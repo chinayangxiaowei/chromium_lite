@@ -3,16 +3,16 @@
 // found in the LICENSE file.
 
 #include "base/basictypes.h"
-#include "base/memory/scoped_temp_dir.h"
+#include "base/scoped_temp_dir.h"
 #include "base/stl_util-inl.h"
 #include "base/string_util.h"
+#include "base/synchronization/waitable_event.h"
 #include "base/time.h"
 #include "base/utf_string_conversions.h"
-#include "base/synchronization/waitable_event.h"
+#include "chrome/browser/password_manager/password_form_data.h"
 #include "chrome/browser/password_manager/password_store_change.h"
 #include "chrome/browser/password_manager/password_store_consumer.h"
 #include "chrome/browser/password_manager/password_store_default.h"
-#include "chrome/browser/password_manager/password_form_data.h"
 #include "chrome/browser/prefs/pref_service.h"
 #include "chrome/browser/webdata/web_data_service.h"
 #include "chrome/common/pref_names.h"
@@ -152,7 +152,8 @@ MATCHER(EmptyWDResult, "") {
 TEST_F(PasswordStoreDefaultTest, NonASCIIData) {
   // Prentend that the migration has already taken place.
   profile_->GetPrefs()->RegisterBooleanPref(prefs::kLoginDatabaseMigrated,
-                                            true);
+                                            true,
+                                            PrefService::UNSYNCABLE_PREF);
 
   // Initializing the PasswordStore shouldn't trigger a migration.
   scoped_refptr<PasswordStoreDefault> store(
@@ -399,7 +400,8 @@ TEST_F(PasswordStoreDefaultTest, MigrationAlreadyDone) {
 
   // Prentend that the migration has already taken place.
   profile_->GetPrefs()->RegisterBooleanPref(prefs::kLoginDatabaseMigrated,
-                                            true);
+                                            true,
+                                            PrefService::UNSYNCABLE_PREF);
 
   // Initializing the PasswordStore shouldn't trigger a migration.
   scoped_refptr<PasswordStore> store(
@@ -430,7 +432,8 @@ TEST_F(PasswordStoreDefaultTest, MigrationAlreadyDone) {
 TEST_F(PasswordStoreDefaultTest, Notifications) {
   // Prentend that the migration has already taken place.
   profile_->GetPrefs()->RegisterBooleanPref(prefs::kLoginDatabaseMigrated,
-                                            true);
+                                            true,
+                                            PrefService::UNSYNCABLE_PREF);
 
   // Initializing the PasswordStore shouldn't trigger a migration.
   scoped_refptr<PasswordStore> store(

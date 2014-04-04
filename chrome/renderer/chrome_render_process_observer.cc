@@ -6,7 +6,9 @@
 
 #include "base/command_line.h"
 #include "base/file_util.h"
+#include "base/metrics/field_trial.h"
 #include "base/metrics/histogram.h"
+#include "base/native_library.h"
 #include "base/path_service.h"
 #include "base/process_util.h"
 #include "base/threading/platform_thread.h"
@@ -354,7 +356,7 @@ ChromeRenderProcessObserver::ChromeRenderProcessObserver() {
   }
 #endif
 
-#if defined(OS_LINUX)
+#if defined(OS_POSIX) && !defined(OS_MACOSX)
   // Remoting requires NSS to function properly.
   if (!command_line.HasSwitch(switches::kSingleProcess) &&
       command_line.HasSwitch(switches::kEnableRemoting)) {
@@ -369,6 +371,11 @@ ChromeRenderProcessObserver::ChromeRenderProcessObserver() {
     NOTREACHED() << "Remoting is not supported for openssl";
 #endif
   }
+#elif defined(OS_WIN)
+  // crypt32.dll is used to decode X509 certificates for Chromoting.
+  // Only load this library when the feature is enabled.
+  std::string error;
+  base::LoadNativeLibrary(FilePath(L"crypt32.dll"), &error);
 #endif
 }
 
@@ -380,10 +387,13 @@ bool ChromeRenderProcessObserver::OnControlMessageReceived(
   bool handled = true;
   IPC_BEGIN_MESSAGE_MAP(ChromeRenderProcessObserver, message)
     IPC_MESSAGE_HANDLER(ViewMsg_SetIsIncognitoProcess, OnSetIsIncognitoProcess)
+    IPC_MESSAGE_HANDLER(ViewMsg_SetDefaultContentSettings,
+                        OnSetDefaultContentSettings)
     IPC_MESSAGE_HANDLER(ViewMsg_SetContentSettingsForCurrentURL,
                         OnSetContentSettingsForCurrentURL)
     IPC_MESSAGE_HANDLER(ViewMsg_SetCacheCapacities, OnSetCacheCapacities)
     IPC_MESSAGE_HANDLER(ViewMsg_ClearCache, OnClearCache)
+    IPC_MESSAGE_HANDLER(ViewMsg_SetFieldTrialGroup, OnSetFieldTrialGroup)
 #if defined(USE_TCMALLOC)
     IPC_MESSAGE_HANDLER(ViewMsg_GetRendererTcmalloc, OnGetRendererTcmalloc)
 #endif
@@ -405,6 +415,11 @@ void ChromeRenderProcessObserver::OnSetContentSettingsForCurrentURL(
     const ContentSettings& content_settings) {
   RenderViewContentSettingsSetter setter(url, content_settings);
   RenderView::ForEach(&setter);
+}
+
+void ChromeRenderProcessObserver::OnSetDefaultContentSettings(
+    const ContentSettings& content_settings) {
+  ContentSettingsObserver::SetDefaultContentSettings(content_settings);
 }
 
 void ChromeRenderProcessObserver::OnSetCacheCapacities(size_t min_dead_capacity,
@@ -434,6 +449,12 @@ void ChromeRenderProcessObserver::OnGetRendererTcmalloc() {
   Send(new ViewHostMsg_RendererTcmalloc(pid, result));
 }
 #endif
+
+void ChromeRenderProcessObserver::OnSetFieldTrialGroup(
+    const std::string& field_trial_name,
+    const std::string& group_name) {
+  base::FieldTrialList::CreateFieldTrial(field_trial_name, group_name);
+}
 
 void ChromeRenderProcessObserver::OnGetV8HeapStats() {
   v8::HeapStatistics heap_stats;
@@ -465,8 +486,9 @@ void ChromeRenderProcessObserver::OnPurgeMemory() {
   while (!v8::V8::IdleNotification()) {
   }
 
-#if (defined(OS_WIN) || defined(OS_LINUX)) && defined(USE_TCMALLOC)
+#if !defined(OS_MACOSX) && defined(USE_TCMALLOC)
   // Tell tcmalloc to release any free pages it's still holding.
   MallocExtension::instance()->ReleaseFreeMemory();
 #endif
 }
+

@@ -10,6 +10,7 @@
 
 #include "content/browser/renderer_host/resource_handler.h"
 
+class HostZoomMap;
 class ResourceDispatcherHost;
 class ResourceMessageFilter;
 class SharedIOBuffer;

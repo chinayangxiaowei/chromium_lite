@@ -86,6 +86,39 @@ base::LazyInstance<app::win::IATPatchFunction> g_iat_patch_set_cursor(
 base::LazyInstance<app::win::IATPatchFunction> g_iat_patch_reg_enum_key_ex_w(
     base::LINKER_INITIALIZED);
 
+// Helper object for patching the GetKeyState API.
+base::LazyInstance<app::win::IATPatchFunction> g_iat_patch_get_key_state(
+    base::LINKER_INITIALIZED);
+
+// Saved key state globals and helper access functions.
+SHORT (WINAPI *g_iat_orig_get_key_state)(int vkey);
+typedef size_t SavedStateType;
+const size_t kBitsPerType = sizeof(SavedStateType) * 8;
+// Bit array of key state corresponding to virtual key index (0=up, 1=down).
+SavedStateType g_saved_key_state[256 / kBitsPerType];
+
+bool GetSavedKeyState(WPARAM vkey) {
+  CHECK_LT(vkey, kBitsPerType * sizeof(g_saved_key_state));
+  if (g_saved_key_state[vkey / kBitsPerType] & 1 << (vkey % kBitsPerType))
+    return true;
+  return false;
+}
+
+void SetSavedKeyState(WPARAM vkey) {
+  CHECK_LT(vkey, kBitsPerType * sizeof(g_saved_key_state));
+  g_saved_key_state[vkey / kBitsPerType] |= 1 << (vkey % kBitsPerType);
+}
+
+void UnsetSavedKeyState(WPARAM vkey) {
+  CHECK_LT(vkey, kBitsPerType * sizeof(g_saved_key_state));
+  g_saved_key_state[vkey / kBitsPerType] &= ~(1 << (vkey % kBitsPerType));
+}
+
+void ClearSavedKeyState() {
+  memset(g_saved_key_state, 0, sizeof(g_saved_key_state));
+}
+
+
 // http://crbug.com/16114
 // Enforces providing a valid device context in NPWindow, so that NPP_SetWindow
 // is never called with NPNWindoTypeDrawable and NPWindow set to NULL.
@@ -257,6 +290,15 @@ LRESULT CALLBACK WebPluginDelegateImpl::MouseHookProc(
   return CallNextHookEx(NULL, code, wParam, lParam);
 }
 
+// In addition to the key state we maintain, we also mask in the original
+// return value. This is done because system keys (e.g. tab, enter, shift)
+// and toggles (e.g. capslock, numlock) don't ever seem to be blocked.
+SHORT WINAPI WebPluginDelegateImpl::GetKeyStatePatch(int vkey) {
+  if (GetSavedKeyState(vkey))
+    return g_iat_orig_get_key_state(vkey) | 0x8000;
+  return g_iat_orig_get_key_state(vkey);
+}
+
 WebPluginDelegateImpl::WebPluginDelegateImpl(
     gfx::PluginWindowHandle containing_view,
     PluginInstance *instance)
@@ -270,9 +312,8 @@ WebPluginDelegateImpl::WebPluginDelegateImpl(
       plugin_wnd_proc_(NULL),
       last_message_(0),
       is_calling_wndproc(false),
-      keyboard_layout_(NULL),
-      parent_thread_id_(0),
       dummy_window_for_activation_(NULL),
+      parent_proxy_window_(NULL),
       handle_event_message_filter_hook_(NULL),
       handle_event_pump_messages_event_(NULL),
       user_gesture_message_posted_(false),
@@ -300,6 +341,11 @@ WebPluginDelegateImpl::WebPluginDelegateImpl(
     quirks_ |= PLUGIN_QUIRK_PATCH_SETCURSOR;
     quirks_ |= PLUGIN_QUIRK_ALWAYS_NOTIFY_SUCCESS;
     quirks_ |= PLUGIN_QUIRK_HANDLE_MOUSE_CAPTURE;
+    if (filename == kBuiltinFlashPlugin &&
+        base::win::GetVersion() >= base::win::VERSION_VISTA) {
+      quirks_ |= PLUGIN_QUIRK_REPARENT_IN_BROWSER |
+                 PLUGIN_QUIRK_PATCH_GETKEYSTATE;
+    }
   } else if (filename == kAcrobatReaderPlugin) {
     // Check for the version number above or equal 9.
     int major_version = GetPluginMajorVersion(plugin_info);
@@ -356,7 +402,11 @@ WebPluginDelegateImpl::WebPluginDelegateImpl(
 
 WebPluginDelegateImpl::~WebPluginDelegateImpl() {
   if (::IsWindow(dummy_window_for_activation_)) {
-    ::DestroyWindow(dummy_window_for_activation_);
+    // Sandboxed Flash stacks two dummy windows to prevent UIPI failures
+    if (::IsWindow(parent_proxy_window_))
+      ::DestroyWindow(parent_proxy_window_);
+    else
+      ::DestroyWindow(dummy_window_for_activation_);
   }
 
   DestroyInstance();
@@ -436,6 +486,17 @@ bool WebPluginDelegateImpl::PlatformInitialize() {
         WebPluginDelegateImpl::RegEnumKeyExWPatch);
   }
 
+  // Under UIPI the key state does not get forwarded properly to the child
+  // plugin window. So, instead we track the key state manually and intercept
+  // GetKeyState.
+  if ((quirks_ & PLUGIN_QUIRK_PATCH_GETKEYSTATE) &&
+      !g_iat_patch_get_key_state.Pointer()->is_patched()) {
+    g_iat_orig_get_key_state = ::GetKeyState;
+    g_iat_patch_get_key_state.Pointer()->Patch(
+        L"gcswf32.dll", "user32.dll", "GetKeyState",
+        WebPluginDelegateImpl::GetKeyStatePatch);
+  }
+
   return true;
 }
 
@@ -465,9 +526,9 @@ void WebPluginDelegateImpl::PlatformDestroyInstance() {
 void WebPluginDelegateImpl::Paint(WebKit::WebCanvas* canvas,
                                   const gfx::Rect& rect) {
   if (windowless_) {
-    HDC hdc = skia::BeginPlatformPaint(canvas);
+    skia::ScopedPlatformPaint scoped_platform_paint(canvas);
+    HDC hdc = scoped_platform_paint.GetPlatformSurface();
     WindowlessPaint(hdc, rect);
-    skia::EndPlatformPaint(canvas);
   }
 }
 
@@ -484,6 +545,9 @@ bool WebPluginDelegateImpl::WindowedCreatePlugin() {
 
   RegisterNativeWindowClass();
 
+  // UIPI requires reparenting in the (medium-integrity) browser process.
+  bool reparent_in_browser = (quirks_ & PLUGIN_QUIRK_REPARENT_IN_BROWSER) != 0;
+
   // The window will be sized and shown later.
   windowed_handle_ = CreateWindowEx(
       WS_EX_LEFT | WS_EX_LTRREADING | WS_EX_RIGHTSCROLLBAR,
@@ -494,14 +558,16 @@ bool WebPluginDelegateImpl::WindowedCreatePlugin() {
       0,
       0,
       0,
-      parent_,
+      reparent_in_browser ? NULL : parent_,
       0,
       GetModuleHandle(NULL),
       0);
   if (windowed_handle_ == 0)
     return false;
 
-  if (IsWindow(parent_)) {
+  if (reparent_in_browser) {
+    plugin_->ReparentPluginWindow(windowed_handle_, parent_);
+  } else if (IsWindow(parent_)) {
     // This is a tricky workaround for Issue 2673 in chromium "Flash: IME not
     // available". To use IMEs in this window, we have to make Windows attach
     // IMEs to this window (i.e. load IME DLLs, attach them to this process,
@@ -707,6 +773,30 @@ BOOL CALLBACK EnumFlashWindows(HWND window, LPARAM arg) {
 
 bool WebPluginDelegateImpl::CreateDummyWindowForActivation() {
   DCHECK(!dummy_window_for_activation_);
+
+  // Built-in Flash runs with UIPI, but in windowless mode Flash sometimes
+  // tries to attach windows to the parent (which fails under UIPI). To make
+  // it work we add an extra dummy parent in the low-integrity process.
+  if (quirks_ & PLUGIN_QUIRK_REPARENT_IN_BROWSER) {
+    parent_proxy_window_ = CreateWindowEx(
+      0,
+      L"Static",
+      kDummyActivationWindowName,
+      WS_POPUP,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      GetModuleHandle(NULL),
+      0);
+
+    if (parent_proxy_window_ == 0)
+      return false;
+    plugin_->ReparentPluginWindow(parent_proxy_window_, parent_);
+  }
+
   dummy_window_for_activation_ = CreateWindowEx(
     0,
     L"Static",
@@ -716,7 +806,7 @@ bool WebPluginDelegateImpl::CreateDummyWindowForActivation() {
     0,
     0,
     0,
-    parent_,
+    parent_proxy_window_ ? parent_proxy_window_ : parent_,
     0,
     GetModuleHandle(NULL),
     0);
@@ -907,6 +997,31 @@ LRESULT CALLBACK WebPluginDelegateImpl::NativeWndProc(
     return FALSE;
   }
 
+  // Track the keystate to work around a UIPI issue.
+  if (delegate->GetQuirks() & PLUGIN_QUIRK_PATCH_GETKEYSTATE) {
+    switch (message) {
+      case WM_KEYDOWN:
+        SetSavedKeyState(wparam);
+        break;
+
+      case WM_KEYUP:
+        UnsetSavedKeyState(wparam);
+        break;
+
+      // Clear out the saved keystate whenever the Flash thread loses focus.
+      case WM_KILLFOCUS:
+      case WM_SETFOCUS:
+        if (::GetCurrentThreadId() != ::GetWindowThreadProcessId(
+            reinterpret_cast<HWND>(wparam), NULL)) {
+          ClearSavedKeyState();
+        }
+        break;
+
+      default:
+        break;
+    }
+  }
+
   LRESULT result;
   uint32 old_message = delegate->last_message_;
   delegate->last_message_ = message;
@@ -1068,6 +1183,9 @@ bool WebPluginDelegateImpl::PlatformSetPluginHasFocus(bool focused) {
   focus_event.wParam = 0;
   focus_event.lParam = 0;
 
+  if (GetQuirks() & PLUGIN_QUIRK_PATCH_GETKEYSTATE)
+    ClearSavedKeyState();
+
   instance()->NPP_HandleEvent(&focus_event);
   return true;
 }
@@ -1187,23 +1305,11 @@ bool WebPluginDelegateImpl::PlatformHandleInputEvent(
     return false;
   }
 
-  // Synchronize the keyboard layout with the one of the browser process. Flash
-  // uses the keyboard layout of this window to verify a WM_CHAR message is
-  // valid. That is, Flash discards a WM_CHAR message unless its character is
-  // the one translated with ToUnicode(). (Since a plug-in is running on a
-  // separate process from the browser process, we need to syncronize it
-  // manually.)
-  if (np_event.event == WM_CHAR) {
-    if (!keyboard_layout_)
-      keyboard_layout_ = GetKeyboardLayout(GetCurrentThreadId());
-    if (!parent_thread_id_)
-      parent_thread_id_ = GetWindowThreadProcessId(parent_, NULL);
-    HKL parent_layout = GetKeyboardLayout(parent_thread_id_);
-    if (keyboard_layout_ != parent_layout) {
-      std::wstring layout_name(base::StringPrintf(L"%08x", parent_layout));
-      LoadKeyboardLayout(layout_name.c_str(), KLF_ACTIVATE);
-      keyboard_layout_ = parent_layout;
-    }
+  if (GetQuirks() & PLUGIN_QUIRK_PATCH_GETKEYSTATE) {
+    if (np_event.event == WM_KEYDOWN)
+      SetSavedKeyState(np_event.wParam);
+    else if (np_event.event == WM_KEYUP)
+      UnsetSavedKeyState(np_event.wParam);
   }
 
   HWND last_focus_window = NULL;

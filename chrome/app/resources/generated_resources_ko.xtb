@@ -258,7 +258,7 @@
 <translation id="8079135502601738761">이 PDF 문서의 일부를 표시할 수 없습니다. Adobe Reader에서 여시겠습니까?</translation>
 <translation id="9123413579398459698">FTP 프록시</translation>
 <translation id="3887875461425980041">플래시의 PPAPI 버전을 사용하는 경우, 전용 플러그인 프로세스보다 각각의 렌더러 프로세스에서 실행합니다.</translation>
-<translation id="8534801226027872331">이는 브라우저에 제출된 인증서에 오류가 있어 인증서를 판독할 수 없는 경우입니다. 인증서의 주소 정보나 연결을 보호하는 데 사용된 인증서의 다른 정보를 크롬이 판독하지 못한 것일 수 있습니다. 더 이상 진행하지 않는 것이 좋습니다.</translation>
+<translation id="8534801226027872331">이는 브라우저에 제출된 인증서에 오류가 있어 인증서를 판독할 수 없는 경우입니다. 인증서의 주소 정보나 연결을 보호하는 데 사용된 인증서의 다른 정보를 Chrome이 판독하지 못한 것일 수 있습니다. 더 이상 진행하지 않는 것이 좋습니다.</translation>
 <translation id="3608527593787258723">탭 1 활성화</translation>
 <translation id="4497369307931735818">원격 설정</translation>
 <translation id="1476822615785139447">프린터 관리...</translation>
@@ -2700,7 +2700,7 @@
 <translation id="3126026824346185272">Ctrl</translation>
 <translation id="4745438305783437565"><ph name="NUMBER_FEW"/>분</translation>
 <translation id="2649911884196340328">서버의 보안 인증서에 오류가 있습니다.</translation>
-<translation id="6666647326143344290">Google 계정으로 로그인하세요</translation>
+<translation id="6666647326143344290"/>
 <translation id="3828029223314399057">북마크 검색</translation>
 <translation id="4885705234041587624">MSCHAPv2</translation>
 <translation id="5614190747811328134">사용자 알림</translation>

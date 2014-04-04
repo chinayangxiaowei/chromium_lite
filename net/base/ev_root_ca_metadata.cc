@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -91,13 +91,6 @@ static const EVMetadata ev_root_ca_metadata[] = {
         0x4c, 0x9a, 0xe6, 0xd3, 0x8f, 0x1a, 0x61, 0xc7, 0xdc, 0x25 } },
     "2.16.840.1.114412.2.1"
   },
-  // DigiNotar Root CA
-  // https://www.evssl.nl
-  // https://www.polisdirect.nl
-  { { { 0xc0, 0x60, 0xed, 0x44, 0xcb, 0xd8, 0x81, 0xbd, 0x0e, 0xf8,
-        0x6c, 0x0b, 0xa2, 0x87, 0xdd, 0xcf, 0x81, 0x67, 0x47, 0x8c } },
-    "2.16.528.1.1001.1.1.1.12.6.1.1.1"
-  },
   // Entrust.net Secure Server Certification Authority
   // https://www.entrust.net/
   { { { 0x99, 0xa6, 0x9b, 0xe6, 0x1a, 0xfe, 0x88, 0x6b, 0x4d, 0x2b,
@@ -122,7 +115,7 @@ static const EVMetadata ev_root_ca_metadata[] = {
         0xe2, 0xe2, 0x10, 0x0d, 0xd6, 0x02, 0x90, 0x37, 0xf0, 0x96 } },
     "1.3.6.1.4.1.14370.1.6"
   },
-  // GlobalSign
+  // GlobalSign Root CA - R2
   // https://www.globalsign.com/
   { { { 0x75, 0xe0, 0xab, 0xb6, 0x13, 0x85, 0x12, 0x27, 0x1c, 0x04,
         0xf8, 0x5f, 0xdd, 0xde, 0x38, 0xe4, 0xb7, 0x24, 0x2e, 0xfe } },
@@ -131,6 +124,12 @@ static const EVMetadata ev_root_ca_metadata[] = {
   // GlobalSign Root CA
   { { { 0xb1, 0xbc, 0x96, 0x8b, 0xd4, 0xf4, 0x9d, 0x62, 0x2a, 0xa8,
         0x9a, 0x81, 0xf2, 0x15, 0x01, 0x52, 0xa4, 0x1d, 0x82, 0x9c } },
+    "1.3.6.1.4.1.4146.1.1"
+  },
+  // GlobalSign Root CA - R3
+  // https://2029.globalsign.com/
+  { { { 0xd6, 0x9b, 0x56, 0x11, 0x48, 0xf0, 0x1c, 0x77, 0xc5, 0x45,
+        0x78, 0xc1, 0x09, 0x26, 0xdf, 0x5b, 0x85, 0x69, 0x76, 0xad } },
     "1.3.6.1.4.1.4146.1.1"
   },
   // Go Daddy Class 2 Certification Authority
@@ -270,7 +269,6 @@ const EVRootCAMetadata::PolicyOID EVRootCAMetadata::policy_oids_[] = {
   "1.3.6.1.4.1.6449.1.2.1.5.1",
   "1.3.6.1.4.1.782.1.2.1.8.1",
   "1.3.6.1.4.1.8024.0.2.100.1.2",
-  "2.16.528.1.1001.1.1.1.12.6.1.1.1",
   "2.16.756.1.89.1.2.1.1",
   "2.16.840.1.113733.1.7.23.6",
   "2.16.840.1.113733.1.7.48.1",
@@ -354,7 +352,7 @@ EVRootCAMetadata::EVRootCAMetadata() {
     od.mechanism = CKM_INVALID_MECHANISM;
     od.supportedExtension = INVALID_CERT_EXTENSION;
     SECOidTag policy = SECOID_AddEntry(&od);
-    DCHECK(policy != SEC_OID_UNKNOWN);
+    DCHECK_NE(SEC_OID_UNKNOWN, policy);
     ev_policy_[metadata.fingerprint] = policy;
     policy_oids_.push_back(policy);
   }

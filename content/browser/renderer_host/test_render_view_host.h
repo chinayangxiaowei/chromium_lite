@@ -78,7 +78,8 @@ class TestRenderWidgetHostView : public RenderWidgetHostView {
   virtual void SetIsLoading(bool is_loading) {}
   virtual void UpdateCursor(const WebCursor& cursor) {}
   virtual void UpdateCursorIfOverSelf() {}
-  virtual void ImeUpdateTextInputState(WebKit::WebTextInputType state,
+  virtual void ImeUpdateTextInputState(ui::TextInputType state,
+                                       bool can_compose_inline,
                                        const gfx::Rect& caret_rect) {}
   virtual void ImeCancelComposition() {}
   virtual void DidUpdateBackingStore(
@@ -182,6 +183,11 @@ class TestRenderViewHost : public RenderViewHost {
   void SendNavigateWithTransition(int page_id, const GURL& url,
                                   PageTransition::Type transition);
 
+  // Calls OnMsgShouldCloseACK on the RenderViewHost with the given parameter.
+  void SendShouldCloseACK(bool proceed);
+
+  void TestOnMsgStartDragging(const WebDropData& drop_data);
+
   // If set, *delete_counter is incremented when this object destructs.
   void set_delete_counter(int* delete_counter) {
     delete_counter_ = delete_counter;
@@ -198,6 +204,12 @@ class TestRenderViewHost : public RenderViewHost {
   // of a before unload handler from the renderer.
   bool is_waiting_for_beforeunload_ack() const {
     return is_waiting_for_beforeunload_ack_;
+  }
+
+  // Sets whether the RenderViewHost is currently swapped out, and thus
+  // filtering messages from the renderer.
+  void set_is_swapped_out(bool is_swapped_out) {
+    is_swapped_out_ = is_swapped_out;
   }
 
   // If set, navigations will appear to have loaded through a proxy

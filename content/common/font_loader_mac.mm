@@ -13,12 +13,52 @@
 #include "base/mac/mac_util.h"
 #include "base/sys_string_conversions.h"
 
+extern "C" {
+
+// Work around http://crbug.com/93191, a really nasty memory smasher bug.
+// On Mac OS X 10.7 ("Lion"), ATS writes to memory it doesn't own.
+// SendDeactivateFontsInContainerMessage, called by ATSFontDeactivate,
+// may trash memory whenever dlsym(RTLD_DEFAULT,
+// "_CTFontManagerUnregisterFontForData") returns NULL. In that case, it tries
+// to locate that symbol in the CoreText framework, doing some extremely
+// sloppy string handling resulting in a likelihood that the string
+// "Text.framework/Versions/A/CoreText" will be written over memory that it
+// doesn't own. The kicker here is that Apple dlsym always inserts its own
+// leading underscore, so ATS actually winds up looking up a
+// __CTFontManagerUnregisterFontForData symbol, which doesn't even exist in
+// CoreText. It's only got the single-underscore variant corresponding to an
+// underscoreless extern "C" name.
+//
+// Providing a single-underscored extern "C" function by this name results in
+// a __CTFontManagerUnregisterFontForData symbol that, as long as it's public
+// (not private extern) and unstripped, ATS will find. If it finds it, it
+// avoids making amateur string mistakes that ruin everyone else's good time.
+//
+// Since ATS wouldn't normally be able to call this function anyway, it's just
+// left as a no-op here.
+//
+// This file seems as good as any other to place this function. It was chosen
+// because it already interfaces with ATS for other reasons.
+//
+// SendDeactivateFontsInContainerMessage on 10.6 ("Snow Leopard") appears to
+// share this bug but this sort of memory corruption wasn't detected until
+// 10.7. The implementation in 10.5 ("Leopard") does not have this problem.
+__attribute__((visibility("default")))
+void _CTFontManagerUnregisterFontForData(NSUInteger, int) {
+}
+
+}  // extern "C"
+
 // static
 bool FontLoader::LoadFontIntoBuffer(NSFont* font_to_encode,
                                     base::SharedMemory* font_data,
-                                    uint32* font_data_size) {
-  CHECK(font_data && font_data_size);
+                                    uint32* font_data_size,
+                                    uint32* font_id) {
+  CHECK(font_data);
+  CHECK(font_data_size);
+  CHECK(font_id);
   *font_data_size = 0;
+  *font_id = 0;
 
   // Used only for logging.
   std::string font_name([[font_to_encode fontName] UTF8String]);
@@ -35,6 +75,17 @@ bool FontLoader::LoadFontIntoBuffer(NSFont* font_to_encode,
   if (!ats_font) {
     LOG(ERROR) << "Conversion to ATSFontRef failed for " << font_name;
     return false;
+  }
+
+  // Retrieve the ATSFontContainerRef corresponding to the font file we want to
+  // load. This is a unique identifier that allows the caller determine if the
+  // font file in question is already loaded.
+  COMPILE_ASSERT(sizeof(ATSFontContainerRef) == sizeof(font_id),
+      uint32_cant_hold_fontcontainer_ref);
+  ATSFontContainerRef fontContainer = kATSFontContainerRefUnspecified;
+  if (ATSFontGetContainer(ats_font, 0, &fontContainer) != noErr) {
+      LOG(ERROR) << "Failed to get font container ref for " << font_name;
+      return false;
   }
 
   // ATSFontRef -> File path.
@@ -79,6 +130,7 @@ bool FontLoader::LoadFontIntoBuffer(NSFont* font_to_encode,
   }
 
   *font_data_size = font_file_size_32;
+  *font_id = fontContainer;
   return true;
 }
 

@@ -437,7 +437,7 @@ double ProcessMetrics::GetCPUUsage() {
 
   int64 system_time_delta = task_time - last_system_time_;
   int64 time_delta = time - last_time_;
-  DCHECK(time_delta != 0);
+  DCHECK_NE(0U, time_delta);
   if (time_delta == 0)
     return 0;
 
@@ -623,11 +623,6 @@ void oom_killer_new() {
 // === Core Foundation CFAllocators ===
 
 bool CanGetContextForCFAllocator(long darwin_version) {
-  // TODO(avi): remove at final release; http://crbug.com/74589
-  if (darwin_version == 11) {
-    NSLog(@"Unsure about the internals of CFAllocator but going to patch them "
-           "anyway. Watch out for crashes inside of CFAllocatorAllocate.");
-  }
   return darwin_version == 9 ||
          darwin_version == 10 ||
          darwin_version == 11;

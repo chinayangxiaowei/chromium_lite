@@ -10,14 +10,17 @@
 #include "base/hash_tables.h"
 #include "base/logging.h"
 #include "base/shared_memory.h"
+#include "chrome/browser/content_settings/host_content_settings_map.h"
 #include "chrome/browser/debugger/devtools_netlog_observer.h"
-#include "chrome/browser/net/chrome_url_request_context.h"
 #include "chrome/browser/net/load_timing_observer.h"
+#include "chrome/browser/profiles/profile_io_data.h"
 #include "chrome/common/render_messages.h"
+#include "content/browser/host_zoom_map.h"
 #include "content/browser/renderer_host/global_request_id.h"
 #include "content/browser/renderer_host/resource_dispatcher_host.h"
 #include "content/browser/renderer_host/resource_dispatcher_host_request_info.h"
 #include "content/browser/renderer_host/resource_message_filter.h"
+#include "content/browser/resource_context.h"
 #include "content/common/resource_response.h"
 #include "content/common/resource_messages.h"
 #include "content/common/view_messages.h"
@@ -123,19 +126,23 @@ bool AsyncResourceHandler::OnResponseStarted(int request_id,
   LoadTimingObserver::PopulateTimingInfo(request, response);
   DevToolsNetLogObserver::PopulateResponseInfo(request, response);
 
+  // We must send the content settings for the URL before sending response
+  // headers to the renderer.
+  const content::ResourceContext& resource_context =
+      filter_->resource_context();
   ResourceDispatcherHostRequestInfo* info = rdh_->InfoForRequest(request);
-  if (info->resource_type() == ResourceType::MAIN_FRAME) {
-    GURL request_url(request->url());
-    ChromeURLRequestContext* context =
-        static_cast<ChromeURLRequestContext*>(request->context());
-    if (context) {
-      filter_->Send(new ViewMsg_SetContentSettingsForLoadingURL(
-          info->route_id(), request_url,
-          context->host_content_settings_map()->GetContentSettings(
-              request_url)));
-      filter_->Send(new ViewMsg_SetZoomLevelForLoadingURL(info->route_id(),
-          request_url, context->host_zoom_map()->GetZoomLevel(request_url)));
-    }
+  GURL request_url(request->url());
+  ProfileIOData* io_data =
+      reinterpret_cast<ProfileIOData*>(resource_context.GetUserData(NULL));
+  HostContentSettingsMap* map = io_data->GetHostContentSettingsMap();
+  filter_->Send(new ViewMsg_SetContentSettingsForLoadingURL(
+      info->route_id(), request_url, map->GetContentSettings(request_url)));
+
+  HostZoomMap* host_zoom_map = resource_context.host_zoom_map();
+  if (info->resource_type() == ResourceType::MAIN_FRAME && host_zoom_map) {
+    filter_->Send(new ViewMsg_SetZoomLevelForLoadingURL(
+        info->route_id(), request_url,
+        host_zoom_map->GetZoomLevel(net::GetHostOrSpecFromURL(request_url))));
   }
 
   filter_->Send(new ResourceMsg_ReceivedResponse(

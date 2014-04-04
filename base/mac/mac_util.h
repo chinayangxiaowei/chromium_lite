@@ -6,6 +6,7 @@
 #define BASE_MAC_MAC_UTIL_H_
 #pragma once
 
+#include <AvailabilityMacros.h>
 #include <Carbon/Carbon.h>
 #include <string>
 
@@ -77,8 +78,8 @@ bool ShouldWindowsMiniaturizeOnDoubleClick();
 // Activates the process with the given PID.
 void ActivateProcess(pid_t pid);
 
-// Set the Time Machine exclusion property for the given file.
-bool SetFileBackupExclusion(const FilePath& file_path, bool exclude);
+// Excludes the file given by |file_path| from being backed up by Time Machine.
+bool SetFileBackupExclusion(const FilePath& file_path);
 
 // Sets the process name as displayed in Activity Monitor to process_name.
 void SetProcessName(CFStringRef process_name);
@@ -110,76 +111,58 @@ void RemoveFromLoginItems();
 // 'Login Item' with 'hide on startup' flag. Used to suppress opening windows.
 bool WasLaunchedAsHiddenLoginItem();
 
+// Run-time OS version checks. Use these instead of
+// base::SysInfo::OperatingSystemVersionNumbers. Prefer the "OrEarlier" and
+// "OrLater" variants to those that check for a specific version, unless you
+// know for sure that you need to check for a specific version.
+
+// Leopard is Mac OS X 10.5, Darwin 9.
+bool IsOSLeopard();
+bool IsOSLeopardOrEarlier();
+
+// Snow Leopard is Mac OS X 10.6, Darwin 10.
+bool IsOSSnowLeopard();
+bool IsOSSnowLeopardOrEarlier();
+bool IsOSSnowLeopardOrLater();
+
+// Lion is Mac OS X 10.7, Darwin 11.
+bool IsOSLion();
+bool IsOSLionOrLater();
+
+// This should be infrequently used. It only makes sense to use this to avoid
+// codepaths that are very likely to break on future (unreleased, untested,
+// unborn) OS releases.
+bool IsOSLaterThanLion();
+
+// When the deployment target is set, the code produced cannot run on earlier
+// OS releases. That enables some of the IsOS* family to be implemented as
+// constant-value inline functions. The MAC_OS_X_VERSION_MIN_REQUIRED macro
+// contains the value of the deployment target.
+
+#if defined(MAC_OS_X_VERSION_10_6) && \
+    MAC_OS_X_VERSION_MIN_REQUIRED >= MAC_OS_X_VERSION_10_6
+#define BASE_MAC_MAC_UTIL_H_INLINED_GE_10_6
+inline bool IsOSLeopard() { return false; }
+inline bool IsOSLeopardOrEarlier() { return false; }
+inline bool IsOSSnowLeopardOrLater() { return true; }
+#endif
+
+#if defined(MAC_OS_X_VERSION_10_7) && \
+    MAC_OS_X_VERSION_MIN_REQUIRED >= MAC_OS_X_VERSION_10_7
+#define BASE_MAC_MAC_UTIL_H_INLINED_GE_10_7
+inline bool IsOSSnowLeopard() { return false; }
+inline bool IsOSSnowLeopardOrEarlier() { return false; }
+inline bool IsOSLionOrLater() { return true; }
+#endif
+
+#if defined(MAC_OS_X_VERSION_10_7) && \
+    MAC_OS_X_VERSION_MIN_REQUIRED > MAC_OS_X_VERSION_10_7
+#define BASE_MAC_MAC_UTIL_H_INLINED_GT_10_7
+inline bool IsOSLion() { return false; }
+inline bool IsOSLaterThanLion() { return true; }
+#endif
+
 }  // namespace mac
 }  // namespace base
-
-#if !defined(__OBJC__)
-#define OBJC_CPP_CLASS_DECL(x) class x;
-#else  // __OBJC__
-#define OBJC_CPP_CLASS_DECL(x)
-#endif  // __OBJC__
-
-// Convert toll-free bridged CFTypes to NSTypes and vice-versa. This does not
-// autorelease |cf_val|. This is useful for the case where there is a CFType in
-// a call that expects an NSType and the compiler is complaining about const
-// casting problems.
-// The calls are used like this:
-// NSString *foo = CFToNSCast(CFSTR("Hello"));
-// CFStringRef foo2 = NSToCFCast(@"Hello");
-// The macro magic below is to enforce safe casting. It could possibly have
-// been done using template function specialization, but template function
-// specialization doesn't always work intuitively,
-// (http://www.gotw.ca/publications/mill17.htm) so the trusty combination
-// of macros and function overloading is used instead.
-
-#define CF_TO_NS_CAST_DECL(TypeCF, TypeNS) \
-OBJC_CPP_CLASS_DECL(TypeNS) \
-\
-namespace base { \
-namespace mac { \
-TypeNS* CFToNSCast(TypeCF##Ref cf_val); \
-TypeCF##Ref NSToCFCast(TypeNS* ns_val); \
-} \
-} \
-
-#define CF_TO_NS_MUTABLE_CAST_DECL(name) \
-CF_TO_NS_CAST_DECL(CF##name, NS##name) \
-OBJC_CPP_CLASS_DECL(NSMutable##name) \
-\
-namespace base { \
-namespace mac { \
-NSMutable##name* CFToNSCast(CFMutable##name##Ref cf_val); \
-CFMutable##name##Ref NSToCFCast(NSMutable##name* ns_val); \
-} \
-} \
-
-// List of toll-free bridged types taken from:
-// http://www.cocoadev.com/index.pl?TollFreeBridged
-
-CF_TO_NS_MUTABLE_CAST_DECL(Array);
-CF_TO_NS_MUTABLE_CAST_DECL(AttributedString);
-CF_TO_NS_CAST_DECL(CFCalendar, NSCalendar);
-CF_TO_NS_MUTABLE_CAST_DECL(CharacterSet);
-CF_TO_NS_MUTABLE_CAST_DECL(Data);
-CF_TO_NS_CAST_DECL(CFDate, NSDate);
-CF_TO_NS_MUTABLE_CAST_DECL(Dictionary);
-CF_TO_NS_CAST_DECL(CFError, NSError);
-CF_TO_NS_CAST_DECL(CFLocale, NSLocale);
-CF_TO_NS_CAST_DECL(CFNumber, NSNumber);
-CF_TO_NS_CAST_DECL(CFRunLoopTimer, NSTimer);
-CF_TO_NS_CAST_DECL(CFTimeZone, NSTimeZone);
-CF_TO_NS_MUTABLE_CAST_DECL(Set);
-CF_TO_NS_CAST_DECL(CFReadStream, NSInputStream);
-CF_TO_NS_CAST_DECL(CFWriteStream, NSOutputStream);
-CF_TO_NS_MUTABLE_CAST_DECL(String);
-CF_TO_NS_CAST_DECL(CFURL, NSURL);
-
-// Stream operations for CFTypes. They can be used with NSTypes as well
-// by using the NSToCFCast methods above.
-// e.g. LOG(INFO) << base::mac::NSToCFCast(@"foo");
-// Operator << can not be overloaded for ObjectiveC types as the compiler
-// can not distinguish between overloads for id with overloads for void*.
-extern std::ostream& operator<<(std::ostream& o, const CFErrorRef err);
-extern std::ostream& operator<<(std::ostream& o, const CFStringRef str);
 
 #endif  // BASE_MAC_MAC_UTIL_H_

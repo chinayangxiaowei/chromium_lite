@@ -5,14 +5,19 @@
 #import "chrome/browser/chrome_browser_application_mac.h"
 
 #import "base/logging.h"
+#import "base/mac/mac_util.h"
+#import "base/mac/scoped_nsexception_enabler.h"
 #import "base/metrics/histogram.h"
 #import "base/memory/scoped_nsobject.h"
-#include "base/sys_info.h"
 #import "base/sys_string_conversions.h"
 #import "chrome/app/breakpad_mac.h"
+#include "chrome/browser/accessibility/browser_accessibility_state.h"
 #import "chrome/browser/app_controller_mac.h"
+#include "chrome/browser/ui/browser_list.h"
 #import "chrome/browser/ui/cocoa/objc_method_swizzle.h"
 #import "chrome/browser/ui/cocoa/objc_zombie.h"
+#include "chrome/browser/ui/tab_contents/tab_contents_wrapper.h"
+#include "content/browser/renderer_host/render_view_host.h"
 
 // The implementation of NSExceptions break various assumptions in the
 // Chrome code.  This category defines a replacement for
@@ -20,18 +25,18 @@
 // the debugger when an exception is raised.  -raise sounds more
 // obvious to intercept, but it doesn't catch the original throw
 // because the objc runtime doesn't use it.
-@interface NSException (NSExceptionSwizzle)
-- (id)chromeInitWithName:(NSString*)aName
-                  reason:(NSString*)aReason
-                userInfo:(NSDictionary *)someUserInfo;
+@interface NSException (CrNSExceptionSwizzle)
+- (id)crInitWithName:(NSString*)aName
+              reason:(NSString*)aReason
+            userInfo:(NSDictionary*)someUserInfo;
 @end
 
 static IMP gOriginalInitIMP = NULL;
 
-@implementation NSException (NSExceptionSwizzle)
-- (id)chromeInitWithName:(NSString*)aName
-                  reason:(NSString*)aReason
-                userInfo:(NSDictionary *)someUserInfo {
+@implementation NSException (CrNSExceptionSwizzle)
+- (id)crInitWithName:(NSString*)aName
+              reason:(NSString*)aReason
+            userInfo:(NSDictionary*)someUserInfo {
   // Method only called when swizzled.
   DCHECK(_cmd == @selector(initWithName:reason:userInfo:));
 
@@ -90,7 +95,8 @@ static IMP gOriginalInitIMP = NULL;
     // (destructors are skipped).  Chrome should be NSException-free,
     // please check your backtrace and see if you can't file a bug
     // with a repro case.
-    if (fatal) {
+    const bool allow = base::mac::GetNSExceptionsAllowed();
+    if (fatal && !allow) {
       LOG(FATAL) << "Someone is trying to raise an exception!  "
                  << base::SysNSStringToUTF8(value);
     } else {
@@ -98,12 +104,35 @@ static IMP gOriginalInitIMP = NULL;
       // exceptions.
       DLOG(ERROR) << "Someone is trying to raise an exception!  "
                   << base::SysNSStringToUTF8(value);
-      NOTREACHED();
+      DCHECK(allow);
     }
   }
 
   // Forward to the original version.
   return gOriginalInitIMP(self, _cmd, aName, aReason, someUserInfo);
+}
+@end
+
+static IMP gOriginalNSBundleLoadIMP = NULL;
+
+@interface NSBundle (CrNSBundleSwizzle)
+- (BOOL)crLoad;
+@end
+
+@implementation NSBundle (CrNSBundleSwizzle)
+- (BOOL)crLoad {
+  // Method only called when swizzled.
+  DCHECK(_cmd == @selector(load));
+
+  // MultiClutchInputManager is broken in Chrome on Lion.
+  // http://crbug.com/90075.
+  if (base::mac::IsOSLionOrLater() &&
+      [[self bundleIdentifier]
+       isEqualToString:@"net.wonderboots.multiclutchinputmanager"]) {
+    return NO;
+  }
+
+  return gOriginalNSBundleLoadIMP(self, _cmd) != nil;
 }
 @end
 
@@ -179,15 +208,21 @@ void CancelTerminate() {
 
 namespace {
 
-// Do-nothing wrapper so that we can arrange to only swizzle
-// -[NSException raise] when DCHECK() is turned on (as opposed to
-// replicating the preprocess logic which turns DCHECK() on).
-BOOL SwizzleNSExceptionInit() {
+void SwizzleInit() {
+  // Do-nothing wrapper so that we can arrange to only swizzle
+  // -[NSException raise] when DCHECK() is turned on (as opposed to
+  // replicating the preprocess logic which turns DCHECK() on).
   gOriginalInitIMP = ObjcEvilDoers::SwizzleImplementedInstanceMethods(
       [NSException class],
       @selector(initWithName:reason:userInfo:),
-      @selector(chromeInitWithName:reason:userInfo:));
-  return YES;
+      @selector(crInitWithName:reason:userInfo:));
+
+  // Avoid loading broken input managers.
+  gOriginalNSBundleLoadIMP =
+      ObjcEvilDoers::SwizzleImplementedInstanceMethods(
+          [NSBundle class],
+          @selector(load),
+          @selector(crLoad));
 }
 
 }  // namespace
@@ -195,19 +230,13 @@ BOOL SwizzleNSExceptionInit() {
 @implementation BrowserCrApplication
 
 + (void)initialize {
-  // Whitelist releases that are compatible with objc zombies.
-  int32 major_version = 0, minor_version = 0, bugfix_version = 0;
-  base::SysInfo::OperatingSystemVersionNumbers(
-      &major_version, &minor_version, &bugfix_version);
-  if (major_version == 10 && (minor_version == 5 || minor_version == 6)) {
-    // Turn all deallocated Objective-C objects into zombies, keeping
-    // the most recent 10,000 of them on the treadmill.
-    ObjcEvilDoers::ZombieEnable(YES, 10000);
-  }
+  // Turn all deallocated Objective-C objects into zombies, keeping
+  // the most recent 10,000 of them on the treadmill.
+  ObjcEvilDoers::ZombieEnable(YES, 10000);
 }
 
-- init {
-  CHECK(SwizzleNSExceptionInit());
+- (id)init {
+  SwizzleInit();
   return [super init];
 }
 
@@ -332,6 +361,21 @@ BOOL SwizzleNSExceptionInit() {
                   [sender className], tag, actionString, aTarget];
 
   ScopedCrashKey key(kActionKey, value);
+
+  // Certain third-party code, such as print drivers, can still throw
+  // exceptions and Chromium cannot fix them.  This provides a way to
+  // work around those on a spot basis.
+  bool enableNSExceptions = false;
+
+  // http://crbug.com/80686 , an Epson printer driver.
+  if (anAction == @selector(selectPDE:)) {
+    enableNSExceptions = true;
+  }
+
+  // Minimize the window by keeping this close to the super call.
+  scoped_ptr<base::mac::ScopedNSExceptionEnabler> enabler(NULL);
+  if (enableNSExceptions)
+    enabler.reset(new base::mac::ScopedNSExceptionEnabler());
   return [super sendAction:anAction to:aTarget from:sender];
 }
 
@@ -356,6 +400,11 @@ BOOL SwizzleNSExceptionInit() {
     // is to "fix" this while the more fundamental concern is
     // addressed elsewhere.
     [self clearIsHandlingSendEvent];
+
+    // If |ScopedNSExceptionEnabler| is used to allow exceptions, and an
+    // uncaught exception is thrown, it will throw past all of the scopers.
+    // Reset the flag so that future exceptions are not masked.
+    base::mac::SetNSExceptionsAllowed(false);
 
     // Store some human-readable information in breakpad keys in case
     // there is a crash.  Since breakpad does not provide infinite
@@ -389,6 +438,23 @@ BOOL SwizzleNSExceptionInit() {
   }
 
   [super reportException:anException];
+}
+
+- (void)accessibilitySetValue:(id)value forAttribute:(NSString*)attribute {
+  if ([attribute isEqualToString:@"AXEnhancedUserInterface"] &&
+      [value intValue] == 1) {
+    BrowserAccessibilityState::GetInstance()->OnScreenReaderDetected();
+    for (TabContentsIterator it;
+         !it.done();
+         ++it) {
+      if (TabContentsWrapper* contents = *it) {
+        if (RenderViewHost* rvh = contents->render_view_host()) {
+          rvh->EnableRendererAccessibility();
+        }
+      }
+    }
+  }
+  return [super accessibilitySetValue:value forAttribute:attribute];
 }
 
 @end
