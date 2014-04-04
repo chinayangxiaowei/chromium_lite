@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,13 +6,13 @@
 
 #include "base/sys_string_conversions.h"
 #include "base/task.h"
-#include "chrome/browser/browser_list.h"
-#include "chrome/browser/extensions/extension_install_ui.h"
 #include "chrome/browser/extensions/extension_service.h"
 #include "chrome/browser/extensions/extension_tabs_module.h"
+#include "chrome/browser/extensions/extension_uninstall_dialog.h"
 #include "chrome/browser/prefs/pref_change_registrar.h"
 #include "chrome/browser/prefs/pref_service.h"
 #include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/ui/browser_list.h"
 #include "chrome/browser/ui/cocoa/browser_window_cocoa.h"
 #include "chrome/browser/ui/cocoa/browser_window_controller.h"
 #include "chrome/browser/ui/cocoa/extensions/browser_actions_controller.h"
@@ -23,35 +23,35 @@
 #include "chrome/common/extensions/extension.h"
 #include "chrome/common/extensions/extension_action.h"
 #include "chrome/common/extensions/extension_constants.h"
-#include "chrome/common/notification_details.h"
-#include "chrome/common/notification_observer.h"
-#include "chrome/common/notification_type.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/common/url_constants.h"
+#include "content/common/notification_details.h"
+#include "content/common/notification_observer.h"
+#include "content/common/notification_source.h"
+#include "content/common/notification_type.h"
 #include "grit/generated_resources.h"
 #include "ui/base/l10n/l10n_util_mac.h"
 
 // A class that loads the extension icon on the I/O thread before showing the
 // confirmation dialog to uninstall the given extension.
 // Also acts as the extension's UI delegate in order to display the dialog.
-class AsyncUninstaller : public ExtensionInstallUI::Delegate {
+class AsyncUninstaller : public ExtensionUninstallDialog::Delegate {
  public:
   AsyncUninstaller(const Extension* extension, Profile* profile)
       : extension_(extension),
         profile_(profile) {
-    install_ui_.reset(new ExtensionInstallUI(profile));
-    install_ui_->ConfirmUninstall(this, extension_);
+    extension_uninstall_dialog_.reset(new ExtensionUninstallDialog(profile));
+    extension_uninstall_dialog_->ConfirmUninstall(this, extension_);
   }
 
   ~AsyncUninstaller() {}
 
-  // Overridden by ExtensionInstallUI::Delegate.
-  virtual void InstallUIProceed() {
+  // ExtensionUninstallDialog::Delegate:
+  virtual void ExtensionDialogAccepted() {
     profile_->GetExtensionService()->
-        UninstallExtension(extension_->id(), false);
+        UninstallExtension(extension_->id(), false, NULL);
   }
-
-  virtual void InstallUIAbort() {}
+  virtual void ExtensionDialogCanceled() {}
 
  private:
   // The extension that we're loading the icon for. Weak.
@@ -60,7 +60,7 @@ class AsyncUninstaller : public ExtensionInstallUI::Delegate {
   // The current profile. Weak.
   Profile* profile_;
 
-  scoped_ptr<ExtensionInstallUI> install_ui_;
+  scoped_ptr<ExtensionUninstallDialog> extension_uninstall_dialog_;
 
   DISALLOW_COPY_AND_ASSIGN(AsyncUninstaller);
 };
@@ -92,6 +92,34 @@ class DevmodeObserver : public NotificationObserver {
   PrefChangeRegistrar registrar_;
 };
 
+class ProfileObserverBridge : public NotificationObserver {
+ public:
+  ProfileObserverBridge(ExtensionActionContextMenu* owner,
+                        const Profile* profile)
+      : owner_(owner),
+        profile_(profile) {
+    registrar_.Add(this, NotificationType::PROFILE_DESTROYED,
+                   Source<Profile>(profile));
+  }
+
+  ~ProfileObserverBridge() {}
+
+  // Overridden from NotificationObserver
+  void Observe(NotificationType type,
+               const NotificationSource& source,
+               const NotificationDetails& details) {
+    if (type == NotificationType::PROFILE_DESTROYED &&
+        source == Source<Profile>(profile_)) {
+      [owner_ invalidateProfile];
+    }
+  }
+
+ private:
+  ExtensionActionContextMenu* owner_;
+  const Profile* profile_;
+  NotificationRegistrar registrar_;
+};
+
 }  // namespace extension_action_context_menu
 
 @interface ExtensionActionContextMenu(Private)
@@ -109,8 +137,9 @@ enum {
   kExtensionContextOptions = 2,
   kExtensionContextDisable = 3,
   kExtensionContextUninstall = 4,
-  kExtensionContextManage = 6,
-  kExtensionContextInspect = 7
+  kExtensionContextHide = 5,
+  kExtensionContextManage = 7,
+  kExtensionContextInspect = 8
 };
 
 int CurrentTabId() {
@@ -139,6 +168,7 @@ int CurrentTabId() {
         l10n_util::GetNSStringWithFixup(IDS_EXTENSIONS_OPTIONS),
         l10n_util::GetNSStringWithFixup(IDS_EXTENSIONS_DISABLE),
         l10n_util::GetNSStringWithFixup(IDS_EXTENSIONS_UNINSTALL),
+        l10n_util::GetNSStringWithFixup(IDS_EXTENSIONS_HIDE_BUTTON),
         [NSMenuItem separatorItem],
         l10n_util::GetNSStringWithFixup(IDS_MANAGE_EXTENSIONS),
         nil];
@@ -163,6 +193,16 @@ int CurrentTabId() {
         } else {
           [itemObj setTarget:self];
         }
+
+        // Only browser actions can have their button hidden. Page actions
+        // should never show the "Hide" menu item.
+        if ([itemObj tag] == kExtensionContextHide &&
+            !extension->browser_action()) {
+          [itemObj setTarget:nil];  // Item is disabled.
+          [itemObj setHidden:YES];  // Item is hidden.
+        } else {
+          [itemObj setTarget:self];
+        }
       }
     }
 
@@ -177,6 +217,9 @@ int CurrentTabId() {
     PrefService* service = profile_->GetPrefs();
     observer_.reset(
         new extension_action_context_menu::DevmodeObserver(self, service));
+    profile_observer_.reset(
+        new extension_action_context_menu::ProfileObserverBridge(self,
+                                                                 profile));
 
     [self updateInspectorItem];
     return self;
@@ -226,6 +269,11 @@ int CurrentTabId() {
       uninstaller_.reset(new AsyncUninstaller(extension_, profile_));
       break;
     }
+    case kExtensionContextHide: {
+      ExtensionService* extension_service = profile_->GetExtensionService();
+      extension_service->SetBrowserActionVisibility(extension_, false);
+      break;
+    }
     case kExtensionContextManage: {
       browser->OpenURL(GURL(chrome::kChromeUIExtensionsURL), GURL(),
                        NEW_FOREGROUND_TAB, PageTransition::LINK);
@@ -273,6 +321,11 @@ int CurrentTabId() {
     return action_ && action_->HasPopup(CurrentTabId());
   }
   return YES;
+}
+
+- (void)invalidateProfile {
+  observer_.reset();
+  profile_ = NULL;
 }
 
 @end

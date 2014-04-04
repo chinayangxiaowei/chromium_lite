@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,15 +9,11 @@
 #include "media/audio/audio_util.h"
 #include "media/audio/mac/audio_manager_mac.h"
 
-namespace {
-
 // A custom data structure to store information an AudioQueue buffer.
 struct AudioQueueUserData {
   AudioQueueUserData() : empty_buffer(false) {}
   bool empty_buffer;
 };
-
-}  // namespace
 
 // Overview of operation:
 // 1) An object of PCMQueueOutAudioOutputStream is created by the AudioManager
@@ -60,8 +56,7 @@ PCMQueueOutAudioOutputStream::PCMQueueOutAudioOutputStream(
   // packet is always one frame.
   format_.mSampleRate = params.sample_rate;
   format_.mFormatID = kAudioFormatLinearPCM;
-  format_.mFormatFlags = kLinearPCMFormatFlagIsPacked |
-                         kLinearPCMFormatFlagIsSignedInteger;
+  format_.mFormatFlags = kLinearPCMFormatFlagIsPacked;
   format_.mBitsPerChannel = params.bits_per_sample;
   format_.mChannelsPerFrame = params.channels;
   format_.mFramesPerPacket = 1;
@@ -69,6 +64,10 @@ PCMQueueOutAudioOutputStream::PCMQueueOutAudioOutputStream(
   format_.mBytesPerFrame = format_.mBytesPerPacket;
 
   packet_size_ = params.GetPacketSize();
+
+  if (params.bits_per_sample > 8) {
+    format_.mFormatFlags |= kLinearPCMFormatFlagIsSignedInteger;
+  }
 
   // Silence buffer has a duration of 6ms to simulate the behavior of Windows.
   // This value is choosen by experiments and macs cannot keep up with
@@ -178,7 +177,6 @@ void PCMQueueOutAudioOutputStream::GetVolume(double* volume) {
 
 // Reorder PCM from AAC layout to Core Audio layout.
 // TODO(fbarchard): Switch layout when ffmpeg is updated.
-namespace {
 template<class Format>
 static void SwizzleLayout(Format* b, uint32 filled) {
   static const int kNumSurroundChannels = 6;
@@ -193,7 +191,6 @@ static void SwizzleLayout(Format* b, uint32 filled) {
     b[5] = aac[4];  // Rs
   }
 }
-}  // namespace
 
 // Note to future hackers of this function: Do not add locks here because we
 // call out to third party source that might do crazy things including adquire
@@ -225,7 +222,15 @@ void PCMQueueOutAudioOutputStream::RenderCallback(void* p_this,
   if (!filled) {
     CHECK(audio_stream->silence_bytes_ <= static_cast<int>(capacity));
     filled = audio_stream->silence_bytes_;
-    memset(buffer->mAudioData, 0, filled);
+
+    // Assume unsigned audio.
+    int silence_value = 128;
+    if (audio_stream->format_.mBitsPerChannel > 8) {
+      // When bits per channel is greater than 8, audio is signed.
+      silence_value = 0;
+    }
+
+    memset(buffer->mAudioData, silence_value, filled);
     static_cast<AudioQueueUserData*>(buffer->mUserData)->empty_buffer = true;
   } else if (filled > capacity) {
     // User probably overran our buffer.
@@ -248,7 +253,7 @@ void PCMQueueOutAudioOutputStream::RenderCallback(void* p_this,
 
   buffer->mAudioDataByteSize = filled;
 
-  // Incremnet bytes by amount filled into audio buffer if this is not a
+  // Increment bytes by amount filled into audio buffer if this is not a
   // silence buffer.
   if (!static_cast<AudioQueueUserData*>(buffer->mUserData)->empty_buffer)
     audio_stream->pending_bytes_ += filled;

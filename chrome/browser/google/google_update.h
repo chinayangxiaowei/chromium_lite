@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,7 +9,7 @@
 #include <string>
 
 #include "base/basictypes.h"
-#include "base/ref_counted.h"
+#include "base/memory/ref_counted.h"
 #if defined(OS_WIN)
 #include "google_update_idl.h"
 #endif
@@ -57,6 +57,8 @@ enum GoogleUpdateErrorCode {
   // An error occurred while upgrading (or while checking for update).
   // Check the Google Update log in %TEMP% for more details.
   GOOGLE_UPDATE_ERROR_UPDATING,
+  // Updates can not be downloaded because the administrator has disabled them.
+  GOOGLE_UPDATE_DISABLED_BY_POLICY,
 };
 
 // The GoogleUpdateStatusListener interface is used by components to receive

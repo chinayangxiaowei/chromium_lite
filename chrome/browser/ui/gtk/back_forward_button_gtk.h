@@ -6,7 +6,7 @@
 #define CHROME_BROWSER_UI_GTK_BACK_FORWARD_BUTTON_GTK_H_
 #pragma once
 
-#include "base/scoped_ptr.h"
+#include "base/memory/scoped_ptr.h"
 #include "base/task.h"
 #include "chrome/browser/ui/gtk/custom_button.h"
 #include "chrome/browser/ui/gtk/menu_gtk.h"
@@ -45,7 +45,7 @@ class BackForwardButtonGtk : MenuGtk::Delegate {
                        GdkEventMotion*);
 
   // Shows the dropdown menu.
-  void ShowBackForwardMenu();
+  void ShowBackForwardMenu(int button, guint32 event_time);
 
   // The menu gets reset every time it is shown.
   scoped_ptr<MenuGtk> menu_;

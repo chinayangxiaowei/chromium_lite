@@ -1,13 +1,13 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "base/scoped_nsobject.h"
-#include "base/scoped_ptr.h"
+#include "base/memory/scoped_nsobject.h"
+#include "base/memory/scoped_ptr.h"
 #include "chrome/app/chrome_command_ids.h"
-#include "chrome/browser/browser_window.h"
 #include "chrome/browser/prefs/pref_service.h"
 #include "chrome/browser/sync/sync_ui_util.h"
+#include "chrome/browser/ui/browser_window.h"
 #include "chrome/browser/ui/cocoa/browser_test_helper.h"
 #include "chrome/browser/ui/cocoa/browser_window_controller.h"
 #include "chrome/browser/ui/cocoa/cocoa_test_helper.h"
@@ -85,14 +85,18 @@ TEST_F(BrowserWindowControllerTest, TestSaveWindowPosition) {
   ASSERT_TRUE(prefs != NULL);
 
   // Check to make sure there is no existing pref for window placement.
-  ASSERT_TRUE(prefs->GetDictionary(prefs::kBrowserWindowPlacement) == NULL);
+  const DictionaryValue* browser_window_placement =
+      prefs->GetDictionary(prefs::kBrowserWindowPlacement);
+  ASSERT_TRUE(browser_window_placement);
+  EXPECT_TRUE(browser_window_placement->empty());
 
   // Ask the window to save its position, then check that a preference
-  // exists.  We're technically passing in a pointer to the user prefs
-  // and not the local state prefs, but a PrefService* is a
-  // PrefService*, and this is a unittest.
+  // exists.
   [controller_ saveWindowPositionToPrefs:prefs];
-  EXPECT_TRUE(prefs->GetDictionary(prefs::kBrowserWindowPlacement) != NULL);
+  browser_window_placement =
+      prefs->GetDictionary(prefs::kBrowserWindowPlacement);
+  ASSERT_TRUE(browser_window_placement);
+  EXPECT_FALSE(browser_window_placement->empty());
 }
 
 TEST_F(BrowserWindowControllerTest, TestFullScreenWindow) {
@@ -618,6 +622,14 @@ class BrowserWindowFullScreenControllerTest : public CocoaTest {
 - (BOOL)supportsFullscreen;
 @end
 
+// Check if the window is front most or if one of its child windows (such
+// as a status bubble) is front most.
+static bool IsFrontWindow(NSWindow *window) {
+  NSWindow* frontmostWindow = [[NSApp orderedWindows] objectAtIndex:0];
+  return [frontmostWindow isEqual:window] ||
+         [[frontmostWindow parentWindow] isEqual:window];
+}
+
 TEST_F(BrowserWindowFullScreenControllerTest, TestFullscreen) {
   EXPECT_FALSE([controller_ isFullscreen]);
   [controller_ setFullscreen:YES];
@@ -634,13 +646,11 @@ TEST_F(BrowserWindowFullScreenControllerTest, TestActivate) {
   EXPECT_FALSE([controller_ isFullscreen]);
 
   [controller_ activate];
-  NSWindow* frontmostWindow = [[NSApp orderedWindows] objectAtIndex:0];
-  EXPECT_EQ(frontmostWindow, [controller_ window]);
+  EXPECT_TRUE(IsFrontWindow([controller_ window]));
 
   [controller_ setFullscreen:YES];
   [controller_ activate];
-  frontmostWindow = [[NSApp orderedWindows] objectAtIndex:0];
-  EXPECT_EQ(frontmostWindow, [controller_ createFullscreenWindow]);
+  EXPECT_TRUE(IsFrontWindow([controller_ createFullscreenWindow]));
 
   // We have to cleanup after ourselves by unfullscreening.
   [controller_ setFullscreen:NO];

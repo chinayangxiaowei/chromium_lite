@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,8 +9,8 @@
 #include <string>
 
 
-#include "base/ref_counted.h"
-#include "base/scoped_ptr.h"
+#include "base/memory/ref_counted.h"
+#include "base/memory/scoped_ptr.h"
 #include "chrome/browser/chromeos/login/login_status_consumer.h"
 #include "chrome/common/net/gaia/gaia_auth_consumer.h"
 #include "chrome/common/net/gaia/google_service_auth_error.h"
@@ -18,6 +18,10 @@
 class CancelableTask;
 class GaiaAuthFetcher;
 class Profile;
+
+namespace net {
+class URLRequestContextGetter;
+}
 
 namespace chromeos {
 class AuthAttemptState;
@@ -34,6 +38,7 @@ class OnlineAttempt
   // Initiate the online login attempt.  Status will be recorded in
   // |current_attempt|, and resolver_->Resolve() will be called on the
   // IO thread when useful state is available.
+  // Must be called on the UI thread.
   void Initiate(Profile* profile);
 
   // Callbacks from GaiaAuthFetcher

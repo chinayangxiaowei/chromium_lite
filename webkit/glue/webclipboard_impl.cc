@@ -10,6 +10,7 @@
 #include "googleurl/src/gurl.h"
 #include "net/base/escape.h"
 #include "third_party/skia/include/core/SkBitmap.h"
+#include "third_party/WebKit/Source/WebKit/chromium/public/WebData.h"
 #include "third_party/WebKit/Source/WebKit/chromium/public/WebImage.h"
 #include "third_party/WebKit/Source/WebKit/chromium/public/WebSize.h"
 #include "third_party/WebKit/Source/WebKit/chromium/public/WebString.h"
@@ -24,6 +25,7 @@
 #endif
 
 using WebKit::WebClipboard;
+using WebKit::WebData;
 using WebKit::WebImage;
 using WebKit::WebString;
 using WebKit::WebURL;
@@ -65,7 +67,15 @@ bool WebClipboardImpl::isFormatAvailable(Format format, Buffer buffer) {
   ui::Clipboard::FormatType format_type;
   ui::Clipboard::Buffer buffer_type;
 
+  if (!ConvertBufferType(buffer, &buffer_type))
+    return false;
+
   switch (format) {
+    case FormatPlainText:
+      return ClipboardIsFormatAvailable(ui::Clipboard::GetPlainTextFormatType(),
+                                        buffer_type) ||
+          ClipboardIsFormatAvailable(ui::Clipboard::GetPlainTextWFormatType(),
+                                     buffer_type);
     case FormatHTML:
       format_type = ui::Clipboard::GetHtmlFormatType();
       break;
@@ -81,9 +91,6 @@ bool WebClipboardImpl::isFormatAvailable(Format format, Buffer buffer) {
       NOTREACHED();
       return false;
   }
-
-  if (!ConvertBufferType(buffer, &buffer_type))
-    return false;
 
   return ClipboardIsFormatAvailable(format_type, buffer_type);
 }
@@ -124,6 +131,16 @@ WebString WebClipboardImpl::readHTML(Buffer buffer, WebURL* source_url) {
   return html_stdstr;
 }
 
+WebData WebClipboardImpl::readImage(Buffer buffer) {
+  ui::Clipboard::Buffer buffer_type;
+  if (!ConvertBufferType(buffer, &buffer_type))
+    return WebData();
+
+  std::string png_data;
+  ClipboardReadImage(buffer_type, &png_data);
+  return WebData(png_data);
+}
+
 void WebClipboardImpl::writeHTML(
     const WebString& html_text, const WebURL& source_url,
     const WebString& plain_text, bool write_smart_paste) {
@@ -145,7 +162,7 @@ void WebClipboardImpl::writeURL(const WebURL& url, const WebString& title) {
 
   scw.WriteBookmark(title, url.spec());
   scw.WriteHTML(UTF8ToUTF16(URLToMarkup(url, title)), "");
-  scw.WriteText(UTF8ToUTF16(url.spec()));
+  scw.WriteText(UTF8ToUTF16(std::string(url.spec())));
 }
 
 void WebClipboardImpl::writeImage(
@@ -172,7 +189,9 @@ void WebClipboardImpl::writeImage(
   }
 }
 
-void WebClipboardImpl::writeData(const WebKit::WebDragData& data) {
+void WebClipboardImpl::writeData(const WebString& type,
+                                 const WebString& data,
+                                 const WebString& metadata) {
   // TODO(dcheng): Implement this stub.
 }
 

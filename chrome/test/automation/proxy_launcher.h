@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,9 +9,9 @@
 
 #include "base/basictypes.h"
 #include "base/command_line.h"
+#include "base/memory/scoped_ptr.h"
+#include "base/memory/scoped_temp_dir.h"
 #include "base/process.h"
-#include "base/scoped_ptr.h"
-#include "base/scoped_temp_dir.h"
 #include "base/time.h"
 
 class AutomationProxy;
@@ -25,6 +25,9 @@ class AutomationProxy;
 // implementation or to override browser launching behavior.
 class ProxyLauncher {
  public:
+  // Default path for named testing interface.
+  static const char kDefaultInterfacePath[];
+
   // Profile theme type choices.
   enum ProfileType {
     DEFAULT_THEME = 0,
@@ -70,17 +73,13 @@ class ProxyLauncher {
 
   virtual ~ProxyLauncher();
 
-  // Creates an automation proxy.
-  virtual AutomationProxy* CreateAutomationProxy(
-      int execution_timeout) = 0;
-
   // Launches the browser if needed and establishes a connection with it.
   virtual void InitializeConnection(const LaunchState& state,
                                     bool wait_for_initial_loads) = 0;
 
-  // Returns the automation proxy's channel with any prefixes prepended,
-  // for passing as a command line parameter over to the browser.
-  virtual std::string PrefixedChannelID() const = 0;
+  // Shuts down the browser if needed and destroys any
+  // connections established by InitalizeConnection.
+  virtual void TerminateConnection() = 0;
 
   // Launches the browser and IPC testing connection in server mode.
   void LaunchBrowserAndServer(const LaunchState& state,
@@ -90,11 +89,9 @@ class ProxyLauncher {
   // which then attempts to connect to a browser.
   void ConnectToRunningBrowser(bool wait_for_initial_loads);
 
-  // Only for pyauto.
-  void set_command_execution_timeout_ms(int timeout);
-
+  // Paired with LaunchBrowserAndServer().
   // Closes the browser and IPC testing server.
-  void CloseBrowserAndServer(ShutdownType shutdown_type);
+  void CloseBrowserAndServer();
 
   // Launches the browser with the given command line.
   // TODO(phajdan.jr): Make LaunchBrowser private. Tests should use
@@ -111,7 +108,7 @@ class ProxyLauncher {
 #endif
 
   // Exits out of browser instance.
-  void QuitBrowser(ShutdownType shutdown_type);
+  void QuitBrowser();
 
   // Terminates the browser, simulates end of session.
   void TerminateBrowser();
@@ -123,15 +120,14 @@ class ProxyLauncher {
   // Returns true when the browser process is running, independent if any
   // renderer process exists or not. It will returns false if an user closed the
   // window or if the browser process died by itself.
+  // TODO(phajdan.jr): Get rid of IsBrowserRunning, it is difficult
+  // to make it simple and reliable.
   bool IsBrowserRunning();
 
-  // Returns true when timeout_ms milliseconds have elapsed.
-  // Returns false if the browser process died while waiting.
-  bool CrashAwareSleep(int timeout_ms);
-
   // Wait for the browser process to shut down on its own (i.e. as a result of
-  // some action that your test has taken).
-  bool WaitForBrowserProcessToQuit(int timeout);
+  // some action that your test has taken). If it has exited within |timeout|,
+  // puts the exit code in |exit_code| and returns true.
+  bool WaitForBrowserProcessToQuit(int timeout, int* exit_code);
 
   AutomationProxy* automation() const;
 
@@ -151,6 +147,11 @@ class ProxyLauncher {
 
   // Return how long the shutdown took.
   base::TimeDelta browser_quit_time() const;
+
+  // Sets the shutdown type, which defaults to WINDOW_CLOSE.
+  void set_shutdown_type(ShutdownType value) {
+    shutdown_type_ = value;
+  }
 
   // Get/Set a flag to run the renderer in-process when running the tests.
   static bool in_process_renderer() { return in_process_renderer_; }
@@ -215,6 +216,18 @@ class ProxyLauncher {
   }
 
  protected:
+  // Creates an automation proxy.
+  virtual AutomationProxy* CreateAutomationProxy(
+      int execution_timeout) = 0;
+
+  // Returns the automation proxy's channel with any prefixes prepended,
+  // for passing as a command line parameter over to the browser.
+  virtual std::string PrefixedChannelID() const = 0;
+
+  // Paired with ConnectToRunningBrowser().
+  // Disconnects the testing IPC from the browser.
+  void DisconnectFromRunningBrowser();
+
   virtual bool ShouldFilterInet() {
     return true;
   }
@@ -252,6 +265,9 @@ class ProxyLauncher {
 
   // How long the shutdown took.
   base::TimeDelta browser_quit_time_;
+
+  // The method for shutting down the browser. Used in ShutdownTest.
+  ShutdownType shutdown_type_;
 
   // True if we're in single process mode.
   static bool in_process_renderer_;
@@ -297,11 +313,13 @@ class NamedProxyLauncher : public ProxyLauncher {
  public:
   // If launch_browser is true, launches Chrome with named interface enabled.
   // Otherwise, there should be an existing instance the proxy can connect to.
-  NamedProxyLauncher(bool launch_browser, bool disconnect_on_failure);
+  NamedProxyLauncher(const std::string& channel_id,
+                     bool launch_browser, bool disconnect_on_failure);
 
   virtual AutomationProxy* CreateAutomationProxy(int execution_timeout);
   virtual void InitializeConnection(const LaunchState& state,
                                     bool wait_for_initial_loads);
+  virtual void TerminateConnection();
   virtual std::string PrefixedChannelID() const;
 
  protected:
@@ -320,6 +338,7 @@ class AnonymousProxyLauncher : public ProxyLauncher {
   virtual AutomationProxy* CreateAutomationProxy(int execution_timeout);
   virtual void InitializeConnection(const LaunchState& state,
                                     bool wait_for_initial_loads);
+  virtual void TerminateConnection();
   virtual std::string PrefixedChannelID() const;
 
  protected:

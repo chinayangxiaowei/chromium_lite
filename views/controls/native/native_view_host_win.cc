@@ -1,13 +1,14 @@
-// Copyright (c) 2006-2008 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "views/controls/native/native_view_host_win.h"
 
 #include "base/logging.h"
-#include "gfx/canvas.h"
+#include "ui/gfx/canvas.h"
 #include "views/controls/native/native_view_host.h"
 #include "views/focus/focus_manager.h"
+#include "views/widget/native_widget.h"
 #include "views/widget/root_view.h"
 #include "views/widget/widget.h"
 
@@ -34,33 +35,15 @@ void NativeViewHostWin::NativeViewAttached() {
   // borders), when we change the parent below.
   ShowWindow(host_->native_view(), SW_HIDE);
 
-  // Need to set the HWND's parent before changing its size to avoid flashing.
-  SetParent(host_->native_view(), host_->GetWidget()->GetNativeView());
+  NativeWidget::ReparentNativeView(host_->native_view(),
+                                   host_->GetWidget()->GetNativeView());
   host_->Layout();
-  // Notify children that parent changed, so they could adjust the focus
-  std::vector<RootView*> root_views;
-  Widget::FindAllRootViews(host_->native_view(), &root_views);
-  for (std::vector<RootView*>::iterator it = root_views.begin();
-       it < root_views.end();
-       ++it) {
-    (*it)->NotifyNativeViewHierarchyChanged(true,
-        host_->GetWidget()->GetNativeView());
-  }
 }
 
 void NativeViewHostWin::NativeViewDetaching(bool destroyed) {
   if (!destroyed && installed_clip_)
     UninstallClip();
   installed_clip_ = false;
-  // Notify children that parent is removed
-  std::vector<RootView*> root_views;
-  Widget::FindAllRootViews(host_->native_view(), &root_views);
-  for (std::vector<RootView*>::iterator it = root_views.begin();
-       it < root_views.end();
-       ++it) {
-    (*it)->NotifyNativeViewHierarchyChanged(false,
-        host_->GetWidget()->GetNativeView());
-  }
 }
 
 void NativeViewHostWin::AddedToWidget() {

@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -29,10 +29,14 @@ FilePath::CharType kDefaultPluginLibraryName[] =
 // Some version ranges can be shared across operating systems. This should be
 // done where possible to avoid duplication.
 static const VersionRangeDefinition kFlashVersionRange[] = {
-    { "", "", "10.2.152" }
+    { "", "", "10.2.153", false }
 };
 static const VersionRangeDefinition kShockwaveVersionRange[] = {
-    { "", "", "11.5.9.620" }
+    { "",  "", "11.5.9.620", true }
+};
+static const VersionRangeDefinition kSilverlightVersionRange[] = {
+    { "0", "4", "3.0.50611.0", false },
+    { "4", "5", "", false }
 };
 
 // Similarly, try and share the group definition for plug-ins that are
@@ -42,38 +46,40 @@ static const PluginGroupDefinition kFlashDefinition = {
     arraysize(kFlashVersionRange), "http://get.adobe.com/flashplayer/" };
 
 static const PluginGroupDefinition kShockwaveDefinition = {
-    "shockwave", "Shockwave", "Shockwave for Director",
+    "shockwave", PluginGroup::kShockwaveGroupName, "Shockwave for Director",
     kShockwaveVersionRange, arraysize(kShockwaveVersionRange),
     "http://www.adobe.com/shockwave/download/" };
+
+static const PluginGroupDefinition kSilverlightDefinition = {
+    "silverlight", PluginGroup::kSilverlightGroupName, "Silverlight",
+    kSilverlightVersionRange, arraysize(kSilverlightVersionRange),
+    "http://www.microsoft.com/getsilverlight/" };
 
 #if defined(OS_MACOSX)
 // Plugin Groups for Mac.
 // Plugins are listed here as soon as vulnerabilities and solutions
 // (new versions) are published.
-// TODO(panayiotis): Get the Real Player version on Mac, somehow.
 static const VersionRangeDefinition kQuicktimeVersionRange[] = {
-    { "", "", "7.6.6" }
+    { "", "", "7.6.6", true }
 };
 static const VersionRangeDefinition kJavaVersionRange[] = {
-    { "13.0", "14.0", "13.3.0" }  // Snow Leopard
-};
-static const VersionRangeDefinition kSilverlightVersionRange[] = {
-    { "0", "4", "3.0.50106.0" },
-    { "4", "5", "" }
+    { "0", "13.0", "12.8.0", true },  // Leopard
+    { "13.0", "14.0", "13.4.0", true }  // Snow Leopard
 };
 static const VersionRangeDefinition kFlip4MacVersionRange[] = {
-    { "", "", "2.2.1" }
+    { "", "", "2.2.1", false }
 };
+// Note: The Adobe Reader browser plug-in is not supported in Chrome.
+// Note: The Real Player plugin for mac doesn't expose a version at all.
 static const PluginGroupDefinition kGroupDefinitions[] = {
   kFlashDefinition,
-  { "apple-quicktime", "Quicktime", "QuickTime Plug-in", kQuicktimeVersionRange,
-    arraysize(kQuicktimeVersionRange),
+  { "apple-quicktime", PluginGroup::kQuickTimeGroupName, "QuickTime Plug-in",
+    kQuicktimeVersionRange, arraysize(kQuicktimeVersionRange),
     "http://www.apple.com/quicktime/download/" },
-  { "java-runtime-environment", "Java", "Java", kJavaVersionRange,
-    arraysize(kJavaVersionRange), "http://support.apple.com/kb/HT1338" },
-  { "silverlight", "Silverlight", "Silverlight", kSilverlightVersionRange,
-    arraysize(kSilverlightVersionRange),
-    "http://www.microsoft.com/getsilverlight/" },
+  { "java-runtime-environment", PluginGroup::kJavaGroupName, "Java",
+    kJavaVersionRange, arraysize(kJavaVersionRange),
+    "http://support.apple.com/kb/HT1338" },
+  kSilverlightDefinition,
   { "flip4mac", "Flip4Mac", "Flip4Mac", kFlip4MacVersionRange,
     arraysize(kFlip4MacVersionRange),
     "http://www.telestream.net/flip4mac-wmv/overview.htm" },
@@ -84,45 +90,42 @@ static const PluginGroupDefinition kGroupDefinitions[] = {
 // TODO(panayiotis): We should group "RealJukebox NS Plugin" with the rest of
 // the RealPlayer files.
 static const VersionRangeDefinition kQuicktimeVersionRange[] = {
-    { "", "", "7.6.9" }
+    { "", "", "7.6.9", true }
 };
 static const VersionRangeDefinition kJavaVersionRange[] = {
-    { "0", "7", "6.0.240" }  // "240" is not a typo.
+    { "0", "7", "6.0.260", true }  // "260" is not a typo.
 };
+// This is up to date with
+// http://www.adobe.com/support/security/bulletins/apsb11-08.html
 static const VersionRangeDefinition kAdobeReaderVersionRange[] = {
-    { "10", "11", "10.0.1" },
-    { "9", "10", "9.4.2" },
-    { "0", "9", "8.2.6" }
-};
-static const VersionRangeDefinition kSilverlightVersionRange[] = {
-    { "0", "4", "3.0.50106.0" },
-    { "4", "5", "" }
+    { "10", "11", "10.0.1", false },
+    { "9", "10", "9.4.4", false },
+    { "0", "9", "8.2.6", false }
 };
 static const VersionRangeDefinition kDivXVersionRange[] = {
-    { "", "", "1.4.3.4" }
+    { "", "", "1.4.3.4", false }
 };
 static const VersionRangeDefinition kRealPlayerVersionRange[] = {
-    { "", "", "12.0.1.633" }
+    { "", "", "12.0.1.633", true }
 };
 static const PluginGroupDefinition kGroupDefinitions[] = {
   kFlashDefinition,
-  { "apple-quicktime", "Quicktime", "QuickTime Plug-in", kQuicktimeVersionRange,
-    arraysize(kQuicktimeVersionRange),
+  { "apple-quicktime", PluginGroup::kQuickTimeGroupName, "QuickTime Plug-in",
+    kQuicktimeVersionRange, arraysize(kQuicktimeVersionRange),
     "http://www.apple.com/quicktime/download/" },
-  { "java-runtime-environment", "Java 6", "Java", kJavaVersionRange,
-    arraysize(kJavaVersionRange), "http://www.java.com/download" },
+  { "java-runtime-environment", PluginGroup::kJavaGroupName, "Java",
+    kJavaVersionRange, arraysize(kJavaVersionRange),
+    "http://www.java.com/download" },
   { "adobe-reader", PluginGroup::kAdobeReaderGroupName, "Adobe Acrobat",
     kAdobeReaderVersionRange, arraysize(kAdobeReaderVersionRange),
     "http://get.adobe.com/reader/" },
-  { "silverlight", "Silverlight", "Silverlight", kSilverlightVersionRange,
-    arraysize(kSilverlightVersionRange),
-    "http://www.microsoft.com/getsilverlight/" },
+  kSilverlightDefinition,
   kShockwaveDefinition,
   { "divx-player", "DivX Player", "DivX Web Player", kDivXVersionRange,
     arraysize(kDivXVersionRange),
     "http://download.divx.com/divx/autoupdate/player/"
     "DivXWebPlayerInstaller.exe" },
-  { "realplayer", "RealPlayer", "RealPlayer",
+  { "realplayer", PluginGroup::kRealPlayerGroupName, "RealPlayer",
     kRealPlayerVersionRange, arraysize(kRealPlayerVersionRange),
     "http://www.real.com/realplayer/download" },
   // These are here for grouping, no vulnerabilities known.
@@ -134,37 +137,26 @@ static const PluginGroupDefinition kGroupDefinitions[] = {
 
 #else
 static const VersionRangeDefinition kJavaVersionRange[] = {
-    { "0", "1.7", "1.6.0.24" }
+    { "0", "1.7", "1.6.0.24", true }
 };
 
 static const VersionRangeDefinition kRedhatIcedTeaVersionRange[] = {
-    { "0", "1.9", "1.8.7" },
-    { "1.9", "1.10", "1.9.7" },
+    { "0", "1.9", "1.8.7", true },
+    { "1.9", "1.10", "1.9.7", true },
 };
 
 static const PluginGroupDefinition kGroupDefinitions[] = {
   // Flash on Linux is significant because there isn't yet a built-in Flash
   // plug-in on the Linux 64-bit version of Chrome.
   kFlashDefinition,
-  { "java-runtime-environment", "Java 6", "Java", kJavaVersionRange,
-    arraysize(kJavaVersionRange),
+  { "java-runtime-environment", PluginGroup::kJavaGroupName, "Java",
+    kJavaVersionRange, arraysize(kJavaVersionRange),
     "http://www.java.com/en/download/manual.jsp" },
-  { "redhat-icetea-java", "IcedTea", "IcedTea", kRedhatIcedTeaVersionRange,
-    arraysize(kRedhatIcedTeaVersionRange),
+  { "redhat-icetea-java", "IcedTea", "IcedTea",
+    kRedhatIcedTeaVersionRange, arraysize(kRedhatIcedTeaVersionRange),
     "http://www.linuxsecurity.com/content/section/3/170/" },
 };
 #endif
-
-// static
-const PluginGroupDefinition* PluginList::GetPluginGroupDefinitions() {
-  return kGroupDefinitions;
-}
-
-// static
-size_t PluginList::GetPluginGroupDefinitionsSize() {
-  // TODO(viettrungluu): |arraysize()| doesn't work with zero-size arrays.
-  return ARRAYSIZE_UNSAFE(kGroupDefinitions);
-}
 
 base::LazyInstance<PluginList> g_singleton(base::LINKER_INITIALIZED);
 
@@ -219,7 +211,9 @@ void PluginList::RegisterInternalPlugin(const WebPluginInfo& info) {
   InternalPlugin plugin = { info, entry_points };
 
   base::AutoLock lock(lock_);
-  internal_plugins_.push_back(plugin);
+  // Newer registrations go earlier in the list so they can override the MIME
+  // types of older registrations.
+  internal_plugins_.insert(internal_plugins_.begin(), plugin);
 }
 
 void PluginList::RegisterInternalPlugin(const FilePath& filename,
@@ -322,8 +316,21 @@ bool PluginList::ParseMimeTypes(
 PluginList::PluginList()
     : plugins_loaded_(false),
       plugins_need_refresh_(false),
-      disable_outdated_plugins_(false) {
+      disable_outdated_plugins_(false),
+      group_definitions_(kGroupDefinitions),
+      num_group_definitions_(ARRAYSIZE_UNSAFE(kGroupDefinitions)) {
   PlatformInit();
+  AddHardcodedPluginGroups(&plugin_groups_);
+}
+
+PluginList::PluginList(const PluginGroupDefinition* definitions,
+                       size_t num_definitions)
+    : plugins_loaded_(false),
+      plugins_need_refresh_(false),
+      disable_outdated_plugins_(false),
+      group_definitions_(definitions),
+      num_group_definitions_(num_definitions) {
+  // Don't do platform-dependend initialization in unit tests.
   AddHardcodedPluginGroups(&plugin_groups_);
 }
 
@@ -427,17 +434,7 @@ void PluginList::LoadPlugins(bool refresh) {
       }
     }
 
-    // Check if the group was disabled previously by the user.
-    for (size_t j = 0; j < plugin_groups_.size(); ++j) {
-      if (plugin_groups_[j]->GetGroupName() == group_name &&
-          !plugin_groups_[j]->Enabled()) {
-        group->EnableGroup(false);
-      }
-    }
-
     if (group->IsEmpty()) {
-      if (!group->Enabled())
-        groups_to_disable_.insert(group->GetGroupName());
       new_plugin_groups.erase(new_plugin_groups.begin() + i);
       --i;
       continue;
@@ -700,11 +697,10 @@ std::string PluginList::GetPluginGroupIdentifier(
 }
 
 void PluginList::AddHardcodedPluginGroups(ScopedVector<PluginGroup>* groups) {
-  base::AutoLock lock(lock_);
-  const PluginGroupDefinition* definitions = GetPluginGroupDefinitions();
-  size_t num_definitions = GetPluginGroupDefinitionsSize();
-  for (size_t i = 0; i < num_definitions; ++i)
-    groups->push_back(PluginGroup::FromPluginGroupDefinition(definitions[i]));
+  for (size_t i = 0; i < num_group_definitions_; ++i) {
+    groups->push_back(
+        PluginGroup::FromPluginGroupDefinition(group_definitions_[i]));
+  }
 }
 
 PluginGroup* PluginList::AddToPluginGroups(
@@ -769,7 +765,8 @@ bool PluginList::EnableGroup(bool enable, const string16& group_name) {
   base::AutoLock lock(lock_);
   PluginGroup* group = NULL;
   for (size_t i = 0; i < plugin_groups_.size(); ++i) {
-    if (plugin_groups_[i]->GetGroupName().find(group_name) != string16::npos) {
+    if (!plugin_groups_[i]->IsEmpty() &&
+        plugin_groups_[i]->GetGroupName().find(group_name) != string16::npos) {
       group = plugin_groups_[i];
       break;
     }

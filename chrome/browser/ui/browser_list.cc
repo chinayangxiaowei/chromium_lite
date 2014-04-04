@@ -1,8 +1,8 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "chrome/browser/browser_list.h"
+#include "chrome/browser/ui/browser_list.h"
 
 #include "base/logging.h"
 #include "base/message_loop.h"
@@ -10,13 +10,13 @@
 #include "build/build_config.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/browser_shutdown.h"
-#include "chrome/browser/browser_window.h"
 #include "chrome/browser/profiles/profile_manager.h"
-#include "chrome/browser/renderer_host/render_process_host.h"
-#include "chrome/browser/tab_contents/navigation_controller.h"
-#include "chrome/common/notification_registrar.h"
-#include "chrome/common/notification_service.h"
-#include "chrome/common/result_codes.h"
+#include "chrome/browser/ui/browser_window.h"
+#include "content/browser/renderer_host/render_process_host.h"
+#include "content/browser/tab_contents/navigation_controller.h"
+#include "content/common/notification_registrar.h"
+#include "content/common/notification_service.h"
+#include "content/common/result_codes.h"
 
 #if defined(OS_MACOSX)
 #include "chrome/browser/chrome_browser_application_mac.h"
@@ -26,6 +26,7 @@
 #include "chrome/browser/chromeos/boot_times_loader.h"
 #include "chrome/browser/chromeos/cros/cros_library.h"
 #include "chrome/browser/chromeos/cros/login_library.h"
+#include "chrome/browser/chromeos/cros/update_library.h"
 #include "chrome/browser/chromeos/wm_ipc.h"
 #endif
 
@@ -160,10 +161,6 @@ Browser* FindBrowserMatching(const T& begin,
 BrowserList::BrowserVector BrowserList::browsers_;
 ObserverList<BrowserList::Observer> BrowserList::observers_;
 
-#if defined(OS_CHROMEOS)
-bool BrowserList::notified_window_manager_about_signout_ = false;
-#endif
-
 // static
 void BrowserList::AddBrowser(Browser* browser) {
   DCHECK(browser);
@@ -194,20 +191,46 @@ void BrowserList::MarkAsCleanShutdown() {
   }
 }
 
+#if defined(OS_CHROMEOS)
 // static
-void BrowserList::NotifyAndTerminate() {
-#if defined(OS_CHROMEOS)
-  // Let the window manager know that we're going away before we start closing
-  // windows so it can display a graceful transition to a black screen.
-  chromeos::WmIpc::instance()->NotifyAboutSignout();
-  notified_window_manager_about_signout_ = true;
+void BrowserList::NotifyWindowManagerAboutSignout() {
+  static bool notified = false;
+  if (!notified) {
+    // Let the window manager know that we're going away before we start closing
+    // windows so it can display a graceful transition to a black screen.
+    chromeos::WmIpc::instance()->NotifyAboutSignout();
+    notified = true;
+  }
+}
+
+// static
+bool BrowserList::signout_ = false;
+
 #endif
-  NotificationService::current()->Notify(NotificationType::APP_TERMINATING,
-                                         NotificationService::AllSources(),
-                                         NotificationService::NoDetails());
+
+// static
+void BrowserList::NotifyAndTerminate(bool fast_path) {
 #if defined(OS_CHROMEOS)
-  if (chromeos::CrosLibrary::Get()->EnsureLoaded()) {
-    chromeos::CrosLibrary::Get()->GetLoginLibrary()->StopSession("");
+  if (!signout_) return;
+  NotifyWindowManagerAboutSignout();
+#endif
+
+  if (fast_path) {
+    NotificationService::current()->Notify(NotificationType::APP_TERMINATING,
+                                           NotificationService::AllSources(),
+                                           NotificationService::NoDetails());
+  }
+
+#if defined(OS_CHROMEOS)
+  chromeos::CrosLibrary* cros_library = chromeos::CrosLibrary::Get();
+  if (cros_library->EnsureLoaded()) {
+    // If update has been installed, reboot, otherwise, sign out.
+    if (cros_library->GetUpdateLibrary()->status().status ==
+          chromeos::UPDATE_STATUS_UPDATED_NEED_REBOOT) {
+      cros_library->GetUpdateLibrary()->RebootAfterUpdate();
+    } else {
+      cros_library->GetLoginLibrary()->StopSession("");
+    }
     return;
   }
   // If running the Chrome OS build, but we're not on the device, fall through
@@ -251,16 +274,6 @@ void BrowserList::RemoveBrowser(Browser* browser) {
   if (browsers_.empty() &&
       (browser_shutdown::IsTryingToQuit() ||
        g_browser_process->IsShuttingDown())) {
-#if defined(OS_CHROMEOS)
-    // We might've already notified the window manager before closing any
-    // windows in NotifyAndTerminate() if we were able to take the
-    // no-beforeunload-handlers-or-downloads fast path; no need to do it again
-    // here.
-    if (!notified_window_manager_about_signout_) {
-      chromeos::WmIpc::instance()->NotifyAboutSignout();
-      notified_window_manager_about_signout_ = true;
-    }
-#endif
     // Last browser has just closed, and this is a user-initiated quit or there
     // is no module keeping the app alive, so send out our notification. No need
     // to call ProfileManager::ShutdownSessionServices() as part of the
@@ -328,7 +341,7 @@ void BrowserList::CloseAllBrowsers() {
   // If there are no browsers, send the APP_TERMINATING action here. Otherwise,
   // it will be sent by RemoveBrowser() when the last browser has closed.
   if (force_exit || browsers_.empty()) {
-    NotifyAndTerminate();
+    NotifyAndTerminate(true);
     return;
   }
 #if defined(OS_CHROMEOS)
@@ -364,11 +377,12 @@ void BrowserList::CloseAllBrowsers() {
 // static
 void BrowserList::Exit() {
 #if defined(OS_CHROMEOS)
+  signout_ = true;
   // Fast shutdown for ChromeOS when there's no unload processing to be done.
   if (chromeos::CrosLibrary::Get()->EnsureLoaded()
       && !NeedBeforeUnloadFired()
       && !PendingDownloads()) {
-    NotifyAndTerminate();
+    NotifyAndTerminate(true);
     return;
   }
 #endif
@@ -618,8 +632,8 @@ void TabContentsIterator::Advance() {
       }
     }
 
-    TabContents* next_tab =
-        (*browser_iterator_)->GetTabContentsAt(web_view_index_);
+    TabContentsWrapper* next_tab =
+        (*browser_iterator_)->GetTabContentsWrapperAt(web_view_index_);
     if (next_tab) {
       cur_ = next_tab;
       return;

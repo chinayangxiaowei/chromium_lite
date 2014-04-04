@@ -20,16 +20,17 @@
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/sync/profile_sync_service.h"
 #include "chrome/browser/sync/sync_ui_util.h"
-#include "chrome/browser/tab_contents/tab_contents.h"
 #include "chrome/browser/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/toolbar/encoding_menu_controller.h"
 #include "chrome/browser/upgrade_detector.h"
 #include "chrome/common/chrome_switches.h"
-#include "chrome/common/notification_service.h"
-#include "chrome/common/notification_source.h"
-#include "chrome/common/notification_type.h"
 #include "chrome/common/pref_names.h"
+#include "chrome/common/profiling.h"
+#include "content/browser/tab_contents/tab_contents.h"
+#include "content/common/notification_service.h"
+#include "content/common/notification_source.h"
+#include "content/common/notification_type.h"
 #include "grit/chromium_strings.h"
 #include "grit/generated_resources.h"
 #include "grit/theme_resources.h"
@@ -167,23 +168,31 @@ void ToolsMenuModel::Build(Browser* browser) {
 #endif
 
   AddItemWithStringId(IDC_MANAGE_EXTENSIONS, IDS_SHOW_EXTENSIONS);
+#if defined(OS_CHROMEOS)
+  AddItemWithStringId(IDC_FILE_MANAGER, IDS_FILE_MANAGER);
+#endif
   AddItemWithStringId(IDC_TASK_MANAGER, IDS_TASK_MANAGER);
   AddItemWithStringId(IDC_CLEAR_BROWSING_DATA, IDS_CLEAR_BROWSING_DATA);
 
   AddSeparator();
 
+#if !defined(OS_CHROMEOS)
+  // Show IDC_FEEDBACK in "Tools" menu for non-ChromeOS platforms.
   AddItemWithStringId(IDC_FEEDBACK, IDS_FEEDBACK);
-
   AddSeparator();
+#endif
 
   encoding_menu_model_.reset(new EncodingMenuModel(browser));
   AddSubMenuWithStringId(IDC_ENCODING_MENU, IDS_ENCODING_MENU,
                          encoding_menu_model_.get());
   AddItemWithStringId(IDC_VIEW_SOURCE, IDS_VIEW_SOURCE);
-  if (g_browser_process->have_inspector_files()) {
-    AddItemWithStringId(IDC_DEV_TOOLS, IDS_DEV_TOOLS);
-    AddItemWithStringId(IDC_DEV_TOOLS_CONSOLE, IDS_DEV_TOOLS_CONSOLE);
-  }
+  AddItemWithStringId(IDC_DEV_TOOLS, IDS_DEV_TOOLS);
+  AddItemWithStringId(IDC_DEV_TOOLS_CONSOLE, IDS_DEV_TOOLS_CONSOLE);
+
+#if defined(ENABLE_PROFILING) && !defined(NO_TCMALLOC)
+  AddSeparator();
+  AddCheckItemWithStringId(IDC_PROFILING_ENABLED, IDS_PROFILING_ENABLED);
+#endif
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -221,7 +230,8 @@ bool WrenchMenuModel::IsItemForCommandIdDynamic(int command_id) const {
          command_id == IDC_FULLSCREEN ||
 #endif
          command_id == IDC_SYNC_BOOKMARKS ||
-         command_id == IDC_VIEW_BACKGROUND_PAGES;
+         command_id == IDC_VIEW_BACKGROUND_PAGES ||
+         command_id == IDC_UPGRADE_DIALOG;
 }
 
 string16 WrenchMenuModel::GetLabelForCommandId(int command_id) const {
@@ -245,10 +255,51 @@ string16 WrenchMenuModel::GetLabelForCommandId(int command_id) const {
       return l10n_util::GetStringFUTF16(IDS_VIEW_BACKGROUND_PAGES,
                                         num_background_pages);
     }
+    case IDC_UPGRADE_DIALOG: {
+#if defined(OS_CHROMEOS)
+      const string16 product_name =
+          l10n_util::GetStringUTF16(IDS_PRODUCT_OS_NAME);
+#else
+      const string16 product_name = l10n_util::GetStringUTF16(IDS_PRODUCT_NAME);
+#endif
+
+      return l10n_util::GetStringFUTF16(IDS_UPDATE_NOW, product_name);
+    }
     default:
       NOTREACHED();
       return string16();
   }
+}
+
+bool WrenchMenuModel::GetIconForCommandId(int command_id,
+                                          SkBitmap* icon) const {
+  switch (command_id) {
+    case IDC_UPGRADE_DIALOG: {
+      ResourceBundle& rb = ResourceBundle::GetSharedInstance();
+      int resource_id;
+      UpgradeDetector::UpgradeNotificationAnnoyanceLevel stage =
+          UpgradeDetector::GetInstance()->upgrade_notification_stage();
+      switch (stage) {
+        case UpgradeDetector::UPGRADE_ANNOYANCE_SEVERE:
+          resource_id = IDR_UPDATE_MENU4;
+          break;
+        case UpgradeDetector::UPGRADE_ANNOYANCE_HIGH:
+          resource_id = IDR_UPDATE_MENU3;
+          break;
+        case UpgradeDetector::UPGRADE_ANNOYANCE_ELEVATED:
+          resource_id = IDR_UPDATE_MENU2;
+          break;
+        default:
+          resource_id = IDR_UPDATE_MENU;
+          break;
+      }
+      *icon = *rb.GetBitmapNamed(resource_id);
+      break;
+    }
+    default:
+      break;
+  }
+  return false;
 }
 
 void WrenchMenuModel::ExecuteCommand(int command_id) {
@@ -258,20 +309,18 @@ void WrenchMenuModel::ExecuteCommand(int command_id) {
 bool WrenchMenuModel::IsCommandIdChecked(int command_id) const {
   if (command_id == IDC_SHOW_BOOKMARK_BAR) {
     return browser_->profile()->GetPrefs()->GetBoolean(prefs::kShowBookmarkBar);
+  } else if (command_id == IDC_PROFILING_ENABLED) {
+    return Profiling::BeingProfiled();
   }
 
   return false;
 }
 
 bool WrenchMenuModel::IsCommandIdEnabled(int command_id) const {
-#if defined(OS_CHROMEOS)
-  // Special case because IDC_NEW_WINDOW item should be disabled in BWSI mode,
-  // but accelerator should work.
-  if (command_id == IDC_NEW_WINDOW &&
-      CommandLine::ForCurrentProcess()->HasSwitch(switches::kGuestSession))
-    return false;
-#endif
-
+  if (command_id == IDC_SHOW_BOOKMARK_BAR) {
+    return !browser_->profile()->GetPrefs()->IsManagedPreference(
+        prefs::kEnableBookmarkBar);
+  }
   return browser_->command_updater()->IsCommandEnabled(command_id);
 }
 
@@ -287,7 +336,10 @@ bool WrenchMenuModel::IsCommandIdVisible(int command_id) const {
 #if defined(OS_WIN)
     EnumerateModulesModel* loaded_modules =
         EnumerateModulesModel::GetInstance();
-    return loaded_modules->confirmed_bad_modules_detected() > 0;
+    if (loaded_modules->confirmed_bad_modules_detected() <= 0)
+      return false;
+    loaded_modules->AcknowledgeConflictNotification();
+    return true;
 #else
     return false;
 #endif
@@ -351,8 +403,12 @@ WrenchMenuModel::WrenchMenuModel()
 void WrenchMenuModel::Build() {
   AddItemWithStringId(IDC_NEW_TAB, IDS_NEW_TAB);
   AddItemWithStringId(IDC_NEW_WINDOW, IDS_NEW_WINDOW);
-  AddItemWithStringId(IDC_NEW_INCOGNITO_WINDOW,
-                             IDS_NEW_INCOGNITO_WINDOW);
+#if defined(OS_CHROMEOS)
+  if (!CommandLine::ForCurrentProcess()->HasSwitch(switches::kGuestSession))
+    AddItemWithStringId(IDC_NEW_INCOGNITO_WINDOW, IDS_NEW_INCOGNITO_WINDOW);
+#else
+  AddItemWithStringId(IDC_NEW_INCOGNITO_WINDOW, IDS_NEW_INCOGNITO_WINDOW);
+#endif
 
   AddSeparator();
 #if defined(OS_MACOSX) || (defined(OS_LINUX) && !defined(TOOLKIT_VIEWS))
@@ -423,11 +479,7 @@ void WrenchMenuModel::Build() {
 #else
   const string16 product_name = l10n_util::GetStringUTF16(IDS_PRODUCT_NAME);
 #endif
-  // On Mac, there is no About item.
-  if (browser_defaults::kShowAboutMenuItem) {
-    AddItem(IDC_ABOUT, l10n_util::GetStringFUTF16(
-        IDS_ABOUT, product_name));
-  }
+  AddItem(IDC_ABOUT, l10n_util::GetStringFUTF16(IDS_ABOUT, product_name));
   string16 num_background_pages = base::FormatNumber(
       BackgroundPageTracker::GetInstance()->GetBackgroundPageCount());
   AddItem(IDC_VIEW_BACKGROUND_PAGES, l10n_util::GetStringFUTF16(
@@ -437,15 +489,23 @@ void WrenchMenuModel::Build() {
   AddItem(IDC_VIEW_INCOMPATIBILITIES, l10n_util::GetStringUTF16(
       IDS_VIEW_INCOMPATIBILITIES));
 
-  ResourceBundle& rb = ResourceBundle::GetSharedInstance();
-  SetIcon(GetIndexOfCommandId(IDC_UPGRADE_DIALOG),
-          *rb.GetBitmapNamed(IDR_UPDATE_MENU));
 #if defined(OS_WIN)
+  ResourceBundle& rb = ResourceBundle::GetSharedInstance();
   SetIcon(GetIndexOfCommandId(IDC_VIEW_INCOMPATIBILITIES),
           *rb.GetBitmapNamed(IDR_CONFLICT_MENU));
 #endif
 
   AddItemWithStringId(IDC_HELP_PAGE, IDS_HELP_PAGE);
+#if defined(OS_CHROMEOS)
+  ResourceBundle& rb = ResourceBundle::GetSharedInstance();
+  // Use an icon for IDC_HELP_PAGE menu item.
+  SetIcon(GetIndexOfCommandId(IDC_HELP_PAGE),
+          *rb.GetBitmapNamed(IDR_HELP_MENU));
+
+  // Show IDC_FEEDBACK in top-tier wrench menu for ChromeOS.
+  AddItemWithStringId(IDC_FEEDBACK, IDS_FEEDBACK);
+#endif
+
   if (browser_defaults::kShowExitMenuItem) {
     AddSeparator();
 #if defined(OS_CHROMEOS)

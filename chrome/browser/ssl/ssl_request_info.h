@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,7 +8,7 @@
 
 #include <string>
 
-#include "base/ref_counted.h"
+#include "base/memory/ref_counted.h"
 #include "googleurl/src/gurl.h"
 #include "webkit/glue/resource_type.h"
 
@@ -19,16 +19,12 @@ class SSLRequestInfo : public base::RefCounted<SSLRequestInfo> {
  public:
   SSLRequestInfo(const GURL& url,
                  ResourceType::Type resource_type,
-                 const std::string& frame_origin,
-                 const std::string& main_frame_origin,
                  int child_id,
                  int ssl_cert_id,
                  int ssl_cert_status);
 
   const GURL& url() const { return url_; }
   ResourceType::Type resource_type() const { return resource_type_; }
-  const std::string& frame_origin() const { return frame_origin_; }
-  const std::string& main_frame_origin() const { return main_frame_origin_; }
   int child_id() const { return child_id_; }
   int ssl_cert_id() const { return ssl_cert_id_; }
   int ssl_cert_status() const { return ssl_cert_status_; }
@@ -40,8 +36,6 @@ class SSLRequestInfo : public base::RefCounted<SSLRequestInfo> {
 
   GURL url_;
   ResourceType::Type resource_type_;
-  std::string frame_origin_;
-  std::string main_frame_origin_;
   int child_id_;
   int ssl_cert_id_;
   int ssl_cert_status_;

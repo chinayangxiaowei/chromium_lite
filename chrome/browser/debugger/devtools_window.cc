@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,36 +7,39 @@
 #include "base/string_number_conversions.h"
 #include "base/utf_string_conversions.h"
 #include "base/values.h"
-#include "chrome/browser/browser_list.h"
 #include "chrome/browser/browser_process.h"
-#include "chrome/browser/browser_window.h"
 #include "chrome/browser/debugger/devtools_manager.h"
 #include "chrome/browser/debugger/devtools_window.h"
 #include "chrome/browser/extensions/extension_service.h"
-#include "chrome/browser/in_process_webkit/session_storage_namespace.h"
 #include "chrome/browser/load_notification_details.h"
 #include "chrome/browser/prefs/pref_service.h"
+#include "chrome/browser/prefs/scoped_user_pref_update.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/renderer_host/render_view_host.h"
-#include "chrome/browser/tab_contents/navigation_controller.h"
-#include "chrome/browser/tab_contents/navigation_entry.h"
-#include "chrome/browser/tab_contents/tab_contents.h"
-#include "chrome/browser/tab_contents/tab_contents_view.h"
 #include "chrome/browser/tabs/tab_strip_model.h"
-#include "chrome/browser/themes/browser_theme_provider.h"
+#include "chrome/browser/themes/theme_service.h"
+#include "chrome/browser/themes/theme_service_factory.h"
 #include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_list.h"
+#include "chrome/browser/ui/browser_window.h"
 #include "chrome/browser/ui/tab_contents/tab_contents_wrapper.h"
-#include "chrome/common/bindings_policy.h"
-#include "chrome/common/notification_service.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/common/render_messages.h"
 #include "chrome/common/url_constants.h"
+#include "content/browser/in_process_webkit/session_storage_namespace.h"
+#include "content/browser/renderer_host/render_view_host.h"
+#include "content/browser/tab_contents/navigation_controller.h"
+#include "content/browser/tab_contents/navigation_entry.h"
+#include "content/browser/tab_contents/tab_contents.h"
+#include "content/browser/tab_contents/tab_contents_view.h"
+#include "content/common/bindings_policy.h"
+#include "content/common/notification_service.h"
 #include "grit/generated_resources.h"
 
 const char DevToolsWindow::kDevToolsApp[] = "DevToolsApp";
 
 // static
-TabContents* DevToolsWindow::GetDevToolsContents(TabContents* inspected_tab) {
+TabContentsWrapper* DevToolsWindow::GetDevToolsContents(
+    TabContents* inspected_tab) {
   if (!inspected_tab) {
     return NULL;
   }
@@ -54,7 +57,7 @@ TabContents* DevToolsWindow::GetDevToolsContents(TabContents* inspected_tab) {
   if (!window || !window->is_docked()) {
     return NULL;
   }
-  return window->tab_contents()->tab_contents();
+  return window->tab_contents();
 }
 
 DevToolsWindow::DevToolsWindow(Profile* profile,
@@ -69,7 +72,7 @@ DevToolsWindow::DevToolsWindow(Profile* profile,
   tab_contents_ =
       Browser::TabContentsFactory(profile, NULL, MSG_ROUTING_NONE, NULL, NULL);
   tab_contents_->tab_contents()->
-      render_view_host()->AllowBindings(BindingsPolicy::DOM_UI);
+      render_view_host()->AllowBindings(BindingsPolicy::WEB_UI);
   tab_contents_->controller().LoadURL(
       GetDevToolsUrl(), GURL(), PageTransition::START_PAGE);
 
@@ -126,21 +129,26 @@ void DevToolsWindow::InspectedTabClosing() {
   }
 }
 
+void DevToolsWindow::TabReplaced(TabContentsWrapper* new_tab) {
+  DCHECK_EQ(profile_, new_tab->profile());
+  inspected_tab_ = new_tab->tab_contents();
+}
+
 void DevToolsWindow::Show(DevToolsToggleAction action) {
   if (docked_) {
     Browser* inspected_browser;
     int inspected_tab_index;
     // Tell inspected browser to update splitter and switch to inspected panel.
-    if (FindInspectedBrowserAndTabIndex(&inspected_browser,
+    if (!IsInspectedBrowserPopup() &&
+        FindInspectedBrowserAndTabIndex(&inspected_browser,
                                         &inspected_tab_index)) {
       BrowserWindow* inspected_window = inspected_browser->window();
       tab_contents_->tab_contents()->set_delegate(this);
       inspected_window->UpdateDevTools();
-      SetAttachedWindow();
       tab_contents_->view()->SetInitialFocus();
       inspected_window->Show();
       TabStripModel* tabstrip_model = inspected_browser->tabstrip_model();
-      tabstrip_model->SelectTabContentsAt(inspected_tab_index, true);
+      tabstrip_model->ActivateTabAt(inspected_tab_index, true);
       ScheduleAction(action);
       return;
     } else {
@@ -157,11 +165,10 @@ void DevToolsWindow::Show(DevToolsToggleAction action) {
   if (!browser_)
     CreateDevToolsBrowser();
 
-  if (should_show_window)
+  if (should_show_window) {
     browser_->window()->Show();
-  SetAttachedWindow();
-  if (should_show_window)
     tab_contents_->view()->SetInitialFocus();
+  }
 
   ScheduleAction(action);
 }
@@ -181,7 +188,7 @@ void DevToolsWindow::Activate() {
 void DevToolsWindow::SetDocked(bool docked) {
   if (docked_ == docked)
     return;
-  if (docked && !GetInspectedBrowserWindow()) {
+  if (docked && (!GetInspectedBrowserWindow() || IsInspectedBrowserPopup())) {
     // Cannot dock, avoid window flashing due to close-reopen cycle.
     return;
   }
@@ -216,14 +223,15 @@ void DevToolsWindow::CreateDevToolsBrowser() {
   wp_key.append("_");
   wp_key.append(kDevToolsApp);
 
-  PrefService* prefs = g_browser_process->local_state();
+  PrefService* prefs = profile_->GetPrefs();
   if (!prefs->FindPreference(wp_key.c_str())) {
     prefs->RegisterDictionaryPref(wp_key.c_str());
   }
 
   const DictionaryValue* wp_pref = prefs->GetDictionary(wp_key.c_str());
-  if (!wp_pref) {
-    DictionaryValue* defaults = prefs->GetMutableDictionary(wp_key.c_str());
+  if (!wp_pref || wp_pref->empty()) {
+    DictionaryPrefUpdate update(prefs, wp_key.c_str());
+    DictionaryValue* defaults = update.Get();
     defaults->SetInteger("left", 100);
     defaults->SetInteger("top", 100);
     defaults->SetInteger("right", 740);
@@ -234,8 +242,7 @@ void DevToolsWindow::CreateDevToolsBrowser() {
 
   browser_ = Browser::CreateForDevTools(profile_);
   browser_->tabstrip_model()->AddTabContents(
-      tab_contents_, -1, PageTransition::START_PAGE,
-      TabStripModel::ADD_SELECTED);
+      tab_contents_, -1, PageTransition::START_PAGE, TabStripModel::ADD_ACTIVE);
 }
 
 bool DevToolsWindow::FindInspectedBrowserAndTabIndex(Browser** browser,
@@ -260,18 +267,27 @@ BrowserWindow* DevToolsWindow::GetInspectedBrowserWindow() {
       browser->window() : NULL;
 }
 
-void DevToolsWindow::SetAttachedWindow() {
-  tab_contents_->render_view_host()->
-      ExecuteJavascriptInWebFrame(
-          L"", docked_ ? L"WebInspector.setAttachedWindow(true);" :
-                         L"WebInspector.setAttachedWindow(false);");
+bool DevToolsWindow::IsInspectedBrowserPopup() {
+  Browser* browser = NULL;
+  int tab;
+  if (!FindInspectedBrowserAndTabIndex(&browser, &tab))
+    return false;
+
+  return (browser->type() & Browser::TYPE_POPUP) != 0;
+}
+
+void DevToolsWindow::UpdateFrontendAttachedState() {
+  tab_contents_->render_view_host()->ExecuteJavascriptInWebFrame(
+      string16(),
+      docked_ ? ASCIIToUTF16("WebInspector.setAttachedWindow(true);")
+              : ASCIIToUTF16("WebInspector.setAttachedWindow(false);"));
 }
 
 
 void DevToolsWindow::AddDevToolsExtensionsToClient() {
   if (inspected_tab_) {
     FundamentalValue tabId(inspected_tab_->controller().session_id().id());
-    CallClientFunction(L"WebInspector.setInspectedTabId", tabId);
+    CallClientFunction(ASCIIToUTF16("WebInspector.setInspectedTabId"), tabId);
   }
   ListValue results;
   const ExtensionService* extension_service =
@@ -291,23 +307,35 @@ void DevToolsWindow::AddDevToolsExtensionsToClient() {
         new StringValue((*extension)->devtools_url().spec()));
     results.Append(extension_info);
   }
-  CallClientFunction(L"WebInspector.addExtensions", results);
+  CallClientFunction(ASCIIToUTF16("WebInspector.addExtensions"), results);
 }
 
-void DevToolsWindow::CallClientFunction(const std::wstring& function_name,
-                                         const Value& arg) {
+void DevToolsWindow::OpenURLFromTab(TabContents* source,
+                                    const GURL& url,
+                                    const GURL& referrer,
+                                    WindowOpenDisposition disposition,
+                                    PageTransition::Type transition) {
+  if (inspected_tab_)
+    inspected_tab_->OpenURL(url,
+                            GURL(),
+                            NEW_FOREGROUND_TAB,
+                            PageTransition::LINK);
+}
+
+void DevToolsWindow::CallClientFunction(const string16& function_name,
+                                        const Value& arg) {
   std::string json;
   base::JSONWriter::Write(&arg, false, &json);
-  std::wstring javascript = function_name + L"(" + UTF8ToWide(json) + L");";
+  string16 javascript = function_name + char16('(') + UTF8ToUTF16(json) +
+      ASCIIToUTF16(");");
   tab_contents_->render_view_host()->
-      ExecuteJavascriptInWebFrame(L"", javascript);
+      ExecuteJavascriptInWebFrame(string16(), javascript);
 }
 
 void DevToolsWindow::Observe(NotificationType type,
                              const NotificationSource& source,
                              const NotificationDetails& details) {
   if (type == NotificationType::LOAD_STOP && !is_loaded_) {
-    SetAttachedWindow();
     is_loaded_ = true;
     UpdateTheme();
     DoAction();
@@ -334,16 +362,16 @@ void DevToolsWindow::ScheduleAction(DevToolsToggleAction action) {
 }
 
 void DevToolsWindow::DoAction() {
+  UpdateFrontendAttachedState();
   // TODO: these messages should be pushed through the WebKit API instead.
   switch (action_on_load_) {
     case DEVTOOLS_TOGGLE_ACTION_SHOW_CONSOLE:
-      tab_contents_->render_view_host()->
-          ExecuteJavascriptInWebFrame(L"", L"WebInspector.showConsole();");
+      tab_contents_->render_view_host()->ExecuteJavascriptInWebFrame(
+          string16(), ASCIIToUTF16("WebInspector.showConsole();"));
       break;
     case DEVTOOLS_TOGGLE_ACTION_INSPECT:
-      tab_contents_->render_view_host()->
-          ExecuteJavascriptInWebFrame(
-              L"", L"WebInspector.toggleSearchingForNode();");
+      tab_contents_->render_view_host()->ExecuteJavascriptInWebFrame(
+          string16(), ASCIIToUTF16("WebInspector.toggleSearchingForNode();"));
     case DEVTOOLS_TOGGLE_ACTION_NONE:
       // Do nothing.
       break;
@@ -362,13 +390,13 @@ std::string SkColorToRGBAString(SkColor color) {
 }
 
 GURL DevToolsWindow::GetDevToolsUrl() {
-  BrowserThemeProvider* tp = profile_->GetThemeProvider();
+  ThemeService* tp = ThemeServiceFactory::GetForProfile(profile_);
   CHECK(tp);
 
   SkColor color_toolbar =
-      tp->GetColor(BrowserThemeProvider::COLOR_TOOLBAR);
+      tp->GetColor(ThemeService::COLOR_TOOLBAR);
   SkColor color_tab_text =
-      tp->GetColor(BrowserThemeProvider::COLOR_BOOKMARK_TEXT);
+      tp->GetColor(ThemeService::COLOR_BOOKMARK_TEXT);
 
   std::string url_string = StringPrintf(
       "%sdevtools.html?docked=%s&toolbar_color=%s&text_color=%s",
@@ -380,19 +408,19 @@ GURL DevToolsWindow::GetDevToolsUrl() {
 }
 
 void DevToolsWindow::UpdateTheme() {
-  BrowserThemeProvider* tp = profile_->GetThemeProvider();
+  ThemeService* tp = ThemeServiceFactory::GetForProfile(profile_);
   CHECK(tp);
 
   SkColor color_toolbar =
-      tp->GetColor(BrowserThemeProvider::COLOR_TOOLBAR);
+      tp->GetColor(ThemeService::COLOR_TOOLBAR);
   SkColor color_tab_text =
-      tp->GetColor(BrowserThemeProvider::COLOR_BOOKMARK_TEXT);
+      tp->GetColor(ThemeService::COLOR_BOOKMARK_TEXT);
   std::string command = StringPrintf(
       "WebInspector.setToolbarColors(\"%s\", \"%s\")",
       SkColorToRGBAString(color_toolbar).c_str(),
       SkColorToRGBAString(color_tab_text).c_str());
   tab_contents_->render_view_host()->
-      ExecuteJavascriptInWebFrame(L"", UTF8ToWide(command));
+      ExecuteJavascriptInWebFrame(string16(), UTF8ToUTF16(command));
 }
 
 void DevToolsWindow::AddNewContents(TabContents* source,

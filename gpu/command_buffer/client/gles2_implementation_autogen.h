@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -879,10 +879,7 @@ void* MapTexSubImage2DCHROMIUM(
 void UnmapTexSubImage2DCHROMIUM(const void* mem);
 
 void CopyTextureToParentTextureCHROMIUM(
-    GLuint client_child_id, GLuint client_parent_id) {
-  helper_->CopyTextureToParentTextureCHROMIUM(
-      client_child_id, client_parent_id);
-}
+    GLuint client_child_id, GLuint client_parent_id);
 
 void ResizeCHROMIUM(GLuint width, GLuint height) {
   helper_->ResizeCHROMIUM(width, height);
@@ -891,6 +888,14 @@ void ResizeCHROMIUM(GLuint width, GLuint height) {
 const GLchar* GetRequestableExtensionsCHROMIUM();
 
 void RequestExtensionCHROMIUM(const char* extension);
+
+void SetLatchCHROMIUM(GLuint latch_id) {
+  helper_->SetLatchCHROMIUM(latch_id);
+}
+
+void WaitLatchCHROMIUM(GLuint latch_id) {
+  helper_->WaitLatchCHROMIUM(latch_id);
+}
 
 #endif  // GPU_COMMAND_BUFFER_CLIENT_GLES2_IMPLEMENTATION_AUTOGEN_H_
 

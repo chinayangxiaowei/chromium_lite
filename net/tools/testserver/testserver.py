@@ -1,5 +1,5 @@
 #!/usr/bin/python2.4
-# Copyright (c) 2006-2010 The Chromium Authors. All rights reserved.
+# Copyright (c) 2011 The Chromium Authors. All rights reserved.
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
@@ -278,16 +278,15 @@ class TestPageHandler(BasePageHandler):
       self.DownloadHandler,
       self.DownloadFinishHandler,
       self.EchoHeader,
-      self.EchoHeaderOverride,
+      self.EchoHeaderCache,
       self.EchoAllHandler,
       self.FileHandler,
-      self.RealFileWithCommonHeaderHandler,
-      self.RealBZ2FileWithCommonHeaderHandler,
       self.SetCookieHandler,
       self.AuthBasicHandler,
       self.AuthDigestHandler,
       self.SlowServerHandler,
       self.ContentTypeHandler,
+      self.NoContentHandler,
       self.ServerRedirectHandler,
       self.ClientRedirectHandler,
       self.MultipartHandler,
@@ -556,19 +555,12 @@ class TestPageHandler(BasePageHandler):
 
   def EchoHeader(self):
     """This handler echoes back the value of a specific request header."""
-    """The only difference between this function and the EchoHeaderOverride"""
-    """function is in the parameter being passed to the helper function"""
     return self.EchoHeaderHelper("/echoheader")
 
-  def EchoHeaderOverride(self):
-    """This handler echoes back the value of a specific request header."""
-    """The UrlRequest unit tests also execute for ChromeFrame which uses"""
-    """IE to issue HTTP requests using the host network stack."""
-    """The Accept and Charset tests which expect the server to echo back"""
-    """the corresponding headers fail here as IE returns cached responses"""
-    """The EchoHeaderOverride parameter is an easy way to ensure that IE"""
-    """treats this request as a new request and does not cache it."""
-    return self.EchoHeaderHelper("/echoheaderoverride")
+    """This function echoes back the value of a specific request header"""
+    """while allowing caching for 16 hours."""
+  def EchoHeaderCache(self):
+    return self.EchoHeaderHelper("/echoheadercache")
 
   def EchoHeaderHelper(self, echo_header):
     """This function echoes back the value of the request header passed in."""
@@ -581,7 +573,10 @@ class TestPageHandler(BasePageHandler):
 
     self.send_response(200)
     self.send_header('Content-type', 'text/plain')
-    self.send_header('Cache-control', 'max-age=60000')
+    if echo_header == '/echoheadercache':
+      self.send_header('Cache-control', 'max-age=60000')
+    else:
+      self.send_header('Cache-control', 'no-cache')
     # insert a vary header to properly indicate that the cachability of this
     # request is subject to value of the request header being echoed.
     if len(header_name) > 0:
@@ -593,6 +588,26 @@ class TestPageHandler(BasePageHandler):
 
     return True
 
+  def ReadRequestBody(self):
+    """This function reads the body of the current HTTP request, handling
+    both plain and chunked transfer encoded requests."""
+
+    if self.headers.getheader('transfer-encoding') != 'chunked':
+      length = int(self.headers.getheader('content-length'))
+      return self.rfile.read(length)
+
+    # Read the request body as chunks.
+    body = ""
+    while True:
+      line = self.rfile.readline()
+      length = int(line, 16)
+      if length == 0:
+        self.rfile.readline()
+        break
+      body += self.rfile.read(length)
+      self.rfile.read(2)
+    return body
+
   def EchoHandler(self):
     """This handler just echoes back the payload of the request, for testing
     form submission."""
@@ -603,9 +618,7 @@ class TestPageHandler(BasePageHandler):
     self.send_response(200)
     self.send_header('Content-type', 'text/html')
     self.end_headers()
-    length = int(self.headers.getheader('content-length'))
-    request = self.rfile.read(length)
-    self.wfile.write(request)
+    self.wfile.write(self.ReadRequestBody())
     return True
 
   def EchoTitleHandler(self):
@@ -617,8 +630,7 @@ class TestPageHandler(BasePageHandler):
     self.send_response(200)
     self.send_header('Content-type', 'text/html')
     self.end_headers()
-    length = int(self.headers.getheader('content-length'))
-    request = self.rfile.read(length)
+    request = self.ReadRequestBody()
     self.wfile.write('<html><head><title>')
     self.wfile.write(request)
     self.wfile.write('</title></head></html>')
@@ -642,8 +654,7 @@ class TestPageHandler(BasePageHandler):
       '<h1>Request Body:</h1><pre>')
 
     if self.command == 'POST' or self.command == 'PUT':
-      length = int(self.headers.getheader('content-length'))
-      qs = self.rfile.read(length)
+      qs = self.ReadRequestBody()
       params = cgi.parse_qs(qs, keep_blank_values=1)
 
       for param in params:
@@ -745,7 +756,7 @@ class TestPageHandler(BasePageHandler):
 
     # Consume a request body if present.
     if self.command == 'POST' or self.command == 'PUT' :
-      self.rfile.read(int(self.headers.getheader('content-length')))
+      self.ReadRequestBody()
 
     _, _, url_path, _, query, _ = urlparse.urlparse(self.path)
     sub_path = url_path[len(prefix):]
@@ -810,78 +821,6 @@ class TestPageHandler(BasePageHandler):
     self.end_headers()
 
     self.wfile.write(data)
-
-    return True
-
-  def RealFileWithCommonHeaderHandler(self):
-    """This handler sends the contents of the requested file without the pseudo
-    http head!"""
-
-    prefix='/realfiles/'
-    if not self.path.startswith(prefix):
-      return False
-
-    file = self.path[len(prefix):]
-    path = os.path.join(self.server.data_dir, file)
-
-    try:
-      f = open(path, "rb")
-      data = f.read()
-      f.close()
-
-      # just simply set the MIME as octal stream
-      self.send_response(200)
-      self.send_header('Content-type', 'application/octet-stream')
-      self.end_headers()
-
-      self.wfile.write(data)
-    except:
-      self.send_error(404)
-
-    return True
-
-  def RealBZ2FileWithCommonHeaderHandler(self):
-    """This handler sends the bzip2 contents of the requested file with
-     corresponding Content-Encoding field in http head!"""
-
-    prefix='/realbz2files/'
-    if not self.path.startswith(prefix):
-      return False
-
-    parts = self.path.split('?')
-    file = parts[0][len(prefix):]
-    path = os.path.join(self.server.data_dir, file) + '.bz2'
-
-    if len(parts) > 1:
-      options = parts[1]
-    else:
-      options = ''
-
-    try:
-      self.send_response(200)
-      accept_encoding = self.headers.get("Accept-Encoding")
-      if accept_encoding.find("bzip2") != -1:
-        f = open(path, "rb")
-        data = f.read()
-        f.close()
-        self.send_header('Content-Encoding', 'bzip2')
-        self.send_header('Content-type', 'application/x-bzip2')
-        self.end_headers()
-        if options == 'incremental-header':
-          self.wfile.write(data[:1])
-          self.wfile.flush()
-          time.sleep(1.0)
-          self.wfile.write(data[1:])
-        else:
-          self.wfile.write(data)
-      else:
-        """client do not support bzip2 format, send pseudo content
-        """
-        self.send_header('Content-type', 'text/html; charset=ISO-8859-1')
-        self.end_headers()
-        self.wfile.write("you do not support bzip2 encoding")
-    except:
-      self.send_error(404)
 
     return True
 
@@ -1128,6 +1067,14 @@ class TestPageHandler(BasePageHandler):
     self.wfile.write("<html>\n<body>\n<p>HTML text</p>\n</body>\n</html>\n");
     return True
 
+  def NoContentHandler(self):
+    """Returns a 204 No Content response."""
+    if not self._ShouldHandleRequest("/nocontent"):
+      return False
+    self.send_response(204)
+    self.end_headers()
+    return True
+
   def ServerRedirectHandler(self):
     """Sends a server redirect to the given URL. The syntax is
     '/server-redirect?http://foo.bar/asdf' to redirect to
@@ -1262,14 +1209,15 @@ class TestPageHandler(BasePageHandler):
     if not self._ShouldHandleRequest("/device_management"):
       return False
 
-    length = int(self.headers.getheader('content-length'))
-    raw_request = self.rfile.read(length)
+    raw_request = self.ReadRequestBody()
 
     if not self.server._device_management_handler:
       import device_management
       policy_path = os.path.join(self.server.data_dir, 'device_management')
       self.server._device_management_handler = (
-          device_management.TestServer(policy_path))
+          device_management.TestServer(policy_path,
+                                       self.server.policy_keys,
+                                       self.server.policy_user))
 
     http_response, raw_reply = (
         self.server._device_management_handler.HandleRequest(self.path,
@@ -1373,8 +1321,11 @@ class FileMultiplexer:
 
 def main(options, args):
   logfile = open('testserver.log', 'w')
-  sys.stdout = FileMultiplexer(sys.stdout, logfile)
   sys.stderr = FileMultiplexer(sys.stderr, logfile)
+  if options.log_to_console:
+    sys.stdout = FileMultiplexer(sys.stdout, logfile)
+  else:
+    sys.stdout = logfile
 
   port = options.port
 
@@ -1404,6 +1355,8 @@ def main(options, args):
     server.file_root_url = options.file_root_url
     server_data['port'] = server.server_port
     server._device_management_handler = None
+    server.policy_keys = options.policy_keys
+    server.policy_user = options.policy_user
   elif options.server_type == SERVER_SYNC:
     server = SyncHTTPServer(('127.0.0.1', port), SyncPageHandler)
     print 'Sync HTTP server started on port %d...' % server.server_port
@@ -1472,6 +1425,11 @@ if __name__ == '__main__':
                            const=SERVER_SYNC, default=SERVER_HTTP,
                            dest='server_type',
                            help='start up a sync server.')
+  option_parser.add_option('', '--log-to-console', action='store_const',
+                           const=True, default=False,
+                           dest='log_to_console',
+                           help='Enables or disables sys.stdout logging to '
+                           'the console.')
   option_parser.add_option('', '--port', default='0', type='int',
                            help='Port used by the server. If unspecified, the '
                            'server will listen on an ephemeral port.')
@@ -1502,6 +1460,21 @@ if __name__ == '__main__':
   option_parser.add_option('', '--startup-pipe', type='int',
                            dest='startup_pipe',
                            help='File handle of pipe to parent process')
+  option_parser.add_option('', '--policy-key', action='append',
+                           dest='policy_keys',
+                           help='Specify a path to a PEM-encoded private key '
+                           'to use for policy signing. May be specified '
+                           'multiple times in order to load multipe keys into '
+                           'the server. If ther server has multiple keys, it '
+                           'will rotate through them in at each request a '
+                           'round-robin fashion. The server will generate a '
+                           'random key if none is specified on the command '
+                           'line.')
+  option_parser.add_option('', '--policy-user', default='user@example.com',
+                           dest='policy_user',
+                           help='Specify the user name the server should '
+                           'report back to the client as the user owning the '
+                           'token used for making the policy request.')
   options, args = option_parser.parse_args()
 
   sys.exit(main(options, args))

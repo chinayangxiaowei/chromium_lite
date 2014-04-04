@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,20 +6,20 @@
 
 #include <string>
 
-#include "base/crypto/rsa_private_key.h"
 #include "base/file_path.h"
 #include "base/file_util.h"
 #include "base/logging.h"
-#include "base/nss_util.h"
-#include "base/scoped_ptr.h"
-#include "base/scoped_temp_dir.h"
-#include "chrome/browser/browser_thread.h"
+#include "base/memory/scoped_ptr.h"
+#include "base/memory/scoped_temp_dir.h"
+#include "crypto/nss_util.h"
+#include "crypto/rsa_private_key.h"
 #include "chrome/browser/chromeos/login/mock_owner_key_utils.h"
 #include "chrome/browser/chromeos/login/owner_manager_unittest.h"
+#include "content/browser/browser_thread.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
-using ::base::RSAPrivateKey;
+using ::crypto::RSAPrivateKey;
 using ::testing::DoAll;
 using ::testing::Eq;
 using ::testing::Invoke;
@@ -42,7 +42,7 @@ class OwnershipServiceTest : public ::testing::Test {
   virtual ~OwnershipServiceTest() {}
 
   virtual void SetUp() {
-    base::OpenPersistentNSSDB();  // TODO(cmasone): use test DB instead
+    crypto::OpenPersistentNSSDB();  // TODO(cmasone): use test DB instead
     fake_private_key_.reset(RSAPrivateKey::Create(256));
     ASSERT_TRUE(fake_private_key_->ExportPublicKey(&fake_public_key_));
 
@@ -53,7 +53,7 @@ class OwnershipServiceTest : public ::testing::Test {
     file_thread_.Start();
     OwnerKeyUtils::set_factory(&injector_);
     service_.reset(new OwnershipService);  // must happen AFTER set_factory().
-
+    service_->Prewarm();
   }
 
   virtual void TearDown() {
@@ -86,6 +86,12 @@ TEST_F(OwnershipServiceTest, IsOwned) {
   EXPECT_TRUE(service_->IsAlreadyOwned());
 }
 
+TEST_F(OwnershipServiceTest, IsOwnershipTaken) {
+  EXPECT_CALL(*mock_, GetOwnerKeyFilePath())
+      .WillRepeatedly(Return(tmpfile_));
+  EXPECT_TRUE(service_->GetStatus(true) == OwnershipService::OWNERSHIP_TAKEN);
+}
+
 TEST_F(OwnershipServiceTest, IsUnowned) {
   StartUnowned();
 
@@ -94,12 +100,12 @@ TEST_F(OwnershipServiceTest, IsUnowned) {
   EXPECT_FALSE(service_->IsAlreadyOwned());
 }
 
-TEST_F(OwnershipServiceTest, LoadOwnerKeyUnowned) {
+TEST_F(OwnershipServiceTest, IsOwnershipNone) {
   StartUnowned();
 
   EXPECT_CALL(*mock_, GetOwnerKeyFilePath())
       .WillRepeatedly(Return(tmpfile_));
-  EXPECT_FALSE(service_->StartLoadOwnerKeyAttempt());
+  EXPECT_TRUE(service_->GetStatus(true) == OwnershipService::OWNERSHIP_NONE);
 }
 
 TEST_F(OwnershipServiceTest, LoadOwnerKeyFail) {
@@ -110,9 +116,16 @@ TEST_F(OwnershipServiceTest, LoadOwnerKeyFail) {
       .WillOnce(Return(false))
       .RetiresOnSaturation();
 
-  EXPECT_TRUE(service_->StartLoadOwnerKeyAttempt());
+  service_->StartLoadOwnerKeyAttempt();
 
   // Run remaining events, until ExportPublicKeyViaDbus().
+  message_loop_.Run();
+}
+
+TEST_F(OwnershipServiceTest, UpdateOwnerKey) {
+  MockKeyUpdateUser delegate;
+  service_->StartUpdateOwnerKey(std::vector<uint8>(), &delegate);
+
   message_loop_.Run();
 }
 
@@ -126,31 +139,7 @@ TEST_F(OwnershipServiceTest, LoadOwnerKey) {
       .WillOnce(DoAll(SetArgumentPointee<1>(fake_public_key_),
                       Return(true)))
       .RetiresOnSaturation();
-  EXPECT_TRUE(service_->StartLoadOwnerKeyAttempt());
-
-  message_loop_.Run();
-}
-
-TEST_F(OwnershipServiceTest, TakeOwnershipAlreadyOwned) {
-  EXPECT_CALL(*mock_, GetOwnerKeyFilePath())
-      .WillRepeatedly(Return(tmpfile_));
-  EXPECT_FALSE(service_->StartTakeOwnershipAttempt("you"));
-}
-
-TEST_F(OwnershipServiceTest, AttemptKeyGeneration) {
-  // We really only care that we initiate key generation here;
-  // actual key-generation paths are tested in owner_manager_unittest.cc
-  StartUnowned();
-  MockKeyLoadObserver loader;
-  loader.ExpectKeyFetchSuccess(false);
-
-  EXPECT_CALL(*mock_, GenerateKeyPair())
-      .WillOnce(Return(reinterpret_cast<RSAPrivateKey*>(NULL)))
-      .RetiresOnSaturation();
-  EXPECT_CALL(*mock_, GetOwnerKeyFilePath())
-      .WillRepeatedly(Return(tmpfile_));
-
-  EXPECT_TRUE(service_->StartTakeOwnershipAttempt("me"));
+  service_->StartLoadOwnerKeyAttempt();
 
   message_loop_.Run();
 }
@@ -160,9 +149,11 @@ TEST_F(OwnershipServiceTest, NotYetOwnedVerify) {
 
   EXPECT_CALL(*mock_, GetOwnerKeyFilePath())
       .WillRepeatedly(Return(tmpfile_));
-  // Create delegate that does not quit the message loop on callback.
-  MockKeyUser delegate(OwnerManager::KEY_UNAVAILABLE, false);
+
+  MockKeyUser delegate(OwnerManager::KEY_UNAVAILABLE);
   service_->StartVerifyAttempt("", std::vector<uint8>(), &delegate);
+
+  message_loop_.Run();
 }
 
 TEST_F(OwnershipServiceTest, GetKeyFailDuringVerify) {

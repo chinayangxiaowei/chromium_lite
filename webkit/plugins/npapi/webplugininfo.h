@@ -1,4 +1,4 @@
-// Copyright (c) 2006-2008 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -15,8 +15,14 @@ namespace webkit {
 namespace npapi {
 
 // Describes a mime type entry for a plugin.
+// TODO(viettrungluu): This isn't NPAPI-specific. Move this somewhere else.
 struct WebPluginMimeType {
   WebPluginMimeType();
+  // A constructor for the common case of a single file extension and an ASCII
+  // description.
+  WebPluginMimeType(const std::string& m,
+                    const std::string& f,
+                    const std::string& d);
   ~WebPluginMimeType();
 
   // The name of the mime type (e.g., "application/x-shockwave-flash").
@@ -27,6 +33,10 @@ struct WebPluginMimeType {
 
   // Description of the mime type.
   string16 description;
+
+  // Extra parameters to include when instantiating the plugin.
+  std::vector<string16> additional_param_names;
+  std::vector<string16> additional_param_values;
 };
 
 // Describes an available NPAPI plugin.

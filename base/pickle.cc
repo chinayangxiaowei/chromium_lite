@@ -1,4 +1,4 @@
-// Copyright (c) 2006-2008 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -33,7 +33,7 @@ Pickle::Pickle(int header_size)
       header_size_(AlignInt(header_size, sizeof(uint32))),
       capacity_(0),
       variable_buffer_offset_(0) {
-  DCHECK(static_cast<size_t>(header_size) >= sizeof(Header));
+  DCHECK_GE(static_cast<size_t>(header_size), sizeof(Header));
   DCHECK(header_size <= kPayloadUnit);
   Resize(kPayloadUnit);
   header_->payload_size = 0;
@@ -152,6 +152,20 @@ bool Pickle::ReadSize(void** iter, size_t* result) const {
   // dependent on alignment.
   // Next line is otherwise the same as: memcpy(result, *iter, sizeof(*result));
   *result = *reinterpret_cast<size_t*>(*iter);
+
+  UpdateIter(iter, sizeof(*result));
+  return true;
+}
+
+bool Pickle::ReadUInt16(void** iter, uint16* result) const {
+  DCHECK(iter);
+  if (!*iter)
+    *iter = const_cast<char*>(payload());
+
+  if (!IteratorHasRoomFor(*iter, sizeof(*result)))
+    return false;
+
+  memcpy(result, *iter, sizeof(*result));
 
   UpdateIter(iter, sizeof(*result));
   return true;

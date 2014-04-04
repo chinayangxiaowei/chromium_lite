@@ -25,6 +25,13 @@ class ServiceProcessControlBrowserTest
     ServiceProcessControlManager::GetInstance()->Shutdown();
   }
 
+#if defined(OS_MACOSX)
+  virtual void TearDown() {
+    // ForceServiceProcessShutdown removes the process from launchd on Mac.
+    ForceServiceProcessShutdown("", 0);
+  }
+#endif  // OS_MACOSX
+
  protected:
   void LaunchServiceProcessControl() {
     ServiceProcessControl* process =
@@ -71,7 +78,8 @@ class ServiceProcessControlBrowserTest
   }
 
   void ProcessControlLaunched() {
-    base::ProcessId service_pid = GetServiceProcessPid();
+    base::ProcessId service_pid;
+    EXPECT_TRUE(GetServiceProcessData(NULL, &service_pid));
     EXPECT_NE(static_cast<base::ProcessId>(0), service_pid);
     EXPECT_TRUE(base::OpenProcessHandleWithAccess(
         service_pid,
@@ -96,7 +104,6 @@ class ServiceProcessControlBrowserTest
   base::ProcessHandle service_process_handle_;
 };
 
-#if defined(OS_WIN)
 // They way that the IPC is implemented only works on windows. This has to
 // change when we implement a different scheme for IPC.
 // Times out flakily, http://crbug.com/70076.
@@ -114,7 +121,13 @@ IN_PROC_BROWSER_TEST_F(ServiceProcessControlBrowserTest,
 
 // This tests the case when a service process is launched when browser
 // starts but we try to launch it again in the remoting setup dialog.
-IN_PROC_BROWSER_TEST_F(ServiceProcessControlBrowserTest, LaunchTwice) {
+// Crashes on mac. http://crbug.com/75518
+#if defined(OS_MACOSX)
+#define MAYBE_LaunchTwice DISABLED_LaunchTwice
+#else
+#define MAYBE_LaunchTwice LaunchTwice
+#endif
+IN_PROC_BROWSER_TEST_F(ServiceProcessControlBrowserTest, MAYBE_LaunchTwice) {
   // Launch the service process the first time.
   LaunchServiceProcessControl();
 
@@ -139,7 +152,14 @@ static void DecrementUntilZero(int* count) {
 
 // Invoke multiple Launch calls in succession and ensure that all the tasks
 // get invoked.
-IN_PROC_BROWSER_TEST_F(ServiceProcessControlBrowserTest, MultipleLaunchTasks) {
+// Crashes on mac. http://crbug.com/75518
+#if defined(OS_MACOSX)
+#define MAYBE_MultipleLaunchTasks DISABLED_MultipleLaunchTasks
+#else
+#define MAYBE_MultipleLaunchTasks MultipleLaunchTasks
+#endif
+IN_PROC_BROWSER_TEST_F(ServiceProcessControlBrowserTest,
+                       MAYBE_MultipleLaunchTasks) {
   ServiceProcessControl* process =
       ServiceProcessControlManager::GetInstance()->GetProcessControl(
           browser()->profile());
@@ -158,7 +178,13 @@ IN_PROC_BROWSER_TEST_F(ServiceProcessControlBrowserTest, MultipleLaunchTasks) {
 }
 
 // Make sure using the same task for success and failure tasks works.
-IN_PROC_BROWSER_TEST_F(ServiceProcessControlBrowserTest, SameLaunchTask) {
+// Crashes on mac. http://crbug.com/75518
+#if defined(OS_MACOSX)
+#define MAYBE_SameLaunchTask DISABLED_SameLaunchTask
+#else
+#define MAYBE_SameLaunchTask SameLaunchTask
+#endif
+IN_PROC_BROWSER_TEST_F(ServiceProcessControlBrowserTest, MAYBE_SameLaunchTask) {
   ServiceProcessControl* process =
       ServiceProcessControlManager::GetInstance()->GetProcessControl(
           browser()->profile());
@@ -177,7 +203,14 @@ IN_PROC_BROWSER_TEST_F(ServiceProcessControlBrowserTest, SameLaunchTask) {
 
 // Tests whether disconnecting from the service IPC causes the service process
 // to die.
-IN_PROC_BROWSER_TEST_F(ServiceProcessControlBrowserTest, DieOnDisconnect) {
+// Crashes on mac. http://crbug.com/75518
+#if defined(OS_MACOSX)
+#define MAYBE_DieOnDisconnect DISABLED_DieOnDisconnect
+#else
+#define MAYBE_DieOnDisconnect DieOnDisconnect
+#endif
+IN_PROC_BROWSER_TEST_F(ServiceProcessControlBrowserTest,
+                       MAYBE_DieOnDisconnect) {
   // Launch the service process.
   LaunchServiceProcessControl();
   // Make sure we are connected to the service process.
@@ -186,23 +219,34 @@ IN_PROC_BROWSER_TEST_F(ServiceProcessControlBrowserTest, DieOnDisconnect) {
   WaitForShutdown();
 }
 
-IN_PROC_BROWSER_TEST_F(ServiceProcessControlBrowserTest, ForceShutdown) {
+//http://code.google.com/p/chromium/issues/detail?id=70793
+IN_PROC_BROWSER_TEST_F(ServiceProcessControlBrowserTest,
+                       DISABLED_ForceShutdown) {
   // Launch the service process.
   LaunchServiceProcessControl();
   // Make sure we are connected to the service process.
   EXPECT_TRUE(process()->is_connected());
+  base::ProcessId service_pid;
+  EXPECT_TRUE(GetServiceProcessData(NULL, &service_pid));
+  EXPECT_NE(static_cast<base::ProcessId>(0), service_pid);
   chrome::VersionInfo version_info;
-  ForceServiceProcessShutdown(version_info.Version());
+  ForceServiceProcessShutdown(version_info.Version(), service_pid);
   WaitForShutdown();
 }
 
-IN_PROC_BROWSER_TEST_F(ServiceProcessControlBrowserTest, CheckPid) {
-  EXPECT_EQ(0, GetServiceProcessPid());
+// Crashes on mac. http://crbug.com/75518
+#if defined(OS_MACOSX)
+#define MAYBE_CheckPid DISABLED_CheckPid
+#else
+#define MAYBE_CheckPid CheckPid
+#endif
+IN_PROC_BROWSER_TEST_F(ServiceProcessControlBrowserTest, MAYBE_CheckPid) {
+  base::ProcessId service_pid;
+  EXPECT_FALSE(GetServiceProcessData(NULL, &service_pid));
   // Launch the service process.
   LaunchServiceProcessControl();
-  EXPECT_NE(static_cast<base::ProcessId>(0), GetServiceProcessPid());
+  EXPECT_TRUE(GetServiceProcessData(NULL, &service_pid));
+  EXPECT_NE(static_cast<base::ProcessId>(0), service_pid);
 }
-
-#endif
 
 DISABLE_RUNNABLE_METHOD_REFCOUNT(ServiceProcessControlBrowserTest);

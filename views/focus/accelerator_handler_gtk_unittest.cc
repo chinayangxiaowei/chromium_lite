@@ -4,8 +4,8 @@
 
 #include <gdk/gdkkeysyms.h>
 
-#include "gfx/rect.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "ui/gfx/rect.h"
 #include "views/focus/accelerator_handler.h"
 #include "views/view.h"
 #include "views/window/window_gtk.h"
@@ -37,7 +37,7 @@ class AcceleratorHandlerGtkTest
   }
 
   virtual void TearDown() {
-    window_->Close();
+    window_->CloseWindow();
 
     // Flush the message loop to make Purify happy.
     message_loop_.RunAllPending();

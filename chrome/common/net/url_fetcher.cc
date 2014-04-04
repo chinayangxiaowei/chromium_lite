@@ -8,12 +8,11 @@
 
 #include "base/compiler_specific.h"
 #include "base/lazy_instance.h"
+#include "base/memory/scoped_ptr.h"
 #include "base/message_loop_proxy.h"
-#include "base/scoped_ptr.h"
 #include "base/stl_util-inl.h"
 #include "base/string_util.h"
 #include "base/threading/thread.h"
-#include "chrome/common/net/url_request_context_getter.h"
 #include "googleurl/src/gurl.h"
 #include "net/base/load_flags.h"
 #include "net/base/io_buffer.h"
@@ -22,11 +21,10 @@
 #include "net/http/http_response_headers.h"
 #include "net/url_request/url_request.h"
 #include "net/url_request/url_request_context.h"
+#include "net/url_request/url_request_context_getter.h"
 #include "net/url_request/url_request_throttler_manager.h"
 
 static const int kBufferSize = 4096;
-
-bool URLFetcher::g_interception_enabled = false;
 
 class URLFetcher::Core
     : public base::RefCountedThreadSafe<URLFetcher::Core>,
@@ -35,7 +33,7 @@ class URLFetcher::Core
   // For POST requests, set |content_type| to the MIME type of the content
   // and set |content| to the data to upload.  |flags| are flags to apply to
   // the load operation--these should be one or more of the LOAD_* flags
-  // defined in url_request.h.
+  // defined in net/base/load_flags.h.
   Core(URLFetcher* fetcher,
        const GURL& original_url,
        RequestType request_type,
@@ -77,13 +75,17 @@ class URLFetcher::Core
 
     void CancelAll();
 
+    int size() const {
+      return fetchers_.size();
+    }
+
    private:
     std::set<Core*> fetchers_;
 
     DISALLOW_COPY_AND_ASSIGN(Registry);
   };
 
-  ~Core();
+  virtual ~Core();
 
   // Wrapper functions that allow us to ensure actions happen on the right
   // thread.
@@ -100,6 +102,13 @@ class URLFetcher::Core
   // Returns the max value of exponential back-off release time for
   // |original_url_| and |url_|.
   base::TimeTicks GetBackoffReleaseTime();
+
+  void CompleteAddingUploadDataChunk(const std::string& data,
+                                     bool is_last_chunk);
+
+  // Adds a block of data to be uploaded in a POST body. This can only be called
+  // after Start().
+  void AppendChunkToUpload(const std::string& data, bool is_last_chunk);
 
   URLFetcher* fetcher_;              // Corresponding fetcher object
   GURL original_url_;                // The URL we were asked to fetch
@@ -118,7 +127,7 @@ class URLFetcher::Core
   std::string data_;                 // Results of the request
   scoped_refptr<net::IOBuffer> buffer_;
                                      // Read buffer
-  scoped_refptr<URLRequestContextGetter> request_context_getter_;
+  scoped_refptr<net::URLRequestContextGetter> request_context_getter_;
                                      // Cookie/cache info for the request
   ResponseCookies cookies_;          // Response cookies
   net::HttpRequestHeaders extra_request_headers_;
@@ -127,6 +136,7 @@ class URLFetcher::Core
   std::string upload_content_;       // HTTP POST payload
   std::string upload_content_type_;  // MIME type of POST payload
   std::string referrer_;             // HTTP Referer header value
+  bool is_chunked_upload_;           // True if using chunked transfer encoding
 
   // Used to determine how long to wait before making a request or doing a
   // retry.
@@ -173,12 +183,8 @@ void URLFetcher::Core::Registry::RemoveURLFetcherCore(Core* core) {
 }
 
 void URLFetcher::Core::Registry::CancelAll() {
-  std::set<Core*> fetchers;
-  fetchers.swap(fetchers_);
-
-  for (std::set<Core*>::iterator it = fetchers.begin();
-       it != fetchers.end(); ++it)
-    (*it)->CancelURLRequest();
+  while (!fetchers_.empty())
+    (*fetchers_.begin())->CancelURLRequest();
 }
 
 // static
@@ -187,6 +193,9 @@ base::LazyInstance<URLFetcher::Core::Registry>
 
 // static
 URLFetcher::Factory* URLFetcher::factory_ = NULL;
+
+// static
+bool URLFetcher::g_interception_enabled = false;
 
 URLFetcher::URLFetcher(const GURL& url,
                        RequestType request_type,
@@ -221,6 +230,7 @@ URLFetcher::Core::Core(URLFetcher* fetcher,
       load_flags_(net::LOAD_NORMAL),
       response_code_(-1),
       buffer_(new net::IOBuffer(kBufferSize)),
+      is_chunked_upload_(false),
       num_retries_(0),
       was_cancelled_(false) {
 }
@@ -282,6 +292,26 @@ void URLFetcher::Core::OnResponseStarted(net::URLRequest* request) {
   OnReadCompleted(request_.get(), bytes_read);
 }
 
+void URLFetcher::Core::CompleteAddingUploadDataChunk(
+    const std::string& content, bool is_last_chunk) {
+  DCHECK(is_chunked_upload_);
+  DCHECK(request_.get());
+  DCHECK(!content.empty());
+  request_->AppendChunkToUpload(content.data(),
+                                static_cast<int>(content.length()),
+                                is_last_chunk);
+}
+
+void URLFetcher::Core::AppendChunkToUpload(const std::string& content,
+                                           bool is_last_chunk) {
+  DCHECK(delegate_loop_proxy_);
+  CHECK(io_message_loop_proxy_.get());
+  io_message_loop_proxy_->PostTask(
+      FROM_HERE,
+      NewRunnableMethod(this, &Core::CompleteAddingUploadDataChunk, content,
+                        is_last_chunk));
+}
+
 void URLFetcher::Core::OnReadCompleted(net::URLRequest* request,
                                        int bytes_read) {
   DCHECK(request == request_);
@@ -334,6 +364,8 @@ void URLFetcher::Core::StartURLRequest() {
   if (!g_interception_enabled) {
     flags = flags | net::LOAD_DISABLE_INTERCEPT;
   }
+  if (is_chunked_upload_)
+    request_->EnableChunkedUpload();
   request_->set_load_flags(flags);
   request_->set_context(request_context_getter_->GetURLRequestContext());
   request_->set_referrer(referrer_);
@@ -343,14 +375,16 @@ void URLFetcher::Core::StartURLRequest() {
       break;
 
     case POST:
-      DCHECK(!upload_content_.empty());
+      DCHECK(!upload_content_.empty() || is_chunked_upload_);
       DCHECK(!upload_content_type_.empty());
 
       request_->set_method("POST");
       extra_request_headers_.SetHeader(net::HttpRequestHeaders::kContentType,
                                        upload_content_type_);
-      request_->AppendBytesToUpload(upload_content_.data(),
-                                    static_cast<int>(upload_content_.size()));
+      if (!upload_content_.empty()) {
+        request_->AppendBytesToUpload(
+            upload_content_.data(), static_cast<int>(upload_content_.length()));
+      }
       break;
 
     case HEAD:
@@ -474,8 +508,24 @@ base::TimeTicks URLFetcher::Core::GetBackoffReleaseTime() {
 
 void URLFetcher::set_upload_data(const std::string& upload_content_type,
                                  const std::string& upload_content) {
+  DCHECK(!core_->is_chunked_upload_);
   core_->upload_content_type_ = upload_content_type;
   core_->upload_content_ = upload_content;
+}
+
+void URLFetcher::set_chunked_upload(const std::string& content_type) {
+  DCHECK(core_->is_chunked_upload_ ||
+         (core_->upload_content_type_.empty() &&
+          core_->upload_content_.empty()));
+  core_->upload_content_type_ = content_type;
+  core_->upload_content_.clear();
+  core_->is_chunked_upload_ = true;
+}
+
+void URLFetcher::AppendChunkToUpload(const std::string& data,
+                                     bool is_last_chunk) {
+  DCHECK(data.length());
+  core_->AppendChunkToUpload(data, is_last_chunk);
 }
 
 const std::string& URLFetcher::upload_data() const {
@@ -501,7 +551,7 @@ void URLFetcher::set_extra_request_headers(
 }
 
 void URLFetcher::set_request_context(
-    URLRequestContextGetter* request_context_getter) {
+    net::URLRequestContextGetter* request_context_getter) {
   core_->request_context_getter_ = request_context_getter;
 }
 
@@ -528,6 +578,11 @@ void URLFetcher::ReceivedContentWasMalformed() {
 // static
 void URLFetcher::CancelAll() {
   Core::CancelAll();
+}
+
+// static
+int URLFetcher::GetNumFetcherCores() {
+  return Core::g_registry.Get().size();
 }
 
 URLFetcher::Delegate* URLFetcher::delegate() const {

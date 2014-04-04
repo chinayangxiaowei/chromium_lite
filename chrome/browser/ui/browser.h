@@ -12,8 +12,9 @@
 #include <vector>
 
 #include "base/basictypes.h"
+#include "base/compiler_specific.h"
 #include "base/gtest_prod_util.h"
-#include "base/scoped_ptr.h"
+#include "base/memory/scoped_ptr.h"
 #include "base/string16.h"
 #include "base/task.h"
 #include "chrome/browser/command_updater.h"
@@ -22,20 +23,24 @@
 #include "chrome/browser/prefs/pref_member.h"
 #include "chrome/browser/sessions/session_id.h"
 #include "chrome/browser/sessions/tab_restore_service_observer.h"
-#include "chrome/browser/shell_dialogs.h"
 #include "chrome/browser/sync/profile_sync_service_observer.h"
 #include "chrome/browser/tabs/tab_handler.h"
-#include "chrome/browser/tabs/tab_strip_model_delegate.h"   // TODO(beng): remove
-#include "chrome/browser/tabs/tab_strip_model_observer.h"   // TODO(beng): remove
-#include "chrome/browser/tab_contents/page_navigator.h"
-#include "chrome/browser/tab_contents/tab_contents_delegate.h"
+#include "chrome/browser/tabs/tab_strip_model_delegate.h"  // TODO(beng): remove
+#include "chrome/browser/tabs/tab_strip_model_observer.h"  // TODO(beng): remove
+#include "chrome/browser/ui/browser_navigator.h"
+#include "chrome/browser/ui/search_engines/search_engine_tab_helper_delegate.h"
+#include "chrome/browser/ui/shell_dialogs.h"
+#include "chrome/browser/ui/tab_contents/tab_contents_wrapper_delegate.h"
 #include "chrome/browser/ui/toolbar/toolbar_model.h"
 #include "chrome/common/extensions/extension_constants.h"
-#include "chrome/common/notification_registrar.h"
-#include "chrome/common/page_transition_types.h"
-#include "chrome/common/page_zoom.h"
-#include "gfx/rect.h"
+#include "content/browser/tab_contents/page_navigator.h"
+#include "content/browser/tab_contents/tab_contents_delegate.h"
+#include "content/common/notification_registrar.h"
+#include "content/common/page_transition_types.h"
+#include "content/common/page_zoom.h"
+#include "ui/gfx/rect.h"
 
+class BrowserTabRestoreServiceDelegate;
 class BrowserWindow;
 class Extension;
 class FindBarController;
@@ -55,6 +60,8 @@ class Point;
 
 class Browser : public TabHandlerDelegate,
                 public TabContentsDelegate,
+                public TabContentsWrapperDelegate,
+                public SearchEngineTabHelperDelegate,
                 public PageNavigator,
                 public CommandUpdater::CommandUpdaterDelegate,
                 public NotificationObserver,
@@ -117,7 +124,7 @@ class Browser : public TabHandlerDelegate,
   // Constructors, Creation, Showing //////////////////////////////////////////
 
   // Creates a new browser of the given |type| and for the given |profile|. The
-  // Browser has a NULL window after its construction, CreateBrowserWindow must
+  // Browser has a NULL window after its construction, InitBrowserWindow must
   // be called after configuration for window() to be valid.
   // Avoid using this constructor directly if you can use one of the Create*()
   // methods below. This applies to almost all non-testing code.
@@ -165,13 +172,15 @@ class Browser : public TabHandlerDelegate,
   // Creates the Browser Window. Prefer to use the static helpers above where
   // possible. This does not show the window. You need to call window()->Show()
   // to show it.
-  void CreateBrowserWindow();
+  void InitBrowserWindow();
 
   // Accessors ////////////////////////////////////////////////////////////////
 
   Type type() const { return type_; }
+  const std::string& app_name() const { return app_name_; }
   Profile* profile() const { return profile_; }
   const std::vector<std::wstring>& user_data_dir_profiles() const;
+  gfx::Rect override_bounds() const { return override_bounds_; }
 
   // Returns the InstantController or NULL if there is no InstantController for
   // this Browser.
@@ -194,6 +203,9 @@ class Browser : public TabHandlerDelegate,
   const SessionID& session_id() const { return session_id_; }
   CommandUpdater* command_updater() { return &command_updater_; }
   bool block_command_execution() const { return block_command_execution_; }
+  BrowserTabRestoreServiceDelegate* tab_restore_service_delegate() {
+    return tab_restore_service_delegate_.get();
+  }
 
   // Get the FindBarController for this browser, creating it if it does not
   // yet exist.
@@ -218,14 +230,6 @@ class Browser : public TabHandlerDelegate,
   // If there is already an existing active incognito session for the specified
   // |profile|, that session is re-used.
   static void OpenURLOffTheRecord(Profile* profile, const GURL& url);
-
-  // Open an application specified by |app_id| in the appropriate launch
-  // container. |existing_tab| is reused if it is not NULL and the launch
-  // container is a tab. Returns NULL if the app_id is invalid or if
-  // ExtensionService isn't ready/available.
-  static TabContents* OpenApplication(Profile* profile,
-                                      const std::string& app_id,
-                                      TabContents* existing_tab);
 
   // Open |extension| in |container|, using |existing_tab| if not NULL and if
   // the correct container type.  Returns the TabContents* that was created or
@@ -279,6 +283,7 @@ class Browser : public TabHandlerDelegate,
   static void OpenOptionsWindow(Profile* profile);
   static void OpenClearBrowingDataDialogWindow(Profile* profile);
   static void OpenImportSettingsDialogWindow(Profile* profile);
+  static void OpenInstantConfirmDialogWindow(Profile* profile);
 #endif
 
   // Opens a window with the extensions tab in it - needed by long-lived
@@ -294,7 +299,7 @@ class Browser : public TabHandlerDelegate,
   gfx::Rect GetSavedWindowBounds() const;
   bool GetSavedMaximizedState() const;
 
-  // Gets the FavIcon of the page in the selected tab.
+  // Gets the Favicon of the page in the selected tab.
   SkBitmap GetCurrentPageIcon() const;
 
   // Gets the title of the window based on the selected tab's title.
@@ -336,7 +341,7 @@ class Browser : public TabHandlerDelegate,
   }
 
   int tab_count() const;
-  int selected_index() const;
+  int active_index() const;
   int GetIndexOfController(const NavigationController* controller) const;
   TabContentsWrapper* GetSelectedTabContentsWrapper() const;
   TabContentsWrapper* GetTabContentsWrapperAt(int index) const;
@@ -348,7 +353,8 @@ class Browser : public TabHandlerDelegate,
   // this differs from the TabStripModel because it has far fewer clients.
   TabContents* GetSelectedTabContents() const;
   TabContents* GetTabContentsAt(int index) const;
-  void SelectTabContentsAt(int index, bool user_gesture);
+  void ActivateTabAt(int index, bool user_gesture);
+  bool IsTabPinned(int index) const;
   void CloseAllTabs();
 
   // Tab adding/showing functions /////////////////////////////////////////////
@@ -409,9 +415,9 @@ class Browser : public TabHandlerDelegate,
   // Called when a popup select is about to be displayed.
   void BrowserRenderWidgetShowing();
 
-  // Notification that some of our content has changed size as
-  // part of an animation.
-  void ToolbarSizeChanged(bool is_animating);
+  // Notification that the bookmark bar has changed size.  We need to resize the
+  // content area and notify our InfoBarContainer.
+  void BookmarkBarSizeChanged(bool is_animating);
 
   // Replaces the state of the currently selected tab with the session
   // history restored from the SessionRestore system.
@@ -428,9 +434,8 @@ class Browser : public TabHandlerDelegate,
 
   // Show a given a URL. If a tab with the same URL (ignoring the ref) is
   // already visible in this browser, it becomes selected. Otherwise a new tab
-  // is created. If |ignore_path| is true, the paths of the URLs are ignored
-  // when locating the singleton tab.
-  void ShowSingletonTab(const GURL& url, bool ignore_path);
+  // is created.
+  void ShowSingletonTab(const GURL& url);
 
   // Update commands whose state depends on whether the window is in fullscreen
   // mode. This is a public function because on Linux, fullscreen mode is an
@@ -493,7 +498,7 @@ class Browser : public TabHandlerDelegate,
   // in |SupportsWindowFeature| for details on this.
   bool CanSupportWindowFeature(WindowFeature feature) const;
 
-// TODO(port): port these, and re-merge the two function declaration lists.
+  // TODO(port): port these, and re-merge the two function declaration lists.
   // Page-related commands.
   void Print();
   void EmailPageLocation();
@@ -543,22 +548,23 @@ class Browser : public TabHandlerDelegate,
   void ShowOptionsTab(const std::string& sub_page);
   void OpenClearBrowsingDataDialog();
   void OpenOptionsDialog();
-  void OpenKeywordEditor();
   void OpenPasswordManager();
   void OpenSyncMyBookmarksDialog();
 #if defined(ENABLE_REMOTING)
   void OpenRemotingSetupDialog();
 #endif
   void OpenImportSettingsDialog();
+  void OpenInstantConfirmDialog();
   void OpenAboutChromeDialog();
   void OpenUpdateChromeDialog();
   void OpenHelpTab();
   // Used by the "Get themes" link in the options dialog.
   void OpenThemeGalleryTabAndActivate();
-  void OpenAutoFillHelpTabAndActivate();
+  void OpenAutofillHelpTabAndActivate();
   void OpenPrivacyDashboardTabAndActivate();
   void OpenSearchEngineOptionsDialog();
 #if defined(OS_CHROMEOS)
+  void OpenFileManager();
   void OpenSystemOptionsDialog();
   void OpenInternetOptionsDialog();
   void OpenLanguageOptionsDialog();
@@ -610,9 +616,11 @@ class Browser : public TabHandlerDelegate,
   // Returns true if the command is executed.
   bool ExecuteCommandIfEnabled(int id);
 
-  // Returns whether the |id| is a reserved command, whose keyboard shortcuts
-  // should not be sent to the renderer.
-  bool IsReservedCommand(int id);
+  // Returns true if |command_id| is a reserved command whose keyboard shortcuts
+  // should not be sent to the renderer or |event| was triggered by a key that
+  // we never want to send to the renderer.
+  bool IsReservedCommandOrKey(int command_id,
+                              const NativeWebKeyboardEvent& event);
 
   // Sets if command execution shall be blocked. If |block| is true then
   // following calls to ExecuteCommand() or ExecuteCommandWithDisposition()
@@ -702,7 +710,7 @@ class Browser : public TabHandlerDelegate,
                             TabContentsWrapper* contents,
                             int index);
   virtual void TabDetachedAt(TabContentsWrapper* contents, int index);
-  virtual void TabDeselectedAt(TabContentsWrapper* contents, int index);
+  virtual void TabDeselected(TabContentsWrapper* contents);
   virtual void TabSelectedAt(TabContentsWrapper* old_contents,
                              TabContentsWrapper* new_contents,
                              int index,
@@ -720,11 +728,20 @@ class Browser : public TabHandlerDelegate,
   // Figure out if there are tabs that have beforeunload handlers.
   bool TabsNeedBeforeUnloadFired();
 
+ protected:
+  // Wrapper for the factory method in BrowserWindow. This allows subclasses to
+  // set their own window.
+  virtual BrowserWindow* CreateBrowserWindow();
+
  private:
   FRIEND_TEST_ALL_PREFIXES(BrowserTest, NoTabsInPopups);
   FRIEND_TEST_ALL_PREFIXES(BrowserTest, ConvertTabToAppShortcut);
   FRIEND_TEST_ALL_PREFIXES(BrowserTest, OpenAppWindowLikeNtp);
   FRIEND_TEST_ALL_PREFIXES(BrowserTest, AppIdSwitch);
+  FRIEND_TEST_ALL_PREFIXES(BrowserInitTest, OpenAppShortcutNoPref);
+  FRIEND_TEST_ALL_PREFIXES(BrowserInitTest, OpenAppShortcutWindowPref);
+  FRIEND_TEST_ALL_PREFIXES(BrowserInitTest, OpenAppShortcutTabPref);
+  FRIEND_TEST_ALL_PREFIXES(BrowserInitTest, OpenAppShortcutPanel);
 
   // Used to describe why a tab is being detached. This is used by
   // TabDetachedAtImpl.
@@ -760,8 +777,6 @@ class Browser : public TabHandlerDelegate,
   virtual void DetachContents(TabContents* source);
   virtual bool IsPopup(const TabContents* source) const;
   virtual bool CanReloadContents(TabContents* source) const;
-  virtual void ToolbarSizeChanged(TabContents* source, bool is_animating);
-  virtual void URLStarredChanged(TabContents* source, bool starred);
   virtual void UpdateTargetURL(TabContents* source, const GURL& url);
   virtual void ContentsMouseEvent(
       TabContents* source, const gfx::Point& location, bool motion);
@@ -782,31 +797,42 @@ class Browser : public TabHandlerDelegate,
   virtual void RenderWidgetShowing();
   virtual int GetExtraRenderViewHeight() const;
   virtual void OnStartDownload(DownloadItem* download, TabContents* tab);
-  virtual void ConfirmSetDefaultSearchProvider(
-      TabContents* tab_contents,
-      TemplateURL* template_url,
-      TemplateURLModel* template_url_model);
-  virtual void ConfirmAddSearchProvider(const TemplateURL* template_url,
-                                        Profile* profile);
   virtual void ShowPageInfo(Profile* profile,
                             const GURL& url,
                             const NavigationEntry::SSLStatus& ssl,
                             bool show_history);
   virtual void ViewSourceForTab(TabContents* source, const GURL& page_url);
+  virtual void ViewSourceForFrame(TabContents* source,
+                                  const GURL& frame_url,
+                                  const std::string& frame_content_state);
   virtual bool PreHandleKeyboardEvent(const NativeWebKeyboardEvent& event,
                                         bool* is_keyboard_shortcut);
   virtual void HandleKeyboardEvent(const NativeWebKeyboardEvent& event);
   virtual void ShowRepostFormWarningDialog(TabContents* tab_contents);
-  virtual void ShowContentSettingsWindow(ContentSettingsType content_type);
+  virtual void ShowContentSettingsPage(ContentSettingsType content_type);
   virtual void ShowCollectedCookiesDialog(TabContents* tab_contents);
   virtual bool ShouldAddNavigationToHistory(
       const history::HistoryAddPageArgs& add_page_args,
       NavigationType::Type navigation_type);
-  virtual void OnDidGetApplicationInfo(TabContents* tab_contents,
-                                       int32 page_id);
-  virtual void OnInstallApplication(TabContents* tab_contents,
-                                    const WebApplicationInfo& app_info);
   virtual void ContentRestrictionsChanged(TabContents* source);
+  virtual void WorkerCrashed();
+
+  // Overridden from TabContentsWrapperDelegate:
+  virtual void URLStarredChanged(TabContentsWrapper* source,
+                                 bool starred) OVERRIDE;
+  virtual void OnDidGetApplicationInfo(TabContentsWrapper* source,
+                                       int32 page_id) OVERRIDE;
+  virtual void OnInstallApplication(
+      TabContentsWrapper* source,
+      const WebApplicationInfo& app_info) OVERRIDE;
+
+  // Overridden from SearchEngineTabHelperDelegate:
+  virtual void ConfirmSetDefaultSearchProvider(
+      TabContents* tab_contents,
+      TemplateURL* template_url,
+      TemplateURLModel* template_url_model) OVERRIDE;
+  virtual void ConfirmAddSearchProvider(const TemplateURL* template_url,
+                                        Profile* profile) OVERRIDE;
 
   // Overridden from SelectFileDialog::Listener:
   virtual void FileSelected(const FilePath& path, int index, void* params);
@@ -820,12 +846,13 @@ class Browser : public TabHandlerDelegate,
   virtual void OnStateChanged();
 
   // Overriden from InstantDelegate:
-  virtual void PrepareForInstant();
-  virtual void ShowInstant(TabContentsWrapper* preview_contents);
-  virtual void HideInstant();
-  virtual void CommitInstant(TabContentsWrapper* preview_contents);
-  virtual void SetSuggestedText(const string16& text);
-  virtual gfx::Rect GetInstantBounds();
+  virtual void PrepareForInstant() OVERRIDE;
+  virtual void ShowInstant(TabContentsWrapper* preview_contents) OVERRIDE;
+  virtual void HideInstant() OVERRIDE;
+  virtual void CommitInstant(TabContentsWrapper* preview_contents) OVERRIDE;
+  virtual void SetSuggestedText(const string16& text,
+                                InstantCompleteBehavior behavior) OVERRIDE;
+  virtual gfx::Rect GetInstantBounds() OVERRIDE;
 
   // Command and state updating ///////////////////////////////////////////////
 
@@ -840,6 +867,9 @@ class Browser : public TabHandlerDelegate,
 
   // Updates commands for enabling developer tools.
   void UpdateCommandsForDevTools();
+
+  // Updates commands for bookmark editing.
+  void UpdateCommandsForBookmarkEditing();
 
   // Updates the printing command state.
   void UpdatePrintingState(int content_restrictions);
@@ -930,23 +960,9 @@ class Browser : public TabHandlerDelegate,
 
   // Assorted utility functions ///////////////////////////////////////////////
 
-  // Checks whether |source| is about to navigate across extension extents, and
-  // if so, navigates in the correct window. For example if this is a normal
-  // browser and we're about to navigate into an extent, this method will
-  // navigate the app's window instead. If we're in an app window and
-  // navigating out of the app, this method will find and navigate a normal
-  // browser instead.
-  //
-  // Returns true if the navigation was handled, eg, it was opened in some other
-  // browser.
-  //
-  // Returns false if it was not handled. In this case, the method may also
-  // modify |disposition| to a more suitable value.
-  bool HandleCrossAppNavigation(TabContents* source,
-                                const GURL& url,
-                                const GURL& referrer,
-                                WindowOpenDisposition *disposition,
-                                PageTransition::Type transition);
+  // Sets the delegate of all the parts of the |TabContentsWrapper| that
+  // are needed.
+  void SetAsDelegate(TabContentsWrapper* tab, Browser* delegate);
 
   // Shows the Find Bar, optionally selecting the next entry that matches the
   // existing search string for that Tab. |forward_direction| controls the
@@ -961,9 +977,10 @@ class Browser : public TabHandlerDelegate,
   void TabDetachedAtImpl(TabContentsWrapper* contents,
       int index, DetachType type);
 
-  // Create a preference dictionary for the provided application name. This is
-  // done only once per application name / per session.
-  static void RegisterAppPrefs(const std::string& app_name);
+  // Create a preference dictionary for the provided application name, in the
+  // given user profile. This is done only once per application name / per
+  // session / per user profile.
+  static void RegisterAppPrefs(const std::string& app_name, Profile* profile);
 
   // Shared code between Reload() and ReloadIgnoringCache().
   void ReloadInternal(WindowOpenDisposition disposition, bool ignore_cache);
@@ -1008,6 +1025,14 @@ class Browser : public TabHandlerDelegate,
 
   // Opens view-source tab for given tab contents.
   void ViewSource(TabContentsWrapper* tab);
+
+  // Creates a NavigateParams struct for a singleton tab navigation.
+  browser::NavigateParams GetSingletonTabNavigateParams(const GURL& url);
+
+  // Opens view-source tab for any frame within given tab contents.
+  void ViewSource(TabContentsWrapper* tab,
+                  const GURL& url,
+                  const std::string& content_state);
 
   // Data members /////////////////////////////////////////////////////////////
 
@@ -1112,6 +1137,12 @@ class Browser : public TabHandlerDelegate,
   // Keep track of when instant enabled changes.
   BooleanPrefMember instant_enabled_;
 
+  // Tracks the preference that controls whether incognito mode is allowed.
+  BooleanPrefMember incognito_mode_allowed_;
+
+  // Tracks whether bookmarks can be modified.
+  BooleanPrefMember edit_bookmarks_enabled_;
+
   // Indicates if command execution is blocked.
   bool block_command_execution_;
 
@@ -1139,6 +1170,9 @@ class Browser : public TabHandlerDelegate,
   // The profile's tab restore service. The service is owned by the profile,
   // and we install ourselves as an observer.
   TabRestoreService* tab_restore_service_;
+
+  // Helper which implements the TabRestoreServiceDelegate interface.
+  scoped_ptr<BrowserTabRestoreServiceDelegate> tab_restore_service_delegate_;
 
   scoped_ptr<InstantController> instant_;
   scoped_ptr<InstantUnloadHandler> instant_unload_handler_;

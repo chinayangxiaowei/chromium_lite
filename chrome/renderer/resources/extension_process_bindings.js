@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -13,13 +13,14 @@ var chrome = chrome || {};
   native function GetExtensionViews();
   native function GetChromeHidden();
   native function GetNextRequestId();
+  native function GetNextContextMenuId();
   native function OpenChannelToTab();
   native function GetRenderViewId();
-  native function GetPopupParentWindow();
-  native function GetPopupView();
   native function SetIconCommon();
   native function IsExtensionProcess();
   native function IsIncognitoProcess();
+  native function GetUniqueSubEventName(eventName);
+  native function GetLocalFileSystem(name, path);
 
   var chromeHidden = GetChromeHidden();
 
@@ -38,6 +39,13 @@ var chrome = chrome || {};
 
   if (!chrome)
     chrome = {};
+
+  function forEach(dict, f) {
+    for (key in dict) {
+      if (dict.hasOwnProperty(key))
+        f(key, dict[key]);
+    }
+  }
 
   // Validate arguments.
   chromeHidden.validationTypes = [];
@@ -236,6 +244,133 @@ var chrome = chrome || {};
 
   // --- Setup additional api's not currently handled in common/extensions/api
 
+  // WebRequestEvent object. This is used for special webRequest events with
+  // extra parameters. Each invocation of addListener creates a new named
+  // sub-event. That sub-event is associated with the extra parameters in the
+  // browser process, so that only it is dispatched when the main event occurs
+  // matching the extra parameters.
+  //
+  // Example:
+  //   chrome.webRequest.onBeforeRequest.addListener(
+  //       callback, {urls: "http://*.google.com/*"});
+  //   ^ callback will only be called for onBeforeRequests matching the filter.
+  chrome.WebRequestEvent = function(eventName, opt_argSchemas) {
+    if (typeof eventName != "string")
+      throw new Error("chrome.WebRequestEvent requires an event name.");
+
+    this.eventName_ = eventName;
+    this.argSchemas_ = opt_argSchemas;
+    this.subEvents_ = [];
+    this.callbackMap_ = {};
+  };
+
+  // Registers a callback to be called when this event is dispatched. If
+  // opt_filter is specified, then the callback is only called for events that
+  // match the given filters. If opt_extraInfo is specified, the given optional
+  // info is sent to the callback.
+  chrome.WebRequestEvent.prototype.addListener =
+      function(cb, opt_filter, opt_extraInfo) {
+    var subEventName = GetUniqueSubEventName(this.eventName_);
+    // Note: this could fail to validate, in which case we would not add the
+    // subEvent listener.
+    chrome.experimental.webRequest.addEventListener(
+        cb, opt_filter, opt_extraInfo, this.eventName_, subEventName);
+
+    var subEvent = new chrome.Event(subEventName, this.argSchemas_);
+    this.subEvents_.push(subEvent);
+    var subEventCallback = cb;
+    if (opt_extraInfo && opt_extraInfo.indexOf("blocking") >= 0) {
+      var eventName = this.eventName_;
+      subEventCallback = function() {
+        var requestId = arguments[0].requestId;
+        try {
+          var result = cb.apply(null, arguments);
+          chrome.experimental.webRequest.eventHandled(
+              eventName, subEventName, requestId, result);
+        } catch (e) {
+          chrome.experimental.webRequest.eventHandled(
+              eventName, subEventName, requestId);
+          throw e;
+        }
+      };
+    }
+    this.callbackMap_[cb] = subEventCallback;
+    subEvent.addListener(subEventCallback);
+  };
+
+  // Unregisters a callback.
+  chrome.WebRequestEvent.prototype.removeListener = function(cb) {
+    var idx = this.findListener_(cb);
+    if (idx < 0) {
+      return;
+    }
+
+    var subEventCallback = this.callbackMap_[cb];
+    this.subEvents_[idx].removeListener(subEventCallback);
+    if (!this.subEvents_[idx].hasListeners())
+      this.subEvents_.splice(idx, 1);
+  };
+
+  chrome.WebRequestEvent.prototype.findListener_ = function(cb) {
+    var subEventCallback = this.callbackMap_[cb];
+    for (var i = 0; i < this.subEvents_.length; i++) {
+      if (this.subEvents_[i].findListener_(subEventCallback) > -1)
+        return i;
+    }
+
+    return -1;
+  };
+
+  function CustomBindingsObject() {
+  }
+  CustomBindingsObject.prototype.setSchema = function(schema) {
+    // The functions in the schema are in list form, so we move them into a
+    // dictionary for easier access.
+    var self = this;
+    self.parameters = {};
+    schema.functions.forEach(function(f) {
+      self.parameters[f.name] = f.parameters;
+    });
+  };
+
+  function extendSchema(schema) {
+    var extendedSchema = schema.slice();
+    extendedSchema.unshift({'type': 'string'});
+    return extendedSchema;
+  }
+
+  var customBindings = {};
+
+  function setupPreferences() {
+    customBindings['Preference'] = function(prefKey, valueSchema) {
+      this.get = function(details, callback) {
+        var getSchema = this.parameters.get;
+        chromeHidden.validate([details, callback], getSchema);
+        return sendRequest('experimental.preferences.get',
+                           [prefKey, details, callback],
+                           extendSchema(getSchema));
+      };
+      this.set = function(details, callback) {
+        var setSchema = this.parameters.set.slice();
+        setSchema[0].properties.value = valueSchema;
+        chromeHidden.validate([details, callback], setSchema);
+        return sendRequest('experimental.preferences.set',
+                           [prefKey, details, callback],
+                           extendSchema(setSchema));
+      };
+      this.clear = function(details, callback) {
+        var clearSchema = this.parameters.clear;
+        chromeHidden.validate([details, callback], clearSchema);
+        return sendRequest('experimental.preferences.clear',
+                           [prefKey, details, callback],
+                           extendSchema(clearSchema));
+      };
+      this.onChange = new chrome.Event('experimental.preferences.' + prefKey
+                                           + '.onChange');
+    };
+    customBindings['Preference'].prototype = new CustomBindingsObject();
+  }
+
   // Page action events send (pageActionId, {tabId, tabUrl}).
   function setupPageActionEvents(extensionId) {
     var pageActions = GetCurrentPageActions(extensionId);
@@ -256,15 +391,8 @@ var chrome = chrome || {};
         new chrome.Event("toolstrip.onCollapsed." + renderViewId);
   }
 
-  function setupPopupEvents(renderViewId) {
-    chrome.experimental.popup = chrome.experimental.popup || {};
-    chrome.experimental.popup.onClosed =
-      new chrome.Event("experimental.popup.onClosed." + renderViewId);
-  }
-
   function setupHiddenContextMenuEvent(extensionId) {
     chromeHidden.contextMenus = {};
-    chromeHidden.contextMenus.nextId = 1;
     chromeHidden.contextMenus.handlers = {};
     var eventName = "contextMenus";
     chromeHidden.contextMenus.event = new chrome.Event(eventName);
@@ -372,6 +500,10 @@ var chrome = chrome || {};
     }
     chrome.initExtension(extensionId, false, IsIncognitoProcess());
 
+    // Setup the Preference class so we can use it to construct Preference
+    // objects from the API definition.
+    setupPreferences();
+
     // |apiFunctions| is a hash of name -> object that stores the
     // name & definition of the apiFunction. Custom handling of api functions
     // is implemented by adding a "handleRequest" function to the object.
@@ -397,6 +529,9 @@ var chrome = chrome || {};
       if (apiDef.types) {
         apiDef.types.forEach(function(t) {
           chromeHidden.validationTypes.push(t);
+          if (t.type == 'object' && customBindings[t.id]) {
+            customBindings[t.id].prototype.setSchema(t);
+          }
         });
       }
 
@@ -450,32 +585,43 @@ var chrome = chrome || {};
             return;
 
           var eventName = apiDef.namespace + "." + eventDef.name;
-          module[eventDef.name] = new chrome.Event(eventName,
-              eventDef.parameters);
+          if (apiDef.namespace == "experimental.webRequest") {
+            // WebRequest events have a special structure.
+            module[eventDef.name] = new chrome.WebRequestEvent(eventName,
+                eventDef.parameters);
+          } else {
+            module[eventDef.name] = new chrome.Event(eventName,
+                eventDef.parameters);
+          }
         });
       }
 
 
       // Parse any values defined for properties.
       if (apiDef.properties) {
-        for (var prop in apiDef.properties) {
-          if (!apiDef.properties.hasOwnProperty(prop))
-            continue;
-
-          var property = apiDef.properties[prop];
+        forEach(apiDef.properties, function(prop, property) {
           if (property.value) {
             var value = property.value;
             if (property.type === 'integer') {
               value = parseInt(value);
             } else if (property.type === 'boolean') {
               value = value === "true";
+            } else if (property["$ref"]) {
+              var constructor = customBindings[property["$ref"]];
+              var args = value;
+              // For an object property, |value| is an array of constructor
+              // arguments, but we want to pass the arguments directly
+              // (i.e. not as an array), so we have to fake calling |new| on the
+              // constructor.
+              value = { __proto__: constructor.prototype };
+              constructor.apply(value, args);
             } else if (property.type !== 'string') {
               throw "NOT IMPLEMENTED (extension_api.json error): Cannot " +
                   "parse values for type \"" + property.type + "\"";
             }
             module[prop] = value;
           }
-        }
+        });
       }
 
       // getTabContentses is retained for backwards compatibility
@@ -503,11 +649,26 @@ var chrome = chrome || {};
           responseCallback();
       });
       port.onMessage.addListener(function(response) {
-        if (responseCallback)
-          responseCallback(response);
-        port.disconnect();
+        try {
+          if (responseCallback)
+            responseCallback(response);
+        } finally {
+          port.disconnect();
+          port = null;
+        }
       });
     };
+
+    apiFunctions["fileBrowserPrivate.requestLocalFileSystem"].customCallback =
+      function(name, request, response) {
+        var resp = response ? [chromeHidden.JSON.parse(response)] : [];
+        var fs = null;
+        if (!resp[0].error)
+          fs = GetLocalFileSystem(resp[0].name, resp[0].path);
+        if (request.callback)
+          request.callback(fs);
+        request.callback = null;
+      };
 
     apiFunctions["extension.getViews"].handleRequest = function(properties) {
       var windowId = -1;
@@ -551,71 +712,6 @@ var chrome = chrome || {};
         tabIdProxy[name] = new chrome.Event("devtools." + tabId + "." + name);
       });
       return tabIdProxy;
-    };
-
-    apiFunctions["experimental.popup.show"].handleRequest =
-        function(url, showDetails, callback) {
-      // Second argument is a transform from HTMLElement to Rect.
-      var internalSchema = [
-        this.definition.parameters[0],
-        {
-          type: "object",
-          name: "showDetails",
-          properties: {
-            domAnchor: {
-              type: "object",
-              properties: {
-                top: { type: "integer", minimum: 0 },
-                left: { type: "integer", minimum: 0 },
-                width: { type: "integer", minimum: 0 },
-                height: { type: "integer", minimum: 0 }
-              }
-            },
-            giveFocus: {
-              type: "boolean",
-              optional: true
-            },
-            borderStyle: {
-              type: "string",
-              optional: true,
-              enum: ["bubble", "rectangle"]
-            },
-            maxSize: {
-              type: "object",
-              optional: true,
-              properties: {
-                width: {
-                  type: "integer", optional: true, minimum: 32
-                },
-                height: {
-                  type: "integer", optional: true, minimum: 32
-                }
-              }
-            }
-          }
-        },
-        this.definition.parameters[2]
-      ];
-      return sendRequest(this.name,
-                         [url,
-                          {
-                            domAnchor: getAbsoluteRect(showDetails.relativeTo),
-                            giveFocus: showDetails.giveFocus,
-                            borderStyle: showDetails.borderStyle,
-                            maxSize: showDetails.maxSize
-                          },
-                          callback],
-                         internalSchema);
-    };
-
-    apiFunctions["experimental.extension.getPopupView"].handleRequest =
-        function() {
-      return GetPopupView();
-    };
-
-    apiFunctions["experimental.popup.getParentWindow"].handleRequest =
-        function() {
-      return GetPopupParentWindow();
     };
 
     var canvas;
@@ -699,7 +795,7 @@ var chrome = chrome || {};
     apiFunctions["contextMenus.create"].handleRequest =
         function() {
       var args = arguments;
-      var id = chromeHidden.contextMenus.nextId++;
+      var id = GetNextContextMenuId();
       args[0].generatedId = id;
       sendRequest(this.name, args, this.definition.parameters,
                   this.customCallback);
@@ -794,7 +890,6 @@ var chrome = chrome || {};
 
     setupPageActionEvents(extensionId);
     setupToolstripEvents(GetRenderViewId());
-    setupPopupEvents(GetRenderViewId());
     setupHiddenContextMenuEvent(extensionId);
     setupOmniboxEvents();
     setupTtsEvents();

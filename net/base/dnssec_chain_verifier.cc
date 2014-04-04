@@ -1,14 +1,14 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "net/base/dnssec_chain_verifier.h"
 
 #include "base/logging.h"
-#include "base/scoped_ptr.h"
+#include "base/memory/scoped_ptr.h"
 #include "base/sha1.h"
-#include "base/sha2.h"
 #include "base/string_util.h"
+#include "crypto/sha2.h"
 #include "net/base/dns_util.h"
 #include "net/base/dnssec_keyset.h"
 
@@ -489,7 +489,7 @@ bool DNSSECChainVerifier::ReadDNSKEYs(std::vector<base::StringPiece>* out,
     base::StringPiece key;
     if (!VariableLength16(&key))
       return false;
-    if (key.size() == 0) {
+    if (key.empty()) {
       if (!is_root)
         return false;
       key = base::StringPiece(reinterpret_cast<const char*>(kRootKey),
@@ -516,7 +516,7 @@ bool DNSSECChainVerifier::DigestKey(base::StringPiece* out,
                                     uint16 keyid,
                                     uint8 algorithm) {
   std::string temp;
-  uint8 temp2[base::SHA256_LENGTH];
+  uint8 temp2[crypto::SHA256_LENGTH];
   const uint8* digest;
   unsigned digest_len;
 
@@ -527,7 +527,7 @@ bool DNSSECChainVerifier::DigestKey(base::StringPiece* out,
     digest = reinterpret_cast<const uint8*>(temp.data());
     digest_len = base::SHA1_LENGTH;
   } else if (digest_type == kDNSSEC_SHA256) {
-    base::SHA256HashString(input, temp2, sizeof(temp2));
+    crypto::SHA256HashString(input, temp2, sizeof(temp2));
     digest = temp2;
     digest_len = sizeof(temp2);
   } else {
@@ -597,7 +597,7 @@ DNSSECChainVerifier::Error DNSSECChainVerifier::EnterZone(
   if (!ReadAheadKey(&key, entry_key))
     return BAD_DATA;
 
-  if (zone.size() == 1 && key.size() == 0) {
+  if (zone.size() == 1 && key.empty()) {
     // If a key is omitted in the root zone then it's the root key.
     key = base::StringPiece(reinterpret_cast<const char*>(kRootKey),
                             sizeof(kRootKey));
@@ -609,7 +609,7 @@ DNSSECChainVerifier::Error DNSSECChainVerifier::EnterZone(
   if (!ReadDNSKEYs(&dnskeys, zone.size() == 1))
     return BAD_DATA;
 
-  if (sig.size() == 0) {
+  if (sig.empty()) {
     // An omitted signature on the keys means that only the entry key is used.
     if (dnskeys.size() > 1 || entry_key != 0)
       return BAD_DATA;
@@ -732,12 +732,9 @@ DNSSECChainVerifier::Error DNSSECChainVerifier::ReadDSSet(
     }
 
     digest_types[i] = digest_type;
-    if (digest.size() > 0) {
+    lookahead[i] = digest.empty();
+    if (!digest.empty())
       (*rrdatas)[i] = digest;
-      lookahead[i] = false;
-    } else {
-      lookahead[i] = true;
-    }
   }
 
   base::StringPiece next_entry_key;

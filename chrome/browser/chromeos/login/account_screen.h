@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,13 +8,13 @@
 
 #include <string>
 
-#include "base/scoped_ptr.h"
+#include "base/memory/scoped_ptr.h"
 #include "chrome/browser/chromeos/login/account_creation_view.h"
 #include "chrome/browser/chromeos/login/screen_observer.h"
 #include "chrome/browser/chromeos/login/view_screen.h"
 #include "chrome/browser/chromeos/login/web_page_screen.h"
 #include "chrome/browser/chromeos/login/web_page_view.h"
-#include "chrome/browser/tab_contents/tab_contents_delegate.h"
+#include "content/browser/tab_contents/tab_contents_delegate.h"
 
 class GURL;
 class WizardScreenDelegate;

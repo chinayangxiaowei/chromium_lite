@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,8 +10,8 @@
 
 namespace {
 
-TEST(AutoFillFieldTest, Type) {
-  AutoFillField field;
+TEST(AutofillFieldTest, Type) {
+  AutofillField field;
   ASSERT_EQ(NO_SERVER_DATA, field.server_type());
   ASSERT_EQ(UNKNOWN_TYPE, field.heuristic_type());
 
@@ -31,32 +31,32 @@ TEST(AutoFillFieldTest, Type) {
   EXPECT_EQ(NAME_FIRST, field.type());
 }
 
-TEST(AutoFillFieldTest, IsEmpty) {
-  AutoFillField field;
-  ASSERT_EQ(string16(), field.value());
+TEST(AutofillFieldTest, IsEmpty) {
+  AutofillField field;
+  ASSERT_EQ(string16(), field.value);
 
   // Field value is empty.
   EXPECT_TRUE(field.IsEmpty());
 
   // Field value is non-empty.
-  field.set_value(ASCIIToUTF16("Value"));
+  field.value = ASCIIToUTF16("Value");
   EXPECT_FALSE(field.IsEmpty());
 }
 
-TEST(AutoFillFieldTest, FieldSignature) {
-  AutoFillField field;
-  ASSERT_EQ(string16(), field.name());
-  ASSERT_EQ(string16(), field.form_control_type());
+TEST(AutofillFieldTest, FieldSignature) {
+  AutofillField field;
+  ASSERT_EQ(string16(), field.name);
+  ASSERT_EQ(string16(), field.form_control_type);
 
   // Signature is empty.
   EXPECT_EQ("2085434232", field.FieldSignature());
 
   // Field name is set.
-  field.set_name(ASCIIToUTF16("Name"));
+  field.name = ASCIIToUTF16("Name");
   EXPECT_EQ("1606968241", field.FieldSignature());
 
   // Field form control type is set.
-  field.set_form_control_type(ASCIIToUTF16("Text"));
+  field.form_control_type = ASCIIToUTF16("Text");
   EXPECT_EQ("4246049809", field.FieldSignature());
 
   // Heuristic type does not affect FieldSignature.
@@ -68,8 +68,8 @@ TEST(AutoFillFieldTest, FieldSignature) {
   EXPECT_EQ("4246049809", field.FieldSignature());
 }
 
-TEST(AutoFillFieldTest, IsFieldFillable) {
-  AutoFillField field;
+TEST(AutofillFieldTest, IsFieldFillable) {
+  AutofillField field;
   ASSERT_EQ(UNKNOWN_TYPE, field.type());
 
   // Type is unknown.

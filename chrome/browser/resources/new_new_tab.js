@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -11,6 +11,33 @@ var LAYOUT_SPACING_TOP = 25;
 
 // The visible height of the expanded maxiview.
 var maxiviewVisibleHeight = 0;
+
+var APP_LAUNCH = {
+  // The histogram buckets (keep in sync with extension_constants.h).
+  NTP_APPS_MAXIMIZED: 0,
+  NTP_APPS_COLLAPSED: 1,
+  NTP_APPS_MENU: 2,
+  NTP_MOST_VISITED: 3,
+  NTP_RECENTLY_CLOSED: 4,
+  NTP_APP_RE_ENABLE: 16
+};
+
+var APP_LAUNCH_URL = {
+  // The URL prefix for pings that record app launches by URL.
+  PING_BY_URL: 'record-app-launch-by-url',
+
+  // The URL prefix for pings that record app launches by ID.
+  PING_BY_ID: 'record-app-launch-by-id',
+
+  // The URL prefix used by the webstore link 'ping' attributes.
+  PING_WEBSTORE: 'record-webstore-launch'
+};
+
+function getAppPingUrl(prefix, data, bucket) {
+  return [APP_LAUNCH_URL[prefix],
+          encodeURIComponent(data),
+          APP_LAUNCH[bucket]].join('+');
+}
 
 function getSectionCloseButton(sectionId) {
   return document.querySelector('#' + sectionId + ' .section-close-button');
@@ -54,11 +81,13 @@ function addClosedMenuEntryWithLink(menu, a) {
   menu.appendChild(span);
 }
 
-function addClosedMenuEntry(menu, url, title, imageUrl) {
+function addClosedMenuEntry(menu, url, title, imageUrl, opt_pingUrl) {
   var a = document.createElement('a');
   a.href = url;
   a.textContent = title;
   a.style.backgroundImage = 'url(' + imageUrl + ')';
+  if (opt_pingUrl)
+    a.ping = opt_pingUrl;
   addClosedMenuEntryWithLink(menu, a);
 }
 
@@ -159,8 +188,10 @@ function layoutForeignSessions() {
 
   if (parentSessEl.hasChildNodes()) {
     sessionElement.classList.remove('disabled');
+    sessionElement.classList.remove('opaque');
   } else {
     sessionElement.classList.add('disabled');
+    sessionElement.classList.add('opaque');
   }
 }
 
@@ -256,6 +287,8 @@ function createRecentItem(data) {
     el = document.createElement('a');
     el.className = 'item';
     el.href = data.url;
+    el.ping = getAppPingUrl(
+        'PING_BY_URL', data.url, 'NTP_RECENTLY_CLOSED');
     el.style.backgroundImage = url('chrome://favicon/' + data.url);
     el.dir = data.direction;
     el.textContent = data.title;
@@ -277,6 +310,8 @@ function addRecentMenuItem(menu, data) {
     a.href = '';  // To make underline show up.
   } else {
     a.href = data.url;
+    a.ping = getAppPingUrl(
+        'PING_BY_URL', data.url, 'NTP_RECENTLY_CLOSED');
     a.style.backgroundImage = 'url(chrome://favicon/' + data.url + ')';
     a.textContent = data.title;
   }
@@ -289,7 +324,7 @@ function addRecentMenuItem(menu, data) {
 }
 
 function saveShownSections() {
-  chrome.send('setShownSections', [String(shownSections)]);
+  chrome.send('setShownSections', [shownSections]);
 }
 
 var LayoutMode = {
@@ -1041,13 +1076,6 @@ function hideNotification() {
   }
 }
 
-function showFirstRunNotification() {
-  showNotification(localStrings.getString('firstrunnotification'),
-                   null, null, 30000);
-  var notificationElement = $('notification');
-  notification.classList.add('first-run');
-}
-
 function showPromoNotification() {
   showNotification(parseHtmlSubset(localStrings.getString('serverpromo')),
                    localStrings.getString('syncpromotext'),
@@ -1415,10 +1443,7 @@ function mostVisitedPages(data, firstRun, hasBlacklistedUrls) {
     maybeDoneLoading();
   }, 1);
 
-  // Only show the first run notification if first run.
-  if (firstRun) {
-    showFirstRunNotification();
-  } else if (localStrings.getString('serverpromo')) {
+  if (localStrings.getString('serverpromo')) {
     showPromoNotification();
   }
 }
@@ -1432,12 +1457,10 @@ function isDoneLoading() {
   return !document.body.classList.contains('loading');
 }
 
-// Initialize the apps promo.
+// Initialize the listener for the "hide this" link on the apps promo. We do
+// this outside of getAppsCallback because it only needs to be done once per
+// NTP load.
 document.addEventListener('DOMContentLoaded', function() {
-  var promoLink = document.querySelector('#apps-promo-text1 a');
-  promoLink.id = 'apps-promo-link';
-  promoLink.href = localStrings.getString('web_store_url');
-
   $('apps-promo-hide').addEventListener('click', function() {
     chrome.send('hideAppsPromo', []);
     document.documentElement.classList.remove('apps-promo-visible');

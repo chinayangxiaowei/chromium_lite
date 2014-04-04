@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,27 +6,30 @@
 
 #include "base/logging.h"
 #include "base/utf_string_conversions.h"
-#include "chrome/browser/browser_thread.h"
 #include "chrome/browser/prefs/pref_service.h"
 #include "chrome/browser/prefs/pref_value_store.h"
-#include "chrome/browser/renderer_host/render_view_host.h"
-#include "chrome/browser/renderer_host/render_widget_host_view.h"
-#include "chrome/browser/renderer_host/site_instance.h"
-#include "chrome/browser/renderer_host/test/test_render_view_host.h"
-#include "chrome/browser/tab_contents/interstitial_page.h"
-#include "chrome/browser/tab_contents/navigation_controller.h"
-#include "chrome/browser/tab_contents/navigation_entry.h"
-#include "chrome/browser/tab_contents/test_tab_contents.h"
 #include "chrome/common/chrome_paths.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/common/render_messages.h"
-#include "chrome/common/render_messages_params.h"
 #include "chrome/common/url_constants.h"
 #include "chrome/test/testing_pref_service.h"
 #include "chrome/test/testing_profile.h"
+#include "content/browser/browser_thread.h"
+#include "content/browser/renderer_host/render_view_host.h"
+#include "content/browser/renderer_host/render_widget_host_view.h"
+#include "content/browser/renderer_host/test_render_view_host.h"
+#include "content/browser/site_instance.h"
+#include "content/browser/tab_contents/constrained_window.h"
+#include "content/browser/tab_contents/interstitial_page.h"
+#include "content/browser/tab_contents/navigation_controller.h"
+#include "content/browser/tab_contents/navigation_entry.h"
+#include "content/browser/tab_contents/test_tab_contents.h"
+#include "content/common/bindings_policy.h"
+#include "content/common/view_messages.h"
 #include "ipc/ipc_channel.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "ui/base/message_box_flags.h"
+#include "webkit/glue/webkit_glue.h"
 
 using webkit_glue::PasswordForm;
 
@@ -46,6 +49,7 @@ static void InitNavigateParams(ViewHostMsg_FrameNavigate_Params* params,
   params->gesture = NavigationGestureUser;
   params->was_within_same_page = false;
   params->is_post = false;
+  params->content_state = webkit_glue::CreateHistoryStateForURL(GURL(url));
 }
 
 class TestInterstitialPage : public InterstitialPage {
@@ -209,8 +213,6 @@ class TabContentsTest : public RenderViewHostTestHarness {
     pref_services->SetUserPref(prefs::kWebKitTextAreasAreResizable,
                                Value::CreateBooleanValue(false));
     pref_services->SetUserPref(prefs::kWebKitUsesUniversalDetector,
-                               Value::CreateBooleanValue(true));
-    pref_services->SetUserPref(prefs::kWebKitStandardFontIsSerif,
                                Value::CreateBooleanValue(true));
     pref_services->SetUserPref("webkit.webprefs.foo",
                                Value::CreateStringValue("bar"));
@@ -575,6 +577,99 @@ TEST_F(TabContentsTest, CrossSiteNavigationPreempted) {
   EXPECT_TRUE(contents()->pending_rvh() == NULL);
 }
 
+TEST_F(TabContentsTest, CrossSiteNavigationBackPreempted) {
+  contents()->transition_cross_site = true;
+
+  // Start with NTP, which gets a new RVH with WebUI bindings.
+  const GURL url1("chrome://newtab");
+  controller().LoadURL(url1, GURL(), PageTransition::TYPED);
+  TestRenderViewHost* ntp_rvh = rvh();
+  ViewHostMsg_FrameNavigate_Params params1;
+  InitNavigateParams(&params1, 1, url1);
+  contents()->TestDidNavigate(ntp_rvh, params1);
+  NavigationEntry* entry1 = controller().GetLastCommittedEntry();
+  SiteInstance* instance1 = contents()->GetSiteInstance();
+
+  EXPECT_FALSE(contents()->cross_navigation_pending());
+  EXPECT_EQ(ntp_rvh, contents()->render_view_host());
+  EXPECT_EQ(url1, entry1->url());
+  EXPECT_EQ(instance1, entry1->site_instance());
+  EXPECT_TRUE(BindingsPolicy::is_web_ui_enabled(ntp_rvh->enabled_bindings()));
+
+  // Navigate to new site.
+  const GURL url2("http://www.google.com");
+  controller().LoadURL(url2, GURL(), PageTransition::TYPED);
+  EXPECT_TRUE(contents()->cross_navigation_pending());
+  TestRenderViewHost* google_rvh = contents()->pending_rvh();
+
+  // Simulate beforeunload approval.
+  EXPECT_TRUE(ntp_rvh->is_waiting_for_beforeunload_ack());
+  ntp_rvh->TestOnMessageReceived(ViewHostMsg_ShouldClose_ACK(0, true));
+
+  // DidNavigate from the pending page.
+  ViewHostMsg_FrameNavigate_Params params2;
+  InitNavigateParams(&params2, 1, url2);
+  contents()->TestDidNavigate(google_rvh, params2);
+  NavigationEntry* entry2 = controller().GetLastCommittedEntry();
+  SiteInstance* instance2 = contents()->GetSiteInstance();
+
+  EXPECT_FALSE(contents()->cross_navigation_pending());
+  EXPECT_EQ(google_rvh, contents()->render_view_host());
+  EXPECT_NE(instance1, instance2);
+  EXPECT_FALSE(contents()->pending_rvh());
+  EXPECT_EQ(url2, entry2->url());
+  EXPECT_EQ(instance2, entry2->site_instance());
+  EXPECT_FALSE(BindingsPolicy::is_web_ui_enabled(
+      google_rvh->enabled_bindings()));
+
+  // Navigate to third page on same site.
+  const GURL url3("http://news.google.com");
+  controller().LoadURL(url3, GURL(), PageTransition::TYPED);
+  EXPECT_FALSE(contents()->cross_navigation_pending());
+  ViewHostMsg_FrameNavigate_Params params3;
+  InitNavigateParams(&params3, 2, url3);
+  contents()->TestDidNavigate(google_rvh, params3);
+  NavigationEntry* entry3 = controller().GetLastCommittedEntry();
+  SiteInstance* instance3 = contents()->GetSiteInstance();
+
+  EXPECT_FALSE(contents()->cross_navigation_pending());
+  EXPECT_EQ(google_rvh, contents()->render_view_host());
+  EXPECT_EQ(instance2, instance3);
+  EXPECT_FALSE(contents()->pending_rvh());
+  EXPECT_EQ(url3, entry3->url());
+  EXPECT_EQ(instance3, entry3->site_instance());
+
+  // Go back within the site.
+  controller().GoBack();
+  EXPECT_FALSE(contents()->cross_navigation_pending());
+  EXPECT_EQ(entry2, controller().pending_entry());
+
+  // Before that commits, go back again.
+  controller().GoBack();
+  EXPECT_TRUE(contents()->cross_navigation_pending());
+  EXPECT_TRUE(contents()->pending_rvh());
+  EXPECT_EQ(entry1, controller().pending_entry());
+
+  // Simulate beforeunload approval.
+  EXPECT_TRUE(google_rvh->is_waiting_for_beforeunload_ack());
+  google_rvh->TestOnMessageReceived(ViewHostMsg_ShouldClose_ACK(0, true));
+
+  // DidNavigate from the first back. This aborts the second back's pending RVH.
+  contents()->TestDidNavigate(google_rvh, params2);
+
+  // We should commit this page and forget about the second back.
+  EXPECT_FALSE(contents()->cross_navigation_pending());
+  EXPECT_FALSE(controller().pending_entry());
+  EXPECT_EQ(google_rvh, contents()->render_view_host());
+  EXPECT_EQ(url2, controller().GetLastCommittedEntry()->url());
+
+  // We should not have corrupted the NTP entry.
+  EXPECT_EQ(instance3, entry3->site_instance());
+  EXPECT_EQ(instance2, entry2->site_instance());
+  EXPECT_EQ(instance1, entry1->site_instance());
+  EXPECT_EQ(url1, entry1->url());
+}
+
 // Test that during a slow cross-site navigation, a sub-frame navigation in the
 // original renderer will not cancel the slow navigation (bug 42029).
 TEST_F(TabContentsTest, CrossSiteNavigationNotPreemptedByFrame) {
@@ -607,40 +702,40 @@ TEST_F(TabContentsTest, CrossSiteNavigationNotPreemptedByFrame) {
   EXPECT_TRUE(contents()->cross_navigation_pending());
 }
 
-// Test that the original renderer can preempt a cross-site navigation while the
-// beforeunload request is in flight.
-TEST_F(TabContentsTest, CrossSitePreemptDuringBeforeUnload) {
+// Test that a cross-site navigation is not preempted if the previous
+// renderer sends a FrameNavigate message just before being told to stop.
+// We should only preempt the cross-site navigation if the previous renderer
+// has started a new navigation.  See http://crbug.com/79176.
+TEST_F(TabContentsTest, CrossSiteNotPreemptedDuringBeforeUnload) {
   contents()->transition_cross_site = true;
-  TestRenderViewHost* orig_rvh = rvh();
-  SiteInstance* instance1 = contents()->GetSiteInstance();
 
-  // Navigate to URL.  First URL should use first RenderViewHost.
-  const GURL url("http://www.google.com");
+  // Navigate to NTP URL.
+  const GURL url("chrome://newtab");
   controller().LoadURL(url, GURL(), PageTransition::TYPED);
-  ViewHostMsg_FrameNavigate_Params params1;
-  InitNavigateParams(&params1, 1, url);
-  contents()->TestDidNavigate(orig_rvh, params1);
+  TestRenderViewHost* orig_rvh = rvh();
   EXPECT_FALSE(contents()->cross_navigation_pending());
-  EXPECT_EQ(orig_rvh, contents()->render_view_host());
 
-  // Navigate to new site, with the befureunload request in flight.
+  // Navigate to new site, with the beforeunload request in flight.
   const GURL url2("http://www.yahoo.com");
   controller().LoadURL(url2, GURL(), PageTransition::TYPED);
+  TestRenderViewHost* pending_rvh = contents()->pending_rvh();
+  EXPECT_TRUE(contents()->cross_navigation_pending());
+  EXPECT_TRUE(orig_rvh->is_waiting_for_beforeunload_ack());
 
-  // Suppose the original renderer navigates now, while the beforeunload request
-  // is in flight.  We must cancel the pending navigation and show this new
-  // page, because the beforeunload handler might return false.
-  orig_rvh->SendNavigate(2, GURL("http://www.google.com/foo"));
+  // Suppose the first navigation tries to commit now, with a
+  // ViewMsg_Stop in flight.  This should not cancel the pending navigation,
+  // but it should act as if the beforeunload ack arrived.
+  orig_rvh->SendNavigate(1, GURL("chrome://newtab"));
+  EXPECT_TRUE(contents()->cross_navigation_pending());
+  EXPECT_EQ(orig_rvh, contents()->render_view_host());
+  EXPECT_FALSE(orig_rvh->is_waiting_for_beforeunload_ack());
 
-  // Verify that the pending navigation is cancelled.
-  SiteInstance* instance2 = contents()->GetSiteInstance();
+  // The pending navigation should be able to commit successfully.
+  ViewHostMsg_FrameNavigate_Params params2;
+  InitNavigateParams(&params2, 1, url2, PageTransition::TYPED);
+  contents()->TestDidNavigate(pending_rvh, params2);
   EXPECT_FALSE(contents()->cross_navigation_pending());
-  EXPECT_EQ(orig_rvh, rvh());
-  EXPECT_EQ(instance1, instance2);
-  EXPECT_TRUE(contents()->pending_rvh() == NULL);
-
-  // Make sure the beforeunload ack doesn't cause problems if it arrives here.
-  orig_rvh->TestOnMessageReceived(ViewHostMsg_ShouldClose_ACK(0, true));
+  EXPECT_EQ(pending_rvh, contents()->render_view_host());
 }
 
 // Test that the original renderer cannot preempt a cross-site navigation once
@@ -1559,7 +1654,7 @@ TEST_F(TabContentsTest, CopyStateFromAndPruneSourceInterstitial) {
   scoped_ptr<TestTabContents> other_contents(CreateTestTabContents());
   NavigationController& other_controller = other_contents->controller();
   other_contents->NavigateAndCommit(url3);
-  other_controller.CopyStateFromAndPrune(&controller());
+  other_controller.CopyStateFromAndPrune(&controller(), false);
 
   // The merged controller should only have two entries: url1 and url2.
   ASSERT_EQ(2, other_controller.entry_count());
@@ -1600,7 +1695,7 @@ TEST_F(TabContentsTest, CopyStateFromAndPruneTargetInterstitial) {
   EXPECT_TRUE(interstitial->is_showing());
   EXPECT_EQ(2, other_controller.entry_count());
 
-  other_controller.CopyStateFromAndPrune(&controller());
+  other_controller.CopyStateFromAndPrune(&controller(), false);
 
   // The merged controller should only have two entries: url1 and url2.
   ASSERT_EQ(2, other_controller.entry_count());
@@ -1616,4 +1711,37 @@ TEST_F(TabContentsTest, CopyStateFromAndPruneTargetInterstitial) {
 
   // And the interstitial should do a reload on don't proceed.
   EXPECT_TRUE(other_contents->interstitial_page()->reload_on_dont_proceed());
+}
+
+class ConstrainedWindowCloseTest : public ConstrainedWindow {
+ public:
+  explicit ConstrainedWindowCloseTest(TabContents* tab_contents)
+      : tab_contents_(tab_contents) {
+  }
+
+  virtual void ShowConstrainedWindow() {}
+  virtual void FocusConstrainedWindow() {}
+  virtual ~ConstrainedWindowCloseTest() {}
+
+  virtual void CloseConstrainedWindow() {
+    tab_contents_->WillClose(this);
+    close_count++;
+  }
+
+  int close_count;
+  TabContents* tab_contents_;
+};
+
+TEST_F(TabContentsTest, ConstrainedWindows) {
+  TabContents* tab_contents = CreateTestTabContents();
+  ConstrainedWindowCloseTest window(tab_contents);
+  window.close_count = 0;
+
+  const int kWindowCount = 4;
+  for (int i = 0; i < kWindowCount; i++) {
+    tab_contents->AddConstrainedDialog(&window);
+  }
+  EXPECT_EQ(window.close_count, 0);
+  delete tab_contents;
+  EXPECT_EQ(window.close_count, kWindowCount);
 }

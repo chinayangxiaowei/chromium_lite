@@ -7,6 +7,7 @@
 #include "chrome/browser/ui/views/accessible_pane_view.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
 #include "chrome/browser/ui/views/location_bar/location_bar_view.h"
+#include "ui/base/accessibility/accessible_view_state.h"
 #include "views/controls/button/menu_button.h"
 #include "views/controls/native/native_view_host.h"
 #include "views/focus/focus_search.h"
@@ -48,7 +49,7 @@ bool AccessiblePaneView::SetPaneFocus(int view_storage_id,
   // Use the provided initial focus if it's visible and enabled, otherwise
   // use the first focusable child.
   if (!initial_focus ||
-      !IsParentOf(initial_focus) ||
+      !Contains(initial_focus) ||
       !initial_focus->IsVisible() ||
       !initial_focus->IsEnabled()) {
     initial_focus = GetFirstFocusableChild();
@@ -85,6 +86,10 @@ bool AccessiblePaneView::SetPaneFocus(int view_storage_id,
 bool AccessiblePaneView::SetPaneFocusAndFocusDefault(
     int view_storage_id) {
   return SetPaneFocus(view_storage_id, GetDefaultFocusableChild());
+}
+
+views::View* AccessiblePaneView::GetDefaultFocusableChild() {
+  return NULL;
 }
 
 void AccessiblePaneView::RemovePaneFocus() {
@@ -192,8 +197,8 @@ void AccessiblePaneView::SetVisible(bool flag) {
   View::SetVisible(flag);
 }
 
-AccessibilityTypes::Role AccessiblePaneView::GetAccessibleRole() {
-  return AccessibilityTypes::ROLE_PANE;
+void AccessiblePaneView::GetAccessibleState(ui::AccessibleViewState* state) {
+  state->role = ui::AccessibilityTypes::ROLE_PANE;
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -216,7 +221,7 @@ void AccessiblePaneView::FocusWillChange(views::View* focused_before,
             &AccessiblePaneView::LocationBarSelectAll));
   }
 
-  if (!IsParentOf(focused_now) ||
+  if (!Contains(focused_now) ||
       reason == views::FocusManager::kReasonDirectFocusChange) {
     // We should remove pane focus (i.e. make most of the controls
     // not focusable again) either because the focus is leaving the pane,

@@ -1,16 +1,30 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "app/app_switches.h"
 #include "base/command_line.h"
 #include "base/environment.h"
 #include "base/logging.h"
+#include "base/memory/scoped_ptr.h"
 #include "base/path_service.h"
-#include "base/scoped_ptr.h"
+#include "base/string_number_conversions.h"
 #include "chrome/common/chrome_paths.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/test/test_launcher_utils.h"
+#include "ui/gfx/gl/gl_switches.h"
+
+namespace {
+
+// TODO(phajdan.jr): remove this flag and fix its users.
+// We should use base/test/test_timeouts and not custom flags.
+static const char kTestTerminateTimeoutFlag[] = "test-terminate-timeout";
+
+// A multiplier for slow tests. We generally avoid multiplying
+// test timeouts by any constants. Here it is used as last resort
+// to implement the SLOW_ test prefix.
+static const int kSlowTestTimeoutMultiplier = 5;
+
+}  // namespace
 
 namespace test_launcher_utils {
 
@@ -66,6 +80,31 @@ bool OverrideGLImplementation(CommandLine* command_line,
   command_line->AppendSwitchASCII(switches::kUseGL, implementation_name);
 
   return true;
+}
+
+int GetTestTerminationTimeout(const std::string& test_name,
+                              int default_timeout_ms) {
+  int timeout_ms = default_timeout_ms;
+  if (CommandLine::ForCurrentProcess()->HasSwitch(kTestTerminateTimeoutFlag)) {
+    std::string timeout_str =
+        CommandLine::ForCurrentProcess()->GetSwitchValueASCII(
+            kTestTerminateTimeoutFlag);
+    int timeout;
+    if (base::StringToInt(timeout_str, &timeout)) {
+      timeout_ms = std::max(timeout_ms, timeout);
+    } else {
+      LOG(ERROR) << "Invalid timeout (" << kTestTerminateTimeoutFlag << "): "
+                 << timeout_str;
+    }
+  }
+
+  // Make it possible for selected tests to request a longer timeout.
+  // Generally tests should really avoid doing too much, and splitting
+  // a test instead of using SLOW prefix is strongly preferred.
+  if (test_name.find("SLOW_") != std::string::npos)
+    timeout_ms *= kSlowTestTimeoutMultiplier;
+
+  return timeout_ms;
 }
 
 }  // namespace test_launcher_utils

@@ -11,13 +11,14 @@
 
 #include "base/basictypes.h"
 #include "base/string16.h"
-#include "gfx/font.h"
+#include "ui/gfx/font.h"
 
 class FilePath;
 class GURL;
 
-// TODO(port): this file should deal in string16s rather than wstrings.
 namespace ui {
+
+extern const char kEllipsis[];
 
 // This function takes a GURL object and elides it. It returns a string
 // which composed of parts from subdomain, domain, path, filename and query.
@@ -35,7 +36,7 @@ namespace ui {
 string16 ElideUrl(const GURL& url,
                   const gfx::Font& font,
                   int available_pixel_width,
-                  const std::wstring& languages);
+                  const std::string& languages);
 
 // Elides |text| to fit in |available_pixel_width|.  If |elide_in_middle| is
 // set the ellipsis is placed in the middle of the string; otherwise it is
@@ -62,7 +63,7 @@ string16 ElideFilename(const FilePath& filename,
 // SortedDisplayURL is relatively cheap and supports value semantics.
 class SortedDisplayURL {
  public:
-  SortedDisplayURL(const GURL& url, const std::wstring& languages);
+  SortedDisplayURL(const GURL& url, const std::string& languages);
   SortedDisplayURL();
   ~SortedDisplayURL();
 
@@ -96,22 +97,24 @@ class SortedDisplayURL {
 // If the size of |input| is more than |max_len|, this function returns
 // true and |input| is shortened into |output| by removing chars in the
 // middle (they are replaced with up to 3 dots, as size permits).
-// Ex: ElideString(L"Hello", 10, &str) puts Hello in str and returns false.
-// ElideString(L"Hello my name is Tom", 10, &str) puts "Hell...Tom" in str
-// and returns true.
+// Ex: ElideString(ASCIIToUTF16("Hello"), 10, &str) puts Hello in str and
+// returns false.  ElideString(ASCIIToUTF16("Hello my name is Tom"), 10, &str)
+// puts "Hell...Tom" in str and returns true.
 // TODO(tsepez): Doesn't handle UTF-16 surrogate pairs properly.
-// TODO(tsepez): Doesn't handle bidi properly
-bool ElideString(const std::wstring& input, int max_len, std::wstring* output);
+// TODO(tsepez): Doesn't handle bidi properly.
+bool ElideString(const string16& input, int max_len, string16* output);
 
 // Reformat |input| into |output| so that it fits into a |max_rows| by
 // |max_cols| rectangle of characters.  Input newlines are respected, but
-// lines that are too long are broken into pieces, first at naturally
-// occuring whitespace boundaries, and then intra-word (respecting UTF-16
-// surrogate pairs) as necssary. Truncation (indicated by an added 3 dots)
-// occurs if the result is still too long.  Returns true if the input had
-// to be truncated (and not just reformatted).
+// lines that are too long are broken into pieces.  If |strict| is true,
+// we break first at naturally occuring whitespace boundaries, otherwise
+// we assume some other mechanism will do this in approximately the same
+// spot after the fact.  If the word itself is too long, we always break
+// intra-word (respecting UTF-16 surrogate pairs) as necssary. Truncation
+// (indicated by an added 3 dots) occurs if the result is still too long.
+//  Returns true if the input had to be truncated (and not just reformatted).
 bool ElideRectangleString(const string16& input, size_t max_rows,
-                          size_t max_cols, string16* output);
+                          size_t max_cols, bool strict, string16* output);
 
 
 } // namespace ui

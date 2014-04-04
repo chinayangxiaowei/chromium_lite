@@ -455,9 +455,8 @@ void SocketStream::DoLoop(int result) {
     // close the connection.
     if (state != STATE_READ_WRITE && result < ERR_IO_PENDING) {
       DCHECK_EQ(next_state_, STATE_CLOSE);
-      net_log_.EndEvent(
-          NetLog::TYPE_SOCKET_STREAM_CONNECT,
-          make_scoped_refptr(new NetLogIntegerParameter("net_error", result)));
+      net_log_.EndEventWithNetErrorCode(
+          NetLog::TYPE_SOCKET_STREAM_CONNECT, result);
     }
   } while (result != ERR_IO_PENDING);
 }
@@ -556,9 +555,9 @@ int SocketStream::DoTcpConnect(int result) {
   }
   next_state_ = STATE_TCP_CONNECT_COMPLETE;
   DCHECK(factory_);
-  socket_.reset(factory_->CreateTCPClientSocket(addresses_,
-                                                net_log_.net_log(),
-                                                net_log_.source()));
+  socket_.reset(factory_->CreateTransportClientSocket(addresses_,
+                                                      net_log_.net_log(),
+                                                      net_log_.source()));
   metrics_->OnStartConnection();
   return socket_->Connect(&io_callback_);
 }
@@ -833,9 +832,6 @@ int SocketStream::DoSSLConnectComplete(int result) {
         reinterpret_cast<SSLClientSocket*>(socket_.get());
       SSLInfo ssl_info;
       ssl_socket->GetSSLInfo(&ssl_info);
-      SSLConfig::CertAndStatus bad_cert;
-      bad_cert.cert = ssl_info.cert;
-      bad_cert.cert_status = ssl_info.cert_status;
       if (ssl_config_.IsAllowedBadCert(ssl_info.cert)) {
         // If we already have the certificate in the set of allowed bad
         // certificates, we did try it and failed again, so we should not
@@ -844,7 +840,10 @@ int SocketStream::DoSSLConnectComplete(int result) {
         return result;
       }
       // Add the bad certificate to the set of allowed certificates in the
-      // SSL info object.
+      // SSL config object.
+      SSLConfig::CertAndStatus bad_cert;
+      bad_cert.cert = ssl_info.cert;
+      bad_cert.cert_status = ssl_info.cert_status;
       ssl_config_.allowed_bad_certs.push_back(bad_cert);
       // Restart connection ignoring the bad certificate.
       socket_->Disconnect();

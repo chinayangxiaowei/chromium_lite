@@ -10,7 +10,8 @@
 #include <vector>
 #include "base/basictypes.h"
 #include "base/logging.h"
-#include "base/ref_counted.h"
+#include "base/memory/ref_counted.h"
+#include "base/memory/scoped_ptr.h"
 #include "gpu/command_buffer/service/gl_utils.h"
 #include "gpu/command_buffer/service/shader_manager.h"
 
@@ -110,8 +111,9 @@ class ProgramManager {
     // Gets the location of a uniform by name.
     GLint GetUniformLocation(const std::string& name) const;
 
-    // Gets the type of a uniform by location.
-    bool GetUniformTypeByLocation(GLint location, GLenum* type) const;
+    // Gets the UniformInfo of a uniform by location.
+    const UniformInfo* GetUniformInfoByLocation(
+        GLint location, GLint* array_index) const;
 
     // Sets the sampler values for a uniform.
     // This is safe to call for any location. If the location is not
@@ -137,12 +139,12 @@ class ProgramManager {
 
     bool CanLink() const;
 
-    const std::string& log_info() const {
-      return log_info_;
+    const std::string* log_info() const {
+      return log_info_.get();
     }
 
-    void set_log_info(const std::string& str) {
-      log_info_ = str;
+    void set_log_info(const char* str) {
+      log_info_.reset(str ? new std::string(str) : NULL);
     }
 
     bool InUse() const {
@@ -153,6 +155,20 @@ class ProgramManager {
    private:
     friend class base::RefCounted<ProgramInfo>;
     friend class ProgramManager;
+
+    // Info for each location
+    struct LocationInfo {
+      LocationInfo()
+          : uniform_index(-1),
+            array_index(-1) {
+      }
+      LocationInfo(GLint _uniform_index, GLint _array_index)
+          : uniform_index(_uniform_index),
+            array_index(_array_index) {
+      }
+      GLint uniform_index;  // index of UniformInfo in uniform_infos_.
+      GLint array_index;  // index of location when used in array.
+    };
 
     ~ProgramInfo();
 
@@ -197,8 +213,8 @@ class ProgramManager {
     // Uniform info by index.
     UniformInfoVector uniform_infos_;
 
-    // Uniform location to index.
-    std::vector<GLint> uniform_location_to_index_map_;
+    // Info for each location.
+    std::vector<LocationInfo> location_infos_;
 
     // The indices of the uniforms that are samplers.
     SamplerIndices sampler_indices_;
@@ -216,7 +232,7 @@ class ProgramManager {
     bool link_status_;
 
     // Log info
-    std::string log_info_;
+    scoped_ptr<std::string> log_info_;
   };
 
   ProgramManager();

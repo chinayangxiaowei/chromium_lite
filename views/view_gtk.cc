@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,34 +7,8 @@
 #include <gtk/gtk.h>
 
 #include "base/logging.h"
-#include "views/views_delegate.h"
 
 namespace views {
-
-// static
-int View::GetDoubleClickTimeMS() {
-  GdkDisplay* display = gdk_display_get_default();
-  return display ? display->double_click_time : 500;
-}
-
-int View::GetMenuShowDelay() {
-  return kShowFolderDropMenuDelay;
-}
-
-void View::NotifyAccessibilityEvent(AccessibilityTypes::Event event_type,
-    bool send_native_event) {
-  // Send the notification to the delegate.
-  if (ViewsDelegate::views_delegate)
-    ViewsDelegate::views_delegate->NotifyAccessibilityEvent(this, event_type);
-
-  // In the future if we add native GTK accessibility support, the
-  // notification should be sent here.
-}
-
-ViewAccessibility* View::GetViewAccessibility() {
-  NOTIMPLEMENTED();
-  return NULL;
-}
 
 int View::GetHorizontalDragThreshold() {
   static bool determined_threshold = false;

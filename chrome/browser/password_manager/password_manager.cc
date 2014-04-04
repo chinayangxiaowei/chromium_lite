@@ -1,4 +1,4 @@
-// Copyright (c) 2006-2008 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -14,10 +14,9 @@
 #include "chrome/browser/password_manager/password_manager_delegate.h"
 #include "chrome/browser/prefs/pref_service.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/common/notification_registrar.h"
+#include "chrome/common/autofill_messages.h"
 #include "chrome/common/pref_names.h"
-#include "chrome/common/render_messages.h"
-#include "chrome/common/render_messages_params.h"
+#include "content/common/view_messages.h"
 #include "grit/generated_resources.h"
 
 using webkit_glue::PasswordForm;
@@ -51,8 +50,10 @@ static void ReportMetrics(bool password_manager_enabled) {
     UserMetrics::RecordAction(UserMetricsAction("PasswordManager_Disabled"));
 }
 
-PasswordManager::PasswordManager(PasswordManagerDelegate* delegate)
-    : login_managers_deleter_(&pending_login_managers_),
+PasswordManager::PasswordManager(TabContents* tab_contents,
+                                 PasswordManagerDelegate* delegate)
+    : TabContentsObserver(tab_contents),
+      login_managers_deleter_(&pending_login_managers_),
       delegate_(delegate),
       observer_(NULL) {
   DCHECK(delegate_);
@@ -162,8 +163,9 @@ void PasswordManager::DidNavigateAnyFramePostCommit(
 bool PasswordManager::OnMessageReceived(const IPC::Message& message) {
   bool handled = true;
   IPC_BEGIN_MESSAGE_MAP(PasswordManager, message)
-    IPC_MESSAGE_HANDLER(ViewHostMsg_PasswordFormsFound, OnPasswordFormsFound)
-    IPC_MESSAGE_HANDLER(ViewHostMsg_PasswordFormsVisible,
+    IPC_MESSAGE_HANDLER(AutofillHostMsg_PasswordFormsFound,
+                        OnPasswordFormsFound)
+    IPC_MESSAGE_HANDLER(AutofillHostMsg_PasswordFormsVisible,
                         OnPasswordFormsVisible)
     IPC_MESSAGE_UNHANDLED(handled = false)
   IPC_END_MESSAGE_MAP()

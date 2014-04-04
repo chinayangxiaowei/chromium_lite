@@ -5,12 +5,12 @@
 #include "remoting/base/encoder_row_based.h"
 
 #include "base/logging.h"
-#include "gfx/rect.h"
 #include "remoting/base/capture_data.h"
 #include "remoting/base/compressor_verbatim.h"
 #include "remoting/base/compressor_zlib.h"
 #include "remoting/base/util.h"
 #include "remoting/proto/video.pb.h"
+#include "ui/gfx/rect.h"
 
 namespace remoting {
 
@@ -42,6 +42,7 @@ EncoderRowBased::EncoderRowBased(Compressor* compressor,
                                  VideoPacketFormat::Encoding encoding)
     : encoding_(encoding),
       compressor_(compressor),
+      screen_size_(0, 0),
       packet_size_(kPacketSize) {
 }
 
@@ -50,6 +51,7 @@ EncoderRowBased::EncoderRowBased(Compressor* compressor,
                                  int packet_size)
     : encoding_(encoding),
       compressor_(compressor),
+      screen_size_(0, 0),
       packet_size_(packet_size) {
 }
 
@@ -115,6 +117,7 @@ void EncoderRowBased::EncodeRect(const gfx::Rect& rect, bool last) {
     // We have reached the end of stream.
     if (!compress_again) {
       packet->set_flags(packet->flags() | VideoPacket::LAST_PACKET);
+      packet->set_capture_time_ms(capture_data_->capture_time_ms());
       if (last)
         packet->set_flags(packet->flags() | VideoPacket::LAST_PARTITION);
       DCHECK(row_pos == row_size);
@@ -147,6 +150,11 @@ void EncoderRowBased::PrepareUpdateStart(const gfx::Rect& rect,
   format->set_width(rect.width());
   format->set_height(rect.height());
   format->set_encoding(encoding_);
+  if (capture_data_->size() != screen_size_) {
+    screen_size_ = capture_data_->size();
+    format->set_screen_width(screen_size_.width());
+    format->set_screen_height(screen_size_.height());
+  }
 }
 
 uint8* EncoderRowBased::GetOutputBuffer(VideoPacket* packet, size_t size) {

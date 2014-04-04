@@ -3,6 +3,7 @@
 // found in the LICENSE file.
 
 #include "base/logging.h"
+#include "ui/base/accessibility/accessible_view_state.h"
 #include "views/window/client_view.h"
 #if defined(OS_LINUX)
 #include "views/window/hit_test.h"
@@ -24,8 +25,15 @@ int ClientView::NonClientHitTest(const gfx::Point& point) {
   return bounds().Contains(point) ? HTCLIENT : HTNOWHERE;
 }
 
+DialogClientView* ClientView::AsDialogClientView() {
+  return NULL;
+}
+
+bool ClientView::CanClose() {
+  return true;
+}
+
 void ClientView::WindowClosing() {
-  window_->GetDelegate()->WindowClosing();
 }
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -52,19 +60,18 @@ void ClientView::ViewHierarchyChanged(bool is_add, View* parent, View* child) {
     DCHECK(contents_view_); // |contents_view_| must be valid now!
     // Insert |contents_view_| at index 0 so it is first in the focus chain.
     // (the OK/Cancel buttons are inserted before contents_view_)
-    AddChildView(0, contents_view_);
+    AddChildViewAt(contents_view_, 0);
   }
 }
 
-void ClientView::DidChangeBounds(const gfx::Rect& previous,
-                                 const gfx::Rect& current) {
+void ClientView::OnBoundsChanged(const gfx::Rect& previous_bounds) {
   // Overridden to do nothing. The NonClientView manually calls Layout on the
   // ClientView when it is itself laid out, see comment in
   // NonClientView::Layout.
 }
 
-AccessibilityTypes::Role ClientView::GetAccessibleRole() {
-  return AccessibilityTypes::ROLE_CLIENT;
+void ClientView::GetAccessibleState(ui::AccessibleViewState* state) {
+  state->role = ui::AccessibilityTypes::ROLE_CLIENT;
 }
 
 }  // namespace views

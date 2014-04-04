@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,10 +9,11 @@
 #include <string>
 
 #include "base/basictypes.h"
+#include "chrome/installer/util/util_constants.h"
 
 namespace installer {
 class ChannelInfo;
-class Package;
+class InstallerState;
 }
 
 // This class provides accessors to the Google Update 'ClientState' information
@@ -38,7 +39,7 @@ class GoogleUpdateSettings {
 
   // Sets the machine-wide EULA consented flag required on OEM installs.
   // Returns false if the setting could not be recorded.
-  static bool SetEULAConsent(const installer::Package& package,
+  static bool SetEULAConsent(const installer::InstallerState& installer_state,
                              bool consented);
 
   // Returns the last time chrome was run in days. It uses a recorded value
@@ -85,9 +86,16 @@ class GoogleUpdateSettings {
   // true if this operation succeeded.
   static bool ClearReferral();
 
+  // Set did_run "dr" in the client state value. This is used to measure
+  // active users. Returns false if writting to the registry failed.
+  static bool UpdateDidRunState(bool did_run, bool system_level);
+
+
   // Return a human readable modifier for the version string, e.g.
   // the channel (dev, beta, stable). Returns true if this operation succeeded,
-  // on success, channel contains one of "", "unknown", "dev" or "beta".
+  // on success, channel contains one of "", "unknown", "dev" or "beta" (unless
+  // it is a multi-install product, in which case it will return "m",
+  // "unknown-m", "dev-m", or "beta-m").
   static bool GetChromeChannel(bool system_install, std::wstring* channel);
 
   // This method changes the Google Update "ap" value to move the installation
@@ -98,12 +106,10 @@ class GoogleUpdateSettings {
   // - If we are currently running full installer, we remove this magic
   // string (if it is present) regardless of whether installer failed or not.
   // There is no fall-back for full installer :)
-  // - If multi-install fails we append -multifail; otherwise, we remove it
-  // (i.e., success or single-install).
+  // - Unconditionally remove "-multifail" since we haven't crashed.
   // |state_key| should be obtained via InstallerState::state_key().
   static void UpdateInstallStatus(bool system_install,
-                                  bool incremental_install,
-                                  bool multi_install,
+                                  installer::ArchiveType archive_type,
                                   int install_return_code,
                                   const std::wstring& product_guid);
 
@@ -116,12 +122,11 @@ class GoogleUpdateSettings {
   // - If full installer failed, still remove this magic
   //   string (if it is present already).
   //
-  // diff_install: tells whether this is incremental install or not.
+  // archive_type: tells whether this is incremental install or not.
   // install_return_code: if 0, means installation was successful.
   // value: current value of Google Update "ap" key.
   // Returns true if |value| is modified.
-  static bool UpdateGoogleUpdateApKey(bool diff_install,
-                                      bool multi_install,
+  static bool UpdateGoogleUpdateApKey(installer::ArchiveType archive_type,
                                       int install_return_code,
                                       installer::ChannelInfo* value);
 
@@ -144,6 +149,11 @@ class GoogleUpdateSettings {
 
   // True if a build is strictly organic, according to its brand code.
   static bool IsOrganic(const std::wstring& brand);
+
+  // True if a build should run as organic in the first run process. This uses
+  // a slightly different set of brand codes from the standard IsOrganic
+  // method.
+  static bool IsOrganicFirstRun(const std::wstring& brand);
 
  private:
   DISALLOW_IMPLICIT_CONSTRUCTORS(GoogleUpdateSettings);

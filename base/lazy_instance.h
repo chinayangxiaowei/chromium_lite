@@ -1,4 +1,4 @@
-// Copyright (c) 2008 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -39,6 +39,7 @@
 #include <new>  // For placement new.
 
 #include "base/atomicops.h"
+#include "base/base_api.h"
 #include "base/basictypes.h"
 #include "base/third_party/dynamic_annotations/dynamic_annotations.h"
 #include "base/threading/thread_restrictions.h"
@@ -80,7 +81,7 @@ void (*LeakyLazyInstanceTraits<Type>::Delete)(void* instance) = NULL;
 
 // We pull out some of the functionality into a non-templated base, so that we
 // can implement the more complicated pieces out of line in the .cc file.
-class LazyInstanceHelper {
+class BASE_API LazyInstanceHelper {
  protected:
   enum {
     STATE_EMPTY    = 0,
@@ -88,7 +89,7 @@ class LazyInstanceHelper {
     STATE_CREATED  = 2
   };
 
-  explicit LazyInstanceHelper(LinkerInitialized x) { /* state_ is 0 */ }
+  explicit LazyInstanceHelper(LinkerInitialized /*unused*/) {/* state_ is 0 */}
   // Declaring a destructor (even if it's empty) will cause MSVC to register a
   // static initializer to register the empty destructor with atexit().
 
@@ -127,7 +128,7 @@ class LazyInstance : public LazyInstanceHelper {
         NeedsInstance()) {
       // Create the instance in the space provided by |buf_|.
       instance_ = Traits::New(buf_);
-      // Traits::Delete will be null for LeakyLazyInstannceTraits
+      // Traits::Delete will be null for LeakyLazyInstanceTraits
       void (*dtor)(void*) = Traits::Delete;
       CompleteInstance(this, (dtor == NULL) ? NULL : OnExit);
     }
@@ -139,6 +140,19 @@ class LazyInstance : public LazyInstanceHelper {
     // See the corresponding HAPPENS_BEFORE in CompleteInstance(...).
     ANNOTATE_HAPPENS_AFTER(&state_);
     return instance_;
+  }
+
+  bool operator==(Type* p) {
+    switch (base::subtle::NoBarrier_Load(&state_)) {
+      case STATE_EMPTY:
+        return p == NULL;
+      case STATE_CREATING:
+        return static_cast<int8*>(static_cast<void*>(p)) == buf_;
+      case STATE_CREATED:
+        return p == instance_;
+      default:
+        return false;
+    }
   }
 
  private:

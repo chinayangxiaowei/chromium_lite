@@ -9,13 +9,17 @@
 #include "base/logging.h"
 #include "base/string_number_conversions.h"
 #include "base/utf_string_conversions.h"
+#include "chrome/browser/metrics/user_metrics.h"
 #include "chrome/browser/search_engines/search_engine_type.h"
 #include "chrome/browser/search_engines/search_terms_data.h"
 #include "chrome/browser/search_engines/template_url_model.h"
 #include "chrome/common/url_constants.h"
-#include "gfx/favicon_size.h"
+#include "chrome/installer/util/google_update_settings.h"
 #include "net/base/escape.h"
 #include "ui/base/l10n/l10n_util.h"
+#include "ui/gfx/favicon_size.h"
+// TODO(pastarmovj): Remove google_update_settings and user_metrics when the
+// CollectRLZMetrics function is not needed anymore.
 
 // The TemplateURLRef has any number of terms that need to be replaced. Each of
 // the terms is enclosed in braces. If the character preceeding the final
@@ -518,6 +522,28 @@ bool TemplateURLRef::SameUrlRefs(const TemplateURLRef* ref1,
   return ref1 == ref2 || (ref1 && ref2 && ref1->url() == ref2->url());
 }
 
+void TemplateURLRef::CollectRLZMetrics() const {
+#if defined(OS_WIN) && defined(GOOGLE_CHROME_BUILD)
+  ParseIfNecessary();
+  for (size_t i = 0; i < replacements_.size(); ++i) {
+    // We are interesed in searches that were supposed to send the RLZ token.
+    if (replacements_[i].type == GOOGLE_RLZ) {
+      string16 brand;
+      // We only have RLZ tocken on a branded browser version.
+      if (GoogleUpdateSettings::GetBrand(&brand) && !brand.empty() &&
+           !GoogleUpdateSettings::IsOrganic(brand)) {
+        // Now we know we should have had RLZ token check if there was one.
+        if (url().find("rlz=") != std::string::npos)
+          UserMetrics::RecordAction(UserMetricsAction("SearchWithRLZ"));
+        else
+          UserMetrics::RecordAction(UserMetricsAction("SearchWithoutRLZ"));
+      }
+      return;
+    }
+  }
+#endif
+}
+
 void TemplateURLRef::InvalidateCachedValues() const {
   supports_replacements_ = valid_ = parsed_ = false;
   host_.clear();
@@ -624,11 +650,11 @@ bool TemplateURL::ShowInDefaultList() const {
   return show_in_default_list() && url() && url()->SupportsReplacement();
 }
 
-void TemplateURL::SetFavIconURL(const GURL& url) {
+void TemplateURL::SetFaviconURL(const GURL& url) {
   for (std::vector<ImageRef>::iterator i = image_refs_.begin();
        i != image_refs_.end(); ++i) {
     if (i->type == "image/x-icon" &&
-        i->width == kFavIconSize && i->height == kFavIconSize) {
+        i->width == kFaviconSize && i->height == kFaviconSize) {
       if (!url.is_valid())
         image_refs_.erase(i);
       else
@@ -639,16 +665,16 @@ void TemplateURL::SetFavIconURL(const GURL& url) {
   // Don't have one yet, add it.
   if (url.is_valid()) {
     add_image_ref(
-        TemplateURL::ImageRef("image/x-icon", kFavIconSize,
-                              kFavIconSize, url));
+        TemplateURL::ImageRef("image/x-icon", kFaviconSize,
+                              kFaviconSize, url));
   }
 }
 
-GURL TemplateURL::GetFavIconURL() const {
+GURL TemplateURL::GetFaviconURL() const {
   for (std::vector<ImageRef>::const_iterator i = image_refs_.begin();
        i != image_refs_.end(); ++i) {
     if ((i->type == "image/x-icon" || i->type == "image/vnd.microsoft.icon")
-        && i->width == kFavIconSize && i->height == kFavIconSize) {
+        && i->width == kFaviconSize && i->height == kFaviconSize) {
       return i->url;
     }
   }

@@ -1,12 +1,16 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include <algorithm>
+
 #include "chrome/test/mini_installer_test/mini_installer_test_util.h"
 
+#include "base/file_path.h"
 #include "base/file_util.h"
 #include "base/path_service.h"
 #include "base/process_util.h"
+#include "base/string_split.h"
 #include "base/string_util.h"
 #include "base/test/test_timeouts.h"
 #include "base/threading/platform_thread.h"
@@ -145,8 +149,8 @@ bool MiniInstallerTestUtil::GetLatestFile(const wchar_t* file_name,
     std::wstring search_path = find_file_data.cFileName;
     size_t position_found = search_path.find(pattern);
     if (position_found != -1) {
-      std::wstring extension = file_util::GetFileExtensionFromPath(file_name);
-      if ((base::strcasecmp(WideToUTF8(extension).c_str(), "exe")) == 0) {
+      std::wstring extension = FilePath(file_name).Extension();
+      if ((base::strcasecmp(WideToUTF8(extension).c_str(), ".exe")) == 0) {
         file_details->push_back(FileInfo(find_file_data.cFileName, 0));
         return_val = true;
         break;
@@ -205,9 +209,12 @@ bool MiniInstallerTestUtil::GetPreviousFullInstaller(
   if (!GetPreviousBuildNumber(diff_path, &build_no))
     return false;
 
-  // Use the fifth and onward characters of the build version string
-  // to compose the full installer name.
-  std::wstring name = build_no.substr(4) +
+  std::vector<std::wstring> build_version;
+  base::SplitString(build_no, '.', &build_version);
+  if (build_version.size() < 4)
+    return false;
+
+  std::wstring name = build_version[2] + L"." + build_version[3] +
       mini_installer_constants::kFullInstallerPattern + L".exe";
 
   // Create the full installer path.

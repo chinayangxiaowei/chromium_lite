@@ -4,7 +4,7 @@
 
 #include <deque>
 
-#include "base/singleton.h"
+#include "base/memory/singleton.h"
 #include "base/string_util.h"
 #include "media/base/data_buffer.h"
 #include "media/base/filters.h"
@@ -15,13 +15,13 @@
 #include "media/base/mock_task.h"
 #include "media/base/video_frame.h"
 #include "media/ffmpeg/ffmpeg_common.h"
-#include "media/filters/ffmpeg_interfaces.h"
 #include "media/filters/ffmpeg_video_decoder.h"
 #include "media/video/video_decode_engine.h"
 #include "media/video/video_decode_context.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 using ::testing::_;
+using ::testing::AnyNumber;
 using ::testing::DoAll;
 using ::testing::Message;
 using ::testing::Return;
@@ -33,12 +33,23 @@ using ::testing::Invoke;
 
 namespace media {
 
-class MockFFmpegDemuxerStream : public MockDemuxerStream,
-                                public AVStreamProvider {
+static const int kWidth = 1280;
+static const int kHeight = 720;
+static const FFmpegVideoDecoder::TimeTuple kTestPts1 =
+    { base::TimeDelta::FromMicroseconds(123),
+      base::TimeDelta::FromMicroseconds(50) };
+static const FFmpegVideoDecoder::TimeTuple kTestPts2 =
+    { base::TimeDelta::FromMicroseconds(456),
+      base::TimeDelta::FromMicroseconds(60) };
+static const FFmpegVideoDecoder::TimeTuple kTestPts3 =
+    { base::TimeDelta::FromMicroseconds(789),
+      base::TimeDelta::FromMicroseconds(60) };
+static const PipelineStatistics kStatistics;
+
+class MockFFmpegDemuxerStream : public MockDemuxerStream {
  public:
   MockFFmpegDemuxerStream() {}
 
-  // AVStreamProvider implementation.
   MOCK_METHOD0(GetAVStream, AVStream*());
 
  protected:
@@ -80,8 +91,9 @@ class DecoderPrivateMock : public FFmpegVideoDecoder {
   void ProduceVideoSample(scoped_refptr<Buffer> buffer) {
     FFmpegVideoDecoder::ProduceVideoSample(buffer);
   }
-  void ConsumeVideoFrame(scoped_refptr<VideoFrame> frame) {
-    FFmpegVideoDecoder::ConsumeVideoFrame(frame);
+  void ConsumeVideoFrame(scoped_refptr<VideoFrame> frame,
+                         const PipelineStatistics& statistics) {
+    FFmpegVideoDecoder::ConsumeVideoFrame(frame, statistics);
   }
   void OnReadComplete(Buffer* buffer) {
     FFmpegVideoDecoder::OnReadComplete(buffer);
@@ -91,6 +103,10 @@ class DecoderPrivateMock : public FFmpegVideoDecoder {
 ACTION_P2(EngineInitialize, engine, success) {
   engine->event_handler_ = arg1;
   engine->info_.success = success;
+  engine->info_.stream_info.surface_type = VideoFrame::TYPE_SYSTEM_MEMORY;
+  engine->info_.stream_info.surface_format = VideoFrame::YV12;
+  engine->info_.stream_info.surface_width = kWidth;
+  engine->info_.stream_info.surface_height = kHeight;
   engine->event_handler_->OnInitializeComplete(engine->info_);
 }
 
@@ -113,16 +129,7 @@ ACTION_P(EngineSeek, engine) {
 // FFmpeg, pipeline and filter host mocks.
 class FFmpegVideoDecoderTest : public testing::Test {
  protected:
-  static const int kWidth;
-  static const int kHeight;
-  static const FFmpegVideoDecoder::TimeTuple kTestPts1;
-  static const FFmpegVideoDecoder::TimeTuple kTestPts2;
-  static const FFmpegVideoDecoder::TimeTuple kTestPts3;
-
   FFmpegVideoDecoderTest() {
-    MediaFormat media_format;
-    media_format.SetAsString(MediaFormat::kMimeType, mime_type::kFFmpegVideo);
-
     // Create an FFmpegVideoDecoder, and MockVideoDecodeEngine.
     //
     // TODO(ajwong): Break the test's dependency on FFmpegVideoDecoder.
@@ -155,8 +162,8 @@ class FFmpegVideoDecoderTest : public testing::Test {
     buffer_ = new DataBuffer(1);
     end_of_stream_buffer_ = new DataBuffer(0);
 
-    // Initialize MockFFmpeg.
-    MockFFmpeg::set(&mock_ffmpeg_);
+    EXPECT_CALL(stats_callback_object_, OnStatistics(_))
+        .Times(AnyNumber());
   }
 
   virtual ~FFmpegVideoDecoderTest() {
@@ -170,25 +177,26 @@ class FFmpegVideoDecoderTest : public testing::Test {
 
     // Finish up any remaining tasks.
     message_loop_.RunAllPending();
-
-    // Reset MockFFmpeg.
-    MockFFmpeg::set(NULL);
   }
 
   void InitializeDecoderSuccessfully() {
     // Test successful initialization.
-    AVStreamProvider* av_stream_provider = demuxer_;
-    EXPECT_CALL(*demuxer_, QueryInterface(AVStreamProvider::interface_id()))
-        .WillOnce(Return(av_stream_provider));
     EXPECT_CALL(*demuxer_, GetAVStream())
         .WillOnce(Return(&stream_));
 
     EXPECT_CALL(*engine_, Initialize(_, _, _, _))
         .WillOnce(EngineInitialize(engine_, true));
 
-    decoder_->Initialize(demuxer_, NewExpectedCallback());
+    decoder_->Initialize(demuxer_,
+                         NewExpectedCallback(), NewStatisticsCallback());
     message_loop_.RunAllPending();
   }
+
+  StatisticsCallback* NewStatisticsCallback() {
+    return NewCallback(&stats_callback_object_,
+                       &MockStatisticsCallback::OnStatistics);
+  }
+
   // Fixture members.
   MockVideoDecodeEngine* engine_;  // Owned by |decoder_|.
   scoped_refptr<DecoderPrivateMock> decoder_;
@@ -196,6 +204,7 @@ class FFmpegVideoDecoderTest : public testing::Test {
   scoped_refptr<StrictMock<MockFFmpegDemuxerStream> > demuxer_;
   scoped_refptr<DataBuffer> buffer_;
   scoped_refptr<DataBuffer> end_of_stream_buffer_;
+  MockStatisticsCallback stats_callback_object_;
   StrictMock<MockFilterHost> host_;
   MessageLoop message_loop_;
 
@@ -211,33 +220,20 @@ class FFmpegVideoDecoderTest : public testing::Test {
   DISALLOW_COPY_AND_ASSIGN(FFmpegVideoDecoderTest);
 };
 
-const int FFmpegVideoDecoderTest::kWidth = 1280;
-const int FFmpegVideoDecoderTest::kHeight = 720;
-const FFmpegVideoDecoder::TimeTuple FFmpegVideoDecoderTest::kTestPts1 =
-    { base::TimeDelta::FromMicroseconds(123),
-      base::TimeDelta::FromMicroseconds(50) };
-const FFmpegVideoDecoder::TimeTuple FFmpegVideoDecoderTest::kTestPts2 =
-    { base::TimeDelta::FromMicroseconds(456),
-      base::TimeDelta::FromMicroseconds(60) };
-const FFmpegVideoDecoder::TimeTuple FFmpegVideoDecoderTest::kTestPts3 =
-    { base::TimeDelta::FromMicroseconds(789),
-      base::TimeDelta::FromMicroseconds(60) };
-
-TEST_F(FFmpegVideoDecoderTest, Initialize_QueryInterfaceFails) {
-  // Test QueryInterface returning NULL.
-  EXPECT_CALL(*demuxer_, QueryInterface(AVStreamProvider::interface_id()))
+TEST_F(FFmpegVideoDecoderTest, Initialize_GetAVStreamFails) {
+  // Test GetAVStream returning NULL.
+  EXPECT_CALL(*demuxer_, GetAVStream())
       .WillOnce(ReturnNull());
   EXPECT_CALL(host_, SetError(PIPELINE_ERROR_DECODE));
 
-  decoder_->Initialize(demuxer_, NewExpectedCallback());
+  decoder_->Initialize(demuxer_,
+                       NewExpectedCallback(), NewStatisticsCallback());
+
   message_loop_.RunAllPending();
 }
 
 TEST_F(FFmpegVideoDecoderTest, Initialize_EngineFails) {
   // Test successful initialization.
-  AVStreamProvider* av_stream_provider = demuxer_;
-  EXPECT_CALL(*demuxer_, QueryInterface(AVStreamProvider::interface_id()))
-      .WillOnce(Return(av_stream_provider));
   EXPECT_CALL(*demuxer_, GetAVStream())
       .WillOnce(Return(&stream_));
 
@@ -246,7 +242,8 @@ TEST_F(FFmpegVideoDecoderTest, Initialize_EngineFails) {
 
   EXPECT_CALL(host_, SetError(PIPELINE_ERROR_DECODE));
 
-  decoder_->Initialize(demuxer_, NewExpectedCallback());
+  decoder_->Initialize(demuxer_,
+                       NewExpectedCallback(), NewStatisticsCallback());
   message_loop_.RunAllPending();
 }
 
@@ -256,11 +253,8 @@ TEST_F(FFmpegVideoDecoderTest, Initialize_Successful) {
   // Test that the output media format is an uncompressed video surface that
   // matches the dimensions specified by FFmpeg.
   const MediaFormat& media_format = decoder_->media_format();
-  std::string mime_type;
   int width = 0;
   int height = 0;
-  EXPECT_TRUE(media_format.GetAsString(MediaFormat::kMimeType, &mime_type));
-  EXPECT_STREQ(mime_type::kUncompressedVideo, mime_type.c_str());
   EXPECT_TRUE(media_format.GetAsInteger(MediaFormat::kWidth, &width));
   EXPECT_EQ(kWidth, width);
   EXPECT_TRUE(media_format.GetAsInteger(MediaFormat::kHeight, &height));
@@ -351,15 +345,15 @@ ACTION_P3(ReturnFromDemux, decoder, buffer, time_tuple) {
   decoder->OnReadComplete(buffer);
 }
 
-ACTION_P3(DecodeComplete, decoder, video_frame, time_tuple) {
+ACTION_P4(DecodeComplete, decoder, video_frame, time_tuple, statistics) {
   video_frame->SetTimestamp(time_tuple.timestamp);
   video_frame->SetDuration(time_tuple.duration);
-  decoder->ConsumeVideoFrame(video_frame);
+  decoder->ConsumeVideoFrame(video_frame, statistics);
 }
-ACTION_P2(DecodeNotComplete, decoder, buffer) {
+ACTION_P3(DecodeNotComplete, decoder, buffer, statistics) {
   scoped_refptr<VideoFrame> null_frame;
   if (buffer->IsEndOfStream()) // We had started flushing.
-    decoder->ConsumeVideoFrame(null_frame);
+    decoder->ConsumeVideoFrame(null_frame, statistics);
   else
     decoder->ProduceVideoSample(buffer);
 }
@@ -406,13 +400,20 @@ TEST_F(FFmpegVideoDecoderTest, DoDecode_TestStateTransition) {
       .WillOnce(ReturnFromDemux(decoder_.get(),
                                 end_of_stream_buffer_, kTestPts3));
   EXPECT_CALL(*engine_, ConsumeVideoSample(_))
-      .WillOnce(DecodeNotComplete(decoder_.get(), buffer_))
-      .WillOnce(DecodeComplete(decoder_.get(), video_frame_, kTestPts1))
-      .WillOnce(DecodeNotComplete(decoder_.get(), buffer_))
-      .WillOnce(DecodeComplete(decoder_.get(), video_frame_, kTestPts2))
-      .WillOnce(DecodeComplete(decoder_.get(), video_frame_, kTestPts3))
-      .WillOnce(DecodeNotComplete(decoder_.get(), end_of_stream_buffer_));
+      .WillOnce(DecodeNotComplete(decoder_.get(), buffer_, kStatistics))
+      .WillOnce(DecodeComplete(decoder_.get(),
+                               video_frame_, kTestPts1, kStatistics))
+      .WillOnce(DecodeNotComplete(decoder_.get(),
+                                  buffer_, kStatistics))
+      .WillOnce(DecodeComplete(decoder_.get(),
+                               video_frame_, kTestPts2, kStatistics))
+      .WillOnce(DecodeComplete(decoder_.get(),
+                               video_frame_, kTestPts3, kStatistics))
+      .WillOnce(DecodeNotComplete(decoder_.get(),
+                                  end_of_stream_buffer_, kStatistics));
   EXPECT_CALL(*renderer_.get(), ConsumeVideoFrame(_))
+      .Times(4);
+  EXPECT_CALL(stats_callback_object_, OnStatistics(_))
       .Times(4);
 
   // First request from renderer: at first round decode engine did not produce

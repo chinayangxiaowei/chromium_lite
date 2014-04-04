@@ -1,8 +1,11 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/safe_browsing/safe_browsing_database.h"
+
+#include <algorithm>
+#include <iterator>
 
 #include "base/file_util.h"
 #include "base/metrics/histogram.h"
@@ -10,11 +13,11 @@
 #include "base/time.h"
 #include "base/message_loop.h"
 #include "base/process_util.h"
-#include "base/sha2.h"
+#include "crypto/sha2.h"
 #include "chrome/browser/safe_browsing/bloom_filter.h"
+#include "chrome/browser/safe_browsing/prefix_set.h"
 #include "chrome/browser/safe_browsing/safe_browsing_store_file.h"
-#include "chrome/browser/safe_browsing/safe_browsing_store_sqlite.h"
-#include "chrome/browser/safe_browsing/safe_browsing_util.h"
+#include "content/browser/browser_thread.h"
 #include "googleurl/src/gurl.h"
 
 namespace {
@@ -23,12 +26,25 @@ namespace {
 const FilePath::CharType kBloomFilterFile[] = FILE_PATH_LITERAL(" Filter 2");
 // Filename suffix for download store.
 const FilePath::CharType kDownloadDBFile[] = FILE_PATH_LITERAL(" Download");
+// Filename suffix for client-side phishing detection whitelist store.
+const FilePath::CharType kCsdWhitelistDBFile[] =
+    FILE_PATH_LITERAL(" Csd Whitelist");
 // Filename suffix for browse store.
 // TODO(lzheng): change to a better name when we change the file format.
 const FilePath::CharType kBrowseDBFile[] = FILE_PATH_LITERAL(" Bloom");
 
 // The maximum staleness for a cached entry.
 const int kMaxStalenessMinutes = 45;
+
+// Maximum number of entries we allow in the client-side phishing detection
+// whitelist.  If the whitelist on disk contains more entries then
+// ContainsCsdWhitelistedUrl will always return true.
+const size_t kMaxCsdWhitelistSize = 5000;
+
+// If the hash of this exact expression is on the csd whitelist then
+// ContainsCsdWhitelistedUrl will always return true.
+const char kCsdKillSwitchUrl[] =
+    "sb-ssl.google.com/safebrowsing/csd/killswitch";
 
 // To save space, the incoming |chunk_id| and |list_id| are combined
 // into an |encoded_chunk_id| for storage by shifting the |list_id|
@@ -47,26 +63,19 @@ int EncodeChunkId(const int chunk, const int list_id) {
   return chunk << 1 | list_id % 2;
 }
 
-// Get the prefix for download url.
-void GetDownloadUrlPrefix(const GURL& url, SBPrefix* prefix) {
-  std::string hostname;
-  std::string path;
-  std::string query;
-  safe_browsing_util::CanonicalizeUrl(url, &hostname, &path, &query);
-
-  SBFullHash full_hash;
-  base::SHA256HashString(hostname + path + query, &full_hash,
-                         sizeof(full_hash));
-  *prefix = full_hash.prefix;
-}
-
-// Generate the set of prefixes to check for |url|.
+// Generate the set of full hashes to check for |url|.  If
+// |include_whitelist_hashes| is true we will generate additional path-prefixes
+// to match against the csd whitelist.  E.g., if the path-prefix /foo is on the
+// whitelist it should also match /foo/bar which is not the case for all the
+// other lists.
 // TODO(shess): This function is almost the same as
 // |CompareFullHashes()| in safe_browsing_util.cc, except that code
 // does an early exit on match.  Since match should be the infrequent
 // case (phishing or malware found), consider combining this function
 // with that one.
-void BrowsePrefixesToCheck(const GURL& url, std::vector<SBPrefix>* prefixes) {
+void BrowseFullHashesToCheck(const GURL& url,
+                             bool include_whitelist_hashes,
+                             std::vector<SBFullHash>* full_hashes) {
   std::vector<std::string> hosts;
   if (url.HostIsIPAddress()) {
     hosts.push_back(url.host());
@@ -79,12 +88,35 @@ void BrowsePrefixesToCheck(const GURL& url, std::vector<SBPrefix>* prefixes) {
 
   for (size_t i = 0; i < hosts.size(); ++i) {
     for (size_t j = 0; j < paths.size(); ++j) {
+      const std::string& path = paths[j];
       SBFullHash full_hash;
-      base::SHA256HashString(hosts[i] + paths[j], &full_hash,
-                             sizeof(full_hash));
-      prefixes->push_back(full_hash.prefix);
+      crypto::SHA256HashString(hosts[i] + path, &full_hash,
+                               sizeof(full_hash));
+      full_hashes->push_back(full_hash);
+
+      // We may have /foo as path-prefix in the whitelist which should
+      // also match with /foo/bar and /foo?bar.  Hence, for every path
+      // that ends in '/' we also add the path without the slash.
+      if (include_whitelist_hashes &&
+          path.size() > 1 &&
+          path[path.size() - 1] == '/') {
+        crypto::SHA256HashString(hosts[i] + path.substr(0, path.size() - 1),
+                                 &full_hash, sizeof(full_hash));
+        full_hashes->push_back(full_hash);
+      }
     }
   }
+}
+
+// Get the prefixes matching the download |urls|.
+void GetDownloadUrlPrefixes(const std::vector<GURL>& urls,
+                            std::vector<SBPrefix>* prefixes) {
+  std::vector<SBFullHash> full_hashes;
+  for (size_t i = 0; i < urls.size(); ++i)
+    BrowseFullHashesToCheck(urls[i], false, &full_hashes);
+
+  for (size_t i = 0; i < full_hashes.size(); ++i)
+    prefixes->push_back(full_hashes[i].prefix);
 }
 
 // Find the entries in |full_hashes| with prefix in |prefix_hits|, and
@@ -130,47 +162,55 @@ void GetCachedFullHashesForBrowse(const std::vector<SBPrefix>& prefix_hits,
   }
 }
 
+// This function generates a chunk range string for |chunks|. It
+// outputs one chunk range string per list and writes it to the
+// |list_ranges| vector.  We expect |list_ranges| to already be of the
+// right size.  E.g., if |chunks| contains chunks with two different
+// list ids then |list_ranges| must contain two elements.
 void GetChunkRanges(const std::vector<int>& chunks,
-                    std::string* list0,
-                    std::string* list1) {
-  std::vector<int> chunks0;
-  std::vector<int> chunks1;
-
+                    std::vector<std::string>* list_ranges) {
+  DCHECK_GT(list_ranges->size(), 0U);
+  DCHECK_LE(list_ranges->size(), 2U);
+  std::vector<std::vector<int> > decoded_chunks(list_ranges->size());
   for (std::vector<int>::const_iterator iter = chunks.begin();
        iter != chunks.end(); ++iter) {
     int mod_list_id = GetListIdBit(*iter);
-    if (0 == mod_list_id) {
-      chunks0.push_back(DecodeChunkId(*iter));
-    } else {
-      DCHECK_EQ(1, mod_list_id);
-      chunks1.push_back(DecodeChunkId(*iter));
-    }
+    DCHECK_GE(mod_list_id, 0);
+    DCHECK_LT(static_cast<size_t>(mod_list_id), decoded_chunks.size());
+    decoded_chunks[mod_list_id].push_back(DecodeChunkId(*iter));
   }
-
-  ChunksToRangeString(chunks0, list0);
-  ChunksToRangeString(chunks1, list1);
+  for (size_t i = 0; i < decoded_chunks.size(); ++i) {
+    ChunksToRangeString(decoded_chunks[i], &((*list_ranges)[i]));
+  }
 }
 
 // Helper function to create chunk range lists for Browse related
 // lists.
-void UpdateChunkRanges(const std::vector<int>& add_chunks,
-                       const std::vector<int>& sub_chunks,
-                       const std::string& list_name0,
-                       const std::string& list_name1,
+void UpdateChunkRanges(SafeBrowsingStore* store,
+                       const std::vector<std::string>& listnames,
                        std::vector<SBListChunkRanges>* lists) {
-  DCHECK_EQ(safe_browsing_util::GetListId(list_name0) % 2, 0);
-  DCHECK_EQ(safe_browsing_util::GetListId(list_name1) % 2, 1);
-  DCHECK_NE(safe_browsing_util::GetListId(list_name0),
-            safe_browsing_util::INVALID);
-  DCHECK_NE(safe_browsing_util::GetListId(list_name1),
-            safe_browsing_util::INVALID);
+  DCHECK_GT(listnames.size(), 0U);
+  DCHECK_LE(listnames.size(), 2U);
+  std::vector<int> add_chunks;
+  std::vector<int> sub_chunks;
+  store->GetAddChunks(&add_chunks);
+  store->GetSubChunks(&sub_chunks);
 
-  SBListChunkRanges chunkrange0(list_name0);
-  SBListChunkRanges chunkrange1(list_name1);
-  GetChunkRanges(add_chunks, &chunkrange0.adds, &chunkrange1.adds);
-  GetChunkRanges(sub_chunks, &chunkrange0.subs, &chunkrange1.subs);
-  lists->push_back(chunkrange0);
-  lists->push_back(chunkrange1);
+  std::vector<std::string> adds(listnames.size());
+  std::vector<std::string> subs(listnames.size());
+  GetChunkRanges(add_chunks, &adds);
+  GetChunkRanges(sub_chunks, &subs);
+
+  for (size_t i = 0; i < listnames.size(); ++i) {
+    const std::string& listname = listnames[i];
+    DCHECK_EQ(safe_browsing_util::GetListId(listname) % 2,
+              static_cast<int>(i % 2));
+    DCHECK_NE(safe_browsing_util::GetListId(listname),
+              safe_browsing_util::INVALID);
+    lists->push_back(SBListChunkRanges(listname));
+    lists->back().adds.swap(adds[i]);
+    lists->back().subs.swap(subs[i]);
+  }
 }
 
 // Order |SBAddFullHash| on the prefix part.  |SBAddPrefixLess()| from
@@ -179,20 +219,183 @@ bool SBAddFullHashPrefixLess(const SBAddFullHash& a, const SBAddFullHash& b) {
   return a.full_hash.prefix < b.full_hash.prefix;
 }
 
+// As compared to the bloom filter, PrefixSet should have these
+// properties:
+// - Any bloom filter miss should be a prefix set miss.
+// - Any prefix set hit should be a bloom filter hit.
+// - Bloom filter false positives are prefix set misses.
+// The following is to log actual performance to verify this.
+enum PrefixSetEvent {
+  PREFIX_SET_EVENT_HIT,
+  PREFIX_SET_EVENT_BLOOM_HIT,
+  PREFIX_SET_EVENT_BLOOM_MISS_PREFIX_HIT,
+  PREFIX_SET_EVENT_BLOOM_MISS_PREFIX_HIT_INVALID,
+  PREFIX_SET_GETPREFIXES_BROKEN,
+  PREFIX_SET_GETPREFIXES_BROKEN_SIZE,
+  PREFIX_SET_GETPREFIXES_FIRST_BROKEN,
+  PREFIX_SET_SBPREFIX_WAS_BROKEN,
+  PREFIX_SET_GETPREFIXES_BROKEN_SORTING,
+  PREFIX_SET_GETPREFIXES_BROKEN_DUPLICATION,
+  PREFIX_SET_GETPREFIX_UNSORTED_IS_DELTA,
+  PREFIX_SET_GETPREFIX_UNSORTED_IS_INDEX,
+  PREFIX_SET_GETPREFIX_CHECKSUM_MISMATCH,
+
+  // Memory space for histograms is determined by the max.  ALWAYS ADD
+  // NEW VALUES BEFORE THIS ONE.
+  PREFIX_SET_EVENT_MAX
+};
+
+void RecordPrefixSetInfo(PrefixSetEvent event_type) {
+  UMA_HISTOGRAM_ENUMERATION("SB2.PrefixSetEvent", event_type,
+                            PREFIX_SET_EVENT_MAX);
+}
+
+// Generate a |PrefixSet| instance from the contents of
+// |add_prefixes|.  Additionally performs various checks to make sure
+// that the resulting prefix set is valid, so that the
+// PREFIX_SET_EVENT_BLOOM_MISS_PREFIX_HIT_INVALID histogram in
+// ContainsBrowseUrl() can be trustworthy.
+safe_browsing::PrefixSet* PrefixSetFromAddPrefixes(
+    const std::vector<SBAddPrefix>& add_prefixes) {
+  // TODO(shess): If |add_prefixes| were sorted by the prefix, it
+  // could be passed directly to |PrefixSet()|, removing the need for
+  // |prefixes|.  For now, |prefixes| is useful while debugging
+  // things.
+  std::vector<SBPrefix> prefixes;
+  for (size_t i = 0; i < add_prefixes.size(); ++i) {
+    prefixes.push_back(add_prefixes[i].prefix);
+  }
+
+  std::sort(prefixes.begin(), prefixes.end());
+  prefixes.erase(std::unique(prefixes.begin(), prefixes.end()),
+                 prefixes.end());
+
+  scoped_ptr<safe_browsing::PrefixSet>
+      prefix_set(new safe_browsing::PrefixSet(prefixes));
+
+  std::vector<SBPrefix> restored;
+  prefix_set->GetPrefixes(&restored);
+
+  // Expect them to be equal.
+  if (restored.size() == prefixes.size() &&
+      std::equal(prefixes.begin(), prefixes.end(), restored.begin()))
+    return prefix_set.release();
+
+  // Log BROKEN for continuity with previous release, and SIZE to
+  // distinguish which test failed.
+  NOTREACHED();
+  RecordPrefixSetInfo(PREFIX_SET_GETPREFIXES_BROKEN);
+  if (restored.size() != prefixes.size())
+    RecordPrefixSetInfo(PREFIX_SET_GETPREFIXES_BROKEN_SIZE);
+
+  // Try to distinguish between updates from one broken user and a
+  // distributed problem.
+  static bool logged_broken = false;
+  if (!logged_broken) {
+    RecordPrefixSetInfo(PREFIX_SET_GETPREFIXES_FIRST_BROKEN);
+    logged_broken = true;
+  }
+
+  // This seems so very very unlikely.  But if it ever were true, then
+  // it could explain why GetPrefixes() seemed broken.
+  if (sizeof(int) != sizeof(int32))
+    RecordPrefixSetInfo(PREFIX_SET_SBPREFIX_WAS_BROKEN);
+
+  // Check if memory was corrupted during construction.
+  if (!prefix_set->CheckChecksum())
+    RecordPrefixSetInfo(PREFIX_SET_GETPREFIX_CHECKSUM_MISMATCH);
+
+  // Check whether |restored| is unsorted, or has duplication.
+  if (restored.size()) {
+    size_t unsorted_count = 0;
+    bool duplicates = false;
+    SBPrefix prev = restored[0];
+    for (size_t i = 0; i < restored.size(); prev = restored[i], ++i) {
+      if (prev > restored[i]) {
+        unsorted_count++;
+        UMA_HISTOGRAM_COUNTS("SB2.PrefixSetUnsortedDifference",
+                             prev - restored[i]);
+
+        // When unsorted, how big is the set, and how far are we into
+        // it.  If the set is very small or large, that might inform
+        // pursuit of a degenerate case.  If the percentage is close
+        // to 0%, 100%, or 50%, then there might be an interesting
+        // degenerate case to explore.
+        UMA_HISTOGRAM_COUNTS("SB2.PrefixSetUnsortedSize", restored.size());
+        UMA_HISTOGRAM_PERCENTAGE("SB2.PrefixSetUnsortedPercent",
+                                 i * 100 / restored.size());
+
+        if (prefix_set->IsDeltaAt(i)) {
+          RecordPrefixSetInfo(PREFIX_SET_GETPREFIX_UNSORTED_IS_DELTA);
+
+          // Histograms require memory on the order of the number of
+          // buckets, making high-precision logging expensive.  For
+          // now aim for a sense of the range of the problem.
+          UMA_HISTOGRAM_CUSTOM_COUNTS("SB2.PrefixSetUnsortedDelta",
+                                      prefix_set->DeltaAt(i), 1, 0xFFFF, 50);
+        } else {
+          RecordPrefixSetInfo(PREFIX_SET_GETPREFIX_UNSORTED_IS_INDEX);
+        }
+      }
+      if (prev == restored[i])
+        duplicates = true;
+    }
+
+    // Record findings.
+    if (unsorted_count) {
+      RecordPrefixSetInfo(PREFIX_SET_GETPREFIXES_BROKEN_SORTING);
+      UMA_HISTOGRAM_COUNTS_100("SB2.PrefixSetUnsorted", unsorted_count);
+    }
+    if (duplicates)
+      RecordPrefixSetInfo(PREFIX_SET_GETPREFIXES_BROKEN_DUPLICATION);
+
+    // Fix the problems noted.  If |restored| was unsorted, then
+    // |duplicates| may give a false negative.
+    if (unsorted_count)
+      std::sort(restored.begin(), restored.end());
+    if (unsorted_count || duplicates)
+      restored.erase(std::unique(restored.begin(), restored.end()),
+                     restored.end());
+  }
+
+  // NOTE(shess): The following could be done using a single
+  // uber-loop, but it's complicated by needing multiple parallel
+  // iterators.  Didn't seem worthwhile for something that will only
+  // live for a short period and only fires for one in a million
+  // updates.
+
+  // Find elements in |restored| which are not in |prefixes|.
+  std::vector<SBPrefix> difference;
+  std::set_difference(restored.begin(), restored.end(),
+                      prefixes.begin(), prefixes.end(),
+                      std::back_inserter(difference));
+  if (difference.size())
+    UMA_HISTOGRAM_COUNTS_100("SB2.PrefixSetRestoredExcess", difference.size());
+
+  // Find elements in |prefixes| which are not in |restored|.
+  difference.clear();
+  std::set_difference(prefixes.begin(), prefixes.end(),
+                      restored.begin(), restored.end(),
+                      std::back_inserter(difference));
+  if (difference.size())
+    UMA_HISTOGRAM_COUNTS_100("SB2.PrefixSetRestoredShortfall",
+                             difference.size());
+
+  return prefix_set.release();
+}
+
 }  // namespace
 
 // The default SafeBrowsingDatabaseFactory.
 class SafeBrowsingDatabaseFactoryImpl : public SafeBrowsingDatabaseFactory {
  public:
   virtual SafeBrowsingDatabase* CreateSafeBrowsingDatabase(
-      bool enable_download_protection) {
-    if (enable_download_protection) {
-      // Create database with browse url store and download store.
-      return new SafeBrowsingDatabaseNew(new SafeBrowsingStoreFile,
-                                         new SafeBrowsingStoreFile);
-    }
-    // Create database with only browse url store.
-    return  new SafeBrowsingDatabaseNew(new SafeBrowsingStoreFile, NULL);
+      bool enable_download_protection,
+      bool enable_client_side_whitelist) {
+    return new SafeBrowsingDatabaseNew(
+        new SafeBrowsingStoreFile,
+        enable_download_protection ? new SafeBrowsingStoreFile : NULL,
+        enable_client_side_whitelist ? new SafeBrowsingStoreFile : NULL);
   }
 
   SafeBrowsingDatabaseFactoryImpl() { }
@@ -206,16 +409,16 @@ SafeBrowsingDatabaseFactory* SafeBrowsingDatabase::factory_ = NULL;
 
 // Factory method, non-thread safe. Caller has to make sure this s called
 // on SafeBrowsing Thread.
-// TODO(shess): Milestone-7 is converting from SQLite-based
-// SafeBrowsingDatabaseBloom to the new file format with
-// SafeBrowsingDatabaseNew.  Once that conversion is too far along to
-// consider reversing, circle back and lift SafeBrowsingDatabaseNew up
-// to SafeBrowsingDatabase and get rid of the abstract class.
+// TODO(shess): There's no need for a factory any longer.  Convert
+// SafeBrowsingDatabaseNew to SafeBrowsingDatabase, and have Create()
+// callers just construct things directly.
 SafeBrowsingDatabase* SafeBrowsingDatabase::Create(
-    bool enable_download_protection) {
+    bool enable_download_protection,
+    bool enable_client_side_whitelist) {
   if (!factory_)
     factory_ = new SafeBrowsingDatabaseFactoryImpl();
-  return factory_->CreateSafeBrowsingDatabase(enable_download_protection);
+  return factory_->CreateSafeBrowsingDatabase(enable_download_protection,
+                                              enable_client_side_whitelist);
 }
 
 SafeBrowsingDatabase::~SafeBrowsingDatabase() {
@@ -239,6 +442,12 @@ FilePath SafeBrowsingDatabase::BloomFilterForFilename(
   return FilePath(db_filename.value() + kBloomFilterFile);
 }
 
+// static
+FilePath SafeBrowsingDatabase::CsdWhitelistDBFilename(
+    const FilePath& db_filename) {
+  return FilePath(db_filename.value() + kCsdWhitelistDBFile);
+}
+
 SafeBrowsingStore* SafeBrowsingDatabaseNew::GetStore(const int list_id) {
   DVLOG(3) << "Get store for list: " << list_id;
   if (list_id == safe_browsing_util::PHISH ||
@@ -247,6 +456,8 @@ SafeBrowsingStore* SafeBrowsingDatabaseNew::GetStore(const int list_id) {
   } else if (list_id == safe_browsing_util::BINURL ||
              list_id == safe_browsing_util::BINHASH) {
     return download_store_.get();
+  } else if (list_id == safe_browsing_util::CSDWHITELIST) {
+    return csd_whitelist_store_.get();
   }
   return NULL;
 }
@@ -259,18 +470,23 @@ void SafeBrowsingDatabase::RecordFailure(FailureType failure_type) {
 
 SafeBrowsingDatabaseNew::SafeBrowsingDatabaseNew()
     : creation_loop_(MessageLoop::current()),
-      browse_store_(new SafeBrowsingStoreSqlite),
+      browse_store_(new SafeBrowsingStoreFile),
       download_store_(NULL),
+      csd_whitelist_store_(NULL),
       ALLOW_THIS_IN_INITIALIZER_LIST(reset_factory_(this)) {
   DCHECK(browse_store_.get());
   DCHECK(!download_store_.get());
+  DCHECK(!csd_whitelist_store_.get());
 }
 
 SafeBrowsingDatabaseNew::SafeBrowsingDatabaseNew(
-    SafeBrowsingStore* browse_store, SafeBrowsingStore* download_store)
+    SafeBrowsingStore* browse_store,
+    SafeBrowsingStore* download_store,
+    SafeBrowsingStore* csd_whitelist_store)
     : creation_loop_(MessageLoop::current()),
       browse_store_(browse_store),
       download_store_(download_store),
+      csd_whitelist_store_(csd_whitelist_store),
       ALLOW_THIS_IN_INITIALIZER_LIST(reset_factory_(this)),
       corruption_detected_(false) {
   DCHECK(browse_store_.get());
@@ -282,27 +498,29 @@ SafeBrowsingDatabaseNew::~SafeBrowsingDatabaseNew() {
 
 void SafeBrowsingDatabaseNew::Init(const FilePath& filename_base) {
   DCHECK_EQ(creation_loop_, MessageLoop::current());
-
-  // NOTE: There is no need to grab the lock in this function, since
-  // until it returns, there are no pointers to this class on other
-  // threads.  Then again, that means there is no possibility of
-  // contention on the lock...
-  base::AutoLock locked(lookup_lock_);
-
-  DCHECK(browse_filename_.empty());  // Ensure we haven't been run before.
-  DCHECK(download_filename_.empty());  // Ensure we haven't been run before.
+  // Ensure we haven't been run before.
+  DCHECK(browse_filename_.empty());
+  DCHECK(download_filename_.empty());
+  DCHECK(csd_whitelist_filename_.empty());
 
   browse_filename_ = BrowseDBFilename(filename_base);
+  bloom_filter_filename_ = BloomFilterForFilename(browse_filename_);
+
   browse_store_->Init(
       browse_filename_,
       NewCallback(this, &SafeBrowsingDatabaseNew::HandleCorruptDatabase));
-
-  full_browse_hashes_.clear();
-  pending_browse_hashes_.clear();
-
-  bloom_filter_filename_ = BloomFilterForFilename(browse_filename_);
-  LoadBloomFilter();
   DVLOG(1) << "Init browse store: " << browse_filename_.value();
+
+  {
+    // NOTE: There is no need to grab the lock in this function, since
+    // until it returns, there are no pointers to this class on other
+    // threads.  Then again, that means there is no possibility of
+    // contention on the lock...
+    base::AutoLock locked(lookup_lock_);
+    full_browse_hashes_.clear();
+    pending_browse_hashes_.clear();
+    LoadBloomFilter();
+  }
 
   if (download_store_.get()) {
     download_filename_ = DownloadDBFilename(filename_base);
@@ -310,6 +528,22 @@ void SafeBrowsingDatabaseNew::Init(const FilePath& filename_base) {
         download_filename_,
         NewCallback(this, &SafeBrowsingDatabaseNew::HandleCorruptDatabase));
     DVLOG(1) << "Init download store: " << download_filename_.value();
+  }
+
+  if (csd_whitelist_store_.get()) {
+    csd_whitelist_filename_ = CsdWhitelistDBFilename(filename_base);
+    csd_whitelist_store_->Init(
+        csd_whitelist_filename_,
+        NewCallback(this, &SafeBrowsingDatabaseNew::HandleCorruptDatabase));
+    DVLOG(1) << "Init csd whitelist store: " << csd_whitelist_filename_.value();
+    std::vector<SBAddFullHash> full_hashes;
+    if (csd_whitelist_store_->GetAddFullHashes(&full_hashes)) {
+      LoadCsdWhitelist(full_hashes);
+    } else {
+      CsdWhitelistAllUrls();
+    }
+  } else {
+    CsdWhitelistAllUrls();  // Just to be safe.
   }
 }
 
@@ -331,7 +565,12 @@ bool SafeBrowsingDatabaseNew::ResetDatabase() {
     // TODO(shess): This could probably be |bloom_filter_.reset()|.
     browse_bloom_filter_ = new BloomFilter(BloomFilter::kBloomFilterMinSize *
                                            BloomFilter::kBloomFilterSizeRatio);
+    // TODO(shess): It is simpler for the code to assume that presence
+    // of a bloom filter always implies presence of a prefix set.
+    prefix_set_.reset(new safe_browsing::PrefixSet(std::vector<SBPrefix>()));
   }
+  // Wants to acquire the lock itself.
+  CsdWhitelistAllUrls();
 
   return true;
 }
@@ -348,9 +587,9 @@ bool SafeBrowsingDatabaseNew::ContainsBrowseUrl(
   prefix_hits->clear();
   full_hits->clear();
 
-  std::vector<SBPrefix> prefixes;
-  BrowsePrefixesToCheck(url, &prefixes);
-  if (prefixes.empty())
+  std::vector<SBFullHash> full_hashes;
+  BrowseFullHashesToCheck(url, false, &full_hashes);
+  if (full_hashes.empty())
     return false;
 
   // This function is called on the I/O thread, prevent changes to
@@ -359,13 +598,44 @@ bool SafeBrowsingDatabaseNew::ContainsBrowseUrl(
 
   if (!browse_bloom_filter_.get())
     return false;
+  DCHECK(prefix_set_.get());
+
+  // Used to double-check in case of a hit mis-match.
+  std::vector<SBPrefix> restored;
 
   size_t miss_count = 0;
-  for (size_t i = 0; i < prefixes.size(); ++i) {
-    if (browse_bloom_filter_->Exists(prefixes[i])) {
-      prefix_hits->push_back(prefixes[i]);
-      if (prefix_miss_cache_.count(prefixes[i]) > 0)
+  for (size_t i = 0; i < full_hashes.size(); ++i) {
+    bool found = prefix_set_->Exists(full_hashes[i].prefix);
+
+    if (browse_bloom_filter_->Exists(full_hashes[i].prefix)) {
+      RecordPrefixSetInfo(PREFIX_SET_EVENT_BLOOM_HIT);
+      if (found)
+        RecordPrefixSetInfo(PREFIX_SET_EVENT_HIT);
+      prefix_hits->push_back(full_hashes[i].prefix);
+      if (prefix_miss_cache_.count(full_hashes[i].prefix) > 0)
         ++miss_count;
+    } else {
+      // Bloom filter misses should never be in prefix set.  Re-create
+      // the original prefixes and manually search for it, to check if
+      // there's a bug with how |Exists()| is implemented.
+      // |UpdateBrowseStore()| previously verified that
+      // |GetPrefixes()| returns the same prefixes as were passed to
+      // the constructor.
+      DCHECK(!found);
+      if (found) {
+        if (restored.empty())
+          prefix_set_->GetPrefixes(&restored);
+
+        // If the item is not in the re-created list, then there is an
+        // error in |PrefixSet::Exists()|.  If the item is in the
+        // re-created list, then the bloom filter was wrong.
+        if (std::binary_search(restored.begin(), restored.end(),
+                               full_hashes[i].prefix)) {
+          RecordPrefixSetInfo(PREFIX_SET_EVENT_BLOOM_MISS_PREFIX_HIT);
+        } else {
+          RecordPrefixSetInfo(PREFIX_SET_EVENT_BLOOM_MISS_PREFIX_HIT_INVALID);
+        }
+      }
     }
   }
 
@@ -385,26 +655,71 @@ bool SafeBrowsingDatabaseNew::ContainsBrowseUrl(
   return true;
 }
 
-bool SafeBrowsingDatabaseNew::ContainsDownloadUrl(
-    const GURL& url, std::vector<SBPrefix>* prefix_hits) {
-  DCHECK_EQ(creation_loop_, MessageLoop::current());
+bool SafeBrowsingDatabaseNew::MatchDownloadAddPrefixes(
+    int list_bit,
+    const std::vector<SBPrefix>& prefixes,
+    std::vector<SBPrefix>* prefix_hits) {
   prefix_hits->clear();
-
-  // Ignore this check when download checking is not enabled.
-  if (!download_store_.get()) return false;
-
-  SBPrefix prefix;
-  GetDownloadUrlPrefix(url, &prefix);
 
   std::vector<SBAddPrefix> add_prefixes;
   download_store_->GetAddPrefixes(&add_prefixes);
   for (size_t i = 0; i < add_prefixes.size(); ++i) {
-    if (prefix == add_prefixes[i].prefix &&
-        GetListIdBit(add_prefixes[i].chunk_id) ==
-        safe_browsing_util::BINURL % 2) {
-      prefix_hits->push_back(prefix);
-      return true;
+    for (size_t j = 0; j < prefixes.size(); ++j) {
+      const SBPrefix& prefix = prefixes[j];
+      if (prefix == add_prefixes[i].prefix &&
+          GetListIdBit(add_prefixes[i].chunk_id) == list_bit) {
+        prefix_hits->push_back(prefix);
+      }
     }
+  }
+  return !prefix_hits->empty();
+}
+
+bool SafeBrowsingDatabaseNew::ContainsDownloadUrl(
+    const std::vector<GURL>& urls,
+    std::vector<SBPrefix>* prefix_hits) {
+  DCHECK_EQ(creation_loop_, MessageLoop::current());
+
+  // Ignore this check when download checking is not enabled.
+  if (!download_store_.get())
+    return false;
+
+  std::vector<SBPrefix> prefixes;
+  GetDownloadUrlPrefixes(urls, &prefixes);
+  return MatchDownloadAddPrefixes(safe_browsing_util::BINURL % 2,
+                                  prefixes,
+                                  prefix_hits);
+}
+
+bool SafeBrowsingDatabaseNew::ContainsDownloadHashPrefix(
+    const SBPrefix& prefix) {
+  DCHECK_EQ(creation_loop_, MessageLoop::current());
+
+  // Ignore this check when download store is not available.
+  if (!download_store_.get())
+    return false;
+
+  std::vector<SBPrefix> prefixes(1, prefix);
+  std::vector<SBPrefix> prefix_hits;
+  return MatchDownloadAddPrefixes(safe_browsing_util::BINHASH % 2,
+                                  prefixes,
+                                  &prefix_hits);
+}
+
+bool SafeBrowsingDatabaseNew::ContainsCsdWhitelistedUrl(const GURL& url) {
+  // This method is theoretically thread-safe but we expect all calls to
+  // originate from the IO thread.
+  DCHECK(BrowserThread::CurrentlyOn(BrowserThread::IO));
+  base::AutoLock l(lookup_lock_);
+  if (csd_whitelist_all_urls_)
+    return true;
+
+  std::vector<SBFullHash> full_hashes;
+  BrowseFullHashesToCheck(url, true, &full_hashes);
+  for (std::vector<SBFullHash>::const_iterator it = full_hashes.begin();
+       it != full_hashes.end(); ++it) {
+    if (std::binary_search(csd_whitelist_.begin(), csd_whitelist_.end(), *it))
+      return true;
   }
   return false;
 }
@@ -566,6 +881,8 @@ void SafeBrowsingDatabaseNew::InsertChunks(const std::string& list_name,
   SafeBrowsingStore* store = GetStore(list_id);
   if (!store) return;
 
+  change_detected_ = true;
+
   store->BeginChunk();
   if (chunks.front().is_add) {
     InsertAddChunks(list_id, chunks);
@@ -589,6 +906,8 @@ void SafeBrowsingDatabaseNew::DeleteChunks(
 
   SafeBrowsingStore* store = GetStore(list_id);
   if (!store) return;
+
+  change_detected_ = true;
 
   for (size_t i = 0; i < chunk_deletes.size(); ++i) {
     std::vector<int> chunk_numbers;
@@ -656,27 +975,33 @@ bool SafeBrowsingDatabaseNew::UpdateStarted(
     return false;
   }
 
-  std::vector<int> browse_add_chunks;
-  browse_store_->GetAddChunks(&browse_add_chunks);
-  std::vector<int> browse_sub_chunks;
-  browse_store_->GetSubChunks(&browse_sub_chunks);
-  UpdateChunkRanges(browse_add_chunks, browse_sub_chunks,
-                    safe_browsing_util::kMalwareList,
-                    safe_browsing_util::kPhishingList,
-                    lists);
+  if (csd_whitelist_store_.get() && !csd_whitelist_store_->BeginUpdate()) {
+    RecordFailure(FAILURE_CSD_WHITELIST_DATABASE_UPDATE_BEGIN);
+    HandleCorruptDatabase();
+    return false;
+  }
+
+  std::vector<std::string> browse_listnames;
+  browse_listnames.push_back(safe_browsing_util::kMalwareList);
+  browse_listnames.push_back(safe_browsing_util::kPhishingList);
+  UpdateChunkRanges(browse_store_.get(), browse_listnames, lists);
 
   if (download_store_.get()) {
-    std::vector<int> download_add_chunks;
-    download_store_->GetAddChunks(&download_add_chunks);
-    std::vector<int> download_sub_chunks;
-    download_store_->GetSubChunks(&download_sub_chunks);
-    UpdateChunkRanges(download_add_chunks, download_sub_chunks,
-                      safe_browsing_util::kBinUrlList,
-                      safe_browsing_util::kBinHashList,
-                      lists);
+    std::vector<std::string> download_listnames;
+    download_listnames.push_back(safe_browsing_util::kBinUrlList);
+    download_listnames.push_back(safe_browsing_util::kBinHashList);
+    UpdateChunkRanges(download_store_.get(), download_listnames, lists);
+  }
+
+  if (csd_whitelist_store_.get()) {
+    std::vector<std::string> csd_whitelist_listnames;
+    csd_whitelist_listnames.push_back(safe_browsing_util::kCsdWhiteList);
+    UpdateChunkRanges(csd_whitelist_store_.get(),
+                      csd_whitelist_listnames, lists);
   }
 
   corruption_detected_ = false;
+  change_detected_ = false;
   return true;
 }
 
@@ -685,11 +1010,18 @@ void SafeBrowsingDatabaseNew::UpdateFinished(bool update_succeeded) {
   if (corruption_detected_)
     return;
 
-  // Unroll any partially-received transaction.
-  if (!update_succeeded) {
+  // Unroll the transaction if there was a protocol error or if the
+  // transaction was empty.  This will leave the bloom filter, the
+  // pending hashes, and the prefix miss cache in place.
+  if (!update_succeeded || !change_detected_) {
+    // Track empty updates to answer questions at http://crbug.com/72216 .
+    if (update_succeeded && !change_detected_)
+      UMA_HISTOGRAM_COUNTS("SB2.DatabaseUpdateKilobytes", 0);
     browse_store_->CancelUpdate();
     if (download_store_.get())
       download_store_->CancelUpdate();
+    if (csd_whitelist_store_.get())
+      csd_whitelist_store_->CancelUpdate();
     return;
   }
 
@@ -697,9 +1029,37 @@ void SafeBrowsingDatabaseNew::UpdateFinished(bool update_succeeded) {
   UpdateDownloadStore();
   // for browsing
   UpdateBrowseStore();
+  // for csd whitelist
+  UpdateCsdWhitelistStore();
 }
 
-void SafeBrowsingDatabaseNew:: UpdateDownloadStore() {
+void SafeBrowsingDatabaseNew::UpdateCsdWhitelistStore() {
+  if (!csd_whitelist_store_.get())
+    return;
+
+  // For the csd whitelist, we don't cache and save full hashes since all
+  // hashes are already full.
+  std::vector<SBAddFullHash> empty_add_hashes;
+
+  // Not needed for the csd whitelist.
+  std::set<SBPrefix> empty_miss_cache;
+
+  // Note: prefixes will not be empty.  The current data store implementation
+  // stores all full-length hashes as both full and prefix hashes.
+  std::vector<SBAddPrefix> prefixes;
+  std::vector<SBAddFullHash> full_hashes;
+  if (!csd_whitelist_store_->FinishUpdate(empty_add_hashes,
+                                          empty_miss_cache,
+                                          &prefixes,
+                                          &full_hashes)) {
+    RecordFailure(FAILURE_CSD_WHITELIST_DATABASE_UPDATE_FINISH);
+    CsdWhitelistAllUrls();
+    return;
+  }
+  LoadCsdWhitelist(full_hashes);
+}
+
+void SafeBrowsingDatabaseNew::UpdateDownloadStore() {
   if (!download_store_.get())
     return;
 
@@ -716,10 +1076,10 @@ void SafeBrowsingDatabaseNew:: UpdateDownloadStore() {
   std::vector<SBAddPrefix> add_prefixes_result;
   std::vector<SBAddFullHash> add_full_hashes_result;
 
-  if (download_store_->FinishUpdate(empty_add_hashes,
-                                    empty_miss_cache,
-                                    &add_prefixes_result,
-                                    &add_full_hashes_result))
+  if (!download_store_->FinishUpdate(empty_add_hashes,
+                                     empty_miss_cache,
+                                     &add_prefixes_result,
+                                     &add_full_hashes_result))
     RecordFailure(FAILURE_DOWNLOAD_DATABASE_UPDATE_FINISH);
   return;
 }
@@ -772,6 +1132,9 @@ void SafeBrowsingDatabaseNew::UpdateBrowseStore() {
     filter->Insert(add_prefixes[i].prefix);
   }
 
+  scoped_ptr<safe_browsing::PrefixSet>
+      prefix_set(PrefixSetFromAddPrefixes(add_prefixes));
+
   // This needs to be in sorted order by prefix for efficient access.
   std::sort(add_full_hashes.begin(), add_full_hashes.end(),
             SBAddFullHashPrefixLess);
@@ -789,6 +1152,7 @@ void SafeBrowsingDatabaseNew::UpdateBrowseStore() {
     pending_browse_hashes_.clear();
     prefix_miss_cache_.clear();
     browse_bloom_filter_.swap(filter);
+    prefix_set_.swap(prefix_set);
   }
 
   const base::TimeDelta bloom_gen = base::Time::Now() - before;
@@ -872,6 +1236,12 @@ void SafeBrowsingDatabaseNew::LoadBloomFilter() {
 
   if (!browse_bloom_filter_.get())
     RecordFailure(FAILURE_DATABASE_FILTER_READ);
+
+  // Manually re-generate the prefix set from the main database.
+  // TODO(shess): Write/read for prefix set.
+  std::vector<SBAddPrefix> add_prefixes;
+  browse_store_->GetAddPrefixes(&add_prefixes);
+  prefix_set_.reset(PrefixSetFromAddPrefixes(add_prefixes));
 }
 
 bool SafeBrowsingDatabaseNew::Delete() {
@@ -885,10 +1255,15 @@ bool SafeBrowsingDatabaseNew::Delete() {
   if (!r2)
     RecordFailure(FAILURE_DATABASE_STORE_DELETE);
 
-  const bool r3 = file_util::Delete(bloom_filter_filename_, false);
+  const bool r3 = csd_whitelist_store_.get() ?
+      csd_whitelist_store_->Delete() : true;
   if (!r3)
+    RecordFailure(FAILURE_DATABASE_STORE_DELETE);
+
+  const bool r4 = file_util::Delete(bloom_filter_filename_, false);
+  if (!r4)
     RecordFailure(FAILURE_DATABASE_FILTER_DELETE);
-  return r1 && r2 && r3;
+  return r1 && r2 && r3 && r4;
 }
 
 void SafeBrowsingDatabaseNew::WriteBloomFilter() {
@@ -904,4 +1279,39 @@ void SafeBrowsingDatabaseNew::WriteBloomFilter() {
 
   if (!write_ok)
     RecordFailure(FAILURE_DATABASE_FILTER_WRITE);
+}
+
+void SafeBrowsingDatabaseNew::CsdWhitelistAllUrls() {
+  base::AutoLock locked(lookup_lock_);
+  csd_whitelist_all_urls_ = true;
+  csd_whitelist_.clear();
+}
+
+void SafeBrowsingDatabaseNew::LoadCsdWhitelist(
+    const std::vector<SBAddFullHash>& full_hashes) {
+  DCHECK_EQ(creation_loop_, MessageLoop::current());
+  if (full_hashes.size() > kMaxCsdWhitelistSize) {
+    CsdWhitelistAllUrls();
+    return;
+  }
+
+  std::vector<SBFullHash> new_csd_whitelist;
+  for (std::vector<SBAddFullHash>::const_iterator it = full_hashes.begin();
+       it != full_hashes.end(); ++it) {
+    new_csd_whitelist.push_back(it->full_hash);
+  }
+  std::sort(new_csd_whitelist.begin(), new_csd_whitelist.end());
+
+  SBFullHash kill_switch;
+  crypto::SHA256HashString(kCsdKillSwitchUrl, &kill_switch,
+                           sizeof(kill_switch));
+  if (std::binary_search(new_csd_whitelist.begin(), new_csd_whitelist.end(),
+                         kill_switch)) {
+    // The kill switch is whitelisted hence we whitelist all URLs.
+    CsdWhitelistAllUrls();
+  } else {
+    base::AutoLock locked(lookup_lock_);
+    csd_whitelist_all_urls_ = false;
+    csd_whitelist_.swap(new_csd_whitelist);
+  }
 }

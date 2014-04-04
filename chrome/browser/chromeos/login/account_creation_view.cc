@@ -1,11 +1,11 @@
-// Copyright (c) 2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/chromeos/login/account_creation_view.h"
 
 #include "base/string_util.h"
-#include "chrome/common/render_messages.h"
+#include "chrome/common/autofill_messages.h"
 #include "webkit/glue/form_data.h"
 
 using webkit_glue::FormData;
@@ -30,13 +30,13 @@ class AccountCreationTabContents : public WizardWebPageViewTabContents {
   virtual bool OnMessageReceived(const IPC::Message& message) {
     bool handled = true;
     IPC_BEGIN_MESSAGE_MAP(AccountCreationTabContents, message)
-      IPC_MESSAGE_HANDLER(ViewHostMsg_FormSubmitted, OnFormSubmitted)
-      IPC_MESSAGE_HANDLER_GENERIC(ViewHostMsg_FormsSeen, )
-      IPC_MESSAGE_HANDLER_GENERIC(ViewHostMsg_QueryFormFieldAutoFill, )
-      IPC_MESSAGE_HANDLER_GENERIC(ViewHostMsg_ShowAutoFillDialog, )
-      IPC_MESSAGE_HANDLER_GENERIC(ViewHostMsg_FillAutoFillFormData, )
-      IPC_MESSAGE_HANDLER_GENERIC(ViewHostMsg_DidFillAutoFillFormData, )
-      IPC_MESSAGE_HANDLER_GENERIC(ViewHostMsg_DidShowAutoFillSuggestions, )
+      IPC_MESSAGE_HANDLER(AutofillHostMsg_FormSubmitted, OnFormSubmitted)
+      IPC_MESSAGE_HANDLER_GENERIC(AutofillHostMsg_FormsSeen, )
+      IPC_MESSAGE_HANDLER_GENERIC(AutofillHostMsg_QueryFormFieldAutofill, )
+      IPC_MESSAGE_HANDLER_GENERIC(AutofillHostMsg_ShowAutofillDialog, )
+      IPC_MESSAGE_HANDLER_GENERIC(AutofillHostMsg_FillAutofillFormData, )
+      IPC_MESSAGE_HANDLER_GENERIC(AutofillHostMsg_DidFillAutofillFormData, )
+      IPC_MESSAGE_HANDLER_GENERIC(AutofillHostMsg_DidShowAutofillSuggestions, )
       IPC_MESSAGE_UNHANDLED(handled = false)
     IPC_END_MESSAGE_MAP()
 
@@ -51,11 +51,11 @@ class AccountCreationTabContents : public WizardWebPageViewTabContents {
       std::string user_name;
       std::string domain;
       for (size_t i = 0; i < form.fields.size(); i++) {
-        std::string name = UTF16ToASCII(form.fields[i].name());
+        std::string name = UTF16ToASCII(form.fields[i].name);
         if (name == kEmailFieldName) {
-          user_name = UTF16ToASCII(form.fields[i].value());
+          user_name = UTF16ToASCII(form.fields[i].value);
         } else if (name == kDomainFieldName) {
-          domain = UTF16ToASCII(form.fields[i].value());
+          domain = UTF16ToASCII(form.fields[i].value);
         }
       }
       if (!user_name.empty()) {

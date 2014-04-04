@@ -10,7 +10,9 @@
 #include <cstring>
 #include <sstream>
 
+#include "base/base_api.h"
 #include "base/basictypes.h"
+#include "build/build_config.h"
 
 //
 // Optional message capabilities
@@ -190,11 +192,11 @@ typedef char PathChar;
 // Implementation of the InitLogging() method declared below.  We use a
 // more-specific name so we can #define it above without affecting other code
 // that has named stuff "InitLogging".
-bool BaseInitLoggingImpl(const PathChar* log_file,
-                         LoggingDestination logging_dest,
-                         LogLockingState lock_log,
-                         OldFileDeletionState delete_old,
-                         DcheckState dcheck_state);
+BASE_API bool BaseInitLoggingImpl(const PathChar* log_file,
+                                  LoggingDestination logging_dest,
+                                  LogLockingState lock_log,
+                                  OldFileDeletionState delete_old,
+                                  DcheckState dcheck_state);
 
 // Sets the log file name and other global logging state. Calling this function
 // is recommended, and is normally done at the beginning of application init.
@@ -221,19 +223,19 @@ inline bool InitLogging(const PathChar* log_file,
 // up to level INFO) if this function is not called.
 // Note that log messages for VLOG(x) are logged at level -x, so setting
 // the min log level to negative values enables verbose logging.
-void SetMinLogLevel(int level);
+BASE_API void SetMinLogLevel(int level);
 
 // Gets the current log level.
-int GetMinLogLevel();
+BASE_API int GetMinLogLevel();
 
 // Gets the VLOG default verbosity level.
-int GetVlogVerbosity();
+BASE_API int GetVlogVerbosity();
 
 // Gets the current vlog level for the given file (usually taken from
 // __FILE__).
 
 // Note that |N| is the size *with* the null terminator.
-int GetVlogLevelHelper(const char* file_start, size_t N);
+BASE_API int GetVlogLevelHelper(const char* file_start, size_t N);
 
 template <size_t N>
 int GetVlogLevel(const char (&file)[N]) {
@@ -244,27 +246,27 @@ int GetVlogLevel(const char (&file)[N]) {
 // process and thread IDs default to off, the timestamp defaults to on.
 // If this function is not called, logging defaults to writing the timestamp
 // only.
-void SetLogItems(bool enable_process_id, bool enable_thread_id,
-                 bool enable_timestamp, bool enable_tickcount);
+BASE_API void SetLogItems(bool enable_process_id, bool enable_thread_id,
+                          bool enable_timestamp, bool enable_tickcount);
 
 // Sets whether or not you'd like to see fatal debug messages popped up in
 // a dialog box or not.
 // Dialogs are not shown by default.
-void SetShowErrorDialogs(bool enable_dialogs);
+BASE_API void SetShowErrorDialogs(bool enable_dialogs);
 
 // Sets the Log Assert Handler that will be used to notify of check failures.
 // The default handler shows a dialog box and then terminate the process,
 // however clients can use this function to override with their own handling
 // (e.g. a silent one for Unit Tests)
 typedef void (*LogAssertHandlerFunction)(const std::string& str);
-void SetLogAssertHandler(LogAssertHandlerFunction handler);
+BASE_API void SetLogAssertHandler(LogAssertHandlerFunction handler);
 
 // Sets the Log Report Handler that will be used to notify of check failures
 // in non-debug mode. The default handler shows a dialog box and continues
 // the execution, however clients can use this function to override with their
 // own handling.
 typedef void (*LogReportHandlerFunction)(const std::string& str);
-void SetLogReportHandler(LogReportHandlerFunction handler);
+BASE_API void SetLogReportHandler(LogReportHandlerFunction handler);
 
 // Sets the Log Message Handler that gets passed every log message before
 // it's sent to other log destinations (if any).
@@ -272,8 +274,8 @@ void SetLogReportHandler(LogReportHandlerFunction handler);
 // should not be sent to other log destinations.
 typedef bool (*LogMessageHandlerFunction)(int severity,
     const char* file, int line, size_t message_start, const std::string& str);
-void SetLogMessageHandler(LogMessageHandlerFunction handler);
-LogMessageHandlerFunction GetLogMessageHandler();
+BASE_API void SetLogMessageHandler(LogMessageHandlerFunction handler);
+BASE_API LogMessageHandlerFunction GetLogMessageHandler();
 
 typedef int LogSeverity;
 const LogSeverity LOG_VERBOSE = -1;  // This is level 1 verbosity
@@ -382,6 +384,23 @@ const LogSeverity LOG_0 = LOG_ERROR;
   LAZY_STREAM(VLOG_STREAM(verbose_level), \
       VLOG_IS_ON(verbose_level) && (condition))
 
+#if defined (OS_WIN)
+#define VPLOG_STREAM(verbose_level) \
+  logging::Win32ErrorLogMessage(__FILE__, __LINE__, -verbose_level, \
+    ::logging::GetLastSystemErrorCode()).stream()
+#elif defined(OS_POSIX)
+#define VPLOG_STREAM(verbose_level) \
+  logging::ErrnoLogMessage(__FILE__, __LINE__, -verbose_level, \
+    ::logging::GetLastSystemErrorCode()).stream()
+#endif
+
+#define VPLOG(verbose_level) \
+  LAZY_STREAM(VPLOG_STREAM(verbose_level), VLOG_IS_ON(verbose_level))
+
+#define VPLOG_IF(verbose_level, condition) \
+  LAZY_STREAM(VPLOG_STREAM(verbose_level), \
+    VLOG_IS_ON(verbose_level) && (condition))
+
 // TODO(akalin): Add more VLOG variants, e.g. VPLOG.
 
 #define LOG_ASSERT(condition)  \
@@ -436,19 +455,10 @@ const LogSeverity LOG_0 = LOG_ERROR;
   LAZY_STREAM(PLOG_STREAM(FATAL), !(condition)) \
   << "Check failed: " #condition ". "
 
-// A container for a string pointer which can be evaluated to a bool -
-// true iff the pointer is NULL.
-struct CheckOpString {
-  CheckOpString(std::string* str) : str_(str) { }
-  // No destructor: if str_ is non-NULL, we're about to LOG(FATAL),
-  // so there's no point in cleaning up str_.
-  operator bool() const { return str_ != NULL; }
-  std::string* str_;
-};
-
 // Build the error message string.  This is separate from the "Impl"
 // function template because it is not performance critical and so can
-// be out of line, while the "Impl" code should be inline.
+// be out of line, while the "Impl" code should be inline.  Caller
+// takes ownership of the returned string.
 template<class t1, class t2>
 std::string* MakeCheckOpString(const t1& v1, const t2& v2, const char* names) {
   std::ostringstream ss;
@@ -479,7 +489,7 @@ extern template std::string* MakeCheckOpString<std::string, std::string>(
 // TODO(akalin): Rewrite this so that constructs like if (...)
 // CHECK_EQ(...) else { ... } work properly.
 #define CHECK_OP(name, op, val1, val2)                          \
-  if (logging::CheckOpString _result =                          \
+  if (std::string* _result =                                    \
       logging::Check##name##Impl((val1), (val2),                \
                                  #val1 " " #op " " #val2))      \
     logging::LogMessage(__FILE__, __LINE__, _result).stream()
@@ -548,6 +558,7 @@ DEFINE_CHECK_OP_IMPL(GT, > )
 #define DLOG_ASSERT(condition) LOG_ASSERT(condition)
 #define DPLOG_IF(severity, condition) PLOG_IF(severity, condition)
 #define DVLOG_IF(verboselevel, condition) VLOG_IF(verboselevel, condition)
+#define DVPLOG_IF(verboselevel, condition) VPLOG_IF(verboselevel, condition)
 
 #else  // ENABLE_DLOG
 
@@ -564,6 +575,7 @@ DEFINE_CHECK_OP_IMPL(GT, > )
 #define DLOG_ASSERT(condition) DLOG_EAT_STREAM_PARAMETERS
 #define DPLOG_IF(severity, condition) DLOG_EAT_STREAM_PARAMETERS
 #define DVLOG_IF(verboselevel, condition) DLOG_EAT_STREAM_PARAMETERS
+#define DVPLOG_IF(verboselevel, condition) DLOG_EAT_STREAM_PARAMETERS
 
 #endif  // ENABLE_DLOG
 
@@ -597,6 +609,8 @@ enum { DEBUG_MODE = ENABLE_DLOG };
   LAZY_STREAM(PLOG_STREAM(severity), DLOG_IS_ON(severity))
 
 #define DVLOG(verboselevel) DLOG_IF(INFO, VLOG_IS_ON(verboselevel))
+
+#define DVPLOG(verboselevel) DVPLOG_IF(verboselevel, VLOG_IS_ON(verboselevel))
 
 // Definitions for DCHECK et al.
 
@@ -655,7 +669,7 @@ const LogSeverity LOG_DCHECK = LOG_INFO;
 // Don't use this macro directly in your code, use DCHECK_EQ et al below.
 #define DCHECK_OP(name, op, val1, val2)                         \
   if (DCHECK_IS_ON())                                           \
-    if (logging::CheckOpString _result =                        \
+    if (std::string* _result =                                  \
         logging::Check##name##Impl((val1), (val2),              \
                                    #val1 " " #op " " #val2))    \
       logging::LogMessage(                                      \
@@ -702,7 +716,7 @@ const LogSeverity LOG_DCHECK = LOG_INFO;
 // You shouldn't actually use LogMessage's constructor to log things,
 // though.  You should use the LOG() macro (and variants thereof)
 // above.
-class LogMessage {
+class BASE_API LogMessage {
  public:
   LogMessage(const char* file, int line, LogSeverity severity, int ctr);
 
@@ -723,14 +737,15 @@ class LogMessage {
   // saves a couple of bytes per call site.
   LogMessage(const char* file, int line, LogSeverity severity);
 
-  // A special constructor used for check failures.
+  // A special constructor used for check failures.  Takes ownership
+  // of the given string.
   // Implied severity = LOG_FATAL
-  LogMessage(const char* file, int line, const CheckOpString& result);
+  LogMessage(const char* file, int line, std::string* result);
 
   // A special constructor used for check failures, with the option to
-  // specify severity.
+  // specify severity.  Takes ownership of the given string.
   LogMessage(const char* file, int line, LogSeverity severity,
-             const CheckOpString& result);
+             std::string* result);
 
   ~LogMessage();
 
@@ -779,7 +794,7 @@ inline void LogAtLevel(int const log_level, std::string const &msg) {
 // This class is used to explicitly ignore values in the conditional
 // logging macros.  This avoids compiler warnings like "value computed
 // is not used" and "statement has no effect".
-class LogMessageVoidify {
+class BASE_API LogMessageVoidify {
  public:
   LogMessageVoidify() { }
   // This has to be an operator with a precedence lower than << but
@@ -795,11 +810,11 @@ typedef int SystemErrorCode;
 
 // Alias for ::GetLastError() on Windows and errno on POSIX. Avoids having to
 // pull in windows.h just for GetLastError() and DWORD.
-SystemErrorCode GetLastSystemErrorCode();
+BASE_API SystemErrorCode GetLastSystemErrorCode();
 
 #if defined(OS_WIN)
 // Appends a formatted system message of the GetLastError() type.
-class Win32ErrorLogMessage {
+class BASE_API Win32ErrorLogMessage {
  public:
   Win32ErrorLogMessage(const char* file,
                        int line,
@@ -851,10 +866,10 @@ class ErrnoLogMessage {
 // NOTE: Since the log file is opened as necessary by the action of logging
 //       statements, there's no guarantee that it will stay closed
 //       after this call.
-void CloseLogFile();
+BASE_API void CloseLogFile();
 
 // Async signal safe logging mechanism.
-void RawLog(int level, const char* message);
+BASE_API void RawLog(int level, const char* message);
 
 #define RAW_LOG(level, message) logging::RawLog(logging::LOG_ ## level, message)
 
@@ -872,7 +887,7 @@ void RawLog(int level, const char* message);
 // which is normally ASCII. It is relatively slow, so try not to use it for
 // common cases. Non-ASCII characters will be converted to UTF-8 by these
 // operators.
-std::ostream& operator<<(std::ostream& out, const wchar_t* wstr);
+BASE_API std::ostream& operator<<(std::ostream& out, const wchar_t* wstr);
 inline std::ostream& operator<<(std::ostream& out, const std::wstring& wstr) {
   return out << wstr.c_str();
 }
@@ -918,5 +933,14 @@ inline std::ostream& operator<<(std::ostream& out, const std::wstring& wstr) {
   LOG_IF(ERROR, 0 == count++) << NOTIMPLEMENTED_MSG;\
 } while(0)
 #endif
+
+namespace base {
+
+class StringPiece;
+
+// Allows StringPiece to be logged.
+BASE_API std::ostream& operator<<(std::ostream& o, const StringPiece& piece);
+
+}  // namespace base
 
 #endif  // BASE_LOGGING_H_

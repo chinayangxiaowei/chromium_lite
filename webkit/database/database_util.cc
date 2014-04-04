@@ -56,8 +56,9 @@ FilePath DatabaseUtil::GetFullFilePathForVfsFile(
   FilePath full_path = db_tracker->GetFullDBFilePath(
       origin_identifier, database_name);
   if (!full_path.empty() && !sqlite_suffix.empty()) {
-    full_path = FilePath::FromWStringHack(
-        full_path.ToWStringHack() + UTF16ToWide(sqlite_suffix));
+    DCHECK(full_path.Extension().empty());
+    full_path = full_path.InsertBeforeExtensionASCII(
+        UTF16ToASCII(sqlite_suffix));
   }
   // Watch out for directory traversal attempts from a compromised renderer.
   if (full_path.value().find(FILE_PATH_LITERAL("..")) !=
@@ -69,6 +70,13 @@ FilePath DatabaseUtil::GetFullFilePathForVfsFile(
 string16 DatabaseUtil::GetOriginIdentifier(const GURL& url) {
   string16 spec = UTF8ToUTF16(url.spec());
   return WebKit::WebSecurityOrigin::createFromString(spec).databaseIdentifier();
+}
+
+GURL DatabaseUtil::GetOriginFromIdentifier(const string16& origin_identifier) {
+  GURL origin(WebKit::WebSecurityOrigin::createFromDatabaseIdentifier(
+      origin_identifier).toString());
+  DCHECK(origin == origin.GetOrigin());
+  return origin;
 }
 
 }  // namespace webkit_database

@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,9 +9,10 @@
 #include "base/gtest_prod_util.h"
 #include "chrome/browser/background_application_list_model.h"
 #include "chrome/browser/prefs/pref_change_registrar.h"
+#include "chrome/browser/profiles/profile_keyed_service.h"
 #include "chrome/browser/status_icons/status_icon.h"
-#include "chrome/common/notification_observer.h"
-#include "chrome/common/notification_registrar.h"
+#include "content/common/notification_observer.h"
+#include "content/common/notification_registrar.h"
 #include "ui/base/models/simple_menu_model.h"
 
 class Browser;
@@ -39,12 +40,14 @@ class StatusTray;
 class BackgroundModeManager
     : public NotificationObserver,
       public ui::SimpleMenuModel::Delegate,
-      public BackgroundApplicationListModel::Observer {
+      public BackgroundApplicationListModel::Observer,
+      public ProfileKeyedService {
  public:
   BackgroundModeManager(Profile* profile, CommandLine* command_line);
   virtual ~BackgroundModeManager();
 
   static bool IsBackgroundModeEnabled(const CommandLine* command_line);
+  static void RegisterPrefs(PrefService* prefs);
 
  private:
   friend class TestBackgroundModeManager;
@@ -86,8 +89,9 @@ class BackgroundModeManager
   void OnBackgroundAppUnloaded();
 
   // Invoked when an extension is installed so we can ensure that
-  // launch-on-startup is enabled if appropriate.
-  void OnBackgroundAppInstalled();
+  // launch-on-startup is enabled if appropriate. |extension| can be NULL when
+  // called from unit tests.
+  void OnBackgroundAppInstalled(const Extension* extension);
 
   // Invoked when an extension is uninstalled so we can ensure that
   // launch-on-startup is disabled if appropriate.
@@ -96,6 +100,10 @@ class BackgroundModeManager
   // Called to make sure that our launch-on-startup mode is properly set.
   // (virtual so we can override for tests).
   virtual void EnableLaunchOnStartup(bool should_launch);
+
+  // Invoked when a background app is installed so we can display a
+  // platform-specific notification to the user.
+  void DisplayAppInstalledNotification(const Extension* extension);
 
   // Invoked to put Chrome in KeepAlive mode - chrome runs in the background
   // and has a status bar icon.

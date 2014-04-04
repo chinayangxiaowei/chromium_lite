@@ -16,26 +16,22 @@
 #include "base/file_util.h"
 #include "base/i18n/file_util_icu.h"
 #include "base/i18n/rtl.h"
+#include "base/memory/scoped_ptr.h"
 #include "base/path_service.h"
-#include "base/scoped_ptr.h"
-#include "base/string16.h"
 #include "base/string_number_conversions.h"
 #include "base/string_split.h"
 #include "base/sys_string_conversions.h"
 #include "base/utf_string_conversions.h"
 #include "build/build_config.h"
-#include "gfx/canvas.h"
 #include "ui/base/l10n/l10n_util_collator.h"
 #include "ui/base/resource/resource_bundle.h"
 #include "ui/base/ui_base_paths.h"
 #include "unicode/rbbi.h"
 #include "unicode/uloc.h"
 
-#if defined(OS_MACOSX)
-#include "ui/base/l10n/l10n_util_mac.h"
-#elif defined(OS_WIN)
+#if defined(OS_WIN)
 #include "ui/base/l10n/l10n_util_win.h"
-#endif
+#endif  // OS_WIN
 
 namespace {
 
@@ -190,6 +186,9 @@ bool IsDuplicateName(const std::string& locale_name) {
     "pt",
     "zh",
     "zh_hans_cn",
+    "zh_hant_hk",
+    "zh_hant_mo",
+    "zh_hans_sg",
     "zh_hant_tw"
   };
 
@@ -274,9 +273,9 @@ bool CheckAndResolveLocale(const std::string& locale,
     if (LowerCaseEqualsASCII(lang, "es") && !LowerCaseEqualsASCII(region, "es"))
       tmp_locale.append("-419");
     else if (LowerCaseEqualsASCII(lang, "zh")) {
-      // Map zh-HK and zh-MK to zh-TW. Otherwise, zh-FOO is mapped to zh-CN.
+      // Map zh-HK and zh-MO to zh-TW. Otherwise, zh-FOO is mapped to zh-CN.
      if (LowerCaseEqualsASCII(region, "hk") ||
-         LowerCaseEqualsASCII(region, "mk")) {
+         LowerCaseEqualsASCII(region, "mo")) { // Macao
        tmp_locale.append("-TW");
      } else {
        tmp_locale.append("-CN");

@@ -4,13 +4,12 @@
 
 #include "chrome/common/extensions/extension_localization_peer.h"
 
-#include "base/scoped_ptr.h"
+#include "base/memory/scoped_ptr.h"
 #include "base/string_util.h"
 #include "chrome/common/extensions/extension_message_bundle.h"
-#include "chrome/common/render_messages.h"
+#include "chrome/common/extensions/extension_messages.h"
 #include "chrome/common/url_constants.h"
 #include "grit/generated_resources.h"
-#include "grit/renderer_resources.h"
 #include "net/base/net_errors.h"
 #include "net/http/http_response_headers.h"
 #include "webkit/glue/webkit_glue.h"
@@ -56,13 +55,14 @@ bool ExtensionLocalizationPeer::OnReceivedRedirect(
 }
 
 void ExtensionLocalizationPeer::OnReceivedResponse(
-    const webkit_glue::ResourceResponseInfo& info,
-    bool content_filtered) {
+    const webkit_glue::ResourceResponseInfo& info) {
   response_info_ = info;
 }
 
-void ExtensionLocalizationPeer::OnReceivedData(const char* data, int len) {
-  data_.append(data, len);
+void ExtensionLocalizationPeer::OnReceivedData(const char* data,
+                                               int data_length,
+                                               int encoded_data_length) {
+  data_.append(data, data_length);
 }
 
 void ExtensionLocalizationPeer::OnCompletedRequest(
@@ -75,7 +75,7 @@ void ExtensionLocalizationPeer::OnCompletedRequest(
   // Give sub-classes a chance at altering the data.
   if (status.status() != net::URLRequestStatus::SUCCESS) {
     // We failed to load the resource.
-    original_peer_->OnReceivedResponse(response_info_, true);
+    original_peer_->OnReceivedResponse(response_info_);
     net::URLRequestStatus status(net::URLRequestStatus::CANCELED,
                                  net::ERR_ABORTED);
     original_peer_->OnCompletedRequest(status, security_info, completion_time);
@@ -84,10 +84,11 @@ void ExtensionLocalizationPeer::OnCompletedRequest(
 
   ReplaceMessages();
 
-  original_peer_->OnReceivedResponse(response_info_, true);
+  original_peer_->OnReceivedResponse(response_info_);
   if (!data_.empty())
     original_peer_->OnReceivedData(data_.data(),
-                                   static_cast<int>(data_.size()));
+                                   static_cast<int>(data_.size()),
+                                   -1);
   original_peer_->OnCompletedRequest(status, security_info, completion_time);
 }
 
@@ -102,7 +103,7 @@ void ExtensionLocalizationPeer::ReplaceMessages() {
   L10nMessagesMap* l10n_messages = GetL10nMessagesMap(extension_id);
   if (!l10n_messages) {
     L10nMessagesMap messages;
-    message_sender_->Send(new ViewHostMsg_GetExtensionMessageBundle(
+    message_sender_->Send(new ExtensionHostMsg_GetMessageBundle(
         extension_id, &messages));
 
     // Save messages we got, so we don't have to ask again.

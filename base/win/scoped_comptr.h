@@ -1,4 +1,4 @@
-// Copyright (c) 2006-2008 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,7 +9,7 @@
 #include <unknwn.h>
 
 #include "base/logging.h"
-#include "base/ref_counted.h"
+#include "base/memory/ref_counted.h"
 
 namespace base {
 namespace win {
@@ -69,7 +69,7 @@ class ScopedComPtr : public scoped_refptr<Interface> {
 
   // Accepts an interface pointer that has already been addref-ed.
   void Attach(Interface* p) {
-    DCHECK(ptr_ == NULL);
+    DCHECK(!ptr_);
     ptr_ = p;
   }
 
@@ -78,7 +78,7 @@ class ScopedComPtr : public scoped_refptr<Interface> {
   // The function DCHECKs on the current value being NULL.
   // Usage: Foo(p.Receive());
   Interface** Receive() {
-    DCHECK(ptr_ == NULL) << "Object leak. Pointer must be NULL";
+    DCHECK(!ptr_) << "Object leak. Pointer must be NULL";
     return &ptr_;
   }
 
@@ -114,7 +114,7 @@ class ScopedComPtr : public scoped_refptr<Interface> {
   // Convenience wrapper around CoCreateInstance
   HRESULT CreateInstance(const CLSID& clsid, IUnknown* outer = NULL,
                          DWORD context = CLSCTX_ALL) {
-    DCHECK(ptr_ == NULL);
+    DCHECK(!ptr_);
     HRESULT hr = ::CoCreateInstance(clsid, outer, context, *interface_id,
                                     reinterpret_cast<void**>(&ptr_));
     return hr;

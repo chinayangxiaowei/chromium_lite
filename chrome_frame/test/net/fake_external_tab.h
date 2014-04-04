@@ -13,10 +13,11 @@
 #include "base/win/scoped_handle.h"
 #include "chrome/app/scoped_ole_initializer.h"
 #include "chrome/browser/browser_process_impl.h"
-#include "chrome/browser/browser_thread.h"
+#include "chrome_frame/test_utils.h"
 #include "chrome_frame/test/test_server.h"
 #include "chrome_frame/test/net/test_automation_provider.h"
 #include "chrome_frame/test/net/process_singleton_subclass.h"
+#include "content/browser/browser_thread.h"
 #include "net/base/net_test_suite.h"
 
 class ProcessSingleton;
@@ -98,6 +99,7 @@ class CFUrlRequestUnittestRunner
   FakeExternalTab fake_chrome_;
   scoped_ptr<ProcessSingletonSubclass> pss_subclass_;
   scoped_ptr<BrowserThread> main_thread_;
+  ScopedChromeFrameRegistrar registrar_;
 };
 
 #endif  // CHROME_FRAME_TEST_NET_FAKE_EXTERNAL_TAB_H_

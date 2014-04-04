@@ -11,32 +11,31 @@
 #include "base/path_service.h"
 #include "base/string_number_conversions.h"
 #include "base/test/test_file_util.h"
-#include "chrome/browser/browser_list.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/browser_shutdown.h"
-#include "chrome/browser/browser_thread.h"
-#include "chrome/browser/browser_window.h"
 #include "chrome/browser/intranet_redirect_detector.h"
 #include "chrome/browser/io_thread.h"
 #include "chrome/browser/net/url_request_mock_util.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profile_manager.h"
-#include "chrome/browser/renderer_host/render_process_host.h"
-#include "chrome/browser/tab_contents/tab_contents.h"
 #include "chrome/browser/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_list.h"
 #include "chrome/browser/ui/browser_navigator.h"
+#include "chrome/browser/ui/browser_window.h"
 #include "chrome/common/chrome_constants.h"
 #include "chrome/common/chrome_paths.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/common/logging_chrome.h"
-#include "chrome/common/main_function_params.h"
-#include "chrome/common/notification_registrar.h"
-#include "chrome/common/notification_type.h"
 #include "chrome/common/url_constants.h"
 #include "chrome/test/test_launcher_utils.h"
 #include "chrome/test/testing_browser_process.h"
 #include "chrome/test/ui_test_utils.h"
+#include "content/browser/browser_thread.h"
+#include "content/browser/renderer_host/render_process_host.h"
+#include "content/browser/tab_contents/tab_contents.h"
+#include "content/common/main_function_params.h"
+#include "content/common/notification_type.h"
 #include "net/base/mock_host_resolver.h"
 #include "net/test/test_server.h"
 #include "sandbox/src/dep.h"
@@ -46,7 +45,11 @@
 #endif
 
 #if defined(OS_WIN)
-#include "chrome/browser/ui/views/frame/browser_view.h"
+#include "chrome/browser/ui/views/frame/browser_frame_win.h"
+#endif
+
+#if defined(OS_CHROMEOS)
+#include "chrome/browser/chromeos/audio_handler.h"
 #endif
 
 namespace {
@@ -75,8 +78,7 @@ InProcessBrowserTest::InProcessBrowserTest()
     : browser_(NULL),
       show_window_(false),
       dom_automation_enabled_(false),
-      tab_closeable_state_watcher_enabled_(false),
-      original_single_process_(false) {
+      tab_closeable_state_watcher_enabled_(false) {
 #if defined(OS_MACOSX)
   base::mac::SetOverrideAmIBundled(true);
 #endif
@@ -100,14 +102,6 @@ InProcessBrowserTest::~InProcessBrowserTest() {
 }
 
 void InProcessBrowserTest::SetUp() {
-  // Remember the command line.  Normally this doesn't matter, because the test
-  // harness creates a new process for each test, but when the test harness is
-  // running in single process mode, we can't let one test's command-line
-  // changes (e.g. enabling DOM automation) affect other tests.
-  // TODO(phajdan.jr): This save/restore logic is unnecessary.  Remove it.
-  CommandLine* command_line = CommandLine::ForCurrentProcessMutable();
-  original_command_line_.reset(new CommandLine(*command_line));
-
   // Create a temporary user data directory if required.
   ASSERT_TRUE(CreateUserDataDirectory())
       << "Could not create user data directory.";
@@ -127,16 +121,13 @@ void InProcessBrowserTest::SetUp() {
   // bundle we'll crash.
   browser_shutdown::delete_resources_on_shutdown = false;
 
-  // Allow subclasses the opportunity to make changes to the command line before
-  // running any tests.
+  CommandLine* command_line = CommandLine::ForCurrentProcess();
+  // Allow subclasses to change the command line before running any tests.
   SetUpCommandLine(command_line);
   // Add command line arguments that are used by all InProcessBrowserTests.
   PrepareTestCommandLine(command_line);
 
-  // Save the single process mode state before it was reset in this test. This
-  // state will be recovered in TearDown(). Single-process mode is not set in
-  // BrowserMain so it needs to be processed explicitly.
-  original_single_process_ = RenderProcessHost::run_renderer_in_process();
+  // Single-process mode is not set in BrowserMain, so process it explicitly.
   if (command_line->HasSwitch(switches::kSingleProcess))
     RenderProcessHost::set_run_renderer_in_process(true);
 
@@ -144,6 +135,14 @@ void InProcessBrowserTest::SetUp() {
   // Make sure that the log directory exists.
   FilePath log_dir = logging::GetSessionLogFile(*command_line).DirName();
   file_util::CreateDirectory(log_dir);
+
+  // Disable audio mixer as it can cause hang.
+  // see http://crosbug.com/17058.
+  chromeos::AudioHandler::Disable();
+
+  // Prevent loading ChromeOS component extension to prevent their interference
+  // with other browser tests.
+  command_line->AppendSwitch(switches::kSkipChromeOSComponents);
 #endif  // defined(OS_CHROMEOS)
 
   SandboxInitWrapper sandbox_wrapper;
@@ -171,15 +170,14 @@ void InProcessBrowserTest::SetUp() {
   TearDownInProcessBrowserTestFixture();
 }
 
-void InProcessBrowserTest::PrepareTestCommandLine(
-    CommandLine* command_line) {
+void InProcessBrowserTest::PrepareTestCommandLine(CommandLine* command_line) {
   // Propagate commandline settings from test_launcher_utils.
   test_launcher_utils::PrepareBrowserCommandLineForTests(command_line);
 
 #if defined(OS_WIN)
   // Hide windows on show.
   if (!command_line->HasSwitch(kUnitTestShowWindows) && !show_window_)
-    BrowserView::SetShowState(SW_HIDE);
+    BrowserFrameWin::SetShowState(SW_HIDE);
 #endif
 
   if (dom_automation_enabled_)
@@ -211,13 +209,13 @@ void InProcessBrowserTest::PrepareTestCommandLine(
                                  subprocess_path);
 #endif
 
-  // If ncecessary, disable TabCloseableStateWatcher.
+  // If neccessary, disable TabCloseableStateWatcher.
   if (!tab_closeable_state_watcher_enabled_)
     command_line->AppendSwitch(switches::kDisableTabCloseableStateWatcher);
 }
 
 bool InProcessBrowserTest::CreateUserDataDirectory() {
-  CommandLine* command_line = CommandLine::ForCurrentProcessMutable();
+  CommandLine* command_line = CommandLine::ForCurrentProcess();
   FilePath user_data_dir =
       command_line->GetSwitchValuePath(switches::kUserDataDir);
   if (user_data_dir.empty()) {
@@ -241,11 +239,8 @@ void InProcessBrowserTest::TearDown() {
   browser_shutdown::delete_resources_on_shutdown = true;
 
 #if defined(OS_WIN)
-  BrowserView::SetShowState(-1);
+  BrowserFrameWin::SetShowState(-1);
 #endif
-
-  *CommandLine::ForCurrentProcessMutable() = *original_command_line_;
-  RenderProcessHost::set_run_renderer_in_process(original_single_process_);
 }
 
 void InProcessBrowserTest::AddTabAtIndexToBrowser(
@@ -264,6 +259,10 @@ void InProcessBrowserTest::AddTabAtIndex(
     const GURL& url,
     PageTransition::Type transition) {
   AddTabAtIndexToBrowser(browser(), index, url, transition);
+}
+
+bool InProcessBrowserTest::SetUpUserDataDirectory() {
+  return true;
 }
 
 // Creates a browser with a single tab (about:blank), waits for the tab to

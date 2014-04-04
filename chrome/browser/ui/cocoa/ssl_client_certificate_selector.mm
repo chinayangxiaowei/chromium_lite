@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,15 +9,15 @@
 #include <vector>
 
 #include "base/logging.h"
-#include "base/ref_counted.h"
-#import "base/scoped_nsobject.h"
+#include "base/memory/ref_counted.h"
+#import "base/memory/scoped_nsobject.h"
 #include "base/string_util.h"
 #include "base/sys_string_conversions.h"
 #include "base/utf_string_conversions.h"
-#include "chrome/browser/browser_thread.h"
 #include "chrome/browser/ssl/ssl_client_auth_handler.h"
-#include "chrome/browser/tab_contents/tab_contents.h"
 #import "chrome/browser/ui/cocoa/constrained_window_mac.h"
+#include "content/browser/browser_thread.h"
+#include "content/browser/tab_contents/tab_contents.h"
 #include "grit/generated_resources.h"
 #include "net/base/x509_certificate.h"
 #include "ui/base/l10n/l10n_util_mac.h"

@@ -1,21 +1,21 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "base/message_loop.h"
 #include "base/path_service.h"
-#include "chrome/browser/browser_thread.h"
 #include "chrome/browser/extensions/image_loading_tracker.h"
 #include "chrome/common/chrome_paths.h"
 #include "chrome/common/extensions/extension.h"
 #include "chrome/common/extensions/extension_icon_set.h"
 #include "chrome/common/extensions/extension_resource.h"
-#include "chrome/common/json_value_serializer.h"
-#include "chrome/common/notification_service.h"
-#include "chrome/common/notification_type.h"
-#include "gfx/size.h"
+#include "content/browser/browser_thread.h"
+#include "content/common/json_value_serializer.h"
+#include "content/common/notification_service.h"
+#include "content/common/notification_type.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/skia/include/core/SkBitmap.h"
+#include "ui/gfx/size.h"
 
 class ImageLoadingTrackerTest : public testing::Test,
                                 public ImageLoadingTracker::Observer {
@@ -28,7 +28,7 @@ class ImageLoadingTrackerTest : public testing::Test,
         io_thread_(BrowserThread::IO) {
   }
 
-  virtual void OnImageLoaded(SkBitmap* image, ExtensionResource resource,
+  virtual void OnImageLoaded(SkBitmap* image, const ExtensionResource& resource,
                              int index) {
     image_loaded_count_++;
     if (quit_in_image_loaded_)
@@ -74,8 +74,8 @@ class ImageLoadingTrackerTest : public testing::Test,
     if (!valid_value.get())
       return NULL;
 
-    return Extension::Create(
-        test_file, Extension::INVALID, *valid_value, false, &error);
+    return Extension::Create(test_file, Extension::INVALID, *valid_value,
+        Extension::STRICT_ERROR_CHECKS, &error);
   }
 
   SkBitmap image_;

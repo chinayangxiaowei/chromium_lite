@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -22,6 +22,8 @@ class ExtensionResource {
                     const FilePath& extension_root,
                     const FilePath& relative_path);
 
+  ~ExtensionResource();
+
   // Returns actual path to the resource (default or locale specific). In the
   // browser process, this will DCHECK if not called on the file thread. To
   // easily load extension images on the UI thread, see ImageLoadingTracker.
@@ -42,7 +44,8 @@ class ExtensionResource {
   bool empty() { return extension_root().empty(); }
 
   // Unit test helpers.
-  FilePath::StringType NormalizeSeperators(FilePath::StringType path) const;
+  FilePath::StringType NormalizeSeperators(
+      const FilePath::StringType& path) const;
   bool ComparePathWithDefault(const FilePath& path) const;
 
  private:

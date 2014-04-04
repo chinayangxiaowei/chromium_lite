@@ -1,18 +1,18 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/download/download_request_limiter.h"
 
 #include "base/stl_util-inl.h"
-#include "chrome/browser/browser_thread.h"
 #include "chrome/browser/download/download_request_infobar_delegate.h"
-#include "chrome/browser/tab_contents/navigation_controller.h"
-#include "chrome/browser/tab_contents/navigation_entry.h"
-#include "chrome/browser/tab_contents/tab_contents_delegate.h"
 #include "chrome/browser/tab_contents/tab_util.h"
-#include "chrome/browser/tab_contents/tab_contents.h"
-#include "chrome/common/notification_source.h"
+#include "content/browser/browser_thread.h"
+#include "content/browser/tab_contents/navigation_controller.h"
+#include "content/browser/tab_contents/navigation_entry.h"
+#include "content/browser/tab_contents/tab_contents.h"
+#include "content/browser/tab_contents/tab_contents_delegate.h"
+#include "content/common/notification_source.h"
 
 // TabDownloadState ------------------------------------------------------------
 
@@ -71,6 +71,7 @@ void DownloadRequestLimiter::TabDownloadState::PromptUserForDownload(
     NotifyCallbacks(DownloadRequestLimiter::delegate_->ShouldAllowDownload());
   } else {
     infobar_ = new DownloadRequestInfoBarDelegate(tab, this);
+    tab->AddInfoBar(infobar_);
   }
 }
 
@@ -189,6 +190,7 @@ DownloadRequestLimiter::DownloadStatus
 
 void DownloadRequestLimiter::CanDownloadOnIOThread(int render_process_host_id,
                                                    int render_view_id,
+                                                   int request_id,
                                                    Callback* callback) {
   // This is invoked on the IO thread. Schedule the task to run on the UI
   // thread so that we can query UI state.
@@ -196,7 +198,8 @@ void DownloadRequestLimiter::CanDownloadOnIOThread(int render_process_host_id,
   BrowserThread::PostTask(
       BrowserThread::UI, FROM_HERE,
       NewRunnableMethod(this, &DownloadRequestLimiter::CanDownload,
-                        render_process_host_id, render_view_id, callback));
+                        render_process_host_id, render_view_id, request_id,
+                        callback));
 }
 
 void DownloadRequestLimiter::OnUserGesture(TabContents* tab) {
@@ -232,6 +235,7 @@ DownloadRequestLimiter::TabDownloadState* DownloadRequestLimiter::
 
 void DownloadRequestLimiter::CanDownload(int render_process_host_id,
                                          int render_view_id,
+                                         int request_id,
                                          Callback* callback) {
   DCHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
 
@@ -242,16 +246,17 @@ void DownloadRequestLimiter::CanDownload(int render_process_host_id,
     ScheduleNotification(callback, false);
     return;
   }
-  CanDownloadImpl(originating_tab, callback);
+  CanDownloadImpl(originating_tab, request_id, callback);
 }
 
 void DownloadRequestLimiter::CanDownloadImpl(
     TabContents* originating_tab,
+    int request_id,
     Callback* callback) {
   // FYI: Chrome Frame overrides CanDownload in ExternalTabContainer in order
   // to cancel the download operation in chrome and let the host browser
   // take care of it.
-  if (!originating_tab->CanDownload(callback->GetRequestId())) {
+  if (!originating_tab->CanDownload(request_id)) {
     ScheduleNotification(callback, false);
     return;
   }

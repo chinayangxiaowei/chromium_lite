@@ -1,4 +1,4 @@
-// Copyright (c) 2008 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,11 +6,11 @@
 
 #import <Cocoa/Cocoa.h>
 
-#include "base/scoped_ptr.h"
+#include "base/memory/scoped_ptr.h"
 #include "base/string_util.h"
-#include "gfx/rect.h"
 #include "third_party/WebKit/Source/WebKit/chromium/public/WebFrame.h"
 #include "third_party/WebKit/Source/WebKit/chromium/public/WebView.h"
+#include "ui/gfx/rect.h"
 #include "webkit/tools/test_shell/test_shell.h"
 #include "webkit/tools/test_shell/webwidget_host.h"
 

@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,27 +6,29 @@
 #include "chrome/browser/printing/print_dialog_cloud_internal.h"
 
 #include "base/base64.h"
+#include "base/command_line.h"
 #include "base/file_util.h"
 #include "base/json/json_reader.h"
 #include "base/values.h"
-#include "chrome/browser/browser_list.h"
-#include "chrome/browser/browser_thread.h"
 #include "chrome/browser/debugger/devtools_manager.h"
-#include "chrome/browser/dom_ui/dom_ui.h"
-#include "chrome/browser/dom_ui/dom_ui_util.h"
 #include "chrome/browser/prefs/pref_service.h"
 #include "chrome/browser/printing/cloud_print/cloud_print_url.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/renderer_host/render_view_host.h"
-#include "chrome/browser/tab_contents/tab_contents.h"
-#include "chrome/browser/tab_contents/tab_contents_view.h"
-#include "chrome/common/notification_observer.h"
-#include "chrome/common/notification_registrar.h"
-#include "chrome/common/notification_source.h"
-#include "chrome/common/notification_type.h"
+#include "chrome/browser/profiles/profile_manager.h"
+#include "chrome/browser/ui/browser_dialogs.h"
+#include "chrome/browser/ui/browser_list.h"
+#include "chrome/common/chrome_switches.h"
 #include "chrome/common/pref_names.h"
-#include "chrome/common/render_messages_params.h"
+#include "chrome/common/print_messages.h"
 #include "chrome/common/url_constants.h"
+#include "content/browser/browser_thread.h"
+#include "content/browser/renderer_host/render_view_host.h"
+#include "content/browser/tab_contents/tab_contents.h"
+#include "content/browser/tab_contents/tab_contents_view.h"
+#include "content/browser/webui/web_ui.h"
+#include "content/common/notification_registrar.h"
+#include "content/common/notification_source.h"
+#include "content/common/notification_type.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "webkit/glue/webpreferences.h"
 
@@ -36,14 +38,14 @@
 // This means hosting a dialog containing HTML/JavaScript and using
 // the published cloud print user interface integration APIs to get
 // page setup settings from the dialog contents and provide the
-// generated print PDF to the dialog contents for uploading to the
+// generated print data to the dialog contents for uploading to the
 // cloud print service.
 
 // Currently, the flow between these classes is as follows:
 
-// PrintDialogCloud::CreatePrintDialogForPdf is called from
+// PrintDialogCloud::CreatePrintDialogForFile is called from
 // resource_message_filter_gtk.cc once the renderer has informed the
-// renderer host that PDF generation into the renderer host provided
+// renderer host that print data generation into the renderer host provided
 // temp file has been completed.  That call is on the FILE thread.
 // That, in turn, hops over to the UI thread to create an instance of
 // PrintDialogCloud.
@@ -52,22 +54,22 @@
 // CloudPrintHtmlDialogDelegate and asks the current active browser to
 // show an HTML dialog using that class as the delegate. That class
 // hands in the kCloudPrintResourcesURL as the URL to visit.  That is
-// recognized by the GetDOMUIFactoryFunction as a signal to create an
+// recognized by the GetWebUIFactoryFunction as a signal to create an
 // ExternalHtmlDialogUI.
 
 // CloudPrintHtmlDialogDelegate also temporarily owns a
 // CloudPrintFlowHandler, a class which is responsible for the actual
-// interactions with the dialog contents, including handing in the PDF
+// interactions with the dialog contents, including handing in the
 // print data and getting any page setup parameters that the dialog
 // contents provides.  As part of bringing up the dialog,
 // HtmlDialogUI::RenderViewCreated is called (an override of
-// DOMUI::RenderViewCreated).  That routine, in turn, calls the
-// delegate's GetDOMMessageHandlers routine, at which point the
+// WebUI::RenderViewCreated).  That routine, in turn, calls the
+// delegate's GetWebUIMessageHandlers routine, at which point the
 // ownership of the CloudPrintFlowHandler is handed over.  A pointer
 // to the flow handler is kept to facilitate communication back and
 // forth between the two classes.
 
-// The DOMUI continues dialog bring-up, calling
+// The WebUI continues dialog bring-up, calling
 // CloudPrintFlowHandler::RegisterMessages.  This is where the
 // additional object model capabilities are registered for the dialog
 // contents to use.  It is also at this time that capabilities for the
@@ -75,11 +77,11 @@
 // the window.  In addition, the pending URL is redirected to the
 // actual cloud print service URL.  The flow controller also registers
 // for notification of when the dialog contents finish loading, which
-// is currently used to send the PDF data to the dialog contents.
+// is currently used to send the data to the dialog contents.
 
-// In order to send the PDF data to the dialog contents, the flow
+// In order to send the data to the dialog contents, the flow
 // handler uses a CloudPrintDataSender.  It creates one, letting it
-// know the name of the temporary file containing the PDF data, and
+// know the name of the temporary file containing the data, and
 // posts the task of reading the file
 // (CloudPrintDataSender::ReadPrintDataFile) to the file thread.  That
 // routine reads in the file, and then hops over to the IO thread to
@@ -92,15 +94,15 @@
 
 // TODO(scottbyer):
 // http://code.google.com/p/chromium/issues/detail?id=44093 The
-// high-level flow (where the PDF data is generated before even
+// high-level flow (where the data is generated before even
 // bringing up the dialog) isn't what we want.
 
 namespace internal_cloud_print_helpers {
 
-bool GetRealOrInt(const DictionaryValue& dictionary,
-                  const std::string& path,
-                  double* out_value) {
-  if (!dictionary.GetReal(path, out_value)) {
+bool GetDoubleOrInt(const DictionaryValue& dictionary,
+                    const std::string& path,
+                    double* out_value) {
+  if (!dictionary.GetDouble(path, out_value)) {
     int int_value = 0;
     if (!dictionary.GetInteger(path, &int_value))
       return false;
@@ -112,7 +114,7 @@ bool GetRealOrInt(const DictionaryValue& dictionary,
 // From the JSON parsed value, get the entries for the page setup
 // parameters.
 bool GetPageSetupParameters(const std::string& json,
-                            ViewMsg_Print_Params& parameters) {
+                            PrintMsg_Print_Params& parameters) {
   scoped_ptr<Value> parsed_value(base::JSONReader::Read(json, false));
   DLOG_IF(ERROR, (!parsed_value.get() ||
                   !parsed_value->IsType(Value::TYPE_DICTIONARY)))
@@ -122,26 +124,26 @@ bool GetPageSetupParameters(const std::string& json,
 
   bool result = true;
   DictionaryValue* params = static_cast<DictionaryValue*>(parsed_value.get());
-  result &= GetRealOrInt(*params, "dpi", &parameters.dpi);
-  result &= GetRealOrInt(*params, "min_shrink", &parameters.min_shrink);
-  result &= GetRealOrInt(*params, "max_shrink", &parameters.max_shrink);
+  result &= GetDoubleOrInt(*params, "dpi", &parameters.dpi);
+  result &= GetDoubleOrInt(*params, "min_shrink", &parameters.min_shrink);
+  result &= GetDoubleOrInt(*params, "max_shrink", &parameters.max_shrink);
   result &= params->GetBoolean("selection_only", &parameters.selection_only);
   return result;
 }
 
 void CloudPrintDataSenderHelper::CallJavascriptFunction(
     const std::wstring& function_name) {
-  dom_ui_->CallJavascriptFunction(function_name);
+  web_ui_->CallJavascriptFunction(WideToASCII(function_name));
 }
 
 void CloudPrintDataSenderHelper::CallJavascriptFunction(
     const std::wstring& function_name, const Value& arg) {
-  dom_ui_->CallJavascriptFunction(function_name, arg);
+  web_ui_->CallJavascriptFunction(WideToASCII(function_name), arg);
 }
 
 void CloudPrintDataSenderHelper::CallJavascriptFunction(
     const std::wstring& function_name, const Value& arg1, const Value& arg2) {
-  dom_ui_->CallJavascriptFunction(function_name, arg1, arg2);
+  web_ui_->CallJavascriptFunction(WideToASCII(function_name), arg1, arg2);
 }
 
 // Clears out the pointer we're using to communicate.  Either routine is
@@ -155,32 +157,36 @@ void CloudPrintDataSender::CancelPrintDataFile() {
 }
 
 CloudPrintDataSender::CloudPrintDataSender(CloudPrintDataSenderHelper* helper,
-                                           const string16& print_job_title)
+                                           const string16& print_job_title,
+                                           const std::string& file_type)
     : helper_(helper),
-      print_job_title_(print_job_title) {
+      print_job_title_(print_job_title),
+      file_type_(file_type) {
 }
 
 CloudPrintDataSender::~CloudPrintDataSender() {}
 
-// Grab the raw PDF file contents and massage them into shape for
+// Grab the raw file contents and massage them into shape for
 // sending to the dialog contents (and up to the cloud print server)
 // by encoding it and prefixing it with the appropriate mime type.
 // Once that is done, kick off the next part of the task on the IO
 // thread.
-void CloudPrintDataSender::ReadPrintDataFile(const FilePath& path_to_pdf) {
+void CloudPrintDataSender::ReadPrintDataFile(const FilePath& path_to_file) {
   DCHECK(BrowserThread::CurrentlyOn(BrowserThread::FILE));
   int64 file_size = 0;
-  if (file_util::GetFileSize(path_to_pdf, &file_size) && file_size != 0) {
+  if (file_util::GetFileSize(path_to_file, &file_size) && file_size != 0) {
     std::string file_data;
     if (file_size < kuint32max) {
       file_data.reserve(static_cast<unsigned int>(file_size));
     } else {
       DLOG(WARNING) << " print data file too large to reserve space";
     }
-    if (helper_ && file_util::ReadFileToString(path_to_pdf, &file_data)) {
+    if (helper_ && file_util::ReadFileToString(path_to_file, &file_data)) {
       std::string base64_data;
       base::Base64Encode(file_data, &base64_data);
-      std::string header("data:application/pdf;base64,");
+      std::string header("data:");
+      header.append(file_type_);
+      header.append(";base64,");
       base64_data.insert(0, header);
       scoped_ptr<StringValue> new_data(new StringValue(base64_data));
       print_data_.swap(new_data);
@@ -215,10 +221,12 @@ void CloudPrintDataSender::SendPrintDataFile() {
 }
 
 
-CloudPrintFlowHandler::CloudPrintFlowHandler(const FilePath& path_to_pdf,
-                                             const string16& print_job_title)
-    : path_to_pdf_(path_to_pdf),
-      print_job_title_(print_job_title) {
+CloudPrintFlowHandler::CloudPrintFlowHandler(const FilePath& path_to_file,
+                                             const string16& print_job_title,
+                                             const std::string& file_type)
+    : path_to_file_(path_to_file),
+      print_job_title_(print_job_title),
+      file_type_(file_type) {
 }
 
 CloudPrintFlowHandler::~CloudPrintFlowHandler() {
@@ -229,7 +237,7 @@ CloudPrintFlowHandler::~CloudPrintFlowHandler() {
 
 void CloudPrintFlowHandler::SetDialogDelegate(
     CloudPrintHtmlDialogDelegate* delegate) {
-  // Even if setting a new dom_ui, it means any previous task needs
+  // Even if setting a new WebUI, it means any previous task needs
   // to be cancelled, it's now invalid.
   DCHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
   CancelAnyRunningTask();
@@ -248,28 +256,28 @@ void CloudPrintFlowHandler::CancelAnyRunningTask() {
 }
 
 void CloudPrintFlowHandler::RegisterMessages() {
-  if (!dom_ui_)
+  if (!web_ui_)
     return;
 
   // TODO(scottbyer) - This is where we will register messages for the
   // UI JS to use.  Needed: Call to update page setup parameters.
-  dom_ui_->RegisterMessageCallback(
+  web_ui_->RegisterMessageCallback(
       "ShowDebugger",
       NewCallback(this, &CloudPrintFlowHandler::HandleShowDebugger));
-  dom_ui_->RegisterMessageCallback(
+  web_ui_->RegisterMessageCallback(
       "SendPrintData",
       NewCallback(this, &CloudPrintFlowHandler::HandleSendPrintData));
-  dom_ui_->RegisterMessageCallback(
+  web_ui_->RegisterMessageCallback(
       "SetPageParameters",
       NewCallback(this, &CloudPrintFlowHandler::HandleSetPageParameters));
 
-  if (dom_ui_->tab_contents()) {
+  if (web_ui_->tab_contents()) {
     // Also, take the opportunity to set some (minimal) additional
     // script permissions required for the web UI.
 
     // TODO(scottbyer): learn how to make sure we're talking to the
     // right web site first.
-    RenderViewHost* rvh = dom_ui_->tab_contents()->render_view_host();
+    RenderViewHost* rvh = web_ui_->tab_contents()->render_view_host();
     if (rvh && rvh->delegate()) {
       WebPreferences webkit_prefs = rvh->delegate()->GetWebkitPrefs();
       webkit_prefs.allow_scripts_to_close_windows = true;
@@ -279,11 +287,11 @@ void CloudPrintFlowHandler::RegisterMessages() {
     // Register for appropriate notifications, and re-direct the URL
     // to the real server URL, now that we've gotten an HTML dialog
     // going.
-    NavigationController* controller = &dom_ui_->tab_contents()->controller();
+    NavigationController* controller = &web_ui_->tab_contents()->controller();
     NavigationEntry* pending_entry = controller->pending_entry();
     if (pending_entry)
       pending_entry->set_url(CloudPrintURL(
-          dom_ui_->GetProfile()).GetCloudPrintServiceDialogURL());
+          web_ui_->GetProfile()).GetCloudPrintServiceDialogURL());
     registrar_.Add(this, NotificationType::LOAD_STOP,
                    Source<NavigationController>(controller));
   }
@@ -308,8 +316,8 @@ void CloudPrintFlowHandler::HandleShowDebugger(const ListValue* args) {
 }
 
 void CloudPrintFlowHandler::ShowDebugger() {
-  if (dom_ui_) {
-    RenderViewHost* rvh = dom_ui_->tab_contents()->render_view_host();
+  if (web_ui_) {
+    RenderViewHost* rvh = web_ui_->tab_contents()->render_view_host();
     if (rvh)
       DevToolsManager::GetInstance()->OpenDevToolsWindow(rvh);
   }
@@ -317,9 +325,11 @@ void CloudPrintFlowHandler::ShowDebugger() {
 
 scoped_refptr<CloudPrintDataSender>
 CloudPrintFlowHandler::CreateCloudPrintDataSender() {
-  DCHECK(dom_ui_);
-  print_data_helper_.reset(new CloudPrintDataSenderHelper(dom_ui_));
-  return new CloudPrintDataSender(print_data_helper_.get(), print_job_title_);
+  DCHECK(web_ui_);
+  print_data_helper_.reset(new CloudPrintDataSenderHelper(web_ui_));
+  return new CloudPrintDataSender(print_data_helper_.get(),
+                                  print_job_title_,
+                                  file_type_);
 }
 
 void CloudPrintFlowHandler::HandleSendPrintData(const ListValue* args) {
@@ -329,20 +339,23 @@ void CloudPrintFlowHandler::HandleSendPrintData(const ListValue* args) {
   // setup parameters becomes asynchronous and may be set while some
   // data is in flight).  Then we can clear out the print data.
   CancelAnyRunningTask();
-  if (dom_ui_) {
+  if (web_ui_) {
     print_data_sender_ = CreateCloudPrintDataSender();
     BrowserThread::PostTask(BrowserThread::FILE, FROM_HERE,
                             NewRunnableMethod(
                                 print_data_sender_.get(),
                                 &CloudPrintDataSender::ReadPrintDataFile,
-                                path_to_pdf_));
+                                path_to_file_));
   }
 }
 
 void CloudPrintFlowHandler::HandleSetPageParameters(const ListValue* args) {
-  std::string json(dom_ui_util::GetJsonResponseFromFirstArgumentInList(args));
-  if (json.empty())
+  std::string json;
+  args->GetString(0, &json);
+  if (json.empty()) {
+    NOTREACHED() << "Empty json string";
     return;
+  }
 
   // These are backstop default values - 72 dpi to match the screen,
   // 8.5x11 inch paper with margins subtracted (1/4 inch top, left,
@@ -358,7 +371,7 @@ void CloudPrintFlowHandler::HandleSetPageParameters(const ListValue* args) {
   const double kMinPageShrink = 1.25;
   const double kMaxPageShrink = 2.0;
 
-  ViewMsg_Print_Params default_settings;
+  PrintMsg_Print_Params default_settings;
   default_settings.printable_size = gfx::Size(kWidth, kHeight);
   default_settings.dpi = kDPI;
   default_settings.min_shrink = kMinPageShrink;
@@ -374,51 +387,62 @@ void CloudPrintFlowHandler::HandleSetPageParameters(const ListValue* args) {
 
   // TODO(scottbyer) - Here is where we would kick the originating
   // renderer thread with these new parameters in order to get it to
-  // re-generate the PDF and hand it back to us.  window.print() is
+  // re-generate the PDF data and hand it back to us.  window.print() is
   // currently synchronous, so there's a lot of work to do to get to
   // that point.
 }
 
 void CloudPrintFlowHandler::StoreDialogClientSize() const {
-  if (dom_ui_ && dom_ui_->tab_contents() && dom_ui_->tab_contents()->view()) {
-    gfx::Size size = dom_ui_->tab_contents()->view()->GetContainerSize();
-    dom_ui_->GetProfile()->GetPrefs()->SetInteger(
+  if (web_ui_ && web_ui_->tab_contents() && web_ui_->tab_contents()->view()) {
+    gfx::Size size = web_ui_->tab_contents()->view()->GetContainerSize();
+    web_ui_->GetProfile()->GetPrefs()->SetInteger(
         prefs::kCloudPrintDialogWidth, size.width());
-    dom_ui_->GetProfile()->GetPrefs()->SetInteger(
+    web_ui_->GetProfile()->GetPrefs()->SetInteger(
         prefs::kCloudPrintDialogHeight, size.height());
   }
 }
 
 CloudPrintHtmlDialogDelegate::CloudPrintHtmlDialogDelegate(
-    const FilePath& path_to_pdf,
+    const FilePath& path_to_file,
     int width, int height,
     const std::string& json_arguments,
-    const string16& print_job_title)
-    : flow_handler_(new CloudPrintFlowHandler(path_to_pdf, print_job_title)),
+    const string16& print_job_title,
+    const std::string& file_type,
+    bool modal)
+    : flow_handler_(new CloudPrintFlowHandler(path_to_file,
+                                              print_job_title,
+                                              file_type)),
+      modal_(modal),
       owns_flow_handler_(true) {
   Init(width, height, json_arguments);
 }
 
+// For unit testing.
 CloudPrintHtmlDialogDelegate::CloudPrintHtmlDialogDelegate(
     CloudPrintFlowHandler* flow_handler,
     int width, int height,
-    const std::string& json_arguments)
+    const std::string& json_arguments,
+    bool modal)
     : flow_handler_(flow_handler),
+      modal_(modal),
       owns_flow_handler_(true) {
   Init(width, height, json_arguments);
 }
 
-void CloudPrintHtmlDialogDelegate::Init(
-    int width, int height, const std::string& json_arguments) {
+void CloudPrintHtmlDialogDelegate::Init(int width, int height,
+                                        const std::string& json_arguments) {
   // This information is needed to show the dialog HTML content.
   DCHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
-  std::string cloud_print_url(chrome::kCloudPrintResourcesURL);
-  params_.url = GURL(cloud_print_url);
+  params_.url = GURL(chrome::kCloudPrintResourcesURL);
   params_.height = height;
   params_.width = width;
   params_.json_input = json_arguments;
 
   flow_handler_->SetDialogDelegate(this);
+  // If we're not modal we can show the dialog with no browser.
+  // We need this to keep Chrome alive while our dialog is up.
+  if (!modal_)
+    BrowserList::StartKeepAlive();
 }
 
 CloudPrintHtmlDialogDelegate::~CloudPrintHtmlDialogDelegate() {
@@ -432,7 +456,7 @@ CloudPrintHtmlDialogDelegate::~CloudPrintHtmlDialogDelegate() {
 }
 
 bool CloudPrintHtmlDialogDelegate::IsDialogModal() const {
-  return true;
+    return modal_;
 }
 
 std::wstring CloudPrintHtmlDialogDelegate::GetDialogTitle() const {
@@ -443,8 +467,8 @@ GURL CloudPrintHtmlDialogDelegate::GetDialogContentURL() const {
   return params_.url;
 }
 
-void CloudPrintHtmlDialogDelegate::GetDOMMessageHandlers(
-    std::vector<DOMMessageHandler*>* handlers) const {
+void CloudPrintHtmlDialogDelegate::GetWebUIMessageHandlers(
+    std::vector<WebUIMessageHandler*>* handlers) const {
   handlers->push_back(flow_handler_);
   // We don't own flow_handler_ anymore, but it sticks around until at
   // least right after OnDialogClosed() is called (and this object is
@@ -465,6 +489,10 @@ void CloudPrintHtmlDialogDelegate::OnDialogClosed(
     const std::string& json_retval) {
   // Get the final dialog size and store it.
   flow_handler_->StoreDialogClientSize();
+  // If we're modal we can show the dialog with no browser.
+  // End the keep-alive so that Chrome can exit.
+  if (!modal_)
+    BrowserList::EndKeepAlive();
   delete this;
 }
 
@@ -478,42 +506,33 @@ bool CloudPrintHtmlDialogDelegate::ShouldShowDialogTitle() const {
   return false;
 }
 
-}  // end of namespace internal_cloud_print_helpers
-
-// static, called on the IO thread.  This is the main entry point into
-// creating the dialog.
-
-// TODO(scottbyer): The signature here will need to change as the
-// workflow through the printing code changes to allow for dynamically
-// changing page setup parameters while the dialog is active.
-void PrintDialogCloud::CreatePrintDialogForPdf(const FilePath& path_to_pdf) {
-  DCHECK(BrowserThread::CurrentlyOn(BrowserThread::FILE));
-
-  BrowserThread::PostTask(
-      BrowserThread::UI, FROM_HERE,
-      NewRunnableFunction(&PrintDialogCloud::CreateDialogImpl, path_to_pdf));
+bool CloudPrintHtmlDialogDelegate::HandleContextMenu(
+    const ContextMenuParams& params) {
+  return true;
 }
 
-// static, called from the UI thread.
-void PrintDialogCloud::CreateDialogImpl(const FilePath& path_to_pdf) {
+// Called from the UI thread, starts up the dialog.
+void CreateDialogImpl(const FilePath& path_to_file,
+                      const string16& print_job_title,
+                      const std::string& file_type,
+                      bool modal) {
   DCHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
-  new PrintDialogCloud(path_to_pdf);
-}
-
-// Initialize the print dialog.  Called on the UI thread.
-PrintDialogCloud::PrintDialogCloud(const FilePath& path_to_pdf)
-    : browser_(BrowserList::GetLastActive()) {
-
-  // TODO(scottbyer): Verify GAIA login valid, execute GAIA login if not (should
-  // be distilled out of bookmark sync.)
-  string16 print_job_title;
-  if (browser_ && browser_->GetSelectedTabContents())
-    print_job_title = browser_->GetSelectedTabContents()->GetTitle();
+  Browser* browser = BrowserList::GetLastActive();
 
   const int kDefaultWidth = 497;
   const int kDefaultHeight = 332;
-
-  PrefService* pref_service = browser_->GetProfile()->GetPrefs();
+  string16 job_title = print_job_title;
+  Profile* profile = NULL;
+  if (modal) {
+    DCHECK(browser);
+    if (job_title.empty() && browser->GetSelectedTabContents())
+      job_title = browser->GetSelectedTabContents()->GetTitle();
+    profile = browser->GetProfile();
+  } else {
+    profile = ProfileManager::GetDefaultProfile();
+  }
+  DCHECK(profile);
+  PrefService* pref_service = profile->GetPrefs();
   DCHECK(pref_service);
   if (!pref_service->FindPreference(prefs::kCloudPrintDialogWidth)) {
     pref_service->RegisterIntegerPref(prefs::kCloudPrintDialogWidth,
@@ -526,11 +545,76 @@ PrintDialogCloud::PrintDialogCloud(const FilePath& path_to_pdf)
 
   int width = pref_service->GetInteger(prefs::kCloudPrintDialogWidth);
   int height = pref_service->GetInteger(prefs::kCloudPrintDialogHeight);
+
   HtmlDialogUIDelegate* dialog_delegate =
       new internal_cloud_print_helpers::CloudPrintHtmlDialogDelegate(
-          path_to_pdf, width, height, std::string(), print_job_title);
-  browser_->BrowserShowHtmlDialog(dialog_delegate, NULL);
+          path_to_file, width, height, std::string(), job_title, file_type,
+          modal);
+  if (modal) {
+    DCHECK(browser);
+    browser->BrowserShowHtmlDialog(dialog_delegate, NULL);
+  } else {
+    browser::ShowHtmlDialog(NULL, profile, dialog_delegate);
+  }
 }
 
-PrintDialogCloud::~PrintDialogCloud() {
+}  // namespace internal_cloud_print_helpers
+
+namespace print_dialog_cloud {
+
+// Called on the FILE or UI thread.  This is the main entry point into creating
+// the dialog.
+
+// TODO(scottbyer): The signature here will need to change as the
+// workflow through the printing code changes to allow for dynamically
+// changing page setup parameters while the dialog is active.
+void CreatePrintDialogForFile(const FilePath& path_to_file,
+                              const string16& print_job_title,
+                              const std::string& file_type,
+                              bool modal) {
+  DCHECK(BrowserThread::CurrentlyOn(BrowserThread::FILE) ||
+         BrowserThread::CurrentlyOn(BrowserThread::UI));
+
+  BrowserThread::PostTask(
+      BrowserThread::UI, FROM_HERE,
+      NewRunnableFunction(&internal_cloud_print_helpers::CreateDialogImpl,
+                          path_to_file,
+                          print_job_title,
+                          file_type,
+                          modal));
 }
+
+bool CreatePrintDialogFromCommandLine(const CommandLine& command_line) {
+  if (!command_line.GetSwitchValuePath(switches::kCloudPrintFile).empty()) {
+    FilePath cloud_print_file;
+    cloud_print_file =
+        command_line.GetSwitchValuePath(switches::kCloudPrintFile);
+    if (!cloud_print_file.empty()) {
+      string16 print_job_title;
+      if (command_line.HasSwitch(switches::kCloudPrintJobTitle)) {
+#ifdef OS_WIN
+        CommandLine::StringType native_job_title;
+        native_job_title = command_line.GetSwitchValueNative(
+            switches::kCloudPrintJobTitle);
+        print_job_title = string16(native_job_title);
+#elif defined(OS_POSIX)
+        // TODO(abodenha@chromium.org) Implement this for OS_POSIX
+        // Command line string types are different
+#endif
+      }
+      std::string file_type = "application/pdf";
+      if (command_line.HasSwitch(switches::kCloudPrintFileType)) {
+        file_type = command_line.GetSwitchValueASCII(
+            switches::kCloudPrintFileType);
+      }
+      print_dialog_cloud::CreatePrintDialogForFile(cloud_print_file,
+                                                   print_job_title,
+                                                   file_type,
+                                                   false);
+      return true;
+    }
+  }
+  return false;
+}
+
+}  // end namespace

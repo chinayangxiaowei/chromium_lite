@@ -15,9 +15,8 @@
 #include "base/file_path.h"
 #include "base/logging.h"
 
-GoogleChromeDistribution::GoogleChromeDistribution(
-    const installer::MasterPreferences& prefs)
-        : BrowserDistribution(prefs) {
+GoogleChromeDistribution::GoogleChromeDistribution()
+    : BrowserDistribution(CHROME_BROWSER) {
 }
 
 void GoogleChromeDistribution::DoPostUninstallOperations(
@@ -102,19 +101,28 @@ std::wstring GoogleChromeDistribution::GetVersionKey() {
 }
 
 void GoogleChromeDistribution::UpdateInstallStatus(bool system_install,
-    bool incremental_install, bool multi_install,
+    installer::ArchiveType archive_type,
     installer::InstallStatus install_status) {
   NOTREACHED();
 }
 
+bool GoogleChromeDistribution::GetExperimentDetails(
+    UserExperiment* experiment, int flavor) {
+  NOTREACHED();
+  return false;
+}
+
 void GoogleChromeDistribution::LaunchUserExperiment(
-    installer::InstallStatus status, const Version& version,
-    const installer::Product& installation, bool system_level) {
+    const FilePath& setup_path, installer::InstallStatus status,
+    const Version& version, const installer::Product& installation,
+    bool system_level) {
   NOTREACHED();
 }
 
 void GoogleChromeDistribution::InactiveUserToastExperiment(int flavor,
-    const installer::Product& installation) {
+    const std::wstring& experiment_group,
+    const installer::Product& installation,
+    const FilePath& application_path) {
   NOTREACHED();
 }
 
@@ -132,13 +140,6 @@ bool GoogleChromeDistribution::ExtractUninstallMetrics(
 
 bool GoogleChromeDistribution::BuildUninstallMetricsString(
     DictionaryValue* uninstall_metrics_dict, std::wstring* metrics) {
-  NOTREACHED();
-  return false;
-}
-
-bool GoogleChromeDistribution::SetChannelFlags(
-    bool set,
-    installer::ChannelInfo* channel_info) {
   NOTREACHED();
   return false;
 }

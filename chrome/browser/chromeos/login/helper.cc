@@ -1,15 +1,20 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/chromeos/login/helper.h"
 
+#include "base/file_util.h"
+#include "chrome/browser/chromeos/cros/network_library.h"
+#include "chrome/browser/chromeos/system_access.h"
 #include "chrome/browser/google/google_util.h"
-#include "gfx/canvas_skia.h"
 #include "googleurl/src/gurl.h"
+#include "grit/generated_resources.h"
 #include "grit/theme_resources.h"
 #include "third_party/skia/include/effects/SkGradientShader.h"
+#include "ui/base/l10n/l10n_util.h"
 #include "ui/base/resource/resource_bundle.h"
+#include "ui/gfx/canvas_skia.h"
 #include "views/controls/button/menu_button.h"
 #include "views/controls/button/native_button.h"
 #include "views/controls/label.h"
@@ -34,7 +39,7 @@ const SkColor kBackgroundCenterColor = SkColorSetRGB(41, 50, 67);
 const SkColor kBackgroundEdgeColor = SK_ColorBLACK;
 
 const char kAccountRecoveryHelpUrl[] =
-    "http://www.google.com/support/accounts/bin/answer.py?answer=48598";
+    "https://www.google.com/support/accounts/bin/answer.py?answer=48598";
 
 class BackgroundPainter : public views::Painter {
  public:
@@ -99,15 +104,17 @@ void ThrobberHostView::StartThrobber() {
   throbber->set_stop_delay_ms(0);
   gfx::Rect throbber_bounds = CalculateThrobberBounds(throbber);
 
-  views::WidgetGtk* widget_gtk =
-      new views::WidgetGtk(views::WidgetGtk::TYPE_WINDOW);
-  widget_gtk->make_transient_to_parent();
-  widget_gtk->MakeTransparent();
-  throbber_widget_ = widget_gtk;
+  views::Widget::CreateParams params(views::Widget::CreateParams::TYPE_POPUP);
+  params.transparent = true;
+  throbber_widget_ = views::Widget::CreateWidget(params);
+  static_cast<views::WidgetGtk*>(throbber_widget_)->make_transient_to_parent();
 
   throbber_bounds.Offset(host_view_->GetScreenBounds().origin());
   throbber_widget_->Init(host_gtk_window, throbber_bounds);
   throbber_widget_->SetContentsView(throbber);
+  // This keeps the window from flashing at startup.
+  gdk_window_set_back_pixmap(
+      throbber_widget_->GetNativeView()->window, NULL, false);
   throbber_widget_->Show();
   // WM can ignore bounds before widget is shown.
   throbber_widget_->SetBounds(throbber_bounds);
@@ -179,8 +186,35 @@ void CorrectTextfieldFontSize(views::Textfield* textfield) {
     textfield->SetFont(textfield->font().DeriveFont(kFontSizeCorrectionDelta));
 }
 
+void SetAndCorrectTextfieldFont(views::Textfield* textfield,
+                                const gfx::Font& font) {
+  if (textfield)
+    textfield->SetFont(font.DeriveFont(kFontSizeCorrectionDelta));
+}
+
 GURL GetAccountRecoveryHelpUrl() {
   return google_util::AppendGoogleLocaleParam(GURL(kAccountRecoveryHelpUrl));
+}
+
+string16 GetCurrentNetworkName(NetworkLibrary* network_library) {
+  if (!network_library)
+    return string16();
+
+  if (network_library->ethernet_connected()) {
+    return l10n_util::GetStringUTF16(IDS_STATUSBAR_NETWORK_DEVICE_ETHERNET);
+  } else if (network_library->wifi_connected()) {
+    return UTF8ToUTF16(network_library->wifi_network()->name());
+  } else if (network_library->cellular_connected()) {
+    return UTF8ToUTF16(network_library->cellular_network()->name());
+  } else if (network_library->ethernet_connecting()) {
+    return l10n_util::GetStringUTF16(IDS_STATUSBAR_NETWORK_DEVICE_ETHERNET);
+  } else if (network_library->wifi_connecting()) {
+    return UTF8ToUTF16(network_library->wifi_network()->name());
+  } else if (network_library->cellular_connecting()) {
+    return UTF8ToUTF16(network_library->cellular_network()->name());
+  } else {
+    return string16();
+  }
 }
 
 namespace login {

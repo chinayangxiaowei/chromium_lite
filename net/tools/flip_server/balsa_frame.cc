@@ -1,11 +1,13 @@
-// Copyright (c) 2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "net/tools/flip_server/balsa_frame.h"
 
 #include <assert.h>
+#if __SSE2__
 #include <emmintrin.h>
+#endif  // __SSE2__
 #include <strings.h>
 
 #include <limits>
@@ -32,6 +34,29 @@ static const char kContentLength[] = "content-length";
 static const size_t kContentLengthSize = sizeof(kContentLength) - 1;
 static const char kTransferEncoding[] = "transfer-encoding";
 static const size_t kTransferEncodingSize = sizeof(kTransferEncoding) - 1;
+
+BalsaFrame::BalsaFrame()
+    : last_char_was_slash_r_(false),
+      saw_non_newline_char_(false),
+      start_was_space_(true),
+      chunk_length_character_extracted_(false),
+      is_request_(true),
+      request_was_head_(false),
+      max_header_length_(16 * 1024),
+      max_request_uri_length_(2048),
+      visitor_(&do_nothing_visitor_),
+      chunk_length_remaining_(0),
+      content_length_remaining_(0),
+      last_slash_n_loc_(NULL),
+      last_recorded_slash_n_loc_(NULL),
+      last_slash_n_idx_(0),
+      term_chars_(0),
+      parse_state_(BalsaFrameEnums::READING_HEADER_AND_FIRSTLINE),
+      last_error_(BalsaFrameEnums::NO_ERROR),
+      headers_(NULL) {
+}
+
+BalsaFrame::~BalsaFrame() {}
 
 void BalsaFrame::Reset() {
   last_char_was_slash_r_ = false;
@@ -1259,7 +1284,7 @@ size_t BalsaFrame::ProcessInput(const char* input, size_t size) {
     // header_length_after equals max_header_length_ and we are still in the
     // parse_state_  BalsaFrameEnums::READING_HEADER_AND_FIRSTLINE we know for
     // sure that the headers limit will be crossed later on
-    if ((parse_state_ == BalsaFrameEnums::READING_HEADER_AND_FIRSTLINE)) {
+    if (parse_state_ == BalsaFrameEnums::READING_HEADER_AND_FIRSTLINE) {
       // Note that headers_ is valid only if we are still reading headers.
       const size_t header_length_after =
           headers_->GetReadableBytesFromHeaderStream();
@@ -1570,4 +1595,3 @@ const uint32 BalsaFrame::kValidTerm2;
 const uint32 BalsaFrame::kValidTerm2Mask;
 
 }  // namespace net
-

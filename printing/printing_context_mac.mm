@@ -1,4 +1,4 @@
-// Copyright (c) 2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,7 +10,12 @@
 #include "base/logging.h"
 #include "base/mac/scoped_cftyperef.h"
 #include "base/sys_string_conversions.h"
+#include "base/values.h"
+#include "printing/print_job_constants.h"
 #include "printing/print_settings_initializer_mac.h"
+
+static const CFStringRef kColorModel = CFSTR("ColorModel");
+static const CFStringRef kGrayColor = CFSTR("Gray");
 
 namespace printing {
 
@@ -21,7 +26,6 @@ PrintingContext* PrintingContext::Create(const std::string& app_locale) {
 
 PrintingContextMac::PrintingContextMac(const std::string& app_locale)
     : PrintingContext(app_locale),
-      print_info_(NULL),
       context_(NULL) {
 }
 
@@ -51,6 +55,7 @@ void PrintingContextMac::AskUserForSettings(gfx::NativeView parent_view,
   options |= NSPrintPanelShowsScaling;
   [panel setOptions:options];
 
+  // Set the print job title text.
   if (parent_view) {
     NSString* job_title = [[parent_view window] title];
     if (job_title) {
@@ -80,26 +85,137 @@ PrintingContext::Result PrintingContextMac::UseDefaultSettings() {
   return OK;
 }
 
+PrintingContext::Result PrintingContextMac::UpdatePrintSettings(
+    const DictionaryValue& job_settings, const PageRanges& ranges) {
+  DCHECK(!in_print_job_);
+
+  ResetSettings();
+  print_info_.reset([[NSPrintInfo sharedPrintInfo] copy]);
+
+  bool landscape;
+  std::string printer_name;
+  int copies;
+  bool collate;
+  bool two_sided;
+  bool color;
+  if (!job_settings.GetBoolean(kSettingLandscape, &landscape) ||
+      !job_settings.GetString(kSettingPrinterName, &printer_name) ||
+      !job_settings.GetInteger(kSettingCopies, &copies) ||
+      !job_settings.GetBoolean(kSettingCollate, &collate) ||
+      !job_settings.GetBoolean(kSettingTwoSided, &two_sided) ||
+      !job_settings.GetBoolean(kSettingColor, &color)) {
+    return OnError();
+  }
+
+  if (!SetPrinter(printer_name))
+    return OnError();
+
+  if (!SetCopiesInPrintSettings(copies))
+    return OnError();
+
+  if (!SetCollateInPrintSettings(collate))
+    return OnError();
+
+  if (!SetOrientationIsLandscape(landscape))
+    return OnError();
+
+  if (!SetDuplexModeIsTwoSided(two_sided))
+    return OnError();
+
+  if (!SetOutputIsColor(color))
+    return OnError();
+
+  [print_info_.get() updateFromPMPrintSettings];
+
+  InitPrintSettingsFromPrintInfo(ranges);
+  return OK;
+}
+
+void PrintingContextMac::InitPrintSettingsFromPrintInfo(
+    const PageRanges& ranges) {
+  PMPrintSession print_session =
+      static_cast<PMPrintSession>([print_info_.get() PMPrintSession]);
+  PMPageFormat page_format =
+      static_cast<PMPageFormat>([print_info_.get() PMPageFormat]);
+  PMPrinter printer;
+  PMSessionGetCurrentPrinter(print_session, &printer);
+  PrintSettingsInitializerMac::InitPrintSettings(
+      printer, page_format, ranges, false, &settings_);
+}
+
+bool PrintingContextMac::SetPrinter(const std::string& printer_name) {
+  NSString* new_printer_name = base::SysUTF8ToNSString(printer_name);
+  if (!new_printer_name)
+    return false;
+
+  if (![[[print_info_.get() printer] name] isEqualToString:new_printer_name]) {
+    NSPrinter* new_printer = [NSPrinter printerWithName:new_printer_name];
+    if (new_printer == nil)
+      return false;
+
+    [print_info_.get() setPrinter:new_printer];
+  }
+  return true;
+}
+
+bool PrintingContextMac::SetCopiesInPrintSettings(int copies) {
+  if (copies < 1)
+    return false;
+
+  PMPrintSettings pmPrintSettings =
+      static_cast<PMPrintSettings>([print_info_.get() PMPrintSettings]);
+  return PMSetCopies(pmPrintSettings, copies, false) == noErr;
+}
+
+bool PrintingContextMac::SetCollateInPrintSettings(bool collate) {
+  PMPrintSettings pmPrintSettings =
+      static_cast<PMPrintSettings>([print_info_.get() PMPrintSettings]);
+  return PMSetCollate(pmPrintSettings, collate) == noErr;
+}
+
+bool PrintingContextMac::SetOrientationIsLandscape(bool landscape) {
+  PMPageFormat page_format =
+      static_cast<PMPageFormat>([print_info_.get() PMPageFormat]);
+
+  PMOrientation orientation = landscape ? kPMLandscape : kPMPortrait;
+
+  if (PMSetOrientation(page_format, orientation, false) != noErr)
+    return false;
+
+  [print_info_.get() updateFromPMPageFormat];
+  return true;
+}
+
+bool PrintingContextMac::SetDuplexModeIsTwoSided(bool two_sided) {
+  PMDuplexMode duplexSetting = two_sided ? kPMDuplexNoTumble : kPMDuplexNone;
+  PMPrintSettings pmPrintSettings =
+      static_cast<PMPrintSettings>([print_info_.get() PMPrintSettings]);
+  return PMSetDuplex(pmPrintSettings, duplexSetting) == noErr;
+}
+
+bool PrintingContextMac::SetOutputIsColor(bool color) {
+  PMPrintSettings pmPrintSettings =
+      static_cast<PMPrintSettings>([print_info_.get() PMPrintSettings]);
+  CFStringRef output_color = color ? NULL : kGrayColor;
+
+  return PMPrintSettingsSetValue(pmPrintSettings,
+                                 kColorModel,
+                                 output_color,
+                                 false) == noErr;
+}
+
 void PrintingContextMac::ParsePrintInfo(NSPrintInfo* print_info) {
   ResetSettings();
-  print_info_ = [print_info retain];
+  print_info_.reset([print_info retain]);
   PageRanges page_ranges;
-  NSDictionary* print_info_dict = [print_info_ dictionary];
+  NSDictionary* print_info_dict = [print_info_.get() dictionary];
   if (![[print_info_dict objectForKey:NSPrintAllPages] boolValue]) {
     PageRange range;
     range.from = [[print_info_dict objectForKey:NSPrintFirstPage] intValue] - 1;
     range.to = [[print_info_dict objectForKey:NSPrintLastPage] intValue] - 1;
     page_ranges.push_back(range);
   }
-  PMPrintSession print_session =
-      static_cast<PMPrintSession>([print_info_ PMPrintSession]);
-  PMPageFormat page_format =
-      static_cast<PMPageFormat>([print_info_ PMPageFormat]);
-  PMPrinter printer;
-  PMSessionGetCurrentPrinter(print_session, &printer);
-
-  PrintSettingsInitializerMac::InitPrintSettings(
-          printer, page_format, page_ranges, false, &settings_);
+  InitPrintSettingsFromPrintInfo(page_ranges);
 }
 
 PrintingContext::Result PrintingContextMac::InitWithSettings(
@@ -120,11 +236,11 @@ PrintingContext::Result PrintingContextMac::NewDocument(
   in_print_job_ = true;
 
   PMPrintSession print_session =
-      static_cast<PMPrintSession>([print_info_ PMPrintSession]);
+      static_cast<PMPrintSession>([print_info_.get() PMPrintSession]);
   PMPrintSettings print_settings =
-      static_cast<PMPrintSettings>([print_info_ PMPrintSettings]);
+      static_cast<PMPrintSettings>([print_info_.get() PMPrintSettings]);
   PMPageFormat page_format =
-      static_cast<PMPageFormat>([print_info_ PMPageFormat]);
+      static_cast<PMPageFormat>([print_info_.get() PMPageFormat]);
 
   base::mac::ScopedCFTypeRef<CFStringRef> job_title(
       base::SysUTF16ToCFStringRef(document_name));
@@ -146,9 +262,9 @@ PrintingContext::Result PrintingContextMac::NewPage() {
   DCHECK(!context_);
 
   PMPrintSession print_session =
-      static_cast<PMPrintSession>([print_info_ PMPrintSession]);
+      static_cast<PMPrintSession>([print_info_.get() PMPrintSession]);
   PMPageFormat page_format =
-      static_cast<PMPageFormat>([print_info_ PMPageFormat]);
+      static_cast<PMPageFormat>([print_info_.get() PMPageFormat]);
   OSStatus status;
   status = PMSessionBeginPageNoDialog(print_session, page_format, NULL);
   if (status != noErr)
@@ -167,7 +283,7 @@ PrintingContext::Result PrintingContextMac::PageDone() {
   DCHECK(context_);
 
   PMPrintSession print_session =
-      static_cast<PMPrintSession>([print_info_ PMPrintSession]);
+      static_cast<PMPrintSession>([print_info_.get() PMPrintSession]);
   OSStatus status = PMSessionEndPageNoDialog(print_session);
   if (status != noErr)
     OnError();
@@ -182,7 +298,7 @@ PrintingContext::Result PrintingContextMac::DocumentDone() {
   DCHECK(in_print_job_);
 
   PMPrintSession print_session =
-      static_cast<PMPrintSession>([print_info_ PMPrintSession]);
+      static_cast<PMPrintSession>([print_info_.get() PMPrintSession]);
   OSStatus status = PMSessionEndDocumentNoDialog(print_session);
   if (status != noErr)
     OnError();
@@ -197,20 +313,13 @@ void PrintingContextMac::Cancel() {
   context_ = NULL;
 
   PMPrintSession print_session =
-      static_cast<PMPrintSession>([print_info_ PMPrintSession]);
+      static_cast<PMPrintSession>([print_info_.get() PMPrintSession]);
   PMSessionEndPageNoDialog(print_session);
 }
 
-void PrintingContextMac::DismissDialog() {
-  NOTIMPLEMENTED();
-}
-
 void PrintingContextMac::ReleaseContext() {
-  if (print_info_) {
-    [print_info_ autorelease];
-    print_info_ = nil;
-    context_ = NULL;
-  }
+  print_info_.reset();
+  context_ = NULL;
 }
 
 gfx::NativeDrawingContext PrintingContextMac::context() const {

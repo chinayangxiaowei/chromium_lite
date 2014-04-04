@@ -7,17 +7,21 @@
 #pragma once
 
 #include "base/string16.h"
-#include "gfx/native_widget_types.h"
+#include "ui/gfx/native_widget_types.h"
 
 namespace gfx {
 class Insets;
 }  // namespace gfx
 
+namespace ui {
+class Range;
+}  // namespace ui
+
 namespace views {
 
 class KeyEvent;
 class Textfield;
-class TextRange;
+class TextInputClient;
 class View;
 
 // An interface implemented by an object that provides a platform-native
@@ -93,10 +97,10 @@ class NativeTextfieldWrapper {
   virtual bool IsIMEComposing() const = 0;
 
   // Gets the selected range.
-  virtual void GetSelectedRange(TextRange* range) const = 0;
+  virtual void GetSelectedRange(ui::Range* range) const = 0;
 
   // Selects the text given by |range|.
-  virtual void SelectRange(const TextRange& range) = 0;
+  virtual void SelectRange(const ui::Range& range) = 0;
 
   // Returns the currnet cursor position.
   virtual size_t GetCursorPosition() const = 0;
@@ -113,10 +117,13 @@ class NativeTextfieldWrapper {
   virtual bool HandleKeyReleased(const views::KeyEvent& e) = 0;
 
   // Invoked when focus is being moved from or to the Textfield.
-  // See also View::WillGainFocus/DidGainFocus/WillLoseFocus.
-  virtual void HandleWillGainFocus() = 0;
-  virtual void HandleDidGainFocus() = 0;
-  virtual void HandleWillLoseFocus() = 0;
+  // See also View::OnFocus/OnBlur.
+  virtual void HandleFocus() = 0;
+  virtual void HandleBlur() = 0;
+
+  // Returns the View's TextInputClient instance or NULL if the View doesn't
+  // support text input.
+  virtual TextInputClient* GetTextInputClient() = 0;
 
   // Creates an appropriate NativeTextfieldWrapper for the platform.
   static NativeTextfieldWrapper* CreateWrapper(Textfield* field);

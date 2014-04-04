@@ -9,7 +9,6 @@
 #include "base/logging.h"
 #include "chrome/browser/ui/find_bar/find_bar.h"
 
-class BrowserWindowCocoa;
 class FindBarController;
 
 // This class is included by find_bar_host_browsertest.cc, so it has to be
@@ -45,18 +44,11 @@ class FindBarBridge : public FindBar,
     return cocoa_controller_;
   }
 
-  virtual void SetFindBarController(FindBarController* find_bar_controller) {
-    find_bar_controller_ = find_bar_controller;
-  }
+  virtual void SetFindBarController(FindBarController* find_bar_controller);
 
-  virtual FindBarController* GetFindBarController() const {
-    DCHECK(find_bar_controller_);
-    return find_bar_controller_;
-  }
+  virtual FindBarController* GetFindBarController() const;
 
-  virtual FindBarTesting* GetFindBarTesting() {
-    return this;
-  }
+  virtual FindBarTesting* GetFindBarTesting();
 
   // Methods from FindBar.
   virtual void Show(bool animate);

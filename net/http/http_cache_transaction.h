@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -28,25 +28,6 @@ struct HttpRequestInfo;
 // factory.
 class HttpCache::Transaction : public HttpTransaction {
  public:
-  Transaction(HttpCache* cache);
-  virtual ~Transaction();
-
-  // HttpTransaction methods:
-  virtual int Start(const HttpRequestInfo*, CompletionCallback*,
-                    const BoundNetLog&);
-  virtual int RestartIgnoringLastError(CompletionCallback* callback);
-  virtual int RestartWithCertificate(X509Certificate* client_cert,
-                                     CompletionCallback* callback);
-  virtual int RestartWithAuth(const string16& username,
-                              const string16& password,
-                              CompletionCallback* callback);
-  virtual bool IsReadyToRestartForAuth();
-  virtual int Read(IOBuffer* buf, int buf_len, CompletionCallback* callback);
-  virtual void StopCaching();
-  virtual const HttpResponseInfo* GetResponseInfo() const;
-  virtual LoadState GetLoadState() const;
-  virtual uint64 GetUploadProgress(void) const;
-
   // The transaction has the following modes, which apply to how it may access
   // its cache entry.
   //
@@ -75,6 +56,9 @@ class HttpCache::Transaction : public HttpTransaction {
     READ_WRITE      = READ | WRITE,
     UPDATE          = READ_META | WRITE,  // READ_WRITE & ~READ_DATA
   };
+
+  Transaction(HttpCache* cache);
+  virtual ~Transaction();
 
   Mode mode() const { return mode_; }
 
@@ -112,6 +96,22 @@ class HttpCache::Transaction : public HttpTransaction {
 
   const BoundNetLog& net_log() const;
 
+  // HttpTransaction methods:
+  virtual int Start(const HttpRequestInfo*, CompletionCallback*,
+                    const BoundNetLog&);
+  virtual int RestartIgnoringLastError(CompletionCallback* callback);
+  virtual int RestartWithCertificate(X509Certificate* client_cert,
+                                     CompletionCallback* callback);
+  virtual int RestartWithAuth(const string16& username,
+                              const string16& password,
+                              CompletionCallback* callback);
+  virtual bool IsReadyToRestartForAuth();
+  virtual int Read(IOBuffer* buf, int buf_len, CompletionCallback* callback);
+  virtual void StopCaching();
+  virtual const HttpResponseInfo* GetResponseInfo() const;
+  virtual LoadState GetLoadState() const;
+  virtual uint64 GetUploadProgress(void) const;
+
  private:
   static const size_t kNumValidationHeaders = 2;
   // Helper struct to pair a header name with its value, for
@@ -141,6 +141,8 @@ class HttpCache::Transaction : public HttpTransaction {
     STATE_DOOM_ENTRY_COMPLETE,
     STATE_ADD_TO_ENTRY,
     STATE_ADD_TO_ENTRY_COMPLETE,
+    STATE_NOTIFY_BEFORE_SEND_HEADERS,
+    STATE_NOTIFY_BEFORE_SEND_HEADERS_COMPLETE,
     STATE_START_PARTIAL_CACHE_VALIDATION,
     STATE_COMPLETE_PARTIAL_CACHE_VALIDATION,
     STATE_UPDATE_CACHED_RESPONSE,
@@ -195,6 +197,8 @@ class HttpCache::Transaction : public HttpTransaction {
   int DoDoomEntryComplete(int result);
   int DoAddToEntry();
   int DoAddToEntryComplete(int result);
+  int DoNotifyBeforeSendHeaders();
+  int DoNotifyBeforeSendHeadersComplete(int result);
   int DoStartPartialCacheValidation();
   int DoCompletePartialCacheValidation(int result);
   int DoUpdateCachedResponse();
@@ -313,6 +317,11 @@ class HttpCache::Transaction : public HttpTransaction {
   // Performs the needed work after receiving data from the cache, when
   // working with range requests.
   int DoPartialCacheReadCompleted(int result);
+
+  // Returns true if we should bother attempting to resume this request if it
+  // is aborted while in progress. If |has_data| is true, the size of the stored
+  // data is considered for the result.
+  bool CanResume(bool has_data);
 
   // Called to signal completion of asynchronous IO.
   void OnIOComplete(int result);

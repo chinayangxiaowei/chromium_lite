@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,11 +8,11 @@
 #include <atlcom.h>
 #include <sapi.h>
 
-#include "base/scoped_comptr_win.h"
-#include "base/singleton.h"
+#include "base/memory/singleton.h"
 #include "base/string_number_conversions.h"
 #include "base/utf_string_conversions.h"
 #include "base/values.h"
+#include "base/win/scoped_comptr.h"
 
 namespace util = extension_tts_api_util;
 
@@ -37,7 +37,7 @@ class ExtensionTtsPlatformImplWin : public ExtensionTtsPlatformImpl {
   ExtensionTtsPlatformImplWin();
   virtual ~ExtensionTtsPlatformImplWin() {}
 
-  ScopedComPtr<ISpVoice> speech_synthesizer_;
+  base::win::ScopedComPtr<ISpVoice> speech_synthesizer_;
   bool paused_;
 
   friend struct DefaultSingletonTraits<ExtensionTtsPlatformImplWin>;
@@ -85,8 +85,10 @@ bool ExtensionTtsPlatformImplWin::Speak(
     speech_synthesizer_->SetVolume(static_cast<uint16>(volume * 100));
   }
 
-  if (paused_)
+  if (paused_) {
     speech_synthesizer_->Resume();
+    paused_ = false;
+  }
   speech_synthesizer_->Speak(
       utterance.c_str(), SPF_ASYNC | SPF_PURGEBEFORESPEAK, NULL);
 
@@ -94,7 +96,7 @@ bool ExtensionTtsPlatformImplWin::Speak(
 }
 
 bool ExtensionTtsPlatformImplWin::StopSpeaking() {
-  if (!speech_synthesizer_ && !paused_) {
+  if (speech_synthesizer_ && !paused_) {
     speech_synthesizer_->Pause();
     paused_ = true;
   }
@@ -102,6 +104,16 @@ bool ExtensionTtsPlatformImplWin::StopSpeaking() {
 }
 
 bool ExtensionTtsPlatformImplWin::IsSpeaking() {
+  if (speech_synthesizer_ && !paused_) {
+    SPVOICESTATUS status;
+    HRESULT result = speech_synthesizer_->GetStatus(&status, NULL);
+    if (result == S_OK) {
+      if (status.dwRunningState == 0 ||  // 0 == waiting to speak
+          status.dwRunningState == SPRS_IS_SPEAKING) {
+        return true;
+      }
+    }
+  }
   return false;
 }
 

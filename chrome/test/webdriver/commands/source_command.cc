@@ -1,40 +1,44 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "chrome/test/webdriver/commands/source_command.h"
+
 #include <string>
 
-#include "base/utf_string_conversions.h"
-#include "chrome/test/webdriver/utility_functions.h"
-#include "chrome/test/webdriver/commands/source_command.h"
+#include "base/values.h"
+#include "chrome/test/webdriver/commands/response.h"
+#include "chrome/test/webdriver/error_codes.h"
+#include "chrome/test/webdriver/session.h"
 
 namespace webdriver {
 
 // Private atom to find source code of the page.
-const wchar_t* const kSource[] = {
-    L"window.domAutomationController.send(",
-    L"new XMLSerializer().serializeToString(document));",
-};
+const char* const kSource =
+    "return new XMLSerializer().serializeToString(document);";
+
+SourceCommand::SourceCommand(const std::vector<std::string>& path_segments,
+                             const DictionaryValue* const parameters)
+    : WebDriverCommand(path_segments, parameters) {}
+
+SourceCommand::~SourceCommand() {}
+
+bool SourceCommand::DoesGet() {
+  return true;
+}
 
 void SourceCommand::ExecuteGet(Response* const response) {
-  const std::wstring jscript = build_atom(kSource, sizeof kSource);
-  // Get the source code for the current frame only.
-  std::wstring xpath = session_->current_frame_xpath();
-  std::wstring result = L"";
+  ListValue args;
+  Value* result = NULL;
+  ErrorCode code = session_->ExecuteScript(kSource, &args, &result);
 
-  if (!tab_->ExecuteAndExtractString(xpath, jscript, &result)) {
-    LOG(ERROR) << "Could not execute JavaScript to find source. JavaScript"
-               << " used was:\n" << kSource;
-    LOG(ERROR) << "ExecuteAndExtractString's results was: "
-               << result;
+  if (code != kSuccess) {
     SET_WEBDRIVER_ERROR(response, "ExecuteAndExtractString failed",
                         kInternalServerError);
     return;
   }
-
-  response->set_value(new StringValue(WideToUTF16(result)));
-  response->set_status(kSuccess);
+  response->SetValue(result);
+  response->SetStatus(kSuccess);
 }
 
 }  // namespace webdriver
-

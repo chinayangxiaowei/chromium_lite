@@ -6,10 +6,11 @@
   'includes': [
     '../appcache/webkit_appcache.gypi',
     '../blob/webkit_blob.gypi',
-    '../fileapi/webkit_fileapi.gypi',
     '../database/webkit_database.gypi',
+    '../fileapi/webkit_fileapi.gypi',
     '../glue/webkit_glue.gypi',
     '../gpu/webkit_gpu.gypi',
+    '../quota/webkit_quota.gypi',
     'webkit_support.gypi',
   ],
 }

@@ -1,11 +1,11 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #import <Cocoa/Cocoa.h>
 
 #import "base/mac/cocoa_protocols.h"
-#include "base/scoped_ptr.h"
+#include "base/memory/scoped_ptr.h"
 
 namespace BaseBubbleControllerInternal {
 class Bridge;
@@ -33,9 +33,9 @@ class Bridge;
   scoped_ptr<BaseBubbleControllerInternal::Bridge> base_bridge_;
 }
 
-@property (nonatomic, readonly) NSWindow* parentWindow;
-@property (nonatomic, assign) NSPoint anchorPoint;
-@property (nonatomic, readonly) InfoBubbleView* bubble;
+@property(nonatomic, readonly) NSWindow* parentWindow;
+@property(nonatomic, assign) NSPoint anchorPoint;
+@property(nonatomic, readonly) InfoBubbleView* bubble;
 
 // Creates a bubble. |nibPath| is just the basename, e.g. @"FirstRunBubble".
 // |anchoredAt| is in screen space. You need to call -showWindow: to make the

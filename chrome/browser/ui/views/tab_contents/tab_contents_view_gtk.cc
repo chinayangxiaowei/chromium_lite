@@ -11,25 +11,26 @@
 #include "base/utf_string_conversions.h"
 #include "build/build_config.h"
 #include "chrome/browser/download/download_shelf.h"
-#include "chrome/browser/renderer_host/render_view_host.h"
-#include "chrome/browser/renderer_host/render_view_host_factory.h"
 #include "chrome/browser/renderer_host/render_widget_host_view_gtk.h"
-#include "chrome/browser/tab_contents/interstitial_page.h"
-#include "chrome/browser/tab_contents/tab_contents.h"
-#include "chrome/browser/tab_contents/tab_contents_delegate.h"
 #include "chrome/browser/tab_contents/web_drag_dest_gtk.h"
 #include "chrome/browser/ui/gtk/constrained_window_gtk.h"
 #include "chrome/browser/ui/gtk/tab_contents_drag_source.h"
 #include "chrome/browser/ui/views/sad_tab_view.h"
 #include "chrome/browser/ui/views/tab_contents/render_view_context_menu_views.h"
-#include "gfx/canvas_skia_paint.h"
-#include "gfx/point.h"
-#include "gfx/rect.h"
-#include "gfx/size.h"
+#include "content/browser/renderer_host/render_view_host.h"
+#include "content/browser/renderer_host/render_view_host_factory.h"
+#include "content/browser/tab_contents/interstitial_page.h"
+#include "content/browser/tab_contents/tab_contents.h"
+#include "content/browser/tab_contents/tab_contents_delegate.h"
+#include "ui/gfx/canvas_skia_paint.h"
+#include "ui/gfx/point.h"
+#include "ui/gfx/rect.h"
+#include "ui/gfx/size.h"
 #include "views/controls/native/native_view_host.h"
 #include "views/focus/view_storage.h"
 #include "views/screen.h"
 #include "views/widget/root_view.h"
+#include "views/widget/widget_gtk.h"
 
 using WebKit::WebDragOperation;
 using WebKit::WebDragOperationsMask;
@@ -189,6 +190,9 @@ RenderWidgetHostView* TabContentsViewGtk::CreateViewForWidget(
   gtk_widget_add_events(view->native_view(), GDK_LEAVE_NOTIFY_MASK |
                         GDK_POINTER_MOTION_MASK);
 
+  // Let widget know that the tab contents has been painted.
+  views::WidgetGtk::RegisterChildExposeHandler(view->native_view());
+
   // Renderer target DnD.
   if (tab_contents()->ShouldAcceptDragAndDrop())
     drag_dest_.reset(new WebDragDestGtk(tab_contents(), view->native_view()));
@@ -216,7 +220,7 @@ gfx::NativeWindow TabContentsViewGtk::GetTopLevelNativeWindow() const {
 void TabContentsViewGtk::GetContainerBounds(gfx::Rect* out) const {
   // Callers expect the requested bounds not the actual bounds. For example,
   // during init callers expect 0x0, but Gtk layout enforces a min size of 1x1.
-  GetBounds(out, false);
+  *out = GetClientAreaScreenBounds();
 
   gfx::Size size;
   WidgetGtk::GetRequestedSize(&size);
@@ -239,8 +243,13 @@ void TabContentsViewGtk::SetPageTitle(const std::wstring& title) {
     gdk_window_set_title(content_view->window, WideToUTF8(title).c_str());
 }
 
-void TabContentsViewGtk::OnTabCrashed(base::TerminationStatus /* status */,
+void TabContentsViewGtk::OnTabCrashed(base::TerminationStatus status,
                                       int /* error_code */) {
+  SadTabView::Kind kind =
+      status == base::TERMINATION_STATUS_PROCESS_WAS_KILLED ?
+      SadTabView::KILLED : SadTabView::CRASHED;
+  sad_tab_ = new SadTabView(tab_contents(), kind);
+  SetContentsView(sad_tab_);
 }
 
 void TabContentsViewGtk::SizeContents(const gfx::Size& size) {
@@ -264,6 +273,11 @@ void TabContentsViewGtk::Focus() {
 
   if (tab_contents()->is_crashed() && sad_tab_ != NULL) {
     sad_tab_->RequestFocus();
+    return;
+  }
+
+  if (constrained_windows_.size()) {
+    constrained_windows_.back()->FocusConstrainedWindow();
     return;
   }
 
@@ -324,7 +338,7 @@ void TabContentsViewGtk::RestoreFocus() {
 }
 
 void TabContentsViewGtk::GetViewBounds(gfx::Rect* out) const {
-  GetBounds(out, true);
+  *out = GetWindowScreenBounds();
 }
 
 void TabContentsViewGtk::UpdateDragCursor(WebDragOperation operation) {
@@ -397,21 +411,10 @@ void TabContentsViewGtk::OnSizeAllocate(GtkWidget* widget,
 
 gboolean TabContentsViewGtk::OnPaint(GtkWidget* widget, GdkEventExpose* event) {
   if (tab_contents()->render_view_host() &&
-      !tab_contents()->render_view_host()->IsRenderViewLive()) {
-    if (sad_tab_ == NULL) {
-      base::TerminationStatus status =
-          tab_contents()->render_view_host()->render_view_termination_status();
-      SadTabView::Kind kind =
-          status == base::TERMINATION_STATUS_PROCESS_WAS_KILLED ?
-          SadTabView::KILLED : SadTabView::CRASHED;
-      sad_tab_ = new SadTabView(tab_contents(), kind);
-      SetContentsView(sad_tab_);
-    }
-    gfx::Rect bounds;
-    GetBounds(&bounds, true);
-    sad_tab_->SetBounds(gfx::Rect(0, 0, bounds.width(), bounds.height()));
+      !tab_contents()->render_view_host()->IsRenderViewLive() &&
+      sad_tab_) {
     gfx::CanvasSkiaPaint canvas(event);
-    sad_tab_->ProcessPaint(&canvas);
+    sad_tab_->Paint(&canvas);
   }
   return false;  // False indicates other widgets should get the event as well.
 }
@@ -447,6 +450,8 @@ void TabContentsViewGtk::WasSized(const gfx::Size& size) {
   RenderWidgetHostView* rwhv = tab_contents()->GetRenderWidgetHostView();
   if (rwhv && rwhv->GetViewBounds().size() != size)
     rwhv->SetSize(size);
+  if (sad_tab_ && sad_tab_->size() != size)
+    sad_tab_->SetSize(size);
 
   if (needs_resize)
     SetFloatingPosition(size);

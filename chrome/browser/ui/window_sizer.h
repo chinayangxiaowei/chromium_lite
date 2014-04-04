@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,7 +9,7 @@
 #include <vector>
 
 #include "base/basictypes.h"
-#include "gfx/rect.h"
+#include "ui/gfx/rect.h"
 
 class Browser;
 
@@ -121,7 +121,7 @@ class WindowSizer {
   // non-NULL value for |browser|.
   static void GetBrowserWindowBounds(const std::string& app_name,
                                      const gfx::Rect& specified_bounds,
-                                     Browser* browser,
+                                     const Browser* browser,
                                      gfx::Rect* window_bounds,
                                      bool* maximized);
 
@@ -181,4 +181,5 @@ class WindowSizer {
   DISALLOW_COPY_AND_ASSIGN(WindowSizer);
 };
 
-#endif  // CHROME_BROWSER_WINDOW_SIZER_H_
+#endif  // CHROME_BROWSER_UI_WINDOW_SIZER_H_
+

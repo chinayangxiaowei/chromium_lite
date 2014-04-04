@@ -8,21 +8,19 @@
 #include "base/json/json_reader.h"
 #include "base/utf_string_conversions.h"
 #include "chrome/browser/automation/automation_browser_tracker.h"
-#include "chrome/browser/automation/automation_extension_function.h"
 #include "chrome/browser/automation/automation_tab_tracker.h"
 #include "chrome/browser/automation/automation_window_tracker.h"
-#include "chrome/browser/automation/extension_automation_constants.h"
-#include "chrome/browser/automation/extension_port_container.h"
 #include "chrome/browser/automation/ui_controls.h"
-#include "chrome/browser/browser_window.h"
-#include "chrome/browser/extensions/extension_event_router.h"
 #include "chrome/browser/external_tab_container_win.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/renderer_host/render_view_host.h"
-#include "chrome/browser/tab_contents/tab_contents.h"
-#include "chrome/browser/ui/views/bookmark_bar_view.h"
+#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window.h"
+#include "chrome/browser/ui/tab_contents/tab_contents_wrapper.h"
+#include "chrome/browser/ui/views/bookmarks/bookmark_bar_view.h"
 #include "chrome/common/automation_messages.h"
-#include "chrome/common/page_zoom.h"
+#include "content/browser/renderer_host/render_view_host.h"
+#include "content/browser/tab_contents/tab_contents.h"
+#include "content/common/page_zoom.h"
 #include "ui/base/keycodes/keyboard_codes.h"
 #include "views/focus/accelerator_handler.h"
 #include "views/widget/root_view.h"
@@ -79,7 +77,7 @@ BOOL CALLBACK EnumThreadWndProc(HWND hwnd, LPARAM l_param) {
 class MouseEventTask : public Task {
  public:
   MouseEventTask(views::View* view,
-                 views::Event::EventType type,
+                 ui::EventType type,
                  const gfx::Point& point,
                  int flags)
       : view_(view), type_(type), point_(point), flags_(flags) {}
@@ -97,16 +95,16 @@ class MouseEventTask : public Task {
     view_->ConvertPointToScreen(view_, &screen_location);
     MoveMouse(screen_location.ToPOINT());
     switch (type_) {
-      case views::Event::ET_MOUSE_PRESSED:
+      case ui::ET_MOUSE_PRESSED:
         view_->OnMousePressed(event);
         break;
 
-      case views::Event::ET_MOUSE_DRAGGED:
+      case ui::ET_MOUSE_DRAGGED:
         view_->OnMouseDragged(event);
         break;
 
-      case views::Event::ET_MOUSE_RELEASED:
-        view_->OnMouseReleased(event, false);
+      case ui::ET_MOUSE_RELEASED:
+        view_->OnMouseReleased(event);
         break;
 
       default:
@@ -116,7 +114,7 @@ class MouseEventTask : public Task {
 
  private:
   views::View* view_;
-  views::Event::EventType type_;
+  ui::EventType type_;
   gfx::Point point_;
   int flags_;
 
@@ -147,11 +145,12 @@ class WindowDragResponseTask : public Task {
   DISALLOW_COPY_AND_ASSIGN(WindowDragResponseTask);
 };
 
-void AutomationProvider::WindowSimulateDrag(int handle,
-                                            std::vector<gfx::Point> drag_path,
-                                            int flags,
-                                            bool press_escape_en_route,
-                                            IPC::Message* reply_message) {
+void AutomationProvider::WindowSimulateDrag(
+    int handle,
+    const std::vector<gfx::Point>& drag_path,
+    int flags,
+    bool press_escape_en_route,
+    IPC::Message* reply_message) {
   if (browser_tracker_->ContainsHandle(handle) && (drag_path.size() > 1)) {
     gfx::NativeWindow window =
         browser_tracker_->GetResource(handle)->window()->GetNativeHandle();
@@ -159,21 +158,21 @@ void AutomationProvider::WindowSimulateDrag(int handle,
     UINT down_message = 0;
     UINT up_message = 0;
     WPARAM wparam_flags = 0;
-    if (flags & views::Event::EF_SHIFT_DOWN)
+    if (flags & ui::EF_SHIFT_DOWN)
       wparam_flags |= MK_SHIFT;
-    if (flags & views::Event::EF_CONTROL_DOWN)
+    if (flags & ui::EF_CONTROL_DOWN)
       wparam_flags |= MK_CONTROL;
-    if (flags & views::Event::EF_LEFT_BUTTON_DOWN) {
+    if (flags & ui::EF_LEFT_BUTTON_DOWN) {
       wparam_flags |= MK_LBUTTON;
       down_message = WM_LBUTTONDOWN;
       up_message = WM_LBUTTONUP;
     }
-    if (flags & views::Event::EF_MIDDLE_BUTTON_DOWN) {
+    if (flags & ui::EF_MIDDLE_BUTTON_DOWN) {
       wparam_flags |= MK_MBUTTON;
       down_message = WM_MBUTTONDOWN;
       up_message = WM_MBUTTONUP;
     }
-    if (flags & views::Event::EF_RIGHT_BUTTON_DOWN) {
+    if (flags & ui::EF_RIGHT_BUTTON_DOWN) {
       wparam_flags |= MK_RBUTTON;
       down_message = WM_LBUTTONDOWN;
       up_message = WM_LBUTTONUP;
@@ -204,11 +203,11 @@ void AutomationProvider::WindowSimulateDrag(int handle,
       // TODO(phajdan.jr): make this use ui_test_utils::SendKeyPressSync.
       ui_controls::SendKeyPressNotifyWhenDone(
           window, ui::VKEY_ESCAPE,
-          ((flags & views::Event::EF_CONTROL_DOWN) ==
-           views::Event::EF_CONTROL_DOWN),
-          ((flags & views::Event::EF_SHIFT_DOWN) ==
-           views::Event::EF_SHIFT_DOWN),
-          ((flags & views::Event::EF_ALT_DOWN) == views::Event::EF_ALT_DOWN),
+          ((flags & ui::EF_CONTROL_DOWN) ==
+           ui::EF_CONTROL_DOWN),
+          ((flags & ui::EF_SHIFT_DOWN) ==
+           ui::EF_SHIFT_DOWN),
+          ((flags & ui::EF_ALT_DOWN) == ui::EF_ALT_DOWN),
           false,
           new MessageLoop::QuitTask());
       MessageLoopForUI* loop = MessageLoopForUI::current();
@@ -242,7 +241,7 @@ void AutomationProvider::CreateExternalTab(
   scoped_refptr<ExternalTabContainer> external_tab_container =
       new ExternalTabContainer(this, automation_resource_message_filter_);
 
-  Profile* profile = settings.is_off_the_record ?
+  Profile* profile = settings.is_incognito ?
       profile_->GetOffTheRecordProfile() : profile_;
 
   // When the ExternalTabContainer window is created we grab a reference on it
@@ -299,12 +298,13 @@ void AutomationProvider::SetInitialFocus(const IPC::Message& message,
 }
 
 void AutomationProvider::PrintAsync(int tab_handle) {
-  NavigationController* tab = NULL;
-  TabContents* tab_contents = GetTabContentsForHandle(tab_handle, &tab);
-  if (tab_contents) {
-    if (tab_contents->PrintNow())
-      return;
-  }
+  TabContents* tab_contents = GetTabContentsForHandle(tab_handle, NULL);
+  if (!tab_contents)
+    return;
+
+  TabContentsWrapper* wrapper =
+      TabContentsWrapper::GetCurrentWrapperForContents(tab_contents);
+  wrapper->print_view_manager()->PrintNow();
 }
 
 ExternalTabContainer* AutomationProvider::GetExternalTabForHandle(int handle) {
@@ -403,21 +403,6 @@ void AutomationProvider::ConnectExternalTab(
   TRACE_EVENT_END("AutomationProvider::ConnectExternalTab", 0, "");
 }
 
-void AutomationProvider::SetEnableExtensionAutomation(
-    int tab_handle,
-    const std::vector<std::string>& functions_enabled) {
-  ExternalTabContainer* external_tab = GetExternalTabForHandle(tab_handle);
-  if (external_tab) {
-    external_tab->SetEnableExtensionAutomation(functions_enabled);
-  } else {
-    // Tab must exist, and must be an external tab so that its
-    // delegate has an on-empty
-    // implementation of ForwardMessageToExternalHost.
-    DLOG(WARNING) <<
-      "SetEnableExtensionAutomation called with invalid tab handle.";
-  }
-}
-
 void AutomationProvider::OnBrowserMoved(int tab_handle) {
   ExternalTabContainer* external_tab = GetExternalTabForHandle(tab_handle);
   if (external_tab) {
@@ -436,67 +421,7 @@ void AutomationProvider::OnMessageFromExternalHost(int handle,
   if (!view_host)
     return;
 
-  if (AutomationExtensionFunction::InterceptMessageFromExternalHost(
-          view_host, message, origin, target)) {
-    // Message was diverted.
-    return;
-  }
-
-  if (ExtensionPortContainer::InterceptMessageFromExternalHost(
-          message, origin, target, this, view_host, handle)) {
-    // Message was diverted.
-    return;
-  }
-
-  if (InterceptBrowserEventMessageFromExternalHost(message, origin, target)) {
-    // Message was diverted.
-    return;
-  }
-
   view_host->ForwardMessageFromExternalHost(message, origin, target);
-}
-
-bool AutomationProvider::InterceptBrowserEventMessageFromExternalHost(
-      const std::string& message, const std::string& origin,
-      const std::string& target) {
-  if (target !=
-      extension_automation_constants::kAutomationBrowserEventRequestTarget)
-    return false;
-
-  if (origin != extension_automation_constants::kAutomationOrigin) {
-    LOG(WARNING) << "Wrong origin on automation browser event " << origin;
-    return false;
-  }
-
-  // The message is a JSON-encoded array with two elements, both strings. The
-  // first is the name of the event to dispatch.  The second is a JSON-encoding
-  // of the arguments specific to that event.
-  scoped_ptr<Value> message_value(base::JSONReader::Read(message, false));
-  if (!message_value.get() || !message_value->IsType(Value::TYPE_LIST)) {
-    LOG(WARNING) << "Invalid browser event specified through automation";
-    return false;
-  }
-
-  const ListValue* args = static_cast<const ListValue*>(message_value.get());
-
-  std::string event_name;
-  if (!args->GetString(0, &event_name)) {
-    LOG(WARNING) << "No browser event name specified through automation";
-    return false;
-  }
-
-  std::string json_args;
-  if (!args->GetString(1, &json_args)) {
-    LOG(WARNING) << "No browser event args specified through automation";
-    return false;
-  }
-
-  if (profile()->GetExtensionEventRouter()) {
-    profile()->GetExtensionEventRouter()->DispatchEventToRenderers(
-        event_name, json_args, profile(), GURL());
-  }
-
-  return true;
 }
 
 void AutomationProvider::NavigateInExternalTab(

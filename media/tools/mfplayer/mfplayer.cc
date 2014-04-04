@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,21 +7,20 @@
 #include <mfapi.h>
 #include <mferror.h>
 #include <shlwapi.h>
-#include <strsafe.h>
 
 #include <cassert>
-
-namespace {
+#include <cstdio>
 
 template <class T>
-void SafeRelease(T** pptr) {
+static void SafeRelease(T** pptr) {
   if (pptr && *pptr) {
     (*pptr)->Release();
     *pptr = NULL;
   }
 }
 
-HRESULT ProbeTopology(IMFMediaEvent* event, IMFTopology** topology_ptr) {
+static HRESULT ProbeTopology(IMFMediaEvent* event,
+                             IMFTopology** topology_ptr) {
   HRESULT hr = S_OK;
   PROPVARIANT var;
   PropVariantInit(&var);
@@ -35,8 +34,6 @@ HRESULT ProbeTopology(IMFMediaEvent* event, IMFTopology** topology_ptr) {
   PropVariantClear(&var);
   return hr;
 }
-
-}  // namespace
 
 namespace mfplayer {
 

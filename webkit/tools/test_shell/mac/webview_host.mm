@@ -7,11 +7,11 @@
 #include "webkit/tools/test_shell/webview_host.h"
 #include "webkit/tools/test_shell/mac/test_shell_webview.h"
 
-#include "gfx/rect.h"
-#include "gfx/size.h"
 #include "skia/ext/platform_canvas.h"
 #include "third_party/WebKit/Source/WebKit/chromium/public/WebSize.h"
 #include "third_party/WebKit/Source/WebKit/chromium/public/WebView.h"
+#include "ui/gfx/rect.h"
+#include "ui/gfx/size.h"
 #include "webkit/glue/webpreferences.h"
 #include "webkit/tools/test_shell/test_shell.h"
 #include "webkit/tools/test_shell/test_webview_delegate.h"
@@ -39,7 +39,8 @@ WebViewHost* WebViewHost::Create(NSView* parent_view,
   [parent_view addSubview:host->view_];
   [host->view_ release];
 
-  host->webwidget_ = WebView::create(delegate, dev_tools_client, NULL);
+  host->webwidget_ = WebView::create(delegate);
+  host->webview()->setDevToolsAgentClient(dev_tools_client);
   prefs.Apply(host->webview());
   host->webview()->initializeMainFrame(delegate);
   host->webwidget_->resize(WebSize(content_rect.size.width,

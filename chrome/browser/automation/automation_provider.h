@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -18,20 +18,22 @@
 
 #include "base/basictypes.h"
 #include "base/compiler_specific.h"
+#include "base/memory/scoped_ptr.h"
+#include "base/memory/weak_ptr.h"
 #include "base/observer_list.h"
-#include "base/scoped_ptr.h"
 #include "base/string16.h"
 #include "chrome/browser/autofill/field_types.h"
-#include "chrome/browser/cancelable_request.h"
-#include "chrome/browser/tab_contents/navigation_entry.h"
 #include "chrome/common/automation_constants.h"
 #include "chrome/common/content_settings.h"
-#include "chrome/common/notification_observer.h"
-#include "ipc/ipc_message.h"
+#include "content/browser/browser_thread.h"
+#include "content/browser/cancelable_request.h"
+#include "content/browser/tab_contents/navigation_entry.h"
+#include "content/common/notification_observer.h"
 #include "ipc/ipc_channel.h"
+
 #if defined(OS_WIN)
-#include "gfx/native_widget_types.h"
-#include "views/event.h"
+#include "ui/gfx/native_widget_types.h"
+#include "views/events/event.h"
 #endif  // defined(OS_WIN)
 
 class PopupMenuWaiter;
@@ -44,7 +46,7 @@ namespace IPC {
 class ChannelProxy;
 }
 
-class AutoFillProfile;
+class AutofillProfile;
 class AutomationAutocompleteEditTracker;
 class AutomationBrowserTracker;
 class AutomationExtensionTracker;
@@ -75,9 +77,12 @@ namespace gfx {
 class Point;
 }
 
-class AutomationProvider : public base::RefCounted<AutomationProvider>,
-                           public IPC::Channel::Listener,
-                           public IPC::Message::Sender {
+class AutomationProvider
+    : public IPC::Channel::Listener,
+      public IPC::Message::Sender,
+      public base::SupportsWeakPtr<AutomationProvider>,
+      public base::RefCountedThreadSafe<AutomationProvider,
+                                        BrowserThread::DeleteOnUIThread> {
  public:
   explicit AutomationProvider(Profile* profile);
 
@@ -98,29 +103,10 @@ class AutomationProvider : public base::RefCounted<AutomationProvider>,
 
   // Called when the inital set of tabs has finished loading.
   // Call SetExpectedTabCount(0) to set this to true immediately.
-  void OnInitialLoadsComplete();
+  void OnInitialTabLoadsComplete();
 
-  // Add a listener for navigation status notification. Currently only
-  // navigation completion is observed; when the |number_of_navigations|
-  // complete, the completed_response object is sent; if the server requires
-  // authentication, we instead send the auth_needed_response object.  A pointer
-  // to the added navigation observer is returned. This object should NOT be
-  // deleted and should be released by calling the corresponding
-  // RemoveNavigationStatusListener method.
-  NotificationObserver* AddNavigationStatusListener(
-      NavigationController* tab, IPC::Message* reply_message,
-      int number_of_navigations, bool include_current_navigation);
-
-  void RemoveNavigationStatusListener(NotificationObserver* obs);
-
-  // Add an observer for the TabStrip. Currently only Tab append is observed. A
-  // navigation listener is created on successful notification of tab append. A
-  // pointer to the added navigation observer is returned. This object should
-  // NOT be deleted and should be released by calling the corresponding
-  // RemoveTabStripObserver method.
-  NotificationObserver* AddTabStripObserver(Browser* parent,
-                                            IPC::Message* reply_message);
-  void RemoveTabStripObserver(NotificationObserver* obs);
+  // Called when the ChromeOS network library has finished its first update.
+  void OnNetworkLibraryInit();
 
   // Get the index of a particular NavigationController object
   // in the given parent window.  This method uses
@@ -136,14 +122,6 @@ class AutomationProvider : public base::RefCounted<AutomationProvider>,
   // not just logins.
   void AddLoginHandler(NavigationController* tab, LoginHandler* handler);
   void RemoveLoginHandler(NavigationController* tab);
-
-  // Add an extension port container.
-  // Takes ownership of the container.
-  void AddPortContainer(ExtensionPortContainer* port);
-  // Remove and delete the port container.
-  void RemovePortContainer(ExtensionPortContainer* port);
-  // Get the port container for the given port id.
-  ExtensionPortContainer* GetPortContainer(int port_id) const;
 
   // IPC implementations
   virtual bool Send(IPC::Message* msg);
@@ -172,7 +150,8 @@ class AutomationProvider : public base::RefCounted<AutomationProvider>,
   DictionaryValue* GetDictionaryFromDownloadItem(const DownloadItem* download);
 
  protected:
-  friend class base::RefCounted<AutomationProvider>;
+  friend struct BrowserThread::DeleteOnThread<BrowserThread::UI>;
+  friend class DeleteTask<AutomationProvider>;
   virtual ~AutomationProvider();
 
   // Helper function to find the browser window that contains a given
@@ -192,6 +171,10 @@ class AutomationProvider : public base::RefCounted<AutomationProvider>,
   // Returns NULL on failure.
   RenderViewHost* GetViewForTab(int tab_handle);
 
+  // Called on IPC message deserialization failure. Prints an error message
+  // and closes the IPC channel.
+  void OnMessageDeserializationFailure();
+
   scoped_ptr<AutomationAutocompleteEditTracker> autocomplete_edit_tracker_;
   scoped_ptr<AutomationBrowserTracker> browser_tracker_;
   scoped_ptr<InitialLoadObserver> initial_load_observer_;
@@ -199,9 +182,6 @@ class AutomationProvider : public base::RefCounted<AutomationProvider>,
   scoped_ptr<NavigationControllerRestoredObserver> restore_tracker_;
   scoped_ptr<AutomationTabTracker> tab_tracker_;
   scoped_ptr<AutomationWindowTracker> window_tracker_;
-
-  typedef ObserverList<NotificationObserver> NotificationObserverList;
-  NotificationObserverList notification_observer_list_;
 
   typedef std::map<NavigationController*, LoginHandler*> LoginHandlerMap;
   LoginHandlerMap login_handler_map_;
@@ -229,12 +209,18 @@ class AutomationProvider : public base::RefCounted<AutomationProvider>,
   scoped_refptr<AutomationResourceMessageFilter>
       automation_resource_message_filter_;
 
+  // True iff we should open a new automation IPC channel if it closes.
+  bool reinitialize_on_channel_error_;
+
  private:
   void OnUnhandledMessage();
 
+  // Clear and reinitialize the automation IPC channel.
+  bool ReinitializeChannel();
+
   // IPC Message callbacks.
   void WindowSimulateDrag(int handle,
-                          std::vector<gfx::Point> drag_path,
+                          const std::vector<gfx::Point>& drag_path,
                           int flags,
                           bool press_escape_en_route,
                           IPC::Message* reply_message);
@@ -262,11 +248,6 @@ class AutomationProvider : public base::RefCounted<AutomationProvider>,
 
   void InstallExtension(const FilePath& crx_path,
                         IPC::Message* reply_message);
-
-  void LoadExpandedExtension(const FilePath& extension_dir,
-                             IPC::Message* reply_message);
-
-  void GetEnabledExtensions(std::vector<FilePath>* result);
 
   void WaitForExtensionTestResult(IPC::Message* reply_message);
 
@@ -307,11 +288,6 @@ class AutomationProvider : public base::RefCounted<AutomationProvider>,
                         const std::string& encoding_name,
                         bool* success);
 
-  // Enables extension automation (for e.g. UITests).
-  void SetEnableExtensionAutomation(
-      int tab_handle,
-      const std::vector<std::string>& functions_enabled);
-
   // Selects all contents on the page.
   void SelectAll(int tab_handle);
 
@@ -323,14 +299,6 @@ class AutomationProvider : public base::RefCounted<AutomationProvider>,
   void ReloadAsync(int tab_handle);
   void StopAsync(int tab_handle);
   void SaveAsAsync(int tab_handle);
-
-#if defined(OS_CHROMEOS)
-  // Logs in through the Chrome OS Login Wizard with given |username| and
-  // password.  Returns true via |reply_message| on success.
-  void LoginWithUserAndPass(const std::string& username,
-                            const std::string& password,
-                            IPC::Message* reply_message);
-#endif
 
   // Returns the extension for the given handle. Returns NULL if there is
   // no extension for the handle.
@@ -390,12 +358,6 @@ class AutomationProvider : public base::RefCounted<AutomationProvider>,
                                  const std::string& origin,
                                  const std::string& target);
 
-  // Determine if the message from the external host represents a browser
-  // event, and if so dispatch it.
-  bool InterceptBrowserEventMessageFromExternalHost(const std::string& message,
-                                                    const std::string& origin,
-                                                    const std::string& target);
-
   void OnBrowserMoved(int handle);
 
   void OnRunUnloadHandlers(int handle, IPC::Message* reply_message);
@@ -405,23 +367,24 @@ class AutomationProvider : public base::RefCounted<AutomationProvider>,
   ExternalTabContainer* GetExternalTabForHandle(int handle);
 #endif  // defined(OS_WIN)
 
-  typedef std::map<int, ExtensionPortContainer*> PortContainerMap;
-
   scoped_ptr<IPC::ChannelProxy> channel_;
   scoped_ptr<NotificationObserver> new_tab_ui_load_observer_;
   scoped_ptr<NotificationObserver> find_in_page_observer_;
-  scoped_ptr<NotificationObserver> dom_operation_observer_;
-  scoped_ptr<NotificationObserver> dom_inspector_observer_;
   scoped_ptr<ExtensionTestResultNotificationObserver>
       extension_test_result_observer_;
   scoped_ptr<AutomationExtensionTracker> extension_tracker_;
-  PortContainerMap port_containers_;
 
   // True iff connected to an AutomationProxy.
   bool is_connected_;
 
   // True iff browser finished loading initial set of tabs.
-  bool initial_loads_complete_;
+  bool initial_tab_loads_complete_;
+
+  // True iff the Chrome OS network library finished initialization.
+  bool network_library_initialized_;
+
+  // ID of automation channel.
+  std::string channel_id_;
 
   DISALLOW_COPY_AND_ASSIGN(AutomationProvider);
 };

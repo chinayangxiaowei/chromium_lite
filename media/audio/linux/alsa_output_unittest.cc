@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -80,12 +80,8 @@ class MockAudioManagerLinux : public AudioManagerLinux {
   MOCK_METHOD0(HasAudioInputDevices, bool());
   MOCK_METHOD1(MakeAudioOutputStream, AudioOutputStream*(
       AudioParameters params));
-  MOCK_METHOD5(MakeAudioInputStream, AudioInputStream*(
-      AudioParameters::Format format,
-      int channels,
-      int sample_rate,
-      char bits_per_sample,
-      uint32 samples_per_packet));
+  MOCK_METHOD1(MakeAudioInputStream, AudioInputStream*(
+      AudioParameters params));
   MOCK_METHOD0(MuteAll, void());
   MOCK_METHOD0(UnMuteAll, void());
 
@@ -441,7 +437,7 @@ TEST_F(AlsaPcmOutputStreamTest, StartStop) {
   // Expect the pre-roll.
   MockAudioSourceCallback mock_callback;
   EXPECT_CALL(mock_alsa_wrapper_, PcmState(kFakeHandle))
-      .Times(2)
+      .Times(3)
       .WillRepeatedly(Return(SND_PCM_STATE_RUNNING));
   EXPECT_CALL(mock_alsa_wrapper_, PcmDelay(kFakeHandle, _))
       .Times(2)

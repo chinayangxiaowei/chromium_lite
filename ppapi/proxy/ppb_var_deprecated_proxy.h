@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,6 +7,7 @@
 
 #include <vector>
 
+#include "base/task.h"
 #include "ppapi/c/pp_instance.h"
 #include "ppapi/proxy/interface_proxy.h"
 
@@ -29,17 +30,19 @@ class PPB_Var_Deprecated_Proxy : public InterfaceProxy {
                            const void* target_interface);
   virtual ~PPB_Var_Deprecated_Proxy();
 
+  static const Info* GetInfo();
+
   const PPB_Var_Deprecated* ppb_var_target() const {
     return reinterpret_cast<const PPB_Var_Deprecated*>(target_interface());
   }
 
   // InterfaceProxy implementation.
-  virtual const void* GetSourceInterface() const;
-  virtual InterfaceID GetInterfaceId() const;
   virtual bool OnMessageReceived(const IPC::Message& msg);
 
  private:
   // Message handlers.
+  void OnMsgAddRefObject(int64 object_id, int* unused);
+  void OnMsgReleaseObject(int64 object_id);
   void OnMsgHasProperty(SerializedVarReceiveInput var,
                         SerializedVarReceiveInput name,
                         SerializedVarOutParam exception,
@@ -87,6 +90,12 @@ class PPB_Var_Deprecated_Proxy : public InterfaceProxy {
                                    int64 ppp_class,
                                    int64 ppp_class_data,
                                    SerializedVarReturnValue result);
+
+  // Call in the host for messages that can be reentered.
+  void SetAllowPluginReentrancy();
+
+  void DoReleaseObject(int64 object_id);
+  ScopedRunnableMethodFactory<PPB_Var_Deprecated_Proxy> task_factory_;
 };
 
 }  // namespace proxy

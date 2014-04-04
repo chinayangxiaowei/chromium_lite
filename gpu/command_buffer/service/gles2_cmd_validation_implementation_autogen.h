@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -270,15 +270,15 @@ static GLenum valid_render_buffer_format_table[] = {
 };
 
 static GLenum valid_render_buffer_parameter_table[] = {
-  GL_RENDERBUFFER_WIDTH,
-  GL_RENDERBUFFER_HEIGHT,
-  GL_RENDERBUFFER_INTERNAL_FORMAT,
   GL_RENDERBUFFER_RED_SIZE,
   GL_RENDERBUFFER_GREEN_SIZE,
   GL_RENDERBUFFER_BLUE_SIZE,
   GL_RENDERBUFFER_ALPHA_SIZE,
   GL_RENDERBUFFER_DEPTH_SIZE,
   GL_RENDERBUFFER_STENCIL_SIZE,
+  GL_RENDERBUFFER_WIDTH,
+  GL_RENDERBUFFER_HEIGHT,
+  GL_RENDERBUFFER_INTERNAL_FORMAT,
 };
 
 static GLenum valid_render_buffer_target_table[] = {

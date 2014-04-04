@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,12 +8,7 @@
 
 #include "base/utf_string_conversions.h"
 #include "chrome/browser/defaults.h"
-#include "chrome/browser/themes/browser_theme_provider.h"
-#include "gfx/canvas_skia.h"
-#include "gfx/favicon_size.h"
-#include "gfx/font.h"
-#include "gfx/path.h"
-#include "gfx/skbitmap_operations.h"
+#include "chrome/browser/themes/theme_service.h"
 #include "grit/app_resources.h"
 #include "grit/generated_resources.h"
 #include "grit/theme_resources.h"
@@ -22,6 +17,11 @@
 #include "ui/base/animation/slide_animation.h"
 #include "ui/base/animation/throb_animation.h"
 #include "ui/base/resource/resource_bundle.h"
+#include "ui/gfx/canvas_skia.h"
+#include "ui/gfx/favicon_size.h"
+#include "ui/gfx/font.h"
+#include "ui/gfx/path.h"
+#include "ui/gfx/skbitmap_operations.h"
 #include "views/controls/button/image_button.h"
 #include "views/widget/tooltip_manager.h"
 #include "views/widget/widget.h"
@@ -34,7 +34,7 @@ static const int kRightPadding = 15;
 static const int kBottomPadding = 5;
 static const int kDropShadowHeight = 2;
 static const int kToolbarOverlap = 1;
-static const int kFavIconTitleSpacing = 4;
+static const int kFaviconTitleSpacing = 4;
 static const int kTitleCloseButtonSpacing = 5;
 static const int kStandardTitleWidth = 175;
 static const int kCloseButtonVertFuzz = 0;
@@ -52,6 +52,13 @@ static const int kMiniTabRendererAsNormalTabWidth =
 
 // How opaque to make the hover state (out of 1).
 static const double kHoverOpacity = 0.33;
+static const double kHoverSlideOpacity = 0.5;
+
+// Opacity for non-active selected tabs.
+static const double kSelectedTabOpacity = .45;
+
+// Selected (but not active) tabs have their throb value scaled down by this.
+static const double kSelectedTabThrobScale = .5;
 
 Tab::TabImage Tab::tab_alpha_ = {0};
 Tab::TabImage Tab::tab_active_ = {0};
@@ -92,7 +99,7 @@ Tab::Tab(TabController* controller)
     : BaseTab(controller),
       showing_icon_(false),
       showing_close_button_(false),
-      close_button_color_(NULL) {
+      close_button_color_(0) {
   InitTabResources();
 }
 
@@ -142,7 +149,7 @@ gfx::Size Tab::GetMinimumUnselectedSize() {
 // static
 gfx::Size Tab::GetMinimumSelectedSize() {
   gfx::Size minimum_size = GetMinimumUnselectedSize();
-  minimum_size.set_width(kLeftPadding + kFavIconSize + kRightPadding);
+  minimum_size.set_width(kLeftPadding + kFaviconSize + kRightPadding);
   return minimum_size;
 }
 
@@ -150,7 +157,7 @@ gfx::Size Tab::GetMinimumSelectedSize() {
 gfx::Size Tab::GetStandardSize() {
   gfx::Size standard_size = GetMinimumUnselectedSize();
   standard_size.set_width(
-      standard_size.width() + kFavIconTitleSpacing + kStandardTitleWidth);
+      standard_size.width() + kFaviconTitleSpacing + kStandardTitleWidth);
   return standard_size;
 }
 
@@ -161,6 +168,14 @@ int Tab::GetMiniWidth() {
 
 ////////////////////////////////////////////////////////////////////////////////
 // Tab, protected:
+
+const gfx::Rect& Tab::GetTitleBounds() const {
+  return title_bounds_;
+}
+
+const gfx::Rect& Tab::GetIconBounds() const {
+  return favicon_bounds_;
+}
 
 void Tab::DataChanged(const TabRendererData& old) {
   if (data().blocked == old.blocked)
@@ -175,7 +190,7 @@ void Tab::DataChanged(const TabRendererData& old) {
 ////////////////////////////////////////////////////////////////////////////////
 // Tab, views::View overrides:
 
-void Tab::Paint(gfx::Canvas* canvas) {
+void Tab::OnPaint(gfx::Canvas* canvas) {
   // Don't paint if we're narrower than we can render correctly. (This should
   // only happen during animations).
   if (width() < GetMinimumUnselectedSize().width() && !data().mini)
@@ -191,8 +206,8 @@ void Tab::Paint(gfx::Canvas* canvas) {
 
   SkColor title_color = GetThemeProvider()->
       GetColor(IsSelected() ?
-          BrowserThemeProvider::COLOR_TAB_TEXT :
-          BrowserThemeProvider::COLOR_BACKGROUND_TAB_TEXT);
+          ThemeService::COLOR_TAB_TEXT :
+          ThemeService::COLOR_BACKGROUND_TAB_TEXT);
 
   if (!data().mini || width() > kMiniTabRendererAsNormalTabWidth)
     PaintTitle(canvas, title_color);
@@ -211,14 +226,14 @@ void Tab::Paint(gfx::Canvas* canvas) {
 }
 
 void Tab::Layout() {
-  gfx::Rect lb = GetLocalBounds(false);
+  gfx::Rect lb = GetContentsBounds();
   if (lb.IsEmpty())
     return;
   lb.Inset(kLeftPadding, kTopPadding, kRightPadding, kBottomPadding);
 
   // The height of the content of the Tab is the largest of the favicon,
   // the title text and the close button graphic.
-  int content_height = std::max(kFavIconSize, font_height());
+  int content_height = std::max(kFaviconSize, font_height());
   gfx::Size close_button_size(close_button()->GetPreferredSize());
   content_height = std::max(content_height, close_button_size.height());
 
@@ -226,23 +241,17 @@ void Tab::Layout() {
   showing_icon_ = ShouldShowIcon();
   if (showing_icon_) {
     // Use the size of the favicon as apps use a bigger favicon size.
-    int favicon_size =
-        !data().favicon.empty() ? data().favicon.width() : kFavIconSize;
-    int favicon_top = kTopPadding + content_height / 2 - favicon_size / 2;
+    int favicon_top = kTopPadding + content_height / 2 - kFaviconSize / 2;
     int favicon_left = lb.x();
-    if (favicon_size != kFavIconSize) {
-      favicon_left -= (favicon_size - kFavIconSize) / 2;
-      favicon_top -= kAppTapFaviconVerticalAdjustment;
-    }
     favicon_bounds_.SetRect(favicon_left, favicon_top,
-                            favicon_size, favicon_size);
+                            kFaviconSize, kFaviconSize);
     if (data().mini && width() < kMiniTabRendererAsNormalTabWidth) {
       // Adjust the location of the favicon when transitioning from a normal
       // tab to a mini-tab.
       int mini_delta = kMiniTabRendererAsNormalTabWidth - GetMiniWidth();
       int ideal_delta = width() - GetMiniWidth();
       if (ideal_delta < mini_delta) {
-        int ideal_x = (GetMiniWidth() - favicon_size) / 2;
+        int ideal_x = (GetMiniWidth() - kFaviconSize) / 2;
         int x = favicon_bounds_.x() + static_cast<int>(
             (1 - static_cast<float>(ideal_delta) /
              static_cast<float>(mini_delta)) *
@@ -269,7 +278,7 @@ void Tab::Layout() {
     close_button()->SetVisible(false);
   }
 
-  int title_left = favicon_bounds_.right() + kFavIconTitleSpacing;
+  int title_left = favicon_bounds_.right() + kFaviconTitleSpacing;
   int title_top = kTopPadding + (content_height - font_height()) / 2;
   // Size the Title text to fill the remaining space.
   if (!data().mini || width() >= kMiniTabRendererAsNormalTabWidth) {
@@ -295,16 +304,20 @@ void Tab::Layout() {
 
   // Certain UI elements within the Tab (the favicon, etc.) are not represented
   // as child Views (which is the preferred method).  Instead, these UI elements
-  // are drawn directly on the canvas from within Tab::Paint(). The Tab's child
-  // Views (for example, the Tab's close button which is a views::Button
+  // are drawn directly on the canvas from within Tab::OnPaint(). The Tab's
+  // child Views (for example, the Tab's close button which is a views::Button
   // instance) are automatically mirrored by the mirroring infrastructure in
   // views. The elements Tab draws directly on the canvas need to be manually
   // mirrored if the View's layout is right-to-left.
-  title_bounds_.set_x(MirroredLeftPointForRect(title_bounds_));
+  title_bounds_.set_x(GetMirroredXForRect(title_bounds_));
 }
 
 void Tab::OnThemeChanged() {
   LoadTabImages();
+}
+
+std::string Tab::GetClassName() const {
+  return kViewClassName;
 }
 
 bool Tab::HasHitTestMask() const {
@@ -338,13 +351,13 @@ void Tab::GetHitTestMask(gfx::Path* path) const {
 }
 
 bool Tab::GetTooltipTextOrigin(const gfx::Point& p, gfx::Point* origin) {
-  origin->set_x(title_bounds().x() + 10);
+  origin->set_x(title_bounds_.x() + 10);
   origin->set_y(-views::TooltipManager::GetTooltipHeight() - 4);
   return true;
 }
 
-void Tab::OnMouseMoved(const views::MouseEvent& e) {
-  hover_point_ = e.location();
+void Tab::OnMouseMoved(const views::MouseEvent& event) {
+  hover_point_ = event.location();
   // We need to redraw here because otherwise the hover glow does not update
   // and follow the new mouse position.
   SchedulePaint();
@@ -353,12 +366,8 @@ void Tab::OnMouseMoved(const views::MouseEvent& e) {
 ////////////////////////////////////////////////////////////////////////////////
 // Tab, private
 
-void Tab::PaintIcon(gfx::Canvas* canvas) {
-  BaseTab::PaintIcon(canvas, favicon_bounds_.x(), favicon_bounds_.y());
-}
-
 void Tab::PaintTabBackground(gfx::Canvas* canvas) {
-  if (IsSelected()) {
+  if (IsActive()) {
     PaintActiveTabBackground(canvas);
   } else {
     if (mini_title_animation_.get() && mini_title_animation_->is_animating())
@@ -433,21 +442,18 @@ void Tab::PaintInactiveTabBackgroundWithTitleChange(gfx::Canvas* canvas) {
 }
 
 void Tab::PaintInactiveTabBackground(gfx::Canvas* canvas) {
-  bool is_otr = data().off_the_record;
-
   // The tab image needs to be lined up with the background image
   // so that it feels partially transparent.  These offsets represent the tab
   // position within the frame background image.
-  int offset = GetX(views::View::APPLY_MIRRORING_TRANSFORMATION) +
-      background_offset_.x();
+  int offset = GetMirroredX() + background_offset_.x();
 
   int tab_id;
   if (GetWidget() &&
-      GetWidget()->GetWindow()->GetNonClientView()->UseNativeFrame()) {
+      GetWidget()->GetWindow()->non_client_view()->UseNativeFrame()) {
     tab_id = IDR_THEME_TAB_BACKGROUND_V;
   } else {
-    tab_id = is_otr ? IDR_THEME_TAB_BACKGROUND_INCOGNITO :
-                      IDR_THEME_TAB_BACKGROUND;
+    tab_id = data().incognito ? IDR_THEME_TAB_BACKGROUND_INCOGNITO :
+                                IDR_THEME_TAB_BACKGROUND;
   }
 
   SkBitmap* tab_bg = GetThemeProvider()->GetBitmapNamed(tab_id);
@@ -503,7 +509,8 @@ void Tab::PaintInactiveTabBackground(gfx::Canvas* canvas) {
   canvas->DrawBitmapInt(background_canvas.ExtractBitmap(), 0, 0);
 
   if (!GetThemeProvider()->HasCustomImage(tab_id) &&
-      hover_animation() && hover_animation()->IsShowing()) {
+      hover_animation() &&
+      (hover_animation()->IsShowing() || hover_animation()->is_animating())) {
     SkBitmap hover_glow = DrawHoverGlowBitmap(width(), height());
     // Draw the hover glow clipped to the background into hover_image.
     SkBitmap hover_image = SkBitmapOperations::CreateMaskedBitmap(
@@ -523,8 +530,7 @@ void Tab::PaintInactiveTabBackground(gfx::Canvas* canvas) {
 }
 
 void Tab::PaintActiveTabBackground(gfx::Canvas* canvas) {
-  int offset = GetX(views::View::APPLY_MIRRORING_TRANSFORMATION) +
-      background_offset_.x();
+  int offset = GetMirroredX() + background_offset_.x();
   ui::ThemeProvider* tp = GetThemeProvider();
   DCHECK(tp) << "Unable to get theme provider";
 
@@ -580,8 +586,8 @@ SkBitmap Tab::DrawHoverGlowBitmap(int width_input, int height_input) {
   const ui::SlideAnimation* hover_slide = hover_animation();
   int hover_alpha = 0;
   if (hover_slide) {
-    hover_alpha =
-        static_cast<int>(255 * kHoverOpacity * hover_slide->GetCurrentValue());
+    hover_alpha = static_cast<int>(255 * kHoverSlideOpacity *
+                                   hover_slide->GetCurrentValue());
   }
   colors[0] = SkColorSetARGB(hover_alpha, 255, 255, 255);
   colors[1] = SkColorSetARGB(0, 255, 255, 255);
@@ -607,7 +613,7 @@ SkBitmap Tab::DrawHoverGlowBitmap(int width_input, int height_input) {
 int Tab::IconCapacity() const {
   if (height() < GetMinimumUnselectedSize().height())
     return 0;
-  return (width() - kLeftPadding - kRightPadding) / kFavIconSize;
+  return (width() - kLeftPadding - kRightPadding) / kFaviconSize;
 }
 
 bool Tab::ShouldShowIcon() const {
@@ -615,8 +621,8 @@ bool Tab::ShouldShowIcon() const {
     return true;
   if (!data().show_icon) {
     return false;
-  } else if (IsSelected()) {
-    // The selected tab clips favicon before close button.
+  } else if (IsActive()) {
+    // The active tab clips favicon before close button.
     return IconCapacity() >= 2;
   }
   // Non-selected tabs clip close button before favicon.
@@ -624,17 +630,22 @@ bool Tab::ShouldShowIcon() const {
 }
 
 bool Tab::ShouldShowCloseBox() const {
-  // The selected tab never clips close button.
-  return !data().mini && IsCloseable() &&
-      (IsSelected() || IconCapacity() >= 3);
+  // The active tab never clips close button.
+  return !data().mini && IsCloseable() && (IsActive() || IconCapacity() >= 3);
 }
 
 double Tab::GetThrobValue() {
-  if (pulse_animation() && pulse_animation()->is_animating())
-    return pulse_animation()->GetCurrentValue() * kHoverOpacity;
+  bool is_selected = IsSelected();
+  double min = is_selected ? kSelectedTabOpacity : 0;
+  double scale = is_selected ? kSelectedTabThrobScale : 1;
 
-  return hover_animation() ?
-      kHoverOpacity * hover_animation()->GetCurrentValue() : 0;
+  if (pulse_animation() && pulse_animation()->is_animating())
+    return pulse_animation()->GetCurrentValue() * kHoverOpacity * scale + min;
+
+  if (hover_animation())
+    return kHoverOpacity * hover_animation()->GetCurrentValue() * scale + min;
+
+  return is_selected ? kSelectedTabOpacity : 0;
 }
 
 ////////////////////////////////////////////////////////////////////////////////

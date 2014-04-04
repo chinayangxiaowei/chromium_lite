@@ -1,4 +1,4 @@
-// Copyright (c) 2006-2008 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,18 +8,19 @@
 #include <ole2.h>
 #endif  // defined(OS_WIN)
 
-#include "chrome/browser/tab_contents/navigation_controller.h"
-#include "chrome/browser/tab_contents/navigation_entry.h"
-#include "chrome/browser/tab_contents/tab_contents.h"
 #include "chrome/browser/tabs/tab_strip_model.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_navigator.h"
 #include "chrome/browser/ui/tab_contents/tab_contents_wrapper.h"
 #include "chrome/common/render_messages.h"
 #include "chrome/test/testing_profile.h"
+#include "content/browser/tab_contents/navigation_controller.h"
+#include "content/browser/tab_contents/navigation_entry.h"
+#include "content/browser/tab_contents/tab_contents.h"
+#include "content/common/page_transition_types.h"
 
 BrowserWithTestWindowTest::BrowserWithTestWindowTest()
     : ui_thread_(BrowserThread::UI, message_loop()),
+      file_thread_(BrowserThread::FILE, message_loop()),
       rph_factory_(),
       rvh_factory_(&rph_factory_) {
 #if defined(OS_WIN)
@@ -28,23 +29,18 @@ BrowserWithTestWindowTest::BrowserWithTestWindowTest()
 }
 
 void BrowserWithTestWindowTest::SetUp() {
-  // NOTE: I have a feeling we're going to want virtual methods for creating
-  // these, as such they're in SetUp instead of the constructor.
-  profile_.reset(new TestingProfile());
+  TestingBrowserProcessTest::SetUp();
+
+  profile_.reset(CreateProfile());
   browser_.reset(new Browser(Browser::TYPE_NORMAL, profile()));
   window_.reset(new TestBrowserWindow(browser()));
   browser_->set_window(window_.get());
 }
 
 BrowserWithTestWindowTest::~BrowserWithTestWindowTest() {
-  // Make sure we close all tabs, otherwise Browser isn't happy in its
-  // destructor.
-  browser()->CloseAllTabs();
-
   // A Task is leaked if we don't destroy everything, then run the message
   // loop.
-  browser_.reset(NULL);
-  window_.reset(NULL);
+  DestroyBrowser();
   profile_.reset(NULL);
 
   MessageLoop::current()->PostTask(FROM_HERE, new MessageLoop::QuitTask);
@@ -95,10 +91,24 @@ void BrowserWithTestWindowTest::CommitPendingLoad(
 void BrowserWithTestWindowTest::NavigateAndCommit(
     NavigationController* controller,
     const GURL& url) {
-  controller->LoadURL(url, GURL(), 0);
+  controller->LoadURL(url, GURL(), PageTransition::LINK);
   CommitPendingLoad(controller);
 }
 
 void BrowserWithTestWindowTest::NavigateAndCommitActiveTab(const GURL& url) {
   NavigateAndCommit(&browser()->GetSelectedTabContents()->controller(), url);
+}
+
+void BrowserWithTestWindowTest::DestroyBrowser() {
+  if (!browser_.get())
+    return;
+  // Make sure we close all tabs, otherwise Browser isn't happy in its
+  // destructor.
+  browser()->CloseAllTabs();
+  browser_.reset(NULL);
+  window_.reset(NULL);
+}
+
+TestingProfile* BrowserWithTestWindowTest::CreateProfile() {
+  return new TestingProfile();
 }

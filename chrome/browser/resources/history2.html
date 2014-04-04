@@ -1054,11 +1054,12 @@ function historyResult(info, results) {
 function deleteComplete() {
   window.console.log('Delete complete');
   deleteInFlight = false;
-  if (deleteQueue.length > 1) {
+  if (deleteQueue.length > 2) {
     deleteQueue = deleteQueue.slice(2);
     deleteNextInQueue();
   } else {
     deleteQueue = [];
+    historyView.reload();
   }
 }
 
@@ -1072,17 +1073,8 @@ function deleteFailed() {
   deleteInFlight = false;
   setTimeout(deleteNextInQueue, 500);
 }
-
-/**
- * We're called when something is deleted (either by us or by someone
- * else).
- */
-function historyDeleted() {
-  window.console.log('History deleted');
-  historyView.reload();
-}
 </script>
-<link rel="stylesheet" href="dom_ui2.css">
+<link rel="stylesheet" href="webui2.css">
 <style>
 #results-separator {
   margin-top:12px;

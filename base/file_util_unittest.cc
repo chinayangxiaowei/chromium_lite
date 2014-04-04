@@ -18,8 +18,8 @@
 #include "base/base_paths.h"
 #include "base/file_path.h"
 #include "base/file_util.h"
+#include "base/memory/scoped_temp_dir.h"
 #include "base/path_service.h"
-#include "base/scoped_temp_dir.h"
 #include "base/threading/platform_thread.h"
 #include "base/time.h"
 #include "base/utf_string_conversions.h"
@@ -162,8 +162,8 @@ class FindResultCollector {
 // Simple function to dump some text into a new file.
 void CreateTextFile(const FilePath& filename,
                     const std::wstring& contents) {
-  std::ofstream file;
-  file.open(WideToUTF8(filename.ToWStringHack()).c_str());
+  std::wofstream file;
+  file.open(filename.value().c_str());
   ASSERT_TRUE(file.is_open());
   file << contents;
   file.close();
@@ -173,9 +173,9 @@ void CreateTextFile(const FilePath& filename,
 std::wstring ReadTextFile(const FilePath& filename) {
   wchar_t contents[64];
   std::wifstream file;
-  file.open(WideToUTF8(filename.ToWStringHack()).c_str());
+  file.open(filename.value().c_str());
   EXPECT_TRUE(file.is_open());
-  file.getline(contents, 64);
+  file.getline(contents, arraysize(contents));
   file.close();
   return std::wstring(contents);
 }

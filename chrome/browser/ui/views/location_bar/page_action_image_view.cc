@@ -5,15 +5,16 @@
 #include "chrome/browser/ui/views/location_bar/page_action_image_view.h"
 
 #include "base/utf_string_conversions.h"
-#include "chrome/browser/browser_list.h"
 #include "chrome/browser/extensions/extension_browser_event_router.h"
 #include "chrome/browser/extensions/extension_service.h"
+#include "chrome/browser/platform_util.h"
 #include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/ui/browser_list.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
 #include "chrome/browser/ui/views/location_bar/location_bar_view.h"
-#include "chrome/browser/platform_util.h"
 #include "chrome/common/extensions/extension_action.h"
 #include "chrome/common/extensions/extension_resource.h"
+#include "ui/base/accessibility/accessible_view_state.h"
 #include "views/controls/menu/menu_2.h"
 
 PageActionImageView::PageActionImageView(LocationBarView* owner,
@@ -89,13 +90,9 @@ void PageActionImageView::ExecuteAction(int button,
     popup_ = ExtensionPopup::Show(
         page_action_->GetPopupUrl(current_tab_id_),
         browser,
-        browser->profile(),
-        browser->window()->GetNativeHandle(),
         screen_bounds,
         arrow_location,
-        true,  // Activate the popup window.
         inspect_with_devtools,
-        ExtensionPopup::BUBBLE_CHROME,
         this);  // ExtensionPopup::Observer
   } else {
     ExtensionService* service = profile_->GetExtensionService();
@@ -105,8 +102,8 @@ void PageActionImageView::ExecuteAction(int button,
   }
 }
 
-AccessibilityTypes::Role PageActionImageView::GetAccessibleRole() {
-  return AccessibilityTypes::ROLE_PUSHBUTTON;
+void PageActionImageView::GetAccessibleState(ui::AccessibleViewState* state) {
+  state->role = ui::AccessibilityTypes::ROLE_PUSHBUTTON;
 }
 
 bool PageActionImageView::OnMousePressed(const views::MouseEvent& event) {
@@ -116,9 +113,8 @@ bool PageActionImageView::OnMousePressed(const views::MouseEvent& event) {
   return true;
 }
 
-void PageActionImageView::OnMouseReleased(const views::MouseEvent& event,
-                                          bool canceled) {
-  if (canceled || !HitTest(event.location()))
+void PageActionImageView::OnMouseReleased(const views::MouseEvent& event) {
+  if (!HitTest(event.location()))
     return;
 
   int button = -1;
@@ -139,9 +135,9 @@ void PageActionImageView::OnMouseReleased(const views::MouseEvent& event,
   ExecuteAction(button, false);  // inspect_with_devtools
 }
 
-bool PageActionImageView::OnKeyPressed(const views::KeyEvent& e) {
-  if (e.GetKeyCode() == ui::VKEY_SPACE ||
-      e.GetKeyCode() == ui::VKEY_RETURN) {
+bool PageActionImageView::OnKeyPressed(const views::KeyEvent& event) {
+  if (event.key_code() == ui::VKEY_SPACE ||
+      event.key_code() == ui::VKEY_RETURN) {
     ExecuteAction(1, false);
     return true;
   }
@@ -164,7 +160,7 @@ void PageActionImageView::ShowContextMenu(const gfx::Point& p,
 }
 
 void PageActionImageView::OnImageLoaded(
-    SkBitmap* image, ExtensionResource resource, int index) {
+    SkBitmap* image, const ExtensionResource& resource, int index) {
   // We loaded icons()->size() icons, plus one extra if the page action had
   // a default icon.
   int total_icons = static_cast<int>(page_action_->icon_paths()->size());
@@ -184,7 +180,7 @@ void PageActionImageView::OnImageLoaded(
   // During object construction (before the parent has been set) we are already
   // in a UpdatePageActions call, so we don't need to start another one (and
   // doing so causes crash described in http://crbug.com/57333).
-  if (GetParent())
+  if (parent())
     owner_->UpdatePageActions();
 }
 

@@ -9,13 +9,13 @@
 
 #include "base/string16.h"
 #include "chrome/common/content_settings.h"
-#include "chrome/common/navigation_types.h"
 #include "chrome/test/automation/autocomplete_edit_proxy.h"
-#include "gfx/rect.h"
+#include "content/common/navigation_types.h"
 #include "googleurl/src/gurl.h"
 #include "ipc/ipc_message_macros.h"
 #include "net/url_request/url_request_status.h"
-
+#include "ui/gfx/rect.h"
+#include "webkit/glue/window_open_disposition.h"
 
 
 // NOTE: All IPC messages have either a routing_id of 0 (for asynchronous
@@ -533,8 +533,8 @@ IPC_MESSAGE_ROUTED3(AutomationMsg_OpenURL,
 //   - int: handle of the tab
 // Response:
 //  - bool: whether the operation was successful.
-IPC_SYNC_MESSAGE_CONTROL1_0(AutomationMsg_WaitForTabToBeRestored,
-                            int)
+IPC_SYNC_MESSAGE_CONTROL1_1(AutomationMsg_WaitForTabToBeRestored,
+                            int, bool)
 
 // This message is an outgoing message from Chrome to an external host.
 // It is a notification that a navigation happened
@@ -653,7 +653,7 @@ IPC_SYNC_MESSAGE_CONTROL4_1(AutomationMsg_SavePage,
 IPC_SYNC_MESSAGE_CONTROL1_2(AutomationMsg_AutocompleteEditGetText,
                             int /* autocomplete edit handle */,
                             bool /* the requested autocomplete edit exists */,
-                            std::wstring /* omnibox text */)
+                            string16 /* omnibox text */)
 
 // This message sets the text being displayed in the AutocompleteEdit.  The
 // first parameter is the handle to the omnibox and the second parameter is
@@ -662,7 +662,7 @@ IPC_SYNC_MESSAGE_CONTROL1_2(AutomationMsg_AutocompleteEditGetText,
 // completed.
 IPC_SYNC_MESSAGE_CONTROL2_1(AutomationMsg_AutocompleteEditSetText,
                             int /* autocomplete edit handle */,
-                            std::wstring /* text to set */,
+                            string16 /* text to set */,
                             bool /* the requested autocomplete edit exists */)
 
 // This message requests if a query to a autocomplete provider is still in
@@ -755,14 +755,14 @@ IPC_SYNC_MESSAGE_CONTROL1_2(AutomationMsg_BookmarkBarVisibility,
 // returns -1 if an error occurred.
 IPC_SYNC_MESSAGE_CONTROL1_1(AutomationMsg_GetInfoBarCount,
                             int /* tab_handle */,
-                            int /* info bar count */)
+                            size_t /* info bar count */)
 
 // This message triggers the action associated with the "accept" button in
 // the info-bar at the specified index.  If |wait for navigation| is true, it
 // won't return until a navigation has occurred.
 IPC_SYNC_MESSAGE_CONTROL3_1(AutomationMsg_ClickInfoBarAccept,
                             int /* tab_handle */,
-                            int /* info bar index */,
+                            size_t /* info bar index */,
                             bool /* wait for navigation */,
 // This line blank on purpose, see comment atop file about __LINE__.
                             /* navigation result */
@@ -887,19 +887,19 @@ IPC_SYNC_MESSAGE_CONTROL0_1(AutomationMsg_FindNormalBrowserWindow,
 IPC_SYNC_MESSAGE_CONTROL0_1(AutomationMsg_NormalBrowserWindowCount,
                             int)
 
-// Used to put the browser into "extension automation mode" for a given
-// set of Chrome Extensions API functions for the current profile, or turn
-// off automation mode.  The specified tab is used as the conduit for all
-// automated API functions.  It must be an external tab (as in
-// AutomationMsg_CreateExternalTab).
-IPC_MESSAGE_CONTROL2(AutomationMsg_SetEnableExtensionAutomation,
-                     // Tab handle.
+// DEPRECATED MESSAGE - But we must leave this comment and message so as
+// not to perturb line numbers (see comment at top of file re __LINE__).
+// TODO(phajdan.jr): Remove when the reference build is updated (this and
+// all others marked "DEPRECATED MESSAGE").
+// (intentionally blank line)
+IPC_MESSAGE_CONTROL2(AutomationMsg_DeprecatedMessageOne,
+                     // (intentionally blank line)
                      int,
-                     // Empty to disable automation, non-empty to enable
-                     // automation of the specified API functions, single
-                     // entry of "*" to enable automation of all API
-                     // functions.
-                     std::vector<std::string>)
+                     // (intentionally blank line)
+                     // (intentionally blank line)
+                     // (intentionally blank line)
+                     // (intentionally blank line)
+                     int)
 
 // This message tells the browser to start using the new proxy configuration
 // represented by the given JSON string. The parameters used in the JSON
@@ -1133,20 +1133,20 @@ IPC_SYNC_MESSAGE_CONTROL1_1(AutomationMsg_InstallExtension,
                             FilePath /* full path to crx file */,
                             AutomationMsg_ExtensionResponseValues)
 
-// Silently load the extension in the given directory.  This expects an
-// extension expanded into the directory, not a crx file.
-IPC_SYNC_MESSAGE_CONTROL1_1(AutomationMsg_LoadExpandedExtension,
-                            FilePath /* root directory of extension */,
-                            AutomationMsg_ExtensionResponseValues)
+// DEPRECATED MESSAGE - But we must leave this comment and message so as
+// not to perturb line numbers (see comment at top of file re __LINE__).
+IPC_SYNC_MESSAGE_CONTROL1_1(AutomationMsg_DeprecatedMessageTwo,
+                            int,
+                            int)
 
-// Retrieves a list of the root directories of all enabled extensions
-// that have been installed into Chrome by dropping a .crx file onto
-// Chrome or an equivalent action (including loaded extensions).
-// Other types of extensions are not included on the list (e.g. "component",
-// "app" or "external" extensions) since since CEEE does not yet support them
-// (and it actually only support a single extension in its profile for now).
-IPC_SYNC_MESSAGE_CONTROL0_1(AutomationMsg_GetEnabledExtensions,
-                            std::vector<FilePath>)
+// DEPRECATED MESSAGE - But we must leave this comment and message so as
+// not to perturb line numbers (see comment at top of file re __LINE__).
+// (intentionally blank line)
+// (intentionally blank line)
+// (intentionally blank line)
+// (intentionally blank line)
+IPC_SYNC_MESSAGE_CONTROL0_1(AutomationMsg_DeprecatedMessageThree,
+                            int)
 
 // This message requests the type of the window with the given handle. The
 // return value contains the type (Browser::Type), or -1 if the request
@@ -1414,7 +1414,7 @@ IPC_SYNC_MESSAGE_CONTROL2_1(AutomationMsg_WaitForTabCountToBecome,
 // Waits for the infobar count to reach given number.
 IPC_SYNC_MESSAGE_CONTROL2_1(AutomationMsg_WaitForInfoBarCount,
                             int /* tab handle */,
-                            int /* target count */,
+                            size_t /* target count */,
                             bool /* success */)
 
 // Waits for the autocomplete edit to receive focus.
@@ -1427,21 +1427,63 @@ IPC_SYNC_MESSAGE_CONTROL1_1(AutomationMsg_LoadBlockedPlugins,
                             int /* tab handle */,
                             bool /* success */)
 
+// TODO(phajdan.jr): Remove this message.
 // Captures the entire page for the tab, including those portions not in
 // view, and saves the image as a PNG in the given file location.
+// This message is deprecated, use the JSON testing interface for
+// similar functionality.
 // Request:
 //   -int: Tab handle
 //   -FilePath: Path to save the captured image to
 // Response:
 //   -bool: Whether the method succeeded
-IPC_SYNC_MESSAGE_CONTROL2_1(AutomationMsg_CaptureEntirePageAsPNG,
+IPC_SYNC_MESSAGE_CONTROL2_1(AutomationMsg_CaptureEntirePageAsPNG_Deprecated,
                             int,
                             FilePath,
                             bool)
 
 // Notify the JavaScript engine in the render to change its parameters
 // while performing stress testing.
-IPC_MESSAGE_ROUTED3(AutomationMsg_JavaScriptStressTestControl,
-                    int /* tab handle */,
-                    int /* command */,
-                    int /* type or run */)
+IPC_MESSAGE_CONTROL3(AutomationMsg_JavaScriptStressTestControl,
+                     int /* tab handle */,
+                     int /* command */,
+                     int /* type or run */)
+
+// This message posts a task to the PROCESS_LAUNCHER thread. Once processed
+// the response is sent back. This is useful when you want to make sure all
+// changes to the number of processes have completed.
+IPC_SYNC_MESSAGE_CONTROL0_0(AutomationMsg_WaitForProcessLauncherThreadToGoIdle)
+
+// Gets a handle of the browser that owns the given tab.
+IPC_SYNC_MESSAGE_CONTROL1_2(AutomationMsg_GetParentBrowserOfTab,
+                            int /* tab handle */,
+                            int /* browser handle */,
+                            bool /* success */)
+
+// This message is an outgoing message from Chrome to an external host.
+// It is a notification that a popup window position or dimentions have
+// changed
+// Request:
+//   gfx::Rect - the bounds of the window
+// Response:
+//   None expected
+IPC_MESSAGE_ROUTED1(AutomationMsg_MoveWindow,
+                    gfx::Rect /* window position and dimentions */)
+
+// Renderer -> browser messages.
+
+// Sent when the renderer has scheduled a client redirect to occur.
+IPC_MESSAGE_ROUTED2(AutomationMsg_WillPerformClientRedirect,
+                    int64 /* frame_id */,
+                    double /* # of seconds till redirect will be performed */)
+
+// Sent when the renderer has completed or canceled a client redirect for a
+// particular frame. This message may be sent multiple times for the same
+// redirect.
+IPC_MESSAGE_ROUTED1(AutomationMsg_DidCompleteOrCancelClientRedirect,
+                    int64 /* frame_id */)
+
+
+// YOUR NEW MESSAGE MIGHT NOT BELONG HERE.
+// This is the section for renderer -> browser automation messages. If it is
+// an automation <-> browser message, put it above this section.

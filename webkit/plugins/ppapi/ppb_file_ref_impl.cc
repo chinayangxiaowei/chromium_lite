@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,6 +6,7 @@
 
 #include "base/string_util.h"
 #include "base/utf_string_conversions.h"
+#include "googleurl/src/gurl.h"
 #include "ppapi/c/pp_errors.h"
 #include "webkit/plugins/ppapi/common.h"
 #include "webkit/plugins/ppapi/file_callbacks.h"
@@ -68,7 +69,7 @@ PP_FileSystemType_Dev GetFileSystemType(PP_Resource file_ref_id) {
   scoped_refptr<PPB_FileRef_Impl> file_ref(
       Resource::GetAs<PPB_FileRef_Impl>(file_ref_id));
   if (!file_ref)
-    return PP_FILESYSTEMTYPE_EXTERNAL;
+    return PP_FILESYSTEMTYPE_INVALID;
   return file_ref->GetFileSystemType();
 }
 
@@ -126,35 +127,12 @@ int32_t MakeDirectory(PP_Resource directory_ref_id,
 
   PluginInstance* instance = file_system->instance();
   if (!instance->delegate()->MakeDirectory(
-          directory_ref->GetSystemPath(), PPBoolToBool(make_ancestors),
+          directory_ref->GetFileSystemURL(), PPBoolToBool(make_ancestors),
           new FileCallbacks(instance->module()->AsWeakPtr(), directory_ref_id,
                             callback, NULL, NULL, NULL)))
     return PP_ERROR_FAILED;
 
-  return PP_ERROR_WOULDBLOCK;
-}
-
-int32_t Query(PP_Resource file_ref_id,
-              PP_FileInfo_Dev* info,
-              PP_CompletionCallback callback) {
-  scoped_refptr<PPB_FileRef_Impl> file_ref(
-      Resource::GetAs<PPB_FileRef_Impl>(file_ref_id));
-  if (!file_ref)
-    return PP_ERROR_BADRESOURCE;
-
-  scoped_refptr<PPB_FileSystem_Impl> file_system = file_ref->GetFileSystem();
-  if (!file_system || !file_system->opened() ||
-      (file_system->type() == PP_FILESYSTEMTYPE_EXTERNAL))
-    return PP_ERROR_NOACCESS;
-
-  PluginInstance* instance = file_system->instance();
-  if (!instance->delegate()->Query(
-          file_ref->GetSystemPath(),
-          new FileCallbacks(instance->module()->AsWeakPtr(), file_ref_id,
-                            callback, info, file_system, NULL)))
-    return PP_ERROR_FAILED;
-
-  return PP_ERROR_WOULDBLOCK;
+  return PP_OK_COMPLETIONPENDING;
 }
 
 int32_t Touch(PP_Resource file_ref_id,
@@ -173,13 +151,14 @@ int32_t Touch(PP_Resource file_ref_id,
 
   PluginInstance* instance = file_system->instance();
   if (!instance->delegate()->Touch(
-          file_ref->GetSystemPath(), base::Time::FromDoubleT(last_access_time),
+          file_ref->GetFileSystemURL(),
+          base::Time::FromDoubleT(last_access_time),
           base::Time::FromDoubleT(last_modified_time),
           new FileCallbacks(instance->module()->AsWeakPtr(), file_ref_id,
                             callback, NULL, NULL, NULL)))
     return PP_ERROR_FAILED;
 
-  return PP_ERROR_WOULDBLOCK;
+  return PP_OK_COMPLETIONPENDING;
 }
 
 int32_t Delete(PP_Resource file_ref_id,
@@ -196,12 +175,12 @@ int32_t Delete(PP_Resource file_ref_id,
 
   PluginInstance* instance = file_system->instance();
   if (!instance->delegate()->Delete(
-          file_ref->GetSystemPath(),
+          file_ref->GetFileSystemURL(),
           new FileCallbacks(instance->module()->AsWeakPtr(), file_ref_id,
                             callback, NULL, NULL, NULL)))
     return PP_ERROR_FAILED;
 
-  return PP_ERROR_WOULDBLOCK;
+  return PP_OK_COMPLETIONPENDING;
 }
 
 int32_t Rename(PP_Resource file_ref_id,
@@ -227,12 +206,12 @@ int32_t Rename(PP_Resource file_ref_id,
   // http://crbug.com/67624
   PluginInstance* instance = file_system->instance();
   if (!instance->delegate()->Rename(
-          file_ref->GetSystemPath(), new_file_ref->GetSystemPath(),
+          file_ref->GetFileSystemURL(), new_file_ref->GetFileSystemURL(),
           new FileCallbacks(instance->module()->AsWeakPtr(), file_ref_id,
                             callback, NULL, NULL, NULL)))
     return PP_ERROR_FAILED;
 
-  return PP_ERROR_WOULDBLOCK;
+  return PP_OK_COMPLETIONPENDING;
 }
 
 const PPB_FileRef_Dev ppb_fileref = {
@@ -243,7 +222,6 @@ const PPB_FileRef_Dev ppb_fileref = {
   &GetPath,
   &GetParent,
   &MakeDirectory,
-  &Query,
   &Touch,
   &Delete,
   &Rename
@@ -331,6 +309,8 @@ scoped_refptr<PPB_FileSystem_Impl> PPB_FileRef_Impl::GetFileSystem() const {
 }
 
 PP_FileSystemType_Dev PPB_FileRef_Impl::GetFileSystemType() const {
+  // When the file ref exists but there's no explicit filesystem object
+  // associated with it, that means it's an "external" filesystem.
   if (!file_system_)
     return PP_FILESYSTEMTYPE_EXTERNAL;
 
@@ -342,24 +322,28 @@ std::string PPB_FileRef_Impl::GetPath() const {
 }
 
 FilePath PPB_FileRef_Impl::GetSystemPath() const {
-  if (GetFileSystemType() == PP_FILESYSTEMTYPE_EXTERNAL)
-    return system_path_;
+  if (GetFileSystemType() != PP_FILESYSTEMTYPE_EXTERNAL) {
+    NOTREACHED();
+    return FilePath();
+  }
+  return system_path_;
+}
 
-  // Since |virtual_path_| starts with a '/', it is considered an absolute path
-  // on POSIX systems. We need to remove the '/' before calling Append() or we
-  // will run into a DCHECK.
-  FilePath virtual_file_path(
-#if defined(OS_WIN)
-      UTF8ToWide(virtual_path_.substr(1))
-#elif defined(OS_POSIX)
-      virtual_path_.substr(1)
-#else
-#error "Unsupported platform."
-#endif
-  );
-  return file_system_->root_path().Append(virtual_file_path);
+GURL PPB_FileRef_Impl::GetFileSystemURL() const {
+  if (GetFileSystemType() != PP_FILESYSTEMTYPE_LOCALPERSISTENT &&
+      GetFileSystemType() != PP_FILESYSTEMTYPE_LOCALTEMPORARY) {
+    NOTREACHED();
+    return GURL();
+  }
+  if (!virtual_path_.size())
+    return file_system_->root_url();
+  // Since |virtual_path_| starts with a '/', it looks like an absolute path.
+  // We need to trim off the '/' before calling Resolve, as FileSystem URLs
+  // start with a storage type identifier that looks like a path segment.
+  // TODO(ericu): Switch this to use Resolve after fixing GURL to understand
+  // FileSystem URLs.
+  return GURL(file_system_->root_url().spec() + virtual_path_.substr(1));
 }
 
 }  // namespace ppapi
 }  // namespace webkit
-

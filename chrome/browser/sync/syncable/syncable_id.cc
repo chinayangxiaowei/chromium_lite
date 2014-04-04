@@ -1,4 +1,4 @@
-// Copyright (c) 2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,6 +7,7 @@
 #include <iosfwd>
 
 #include "base/string_util.h"
+#include "base/values.h"
 
 using std::ostream;
 using std::string;
@@ -19,10 +20,8 @@ ostream& operator<<(ostream& out, const Id& id) {
   return out;
 }
 
-using browser_sync::FastDump;
-FastDump& operator<<(FastDump& dump, const Id& id) {
-  dump.out_->sputn(id.s_.data(), id.s_.size());
-  return dump;
+StringValue* Id::ToValue() const {
+  return Value::CreateStringValue(s_);
 }
 
 string Id::GetServerId() const {
@@ -48,6 +47,21 @@ Id Id::CreateFromClientString(const string& local_id) {
     id.s_ = "r";
   else
     id.s_ = string("c") + local_id;
+  return id;
+}
+
+Id Id::GetLexicographicSuccessor() const {
+  // The successor of a string is given by appending the least
+  // character in the alphabet.
+  Id id = *this;
+  id.s_.push_back(0);
+  return id;
+}
+
+// static
+Id Id::GetLeastIdForLexicographicComparison() {
+  Id id;
+  id.s_.clear();
   return id;
 }
 

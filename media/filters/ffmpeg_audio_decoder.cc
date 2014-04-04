@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -42,12 +42,10 @@ void FFmpegAudioDecoder::DoInitialize(DemuxerStream* demuxer_stream,
   AutoTaskRunner done_runner(done_cb);
   *success = false;
 
-  // Get the AVStream by querying for the provider interface.
-  AVStreamProvider* av_stream_provider;
-  if (!demuxer_stream->QueryInterface(&av_stream_provider)) {
+  AVStream* av_stream = demuxer_stream->GetAVStream();
+  if (!av_stream) {
     return;
   }
-  AVStream* av_stream = av_stream_provider->GetAVStream();
 
   // Grab the AVStream's codec context and make sure we have sensible values.
   codec_context_ = av_stream->codec;
@@ -81,8 +79,6 @@ void FFmpegAudioDecoder::DoInitialize(DemuxerStream* demuxer_stream,
       av_get_bits_per_sample_fmt(codec_context_->sample_fmt));
   media_format_.SetAsInteger(MediaFormat::kSampleRate,
       codec_context_->sample_rate);
-  media_format_.SetAsString(MediaFormat::kMimeType,
-      mime_type::kUncompressedAudio);
 
   // Prepare the output buffer.
   output_buffer_.reset(static_cast<uint8*>(av_malloc(kOutputBufferSize)));
@@ -148,6 +144,8 @@ static void ConvertAudioF32ToS32(void* buffer, int buffer_size) {
 }
 
 void FFmpegAudioDecoder::DoDecode(Buffer* input) {
+  PipelineStatistics statistics;
+
   // FFmpeg tends to seek Ogg audio streams in the middle of nowhere, giving us
   // a whole bunch of AV_NOPTS_VALUE packets.  Discard them until we find
   // something valid.  Refer to http://crbug.com/49709
@@ -155,7 +153,7 @@ void FFmpegAudioDecoder::DoDecode(Buffer* input) {
   if (input->GetTimestamp() == kNoTimestamp &&
       estimated_next_timestamp_ == kNoTimestamp &&
       !input->IsEndOfStream()) {
-    DecoderBase<AudioDecoder, Buffer>::OnDecodeComplete();
+    DecoderBase<AudioDecoder, Buffer>::OnDecodeComplete(statistics);
     return;
   }
 
@@ -164,6 +162,8 @@ void FFmpegAudioDecoder::DoDecode(Buffer* input) {
   av_init_packet(&packet);
   packet.data = const_cast<uint8*>(input->GetData());
   packet.size = input->GetDataSize();
+
+  statistics.audio_bytes_decoded = input->GetDataSize();
 
   int16_t* output_buffer = reinterpret_cast<int16_t*>(output_buffer_.get());
   int output_buffer_size = kOutputBufferSize;
@@ -185,7 +185,7 @@ void FFmpegAudioDecoder::DoDecode(Buffer* input) {
             << input->GetTimestamp().InMicroseconds() << " us, duration: "
             << input->GetDuration().InMicroseconds() << " us, packet size: "
             << input->GetDataSize() << " bytes";
-    DecoderBase<AudioDecoder, Buffer>::OnDecodeComplete();
+    DecoderBase<AudioDecoder, Buffer>::OnDecodeComplete(statistics);
     return;
   }
 
@@ -216,7 +216,7 @@ void FFmpegAudioDecoder::DoDecode(Buffer* input) {
     }
 
     EnqueueResult(result_buffer);
-    DecoderBase<AudioDecoder, Buffer>::OnDecodeComplete();
+    DecoderBase<AudioDecoder, Buffer>::OnDecodeComplete(statistics);
     return;
   }
 
@@ -227,7 +227,7 @@ void FFmpegAudioDecoder::DoDecode(Buffer* input) {
       input->GetTimestamp() != kNoTimestamp &&
       input->GetDuration() != kNoTimestamp) {
     estimated_next_timestamp_ = input->GetTimestamp() + input->GetDuration();
-    DecoderBase<AudioDecoder, Buffer>::OnDecodeComplete();
+    DecoderBase<AudioDecoder, Buffer>::OnDecodeComplete(statistics);
     return;
   }
 
@@ -241,7 +241,7 @@ void FFmpegAudioDecoder::DoDecode(Buffer* input) {
     result_buffer->SetDuration(input->GetDuration());
     EnqueueResult(result_buffer);
   }
-  DecoderBase<AudioDecoder, Buffer>::OnDecodeComplete();
+  DecoderBase<AudioDecoder, Buffer>::OnDecodeComplete(statistics);
 }
 
 base::TimeDelta FFmpegAudioDecoder::CalculateDuration(size_t size) {

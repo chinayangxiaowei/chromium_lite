@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,9 +8,9 @@
 
 #include "base/file_path.h"
 #include "base/logging.h"
+#include "base/memory/scoped_ptr.h"
 #include "base/native_library.h"
 #include "base/path_service.h"
-#include "base/scoped_ptr.h"
 
 // Enable timing code by turning on TESTING macro.
 //#define TESTING 1
@@ -22,16 +22,14 @@
 
 namespace media {
 
-namespace {
-
 enum FFmpegDLLKeys {
-  FILE_LIBAVCODEC,       // full path to libavcodec media decoding library.
-  FILE_LIBAVFORMAT,      // full path to libavformat media parsing library.
-  FILE_LIBAVUTIL,        // full path to libavutil media utility library.
+  FILE_LIBAVCODEC,   // full path to libavcodec media decoding library.
+  FILE_LIBAVFORMAT,  // full path to libavformat media parsing library.
+  FILE_LIBAVUTIL,    // full path to libavutil media utility library.
 };
 
 // Retrieves the DLLName for the given key.
-FilePath::CharType* GetDLLName(FFmpegDLLKeys dll_key) {
+static FilePath::CharType* GetDLLName(FFmpegDLLKeys dll_key) {
   // TODO(ajwong): Do we want to lock to a specific ffmpeg version?
   switch (dll_key) {
     case FILE_LIBAVCODEC:
@@ -46,11 +44,14 @@ FilePath::CharType* GetDLLName(FFmpegDLLKeys dll_key) {
   }
 }
 
-}  // namespace
+static bool g_media_library_is_initialized = false;
 
 // Attempts to initialize the media library (loading DLLs, DSOs, etc.).
 // Returns true if everything was successfully initialized, false otherwise.
 bool InitializeMediaLibrary(const FilePath& base_path) {
+  if (g_media_library_is_initialized)
+    return true;
+
   FFmpegDLLKeys path_keys[] = {
     media::FILE_LIBAVCODEC,
     media::FILE_LIBAVFORMAT,
@@ -82,15 +83,21 @@ bool InitializeMediaLibrary(const FilePath& base_path) {
   // Check that we loaded all libraries successfully.  We only need to check the
   // last array element because the loop above will break without initializing
   // it on any prior error.
-  if (libs[arraysize(libs)-1])
-    return true;
+  g_media_library_is_initialized = (libs[arraysize(libs)-1] != NULL);
 
-  // Free any loaded libraries if we weren't successful.
-  for (size_t i = 0; i < arraysize(libs) && libs[i] != NULL; ++i) {
-    FreeLibrary(libs[i]);
-    libs[i] = NULL;  // Just to be safe.
+  if (!g_media_library_is_initialized) {
+    // Free any loaded libraries if we weren't successful.
+    for (size_t i = 0; i < arraysize(libs) && libs[i] != NULL; ++i) {
+      FreeLibrary(libs[i]);
+      libs[i] = NULL;  // Just to be safe.
+    }
   }
-  return false;
+
+  return g_media_library_is_initialized;
+}
+
+bool IsMediaLibraryInitialized() {
+  return g_media_library_is_initialized;
 }
 
 bool InitializeOpenMaxLibrary(const FilePath& module_dir) {

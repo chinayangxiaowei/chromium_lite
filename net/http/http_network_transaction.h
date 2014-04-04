@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,8 +10,8 @@
 
 #include "base/basictypes.h"
 #include "base/gtest_prod_util.h"
-#include "base/ref_counted.h"
-#include "base/scoped_ptr.h"
+#include "base/memory/ref_counted.h"
+#include "base/memory/scoped_ptr.h"
 #include "base/time.h"
 #include "net/base/net_log.h"
 #include "net/base/request_priority.h"
@@ -19,8 +19,8 @@
 #include "net/http/http_auth.h"
 #include "net/http/http_request_headers.h"
 #include "net/http/http_response_info.h"
+#include "net/http/http_stream_factory.h"
 #include "net/http/http_transaction.h"
-#include "net/http/stream_factory.h"
 #include "net/proxy/proxy_service.h"
 
 namespace net {
@@ -33,7 +33,7 @@ class IOBuffer;
 struct HttpRequestInfo;
 
 class HttpNetworkTransaction : public HttpTransaction,
-                               public StreamRequest::Delegate {
+                               public HttpStreamRequest::Delegate {
  public:
   explicit HttpNetworkTransaction(HttpNetworkSession* session);
 
@@ -57,15 +57,25 @@ class HttpNetworkTransaction : public HttpTransaction,
   virtual LoadState GetLoadState() const;
   virtual uint64 GetUploadProgress() const;
 
-  // StreamRequest::Delegate methods:
-  virtual void OnStreamReady(HttpStream* stream);
-  virtual void OnStreamFailed(int status);
-  virtual void OnCertificateError(int status, const SSLInfo& ssl_info);
+  // HttpStreamRequest::Delegate methods:
+  virtual void OnStreamReady(const SSLConfig& used_ssl_config,
+                             const ProxyInfo& used_proxy_info,
+                             HttpStream* stream);
+  virtual void OnStreamFailed(int status,
+                              const SSLConfig& used_ssl_config);
+  virtual void OnCertificateError(int status,
+                                  const SSLConfig& used_ssl_config,
+                                  const SSLInfo& ssl_info);
   virtual void OnNeedsProxyAuth(
       const HttpResponseInfo& response_info,
+      const SSLConfig& used_ssl_config,
+      const ProxyInfo& used_proxy_info,
       HttpAuthController* auth_controller);
-  virtual void OnNeedsClientAuth(SSLCertRequestInfo* cert_info);
+  virtual void OnNeedsClientAuth(const SSLConfig& used_ssl_config,
+                                 SSLCertRequestInfo* cert_info);
   virtual void OnHttpsProxyTunnelResponse(const HttpResponseInfo& response_info,
+                                          const SSLConfig& used_ssl_config,
+                                          const ProxyInfo& used_proxy_info,
                                           HttpStream* stream);
 
  private:
@@ -84,6 +94,8 @@ class HttpNetworkTransaction : public HttpTransaction,
     STATE_GENERATE_PROXY_AUTH_TOKEN_COMPLETE,
     STATE_GENERATE_SERVER_AUTH_TOKEN,
     STATE_GENERATE_SERVER_AUTH_TOKEN_COMPLETE,
+    STATE_BUILD_REQUEST,
+    STATE_BUILD_REQUEST_COMPLETE,
     STATE_SEND_REQUEST,
     STATE_SEND_REQUEST_COMPLETE,
     STATE_READ_HEADERS,
@@ -115,6 +127,8 @@ class HttpNetworkTransaction : public HttpTransaction,
   int DoGenerateProxyAuthTokenComplete(int result);
   int DoGenerateServerAuthToken();
   int DoGenerateServerAuthTokenComplete(int result);
+  int DoBuildRequest();
+  int DoBuildRequestComplete(int result);
   int DoSendRequest();
   int DoSendRequestComplete(int result);
   int DoReadHeaders();
@@ -123,6 +137,8 @@ class HttpNetworkTransaction : public HttpTransaction,
   int DoReadBodyComplete(int result);
   int DoDrainBodyForAuthRestart();
   int DoDrainBodyForAuthRestartComplete(int result);
+
+  void BuildRequestHeaders(bool using_proxy);
 
   // Record histogram of time until first byte of header is received.
   void LogTransactionConnectedMetrics();
@@ -207,7 +223,10 @@ class HttpNetworkTransaction : public HttpTransaction,
   HttpAuth::Target pending_auth_target_;
 
   CompletionCallbackImpl<HttpNetworkTransaction> io_callback_;
+  scoped_refptr<CancelableCompletionCallback<HttpNetworkTransaction> >
+      delegate_callback_;
   CompletionCallback* user_callback_;
+  scoped_ptr<UploadDataStream> request_body_;
 
   scoped_refptr<HttpNetworkSession> session_;
 
@@ -215,9 +234,10 @@ class HttpNetworkTransaction : public HttpTransaction,
   const HttpRequestInfo* request_;
   HttpResponseInfo response_;
 
+  // |proxy_info_| is the ProxyInfo used by the HttpStreamRequest.
   ProxyInfo proxy_info_;
 
-  scoped_ptr<StreamRequest> stream_request_;
+  scoped_ptr<HttpStreamRequest> stream_request_;
   scoped_ptr<HttpStream> stream_;
 
   // True if we've validated the headers that the stream parser has returned.
@@ -253,8 +273,6 @@ class HttpNetworkTransaction : public HttpTransaction,
 
   DISALLOW_COPY_AND_ASSIGN(HttpNetworkTransaction);
 };
-
-int ConvertRequestPriorityToSpdyPriority(RequestPriority priority);
 
 }  // namespace net
 

@@ -16,6 +16,54 @@ WindowDelegate::WindowDelegate() : window_(NULL) {
 WindowDelegate::~WindowDelegate() {
 }
 
+DialogDelegate* WindowDelegate::AsDialogDelegate() {
+  return NULL;
+}
+
+bool WindowDelegate::CanResize() const {
+  return false;
+}
+
+bool WindowDelegate::CanMaximize() const {
+  return false;
+}
+
+bool WindowDelegate::CanActivate() const {
+  return true;
+}
+
+bool WindowDelegate::IsModal() const {
+  return false;
+}
+
+ui::AccessibilityTypes::Role WindowDelegate::GetAccessibleWindowRole() const {
+  return ui::AccessibilityTypes::ROLE_WINDOW;
+}
+
+ui::AccessibilityTypes::State WindowDelegate::GetAccessibleWindowState() const {
+  return 0;
+}
+
+std::wstring WindowDelegate::GetAccessibleWindowTitle() const {
+  return GetWindowTitle();
+}
+
+std::wstring WindowDelegate::GetWindowTitle() const {
+  return L"";
+}
+
+View* WindowDelegate::GetInitiallyFocusedView() {
+  return NULL;
+}
+
+bool WindowDelegate::ShouldShowWindowTitle() const {
+  return true;
+}
+
+bool WindowDelegate::ShouldShowClientEdge() const {
+  return true;
+}
+
 SkBitmap WindowDelegate::GetWindowAppIcon() {
   // Use the window icon as app icon by default.
   return GetWindowIcon();
@@ -26,6 +74,18 @@ SkBitmap WindowDelegate::GetWindowIcon() {
   return SkBitmap();
 }
 
+bool WindowDelegate::ShouldShowWindowIcon() const {
+  return false;
+}
+
+bool WindowDelegate::ExecuteWindowsCommand(int command_id) {
+  return false;
+}
+
+std::wstring WindowDelegate::GetWindowName() const {
+  return std::wstring();
+}
+
 void WindowDelegate::SaveWindowPlacement(const gfx::Rect& bounds,
                                          bool maximized) {
   std::wstring window_name = GetWindowName();
@@ -33,7 +93,7 @@ void WindowDelegate::SaveWindowPlacement(const gfx::Rect& bounds,
     return;
 
   ViewsDelegate::views_delegate->SaveWindowPlacement(
-      window_name, bounds, maximized);
+      window_, window_name, bounds, maximized);
 }
 
 bool WindowDelegate::GetSavedWindowBounds(gfx::Rect* bounds) const {
@@ -42,7 +102,7 @@ bool WindowDelegate::GetSavedWindowBounds(gfx::Rect* bounds) const {
     return false;
 
   return ViewsDelegate::views_delegate->GetSavedWindowBounds(
-      window_name, bounds);
+      window_, window_name, bounds);
 }
 
 bool WindowDelegate::GetSavedMaximizedState(bool* maximized) const {
@@ -51,11 +111,15 @@ bool WindowDelegate::GetSavedMaximizedState(bool* maximized) const {
     return false;
 
   return ViewsDelegate::views_delegate->GetSavedMaximizedState(
-      window_name, maximized);
+      window_, window_name, maximized);
 }
 
 bool WindowDelegate::ShouldRestoreWindowSize() const {
   return true;
+}
+
+View* WindowDelegate::GetContentsView() {
+  return NULL;
 }
 
 ClientView* WindowDelegate::CreateClientView(Window* window) {

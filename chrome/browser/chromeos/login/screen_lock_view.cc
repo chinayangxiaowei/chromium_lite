@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,14 +7,14 @@
 #include "base/utf_string_conversions.h"
 #include "chrome/browser/chromeos/login/rounded_rect_painter.h"
 #include "chrome/browser/chromeos/login/screen_locker.h"
+#include "chrome/browser/chromeos/login/textfield_with_margin.h"
 #include "chrome/browser/chromeos/login/user_manager.h"
 #include "chrome/browser/chromeos/login/user_view.h"
 #include "chrome/browser/chromeos/login/username_view.h"
 #include "chrome/browser/chromeos/login/wizard_accessibility_helper.h"
-#include "chrome/browser/chromeos/login/textfield_with_margin.h"
 #include "chrome/browser/chromeos/views/copy_background.h"
 #include "chrome/browser/profiles/profile_manager.h"
-#include "chrome/common/notification_service.h"
+#include "content/common/notification_service.h"
 #include "grit/generated_resources.h"
 #include "grit/theme_resources.h"
 #include "ui/base/l10n/l10n_util.h"
@@ -23,7 +23,9 @@
 #include "views/border.h"
 #include "views/controls/image_view.h"
 #include "views/controls/label.h"
-#include "views/grid_layout.h"
+#include "views/controls/textfield/native_textfield_wrapper.h"
+#include "views/controls/textfield/textfield.h"
+#include "views/layout/grid_layout.h"
 
 namespace chromeos {
 
@@ -37,7 +39,8 @@ const int kCornerRadius = 5;
 class PasswordField : public TextfieldWithMargin {
  public:
   PasswordField()
-      : TextfieldWithMargin(views::Textfield::STYLE_PASSWORD) {
+      : TextfieldWithMargin(views::Textfield::STYLE_PASSWORD),
+        context_menu_disabled_(false) {
     set_text_to_display_when_empty(
         l10n_util::GetStringUTF16(IDS_LOGIN_POD_EMPTY_PASSWORD_TEXT));
   }
@@ -48,9 +51,37 @@ class PasswordField : public TextfieldWithMargin {
     return false;
   }
 
+  virtual void ViewHierarchyChanged(bool is_add,
+                                    views::View* parent,
+                                    views::View* child) OVERRIDE {
+    Textfield::ViewHierarchyChanged(is_add, parent, child);
+    // Wiat until native widget is created.
+    if (!context_menu_disabled_ && native_wrapper_) {
+      gfx::NativeView widget = native_wrapper_->GetTestingHandle();
+      if (widget) {
+        context_menu_disabled_ = true;
+        g_signal_connect(widget, "button-press-event",
+                         G_CALLBACK(OnButtonPressEventThunk), this);
+      }
+    }
+  }
+
+  CHROMEGTK_CALLBACK_1(PasswordField, gboolean, OnButtonPressEvent,
+                       GdkEventButton*);
+
  private:
+  bool context_menu_disabled_;
+
   DISALLOW_COPY_AND_ASSIGN(PasswordField);
 };
+
+gboolean PasswordField::OnButtonPressEvent(GtkWidget* widget,
+                                           GdkEventButton* event) {
+  // Eat button 2/3 and alt + any button to disable context menu.
+  return event->state & GDK_MOD1_MASK ||
+      event->button == 2 ||
+      event->button == 3;
+}
 
 }  // namespace
 
@@ -117,7 +148,8 @@ void ScreenLockView::Init() {
   std::wstring text = UTF8ToWide(user.GetDisplayName());
 
   ResourceBundle& rb = ResourceBundle::GetSharedInstance();
-  const gfx::Font& font = rb.GetFont(ResourceBundle::MediumBoldFont);
+  const gfx::Font& font = rb.GetFont(ResourceBundle::MediumBoldFont).DeriveFont(
+      kSelectedUsernameFontDelta);
 
   // Layouts image, textfield and button components.
   GridLayout* layout = new GridLayout(main_);
@@ -187,11 +219,17 @@ void ScreenLockView::OnSignout() {
   screen_locker_->Signout();
 }
 
+void ScreenLockView::ContentsChanged(views::Textfield* sender,
+                                     const string16& new_contents) {
+  if (!new_contents.empty())
+    screen_locker_->ClearErrors();
+}
+
 bool ScreenLockView::HandleKeyEvent(
     views::Textfield* sender,
     const views::KeyEvent& key_event) {
   screen_locker_->ClearErrors();
-  if (key_event.GetKeyCode() == ui::VKEY_RETURN) {
+  if (key_event.key_code() == ui::VKEY_RETURN) {
     screen_locker_->Authenticate(password_field_->text());
     return true;
   }
@@ -209,13 +247,6 @@ void ScreenLockView::Observe(
   if (screen_locker_->user().email() != user->email())
     return;
   user_view_->SetImage(user->image(), user->image());
-}
-
-void ScreenLockView::ViewHierarchyChanged(bool is_add,
-                                          views::View* parent,
-                                          views::View* child) {
-  if (is_add && this == child)
-    WizardAccessibilityHelper::GetInstance()->MaybeEnableAccessibility(this);
 }
 
 }  // namespace chromeos

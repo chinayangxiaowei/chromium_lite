@@ -8,7 +8,7 @@
 #include "remoting/base/encoder.h"
 #include "remoting/proto/video.pb.h"
 
-#include "gfx/rect.h"
+#include "ui/gfx/rect.h"
 
 namespace remoting {
 
@@ -60,6 +60,9 @@ class EncoderRowBased : public Encoder {
 
   scoped_refptr<CaptureData> capture_data_;
   scoped_ptr<DataAvailableCallback> callback_;
+
+  // The most recent screen size.
+  gfx::Size screen_size_;
 
   int packet_size_;
 };

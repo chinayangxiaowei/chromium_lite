@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -36,6 +36,11 @@ bool Cryptographer::CanDecrypt(const sync_pb::EncryptedData& data) const {
   return nigoris_.end() != nigoris_.find(data.key_name());
 }
 
+bool Cryptographer::CanDecryptUsingDefaultKey(
+    const sync_pb::EncryptedData& data) const {
+  return default_nigori_ && (data.key_name() == default_nigori_->first);
+}
+
 bool Cryptographer::Encrypt(const ::google::protobuf::MessageLite& message,
                             sync_pb::EncryptedData* encrypted) const {
   DCHECK(encrypted);
@@ -59,19 +64,24 @@ bool Cryptographer::Encrypt(const ::google::protobuf::MessageLite& message,
 bool Cryptographer::Decrypt(const sync_pb::EncryptedData& encrypted,
                             ::google::protobuf::MessageLite* message) const {
   DCHECK(message);
+  std::string plaintext = DecryptToString(encrypted);
+  return message->ParseFromString(plaintext);
+}
 
+std::string Cryptographer::DecryptToString(
+    const sync_pb::EncryptedData& encrypted) const {
   NigoriMap::const_iterator it = nigoris_.find(encrypted.key_name());
   if (nigoris_.end() == it) {
     NOTREACHED() << "Cannot decrypt message";
-    return false;  // Caller should have called CanDecrypt(encrypt).
+    return std::string("");  // Caller should have called CanDecrypt(encrypt).
   }
 
   std::string plaintext;
   if (!it->second->Decrypt(encrypted.blob(), &plaintext)) {
-    return false;
+    return std::string("");
   }
 
-  return message->ParseFromString(plaintext);
+  return plaintext;
 }
 
 bool Cryptographer::GetKeys(sync_pb::EncryptedData* encrypted) const {
@@ -204,7 +214,7 @@ Nigori* Cryptographer::UnpackBootstrapToken(const std::string& token) const {
     return NULL;
 
   std::string encrypted_data;
-  if (!base::Base64Decode(token, &encrypted_data)){
+  if (!base::Base64Decode(token, &encrypted_data)) {
     DLOG(WARNING) << "Could not decode token.";
     return NULL;
   }

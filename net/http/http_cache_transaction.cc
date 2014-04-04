@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -13,9 +13,9 @@
 #include <string>
 
 #include "base/compiler_specific.h"
+#include "base/memory/ref_counted.h"
 #include "base/metrics/field_trial.h"
 #include "base/metrics/histogram.h"
-#include "base/ref_counted.h"
 #include "base/string_util.h"
 #include "base/time.h"
 #include "net/base/cert_status_flags.h"
@@ -23,10 +23,12 @@
 #include "net/base/load_flags.h"
 #include "net/base/net_errors.h"
 #include "net/base/net_log.h"
+#include "net/base/network_delegate.h"
 #include "net/base/ssl_cert_request_info.h"
 #include "net/base/ssl_config_service.h"
 #include "net/disk_cache/disk_cache.h"
 #include "net/http/disk_cache_based_ssl_host_info.h"
+#include "net/http/http_network_session.h"
 #include "net/http/http_request_info.h"
 #include "net/http/http_response_headers.h"
 #include "net/http/http_transaction.h"
@@ -161,6 +163,51 @@ HttpCache::Transaction::~Transaction() {
   // We could still have a cache read or write in progress, so we just null the
   // cache_ pointer to signal that we are dead.  See DoCacheReadCompleted.
   cache_.reset();
+}
+
+int HttpCache::Transaction::WriteMetadata(IOBuffer* buf, int buf_len,
+                                          CompletionCallback* callback) {
+  DCHECK(buf);
+  DCHECK_GT(buf_len, 0);
+  DCHECK(callback);
+  if (!cache_ || !entry_)
+    return ERR_UNEXPECTED;
+
+  // We don't need to track this operation for anything.
+  // It could be possible to check if there is something already written and
+  // avoid writing again (it should be the same, right?), but let's allow the
+  // caller to "update" the contents with something new.
+  return entry_->disk_entry->WriteData(kMetadataIndex, 0, buf, buf_len,
+                                       callback, true);
+}
+
+bool HttpCache::Transaction::AddTruncatedFlag() {
+  DCHECK(mode_ & WRITE);
+
+  // Don't set the flag for sparse entries.
+  if (partial_.get() && !truncated_)
+    return true;
+
+  if (!CanResume(true))
+    return false;
+
+  truncated_ = true;
+  target_state_ = STATE_NONE;
+  next_state_ = STATE_CACHE_WRITE_TRUNCATED_RESPONSE;
+  DoLoop(OK);
+  return true;
+}
+
+LoadState HttpCache::Transaction::GetWriterLoadState() const {
+  if (network_trans_.get())
+    return network_trans_->GetLoadState();
+  if (entry_ || !request_)
+    return LOAD_STATE_IDLE;
+  return LOAD_STATE_WAITING_FOR_CACHE;
+}
+
+const BoundNetLog& HttpCache::Transaction::net_log() const {
+  return net_log_;
 }
 
 int HttpCache::Transaction::Start(const HttpRequestInfo* request,
@@ -338,70 +385,6 @@ uint64 HttpCache::Transaction::GetUploadProgress() const {
   return final_upload_progress_;
 }
 
-int HttpCache::Transaction::WriteMetadata(IOBuffer* buf, int buf_len,
-                                          CompletionCallback* callback) {
-  DCHECK(buf);
-  DCHECK_GT(buf_len, 0);
-  DCHECK(callback);
-  if (!cache_ || !entry_)
-    return ERR_UNEXPECTED;
-
-  // We don't need to track this operation for anything.
-  // It could be possible to check if there is something already written and
-  // avoid writing again (it should be the same, right?), but let's allow the
-  // caller to "update" the contents with something new.
-  return entry_->disk_entry->WriteData(kMetadataIndex, 0, buf, buf_len,
-                                       callback, true);
-}
-
-// Histogram data from the end of 2010 show the following distribution of
-// response headers:
-//
-//   Content-Length............... 87%
-//   Date......................... 98%
-//   Last-Modified................ 49%
-//   Etag......................... 19%
-//   Accept-Ranges: bytes......... 25%
-//   Accept-Ranges: none.......... 0.4%
-//   Strong Validator............. 50%
-//   Strong Validator + ranges.... 24%
-//   Strong Validator + CL........ 49%
-//
-bool HttpCache::Transaction::AddTruncatedFlag() {
-  DCHECK(mode_ & WRITE);
-
-  // Don't set the flag for sparse entries.
-  if (partial_.get() && !truncated_)
-    return true;
-
-  // Double check that there is something worth keeping.
-  if (!entry_->disk_entry->GetDataSize(kResponseContentIndex))
-    return false;
-
-  if (response_.headers->GetContentLength() <= 0 ||
-      response_.headers->HasHeaderValue("Accept-Ranges", "none") ||
-      !response_.headers->HasStrongValidators())
-    return false;
-
-  truncated_ = true;
-  target_state_ = STATE_NONE;
-  next_state_ = STATE_CACHE_WRITE_TRUNCATED_RESPONSE;
-  DoLoop(OK);
-  return true;
-}
-
-LoadState HttpCache::Transaction::GetWriterLoadState() const {
-  if (network_trans_.get())
-    return network_trans_->GetLoadState();
-  if (entry_ || !request_)
-    return LOAD_STATE_IDLE;
-  return LOAD_STATE_WAITING_FOR_CACHE;
-}
-
-const BoundNetLog& HttpCache::Transaction::net_log() const {
-  return net_log_;
-}
-
 //-----------------------------------------------------------------------------
 
 void HttpCache::Transaction::DoCallback(int rv) {
@@ -485,6 +468,13 @@ int HttpCache::Transaction::DoLoop(int result) {
         break;
       case STATE_ADD_TO_ENTRY_COMPLETE:
         rv = DoAddToEntryComplete(rv);
+        break;
+      case STATE_NOTIFY_BEFORE_SEND_HEADERS:
+        DCHECK_EQ(OK, rv);
+        rv = DoNotifyBeforeSendHeaders();
+        break;
+      case STATE_NOTIFY_BEFORE_SEND_HEADERS_COMPLETE:
+        rv = DoNotifyBeforeSendHeadersComplete(rv);
         break;
       case STATE_START_PARTIAL_CACHE_VALIDATION:
         DCHECK_EQ(OK, rv);
@@ -731,6 +721,11 @@ int HttpCache::Transaction::DoNetworkReadComplete(int result) {
   if (!cache_)
     return ERR_UNEXPECTED;
 
+  // If there is an error and we are saving the data, just tell the user about
+  // it and wait until the destructor runs to see if we can keep the data.
+  if (mode_ != NONE && result < 0)
+    return result;
+
   next_state_ = STATE_CACHE_WRITE_DATA;
   return result;
 }
@@ -904,6 +899,57 @@ int HttpCache::Transaction::DoAddToEntryComplete(int result) {
   return OK;
 }
 
+int HttpCache::Transaction::DoNotifyBeforeSendHeaders() {
+  // Balanced in DoNotifyBeforeSendHeadersComplete.
+  cache_callback_->AddRef();
+  next_state_ = STATE_NOTIFY_BEFORE_SEND_HEADERS_COMPLETE;
+
+  if (cache_->GetSession() && cache_->GetSession()->network_delegate()) {
+    // TODO(mpcomplete): need to be able to modify these headers.
+    HttpRequestHeaders headers = request_->extra_headers;
+    return cache_->GetSession()->network_delegate()->NotifyBeforeSendHeaders(
+        request_->request_id, cache_callback_, &headers);
+  }
+
+  return OK;
+}
+
+int HttpCache::Transaction::DoNotifyBeforeSendHeadersComplete(int result) {
+  cache_callback_->Release();  // Balanced in DoNotifyBeforeSendHeaders.
+
+  // We now have access to the cache entry.
+  //
+  //  o if we are a reader for the transaction, then we can start reading the
+  //    cache entry.
+  //
+  //  o if we can read or write, then we should check if the cache entry needs
+  //    to be validated and then issue a network request if needed or just read
+  //    from the cache if the cache entry is already valid.
+  //
+  //  o if we are set to UPDATE, then we are handling an externally
+  //    conditionalized request (if-modified-since / if-none-match). We check
+  //    if the request headers define a validation request.
+  //
+  if (result == net::OK) {
+    switch (mode_) {
+      case READ:
+        result = BeginCacheRead();
+        break;
+      case READ_WRITE:
+        result = BeginPartialCacheValidation();
+        break;
+      case UPDATE:
+        result = BeginExternallyConditionalizedRequest();
+        break;
+      case WRITE:
+      default:
+        NOTREACHED();
+        result = ERR_FAILED;
+    }
+  }
+  return result;
+}
+
 // We may end up here multiple times for a given request.
 int HttpCache::Transaction::DoStartPartialCacheValidation() {
   if (mode_ == NONE)
@@ -982,6 +1028,16 @@ int HttpCache::Transaction::DoUpdateCachedResponseComplete(int result) {
     // We no longer need the network transaction, so destroy it.
     final_upload_progress_ = network_trans_->GetUploadProgress();
     network_trans_.reset();
+  } else if (entry_ && server_responded_206_ && truncated_ &&
+             partial_->initial_validation()) {
+    // We just finished the validation of a truncated entry, and the server
+    // is willing to resume the operation. Now we go back and start serving
+    // the first part to the user.
+    network_trans_.reset();
+    new_response_ = NULL;
+    next_state_ = STATE_START_PARTIAL_CACHE_VALIDATION;
+    partial_->SetRangeToStartDownload();
+    return OK;
   }
   next_state_ = STATE_OVERWRITE_CACHED_RESPONSE;
   return OK;
@@ -998,6 +1054,16 @@ int HttpCache::Transaction::DoOverwriteCachedResponse() {
     partial_->FixContentLength(new_response_->headers);
 
   response_ = *new_response_;
+
+  if (server_responded_206_ && !CanResume(false)) {
+    // There is no point in storing this resource because it will never be used.
+    DoneWritingToEntry(false);
+    if (partial_.get())
+      partial_->FixResponseHeaders(response_.headers, true);
+    next_state_ = STATE_PARTIAL_HEADERS_RECEIVED;
+    return OK;
+  }
+
   target_state_ = STATE_TRUNCATE_CACHED_DATA;
   next_state_ = truncated_ ? STATE_CACHE_WRITE_TRUNCATED_RESPONSE :
                              STATE_CACHE_WRITE_RESPONSE;
@@ -1094,6 +1160,7 @@ int HttpCache::Transaction::DoCacheReadResponse() {
 
 int HttpCache::Transaction::DoCacheReadResponseComplete(int result) {
   cache_callback_->Release();  // Balance the AddRef from DoCacheReadResponse.
+
   net_log_.EndEventWithNetErrorCode(NetLog::TYPE_HTTP_CACHE_READ_INFO, result);
   if (result != io_buf_len_ ||
       !HttpCache::ParseResponseInfo(read_buf_->data(), io_buf_len_,
@@ -1102,35 +1169,8 @@ int HttpCache::Transaction::DoCacheReadResponseComplete(int result) {
     return ERR_CACHE_READ_FAILURE;
   }
 
-  // We now have access to the cache entry.
-  //
-  //  o if we are a reader for the transaction, then we can start reading the
-  //    cache entry.
-  //
-  //  o if we can read or write, then we should check if the cache entry needs
-  //    to be validated and then issue a network request if needed or just read
-  //    from the cache if the cache entry is already valid.
-  //
-  //  o if we are set to UPDATE, then we are handling an externally
-  //    conditionalized request (if-modified-since / if-none-match). We check
-  //    if the request headers define a validation request.
-  //
-  switch (mode_) {
-    case READ:
-      result = BeginCacheRead();
-      break;
-    case READ_WRITE:
-      result = BeginPartialCacheValidation();
-      break;
-    case UPDATE:
-      result = BeginExternallyConditionalizedRequest();
-      break;
-    case WRITE:
-    default:
-      NOTREACHED();
-      result = ERR_FAILED;
-  }
-  return result;
+  next_state_ = STATE_NOTIFY_BEFORE_SEND_HEADERS;
+  return OK;
 }
 
 int HttpCache::Transaction::DoCacheWriteResponse() {
@@ -1442,6 +1482,9 @@ int HttpCache::Transaction::BeginCacheValidation() {
   bool skip_validation = effective_load_flags_ & LOAD_PREFERRING_CACHE ||
                          !RequiresValidation();
 
+  if (truncated_)
+    skip_validation = !partial_->initial_validation();
+
   if ((partial_.get() && !partial_->IsCurrentRangeCached()) || invalid_range_)
     skip_validation = false;
 
@@ -1462,8 +1505,11 @@ int HttpCache::Transaction::BeginCacheValidation() {
     // response.  If we cannot do so, then we just resort to a normal fetch.
     // Our mode remains READ_WRITE for a conditional request.  We'll switch to
     // either READ or WRITE mode once we hear back from the server.
-    if (!ConditionalizeRequest())
+    if (!ConditionalizeRequest()) {
+      DCHECK(!partial_.get());
+      DCHECK_NE(206, response_.headers->response_code());
       mode_ = WRITE;
+    }
     next_state_ = STATE_SEND_REQUEST;
   }
   return OK;
@@ -1616,6 +1662,10 @@ bool HttpCache::Transaction::ConditionalizeRequest() {
       response_.headers->response_code() != 206)
     return false;
 
+  // We should have handled this case before.
+  DCHECK(response_.headers->response_code() != 206 ||
+         response_.headers->HasStrongValidators());
+
   // Just use the first available ETag and/or Last-Modified header value.
   // TODO(darin): Or should we use the last?
 
@@ -1738,8 +1788,16 @@ bool HttpCache::Transaction::ValidatePartialResponse(bool* partial_content) {
 
     // 304 is not expected here, but we'll spare the entry (unless it was
     // truncated).
-    if (truncated_)
+    if (truncated_) {
+      if (!reading_ && response_code == 200) {
+        // The server is sending the whole resource, and we can save it.
+        DCHECK(!partial_->IsLastRange());
+        partial_.reset();
+        truncated_ = false;
+        return true;
+      }
       failure = true;
+    }
   }
 
   if (failure) {
@@ -1908,6 +1966,35 @@ int HttpCache::Transaction::DoPartialCacheReadCompleted(int result) {
     next_state_ = STATE_START_PARTIAL_CACHE_VALIDATION;
   }
   return result;
+}
+
+// Histogram data from the end of 2010 show the following distribution of
+// response headers:
+//
+//   Content-Length............... 87%
+//   Date......................... 98%
+//   Last-Modified................ 49%
+//   Etag......................... 19%
+//   Accept-Ranges: bytes......... 25%
+//   Accept-Ranges: none.......... 0.4%
+//   Strong Validator............. 50%
+//   Strong Validator + ranges.... 24%
+//   Strong Validator + CL........ 49%
+//
+bool HttpCache::Transaction::CanResume(bool has_data) {
+  // Double check that there is something worth keeping.
+  if (has_data && !entry_->disk_entry->GetDataSize(kResponseContentIndex))
+    return false;
+
+  if (request_->method != "GET")
+    return false;
+
+  if (response_.headers->GetContentLength() <= 0 ||
+      response_.headers->HasHeaderValue("Accept-Ranges", "none") ||
+      !response_.headers->HasStrongValidators())
+    return false;
+
+  return true;
 }
 
 void HttpCache::Transaction::OnIOComplete(int result) {

@@ -1,16 +1,16 @@
-// Copyright (c) 2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/download/download_shelf.h"
 
 #include "base/file_util.h"
-#include "chrome/browser/dom_ui/downloads_ui.h"
 #include "chrome/browser/download/download_item.h"
 #include "chrome/browser/download/download_item_model.h"
 #include "chrome/browser/download/download_manager.h"
 #include "chrome/browser/download/download_util.h"
 #include "chrome/browser/metrics/user_metrics.h"
+#include "chrome/browser/ui/webui/downloads_ui.h"
 #include "chrome/common/url_constants.h"
 #include "grit/generated_resources.h"
 #include "ui/base/l10n/l10n_util.h"
@@ -36,6 +36,8 @@ bool DownloadShelfContextMenu::IsCommandIdChecked(int command_id) const {
       return download_->open_when_complete();
     case ALWAYS_OPEN_TYPE:
       return download_->ShouldOpenFileBasedOnExtension();
+    case TOGGLE_PAUSE:
+      return download_->is_paused();
   }
   return false;
 }
@@ -45,7 +47,7 @@ string16 DownloadShelfContextMenu::GetLabelForCommandId(int command_id) const {
     case SHOW_IN_FOLDER:
       return l10n_util::GetStringUTF16(IDS_DOWNLOAD_MENU_SHOW);
     case OPEN_WHEN_COMPLETE:
-      if (download_->state() == DownloadItem::IN_PROGRESS)
+      if (download_->IsInProgress())
         return l10n_util::GetStringUTF16(IDS_DOWNLOAD_MENU_OPEN_WHEN_COMPLETE);
       return l10n_util::GetStringUTF16(IDS_DOWNLOAD_MENU_OPEN);
     case ALWAYS_OPEN_TYPE:
@@ -68,13 +70,13 @@ bool DownloadShelfContextMenu::IsCommandIdEnabled(int command_id) const {
   switch (command_id) {
     case SHOW_IN_FOLDER:
     case OPEN_WHEN_COMPLETE:
-      return download_->state() != DownloadItem::CANCELLED;
+      return !download_->IsCancelled();
     case ALWAYS_OPEN_TYPE:
       return download_->CanOpenDownload();
     case CANCEL:
-      return download_->state() == DownloadItem::IN_PROGRESS;
+      return download_->IsPartialDownload();
     case TOGGLE_PAUSE:
-      return download_->state() == DownloadItem::IN_PROGRESS;
+      return download_->IsInProgress();
     default:
       return command_id > 0 && command_id < MENU_LAST;
   }
@@ -100,7 +102,7 @@ void DownloadShelfContextMenu::ExecuteCommand(int command_id) {
       // It is possible for the download to complete before the user clicks the
       // menu item, recheck if the download is in progress state before toggling
       // pause.
-      if (download_->state() == DownloadItem::IN_PROGRESS)
+      if (download_->IsPartialDownload())
         download_->TogglePause();
       break;
     default:

@@ -1,4 +1,4 @@
-// Copyright (c) 2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -33,6 +33,11 @@ class GLES2MockCommandBufferHelper : public CommandBuffer {
     return true;
   }
 
+  virtual bool Initialize(base::SharedMemory* buffer, int32 size) {
+    GPU_NOTREACHED();
+    return false;
+  }
+
   virtual Buffer GetRingBuffer() {
     return ring_buffer_buffer_;
   }
@@ -57,7 +62,7 @@ class GLES2MockCommandBufferHelper : public CommandBuffer {
     state_.get_offset = get_offset;
   }
 
-  virtual int32 CreateTransferBuffer(size_t size) {
+  virtual int32 CreateTransferBuffer(size_t size, int32 id_request) {
     transfer_buffer_.reset(new int8[size]);
     transfer_buffer_buffer_.ptr = transfer_buffer_.get();
     transfer_buffer_buffer_.size = size;
@@ -71,6 +76,13 @@ class GLES2MockCommandBufferHelper : public CommandBuffer {
   virtual Buffer GetTransferBuffer(int32 id) {
     GPU_DCHECK_EQ(id, kTransferBufferId);
     return transfer_buffer_buffer_;
+  }
+
+  virtual int32 RegisterTransferBuffer(base::SharedMemory* shared_memory,
+                                       size_t size,
+                                       int32 id_request) {
+    GPU_NOTREACHED();
+    return -1;
   }
 
   virtual void SetToken(int32 token) {
@@ -178,7 +190,7 @@ class GLES2ImplementationTest : public testing::Test {
     command_buffer_->Initialize(kCommandBufferSizeBytes);
 
     EXPECT_EQ(kTransferBufferId,
-              command_buffer_->CreateTransferBuffer(kTransferBufferSize));
+              command_buffer_->CreateTransferBuffer(kTransferBufferSize, -1));
     transfer_buffer_ = command_buffer_->GetTransferBuffer(kTransferBufferId);
     ClearTransferBuffer();
 
@@ -848,7 +860,7 @@ TEST_F(GLES2ImplementationTest, MapUnmapTexSubImage2DCHROMIUM) {
   Cmds expected;
   expected.tex.Init(
       GL_TEXTURE_2D, kLevel, kXOffset, kYOffset, kWidth, kHeight, kFormat,
-      kType, kTransferBufferId, offset);
+      kType, kTransferBufferId, offset, GL_FALSE);
   expected.set_token.Init(token++);
 
   void* mem = gl_->MapTexSubImage2DCHROMIUM(

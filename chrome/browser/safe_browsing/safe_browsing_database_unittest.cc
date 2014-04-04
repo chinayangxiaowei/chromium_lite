@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 //
@@ -8,14 +8,14 @@
 #include "app/sql/statement.h"
 #include "base/file_util.h"
 #include "base/logging.h"
+#include "base/memory/scoped_temp_dir.h"
 #include "base/message_loop.h"
-#include "base/scoped_temp_dir.h"
-#include "base/sha2.h"
 #include "base/time.h"
+#include "crypto/sha2.h"
 #include "chrome/browser/safe_browsing/safe_browsing_database.h"
 #include "chrome/browser/safe_browsing/safe_browsing_store_file.h"
-#include "chrome/browser/safe_browsing/safe_browsing_store_sqlite.h"
 #include "chrome/browser/safe_browsing/safe_browsing_store_unittest_helper.h"
+#include "content/browser/browser_thread.h"
 #include "googleurl/src/gurl.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "testing/platform_test.h"
@@ -26,13 +26,13 @@ namespace {
 
 SBPrefix Sha256Prefix(const std::string& str) {
   SBPrefix prefix;
-  base::SHA256HashString(str, &prefix, sizeof(prefix));
+  crypto::SHA256HashString(str, &prefix, sizeof(prefix));
   return prefix;
 }
 
 SBFullHash Sha256Hash(const std::string& str) {
   SBFullHash hash;
-  base::SHA256HashString(str, &hash, sizeof(hash));
+  crypto::SHA256HashString(str, &hash, sizeof(hash));
   return hash;
 }
 
@@ -61,6 +61,21 @@ void InsertAddChunkHostPrefixUrl(SBChunk* chunk,
   InsertAddChunkHostPrefixValue(chunk, chunk_number,
                                 Sha256Prefix(host_name),
                                 Sha256Prefix(url));
+}
+
+// Same as InsertAddChunkHostPrefixUrl, but with full hashes.
+void InsertAddChunkHostFullHashes(SBChunk* chunk,
+                                  int chunk_number,
+                                  const std::string& host_name,
+                                  const std::string& url) {
+  chunk->chunk_number = chunk_number;
+  chunk->is_add = true;
+  SBChunkHost host;
+  host.host = Sha256Prefix(host_name);
+  host.entry = SBEntry::Create(SBEntry::ADD_FULL_HASH, 1);
+  host.entry->set_chunk_id(chunk->chunk_number);
+  host.entry->SetFullHashAt(0, Sha256Hash(url));
+  chunk->hosts.push_back(host);
 }
 
 // Same as InsertAddChunkHostPrefixUrl, but with two urls for prefixes.
@@ -218,57 +233,6 @@ class ScopedLogMessageIgnorer {
   }
 };
 
-// Helper function which corrupts the root page of the indicated
-// table.  After this the table can be opened successfully, and
-// queries to other tables work, and possibly queries to this table
-// which only hit an index may work, but queries which hit the table
-// itself should not.  Returns |true| on success.
-bool CorruptSqliteTable(const FilePath& filename,
-                        const std::string& table_name) {
-  size_t root_page;  // Root page of the table.
-  size_t page_size;  // Page size of the database.
-
-  sql::Connection db;
-  if (!db.Open(filename))
-    return false;
-
-  sql::Statement stmt(db.GetUniqueStatement("PRAGMA page_size"));
-  if (!stmt.Step())
-    return false;
-  page_size = stmt.ColumnInt(0);
-
-  stmt.Assign(db.GetUniqueStatement(
-      "SELECT rootpage FROM sqlite_master WHERE name = ?"));
-  stmt.BindString(0, "sub_prefix");
-  if (!stmt.Step())
-    return false;
-  root_page = stmt.ColumnInt(0);
-
-  // The page numbers are 1-based.
-  const size_t root_page_offset = (root_page - 1) * page_size;
-
-  // Corrupt the file by overwriting the table's root page.
-  FILE* fp = file_util::OpenFile(filename, "r+");
-  if (!fp)
-    return false;
-
-  file_util::ScopedFILE file_closer(fp);
-  if (fseek(fp, root_page_offset, SEEK_SET) == -1)
-    return false;
-
-  for (size_t i = 0; i < page_size; ++i) {
-    fputc('!', fp);  // Character experimentally verified.
-  }
-
-  // Close the file manually because if there is an error in the
-  // close, it's likely because the data could not be flushed to the
-  // file.
-  if (!file_util::CloseFile(file_closer.release()))
-    return false;
-
-  return true;
-}
-
 }  // namespace
 
 class SafeBrowsingDatabaseTest : public PlatformTest {
@@ -421,7 +385,10 @@ TEST_F(SafeBrowsingDatabaseTest, ListNameForBrowseAndDownload) {
   MessageLoop loop(MessageLoop::TYPE_DEFAULT);
   SafeBrowsingStoreFile* browse_store = new SafeBrowsingStoreFile();
   SafeBrowsingStoreFile* download_store = new SafeBrowsingStoreFile();
-  database_.reset(new SafeBrowsingDatabaseNew(browse_store, download_store));
+  SafeBrowsingStoreFile* csd_whitelist_store = new SafeBrowsingStoreFile();
+  database_.reset(new SafeBrowsingDatabaseNew(browse_store,
+                                              download_store,
+                                              csd_whitelist_store));
   database_->Init(database_filename_);
 
   SBChunkList chunks;
@@ -456,10 +423,17 @@ TEST_F(SafeBrowsingDatabaseTest, ListNameForBrowseAndDownload) {
   chunks.push_back(chunk);
   database_->InsertChunks(safe_browsing_util::kBinHashList, chunks);
 
+  chunk.hosts.clear();
+  InsertAddChunkHostFullHashes(&chunk, 5, "www.forwhitelist.com/",
+                               "www.forwhitelist.com/a.html");
+  chunks.clear();
+  chunks.push_back(chunk);
+  database_->InsertChunks(safe_browsing_util::kCsdWhiteList, chunks);
+
   database_->UpdateFinished(true);
 
   GetListsInfo(&lists);
-  EXPECT_EQ(4U, lists.size());
+  EXPECT_EQ(5U, lists.size());
   EXPECT_TRUE(lists[0].name == safe_browsing_util::kMalwareList);
   EXPECT_EQ(lists[0].adds, "1");
   EXPECT_TRUE(lists[0].subs.empty());
@@ -472,6 +446,9 @@ TEST_F(SafeBrowsingDatabaseTest, ListNameForBrowseAndDownload) {
   EXPECT_TRUE(lists[3].name == safe_browsing_util::kBinHashList);
   EXPECT_EQ(lists[3].adds, "4");
   EXPECT_TRUE(lists[3].subs.empty());
+  EXPECT_TRUE(lists[4].name == safe_browsing_util::kCsdWhiteList);
+  EXPECT_EQ(lists[4].adds, "5");
+  EXPECT_TRUE(lists[4].subs.empty());
   database_.reset();
 }
 
@@ -1088,84 +1065,6 @@ TEST_F(SafeBrowsingDatabaseTest, HashCaching) {
 // corruption is detected in the midst of the update.
 // TODO(shess): Disabled until ScopedLogMessageIgnorer resolved.
 // http://crbug.com/56448
-TEST_F(SafeBrowsingDatabaseTest, DISABLED_SqliteCorruptionHandling) {
-  // Re-create the database in a captive message loop so that we can
-  // influence task-posting.  Database specifically needs to the
-  // SQLite-backed.
-  database_.reset();
-  MessageLoop loop(MessageLoop::TYPE_DEFAULT);
-  SafeBrowsingStoreSqlite* store = new SafeBrowsingStoreSqlite();
-  database_.reset(new SafeBrowsingDatabaseNew(store, NULL));
-  database_->Init(database_filename_);
-
-  // This will cause an empty database to be created.
-  std::vector<SBListChunkRanges> lists;
-  EXPECT_TRUE(database_->UpdateStarted(&lists));
-  database_->UpdateFinished(true);
-
-  // Create a sub chunk to insert.
-  SBChunkList chunks;
-  SBChunk chunk;
-  SBChunkHost host;
-  host.host = Sha256Prefix("www.subbed.com/");
-  host.entry = SBEntry::Create(SBEntry::SUB_PREFIX, 1);
-  host.entry->set_chunk_id(7);
-  host.entry->SetChunkIdAtPrefix(0, 19);
-  host.entry->SetPrefixAt(0, Sha256Prefix("www.subbed.com/notevil1.html"));
-  chunk.chunk_number = 7;
-  chunk.is_add = false;
-  chunk.hosts.clear();
-  chunk.hosts.push_back(host);
-  chunks.clear();
-  chunks.push_back(chunk);
-
-  // Corrupt the |sub_prefix| table.
-  ASSERT_TRUE(CorruptSqliteTable(database_filename_, "sub_prefix"));
-
-  {
-    // The following code will cause DCHECKs, so suppress the crashes.
-    ScopedLogMessageIgnorer ignorer;
-
-    // Start an update.  The insert will fail due to corruption.
-    EXPECT_TRUE(database_->UpdateStarted(&lists));
-    VLOG(1) << "Expect failed check on: sqlite error 11";
-    database_->InsertChunks(safe_browsing_util::kMalwareList, chunks);
-
-    // Database file still exists until the corruption handler has run.
-    EXPECT_TRUE(file_util::PathExists(database_filename_));
-
-    // Flush through the corruption-handler task.
-    VLOG(1) << "Expect failed check on: SafeBrowsing database reset";
-    MessageLoop::current()->RunAllPending();
-  }
-
-  // Database file should not exist.
-  EXPECT_FALSE(file_util::PathExists(database_filename_));
-
-  // Finish the transaction.  This should short-circuit, so no
-  // DCHECKs.
-  database_->InsertChunks(safe_browsing_util::kMalwareList, chunks);
-  database_->UpdateFinished(true);
-
-  // Flush through any posted tasks.
-  MessageLoop::current()->RunAllPending();
-
-  // Database file should still not exist.
-  EXPECT_FALSE(file_util::PathExists(database_filename_));
-
-  // Run the update again successfully.
-  EXPECT_TRUE(database_->UpdateStarted(&lists));
-  database_->InsertChunks(safe_browsing_util::kMalwareList, chunks);
-  database_->UpdateFinished(true);
-  EXPECT_TRUE(file_util::PathExists(database_filename_));
-
-  database_.reset();
-}
-
-// Test that corrupt databases are appropriately handled, even if the
-// corruption is detected in the midst of the update.
-// TODO(shess): Disabled until ScopedLogMessageIgnorer resolved.
-// http://crbug.com/56448
 TEST_F(SafeBrowsingDatabaseTest, DISABLED_FileCorruptionHandling) {
   // Re-create the database in a captive message loop so that we can
   // influence task-posting.  Database specifically needs to the
@@ -1173,7 +1072,7 @@ TEST_F(SafeBrowsingDatabaseTest, DISABLED_FileCorruptionHandling) {
   database_.reset();
   MessageLoop loop(MessageLoop::TYPE_DEFAULT);
   SafeBrowsingStoreFile* store = new SafeBrowsingStoreFile();
-  database_.reset(new SafeBrowsingDatabaseNew(store, NULL));
+  database_.reset(new SafeBrowsingDatabaseNew(store, NULL, NULL));
   database_->Init(database_filename_);
 
   // This will cause an empty database to be created.
@@ -1242,11 +1141,14 @@ TEST_F(SafeBrowsingDatabaseTest, ContainsDownloadUrl) {
   MessageLoop loop(MessageLoop::TYPE_DEFAULT);
   SafeBrowsingStoreFile* browse_store = new SafeBrowsingStoreFile();
   SafeBrowsingStoreFile* download_store = new SafeBrowsingStoreFile();
-  database_.reset(new SafeBrowsingDatabaseNew(browse_store, download_store));
+  SafeBrowsingStoreFile* csd_whitelist_store = new SafeBrowsingStoreFile();
+  database_.reset(new SafeBrowsingDatabaseNew(browse_store,
+                                              download_store,
+                                              csd_whitelist_store));
   database_->Init(database_filename_);
 
   const char kEvil1Host[] = "www.evil1.com/";
-  const char kEvil1Url1[] = "www.evil1.com/download1.html";
+  const char kEvil1Url1[] = "www.evil1.com/download1/";
   const char kEvil1Url2[] = "www.evil1.com/download2.html";
 
   SBChunkList chunks;
@@ -1260,33 +1162,191 @@ TEST_F(SafeBrowsingDatabaseTest, ContainsDownloadUrl) {
   database_->InsertChunks(safe_browsing_util::kBinUrlList, chunks);
   database_->UpdateFinished(true);
 
-  const Time now = Time::Now();
   std::vector<SBPrefix> prefix_hits;
-  std::string matching_list;
+  std::vector<GURL> urls(1);
 
-  EXPECT_TRUE(database_->ContainsDownloadUrl(
-      GURL(std::string("http://") + kEvil1Url1), &prefix_hits));
+  urls[0] = GURL(std::string("http://") + kEvil1Url1);
+  EXPECT_TRUE(database_->ContainsDownloadUrl(urls, &prefix_hits));
+  ASSERT_EQ(prefix_hits.size(), 1U);
   EXPECT_EQ(prefix_hits[0], Sha256Prefix(kEvil1Url1));
-  EXPECT_EQ(prefix_hits.size(), 1U);
 
-  EXPECT_TRUE(database_->ContainsDownloadUrl(
-      GURL(std::string("http://") + kEvil1Url2), &prefix_hits));
+  urls[0] = GURL(std::string("http://") + kEvil1Url2);
+  EXPECT_TRUE(database_->ContainsDownloadUrl(urls, &prefix_hits));
+  ASSERT_EQ(prefix_hits.size(), 1U);
   EXPECT_EQ(prefix_hits[0], Sha256Prefix(kEvil1Url2));
-  EXPECT_EQ(prefix_hits.size(), 1U);
 
-  EXPECT_TRUE(database_->ContainsDownloadUrl(
-      GURL(std::string("https://") + kEvil1Url2), &prefix_hits));
+  urls[0] = GURL(std::string("https://") + kEvil1Url2);
+  EXPECT_TRUE(database_->ContainsDownloadUrl(urls, &prefix_hits));
+  ASSERT_EQ(prefix_hits.size(), 1U);
   EXPECT_EQ(prefix_hits[0], Sha256Prefix(kEvil1Url2));
-  EXPECT_EQ(prefix_hits.size(), 1U);
 
-  EXPECT_TRUE(database_->ContainsDownloadUrl(
-      GURL(std::string("ftp://") + kEvil1Url2), &prefix_hits));
+  urls[0] = GURL(std::string("ftp://") + kEvil1Url2);
+  EXPECT_TRUE(database_->ContainsDownloadUrl(urls, &prefix_hits));
+  ASSERT_EQ(prefix_hits.size(), 1U);
   EXPECT_EQ(prefix_hits[0], Sha256Prefix(kEvil1Url2));
-  EXPECT_EQ(prefix_hits.size(), 1U);
 
-  EXPECT_FALSE(database_->ContainsDownloadUrl(GURL("http://www.randomevil.com"),
-                                              &prefix_hits));
-  EXPECT_EQ(prefix_hits.size(), 0U);
+  urls[0] = GURL("http://www.randomevil.com");
+  EXPECT_FALSE(database_->ContainsDownloadUrl(urls, &prefix_hits));
+
+  // Should match with query args stripped.
+  urls[0] = GURL(std::string("http://") + kEvil1Url2 + "?blah");
+  EXPECT_TRUE(database_->ContainsDownloadUrl(urls, &prefix_hits));
+  ASSERT_EQ(prefix_hits.size(), 1U);
+  EXPECT_EQ(prefix_hits[0], Sha256Prefix(kEvil1Url2));
+
+  // Should match with extra path stuff and query args stripped.
+  urls[0] = GURL(std::string("http://") + kEvil1Url1 + "foo/bar?blah");
+  EXPECT_TRUE(database_->ContainsDownloadUrl(urls, &prefix_hits));
+  ASSERT_EQ(prefix_hits.size(), 1U);
+  EXPECT_EQ(prefix_hits[0], Sha256Prefix(kEvil1Url1));
+
+  // First hit in redirect chain is malware.
+  urls.clear();
+  urls.push_back(GURL(std::string("http://") + kEvil1Url1));
+  urls.push_back(GURL("http://www.randomevil.com"));
+  EXPECT_TRUE(database_->ContainsDownloadUrl(urls, &prefix_hits));
+  ASSERT_EQ(prefix_hits.size(), 1U);
+  EXPECT_EQ(prefix_hits[0], Sha256Prefix(kEvil1Url1));
+
+  // Middle hit in redirect chain is malware.
+  urls.clear();
+  urls.push_back(GURL("http://www.randomevil.com"));
+  urls.push_back(GURL(std::string("http://") + kEvil1Url1));
+  urls.push_back(GURL("http://www.randomevil2.com"));
+  EXPECT_TRUE(database_->ContainsDownloadUrl(urls, &prefix_hits));
+  ASSERT_EQ(prefix_hits.size(), 1U);
+  EXPECT_EQ(prefix_hits[0], Sha256Prefix(kEvil1Url1));
+
+  // Final hit in redirect chain is malware.
+  urls.clear();
+  urls.push_back(GURL("http://www.randomevil.com"));
+  urls.push_back(GURL(std::string("http://") + kEvil1Url1));
+  EXPECT_TRUE(database_->ContainsDownloadUrl(urls, &prefix_hits));
+  ASSERT_EQ(prefix_hits.size(), 1U);
+  EXPECT_EQ(prefix_hits[0], Sha256Prefix(kEvil1Url1));
+
+  // Multiple hits in redirect chain are in malware list.
+  urls.clear();
+  urls.push_back(GURL(std::string("http://") + kEvil1Url1));
+  urls.push_back(GURL(std::string("https://") + kEvil1Url2));
+  EXPECT_TRUE(database_->ContainsDownloadUrl(urls, &prefix_hits));
+  ASSERT_EQ(prefix_hits.size(), 2U);
+  EXPECT_EQ(prefix_hits[0], Sha256Prefix(kEvil1Url1));
+  EXPECT_EQ(prefix_hits[1], Sha256Prefix(kEvil1Url2));
+  database_.reset();
+}
+
+// Checks that the csd-whitelist is handled properly.
+TEST_F(SafeBrowsingDatabaseTest, CsdWhitelist) {
+  database_.reset();
+  MessageLoop loop(MessageLoop::TYPE_DEFAULT);
+  // We expect all calls to ContainsCsdWhitelistedUrl to be made from the IO
+  // thread.
+  BrowserThread io_thread(BrowserThread::IO, &loop);
+
+  // If the whitelist is disabled everything should match the whitelist.
+  database_.reset(new SafeBrowsingDatabaseNew(new SafeBrowsingStoreFile(),
+                                              NULL, NULL));
+  database_->Init(database_filename_);
+  EXPECT_TRUE(database_->ContainsCsdWhitelistedUrl(
+      GURL(std::string("http://www.phishig.com/"))));
+
+  SafeBrowsingStoreFile* browse_store = new SafeBrowsingStoreFile();
+  SafeBrowsingStoreFile* csd_whitelist_store = new SafeBrowsingStoreFile();
+  database_.reset(new SafeBrowsingDatabaseNew(browse_store, NULL,
+                                              csd_whitelist_store));
+  database_->Init(database_filename_);
+
+  const char kGood1Host[] = "www.good1.com/";
+  const char kGood1Url1[] = "www.good1.com/a/b.html";
+  const char kGood1Url2[] = "www.good1.com/b/";
+
+  const char kGood2Host[] = "www.good2.com/";
+  const char kGood2Url1[] = "www.good2.com/c";  // Should match '/c/bla'.
+
+  SBChunkList chunks;
+  SBChunk chunk;
+  // Add two simple chunks to the csd whitelist.
+  InsertAddChunkHost2FullHashes(&chunk, 1, kGood1Host,
+                                kGood1Url1, kGood1Url2);
+  chunks.push_back(chunk);
+
+  chunk.hosts.clear();
+  InsertAddChunkHostFullHashes(&chunk, 2, kGood2Host, kGood2Url1);
+  chunks.push_back(chunk);
+
+  std::vector<SBListChunkRanges> lists;
+  EXPECT_TRUE(database_->UpdateStarted(&lists));
+  database_->InsertChunks(safe_browsing_util::kCsdWhiteList, chunks);
+  database_->UpdateFinished(true);
+
+  EXPECT_FALSE(database_->ContainsCsdWhitelistedUrl(
+      GURL(std::string("http://") + kGood1Host)));
+
+  EXPECT_TRUE(database_->ContainsCsdWhitelistedUrl(
+      GURL(std::string("http://") + kGood1Url1)));
+  EXPECT_TRUE(database_->ContainsCsdWhitelistedUrl(
+      GURL(std::string("http://") + kGood1Url1 + "?a=b")));
+
+  EXPECT_TRUE(database_->ContainsCsdWhitelistedUrl(
+      GURL(std::string("http://") + kGood1Url2)));
+  EXPECT_TRUE(database_->ContainsCsdWhitelistedUrl(
+      GURL(std::string("http://") + kGood1Url2 + "/c.html")));
+
+  EXPECT_TRUE(database_->ContainsCsdWhitelistedUrl(
+      GURL(std::string("https://") + kGood1Url2 + "/c.html")));
+
+  EXPECT_TRUE(database_->ContainsCsdWhitelistedUrl(
+      GURL(std::string("http://") + kGood2Url1 + "/c")));
+  EXPECT_TRUE(database_->ContainsCsdWhitelistedUrl(
+      GURL(std::string("http://") + kGood2Url1 + "/c?bla")));
+  EXPECT_TRUE(database_->ContainsCsdWhitelistedUrl(
+      GURL(std::string("http://") + kGood2Url1 + "/c/bla")));
+
+  EXPECT_FALSE(database_->ContainsCsdWhitelistedUrl(
+      GURL(std::string("http://www.google.com/"))));
+
+  // Test that the kill-switch works as intended.
+  chunks.clear();
+  lists.clear();
+  SBChunk chunk2;
+  InsertAddChunkHostFullHashes(&chunk2, 3, "sb-ssl.google.com/",
+                               "sb-ssl.google.com/safebrowsing/csd/killswitch");
+  chunks.push_back(chunk2);
+
+  EXPECT_TRUE(database_->UpdateStarted(&lists));
+  database_->InsertChunks(safe_browsing_util::kCsdWhiteList, chunks);
+  database_->UpdateFinished(true);
+
+  EXPECT_TRUE(database_->ContainsCsdWhitelistedUrl(
+      GURL(std::string("https://") + kGood1Url2 + "/c.html")));
+  EXPECT_TRUE(database_->ContainsCsdWhitelistedUrl(
+      GURL(std::string("http://www.google.com/"))));
+  EXPECT_TRUE(database_->ContainsCsdWhitelistedUrl(
+      GURL(std::string("http://www.phishing_url.com/"))));
+
+  // Remove the kill-switch and verify that we can recover.
+  chunks.clear();
+  lists.clear();
+  SBChunk sub_chunk;
+  InsertSubChunkHostFullHash(&sub_chunk, 1, 3,
+                             "sb-ssl.google.com/",
+                             "sb-ssl.google.com/safebrowsing/csd/killswitch");
+  chunks.push_back(sub_chunk);
+
+  EXPECT_TRUE(database_->UpdateStarted(&lists));
+  database_->InsertChunks(safe_browsing_util::kCsdWhiteList, chunks);
+  database_->UpdateFinished(true);
+
+  EXPECT_TRUE(database_->ContainsCsdWhitelistedUrl(
+      GURL(std::string("https://") + kGood1Url2 + "/c.html")));
+  EXPECT_TRUE(database_->ContainsCsdWhitelistedUrl(
+      GURL(std::string("https://") + kGood2Url1 + "/c/bla")));
+  EXPECT_FALSE(database_->ContainsCsdWhitelistedUrl(
+      GURL(std::string("http://www.google.com/"))));
+  EXPECT_FALSE(database_->ContainsCsdWhitelistedUrl(
+      GURL(std::string("http://www.phishing_url.com/"))));
+
   database_.reset();
 }
 
@@ -1389,20 +1449,25 @@ TEST_F(SafeBrowsingDatabaseTest, SameHostEntriesOkay) {
       &listname, &prefixes, &full_hashes, now));
 }
 
-TEST_F(SafeBrowsingDatabaseTest, BinHashEntries) {
+TEST_F(SafeBrowsingDatabaseTest, BinHashInsertLookup) {
+  const SBPrefix kPrefix1 = 0x31313131;
+  const SBPrefix kPrefix2 = 0x32323232;
+  const SBPrefix kPrefix3 = 0x33333333;
   database_.reset();
   MessageLoop loop(MessageLoop::TYPE_DEFAULT);
   SafeBrowsingStoreFile* browse_store = new SafeBrowsingStoreFile();
   SafeBrowsingStoreFile* download_store = new SafeBrowsingStoreFile();
-  database_.reset(new SafeBrowsingDatabaseNew(browse_store, download_store));
+  database_.reset(new SafeBrowsingDatabaseNew(browse_store,
+                                              download_store,
+                                              NULL));
   database_->Init(database_filename_);
 
   SBChunkList chunks;
   SBChunk chunk;
   // Insert one host.
-  InsertAddChunkHostPrefixValue(&chunk, 1, 0, 0x31313131);
+  InsertAddChunkHostPrefixValue(&chunk, 1, 0, kPrefix1);
   // Insert a second host, which has the same host prefix as the first one.
-  InsertAddChunkHostPrefixValue(&chunk, 1, 0, 0x32323232);
+  InsertAddChunkHostPrefixValue(&chunk, 1, 0, kPrefix2);
   chunks.push_back(chunk);
 
   // Insert the testing chunks into database.
@@ -1417,7 +1482,70 @@ TEST_F(SafeBrowsingDatabaseTest, BinHashEntries) {
   EXPECT_EQ("1", lists[3].adds);
   EXPECT_TRUE(lists[3].subs.empty());
 
-  // TODO(lzheng): Query database and verifies the prefixes once that API
-  // database is available in database.
+  EXPECT_TRUE(database_->ContainsDownloadHashPrefix(kPrefix1));
+  EXPECT_TRUE(database_->ContainsDownloadHashPrefix(kPrefix2));
+  EXPECT_FALSE(database_->ContainsDownloadHashPrefix(kPrefix3));
   database_.reset();
+}
+
+// Test that an empty update doesn't actually update the database.
+// This isn't a functionality requirement, but it is a useful
+// optimization.
+TEST_F(SafeBrowsingDatabaseTest, EmptyUpdate) {
+  SBChunkList chunks;
+  SBChunk chunk;
+
+  FilePath filename = database_->BrowseDBFilename(database_filename_);
+
+  // Prime the database.
+  std::vector<SBListChunkRanges> lists;
+  EXPECT_TRUE(database_->UpdateStarted(&lists));
+
+  InsertAddChunkHostPrefixUrl(&chunk, 1, "www.evil.com/",
+                              "www.evil.com/malware.html");
+  chunks.clear();
+  chunks.push_back(chunk);
+  database_->InsertChunks(safe_browsing_util::kMalwareList, chunks);
+  database_->UpdateFinished(true);
+
+  // Get an older time to reset the lastmod time for detecting whether
+  // the file has been updated.
+  base::PlatformFileInfo before_info, after_info;
+  ASSERT_TRUE(file_util::GetFileInfo(filename, &before_info));
+  const base::Time old_last_modified =
+      before_info.last_modified - base::TimeDelta::FromSeconds(10);
+
+  // Inserting another chunk updates the database file.  The sleep is
+  // needed because otherwise the entire test can finish w/in the
+  // resolution of the lastmod time.
+  ASSERT_TRUE(file_util::SetLastModifiedTime(filename, old_last_modified));
+  ASSERT_TRUE(file_util::GetFileInfo(filename, &before_info));
+  EXPECT_TRUE(database_->UpdateStarted(&lists));
+  chunk.hosts.clear();
+  InsertAddChunkHostPrefixUrl(&chunk, 2, "www.foo.com/",
+                              "www.foo.com/malware.html");
+  chunks.clear();
+  chunks.push_back(chunk);
+  database_->InsertChunks(safe_browsing_util::kMalwareList, chunks);
+  database_->UpdateFinished(true);
+  ASSERT_TRUE(file_util::GetFileInfo(filename, &after_info));
+  EXPECT_LT(before_info.last_modified, after_info.last_modified);
+
+  // Deleting a chunk updates the database file.
+  ASSERT_TRUE(file_util::SetLastModifiedTime(filename, old_last_modified));
+  ASSERT_TRUE(file_util::GetFileInfo(filename, &before_info));
+  EXPECT_TRUE(database_->UpdateStarted(&lists));
+  AddDelChunk(safe_browsing_util::kMalwareList, chunk.chunk_number);
+  database_->UpdateFinished(true);
+  ASSERT_TRUE(file_util::GetFileInfo(filename, &after_info));
+  EXPECT_LT(before_info.last_modified, after_info.last_modified);
+
+  // Simply calling |UpdateStarted()| then |UpdateFinished()| does not
+  // update the database file.
+  ASSERT_TRUE(file_util::SetLastModifiedTime(filename, old_last_modified));
+  ASSERT_TRUE(file_util::GetFileInfo(filename, &before_info));
+  EXPECT_TRUE(database_->UpdateStarted(&lists));
+  database_->UpdateFinished(true);
+  ASSERT_TRUE(file_util::GetFileInfo(filename, &after_info));
+  EXPECT_EQ(before_info.last_modified, after_info.last_modified);
 }

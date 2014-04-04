@@ -19,8 +19,9 @@
 #include "views/controls/button/text_button.h"
 #include "views/controls/image_view.h"
 #include "views/controls/label.h"
-#include "views/grid_layout.h"
-#include "views/standard_layout.h"
+#include "views/controls/textfield/textfield.h"
+#include "views/layout/grid_layout.h"
+#include "views/layout/layout_constants.h"
 #include "views/widget/widget_gtk.h"
 #include "views/window/window.h"
 
@@ -102,7 +103,6 @@ void CaptchaView::SetCaptchaURL(const GURL& captcha_url) {
 }
 
 gfx::Size CaptchaView::GetPreferredSize() {
-  // TODO(nkostylev): Once UI is finalized, create locale settings.
   gfx::Size size = gfx::Size(views::Window::GetLocalizedContentsSize(
       IDS_CAPTCHA_INPUT_DIALOG_WIDTH_CHARS,
       IDS_CAPTCHA_INPUT_DIALOG_HEIGHT_LINES));
@@ -123,7 +123,7 @@ void CaptchaView::ViewHierarchyChanged(bool is_add,
 bool CaptchaView::HandleKeyEvent(views::Textfield* sender,
                                  const views::KeyEvent& key_event) {
   if (sender == captcha_textfield_ &&
-      key_event.GetKeyCode() == ui::VKEY_RETURN) {
+      key_event.key_code() == ui::VKEY_RETURN) {
     if (is_standalone_) {
       Accept();
     } else {
@@ -133,7 +133,8 @@ bool CaptchaView::HandleKeyEvent(views::Textfield* sender,
   return false;
 }
 
-void CaptchaView::OnImageDecoded(const SkBitmap& decoded_image) {
+void CaptchaView::OnImageDecoded(const ImageDecoder*,
+                                 const SkBitmap& decoded_image) {
   captcha_image_->SetImage(decoded_image);
   captcha_textfield_->RequestFocus();
   Layout();
@@ -166,12 +167,12 @@ void CaptchaView::Init() {
       UTF16ToWide(l10n_util::GetStringUTF16(IDS_LOGIN_CAPTCHA_INSTRUCTIONS)));
   label->SetMultiLine(true);
   layout->AddView(label);
-  layout->AddPaddingRow(0, kRelatedControlVerticalSpacing);
+  layout->AddPaddingRow(0, views::kRelatedControlVerticalSpacing);
 
   layout->StartRow(0, column_view_set_id);
   captcha_image_ = new views::ImageView();
   layout->AddView(captcha_image_);
-  layout->AddPaddingRow(0, kRelatedControlVerticalSpacing);
+  layout->AddPaddingRow(0, views::kRelatedControlVerticalSpacing);
 
   layout->StartRow(0, column_view_set_id);
   captcha_textfield_ = new CaptchaField();
@@ -179,14 +180,14 @@ void CaptchaView::Init() {
   if (is_standalone_)
     captcha_textfield_->set_background(new CopyBackground(this));
   layout->AddView(captcha_textfield_);
-  layout->AddPaddingRow(0, kRelatedControlVerticalSpacing);
+  layout->AddPaddingRow(0, views::kRelatedControlVerticalSpacing);
 
   layout->StartRow(0, column_view_set_id);
   label = new views::Label(UTF16ToWide(
       l10n_util::GetStringUTF16(IDS_SYNC_GAIA_CAPTCHA_CASE_INSENSITIVE_TIP)));
   label->SetMultiLine(true);
   layout->AddView(label);
-  layout->AddPaddingRow(0, kRelatedControlVerticalSpacing);
+  layout->AddPaddingRow(0, views::kRelatedControlVerticalSpacing);
 
   if (is_standalone_) {
     layout->StartRow(0, column_view_set_id);

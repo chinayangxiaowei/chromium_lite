@@ -1,11 +1,10 @@
-// Copyright (c) 2006-2008 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "base/memory/ref_counted.h"
+#include "base/memory/scoped_ptr.h"
 #include "base/message_loop.h"
-#include "base/ref_counted.h"
-#include "base/scoped_ptr.h"
-#include "base/threading/thread.h"
 #include "ipc/ipc_channel_proxy.h"
 #include "ipc/ipc_logging.h"
 #include "ipc/ipc_message_utils.h"
@@ -307,7 +306,7 @@ void ChannelProxy::Init(const IPC::ChannelHandle& channel_handle,
   // to be created immediately so that it can be accessed and passed
   // to other processes. Forcing it to be created immediately avoids
   // race conditions that may otherwise arise.
-  if (mode == Channel::MODE_SERVER) {
+  if (mode & Channel::MODE_SERVER_FLAG) {
     create_pipe_now = true;
   }
 #endif  // defined(OS_POSIX)
@@ -375,6 +374,13 @@ int ChannelProxy::GetClientFileDescriptor() const {
   // Channel must have been created first.
   DCHECK(channel) << context_.get()->channel_id_;
   return channel->GetClientFileDescriptor();
+}
+
+bool ChannelProxy::GetClientEuid(uid_t* client_euid) const {
+  Channel *channel = context_.get()->channel_.get();
+  // Channel must have been created first.
+  DCHECK(channel) << context_.get()->channel_id_;
+  return channel->GetClientEuid(client_euid);
 }
 #endif
 

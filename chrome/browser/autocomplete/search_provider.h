@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 //
@@ -20,7 +20,7 @@
 #include <string>
 #include <vector>
 
-#include "base/scoped_ptr.h"
+#include "base/memory/scoped_ptr.h"
 #include "chrome/browser/autocomplete/autocomplete.h"
 #include "chrome/browser/autocomplete/autocomplete_match.h"
 #include "chrome/browser/history/history_types.h"
@@ -59,8 +59,8 @@ class SearchProvider : public AutocompleteProvider,
   //
   // This method also marks the search provider as no longer needing to wait for
   // the instant result.
-  void FinalizeInstantQuery(const std::wstring& input_text,
-                            const std::wstring& suggest_text);
+  void FinalizeInstantQuery(const string16& input_text,
+                            const string16& suggest_text);
 
   // AutocompleteProvider
   virtual void Start(const AutocompleteInput& input,
@@ -152,7 +152,7 @@ class SearchProvider : public AutocompleteProvider,
   };
 
   struct NavigationResult {
-    NavigationResult(const GURL& url, const std::wstring& site_name)
+    NavigationResult(const GURL& url, const string16& site_name)
         : url(url),
           site_name(site_name) {
     }
@@ -161,13 +161,13 @@ class SearchProvider : public AutocompleteProvider,
     GURL url;
 
     // Name for the site.
-    std::wstring site_name;
+    string16 site_name;
   };
 
-  typedef std::vector<std::wstring> SuggestResults;
+  typedef std::vector<string16> SuggestResults;
   typedef std::vector<NavigationResult> NavigationResults;
   typedef std::vector<history::KeywordSearchTermVisit> HistoryResults;
-  typedef std::map<std::wstring, AutocompleteMatch> MatchMap;
+  typedef std::map<string16, AutocompleteMatch> MatchMap;
 
   // Called when timer_ expires.
   void Run();
@@ -194,13 +194,13 @@ class SearchProvider : public AutocompleteProvider,
   // TemplateURL. Ownership of the returned URLFetchet passes to the caller.
   URLFetcher* CreateSuggestFetcher(int id,
                                    const TemplateURL& provider,
-                                   const std::wstring& text);
+                                   const string16& text);
 
   // Parses the results from the Suggest server and stores up to kMaxMatches of
   // them in server_results_.  Returns whether parsing succeeded.
   bool ParseSuggestResults(Value* root_val,
                            bool is_keyword,
-                           const std::wstring& input_text,
+                           const string16& input_text,
                            SuggestResults* suggest_results);
 
   // Converts the parsed server results in server_results_ to a set of
@@ -233,8 +233,10 @@ class SearchProvider : public AutocompleteProvider,
   // algorithms for the different types of matches.
   int CalculateRelevanceForWhatYouTyped() const;
   // |time| is the time at which this query was last seen. |is_keyword| is true
-  // if the search is from the keyword provider.
+  // if the search is from the keyword provider. |looks_like_url| is true if the
+  // search term would be treated as a URL if typed into the omnibox.
   int CalculateRelevanceForHistory(const base::Time& time,
+                                   bool looks_like_url,
                                    bool is_keyword) const;
   // |result_number| is the index of the suggestion in the result set from the
   // server; the best suggestion is suggestion number 0.  |is_keyword| is true
@@ -251,8 +253,8 @@ class SearchProvider : public AutocompleteProvider,
   // Creates an AutocompleteMatch for "Search <engine> for |query_string|" with
   // the supplied relevance.  Adds this match to |map|; if such a match already
   // exists, whichever one has lower relevance is eliminated.
-  void AddMatchToMap(const std::wstring& query_string,
-                     const std::wstring& input_text,
+  void AddMatchToMap(const string16& query_string,
+                     const string16& input_text,
                      int relevance,
                      AutocompleteMatch::Type type,
                      int accepted_suggestion,
@@ -282,7 +284,7 @@ class SearchProvider : public AutocompleteProvider,
   AutocompleteInput input_;
 
   // Input text when searching against the keyword provider.
-  std::wstring keyword_input_text_;
+  string16 keyword_input_text_;
 
   // Searches in the user's history that begin with the input text.
   HistoryResults keyword_history_results_;
@@ -318,7 +320,7 @@ class SearchProvider : public AutocompleteProvider,
   bool instant_finalized_;
 
   // The |suggest_text| parameter passed to FinalizeInstantQuery.
-  std::wstring default_provider_suggest_text_;
+  string16 default_provider_suggest_text_;
 
   DISALLOW_COPY_AND_ASSIGN(SearchProvider);
 };

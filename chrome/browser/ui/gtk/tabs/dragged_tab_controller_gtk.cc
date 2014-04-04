@@ -7,8 +7,8 @@
 #include <algorithm>
 
 #include "base/callback.h"
+#include "base/i18n/rtl.h"
 #include "chrome/browser/platform_util.h"
-#include "chrome/browser/tab_contents/tab_contents.h"
 #include "chrome/browser/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/gtk/browser_window_gtk.h"
@@ -16,7 +16,8 @@
 #include "chrome/browser/ui/gtk/tabs/dragged_tab_gtk.h"
 #include "chrome/browser/ui/gtk/tabs/tab_strip_gtk.h"
 #include "chrome/browser/ui/tab_contents/tab_contents_wrapper.h"
-#include "chrome/common/notification_source.h"
+#include "content/browser/tab_contents/tab_contents.h"
+#include "content/common/notification_source.h"
 
 namespace {
 
@@ -170,18 +171,8 @@ void DraggedTabControllerGtk::MoveContents(TabContents* source,
   // own window. Should be ignored since we're moving the window...
 }
 
-bool DraggedTabControllerGtk::IsPopup(TabContents* source) {
+bool DraggedTabControllerGtk::IsPopup(const TabContents* source) const {
   return false;
-}
-
-void DraggedTabControllerGtk::ToolbarSizeChanged(TabContents* source,
-                                                 bool finished) {
-  // Dragged tabs don't care about this.
-}
-
-void DraggedTabControllerGtk::URLStarredChanged(TabContents* source,
-                                                bool starred) {
-  // Ignored.
 }
 
 void DraggedTabControllerGtk::UpdateTargetURL(TabContents* source,
@@ -217,7 +208,7 @@ void DraggedTabControllerGtk::SetDraggedContents(
                       NotificationType::TAB_CONTENTS_DESTROYED,
                       Source<TabContentsWrapper>(dragged_contents_));
     if (original_delegate_)
-      dragged_contents_->set_delegate(original_delegate_);
+      dragged_contents_->tab_contents()->set_delegate(original_delegate_);
   }
   original_delegate_ = NULL;
   dragged_contents_ = new_contents;
@@ -230,8 +221,8 @@ void DraggedTabControllerGtk::SetDraggedContents(
     // otherwise our dragged_contents() may be replaced and subsequently
     // collected/destroyed while the drag is in process, leading to
     // nasty crashes.
-    original_delegate_ = dragged_contents_->delegate();
-    dragged_contents_->set_delegate(this);
+    original_delegate_ = dragged_contents_->tab_contents()->delegate();
+    dragged_contents_->tab_contents()->set_delegate(this);
   }
 }
 
@@ -378,7 +369,7 @@ void DraggedTabControllerGtk::Attach(TabStripGtk* attached_tabstrip,
 
     // Remove ourselves as the delegate now that the dragged TabContents is
     // being inserted back into a Browser.
-    dragged_contents_->set_delegate(NULL);
+    dragged_contents_->tab_contents()->set_delegate(NULL);
     original_delegate_ = NULL;
 
     // Return the TabContents' to normalcy.
@@ -402,7 +393,7 @@ void DraggedTabControllerGtk::Attach(TabStripGtk* attached_tabstrip,
     int index = GetInsertionIndexForDraggedBounds(bounds, false);
     attached_tabstrip_->model()->InsertTabContentsAt(
         index, dragged_contents_,
-        TabStripModel::ADD_SELECTED |
+        TabStripModel::ADD_ACTIVE |
             (pinned_ ? TabStripModel::ADD_PINNED : 0));
 
     tab = GetTabMatchingDraggedContents(attached_tabstrip_);
@@ -438,7 +429,7 @@ void DraggedTabControllerGtk::Detach() {
   }
 
   // Detaching resets the delegate, but we still want to be the delegate.
-  dragged_contents_->set_delegate(this);
+  dragged_contents_->tab_contents()->set_delegate(this);
 
   attached_tabstrip_ = NULL;
 }
@@ -463,8 +454,11 @@ int DraggedTabControllerGtk::GetInsertionIndexForDraggedBounds(
     const gfx::Rect& dragged_bounds,
     bool is_tab_attached) const {
   int right_tab_x = 0;
-
-  // TODO(jhawkins): Handle RTL layout.
+  int dragged_bounds_x = base::i18n::IsRTL() ? dragged_bounds.right() :
+                                               dragged_bounds.x();
+  dragged_bounds_x =
+      gtk_util::MirroredXCoordinate(attached_tabstrip_->widget(),
+                                    dragged_bounds_x);
 
   // Divides each tab into two halves to see if the dragged tab has crossed
   // the halfway boundary necessary to move past the next tab.
@@ -481,22 +475,22 @@ int DraggedTabControllerGtk::GetInsertionIndexForDraggedBounds(
 
     right_tab_x = right_half.right();
 
-    if (dragged_bounds.x() >= right_half.x() &&
-        dragged_bounds.x() < right_half.right()) {
+    if (dragged_bounds_x >= right_half.x() &&
+        dragged_bounds_x < right_half.right()) {
       index = i + 1;
       break;
-    } else if (dragged_bounds.x() >= left_half.x() &&
-               dragged_bounds.x() < left_half.right()) {
+    } else if (dragged_bounds_x >= left_half.x() &&
+               dragged_bounds_x < left_half.right()) {
       index = i;
       break;
     }
   }
 
   if (index == -1) {
-    if (dragged_bounds.right() > right_tab_x)
-      index = attached_tabstrip_->model()->count();
-    else
-      index = 0;
+    bool at_the_end = base::i18n::IsRTL() ?
+        dragged_bounds.x() < right_tab_x :
+        dragged_bounds.right() > right_tab_x;
+    index = at_the_end ? attached_tabstrip_->model()->count() : 0;
   }
 
   index = attached_tabstrip_->model()->ConstrainInsertionIndex(index, mini_);
@@ -580,8 +574,9 @@ bool DraggedTabControllerGtk::EndDragImpl(EndDragType type) {
     // If we get here it means the NavigationController is going down. Don't
     // attempt to do any cleanup other than resetting the delegate (if we're
     // still the delegate).
-    if (dragged_contents_ && dragged_contents_->delegate() == this)
-      dragged_contents_->set_delegate(NULL);
+    if (dragged_contents_ &&
+        dragged_contents_->tab_contents()->delegate() == this)
+      dragged_contents_->tab_contents()->set_delegate(NULL);
     dragged_contents_ = NULL;
   } else {
     // If we never received a drag-motion event, the drag will never have
@@ -595,14 +590,16 @@ bool DraggedTabControllerGtk::EndDragImpl(EndDragType type) {
       }
     }
 
-    if (dragged_contents_ && dragged_contents_->delegate() == this)
-      dragged_contents_->set_delegate(original_delegate_);
+    if (dragged_contents_ &&
+        dragged_contents_->tab_contents()->delegate() == this)
+      dragged_contents_->tab_contents()->set_delegate(original_delegate_);
   }
 
   // The delegate of the dragged contents should have been reset. Unset the
   // original delegate so that we don't attempt to reset the delegate when
   // deleted.
-  DCHECK(!dragged_contents_ || dragged_contents_->delegate() != this);
+  DCHECK(!dragged_contents_ ||
+         dragged_contents_->tab_contents()->delegate() != this);
   original_delegate_ = NULL;
 
   // If we're not destroyed now, we'll be destroyed asynchronously later.
@@ -627,7 +624,7 @@ void DraggedTabControllerGtk::RevertDrag() {
       attached_tabstrip_ = source_tabstrip_;
       source_tabstrip_->model()->InsertTabContentsAt(
           source_model_index_, dragged_contents_,
-          TabStripModel::ADD_SELECTED |
+          TabStripModel::ADD_ACTIVE |
               (pinned_ ? TabStripModel::ADD_PINNED : 0));
     } else {
       // The tab was moved within the tabstrip where the drag was initiated.
@@ -644,7 +641,7 @@ void DraggedTabControllerGtk::RevertDrag() {
     // source tabstrip.
     source_tabstrip_->model()->InsertTabContentsAt(
         source_model_index_, dragged_contents_,
-        TabStripModel::ADD_SELECTED |
+        TabStripModel::ADD_ACTIVE |
             (pinned_ ? TabStripModel::ADD_PINNED : 0));
   }
 

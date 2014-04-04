@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 //
@@ -8,6 +8,7 @@
 #define CHROME_BROWSER_CHROMEOS_LOGIN_HELPER_H_
 #pragma once
 
+#include "base/string16.h"
 #include "third_party/skia/include/core/SkColor.h"
 #include "views/controls/button/native_button.h"
 #include "views/view.h"
@@ -31,6 +32,8 @@ class Widget;
 }  // namespace views
 
 namespace chromeos {
+
+class NetworkLibrary;
 
 // View that provides interface for start/stop throbber above the view.
 class ThrobberHostView : public views::View {
@@ -91,8 +94,19 @@ void CorrectNativeButtonFontSize(views::NativeButton* button);
 // Corrects font size for Textfield control.
 void CorrectTextfieldFontSize(views::Textfield* textfield);
 
+// Sets font and corrects font size for Textfield control.
+void SetAndCorrectTextfieldFont(views::Textfield* textfield,
+                                const gfx::Font& font);
+
 // Returns URL used for account recovery.
 GURL GetAccountRecoveryHelpUrl();
+
+// Returns name of the currently connected network.
+// If there are no connected networks, returns name of the network
+// that is in the "connecting" state. Otherwise empty string is returned.
+// If there are multiple connected networks, network priority:
+// Ethernet > WiFi > Cellular. Same for connecting network.
+string16 GetCurrentNetworkName(NetworkLibrary* network_library);
 
 // Define the constants in |login| namespace to avoid potential
 // conflict with other chromeos components.
@@ -153,15 +167,21 @@ class WideButton : public views::NativeButton {
 
 }  // namespace login
 
-// Font size correction in points for login/oobe controls.
+// Font size correction in pixels for login/oobe controls.
 #if defined(CROS_FONTS_USING_BCI)
 const int kFontSizeCorrectionDelta = 1;
-const int kUnselectedUsernameFontDelta = 0;
-const int kWelcomeTitleFontDelta = 5;
+const int kNetworkSelectionLabelFontDelta = 1;
+const int kSelectedUsernameFontDelta = 1;
+const int kUnselectedUsernameFontDelta = 1;
+const int kWelcomeTitleFontDelta = 8;
+const int kLoginTitleFontDelta = 3;
 #else
 const int kFontSizeCorrectionDelta = 2;
-const int kUnselectedUsernameFontDelta = 1;
-const int kWelcomeTitleFontDelta = 5;
+const int kNetworkSelectionLabelFontDelta = 1;
+const int kSelectedUsernameFontDelta = 1;
+const int kUnselectedUsernameFontDelta = 2;
+const int kWelcomeTitleFontDelta = 9;
+const int kLoginTitleFontDelta = 4;
 #endif
 
 // New pod sizes.

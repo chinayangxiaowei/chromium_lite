@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -24,10 +24,13 @@ namespace extension_manifest_keys {
   extern const char* kDescription;
   extern const char* kDevToolsPage;
   extern const char* kExcludeGlobs;
+  extern const char* kFileFilters;
+  extern const char* kFileBrowserHandlers;
   extern const char* kHomepageURL;
   extern const char* kIcons;
   extern const char* kIncognito;
   extern const char* kIncludeGlobs;
+  extern const char* kIsolation;
   extern const char* kJs;
   extern const char* kLaunch;
   extern const char* kLaunchContainer;
@@ -37,6 +40,9 @@ namespace extension_manifest_keys {
   extern const char* kLaunchWidth;
   extern const char* kMatches;
   extern const char* kMinimumChromeVersion;
+  extern const char* kNaClModules;
+  extern const char* kNaClModulesMIMEType;
+  extern const char* kNaClModulesPath;
   extern const char* kName;
   extern const char* kOmnibox;
   extern const char* kOmniboxKeyword;
@@ -59,8 +65,8 @@ namespace extension_manifest_keys {
   extern const char* kRunAt;
   extern const char* kSidebar;
   extern const char* kSidebarDefaultIcon;
+  extern const char* kSidebarDefaultPage;
   extern const char* kSidebarDefaultTitle;
-  extern const char* kSidebarDefaultUrl;
   extern const char* kSignature;
   extern const char* kTheme;
   extern const char* kThemeColors;
@@ -86,6 +92,7 @@ namespace extension_manifest_keys {
 namespace extension_manifest_values {
   extern const char* kIncognitoSplit;
   extern const char* kIncognitoSpanning;
+  extern const char* kIsolatedStorage;
   extern const char* kLaunchContainerPanel;
   extern const char* kLaunchContainerTab;
   extern const char* kLaunchContainerWindow;
@@ -99,15 +106,22 @@ namespace extension_manifest_values {
 // Error messages returned from Extension::InitFromValue().
 namespace extension_manifest_errors {
   extern const char* kAppsNotEnabled;
+  extern const char* kBackgroundPermissionNeeded;
   extern const char* kCannotAccessPage;
+  extern const char* kCannotClaimAllHostsInExtent;
+  extern const char* kCannotClaimAllURLsInExtent;
   extern const char* kCannotScriptGallery;
+  extern const char* kCannotUninstallManagedExtension;
   extern const char* kChromeVersionTooLow;
   extern const char* kDevToolsExperimental;
   extern const char* kDisabledByPolicy;
   extern const char* kExperimentalFlagRequired;
+  extern const char* kExperimentalFeature;
+  extern const char* kExpectString;
   extern const char* kHostedAppsCannotIncludeExtensionFeatures;
   extern const char* kInvalidAllFrames;
   extern const char* kInvalidBackground;
+  extern const char* kInvalidBackgroundInHostedApp;
   extern const char* kInvalidBrowserAction;
   extern const char* kInvalidBrowseURL;
   extern const char* kInvalidBrowseURLs;
@@ -119,12 +133,17 @@ namespace extension_manifest_errors {
   extern const char* kInvalidDefaultLocale;
   extern const char* kInvalidDescription;
   extern const char* kInvalidDevToolsPage;
+  extern const char* kInvalidFileBrowserHandler;
+  extern const char* kInvalidFileFiltersList;
+  extern const char* kInvalidFileFilterValue;
   extern const char* kInvalidGlob;
   extern const char* kInvalidGlobList;
   extern const char* kInvalidHomepageURL;
   extern const char* kInvalidIconPath;
   extern const char* kInvalidIcons;
   extern const char* kInvalidIncognitoBehavior;
+  extern const char* kInvalidIsolation;
+  extern const char* kInvalidIsolationValue;
   extern const char* kInvalidJs;
   extern const char* kInvalidJsList;
   extern const char* kInvalidKey;
@@ -140,6 +159,9 @@ namespace extension_manifest_errors {
   extern const char* kInvalidMatchCount;
   extern const char* kInvalidMatches;
   extern const char* kInvalidMinimumChromeVersion;
+  extern const char* kInvalidNaClModules;
+  extern const char* kInvalidNaClModulesMIMEType;
+  extern const char* kInvalidNaClModulesPath;
   extern const char* kInvalidName;
   extern const char* kInvalidOmniboxKeyword;
   extern const char* kInvalidOptionsPage;
@@ -166,8 +188,8 @@ namespace extension_manifest_errors {
   extern const char* kInvalidRunAt;
   extern const char* kInvalidSidebar;
   extern const char* kInvalidSidebarDefaultIconPath;
+  extern const char* kInvalidSidebarDefaultPage;
   extern const char* kInvalidSidebarDefaultTitle;
-  extern const char* kInvalidSidebarDefaultUrl;
   extern const char* kInvalidSignature;
   extern const char* kInvalidTheme;
   extern const char* kInvalidThemeColors;
@@ -182,6 +204,7 @@ namespace extension_manifest_errors {
   extern const char* kInvalidTtsVoicesLocale;
   extern const char* kInvalidTtsVoicesVoiceName;
   extern const char* kInvalidUpdateURL;
+  extern const char* kInvalidURLPatternError;
   extern const char* kInvalidVersion;
   extern const char* kInvalidWebURL;
   extern const char* kInvalidWebURLs;
@@ -197,6 +220,7 @@ namespace extension_manifest_errors {
   extern const char* kManifestUnreadable;
   extern const char* kMissingFile;
   extern const char* kMultipleOverrides;
+  extern const char* kNoWildCardsInPaths;
   extern const char* kOneUISurfaceOnly;
   extern const char* kReservedMessageFound;
   extern const char* kSidebarExperimental;
@@ -267,6 +291,71 @@ namespace extension_misc {
     PROMO_EXPIRE,
     PROMO_SEEN,
     PROMO_BUCKET_BOUNDARY
+  };
+
+  // The name of the app launch histogram.
+  extern const char* kAppLaunchHistogram;
+
+  // The buckets used for app launches.
+  enum AppLaunchBucket {
+    // Launch from NTP apps section while maximized.
+    APP_LAUNCH_NTP_APPS_MAXIMIZED,
+
+    // Launch from NTP apps section while collapsed.
+    APP_LAUNCH_NTP_APPS_COLLAPSED,
+
+    // Launch from NTP apps section while in menu mode.
+    APP_LAUNCH_NTP_APPS_MENU,
+
+    // Launch from NTP most visited section in any mode.
+    APP_LAUNCH_NTP_MOST_VISITED,
+
+    // Launch from NTP recently closed section in any mode.
+    APP_LAUNCH_NTP_RECENTLY_CLOSED,
+
+    // App link clicked from bookmark bar.
+    APP_LAUNCH_BOOKMARK_BAR,
+
+    // Nvigated to an app from within a web page (like by clicking a link).
+    APP_LAUNCH_CONTENT_NAVIGATION,
+
+    // Launch from session restore.
+    APP_LAUNCH_SESSION_RESTORE,
+
+    // Autolaunched at startup, like for pinned tabs.
+    APP_LAUNCH_AUTOLAUNCH,
+
+    // Launched from omnibox app links (not implemented yet).
+    APP_LAUNCH_OMNIBOX_APP,
+
+    // App URL typed directly into the omnibox (w/ instant turned off).
+    APP_LAUNCH_OMNIBOX_LOCATION,
+
+    // Navigate to an app URL via instant.
+    APP_LAUNCH_OMNIBOX_INSTANT,
+
+    // Launch via chrome.management.launchApp.
+    APP_LAUNCH_EXTENSION_API,
+
+    // Launch using the --app or --app-id cmd line options.
+    APP_LAUNCH_CMD_LINE_APP,
+
+    // App launch by passing the URL on the cmd line (not using app switches).
+    APP_LAUNCH_CMD_LINE_URL,
+
+    // User clicked web store launcher on NTP.
+    APP_LAUNCH_NTP_WEBSTORE,
+
+    // App launched after the user re-enabled it on the NTP.
+    APP_LAUNCH_NTP_APP_RE_ENABLE,
+
+    // URL launched using the --app cmd line option, but the URL does not
+    // correspond to an installed app. These launches are left over from a
+    // feature that let you make desktop shortcuts from the file menu.
+    APP_LAUNCH_CMD_LINE_APP_LEGACY,
+
+    APP_LAUNCH_BUCKET_BOUNDARY,
+    APP_LAUNCH_BUCKET_INVALID
   };
 
 #if defined(OS_CHROMEOS)

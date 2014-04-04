@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -16,7 +16,7 @@
 #include "base/environment.h"
 #include "base/file_util.h"
 #include "base/file_version_info.h"
-#include "base/scoped_ptr.h"
+#include "base/memory/scoped_ptr.h"
 #include "base/string_split.h"
 #include "base/string_util.h"
 #include "base/utf_string_conversions.h"
@@ -27,11 +27,11 @@
 #include "chrome/common/child_process_logging.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/common/env_vars.h"
-#include "chrome/common/result_codes.h"
-#include "chrome/common/policy_constants.h"
 #include "chrome/installer/util/google_chrome_sxs_distribution.h"
 #include "chrome/installer/util/google_update_settings.h"
 #include "chrome/installer/util/install_util.h"
+#include "content/common/result_codes.h"
+#include "policy/policy_constants.h"
 
 namespace {
 
@@ -276,6 +276,14 @@ long WINAPI ChromeExceptionFilter(EXCEPTION_POINTERS* info) {
   return EXCEPTION_EXECUTE_HANDLER;
 }
 
+// Exception filter for the service process used when breakpad is not enabled.
+// We just display the "Do you want to restart" message and then die
+// (without calling the previous filter).
+long WINAPI ServiceExceptionFilter(EXCEPTION_POINTERS* info) {
+  DumpDoneCallback(NULL, NULL, NULL, info, NULL, false);
+  return EXCEPTION_EXECUTE_HANDLER;
+}
+
 extern "C" void __declspec(dllexport) __cdecl SetActiveURL(
     const wchar_t* url_cstring) {
   DCHECK(url_cstring);
@@ -430,6 +438,18 @@ bool ShowRestartDialogIfCrashed(bool* exit_now) {
                                flags, exit_now);
 }
 
+// Crashes the process after generating a dump for the provided exception. Note
+// that the crash reporter should be initialized before calling this function
+// for it to do anything.
+extern "C" int __declspec(dllexport) CrashForException(
+    EXCEPTION_POINTERS* info) {
+  if (g_breakpad) {
+    g_breakpad->WriteMinidumpForException(info);
+    ::ExitProcess(ResultCodes::KILLED);
+  }
+  return EXCEPTION_CONTINUE_SEARCH;
+}
+
 // Determine whether configuration management allows loading the crash reporter.
 // Since the configuration management infrastructure is not initialized at this
 // point, we read the corresponding registry key directly. The return status
@@ -465,10 +485,15 @@ static DWORD __stdcall InitCrashReporterThread(void* param) {
   info->custom_info = GetCustomInfo(info->dll_path, info->process_type);
 
   google_breakpad::ExceptionHandler::MinidumpCallback callback = NULL;
+  LPTOP_LEVEL_EXCEPTION_FILTER default_filter = NULL;
+  // We install the post-dump callback only for the browser and service
+  // processes. It spawns a new browser/service process.
   if (info->process_type == L"browser") {
-    // We install the post-dump callback only for the browser process. It
-    // spawns a new browser process.
     callback = &DumpDoneCallback;
+    default_filter = &ChromeExceptionFilter;
+  } else if (info->process_type == L"service") {
+    callback = &DumpDoneCallback;
+    default_filter = &ServiceExceptionFilter;
   }
 
   // Check whether configuration management controls crash reporting.
@@ -498,9 +523,9 @@ static DWORD __stdcall InitCrashReporterThread(void* param) {
     if (!crash_reporting_enabled) {
       // Configuration managed or the user did not allow Google Update to send
       // crashes, we need to use our default crash handler instead, but only
-      // for the browser process.
-      if (callback)
-        InitDefaultCrashCallback();
+      // for the browser/service processes.
+      if (default_filter)
+        InitDefaultCrashCallback(default_filter);
       return 0;
     }
 
@@ -510,8 +535,8 @@ static DWORD __stdcall InitCrashReporterThread(void* param) {
     std::wstring user_sid;
     if (is_per_user_install) {
       if (!base::win::GetUserSidString(&user_sid)) {
-        if (callback)
-          InitDefaultCrashCallback();
+        if (default_filter)
+          InitDefaultCrashCallback(default_filter);
         return -1;
       }
     } else {
@@ -559,8 +584,8 @@ static DWORD __stdcall InitCrashReporterThread(void* param) {
   return 0;
 }
 
-void InitDefaultCrashCallback() {
-  previous_filter = SetUnhandledExceptionFilter(ChromeExceptionFilter);
+void InitDefaultCrashCallback(LPTOP_LEVEL_EXCEPTION_FILTER filter) {
+  previous_filter = SetUnhandledExceptionFilter(filter);
 }
 
 void InitCrashReporterWithDllPath(const std::wstring& dll_path) {

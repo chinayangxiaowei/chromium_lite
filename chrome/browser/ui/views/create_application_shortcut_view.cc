@@ -7,16 +7,17 @@
 #include "base/callback.h"
 #include "base/utf_string_conversions.h"
 #include "base/win/windows_version.h"
+#include "chrome/browser/extensions/extension_tab_helper.h"
 #include "chrome/browser/prefs/pref_service.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/tab_contents/tab_contents.h"
-#include "chrome/browser/tab_contents/tab_contents_delegate.h"
+#include "chrome/browser/ui/tab_contents/tab_contents_wrapper.h"
+#include "chrome/browser/ui/web_applications/web_app_ui.h"
 #include "chrome/common/chrome_constants.h"
 #include "chrome/common/extensions/extension.h"
 #include "chrome/common/extensions/extension_resource.h"
 #include "chrome/common/pref_names.h"
-#include "gfx/canvas_skia.h"
-#include "gfx/codec/png_codec.h"
+#include "content/browser/tab_contents/tab_contents.h"
+#include "content/browser/tab_contents/tab_contents_delegate.h"
 #include "grit/generated_resources.h"
 #include "grit/locale_settings.h"
 #include "net/base/load_flags.h"
@@ -25,11 +26,13 @@
 #include "third_party/skia/include/core/SkPaint.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/resource/resource_bundle.h"
+#include "ui/gfx/canvas_skia.h"
+#include "ui/gfx/codec/png_codec.h"
 #include "views/controls/button/checkbox.h"
 #include "views/controls/image_view.h"
 #include "views/controls/label.h"
-#include "views/grid_layout.h"
-#include "views/standard_layout.h"
+#include "views/layout/grid_layout.h"
+#include "views/layout/layout_constants.h"
 #include "views/window/window.h"
 
 namespace {
@@ -50,7 +53,7 @@ class AppInfoView : public views::View {
   void UpdateIcon(const SkBitmap& new_icon);
 
   // Overridden from views::View:
-  virtual void Paint(gfx::Canvas* canvas);
+  virtual void OnPaint(gfx::Canvas* canvas);
 
  private:
   // Initializes the controls
@@ -155,8 +158,8 @@ void AppInfoView::UpdateIcon(const SkBitmap& new_icon) {
   icon_->SetImage(new_icon);
 }
 
-void AppInfoView::Paint(gfx::Canvas* canvas) {
-  gfx::Rect bounds = GetLocalBounds(true);
+void AppInfoView::OnPaint(gfx::Canvas* canvas) {
+  gfx::Rect bounds = GetLocalBounds();
 
   SkRect border_rect = {
     SkIntToScalar(bounds.x()),
@@ -191,7 +194,7 @@ void AppInfoView::Paint(gfx::Canvas* canvas) {
 namespace browser {
 
 void ShowCreateWebAppShortcutsDialog(gfx::NativeWindow parent_window,
-                                     TabContents* tab_contents) {
+                                     TabContentsWrapper* tab_contents) {
   views::Window::CreateChromeWindow(parent_window, gfx::Rect(),
       new CreateUrlApplicationShortcutView(tab_contents))->Show();
 }
@@ -280,22 +283,22 @@ void CreateApplicationShortcutView::InitControls() {
   layout->StartRow(0, kHeaderColumnSetId);
   layout->AddView(app_info_);
 
-  layout->AddPaddingRow(0, kPanelSubVerticalSpacing);
+  layout->AddPaddingRow(0, views::kPanelSubVerticalSpacing);
   layout->StartRow(0, kHeaderColumnSetId);
   layout->AddView(create_shortcuts_label_);
 
-  layout->AddPaddingRow(0, kLabelToControlVerticalSpacing);
+  layout->AddPaddingRow(0, views::kLabelToControlVerticalSpacing);
   layout->StartRow(0, kTableColumnSetId);
   layout->AddView(desktop_check_box_);
 
   if (menu_check_box_ != NULL) {
-    layout->AddPaddingRow(0, kRelatedControlSmallVerticalSpacing);
+    layout->AddPaddingRow(0, views::kRelatedControlSmallVerticalSpacing);
     layout->StartRow(0, kTableColumnSetId);
     layout->AddView(menu_check_box_);
   }
 
   if (quick_launch_check_box_ != NULL) {
-    layout->AddPaddingRow(0, kRelatedControlSmallVerticalSpacing);
+    layout->AddPaddingRow(0, views::kRelatedControlSmallVerticalSpacing);
     layout->StartRow(0, kTableColumnSetId);
     layout->AddView(quick_launch_check_box_);
   }
@@ -407,13 +410,14 @@ void CreateApplicationShortcutView::ButtonPressed(views::Button* sender,
 }
 
 CreateUrlApplicationShortcutView::CreateUrlApplicationShortcutView(
-    TabContents* tab_contents)
+    TabContentsWrapper* tab_contents)
     : CreateApplicationShortcutView(tab_contents->profile()),
       tab_contents_(tab_contents),
       pending_download_(NULL)  {
 
   web_app::GetShortcutInfoForTab(tab_contents_, &shortcut_info_);
-  const WebApplicationInfo& app_info = tab_contents_->web_app_info();
+  const WebApplicationInfo& app_info =
+      tab_contents_->extension_tab_helper()->web_app_info();
   if (!app_info.icons.empty()) {
     web_app::GetIconsInfo(app_info, &unprocessed_icons_);
     FetchIcon();
@@ -431,9 +435,11 @@ bool CreateUrlApplicationShortcutView::Accept() {
   if (!CreateApplicationShortcutView::Accept())
     return false;
 
-  tab_contents_->SetAppIcon(shortcut_info_.favicon);
-  if (tab_contents_->delegate())
-    tab_contents_->delegate()->ConvertContentsToApplication(tab_contents_);
+  tab_contents_->extension_tab_helper()->SetAppIcon(shortcut_info_.favicon);
+  if (tab_contents_->tab_contents()->delegate()) {
+    tab_contents_->tab_contents()->delegate()->ConvertContentsToApplication(
+        tab_contents_->tab_contents());
+  }
   return true;
 }
 
@@ -447,10 +453,11 @@ void CreateUrlApplicationShortcutView::FetchIcon() {
   pending_download_ = new IconDownloadCallbackFunctor(this);
   DCHECK(pending_download_);
 
-  tab_contents_->fav_icon_helper().DownloadImage(
+  tab_contents_->tab_contents()->favicon_helper().DownloadImage(
       unprocessed_icons_.back().url,
       std::max(unprocessed_icons_.back().width,
                unprocessed_icons_.back().height),
+      history::FAVICON,
       NewCallback(pending_download_, &IconDownloadCallbackFunctor::Run));
 
   unprocessed_icons_.pop_back();
@@ -475,7 +482,7 @@ CreateChromeApplicationShortcutView::CreateChromeApplicationShortcutView(
       app_(app),
       ALLOW_THIS_IN_INITIALIZER_LIST(tracker_(this)) {
 
-  shortcut_info_.extension_id = UTF8ToUTF16(app_->id());
+  shortcut_info_.extension_id = app_->id();
   shortcut_info_.url = GURL(app_->launch_web_url());
   shortcut_info_.title = UTF8ToUTF16(app_->name());
   shortcut_info_.description = UTF8ToUTF16(app_->description());
@@ -511,7 +518,7 @@ CreateChromeApplicationShortcutView::~CreateChromeApplicationShortcutView() {}
 
 // Called by tracker_ when the app's icon is loaded.
 void CreateChromeApplicationShortcutView::OnImageLoaded(
-    SkBitmap* image, ExtensionResource resource, int index) {
+    SkBitmap* image, const ExtensionResource& resource, int index) {
   if (image->isNull()) {
     NOTREACHED() << "Corrupt image in profile?";
     return;

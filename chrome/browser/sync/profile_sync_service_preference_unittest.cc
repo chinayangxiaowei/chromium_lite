@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,6 +9,7 @@
 #include "base/stl_util-inl.h"
 #include "base/string_piece.h"
 #include "base/task.h"
+#include "chrome/browser/prefs/scoped_user_pref_update.h"
 #include "chrome/browser/sync/abstract_profile_sync_service_test.h"
 #include "chrome/browser/sync/engine/syncapi.h"
 #include "chrome/browser/sync/glue/preference_change_processor.h"
@@ -20,10 +21,10 @@
 #include "chrome/browser/sync/syncable/model_type.h"
 #include "chrome/browser/sync/test_profile_sync_service.h"
 #include "chrome/common/net/gaia/gaia_constants.h"
-#include "chrome/common/json_value_serializer.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/test/testing_pref_service.h"
 #include "chrome/test/testing_profile.h"
+#include "content/common/json_value_serializer.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
@@ -51,7 +52,7 @@ class ProfileSyncServicePreferenceTest
 
   virtual void SetUp() {
     profile_.reset(new TestingProfile());
-    profile_->set_has_history_service(true);
+    profile_->CreateRequestContext();
     prefs_ = profile_->GetTestingPrefService();
 
     prefs_->RegisterStringPref(not_synced_preference_name_.c_str(),
@@ -60,7 +61,12 @@ class ProfileSyncServicePreferenceTest
 
   virtual void TearDown() {
     service_.reset();
-    profile_.reset();
+    {
+      // The request context gets deleted on the I/O thread. To prevent a leak
+      // supply one here.
+      BrowserThread io_thread(BrowserThread::IO, MessageLoop::current());
+      profile_.reset();
+    }
     MessageLoop::current()->RunAllPending();
   }
 
@@ -83,10 +89,9 @@ class ProfileSyncServicePreferenceTest
     EXPECT_CALL(factory_, CreateDataTypeManager(_, _)).
         WillOnce(ReturnNewDataTypeManager());
 
-    service_->set_num_expected_resumes(will_fail_association ? 0 : 1);
-
     service_->RegisterDataTypeController(
         new PreferenceDataTypeController(&factory_,
+                                         profile_.get(),
                                          service_.get()));
     profile_->GetTokenService()->IssueAuthTokenForTest(
         GaiaConstants::kSyncService, "token");
@@ -94,8 +99,6 @@ class ProfileSyncServicePreferenceTest
     MessageLoop::current()->Run();
     return true;
   }
-
-  SyncBackendHost* backend() { return service_->backend_.get(); }
 
   const Value& GetPreferenceValue(const std::string& name) {
     const PrefService::Preference* preference =
@@ -105,7 +108,7 @@ class ProfileSyncServicePreferenceTest
 
   // Caller gets ownership of the returned value.
   const Value* GetSyncedValue(const std::string& name) {
-    sync_api::ReadTransaction trans(service_->backend()->GetUserShareHandle());
+    sync_api::ReadTransaction trans(service_->GetUserShare());
     sync_api::ReadNode node(&trans);
 
     int64 node_id = model_associator_->GetSyncIdFromChromeId(name);
@@ -121,16 +124,16 @@ class ProfileSyncServicePreferenceTest
     return reader.JsonToValue(specifics.value(), false, false);
   }
 
-  int64 WriteSyncedValue(sync_api::WriteNode& node,
-                         const std::string& name,
-                         const Value& value) {
-    if (!PreferenceModelAssociator::WritePreferenceToNode(name, value, &node))
+  int64 WriteSyncedValue(const std::string& name,
+                         const Value& value,
+                         sync_api::WriteNode* node) {
+    if (!PreferenceModelAssociator::WritePreferenceToNode(name, value, node))
       return sync_api::kInvalidId;
-    return node.GetId();
+    return node->GetId();
   }
 
   int64 SetSyncedValue(const std::string& name, const Value& value) {
-    sync_api::WriteTransaction trans(backend()->GetUserShareHandle());
+    sync_api::WriteTransaction trans(service_->GetUserShare());
     sync_api::ReadNode root(&trans);
     if (!root.InitByTagLookup(browser_sync::kPreferencesTag))
       return sync_api::kInvalidId;
@@ -141,11 +144,11 @@ class ProfileSyncServicePreferenceTest
     int64 node_id = model_associator_->GetSyncIdFromChromeId(name);
     if (node_id == sync_api::kInvalidId) {
       if (tag_node.InitByClientTagLookup(syncable::PREFERENCES, name))
-        return WriteSyncedValue(tag_node, name, value);
+        return WriteSyncedValue(name, value, &tag_node);
       if (node.InitUniqueByCreation(syncable::PREFERENCES, root, name))
-        return WriteSyncedValue(node, name, value);
+        return WriteSyncedValue(name, value, &node);
     } else if (node.InitByIdLookup(node_id)) {
-      return WriteSyncedValue(node, name, value);
+      return WriteSyncedValue(name, value, &node);
     }
     return sync_api::kInvalidId;
   }
@@ -219,7 +222,7 @@ TEST_F(ProfileSyncServicePreferenceTest, WritePreferenceToNode) {
 
   const PrefService::Preference* pref =
       prefs_->FindPreference(prefs::kHomePage);
-  sync_api::WriteTransaction trans(service_->backend()->GetUserShareHandle());
+  sync_api::WriteTransaction trans(service_->GetUserShare());
   sync_api::WriteNode node(&trans);
   EXPECT_TRUE(node.InitByClientTagLookup(syncable::PREFERENCES,
                                          prefs::kHomePage));
@@ -250,9 +253,12 @@ TEST_F(ProfileSyncServicePreferenceTest, ModelAssociationDoNotSyncDefaults) {
 
 TEST_F(ProfileSyncServicePreferenceTest, ModelAssociationEmptyCloud) {
   prefs_->SetString(prefs::kHomePage, example_url0_);
-  ListValue* url_list = prefs_->GetMutableList(prefs::kURLsToRestoreOnStartup);
-  url_list->Append(Value::CreateStringValue(example_url0_));
-  url_list->Append(Value::CreateStringValue(example_url1_));
+  {
+    ListPrefUpdate update(prefs_, prefs::kURLsToRestoreOnStartup);
+    ListValue* url_list = update.Get();
+    url_list->Append(Value::CreateStringValue(example_url0_));
+    url_list->Append(Value::CreateStringValue(example_url1_));
+  }
   CreateRootTask task(this, syncable::PREFERENCES);
   ASSERT_TRUE(StartSyncService(&task, false));
   ASSERT_TRUE(task.success());
@@ -268,9 +274,12 @@ TEST_F(ProfileSyncServicePreferenceTest, ModelAssociationEmptyCloud) {
 
 TEST_F(ProfileSyncServicePreferenceTest, ModelAssociationCloudHasData) {
   prefs_->SetString(prefs::kHomePage, example_url0_);
-  ListValue* url_list = prefs_->GetMutableList(prefs::kURLsToRestoreOnStartup);
-  url_list->Append(Value::CreateStringValue(example_url0_));
-  url_list->Append(Value::CreateStringValue(example_url1_));
+  {
+    ListPrefUpdate update(prefs_, prefs::kURLsToRestoreOnStartup);
+    ListValue* url_list = update.Get();
+    url_list->Append(Value::CreateStringValue(example_url0_));
+    url_list->Append(Value::CreateStringValue(example_url1_));
+  }
 
   PreferenceValues cloud_data;
   cloud_data[prefs::kHomePage] = Value::CreateStringValue(example_url1_);
@@ -362,7 +371,7 @@ TEST_F(ProfileSyncServicePreferenceTest, UpdatedSyncNodeActionUpdate) {
   record->action = SyncManager::ChangeRecord::ACTION_UPDATE;
   record->id = node_id;
   {
-    sync_api::WriteTransaction trans(backend()->GetUserShareHandle());
+    sync_api::WriteTransaction trans(service_->GetUserShare());
     change_processor_->ApplyChangesFromSyncModel(&trans, record.get(), 1);
   }
 
@@ -382,7 +391,7 @@ TEST_F(ProfileSyncServicePreferenceTest, UpdatedSyncNodeActionAdd) {
   record->action = SyncManager::ChangeRecord::ACTION_ADD;
   record->id = node_id;
   {
-    sync_api::WriteTransaction trans(backend()->GetUserShareHandle());
+    sync_api::WriteTransaction trans(service_->GetUserShare());
     change_processor_->ApplyChangesFromSyncModel(&trans, record.get(), 1);
   }
 
@@ -404,7 +413,7 @@ TEST_F(ProfileSyncServicePreferenceTest, UpdatedSyncNodeUnknownPreference) {
   record->action = SyncManager::ChangeRecord::ACTION_ADD;
   record->id = node_id;
   {
-    sync_api::WriteTransaction trans(backend()->GetUserShareHandle());
+    sync_api::WriteTransaction trans(service_->GetUserShare());
     change_processor_->ApplyChangesFromSyncModel(&trans, record.get(), 1);
   }
 
@@ -437,7 +446,7 @@ TEST_F(ProfileSyncServicePreferenceTest, ManagedPreferences) {
   record->action = SyncManager::ChangeRecord::ACTION_UPDATE;
   record->id = node_id;
   {
-    sync_api::WriteTransaction trans(backend()->GetUserShareHandle());
+    sync_api::WriteTransaction trans(service_->GetUserShare());
     change_processor_->ApplyChangesFromSyncModel(&trans, record.get(), 1);
   }
   EXPECT_TRUE(managed_value->Equals(
@@ -476,7 +485,7 @@ TEST_F(ProfileSyncServicePreferenceTest, DynamicManagedPreferences) {
   record->action = SyncManager::ChangeRecord::ACTION_ADD;
   record->id = node_id;
   {
-    sync_api::WriteTransaction trans(backend()->GetUserShareHandle());
+    sync_api::WriteTransaction trans(service_->GetUserShare());
     change_processor_->ApplyChangesFromSyncModel(&trans, record.get(), 1);
   }
 

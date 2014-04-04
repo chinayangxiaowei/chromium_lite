@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -130,12 +130,16 @@ void Connection::Preload() {
   if (!dummy || !dummy.Step())
     return;
 
-  sqlite3Preload(db_);
+#if !defined(USE_SYSTEM_SQLITE)
+  // This function is only defined in Chromium's version of sqlite.
+  // Do not call it when using system sqlite.
+  sqlite3_preload(db_);
+#endif
 }
 
 bool Connection::BeginTransaction() {
   if (needs_rollback_) {
-    DCHECK(transaction_nesting_ > 0);
+    DCHECK_GT(transaction_nesting_, 0);
 
     // When we're going to rollback, fail on this begin and don't actually
     // mark us as entering the nested transaction.

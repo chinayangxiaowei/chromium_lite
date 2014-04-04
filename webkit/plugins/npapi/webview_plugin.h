@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,7 +7,7 @@
 
 #include <list>
 
-#include "base/scoped_ptr.h"
+#include "base/memory/scoped_ptr.h"
 #include "base/task.h"
 #include "third_party/WebKit/Source/WebKit/chromium/public/WebCursorInfo.h"
 #include "third_party/WebKit/Source/WebKit/chromium/public/WebFrameClient.h"
@@ -126,6 +126,14 @@ class WebViewPlugin: public WebKit::WebPlugin, public WebKit::WebViewClient,
 
   virtual WebKit::WebURLError cancelledError(
       WebKit::WebFrame* frame, const WebKit::WebURLRequest& request);
+
+  // This method is defined in WebPlugin as well as in WebFrameClient, but with
+  // different parameters. We only care about implementing the WebPlugin
+  // version, so we implement this method and call the default in WebFrameClient
+  // (which does nothing) to correctly overload it.
+  virtual void didReceiveResponse(WebKit::WebFrame* frame,
+                                  unsigned identifier,
+                                  const WebKit::WebURLResponse& response);
 
  private:
   friend class DeleteTask<WebViewPlugin>;

@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,10 +9,8 @@
 #include "base/threading/thread_restrictions.h"
 #include "base/utf_string_conversions.h"
 #include "base/values.h"
-#include "chrome/browser/browser_thread.h"
-#include "chrome/browser/themes/browser_theme_provider.h"
-#include "gfx/codec/png_codec.h"
-#include "gfx/skbitmap_operations.h"
+#include "chrome/browser/themes/theme_service.h"
+#include "content/browser/browser_thread.h"
 #include "grit/app_resources.h"
 #include "grit/theme_resources.h"
 #include "net/base/file_stream.h"
@@ -20,6 +18,8 @@
 #include "third_party/skia/include/core/SkCanvas.h"
 #include "ui/base/resource/data_pack.h"
 #include "ui/base/resource/resource_bundle.h"
+#include "ui/gfx/codec/png_codec.h"
+#include "ui/gfx/skbitmap_operations.h"
 
 namespace {
 
@@ -174,57 +174,57 @@ struct StringToIntTable {
 
 // Strings used by themes to identify tints in the JSON.
 StringToIntTable kTintTable[] = {
-  { "buttons", BrowserThemeProvider::TINT_BUTTONS },
-  { "frame", BrowserThemeProvider::TINT_FRAME },
-  { "frame_inactive", BrowserThemeProvider::TINT_FRAME_INACTIVE },
-  { "frame_incognito", BrowserThemeProvider::TINT_FRAME_INCOGNITO },
+  { "buttons", ThemeService::TINT_BUTTONS },
+  { "frame", ThemeService::TINT_FRAME },
+  { "frame_inactive", ThemeService::TINT_FRAME_INACTIVE },
+  { "frame_incognito", ThemeService::TINT_FRAME_INCOGNITO },
   { "frame_incognito_inactive",
-    BrowserThemeProvider::TINT_FRAME_INCOGNITO_INACTIVE },
-  { "background_tab", BrowserThemeProvider::TINT_BACKGROUND_TAB },
+    ThemeService::TINT_FRAME_INCOGNITO_INACTIVE },
+  { "background_tab", ThemeService::TINT_BACKGROUND_TAB },
   { NULL, 0 }
 };
 
 // Strings used by themes to identify colors in the JSON.
 StringToIntTable kColorTable[] = {
-  { "frame", BrowserThemeProvider::COLOR_FRAME },
-  { "frame_inactive", BrowserThemeProvider::COLOR_FRAME_INACTIVE },
-  { "frame_incognito", BrowserThemeProvider::COLOR_FRAME_INCOGNITO },
+  { "frame", ThemeService::COLOR_FRAME },
+  { "frame_inactive", ThemeService::COLOR_FRAME_INACTIVE },
+  { "frame_incognito", ThemeService::COLOR_FRAME_INCOGNITO },
   { "frame_incognito_inactive",
-    BrowserThemeProvider::COLOR_FRAME_INCOGNITO_INACTIVE },
-  { "toolbar", BrowserThemeProvider::COLOR_TOOLBAR },
-  { "tab_text", BrowserThemeProvider::COLOR_TAB_TEXT },
-  { "tab_background_text", BrowserThemeProvider::COLOR_BACKGROUND_TAB_TEXT },
-  { "bookmark_text", BrowserThemeProvider::COLOR_BOOKMARK_TEXT },
-  { "ntp_background", BrowserThemeProvider::COLOR_NTP_BACKGROUND },
-  { "ntp_text", BrowserThemeProvider::COLOR_NTP_TEXT },
-  { "ntp_link", BrowserThemeProvider::COLOR_NTP_LINK },
-  { "ntp_link_underline", BrowserThemeProvider::COLOR_NTP_LINK_UNDERLINE },
-  { "ntp_header", BrowserThemeProvider::COLOR_NTP_HEADER },
-  { "ntp_section", BrowserThemeProvider::COLOR_NTP_SECTION },
-  { "ntp_section_text", BrowserThemeProvider::COLOR_NTP_SECTION_TEXT },
-  { "ntp_section_link", BrowserThemeProvider::COLOR_NTP_SECTION_LINK },
+    ThemeService::COLOR_FRAME_INCOGNITO_INACTIVE },
+  { "toolbar", ThemeService::COLOR_TOOLBAR },
+  { "tab_text", ThemeService::COLOR_TAB_TEXT },
+  { "tab_background_text", ThemeService::COLOR_BACKGROUND_TAB_TEXT },
+  { "bookmark_text", ThemeService::COLOR_BOOKMARK_TEXT },
+  { "ntp_background", ThemeService::COLOR_NTP_BACKGROUND },
+  { "ntp_text", ThemeService::COLOR_NTP_TEXT },
+  { "ntp_link", ThemeService::COLOR_NTP_LINK },
+  { "ntp_link_underline", ThemeService::COLOR_NTP_LINK_UNDERLINE },
+  { "ntp_header", ThemeService::COLOR_NTP_HEADER },
+  { "ntp_section", ThemeService::COLOR_NTP_SECTION },
+  { "ntp_section_text", ThemeService::COLOR_NTP_SECTION_TEXT },
+  { "ntp_section_link", ThemeService::COLOR_NTP_SECTION_LINK },
   { "ntp_section_link_underline",
-    BrowserThemeProvider::COLOR_NTP_SECTION_LINK_UNDERLINE },
-  { "control_background", BrowserThemeProvider::COLOR_CONTROL_BACKGROUND },
-  { "button_background", BrowserThemeProvider::COLOR_BUTTON_BACKGROUND },
+    ThemeService::COLOR_NTP_SECTION_LINK_UNDERLINE },
+  { "control_background", ThemeService::COLOR_CONTROL_BACKGROUND },
+  { "button_background", ThemeService::COLOR_BUTTON_BACKGROUND },
   { NULL, 0 }
 };
 
 // Strings used by themes to identify display properties keys in JSON.
 StringToIntTable kDisplayProperties[] = {
   { "ntp_background_alignment",
-    BrowserThemeProvider::NTP_BACKGROUND_ALIGNMENT },
-  { "ntp_background_repeat", BrowserThemeProvider::NTP_BACKGROUND_TILING },
-  { "ntp_logo_alternate", BrowserThemeProvider::NTP_LOGO_ALTERNATE },
+    ThemeService::NTP_BACKGROUND_ALIGNMENT },
+  { "ntp_background_repeat", ThemeService::NTP_BACKGROUND_TILING },
+  { "ntp_logo_alternate", ThemeService::NTP_LOGO_ALTERNATE },
   { NULL, 0 }
 };
 
 // Strings used by the tiling values in JSON.
 StringToIntTable kTilingStrings[] = {
-  { "no-repeat", BrowserThemeProvider::NO_REPEAT },
-  { "repeat-x", BrowserThemeProvider::REPEAT_X },
-  { "repeat-y", BrowserThemeProvider::REPEAT_Y },
-  { "repeat", BrowserThemeProvider::REPEAT },
+  { "no-repeat", ThemeService::NO_REPEAT },
+  { "repeat-x", ThemeService::REPEAT_X },
+  { "repeat-y", ThemeService::REPEAT_Y },
+  { "repeat", ThemeService::REPEAT },
   { NULL, 0 }
 };
 
@@ -246,14 +246,14 @@ struct IntToIntTable {
 // Mapping used in GenerateFrameImages() to associate frame images with the
 // tint ID that should maybe be applied to it.
 IntToIntTable kFrameTintMap[] = {
-  { PRS_THEME_FRAME, BrowserThemeProvider::TINT_FRAME },
-  { PRS_THEME_FRAME_INACTIVE, BrowserThemeProvider::TINT_FRAME_INACTIVE },
-  { PRS_THEME_FRAME_OVERLAY, BrowserThemeProvider::TINT_FRAME },
+  { PRS_THEME_FRAME, ThemeService::TINT_FRAME },
+  { PRS_THEME_FRAME_INACTIVE, ThemeService::TINT_FRAME_INACTIVE },
+  { PRS_THEME_FRAME_OVERLAY, ThemeService::TINT_FRAME },
   { PRS_THEME_FRAME_OVERLAY_INACTIVE,
-    BrowserThemeProvider::TINT_FRAME_INACTIVE },
-  { PRS_THEME_FRAME_INCOGNITO, BrowserThemeProvider::TINT_FRAME_INCOGNITO },
+    ThemeService::TINT_FRAME_INACTIVE },
+  { PRS_THEME_FRAME_INCOGNITO, ThemeService::TINT_FRAME_INCOGNITO },
   { PRS_THEME_FRAME_INCOGNITO_INACTIVE,
-    BrowserThemeProvider::TINT_FRAME_INCOGNITO_INACTIVE }
+    ThemeService::TINT_FRAME_INCOGNITO_INACTIVE }
 };
 
 // Mapping used in GenerateTabBackgroundImages() to associate what frame image
@@ -298,8 +298,8 @@ RefCountedMemory* ReadFileData(const FilePath& path) {
 
 // Does error checking for invalid incoming data while trying to read an
 // floating point value.
-bool ValidRealValue(ListValue* tint_list, int index, double* out) {
-  if (tint_list->GetReal(index, out))
+bool ValidDoubleValue(ListValue* tint_list, int index, double* out) {
+  if (tint_list->GetDouble(index, out))
     return true;
 
   int value = 0;
@@ -355,7 +355,7 @@ BrowserThemePack* BrowserThemePack::BuildFromExtension(
   // OSX uses its own special buttons that are PDFs that do odd sorts of vector
   // graphics tricks. Other platforms use bitmaps and we must pre-tint them.
   pack->GenerateTintedButtons(
-      pack->GetTintInternal(BrowserThemeProvider::TINT_BUTTONS),
+      pack->GetTintInternal(ThemeService::TINT_BUTTONS),
       &pack->prepared_images_);
 #endif
 
@@ -619,9 +619,9 @@ void BrowserThemePack::BuildTintsFromJSON(DictionaryValue* tints_value) {
         (tint_list->GetSize() == 3)) {
       color_utils::HSL hsl = { -1, -1, -1 };
 
-      if (ValidRealValue(tint_list, 0, &hsl.h) &&
-          ValidRealValue(tint_list, 1, &hsl.s) &&
-          ValidRealValue(tint_list, 2, &hsl.l)) {
+      if (ValidDoubleValue(tint_list, 0, &hsl.h) &&
+          ValidDoubleValue(tint_list, 1, &hsl.s) &&
+          ValidDoubleValue(tint_list, 2, &hsl.l)) {
         int id = GetIntForString(*iter, kTintTable);
         if (id != -1) {
           temp_tints[id] = hsl;
@@ -680,7 +680,7 @@ void BrowserThemePack::ReadColorsFromJSON(
         if (color_list->GetSize() == 4) {
           double alpha;
           int alpha_int;
-          if (color_list->GetReal(3, &alpha)) {
+          if (color_list->GetDouble(3, &alpha)) {
             color = SkColorSetARGB(static_cast<int>(alpha * 255), r, g, b);
           } else if (color_list->GetInteger(3, &alpha_int) &&
                      (alpha_int == 0 || alpha_int == 1)) {
@@ -705,56 +705,56 @@ void BrowserThemePack::ReadColorsFromJSON(
 void BrowserThemePack::GenerateMissingColors(
     std::map<int, SkColor>* colors) {
   // Generate link colors, if missing. (See GetColor()).
-  if (!colors->count(BrowserThemeProvider::COLOR_NTP_HEADER) &&
-      colors->count(BrowserThemeProvider::COLOR_NTP_SECTION)) {
-    (*colors)[BrowserThemeProvider::COLOR_NTP_HEADER] =
-        (*colors)[BrowserThemeProvider::COLOR_NTP_SECTION];
+  if (!colors->count(ThemeService::COLOR_NTP_HEADER) &&
+      colors->count(ThemeService::COLOR_NTP_SECTION)) {
+    (*colors)[ThemeService::COLOR_NTP_HEADER] =
+        (*colors)[ThemeService::COLOR_NTP_SECTION];
   }
 
-  if (!colors->count(BrowserThemeProvider::COLOR_NTP_SECTION_LINK_UNDERLINE) &&
-      colors->count(BrowserThemeProvider::COLOR_NTP_SECTION_LINK)) {
+  if (!colors->count(ThemeService::COLOR_NTP_SECTION_LINK_UNDERLINE) &&
+      colors->count(ThemeService::COLOR_NTP_SECTION_LINK)) {
     SkColor color_section_link =
-        (*colors)[BrowserThemeProvider::COLOR_NTP_SECTION_LINK];
-    (*colors)[BrowserThemeProvider::COLOR_NTP_SECTION_LINK_UNDERLINE] =
+        (*colors)[ThemeService::COLOR_NTP_SECTION_LINK];
+    (*colors)[ThemeService::COLOR_NTP_SECTION_LINK_UNDERLINE] =
         SkColorSetA(color_section_link, SkColorGetA(color_section_link) / 3);
   }
 
-  if (!colors->count(BrowserThemeProvider::COLOR_NTP_LINK_UNDERLINE) &&
-      colors->count(BrowserThemeProvider::COLOR_NTP_LINK)) {
-    SkColor color_link = (*colors)[BrowserThemeProvider::COLOR_NTP_LINK];
-    (*colors)[BrowserThemeProvider::COLOR_NTP_LINK_UNDERLINE] =
+  if (!colors->count(ThemeService::COLOR_NTP_LINK_UNDERLINE) &&
+      colors->count(ThemeService::COLOR_NTP_LINK)) {
+    SkColor color_link = (*colors)[ThemeService::COLOR_NTP_LINK];
+    (*colors)[ThemeService::COLOR_NTP_LINK_UNDERLINE] =
         SkColorSetA(color_link, SkColorGetA(color_link) / 3);
   }
 
   // Generate frame colors, if missing. (See GenerateFrameColors()).
   SkColor frame;
   std::map<int, SkColor>::const_iterator it =
-      colors->find(BrowserThemeProvider::COLOR_FRAME);
+      colors->find(ThemeService::COLOR_FRAME);
   if (it != colors->end()) {
     frame = it->second;
   } else {
-    frame = BrowserThemeProvider::GetDefaultColor(
-        BrowserThemeProvider::COLOR_FRAME);
+    frame = ThemeService::GetDefaultColor(
+        ThemeService::COLOR_FRAME);
   }
 
-  if (!colors->count(BrowserThemeProvider::COLOR_FRAME)) {
-    (*colors)[BrowserThemeProvider::COLOR_FRAME] =
-        HSLShift(frame, GetTintInternal(BrowserThemeProvider::TINT_FRAME));
+  if (!colors->count(ThemeService::COLOR_FRAME)) {
+    (*colors)[ThemeService::COLOR_FRAME] =
+        HSLShift(frame, GetTintInternal(ThemeService::TINT_FRAME));
   }
-  if (!colors->count(BrowserThemeProvider::COLOR_FRAME_INACTIVE)) {
-    (*colors)[BrowserThemeProvider::COLOR_FRAME_INACTIVE] =
+  if (!colors->count(ThemeService::COLOR_FRAME_INACTIVE)) {
+    (*colors)[ThemeService::COLOR_FRAME_INACTIVE] =
         HSLShift(frame, GetTintInternal(
-            BrowserThemeProvider::TINT_FRAME_INACTIVE));
+            ThemeService::TINT_FRAME_INACTIVE));
   }
-  if (!colors->count(BrowserThemeProvider::COLOR_FRAME_INCOGNITO)) {
-    (*colors)[BrowserThemeProvider::COLOR_FRAME_INCOGNITO] =
+  if (!colors->count(ThemeService::COLOR_FRAME_INCOGNITO)) {
+    (*colors)[ThemeService::COLOR_FRAME_INCOGNITO] =
         HSLShift(frame, GetTintInternal(
-            BrowserThemeProvider::TINT_FRAME_INCOGNITO));
+            ThemeService::TINT_FRAME_INCOGNITO));
   }
-  if (!colors->count(BrowserThemeProvider::COLOR_FRAME_INCOGNITO_INACTIVE)) {
-    (*colors)[BrowserThemeProvider::COLOR_FRAME_INCOGNITO_INACTIVE] =
+  if (!colors->count(ThemeService::COLOR_FRAME_INCOGNITO_INACTIVE)) {
+    (*colors)[ThemeService::COLOR_FRAME_INCOGNITO_INACTIVE] =
         HSLShift(frame, GetTintInternal(
-            BrowserThemeProvider::TINT_FRAME_INCOGNITO_INACTIVE));
+            ThemeService::TINT_FRAME_INCOGNITO_INACTIVE));
   }
 }
 
@@ -775,26 +775,26 @@ void BrowserThemePack::BuildDisplayPropertiesFromJSON(
        iter != display_properties_value->end_keys(); ++iter) {
     int property_id = GetIntForString(*iter, kDisplayProperties);
     switch (property_id) {
-      case BrowserThemeProvider::NTP_BACKGROUND_ALIGNMENT: {
+      case ThemeService::NTP_BACKGROUND_ALIGNMENT: {
         std::string val;
         if (display_properties_value->GetString(*iter, &val)) {
-          temp_properties[BrowserThemeProvider::NTP_BACKGROUND_ALIGNMENT] =
-              BrowserThemeProvider::StringToAlignment(val);
+          temp_properties[ThemeService::NTP_BACKGROUND_ALIGNMENT] =
+              ThemeService::StringToAlignment(val);
         }
         break;
       }
-      case BrowserThemeProvider::NTP_BACKGROUND_TILING: {
+      case ThemeService::NTP_BACKGROUND_TILING: {
         std::string val;
         if (display_properties_value->GetString(*iter, &val)) {
-          temp_properties[BrowserThemeProvider::NTP_BACKGROUND_TILING] =
+          temp_properties[ThemeService::NTP_BACKGROUND_TILING] =
               GetIntForString(val, kTilingStrings);
         }
         break;
       }
-      case BrowserThemeProvider::NTP_LOGO_ALTERNATE: {
+      case ThemeService::NTP_LOGO_ALTERNATE: {
         int val = 0;
         if (display_properties_value->GetInteger(*iter, &val))
-          temp_properties[BrowserThemeProvider::NTP_LOGO_ALTERNATE] = val;
+          temp_properties[ThemeService::NTP_LOGO_ALTERNATE] = val;
         break;
       }
     }
@@ -812,7 +812,7 @@ void BrowserThemePack::BuildDisplayPropertiesFromJSON(
 
 void BrowserThemePack::ParseImageNamesFromJSON(
     DictionaryValue* images_value,
-    FilePath images_path,
+    const FilePath& images_path,
     FilePathMap* file_paths) const {
   if (!images_value)
     return;
@@ -945,7 +945,7 @@ void BrowserThemePack::GenerateTintedButtons(
   if (button_tint.h != -1 || button_tint.s != -1 || button_tint.l != -1) {
     ResourceBundle& rb = ResourceBundle::GetSharedInstance();
     const std::set<int>& idr_ids =
-        BrowserThemeProvider::GetTintableToolbarButtons();
+        ThemeService::GetTintableToolbarButtons();
     for (std::set<int>::const_iterator it = idr_ids.begin();
          it != idr_ids.end(); ++it) {
       int prs_id = GetPersistentIDByIDR(*it);
@@ -973,7 +973,7 @@ void BrowserThemePack::GenerateTabBackgroundImages(ImageCache* bitmaps) const {
     if (it != bitmaps->end()) {
       SkBitmap bg_tint = SkBitmapOperations::CreateHSLShiftedBitmap(
           *(it->second), GetTintInternal(
-              BrowserThemeProvider::TINT_BACKGROUND_TAB));
+              ThemeService::TINT_BACKGROUND_TAB));
       int vertical_offset = bitmaps->count(prs_id)
                             ? kRestoredTabVerticalOffset : 0;
       SkBitmap* bg_tab = new SkBitmap(SkBitmapOperations::CreateTiledBitmap(
@@ -1046,5 +1046,5 @@ color_utils::HSL BrowserThemePack::GetTintInternal(int id) const {
     }
   }
 
-  return BrowserThemeProvider::GetDefaultTint(id);
+  return ThemeService::GetDefaultTint(id);
 }

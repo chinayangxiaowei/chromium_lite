@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,14 +6,17 @@
 
 #include "base/lazy_instance.h"
 #include "build/build_config.h"
+#include "net/base/cert_database.h"
 #include "net/socket/client_socket_handle.h"
 #if defined(OS_WIN)
+#include "net/socket/ssl_client_socket_nss.h"
 #include "net/socket/ssl_client_socket_win.h"
 #elif defined(USE_OPENSSL)
 #include "net/socket/ssl_client_socket_openssl.h"
 #elif defined(USE_NSS)
 #include "net/socket/ssl_client_socket_nss.h"
 #elif defined(OS_MACOSX)
+#include "net/socket/ssl_client_socket_mac.h"
 #include "net/socket/ssl_client_socket_nss.h"
 #endif
 #include "net/socket/ssl_host_info.h"
@@ -21,41 +24,35 @@
 
 namespace net {
 
-class DnsCertProvenanceChecker;
+class X509Certificate;
 
 namespace {
 
-SSLClientSocket* DefaultSSLClientSocketFactory(
-    ClientSocketHandle* transport_socket,
-    const HostPortPair& host_and_port,
-    const SSLConfig& ssl_config,
-    SSLHostInfo* ssl_host_info,
-    CertVerifier* cert_verifier,
-    DnsCertProvenanceChecker* dns_cert_checker) {
-  scoped_ptr<SSLHostInfo> shi(ssl_host_info);
-#if defined(OS_WIN)
-  return new SSLClientSocketWin(transport_socket, host_and_port, ssl_config,
-                                cert_verifier);
-#elif defined(USE_OPENSSL)
-  return new SSLClientSocketOpenSSL(transport_socket, host_and_port,
-                                    ssl_config, cert_verifier);
-#elif defined(USE_NSS)
-  return new SSLClientSocketNSS(transport_socket, host_and_port, ssl_config,
-                                shi.release(), cert_verifier, dns_cert_checker);
-#elif defined(OS_MACOSX)
-  return new SSLClientSocketNSS(transport_socket, host_and_port, ssl_config,
-                                shi.release(), cert_verifier, dns_cert_checker);
-#else
-  NOTIMPLEMENTED();
-  return NULL;
-#endif
-}
+bool g_use_system_ssl = false;
 
-SSLClientSocketFactory g_ssl_factory = DefaultSSLClientSocketFactory;
-
-class DefaultClientSocketFactory : public ClientSocketFactory {
+class DefaultClientSocketFactory : public ClientSocketFactory,
+                                   public CertDatabase::Observer {
  public:
-  virtual ClientSocket* CreateTCPClientSocket(
+  DefaultClientSocketFactory() {
+    CertDatabase::AddObserver(this);
+  }
+
+  virtual ~DefaultClientSocketFactory() {
+    CertDatabase::RemoveObserver(this);
+  }
+
+  virtual void OnUserCertAdded(const X509Certificate* cert) {
+    ClearSSLSessionCache();
+  }
+
+  virtual void OnCertTrustChanged(const X509Certificate* cert) {
+    // Per wtc, we actually only need to flush when trust is reduced.
+    // Always flush now because OnCertTrustChanged does not tell us this.
+    // See comments in ClientSocketPoolManager::OnCertTrustChanged.
+    ClearSSLSessionCache();
+  }
+
+  virtual ClientSocket* CreateTransportClientSocket(
       const AddressList& addresses,
       NetLog* net_log,
       const NetLog::Source& source) {
@@ -69,26 +66,60 @@ class DefaultClientSocketFactory : public ClientSocketFactory {
       SSLHostInfo* ssl_host_info,
       CertVerifier* cert_verifier,
       DnsCertProvenanceChecker* dns_cert_checker) {
-    return g_ssl_factory(transport_socket, host_and_port, ssl_config,
-                         ssl_host_info, cert_verifier, dns_cert_checker);
+    scoped_ptr<SSLHostInfo> shi(ssl_host_info);
+#if defined(OS_WIN)
+    if (g_use_system_ssl) {
+      return new SSLClientSocketWin(transport_socket, host_and_port,
+                                    ssl_config, cert_verifier);
+    }
+    return new SSLClientSocketNSS(transport_socket, host_and_port, ssl_config,
+                                  shi.release(), cert_verifier,
+                                  dns_cert_checker);
+#elif defined(USE_OPENSSL)
+    return new SSLClientSocketOpenSSL(transport_socket, host_and_port,
+                                      ssl_config, cert_verifier);
+#elif defined(USE_NSS)
+    return new SSLClientSocketNSS(transport_socket, host_and_port, ssl_config,
+                                  shi.release(), cert_verifier,
+                                  dns_cert_checker);
+#elif defined(OS_MACOSX)
+    if (g_use_system_ssl) {
+      return new SSLClientSocketMac(transport_socket, host_and_port,
+                                    ssl_config, cert_verifier);
+    }
+    return new SSLClientSocketNSS(transport_socket, host_and_port, ssl_config,
+                                  shi.release(), cert_verifier,
+                                  dns_cert_checker);
+#else
+    NOTIMPLEMENTED();
+    return NULL;
+#endif
   }
+
+  // TODO(rch): This is only implemented for the NSS SSL library, which is the
+  /// default for Windows, Mac and Linux, but we should implement it everywhere.
+  void ClearSSLSessionCache() {
+#if defined(OS_WIN)
+    if (!g_use_system_ssl)
+      SSLClientSocketNSS::ClearSessionCache();
+#elif defined(USE_OPENSSL)
+    // no-op
+#elif defined(USE_NSS)
+    SSLClientSocketNSS::ClearSessionCache();
+#elif defined(OS_MACOSX)
+    if (!g_use_system_ssl)
+      SSLClientSocketNSS::ClearSessionCache();
+#else
+    NOTIMPLEMENTED();
+#endif
+  }
+
 };
 
 static base::LazyInstance<DefaultClientSocketFactory>
     g_default_client_socket_factory(base::LINKER_INITIALIZED);
 
 }  // namespace
-
-// static
-ClientSocketFactory* ClientSocketFactory::GetDefaultFactory() {
-  return g_default_client_socket_factory.Pointer();
-}
-
-// static
-void ClientSocketFactory::SetSSLClientSocketFactory(
-    SSLClientSocketFactory factory) {
-  g_ssl_factory = factory;
-}
 
 // Deprecated function (http://crbug.com/37810) that takes a ClientSocket.
 SSLClientSocket* ClientSocketFactory::CreateSSLClientSocket(
@@ -102,6 +133,16 @@ SSLClientSocket* ClientSocketFactory::CreateSSLClientSocket(
   return CreateSSLClientSocket(socket_handle, host_and_port, ssl_config,
                                ssl_host_info, cert_verifier,
                                NULL /* DnsCertProvenanceChecker */);
+}
+
+// static
+ClientSocketFactory* ClientSocketFactory::GetDefaultFactory() {
+  return g_default_client_socket_factory.Pointer();
+}
+
+// static
+void ClientSocketFactory::UseSystemSSL() {
+  g_use_system_ssl = true;
 }
 
 }  // namespace net

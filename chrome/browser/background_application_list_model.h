@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -12,8 +12,8 @@
 #include "base/basictypes.h"
 #include "base/observer_list.h"
 #include "chrome/common/extensions/extension.h"
-#include "chrome/common/notification_observer.h"
-#include "chrome/common/notification_registrar.h"
+#include "content/common/notification_observer.h"
+#include "content/common/notification_registrar.h"
 
 class ExtensionService;
 class PrefService;
@@ -122,8 +122,7 @@ class BackgroundApplicationListModel : public NotificationObserver {
   // Invoked by Observe for EXTENSION_UNLOADED notifications.
   void OnExtensionUnloaded(const Extension* extension);
 
-  // Refresh the list of background applications and generates ApplicationAdded
-  // and ApplicationRemoved events.
+  // Refresh the list of background applications and generate notifications.
   void Update();
 
   ApplicationMap applications_;

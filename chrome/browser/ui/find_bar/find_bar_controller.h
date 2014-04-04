@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,16 +7,16 @@
 #pragma once
 
 #include "base/basictypes.h"
-#include "base/scoped_ptr.h"
-#include "chrome/common/notification_observer.h"
-#include "chrome/common/notification_registrar.h"
+#include "base/memory/scoped_ptr.h"
+#include "content/common/notification_observer.h"
+#include "content/common/notification_registrar.h"
 
 namespace gfx {
 class Rect;
 }
 
 class FindBar;
-class TabContents;
+class TabContentsWrapper;
 
 class FindBarController : public NotificationObserver {
  public:
@@ -38,12 +38,12 @@ class FindBarController : public NotificationObserver {
   // Ends the current session.
   void EndFindSession(SelectionAction action);
 
-  // Accessor for the attached TabContents.
-  TabContents* tab_contents() const { return tab_contents_; }
+  // Accessor for the attached TabContentsWrapper.
+  TabContentsWrapper* tab_contents() const { return tab_contents_; }
 
   // Changes the TabContents that this FindBar is attached to. This occurs when
   // the user switches tabs in the Browser window. |contents| can be NULL.
-  void ChangeTabContents(TabContents* contents);
+  void ChangeTabContents(TabContentsWrapper* contents);
 
   // Overridden from NotificationObserver:
   virtual void Observe(NotificationType type,
@@ -76,8 +76,8 @@ class FindBarController : public NotificationObserver {
 
   scoped_ptr<FindBar> find_bar_;
 
-  // The TabContents we are currently associated with.  Can be NULL.
-  TabContents* tab_contents_;
+  // The TabContentsWrapper we are currently associated with.  Can be NULL.
+  TabContentsWrapper* tab_contents_;
 
   // The last match count we reported to the user. This is used by
   // UpdateFindBarForCurrentResult to avoid flickering.

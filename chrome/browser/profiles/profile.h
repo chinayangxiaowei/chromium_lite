@@ -10,17 +10,20 @@
 
 #include "base/basictypes.h"
 #include "base/logging.h"
+#include "chrome/common/extensions/extension.h"
 
 namespace base {
 class Time;
 }
 
-#if defined(OS_CHROMEOS)
-namespace chromeos {
-class EnterpriseExtensionObserver;
-class ProxyConfigServiceImpl;
+namespace content {
+class ResourceContext;
 }
-#endif
+
+namespace fileapi {
+class FileSystemContext;
+class SandboxedFileSystemContext;
+}
 
 namespace history {
 class TopSites;
@@ -32,35 +35,34 @@ class SSLConfigService;
 }
 
 namespace policy {
-class ProfilePolicyContext;
+class ProfilePolicyConnector;
+}
+
+namespace prerender {
+class PrerenderManager;
 }
 
 namespace webkit_database {
 class DatabaseTracker;
 }
 
-namespace fileapi {
-class SandboxedFileSystemContext;
-}
-
 class AutocompleteClassifier;
-class BackgroundContentsService;
 class BookmarkModel;
 class BrowserSignin;
-class BrowserThemeProvider;
 class ChromeAppCacheService;
 class ChromeBlobStorageContext;
-class ChromeURLRequestContextGetter;
+class ChromeURLDataManager;
 class CloudPrintProxyService;
-class DesktopNotificationService;
 class DownloadManager;
 class Extension;
 class ExtensionDevToolsManager;
 class ExtensionEventRouter;
 class ExtensionInfoMap;
 class ExtensionMessageService;
+class ExtensionPrefValueMap;
 class ExtensionProcessManager;
 class ExtensionService;
+class ExtensionSpecialStoragePolicy;
 class FaviconService;
 class FilePath;
 class FindBarState;
@@ -73,15 +75,12 @@ class NTPResourceCache;
 class NavigationController;
 class PasswordStore;
 class PersonalDataManager;
-class PinnedTabService;
 class PrefProxyConfigTracker;
 class PrefService;
-class PrerenderManager;
 class ProfileSyncFactory;
 class ProfileSyncService;
-class ProfileSyncService;
 class PromoCounter;
-class PromoCounter;
+class ProtocolHandlerRegistry;
 class SQLitePersistentCookieStore;
 class SSLConfigServiceManager;
 class SSLHostState;
@@ -93,14 +92,17 @@ class TemplateURLFetcher;
 class TemplateURLModel;
 class TokenService;
 class TransportSecurityPersister;
-class URLRequestContextGetter;
 class UserScriptMaster;
 class UserStyleSheetWatcher;
 class VisitedLinkEventListener;
 class VisitedLinkMaster;
 class WebDataService;
 class WebKitContext;
-class WebResourceService;
+class PromoResourceService;
+
+namespace net {
+class URLRequestContextGetter;
+}
 
 typedef intptr_t ProfileId;
 
@@ -118,7 +120,7 @@ class Profile {
   enum ServiceAccessType {
     // The caller plans to perform a read or write that takes place as a result
     // of the user input. Use this flag when the operation you are doing can be
-    // performed while off the record. (ex: creating a bookmark)
+    // performed while incognito. (ex: creating a bookmark)
     //
     // Since EXPLICIT_ACCESS means "as a result of a user action", this request
     // always succeeds.
@@ -127,12 +129,21 @@ class Profile {
     // The caller plans to call a method that will permanently change some data
     // in the profile, as part of Chrome's implicit data logging. Use this flag
     // when you are about to perform an operation which is incompatible with the
-    // off the record mode.
+    // incognito mode.
     IMPLICIT_ACCESS
   };
 
+  class Delegate {
+   public:
+    // Called when creation of the profile is finished.
+    virtual void OnProfileCreated(Profile* profile, bool success) = 0;
+  };
+
+  // Key used to bind profile to the widget with which it is associated.
+  static const char* kProfileKey;
+
   // Value that represents no profile Id.
-  static const ProfileId InvalidProfileId;
+  static const ProfileId kInvalidProfileId;
 
   Profile();
   virtual ~Profile() {}
@@ -144,11 +155,15 @@ class Profile {
   // Create a new profile given a path.
   static Profile* CreateProfile(const FilePath& path);
 
+  // Same as above, but uses async initialization.
+  static Profile* CreateProfileAsync(const FilePath& path,
+                                     Delegate* delegate);
+
   // Returns the request context for the "default" profile.  This may be called
   // from any thread.  This CAN return NULL if a first request context has not
   // yet been created.  If necessary, listen on the UI thread for
   // NOTIFY_DEFAULT_REQUEST_CONTEXT_AVAILABLE.
-  static URLRequestContextGetter* GetDefaultRequestContext();
+  static net::URLRequestContextGetter* GetDefaultRequestContext();
 
   // Returns a unique Id that can be used to identify this profile at runtime.
   // This Id is not persistent and will not survive a restart of the browser.
@@ -157,22 +172,22 @@ class Profile {
   // Returns the path of the directory where this profile's data is stored.
   virtual FilePath GetPath() = 0;
 
-  // Return whether this profile is off the record. Default is false.
+  // Return whether this profile is incognito. Default is false.
   virtual bool IsOffTheRecord() = 0;
 
-  // Return the off the record version of this profile. The returned pointer
+  // Return the incognito version of this profile. The returned pointer
   // is owned by the receiving profile. If the receiving profile is off the
   // record, the same profile is returned.
   virtual Profile* GetOffTheRecordProfile() = 0;
 
-  // Destroys the off the record profile.
+  // Destroys the incognito profile.
   virtual void DestroyOffTheRecordProfile() = 0;
 
-  // True if an off the record profile exists.
+  // True if an incognito profile exists.
   virtual bool HasOffTheRecordProfile() = 0;
 
   // Return the original "recording" profile. This method returns this if the
-  // profile is not off the record.
+  // profile is not incognito.
   virtual Profile* GetOriginalProfile() = 0;
 
   // Returns a pointer to the ChromeAppCacheService instance for this profile.
@@ -216,6 +231,10 @@ class Profile {
 
   // Accessor. The instance is created at startup.
   virtual ExtensionEventRouter* GetExtensionEventRouter() = 0;
+
+  // Accessor. The instance is created upon first access.
+  virtual ExtensionSpecialStoragePolicy*
+      GetExtensionSpecialStoragePolicy() = 0;
 
   // Retrieves a pointer to the SSLHostState associated with this profile.
   // The SSLHostState is lazily created the first time that this method is
@@ -282,6 +301,11 @@ class Profile {
   // time that this method is called.
   virtual PrefService* GetPrefs() = 0;
 
+  // Retrieves a pointer to the PrefService that manages the preferences
+  // for OffTheRecord Profiles.  This PrefService is lazily created the first
+  // time that this method is called.
+  virtual PrefService* GetOffTheRecordPrefs() = 0;
+
   // Returns the TemplateURLModel for this profile. This is owned by the
   // the Profile.
   virtual TemplateURLModel* GetTemplateURLModel() = 0;
@@ -300,42 +324,38 @@ class Profile {
   // Returns the FileSystemContext associated to this profile.  The context
   // is lazily created the first time this method is called.  This is owned
   // by the profile.
-  virtual fileapi::SandboxedFileSystemContext* GetFileSystemContext() = 0;
+  virtual fileapi::FileSystemContext* GetFileSystemContext() = 0;
 
   // Returns the BrowserSignin object assigned to this profile.
   virtual BrowserSignin* GetBrowserSignin() = 0;
 
-  // Init our themes system.
-  virtual void InitThemes() = 0;
-
-  // Set the theme to the specified extension.
-  virtual void SetTheme(const Extension* extension) = 0;
-
-  // Set the theme to the machine's native theme.
-  virtual void SetNativeTheme() = 0;
-
-  // Clear the theme and reset it to default.
-  virtual void ClearTheme() = 0;
-
-  // Gets the theme that was last set. Returns NULL if the theme is no longer
-  // installed, if there is no installed theme, or the theme was cleared.
-  virtual const Extension* GetTheme() = 0;
-
-  // Returns or creates the ThemeProvider associated with this profile
-  virtual BrowserThemeProvider* GetThemeProvider() = 0;
-
   // Returns the request context information associated with this profile.  Call
   // this only on the UI thread, since it can send notifications that should
   // happen on the UI thread.
-  virtual URLRequestContextGetter* GetRequestContext() = 0;
+  virtual net::URLRequestContextGetter* GetRequestContext() = 0;
+
+  // Returns the request context appropriate for the given app. If installed_app
+  // is null or installed_app->is_storage_isolated() returns false, this is
+  // equivalent to calling GetRequestContext().
+  // TODO(creis): After isolated app storage is no longer an experimental
+  // feature, consider making this the default contract for GetRequestContext.
+  virtual net::URLRequestContextGetter* GetRequestContextForPossibleApp(
+      const Extension* installed_app) = 0;
 
   // Returns the request context for media resources asociated with this
   // profile.
-  virtual URLRequestContextGetter* GetRequestContextForMedia() = 0;
+  virtual net::URLRequestContextGetter* GetRequestContextForMedia() = 0;
 
   // Returns the request context used for extension-related requests.  This
   // is only used for a separate cookie store currently.
-  virtual URLRequestContextGetter* GetRequestContextForExtensions() = 0;
+  virtual net::URLRequestContextGetter* GetRequestContextForExtensions() = 0;
+
+  // Returns the request context used within an installed app that has
+  // requested isolated storage.
+  virtual net::URLRequestContextGetter* GetRequestContextForIsolatedApp(
+      const std::string& app_id) = 0;
+
+  virtual const content::ResourceContext& GetResourceContext() = 0;
 
   // Called by the ExtensionService that lives in this profile. Gives the
   // profile a chance to react to the load event before the EXTENSION_LOADED
@@ -349,7 +369,8 @@ class Profile {
   // profile clean up its RequestContexts once all the listeners to the
   // EXTENSION_UNLOADED notification have finished running.
   virtual void UnregisterExtensionWithRequestContexts(
-      const Extension* extension) {}
+      const std::string& extension_id,
+      const UnloadedExtensionInfo::Reason) {}
 
   // Returns the SSLConfigService for this profile.
   virtual net::SSLConfigService* GetSSLConfigService() = 0;
@@ -374,11 +395,11 @@ class Profile {
   virtual FindBarState* GetFindBarState() = 0;
 
   // Returns the session service for this profile. This may return NULL. If
-  // this profile supports a session service (it isn't off the record), and
+  // this profile supports a session service (it isn't incognito), and
   // the session service hasn't yet been created, this forces creation of
   // the session service.
   //
-  // This returns NULL in two situations: the profile is off the record, or the
+  // This returns NULL in two situations: the profile is incognito, or the
   // session service has been explicitly shutdown (browser is exiting). Callers
   // should always check the return value for NULL.
   virtual SessionService* GetSessionService() = 0;
@@ -400,6 +421,9 @@ class Profile {
   // Returns the BookmarkModel, creating if not yet created.
   virtual BookmarkModel* GetBookmarkModel() = 0;
 
+  // Returns the ProtocolHandlerRegistry, creating if not yet created.
+  virtual ProtocolHandlerRegistry* GetProtocolHandlerRegistry() = 0;
+
   // Returns the Gaia Token Service, creating if not yet created.
   virtual TokenService* GetTokenService() = 0;
 
@@ -416,7 +440,7 @@ class Profile {
 
   // Return whether 2 profiles are the same. 2 profiles are the same if they
   // represent the same profile. This can happen if there is pointer equality
-  // or if one profile is the off the record version of another profile (or vice
+  // or if one profile is the incognito version of another profile (or vice
   // versa).
   virtual bool IsSameProfile(Profile* profile) = 0;
 
@@ -426,7 +450,7 @@ class Profile {
   // the user started chrome.
   virtual base::Time GetStartTime() const = 0;
 
-  // Returns the TabRestoreService. This returns NULL when off the record.
+  // Returns the TabRestoreService. This returns NULL when incognito.
   virtual TabRestoreService* GetTabRestoreService() = 0;
 
   virtual void ResetTabRestoreService() = 0;
@@ -442,12 +466,6 @@ class Profile {
   // Returns the WebKitContext assigned to this profile.
   virtual WebKitContext* GetWebKitContext() = 0;
 
-  // Returns the provider of desktop notifications for this profile.
-  virtual DesktopNotificationService* GetDesktopNotificationService() = 0;
-
-  // Returns the service that manages BackgroundContents for this profile.
-  virtual BackgroundContentsService* GetBackgroundContentsService() const = 0;
-
   // Returns the StatusTray, which provides an API for displaying status icons
   // in the system status tray. Returns NULL if status icons are not supported
   // on this platform (or this is a unit test).
@@ -459,10 +477,17 @@ class Profile {
   // that it can be invoked when the user logs out/powers down (WM_ENDSESSION).
   virtual void MarkAsCleanShutdown() = 0;
 
-  virtual void InitExtensions() = 0;
+  // Initializes extensions machinery.
+  // Component extensions are always enabled, external and user extensions
+  // are controlled by |extensions_enabled|.
+  virtual void InitExtensions(bool extensions_enabled) = 0;
 
-  // Start up service that gathers data from a web resource feed.
-  virtual void InitWebResources() = 0;
+  // Start up service that gathers data from a promo resource feed.
+  virtual void InitPromoResources() = 0;
+
+  // Register URLRequestFactories for protocols registered with
+  // registerProtocolHandler.
+  virtual void InitRegisteredProtocolHandlers() = 0;
 
   // Returns the new tab page resource cache.
   virtual NTPResourceCache* GetNTPResourceCache() = 0;
@@ -481,22 +506,36 @@ class Profile {
   // Returns the PromoCounter for Instant, or NULL if not applicable.
   virtual PromoCounter* GetInstantPromoCounter() = 0;
 
-  // Gets the policy context associated with this profile.
-  virtual policy::ProfilePolicyContext* GetPolicyContext() = 0;
+  // Gets the policy connector associated with this profile.
+  virtual policy::ProfilePolicyConnector* GetPolicyConnector() = 0;
+
+  // Returns the ChromeURLDataManager for this profile.
+  virtual ChromeURLDataManager* GetChromeURLDataManager() = 0;
 
 #if defined(OS_CHROMEOS)
-  // Changes application locale.
-  // "Keep local" means that changes should not be propagated to other devices.
-  virtual void ChangeApplicationLocale(
-      const std::string& locale, bool keep_local) = 0;
+  enum AppLocaleChangedVia {
+    // Caused by chrome://settings change.
+    APP_LOCALE_CHANGED_VIA_SETTINGS,
+    // Locale has been reverted via LocaleChangeGuard.
+    APP_LOCALE_CHANGED_VIA_REVERT,
+    // From login screen.
+    APP_LOCALE_CHANGED_VIA_LOGIN,
+    // Source unknown.
+    APP_LOCALE_CHANGED_VIA_UNKNOWN
+  };
 
-  // Returns ChromeOS's ProxyConfigServiceImpl, creating if not yet created.
-  virtual chromeos::ProxyConfigServiceImpl*
-      GetChromeOSProxyConfigServiceImpl() = 0;
+  // Changes application locale for a profile.
+  virtual void ChangeAppLocale(
+      const std::string& locale, AppLocaleChangedVia via) = 0;
+
+  // Called after login.
+  virtual void OnLogin() = 0;
 
   // Creates ChromeOS's EnterpriseExtensionListener.
   virtual void SetupChromeOSEnterpriseExtensionObserver() = 0;
 
+  // Initializes Chrome OS's preferences.
+  virtual void InitChromeOSPreferences() = 0;
 #endif  // defined(OS_CHROMEOS)
 
   // Returns the helper object that provides the proxy configuration service
@@ -505,11 +544,14 @@ class Profile {
 
   // Returns the PrerenderManager used to prerender entire webpages for this
   // profile.
-  virtual PrerenderManager* GetPrerenderManager() = 0;
+  virtual prerender::PrerenderManager* GetPrerenderManager() = 0;
+
+  // Returns whether it is a guest session.
+  static bool IsGuestSession();
 
 #ifdef UNIT_TEST
   // Use with caution.  GetDefaultRequestContext may be called on any thread!
-  static void set_default_request_context(URLRequestContextGetter* c) {
+  static void set_default_request_context(net::URLRequestContextGetter* c) {
     default_request_context_ = c;
   }
 #endif
@@ -546,7 +588,9 @@ class Profile {
   Profile* CreateOffTheRecordProfile();
 
  protected:
-  static URLRequestContextGetter* default_request_context_;
+  friend class OffTheRecordProfileImpl;
+
+  static net::URLRequestContextGetter* default_request_context_;
 
  private:
   bool restored_last_session_;

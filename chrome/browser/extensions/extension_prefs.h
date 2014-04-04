@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,13 +10,13 @@
 #include <string>
 #include <vector>
 
-#include "base/linked_ptr.h"
+#include "base/memory/linked_ptr.h"
 #include "base/time.h"
 #include "chrome/browser/prefs/pref_service.h"
 #include "chrome/common/extensions/extension.h"
 #include "googleurl/src/gurl.h"
 
-class ExtensionPrefStore;
+class ExtensionPrefValueMap;
 
 // Class for managing global and per-extension preferences.
 //
@@ -56,22 +56,28 @@ class ExtensionPrefs {
     LAUNCH_PINNED,
     LAUNCH_REGULAR,
     LAUNCH_FULLSCREEN,
-    LAUNCH_WINDOW
+    LAUNCH_WINDOW,
+
+    // Launch an app in the in the way a click on the NTP would,
+    // if no user pref were set.  Update this constant to change
+    // the default for the NTP and chrome.management.launchApp().
+    LAUNCH_DEFAULT = LAUNCH_REGULAR
   };
 
+  // Does not assume ownership of |prefs| and |incognito_prefs|.
   explicit ExtensionPrefs(PrefService* prefs,
                           const FilePath& root_dir,
-                          ExtensionPrefStore* extension_pref_store);
-  ~ExtensionPrefs();
+                          ExtensionPrefValueMap* extension_pref_value_map);
+  virtual ~ExtensionPrefs();
 
   // Returns a copy of the Extensions prefs.
   // TODO(erikkay) Remove this so that external consumers don't need to be
   // aware of the internal structure of the preferences.
   DictionaryValue* CopyCurrentExtensions();
 
-  // Returns true if the specified extension has an entry in prefs
-  // and its killbit is on.
-  bool IsExtensionKilled(const std::string& id);
+  // Returns true if the specified external extension was uninstalled by the
+  // user.
+  bool IsExternalExtensionUninstalled(const std::string& id) const;
 
   // Get the order that toolstrip URLs appear in the shelf.
   typedef std::vector<GURL> URLList;
@@ -102,8 +108,8 @@ class ExtensionPrefs {
   // Called to change the extension's state when it is enabled/disabled.
   void SetExtensionState(const Extension* extension, Extension::State);
 
-  // Returns all installed and enabled extensions
-  void GetEnabledExtensions(ExtensionIdSet* out) const;
+  // Returns all installed extensions
+  void GetExtensions(ExtensionIdSet* out);
 
   // Getter and setter for browser action visibility.
   bool GetBrowserActionVisibility(const Extension* extension);
@@ -149,11 +155,27 @@ class ExtensionPrefs {
   // the client's.
   void SetLastPingDay(const std::string& extension_id, const base::Time& time);
 
+  // Similar to the 2 above, but for the extensions blacklist.
+  base::Time BlacklistLastPingDay() const;
+  void SetBlacklistLastPingDay(const base::Time& time);
+
+  // Similar to LastPingDay/SetLastPingDay, but for sending "days since active"
+  // ping.
+  base::Time LastActivePingDay(const std::string& extension_id);
+  void SetLastActivePingDay(const std::string& extension_id,
+                            const base::Time& time);
+
+  // A bit we use for determining if we should send the "days since active"
+  // ping. A value of true means the item has been active (launched) since the
+  // last update check.
+  bool GetActiveBit(const std::string& extension_id);
+  void SetActiveBit(const std::string& extension_id, bool active);
+
   // Gets the permissions (|api_permissions|, |host_extent| and |full_access|)
   // granted to the extension with |extension_id|. |full_access| will be true
   // if the extension has all effective permissions (like from an NPAPI plugin).
   // Returns false if the granted permissions haven't been initialized yet.
-  // TODO(jstritar): Refractor the permissions into a class that encapsulates
+  // TODO(jstritar): Refactor the permissions into a class that encapsulates
   // all granted permissions, can be initialized from preferences or
   // a manifest file, and can be compared to each other.
   bool GetGrantedPermissions(const std::string& extension_id,
@@ -170,10 +192,6 @@ class ExtensionPrefs {
                              const std::set<std::string>& api_permissions,
                              const ExtensionExtent& host_extent);
 
-  // Similar to the 2 above, but for the extensions blacklist.
-  base::Time BlacklistLastPingDay() const;
-  void SetBlacklistLastPingDay(const base::Time& time);
-
   // Returns true if the user enabled this extension to be loaded in incognito
   // mode.
   bool IsIncognitoEnabled(const std::string& extension_id);
@@ -183,6 +201,7 @@ class ExtensionPrefs {
   // scripts into pages with file URLs.
   bool AllowFileAccess(const std::string& extension_id);
   void SetAllowFileAccess(const std::string& extension_id, bool allow);
+  bool HasAllowFileAccessSetting(const std::string& extension_id) const;
 
   // Get the launch type preference.  If no preference is set, return
   // |default_pref_value|.
@@ -254,6 +273,22 @@ class ExtensionPrefs {
   // Sets the order the apps should be displayed in the app launcher.
   void SetAppLauncherOrder(const std::vector<std::string>& extension_ids);
 
+  // Get the application page index for an extension with |extension_id|.  This
+  // determines which page an app will appear on in page-based NTPs.  If
+  // the app has no page specified, -1 is returned.
+  int GetPageIndex(const std::string& extension_id);
+
+  // Sets a specific page index for an extension with |extension_id|.
+  void SetPageIndex(const std::string& extension_id, int index);
+
+  // Returns true if the user repositioned the app on the app launcher via drag
+  // and drop.
+  bool WasAppDraggedByUser(const std::string& extension_id);
+
+  // Sets a flag indicating that the user repositioned the app on the app
+  // launcher by drag and dropping it.
+  void SetAppDraggedByUser(const std::string& extension_id);
+
   // The extension's update URL data.  If not empty, the ExtensionUpdater
   // will append a ap= parameter to the URL when checking if a new version
   // of the extension is available.
@@ -264,9 +299,31 @@ class ExtensionPrefs {
   // Sets a preference value that is controlled by the extension. In other
   // words, this is not a pref value *about* the extension but something
   // global the extension wants to override.
+  // Takes ownership of |value|.
   void SetExtensionControlledPref(const std::string& extension_id,
                                   const std::string& pref_key,
+                                  bool incognito,
                                   Value* value);
+
+  void RemoveExtensionControlledPref(const std::string& extension_id,
+                                     const std::string& pref_key,
+                                     bool incognito);
+
+  // Returns true if currently no extension with higher precedence controls the
+  // preference.
+  bool CanExtensionControlPref(const std::string& extension_id,
+                               const std::string& pref_key,
+                               bool incognito);
+
+  // Returns true if extension |extension_id| currently controls the
+  // preference.
+  bool DoesExtensionControlPref(const std::string& extension_id,
+                                const std::string& pref_key,
+                                bool incognito);
+
+  // Returns true if there is an extension which controls the preference value
+  //  for |pref_key| *and* it is specific to incognito mode.
+  bool HasIncognitoPrefValue(const std::string& pref_key);
 
   static void RegisterUserPrefs(PrefService* prefs);
 
@@ -297,7 +354,8 @@ class ExtensionPrefs {
 
   // Reads a boolean pref from |ext| with key |pref_key|.
   // Return false if the value is false or |pref_key| does not exist.
-  bool ReadBooleanFromPref(DictionaryValue* ext, const std::string& pref_key);
+  bool ReadBooleanFromPref(const DictionaryValue* ext,
+                           const std::string& pref_key);
 
   // Reads a boolean pref |pref_key| from extension with id |extension_id|.
   bool ReadExtensionPrefBoolean(const std::string& extension_id,
@@ -305,7 +363,8 @@ class ExtensionPrefs {
 
   // Reads an integer pref from |ext| with key |pref_key|.
   // Return false if the value does not exist.
-  bool ReadIntegerFromPref(DictionaryValue* ext, const std::string& pref_key,
+  bool ReadIntegerFromPref(const DictionaryValue* ext,
+                           const std::string& pref_key,
                            int* out_value);
 
   // Reads an integer pref |pref_key| from extension with id |extension_id|.
@@ -316,7 +375,7 @@ class ExtensionPrefs {
   // Reads a list pref |pref_key| from extension with id | extension_id|.
   bool ReadExtensionPrefList(const std::string& extension_id,
                              const std::string& pref_key,
-                             ListValue** out_value);
+                             const ListValue** out_value);
 
   // Reads a list pref |pref_key| as a string set from the extension with
   // id |extension_id|.
@@ -331,33 +390,28 @@ class ExtensionPrefs {
                                    const std::string& pref_key,
                                    const std::set<std::string>& added_values);
 
-  // Ensures and returns a mutable dictionary for extension |id|'s prefs.
-  DictionaryValue* GetOrCreateExtensionPref(const std::string& id);
-
-  // Same as above, but returns NULL if it doesn't exist.
-  DictionaryValue* GetExtensionPref(const std::string& id) const;
+  // Returns a dictionary for extension |id|'s prefs or NULL if it doesn't
+  // exist.
+  const DictionaryValue* GetExtensionPref(const std::string& id) const;
 
   // Returns the dictionary of preferences controlled by the specified extension
-  // or NULL if unknown. All entries in the dictionary contain non-expanded
+  // or creates a new one. All entries in the dictionary contain non-expanded
   // paths.
-  DictionaryValue* GetExtensionControlledPrefs(const std::string& id) const;
+  const DictionaryValue* GetExtensionControlledPrefs(
+      const std::string& id) const;
 
   // Serializes the data and schedules a persistent save via the |PrefService|.
   // Additionally fires a PREF_CHANGED notification with the top-level
   // |kExtensionsPref| path set.
   // TODO(andybons): Switch this to EXTENSION_PREF_CHANGED to be more granular.
-  // TODO(andybons): Use a ScopedPrefUpdate to update observers on changes to
-  // the mutable extension dictionary.
-  void SavePrefsAndNotify();
+  // TODO(andybons): Use a ScopedUserPrefUpdate to update observers on changes
+  // to the mutable extension dictionary.
+  void SavePrefs();
 
   // Checks if kPrefBlacklist is set to true in the DictionaryValue.
   // Return false if the value is false or kPrefBlacklist does not exist.
   // This is used to decide if an extension is blacklisted.
   bool IsBlacklistBitSet(DictionaryValue* ext);
-
-  // Helper methods for the public last ping day functions.
-  base::Time LastPingDayImpl(const DictionaryValue* dictionary) const;
-  void SetLastPingDayImpl(const base::Time& time, DictionaryValue* dictionary);
 
   // Helper method to acquire the installation time of an extension.
   // Returns base::Time() if the installation time could not be parsed or
@@ -372,32 +426,14 @@ class ExtensionPrefs {
   // pref store.
   void InitPrefStore();
 
-  // Returns the extension controlled preference value of the extension that was
-  // installed most recently.
-  const Value* GetWinningExtensionControlledPrefValue(
-      const std::string& key) const;
-
-  // Executes UpdatePrefStore for all |pref_keys|.
-  void UpdatePrefStore(const PrefKeySet& pref_keys);
-
-  // Finds the most recently installed extension that defines a preference
-  // for |pref_key|, then stores its value in the PrefValueStore's extension
-  // pref store and sends notifications to observers in case the value changed.
-  void UpdatePrefStore(const std::string& pref_key);
-
-  // Retrieves a list of preference keys that the specified extension
-  // intends to manage. Keys are always appended, |out| is not cleared.
-  void GetExtensionControlledPrefKeys(const std::string& extension_id,
-                                      PrefKeySet *out) const;
-
-  // The pref service specific to this set of extension prefs.
+  // The pref service specific to this set of extension prefs. Owned by profile.
   PrefService* prefs_;
 
   // Base extensions install directory.
   FilePath install_directory_;
 
-  // Used to manipulate extension preferences.
-  ExtensionPrefStore* pref_store_;
+  // Weak pointer, owned by Profile.
+  ExtensionPrefValueMap* extension_pref_value_map_;
 
   // The URLs of all of the toolstrips.
   URLList shelf_order_;

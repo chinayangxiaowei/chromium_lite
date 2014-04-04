@@ -15,8 +15,8 @@
 #include "chrome/browser/ui/gtk/gtk_util.h"
 #include "chrome/browser/ui/gtk/view_id_util.h"
 #include "chrome/common/automation_messages.h"
-#include "gfx/point.h"
-#include "gfx/rect.h"
+#include "ui/gfx/point.h"
+#include "ui/gfx/rect.h"
 
 void AutomationProvider::PrintAsync(int tab_handle) {
   NOTIMPLEMENTED();
@@ -103,11 +103,12 @@ class MouseMoveTask : public Task {
   DISALLOW_COPY_AND_ASSIGN(MouseMoveTask);
 };
 
-void AutomationProvider::WindowSimulateDrag(int handle,
-                                            std::vector<gfx::Point> drag_path,
-                                            int flags,
-                                            bool press_escape_en_route,
-                                            IPC::Message* reply_message) {
+void AutomationProvider::WindowSimulateDrag(
+    int handle,
+    const std::vector<gfx::Point>& drag_path,
+    int flags,
+    bool press_escape_en_route,
+    IPC::Message* reply_message) {
   // TODO(estade): don't ignore |flags| or |escape_en_route|.
   gfx::NativeWindow window =
       browser_tracker_->GetResource(handle)->window()->GetNativeHandle();

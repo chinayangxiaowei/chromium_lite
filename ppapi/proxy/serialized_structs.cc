@@ -1,10 +1,11 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "ppapi/proxy/serialized_structs.h"
 
 #include "ppapi/c/dev/ppb_font_dev.h"
+#include "ppapi/c/dev/pp_file_info_dev.h"
 #include "ppapi/c/pp_rect.h"
 
 namespace pp {
@@ -62,11 +63,20 @@ void SerializedFontDescription::SetToPPFontDescription(
   desc->word_spacing = word_spacing;
 }
 
+PPBFileRef_CreateInfo::PPBFileRef_CreateInfo()
+    : file_system_type(PP_FILESYSTEMTYPE_EXTERNAL) {
+}
+
 PPBFlash_DrawGlyphs_Params::PPBFlash_DrawGlyphs_Params()
     : instance(0),
-      pp_image_data(0),
       font_desc(),
       color(0) {
+  clip.point.x = 0;
+  clip.point.y = 0;
+  clip.size.height = 0;
+  clip.size.width = 0;
+  position.x = 0;
+  position.y = 0;
 }
 
 PPBFlash_DrawGlyphs_Params::~PPBFlash_DrawGlyphs_Params() {}

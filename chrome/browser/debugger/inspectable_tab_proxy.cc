@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,14 +6,14 @@
 
 #include "base/string_number_conversions.h"
 #include "base/string_util.h"
-#include "chrome/browser/browser_list.h"
 #include "chrome/browser/debugger/debugger_remote_service.h"
 #include "chrome/browser/debugger/devtools_client_host.h"
 #include "chrome/browser/sessions/session_id.h"
-#include "chrome/browser/tab_contents/tab_contents.h"
 #include "chrome/browser/tabs/tab_strip_model.h"
+#include "chrome/browser/ui/browser_list.h"
 #include "chrome/browser/ui/tab_contents/tab_contents_wrapper.h"
 #include "chrome/common/devtools_messages.h"
+#include "content/browser/tab_contents/tab_contents.h"
 
 DevToolsClientHostImpl::DevToolsClientHostImpl(
     int32 id,
@@ -48,12 +48,17 @@ void DevToolsClientHostImpl::SendMessageToClient(
   IPC_END_MESSAGE_MAP()
 }
 
+void DevToolsClientHostImpl::TabReplaced(TabContentsWrapper* new_tab) {
+  map_->erase(id_);
+  id_ = new_tab->controller().session_id().id();
+  (*map_)[id_] = this;
+}
 
 void DevToolsClientHostImpl::OnDebuggerOutput(const std::string& data) {
   service_->DebuggerOutput(id_, data);
 }
 
-void DevToolsClientHostImpl::FrameNavigate(const std::string& url) {
+void DevToolsClientHostImpl::FrameNavigating(const std::string& url) {
   service_->FrameNavigate(id_, url);
 }
 
@@ -100,7 +105,7 @@ DevToolsClientHost* InspectableTabProxy::NewClientHost(
 }
 
 void InspectableTabProxy::OnRemoteDebuggerDetached() {
-  while (id_to_client_host_map_.size() > 0) {
+  while (!id_to_client_host_map_.empty()) {
     IdToClientHostMap::iterator it = id_to_client_host_map_.begin();
     it->second->debugger_remote_service()->DetachFromTab(
         base::IntToString(it->first), NULL);

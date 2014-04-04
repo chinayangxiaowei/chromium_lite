@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,14 +7,13 @@
 #include "base/base64.h"
 #include "base/logging.h"
 #include "base/metrics/histogram.h"
-#include "base/sha2.h"
 #include "base/string_number_conversions.h"
 #include "base/string_util.h"
+#include "crypto/sha2.h"
 #include "net/base/registry_controlled_domain.h"
 #include "net/url_request/url_request_http_job.h"
 
-using base::Time;
-using base::TimeDelta;
+namespace net {
 
 //------------------------------------------------------------------------------
 // static
@@ -28,16 +27,20 @@ SdchManager* SdchManager::global_;
 
 //------------------------------------------------------------------------------
 SdchManager::Dictionary::Dictionary(const std::string& dictionary_text,
-    size_t offset, const std::string& client_hash, const GURL& gurl,
-    const std::string& domain, const std::string& path, const Time& expiration,
-    const std::set<int> ports)
-      : text_(dictionary_text, offset),
-        client_hash_(client_hash),
-        url_(gurl),
-        domain_(domain),
-        path_(path),
-        expiration_(expiration),
-        ports_(ports) {
+                                    size_t offset,
+                                    const std::string& client_hash,
+                                    const GURL& gurl,
+                                    const std::string& domain,
+                                    const std::string& path,
+                                    const base::Time& expiration,
+                                    const std::set<int>& ports)
+    : text_(dictionary_text, offset),
+      client_hash_(client_hash),
+      url_(gurl),
+      domain_(domain),
+      path_(path),
+      expiration_(expiration),
+      ports_(ports) {
 }
 
 SdchManager::Dictionary::~Dictionary() {
@@ -66,7 +69,7 @@ bool SdchManager::Dictionary::CanAdvertise(const GURL& target_url) {
     return false;
   if (target_url.SchemeIsSecure())
     return false;
-  if (Time::Now() > expiration_)
+  if (base::Time::Now() > expiration_)
     return false;
   return true;
 }
@@ -77,7 +80,7 @@ bool SdchManager::Dictionary::CanAdvertise(const GURL& target_url) {
 // static
 bool SdchManager::Dictionary::CanSet(const std::string& domain,
                                      const std::string& path,
-                                     const std::set<int> ports,
+                                     const std::set<int>& ports,
                                      const GURL& dictionary_url) {
   if (!SdchManager::Global()->IsInSupportedDomain(dictionary_url))
     return false;
@@ -103,7 +106,7 @@ bool SdchManager::Dictionary::CanSet(const std::string& domain,
     SdchErrorRecovery(DICTIONARY_MISSING_DOMAIN_SPECIFIER);
     return false;  // Domain is required.
   }
-  if (net::RegistryControlledDomainService::GetDomainAndRegistry(domain).size()
+  if (RegistryControlledDomainService::GetDomainAndRegistry(domain).size()
       == 0) {
     SdchErrorRecovery(DICTIONARY_SPECIFIES_TOP_LEVEL_DOMAIN);
     return false;  // domain was a TLD.
@@ -370,7 +373,7 @@ bool SdchManager::AddSdchDictionary(const std::string& dictionary_text,
 
   std::string domain, path;
   std::set<int> ports;
-  Time expiration(Time::Now() + TimeDelta::FromDays(30));
+  base::Time expiration(base::Time::Now() + base::TimeDelta::FromDays(30));
 
   if (dictionary_text.empty()) {
     SdchErrorRecovery(DICTIONARY_HAS_NO_TEXT);
@@ -415,7 +418,7 @@ bool SdchManager::AddSdchDictionary(const std::string& dictionary_text,
       } else if (name == "max-age") {
         int64 seconds;
         base::StringToInt64(value, &seconds);
-        expiration = Time::Now() + TimeDelta::FromSeconds(seconds);
+        expiration = base::Time::Now() + base::TimeDelta::FromSeconds(seconds);
       } else if (name == "port") {
         int port;
         base::StringToInt(value, &port);
@@ -493,7 +496,7 @@ void SdchManager::GetAvailDictionaryList(const GURL& target_url,
 void SdchManager::GenerateHash(const std::string& dictionary_text,
     std::string* client_hash, std::string* server_hash) {
   char binary_hash[32];
-  base::SHA256HashString(dictionary_text, binary_hash, sizeof(binary_hash));
+  crypto::SHA256HashString(dictionary_text, binary_hash, sizeof(binary_hash));
 
   std::string first_48_bits(&binary_hash[0], 6);
   std::string second_48_bits(&binary_hash[6], 6);
@@ -543,3 +546,5 @@ void SdchManager::UrlSafeBase64Encode(const std::string& input,
     }
   }
 }
+
+}  // namespace net

@@ -151,7 +151,7 @@ bool BitmapPlatformDevice::IsVectorial() {
   return false;
 }
 
-cairo_t* BitmapPlatformDevice::beginPlatformPaint() {
+cairo_t* BitmapPlatformDevice::BeginPlatformPaint() {
   data_->LoadConfig();
   cairo_t* cairo = data_->bitmap_context();
   cairo_surface_t* surface = cairo_get_target(cairo);
@@ -164,7 +164,8 @@ cairo_t* BitmapPlatformDevice::beginPlatformPaint() {
 }
 
 void BitmapPlatformDevice::setMatrixClip(const SkMatrix& transform,
-                                         const SkRegion& region) {
+                                         const SkRegion& region,
+                                         const SkClipStack&) {
   data_->SetMatrixClip(transform, region);
 }
 

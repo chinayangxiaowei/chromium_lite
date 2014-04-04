@@ -1,14 +1,14 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef PRINTING_PRINT_SETTINGS_H_
 #define PRINTING_PRINT_SETTINGS_H_
 
-#include "gfx/rect.h"
 #include "printing/page_overlays.h"
 #include "printing/page_range.h"
 #include "printing/page_setup.h"
+#include "ui/gfx/rect.h"
 
 namespace printing {
 
@@ -93,6 +93,9 @@ class PrintSettings {
   // associated PrintSettings, to be sure that each generated PrintedPage is
   // correctly associated with its corresponding PrintedDocument.
   static int NewCookie();
+
+  // Updates the orientation and flip the page if needed.
+  void SetOrientation(bool landscape);
 
  private:
   //////////////////////////////////////////////////////////////////////////////

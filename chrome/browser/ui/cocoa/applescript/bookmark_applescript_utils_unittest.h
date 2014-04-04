@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,7 +8,7 @@
 #import <objc/objc-runtime.h>
 #import <Cocoa/Cocoa.h>
 
-#include "base/scoped_nsobject.h"
+#include "base/memory/scoped_nsobject.h"
 #import "chrome/browser/app_controller_mac.h"
 #import "chrome/browser/ui/cocoa/applescript/bookmark_folder_applescript.h"
 #include "chrome/browser/ui/cocoa/browser_test_helper.h"
@@ -23,7 +23,7 @@ class BookmarkModel;
  @public
   BrowserTestHelper* helper_;  // weak.
 }
-@property (nonatomic) BrowserTestHelper* helper;
+@property(nonatomic) BrowserTestHelper* helper;
 // Return the |TestingProfile*| which is used for testing.
 - (Profile*)defaultProfile;
 @end
@@ -41,6 +41,7 @@ class BookmarkModel;
 class BookmarkAppleScriptTest : public CocoaTest {
  public:
   BookmarkAppleScriptTest();
+  virtual ~BookmarkAppleScriptTest();
  private:
   BrowserTestHelper helper_;
   scoped_nsobject<FakeAppDelegate> appDelegate_;

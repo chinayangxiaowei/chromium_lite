@@ -10,10 +10,10 @@
 
 #include "base/string16.h"
 #include "build/build_config.h"
-#include "gfx/native_widget_types.h"
 #include "third_party/npapi/bindings/npapi.h"
 #include "third_party/npapi/bindings/npapi_extensions.h"
 #include "third_party/WebKit/Source/WebKit/chromium/public/WebCanvas.h"
+#include "ui/gfx/native_widget_types.h"
 #include "webkit/plugins/npapi/webplugin_2d_device_delegate.h"
 #include "webkit/plugins/npapi/webplugin_3d_device_delegate.h"
 #include "webkit/plugins/npapi/webplugin_audio_device_delegate.h"
@@ -79,9 +79,6 @@ class WebPluginDelegate : public WebPlugin2DDeviceDelegate,
   // Tells the plugin to paint the damaged rect.  |canvas| is only used for
   // windowless plugins.
   virtual void Paint(WebKit::WebCanvas* canvas, const gfx::Rect& rect) = 0;
-
-  // Tells the plugin to print itself.
-  virtual void Print(gfx::NativeDrawingContext hdc) = 0;
 
   // Informs the plugin that it has gained or lost focus. This is only called in
   // windowless mode.

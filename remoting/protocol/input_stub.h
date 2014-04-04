@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,6 +7,8 @@
 
 #ifndef REMOTING_PROTOCOL_INPUT_STUB_H_
 #define REMOTING_PROTOCOL_INPUT_STUB_H_
+
+#include "base/basictypes.h"
 
 class Task;
 
@@ -18,8 +20,8 @@ class MouseEvent;
 
 class InputStub {
  public:
-  InputStub() {}
-  virtual ~InputStub() {}
+  InputStub() {};
+  virtual ~InputStub() {};
 
   virtual void InjectKeyEvent(const KeyEvent* event, Task* done) = 0;
   virtual void InjectMouseEvent(const MouseEvent* event, Task* done) = 0;

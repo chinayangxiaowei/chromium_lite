@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,11 +7,11 @@
 #pragma once
 
 #include "base/basictypes.h"
-#include "chrome/browser/browser_child_process_host.h"
+#include "content/browser/browser_child_process_host.h"
 
 class NaClBrokerHost : public BrowserChildProcessHost {
  public:
-  explicit NaClBrokerHost(ResourceDispatcherHost* resource_dispatcher_host);
+  NaClBrokerHost();
   ~NaClBrokerHost();
 
   // This function starts the broker process. It needs to be called

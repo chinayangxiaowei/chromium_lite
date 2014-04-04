@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,6 +9,7 @@
 
 #include "base/message_loop.h"
 #include "ui/base/keycodes/keyboard_codes.h"
+#include "ui/base/win/hwnd_util.h"
 #include "ui/base/win/window_impl.h"
 #include "views/controls/scrollbar/native_scroll_bar.h"
 #include "views/controls/scrollbar/scroll_bar.h"
@@ -79,6 +80,7 @@ class ScrollBarContainer : public ui::WindowImpl {
                                           SBS_HORZ : SBS_VERT),
                               0, 0, parent_->width(), parent_->height(),
                               hwnd(), NULL, NULL, NULL);
+    ui::CheckWindowCreated(scrollbar_);
     ShowWindow(scrollbar_, SW_SHOW);
     return 1;
   }
@@ -216,7 +218,7 @@ NativeScrollBarWin::~NativeScrollBarWin() {
 // NativeScrollBarWin, View overrides:
 
 void NativeScrollBarWin::Layout() {
-  SetBounds(native_scroll_bar_->GetLocalBounds(true));
+  SetBoundsRect(native_scroll_bar_->GetLocalBounds());
   NativeControlWin::Layout();
 }
 
@@ -230,7 +232,7 @@ bool NativeScrollBarWin::OnKeyPressed(const KeyEvent& event) {
   if (!sb_container_.get())
     return false;
   int code = -1;
-  switch (event.GetKeyCode()) {
+  switch (event.key_code()) {
     case ui::VKEY_UP:
       if (!native_scroll_bar_->IsHorizontal())
         code = SB_LINEUP;
@@ -272,7 +274,7 @@ bool NativeScrollBarWin::OnKeyPressed(const KeyEvent& event) {
 bool NativeScrollBarWin::OnMouseWheel(const MouseWheelEvent& e) {
   if (!sb_container_.get())
     return false;
-  sb_container_->ScrollWithOffset(e.GetOffset());
+  sb_container_->ScrollWithOffset(e.offset());
   return true;
 }
 

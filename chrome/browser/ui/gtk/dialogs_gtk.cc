@@ -14,8 +14,8 @@
 #include "base/threading/thread.h"
 #include "base/threading/thread_restrictions.h"
 #include "base/utf_string_conversions.h"
-#include "chrome/browser/browser_thread.h"
-#include "chrome/browser/shell_dialogs.h"
+#include "chrome/browser/ui/shell_dialogs.h"
+#include "content/browser/browser_thread.h"
 #include "grit/generated_resources.h"
 #include "ui/base/gtk/gtk_signal.h"
 #include "ui/base/l10n/l10n_util.h"
@@ -38,16 +38,17 @@ class SelectFileDialogImpl : public SelectFileDialog {
   virtual bool IsRunning(gfx::NativeWindow parent_window) const;
   virtual void ListenerDestroyed();
 
+ protected:
   // SelectFileDialog implementation.
   // |params| is user data we pass back via the Listener interface.
-  virtual void SelectFile(Type type,
-                          const string16& title,
-                          const FilePath& default_path,
-                          const FileTypeInfo* file_types,
-                          int file_type_index,
-                          const FilePath::StringType& default_extension,
-                          gfx::NativeWindow owning_window,
-                          void* params);
+  virtual void SelectFileImpl(Type type,
+                              const string16& title,
+                              const FilePath& default_path,
+                              const FileTypeInfo* file_types,
+                              int file_type_index,
+                              const FilePath::StringType& default_extension,
+                              gfx::NativeWindow owning_window,
+                              void* params);
 
  private:
   virtual ~SelectFileDialogImpl();
@@ -55,7 +56,6 @@ class SelectFileDialogImpl : public SelectFileDialog {
   // Add the filters from |file_types_| to |chooser|.
   void AddFilters(GtkFileChooser* chooser);
 
-  // Notifies the listener that a single file was chosen.
   void FileSelected(GtkWidget* dialog, const FilePath& path);
 
   // Notifies the listener that multiple files were chosen.
@@ -109,24 +109,21 @@ class SelectFileDialogImpl : public SelectFileDialog {
 
   // Callback for when the user responds to a Save As or Open File dialog.
   CHROMEGTK_CALLBACK_1(SelectFileDialogImpl, void,
-                       OnSelectSingleFileDialogResponse, gint);
+                       OnSelectSingleFileDialogResponse, int);
 
   // Callback for when the user responds to a Select Folder dialog.
   CHROMEGTK_CALLBACK_1(SelectFileDialogImpl, void,
-                       OnSelectSingleFolderDialogResponse, gint);
+                       OnSelectSingleFolderDialogResponse, int);
 
   // Callback for when the user responds to a Open Multiple Files dialog.
   CHROMEGTK_CALLBACK_1(SelectFileDialogImpl, void,
-                       OnSelectMultiFileDialogResponse, gint);
+                       OnSelectMultiFileDialogResponse, int);
 
   // Callback for when the file chooser gets destroyed.
   CHROMEGTK_CALLBACK_0(SelectFileDialogImpl, void, OnFileChooserDestroy);
 
   // Callback for when we update the preview for the selection.
   CHROMEGTK_CALLBACK_0(SelectFileDialogImpl, void, OnUpdatePreview);
-
-  // The listener to be notified of selection completion.
-  Listener* listener_;
 
   // A map from dialog windows to the |params| user data associated with them.
   std::map<GtkWidget*, void*> params_map_;
@@ -163,13 +160,12 @@ FilePath* SelectFileDialogImpl::last_opened_path_ = NULL;
 
 // static
 SelectFileDialog* SelectFileDialog::Create(Listener* listener) {
-  DCHECK(!BrowserThread::CurrentlyOn(BrowserThread::IO));
-  DCHECK(!BrowserThread::CurrentlyOn(BrowserThread::FILE));
+  DCHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
   return new SelectFileDialogImpl(listener);
 }
 
 SelectFileDialogImpl::SelectFileDialogImpl(Listener* listener)
-    : listener_(listener),
+    : SelectFileDialog(listener),
       file_type_index_(0),
       type_(SELECT_NONE),
       preview_(NULL) {
@@ -194,7 +190,7 @@ void SelectFileDialogImpl::ListenerDestroyed() {
 }
 
 // We ignore |default_extension|.
-void SelectFileDialogImpl::SelectFile(
+void SelectFileDialogImpl::SelectFileImpl(
     Type type,
     const string16& title,
     const FilePath& default_path,
@@ -265,6 +261,9 @@ void SelectFileDialogImpl::AddFilters(GtkFileChooser* chooser) {
       if (!file_types_.extensions[i][j].empty()) {
         if (!filter)
           filter = gtk_file_filter_new();
+
+        // Allow IO in the file dialog. http://crbug.com/72637
+        base::ThreadRestrictions::ScopedAllowIO allow_io;
         std::string mime_type = mime_util::GetFileMimeType(
             FilePath("name").ReplaceExtension(file_types_.extensions[i][j]));
         gtk_file_filter_add_mime_type(filter, mime_type.c_str());
@@ -280,6 +279,8 @@ void SelectFileDialogImpl::AddFilters(GtkFileChooser* chooser) {
       gtk_file_filter_set_name(filter, UTF16ToUTF8(
           file_types_.extension_description_overrides[i]).c_str());
     } else {
+      // Allow IO in the file dialog. http://crbug.com/72637
+      base::ThreadRestrictions::ScopedAllowIO allow_io;
       // There is no system default filter description so we use
       // the MIME type itself if the description is blank.
       std::string mime_type = mime_util::GetFileMimeType(
@@ -294,7 +295,7 @@ void SelectFileDialogImpl::AddFilters(GtkFileChooser* chooser) {
 
   // Add the *.* filter, but only if we have added other filters (otherwise it
   // is implied).
-  if (file_types_.include_all_files && file_types_.extensions.size() > 0) {
+  if (file_types_.include_all_files && !file_types_.extensions.empty()) {
     GtkFileFilter* filter = gtk_file_filter_new();
     gtk_file_filter_add_pattern(filter, "*");
     gtk_file_filter_set_name(filter,
@@ -307,10 +308,8 @@ void SelectFileDialogImpl::FileSelected(GtkWidget* dialog,
                                         const FilePath& path) {
   if (type_ == SELECT_SAVEAS_FILE)
     *last_saved_path_ = path.DirName();
-  else if (type_ == SELECT_OPEN_FILE)
+  else if (type_ == SELECT_OPEN_FILE || type_ == SELECT_FOLDER)
     *last_opened_path_ = path.DirName();
-  else if (type_ == SELECT_FOLDER)
-    *last_opened_path_ = path.DirName().DirName();
   else
     NOTREACHED();
 
@@ -525,18 +524,18 @@ void SelectFileDialogImpl::SelectSingleFileHelper(GtkWidget* dialog,
     FileSelected(dialog, path);
 }
 
-void SelectFileDialogImpl::OnSelectSingleFileDialogResponse(
-    GtkWidget* dialog, gint response_id) {
-  return SelectSingleFileHelper(dialog, response_id, false);
+void SelectFileDialogImpl::OnSelectSingleFileDialogResponse(GtkWidget* dialog,
+                                                            int response_id) {
+  SelectSingleFileHelper(dialog, response_id, false);
 }
 
-void SelectFileDialogImpl::OnSelectSingleFolderDialogResponse(
-    GtkWidget* dialog, gint response_id) {
-  return SelectSingleFileHelper(dialog, response_id, true);
+void SelectFileDialogImpl::OnSelectSingleFolderDialogResponse(GtkWidget* dialog,
+                                                              int response_id) {
+  SelectSingleFileHelper(dialog, response_id, true);
 }
 
-void SelectFileDialogImpl::OnSelectMultiFileDialogResponse(
-    GtkWidget* dialog, gint response_id) {
+void SelectFileDialogImpl::OnSelectMultiFileDialogResponse(GtkWidget* dialog,
+                                                           int response_id) {
   if (IsCancelResponse(response_id)) {
     FileNotSelected(dialog);
     return;

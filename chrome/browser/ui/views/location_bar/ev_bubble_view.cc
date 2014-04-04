@@ -7,7 +7,7 @@
 EVBubbleView::EVBubbleView(const int background_images[],
                            int contained_image,
                            const SkColor& color,
-                           const LocationBarView* location_bar)
+                           LocationBarView* location_bar)
     : IconLabelBubbleView(background_images, contained_image, color),
       ALLOW_THIS_IN_INITIALIZER_LIST(click_handler_(this, location_bar)) {
   SetElideInMiddle(true);
@@ -22,8 +22,6 @@ bool EVBubbleView::OnMousePressed(const views::MouseEvent& event) {
   return true;
 }
 
-void EVBubbleView::OnMouseReleased(const views::MouseEvent& event,
-                                   bool canceled) {
-  click_handler_.OnMouseReleased(event, canceled);
+void EVBubbleView::OnMouseReleased(const views::MouseEvent& event) {
+  click_handler_.OnMouseReleased(event);
 }
-

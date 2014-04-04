@@ -1,8 +1,9 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "base/command_line.h"
+#include "chrome/browser/extensions/extension_service.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/sync/glue/app_data_type_controller.h"
 #include "chrome/browser/sync/glue/autofill_change_processor.h"
@@ -125,7 +126,7 @@ ProfileSyncService* ProfileSyncFactoryImpl::CreateProfileSyncService(
   // disabled.
   if (!command_line_->HasSwitch(switches::kDisableSyncPreferences)) {
     pss->RegisterDataTypeController(
-        new PreferenceDataTypeController(this, pss));
+        new PreferenceDataTypeController(this, profile_, pss));
   }
 
   // Theme sync is enabled by default.  Register unless explicitly disabled.
@@ -145,7 +146,7 @@ ProfileSyncService* ProfileSyncFactoryImpl::CreateProfileSyncService(
   // enabled.
   if (command_line_->HasSwitch(switches::kEnableSyncSessions)) {
     pss->RegisterDataTypeController(
-        new SessionDataTypeController(this, pss));
+        new SessionDataTypeController(this, profile_, pss));
   }
 
   if (!command_line_->HasSwitch(switches::kDisableSyncAutofillProfile)) {
@@ -169,8 +170,11 @@ ProfileSyncFactoryImpl::CreateAppSyncComponents(
   // For now we simply use extensions sync objects with the app sync
   // traits.  If apps become more than simply extensions, we may have
   // to write our own apps model associator and/or change processor.
+  ExtensionServiceInterface* extension_service =
+      profile_sync_service->profile()->GetExtensionService();
+  sync_api::UserShare* user_share = profile_sync_service->GetUserShare();
   ExtensionModelAssociator* model_associator =
-      new ExtensionModelAssociator(traits, profile_sync_service);
+      new ExtensionModelAssociator(traits, extension_service, user_share);
   ExtensionChangeProcessor* change_processor =
       new ExtensionChangeProcessor(traits, error_handler);
   return SyncComponents(model_associator, change_processor);
@@ -218,8 +222,12 @@ ProfileSyncFactory::SyncComponents
 ProfileSyncFactoryImpl::CreateBookmarkSyncComponents(
     ProfileSyncService* profile_sync_service,
     UnrecoverableErrorHandler* error_handler) {
+  BookmarkModel* bookmark_model =
+      profile_sync_service->profile()->GetBookmarkModel();
+  sync_api::UserShare* user_share = profile_sync_service->GetUserShare();
   BookmarkModelAssociator* model_associator =
-      new BookmarkModelAssociator(profile_sync_service,
+      new BookmarkModelAssociator(bookmark_model,
+                                  user_share,
                                   error_handler);
   BookmarkChangeProcessor* change_processor =
       new BookmarkChangeProcessor(model_associator,
@@ -233,8 +241,11 @@ ProfileSyncFactoryImpl::CreateExtensionSyncComponents(
     UnrecoverableErrorHandler* error_handler) {
   browser_sync::ExtensionSyncTraits traits =
       browser_sync::GetExtensionSyncTraits();
+  ExtensionServiceInterface* extension_service =
+      profile_sync_service->profile()->GetExtensionService();
+  sync_api::UserShare* user_share = profile_sync_service->GetUserShare();
   ExtensionModelAssociator* model_associator =
-      new ExtensionModelAssociator(traits, profile_sync_service);
+      new ExtensionModelAssociator(traits, extension_service, user_share);
   ExtensionChangeProcessor* change_processor =
       new ExtensionChangeProcessor(traits, error_handler);
   return SyncComponents(model_associator, change_processor);

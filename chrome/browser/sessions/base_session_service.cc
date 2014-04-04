@@ -11,7 +11,7 @@
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/sessions/session_backend.h"
 #include "chrome/browser/sessions/session_types.h"
-#include "chrome/browser/tab_contents/navigation_entry.h"
+#include "content/browser/tab_contents/navigation_entry.h"
 #include "webkit/glue/webkit_glue.h"
 
 // InternalGetCommandsRequest -------------------------------------------------
@@ -69,7 +69,7 @@ BaseSessionService::BaseSessionService(SessionType type,
       pending_reset_(false),
       commands_since_reset_(0) {
   if (profile) {
-    // We should never be created when off the record.
+    // We should never be created when incognito.
     DCHECK(!profile->IsOffTheRecord());
   }
   backend_ = new SessionBackend(type,

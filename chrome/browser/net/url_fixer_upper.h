@@ -8,6 +8,7 @@
 
 #include <string>
 
+#include "base/string16.h"
 #include "googleurl/src/gurl.h"
 
 namespace url_parse {
@@ -29,8 +30,7 @@ namespace URLFixerUpper {
   // Returns the canonicalized scheme, or the empty string when |text| is only
   // whitespace.
   std::string SegmentURL(const std::string& text, url_parse::Parsed* parts);
-  // Deprecated temporary compatibility function.
-  std::wstring SegmentURL(const std::wstring& text, url_parse::Parsed* parts);
+  string16 SegmentURL(const string16& text, url_parse::Parsed* parts);
 
   // Converts |text| to a fixed-up URL and returns it. Attempts to make
   // some "smart" adjustments to obviously-invalid input where possible.
@@ -59,9 +59,6 @@ namespace URLFixerUpper {
   // should use FixupURL() directly.  This function should only be used when
   // relative path handling is desired, as for command line processing.
   GURL FixupRelativeFile(const FilePath& base_dir, const FilePath& text);
-  // Deprecated temporary compatibility function.
-  GURL FixupRelativeFile(const std::wstring& base_dir,
-                         const std::wstring& text);
 
   // Offsets the beginning index of |part| by |offset|, which is allowed to be
   // negative.  In some cases, the desired component does not exist at the given

@@ -1,20 +1,22 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/chromeos/audio_mixer_alsa.h"
 
 #include <cmath>
+#include <unistd.h>
 
 #include <alsa/asoundlib.h>
 
 #include "base/logging.h"
+#include "base/message_loop.h"
 #include "base/task.h"
 #include "base/threading/thread_restrictions.h"
 #include "chrome/browser/browser_process.h"
-#include "chrome/browser/browser_thread.h"
 #include "chrome/browser/prefs/pref_service.h"
 #include "chrome/common/pref_names.h"
+#include "content/browser/browser_thread.h"
 
 namespace chromeos {
 
@@ -30,14 +32,22 @@ typedef long alsa_long_t;  // 'long' is required for ALSA API calls.
 
 namespace {
 
-const char* kMasterVolume = "Master";
-const char* kPCMVolume = "PCM";
+const char kMasterVolume[] = "Master";
+const char kPCMVolume[] = "PCM";
 const double kDefaultMinVolume = -90.0;
 const double kDefaultMaxVolume = 0.0;
 const double kPrefVolumeInvalid = -999.0;
 const int kPrefMuteOff = 0;
 const int kPrefMuteOn = 1;
 const int kPrefMuteInvalid = 2;
+
+// Maximum number of times that we'll attempt to initialize the mixer.
+// We'll fail until the ALSA modules have been loaded; see
+// http://crosbug.com/13162.
+const int kMaxInitAttempts = 20;
+
+// Number of seconds that we'll sleep between each initialization attempt.
+const int kInitRetrySleepSec = 1;
 
 }  // namespace
 
@@ -48,17 +58,27 @@ AudioMixerAlsa::AudioMixerAlsa()
       mixer_state_(UNINITIALIZED),
       alsa_mixer_(NULL),
       elem_master_(NULL),
-      elem_pcm_(NULL) {
+      elem_pcm_(NULL),
+      prefs_(NULL),
+      done_event_(true, false) {
 }
 
 AudioMixerAlsa::~AudioMixerAlsa() {
-  FreeAlsaMixer();
   if (thread_ != NULL) {
+    {
+      base::AutoLock lock(mixer_state_lock_);
+      mixer_state_ = SHUTTING_DOWN;
+      thread_->message_loop()->PostTask(FROM_HERE,
+          NewRunnableMethod(this, &AudioMixerAlsa::FreeAlsaMixer));
+    }
+    done_event_.Wait();
+
     DCHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
     // A ScopedAllowIO object is required to join the thread when calling Stop.
     // The worker thread should be idle at this time.
     // See http://crosbug.com/11110 for discussion.
     base::ThreadRestrictions::ScopedAllowIO allow_io_for_thread_join;
+    thread_->message_loop()->AssertIdle();
 
     thread_->Stop();
     thread_.reset();
@@ -74,10 +94,16 @@ void AudioMixerAlsa::Init(InitDoneCallback* callback) {
   }
   InitPrefs();
 
-  // Post the task of starting up, which may block on the order of ms,
-  // so best not to do it on the caller's thread.
-  thread_->message_loop()->PostTask(FROM_HERE,
-      NewRunnableMethod(this, &AudioMixerAlsa::DoInit, callback));
+  {
+    base::AutoLock lock(mixer_state_lock_);
+    if (mixer_state_ == SHUTTING_DOWN)
+      return;
+
+    // Post the task of starting up, which may block on the order of ms,
+    // so best not to do it on the caller's thread.
+    thread_->message_loop()->PostTask(FROM_HERE,
+        NewRunnableMethod(this, &AudioMixerAlsa::DoInit, callback));
+  }
 }
 
 bool AudioMixerAlsa::InitSync() {
@@ -118,7 +144,7 @@ void AudioMixerAlsa::SetVolumeDb(double vol_db) {
   }
 
   DoSetVolumeDb_Locked(vol_db);
-  volume_pref_.SetValue(vol_db);
+  prefs_->SetDouble(prefs::kAudioVolume, vol_db);
 }
 
 bool AudioMixerAlsa::IsMute() const {
@@ -158,9 +184,7 @@ void AudioMixerAlsa::SetMute(bool mute) {
   }
 
   SetElementMuted_Locked(elem_master_, mute);
-  if (elem_pcm_)
-    SetElementMuted_Locked(elem_pcm_, mute);
-  mute_pref_.SetValue(mute ? kPrefMuteOn : kPrefMuteOff);
+  prefs_->SetInteger(prefs::kAudioMute, mute ? kPrefMuteOn : kPrefMuteOff);
 }
 
 AudioMixer::State AudioMixerAlsa::GetState() const {
@@ -174,7 +198,7 @@ AudioMixer::State AudioMixerAlsa::GetState() const {
 // static
 void AudioMixerAlsa::RegisterPrefs(PrefService* local_state) {
   if (!local_state->FindPreference(prefs::kAudioVolume))
-    local_state->RegisterRealPref(prefs::kAudioVolume, kPrefVolumeInvalid);
+    local_state->RegisterDoublePref(prefs::kAudioVolume, kPrefVolumeInvalid);
   if (!local_state->FindPreference(prefs::kAudioMute))
     local_state->RegisterIntegerPref(prefs::kAudioMute, kPrefMuteInvalid);
 }
@@ -183,7 +207,21 @@ void AudioMixerAlsa::RegisterPrefs(PrefService* local_state) {
 // Private functions follow
 
 void AudioMixerAlsa::DoInit(InitDoneCallback* callback) {
-  bool success = InitializeAlsaMixer();
+  bool success = false;
+  for (int num_attempts = 0; num_attempts < kMaxInitAttempts; ++num_attempts) {
+    success = InitializeAlsaMixer();
+    if (success) {
+      break;
+    } else {
+      // If the destructor has reset the state, give up.
+      {
+        base::AutoLock lock(mixer_state_lock_);
+        if (mixer_state_ != INITIALIZING)
+          break;
+      }
+      sleep(kInitRetrySleepSec);
+    }
+  }
 
   if (success) {
     BrowserThread::PostTask(
@@ -217,13 +255,13 @@ bool AudioMixerAlsa::InitThread() {
 }
 
 void AudioMixerAlsa::InitPrefs() {
-  DCHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
-  PrefService* prefs = g_browser_process->local_state();
-  volume_pref_.Init(prefs::kAudioVolume, prefs, NULL);
-  mute_pref_.Init(prefs::kAudioMute, prefs, NULL);
+  prefs_ = g_browser_process->local_state();
 }
 
 bool AudioMixerAlsa::InitializeAlsaMixer() {
+  // We can block; make sure that we're not on the UI thread.
+  DCHECK(!BrowserThread::CurrentlyOn(BrowserThread::UI));
+
   base::AutoLock lock(mixer_state_lock_);
   if (mixer_state_ != INITIALIZING)
     return false;
@@ -244,6 +282,19 @@ bool AudioMixerAlsa::InitializeAlsaMixer() {
     return false;
   }
 
+  // Verify PCM can be opened, which also instantiates the PCM mixer element
+  // which is needed for finer volume control and for muting by setting to zero.
+  // If it fails, we can still try to use the mixer as best we can.
+  snd_pcm_t* pcm_out_handle;
+  if ((err = snd_pcm_open(&pcm_out_handle,
+                          card,
+                          SND_PCM_STREAM_PLAYBACK,
+                          0)) >= 0) {
+    snd_pcm_close(pcm_out_handle);
+  } else {
+    LOG(WARNING) << "ALSA PCM open: " << snd_strerror(err);
+  }
+
   if ((err = snd_mixer_selem_register(handle, NULL, NULL)) < 0) {
     LOG(ERROR) << "ALSA mixer register error: " << snd_strerror(err);
     snd_mixer_close(handle);
@@ -261,7 +312,8 @@ bool AudioMixerAlsa::InitializeAlsaMixer() {
 
   elem_master_ = FindElementWithName_Locked(handle, kMasterVolume);
   if (elem_master_) {
-    alsa_long_t long_lo, long_hi;
+    alsa_long_t long_lo = static_cast<alsa_long_t>(kDefaultMinVolume * 100);
+    alsa_long_t long_hi = static_cast<alsa_long_t>(kDefaultMaxVolume * 100);
     err = snd_mixer_selem_get_playback_dB_range(
         elem_master_, &long_lo, &long_hi);
     if (err != 0) {
@@ -280,7 +332,8 @@ bool AudioMixerAlsa::InitializeAlsaMixer() {
 
   elem_pcm_ = FindElementWithName_Locked(handle, kPCMVolume);
   if (elem_pcm_) {
-    alsa_long_t long_lo, long_hi;
+    alsa_long_t long_lo = static_cast<alsa_long_t>(kDefaultMinVolume * 100);
+    alsa_long_t long_hi = static_cast<alsa_long_t>(kDefaultMaxVolume * 100);
     err = snd_mixer_selem_get_playback_dB_range(elem_pcm_, &long_lo, &long_hi);
     if (err != 0) {
       LOG(WARNING) << "snd_mixer_selem_get_playback_dB_range() failed for PCM: "
@@ -301,12 +354,11 @@ bool AudioMixerAlsa::InitializeAlsaMixer() {
 }
 
 void AudioMixerAlsa::FreeAlsaMixer() {
-  base::AutoLock lock(mixer_state_lock_);
-  mixer_state_ = SHUTTING_DOWN;
   if (alsa_mixer_) {
     snd_mixer_close(alsa_mixer_);
     alsa_mixer_ = NULL;
   }
+  done_event_.Signal();
 }
 
 void AudioMixerAlsa::DoSetVolumeMute(double pref_volume, int pref_mute) {
@@ -333,16 +385,20 @@ void AudioMixerAlsa::DoSetVolumeMute(double pref_volume, int pref_mute) {
   }
 
   SetElementMuted_Locked(elem_master_, mute);
-  if (elem_pcm_)
-    SetElementMuted_Locked(elem_pcm_, mute);
 }
 
 void AudioMixerAlsa::RestoreVolumeMuteOnUIThread() {
   DCHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
   // This happens during init, so set the volume off the UI thread.
-  thread_->message_loop()->PostTask(FROM_HERE,
-      NewRunnableMethod(this, &AudioMixerAlsa::DoSetVolumeMute,
-                        volume_pref_.GetValue(), mute_pref_.GetValue()));
+  int mute = prefs_->GetInteger(prefs::kAudioMute);
+  double vol = prefs_->GetDouble(prefs::kAudioVolume);
+  {
+    base::AutoLock lock(mixer_state_lock_);
+    if (mixer_state_ == SHUTTING_DOWN)
+      return;
+    thread_->message_loop()->PostTask(FROM_HERE,
+        NewRunnableMethod(this, &AudioMixerAlsa::DoSetVolumeMute, vol, mute));
+  }
 }
 
 double AudioMixerAlsa::DoGetVolumeDb_Locked() const {
@@ -458,7 +514,7 @@ bool AudioMixerAlsa::SetElementVolume_Locked(snd_mixer_elem_t* elem,
           << " dB";
 
   if (actual_vol) {
-    alsa_long_t volume;
+    alsa_long_t volume = vol_lo;
     alsa_result = snd_mixer_selem_get_playback_volume(
         elem, static_cast<snd_mixer_selem_channel_id_t>(0), &volume);
     if (alsa_result != 0) {
@@ -475,7 +531,7 @@ bool AudioMixerAlsa::SetElementVolume_Locked(snd_mixer_elem_t* elem,
 }
 
 bool AudioMixerAlsa::GetElementMuted_Locked(snd_mixer_elem_t* elem) const {
-  int enabled;
+  int enabled = 0;
   int alsa_result = snd_mixer_selem_get_playback_switch(
       elem, static_cast<snd_mixer_selem_channel_id_t>(0), &enabled);
   if (alsa_result != 0) {
@@ -499,4 +555,3 @@ void AudioMixerAlsa::SetElementMuted_Locked(snd_mixer_elem_t* elem, bool mute) {
 }
 
 }  // namespace chromeos
-

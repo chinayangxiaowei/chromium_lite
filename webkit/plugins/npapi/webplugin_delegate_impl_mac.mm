@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -12,9 +12,9 @@
 #include <set>
 
 #include "base/file_util.h"
+#include "base/memory/scoped_ptr.h"
 #include "base/message_loop.h"
 #include "base/metrics/stats_counters.h"
-#include "base/scoped_ptr.h"
 #include "base/string_util.h"
 #include "base/utf_string_conversions.h"
 #include "base/sys_info.h"
@@ -383,7 +383,7 @@ bool WebPluginDelegateImpl::PlatformInitialize() {
         // If surface initialization fails for some reason, just continue
         // without any drawing; returning false would be a more confusing user
         // experience (since it triggers a missing plugin placeholder).
-        if (surface_->context()) {
+        if (surface_ && surface_->context()) {
           renderer_ = [[CARenderer rendererWithCGLContext:surface_->context()
                                                   options:NULL] retain];
           [renderer_ setLayer:layer_];
@@ -467,10 +467,6 @@ void WebPluginDelegateImpl::Paint(CGContextRef context, const gfx::Rect& rect) {
     qd_manager_->UpdateContext();
   }
 #endif
-}
-
-void WebPluginDelegateImpl::Print(CGContextRef context) {
-  NOTIMPLEMENTED();
 }
 
 bool WebPluginDelegateImpl::PlatformHandleInputEvent(
@@ -934,13 +930,15 @@ void WebPluginDelegateImpl::ImeCompositionCompleted(const string16& text) {
   }
 }
 
+#ifndef NP_NO_CARBON
 void WebPluginDelegateImpl::SetThemeCursor(ThemeCursor cursor) {
   current_windowless_cursor_.InitFromThemeCursor(cursor);
 }
 
-void WebPluginDelegateImpl::SetCursor(const Cursor* cursor) {
+void WebPluginDelegateImpl::SetCarbonCursor(const Cursor* cursor) {
   current_windowless_cursor_.InitFromCursor(cursor);
 }
+#endif
 
 void WebPluginDelegateImpl::SetNSCursor(NSCursor* cursor) {
   current_windowless_cursor_.InitFromNSCursor(cursor);

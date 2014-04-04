@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,25 +10,19 @@
 #include "base/task.h"
 #include "base/utf_string_conversions.h"
 #include "build/build_config.h"
-#include "chrome/browser/browser_thread.h"
 #include "chrome/browser/download/download_manager.h"
 #include "chrome/browser/download/download_util.h"
 #include "chrome/browser/history/download_create_info.h"
 #include "chrome/browser/net/chrome_url_request_context.h"
 #include "chrome/browser/platform_util.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/renderer_host/resource_dispatcher_host.h"
 #include "chrome/browser/safe_browsing/safe_browsing_service.h"
 #include "chrome/browser/tab_contents/tab_util.h"
-#include "chrome/browser/tab_contents/tab_contents.h"
+#include "content/browser/browser_thread.h"
+#include "content/browser/renderer_host/resource_dispatcher_host.h"
+#include "content/browser/tab_contents/tab_contents.h"
 #include "googleurl/src/gurl.h"
 #include "net/base/io_buffer.h"
-
-#if defined(OS_WIN)
-#include "chrome/common/win_safe_util.h"
-#elif defined(OS_MACOSX)
-#include "chrome/browser/ui/cocoa/file_metadata.h"
-#endif
 
 namespace {
 
@@ -210,34 +204,39 @@ void DownloadFileManager::UpdateDownload(int id, DownloadBuffer* buffer) {
   }
 }
 
-void DownloadFileManager::OnResponseCompleted(int id, DownloadBuffer* buffer) {
-  VLOG(20) << __FUNCTION__ << "()" << " id = " << id;
+void DownloadFileManager::OnResponseCompleted(
+    int id,
+    DownloadBuffer* buffer,
+    int os_error,
+    const std::string& security_info) {
+  VLOG(20) << __FUNCTION__ << "()" << " id = " << id
+           << " os_error = " << os_error
+           << " security_info = \"" << security_info << "\"";
   DCHECK(BrowserThread::CurrentlyOn(BrowserThread::FILE));
   delete buffer;
-  DownloadFileMap::iterator it = downloads_.find(id);
-  if (it != downloads_.end()) {
-    DownloadFile* download = it->second;
-    download->Finish();
+  DownloadFile* download = GetDownloadFile(id);
+  if (!download)
+    return;
 
-    DownloadManager* download_manager = download->GetDownloadManager();
-    if (download_manager) {
-      BrowserThread::PostTask(
-          BrowserThread::UI, FROM_HERE,
-          NewRunnableMethod(
-              download_manager, &DownloadManager::OnAllDataSaved,
-              id, download->bytes_so_far()));
-    }
+  download->Finish();
 
-    // We need to keep the download around until the UI thread has finalized
-    // the name.
-    if (download->path_renamed()) {
-      downloads_.erase(it);
-      delete download;
-    }
+  DownloadManager* download_manager = download->GetDownloadManager();
+  if (!download_manager) {
+    CancelDownload(id);
+    return;
   }
 
-  if (downloads_.empty())
-    StopUpdateTimer();
+  std::string hash;
+  if (!download->GetSha256Hash(&hash))
+    hash.clear();
+
+  BrowserThread::PostTask(
+      BrowserThread::UI, FROM_HERE,
+      NewRunnableMethod(
+        download_manager, &DownloadManager::OnResponseCompleted,
+        id, download->bytes_so_far(), os_error, hash));
+  // We need to keep the download around until the UI thread has finalized
+  // the name.
 }
 
 // This method will be sent via a user action, or shutdown on the UI thread, and
@@ -247,20 +246,32 @@ void DownloadFileManager::CancelDownload(int id) {
   VLOG(20) << __FUNCTION__ << "()" << " id = " << id;
   DCHECK(BrowserThread::CurrentlyOn(BrowserThread::FILE));
   DownloadFileMap::iterator it = downloads_.find(id);
-  if (it != downloads_.end()) {
-    DownloadFile* download = it->second;
-    VLOG(20) << __FUNCTION__ << "()"
-             << " download = " << download->DebugString();
-    download->Cancel();
+  if (it == downloads_.end())
+    return;
 
-    if (download->path_renamed()) {
-      downloads_.erase(it);
-      delete download;
-    }
-  }
+  DownloadFile* download = it->second;
+  VLOG(20) << __FUNCTION__ << "()"
+           << " download = " << download->DebugString();
+  download->Cancel();
 
-  if (downloads_.empty())
-    StopUpdateTimer();
+  EraseDownload(id);
+}
+
+void DownloadFileManager::CompleteDownload(int id) {
+  DCHECK(BrowserThread::CurrentlyOn(BrowserThread::FILE));
+
+  if (!ContainsKey(downloads_, id))
+    return;
+
+  DownloadFile* download_file = downloads_[id];
+
+  VLOG(20) << " " << __FUNCTION__ << "()"
+           << " id = " << id
+           << " download_file = " << download_file->DebugString();
+
+  download_file->Detach();
+
+  EraseDownload(id);
 }
 
 void DownloadFileManager::OnDownloadManagerShutdown(DownloadManager* manager) {
@@ -289,19 +300,23 @@ void DownloadFileManager::OnDownloadManagerShutdown(DownloadManager* manager) {
 
 // The DownloadManager in the UI thread has provided an intermediate .crdownload
 // name for the download specified by 'id'. Rename the in progress download.
-void DownloadFileManager::OnIntermediateDownloadName(
-    int id, const FilePath& full_path, DownloadManager* download_manager)
-{
+//
+// There are 2 possible rename cases where this method can be called:
+// 1. tmp -> foo.crdownload (not final, safe)
+// 2. tmp-> Unconfirmed.xxx.crdownload (not final, dangerous)
+void DownloadFileManager::RenameInProgressDownloadFile(
+    int id, const FilePath& full_path) {
   VLOG(20) << __FUNCTION__ << "()" << " id = " << id
            << " full_path = \"" << full_path.value() << "\"";
   DCHECK(BrowserThread::CurrentlyOn(BrowserThread::FILE));
-  DownloadFileMap::iterator it = downloads_.find(id);
-  if (it == downloads_.end())
+
+  DownloadFile* download = GetDownloadFile(id);
+  if (!download)
     return;
 
-  DownloadFile* download = it->second;
   VLOG(20) << __FUNCTION__ << "()" << " download = " << download->DebugString();
-  if (!download->Rename(full_path, false /* is_final_rename */)) {
+
+  if (!download->Rename(full_path)) {
     // Error. Between the time the UI thread generated 'full_path' to the time
     // this code runs, something happened that prevents us from renaming.
     CancelDownloadOnRename(id);
@@ -309,60 +324,67 @@ void DownloadFileManager::OnIntermediateDownloadName(
 }
 
 // The DownloadManager in the UI thread has provided a final name for the
-// download specified by 'id'. Rename the in progress download, and remove it
-// from our table if it has been completed or cancelled already.
-// |need_delete_crdownload| indicates if we explicitly delete an intermediate
-// .crdownload file or not.
+// download specified by 'id'. Rename the download that's in the process
+// of completing.
 //
-// There are 3 possible rename cases where this method can be called:
-// 1. tmp -> foo            (need_delete_crdownload=T)
-// 2. foo.crdownload -> foo (need_delete_crdownload=F)
-// 3. tmp-> Unconfirmed.xxx.crdownload (need_delete_crdownload=F)
-void DownloadFileManager::OnFinalDownloadName(
-    int id, const FilePath& full_path, bool need_delete_crdownload,
-    DownloadManager* download_manager) {
+// There are 2 possible rename cases where this method can be called:
+// 1. foo.crdownload -> foo (final, safe)
+// 2. Unconfirmed.xxx.crdownload -> xxx (final, validated)
+void DownloadFileManager::RenameCompletingDownloadFile(
+    int id, const FilePath& full_path, bool overwrite_existing_file) {
   VLOG(20) << __FUNCTION__ << "()" << " id = " << id
-           << " full_path = \"" << full_path.value() << "\""
-           << " need_delete_crdownload = " << need_delete_crdownload;
+           << " overwrite_existing_file = " << overwrite_existing_file
+           << " full_path = \"" << full_path.value() << "\"";
   DCHECK(BrowserThread::CurrentlyOn(BrowserThread::FILE));
 
   DownloadFile* download = GetDownloadFile(id);
   if (!download)
     return;
+
+  DCHECK(download->GetDownloadManager());
+  DownloadManager* download_manager = download->GetDownloadManager();
+
   VLOG(20) << __FUNCTION__ << "()" << " download = " << download->DebugString();
-  if (download->Rename(full_path, true /* is_final_rename */)) {
-#if defined(OS_MACOSX)
-    // Done here because we only want to do this once; see
-    // http://crbug.com/13120 for details.
-    download->AnnotateWithSourceInformation();
-#endif
-    BrowserThread::PostTask(
-        BrowserThread::UI, FROM_HERE,
-        NewRunnableMethod(
-            download_manager, &DownloadManager::DownloadRenamedToFinalName, id,
-            full_path));
-  } else {
+
+  int uniquifier = 0;
+  FilePath new_path = full_path;
+  if (!overwrite_existing_file) {
+    // Make our name unique at this point, as if a dangerous file is
+    // downloading and a 2nd download is started for a file with the same
+    // name, they would have the same path.  This is because we uniquify
+    // the name on download start, and at that time the first file does
+    // not exists yet, so the second file gets the same name.
+    // This should not happen in the SAFE case, and we check for that in the UI
+    // thread.
+    uniquifier = download_util::GetUniquePathNumber(new_path);
+    if (uniquifier > 0) {
+      download_util::AppendNumberToPath(&new_path, uniquifier);
+    }
+  }
+
+  // Rename the file, overwriting if necessary.
+  if (!download->Rename(new_path)) {
     // Error. Between the time the UI thread generated 'full_path' to the time
     // this code runs, something happened that prevents us from renaming.
     CancelDownloadOnRename(id);
+    return;
   }
 
-  if (need_delete_crdownload)
-    download->DeleteCrDownload();
+#if defined(OS_MACOSX)
+  // Done here because we only want to do this once; see
+  // http://crbug.com/13120 for details.
+  download->AnnotateWithSourceInformation();
+#endif
 
-  // If the download has completed before we got this final name, we remove it
-  // from our in progress map.
-  if (!download->in_progress()) {
-    downloads_.erase(id);
-    delete download;
-  }
-
-  if (downloads_.empty())
-    StopUpdateTimer();
+  BrowserThread::PostTask(
+      BrowserThread::UI, FROM_HERE,
+      NewRunnableMethod(
+          download_manager, &DownloadManager::OnDownloadRenamedToFinalName, id,
+          new_path, uniquifier));
 }
 
-// Called only from OnFinalDownloadName or OnIntermediateDownloadName
-// on the FILE thread.
+// Called only from RenameInProgressDownloadFile and
+// RenameCompletingDownloadFile on the FILE thread.
 void DownloadFileManager::CancelDownloadOnRename(int id) {
   DCHECK(BrowserThread::CurrentlyOn(BrowserThread::FILE));
 
@@ -372,6 +394,9 @@ void DownloadFileManager::CancelDownloadOnRename(int id) {
 
   DownloadManager* download_manager = download->GetDownloadManager();
   if (!download_manager) {
+    // Without a download manager, we can't cancel the request normally, so we
+    // need to do it here.  The normal path will also update the download
+    // history before cancelling the request.
     download->CancelDownloadRequest(resource_dispatcher_host_);
     return;
   }
@@ -380,4 +405,24 @@ void DownloadFileManager::CancelDownloadOnRename(int id) {
       BrowserThread::UI, FROM_HERE,
       NewRunnableMethod(download_manager,
                         &DownloadManager::DownloadCancelled, id));
+}
+
+void DownloadFileManager::EraseDownload(int id) {
+  DCHECK(BrowserThread::CurrentlyOn(BrowserThread::FILE));
+
+  if (!ContainsKey(downloads_, id))
+    return;
+
+  DownloadFile* download_file = downloads_[id];
+
+  VLOG(20) << " " << __FUNCTION__ << "()"
+           << " id = " << id
+           << " download_file = " << download_file->DebugString();
+
+  downloads_.erase(id);
+
+  delete download_file;
+
+  if (downloads_.empty())
+    StopUpdateTimer();
 }

@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,21 +9,28 @@
 #include <string>
 
 #include "base/command_line.h"
-#include "base/scoped_ptr.h"
-#include "chrome/common/main_function_params.h"
-#include "chrome/common/native_web_keyboard_event.h"
-#include "chrome/common/sandbox_init_wrapper.h"
+#include "base/memory/scoped_ptr.h"
+#include "base/message_loop.h"
+#include "chrome/renderer/autofill/autofill_agent.h"
 #include "chrome/renderer/mock_keyboard.h"
 #include "chrome/renderer/mock_render_thread.h"
-#include "chrome/renderer/render_view.h"
-#include "chrome/renderer/renderer_main_platform_delegate.h"
-#include "chrome/renderer/renderer_webkitclient_impl.h"
+#include "content/common/main_function_params.h"
+#include "content/common/native_web_keyboard_event.h"
+#include "content/common/sandbox_init_wrapper.h"
+#include "content/renderer/render_view.h"
+#include "content/renderer/renderer_webkitclient_impl.h"
+#include "chrome/renderer/chrome_content_renderer_client.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/WebKit/Source/WebKit/chromium/public/WebFrame.h"
 
-class AutoFillHelper;
+namespace autofill {
+class AutofillAgent;
+class PasswordAutofillManager;
+}
+
+class ExtensionDispatcher;
 class MockRenderProcess;
-class PasswordAutocompleteManager;
+class RendererMainPlatformDelegate;
 
 class RenderViewTest : public testing::Test {
  public:
@@ -72,8 +79,8 @@ class RenderViewTest : public testing::Test {
   // according to the specified settings defined in the mock render thread.
   // Verify the page count is correct.
   void VerifyPageCount(int count);
-  // Verifies the rendered "printed page".
-  void VerifyPagesPrinted();
+  // Verifies whether the pages printed or not.
+  void VerifyPagesPrinted(bool printed);
 
   // Returns the bounds (coordinates and size) of the element with id
   // |element_id|.  Returns an empty rect if such an element was not found.
@@ -90,6 +97,8 @@ class RenderViewTest : public testing::Test {
   virtual void TearDown();
 
   MessageLoop msg_loop_;
+  chrome::ChromeContentRendererClient chrome_content_renderer_client_;
+  ExtensionDispatcher* extension_dispatcher_;
   MockRenderThread render_thread_;
   scoped_ptr<MockRenderProcess> mock_process_;
   scoped_refptr<RenderView> view_;
@@ -102,8 +111,8 @@ class RenderViewTest : public testing::Test {
   scoped_ptr<CommandLine> command_line_;
   scoped_ptr<SandboxInitWrapper> sandbox_init_wrapper_;
 
-  PasswordAutocompleteManager* password_autocomplete_;
-  AutoFillHelper* autofill_helper_;
+  autofill::PasswordAutofillManager* password_autofill_;
+  autofill::AutofillAgent* autofill_agent_;
 };
 
 #endif  // CHROME_TEST_RENDER_VIEW_TEST_H_

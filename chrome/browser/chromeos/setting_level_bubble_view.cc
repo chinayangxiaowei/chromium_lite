@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,8 +7,8 @@
 #include <string>
 
 #include "base/logging.h"
-#include "gfx/canvas.h"
 #include "third_party/skia/include/core/SkBitmap.h"
+#include "ui/gfx/canvas.h"
 #include "views/controls/progress_bar.h"
 
 using views::Background;
@@ -39,6 +39,8 @@ void SettingLevelBubbleView::Init(SkBitmap* icon, int level_percent) {
   progress_bar_ = new views::ProgressBar();
   AddChildView(progress_bar_);
   Update(level_percent);
+  progress_bar_->EnableCanvasFlippingForRTLUI(true);
+  EnableCanvasFlippingForRTLUI(true);
 }
 
 void SettingLevelBubbleView::SetIcon(SkBitmap* icon) {
@@ -52,8 +54,8 @@ void SettingLevelBubbleView::Update(int level_percent) {
   progress_bar_->SetProgress(level_percent);
 }
 
-void SettingLevelBubbleView::Paint(gfx::Canvas* canvas) {
-  views::View::Paint(canvas);
+void SettingLevelBubbleView::OnPaint(gfx::Canvas* canvas) {
+  views::View::OnPaint(canvas);
   canvas->DrawBitmapInt(*icon_, kPadding, (height() - icon_->height()) / 2);
 }
 

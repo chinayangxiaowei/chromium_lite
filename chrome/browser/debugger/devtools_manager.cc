@@ -1,4 +1,4 @@
-// Copyright (c) 2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,18 +9,20 @@
 #include "base/auto_reset.h"
 #include "base/message_loop.h"
 #include "chrome/browser/browser_process.h"
-#include "chrome/browser/browsing_instance.h"
-#include "chrome/browser/child_process_security_policy.h"
 #include "chrome/browser/debugger/devtools_client_host.h"
 #include "chrome/browser/debugger/devtools_netlog_observer.h"
 #include "chrome/browser/debugger/devtools_window.h"
 #include "chrome/browser/io_thread.h"
 #include "chrome/browser/prefs/pref_service.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/renderer_host/render_view_host.h"
-#include "chrome/browser/renderer_host/site_instance.h"
-#include "chrome/common/notification_service.h"
+#include "chrome/browser/ui/tab_contents/tab_contents_wrapper.h"
+#include "chrome/common/devtools_messages.h"
 #include "chrome/common/pref_names.h"
+#include "content/browser/browsing_instance.h"
+#include "content/browser/child_process_security_policy.h"
+#include "content/browser/renderer_host/render_view_host.h"
+#include "content/browser/site_instance.h"
+#include "content/common/notification_service.h"
 #include "googleurl/src/gurl.h"
 
 // static
@@ -41,6 +43,8 @@ DevToolsManager::DevToolsManager()
     : inspected_rvh_for_reopen_(NULL),
       in_initial_show_(false),
       last_orphan_cookie_(0) {
+  registrar_.Add(this, NotificationType::RENDER_VIEW_HOST_DELETED,
+                 NotificationService::AllSources());
 }
 
 DevToolsManager::~DevToolsManager() {
@@ -191,6 +195,13 @@ void DevToolsManager::ClientHostClosing(DevToolsClientHost* host) {
   UnbindClientHost(inspected_rvh, host);
 }
 
+void DevToolsManager::Observe(NotificationType type,
+                              const NotificationSource& source,
+                              const NotificationDetails& details) {
+  DCHECK(type == NotificationType::RENDER_VIEW_HOST_DELETED);
+  UnregisterDevToolsClientHostFor(Source<RenderViewHost>(source).ptr());
+}
+
 RenderViewHost* DevToolsManager::GetInspectedRenderViewHost(
     DevToolsClientHost* client_host) {
   ClientHostToInspectedRvhMap::iterator it =
@@ -221,6 +232,10 @@ void DevToolsManager::OnNavigatingToPendingEntry(RenderViewHost* rvh,
   if (cookie != -1) {
     // Navigating to URL in the inspected window.
     AttachClientHost(cookie, dest_rvh);
+
+    DevToolsClientHost* client_host = GetDevToolsClientHostFor(dest_rvh);
+    client_host->FrameNavigating(gurl.spec());
+
     return;
   }
 
@@ -239,6 +254,20 @@ void DevToolsManager::OnNavigatingToPendingEntry(RenderViewHost* rvh,
       return;
     }
   }
+}
+
+void DevToolsManager::TabReplaced(TabContentsWrapper* old_tab,
+                                  TabContentsWrapper* new_tab) {
+  RenderViewHost* old_rvh = old_tab->tab_contents()->render_view_host();
+  DevToolsClientHost* client_host = GetDevToolsClientHostFor(old_rvh);
+  if (!client_host)
+    return;  // Didn't know about old_tab.
+  int cookie = DetachClientHost(old_rvh);
+  if (cookie == -1)
+    return;  // Didn't know about old_tab.
+
+  client_host->TabReplaced(new_tab);
+  AttachClientHost(cookie, new_tab->tab_contents()->render_view_host());
 }
 
 int DevToolsManager::DetachClientHost(RenderViewHost* from_rvh) {
@@ -338,6 +367,13 @@ void DevToolsManager::ToggleDevToolsWindow(
     DevToolsToggleAction action) {
   bool do_open = force_open;
   DevToolsClientHost* host = GetDevToolsClientHostFor(inspected_rvh);
+
+  if (host != NULL && host->AsDevToolsWindow() == NULL) {
+    // Break remote debugging / extension debugging session.
+    UnregisterDevToolsClientHostFor(inspected_rvh);
+    host = NULL;
+  }
+
   if (!host) {
     bool docked = inspected_rvh->process()->profile()->GetPrefs()->
         GetBoolean(prefs::kDevToolsOpenDocked);
@@ -348,10 +384,8 @@ void DevToolsManager::ToggleDevToolsWindow(
     RegisterDevToolsClientHostFor(inspected_rvh, host);
     do_open = true;
   }
-  DevToolsWindow* window = host->AsDevToolsWindow();
-  if (!window)
-    return;
 
+  DevToolsWindow* window = host->AsDevToolsWindow();
   // If window is docked and visible, we hide it on toggle. If window is
   // undocked, we show (activate) it.
   if (!window->is_docked() || do_open) {

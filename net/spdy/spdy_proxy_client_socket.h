@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,7 +10,7 @@
 #include <list>
 
 #include "base/basictypes.h"
-#include "base/ref_counted.h"
+#include "base/memory/ref_counted.h"
 #include "net/base/completion_callback.h"
 #include "net/base/host_port_pair.h"
 #include "net/base/net_log.h"
@@ -84,17 +84,19 @@ class SpdyProxyClientSocket : public ProxyClientSocket,
   virtual bool SetReceiveBufferSize(int32 size);
   virtual bool SetSendBufferSize(int32 size);
   virtual int GetPeerAddress(AddressList* address) const;
+  virtual int GetLocalAddress(IPEndPoint* address) const;
 
   // SpdyStream::Delegate methods:
   virtual bool OnSendHeadersComplete(int status);
   virtual int OnSendBody();
-  virtual bool OnSendBodyComplete(int status);
+  virtual int OnSendBodyComplete(int status, bool* eof);
   virtual int OnResponseReceived(const spdy::SpdyHeaderBlock& response,
                                  base::Time response_time,
                                  int status);
   virtual void OnDataReceived(const char* data, int length);
   virtual void OnDataSent(int length);
   virtual void OnClose(int status);
+  virtual void set_chunk_callback(ChunkCallback* /*callback*/);
 
  private:
   enum State {

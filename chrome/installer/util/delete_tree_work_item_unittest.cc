@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,9 +9,10 @@
 #include "base/base_paths.h"
 #include "base/file_util.h"
 #include "base/logging.h"
+#include "base/memory/scoped_ptr.h"
+#include "base/memory/scoped_temp_dir.h"
 #include "base/path_service.h"
 #include "base/process_util.h"
-#include "base/scoped_ptr.h"
 #include "base/string_util.h"
 #include "chrome/installer/util/delete_tree_work_item.h"
 #include "chrome/installer/util/work_item.h"
@@ -21,25 +22,11 @@ namespace {
   class DeleteTreeWorkItemTest : public testing::Test {
    protected:
     virtual void SetUp() {
-      // Name a subdirectory of the user temp directory.
-      ASSERT_TRUE(PathService::Get(base::DIR_TEMP, &test_dir_));
-      test_dir_ = test_dir_.AppendASCII("DeleteTreeWorkItemTest");
-
-      // Create a fresh, empty copy of this test directory.
-      file_util::Delete(test_dir_, true);
-      file_util::CreateDirectoryW(test_dir_);
-
-      ASSERT_TRUE(file_util::PathExists(test_dir_));
+      ASSERT_TRUE(temp_dir_.CreateUniqueTempDir());
     }
 
-    virtual void TearDown() {
-      // Clean up test directory
-      ASSERT_TRUE(file_util::Delete(test_dir_, true));
-      ASSERT_FALSE(file_util::PathExists(test_dir_));
-    }
-
-    // the path to temporary directory used to contain the test operations
-    FilePath test_dir_;
+    // The temporary directory used to contain the test operations.
+    ScopedTempDir temp_dir_;
   };
 
   // Simple function to dump some text into a new file.
@@ -58,8 +45,8 @@ namespace {
 
 // Delete a tree without key path. Everything should be deleted.
 TEST_F(DeleteTreeWorkItemTest, DeleteTreeNoKeyPath) {
-  // Create tree to be deleted
-  FilePath dir_name_delete(test_dir_);
+  // Create tree to be deleted.
+  FilePath dir_name_delete(temp_dir_.path());
   dir_name_delete = dir_name_delete.AppendASCII("to_be_delete");
   file_util::CreateDirectory(dir_name_delete);
   ASSERT_TRUE(file_util::PathExists(dir_name_delete));
@@ -84,10 +71,14 @@ TEST_F(DeleteTreeWorkItemTest, DeleteTreeNoKeyPath) {
   CreateTextFile(file_name_delete_2.value(), text_content_1);
   ASSERT_TRUE(file_util::PathExists(file_name_delete_2));
 
-  // test Do()
+  // Test Do().
+  ScopedTempDir temp_dir;
+  ASSERT_TRUE(temp_dir.CreateUniqueTempDir());
+
   std::vector<FilePath> key_files;
   scoped_ptr<DeleteTreeWorkItem> work_item(
-      WorkItem::CreateDeleteTreeWorkItem(dir_name_delete, key_files));
+      WorkItem::CreateDeleteTreeWorkItem(dir_name_delete, temp_dir.path(),
+                                         key_files));
   EXPECT_TRUE(work_item->Do());
 
   // everything should be gone
@@ -107,7 +98,7 @@ TEST_F(DeleteTreeWorkItemTest, DeleteTreeNoKeyPath) {
 // Rollback should bring back everything
 TEST_F(DeleteTreeWorkItemTest, DeleteTree) {
   // Create tree to be deleted
-  FilePath dir_name_delete(test_dir_);
+  FilePath dir_name_delete(temp_dir_.path());
   dir_name_delete = dir_name_delete.AppendASCII("to_be_delete");
   file_util::CreateDirectory(dir_name_delete);
   ASSERT_TRUE(file_util::PathExists(dir_name_delete));
@@ -133,9 +124,13 @@ TEST_F(DeleteTreeWorkItemTest, DeleteTree) {
   ASSERT_TRUE(file_util::PathExists(file_name_delete_2));
 
   // test Do()
+  ScopedTempDir temp_dir;
+  ASSERT_TRUE(temp_dir.CreateUniqueTempDir());
+
   std::vector<FilePath> key_files(1, file_name_delete_1);
   scoped_ptr<DeleteTreeWorkItem> work_item(
-      WorkItem::CreateDeleteTreeWorkItem(dir_name_delete, key_files));
+      WorkItem::CreateDeleteTreeWorkItem(dir_name_delete, temp_dir.path(),
+                                         key_files));
   EXPECT_TRUE(work_item->Do());
 
   // everything should be gone
@@ -153,7 +148,7 @@ TEST_F(DeleteTreeWorkItemTest, DeleteTree) {
 // Delete a tree with key_path in use. Everything should still be there.
 TEST_F(DeleteTreeWorkItemTest, DeleteTreeInUse) {
   // Create tree to be deleted
-  FilePath dir_name_delete(test_dir_);
+  FilePath dir_name_delete(temp_dir_.path());
   dir_name_delete = dir_name_delete.AppendASCII("to_be_delete");
   file_util::CreateDirectory(dir_name_delete);
   ASSERT_TRUE(file_util::PathExists(dir_name_delete));
@@ -202,9 +197,13 @@ TEST_F(DeleteTreeWorkItemTest, DeleteTreeInUse) {
 
   // test Do().
   {
+    ScopedTempDir temp_dir;
+    ASSERT_TRUE(temp_dir.CreateUniqueTempDir());
+
     std::vector<FilePath> key_paths(1, key_path);
     scoped_ptr<DeleteTreeWorkItem> work_item(
-        WorkItem::CreateDeleteTreeWorkItem(dir_name_delete, key_paths));
+        WorkItem::CreateDeleteTreeWorkItem(dir_name_delete, temp_dir.path(),
+                                           key_paths));
 
     // delete should fail as file in use.
     EXPECT_FALSE(work_item->Do());

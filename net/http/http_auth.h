@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,7 +9,7 @@
 #include <set>
 #include <string>
 
-#include "base/scoped_ptr.h"
+#include "base/memory/scoped_ptr.h"
 #include "base/string16.h"
 #include "net/http/http_util.h"
 
@@ -52,6 +52,13 @@ class HttpAuth {
     AUTHORIZATION_RESULT_INVALID,  // The authentication challenge headers are
                                    // poorly formed (the authorization attempt
                                    // itself may have been fine).
+
+    AUTHORIZATION_RESULT_DIFFERENT_REALM,  // The authorization
+                                           // attempt was rejected,
+                                           // but the realm associated
+                                           // with the new challenge
+                                           // is different from the
+                                           // previous attempt.
   };
 
   // Describes where the identity used for authentication came from.

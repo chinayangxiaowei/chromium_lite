@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,8 +8,8 @@
 
 #include <vector>
 
-#include "base/ref_counted.h"
-#include "base/scoped_ptr.h"
+#include "base/memory/ref_counted.h"
+#include "base/memory/scoped_ptr.h"
 #include "chrome/browser/sessions/base_session_service.h"
 #include "chrome/browser/sessions/session_command.h"
 
@@ -113,13 +113,6 @@ class SessionBackend : public base::RefCountedThreadSafe<SessionBackend> {
   // Appends the specified commands to the specified file.
   bool AppendCommandsToFile(net::FileStream* file,
                             const std::vector<SessionCommand*>& commands);
-
-  // Returns the size of the header. The header is the first bytes written to
-  // the file, and is used to identify the file as one written by us.
-  int32 sizeof_header() const {
-    int32 header[2];
-    return sizeof(header);
-  }
 
   const BaseSessionService::SessionType type_;
 

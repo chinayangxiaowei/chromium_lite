@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,10 +6,10 @@
 
 #include "base/message_loop.h"
 #include "base/time.h"
-#include "chrome/browser/browser_thread.h"
 #include "chrome/browser/chromeos/cros/cros_library.h"
-#include "chrome/common/notification_service.h"
-#include "chrome/common/notification_type.h"
+#include "content/browser/browser_thread.h"
+#include "content/common/notification_service.h"
+#include "content/common/notification_type.h"
 
 namespace chromeos {
 
@@ -48,11 +48,14 @@ NetworkStateNotifier::~NetworkStateNotifier() {
 
 void NetworkStateNotifier::OnNetworkManagerChanged(NetworkLibrary* cros) {
   DCHECK(CrosLibrary::Get()->EnsureLoaded());
-  BrowserThread::PostTask(
+  // Update the state 500ms later using UI thread.
+  // See http://crosbug.com/4558
+  BrowserThread::PostDelayedTask(
       BrowserThread::UI, FROM_HERE,
       task_factory_.NewRunnableMethod(
           &NetworkStateNotifier::UpdateNetworkState,
-          RetrieveState()));
+          RetrieveState()),
+      500);
 }
 
 void NetworkStateNotifier::UpdateNetworkState(

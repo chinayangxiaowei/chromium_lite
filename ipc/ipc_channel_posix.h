@@ -1,4 +1,4 @@
-// Copyright (c) 2008 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -53,12 +53,11 @@ class Channel::ChannelImpl : public MessageLoopForIO::Watcher {
   int GetClientFileDescriptor() const;
   bool AcceptsConnections() const;
   bool HasAcceptedConnection() const;
+  bool GetClientEuid(uid_t* client_euid) const;
   void ResetToAcceptingConnectionState();
 
  private:
-  bool CreatePipe(const IPC::ChannelHandle& channel_handle,
-                  bool uses_domain_sockets,
-                  bool listening_socket);
+  bool CreatePipe(const IPC::ChannelHandle& channel_handle);
 
   bool ProcessIncomingMessages();
   bool ProcessOutgoingMessages();
@@ -142,7 +141,7 @@ class Channel::ChannelImpl : public MessageLoopForIO::Watcher {
 
   ScopedRunnableMethodFactory<ChannelImpl> factory_;
 
-  DISALLOW_COPY_AND_ASSIGN(ChannelImpl);
+  DISALLOW_IMPLICIT_CONSTRUCTORS(ChannelImpl);
 };
 
 // The maximum length of the name of a pipe for MODE_NAMED_SERVER or

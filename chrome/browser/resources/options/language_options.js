@@ -6,17 +6,15 @@
 // in js/cr/ui/notification.js .
 
 cr.define('options', function() {
-
   const OptionsPage = options.OptionsPage;
-  const AddLanguageOverlay = options.language.AddLanguageOverlay;
-  const LanguageList = options.language.LanguageList;
+  const LanguageList = options.LanguageList;
 
   // Some input methods like Chinese Pinyin have config pages.
   // This is the map of the input method names to their config page names.
   const INPUT_METHOD_ID_TO_CONFIG_PAGE_NAME = {
-    'chewing': 'languageChewing',
     'hangul': 'languageHangul',
     'mozc': 'languageMozc',
+    'mozc-chewing': 'languageChewing',
     'mozc-dv': 'languageMozc',
     'mozc-jp': 'languageMozc',
     'pinyin': 'languagePinyin',
@@ -30,7 +28,7 @@ cr.define('options', function() {
    * @constructor
    */
   function LanguageOptions(model) {
-    OptionsPage.call(this, 'language', localStrings.getString('languagePage'),
+    OptionsPage.call(this, 'languages', templateData.languagePageTabTitle,
                      'languagePage');
   }
 
@@ -60,7 +58,7 @@ cr.define('options', function() {
 
       if (cr.isChromeOS) {
         this.initializeInputMethodList_();
-        this.initializeLanguageCodeToInputMehotdIdsMap_();
+        this.initializeLanguageCodeToInputMethodIdsMap_();
       }
       Preferences.getInstance().addEventListener(this.spellCheckDictionaryPref,
           this.handleSpellCheckDictionaryPrefChange_.bind(this));
@@ -74,15 +72,9 @@ cr.define('options', function() {
           var addLanguageCode = match[1];
           $('language-options-list').addLanguage(addLanguageCode);
         } else {
-          OptionsPage.showOverlay('addLanguageOverlay');
+          OptionsPage.navigateToPage('addLanguage');
         }
       };
-      // Set up remove button.
-      $('language-options-remove-button').addEventListener('click',
-          this.handleRemoveButtonClick_.bind(this));
-
-      // Setup add language overlay page.
-      OptionsPage.registerOverlay(AddLanguageOverlay.getInstance());
 
       if (cr.isChromeOS) {
         // Listen to user clicks on the add language list.
@@ -136,7 +128,10 @@ cr.define('options', function() {
                                this.handleCheckboxClick_.bind(this));
         var label = document.createElement('label');
         label.appendChild(input);
-        label.appendChild(document.createTextNode(inputMethod.displayName));
+        // Adding a space between the checkbox and the text. This is a bit
+        // dirty, but we rely on a space character for all other checkboxes.
+        label.appendChild(document.createTextNode(
+            ' ' + inputMethod.displayName));
         label.style.display = 'none';
         label.languageCodeSet = inputMethod.languageCodeSet;
         // Add the configure button if the config page is present for this
@@ -170,7 +165,7 @@ cr.define('options', function() {
         // as checkbox click.
         e.preventDefault();
         chrome.send('inputMethodOptionsOpen', [inputMethodId]);
-        OptionsPage.showPageByName(pageName);
+        OptionsPage.navigateToPage(pageName);
       }
       return button;
     },
@@ -278,7 +273,7 @@ cr.define('options', function() {
      * Initializes the map of language code to input method IDs.
      * @private
      */
-    initializeLanguageCodeToInputMehotdIdsMap_: function() {
+    initializeLanguageCodeToInputMethodIdsMap_: function() {
       var inputMethodList = templateData.inputMethodList;
       for (var i = 0; i < inputMethodList.length; i++) {
         var inputMethod = inputMethodList[i];
@@ -339,8 +334,10 @@ cr.define('options', function() {
         uiLanguageButton.onclick = function(e) {
           chrome.send('uiLanguageChange', [languageCode]);
         }
-        $('language-options-ui-restart-button').onclick = function(e) {
-          chrome.send('uiLanguageRestart');
+        if (cr.isChromeOS) {
+          $('language-options-ui-restart-button').onclick = function(e) {
+            chrome.send('uiLanguageRestart');
+          }
         }
       } else {
         // If the language is not supported as UI language, the button
@@ -425,9 +422,8 @@ cr.define('options', function() {
           label.style.display = 'none';
         }
       }
-      if (focusInputMethodId == 'remove') {
-        $('language-options-remove-button').focus();
-      } else if (focusInputMethodId == 'add') {
+
+      if (focusInputMethodId == 'add') {
         $('language-options-add-button').focus();
       }
     },
@@ -469,6 +465,7 @@ cr.define('options', function() {
       var value = e.value.value;
       this.preloadEngines_ = this.filterBadPreloadEngines_(value.split(','));
       this.updateCheckboxesFromPreloadEngines_();
+      $('language-options-list').updateDeletable();
     },
 
     /**
@@ -521,7 +518,7 @@ cr.define('options', function() {
         this.updateCheckboxesFromPreloadEngines_();
         this.savePreloadEnginesPref_();
       }
-      OptionsPage.clearOverlays();
+      OptionsPage.closeOverlay();
     },
 
     /**
@@ -533,36 +530,20 @@ cr.define('options', function() {
       if (selectedIndex >= 0) {
         var selection = languagesSelect.options[selectedIndex];
         $('language-options-list').addLanguage(String(selection.value));
-        OptionsPage.clearOverlays();
+        OptionsPage.closeOverlay();
       }
     },
 
     /**
-     * Handles remove button's click event.
-     * @param {Event} e Click event.
+     * Checks if languageCode is deletable or not.
+     * @param {String} languageCode the languageCode to check for deletability.
      */
-    handleRemoveButtonClick_: function(e) {
-      var languageOptionsList = $('language-options-list');
-      var languageCode = languageOptionsList.getSelectedLanguageCode();
+    languageIsDeletable: function(languageCode) {
       // Don't allow removing the language if it's as UI language.
-      if (languageCode == templateData.currentUiLanguageCode) {
-        this.showNotification_(
-            localStrings.getString('this_language_is_currently_in_use'),
-            localStrings.getString('ok_button'));
-        return;
-      }
-      if (cr.isChromeOS) {
-        // Disable input methods associated with |languageCode|.
-        // Don't allow removing the language if cerntain conditions are met.
-        // See removePreloadEnginesByLanguageCode_() for details.
-        if (!this.removePreloadEnginesByLanguageCode_(languageCode)) {
-          this.showNotification_(
-              localStrings.getString('please_add_another_language'),
-              localStrings.getString('ok_button'));
-          return;
-        }
-      }
-      languageOptionsList.removeSelectedLanguage();
+      if (languageCode == templateData.currentUiLanguageCode)
+        return false;
+      return (!cr.isChromeOS ||
+              this.canDeleteLanguage_(languageCode));
     },
 
     /**
@@ -592,19 +573,15 @@ cr.define('options', function() {
     },
 
     /**
-     * Removes preload engines associated with the given language code.
-     * However, this function does not remove engines (input methods) that
-     * are used for other active languages. For instance, if "xkb:us::eng"
-     * is used for English and Filipino, and the two languages are active,
-     * this function does not remove "xkb:us::eng" when either of these
-     * languages is removed. Instead, it'll remove "xkb:us::eng" when the
-     * both languages are gone.
+     * Checks whether it's possible to remove the language specified by
+     * languageCode and returns true if possible. This function returns false
+     * if the removal causes the number of preload engines to be zero.
      *
      * @param {string} languageCode Language code (ex. "fr").
      * @return {boolean} Returns true on success.
      * @private
      */
-    removePreloadEnginesByLanguageCode_: function(languageCode) {
+    canDeleteLanguage_: function(languageCode) {
       // First create the set of engines to be removed from input methods
       // associated with the language code.
       var enginesToBeRemovedSet = {};
@@ -614,6 +591,7 @@ cr.define('options', function() {
       }
 
       // Then eliminate engines that are also used for other active languages.
+      // For instance, if "xkb:us::eng" is used for both English and Filipino.
       var languageCodes = $('language-options-list').getLanguageCodes();
       for (var i = 0; i < languageCodes.length; i++) {
         // Skip the target language code.
@@ -642,12 +620,7 @@ cr.define('options', function() {
       }
       // Don't allow this operation if it causes the number of preload
       // engines to be zero.
-      if (newPreloadEngines.length == 0) {
-        return false;
-      }
-      this.preloadEngines_ = newPreloadEngines;
-      this.savePreloadEnginesPref_();
-      return true;
+      return (newPreloadEngines.length > 0);
     },
 
     /**
@@ -692,6 +665,8 @@ cr.define('options', function() {
           this.preloadEngines_.push(checkboxes[i].inputMethodId);
         }
       }
+      var languageOptionsList = $('language-options-list');
+      languageOptionsList.updateDeletable();
     },
 
     /**
@@ -790,5 +765,4 @@ cr.define('options', function() {
   return {
     LanguageOptions: LanguageOptions
   };
-
 });

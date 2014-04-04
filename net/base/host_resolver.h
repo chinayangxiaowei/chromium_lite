@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,7 +8,7 @@
 
 #include <string>
 
-#include "base/scoped_ptr.h"
+#include "base/memory/scoped_ptr.h"
 #include "googleurl/src/gurl.h"
 #include "net/base/address_family.h"
 #include "net/base/completion_callback.h"
@@ -63,6 +63,9 @@ class HostResolver {
     bool allow_cached_response() const { return allow_cached_response_; }
     void set_allow_cached_response(bool b) { allow_cached_response_ = b; }
 
+    bool only_use_cached_response() const { return only_use_cached_response_; }
+    void set_only_use_cached_response(bool b) { only_use_cached_response_ = b; }
+
     bool is_speculative() const { return is_speculative_; }
     void set_is_speculative(bool b) { is_speculative_ = b; }
 
@@ -84,6 +87,9 @@ class HostResolver {
 
     // Whether it is ok to return a result from the host cache.
     bool allow_cached_response_;
+
+    // Whether the response will only use the cache.
+    bool only_use_cached_response_;
 
     // Whether this request was started by the DNS prefetcher.
     bool is_speculative_;
@@ -224,7 +230,7 @@ class SingleRequestHostResolver {
   CompletionCallback* cur_request_callback_;
 
   // Completion callback for when request to |resolver_| completes.
-  net::CompletionCallbackImpl<SingleRequestHostResolver> callback_;
+  CompletionCallbackImpl<SingleRequestHostResolver> callback_;
 
   DISALLOW_COPY_AND_ASSIGN(SingleRequestHostResolver);
 };

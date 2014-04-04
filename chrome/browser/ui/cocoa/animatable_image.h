@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,7 +9,7 @@
 #import <Cocoa/Cocoa.h>
 #import <QuartzCore/QuartzCore.h>
 
-#include "base/scoped_nsobject.h"
+#include "base/memory/scoped_nsobject.h"
 
 // This class helps animate an NSImage's frame and opacity. It works by creating
 // a blank NSWindow in the size specified and giving it a layer on which the
@@ -36,11 +36,11 @@
   CGFloat duration_;
 }
 
-@property (nonatomic) CGRect startFrame;
-@property (nonatomic) CGRect endFrame;
-@property (nonatomic) CGFloat startOpacity;
-@property (nonatomic) CGFloat endOpacity;
-@property (nonatomic) CGFloat duration;
+@property(nonatomic) CGRect startFrame;
+@property(nonatomic) CGRect endFrame;
+@property(nonatomic) CGFloat startOpacity;
+@property(nonatomic) CGFloat endOpacity;
+@property(nonatomic) CGFloat duration;
 
 // Designated initializer. Do not use any other NSWindow initializers. Creates
 // but does not show the blank animation window of the given size. The

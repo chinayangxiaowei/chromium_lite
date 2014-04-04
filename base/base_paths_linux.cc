@@ -1,23 +1,25 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "base/base_paths.h"
 
-#include <unistd.h>
-#if defined(OS_FREEBSD)
-#include <sys/param.h>
-#include <sys/sysctl.h>
-#endif
+#include <ostream>
+#include <string>
 
+#include "build/build_config.h"
 #include "base/environment.h"
 #include "base/file_path.h"
 #include "base/file_util.h"
 #include "base/logging.h"
+#include "base/memory/scoped_ptr.h"
 #include "base/path_service.h"
-#include "base/scoped_ptr.h"
-#include "base/sys_string_conversions.h"
 #include "base/nix/xdg_util.h"
+
+#if defined(OS_FREEBSD)
+#include <sys/param.h>
+#include <sys/sysctl.h>
+#endif
 
 namespace base {
 
@@ -83,10 +85,10 @@ bool PathProviderPosix(int key, FilePath* result) {
         }
       }
       // In a case of WebKit-only checkout, executable files are put into
-      // WebKit/out/{Debug|Release}, and we should return WebKit/WebKit/chromium
-      // for DIR_SOURCE_ROOT.
+      // <root of checkout>/out/{Debug|Release}, and we should return
+      // <root of checkout>/Source/WebKit/chromium for DIR_SOURCE_ROOT.
       if (PathService::Get(base::DIR_EXE, &path)) {
-        path = path.DirName().DirName().Append("WebKit/chromium");
+        path = path.DirName().DirName().Append("Source/WebKit/chromium");
         if (file_util::PathExists(path.Append(kThisSourceFile))) {
           *result = path;
           return true;

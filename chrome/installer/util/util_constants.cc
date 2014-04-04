@@ -18,6 +18,9 @@ const char kChrome[] = "chrome";
 // Install Chrome Frame.
 const char kChromeFrame[] = "chrome-frame";
 
+// Installs Chrome Frame from an already installed multi-install of Chrome.
+const char kChromeFrameQuickEnable[] = "quick-enable-cf";
+
 // When installing Chrome Frame, install it in ready mode.
 // If --chrome-frame is not on the command line, this switch has no effect.
 const char kChromeFrameReadyMode[] = "ready-mode";
@@ -140,6 +143,9 @@ const char kInactiveUserToast[] = "inactive-user-toast";
 // User toast experiment switch from system context to user context.
 const char kSystemLevelToast[] = "system-level-toast";
 
+// The group this experiment belongs to.
+const char kExperimentGroup[] = "experiment-group";
+
 // A handle value of the key to write the results of the toast experiment
 // to. See DuplicateGoogleUpdateSystemClientKey for details.
 const char kToastResultsKey[] = "toast-results-key";
@@ -155,13 +161,16 @@ const wchar_t kChromeFrameDll[] = L"npchrome_frame.dll";
 const wchar_t kChromeFrameHelperExe[] = L"chrome_frame_helper.exe";
 const wchar_t kChromeFrameHelperWndClass[] = L"ChromeFrameHelperWindowClass";
 const wchar_t kChromeFrameReadyModeField[] = L"ChromeFrameReadyMode";
+const wchar_t kChromeLauncherExe[] = L"chrome_launcher.exe";
 const wchar_t kChromeNaCl64Dll[] = L"nacl64.dll";
 const wchar_t kChromeNewExe[] = L"new_chrome.exe";
 const wchar_t kChromeOldExe[] = L"old_chrome.exe";
+const wchar_t kCmdQuickEnableCf[] = L"quick-enable-cf";
 const wchar_t kGoogleChromeInstallSubDir1[] = L"Google";
 const wchar_t kGoogleChromeInstallSubDir2[] = L"Chrome";
 const wchar_t kInstallBinaryDir[] = L"Application";
 const wchar_t kInstallerDir[] = L"Installer";
+const wchar_t kInstallTempDir[] = L"Temp";
 const wchar_t kInstallUserDataDir[] = L"User Data";
 const wchar_t kNaClExe[] = L"nacl64.exe";
 const wchar_t kSetupExe[] = L"setup.exe";
@@ -176,5 +185,9 @@ const wchar_t kInstallerError[] = L"InstallerError";
 const wchar_t kInstallerResultUIString[] = L"InstallerResultUIString";
 const wchar_t kInstallerSuccessLaunchCmdLine[] =
     L"InstallerSuccessLaunchCmdLine";
+
+const wchar_t kOptionCeee[] = L"ceee";
+const wchar_t kOptionMultiInstall[] = L"multi-install";
+const wchar_t kOptionReadyMode[] = L"ready-mode";
 
 }  // namespace installer

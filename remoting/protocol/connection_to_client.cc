@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,6 +8,8 @@
 #include "net/base/io_buffer.h"
 #include "remoting/protocol/client_control_sender.h"
 #include "remoting/protocol/host_message_dispatcher.h"
+#include "remoting/protocol/host_stub.h"
+#include "remoting/protocol/input_stub.h"
 
 // TODO(hclam): Remove this header once MessageDispatcher is used.
 #include "remoting/base/compound_buffer.h"
@@ -20,13 +22,11 @@ namespace protocol {
 static const size_t kAverageUpdateStream = 10;
 
 ConnectionToClient::ConnectionToClient(MessageLoop* message_loop,
-                                       EventHandler* handler,
-                                       HostStub* host_stub,
-                                       InputStub* input_stub)
+                                       EventHandler* handler)
     : loop_(message_loop),
       handler_(handler),
-      host_stub_(host_stub),
-      input_stub_(input_stub) {
+      host_stub_(NULL),
+      input_stub_(NULL) {
   DCHECK(loop_);
   DCHECK(handler_);
 }
@@ -73,7 +73,12 @@ ClientStub* ConnectionToClient::client_stub() {
   return client_stub_.get();
 }
 
-ConnectionToClient::ConnectionToClient() {
+void ConnectionToClient::set_host_stub(protocol::HostStub* host_stub) {
+  host_stub_ = host_stub;
+}
+
+void ConnectionToClient::set_input_stub(protocol::InputStub* input_stub) {
+  input_stub_ = input_stub;
 }
 
 void ConnectionToClient::OnSessionStateChange(protocol::Session::State state) {

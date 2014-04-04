@@ -1,13 +1,13 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include <map>
 #include <string>
 
+#include "base/memory/scoped_ptr.h"
+#include "base/memory/scoped_temp_dir.h"
 #include "base/message_loop.h"
-#include "base/scoped_ptr.h"
-#include "base/scoped_temp_dir.h"
 #include "base/stl_util-inl.h"
 #include "base/task.h"
 #include "chrome/browser/sessions/session_service.h"
@@ -18,8 +18,8 @@
 #include "chrome/browser/sync/glue/session_data_type_controller.h"
 #include "chrome/browser/sync/glue/session_model_associator.h"
 #include "chrome/browser/sync/glue/sync_backend_host.h"
-#include "chrome/browser/sync/profile_sync_test_util.h"
 #include "chrome/browser/sync/profile_sync_factory_mock.h"
+#include "chrome/browser/sync/profile_sync_test_util.h"
 #include "chrome/browser/sync/protocol/session_specifics.pb.h"
 #include "chrome/browser/sync/protocol/sync.pb.h"
 #include "chrome/browser/sync/syncable/directory_manager.h"
@@ -27,14 +27,14 @@
 #include "chrome/browser/sync/syncable/syncable.h"
 #include "chrome/browser/sync/test_profile_sync_service.h"
 #include "chrome/common/net/gaia/gaia_constants.h"
-#include "chrome/common/notification_observer.h"
-#include "chrome/common/notification_registrar.h"
-#include "chrome/common/notification_service.h"
 #include "chrome/test/browser_with_test_window_test.h"
 #include "chrome/test/file_test_utils.h"
 #include "chrome/test/profile_mock.h"
-#include "chrome/test/testing_profile.h"
 #include "chrome/test/sync/engine/test_id_factory.h"
+#include "chrome/test/testing_profile.h"
+#include "content/common/notification_observer.h"
+#include "content/common/notification_registrar.h"
+#include "content/common/notification_service.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
@@ -56,7 +56,6 @@ class ProfileSyncServiceSessionTest
   ProfileSyncServiceSessionTest()
       : window_bounds_(0, 1, 2, 3),
         notified_of_update_(false) {}
-
   ProfileSyncService* sync_service() { return sync_service_.get(); }
 
   TestIdFactory* ids() { return sync_service_->id_factory(); }
@@ -65,8 +64,9 @@ class ProfileSyncServiceSessionTest
   SessionService* service() { return helper_.service(); }
 
   virtual void SetUp() {
+    // BrowserWithTestWindowTest implementation.
     BrowserWithTestWindowTest::SetUp();
-    profile()->set_has_history_service(true);
+    profile()->CreateRequestContext();
     ASSERT_TRUE(temp_dir_.CreateUniqueTempDir());
     SessionService* session_service = new SessionService(temp_dir_.path());
     helper_.set_service(session_service);
@@ -93,37 +93,44 @@ class ProfileSyncServiceSessionTest
     helper_.set_service(NULL);
     profile()->set_session_service(NULL);
     sync_service_.reset();
+    {
+      // The request context gets deleted on the I/O thread. To prevent a leak
+      // supply one here.
+      BrowserThread io_thread(BrowserThread::IO, MessageLoop::current());
+      profile()->ResetRequestContext();
+    }
+    MessageLoop::current()->RunAllPending();
   }
 
   bool StartSyncService(Task* task, bool will_fail_association) {
     if (sync_service_.get())
       return false;
-
     sync_service_.reset(new TestProfileSyncService(
         &factory_, profile(), "test user", false, task));
     profile()->set_session_service(helper_.service());
 
     // Register the session data type.
     model_associator_ =
-        new SessionModelAssociator(sync_service_.get());
+        new SessionModelAssociator(sync_service_.get(),
+                                   true /* setup_for_test */);
     change_processor_ = new SessionChangeProcessor(
-        sync_service_.get(), model_associator_);
+        sync_service_.get(), model_associator_,
+        true /* setup_for_test */);
     EXPECT_CALL(factory_, CreateSessionSyncComponents(_, _)).
         WillOnce(Return(ProfileSyncFactory::SyncComponents(
             model_associator_, change_processor_)));
     EXPECT_CALL(factory_, CreateDataTypeManager(_, _)).
         WillOnce(ReturnNewDataTypeManager());
-    sync_service_->set_num_expected_resumes(will_fail_association ? 0 : 1);
     sync_service_->RegisterDataTypeController(
-        new SessionDataTypeController(&factory_, sync_service_.get()));
+        new SessionDataTypeController(&factory_,
+                                      profile(),
+                                      sync_service_.get()));
     profile()->GetTokenService()->IssueAuthTokenForTest(
         GaiaConstants::kSyncService, "token");
     sync_service_->Initialize();
     MessageLoop::current()->Run();
     return true;
   }
-
-  SyncBackendHost* backend() { return sync_service_->backend(); }
 
   // Path used in testing.
   ScopedTempDir temp_dir_;
@@ -146,8 +153,10 @@ class CreateRootTask : public Task {
 
   virtual ~CreateRootTask() {}
   virtual void Run() {
-    success_ = ProfileSyncServiceTestHelper::CreateRoot(syncable::SESSIONS,
-        test_->sync_service(), test_->ids());
+    success_ = ProfileSyncServiceTestHelper::CreateRoot(
+        syncable::SESSIONS,
+        test_->sync_service()->GetUserShare(),
+        test_->ids());
   }
 
   bool success() { return success_; }
@@ -173,8 +182,7 @@ TEST_F(ProfileSyncServiceSessionTest, WriteSessionToNode) {
   ASSERT_NE(sync_api::kInvalidId, sync_id);
 
   // Check that we can get the correct session specifics back from the node.
-  sync_api::ReadTransaction trans(sync_service_->
-      backend()->GetUserShareHandle());
+  sync_api::ReadTransaction trans(sync_service_->GetUserShare());
   sync_api::ReadNode node(&trans);
   ASSERT_TRUE(node.InitByClientTagLookup(syncable::SESSIONS,
       machine_tag));
@@ -320,7 +328,7 @@ TEST_F(ProfileSyncServiceSessionTest, UpdatedSyncNodeActionUpdate) {
   record->id = node_id;
   ASSERT_FALSE(notified_of_update_);
   {
-    sync_api::WriteTransaction trans(backend()->GetUserShareHandle());
+    sync_api::WriteTransaction trans(sync_service_->GetUserShare());
     change_processor_->ApplyChangesFromSyncModel(&trans, record.get(), 1);
   }
   ASSERT_TRUE(notified_of_update_);
@@ -339,7 +347,7 @@ TEST_F(ProfileSyncServiceSessionTest, UpdatedSyncNodeActionAdd) {
   record->id = node_id;
   ASSERT_FALSE(notified_of_update_);
   {
-    sync_api::WriteTransaction trans(backend()->GetUserShareHandle());
+    sync_api::WriteTransaction trans(sync_service_->GetUserShare());
     change_processor_->ApplyChangesFromSyncModel(&trans, record.get(), 1);
   }
   ASSERT_TRUE(notified_of_update_);
@@ -358,7 +366,7 @@ TEST_F(ProfileSyncServiceSessionTest, UpdatedSyncNodeActionDelete) {
   record->id = node_id;
   ASSERT_FALSE(notified_of_update_);
   {
-    sync_api::WriteTransaction trans(backend()->GetUserShareHandle());
+    sync_api::WriteTransaction trans(sync_service_->GetUserShare());
     change_processor_->ApplyChangesFromSyncModel(&trans, record.get(), 1);
   }
   ASSERT_TRUE(notified_of_update_);

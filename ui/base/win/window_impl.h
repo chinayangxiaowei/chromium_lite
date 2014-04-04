@@ -14,8 +14,8 @@
 #include <string>
 
 #include "base/logging.h"
-#include "gfx/native_widget_types.h"
-#include "gfx/rect.h"
+#include "ui/gfx/native_widget_types.h"
+#include "ui/gfx/rect.h"
 
 namespace ui {
 
@@ -70,9 +70,6 @@ class WindowImpl : public MessageMapInterface {
     class_style_ = class_style;
   }
   UINT initial_class_style() const { return class_style_; }
-
-  // Returns true if the specified |hwnd| is a WindowImpl.
-  static bool IsWindowImpl(HWND hwnd);
 
  protected:
   // Handles the WndProc callback for this object.

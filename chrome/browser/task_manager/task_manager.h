@@ -13,10 +13,10 @@
 
 #include "base/basictypes.h"
 #include "base/gtest_prod_util.h"
+#include "base/memory/ref_counted.h"
+#include "base/memory/singleton.h"
 #include "base/observer_list.h"
 #include "base/process_util.h"
-#include "base/ref_counted.h"
-#include "base/singleton.h"
 #include "base/string16.h"
 #include "base/timer.h"
 #include "chrome/browser/renderer_host/web_cache_manager.h"
@@ -25,7 +25,7 @@
 
 class Extension;
 class SkBitmap;
-class TabContents;
+class TabContentsWrapper;
 class TaskManagerModel;
 
 namespace base {
@@ -57,7 +57,7 @@ class TaskManager {
       GPU              // A graphics process.
     };
 
-    virtual std::wstring GetTitle() const = 0;
+    virtual string16 GetTitle() const = 0;
     virtual SkBitmap GetIcon() const = 0;
     virtual base::ProcessHandle GetProcess() const = 0;
     virtual Type GetType() const = 0;
@@ -80,7 +80,7 @@ class TaskManager {
 
     // A helper function for ActivateFocusedTab.  Returns NULL by default
     // because not all resources have an associated tab.
-    virtual TabContents* GetTabContents() const { return NULL; }
+    virtual TabContentsWrapper* GetTabContents() const { return NULL; }
 
     // Whether this resource does report the network usage accurately.
     // This controls whether 0 or N/A is displayed when no bytes have been
@@ -146,9 +146,6 @@ class TaskManager {
   // Activates the browser tab associated with the process in the specified
   // index.
   void ActivateProcess(int index);
-
-  void AddResourceProvider(ResourceProvider* provider);
-  void RemoveResourceProvider(ResourceProvider* provider);
 
   // These methods are invoked by the resource providers to add/remove resources
   // to the Task Manager. Note that the resources are owned by the
@@ -290,7 +287,7 @@ class TaskManagerModel : public net::URLRequestJobTracker::JobObserver,
   TaskManager::Resource::Type GetResourceType(int index) const;
 
   // Returns TabContents of given resource or NULL if not applicable.
-  TabContents* GetResourceTabContents(int index) const;
+  TabContentsWrapper* GetResourceTabContents(int index) const;
 
   // Returns Extension of given resource or NULL if not applicable.
   const Extension* GetResourceExtension(int index) const;
@@ -306,9 +303,6 @@ class TaskManagerModel : public net::URLRequestJobTracker::JobObserver,
   virtual void OnBytesRead(net::URLRequestJob* job,
                            const char* buf,
                            int byte_count);
-
-  void AddResourceProvider(TaskManager::ResourceProvider* provider);
-  void RemoveResourceProvider(TaskManager::ResourceProvider* provider);
 
   void AddResource(TaskManager::Resource* resource);
   void RemoveResource(TaskManager::Resource* resource);
@@ -345,21 +339,20 @@ class TaskManagerModel : public net::URLRequestJobTracker::JobObserver,
 
   // This struct is used to exchange information between the io and ui threads.
   struct BytesReadParam {
-    BytesReadParam(int origin_child_id,
+    BytesReadParam(int origin_pid,
                    int render_process_host_child_id,
                    int routing_id,
                    int byte_count)
-        : origin_child_id(origin_child_id),
+        : origin_pid(origin_pid),
           render_process_host_child_id(render_process_host_child_id),
           routing_id(routing_id),
           byte_count(byte_count) {}
 
-    // This is the child ID of the originator of the request. It will often be
-    // the same as the render_process_host_child_id, but will be different when
-    // another sub-process like a plugin is routing requests through a renderer.
-    int origin_child_id;
+    // The process ID that triggered the request.  For plugin requests this
+    // will differ from the renderer process ID.
+    int origin_pid;
 
-    // The child ID of the RenderProcessHist this request was routed through.
+    // The child ID of the RenderProcessHost this request was routed through.
     int render_process_host_child_id;
 
     int routing_id;
@@ -414,6 +407,9 @@ class TaskManagerModel : public net::URLRequestJobTracker::JobObserver,
   // |memory_usage_map_|.
   bool GetAndCacheMemoryMetrics(base::ProcessHandle handle,
                                 std::pair<size_t, size_t>* usage) const;
+
+  // Adds a resource provider to be managed.
+  void AddResourceProvider(TaskManager::ResourceProvider* provider);
 
   // The list of providers to the task manager. They are ref counted.
   ResourceProviderList providers_;

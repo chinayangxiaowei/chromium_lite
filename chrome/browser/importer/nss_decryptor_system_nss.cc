@@ -1,4 +1,4 @@
-// Copyright (c) 2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,9 +8,10 @@
 #include <pk11sdr.h>
 
 #include "base/basictypes.h"
-#include "base/nss_util.h"
+#include "base/file_path.h"
 #include "base/string_util.h"
 #include "base/sys_string_conversions.h"
+#include "crypto/nss_util.h"
 
 NSSDecryptor::NSSDecryptor() : is_nss_initialized_(false), db_slot_(NULL) {}
 NSSDecryptor::~NSSDecryptor() {
@@ -23,13 +24,12 @@ NSSDecryptor::~NSSDecryptor() {
   }
 }
 
-bool NSSDecryptor::Init(const std::wstring& /* dll_path */,
-                        const std::wstring& db_path) {
-  base::EnsureNSSInit();
+bool NSSDecryptor::Init(const FilePath& dll_path, const FilePath& db_path) {
+  crypto::EnsureNSSInit();
   is_nss_initialized_ = true;
   const std::string modspec =
       StringPrintf("configDir='%s' tokenDescription='Firefox NSS database' "
-                   "flags=readOnly", base::SysWideToNativeMB(db_path).c_str());
+                   "flags=readOnly", db_path.value().c_str());
   db_slot_ = SECMOD_OpenUserDB(modspec.c_str());
   return db_slot_ != NULL;
 }

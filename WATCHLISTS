@@ -39,6 +39,9 @@
     'chromeos_login': {
       'filepath': 'chrome/browser/chromeos/login/.*',
     },
+    'content': {
+      'filepath': 'content/.*',
+    },
     'download': {
       'filepath': 'chrome/browser/download/.*',
     },
@@ -50,7 +53,9 @@
         'chrome/common/render.*',
     },
     'tab_contents': {
-      'filepath': 'chrome/browser/tab_contents/.*',
+      'filepath': 'chrome/browser/tab_contents/.*|'\
+        'content/browser/tab_contents/.*|'\
+        'chrome/browser/ui/tab_contents/.*',
     },
     'webkit': {
       'filepath': 'webkit/.*',
@@ -65,6 +70,9 @@
     },
     'net': {
       'filepath': 'net/.*',
+    },
+    'net_error_list': {
+      'filepath': 'net/base/net_error_list.h',
     },
     'ftp': {
       'filepath': 'ftp',
@@ -100,9 +108,6 @@
     },
     'automation': {
       'filepath': 'chrome/browser/automation/.*|chrome/test/automation/.*',
-    },
-    'ceee': {
-      'filepath': 'ceee/.*',
     },
     'chrome_frame': {
       'filepath': 'chrome_frame/.*',
@@ -143,13 +148,16 @@
         'chrome/browser/net/sqlite_persistent_cookie_store.*',
     },
     'autofill': {
-      'filepath': 'chrome/app/nibs/AutoFill.*|'\
-        'chrome/browser/autofill/.*|'\
-        'chrome/browser/dom_ui/autofill_.*|'\
+      'filepath': 'chrome/browser/autofill/.*|'\
+        'chrome/browser/resources/options/autofill_.*|'\
         'chrome/browser/sync/glue/autofill_.*|'\
-        'chrome/browser/views/autofill_.*|'\
-        'chrome/renderer/autofill_.*|'\
-        'chrome/renderer/form_manager.*',
+        'chrome/browser/ui/webui/options/autofill_.*|'\
+        'chrome/renderer/autofill/.*|'\
+        'chrome/test/data/autofill/.*|'\
+        'chrome/test/data/autofill/heuristics/input/.*|'\
+        'chrome/test/data/autofill/heuristics/output/.*|'\
+        'chrome/test/data/autofill/merge/input/.*|'\
+        'chrome/test/data/autofill/merge/output/.*',
     },
     'webdata': {
       'filepath': 'chrome/browser/webdata/.*',
@@ -167,11 +175,34 @@
       'filepath': 'chrome/browser/labs' \
                   '|chrome/browser/dom_ui/labs'
     },
-    'file_system': {
-      'filepath': 'file_system/.*',
+    'fileapi': {
+      'filepath': 'file_system/.*' \
+                  '|fileapi/.*'
     },
     'pepper_api': {
       'filepath': 'ppapi/c/.*',
+    },
+    'prerender': {
+      'filepath': 'chrome/browser/prerender/.*'
+    },
+    'chromedriver': {
+      'filepath': 'chrome/test/webdriver|third_party/webdriver'
+    },
+    'dom_login' : {
+      'filepath': 'chrome/browser/chromeos/frame/.*dom.*' \
+                  '|chrome/browser/chromeos/login/.*dom.*'  \
+                  '|chrome/browser/chromeos/login/.*login_display.*' \
+                  '|chrome/browser/chromeos/login/existing_user_controller.*' \
+                  '|chrome/browser/resources/login.html' \
+                  '|chrome/browser/ui/webui/chromeos/login/.*'
+    },
+    'filebrowse' : {
+      'filepath': 'file_browser' \
+                  '|file_manager' \
+                  '|filebrowse'
+    },
+    'imageburner' : {
+      'filepath': 'imageburner'
     },
   },
 
@@ -185,11 +216,12 @@
     'browser_main': ['brettw-cc@chromium.org'],
     'browser_resources': ['arv@chromium.org'],
     'chromeos_login': ['nkostylev+cc@chromium.org'],
+    'content': ['jam@chromium.org'],
     'download': ['phajdan.jr@chromium.org','rdsmith+dwatch@chromium.org'],
     'history': ['brettw-cc@chromium.org'],
     'renderer': ['darin-cc@chromium.org',
                  'brettw-cc@chromium.org'],
-    'tab_contents': ['brettw-cc@chromium.org'],
+    'tab_contents': ['brettw-cc@chromium.org', 'avi@chromium.org'],
     'webkit': ['darin-cc@chromium.org'],
     'plugin': ['darin-cc@chromium.org', 'jam@chromium.org',
                'stuartmorgan+watch@chromium.org'],
@@ -198,11 +230,12 @@
                   'erikkay@chromium.org',
                   'pam+watch@chromium.org'],
     'net': ['darin-cc@chromium.org', 'cbentzel+watch@chromium.org'],
+    'net_error_list': ['mmenke@chromium.org'],
     'ftp': ['phajdan.jr@chromium.org'],
-    'media': ['acolwell@chromium.org', 'ajwong@chromium.org',
+    'media': ['acolwell@chromium.org', 'ajwong+watch@chromium.org',
               'annacc@chromium.org', 'ddorwin+watch@chromium.org',
-              'hclam@chromium.org', 'scherkus@chromium.org',
-              'sjl@chromium.org', 'vrk@chromium.org'],
+              'fischman+watch@chromium.org', 'hclam+watch@chromium.org',
+              'scherkus@chromium.org', 'sjl@chromium.org', 'vrk@chromium.org'],
     'ipc': ['jam@chromium.org', 'darin-cc@chromium.org'],
     'linux-sandboxing': ['agl@chromium.org'],
     'sync': ['tim@chromium.org', 'nick@chromium.org',
@@ -210,8 +243,7 @@
     'layout_tests': ['pam+watch@chromium.org'],
     'tools': ['pam+watch@chromium.org'],
     'tests': ['phajdan.jr@chromium.org'],
-    'automation': ['phajdan.jr@chromium.org'],
-    'ceee' : ['ceee-reviews@chromium.org'],
+    'automation': ['phajdan.jr@chromium.org', 'kkania@chromium.org'],
     'chrome_frame' : ['amit@chromium.org'],
     'nacl' : ['native-client-reviews@googlegroups.com'],
     'appcache': ['michaeln@chromium.org'],
@@ -220,18 +252,27 @@
     'options_dialog_content': ['finnur+watch@chromium.org'],
     'chromeos': ['davemoore+watch@chromium.org'],
     'npapi_headers': ['stuartmorgan@chromium.org'],
-    'remoting': ['ajwong@chromium.org', 'sergeyu@chromium.org',
-                 'hclam@chromium.org', 'dmaclach@chromium.org',
-                 'garykac@chromium.org'],
+    'remoting': ['ajwong+watch@chromium.org', 'dmaclach+watch@chromium.org',
+                 'garykac+watch@chromium.org', 'hclam+watch@chromium.org',
+                 'jamiewalch+watch@chromium.org',
+                 'lambroslambrou+watch@chromium.org',
+                 'sergeyu+watch@chromium.org',
+                 'simonmorris+watch@chromium.org',
+                 'wez+watch@chromium.org'],
     'cookie_monster': ['rdsmith@chromium.org'],
-    'autofill': ['dhollowa@chromium.org', 'jhawkins@chromium.org',
+    'autofill': ['dhollowa@chromium.org', 'georgey@chromium.org',
                  'isherman@chromium.org'],
     'webdata': ['dhollowa@chromium.org'],
     'i18n': ['jshin+watch@chromium.org'],
     'pyauto': ['anantha@chromium.org', 'jrg@chromium.org',
                'nirnimesh@chromium.org', 'dyu@chromium.org'],
     'labs': ['thakis@chromium.org'],
-    'file_system': ['kinuko@chromium.org'],
+    'fileapi': ['kinuko+watch@chromium.org'],
     'pepper_api': ['piman+watch@chromium.org'],
+    'prerender': ['cbentzel+watch@chromium.org', 'tburkard+watch@chromium.org'],
+    'chromedriver': ['kkania@chromium.org'],
+    'dom_login': ['rharrison@chromium.org'],
+    'imageburner': ['achuith+watch@chromium.org', 'tbarzic+watch@chromium.org'],
+    'filebrowse': ['achuith+watch@chromium.org', 'rginda+watch@chromium.org'],
   },
 }

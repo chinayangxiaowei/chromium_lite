@@ -14,13 +14,12 @@
 #include "chrome/browser/extensions/extension_service.h"
 #include "chrome/browser/extensions/image_loading_tracker.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/tab_contents/tab_contents.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/gtk/cairo_cached_surface.h"
-#include "chrome/browser/ui/gtk/extension_popup_gtk.h"
+#include "chrome/browser/ui/gtk/extensions/extension_popup_gtk.h"
 #include "chrome/browser/ui/gtk/gtk_chrome_button.h"
 #include "chrome/browser/ui/gtk/gtk_chrome_shrinkable_hbox.h"
-#include "chrome/browser/ui/gtk/gtk_theme_provider.h"
+#include "chrome/browser/ui/gtk/gtk_theme_service.h"
 #include "chrome/browser/ui/gtk/gtk_util.h"
 #include "chrome/browser/ui/gtk/hover_controller_gtk.h"
 #include "chrome/browser/ui/gtk/menu_gtk.h"
@@ -28,14 +27,15 @@
 #include "chrome/common/extensions/extension.h"
 #include "chrome/common/extensions/extension_action.h"
 #include "chrome/common/extensions/extension_resource.h"
-#include "chrome/common/notification_details.h"
-#include "chrome/common/notification_service.h"
-#include "chrome/common/notification_source.h"
-#include "chrome/common/notification_type.h"
-#include "gfx/canvas_skia_paint.h"
-#include "gfx/gtk_util.h"
+#include "content/browser/tab_contents/tab_contents.h"
+#include "content/common/notification_details.h"
+#include "content/common/notification_service.h"
+#include "content/common/notification_source.h"
+#include "content/common/notification_type.h"
 #include "grit/app_resources.h"
 #include "grit/theme_resources.h"
+#include "ui/gfx/canvas_skia_paint.h"
+#include "ui/gfx/gtk_util.h"
 
 namespace {
 
@@ -85,7 +85,7 @@ class BrowserActionButton : public NotificationObserver,
  public:
   BrowserActionButton(BrowserActionsToolbarGtk* toolbar,
                       const Extension* extension,
-                      GtkThemeProvider* theme_provider)
+                      GtkThemeService* theme_provider)
       : toolbar_(toolbar),
         extension_(extension),
         image_(NULL),
@@ -157,7 +157,8 @@ class BrowserActionButton : public NotificationObserver,
   }
 
   // ImageLoadingTracker::Observer implementation.
-  void OnImageLoaded(SkBitmap* image, ExtensionResource resource, int index) {
+  void OnImageLoaded(SkBitmap* image, const ExtensionResource& resource,
+                     int index) {
     if (image) {
       default_skbitmap_ = *image;
       default_icon_ = gfx::GdkPixbufFromSkBitmap(image);
@@ -266,9 +267,9 @@ class BrowserActionButton : public NotificationObserver,
   }
 
   static gboolean OnButtonPress(GtkWidget* widget,
-                                GdkEvent* event,
+                                GdkEventButton* event,
                                 BrowserActionButton* action) {
-    if (event->button.button != 3)
+    if (event->button != 3)
       return FALSE;
 
     MenuGtk* menu = action->GetContextMenu();
@@ -276,7 +277,7 @@ class BrowserActionButton : public NotificationObserver,
       return FALSE;
 
     action->button_->SetPaintOverride(GTK_STATE_ACTIVE);
-    menu->Popup(widget, event);
+    menu->PopupForWidget(widget, event->button, event->time);
 
     return TRUE;
   }
@@ -363,7 +364,7 @@ class BrowserActionButton : public NotificationObserver,
 BrowserActionsToolbarGtk::BrowserActionsToolbarGtk(Browser* browser)
     : browser_(browser),
       profile_(browser->profile()),
-      theme_provider_(GtkThemeProvider::GetFrom(browser->profile())),
+      theme_service_(GtkThemeService::GetFrom(browser->profile())),
       model_(NULL),
       hbox_(gtk_hbox_new(FALSE, 0)),
       button_hbox_(gtk_chrome_shrinkable_hbox_new(TRUE, FALSE, kButtonPadding)),
@@ -379,7 +380,7 @@ BrowserActionsToolbarGtk::BrowserActionsToolbarGtk(Browser* browser)
     return;
 
   overflow_button_.reset(new CustomDrawButton(
-      theme_provider_,
+      theme_service_,
       IDR_BROWSER_ACTIONS_OVERFLOW,
       IDR_BROWSER_ACTIONS_OVERFLOW_P,
       IDR_BROWSER_ACTIONS_OVERFLOW_H,
@@ -447,7 +448,7 @@ BrowserActionsToolbarGtk::BrowserActionsToolbarGtk(Browser* browser)
   registrar_.Add(this,
                  NotificationType::BROWSER_THEME_CHANGED,
                  NotificationService::AllSources());
-  theme_provider_->InitThemesFor(this);
+  theme_service_->InitThemesFor(this);
 }
 
 BrowserActionsToolbarGtk::~BrowserActionsToolbarGtk() {
@@ -476,7 +477,7 @@ void BrowserActionsToolbarGtk::Observe(NotificationType type,
                                        const NotificationSource& source,
                                        const NotificationDetails& details) {
   DCHECK(NotificationType::BROWSER_THEME_CHANGED == type);
-  if (theme_provider_->UseGtkTheme())
+  if (theme_service_->UseGtkTheme())
     gtk_widget_show(separator_);
   else
     gtk_widget_hide(separator_);
@@ -517,7 +518,7 @@ void BrowserActionsToolbarGtk::CreateButtonForExtension(
 
   RemoveButtonForExtension(extension);
   linked_ptr<BrowserActionButton> button(
-      new BrowserActionButton(this, extension, theme_provider_));
+      new BrowserActionButton(this, extension, theme_service_));
   gtk_chrome_shrinkable_hbox_pack_start(
       GTK_CHROME_SHRINKABLE_HBOX(button_hbox_.get()), button->widget(), 0);
   gtk_box_reorder_child(GTK_BOX(button_hbox_.get()), button->widget(), index);
@@ -572,7 +573,7 @@ bool BrowserActionsToolbarGtk::ShouldDisplayBrowserAction(
     const Extension* extension) {
   // Only display incognito-enabled extensions while in incognito mode.
   return (!profile_->IsOffTheRecord() ||
-          profile_->GetExtensionService()->IsIncognitoEnabled(extension));
+          profile_->GetExtensionService()->IsIncognitoEnabled(extension->id()));
 }
 
 void BrowserActionsToolbarGtk::HidePopup() {
@@ -950,7 +951,8 @@ gboolean BrowserActionsToolbarGtk::OnOverflowMenuButtonPress(
   if (!menu)
     return FALSE;
 
-  menu->PopupAsContext(event->time);
+  menu->PopupAsContext(gfx::Point(event->x_root, event->y_root),
+                       event->time);
   return TRUE;
 }
 

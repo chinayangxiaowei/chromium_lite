@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -20,7 +20,6 @@
 #include "net/socket/client_socket_pool_histograms.h"
 #include "net/socket/socket_test_util.h"
 #include "net/spdy/spdy_protocol.h"
-#include "net/spdy/spdy_session_pool.h"
 #include "net/spdy/spdy_test_util.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
@@ -49,54 +48,43 @@ class HttpProxyClientSocketPoolTest : public TestWithHttpParam {
  protected:
   HttpProxyClientSocketPoolTest()
       : ssl_config_(),
-        ignored_tcp_socket_params_(new TCPSocketParams(
-            HostPortPair("proxy", 80), LOWEST, GURL(), false)),
+        ignored_transport_socket_params_(new TransportSocketParams(
+            HostPortPair("proxy", 80), LOWEST, GURL(), false, false)),
         ignored_ssl_socket_params_(new SSLSocketParams(
-            ignored_tcp_socket_params_, NULL, NULL, ProxyServer::SCHEME_DIRECT,
-            HostPortPair("www.google.com", 443), ssl_config_, 0, false, false)),
+            ignored_transport_socket_params_, NULL, NULL,
+            ProxyServer::SCHEME_DIRECT, HostPortPair("www.google.com", 443),
+            ssl_config_, 0, false, false)),
         tcp_histograms_("MockTCP"),
-        tcp_socket_pool_(
+        transport_socket_pool_(
             kMaxSockets, kMaxSocketsPerGroup,
             &tcp_histograms_,
             &socket_factory_),
         ssl_histograms_("MockSSL"),
+        proxy_service_(ProxyService::CreateDirect()),
         ssl_config_service_(new SSLConfigServiceDefaults),
-        host_resolver_(new MockHostResolver),
-        cert_verifier_(new CertVerifier),
         ssl_socket_pool_(kMaxSockets, kMaxSocketsPerGroup,
                          &ssl_histograms_,
-                         host_resolver_.get(),
-                         cert_verifier_.get(),
+                         &host_resolver_,
+                         &cert_verifier_,
                          NULL /* dnsrr_resolver */,
                          NULL /* dns_cert_checker */,
                          NULL /* ssl_host_info_factory */,
                          &socket_factory_,
-                         &tcp_socket_pool_,
+                         &transport_socket_pool_,
                          NULL,
                          NULL,
                          ssl_config_service_.get(),
                          BoundNetLog().net_log()),
         http_auth_handler_factory_(
-            HttpAuthHandlerFactory::CreateDefault(host_resolver_.get())),
-        session_(new HttpNetworkSession(host_resolver_.get(),
-                                        cert_verifier_.get(),
-                                        NULL /* dnsrr_resolver */,
-                                        NULL /* dns_cert_checker */,
-                                        NULL /* ssl_host_info_factory */,
-                                        ProxyService::CreateDirect(),
-                                        &socket_factory_,
-                                        new SSLConfigServiceDefaults,
-                                        new SpdySessionPool(NULL),
-                                        http_auth_handler_factory_.get(),
-                                        NULL,
-                                        NULL)),
+            HttpAuthHandlerFactory::CreateDefault(&host_resolver_)),
+        session_(CreateNetworkSession()),
         http_proxy_histograms_("HttpProxyUnitTest"),
         ssl_data_(NULL),
         data_(NULL),
         pool_(kMaxSockets, kMaxSocketsPerGroup,
               &http_proxy_histograms_,
               NULL,
-              &tcp_socket_pool_,
+              &transport_socket_pool_,
               &ssl_socket_pool_,
               NULL) {
   }
@@ -107,19 +95,19 @@ class HttpProxyClientSocketPoolTest : public TestWithHttpParam {
   void AddAuthToCache() {
     const string16 kFoo(ASCIIToUTF16("foo"));
     const string16 kBar(ASCIIToUTF16("bar"));
-    session_->auth_cache()->Add(GURL("http://proxy/"),
-                                "MyRealm1",
-                                HttpAuth::AUTH_SCHEME_BASIC,
-                                "Basic realm=MyRealm1",
-                                kFoo,
-                                kBar,
-                                "/");
+    session_->http_auth_cache()->Add(GURL("http://proxy/"),
+                                     "MyRealm1",
+                                     HttpAuth::AUTH_SCHEME_BASIC,
+                                     "Basic realm=MyRealm1",
+                                     kFoo,
+                                     kBar,
+                                     "/");
   }
 
-  scoped_refptr<TCPSocketParams> GetTcpParams() {
+  scoped_refptr<TransportSocketParams> GetTcpParams() {
     if (GetParam() != HTTP)
-      return scoped_refptr<TCPSocketParams>();
-    return ignored_tcp_socket_params_;
+      return scoped_refptr<TransportSocketParams>();
+    return ignored_transport_socket_params_;
   }
 
   scoped_refptr<SSLSocketParams> GetSslParams() {
@@ -138,10 +126,9 @@ class HttpProxyClientSocketPoolTest : public TestWithHttpParam {
             GURL(tunnel ? "https://www.google.com/" : "http://www.google.com"),
             "",
             HostPortPair("www.google.com", tunnel ? 443 : 80),
-            session_->auth_cache(),
+            session_->http_auth_cache(),
             session_->http_auth_handler_factory(),
             session_->spdy_session_pool(),
-            session_->mutable_spdy_settings(),
             tunnel));
   }
 
@@ -189,22 +176,34 @@ class HttpProxyClientSocketPoolTest : public TestWithHttpParam {
     ssl_data_->was_npn_negotiated = true;
   }
 
+  HttpNetworkSession* CreateNetworkSession() {
+    HttpNetworkSession::Params params;
+    params.host_resolver = &host_resolver_;
+    params.cert_verifier = &cert_verifier_;
+    params.proxy_service = proxy_service_;
+    params.client_socket_factory = &socket_factory_;
+    params.ssl_config_service = ssl_config_service_;
+    params.http_auth_handler_factory = http_auth_handler_factory_.get();
+    return new HttpNetworkSession(params);
+  }
+
  private:
   SSLConfig ssl_config_;
 
-  scoped_refptr<TCPSocketParams> ignored_tcp_socket_params_;
+  scoped_refptr<TransportSocketParams> ignored_transport_socket_params_;
   scoped_refptr<SSLSocketParams> ignored_ssl_socket_params_;
   ClientSocketPoolHistograms tcp_histograms_;
   DeterministicMockClientSocketFactory socket_factory_;
-  MockTCPClientSocketPool tcp_socket_pool_;
+  MockTransportClientSocketPool transport_socket_pool_;
   ClientSocketPoolHistograms ssl_histograms_;
-  scoped_refptr<SSLConfigService> ssl_config_service_;
-  scoped_ptr<HostResolver> host_resolver_;
-  scoped_ptr<CertVerifier> cert_verifier_;
+  MockHostResolver host_resolver_;
+  CertVerifier cert_verifier_;
+  const scoped_refptr<ProxyService> proxy_service_;
+  const scoped_refptr<SSLConfigService> ssl_config_service_;
   SSLClientSocketPool ssl_socket_pool_;
 
-  scoped_ptr<HttpAuthHandlerFactory> http_auth_handler_factory_;
-  scoped_refptr<HttpNetworkSession> session_;
+  const scoped_ptr<HttpAuthHandlerFactory> http_auth_handler_factory_;
+  const scoped_refptr<HttpNetworkSession> session_;
   ClientSocketPoolHistograms http_proxy_histograms_;
 
  protected:

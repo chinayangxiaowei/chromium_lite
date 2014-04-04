@@ -1,14 +1,15 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "views/controls/resize_area.h"
 
 #include "base/logging.h"
+#include "ui/base/accessibility/accessible_view_state.h"
 #include "ui/base/resource/resource_bundle.h"
 
 #if defined(OS_LINUX)
-#include "gfx/gtk_util.h"
+#include "ui/gfx/gtk_util.h"
 #endif
 
 namespace views {
@@ -34,7 +35,7 @@ std::string ResizeArea::GetClassName() const {
   return kViewClassName;
 }
 
-gfx::NativeCursor ResizeArea::GetCursorForPoint(Event::EventType event_type,
+gfx::NativeCursor ResizeArea::GetCursorForPoint(ui::EventType event_type,
                                                 const gfx::Point& p) {
   if (!enabled_)
     return NULL;
@@ -69,13 +70,16 @@ bool ResizeArea::OnMouseDragged(const views::MouseEvent& event) {
   return true;
 }
 
-void ResizeArea::OnMouseReleased(const views::MouseEvent& event,
-                                 bool canceled) {
-  ReportResizeAmount(canceled ? initial_position_ : event.x(), true);
+void ResizeArea::OnMouseReleased(const views::MouseEvent& event) {
+  ReportResizeAmount(event.x(), true);
 }
 
-AccessibilityTypes::Role ResizeArea::GetAccessibleRole() {
-  return AccessibilityTypes::ROLE_SEPARATOR;
+void ResizeArea::OnMouseCaptureLost() {
+  ReportResizeAmount(initial_position_, true);
+}
+
+void ResizeArea::GetAccessibleState(ui::AccessibleViewState* state) {
+  state->role = ui::AccessibilityTypes::ROLE_SEPARATOR;
 }
 
 void ResizeArea::ReportResizeAmount(int resize_amount, bool last_update) {

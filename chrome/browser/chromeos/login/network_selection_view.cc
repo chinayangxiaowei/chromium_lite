@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -17,17 +17,17 @@
 #include "chrome/browser/chromeos/login/rounded_rect_painter.h"
 #include "chrome/browser/chromeos/login/wizard_accessibility_helper.h"
 #include "chrome/browser/chromeos/status/network_dropdown_button.h"
-#include "gfx/size.h"
 #include "grit/chromium_strings.h"
 #include "grit/generated_resources.h"
 #include "grit/theme_resources.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/resource/resource_bundle.h"
+#include "ui/gfx/size.h"
 #include "views/controls/label.h"
 #include "views/controls/throbber.h"
-#include "views/fill_layout.h"
-#include "views/grid_layout.h"
-#include "views/standard_layout.h"
+#include "views/layout/fill_layout.h"
+#include "views/layout/grid_layout.h"
+#include "views/layout/layout_constants.h"
 #include "views/widget/widget.h"
 #include "views/widget/widget_gtk.h"
 #include "views/window/non_client_view.h"
@@ -64,7 +64,7 @@ const int kControlPaddingRow = 15;
 const int kSelectionBoxHeight = 29;
 
 // Menu button is drawn using our custom icons in resources. See
-// TextButtonBorder::Paint() for details. So this offset compensate
+// TextButtonBorder::OnPaint() for details. So this offset compensate
 // horizontal size, eaten by those icons.
 const int kMenuHorizontalOffset = -3;
 
@@ -88,6 +88,11 @@ static void InitMenuButtonProperties(views::MenuButton* menu_button) {
   menu_button->set_animate_on_state_change(false);
   // Menu is positioned by bottom right corner of the MenuButton.
   menu_button->set_menu_offset(kMenuHorizontalOffset, kMenuVerticalOffset);
+}
+
+static void SetMenuButtonFont(views::MenuButton* menu_button,
+                              const gfx::Font& font) {
+  menu_button->SetFont(font);
   chromeos::CorrectMenuButtonFontSize(menu_button);
 }
 
@@ -128,8 +133,10 @@ class NotifyingMenuButton : public DropDownButton {
         delegate_(delegate) {}
 
   // Overridden from View:
-  virtual void DidGainFocus() {
+  virtual void OnFocus() OVERRIDE {
     delegate_->ClearErrors();
+    GetWidget()->NotifyAccessibilityEvent(
+        this, ui::AccessibilityTypes::EVENT_FOCUS, true);
   }
 
  private:
@@ -263,7 +270,7 @@ void NetworkSelectionView::InitLayout() {
   column_set->AddPaddingColumn(1, h_padding);
   column_set->AddColumn(GridLayout::TRAILING, GridLayout::CENTER, 0,
                         GridLayout::USE_PREF, 0, 0);
-  column_set->AddPaddingColumn(0, kRelatedControlHorizontalSpacing);
+  column_set->AddPaddingColumn(0, views::kRelatedControlHorizontalSpacing);
   column_set->AddColumn(GridLayout::LEADING, GridLayout::CENTER, 1,
                         GridLayout::USE_PREF, 0, 0);
   column_set->AddPaddingColumn(1, h_padding);
@@ -283,24 +290,17 @@ void NetworkSelectionView::Init() {
   contents_view_->set_background(
       views::Background::CreateBackgroundPainter(true, painter));
 
-  ResourceBundle& rb = ResourceBundle::GetSharedInstance();
-  gfx::Font welcome_label_font = rb.GetFont(ResourceBundle::LargeFont).
-      DeriveFont(kWelcomeTitleFontDelta, gfx::Font::BOLD);
-
   welcome_label_ = new views::Label();
   welcome_label_->SetColor(kWelcomeColor);
-  welcome_label_->SetFont(welcome_label_font);
   welcome_label_->SetMultiLine(true);
 
   select_language_label_ = new views::Label();
-  select_language_label_->SetFont(rb.GetFont(ResourceBundle::MediumFont));
 
   languages_menubutton_ = new NotifyingMenuButton(
       NULL, std::wstring(), delegate_->language_switch_menu(), true, delegate_);
   InitMenuButtonProperties(languages_menubutton_);
 
   select_keyboard_label_ = new views::Label();
-  select_keyboard_label_->SetFont(rb.GetFont(ResourceBundle::MediumFont));
 
   keyboards_menubutton_ = new DropDownButton(
       NULL /* listener */, L"", delegate_->keyboard_switch_menu(),
@@ -308,7 +308,6 @@ void NetworkSelectionView::Init() {
   InitMenuButtonProperties(keyboards_menubutton_);
 
   select_network_label_ = new views::Label();
-  select_network_label_->SetFont(rb.GetFont(ResourceBundle::MediumFont));
 
   network_dropdown_ = new NetworkControlReportOnActivate(false,
                                                          GetNativeWindow(),
@@ -316,7 +315,6 @@ void NetworkSelectionView::Init() {
   InitMenuButtonProperties(network_dropdown_);
 
   connecting_network_label_ = new views::Label();
-  connecting_network_label_->SetFont(rb.GetFont(ResourceBundle::MediumFont));
   connecting_network_label_->SetVisible(false);
 
   proxy_settings_link_ = new views::Link();
@@ -326,24 +324,46 @@ void NetworkSelectionView::Init() {
   proxy_settings_link_->SetNormalColor(login::kLinkColor);
   proxy_settings_link_->SetHighlightedColor(login::kLinkColor);
 
-  UpdateLocalizedStrings();
+  UpdateLocalizedStringsAndFonts();
 }
 
-void NetworkSelectionView::UpdateLocalizedStrings() {
+void NetworkSelectionView::UpdateLocalizedStringsAndFonts() {
+  ResourceBundle& rb = ResourceBundle::GetSharedInstance();
+  gfx::Font welcome_label_font = rb.GetFont(ResourceBundle::LargeFont).
+      DeriveFont(kWelcomeTitleFontDelta, gfx::Font::BOLD);
+  gfx::Font select_label_font = rb.GetFont(ResourceBundle::MediumFont).
+      DeriveFont(kNetworkSelectionLabelFontDelta);
+  const gfx::Font& base_font = rb.GetFont(ResourceBundle::BaseFont);
+
+  SetMenuButtonFont(languages_menubutton_, base_font);
   languages_menubutton_->SetText(
       UTF16ToWide(delegate_->language_switch_menu()->GetCurrentLocaleName()));
+  SetMenuButtonFont(keyboards_menubutton_, base_font);
   keyboards_menubutton_->SetText(
       UTF16ToWide(delegate_->keyboard_switch_menu()->GetCurrentKeyboardName()));
+  welcome_label_->SetFont(welcome_label_font);
   welcome_label_->SetText(
       UTF16ToWide(l10n_util::GetStringUTF16(IDS_NETWORK_SELECTION_TITLE)));
+  select_language_label_->SetFont(select_label_font);
   select_language_label_->SetText(
       UTF16ToWide(l10n_util::GetStringUTF16(IDS_LANGUAGE_SELECTION_SELECT)));
+  languages_menubutton_->SetAccessibleName(
+      l10n_util::GetStringUTF16(IDS_LANGUAGE_SELECTION_SELECT));
+  select_keyboard_label_->SetFont(select_label_font);
   select_keyboard_label_->SetText(
       UTF16ToWide(l10n_util::GetStringUTF16(IDS_KEYBOARD_SELECTION_SELECT)));
+  keyboards_menubutton_->SetAccessibleName(
+      l10n_util::GetStringUTF16(IDS_KEYBOARD_SELECTION_SELECT));
+  select_network_label_->SetFont(select_label_font);
   select_network_label_->SetText(
       UTF16ToWide(l10n_util::GetStringUTF16(IDS_NETWORK_SELECTION_SELECT)));
+  SetMenuButtonFont(network_dropdown_, base_font);
+  network_dropdown_->SetAccessibleName(
+      l10n_util::GetStringUTF16(IDS_NETWORK_SELECTION_SELECT));
+  proxy_settings_link_->SetFont(base_font);
   proxy_settings_link_->SetText(UTF16ToWide(
       l10n_util::GetStringUTF16(IDS_OPTIONS_PROXIES_CONFIGURE_BUTTON)));
+  connecting_network_label_->SetFont(rb.GetFont(ResourceBundle::MediumFont));
   RecreateNativeControls();
   UpdateConnectingNetworkLabel();
   network_dropdown_->Refresh();
@@ -363,7 +383,7 @@ bool NetworkSelectionView::OnKeyPressed(const views::KeyEvent&) {
 
 void NetworkSelectionView::OnLocaleChanged() {
   show_keyboard_button_ = true;
-  UpdateLocalizedStrings();
+  UpdateLocalizedStringsAndFonts();
   // Proxy settings dialog contains localized title.  Zap it.
   proxy_settings_dialog_.reset(NULL);
 
@@ -371,18 +391,12 @@ void NetworkSelectionView::OnLocaleChanged() {
   SchedulePaint();
 }
 
-void NetworkSelectionView::ViewHierarchyChanged(bool is_add,
-                                                View* parent,
-                                                View* child) {
-  if (is_add && this == child)
-    WizardAccessibilityHelper::GetInstance()->MaybeEnableAccessibility(this);
-}
-
 ////////////////////////////////////////////////////////////////////////////////
 // NetworkSelectionView, public:
 
 gfx::NativeWindow NetworkSelectionView::GetNativeWindow() const {
-  return GTK_WINDOW(static_cast<WidgetGtk*>(GetWidget())->GetNativeView());
+  return
+      GTK_WINDOW(static_cast<const WidgetGtk*>(GetWidget())->GetNativeView());
 }
 
 views::View* NetworkSelectionView::GetNetworkControlView() const {

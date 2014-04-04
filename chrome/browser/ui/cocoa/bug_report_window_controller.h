@@ -1,4 +1,4 @@
-// Copyright (c) 2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,7 +10,7 @@
 
 #include <vector>
 
-#include "base/scoped_nsobject.h"
+#include "base/memory/scoped_nsobject.h"
 
 class Profile;
 class TabContents;
@@ -69,6 +69,15 @@ class TabContents;
   NSDictionary* bugTypeDictionary_;  // Strong
 }
 
+// Properties for bindings.
+@property(nonatomic, copy) NSString* bugDescription;
+@property(nonatomic) NSUInteger bugTypeIndex;
+@property(nonatomic, copy) NSString* pageTitle;
+@property(nonatomic, copy) NSString* pageURL;
+@property(nonatomic) BOOL sendScreenshot;
+@property(nonatomic) BOOL disableScreenshotCheckbox;
+@property(nonatomic, readonly) NSArray* bugTypeList;
+
 // Initialize with the contents of the tab to be reported as buggy / wrong.
 // If dialog is called without an open window, currentTab may be null; in
 // that case, a dialog is opened with options for reporting a bugs not
@@ -97,15 +106,6 @@ class TabContents;
 // the return key in IB.
 - (BOOL)control:(NSControl*)control textView:(NSTextView*)textView
     doCommandBySelector:(SEL)commandSelector;
-
-// Properties for bindings.
-@property (nonatomic, copy) NSString* bugDescription;
-@property (nonatomic) NSUInteger bugTypeIndex;
-@property (nonatomic, copy) NSString* pageTitle;
-@property (nonatomic, copy) NSString* pageURL;
-@property (nonatomic) BOOL sendScreenshot;
-@property (nonatomic) BOOL disableScreenshotCheckbox;
-@property (nonatomic, readonly) NSArray* bugTypeList;
 
 @end
 

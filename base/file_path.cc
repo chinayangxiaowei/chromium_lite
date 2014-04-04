@@ -1,15 +1,13 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "base/file_path.h"
 
-#if defined(OS_WIN)
-#include <windows.h>
-#elif defined(OS_MACOSX)
-#include <CoreFoundation/CoreFoundation.h>
-#endif
+#include <string.h>
+#include <algorithm>
 
+#include "base/basictypes.h"
 #include "base/logging.h"
 #include "base/pickle.h"
 
@@ -23,6 +21,12 @@
 #if defined(OS_MACOSX)
 #include "base/mac/scoped_cftyperef.h"
 #include "base/third_party/icu/icu_utf.h"
+#endif
+
+#if defined(OS_WIN)
+#include <windows.h>
+#elif defined(OS_MACOSX)
+#include <CoreFoundation/CoreFoundation.h>
 #endif
 
 #if defined(FILE_PATH_USES_WIN_SEPARATORS)
@@ -61,8 +65,8 @@ StringType::size_type FindDriveLetter(const StringType& path) {
 }
 
 #if defined(FILE_PATH_USES_DRIVE_LETTERS)
-bool EqualDriveLetterCaseInsensitive(const StringType a,
-                                     const StringType b) {
+bool EqualDriveLetterCaseInsensitive(const StringType& a,
+                                     const StringType& b) {
   size_t a_letter_pos = FindDriveLetter(a);
   size_t b_letter_pos = FindDriveLetter(b);
 
@@ -247,9 +251,8 @@ bool FilePath::AppendRelativePath(const FilePath& child,
   GetComponents(&parent_components);
   child.GetComponents(&child_components);
 
-  if (parent_components.size() >= child_components.size())
-    return false;
-  if (parent_components.size() == 0)
+  if (parent_components.empty() ||
+      parent_components.size() >= child_components.size())
     return false;
 
   std::vector<StringType>::const_iterator parent_comp =
@@ -511,26 +514,40 @@ bool FilePath::ReferencesParent() const {
 }
 
 #if defined(OS_POSIX)
-
 // See file_path.h for a discussion of the encoding of paths on POSIX
-// platforms.  These *Hack() functions are not quite correct, but they're
-// only temporary while we fix the remainder of the code.
+// platforms.  These encoding conversion functions are not quite correct.
+
+string16 FilePath::LossyDisplayName() const {
+  return WideToUTF16(base::SysNativeMBToWide(path_));
+}
+
+std::string FilePath::MaybeAsASCII() const {
+  if (IsStringASCII(path_))
+    return path_;
+  return "";
+}
+
+// The *Hack functions are temporary while we fix the remainder of the code.
 // Remember to remove the #includes at the top when you remove these.
 
 // static
 FilePath FilePath::FromWStringHack(const std::wstring& wstring) {
   return FilePath(base::SysWideToNativeMB(wstring));
 }
-std::wstring FilePath::ToWStringHack() const {
-  return base::SysNativeMBToWide(path_);
-}
 #elif defined(OS_WIN)
+string16 FilePath::LossyDisplayName() const {
+  return path_;
+}
+
+std::string FilePath::MaybeAsASCII() const {
+  if (IsStringASCII(path_))
+    return WideToASCII(path_);
+  return "";
+}
+
 // static
 FilePath FilePath::FromWStringHack(const std::wstring& wstring) {
   return FilePath(wstring);
-}
-std::wstring FilePath::ToWStringHack() const {
-  return path_;
 }
 #endif
 

@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,18 +7,18 @@
 #pragma once
 
 #include <map>
+#include <string>
 #include <vector>
 
 #include "app/sql/init_status.h"
 #include "base/file_path.h"
-#include "base/ref_counted.h"
+#include "base/memory/ref_counted.h"
 #include "base/synchronization/lock.h"
-#include "chrome/browser/browser_thread.h"
 #include "chrome/browser/search_engines/template_url_id.h"
-#include "webkit/glue/form_field.h"
+#include "content/browser/browser_thread.h"
 
 class AutofillChange;
-class AutoFillProfile;
+class AutofillProfile;
 class CreditCard;
 class GURL;
 #if defined(OS_WIN)
@@ -35,6 +35,7 @@ class Thread;
 }
 
 namespace webkit_glue {
+struct FormField;
 struct PasswordForm;
 }
 
@@ -69,8 +70,8 @@ typedef enum {
   TOKEN_RESULT,                // WDResult<std::vector<std::string>>
   AUTOFILL_VALUE_RESULT,       // WDResult<std::vector<string16>>
   AUTOFILL_CHANGES,            // WDResult<std::vector<AutofillChange>>
-  AUTOFILL_PROFILE_RESULT,     // WDResult<AutoFillProfile>
-  AUTOFILL_PROFILES_RESULT,    // WDResult<std::vector<AutoFillProfile*>>
+  AUTOFILL_PROFILE_RESULT,     // WDResult<AutofillProfile>
+  AUTOFILL_PROFILES_RESULT,    // WDResult<std::vector<AutofillProfile*>>
   AUTOFILL_CREDITCARD_RESULT,  // WDResult<CreditCard>
   AUTOFILL_CREDITCARDS_RESULT  // WDResult<std::vector<CreditCard*>>
 } WDResultType;
@@ -415,7 +416,7 @@ class WebDataService
 
   //////////////////////////////////////////////////////////////////////////////
   //
-  // AutoFill.
+  // Autofill.
   //
   //////////////////////////////////////////////////////////////////////////////
 
@@ -437,31 +438,35 @@ class WebDataService
   void RemoveFormValueForElementName(const string16& name,
                                      const string16& value);
 
-  // Schedules a task to add an AutoFill profile to the web database.
-  void AddAutoFillProfileGUID(const AutoFillProfile& profile);
+  // Schedules a task to add an Autofill profile to the web database.
+  void AddAutofillProfile(const AutofillProfile& profile);
 
-  // Schedules a task to update an AutoFill profile in the web database.
-  void UpdateAutoFillProfileGUID(const AutoFillProfile& profile);
+  // Schedules a task to update an Autofill profile in the web database.
+  void UpdateAutofillProfile(const AutofillProfile& profile);
 
-  // Schedules a task to remove an AutoFill profile from the web database.
+  // Schedules a task to remove an Autofill profile from the web database.
   // |guid| is the identifer of the profile to remove.
-  void RemoveAutoFillProfileGUID(const std::string& guid);
+  void RemoveAutofillProfile(const std::string& guid);
 
-  // Initiates the request for all AutoFill profiles.  The method
+  // Initiates the request for all Autofill profiles.  The method
   // OnWebDataServiceRequestDone of |consumer| gets called when the request is
   // finished, with the profiles included in the argument |result|.  The
   // consumer owns the profiles.
-  Handle GetAutoFillProfiles(WebDataServiceConsumer* consumer);
+  Handle GetAutofillProfiles(WebDataServiceConsumer* consumer);
+
+  // Remove "trashed" profile guids from the web database and optionally send
+  // notifications to tell Sync that the items have been removed.
+  void EmptyMigrationTrash(bool notify_sync);
 
   // Schedules a task to add credit card to the web database.
-  void AddCreditCardGUID(const CreditCard& credit_card);
+  void AddCreditCard(const CreditCard& credit_card);
 
   // Schedules a task to update credit card in the web database.
-  void UpdateCreditCardGUID(const CreditCard& credit_card);
+  void UpdateCreditCard(const CreditCard& credit_card);
 
   // Schedules a task to remove a credit card from the web database.
   // |guid| is identifer of the credit card to remove.
-  void RemoveCreditCardGUID(const std::string& guid);
+  void RemoveCreditCard(const std::string& guid);
 
   // Initiates the request for all credit cards.  The method
   // OnWebDataServiceRequestDone of |consumer| gets called when the request is
@@ -469,8 +474,8 @@ class WebDataService
   // consumer owns the credit cards.
   Handle GetCreditCards(WebDataServiceConsumer* consumer);
 
-  // Removes AutoFill records from the database.
-  void RemoveAutoFillProfilesAndCreditCardsModifiedBetween(
+  // Removes Autofill records from the database.
+  void RemoveAutofillProfilesAndCreditCardsModifiedBetween(
       const base::Time& delete_begin,
       const base::Time& delete_end);
 
@@ -502,8 +507,7 @@ class WebDataService
   //
   //////////////////////////////////////////////////////////////////////////////
  private:
-  friend class base::RefCountedThreadSafe<WebDataService>;
-  friend class BrowserThread;
+  friend struct BrowserThread::DeleteOnThread<BrowserThread::UI>;
   friend class DeleteTask<WebDataService>;
   friend class ShutdownTask;
 
@@ -588,7 +592,7 @@ class WebDataService
 
   //////////////////////////////////////////////////////////////////////////////
   //
-  // AutoFill.
+  // Autofill.
   //
   //////////////////////////////////////////////////////////////////////////////
   void AddFormElementsImpl(
@@ -599,15 +603,16 @@ class WebDataService
       GenericRequest2<base::Time, base::Time>* request);
   void RemoveFormValueForElementNameImpl(
       GenericRequest2<string16, string16>* request);
-  void AddAutoFillProfileGUIDImpl(GenericRequest<AutoFillProfile>* request);
-  void UpdateAutoFillProfileGUIDImpl(GenericRequest<AutoFillProfile>* request);
-  void RemoveAutoFillProfileGUIDImpl(GenericRequest<std::string>* request);
-  void GetAutoFillProfilesImpl(WebDataRequest* request);
-  void AddCreditCardGUIDImpl(GenericRequest<CreditCard>* request);
-  void UpdateCreditCardGUIDImpl(GenericRequest<CreditCard>* request);
-  void RemoveCreditCardGUIDImpl(GenericRequest<std::string>* request);
+  void AddAutofillProfileImpl(GenericRequest<AutofillProfile>* request);
+  void UpdateAutofillProfileImpl(GenericRequest<AutofillProfile>* request);
+  void RemoveAutofillProfileImpl(GenericRequest<std::string>* request);
+  void GetAutofillProfilesImpl(WebDataRequest* request);
+  void EmptyMigrationTrashImpl(GenericRequest<bool>* request);
+  void AddCreditCardImpl(GenericRequest<CreditCard>* request);
+  void UpdateCreditCardImpl(GenericRequest<CreditCard>* request);
+  void RemoveCreditCardImpl(GenericRequest<std::string>* request);
   void GetCreditCardsImpl(WebDataRequest* request);
-  void RemoveAutoFillProfilesAndCreditCardsModifiedBetweenImpl(
+  void RemoveAutofillProfilesAndCreditCardsModifiedBetweenImpl(
       GenericRequest2<base::Time, base::Time>* request);
 
   // True once initialization has started.

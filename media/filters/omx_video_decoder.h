@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -28,7 +28,9 @@ class OmxVideoDecoder : public VideoDecoder,
   virtual ~OmxVideoDecoder();
 
   // Filter implementations.
-  virtual void Initialize(DemuxerStream* stream, FilterCallback* callback);
+  virtual void Initialize(DemuxerStream* stream,
+                          FilterCallback* callback,
+                          StatisticsCallback* stats_callback);
   virtual void Stop(FilterCallback* callback);
   virtual void Flush(FilterCallback* callback);
   virtual void Seek(base::TimeDelta time, FilterCallback* callback);
@@ -45,7 +47,8 @@ class OmxVideoDecoder : public VideoDecoder,
   virtual void OnError();
   virtual void OnFormatChange(VideoStreamInfo stream_info);
   virtual void ProduceVideoSample(scoped_refptr<Buffer> buffer);
-  virtual void ConsumeVideoFrame(scoped_refptr<VideoFrame> frame);
+  virtual void ConsumeVideoFrame(scoped_refptr<VideoFrame> frame,
+                                 const PipelineStatistics& statistics);
 
   // TODO(hclam): This is very ugly that we keep reference instead of
   // scoped_refptr.
@@ -58,13 +61,12 @@ class OmxVideoDecoder : public VideoDecoder,
   scoped_ptr<VideoDecodeEngine> decode_engine_;
   scoped_ptr<VideoDecodeContext> decode_context_;
   MediaFormat media_format_;
-  size_t width_;
-  size_t height_;
 
   scoped_ptr<FilterCallback> initialize_callback_;
   scoped_ptr<FilterCallback> uninitialize_callback_;
   scoped_ptr<FilterCallback> flush_callback_;
   scoped_ptr<FilterCallback> seek_callback_;
+  scoped_ptr<StatisticsCallback> statistics_callback_;
 
   VideoCodecInfo info_;
 

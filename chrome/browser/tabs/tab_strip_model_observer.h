@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -56,15 +56,26 @@ class TabStripModelObserver {
   // action is necessary to deal with the TabContents no longer being present.
   virtual void TabDetachedAt(TabContentsWrapper* contents, int index);
 
-  // The selected TabContents is about to change from |old_contents| at |index|.
+  // The selected TabContents is about to change from |old_contents|.
   // This gives observers a chance to prepare for an impending switch before it
   // happens.
-  virtual void TabDeselectedAt(TabContentsWrapper* contents, int index);
+  virtual void TabDeselected(TabContentsWrapper* contents);
 
-  // The selected TabContents changed from |old_contents| to |new_contents| at
-  // |index|. |user_gesture| specifies whether or not this was done by a user
-  // input event (e.g. clicking on a tab, keystroke) or as a side-effect of
-  // some other function.
+  // Sent when the selection changes. The previously selected tab is identified
+  // by |old_contents| and the newly selected tab by |new_contents|. |index| is
+  // the index of |new_contents|. When using multiple selection this may be sent
+  // even when the active tab has not changed. For example, if the selection is
+  // extended this method is invoked to inform observers the selection has
+  // changed, but |old_contents| and |new_contents| are the same.  If you only
+  // care about when the active tab changes, check for when |old_contents|
+  // differs from |new_contents|. |user_gesture| specifies whether or not this
+  // was done by a user input event (e.g. clicking on a tab, keystroke) or as a
+  // side-effect of some other function.
+  //
+  // TODO(sky): consider not overloading this. Instead rename this to
+  // TabActivatedAt (or something) and have TabSelectionChanged as well.
+  // TabSelectedAt. This requires renaming everyone to use new terms instead of
+  // selection.
   virtual void TabSelectedAt(TabContentsWrapper* old_contents,
                              TabContentsWrapper* new_contents,
                              int index,

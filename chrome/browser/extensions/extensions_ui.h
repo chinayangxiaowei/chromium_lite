@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,15 +9,15 @@
 #include <string>
 #include <vector>
 
-#include "base/scoped_ptr.h"
-#include "chrome/browser/dom_ui/chrome_url_data_manager.h"
-#include "chrome/browser/dom_ui/dom_ui.h"
-#include "chrome/browser/extensions/extension_install_ui.h"
+#include "base/memory/scoped_ptr.h"
+#include "chrome/browser/extensions/extension_uninstall_dialog.h"
 #include "chrome/browser/extensions/pack_extension_job.h"
-#include "chrome/browser/shell_dialogs.h"
+#include "chrome/browser/ui/shell_dialogs.h"
+#include "chrome/browser/ui/webui/chrome_url_data_manager.h"
 #include "chrome/common/extensions/extension_resource.h"
-#include "chrome/common/notification_observer.h"
-#include "chrome/common/notification_registrar.h"
+#include "content/browser/webui/web_ui.h"
+#include "content/common/notification_observer.h"
+#include "content/common/notification_registrar.h"
 #include "googleurl/src/gurl.h"
 
 class DictionaryValue;
@@ -49,7 +49,7 @@ class ExtensionsUIHTMLSource : public ChromeURLDataManager::DataSource {
   // Called when the network layer has requested a resource underneath
   // the path we registered.
   virtual void StartDataRequest(const std::string& path,
-                                bool is_off_the_record,
+                                bool is_incognito,
                                 int request_id);
   virtual std::string GetMimeType(const std::string&) const;
 
@@ -60,52 +60,16 @@ class ExtensionsUIHTMLSource : public ChromeURLDataManager::DataSource {
 };
 
 // The handler for JavaScript messages related to the "extensions" view.
-class ExtensionsDOMHandler
-    : public DOMMessageHandler,
-      public NotificationObserver,
-      public PackExtensionJob::Client,
-      public SelectFileDialog::Listener,
-      public ExtensionInstallUI::Delegate {
+class ExtensionsDOMHandler : public WebUIMessageHandler,
+                             public NotificationObserver,
+                             public PackExtensionJob::Client,
+                             public SelectFileDialog::Listener,
+                             public ExtensionUninstallDialog::Delegate {
  public:
-
-  // Helper class that loads the icons for the extensions in the management UI.
-  // We do this with native code instead of just using chrome-extension:// URLs
-  // for two reasons:
-  //
-  // 1. We need to support the disabled extensions, too, and using URLs won't
-  //    work for them.
-  // 2. We want to desaturate the icons of the disabled extensions to make them
-  //    look disabled.
-  class IconLoader : public base::RefCountedThreadSafe<IconLoader> {
-   public:
-    explicit IconLoader(ExtensionsDOMHandler* handler);
-
-    // Load |icons|. Will call handler->OnIconsLoaded when complete. IconLoader
-    // takes ownership of both arguments.
-    void LoadIcons(std::vector<ExtensionResource>* icons,
-                   DictionaryValue* json);
-
-    // Cancel the load. IconLoader won't try to call back to the handler after
-    // this.
-    void Cancel();
-
-   private:
-    // Load the icons and call ReportResultOnUIThread when done. This method
-    // takes ownership of both arguments.
-    void LoadIconsOnFileThread(std::vector<ExtensionResource>* icons,
-                               DictionaryValue* json);
-
-    // Report back to the handler. This method takes ownership of |json|.
-    void ReportResultOnUIThread(DictionaryValue* json);
-
-    // The handler we will report back to.
-    ExtensionsDOMHandler* handler_;
-  };
-
   explicit ExtensionsDOMHandler(ExtensionService* extension_service);
   virtual ~ExtensionsDOMHandler();
 
-  // DOMMessageHandler implementation.
+  // WebUIMessageHandler implementation.
   virtual void RegisterMessages();
 
   // Extension Detail JSON Struct for page. (static for ease of testing).
@@ -117,21 +81,15 @@ class ExtensionsDOMHandler
       bool enabled,
       bool terminated);
 
-  // ContentScript JSON Struct for page. (static for ease of testing).
-  static DictionaryValue* CreateContentScriptDetailValue(
-      const UserScript& script,
-      const FilePath& extension_path);
-
   // ExtensionPackJob::Client
   virtual void OnPackSuccess(const FilePath& crx_file,
                              const FilePath& key_file);
 
   virtual void OnPackFailure(const std::string& error);
 
-  // ExtensionInstallUI::Delegate implementation, used for receiving
-  // notification about uninstall confirmation dialog selections.
-  virtual void InstallUIProceed();
-  virtual void InstallUIAbort();
+  // ExtensionUninstallDialog::Delegate:
+  virtual void ExtensionDialogAccepted();
+  virtual void ExtensionDialogCanceled();
 
  private:
   // Callback for "requestExtensionsData" message.
@@ -185,6 +143,9 @@ class ExtensionsDOMHandler
   // Forces a UI update if appropriate after a notification is received.
   void MaybeUpdateAfterNotification();
 
+  // Register for notifications that we need to reload the page.
+  void RegisterForNotifications();
+
   // SelectFileDialog::Listener
   virtual void FileSelected(const FilePath& path,
                             int index, void* params);
@@ -205,23 +166,9 @@ class ExtensionsDOMHandler
       const Extension* extension,
       std::vector<ExtensionPage> *result);
 
-  // Returns the best icon to display in the UI for an extension, or an empty
-  // ExtensionResource if no good icon exists.
-  ExtensionResource PickExtensionIcon(const Extension* extension);
-
-  // Loads the extension resources into the json data, then calls OnIconsLoaded.
-  // Takes ownership of |icons|.
-  // Called on the file thread.
-  void LoadExtensionIcons(std::vector<ExtensionResource>* icons,
-                          DictionaryValue* json_data);
-
-  // Takes ownership of |json_data| and tells HTML about it.
-  // Called on the UI thread.
-  void OnIconsLoaded(DictionaryValue* json_data);
-
-  // Returns the ExtensionInstallUI object for this class, creating it if
+  // Returns the ExtensionUninstallDialog object for this class, creating it if
   // needed.
-  ExtensionInstallUI* GetExtensionInstallUI();
+  ExtensionUninstallDialog* GetExtensionUninstallDialog();
 
   // Our model.
   scoped_refptr<ExtensionService> extensions_service_;
@@ -232,12 +179,8 @@ class ExtensionsDOMHandler
   // Used to package the extension.
   scoped_refptr<PackExtensionJob> pack_job_;
 
-  // Used to load icons asynchronously on the file thread.
-  scoped_refptr<IconLoader> icon_loader_;
-
-  // Used to show confirmation UI for uninstalling/enabling extensions in
-  // incognito mode.
-  scoped_ptr<ExtensionInstallUI> install_ui_;
+  // Used to show confirmation UI for uninstalling extensions in incognito mode.
+  scoped_ptr<ExtensionUninstallDialog> extension_uninstall_dialog_;
 
   // The id of the extension we are prompting the user about.
   std::string extension_id_prompting_;
@@ -261,7 +204,7 @@ class ExtensionsDOMHandler
   DISALLOW_COPY_AND_ASSIGN(ExtensionsDOMHandler);
 };
 
-class ExtensionsUI : public DOMUI {
+class ExtensionsUI : public WebUI {
  public:
   explicit ExtensionsUI(TabContents* contents);
 

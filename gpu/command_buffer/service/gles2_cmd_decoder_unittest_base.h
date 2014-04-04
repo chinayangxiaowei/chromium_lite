@@ -1,11 +1,10 @@
-// Copyright (c) 2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef GPU_COMMAND_BUFFER_SERVICE_GLES2_CMD_DECODER_UNITTEST_BASE_H_
 #define GPU_COMMAND_BUFFER_SERVICE_GLES2_CMD_DECODER_UNITTEST_BASE_H_
 
-#include "app/gfx/gl/gl_context_stub.h"
 #include "gpu/command_buffer/common/gl_mock.h"
 #include "gpu/command_buffer/common/gles2_cmd_format.h"
 #include "gpu/command_buffer/common/gles2_cmd_utils.h"
@@ -20,22 +19,15 @@
 #include "gpu/command_buffer/service/texture_manager.h"
 #include "gpu/GLES2/gles2_command_buffer.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "ui/gfx/gl/gl_context_stub.h"
 
 namespace gpu {
 namespace gles2 {
 
 class GLES2DecoderTestBase : public testing::Test {
  public:
-  GLES2DecoderTestBase()
-      : client_buffer_id_(100),
-        client_framebuffer_id_(101),
-        client_program_id_(102),
-        client_renderbuffer_id_(103),
-        client_shader_id_(104),
-        client_texture_id_(106),
-        client_element_buffer_id_(107) {
-    memset(immediate_buffer_, 0xEE, sizeof(immediate_buffer_));
-  }
+  GLES2DecoderTestBase();
+  virtual ~GLES2DecoderTestBase();
 
  protected:
   static const GLint kMaxTextureSize = 2048;
@@ -168,7 +160,7 @@ class GLES2DecoderTestBase : public testing::Test {
 
   void SetBucketAsCString(uint32 bucket_id, const char* str);
 
-  void InitDecoder(const char* extensions);
+  void InitDecoder(const char* extensions, bool has_alpha_backbuffer);
 
   const ContextGroup& group() const {
     return *group_.get();
@@ -277,6 +269,7 @@ class GLES2DecoderTestBase : public testing::Test {
   uint32 shared_memory_id_;
   uint32 shared_memory_offset_;
   void* shared_memory_address_;
+  void* shared_memory_base_;
 
   int8 immediate_buffer_[256];
 
@@ -293,15 +286,16 @@ class GLES2DecoderTestBase : public testing::Test {
     virtual ~MockCommandBufferEngine() {
     }
 
-    Buffer GetSharedMemoryBuffer(int32 shm_id) {
-      return shm_id == kSharedMemoryId ? valid_buffer_ : invalid_buffer_;
+    virtual Buffer GetSharedMemoryBuffer(int32 shm_id) {
+      return shm_id == kSharedMemoryId || shm_id == gpu::kLatchSharedMemoryId ?
+          valid_buffer_ : invalid_buffer_;
     }
 
     void ClearSharedMemory() {
       memset(data_.get(), kInitialMemoryValue, kSharedBufferSize);
     }
 
-    void set_token(int32 token) {
+    virtual void set_token(int32 token) {
       DCHECK(false);
     }
 

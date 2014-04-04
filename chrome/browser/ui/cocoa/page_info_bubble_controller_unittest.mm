@@ -1,8 +1,8 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "base/scoped_nsobject.h"
+#include "base/memory/scoped_nsobject.h"
 #include "base/string_util.h"
 #include "base/string_number_conversions.h"
 #include "base/sys_string_conversions.h"
@@ -185,7 +185,6 @@ TEST_F(PageInfoBubbleControllerTest, NoHistoryMixedSecurity) {
       string16(),
       description,
       PageInfoModel::SECTION_INFO_CONNECTION);
-
 
   CreateBubble();
   [controller_ setCertID:1];

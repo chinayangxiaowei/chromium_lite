@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -14,8 +14,8 @@
 #include "base/message_loop.h"
 #include "chrome/browser/notifications/balloon_collection.h"
 #include "chrome/browser/notifications/balloon_collection_base.h"
-#include "gfx/point.h"
-#include "gfx/rect.h"
+#include "ui/gfx/point.h"
+#include "ui/gfx/rect.h"
 
 // Mac balloons grow from the top down and have close buttons on top, so
 // offsetting is not necessary for easy multiple-closing.  Other platforms grow
@@ -50,7 +50,7 @@ class BalloonCollectionImpl : public BalloonCollection
   virtual void SetPositionPreference(PositionPreference position);
   virtual void DisplayChanged();
   virtual void OnBalloonClosed(Balloon* source);
-  virtual const Balloons& GetActiveBalloons() { return base_.balloons(); }
+  virtual const Balloons& GetActiveBalloons();
 
   // MessageLoopForUI::Observer interface.
 #if defined(OS_WIN)
@@ -72,6 +72,7 @@ class BalloonCollectionImpl : public BalloonCollection
     // These enumerations all are based on a screen orientation where
     // the origin is the top-left.
     enum Placement {
+      INVALID,
       VERTICALLY_FROM_TOP_LEFT,
       VERTICALLY_FROM_TOP_RIGHT,
       VERTICALLY_FROM_BOTTOM_LEFT,
@@ -119,6 +120,10 @@ class BalloonCollectionImpl : public BalloonCollection
     // Return a offscreen location which is offscreen for this layout,
     // to be used as the initial position for an animation into view.
     gfx::Point OffScreenLocation() const;
+
+    // Returns true if the layout requires offsetting for keeping the close
+    // buttons under the cursor during rapid-close interaction.
+    bool RequiresOffsets() const;
 
    private:
     // Layout parameters

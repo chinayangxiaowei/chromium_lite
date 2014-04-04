@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,8 +9,8 @@
 #define GPU_COMMAND_BUFFER_COMMON_GL_MOCK_H_
 #pragma once
 
-#include "app/gfx/gl/gl_interface.h"
 #include "testing/gmock/include/gmock/gmock.h"
+#include "ui/gfx/gl/gl_interface.h"
 
 namespace gfx {
 
@@ -260,6 +260,8 @@ class MockGLInterface : public GLInterface {
 
   MOCK_METHOD1(LinkProgram, void(GLuint program));
 
+  MOCK_METHOD2(MapBuffer, void*(GLenum target, GLenum access));
+
   MOCK_METHOD2(PixelStorei, void(GLenum pname, GLint param));
 
   MOCK_METHOD2(PolygonOffset, void(GLfloat factor, GLfloat units));
@@ -376,6 +378,8 @@ class MockGLInterface : public GLInterface {
       GLint location, GLsizei count, GLboolean transpose,
       const GLfloat* value));
 
+  MOCK_METHOD1(UnmapBuffer, GLboolean(GLenum target));
+
   MOCK_METHOD1(UseProgram, void(GLuint program));
 
   MOCK_METHOD1(ValidateProgram, void(GLuint program));
@@ -408,6 +412,20 @@ class MockGLInterface : public GLInterface {
 
   MOCK_METHOD4(GetMaxValueInBufferCHROMIUM, GLuint(
       GLuint buffer_id, GLsizei count, GLenum type, GLuint offset));
+
+  MOCK_METHOD2(GenFencesNV, void(GLsizei n, GLuint *fences));
+
+  MOCK_METHOD2(DeleteFencesNV, void(GLsizei n, const GLuint *fences));
+
+  MOCK_METHOD2(SetFenceNV, void(GLuint fence, GLenum condition));
+
+  MOCK_METHOD1(TestFenceNV, GLboolean(GLuint fence));
+
+  MOCK_METHOD1(FinishFenceNV, void(GLuint fence));
+
+  MOCK_METHOD1(IsFenceNV, GLboolean(GLuint fence));
+
+  MOCK_METHOD3(GetFenceivNV, void(GLuint fence, GLenum pname, GLint *params));
 };
 
 }  // namespace gfx

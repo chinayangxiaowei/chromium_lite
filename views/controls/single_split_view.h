@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -39,20 +39,17 @@ class SingleSplitView : public views::View {
                   Orientation orientation,
                   Observer* observer);
 
-  virtual void DidChangeBounds(const gfx::Rect& previous,
-                               const gfx::Rect& current);
+  virtual void Layout() OVERRIDE;
 
-  virtual void Layout();
-
-  virtual AccessibilityTypes::Role GetAccessibleRole();
+  virtual void GetAccessibleState(ui::AccessibleViewState* state) OVERRIDE;
 
   // SingleSplitView's preferred size is the sum of the preferred widths
   // and the max of the heights.
-  virtual gfx::Size GetPreferredSize();
+  virtual gfx::Size GetPreferredSize() OVERRIDE;
 
   // Overriden to return a resize cursor when over the divider.
-  virtual gfx::NativeCursor GetCursorForPoint(Event::EventType event_type,
-                                              const gfx::Point& p);
+  virtual gfx::NativeCursor GetCursorForPoint(ui::EventType event_type,
+                                              const gfx::Point& p) OVERRIDE;
 
   Orientation orientation() const {
     return is_horizontal_ ? HORIZONTAL_SPLIT : VERTICAL_SPLIT;
@@ -77,10 +74,14 @@ class SingleSplitView : public views::View {
                                gfx::Rect* leading_bounds,
                                gfx::Rect* trailing_bounds) const;
 
+  void SetAccessibleName(const string16& name);
+
  protected:
-  virtual bool OnMousePressed(const MouseEvent& event);
-  virtual bool OnMouseDragged(const MouseEvent& event);
-  virtual void OnMouseReleased(const MouseEvent& event, bool canceled);
+  // View overrides.
+  virtual bool OnMousePressed(const MouseEvent& event) OVERRIDE;
+  virtual bool OnMouseDragged(const MouseEvent& event) OVERRIDE;
+  virtual void OnMouseCaptureLost() OVERRIDE;
+  virtual void OnBoundsChanged(const gfx::Rect& previous_bounds) OVERRIDE;
 
  private:
   // This test calls OnMouse* functions.
@@ -129,6 +130,9 @@ class SingleSplitView : public views::View {
 
   // Observer to notify about user initiated handle movements. Not own by us.
   Observer* observer_;
+
+  // The accessible name of this view.
+  string16 accessible_name_;
 
   DISALLOW_COPY_AND_ASSIGN(SingleSplitView);
 };

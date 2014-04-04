@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,21 +7,21 @@
 #include <set>
 
 #include "base/file_util.h"
-#include "base/scoped_handle.h"
-#include "base/scoped_temp_dir.h"
+#include "base/memory/scoped_handle.h"
+#include "base/memory/scoped_temp_dir.h"
 #include "base/string_util.h"
 #include "base/threading/thread.h"
 #include "base/utf_string_conversions.h"
 #include "base/values.h"
 #include "net/base/file_stream.h"
-#include "chrome/common/common_param_traits.h"
 #include "chrome/common/extensions/extension.h"
 #include "chrome/common/extensions/extension_constants.h"
 #include "chrome/common/extensions/extension_file_util.h"
 #include "chrome/common/extensions/extension_l10n_util.h"
-#include "chrome/common/json_value_serializer.h"
 #include "chrome/common/url_constants.h"
 #include "chrome/common/zip.h"
+#include "content/common/common_param_traits.h"
+#include "content/common/json_value_serializer.h"
 #include "ipc/ipc_message_utils.h"
 #include "third_party/skia/include/core/SkBitmap.h"
 #include "webkit/glue/image_decoder.h"
@@ -177,7 +177,11 @@ bool ExtensionUnpacker::Run() {
   // EXTENSION.
   std::string error;
   scoped_refptr<Extension> extension(Extension::Create(
-      temp_install_dir_, Extension::INVALID, *parsed_manifest_, false, &error));
+      temp_install_dir_,
+      Extension::INVALID,
+      *parsed_manifest_,
+      Extension::NO_FLAGS,
+      &error));
   if (!extension.get()) {
     SetError(error);
     return false;
@@ -286,13 +290,14 @@ bool ExtensionUnpacker::ReadMessageCatalog(const FilePath& message_path) {
   scoped_ptr<DictionaryValue> root(
       static_cast<DictionaryValue*>(serializer.Deserialize(NULL, &error)));
   if (!root.get()) {
-    std::string messages_file = WideToASCII(message_path.ToWStringHack());
+    string16 messages_file = message_path.LossyDisplayName();
     if (error.empty()) {
       // If file is missing, Deserialize will fail with empty error.
       SetError(base::StringPrintf("%s %s", errors::kLocalesMessagesFileMissing,
-                                  messages_file.c_str()));
+                                  UTF16ToUTF8(messages_file).c_str()));
     } else {
-      SetError(base::StringPrintf("%s: %s", messages_file.c_str(),
+      SetError(base::StringPrintf("%s: %s",
+                                  UTF16ToUTF8(messages_file).c_str(),
                                   error.c_str()));
     }
     return false;
@@ -300,11 +305,17 @@ bool ExtensionUnpacker::ReadMessageCatalog(const FilePath& message_path) {
 
   FilePath relative_path;
   // message_path was created from temp_install_dir. This should never fail.
-  if (!temp_install_dir_.AppendRelativePath(message_path, &relative_path))
+  if (!temp_install_dir_.AppendRelativePath(message_path, &relative_path)) {
     NOTREACHED();
+    return false;
+  }
 
-  parsed_catalogs_->Set(WideToUTF8(relative_path.DirName().ToWStringHack()),
-                        root.release());
+  std::string dir_name = relative_path.DirName().MaybeAsASCII();
+  if (dir_name.empty()) {
+    NOTREACHED();
+    return false;
+  }
+  parsed_catalogs_->Set(dir_name, root.release());
 
   return true;
 }

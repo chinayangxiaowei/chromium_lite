@@ -6,11 +6,9 @@
 #define CHROME_BROWSER_UI_BROWSER_WINDOW_H_
 #pragma once
 
-#include <vector>
-
-#include "chrome/browser/tab_contents/navigation_entry.h"
 #include "chrome/common/content_settings_types.h"
-#include "gfx/native_widget_types.h"
+#include "content/browser/tab_contents/navigation_entry.h"
+#include "ui/gfx/native_widget_types.h"
 
 class Browser;
 class BrowserWindowTesting;
@@ -19,6 +17,7 @@ class FindBar;
 class GURL;
 class HtmlDialogUIDelegate;
 class LocationBar;
+class Panel;
 class Profile;
 class StatusBubble;
 class TabContents;
@@ -47,8 +46,14 @@ class Extension;
 // NOTE: All getters may return NULL.
 class BrowserWindow {
  public:
+  virtual ~BrowserWindow() {}
+
   // Show the window, or activates it if it's already visible.
   virtual void Show() = 0;
+
+  // Show the window, but do not activate it. Does nothing if window
+  // is already visible.
+  virtual void ShowInactive() = 0;
 
   // Sets the window's size and position to the specified values.
   virtual void SetBounds(const gfx::Rect& bounds) = 0;
@@ -91,7 +96,7 @@ class BrowserWindow {
   // selected tab.
   // TODO(beng): Remove. Infobars/Boomarks bars should talk directly to
   //             BrowserView.
-  virtual void SelectedTabToolbarSizeChanged(bool is_animating) = 0;
+  virtual void ToolbarSizeChanged(bool is_animating) = 0;
 
   // Inform the frame that the selected tab favicon or title has changed. Some
   // frames may need to refresh their title bar.
@@ -120,6 +125,11 @@ class BrowserWindow {
   // Returns the nonmaximized bounds of the frame (even if the frame is
   // currently maximized or minimized) in terms of the screen coordinates.
   virtual gfx::Rect GetRestoredBounds() const = 0;
+
+  // Retrieves the window's current bounds, including its frame.
+  // This will only differ from GetRestoredBounds() for maximized
+  // and minimized windows.
+  virtual gfx::Rect GetBounds() const = 0;
 
   // TODO(beng): REMOVE?
   // Returns true if the frame is maximized (aka zoomed).
@@ -189,6 +199,7 @@ class BrowserWindow {
       TemplateURL* template_url,
       TemplateURLModel* template_url_model) {
     // TODO(levin): Implement this for non-Windows platforms and make it pure.
+    // http://crbug.com/38475
   }
 
   // Shows a confirmation dialog box for adding a search engine described by
@@ -200,7 +211,7 @@ class BrowserWindow {
   virtual void ToggleBookmarkBar() = 0;
 
   // Shows the About Chrome dialog box.
-  virtual views::Window* ShowAboutChromeDialog() = 0;
+  virtual void ShowAboutChromeDialog() = 0;
 
   // Shows the Update Recommended dialog box.
   virtual void ShowUpdateChromeDialog() = 0;
@@ -221,32 +232,11 @@ class BrowserWindow {
   // Returns the DownloadShelf.
   virtual DownloadShelf* GetDownloadShelf() = 0;
 
-  // Shows the Clear Browsing Data dialog box.
-  virtual void ShowClearBrowsingDataDialog() = 0;
-
-  // Shows the Import Bookmarks & Settings dialog box.
-  virtual void ShowImportDialog() = 0;
-
-  // Shows the Search Engines dialog box.
-  virtual void ShowSearchEnginesDialog() = 0;
-
-  // Shows the Password Manager dialog box.
-  virtual void ShowPasswordManager() = 0;
-
   // Shows the repost form confirmation dialog box.
   virtual void ShowRepostFormWarningDialog(TabContents* tab_contents) = 0;
 
-  // Shows the Content Settings dialog box.
-  virtual void ShowContentSettingsWindow(ContentSettingsType content_type,
-                                         Profile* profile) = 0;
-
   // Shows the collected cookies dialog box.
   virtual void ShowCollectedCookiesDialog(TabContents* tab_contents) = 0;
-
-  // Shows a dialog to the user that something is wrong with the profile.
-  // |message_id| is the ID for a string in the string table which will be
-  // displayed in the dialog.
-  virtual void ShowProfileErrorDialog(int message_id) = 0;
 
   // Show the bubble that indicates to the user that a theme is being installed.
   virtual void ShowThemeInstallBubble() = 0;
@@ -257,13 +247,12 @@ class BrowserWindow {
   // has confirmed.
   virtual void ConfirmBrowserCloseWithPendingDownloads() = 0;
 
-  // Shows a dialog box with HTML content, e.g. for Gears. |parent_window| is
-  // the window the dialog should be opened modal to and is a native window
-  // handle.
+  // Shows a dialog box with HTML content. |parent_window| is the window the
+  // dialog should be opened modal to and is a native window handle.
   virtual void ShowHTMLDialog(HtmlDialogUIDelegate* delegate,
                               gfx::NativeWindow parent_window) = 0;
 
-  // BrowserThemeProvider calls this when a user has changed his or her theme,
+  // ThemeService calls this when a user has changed his or her theme,
   // indicating that it's time to redraw everything.
   virtual void UserChangedTheme() = 0;
 
@@ -302,7 +291,8 @@ class BrowserWindow {
   virtual void HandleKeyboardEvent(const NativeWebKeyboardEvent& event) = 0;
 
   // Shows the create web app shortcut dialog box.
-  virtual void ShowCreateWebAppShortcutsDialog(TabContents* tab_contents) = 0;
+  virtual void ShowCreateWebAppShortcutsDialog(
+      TabContentsWrapper* tab_contents) = 0;
 
   // Shows the create chrome app shortcut dialog box.
   virtual void ShowCreateChromeAppShortcutsDialog(Profile* profile,
@@ -325,7 +315,7 @@ class BrowserWindow {
   virtual void PrepareForInstant() = 0;
 
   // Invoked when instant's tab contents should be shown.
-  virtual void ShowInstant(TabContents* preview_contents) = 0;
+  virtual void ShowInstant(TabContentsWrapper* preview) = 0;
 
   // Invoked when the instant's tab contents should be hidden.
   // |instant_is_active| indicates if instant is still active.
@@ -347,16 +337,10 @@ class BrowserWindow {
   // Construct a FindBar implementation for the specified |browser|.
   static FindBar* CreateFindBar(Browser* browser_window);
 
-  // Grabs a snapshot of the current browser window and returns the bounds.
-  virtual gfx::Rect GrabWindowSnapshot(std::vector<unsigned char>*
-                                       png_representation) = 0;
-
  protected:
   friend class BrowserList;
   friend class BrowserView;
   virtual void DestroyBrowser() = 0;
-
-  virtual ~BrowserWindow() {}
 };
 
 #if defined(OS_WIN) || defined(TOOLKIT_VIEWS)

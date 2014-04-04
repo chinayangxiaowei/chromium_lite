@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,8 +7,10 @@
 #include "base/file_util.h"
 #include "base/md5.h"
 #include "base/string_number_conversions.h"
-#include "gfx/codec/png_codec.h"
+#include "printing/metafile.h"
+#include "printing/metafile_impl.h"
 #include "third_party/skia/include/core/SkColor.h"
+#include "ui/gfx/codec/png_codec.h"
 
 namespace printing {
 
@@ -32,7 +34,7 @@ Image::Image(const FilePath& path)
   }
 }
 
-Image::Image(const NativeMetafile& metafile)
+Image::Image(const Metafile& metafile)
     : row_length_(0),
       ignore_alpha_(true) {
   LoadMetafile(metafile);
@@ -58,10 +60,10 @@ bool Image::SaveToPng(const FilePath& filepath) const {
   std::vector<unsigned char> compressed;
   bool success = gfx::PNGCodec::Encode(&*data_.begin(),
                                        gfx::PNGCodec::FORMAT_BGRA,
-                                       size_.width(),
-                                       size_.height(),
+                                       size_,
                                        row_length_,
                                        true,
+                                       std::vector<gfx::PNGCodec::Comment>(),
                                        &compressed);
   DCHECK(success && compressed.size());
   if (success) {
@@ -144,8 +146,9 @@ bool Image::LoadPng(const std::string& compressed) {
 
 bool Image::LoadMetafile(const std::string& data) {
   DCHECK(!data.empty());
-  NativeMetafile metafile;
-  metafile.Init(data.data(), data.size());
+  printing::NativeMetafile metafile;
+  if (!metafile.InitFromData(data.data(), data.size()))
+    return false;
   return LoadMetafile(metafile);
 }
 

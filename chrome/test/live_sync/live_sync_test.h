@@ -10,11 +10,9 @@
 
 #include "base/basictypes.h"
 #include "base/file_util.h"
+#include "base/memory/scoped_ptr.h"
+#include "base/memory/scoped_vector.h"
 #include "base/process_util.h"
-#include "base/scoped_ptr.h"
-#include "base/scoped_vector.h"
-#include "chrome/browser/sync/profile_sync_service_harness.h"
-#include "chrome/common/net/test_url_fetcher_factory.h"
 #include "net/base/mock_host_resolver.h"
 #include "net/test/test_server.h"
 
@@ -23,11 +21,13 @@
 
 class CommandLine;
 class Profile;
-class URLRequestContextGetter;
+class ProfileSyncServiceHarness;
+class FakeURLFetcherFactory;
 
 namespace net {
 class ProxyConfig;
 class ScopedDefaultHostResolverProc;
+class URLRequestContextGetter;
 }
 
 // This is the base class for integration tests for all sync data types. Derived
@@ -58,7 +58,7 @@ class LiveSyncTest : public InProcessBrowserTest {
   // A LiveSyncTest must be associated with a particular test type.
   explicit LiveSyncTest(TestType test_type);
 
-  virtual ~LiveSyncTest() {}
+  virtual ~LiveSyncTest();
 
   // Validates command line parameters and creates a local python test server if
   // specified.
@@ -169,7 +169,7 @@ class LiveSyncTest : public InProcessBrowserTest {
 
   // Used to disable and enable network connectivity by providing and
   // clearing an invalid proxy configuration.
-  void SetProxyConfig(URLRequestContextGetter* context,
+  void SetProxyConfig(net::URLRequestContextGetter* context,
                       const net::ProxyConfig& proxy_config);
 
   // Helper method used to set up fake responses for kClientLoginUrl,

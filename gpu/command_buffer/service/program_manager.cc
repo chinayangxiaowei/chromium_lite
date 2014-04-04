@@ -8,7 +8,7 @@
 
 #include "base/basictypes.h"
 #include "base/logging.h"
-#include "base/scoped_ptr.h"
+#include "base/memory/scoped_ptr.h"
 #include "base/string_number_conversions.h"
 #include "gpu/command_buffer/service/gles2_cmd_decoder.h"
 
@@ -32,6 +32,7 @@ ProgramManager::ProgramInfo::UniformInfo::UniformInfo(GLsizei _size,
                                                       const std::string& _name)
     : size(_size),
       type(_type),
+      is_array(false),
       name(_name) {
 }
 
@@ -61,19 +62,23 @@ void ProgramManager::ProgramInfo::Reset() {
   uniform_infos_.clear();
   sampler_indices_.clear();
   attrib_location_to_index_map_.clear();
-  uniform_location_to_index_map_.clear();
+  location_infos_.clear();
   UpdateLogInfo();
 }
 
 void ProgramManager::ProgramInfo::UpdateLogInfo() {
   GLint max_len = 0;
   glGetProgramiv(service_id_, GL_INFO_LOG_LENGTH, &max_len);
+  if (max_len == 0) {
+    set_log_info(NULL);
+    return;
+  }
   scoped_array<char> temp(new char[max_len]);
   GLint len = 0;
   glGetProgramInfoLog(service_id_, max_len, &len, temp.get());
   DCHECK(max_len == 0 || len < max_len);
   DCHECK(len == 0 || temp[len] == '\0');
-  set_log_info(std::string(temp.get(), len));
+  set_log_info(std::string(temp.get(), len).c_str());
 }
 
 void ProgramManager::ProgramInfo::Update() {
@@ -153,14 +158,14 @@ void ProgramManager::ProgramInfo::Update() {
     }
   }
   // Create uniform location to index map.
-  uniform_location_to_index_map_.resize(max_location + 1);
+  location_infos_.resize(max_location + 1);
   for (GLint ii = 0; ii <= max_location; ++ii) {
-    uniform_location_to_index_map_[ii] = -1;
+    location_infos_[ii] = LocationInfo(-1, -1);
   }
   for (size_t ii = 0; ii < uniform_infos_.size(); ++ii) {
     const UniformInfo& info = uniform_infos_[ii];
     for (size_t jj = 0; jj < info.element_locations.size(); ++jj) {
-      uniform_location_to_index_map_[info.element_locations[jj]] = ii;
+      location_infos_[info.element_locations[jj]] = LocationInfo(ii, jj);
     }
   }
   valid_ = true;
@@ -213,17 +218,18 @@ GLint ProgramManager::ProgramInfo::GetAttribLocation(
   return -1;
 }
 
-bool ProgramManager::ProgramInfo::GetUniformTypeByLocation(
-    GLint location, GLenum* type) const {
-  if (location >= 0 &&
-      static_cast<size_t>(location) < uniform_location_to_index_map_.size()) {
-    GLint index = uniform_location_to_index_map_[location];
-    if (index >= 0) {
-      *type = uniform_infos_[index].type;
-      return true;
+const ProgramManager::ProgramInfo::UniformInfo*
+    ProgramManager::ProgramInfo::GetUniformInfoByLocation(
+        GLint location, GLint* array_index) const {
+  DCHECK(array_index);
+  if (location >= 0 && static_cast<size_t>(location) < location_infos_.size()) {
+    const LocationInfo& info = location_infos_[location];
+    if (info.uniform_index >= 0) {
+      *array_index = info.array_index;
+      return &uniform_infos_[info.uniform_index];
     }
   }
-  return false;
+  return NULL;
 }
 
 // Note: This is only valid to call right after a program has been linked
@@ -309,13 +315,14 @@ const ProgramManager::ProgramInfo::UniformInfo*
 
 bool ProgramManager::ProgramInfo::SetSamplers(
     GLint location, GLsizei count, const GLint* value) {
-  if (location >= 0 &&
-      static_cast<size_t>(location) < uniform_location_to_index_map_.size()) {
-    GLint index = uniform_location_to_index_map_[location];
-    if (index >= 0) {
-      UniformInfo& info = uniform_infos_[index];
-      if (info.IsSampler() && count <= info.size) {
-        std::copy(value, value + count, info.texture_units.begin());
+  if (location >= 0 && static_cast<size_t>(location) < location_infos_.size()) {
+    const LocationInfo& location_info = location_infos_[location];
+    if (location_info.uniform_index >= 0) {
+      UniformInfo& info = uniform_infos_[location_info.uniform_index];
+      count = std::min(info.size - location_info.array_index, count);
+      if (info.IsSampler() && count > 0) {
+        std::copy(value, value + count,
+                  info.texture_units.begin() + location_info.array_index);
         return true;
       }
     }
@@ -344,7 +351,7 @@ void ProgramManager::ProgramInfo::GetProgramiv(GLenum pname, GLint* params) {
       break;
     case GL_INFO_LOG_LENGTH:
       // Notice +1 to accomodate NULL terminator.
-      *params = log_info_.size() + 1;
+      *params = log_info_.get() ? (log_info_->size() + 1) : 0;
       break;
     case GL_VALIDATE_STATUS:
       if (!CanLink()) {

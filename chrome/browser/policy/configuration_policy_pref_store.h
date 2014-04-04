@@ -10,8 +10,8 @@
 #include <string>
 
 #include "base/basictypes.h"
+#include "base/memory/scoped_ptr.h"
 #include "base/observer_list.h"
-#include "base/scoped_ptr.h"
 #include "base/values.h"
 #include "chrome/browser/policy/configuration_policy_provider.h"
 #include "chrome/browser/policy/configuration_policy_store_interface.h"
@@ -38,7 +38,8 @@ class ConfigurationPolicyPrefStore
   virtual void AddObserver(PrefStore::Observer* observer);
   virtual void RemoveObserver(PrefStore::Observer* observer);
   virtual bool IsInitializationComplete() const;
-  virtual ReadResult GetValue(const std::string& key, Value** result) const;
+  virtual ReadResult GetValue(const std::string& key,
+                              const Value** result) const;
 
   // ConfigurationPolicyProvider::Observer methods:
   virtual void OnUpdatePolicy();
@@ -47,13 +48,18 @@ class ConfigurationPolicyPrefStore
   // Creates a ConfigurationPolicyPrefStore that reads managed platform policy.
   static ConfigurationPolicyPrefStore* CreateManagedPlatformPolicyPrefStore();
 
-  // Creates a ConfigurationPolicyPrefStore that supplies policy from
-  // the device management server.
-  static ConfigurationPolicyPrefStore* CreateDeviceManagementPolicyPrefStore(
+  // Creates a ConfigurationPolicyPrefStore that reads managed cloud policy.
+  static ConfigurationPolicyPrefStore* CreateManagedCloudPolicyPrefStore(
       Profile* profile);
 
-  // Creates a ConfigurationPolicyPrefStore that reads recommended policy.
-  static ConfigurationPolicyPrefStore* CreateRecommendedPolicyPrefStore();
+  // Creates a ConfigurationPolicyPrefStore that reads recommended platform
+  // policy.
+  static ConfigurationPolicyPrefStore*
+      CreateRecommendedPlatformPolicyPrefStore();
+
+  // Creates a ConfigurationPolicyPrefStore that reads recommended cloud policy.
+  static ConfigurationPolicyPrefStore* CreateRecommendedCloudPolicyPrefStore(
+      Profile* profile);
 
   // Returns the default policy definition list for Chrome.
   static const ConfigurationPolicyProvider::PolicyDefinitionList*

@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -48,12 +48,12 @@ class NonClientFrameView : public View {
   // Returns true if this FrameView should always use the custom frame,
   // regardless of the system settings. An example is the Constrained Window,
   // which is a child window and must always provide its own frame.
-  virtual bool AlwaysUseCustomFrame() const { return false; }
+  virtual bool AlwaysUseCustomFrame() const;
 
   // Like AlwaysUseCustomFrame, returns true if this FrameView should always use
   // the native frame, regardless of theme settings. An example is popup/app
   // windows, which we do not ever want to show themed.
-  virtual bool AlwaysUseNativeFrame() const { return false; }
+  virtual bool AlwaysUseNativeFrame() const;
 
   virtual gfx::Rect GetWindowBoundsForClientBounds(
       const gfx::Rect& client_bounds) const = 0;
@@ -67,14 +67,14 @@ class NonClientFrameView : public View {
                              gfx::Path* window_mask) = 0;
   virtual void EnableClose(bool enable) = 0;
   virtual void ResetWindowControls() = 0;
+  virtual void UpdateWindowIcon() = 0;
 
   // Overridden from View:
-  virtual bool HitTest(const gfx::Point& l) const;
-  virtual AccessibilityTypes::Role GetAccessibleRole();
+  virtual bool HitTest(const gfx::Point& l) const OVERRIDE;
+  virtual void GetAccessibleState(ui::AccessibleViewState* state) OVERRIDE;
 
  protected:
-  virtual void DidChangeBounds(const gfx::Rect& previous,
-                               const gfx::Rect& current);
+  virtual void OnBoundsChanged(const gfx::Rect& previous_bounds) OVERRIDE;
 
   NonClientFrameView() : paint_as_active_(false) {}
 
@@ -152,7 +152,7 @@ class NonClientView : public View {
 
   // Returns true if the ClientView determines that the containing window can be
   // closed, false otherwise.
-  bool CanClose() const;
+  bool CanClose();
 
   // Called by the containing Window when it is closed.
   void WindowClosing();
@@ -195,6 +195,9 @@ class NonClientView : public View {
   // when the window is maximized, minimized or restored.
   void ResetWindowControls();
 
+  // Tells the NonClientView to invalidate the NonClientFrameView's window icon.
+  void UpdateWindowIcon();
+
   // Get/Set client_view property.
   ClientView* client_view() const { return client_view_; }
   void set_client_view(ClientView* client_view) {
@@ -206,16 +209,22 @@ class NonClientView : public View {
   // of a window resize message.
   void LayoutFrameView();
 
+  // Set the accessible name of this view.
+  void SetAccessibleName(const string16& name);
+
   // NonClientView, View overrides:
-  virtual gfx::Size GetPreferredSize();
-  virtual gfx::Size GetMinimumSize();
-  virtual void Layout();
-  virtual AccessibilityTypes::Role GetAccessibleRole();
+  virtual gfx::Size GetPreferredSize() OVERRIDE;
+  virtual gfx::Size GetMinimumSize() OVERRIDE;
+  virtual void Layout() OVERRIDE;
+  virtual void GetAccessibleState(ui::AccessibleViewState* state) OVERRIDE;
+
+  virtual views::View* GetEventHandlerForPoint(const gfx::Point& point)
+      OVERRIDE;
 
  protected:
   // NonClientView, View overrides:
-  virtual void ViewHierarchyChanged(bool is_add, View* parent, View* child);
-  virtual views::View* GetViewForPoint(const gfx::Point& point);
+  virtual void ViewHierarchyChanged(bool is_add, View* parent, View* child)
+      OVERRIDE;
 
  private:
   // The frame that hosts this NonClientView.
@@ -230,6 +239,9 @@ class NonClientView : public View {
   // This object is not owned by the view hierarchy because it can be replaced
   // dynamically as the system settings change.
   scoped_ptr<NonClientFrameView> frame_view_;
+
+  // The accessible name of this view.
+  string16 accessible_name_;
 
   DISALLOW_COPY_AND_ASSIGN(NonClientView);
 };

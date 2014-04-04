@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -13,8 +13,9 @@
 #endif
 
 #include "views/accelerator.h"
-#include "views/event.h"
+#include "views/events/event.h"
 #include "views/focus/focus_manager.h"
+#include "views/ime/input_method.h"
 #include "views/touchui/touch_factory.h"
 #include "views/widget/root_view.h"
 #include "views/widget/widget_gtk.h"
@@ -23,7 +24,7 @@ namespace views {
 
 namespace {
 
-RootView* FindRootViewForGdkWindow(GdkWindow* gdk_window) {
+Widget* FindWidgetForGdkWindow(GdkWindow* gdk_window) {
   gpointer data = NULL;
   gdk_window_get_user_data(gdk_window, &data);
   GtkWidget* gtk_widget = reinterpret_cast<GtkWidget*>(data);
@@ -31,13 +32,13 @@ RootView* FindRootViewForGdkWindow(GdkWindow* gdk_window) {
     DLOG(WARNING) << "no GtkWidget found for that GdkWindow";
     return NULL;
   }
-  WidgetGtk* widget_gtk = WidgetGtk::GetViewForNative(gtk_widget);
+  NativeWidget* widget = NativeWidget::GetNativeWidgetForNativeView(gtk_widget);
 
-  if (!widget_gtk) {
+  if (!widget) {
     DLOG(WARNING) << "no WidgetGtk found for that GtkWidget";
     return NULL;
   }
-  return widget_gtk->GetRootView();
+  return widget->GetWidget();
 }
 
 #if defined(HAVE_XINPUT2)
@@ -62,17 +63,22 @@ bool X2EventIsTouchEvent(XEvent* xev) {
 
 #if defined(HAVE_XINPUT2)
 bool DispatchX2Event(RootView* root, XEvent* xev) {
+  XGenericEventCookie* cookie = &xev->xcookie;
+  bool touch_event = false;
+
   if (X2EventIsTouchEvent(xev)) {
+    // Hide the cursor when a touch event comes in.
+    TouchFactory::GetInstance()->SetCursorVisible(false, false);
+    touch_event = true;
+
     // Create a TouchEvent, and send it off to |root|. If the event
     // is processed by |root|, then return. Otherwise let it fall through so it
     // can be used (if desired) as a mouse event.
-
-    TouchEvent touch(xev);
+    Event::FromNativeEvent2 from_native;
+    TouchEvent touch(xev, from_native);
     if (root->OnTouchEvent(touch) != views::View::TOUCH_STATUS_UNKNOWN)
       return true;
   }
-
-  XGenericEventCookie* cookie = &xev->xcookie;
 
   switch (cookie->evtype) {
     case XI_KeyPress:
@@ -81,25 +87,61 @@ bool DispatchX2Event(RootView* root, XEvent* xev) {
       break;
     }
     case XI_ButtonPress:
-    case XI_ButtonRelease: {
-      MouseEvent mouseev(xev);
-      if (cookie->evtype == XI_ButtonPress) {
-        return root->OnMousePressed(mouseev);
-      } else {
-        root->OnMouseReleased(mouseev, false);
-        return true;
-      }
-    }
-
+    case XI_ButtonRelease:
     case XI_Motion: {
-      MouseEvent mouseev(xev);
-      if (mouseev.GetType() == Event::ET_MOUSE_DRAGGED) {
-        return root->OnMouseDragged(mouseev);
-      } else {
-        root->OnMouseMoved(mouseev);
-        return true;
+      // Scrolling the wheel generates press/release events with button id's 4
+      // and 5. In case of a wheelscroll, we do not want to show the cursor.
+      XIDeviceEvent* xievent = static_cast<XIDeviceEvent*>(cookie->data);
+      if (xievent->detail == 4 || xievent->detail == 5) {
+        Event::FromNativeEvent2 from_native;
+        MouseWheelEvent wheelev(xev, from_native);
+        return root->OnMouseWheel(wheelev);
       }
-      break;
+
+      Event::FromNativeEvent2 from_native;
+      MouseEvent mouseev(xev, from_native);
+      if (!touch_event) {
+        // Show the cursor, and decide whether or not the cursor should be
+        // automatically hidden after a certain time of inactivity.
+        int button_flags = mouseev.flags() & (ui::EF_RIGHT_BUTTON_DOWN |
+            ui::EF_MIDDLE_BUTTON_DOWN | ui::EF_LEFT_BUTTON_DOWN);
+        bool start_timer = false;
+
+        switch (cookie->evtype) {
+          case XI_ButtonPress:
+            start_timer = false;
+            break;
+          case XI_ButtonRelease:
+            // For a release, start the timer if this was only button pressed
+            // that is being released.
+            if (button_flags == ui::EF_RIGHT_BUTTON_DOWN ||
+                button_flags == ui::EF_LEFT_BUTTON_DOWN ||
+                button_flags == ui::EF_MIDDLE_BUTTON_DOWN)
+              start_timer = true;
+            break;
+          case XI_Motion:
+            start_timer = !button_flags;
+            break;
+        }
+        TouchFactory::GetInstance()->SetCursorVisible(true, start_timer);
+      }
+
+      // Dispatch the event.
+      switch (cookie->evtype) {
+        case XI_ButtonPress:
+          return root->OnMousePressed(mouseev);
+        case XI_ButtonRelease:
+          root->OnMouseReleased(mouseev);
+          return true;
+        case XI_Motion: {
+          if (mouseev.type() == ui::ET_MOUSE_DRAGGED) {
+            return root->OnMouseDragged(mouseev);
+          } else {
+            root->OnMouseMoved(mouseev);
+            return true;
+          }
+        }
+      }
     }
   }
 
@@ -121,12 +163,21 @@ bool DispatchXEvent(XEvent* xev) {
 #endif
 
   GdkWindow* gwind = gdk_window_lookup_for_display(gdisp, xwindow);
-
-  if (RootView* root = FindRootViewForGdkWindow(gwind)) {
+  Widget* widget = FindWidgetForGdkWindow(gwind);
+  if (widget) {
+    RootView* root = widget->GetRootView();
     switch (xev->type) {
       case KeyPress:
       case KeyRelease: {
-        KeyEvent keyev(xev);
+        Event::FromNativeEvent2 from_native;
+        KeyEvent keyev(xev, from_native);
+        InputMethod* ime = widget->GetInputMethod();
+        // Always dispatch key events to the input method first, to make sure
+        // that the input method's hotkeys work all time.
+        if (ime) {
+          ime->DispatchKeyEvent(keyev);
+          return true;
+        }
         return root->ProcessKeyEvent(keyev);
       }
 
@@ -134,14 +185,16 @@ bool DispatchXEvent(XEvent* xev) {
       case ButtonRelease: {
         if (xev->xbutton.button == 4 || xev->xbutton.button == 5) {
           // Scrolling the wheel triggers button press/release events.
-          MouseWheelEvent wheelev(xev);
-          return root->ProcessMouseWheelEvent(wheelev);
+          Event::FromNativeEvent2 from_native;
+          MouseWheelEvent wheelev(xev, from_native);
+          return root->OnMouseWheel(wheelev);
         } else {
-          MouseEvent mouseev(xev);
+          Event::FromNativeEvent2 from_native;
+          MouseEvent mouseev(xev, from_native);
           if (xev->type == ButtonPress) {
             return root->OnMousePressed(mouseev);
           } else {
-            root->OnMouseReleased(mouseev, false);
+            root->OnMouseReleased(mouseev);
             return true;  // Assume the event has been processed to make sure we
                           // don't process it twice.
           }
@@ -149,8 +202,9 @@ bool DispatchXEvent(XEvent* xev) {
       }
 
       case MotionNotify: {
-        MouseEvent mouseev(xev);
-        if (mouseev.GetType() == Event::ET_MOUSE_DRAGGED) {
+        Event::FromNativeEvent2 from_native;
+        MouseEvent mouseev(xev, from_native);
+        if (mouseev.type() == ui::ET_MOUSE_DRAGGED) {
           return root->OnMouseDragged(mouseev);
         } else {
           root->OnMouseMoved(mouseev);
@@ -182,8 +236,8 @@ bool AcceleratorHandler::Dispatch(GdkEvent* event) {
   return true;
 }
 
-base::MessagePumpGlibXDispatcher::DispatchStatus AcceleratorHandler::Dispatch(
-    XEvent* xev) {
+base::MessagePumpGlibXDispatcher::DispatchStatus
+    AcceleratorHandler::DispatchX(XEvent* xev) {
   return DispatchXEvent(xev) ?
       base::MessagePumpGlibXDispatcher::EVENT_PROCESSED :
       base::MessagePumpGlibXDispatcher::EVENT_IGNORED;

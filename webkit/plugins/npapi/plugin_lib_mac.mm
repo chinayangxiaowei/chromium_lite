@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,8 +7,8 @@
 #include "webkit/plugins/npapi/plugin_lib.h"
 
 #include "base/mac/scoped_cftyperef.h"
+#include "base/memory/scoped_ptr.h"
 #include "base/native_library.h"
-#include "base/scoped_ptr.h"
 #include "base/string_split.h"
 #include "base/string_util.h"
 #include "base/sys_string_conversions.h"
@@ -219,7 +219,7 @@ bool ReadSTRPluginInfo(const FilePath& filename, CFBundleRef bundle,
   info->path = filename;
   if (plugin_vers)
     info->version = base::SysNSStringToUTF16(plugin_vers);
-  if (have_plugin_descs && plugin_descs.size() > 0)
+  if (have_plugin_descs && !plugin_descs.empty())
     info->desc = UTF8ToUTF16(plugin_descs[0]);
   else
     info->desc = UTF8ToUTF16(filename.BaseName().value());

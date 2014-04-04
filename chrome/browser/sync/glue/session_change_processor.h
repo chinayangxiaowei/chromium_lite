@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -11,9 +11,9 @@
 #include "chrome/browser/sessions/session_service.h"
 #include "chrome/browser/sync/engine/syncapi.h"
 #include "chrome/browser/sync/glue/change_processor.h"
-#include "chrome/common/notification_observer.h"
-#include "chrome/common/notification_type.h"
-#include "chrome/common/notification_registrar.h"
+#include "content/common/notification_observer.h"
+#include "content/common/notification_registrar.h"
+#include "content/common/notification_type.h"
 
 class NotificationDetails;
 class NotificationSource;
@@ -35,6 +35,10 @@ class SessionChangeProcessor : public ChangeProcessor,
   SessionChangeProcessor(
       UnrecoverableErrorHandler* error_handler,
       SessionModelAssociator* session_model_associator);
+  SessionChangeProcessor(
+      UnrecoverableErrorHandler* error_handler,
+      SessionModelAssociator* session_model_associator,
+      bool setup_for_test);
   virtual ~SessionChangeProcessor();
 
   // NotificationObserver implementation.
@@ -62,6 +66,9 @@ class SessionChangeProcessor : public ChangeProcessor,
 
   // Owner of the SessionService.  Non-NULL iff |running()| is true.
   Profile* profile_;
+
+  // To bypass some checks/codepaths not applicable in tests.
+  bool setup_for_test_;
 
   DISALLOW_COPY_AND_ASSIGN(SessionChangeProcessor);
 };

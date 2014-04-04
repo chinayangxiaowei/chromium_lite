@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,7 +8,6 @@
 #include <stdlib.h>
 #include <sys/socket.h>
 #include <sys/syscall.h>
-#include <sys/types.h>
 #include <unistd.h>
 
 #include "base/eintr_wrapper.h"
@@ -16,10 +15,10 @@
 #include "base/format_macros.h"
 #include "base/linux_util.h"
 #include "base/logging.h"
+#include "base/memory/singleton.h"
 #include "base/message_loop.h"
 #include "base/path_service.h"
 #include "base/rand_util.h"
-#include "base/singleton.h"
 #include "base/string_util.h"
 #include "base/task.h"
 #include "base/threading/thread.h"
@@ -27,13 +26,19 @@
 #include "breakpad/src/client/linux/minidump_writer/linux_dumper.h"
 #include "breakpad/src/client/linux/minidump_writer/minidump_writer.h"
 #include "chrome/app/breakpad_linux.h"
-#include "chrome/browser/browser_thread.h"
 #include "chrome/common/chrome_paths.h"
 #include "chrome/common/env_vars.h"
+#include "content/browser/browser_thread.h"
 
 using google_breakpad::ExceptionHandler;
 
 namespace {
+
+// The length of the control message:
+const unsigned kControlMsgSize =
+    CMSG_SPACE(2*sizeof(int)) + CMSG_SPACE(sizeof(struct ucred));
+// The length of the regular payload:
+const unsigned kCrashContextSize = sizeof(ExceptionHandler::CrashContext);
 
 // Handles the crash dump and frees the allocated BreakpadInfo struct.
 void CrashDumpTask(CrashHandlerHostLinux* handler, BreakpadInfo* info) {
@@ -112,25 +117,23 @@ void CrashHandlerHostLinux::OnFileCanReadWithoutBlocking(int fd) {
   // for writing the minidump as well as a file descriptor and a credentials
   // block so that they can't lie about their pid.
 
-  // The length of the control message:
-  static const unsigned kControlMsgSize =
-      CMSG_SPACE(2*sizeof(int)) + CMSG_SPACE(sizeof(struct ucred));
-  // The length of the regular payload:
-  static const unsigned kCrashContextSize =
-      sizeof(ExceptionHandler::CrashContext);
-
   const size_t kIovSize = 7;
   struct msghdr msg = {0};
   struct iovec iov[kIovSize];
-  char crash_context[kCrashContextSize];
+
+  // Freed in WriteDumpFile();
+  char* crash_context = new char[kCrashContextSize];
+  // Freed in CrashDumpTask();
   char* guid = new char[kGuidSize + 1];
   char* crash_url = new char[kMaxActiveURLSize + 1];
   char* distro = new char[kDistroSize + 1];
+
   char* tid_buf_addr = NULL;
   int tid_fd = -1;
   uint64_t uptime;
   char control[kControlMsgSize];
-  const ssize_t expected_msg_size = sizeof(crash_context) +
+  const ssize_t expected_msg_size =
+      kCrashContextSize +
       kGuidSize + 1 +
       kMaxActiveURLSize + 1 +
       kDistroSize + 1 +
@@ -138,7 +141,7 @@ void CrashHandlerHostLinux::OnFileCanReadWithoutBlocking(int fd) {
       sizeof(uptime);
 
   iov[0].iov_base = crash_context;
-  iov[0].iov_len = sizeof(crash_context);
+  iov[0].iov_len = kCrashContextSize;
   iov[1].iov_base = guid;
   iov[1].iov_len = kGuidSize + 1;
   iov[2].iov_base = crash_url;
@@ -279,44 +282,11 @@ void CrashHandlerHostLinux::OnFileCanReadWithoutBlocking(int fd) {
     bad_context->tid = crashing_tid;
   }
 
-  bool upload = true;
-  FilePath dumps_path("/tmp");
-  PathService::Get(base::DIR_TEMP, &dumps_path);
-  if (getenv(env_vars::kHeadless)) {
-    upload = false;
-    PathService::Get(chrome::DIR_CRASH_DUMPS, &dumps_path);
-  }
-  const uint64 rand = base::RandUint64();
-  const std::string minidump_filename =
-      StringPrintf("%s/chromium-%s-minidump-%016" PRIx64 ".dmp",
-                   dumps_path.value().c_str(), process_type_.c_str(), rand);
-  if (!google_breakpad::WriteMinidump(minidump_filename.c_str(),
-                                      crashing_pid, crash_context,
-                                      kCrashContextSize)) {
-    LOG(ERROR) << "Failed to write crash dump for pid " << crashing_pid;
-    HANDLE_EINTR(close(signal_fd));
-  }
-
-  // Send the done signal to the process: it can exit now.
-  memset(&msg, 0, sizeof(msg));
-  struct iovec done_iov;
-  done_iov.iov_base = const_cast<char*>("\x42");
-  done_iov.iov_len = 1;
-  msg.msg_iov = &done_iov;
-  msg.msg_iovlen = 1;
-
-  HANDLE_EINTR(sendmsg(signal_fd, &msg, MSG_DONTWAIT | MSG_NOSIGNAL));
-  HANDLE_EINTR(close(signal_fd));
-
   // Sanitize the string data a bit more
   guid[kGuidSize] = crash_url[kMaxActiveURLSize] = distro[kDistroSize] = 0;
 
+  // Freed in CrashDumpTask();
   BreakpadInfo* info = new BreakpadInfo;
-
-  char* minidump_filename_str = new char[minidump_filename.length() + 1];
-  minidump_filename.copy(minidump_filename_str, minidump_filename.length());
-  minidump_filename_str[minidump_filename.length()] = '\0';
-  info->filename = minidump_filename_str;
 
   info->process_type_length = process_type_.length();
   char* process_type_str = new char[info->process_type_length + 1];
@@ -333,8 +303,68 @@ void CrashHandlerHostLinux::OnFileCanReadWithoutBlocking(int fd) {
   info->distro_length = strlen(distro);
   info->distro = distro;
 
-  info->upload = upload;
+  info->upload = (getenv(env_vars::kHeadless) == NULL);
   info->process_start_time = uptime;
+
+  BrowserThread::PostTask(
+      BrowserThread::FILE, FROM_HERE,
+      NewRunnableMethod(this,
+                        &CrashHandlerHostLinux::WriteDumpFile,
+                        info,
+                        crashing_pid,
+                        crash_context,
+                        signal_fd));
+}
+
+void CrashHandlerHostLinux::WriteDumpFile(BreakpadInfo* info,
+                                          pid_t crashing_pid,
+                                          char* crash_context,
+                                          int signal_fd) {
+  DCHECK(BrowserThread::CurrentlyOn(BrowserThread::FILE));
+
+  FilePath dumps_path("/tmp");
+  PathService::Get(base::DIR_TEMP, &dumps_path);
+  if (!info->upload)
+    PathService::Get(chrome::DIR_CRASH_DUMPS, &dumps_path);
+  const uint64 rand = base::RandUint64();
+  const std::string minidump_filename =
+      StringPrintf("%s/chromium-%s-minidump-%016" PRIx64 ".dmp",
+                   dumps_path.value().c_str(), process_type_.c_str(), rand);
+  if (!google_breakpad::WriteMinidump(minidump_filename.c_str(),
+                                      crashing_pid, crash_context,
+                                      kCrashContextSize)) {
+    LOG(ERROR) << "Failed to write crash dump for pid " << crashing_pid;
+  }
+  delete[] crash_context;
+
+  // Freed in CrashDumpTask();
+  char* minidump_filename_str = new char[minidump_filename.length() + 1];
+  minidump_filename.copy(minidump_filename_str, minidump_filename.length());
+  minidump_filename_str[minidump_filename.length()] = '\0';
+  info->filename = minidump_filename_str;
+
+  BrowserThread::PostTask(
+      BrowserThread::IO, FROM_HERE,
+      NewRunnableMethod(this,
+                        &CrashHandlerHostLinux::QueueCrashDumpTask,
+                        info,
+                        signal_fd));
+}
+
+void CrashHandlerHostLinux::QueueCrashDumpTask(BreakpadInfo* info,
+                                               int signal_fd) {
+  DCHECK(BrowserThread::CurrentlyOn(BrowserThread::IO));
+
+  // Send the done signal to the process: it can exit now.
+  struct msghdr msg = {0};
+  struct iovec done_iov;
+  done_iov.iov_base = const_cast<char*>("\x42");
+  done_iov.iov_len = 1;
+  msg.msg_iov = &done_iov;
+  msg.msg_iovlen = 1;
+
+  HANDLE_EINTR(sendmsg(signal_fd, &msg, MSG_DONTWAIT | MSG_NOSIGNAL));
+  HANDLE_EINTR(close(signal_fd));
 
   uploader_thread_->message_loop()->PostTask(
       FROM_HERE,
@@ -400,4 +430,20 @@ void RendererCrashHandlerHostLinux::SetProcessType() {
 // static
 RendererCrashHandlerHostLinux* RendererCrashHandlerHostLinux::GetInstance() {
   return Singleton<RendererCrashHandlerHostLinux>::get();
+}
+
+PpapiCrashHandlerHostLinux::PpapiCrashHandlerHostLinux() {
+  InitCrashUploaderThread();
+}
+
+PpapiCrashHandlerHostLinux::~PpapiCrashHandlerHostLinux() {
+}
+
+void PpapiCrashHandlerHostLinux::SetProcessType() {
+  process_type_ = "ppapi";
+}
+
+// static
+PpapiCrashHandlerHostLinux* PpapiCrashHandlerHostLinux::GetInstance() {
+  return Singleton<PpapiCrashHandlerHostLinux>::get();
 }

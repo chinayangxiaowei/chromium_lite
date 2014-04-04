@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -45,7 +45,8 @@ class TestAudioInputControllerFactory;
 class TestAudioInputController : public AudioInputController {
  public:
   TestAudioInputController(TestAudioInputControllerFactory* factory,
-                           EventHandler* event_handler);
+                           EventHandler* event_handler,
+                           SyncWriter* sync_writer);
   virtual ~TestAudioInputController();
 
   // Returns the event handler installed on the AudioInputController.
@@ -72,7 +73,7 @@ class TestAudioInputControllerFactory : public AudioInputController::Factory {
   TestAudioInputControllerFactory();
 
   // AudioInputController::Factory methods.
-  AudioInputController* Create(
+  virtual AudioInputController* Create(
       AudioInputController::EventHandler* event_handler,
       AudioParameters params);
 

@@ -12,20 +12,20 @@
 #include "base/file_util.h"
 #include "base/logging.h"
 #include "chrome/app/chrome_command_ids.h"
-#include "gfx/canvas.h"
-#include "gfx/favicon_size.h"
 #include "grit/app_resources.h"
 #include "grit/theme_resources.h"
 #include "ui/base/resource/resource_bundle.h"
 #include "ui/base/theme_provider.h"
+#include "ui/gfx/canvas.h"
+#include "ui/gfx/favicon_size.h"
 
 #if defined(OS_WIN)
 #include "chrome/browser/app_icon_win.h"
-#include "gfx/icon_util.h"
+#include "ui/gfx/icon_util.h"
 #endif
 
 static bool g_initialized = false;
-static SkBitmap* g_default_fav_icon = NULL;
+static SkBitmap* g_default_favicon = NULL;
 
 // static
 void TabIconView::InitializeIfNeeded() {
@@ -36,11 +36,11 @@ void TabIconView::InitializeIfNeeded() {
     // The default window icon is the application icon, not the default
     // favicon.
     HICON app_icon = GetAppIcon();
-    g_default_fav_icon =
+    g_default_favicon =
         IconUtil::CreateSkBitmapFromHICON(app_icon, gfx::Size(16, 16));
     DestroyIcon(app_icon);
 #else
-    g_default_fav_icon =
+    g_default_favicon =
         ResourceBundle::GetSharedInstance().GetBitmapNamed(IDR_PRODUCT_LOGO_16);
 #endif
   }
@@ -96,7 +96,7 @@ void TabIconView::PaintThrobber(gfx::Canvas* canvas) {
             image_size, false);
 }
 
-void TabIconView::PaintFavIcon(gfx::Canvas* canvas, const SkBitmap& bitmap) {
+void TabIconView::PaintFavicon(gfx::Canvas* canvas, const SkBitmap& bitmap) {
   PaintIcon(canvas, bitmap, 0, 0, bitmap.width(), bitmap.height(), true);
 }
 
@@ -113,8 +113,8 @@ void TabIconView::PaintIcon(gfx::Canvas* canvas,
   float float_src_w = static_cast<float>(src_w);
   float float_src_h = static_cast<float>(src_h);
   float scalable_w, scalable_h;
-  if (src_w <= kFavIconSize && src_h <= kFavIconSize) {
-    scalable_w = scalable_h = kFavIconSize;
+  if (src_w <= kFaviconSize && src_h <= kFaviconSize) {
+    scalable_w = scalable_h = kFaviconSize;
   } else {
     scalable_w = float_src_w;
     scalable_h = float_src_h;
@@ -132,24 +132,24 @@ void TabIconView::PaintIcon(gfx::Canvas* canvas,
                         dest_h, filter);
 }
 
-void TabIconView::Paint(gfx::Canvas* canvas) {
+void TabIconView::OnPaint(gfx::Canvas* canvas) {
   bool rendered = false;
 
   if (throbber_running_) {
     rendered = true;
     PaintThrobber(canvas);
   } else {
-    SkBitmap favicon = model_->GetFavIconForTabIconView();
+    SkBitmap favicon = model_->GetFaviconForTabIconView();
     if (!favicon.isNull()) {
       rendered = true;
-      PaintFavIcon(canvas, favicon);
+      PaintFavicon(canvas, favicon);
     }
   }
 
   if (!rendered)
-    PaintFavIcon(canvas, *g_default_fav_icon);
+    PaintFavicon(canvas, *g_default_favicon);
 }
 
 gfx::Size TabIconView::GetPreferredSize() {
-  return gfx::Size(kFavIconSize, kFavIconSize);
+  return gfx::Size(kFaviconSize, kFaviconSize);
 }

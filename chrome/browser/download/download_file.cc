@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,15 +8,15 @@
 
 #include "base/file_util.h"
 #include "base/stringprintf.h"
-#include "chrome/browser/browser_thread.h"
 #include "chrome/browser/download/download_manager.h"
 #include "chrome/browser/download/download_util.h"
 #include "chrome/browser/history/download_create_info.h"
+#include "content/browser/browser_thread.h"
 
 DownloadFile::DownloadFile(const DownloadCreateInfo* info,
                            DownloadManager* download_manager)
     : BaseFile(info->save_info.file_path,
-               info->url,
+               info->url(),
                info->referrer_url,
                info->received_bytes,
                info->save_info.file_stream),
@@ -30,12 +30,6 @@ DownloadFile::DownloadFile(const DownloadCreateInfo* info,
 
 DownloadFile::~DownloadFile() {
   DCHECK(BrowserThread::CurrentlyOn(BrowserThread::FILE));
-}
-
-void DownloadFile::DeleteCrDownload() {
-  DCHECK(BrowserThread::CurrentlyOn(BrowserThread::FILE));
-  FilePath crdownload = download_util::GetCrDownloadPath(full_path_);
-  file_util::Delete(crdownload, false);
 }
 
 void DownloadFile::CancelDownloadRequest(ResourceDispatcherHost* rdh) {

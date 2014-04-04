@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -13,13 +13,15 @@
 #include "base/command_line.h"
 #include "base/metrics/nacl_histogram.h"
 #include "base/utf_string_conversions.h"
-#include "chrome/browser/renderer_host/render_message_filter.h"
+#include "base/win/windows_version.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/common/logging_chrome.h"
 #include "chrome/common/nacl_cmd_line.h"
 #include "chrome/common/nacl_messages.h"
 #include "chrome/common/render_messages.h"
+#include "chrome/browser/renderer_host/chrome_render_message_filter.h"
 #include "ipc/ipc_switches.h"
+#include "native_client/src/shared/imc/nacl_imc.h"
 
 #if defined(OS_POSIX)
 #include "ipc/ipc_channel_posix.h"
@@ -42,16 +44,20 @@ void SetCloseOnExec(nacl::Handle fd) {
 
 }  // namespace
 
-NaClProcessHost::NaClProcessHost(
-    ResourceDispatcherHost *resource_dispatcher_host,
-    const std::wstring& url)
-    : BrowserChildProcessHost(NACL_LOADER_PROCESS, resource_dispatcher_host),
-      resource_dispatcher_host_(resource_dispatcher_host),
+struct NaClProcessHost::NaClInternal {
+  std::vector<nacl::Handle> sockets_for_renderer;
+  std::vector<nacl::Handle> sockets_for_sel_ldr;
+};
+
+NaClProcessHost::NaClProcessHost(const std::wstring& url)
+    : BrowserChildProcessHost(NACL_LOADER_PROCESS),
       reply_msg_(NULL),
+      internal_(new NaClInternal()),
       running_on_wow64_(false) {
   set_name(url);
 #if defined(OS_WIN)
-  CheckIsWow64();
+  running_on_wow64_ = (base::win::OSInfo::GetInstance()->wow64_status() ==
+      base::win::OSInfo::WOW64_ENABLED);
 #endif
 }
 
@@ -63,23 +69,24 @@ NaClProcessHost::~NaClProcessHost() {
   // defined, but we still compile a bunch of other code from this
   // file anyway.  TODO(mseaborn): Make this less messy.
 #ifndef DISABLE_NACL
-  for (size_t i = 0; i < sockets_for_renderer_.size(); i++) {
-    nacl::Close(sockets_for_renderer_[i]);
+  for (size_t i = 0; i < internal_->sockets_for_renderer.size(); i++) {
+    nacl::Close(internal_->sockets_for_renderer[i]);
   }
-  for (size_t i = 0; i < sockets_for_sel_ldr_.size(); i++) {
-    nacl::Close(sockets_for_sel_ldr_[i]);
+  for (size_t i = 0; i < internal_->sockets_for_sel_ldr.size(); i++) {
+    nacl::Close(internal_->sockets_for_sel_ldr[i]);
   }
 #endif
 
   // OnProcessLaunched didn't get called because the process couldn't launch.
   // Don't keep the renderer hanging.
   reply_msg_->set_reply_error();
-  render_message_filter_->Send(reply_msg_);
+  chrome_render_message_filter_->Send(reply_msg_);
 }
 
-bool NaClProcessHost::Launch(RenderMessageFilter* render_message_filter,
-                             int socket_count,
-                             IPC::Message* reply_msg) {
+bool NaClProcessHost::Launch(
+    ChromeRenderMessageFilter* chrome_render_message_filter,
+    int socket_count,
+    IPC::Message* reply_msg) {
 #ifdef DISABLE_NACL
   NOTIMPLEMENTED() << "Native Client disabled at build time";
   return false;
@@ -105,8 +112,8 @@ bool NaClProcessHost::Launch(RenderMessageFilter* render_message_filter,
     // Create a connected socket
     if (nacl::SocketPair(pair) == -1)
       return false;
-    sockets_for_renderer_.push_back(pair[0]);
-    sockets_for_sel_ldr_.push_back(pair[1]);
+    internal_->sockets_for_renderer.push_back(pair[0]);
+    internal_->sockets_for_sel_ldr.push_back(pair[1]);
     SetCloseOnExec(pair[0]);
     SetCloseOnExec(pair[1]);
   }
@@ -116,7 +123,7 @@ bool NaClProcessHost::Launch(RenderMessageFilter* render_message_filter,
     return false;
   }
   UmaNaclHistogramEnumeration(NACL_STARTED);
-  render_message_filter_ = render_message_filter;
+  chrome_render_message_filter_ = chrome_render_message_filter;
   reply_msg_ = reply_msg;
 
   return true;
@@ -145,9 +152,8 @@ bool NaClProcessHost::LaunchSelLdr() {
   // On Windows we might need to start the broker process to launch a new loader
 #if defined(OS_WIN)
   if (running_on_wow64_) {
-    NaClBrokerService::GetInstance()->Init(resource_dispatcher_host_);
-    return NaClBrokerService::GetInstance()->LaunchLoader(this,
-        ASCIIToWide(channel_id()));
+    return NaClBrokerService::GetInstance()->LaunchLoader(
+        this, ASCIIToWide(channel_id()));
   } else {
     BrowserChildProcessHost::Launch(FilePath(), cmd_line);
   }
@@ -183,13 +189,14 @@ void NaClProcessHost::OnProcessLaunched() {
   std::vector<nacl::FileDescriptor> handles_for_renderer;
   base::ProcessHandle nacl_process_handle;
 
-  for (size_t i = 0; i < sockets_for_renderer_.size(); i++) {
+  for (size_t i = 0; i < internal_->sockets_for_renderer.size(); i++) {
 #if defined(OS_WIN)
     // Copy the handle into the renderer process.
     HANDLE handle_in_renderer;
     DuplicateHandle(base::GetCurrentProcessHandle(),
-                    reinterpret_cast<HANDLE>(sockets_for_renderer_[i]),
-                    render_message_filter_->peer_handle(),
+                    reinterpret_cast<HANDLE>(
+                        internal_->sockets_for_renderer[i]),
+                    chrome_render_message_filter_->peer_handle(),
                     &handle_in_renderer,
                     GENERIC_READ | GENERIC_WRITE,
                     FALSE,
@@ -200,7 +207,7 @@ void NaClProcessHost::OnProcessLaunched() {
     // No need to dup the imc_handle - we don't pass it anywhere else so
     // it cannot be closed.
     nacl::FileDescriptor imc_handle;
-    imc_handle.fd = sockets_for_renderer_[i];
+    imc_handle.fd = internal_->sockets_for_renderer[i];
     imc_handle.auto_close = true;
     handles_for_renderer.push_back(imc_handle);
 #endif
@@ -210,7 +217,7 @@ void NaClProcessHost::OnProcessLaunched() {
   // Copy the process handle into the renderer process.
   DuplicateHandle(base::GetCurrentProcessHandle(),
                   handle(),
-                  render_message_filter_->peer_handle(),
+                  chrome_render_message_filter_->peer_handle(),
                   &nacl_process_handle,
                   PROCESS_DUP_HANDLE,
                   FALSE,
@@ -225,21 +232,22 @@ void NaClProcessHost::OnProcessLaunched() {
 
   ViewHostMsg_LaunchNaCl::WriteReplyParams(
       reply_msg_, handles_for_renderer, nacl_process_handle, nacl_process_id);
-  render_message_filter_->Send(reply_msg_);
-  render_message_filter_ = NULL;
+  chrome_render_message_filter_->Send(reply_msg_);
+  chrome_render_message_filter_ = NULL;
   reply_msg_ = NULL;
-  sockets_for_renderer_.clear();
+  internal_->sockets_for_renderer.clear();
 
   SendStartMessage();
 }
 
 void NaClProcessHost::SendStartMessage() {
   std::vector<nacl::FileDescriptor> handles_for_sel_ldr;
-  for (size_t i = 0; i < sockets_for_sel_ldr_.size(); i++) {
+  for (size_t i = 0; i < internal_->sockets_for_sel_ldr.size(); i++) {
 #if defined(OS_WIN)
     HANDLE channel;
     if (!DuplicateHandle(GetCurrentProcess(),
-                         reinterpret_cast<HANDLE>(sockets_for_sel_ldr_[i]),
+                         reinterpret_cast<HANDLE>(
+                             internal_->sockets_for_sel_ldr[i]),
                          handle(),
                          &channel,
                          GENERIC_READ | GENERIC_WRITE,
@@ -250,7 +258,7 @@ void NaClProcessHost::SendStartMessage() {
         reinterpret_cast<nacl::FileDescriptor>(channel));
 #else
     nacl::FileDescriptor channel;
-    channel.fd = dup(sockets_for_sel_ldr_[i]);
+    channel.fd = dup(internal_->sockets_for_sel_ldr[i]);
     if (channel.fd < 0) {
       LOG(ERROR) << "Failed to dup() a file descriptor";
       return;
@@ -281,7 +289,7 @@ void NaClProcessHost::SendStartMessage() {
 #endif
 
   Send(new NaClProcessMsg_Start(handles_for_sel_ldr));
-  sockets_for_sel_ldr_.clear();
+  internal_->sockets_for_sel_ldr.clear();
 }
 
 bool NaClProcessHost::OnMessageReceived(const IPC::Message& msg) {
@@ -292,24 +300,3 @@ bool NaClProcessHost::OnMessageReceived(const IPC::Message& msg) {
 bool NaClProcessHost::CanShutdown() {
   return true;
 }
-
-#if defined(OS_WIN)
-// TODO(gregoryd): invoke CheckIsWow64 only once, not for each NaClProcessHost
-typedef BOOL (WINAPI *LPFN_ISWOW64PROCESS) (HANDLE, PBOOL);
-void NaClProcessHost::CheckIsWow64() {
-  LPFN_ISWOW64PROCESS fnIsWow64Process;
-
-  fnIsWow64Process = (LPFN_ISWOW64PROCESS) GetProcAddress(
-      GetModuleHandle(TEXT("kernel32")),
-      "IsWow64Process");
-
-  if (fnIsWow64Process != NULL) {
-    BOOL bIsWow64 = FALSE;
-    if (fnIsWow64Process(GetCurrentProcess(),&bIsWow64)) {
-      if (bIsWow64) {
-        running_on_wow64_ = true;
-      }
-    }
-  }
-}
-#endif

@@ -1,10 +1,9 @@
-// Copyright (c) 2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "base/ref_counted.h"
+#include "base/memory/ref_counted.h"
 #include "base/stringprintf.h"
-#include "chrome/browser/browser_list.h"
 #include "chrome/browser/debugger/devtools_client_host.h"
 #include "chrome/browser/debugger/devtools_manager.h"
 #include "chrome/browser/extensions/extension_devtools_browsertest.h"
@@ -14,14 +13,15 @@
 #include "chrome/browser/extensions/extension_service.h"
 #include "chrome/browser/extensions/extension_tabs_module.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/renderer_host/render_view_host.h"
-#include "chrome/browser/renderer_host/site_instance.h"
-#include "chrome/browser/tab_contents/tab_contents.h"
 #include "chrome/browser/tabs/tab_strip_model.h"
+#include "chrome/browser/ui/browser_list.h"
 #include "chrome/common/chrome_paths.h"
 #include "chrome/common/devtools_messages.h"
 #include "chrome/common/url_constants.h"
 #include "chrome/test/ui_test_utils.h"
+#include "content/browser/renderer_host/render_view_host.h"
+#include "content/browser/site_instance.h"
+#include "content/browser/tab_contents/tab_contents.h"
 #include "net/base/net_util.h"
 
 // Looks for an ExtensionHost whose URL has the given path component (including

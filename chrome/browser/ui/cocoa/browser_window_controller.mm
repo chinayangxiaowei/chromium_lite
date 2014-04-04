@@ -9,19 +9,19 @@
 #include "app/mac/scoped_nsdisable_screen_updates.h"
 #include "app/mac/nsimage_cache.h"
 #include "base/mac/mac_util.h"
-#import "base/scoped_nsobject.h"
+#import "base/memory/scoped_nsobject.h"
 #include "base/sys_string_conversions.h"
 #include "chrome/app/chrome_command_ids.h"  // IDC_*
 #include "chrome/browser/bookmarks/bookmark_editor.h"
 #include "chrome/browser/google/google_util.h"
+#include "chrome/browser/instant/instant_controller.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/renderer_host/render_widget_host_view.h"
 #include "chrome/browser/sync/profile_sync_service.h"
 #include "chrome/browser/sync/sync_ui_util_mac.h"
-#include "chrome/browser/tab_contents/tab_contents.h"
 #include "chrome/browser/tab_contents/tab_contents_view_mac.h"
 #include "chrome/browser/tabs/tab_strip_model.h"
-#include "chrome/browser/themes/browser_theme_provider.h"
+#include "chrome/browser/themes/theme_service.h"
+#include "chrome/browser/themes/theme_service_factory.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_list.h"
 #import "chrome/browser/ui/cocoa/background_gradient_view.h"
@@ -41,11 +41,11 @@
 #import "chrome/browser/ui/cocoa/image_utils.h"
 #import "chrome/browser/ui/cocoa/infobars/infobar_container_controller.h"
 #import "chrome/browser/ui/cocoa/location_bar/autocomplete_text_field_editor.h"
-#import "chrome/browser/ui/cocoa/previewable_contents_controller.h"
-#import "chrome/browser/ui/cocoa/sad_tab_controller.h"
 #import "chrome/browser/ui/cocoa/sidebar_controller.h"
 #import "chrome/browser/ui/cocoa/status_bubble_mac.h"
-#import "chrome/browser/ui/cocoa/tab_contents_controller.h"
+#import "chrome/browser/ui/cocoa/tab_contents/previewable_contents_controller.h"
+#import "chrome/browser/ui/cocoa/tab_contents/sad_tab_controller.h"
+#import "chrome/browser/ui/cocoa/tab_contents/tab_contents_controller.h"
 #import "chrome/browser/ui/cocoa/tabs/tab_strip_controller.h"
 #import "chrome/browser/ui/cocoa/tabs/tab_strip_view.h"
 #import "chrome/browser/ui/cocoa/tabs/tab_view.h"
@@ -57,10 +57,13 @@
 #include "chrome/browser/ui/toolbar/encoding_menu_controller.h"
 #include "chrome/browser/ui/window_sizer.h"
 #include "chrome/common/url_constants.h"
+#include "content/browser/renderer_host/render_widget_host_view.h"
+#include "content/browser/tab_contents/tab_contents.h"
 #include "grit/generated_resources.h"
 #include "grit/locale_settings.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/l10n/l10n_util_mac.h"
+
 
 // ORGANIZATION: This is a big file. It is (in principle) organized as follows
 // (in order):
@@ -137,7 +140,7 @@
 // and if it's set we continue to constrain the resize.
 
 
-@interface NSWindow(NSPrivateApis)
+@interface NSWindow (NSPrivateApis)
 // Note: These functions are private, use -[NSObject respondsToSelector:]
 // before calling them.
 
@@ -147,6 +150,16 @@
 
 @end
 
+// Provide the forward-declarations of new 10.7 SDK symbols so they can be
+// called when building with the 10.5 SDK.
+#if !defined(MAC_OS_X_VERSION_10_7) || \
+    MAC_OS_X_VERSION_MAX_ALLOWED < MAC_OS_X_VERSION_10_7
+
+@interface NSWindow (LionSDKDeclarations)
+- (void)setRestorable:(BOOL)flag;
+@end
+
+#endif  // MAC_OS_X_VERSION_10_7
 
 // IncognitoImageView subclasses NSView to allow mouse events to pass through it
 // so you can drag the window by dragging on the spy guy.
@@ -238,6 +251,13 @@
     if ([window respondsToSelector:@selector(setBottomCornerRounded:)])
       [window setBottomCornerRounded:NO];
 
+    // Lion will attempt to automagically save and restore the UI. This
+    // functionality appears to be leaky (or at least interacts badly with our
+    // architecture) and thus BrowserWindowController never gets released. This
+    // prevents the browser from being able to quit <http://crbug.com/79113>.
+    if ([window respondsToSelector:@selector(setRestorable:)])
+      [window setRestorable:NO];
+
     // Get the most appropriate size for the window, then enforce the
     // minimum width and height. The window shim will handle flipping
     // the coordinates for us so we can use it to save some code.
@@ -298,12 +318,6 @@
     // managing the creation of new tabs.
     [self createTabStripController];
 
-    // Create the infobar container view, so we can pass it to the
-    // ToolbarController.
-    infoBarContainerController_.reset(
-        [[InfoBarContainerController alloc] initWithResizeDelegate:self]);
-    [[[self window] contentView] addSubview:[infoBarContainerController_ view]];
-
     // Create a controller for the toolbar, giving it the toolbar model object
     // and the toolbar view from the nib. The controller will handle
     // registering for the appropriate command state changes from the back-end.
@@ -334,6 +348,12 @@
                                  positioned:NSWindowBelow
                                  relativeTo:[toolbarController_ view]];
     [bookmarkBarController_ setBookmarkBarEnabled:[self supportsBookmarkBar]];
+
+    // Create the infobar container view, so we can pass it to the
+    // ToolbarController.
+    infoBarContainerController_.reset(
+        [[InfoBarContainerController alloc] initWithResizeDelegate:self]);
+    [[[self window] contentView] addSubview:[infoBarContainerController_ view]];
 
     // We don't want to try and show the bar before it gets placed in its parent
     // view, so this step shoudn't be inside the bookmark bar controller's
@@ -387,6 +407,8 @@
     if ([self hasToolbar])  // Do not create the buttons in popups.
       [toolbarController_ createBrowserActionButtons];
 
+    [self setUpOSFullScreenButton];
+
     // We are done initializing now.
     initializing_ = NO;
   }
@@ -422,6 +444,10 @@
 
 - (TabStripController*)tabStripController {
   return tabStripController_.get();
+}
+
+- (InfoBarContainerController*)infoBarContainerController {
+  return infoBarContainerController_.get();
 }
 
 - (StatusBubbleMac*)statusBubble {
@@ -479,7 +505,8 @@
 }
 
 - (void)updateDevToolsForContents:(TabContents*)contents {
-  [devToolsController_ updateDevToolsForTabContents:contents];
+  [devToolsController_ updateDevToolsForTabContents:contents
+                                        withProfile:browser_->profile()];
   [devToolsController_ ensureContentsVisible];
 }
 
@@ -682,6 +709,9 @@
 
 - (void)activate {
   [[self window] makeKeyAndOrderFront:self];
+  ProcessSerialNumber psn;
+  GetCurrentProcess(&psn);
+  SetFrontProcessWithOptions(&psn, kSetFrontProcessFrontWindowOnly);
 }
 
 // Determine whether we should let a window zoom/unzoom to the given |newFrame|.
@@ -1338,7 +1368,7 @@
   NSView *contentView = [[self window] contentView];
   [contentView addSubview:[findBarCocoaController_ view]
                positioned:NSWindowAbove
-               relativeTo:[toolbarController_ view]];
+               relativeTo:[infoBarContainerController_ view]];
 
   // Place the find bar immediately below the toolbar/attached bookmark bar. In
   // fullscreen mode, it hangs off the top of the screen when the bar is hidden.
@@ -1347,6 +1377,10 @@
       NSMinY([[bookmarkBarController_ view] frame]);
   CGFloat maxWidth = NSWidth([contentView frame]);
   [findBarCocoaController_ positionFindBarViewAtMaxY:maxY maxWidth:maxWidth];
+
+  // This allows the FindBarCocoaController to call |layoutSubviews| and get
+  // its position adjusted.
+  [findBarCocoaController_ setBrowserWindowController:self];
 }
 
 - (NSWindow*)createFullscreenWindow {
@@ -1428,7 +1462,8 @@
   windowShim_->UpdateTitleBar();
 
   [sidebarController_ updateSidebarForTabContents:contents];
-  [devToolsController_ updateDevToolsForTabContents:contents];
+  [devToolsController_ updateDevToolsForTabContents:contents
+                                        withProfile:browser_->profile()];
 
   // Update the bookmark bar.
   // Must do it after sidebar and devtools update, otherwise bookmark bar might
@@ -1478,7 +1513,7 @@
 }
 
 - (ui::ThemeProvider*)themeProvider {
-  return browser_->profile()->GetThemeProvider();
+  return ThemeServiceFactory::GetForProfile(browser_->profile());
 }
 
 - (ThemedWindowStyle)themedWindowStyle {
@@ -1564,7 +1599,7 @@
       [[[BookmarkEditorController alloc]
          initWithParentWindow:[self window]
                       profile:browser_->profile()
-                       parent:node->GetParent()
+                       parent:node->parent()
                          node:node
                 configuration:BookmarkEditor::SHOW_TREE]
         runAsModalSheet];
@@ -1621,7 +1656,7 @@
 - (void)magnifyWithEvent:(NSEvent*)event {
   // The deltaZ difference necessary to trigger a zoom action. Derived from
   // experimentation to find a value that feels reasonable.
-  const float kZoomStepValue = 150;
+  const float kZoomStepValue = 300;
 
   // Find the (absolute) thresholds on either side of the current zoom factor,
   // then convert those to actual numbers to trigger a zoom in or out.
@@ -1670,6 +1705,14 @@
     if (RenderWidgetHostView* rwhv = contents->GetRenderWidgetHostView())
       rwhv->WindowFrameChanged();
   }
+
+  // The FindBar needs to know its own position to properly detect overlaps
+  // with find results. The position changes whenever the window is resized,
+  // and |layoutSubviews| computes the FindBar's position.
+  // TODO: calling |layoutSubviews| here is a waste, find a better way to
+  // do this.
+  if ([findBarCocoaController_ isFindBarVisible])
+    [self layoutSubviews];
 }
 
 // Handle the openLearnMoreAboutCrashLink: action from SadTabController when
@@ -1803,6 +1846,11 @@ willAnimateFromState:(bookmarks::VisualState)oldState
   [self updateBookmarkBarVisibilityWithAnimation:NO];
 }
 
+- (void)commitInstant {
+  InstantController::CommitIfCurrent(browser_->instant());
+}
+
+
 - (NSRect)instantFrame {
   // The view's bounds are in its own coordinate system.  Convert that to the
   // window base coordinate system, then translate it into the screen's
@@ -1815,6 +1863,12 @@ willAnimateFromState:(bookmarks::VisualState)oldState
   NSPoint originInScreenCoords =
       [[view window] convertBaseToScreen:frame.origin];
   frame.origin = originInScreenCoords;
+
+  // Account for the bookmark bar height if it is currently in the detached
+  // state on the new tab page.
+  if ([bookmarkBarController_ isInState:(bookmarks::kDetachedState)])
+    frame.size.height += [[bookmarkBarController_ view] bounds].size.height;
+
   return frame;
 }
 
@@ -1828,6 +1882,10 @@ willAnimateFromState:(bookmarks::VisualState)oldState
 
 
 @implementation BrowserWindowController(Fullscreen)
+
+- (IBAction)enterFullscreen:(id)sender {
+  browser_->ExecuteCommand(IDC_FULLSCREEN);
+}
 
 - (void)setFullscreen:(BOOL)fullscreen {
   // The logic in this function is a bit complicated and very carefully
@@ -1934,6 +1992,16 @@ willAnimateFromState:(bookmarks::VisualState)oldState
   [destWindow setWindowController:self];
   [self adjustUIForFullscreen:fullscreen];
 
+  // Adjust the infobar container. In fullscreen, it needs to be below all
+  // top chrome elements so it only sits atop the web contents. When in normal
+  // mode, it needs to draw over the bookmark bar and part of the toolbar.
+  [[infoBarContainerController_ view] removeFromSuperview];
+  NSView* infoBarDest = [[destWindow contentView] superview];
+  [infoBarDest addSubview:[infoBarContainerController_ view]
+               positioned:fullscreen ? NSWindowBelow : NSWindowAbove
+               relativeTo:fullscreen ? floatingBarBackingView_
+                                     : [bookmarkBarController_ view]];
+
   // When entering fullscreen mode, the controller forces a layout for us.  When
   // exiting, we need to call layoutSubviews manually.
   if (fullscreen) {
@@ -1965,6 +2033,10 @@ willAnimateFromState:(bookmarks::VisualState)oldState
 
   // We're done moving focus, so re-enable bar visibility changes.
   [self enableBarVisibilityUpdates];
+
+  // This needs to be done when leaving full-screen mode to ensure that the
+  // button's action is set properly.
+  [self setUpOSFullScreenButton];
 
   // Fade back in.
   if (didFadeOut) {
@@ -2037,6 +2109,11 @@ willAnimateFromState:(bookmarks::VisualState)oldState
   return [focused isKindOfClass:[AutocompleteTextFieldEditor class]];
 }
 
+- (void)tabposeWillClose:(NSNotification*)notif {
+  // Re-show the container after Tabpose closes.
+  [[infoBarContainerController_ view] setHidden:NO];
+}
+
 - (void)openTabpose {
   NSUInteger modifierFlags = [[NSApp currentEvent] modifierFlags];
   BOOL slomo = (modifierFlags & NSShiftKeyMask) != 0;
@@ -2044,17 +2121,33 @@ willAnimateFromState:(bookmarks::VisualState)oldState
   // Cover info bars, inspector window, and detached bookmark bar on NTP.
   // Do not cover download shelf.
   NSRect activeArea = [[self tabContentArea] frame];
+  // Take out the anti-spoof height so that Tabpose doesn't draw on top of the
+  // browser chrome.
   activeArea.size.height +=
-      NSHeight([[infoBarContainerController_ view] frame]);
+      NSHeight([[infoBarContainerController_ view] frame]) -
+          [infoBarContainerController_ antiSpoofHeight];
   if ([self isBookmarkBarVisible] && [self placeBookmarkBarBelowInfoBar]) {
     NSView* bookmarkBarView = [bookmarkBarController_ view];
     activeArea.size.height += NSHeight([bookmarkBarView frame]);
   }
 
-  [TabposeWindow openTabposeFor:[self window]
-                           rect:activeArea
-                          slomo:slomo
-                  tabStripModel:browser_->tabstrip_model()];
+  // Hide the infobar container so that the anti-spoof bulge doesn't show when
+  // Tabpose is open.
+  [[infoBarContainerController_ view] setHidden:YES];
+
+  TabposeWindow* window =
+      [TabposeWindow openTabposeFor:[self window]
+                               rect:activeArea
+                              slomo:slomo
+                      tabStripModel:browser_->tabstrip_model()];
+
+  // When the Tabpose window closes, the infobar container needs to be made
+  // visible again.
+  NSNotificationCenter* center = [NSNotificationCenter defaultCenter];
+  [center addObserver:self
+             selector:@selector(tabposeWillClose:)
+                 name:NSWindowWillCloseNotification
+               object:window];
 }
 
 @end  // @implementation BrowserWindowController(Fullscreen)

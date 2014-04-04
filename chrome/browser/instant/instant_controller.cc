@@ -1,14 +1,13 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/instant/instant_controller.h"
 
-#include "build/build_config.h"
 #include "base/command_line.h"
 #include "base/message_loop.h"
 #include "base/metrics/histogram.h"
-#include "base/rand_util.h"
+#include "build/build_config.h"
 #include "chrome/browser/autocomplete/autocomplete_match.h"
 #include "chrome/browser/instant/instant_delegate.h"
 #include "chrome/browser/instant/instant_loader.h"
@@ -17,18 +16,21 @@
 #include "chrome/browser/platform_util.h"
 #include "chrome/browser/prefs/pref_service.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/renderer_host/render_widget_host_view.h"
 #include "chrome/browser/search_engines/template_url.h"
 #include "chrome/browser/search_engines/template_url_model.h"
-#include "chrome/browser/tab_contents/tab_contents.h"
 #include "chrome/browser/ui/tab_contents/tab_contents_wrapper.h"
 #include "chrome/common/chrome_switches.h"
-#include "chrome/common/notification_service.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/common/url_constants.h"
+#include "content/browser/renderer_host/render_widget_host_view.h"
+#include "content/browser/tab_contents/tab_contents.h"
+#include "content/common/notification_service.h"
 
 // Number of ms to delay between loading urls.
 static const int kUpdateDelayMS = 200;
+
+// Amount of time we delay before showing pages that have a non-200 status.
+static const int kShowDelayMS = 800;
 
 // static
 InstantController::HostBlacklist* InstantController::host_blacklist_ = NULL;
@@ -38,13 +40,10 @@ InstantController::InstantController(Profile* profile,
     : delegate_(delegate),
       tab_contents_(NULL),
       is_active_(false),
-      is_displayable_(false),
+      displayable_loader_(NULL),
       commit_on_mouse_up_(false),
       last_transition_type_(PageTransition::LINK),
-      ALLOW_THIS_IN_INITIALIZER_LIST(destroy_factory_(this)),
-      type_(FIRST_TYPE) {
-  bool enabled = GetType(profile, &type_);
-  DCHECK(enabled);
+      ALLOW_THIS_IN_INITIALIZER_LIST(destroy_factory_(this)) {
   PrefService* service = profile->GetPrefs();
   if (service) {
     // kInstantWasEnabledOnce was added after instant, set it now to make sure
@@ -79,27 +78,17 @@ void InstantController::RecordMetrics(Profile* profile) {
     } else {
       base::TimeDelta delta =
           base::Time::Now() - base::Time::FromInternalValue(enable_time);
-      std::string name = "Instant.EnabledTime. " + GetTypeString(profile);
-      // Can't use histogram macros as name isn't constant.
       // Histogram from 1 hour to 30 days.
-      scoped_refptr<base::Histogram> counter =
-          base::Histogram::FactoryGet(name, 1, 30 * 24, 50,
-              base::Histogram::kUmaTargetedHistogramFlag);
-      counter->Add(delta.InHours());
+      UMA_HISTOGRAM_CUSTOM_COUNTS("Instant.EnabledTime.Predictive",
+                                  delta.InHours(), 1, 30 * 24, 50);
     }
   }
 }
 
 // static
 bool InstantController::IsEnabled(Profile* profile) {
-  Type type;
-  return GetType(profile, &type);
-}
-
-// static
-bool InstantController::IsEnabled(Profile* profile, Type type) {
-  Type enabled_type;
-  return GetType(profile, &enabled_type) && type == enabled_type;
+  PrefService* prefs = profile->GetPrefs();
+  return prefs->GetBoolean(prefs::kInstantEnabled);
 }
 
 // static
@@ -129,13 +118,9 @@ void InstantController::Disable(Profile* profile) {
   if (enable_time) {
     base::TimeDelta delta =
         base::Time::Now() - base::Time::FromInternalValue(enable_time);
-    std::string name = "Instant.TimeToDisable." + GetTypeString(profile);
-    // Can't use histogram macros as name isn't constant.
     // Histogram from 1 minute to 10 days.
-    scoped_refptr<base::Histogram> counter =
-       base::Histogram::FactoryGet(name, 1, 60 * 24 * 10, 50,
-                                   base::Histogram::kUmaTargetedHistogramFlag);
-    counter->Add(delta.InMinutes());
+    UMA_HISTOGRAM_CUSTOM_COUNTS("Instant.TimeToDisable.Predictive",
+                                delta.InMinutes(), 1, 60 * 24 * 10, 50);
   }
 
   service->SetBoolean(prefs::kInstantEnabled, false);
@@ -173,7 +158,7 @@ void InstantController::Update(TabContentsWrapper* tab_contents,
   }
 
   if (!ShouldShowPreviewFor(match, &template_url)) {
-    DestroyAndLeaveActive();
+    DestroyPreviewContentsAndLeaveActive();
     return;
   }
 
@@ -231,15 +216,49 @@ void InstantController::DestroyPreviewContents() {
   delete ReleasePreviewContents(INSTANT_COMMIT_DESTROY);
 }
 
+void InstantController::DestroyPreviewContentsAndLeaveActive() {
+  commit_on_mouse_up_ = false;
+  if (displayable_loader_) {
+    displayable_loader_ = NULL;
+    delegate_->HideInstant();
+  }
+
+  // TODO(sky): this shouldn't nuke the loader. It should just nuke non-instant
+  // loaders and hide instant loaders.
+  loader_manager_.reset(new InstantLoaderManager(this));
+  show_timer_.Stop();
+  update_timer_.Stop();
+}
+
 bool InstantController::IsCurrent() {
   return loader_manager_.get() && loader_manager_->active_loader() &&
-      loader_manager_->active_loader()->ready() && !update_timer_.IsRunning();
+      loader_manager_->active_loader()->ready() &&
+      !loader_manager_->active_loader()->needs_reload() &&
+      !update_timer_.IsRunning();
 }
 
 void InstantController::CommitCurrentPreview(InstantCommitType type) {
+  if (type == INSTANT_COMMIT_PRESSED_ENTER && show_timer_.IsRunning()) {
+    // The user pressed enter and the show timer is running. This means the
+    // pending_loader returned an error code and we're not showing it. Force it
+    // to be shown.
+    show_timer_.Stop();
+    ShowTimerFired();
+  }
   DCHECK(loader_manager_.get());
   DCHECK(loader_manager_->current_loader());
+  bool showing_instant =
+      loader_manager_->current_loader()->is_showing_instant();
   TabContentsWrapper* tab = ReleasePreviewContents(type);
+  // If the loader was showing an instant page then it's navigation stack is
+  // something like: search-engine-home-page (eg google.com) search-term1
+  // search-term2 .... Each search-term navigation corresponds to the page
+  // deciding enough time has passed to commit a navigation. We don't want the
+  // searche-engine-home-page navigation in this case so we pass true to
+  // CopyStateFromAndPrune to have the search-engine-home-page navigation
+  // removed.
+  tab->controller().CopyStateFromAndPrune(
+      &tab_contents_->controller(), showing_instant);
   delegate_->CommitInstant(tab);
   CompleteRelease(tab->tab_contents());
 }
@@ -254,6 +273,22 @@ bool InstantController::IsMouseDownFromActivate() {
   return loader_manager_->current_loader()->IsMouseDownFromActivate();
 }
 
+#if defined(OS_MACOSX)
+void InstantController::OnAutocompleteLostFocus(
+    gfx::NativeView view_gaining_focus) {
+  // If |IsMouseDownFromActivate()| returns false, the RenderWidgetHostView did
+  // not receive a mouseDown event.  Therefore, we should destroy the preview.
+  // Otherwise, the RWHV was clicked, so we commit the preview.
+  if (!is_displayable() || !GetPreviewContents() ||
+      !IsMouseDownFromActivate()) {
+    DestroyPreviewContents();
+  } else if (IsShowingInstant()) {
+    SetCommitOnMouseUp();
+  } else {
+    CommitCurrentPreview(INSTANT_COMMIT_FOCUS_LOST);
+  }
+}
+#else
 void InstantController::OnAutocompleteLostFocus(
     gfx::NativeView view_gaining_focus) {
   if (!is_active() || !GetPreviewContents()) {
@@ -310,11 +345,24 @@ void InstantController::OnAutocompleteLostFocus(
 
   DestroyPreviewContents();
 }
+#endif
 
 TabContentsWrapper* InstantController::ReleasePreviewContents(
     InstantCommitType type) {
   if (!loader_manager_.get())
     return NULL;
+
+  // Make sure the pending loader is active. Ideally we would call
+  // ShowTimerFired, but if Release is invoked from the browser we don't want to
+  // attempt to show the tab contents (since its being added to a new tab).
+  if (type == INSTANT_COMMIT_PRESSED_ENTER && show_timer_.IsRunning()) {
+    InstantLoader* loader = loader_manager_->active_loader();
+    if (loader && loader->ready() &&
+        loader == loader_manager_->pending_loader()) {
+      scoped_ptr<InstantLoader> old_loader;
+      loader_manager_->MakePendingCurrent(&old_loader);
+    }
+  }
 
   // Loader may be null if the url blacklisted instant.
   scoped_ptr<InstantLoader> loader;
@@ -325,11 +373,12 @@ TabContentsWrapper* InstantController::ReleasePreviewContents(
 
   ClearBlacklist();
   is_active_ = false;
-  is_displayable_ = false;
+  displayable_loader_ = NULL;
   commit_on_mouse_up_ = false;
   omnibox_bounds_ = gfx::Rect();
   loader_manager_.reset();
   update_timer_.Stop();
+  show_timer_.Stop();
   return tab;
 }
 
@@ -352,29 +401,32 @@ bool InstantController::MightSupportInstant() {
       loader_manager_->active_loader()->is_showing_instant();
 }
 
-void InstantController::ShowInstantLoader(InstantLoader* loader) {
-  DCHECK(loader_manager_.get());
-  if (loader_manager_->current_loader() == loader) {
-    is_displayable_ = true;
-    delegate_->ShowInstant(loader->preview_contents());
-  } else if (loader_manager_->pending_loader() == loader) {
-    scoped_ptr<InstantLoader> old_loader;
-    loader_manager_->MakePendingCurrent(&old_loader);
-    delegate_->ShowInstant(loader->preview_contents());
-  } else {
-    // The loader supports instant but isn't active yet. Nothing to do.
-  }
-
-  NotificationService::current()->Notify(
-      NotificationType::INSTANT_CONTROLLER_SHOWN,
-      Source<InstantController>(this),
-      NotificationService::NoDetails());
+GURL InstantController::GetCurrentURL() {
+  return loader_manager_.get() && loader_manager_->active_loader() ?
+      loader_manager_->active_loader()->url() : GURL();
 }
 
-void InstantController::SetSuggestedTextFor(InstantLoader* loader,
-                                            const string16& text) {
+void InstantController::InstantStatusChanged(InstantLoader* loader) {
+  if (!loader->http_status_ok()) {
+    // Status isn't ok, start a timer that when fires shows the result. This
+    // delays showing 403 pages and the like.
+    show_timer_.Stop();
+    show_timer_.Start(
+        base::TimeDelta::FromMilliseconds(kShowDelayMS),
+        this, &InstantController::ShowTimerFired);
+    UpdateDisplayableLoader();
+    return;
+  }
+
+  ProcessInstantStatusChanged(loader);
+}
+
+void InstantController::SetSuggestedTextFor(
+    InstantLoader* loader,
+    const string16& text,
+    InstantCompleteBehavior behavior) {
   if (loader_manager_->current_loader() == loader)
-    delegate_->SetSuggestedText(text);
+    delegate_->SetSuggestedText(text, behavior);
 }
 
 gfx::Rect InstantController::GetInstantBounds() {
@@ -406,18 +458,16 @@ void InstantController::InstantLoaderDoesntSupportInstant(
   // Don't attempt to use instant for this search engine again.
   BlacklistFromInstant(loader->template_url_id());
 
-  if (loader_manager_->active_loader() == loader) {
-    // The loader is active, hide all.
-    DestroyAndLeaveActive();
+  // Because of the state of the stack we can't destroy the loader now.
+  bool was_pending = loader_manager_->pending_loader() == loader;
+  ScheduleDestroy(loader_manager_->ReleaseLoader(loader));
+  if (was_pending) {
+    // |loader| was the pending loader. We may be showing another TabContents to
+    // the user (what was current). Destroy it.
+    DestroyPreviewContentsAndLeaveActive();
   } else {
-    if (loader_manager_->current_loader() == loader && is_displayable_) {
-      // There is a pending loader and we're active. Hide the preview. When then
-      // pending loader finishes loading we'll notify the delegate to show.
-      DCHECK(loader_manager_->pending_loader());
-      is_displayable_ = false;
-      delegate_->HideInstant();
-    }
-    loader_manager_->DestroyLoader(loader);
+    // |loader| wasn't pending, yet it may still be the displayed loader.
+    UpdateDisplayableLoader();
   }
 }
 
@@ -437,23 +487,34 @@ void InstantController::AddToBlacklist(InstantLoader* loader, const GURL& url) {
   ScheduleDestroy(loader);
 
   loader_manager_->ReleaseLoader(loader);
-  if (is_displayable_ &&
-      (!loader_manager_->active_loader() ||
-       !loader_manager_->current_loader()->ready())) {
-    // Hide instant. When the pending loader finishes loading we'll go active
-    // again.
-    is_displayable_ = false;
-    delegate_->HideInstant();
-  }
+
+  UpdateDisplayableLoader();
 }
 
-void InstantController::DestroyAndLeaveActive() {
-  is_displayable_ = false;
-  commit_on_mouse_up_ = false;
-  delegate_->HideInstant();
+void InstantController::UpdateDisplayableLoader() {
+  InstantLoader* loader = NULL;
+  // As soon as the pending loader is displayable it becomes the current loader,
+  // so we need only concern ourselves with the current loader here.
+  if (loader_manager_.get() && loader_manager_->current_loader() &&
+      loader_manager_->current_loader()->ready() &&
+      (!show_timer_.IsRunning() ||
+       loader_manager_->current_loader()->http_status_ok())) {
+    loader = loader_manager_->current_loader();
+  }
+  if (loader == displayable_loader_)
+    return;
 
-  loader_manager_.reset(new InstantLoaderManager(this));
-  update_timer_.Stop();
+  displayable_loader_ = loader;
+
+  if (!displayable_loader_) {
+    delegate_->HideInstant();
+  } else {
+    delegate_->ShowInstant(displayable_loader_->preview_contents());
+    NotificationService::current()->Notify(
+        NotificationType::INSTANT_CONTROLLER_SHOWN,
+        Source<InstantController>(this),
+        NotificationService::NoDetails());
+  }
 }
 
 TabContentsWrapper* InstantController::GetPendingPreviewContents() {
@@ -493,8 +554,7 @@ bool InstantController::ShouldUpdateNow(TemplateURLID instant_id,
 void InstantController::ScheduleUpdate(const GURL& url) {
   scheduled_url_ = url;
 
-  if (update_timer_.IsRunning())
-    update_timer_.Stop();
+  update_timer_.Stop();
   update_timer_.Start(base::TimeDelta::FromMilliseconds(kUpdateDelayMS),
                       this, &InstantController::ProcessScheduledUpdate);
 }
@@ -509,6 +569,29 @@ void InstantController::ProcessScheduledUpdate() {
                &suggested_text);
 }
 
+void InstantController::ProcessInstantStatusChanged(InstantLoader* loader) {
+  DCHECK(loader_manager_.get());
+  scoped_ptr<InstantLoader> old_loader;
+  if (loader == loader_manager_->pending_loader()) {
+    loader_manager_->MakePendingCurrent(&old_loader);
+  } else if (loader != loader_manager_->current_loader()) {
+    // Notification from a loader that is no longer the current (either we have
+    // a pending, or its an instant loader). Ignore it.
+    return;
+  }
+
+  UpdateDisplayableLoader();
+}
+
+void InstantController::ShowTimerFired() {
+  if (!loader_manager_.get())
+    return;
+
+  InstantLoader* loader = loader_manager_->active_loader();
+  if (loader && loader->ready())
+    ProcessInstantStatusChanged(loader);
+}
+
 void InstantController::UpdateLoader(const TemplateURL* template_url,
                                      const GURL& url,
                                      PageTransition::Type transition_type,
@@ -517,17 +600,22 @@ void InstantController::UpdateLoader(const TemplateURL* template_url,
                                      string16* suggested_text) {
   update_timer_.Stop();
 
-  InstantLoader* old_loader = loader_manager_->current_loader();
   scoped_ptr<InstantLoader> owned_loader;
   TemplateURLID template_url_id = template_url ? template_url->id() : 0;
   InstantLoader* new_loader =
       loader_manager_->UpdateLoader(template_url_id, &owned_loader);
 
   new_loader->SetOmniboxBounds(omnibox_bounds_);
-  new_loader->Update(tab_contents_, template_url, url, transition_type,
-                     user_text, verbatim, suggested_text);
-  if (old_loader != new_loader && new_loader->ready())
-    delegate_->ShowInstant(new_loader->preview_contents());
+  if (new_loader->Update(tab_contents_, template_url, url, transition_type,
+                         user_text, verbatim, suggested_text)) {
+    show_timer_.Stop();
+    if (!new_loader->http_status_ok()) {
+      show_timer_.Start(
+          base::TimeDelta::FromMilliseconds(kShowDelayMS),
+          this, &InstantController::ShowTimerFired);
+    }
+  }
+  UpdateDisplayableLoader();
 }
 
 bool InstantController::ShouldShowPreviewFor(const AutocompleteMatch& match,
@@ -586,16 +674,6 @@ void InstantController::DestroyLoaders() {
 
 const TemplateURL* InstantController::GetTemplateURL(
     const AutocompleteMatch& match) {
-  if (type_ == VERBATIM_TYPE) {
-    // When using VERBATIM_TYPE we don't want to attempt to use the instant
-    // JavaScript API, otherwise the page would show predictive results. By
-    // returning NULL here we ensure we don't attempt to use the instant API.
-    //
-    // TODO: when the full search box API is in place we can lift this
-    // restriction and force the page to show verbatim results always.
-    return NULL;
-  }
-
   const TemplateURL* template_url = match.template_url;
   if (match.type == AutocompleteMatch::SEARCH_WHAT_YOU_TYPED ||
       match.type == AutocompleteMatch::SEARCH_HISTORY ||
@@ -604,52 +682,4 @@ const TemplateURL* InstantController::GetTemplateURL(
     template_url = model ? model->GetDefaultSearchProvider() : NULL;
   }
   return template_url;
-}
-
-// static
-bool InstantController::GetType(Profile* profile, Type* type) {
-  *type = FIRST_TYPE;
-  // CommandLine takes precedence.
-  CommandLine* cl = CommandLine::ForCurrentProcess();
-  if (cl->HasSwitch(switches::kEnablePredictiveInstant)) {
-    *type = PREDICTIVE_TYPE;
-    return true;
-  }
-  if (cl->HasSwitch(switches::kEnableVerbatimInstant)) {
-    *type = VERBATIM_TYPE;
-    return true;
-  }
-  if (cl->HasSwitch(switches::kEnablePredictiveNoAutoCompleteInstant)) {
-    *type = PREDICTIVE_NO_AUTO_COMPLETE_TYPE;
-    return true;
-  }
-
-  // Then prefs.
-  PrefService* prefs = profile->GetPrefs();
-  if (!prefs->GetBoolean(prefs::kInstantEnabled))
-    return false;
-
-  // PREDICTIVE_TYPE is the default if enabled via preferences.
-  *type = PREDICTIVE_TYPE;
-  return true;
-}
-
-// static
-std::string InstantController::GetTypeString(Profile* profile) {
-  Type type;
-  if (!GetType(profile, &type)) {
-    NOTREACHED();
-    return std::string();
-  }
-  switch (type) {
-    case PREDICTIVE_TYPE:
-      return "Predictive";
-    case VERBATIM_TYPE:
-      return "Verbatim";
-    case PREDICTIVE_NO_AUTO_COMPLETE_TYPE:
-      return "PredictiveNoAutoComplete";
-    default:
-      NOTREACHED();
-      return std::string();
-  }
 }

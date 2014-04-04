@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -158,8 +158,12 @@ class BrowserList {
   // currently open.
   static size_t GetBrowserCountForType(Profile* p, Browser::Type type);
 
-  // Returns true if at least one off the record session is active.
+  // Returns true if at least one incognito session is active.
   static bool IsOffTheRecordSessionActive();
+
+  // Send out notifications.
+  // For ChromeOS, also request session manager to end the session.
+  static void NotifyAndTerminate(bool fast_path);
 
   // Called once there are no more browsers open and the application is exiting.
   static void AllBrowsersClosedAndAppExiting();
@@ -168,10 +172,12 @@ class BrowserList {
   // Helper method to remove a browser instance from a list of browsers
   static void RemoveBrowserFrom(Browser* browser, BrowserVector* browser_list);
   static void MarkAsCleanShutdown();
-  static void NotifyAndTerminate();
 #if defined(OS_CHROMEOS)
   static bool NeedBeforeUnloadFired();
   static bool PendingDownloads();
+  static void NotifyWindowManagerAboutSignout();
+
+  static bool signout_;
 #endif
 
   static BrowserVector browsers_;
@@ -181,14 +187,9 @@ class BrowserList {
   // Counter of calls to StartKeepAlive(). If non-zero, the application will
   // continue running after the last browser has exited.
   static int keep_alive_count_;
-
-#if defined(OS_CHROMEOS)
-  // Have we already notified the window manager that we're signing out?
-  static bool notified_window_manager_about_signout_;
-#endif
 };
 
-class TabContents;
+class TabContentsWrapper;
 
 // Iterates through all web view hosts in all browser windows. Because the
 // renderers act asynchronously, getting a host through this interface does
@@ -218,20 +219,20 @@ class TabContentsIterator {
   }
 
   // Returns the current TabContents, valid as long as !Done()
-  TabContents* operator->() const {
+  TabContentsWrapper* operator->() const {
     return cur_;
   }
-  TabContents* operator*() const {
+  TabContentsWrapper* operator*() const {
     return cur_;
   }
 
   // Incrementing operators, valid as long as !Done()
-  TabContents* operator++() {  // ++preincrement
+  TabContentsWrapper* operator++() {  // ++preincrement
     Advance();
     return cur_;
   }
-  TabContents* operator++(int) {  // postincrement++
-    TabContents* tmp = cur_;
+  TabContentsWrapper* operator++(int) {  // postincrement++
+    TabContentsWrapper* tmp = cur_;
     Advance();
     return tmp;
   }
@@ -251,7 +252,7 @@ class TabContentsIterator {
   // Current TabContents, or NULL if we're at the end of the list. This can
   // be extracted given the browser iterator and index, but it's nice to cache
   // this since the caller may access the current host many times.
-  TabContents* cur_;
+  TabContentsWrapper* cur_;
 };
 
 #endif  // CHROME_BROWSER_UI_BROWSER_LIST_H_

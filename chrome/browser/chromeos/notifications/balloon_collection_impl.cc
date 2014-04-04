@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,15 +7,15 @@
 #include <algorithm>
 
 #include "base/logging.h"
-#include "chrome/browser/browser_list.h"
 #include "chrome/browser/chromeos/notifications/balloon_view.h"
 #include "chrome/browser/chromeos/notifications/notification_panel.h"
 #include "chrome/browser/notifications/balloon.h"
 #include "chrome/browser/notifications/notification.h"
+#include "chrome/browser/ui/browser_list.h"
 #include "chrome/browser/ui/window_sizer.h"
-#include "chrome/common/notification_service.h"
-#include "gfx/rect.h"
-#include "gfx/size.h"
+#include "content/common/notification_service.h"
+#include "ui/gfx/rect.h"
+#include "ui/gfx/size.h"
 
 namespace {
 
@@ -49,7 +49,7 @@ void BalloonCollectionImpl::Add(const Notification& notification,
     space_change_listener_->OnBalloonSpaceChanged();
 }
 
-bool BalloonCollectionImpl::AddDOMUIMessageCallback(
+bool BalloonCollectionImpl::AddWebUIMessageCallback(
     const Notification& notification,
     const std::string& message,
     MessageCallback* callback) {
@@ -60,7 +60,7 @@ bool BalloonCollectionImpl::AddDOMUIMessageCallback(
   }
   BalloonViewHost* host =
       static_cast<BalloonViewHost*>(balloon->view()->GetHost());
-  return host->AddDOMUIMessageCallback(message, callback);
+  return host->AddWebUIMessageCallback(message, callback);
 }
 
 void BalloonCollectionImpl::AddSystemNotification(

@@ -23,8 +23,8 @@
 #include "chrome/common/chrome_paths.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/common/env_vars.h"
-#include "chrome/common/policy_constants.h"
 #include "chrome/installer/util/google_update_settings.h"
+#include "policy/policy_constants.h"
 
 namespace {
 
@@ -45,7 +45,7 @@ void DestructCrashReporter() {
 
 // Only called for a branded build of Chrome.app.
 void InitCrashReporter() {
-  DCHECK(gBreakpadRef == NULL);
+  DCHECK(!gBreakpadRef);
   base::mac::ScopedNSAutoreleasePool autorelease_pool;
 
   // Check whether crash reporting should be enabled. If enterprise
@@ -202,4 +202,14 @@ void ClearCrashKeyValue(NSString* key) {
   }
 
   BreakpadRemoveUploadParameter(gBreakpadRef, key);
+}
+
+// NOTE(shess): These also exist in breakpad_mac_stubs.mm.
+ScopedCrashKey::ScopedCrashKey(NSString* key, NSString* value)
+    : crash_key_([key retain]) {
+  SetCrashKeyValue(crash_key_.get(), value);
+}
+
+ScopedCrashKey::~ScopedCrashKey() {
+  ClearCrashKeyValue(crash_key_.get());
 }

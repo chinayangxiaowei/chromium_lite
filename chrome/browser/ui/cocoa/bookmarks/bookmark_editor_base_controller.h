@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,8 +9,8 @@
 #import <Cocoa/Cocoa.h>
 
 #import "base/mac/cocoa_protocols.h"
-#include "base/scoped_ptr.h"
-#include "base/scoped_nsobject.h"
+#include "base/memory/scoped_nsobject.h"
+#include "base/memory/scoped_ptr.h"
 #include "chrome/browser/bookmarks/bookmark_editor.h"
 
 class BookmarkEditorBaseControllerBridge;
@@ -47,11 +47,11 @@ class BookmarkModel;
   scoped_ptr<BookmarkEditorBaseControllerBridge> observer_;
 }
 
-@property (nonatomic, copy) NSString* initialName;
-@property (nonatomic, copy) NSString* displayName;
-@property (nonatomic, assign) BOOL okEnabled;
-@property (nonatomic, retain, readonly) NSArray* folderTreeArray;
-@property (nonatomic, copy) NSArray* tableSelectionPaths;
+@property(nonatomic, copy) NSString* initialName;
+@property(nonatomic, copy) NSString* displayName;
+@property(nonatomic, assign) BOOL okEnabled;
+@property(nonatomic, retain, readonly) NSArray* folderTreeArray;
+@property(nonatomic, copy) NSArray* tableSelectionPaths;
 
 // Designated initializer.  Derived classes should call through to this init.
 - (id)initWithParentWindow:(NSWindow*)parentWindow
@@ -121,10 +121,10 @@ class BookmarkModel;
   BOOL newFolder_;
 }
 
-@property (nonatomic, copy) NSString* folderName;
-@property (nonatomic, assign) const BookmarkNode* folderNode;
-@property (nonatomic, retain) NSMutableArray* children;
-@property (nonatomic, assign) BOOL newFolder;
+@property(nonatomic, copy) NSString* folderName;
+@property(nonatomic, assign) const BookmarkNode* folderNode;
+@property(nonatomic, retain) NSMutableArray* children;
+@property(nonatomic, assign) BOOL newFolder;
 
 // Convenience creator for adding a new folder to the editor's bookmark
 // structure.  This folder will be added to the bookmark model when the
@@ -153,7 +153,7 @@ class BookmarkModel;
 
 @interface BookmarkEditorBaseController(TestingAPI)
 
-@property (nonatomic, readonly) BOOL okButtonEnabled;
+@property(nonatomic, readonly) BOOL okButtonEnabled;
 
 // Create any newly added folders.  New folders are nodes in folderTreeArray
 // which are marked as being new (i.e. their kFolderTreeNewFolderKey

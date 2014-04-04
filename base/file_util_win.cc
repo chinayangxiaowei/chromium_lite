@@ -55,7 +55,7 @@ bool DevicePathToDriveLetterPath(const FilePath& device_path,
   // For each string in the drive mapping, get the junction that links
   // to it.  If that junction is a prefix of |device_path|, then we
   // know that |drive| is the real path prefix.
-  while(*drive_map_ptr) {
+  while (*drive_map_ptr) {
     drive[0] = drive_map_ptr[0];  // Copy the drive letter.
 
     if (QueryDosDevice(drive, device_name, MAX_PATH) &&
@@ -66,7 +66,7 @@ bool DevicePathToDriveLetterPath(const FilePath& device_path,
     }
     // Move to the next drive letter string, which starts one
     // increment after the '\0' that terminates the current string.
-    while(*drive_map_ptr++);
+    while (*drive_map_ptr++);
   }
 
   // No drive matched.  The path does not start with a device junction
@@ -104,7 +104,7 @@ int CountFilesCreatedAfter(const FilePath& path,
           (wcscmp(find_file_data.cFileName, L".") == 0))
         continue;
 
-      long result = CompareFileTime(&find_file_data.ftCreationTime,
+      long result = CompareFileTime(&find_file_data.ftCreationTime,  // NOLINT
                                     &comparison_filetime);
       // File was created after or on comparison time
       if ((result == 1) || (result == 0))
@@ -187,13 +187,26 @@ bool Move(const FilePath& from_path, const FilePath& to_path) {
   if (MoveFileEx(from_path.value().c_str(), to_path.value().c_str(),
                  MOVEFILE_COPY_ALLOWED | MOVEFILE_REPLACE_EXISTING) != 0)
     return true;
+
+  // Keep the last error value from MoveFileEx around in case the below
+  // fails.
+  bool ret = false;
+  DWORD last_error = ::GetLastError();
+
   if (DirectoryExists(from_path)) {
     // MoveFileEx fails if moving directory across volumes. We will simulate
     // the move by using Copy and Delete. Ideally we could check whether
     // from_path and to_path are indeed in different volumes.
-    return CopyAndDeleteDirectory(from_path, to_path);
+    ret = CopyAndDeleteDirectory(from_path, to_path);
   }
-  return false;
+
+  if (!ret) {
+    // Leave a clue about what went wrong so that it can be (at least) picked
+    // up by a PLOG entry.
+    ::SetLastError(last_error);
+  }
+
+  return ret;
 }
 
 bool ReplaceFile(const FilePath& from_path, const FilePath& to_path) {
@@ -442,7 +455,6 @@ bool CreateShortcutLink(const wchar_t *source, const wchar_t *destination,
   return SUCCEEDED(result);
 }
 
-
 bool UpdateShortcutLink(const wchar_t *source, const wchar_t *destination,
                         const wchar_t *working_dir, const wchar_t *arguments,
                         const wchar_t *description, const wchar_t *icon,
@@ -491,6 +503,16 @@ bool UpdateShortcutLink(const wchar_t *source, const wchar_t *destination,
   }
 
   HRESULT result = i_persist_file->Save(destination, TRUE);
+
+  i_persist_file.Release();
+  i_shell_link.Release();
+
+  // If we successfully updated the icon, notify the shell that we have done so.
+  if (SUCCEEDED(result)) {
+    SHChangeNotify(SHCNE_ASSOCCHANGED, SHCNF_IDLIST | SHCNF_FLUSHNOWAIT,
+                   NULL, NULL);
+  }
+
   return SUCCEEDED(result);
 }
 
@@ -606,13 +628,11 @@ bool CreateTemporaryDirInDir(const FilePath& base_dir,
   for (int count = 0; count < 50; ++count) {
     // Try create a new temporary directory with random generated name. If
     // the one exists, keep trying another path name until we reach some limit.
-    path_to_create = base_dir;
-
     string16 new_dir_name;
     new_dir_name.assign(prefix);
     new_dir_name.append(base::IntToString16(rand() % kint16max));
 
-    path_to_create = path_to_create.Append(new_dir_name);
+    path_to_create = base_dir.Append(new_dir_name);
     if (::CreateDirectory(path_to_create.value().c_str(), NULL)) {
       *new_dir = path_to_create;
       return true;
@@ -923,8 +943,9 @@ FilePath FileEnumerator::Next() {
       }
       if (file_type_ & FileEnumerator::DIRECTORIES)
         return cur_file;
-    } else if (file_type_ & FileEnumerator::FILES)
+    } else if (file_type_ & FileEnumerator::FILES) {
       return cur_file;
+    }
   }
 
   return FilePath();
@@ -940,7 +961,31 @@ MemoryMappedFile::MemoryMappedFile()
       length_(INVALID_FILE_SIZE) {
 }
 
+bool MemoryMappedFile::InitializeAsImageSection(const FilePath& file_name) {
+  if (IsValid())
+    return false;
+  file_ = base::CreatePlatformFile(
+      file_name, base::PLATFORM_FILE_OPEN | base::PLATFORM_FILE_READ,
+      NULL, NULL);
+
+  if (file_ == base::kInvalidPlatformFileValue) {
+    LOG(ERROR) << "Couldn't open " << file_name.value();
+    return false;
+  }
+
+  if (!MapFileToMemoryInternalEx(SEC_IMAGE)) {
+    CloseHandles();
+    return false;
+  }
+
+  return true;
+}
+
 bool MemoryMappedFile::MapFileToMemoryInternal() {
+  return MapFileToMemoryInternalEx(0);
+}
+
+bool MemoryMappedFile::MapFileToMemoryInternalEx(int flags) {
   base::ThreadRestrictions::AssertIOAllowed();
 
   if (file_ == INVALID_HANDLE_VALUE)
@@ -950,10 +995,8 @@ bool MemoryMappedFile::MapFileToMemoryInternal() {
   if (length_ == INVALID_FILE_SIZE)
     return false;
 
-  // length_ value comes from GetFileSize() above. GetFileSize() returns DWORD,
-  // therefore the cast here is safe.
-  file_mapping_ = ::CreateFileMapping(file_, NULL, PAGE_READONLY,
-                                      0, static_cast<DWORD>(length_), NULL);
+  file_mapping_ = ::CreateFileMapping(file_, NULL, PAGE_READONLY | flags,
+                                      0, 0, NULL);
   if (!file_mapping_) {
     // According to msdn, system error codes are only reserved up to 15999.
     // http://msdn.microsoft.com/en-us/library/ms681381(v=VS.85).aspx.
@@ -963,7 +1006,7 @@ bool MemoryMappedFile::MapFileToMemoryInternal() {
   }
 
   data_ = static_cast<uint8*>(
-      ::MapViewOfFile(file_mapping_, FILE_MAP_READ, 0, 0, length_));
+      ::MapViewOfFile(file_mapping_, FILE_MAP_READ, 0, 0, 0));
   if (!data_) {
     UMA_HISTOGRAM_ENUMERATION("MemoryMappedFile.MapViewOfFile",
                               logging::GetLastSystemErrorCode(), 16000);
@@ -987,7 +1030,7 @@ void MemoryMappedFile::CloseHandles() {
 bool HasFileBeenModifiedSince(const FileEnumerator::FindInfo& find_info,
                               const base::Time& cutoff_time) {
   base::ThreadRestrictions::AssertIOAllowed();
-  long result = CompareFileTime(&find_info.ftLastWriteTime,
+  long result = CompareFileTime(&find_info.ftLastWriteTime,  // NOLINT
                                 &cutoff_time.ToFileTime());
   return result == 1 || result == 0;
 }
@@ -1030,7 +1073,7 @@ bool NormalizeToNativeFilePath(const FilePath& path, FilePath* nt_path) {
                           NULL,
                           PAGE_READONLY,
                           0,
-                          1, // Just one byte.  No need to look at the data.
+                          1,  // Just one byte.  No need to look at the data.
                           NULL));
   if (!file_map_handle)
     return false;

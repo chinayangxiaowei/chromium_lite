@@ -1,11 +1,11 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include <string>
 
+#include "base/memory/scoped_ptr.h"
 #include "base/message_loop.h"
-#include "base/scoped_ptr.h"
 #include "base/string16.h"
 #include "base/string_number_conversions.h"
 #include "base/utf_string_conversions.h"
@@ -54,10 +54,11 @@ class NetworkScreenTest : public WizardInProcessBrowserTest {
     cros_mock_->InitStatusAreaMocks();
     mock_network_library_ = cros_mock_->mock_network_library();
     mock_login_library_ = new MockLoginLibrary();
+    cellular_.reset(new NetworkDevice("cellular"));
     cros_mock_->test_api()->SetLoginLibrary(mock_login_library_, true);
     EXPECT_CALL(*mock_login_library_, EmitLoginPromptReady())
         .Times(1);
-    EXPECT_CALL(*mock_login_library_,RetrieveProperty(_,_,_))
+    EXPECT_CALL(*mock_login_library_,RequestRetrieveProperty(_,_,_))
         .Times(AnyNumber());
 
     // Minimal set of expectations needed on NetworkScreen initialization.
@@ -72,9 +73,10 @@ class NetworkScreenTest : public WizardInProcessBrowserTest {
     EXPECT_CALL(*mock_network_library_, wifi_connected())
         .Times(1)
         .WillRepeatedly(Return(false));
-    EXPECT_CALL(*mock_network_library_, cellular_connected())
-        .Times(1)
-        .WillRepeatedly(Return(false));
+    EXPECT_CALL(*mock_network_library_, FindWifiDevice())
+        .Times(AnyNumber());
+    EXPECT_CALL(*mock_network_library_, FindEthernetDevice())
+        .Times(AnyNumber());
 
     cros_mock_->SetStatusAreaMocksExpectations();
 
@@ -100,6 +102,10 @@ class NetworkScreenTest : public WizardInProcessBrowserTest {
     EXPECT_CALL(*mock_network_library_, cellular_connecting())
         .Times(AnyNumber())
         .WillRepeatedly((Return(false)));
+
+    EXPECT_CALL(*mock_network_library_, FindCellularDevice())
+        .Times(AnyNumber())
+        .WillRepeatedly((Return(cellular_.get())));
   }
 
   virtual void TearDownInProcessBrowserTestFixture() {
@@ -118,9 +124,9 @@ class NetworkScreenTest : public WizardInProcessBrowserTest {
     controller()->set_observer(mock_screen_observer.get());
     DummyButtonListener button_listener;
     views::TextButton button(&button_listener, L"Button");
-    views::MouseEvent event(views::Event::ET_MOUSE_RELEASED,
+    views::MouseEvent event(ui::ET_MOUSE_RELEASED,
                             0, 0,
-                            views::Event::EF_LEFT_BUTTON_DOWN);
+                            ui::EF_LEFT_BUTTON_DOWN);
     network_screen->ButtonPressed(&button, event);
     ui_test_utils::RunAllPendingInMessageLoop();
     controller()->set_observer(NULL);
@@ -128,6 +134,7 @@ class NetworkScreenTest : public WizardInProcessBrowserTest {
 
   MockLoginLibrary* mock_login_library_;
   MockNetworkLibrary* mock_network_library_;
+  scoped_ptr<NetworkDevice> cellular_;
 
  private:
   DISALLOW_COPY_AND_ASSIGN(NetworkScreenTest);
@@ -156,7 +163,7 @@ IN_PROC_BROWSER_TEST_F(NetworkScreenTest, Ethernet) {
   EXPECT_CALL(*mock_network_library_, ethernet_connected())
       .WillOnce(Return(true));
   EXPECT_CALL(*mock_network_library_, Connected())
-      .Times(2)
+      .Times(3)
       .WillRepeatedly(Return(true));
   EXPECT_FALSE(network_view->IsContinueEnabled());
   EXPECT_FALSE(network_view->IsConnecting());
@@ -185,11 +192,11 @@ IN_PROC_BROWSER_TEST_F(NetworkScreenTest, Wifi) {
       .WillOnce((Return(false)));
   EXPECT_CALL(*mock_network_library_, wifi_connecting())
       .WillOnce((Return(true)));
-  WifiNetwork wifi;
+  scoped_ptr<WifiNetwork> wifi(new WifiNetwork("wifi"));
   WifiNetworkVector wifi_networks;
-  wifi_networks.push_back(&wifi);
+  wifi_networks.push_back(wifi.get());
   EXPECT_CALL(*mock_network_library_, wifi_network())
-      .WillRepeatedly(Return(&wifi));
+      .WillRepeatedly(Return(wifi.get()));
   EXPECT_CALL(*mock_network_library_, wifi_networks())
       .WillRepeatedly(ReturnRef(wifi_networks));
   EXPECT_FALSE(network_view->IsContinueEnabled());
@@ -198,7 +205,7 @@ IN_PROC_BROWSER_TEST_F(NetworkScreenTest, Wifi) {
   EXPECT_CALL(*mock_network_library_, ethernet_connected())
       .WillOnce(Return(true));
   EXPECT_CALL(*mock_network_library_, Connected())
-        .Times(2)
+        .Times(3)
         .WillRepeatedly(Return(true));
   EXPECT_FALSE(network_view->IsContinueEnabled());
   EXPECT_FALSE(network_view->IsConnecting());
@@ -229,7 +236,7 @@ IN_PROC_BROWSER_TEST_F(NetworkScreenTest, Cellular) {
       .WillOnce((Return(false)));
   EXPECT_CALL(*mock_network_library_, cellular_connecting())
       .WillOnce((Return(true)));
-  scoped_ptr<CellularNetwork> cellular(new CellularNetwork());
+  scoped_ptr<CellularNetwork> cellular(new CellularNetwork("cellular"));
   EXPECT_CALL(*mock_network_library_, cellular_network())
       .WillOnce(Return(cellular.get()));
   EXPECT_FALSE(network_view->IsContinueEnabled());
@@ -238,7 +245,7 @@ IN_PROC_BROWSER_TEST_F(NetworkScreenTest, Cellular) {
   EXPECT_CALL(*mock_network_library_, ethernet_connected())
       .WillOnce(Return(true));
   EXPECT_CALL(*mock_network_library_, Connected())
-      .Times(2)
+      .Times(3)
       .WillRepeatedly(Return(true));
   EXPECT_FALSE(network_view->IsContinueEnabled());
   EXPECT_FALSE(network_view->IsConnecting());
@@ -267,7 +274,7 @@ IN_PROC_BROWSER_TEST_F(NetworkScreenTest, Timeout) {
       .WillOnce((Return(false)));
   EXPECT_CALL(*mock_network_library_, wifi_connecting())
       .WillOnce((Return(true)));
-  scoped_ptr<WifiNetwork> wifi(new WifiNetwork());
+  scoped_ptr<WifiNetwork> wifi(new WifiNetwork("wifi"));
   EXPECT_CALL(*mock_network_library_, wifi_network())
       .WillOnce(Return(wifi.get()));
   EXPECT_FALSE(network_view->IsContinueEnabled());

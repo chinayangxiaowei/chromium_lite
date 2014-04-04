@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -12,7 +12,6 @@
 #include "chrome/browser/sync/glue/theme_util.h"
 #include "chrome/browser/sync/profile_sync_service.h"
 #include "chrome/browser/sync/protocol/theme_specifics.pb.h"
-#include "chrome/browser/themes/browser_theme_provider.h"
 
 namespace browser_sync {
 
@@ -36,8 +35,7 @@ ThemeModelAssociator::ThemeModelAssociator(
 ThemeModelAssociator::~ThemeModelAssociator() {}
 
 bool ThemeModelAssociator::AssociateModels() {
-  sync_api::WriteTransaction trans(
-      sync_service_->backend()->GetUserShareHandle());
+  sync_api::WriteTransaction trans(sync_service_->GetUserShare());
   sync_api::ReadNode root(&trans);
   if (!root.InitByTagLookup(kThemesTag)) {
     LOG(ERROR) << kNoThemesFolderError;
@@ -83,8 +81,7 @@ bool ThemeModelAssociator::DisassociateModels() {
 bool ThemeModelAssociator::SyncModelHasUserCreatedNodes(bool* has_nodes) {
   DCHECK(has_nodes);
   *has_nodes = false;
-  sync_api::ReadTransaction trans(
-      sync_service_->backend()->GetUserShareHandle());
+  sync_api::ReadTransaction trans(sync_service_->GetUserShare());
   sync_api::ReadNode root(&trans);
   if (!root.InitByTagLookup(kThemesTag)) {
     LOG(ERROR) << kNoThemesFolderError;
@@ -94,6 +91,15 @@ bool ThemeModelAssociator::SyncModelHasUserCreatedNodes(bool* has_nodes) {
   // any children.
   *has_nodes = root.GetFirstChildId() != sync_api::kInvalidId;
   return true;
+}
+
+bool ThemeModelAssociator::CryptoReadyIfNecessary() {
+  // We only access the cryptographer while holding a transaction.
+  sync_api::ReadTransaction trans(sync_service_->GetUserShare());
+  syncable::ModelTypeSet encrypted_types;
+  sync_service_->GetEncryptedDataTypes(&encrypted_types);
+  return encrypted_types.count(syncable::THEMES) == 0 ||
+         sync_service_->IsCryptographerReady(&trans);
 }
 
 }  // namespace browser_sync

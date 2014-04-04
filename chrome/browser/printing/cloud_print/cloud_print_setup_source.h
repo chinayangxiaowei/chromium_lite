@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,14 +8,14 @@
 #include <string>
 
 #include "base/message_loop.h"
-#include "chrome/browser/dom_ui/chrome_url_data_manager.h"
+#include "chrome/browser/ui/webui/chrome_url_data_manager.h"
 #include "chrome/common/url_constants.h"
 
 class CloudPrintSetupSource : public ChromeURLDataManager::DataSource {
  public:
   CloudPrintSetupSource();
   virtual void StartDataRequest(const std::string& path,
-                                bool is_off_the_record,
+                                bool is_incognito,
                                 int request_id);
 
   virtual std::string GetMimeType(const std::string& path) const;

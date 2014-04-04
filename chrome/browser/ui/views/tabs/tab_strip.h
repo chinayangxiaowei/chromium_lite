@@ -6,12 +6,12 @@
 #define CHROME_BROWSER_UI_VIEWS_TABS_TAB_STRIP_H_
 #pragma once
 
-#include "base/ref_counted.h"
+#include "base/memory/ref_counted.h"
 #include "base/timer.h"
 #include "chrome/browser/ui/views/tabs/base_tab_strip.h"
-#include "gfx/point.h"
-#include "gfx/rect.h"
 #include "ui/base/animation/animation_container.h"
+#include "ui/gfx/point.h"
+#include "ui/gfx/rect.h"
 #include "views/controls/button/image_button.h"
 #include "views/mouse_watcher.h"
 
@@ -53,53 +53,60 @@ class TabStrip : public BaseTabStrip,
   gfx::Rect GetNewTabButtonBounds();
 
   // MouseWatcherListener overrides:
-  virtual void MouseMovedOutOfView();
+  virtual void MouseMovedOutOfView() OVERRIDE;
+
+  // AbstractTabStripView implementation:
+  virtual bool IsPositionInWindowCaption(const gfx::Point& point) OVERRIDE;
+  virtual void SetBackgroundOffset(const gfx::Point& offset) OVERRIDE;
 
   // BaseTabStrip implementation:
-  virtual int GetPreferredHeight();
-  virtual void SetBackgroundOffset(const gfx::Point& offset);
-  virtual bool IsPositionInWindowCaption(const gfx::Point& point);
-  virtual void PrepareForCloseAt(int model_index);
-  virtual void RemoveTabAt(int model_index);
-  virtual void SelectTabAt(int old_model_index, int new_model_index);
-  virtual void TabTitleChangedNotLoading(int model_index);
-  virtual void StartHighlight(int model_index);
-  virtual void StopAllHighlighting();
-  virtual BaseTab* CreateTabForDragging();
+  virtual void PrepareForCloseAt(int model_index) OVERRIDE;
+  virtual void RemoveTabAt(int model_index) OVERRIDE;
+  virtual void SelectTabAt(int old_model_index, int new_model_index) OVERRIDE;
+  virtual void TabTitleChangedNotLoading(int model_index) OVERRIDE;
+  virtual void StartHighlight(int model_index) OVERRIDE;
+  virtual void StopAllHighlighting() OVERRIDE;
+  virtual BaseTab* CreateTabForDragging() OVERRIDE;
 
   // views::View overrides:
-  virtual void PaintChildren(gfx::Canvas* canvas);
-  virtual views::View* GetViewByID(int id) const;
-  virtual gfx::Size GetPreferredSize();
-  // NOTE: the drag and drop methods are invoked from FrameView. This is done to
-  // allow for a drop region that extends outside the bounds of the TabStrip.
-  virtual void OnDragEntered(const views::DropTargetEvent& event);
-  virtual int OnDragUpdated(const views::DropTargetEvent& event);
-  virtual void OnDragExited();
-  virtual int OnPerformDrop(const views::DropTargetEvent& event);
-  virtual AccessibilityTypes::Role GetAccessibleRole();
-  virtual views::View* GetViewForPoint(const gfx::Point& point);
-  virtual void OnThemeChanged();
+  virtual void PaintChildren(gfx::Canvas* canvas) OVERRIDE;
+  virtual const views::View* GetViewByID(int id) const OVERRIDE;
+  virtual gfx::Size GetPreferredSize() OVERRIDE;
+  // NOTE: the drag and drop methods are invoked from FrameView. This is done
+  // to allow for a drop region that extends outside the bounds of the TabStrip.
+  virtual void OnDragEntered(const views::DropTargetEvent& event) OVERRIDE;
+  virtual int OnDragUpdated(const views::DropTargetEvent& event) OVERRIDE;
+  virtual void OnDragExited() OVERRIDE;
+  virtual int OnPerformDrop(const views::DropTargetEvent& event) OVERRIDE;
+  virtual void GetAccessibleState(ui::AccessibleViewState* state) OVERRIDE;
+  virtual views::View* GetEventHandlerForPoint(const gfx::Point& point)
+      OVERRIDE;
+  virtual void OnThemeChanged() OVERRIDE;
 
  protected:
   // BaseTabStrip overrides:
-  virtual BaseTab* CreateTab();
-  virtual void StartInsertTabAnimation(int model_index, bool foreground);
-  virtual void StartMoveTabAnimation();
-  virtual void AnimateToIdealBounds();
-  virtual bool ShouldHighlightCloseButtonAfterRemove();
-  virtual void DoLayout();
+  virtual BaseTab* CreateTab() OVERRIDE;
+  virtual void StartInsertTabAnimation(int model_index) OVERRIDE;
+  virtual void AnimateToIdealBounds() OVERRIDE;
+  virtual bool ShouldHighlightCloseButtonAfterRemove() OVERRIDE;
+  virtual void DoLayout() OVERRIDE;
+  virtual void LayoutDraggedTabsAt(const std::vector<BaseTab*>& tabs,
+                                   BaseTab* active_tab,
+                                   const gfx::Point& location,
+                                   bool initial_drag) OVERRIDE;
+  virtual void CalculateBoundsForDraggedTabs(
+      const std::vector<BaseTab*>& tabs,
+      std::vector<gfx::Rect>* bounds) OVERRIDE;
+  virtual int GetSizeNeededForTabs(const std::vector<BaseTab*>& tabs) OVERRIDE;
 
   // views::View implementation:
   virtual void ViewHierarchyChanged(bool is_add,
                                     views::View* parent,
-                                    views::View* child);
-
-  // TabController overrides.
-  virtual bool IsTabSelected(const BaseTab* btr) const;
+                                    views::View* child) OVERRIDE;
 
   // views::ButtonListener implementation:
-  virtual void ButtonPressed(views::Button* sender, const views::Event& event);
+  virtual void ButtonPressed(views::Button* sender, const views::Event& event)
+      OVERRIDE;
 
   // Horizontal gap between mini and non-mini-tabs.
   static const int mini_to_non_mini_gap_;
@@ -126,12 +133,7 @@ class TabStrip : public BaseTabStrip,
     bool point_down;
 
     // Renders the drop indicator.
-    // TODO(beng): should be views::Widget.
-#if defined(OS_WIN)
-    views::WidgetWin* arrow_window;
-#else
-    views::WidgetGtk* arrow_window;
-#endif
+    views::Widget* arrow_window;
     views::ImageView* arrow_view;
 
    private:
@@ -211,18 +213,12 @@ class TabStrip : public BaseTabStrip,
   // animating to their desired position/bounds. This is used by the standard
   // Layout method and other callers like the DraggedTabController that need
   // stable representations of Tab positions.
-  void GenerateIdealBounds();
+  virtual void GenerateIdealBounds();
 
   // Starts various types of TabStrip animations.
   void StartResizeLayoutAnimation();
-  void StartMoveTabAnimation(int from_model_index,
-                             int to_model_index);
-  void StartMiniTabAnimation();
+  virtual void StartMiniTabAnimation();
   void StartMouseInitiatedRemoveTabAnimation(int model_index);
-
-  // Stops any ongoing animations. If |layout| is true and an animation is
-  // ongoing this does a layout.
-  virtual void StopAnimating(bool layout);
 
   // Calculates the available width for tabs, assuming a Tab is to be closed.
   int GetAvailableWidthForTabs(Tab* last_tab) const;

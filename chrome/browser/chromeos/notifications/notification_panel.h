@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,12 +8,12 @@
 #define CHROME_BROWSER_CHROMEOS_NOTIFICATIONS_NOTIFICATION_PANEL_H_
 #pragma once
 
-#include "base/scoped_ptr.h"
+#include "base/memory/scoped_ptr.h"
 #include "base/task.h"
 #include "chrome/browser/chromeos/frame/panel_controller.h"
 #include "chrome/browser/chromeos/notifications/balloon_collection_impl.h"
-#include "chrome/common/notification_registrar.h"
-#include "gfx/rect.h"
+#include "content/common/notification_registrar.h"
+#include "ui/gfx/rect.h"
 
 class Balloon;
 class Notification;
@@ -102,6 +102,7 @@ class NotificationPanel : public PanelController::Delegate,
   virtual SkBitmap GetPanelIcon();
   virtual bool CanClosePanel();
   virtual void ClosePanel();
+  virtual void ActivatePanel();
 
   // NotificationObserver overrides:
   virtual void Observe(NotificationType type,

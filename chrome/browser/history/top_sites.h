@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -13,16 +13,16 @@
 
 #include "base/basictypes.h"
 #include "base/gtest_prod_util.h"
-#include "base/ref_counted.h"
-#include "base/ref_counted_memory.h"
+#include "base/memory/ref_counted.h"
+#include "base/memory/ref_counted_memory.h"
 #include "base/synchronization/lock.h"
 #include "base/time.h"
 #include "base/timer.h"
-#include "chrome/browser/cancelable_request.h"
 #include "chrome/browser/history/history_types.h"
 #include "chrome/browser/history/history.h"
 #include "chrome/browser/history/page_usage_data.h"
 #include "chrome/common/thumbnail_score.h"
+#include "content/browser/cancelable_request.h"
 #include "googleurl/src/gurl.h"
 
 class DictionaryValue;
@@ -78,6 +78,16 @@ class TopSites
   // upped before this method returns, so this takes a scoped_refptr*.
   bool GetPageThumbnail(const GURL& url,
                         scoped_refptr<RefCountedBytes>* bytes);
+
+  // Get a thumbnail score for a given page. Returns true iff we have the
+  // thumbnail score.  This may be invoked on any thread. The score will
+  // be copied to |score|.
+  virtual bool GetPageThumbnailScore(const GURL& url, ThumbnailScore* score);
+
+  // Get a temporary thumbnail score for a given page. Returns true iff we
+  // have the thumbnail score. Useful when checking if we should update a
+  // thumbnail for a given page. The score will be copied to |score|.
+  bool GetTemporaryPageThumbnailScore(const GURL& url, ThumbnailScore* score);
 
   // Invoked from History if migration is needed. If this is invoked it will
   // be before HistoryLoaded is invoked.
@@ -144,6 +154,19 @@ class TopSites
 
   bool loaded() const { return loaded_; }
 
+  // Returns true if the given URL is known to the top sites service.
+  // This function also returns false if TopSites isn't loaded yet.
+  virtual bool IsKnownURL(const GURL& url);
+
+  // Returns true if the top sites list is full (i.e. we already have the
+  // maximum number of top sites).  This function also returns false if
+  // TopSites isn't loaded yet.
+  virtual bool IsFull();
+
+ protected:
+  // For allowing inheritance.
+  virtual ~TopSites();
+
  private:
   friend class base::RefCountedThreadSafe<TopSites>;
   friend class TopSitesTest;
@@ -176,8 +199,6 @@ class TopSites
     // Top sites is loaded.
     TOP_SITES_LOADED
   };
-
-  ~TopSites();
 
   // Sets the thumbnail without writing to the database. Useful when
   // reading last known top sites from the DB.
@@ -331,12 +352,12 @@ class TopSites
   // storing all URLs, but filtering on access. It is a dictionary,
   // key is the URL, value is a dummy value. This is owned by the
   // PrefService.
-  DictionaryValue* blacklist_;
+  const DictionaryValue* blacklist_;
 
   // This is a dictionary for the pinned URLs for the the most visited part of
   // the new tab page. Key is the URL, value is index where it is pinned at (may
   // be the same as key). This is owned by the PrefService.
-  DictionaryValue* pinned_urls_;
+  const DictionaryValue* pinned_urls_;
 
   // See description above HistoryLoadState.
   HistoryLoadState history_state_;

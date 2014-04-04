@@ -1,4 +1,4 @@
-// Copyright (c) 2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -61,10 +61,6 @@ void GLES2DecoderTestBase::SpecializedSetup<LinkProgram, 0>(bool /* valid */) {
       GetProgramiv(kServiceProgramId, GL_INFO_LOG_LENGTH, _))
       .WillOnce(SetArgumentPointee<2>(0))
       .RetiresOnSaturation();
-  EXPECT_CALL(*gl_,
-      GetProgramInfoLog(kServiceProgramId, _, _, _))
-      .Times(1)
-      .RetiresOnSaturation();
   EXPECT_CALL(*gl_, GetProgramiv(kServiceProgramId, GL_ACTIVE_ATTRIBUTES, _))
       .WillOnce(SetArgumentPointee<2>(0));
   EXPECT_CALL(
@@ -104,10 +100,6 @@ void GLES2DecoderTestBase::SpecializedSetup<ValidateProgram, 0>(
       GetProgramiv(kServiceProgramId, GL_INFO_LOG_LENGTH, _))
       .WillOnce(SetArgumentPointee<2>(0))
       .RetiresOnSaturation();
-  EXPECT_CALL(*gl_,
-      GetProgramInfoLog(kServiceProgramId, _, _, _))
-      .Times(1)
-      .RetiresOnSaturation();
 };
 
 template <>
@@ -127,6 +119,17 @@ void GLES2DecoderTestBase::SpecializedSetup<Uniform1fvImmediate, 0>(
 };
 
 template <>
+void GLES2DecoderTestBase::SpecializedSetup<Uniform1iv, 0>(bool /* valid */) {
+  SetupShaderForUniform();
+};
+
+template <>
+void GLES2DecoderTestBase::SpecializedSetup<Uniform1ivImmediate, 0>(
+    bool /* valid */) {
+  SetupShaderForUniform();
+};
+
+template <>
 void GLES2DecoderTestBase::SpecializedSetup<Uniform2f, 0>(bool /* valid */) {
   SetupShaderForUniform();
 };
@@ -137,7 +140,18 @@ void GLES2DecoderTestBase::SpecializedSetup<Uniform2fv, 0>(bool /* valid */) {
 };
 
 template <>
+void GLES2DecoderTestBase::SpecializedSetup<Uniform2iv, 0>(bool /* valid */) {
+  SetupShaderForUniform();
+};
+
+template <>
 void GLES2DecoderTestBase::SpecializedSetup<Uniform2fvImmediate, 0>(
+    bool /* valid */) {
+  SetupShaderForUniform();
+};
+
+template <>
+void GLES2DecoderTestBase::SpecializedSetup<Uniform2ivImmediate, 0>(
     bool /* valid */) {
   SetupShaderForUniform();
 };
@@ -153,7 +167,18 @@ void GLES2DecoderTestBase::SpecializedSetup<Uniform3fv, 0>(bool /* valid */) {
 };
 
 template <>
+void GLES2DecoderTestBase::SpecializedSetup<Uniform3iv, 0>(bool /* valid */) {
+  SetupShaderForUniform();
+};
+
+template <>
 void GLES2DecoderTestBase::SpecializedSetup<Uniform3fvImmediate, 0>(
+    bool /* valid */) {
+  SetupShaderForUniform();
+};
+
+template <>
+void GLES2DecoderTestBase::SpecializedSetup<Uniform3ivImmediate, 0>(
     bool /* valid */) {
   SetupShaderForUniform();
 };
@@ -169,7 +194,54 @@ void GLES2DecoderTestBase::SpecializedSetup<Uniform4fv, 0>(bool /* valid */) {
 };
 
 template <>
+void GLES2DecoderTestBase::SpecializedSetup<Uniform4iv, 0>(bool /* valid */) {
+  SetupShaderForUniform();
+};
+
+template <>
 void GLES2DecoderTestBase::SpecializedSetup<Uniform4fvImmediate, 0>(
+    bool /* valid */) {
+  SetupShaderForUniform();
+};
+
+template <>
+void GLES2DecoderTestBase::SpecializedSetup<Uniform4ivImmediate, 0>(
+    bool /* valid */) {
+  SetupShaderForUniform();
+};
+
+template <>
+void GLES2DecoderTestBase::SpecializedSetup<UniformMatrix2fv, 0>(
+    bool /* valid */) {
+  SetupShaderForUniform();
+};
+
+template <>
+void GLES2DecoderTestBase::SpecializedSetup<UniformMatrix2fvImmediate, 0>(
+    bool /* valid */) {
+  SetupShaderForUniform();
+};
+
+template <>
+void GLES2DecoderTestBase::SpecializedSetup<UniformMatrix3fv, 0>(
+    bool /* valid */) {
+  SetupShaderForUniform();
+};
+
+template <>
+void GLES2DecoderTestBase::SpecializedSetup<UniformMatrix3fvImmediate, 0>(
+    bool /* valid */) {
+  SetupShaderForUniform();
+};
+
+template <>
+void GLES2DecoderTestBase::SpecializedSetup<UniformMatrix4fv, 0>(
+    bool /* valid */) {
+  SetupShaderForUniform();
+};
+
+template <>
+void GLES2DecoderTestBase::SpecializedSetup<UniformMatrix4fvImmediate, 0>(
     bool /* valid */) {
   SetupShaderForUniform();
 };

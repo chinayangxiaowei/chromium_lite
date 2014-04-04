@@ -7,13 +7,14 @@
 #include "base/compiler_specific.h"
 #include "base/message_loop.h"
 #include "base/task.h"
-#include "views/grid_layout.h"
+#include "grit/generated_resources.h"
 #include "views/controls/label.h"
 #include "views/controls/textfield/textfield.h"
-#include "views/standard_layout.h"
+#include "views/controls/textfield/textfield_controller.h"
+#include "views/layout/grid_layout.h"
+#include "views/layout/layout_constants.h"
 #include "views/window/dialog_delegate.h"
 #include "views/window/window.h"
-#include "grit/generated_resources.h"
 
 // Width to make the text field, in pixels.
 static const int kTextfieldWidth = 200;
@@ -56,7 +57,7 @@ class WinInputWindowDialog : public InputWindowDialog {
 // It registers accelerators that accept/cancel the input.
 class ContentView : public views::View,
                     public views::DialogDelegate,
-                    public views::Textfield::Controller {
+                    public views::TextfieldController {
  public:
   explicit ContentView(WinInputWindowDialog* delegate)
       : delegate_(delegate),
@@ -64,7 +65,7 @@ class ContentView : public views::View,
     DCHECK(delegate_);
   }
 
-  // views::DialogDelegate overrides:
+  // views::DialogDelegate:
   virtual bool IsDialogButtonEnabled(
       MessageBoxFlags::DialogButton button) const;
   virtual bool Accept();
@@ -74,7 +75,7 @@ class ContentView : public views::View,
   virtual bool IsModal() const { return true; }
   virtual views::View* GetContentsView();
 
-  // views::Textfield::Controller overrides:
+  // views::TextfieldController:
   virtual void ContentsChanged(views::Textfield* sender,
                                const std::wstring& new_contents);
   virtual bool HandleKeyEvent(views::Textfield*,
@@ -83,8 +84,9 @@ class ContentView : public views::View,
   }
 
  protected:
-  // views::View overrides:
-  virtual void ViewHierarchyChanged(bool is_add, views::View* parent,
+  // views::View:
+  virtual void ViewHierarchyChanged(bool is_add,
+                                    views::View* parent,
                                     views::View* child);
 
  private:
@@ -142,7 +144,7 @@ views::View* ContentView::GetContentsView() {
 }
 
 ///////////////////////////////////////////////////////////////////////////////
-// ContentView, views::Textfield::Controller implementation:
+// ContentView, views::TextfieldController implementation:
 
 void ContentView::ContentsChanged(views::Textfield* sender,
                                   const std::wstring& new_contents) {
@@ -177,7 +179,7 @@ void ContentView::InitControlLayout() {
   ColumnSet* c1 = layout->AddColumnSet(0);
   c1->AddColumn(GridLayout::CENTER, GridLayout::CENTER, 0,
                 GridLayout::USE_PREF, 0, 0);
-  c1->AddPaddingColumn(0, kRelatedControlHorizontalSpacing);
+  c1->AddPaddingColumn(0, views::kRelatedControlHorizontalSpacing);
   c1->AddColumn(GridLayout::FILL, GridLayout::CENTER, 1,
                 GridLayout::USE_PREF, kTextfieldWidth, kTextfieldWidth);
 
@@ -207,7 +209,7 @@ WinInputWindowDialog::WinInputWindowDialog(HWND parent,
       delegate_(delegate) {
   window_ = views::Window::CreateChromeWindow(parent, gfx::Rect(),
                                               new ContentView(this));
-  window_->GetClientView()->AsDialogClientView()->UpdateDialogButtons();
+  window_->client_view()->AsDialogClientView()->UpdateDialogButtons();
 }
 
 WinInputWindowDialog::~WinInputWindowDialog() {
@@ -218,7 +220,7 @@ void WinInputWindowDialog::Show() {
 }
 
 void WinInputWindowDialog::Close() {
-  window_->Close();
+  window_->CloseWindow();
 }
 
 // static

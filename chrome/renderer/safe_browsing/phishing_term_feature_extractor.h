@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 //
@@ -11,10 +11,6 @@
 // To make it harder for a phisher to enumerate all of the relevant terms in
 // the model, the terms are provided as SHA-256 hashes, rather than plain text.
 //
-// TODO(bryner): When we compute the score, all of the features in the
-// FeatureMap will be hashed so that they can be compared against the model.
-// When this is implemented, add a comment about it here.
-//
 // There is one PhishingTermFeatureExtractor per RenderView.
 
 #ifndef CHROME_RENDERER_SAFE_BROWSING_PHISHING_TERM_FEATURE_EXTRACTOR_H_
@@ -25,7 +21,7 @@
 #include "base/basictypes.h"
 #include "base/callback.h"
 #include "base/hash_tables.h"
-#include "base/scoped_ptr.h"
+#include "base/memory/scoped_ptr.h"
 #include "base/string16.h"
 #include "base/task.h"
 

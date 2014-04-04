@@ -122,7 +122,41 @@ var chrome = chrome || {};
     }
   };
 
+  chrome.test.checkDeepEq = function(expected, actual) {
+    for (var p in expected) {
+      var eq = true;
+      switch (typeof(expected[p])) {
+        case 'object':
+          eq = chrome.test.checkDeepEq(expected[p], actual[p]);
+          break;
+        case 'function':
+          eq = (typeof(actual[p]) != 'undefined' &&
+                expected[p].toString() == actual[p].toString());
+          break;
+        default:
+          eq = (expected[p] == actual[p] &&
+                typeof(expected[p]) == typeof(actual[p]));
+          break;
+      }
+      if (!eq)
+        return false;
+    }
+    for (var p in actual) {
+      if (typeof(expected[p]) == 'undefined')
+        return false;
+    }
+    return true;
+  };
+
   chrome.test.assertEq = function(expected, actual) {
+    if (typeof(expected) == 'object') {
+      if (!chrome.test.checkDeepEq(expected, actual)) {
+        chrome.test.fail("API Test Error in " + testName(currentTest) +
+                         "\nActual: " + JSON.stringify(actual) +
+                         "\nExpected: " + JSON.stringify(expected));
+      }
+      return;
+    }
     if (expected != actual) {
       chrome.test.fail("API Test Error in " + testName(currentTest) +
                        "\nActual: " + actual + "\nExpected: " + expected);

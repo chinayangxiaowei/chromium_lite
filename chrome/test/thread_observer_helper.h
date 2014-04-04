@@ -1,4 +1,4 @@
-// Copyright (c) 2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,11 +6,11 @@
 #define CHROME_TEST_THREAD_OBSERVER_HELPER_H__
 #pragma once
 
-#include "base/ref_counted.h"
+#include "base/memory/ref_counted.h"
 #include "base/synchronization/waitable_event.h"
-#include "chrome/browser/browser_thread.h"
-#include "chrome/common/notification_observer_mock.h"
-#include "chrome/common/notification_registrar.h"
+#include "content/browser/browser_thread.h"
+#include "content/common/notification_observer_mock.h"
+#include "content/common/notification_registrar.h"
 
 // Helper class to add and remove observers on a non-UI thread from
 // the UI thread.

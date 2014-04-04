@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -11,24 +11,26 @@
 #include <string>
 
 #include "base/basictypes.h"
-#include "base/scoped_ptr.h"
+#include "base/memory/scoped_ptr.h"
 #include "chrome/browser/autocomplete/autocomplete_match.h"
 #include "chrome/browser/autocomplete/autocomplete_popup_view.h"
-#include "chrome/common/notification_observer.h"
-#include "chrome/common/notification_registrar.h"
+#include "content/common/notification_observer.h"
+#include "content/common/notification_registrar.h"
+#include "ui/gfx/font.h"
 #include "webkit/glue/window_open_disposition.h"
 
 class AutocompleteEditModel;
 class AutocompleteEditView;
 class AutocompletePopupModel;
-class GtkThemeProvider;
+class GtkThemeService;
 class Profile;
 class SkBitmap;
 
 class AutocompletePopupViewGtk : public AutocompletePopupView,
                                  public NotificationObserver {
  public:
-  AutocompletePopupViewGtk(AutocompleteEditView* edit_view,
+  AutocompletePopupViewGtk(const gfx::Font& font,
+                           AutocompleteEditView* edit_view,
                            AutocompleteEditModel* edit_model,
                            Profile* profile,
                            GtkWidget* location_bar);
@@ -41,7 +43,6 @@ class AutocompletePopupViewGtk : public AutocompletePopupView,
   virtual gfx::Rect GetTargetBounds();
   virtual void PaintUpdatesNow();
   virtual void OnDragCanceled();
-  virtual AutocompletePopupModel* GetModel();
 
   // Overridden from NotificationObserver:
   virtual void Observe(NotificationType type,
@@ -53,7 +54,7 @@ class AutocompletePopupViewGtk : public AutocompletePopupView,
   friend class AutocompletePopupViewGtkTest;
   static void SetupLayoutForMatch(
       PangoLayout* layout,
-      const std::wstring& text,
+      const string16& text,
       const AutocompleteMatch::ACMatchClassifications& classifications,
       const GdkColor* base_color,
       const GdkColor* dim_color,
@@ -114,8 +115,12 @@ class AutocompletePopupViewGtk : public AutocompletePopupView,
   // The pango layout object created from the window, cached across exposes.
   PangoLayout* layout_;
 
-  GtkThemeProvider* theme_provider_;
+  GtkThemeService* theme_service_;
   NotificationRegistrar registrar_;
+
+  // Font used for suggestions after being derived from the constructor's
+  // |font|.
+  gfx::Font font_;
 
   // Used to cache GdkPixbufs and map them from the SkBitmaps they were created
   // from.

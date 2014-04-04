@@ -9,15 +9,15 @@
 #include <gtk/gtk.h>
 #include <string>
 
-#include "base/scoped_ptr.h"
+#include "base/memory/scoped_ptr.h"
 #include "chrome/browser/command_updater.h"
 #include "chrome/browser/prefs/pref_member.h"
 #include "chrome/browser/ui/gtk/custom_button.h"
 #include "chrome/browser/ui/gtk/menu_gtk.h"
 #include "chrome/browser/ui/gtk/owned_widget_gtk.h"
 #include "chrome/browser/ui/toolbar/wrench_menu_model.h"
-#include "chrome/common/notification_observer.h"
-#include "chrome/common/notification_registrar.h"
+#include "content/common/notification_observer.h"
+#include "content/common/notification_registrar.h"
 #include "ui/base/gtk/gtk_signal.h"
 #include "ui/base/gtk/gtk_signal_registrar.h"
 #include "ui/base/models/accelerator.h"
@@ -28,7 +28,7 @@ class Browser;
 class BrowserActionsToolbarGtk;
 class BrowserWindowGtk;
 class CustomDrawButton;
-class GtkThemeProvider;
+class GtkThemeService;
 class LocationBar;
 class LocationBarViewGtk;
 class Profile;
@@ -186,7 +186,7 @@ class BrowserToolbarGtk : public CommandUpdater::CommandObserver,
   // The model that contains the security level, text, icon to display...
   ToolbarModel* model_;
 
-  GtkThemeProvider* theme_provider_;
+  GtkThemeService* theme_service_;
 
   scoped_ptr<MenuGtk> wrench_menu_;
 

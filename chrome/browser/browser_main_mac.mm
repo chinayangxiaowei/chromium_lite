@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,25 +6,24 @@
 
 #import <Cocoa/Cocoa.h>
 
-#include "app/app_switches.h"
 #include "base/command_line.h"
 #include "base/debug/debugger.h"
 #include "base/file_path.h"
 #include "base/mac/mac_util.h"
-#include "base/nss_util.h"
+#include "base/memory/scoped_nsobject.h"
 #include "base/path_service.h"
-#include "base/scoped_nsobject.h"
+#include "crypto/nss_util.h"
 #include "chrome/app/breakpad_mac.h"
 #import "chrome/browser/app_controller_mac.h"
 #include "chrome/browser/browser_main_win.h"
 #import "chrome/browser/chrome_browser_application_mac.h"
-#import "chrome/browser/ui/cocoa/keystone_glue.h"
+#import "chrome/browser/cocoa/keystone_glue.h"
 #include "chrome/browser/metrics/metrics_service.h"
 #include "chrome/common/chrome_paths.h"
 #include "chrome/common/chrome_switches.h"
-#include "chrome/common/main_function_params.h"
-#include "chrome/common/result_codes.h"
-#include "net/socket/ssl_client_socket_mac_factory.h"
+#include "content/common/main_function_params.h"
+#include "content/common/result_codes.h"
+#include "net/socket/client_socket_factory.h"
 #include "ui/base/l10n/l10n_util_mac.h"
 #include "ui/base/resource/resource_bundle.h"
 
@@ -36,6 +35,10 @@ void DidEndMainMessageLoop() {
 void RecordBreakpadStatusUMA(MetricsService* metrics) {
   metrics->RecordBreakpadRegistration(IsCrashReporterEnabled());
   metrics->RecordBreakpadHasDebugger(base::debug::BeingDebugged());
+}
+
+void RecordBrowserStartupTime() {
+  // Not implemented on Mac for now.
 }
 
 void WarnAboutMinimumSystemRequirements() {
@@ -135,11 +138,10 @@ class BrowserMainPartsMac : public BrowserMainPartsPosix {
     // Use NSS for SSL by default.
     // The default client socket factory uses NSS for SSL by default on Mac.
     if (parsed_command_line().HasSwitch(switches::kUseSystemSSL)) {
-      net::ClientSocketFactory::SetSSLClientSocketFactory(
-          net::SSLClientSocketMacFactory);
+      net::ClientSocketFactory::UseSystemSSL();
     } else {
       // We want to be sure to init NSPR on the main thread.
-      base::EnsureNSPRInit();
+      crypto::EnsureNSPRInit();
     }
   }
 };

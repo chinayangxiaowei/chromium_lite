@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -79,7 +79,8 @@ SharedMemoryHandle SharedMemory::NULLHandle() {
 // static
 void SharedMemory::CloseHandle(const SharedMemoryHandle& handle) {
   DCHECK(handle.fd >= 0);
-  close(handle.fd);
+  if (HANDLE_EINTR(close(handle.fd)) < 0)
+    PLOG(ERROR) << "close";
 }
 
 bool SharedMemory::CreateAndMapAnonymous(uint32 size) {
@@ -98,7 +99,7 @@ bool SharedMemory::CreateAnonymous(uint32 size) {
 // of mem_filename after FilePathForMemoryName().
 bool SharedMemory::CreateNamed(const std::string& name,
                                bool open_existing, uint32 size) {
-  DCHECK(mapped_file_ == -1);
+  DCHECK_EQ(-1, mapped_file_);
   if (size == 0) return false;
 
   // This function theoretically can block on the disk, but realistically
@@ -141,7 +142,7 @@ bool SharedMemory::CreateNamed(const std::string& name,
       return false;
     const uint32 current_size = stat.st_size;
     if (current_size != size) {
-      if (ftruncate(fileno(fp), size) != 0)
+      if (HANDLE_EINTR(ftruncate(fileno(fp), size)) != 0)
         return false;
       if (fseeko(fp, size, SEEK_SET) != 0)
         return false;
@@ -229,7 +230,8 @@ void SharedMemory::Close() {
   Unmap();
 
   if (mapped_file_ > 0) {
-    close(mapped_file_);
+    if (HANDLE_EINTR(close(mapped_file_)) < 0)
+      PLOG(ERROR) << "close";
     mapped_file_ = -1;
   }
 }
@@ -243,7 +245,7 @@ void SharedMemory::Unlock() {
 }
 
 bool SharedMemory::PrepareMapFile(FILE *fp) {
-  DCHECK(mapped_file_ == -1);
+  DCHECK_EQ(-1, mapped_file_);
   if (fp == NULL) return false;
 
   // This function theoretically can block on the disk, but realistically
@@ -278,8 +280,8 @@ bool SharedMemory::FilePathForMemoryName(const std::string& mem_name,
                                          FilePath* path) {
   // mem_name will be used for a filename; make sure it doesn't
   // contain anything which will confuse us.
-  DCHECK(mem_name.find('/') == std::string::npos);
-  DCHECK(mem_name.find('\0') == std::string::npos);
+  DCHECK_EQ(std::string::npos, mem_name.find('/'));
+  DCHECK_EQ(std::string::npos, mem_name.find('\0'));
 
   FilePath temp_dir;
   if (!file_util::GetShmemTempDir(&temp_dir))
@@ -290,7 +292,7 @@ bool SharedMemory::FilePathForMemoryName(const std::string& mem_name,
 }
 
 void SharedMemory::LockOrUnlockCommon(int function) {
-  DCHECK(mapped_file_ >= 0);
+  DCHECK_GE(mapped_file_, 0);
   while (lockf(mapped_file_, function, 0) < 0) {
     if (errno == EINTR) {
       continue;
@@ -312,7 +314,7 @@ bool SharedMemory::ShareToProcessCommon(ProcessHandle process,
                                         SharedMemoryHandle *new_handle,
                                         bool close_self) {
   const int new_fd = dup(mapped_file_);
-  DCHECK(new_fd >= 0);
+  DCHECK_GE(new_fd, 0);
   new_handle->fd = new_fd;
   new_handle->auto_close = true;
 

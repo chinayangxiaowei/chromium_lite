@@ -1,9 +1,8 @@
-// Copyright (c) 2006-2008 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "build/build_config.h"
-
+#include <stddef.h>
 #include <windows.h>
 #include <mmsystem.h>
 
@@ -49,7 +48,7 @@ bool EventRecorder::StartRecording(const FilePath& filename) {
     return false;
 
   // Open the recording file.
-  DCHECK(file_ == NULL);
+  DCHECK(!file_);
   file_ = file_util::OpenFile(filename, "wb+");
   if (!file_) {
     DLOG(ERROR) << "EventRecorder could not open log file";
@@ -100,7 +99,7 @@ bool EventRecorder::StartPlayback(const FilePath& filename) {
     return false;
 
   // Open the recording file.
-  DCHECK(file_ == NULL);
+  DCHECK(!file_);
   file_ = file_util::OpenFile(filename, "rb");
   if (!file_) {
     DLOG(ERROR) << "EventRecorder Playback could not open log file";

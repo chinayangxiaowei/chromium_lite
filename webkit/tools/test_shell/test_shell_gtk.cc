@@ -1,4 +1,4 @@
-// Copyright (c) 2006-2008 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -25,7 +25,7 @@
 #include "third_party/WebKit/Source/WebKit/chromium/public/WebFrame.h"
 #include "third_party/WebKit/Source/WebKit/chromium/public/WebPoint.h"
 #include "third_party/WebKit/Source/WebKit/chromium/public/WebView.h"
-#include "ui/base/resource/data_pack.h"
+#include "ui/base/resource/resource_bundle.h"
 #include "webkit/glue/plugins/plugin_list.h"
 #include "webkit/glue/resource_loader_bridge.h"
 #include "webkit/glue/webkit_glue.h"
@@ -43,9 +43,6 @@ namespace {
 const FcChar8* FilePathAsFcChar(const FilePath& path) {
   return reinterpret_cast<const FcChar8*>(path.value().c_str());
 }
-
-// Data resources on linux.  This is a pointer to the mmapped resources file.
-ui::DataPack* g_resource_data_pack = NULL;
 
 void TerminationSignalHandler(int signatl) {
   TestShell::ShutdownTestShell();
@@ -159,13 +156,10 @@ void TestShell::InitializeTestShell(bool layout_test_mode,
 
   web_prefs_ = new WebPreferences;
 
-  g_resource_data_pack = new ui::DataPack;
   FilePath data_path;
   PathService::Get(base::DIR_EXE, &data_path);
   data_path = data_path.Append("test_shell.pak");
-  if (!g_resource_data_pack->Load(data_path)) {
-    LOG(FATAL) << "failed to load test_shell.pak";
-  }
+  ResourceBundle::InitSharedInstanceForTest(data_path);
 
   FilePath resources_dir;
   PathService::Get(base::DIR_SOURCE_ROOT, &resources_dir);
@@ -281,8 +275,7 @@ void TestShell::InitializeTestShell(bool layout_test_mode,
 }
 
 void TestShell::PlatformShutdown() {
-  delete g_resource_data_pack;
-  g_resource_data_pack = NULL;
+  ResourceBundle::CleanupSharedInstance();
 }
 
 void TestShell::PlatformCleanUp() {
@@ -376,12 +369,6 @@ void TestShell::TestFinished() {
     return;
 
   test_is_pending_ = false;
-  if (dump_when_finished_) {
-    GtkWindow* window = *(TestShell::windowList()->begin());
-    TestShell* shell = static_cast<TestShell*>(
-        g_object_get_data(G_OBJECT(window), "test-shell"));
-    TestShell::Dump(shell);
-  }
   MessageLoop::current()->Quit();
 }
 
@@ -499,64 +486,6 @@ void TestShell::ResizeSubViews() {
   }
 }
 
-/* static */ bool TestShell::RunFileTest(const TestParams& params) {
-  // Load the test file into the first available window.
-  if (TestShell::windowList()->empty()) {
-    LOG(ERROR) << "No windows open.";
-    return false;
-  }
-
-  GtkWindow* window = *(TestShell::windowList()->begin());
-  TestShell* shell =
-      static_cast<TestShell*>(g_object_get_data(G_OBJECT(window),
-                                                "test-shell"));
-
-  // Clear focus between tests.
-  shell->m_focusedWidgetHost = NULL;
-
-  // Make sure the previous load is stopped.
-  shell->webView()->mainFrame()->stopLoading();
-  shell->navigation_controller()->Reset();
-
-  // StopLoading may update state maintained in the test controller (for
-  // example, whether the WorkQueue is frozen) as such, we need to reset it
-  // after we invoke StopLoading.
-  shell->ResetTestController();
-
-  // ResetTestController may have closed the window we were holding on to.
-  // Grab the first window again.
-  window = *(TestShell::windowList()->begin());
-  shell = static_cast<TestShell*>(g_object_get_data(G_OBJECT(window),
-                                                    "test-shell"));
-  DCHECK(shell);
-
-  // Clean up state between test runs.
-  webkit_glue::ResetBeforeTestRun(shell->webView());
-  ResetWebPreferences();
-  web_prefs_->Apply(shell->webView());
-
-  // TODO(agl): Maybe make the window hidden in the future. Window does this
-  // by positioning it off the screen but the GTK function to do this is
-  // deprecated and appears to have been removed.
-
-  shell->ResizeSubViews();
-
-  if (strstr(params.test_url.c_str(), "loading/") ||
-      strstr(params.test_url.c_str(), "loading\\"))
-    shell->layout_test_controller()->SetShouldDumpFrameLoadCallbacks(true);
-
-  shell->test_is_preparing_ = true;
-
-  shell->set_test_params(&params);
-  shell->LoadURL(GURL(params.test_url));
-
-  shell->test_is_preparing_ = false;
-  shell->WaitTestFinished();
-  shell->set_test_params(NULL);
-
-  return true;
-}
-
 void TestShell::LoadURLForFrame(const GURL& url,
                                 const std::wstring& frame_name) {
   if (!url.is_valid())
@@ -627,9 +556,7 @@ void TestShell::ShowStartupDebuggingDialog() {
 
 // static
 base::StringPiece TestShell::ResourceProvider(int key) {
-  base::StringPiece res;
-  g_resource_data_pack->GetStringPiece(key, &res);
-  return res;
+  return ResourceBundle::GetSharedInstance().GetRawDataResource(key);
 }
 
 //-----------------------------------------------------------------------------
@@ -637,13 +564,7 @@ base::StringPiece TestShell::ResourceProvider(int key) {
 namespace webkit_glue {
 
 string16 GetLocalizedString(int message_id) {
-  base::StringPiece res;
-  if (!g_resource_data_pack->GetStringPiece(message_id, &res)) {
-    LOG(FATAL) << "failed to load webkit string with id " << message_id;
-  }
-
-  return string16(reinterpret_cast<const char16*>(res.data()),
-                  res.length() / 2);
+  return ResourceBundle::GetSharedInstance().GetLocalizedString(message_id);
 }
 
 base::StringPiece GetDataResource(int resource_id) {

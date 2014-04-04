@@ -1,4 +1,4 @@
-// Copyright (c) 2008 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -11,16 +11,14 @@
 #include "chrome/browser/extensions/extension_service.h"
 #include "chrome/browser/extensions/user_script_master.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/tab_contents/tab_contents.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/common/chrome_paths.h"
 #include "chrome/common/chrome_switches.h"
-#include "chrome/common/notification_details.h"
-#include "chrome/common/notification_observer.h"
-#include "chrome/common/notification_registrar.h"
-#include "chrome/common/notification_type.h"
 #include "chrome/test/in_process_browser_test.h"
 #include "chrome/test/ui_test_utils.h"
+#include "content/browser/tab_contents/tab_contents.h"
+#include "content/common/notification_details.h"
+#include "content/common/notification_type.h"
 #include "net/base/net_util.h"
 
 // This file contains high-level startup tests for the extensions system. We've
@@ -30,13 +28,7 @@
 class ExtensionStartupTestBase : public InProcessBrowserTest {
  public:
   ExtensionStartupTestBase() : enable_extensions_(false) {
-#if defined(OS_CHROMEOS)
-    // Chromeos disallows extensions with NPAPI plug-ins, so it's count is one
-    // less
-    num_expected_extensions_ = 2;
-#else
     num_expected_extensions_ = 3;
-#endif
   }
 
  protected:
@@ -80,6 +72,8 @@ class ExtensionStartupTestBase : public InProcessBrowserTest {
     // TODO(phajdan.jr): Check return values of the functions below, carefully.
     file_util::Delete(user_scripts_dir_, true);
     file_util::Delete(extensions_dir_, true);
+
+    InProcessBrowserTest::TearDown();
   }
 
   void WaitForServicesToStart(int num_expected_extensions,

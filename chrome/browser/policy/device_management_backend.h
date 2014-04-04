@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -27,6 +27,8 @@ class DeviceManagementBackend : base::NonThreadSafe {
     kErrorRequestInvalid,
     // The HTTP request failed.
     kErrorRequestFailed,
+    // The server returned an error code that points to a temporary problem.
+    kErrorTemporaryUnavailable,
     // The HTTP request returned a non-success code.
     kErrorHttpStatus,
     // Response could not be decoded.
@@ -39,8 +41,8 @@ class DeviceManagementBackend : base::NonThreadSafe {
     kErrorServiceManagementTokenInvalid,
     // Service error: Activation pending.
     kErrorServiceActivationPending,
-    // Service error: Policy not found.
-    kErrorServicePolicyNotFound,
+    // Service error: Policy not found. Error code defined by the DM folks.
+    kErrorServicePolicyNotFound = 902,
   };
 
   class DeviceRegisterResponseDelegate {

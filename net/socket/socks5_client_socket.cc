@@ -83,7 +83,7 @@ int SOCKS5ClientSocket::Connect(CompletionCallback* callback) {
   if (rv == ERR_IO_PENDING) {
     user_callback_ = callback;
   } else {
-    net_log_.EndEvent(NetLog::TYPE_SOCKS5_CONNECT, NULL);
+    net_log_.EndEventWithNetErrorCode(NetLog::TYPE_SOCKS5_CONNECT, rv);
   }
   return rv;
 }
@@ -206,7 +206,7 @@ int SOCKS5ClientSocket::DoLoop(int last_io_result) {
         break;
       case STATE_GREET_WRITE_COMPLETE:
         rv = DoGreetWriteComplete(rv);
-        net_log_.EndEvent(NetLog::TYPE_SOCKS5_GREET_WRITE, NULL);
+        net_log_.EndEventWithNetErrorCode(NetLog::TYPE_SOCKS5_GREET_WRITE, rv);
         break;
       case STATE_GREET_READ:
         DCHECK_EQ(OK, rv);
@@ -215,7 +215,7 @@ int SOCKS5ClientSocket::DoLoop(int last_io_result) {
         break;
       case STATE_GREET_READ_COMPLETE:
         rv = DoGreetReadComplete(rv);
-        net_log_.EndEvent(NetLog::TYPE_SOCKS5_GREET_READ, NULL);
+        net_log_.EndEventWithNetErrorCode(NetLog::TYPE_SOCKS5_GREET_READ, rv);
         break;
       case STATE_HANDSHAKE_WRITE:
         DCHECK_EQ(OK, rv);
@@ -224,7 +224,8 @@ int SOCKS5ClientSocket::DoLoop(int last_io_result) {
         break;
       case STATE_HANDSHAKE_WRITE_COMPLETE:
         rv = DoHandshakeWriteComplete(rv);
-        net_log_.EndEvent(NetLog::TYPE_SOCKS5_HANDSHAKE_WRITE, NULL);
+        net_log_.EndEventWithNetErrorCode(
+            NetLog::TYPE_SOCKS5_HANDSHAKE_WRITE, rv);
         break;
       case STATE_HANDSHAKE_READ:
         DCHECK_EQ(OK, rv);
@@ -233,7 +234,8 @@ int SOCKS5ClientSocket::DoLoop(int last_io_result) {
         break;
       case STATE_HANDSHAKE_READ_COMPLETE:
         rv = DoHandshakeReadComplete(rv);
-        net_log_.EndEvent(NetLog::TYPE_SOCKS5_HANDSHAKE_READ, NULL);
+        net_log_.EndEventWithNetErrorCode(
+            NetLog::TYPE_SOCKS5_HANDSHAKE_READ, rv);
         break;
       default:
         NOTREACHED() << "bad state";
@@ -479,6 +481,10 @@ int SOCKS5ClientSocket::DoHandshakeReadComplete(int result) {
 
 int SOCKS5ClientSocket::GetPeerAddress(AddressList* address) const {
   return transport_->socket()->GetPeerAddress(address);
+}
+
+int SOCKS5ClientSocket::GetLocalAddress(IPEndPoint* address) const {
+  return transport_->socket()->GetLocalAddress(address);
 }
 
 }  // namespace net

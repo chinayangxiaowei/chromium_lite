@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -20,9 +20,6 @@ class ScreenObserver {
   // login wizard decides what is the next view to show. There must be an
   // exit code for each way to exit the screen for each screen.
   enum ExitCodes {
-    LOGIN_SIGN_IN_SELECTED,
-    LOGIN_GUEST_SELECTED,
-    LOGIN_CREATE_ACCOUNT,
     NETWORK_CONNECTED,
     NETWORK_OFFLINE,
     ACCOUNT_CREATE_BACK,
@@ -38,6 +35,8 @@ class ScreenObserver {
     EULA_BACK,
     REGISTRATION_SUCCESS,
     REGISTRATION_SKIPPED,
+    ENTERPRISE_ENROLLMENT_CANCELLED,
+    ENTERPRISE_ENROLLMENT_COMPLETED,
     EXIT_CODES_COUNT  // not a real code, must be the last
   };
 
@@ -48,6 +47,10 @@ class ScreenObserver {
   // just created user without asking the same info once again.
   virtual void OnSetUserNamePassword(const std::string& username,
                                      const std::string& password) = 0;
+
+  // Set/get usage statistics reporting checkbox status on EULA screen.
+  virtual void set_usage_statistics_reporting(bool val) = 0;
+  virtual bool usage_statistics_reporting() const = 0;
 
  protected:
   virtual ~ScreenObserver() {}

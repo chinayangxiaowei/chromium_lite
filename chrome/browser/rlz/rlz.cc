@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 //
@@ -8,8 +8,8 @@
 
 #include "chrome/browser/rlz/rlz.h"
 
-#include <windows.h>
 #include <process.h>
+#include <windows.h>
 
 #include <algorithm>
 
@@ -17,6 +17,7 @@
 #include "base/message_loop.h"
 #include "base/path_service.h"
 #include "base/string_util.h"
+#include "base/synchronization/lock.h"
 #include "base/task.h"
 #include "base/threading/thread.h"
 #include "base/threading/thread_restrictions.h"
@@ -28,9 +29,10 @@
 #include "chrome/browser/search_engines/template_url_model.h"
 #include "chrome/common/chrome_paths.h"
 #include "chrome/common/env_vars.h"
-#include "chrome/common/notification_registrar.h"
-#include "chrome/common/notification_service.h"
 #include "chrome/installer/util/google_update_settings.h"
+#include "content/browser/browser_thread.h"
+#include "content/common/notification_registrar.h"
+#include "content/common/notification_service.h"
 
 namespace {
 
@@ -45,6 +47,7 @@ enum {
 // Tracks if we have tried and succeeded sending the ping. This helps us
 // decide if we need to refresh the some cached strings.
 volatile int access_values_state = ACCESS_VALUES_STALE;
+base::Lock rlz_lock;
 
 bool SendFinancialPing(const std::wstring& brand, const std::wstring& lang,
                        const std::wstring& referral, bool exclude_id) {
@@ -64,7 +67,9 @@ bool SendFinancialPing(const std::wstring& brand, const std::wstring& lang,
 // the user first interacted with the omnibox and set a global accordingly.
 class OmniBoxUsageObserver : public NotificationObserver {
  public:
-  OmniBoxUsageObserver() {
+  OmniBoxUsageObserver(bool first_run, bool send_ping_immediately)
+    : first_run_(first_run),
+      send_ping_immediately_(send_ping_immediately) {
     registrar_.Add(this, NotificationType::OMNIBOX_OPENED_URL,
                    NotificationService::AllSources());
     // If instant is enabled we'll start searching as soon as the user starts
@@ -78,18 +83,7 @@ class OmniBoxUsageObserver : public NotificationObserver {
 
   virtual void Observe(NotificationType type,
                        const NotificationSource& source,
-                       const NotificationDetails& details) {
-    // Needs to be evaluated. See http://crbug.com/62328.
-    base::ThreadRestrictions::ScopedAllowIO allow_io;
-
-    // Try to record event now, else set the flag to try later when we
-    // attempt the ping.
-    if (!RLZTracker::RecordProductEvent(rlz_lib::CHROME,
-                                        rlz_lib::CHROME_OMNIBOX,
-                                        rlz_lib::FIRST_SEARCH))
-      omnibox_used_ = true;
-    delete this;
-  }
+                       const NotificationDetails& details);
 
   static bool used() {
     return omnibox_used_;
@@ -115,6 +109,8 @@ class OmniBoxUsageObserver : public NotificationObserver {
   static OmniBoxUsageObserver* instance_;
 
   NotificationRegistrar registrar_;
+  bool first_run_;
+  bool send_ping_immediately_;
 };
 
 bool OmniBoxUsageObserver::omnibox_used_ = false;
@@ -147,6 +143,7 @@ class DailyPingTask : public Task {
     std::wstring referral;
     GoogleUpdateSettings::GetReferral(&referral);
     if (SendFinancialPing(brand, lang, referral, is_organic(brand))) {
+      base::AutoLock lock(rlz_lock);
       access_values_state = ACCESS_VALUES_STALE;
       GoogleUpdateSettings::ClearReferral();
     }
@@ -168,9 +165,6 @@ class DelayedInitTask : public Task {
   virtual ~DelayedInitTask() {
   }
   virtual void Run() {
-    // Needs to be evaluated. See http://crbug.com/62328.
-    base::ThreadRestrictions::ScopedAllowIO allow_io;
-
     // For non-interactive tests we don't do the rest of the initialization
     // because sometimes the very act of loading the dll causes QEMU to crash.
     if (::GetEnvironmentVariableW(ASCIIToWide(env_vars::kHeadless).c_str(),
@@ -189,7 +183,9 @@ class DelayedInitTask : public Task {
     std::wstring omnibox_rlz;
     RLZTracker::GetAccessPointRlz(rlz_lib::CHROME_OMNIBOX, &omnibox_rlz);
 
-    if (first_run_ || omnibox_rlz.empty()) {
+    if ((first_run_ || omnibox_rlz.empty()) && !already_ran_) {
+      already_ran_ = true;
+
       // Record the installation of chrome.
       RLZTracker::RecordProductEvent(rlz_lib::CHROME,
                                      rlz_lib::CHROME_OMNIBOX,
@@ -212,9 +208,7 @@ class DelayedInitTask : public Task {
                                      rlz_lib::FIRST_SEARCH);
     }
     // Schedule the daily RLZ ping.
-    base::Thread* thread = g_browser_process->file_thread();
-    if (thread)
-      thread->message_loop()->PostTask(FROM_HERE, new DailyPingTask());
+    MessageLoop::current()->PostTask(FROM_HERE, new DailyPingTask());
   }
 
  private:
@@ -238,13 +232,50 @@ class DelayedInitTask : public Task {
     return urlref->HasGoogleBaseURLs();
   }
 
+  // Flag that remembers if the delayed task already ran or not.  This is
+  // needed only in the first_run case, since we don't want to record the
+  // set-to-google event more than once.  We need to worry about this event
+  // (and not the others) because it is not a stateful RLZ event.
+  static bool already_ran_;
+
   bool first_run_;
   DISALLOW_IMPLICIT_CONSTRUCTORS(DelayedInitTask);
 };
 
+bool DelayedInitTask::already_ran_ = false;
+
+void OmniBoxUsageObserver::Observe(NotificationType type,
+                                   const NotificationSource& source,
+                                   const NotificationDetails& details) {
+  // Needs to be evaluated. See http://crbug.com/62328.
+  base::ThreadRestrictions::ScopedAllowIO allow_io;
+
+  // Try to record event now, else set the flag to try later when we
+  // attempt the ping.
+  if (!RLZTracker::RecordProductEvent(rlz_lib::CHROME,
+                                      rlz_lib::CHROME_OMNIBOX,
+                                      rlz_lib::FIRST_SEARCH))
+    omnibox_used_ = true;
+  else if (send_ping_immediately_) {
+    BrowserThread::PostTask(
+        BrowserThread::FILE, FROM_HERE, new DelayedInitTask(first_run_));
+  }
+
+  delete this;
+}
+
 }  // namespace
 
 bool RLZTracker::InitRlzDelayed(bool first_run, int delay) {
+  // A negative delay means that a financial ping should be sent immediately
+  // after a first search is recorded, without waiting for the next restart
+  // of chrome.  However, we only want this behaviour on first run.
+  bool send_ping_immediately = false;
+  if (delay < 0) {
+    send_ping_immediately = true;
+    delay = -delay;
+  }
+
   // Maximum and minimum delay we would allow to be set through master
   // preferences. Somewhat arbitrary, may need to be adjusted in future.
   const int kMaxDelay = 200 * 1000;
@@ -255,11 +286,11 @@ bool RLZTracker::InitRlzDelayed(bool first_run, int delay) {
   delay = (delay > kMaxDelay) ? kMaxDelay : delay;
 
   if (!OmniBoxUsageObserver::used())
-    new OmniBoxUsageObserver();
+    new OmniBoxUsageObserver(first_run, send_ping_immediately);
 
   // Schedule the delayed init items.
-  MessageLoop::current()->PostDelayedTask(FROM_HERE,
-      new DelayedInitTask(first_run), delay);
+  BrowserThread::PostDelayedTask(
+      BrowserThread::FILE, FROM_HERE, new DelayedInitTask(first_run), delay);
   return true;
 }
 
@@ -280,18 +311,40 @@ bool RLZTracker::ClearAllProductEvents(rlz_lib::Product product) {
 bool RLZTracker::GetAccessPointRlz(rlz_lib::AccessPoint point,
                                    std::wstring* rlz) {
   static std::wstring cached_ommibox_rlz;
-  if ((rlz_lib::CHROME_OMNIBOX == point) &&
-      (access_values_state == ACCESS_VALUES_FRESH)) {
-    *rlz = cached_ommibox_rlz;
-    return true;
+  if (rlz_lib::CHROME_OMNIBOX == point) {
+    base::AutoLock lock(rlz_lock);
+    if (access_values_state == ACCESS_VALUES_FRESH) {
+      *rlz = cached_ommibox_rlz;
+      return true;
+    }
   }
+
+  // Make sure we don't access disk outside of the file context.
+  // In such case we repost the task on the right thread and return error.
+  if (!BrowserThread::CurrentlyOn(BrowserThread::FILE)) {
+    // Caching of access points is now only implemented for the CHROME_OMNIBOX.
+    // Thus it is not possible to call this function on another thread for
+    // other access points until proper caching for these has been implemented
+    // and the code that calls this function can handle synchronous fetching
+    // of the access point.
+    DCHECK_EQ(rlz_lib::CHROME_OMNIBOX, point);
+
+    BrowserThread::PostTask(
+        BrowserThread::FILE, FROM_HERE,
+        NewRunnableFunction(&RLZTracker::GetAccessPointRlz,
+                            point, &cached_ommibox_rlz));
+      rlz->erase();
+      return false;
+  }
+
   char str_rlz[kMaxRlzLength + 1];
   if (!rlz_lib::GetAccessPointRlz(point, str_rlz, rlz_lib::kMaxRlzLength, NULL))
     return false;
   *rlz = ASCIIToWide(std::string(str_rlz));
   if (rlz_lib::CHROME_OMNIBOX == point) {
-    access_values_state = ACCESS_VALUES_FRESH;
+    base::AutoLock lock(rlz_lock);
     cached_ommibox_rlz.assign(*rlz);
+    access_values_state = ACCESS_VALUES_FRESH;
   }
   return true;
 }

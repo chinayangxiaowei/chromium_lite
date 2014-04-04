@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,8 +8,8 @@
 
 #include <vector>
 
-#include "base/ref_counted.h"
-#include "base/scoped_ptr.h"
+#include "base/memory/ref_counted.h"
+#include "base/memory/scoped_ptr.h"
 #include "chrome/browser/command_updater.h"
 #include "chrome/browser/prefs/pref_member.h"
 #include "chrome/browser/ui/toolbar/back_forward_menu_model.h"
@@ -78,6 +78,8 @@ class ToolbarView : public AccessiblePaneView,
   // Remove a menu listener.
   void RemoveMenuListener(views::MenuListener* listener);
 
+  virtual bool GetAcceleratorInfo(int id, ui::Accelerator* accel);
+
   // Accessors...
   Browser* browser() const { return browser_; }
   BrowserActionsContainer* browser_actions() const { return browser_actions_; }
@@ -86,40 +88,44 @@ class ToolbarView : public AccessiblePaneView,
   views::MenuButton* app_menu() const { return app_menu_; }
 
   // Overridden from AccessiblePaneView
-  virtual bool SetPaneFocus(int view_storage_id, View* initial_focus);
-  virtual AccessibilityTypes::Role GetAccessibleRole();
-
-  // Overridden from Menu::BaseControllerDelegate:
-  virtual bool GetAcceleratorInfo(int id, ui::Accelerator* accel);
+  virtual bool SetPaneFocus(int view_storage_id, View* initial_focus) OVERRIDE;
+  virtual void GetAccessibleState(ui::AccessibleViewState* state) OVERRIDE;
 
   // Overridden from views::MenuDelegate:
-  virtual void RunMenu(views::View* source, const gfx::Point& pt);
+  virtual void RunMenu(views::View* source, const gfx::Point& pt) OVERRIDE;
 
   // Overridden from LocationBarView::Delegate:
-  virtual TabContentsWrapper* GetTabContentsWrapper();
-  virtual InstantController* GetInstant();
-  virtual void OnInputInProgress(bool in_progress);
+  virtual TabContentsWrapper* GetTabContentsWrapper() const OVERRIDE;
+  virtual InstantController* GetInstant() OVERRIDE;
+  virtual void OnInputInProgress(bool in_progress) OVERRIDE;
 
   // Overridden from CommandUpdater::CommandObserver:
-  virtual void EnabledStateChangedForCommand(int id, bool enabled);
+  virtual void EnabledStateChangedForCommand(int id, bool enabled) OVERRIDE;
 
   // Overridden from views::BaseButton::ButtonListener:
-  virtual void ButtonPressed(views::Button* sender, const views::Event& event);
+  virtual void ButtonPressed(views::Button* sender, const views::Event& event)
+      OVERRIDE;
 
   // Overridden from NotificationObserver:
   virtual void Observe(NotificationType type,
                        const NotificationSource& source,
-                       const NotificationDetails& details);
+                       const NotificationDetails& details) OVERRIDE;
 
   // Overridden from ui::AcceleratorProvider:
-  virtual bool GetAcceleratorForCommandId(int command_id,
-                                          ui::Accelerator* accelerator);
+  virtual bool GetAcceleratorForCommandId(
+      int command_id, ui::Accelerator* accelerator) OVERRIDE;
 
   // Overridden from views::View:
-  virtual gfx::Size GetPreferredSize();
-  virtual void Layout();
-  virtual void Paint(gfx::Canvas* canvas);
-  virtual void OnThemeChanged();
+  virtual gfx::Size GetPreferredSize() OVERRIDE;
+  virtual void Layout() OVERRIDE;
+  virtual void OnPaint(gfx::Canvas* canvas) OVERRIDE;
+  virtual bool GetDropFormats(
+      int* formats,
+      std::set<OSExchangeData::CustomFormat>* custom_formats) OVERRIDE;
+  virtual bool CanDrop(const ui::OSExchangeData& data) OVERRIDE;
+  virtual int OnDragUpdated(const views::DropTargetEvent& event) OVERRIDE;
+  virtual int OnPerformDrop(const views::DropTargetEvent& event) OVERRIDE;
+  virtual void OnThemeChanged() OVERRIDE;
 
   // The apparent horizontal space between most items, and the vertical padding
   // above and below them.
@@ -131,12 +137,15 @@ class ToolbarView : public AccessiblePaneView,
  protected:
 
   // Overridden from AccessiblePaneView
-  virtual views::View* GetDefaultFocusableChild();
-  virtual void RemovePaneFocus();
+  virtual views::View* GetDefaultFocusableChild() OVERRIDE;
+  virtual void RemovePaneFocus() OVERRIDE;
 
  private:
   // Returns true if we should show the upgrade recommended dot.
   bool IsUpgradeRecommended();
+
+  // Retrieve which badge we should show when recommending an upgrade.
+  int GetUpgradeRecommendedBadge() const;
 
   // Returns true if we should show the background page badge.
   bool ShouldShowBackgroundPageBadge();
@@ -181,9 +190,6 @@ class ToolbarView : public AccessiblePaneView,
   views::ImageButton* back_;
   views::ImageButton* forward_;
   ReloadButton* reload_;
-#if defined(OS_CHROMEOS)
-  views::ImageButton* feedback_;
-#endif
   views::ImageButton* home_;
   LocationBarView* location_bar_;
   BrowserActionsContainer* browser_actions_;
@@ -204,7 +210,7 @@ class ToolbarView : public AccessiblePaneView,
   scoped_ptr<ui::SimpleMenuModel> wrench_menu_model_;
 
 #if defined(OS_CHROMEOS)
-  // Wrench menu using domui menu.
+  // Wrench menu using WebUI menu.
   // MenuLister is managed by Menu2.
   scoped_ptr<views::Menu2> wrench_menu_2_;
 #endif
@@ -214,9 +220,6 @@ class ToolbarView : public AccessiblePaneView,
 
   // Vector of listeners to receive callbacks when the menu opens.
   std::vector<views::MenuListener*> menu_listeners_;
-
-  // Used to post tasks to switch to the next/previous menu.
-  ScopedRunnableMethodFactory<ToolbarView> method_factory_;
 
   NotificationRegistrar registrar_;
 

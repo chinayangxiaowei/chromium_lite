@@ -9,7 +9,8 @@
 #include <string>
 #include "base/basictypes.h"
 #include "base/logging.h"
-#include "base/ref_counted.h"
+#include "base/memory/ref_counted.h"
+#include "base/memory/scoped_ptr.h"
 #include "gpu/command_buffer/service/gl_utils.h"
 #include "gpu/command_buffer/service/shader_translator.h"
 
@@ -31,8 +32,8 @@ class ShaderManager {
     typedef scoped_refptr<ShaderInfo> Ref;
     typedef ShaderTranslator::VariableInfo VariableInfo;
 
-    void Update(const std::string& source) {
-      source_ = source;
+    void Update(const char* source) {
+      source_.reset(source ? new std::string(source) : NULL);
     }
 
     GLuint service_id() const {
@@ -43,19 +44,19 @@ class ShaderManager {
       return shader_type_;
     }
 
-    const std::string& source() const {
-      return source_;
+    const std::string* source() const {
+      return source_.get();
     }
 
     void SetStatus(
-        bool valid, const std::string& log,
+        bool valid, const char* log,
         ShaderTranslatorInterface* translator);
 
     const VariableInfo* GetAttribInfo(const std::string& name) const;
     const VariableInfo* GetUniformInfo(const std::string& name) const;
 
-    const std::string& log_info() const {
-      return log_info_;
+    const std::string* log_info() const {
+      return log_info_.get();
     }
 
     bool IsValid() const {
@@ -95,10 +96,10 @@ class ShaderManager {
     bool valid_;
 
     // The shader source as passed to glShaderSource.
-    std::string source_;
+    scoped_ptr<std::string> source_;
 
     // The shader translation log.
-    std::string log_info_;
+    scoped_ptr<std::string> log_info_;
 
     // The type info when the shader was last compiled.
     VariableMap attrib_map_;

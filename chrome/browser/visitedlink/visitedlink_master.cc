@@ -22,7 +22,7 @@
 #include "base/stack_container.h"
 #include "base/string_util.h"
 #include "base/threading/thread_restrictions.h"
-#include "chrome/browser/browser_thread.h"
+#include "content/browser/browser_thread.h"
 #include "chrome/browser/history/history.h"
 #include "chrome/browser/profiles/profile.h"
 
@@ -261,7 +261,7 @@ bool VisitedLinkMaster::Init() {
 }
 
 VisitedLinkMaster::Hash VisitedLinkMaster::TryToAddURL(const GURL& url) {
-  // Extra check that we are not off the record. This should not happen.
+  // Extra check that we are not incognito. This should not happen.
   if (profile_ && profile_->IsOffTheRecord()) {
     NOTREACHED();
     return null_hash_;

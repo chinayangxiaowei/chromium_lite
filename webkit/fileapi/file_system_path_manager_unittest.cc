@@ -1,19 +1,27 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "webkit/fileapi/file_system_path_manager.h"
 
+#include <set>
+#include <string>
+
 #include "base/basictypes.h"
 #include "base/file_util.h"
+#include "base/memory/ref_counted.h"
+#include "base/memory/scoped_callback_factory.h"
+#include "base/memory/scoped_ptr.h"
+#include "base/memory/scoped_temp_dir.h"
 #include "base/message_loop.h"
 #include "base/message_loop_proxy.h"
-#include "base/ref_counted.h"
-#include "base/scoped_callback_factory.h"
-#include "base/scoped_ptr.h"
-#include "base/scoped_temp_dir.h"
+#include "base/sys_string_conversions.h"
+#include "base/utf_string_conversions.h"
 #include "googleurl/src/gurl.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "webkit/fileapi/file_system_util.h"
+#include "webkit/fileapi/sandbox_mount_point_provider.h"
+#include "webkit/quota/special_storage_policy.h"
 
 using namespace fileapi;
 
@@ -53,17 +61,26 @@ const struct RootPathTest {
     "https_bar.com_0" PS "Temporary" },
   { fileapi::kFileSystemTypePersistent, "https://bar.com/",
     "https_bar.com_0" PS "Persistent" },
+#if defined(OS_CHROMEOS)
+  { fileapi::kFileSystemTypeExternal, "chrome-extension://foo/",
+    "chrome-extension__0" PS "External" },
+#endif
 };
 
 const struct RootPathFileURITest {
   fileapi::FileSystemType type;
   const char* origin_url;
   const char* expected_path;
+  const char* virtual_path;
 } kRootPathFileURITestCases[] = {
   { fileapi::kFileSystemTypeTemporary, "file:///",
-    "file__0" PS "Temporary" },
+    "file__0" PS "Temporary", NULL },
   { fileapi::kFileSystemTypePersistent, "file:///",
-    "file__0" PS "Persistent" },
+    "file__0" PS "Persistent", NULL },
+#if defined(OS_CHROMEOS)
+  { fileapi::kFileSystemTypeExternal, "chrome-extension://foo/",
+    "chrome-extension__0" PS "External", "testing" },
+#endif
 };
 
 const struct CheckValidPathTest {
@@ -155,6 +172,31 @@ const struct IsRestrictedNameTest {
   { FILE_PATH_LITERAL("|ab"), true, },
 };
 
+FilePath UTF8ToFilePath(const std::string& str) {
+  FilePath::StringType result;
+#if defined(OS_POSIX)
+  result = base::SysWideToNativeMB(UTF8ToWide(str));
+#elif defined(OS_WIN)
+  result = UTF8ToUTF16(str);
+#endif
+  return FilePath(result);
+}
+
+class TestSpecialStoragePolicy : public quota::SpecialStoragePolicy {
+ public:
+  virtual bool IsStorageProtected(const GURL& origin) {
+    return false;
+  }
+
+  virtual bool IsStorageUnlimited(const GURL& origin) {
+    return true;
+  }
+
+  virtual bool IsFileHandler(const std::string& extension_id) {
+    return true;
+  }
+};
+
 }  // namespace
 
 class FileSystemPathManagerTest : public testing::Test {
@@ -164,8 +206,7 @@ class FileSystemPathManagerTest : public testing::Test {
   }
 
   void SetUp() {
-    data_dir_.reset(new ScopedTempDir);
-    ASSERT_TRUE(data_dir_->CreateUniqueTempDir());
+    ASSERT_TRUE(data_dir_.CreateUniqueTempDir());
     root_path_callback_status_ = false;
     root_path_.clear();
     file_system_name_.clear();
@@ -175,14 +216,24 @@ class FileSystemPathManagerTest : public testing::Test {
   FileSystemPathManager* NewPathManager(
       bool incognito,
       bool allow_file_access) {
-    return new FileSystemPathManager(
+    FileSystemPathManager* manager = new FileSystemPathManager(
         base::MessageLoopProxy::CreateForCurrentThread(),
-        data_dir_->path(), incognito, allow_file_access);
+        data_dir_.path(),
+        scoped_refptr<quota::SpecialStoragePolicy>(
+            new TestSpecialStoragePolicy()),
+        incognito,
+        allow_file_access);
+#if defined(OS_CHROMEOS)
+    fileapi::ExternalFileSystemMountPointProvider* ext_provider =
+        manager->external_provider();
+    ext_provider->AddMountPoint(FilePath("/tmp/testing"));
+#endif
+    return manager;
   }
 
   void OnGetRootPath(bool success,
-                           const FilePath& root_path,
-                           const std::string& name) {
+                     const FilePath& root_path,
+                     const std::string& name) {
     root_path_callback_status_ = success;
     root_path_ = root_path;
     file_system_name_ = name;
@@ -193,7 +244,7 @@ class FileSystemPathManagerTest : public testing::Test {
                    fileapi::FileSystemType type,
                    bool create,
                    FilePath* root_path) {
-    manager->GetFileSystemRootPath(origin_url, type, create,
+    manager->ValidateFileSystemRootAndGetURL(origin_url, type, create,
         callback_factory_.NewCallback(
             &FileSystemPathManagerTest::OnGetRootPath));
     MessageLoop::current()->RunAllPending();
@@ -202,19 +253,20 @@ class FileSystemPathManagerTest : public testing::Test {
     return root_path_callback_status_;
   }
 
-  bool CheckValidFileSystemPath(FileSystemPathManager* manager,
-                                const FilePath& path) {
-    return manager->CrackFileSystemPath(path, NULL, NULL, NULL);
-  }
-
-  FilePath data_path() { return data_dir_->path(); }
+  FilePath data_path() { return data_dir_.path(); }
   FilePath file_system_path() {
-    return data_dir_->path().Append(
-        FileSystemPathManager::kFileSystemDirectory);
+    return data_dir_.path().Append(
+        SandboxMountPointProvider::kFileSystemDirectory);
+  }
+  FilePath external_file_system_path() {
+    return UTF8ToFilePath(std::string(fileapi::kExternalDir));
+  }
+  FilePath external_file_path_root() {
+    return UTF8ToFilePath(std::string("/tmp"));
   }
 
  private:
-  scoped_ptr<ScopedTempDir> data_dir_;
+  ScopedTempDir data_dir_;
   base::ScopedCallbackFactory<FileSystemPathManagerTest> callback_factory_;
 
   bool root_path_callback_status_;
@@ -240,10 +292,17 @@ TEST_F(FileSystemPathManagerTest, GetRootPathCreateAndExamine) {
                             kRootPathTestCases[i].type,
                             true /* create */, &root_path));
 
-    FilePath expected = file_system_path().AppendASCII(
-        kRootPathTestCases[i].expected_path);
-    EXPECT_EQ(expected.value(), root_path.DirName().value());
-    EXPECT_TRUE(file_util::DirectoryExists(root_path));
+    if (kRootPathTestCases[i].type != fileapi::kFileSystemTypeExternal) {
+      FilePath expected = file_system_path().AppendASCII(
+          kRootPathTestCases[i].expected_path);
+      EXPECT_EQ(expected.value(), root_path.DirName().value());
+      EXPECT_TRUE(file_util::DirectoryExists(root_path));
+    } else {
+      // External file system root path is virtual one and does not match
+      // anything from the actual file system.
+      EXPECT_EQ(external_file_system_path().value(),
+                root_path.value());
+    }
     ASSERT_TRUE(returned_root_path.size() > i);
     returned_root_path[i] = root_path;
   }
@@ -334,83 +393,14 @@ TEST_F(FileSystemPathManagerTest, GetRootPathFileURIWithAllowFlag) {
                             GURL(kRootPathFileURITestCases[i].origin_url),
                             kRootPathFileURITestCases[i].type,
                             true /* create */, &root_path));
-    FilePath expected = file_system_path().AppendASCII(
-        kRootPathFileURITestCases[i].expected_path);
-    EXPECT_EQ(expected.value(), root_path.DirName().value());
-    EXPECT_TRUE(file_util::DirectoryExists(root_path));
-  }
-}
-
-TEST_F(FileSystemPathManagerTest, VirtualPathFromFileSystemPathTest) {
-  scoped_ptr<FileSystemPathManager> manager(NewPathManager(false, false));
-  FilePath root_path;
-  EXPECT_TRUE(GetRootPath(manager.get(), GURL("http://foo.com/"),
-                          fileapi::kFileSystemTypeTemporary,
-                          true /* create */, &root_path));
-
-  for (size_t i = 0; i < ARRAYSIZE_UNSAFE(kPathToVirtualPathTestCases); ++i) {
-    SCOPED_TRACE(testing::Message() << "PathToVirtualPath #"
-                 << i << " " << kPathToVirtualPathTestCases[i]);
-    FilePath absolute_path = root_path.AppendASCII(
-        kPathToVirtualPathTestCases[i]);
-    FilePath virtual_path;
-    EXPECT_TRUE(manager->CrackFileSystemPath(absolute_path, NULL, NULL,
-                                             &virtual_path));
-
-    FilePath test_case_path;
-    test_case_path = test_case_path.AppendASCII(
-        kPathToVirtualPathTestCases[i]);
-    EXPECT_EQ(test_case_path.value(), virtual_path.value());
-  }
-}
-
-TEST_F(FileSystemPathManagerTest, TypeFromFileSystemPathTest) {
-  scoped_ptr<FileSystemPathManager> manager(NewPathManager(false, false));
-
-  FilePath root_path;
-  fileapi::FileSystemType type;
-
-  EXPECT_TRUE(GetRootPath(manager.get(), GURL("http://foo.com/"),
-                          fileapi::kFileSystemTypeTemporary,
-                          true /* create */, &root_path));
-  FilePath path = root_path.AppendASCII("test");
-  EXPECT_TRUE(manager->CrackFileSystemPath(path, NULL, &type, NULL));
-  EXPECT_EQ(fileapi::kFileSystemTypeTemporary, type);
-
-  EXPECT_TRUE(GetRootPath(manager.get(), GURL("http://foo.com/"),
-                          fileapi::kFileSystemTypePersistent,
-                          true /* create */, &root_path));
-  path = root_path.AppendASCII("test");
-  EXPECT_TRUE(manager->CrackFileSystemPath(path, NULL, &type, NULL));
-  EXPECT_EQ(fileapi::kFileSystemTypePersistent, type);
-}
-
-TEST_F(FileSystemPathManagerTest, CheckValidPath) {
-  scoped_ptr<FileSystemPathManager> manager(NewPathManager(false, false));
-  FilePath root_path;
-  EXPECT_TRUE(GetRootPath(manager.get(), GURL("http://foo.com/"),
-                          kFileSystemTypePersistent, true, &root_path));
-
-  // The root path must be valid, but upper directories or directories
-  // that are not in our temporary or persistent directory must be
-  // evaluated invalid.
-  EXPECT_TRUE(CheckValidFileSystemPath(manager.get(), root_path));
-  EXPECT_FALSE(CheckValidFileSystemPath(manager.get(), root_path.DirName()));
-  EXPECT_FALSE(CheckValidFileSystemPath(manager.get(),
-                                        root_path.DirName().DirName()));
-  EXPECT_FALSE(CheckValidFileSystemPath(manager.get(),
-                                        root_path.DirName().DirName()
-                                            .AppendASCII("ArbitraryName")
-                                            .AppendASCII("chrome-dummy")));
-
-  for (size_t i = 0; i < ARRAYSIZE_UNSAFE(kCheckValidPathTestCases); ++i) {
-    SCOPED_TRACE(testing::Message() << "CheckValidPath #" << i << " "
-                 << kCheckValidPathTestCases[i].path);
-    FilePath path(kCheckValidPathTestCases[i].path);
-    if (!path.IsAbsolute())
-      path = root_path.Append(path);
-    EXPECT_EQ(kCheckValidPathTestCases[i].expected_valid,
-              CheckValidFileSystemPath(manager.get(), path));
+    if (kRootPathFileURITestCases[i].type != fileapi::kFileSystemTypeExternal) {
+      FilePath expected = file_system_path().AppendASCII(
+          kRootPathFileURITestCases[i].expected_path);
+      EXPECT_EQ(expected.value(), root_path.DirName().value());
+      EXPECT_TRUE(file_util::DirectoryExists(root_path));
+    } else {
+      EXPECT_EQ(external_file_path_root().value(), root_path.value());
+    }
   }
 }
 
@@ -421,6 +411,6 @@ TEST_F(FileSystemPathManagerTest, IsRestrictedName) {
                  << kIsRestrictedNameTestCases[i].name);
     FilePath name(kIsRestrictedNameTestCases[i].name);
     EXPECT_EQ(kIsRestrictedNameTestCases[i].expected_dangerous,
-              manager->IsRestrictedFileName(name));
+              manager->IsRestrictedFileName(kFileSystemTypeTemporary, name));
   }
 }

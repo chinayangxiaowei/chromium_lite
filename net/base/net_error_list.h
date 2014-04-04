@@ -180,11 +180,7 @@ NET_ERROR(SSL_WEAK_SERVER_EPHEMERAL_DH_KEY, -129)
 // of an HTTP proxy.
 NET_ERROR(PROXY_CONNECTION_FAILED, -130)
 
-// We tried a Snap Start connection and sent a request, predicting the server's
-// NPN protocol support. However, after doing the actual handshake, our
-// prediction turned out to be incorrect so we sent a request in the wrong
-// protocol.
-NET_ERROR(SSL_SNAP_START_NPN_MISPREDICTION, -131)
+// Free: 131
 
 // We detected an ESET product intercepting our HTTPS connections. Since these
 // products are False Start intolerant, we return this error so that we can
@@ -219,6 +215,19 @@ NET_ERROR(TEMPORARILY_THROTTLED, -139)
 // received a non-200 (OK) and non-407 (Proxy Auth) response.  The response
 // body might include a description of why the request failed.
 NET_ERROR(HTTPS_PROXY_TUNNEL_RESPONSE, -140)
+
+// We were unable to sign the CertificateVerify data of an SSL client auth
+// handshake with the client certificate's private key.
+//
+// Possible causes for this include the user implicitly or explicitly
+// denying access to the private key, the private key may not be valid for
+// signing, the key may be relying on a cached handle which is no longer
+// valid, or the CSP won't allow arbitrary data to be signed.
+NET_ERROR(SSL_CLIENT_AUTH_SIGNATURE_FAILED, -141)
+
+// The message was too large for the transport.  (for example a UDP message
+// which exceeds size threshold).
+NET_ERROR(MSG_TOO_BIG, -142)
 
 // Certificate error codes
 //

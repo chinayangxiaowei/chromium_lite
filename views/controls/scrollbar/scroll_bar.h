@@ -6,7 +6,7 @@
 #define VIEWS_CONTROLS_SCROLLBAR_SCROLLBAR_H_
 #pragma once
 
-#include "views/event.h"
+#include "views/events/event.h"
 #include "views/view.h"
 
 namespace views {
@@ -60,7 +60,7 @@ class ScrollBar : public View {
   virtual ~ScrollBar();
 
   // Overridden from View:
-  virtual AccessibilityTypes::Role GetAccessibleRole();
+  virtual void GetAccessibleState(ui::AccessibleViewState* state) OVERRIDE;
 
   // Return whether this scrollbar is horizontal
   bool IsHorizontal() const;

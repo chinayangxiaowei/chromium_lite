@@ -1,4 +1,4 @@
-// Copyright (c) 2006-2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -25,6 +25,39 @@ extern const char kNamedInterfacePrefix[];
 
 // Amount of time to wait before querying the browser.
 static const int kSleepTime = 250;
+
+// Recognized by the AutomationProvider's SendWebKeyboardEventToSelectedTab
+// command. Specifies the type of the keyboard event.
+enum KeyEventTypes {
+  kRawKeyDownType = 0,
+  kKeyDownType,
+  kCharType,
+  kKeyUpType,
+};
+
+// Recognized by the AutomationProvider's SendWebKeyboardEventToSelectedTab
+// command. Specifies masks to be used in constructing keyboard event modifiers.
+enum KeyModifierMasks {
+  kShiftKeyMask   = 1 << 0,
+  kControlKeyMask = 1 << 1,
+  kAltKeyMask     = 1 << 2,
+  kMetaKeyMask    = 1 << 3,
+};
+
+enum MouseButton {
+  kLeftButton = 0,
+  kMiddleButton,
+  kRightButton,
+};
+
+// The current version of ChromeDriver automation supported by Chrome.
+// This needs to be incremented for each change to ChromeDriver automation that
+// is not backwards compatible. Some examples of this would be:
+// - SendJSONRequest or Hello IPC messages change
+// - The interface for an individual ChromeDriver automation call changes in an
+//   incompatible way
+// TODO(kkania): Investigate a better backwards compatible automation solution.
+extern const int kChromeDriverAutomationVersion;
 
 }  // namespace automation
 

@@ -1,12 +1,12 @@
-// Copyright (c) 2006-2008 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include <string>
 
 #include "base/basictypes.h"
+#include "base/memory/scoped_ptr.h"
 #include "base/pickle.h"
-#include "base/scoped_ptr.h"
 #include "base/string16.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
@@ -19,6 +19,7 @@ const char testdata[] = "AAA\0BBB\0";
 const int testdatalen = arraysize(testdata) - 1;
 const bool testbool1 = false;
 const bool testbool2 = true;
+const uint16 testuint16 = 32123;
 
 // checks that the result
 void VerifyResult(const Pickle& pickle) {
@@ -41,6 +42,10 @@ void VerifyResult(const Pickle& pickle) {
   EXPECT_EQ(testbool1, outbool);
   EXPECT_TRUE(pickle.ReadBool(&iter, &outbool));
   EXPECT_EQ(testbool2, outbool);
+
+  uint16 outuint16;
+  EXPECT_TRUE(pickle.ReadUInt16(&iter, &outuint16));
+  EXPECT_EQ(testuint16, outuint16);
 
   const char* outdata;
   int outdatalen;
@@ -66,6 +71,7 @@ TEST(PickleTest, EncodeDecode) {
   EXPECT_TRUE(pickle.WriteWString(testwstr));
   EXPECT_TRUE(pickle.WriteBool(testbool1));
   EXPECT_TRUE(pickle.WriteBool(testbool2));
+  EXPECT_TRUE(pickle.WriteUInt16(testuint16));
   EXPECT_TRUE(pickle.WriteData(testdata, testdatalen));
 
   // Over allocate BeginWriteData so we can test TrimWriteData.

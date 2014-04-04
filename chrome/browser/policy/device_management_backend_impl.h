@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -14,8 +14,8 @@
 
 namespace policy {
 
-class DeviceManagementService;
 class DeviceManagementJobBase;
+class DeviceManagementService;
 
 // Implements the actual backend interface. It creates device management jobs
 // and passes them on to the service for processing.
@@ -25,6 +25,7 @@ class DeviceManagementBackendImpl : public DeviceManagementBackend {
   virtual ~DeviceManagementBackendImpl();
 
   static std::string GetAgentString();
+  static std::string GetPlatformString();
 
   // Name constants for URL query parameters.
   static const char kParamRequest[];
@@ -32,6 +33,7 @@ class DeviceManagementBackendImpl : public DeviceManagementBackend {
   static const char kParamAppType[];
   static const char kParamDeviceID[];
   static const char kParamAgent[];
+  static const char kParamPlatform[];
 
   // String constants for the device and app type we report to the server.
   static const char kValueRequestRegister[];

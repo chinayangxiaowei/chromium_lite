@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 //
@@ -24,18 +24,27 @@
 #include "base/file_path.h"
 #include "base/logging.h"
 #include "base/mac/scoped_nsautorelease_pool.h"
-#include "base/nss_util.h"
 #include "base/path_service.h"
+#include "base/test/mock_chrome_application_mac.h"
 #include "base/threading/thread.h"
+#include "crypto/nss_util.h"
 #include "media/base/media.h"
 #include "remoting/base/tracer.h"
 #include "remoting/host/capturer_fake.h"
 #include "remoting/host/chromoting_host.h"
 #include "remoting/host/chromoting_host_context.h"
+#include "remoting/host/curtain.h"
+#include "remoting/host/desktop_environment.h"
+#include "remoting/host/event_executor.h"
 #include "remoting/host/json_host_config.h"
 #include "remoting/proto/video.pb.h"
 
+#if defined(TOOLKIT_USES_GTK)
+#include "ui/gfx/gtk_util.h"
+#endif
+
 using remoting::ChromotingHost;
+using remoting::DesktopEnvironment;
 using remoting::protocol::CandidateSessionConfig;
 using remoting::protocol::ChannelConfig;
 using std::string;
@@ -74,10 +83,14 @@ int main(int argc, char** argv) {
   const CommandLine* cmd_line = CommandLine::ForCurrentProcess();
 
   base::AtExitManager exit_manager;
-  base::EnsureNSPRInit();
+  crypto::EnsureNSPRInit();
 
   // Allocate a chromoting context and starts it.
-  remoting::ChromotingHostContext context;
+#if defined(TOOLKIT_USES_GTK)
+  gfx::GtkInitFromCommandLine(*cmd_line);
+#endif
+  MessageLoopForUI message_loop;
+  remoting::ChromotingHostContext context(&message_loop);
   context.Start();
 
 
@@ -116,9 +129,14 @@ int main(int argc, char** argv) {
 
   bool fake = cmd_line->HasSwitch(kFakeSwitchName);
   if (fake) {
+    remoting::Capturer* capturer =
+        new remoting::CapturerFake();
+    remoting::EventExecutor* event_executor =
+        remoting::EventExecutor::Create(context.ui_message_loop(), capturer);
+    remoting::Curtain* curtain = remoting::Curtain::Create();
     host = ChromotingHost::Create(
         &context, config,
-        new remoting::CapturerFake(context.main_message_loop()));
+        new DesktopEnvironment(capturer, event_executor, curtain));
   } else {
     host = ChromotingHost::Create(&context, config);
   }
@@ -150,10 +168,13 @@ int main(int argc, char** argv) {
     host->set_protocol_config(config.release());
   }
 
+#if defined(OS_MACOSX)
+  mock_cr_app::RegisterMockCrApp();
+#endif  // OS_MACOSX
+
   // Let the chromoting host run until the shutdown task is executed.
-  MessageLoop message_loop(MessageLoop::TYPE_UI);
   host->Start(NewRunnableFunction(&ShutdownTask, &message_loop));
-  message_loop.Run();
+  message_loop.MessageLoop::Run();
 
   // And then stop the chromoting context.
   context.Stop();

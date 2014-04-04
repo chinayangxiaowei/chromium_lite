@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -16,10 +16,17 @@ MockPluginDelegate::MockPluginDelegate() {
 MockPluginDelegate::~MockPluginDelegate() {
 }
 
+void MockPluginDelegate::PluginCrashed(PluginInstance* instance) {
+}
+
 void MockPluginDelegate::InstanceCreated(PluginInstance* instance) {
 }
 
 void MockPluginDelegate::InstanceDeleted(PluginInstance* instance) {
+}
+
+SkBitmap* MockPluginDelegate::GetSadPluginBitmap() {
+  return NULL;
 }
 
 MockPluginDelegate::PlatformImage2D* MockPluginDelegate::CreateImage2D(
@@ -34,7 +41,7 @@ MockPluginDelegate::PlatformContext3D* MockPluginDelegate::CreateContext3D() {
 
 MockPluginDelegate::PlatformVideoDecoder*
 MockPluginDelegate::CreateVideoDecoder(
-    const PP_VideoDecoderConfig_Dev& decoder_config) {
+    PP_VideoDecoderConfig_Dev* decoder_config) {
   return NULL;
 }
 
@@ -42,6 +49,11 @@ MockPluginDelegate::PlatformAudio* MockPluginDelegate::CreateAudio(
     uint32_t sample_rate,
     uint32_t sample_count,
     PlatformAudio::Client* client) {
+  return NULL;
+}
+
+MockPluginDelegate::PpapiBroker* MockPluginDelegate::ConnectToPpapiBroker(
+    PPB_Broker_Impl* client) {
   return NULL;
 }
 
@@ -65,6 +77,11 @@ bool MockPluginDelegate::AsyncOpenFile(const FilePath& path,
   return false;
 }
 
+bool MockPluginDelegate::AsyncOpenFileSystemURL(
+    const GURL& path, int flags, AsyncOpenFileCallback* callback) {
+  return false;
+}
+
 bool MockPluginDelegate::OpenFileSystem(
     const GURL& url,
     fileapi::FileSystemType type,
@@ -74,20 +91,20 @@ bool MockPluginDelegate::OpenFileSystem(
 }
 
 bool MockPluginDelegate::MakeDirectory(
-    const FilePath& path,
+    const GURL& path,
     bool recursive,
     fileapi::FileSystemCallbackDispatcher* dispatcher) {
   return false;
 }
 
 bool MockPluginDelegate::Query(
-    const FilePath& path,
+    const GURL& path,
     fileapi::FileSystemCallbackDispatcher* dispatcher) {
   return false;
 }
 
 bool MockPluginDelegate::Touch(
-    const FilePath& path,
+    const GURL& path,
     const base::Time& last_access_time,
     const base::Time& last_modified_time,
     fileapi::FileSystemCallbackDispatcher* dispatcher) {
@@ -95,62 +112,56 @@ bool MockPluginDelegate::Touch(
 }
 
 bool MockPluginDelegate::Delete(
-    const FilePath& path,
+    const GURL& path,
     fileapi::FileSystemCallbackDispatcher* dispatcher) {
   return false;
 }
 
 bool MockPluginDelegate::Rename(
-    const FilePath& file_path,
-    const FilePath& new_file_path,
+    const GURL& file_path,
+    const GURL& new_file_path,
     fileapi::FileSystemCallbackDispatcher* dispatcher) {
   return false;
 }
 
 bool MockPluginDelegate::ReadDirectory(
-    const FilePath& directory_path,
+    const GURL& directory_path,
     fileapi::FileSystemCallbackDispatcher* dispatcher) {
   return false;
 }
 
-base::PlatformFileError MockPluginDelegate::OpenModuleLocalFile(
-    const std::string& module_name,
-    const FilePath& path,
+base::PlatformFileError MockPluginDelegate::OpenFile(
+    const PepperFilePath& path,
     int flags,
     base::PlatformFile* file) {
   return base::PLATFORM_FILE_ERROR_FAILED;
 }
 
-base::PlatformFileError MockPluginDelegate::RenameModuleLocalFile(
-    const std::string& module_name,
-    const FilePath& path_from,
-    const FilePath& path_to) {
+base::PlatformFileError MockPluginDelegate::RenameFile(
+    const PepperFilePath& from_path,
+    const PepperFilePath& to_path) {
   return base::PLATFORM_FILE_ERROR_FAILED;
 }
 
-base::PlatformFileError MockPluginDelegate::DeleteModuleLocalFileOrDir(
-    const std::string& module_name,
-    const FilePath& path,
+base::PlatformFileError MockPluginDelegate::DeleteFileOrDir(
+    const PepperFilePath& path,
     bool recursive) {
   return base::PLATFORM_FILE_ERROR_FAILED;
 }
 
-base::PlatformFileError MockPluginDelegate::CreateModuleLocalDir(
-    const std::string& module_name,
-    const FilePath& path) {
+base::PlatformFileError MockPluginDelegate::CreateDir(
+    const PepperFilePath& path) {
   return base::PLATFORM_FILE_ERROR_FAILED;
 }
 
-base::PlatformFileError MockPluginDelegate::QueryModuleLocalFile(
-    const std::string& module_name,
-    const FilePath& path,
+base::PlatformFileError MockPluginDelegate::QueryFile(
+    const PepperFilePath& path,
     base::PlatformFileInfo* info) {
   return base::PLATFORM_FILE_ERROR_FAILED;
 }
 
-base::PlatformFileError MockPluginDelegate::GetModuleLocalDirContents(
-    const std::string& module_name,
-    const FilePath& path,
+base::PlatformFileError MockPluginDelegate::GetDirContents(
+    const PepperFilePath& path,
     DirContents* contents) {
   return base::PLATFORM_FILE_ERROR_FAILED;
 }
@@ -173,9 +184,20 @@ int32_t MockPluginDelegate::ConnectTcpAddress(
   return PP_ERROR_FAILED;
 }
 
+int32_t MockPluginDelegate::ShowContextMenu(
+    PluginInstance* instance,
+    webkit::ppapi::PPB_Flash_Menu_Impl* menu,
+    const gfx::Point& position) {
+  return PP_ERROR_FAILED;
+}
+
 FullscreenContainer* MockPluginDelegate::CreateFullscreenContainer(
     PluginInstance* instance) {
   return NULL;
+}
+
+gfx::Size MockPluginDelegate::GetScreenSize() {
+  return gfx::Size(1024, 768);
 }
 
 std::string MockPluginDelegate::GetDefaultEncoding() {
@@ -202,6 +224,20 @@ void MockPluginDelegate::SetContentRestriction(int restrictions) {
 void MockPluginDelegate::HasUnsupportedFeature() {
 }
 
+void MockPluginDelegate::SaveURLAs(const GURL& url) {
+}
+
+P2PSocketDispatcher* MockPluginDelegate::GetP2PSocketDispatcher() {
+  return NULL;
+}
+
+webkit_glue::P2PTransport* MockPluginDelegate::CreateP2PTransport() {
+  return NULL;
+}
+
+double MockPluginDelegate::GetLocalTimeZoneOffset(base::Time t) {
+  return 0.0;
+}
+
 }  // namespace ppapi
 }  // namespace webkit
-

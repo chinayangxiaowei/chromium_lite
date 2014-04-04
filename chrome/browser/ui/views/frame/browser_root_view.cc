@@ -14,6 +14,7 @@
 #include "chrome/browser/ui/views/frame/browser_view.h"
 #include "chrome/browser/ui/views/tabs/tab_strip.h"
 #include "grit/chromium_strings.h"
+#include "ui/base/accessibility/accessible_view_state.h"
 #include "ui/base/dragdrop/drag_drop_types.h"
 #include "ui/base/dragdrop/os_exchange_data.h"
 #include "ui/base/l10n/l10n_util.h"
@@ -22,14 +23,12 @@ BrowserRootView::BrowserRootView(BrowserView* browser_view,
                                  views::Widget* widget)
     : views::RootView(widget),
       browser_view_(browser_view),
-      forwarding_to_tab_strip_(false) {
-  SetAccessibleName(l10n_util::GetStringUTF16(IDS_PRODUCT_NAME));
-}
+      forwarding_to_tab_strip_(false) { }
 
 bool BrowserRootView::GetDropFormats(
       int* formats,
       std::set<ui::OSExchangeData::CustomFormat>* custom_formats) {
-  if (tabstrip() && tabstrip()->IsVisible() && !tabstrip()->IsAnimating()) {
+  if (tabstrip() && tabstrip()->IsVisible()) {
     *formats = ui::OSExchangeData::URL | ui::OSExchangeData::STRING;
     return true;
   }
@@ -41,7 +40,7 @@ bool BrowserRootView::AreDropTypesRequired() {
 }
 
 bool BrowserRootView::CanDrop(const ui::OSExchangeData& data) {
-  if (!tabstrip() || !tabstrip()->IsVisible() || tabstrip()->IsAnimating())
+  if (!tabstrip() || !tabstrip()->IsVisible())
     return false;
 
   // If there is a URL, we'll allow the drop.
@@ -56,7 +55,7 @@ void BrowserRootView::OnDragEntered(const views::DropTargetEvent& event) {
   if (ShouldForwardToTabStrip(event)) {
     forwarding_to_tab_strip_ = true;
     scoped_ptr<views::DropTargetEvent> mapped_event(
-        MapEventToTabStrip(event, event.GetData()));
+        MapEventToTabStrip(event, event.data()));
     tabstrip()->OnDragEntered(*mapped_event.get());
   }
 }
@@ -64,7 +63,7 @@ void BrowserRootView::OnDragEntered(const views::DropTargetEvent& event) {
 int BrowserRootView::OnDragUpdated(const views::DropTargetEvent& event) {
   if (ShouldForwardToTabStrip(event)) {
     scoped_ptr<views::DropTargetEvent> mapped_event(
-        MapEventToTabStrip(event, event.GetData()));
+        MapEventToTabStrip(event, event.data()));
     if (!forwarding_to_tab_strip_) {
       tabstrip()->OnDragEntered(*mapped_event.get());
       forwarding_to_tab_strip_ = true;
@@ -92,22 +91,27 @@ int BrowserRootView::OnPerformDrop(const views::DropTargetEvent& event) {
   // do this as the TabStrip doesn't know about the autocomplete edit and needs
   // to know about it to handle 'paste and go'.
   GURL url;
-  std::wstring title;
+  string16 title;
   ui::OSExchangeData mapped_data;
-  if (!event.GetData().GetURLAndTitle(&url, &title) || !url.is_valid()) {
+  if (!event.data().GetURLAndTitle(&url, &title) || !url.is_valid()) {
     // The url isn't valid. Use the paste and go url.
-    if (GetPasteAndGoURL(event.GetData(), &url))
-      mapped_data.SetURL(url, std::wstring());
+    if (GetPasteAndGoURL(event.data(), &url))
+      mapped_data.SetURL(url, string16());
     // else case: couldn't extract a url or 'paste and go' url. This ends up
     // passing through an ui::OSExchangeData with nothing in it. We need to do
     // this so that the tab strip cleans up properly.
   } else {
-    mapped_data.SetURL(url, std::wstring());
+    mapped_data.SetURL(url, string16());
   }
   forwarding_to_tab_strip_ = false;
   scoped_ptr<views::DropTargetEvent> mapped_event(
       MapEventToTabStrip(event, mapped_data));
   return tabstrip()->OnPerformDrop(*mapped_event);
+}
+
+void BrowserRootView::GetAccessibleState(ui::AccessibleViewState* state) {
+  RootView::GetAccessibleState(state);
+  state->name = l10n_util::GetStringUTF16(IDS_PRODUCT_NAME);
 }
 
 bool BrowserRootView::ShouldForwardToTabStrip(
@@ -129,10 +133,10 @@ views::DropTargetEvent* BrowserRootView::MapEventToTabStrip(
   ConvertPointToView(this, tabstrip(), &tab_strip_loc);
   return new views::DropTargetEvent(data, tab_strip_loc.x(),
                                     tab_strip_loc.y(),
-                                    event.GetSourceOperations());
+                                    event.source_operations());
 }
 
-BaseTabStrip* BrowserRootView::tabstrip() const {
+AbstractTabStripView* BrowserRootView::tabstrip() const {
   return browser_view_->tabstrip();
 }
 
@@ -141,13 +145,13 @@ bool BrowserRootView::GetPasteAndGoURL(const ui::OSExchangeData& data,
   if (!data.HasString())
     return false;
 
-  std::wstring text;
+  string16 text;
   if (!data.GetString(&text) || text.empty())
     return false;
 
   AutocompleteMatch match;
   browser_view_->browser()->profile()->GetAutocompleteClassifier()->Classify(
-      text, std::wstring(), false, &match, NULL);
+      text, string16(), false, &match, NULL);
   if (!match.destination_url.is_valid())
     return false;
 

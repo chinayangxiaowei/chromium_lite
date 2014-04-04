@@ -1,14 +1,14 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "base/file_path.h"
 #include "base/file_util.h"
-#include "base/nss_util.h"
 #include "base/path_service.h"
 #include "base/time.h"
 #include "base/synchronization/waitable_event.h"
 #include "base/test/test_timeouts.h"
+#include "crypto/nss_util.h"
 #include "net/base/completion_callback.h"
 #include "net/base/io_buffer.h"
 #include "net/base/net_errors.h"
@@ -116,23 +116,6 @@ class JingleSessionTest : public testing::Test {
   }
 
   void DoCreateServerPair() {
-    session_manager_pair_ = new SessionManagerPair(&thread_);
-    session_manager_pair_->Init();
-    host_server_ = new JingleSessionManager(&thread_);
-    host_server_->set_allow_local_ips(true);
-    host_server_->Init(SessionManagerPair::kHostJid,
-                       session_manager_pair_->host_session_manager(),
-                       NewCallback(&host_server_callback_,
-                           &MockSessionManagerCallback::OnIncomingSession));
-
-    client_server_ = new JingleSessionManager(&thread_);
-    client_server_->set_allow_local_ips(true);
-    client_server_->Init(
-        SessionManagerPair::kClientJid,
-        session_manager_pair_->client_session_manager(),
-        NewCallback(&client_server_callback_,
-                    &MockSessionManagerCallback::OnIncomingSession));
-
     FilePath certs_dir;
     PathService::Get(base::DIR_SOURCE_ROOT, &certs_dir);
     certs_dir = certs_dir.AppendASCII("net");
@@ -155,11 +138,29 @@ class JingleSessionTest : public testing::Test {
         reinterpret_cast<const uint8*>(key_string.data()),
         reinterpret_cast<const uint8*>(key_string.data() +
                                        key_string.length()));
+    scoped_ptr<crypto::RSAPrivateKey> private_key(
+        crypto::RSAPrivateKey::CreateFromPrivateKeyInfo(key_vector));
 
-    scoped_ptr<base::RSAPrivateKey> private_key(
-        base::RSAPrivateKey::CreateFromPrivateKeyInfo(key_vector));
-    host_server_->SetCertificate(cert);
-    host_server_->SetPrivateKey(private_key.release());
+    session_manager_pair_ = new SessionManagerPair(&thread_);
+    session_manager_pair_->Init();
+    host_server_ = new JingleSessionManager(&thread_);
+    host_server_->set_allow_local_ips(true);
+    host_server_->Init(
+        SessionManagerPair::kHostJid,
+        session_manager_pair_->host_session_manager(),
+        NewCallback(&host_server_callback_,
+                    &MockSessionManagerCallback::OnIncomingSession),
+        private_key.release(),
+        cert);
+
+    client_server_ = new JingleSessionManager(&thread_);
+    client_server_->set_allow_local_ips(true);
+    client_server_->Init(
+        SessionManagerPair::kClientJid,
+        session_manager_pair_->client_session_manager(),
+        NewCallback(&client_server_callback_,
+                    &MockSessionManagerCallback::OnIncomingSession),
+        NULL, NULL);
   }
 
   bool InitiateConnection() {

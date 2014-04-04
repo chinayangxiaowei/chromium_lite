@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -19,12 +19,20 @@ function DataView(mainBoxId,
                   byteLoggingCheckboxId,
                   passivelyCapturedCountId,
                   activelyCapturedCountId,
-                  deleteAllId) {
+                  deleteAllId,
+                  dumpDataDivId,
+                  loadDataDivId,
+                  loadLogFileId,
+                  capturingTextSpanId,
+                  loggingTextSpanId) {
   DivView.call(this, mainBoxId);
 
   this.textPre_ = document.getElementById(outputTextBoxId);
-  this.securityStrippingCheckbox_ =
+
+  var securityStrippingCheckbox =
       document.getElementById(securityStrippingCheckboxId);
+  securityStrippingCheckbox.onclick =
+      this.onSetSecurityStripping_.bind(this, securityStrippingCheckbox);
 
   var byteLoggingCheckbox = document.getElementById(byteLoggingCheckboxId);
   byteLoggingCheckbox.onclick =
@@ -39,6 +47,14 @@ function DataView(mainBoxId,
       document.getElementById(passivelyCapturedCountId);
   document.getElementById(deleteAllId).onclick =
       g_browser.deleteAllEvents.bind(g_browser);
+
+  this.dumpDataDiv_ = document.getElementById(dumpDataDivId);
+  this.loadDataDiv_ = document.getElementById(loadDataDivId);
+  this.capturingTextSpan_ = document.getElementById(capturingTextSpanId);
+  this.loggingTextSpan_ = document.getElementById(loggingTextSpanId);
+
+  document.getElementById(loadLogFileId).onclick =
+      g_browser.loadLogFile.bind(g_browser);
 
   this.updateEventCounts_();
   this.waitingForUpdate_ = false;
@@ -71,6 +87,18 @@ DataView.prototype.onAllLogEntriesDeleted = function() {
 };
 
 /**
+ * Called when either a log file is loaded or when going back to actively
+ * logging events.  In either case, called after clearing the old entries,
+ * but before getting any new ones.
+ */
+DataView.prototype.onSetIsViewingLogFile = function(isViewingLogFile) {
+  setNodeDisplay(this.dumpDataDiv_, !isViewingLogFile);
+  setNodeDisplay(this.capturingTextSpan_, !isViewingLogFile);
+  setNodeDisplay(this.loggingTextSpan_, isViewingLogFile);
+  this.setText_('');
+};
+
+/**
  * Updates the counters showing how many events have been captured.
  */
 DataView.prototype.updateEventCounts_ = function() {
@@ -93,6 +121,22 @@ DataView.prototype.onSetByteLogging_ = function(byteLoggingCheckbox) {
 };
 
 /**
+ * Depending on the value of the checkbox, enables or disables stripping
+ * cookies and passwords from log dumps and displayed events.
+ */
+DataView.prototype.onSetSecurityStripping_ =
+    function(securityStrippingCheckbox) {
+  g_browser.setSecurityStripping(securityStrippingCheckbox.checked);
+};
+
+/**
+ * Clears displayed text when security stripping is toggled.
+ */
+DataView.prototype.onSecurityStrippingChanged = function() {
+  this.setText_('');
+}
+
+/**
  * If not already waiting for results from all updates, triggers all
  * updates and starts waiting for them to complete.
  */
@@ -108,6 +152,10 @@ DataView.prototype.onExportToText_ = function() {
  * Presents the captured data as formatted text.
  */
 DataView.prototype.onUpdateAllCompleted = function(data) {
+  // It's possible for a log file to be loaded while a dump is being generated.
+  // When that happens, don't display the log dump, to avoid any confusion.
+  if (g_browser.isViewingLogFile())
+    return;
   this.waitingForUpdate_ = false;
   var text = [];
 
@@ -241,6 +289,20 @@ DataView.prototype.onUpdateAllCompleted = function(data) {
 
   text.push('');
   text.push('----------------------------------------------');
+  text.push(' SPDY Status');
+  text.push('----------------------------------------------');
+  text.push('');
+
+  text.push('SPDY Enabled: ' + data.spdyStatus.spdy_enabled);
+  text.push('Use Alternate Protocol: ' +
+      data.spdyStatus.use_alternate_protocols);
+  text.push('Force SPDY Always: ' + data.spdyStatus.force_spdy_always);
+  text.push('Force SPDY Over SSL: ' + data.spdyStatus.force_spdy_over_ssl);
+  text.push('Next Protocols: ' + data.spdyStatus.next_protos);
+
+
+  text.push('');
+  text.push('----------------------------------------------');
   text.push(' SPDY Sessions');
   text.push('----------------------------------------------');
   text.push('');
@@ -250,6 +312,22 @@ DataView.prototype.onUpdateAllCompleted = function(data) {
   } else {
     var spdyTablePrinter =
       SpdyView.createSessionTablePrinter(data.spdySessionInfo);
+    text.push(spdyTablePrinter.toText(2));
+  }
+
+  text.push('');
+  text.push('----------------------------------------------');
+  text.push(' Alternate Protocol Mappings');
+  text.push('----------------------------------------------');
+  text.push('');
+
+  if (data.spdyAlternateProtocolMappings == null ||
+      data.spdyAlternateProtocolMappings.length == 0) {
+    text.push('None');
+  } else {
+    var spdyTablePrinter =
+      SpdyView.createAlternateProtocolMappingsTablePrinter(
+          data.spdyAlternateProtocolMappings);
     text.push(spdyTablePrinter.toText(2));
   }
 
@@ -350,8 +428,7 @@ DataView.prototype.appendEventsPrintedAsText_ = function(out) {
              '  [start=' + startDate.toLocaleString() + ']');
     out.push('------------------------------------------');
 
-    out.push(PrintSourceEntriesAsText(eventList,
-        this.securityStrippingCheckbox_.checked));
+    out.push(PrintSourceEntriesAsText(eventList));
   }
 };
 

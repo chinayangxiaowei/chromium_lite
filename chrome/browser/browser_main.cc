@@ -8,7 +8,7 @@
 #include <string>
 #include <vector>
 
-#include "ui/base/l10n/l10n_util.h"
+#include "base/allocator/allocator_shim.h"
 #include "base/at_exit.h"
 #include "base/command_line.h"
 #include "base/debug/trace_event.h"
@@ -32,36 +32,38 @@
 #include "build/build_config.h"
 #include "chrome/browser/about_flags.h"
 #include "chrome/browser/browser_main_win.h"
-#include "chrome/browser/defaults.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/browser_process_impl.h"
 #include "chrome/browser/browser_shutdown.h"
-#include "chrome/browser/browser_thread.h"
-#include "chrome/browser/dom_ui/chrome_url_data_manager.h"
+#include "chrome/browser/chrome_content_browser_client.h"
+#include "chrome/browser/defaults.h"
 #include "chrome/browser/extensions/extension_protocols.h"
 #include "chrome/browser/extensions/extension_service.h"
 #include "chrome/browser/extensions/extensions_startup.h"
 #include "chrome/browser/first_run/first_run.h"
+#include "chrome/browser/first_run/first_run_browser_process.h"
+#include "chrome/browser/first_run/upgrade_util.h"
 #include "chrome/browser/jankometer.h"
 #include "chrome/browser/metrics/histogram_synchronizer.h"
 #include "chrome/browser/metrics/metrics_log.h"
 #include "chrome/browser/metrics/metrics_service.h"
+#include "chrome/browser/metrics/thread_watcher.h"
 #include "chrome/browser/net/blob_url_request_job_factory.h"
 #include "chrome/browser/net/chrome_dns_cert_provenance_checker.h"
 #include "chrome/browser/net/chrome_dns_cert_provenance_checker_factory.h"
+#include "chrome/browser/net/file_system_url_request_job_factory.h"
 #include "chrome/browser/net/metadata_url_request.h"
 #include "chrome/browser/net/predictor_api.h"
 #include "chrome/browser/net/sdch_dictionary_fetcher.h"
 #include "chrome/browser/net/websocket_experiment/websocket_experiment_runner.h"
-#include "chrome/browser/plugin_service.h"
 #include "chrome/browser/prefs/browser_prefs.h"
 #include "chrome/browser/prefs/pref_service.h"
 #include "chrome/browser/prefs/pref_value_store.h"
+#include "chrome/browser/prerender/prerender_field_trial.h"
 #include "chrome/browser/printing/cloud_print/cloud_print_proxy_service.h"
 #include "chrome/browser/process_singleton.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profile_manager.h"
-#include "chrome/browser/renderer_host/resource_dispatcher_host.h"
 #include "chrome/browser/search_engines/search_engine_type.h"
 #include "chrome/browser/search_engines/template_url.h"
 #include "chrome/browser/search_engines/template_url_model.h"
@@ -71,25 +73,31 @@
 #include "chrome/browser/translate/translate_manager.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_init.h"
-#include "chrome/common/child_process.h"
+#include "chrome/browser/ui/webui/chrome_url_data_manager_backend.h"
+#include "chrome/browser/web_resource/gpu_blacklist_updater.h"
 #include "chrome/common/chrome_constants.h"
 #include "chrome/common/chrome_paths.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/common/env_vars.h"
-#include "chrome/common/gfx_resource_provider.h"
-#include "chrome/common/hi_res_timer_manager.h"
 #include "chrome/common/json_pref_store.h"
 #include "chrome/common/jstemplate_builder.h"
 #include "chrome/common/logging_chrome.h"
-#include "chrome/common/main_function_params.h"
 #include "chrome/common/net/net_resource_provider.h"
 #include "chrome/common/pref_names.h"
-#include "chrome/common/result_codes.h"
+#include "chrome/common/profiling.h"
 #include "chrome/installer/util/google_update_settings.h"
-#include "gfx/gfx_module.h"
+#include "content/browser/browser_thread.h"
+#include "content/browser/plugin_service.h"
+#include "content/browser/renderer_host/resource_dispatcher_host.h"
+#include "content/common/child_process.h"
+#include "content/common/content_client.h"
+#include "content/common/hi_res_timer_manager.h"
+#include "content/common/main_function_params.h"
+#include "content/common/result_codes.h"
 #include "grit/app_locale_settings.h"
 #include "grit/chromium_strings.h"
 #include "grit/generated_resources.h"
+#include "grit/platform_locale_settings.h"
 #include "net/base/cookie_monster.h"
 #include "net/base/net_module.h"
 #include "net/base/network_change_notifier.h"
@@ -102,8 +110,11 @@
 #include "net/spdy/spdy_session_pool.h"
 #include "net/url_request/url_request.h"
 #include "net/url_request/url_request_throttler_manager.h"
+#include "ui/base/l10n/l10n_util.h"
 #include "ui/base/resource/resource_bundle.h"
 #include "ui/base/system_monitor/system_monitor.h"
+#include "ui/gfx/gl/gl_implementation.h"
+#include "ui/gfx/gl/gl_switches.h"
 
 #if defined(USE_LINUX_BREAKPAD)
 #include "base/linux_util.h"
@@ -112,13 +123,32 @@
 
 #if defined(OS_POSIX) && !defined(OS_MACOSX)
 #include <dbus/dbus-glib.h>
+
 #include "chrome/browser/browser_main_gtk.h"
 #include "chrome/browser/ui/gtk/gtk_util.h"
 #endif
 
+#if defined(OS_LINUX) && !defined(OS_CHROMEOS)
+#include "chrome/browser/first_run/upgrade_util_linux.h"
+#endif
+
 #if defined(OS_CHROMEOS)
 #include "chrome/browser/chromeos/boot_times_loader.h"
+#include "chrome/browser/chromeos/brightness_observer.h"
+#include "chrome/browser/chromeos/cros/cros_library.h"
+#include "chrome/browser/chromeos/cros/screen_lock_library.h"
+#include "chrome/browser/chromeos/customization_document.h"
+#include "chrome/browser/chromeos/external_metrics.h"
+#include "chrome/browser/chromeos/login/authenticator.h"
+#include "chrome/browser/chromeos/login/login_utils.h"
+#include "chrome/browser/chromeos/login/ownership_service.h"
+#include "chrome/browser/chromeos/login/screen_locker.h"
+#include "chrome/browser/chromeos/login/user_manager.h"
+#include "chrome/browser/chromeos/metrics_cros_settings_provider.h"
+#include "chrome/browser/chromeos/net/network_change_notifier_chromeos.h"
+#include "chrome/browser/chromeos/system_key_event_listener.h"
 #include "chrome/browser/oom_priority_manager.h"
+#include "chrome/browser/ui/views/browser_dialogs.h"
 #endif
 
 // TODO(port): several win-only methods have been pulled out of this, but
@@ -132,7 +162,11 @@
 #include <windows.h>
 
 #include "app/win/scoped_com_initializer.h"
+#include "base/win/windows_version.h"
 #include "chrome/browser/browser_trial.h"
+#include "chrome/browser/browser_util_win.h"
+#include "chrome/browser/first_run/try_chrome_dialog_view.h"
+#include "chrome/browser/first_run/upgrade_util_win.h"
 #include "chrome/browser/metrics/user_metrics.h"
 #include "chrome/browser/net/url_fixer_upper.h"
 #include "chrome/browser/rlz/rlz.h"
@@ -141,39 +175,34 @@
 #include "chrome/installer/util/helper.h"
 #include "chrome/installer/util/install_util.h"
 #include "chrome/installer/util/shell_util.h"
-#include "gfx/platform_font_win.h"
 #include "net/base/net_util.h"
 #include "net/base/sdch_manager.h"
 #include "printing/printed_document.h"
 #include "sandbox/src/sandbox.h"
 #include "ui/base/l10n/l10n_util_win.h"
+#include "ui/gfx/platform_font_win.h"
 #endif  // defined(OS_WIN)
 
 #if defined(OS_MACOSX)
 #include <Security/Security.h>
-#include "chrome/browser/ui/cocoa/install_from_dmg.h"
+
+#include "chrome/browser/cocoa/install_from_dmg.h"
 #endif
 
 #if defined(TOOLKIT_VIEWS)
 #include "chrome/browser/ui/views/chrome_views_delegate.h"
 #include "views/focus/accelerator_handler.h"
+#if defined(TOOLKIT_USES_GTK)
+#include "views/widget/widget_gtk.h"
 #endif
-
-#if defined(OS_CHROMEOS)
-#include "chrome/browser/chromeos/cros/cros_library.h"
-#include "chrome/browser/chromeos/cros/screen_lock_library.h"
-#include "chrome/browser/chromeos/customization_document.h"
-#include "chrome/browser/chromeos/external_metrics.h"
-#include "chrome/browser/chromeos/login/authenticator.h"
-#include "chrome/browser/chromeos/login/login_utils.h"
-#include "chrome/browser/chromeos/login/screen_locker.h"
-#include "chrome/browser/chromeos/login/user_manager.h"
-#include "chrome/browser/chromeos/metrics_cros_settings_provider.h"
-#include "chrome/browser/ui/views/browser_dialogs.h"
 #endif
 
 #if defined(TOOLKIT_USES_GTK)
-#include "gfx/gtk_util.h"
+#include "ui/gfx/gtk_util.h"
+#endif
+
+#if defined(TOUCH_UI)
+#include "views/widget/root_view.h"
 #endif
 
 // BrowserMainParts ------------------------------------------------------------
@@ -194,22 +223,12 @@ void BrowserMainParts::EarlyInitialization() {
   if (parsed_command_line().HasSwitch(switches::kEnableBenchmarking))
     base::FieldTrial::EnableBenchmarking();
 
-  // Note: make sure to call ConnectionFieldTrial() before
-  // ProxyConnectionsFieldTrial().
-  ConnectionFieldTrial();
-  SocketTimeoutFieldTrial();
-  ProxyConnectionsFieldTrial();
-  SpdyFieldTrial();
-  PrefetchFieldTrial();
-  ConnectBackupJobsFieldTrial();
   InitializeSSL();
 
   if (parsed_command_line().HasSwitch(switches::kEnableDNSSECCerts))
     net::SSLConfigService::EnableDNSSEC();
   if (parsed_command_line().HasSwitch(switches::kDisableSSLFalseStart))
     net::SSLConfigService::DisableFalseStart();
-  if (parsed_command_line().HasSwitch(switches::kAllowSSLMITMProxies))
-    net::SSLConfigService::AllowMITMProxies();
   // Disabled to stop people playing with it.
   // if (parsed_command_line().HasSwitch(switches::kEnableSnapStart))
   //   net::SSLConfigService::EnableSnapStart();
@@ -222,6 +241,19 @@ void BrowserMainParts::EarlyInitialization() {
     net::set_tcp_fastopen_enabled(true);
 
   PostEarlyInitialization();
+}
+
+// This will be called after the command-line has been mutated by about:flags
+void BrowserMainParts::SetupFieldTrials() {
+  // Note: make sure to call ConnectionFieldTrial() before
+  // ProxyConnectionsFieldTrial().
+  ConnectionFieldTrial();
+  SocketTimeoutFieldTrial();
+  ProxyConnectionsFieldTrial();
+  prerender::ConfigurePrefetchAndPrerender(parsed_command_line());
+  SpdyFieldTrial();
+  ConnectBackupJobsFieldTrial();
+  SSLFalseStartFieldTrial();
 }
 
 // This is an A/B test for the maximum number of persistent connections per
@@ -359,15 +391,15 @@ void BrowserMainParts::ProxyConnectionsFieldTrial() {
 //           default group: no npn or spdy is involved. The "old" non-spdy
 //                          chrome behavior.
 void BrowserMainParts::SpdyFieldTrial() {
-  bool is_spdy_trial = false;
   if (parsed_command_line().HasSwitch(switches::kUseSpdy)) {
     std::string spdy_mode =
         parsed_command_line().GetSwitchValueASCII(switches::kUseSpdy);
     net::HttpNetworkLayer::EnableSpdy(spdy_mode);
   } else {
+#if !defined(OS_CHROMEOS)
+    bool is_spdy_trial = false;
     const base::FieldTrial::Probability kSpdyDivisor = 100;
-    // 10% to preclude SPDY.
-    base::FieldTrial::Probability npnhttp_probability = 10;
+    base::FieldTrial::Probability npnhttp_probability = 5;
 
     // After June 30, 2011 builds, it will always be in default group.
     scoped_refptr<base::FieldTrial> trial(
@@ -390,12 +422,16 @@ void BrowserMainParts::SpdyFieldTrial() {
     } else {
       CHECK(!is_spdy_trial);
     }
+#else
+    // Always enable SPDY on Chrome OS
+    net::HttpNetworkLayer::EnableSpdy("npn");
+#endif  // !defined(OS_CHROMEOS)
   }
 
   // Setup SPDY CWND Field trial.
   const base::FieldTrial::Probability kSpdyCwndDivisor = 100;
-  const base::FieldTrial::Probability kSpdyCwnd32 = 20;     // fixed at 32
   const base::FieldTrial::Probability kSpdyCwnd16 = 20;     // fixed at 16
+  const base::FieldTrial::Probability kSpdyCwnd10 = 20;     // fixed at 10
   const base::FieldTrial::Probability kSpdyCwndMin16 = 20;  // no less than 16
   const base::FieldTrial::Probability kSpdyCwndMin10 = 20;  // no less than 10
 
@@ -405,7 +441,7 @@ void BrowserMainParts::SpdyFieldTrial() {
       new base::FieldTrial(
           "SpdyCwnd", kSpdyCwndDivisor, "cwndDynamic", 2011, 6, 30));
 
-  trial->AppendGroup("cwnd32", kSpdyCwnd32);
+  trial->AppendGroup("cwnd10", kSpdyCwnd10);
   trial->AppendGroup("cwnd16", kSpdyCwnd16);
   trial->AppendGroup("cwndMin16", kSpdyCwndMin16);
   trial->AppendGroup("cwndMin10", kSpdyCwndMin10);
@@ -420,30 +456,28 @@ void BrowserMainParts::SpdyFieldTrial() {
   }
 }
 
-// If any of --enable-prerender, --enable-content-prefetch or
-// --disable-content-prefetch are set, use those to determine if
-// prefetch is enabled. Otherwise, randomly assign users to an A/B test for
-// prefetching.
-void BrowserMainParts::PrefetchFieldTrial() {
-  if (parsed_command_line().HasSwitch(switches::kEnableContentPrefetch) ||
-      parsed_command_line().HasSwitch(switches::kEnablePagePrerender))
-    ResourceDispatcherHost::set_is_prefetch_enabled(true);
-  else if (parsed_command_line().HasSwitch(switches::kDisableContentPrefetch)) {
-    ResourceDispatcherHost::set_is_prefetch_enabled(false);
-  } else {
-    const base::FieldTrial::Probability kPrefetchDivisor = 1000;
-    const base::FieldTrial::Probability no_prefetch_probability = 970;
-    // After June 30, 2011 builds, it will always be in default group.
-    scoped_refptr<base::FieldTrial> trial(
-        new base::FieldTrial("Prefetch", kPrefetchDivisor,
-            "ContentPrefetchEnabled", 2011, 6, 30));
-    const int yes_prefetch_grp = trial->kDefaultGroupNumber;
-    trial->AppendGroup("ContentPrefetchDisabled", no_prefetch_probability);
-    const int trial_grp = trial->group();
-    ResourceDispatcherHost::set_is_prefetch_enabled(
-        trial_grp == yes_prefetch_grp);
+void BrowserMainParts::SSLFalseStartFieldTrial() {
+  if (parsed_command_line().HasSwitch(switches::kDisableSSLFalseStart)) {
+    net::SSLConfigService::DisableFalseStart();
+    return;
   }
+
+  const base::FieldTrial::Probability kDivisor = 100;
+  base::FieldTrial::Probability falsestart_probability = 50;  // 50/50 trial
+
+  // After July 30, 2011 builds, it will always be in default group.
+  scoped_refptr<base::FieldTrial> trial(
+      new base::FieldTrial(
+          "SSLFalseStart", kDivisor, "FalseStart_enabled", 2011, 7, 30));
+
+  int disabled_group = trial->AppendGroup("FalseStart_disabled",
+                                          falsestart_probability);
+
+  int trial_grp = trial->group();
+  if (trial_grp == disabled_group)
+    net::SSLConfigService::DisableFalseStart();
 }
+
 
 // If neither --enable-connect-backup-jobs or --disable-connect-backup-jobs is
 // specified, run an A/B test for automatically establishing backup TCP
@@ -484,11 +518,19 @@ void BrowserMainParts::MainMessageLoopStart() {
   // TODO(viettrungluu): should these really go before setting the thread name?
   system_monitor_.reset(new ui::SystemMonitor);
   hi_res_timer_manager_.reset(new HighResolutionTimerManager);
+#if defined(OS_CHROMEOS)
+  // TODO(zelidrag): We need to move cros library glue code outside of
+  // chrome/browser directory to avoid check_deps issues and then migrate
+  // NetworkChangeNotifierCros class to net/base where other OS implementations
+  // live.
+  network_change_notifier_.reset(new chromeos::NetworkChangeNotifierChromeos());
+#else
   network_change_notifier_.reset(net::NetworkChangeNotifier::Create());
-
+#endif
   InitializeMainThread();
 
   PostMainMessageLoopStart();
+  Profiling::MainMessageLoopStarted();
 }
 
 void BrowserMainParts::InitializeMainThread() {
@@ -531,14 +573,14 @@ void HandleTestParameters(const CommandLine& command_line) {
 
 void RunUIMessageLoop(BrowserProcess* browser_process) {
   TRACE_EVENT_BEGIN("BrowserMain:MESSAGE_LOOP", 0, "");
+  // This should be invoked as close to the start of the browser's
+  // UI thread message loop as possible to get a stable measurement
+  // across versions.
+  RecordBrowserStartupTime();
 
-#if !defined(OS_CHROMEOS)
   // If the UI thread blocks, the whole UI is unresponsive.
   // Do not allow disk IO from the UI thread.
-  // TODO(evanm): turn this on for all platforms.
-  //   http://code.google.com/p/chromium/issues/detail?id=60211
   base::ThreadRestrictions::SetIOAllowed(false);
-#endif
 
 #if defined(TOOLKIT_VIEWS)
   views::AcceleratorHandler accelerator_handler;
@@ -592,6 +634,12 @@ void InitializeNetworkOptions(const CommandLine& parsed_command_line) {
     net::HttpStreamFactory::SetHostMappingRules(
         parsed_command_line.GetSwitchValueASCII(switches::kHostRules));
 
+  if (parsed_command_line.HasSwitch(switches::kEnableIPPooling))
+    net::SpdySessionPool::enable_ip_pooling(true);
+
+  if (parsed_command_line.HasSwitch(switches::kDisableIPPooling))
+    net::SpdySessionPool::enable_ip_pooling(false);
+
   if (parsed_command_line.HasSwitch(switches::kMaxSpdySessionsPerDomain)) {
     int value;
     base::StringToInt(parsed_command_line.GetSwitchValueASCII(
@@ -600,10 +648,8 @@ void InitializeNetworkOptions(const CommandLine& parsed_command_line) {
     net::SpdySessionPool::set_max_sessions_per_domain(value);
   }
 
-  if (parsed_command_line.HasSwitch(switches::kDisableEnforcedThrottling)) {
-    net::URLRequestThrottlerManager::GetInstance()->
-        set_enforce_throttling(false);
-  }
+  net::URLRequestThrottlerManager::GetInstance()->set_enable_thread_checks(
+      true);
 
   SetDnsCertProvenanceCheckerFactory(CreateChromeDnsCertProvenanceChecker);
 }
@@ -617,6 +663,9 @@ void CreateChildThreads(BrowserProcessImpl* process) {
   process->process_launcher_thread();
   process->cache_thread();
   process->io_thread();
+  // Create watchdog thread after creating all other threads because it will
+  // watch the other threads and they must be running.
+  process->watchdog_thread();
 }
 
 // Returns the new local state object, guaranteed non-NULL.
@@ -631,11 +680,18 @@ PrefService* InitializeLocalState(const CommandLine& parsed_command_line,
   PrefService* local_state = g_browser_process->local_state();
   DCHECK(local_state);
 
+  // TODO(brettw,*): this comment about ResourceBundle was here since
+  // initial commit.  This comment seems unrelated, bit-rotten and
+  // a candidate for removal.
   // Initialize ResourceBundle which handles files loaded from external
   // sources. This has to be done before uninstall code path and before prefs
   // are registered.
-  local_state->RegisterStringPref(prefs::kApplicationLocale,
+  local_state->RegisterStringPref(prefs::kApplicationLocale, std::string());
+#if defined(OS_CHROMEOS)
+  local_state->RegisterStringPref(prefs::kOwnerLocale, std::string());
+  local_state->RegisterStringPref(prefs::kHardwareKeyboardLayout,
                                   std::string());
+#endif  // defined(OS_CHROMEOS)
 #if !defined(OS_CHROMEOS)
   local_state->RegisterBooleanPref(prefs::kMetricsReportingEnabled,
       GoogleUpdateSettings::GetCollectStatsConsent());
@@ -676,6 +732,19 @@ PrefService* InitializeLocalState(const CommandLine& parsed_command_line,
         prefs::kApplicationLocale,
         parent_local_state->GetString(prefs::kApplicationLocale));
   }
+
+#if defined(OS_CHROMEOS)
+  if (parsed_command_line.HasSwitch(switches::kLoginManager)) {
+    std::string owner_locale = local_state->GetString(prefs::kOwnerLocale);
+    // Ensure that we start with owner's locale.
+    if (!owner_locale.empty() &&
+        local_state->GetString(prefs::kApplicationLocale) != owner_locale &&
+        !local_state->IsManagedPreference(prefs::kApplicationLocale)) {
+      local_state->SetString(prefs::kApplicationLocale, owner_locale);
+      local_state->ScheduleSavePersistentPrefs();
+    }
+  }
+#endif
 
   return local_state;
 }
@@ -730,7 +799,6 @@ MetricsService* InitializeMetrics(const CommandLine& parsed_command_line,
 #else
     bool enabled = local_state->GetBoolean(prefs::kMetricsReportingEnabled);
 #endif  // #if defined(OS_CHROMEOS)
-    metrics->SetUserPermitsUpload(enabled);
     if (enabled) {
       metrics->Start();
       chrome_browser_net_websocket_experiment::
@@ -800,21 +868,6 @@ int GetMinimumFontSize() {
   return min_font_size;
 }
 
-#elif defined(OS_CHROMEOS)
-// Changes the UI font if non-default font name is specified in
-// IDS_UI_FONT_FAMILY_CROS. This is necessary as the default font
-// specified in /etc/gtk-2.0/gtrkc may not work well for some languages
-// For instance, ChromeDroidSans does not work well for Japanese users,
-// since Chinese glyphs are used for Kanji characters.
-void MaybeChangeUIFont() {
-  const std::string font_name =
-      l10n_util::GetStringUTF8(IDS_UI_FONT_FAMILY_CROS);
-  // The font name should not be empty here, but just in case.
-  if (font_name == "default" || font_name.empty()) {
-    return;
-  }
-  gtk_util::SetGtkFont(font_name);
-}
 #endif
 
 #if defined(TOOLKIT_USES_GTK)
@@ -849,12 +902,12 @@ static void GLibLogHandler(const gchar* log_domain,
     LOG(ERROR) << "GTK theme error: " << message;
   } else if (strstr(message, "gtk_drag_dest_leave: assertion")) {
     LOG(ERROR) << "Drag destination deleted: http://crbug.com/18557";
+  } else if (strstr(message, "Out of memory") &&
+             strstr(log_domain, "<unknown>")) {
+    LOG(ERROR) << "DBus call timeout or out of memory: "
+               << "http://crosbug.com/15496";
   } else {
-#ifdef NDEBUG
-    LOG(ERROR) << log_domain << ": " << message;
-#else
-    LOG(FATAL) << log_domain << ": " << message;
-#endif
+    LOG(DFATAL) << log_domain << ": " << message;
   }
 }
 
@@ -914,6 +967,12 @@ void InitializeToolkit(const MainFunctionParams& parameters) {
   // display the correct icon.
   if (!views::ViewsDelegate::views_delegate)
     views::ViewsDelegate::views_delegate = new ChromeViewsDelegate;
+
+#if defined(TOOLKIT_USES_GTK)
+  // TODO(beng): Move to WidgetImpl and implement on Windows too!
+  if (parameters.command_line_.HasSwitch(switches::kDebugViewsPaint))
+    views::WidgetGtk::EnableDebugPaint();
+#endif
 #endif
 
 #if defined(OS_WIN)
@@ -932,7 +991,8 @@ void InitializeToolkit(const MainFunctionParams& parameters) {
 
 // Class is used to login using passed username and password.
 // The instance will be deleted upon success or failure.
-class StubLogin : public chromeos::LoginStatusConsumer {
+class StubLogin : public chromeos::LoginStatusConsumer,
+                  public chromeos::LoginUtils::Delegate {
  public:
   explicit StubLogin(std::string username, std::string password) {
     authenticator_ = chromeos::LoginUtils::Get()->CreateAuthenticator(this);
@@ -953,10 +1013,17 @@ class StubLogin : public chromeos::LoginStatusConsumer {
                       const std::string& password,
                       const GaiaAuthConsumer::ClientLoginResult& credentials,
                       bool pending_requests) {
-    chromeos::LoginUtils::Get()->CompleteLogin(username,
-                                               password,
-                                               credentials,
-                                               pending_requests);
+    // Will call OnProfilePrepared in the end.
+    chromeos::LoginUtils::Get()->PrepareProfile(username,
+                                                password,
+                                                credentials,
+                                                pending_requests,
+                                                this);
+  }
+
+  // LoginUtils::Delegate implementation:
+  virtual void OnProfilePrepared(Profile* profile) {
+    chromeos::LoginUtils::DoBrowserLaunch(profile);
     delete this;
   }
 
@@ -1029,7 +1096,7 @@ DLLEXPORT void __cdecl RelaunchChromeBrowserWithNewCommandLineIfNeeded() {
   // deletions.  We need this new instance because, the old instance created
   // in ChromeMain() got destructed when the function returned.
   base::AtExitManager exit_manager;
-  Upgrade::RelaunchChromeBrowserWithNewCommandLineIfNeeded();
+  upgrade_util::RelaunchChromeBrowserWithNewCommandLineIfNeeded();
 }
 #endif
 
@@ -1103,6 +1170,14 @@ int BrowserMain(const MainFunctionParams& parameters) {
   const CommandLine& parsed_command_line = parameters.command_line_;
   base::mac::ScopedNSAutoreleasePool* pool = parameters.autorelease_pool_;
 
+#if defined(OS_WIN) && !defined(NO_TCMALLOC)
+  // When linking shared libraries, NO_TCMALLOC is defined, and dynamic
+  // allocator selection is not supported.
+
+  // Make this call before going multithreaded, or spawning any subprocesses.
+  base::allocator::SetupSubprocessAllocator();
+#endif  // OS_WIN
+
   FilePath user_data_dir;
 #if defined(OS_WIN)
   PathService::Get(chrome::DIR_USER_DATA, &user_data_dir);
@@ -1174,10 +1249,10 @@ int BrowserMain(const MainFunctionParams& parameters) {
 #if defined(OS_MACOSX)
     g_browser_process->SetApplicationLocale(l10n_util::GetLocaleOverride());
 #else
-    // On a POSIX OS other than ChromeOS, the parameter that is passed to the
-    // method InitSharedInstance is ignored.
     const std::string locale =
         local_state->GetString(prefs::kApplicationLocale);
+    // On a POSIX OS other than ChromeOS, the parameter that is passed to the
+    // method InitSharedInstance is ignored.
     const std::string loaded_locale =
         ResourceBundle::InitSharedInstance(locale);
     CHECK(!loaded_locale.empty()) << "Locale could not be found for " << locale;
@@ -1186,26 +1261,32 @@ int BrowserMain(const MainFunctionParams& parameters) {
     FilePath resources_pack_path;
     PathService::Get(chrome::FILE_RESOURCES_PACK, &resources_pack_path);
     ResourceBundle::AddDataPackToSharedInstance(resources_pack_path);
-#endif  // !defined(OS_MACOSX)
+#endif  // defined(OS_MACOSX)
   }
 
-#if defined(OS_POSIX) && !defined(OS_MACOSX) && !defined(OS_CHROMEOS)
-  // gdk_pixbuf_loader_write always fails on chromeos device.
-  // Disabling for chromeos as well because chromeos is not using them.
-  // http://crosbug.com/4996 .
-  gtk_util::SetDefaultWindowIcon();
+#if defined(TOOLKIT_GTK)
+  g_set_application_name(l10n_util::GetStringUTF8(IDS_PRODUCT_NAME).c_str());
 #endif
 
   std::string try_chrome =
       parsed_command_line.GetSwitchValueASCII(switches::kTryChromeAgain);
   if (!try_chrome.empty()) {
 #if defined(OS_WIN)
+    // Setup.exe has determined that we need to run a retention experiment
+    // and has lauched chrome to show the experiment UI.
+    if (process_singleton.FoundOtherProcessWindow()) {
+      // It seems that we don't need to run the experiment since chrome
+      // in the same profile is already running.
+      VLOG(1) << "Retention experiment not required";
+      return TryChromeDialogView::NOT_NOW;
+    }
     int try_chrome_int;
     base::StringToInt(try_chrome, &try_chrome_int);
-    Upgrade::TryResult answer = Upgrade::ShowTryChromeDialog(try_chrome_int);
-    if (answer == Upgrade::TD_NOT_NOW)
+    TryChromeDialogView::Result answer =
+        TryChromeDialogView::Show(try_chrome_int, &process_singleton);
+    if (answer == TryChromeDialogView::NOT_NOW)
       return ResultCodes::NORMAL_EXIT_CANCEL;
-    if (answer == Upgrade::TD_UNINSTALL_CHROME)
+    if (answer == TryChromeDialogView::UNINSTALL_CHROME)
       return ResultCodes::NORMAL_EXIT_EXP2;
 #else
     // We don't support retention experiments on Mac or Linux.
@@ -1247,12 +1328,21 @@ int BrowserMain(const MainFunctionParams& parameters) {
   scoped_refptr<HistogramSynchronizer> histogram_synchronizer(
       new HistogramSynchronizer());
 
+  // Initialize thread watcher system. This is a singleton and is used by
+  // WatchDogThread to keep track of information about threads that are being
+  // watched.
+  scoped_ptr<ThreadWatcherList> thread_watcher_list(new ThreadWatcherList());
+
   // Initialize the prefs of the local state.
   browser::RegisterLocalState(local_state);
 
   // Convert active labs into switches. Modifies the current command line.
   about_flags::ConvertFlagsToSwitches(local_state,
                                       CommandLine::ForCurrentProcess());
+
+  // Now the command line has been mutated based on about:flags, we can run some
+  // field trials
+  parts->SetupFieldTrials();
 
   // Now that all preferences have been registered, set the install date
   // for the uninstall metrics if this is our first run. This only actually
@@ -1279,9 +1369,14 @@ int BrowserMain(const MainFunctionParams& parameters) {
 #if defined(OS_CHROMEOS)
   // Now that the file thread exists we can record our stats.
   chromeos::BootTimesLoader::Get()->RecordChromeMainStats();
-  // Change the UI font if necessary. This has to be done after
-  // InitSharedInstance() is called, as it depends on resource data.
-  MaybeChangeUIFont();
+
+  // Read locale-specific GTK resource information.
+  std::string gtkrc = l10n_util::GetStringUTF8(IDS_LOCALE_GTKRC);
+  if (!gtkrc.empty())
+    gtk_rc_parse_string(gtkrc.c_str());
+
+  // Trigger prefetching of ownership status.
+  chromeos::OwnershipService::GetSharedInstance()->Prewarm();
 #endif
 
   // Record last shutdown time into a histogram.
@@ -1291,7 +1386,7 @@ int BrowserMain(const MainFunctionParams& parameters) {
   // On Windows, we use our startup as an opportunity to do upgrade/uninstall
   // tasks.  Those care whether the browser is already running.  On Linux/Mac,
   // upgrade/uninstall happen separately.
-  bool already_running = Upgrade::IsBrowserAlreadyRunning();
+  bool already_running = browser_util::IsBrowserAlreadyRunning();
 
   // If the command line specifies 'uninstall' then we need to work here
   // unless we detect another chrome browser running.
@@ -1364,6 +1459,11 @@ int BrowserMain(const MainFunctionParams& parameters) {
   SetBrowserX11ErrorHandlers();
 #endif
 
+  // Override the default ContentBrowserClient to let Chrome participate in
+  // content logic.  Must be done before any tabs or profiles are created.
+  chrome::ChromeContentBrowserClient browser_client;
+  content::GetContentClient()->set_browser(&browser_client);
+
   // Profile creation ----------------------------------------------------------
 
 #if defined(OS_CHROMEOS)
@@ -1377,7 +1477,7 @@ int BrowserMain(const MainFunctionParams& parameters) {
 
   // This forces the ProfileManager to be created and register for the
   // notification it needs to track the logged in user.
-  g_browser_process->profile_manager()->GetDefaultProfile();
+  g_browser_process->profile_manager();
 
   // Allow access to file:// on ChromeOS for tests.
   if (parsed_command_line.HasSwitch(switches::kAllowFileAccess)) {
@@ -1401,8 +1501,6 @@ int BrowserMain(const MainFunctionParams& parameters) {
   }
 #endif
 
-  // Modifies the current command line based on active experiments on
-  // about:flags.
   Profile* profile = CreateProfile(parameters, user_data_dir);
   if (!profile)
     return ResultCodes::NORMAL_EXIT;
@@ -1431,7 +1529,7 @@ int BrowserMain(const MainFunctionParams& parameters) {
 
 #if defined(OS_WIN)
   // Do the tasks if chrome has been upgraded while it was last running.
-  if (!already_running && Upgrade::DoUpgradeTasks(parsed_command_line))
+  if (!already_running && upgrade_util::DoUpgradeTasks(parsed_command_line))
     return ResultCodes::NORMAL_EXIT;
 #endif
 
@@ -1494,6 +1592,18 @@ int BrowserMain(const MainFunctionParams& parameters) {
   // testing against a bunch of special cases that are taken care early on.
   PrepareRestartOnCrashEnviroment(parsed_command_line);
 
+#if defined(OS_WIN)
+  // Registers Chrome with the Windows Restart Manager, which will restore the
+  // Chrome session when the computer is restarted after a system update.
+  // This could be run as late as WM_QUERYENDSESSION for system update reboots,
+  // but should run on startup if extended to handle crashes/hangs/patches.
+  // Also, better to run once here than once for each HWND's WM_QUERYENDSESSION.
+  if (base::win::GetVersion() >= base::win::VERSION_VISTA) {
+    bool result = RegisterApplicationRestart(parsed_command_line);
+    DCHECK(result);
+  }
+#endif  // OS_WIN
+
   // Initialize and maintain network predictor module, which handles DNS
   // pre-resolution, as well as TCP/IP connection pre-warming.
   // This also registers an observer to discard data when closing incognito
@@ -1516,19 +1626,19 @@ int BrowserMain(const MainFunctionParams& parameters) {
   // file thread to be run sometime later. If this is the first run we record
   // the installation event.
   RLZTracker::InitRlzDelayed(is_first_run, master_prefs.ping_delay);
-#endif
-#endif
+#endif  // GOOGLE_CHROME_BUILD
+#endif  // OS_WIN
 
   // Configure modules that need access to resources.
   net::NetModule::SetResourceProvider(chrome_common_net::NetResourceProvider);
-  gfx::GfxModule::SetResourceProvider(chrome::GfxResourceProvider);
 
   // Register our global network handler for chrome:// and
   // chrome-extension:// URLs.
-  RegisterURLRequestChromeJob();
+  ChromeURLDataManagerBackend::Register();
   RegisterExtensionProtocols();
   RegisterMetadataURLRequestHandler();
   RegisterBlobURLRequestJobFactory();
+  RegisterFileSystemURLRequestJobFactory();
 
   // In unittest mode, this will do nothing.  In normal mode, this will create
   // the global GoogleURLTracker and IntranetRedirectDetector instances, which
@@ -1572,7 +1682,7 @@ int BrowserMain(const MainFunctionParams& parameters) {
       sdch_supported_domain = "never_enabled_sdch_for_any_domain";
   }
 
-  SdchManager sdch_manager;  // Singleton database.
+  net::SdchManager sdch_manager;  // Singleton database.
   sdch_manager.set_sdch_fetcher(new SdchDictionaryFetcher);
   sdch_manager.EnableSdchSupport(sdch_supported_domain);
 
@@ -1587,16 +1697,28 @@ int BrowserMain(const MainFunctionParams& parameters) {
   }
 #endif
 
+#if defined(TOUCH_UI)
+  views::RootView::SetKeepMouseCursor(
+      CommandLine::ForCurrentProcess()->HasSwitch(switches::kKeepMouseCursor));
+#endif
+
   HandleTestParameters(parsed_command_line);
   RecordBreakpadStatusUMA(metrics);
   about_flags::RecordUMAStatistics(local_state);
 
-  // Stat the directory with the inspector's files so that we can know if we
-  // should display the entry in the context menu or not.
-  browser_process->CheckForInspectorFiles();
-
 #if defined(OS_CHROMEOS)
   metrics->StartExternalMetrics();
+
+  // Initialize the brightness observer so that we'll display an onscreen
+  // indication of brightness changes during login.
+  static chromeos::BrightnessObserver* brightness_observer =
+      new chromeos::BrightnessObserver();
+  chromeos::CrosLibrary::Get()->GetBrightnessLibrary()->AddObserver(
+      brightness_observer);
+
+  // Listen for system key events so that the user will be able to adjust the
+  // volume on the login screen.
+  chromeos::SystemKeyEventListener::GetInstance();
 #endif
 
   // Initialize extension event routers. Note that on Chrome OS, this will
@@ -1630,7 +1752,7 @@ int BrowserMain(const MainFunctionParams& parameters) {
   // of --wait-for-debugger only makes sense when Chrome itself is a
   // child process (e.g. when launched by PyAuto).
   if (parsed_command_line.HasSwitch(switches::kWaitForDebugger)) {
-    ChildProcess::WaitForDebugger(L"Browser");
+    ChildProcess::WaitForDebugger("Browser");
   }
 
   // If remoting or cloud print proxy is enabled and setup has been completed
@@ -1663,6 +1785,18 @@ int BrowserMain(const MainFunctionParams& parameters) {
   // might have shutdown because an update was available.
   profile->GetCloudPrintProxyService();
 
+  // Schedule a GPU blacklist auto update.  This also loads the current one.
+  scoped_refptr<GpuBlacklistUpdater> gpu_blacklist_updater =
+      new GpuBlacklistUpdater();
+  // Don't start auto update in tests.
+  if (parsed_command_line.GetSwitchValueASCII(switches::kUseGL) !=
+          gfx::kGLImplementationOSMesaName) {
+    gpu_blacklist_updater->StartAfterDelay();
+  }
+
+  // Start watching all browser threads for responsiveness.
+  ThreadWatcherList::StartWatchingAll();
+
   int result_code = ResultCodes::NORMAL_EXIT;
   if (parameters.ui_task) {
     // We are in test mode. Run one task and enter the main message loop.
@@ -1671,8 +1805,12 @@ int BrowserMain(const MainFunctionParams& parameters) {
     parameters.ui_task->Run();
     delete parameters.ui_task;
   } else {
-    // We are in regular browser boot sequence. Open initial stabs and enter
-    // the main message loop.
+    // Most general initialization is behind us, but opening a
+    // tab and/or session restore and such is still to be done.
+    base::TimeTicks browser_open_start = base::TimeTicks::Now();
+
+    // We are in regular browser boot sequence. Open initial tabs and enter the
+    // main message loop.
     if (browser_init.Start(parsed_command_line, FilePath(), profile,
                            &result_code)) {
 #if (defined(OS_WIN) || defined(OS_LINUX)) && !defined(OS_CHROMEOS)
@@ -1688,7 +1826,7 @@ int BrowserMain(const MainFunctionParams& parameters) {
       // available while the browser is running.  We need to save the last
       // modified time of the exe, so we can compare to determine if there is
       // an upgrade while the browser is kept alive by a persistent extension.
-      Upgrade::SaveLastModifiedTimeOfExe();
+      upgrade_util::SaveLastModifiedTimeOfExe();
 #endif
 
       // Record now as the last successful chrome start.
@@ -1697,6 +1835,10 @@ int BrowserMain(const MainFunctionParams& parameters) {
       // because Start() will add things to it while creating the main window.
       if (pool)
         pool->Recycle();
+
+      UMA_HISTOGRAM_MEDIUM_TIMES("Startup.BrowserOpenTabs",
+                                 base::TimeTicks::Now() - browser_open_start);
+
       RunUIMessageLoop(browser_process.get());
     }
   }
@@ -1706,7 +1848,7 @@ int BrowserMain(const MainFunctionParams& parameters) {
   // shutdown because otherwise we can't be sure the user has finished
   // selecting a search engine through the dialog reached from the first run
   // bubble link.
-  if (FirstRun::InSearchExperimentLocale() && record_search_engine) {
+  if (record_search_engine) {
     const TemplateURL* default_search_engine =
         profile->GetTemplateURLModel()->GetDefaultSearchProvider();
     // The default engine can be NULL if the administrator has disabled
@@ -1748,6 +1890,9 @@ int BrowserMain(const MainFunctionParams& parameters) {
   chrome_browser_net_websocket_experiment::WebSocketExperimentRunner::Stop();
 
   process_singleton.Cleanup();
+
+  // Stop all tasks that might run on WatchDogThread.
+  ThreadWatcherList::StopWatchingAll();
 
   metrics->Stop();
 

@@ -7,10 +7,12 @@
 #include <windowsx.h>
 
 #include "base/logging.h"
+#include "ui/base/accessibility/accessibility_types.h"
 #include "ui/base/l10n/l10n_util_win.h"
 #include "ui/base/view_prop.h"
 #include "ui/base/win/hwnd_util.h"
 #include "views/focus/focus_manager.h"
+#include "views/widget/widget.h"
 
 using ui::ViewProp;
 
@@ -96,13 +98,13 @@ void NativeControlWin::VisibilityChanged(View* starting_from, bool is_visible) {
   }
 }
 
-void NativeControlWin::Focus() {
+void NativeControlWin::OnFocus() {
   DCHECK(native_view());
   SetFocus(native_view());
 
   // Since we are being wrapped by a view, accessibility should receive
   // the super class as the focused view.
-  View* parent_view = GetParent();
+  View* parent_view = parent();
 
   // Due to some controls not behaving as expected without having
   // a native win32 control, we don't always send a native (MSAA)
@@ -112,8 +114,10 @@ void NativeControlWin::Focus() {
       parent_view->HasFocus();
 
   // Send the accessibility focus notification.
-  parent_view->NotifyAccessibilityEvent(AccessibilityTypes::EVENT_FOCUS,
-                                        send_native_event);
+  if (parent_view->GetWidget()) {
+    parent_view->GetWidget()->NotifyAccessibilityEvent(
+        parent_view, ui::AccessibilityTypes::EVENT_FOCUS, send_native_event);
+  }
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -184,7 +188,7 @@ LRESULT NativeControlWin::GetControlColor(UINT message, HDC dc, HWND sender) {
       if (brush)
         return reinterpret_cast<LRESULT>(brush);
     }
-    ancestor = ancestor->GetParent();
+    ancestor = ancestor->parent();
   }
 
   // COLOR_BTNFACE is the default for dialog box backgrounds.

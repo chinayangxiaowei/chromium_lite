@@ -1,4 +1,4 @@
-// Copyright (c) 2006-2008 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 //
@@ -11,12 +11,13 @@
 
 #include "base/basictypes.h"
 #include "base/message_loop.h"
-#include "chrome/browser/shell_dialogs.h"
+#include "chrome/browser/ui/shell_dialogs.h"
 #include "views/window/dialog_delegate.h"
 
 class FilePath;
-class MessageBoxView;
+
 namespace views {
+class MessageBoxView;
 class Window;
 }
 
@@ -59,7 +60,7 @@ class UserDataDirDialog : public views::DialogDelegate,
   // Empty until the user picks a directory.
   FilePath user_data_dir_;
 
-  MessageBoxView* message_box_view_;
+  views::MessageBoxView* message_box_view_;
   scoped_refptr<SelectFileDialog> select_file_dialog_;
 
   // Used to keep track of whether or not to block the message loop (still

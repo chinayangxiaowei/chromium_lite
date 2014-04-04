@@ -1,4 +1,4 @@
-// Copyright (c) 2006-2008 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -17,6 +17,7 @@ enum OptionsPage {
 #if defined(OS_CHROMEOS)
   OPTIONS_PAGE_SYSTEM,
   OPTIONS_PAGE_INTERNET,
+  OPTIONS_PAGE_ACCOUNTS,
 #endif
   OPTIONS_PAGE_GENERAL,
   OPTIONS_PAGE_CONTENT,
@@ -30,11 +31,5 @@ enum OptionsGroup {
   OPTIONS_GROUP_NONE,
   OPTIONS_GROUP_DEFAULT_SEARCH
 };
-
-// Show the Options window selecting the specified page. If an Options window
-// is currently open, this just activates it instead of opening a new one.
-void ShowOptionsWindow(OptionsPage page,
-                       OptionsGroup highlight_group,
-                       Profile* profile);
 
 #endif  // CHROME_BROWSER_UI_OPTIONS_OPTIONS_WINDOW_H_

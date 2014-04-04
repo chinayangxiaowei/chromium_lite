@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -15,10 +15,8 @@
 #include "base/utf_string_conversions.h"
 #include "chrome/app/chrome_command_ids.h"
 #include "chrome/common/automation_constants.h"
-#include "chrome/common/child_process_info.h"
 #include "chrome/common/chrome_constants.h"
 #include "chrome/common/chrome_switches.h"
-#include "chrome/common/debug_flags.h"
 #include "chrome/common/logging_chrome.h"
 #include "chrome/common/url_constants.h"
 #include "chrome/test/chrome_process_util.h"
@@ -26,14 +24,13 @@
 #include "chrome/test/test_switches.h"
 #include "chrome/test/automation/automation_proxy.h"
 #include "chrome/test/ui/ui_test.h"
+#include "content/common/child_process_info.h"
+#include "content/common/debug_flags.h"
 
 namespace {
 
 // Passed as value of kTestType.
 const char kUITestType[] = "ui";
-
-// Default path of named testing interface.
-const char kInterfacePath[] = "/var/tmp/ChromeTestingInterface";
 
 // Rewrite the preferences file to point to the proper image directory.
 void RewritePreferencesFile(const FilePath& user_data_dir) {
@@ -98,6 +95,9 @@ void UpdateHistoryDates(const FilePath& user_data_dir) {
 
 // ProxyLauncher functions
 
+const char ProxyLauncher::kDefaultInterfacePath[] =
+    "/var/tmp/ChromeTestingInterface";
+
 bool ProxyLauncher::in_process_renderer_ = false;
 bool ProxyLauncher::no_sandbox_ = false;
 bool ProxyLauncher::full_memory_dump_ = false;
@@ -112,7 +112,9 @@ std::string ProxyLauncher::log_level_ = "";
 
 ProxyLauncher::ProxyLauncher()
     : process_(base::kNullProcessHandle),
-      process_id_(-1) {}
+      process_id_(-1),
+      shutdown_type_(WINDOW_CLOSE) {
+}
 
 ProxyLauncher::~ProxyLauncher() {}
 
@@ -131,7 +133,7 @@ void ProxyLauncher::LaunchBrowserAndServer(const LaunchState& state,
                                            bool wait_for_initial_loads) {
   // Set up IPC testing interface as a server.
   automation_proxy_.reset(CreateAutomationProxy(
-                              TestTimeouts::command_execution_timeout_ms()));
+                              TestTimeouts::action_max_timeout_ms()));
 
   LaunchBrowser(state);
   WaitForBrowserLaunch(wait_for_initial_loads);
@@ -140,12 +142,12 @@ void ProxyLauncher::LaunchBrowserAndServer(const LaunchState& state,
 void ProxyLauncher::ConnectToRunningBrowser(bool wait_for_initial_loads) {
   // Set up IPC testing interface as a client.
   automation_proxy_.reset(CreateAutomationProxy(
-                              TestTimeouts::command_execution_timeout_ms()));
+                              TestTimeouts::action_max_timeout_ms()));
   WaitForBrowserLaunch(wait_for_initial_loads);
 }
 
-void ProxyLauncher::CloseBrowserAndServer(ShutdownType shutdown_type) {
-  QuitBrowser(shutdown_type);
+void ProxyLauncher::CloseBrowserAndServer() {
+  QuitBrowser();
   CleanupAppProcesses();
 
   // Suppress spammy failures that seem to be occurring when running
@@ -156,6 +158,10 @@ void ProxyLauncher::CloseBrowserAndServer(ShutdownType shutdown_type) {
         StringPrintf(L"Unable to quit all browser processes. Original PID %d",
                      &process_id_));
 
+  DisconnectFromRunningBrowser();
+}
+
+void ProxyLauncher::DisconnectFromRunningBrowser() {
   automation_proxy_.reset();  // Shut down IPC testing interface.
 }
 
@@ -194,11 +200,13 @@ bool ProxyLauncher::LaunchAnotherBrowserBlockUntilClosed(
 }
 #endif
 
-void ProxyLauncher::QuitBrowser(ShutdownType shutdown_type) {
-  if (SESSION_ENDING == shutdown_type) {
+void ProxyLauncher::QuitBrowser() {
+  if (SESSION_ENDING == shutdown_type_) {
     TerminateBrowser();
     return;
   }
+
+  base::TimeTicks quit_start = base::TimeTicks::Now();
 
   // There's nothing to do here if the browser is not running.
   // WARNING: There is a race condition here where the browser may shut down
@@ -206,10 +214,9 @@ void ProxyLauncher::QuitBrowser(ShutdownType shutdown_type) {
   // use WaitForBrowserProcessToQuit() if it intentionally
   // causes the browser to shut down.
   if (IsBrowserRunning()) {
-    base::TimeTicks quit_start = base::TimeTicks::Now();
     EXPECT_TRUE(automation()->SetFilteredInet(false));
 
-    if (WINDOW_CLOSE == shutdown_type) {
+    if (WINDOW_CLOSE == shutdown_type_) {
       int window_count = 0;
       EXPECT_TRUE(automation()->GetBrowserWindowCount(&window_count));
 
@@ -237,7 +244,7 @@ void ProxyLauncher::QuitBrowser(ShutdownType shutdown_type) {
         EXPECT_TRUE(browser_proxy->ApplyAccelerator(IDC_CLOSE_WINDOW));
         browser_proxy = NULL;
       }
-    } else if (USER_QUIT == shutdown_type) {
+    } else if (USER_QUIT == shutdown_type_) {
       scoped_refptr<BrowserProxy> browser_proxy =
           automation()->GetBrowserWindow(0);
       EXPECT_TRUE(browser_proxy.get());
@@ -245,23 +252,27 @@ void ProxyLauncher::QuitBrowser(ShutdownType shutdown_type) {
         EXPECT_TRUE(browser_proxy->RunCommandAsync(IDC_EXIT));
       }
     } else {
-      NOTREACHED() << "Invalid shutdown type " << shutdown_type;
+      NOTREACHED() << "Invalid shutdown type " << shutdown_type_;
     }
-
-    // Now, drop the automation IPC channel so that the automation provider in
-    // the browser notices and drops its reference to the browser process.
-    automation()->Disconnect();
-
-    // Wait for the browser process to quit. It should quit once all tabs have
-    // been closed.
-    if (!WaitForBrowserProcessToQuit(
-        TestTimeouts::wait_for_terminate_timeout_ms())) {
-      // We need to force the browser to quit because it didn't quit fast
-      // enough. Take no chance and kill every chrome processes.
-      CleanupAppProcesses();
-    }
-    browser_quit_time_ = base::TimeTicks::Now() - quit_start;
   }
+
+  // Now, drop the automation IPC channel so that the automation provider in
+  // the browser notices and drops its reference to the browser process.
+  if (automation_proxy_.get())
+    automation_proxy_->Disconnect();
+
+  // Wait for the browser process to quit. It should quit once all tabs have
+  // been closed.
+  int exit_code = -1;
+  if (WaitForBrowserProcessToQuit(
+          TestTimeouts::wait_for_terminate_timeout_ms(), &exit_code)) {
+    EXPECT_EQ(0, exit_code);  // Expect a clean shutdown.
+  } else {
+    // We need to force the browser to quit because it didn't quit fast
+    // enough. Take no chance and kill every chrome processes.
+    CleanupAppProcesses();
+  }
+  browser_quit_time_ = base::TimeTicks::Now() - quit_start;
 
   // Don't forget to close the handle
   base::CloseProcessHandle(process_);
@@ -270,8 +281,9 @@ void ProxyLauncher::QuitBrowser(ShutdownType shutdown_type) {
 }
 
 void ProxyLauncher::TerminateBrowser() {
+  base::TimeTicks quit_start = base::TimeTicks::Now();
+
   if (IsBrowserRunning()) {
-    base::TimeTicks quit_start = base::TimeTicks::Now();
     EXPECT_TRUE(automation()->SetFilteredInet(false));
 #if defined(OS_WIN)
     scoped_refptr<BrowserProxy> browser(automation()->GetBrowserWindow(0));
@@ -286,15 +298,18 @@ void ProxyLauncher::TerminateBrowser() {
 #if defined(OS_POSIX)
     EXPECT_EQ(kill(process_, SIGTERM), 0);
 #endif  // OS_POSIX
-
-    if (!WaitForBrowserProcessToQuit(
-        TestTimeouts::wait_for_terminate_timeout_ms())) {
-      // We need to force the browser to quit because it didn't quit fast
-      // enough. Take no chance and kill every chrome processes.
-      CleanupAppProcesses();
-    }
-    browser_quit_time_ = base::TimeTicks::Now() - quit_start;
   }
+
+  int exit_code = 0;
+  if (WaitForBrowserProcessToQuit(
+          TestTimeouts::wait_for_terminate_timeout_ms(), &exit_code)) {
+    EXPECT_EQ(0, exit_code);  // Expect a clean shutdown.
+  } else {
+    // We need to force the browser to quit because it didn't quit fast
+    // enough. Take no chance and kill every chrome processes.
+    CleanupAppProcesses();
+  }
+  browser_quit_time_ = base::TimeTicks::Now() - quit_start;
 
   // Don't forget to close the handle
   base::CloseProcessHandle(process_);
@@ -321,19 +336,22 @@ void ProxyLauncher::CleanupAppProcesses() {
   TerminateAllChromeProcesses(process_id_);
 }
 
-bool ProxyLauncher::WaitForBrowserProcessToQuit(int timeout) {
+bool ProxyLauncher::WaitForBrowserProcessToQuit(int timeout, int* exit_code) {
 #ifdef WAIT_FOR_DEBUGGER_ON_OPEN
   timeout = 500000;
 #endif
-  return base::WaitForSingleProcess(process_, timeout);
+  return base::WaitForExitCodeWithTimeout(process_, exit_code, timeout);
 }
 
 bool ProxyLauncher::IsBrowserRunning() {
-  return CrashAwareSleep(0);
-}
+  // If there is no active AutomationProxy the browser shouldn't be running.
+  if (!automation_proxy_.get())
+    return false;
 
-bool ProxyLauncher::CrashAwareSleep(int timeout_ms) {
-  return base::CrashAwareSleep(process_, timeout_ms);
+  // Send a simple message to the browser. If it comes back, the browser
+  // must be alive.
+  int window_count;
+  return automation_proxy_->GetBrowserWindowCount(&window_count);
 }
 
 void ProxyLauncher::PrepareTestCommandline(CommandLine* command_line,
@@ -413,6 +431,9 @@ void ProxyLauncher::PrepareTestCommandline(CommandLine* command_line,
 
   // Allow file:// access on ChromeOS.
   command_line->AppendSwitch(switches::kAllowFileAccess);
+
+  // Allow testing File API over http.
+  command_line->AppendSwitch(switches::kUnlimitedQuotaForFiles);
 }
 
 bool ProxyLauncher::LaunchBrowserHelper(const LaunchState& state, bool wait,
@@ -484,11 +505,12 @@ base::TimeDelta ProxyLauncher::browser_quit_time() const {
 
 // NamedProxyLauncher functions
 
-NamedProxyLauncher::NamedProxyLauncher(bool launch_browser,
+NamedProxyLauncher::NamedProxyLauncher(const std::string& channel_id,
+                                       bool launch_browser,
                                        bool disconnect_on_failure)
-    : launch_browser_(launch_browser),
+    : channel_id_(channel_id),
+      launch_browser_(launch_browser),
       disconnect_on_failure_(disconnect_on_failure) {
-  channel_id_ = kInterfacePath;
 }
 
 AutomationProxy* NamedProxyLauncher::CreateAutomationProxy(
@@ -501,17 +523,42 @@ AutomationProxy* NamedProxyLauncher::CreateAutomationProxy(
 
 void NamedProxyLauncher::InitializeConnection(const LaunchState& state,
                                               bool wait_for_initial_loads) {
+  FilePath testing_channel_path;
+#if defined(OS_WIN)
+  testing_channel_path = FilePath(ASCIIToWide(channel_id_));
+#else
+  testing_channel_path = FilePath(channel_id_);
+#endif
+
   if (launch_browser_) {
+    // Because we are waiting on the existence of the testing file below,
+    // make sure there isn't one already there before browser launch.
+    EXPECT_TRUE(file_util::Delete(testing_channel_path, false));
+
     // Set up IPC testing interface as a client.
     LaunchBrowser(state);
-
-    // Wait for browser to be ready for connections.
-    struct stat file_info;
-    while (stat(kInterfacePath, &file_info))
-      base::PlatformThread::Sleep(automation::kSleepTime);
   }
 
+  // Wait for browser to be ready for connections.
+  bool testing_channel_exists = false;
+  for (int wait_time = 0;
+       wait_time < TestTimeouts::action_max_timeout_ms();
+       wait_time += automation::kSleepTime) {
+    testing_channel_exists = file_util::PathExists(testing_channel_path);
+    if (testing_channel_exists)
+      break;
+    base::PlatformThread::Sleep(automation::kSleepTime);
+  }
+  EXPECT_TRUE(testing_channel_exists);
+
   ConnectToRunningBrowser(wait_for_initial_loads);
+}
+
+void NamedProxyLauncher::TerminateConnection() {
+  if (launch_browser_)
+    CloseBrowserAndServer();
+  else
+    DisconnectFromRunningBrowser();
 }
 
 std::string NamedProxyLauncher::PrefixedChannelID() const {
@@ -538,6 +585,10 @@ AutomationProxy* AnonymousProxyLauncher::CreateAutomationProxy(
 void AnonymousProxyLauncher::InitializeConnection(const LaunchState& state,
                                                   bool wait_for_initial_loads) {
   LaunchBrowserAndServer(state, wait_for_initial_loads);
+}
+
+void AnonymousProxyLauncher::TerminateConnection() {
+  CloseBrowserAndServer();
 }
 
 std::string AnonymousProxyLauncher::PrefixedChannelID() const {

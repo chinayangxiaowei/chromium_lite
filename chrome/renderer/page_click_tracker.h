@@ -9,7 +9,7 @@
 
 #include "base/basictypes.h"
 #include "base/observer_list.h"
-#include "chrome/renderer/render_view_observer.h"
+#include "content/renderer/render_view_observer.h"
 #include "third_party/WebKit/Source/WebKit/chromium/public/WebDOMEventListener.h"
 #include "third_party/WebKit/Source/WebKit/chromium/public/WebNode.h"
 
@@ -51,7 +51,7 @@ class PageClickTracker : public RenderViewObserver,
   virtual void handleEvent(const WebKit::WebDOMEvent& event);
 
   // Called after the mouse event |event| has been processed by WebKit.
-  void DidHandleMouseEvent(const WebKit::WebMouseEvent& event);
+  virtual void DidHandleMouseEvent(const WebKit::WebMouseEvent& event);
 
   // Returns the currently focused node in the associated render view.
   // That node may be null.

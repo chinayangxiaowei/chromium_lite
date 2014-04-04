@@ -7,6 +7,7 @@
 '''
 
 import os.path
+import re
 import sys
 
 from grit.node import base
@@ -18,6 +19,33 @@ from grit import util
 
 import grit.format.rc_header
 
+
+def _ReadFirstIdsFromFile(filename, defines, src_root_dir):
+  '''Read the starting resource id values from |filename|.  We also
+  expand variables of the form <(FOO) based on defines passed in on
+  the command line.'''
+  first_ids_dict = eval(open(filename).read())
+
+  def ReplaceVariable(matchobj):
+    for key, value in defines.iteritems():
+      if matchobj.group(1) == key:
+        value = os.path.abspath(value)[len(src_root_dir) + 1:]
+        return value
+    return ''
+
+  renames = []
+  for grd_filename in first_ids_dict:
+    new_grd_filename = re.sub(r'<\(([A-Za-z_]+)\)', ReplaceVariable,
+                              grd_filename)
+    if new_grd_filename != grd_filename:
+      new_grd_filename = new_grd_filename.replace('\\', '/')
+      renames.append((grd_filename, new_grd_filename))
+
+  for grd_filename, new_grd_filename in renames:
+    first_ids_dict[new_grd_filename] = first_ids_dict[grd_filename]
+    del(first_ids_dict[grd_filename])
+
+  return first_ids_dict
 
 
 class IfNode(base.Node):
@@ -39,6 +67,9 @@ class IfNode(base.Node):
     elif isinstance(self.parent, empty.OutputsNode):
       from grit.node import io
       return isinstance(child, io.OutputNode)
+    elif isinstance(self.parent, empty.TranslationsNode):
+      from grit.node import io
+      return isinstance(child, io.FileNode)
     else:
       return False
 
@@ -264,7 +295,7 @@ class GritNode(base.Node):
   def SetDefines(self, defines):
     self.defines = defines
 
-  def AssignFirstIds(self, filename_or_stream, first_id_filename):
+  def AssignFirstIds(self, filename_or_stream, first_id_filename, defines):
     '''Assign first ids to each grouping node based on values from
     tools/grit/resource_ids.'''
     # If the input is a stream, then we're probably in a unit test and
@@ -274,23 +305,24 @@ class GritNode(base.Node):
 
     # By default, we use the the file resources_ids next to grit.py
     # to determine what ids to assign to resources.
+    grit_root_dir = os.path.abspath(os.path.join(os.path.dirname(
+        os.path.abspath(__file__)), '..', '..'))
     if not first_id_filename:
-      first_id_filename = os.path.join(os.path.dirname(
-          os.path.abspath(sys.argv[0])), 'resource_ids')
+      first_id_filename = os.path.join(grit_root_dir, 'resource_ids')
 
     first_ids = None
     from grit.node import empty
     for node in self.inorder():
       if isinstance(node, empty.GroupingNode):
         # The checkout base directory is 2 directories up from grit.py.
-        src_root_dir = os.path.dirname(os.path.dirname(
-            os.path.dirname(os.path.abspath(sys.argv[0]))))
+        src_root_dir = os.path.dirname(os.path.dirname(grit_root_dir))
 
         filename = os.path.abspath(filename_or_stream)[
             len(src_root_dir) + 1:]
         filename = filename.replace('\\', '/')
         if not first_ids:
-          first_ids = eval(open(first_id_filename).read())
+          first_ids = _ReadFirstIdsFromFile(first_id_filename, defines,
+                                            src_root_dir)
 
         if node.attrs['first_id'] != '':
           raise Exception("Don't set the first_id attribute, update "

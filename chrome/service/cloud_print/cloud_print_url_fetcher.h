@@ -8,7 +8,7 @@
 
 #include <string>
 
-#include "base/scoped_ptr.h"
+#include "base/memory/scoped_ptr.h"
 #include "chrome/common/net/url_fetcher.h"
 
 class DictionaryValue;
@@ -81,13 +81,15 @@ class CloudPrintURLFetcher
   void StartGetRequest(const GURL& url,
                        Delegate* delegate,
                        const std::string& auth_token,
-                       int max_retries);
+                       int max_retries,
+                       const std::string& additional_headers);
   void StartPostRequest(const GURL& url,
                         Delegate* delegate,
                         const std::string& auth_token,
                         int max_retries,
                         const std::string& post_data_mime_type,
-                        const std::string& post_data);
+                        const std::string& post_data,
+                        const std::string& additional_headers);
 
   // URLFetcher::Delegate implementation.
   virtual void OnURLFetchComplete(const URLFetcher* source, const GURL& url,
@@ -100,7 +102,7 @@ class CloudPrintURLFetcher
   virtual ~CloudPrintURLFetcher();
 
   // Virtual for testing.
-  virtual URLRequestContextGetter* GetRequestContextGetter();
+  virtual net::URLRequestContextGetter* GetRequestContextGetter();
 
  private:
   void StartRequestHelper(const GURL& url,
@@ -109,7 +111,8 @@ class CloudPrintURLFetcher
                           const std::string& auth_token,
                           int max_retries,
                           const std::string& post_data_mime_type,
-                          const std::string& post_data);
+                          const std::string& post_data,
+                          const std::string& additional_headers);
 
   scoped_ptr<URLFetcher> request_;
   Delegate* delegate_;

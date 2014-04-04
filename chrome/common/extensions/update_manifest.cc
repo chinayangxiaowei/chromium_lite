@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,7 +6,7 @@
 
 #include <algorithm>
 
-#include "base/scoped_ptr.h"
+#include "base/memory/scoped_ptr.h"
 #include "base/stl_util-inl.h"
 #include "base/string_util.h"
 #include "base/string_number_conversions.h"
@@ -18,6 +18,10 @@
 static const char* kExpectedGupdateProtocol = "2.0";
 static const char* kExpectedGupdateXmlns =
     "http://www.google.com/update2/response";
+
+UpdateManifest::Result::Result() {}
+
+UpdateManifest::Result::~Result() {}
 
 UpdateManifest::Results::Results() : daystart_elapsed_seconds(kNoDaystart) {}
 
@@ -136,7 +140,7 @@ static bool ParseSingleAppTag(xmlNode* app_node, xmlNs* xml_namespace,
     *error_detail = "Too many updatecheck tags on app (expecting only 1).";
     return false;
   }
-  if (updates.size() == 0) {
+  if (updates.empty()) {
     *error_detail = "Missing updatecheck on app.";
     return false;
   }
@@ -238,7 +242,7 @@ bool UpdateManifest::Parse(const std::string& manifest_xml) {
 
   // Parse the first <daystart> if it's present.
   std::vector<xmlNode*> daystarts = GetChildren(root, gupdate_ns, "daystart");
-  if (daystarts.size() > 0) {
+  if (!daystarts.empty()) {
     xmlNode* first = daystarts[0];
     std::string elapsed_seconds = GetAttribute(first, "elapsed_seconds");
     int parsed_elapsed = kNoDaystart;

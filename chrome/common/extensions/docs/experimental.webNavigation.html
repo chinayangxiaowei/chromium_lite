@@ -16,7 +16,7 @@
     <script type="text/javascript" src="js/api_page_generator.js"></script>
     <script type="text/javascript" src="js/bootstrap.js"></script>
     <script type="text/javascript" src="js/sidebar.js"></script>
-  <title>chrome.experimental.webNavigation - Google Chrome Extensions - Google Code</title></head>
+  <title>WebNavigation API - Google Chrome Extensions - Google Code</title></head>
   <body>  <div id="gc-container" class="labs">
       <div id="devModeWarning">
         You are viewing extension docs in chrome via the 'file:' scheme: are you expecting to see local changes when you refresh? You'll need run chrome with --allow-file-access-from-files.
@@ -79,6 +79,16 @@
                 </div>
               </div>
             </dl>
+          </dd>
+
+          <!-- OBJECT METHODS -->
+          <dd>
+            <div></div>
+          </dd>
+
+          <!-- OBJECT EVENT FIELDS -->
+          <dd>
+            <div></div>
           </dd>
 
           <!-- FUNCTION PARAMETERS -->
@@ -241,16 +251,16 @@
 
     <div class="g-unit" id="gc-pagecontent">
       <div id="pageTitle">
-        <h1 class="page_title">chrome.experimental.webNavigation</h1>
+        <h1 class="page_title">WebNavigation API</h1>
       </div>
         <!-- TABLE OF CONTENTS -->
         <div id="toc">
           <h2>Contents</h2>
           <ol>
-            <li style="display: none; ">
-              <a>h2Name</a>
+            <li>
+              <a href="#H2-0">A note about timestamps</a>
               <ol>
-                <li>
+                <li style="display: none; ">
                   <a>h3Name</a>
                 </li>
               </ol>
@@ -267,7 +277,7 @@
                     </ol>
                   </li>
                   <li style="display: none; ">
-                    <a href="#methods">Methods</a>
+                    <a>Methods</a>
                     <ol>
                       <li>
                         <a href="#method-anchor">methodName</a>
@@ -275,7 +285,7 @@
                     </ol>
                   </li>
                   <li>
-                    <a href="#events">Events</a>
+                    <a href="#global-events">Events</a>
                     <ol>
                       <li>
                         <a href="#event-onBeforeNavigate">onBeforeNavigate</a>
@@ -307,12 +317,35 @@
         <!-- /TABLE OF CONTENTS -->
 
         <!-- Standard content lead-in for experimental API pages -->
-        <p id="classSummary">
+        <p id="classSummary" style="display: none; ">
           For information on how to use experimental APIs, see the <a href="experimental.html">chrome.experimental.* APIs</a> page.
         </p>
 
         <!-- STATIC CONTENT PLACEHOLDER -->
-        <div id="static"></div>
+        <div id="static"><div id="pageData-name" class="pageData">WebNavigation API</div>
+
+<!-- BEGIN AUTHORED CONTENT -->
+<p id="classSummary">
+Use the <code>chrome.experimental.webNavigation</code> module to recieve
+notifications about the status of navigations requests in-flight. This
+module is still very much experimental. For information on how to use
+experimental APIs, see the <a href="experimental.html">chrome.experimental.*
+APIs</a> page.
+</p>
+
+<a name="H2-0"></a><h2>A note about timestamps</h2>
+<p>
+It's important to note that some technical oddities in the OS's handling
+of distinct Chrome processes can cause the clock to be skewed between the
+browser itself and extension processes. That means that WebNavigation's events'
+<code>timeStamp</code> property is only guaranteed to be <i>internally</i>
+consistent. Comparing one event to another event will give you the correct
+offset between them, but comparing them to the current time inside the
+extension (via <code>(new Date()).getTime()</code>, for instance) might give
+unexpected results.
+</p>
+<!-- END AUTHORED CONTENT -->
+</div>
 
         <!-- API PAGE -->
         <div class="apiPage">
@@ -338,8 +371,8 @@
           </div> <!-- /apiGroup -->
 
           <!-- METHODS -->
-          <div class="apiGroup" id="methods" style="display: none; ">
-            <a name="methods"></a>
+          <div id="methodsTemplate" class="apiGroup" style="display: none; ">
+            <a></a>
             <h3>Methods</h3>
 
             <!-- iterates over all functions -->
@@ -414,10 +447,9 @@
           </div>  <!-- /apiGroup -->
 
           <!-- EVENTS -->
-          <div class="apiGroup">
-            <a name="events"></a>
-            <h3 id="events">Events</h3>
-
+          <div id="eventsTemplate" class="apiGroup">
+            <a name="global-events"></a>
+            <h3>Events</h3>
             <!-- iterates over all events -->
             <div class="apiItem">
               <a name="event-onBeforeNavigate"></a>
@@ -433,10 +465,11 @@
                 <p>Fires when a navigation is about to occur.</p>
 
                 <!-- PARAMETERS -->
-                <h4>Parameters</h4>
-                <dl>
-                  <div>
+                <div>
+                  <h4>Parameters</h4>
+                  <dl>
                     <div>
+                      <div>
           <dt>
             <var>details</var>
               <em>
@@ -534,6 +567,16 @@
             </dl>
           </dd>
 
+          <!-- OBJECT METHODS -->
+          <dd style="display: none; ">
+            <div></div>
+          </dd>
+
+          <!-- OBJECT EVENT FIELDS -->
+          <dd style="display: none; ">
+            <div></div>
+          </dd>
+
           <!-- FUNCTION PARAMETERS -->
           <dd style="display: none; ">
             <div></div>
@@ -594,6 +637,16 @@
             </dl>
           </dd>
 
+          <!-- OBJECT METHODS -->
+          <dd style="display: none; ">
+            <div></div>
+          </dd>
+
+          <!-- OBJECT EVENT FIELDS -->
+          <dd style="display: none; ">
+            <div></div>
+          </dd>
+
           <!-- FUNCTION PARAMETERS -->
           <dd style="display: none; ">
             <div></div>
@@ -652,6 +705,16 @@
             </dl>
           </dd>
 
+          <!-- OBJECT METHODS -->
+          <dd style="display: none; ">
+            <div></div>
+          </dd>
+
+          <!-- OBJECT EVENT FIELDS -->
+          <dd style="display: none; ">
+            <div></div>
+          </dd>
+
           <!-- FUNCTION PARAMETERS -->
           <dd style="display: none; ">
             <div></div>
@@ -677,7 +740,7 @@
                         <span style="display: none; ">
                           array of <span><span></span></span>
                         </span>
-                        <span>integer</span>
+                        <span>string</span>
                         <span style="display: none; "></span>
                       </span>
                     </span>
@@ -708,6 +771,16 @@
                 </div>
               </div>
             </dl>
+          </dd>
+
+          <!-- OBJECT METHODS -->
+          <dd style="display: none; ">
+            <div></div>
+          </dd>
+
+          <!-- OBJECT EVENT FIELDS -->
+          <dd style="display: none; ">
+            <div></div>
           </dd>
 
           <!-- FUNCTION PARAMETERS -->
@@ -768,6 +841,16 @@
             </dl>
           </dd>
 
+          <!-- OBJECT METHODS -->
+          <dd style="display: none; ">
+            <div></div>
+          </dd>
+
+          <!-- OBJECT EVENT FIELDS -->
+          <dd style="display: none; ">
+            <div></div>
+          </dd>
+
           <!-- FUNCTION PARAMETERS -->
           <dd style="display: none; ">
             <div></div>
@@ -778,15 +861,25 @@
             </dl>
           </dd>
 
+          <!-- OBJECT METHODS -->
+          <dd style="display: none; ">
+            <div></div>
+          </dd>
+
+          <!-- OBJECT EVENT FIELDS -->
+          <dd style="display: none; ">
+            <div></div>
+          </dd>
+
           <!-- FUNCTION PARAMETERS -->
           <dd style="display: none; ">
             <div></div>
           </dd>
 
         </div>
-                  </div>
-                </dl>
-
+                    </div>
+                  </dl>
+                </div>
               </div> <!-- /decription -->
 
             </div><div class="apiItem">
@@ -803,10 +896,11 @@
                 <p>Fires when a new window, or a new tab in an existing window, is about to be created to host a navigation.</p>
 
                 <!-- PARAMETERS -->
-                <h4>Parameters</h4>
-                <dl>
-                  <div>
+                <div>
+                  <h4>Parameters</h4>
+                  <dl>
                     <div>
+                      <div>
           <dt>
             <var>details</var>
               <em>
@@ -904,6 +998,16 @@
             </dl>
           </dd>
 
+          <!-- OBJECT METHODS -->
+          <dd style="display: none; ">
+            <div></div>
+          </dd>
+
+          <!-- OBJECT EVENT FIELDS -->
+          <dd style="display: none; ">
+            <div></div>
+          </dd>
+
           <!-- FUNCTION PARAMETERS -->
           <dd style="display: none; ">
             <div></div>
@@ -962,6 +1066,16 @@
             </dl>
           </dd>
 
+          <!-- OBJECT METHODS -->
+          <dd style="display: none; ">
+            <div></div>
+          </dd>
+
+          <!-- OBJECT EVENT FIELDS -->
+          <dd style="display: none; ">
+            <div></div>
+          </dd>
+
           <!-- FUNCTION PARAMETERS -->
           <dd style="display: none; ">
             <div></div>
@@ -971,7 +1085,7 @@
               </div><div>
                 <div>
           <dt>
-            <var>targetUrl</var>
+            <var>url</var>
               <em>
 
                 <!-- TYPE -->
@@ -1018,6 +1132,16 @@
                 </div>
               </div>
             </dl>
+          </dd>
+
+          <!-- OBJECT METHODS -->
+          <dd style="display: none; ">
+            <div></div>
+          </dd>
+
+          <!-- OBJECT EVENT FIELDS -->
+          <dd style="display: none; ">
+            <div></div>
           </dd>
 
           <!-- FUNCTION PARAMETERS -->
@@ -1078,6 +1202,16 @@
             </dl>
           </dd>
 
+          <!-- OBJECT METHODS -->
+          <dd style="display: none; ">
+            <div></div>
+          </dd>
+
+          <!-- OBJECT EVENT FIELDS -->
+          <dd style="display: none; ">
+            <div></div>
+          </dd>
+
           <!-- FUNCTION PARAMETERS -->
           <dd style="display: none; ">
             <div></div>
@@ -1088,15 +1222,25 @@
             </dl>
           </dd>
 
+          <!-- OBJECT METHODS -->
+          <dd style="display: none; ">
+            <div></div>
+          </dd>
+
+          <!-- OBJECT EVENT FIELDS -->
+          <dd style="display: none; ">
+            <div></div>
+          </dd>
+
           <!-- FUNCTION PARAMETERS -->
           <dd style="display: none; ">
             <div></div>
           </dd>
 
         </div>
-                  </div>
-                </dl>
-
+                    </div>
+                  </dl>
+                </div>
               </div> <!-- /decription -->
 
             </div><div class="apiItem">
@@ -1113,10 +1257,11 @@
                 <p>Fires when a navigation is committed. The document (and the resources it refers to, such as images and subframes) might still be downloading, but at least part of the document has been received from the server and the browser has decided to switch to the new document.</p>
 
                 <!-- PARAMETERS -->
-                <h4>Parameters</h4>
-                <dl>
-                  <div>
+                <div>
+                  <h4>Parameters</h4>
+                  <dl>
                     <div>
+                      <div>
           <dt>
             <var>details</var>
               <em>
@@ -1214,6 +1359,16 @@
             </dl>
           </dd>
 
+          <!-- OBJECT METHODS -->
+          <dd style="display: none; ">
+            <div></div>
+          </dd>
+
+          <!-- OBJECT EVENT FIELDS -->
+          <dd style="display: none; ">
+            <div></div>
+          </dd>
+
           <!-- FUNCTION PARAMETERS -->
           <dd style="display: none; ">
             <div></div>
@@ -1274,6 +1429,16 @@
             </dl>
           </dd>
 
+          <!-- OBJECT METHODS -->
+          <dd style="display: none; ">
+            <div></div>
+          </dd>
+
+          <!-- OBJECT EVENT FIELDS -->
+          <dd style="display: none; ">
+            <div></div>
+          </dd>
+
           <!-- FUNCTION PARAMETERS -->
           <dd style="display: none; ">
             <div></div>
@@ -1330,6 +1495,16 @@
                 </div>
               </div>
             </dl>
+          </dd>
+
+          <!-- OBJECT METHODS -->
+          <dd style="display: none; ">
+            <div></div>
+          </dd>
+
+          <!-- OBJECT EVENT FIELDS -->
+          <dd style="display: none; ">
+            <div></div>
           </dd>
 
           <!-- FUNCTION PARAMETERS -->
@@ -1390,6 +1565,16 @@
             </dl>
           </dd>
 
+          <!-- OBJECT METHODS -->
+          <dd style="display: none; ">
+            <div></div>
+          </dd>
+
+          <!-- OBJECT EVENT FIELDS -->
+          <dd style="display: none; ">
+            <div></div>
+          </dd>
+
           <!-- FUNCTION PARAMETERS -->
           <dd style="display: none; ">
             <div></div>
@@ -1412,10 +1597,10 @@
                         <a> Type</a>
                       </span>
                       <span>
-                        <span style="display: none; ">
-                          array of <span><span></span></span>
+                        <span>
+                          array of <span style="display: none; "><span></span></span>
                         </span>
-                        <span>string</span>
+                        <span style="display: none; ">paramType</span>
                         <span style="display: none; "></span>
                       </span>
                     </span>
@@ -1427,7 +1612,7 @@
           <dd class="todo" style="display: none; ">
             Undocumented.
           </dd>
-          <dd>Zero or more transition qualifiers delimited by "|". Possible qualifiers are "client_redirect", "server_redirect", and "forward_back".</dd>
+          <dd>A list of transition qualifiers.</dd>
           <dd style="display: none; ">
             This parameter was added in version
             <b><span></span></b>.
@@ -1446,6 +1631,16 @@
                 </div>
               </div>
             </dl>
+          </dd>
+
+          <!-- OBJECT METHODS -->
+          <dd style="display: none; ">
+            <div></div>
+          </dd>
+
+          <!-- OBJECT EVENT FIELDS -->
+          <dd style="display: none; ">
+            <div></div>
           </dd>
 
           <!-- FUNCTION PARAMETERS -->
@@ -1506,6 +1701,16 @@
             </dl>
           </dd>
 
+          <!-- OBJECT METHODS -->
+          <dd style="display: none; ">
+            <div></div>
+          </dd>
+
+          <!-- OBJECT EVENT FIELDS -->
+          <dd style="display: none; ">
+            <div></div>
+          </dd>
+
           <!-- FUNCTION PARAMETERS -->
           <dd style="display: none; ">
             <div></div>
@@ -1516,15 +1721,25 @@
             </dl>
           </dd>
 
+          <!-- OBJECT METHODS -->
+          <dd style="display: none; ">
+            <div></div>
+          </dd>
+
+          <!-- OBJECT EVENT FIELDS -->
+          <dd style="display: none; ">
+            <div></div>
+          </dd>
+
           <!-- FUNCTION PARAMETERS -->
           <dd style="display: none; ">
             <div></div>
           </dd>
 
         </div>
-                  </div>
-                </dl>
-
+                    </div>
+                  </dl>
+                </div>
               </div> <!-- /decription -->
 
             </div><div class="apiItem">
@@ -1541,10 +1756,11 @@
                 <p>Fires when a document, including the resources it refers to, is completely loaded and initialized.</p>
 
                 <!-- PARAMETERS -->
-                <h4>Parameters</h4>
-                <dl>
-                  <div>
+                <div>
+                  <h4>Parameters</h4>
+                  <dl>
                     <div>
+                      <div>
           <dt>
             <var>details</var>
               <em>
@@ -1642,6 +1858,16 @@
             </dl>
           </dd>
 
+          <!-- OBJECT METHODS -->
+          <dd style="display: none; ">
+            <div></div>
+          </dd>
+
+          <!-- OBJECT EVENT FIELDS -->
+          <dd style="display: none; ">
+            <div></div>
+          </dd>
+
           <!-- FUNCTION PARAMETERS -->
           <dd style="display: none; ">
             <div></div>
@@ -1702,6 +1928,16 @@
             </dl>
           </dd>
 
+          <!-- OBJECT METHODS -->
+          <dd style="display: none; ">
+            <div></div>
+          </dd>
+
+          <!-- OBJECT EVENT FIELDS -->
+          <dd style="display: none; ">
+            <div></div>
+          </dd>
+
           <!-- FUNCTION PARAMETERS -->
           <dd style="display: none; ">
             <div></div>
@@ -1758,6 +1994,16 @@
                 </div>
               </div>
             </dl>
+          </dd>
+
+          <!-- OBJECT METHODS -->
+          <dd style="display: none; ">
+            <div></div>
+          </dd>
+
+          <!-- OBJECT EVENT FIELDS -->
+          <dd style="display: none; ">
+            <div></div>
           </dd>
 
           <!-- FUNCTION PARAMETERS -->
@@ -1818,6 +2064,16 @@
             </dl>
           </dd>
 
+          <!-- OBJECT METHODS -->
+          <dd style="display: none; ">
+            <div></div>
+          </dd>
+
+          <!-- OBJECT EVENT FIELDS -->
+          <dd style="display: none; ">
+            <div></div>
+          </dd>
+
           <!-- FUNCTION PARAMETERS -->
           <dd style="display: none; ">
             <div></div>
@@ -1828,15 +2084,25 @@
             </dl>
           </dd>
 
+          <!-- OBJECT METHODS -->
+          <dd style="display: none; ">
+            <div></div>
+          </dd>
+
+          <!-- OBJECT EVENT FIELDS -->
+          <dd style="display: none; ">
+            <div></div>
+          </dd>
+
           <!-- FUNCTION PARAMETERS -->
           <dd style="display: none; ">
             <div></div>
           </dd>
 
         </div>
-                  </div>
-                </dl>
-
+                    </div>
+                  </dl>
+                </div>
               </div> <!-- /decription -->
 
             </div><div class="apiItem">
@@ -1853,10 +2119,11 @@
                 <p>Fires when the page's DOM is fully constructed, but the referenced resources may not finish loading.</p>
 
                 <!-- PARAMETERS -->
-                <h4>Parameters</h4>
-                <dl>
-                  <div>
+                <div>
+                  <h4>Parameters</h4>
+                  <dl>
                     <div>
+                      <div>
           <dt>
             <var>details</var>
               <em>
@@ -1954,6 +2221,16 @@
             </dl>
           </dd>
 
+          <!-- OBJECT METHODS -->
+          <dd style="display: none; ">
+            <div></div>
+          </dd>
+
+          <!-- OBJECT EVENT FIELDS -->
+          <dd style="display: none; ">
+            <div></div>
+          </dd>
+
           <!-- FUNCTION PARAMETERS -->
           <dd style="display: none; ">
             <div></div>
@@ -2014,6 +2291,16 @@
             </dl>
           </dd>
 
+          <!-- OBJECT METHODS -->
+          <dd style="display: none; ">
+            <div></div>
+          </dd>
+
+          <!-- OBJECT EVENT FIELDS -->
+          <dd style="display: none; ">
+            <div></div>
+          </dd>
+
           <!-- FUNCTION PARAMETERS -->
           <dd style="display: none; ">
             <div></div>
@@ -2070,6 +2357,16 @@
                 </div>
               </div>
             </dl>
+          </dd>
+
+          <!-- OBJECT METHODS -->
+          <dd style="display: none; ">
+            <div></div>
+          </dd>
+
+          <!-- OBJECT EVENT FIELDS -->
+          <dd style="display: none; ">
+            <div></div>
           </dd>
 
           <!-- FUNCTION PARAMETERS -->
@@ -2130,6 +2427,16 @@
             </dl>
           </dd>
 
+          <!-- OBJECT METHODS -->
+          <dd style="display: none; ">
+            <div></div>
+          </dd>
+
+          <!-- OBJECT EVENT FIELDS -->
+          <dd style="display: none; ">
+            <div></div>
+          </dd>
+
           <!-- FUNCTION PARAMETERS -->
           <dd style="display: none; ">
             <div></div>
@@ -2140,15 +2447,25 @@
             </dl>
           </dd>
 
+          <!-- OBJECT METHODS -->
+          <dd style="display: none; ">
+            <div></div>
+          </dd>
+
+          <!-- OBJECT EVENT FIELDS -->
+          <dd style="display: none; ">
+            <div></div>
+          </dd>
+
           <!-- FUNCTION PARAMETERS -->
           <dd style="display: none; ">
             <div></div>
           </dd>
 
         </div>
-                  </div>
-                </dl>
-
+                    </div>
+                  </dl>
+                </div>
               </div> <!-- /decription -->
 
             </div><div class="apiItem">
@@ -2165,10 +2482,11 @@
                 <p>Fires when an error occurs.</p>
 
                 <!-- PARAMETERS -->
-                <h4>Parameters</h4>
-                <dl>
-                  <div>
+                <div>
+                  <h4>Parameters</h4>
+                  <dl>
                     <div>
+                      <div>
           <dt>
             <var>details</var>
               <em>
@@ -2266,6 +2584,16 @@
             </dl>
           </dd>
 
+          <!-- OBJECT METHODS -->
+          <dd style="display: none; ">
+            <div></div>
+          </dd>
+
+          <!-- OBJECT EVENT FIELDS -->
+          <dd style="display: none; ">
+            <div></div>
+          </dd>
+
           <!-- FUNCTION PARAMETERS -->
           <dd style="display: none; ">
             <div></div>
@@ -2326,6 +2654,16 @@
             </dl>
           </dd>
 
+          <!-- OBJECT METHODS -->
+          <dd style="display: none; ">
+            <div></div>
+          </dd>
+
+          <!-- OBJECT EVENT FIELDS -->
+          <dd style="display: none; ">
+            <div></div>
+          </dd>
+
           <!-- FUNCTION PARAMETERS -->
           <dd style="display: none; ">
             <div></div>
@@ -2382,6 +2720,16 @@
                 </div>
               </div>
             </dl>
+          </dd>
+
+          <!-- OBJECT METHODS -->
+          <dd style="display: none; ">
+            <div></div>
+          </dd>
+
+          <!-- OBJECT EVENT FIELDS -->
+          <dd style="display: none; ">
+            <div></div>
           </dd>
 
           <!-- FUNCTION PARAMETERS -->
@@ -2442,6 +2790,16 @@
             </dl>
           </dd>
 
+          <!-- OBJECT METHODS -->
+          <dd style="display: none; ">
+            <div></div>
+          </dd>
+
+          <!-- OBJECT EVENT FIELDS -->
+          <dd style="display: none; ">
+            <div></div>
+          </dd>
+
           <!-- FUNCTION PARAMETERS -->
           <dd style="display: none; ">
             <div></div>
@@ -2500,6 +2858,16 @@
             </dl>
           </dd>
 
+          <!-- OBJECT METHODS -->
+          <dd style="display: none; ">
+            <div></div>
+          </dd>
+
+          <!-- OBJECT EVENT FIELDS -->
+          <dd style="display: none; ">
+            <div></div>
+          </dd>
+
           <!-- FUNCTION PARAMETERS -->
           <dd style="display: none; ">
             <div></div>
@@ -2510,15 +2878,25 @@
             </dl>
           </dd>
 
+          <!-- OBJECT METHODS -->
+          <dd style="display: none; ">
+            <div></div>
+          </dd>
+
+          <!-- OBJECT EVENT FIELDS -->
+          <dd style="display: none; ">
+            <div></div>
+          </dd>
+
           <!-- FUNCTION PARAMETERS -->
           <dd style="display: none; ">
             <div></div>
           </dd>
 
         </div>
-                  </div>
-                </dl>
-
+                    </div>
+                  </dl>
+                </div>
               </div> <!-- /decription -->
 
             </div> <!-- /apiItem -->

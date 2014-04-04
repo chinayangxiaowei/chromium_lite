@@ -1,9 +1,10 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "base/memory/ref_counted.h"
 #include "net/spdy/spdy_stream.h"
-#include "base/ref_counted.h"
+#include "net/spdy/spdy_http_utils.h"
 #include "net/spdy/spdy_session.h"
 #include "net/spdy/spdy_test_util.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -50,9 +51,9 @@ class TestSpdyStreamDelegate : public SpdyStream::Delegate {
     ADD_FAILURE() << "OnSendBody should not be called";
     return ERR_UNEXPECTED;
   }
-  virtual bool OnSendBodyComplete(int status) {
+  virtual int OnSendBodyComplete(int /*status*/, bool* /*eof*/) {
     ADD_FAILURE() << "OnSendBodyComplete should not be called";
-    return true;
+    return ERR_UNEXPECTED;
   }
 
   virtual int OnResponseReceived(const spdy::SpdyHeaderBlock& response,
@@ -79,6 +80,7 @@ class TestSpdyStreamDelegate : public SpdyStream::Delegate {
     callback_ = NULL;
     callback->Run(OK);
   }
+  virtual void set_chunk_callback(net::ChunkCallback *) {}
 
   bool send_headers_completed() const { return send_headers_completed_; }
   const linked_ptr<spdy::SpdyHeaderBlock>& response() const {
@@ -116,9 +118,7 @@ class SpdyStreamTest : public testing::Test {
     HostPortPair host_port_pair("www.google.com", 80);
     HostPortProxyPair pair(host_port_pair, ProxyServer::Direct());
     scoped_refptr<SpdySession> session(
-        session_->spdy_session_pool()->Get(pair,
-                                           session_->mutable_spdy_settings(),
-                                           BoundNetLog()));
+        session_->spdy_session_pool()->Get(pair, BoundNetLog()));
     return session;
   }
 
@@ -197,13 +197,17 @@ TEST_F(SpdyStreamTest, SendDataAfterOpen) {
   GURL url(kStreamUrl);
 
   HostPortPair host_port_pair("www.google.com", 80);
-  scoped_refptr<TCPSocketParams> tcp_params(
-      new TCPSocketParams(host_port_pair, LOWEST, GURL(), false));
+  scoped_refptr<TransportSocketParams> transport_params(
+      new TransportSocketParams(host_port_pair, LOWEST, GURL(), false, false));
 
   scoped_ptr<ClientSocketHandle> connection(new ClientSocketHandle);
   EXPECT_EQ(OK,
-            connection->Init(host_port_pair.ToString(), tcp_params, LOWEST,
-                             NULL, session_->tcp_socket_pool(), BoundNetLog()));
+            connection->Init(host_port_pair.ToString(),
+                             transport_params,
+                             LOWEST,
+                             NULL,
+                             session_->transport_socket_pool(),
+                             BoundNetLog()));
   session->InitializeWithSocket(connection.release(), false, OK);
 
   scoped_refptr<SpdyStream> stream;

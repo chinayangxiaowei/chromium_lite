@@ -21,12 +21,12 @@ class EVBubbleView : public IconLabelBubbleView {
   EVBubbleView(const int background_images[],
                int contained_image,
                const SkColor& color,
-               const LocationBarView* location_bar);
+               LocationBarView* location_bar);
   virtual ~EVBubbleView();
 
   // Overridden from view.
-  virtual bool OnMousePressed(const views::MouseEvent& event);
-  virtual void OnMouseReleased(const views::MouseEvent& event, bool canceled);
+  virtual bool OnMousePressed(const views::MouseEvent& event) OVERRIDE;
+  virtual void OnMouseReleased(const views::MouseEvent& event) OVERRIDE;
 
  private:
   ClickHandler click_handler_;

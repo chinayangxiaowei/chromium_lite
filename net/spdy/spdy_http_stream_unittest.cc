@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -29,16 +29,17 @@ class SpdyHttpStreamTest : public testing::Test {
     data_ = new OrderedSocketData(reads, reads_count, writes, writes_count);
     session_deps_.socket_factory->AddSocketDataProvider(data_.get());
     http_session_ = SpdySessionDependencies::SpdyCreateSession(&session_deps_);
-    session_ = http_session_->spdy_session_pool()->
-      Get(pair, http_session_->mutable_spdy_settings(), BoundNetLog());
-    tcp_params_ = new TCPSocketParams(host_port_pair.host(),
-                                      host_port_pair.port(),
-                                      MEDIUM, GURL(), false);
+    session_ = http_session_->spdy_session_pool()->Get(pair, BoundNetLog());
+    transport_params_ = new TransportSocketParams(host_port_pair,
+                                      MEDIUM, GURL(), false, false);
     TestCompletionCallback callback;
     scoped_ptr<ClientSocketHandle> connection(new ClientSocketHandle);
     EXPECT_EQ(ERR_IO_PENDING,
-              connection->Init(host_port_pair.ToString(), tcp_params_, MEDIUM,
-                                &callback, http_session_->tcp_socket_pool(),
+              connection->Init(host_port_pair.ToString(),
+                                transport_params_,
+                                MEDIUM,
+                                &callback,
+                                http_session_->transport_socket_pool(),
                                 BoundNetLog()));
     EXPECT_EQ(OK, callback.WaitForResult());
     return session_->InitializeWithSocket(connection.release(), false, OK);
@@ -47,7 +48,7 @@ class SpdyHttpStreamTest : public testing::Test {
   scoped_refptr<OrderedSocketData> data_;
   scoped_refptr<HttpNetworkSession> http_session_;
   scoped_refptr<SpdySession> session_;
-  scoped_refptr<TCPSocketParams> tcp_params_;
+  scoped_refptr<TransportSocketParams> transport_params_;
 };
 
 TEST_F(SpdyHttpStreamTest, SendRequest) {
@@ -94,7 +95,69 @@ TEST_F(SpdyHttpStreamTest, SendRequest) {
 
   // Because we abandoned the stream, we don't expect to find a session in the
   // pool anymore.
-  EXPECT_TRUE(!http_session_->spdy_session_pool()->HasSession(pair));
+  EXPECT_FALSE(http_session_->spdy_session_pool()->HasSession(pair));
+  EXPECT_TRUE(data()->at_read_eof());
+  EXPECT_TRUE(data()->at_write_eof());
+}
+
+TEST_F(SpdyHttpStreamTest, SendChunkedPost) {
+  EnableCompression(false);
+  SpdySession::SetSSLMode(false);
+  UploadDataStream::set_merge_chunks(false);
+
+  scoped_ptr<spdy::SpdyFrame> req(ConstructChunkedSpdyPost(NULL, 0));
+  scoped_ptr<spdy::SpdyFrame> chunk1(ConstructSpdyBodyFrame(1, false));
+  scoped_ptr<spdy::SpdyFrame> chunk2(ConstructSpdyBodyFrame(1, true));
+  MockWrite writes[] = {
+    CreateMockWrite(*req.get(), 1),
+    CreateMockWrite(*chunk1, 2),  // POST upload frames
+    CreateMockWrite(*chunk2, 3),
+  };
+  scoped_ptr<spdy::SpdyFrame> resp(ConstructSpdyPostSynReply(NULL, 0));
+  MockRead reads[] = {
+    CreateMockRead(*resp, 4),
+    CreateMockRead(*chunk1, 5),
+    CreateMockRead(*chunk2, 5),
+    MockRead(false, 0, 6)  // EOF
+  };
+
+  HostPortPair host_port_pair("www.google.com", 80);
+  HostPortProxyPair pair(host_port_pair, ProxyServer::Direct());
+  EXPECT_EQ(OK, InitSession(reads, arraysize(reads), writes, arraysize(writes),
+                            host_port_pair));
+
+  HttpRequestInfo request;
+  request.method = "POST";
+  request.url = GURL("http://www.google.com/");
+  request.upload_data = new UploadData();
+  request.upload_data->set_is_chunked(true);
+  request.upload_data->AppendChunk(kUploadData, kUploadDataSize, false);
+  request.upload_data->AppendChunk(kUploadData, kUploadDataSize, true);
+  TestCompletionCallback callback;
+  HttpResponseInfo response;
+  HttpRequestHeaders headers;
+  BoundNetLog net_log;
+  SpdyHttpStream http_stream(session_.get(), true);
+  ASSERT_EQ(
+      OK,
+      http_stream.InitializeStream(&request, net_log, NULL));
+
+  UploadDataStream* upload_stream =
+      UploadDataStream::Create(request.upload_data, NULL);
+  EXPECT_EQ(ERR_IO_PENDING, http_stream.SendRequest(
+      headers, upload_stream, &response, &callback));
+  EXPECT_TRUE(http_session_->spdy_session_pool()->HasSession(pair));
+
+  // This triggers the MockWrite and read 2
+  callback.WaitForResult();
+
+  // This triggers read 3. The empty read causes the session to shut down.
+  data()->CompleteRead();
+  MessageLoop::current()->RunAllPending();
+
+  // Because we abandoned the stream, we don't expect to find a session in the
+  // pool anymore.
+  EXPECT_FALSE(http_session_->spdy_session_pool()->HasSession(pair));
   EXPECT_TRUE(data()->at_read_eof());
   EXPECT_TRUE(data()->at_write_eof());
 }
@@ -152,7 +215,7 @@ TEST_F(SpdyHttpStreamTest, SpdyURLTest) {
 
   // Because we abandoned the stream, we don't expect to find a session in the
   // pool anymore.
-  EXPECT_TRUE(!http_session_->spdy_session_pool()->HasSession(pair));
+  EXPECT_FALSE(http_session_->spdy_session_pool()->HasSession(pair));
   EXPECT_TRUE(data()->at_read_eof());
   EXPECT_TRUE(data()->at_write_eof());
 }

@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,150 +8,199 @@
 
 #include <map>
 #include <string>
-#include <vector>
 
-#include "base/basictypes.h"
-#include "base/file_path.h"
-#include "third_party/skia/include/core/SkColor.h"
+#include "base/gtest_prod_util.h"
+#include "base/memory/scoped_ptr.h"
+#include "base/memory/singleton.h"
+#include "base/timer.h"
+#include "base/values.h"
+#include "chrome/common/net/url_fetcher.h"
+#include "googleurl/src/gurl.h"
 
 class DictionaryValue;
+class FilePath;
 class ListValue;
+class PrefService;
+
+namespace base {
+  class Time;
+}
 
 namespace chromeos {
 
-// Base class for OEM customization document classes.
+class SystemAccess;
 
+// Base class for OEM customization document classes.
 class CustomizationDocument {
  public:
-  CustomizationDocument() {}
   virtual ~CustomizationDocument() {}
+
+  // Return true if the document was successfully fetched and parsed.
+  bool IsReady() const { return root_.get(); }
+
+ protected:
+  CustomizationDocument() {}
 
   virtual bool LoadManifestFromFile(const FilePath& manifest_path);
   virtual bool LoadManifestFromString(const std::string& manifest);
 
-  const std::string& version() const { return version_; }
+  std::string GetLocaleSpecificString(const std::string& locale,
+                                      const std::string& dictionary_name,
+                                      const std::string& entry_name) const;
 
- protected:
-  // Parses manifest's attributes from the JSON dictionary value.
-  virtual bool ParseFromJsonValue(const DictionaryValue* root);
+  scoped_ptr<DictionaryValue> root_;
 
  private:
-  // Manifest version string.
-  std::string version_;
-
   DISALLOW_COPY_AND_ASSIGN(CustomizationDocument);
 };
 
 // OEM startup customization document class.
-
+// Now StartupCustomizationDocument is loaded in c-tor so just after create it
+// may be ready or not (if manifest is missing or corrupted) and this state
+// won't be changed later (i.e. IsReady() always return the same value).
 class StartupCustomizationDocument : public CustomizationDocument {
  public:
-  StartupCustomizationDocument() {}
+  static StartupCustomizationDocument* GetInstance();
 
-  virtual bool LoadManifestFromFile(const FilePath& manifest_path);
-
-  const std::string& product_sku() const { return product_sku_; }
   const std::string& initial_locale() const { return initial_locale_; }
   const std::string& initial_timezone() const { return initial_timezone_; }
-  SkColor background_color() const { return background_color_; }
+  const std::string& keyboard_layout() const { return keyboard_layout_; }
   const std::string& registration_url() const { return registration_url_; }
 
-  FilePath GetHelpPagePath(const std::string& locale) const;
-  FilePath GetEULAPagePath(const std::string& locale) const;
+  std::string GetHelpPage(const std::string& locale) const;
+  std::string GetEULAPage(const std::string& locale) const;
 
  private:
-  struct SetupContent {
-    SetupContent() {}
-    SetupContent(const std::string& help_page_path,
-                 const std::string& eula_page_path)
-        : help_page_path(help_page_path),
-          eula_page_path(eula_page_path) {}
+  FRIEND_TEST(StartupCustomizationDocumentTest, Basic);
+  FRIEND_TEST(StartupCustomizationDocumentTest, VPD);
+  FRIEND_TEST(StartupCustomizationDocumentTest, BadManifest);
+  friend struct DefaultSingletonTraits<StartupCustomizationDocument>;
 
-    // Partner's help page for specific locale.
-    std::string help_page_path;
-    // Partner's EULA for specific locale.
-    std::string eula_page_path;
-  };
+  // C-tor for singleton construction.
+  StartupCustomizationDocument();
 
-  typedef std::map<std::string, SetupContent> SetupContentMap;
+  // C-tor for test construction.
+  StartupCustomizationDocument(SystemAccess* system_access,
+                               const std::string& manifest);
 
-  virtual bool ParseFromJsonValue(const DictionaryValue* root);
-  FilePath GetSetupPagePath(const std::string& locale,
-                            std::string SetupContent::* page_path) const;
+  void Init(SystemAccess* system_access);
 
-  // Product SKU.
-  std::string product_sku_;
+  // If |attr| exists in machine stat, assign it to |value|.
+  void InitFromMachineStatistic(const char* attr, std::string* value);
 
-  // Initial locale for the OOBE wizard.
   std::string initial_locale_;
-
-  // Initial timezone for clock setting.
   std::string initial_timezone_;
-
-  // OOBE wizard and login screen background color.
-  SkColor background_color_;
-
-  // Partner's product registration page URL.
+  std::string keyboard_layout_;
   std::string registration_url_;
-
-  // Setup content for different locales.
-  SetupContentMap setup_content_;
-
-  // Copy of manifest full path.
-  FilePath manifest_path_;
 
   DISALLOW_COPY_AND_ASSIGN(StartupCustomizationDocument);
 };
 
-inline FilePath StartupCustomizationDocument::GetHelpPagePath(
-    const std::string& locale) const {
-  return GetSetupPagePath(locale, &SetupContent::help_page_path);
-}
-inline FilePath StartupCustomizationDocument::GetEULAPagePath(
-    const std::string& locale) const {
-  return GetSetupPagePath(locale, &SetupContent::eula_page_path);
-}
-
 // OEM services customization document class.
-
-class ServicesCustomizationDocument : public CustomizationDocument {
+// ServicesCustomizationDocument is fetched from network or local file but on
+// FILE thread therefore it may not be ready just after creation. Fetching of
+// the manifest should be initiated outside this class by calling
+// StartFetching() method. User of the file should check IsReady before use it.
+class ServicesCustomizationDocument : public CustomizationDocument,
+                                      private URLFetcher::Delegate {
  public:
-  typedef std::vector<std::string> StringList;
+  // OEM specific carrier deal.
+  struct CarrierDeal {
+    explicit CarrierDeal(DictionaryValue* deal_dict);
 
-  ServicesCustomizationDocument() {}
+    // Returns string with the specified |locale| and |id|.
+    // If there's no version for |locale|, default one is returned.
+    // If there's no string with specified |id|, empty string is returned.
+    std::string GetLocalizedString(const std::string& locale,
+                                   const std::string& id) const;
 
-  const std::string& initial_start_page_url() const {
-    return initial_start_page_url_;
-  }
-  const std::string& app_menu_section_title() const {
-    return app_menu_section_title_;
-  }
-  const std::string& app_menu_support_page_url() const {
-    return app_menu_support_page_url_;
-  }
-  const StringList& web_apps() const { return web_apps_; }
-  const StringList& extensions() const { return extensions_; }
+    std::string deal_locale;
+    std::string top_up_url;
+    int notification_count;
+    base::Time expire_date;
+    DictionaryValue* localized_strings;
+  };
+
+  // Carrier ID (ex. "Verizon (us)") mapping to carrier deals.
+  typedef std::map<std::string, CarrierDeal*> CarrierDeals;
+
+  static ServicesCustomizationDocument* GetInstance();
+
+  // Registers preferences.
+  static void RegisterPrefs(PrefService* local_state);
+
+  // Return true if the customization was applied. Customization is applied only
+  // once per machine.
+  static bool WasApplied();
+
+  // Start fetching customization document.
+  void StartFetching();
+
+  // Apply customization and save in machine options that customization was
+  // applied successfully. Return true if customization was applied.
+  bool ApplyCustomization();
+
+  std::string GetInitialStartPage(const std::string& locale) const;
+  std::string GetSupportPage(const std::string& locale) const;
+
+  // Returns carrier deal by specified |carrier_id|.
+  // Also checks deal restrictions, such as deal locale (launch locale) and
+  // deal expiration date if |check_restrictions| is true.
+  const ServicesCustomizationDocument::CarrierDeal* GetCarrierDeal(
+      const std::string& carrier_id, bool check_restrictions) const;
+
+ protected:
+  virtual bool LoadManifestFromString(const std::string& manifest) OVERRIDE;
 
  private:
-  virtual bool ParseFromJsonValue(const DictionaryValue* root);
+  FRIEND_TEST(ServicesCustomizationDocumentTest, Basic);
+  FRIEND_TEST(ServicesCustomizationDocumentTest, BadManifest);
+  FRIEND_TEST(ServicesCustomizationDocumentTest, DealOtherLocale);
+  FRIEND_TEST(ServicesCustomizationDocumentTest, NoDealRestrictions);
+  FRIEND_TEST(ServicesCustomizationDocumentTest, OldDeal);
+  friend struct DefaultSingletonTraits<ServicesCustomizationDocument>;
 
-  bool ParseStringListFromJsonValue(const ListValue* list_value,
-                                    StringList* string_list);
+  // C-tor for singleton construction.
+  ServicesCustomizationDocument();
 
-  // Partner's welcome page that is opened right after the OOBE.
-  std::string initial_start_page_url_;
+  // C-tor for test construction.
+  ServicesCustomizationDocument(const std::string& manifest,
+                                const std::string& initial_locale);
 
-  // Partner's featured apps URLs list.
-  StringList web_apps_;
+  // Save applied state in machine settings.
+  static void SetApplied(bool val);
 
-  // Partner's featured extensions URLs list.
-  StringList extensions_;
+  // Overriden from URLFetcher::Delegate:
+  virtual void OnURLFetchComplete(const URLFetcher* source,
+                                  const GURL& url,
+                                  const net::URLRequestStatus& status,
+                                  int response_code,
+                                  const ResponseCookies& cookies,
+                                  const std::string& data);
 
-  // Title for the partner's apps section in apps menu.
-  std::string app_menu_section_title_;
+  // Initiate file fetching.
+  void StartFileFetch();
 
-  // Partner's apps section support page URL.
-  std::string app_menu_support_page_url_;
+  // Executes on FILE thread and reads file to string.
+  void ReadFileInBackground(const FilePath& file);
+
+  // Services customization manifest URL.
+  GURL url_;
+
+  // URLFetcher instance.
+  scoped_ptr<URLFetcher> url_fetcher_;
+
+  // Timer to retry fetching file if network is not available.
+  base::OneShotTimer<ServicesCustomizationDocument> retry_timer_;
+
+  // How many times we already tried to fetch customization manifest file.
+  int num_retries_;
+
+  // Carrier-specific deals.
+  CarrierDeals carrier_deals_;
+
+  // Initial locale value.
+  std::string initial_locale_;
 
   DISALLOW_COPY_AND_ASSIGN(ServicesCustomizationDocument);
 };

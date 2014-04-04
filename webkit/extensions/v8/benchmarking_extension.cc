@@ -27,9 +27,17 @@ class BenchmarkingWrapper : public v8::Extension {
         "if (typeof(chrome.benchmarking) == 'undefined') {"
         "  chrome.benchmarking = {};"
         "};"
-        "chrome.benchmarking.clearCache = function() {"
+        "chrome.benchmarking.clearCache = function(preserve_ssl_entries) {"
         "  native function ClearCache();"
-        "  ClearCache();"
+        "  ClearCache(preserve_ssl_entries);"
+        "};"
+        "chrome.benchmarking.clearHostResolverCache = function() {"
+        "  native function ClearHostResolverCache();"
+        "  ClearHostResolverCache();"
+        "};"
+        "chrome.benchmarking.clearPredictorCache = function() {"
+        "  native function ClearPredictorCache();"
+        "  ClearPredictorCache();"
         "};"
         "chrome.benchmarking.closeConnections = function() {"
         "  native function CloseConnections();"
@@ -75,6 +83,10 @@ class BenchmarkingWrapper : public v8::Extension {
       return v8::FunctionTemplate::New(CloseConnections);
     } else if (name->Equals(v8::String::New("ClearCache"))) {
       return v8::FunctionTemplate::New(ClearCache);
+    } else if (name->Equals(v8::String::New("ClearHostResolverCache"))) {
+      return v8::FunctionTemplate::New(ClearHostResolverCache);
+    } else if (name->Equals(v8::String::New("ClearPredictorCache"))) {
+      return v8::FunctionTemplate::New(ClearPredictorCache);
     } else if (name->Equals(v8::String::New("EnableSpdy"))) {
       return v8::FunctionTemplate::New(EnableSpdy);
     } else if (name->Equals(v8::String::New("GetCounter"))) {
@@ -94,8 +106,23 @@ class BenchmarkingWrapper : public v8::Extension {
   }
 
   static v8::Handle<v8::Value> ClearCache(const v8::Arguments& args) {
-    webkit_glue::ClearCache();
+    bool preserve_ssl_host_entries = false;
+    if (args.Length() && args[0]->IsBoolean())
+      preserve_ssl_host_entries = args[0]->BooleanValue();
+    webkit_glue::ClearCache(preserve_ssl_host_entries);
     WebCache::clear();
+    return v8::Undefined();
+  }
+
+  static v8::Handle<v8::Value> ClearHostResolverCache(
+      const v8::Arguments& args) {
+    webkit_glue::ClearHostResolverCache();
+    return v8::Undefined();
+  }
+
+  static v8::Handle<v8::Value> ClearPredictorCache(
+      const v8::Arguments& args) {
+    webkit_glue::ClearPredictorCache();
     return v8::Undefined();
   }
 

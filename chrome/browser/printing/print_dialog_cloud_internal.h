@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,12 +10,12 @@
 #include <vector>
 
 #include "base/file_path.h"
-#include "base/scoped_ptr.h"
+#include "base/memory/scoped_ptr.h"
 #include "base/synchronization/lock.h"
-#include "chrome/browser/dom_ui/dom_ui.h"
-#include "chrome/browser/dom_ui/html_dialog_ui.h"
-#include "chrome/common/notification_observer.h"
-#include "chrome/common/notification_registrar.h"
+#include "chrome/browser/ui/webui/html_dialog_ui.h"
+#include "content/browser/webui/web_ui.h"
+#include "content/common/notification_observer.h"
+#include "content/common/notification_registrar.h"
 
 class GURL;
 class StringValue;
@@ -26,10 +26,10 @@ namespace internal_cloud_print_helpers {
 // Small class to virtualize a few functions to aid with unit testing.
 class CloudPrintDataSenderHelper {
  public:
-  explicit CloudPrintDataSenderHelper(DOMUI* dom_ui) : dom_ui_(dom_ui) {}
+  explicit CloudPrintDataSenderHelper(WebUI* web_ui) : web_ui_(web_ui) {}
   virtual ~CloudPrintDataSenderHelper() {}
 
-  // Virtualize the overrides of these three functions from DOMUI to
+  // Virtualize the overrides of these three functions from WebUI to
   // facilitate unit testing.
   virtual void CallJavascriptFunction(const std::wstring& function_name);
   virtual void CallJavascriptFunction(const std::wstring& function_name,
@@ -39,7 +39,7 @@ class CloudPrintDataSenderHelper {
                                       const Value& arg2);
 
  private:
-  DOMUI* dom_ui_;
+  WebUI* web_ui_;
 
   DISALLOW_COPY_AND_ASSIGN(CloudPrintDataSenderHelper);
 };
@@ -53,16 +53,17 @@ class CloudPrintDataSender
   // The owner of this object is also expected to own and control the
   // lifetime of the helper.
   CloudPrintDataSender(CloudPrintDataSenderHelper* helper,
-                       const string16& print_job_title);
+                       const string16& print_job_title,
+                       const std::string& file_type);
 
   // Calls to read in the PDF file (on the FILE thread) then send that
   // information to the dialog renderer (on the IO thread).  We know
-  // that the dom_ui pointer lifetime will outlast us, so we should be
+  // that the WebUI pointer lifetime will outlast us, so we should be
   // good.
-  void ReadPrintDataFile(const FilePath& path_to_pdf);
+  void ReadPrintDataFile(const FilePath& path_to_file);
   void SendPrintDataFile();
 
-  // Cancels any ramining part of the task by clearing out the dom_ui
+  // Cancels any ramining part of the task by clearing out the WebUI
   // helper_ ptr.
   void CancelPrintDataFile();
 
@@ -74,6 +75,7 @@ class CloudPrintDataSender
   CloudPrintDataSenderHelper* volatile helper_;
   scoped_ptr<StringValue> print_data_;
   string16 print_job_title_;
+  std::string file_type_;
 
   DISALLOW_COPY_AND_ASSIGN(CloudPrintDataSender);
 };
@@ -81,20 +83,21 @@ class CloudPrintDataSender
 class CloudPrintHtmlDialogDelegate;
 
 // The CloudPrintFlowHandler connects the state machine (the UI delegate)
-// to the dialog backing HTML and JS by providing DOMMessageHandler
+// to the dialog backing HTML and JS by providing WebUIMessageHandler
 // functions for the JS to use.  This include refreshing the page
 // setup parameters (which will cause a re-generation of the PDF in
 // the renderer process - do we want a progress throbber shown?
 // Probably..), and packing up the PDF and job parameters and sending
 // them to the cloud.
-class CloudPrintFlowHandler : public DOMMessageHandler,
+class CloudPrintFlowHandler : public WebUIMessageHandler,
                               public NotificationObserver {
  public:
-  explicit CloudPrintFlowHandler(const FilePath& path_to_pdf,
-                                 const string16& print_job_title);
+  explicit CloudPrintFlowHandler(const FilePath& path_to_file,
+                                 const string16& print_job_title,
+                                 const std::string& file_type);
   virtual ~CloudPrintFlowHandler();
 
-  // DOMMessageHandler implementation.
+  // WebUIMessageHandler implementation.
   virtual void RegisterMessages();
 
   // NotificationObserver implementation.
@@ -107,23 +110,24 @@ class CloudPrintFlowHandler : public DOMMessageHandler,
   void HandleSendPrintData(const ListValue* args);
   void HandleSetPageParameters(const ListValue* args);
 
+  virtual void SetDialogDelegate(CloudPrintHtmlDialogDelegate *delegate);
+  void StoreDialogClientSize() const;
+
+ private:
+  virtual scoped_refptr<CloudPrintDataSender> CreateCloudPrintDataSender();
+
   // Call to get the debugger loaded on our hosted dialog page
   // specifically.  Since we're not in an official browser tab, only
   // way to get the debugger going.
   void ShowDebugger();
 
-  virtual void SetDialogDelegate(CloudPrintHtmlDialogDelegate *delegate);
   void CancelAnyRunningTask();
-  void StoreDialogClientSize() const;
-
- private:
-  // For unit testing.
-  virtual scoped_refptr<CloudPrintDataSender> CreateCloudPrintDataSender();
 
   CloudPrintHtmlDialogDelegate* dialog_delegate_;
   NotificationRegistrar registrar_;
-  FilePath path_to_pdf_;
+  FilePath path_to_file_;
   string16 print_job_title_;
+  std::string file_type_;
   scoped_refptr<CloudPrintDataSender> print_data_sender_;
   scoped_ptr<CloudPrintDataSenderHelper> print_data_helper_;
 
@@ -135,33 +139,39 @@ class CloudPrintFlowHandler : public DOMMessageHandler,
 // is closed.
 class CloudPrintHtmlDialogDelegate : public HtmlDialogUIDelegate {
  public:
-  CloudPrintHtmlDialogDelegate(const FilePath& path_to_pdf,
+  CloudPrintHtmlDialogDelegate(const FilePath& path_to_file,
                                int width, int height,
                                const std::string& json_arguments,
-                               const string16& print_job_title);
+                               const string16& print_job_title,
+                               const std::string& file_type,
+                               bool modal);
   virtual ~CloudPrintHtmlDialogDelegate();
 
   // HTMLDialogUIDelegate implementation:
   virtual bool IsDialogModal() const;
   virtual std::wstring GetDialogTitle() const;
   virtual GURL GetDialogContentURL() const;
-  virtual void GetDOMMessageHandlers(
-      std::vector<DOMMessageHandler*>* handlers) const;
+  virtual void GetWebUIMessageHandlers(
+      std::vector<WebUIMessageHandler*>* handlers) const;
   virtual void GetDialogSize(gfx::Size* size) const;
   virtual std::string GetDialogArgs() const;
   virtual void OnDialogClosed(const std::string& json_retval);
   virtual void OnCloseContents(TabContents* source, bool* out_close_dialog);
   virtual bool ShouldShowDialogTitle() const;
+  virtual bool HandleContextMenu(const ContextMenuParams& params);
 
  private:
   friend class ::CloudPrintHtmlDialogDelegateTest;
 
+  // For unit testing.
   CloudPrintHtmlDialogDelegate(CloudPrintFlowHandler* flow_handler,
                                int width, int height,
-                               const std::string& json_arguments);
+                               const std::string& json_arguments,
+                               bool modal);
   void Init(int width, int height, const std::string& json_arguments);
 
   CloudPrintFlowHandler* flow_handler_;
+  bool modal_;
   mutable bool owns_flow_handler_;
 
   // The parameters needed to display a modal HTML dialog.
@@ -169,6 +179,11 @@ class CloudPrintHtmlDialogDelegate : public HtmlDialogUIDelegate {
 
   DISALLOW_COPY_AND_ASSIGN(CloudPrintHtmlDialogDelegate);
 };
+
+void CreateDialogImpl(const FilePath& path_to_file,
+                      const string16& print_job_title,
+                      const std::string& file_type,
+                      bool modal);
 
 }  // namespace internal_cloud_print_helpers
 

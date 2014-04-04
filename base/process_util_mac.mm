@@ -1,4 +1,4 @@
-// Copyright (c) 2008 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -124,13 +124,13 @@ bool ProcessIterator::CheckForNextProcess() {
     // Find out what size buffer we need.
     size_t data_len = 0;
     if (sysctl(mib, arraysize(mib), NULL, &data_len, NULL, 0) < 0) {
-      LOG(ERROR) << "failed to figure out the buffer size for a commandline";
+      DVPLOG(1) << "failed to figure out the buffer size for a commandline";
       continue;
     }
 
     data.resize(data_len);
     if (sysctl(mib, arraysize(mib), &data[0], &data_len, NULL, 0) < 0) {
-      LOG(ERROR) << "failed to fetch a commandline";
+      DVPLOG(1) << "failed to fetch a commandline";
       continue;
     }
 
@@ -622,7 +622,33 @@ void oom_killer_new() {
 
 // === Core Foundation CFAllocators ===
 
-typedef ChromeCFAllocator* ChromeCFAllocatorRef;
+bool CanGetContextForCFAllocator(long darwin_version) {
+  // TODO(avi): remove at final release; http://crbug.com/74589
+  if (darwin_version == 11) {
+    NSLog(@"Unsure about the internals of CFAllocator but going to patch them "
+           "anyway. Watch out for crashes inside of CFAllocatorAllocate.");
+  }
+  return darwin_version == 9 ||
+         darwin_version == 10 ||
+         darwin_version == 11;
+}
+
+CFAllocatorContext* ContextForCFAllocator(CFAllocatorRef allocator,
+                                          long darwin_version) {
+  if (darwin_version == 9 || darwin_version == 10) {
+    ChromeCFAllocator9and10* our_allocator =
+        const_cast<ChromeCFAllocator9and10*>(
+            reinterpret_cast<const ChromeCFAllocator9and10*>(allocator));
+    return &our_allocator->_context;
+  } else if (darwin_version == 11) {
+    ChromeCFAllocator11* our_allocator =
+        const_cast<ChromeCFAllocator11*>(
+            reinterpret_cast<const ChromeCFAllocator11*>(allocator));
+    return &our_allocator->_context;
+  } else {
+    return NULL;
+  }
+}
 
 CFAllocatorAllocateCallBack g_old_cfallocator_system_default;
 CFAllocatorAllocateCallBack g_old_cfallocator_malloc;
@@ -833,29 +859,30 @@ void EnableTerminationOnOutOfMemory() {
       << "Old allocators unexpectedly non-null";
 
   bool cf_allocator_internals_known =
-      darwin_version == 9 || darwin_version == 10;
+      CanGetContextForCFAllocator(darwin_version);
 
   if (cf_allocator_internals_known) {
-    ChromeCFAllocatorRef allocator = const_cast<ChromeCFAllocatorRef>(
-        reinterpret_cast<const ChromeCFAllocator*>(kCFAllocatorSystemDefault));
-    g_old_cfallocator_system_default = allocator->_context.allocate;
+    CFAllocatorContext* context =
+        ContextForCFAllocator(kCFAllocatorSystemDefault, darwin_version);
+    CHECK(context) << "Failed to get context for kCFAllocatorSystemDefault.";
+    g_old_cfallocator_system_default = context->allocate;
     CHECK(g_old_cfallocator_system_default)
         << "Failed to get kCFAllocatorSystemDefault allocation function.";
-    allocator->_context.allocate = oom_killer_cfallocator_system_default;
+    context->allocate = oom_killer_cfallocator_system_default;
 
-    allocator = const_cast<ChromeCFAllocatorRef>(
-        reinterpret_cast<const ChromeCFAllocator*>(kCFAllocatorMalloc));
-    g_old_cfallocator_malloc = allocator->_context.allocate;
+    context = ContextForCFAllocator(kCFAllocatorMalloc, darwin_version);
+    CHECK(context) << "Failed to get context for kCFAllocatorMalloc.";
+    g_old_cfallocator_malloc = context->allocate;
     CHECK(g_old_cfallocator_malloc)
         << "Failed to get kCFAllocatorMalloc allocation function.";
-    allocator->_context.allocate = oom_killer_cfallocator_malloc;
+    context->allocate = oom_killer_cfallocator_malloc;
 
-    allocator = const_cast<ChromeCFAllocatorRef>(
-        reinterpret_cast<const ChromeCFAllocator*>(kCFAllocatorMallocZone));
-    g_old_cfallocator_malloc_zone = allocator->_context.allocate;
+    context = ContextForCFAllocator(kCFAllocatorMallocZone, darwin_version);
+    CHECK(context) << "Failed to get context for kCFAllocatorMallocZone.";
+    g_old_cfallocator_malloc_zone = context->allocate;
     CHECK(g_old_cfallocator_malloc_zone)
         << "Failed to get kCFAllocatorMallocZone allocation function.";
-    allocator->_context.allocate = oom_killer_cfallocator_malloc_zone;
+    context->allocate = oom_killer_cfallocator_malloc_zone;
   } else {
     NSLog(@"Internals of CFAllocator not known; out-of-memory failures via "
         "CFAllocator will not result in termination. http://crbug.com/45650");
@@ -878,6 +905,19 @@ void EnableTerminationOnOutOfMemory() {
       << "Failed to get allocWithZone allocation function.";
   method_setImplementation(orig_method,
                            reinterpret_cast<IMP>(oom_killer_allocWithZone));
+}
+
+ProcessId GetParentProcessId(ProcessHandle process) {
+  struct kinfo_proc info;
+  size_t length = sizeof(struct kinfo_proc);
+  int mib[4] = { CTL_KERN, KERN_PROC, KERN_PROC_PID, process };
+  if (sysctl(mib, 4, &info, &length, NULL, 0) < 0) {
+    PLOG(ERROR) << "sysctl";
+    return -1;
+  }
+  if (length == 0)
+    return -1;
+  return info.kp_eproc.e_ppid;
 }
 
 }  // namespace base

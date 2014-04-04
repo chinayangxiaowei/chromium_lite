@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,26 +8,26 @@
 
 #include <vector>
 
-#include "base/string16.h"
 #include "base/gtest_prod_util.h"
+#include "base/string16.h"
+#include "chrome/browser/autofill/autofill_type.h"
 #include "chrome/browser/autofill/form_group.h"
 
 // A form group that stores phone number information.
 class PhoneNumber : public FormGroup {
  public:
   PhoneNumber();
+  explicit PhoneNumber(const PhoneNumber& number);
   virtual ~PhoneNumber();
 
+  PhoneNumber& operator=(const PhoneNumber& number);
+
   // FormGroup implementation:
-  virtual FormGroup* Clone() const = 0;
   virtual void GetPossibleFieldTypes(const string16& text,
                                      FieldTypeSet* possible_types) const;
   virtual void GetAvailableFieldTypes(FieldTypeSet* available_types) const;
-  virtual void FindInfoMatches(const AutoFillType& type,
-                               const string16& info,
-                               std::vector<string16>* matched_text) const;
-  virtual string16 GetFieldText(const AutoFillType& type) const;
-  virtual void SetInfo(const AutoFillType& type, const string16& value);
+  virtual string16 GetInfo(AutofillFieldType type) const;
+  virtual void SetInfo(AutofillFieldType type, const string16& value);
 
   // Parses |value| to extract the components of a phone number.  |number|
   // returns the trailing 7 digits, |city_code| returns the next 3 digits, and
@@ -45,13 +45,16 @@ class PhoneNumber : public FormGroup {
   static const int kSuffixOffset = 3;
   static const int kSuffixLength = 4;
 
- protected:
-  explicit PhoneNumber(const PhoneNumber& phone_number);
+  // The following functions should return the field type for each part of the
+  // phone number.  Currently, these are either fax or home phone number types.
+  virtual AutofillFieldType GetNumberType() const = 0;
+  virtual AutofillFieldType GetCityCodeType() const = 0;
+  virtual AutofillFieldType GetCountryCodeType() const = 0;
+  virtual AutofillFieldType GetCityAndNumberType() const = 0;
+  virtual AutofillFieldType GetWholeNumberType() const = 0;
 
  private:
   FRIEND_TEST_ALL_PREFIXES(PhoneNumberTest, Matcher);
-
-  void operator=(const PhoneNumber& phone_number);
 
   const string16& country_code() const { return country_code_; }
   const string16& city_code() const { return city_code_; }
@@ -70,12 +73,6 @@ class PhoneNumber : public FormGroup {
   void set_extension(const string16& extension) { extension_ = extension; }
   void set_whole_number(const string16& whole_number);
 
-  // A helper function for FindInfoMatches that only handles matching the info
-  // with the requested field type.
-  bool FindInfoMatchesHelper(const FieldTypeSubGroup& subgroup,
-                             const string16& info,
-                             string16* match) const;
-
   // The numbers will be digits only (no punctuation), so any call to the IsX()
   // functions should first call StripPunctuation on the text.
   bool IsNumber(const string16& text) const;
@@ -83,14 +80,6 @@ class PhoneNumber : public FormGroup {
   bool IsCountryCode(const string16& text) const;
   bool IsCityAndNumber(const string16& text) const;
   bool IsWholeNumber(const string16& text) const;
-
-  // The following functions should return the field type for each part of the
-  // phone number.  Currently, these are either fax or home phone number types.
-  virtual AutoFillFieldType GetNumberType() const = 0;
-  virtual AutoFillFieldType GetCityCodeType() const = 0;
-  virtual AutoFillFieldType GetCountryCodeType() const = 0;
-  virtual AutoFillFieldType GetCityAndNumberType() const = 0;
-  virtual AutoFillFieldType GetWholeNumberType() const = 0;
 
   // Verifies that |number| is a valid phone number.
   bool Validate(const string16& number) const;

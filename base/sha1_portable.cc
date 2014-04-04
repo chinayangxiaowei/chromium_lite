@@ -1,8 +1,10 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "base/sha1.h"
+
+#include <string.h>
 
 #include "base/basictypes.h"
 
@@ -99,6 +101,11 @@ static inline void swapends(uint32* t) {
 const int SecureHashAlgorithm::kDigestSizeBytes = 20;
 
 void SecureHashAlgorithm::Init() {
+  A = 0;
+  B = 0;
+  C = 0;
+  D = 0;
+  E = 0;
   cursor = 0;
   l = 0;
   H[0] = 0x67452301;
@@ -190,12 +197,19 @@ void SecureHashAlgorithm::Process() {
 }
 
 std::string SHA1HashString(const std::string& str) {
+  char hash[SecureHashAlgorithm::kDigestSizeBytes];
+  SHA1HashBytes(reinterpret_cast<const unsigned char*>(str.c_str()),
+                str.length(), reinterpret_cast<unsigned char*>(hash));
+  return std::string(hash, SecureHashAlgorithm::kDigestSizeBytes);
+}
+
+void SHA1HashBytes(const unsigned char* data, size_t len,
+                   unsigned char* hash) {
   SecureHashAlgorithm sha;
-  sha.Update(str.c_str(), str.length());
+  sha.Update(data, len);
   sha.Final();
-  std::string out(reinterpret_cast<const char*>(sha.Digest()),
-                  SecureHashAlgorithm::kDigestSizeBytes);
-  return out;
+
+  memcpy(hash, sha.Digest(), SecureHashAlgorithm::kDigestSizeBytes);
 }
 
 }  // namespace base

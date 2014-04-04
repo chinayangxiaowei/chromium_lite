@@ -1,24 +1,23 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/download/base_file.h"
 
 #include "base/file_util.h"
+#include "base/format_macros.h"
 #include "base/logging.h"
 #include "base/stringprintf.h"
-#include "base/third_party/nss/blapi.h"
-#include "base/third_party/nss/sha256.h"
+#include "crypto/secure_hash.h"
 #include "net/base/file_stream.h"
 #include "net/base/net_errors.h"
-#include "chrome/browser/browser_thread.h"
 #include "chrome/browser/download/download_util.h"
+#include "content/browser/browser_thread.h"
 
 #if defined(OS_WIN)
-#include "app/win/win_util.h"
 #include "chrome/common/win_safe_util.h"
 #elif defined(OS_MACOSX)
-#include "chrome/browser/ui/cocoa/file_metadata.h"
+#include "chrome/browser/cocoa/file_metadata.h"
 #endif
 
 BaseFile::BaseFile(const FilePath& full_path,
@@ -27,33 +26,33 @@ BaseFile::BaseFile(const FilePath& full_path,
                    int64 received_bytes,
                    const linked_ptr<net::FileStream>& file_stream)
     : full_path_(full_path),
-      path_renamed_(false),
       source_url_(source_url),
       referrer_url_(referrer_url),
       file_stream_(file_stream),
       bytes_so_far_(received_bytes),
       power_save_blocker_(true),
       calculate_hash_(false),
-      sha_context_(NULL) {
+      detached_(false) {
   DCHECK(BrowserThread::CurrentlyOn(BrowserThread::FILE));
+  memset(sha256_hash_, 0, sizeof(sha256_hash_));
 }
 
 BaseFile::~BaseFile() {
   DCHECK(BrowserThread::CurrentlyOn(BrowserThread::FILE));
-  if (in_progress())
-    Cancel();
-  Close();
+  if (detached_)
+    Close();
+  else
+    Cancel();  // Will delete the file.
 }
 
 bool BaseFile::Initialize(bool calculate_hash) {
   DCHECK(BrowserThread::CurrentlyOn(BrowserThread::FILE));
+  DCHECK(!detached_);
 
   calculate_hash_ = calculate_hash;
 
-  if (calculate_hash_) {
-    sha_context_.reset(new SHA256Context);
-    SHA256_Begin(sha_context_.get());
-  }
+  if (calculate_hash_)
+    secure_hash_.reset(crypto::SecureHash::Create(crypto::SecureHash::SHA256));
 
   if (!full_path_.empty() ||
       download_util::CreateTemporaryFileForDownload(&full_path_))
@@ -63,6 +62,7 @@ bool BaseFile::Initialize(bool calculate_hash) {
 
 bool BaseFile::AppendDataToFile(const char* data, size_t data_len) {
   DCHECK(BrowserThread::CurrentlyOn(BrowserThread::FILE));
+  DCHECK(!detached_);
 
   if (!file_stream_.get())
     return false;
@@ -78,16 +78,13 @@ bool BaseFile::AppendDataToFile(const char* data, size_t data_len) {
   if (written != data_len)
     return false;
 
-  if (calculate_hash_) {
-    SHA256_Update(sha_context_.get(),
-                  reinterpret_cast<const unsigned char*>(data),
-                  data_len);
-  }
+  if (calculate_hash_)
+    secure_hash_->Update(data, data_len);
 
   return true;
 }
 
-bool BaseFile::Rename(const FilePath& new_path, bool is_final_rename) {
+bool BaseFile::Rename(const FilePath& new_path) {
   DCHECK(BrowserThread::CurrentlyOn(BrowserThread::FILE));
 
   // Save the information whether the download is in progress because
@@ -97,8 +94,6 @@ bool BaseFile::Rename(const FilePath& new_path, bool is_final_rename) {
   // If the new path is same as the old one, there is no need to perform the
   // following renaming logic.
   if (new_path == full_path_) {
-    path_renamed_ = is_final_rename;
-
     // Don't close the file if we're not done (finished or canceled).
     if (!saved_in_progress)
       Close();
@@ -139,7 +134,6 @@ bool BaseFile::Rename(const FilePath& new_path, bool is_final_rename) {
 #endif
 
   full_path_ = new_path;
-  path_renamed_ = is_final_rename;
 
   // We don't need to re-open the file if we're done (finished or canceled).
   if (!saved_in_progress)
@@ -151,9 +145,16 @@ bool BaseFile::Rename(const FilePath& new_path, bool is_final_rename) {
   return true;
 }
 
+void BaseFile::Detach() {
+  detached_ = true;
+}
+
 void BaseFile::Cancel() {
   DCHECK(BrowserThread::CurrentlyOn(BrowserThread::FILE));
+  DCHECK(!detached_);
+
   Close();
+
   if (!full_path_.empty())
     file_util::Delete(full_path_, false);
 }
@@ -162,12 +163,13 @@ void BaseFile::Finish() {
   DCHECK(BrowserThread::CurrentlyOn(BrowserThread::FILE));
 
   if (calculate_hash_)
-    SHA256_End(sha_context_.get(), sha256_hash_, NULL, kSha256HashLen);
+    secure_hash_->Finish(sha256_hash_, kSha256HashLen);
 
   Close();
 }
 
 bool BaseFile::GetSha256Hash(std::string* hash) {
+  DCHECK(!detached_);
   if (!calculate_hash_ || in_progress())
     return false;
   hash->assign(reinterpret_cast<const char*>(sha256_hash_),
@@ -177,6 +179,8 @@ bool BaseFile::GetSha256Hash(std::string* hash) {
 
 void BaseFile::AnnotateWithSourceInformation() {
   DCHECK(BrowserThread::CurrentlyOn(BrowserThread::FILE));
+  DCHECK(!detached_);
+
 #if defined(OS_WIN)
   // Sets the Zone to tell Windows that this file comes from the internet.
   // We ignore the return value because a failure is not fatal.
@@ -191,9 +195,10 @@ void BaseFile::AnnotateWithSourceInformation() {
 
 bool BaseFile::Open() {
   DCHECK(BrowserThread::CurrentlyOn(BrowserThread::FILE));
+  DCHECK(!detached_);
   DCHECK(!full_path_.empty());
 
-  // Create a new file steram if it is not provided.
+  // Create a new file stream if it is not provided.
   if (!file_stream_.get()) {
     file_stream_.reset(new net::FileStream);
     if (file_stream_->Open(full_path_,
@@ -231,7 +236,11 @@ void BaseFile::Close() {
 }
 
 std::string BaseFile::DebugString() const {
-  return base::StringPrintf("{ source_url_ = \"%s\" full_path_ = \"%s\" }",
+  return base::StringPrintf("{ source_url_ = \"%s\""
+                            " full_path_ = \"%" PRFilePath "\""
+                            " bytes_so_far_ = %" PRId64 " detached_ = %c }",
                             source_url_.spec().c_str(),
-                            full_path_.value().c_str());
+                            full_path_.value().c_str(),
+                            bytes_so_far_,
+                            detached_ ? 'T' : 'F');
 }

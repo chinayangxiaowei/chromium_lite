@@ -14,17 +14,18 @@
 #include "base/string_util.h"
 #include "base/sys_string_conversions.h"
 #include "base/utf_string_conversions.h"
-#include "gfx/font.h"
 #include "googleurl/src/gurl.h"
 #include "net/base/escape.h"
 #include "net/base/net_util.h"
 #include "net/base/registry_controlled_domain.h"
+#include "ui/gfx/font.h"
 
 namespace ui {
 
-namespace {
+// U+2026 in utf8
+const char kEllipsis[] = "\xE2\x80\xA6";
 
-const char* kEllipsis = "\xE2\x80\xA6";
+namespace {
 
 // Cuts |text| to be |length| characters long.  If |cut_in_middle| is true, the
 // middle of the string is removed to leave equal-length pieces from the
@@ -55,18 +56,18 @@ string16 CutString(const string16& text,
 // than the available pixel width. For available pixel width = 0, a formatted,
 // but un-elided, string is returned.
 //
-// TODO(pkasting): http://b/119635 This whole function gets
+// TODO(pkasting): http://crbug.com/77883 This whole function gets
 // kerning/ligatures/etc. issues potentially wrong by assuming that the width of
 // a rendered string is always the sum of the widths of its substrings.  Also I
 // suspect it could be made simpler.
 string16 ElideUrl(const GURL& url,
                   const gfx::Font& font,
                   int available_pixel_width,
-                  const std::wstring& languages) {
+                  const std::string& languages) {
   // Get a formatted string and corresponding parsing of the url.
   url_parse::Parsed parsed;
-  string16 url_string = net::FormatUrl(url, WideToUTF8(languages),
-      net::kFormatUrlOmitAll, UnescapeRule::SPACES, &parsed, NULL, NULL);
+  string16 url_string = net::FormatUrl(url, languages, net::kFormatUrlOmitAll,
+      UnescapeRule::SPACES, &parsed, NULL, NULL);
   if (available_pixel_width <= 0)
     return url_string;
 
@@ -388,15 +389,14 @@ string16 ElideText(const string16& text,
   return CutString(text, lo, elide_in_middle, true);
 }
 
-// TODO(viettrungluu): convert |languages| to an |std::string|.
 SortedDisplayURL::SortedDisplayURL(const GURL& url,
-                                   const std::wstring& languages) {
+                                   const std::string& languages) {
   std::wstring host;
-  net::AppendFormattedHost(url, languages, &host, NULL, NULL);
+  net::AppendFormattedHost(url, UTF8ToWide(languages), &host, NULL, NULL);
   sort_host_ = WideToUTF16Hack(host);
   string16 host_minus_www = net::StripWWW(WideToUTF16Hack(host));
   url_parse::Parsed parsed;
-  display_url_ = net::FormatUrl(url, WideToUTF8(languages),
+  display_url_ = net::FormatUrl(url, languages,
       net::kFormatUrlOmitAll, UnescapeRule::SPACES, &parsed, &prefix_end_,
       NULL);
   if (sort_host_.length() > host_minus_www.length()) {
@@ -461,7 +461,7 @@ string16 SortedDisplayURL::AfterHost() const {
   return display_url_.substr(slash_index + sort_host_.length());
 }
 
-bool ElideString(const std::wstring& input, int max_len, std::wstring* output) {
+bool ElideString(const string16& input, int max_len, string16* output) {
   DCHECK_GE(max_len, 0);
   if (static_cast<int>(input.length()) <= max_len) {
     output->assign(input);
@@ -479,17 +479,17 @@ bool ElideString(const std::wstring& input, int max_len, std::wstring* output) {
       output->assign(input.substr(0, 2));
       break;
     case 3:
-      output->assign(input.substr(0, 1) + L"." +
+      output->assign(input.substr(0, 1) + ASCIIToUTF16(".") +
                      input.substr(input.length() - 1));
       break;
     case 4:
-      output->assign(input.substr(0, 1) + L".." +
+      output->assign(input.substr(0, 1) + ASCIIToUTF16("..") +
                      input.substr(input.length() - 1));
       break;
     default: {
       int rstr_len = (max_len - 3) / 2;
       int lstr_len = rstr_len + ((max_len - 3) % 2);
-      output->assign(input.substr(0, lstr_len) + L"..." +
+      output->assign(input.substr(0, lstr_len) + ASCIIToUTF16("...") +
                      input.substr(input.length() - rstr_len));
       break;
     }
@@ -507,11 +507,13 @@ namespace {
 // can be broken into smaller methods sharing this state.
 class RectangleString {
  public:
-  RectangleString(size_t max_rows, size_t max_cols, string16 *output)
+  RectangleString(size_t max_rows, size_t max_cols,
+                  bool strict, string16 *output)
       : max_rows_(max_rows),
         max_cols_(max_cols),
         current_row_(0),
         current_col_(0),
+        strict_(strict),
         suppressed_(false),
         output_(output) {}
 
@@ -542,10 +544,11 @@ class RectangleString {
   // have not been exceeded, advancing the current position.
   void Append(const string16& string);
 
-  // Add a newline to the output string if the rectangular boundaries
-  // have not been exceeded, resetting the current position to the
-  // beginning of the next line.
-  void NewLine();
+  // Set the current position to the beginning of the next line.  If
+  // |output| is true, add a newline to the output string if the rectangular
+  // boundaries have not been exceeded.  If |output| is false, we assume
+  // some other mechanism will (likely) do similar breaking after the fact.
+  void NewLine(bool output);
 
   // Maximum number of rows allowed in the output string.
   size_t max_rows_;
@@ -563,6 +566,9 @@ class RectangleString {
 
   // Current character position, should never exceed max_cols_.
   size_t current_col_;
+
+  // True when we do whitespace to newline conversions ourselves.
+  bool strict_;
 
   // True when some of the input has been truncated.
   bool suppressed_;
@@ -610,7 +616,7 @@ void RectangleString::AddWord(const string16& word) {
   if (word.length() < max_cols_) {
     // Word can be made to fit, no need to fragment it.
     if (current_col_ + word.length() >= max_cols_)
-      NewLine();
+      NewLine(strict_);
     Append(word);
   } else {
     // Word is so big that it must be fragmented.
@@ -621,7 +627,7 @@ void RectangleString::AddWord(const string16& word) {
       // When boundary is hit, add as much as will fit on this line.
       if (current_col_ + (chars.char_pos() - char_start) >= max_cols_) {
         Append(word.substr(array_start, chars.array_pos() - array_start));
-        NewLine();
+        NewLine(true);
         array_start = chars.array_pos();
         char_start = chars.char_pos();
       }
@@ -641,11 +647,13 @@ void RectangleString::Append(const string16& string) {
   current_col_ += string.length();
 }
 
-void RectangleString::NewLine() {
-  if (current_row_ < max_rows_)
-    output_->append(ASCIIToUTF16("\n"));
-  else
+void RectangleString::NewLine(bool output) {
+  if (current_row_ < max_rows_) {
+    if (output)
+      output_->append(ASCIIToUTF16("\n"));
+  } else {
     suppressed_ = true;
+  }
   ++current_row_;
   current_col_ = 0;
 }
@@ -655,8 +663,8 @@ void RectangleString::NewLine() {
 namespace ui {
 
 bool ElideRectangleString(const string16& input, size_t max_rows,
-                          size_t max_cols, string16* output) {
-  RectangleString rect(max_rows, max_cols, output);
+                          size_t max_cols, bool strict, string16* output) {
+  RectangleString rect(max_rows, max_cols, strict, output);
   rect.Init();
   rect.AddString(input);
   return rect.Finalize();

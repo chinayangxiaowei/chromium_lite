@@ -13,16 +13,16 @@
 
 #include <gtk/gtk.h>
 
-#include "base/scoped_ptr.h"
-#include "chrome/common/notification_observer.h"
-#include "chrome/common/notification_registrar.h"
+#include "base/memory/scoped_ptr.h"
+#include "content/common/notification_observer.h"
+#include "content/common/notification_registrar.h"
 #include "ui/base/gtk/gtk_signal.h"
 #include "ui/base/models/simple_menu_model.h"
 #include "ui/base/x/active_window_watcher_x.h"
 
 class BrowserWindowGtk;
 class CustomDrawButton;
-class GtkThemeProvider;
+class GtkThemeService;
 class MenuGtk;
 class PopupPageMenuModel;
 class TabContents;
@@ -63,7 +63,7 @@ class BrowserTitlebar : public NotificationObserver,
   // On Windows, right clicking in the titlebar background brings up the system
   // menu.  There's no such thing on linux, so we just show the menu items we
   // add to the menu.
-  void ShowContextMenu();
+  void ShowContextMenu(GdkEventButton* event);
 
  private:
   // A helper class to keep track of which frame of the throbber animation
@@ -231,7 +231,7 @@ class BrowserTitlebar : public NotificationObserver,
   Throbber throbber_;
 
   // Theme provider for building buttons.
-  GtkThemeProvider* theme_provider_;
+  GtkThemeService* theme_service_;
 
   NotificationRegistrar registrar_;
 };

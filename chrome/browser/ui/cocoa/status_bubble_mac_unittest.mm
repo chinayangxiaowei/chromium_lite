@@ -1,11 +1,11 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include <Cocoa/Cocoa.h>
 
-#include "base/scoped_nsobject.h"
-#include "base/scoped_ptr.h"
+#include "base/memory/scoped_nsobject.h"
+#include "base/memory/scoped_ptr.h"
 #include "base/utf_string_conversions.h"
 #import "chrome/browser/ui/cocoa/bubble_view.h"
 #import "chrome/browser/ui/cocoa/browser_test_helper.h"
@@ -90,7 +90,7 @@ class StatusBubbleMacTest : public CocoaTest {
     // minimal loss of coverage and without any heinous rearchitecting.
     bubble_->immediate_ = true;
 
-    EXPECT_FALSE(bubble_->window_);  // lazily creates window
+    EXPECT_TRUE(bubble_->window_);  // immediately creates window
   }
 
   virtual void TearDown() {
@@ -118,7 +118,7 @@ class StatusBubbleMacTest : public CocoaTest {
   NSWindow* GetWindow() {
     return bubble_->window_;
   }
-  NSWindow* GetParent() {
+  NSWindow* parent() {
     return bubble_->parent_;
   }
   StatusBubbleMac::StatusBubbleState GetState() {
@@ -446,9 +446,9 @@ TEST_F(StatusBubbleMacTest, Delete) {
 TEST_F(StatusBubbleMacTest, UpdateSizeAndPosition) {
   // Test |UpdateSizeAndPosition()| when status bubble does not exist (shouldn't
   // crash; shouldn't create window).
-  EXPECT_FALSE(GetWindow());
+  EXPECT_TRUE(GetWindow());
   bubble_->UpdateSizeAndPosition();
-  EXPECT_FALSE(GetWindow());
+  EXPECT_TRUE(GetWindow());
 
   // Create a status bubble (with contents) and call resize (without actually
   // resizing); the frame size shouldn't change.

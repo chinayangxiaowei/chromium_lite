@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -11,16 +11,22 @@
 
 #include "base/basictypes.h"
 #include "base/hash_tables.h"
-#include "base/ref_counted.h"
+#include "base/memory/ref_counted.h"
+#include "base/synchronization/lock.h"
 #include "chrome/browser/chromeos/login/user_image_loader.h"
-#include "chrome/common/notification_observer.h"
-#include "chrome/common/notification_registrar.h"
+#include "content/common/notification_observer.h"
+#include "content/common/notification_registrar.h"
 #include "third_party/skia/include/core/SkBitmap.h"
 
 class FilePath;
 class PrefService;
 
+namespace base {
+template<typename> struct DefaultLazyInstanceTraits;
+}
+
 namespace chromeos {
+class RemoveUserDelegate;
 
 // This class provides a mechanism for discovering users who have logged
 // into this chromium os device before and updating that list.
@@ -31,7 +37,7 @@ class UserManager : public UserImageLoader::Delegate,
   class User {
    public:
     User();
-    ~User() {}
+    ~User();
 
     // The email the user used to log in.
     void set_email(const std::string& email) { email_ = email; }
@@ -39,6 +45,10 @@ class UserManager : public UserImageLoader::Delegate,
 
     // Returns the name to display for this user.
     std::string GetDisplayName() const;
+
+    // Tooltip contains user's display name and his email domain to distinguish
+    // this user from the other one with the same display name.
+    std::string GetNameTooltip() const;
 
     // The image for this user.
     void set_image(const SkBitmap& image) { image_ = image; }
@@ -60,35 +70,52 @@ class UserManager : public UserImageLoader::Delegate,
   // It is sorted in order of recency, with most recent at the beginning.
   virtual std::vector<User> GetUsers() const;
 
-  // Indicates that user just started off the record session.
+  // Indicates that user just started incognito session.
   virtual void OffTheRecordUserLoggedIn();
 
   // Indicates that a user with the given email has just logged in.
   // The persistent list will be updated accordingly.
   virtual void UserLoggedIn(const std::string& email);
 
-  // Remove user from persistent list. NOTE: user's data won't be removed.
-  virtual void RemoveUser(const std::string& email);
+  // Removes the user from the device. Note, it will verify that the given user
+  // isn't the owner, so calling this method for the owner will take no effect.
+  // Note, |delegate| can be NULL.
+  virtual void RemoveUser(const std::string& email,
+                          RemoveUserDelegate* delegate);
+
+  // Removes the user from the persistent list only. Also removes the user's
+  // picture.
+  virtual void RemoveUserFromList(const std::string& email);
 
   // Returns true if given user has logged into the device before.
   virtual bool IsKnownUser(const std::string& email);
 
   // Returns the logged-in user.
-  virtual User logged_in_user() const {
-    return logged_in_user_;
-  }
+  virtual const User& logged_in_user() const;
 
   // Sets image for logged-in user and sends LOGIN_USER_IMAGE_CHANGED
   // notification about the image changed via NotificationService.
   void SetLoggedInUserImage(const SkBitmap& image);
 
+  // Tries to load logged-in user image from disk and sets it for the user.
+  void LoadLoggedInUserImage(const FilePath& path);
+
   // Saves image to file and saves image path in local state preferences.
   void SaveUserImage(const std::string& username,
                      const SkBitmap& image);
 
+  // Saves user image path for the user. Can be used to set default images.
+  void SaveUserImagePath(const std::string& username,
+                         const std::string& image_path);
+
+  // Returns the index of user's default image or -1 if the image is not
+  // default.
+  int GetUserDefaultImageIndex(const std::string& username);
+
   // chromeos::UserImageLoader::Delegate implementation.
   virtual void OnImageLoaded(const std::string& username,
-                             const SkBitmap& image);
+                             const SkBitmap& image,
+                             bool save_image);
 
   // NotificationObserver implementation.
   virtual void Observe(NotificationType type,
@@ -96,12 +123,8 @@ class UserManager : public UserImageLoader::Delegate,
                        const NotificationDetails& details);
 
   // Accessor for current_user_is_owner_
-  virtual bool current_user_is_owner() const {
-    return current_user_is_owner_;
-  }
-  virtual void set_current_user_is_owner(bool current_user_is_owner) {
-    current_user_is_owner_ = current_user_is_owner;
-  }
+  virtual bool current_user_is_owner() const;
+  virtual void set_current_user_is_owner(bool current_user_is_owner);
 
   // Accessor for current_user_is_new_.
   bool current_user_is_new() const {
@@ -109,6 +132,9 @@ class UserManager : public UserImageLoader::Delegate,
   }
 
   bool user_is_logged_in() const { return user_is_logged_in_; }
+
+  // Returns true if we're logged in as a Guest.
+  bool IsLoggedInAsGuest() const;
 
  protected:
   UserManager();
@@ -136,7 +162,9 @@ class UserManager : public UserImageLoader::Delegate,
   User logged_in_user_;
 
   // Cached flag of whether currently logged-in user is owner or not.
+  // May be accessed on different threads, requires locking.
   bool current_user_is_owner_;
+  mutable base::Lock current_user_is_owner_lock_;
 
   // Cached flag of whether the currently logged-in user existed before this
   // login.
@@ -147,8 +175,12 @@ class UserManager : public UserImageLoader::Delegate,
 
   NotificationRegistrar registrar_;
 
+  friend struct base::DefaultLazyInstanceTraits<UserManager>;
+
   DISALLOW_COPY_AND_ASSIGN(UserManager);
 };
+
+typedef std::vector<UserManager::User> UserVector;
 
 }  // namespace chromeos
 

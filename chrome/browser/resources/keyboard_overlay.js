@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,14 +6,14 @@ var BASE_KEYBOARD = {
   top: 0,
   left: 0,
   width: 1237,
-  height: 468
+  height: 514
 };
 
 var BASE_INSTRUCTIONS = {
-  top: 174,
+  top: 194,
   left: 370,
   width: 498,
-  height: 81
+  height: 112
 };
 
 var LABEL_TO_KEY_TEXT = {
@@ -32,12 +32,15 @@ var LABEL_TO_KEY_TEXT = {
   glyph_brightness_up: 'bright up',
   glyph_enter: 'enter',
   glyph_forward: 'forward',
-  glyph_fullscreen: 'fullscreen',
-  glyph_overview: 'windows',
+  glyph_fullscreen: 'full screen',
+  glyph_ime: 'ime',
+  glyph_lock: 'lock',
+  glyph_overview: 'switch window',
   glyph_power: 'power',
-  glyph_reload: 'reload',
+  glyph_right: 'right',
   glyph_reload: 'reload',
   glyph_search: 'search',
+  glyph_shift: 'shift',
   glyph_tab: 'tab',
   glyph_tools: 'tools',
   glyph_volume_down: 'vol. down',
@@ -117,17 +120,27 @@ function getModifiers(e) {
   if (!e) {
     return [];
   }
-  var modifiers = [];
-  if (e.keyCode == 16 || e.shiftKey) {
-    modifiers.push('SHIFT');
+  var isKeyDown = (e.type == 'keydown');
+  var keyCodeToModifier = {
+    16: 'SHIFT',
+    17: 'CTRL',
+    18: 'ALT',
+    91: 'ALT', // left ALT pressed with SHIFT
+    92: 'ALT', // right ALT pressed with SHIFT
+  };
+  var modifierWithKeyCode = keyCodeToModifier[e.keyCode];
+  var isPressed = {'SHIFT': e.shiftKey, 'CTRL': e.ctrlKey, 'ALT': e.altKey};
+  // if e.keyCode is one of Shift, Ctrl and Alt, isPressed should
+  // be changed because the key currently pressed
+  // does not affect the values of e.shiftKey, e.ctrlKey and e.altKey
+  if(modifierWithKeyCode){
+    isPressed[modifierWithKeyCode] = isKeyDown;
   }
-  if (e.keyCode == 17 || e.ctrlKey) {
-    modifiers.push('CTRL');
-  }
-  if (e.keyCode == 18 || e.altKey) {
-    modifiers.push('ALT');
-  }
-  return modifiers.sort();
+  // make the result array
+  return ['SHIFT', 'CTRL', 'ALT'].filter(
+      function(modifier) {
+        return isPressed[modifier];
+      }).sort();
 }
 
 /**
@@ -218,9 +231,24 @@ function getKeyLabel(keyData, modifiers) {
 
 /**
  * Returns a normalized string used for a key of shortcutData.
+ *
+ * Examples:
+ *   keycode: 'd', modifiers: ['CTRL', 'SHIFT'] => 'd<>CTRL<>SHIFT'
+ *   keycode: 'alt', modifiers: ['ALT', 'SHIFT'] => 'ALT<>SHIFT'
  */
 function getAction(keycode, modifiers) {
-  return [keycode].concat(modifiers).join(' ');
+  const SEPARATOR = '<>';
+  if (keycode.toUpperCase() in MODIFIER_TO_CLASS) {
+    keycode = keycode.toUpperCase();
+    if (keycode in modifiers) {
+      return modifiers.join(SEPARATOR);
+    } else {
+      var action = [keycode].concat(modifiers)
+      action.sort();
+      return action.join(SEPARATOR);
+    }
+  }
+  return [keycode].concat(modifiers).join(SEPARATOR);
 }
 
 /**
@@ -247,8 +275,7 @@ function getKeyTextValue(keyData) {
 /**
  * Updates the whole keyboard.
  */
-function update(e) {
-  var modifiers = getModifiers(e);
+function update(modifiers) {
   var instructions = document.getElementById('instructions');
   if (modifiers.length == 0) {
     instructions.style.visibility = 'visible';
@@ -304,23 +331,14 @@ function update(e) {
 }
 
 /**
- * A callback furnction for the onkeydown event.
+ * A callback function for onkeydown and onkeyup events.
  */
-function keydown(e) {
+function handleKeyEvent(e){
+  var modifiers = getModifiers(e);
   if (!getKeyboardOverlayId()) {
     return;
   }
-  update(e);
-}
-
-/**
- * A callback furnction for the onkeyup event.
- */
-function keyup(e) {
-  if (!getKeyboardOverlayId()) {
-    return;
-  }
-  update();
+  update(modifiers);
 }
 
 /**
@@ -377,8 +395,7 @@ function initLayout() {
   keyboard.style.width = (width + 2 * (minX + 1)) + 'px';
   keyboard.style.height = (height + 2 * (minY + 1)) + 'px';
 
-  var instructions = document.createElement('instructions');
-  instructions = document.createElement('div');
+  var instructions = document.createElement('div');
   instructions.id = 'instructions';
   instructions.className = 'keyboard-overlay-instructions';
   instructions.style.left = ((BASE_INSTRUCTIONS.left - BASE_KEYBOARD.left) *
@@ -390,11 +407,16 @@ function initLayout() {
   instructions.style.height = (height * BASE_INSTRUCTIONS.height /
                                BASE_KEYBOARD.height) + 'px';
 
-  var instructionsText = document.createElement('span');
+  var instructionsText = document.createElement('div');
   instructionsText.id = 'instructions-text';
   instructionsText.className = 'keyboard-overlay-instructions-text';
   instructionsText.innerHTML = templateData.keyboardOverlayInstructions;
   instructions.appendChild(instructionsText);
+  var instructionsHideText = document.createElement('div');
+  instructionsHideText.id = 'instructions-hide-text';
+  instructionsHideText.className = 'keyboard-overlay-instructions-hide-text';
+  instructionsHideText.innerHTML = templateData.keyboardOverlayInstructionsHide;
+  instructions.appendChild(instructionsHideText);
   keyboard.appendChild(instructions);
 }
 
@@ -402,8 +424,8 @@ function initLayout() {
  * A callback function for the onload event of the body element.
  */
 function init() {
-  document.addEventListener('keydown', keydown);
-  document.addEventListener('keyup', keyup);
+  document.addEventListener('keydown', handleKeyEvent);
+  document.addEventListener('keyup', handleKeyEvent);
   chrome.send('getKeyboardOverlayId');
 }
 
@@ -412,7 +434,12 @@ function init() {
  * Called after sending the 'getKeyboardOverlayId' message.
  */
 function initKeyboardOverlayId(overlayId) {
-  keyboardOverlayId = overlayId;
+  // Libcros returns an empty string when it cannot find the keyboard overlay ID
+  // corresponding to the current input method.
+  // In such a case, fallback to the default ID (en_US).
+  if (overlayId) {
+    keyboardOverlayId = overlayId;
+  }
   while(document.body.firstChild) {
     document.body.removeChild(document.body.firstChild);
   }

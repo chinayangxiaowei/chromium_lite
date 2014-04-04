@@ -1,10 +1,10 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #import <Cocoa/Cocoa.h>
 
-#include "base/scoped_ptr.h"
+#include "base/memory/scoped_ptr.h"
 #import "chrome/browser/ui/cocoa/chrome_event_processing_window.h"
 
 class AppNotificationBridge;
@@ -22,11 +22,11 @@ class AppNotificationBridge;
   scoped_ptr<AppNotificationBridge> notificationBridge_;
 }
 
+@property(nonatomic) BOOL delayOnClose;
+
 // Returns YES if the window is in the process of closing.
 // Can't use "windowWillClose" notification because that will be sent
 // after the closing animation has completed.
 - (BOOL)isClosing;
-
-@property (nonatomic) BOOL delayOnClose;
 
 @end

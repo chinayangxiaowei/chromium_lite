@@ -16,7 +16,7 @@
 using ::testing::NiceMock;
 using ::testing::StrictMock;
 
-namespace {
+namespace media {
 
 class ReadCallbackHandler {
  public:
@@ -27,10 +27,6 @@ class ReadCallbackHandler {
  private:
   DISALLOW_COPY_AND_ASSIGN(ReadCallbackHandler);
 };
-
-}  // namespace
-
-namespace media {
 
 // Returns a path to the test file which contains the string "0123456789"
 // without the quotes or any trailing space or null termination.  The file lives
@@ -60,7 +56,7 @@ TEST(FileDataSourceTest, OpenFile) {
 
   scoped_refptr<FileDataSource> filter(new FileDataSource());
   filter->set_host(&host);
-  filter->Initialize(TestFileURL(), NewExpectedCallback());
+  EXPECT_EQ(PIPELINE_OK, filter->Initialize(TestFileURL()));
 
   filter->Stop(NewExpectedCallback());
 }
@@ -75,7 +71,7 @@ TEST(FileDataSourceTest, ReadData) {
   scoped_refptr<FileDataSource> filter(new FileDataSource());
 
   filter->set_host(&host);
-  filter->Initialize(TestFileURL(), NewExpectedCallback());
+  EXPECT_EQ(PIPELINE_OK, filter->Initialize(TestFileURL()));
 
   EXPECT_TRUE(filter->GetSize(&size));
   EXPECT_EQ(10, size);

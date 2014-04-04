@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,9 +8,13 @@
 
 // TODO(avi): remove when not needed
 #include "base/utf_string_conversions.h"
-#include "gfx/font.h"
+#include "ui/gfx/font.h"
 #include "views/controls/button/button.h"
 #include "views/controls/button/native_button_wrapper.h"
+
+#if defined(TOUCH_UI)
+#include "views/controls/button/text_button.h"
+#endif
 
 namespace gfx {
 class Font;
@@ -18,14 +22,14 @@ class Font;
 
 namespace views {
 
-class NativeButton : public Button {
+class NativeButtonBase : public Button {
  public:
   // The button's class name.
   static const char kViewClassName[];
 
-  explicit NativeButton(ButtonListener* listener);
-  NativeButton(ButtonListener* listener, const std::wstring& label);
-  virtual ~NativeButton();
+  explicit NativeButtonBase(ButtonListener* listener);
+  NativeButtonBase(ButtonListener* listener, const std::wstring& label);
+  virtual ~NativeButtonBase();
 
   // Sets/Gets the text to be used as the button's label.
   virtual void SetLabel(const std::wstring& label);
@@ -52,16 +56,17 @@ class NativeButton : public Button {
   void ButtonPressed();
 
   // Overridden from View:
-  virtual gfx::Size GetPreferredSize();
-  virtual void Layout();
-  virtual void SetEnabled(bool flag);
-  virtual void Focus();
-  virtual void PaintFocusBorder(gfx::Canvas* canvas);
+  virtual gfx::Size GetPreferredSize() OVERRIDE;
+  virtual void Layout() OVERRIDE;
+  virtual void SetEnabled(bool flag) OVERRIDE;
+  virtual void OnFocus() OVERRIDE;
+  virtual void OnPaintFocusBorder(gfx::Canvas* canvas) OVERRIDE;
 
  protected:
-  virtual void ViewHierarchyChanged(bool is_add, View* parent, View* child);
-  virtual std::string GetClassName() const;
-  virtual bool AcceleratorPressed(const Accelerator& accelerator);
+  virtual void ViewHierarchyChanged(bool is_add, View* parent,
+                                    View* child) OVERRIDE;
+  virtual std::string GetClassName() const OVERRIDE;
+  virtual bool AcceleratorPressed(const Accelerator& accelerator) OVERRIDE;
 
   // Create the button wrapper and returns it. Ownership of the returned
   // value is passed to the caller.
@@ -95,8 +100,40 @@ class NativeButton : public Button {
   // is false. Set to true to create narrower buttons.
   bool ignore_minimum_size_;
 
+  DISALLOW_COPY_AND_ASSIGN(NativeButtonBase);
+};
+
+#if defined(TOUCH_UI)
+// TODO(saintlou): this maps NativeButton to TextButton in the touch case
+class NativeButton : public TextButton {
+ public:
+  NativeButton(ButtonListener* listener, const std::wstring& label);
+  void SetLabel(const std::wstring& label);
+  void set_font(const gfx::Font& font);
+  void SetIsDefault(bool default_button);
+  bool is_default() const;
+  void set_ignore_minimum_size(bool);
+
+ private:
+  // True if the button is the default button in its context.
+  bool is_default_;
+
   DISALLOW_COPY_AND_ASSIGN(NativeButton);
 };
+#else
+// TODO(saintlou): Windows and Clang do not like typedef, it
+// chokes in other modules that have a forward declaration for
+// NativeButton
+class NativeButton : public NativeButtonBase {
+ public:
+  explicit NativeButton(ButtonListener* listener);
+  NativeButton(ButtonListener* listener, const std::wstring& label);
+  virtual ~NativeButton();
+
+ private:
+  DISALLOW_COPY_AND_ASSIGN(NativeButton);
+};
+#endif
 
 }  // namespace views
 

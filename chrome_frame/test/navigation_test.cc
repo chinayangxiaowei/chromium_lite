@@ -1,11 +1,11 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include <string>
 
-#include "base/scoped_comptr_win.h"
 #include "base/test/test_file_util.h"
+#include "base/win/scoped_comptr.h"
 #include "base/win/windows_version.h"
 #include "chrome_frame/test/chrome_frame_test_utils.h"
 #include "chrome_frame/test/chrome_frame_ui_test_utils.h"
@@ -277,7 +277,7 @@ TEST_P(FullTabNavigationTest, BackForwardAnchor) {
 // dialog appears.
 TEST_P(FullTabNavigationTest, RestrictedSite) {
   // Add the server to restricted sites zone.
-  ScopedComPtr<IInternetSecurityManager> security_manager;
+  base::win::ScopedComPtr<IInternetSecurityManager> security_manager;
   HRESULT hr = security_manager.CreateInstance(CLSID_InternetSecurityManager);
   ASSERT_HRESULT_SUCCEEDED(hr);
   hr = security_manager->SetZoneMapping(URLZONE_UNTRUSTED,
@@ -829,7 +829,7 @@ TEST_F(FullTabDownloadTest, CF_DownloadFileFromPost) {
                               testing::Field(&VARIANT::bstrVal,
                               StrEq(tgt_url)), _, _, _, _, _));
   EXPECT_CALL(download_window_mock, OnLoad(false, _));
-  EXPECT_CALL(download_window_mock, OnQuit());
+  EXPECT_CALL(download_window_mock, OnQuit()).Times(testing::AtMost(1));
 
   FilePath temp_file_path;
   ASSERT_TRUE(file_util::CreateTemporaryFile(&temp_file_path));
@@ -856,7 +856,8 @@ TEST_F(FullTabDownloadTest, CF_DownloadFileFromPost) {
             testing::InvokeWithoutArgs(
                 testing::CreateFunctor(CloseWindow, &owner_window)),
             CloseBrowserMock(&ie_mock_)));
-  LaunchIENavigateAndLoop(src_url, kChromeFrameLongNavigationTimeoutInSeconds);
+  LaunchIENavigateAndLoop(src_url,
+                          kChromeFrameVeryLongNavigationTimeoutInSeconds);
 
   std::string data;
   EXPECT_TRUE(file_util::ReadFileToString(temp_file_path, &data));
@@ -958,13 +959,14 @@ TEST_P(FullTabNavigationTest, RefreshContents) {
                                 _, _, _, _, _));
   EXPECT_CALL(ie_mock_,
               OnNavigateComplete2(_, testing::Field(&VARIANT::bstrVal,
-                                                    StrEq(src_url))))
-      .WillOnce(DelayRefresh(&ie_mock_, &loop_, 2000));
-
+                                                    StrEq(src_url))));
   EXPECT_CALL(ie_mock_, OnLoad(in_cf, StrEq(src_url)))
-      .Times(2);
+      .Times(2)
+      .WillOnce(DelayRefresh(&ie_mock_, &loop_, 50))
+      .WillOnce(testing::Return());
 
-  LaunchIEAndNavigate(src_url);
+  LaunchIENavigateAndLoop(src_url,
+                          kChromeFrameVeryLongNavigationTimeoutInSeconds);
 }
 
 class FullTabSeleniumTest
@@ -1098,7 +1100,9 @@ TEST_F(FullTabDownloadTest, TopLevelPostReissueFromChromeFramePage) {
   EXPECT_CALL(ie_mock_, OnLoad(false, StrEq(src_url)));
 
   EXPECT_CALL(ie_mock_, OnLoad(true, StrEq(tgt_url)))
-      .Times(2);
+      .Times(testing::Between(1,2))
+      .WillOnce(DelayRefresh(&ie_mock_, &loop_, 50))
+      .WillOnce(testing::Return());
 
   EXPECT_CALL(ie_mock_, OnBeforeNavigate2(_,
                               testing::Field(&VARIANT::bstrVal,
@@ -1109,11 +1113,11 @@ TEST_F(FullTabDownloadTest, TopLevelPostReissueFromChromeFramePage) {
                               testing::Field(&VARIANT::bstrVal,
                               StrEq(tgt_url))))
       .Times(2)
-      .WillOnce(testing::DoAll(DelayRefresh(&ie_mock_, &loop_, 2000),
-                DelayCloseBrowserMock(&loop_, 4000, &ie_mock_)))
+      .WillOnce(DelayCloseBrowserMock(&loop_, 4000, &ie_mock_))
       .WillOnce(testing::Return());
 
-  LaunchIENavigateAndLoop(src_url, kChromeFrameLongNavigationTimeoutInSeconds);
+  LaunchIENavigateAndLoop(src_url,
+                          kChromeFrameVeryLongNavigationTimeoutInSeconds);
 }
 
 MATCHER_P(UserAgentHeaderMatcher, ua_string, "") {
@@ -1174,13 +1178,14 @@ TEST_P(FullTabNavigationTest, RefreshContentsUATest) {
                                 _, _, _, _, _));
   EXPECT_CALL(ie_mock_,
               OnNavigateComplete2(_, testing::Field(&VARIANT::bstrVal,
-                                                    StrEq(src_url))))
-      .WillOnce(DelayRefresh(&ie_mock_, &loop_, 2000));
-
+                                                    StrEq(src_url))));
   EXPECT_CALL(ie_mock_, OnLoad(in_cf, StrEq(src_url)))
-      .Times(testing::AtMost(2));
+      .Times(testing::Between(1, 2))
+      .WillOnce(DelayRefresh(&ie_mock_, &loop_, 50))
+      .WillOnce(testing::Return());
 
-  LaunchIEAndNavigate(src_url);
+  LaunchIENavigateAndLoop(src_url,
+                          kChromeFrameVeryLongNavigationTimeoutInSeconds);
 }
 
 // Link navigations in the same domain specified with the noreferrer flag

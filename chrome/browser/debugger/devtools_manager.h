@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,10 +9,11 @@
 #include <map>
 #include <string>
 
-#include "base/ref_counted.h"
+#include "base/memory/ref_counted.h"
 #include "chrome/browser/debugger/devtools_client_host.h"
 #include "chrome/browser/debugger/devtools_toggle_action.h"
-#include "chrome/common/devtools_messages.h"
+#include "content/common/notification_observer.h"
+#include "content/common/notification_registrar.h"
 #include "webkit/glue/resource_loader_bridge.h"
 
 namespace IPC {
@@ -24,11 +25,16 @@ class GURL;
 class IOThread;
 class PrefService;
 class RenderViewHost;
+class TabContentsWraper;
+
 using webkit_glue::ResourceLoaderBridge;
+
+typedef std::map<std::string, std::string> DevToolsRuntimeProperties;
 
 // This class is a singleton that manages DevToolsClientHost instances and
 // routes messages between developer tools clients and agents.
 class DevToolsManager : public DevToolsClientHost::CloseListener,
+                        public NotificationObserver,
                         public base::RefCounted<DevToolsManager> {
  public:
   static DevToolsManager* GetInstance();
@@ -77,6 +83,10 @@ class DevToolsManager : public DevToolsClientHost::CloseListener,
                                   RenderViewHost* dest_rvh,
                                   const GURL& gurl);
 
+  // Invoked when a tab is replaced by another tab. This is triggered by
+  // TabStripModel::ReplaceTabContentsAt.
+  void TabReplaced(TabContentsWrapper* old_tab, TabContentsWrapper* new_tab);
+
   // Detaches client host and returns cookie that can be used in
   // AttachClientHost.
   int DetachClientHost(RenderViewHost* from_rvh);
@@ -98,6 +108,11 @@ class DevToolsManager : public DevToolsClientHost::CloseListener,
   // DevToolsClientHost and unregister all listeners related to the
   // DevToolsClientHost.
   virtual void ClientHostClosing(DevToolsClientHost* host);
+
+  // Overridden from NotificationObserver:
+  virtual void Observe(NotificationType type,
+                       const NotificationSource& source,
+                       const NotificationDetails& details);
 
   // Returns RenderViewHost for the tab that is inspected by devtools
   // client hosted by DevToolsClientHost.
@@ -124,10 +139,8 @@ class DevToolsManager : public DevToolsClientHost::CloseListener,
                         DevToolsClientHost* client_host);
 
   // These two maps are for tracking dependencies between inspected tabs and
-  // their DevToolsClientHosts. They are usful for routing devtools messages
-  // and allow us to have at most one devtools client host per tab. We use
-  // NavigationController* as key because it survives crosee-site navigation in
-  // cases when tab contents may change.
+  // their DevToolsClientHosts. They are useful for routing devtools messages
+  // and allow us to have at most one devtools client host per tab.
   //
   // DevToolsManager start listening to DevToolsClientHosts when they are put
   // into these maps and removes them when they are closing.
@@ -151,6 +164,8 @@ class DevToolsManager : public DevToolsClientHost::CloseListener,
       OrphanClientHosts;
   OrphanClientHosts orphan_client_hosts_;
   int last_orphan_cookie_;
+
+  NotificationRegistrar registrar_;
 
   DISALLOW_COPY_AND_ASSIGN(DevToolsManager);
 };

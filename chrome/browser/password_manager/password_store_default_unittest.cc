@@ -1,26 +1,27 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "base/basictypes.h"
+#include "base/memory/scoped_temp_dir.h"
 #include "base/stl_util-inl.h"
 #include "base/string_util.h"
-#include "base/scoped_temp_dir.h"
 #include "base/time.h"
 #include "base/utf_string_conversions.h"
 #include "base/synchronization/waitable_event.h"
 #include "chrome/browser/password_manager/password_store_change.h"
+#include "chrome/browser/password_manager/password_store_consumer.h"
 #include "chrome/browser/password_manager/password_store_default.h"
 #include "chrome/browser/password_manager/password_form_data.h"
 #include "chrome/browser/prefs/pref_service.h"
 #include "chrome/browser/webdata/web_data_service.h"
-#include "chrome/common/notification_details.h"
-#include "chrome/common/notification_observer_mock.h"
-#include "chrome/common/notification_registrar.h"
-#include "chrome/common/notification_source.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/test/signaling_task.h"
 #include "chrome/test/testing_profile.h"
+#include "content/common/notification_details.h"
+#include "content/common/notification_observer_mock.h"
+#include "content/common/notification_registrar.h"
+#include "content/common/notification_source.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
@@ -38,7 +39,8 @@ namespace {
 class MockPasswordStoreConsumer : public PasswordStoreConsumer {
  public:
   MOCK_METHOD2(OnPasswordStoreRequestDone,
-               void(int, const std::vector<webkit_glue::PasswordForm*>&));
+               void(CancelableRequestProvider::Handle,
+                    const std::vector<webkit_glue::PasswordForm*>&));
 };
 
 class MockWebDataServiceConsumer : public WebDataServiceConsumer {
@@ -283,7 +285,7 @@ TEST_F(PasswordStoreDefaultTest, Migration) {
   done.Wait();
 
   // Initializing the PasswordStore should trigger a migration.
-  scoped_refptr<PasswordStoreDefault> store(
+  scoped_refptr<PasswordStore> store(
       new PasswordStoreDefault(login_db_.release(),
           profile_.get(), wds_.get()));
   store->Init();
@@ -362,6 +364,8 @@ TEST_F(PasswordStoreDefaultTest, Migration) {
 
   STLDeleteElements(&expected_autofillable);
   STLDeleteElements(&expected_blacklisted);
+
+  store->Shutdown();
 }
 
 TEST_F(PasswordStoreDefaultTest, MigrationAlreadyDone) {
@@ -398,7 +402,7 @@ TEST_F(PasswordStoreDefaultTest, MigrationAlreadyDone) {
                                             true);
 
   // Initializing the PasswordStore shouldn't trigger a migration.
-  scoped_refptr<PasswordStoreDefault> store(
+  scoped_refptr<PasswordStore> store(
       new PasswordStoreDefault(login_db_.release(), profile_.get(),
                                wds_.get()));
   store->Init();
@@ -419,6 +423,8 @@ TEST_F(PasswordStoreDefaultTest, MigrationAlreadyDone) {
   MessageLoop::current()->Run();
 
   STLDeleteElements(&unexpected_autofillable);
+
+  store->Shutdown();
 }
 
 TEST_F(PasswordStoreDefaultTest, Notifications) {
@@ -427,7 +433,7 @@ TEST_F(PasswordStoreDefaultTest, Notifications) {
                                             true);
 
   // Initializing the PasswordStore shouldn't trigger a migration.
-  scoped_refptr<PasswordStoreDefault> store(
+  scoped_refptr<PasswordStore> store(
       new PasswordStoreDefault(login_db_.release(), profile_.get(),
                                wds_.get()));
   store->Init();
@@ -509,4 +515,6 @@ TEST_F(PasswordStoreDefaultTest, Notifications) {
   BrowserThread::PostTask(BrowserThread::DB, FROM_HERE,
       new SignalingTask(&done));
   done.Wait();
+
+  store->Shutdown();
 }

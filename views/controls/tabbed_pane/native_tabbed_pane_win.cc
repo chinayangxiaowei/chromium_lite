@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,15 +8,17 @@
 
 #include "base/logging.h"
 #include "base/stl_util-inl.h"
-#include "gfx/canvas_skia.h"
-#include "gfx/font.h"
-#include "gfx/native_theme_win.h"
 #include "ui/base/l10n/l10n_util_win.h"
 #include "ui/base/resource/resource_bundle.h"
+#include "ui/base/win/hwnd_util.h"
+#include "ui/gfx/canvas_skia.h"
+#include "ui/gfx/font.h"
+#include "ui/gfx/native_theme_win.h"
 #include "views/controls/tabbed_pane/tabbed_pane.h"
-#include "views/fill_layout.h"
+#include "views/controls/tabbed_pane/tabbed_pane_listener.h"
+#include "views/layout/fill_layout.h"
 #include "views/widget/root_view.h"
-#include "views/widget/widget_win.h"
+#include "views/widget/widget.h"
 
 namespace views {
 
@@ -28,8 +30,8 @@ class TabBackground : public Background {
     // TMT_FILLCOLORHINT returns a color value that supposedly
     // approximates the texture drawn by PaintTabPanelBackground.
     SkColor tab_page_color =
-        gfx::NativeTheme::instance()->GetThemeColorWithDefault(
-            gfx::NativeTheme::TAB, TABP_BODY, 0, TMT_FILLCOLORHINT,
+        gfx::NativeThemeWin::instance()->GetThemeColorWithDefault(
+            gfx::NativeThemeWin::TAB, TABP_BODY, 0, TMT_FILLCOLORHINT,
             COLOR_3DFACE);
     SetNativeControlColor(tab_page_color);
   }
@@ -38,7 +40,7 @@ class TabBackground : public Background {
   virtual void Paint(gfx::Canvas* canvas, View* view) const {
     HDC dc = canvas->BeginPlatformPaint();
     RECT r = {0, 0, view->width(), view->height()};
-    gfx::NativeTheme::instance()->PaintTabPanelBackground(dc, &r);
+    gfx::NativeThemeWin::instance()->PaintTabPanelBackground(dc, &r);
     canvas->EndPlatformPaint();
   }
 
@@ -53,38 +55,38 @@ class TabLayout : public LayoutManager {
 
   // Switches to the tab page identified by the given index.
   void SwitchToPage(View* host, View* page) {
-    for (int i = 0; i < host->GetChildViewCount(); ++i) {
+    for (int i = 0; i < host->child_count(); ++i) {
       View* child = host->GetChildViewAt(i);
       // The child might not have been laid out yet.
       if (child == page)
-        child->SetBounds(gfx::Rect(host->size()));
+        child->SetBoundsRect(host->GetContentsBounds());
       child->SetVisible(child == page);
     }
 
     FocusManager* focus_manager = page->GetFocusManager();
     DCHECK(focus_manager);
     View* focused_view = focus_manager->GetFocusedView();
-    if (focused_view && host->IsParentOf(focused_view) &&
-        !page->IsParentOf(focused_view))
+    if (focused_view && host->Contains(focused_view) &&
+        !page->Contains(focused_view))
       focus_manager->SetFocusedView(page);
   }
 
  private:
   // LayoutManager overrides:
   virtual void Layout(View* host) {
-    gfx::Rect bounds(host->size());
-    for (int i = 0; i < host->GetChildViewCount(); ++i) {
+    gfx::Rect bounds(host->GetContentsBounds());
+    for (int i = 0; i < host->child_count(); ++i) {
       View* child = host->GetChildViewAt(i);
       // We only layout visible children, since it may be expensive.
       if (child->IsVisible() && child->bounds() != bounds)
-        child->SetBounds(bounds);
+        child->SetBoundsRect(bounds);
     }
   }
 
   virtual gfx::Size GetPreferredSize(View* host) {
     // First, query the preferred sizes to determine a good width.
     int width = 0;
-    for (int i = 0; i < host->GetChildViewCount(); ++i) {
+    for (int i = 0; i < host->child_count(); ++i) {
       View* page = host->GetChildViewAt(i);
       width = std::max(width, page->GetPreferredSize().width());
     }
@@ -94,7 +96,7 @@ class TabLayout : public LayoutManager {
 
   virtual int GetPreferredHeightForWidth(View* host, int width) {
     int height = 0;
-    for (int i = 0; i < host->GetChildViewCount(); ++i) {
+    for (int i = 0; i < host->child_count(); ++i) {
       View* page = host->GetChildViewAt(i);
       height = std::max(height, page->GetHeightForWidth(width));
     }
@@ -235,7 +237,7 @@ View* NativeTabbedPaneWin::GetView() {
 
 void NativeTabbedPaneWin::SetFocus() {
   // Focus the associated HWND.
-  Focus();
+  OnFocus();
 }
 
 gfx::Size NativeTabbedPaneWin::GetPreferredSize() {
@@ -282,13 +284,15 @@ void NativeTabbedPaneWin::CreateNativeControl() {
                                       0, 0, width(), height(),
                                       GetWidget()->GetNativeView(), NULL, NULL,
                                       NULL);
+  ui::CheckWindowCreated(tab_control);
 
   HFONT font = ResourceBundle::GetSharedInstance().
       GetFont(ResourceBundle::BaseFont).GetNativeFont();
   SendMessage(tab_control, WM_SETFONT, reinterpret_cast<WPARAM>(font), FALSE);
 
   // Create the view container which is a child of the TabControl.
-  content_window_ = new WidgetWin();
+  content_window_ = Widget::CreateWidget(
+      Widget::CreateParams(Widget::CreateParams::TYPE_CONTROL));
   content_window_->Init(tab_control, gfx::Rect());
 
   // Explicitly setting the WS_EX_LAYOUTRTL property for the HWND (see above
@@ -310,7 +314,7 @@ void NativeTabbedPaneWin::CreateNativeControl() {
   NativeControlCreated(tab_control);
 
   // Add tabs that are already added if any.
-  if (tab_views_.size() > 0) {
+  if (!tab_views_.empty()) {
     InitializeTabs();
     if (selected_index_ >= 0)
       DoSelectTabAt(selected_index_, false);
@@ -353,7 +357,8 @@ void NativeTabbedPaneWin::ViewHierarchyChanged(bool is_add,
   if (is_add && (child == this) && content_window_) {
     // We have been added to a view hierarchy, update the FocusTraversable
     // parent.
-    content_window_->SetFocusTraversableParent(GetRootView());
+    content_window_->SetFocusTraversableParent(
+        GetWidget()->GetFocusTraversable());
   }
 }
 
@@ -381,13 +386,11 @@ void NativeTabbedPaneWin::DoSelectTabAt(int index, boolean invoke_listener) {
 }
 
 void NativeTabbedPaneWin::ResizeContents() {
-  CRect content_bounds;
+  RECT content_bounds;
   if (!GetClientRect(native_view(), &content_bounds))
     return;
   TabCtrl_AdjustRect(native_view(), FALSE, &content_bounds);
-  content_window_->MoveWindow(content_bounds.left, content_bounds.top,
-                              content_bounds.Width(), content_bounds.Height(),
-                              TRUE);
+  content_window_->SetBounds(gfx::Rect(content_bounds));
 }
 
 ////////////////////////////////////////////////////////////////////////////////

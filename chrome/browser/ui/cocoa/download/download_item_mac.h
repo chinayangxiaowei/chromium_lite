@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,15 +8,19 @@
 
 #import <Cocoa/Cocoa.h>
 
-#include "base/scoped_nsobject.h"
-#include "base/scoped_ptr.h"
-#include "chrome/browser/cancelable_request.h"
+#include "base/memory/scoped_nsobject.h"
+#include "base/memory/scoped_ptr.h"
 #include "chrome/browser/download/download_item.h"
 #include "chrome/browser/download/download_manager.h"
 #include "chrome/browser/icon_manager.h"
+#include "content/browser/cancelable_request.h"
 
 class BaseDownloadItemModel;
 @class DownloadItemController;
+
+namespace gfx{
+class Image;
+}
 
 // A class that bridges the visible mac download items to chromium's download
 // model. The owning object (DownloadItemController) must explicitly call
@@ -34,7 +38,6 @@ class DownloadItemMac : DownloadItem::Observer {
   // DownloadItem::Observer implementation
   virtual void OnDownloadUpdated(DownloadItem* download);
   virtual void OnDownloadOpened(DownloadItem* download);
-  virtual void OnDownloadFileCompleted(DownloadItem* download) { }
 
   BaseDownloadItemModel* download_model() { return download_model_.get(); }
 
@@ -43,7 +46,8 @@ class DownloadItemMac : DownloadItem::Observer {
 
  private:
   // Callback for asynchronous icon loading.
-  void OnExtractIconComplete(IconManager::Handle handle, SkBitmap* icon_bitmap);
+  void OnExtractIconComplete(IconManager::Handle handle,
+                             gfx::Image* icon_bitmap);
 
   // The download item model we represent.
   scoped_ptr<BaseDownloadItemModel> download_model_;

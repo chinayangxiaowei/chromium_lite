@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,14 +8,16 @@
 
 #include <vector>
 
-#include "base/scoped_ptr.h"
+#include "base/memory/scoped_ptr.h"
 #include "base/string16.h"
 #include "base/task.h"
 
 namespace gfx {
+class Canvas;
 class Rect;
 }
 class SkBitmap;
+class SkCanvas;
 class TabContents;
 
 // SpeechInputBubble displays a popup info bubble during speech recognition,
@@ -77,6 +79,10 @@ class SpeechInputBubble {
 
   virtual ~SpeechInputBubble() {}
 
+  // Indicates to the user that audio hardware is initializing. If the bubble is
+  // hidden, |Show| must be called to make it appear on screen.
+  virtual void SetWarmUpMode() = 0;
+
   // Indicates to the user that audio recording is in progress. If the bubble is
   // hidden, |Show| must be called to make it appear on screen.
   virtual void SetRecordingMode() = 0;
@@ -96,8 +102,8 @@ class SpeechInputBubble {
   // |Delegate::InfoBubbleFocusChanged| as well.
   virtual void Hide() = 0;
 
-  // Updates the current captured audio volume displayed on screen.
-  virtual void SetInputVolume(float volume) = 0;
+  // Updates and draws the current captured audio volume displayed on screen.
+  virtual void SetInputVolume(float volume, float noise_volume) = 0;
 
   // Returns the TabContents for which this bubble gets displayed.
   virtual TabContents* tab_contents() = 0;
@@ -117,6 +123,7 @@ class SpeechInputBubbleBase : public SpeechInputBubble {
   // The current display mode of the bubble, useful only for the platform
   // specific implementation.
   enum DisplayMode {
+    DISPLAY_MODE_WARM_UP,
     DISPLAY_MODE_RECORDING,
     DISPLAY_MODE_RECOGNIZING,
     DISPLAY_MODE_MESSAGE
@@ -126,20 +133,19 @@ class SpeechInputBubbleBase : public SpeechInputBubble {
   virtual ~SpeechInputBubbleBase();
 
   // SpeechInputBubble methods
+  virtual void SetWarmUpMode();
   virtual void SetRecordingMode();
   virtual void SetRecognizingMode();
   virtual void SetMessage(const string16& text);
-  virtual void SetInputVolume(float volume);
-  virtual TabContents* tab_contents() { return tab_contents_; }
+  virtual void SetInputVolume(float volume, float noise_volume);
+  virtual TabContents* tab_contents();
 
  protected:
   // Updates the platform specific UI layout for the current display mode.
   virtual void UpdateLayout() = 0;
 
-  // Sets the given image as the image to display in the speech bubble.
-  // TODO(satish): Make the SetRecognizingMode call use this to show an
-  // animation while waiting for results.
-  virtual void SetImage(const SkBitmap& image) = 0;
+  // Overridden by subclasses to copy |icon_image()| to the screen.
+  virtual void UpdateImage() = 0;
 
   DisplayMode display_mode() {
     return display_mode_;
@@ -149,13 +155,22 @@ class SpeechInputBubbleBase : public SpeechInputBubble {
     return message_text_;
   }
 
+  SkBitmap icon_image();
+
  private:
   void DoRecognizingAnimationStep();
+  void DoWarmingUpAnimationStep();
+  void SetImage(const SkBitmap& image);
+
+  void DrawVolumeOverlay(SkCanvas* canvas,
+                         const SkBitmap& bitmap,
+                         float volume);
 
   // Task factory used for animation timer.
   ScopedRunnableMethodFactory<SpeechInputBubbleBase> task_factory_;
   int animation_step_;  // Current index/step of the animation.
   std::vector<SkBitmap> animation_frames_;
+  std::vector<SkBitmap> warming_up_frames_;
 
   DisplayMode display_mode_;
   string16 message_text_;  // Text displayed in DISPLAY_MODE_MESSAGE
@@ -165,12 +180,8 @@ class SpeechInputBubbleBase : public SpeechInputBubble {
   scoped_ptr<SkBitmap> buffer_image_;
   // TabContents in which this this bubble gets displayed.
   TabContents* tab_contents_;
-
-  static SkBitmap* mic_full_;  // Mic image with full volume.
-  static SkBitmap* mic_empty_;  // Mic image with zero volume.
-  static SkBitmap* mic_mask_;  // Gradient mask used by the volume indicator.
-  static SkBitmap* spinner_;  // Spinner image for the progress animation.
-  static const int kRecognizingAnimationStepMs;
+  // The current image displayed in the bubble's icon widget.
+  scoped_ptr<SkBitmap> icon_image_;
 };
 
 // This typedef is to workaround the issue with certain versions of

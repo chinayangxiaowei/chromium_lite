@@ -15,15 +15,15 @@
 #include "base/process_util.h"
 #include "base/threading/thread.h"
 #include "base/utf_string_conversions.h"
-#include "chrome/browser/browser_child_process_host.h"
-#include "chrome/browser/browser_thread.h"
 #include "chrome/browser/process_info_snapshot.h"
-#include "chrome/browser/renderer_host/backing_store_manager.h"
-#include "chrome/browser/renderer_host/render_process_host.h"
-#include "chrome/browser/tab_contents/navigation_entry.h"
 #include "chrome/common/chrome_constants.h"
 #include "chrome/common/chrome_version_info.h"
 #include "chrome/common/url_constants.h"
+#include "content/browser/browser_child_process_host.h"
+#include "content/browser/browser_thread.h"
+#include "content/browser/renderer_host/backing_store_manager.h"
+#include "content/browser/renderer_host/render_process_host.h"
+#include "content/browser/tab_contents/navigation_entry.h"
 #include "grit/chromium_strings.h"
 #include "ui/base/l10n/l10n_util.h"
 
@@ -84,7 +84,7 @@ ProcessData* MemoryDetails::ChromeBrowser() {
 }
 
 void MemoryDetails::CollectProcessData(
-    std::vector<ProcessMemoryInformation> child_info) {
+    const std::vector<ProcessMemoryInformation>& child_info) {
   // This must be run on the file thread to avoid jank (|ProcessInfoSnapshot|
   // runs /bin/ps, which isn't instantaneous).
   DCHECK(BrowserThread::CurrentlyOn(BrowserThread::FILE));

@@ -1,4 +1,4 @@
-// Copyright (c) 2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -21,7 +21,7 @@
 
 #include <string>
 
-#include "base/scoped_ptr.h"
+#include "base/memory/scoped_ptr.h"
 #include "chrome/browser/sync/engine/model_safe_worker.h"
 #include "chrome/browser/sync/engine/syncer_types.h"
 
@@ -35,6 +35,9 @@ class ConflictResolver;
 class ExtensionsActivityMonitor;
 class ModelSafeWorkerRegistrar;
 class ServerConnectionManager;
+
+// Default number of items a client can commit in a single message.
+static const int kDefaultMaxCommitBatchSize = 25;
 
 namespace sessions {
 class ScopedSessionContextConflictResolver;
@@ -76,6 +79,11 @@ class SyncSessionContext {
   }
   const std::string& account_name() { return account_name_; }
 
+  void set_max_commit_batch_size(int batch_size) {
+    max_commit_batch_size_ = batch_size;
+  }
+  int32 max_commit_batch_size() const { return max_commit_batch_size_; }
+
   const ModelSafeRoutingInfo& previous_session_routing_info() const {
     return previous_session_routing_info_;
   }
@@ -83,12 +91,6 @@ class SyncSessionContext {
   void set_previous_session_routing_info(const ModelSafeRoutingInfo& info) {
     previous_session_routing_info_ = info;
   }
-
-  sessions::SyncSessionSnapshot* previous_session_snapshot() {
-    return previous_session_snapshot_.get();
-  }
-
-  void set_last_snapshot(const SyncSessionSnapshot& snapshot);
 
   void NotifyListeners(const SyncEngineEvent& event) {
     FOR_EACH_OBSERVER(SyncEngineEventListener, listeners_,
@@ -124,6 +126,9 @@ class SyncSessionContext {
 
   // The name of the account being synced.
   std::string account_name_;
+
+  // The server limits the number of items a client can commit in one batch.
+  int max_commit_batch_size_;
 
   // Some routing info history to help us clean up types that get disabled
   // by the user.

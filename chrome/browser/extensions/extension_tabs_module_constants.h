@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -13,7 +13,7 @@ namespace extension_tabs_module_constants {
 // Keys used in serializing tab data & events.
 extern const char kAllFramesKey[];
 extern const char kCodeKey[];
-extern const char kFavIconUrlKey[];
+extern const char kFaviconUrlKey[];
 extern const char kFileKey[];
 extern const char kFocusedKey[];
 extern const char kFormatKey[];
@@ -46,6 +46,7 @@ extern const char kWindowTypeKey[];
 
 // Value consts.
 extern const char kCanOnlyMoveTabsWithinNormalWindowsError[];
+extern const char kCanOnlyMoveTabsWithinSameProfileError[];
 extern const char kFormatValueJpeg[];
 extern const char kFormatValuePng[];
 extern const char kMimeTypeJpeg[];
@@ -54,15 +55,18 @@ extern const char kStatusValueComplete[];
 extern const char kStatusValueLoading[];
 extern const char kWindowTypeValueNormal[];
 extern const char kWindowTypeValuePopup[];
+extern const char kWindowTypeValuePanel[];
 extern const char kWindowTypeValueApp[];
 
 // Error messages.
+extern const char kNoCrashBrowserError[];
 extern const char kNoCurrentWindowError[];
 extern const char kNoLastFocusedWindowError[];
 extern const char kWindowNotFoundError[];
 extern const char kTabNotFoundError[];
 extern const char kTabStripNotEditableError[];
 extern const char kNoSelectedTabError[];
+extern const char kIncognitoModeIsDisabled[];
 extern const char kInvalidUrlError[];
 extern const char kInternalVisibleTabCaptureError[];
 extern const char kNotImplementedError[];

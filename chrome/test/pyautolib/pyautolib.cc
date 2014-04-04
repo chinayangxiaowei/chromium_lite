@@ -1,8 +1,8 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "base/scoped_ptr.h"
+#include "base/memory/scoped_ptr.h"
 #include "base/string_number_conversions.h"
 #include "base/string_util.h"
 #include "base/utf_string_conversions.h"
@@ -32,6 +32,10 @@ void PyUITestSuiteBase::Initialize(const FilePath& browser_dir) {
   UITestSuite::Initialize();
 }
 
+void PyUITestSuiteBase::SetCrSourceRoot(const FilePath& path) {
+  PathService::Override(base::DIR_SOURCE_ROOT, path);
+}
+
 // PyUITestBase
 PyUITestBase::PyUITestBase(bool clear_profile, std::wstring homepage)
     : UITestBase() {
@@ -59,6 +63,12 @@ MessageLoop* PyUITestBase::GetSharedMessageLoop(
 
 void PyUITestBase::Initialize(const FilePath& browser_dir) {
   UITestBase::SetBrowserDirectory(browser_dir);
+}
+
+ProxyLauncher* PyUITestBase::CreateProxyLauncher() {
+  if (named_channel_id_.empty())
+    return new AnonymousProxyLauncher(false);
+  return new NamedProxyLauncher(named_channel_id_, false, false);
 }
 
 void PyUITestBase::SetUp() {
@@ -191,10 +201,14 @@ int PyUITestBase::GetBrowserWindowCount() {
   return num_windows;
 }
 
-bool PyUITestBase::InstallExtension(const FilePath& crx_file, bool with_ui) {
+std::string PyUITestBase::InstallExtension(const FilePath& crx_file,
+                                           bool with_ui) {
   scoped_refptr<ExtensionProxy> proxy =
       automation()->InstallExtension(crx_file, with_ui);
-  return proxy.get() != NULL;
+  std::string id;
+  if (!proxy.get() || !proxy.get()->GetId(&id))
+    return "";
+  return id;
 }
 
 bool PyUITestBase::GetBookmarkBarVisibility() {
@@ -309,13 +323,18 @@ scoped_refptr<BrowserProxy> PyUITestBase::GetBrowserWindow(int window_index) {
 }
 
 std::string PyUITestBase::_SendJSONRequest(int window_index,
-                                           std::string& request) {
-  scoped_refptr<BrowserProxy> browser_proxy =
-      automation()->GetBrowserWindow(window_index);
-  EXPECT_TRUE(browser_proxy.get());
+                                           const std::string& request,
+                                           int timeout) {
   std::string response;
-  if (browser_proxy.get()) {
-    EXPECT_TRUE(browser_proxy->SendJSONRequest(request, &response));
+  if (window_index < 0) {  // Do not need to target a browser window.
+    EXPECT_TRUE(automation()->SendJSONRequest(request, timeout, &response));
+  } else {
+    scoped_refptr<BrowserProxy> browser_proxy =
+        automation()->GetBrowserWindow(window_index);
+    EXPECT_TRUE(browser_proxy.get());
+    if (browser_proxy.get()) {
+      EXPECT_TRUE(browser_proxy->SendJSONRequest(request, timeout, &response));
+    }
   }
   return response;
 }

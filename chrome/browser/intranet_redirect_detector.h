@@ -11,8 +11,8 @@
 #include <vector>
 
 #include "chrome/common/net/url_fetcher.h"
-#include "chrome/common/notification_observer.h"
-#include "chrome/common/notification_registrar.h"
+#include "content/common/notification_observer.h"
+#include "content/common/notification_registrar.h"
 #include "googleurl/src/gurl.h"
 #include "net/base/host_resolver_proc.h"
 #include "net/base/network_change_notifier.h"
@@ -35,9 +35,9 @@ class PrefService;
 // Consumers should call RedirectOrigin(), which is guaranteed to synchronously
 // return a value at all times (even during startup or in unittest mode).  If no
 // redirection is in place, the returned GURL will be empty.
-class IntranetRedirectDetector : public URLFetcher::Delegate,
-                                 public NotificationObserver,
-                                 public net::NetworkChangeNotifier::Observer {
+class IntranetRedirectDetector
+    : public URLFetcher::Delegate,
+      public net::NetworkChangeNotifier::IPAddressObserver {
  public:
   // Only the main browser process loop should call this, when setting up
   // g_browser_process->intranet_redirect_detector_.  No code other than the
@@ -65,9 +65,6 @@ class IntranetRedirectDetector : public URLFetcher::Delegate,
   // switch sleep has finished.  Runs any pending fetch.
   void FinishSleep();
 
-  // Starts the fetches to determine the redirect URL if we can currently do so.
-  void StartFetchesIfPossible();
-
   // URLFetcher::Delegate
   virtual void OnURLFetchComplete(const URLFetcher* source,
                                   const GURL& url,
@@ -76,15 +73,9 @@ class IntranetRedirectDetector : public URLFetcher::Delegate,
                                   const ResponseCookies& cookies,
                                   const std::string& data);
 
-  // NotificationObserver
-  virtual void Observe(NotificationType type,
-                       const NotificationSource& source,
-                       const NotificationDetails& details);
-
-  // NetworkChangeNotifier::Observer
+  // NetworkChangeNotifier::IPAddressObserver
   virtual void OnIPAddressChanged();
 
-  NotificationRegistrar registrar_;
   GURL redirect_origin_;
   ScopedRunnableMethodFactory<IntranetRedirectDetector> fetcher_factory_;
   Fetchers fetchers_;
@@ -92,10 +83,6 @@ class IntranetRedirectDetector : public URLFetcher::Delegate,
   bool in_sleep_;  // True if we're in the seven-second "no fetching" period
                    // that begins at browser start, or the one-second "no
                    // fetching" period that begins after network switches.
-  bool request_context_available_;
-                           // True when the profile has been loaded and the
-                           // default request context created, so we can
-                           // actually do the fetch with the right data.
 
   DISALLOW_COPY_AND_ASSIGN(IntranetRedirectDetector);
 };

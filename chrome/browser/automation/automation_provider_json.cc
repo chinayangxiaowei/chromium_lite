@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,8 +6,10 @@
 
 #include "base/json/json_writer.h"
 #include "base/json/string_escape.h"
+#include "base/values.h"
 #include "chrome/browser/autocomplete/autocomplete_match.h"
 #include "chrome/browser/automation/automation_provider.h"
+#include "chrome/browser/automation/automation_util.h"
 #include "chrome/common/automation_messages.h"
 
 namespace {
@@ -53,4 +55,51 @@ void AutomationJSONReply::SendError(const std::string& error_message) {
       message_, json_string, false);
   provider_->Send(message_);
   message_ = NULL;
+}
+
+bool GetBrowserFromJSONArgs(
+    DictionaryValue* args,
+    Browser** browser,
+    std::string* error) {
+  int browser_index;
+  if (!args->GetInteger("windex", &browser_index)) {
+    *error = "'windex' missing or invalid";
+    return false;
+  }
+  *browser = automation_util::GetBrowserAt(browser_index);
+  if (!*browser) {
+    *error = "Cannot locate browser from given index";
+    return false;
+  }
+  return true;
+}
+
+bool GetTabFromJSONArgs(
+    DictionaryValue* args,
+    TabContents** tab,
+    std::string* error) {
+  int browser_index, tab_index;
+  if (!args->GetInteger("windex", &browser_index)) {
+    *error = "'windex' missing or invalid";
+    return false;
+  }
+  if (!args->GetInteger("tab_index", &tab_index)) {
+    *error = "'tab_index' missing or invalid";
+    return false;
+  }
+  *tab = automation_util::GetTabContentsAt(browser_index, tab_index);
+  if (!*tab) {
+    *error = "Cannot locate tab from given indices";
+    return false;
+  }
+  return true;
+}
+
+bool GetBrowserAndTabFromJSONArgs(
+    DictionaryValue* args,
+    Browser** browser,
+    TabContents** tab,
+    std::string* error) {
+  return GetBrowserFromJSONArgs(args, browser, error) &&
+         GetTabFromJSONArgs(args, tab, error);
 }

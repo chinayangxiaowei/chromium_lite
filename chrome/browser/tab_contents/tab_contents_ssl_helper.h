@@ -8,8 +8,8 @@
 
 #include <map>
 
-#include "base/linked_ptr.h"
-#include "chrome/browser/renderer_host/render_view_host_delegate.h"
+#include "base/memory/linked_ptr.h"
+#include "content/browser/renderer_host/render_view_host_delegate.h"
 
 class SSLAddCertHandler;
 class SSLClientAuthHandler;

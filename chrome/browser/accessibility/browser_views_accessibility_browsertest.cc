@@ -1,15 +1,15 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include <oleacc.h>
 
-#include "base/scoped_comptr_win.h"
 #include "base/utf_string_conversions.h"
-#include "chrome/browser/browser_window.h"
+#include "base/win/scoped_comptr.h"
 #include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window.h"
 #include "chrome/browser/ui/view_ids.h"
-#include "chrome/browser/ui/views/bookmark_bar_view.h"
+#include "chrome/browser/ui/views/bookmarks/bookmark_bar_view.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
 #include "chrome/browser/ui/views/toolbar_view.h"
 #include "chrome/common/url_constants.h"
@@ -17,8 +17,9 @@
 #include "chrome/test/ui_test_utils.h"
 #include "grit/chromium_strings.h"
 #include "grit/generated_resources.h"
+#include "ui/base/accessibility/accessibility_types.h"
 #include "ui/base/l10n/l10n_util.h"
-#include "views/accessibility/view_accessibility.h"
+#include "views/accessibility/native_view_accessibility_win.h"
 #include "views/widget/root_view.h"
 #include "views/widget/widget_win.h"
 #include "views/window/window.h"
@@ -28,9 +29,11 @@ namespace {
 VARIANT id_self = {VT_I4, CHILDID_SELF};
 
 // Dummy class to force creation of ATL module, needed by COM to instantiate
-// ViewAccessibility.
-class TestAtlModule : public CAtlDllModuleT< TestAtlModule > {};
+// NativeViewAccessibilityWin.
+class TestAtlModule : public CAtlDllModuleT<TestAtlModule> {};
 TestAtlModule test_atl_module_;
+
+}  // namespace
 
 class BrowserViewsAccessibilityTest : public InProcessBrowserTest {
  public:
@@ -84,7 +87,9 @@ class BrowserViewsAccessibilityTest : public InProcessBrowserTest {
     ASSERT_TRUE(NULL != view);
 
     TestAccessibilityInfo(
-        ViewAccessibility::GetAccessibleForView(view), name, role);
+        NativeViewAccessibilityWin::GetAccessibleForView(view),
+        name,
+        role);
   }
 
 
@@ -122,7 +127,7 @@ IN_PROC_BROWSER_TEST_F(BrowserViewsAccessibilityTest,
   ASSERT_TRUE(NULL != hwnd);
 
   // Get accessibility object.
-  ScopedComPtr<IAccessible> acc_obj;
+  base::win::ScopedComPtr<IAccessible> acc_obj;
   HRESULT hr = ::AccessibleObjectFromWindow(hwnd, OBJID_WINDOW, IID_IAccessible,
                                             reinterpret_cast<void**>(&acc_obj));
   ASSERT_EQ(S_OK, hr);
@@ -139,7 +144,7 @@ IN_PROC_BROWSER_TEST_F(BrowserViewsAccessibilityTest,
 // info.
 IN_PROC_BROWSER_TEST_F(BrowserViewsAccessibilityTest, TestNonClientViewAccObj) {
   views::View* non_client_view =
-  GetBrowserView()->GetWindow()->GetNonClientView();
+  GetBrowserView()->GetWindow()->non_client_view();
 
   TestViewAccessibilityObject(non_client_view,
       UTF16ToWide(l10n_util::GetStringUTF16(IDS_PRODUCT_NAME)),
@@ -246,17 +251,18 @@ IN_PROC_BROWSER_TEST_F(BrowserViewsAccessibilityTest,
 IN_PROC_BROWSER_TEST_F(BrowserViewsAccessibilityTest,
                        TestAboutChromeViewAccObj) {
   //  Firstly, test that the WindowDelegate got updated.
-  views::Window* aboutChromeWindow = GetBrowserView()->ShowAboutChromeDialog();
+  views::Window* about_chrome_window =
+      GetBrowserView()->DoShowAboutChromeDialog();
   EXPECT_STREQ(
-      aboutChromeWindow->GetDelegate()->GetWindowTitle().c_str(),
+      about_chrome_window->window_delegate()->GetWindowTitle().c_str(),
       UTF16ToWide(l10n_util::GetStringUTF16(IDS_ABOUT_CHROME_TITLE)).c_str());
-  EXPECT_EQ(aboutChromeWindow->GetDelegate()->accessible_role(),
-            AccessibilityTypes::ROLE_DIALOG);
+  EXPECT_EQ(about_chrome_window->window_delegate()->GetAccessibleWindowRole(),
+            ui::AccessibilityTypes::ROLE_DIALOG);
 
   // Also test the accessibility object directly.
   IAccessible* acc_obj = NULL;
   HRESULT hr =
-    ::AccessibleObjectFromWindow(aboutChromeWindow->GetNativeWindow(),
+    ::AccessibleObjectFromWindow(about_chrome_window->GetNativeWindow(),
                                  OBJID_CLIENT,
                                  IID_IAccessible,
                                  reinterpret_cast<void**>(&acc_obj));
@@ -270,4 +276,3 @@ IN_PROC_BROWSER_TEST_F(BrowserViewsAccessibilityTest,
 
   acc_obj->Release();
 }
-}  // Namespace.

@@ -6,11 +6,11 @@
 #define CHROME_BROWSER_UI_COCOA_BROWSER_WINDOW_COCOA_H_
 #pragma once
 
-#include "base/scoped_nsobject.h"
+#include "base/memory/scoped_nsobject.h"
 #include "base/task.h"
-#include "chrome/browser/browser_window.h"
 #include "chrome/browser/bookmarks/bookmark_model.h"
-#include "chrome/common/notification_registrar.h"
+#include "chrome/browser/ui/browser_window.h"
+#include "content/common/notification_registrar.h"
 
 class Browser;
 @class BrowserWindowController;
@@ -33,6 +33,7 @@ class BrowserWindowCocoa : public BrowserWindow,
 
   // Overridden from BrowserWindow
   virtual void Show();
+  virtual void ShowInactive();
   virtual void SetBounds(const gfx::Rect& bounds);
   virtual void Close();
   virtual void Activate();
@@ -42,13 +43,14 @@ class BrowserWindowCocoa : public BrowserWindow,
   virtual gfx::NativeWindow GetNativeHandle();
   virtual BrowserWindowTesting* GetBrowserWindowTesting();
   virtual StatusBubble* GetStatusBubble();
-  virtual void SelectedTabToolbarSizeChanged(bool is_animating);
+  virtual void ToolbarSizeChanged(bool is_animating);
   virtual void UpdateTitleBar();
   virtual void ShelfVisibilityChanged();
   virtual void UpdateDevTools();
   virtual void UpdateLoadingAnimations(bool should_animate);
   virtual void SetStarredState(bool is_starred);
   virtual gfx::Rect GetRestoredBounds() const;
+  virtual gfx::Rect GetBounds() const;
   virtual bool IsMaximized() const;
   virtual void SetFullscreen(bool fullscreen);
   virtual bool IsFullscreen() const;
@@ -70,22 +72,15 @@ class BrowserWindowCocoa : public BrowserWindow,
   virtual void ConfirmAddSearchProvider(const TemplateURL* template_url,
                                         Profile* profile);
   virtual void ToggleBookmarkBar();
-  virtual views::Window* ShowAboutChromeDialog();
+  virtual void ShowAboutChromeDialog();
   virtual void ShowUpdateChromeDialog();
   virtual void ShowTaskManager();
   virtual void ShowBackgroundPages();
   virtual void ShowBookmarkBubble(const GURL& url, bool already_bookmarked);
   virtual bool IsDownloadShelfVisible() const;
   virtual DownloadShelf* GetDownloadShelf();
-  virtual void ShowClearBrowsingDataDialog();
-  virtual void ShowImportDialog();
-  virtual void ShowSearchEnginesDialog();
-  virtual void ShowPasswordManager();
   virtual void ShowRepostFormWarningDialog(TabContents* tab_contents);
-  virtual void ShowContentSettingsWindow(ContentSettingsType content_type,
-                                         Profile* profile);
   virtual void ShowCollectedCookiesDialog(TabContents* tab_contents);
-  virtual void ShowProfileErrorDialog(int message_id);
   virtual void ShowThemeInstallBubble();
   virtual void ConfirmBrowserCloseWithPendingDownloads();
   virtual void ShowHTMLDialog(HtmlDialogUIDelegate* delegate,
@@ -101,7 +96,8 @@ class BrowserWindowCocoa : public BrowserWindow,
   virtual bool PreHandleKeyboardEvent(const NativeWebKeyboardEvent& event,
                                       bool* is_keyboard_shortcut);
   virtual void HandleKeyboardEvent(const NativeWebKeyboardEvent& event);
-  virtual void ShowCreateWebAppShortcutsDialog(TabContents* tab_contents);
+  virtual void ShowCreateWebAppShortcutsDialog(
+      TabContentsWrapper* tab_contents);
   virtual void ShowCreateChromeAppShortcutsDialog(Profile* profile,
                                                   const Extension* app);
   virtual void Cut();
@@ -110,12 +106,9 @@ class BrowserWindowCocoa : public BrowserWindow,
   virtual void ToggleTabStripMode();
   virtual void OpenTabpose();
   virtual void PrepareForInstant();
-  virtual void ShowInstant(TabContents* preview_contents);
+  virtual void ShowInstant(TabContentsWrapper* preview);
   virtual void HideInstant(bool instant_is_active);
   virtual gfx::Rect GetInstantBounds();
-
-  virtual gfx::Rect GrabWindowSnapshot(std::vector<unsigned char>*
-                                       png_representation);
 
   // Overridden from NotificationObserver
   virtual void Observe(NotificationType type,

@@ -15,7 +15,8 @@ cr.define('options', function() {
    * @constructor
    */
   function PersonalOptions() {
-    OptionsPage.call(this, 'personal', templateData.personalPage,
+    OptionsPage.call(this, 'personal',
+                     templateData.personalPageTabTitle,
                      'personal-page');
   }
 
@@ -47,15 +48,15 @@ cr.define('options', function() {
         chrome.send('openPrivacyDashboardTabAndActivate');
       };
       $('manage-passwords').onclick = function(event) {
-        OptionsPage.showPageByName('passwordManager');
+        OptionsPage.navigateToPage('passwords');
         OptionsPage.showTab($('passwords-nav-tab'));
         chrome.send('coreOptionsUserMetricsAction',
             ['Options_ShowPasswordManager']);
       };
       $('autofill-settings').onclick = function(event) {
-        OptionsPage.showPageByName('autoFillOptions');
+        OptionsPage.navigateToPage('autofill');
         chrome.send('coreOptionsUserMetricsAction',
-            ['Options_ShowAutoFillSettings']);
+            ['Options_ShowAutofillSettings']);
       };
       $('themes-reset').onclick = function(event) {
         chrome.send('themesReset');
@@ -63,25 +64,37 @@ cr.define('options', function() {
 
       if (!cr.isChromeOS) {
         $('import-data').onclick = function(event) {
-          OptionsPage.showOverlay('importDataOverlay');
+          OptionsPage.navigateToPage('importData');
           chrome.send('coreOptionsUserMetricsAction', ['Import_ShowDlg']);
         };
 
-        if (navigator.platform.match(/linux|BSD/i)) {
+        if ($('themes-GTK-button')) {
           $('themes-GTK-button').onclick = function(event) {
             chrome.send('themesSetGTK');
           };
         }
       } else {
+        $('change-picture-button').onclick = function(event) {
+          OptionsPage.navigateToPage('changePicture');
+        };
         chrome.send('loadAccountPicture');
       }
 
-      // Disable the screen lock checkbox for the guest mode.
-      if (cr.commandLine.options['--bwsi'])
+      if (cr.commandLine.options['--bwsi']) {
+        // Disable the screen lock checkbox for the guest mode.
         $('enable-screen-lock').disabled = true;
+      }
+
+      if (PersonalOptions.disablePasswordManagement()) {
+        $('passwords-offersave').disabled = true;
+        $('passwords-neversave').disabled = true;
+        $('passwords-offersave').value = false;
+        $('passwords-neversave').value = true;
+        $('manage-passwords').disabled = true;
+      }
     },
 
-    showStopSyncingOverlay_: function(event) {
+    showStopSyncingOverlay_: function() {
       AlertOverlay.show(localStrings.getString('stop_syncing_title'),
                         localStrings.getString('stop_syncing_explanation'),
                         localStrings.getString('stop_syncing_confirm'),
@@ -90,6 +103,7 @@ cr.define('options', function() {
     },
 
     setElementVisible_: function(element, visible) {
+      element.hidden = !visible;
       if (visible)
         element.classList.remove('hidden');
       else
@@ -103,6 +117,7 @@ cr.define('options', function() {
     setSyncSetupCompleted_: function(completed) {
       this.syncSetupCompleted = completed;
       this.setElementVisible_($('customize-sync'), completed);
+      $('privacy-dashboard-link').hidden = !completed;
     },
 
     setAccountPicture_: function(image) {
@@ -110,6 +125,9 @@ cr.define('options', function() {
     },
 
     setSyncStatus_: function(status) {
+      var statusSet = status != '';
+      $('sync-overview').hidden = statusSet;
+      $('sync-status').hidden = !statusSet;
       $('sync-status-text').textContent = status;
     },
 
@@ -128,6 +146,18 @@ cr.define('options', function() {
       // link-button does is not zero-area when the contents of the button are
       // empty, so explicitly hide the element.
       this.setElementVisible_($('sync-action-link'), status.length != 0);
+    },
+
+    setProfilesSectionVisible_: function(visible) {
+      this.setElementVisible_($('profiles-create'), visible);
+    },
+
+    setNewProfileButtonEnabled_: function(enabled) {
+      $('new-profile').disabled = !enabled;
+      if (enabled)
+        $('profiles-create').classList.remove('disabled');
+      else
+        $('profiles-create').classList.add('disabled');
     },
 
     setStartStopButtonVisible_: function(visible) {
@@ -175,6 +205,15 @@ cr.define('options', function() {
     },
   };
 
+  /**
+   * Returns whether the user should be able to manage (view and edit) their
+   * stored passwords. Password management is disabled in guest mode.
+   * @return {boolean} True if password management should be disabled.
+   */
+  PersonalOptions.disablePasswordManagement = function() {
+    return cr.commandLine.options['--bwsi'];
+  };
+
   // Forward public APIs to private implementations.
   [
     'setSyncEnabled',
@@ -184,6 +223,8 @@ cr.define('options', function() {
     'setSyncStatusErrorVisible',
     'setSyncActionLinkEnabled',
     'setSyncActionLinkLabel',
+    'setProfilesSectionVisible',
+    'setNewProfileButtonEnabled',
     'setStartStopButtonVisible',
     'setStartStopButtonEnabled',
     'setStartStopButtonLabel',

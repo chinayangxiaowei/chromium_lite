@@ -52,6 +52,27 @@ void ChromotingClient::Start() {
   }
 }
 
+void ChromotingClient::StartSandboxed(scoped_refptr<XmppProxy> xmpp_proxy,
+                                      const std::string& your_jid,
+                                      const std::string& host_jid) {
+  // TODO(ajwong): Merge this with Start(), and just change behavior based on
+  // ClientConfig.
+  if (message_loop() != MessageLoop::current()) {
+    message_loop()->PostTask(
+        FROM_HERE,
+        NewRunnableMethod(this, &ChromotingClient::StartSandboxed, xmpp_proxy,
+                          your_jid, host_jid));
+    return;
+  }
+
+  connection_->ConnectSandboxed(xmpp_proxy, your_jid, host_jid, this, this,
+                                this);
+
+  if (!view_->Initialize()) {
+    ClientDone();
+  }
+}
+
 void ChromotingClient::Stop() {
   if (message_loop() != MessageLoop::current()) {
     message_loop()->PostTask(
@@ -69,6 +90,10 @@ void ChromotingClient::ClientDone() {
   if (client_done_ != NULL) {
     message_loop()->PostTask(FROM_HERE, client_done_);
   }
+}
+
+ChromotingStats* ChromotingClient::GetStats() {
+  return &stats_;
 }
 
 void ChromotingClient::Repaint() {
@@ -104,6 +129,15 @@ void ChromotingClient::ProcessVideoPacket(const VideoPacket* packet,
     return;
   }
 
+  // Record size of the packet for statistics.
+  stats_.video_bandwidth()->Record(packet->data().size());
+
+  // Record statistics received from host.
+  if (packet->has_capture_time_ms())
+    stats_.video_capture_ms()->Record(packet->capture_time_ms());
+  if (packet->has_encode_time_ms())
+    stats_.video_encode_ms()->Record(packet->encode_time_ms());
+
   received_packets_.push_back(QueuedVideoPacket(packet, done));
   if (!packet_being_processed_)
     DispatchPacket();
@@ -126,14 +160,22 @@ void ChromotingClient::DispatchPacket() {
   packet_being_processed_ = true;
 
   ScopedTracer tracer("Handle video packet");
+
+  // Measure the latency between the last packet being received and presented.
+  bool last_packet = (packet->flags() & VideoPacket::LAST_PACKET) != 0;
+  base::Time decode_start;
+  if (last_packet)
+    decode_start = base::Time::Now();
+
   rectangle_decoder_->DecodePacket(
-      packet, NewTracedMethod(this, &ChromotingClient::OnPacketDone));
+      packet, NewTracedMethod(this, &ChromotingClient::OnPacketDone,
+                              last_packet, decode_start));
 }
 
 void ChromotingClient::OnConnectionOpened(protocol::ConnectionToHost* conn) {
   VLOG(1) << "ChromotingClient::OnConnectionOpened";
-  SetConnectionState(CONNECTED);
   Initialize();
+  SetConnectionState(CONNECTED);
 }
 
 void ChromotingClient::OnConnectionClosed(protocol::ConnectionToHost* conn) {
@@ -166,15 +208,24 @@ void ChromotingClient::SetConnectionState(ConnectionState s) {
   Repaint();
 }
 
-void ChromotingClient::OnPacketDone() {
+void ChromotingClient::OnPacketDone(bool last_packet,
+                                    base::Time decode_start) {
   if (message_loop() != MessageLoop::current()) {
     message_loop()->PostTask(
         FROM_HERE,
-        NewTracedMethod(this, &ChromotingClient::OnPacketDone));
+        NewTracedMethod(this, &ChromotingClient::OnPacketDone,
+                        last_packet, decode_start));
     return;
   }
 
   TraceContext::tracer()->PrintString("Packet done");
+
+  // Record the latency between the final packet being received and
+  // presented.
+  if (last_packet) {
+    stats_.video_decode_ms()->Record(
+        (base::Time::Now() - decode_start).InMilliseconds());
+  }
 
   received_packets_.front().done->Run();
   delete received_packets_.front().done;
@@ -182,6 +233,7 @@ void ChromotingClient::OnPacketDone() {
 
   packet_being_processed_ = false;
 
+  // Process the next video packet.
   DispatchPacket();
 }
 
@@ -219,11 +271,29 @@ void ChromotingClient::Initialize() {
 void ChromotingClient::NotifyResolution(
     const protocol::NotifyResolutionRequest* msg, Task* done) {
   NOTIMPLEMENTED();
+  done->Run();
+  delete done;
 }
 
 void ChromotingClient::BeginSessionResponse(
     const protocol::LocalLoginStatus* msg, Task* done) {
-  NOTIMPLEMENTED();
+  if (message_loop() != MessageLoop::current()) {
+    message_loop()->PostTask(
+        FROM_HERE,
+        NewRunnableMethod(this, &ChromotingClient::BeginSessionResponse,
+                          msg, done));
+    return;
+  }
+
+  // Inform the connection that the client has been authenticated. This will
+  // enable the communication channels.
+  if (msg->success()) {
+    connection_->OnClientAuthenticated();
+  }
+
+  view_->UpdateLoginStatus(msg->success(), msg->error_info());
+  done->Run();
+  delete done;
 }
 
 }  // namespace remoting

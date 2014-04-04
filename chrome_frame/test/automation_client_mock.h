@@ -65,7 +65,7 @@ struct MockCFDelegate : public ChromeFrameDelegateImpl {
 
   void ReplyStarted(int request_id, const char* headers) {
     request_delegate_->OnResponseStarted(request_id, "text/html", headers,
-        0, base::Time::Now(), EmptyString(), 0);
+      0, base::Time::Now(), EmptyString(), 0, net::HostPortPair());
   }
 
   void ReplyData(int request_id, const std::string* data) {
@@ -96,13 +96,16 @@ class MockAutomationProxy : public ChromeFrameAutomationProxy {
   MOCK_METHOD1(ReleaseTabProxy, void(AutomationHandle handle));
   MOCK_METHOD0(server_version, std::string(void));
   MOCK_METHOD1(SendProxyConfig, void(const std::string&));
-  MOCK_METHOD1(SetEnableExtensionAutomation, void(bool enable));
 
   ~MockAutomationProxy() {}
 };
 
 struct MockAutomationMessageSender : public AutomationMessageSender {
   virtual bool Send(IPC::Message* msg) {
+    return proxy_->Send(msg);
+  }
+
+  virtual bool Send(IPC::Message* msg, int timeout_ms) {
     return proxy_->Send(msg);
   }
 

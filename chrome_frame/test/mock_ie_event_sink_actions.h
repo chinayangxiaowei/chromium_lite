@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -17,9 +17,9 @@
 #include "chrome_frame/test/ie_event_sink.h"
 #include "chrome_frame/test/mock_ie_event_sink_test.h"
 #include "chrome_frame/test/simulate_input.h"
-#include "gfx/point.h"
-#include "gfx/rect.h"
 #include "testing/gmock/include/gmock/gmock.h"
+#include "ui/gfx/point.h"
+#include "ui/gfx/rect.h"
 
 namespace chrome_frame_test {
 
@@ -52,7 +52,7 @@ ACTION_P3(DelayCloseBrowserMock, loop, delay, mock) {
 }
 
 ACTION_P2(ConnectDocPropNotifySink, mock, sink) {
-  ScopedComPtr<IDispatch> document;
+  base::win::ScopedComPtr<IDispatch> document;
   mock->event_sink()->web_browser2()->get_Document(document.Receive());
   EXPECT_TRUE(document != NULL);  // NOLINT
   if (document) {

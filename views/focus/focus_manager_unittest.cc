@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,10 +8,10 @@
 #include "base/string16.h"
 #include "base/string_number_conversions.h"
 #include "base/utf_string_conversions.h"
-#include "gfx/rect.h"
 #include "third_party/skia/include/core/SkColor.h"
 #include "ui/base/keycodes/keyboard_codes.h"
 #include "ui/base/models/combobox_model.h"
+#include "ui/gfx/rect.h"
 #include "views/background.h"
 #include "views/border.h"
 #include "views/controls/button/checkbox.h"
@@ -22,10 +22,10 @@
 #include "views/controls/label.h"
 #include "views/controls/link.h"
 #include "views/controls/native/native_view_host.h"
-#include "views/controls/textfield/textfield.h"
 #include "views/controls/scroll_view.h"
 #include "views/controls/tabbed_pane/native_tabbed_pane_wrapper.h"
 #include "views/controls/tabbed_pane/tabbed_pane.h"
+#include "views/controls/textfield/textfield.h"
 #include "views/focus/accelerator_handler.h"
 #include "views/widget/root_view.h"
 #include "views/window/non_client_view.h"
@@ -39,8 +39,6 @@
 #include "ui/base/keycodes/keyboard_code_conversion_gtk.h"
 #include "views/window/window_gtk.h"
 #endif
-
-using ui::ComboboxModel;  // TODO(beng): remove
 
 namespace {
 const int kWindowWidth = 600;
@@ -132,7 +130,7 @@ class FocusManagerTest : public testing::Test, public WindowDelegate {
   virtual void TearDown() {
     if (focus_change_listener_)
       GetFocusManager()->RemoveFocusChangeListener(focus_change_listener_);
-    window_->Close();
+    window_->CloseWindow();
 
     // Flush the message loop to make Purify happy.
     message_loop()->RunAllPending();
@@ -292,25 +290,24 @@ class BorderView : public NativeViewHost {
 
     if (child == this && is_add) {
       if (!widget_) {
+        widget_ = Widget::CreateWidget(
+            Widget::CreateParams(Widget::CreateParams::TYPE_CONTROL));
 #if defined(OS_WIN)
-        WidgetWin* widget_win = new WidgetWin();
-        widget_win->Init(parent->GetRootView()->GetWidget()->GetNativeView(),
-                         gfx::Rect(0, 0, 0, 0));
-        widget_win->SetFocusTraversableParentView(this);
-        widget_ = widget_win;
-#else
-        WidgetGtk* widget_gtk = new WidgetGtk(WidgetGtk::TYPE_CHILD);
-        widget_gtk->Init(native_view(), gfx::Rect(0, 0, 0, 0));
-        widget_gtk->SetFocusTraversableParentView(this);
-        widget_ = widget_gtk;
+        gfx::NativeView parent_native_view =
+            parent->GetRootView()->GetWidget()->GetNativeView();
+#elif defined(TOOLKIT_USES_GTK)
+        gfx::NativeView parent_native_view = native_view();
 #endif
+        widget_->Init(parent_native_view, gfx::Rect(0, 0, 0, 0));
+        widget_->SetFocusTraversableParentView(this);
         widget_->SetContentsView(child_);
       }
 
       // We have been added to a view hierarchy, attach the native view.
       Attach(widget_->GetNativeView());
       // Also update the FocusTraversable parent so the focus traversal works.
-      widget_->GetRootView()->SetFocusTraversableParent(GetRootView());
+      widget_->GetRootView()->SetFocusTraversableParent(
+          GetWidget()->GetFocusTraversable());
     }
   }
 
@@ -321,7 +318,7 @@ class BorderView : public NativeViewHost {
   DISALLOW_COPY_AND_ASSIGN(BorderView);
 };
 
-class DummyComboboxModel : public ComboboxModel {
+class DummyComboboxModel : public ui::ComboboxModel {
  public:
   virtual int GetItemCount() { return 10; }
 
@@ -749,9 +746,8 @@ void FocusTraversalTest::InitContentView() {
 ////////////////////////////////////////////////////////////////////////////////
 
 enum FocusTestEventType {
-  WILL_GAIN_FOCUS = 0,
-  DID_GAIN_FOCUS,
-  WILL_LOSE_FOCUS
+  ON_FOCUS = 0,
+  ON_BLUR
 };
 
 struct FocusTestEvent {
@@ -772,16 +768,12 @@ class SimpleTestView : public View {
     SetID(view_id);
   }
 
-  virtual void WillGainFocus() {
-    event_list_->push_back(FocusTestEvent(WILL_GAIN_FOCUS, GetID()));
+  virtual void OnFocus() {
+    event_list_->push_back(FocusTestEvent(ON_FOCUS, GetID()));
   }
 
-  virtual void DidGainFocus() {
-    event_list_->push_back(FocusTestEvent(DID_GAIN_FOCUS, GetID()));
-  }
-
-  virtual void WillLoseFocus() {
-    event_list_->push_back(FocusTestEvent(WILL_LOSE_FOCUS, GetID()));
+  virtual void OnBlur() {
+    event_list_->push_back(FocusTestEvent(ON_BLUR, GetID()));
   }
 
  private:
@@ -801,26 +793,22 @@ TEST_F(FocusManagerTest, ViewFocusCallbacks) {
   content_view_->AddChildView(view2);
 
   view1->RequestFocus();
-  ASSERT_EQ(2, static_cast<int>(event_list.size()));
-  EXPECT_EQ(WILL_GAIN_FOCUS, event_list[0].type);
-  EXPECT_EQ(kView1ID, event_list[0].view_id);
-  EXPECT_EQ(DID_GAIN_FOCUS, event_list[1].type);
+  ASSERT_EQ(1, static_cast<int>(event_list.size()));
+  EXPECT_EQ(ON_FOCUS, event_list[0].type);
   EXPECT_EQ(kView1ID, event_list[0].view_id);
 
   event_list.clear();
   view2->RequestFocus();
-  ASSERT_EQ(3, static_cast<int>(event_list.size()));
-  EXPECT_EQ(WILL_LOSE_FOCUS, event_list[0].type);
+  ASSERT_EQ(2, static_cast<int>(event_list.size()));
+  EXPECT_EQ(ON_BLUR, event_list[0].type);
   EXPECT_EQ(kView1ID, event_list[0].view_id);
-  EXPECT_EQ(WILL_GAIN_FOCUS, event_list[1].type);
+  EXPECT_EQ(ON_FOCUS, event_list[1].type);
   EXPECT_EQ(kView2ID, event_list[1].view_id);
-  EXPECT_EQ(DID_GAIN_FOCUS, event_list[2].type);
-  EXPECT_EQ(kView2ID, event_list[2].view_id);
 
   event_list.clear();
   GetFocusManager()->ClearFocus();
   ASSERT_EQ(1, static_cast<int>(event_list.size()));
-  EXPECT_EQ(WILL_LOSE_FOCUS, event_list[0].type);
+  EXPECT_EQ(ON_BLUR, event_list[0].type);
   EXPECT_EQ(kView2ID, event_list[0].view_id);
 }
 
@@ -850,9 +838,18 @@ TEST_F(FocusManagerTest, FocusChangeListener) {
   TestFocusChangeListener listener;
   AddFocusChangeListener(&listener);
 
+  // Visual Studio 2010 has problems converting NULL to the null pointer for
+  // std::pair.  See http://connect.microsoft.com/VisualStudio/feedback/details/520043/error-converting-from-null-to-a-pointer-type-in-std-pair
+  // It will work if we pass nullptr.
+#if defined(_MSC_VER) && _MSC_VER >= 1600
+  views::View* null_view = nullptr;
+#else
+  views::View* null_view = NULL;
+#endif
+
   view1->RequestFocus();
   ASSERT_EQ(1, static_cast<int>(listener.focus_changes().size()));
-  EXPECT_TRUE(listener.focus_changes()[0] == ViewPair(NULL, view1));
+  EXPECT_TRUE(listener.focus_changes()[0] == ViewPair(null_view, view1));
   listener.ClearFocusChanges();
 
   view2->RequestFocus();
@@ -862,7 +859,7 @@ TEST_F(FocusManagerTest, FocusChangeListener) {
 
   GetFocusManager()->ClearFocus();
   ASSERT_EQ(1, static_cast<int>(listener.focus_changes().size()));
-  EXPECT_TRUE(listener.focus_changes()[0] == ViewPair(view2, NULL));
+  EXPECT_TRUE(listener.focus_changes()[0] == ViewPair(view2, null_view));
 }
 
 class TestNativeButton : public NativeButton {
@@ -871,7 +868,11 @@ class TestNativeButton : public NativeButton {
       : NativeButton(NULL, text) {
   };
   virtual gfx::NativeView TestGetNativeControlView() {
+#if defined(TOUCH_UI)
+    return GetWidget()->GetNativeView();
+#else
     return native_wrapper_->GetTestingHandle();
+#endif
   }
 };
 
@@ -901,7 +902,7 @@ class TestTextfield : public Textfield {
   }
 };
 
-class TestCombobox : public Combobox, public ComboboxModel {
+class TestCombobox : public Combobox, public ui::ComboboxModel {
  public:
   TestCombobox() : Combobox(this) { }
   virtual gfx::NativeView TestGetNativeControlView() {
@@ -965,6 +966,11 @@ TEST_F(FocusManagerTest, FocusNativeControls) {
   EXPECT_EQ(tab_button, GetFocusManager()->GetFocusedView());
 }
 
+
+// On linux, we don't store/restore focused view because gtk handles
+// this (and pure views will be the same).
+#if defined(OS_WIN)
+
 // Test that when activating/deactivating the top window, the focus is stored/
 // restored properly.
 TEST_F(FocusManagerTest, FocusStoreRestore) {
@@ -987,19 +993,28 @@ TEST_F(FocusManagerTest, FocusStoreRestore) {
   message_loop()->RunAllPending();
   //  MessageLoopForUI::current()->Run(new AcceleratorHandler());
 
+  // Visual Studio 2010 has problems converting NULL to the null pointer for
+  // std::pair.  See http://connect.microsoft.com/VisualStudio/feedback/details/520043/error-converting-from-null-to-a-pointer-type-in-std-pair
+  // It will work if we pass nullptr.
+#if defined(_MSC_VER) && _MSC_VER >= 1600
+  views::View* null_view = nullptr;
+#else
+  views::View* null_view = NULL;
+#endif
+
   // Deacivate the window, it should store its focus.
   SimulateDeactivateWindow();
   EXPECT_EQ(NULL, GetFocusManager()->GetFocusedView());
   ASSERT_EQ(2, static_cast<int>(listener.focus_changes().size()));
-  EXPECT_TRUE(listener.focus_changes()[0] == ViewPair(NULL, view));
-  EXPECT_TRUE(listener.focus_changes()[1] == ViewPair(view, NULL));
+  EXPECT_TRUE(listener.focus_changes()[0] == ViewPair(null_view, view));
+  EXPECT_TRUE(listener.focus_changes()[1] == ViewPair(view, null_view));
   listener.ClearFocusChanges();
 
   // Reactivate, focus should come-back to the previously focused view.
   SimulateActivateWindow();
   EXPECT_EQ(view, GetFocusManager()->GetFocusedView());
   ASSERT_EQ(1, static_cast<int>(listener.focus_changes().size()));
-  EXPECT_TRUE(listener.focus_changes()[0] == ViewPair(NULL, view));
+  EXPECT_TRUE(listener.focus_changes()[0] == ViewPair(null_view, view));
   listener.ClearFocusChanges();
 
   // Same test with a NativeControl.
@@ -1008,13 +1023,13 @@ TEST_F(FocusManagerTest, FocusStoreRestore) {
   EXPECT_EQ(NULL, GetFocusManager()->GetFocusedView());
   ASSERT_EQ(2, static_cast<int>(listener.focus_changes().size()));
   EXPECT_TRUE(listener.focus_changes()[0] == ViewPair(view, button));
-  EXPECT_TRUE(listener.focus_changes()[1] == ViewPair(button, NULL));
+  EXPECT_TRUE(listener.focus_changes()[1] == ViewPair(button, null_view));
   listener.ClearFocusChanges();
 
   SimulateActivateWindow();
   EXPECT_EQ(button, GetFocusManager()->GetFocusedView());
   ASSERT_EQ(1, static_cast<int>(listener.focus_changes().size()));
-  EXPECT_TRUE(listener.focus_changes()[0] == ViewPair(NULL, button));
+  EXPECT_TRUE(listener.focus_changes()[0] == ViewPair(null_view, button));
   listener.ClearFocusChanges();
 
   /*
@@ -1028,10 +1043,11 @@ TEST_F(FocusManagerTest, FocusStoreRestore) {
 
   EXPECT_EQ(view, GetFocusManager()->GetFocusedView());
   ASSERT_EQ(2, static_cast<int>(listener.focus_changes().size()));
-  EXPECT_TRUE(listener.focus_changes()[0] == ViewPair(button, NULL));
-  EXPECT_TRUE(listener.focus_changes()[1] == ViewPair(NULL, view));
+  EXPECT_TRUE(listener.focus_changes()[0] == ViewPair(button, null_view));
+  EXPECT_TRUE(listener.focus_changes()[1] == ViewPair(null_view, view));
   */
 }
+#endif
 
 TEST_F(FocusManagerTest, ContainsView) {
   View* view = new View();
@@ -1448,12 +1464,12 @@ class MessageTrackingView : public View {
  }
 
   virtual bool OnKeyPressed(const KeyEvent& e) {
-    keys_pressed_.push_back(e.GetKeyCode());
+    keys_pressed_.push_back(e.key_code());
     return true;
   }
 
   virtual bool OnKeyReleased(const KeyEvent& e) {
-    keys_released_.push_back(e.GetKeyCode());
+    keys_released_.push_back(e.key_code());
     return true;
   }
 
@@ -1667,11 +1683,9 @@ class FocusManagerDtorTest : public FocusManagerTest {
           dtor_tracker_(dtor_tracker) {
       tracked_focus_manager_ = new FocusManagerDtorTracked(this,
           dtor_tracker_);
-      // Replace focus_manager_ with FocusManagerDtorTracked
-      set_focus_manager(tracked_focus_manager_);
-
-      GetNonClientView()->SetFrameView(CreateFrameViewForWindow());
-      Init(NULL, gfx::Rect(0, 0, 100, 100));
+      non_client_view()->SetFrameView(CreateFrameViewForWindow());
+      InitWindow(NULL, gfx::Rect(0, 0, 100, 100));
+      ReplaceFocusManager(tracked_focus_manager_);
     }
 
     virtual ~WindowGtkDtorTracked() {
@@ -1694,7 +1708,7 @@ class FocusManagerDtorTest : public FocusManagerTest {
 
   virtual void TearDown() {
     if (window_) {
-      window_->Close();
+      window_->CloseWindow();
       message_loop()->RunAllPending();
     }
   }
@@ -1712,7 +1726,7 @@ TEST_F(FocusManagerDtorTest, FocusManagerDestructedLast) {
   tabbed_pane->AddTab(L"Awesome tab", button);
 
   // Close the window.
-  window_->Close();
+  window_->CloseWindow();
   message_loop()->RunAllPending();
 
   // Test window, button and focus manager should all be destructed.

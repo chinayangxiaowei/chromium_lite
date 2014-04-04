@@ -12,13 +12,13 @@
 #include <vector>
 
 #include "base/gtest_prod_util.h"
+#include "base/memory/scoped_ptr.h"
 #include "base/observer_list.h"
-#include "base/scoped_ptr.h"
+#include "chrome/browser/search_engines/search_host_to_urls_map.h"
 #include "chrome/browser/search_engines/template_url_id.h"
 #include "chrome/browser/webdata/web_data_service.h"
-#include "chrome/browser/search_engines/search_host_to_urls_map.h"
-#include "chrome/common/notification_observer.h"
-#include "chrome/common/notification_registrar.h"
+#include "content/common/notification_observer.h"
+#include "content/common/notification_registrar.h"
 
 class GURL;
 class Extension;
@@ -59,6 +59,7 @@ class TemplateURLModel : public WebDataServiceConsumer,
                          public NotificationObserver {
  public:
   typedef std::map<std::string, std::string> QueryTerms;
+  typedef std::vector<const TemplateURL*> TemplateURLVector;
 
   // Struct used for initializing the data store with fake data.
   // Each initializer is mapped to a TemplateURL.
@@ -157,7 +158,7 @@ class TemplateURLModel : public WebDataServiceConsumer,
 
   // Returns the set of URLs describing the keywords. The elements are owned
   // by TemplateURLModel and should not be deleted.
-  std::vector<const TemplateURL*> GetTemplateURLs() const;
+  TemplateURLVector GetTemplateURLs() const;
 
   // Increment the usage count of a keyword.
   // Called when a URL is loaded that was generated from a keyword.
@@ -258,7 +259,6 @@ class TemplateURLModel : public WebDataServiceConsumer,
   friend class TemplateURLModelTestUtil;
 
   typedef std::map<string16, const TemplateURL*> KeywordToTemplateMap;
-  typedef std::vector<const TemplateURL*> TemplateURLVector;
 
   // Helper functor for FindMatchingKeywords(), for finding the range of
   // keywords which begin with a prefix.

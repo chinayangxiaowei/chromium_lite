@@ -1,4 +1,4 @@
-// Copyright (c) 2008 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -34,7 +34,6 @@
 #include "base/message_pump.h"
 
 #include <CoreFoundation/CoreFoundation.h>
-#include <IOKit/IOKitLib.h>
 
 #if !defined(__OBJC__)
 class NSAutoreleasePool;
@@ -86,23 +85,16 @@ class MessagePumpCFRunLoopBase : public MessagePump {
 
  private:
   // Timer callback scheduled by ScheduleDelayedWork.  This does not do any
-  // work, but it signals delayed_work_source_ so that delayed work can be
-  // performed within the appropriate priority constraints.
+  // work, but it signals work_source_ so that delayed work can be performed
+  // within the appropriate priority constraints.
   static void RunDelayedWorkTimer(CFRunLoopTimerRef timer, void* info);
 
   // Perform highest-priority work.  This is associated with work_source_
-  // signalled by ScheduleWork.  The static method calls the instance method;
-  // the instance method returns true if work was done.
+  // signalled by ScheduleWork or RunDelayedWorkTimer.  The static method calls
+  // the instance method; the instance method returns true if it resignalled
+  // work_source_ to be called again from the loop.
   static void RunWorkSource(void* info);
   bool RunWork();
-
-  // Perform delayed-priority work.  This is associated with
-  // delayed_work_source_ signalled by RunDelayedWorkTimer, and is responsible
-  // for calling ScheduleDelayedWork again if appropriate.  The static method
-  // calls the instance method; the instance method returns true if more
-  // delayed work is available.
-  static void RunDelayedWorkSource(void* info);
-  bool RunDelayedWork();
 
   // Perform idle-priority work.  This is normally called by PreWaitObserver,
   // but is also associated with idle_work_source_.  When this function
@@ -149,12 +141,6 @@ class MessagePumpCFRunLoopBase : public MessagePump {
   // the basis of run loops starting and stopping.
   virtual void EnterExitRunLoop(CFRunLoopActivity activity);
 
-  // IOKit power state change notification callback, called when the system
-  // enters and leaves the sleep state.
-  static void PowerStateNotification(void* info, io_service_t service,
-                                     uint32_t message_type,
-                                     void* message_argument);
-
   // The thread's run loop.
   CFRunLoopRef run_loop_;
 
@@ -162,17 +148,11 @@ class MessagePumpCFRunLoopBase : public MessagePump {
   // callbacks.
   CFRunLoopTimerRef delayed_work_timer_;
   CFRunLoopSourceRef work_source_;
-  CFRunLoopSourceRef delayed_work_source_;
   CFRunLoopSourceRef idle_work_source_;
   CFRunLoopSourceRef nesting_deferred_work_source_;
   CFRunLoopObserverRef pre_wait_observer_;
   CFRunLoopObserverRef pre_source_observer_;
   CFRunLoopObserverRef enter_exit_observer_;
-
-  // Objects used for power state notification.  See PowerStateNotification.
-  io_connect_t root_power_domain_;
-  IONotificationPortRef power_notification_port_;
-  io_object_t power_notification_object_;
 
   // (weak) Delegate passed as an argument to the innermost Run call.
   Delegate* delegate_;
@@ -202,7 +182,6 @@ class MessagePumpCFRunLoopBase : public MessagePump {
   // any call to Run on the stack.  The Run method will check for delegateless
   // work on entry and redispatch it as needed once a delegate is available.
   bool delegateless_work_;
-  bool delegateless_delayed_work_;
   bool delegateless_idle_work_;
 
   DISALLOW_COPY_AND_ASSIGN(MessagePumpCFRunLoopBase);

@@ -1,11 +1,11 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #import <Cocoa/Cocoa.h>
 
 #import "base/mac/cocoa_protocols.h"
-#include "base/scoped_nsobject.h"
+#include "base/memory/scoped_nsobject.h"
 #import "chrome/browser/ui/cocoa/location_bar/autocomplete_text_field.h"
 #import "chrome/browser/ui/cocoa/location_bar/autocomplete_text_field_cell.h"
 #import "chrome/browser/ui/cocoa/location_bar/autocomplete_text_field_editor.h"
@@ -331,6 +331,7 @@ TEST_F(AutocompleteTextFieldObserverTest, ResetFieldEditorContinuesEditing) {
 
   // This should begin editing and indicate a change.
   EXPECT_CALL(field_observer_, OnDidBeginEditing());
+  EXPECT_CALL(field_observer_, OnBeforeChange());
   EXPECT_CALL(field_observer_, OnDidChange());
   [editor shouldChangeTextInRange:NSMakeRange(0, 0) replacementString:@""];
   [editor didChangeText];
@@ -749,11 +750,13 @@ TEST_F(AutocompleteTextFieldObserverTest, SendsEditingMessages) {
 
   // This should begin editing and indicate a change.
   EXPECT_CALL(field_observer_, OnDidBeginEditing());
+  EXPECT_CALL(field_observer_, OnBeforeChange());
   EXPECT_CALL(field_observer_, OnDidChange());
   [editor shouldChangeTextInRange:NSMakeRange(0, 0) replacementString:@""];
   [editor didChangeText];
 
   // Further changes don't send the begin message.
+  EXPECT_CALL(field_observer_, OnBeforeChange());
   EXPECT_CALL(field_observer_, OnDidChange());
   [editor shouldChangeTextInRange:NSMakeRange(0, 0) replacementString:@""];
   [editor didChangeText];

@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,8 +10,8 @@
 #include <string>
 
 #include "base/basictypes.h"
-#include "base/ref_counted.h"
-#include "base/scoped_ptr.h"
+#include "base/memory/ref_counted.h"
+#include "base/memory/scoped_ptr.h"
 #include "base/string16.h"
 #include "base/threading/non_thread_safe.h"
 #include "googleurl/src/gurl.h"
@@ -73,6 +73,12 @@ class HttpAuthController : public base::RefCounted<HttpAuthController>,
   virtual void DisableAuthScheme(HttpAuth::Scheme scheme);
 
  private:
+  // Actions for InvalidateCurrentHandler()
+  enum InvalidateHandlerAction {
+    INVALIDATE_HANDLER_AND_CACHED_CREDENTIALS,
+    INVALIDATE_HANDLER
+  };
+
   // So that we can mock this object.
   friend class base::RefCounted<HttpAuthController>;
 
@@ -83,8 +89,10 @@ class HttpAuthController : public base::RefCounted<HttpAuthController>,
   // cache entry's data and returns true.
   bool SelectPreemptiveAuth(const BoundNetLog& net_log);
 
-  // Invalidates the current handler, including cache.
-  void InvalidateCurrentHandler();
+  // Invalidates the current handler.  If |action| is
+  // INVALIDATE_HANDLER_AND_CACHED_CREDENTIALS, then also invalidate
+  // the cached credentials used by the handler.
+  void InvalidateCurrentHandler(InvalidateHandlerAction action);
 
   // Invalidates any auth cache entries after authentication has failed.
   // The identity that was rejected is |identity_|.
@@ -98,6 +106,11 @@ class HttpAuthController : public base::RefCounted<HttpAuthController>,
   // Populates auth_info_ with the challenge information, so that
   // URLRequestHttpJob can prompt for a username/password.
   void PopulateAuthChallenge();
+
+  // If |result| indicates a permanent failure, disables the current
+  // auth scheme for this controller and returns true.  Returns false
+  // otherwise.
+  bool DisableOnAuthHandlerResult(int result);
 
   void OnIOComplete(int result);
 

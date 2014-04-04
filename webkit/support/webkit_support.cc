@@ -1,11 +1,9 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "webkit/support/webkit_support.h"
 
-#include "app/gfx/gl/gl_context.h"
-#include "app/gfx/gl/gl_implementation.h"
 #include "base/at_exit.h"
 #include "base/base64.h"
 #include "base/command_line.h"
@@ -14,6 +12,8 @@
 #include "base/file_util.h"
 #include "base/i18n/icu_util.h"
 #include "base/logging.h"
+#include "base/memory/ref_counted.h"
+#include "base/memory/weak_ptr.h"
 #include "base/message_loop.h"
 #include "base/path_service.h"
 #include "base/process_util.h"
@@ -23,7 +23,6 @@
 #include "base/sys_string_conversions.h"
 #include "base/time.h"
 #include "base/utf_string_conversions.h"
-#include "base/weak_ptr.h"
 #include "grit/webkit_chromium_resources.h"
 #include "media/base/filter_collection.h"
 #include "media/base/message_loop_factory_impl.h"
@@ -35,8 +34,11 @@
 #include "third_party/WebKit/Source/WebKit/chromium/public/WebKit.h"
 #include "third_party/WebKit/Source/WebKit/chromium/public/WebPluginParams.h"
 #include "third_party/WebKit/Source/WebKit/chromium/public/WebURLError.h"
+#include "ui/gfx/gl/gl_context.h"
+#include "ui/gfx/gl/gl_implementation.h"
 #include "webkit/appcache/web_application_cache_host_impl.h"
 #include "webkit/glue/media/video_renderer_impl.h"
+#include "webkit/glue/webkit_constants.h"
 #include "webkit/glue/webkit_glue.h"
 #include "webkit/glue/webkitclient_impl.h"
 #include "webkit/glue/webmediaplayer_impl.h"
@@ -45,9 +47,9 @@
 #include "webkit/plugins/npapi/webplugin_page_delegate.h"
 #include "webkit/plugins/npapi/webplugininfo.h"
 #include "webkit/support/platform_support.h"
+#include "webkit/support/simple_database_system.h"
 #include "webkit/support/test_webplugin_page_delegate.h"
 #include "webkit/support/test_webkit_client.h"
-#include "webkit/tools/test_shell/simple_database_system.h"
 #include "webkit/tools/test_shell/simple_file_system.h"
 #include "webkit/tools/test_shell/simple_resource_loader_bridge.h"
 
@@ -164,8 +166,8 @@ FilePath GetWebKitRootDirFilePath() {
   if (file_util::PathExists(basePath.Append(FILE_PATH_LITERAL("chrome")))) {
     return basePath.Append(FILE_PATH_LITERAL("third_party/WebKit"));
   } else {
-    // WebKit/WebKit/chromium/ -> WebKit/
-    return basePath.Append(FILE_PATH_LITERAL("../.."));
+    // WebKit/Source/WebKit/chromium/ -> WebKit/
+    return basePath.Append(FILE_PATH_LITERAL("../../.."));
   }
 }
 
@@ -187,6 +189,26 @@ class WebKitClientMessageLoopImpl
   }
  private:
   MessageLoop* message_loop_;
+};
+
+// An wrapper object for giving TaskAdaptor ref-countability,
+// which NewRunnableMethod() requires.
+class TaskAdaptorHolder : public CancelableTask {
+ public:
+  explicit TaskAdaptorHolder(webkit_support::TaskAdaptor* adaptor)
+      : adaptor_(adaptor) {
+  }
+
+  virtual void Run() {
+    adaptor_->Run();
+  }
+
+  virtual void Cancel() {
+    adaptor_.reset();
+  }
+
+ private:
+  scoped_ptr<webkit_support::TaskAdaptor> adaptor_;
 };
 
 }  // namespace
@@ -290,7 +312,9 @@ WebKit::WebApplicationCacheHost* CreateApplicationCacheHost(
 
 WebKit::WebString GetWebKitRootDir() {
   FilePath path = GetWebKitRootDirFilePath();
-  return WebKit::WebString::fromUTF8(WideToUTF8(path.ToWStringHack()).c_str());
+  std::string path_ascii = path.MaybeAsASCII();
+  CHECK(!path_ascii.empty());
+  return WebKit::WebString::fromUTF8(path_ascii.c_str());
 }
 
 void SetUpGLBindings(GLBindingPreferences bindingPref) {
@@ -370,6 +394,11 @@ void PostDelayedTask(void (*func)(void*), void* context, int64 delay_ms) {
       FROM_HERE, NewRunnableFunction(func, context), delay_ms);
 }
 
+void PostDelayedTask(TaskAdaptor* task, int64 delay_ms) {
+  MessageLoop::current()->PostDelayedTask(
+      FROM_HERE, new TaskAdaptorHolder(task), delay_ms);
+}
+
 // Wrappers for FilePath and file_util
 
 WebString GetAbsoluteWebStringFromUTF8Path(const std::string& utf8_path) {
@@ -409,7 +438,8 @@ WebURL RewriteLayoutTestsURL(const std::string& utf8_url) {
 
   FilePath replacePath =
       GetWebKitRootDirFilePath().Append(FILE_PATH_LITERAL("LayoutTests/"));
-  CHECK(file_util::PathExists(replacePath));
+  CHECK(file_util::PathExists(replacePath)) << replacePath.value() <<
+      " (re-written from " << utf8_url << ") does not exit";
 #if defined(OS_WIN)
   std::string utf8_path = WideToUTF8(replacePath.value());
 #else
@@ -522,12 +552,6 @@ WebKit::WebThemeEngine* GetThemeEngine() {
 #endif
 
 // DevTools
-WebCString GetDevToolsDebuggerScriptSource() {
-  base::StringPiece debuggerScriptJS = webkit_glue::GetDataResource(
-      IDR_DEVTOOLS_DEBUGGER_SCRIPT_JS);
-  return WebCString(debuggerScriptJS.as_string().c_str());
-}
-
 WebURL GetDevToolsPathAsURL() {
   FilePath dirExe;
   if (!webkit_glue::GetExeDirectory(&dirExe)) {
@@ -545,6 +569,11 @@ void OpenFileSystem(WebFrame* frame, WebFileSystem::Type type,
   SimpleFileSystem* fileSystem = static_cast<SimpleFileSystem*>(
       test_environment->webkit_client()->fileSystem());
   fileSystem->OpenFileSystem(frame, type, size, create, callbacks);
+}
+
+// Timers
+double GetForegroundTabTimerInterval() {
+  return webkit_glue::kForegroundTabTimerInterval;
 }
 
 }  // namespace webkit_support

@@ -7,6 +7,7 @@
 #include <map>
 
 #include "base/file_util.h"
+#include "base/stringprintf.h"
 
 #ifdef OS_WIN
 
@@ -14,7 +15,7 @@ namespace courgette {
 
 // TempFile
 
-TempFile::TempFile() : file_(base::kInvalidPlatformFileValue), size_(0) {
+TempFile::TempFile() : file_(base::kInvalidPlatformFileValue) {
 }
 
 TempFile::~TempFile() {
@@ -25,25 +26,26 @@ void TempFile::Close() {
   if (valid()) {
     base::ClosePlatformFile(file_);
     file_ = base::kInvalidPlatformFileValue;
-    size_ = 0;
   }
 }
 
 bool TempFile::Create() {
   DCHECK(file_ == base::kInvalidPlatformFileValue);
   FilePath path;
-  if (file_util::CreateTemporaryFile(&path)) {
-    bool created = false;
-    base::PlatformFileError error_code = base::PLATFORM_FILE_OK;
-    int flags = base::PLATFORM_FILE_OPEN_ALWAYS | base::PLATFORM_FILE_READ |
-                base::PLATFORM_FILE_WRITE |
-                base::PLATFORM_FILE_DELETE_ON_CLOSE |
-                base::PLATFORM_FILE_TEMPORARY;
-    file_ = base::CreatePlatformFile(path, flags, &created, &error_code);
-    PLOG_IF(ERROR, file_ == base::kInvalidPlatformFileValue)
-        << "CreatePlatformFile";
-  }
-  return valid();
+  if (!file_util::CreateTemporaryFile(&path))
+    return false;
+
+  bool created = false;
+  base::PlatformFileError error_code = base::PLATFORM_FILE_OK;
+  int flags = base::PLATFORM_FILE_OPEN_ALWAYS | base::PLATFORM_FILE_READ |
+              base::PLATFORM_FILE_WRITE |
+              base::PLATFORM_FILE_DELETE_ON_CLOSE |
+              base::PLATFORM_FILE_TEMPORARY;
+  file_ = base::CreatePlatformFile(path, flags, &created, &error_code);
+  if (file_ == base::kInvalidPlatformFileValue)
+    return false;
+
+  return true;
 }
 
 bool TempFile::valid() const {
@@ -54,15 +56,8 @@ base::PlatformFile TempFile::handle() const {
   return file_;
 }
 
-size_t TempFile::size() const {
-  return size_;
-}
-
 bool TempFile::SetSize(size_t size) {
-  bool ret = base::TruncatePlatformFile(file_, size);
-  if (ret)
-    size_ = size;
-  return ret;
+  return base::TruncatePlatformFile(file_, size);
 }
 
 // FileMapping
@@ -74,19 +69,25 @@ FileMapping::~FileMapping() {
   Close();
 }
 
+bool FileMapping::InitializeView(size_t size) {
+  DCHECK(view_ == NULL);
+  DCHECK(mapping_ != NULL);
+  view_ = ::MapViewOfFile(mapping_, FILE_MAP_WRITE, 0, 0, size);
+  if (!view_) {
+    Close();
+    return false;
+  }
+  return true;
+}
+
 bool FileMapping::Create(HANDLE file, size_t size) {
   DCHECK(file != INVALID_HANDLE_VALUE);
   DCHECK(!valid());
   mapping_ = ::CreateFileMapping(file, NULL, PAGE_READWRITE, 0, 0, NULL);
-  if (mapping_)
-    view_ = ::MapViewOfFile(mapping_, FILE_MAP_WRITE, 0, 0, size);
+  if (!mapping_)
+    return false;
 
-  if (!valid()) {
-    PLOG(ERROR) << "Failed to map file";
-    Close();
-  }
-
-  return valid();
+  return InitializeView(size);
 }
 
 void FileMapping::Close() {
@@ -119,14 +120,17 @@ bool TempMapping::Initialize(size_t size) {
   // is as strict or stricter than the alignment of the element type.  This is
   // not always true, e.g. __m128 has 16-byte alignment.
   size += sizeof(this);
-  bool ret = file_.Create() && file_.SetSize(size) &&
-             mapping_.Create(file_.handle(), size);
-  if (ret) {
-    TempMapping** write = reinterpret_cast<TempMapping**>(mapping_.view());
-    write[0] = this;
+  if (!file_.Create() ||
+      !file_.SetSize(size) ||
+      !mapping_.Create(file_.handle(), size)) {
+    file_.Close();
+    return false;
   }
 
-  return ret;
+  TempMapping** write = reinterpret_cast<TempMapping**>(mapping_.view());
+  write[0] = this;
+
+  return true;
 }
 
 void* TempMapping::memory() const {
@@ -135,6 +139,10 @@ void* TempMapping::memory() const {
     mem += sizeof(this);
   DCHECK(mem);
   return mem;
+}
+
+bool TempMapping::valid() const {
+  return mapping_.valid();
 }
 
 // static

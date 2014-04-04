@@ -1,8 +1,9 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "base/file_path.h"
+#include "base/test/test_timeouts.h"
 #include "chrome/app/chrome_command_ids.h"
 #include "chrome/browser/ui/view_ids.h"
 #include "chrome/test/automation/automation_proxy.h"
@@ -11,9 +12,9 @@
 #include "chrome/test/automation/window_proxy.h"
 #include "chrome/test/ui/ui_test.h"
 #include "chrome/test/ui_test_utils.h"
-#include "gfx/rect.h"
+#include "ui/base/events.h"
 #include "ui/base/message_box_flags.h"
-#include "views/event.h"
+#include "ui/gfx/rect.h"
 
 class FastShutdown : public UITest {
 };
@@ -42,7 +43,7 @@ TEST_F(FastShutdown, MAYBE_SlowTermination) {
   ASSERT_TRUE(window->GetViewBounds(VIEW_ID_TAB_CONTAINER, &bounds, true));
   // This click will launch a popup which has a before unload handler.
   ASSERT_TRUE(window->SimulateOSClick(bounds.CenterPoint(),
-                                      views::Event::EF_LEFT_BUTTON_DOWN));
+                                      ui::EF_LEFT_BUTTON_DOWN));
   ASSERT_TRUE(browser->WaitForTabCountToBecome(2));
   // Close the tab, removing the one and only before unload handler.
   scoped_refptr<TabProxy> tab(browser->GetTab(1));
@@ -54,6 +55,9 @@ TEST_F(FastShutdown, MAYBE_SlowTermination) {
   ASSERT_TRUE(automation()->WaitForAppModalDialog());
   ASSERT_TRUE(automation()->ClickAppModalDialogButton(
                   ui::MessageBoxFlags::DIALOGBUTTON_OK));
-  ASSERT_TRUE(WaitForBrowserProcessToQuit(
-      TestTimeouts::wait_for_terminate_timeout_ms()));
+
+  int exit_code = -1;
+  ASSERT_TRUE(launcher_->WaitForBrowserProcessToQuit(
+                  TestTimeouts::wait_for_terminate_timeout_ms(), &exit_code));
+  EXPECT_EQ(0, exit_code);  // Expect a clean shutdown.
 }

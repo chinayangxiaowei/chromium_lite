@@ -26,10 +26,12 @@
 #include "chrome/browser/ui/views/theme_background.h"
 #include "chrome/browser/ui/views/toolbar_view.h"
 #include "chrome/common/chrome_switches.h"
-#include "gfx/canvas.h"
 #include "grit/generated_resources.h"
+#include "grit/theme_resources.h"
 #include "third_party/cros/chromeos_wm_ipc_enums.h"
 #include "ui/base/models/simple_menu_model.h"
+#include "ui/base/theme_provider.h"
+#include "ui/gfx/canvas.h"
 #include "views/controls/button/button.h"
 #include "views/controls/button/image_button.h"
 #include "views/controls/menu/menu_2.h"
@@ -42,6 +44,12 @@ namespace {
 
 // Amount to offset the toolbar by when vertical tabs are enabled.
 const int kVerticalTabStripToolbarOffset = 2;
+// Amount to tweak the position of the status area to get it to look right.
+const int kStatusAreaVerticalAdjustment = -1;
+
+// If a popup window is larger than this fraction of the screen, create a tab.
+const float kPopupMaxWidthFactor = 0.5;
+const float kPopupMaxHeightFactor = 0.6;
 
 }  // namespace
 
@@ -89,7 +97,7 @@ class BrowserViewLayout : public ::BrowserViewLayout {
     gfx::Rect tabstrip_bounds(
         browser_view_->frame()->GetBoundsForTabStrip(tabstrip_));
     gfx::Point tabstrip_origin = tabstrip_bounds.origin();
-    views::View::ConvertPointToView(browser_view_->GetParent(), browser_view_,
+    views::View::ConvertPointToView(browser_view_->parent(), browser_view_,
                                     &tabstrip_origin);
     tabstrip_bounds.set_origin(tabstrip_origin);
     return browser_view_->UseVerticalTabs() ?
@@ -115,7 +123,7 @@ class BrowserViewLayout : public ::BrowserViewLayout {
   virtual int NonClientHitTest(const gfx::Point& point) {
     gfx::Point point_in_browser_view_coords(point);
     views::View::ConvertPointToView(
-        browser_view_->GetParent(), browser_view_,
+        browser_view_->parent(), browser_view_,
         &point_in_browser_view_coords);
     return IsPointInViewsInTitleArea(point_in_browser_view_coords) ?
         HTCLIENT : ::BrowserViewLayout::NonClientHitTest(point);
@@ -165,21 +173,21 @@ class BrowserViewLayout : public ::BrowserViewLayout {
 
     // The toolbar is promoted to the title for vertical tabs.
     bool toolbar_visible = browser_view_->IsToolbarVisible();
-    toolbar_->SetVisible(toolbar_visible);
     int toolbar_height = 0;
-    if (toolbar_visible)
-      toolbar_height = toolbar_->GetPreferredSize().height();
-    int tabstrip_max_x = tabstrip_->bounds().right();
-    toolbar_->SetBounds(tabstrip_max_x,
-                        bounds.y() - kVerticalTabStripToolbarOffset,
-                        browser_view_->width() - tabstrip_max_x,
-                        toolbar_height);
-
+    if (toolbar_) {
+      toolbar_->SetVisible(toolbar_visible);
+      if (toolbar_visible)
+        toolbar_height = toolbar_->GetPreferredSize().height();
+      int tabstrip_max_x = tabstrip_->bounds().right();
+      toolbar_->SetBounds(tabstrip_max_x,
+                          bounds.y() - kVerticalTabStripToolbarOffset,
+                          browser_view_->width() - tabstrip_max_x,
+                          toolbar_height);
+    }
     // Adjust the available bounds for other components.
     gfx::Rect available_bounds = vertical_layout_rect();
     available_bounds.Inset(tabstrip_w, 0, 0, 0);
     set_vertical_layout_rect(available_bounds);
-
     return bounds.y() + toolbar_height;
   }
 
@@ -194,8 +202,11 @@ class BrowserViewLayout : public ::BrowserViewLayout {
 
     // Layout status area after tab strip.
     gfx::Size status_size = status_area_->GetPreferredSize();
-    status_area_->SetBounds(bounds.right() - status_size.width(), bounds.y(),
-                            status_size.width(), status_size.height());
+    status_area_->SetBounds(
+        bounds.right() - status_size.width(),
+        bounds.y() + kStatusAreaVerticalAdjustment,
+        status_size.width(),
+        status_size.height());
     tabstrip_->SetBounds(bounds.x(), bounds.y(),
         std::max(0, status_area_->bounds().x() - bounds.x()),
         bounds.height());
@@ -234,15 +245,16 @@ void BrowserView::Init() {
   // a NonClientFrameView even though visually a TabStrip is over a
   // NonClientFrameView.
   BrowserFrameGtk* gtk_frame = static_cast<BrowserFrameGtk*>(frame());
-  gtk_frame->GetNonClientView()->SetContextMenuController(this);
+  gtk_frame->non_client_view()->SetContextMenuController(this);
 
   // Listen to wrench menu opens.
-  toolbar()->AddMenuListener(this);
+  if (toolbar())
+    toolbar()->AddMenuListener(this);
 
   // Make sure the window is set to the right type.
   std::vector<int> params;
   params.push_back(browser()->tab_count());
-  params.push_back(browser()->selected_index());
+  params.push_back(browser()->active_index());
   params.push_back(gtk_get_current_event_time());
   WmIpc::instance()->SetWindowType(
       GTK_WIDGET(frame()->GetWindow()->GetNativeWindow()),
@@ -251,13 +263,24 @@ void BrowserView::Init() {
 }
 
 void BrowserView::Show() {
+  ShowInternal(true);
+}
+
+void BrowserView::ShowInactive() {
+  ShowInternal(false);
+}
+
+void BrowserView::ShowInternal(bool is_active) {
   bool was_visible = frame()->GetWindow()->IsVisible();
-  ::BrowserView::Show();
+  if (is_active)
+    ::BrowserView::Show();
+  else
+    ::BrowserView::ShowInactive();
   if (!was_visible) {
     // Have to update the tab count and selected index to reflect reality.
     std::vector<int> params;
     params.push_back(browser()->tab_count());
-    params.push_back(browser()->selected_index());
+    params.push_back(browser()->active_index());
     WmIpc::instance()->SetWindowType(
         GTK_WIDGET(frame()->GetWindow()->GetNativeWindow()),
         WM_IPC_WINDOW_CHROME_TOPLEVEL,
@@ -276,7 +299,6 @@ views::LayoutManager* BrowserView::CreateLayoutManager() const {
 
 void BrowserView::ChildPreferredSizeChanged(View* child) {
   Layout();
-  SchedulePaint();
 }
 
 bool BrowserView::GetSavedWindowBounds(gfx::Rect* bounds) const {
@@ -305,15 +327,15 @@ void BrowserView::Paste() {
 }
 
 // views::ContextMenuController overrides.
-void BrowserView::ShowContextMenu(views::View* source,
-                                  const gfx::Point& p,
-                                  bool is_mouse_gesture) {
+void BrowserView::ShowContextMenuForView(views::View* source,
+                                         const gfx::Point& p,
+                                         bool is_mouse_gesture) {
   // Only show context menu if point is in unobscured parts of browser, i.e.
   // if NonClientHitTest returns :
   // - HTCAPTION: in title bar or unobscured part of tabstrip
   // - HTNOWHERE: as the name implies.
   gfx::Point point_in_parent_coords(p);
-  views::View::ConvertPointToView(NULL, GetParent(), &point_in_parent_coords);
+  views::View::ConvertPointToView(NULL, parent(), &point_in_parent_coords);
   int hit_test = NonClientHitTest(point_in_parent_coords);
   if (hit_test == HTCAPTION || hit_test == HTNOWHERE)
     system_menu_menu_->RunMenuAt(p, views::Menu2::ALIGN_TOPLEFT);
@@ -354,6 +376,13 @@ void BrowserView::OpenButtonOptions(const views::View* button_view) {
 
 StatusAreaHost::ScreenMode BrowserView::GetScreenMode() const {
   return kBrowserMode;
+}
+
+StatusAreaHost::TextStyle BrowserView::GetTextStyle() const {
+  ui::ThemeProvider* tp = GetThemeProvider();
+  return tp->HasCustomImage(IDR_THEME_FRAME) ?
+      StatusAreaHost::kWhiteHaloed : (IsOffTheRecord() ?
+          StatusAreaHost::kWhitePlain : StatusAreaHost::kGrayEmbossed);
 }
 
 ////////////////////////////////////////////////////////////////////////////////

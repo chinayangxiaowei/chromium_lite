@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,7 +7,7 @@
 #include <algorithm>
 
 #include "base/logging.h"
-#include "base/scoped_ptr.h"
+#include "base/memory/scoped_ptr.h"
 #include "base/stl_util-inl.h"
 #include "base/task.h"
 #include "base/time.h"
@@ -79,6 +79,10 @@ void ScreenRecorder::AddConnection(
     scoped_refptr<ConnectionToClient> connection) {
   ScopedTracer tracer("AddConnection");
 
+  capture_loop_->PostTask(
+      FROM_HERE,
+      NewRunnableMethod(this, &ScreenRecorder::DoInvalidateFullScreen));
+
   // Add the client to the list so it can receive update stream.
   network_loop_->PostTask(
       FROM_HERE,
@@ -102,8 +106,8 @@ void ScreenRecorder::RemoveAllConnections() {
 
 Capturer* ScreenRecorder::capturer() {
   DCHECK_EQ(capture_loop_, MessageLoop::current());
-  DCHECK(capturer_.get());
-  return capturer_.get();
+  DCHECK(capturer_);
+  return capturer_;
 }
 
 Encoder* ScreenRecorder::encoder() {
@@ -132,8 +136,10 @@ void ScreenRecorder::DoStart() {
 void ScreenRecorder::DoStop(Task* done_task) {
   DCHECK_EQ(capture_loop_, MessageLoop::current());
 
+  // We might have not started when we receive a stop command, simply run the
+  // task and then return.
   if (!is_recording_) {
-    NOTREACHED() << "Record session not started.";
+    DoCompleteStop(done_task);
     return;
   }
 
@@ -206,6 +212,7 @@ void ScreenRecorder::DoCapture() {
   DCHECK_LE(recordings_, kMaxRecordings);
 
   // And finally perform one capture.
+  capture_start_time_ = base::Time::Now();
   capturer()->CaptureInvalidRects(
       NewCallback(this, &ScreenRecorder::CaptureDoneCallback));
 }
@@ -218,6 +225,9 @@ void ScreenRecorder::CaptureDoneCallback(
     return;
 
   TraceContext::tracer()->PrintString("Capture Done");
+  int capture_time = static_cast<int>(
+      (base::Time::Now() - capture_start_time_).InMilliseconds());
+  capture_data->set_capture_time_ms(capture_time);
   encode_loop_->PostTask(
       FROM_HERE,
       NewTracedMethod(this, &ScreenRecorder::DoEncode, capture_data));
@@ -234,9 +244,16 @@ void ScreenRecorder::DoFinishOneRecording() {
   --recordings_;
   DCHECK_GE(recordings_, 0);
 
-  // Try to do a capture again. Note that the following method may do nothing
-  // if it is too early to perform a capture.
-  DoCapture();
+  // Try to do a capture again only if |frame_skipped_| is set to true by
+  // capture timer.
+  if (frame_skipped_)
+    DoCapture();
+}
+
+void ScreenRecorder::DoInvalidateFullScreen() {
+  DCHECK_EQ(capture_loop_, MessageLoop::current());
+
+  capturer_->InvalidateFullScreen();
 }
 
 // Network thread --------------------------------------------------------------
@@ -248,7 +265,7 @@ void ScreenRecorder::DoSendVideoPacket(VideoPacket* packet) {
 
   bool last = (packet->flags() & VideoPacket::LAST_PARTITION) != 0;
 
-  if (network_stopped_) {
+  if (network_stopped_ || connections_.empty()) {
     delete packet;
     return;
   }
@@ -288,7 +305,6 @@ void ScreenRecorder::DoAddConnection(
     scoped_refptr<ConnectionToClient> connection) {
   DCHECK_EQ(network_loop_, MessageLoop::current());
 
-  // TODO(hclam): Force a full frame for next encode.
   connections_.push_back(connection);
 }
 
@@ -296,7 +312,6 @@ void ScreenRecorder::DoRemoveClient(
     scoped_refptr<ConnectionToClient> connection) {
   DCHECK_EQ(network_loop_, MessageLoop::current());
 
-  // TODO(hclam): Is it correct to do to a scoped_refptr?
   ConnectionToClientList::iterator it =
       std::find(connections_.begin(), connections_.end(), connection);
   if (it != connections_.end()) {
@@ -342,8 +357,8 @@ void ScreenRecorder::DoEncode(
     return;
   }
 
-  // TODO(hclam): Invalidate the full screen if there is a new connection added.
   TraceContext::tracer()->PrintString("Encode start");
+  encode_start_time_ = base::Time::Now();
   encoder()->Encode(
       capture_data, false,
       NewCallback(this, &ScreenRecorder::EncodedDataAvailableCallback));
@@ -363,6 +378,13 @@ void ScreenRecorder::DoStopOnEncodeThread(Task* done_task) {
 
 void ScreenRecorder::EncodedDataAvailableCallback(VideoPacket* packet) {
   DCHECK_EQ(encode_loop_, MessageLoop::current());
+
+  bool last = (packet->flags() & VideoPacket::LAST_PACKET) != 0;
+  if (last) {
+    int encode_time = static_cast<int>(
+        (base::Time::Now() - encode_start_time_).InMilliseconds());
+    packet->set_encode_time_ms(encode_time);
+  }
 
   network_loop_->PostTask(
       FROM_HERE,

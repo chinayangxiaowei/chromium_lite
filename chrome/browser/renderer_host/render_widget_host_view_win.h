@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -13,16 +13,16 @@
 
 #include <vector>
 
-#include "base/scoped_comptr_win.h"
-#include "base/scoped_ptr.h"
-#include "base/scoped_vector.h"
+#include "base/memory/scoped_ptr.h"
+#include "base/memory/scoped_vector.h"
 #include "base/task.h"
+#include "base/win/scoped_comptr.h"
 #include "chrome/browser/accessibility/browser_accessibility_manager.h"
-#include "chrome/browser/ime_input.h"
-#include "chrome/browser/renderer_host/render_widget_host_view.h"
-#include "chrome/common/notification_observer.h"
-#include "chrome/common/notification_registrar.h"
-#include "gfx/native_widget_types.h"
+#include "content/browser/renderer_host/render_widget_host_view.h"
+#include "content/common/notification_observer.h"
+#include "content/common/notification_registrar.h"
+#include "ui/base/win/ime_input.h"
+#include "ui/gfx/native_widget_types.h"
 #include "webkit/glue/webcursor.h"
 
 class BackingStore;
@@ -120,16 +120,18 @@ class RenderWidgetHostViewWin
     MESSAGE_HANDLER(WM_IME_CHAR, OnKeyEvent)
     MESSAGE_HANDLER(WM_MOUSEACTIVATE, OnMouseActivate)
     MESSAGE_HANDLER(WM_GETOBJECT, OnGetObject)
+    MESSAGE_HANDLER(WM_PARENTNOTIFY, OnParentNotify)
   END_MSG_MAP()
 
   // Implementation of RenderWidgetHostView:
   virtual void InitAsPopup(RenderWidgetHostView* parent_host_view,
                            const gfx::Rect& pos);
-  virtual void InitAsFullscreen(RenderWidgetHostView* parent_host_view);
+  virtual void InitAsFullscreen();
   virtual RenderWidgetHost* GetRenderWidgetHost() const;
   virtual void DidBecomeSelected();
   virtual void WasHidden();
   virtual void SetSize(const gfx::Size& size);
+  virtual void SetBounds(const gfx::Rect& rect);
   virtual gfx::NativeView GetNativeView();
   virtual void MovePluginWindows(
       const std::vector<webkit::npapi::WebPluginGeometry>& moves);
@@ -159,7 +161,7 @@ class RenderWidgetHostViewWin
   virtual bool ContainsNativeView(gfx::NativeView native_view) const;
   virtual void SetVisuallyDeemphasized(const SkColor* color, bool animate);
 
-  virtual gfx::PluginWindowHandle GetCompositorHostWindow();
+  virtual gfx::PluginWindowHandle GetCompositingSurface();
   virtual void ShowCompositorHostWindow(bool show);
 
   virtual void OnAccessibilityNotifications(
@@ -215,6 +217,9 @@ class RenderWidgetHostViewWin
   LRESULT OnVScroll(int code, short position, HWND scrollbar_control);
   // Handle horizontal scrolling
   LRESULT OnHScroll(int code, short position, HWND scrollbar_control);
+
+  LRESULT OnParentNotify(UINT message, WPARAM wparam, LPARAM lparam,
+                         BOOL& handled);
 
   void OnFinalMessage(HWND window);
 
@@ -272,6 +277,10 @@ class RenderWidgetHostViewWin
   // When we are doing accelerated compositing
   HWND compositor_host_window_;
 
+  // true if the compositor host window must be hidden after the
+  // software renderered view is updated.
+  bool hide_compositor_window_at_next_paint_;
+
   // The cursor for the page. This is passed up from the renderer.
   WebCursor current_cursor_;
 
@@ -282,8 +291,8 @@ class RenderWidgetHostViewWin
   bool track_mouse_leave_;
 
   // Wrapper class for IME input.
-  // (See "chrome/browser/ime_input.h" for its details.)
-  ImeInput ime_input_;
+  // (See "ui/base/win/ime_input.h" for its details.)
+  ui::ImeInput ime_input_;
 
   // Represents whether or not this browser process is receiving status
   // messages about the focused edit control from a renderer process.
@@ -351,6 +360,8 @@ class RenderWidgetHostViewWin
   WebKit::WebTextInputType text_input_type_;
 
   ScopedVector<ui::ViewProp> props_;
+
+  scoped_ptr<ui::ViewProp> accessibility_prop_;
 
   DISALLOW_COPY_AND_ASSIGN(RenderWidgetHostViewWin);
 };

@@ -1,17 +1,17 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "base/scoped_nsobject.h"
+#include "base/memory/scoped_nsobject.h"
 #include "base/utf_string_conversions.h"
 #include "chrome/browser/notifications/balloon.h"
 #include "chrome/browser/notifications/balloon_collection.h"
 #include "chrome/browser/notifications/notification.h"
-#include "chrome/browser/renderer_host/test/test_render_view_host.h"
 #include "chrome/browser/ui/cocoa/browser_test_helper.h"
 #include "chrome/browser/ui/cocoa/cocoa_test_helper.h"
 #include "chrome/browser/ui/cocoa/notifications/balloon_controller.h"
 #include "chrome/test/testing_profile.h"
+#include "content/browser/renderer_host/test_render_view_host.h"
 #import "third_party/ocmock/OCMock/OCMock.h"
 
 // Subclass balloon controller and mock out the initialization of the RVH.

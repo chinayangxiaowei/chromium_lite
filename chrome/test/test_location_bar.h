@@ -8,15 +8,13 @@
 
 #include "chrome/browser/first_run/first_run.h"
 #include "chrome/browser/ui/omnibox/location_bar.h"
-#include "chrome/common/page_transition_types.h"
+#include "content/common/page_transition_types.h"
 #include "webkit/glue/window_open_disposition.h"
 
 class TestLocationBar : public LocationBar {
  public:
-  TestLocationBar()
-      : disposition_(CURRENT_TAB),
-        transition_(PageTransition::LINK) {
-  }
+  TestLocationBar();
+  virtual ~TestLocationBar();
 
   void set_input_string(const std::wstring& input_string) {
     input_string_ = input_string;
@@ -29,30 +27,23 @@ class TestLocationBar : public LocationBar {
   }
 
   // Overridden from LocationBar:
-  virtual void ShowFirstRunBubble(FirstRun::BubbleType bubble_type) {}
-  virtual void SetSuggestedText(const string16& text) {}
-  virtual std::wstring GetInputString() const { return input_string_; }
-  virtual WindowOpenDisposition GetWindowOpenDisposition() const {
-    return disposition_;
-  }
-  virtual PageTransition::Type GetPageTransition() const { return transition_; }
-  virtual void AcceptInput() {}
-  virtual void FocusLocation(bool select_all) {}
-  virtual void FocusSearch() {}
-  virtual void UpdateContentSettingsIcons() {}
-  virtual void UpdatePageActions() {}
-  virtual void InvalidatePageActions() {}
-  virtual void SaveStateToContents(TabContents* contents) {}
-  virtual void Revert() {}
-  virtual const AutocompleteEditView* location_entry() const {
-    return NULL;
-  }
-  virtual AutocompleteEditView* location_entry() {
-    return NULL;
-  }
-  virtual LocationBarTesting* GetLocationBarForTesting() {
-    return NULL;
-  }
+  virtual void ShowFirstRunBubble(FirstRun::BubbleType bubble_type) OVERRIDE {}
+  virtual void SetSuggestedText(const string16& text,
+                                InstantCompleteBehavior behavior) OVERRIDE {}
+  virtual std::wstring GetInputString() const OVERRIDE;
+  virtual WindowOpenDisposition GetWindowOpenDisposition() const OVERRIDE;
+  virtual PageTransition::Type GetPageTransition() const OVERRIDE;
+  virtual void AcceptInput() OVERRIDE {}
+  virtual void FocusLocation(bool select_all) OVERRIDE {}
+  virtual void FocusSearch() OVERRIDE {}
+  virtual void UpdateContentSettingsIcons() OVERRIDE {}
+  virtual void UpdatePageActions() OVERRIDE {}
+  virtual void InvalidatePageActions() OVERRIDE {}
+  virtual void SaveStateToContents(TabContents* contents) OVERRIDE {}
+  virtual void Revert() OVERRIDE {}
+  virtual const AutocompleteEditView* location_entry() const OVERRIDE;
+  virtual AutocompleteEditView* location_entry() OVERRIDE;
+  virtual LocationBarTesting* GetLocationBarForTesting() OVERRIDE;
 
  private:
 

@@ -8,7 +8,7 @@
 
 #include <gtk/gtk.h>
 
-#include "base/scoped_ptr.h"
+#include "base/memory/scoped_ptr.h"
 #include "chrome/browser/ui/gtk/constrained_window_gtk.h"
 #include "ui/base/gtk/gtk_signal.h"
 
@@ -25,7 +25,7 @@ class RepostFormWarningGtk : public ConstrainedDialogDelegate {
 
   // ConstrainedDialogDelegate methods
   virtual GtkWidget* GetWidgetRoot();
-
+  virtual GtkWidget* GetFocusWidget();
   virtual void DeleteDelegate();
 
  private:
@@ -34,10 +34,6 @@ class RepostFormWarningGtk : public ConstrainedDialogDelegate {
   // Callbacks
   CHROMEGTK_CALLBACK_0(RepostFormWarningGtk, void, OnRefresh);
   CHROMEGTK_CALLBACK_0(RepostFormWarningGtk, void, OnCancel);
-  CHROMEGTK_CALLBACK_1(RepostFormWarningGtk,
-                       void,
-                       OnHierarchyChanged,
-                       GtkWidget*);
 
   scoped_ptr<RepostFormWarningController> controller_;
 

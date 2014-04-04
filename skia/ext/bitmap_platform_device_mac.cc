@@ -1,13 +1,14 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "skia/ext/bitmap_platform_device_mac.h"
 
+#import <ApplicationServices/ApplicationServices.h>
 #include <time.h>
 
 #include "base/mac/mac_util.h"
-#include "base/ref_counted.h"
+#include "base/memory/ref_counted.h"
 #include "skia/ext/bitmap_platform_device_data.h"
 #include "skia/ext/skia_utils_mac.h"
 #include "third_party/skia/include/core/SkMatrix.h"
@@ -80,6 +81,12 @@ BitmapPlatformDevice::BitmapPlatformDeviceData::BitmapPlatformDeviceData(
 BitmapPlatformDevice::BitmapPlatformDeviceData::~BitmapPlatformDeviceData() {
   if (bitmap_context_)
     CGContextRelease(bitmap_context_);
+}
+
+void BitmapPlatformDevice::BitmapPlatformDeviceData::ReleaseBitmapContext() {
+  SkASSERT(bitmap_context_);
+  CGContextRelease(bitmap_context_);
+  bitmap_context_ = NULL;
 }
 
 void BitmapPlatformDevice::BitmapPlatformDeviceData::SetMatrixClip(
@@ -201,6 +208,10 @@ BitmapPlatformDevice::~BitmapPlatformDevice() {
   data_->unref();
 }
 
+SkDeviceFactory* BitmapPlatformDevice::getDeviceFactory() {
+  return SkNEW(BitmapPlatformDeviceFactory);
+}
+
 BitmapPlatformDevice& BitmapPlatformDevice::operator=(
     const BitmapPlatformDevice& other) {
   data_ = other.data_;
@@ -214,7 +225,8 @@ CGContextRef BitmapPlatformDevice::GetBitmapContext() {
 }
 
 void BitmapPlatformDevice::setMatrixClip(const SkMatrix& transform,
-                                         const SkRegion& region) {
+                                         const SkRegion& region,
+                                         const SkClipStack&) {
   data_->SetMatrixClip(transform, region);
 }
 
@@ -247,6 +259,10 @@ void BitmapPlatformDevice::DrawToContext(CGContextRef context, int x, int y,
 
   if (created_dc)
     data_->ReleaseBitmapContext();
+}
+
+bool BitmapPlatformDevice::IsVectorial() {
+  return false;
 }
 
 // Returns the color value at the specified location.

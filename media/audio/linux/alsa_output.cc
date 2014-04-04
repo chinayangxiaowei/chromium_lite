@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 //
@@ -105,20 +105,9 @@ static const int kPcmRecoverIsSilent = 1;
 static const int kPcmRecoverIsSilent = 0;
 #endif
 
-const char AlsaPcmOutputStream::kDefaultDevice[] = "default";
-const char AlsaPcmOutputStream::kAutoSelectDevice[] = "";
-const char AlsaPcmOutputStream::kPlugPrefix[] = "plug:";
-
-// Since we expect to only be able to wake up with a resolution of
-// kSleepErrorMilliseconds, double that for our minimum required latency.
-const uint32 AlsaPcmOutputStream::kMinLatencyMicros =
-    kSleepErrorMilliseconds * 2 * 1000;
-
-namespace {
-
 // ALSA is currently limited to 48Khz.
 // TODO(fbarchard): Resample audio from higher frequency to 48000.
-const int kAlsaMaxSampleRate = 48000;
+static const int kAlsaMaxSampleRate = 48000;
 
 // While the "default" device may support multi-channel audio, in Alsa, only
 // the device names surround40, surround41, surround50, etc, have a defined
@@ -137,7 +126,7 @@ const int kAlsaMaxSampleRate = 48000;
 // TODO(ajwong): The source data should have enough info to tell us if we want
 // surround41 versus surround51, etc., instead of needing us to guess base don
 // channel number.  Fix API to pass that data down.
-const char* GuessSpecificDeviceName(uint32 channels) {
+static const char* GuessSpecificDeviceName(uint32 channels) {
   switch (channels) {
     case 8:
       return "surround71";
@@ -190,10 +179,6 @@ static void Swizzle51Layout(Format* b, uint32 filled) {
   }
 }
 
-}  // namespace
-
-// Not in an anonymous namespace so that it can be a friend to
-// AlsaPcmOutputStream.
 std::ostream& operator<<(std::ostream& os,
                          AlsaPcmOutputStream::InternalState state) {
   switch (state) {
@@ -218,6 +203,15 @@ std::ostream& operator<<(std::ostream& os,
   };
   return os;
 }
+
+const char AlsaPcmOutputStream::kDefaultDevice[] = "default";
+const char AlsaPcmOutputStream::kAutoSelectDevice[] = "";
+const char AlsaPcmOutputStream::kPlugPrefix[] = "plug:";
+
+// Since we expect to only be able to wake up with a resolution of
+// kSleepErrorMilliseconds, double that for our minimum required latency.
+const uint32 AlsaPcmOutputStream::kMinLatencyMicros =
+    kSleepErrorMilliseconds * 2 * 1000;
 
 AlsaPcmOutputStream::AlsaPcmOutputStream(const std::string& device_name,
                                          AudioParameters params,
@@ -253,8 +247,9 @@ AlsaPcmOutputStream::AlsaPcmOutputStream(const std::string& device_name,
     shared_data_.TransitionTo(kInError);
   }
 
-  if (AudioParameters::AUDIO_PCM_LINEAR != params.format) {
-    LOG(WARNING) << "Only linear PCM supported.";
+  if (AudioParameters::AUDIO_PCM_LINEAR != params.format &&
+      AudioParameters::AUDIO_PCM_LOW_LATENCY != params.format) {
+    LOG(WARNING) << "Unsupported audio format";
     shared_data_.TransitionTo(kInError);
   }
 
@@ -401,6 +396,14 @@ void AlsaPcmOutputStream::StartTask() {
     return;
   }
 
+  if (shared_data_.state() != kIsPlaying) {
+    return;
+  }
+
+  // Before starting, the buffer might have audio from previous user of this
+  // device.
+  buffer_->Clear();
+
   // When starting again, drop all packets in the device and prepare it again
   // incase we are restarting from a pause state and need to flush old data.
   int error = wrapper_->PcmDrop(playback_handle_);
@@ -544,6 +547,10 @@ void AlsaPcmOutputStream::WritePacket() {
     return;
   }
 
+  if (shared_data_.state() == kIsStopped) {
+    return;
+  }
+
   CHECK_EQ(buffer_->forward_bytes() % bytes_per_output_frame_, 0u);
 
   const uint8* buffer_data;
@@ -585,6 +592,14 @@ void AlsaPcmOutputStream::WritePacket() {
       // Seek forward in the buffer after we've written some data to ALSA.
       buffer_->Seek(frames_written * bytes_per_output_frame_);
     }
+  } else {
+    // If nothing left to write and playback hasn't started yet, start it now.
+    // This ensures that shorter sounds will still play.
+    if (playback_handle_ &&
+        (wrapper_->PcmState(playback_handle_) == SND_PCM_STATE_PREPARED) &&
+        GetCurrentDelay() > 0) {
+      wrapper_->PcmStart(playback_handle_);
+    }
   }
 }
 
@@ -592,6 +607,10 @@ void AlsaPcmOutputStream::WriteTask() {
   DCHECK_EQ(message_loop_, MessageLoop::current());
 
   if (stop_stream_) {
+    return;
+  }
+
+  if (shared_data_.state() == kIsStopped) {
     return;
   }
 

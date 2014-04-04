@@ -6,16 +6,17 @@
 
 #include "chrome/browser/extensions/extension_service.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/renderer_host/render_view_host.h"
-#include "chrome/browser/tab_contents/navigation_controller.h"
-#include "chrome/browser/tab_contents/navigation_entry.h"
-#include "chrome/browser/tab_contents/tab_contents.h"
-#include "chrome/browser/tab_contents/tab_contents_view.h"
-#include "chrome/common/bindings_policy.h"
 #include "chrome/common/extensions/extension.h"
 #include "chrome/common/extensions/extension_resource.h"
 #include "chrome/common/extensions/extension_sidebar_defaults.h"
 #include "chrome/common/extensions/extension_sidebar_utils.h"
+#include "content/browser/renderer_host/browser_render_process_host.h"
+#include "content/browser/renderer_host/render_view_host.h"
+#include "content/browser/tab_contents/navigation_controller.h"
+#include "content/browser/tab_contents/navigation_entry.h"
+#include "content/browser/tab_contents/tab_contents.h"
+#include "content/browser/tab_contents/tab_contents_view.h"
+#include "content/common/bindings_policy.h"
 #include "googleurl/src/gurl.h"
 #include "third_party/skia/include/core/SkBitmap.h"
 
@@ -26,12 +27,18 @@ SidebarContainer::SidebarContainer(TabContents* tab,
       content_id_(content_id),
       delegate_(delegate),
       icon_(new SkBitmap),
-      navigate_to_default_url_on_expand_(true),
+      navigate_to_default_page_on_expand_(true),
       use_default_icon_(true) {
   // Create TabContents for sidebar.
   sidebar_contents_.reset(
       new TabContents(tab->profile(), NULL, MSG_ROUTING_NONE, NULL, NULL));
   sidebar_contents_->render_view_host()->set_is_extension_process(true);
+  const Extension* extension = GetExtension();
+  if (extension && extension->is_app()) {
+    BrowserRenderProcessHost* process = static_cast<BrowserRenderProcessHost*>(
+        sidebar_contents_->render_view_host()->process());
+    process->set_installed_app(extension);
+  }
   sidebar_contents_->render_view_host()->AllowBindings(
       BindingsPolicy::EXTENSION);
   sidebar_contents_->set_delegate(this);
@@ -69,13 +76,13 @@ void SidebarContainer::Show() {
 }
 
 void SidebarContainer::Expand() {
-  if (navigate_to_default_url_on_expand_) {
-    navigate_to_default_url_on_expand_ = false;
-    // Check whether a default URL is specified for this sidebar.
+  if (navigate_to_default_page_on_expand_) {
+    navigate_to_default_page_on_expand_ = false;
+    // Check whether a default page is specified for this sidebar.
     const Extension* extension = GetExtension();
     if (extension) {  // Can be NULL in tests.
-      if (extension->sidebar_defaults()->default_url().is_valid())
-        Navigate(extension->sidebar_defaults()->default_url());
+      if (extension->sidebar_defaults()->default_page().is_valid())
+        Navigate(extension->sidebar_defaults()->default_page());
     }
   }
 
@@ -89,7 +96,7 @@ void SidebarContainer::Collapse() {
 
 void SidebarContainer::Navigate(const GURL& url) {
   // TODO(alekseys): add a progress UI.
-  navigate_to_default_url_on_expand_ = false;
+  navigate_to_default_page_on_expand_ = false;
   sidebar_contents_->controller().LoadURL(
       url, GURL(), PageTransition::START_PAGE);
 }
@@ -112,7 +119,7 @@ bool SidebarContainer::IsPopup(const TabContents* source) const {
 }
 
 void SidebarContainer::OnImageLoaded(SkBitmap* image,
-                                     ExtensionResource resource,
+                                     const ExtensionResource& resource,
                                      int index) {
   if (image && use_default_icon_) {
     *icon_ = *image;

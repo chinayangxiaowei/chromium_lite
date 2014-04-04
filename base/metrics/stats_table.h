@@ -23,6 +23,7 @@
 
 #include <string>
 
+#include "base/base_api.h"
 #include "base/basictypes.h"
 #include "base/hash_tables.h"
 #include "base/synchronization/lock.h"
@@ -30,7 +31,7 @@
 
 namespace base {
 
-class StatsTable {
+class BASE_API StatsTable {
  public:
   // Create a new StatsTable.
   // If a StatsTable already exists with the specified name, this StatsTable
@@ -122,7 +123,7 @@ class StatsTable {
 
   // The maximum length (in characters) of a Counter's name including
   // null terminator, as stored in the shared memory.
-  static const int kMaxCounterNameLength = 32;
+  static const int kMaxCounterNameLength = 64;
 
   // Convenience function to lookup a counter location for a
   // counter by name for the calling thread.  Will register

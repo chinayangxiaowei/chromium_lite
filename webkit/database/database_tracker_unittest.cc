@@ -1,19 +1,39 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "base/file_path.h"
 #include "base/file_util.h"
-#include "base/scoped_ptr.h"
-#include "base/scoped_temp_dir.h"
+#include "base/memory/scoped_ptr.h"
+#include "base/memory/scoped_temp_dir.h"
 #include "base/time.h"
 #include "base/utf_string_conversions.h"
 #include "net/base/net_errors.h"
 #include "net/base/test_completion_callback.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "webkit/database/database_tracker.h"
+#include "webkit/database/database_util.h"
+#include "webkit/quota/special_storage_policy.h"
 
 namespace {
+
+const char kOrigin1Url[] = "http://origin1";
+const char kOrigin2Url[] = "http://protected_origin2";
+
+class TestSpecialStoragePolicy : public quota::SpecialStoragePolicy {
+ public:
+  virtual bool IsStorageProtected(const GURL& origin) {
+    return origin == GURL(kOrigin2Url);
+  }
+
+  virtual bool IsStorageUnlimited(const GURL& origin) {
+    return false;
+  }
+
+  virtual bool IsFileHandler(const std::string& extension_id) {
+    return false;
+  }
+};
 
 class TestObserver : public webkit_database::DatabaseTracker::Observer {
  public:
@@ -85,13 +105,16 @@ class DatabaseTracker_TestHelper_Test {
     ScopedTempDir temp_dir;
     ASSERT_TRUE(temp_dir.CreateUniqueTempDir());
     scoped_refptr<DatabaseTracker> tracker(
-        new DatabaseTracker(temp_dir.path(), incognito_mode));
+        new DatabaseTracker(temp_dir.path(), incognito_mode,
+                            new TestSpecialStoragePolicy));
 
     // Create and open three databases.
     int64 database_size = 0;
     int64 space_available = 0;
-    const string16 kOrigin1 = ASCIIToUTF16("origin1");
-    const string16 kOrigin2 = ASCIIToUTF16("origin2");
+    const string16 kOrigin1 =
+        DatabaseUtil::GetOriginIdentifier(GURL(kOrigin1Url));
+    const string16 kOrigin2 =
+        DatabaseUtil::GetOriginIdentifier(GURL(kOrigin2Url));
     const string16 kDB1 = ASCIIToUTF16("db1");
     const string16 kDB2 = ASCIIToUTF16("db2");
     const string16 kDB3 = ASCIIToUTF16("db3");
@@ -160,10 +183,8 @@ class DatabaseTracker_TestHelper_Test {
     // Delete databases modified since yesterday. db2 is whitelisted.
     base::Time yesterday = base::Time::Now();
     yesterday -= base::TimeDelta::FromDays(1);
-    std::vector<string16> protected_origins;
-    protected_origins.push_back(kOrigin2);
     result = tracker->DeleteDataModifiedSince(
-        yesterday, protected_origins, &callback);
+        yesterday, &callback);
     EXPECT_EQ(net::ERR_IO_PENDING, result);
     ASSERT_FALSE(callback.have_result());
     EXPECT_TRUE(observer.DidReceiveNewNotification());
@@ -187,7 +208,8 @@ class DatabaseTracker_TestHelper_Test {
     ScopedTempDir temp_dir;
     ASSERT_TRUE(temp_dir.CreateUniqueTempDir());
     scoped_refptr<DatabaseTracker> tracker(
-        new DatabaseTracker(temp_dir.path(), incognito_mode));
+        new DatabaseTracker(temp_dir.path(), incognito_mode,
+                            new TestSpecialStoragePolicy));
 
     // Add two observers.
     TestObserver observer1;
@@ -198,8 +220,10 @@ class DatabaseTracker_TestHelper_Test {
     // Open three new databases.
     int64 database_size = 0;
     int64 space_available = 0;
-    const string16 kOrigin1 = ASCIIToUTF16("origin1");
-    const string16 kOrigin2 = ASCIIToUTF16("origin2");
+    const string16 kOrigin1 =
+        DatabaseUtil::GetOriginIdentifier(GURL(kOrigin1Url));
+    const string16 kOrigin2 =
+        DatabaseUtil::GetOriginIdentifier(GURL(kOrigin2Url));
     const string16 kDB1 = ASCIIToUTF16("db1");
     const string16 kDB2 = ASCIIToUTF16("db2");
     const string16 kDB3 = ASCIIToUTF16("db3");

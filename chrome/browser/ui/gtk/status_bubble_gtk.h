@@ -10,18 +10,18 @@
 
 #include <string>
 
-#include "base/scoped_ptr.h"
+#include "base/memory/scoped_ptr.h"
 #include "base/timer.h"
 #include "chrome/browser/ui/gtk/owned_widget_gtk.h"
 #include "chrome/browser/ui/status_bubble.h"
-#include "chrome/common/notification_observer.h"
-#include "chrome/common/notification_registrar.h"
-#include "gfx/point.h"
+#include "content/common/notification_observer.h"
+#include "content/common/notification_registrar.h"
 #include "googleurl/src/gurl.h"
 #include "ui/base/animation/animation_delegate.h"
 #include "ui/base/gtk/gtk_signal.h"
+#include "ui/gfx/point.h"
 
-class GtkThemeProvider;
+class GtkThemeService;
 class Profile;
 
 namespace ui {
@@ -114,7 +114,7 @@ class StatusBubbleGtk : public StatusBubble,
   NotificationRegistrar registrar_;
 
   // Provides colors.
-  GtkThemeProvider* theme_provider_;
+  GtkThemeService* theme_service_;
 
   // The toplevel event box.
   OwnedWidgetGtk container_;
@@ -123,7 +123,7 @@ class StatusBubbleGtk : public StatusBubble,
   GtkWidget* padding_;
 
   // The GtkLabel holding the text.
-  GtkWidget* label_;
+  OwnedWidgetGtk label_;
 
   // The status text we want to display when there are no URLs to display.
   std::string status_text_;

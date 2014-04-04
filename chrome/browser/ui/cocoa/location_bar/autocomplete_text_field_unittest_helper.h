@@ -1,4 +1,4 @@
-// Copyright (c) 2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,7 +9,7 @@
 #import <Cocoa/Cocoa.h>
 
 #import "base/mac/cocoa_protocols.h"
-#include "base/scoped_nsobject.h"
+#include "base/memory/scoped_nsobject.h"
 #import "chrome/browser/ui/cocoa/location_bar/autocomplete_text_field.h"
 #include "testing/gmock/include/gmock/gmock.h"
 
@@ -24,8 +24,6 @@
 - (id)windowWillReturnFieldEditor:(NSWindow *)sender toObject:(id)anObject;
 @end
 
-namespace {
-
 // Allow monitoring calls into AutocompleteTextField's observer.
 // Being in a .h file with an anonymous namespace is strange, but this
 // is here so the mock interface doesn't have to change in multiple
@@ -35,6 +33,9 @@ namespace {
 
 class MockAutocompleteTextFieldObserver : public AutocompleteTextFieldObserver {
  public:
+  MockAutocompleteTextFieldObserver();
+  ~MockAutocompleteTextFieldObserver();
+
   MOCK_METHOD1(SelectionRangeForProposedRange, NSRange(NSRange range));
   MOCK_METHOD1(OnControlKeyChanged, void(bool pressed));
   MOCK_METHOD0(CanCopy, bool());
@@ -46,6 +47,7 @@ class MockAutocompleteTextFieldObserver : public AutocompleteTextFieldObserver {
   MOCK_METHOD0(OnFrameChanged, void());
   MOCK_METHOD0(ClosePopup, void());
   MOCK_METHOD0(OnDidBeginEditing, void());
+  MOCK_METHOD0(OnBeforeChange, void());
   MOCK_METHOD0(OnDidChange, void());
   MOCK_METHOD0(OnDidEndEditing, void());
   MOCK_METHOD0(OnStartingIME, void());
@@ -53,7 +55,5 @@ class MockAutocompleteTextFieldObserver : public AutocompleteTextFieldObserver {
   MOCK_METHOD1(OnSetFocus, void(bool control_down));
   MOCK_METHOD0(OnKillFocus, void());
 };
-
-}  // namespace
 
 #endif  // CHROME_BROWSER_UI_COCOA_AUTOCOMPLETE_TEXT_FIELD_UNITTEST_HELPER_H_

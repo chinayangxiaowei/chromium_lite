@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -40,6 +40,9 @@ class MockCryptohomeLibrary : public CryptohomeLibrary {
     ON_CALL(*this, AsyncRemove(_, _))
         .WillByDefault(
             WithArgs<1>(Invoke(this, &MockCryptohomeLibrary::DoCallback)));
+    ON_CALL(*this, AsyncDoAutomaticFreeDiskSpaceControl(_))
+        .WillByDefault(
+            WithArgs<0>(Invoke(this, &MockCryptohomeLibrary::DoCallback)));
   }
   MOCK_METHOD2(CheckKey, bool(const std::string& user_email,
                               const std::string& passhash));
@@ -67,6 +70,7 @@ class MockCryptohomeLibrary : public CryptohomeLibrary {
   MOCK_METHOD2(AsyncRemove, bool(const std::string& user_email, Delegate* d));
   MOCK_METHOD0(IsMounted, bool(void));
   MOCK_METHOD0(GetSystemSalt, CryptohomeBlob(void));
+  MOCK_METHOD1(AsyncDoAutomaticFreeDiskSpaceControl, bool(Delegate* callback));
 
   MOCK_METHOD0(TpmIsReady, bool(void));
   MOCK_METHOD0(TpmIsEnabled, bool(void));
@@ -75,6 +79,18 @@ class MockCryptohomeLibrary : public CryptohomeLibrary {
   MOCK_METHOD1(TpmGetPassword, bool(std::string* password));
   MOCK_METHOD0(TpmCanAttemptOwnership, void(void));
   MOCK_METHOD0(TpmClearStoredPassword, void(void));
+  MOCK_METHOD0(Pkcs11IsTpmTokenReady, bool(void));
+  MOCK_METHOD2(Pkcs11GetTpmTokenInfo, void(std::string*, std::string*));
+
+  MOCK_METHOD2(InstallAttributesGet, bool(const std::string&, std::string*));
+  MOCK_METHOD2(InstallAttributesSet, bool(const std::string&,
+                                          const std::string&));
+  MOCK_METHOD0(InstallAttributesCount, int(void));
+  MOCK_METHOD0(InstallAttributesFinalize, bool(void));
+  MOCK_METHOD0(InstallAttributesIsReady, bool(void));
+  MOCK_METHOD0(InstallAttributesIsSecure, bool(void));
+  MOCK_METHOD0(InstallAttributesIsInvalid, bool(void));
+  MOCK_METHOD0(InstallAttributesIsFirstInstall, bool(void));
 
   void SetAsyncBehavior(bool outcome, int code) {
     outcome_ = outcome;
@@ -91,6 +107,7 @@ class MockCryptohomeLibrary : public CryptohomeLibrary {
   int code_;
   DISALLOW_COPY_AND_ASSIGN(MockCryptohomeLibrary);
 };
+
 }  // namespace chromeos
 
 #endif  // CHROME_BROWSER_CHROMEOS_CROS_MOCK_CRYPTOHOME_LIBRARY_H_

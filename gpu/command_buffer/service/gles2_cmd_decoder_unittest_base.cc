@@ -1,4 +1,4 @@
-// Copyright (c) 2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -32,23 +32,38 @@ using ::testing::StrictMock;
 namespace gpu {
 namespace gles2 {
 
-void GLES2DecoderTestBase::SetUp() {
-  InitDecoder("");
+GLES2DecoderTestBase::GLES2DecoderTestBase()
+    : client_buffer_id_(100),
+      client_framebuffer_id_(101),
+      client_program_id_(102),
+      client_renderbuffer_id_(103),
+      client_shader_id_(104),
+      client_texture_id_(106),
+      client_element_buffer_id_(107) {
+  memset(immediate_buffer_, 0xEE, sizeof(immediate_buffer_));
 }
 
-void GLES2DecoderTestBase::InitDecoder(const char* extensions) {
+GLES2DecoderTestBase::~GLES2DecoderTestBase() {}
+
+void GLES2DecoderTestBase::SetUp() {
+  InitDecoder("", true);
+}
+
+void GLES2DecoderTestBase::InitDecoder(
+    const char* extensions, bool has_alpha_backbuffer) {
   gl_.reset(new StrictMock<MockGLInterface>());
   ::gfx::GLInterface::SetGLInterface(gl_.get());
   group_ = ContextGroup::Ref(new ContextGroup());
 
   InSequence sequence;
 
-  TestHelper::SetupContextGroupInitExpectations(gl_.get(), extensions);
+  TestHelper::SetupContextGroupInitExpectations(gl_.get(),
+      DisallowedExtensions(), extensions);
 
-  EXPECT_TRUE(group_->Initialize(extensions));
+  EXPECT_TRUE(group_->Initialize(DisallowedExtensions(), extensions));
 
   EXPECT_CALL(*gl_, GetIntegerv(GL_ALPHA_BITS, _))
-      .WillOnce(SetArgumentPointee<1>(8))
+      .WillOnce(SetArgumentPointee<1>(has_alpha_backbuffer ? 8 : 0))
       .RetiresOnSaturation();
   EXPECT_CALL(*gl_, EnableVertexAttribArray(0))
       .Times(1)
@@ -109,13 +124,15 @@ void GLES2DecoderTestBase::InitDecoder(const char* extensions) {
   shared_memory_address_ = reinterpret_cast<int8*>(buffer.ptr) +
       shared_memory_offset_;
   shared_memory_id_ = kSharedMemoryId;
+  shared_memory_base_ = buffer.ptr;
 
   context_ = new gfx::StubGLContext;
   context_->SetSize(gfx::Size(kBackBufferWidth, kBackBufferHeight));
 
   decoder_.reset(GLES2Decoder::Create(group_.get()));
   decoder_->Initialize(
-      context_, context_->GetSize(), NULL, std::vector<int32>(), NULL, 0);
+      context_, context_->GetSize(), DisallowedExtensions(),
+      NULL, std::vector<int32>(), NULL, 0);
   decoder_->set_engine(engine_.get());
 
   EXPECT_CALL(*gl_, GenBuffersARB(_, _))
@@ -320,7 +337,7 @@ void GLES2DecoderTestBase::SetupShaderForUniform() {
     { "foo", 1, GL_FLOAT, 1, },
   };
   static UniformInfo uniforms[] = {
-    { "bar", 1, GL_INT, 1, },
+    { "bar", 3, GL_INT, 1, },
   };
   const GLuint kClientVertexShaderId = 5001;
   const GLuint kServiceVertexShaderId = 6001;
@@ -571,10 +588,6 @@ void GLES2DecoderTestBase::SetupShader(
     EXPECT_CALL(*gl_,
         GetProgramiv(program_service_id, GL_INFO_LOG_LENGTH, _))
         .WillOnce(SetArgumentPointee<2>(0))
-        .RetiresOnSaturation();
-    EXPECT_CALL(*gl_,
-        GetProgramInfoLog(program_service_id, _, _, _))
-        .Times(1)
         .RetiresOnSaturation();
     EXPECT_CALL(*gl_,
         GetProgramiv(program_service_id, GL_ACTIVE_ATTRIBUTES, _))

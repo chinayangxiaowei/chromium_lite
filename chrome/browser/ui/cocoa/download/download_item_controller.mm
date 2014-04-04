@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -14,7 +14,7 @@
 #include "chrome/browser/download/download_item_model.h"
 #include "chrome/browser/download/download_shelf.h"
 #include "chrome/browser/download/download_util.h"
-#import "chrome/browser/themes/browser_theme_provider.h"
+#import "chrome/browser/themes/theme_service.h"
 #import "chrome/browser/ui/cocoa/download/download_item_button.h"
 #import "chrome/browser/ui/cocoa/download/download_item_cell.h"
 #include "chrome/browser/ui/cocoa/download/download_item_mac.h"
@@ -27,6 +27,7 @@
 #include "ui/base/l10n/l10n_util_mac.h"
 #include "ui/base/resource/resource_bundle.h"
 #include "ui/base/text/text_elider.h"
+#include "ui/gfx/image.h"
 
 namespace {
 
@@ -152,11 +153,6 @@ class DownloadShelfContextMenuMac : public DownloadShelfContextMenu {
   frameOrigin.x += widthChange;
   [buttonTweaker_ setFrameOrigin:frameOrigin];
 
-  ResourceBundle& rb = ResourceBundle::GetSharedInstance();
-  NSImage* alertIcon = rb.GetNativeImageNamed(IDR_WARNING);
-  DCHECK(alertIcon);
-  [image_ setImage:alertIcon];
-
   bridge_->LoadIcon();
   [self updateToolTip];
 }
@@ -168,53 +164,74 @@ class DownloadShelfContextMenuMac : public DownloadShelfContextMenu {
   if (downloadModel->download()->safety_state() == DownloadItem::DANGEROUS) {
     [self setState:kDangerous];
 
+    ResourceBundle& rb = ResourceBundle::GetSharedInstance();
     NSString* dangerousWarning;
     NSString* confirmButtonTitle;
-    // The dangerous download label and button text are different for an
-    // extension file.
-    if (downloadModel->download()->is_extension_install()) {
+    NSImage* alertIcon;
+
+    // The dangerous download label, button text and icon are different under
+    // different cases.
+    if (downloadModel->download()->danger_type() ==
+        DownloadItem::DANGEROUS_URL) {
+      // Safebrowsing shows the download URL leads to malicious file.
+      alertIcon = rb.GetNativeImageNamed(IDR_SAFEBROWSING_WARNING);
       dangerousWarning = l10n_util::GetNSStringWithFixup(
-          IDS_PROMPT_DANGEROUS_DOWNLOAD_EXTENSION);
-      confirmButtonTitle = l10n_util::GetNSStringWithFixup(
-          IDS_CONTINUE_EXTENSION_DOWNLOAD);
-    } else {
-      // This basic fixup copies Windows DownloadItemView::DownloadItemView().
-
-      // Extract the file extension (if any).
-      FilePath filename(downloadModel->download()->target_name());
-      FilePath::StringType extension = filename.Extension();
-
-      // Remove leading '.' from the extension
-      if (extension.length() > 0)
-        extension = extension.substr(1);
-
-      // Elide giant extensions.
-      if (extension.length() > kFileNameMaxLength / 2) {
-        std::wstring wide_extension;
-        ui::ElideString(UTF8ToWide(extension), kFileNameMaxLength / 2,
-                        &wide_extension);
-        extension = WideToUTF8(wide_extension);
-      }
-
-      // Rebuild the filename.extension.
-      std::wstring rootname = UTF8ToWide(filename.RemoveExtension().value());
-      ui::ElideString(rootname, kFileNameMaxLength - extension.length(),
-                      &rootname);
-      std::string new_filename = WideToUTF8(rootname);
-      if (extension.length())
-        new_filename += std::string(".") + extension;
-
-      dangerousWarning = l10n_util::GetNSStringFWithFixup(
-          IDS_PROMPT_DANGEROUS_DOWNLOAD, UTF8ToUTF16(new_filename));
+          IDS_PROMPT_UNSAFE_DOWNLOAD_URL);
       confirmButtonTitle = l10n_util::GetNSStringWithFixup(IDS_SAVE_DOWNLOAD);
+    } else {
+      // It's a dangerous file type (e.g.: an executable).
+      DCHECK_EQ(downloadModel->download()->danger_type(),
+                DownloadItem::DANGEROUS_FILE);
+      alertIcon = rb.GetNativeImageNamed(IDR_WARNING);
+      if (downloadModel->download()->is_extension_install()) {
+        dangerousWarning = l10n_util::GetNSStringWithFixup(
+            IDS_PROMPT_DANGEROUS_DOWNLOAD_EXTENSION);
+        confirmButtonTitle = l10n_util::GetNSStringWithFixup(
+            IDS_CONTINUE_EXTENSION_DOWNLOAD);
+      } else {
+        // This basic fixup copies Windows DownloadItemView::DownloadItemView().
+
+        // Extract the file extension (if any).
+        FilePath filename(downloadModel->download()->target_name());
+        FilePath::StringType extension = filename.Extension();
+
+        // Remove leading '.' from the extension
+        if (extension.length() > 0)
+          extension = extension.substr(1);
+
+        // Elide giant extensions.
+        if (extension.length() > kFileNameMaxLength / 2) {
+          string16 utf16_extension;
+          ui::ElideString(UTF8ToUTF16(extension), kFileNameMaxLength / 2,
+                          &utf16_extension);
+          extension = UTF16ToUTF8(utf16_extension);
+        }
+
+       // Rebuild the filename.extension.
+       string16 rootname = UTF8ToUTF16(filename.RemoveExtension().value());
+       ui::ElideString(rootname, kFileNameMaxLength - extension.length(),
+                       &rootname);
+       std::string new_filename = UTF16ToUTF8(rootname);
+       if (extension.length())
+         new_filename += std::string(".") + extension;
+
+         dangerousWarning = l10n_util::GetNSStringFWithFixup(
+             IDS_PROMPT_DANGEROUS_DOWNLOAD, UTF8ToUTF16(new_filename));
+         confirmButtonTitle =
+             l10n_util::GetNSStringWithFixup(IDS_SAVE_DOWNLOAD);
+      }
     }
+    DCHECK(alertIcon);
+    [image_ setImage:alertIcon];
+    DCHECK(dangerousWarning);
     [dangerousDownloadLabel_ setStringValue:dangerousWarning];
+    DCHECK(confirmButtonTitle);
     [dangerousDownloadConfirmButton_ setTitle:confirmButtonTitle];
     return;
   }
 
   // Set correct popup menu. Also, set draggable download on completion.
-  if (downloadModel->download()->state() == DownloadItem::COMPLETE) {
+  if (downloadModel->download()->IsComplete()) {
     [progressView_ setMenu:completeDownloadMenu_];
     [progressView_ setDownload:downloadModel->download()->full_path()];
   } else {
@@ -307,7 +324,7 @@ class DownloadShelfContextMenuMac : public DownloadShelfContextMenu {
 // Called after the current theme has changed.
 - (void)themeDidChangeNotification:(NSNotification*)aNotification {
   ui::ThemeProvider* themeProvider =
-      static_cast<ui::ThemeProvider*>([[aNotification object] pointerValue]);
+      static_cast<ThemeService*>([[aNotification object] pointerValue]);
   [self updateTheme:themeProvider];
 }
 
@@ -315,7 +332,7 @@ class DownloadShelfContextMenuMac : public DownloadShelfContextMenu {
 // this is shown for the first time.
 - (void)updateTheme:(ui::ThemeProvider*)themeProvider {
   NSColor* color =
-      themeProvider->GetNSColor(BrowserThemeProvider::COLOR_TAB_TEXT, true);
+      themeProvider->GetNSColor(ThemeService::COLOR_TAB_TEXT, true);
   [dangerousDownloadLabel_ setTextColor:color];
 }
 
@@ -331,10 +348,10 @@ class DownloadShelfContextMenuMac : public DownloadShelfContextMenu {
 - (IBAction)discardDownload:(id)sender {
   UMA_HISTOGRAM_LONG_TIMES("clickjacking.discard_download",
                            base::Time::Now() - creationTime_);
-  if (bridge_->download_model()->download()->state() ==
-      DownloadItem::IN_PROGRESS)
-    bridge_->download_model()->download()->Cancel(true);
-  bridge_->download_model()->download()->Remove(true);
+  DownloadItem* download = bridge_->download_model()->download();
+  if (download->IsPartialDownload())
+    download->Cancel(true);
+  download->Delete(DownloadItem::DELETE_DUE_TO_USER_DISCARD);
   // WARNING: we are deleted at this point.  Don't access 'this'.
 }
 

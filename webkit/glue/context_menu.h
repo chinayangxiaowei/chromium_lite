@@ -1,4 +1,4 @@
-// Copyright (c) 2006-2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -14,6 +14,23 @@
 
 #include "third_party/WebKit/Source/WebKit/chromium/public/WebContextMenuData.h"
 
+namespace webkit_glue {
+
+struct CustomContextMenuContext {
+  bool is_pepper_menu;
+  int request_id;
+  // The routing ID of the render widget on which the context menu is shown.
+  // It could also be |kCurrentRenderWidget|, which means the render widget that
+  // the corresponding ViewHostMsg_ContextMenu is sent to.
+  int32 render_widget_id;
+  static const int32 kCurrentRenderWidget;
+
+  CustomContextMenuContext();
+};
+
+}  // namespace webkit_glue
+
+// TODO(viettrungluu): Put this in the webkit_glue namespace.
 // Parameters structure for ViewHostMsg_ContextMenu.
 // FIXME(beng): This would be more useful in the future and more efficient
 //              if the parameters here weren't so literally mapped to what
@@ -51,6 +68,10 @@ struct ContextMenuParams {
 
   // This is the URL of the subframe that the context menu was invoked on.
   GURL frame_url;
+
+  // This is the history item state of the subframe that the context menu was
+  // invoked on.
+  std::string frame_content_state;
 
   // These are the parameters for the media element that the context menu
   // was invoked on.
@@ -94,6 +115,7 @@ struct ContextMenuParams {
   // The character encoding of the frame on which the menu is invoked.
   std::string frame_charset;
 
+  webkit_glue::CustomContextMenuContext custom_context;
   std::vector<WebMenuItem> custom_items;
 
   ContextMenuParams();

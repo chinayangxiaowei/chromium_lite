@@ -1,23 +1,23 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/first_run/first_run.h"
 
-#include "build/build_config.h"
-
-// TODO(port): move more code in back from the first_run_win.cc module.
-
-#if defined(OS_WIN)
-#include "chrome/installer/util/google_update_settings.h"
-#include "chrome/installer/util/install_util.h"
-#endif
-
 #include "base/command_line.h"
+#include "base/compiler_specific.h"
 #include "base/file_util.h"
 #include "base/path_service.h"
 #include "base/utf_string_conversions.h"
-#include "chrome/browser/importer/importer.h"
+#include "build/build_config.h"
+#include "chrome/browser/browser_process.h"
+#include "chrome/browser/first_run/first_run_dialog.h"
+#include "chrome/browser/first_run/first_run_import_observer.h"
+#include "chrome/browser/importer/external_process_importer_host.h"
+#include "chrome/browser/importer/importer_host.h"
+#include "chrome/browser/importer/importer_list.h"
+#include "chrome/browser/importer/importer_progress_dialog.h"
+#include "chrome/browser/importer/importer_progress_observer.h"
 #include "chrome/browser/metrics/user_metrics.h"
 #include "chrome/browser/prefs/pref_service.h"
 #include "chrome/browser/process_singleton.h"
@@ -30,6 +30,13 @@
 #include "chrome/installer/util/master_preferences.h"
 #include "chrome/installer/util/master_preferences_constants.h"
 #include "chrome/installer/util/util_constants.h"
+#include "googleurl/src/gurl.h"
+
+#if defined(OS_WIN)
+// TODO(port): move more code in back from the first_run_win.cc module.
+#include "chrome/installer/util/google_update_settings.h"
+#include "chrome/installer/util/install_util.h"
+#endif
 
 namespace {
 
@@ -50,6 +57,8 @@ FilePath GetDefaultPrefFilePath(bool create_profile_dir,
 }
 
 }  // namespace
+
+// FirstRun -------------------------------------------------------------------
 
 FirstRun::FirstRunState FirstRun::first_run_ = FIRST_RUN_UNKNOWN;
 
@@ -126,7 +135,7 @@ bool FirstRun::ProcessMasterPreferences(const FilePath& user_data_dir,
     if (WriteEULAtoTempFile(&inner_html)) {
       int retcode = 0;
       if (!LaunchSetupWithParam(installer::switches::kShowEula,
-                                inner_html.ToWStringHack(), &retcode) ||
+                                inner_html.value(), &retcode) ||
           (retcode == installer::EULA_REJECTED)) {
         LOG(WARNING) << "EULA rejected. Fast exit.";
         ::ExitProcess(1);
@@ -259,11 +268,7 @@ bool FirstRun::ProcessMasterPreferences(const FilePath& user_data_dir,
       &import_bookmarks_path);
 
 #if defined(OS_WIN)
-  std::wstring brand;
-  GoogleUpdateSettings::GetBrand(&brand);
-  // This should generally be true, as skip_first_run_ui is a setting used for
-  // non-organic builds.
-  if (!GoogleUpdateSettings::IsOrganic(brand)) {
+  if (!IsOrganicFirstRun()) {
     // If search engines aren't explicitly imported, don't import.
     if (!(out_prefs->do_import_items & importer::SEARCH_ENGINES)) {
       out_prefs->dont_import_items |= importer::SEARCH_ENGINES;
@@ -281,9 +286,10 @@ bool FirstRun::ProcessMasterPreferences(const FilePath& user_data_dir,
   if (out_prefs->do_import_items || !import_bookmarks_path.empty()) {
     // There is something to import from the default browser. This launches
     // the importer process and blocks until done or until it fails.
-    scoped_refptr<ImporterHost> importer_host = new ImporterHost();
+    scoped_refptr<ImporterList> importer_list(new ImporterList);
+    importer_list->DetectSourceProfilesHack();
     if (!FirstRun::ImportSettings(NULL,
-          importer_host->GetSourceProfileInfoAt(0).browser_type,
+          importer_list->GetSourceProfileAt(0).importer_type,
           out_prefs->do_import_items,
           FilePath::FromWStringHack(UTF8ToWide(import_bookmarks_path)),
           true, NULL)) {
@@ -301,10 +307,20 @@ bool FirstRun::ProcessMasterPreferences(const FilePath& user_data_dir,
   }
 #endif
 
-  if (prefs.GetBool(
-          installer::master_preferences::kMakeChromeDefaultForUser,
-          &value) && value) {
-    ShellIntegration::SetAsDefaultBrowser();
+  // Even on the first run we only allow for the user choice to take effect if
+  // no policy has been set by the admin.
+  if (!g_browser_process->local_state()->IsManagedPreference(
+          prefs::kDefaultBrowserSettingEnabled)) {
+    if (prefs.GetBool(
+            installer::master_preferences::kMakeChromeDefaultForUser,
+            &value) && value) {
+      ShellIntegration::SetAsDefaultBrowser();
+    }
+  } else {
+    if (g_browser_process->local_state()->GetBoolean(
+            prefs::kDefaultBrowserSettingEnabled)) {
+      ShellIntegration::SetAsDefaultBrowser();
+    }
   }
 
   return false;
@@ -371,12 +387,20 @@ bool FirstRun::SetPersonalDataManagerFirstRunPref() {
   if (!local_state)
     return false;
   if (!local_state->FindPreference(
-          prefs::kAutoFillPersonalDataManagerFirstRun)) {
+          prefs::kAutofillPersonalDataManagerFirstRun)) {
     local_state->RegisterBooleanPref(
-        prefs::kAutoFillPersonalDataManagerFirstRun, false);
-    local_state->SetBoolean(prefs::kAutoFillPersonalDataManagerFirstRun, true);
+        prefs::kAutofillPersonalDataManagerFirstRun, false);
+    local_state->SetBoolean(prefs::kAutofillPersonalDataManagerFirstRun, true);
   }
   return true;
+}
+
+// static
+bool FirstRun::SearchEngineSelectorDisallowed() {
+  // For now, the only case in which the search engine dialog should never be
+  // shown is if the locale is Russia.
+  std::string locale = g_browser_process->GetApplicationLocale();
+  return (locale == "ru");
 }
 
 // static
@@ -412,26 +436,24 @@ int FirstRun::ImportFromFile(Profile* profile, const CommandLine& cmdline) {
     NOTREACHED();
     return false;
   }
-  scoped_refptr<ImporterHost> importer_host(new ImporterHost());
-  FirstRunImportObserver observer;
-
+  scoped_refptr<ImporterHost> importer_host(new ImporterHost);
   importer_host->set_headless();
 
-  ProfileInfo profile_info;
-  profile_info.browser_type = importer::BOOKMARKS_HTML;
-  profile_info.source_path = file_path;
+  importer::SourceProfile source_profile;
+  source_profile.importer_type = importer::BOOKMARKS_HTML;
+  source_profile.source_path = file_path;
 
-  StartImportingWithUI(
-      NULL,
-      importer::FAVORITES,
-      importer_host,
-      profile_info,
-      profile,
-      &observer,
-      true);
+  FirstRunImportObserver importer_observer;
+  importer::ShowImportProgressDialog(NULL,
+                                     importer::FAVORITES,
+                                     importer_host,
+                                     &importer_observer,
+                                     source_profile,
+                                     profile,
+                                     true);
 
-  observer.RunLoop();
-  return observer.import_result();
+  importer_observer.RunLoop();
+  return importer_observer.import_result();
 }
 
 // static
@@ -455,62 +477,6 @@ bool FirstRun::GetFirstRunSentinelFilePath(FilePath* path) {
 
   *path = first_run_sentinel.AppendASCII(kSentinelFile);
   return true;
-}
-
-#if (defined(OS_WIN) || defined(OS_LINUX)) && !defined(OS_CHROMEOS)
-// static
-void Upgrade::RelaunchChromeBrowserWithNewCommandLineIfNeeded() {
-  if (new_command_line_) {
-    if (!RelaunchChromeBrowser(*new_command_line_)) {
-      DLOG(ERROR) << "Launching a new instance of the browser failed.";
-    } else {
-      DLOG(WARNING) << "Launched a new instance of the browser.";
-    }
-    delete new_command_line_;
-    new_command_line_ = NULL;
-  }
-}
-#endif  // (defined(OS_WIN) || defined(OS_LINUX)) && !defined(OS_CHROMEOS)
-
-FirstRunBrowserProcess::FirstRunBrowserProcess(const CommandLine& command_line)
-    : BrowserProcessImpl(command_line) {
-}
-
-FirstRunBrowserProcess::~FirstRunBrowserProcess() {}
-
-GoogleURLTracker* FirstRunBrowserProcess::google_url_tracker() {
-  return NULL;
-}
-
-IntranetRedirectDetector* FirstRunBrowserProcess::intranet_redirect_detector() {
-  return NULL;
-}
-
-FirstRunImportObserver::FirstRunImportObserver()
-    : loop_running_(false), import_result_(ResultCodes::NORMAL_EXIT) {
-}
-
-int FirstRunImportObserver::import_result() const {
-  return import_result_;
-}
-
-void FirstRunImportObserver::ImportCanceled() {
-  import_result_ = ResultCodes::IMPORTER_CANCEL;
-  Finish();
-}
-void FirstRunImportObserver::ImportComplete() {
-  import_result_ = ResultCodes::NORMAL_EXIT;
-  Finish();
-}
-
-void FirstRunImportObserver::RunLoop() {
-  loop_running_ = true;
-  MessageLoop::current()->Run();
-}
-
-void FirstRunImportObserver::Finish() {
-  if (loop_running_)
-    MessageLoop::current()->Quit();
 }
 
 // static
@@ -546,8 +512,12 @@ void FirstRun::AutoImport(
 #else
   importer_host = new ImporterHost;
 #endif
+
+  scoped_refptr<ImporterList> importer_list(new ImporterList);
+  importer_list->DetectSourceProfilesHack();
+
   // Do import if there is an available profile for us to import.
-  if (importer_host->GetAvailableProfileCount() > 0) {
+  if (importer_list->count() > 0) {
     // Don't show the warning dialog if import fails.
     importer_host->set_headless();
     int items = 0;
@@ -557,17 +527,17 @@ void FirstRun::AutoImport(
       items = items | importer::HISTORY;
     // Home page is imported in organic builds only unless turned off or
     // defined in master_preferences.
-    if (IsOrganic()) {
+    if (IsOrganicFirstRun()) {
       if (!(dont_import_items & importer::HOME_PAGE) && !homepage_defined)
         items = items | importer::HOME_PAGE;
     } else {
       if (import_items & importer::HOME_PAGE)
         items = items | importer::HOME_PAGE;
     }
-    // Search engines are only imported in organic builds unless overridden
+    // Search engines are only imported in certain builds unless overridden
     // in master_preferences. Search engines are not imported automatically
     // if the user already has a user preferences directory.
-    if (IsOrganic()) {
+    if (IsOrganicFirstRun()) {
       if (!(dont_import_items & importer::SEARCH_ENGINES) &&
           !local_state_file_exists) {
         items = items | importer::SEARCH_ENGINES;
@@ -580,18 +550,18 @@ void FirstRun::AutoImport(
     if (import_items & importer::FAVORITES)
       items = items | importer::FAVORITES;
 
-    ImportSettings(profile, importer_host, items);
+    ImportSettings(profile, importer_host, importer_list, items);
   }
 
   UserMetrics::RecordAction(UserMetricsAction("FirstRunDef_Accept"));
 
-  // Launch the search engine dialog only if build is organic, and user has not
-  // already set preferences.
-  if (IsOrganic() && !local_state_file_exists) {
+  // Launch the search engine dialog only for certain builds, and only if the
+  // user has not already set preferences.
+  if (IsOrganicFirstRun() && !local_state_file_exists) {
     // The home page string may be set in the preferences, but the user should
     // initially use Chrome with the NTP as home page in organic builds.
     profile->GetPrefs()->SetBoolean(prefs::kHomePageIsNewTabPage, true);
-    ShowFirstRunDialog(profile, randomize_search_engine_experiment);
+    first_run::ShowFirstRunDialog(profile, randomize_search_engine_experiment);
   }
 
   if (make_chrome_default)
@@ -615,20 +585,21 @@ void FirstRun::AutoImport(
 #if defined(OS_POSIX)
 namespace {
 
-// This class acts as an observer for the ImporterHost::Observer::ImportEnded
+// This class acts as an observer for the ImporterProgressObserver::ImportEnded
 // callback. When the import process is started, certain errors may cause
 // ImportEnded() to be called synchronously, but the typical case is that
 // ImportEnded() is called asynchronously. Thus we have to handle both cases.
-class ImportEndedObserver : public ImporterHost::Observer {
+class ImportEndedObserver : public importer::ImporterProgressObserver {
  public:
   ImportEndedObserver() : ended_(false),
                           should_quit_message_loop_(false) {}
   virtual ~ImportEndedObserver() {}
 
-  virtual void ImportItemStarted(importer::ImportItem item) {}
-  virtual void ImportItemEnded(importer::ImportItem item) {}
-  virtual void ImportStarted() {}
-  virtual void ImportEnded() {
+  // importer::ImporterProgressObserver:
+  virtual void ImportStarted() OVERRIDE {}
+  virtual void ImportItemStarted(importer::ImportItem item) OVERRIDE {}
+  virtual void ImportItemEnded(importer::ImportItem item) OVERRIDE {}
+  virtual void ImportEnded() OVERRIDE {
     ended_ = true;
     if (should_quit_message_loop_)
       MessageLoop::current()->Quit();
@@ -656,8 +627,10 @@ class ImportEndedObserver : public ImporterHost::Observer {
 // static
 bool FirstRun::ImportSettings(Profile* profile,
                               scoped_refptr<ImporterHost> importer_host,
+                              scoped_refptr<ImporterList> importer_list,
                               int items_to_import) {
-  const ProfileInfo& source_profile = importer_host->GetSourceProfileInfoAt(0);
+  const importer::SourceProfile& source_profile =
+      importer_list->GetSourceProfileAt(0);
 
   // Ensure that importers aren't requested to import items that they do not
   // support.

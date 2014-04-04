@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -12,12 +12,13 @@
 #include "chrome/browser/metrics/user_metrics.h"
 #include "chrome/browser/prefs/pref_service.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/renderer_host/render_view_host.h"
-#include "chrome/browser/tab_contents/tab_contents.h"
-#include "chrome/browser/tab_contents/tab_contents_delegate.h"
 #include "chrome/browser/tab_contents/tab_specific_content_settings.h"
-#include "chrome/common/notification_service.h"
+#include "chrome/browser/ui/collected_cookies_infobar_delegate.h"
 #include "chrome/common/pref_names.h"
+#include "content/browser/renderer_host/render_view_host.h"
+#include "content/browser/tab_contents/tab_contents.h"
+#include "content/browser/tab_contents/tab_contents_delegate.h"
+#include "content/common/notification_service.h"
 #include "grit/generated_resources.h"
 #include "net/base/net_util.h"
 #include "ui/base/l10n/l10n_util.h"
@@ -34,6 +35,8 @@ class ContentSettingTitleAndLinkModel : public ContentSettingBubbleModel {
      SetTitle();
      SetManageLink();
   }
+
+  virtual ~ContentSettingTitleAndLinkModel() {}
 
  private:
   void SetBlockedResources() {
@@ -56,6 +59,7 @@ class ContentSettingTitleAndLinkModel : public ContentSettingBubbleModel {
       IDS_BLOCKED_POPUPS_TITLE,
       0,  // Geolocation does not have an overall title.
       0,  // Notifications do not have a bubble.
+      0,  // Prerender does not have a bubble.
     };
     // Fields as for kBlockedTitleIDs, above.
     static const int kResourceSpecificBlockedTitleIDs[] = {
@@ -66,9 +70,11 @@ class ContentSettingTitleAndLinkModel : public ContentSettingBubbleModel {
       0,
       0,
       0,
+      0,
     };
     static const int kAccessedTitleIDs[] = {
       IDS_ACCESSED_COOKIES_TITLE,
+      0,
       0,
       0,
       0,
@@ -106,6 +112,7 @@ class ContentSettingTitleAndLinkModel : public ContentSettingBubbleModel {
       IDS_BLOCKED_POPUPS_LINK,
       IDS_GEOLOCATION_BUBBLE_MANAGE_LINK,
       0,  // Notifications do not have a bubble.
+      0,  // Prerender does not have a bubble.
     };
     COMPILE_ASSERT(arraysize(kLinkIDs) == CONTENT_SETTINGS_NUM_TYPES,
                    Need_a_setting_for_every_content_settings_type);
@@ -114,7 +121,7 @@ class ContentSettingTitleAndLinkModel : public ContentSettingBubbleModel {
 
   virtual void OnManageLinkClicked() {
     if (tab_contents())
-      tab_contents()->delegate()->ShowContentSettingsWindow(content_type());
+      tab_contents()->delegate()->ShowContentSettingsPage(content_type());
   }
 };
 
@@ -128,6 +135,8 @@ class ContentSettingTitleLinkAndCustomModel
     SetCustomLink();
   }
 
+  virtual ~ContentSettingTitleLinkAndCustomModel() {}
+
  private:
   void SetCustomLink() {
     static const int kCustomIDs[] = {
@@ -138,6 +147,7 @@ class ContentSettingTitleLinkAndCustomModel
       0,  // Popups do not have a custom link.
       0,  // Geolocation custom links are set within that class.
       0,  // Notifications do not have a bubble.
+      0,  // Prerender does not have a bubble.
     };
     COMPILE_ASSERT(arraysize(kCustomIDs) == CONTENT_SETTINGS_NUM_TYPES,
                    Need_a_setting_for_every_content_settings_type);
@@ -157,12 +167,36 @@ class ContentSettingSingleRadioGroup
                                  ContentSettingsType content_type)
       : ContentSettingTitleLinkAndCustomModel(tab_contents, profile,
                                               content_type),
-        block_setting_(CONTENT_SETTING_BLOCK) {
+        block_setting_(CONTENT_SETTING_BLOCK),
+        selected_item_(0) {
     SetRadioGroup();
+  }
+
+  virtual ~ContentSettingSingleRadioGroup() {
+    if (settings_changed()) {
+      ContentSetting setting =
+          selected_item_ == 0 ? CONTENT_SETTING_ALLOW : block_setting_;
+      const std::set<std::string>& resources =
+          bubble_content().resource_identifiers;
+      if (resources.empty()) {
+        AddException(setting, std::string());
+      } else {
+        for (std::set<std::string>::const_iterator it = resources.begin();
+             it != resources.end(); ++it) {
+          AddException(setting, *it);
+        }
+      }
+    }
+  }
+
+ protected:
+  bool settings_changed() const {
+    return selected_item_ != bubble_content().radio_group.default_item;
   }
 
  private:
   ContentSetting block_setting_;
+  int selected_item_;
 
   // Initialize the radio group by setting the appropriate labels for the
   // content type and setting the default value based on the content setting.
@@ -174,6 +208,9 @@ class ContentSettingSingleRadioGroup
         &display_host_wide, NULL, NULL);
     std::string display_host(WideToUTF8(display_host_wide));
 
+    if (display_host.empty())
+      display_host = url.spec();
+
     const std::set<std::string>& resources =
         bubble_content().resource_identifiers;
 
@@ -181,13 +218,14 @@ class ContentSettingSingleRadioGroup
     radio_group.url = url;
 
     static const int kAllowIDs[] = {
-      0,  // We don't manage cookies here.
+      IDS_BLOCKED_COOKIES_UNBLOCK,
       IDS_BLOCKED_IMAGES_UNBLOCK,
       IDS_BLOCKED_JAVASCRIPT_UNBLOCK,
       IDS_BLOCKED_PLUGINS_UNBLOCK_ALL,
       IDS_BLOCKED_POPUPS_UNBLOCK,
       0,  // We don't manage geolocation here.
       0,  // Notifications do not have a bubble.
+      0,  // Prerender does not have a bubble.
     };
     COMPILE_ASSERT(arraysize(kAllowIDs) == CONTENT_SETTINGS_NUM_TYPES,
                    Need_a_setting_for_every_content_settings_type);
@@ -200,6 +238,7 @@ class ContentSettingSingleRadioGroup
       0,
       0,
       0,
+      0,  // Prerender does not have a bubble.
     };
     COMPILE_ASSERT(
         arraysize(kResourceSpecificAllowIDs) == CONTENT_SETTINGS_NUM_TYPES,
@@ -211,13 +250,14 @@ class ContentSettingSingleRadioGroup
         allowIDs[content_type()], UTF8ToUTF16(display_host));
 
     static const int kBlockIDs[] = {
-      0,  // We don't manage cookies here.
+      IDS_BLOCKED_COOKIES_NO_ACTION,
       IDS_BLOCKED_IMAGES_NO_ACTION,
       IDS_BLOCKED_JAVASCRIPT_NO_ACTION,
       IDS_BLOCKED_PLUGINS_NO_ACTION,
       IDS_BLOCKED_POPUPS_NO_ACTION,
       0,  // We don't manage geolocation here.
       0,  // Notifications do not have a bubble.
+      0,  // Prerender does not have a bubble.
     };
     COMPILE_ASSERT(arraysize(kBlockIDs) == CONTENT_SETTINGS_NUM_TYPES,
                    Need_a_setting_for_every_content_settings_type);
@@ -253,6 +293,7 @@ class ContentSettingSingleRadioGroup
       radio_group.default_item = 1;
       block_setting_ = mostRestrictiveSetting;
     }
+    selected_item_ = radio_group.default_item;
     set_radio_group(radio_group);
   }
 
@@ -264,31 +305,25 @@ class ContentSettingSingleRadioGroup
   }
 
   virtual void OnRadioClicked(int radio_index) {
-    ContentSetting setting =
-        radio_index == 0 ? CONTENT_SETTING_ALLOW : block_setting_;
-    const std::set<std::string>& resources =
-        bubble_content().resource_identifiers;
-    if (resources.empty()) {
-      AddException(setting, std::string());
-    } else {
-      for (std::set<std::string>::const_iterator it = resources.begin();
-           it != resources.end(); ++it) {
-        AddException(setting, *it);
-      }
-    }
+    selected_item_ = radio_index;
   }
 };
 
-class ContentSettingCookiesBubbleModel
-    : public ContentSettingTitleLinkAndCustomModel {
+class ContentSettingCookiesBubbleModel : public ContentSettingSingleRadioGroup {
  public:
   ContentSettingCookiesBubbleModel(TabContents* tab_contents,
                                    Profile* profile,
                                    ContentSettingsType content_type)
-      : ContentSettingTitleLinkAndCustomModel(tab_contents, profile,
-                                              content_type) {
+      : ContentSettingSingleRadioGroup(tab_contents, profile, content_type) {
     DCHECK_EQ(CONTENT_SETTINGS_TYPE_COOKIES, content_type);
     set_custom_link_enabled(true);
+  }
+
+  virtual ~ContentSettingCookiesBubbleModel() {
+    if (settings_changed()) {
+      tab_contents()->AddInfoBar(
+          new CollectedCookiesInfoBarDelegate(tab_contents()));
+    }
   }
 
  private:
@@ -315,6 +350,8 @@ class ContentSettingPluginBubbleModel : public ContentSettingSingleRadioGroup {
         GetTabSpecificContentSettings()->load_plugins_link_enabled());
   }
 
+  virtual ~ContentSettingPluginBubbleModel() {}
+
  private:
   virtual void OnCustomLinkClicked() OVERRIDE {
     UserMetrics::RecordAction(UserMetricsAction("ClickToPlay_LoadAll_Bubble"));
@@ -335,6 +372,8 @@ class ContentSettingPopupBubbleModel : public ContentSettingSingleRadioGroup {
     SetPopups();
   }
 
+  virtual ~ContentSettingPopupBubbleModel() {}
+
  private:
   void SetPopups() {
     // check for crbug.com/53176
@@ -352,7 +391,7 @@ class ContentSettingPopupBubbleModel : public ContentSettingSingleRadioGroup {
         title = l10n_util::GetStringUTF8(IDS_TAB_LOADING_TITLE);
       PopupItem popup_item;
       popup_item.title = title;
-      popup_item.bitmap = (*i)->GetFavIcon();
+      popup_item.bitmap = (*i)->GetFavicon();
       popup_item.tab_contents = (*i);
       add_popup(popup_item);
     }
@@ -377,6 +416,8 @@ class ContentSettingDomainListBubbleModel
         "SetDomains currently only supports geolocation content type";
     SetDomainsAndCustomLink();
   }
+
+  virtual ~ContentSettingDomainListBubbleModel() {}
 
  private:
   void MaybeAddDomainList(const std::set<std::string>& hosts, int title_id) {

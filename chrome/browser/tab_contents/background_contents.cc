@@ -1,21 +1,24 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/tab_contents/background_contents.h"
 
 #include "chrome/browser/background_contents_service.h"
-#include "chrome/browser/browsing_instance.h"
+#include "chrome/browser/extensions/extension_message_service.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/renderer_host/render_view_host.h"
-#include "chrome/browser/renderer_host/site_instance.h"
 #include "chrome/browser/renderer_preferences_util.h"
+#include "chrome/browser/ui/webui/chrome_web_ui_factory.h"
 #include "chrome/common/extensions/extension_constants.h"
-#include "chrome/common/notification_service.h"
+#include "chrome/common/extensions/extension_messages.h"
 #include "chrome/common/url_constants.h"
 #include "chrome/common/view_types.h"
-#include "chrome/common/render_messages_params.h"
-#include "gfx/rect.h"
+#include "content/browser/browsing_instance.h"
+#include "content/browser/renderer_host/render_view_host.h"
+#include "content/browser/site_instance.h"
+#include "content/common/notification_service.h"
+#include "content/common/view_messages.h"
+#include "ui/gfx/rect.h"
 
 ////////////////
 // BackgroundContents
@@ -28,7 +31,6 @@ BackgroundContents::BackgroundContents(SiteInstance* site_instance,
 
   // TODO(rafaelw): Implement correct session storage.
   render_view_host_ = new RenderViewHost(site_instance, this, routing_id, NULL);
-  render_view_host_->AllowScriptToClose(true);
 
   // Close ourselves when the application is shutting down.
   registrar_.Add(this, NotificationType::APP_TERMINATING,
@@ -178,6 +180,12 @@ void BackgroundContents::Close(RenderViewHost* render_view_host) {
 void BackgroundContents::RenderViewGone(RenderViewHost* rvh,
                                         base::TerminationStatus status,
                                         int error_code) {
+  Profile* profile = rvh->process()->profile();
+  NotificationService::current()->Notify(
+      NotificationType::BACKGROUND_CONTENTS_TERMINATED,
+      Source<Profile>(profile),
+      Details<BackgroundContents>(this));
+
   // Our RenderView went away, so we should go away also, so killing the process
   // via the TaskManager doesn't permanently leave a BackgroundContents hanging
   // around the system, blocking future instances from being created
@@ -197,28 +205,30 @@ WebPreferences BackgroundContents::GetWebkitPrefs() {
   // apps.
   Profile* profile = render_view_host_->process()->profile();
   return RenderViewHostDelegateHelper::GetWebkitPrefs(profile,
-                                                      false);  // is_dom_ui
+                                                      false);  // is_web_ui
 }
 
-void BackgroundContents::ProcessDOMUIMessage(
-    const ViewHostMsg_DomMessage_Params& params) {
+void BackgroundContents::ProcessWebUIMessage(
+    const ExtensionHostMsg_DomMessage_Params& params) {
   // TODO(rafaelw): It may make sense for extensions to be able to open
   // BackgroundContents to chrome-extension://<id> pages. Consider implementing.
-  render_view_host_->BlockExtensionRequest(params.request_id);
+  render_view_host_->Send(new ExtensionMsg_Response(
+      render_view_host_->routing_id(), params.request_id, false,
+      std::string(), "Access to extension API denied."));
 }
 
 void BackgroundContents::CreateNewWindow(
     int route_id,
-    WindowContainerType window_container_type,
-    const string16& frame_name) {
+    const ViewHostMsg_CreateWindow_Params& params) {
   delegate_view_helper_.CreateNewWindow(
       route_id,
       render_view_host_->process()->profile(),
       render_view_host_->site_instance(),
-      DOMUIFactory::GetDOMUIType(render_view_host_->process()->profile(), url_),
+      ChromeWebUIFactory::GetInstance()->GetWebUIType(
+          render_view_host_->process()->profile(), url_),
       this,
-      window_container_type,
-      frame_name);
+      params.window_container_type,
+      params.frame_name);
 }
 
 void BackgroundContents::CreateNewWidget(int route_id,
@@ -226,8 +236,7 @@ void BackgroundContents::CreateNewWidget(int route_id,
   NOTREACHED();
 }
 
-void BackgroundContents::CreateNewFullscreenWidget(
-    int route_id, WebKit::WebPopupType popup_type) {
+void BackgroundContents::CreateNewFullscreenWidget(int route_id) {
   NOTREACHED();
 }
 

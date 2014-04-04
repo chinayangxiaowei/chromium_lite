@@ -64,10 +64,12 @@
           'dependencies': [
             'installer_util',
             'installer_util_strings',
+            '../content/content.gyp:content_common',
             '<(DEPTH)/base/base.gyp:base',
             '<(DEPTH)/base/base.gyp:base_i18n',
             '<(DEPTH)/base/base.gyp:test_support_base',
             '<(DEPTH)/build/temp_gyp/googleurl.gyp:googleurl',
+            '<(DEPTH)/testing/gmock.gyp:gmock',
             '<(DEPTH)/testing/gtest.gyp:gtest',
           ],
           'include_dirs': [
@@ -82,23 +84,27 @@
             'installer/util/create_dir_work_item_unittest.cc',
             'installer/util/create_reg_key_work_item_unittest.cc',
             'installer/util/delete_after_reboot_helper_unittest.cc',
+            'installer/util/delete_reg_key_work_item_unittest.cc',
             'installer/util/delete_reg_value_work_item_unittest.cc',
             'installer/util/delete_tree_work_item_unittest.cc',
             'installer/util/google_chrome_distribution_unittest.cc',
             'installer/util/google_update_settings_unittest.cc',
-            'installer/util/helper_unittest.cc',
             'installer/util/install_util_unittest.cc',
+            'installer/util/installation_validator_unittest.cc',
+            'installer/util/installation_validation_helper.cc',
+            'installer/util/installation_validation_helper.h',
+            'installer/util/installer_state_unittest.cc',
             'installer/util/installer_util_unittests.rc',
             'installer/util/installer_util_unittests_resource.h',
             'installer/util/language_selector_unittest.cc',
             'installer/util/lzma_util_unittest.cc',
             'installer/util/master_preferences_unittest.cc',
             'installer/util/move_tree_work_item_unittest.cc',
-            'installer/util/package_properties_unittest.cc',
-            'installer/util/package_unittest.cc',
             'installer/util/product_unittest.h',
             'installer/util/product_unittest.cc',
+            'installer/util/product_state_unittest.cc',
             'installer/util/run_all_unittests.cc',
+            'installer/util/self_cleaning_temp_dir_unittest.cc',
             'installer/util/set_reg_value_work_item_unittest.cc',
             'installer/util/shell_util_unittest.cc',
             'installer/util/wmi_unittest.cc',
@@ -118,7 +124,11 @@
             {
               'rule_name': 'installer_util_strings',
               'extension': 'grd',
+              'variables': {
+                'create_string_rc_py' : 'installer/util/prebuild/create_string_rc.py',
+              },
               'inputs': [
+                '<(create_string_rc_py)',
                 '<(RULE_INPUT_PATH)',
               ],
               'outputs': [
@@ -129,7 +139,7 @@
                 '<(SHARED_INTERMEDIATE_DIR)/installer_util_strings/installer_util_strings.h',
               ],
               'action': ['python',
-                         'installer/util/prebuild/create_string_rc.py',
+                         '<(create_string_rc_py)',
                          '<(SHARED_INTERMEDIATE_DIR)/installer_util_strings',
                          '<(branding)',],
               'message': 'Generating resources from <(RULE_INPUT_PATH)',
@@ -150,6 +160,7 @@
           'msvs_guid': '4B6E199A-034A-49BD-AB93-458DD37E45B1',
           'dependencies': [
             'installer_util',
+            'installer_util_strings',
             '<(DEPTH)/base/base.gyp:base',
             '<(DEPTH)/base/base.gyp:base_i18n',
             '<(DEPTH)/base/base.gyp:test_support_base',
@@ -160,6 +171,9 @@
             '<(DEPTH)',
           ],
           'sources': [
+            '<(SHARED_INTERMEDIATE_DIR)/installer_util_strings/installer_util_strings.rc',
+            'installer/util/installation_validation_helper.cc',
+            'installer/util/installation_validation_helper.h',
             'test/mini_installer_test/run_all_unittests.cc',
             'test/mini_installer_test/chrome_mini_installer.cc',
             'test/mini_installer_test/chrome_mini_installer.h',
@@ -186,9 +200,7 @@
             '<(DEPTH)/build/util/build_util.gyp:lastchange',
             '<(DEPTH)/build/util/support/support.gyp:*',
             '<(DEPTH)/build/win/system.gyp:cygwin',
-            '<(DEPTH)/ceee/ie/broker/broker.gyp:ceee_broker',
-            '<(DEPTH)/ceee/ie/plugin/toolband/toolband.gyp:ceee_ie',
-            '<(DEPTH)/ceee/installer_dll/ceee_installer_dll.gyp:ceee_installer_helper',
+            '<(DEPTH)/chrome_frame/chrome_frame.gyp:chrome_tab_idl',
             '<(DEPTH)/chrome_frame/chrome_frame.gyp:npchrome_frame',
             '<(DEPTH)/breakpad/breakpad.gyp:breakpad_handler',
             '<(DEPTH)/rlz/rlz.gyp:rlz_lib',
@@ -206,6 +218,8 @@
           },
           'sources': [
             'installer/mini_installer/chrome.release',
+            'installer/setup/chrome_frame_quick_enable.cc',
+            'installer/setup/chrome_frame_quick_enable.h',
             'installer/setup/chrome_frame_ready_mode.cc',
             'installer/setup/chrome_frame_ready_mode.h',
             'installer/setup/install.cc',
@@ -311,26 +325,37 @@
           'msvs_guid': 'C0AE4E06-F023-460F-BC14-6302CEAC51F8',
           'dependencies': [
             'installer_util',
+            'installer_util_strings',
             '<(DEPTH)/base/base.gyp:base',
             '<(DEPTH)/base/base.gyp:base_i18n',
             '<(DEPTH)/base/base.gyp:test_support_base',
             '<(DEPTH)/build/temp_gyp/googleurl.gyp:googleurl',
+            '<(DEPTH)/chrome_frame/chrome_frame.gyp:chrome_tab_idl',
             '<(DEPTH)/testing/gmock.gyp:gmock',
             '<(DEPTH)/testing/gtest.gyp:gtest',
           ],
           'include_dirs': [
             '<(DEPTH)',
+            '<(INTERMEDIATE_DIR)',
           ],
           # TODO(robertshield): Move the items marked with "Move to lib"
           # below into a separate lib and then link both setup.exe and
           # setup_unittests.exe against that.
           'sources': [
+            'installer/mini_installer/decompress.cc',
+            'installer/mini_installer/decompress.h',
+            'installer/mini_installer/decompress_test.cc',
+            'installer/mini_installer/mini_string.cc',
+            'installer/mini_installer/mini_string.h',
+            'installer/mini_installer/mini_string_test.cc',
             'installer/setup/install_worker.cc',    # Move to lib
             'installer/setup/install_worker.h',     # Move to lib
             'installer/setup/install_worker_unittest.cc',
             'installer/setup/run_all_unittests.cc',
             'installer/setup/setup_constants.cc',   # Move to lib
             'installer/setup/setup_constants.h',    # Move to lib
+            'installer/setup/setup_unittests.rc',
+            'installer/setup/setup_unittests_resource.h',
             'installer/setup/setup_util.cc',
             'installer/setup/setup_util_unittest.cc',
           ],
@@ -379,6 +404,7 @@
           '<(PRODUCT_DIR)/chrome.pak',
           '<(PRODUCT_DIR)/chrome_sandbox',
           '<(PRODUCT_DIR)/libffmpegsumo.so',
+          '<(PRODUCT_DIR)/libppGoogleNaClPluginChrome.so',
           '<(PRODUCT_DIR)/xdg-mime',
           '<(PRODUCT_DIR)/xdg-settings',
           '<(PRODUCT_DIR)/locales/en-US.pak',
@@ -863,6 +889,9 @@
                 }],  # mac_keystone
                 ['branding=="Chrome" and buildtype=="Official"', {
                   'files': [
+                    'app/theme/google_chrome/app_canary.icns',
+                    'installer/mac/internal/chrome_canary_dmg_dsstore',
+                    'installer/mac/internal/chrome_canary_dmg_icon.icns',
                     'installer/mac/internal/chrome_dmg_background.png',
                     'installer/mac/internal/chrome_dmg_dsstore',
                     'installer/mac/internal/chrome_dmg_icon.icns',

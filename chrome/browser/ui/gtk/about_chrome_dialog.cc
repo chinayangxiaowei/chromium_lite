@@ -10,13 +10,13 @@
 #include <vector>
 
 #include "base/utf_string_conversions.h"
-#include "chrome/browser/browser_list.h"
 #include "chrome/browser/google/google_util.h"
 #include "chrome/browser/platform_util.h"
 #include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/ui/browser_list.h"
 #include "chrome/browser/ui/gtk/cairo_cached_surface.h"
 #include "chrome/browser/ui/gtk/gtk_chrome_link_button.h"
-#include "chrome/browser/ui/gtk/gtk_theme_provider.h"
+#include "chrome/browser/ui/gtk/gtk_theme_service.h"
 #include "chrome/browser/ui/gtk/gtk_util.h"
 #include "chrome/common/chrome_constants.h"
 #include "chrome/common/chrome_version_info.h"
@@ -50,15 +50,9 @@ const char* kEndLinkOss = "END_LINK_OSS";
 const char* kBeginLink = "BEGIN_LINK";
 const char* kEndLink = "END_LINK";
 
-void OnDialogResponse(GtkDialog* dialog, int response_id) {
+void OnResponse(GtkWidget* dialog, int response_id) {
   // We're done.
-  gtk_widget_destroy(GTK_WIDGET(dialog));
-}
-
-void FixLabelWrappingCallback(GtkWidget *label,
-                              GtkAllocation *allocation,
-                              gpointer data) {
-  gtk_widget_set_size_request(label, allocation->width, -1);
+  gtk_widget_destroy(dialog);
 }
 
 GtkWidget* MakeMarkupLabel(const char* format, const std::string& str) {
@@ -90,8 +84,8 @@ gboolean OnEventBoxExpose(GtkWidget* event_box,
   cairo_t* cr = gdk_cairo_create(GDK_DRAWABLE(event_box->window));
   gdk_cairo_rectangle(cr, &expose->area);
   cairo_clip(cr);
-  GtkThemeProvider* theme_provider =
-      GtkThemeProvider::GetFrom(BrowserList::GetLastActive()->profile());
+  GtkThemeService* theme_provider =
+      GtkThemeService::GetFrom(BrowserList::GetLastActive()->profile());
   CairoCachedSurface* background = theme_provider->GetSurfaceNamed(
       IDR_ABOUT_BACKGROUND_COLOR, event_box);
 
@@ -286,7 +280,7 @@ void ShowAboutDialogForProfile(GtkWindow* parent, Profile* profile) {
   gtk_container_add(GTK_CONTAINER(alignment), vbox);
   gtk_box_pack_start(GTK_BOX(content_area), alignment, FALSE, FALSE, 0);
 
-  g_signal_connect(dialog, "response", G_CALLBACK(OnDialogResponse), NULL);
+  g_signal_connect(dialog, "response", G_CALLBACK(OnResponse), NULL);
   gtk_window_set_resizable(GTK_WINDOW(dialog), FALSE);
   gtk_widget_show_all(dialog);
   gtk_widget_grab_focus(close_button);

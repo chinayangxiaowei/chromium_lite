@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -11,11 +11,10 @@
 #include "base/sys_string_conversions.h"
 #include "chrome/browser/extensions/extension_browser_event_router.h"
 #include "chrome/browser/extensions/extension_host.h"
-#include "chrome/browser/extensions/extension_toolbar_model.h"
 #include "chrome/browser/extensions/extension_service.h"
+#include "chrome/browser/extensions/extension_toolbar_model.h"
 #include "chrome/browser/prefs/pref_service.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/tab_contents/tab_contents.h"
 #include "chrome/browser/ui/browser.h"
 #import "chrome/browser/ui/cocoa/extensions/browser_action_button.h"
 #import "chrome/browser/ui/cocoa/extensions/browser_actions_container_view.h"
@@ -23,11 +22,12 @@
 #import "chrome/browser/ui/cocoa/extensions/extension_popup_controller.h"
 #import "chrome/browser/ui/cocoa/menu_button.h"
 #include "chrome/common/extensions/extension_action.h"
-#include "chrome/common/notification_details.h"
-#include "chrome/common/notification_observer.h"
-#include "chrome/common/notification_registrar.h"
-#include "chrome/common/notification_source.h"
 #include "chrome/common/pref_names.h"
+#include "content/browser/tab_contents/tab_contents.h"
+#include "content/common/notification_details.h"
+#include "content/common/notification_observer.h"
+#include "content/common/notification_registrar.h"
+#include "content/common/notification_source.h"
 #import "third_party/GTM/AppKit/GTMNSAnimation+Duration.h"
 
 NSString* const kBrowserActionVisibilityChangedNotification =
@@ -360,7 +360,7 @@ class ExtensionServiceObserverBridge : public NotificationObserver,
     // Migration code to the new VisibleIconCount pref.
     // TODO(mpcomplete): remove this at some point.
     double predefinedWidth =
-        profile_->GetPrefs()->GetReal(prefs::kBrowserActionContainerWidth);
+        profile_->GetPrefs()->GetDouble(prefs::kBrowserActionContainerWidth);
     if (predefinedWidth != 0) {
       int iconWidth = kBrowserActionWidth + kBrowserActionButtonPadding;
       int extraWidth = kChevronWidth;
@@ -419,7 +419,7 @@ class ExtensionServiceObserverBridge : public NotificationObserver,
 }
 
 + (void)registerUserPrefs:(PrefService*)prefs {
-  prefs->RegisterRealPref(prefs::kBrowserActionContainerWidth, 0);
+  prefs->RegisterDoublePref(prefs::kBrowserActionContainerWidth, 0);
 }
 
 #pragma mark -
@@ -749,8 +749,9 @@ class ExtensionServiceObserverBridge : public NotificationObserver,
 
 - (BOOL)shouldDisplayBrowserAction:(const Extension*)extension {
   // Only display incognito-enabled extensions while in incognito mode.
-  return (!profile_->IsOffTheRecord() ||
-          profile_->GetExtensionService()->IsIncognitoEnabled(extension));
+  return
+      (!profile_->IsOffTheRecord() ||
+       profile_->GetExtensionService()->IsIncognitoEnabled(extension->id()));
 }
 
 - (void)showChevronIfNecessaryInFrame:(NSRect)frame animate:(BOOL)animate {

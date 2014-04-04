@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -71,6 +71,9 @@ class PasswordModelAssociator
   // See ModelAssociator interface.
   virtual void AbortAssociation();
 
+  // See ModelAssociator interface.
+  virtual bool CryptoReadyIfNecessary();
+
   // Not implemented.
   virtual const std::string* GetChromeNodeFromSyncId(int64 sync_id);
 
@@ -116,10 +119,6 @@ class PasswordModelAssociator
   // Called at various points in model association to determine if the
   // user requested an abort.
   bool IsAbortPending();
-
- protected:
-  // Returns sync service instance.
-  ProfileSyncService* sync_service() { return sync_service_; }
 
  private:
   typedef std::map<std::string, int64> PasswordToSyncIdMap;

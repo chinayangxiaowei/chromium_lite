@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -11,9 +11,9 @@
 #include "chrome/browser/chromeos/cros/input_method_library.h"
 #include "chrome/browser/chromeos/status/status_area_host.h"
 #include "chrome/browser/prefs/pref_member.h"
-#include "chrome/common/notification_observer.h"
-#include "chrome/common/notification_registrar.h"
-#include "chrome/common/notification_type.h"
+#include "content/common/notification_observer.h"
+#include "content/common/notification_registrar.h"
+#include "content/common/notification_type.h"
 #include "ui/base/models/simple_menu_model.h"
 #include "views/controls/menu/menu_2.h"
 #include "views/controls/menu/view_menu_delegate.h"
@@ -48,13 +48,14 @@ class InputMethodMenu : public views::ViewMenuDelegate,
                                 ui::Accelerator* accelerator) const;
   virtual bool IsItemCheckedAt(int index) const;
   virtual int GetGroupIdAt(int index) const;
-  virtual bool GetIconAt(int index, SkBitmap* icon) const;
+  virtual bool GetIconAt(int index, SkBitmap* icon);
   virtual ui::ButtonMenuItemModel* GetButtonMenuItemAt(int index) const;
   virtual bool IsEnabledAt(int index) const;
   virtual ui::MenuModel* GetSubmenuModelAt(int index) const;
   virtual void HighlightChangedTo(int index);
   virtual void ActivatedAt(int index);
   virtual void MenuWillShow();
+  virtual void SetMenuModelDelegate(ui::MenuModelDelegate* delegate);
 
   // views::ViewMenuDelegate implementation. Sub classes can override the method
   // to adjust the position of the menu.
@@ -64,7 +65,6 @@ class InputMethodMenu : public views::ViewMenuDelegate,
   // InputMethodLibrary::Observer implementation.
   virtual void InputMethodChanged(
       InputMethodLibrary* obj,
-      const InputMethodDescriptor& previous_input_method,
       const InputMethodDescriptor& current_input_method,
       size_t num_active_input_methods);
   virtual void ActiveInputMethodsChanged(
@@ -75,6 +75,10 @@ class InputMethodMenu : public views::ViewMenuDelegate,
     InputMethodLibrary* obj,
     const InputMethodDescriptor& previous_input_method,
     const InputMethodDescriptor& current_input_method);
+  virtual void PropertyListChanged(
+      InputMethodLibrary* obj,
+      const ImePropertyList& current_ime_properties);
+  virtual void FirstObserverIsAdded(InputMethodLibrary* obj);
 
   // NotificationObserver implementation.
   virtual void Observe(NotificationType type,
@@ -83,6 +87,9 @@ class InputMethodMenu : public views::ViewMenuDelegate,
 
   // Sets the minimum width of the dropdown menu.
   void SetMinimumWidth(int width);
+
+  // Rebuilds model and menu2 objects.
+  void PrepareMenu();
 
   // Registers input method preferences for the login screen.
   static void RegisterPrefs(PrefService* local_state);
@@ -97,11 +104,7 @@ class InputMethodMenu : public views::ViewMenuDelegate,
   static std::wstring GetTextForMenu(const InputMethodDescriptor& input_method);
 
  protected:
-  // Parses |input_method| and then calls UpdateUI().
-  void UpdateUIFromInputMethod(const InputMethodDescriptor& input_method,
-                               size_t num_active_input_methods);
-
-  // Rebuilds model and menu2 objects in preparetion to open the menu.
+  // Prepares menu: saves user metrics and rebuilds.
   void PrepareForMenuOpen();
 
   // Returns menu2 object for language menu.
@@ -119,12 +122,16 @@ class InputMethodMenu : public views::ViewMenuDelegate,
 
   // Sub classes have to implement the interface. This interface should return
   // true if the dropdown menu should show an item like "Customize languages
-  // and input..." DOMUI.
+  // and input..." WebUI.
   virtual bool ShouldSupportConfigUI() = 0;
 
   // Sub classes have to implement the interface which opens an UI for
   // customizing languages and input.
   virtual void OpenConfigUI() = 0;
+
+  // Parses |input_method| and then calls UpdateUI().
+  void UpdateUIFromInputMethod(const InputMethodDescriptor& input_method,
+                               size_t num_active_input_methods);
 
   // Rebuilds |model_|. This function should be called whenever
   // |input_method_descriptors_| is updated, or ImePropertiesChanged() is

@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -13,10 +13,10 @@ using ::testing::Return;
 namespace {
 
 static void VerifySplitViewLayout(const views::SingleSplitView& split) {
-  ASSERT_EQ(2, split.GetChildViewCount());
+  ASSERT_EQ(2, split.child_count());
 
-  views::View* leading = split.GetChildViewAt(0);
-  views::View* trailing = split.GetChildViewAt(1);
+  const views::View* leading = split.GetChildViewAt(0);
+  const views::View* trailing = split.GetChildViewAt(1);
 
   if (split.bounds().IsEmpty()) {
     EXPECT_TRUE(leading->bounds().IsEmpty());
@@ -116,15 +116,13 @@ TEST(SingleSplitViewTest, Resize) {
     split.GetChildViewAt(0)->SetVisible(false);
     split.Layout();
 
-    EXPECT_EQ(split.bounds().size(),
-              split.GetChildViewAt(1)->bounds().size());
+    EXPECT_EQ(split.size(), split.GetChildViewAt(1)->size());
 
     split.GetChildViewAt(0)->SetVisible(true);
     split.GetChildViewAt(1)->SetVisible(false);
     split.Layout();
 
-    EXPECT_EQ(split.bounds().size(),
-              split.GetChildViewAt(0)->bounds().size());
+    EXPECT_EQ(split.size(), split.GetChildViewAt(0)->size());
   }
 }
 
@@ -135,9 +133,9 @@ TEST(SingleSplitViewTest, MouseDrag) {
 
   ON_CALL(observer, SplitHandleMoved(_))
       .WillByDefault(Return(true));
-  // SplitHandleMoved is expected to be called once for every mouse move.
+  // SplitHandleMoved is called for two mouse moves and one mouse capture loss.
   EXPECT_CALL(observer, SplitHandleMoved(_))
-      .Times(2);
+      .Times(3);
 
   split.SetBounds(0, 0, 10, 100);
   const int kInitialDividerOffset = 33;
@@ -148,29 +146,34 @@ TEST(SingleSplitViewTest, MouseDrag) {
 
   // Drag divider to the right, in 2 steps.
   MouseEvent mouse_pressed(
-      Event::ET_MOUSE_PRESSED, 7, kInitialDividerOffset + kMouseOffset, 0);
+      ui::ET_MOUSE_PRESSED, 7, kInitialDividerOffset + kMouseOffset, 0);
   ASSERT_TRUE(split.OnMousePressed(mouse_pressed));
   EXPECT_EQ(kInitialDividerOffset, split.divider_offset());
 
   MouseEvent mouse_dragged_1(
-      Event::ET_MOUSE_DRAGGED, 5,
+      ui::ET_MOUSE_DRAGGED, 5,
       kInitialDividerOffset + kMouseOffset + kMouseMoveDelta, 0);
   ASSERT_TRUE(split.OnMouseDragged(mouse_dragged_1));
   EXPECT_EQ(kInitialDividerOffset + kMouseMoveDelta, split.divider_offset());
 
   MouseEvent mouse_dragged_2(
-      Event::ET_MOUSE_DRAGGED, 6,
+      ui::ET_MOUSE_DRAGGED, 6,
       kInitialDividerOffset + kMouseOffset + kMouseMoveDelta * 2, 0);
   ASSERT_TRUE(split.OnMouseDragged(mouse_dragged_2));
   EXPECT_EQ(kInitialDividerOffset + kMouseMoveDelta * 2,
             split.divider_offset());
 
   MouseEvent mouse_released(
-      Event::ET_MOUSE_RELEASED, 7,
+      ui::ET_MOUSE_RELEASED, 7,
       kInitialDividerOffset + kMouseOffset + kMouseMoveDelta * 2, 0);
-  split.OnMouseReleased(mouse_released, false);
+  split.OnMouseReleased(mouse_released);
   EXPECT_EQ(kInitialDividerOffset + kMouseMoveDelta * 2,
             split.divider_offset());
+
+  // Expect intial offset after a system/user gesture cancels the drag.
+  // This shouldn't occur after mouse release, but it's sufficient for testing.
+  split.OnMouseCaptureLost();
+  EXPECT_EQ(kInitialDividerOffset, split.divider_offset());
 }
 
 }  // namespace views

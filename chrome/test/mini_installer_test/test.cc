@@ -1,10 +1,10 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "base/command_line.h"
 #include "base/file_path.h"
-#include "base/scoped_ptr.h"
+#include "base/memory/scoped_ptr.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/installer/util/install_util.h"
 #include "chrome/installer/util/util_constants.h"
@@ -16,13 +16,13 @@
 
 // Although the C++ style guide disallows use of namespace directive, use
 // here because this is not only a .cc file, but also a test.
-using namespace mini_installer_constants;
+using namespace mini_installer_constants;  // NOLINT
 
 namespace {
 
 class MiniInstallTest : public testing::Test {
  public:
-   MiniInstallTest() : chrome_frame_(false) {}
+  MiniInstallTest() : chrome_frame_(false) {}
 
   static void CleanTheSystem() {
     const CommandLine* cmd = CommandLine::ForCurrentProcess();
@@ -97,20 +97,32 @@ TEST_F(MiniInstallTest, FullInstallerUser) {
 // Overinstall full installer.
 TEST_F(MiniInstallTest, FullOverPreviousFullUser) {
   if (!chrome_frame_)
-    user_inst_->OverInstallOnFullInstaller(kFullInstall);
+    user_inst_->OverInstallOnFullInstaller(kFullInstall, false);
 }
 TEST_F(MiniInstallTest, FullOverPreviousFullSys) {
-  sys_inst_->OverInstallOnFullInstaller(kFullInstall);
+  sys_inst_->OverInstallOnFullInstaller(kFullInstall, false);
+}
+
+// Overinstall full Chrome Frame installer while IE browser is running.
+TEST_F(MiniInstallTest, FullFrameOverPreviousFullIERunningSys) {
+  if (chrome_frame_)
+    sys_inst_->OverInstallOnFullInstaller(kFullInstall, true);
 }
 
 // Overinstall diff installer.
 TEST_F(MiniInstallTest, DiffOverPreviousFullUser) {
   if (!chrome_frame_)
-    user_inst_->OverInstallOnFullInstaller(kDiffInstall);
+    user_inst_->OverInstallOnFullInstaller(kDiffInstall, false);
 }
 
 TEST_F(MiniInstallTest, DiffOverPreviousFullSys) {
-  sys_inst_->OverInstallOnFullInstaller(kDiffInstall);
+  sys_inst_->OverInstallOnFullInstaller(kDiffInstall, false);
+}
+
+// Overinstall diff Chrome Frame installer while IE browser is running.
+TEST_F(MiniInstallTest, DiffFrameOverPreviousFullIERunningSys) {
+  if (chrome_frame_)
+    sys_inst_->OverInstallOnFullInstaller(kDiffInstall, true);
 }
 
 // Repair version folder.
@@ -130,6 +142,14 @@ TEST_F(MiniInstallTest, RepairRegistryOnFullUser) {
 }
 TEST_F(MiniInstallTest, RepairRegistryOnFullSys) {
   sys_inst_->Repair(ChromeMiniInstaller::REGISTRY);
+}
+
+// Run full Chrome Frame install then uninstall it while IE browser is running.
+TEST_F(MiniInstallTest, FullInstallAndUnInstallChromeFrameWithIERunning) {
+  if (chrome_frame_) {
+    sys_inst_->InstallFullInstaller(false);
+    sys_inst_->UnInstallChromeFrameWithIERunning();
+  }
 }
 
 // Install standalone.

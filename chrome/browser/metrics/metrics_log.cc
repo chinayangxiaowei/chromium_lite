@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,8 +9,8 @@
 
 #include "base/basictypes.h"
 #include "base/file_util.h"
+#include "base/memory/scoped_ptr.h"
 #include "base/perftimer.h"
-#include "base/scoped_ptr.h"
 #include "base/string_util.h"
 #include "base/sys_info.h"
 #include "base/third_party/nspr/prtime.h"
@@ -19,7 +19,7 @@
 #include "chrome/browser/autocomplete/autocomplete.h"
 #include "chrome/browser/autocomplete/autocomplete_match.h"
 #include "chrome/browser/browser_process.h"
-#include "chrome/browser/gpu_process_host_ui_shim.h"
+#include "chrome/browser/gpu_data_manager.h"
 #include "chrome/browser/prefs/pref_service.h"
 #include "chrome/common/chrome_version_info.h"
 #include "chrome/common/logging_chrome.h"
@@ -98,7 +98,7 @@ void MetricsLog::RecordIncrementalStabilityElements() {
   OPEN_ELEMENT_FOR_SCOPE("profile");
   WriteCommonEventAttributes();
 
-  WriteInstallElement();  // Supply appversion.
+  WriteInstallElement();
 
   {
     OPEN_ELEMENT_FOR_SCOPE("stability");  // Minimal set of stability elements.
@@ -282,8 +282,13 @@ void MetricsLog::WritePluginList(
     // Plugin name and filename are hashed for the privacy of those
     // testing unreleased new extensions.
     WriteAttribute("name", CreateBase64Hash(UTF16ToUTF8(iter->name)));
-    WriteAttribute("filename",
-        CreateBase64Hash(WideToUTF8(iter->path.BaseName().ToWStringHack())));
+    std::string filename_bytes =
+#if defined(OS_WIN)
+        UTF16ToUTF8(iter->path.BaseName().value());
+#else
+        iter->path.BaseName().value();
+#endif
+    WriteAttribute("filename", CreateBase64Hash(filename_bytes));
     WriteAttribute("version", UTF16ToUTF8(iter->version));
   }
 }
@@ -333,12 +338,11 @@ void MetricsLog::RecordEnvironment(
 
   {
     OPEN_ELEMENT_FOR_SCOPE("gpu");
-    WriteIntAttribute(
-        "vendorid",
-        GpuProcessHostUIShim::GetInstance()->gpu_info().vendor_id());
-    WriteIntAttribute(
-        "deviceid",
-        GpuProcessHostUIShim::GetInstance()->gpu_info().device_id());
+    GpuDataManager* gpu_data_manager = GpuDataManager::GetInstance();
+    if (gpu_data_manager) {
+      WriteIntAttribute("vendorid", gpu_data_manager->gpu_info().vendor_id);
+      WriteIntAttribute("deviceid", gpu_data_manager->gpu_info().device_id);
+    }
   }
 
   {

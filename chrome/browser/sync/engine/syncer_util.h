@@ -1,4 +1,4 @@
-// Copyright (c) 2006-2008 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 //
@@ -101,15 +101,6 @@ class SyncerUtil {
                                      const SyncEntity& update,
                                      syncable::MutableEntry* target);
 
-  // Compute a local predecessor position for |update_item|.  The position
-  // is determined by the SERVER_POSITION_IN_PARENT value of |update_item|,
-  // as well as the SERVER_POSITION_IN_PARENT values of any up-to-date
-  // children of |parent_id|.
-  static syncable::Id ComputePrevIdFromServerPosition(
-      syncable::BaseTransaction* trans,
-      syncable::Entry* update_item,
-      const syncable::Id& parent_id);
-
   // Append |item|, followed by a chain of its predecessors selected by
   // |inclusion_filter|, to the |commit_ids| vector and tag them as included by
   // storing in the set |inserted_items|.  |inclusion_filter| (typically one of
@@ -135,12 +126,6 @@ class SyncerUtil {
       syncable::IndexedBitField inclusion_filter,
       syncable::MetahandleSet* inserted_items,
       std::vector<syncable::Id>* commit_ids);
-
-  static void AddUncommittedParentsAndTheirPredecessors(
-      syncable::BaseTransaction* trans,
-      syncable::MetahandleSet* inserted_items,
-      std::vector<syncable::Id>* commit_ids,
-      syncable::Id parent_id);
 
   static void MarkDeletedChildrenSynced(
       const syncable::ScopedDirLookup &dir,

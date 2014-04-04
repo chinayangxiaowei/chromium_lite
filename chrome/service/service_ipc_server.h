@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,7 +7,8 @@
 
 #include <string>
 
-#include "base/scoped_ptr.h"
+#include "base/memory/scoped_ptr.h"
+#include "ipc/ipc_channel_handle.h"
 #include "ipc/ipc_sync_channel.h"
 #include "ipc/ipc_sync_message_filter.h"
 #include "ipc/ipc_message.h"
@@ -16,7 +17,7 @@
 class ServiceIPCServer : public IPC::Channel::Listener,
                          public IPC::Message::Sender {
  public:
-  explicit ServiceIPCServer(const std::string& channel_name);
+  explicit ServiceIPCServer(const IPC::ChannelHandle& handle);
   virtual ~ServiceIPCServer();
 
   bool Init();
@@ -65,7 +66,7 @@ class ServiceIPCServer : public IPC::Channel::Listener,
   // Helper method to create the sync channel.
   void CreateChannel();
 
-  std::string channel_name_;
+  IPC::ChannelHandle channel_handle_;
   scoped_ptr<IPC::SyncChannel> channel_;
   // Indicates whether a client is currently connected to the channel.
   bool client_connected_;

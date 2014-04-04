@@ -6,7 +6,7 @@
 
 #include <algorithm>
 
-#include "base/scoped_ptr.h"
+#include "base/memory/scoped_ptr.h"
 #include "base/string_number_conversions.h"
 #include "base/string_util.h"
 #include "gpu/command_buffer/common/gl_mock.h"
@@ -120,7 +120,7 @@ TEST_F(ProgramManagerTest, ProgramInfo) {
   EXPECT_FALSE(info1->IsValid());
   EXPECT_FALSE(info1->IsDeleted());
   EXPECT_FALSE(info1->CanLink());
-  EXPECT_STREQ("", info1->log_info().c_str());
+  EXPECT_TRUE(info1->log_info() == NULL);
 }
 
 class ProgramManagerWithShaderTest : public testing::Test {
@@ -205,10 +205,6 @@ class ProgramManagerWithShaderTest : public testing::Test {
     EXPECT_CALL(*gl_,
         GetProgramiv(service_id, GL_INFO_LOG_LENGTH, _))
         .WillOnce(SetArgumentPointee<2>(0))
-        .RetiresOnSaturation();
-    EXPECT_CALL(*gl_,
-        GetProgramInfoLog(service_id, _, _, _))
-        .Times(1)
         .RetiresOnSaturation();
     EXPECT_CALL(*gl_,
         GetProgramiv(service_id, GL_ACTIVE_ATTRIBUTES, _))
@@ -515,18 +511,27 @@ TEST_F(ProgramManagerWithShaderTest, GetUniformLocation) {
             program_info->GetUniformLocation("uniform3[2]"));
 }
 
-TEST_F(ProgramManagerWithShaderTest, GetUniformTypeByLocation) {
+TEST_F(ProgramManagerWithShaderTest, GetUniformInfoByLocation) {
   const GLint kInvalidLocation = 1234;
-  GLenum type = 0u;
+  const ProgramManager::ProgramInfo::UniformInfo* info;
   const ProgramManager::ProgramInfo* program_info =
       manager_.GetProgramInfo(kClientProgramId);
+  GLint array_index = -1;
   ASSERT_TRUE(program_info != NULL);
-  EXPECT_TRUE(program_info->GetUniformTypeByLocation(kUniform2Location, &type));
-  EXPECT_EQ(kUniform2Type, type);
-  type = 0u;
-  EXPECT_FALSE(program_info->GetUniformTypeByLocation(
-      kInvalidLocation, &type));
-  EXPECT_EQ(0u, type);
+  info = program_info->GetUniformInfoByLocation(
+      kUniform2Location, &array_index);
+  EXPECT_EQ(0, array_index);
+  ASSERT_TRUE(info != NULL);
+  EXPECT_EQ(kUniform2Type, info->type);
+  array_index = -1;
+  info = program_info->GetUniformInfoByLocation(
+      kInvalidLocation, &array_index);
+  EXPECT_TRUE(info == NULL);
+  EXPECT_EQ(-1, array_index);
+  GLint loc = program_info->GetUniformLocation("uniform2[2]");
+  info = program_info->GetUniformInfoByLocation(loc, &array_index);
+  ASSERT_TRUE(info != NULL);
+  EXPECT_EQ(2, array_index);
 }
 
 // Some GL drivers incorrectly return gl_DepthRange and possibly other uniforms

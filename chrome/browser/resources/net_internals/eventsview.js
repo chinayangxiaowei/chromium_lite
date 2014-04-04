@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -125,6 +125,13 @@ EventsView.prototype.setFilterText_ = function(filterText) {
 EventsView.prototype.onFilterTextChanged_ = function() {
   this.setFilter_(this.getFilterText_());
 };
+
+/**
+ * Updates text in the details view when security stripping is toggled.
+ */
+EventsView.prototype.onSecurityStrippingChanged = function() {
+  this.invalidateDetailsView_();
+}
 
 /**
  * Sorts active entries first.   If both entries are inactive, puts the one
@@ -475,8 +482,18 @@ EventsView.prototype.onLogEntriesDeleted = function(sourceIds) {
 /**
  * Called whenever all log events are deleted.
  */
-EventsView.prototype.onAllLogEntriesDeleted = function(offset) {
+EventsView.prototype.onAllLogEntriesDeleted = function() {
   this.initializeSourceList_();
+};
+
+/**
+ * Called when either a log file is loaded or when going back to actively
+ * logging events.  In either case, called after clearing the old entries,
+ * but before getting any new ones.
+ */
+EventsView.prototype.onSetIsViewingLogFile = function(isViewingLogFile) {
+  // Needed to sort new sourceless entries correctly.
+  this.maxReceivedSourceId_ = 0;
 };
 
 EventsView.prototype.incrementPrefilterCount = function(offset) {

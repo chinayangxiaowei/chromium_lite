@@ -5,40 +5,96 @@
 #include "chrome/browser/browser_main.h"
 #include "chrome/browser/browser_main_win.h"
 
-#include <windows.h>
 #include <shellapi.h>
+#include <windows.h>
 
 #include <algorithm>
 
-#include "app/win/win_util.h"
 #include "base/command_line.h"
 #include "base/environment.h"
 #include "base/i18n/rtl.h"
-#include "base/nss_util.h"
+#include "base/memory/scoped_native_library.h"
+#include "base/memory/scoped_ptr.h"
 #include "base/path_service.h"
-#include "base/scoped_ptr.h"
+#include "base/time.h"
 #include "base/utf_string_conversions.h"
 #include "base/win/windows_version.h"
-#include "chrome/browser/browser_list.h"
+#include "base/win/wrapped_window_proc.h"
+#include "crypto/nss_util.h"
+#include "chrome/browser/browser_util_win.h"
 #include "chrome/browser/first_run/first_run.h"
 #include "chrome/browser/metrics/metrics_service.h"
+#include "chrome/browser/ui/browser_list.h"
 #include "chrome/browser/ui/views/uninstall_view.h"
+#include "chrome/common/chrome_constants.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/common/env_vars.h"
-#include "chrome/common/main_function_params.h"
-#include "chrome/common/result_codes.h"
 #include "chrome/installer/util/browser_distribution.h"
+#include "chrome/installer/util/google_update_settings.h"
 #include "chrome/installer/util/helper.h"
 #include "chrome/installer/util/install_util.h"
 #include "chrome/installer/util/shell_util.h"
+#include "content/common/main_function_params.h"
+#include "content/common/result_codes.h"
 #include "grit/chromium_strings.h"
 #include "grit/generated_resources.h"
 #include "net/base/winsock_init.h"
-#include "net/socket/ssl_client_socket_nss_factory.h"
+#include "net/socket/client_socket_factory.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/l10n/l10n_util_win.h"
+#include "ui/base/message_box_win.h"
 #include "views/focus/accelerator_handler.h"
 #include "views/window/window.h"
+
+namespace {
+
+typedef HRESULT (STDAPICALLTYPE* RegisterApplicationRestartProc)(
+    const wchar_t* command_line,
+    DWORD flags);
+
+void InitializeWindowProcExceptions() {
+  // Get the breakpad pointer from chrome.exe
+  base::win::WinProcExceptionFilter exception_filter =
+      reinterpret_cast<base::win::WinProcExceptionFilter>(
+          ::GetProcAddress(::GetModuleHandle(
+                               chrome::kBrowserProcessExecutableName),
+                           "CrashForException"));
+  exception_filter = base::win::SetWinProcExceptionFilter(exception_filter);
+  DCHECK(!exception_filter);
+}
+
+// BrowserUsageUpdater --------------------------------------------------------
+// This class' job is to update the registry 'dr' value every 24 hours
+// that way google update can accurately track browser usage without
+// undercounting users that do not close chrome for long periods of time.
+class BrowserUsageUpdater : public Task {
+ public:
+  virtual ~BrowserUsageUpdater() {}
+
+  virtual void Run() OVERRIDE {
+    if (UpdateUsageRegKey())
+      Track();
+  }
+
+  static void Track() {
+    BrowserThread::PostDelayedTask(
+        BrowserThread::FILE,
+        FROM_HERE, new BrowserUsageUpdater,
+        base::TimeDelta::FromHours(24).InMillisecondsRoundedUp());
+  }
+
+ private:
+  bool UpdateUsageRegKey() {
+    FilePath module_dir;
+    if (!PathService::Get(base::DIR_MODULE, &module_dir))
+      return false;
+    bool system_level =
+        !InstallUtil::IsPerUserInstall(module_dir.value().c_str());
+    return GoogleUpdateSettings::UpdateDidRunState(true, system_level);
+  }
+};
+
+}  // namespace
 
 void DidEndMainMessageLoop() {
   OleUninitialize();
@@ -57,9 +113,23 @@ void WarnAboutMinimumSystemRequirements() {
     const string16 text =
         l10n_util::GetStringUTF16(IDS_UNSUPPORTED_OS_PRE_WIN_XP);
     const string16 caption = l10n_util::GetStringUTF16(IDS_PRODUCT_NAME);
-    app::win::MessageBox(NULL, text, caption,
-                         MB_OK | MB_ICONWARNING | MB_TOPMOST);
+    ui::MessageBox(NULL, text, caption, MB_OK | MB_ICONWARNING | MB_TOPMOST);
   }
+}
+
+void RecordBrowserStartupTime() {
+  // Calculate the time that has elapsed from our own process creation.
+  FILETIME creation_time = {};
+  FILETIME ignore = {};
+  ::GetProcessTimes(::GetCurrentProcess(), &creation_time, &ignore, &ignore,
+      &ignore);
+
+  base::TimeDelta elapsed_from_startup =
+      base::Time::Now() - base::Time::FromFileTime(creation_time);
+
+  // Record the time to present in a histogram.
+  UMA_HISTOGRAM_MEDIUM_TIMES("Startup.BrowserMessageLoopStartTime",
+                             elapsed_from_startup);
 }
 
 int AskForUninstallConfirmation() {
@@ -75,7 +145,7 @@ void ShowCloseBrowserFirstMessageBox() {
   const string16 text = l10n_util::GetStringUTF16(IDS_UNINSTALL_CLOSE_APP);
   const string16 caption = l10n_util::GetStringUTF16(IDS_PRODUCT_NAME);
   const UINT flags = MB_OK | MB_ICONWARNING | MB_TOPMOST;
-  app::win::MessageBox(NULL, text, caption, flags);
+  ui::MessageBox(NULL, text, caption, flags);
 }
 
 int DoUninstallTasks(bool chrome_still_running) {
@@ -88,7 +158,7 @@ int DoUninstallTasks(bool chrome_still_running) {
     return ResultCodes::UNINSTALL_CHROME_ALIVE;
   }
   int ret = AskForUninstallConfirmation();
-  if (Upgrade::IsBrowserAlreadyRunning()) {
+  if (browser_util::IsBrowserAlreadyRunning()) {
     ShowCloseBrowserFirstMessageBox();
     return ResultCodes::UNINSTALL_CHROME_ALIVE;
   }
@@ -115,7 +185,7 @@ int DoUninstallTasks(bool chrome_still_running) {
 // the user if the browser process dies. These strings are stored in the
 // environment block so they are accessible in the early stages of the
 // chrome executable's lifetime.
-void PrepareRestartOnCrashEnviroment(const CommandLine &parsed_command_line) {
+void PrepareRestartOnCrashEnviroment(const CommandLine& parsed_command_line) {
   // Clear this var so child processes don't show the dialog by default.
   scoped_ptr<base::Environment> env(base::Environment::Create());
   env->UnSetVar(env_vars::kShowRestart);
@@ -147,11 +217,39 @@ void PrepareRestartOnCrashEnviroment(const CommandLine &parsed_command_line) {
   env->SetVar(env_vars::kRestartInfo, UTF16ToUTF8(dlg_strings));
 }
 
+bool RegisterApplicationRestart(const CommandLine& parsed_command_line) {
+  DCHECK(base::win::GetVersion() >= base::win::VERSION_VISTA);
+  base::ScopedNativeLibrary library(FilePath(L"kernel32.dll"));
+  // Get the function pointer for RegisterApplicationRestart.
+  RegisterApplicationRestartProc register_application_restart =
+      static_cast<RegisterApplicationRestartProc>(
+          library.GetFunctionPointer("RegisterApplicationRestart"));
+  if (!register_application_restart)
+    return false;
+
+  // The Windows Restart Manager expects a string of command line flags only,
+  // without the program.
+  CommandLine command_line(CommandLine::NO_PROGRAM);
+  command_line.AppendSwitches(parsed_command_line);
+  command_line.AppendArgs(parsed_command_line);
+  // Ensure restore last session is set.
+  if (!command_line.HasSwitch(switches::kRestoreLastSession))
+    command_line.AppendSwitch(switches::kRestoreLastSession);
+
+  // Restart Chrome if the computer is restarted as the result of an update.
+  // This could be extended to handle crashes, hangs, and patches.
+  HRESULT hr = register_application_restart(
+      command_line.command_line_string().c_str(),
+      RESTART_NO_CRASH | RESTART_NO_HANG | RESTART_NO_PATCH);
+  DCHECK(SUCCEEDED(hr)) << "RegisterApplicationRestart failed.";
+  return SUCCEEDED(hr);
+}
+
 // This method handles the --hide-icons and --show-icons command line options
 // for chrome that get triggered by Windows from registry entries
 // HideIconsCommand & ShowIconsCommand. Chrome doesn't support hide icons
 // functionality so we just ask the users if they want to uninstall Chrome.
-int HandleIconsCommands(const CommandLine &parsed_command_line) {
+int HandleIconsCommands(const CommandLine& parsed_command_line) {
   if (parsed_command_line.HasSwitch(switches::kHideIcons)) {
     string16 cp_applet;
     base::win::Version version = base::win::GetVersion();
@@ -167,7 +265,7 @@ int HandleIconsCommands(const CommandLine &parsed_command_line) {
         l10n_util::GetStringFUTF16(IDS_HIDE_ICONS_NOT_SUPPORTED, cp_applet);
     const string16 caption = l10n_util::GetStringUTF16(IDS_PRODUCT_NAME);
     const UINT flags = MB_OKCANCEL | MB_ICONWARNING | MB_TOPMOST;
-    if (IDOK == app::win::MessageBox(NULL, msg, caption, flags))
+    if (IDOK == ui::MessageBox(NULL, msg, caption, flags))
       ShellExecute(NULL, NULL, L"appwiz.cpl", NULL, NULL, SW_SHOWNORMAL);
     return ResultCodes::NORMAL_EXIT;  // Exit as we are not launching browser.
   }
@@ -194,12 +292,10 @@ bool CheckMachineLevelInstall() {
           l10n_util::GetStringUTF16(IDS_MACHINE_LEVEL_INSTALL_CONFLICT);
       const string16 caption = l10n_util::GetStringUTF16(IDS_PRODUCT_NAME);
       const UINT flags = MB_OK | MB_ICONERROR | MB_TOPMOST;
-      app::win::MessageBox(NULL, text, caption, flags);
-
-      std::wstring uninstall_string = InstallUtil::GetChromeUninstallCmd(false,
-                                                                         dist);
-      CommandLine uninstall_cmd = CommandLine::FromString(uninstall_string);
-      if (!uninstall_cmd.GetProgram().value().empty()) {
+      ui::MessageBox(NULL, text, caption, flags);
+      CommandLine uninstall_cmd(
+          InstallUtil::GetChromeUninstallCmd(false, dist->GetType()));
+      if (!uninstall_cmd.GetProgram().empty()) {
         uninstall_cmd.AppendSwitch(installer::switches::kForceUninstall);
         uninstall_cmd.AppendSwitch(
             installer::switches::kDoNotRemoveSharedItems);
@@ -232,20 +328,29 @@ class BrowserMainPartsWin : public BrowserMainParts {
     if (!parameters().ui_task) {
       // Override the configured locale with the user's preferred UI language.
       l10n_util::OverrideLocaleWithUILanguageList();
+
+      // Make sure that we know how to handle exceptions from the message loop.
+      InitializeWindowProcExceptions();
     }
+  }
+
+  virtual void PostMainMessageLoopStart() OVERRIDE {
+    MessageLoop::current()->PostDelayedTask(
+        FROM_HERE,
+        NewRunnableFunction(&BrowserUsageUpdater::Track),
+        base::TimeDelta::FromSeconds(30).InMillisecondsRoundedUp());
   }
 
  private:
   virtual void InitializeSSL() {
     // Use NSS for SSL by default.
-    // Because of a build system issue (http://crbug.com/43461), the default
-    // client socket factory uses SChannel (the system SSL library) for SSL by
-    // default on Windows.
-    if (!parsed_command_line().HasSwitch(switches::kUseSystemSSL)) {
-      net::ClientSocketFactory::SetSSLClientSocketFactory(
-          net::SSLClientSocketNSSFactory);
+    // The default client socket factory uses NSS for SSL by default on
+    // Windows.
+    if (parsed_command_line().HasSwitch(switches::kUseSystemSSL)) {
+      net::ClientSocketFactory::UseSystemSSL();
+    } else {
       // We want to be sure to init NSPR on the main thread.
-      base::EnsureNSPRInit();
+      crypto::EnsureNSPRInit();
     }
   }
 };

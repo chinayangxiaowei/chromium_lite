@@ -9,14 +9,14 @@
 #include "chrome/common/extensions/extension.h"
 #include "chrome/common/extensions/extension_icon_set.h"
 #include "chrome/common/extensions/extension_resource.h"
-#include "gfx/canvas_skia.h"
-#include "gfx/color_utils.h"
-#include "gfx/favicon_size.h"
-#include "gfx/skbitmap_operations.h"
-#include "gfx/size.h"
 #include "grit/theme_resources.h"
 #include "skia/ext/image_operations.h"
 #include "ui/base/resource/resource_bundle.h"
+#include "ui/gfx/canvas_skia.h"
+#include "ui/gfx/color_utils.h"
+#include "ui/gfx/favicon_size.h"
+#include "ui/gfx/size.h"
+#include "ui/gfx/skbitmap_operations.h"
 
 namespace {
 
@@ -54,7 +54,7 @@ void ExtensionIconManager::LoadIcon(const Extension* extension) {
     pending_icons_.insert(extension->id());
     image_tracker_.LoadImage(extension,
                              icon_resource,
-                             gfx::Size(kFavIconSize, kFavIconSize),
+                             gfx::Size(kFaviconSize, kFaviconSize),
                              ImageLoadingTracker::CACHE);
   }
 }
@@ -68,8 +68,8 @@ const SkBitmap& ExtensionIconManager::GetIcon(const std::string& extension_id) {
     result = &default_icon_;
   }
   DCHECK(result);
-  DCHECK_EQ(kFavIconSize + padding_.width(), result->width());
-  DCHECK_EQ(kFavIconSize + padding_.height(), result->height());
+  DCHECK_EQ(kFaviconSize + padding_.width(), result->width());
+  DCHECK_EQ(kFaviconSize + padding_.height(), result->height());
   return *result;
 }
 
@@ -79,7 +79,7 @@ void ExtensionIconManager::RemoveIcon(const std::string& extension_id) {
 }
 
 void ExtensionIconManager::OnImageLoaded(SkBitmap* image,
-                                         ExtensionResource resource,
+                                         const ExtensionResource& resource,
                                          int index) {
   if (!image)
     return;
@@ -106,10 +106,10 @@ void ExtensionIconManager::EnsureDefaultIcon() {
 SkBitmap ExtensionIconManager::ApplyTransforms(const SkBitmap& source) {
   SkBitmap result = source;
 
-  if (result.width() != kFavIconSize || result.height() != kFavIconSize) {
+  if (result.width() != kFaviconSize || result.height() != kFaviconSize) {
     result = skia::ImageOperations::Resize(
         result, skia::ImageOperations::RESIZE_LANCZOS3,
-        kFavIconSize, kFavIconSize);
+        kFaviconSize, kFaviconSize);
   }
 
   if (monochrome_) {

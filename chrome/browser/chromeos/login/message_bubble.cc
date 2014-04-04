@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -12,7 +12,7 @@
 #include "views/controls/button/image_button.h"
 #include "views/controls/image_view.h"
 #include "views/controls/label.h"
-#include "views/grid_layout.h"
+#include "views/layout/grid_layout.h"
 #include "views/widget/widget.h"
 
 namespace chromeos {
@@ -27,7 +27,7 @@ MessageBubble::MessageBubble(views::WidgetGtk::Type type,
                              const std::wstring& help,
                              bool grab_enabled,
                              MessageBubbleDelegate* delegate)
-    : InfoBubble(type, false),  // don't show while screen is locked
+    : Bubble(type, false),  // don't show while screen is locked
       parent_(parent),
       help_link_(NULL),
       message_delegate_(delegate),
@@ -114,8 +114,8 @@ MessageBubble* MessageBubble::Show(views::Widget* parent,
   // The bubble will be destroyed when it is closed.
   MessageBubble* bubble = new MessageBubble(
       views::WidgetGtk::TYPE_WINDOW, parent, image, text, help, true, delegate);
-  bubble->Init(parent, position_relative_to, arrow_location,
-               bubble->text_->GetParent(), delegate);
+  bubble->InitBubble(parent, position_relative_to, arrow_location,
+                     bubble->text_->parent(), delegate);
   return bubble;
 }
 
@@ -131,8 +131,8 @@ MessageBubble* MessageBubble::ShowNoGrab(
   // The bubble will be destroyed when it is closed.
   MessageBubble* bubble = new MessageBubble(
       views::WidgetGtk::TYPE_CHILD, parent, image, text, help, false, delegate);
-  bubble->Init(parent, position_relative_to, arrow_location,
-               bubble->text_->GetParent(), delegate);
+  bubble->InitBubble(parent, position_relative_to, arrow_location,
+                     bubble->text_->parent(), delegate);
   return bubble;
 }
 
@@ -145,14 +145,14 @@ void MessageBubble::IsActiveChanged() {
   }
 }
 
-void MessageBubble::DoGrab() {
+void MessageBubble::SetMouseCapture() {
   if (grab_enabled_)
-    WidgetGtk::DoGrab();
+    WidgetGtk::SetMouseCapture();
 }
 
 void MessageBubble::Close() {
   parent_ = NULL;
-  InfoBubble::Close();
+  Bubble::Close();
 }
 
 }  // namespace chromeos

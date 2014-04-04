@@ -9,20 +9,21 @@
 #include <string>
 #include <vector>
 
+#include "base/memory/scoped_ptr.h"
 #include "base/perftimer.h"
-#include "base/scoped_ptr.h"
 #include "chrome/browser/extensions/extension_function_dispatcher.h"
-#include "chrome/browser/renderer_host/render_view_host_delegate.h"
 #include "chrome/browser/tab_contents/render_view_host_delegate_helper.h"
 #include "chrome/browser/ui/app_modal_dialogs/js_modal_dialog.h"
+#include "content/browser/renderer_host/render_view_host_delegate.h"
+#include "content/common/notification_registrar.h"
+
 #if defined(TOOLKIT_VIEWS)
 #include "chrome/browser/ui/views/extensions/extension_view.h"
 #elif defined(OS_MACOSX)
 #include "chrome/browser/ui/cocoa/extensions/extension_view_mac.h"
 #elif defined(TOOLKIT_GTK)
-#include "chrome/browser/ui/gtk/extension_view_gtk.h"
+#include "chrome/browser/ui/gtk/extensions/extension_view_gtk.h"
 #endif
-#include "chrome/common/notification_registrar.h"
 
 class Browser;
 class Extension;
@@ -30,12 +31,13 @@ class FileSelectHelper;
 class RenderProcessHost;
 class RenderWidgetHostView;
 class TabContents;
+struct ViewHostMsg_RunFileChooser_Params;
 struct WebPreferences;
 
 // This class is the browser component of an extension component's RenderView.
 // It handles setting up the renderer process, if needed, with special
 // privileges available to extensions.  It may have a view to be shown in the
-// in the browser UI, or it may be hidden.
+// browser UI, or it may be hidden.
 class ExtensionHost : public RenderViewHostDelegate,
                       public RenderViewHostDelegate::View,
                       public ExtensionFunctionDispatcher::Delegate,
@@ -70,6 +72,7 @@ class ExtensionHost : public RenderViewHostDelegate,
   void CreateView(Browser* browser);
 
   const Extension* extension() const { return extension_; }
+  const std::string& extension_id() const { return extension_id_; }
   RenderViewHost* render_view_host() const { return render_view_host_; }
   RenderProcessHost* render_process_host() const;
   SiteInstance* site_instance() const;
@@ -106,11 +109,11 @@ class ExtensionHost : public RenderViewHostDelegate,
   // |size_limit| in both width and height.
   void DisableScrollbarsForSmallWindows(const gfx::Size& size_limit);
 
-  // RenderViewHostDelegate::View implementation.
+  // RenderViewHostDelegate implementation.
+  virtual bool OnMessageReceived(const IPC::Message& message);
   virtual const GURL& GetURL() const;
   virtual void RenderViewCreated(RenderViewHost* render_view_host);
   virtual ViewType::Type GetRenderViewType() const;
-  virtual FileSelect* GetFileSelectDelegate();
   virtual int GetBrowserWindowID() const;
   virtual void RenderViewGone(RenderViewHost* render_view_host,
                               base::TerminationStatus status,
@@ -126,7 +129,8 @@ class ExtensionHost : public RenderViewHostDelegate,
   // RenderViewHostDelegate implementation.
   virtual RenderViewHostDelegate::View* GetViewDelegate();
   virtual WebPreferences GetWebkitPrefs();
-  virtual void ProcessDOMUIMessage(const ViewHostMsg_DomMessage_Params& params);
+  virtual void ProcessWebUIMessage(
+      const ExtensionHostMsg_DomMessage_Params& params);
   virtual void RunJavaScriptMessage(const std::wstring& message,
                                     const std::wstring& default_prompt,
                                     const GURL& frame_url,
@@ -139,11 +143,9 @@ class ExtensionHost : public RenderViewHostDelegate,
   // RenderViewHostDelegate::View
   virtual void CreateNewWindow(
       int route_id,
-      WindowContainerType window_container_type,
-      const string16& frame_name);
+      const ViewHostMsg_CreateWindow_Params& params);
   virtual void CreateNewWidget(int route_id, WebKit::WebPopupType popup_type);
-  virtual void CreateNewFullscreenWidget(int route_id,
-                                         WebKit::WebPopupType popup_type);
+  virtual void CreateNewFullscreenWidget(int route_id);
   virtual void ShowCreatedWindow(int route_id,
                                  WindowOpenDisposition disposition,
                                  const gfx::Rect& initial_pos,
@@ -190,7 +192,7 @@ class ExtensionHost : public RenderViewHostDelegate,
   virtual void OnMessageBoxClosed(IPC::Message* reply_msg,
                                   bool success,
                                   const std::wstring& prompt);
-  virtual void SetSuppressMessageBoxes(bool suppress_message_boxes) {}
+  virtual void SetSuppressMessageBoxes(bool suppress_message_boxes);
   virtual gfx::NativeWindow GetMessageBoxRootWindow();
   virtual TabContents* AsTabContents();
   virtual ExtensionHost* AsExtensionHost();
@@ -227,6 +229,9 @@ class ExtensionHost : public RenderViewHostDelegate,
   virtual Browser* GetBrowser();
   virtual gfx::NativeView GetNativeViewOfHost();
 
+  // Message handlers.
+  void OnRunFileChooser(const ViewHostMsg_RunFileChooser_Params& params);
+
   // Handles keyboard events that were not handled by HandleKeyboardEvent().
   // Platform specific implementation may override this method to handle the
   // event in platform specific way.
@@ -238,6 +243,9 @@ class ExtensionHost : public RenderViewHostDelegate,
 
   // The extension that we're hosting in this view.
   const Extension* extension_;
+
+  // Id of extension that we're hosting in this view.
+  const std::string extension_id_;
 
   // The profile that this host is tied to.
   Profile* profile_;
@@ -282,6 +290,12 @@ class ExtensionHost : public RenderViewHostDelegate,
 
   // FileSelectHelper, lazily created.
   scoped_ptr<FileSelectHelper> file_select_helper_;
+
+  // The time that the last javascript message was dismissed.
+  base::TimeTicks last_javascript_message_dismissal_;
+
+  // Whether to suppress all javascript messages.
+  bool suppress_javascript_messages_;
 
   DISALLOW_COPY_AND_ASSIGN(ExtensionHost);
 };

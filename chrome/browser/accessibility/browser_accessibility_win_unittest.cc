@@ -1,15 +1,17 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "base/scoped_ptr.h"
-#include "base/scoped_comptr_win.h"
+#include "base/memory/scoped_ptr.h"
+#include "base/win/scoped_comptr.h"
 #include "chrome/browser/accessibility/browser_accessibility_manager.h"
 #include "chrome/browser/accessibility/browser_accessibility_win.h"
-#include "chrome/common/render_messages_params.h"
+#include "content/common/view_messages.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 using webkit_glue::WebAccessibility;
+
+namespace {
 
 // Subclass of BrowserAccessibilityWin that counts the number of instances.
 class CountedBrowserAccessibility : public BrowserAccessibilityWin {
@@ -35,6 +37,8 @@ class CountedBrowserAccessibilityFactory
     return instance;
   }
 };
+
+}  // anonymous namespace
 
 VARIANT CreateI4Variant(LONG value) {
   VARIANT variant = {0};
@@ -146,7 +150,7 @@ TEST_F(BrowserAccessibilityTest, TestChildrenChange) {
   WebAccessibility text;
   text.id = 2;
   text.role = WebAccessibility::ROLE_STATIC_TEXT;
-  text.value = L"old text";
+  text.name = L"old text";
   text.state = 0;
 
   WebAccessibility root;
@@ -168,28 +172,28 @@ TEST_F(BrowserAccessibilityTest, TestChildrenChange) {
 
   // Query for the text IAccessible and verify that it returns "old text" as its
   // value.
-  ScopedComPtr<IDispatch> text_dispatch;
+  base::win::ScopedComPtr<IDispatch> text_dispatch;
   HRESULT hr = manager->GetRoot()->toBrowserAccessibilityWin()->get_accChild(
       CreateI4Variant(1), text_dispatch.Receive());
   ASSERT_EQ(S_OK, hr);
 
-  ScopedComPtr<IAccessible> text_accessible;
+  base::win::ScopedComPtr<IAccessible> text_accessible;
   hr = text_dispatch.QueryInterface(text_accessible.Receive());
   ASSERT_EQ(S_OK, hr);
 
-  CComBSTR value;
-  hr = text_accessible->get_accValue(CreateI4Variant(CHILDID_SELF), &value);
+  CComBSTR name;
+  hr = text_accessible->get_accName(CreateI4Variant(CHILDID_SELF), &name);
   ASSERT_EQ(S_OK, hr);
-  EXPECT_STREQ(L"old text", value.m_str);
+  EXPECT_STREQ(L"old text", name.m_str);
 
   text_dispatch.Release();
   text_accessible.Release();
 
   // Notify the BrowserAccessibilityManager that the text child has changed.
-  text.value = L"new text";
+  text.name = L"new text";
   ViewHostMsg_AccessibilityNotification_Params param;
   param.notification_type =
-      ViewHostMsg_AccessibilityNotification_Params::
+      ViewHostMsg_AccessibilityNotification_Type::
         NOTIFICATION_TYPE_CHILDREN_CHANGED;
   param.acc_obj = text;
   std::vector<ViewHostMsg_AccessibilityNotification_Params> notifications;
@@ -206,9 +210,9 @@ TEST_F(BrowserAccessibilityTest, TestChildrenChange) {
   hr = text_dispatch.QueryInterface(text_accessible.Receive());
   ASSERT_EQ(S_OK, hr);
 
-  hr = text_accessible->get_accValue(CreateI4Variant(CHILDID_SELF), &value);
+  hr = text_accessible->get_accName(CreateI4Variant(CHILDID_SELF), &name);
   ASSERT_EQ(S_OK, hr);
-  EXPECT_STREQ(L"new text", value.m_str);
+  EXPECT_STREQ(L"new text", name.m_str);
 
   text_dispatch.Release();
   text_accessible.Release();
@@ -261,7 +265,7 @@ TEST_F(BrowserAccessibilityTest, TestChildrenChangeNoLeaks) {
   root.children.clear();
   ViewHostMsg_AccessibilityNotification_Params param;
   param.notification_type =
-      ViewHostMsg_AccessibilityNotification_Params::
+      ViewHostMsg_AccessibilityNotification_Type::
         NOTIFICATION_TYPE_CHILDREN_CHANGED;
   param.acc_obj = root;
   std::vector<ViewHostMsg_AccessibilityNotification_Params> notifications;
@@ -311,14 +315,14 @@ TEST_F(BrowserAccessibilityTest, TestTextBoundaries) {
   SysFreeString(text);
 
   ASSERT_EQ(S_OK, text1_obj->get_text(0, 4, &text));
-  ASSERT_EQ(text, std::wstring(L"One "));
+  ASSERT_EQ(text, string16(L"One "));
   SysFreeString(text);
 
   ASSERT_EQ(S_OK, text1_obj->get_textAtOffset(
       1, IA2_TEXT_BOUNDARY_CHAR, &start, &end, &text));
   ASSERT_EQ(start, 1);
   ASSERT_EQ(end, 2);
-  ASSERT_EQ(text, std::wstring(L"n"));
+  ASSERT_EQ(text, string16(L"n"));
   SysFreeString(text);
 
   ASSERT_EQ(S_FALSE, text1_obj->get_textAtOffset(
@@ -330,28 +334,28 @@ TEST_F(BrowserAccessibilityTest, TestTextBoundaries) {
       1, IA2_TEXT_BOUNDARY_WORD, &start, &end, &text));
   ASSERT_EQ(start, 0);
   ASSERT_EQ(end, 3);
-  ASSERT_EQ(text, std::wstring(L"One"));
+  ASSERT_EQ(text, string16(L"One"));
   SysFreeString(text);
 
   ASSERT_EQ(S_OK, text1_obj->get_textAtOffset(
       6, IA2_TEXT_BOUNDARY_WORD, &start, &end, &text));
   ASSERT_EQ(start, 4);
   ASSERT_EQ(end, 7);
-  ASSERT_EQ(text, std::wstring(L"two"));
+  ASSERT_EQ(text, string16(L"two"));
   SysFreeString(text);
 
   ASSERT_EQ(S_OK, text1_obj->get_textAtOffset(
       text1_len, IA2_TEXT_BOUNDARY_WORD, &start, &end, &text));
   ASSERT_EQ(start, 25);
   ASSERT_EQ(end, 29);
-  ASSERT_EQ(text, std::wstring(L"six."));
+  ASSERT_EQ(text, string16(L"six."));
   SysFreeString(text);
 
   ASSERT_EQ(S_OK, text1_obj->get_textAtOffset(
       1, IA2_TEXT_BOUNDARY_LINE, &start, &end, &text));
   ASSERT_EQ(start, 0);
   ASSERT_EQ(end, 13);
-  ASSERT_EQ(text, std::wstring(L"One two three"));
+  ASSERT_EQ(text, string16(L"One two three"));
   SysFreeString(text);
 
   // Delete the manager and test that all BrowserAccessibility instances are

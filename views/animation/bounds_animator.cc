@@ -1,10 +1,10 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "views/animation/bounds_animator.h"
 
-#include "base/scoped_ptr.h"
+#include "base/memory/scoped_ptr.h"
 #include "ui/base/animation/animation_container.h"
 #include "ui/base/animation/slide_animation.h"
 #include "views/view.h"
@@ -39,7 +39,7 @@ BoundsAnimator::~BoundsAnimator() {
 
 void BoundsAnimator::AnimateViewTo(View* view, const gfx::Rect& target) {
   DCHECK(view);
-  DCHECK_EQ(view->GetParent(), parent_);
+  DCHECK_EQ(view->parent(), parent_);
 
   Data existing_data;
 
@@ -66,6 +66,15 @@ void BoundsAnimator::AnimateViewTo(View* view, const gfx::Rect& target) {
   data.animation->Show();
 
   CleanupData(true, &existing_data, NULL);
+}
+
+void BoundsAnimator::SetTargetBounds(View* view, const gfx::Rect& target) {
+  if (!IsAnimating(view)) {
+    AnimateViewTo(view, target);
+    return;
+  }
+
+  data_[view].target_bounds = target;
 }
 
 void BoundsAnimator::SetAnimationForView(View* view,
@@ -215,7 +224,7 @@ void BoundsAnimator::AnimationProgressed(const Animation* animation) {
     else
       repaint_bounds_ = repaint_bounds_.Union(total_bounds);
 
-    view->SetBounds(new_bounds);
+    view->SetBoundsRect(new_bounds);
   }
 
   if (data.delegate)
@@ -234,9 +243,9 @@ void BoundsAnimator::AnimationContainerProgressed(
     AnimationContainer* container) {
   if (!repaint_bounds_.IsEmpty()) {
     // Adjust for rtl.
-    repaint_bounds_.set_x(parent_->MirroredXWithWidthInsideView(
+    repaint_bounds_.set_x(parent_->GetMirroredXWithWidthInView(
         repaint_bounds_.x(), repaint_bounds_.width()));
-    parent_->SchedulePaint(repaint_bounds_, false);
+    parent_->SchedulePaintInRect(repaint_bounds_);
     repaint_bounds_.SetRect(0, 0, 0, 0);
   }
 

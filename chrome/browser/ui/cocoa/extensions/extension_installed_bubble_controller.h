@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,7 +9,7 @@
 #import <Cocoa/Cocoa.h>
 
 #import "base/mac/cocoa_protocols.h"
-#include "base/scoped_ptr.h"
+#include "base/memory/scoped_ptr.h"
 #import "chrome/browser/ui/cocoa/browser_window_controller.h"
 #include "third_party/skia/include/core/SkBitmap.h"
 
@@ -74,8 +74,8 @@ typedef enum {
   IBOutlet NSTextField* extensionInstalledInfoMsg_;
 }
 
-@property (nonatomic, readonly) const Extension* extension;
-@property (nonatomic) BOOL pageActionRemoved;
+@property(nonatomic, readonly) const Extension* extension;
+@property(nonatomic) BOOL pageActionRemoved;
 
 // Initialize the window, and then create observers to wait for the extension
 // to complete loading, or the browser window to close.

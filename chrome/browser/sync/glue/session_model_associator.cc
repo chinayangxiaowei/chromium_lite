@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,18 +8,20 @@
 #include <utility>
 
 #include "base/logging.h"
-#include "chrome/browser/browser_list.h"
-#include "chrome/browser/browser_window.h"
+#include "chrome/browser/extensions/extension_tab_helper.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/sync/profile_sync_service.h"
 #include "chrome/browser/sync/syncable/syncable.h"
-#include "chrome/browser/tab_contents/navigation_controller.h"
-#include "chrome/browser/tab_contents/navigation_entry.h"
 #include "chrome/browser/tabs/tab_strip_model.h"
+#include "chrome/browser/ui/browser_list.h"
+#include "chrome/browser/ui/browser_window.h"
+#include "chrome/browser/ui/tab_contents/tab_contents_wrapper.h"
 #include "chrome/common/extensions/extension.h"
-#include "chrome/common/notification_details.h"
-#include "chrome/common/notification_service.h"
 #include "chrome/common/url_constants.h"
+#include "content/browser/tab_contents/navigation_controller.h"
+#include "content/browser/tab_contents/navigation_entry.h"
+#include "content/common/notification_details.h"
+#include "content/common/notification_service.h"
 
 namespace browser_sync {
 
@@ -35,7 +37,18 @@ static const int max_sync_navigation_count = 6;
 SessionModelAssociator::SessionModelAssociator(ProfileSyncService* sync_service)
     : tab_pool_(sync_service),
       local_session_syncid_(sync_api::kInvalidId),
-      sync_service_(sync_service) {
+      sync_service_(sync_service),
+      setup_for_test_(false) {
+  DCHECK(CalledOnValidThread());
+  DCHECK(sync_service_);
+}
+
+SessionModelAssociator::SessionModelAssociator(ProfileSyncService* sync_service,
+                                               bool setup_for_test)
+    : tab_pool_(sync_service),
+      local_session_syncid_(sync_api::kInvalidId),
+      sync_service_(sync_service),
+      setup_for_test_(setup_for_test) {
   DCHECK(CalledOnValidThread());
   DCHECK(sync_service_);
 }
@@ -55,8 +68,7 @@ bool SessionModelAssociator::SyncModelHasUserCreatedNodes(bool* has_nodes) {
   DCHECK(CalledOnValidThread());
   CHECK(has_nodes);
   *has_nodes = false;
-  sync_api::ReadTransaction trans(
-      sync_service_->backend()->GetUserShareHandle());
+  sync_api::ReadTransaction trans(sync_service_->GetUserShare());
   sync_api::ReadNode root(&trans);
   if (!root.InitByTagLookup(kSessionsTag)) {
     LOG(ERROR) << kNoSessionsFolderError;
@@ -75,13 +87,26 @@ int64 SessionModelAssociator::GetSyncIdFromChromeId(const size_t& id) {
 
 int64 SessionModelAssociator::GetSyncIdFromSessionTag(const std::string& tag) {
   DCHECK(CalledOnValidThread());
-  sync_api::ReadTransaction trans(
-      sync_service_->backend()->GetUserShareHandle());
+  sync_api::ReadTransaction trans(sync_service_->GetUserShare());
   sync_api::ReadNode node(&trans);
   if (!node.InitByClientTagLookup(syncable::SESSIONS, tag))
     return sync_api::kInvalidId;
   return node.GetId();
 }
+
+const TabContents*
+SessionModelAssociator::GetChromeNodeFromSyncId(int64 sync_id) {
+  NOTREACHED();
+  return NULL;
+}
+
+bool SessionModelAssociator::InitSyncNodeFromChromeId(
+    const size_t& id,
+    sync_api::BaseNode* sync_node) {
+  NOTREACHED();
+  return false;
+}
+
 void SessionModelAssociator::ReassociateWindows(bool reload_tabs) {
   DCHECK(CalledOnValidThread());
   sync_pb::SessionSpecifics specifics;
@@ -103,7 +128,7 @@ void SessionModelAssociator::ReassociateWindows(bool reload_tabs) {
       VLOG(1) << "Reassociating window " << window_id << " with " <<
           (*i)->tab_count() << " tabs.";
       window_s.set_window_id(window_id);
-      window_s.set_selected_tab_index((*i)->selected_index());
+      window_s.set_selected_tab_index((*i)->active_index());
       if ((*i)->type() ==
           Browser::TYPE_NORMAL) {
         window_s.set_browser_type(
@@ -134,8 +159,7 @@ void SessionModelAssociator::ReassociateWindows(bool reload_tabs) {
     }
   }
 
-  sync_api::WriteTransaction trans(
-      sync_service_->backend()->GetUserShareHandle());
+  sync_api::WriteTransaction trans(sync_service_->GetUserShare());
   sync_api::WriteNode header_node(&trans);
   if (!header_node.InitByIdLookup(local_session_syncid_)) {
     LOG(ERROR) << "Failed to load local session header node.";
@@ -206,16 +230,20 @@ void SessionModelAssociator::ReassociateTab(const TabContents& tab) {
 void SessionModelAssociator::Associate(const TabContents* tab, int64 sync_id) {
   DCHECK(CalledOnValidThread());
   SessionID::id_type session_id = tab->controller().session_id().id();
+  Browser* browser = BrowserList::FindBrowserWithID(
+      tab->controller().window_id().id());
+  if (!browser)  // Can happen for weird things like developer console.
+    return;
 
   TabLinks t(sync_id, tab);
   tab_map_[session_id] = t;
 
-  sync_api::WriteTransaction trans(
-      sync_service_->backend()->GetUserShareHandle());
-  WriteTabContentsToSyncModel(*tab, sync_id, &trans);
+  sync_api::WriteTransaction trans(sync_service_->GetUserShare());
+  WriteTabContentsToSyncModel(*browser, *tab, sync_id, &trans);
 }
 
 bool SessionModelAssociator::WriteTabContentsToSyncModel(
+    const Browser& browser,
     const TabContents& tab,
     int64 sync_id,
     sync_api::WriteTransaction* trans) {
@@ -239,14 +267,16 @@ bool SessionModelAssociator::WriteTabContentsToSyncModel(
   const int max_index = std::min(current_index + max_sync_navigation_count,
                                  tab.controller().entry_count());
   const int pending_index = tab.controller().pending_entry_index();
-  Browser* browser = BrowserList::FindBrowserWithID(
-      tab.controller().window_id().id());
-  DCHECK(browser);
-  int index_in_window = browser->tabstrip_model()->GetWrapperIndex(&tab);
+  int index_in_window = browser.tabstrip_model()->GetWrapperIndex(&tab);
   DCHECK(index_in_window != TabStripModel::kNoTab);
-  tab_s->set_pinned(browser->tabstrip_model()->IsTabPinned(index_in_window));
-  if (tab.extension_app())
-    tab_s->set_extension_app_id(tab.extension_app()->id());
+  tab_s->set_pinned(browser.tabstrip_model()->IsTabPinned(index_in_window));
+  TabContentsWrapper* wrapper =
+      TabContentsWrapper::GetCurrentWrapperForContents(
+          const_cast<TabContents*>(&tab));
+  if (wrapper->extension_tab_helper()->extension_app()) {
+    tab_s->set_extension_app_id(
+        wrapper->extension_tab_helper()->extension_app()->id());
+  }
   for (int i = min_index; i < max_index; ++i) {
     const NavigationEntry* entry = (i == pending_index) ?
        tab.controller().pending_entry() : tab.controller().GetEntryAtIndex(i);
@@ -363,8 +393,7 @@ bool SessionModelAssociator::AssociateModels() {
   // Read any available foreign sessions and load any session data we may have.
   // If we don't have any local session data in the db, create a header node.
   {
-    sync_api::WriteTransaction trans(
-        sync_service_->backend()->GetUserShareHandle());
+    sync_api::WriteTransaction trans(sync_service_->GetUserShare());
 
     sync_api::ReadNode root(&trans);
     if (!root.InitByTagLookup(kSessionsTag)) {
@@ -484,8 +513,7 @@ bool SessionModelAssociator::AssociateForeignSpecifics(
     const int64 modification_time) {
   DCHECK(CalledOnValidThread());
   std::string foreign_session_tag = specifics.session_tag();
-  DCHECK(foreign_session_tag != GetCurrentMachineTag() ||
-         sync_service_->cros_user() == "test user");  // For tests.
+  DCHECK(foreign_session_tag != GetCurrentMachineTag() || setup_for_test_);
 
   if (specifics.has_header()) {
     // Read in the header data for this foreign session.
@@ -542,7 +570,7 @@ void SessionModelAssociator::DisassociateForeignSession(
 
 // Static
 void SessionModelAssociator::PopulateSessionWindowFromSpecifics(
-    std::string foreign_session_tag,
+    const std::string& foreign_session_tag,
     const sync_pb::SessionWindow& specifics,
     int64 mtime,
     SessionWindow* session_window,
@@ -697,6 +725,8 @@ SessionModelAssociator::TabNodePool::TabNodePool(
       sync_service_(sync_service) {
 }
 
+SessionModelAssociator::TabNodePool::~TabNodePool() {}
+
 void SessionModelAssociator::TabNodePool::AddTabNode(int64 sync_id) {
   tab_syncid_pool_.resize(tab_syncid_pool_.size() + 1);
   tab_syncid_pool_[static_cast<size_t>(++tab_pool_fp_)] = sync_id;
@@ -706,8 +736,7 @@ int64 SessionModelAssociator::TabNodePool::GetFreeTabNode() {
   DCHECK_GT(machine_tag_.length(), 0U);
   if (tab_pool_fp_ == -1) {
     // Tab pool has no free nodes, allocate new one.
-    sync_api::WriteTransaction trans(
-        sync_service_->backend()->GetUserShareHandle());
+    sync_api::WriteTransaction trans(sync_service_->GetUserShare());
     sync_api::ReadNode root(&trans);
     if (!root.InitByTagLookup(kSessionsTag)) {
       LOG(ERROR) << kNoSessionsFolderError;
@@ -838,8 +867,7 @@ void SessionModelAssociator::OnGotSession(
   sync_pb::SessionHeader* header_s = specifics.mutable_header();
   PopulateSessionSpecificsHeader(*windows, header_s);
 
-  sync_api::WriteTransaction trans(
-      sync_service_->backend()->GetUserShareHandle());
+  sync_api::WriteTransaction trans(sync_service_->GetUserShare());
   sync_api::ReadNode root(&trans);
   if (!root.InitByTagLookup(kSessionsTag)) {
     LOG(ERROR) << kNoSessionsFolderError;
@@ -913,8 +941,7 @@ bool SessionModelAssociator::SyncLocalWindowToSyncModel(
       return false;
     }
 
-    sync_api::WriteTransaction trans(
-        sync_service_->backend()->GetUserShareHandle());
+    sync_api::WriteTransaction trans(sync_service_->GetUserShare());
     if (!WriteSessionTabToSyncModel(*tab, id, &trans)) {
       return false;
     }
@@ -963,6 +990,15 @@ void SessionModelAssociator::PopulateSessionSpecificsTab(
         session_tab->add_navigation();
     PopulateSessionSpecificsNavigation(&navigation, tab_navigation);
   }
+}
+
+bool SessionModelAssociator::CryptoReadyIfNecessary() {
+  // We only access the cryptographer while holding a transaction.
+  sync_api::ReadTransaction trans(sync_service_->GetUserShare());
+  syncable::ModelTypeSet encrypted_types;
+  sync_service_->GetEncryptedDataTypes(&encrypted_types);
+  return encrypted_types.count(syncable::SESSIONS) == 0 ||
+         sync_service_->IsCryptographerReady(&trans);
 }
 
 }  // namespace browser_sync

@@ -12,8 +12,8 @@
 #include <shlobj.h>
 
 #include "base/logging.h"
+#include "base/memory/scoped_ptr.h"
 #include "base/win/registry.h"
-#include "base/scoped_ptr.h"
 #include "base/string_util.h"
 #include "base/stringprintf.h"
 #include "base/threading/thread_restrictions.h"
@@ -135,6 +135,13 @@ bool AddCommandToAutoRun(HKEY root_key, const string16& name,
 bool RemoveCommandFromAutoRun(HKEY root_key, const string16& name) {
   base::win::RegKey autorun_key(root_key, kAutoRunKeyPath, KEY_SET_VALUE);
   return (autorun_key.DeleteValue(name.c_str()) == ERROR_SUCCESS);
+}
+
+bool ReadCommandFromAutoRun(HKEY root_key,
+                            const string16& name,
+                            string16* command) {
+  base::win::RegKey autorun_key(root_key, kAutoRunKeyPath, KEY_QUERY_VALUE);
+  return (autorun_key.ReadValue(name.c_str(), command) == ERROR_SUCCESS);
 }
 
 }  // namespace win

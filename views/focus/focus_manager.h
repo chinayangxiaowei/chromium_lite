@@ -1,4 +1,4 @@
-// Copyright (c) 2006-2008 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -11,8 +11,8 @@
 #include <vector>
 
 #include "base/basictypes.h"
-#include "base/singleton.h"
-#include "gfx/native_widget_types.h"
+#include "base/memory/singleton.h"
+#include "ui/gfx/native_widget_types.h"
 #include "views/accelerator.h"
 
 // The FocusManager class is used to handle focus traversal, store/restore
@@ -54,17 +54,17 @@
 //   the focus traversal traverse down the focus hierarchy to enter the nested
 //   RootView. In the example mentioned above, the NativeControl overrides
 //   GetFocusTraversable() and returns hwnd_view_container_->GetRootView().
-// - call RootView::SetFocusTraversableParent() on the nested RootView and point
-//   it to the outter RootView. This is used when the focus goes out of the
+// - call Widget::SetFocusTraversableParent() on the nested RootView and point
+//   it to the outer RootView. This is used when the focus goes out of the
 //   nested RootView. In the example:
-//   hwnd_view_container_->GetRootView()->SetFocusTraversableParent(
+//   hwnd_view_container_->GetWidget()->SetFocusTraversableParent(
 //      native_control->GetRootView());
 // - call RootView::SetFocusTraversableParentView() on the nested RootView with
 //   the parent view that directly contains the native window. This is needed
 //   when traversing up from the nested RootView to know which view to start
 //   with when going to the next/previous view.
 //   In our example:
-//   hwnd_view_container_->GetRootView()->SetFocusTraversableParent(
+//   hwnd_view_container_->GetWidget()->SetFocusTraversableParent(
 //      native_control);
 //
 // Note that FocusTraversable do not have to be RootViews: AccessibleToolbarView
@@ -100,6 +100,7 @@ class FocusTraversable {
 
 // This interface should be implemented by classes that want to be notified when
 // the focus is about to change.  See the Add/RemoveFocusChangeListener methods.
+// No change to focus state has occurred yet when this function is called.
 class FocusChangeListener {
  public:
   virtual void FocusWillChange(View* focused_before, View* focused_now) = 0;
@@ -149,7 +150,8 @@ class FocusManager {
     void DisableNotifications() { enabled_ = false; }
 
    private:
-    WidgetFocusManager() : enabled_(true) {}
+    WidgetFocusManager();
+    ~WidgetFocusManager();
 
     typedef std::vector<WidgetFocusChangeListener*>
       WidgetFocusChangeListenerList;
@@ -252,10 +254,11 @@ class FocusManager {
   // Returns true if an accelerator was activated.
   bool ProcessAccelerator(const Accelerator& accelerator);
 
-  // Called by a RootView when a view within its hierarchy is removed from its
-  // parent. This will only be called by a RootView in a hierarchy of Widgets
-  // that this FocusManager is attached to the parent Widget of.
-  void ViewRemoved(View* parent, View* removed);
+  // Called by a RootView when a view within its hierarchy is removed
+  // from its parent. This will only be called by a RootView in a
+  // hierarchy of Widgets that this FocusManager is attached to the
+  // parent Widget of.
+  void ViewRemoved(View* removed);
 
   // Adds/removes a listener.  The FocusChangeListener is notified every time
   // the focused view is about to change.

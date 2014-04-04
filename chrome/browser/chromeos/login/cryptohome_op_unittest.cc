@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,14 +6,14 @@
 
 #include <string>
 
+#include "base/memory/ref_counted.h"
 #include "base/message_loop.h"
-#include "base/ref_counted.h"
-#include "chrome/browser/browser_thread.h"
 #include "chrome/browser/chromeos/cros/mock_library_loader.h"
 #include "chrome/browser/chromeos/cros/mock_cryptohome_library.h"
 #include "chrome/browser/chromeos/login/auth_attempt_state.h"
 #include "chrome/browser/chromeos/login/mock_auth_attempt_state_resolver.h"
 #include "chrome/browser/chromeos/login/test_attempt_state.h"
+#include "content/browser/browser_thread.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 

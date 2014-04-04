@@ -1,17 +1,17 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "base/scoped_ptr.h"
+#include "base/memory/scoped_ptr.h"
 #include "remoting/host/differ.h"
+#include "remoting/host/differ_block.h"
 #include "testing/gmock/include/gmock/gmock.h"
 
 namespace remoting {
 
-// 96x96 screen gives a 3x3 grid of blocks.
+// 96x96 screen gives a 4x4 grid of blocks.
 const int kScreenWidth= 96;
 const int kScreenHeight = 96;
-const int kBytesPerPixel = 3;
 const int kBytesPerRow = (kBytesPerPixel * kScreenWidth);
 
 class DifferTest : public testing::Test {
@@ -50,9 +50,9 @@ class DifferTest : public testing::Test {
     // Offset from upper-left of buffer to upper-left of requested block.
     int block_offset = ((block_y * stride_) + (block_x * bytes_per_pixel_))
                         * kBlockSize;
-    return differ_->DiffBlock(prev_.get() + block_offset,
-                              curr_.get() + block_offset,
-                              stride_);
+    return BlockDifference(prev_.get() + block_offset,
+                           curr_.get() + block_offset,
+                           stride_);
   }
 
   // Write the pixel |value| into the specified block in the |buffer|.

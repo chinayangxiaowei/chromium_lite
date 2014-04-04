@@ -15,10 +15,10 @@
 #include "base/string_piece.h"
 #include "base/synchronization/lock.h"
 #include "base/win/windows_version.h"
-#include "gfx/font.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/resource/data_pack.h"
 #include "ui/base/ui_base_paths.h"
+#include "ui/gfx/font.h"
 
 namespace ui {
 
@@ -66,6 +66,11 @@ std::string ResourceBundle::LoadLocaleResources(
   DCHECK(locale_resources_data_ != NULL) <<
       "unable to load generated resources";
   return app_locale;
+}
+
+void ResourceBundle::LoadTestResources(const FilePath& path) {
+  // On Windows, the test resources are normally compiled into the binary
+  // itself.
 }
 
 void ResourceBundle::UnloadLocaleResources() {

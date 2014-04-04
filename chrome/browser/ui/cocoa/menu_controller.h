@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,7 +9,7 @@
 #import <Cocoa/Cocoa.h>
 
 #import "base/mac/cocoa_protocols.h"
-#include "base/scoped_nsobject.h"
+#include "base/memory/scoped_nsobject.h"
 
 namespace ui {
 class MenuModel;
@@ -28,10 +28,10 @@ class MenuModel;
   BOOL useWithPopUpButtonCell_;  // If YES, 0th item is blank
 }
 
-@property (nonatomic, assign) ui::MenuModel* model;
+@property(nonatomic, assign) ui::MenuModel* model;
 // Note that changing this will have no effect if you use
 // |-initWithModel:useWithPopUpButtonCell:| or after the first call to |-menu|.
-@property (nonatomic) BOOL useWithPopUpButtonCell;
+@property(nonatomic) BOOL useWithPopUpButtonCell;
 
 // NIB-based initializer. This does not create a menu. Clients can set the
 // properties of the object and the menu will be created upon the first call to

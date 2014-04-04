@@ -1,12 +1,12 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "base/metrics/stats_table.h"
 
 #include "base/logging.h"
+#include "base/memory/scoped_ptr.h"
 #include "base/process_util.h"
-#include "base/scoped_ptr.h"
 #include "base/shared_memory.h"
 #include "base/string_piece.h"
 #include "base/string_util.h"
@@ -136,7 +136,14 @@ class StatsTable::Private {
 
  private:
   // Constructor is private because you should use New() instead.
-  Private() {}
+  Private()
+      : table_header_(NULL),
+        thread_names_table_(NULL),
+        thread_tid_table_(NULL),
+        thread_pid_table_(NULL),
+        counter_names_table_(NULL),
+        data_table_(NULL) {
+  }
 
   // Initializes the table on first access.  Sets header values
   // appropriately and zeroes all counters.

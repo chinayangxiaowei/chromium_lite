@@ -1,9 +1,8 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 cr.define('options', function() {
-
   var OptionsPage = options.OptionsPage;
 
   /**
@@ -13,8 +12,8 @@ cr.define('options', function() {
    */
   function ImportDataOverlay() {
     OptionsPage.call(this,
-                     'importDataOverlay',
-                     templateData.import_data_title,
+                     'importData',
+                     templateData.importDataOverlayTabTitle,
                      'import-data-overlay');
   }
 
@@ -102,11 +101,14 @@ cr.define('options', function() {
      */
     updateCheckboxes_: function() {
       var index = $('import-browsers').selectedIndex;
-      var browserProfile = ImportDataOverlay.browserProfiles[index];
+      var browserProfile;
+      if (this.browserProfiles.length > index)
+        browserProfile = this.browserProfiles[index];
       var importOptions = ['history', 'favorites', 'passwords', 'search'];
       for (var i = 0; i < importOptions.length; i++) {
         var checkbox = $('import-' + importOptions[i]);
-        this.setUpCheckboxState_(checkbox, browserProfile[importOptions[i]]);
+        this.setUpCheckboxState_(checkbox,
+            browserProfile ? browserProfile[importOptions[i]] : false);
       }
     },
 
@@ -116,7 +118,7 @@ cr.define('options', function() {
      * @private
      */
     updateSupportedBrowsers_: function(browsers) {
-      ImportDataOverlay.browserProfiles = browsers;
+      this.browserProfiles = browsers;
       var browserSelect = $('import-browsers');
       browserSelect.remove(0);  // Remove the 'Loading...' option.
       browserSelect.textContent = '';
@@ -164,8 +166,8 @@ cr.define('options', function() {
       ImportDataOverlay.getInstance().updateCheckboxes_();
     }
     $('import-browsers').disabled = state;
-    $('import-data-commit').disabled = state;
     $('import-throbber').style.visibility = state ? "visible" : "hidden";
+    ImportDataOverlay.getInstance().validateCommitButton_();
   };
 
   /**
@@ -173,12 +175,11 @@ cr.define('options', function() {
    */
   ImportDataOverlay.dismiss = function() {
     ImportDataOverlay.setImportingState(false);
-    OptionsPage.clearOverlays();
-  }
+    OptionsPage.closeOverlay();
+  };
 
   // Export
   return {
     ImportDataOverlay: ImportDataOverlay
   };
-
 });

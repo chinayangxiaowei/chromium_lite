@@ -1,4 +1,4 @@
-// Copyright (c) 2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -13,7 +13,10 @@
 #define CHROME_BROWSER_SYNC_SESSIONS_SESSION_STATE_H_
 #pragma once
 
+#include <map>
 #include <set>
+#include <string>
+#include <utility>
 #include <vector>
 
 #include "base/basictypes.h"
@@ -21,7 +24,10 @@
 #include "chrome/browser/sync/engine/syncproto.h"
 #include "chrome/browser/sync/sessions/ordered_commit_set.h"
 #include "chrome/browser/sync/syncable/model_type.h"
+#include "chrome/browser/sync/syncable/model_type_payload_map.h"
 #include "chrome/browser/sync/syncable/syncable.h"
+
+class DictionaryValue;
 
 namespace syncable {
 class DirectoryManager;
@@ -32,9 +38,31 @@ namespace sessions {
 
 class UpdateProgress;
 
+// A container for the source of a sync session. This includes the update
+// source, the datatypes triggering the sync session, and possible session
+// specific payloads which should be sent to the server.
+struct SyncSourceInfo {
+  SyncSourceInfo();
+  explicit SyncSourceInfo(const syncable::ModelTypePayloadMap& t);
+  SyncSourceInfo(
+      const sync_pb::GetUpdatesCallerInfo::GetUpdatesSource& u,
+      const syncable::ModelTypePayloadMap& t);
+  ~SyncSourceInfo();
+
+  // Caller takes ownership of the returned dictionary.
+  DictionaryValue* ToValue() const;
+
+  sync_pb::GetUpdatesCallerInfo::GetUpdatesSource updates_source;
+  syncable::ModelTypePayloadMap types;
+};
+
 // Data pertaining to the status of an active Syncer object.
 struct SyncerStatus {
   SyncerStatus();
+  ~SyncerStatus();
+
+  // Caller takes ownership of the returned dictionary.
+  DictionaryValue* ToValue() const;
 
   // True when we get such an INVALID_STORE error from the server.
   bool invalid_store;
@@ -48,11 +76,19 @@ struct SyncerStatus {
   // Download event counters.
   int num_updates_downloaded_total;
   int num_tombstone_updates_downloaded_total;
+
+  // If the syncer encountered a MIGRATION_DONE code, these are the types that
+  // the client must now "migrate", by purging and re-downloading all updates.
+  syncable::ModelTypeSet types_needing_local_migration;
 };
 
 // Counters for various errors that can occur repeatedly during a sync session.
 struct ErrorCounters {
   ErrorCounters();
+
+  // Caller takes ownership of the returned dictionary.
+  DictionaryValue* ToValue() const;
+
   int num_conflicting_commits;
 
   // Number of commits hitting transient errors since the last successful
@@ -65,6 +101,11 @@ struct ErrorCounters {
   int consecutive_errors;
 };
 
+// Caller takes ownership of the returned dictionary.
+DictionaryValue* DownloadProgressMarkersToValue(
+    const std::string
+        (&download_progress_markers)[syncable::MODEL_TYPE_COUNT]);
+
 // An immutable snapshot of state from a SyncSession.  Convenient to use as
 // part of notifications as it is inherently thread-safe.
 struct SyncSessionSnapshot {
@@ -74,13 +115,18 @@ struct SyncSessionSnapshot {
       int64 num_server_changes_remaining,
       bool is_share_usable,
       const syncable::ModelTypeBitSet& initial_sync_ended,
-      std::string download_progress_markers[syncable::MODEL_TYPE_COUNT],
+      const std::string
+          (&download_progress_markers)[syncable::MODEL_TYPE_COUNT],
       bool more_to_sync,
       bool is_silenced,
       int64 unsynced_count,
       int num_conflicting_updates,
-      bool did_commit_items);
+      bool did_commit_items,
+      const SyncSourceInfo& source);
   ~SyncSessionSnapshot();
+
+  // Caller takes ownership of the returned dictionary.
+  DictionaryValue* ToValue() const;
 
   const SyncerStatus syncer_status;
   const ErrorCounters errors;
@@ -93,6 +139,7 @@ struct SyncSessionSnapshot {
   const int64 unsynced_count;
   const int num_conflicting_updates;
   const bool did_commit_items;
+  const SyncSourceInfo source;
 };
 
 // Tracks progress of conflicts and their resolution using conflict sets.

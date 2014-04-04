@@ -32,8 +32,6 @@ enum MessageType {
 // TODO(akalin): audit the use of ProfileSyncService* service below,
 // and use const ProfileSyncService& service where possible.
 
-string16 GetLoginMessageForEncryption();
-
 // Create status and link labels for the current status labels and link text
 // by querying |service|.
 MessageType GetStatusLabels(ProfileSyncService* service,
@@ -55,7 +53,7 @@ string16 GetSyncMenuLabel(ProfileSyncService* service);
 
 // Open the appropriate sync dialog for the given profile (which can be
 // incognito). |browser| is the browser window that should be used if the UI
-// is in-window (i.e., DOMUI). |code| should be one of the START_FROM_* codes.
+// is in-window (i.e., WebUI). |code| should be one of the START_FROM_* codes.
 void OpenSyncMyBookmarksDialog(Profile* profile,
                                Browser* browser,
                                ProfileSyncService::SyncEventCodes code);

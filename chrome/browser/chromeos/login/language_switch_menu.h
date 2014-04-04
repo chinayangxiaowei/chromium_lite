@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,7 +8,7 @@
 
 #include <string>
 
-#include "base/scoped_ptr.h"
+#include "base/memory/scoped_ptr.h"
 #include "chrome/browser/language_combobox_model.h"
 #include "testing/gtest/include/gtest/gtest_prod.h"
 #include "ui/base/models/simple_menu_model.h"
@@ -42,9 +42,17 @@ class LanguageSwitchMenu : public views::ViewMenuDelegate,
   void SetFirstLevelMenuWidth(int width);
 
   // Switches the current locale, saves the new locale in preferences.
-  static void SwitchLanguage(const std::string& locale);
+  // Returns true if it has switched the current locale.
+  static bool SwitchLanguage(const std::string& locale);
+
+  // Switches the current locale, saves the new locale in preferences.
+  // Enables the keyboard layouts associated with the new locale.
+  static void SwitchLanguageAndEnableKeyboardLayouts(
+      const std::string& locale);
 
  private:
+  static void LoadFontsForCurrentLocale();
+
   // views::ViewMenuDelegate implementation.
   virtual void RunMenu(views::View* source, const gfx::Point& pt);
 

@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,13 +10,13 @@
 #include "chrome/browser/extensions/extension_browser_event_router.h"
 #include "chrome/browser/extensions/extension_service.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/tab_contents/tab_contents.h"
 #import "chrome/browser/ui/cocoa/extensions/extension_action_context_menu.h"
 #import "chrome/browser/ui/cocoa/extensions/extension_popup_controller.h"
 #import "chrome/browser/ui/cocoa/location_bar/location_bar_view_mac.h"
 #include "chrome/common/extensions/extension_action.h"
 #include "chrome/common/extensions/extension_resource.h"
-#include "chrome/common/notification_service.h"
+#include "content/browser/tab_contents/tab_contents.h"
+#include "content/common/notification_service.h"
 #include "skia/ext/skia_utils_mac.h"
 
 namespace {
@@ -74,6 +74,10 @@ CGFloat PageActionDecoration::GetWidthForSpace(CGFloat width) {
   return Extension::kPageActionIconMaxSize;
 }
 
+bool PageActionDecoration::AcceptsMousePress() {
+  return true;
+}
+
 // Either notify listeners or show a popup depending on the Page
 // Action.
 bool PageActionDecoration::OnMousePressed(NSRect frame) {
@@ -107,7 +111,7 @@ bool PageActionDecoration::OnMousePressed(NSRect frame) {
 }
 
 void PageActionDecoration::OnImageLoaded(
-    SkBitmap* image, ExtensionResource resource, int index) {
+    SkBitmap* image, const ExtensionResource& resource, int index) {
   // We loaded icons()->size() icons, plus one extra if the Page Action had
   // a default icon.
   int total_icons = static_cast<int>(page_action_->icon_paths()->size());

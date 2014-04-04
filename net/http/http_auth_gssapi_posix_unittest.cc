@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,8 +6,8 @@
 
 #include "base/basictypes.h"
 #include "base/logging.h"
+#include "base/memory/scoped_ptr.h"
 #include "base/native_library.h"
-#include "base/scoped_ptr.h"
 #include "net/base/net_errors.h"
 #include "net/http/mock_gssapi_library_posix.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -109,23 +109,20 @@ TEST(HttpAuthGSSAPIPOSIXTest, GSSAPICycle) {
       1,                              // Locally initiated
       1);                             // Open
   test::MockGSSAPILibrary::SecurityContextQuery queries[] = {
-    { "Negotiate",                    // Package name
-      GSS_S_CONTINUE_NEEDED,          // Major response code
-      0,                              // Minor response code
-      context1,                       // Context
-      { 0, NULL },                           // Expected input token
-      { arraysize(kAuthResponse),
-        const_cast<char*>(kAuthResponse) }   // Output token
-    },
-    { "Negotiate",                    // Package name
-      GSS_S_COMPLETE,                 // Major response code
-      0,                              // Minor response code
-      context2,                       // Context
-      { arraysize(kAuthResponse),
-        const_cast<char*>(kAuthResponse) },  // Expected input token
-      { arraysize(kAuthResponse),
-        const_cast<char*>(kAuthResponse) }   // Output token
-    },
+    test::MockGSSAPILibrary::SecurityContextQuery(
+        "Negotiate",            // Package name
+        GSS_S_CONTINUE_NEEDED,  // Major response code
+        0,                      // Minor response code
+        context1,               // Context
+        NULL,                   // Expected input token
+        kAuthResponse),         // Output token
+    test::MockGSSAPILibrary::SecurityContextQuery(
+        "Negotiate",            // Package name
+        GSS_S_COMPLETE,         // Major response code
+        0,                      // Minor response code
+        context2,               // Context
+        kAuthResponse,          // Expected input token
+        kAuthResponse)          // Output token
   };
 
   for (size_t i = 0; i < arraysize(queries); ++i) {

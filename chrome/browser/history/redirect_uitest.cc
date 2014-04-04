@@ -8,8 +8,8 @@
 // the case of redirects. It may also mean problems with the history system.
 
 #include "base/file_util.h"
-#include "base/scoped_ptr.h"
-#include "base/scoped_temp_dir.h"
+#include "base/memory/scoped_ptr.h"
+#include "base/memory/scoped_temp_dir.h"
 #include "base/string_util.h"
 #include "base/string16.h"
 #include "base/test/test_timeouts.h"
@@ -22,7 +22,7 @@
 #include "chrome/test/ui/ui_test.h"
 #include "net/base/net_util.h"
 #include "net/test/test_server.h"
-#include "views/event.h"
+#include "ui/base/events.h"
 
 namespace {
 
@@ -165,9 +165,8 @@ TEST_F(RedirectTest, MAYBE_ClientCancelled) {
   ASSERT_TRUE(browser->BringToFront());
   ASSERT_TRUE(window->GetViewBounds(VIEW_ID_TAB_CONTAINER, &tab_view_bounds,
                                     true));
-  ASSERT_TRUE(
-      window->SimulateOSClick(tab_view_bounds.CenterPoint(),
-                              views::Event::EF_LEFT_BUTTON_DOWN));
+  ASSERT_TRUE(window->SimulateOSClick(tab_view_bounds.CenterPoint(),
+                                      ui::EF_LEFT_BUTTON_DOWN));
   EXPECT_TRUE(tab_proxy->WaitForNavigation(last_nav_time));
 
   std::vector<GURL> redirects;

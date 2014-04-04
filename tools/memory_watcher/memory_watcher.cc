@@ -2,6 +2,7 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include <algorithm>
 #include <windows.h>
 #include <tlhelp32.h>     // for CreateToolhelp32Snapshot()
 #include <map>
@@ -81,8 +82,7 @@ void MemoryWatcher::CloseLogFile() {
     file_ = NULL;
     std::wstring tmp_name = ASCIIToWide(file_name_);
     tmp_name += L".tmp";
-    file_util::Move(FilePath::FromWStringHack(tmp_name),
-                    FilePath::FromWStringHack(ASCIIToWide(file_name_)));
+    file_util::Move(FilePath(tmp_name), FilePath(ASCIIToWide(file_name_)));
   }
 }
 

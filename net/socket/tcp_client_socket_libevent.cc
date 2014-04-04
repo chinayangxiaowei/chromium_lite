@@ -19,7 +19,9 @@
 #include "base/metrics/stats_counters.h"
 #include "base/string_util.h"
 #include "net/base/address_list_net_log_param.h"
+#include "net/base/connection_type_histograms.h"
 #include "net/base/io_buffer.h"
+#include "net/base/ip_endpoint.h"
 #include "net/base/net_errors.h"
 #include "net/base/net_log.h"
 #include "net/base/net_util.h"
@@ -68,45 +70,6 @@ void SetTCPKeepAlive(int fd) {
 #endif
 }
 
-// Convert values from <errno.h> to values from "net/base/net_errors.h"
-int MapPosixError(int os_error) {
-  // There are numerous posix error codes, but these are the ones we thus far
-  // find interesting.
-  switch (os_error) {
-    case EAGAIN:
-#if EWOULDBLOCK != EAGAIN
-    case EWOULDBLOCK:
-#endif
-      return ERR_IO_PENDING;
-    case EACCES:
-      return ERR_ACCESS_DENIED;
-    case ENETDOWN:
-      return ERR_INTERNET_DISCONNECTED;
-    case ETIMEDOUT:
-      return ERR_TIMED_OUT;
-    case ECONNRESET:
-    case ENETRESET:  // Related to keep-alive
-    case EPIPE:
-      return ERR_CONNECTION_RESET;
-    case ECONNABORTED:
-      return ERR_CONNECTION_ABORTED;
-    case ECONNREFUSED:
-      return ERR_CONNECTION_REFUSED;
-    case EHOSTUNREACH:
-    case EHOSTDOWN:
-    case ENETUNREACH:
-      return ERR_ADDRESS_UNREACHABLE;
-    case EADDRNOTAVAIL:
-      return ERR_ADDRESS_INVALID;
-    case 0:
-      return OK;
-    default:
-      LOG(WARNING) << "Unknown error " << os_error
-                   << " mapped to net::ERR_FAILED";
-      return ERR_FAILED;
-  }
-}
-
 int MapConnectError(int os_error) {
   switch (os_error) {
     case EACCES:
@@ -114,7 +77,7 @@ int MapConnectError(int os_error) {
     case ETIMEDOUT:
       return ERR_CONNECTION_TIMED_OUT;
     default: {
-      int net_error = MapPosixError(os_error);
+      int net_error = MapSystemError(os_error);
       if (net_error == ERR_FAILED)
         return ERR_CONNECTION_FAILED;  // More specific than ERR_FAILED.
 
@@ -182,7 +145,7 @@ int TCPClientSocketLibevent::Connect(CompletionCallback* callback) {
   if (socket_ != kInvalidSocket)
     return OK;
 
-  static base::StatsCounter connects("tcp.connect");
+  base::StatsCounter connects("tcp.connect");
   connects.Increment();
 
   DCHECK(!waiting_connect());
@@ -252,7 +215,7 @@ int TCPClientSocketLibevent::DoConnect() {
   // Create a non-blocking socket.
   connect_os_error_ = CreateSocket(current_ai_);
   if (connect_os_error_)
-    return MapPosixError(connect_os_error_);
+    return MapSystemError(connect_os_error_);
 
   // Connect the socket.
   if (!use_tcp_fastopen_) {
@@ -279,7 +242,7 @@ int TCPClientSocketLibevent::DoConnect() {
           &write_watcher_)) {
     connect_os_error_ = errno;
     DVLOG(1) << "WatchFileDescriptor failed: " << connect_os_error_;
-    return MapPosixError(connect_os_error_);
+    return MapSystemError(connect_os_error_);
   }
 
   return ERR_IO_PENDING;
@@ -384,7 +347,7 @@ int TCPClientSocketLibevent::Read(IOBuffer* buf,
 
   int nread = HANDLE_EINTR(read(socket_, buf->data(), buf_len));
   if (nread >= 0) {
-    static base::StatsCounter read_bytes("tcp.read_bytes");
+    base::StatsCounter read_bytes("tcp.read_bytes");
     read_bytes.Add(nread);
     if (nread > 0)
       use_history_.set_was_used_to_convey_data();
@@ -394,14 +357,14 @@ int TCPClientSocketLibevent::Read(IOBuffer* buf,
   }
   if (errno != EAGAIN && errno != EWOULDBLOCK) {
     DVLOG(1) << "read failed, errno " << errno;
-    return MapPosixError(errno);
+    return MapSystemError(errno);
   }
 
   if (!MessageLoopForIO::current()->WatchFileDescriptor(
           socket_, true, MessageLoopForIO::WATCH_READ,
           &read_socket_watcher_, &read_watcher_)) {
     DVLOG(1) << "WatchFileDescriptor failed on read, errno " << errno;
-    return MapPosixError(errno);
+    return MapSystemError(errno);
   }
 
   read_buf_ = buf;
@@ -423,7 +386,7 @@ int TCPClientSocketLibevent::Write(IOBuffer* buf,
 
   int nwrite = InternalWrite(buf, buf_len);
   if (nwrite >= 0) {
-    static base::StatsCounter write_bytes("tcp.write_bytes");
+    base::StatsCounter write_bytes("tcp.write_bytes");
     write_bytes.Add(nwrite);
     if (nwrite > 0)
       use_history_.set_was_used_to_convey_data();
@@ -432,13 +395,13 @@ int TCPClientSocketLibevent::Write(IOBuffer* buf,
     return nwrite;
   }
   if (errno != EAGAIN && errno != EWOULDBLOCK)
-    return MapPosixError(errno);
+    return MapSystemError(errno);
 
   if (!MessageLoopForIO::current()->WatchFileDescriptor(
           socket_, true, MessageLoopForIO::WATCH_WRITE,
           &write_socket_watcher_, &write_watcher_)) {
     DVLOG(1) << "WatchFileDescriptor failed on write, errno " << errno;
-    return MapPosixError(errno);
+    return MapSystemError(errno);
   }
 
   write_buf_ = buf;
@@ -522,10 +485,33 @@ int TCPClientSocketLibevent::SetupSocket() {
 }
 
 void TCPClientSocketLibevent::LogConnectCompletion(int net_error) {
-  scoped_refptr<NetLog::EventParameters> params;
-  if (net_error != OK)
-    params = new NetLogIntegerParameter("net_error", net_error);
-  net_log_.EndEvent(NetLog::TYPE_TCP_CONNECT, params);
+  if (net_error == OK)
+    UpdateConnectionTypeHistograms(CONNECTION_ANY);
+
+  if (net_error != OK) {
+    net_log_.EndEventWithNetErrorCode(NetLog::TYPE_TCP_CONNECT, net_error);
+    return;
+  }
+
+  struct sockaddr_storage source_address;
+  socklen_t addrlen = sizeof(source_address);
+  int rv = getsockname(
+      socket_, reinterpret_cast<struct sockaddr*>(&source_address), &addrlen);
+  if (rv != 0) {
+    PLOG(ERROR) << "getsockname() [rv: " << rv << "] error: ";
+    NOTREACHED();
+    net_log_.EndEventWithNetErrorCode(NetLog::TYPE_TCP_CONNECT, rv);
+    return;
+  }
+
+  const std::string source_address_str =
+      NetAddressToStringWithPort(
+          reinterpret_cast<const struct sockaddr*>(&source_address),
+          sizeof(source_address));
+  net_log_.EndEvent(NetLog::TYPE_TCP_CONNECT,
+                    make_scoped_refptr(new NetLogStringParameter(
+                        "source address",
+                        source_address_str)));
 }
 
 void TCPClientSocketLibevent::DoReadCallback(int rv) {
@@ -579,14 +565,14 @@ void TCPClientSocketLibevent::DidCompleteRead() {
   int result;
   if (bytes_transferred >= 0) {
     result = bytes_transferred;
-    static base::StatsCounter read_bytes("tcp.read_bytes");
+    base::StatsCounter read_bytes("tcp.read_bytes");
     read_bytes.Add(bytes_transferred);
     if (bytes_transferred > 0)
       use_history_.set_was_used_to_convey_data();
     LogByteTransfer(net_log_, NetLog::TYPE_SOCKET_BYTES_RECEIVED, result,
                     read_buf_->data());
   } else {
-    result = MapPosixError(errno);
+    result = MapSystemError(errno);
   }
 
   if (result != ERR_IO_PENDING) {
@@ -606,14 +592,14 @@ void TCPClientSocketLibevent::DidCompleteWrite() {
   int result;
   if (bytes_transferred >= 0) {
     result = bytes_transferred;
-    static base::StatsCounter write_bytes("tcp.write_bytes");
+    base::StatsCounter write_bytes("tcp.write_bytes");
     write_bytes.Add(bytes_transferred);
     if (bytes_transferred > 0)
       use_history_.set_was_used_to_convey_data();
     LogByteTransfer(net_log_, NetLog::TYPE_SOCKET_BYTES_SENT, result,
                     write_buf_->data());
   } else {
-    result = MapPosixError(errno);
+    result = MapSystemError(errno);
   }
 
   if (result != ERR_IO_PENDING) {
@@ -630,6 +616,23 @@ int TCPClientSocketLibevent::GetPeerAddress(AddressList* address) const {
   if (!IsConnected())
     return ERR_SOCKET_NOT_CONNECTED;
   address->Copy(current_ai_, false);
+  return OK;
+}
+
+int TCPClientSocketLibevent::GetLocalAddress(IPEndPoint* address) const {
+  DCHECK(CalledOnValidThread());
+  DCHECK(address);
+  if (!IsConnected())
+    return ERR_SOCKET_NOT_CONNECTED;
+
+  struct sockaddr_storage addr_storage;
+  socklen_t addr_len = sizeof(addr_storage);
+  struct sockaddr* addr = reinterpret_cast<struct sockaddr*>(&addr_storage);
+  if (getsockname(socket_, addr, &addr_len))
+    return MapSystemError(errno);
+  if (!address->FromSockAddr(addr, addr_len))
+    return ERR_FAILED;
+
   return OK;
 }
 

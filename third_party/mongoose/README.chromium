@@ -1,9 +1,9 @@
-Name: Mongoose
+Name: mongoose
 URL: http://code.google.com/p/mongoose/
 LICENSE: MIT
 Version: 2.8
 
-From the website:
+Description:
 Mongoose is an easy to use web server. It can be embedded into existing
 application to provide a web interface to it.
 
@@ -25,4 +25,7 @@ modified to allow for 128 unique URI and not the standard 64.
 Note:  There is no make file for this project, it's compiled directly in
 the chrome versoin of webdriver found under the directory:
   src/chrome/test/webdriver
+
+Local modifications:
+-Do not check for OS_POSIX, instead just check that it is not windows.
 

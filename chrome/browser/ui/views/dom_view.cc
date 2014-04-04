@@ -4,12 +4,11 @@
 
 #include "chrome/browser/ui/views/dom_view.h"
 
-#include "chrome/browser/tab_contents/tab_contents.h"
-#include "ipc/ipc_message.h"
+#include "content/browser/tab_contents/tab_contents.h"
 #include "views/focus/focus_manager.h"
 
 #if defined(TOUCH_UI)
-#include "chrome/browser/ui/views/tab_contents/tab_contents_view_views.h"
+#include "chrome/browser/ui/views/tab_contents/tab_contents_view_touch.h"
 #endif
 
 DOMView::DOMView() : tab_contents_(NULL), initialized_(false) {
@@ -30,6 +29,7 @@ bool DOMView::Init(Profile* profile, SiteInstance* instance) {
   // Attach the native_view now if the view is already added to Widget.
   if (GetWidget())
     AttachTabContents();
+
   return true;
 }
 
@@ -50,7 +50,7 @@ bool DOMView::SkipDefaultKeyEventProcessing(const views::KeyEvent& e) {
   return views::FocusManager::IsTabTraversalKeyEvent(e);
 }
 
-void DOMView::Focus() {
+void DOMView::OnFocus() {
   tab_contents_->Focus();
 }
 
@@ -67,7 +67,7 @@ void DOMView::ViewHierarchyChanged(bool is_add, views::View* parent,
 
 void DOMView::AttachTabContents() {
 #if defined(TOUCH_UI)
-  AttachToView(static_cast<TabContentsViewViews*>(tab_contents_->view()));
+  AttachToView(static_cast<TabContentsViewTouch*>(tab_contents_->view()));
 #else
   Attach(tab_contents_->GetNativeView());
 #endif

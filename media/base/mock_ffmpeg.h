@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -28,6 +28,7 @@ class MockFFmpeg {
   MOCK_METHOD1(AVCodecClose, int(AVCodecContext* avctx));
   MOCK_METHOD2(AVCodecThreadInit, int(AVCodecContext* avctx, int threads));
   MOCK_METHOD1(AVCodecFlushBuffers, void(AVCodecContext* avctx));
+  MOCK_METHOD0(AVCodecAllocContext, AVCodecContext*());
   MOCK_METHOD0(AVCodecAllocFrame, AVFrame*());
   MOCK_METHOD4(AVCodecDecodeVideo2,
                int(AVCodecContext* avctx, AVFrame* picture,
@@ -65,8 +66,7 @@ class MockFFmpeg {
   // Used for verifying check points during tests.
   MOCK_METHOD1(CheckPoint, void(int id));
 
-  // Setter/getter for the global instance of MockFFmpeg.
-  static void set(MockFFmpeg* instance);
+  // Returns the current MockFFmpeg instance.
   static MockFFmpeg* get();
 
   // Returns the URLProtocol registered by the FFmpegGlue singleton.

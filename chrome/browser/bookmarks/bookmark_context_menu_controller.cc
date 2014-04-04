@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,13 +10,13 @@
 #include "chrome/browser/bookmarks/bookmark_folder_editor_controller.h"
 #include "chrome/browser/bookmarks/bookmark_model.h"
 #include "chrome/browser/bookmarks/bookmark_utils.h"
-#include "chrome/browser/browser_list.h"
 #include "chrome/browser/metrics/user_metrics.h"
 #include "chrome/browser/prefs/pref_service.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/tab_contents/page_navigator.h"
 #include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_list.h"
 #include "chrome/common/pref_names.h"
+#include "content/browser/tab_contents/page_navigator.h"
 #include "grit/generated_resources.h"
 #include "ui/base/l10n/l10n_util.h"
 
@@ -158,8 +158,9 @@ void BookmarkContextMenuController::ExecuteCommand(int id) {
           profile_);
 
       for (size_t i = 0; i < selection_.size(); ++i) {
-        model_->Remove(selection_[i]->GetParent(),
-                      selection_[i]->GetParent()->IndexOfChild(selection_[i]));
+        int index = selection_[i]->parent()->GetIndexOf(selection_[i]);
+        if (index > -1)
+          model_->Remove(selection_[i]->parent(), index);
       }
       selection_.clear();
       break;
@@ -241,13 +242,17 @@ bool BookmarkContextMenuController::IsCommandIdChecked(int command_id) const {
 bool BookmarkContextMenuController::IsCommandIdEnabled(int command_id) const {
   bool is_root_node =
       (selection_.size() == 1 &&
-       selection_[0]->GetParent() == model_->root_node());
+       selection_[0]->parent() == model_->root_node());
+  bool can_edit =
+      profile_->GetPrefs()->GetBoolean(prefs::kEditBookmarksEnabled);
   switch (command_id) {
     case IDC_BOOKMARK_BAR_OPEN_INCOGNITO:
-      return !profile_->IsOffTheRecord();
+      return !profile_->IsOffTheRecord() &&
+             profile_->GetPrefs()->GetBoolean(prefs::kIncognitoEnabled);
 
     case IDC_BOOKMARK_BAR_OPEN_ALL_INCOGNITO:
-      return HasURLs() && !profile_->IsOffTheRecord();
+      return HasURLs() && !profile_->IsOffTheRecord() &&
+             profile_->GetPrefs()->GetBoolean(prefs::kIncognitoEnabled);
 
     case IDC_BOOKMARK_BAR_OPEN_ALL:
     case IDC_BOOKMARK_BAR_OPEN_ALL_NEW_WINDOW:
@@ -255,25 +260,31 @@ bool BookmarkContextMenuController::IsCommandIdEnabled(int command_id) const {
 
     case IDC_BOOKMARK_BAR_RENAME_FOLDER:
     case IDC_BOOKMARK_BAR_EDIT:
-      return selection_.size() == 1 && !is_root_node;
+      return selection_.size() == 1 && !is_root_node && can_edit;
 
     case IDC_BOOKMARK_BAR_REMOVE:
-      return !selection_.empty() && !is_root_node;
+      return !selection_.empty() && !is_root_node && can_edit;
 
     case IDC_BOOKMARK_BAR_NEW_FOLDER:
     case IDC_BOOKMARK_BAR_ADD_NEW_BOOKMARK:
-      return bookmark_utils::GetParentForNewNodes(
+      return can_edit && bookmark_utils::GetParentForNewNodes(
           parent_, selection_, NULL) != NULL;
+
+    case IDC_BOOKMARK_BAR_ALWAYS_SHOW:
+      return !profile_->GetPrefs()->IsManagedPreference(
+          prefs::kEnableBookmarkBar);
 
     case IDC_COPY:
     case IDC_CUT:
-      return selection_.size() > 0 && !is_root_node;
+      return !selection_.empty() && !is_root_node &&
+             (command_id == IDC_COPY || can_edit);
 
     case IDC_PASTE:
       // Paste to selection from the Bookmark Bar, to parent_ everywhere else
-      return (!selection_.empty() &&
-              bookmark_utils::CanPasteFromClipboard(selection_[0])) ||
-             bookmark_utils::CanPasteFromClipboard(parent_);
+      return can_edit &&
+             ((!selection_.empty() &&
+               bookmark_utils::CanPasteFromClipboard(selection_[0])) ||
+              bookmark_utils::CanPasteFromClipboard(parent_));
   }
   return true;
 }

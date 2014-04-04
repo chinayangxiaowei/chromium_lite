@@ -6,28 +6,31 @@
 
 #include <algorithm>
 
-#include "app/win/win_util.h"
 #include "base/i18n/rtl.h"
 #include "base/string_util.h"
 #include "base/utf_string_conversions.h"
 #include "base/win/windows_version.h"
-#include "gfx/native_theme_win.h"
 #include "grit/app_strings.h"
 #include "skia/ext/skia_utils_win.h"
+#include "ui/base/accessibility/accessible_view_state.h"
 #include "ui/base/clipboard/clipboard.h"
 #include "ui/base/clipboard/scoped_clipboard_writer.h"
-#include "ui/base/keycodes/keyboard_codes.h"
 #include "ui/base/keycodes/keyboard_code_conversion_win.h"
+#include "ui/base/keycodes/keyboard_codes.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/l10n/l10n_util_win.h"
+#include "ui/base/range/range.h"
+#include "ui/gfx/native_theme_win.h"
 #include "views/controls/label.h"
-#include "views/controls/menu/menu_win.h"
 #include "views/controls/menu/menu_2.h"
+#include "views/controls/menu/menu_win.h"
 #include "views/controls/native/native_view_host.h"
 #include "views/controls/textfield/native_textfield_views.h"
 #include "views/controls/textfield/textfield.h"
+#include "views/controls/textfield/textfield_controller.h"
 #include "views/focus/focus_manager.h"
 #include "views/focus/focus_util_win.h"
+#include "views/metrics.h"
 #include "views/views_delegate.h"
 #include "views/widget/widget.h"
 
@@ -129,6 +132,37 @@ NativeTextfieldWin::NativeTextfieldWin(Textfield* textfield)
 NativeTextfieldWin::~NativeTextfieldWin() {
   if (IsWindow())
     DestroyWindow();
+}
+
+// static
+bool NativeTextfieldWin::IsDoubleClick(const POINT& origin,
+                                       const POINT& current,
+                                       DWORD elapsed_time) {
+  // The CXDOUBLECLK and CYDOUBLECLK system metrics describe the width and
+  // height of a rectangle around the origin position, inside of which clicks
+  // within the double click time are considered double clicks.
+  return (elapsed_time <= GetDoubleClickTime()) &&
+      (abs(current.x - origin.x) <= (GetSystemMetrics(SM_CXDOUBLECLK) / 2)) &&
+      (abs(current.y - origin.y) <= (GetSystemMetrics(SM_CYDOUBLECLK) / 2));
+}
+
+// static
+bool NativeTextfieldWin::IsNumPadDigit(int key_code, bool extended_key) {
+  if (key_code >= VK_NUMPAD0 && key_code <= VK_NUMPAD9)
+    return true;
+
+  // Check for num pad keys without NumLock.
+  // Note: there is no easy way to know if a the key that was pressed comes from
+  //       the num pad or the rest of the keyboard.  Investigating how
+  //       TranslateMessage() generates the WM_KEYCHAR from an
+  //       ALT + <NumPad sequences> it appears it looks at the extended key flag
+  //       (which is on if the key pressed comes from one of the 3 clusters to
+  //       the left of the numeric keypad).  So we use it as well.
+  return !extended_key &&
+            ((key_code >= VK_PRIOR && key_code <= VK_DOWN) ||  // All keys but 5
+                                                               // and 0.
+            (key_code == VK_CLEAR) ||  // Key 5.
+            (key_code == VK_INSERT));  // Key 0.
 }
 
 void NativeTextfieldWin::AttachHack() {
@@ -305,11 +339,11 @@ bool NativeTextfieldWin::IsIMEComposing() const {
   return composition_size > 0;
 }
 
-void NativeTextfieldWin::GetSelectedRange(TextRange* range) const {
+void NativeTextfieldWin::GetSelectedRange(ui::Range* range) const {
   NOTREACHED();
 }
 
-void NativeTextfieldWin::SelectRange(const TextRange& range) {
+void NativeTextfieldWin::SelectRange(const ui::Range& range) {
   NOTREACHED();
 }
 
@@ -318,21 +352,22 @@ size_t NativeTextfieldWin::GetCursorPosition() const {
   return 0U;
 }
 
-bool NativeTextfieldWin::HandleKeyPressed(const views::KeyEvent& e) {
+bool NativeTextfieldWin::HandleKeyPressed(const views::KeyEvent& event) {
   return false;
 }
 
-bool NativeTextfieldWin::HandleKeyReleased(const views::KeyEvent& e) {
+bool NativeTextfieldWin::HandleKeyReleased(const views::KeyEvent& event) {
   return false;
 }
 
-void NativeTextfieldWin::HandleWillGainFocus() {
+void NativeTextfieldWin::HandleFocus() {
 }
 
-void NativeTextfieldWin::HandleDidGainFocus() {
+void NativeTextfieldWin::HandleBlur() {
 }
 
-void NativeTextfieldWin::HandleWillLoseFocus() {
+TextInputClient* NativeTextfieldWin::GetTextInputClient() {
+  return NULL;
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -406,17 +441,18 @@ void NativeTextfieldWin::InitializeAccessibilityInfo() {
       CHILDID_SELF, PROPID_ACC_ROLE, var);
 
   // Set the accessible name by getting the label text.
-  View* parent = textfield_->GetParent();
-  int label_index = parent->GetChildIndex(textfield_) - 1;
+  View* parent = textfield_->parent();
+  int label_index = parent->GetIndexOf(textfield_) - 1;
   if (label_index >= 0) {
     // Try to find the name of this text field.
     // We expect it to be a Label preceeding this view (if it exists).
     string16 name;
     View* label_view = parent->GetChildViewAt(label_index);
-    if (label_view->GetClassName() == Label::kViewClassName &&
-        label_view->GetAccessibleName(&name)) {
+    if (label_view->GetClassName() == Label::kViewClassName) {
+      ui::AccessibleViewState state;
+      label_view->GetAccessibleState(&state);
       hr = pAccPropServices->SetHwndPropStr(m_hWnd, OBJID_CLIENT,
-          CHILDID_SELF, PROPID_ACC_NAME, name.c_str());
+          CHILDID_SELF, PROPID_ACC_NAME, state.name.c_str());
     }
   }
 }
@@ -458,7 +494,7 @@ void NativeTextfieldWin::UpdateAccessibleValue(const std::wstring& value) {
 // NativeTextfieldWin, private:
 
 void NativeTextfieldWin::OnChar(TCHAR ch, UINT repeat_count, UINT flags) {
-  HandleKeystroke(GetCurrentMessage()->message, ch, repeat_count, flags);
+  HandleKeystroke();
 }
 
 void NativeTextfieldWin::OnContextMenu(HWND window, const POINT& point) {
@@ -570,8 +606,6 @@ LRESULT NativeTextfieldWin::OnImeEndComposition(UINT message,
   // this case, we need to update the find results when a composition is
   // finished or canceled.
   textfield_->SyncText();
-  if (textfield_->GetController())
-    textfield_->GetController()->ContentsChanged(textfield_, GetText());
   return DefWindowProc(message, wparam, lparam);
 }
 
@@ -631,6 +665,7 @@ void NativeTextfieldWin::OnKeyDown(TCHAR key, UINT repeat_count, UINT flags) {
       if (!(flags & KF_ALTDOWN) && (GetKeyState(VK_SHIFT) >= 0) &&
           (GetKeyState(VK_CONTROL) >= 0))
         return;
+      // Fall through to the next case (ie. Shift-Insert == Ctrl-V).
     case 'V':
       if ((flags & KF_ALTDOWN) ||
           (GetKeyState((key == 'V') ? VK_CONTROL : VK_SHIFT) >= 0))
@@ -657,7 +692,7 @@ void NativeTextfieldWin::OnKeyDown(TCHAR key, UINT repeat_count, UINT flags) {
 
   // CRichEditCtrl changes its text on WM_KEYDOWN instead of WM_CHAR for many
   // different keys (backspace, ctrl-v, ...), so we call this in both cases.
-  HandleKeystroke(GetCurrentMessage()->message, key, repeat_count, flags);
+  HandleKeystroke();
 }
 
 void NativeTextfieldWin::OnLButtonDblClk(UINT keys, const CPoint& point) {
@@ -678,8 +713,8 @@ void NativeTextfieldWin::OnLButtonDown(UINT keys, const CPoint& point) {
   // double_click_time_ from the current message's time even if the timer has
   // wrapped in between.
   const bool is_triple_click = tracking_double_click_ &&
-      app::win::IsDoubleClick(double_click_point_, point,
-                              GetCurrentMessage()->time - double_click_time_);
+      IsDoubleClick(double_click_point_, point,
+                    GetCurrentMessage()->time - double_click_time_);
   tracking_double_click_ = false;
 
   ScopedFreeze freeze(this, GetTextObjectModel());
@@ -702,7 +737,8 @@ void NativeTextfieldWin::OnMouseLeave() {
   SetContainsMouse(false);
 }
 
-LRESULT NativeTextfieldWin::OnMouseWheel(UINT message, WPARAM w_param,
+LRESULT NativeTextfieldWin::OnMouseWheel(UINT message,
+                                         WPARAM w_param,
                                          LPARAM l_param) {
   // Reroute the mouse-wheel to the window under the mouse pointer if
   // applicable.
@@ -838,9 +874,9 @@ void NativeTextfieldWin::OnNCPaint(HRGN region) {
   int classic_state =
       (!textfield_->IsEnabled() || textfield_->read_only()) ? DFCS_INACTIVE : 0;
 
-  gfx::NativeTheme::instance()->PaintTextField(hdc, part, state, classic_state,
-                                               &window_rect, bg_color_, false,
-                                               true);
+  gfx::NativeThemeWin::instance()->PaintTextField(hdc, part, state,
+                                                  classic_state, &window_rect,
+                                                  bg_color_, false, true);
 
   // NOTE: I tried checking the transparent property of the theme and invoking
   // drawParentBackground, but it didn't seem to make a difference.
@@ -901,45 +937,21 @@ void NativeTextfieldWin::OnSysChar(TCHAR ch, UINT repeat_count, UINT flags) {
     SetMsgHandled(false);
 }
 
-void NativeTextfieldWin::HandleKeystroke(UINT message,
-                                         TCHAR key,
-                                         UINT repeat_count,
-                                         UINT flags) {
+void NativeTextfieldWin::HandleKeystroke() {
+  const MSG* msg = GetCurrentMessage();
   ScopedFreeze freeze(this, GetTextObjectModel());
 
-  Textfield::Controller* controller = textfield_->GetController();
+  TextfieldController* controller = textfield_->GetController();
   bool handled = false;
   if (controller) {
-    Event::EventType type;
-    switch (message) {
-      case WM_KEYDOWN:
-      case WM_SYSKEYDOWN:
-      case WM_CHAR:
-      case WM_SYSCHAR:
-        type = Event::ET_KEY_PRESSED;
-        break;
-      case WM_KEYUP:
-      case WM_SYSKEYUP:
-        type = Event::ET_KEY_RELEASED;
-        break;
-      default:
-        NOTREACHED() << "Unknown message:" << message;
-        // Passing through to avoid crash on release build.
-        type = Event::ET_KEY_PRESSED;
-    }
-    KeyEvent key_event(type,
-                       ui::KeyboardCodeForWindowsKeyCode(key),
-                       KeyEvent::GetKeyStateFlags(),
-                       repeat_count,
-                       flags,
-                       message);
-    handled = controller->HandleKeyEvent(textfield_, key_event);
+    KeyEvent event(*msg);
+    handled = controller->HandleKeyEvent(textfield_, event);
   }
 
   if (!handled) {
     OnBeforePossibleChange();
 
-    if (key == ui::VKEY_HOME || key == ui::VKEY_END) {
+    if (msg->wParam == ui::VKEY_HOME || msg->wParam == ui::VKEY_END) {
       // DefWindowProc() might reset the keyboard layout when it receives a
       // keydown event for VKEY_HOME or VKEY_END. When the window was created
       // with WS_EX_LAYOUTRTL and the current keyboard layout is not a RTL one,
@@ -954,10 +966,10 @@ void NativeTextfieldWin::HandleKeystroke(UINT message,
       // change behavior is surprising and inconsistent with keyboard behavior
       // elsewhere, so reset the layout in this case.
       HKL layout = GetKeyboardLayout(0);
-      DefWindowProc(message, key, MAKELPARAM(repeat_count, flags));
+      DefWindowProc(msg->message, msg->wParam, msg->lParam);
       ActivateKeyboardLayout(layout, KLF_REORDER);
     } else {
-      DefWindowProc(message, key, MAKELPARAM(repeat_count, flags));
+      DefWindowProc(msg->message, msg->wParam, msg->lParam);
     }
 
     // CRichEditCtrl automatically turns on IMF_AUTOKEYBOARD when the user
@@ -1006,8 +1018,6 @@ void NativeTextfieldWin::OnAfterPossibleChange(bool should_redraw_text) {
     }
     textfield_->SyncText();
     UpdateAccessibleValue(textfield_->text());
-    if (textfield_->GetController())
-      textfield_->GetController()->ContentsChanged(textfield_, new_text);
 
     if (should_redraw_text) {
       CHARRANGE original_sel;

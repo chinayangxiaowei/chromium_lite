@@ -8,15 +8,15 @@
 #include "base/metrics/histogram.h"
 #include "base/stl_util-inl.h"
 #include "chrome/browser/automation/url_request_automation_job.h"
-#include "chrome/browser/browser_thread.h"
 #include "chrome/browser/net/url_request_failed_dns_job.h"
 #include "chrome/browser/net/url_request_mock_http_job.h"
 #include "chrome/browser/net/url_request_mock_util.h"
 #include "chrome/browser/net/url_request_slow_download_job.h"
 #include "chrome/browser/net/url_request_slow_http_job.h"
-#include "chrome/browser/renderer_host/render_message_filter.h"
 #include "chrome/common/automation_messages.h"
 #include "chrome/common/chrome_paths.h"
+#include "content/browser/browser_thread.h"
+#include "content/browser/renderer_host/render_message_filter.h"
 #include "googleurl/src/gurl.h"
 #include "net/base/net_errors.h"
 #include "net/url_request/url_request_filter.h"
@@ -121,7 +121,7 @@ AutomationResourceMessageFilter::~AutomationResourceMessageFilter() {
 
 // Called on the IPC thread:
 void AutomationResourceMessageFilter::OnFilterAdded(IPC::Channel* channel) {
-  DCHECK(channel_ == NULL);
+  DCHECK(!channel_);
   channel_ = channel;
 }
 
@@ -318,7 +318,8 @@ void AutomationResourceMessageFilter::UnRegisterRenderViewInIOThread(
                                                    renderer_id)));
 
   if (automation_details_iter == filtered_render_views_.Get().end()) {
-    VLOG(1) << "UnRegisterRenderViewInIOThread: already unregistered";
+    // This is called for all RenderViewHosts, so it's fine if we don't find a
+    // match.
     return;
   }
 
@@ -525,6 +526,7 @@ bool AutomationResourceMessageFilter::SetCookiesForUrl(
     return false;
   }
 
+  delete callback;
   DCHECK(automation_details_iter->second.filter != NULL);
 
   if (automation_details_iter->second.filter) {

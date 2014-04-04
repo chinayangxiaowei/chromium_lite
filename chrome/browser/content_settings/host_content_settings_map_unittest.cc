@@ -1,25 +1,25 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
-
-#include "chrome/browser/content_settings/host_content_settings_map_unittest.h"
 
 #include "base/auto_reset.h"
 #include "base/command_line.h"
 #include "base/json/json_reader.h"
 #include "base/json/json_writer.h"
 #include "chrome/browser/content_settings/content_settings_details.h"
+#include "chrome/browser/content_settings/host_content_settings_map.h"
+#include "chrome/browser/content_settings/stub_settings_observer.h"
 #include "chrome/browser/prefs/pref_service.h"
+#include "chrome/browser/prefs/scoped_user_pref_update.h"
 #include "chrome/common/chrome_switches.h"
-#include "chrome/common/notification_registrar.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/common/url_constants.h"
+#include "chrome/test/testing_browser_process_test.h"
 #include "chrome/test/testing_pref_service.h"
 #include "chrome/test/testing_profile.h"
 #include "googleurl/src/gurl.h"
 #include "net/base/static_cookie_policy.h"
 #include "testing/gtest/include/gtest/gtest.h"
-
 
 namespace {
 
@@ -32,7 +32,7 @@ bool SettingsEqual(const ContentSettings& settings1,
   return true;
 }
 
-class HostContentSettingsMapTest : public testing::Test {
+class HostContentSettingsMapTest : public TestingBrowserProcessTest {
  public:
   HostContentSettingsMapTest() : ui_thread_(BrowserThread::UI, &message_loop_) {
   }
@@ -123,6 +123,8 @@ TEST_F(HostContentSettingsMapTest, DefaultValues) {
       CONTENT_SETTING_ASK;
   desired_settings.settings[CONTENT_SETTINGS_TYPE_NOTIFICATIONS] =
       CONTENT_SETTING_ASK;
+  desired_settings.settings[CONTENT_SETTINGS_TYPE_PRERENDER] =
+      CONTENT_SETTING_ALLOW;
   ContentSettings settings =
       host_content_settings_map->GetContentSettings(host);
   EXPECT_TRUE(SettingsEqual(desired_settings, settings));
@@ -424,6 +426,8 @@ TEST_F(HostContentSettingsMapTest, NestedSettings) {
       CONTENT_SETTING_ASK;
   desired_settings.settings[CONTENT_SETTINGS_TYPE_NOTIFICATIONS] =
       CONTENT_SETTING_ASK;
+  desired_settings.settings[CONTENT_SETTINGS_TYPE_PRERENDER] =
+      CONTENT_SETTING_ALLOW;
   ContentSettings settings =
       host_content_settings_map->GetContentSettings(host);
   EXPECT_TRUE(SettingsEqual(desired_settings, settings));
@@ -445,10 +449,10 @@ TEST_F(HostContentSettingsMapTest, OffTheRecord) {
   TestingProfile profile;
   HostContentSettingsMap* host_content_settings_map =
       profile.GetHostContentSettingsMap();
-  profile.set_off_the_record(true);
+  profile.set_incognito(true);
   scoped_refptr<HostContentSettingsMap> otr_map(
       new HostContentSettingsMap(&profile));
-  profile.set_off_the_record(false);
+  profile.set_incognito(false);
 
   GURL host("http://example.com/");
   ContentSettingsPattern pattern("[*.]example.com");
@@ -461,7 +465,7 @@ TEST_F(HostContentSettingsMapTest, OffTheRecord) {
                 host, CONTENT_SETTINGS_TYPE_IMAGES, ""));
 
   // Changing content settings on the main map should also affect the
-  // off-the-record map.
+  // incognito map.
   host_content_settings_map->SetContentSetting(pattern,
       CONTENT_SETTINGS_TYPE_IMAGES, "", CONTENT_SETTING_BLOCK);
   EXPECT_EQ(CONTENT_SETTING_BLOCK,
@@ -471,7 +475,7 @@ TEST_F(HostContentSettingsMapTest, OffTheRecord) {
             otr_map->GetContentSetting(
                 host, CONTENT_SETTINGS_TYPE_IMAGES, ""));
 
-  // Changing content settings on the off-the-record map should NOT affect the
+  // Changing content settings on the incognito map should NOT affect the
   // main map.
   otr_map->SetContentSetting(pattern,
       CONTENT_SETTINGS_TYPE_IMAGES, "", CONTENT_SETTING_ALLOW);
@@ -513,6 +517,30 @@ TEST_F(HostContentSettingsMapTest, MigrateObsoletePrefs) {
                 host, CONTENT_SETTINGS_TYPE_POPUPS, ""));
 }
 
+TEST_F(HostContentSettingsMapTest, MigrateObsoleteNotificationsPrefs) {
+  TestingProfile profile;
+  PrefService* prefs = profile.GetPrefs();
+
+  // Set obsolete data.
+  prefs->SetInteger(prefs::kDesktopNotificationDefaultContentSetting,
+                    CONTENT_SETTING_ALLOW);
+
+  HostContentSettingsMap* host_content_settings_map =
+      profile.GetHostContentSettingsMap();
+
+  EXPECT_EQ(CONTENT_SETTING_ALLOW,
+            host_content_settings_map->GetDefaultContentSetting(
+                CONTENT_SETTINGS_TYPE_NOTIFICATIONS));
+
+  // Check if the pref was migrated correctly.
+  const DictionaryValue* default_settings_dictionary =
+      prefs->GetDictionary(prefs::kDefaultContentSettings);
+  int value;
+  default_settings_dictionary->GetIntegerWithoutPathExpansion(
+      "notifications", &value);
+  EXPECT_EQ(CONTENT_SETTING_ALLOW, ContentSetting(value));
+}
+
 // For a single Unicode encoded pattern, check if it gets converted to punycode
 // and old pattern gets deleted.
 TEST_F(HostContentSettingsMapTest, CanonicalizeExceptionsUnicodeOnly) {
@@ -520,17 +548,20 @@ TEST_F(HostContentSettingsMapTest, CanonicalizeExceptionsUnicodeOnly) {
   PrefService* prefs = profile.GetPrefs();
 
   // Set utf-8 data.
-  DictionaryValue* all_settings_dictionary =
-      prefs->GetMutableDictionary(prefs::kContentSettingsPatterns);
-  ASSERT_TRUE(NULL != all_settings_dictionary);
+  {
+    DictionaryPrefUpdate update(prefs, prefs::kContentSettingsPatterns);
+    DictionaryValue* all_settings_dictionary = update.Get();
+    ASSERT_TRUE(NULL != all_settings_dictionary);
 
-  DictionaryValue* dummy_payload = new DictionaryValue;
-  dummy_payload->SetInteger("images", CONTENT_SETTING_ALLOW);
-  all_settings_dictionary->SetWithoutPathExpansion("[*.]\xC4\x87ira.com",
-                                                   dummy_payload);
-
+    DictionaryValue* dummy_payload = new DictionaryValue;
+    dummy_payload->SetInteger("images", CONTENT_SETTING_ALLOW);
+    all_settings_dictionary->SetWithoutPathExpansion("[*.]\xC4\x87ira.com",
+                                                     dummy_payload);
+  }
   profile.GetHostContentSettingsMap();
 
+  const DictionaryValue* all_settings_dictionary =
+      prefs->GetDictionary(prefs::kContentSettingsPatterns);
   DictionaryValue* result = NULL;
   EXPECT_FALSE(all_settings_dictionary->GetDictionaryWithoutPathExpansion(
       "[*.]\xC4\x87ira.com", &result));
@@ -616,6 +647,14 @@ TEST_F(HostContentSettingsMapTest, ResourceIdentifier) {
   EXPECT_EQ(CONTENT_SETTING_ALLOW,
             host_content_settings_map->GetContentSetting(
                 host, CONTENT_SETTINGS_TYPE_PLUGINS, resource2));
+
+  // If resource content settings are enabled GetContentSettings should return
+  // CONTENT_SETTING_DEFAULT for content types that require resource
+  // identifiers.
+  ContentSettings settings =
+      host_content_settings_map->GetContentSettings(host);
+  EXPECT_EQ(CONTENT_SETTING_DEFAULT,
+            settings.settings[CONTENT_SETTINGS_TYPE_PLUGINS]);
 }
 
 TEST_F(HostContentSettingsMapTest, ResourceIdentifierPrefs) {

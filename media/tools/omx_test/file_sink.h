@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.  Use of this
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.  Use of this
 // source code is governed by a BSD-style license that can be found in the
 // LICENSE file.
 
@@ -10,8 +10,8 @@
 
 #include "base/basictypes.h"
 #include "base/file_path.h"
-#include "base/scoped_handle.h"
-#include "base/scoped_ptr.h"
+#include "base/memory/scoped_handle.h"
+#include "base/memory/scoped_ptr.h"
 
 namespace media {
 
@@ -21,17 +21,9 @@ class FileSink {
  public:
   FileSink(const FilePath& output_path,
            bool simulate_copy,
-           bool enable_csc)
-      : output_path_(output_path),
-        simulate_copy_(simulate_copy),
-        enable_csc_(enable_csc),
-        width_(0),
-        height_(0),
-        copy_buf_size_(0),
-        csc_buf_size_(0) {
-  }
+           bool enable_csc);
 
-  virtual ~FileSink() {}
+  virtual ~FileSink();
 
   virtual void BufferReady(int size, uint8* buffer);
 

@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,14 +8,16 @@
 
 #import <Cocoa/Cocoa.h>
 
-#include "base/scoped_nsobject.h"
-#include "base/scoped_ptr.h"
-#import "chrome/browser/ui/cocoa/tab_contents_controller.h"
+#include "base/memory/scoped_nsobject.h"
+#include "base/memory/scoped_ptr.h"
+#import "chrome/browser/ui/cocoa/tab_contents/tab_contents_controller.h"
 #import "chrome/browser/ui/cocoa/tabs/tab_controller_target.h"
 #import "chrome/browser/ui/cocoa/url_drop_target.h"
 #import "third_party/GTM/AppKit/GTMWindowSheetController.h"
 
+@class CrTrackingArea;
 @class NewTabButton;
+@class ProfileMenuButton;
 @class TabContentsController;
 @class TabView;
 @class TabStripView;
@@ -26,6 +28,10 @@ class TabStripModelObserverBridge;
 class TabStripModel;
 class TabContents;
 class ToolbarModel;
+
+namespace TabStripControllerInternal {
+class NotificationBridge;
+} // namespace TabStripControllerInternal
 
 // The interface for the tab strip controller's delegate.
 // Delegating TabStripModelObserverBridge's events (in lieu of directly
@@ -69,9 +75,11 @@ class ToolbarModel;
   NSView* switchView_;  // weak
   scoped_nsobject<NSView> dragBlockingView_;  // avoid bad window server drags
   NewTabButton* newTabButton_;  // weak, obtained from the nib.
+  ProfileMenuButton* profileMenuButton_;  // weak, obtained from the nib.
+  BOOL hasUpdatedProfileMenuButtonXOffset_;
 
   // Tracks the newTabButton_ for rollovers.
-  scoped_nsobject<NSTrackingArea> newTabTrackingArea_;
+  scoped_nsobject<CrTrackingArea> newTabTrackingArea_;
   scoped_ptr<TabStripModelObserverBridge> bridge_;
   Browser* browser_;  // weak
   TabStripModel* tabStripModel_;  // weak
@@ -123,7 +131,7 @@ class ToolbarModel;
   float availableResizeWidth_;
   // A tracking area that's the size of the tab strip used to be notified
   // when the mouse moves in the tab strip
-  scoped_nsobject<NSTrackingArea> trackingArea_;
+  scoped_nsobject<CrTrackingArea> trackingArea_;
   TabView* hoveredTab_;  // weak. Tab that the mouse is hovering over
 
   // Array of subviews which are permanent (and which should never be removed),
@@ -131,7 +139,7 @@ class ToolbarModel;
   scoped_nsobject<NSMutableArray> permanentSubviews_;
 
   // The default favicon, so we can use one copy for all buttons.
-  scoped_nsobject<NSImage> defaultFavIcon_;
+  scoped_nsobject<NSImage> defaultFavicon_;
 
   // The amount by which to indent the tabs on the left (to make room for the
   // red/yellow/green buttons).
@@ -142,6 +150,10 @@ class ToolbarModel;
 
   // Is the mouse currently inside the strip;
   BOOL mouseInside_;
+
+  // Used for monitoring the profile name pref.
+  scoped_ptr<TabStripControllerInternal::NotificationBridge>
+      notificationBridge_;
 }
 
 @property(nonatomic) CGFloat indentForControls;

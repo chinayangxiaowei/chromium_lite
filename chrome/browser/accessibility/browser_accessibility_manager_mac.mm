@@ -4,7 +4,9 @@
 
 #include "chrome/browser/accessibility/browser_accessibility_manager_mac.h"
 
+#import "base/logging.h"
 #import "chrome/browser/accessibility/browser_accessibility_cocoa.h"
+#include "content/common/view_messages.h"
 
 // static
 BrowserAccessibilityManager* BrowserAccessibilityManager::Create(
@@ -16,10 +18,6 @@ BrowserAccessibilityManager* BrowserAccessibilityManager::Create(
       parent_view, src, delegate, factory);
 }
 
-BrowserAccessibility* BrowserAccessibilityFactory::Create() {
-  return BrowserAccessibility::Create();
-}
-
 BrowserAccessibilityManagerMac::BrowserAccessibilityManagerMac(
     gfx::NativeView parent_window,
     const webkit_glue::WebAccessibility& src,
@@ -29,32 +27,32 @@ BrowserAccessibilityManagerMac::BrowserAccessibilityManagerMac(
 }
 
 void BrowserAccessibilityManagerMac::NotifyAccessibilityEvent(
-    ViewHostMsg_AccessibilityNotification_Params::NotificationType n,
+    int type,
     BrowserAccessibility* node) {
   // Refer to AXObjectCache.mm (webkit).
   NSString* event_id = @"";
-  switch (n) {
-    case ViewHostMsg_AccessibilityNotification_Params::
+  switch (type) {
+    case ViewHostMsg_AccessibilityNotification_Type::
         NOTIFICATION_TYPE_CHECK_STATE_CHANGED:
       // Does not exist on Mac.
       return;
-    case ViewHostMsg_AccessibilityNotification_Params::
+    case ViewHostMsg_AccessibilityNotification_Type::
         NOTIFICATION_TYPE_CHILDREN_CHANGED:
       // TODO(dtseng): no clear equivalent on Mac.
       return;
-    case ViewHostMsg_AccessibilityNotification_Params::
+    case ViewHostMsg_AccessibilityNotification_Type::
         NOTIFICATION_TYPE_FOCUS_CHANGED:
       event_id = NSAccessibilityFocusedUIElementChangedNotification;
       break;
-    case ViewHostMsg_AccessibilityNotification_Params::
+    case ViewHostMsg_AccessibilityNotification_Type::
         NOTIFICATION_TYPE_LOAD_COMPLETE:
       event_id = @"AXLoadComplete";
       break;
-    case ViewHostMsg_AccessibilityNotification_Params::
+    case ViewHostMsg_AccessibilityNotification_Type::
         NOTIFICATION_TYPE_VALUE_CHANGED:
       event_id = NSAccessibilityValueChangedNotification;
       break;
-    case ViewHostMsg_AccessibilityNotification_Params::
+    case ViewHostMsg_AccessibilityNotification_Type::
         NOTIFICATION_TYPE_SELECTED_TEXT_CHANGED:
       event_id = NSAccessibilitySelectedTextChangedNotification;
       break;

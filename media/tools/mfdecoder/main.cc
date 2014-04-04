@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -18,28 +18,26 @@
 #include "base/at_exit.h"
 #include "base/basictypes.h"
 #include "base/logging.h"
+#include "base/memory/scoped_ptr.h"
 #include "base/message_loop.h"
-#include "base/scoped_comptr_win.h"
-#include "base/scoped_ptr.h"
 #include "base/time.h"
-#include "gfx/gdi_util.h"
+#include "base/win/scoped_comptr.h"
 #include "media/base/yuv_convert.h"
 #include "media/tools/mfdecoder/mfdecoder.h"
+#include "ui/gfx/gdi_util.h"
 
-namespace {
+static const char* const kWindowClass = "Chrome_MF_Decoder";
+static const char* const kWindowTitle = "MF Decoder";
+static const int kWindowStyleFlags =
+    (WS_OVERLAPPEDWINDOW | WS_VISIBLE) & ~(WS_MAXIMIZEBOX | WS_THICKFRAME);
+static bool g_render_to_window = false;
+static bool g_render_asap = false;
 
-const char* const kWindowClass = "Chrome_MF_Decoder";
-const char* const kWindowTitle = "MF Decoder";
-const int kWindowStyleFlags = (WS_OVERLAPPEDWINDOW | WS_VISIBLE) &
-                              ~(WS_MAXIMIZEBOX | WS_THICKFRAME);
-bool g_render_to_window = false;
-bool g_render_asap = false;
+static base::TimeDelta* g_decode_time;
+static base::TimeDelta* g_render_time;
+static int64 g_num_frames = 0;
 
-base::TimeDelta* g_decode_time;
-base::TimeDelta* g_render_time;
-int64 g_num_frames = 0;
-
-void usage() {
+static void usage() {
   static char* usage_msg = "Usage: mfdecoder (-s|-h) (-d|-r|-f) input-file\n"
                            "-s: Use software decoding\n"
                            "-h: Use hardware decoding\n"
@@ -57,7 +55,7 @@ void usage() {
 // space for the returned Unicode string from the heap and it is caller's
 // responsibility to free it.
 // Returns: An equivalent Unicode string if successful, NULL otherwise.
-wchar_t* ConvertASCIIStringToUnicode(const char* source) {
+static wchar_t* ConvertASCIIStringToUnicode(const char* source) {
   if (source == NULL) {
     LOG(ERROR) << "ConvertASCIIStringToUnicode: source cannot be NULL";
     return NULL;
@@ -83,8 +81,8 @@ wchar_t* ConvertASCIIStringToUnicode(const char* source) {
 // Converts the given raw data buffer into RGB32 format, and drawing the result
 // into the given window. This is only used when DXVA2 is not enabled.
 // Returns: true on success.
-bool ConvertToRGBAndDrawToWindow(HWND video_window, uint8* data, int width,
-                                 int height, int stride) {
+static bool ConvertToRGBAndDrawToWindow(HWND video_window, uint8* data,
+                                        int width, int height, int stride) {
   CHECK(video_window != NULL);
   CHECK(data != NULL);
   CHECK_GT(width, 0);
@@ -132,8 +130,9 @@ bool ConvertToRGBAndDrawToWindow(HWND video_window, uint8* data, int width,
 // Obtains the underlying raw data buffer for the given IMFMediaBuffer, and
 // calls ConvertToRGBAndDrawToWindow() with it.
 // Returns: true on success.
-bool PaintMediaBufferOntoWindow(HWND video_window, IMFMediaBuffer* video_buffer,
-                                int width, int height, int stride) {
+static bool PaintMediaBufferOntoWindow(HWND video_window,
+                                       IMFMediaBuffer* video_buffer,
+                                       int width, int height, int stride) {
   CHECK(video_buffer != NULL);
   HRESULT hr;
   BYTE* data;
@@ -164,10 +163,10 @@ bool PaintMediaBufferOntoWindow(HWND video_window, IMFMediaBuffer* video_buffer,
 // Obtains the D3D9 surface from the given IMFMediaBuffer, then calls methods
 // in the D3D device to draw to the window associated with it.
 // Returns: true on success.
-bool PaintD3D9BufferOntoWindow(IDirect3DDevice9* device,
-                               IMFMediaBuffer* video_buffer) {
+static bool PaintD3D9BufferOntoWindow(IDirect3DDevice9* device,
+                                      IMFMediaBuffer* video_buffer) {
   CHECK(device != NULL);
-  ScopedComPtr<IDirect3DSurface9> surface;
+  base::win::ScopedComPtr<IDirect3DSurface9> surface;
   HRESULT hr = MFGetService(video_buffer, MR_BUFFER_SERVICE,
                             IID_PPV_ARGS(surface.Receive()));
   if (FAILED(hr)) {
@@ -182,7 +181,7 @@ bool PaintD3D9BufferOntoWindow(IDirect3DDevice9* device,
       LOG(ERROR) << "Device->Clear() failed";
       return false;
     }
-    ScopedComPtr<IDirect3DSurface9> backbuffer;
+    base::win::ScopedComPtr<IDirect3DSurface9> backbuffer;
     hr = device->GetBackBuffer(0, 0, D3DBACKBUFFER_TYPE_MONO,
                                backbuffer.Receive());
     if (FAILED(hr)) {
@@ -219,8 +218,8 @@ bool PaintD3D9BufferOntoWindow(IDirect3DDevice9* device,
 // For H.264 format, there should only be 1 buffer per sample, so each buffer
 // represents 1 frame.
 // Returns: true if successful.
-bool DrawVideoSample(HWND video_window, media::MFDecoder* decoder,
-                     IDirect3DDevice9* device) {
+static bool DrawVideoSample(HWND video_window, media::MFDecoder* decoder,
+                            IDirect3DDevice9* device) {
   CHECK(video_window != NULL);
   CHECK(decoder != NULL);
   CHECK(decoder->initialized());
@@ -230,7 +229,7 @@ bool DrawVideoSample(HWND video_window, media::MFDecoder* decoder,
                << "stream has been reached";
     return false;
   }
-  ScopedComPtr<IMFSample> video_sample;
+  base::win::ScopedComPtr<IMFSample> video_sample;
   base::Time decode_time_start(base::Time::Now());
   video_sample.Attach(decoder->ReadVideoSample());
   if (video_sample.get() == NULL) {
@@ -251,7 +250,7 @@ bool DrawVideoSample(HWND video_window, media::MFDecoder* decoder,
   // For H.264 videos, the number of buffers in the sample is 1.
   CHECK_EQ(buffer_count, 1u) << "buffer_count should be equal "
                                               << "to 1 for H.264 format";
-  ScopedComPtr<IMFMediaBuffer> video_buffer;
+  base::win::ScopedComPtr<IMFMediaBuffer> video_buffer;
   hr = video_sample->GetBufferByIndex(0, video_buffer.Receive());
   if (FAILED(hr)) {
     LOG(ERROR) << "Failed to get buffer from sample";
@@ -268,7 +267,7 @@ bool DrawVideoSample(HWND video_window, media::MFDecoder* decoder,
 
 // Creates a window with the given width and height.
 // Returns: A handle to the window on success, NULL otherwise.
-HWND CreateDrawWindow(int width, int height) {
+static HWND CreateDrawWindow(int width, int height) {
   WNDCLASS window_class = {0};
   window_class.lpszClassName = kWindowClass;
   window_class.hInstance = NULL;
@@ -303,14 +302,14 @@ HWND CreateDrawWindow(int width, int height) {
 // device. This function is used by mfdecoder.cc during the call to
 // MFDecoder::GetDXVA2AttributesForSourceReader().
 // Returns: The D3D manager object if successful. Otherwise, NULL is returned.
-IDirect3DDeviceManager9* CreateD3DDevManager(HWND video_window,
-                                             IDirect3DDevice9** device) {
+static IDirect3DDeviceManager9* CreateD3DDevManager(HWND video_window,
+                                                    IDirect3DDevice9** device) {
   CHECK(video_window != NULL);
   CHECK(device != NULL);
   int ret = -1;
 
-  ScopedComPtr<IDirect3DDeviceManager9> dev_manager;
-  ScopedComPtr<IDirect3D9> d3d;
+  base::win::ScopedComPtr<IDirect3DDeviceManager9> dev_manager;
+  base::win::ScopedComPtr<IDirect3D9> d3d;
   d3d.Attach(Direct3DCreate9(D3D_SDK_VERSION));
   if (d3d == NULL) {
     LOG(ERROR) << "Failed to create D3D9";
@@ -331,7 +330,7 @@ IDirect3DDeviceManager9* CreateD3DDevManager(HWND video_window,
   present_params.FullScreen_RefreshRateInHz = 0;
   present_params.PresentationInterval = 0;
 
-  ScopedComPtr<IDirect3DDevice9> temp_device;
+  base::win::ScopedComPtr<IDirect3DDevice9> temp_device;
 
   // D3DCREATE_HARDWARE_VERTEXPROCESSING specifies hardware vertex processing.
   HRESULT hr = d3d->CreateDevice(D3DADAPTER_DEFAULT,
@@ -366,9 +365,9 @@ IDirect3DDeviceManager9* CreateD3DDevManager(HWND video_window,
 // buffer dimensions to the actual video frame dimensions.
 // Both the decoder and device should be initialized before calling this method.
 // Returns: true if successful.
-bool AdjustD3DDeviceBackBufferDimensions(media::MFDecoder* decoder,
-                                         IDirect3DDevice9* device,
-                                         HWND video_window) {
+static bool AdjustD3DDeviceBackBufferDimensions(media::MFDecoder* decoder,
+                                                IDirect3DDevice9* device,
+                                                HWND video_window) {
   CHECK(decoder != NULL);
   CHECK(decoder->initialized());
   CHECK(decoder->use_dxva2());
@@ -390,8 +389,8 @@ bool AdjustD3DDeviceBackBufferDimensions(media::MFDecoder* decoder,
 
 // Post this task in the MessageLoop. This function keeps posting itself
 // until DrawVideoSample fails.
-void RepaintTask(media::MFDecoder* decoder, HWND video_window,
-                 IDirect3DDevice9* device) {
+static void RepaintTask(media::MFDecoder* decoder, HWND video_window,
+                        IDirect3DDevice9* device) {
   // This sends a WM_PAINT message so we can paint on the window later.
   // If we are using D3D9, then we do not send a WM_PAINT message since the two
   // do not work well together.
@@ -417,8 +416,6 @@ void RepaintTask(media::MFDecoder* decoder, HWND video_window,
     }
   }
 }
-
-}  // namespace
 
 int main(int argc, char** argv) {
   if (argc < 2) {
@@ -484,8 +481,8 @@ int main(int argc, char** argv) {
     LOG(ERROR) << "Failed to create decoder";
     return -1;
   }
-  ScopedComPtr<IDirect3DDeviceManager9> dev_manager;
-  ScopedComPtr<IDirect3DDevice9> device;
+  base::win::ScopedComPtr<IDirect3DDeviceManager9> dev_manager;
+  base::win::ScopedComPtr<IDirect3DDevice9> device;
   if (decoder->use_dxva2()) {
     dev_manager.Attach(CreateD3DDevManager(video_window, device.Receive()));
     if (dev_manager.get() == NULL || device.get() == NULL) {

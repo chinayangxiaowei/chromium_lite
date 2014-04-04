@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,18 +6,17 @@
 #define CHROME_BROWSER_CHROMEOS_LOGIN_USER_IMAGE_SCREEN_H_
 #pragma once
 
-#include "base/threading/thread.h"
-#include "chrome/browser/chromeos/login/camera.h"
+#include "chrome/browser/chromeos/login/camera_controller.h"
 #include "chrome/browser/chromeos/login/user_image_view.h"
 #include "chrome/browser/chromeos/login/view_screen.h"
-#include "chrome/common/notification_observer.h"
-#include "chrome/common/notification_registrar.h"
+#include "content/common/notification_observer.h"
+#include "content/common/notification_registrar.h"
 #include "third_party/skia/include/core/SkBitmap.h"
 
 namespace chromeos {
 
 class UserImageScreen: public ViewScreen<UserImageView>,
-                       public Camera::Delegate,
+                       public CameraController::Delegate,
                        public UserImageView::Delegate,
                        public NotificationObserver {
  public:
@@ -29,17 +28,15 @@ class UserImageScreen: public ViewScreen<UserImageView>,
   virtual void Hide();
   virtual UserImageView* AllocateView();
 
-  // Camera::Delegate implementation:
-  virtual void OnInitializeSuccess();
-  virtual void OnInitializeFailure();
-  virtual void OnStartCapturingSuccess();
-  virtual void OnStartCapturingFailure();
+  // CameraController::Delegate implementation:
   virtual void OnCaptureSuccess();
   virtual void OnCaptureFailure();
 
   // UserImageView::Delegate implementation:
-  virtual void OnOK(const SkBitmap& image);
-  virtual void OnSkip();
+  virtual void StartCamera();
+  virtual void StopCamera();
+  virtual void OnPhotoTaken(const SkBitmap& image);
+  virtual void OnDefaultImageSelected(int index);
 
   // NotificationObserver implementation:
   virtual void Observe(NotificationType type,
@@ -47,24 +44,7 @@ class UserImageScreen: public ViewScreen<UserImageView>,
                        const NotificationDetails& details);
 
  private:
-  // Starts initializing the camera and shows the appropriate status on the
-  // screen.
-  void InitCamera();
-
-  // Capturing timer callback that updates image from camera.
-  void OnCaptureTimer();
-
-  // Object that handles video capturing.
-  scoped_refptr<Camera> camera_;
-
-  // Counts how many times in a row capture failed.
-  int capture_failure_counter_;
-
-  // Counts how many times camera initialization failed.
-  int camera_init_failure_counter_;
-
-  // Thread for camera to work on.
-  base::Thread camera_thread_;
+  CameraController camera_controller_;
 
   NotificationRegistrar registrar_;
 
@@ -74,4 +54,5 @@ class UserImageScreen: public ViewScreen<UserImageView>,
 }  // namespace chromeos
 
 #endif  // CHROME_BROWSER_CHROMEOS_LOGIN_USER_IMAGE_SCREEN_H_
+
 

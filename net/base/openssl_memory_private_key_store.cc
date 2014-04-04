@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,8 +9,8 @@
 #include "net/base/openssl_private_key_store.h"
 
 #include "base/logging.h"
-#include "base/openssl_util.h"
-#include "base/singleton.h"
+#include "base/memory/singleton.h"
+#include "base/synchronization/lock.h"
 #include "net/base/x509_certificate.h"
 
 namespace net {
@@ -52,7 +52,7 @@ class OpenSSLMemoryKeyStore : public OpenSSLPrivateKeyStore {
 
  private:
   std::vector<EVP_PKEY*> keys_;
-  Lock lock_;
+  base::Lock lock_;
 
   DISALLOW_COPY_AND_ASSIGN(OpenSSLMemoryKeyStore);
 };

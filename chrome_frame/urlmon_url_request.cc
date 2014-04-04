@@ -4,26 +4,27 @@
 
 #include "chrome_frame/urlmon_url_request.h"
 
-#include <wininet.h>
 #include <urlmon.h>
+#include <wininet.h>
 
 #include "base/logging.h"
+#include "base/memory/scoped_ptr.h"
 #include "base/message_loop.h"
-#include "base/scoped_ptr.h"
 #include "base/string_number_conversions.h"
 #include "base/stringprintf.h"
 #include "base/threading/platform_thread.h"
 #include "base/utf_string_conversions.h"
+#include "chrome/common/automation_messages.h"
 #include "chrome_frame/bind_context_info.h"
 #include "chrome_frame/chrome_frame_activex_base.h"
 #include "chrome_frame/extra_system_apis.h"
 #include "chrome_frame/html_utils.h"
-#include "chrome_frame/urlmon_url_request_private.h"
 #include "chrome_frame/urlmon_upload_data_stream.h"
+#include "chrome_frame/urlmon_url_request_private.h"
 #include "chrome_frame/utils.h"
 #include "net/base/load_flags.h"
-#include "net/http/http_util.h"
 #include "net/http/http_response_headers.h"
+#include "net/http/http_util.h"
 
 UrlmonUrlRequest::UrlmonUrlRequest()
     : pending_read_size_(0),
@@ -51,6 +52,10 @@ bool UrlmonUrlRequest::Start() {
   DCHECK(thread_ == 0 || thread_ == base::PlatformThread::CurrentId());
   thread_ = base::PlatformThread::CurrentId();
   status_.Start();
+  // Initialize the net::HostPortPair structure from the url initially. We may
+  // not receive the ip address of the host if the request is satisfied from
+  // the cache.
+  socket_address_ = net::HostPortPair::FromURL(GURL(url()));
   // The UrlmonUrlRequest instance can get destroyed in the context of
   // StartAsyncDownload if BindToStorage finishes synchronously with an error.
   // Grab a reference to protect against this.
@@ -180,7 +185,7 @@ void UrlmonUrlRequest::TerminateBind(TerminateBindCallback* callback) {
       // should get E_PENDING back and then later we'll get that call
       // to OnDataAvailable.
       std::string data;
-      ScopedComPtr<IStream> read_stream(pending_data_);
+      base::win::ScopedComPtr<IStream> read_stream(pending_data_);
       HRESULT hr;
       while ((hr = ReadStream(read_stream, 0xffff, &data)) == S_OK) {
         // Just drop the data.
@@ -214,7 +219,7 @@ size_t UrlmonUrlRequest::SendDataToDelegate(size_t bytes_to_read) {
       // where we can get a call to OnDataAvailable while inside Read and
       // in our OnDataAvailable call, we can release the stream object
       // while still using it.
-      ScopedComPtr<IStream> pending(pending_data_);
+      base::win::ScopedComPtr<IStream> pending(pending_data_);
       HRESULT hr = ReadStream(pending, bytes_to_read, &read_data);
       if (read_data.empty())
         pending_read_size_ = pending_data_read_save;
@@ -282,11 +287,18 @@ STDMETHODIMP UrlmonUrlRequest::OnProgress(ULONG progress, ULONG max_progress,
   }
 
   switch (status_code) {
+    case BINDSTATUS_CONNECTING: {
+      if (status_text) {
+        socket_address_.set_host(WideToUTF8(status_text));
+      }
+      break;
+    }
+
     case BINDSTATUS_REDIRECTING: {
       // If we receive a redirect for the initial pending request initiated
       // when our document loads we should stash it away and inform Chrome
       // accordingly when it requests data for the original URL.
-      ScopedComPtr<BindContextInfo> info;
+      base::win::ScopedComPtr<BindContextInfo> info;
       BindContextInfo::FromBindContext(bind_context_, info.Receive());
       DCHECK(info);
       GURL previously_redirected(info ? info->GetUrl() : std::wstring());
@@ -430,6 +442,9 @@ STDMETHODIMP UrlmonUrlRequest::GetBindInfo(DWORD* bind_flags,
 
   *bind_flags = BINDF_ASYNCHRONOUS | BINDF_ASYNCSTORAGE | BINDF_PULLDATA;
 
+  bind_info->dwOptionsFlags = INTERNET_FLAG_NO_AUTO_REDIRECT;
+  bind_info->dwOptions = BINDINFO_OPTIONS_WININETFLAG;
+
   // TODO(ananta)
   // Look into whether the other load flags need to be supported in chrome
   // frame.
@@ -472,6 +487,9 @@ STDMETHODIMP UrlmonUrlRequest::GetBindInfo(DWORD* bind_flags,
 
     if (get_upload_data(&bind_info->stgmedData.pstm) == S_OK) {
       bind_info->stgmedData.tymed = TYMED_ISTREAM;
+#pragma warning(disable:4244)
+      bind_info->cbstgmedData = post_data_len();
+#pragma warning(default:4244)
       DVLOG(1) << __FUNCTION__ << me() << method()
                << " request with " << base::Int64ToString(post_data_len())
                << " bytes. url=" << url();
@@ -568,11 +586,9 @@ STDMETHODIMP UrlmonUrlRequest::BeginningTransaction(const wchar_t* url,
 
   std::string new_headers;
   if (post_data_len() > 0) {
-    // Tack on the Content-Length header since when using an IStream type
-    // STGMEDIUM, it looks like it doesn't get set for us :(
-    new_headers = base::StringPrintf(
-        "Content-Length: %s\r\n",
-        base::Int64ToString(post_data_len()).c_str());
+    if (is_chunked_upload()) {
+      new_headers = base::StringPrintf("Transfer-Encoding: chunked\r\n");
+    }
   }
 
   if (!extra_headers().empty()) {
@@ -662,7 +678,8 @@ STDMETHODIMP UrlmonUrlRequest::OnResponse(DWORD dwResponseCode,
                     0,                    // size
                     base::Time(),         // last_modified
                     status_.get_redirection().utf8_url,
-                    status_.get_redirection().http_code);
+                    status_.get_redirection().http_code,
+                    socket_address_);
   return S_OK;
 }
 
@@ -791,16 +808,16 @@ HRESULT UrlmonUrlRequest::StartAsyncDownload() {
   }
 
   if (SUCCEEDED(hr)) {
-    ScopedComPtr<IStream> stream;
+    base::win::ScopedComPtr<IStream> stream;
 
     // BindToStorage may complete synchronously.
     // We still get all the callbacks - OnStart/StopBinding, this may result
     // in destruction of our object. It's fine but we access some members
     // below for debug info. :)
-    ScopedComPtr<IHttpSecurity> self(this);
+    base::win::ScopedComPtr<IHttpSecurity> self(this);
 
     // Inform our moniker patch this binding should not be tortured.
-    ScopedComPtr<BindContextInfo> info;
+    base::win::ScopedComPtr<BindContextInfo> info;
     BindContextInfo::FromBindContext(bind_context_, info.Receive());
     DCHECK(info);
     if (info)
@@ -837,7 +854,7 @@ void UrlmonUrlRequest::NotifyDelegateAndDie() {
   delegate_ = NULL;
   ReleaseBindings();
   TerminateTransaction();
-  if (delegate) {
+  if (delegate && id() != -1) {
     net::URLRequestStatus result = status_.get_result();
     delegate->OnResponseEnd(id(), result);
   } else {
@@ -857,7 +874,7 @@ void UrlmonUrlRequest::TerminateTransaction() {
     // on this with the special flags 0x2000000 cleanly releases the
     // transaction.
     static const int kUrlmonTerminateTransactionFlags = 0x2000000;
-    ScopedComPtr<BindContextInfo> info;
+    base::win::ScopedComPtr<BindContextInfo> info;
     BindContextInfo::FromBindContext(bind_context_, info.Receive());
     DCHECK(info);
     if (info && info->protocol()) {
@@ -950,7 +967,7 @@ void UrlmonUrlRequestManager::SetInfoForUrl(const std::wstring& url,
     DCHECK(start_url.is_valid());
     DCHECK(pending_request_ == NULL);
 
-    ScopedComPtr<BindContextInfo> info;
+    base::win::ScopedComPtr<BindContextInfo> info;
     BindContextInfo::FromBindContext(bind_ctx, info.Receive());
     DCHECK(info);
     IStream* cache = info ? info->cache() : NULL;
@@ -981,22 +998,22 @@ void UrlmonUrlRequestManager::StartRequest(int request_id,
   bool is_started = false;
   if (pending_request_) {
     if (pending_request_->url() != request_info.url) {
-      DLOG(WARNING) << __FUNCTION__
-                    << "Received unexpected url request for url:"
-                    << request_info.url
-                    << ".Pending url request for url:"
-                    << pending_request_->url()
-                    << " was expected.";
-      net::URLRequestStatus result;
-      result.set_status(net::URLRequestStatus::FAILED);
-      OnResponseEnd(request_id, result);
-      return;
+      DLOG(INFO) << __FUNCTION__
+                 << "Received url request for url:"
+                 << request_info.url
+                 << ". Stopping pending url request for url:"
+                 << pending_request_->url();
+      pending_request_->Stop();
+      pending_request_ = NULL;
+    } else {
+      new_request.swap(pending_request_);
+      is_started = true;
+      DVLOG(1) << __FUNCTION__ << new_request->me()
+               << " assigned id " << request_id;
     }
-    new_request.swap(pending_request_);
-    is_started = true;
-    DVLOG(1) << __FUNCTION__ << new_request->me()
-             << " assigned id " << request_id;
-  } else {
+  }
+
+  if (!is_started) {
     CComObject<UrlmonUrlRequest>* created_request = NULL;
     CComObject<UrlmonUrlRequest>::CreateInstance(&created_request);
     new_request = created_request;
@@ -1158,13 +1175,13 @@ void UrlmonUrlRequestManager::StopAll() {
 void UrlmonUrlRequestManager::OnResponseStarted(int request_id,
     const char* mime_type, const char* headers, int size,
     base::Time last_modified, const std::string& redirect_url,
-    int redirect_status) {
+    int redirect_status, const net::HostPortPair& socket_address) {
   DCHECK_NE(request_id, -1);
   DVLOG(1) << __FUNCTION__;
   DCHECK(LookupRequest(request_id) != NULL);
   ++calling_delegate_;
   delegate_->OnResponseStarted(request_id, mime_type, headers, size,
-      last_modified, redirect_url, redirect_status);
+      last_modified, redirect_url, redirect_status, socket_address);
   --calling_delegate_;
 }
 
@@ -1228,7 +1245,7 @@ void UrlmonUrlRequestManager::AddPrivacyDataForUrl(
 
   bool fire_privacy_event = false;
 
-  if (privacy_info_.privacy_records.size() == 0)
+  if (privacy_info_.privacy_records.empty())
     flags |= PRIVACY_URLISTOPLEVEL;
 
   if (!privacy_info_.privacy_impacted) {

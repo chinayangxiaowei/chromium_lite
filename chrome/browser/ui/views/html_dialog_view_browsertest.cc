@@ -5,17 +5,17 @@
 #include "chrome/test/ui/ui_test.h"
 
 #include "base/file_path.h"
+#include "base/memory/singleton.h"
 #include "base/message_loop.h"
-#include "base/singleton.h"
-#include "chrome/browser/dom_ui/html_dialog_ui.h"
-#include "chrome/browser/tab_contents/tab_contents.h"
-#include "chrome/browser/renderer_host/render_widget_host_view.h"
 #include "chrome/browser/ui/views/html_dialog_view.h"
+#include "chrome/browser/ui/webui/html_dialog_ui.h"
 #include "chrome/common/url_constants.h"
 #include "chrome/test/in_process_browser_test.h"
 #include "chrome/test/ui_test_utils.h"
-#include "testing/gtest/include/gtest/gtest.h"
+#include "content/browser/renderer_host/render_widget_host_view.h"
+#include "content/browser/tab_contents/tab_contents.h"
 #include "testing/gmock/include/gmock/gmock.h"
+#include "testing/gtest/include/gtest/gtest.h"
 #include "views/widget/widget.h"
 #include "views/window/window.h"
 
@@ -44,8 +44,8 @@ class TestHtmlDialogUIDelegate : public HtmlDialogUIDelegate {
   virtual GURL GetDialogContentURL() const {
     return GURL(chrome::kAboutBlankURL);
   }
-  virtual void GetDOMMessageHandlers(
-      std::vector<DOMMessageHandler*>* handlers) const { }
+  virtual void GetWebUIMessageHandlers(
+      std::vector<WebUIMessageHandler*>* handlers) const { }
   virtual void GetDialogSize(gfx::Size* size) const {
     size->set_width(40);
     size->set_height(40);
@@ -113,13 +113,14 @@ class HtmlDialogBrowserTest : public InProcessBrowserTest {
 #endif
 };
 
-#if defined(OS_LINUX)
+#if defined(OS_LINUX) && !defined(OS_CHROMEOS)
 #define MAYBE_SizeWindow SizeWindow
 #else
 // http://code.google.com/p/chromium/issues/detail?id=52602
 // Windows has some issues resizing windows- an off by one problem,
 // and a minimum size that seems too big.  This file isn't included in
-// Mac builds yet.
+// Mac builds yet. On Chrome OS, this test doesn't apply since ChromeOS
+// doesn't allow resizing of windows.
 #define MAYBE_SizeWindow DISABLED_SizeWindow
 #endif
 
@@ -138,8 +139,7 @@ IN_PROC_BROWSER_TEST_F(HtmlDialogBrowserTest, MAYBE_SizeWindow) {
   MessageLoopForUI::current()->AddObserver(
       WindowChangedObserver::GetInstance());
 
-  gfx::Rect bounds;
-  html_view->GetWidget()->GetBounds(&bounds, false);
+  gfx::Rect bounds = html_view->GetWidget()->GetClientAreaScreenBounds();
 
   gfx::Rect set_bounds = bounds;
   gfx::Rect actual_bounds, rwhv_bounds;
@@ -150,7 +150,7 @@ IN_PROC_BROWSER_TEST_F(HtmlDialogBrowserTest, MAYBE_SizeWindow) {
 
   html_view->MoveContents(tab_contents, set_bounds);
   ui_test_utils::RunMessageLoop();
-  html_view->GetWidget()->GetBounds(&actual_bounds, false);
+  actual_bounds = html_view->GetWidget()->GetClientAreaScreenBounds();
   EXPECT_EQ(set_bounds, actual_bounds);
 
   rwhv_bounds =
@@ -166,7 +166,7 @@ IN_PROC_BROWSER_TEST_F(HtmlDialogBrowserTest, MAYBE_SizeWindow) {
 
   html_view->MoveContents(tab_contents, set_bounds);
   ui_test_utils::RunMessageLoop();
-  html_view->GetWidget()->GetBounds(&actual_bounds, false);
+  actual_bounds = html_view->GetWidget()->GetClientAreaScreenBounds();
   EXPECT_EQ(set_bounds, actual_bounds);
 
   rwhv_bounds =
@@ -182,7 +182,7 @@ IN_PROC_BROWSER_TEST_F(HtmlDialogBrowserTest, MAYBE_SizeWindow) {
 
   html_view->MoveContents(tab_contents, set_bounds);
   ui_test_utils::RunMessageLoop();
-  html_view->GetWidget()->GetBounds(&actual_bounds, false);
+  actual_bounds = html_view->GetWidget()->GetClientAreaScreenBounds();
   EXPECT_EQ(set_bounds, actual_bounds);
 
   rwhv_bounds =
@@ -198,7 +198,7 @@ IN_PROC_BROWSER_TEST_F(HtmlDialogBrowserTest, MAYBE_SizeWindow) {
 
   html_view->MoveContents(tab_contents, set_bounds);
   ui_test_utils::RunMessageLoop();
-  html_view->GetWidget()->GetBounds(&actual_bounds, false);
+  actual_bounds = html_view->GetWidget()->GetClientAreaScreenBounds();
   EXPECT_LT(0, actual_bounds.width());
   EXPECT_LT(0, actual_bounds.height());
 

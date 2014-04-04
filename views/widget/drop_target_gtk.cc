@@ -1,4 +1,4 @@
-// Copyright (c) 2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -11,11 +11,11 @@
 
 #include "base/file_path.h"
 #include "base/utf_string_conversions.h"
-#include "gfx/point.h"
 #include "net/base/net_util.h"
 #include "ui/base/dragdrop/drag_drop_types.h"
 #include "ui/base/dragdrop/gtk_dnd_util.h"
 #include "ui/base/dragdrop/os_exchange_data_provider_gtk.h"
+#include "ui/gfx/point.h"
 #include "views/widget/root_view.h"
 #include "views/widget/widget_gtk.h"
 
@@ -104,7 +104,7 @@ void DropTargetGtk::OnDragDataReceived(GdkDragContext* context,
       UTF8ToUTF16(as_char, strlen(as_char), &result);
       g_free(text_data);
     }
-    data_provider().SetString(UTF16ToWideHack(result));
+    data_provider().SetString(result);
   } else if (requested_custom_formats_.find(data->type) !=
              requested_custom_formats_.end()) {
     Pickle result;
@@ -115,24 +115,24 @@ void DropTargetGtk::OnDragDataReceived(GdkDragContext* context,
     GURL url;
     string16 title;
     ui::ExtractNamedURL(data, &url, &title);
-    data_provider().SetURL(url, UTF16ToWideHack(title));
+    data_provider().SetURL(url, title);
   } else if (data->type == ui::GetAtomForTarget(ui::TEXT_URI_LIST)) {
     std::vector<GURL> urls;
     ui::ExtractURIList(data, &urls);
     if (urls.size() == 1 && urls[0].is_valid()) {
-      data_provider().SetURL(urls[0], std::wstring());
+      data_provider().SetURL(urls[0], string16());
 
       // TEXT_URI_LIST is used for files as well as urls.
       if (urls[0].SchemeIsFile()) {
         FilePath file_path;
         if (net::FileURLToFilePath(urls[0], &file_path))
-          data_provider().SetFilename(file_path.ToWStringHack());
+          data_provider().SetFilename(file_path);
       }
     } else {
       // Consumers of OSExchangeData will see this as an invalid URL. That is,
       // when GetURL is invoked on the OSExchangeData this triggers false to
       // be returned.
-      data_provider().SetURL(GURL(), std::wstring());
+      data_provider().SetURL(GURL(), string16());
     }
   }
 
@@ -273,15 +273,18 @@ void DropTargetGtk::RequestFormats(GdkDragContext* context,
   if ((formats & OSExchangeData::STRING) != 0 &&
       (requested_formats_ & OSExchangeData::STRING) == 0) {
     requested_formats_ |= OSExchangeData::STRING;
-    if (known_formats.count(GDK_TARGET_STRING)) {
-      gtk_drag_get_data(widget, context, GDK_TARGET_STRING, time);
-    } else if (known_formats.count(gdk_atom_intern("text/plain", false))) {
-      gtk_drag_get_data(widget, context, gdk_atom_intern("text/plain", false),
-                        time);
+    if (known_formats.count(gdk_atom_intern("UTF8_STRING", false))) {
+      gtk_drag_get_data(widget, context,
+                        gdk_atom_intern("UTF8_STRING", false), time);
     } else if (known_formats.count(gdk_atom_intern("text/plain;charset=utf-8",
                                                    false))) {
       gtk_drag_get_data(widget, context,
                         gdk_atom_intern("text/plain;charset=utf-8", false),
+                        time);
+    } else if (known_formats.count(GDK_TARGET_STRING)) {
+      gtk_drag_get_data(widget, context, GDK_TARGET_STRING, time);
+    } else if (known_formats.count(gdk_atom_intern("text/plain", false))) {
+      gtk_drag_get_data(widget, context, gdk_atom_intern("text/plain", false),
                         time);
     } else if (known_formats.count(gdk_atom_intern("TEXT", false))) {
         gtk_drag_get_data(widget, context, gdk_atom_intern("TEXT", false),
@@ -289,9 +292,6 @@ void DropTargetGtk::RequestFormats(GdkDragContext* context,
     } else if (known_formats.count(gdk_atom_intern("STRING", false))) {
       gtk_drag_get_data(widget, context, gdk_atom_intern("STRING", false),
                         time);
-    } else if (known_formats.count(gdk_atom_intern("UTF8_STRING", false))) {
-      gtk_drag_get_data(widget, context,
-                        gdk_atom_intern("UTF8_STRING", false), time);
     }
   }
   if ((formats & OSExchangeData::URL) != 0 &&

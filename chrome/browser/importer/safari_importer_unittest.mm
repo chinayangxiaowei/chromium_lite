@@ -1,29 +1,21 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/importer/safari_importer.h"
 
+#include "app/sql/connection.h"
 #include "base/basictypes.h"
 #include "base/file_path.h"
 #include "base/file_util.h"
 #include "base/path_service.h"
 #include "base/sys_string_conversions.h"
 #include "base/utf_string_conversions.h"
-#include "base/values.h"
 #include "chrome/browser/history/history_types.h"
+#include "chrome/browser/importer/importer_bridge.h"
 #include "chrome/common/chrome_paths.h"
 #include "chrome/test/file_test_utils.h"
-#include "chrome/browser/importer/importer_bridge.h"
 #include "testing/platform_test.h"
-
-using importer::COOKIES;
-using importer::FAVORITES;
-using importer::HISTORY;
-using importer::HOME_PAGE;
-using importer::NONE;
-using importer::PASSWORDS;
-using importer::SEARCH_ENGINES;
 
 // In order to test the Safari import functionality effectively, we store a
 // simulated Library directory containing dummy data files in the same
@@ -114,27 +106,27 @@ TEST_F(SafariImporterTest, BookmarkImport) {
       EXPECT_EQ(entry.path.size(), 0U);
     } else {
       EXPECT_EQ(entry.path.size(), 1U);
-      EXPECT_EQ(entry.path[0], kImportedBookmarksData[i].path);
-      EXPECT_EQ(entry.title, kImportedBookmarksData[i].title);
+      EXPECT_EQ(UTF16ToWideHack(entry.path[0]), kImportedBookmarksData[i].path);
+      EXPECT_EQ(UTF16ToWideHack(entry.title), kImportedBookmarksData[i].title);
     }
   }
 }
 
-TEST_F(SafariImporterTest, FavIconImport) {
+TEST_F(SafariImporterTest, FaviconImport) {
   scoped_refptr<SafariImporter> importer(GetSafariImporter());
-  sqlite_utils::scoped_sqlite_db_ptr db(importer->OpenFavIconDB());
-  ASSERT_TRUE(db.get() != NULL);
+  sql::Connection db;
+  ASSERT_TRUE(importer->OpenDatabase(&db));
 
   SafariImporter::FaviconMap favicon_map;
-  importer->ImportFavIconURLs(db.get(), &favicon_map);
+  importer->ImportFaviconURLs(&db, &favicon_map);
 
-  std::vector<history::ImportedFavIconUsage> favicons;
-  importer->LoadFaviconData(db.get(), favicon_map, &favicons);
+  std::vector<history::ImportedFaviconUsage> favicons;
+  importer->LoadFaviconData(&db, favicon_map, &favicons);
 
   size_t num_favicons = favicons.size();
   ASSERT_EQ(num_favicons, 2U);
 
-  history::ImportedFavIconUsage &fav0 = favicons[0];
+  history::ImportedFaviconUsage &fav0 = favicons[0];
   EXPECT_EQ("http://s.ytimg.com/yt/favicon-vfl86270.ico",
             fav0.favicon_url.spec());
   EXPECT_GT(fav0.png_data.size(), 0U);
@@ -142,7 +134,7 @@ TEST_F(SafariImporterTest, FavIconImport) {
   EXPECT_TRUE(fav0.urls.find(GURL("http://www.youtube.com/"))
       != fav0.urls.end());
 
-  history::ImportedFavIconUsage &fav1 = favicons[1];
+  history::ImportedFaviconUsage &fav1 = favicons[1];
   EXPECT_EQ("http://www.opensearch.org/favicon.ico",
             fav1.favicon_url.spec());
   EXPECT_GT(fav1.png_data.size(), 0U);
@@ -156,13 +148,13 @@ TEST_F(SafariImporterTest, FavIconImport) {
 }
 
 TEST_F(SafariImporterTest, CanImport) {
-  uint16 items = NONE;
+  uint16 items = importer::NONE;
   EXPECT_TRUE(SafariImporter::CanImport(GetTestSafariLibraryPath(), &items));
-  EXPECT_EQ(items, HISTORY | FAVORITES);
-  EXPECT_EQ(items & COOKIES, NONE);
-  EXPECT_EQ(items & PASSWORDS, NONE);
-  EXPECT_EQ(items & SEARCH_ENGINES, NONE);
-  EXPECT_EQ(items & HOME_PAGE, NONE);
+  EXPECT_EQ(items, importer::HISTORY | importer::FAVORITES);
+  EXPECT_EQ(items & importer::COOKIES, importer::NONE);
+  EXPECT_EQ(items & importer::PASSWORDS, importer::NONE);
+  EXPECT_EQ(items & importer::SEARCH_ENGINES, importer::NONE);
+  EXPECT_EQ(items & importer::HOME_PAGE, importer::NONE);
 
   // Check that we don't import anything from a bogus library directory.
   FilePath fake_library_dir;

@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -20,7 +20,6 @@ class MockNetworkLibrary;
 class MockPowerLibrary;
 class MockScreenLockLibrary;
 class MockSpeechSynthesisLibrary;
-class MockSystemLibrary;
 class MockTouchpadLibrary;
 
 // Class for initializing mocks for some parts of CrosLibrary. Once you mock
@@ -52,7 +51,6 @@ class CrosMock {
   void InitMockScreenLockLibrary();
   void InitMockSpeechSynthesisLibrary();
   void InitMockTouchpadLibrary();
-  void InitMockSystemLibrary();
 
   // Get mocks.
   MockCryptohomeLibrary* mock_cryptohome_library();
@@ -62,7 +60,6 @@ class CrosMock {
   MockPowerLibrary* mock_power_library();
   MockScreenLockLibrary* mock_screen_lock_library();
   MockSpeechSynthesisLibrary* mock_speech_synthesis_library();
-  MockSystemLibrary* mock_system_library();
   MockTouchpadLibrary* mock_touchpad_library();
 
   // This method sets up corresponding expectations for basic mocks that
@@ -80,11 +77,13 @@ class CrosMock {
   void SetPowerLibraryStatusAreaExpectations();
   void SetPowerLibraryExpectations();
   void SetSpeechSynthesisLibraryExpectations();
-  void SetSystemLibraryStatusAreaExpectations();
-  void SetSystemLibraryExpectations();
   void SetTouchpadLibraryExpectations();
 
   void TearDownMocks();
+
+  // Creates input method descriptors. This is a helper function for
+  // SetInputMethodLibraryStatusAreaExpectations().
+  static InputMethodDescriptors* CreateInputMethodDescriptors();
 
   // TestApi gives access to CrosLibrary private members.
   chromeos::CrosLibrary::TestApi* test_api();
@@ -99,14 +98,14 @@ class CrosMock {
   MockPowerLibrary* mock_power_library_;
   MockScreenLockLibrary* mock_screen_lock_library_;
   MockSpeechSynthesisLibrary* mock_speech_synthesis_library_;
-  MockSystemLibrary* mock_system_library_;
   MockTouchpadLibrary* mock_touchpad_library_;
 
   ImePropertyList ime_properties_;
-  WifiNetwork wifi_network_;
+  InputMethodDescriptor current_input_method_;
+  InputMethodDescriptor previous_input_method_;
   WifiNetworkVector wifi_networks_;
-  CellularNetwork cellular_network_;
   CellularNetworkVector cellular_networks_;
+  VirtualNetworkVector virtual_networks_;
   std::string empty_string_;
 
   DISALLOW_COPY_AND_ASSIGN(CrosMock);

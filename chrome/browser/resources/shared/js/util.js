@@ -4,7 +4,7 @@
 
 /**
  * The global object.
- * @param {!Object}
+ * @type {!Object}
  */
 const global = this;
 
@@ -111,6 +111,10 @@ function swapDomNodes(a, b) {
 // Handle click on a link. If the link points to a chrome: or file: url, then
 // call into the browser to do the navigation.
 document.addEventListener('click', function(e) {
+  // Allow preventDefault to work.
+  if (!e.returnValue)
+    return;
+
   var el = e.target;
   if (el.nodeType == Node.ELEMENT_NODE &&
       el.webkitMatchesSelector('A, A *')) {
@@ -120,9 +124,15 @@ document.addEventListener('click', function(e) {
 
     if ((el.protocol == 'file:' || el.protocol == 'about:') &&
         (e.button == 0 || e.button == 1)) {
-      chrome.send('navigateToUrl',
-          [el.href, String(e.button), String(e.altKey), String(e.ctrlKey),
-           String(e.shiftKey)]);
+      chrome.send('navigateToUrl', [
+        el.href,
+        el.target,
+        e.button,
+        e.altKey,
+        e.ctrlKey,
+        e.metaKey,
+        e.shiftKey
+      ]);
       e.preventDefault();
     }
   }

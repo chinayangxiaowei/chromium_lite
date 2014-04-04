@@ -4,13 +4,13 @@
 
 #include "chrome/browser/ui/views/tab_contents/native_tab_contents_container_win.h"
 
-#include "chrome/browser/renderer_host/render_widget_host_view.h"
-#include "chrome/browser/tab_contents/interstitial_page.h"
-#include "chrome/browser/tab_contents/tab_contents.h"
 #include "chrome/browser/ui/view_ids.h"
 #include "chrome/browser/ui/views/tab_contents/tab_contents_container.h"
-#include "chrome/browser/ui/views/tab_contents/tab_contents_view_win.h"
-
+#include "chrome/browser/ui/views/tab_contents/tab_contents_view_views.h"
+#include "content/browser/renderer_host/render_widget_host_view.h"
+#include "content/browser/tab_contents/interstitial_page.h"
+#include "content/browser/tab_contents/tab_contents.h"
+#include "ui/base/accessibility/accessible_view_state.h"
 #include "views/focus/focus_manager.h"
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -38,9 +38,13 @@ void NativeTabContentsContainerWin::AttachContents(TabContents* contents) {
 }
 
 void NativeTabContentsContainerWin::DetachContents(TabContents* contents) {
-  // TODO(brettw) should this move to NativeViewHost::Detach which is called
-  // below?
-  // It needs cleanup regardless.
+  // Detach the TabContents.  Do this before we unparent the
+  // TabContentsViewViews so that the window hierarchy is intact for any
+  // cleanup during Detach().
+  Detach();
+
+  // TODO(brettw) should this move to NativeViewHost::Detach?  It
+  // needs cleanup regardless.
   HWND container_hwnd = contents->GetNativeView();
   if (container_hwnd) {
     // Hide the contents before adjusting its parent to avoid a full desktop
@@ -48,11 +52,8 @@ void NativeTabContentsContainerWin::DetachContents(TabContents* contents) {
     ShowWindow(container_hwnd, SW_HIDE);
 
     // Reset the parent to NULL to ensure hidden tabs don't receive messages.
-    static_cast<TabContentsViewWin*>(contents->view())->Unparent();
+    static_cast<TabContentsViewViews*>(contents->view())->Unparent();
   }
-
-  // Now detach the TabContents.
-  Detach();
 }
 
 void NativeTabContentsContainerWin::SetFastResize(bool fast_resize) {
@@ -64,7 +65,7 @@ void NativeTabContentsContainerWin::RenderViewHostChanged(
     RenderViewHost* new_host) {
   // If we are focused, we need to pass the focus to the new RenderViewHost.
   if (GetFocusManager()->GetFocusedView() == this)
-    Focus();
+    OnFocus();
 }
 
 views::View* NativeTabContentsContainerWin::GetView() {
@@ -101,19 +102,19 @@ bool NativeTabContentsContainerWin::IsFocusable() const {
   return container_->tab_contents() != NULL;
 }
 
-void NativeTabContentsContainerWin::Focus() {
+void NativeTabContentsContainerWin::OnFocus() {
   if (container_->tab_contents())
     container_->tab_contents()->Focus();
 }
 
 void NativeTabContentsContainerWin::RequestFocus() {
-  // This is a hack to circumvent the fact that a the Focus() method is not
+  // This is a hack to circumvent the fact that a the OnFocus() method is not
   // invoked when RequestFocus() is called on an already focused view.
   // The TabContentsContainer is the view focused when the TabContents has
   // focus.  When switching between from one tab that has focus to another tab
   // that should also have focus, RequestFocus() is invoked one the
-  // TabContentsContainer.  In order to make sure Focus() is invoked we need to
-  // clear the focus before hands.
+  // TabContentsContainer.  In order to make sure OnFocus() is invoked we need
+  // to clear the focus before hands.
   {
     // Disable notifications.  Clear focus will assign the focus to the main
     // browser window.  Because this change of focus was not user requested,
@@ -129,8 +130,9 @@ void NativeTabContentsContainerWin::AboutToRequestFocusFromTabTraversal(
   container_->tab_contents()->FocusThroughTabTraversal(reverse);
 }
 
-AccessibilityTypes::Role NativeTabContentsContainerWin::GetAccessibleRole() {
-  return AccessibilityTypes::ROLE_GROUPING;
+void NativeTabContentsContainerWin::GetAccessibleState(
+    ui::AccessibleViewState* state) {
+  state->role = ui::AccessibilityTypes::ROLE_GROUPING;
 }
 
 ////////////////////////////////////////////////////////////////////////////////

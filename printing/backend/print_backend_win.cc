@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,7 +7,7 @@
 #include <objidl.h>
 #include <winspool.h>
 
-#include "base/scoped_ptr.h"
+#include "base/memory/scoped_ptr.h"
 #include "base/string_piece.h"
 #include "base/utf_string_conversions.h"
 #include "base/win/scoped_bstr.h"
@@ -15,9 +15,6 @@
 #include "base/win/scoped_hglobal.h"
 #include "printing/backend/print_backend_consts.h"
 #include "printing/backend/win_helper.h"
-
-using base::win::ScopedBstr;
-using base::win::ScopedComPtr;
 
 namespace {
 
@@ -43,7 +40,7 @@ class PrintBackendWin : public PrintBackend {
   PrintBackendWin() {}
   virtual ~PrintBackendWin() {}
 
-  virtual void EnumeratePrinters(PrinterList* printer_list);
+  virtual bool EnumeratePrinters(PrinterList* printer_list);
 
   virtual bool GetPrinterCapsAndDefaults(const std::string& printer_name,
                                          PrinterCapsAndDefaults* printer_info);
@@ -51,35 +48,47 @@ class PrintBackendWin : public PrintBackend {
   virtual bool IsValidPrinter(const std::string& printer_name);
 };
 
-void PrintBackendWin::EnumeratePrinters(PrinterList* printer_list) {
+bool PrintBackendWin::EnumeratePrinters(PrinterList* printer_list) {
   DCHECK(printer_list);
   DWORD bytes_needed = 0;
   DWORD count_returned = 0;
   BOOL ret = EnumPrinters(PRINTER_ENUM_LOCAL|PRINTER_ENUM_CONNECTIONS, NULL, 2,
                           NULL, 0, &bytes_needed, &count_returned);
-  if (0 != bytes_needed) {
-    scoped_ptr<BYTE> printer_info_buffer(new BYTE[bytes_needed]);
-    ret = EnumPrinters(PRINTER_ENUM_LOCAL|PRINTER_ENUM_CONNECTIONS, NULL, 2,
-                       printer_info_buffer.get(), bytes_needed, &bytes_needed,
-                       &count_returned);
-    DCHECK(ret);
-    PRINTER_INFO_2* printer_info =
-        reinterpret_cast<PRINTER_INFO_2*>(printer_info_buffer.get());
-    for (DWORD index = 0; index < count_returned; index++) {
-      PrinterBasicInfo info;
-      info.printer_name = WideToUTF8(printer_info[index].pPrinterName);
-      if (printer_info[index].pComment)
-        info.printer_description = WideToUTF8(printer_info[index].pComment);
-      info.printer_status = printer_info[index].Status;
-      if (printer_info[index].pLocation)
-        info.options[kLocationTagName] =
-            WideToUTF8(printer_info[index].pLocation);
-      if (printer_info[index].pDriverName)
-        info.options[kDriverNameTagName] =
-            WideToUTF8(printer_info[index].pDriverName);
-      printer_list->push_back(info);
-    }
+  if (!bytes_needed)
+    return false;
+  scoped_ptr<BYTE> printer_info_buffer(new BYTE[bytes_needed]);
+  ret = EnumPrinters(PRINTER_ENUM_LOCAL|PRINTER_ENUM_CONNECTIONS, NULL, 2,
+                     printer_info_buffer.get(), bytes_needed, &bytes_needed,
+                     &count_returned);
+  DCHECK(ret);
+  if (!ret)
+    return false;
+
+  // Getting the name of the default printer.
+  DWORD size = MAX_PATH;
+  TCHAR default_printer_name[MAX_PATH];
+  BOOL default_printer_exists = ::GetDefaultPrinter(
+      default_printer_name, &size);
+
+  PRINTER_INFO_2* printer_info =
+      reinterpret_cast<PRINTER_INFO_2*>(printer_info_buffer.get());
+  for (DWORD index = 0; index < count_returned; index++) {
+    PrinterBasicInfo info;
+    info.printer_name = WideToUTF8(printer_info[index].pPrinterName);
+    if (default_printer_exists)
+      info.is_default = (info.printer_name == WideToUTF8(default_printer_name));
+    if (printer_info[index].pComment)
+      info.printer_description = WideToUTF8(printer_info[index].pComment);
+    info.printer_status = printer_info[index].Status;
+    if (printer_info[index].pLocation)
+      info.options[kLocationTagName] =
+          WideToUTF8(printer_info[index].pLocation);
+    if (printer_info[index].pDriverName)
+      info.options[kDriverNameTagName] =
+          WideToUTF8(printer_info[index].pDriverName);
+    printer_list->push_back(info);
   }
+  return true;
 }
 
 bool PrintBackendWin::GetPrinterCapsAndDefaults(
@@ -99,12 +108,12 @@ bool PrintBackendWin::GetPrinterCapsAndDefaults(
   HRESULT hr = XPSModule::OpenProvider(printer_name_wide, 1, &provider);
   DCHECK(SUCCEEDED(hr));
   if (provider) {
-    ScopedComPtr<IStream> print_capabilities_stream;
+    base::win::ScopedComPtr<IStream> print_capabilities_stream;
     hr = CreateStreamOnHGlobal(NULL, TRUE,
                                print_capabilities_stream.Receive());
     DCHECK(SUCCEEDED(hr));
     if (print_capabilities_stream) {
-      ScopedBstr error;
+      base::win::ScopedBstr error;
       hr = XPSModule::GetPrintCapabilities(provider,
                                            NULL,
                                            print_capabilities_stream,
@@ -134,7 +143,7 @@ bool PrintBackendWin::GetPrinterCapsAndDefaults(
       DocumentProperties(
           NULL, printer_handle, const_cast<LPTSTR>(printer_name_wide.c_str()),
           devmode_out, NULL, DM_OUT_BUFFER);
-      ScopedComPtr<IStream> printer_defaults_stream;
+      base::win::ScopedComPtr<IStream> printer_defaults_stream;
       hr = CreateStreamOnHGlobal(NULL, TRUE,
                                  printer_defaults_stream.Receive());
       DCHECK(SUCCEEDED(hr));

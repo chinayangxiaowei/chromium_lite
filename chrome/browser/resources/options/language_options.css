@@ -3,7 +3,8 @@
   margin: 10px 0;
 }
 
-.language-options button {
+.language-options-lower-left button,
+.language-options-right button {
   min-width: 70px;
 }
 
@@ -12,10 +13,6 @@
   font-size: 100%;
   font-weight: bold;
   margin-top: 12px;
-}
-
-.language-options label {
-  display: block;
 }
 
 .language-options-contents  {

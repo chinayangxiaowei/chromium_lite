@@ -7,23 +7,26 @@
 #include <gtk/gtk.h>
 
 #include "base/utf_string_conversions.h"
-#include "chrome/browser/browser_window.h"
-#include "chrome/browser/dom_ui/html_dialog_ui.h"
-#include "chrome/browser/tab_contents/tab_contents.h"
 #include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_dialogs.h"
+#include "chrome/browser/ui/browser_window.h"
 #include "chrome/browser/ui/gtk/gtk_util.h"
 #include "chrome/browser/ui/gtk/tab_contents_container_gtk.h"
-#include "chrome/common/native_web_keyboard_event.h"
-#include "ipc/ipc_message.h"
+#include "chrome/browser/ui/tab_contents/tab_contents_wrapper.h"
+#include "chrome/browser/ui/webui/html_dialog_ui.h"
+#include "content/browser/tab_contents/tab_contents.h"
+#include "content/common/native_web_keyboard_event.h"
 
-// static
-void HtmlDialogGtk::ShowHtmlDialogGtk(Browser* browser,
-                                      HtmlDialogUIDelegate* delegate,
-                                      gfx::NativeWindow parent_window) {
+namespace browser {
+
+gfx::NativeWindow ShowHtmlDialog(gfx::NativeWindow parent, Profile* profile,
+                                 HtmlDialogUIDelegate* delegate) {
   HtmlDialogGtk* html_dialog =
-      new HtmlDialogGtk(browser->profile(), delegate, parent_window);
-  html_dialog->InitDialog();
+      new HtmlDialogGtk(profile, delegate, parent);
+  return html_dialog->InitDialog();
 }
+
+} // namespace browser
 
 ////////////////////////////////////////////////////////////////////////////////
 // HtmlDialogGtk, public:
@@ -58,10 +61,10 @@ GURL HtmlDialogGtk::GetDialogContentURL() const {
     return GURL();
 }
 
-void HtmlDialogGtk::GetDOMMessageHandlers(
-    std::vector<DOMMessageHandler*>* handlers) const {
+void HtmlDialogGtk::GetWebUIMessageHandlers(
+    std::vector<WebUIMessageHandler*>* handlers) const {
   if (delegate_)
-    delegate_->GetDOMMessageHandlers(handlers);
+    delegate_->GetWebUIMessageHandlers(handlers);
   else
     handlers->clear();
 }
@@ -105,11 +108,6 @@ void HtmlDialogGtk::MoveContents(TabContents* source, const gfx::Rect& pos) {
   // if it's a dialog we know about, we trust it not to be mean to the user.
 }
 
-void HtmlDialogGtk::ToolbarSizeChanged(TabContents* source,
-                                       bool is_animating) {
-  // Ignored.
-}
-
 // A simplified version of BrowserWindowGtk::HandleKeyboardEvent().
 // We don't handle global keyboard shortcuts here, but that's fine since
 // they're all browser-specific. (This may change in the future.)
@@ -126,18 +124,18 @@ void HtmlDialogGtk::HandleKeyboardEvent(const NativeWebKeyboardEvent& event) {
 ////////////////////////////////////////////////////////////////////////////////
 // HtmlDialogGtk:
 
-void HtmlDialogGtk::InitDialog() {
-  tab_contents_.reset(
-      new TabContents(profile(), NULL, MSG_ROUTING_NONE, NULL, NULL));
-  tab_contents_->set_delegate(this);
+gfx::NativeWindow HtmlDialogGtk::InitDialog() {
+  tab_.reset(new TabContentsWrapper(
+      new TabContents(profile(), NULL, MSG_ROUTING_NONE, NULL, NULL)));
+  tab_->tab_contents()->set_delegate(this);
 
   // This must be done before loading the page; see the comments in
   // HtmlDialogUI.
-  HtmlDialogUI::GetPropertyAccessor().SetProperty(tab_contents_->property_bag(),
-                                                  this);
+  HtmlDialogUI::GetPropertyAccessor().SetProperty(
+      tab_->tab_contents()->property_bag(), this);
 
-  tab_contents_->controller().LoadURL(GetDialogContentURL(),
-                                      GURL(), PageTransition::START_PAGE);
+  tab_->controller().LoadURL(GetDialogContentURL(),
+                             GURL(), PageTransition::START_PAGE);
   GtkDialogFlags flags = GTK_DIALOG_NO_SEPARATOR;
   if (delegate_->IsDialogModal())
     flags = static_cast<GtkDialogFlags>(flags | GTK_DIALOG_MODAL);
@@ -154,7 +152,7 @@ void HtmlDialogGtk::InitDialog() {
   gtk_box_pack_start(GTK_BOX(GTK_DIALOG(dialog_)->vbox),
                      tab_contents_container_->widget(), TRUE, TRUE, 0);
 
-  tab_contents_container_->SetTabContents(tab_contents_.get());
+  tab_contents_container_->SetTab(tab_.get());
 
   gfx::Size dialog_size;
   delegate_->GetDialogSize(&dialog_size);
@@ -164,6 +162,8 @@ void HtmlDialogGtk::InitDialog() {
                               dialog_size.height());
 
   gtk_widget_show_all(dialog_);
+
+  return GTK_WINDOW(dialog_);
 }
 
 void HtmlDialogGtk::OnResponse(GtkWidget* dialog, int response_id) {

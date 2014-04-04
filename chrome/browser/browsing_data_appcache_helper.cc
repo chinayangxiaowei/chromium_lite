@@ -4,10 +4,10 @@
 
 #include "chrome/browser/browsing_data_appcache_helper.h"
 
-#include "chrome/browser/browser_thread.h"
 #include "chrome/browser/net/chrome_url_request_context.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/common/url_constants.h"
+#include "content/browser/browser_thread.h"
 #include "webkit/appcache/appcache_database.h"
 #include "webkit/appcache/appcache_storage.h"
 
@@ -103,8 +103,18 @@ ChromeAppCacheService* BrowsingDataAppCacheHelper::GetAppCacheService() {
 
 CannedBrowsingDataAppCacheHelper::CannedBrowsingDataAppCacheHelper(
     Profile* profile)
-    : BrowsingDataAppCacheHelper(profile) {
+    : BrowsingDataAppCacheHelper(profile),
+      profile_(profile) {
   info_collection_ = new appcache::AppCacheInfoCollection;
+}
+
+CannedBrowsingDataAppCacheHelper* CannedBrowsingDataAppCacheHelper::Clone() {
+  DCHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
+  CannedBrowsingDataAppCacheHelper* clone =
+      new CannedBrowsingDataAppCacheHelper(profile_);
+
+  clone->info_collection_->infos_by_origin = info_collection_->infos_by_origin;
+  return clone;
 }
 
 void CannedBrowsingDataAppCacheHelper::AddAppCache(const GURL& manifest_url) {

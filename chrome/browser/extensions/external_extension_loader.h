@@ -7,8 +7,8 @@
 #pragma once
 
 #include "base/file_path.h"
-#include "base/ref_counted.h"
-#include "base/scoped_ptr.h"
+#include "base/memory/ref_counted.h"
+#include "base/memory/scoped_ptr.h"
 
 class DictionaryValue;
 class ExternalExtensionProviderImpl;
@@ -27,7 +27,7 @@ class ExternalExtensionProviderImpl;
 class ExternalExtensionLoader
     : public base::RefCountedThreadSafe<ExternalExtensionLoader> {
  public:
-  explicit ExternalExtensionLoader() : running_(false) {}
+  explicit ExternalExtensionLoader();
 
   // Specifies the provider that owns this object.
   void Init(ExternalExtensionProviderImpl* owner);
@@ -50,7 +50,7 @@ class ExternalExtensionLoader
   virtual const FilePath GetBaseCrxFilePath();
 
  protected:
-  virtual ~ExternalExtensionLoader() {}
+  virtual ~ExternalExtensionLoader();
 
   // Notifies the provider that the list of extensions has been loaded.
   void LoadFinished();

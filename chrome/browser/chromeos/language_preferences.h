@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -69,7 +69,7 @@ extern const LanguageBooleanPrefs kChewingBooleanPrefs[];
 // This is not ideal, but we should hard-code the number here as the value
 // is referenced in other header files as array sizes. We have a
 // COMPILE_ASSERT in .cc to ensure that the number is correct.
-const size_t kNumChewingBooleanPrefs = 8;
+const size_t kNumChewingBooleanPrefs = 8 - 2; // -2 is for crosbug.com/14185
 
 extern const LanguageIntegerRangePreference kChewingIntegerPrefs[];
 // See comments at kNumChewingBooleanPrefs for why we hard-code this here.
@@ -145,7 +145,7 @@ const size_t kNumMozcIntegerPrefs = 1;
 // ---------------------------------------------------------------------------
 // TODO(yusukes): Temporary solution for View version of modifier key remapper.
 // Remove RemapType and kXkbModifierMultipleChoicePrefs when we finish to
-// migrate to DOMUI.
+// migrate to WebUI.
 enum RemapType {
   kNoRemap = 0,
   kSwapCtrlAndAlt = 1,

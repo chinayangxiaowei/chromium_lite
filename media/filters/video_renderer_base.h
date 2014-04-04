@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -17,7 +17,7 @@
 
 #include <deque>
 
-#include "base/scoped_ptr.h"
+#include "base/memory/scoped_ptr.h"
 #include "base/synchronization/condition_variable.h"
 #include "base/synchronization/lock.h"
 #include "base/threading/platform_thread.h"
@@ -53,7 +53,9 @@ class VideoRendererBase : public VideoRenderer,
   virtual void Seek(base::TimeDelta time, FilterCallback* callback);
 
   // VideoRenderer implementation.
-  virtual void Initialize(VideoDecoder* decoder, FilterCallback* callback);
+  virtual void Initialize(VideoDecoder* decoder,
+                          FilterCallback* callback,
+                          StatisticsCallback* stats_callback);
   virtual bool HasEnded();
 
   // PlatformThread::Delegate implementation.
@@ -208,6 +210,7 @@ class VideoRendererBase : public VideoRenderer,
   // Filter callbacks.
   scoped_ptr<FilterCallback> flush_callback_;
   scoped_ptr<FilterCallback> seek_callback_;
+  scoped_ptr<StatisticsCallback> statistics_callback_;
 
   base::TimeDelta seek_timestamp_;
 

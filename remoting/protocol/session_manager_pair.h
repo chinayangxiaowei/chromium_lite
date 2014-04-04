@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,8 +10,8 @@
 #ifndef REMOTING_PROTOCOL_MOCK_SESSION_MANAGER_H_
 #define REMOTING_PROTOCOL_MOCK_SESSION_MANAGER_H_
 
-#include <base/ref_counted.h>
-#include <base/scoped_ptr.h>
+#include <base/memory/ref_counted.h>
+#include <base/memory/scoped_ptr.h>
 
 #include "third_party/libjingle/source/talk/base/sigslot.h"
 
@@ -28,6 +28,7 @@ class SessionManager;
 
 namespace talk_base {
 class NetworkManager;
+class PacketSocketFactory;
 }  // namespace talk_base
 
 namespace remoting {
@@ -61,6 +62,7 @@ class SessionManagerPair
 
   MessageLoop* message_loop_;
   scoped_ptr<talk_base::NetworkManager> network_manager_;
+  scoped_ptr<talk_base::PacketSocketFactory> socket_factory_;
   scoped_ptr<cricket::BasicPortAllocator> port_allocator_;
   scoped_ptr<cricket::SessionManager> host_session_manager_;
   scoped_ptr<cricket::SessionManager> client_session_manager_;

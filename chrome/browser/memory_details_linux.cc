@@ -15,11 +15,11 @@
 #include "base/string_util.h"
 #include "base/process_util.h"
 #include "base/utf_string_conversions.h"
-#include "chrome/browser/browser_child_process_host.h"
-#include "chrome/browser/browser_thread.h"
-#include "chrome/browser/zygote_host_linux.h"
 #include "chrome/common/chrome_constants.h"
 #include "chrome/common/url_constants.h"
+#include "content/browser/browser_child_process_host.h"
+#include "content/browser/browser_thread.h"
+#include "content/browser/zygote_host_linux.h"
 #include "grit/chromium_strings.h"
 
 // Known browsers which we collect details for.
@@ -200,7 +200,7 @@ static void GetAllChildren(const std::vector<Process>& processes,
 }
 
 void MemoryDetails::CollectProcessData(
-    std::vector<ProcessMemoryInformation> child_info) {
+    const std::vector<ProcessMemoryInformation>& child_info) {
   DCHECK(BrowserThread::CurrentlyOn(BrowserThread::FILE));
 
   std::vector<Process> processes;

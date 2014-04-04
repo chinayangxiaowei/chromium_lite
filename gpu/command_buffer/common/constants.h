@@ -1,4 +1,4 @@
-// Copyright (c) 2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -21,13 +21,32 @@ namespace error {
     kUnknownCommand,
     kInvalidArguments,
     kLostContext,
-    kGenericError
+    kGenericError,
+
+    // This is not an error. It is returned by WaitLatch when it is blocked.
+    // When blocked, the context will not reschedule itself until another
+    // context executes a SetLatch command.
+    kWaiting
   };
+
+  // Return true if the given error code is an actual error.
+  inline bool IsError(Error error) {
+    return (error != kNoError && error != kWaiting);
+  }
 }
 
 // Invalid shared memory Id, returned by RegisterSharedMemory in case of
 // failure.
 const int32 kInvalidSharedMemoryId = -1;
+
+// Common Command Buffer shared memory transfer buffer ID.
+const int32 kCommandBufferSharedMemoryId = 4;
+
+// Common Latch shared memory transfer buffer ID.
+const int32 kLatchSharedMemoryId = 5;
+
+// Invalid latch ID.
+const int32 kInvalidLatchId = 0xffffffffu;
 
 }  // namespace gpu
 

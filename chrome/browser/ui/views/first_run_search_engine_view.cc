@@ -12,31 +12,32 @@
 #include "base/rand_util.h"
 #include "base/time.h"
 #include "base/utf_string_conversions.h"
+#include "chrome/browser/first_run/first_run.h"
+#include "chrome/browser/first_run/first_run_dialog.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/search_engines/search_engine_type.h"
 #include "chrome/browser/search_engines/template_url.h"
 #include "chrome/browser/search_engines/template_url_model.h"
 #include "chrome/browser/ui/options/options_window.h"
-#include "gfx/canvas.h"
-#include "gfx/font.h"
-#include "grit/browser_resources.h"
 #include "grit/chromium_strings.h"
-#include "grit/google_chrome_strings.h"
 #include "grit/generated_resources.h"
+#include "grit/google_chrome_strings.h"
 #include "grit/locale_settings.h"
 #include "grit/theme_resources.h"
+#include "ui/base/accessibility/accessible_view_state.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/resource/resource_bundle.h"
+#include "ui/gfx/canvas.h"
+#include "ui/gfx/font.h"
 #include "views/controls/button/button.h"
 #include "views/controls/image_view.h"
 #include "views/controls/label.h"
 #include "views/controls/separator.h"
-#include "views/standard_layout.h"
+#include "views/focus/accelerator_handler.h"
+#include "views/layout/layout_constants.h"
 #include "views/view_text_utils.h"
 #include "views/widget/widget.h"
 #include "views/window/window.h"
-
-using base::Time;
 
 namespace {
 
@@ -50,6 +51,34 @@ const int kSmallLogoHeight = 88;
 const int kLabelPadding = 25;
 
 }  // namespace
+
+namespace first_run {
+
+void ShowFirstRunDialog(Profile* profile,
+                        bool randomize_search_engine_experiment) {
+  // If the default search is managed via policy, we don't ask the user to
+  // choose.
+  TemplateURLModel* model = profile->GetTemplateURLModel();
+  if (FirstRun::SearchEngineSelectorDisallowed() || !model ||
+      model->is_default_search_managed()) {
+    return;
+  }
+
+  views::Window* window = views::Window::CreateChromeWindow(
+      NULL,
+      gfx::Rect(),
+      new FirstRunSearchEngineView(
+          profile, randomize_search_engine_experiment));
+  DCHECK(window);
+
+  window->SetIsAlwaysOnTop(true);
+  window->Show();
+  views::AcceleratorHandler accelerator_handler;
+  MessageLoopForUI::current()->Run(&accelerator_handler);
+  window->CloseWindow();
+}
+
+}  // namespace first_run
 
 SearchEngineChoice::SearchEngineChoice(views::ButtonListener* listener,
                                        const TemplateURL* search_engine,
@@ -155,7 +184,7 @@ void FirstRunSearchEngineView::ButtonPressed(views::Button* sender,
   MessageLoop::current()->Quit();
 }
 
-void FirstRunSearchEngineView::Paint(gfx::Canvas* canvas) {
+void FirstRunSearchEngineView::OnPaint(gfx::Canvas* canvas) {
   // Fill in behind the background image with the standard gray toolbar color.
   canvas->FillRectInt(SkColorSetRGB(237, 238, 237), 0, 0, width(),
                       background_image_->height());
@@ -266,7 +295,8 @@ void FirstRunSearchEngineView::OnTemplateURLModelChanged() {
   // This will tell screenreaders that they should read the full text
   // of this dialog to the user now (rather than waiting for the user
   // to explore it).
-  NotifyAccessibilityEvent(AccessibilityTypes::EVENT_ALERT);
+  GetWidget()->NotifyAccessibilityEvent(
+      this, ui::AccessibilityTypes::EVENT_ALERT, true);
 }
 
 gfx::Size FirstRunSearchEngineView::GetPreferredSize() {
@@ -293,7 +323,7 @@ void FirstRunSearchEngineView::SetupControls() {
 
   AddChildView(background_image_);
 
-  int label_width = GetPreferredSize().width() - 2 * kPanelHorizMargin;
+  int label_width = GetPreferredSize().width() - 2 * views::kPanelHorizMargin;
 
   // Add title and text asking the user to choose a search engine:
   title_label_ = new Label(UTF16ToWide(l10n_util::GetStringUTF16(
@@ -330,18 +360,21 @@ void FirstRunSearchEngineView::Layout() {
   const double kUpperPaddingPercent = 0.4;
 
   int num_choices = search_engine_choices_.size();
-  int label_width = GetPreferredSize().width() - 2 * kPanelHorizMargin;
-  int label_height = GetPreferredSize().height() - 2 * kPanelVertMargin;
+  int label_width = GetPreferredSize().width() - 2 * views::kPanelHorizMargin;
+  int label_height = GetPreferredSize().height() - 2 * views::kPanelVertMargin;
 
   // Set title.
-  title_label_->SetBounds(kPanelHorizMargin,
+  title_label_->SetBounds(
+      views::kPanelHorizMargin,
       pref_size.height() / 2 - title_label_->GetPreferredSize().height() / 2,
-      label_width, title_label_->GetPreferredSize().height());
+      label_width,
+      title_label_->GetPreferredSize().height());
 
   int next_v_space = background_image_->height() + kVertSpacing * 2;
 
   // Set text describing search engine hooked into omnibox.
-  text_label_->SetBounds(kPanelHorizMargin, next_v_space,
+  text_label_->SetBounds(views::kPanelHorizMargin,
+                         next_v_space,
                          label_width,
                          text_label_->GetPreferredSize().height());
   next_v_space = text_label_->y() +
@@ -365,7 +398,7 @@ void FirstRunSearchEngineView::Layout() {
     int upper_logo_margin =
         static_cast<int>((label_height - logo_section_height -
             background_image_->height() - text_label_->height()
-            - kVertSpacing + kPanelVertMargin) * kUpperPaddingPercent);
+            - kVertSpacing + views::kPanelVertMargin) * kUpperPaddingPercent);
 
     next_v_space = text_label_->y() + text_label_->height() +
                    upper_logo_margin;
@@ -375,7 +408,7 @@ void FirstRunSearchEngineView::Layout() {
         (label_width - (num_choices * logo_width)) / (num_choices + 1);
 
     search_engine_choices_[0]->SetChoiceViewBounds(
-        kPanelHorizMargin + logo_padding, next_v_space, logo_width,
+        views::kPanelHorizMargin + logo_padding, next_v_space, logo_width,
         logo_height);
 
     int next_h_space = search_engine_choices_[0]->GetView()->x() +
@@ -403,9 +436,9 @@ void FirstRunSearchEngineView::Layout() {
     // The buttons for search engine selection:
     int button_padding = logo_padding + logo_width / 2 - button_width / 2;
 
-    search_engine_choices_[0]->SetBounds(kPanelHorizMargin + button_padding,
-                                         next_v_space, button_width,
-                                         button_height);
+    search_engine_choices_[0]->SetBounds(
+        views::kPanelHorizMargin + button_padding, next_v_space,
+        button_width, button_height);
 
     next_h_space = search_engine_choices_[0]->x() + logo_width + logo_padding;
     search_engine_choices_[1]->SetBounds(next_h_space, next_v_space,
@@ -425,8 +458,9 @@ void FirstRunSearchEngineView::Layout() {
   }  // if (search_engine_choices.size() > 0)
 }
 
-AccessibilityTypes::Role FirstRunSearchEngineView::GetAccessibleRole() {
-  return AccessibilityTypes::ROLE_ALERT;
+void FirstRunSearchEngineView::GetAccessibleState(
+    ui::AccessibleViewState* state) {
+  state->role = ui::AccessibilityTypes::ROLE_ALERT;
 }
 
 std::wstring FirstRunSearchEngineView::GetWindowTitle() const {

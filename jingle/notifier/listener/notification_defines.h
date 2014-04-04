@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,29 +6,30 @@
 #define JINGLE_NOTIFIER_LISTENER_NOTIFICATION_DEFINES_H_
 
 #include <string>
+#include <vector>
 
-struct IncomingNotificationData {
-  std::string service_url;
-  std::string service_specific_data;
+namespace notifier {
+
+struct Subscription {
+  // The name of the channel to subscribe to; usually but not always
+  // a URL.
+  std::string channel;
+  // A sender, which could be a domain or a bare JID, from which we
+  // will accept pushes.
+  std::string from;
 };
 
-struct OutgoingNotificationData {
-  OutgoingNotificationData() : send_content(false), priority(0),
-                               require_subscription(false),
-                               write_to_cache_only(false) {
-  }
-  // Id values
-  std::string service_url;
-  std::string service_id;
-  // This bool signifies whether the content fields should be
-  // sent with the outgoing data.
-  bool send_content;
-  // Content values.
-  std::string service_specific_data;
-  int priority;
-  bool require_subscription;
-  bool write_to_cache_only;
+typedef std::vector<Subscription> SubscriptionList;
+
+struct Notification {
+  // The channel the notification is coming in on.
+  std::string channel;
+  // The notification data payload.
+  std::string data;
+
+  std::string ToString() const;
 };
+
+}  // namespace notifier
 
 #endif  // JINGLE_NOTIFIER_LISTENER_NOTIFICATION_DEFINES_H_
-

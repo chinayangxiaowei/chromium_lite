@@ -7,15 +7,16 @@
 #include "base/logging.h"
 #include "base/metrics/histogram.h"
 #include "base/time.h"
-#include "chrome/renderer/render_view.h"
-#include "gfx/size.h"
+#include "content/renderer/render_view.h"
 #include "skia/ext/bitmap_platform_device.h"
 #include "skia/ext/image_operations.h"
+#include "skia/ext/platform_canvas.h"
 #include "third_party/skia/include/core/SkBitmap.h"
 #include "third_party/WebKit/Source/WebKit/chromium/public/WebFrame.h"
 #include "third_party/WebKit/Source/WebKit/chromium/public/WebRect.h"
 #include "third_party/WebKit/Source/WebKit/chromium/public/WebSize.h"
 #include "third_party/WebKit/Source/WebKit/chromium/public/WebView.h"
+#include "ui/gfx/size.h"
 #include "webkit/glue/webkit_glue.h"
 
 using WebKit::WebRect;
@@ -28,8 +29,7 @@ SkBitmap GrabPhishingThumbnail(RenderView* render_view,
                                const gfx::Size& view_size,
                                const gfx::Size& thumbnail_size) {
   if (!render_view || !render_view->webview()) {
-    NOTREACHED();
-    return SkBitmap();
+    return SkBitmap();  // The WebView is going away.
   }
   WebView* view = render_view->webview();
   base::TimeTicks beginning_time = base::TimeTicks::Now();

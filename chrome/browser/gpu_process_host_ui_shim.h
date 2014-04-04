@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -11,30 +11,62 @@
 // portion of this class, the GpuProcessHost, is responsible for
 // shuttling messages between the browser and GPU processes.
 
+#include <queue>
+
 #include "base/callback.h"
-#include "base/scoped_ptr.h"
-#include "base/singleton.h"
+#include "base/memory/linked_ptr.h"
+#include "base/memory/ref_counted.h"
 #include "base/threading/non_thread_safe.h"
-#include "chrome/common/gpu_info.h"
-#include "chrome/common/message_router.h"
-#include "ipc/ipc_channel.h"
-#include "gfx/native_widget_types.h"
+#include "content/common/gpu/gpu_channel_manager.h"
+#include "content/common/gpu/gpu_info.h"
+#include "content/common/gpu_feature_flags.h"
+#include "content/common/gpu_process_launch_causes.h"
+#include "content/common/message_router.h"
 
 namespace gfx {
 class Size;
 }
 
+struct GPUCreateCommandBufferConfig;
 struct GpuHostMsg_AcceleratedSurfaceSetIOSurface_Params;
 struct GpuHostMsg_AcceleratedSurfaceBuffersSwapped_Params;
 
-class GpuProcessHostUIShim : public IPC::Channel::Sender,
-                             public IPC::Channel::Listener,
-                             public base::NonThreadSafe {
- public:
-  // Getter for the singleton. This will return NULL on failure.
-  static GpuProcessHostUIShim* GetInstance();
+namespace IPC {
+struct ChannelHandle;
+class Message;
+}
 
-  int32 GetNextRoutingId();
+// A task that will forward an IPC message to the UI shim.
+class RouteToGpuProcessHostUIShimTask : public Task {
+ public:
+  RouteToGpuProcessHostUIShimTask(int host_id, const IPC::Message& msg);
+  ~RouteToGpuProcessHostUIShimTask();
+
+ private:
+  virtual void Run();
+
+  int host_id_;
+  IPC::Message msg_;
+};
+
+class GpuProcessHostUIShim
+    : public IPC::Channel::Listener,
+      public IPC::Channel::Sender,
+      public base::NonThreadSafe {
+ public:
+  // Create a GpuProcessHostUIShim with the given ID.  The object can be found
+  // using FromID with the same id.
+  static GpuProcessHostUIShim* Create(int host_id);
+
+  // Destroy the GpuProcessHostUIShim with the given host ID. This can only
+  // be called on the UI thread. Only the GpuProcessHost should destroy the
+  // UI shim.
+  static void Destroy(int host_id);
+
+  // Destroy all remaining GpuProcessHostUIShims.
+  static void DestroyAll();
+
+  static GpuProcessHostUIShim* FromID(int host_id);
 
   // IPC::Channel::Sender implementation.
   virtual bool Send(IPC::Message* msg);
@@ -45,66 +77,50 @@ class GpuProcessHostUIShim : public IPC::Channel::Sender,
   // actually received on the IO thread.
   virtual bool OnMessageReceived(const IPC::Message& message);
 
-  // See documentation on MessageRouter for AddRoute and RemoveRoute
-  void AddRoute(int32 routing_id, IPC::Channel::Listener* listener);
-  void RemoveRoute(int32 routing_id);
+#if defined(OS_MACOSX)
+  // Notify the GPU process that an accelerated surface was destroyed.
+  void DidDestroyAcceleratedSurface(int renderer_id, int32 render_view_id);
 
-  // Sends a message to the browser process to collect the information from the
-  // graphics card.
-  void CollectGraphicsInfoAsynchronously();
-
-  // Tells the GPU process to crash. Useful for testing.
-  void SendAboutGpuCrash();
-
-  // Tells the GPU process to let its main thread enter an infinite loop.
-  // Useful for testing.
-  void SendAboutGpuHang();
-
-  // Return all known information about the GPU.
-  const GPUInfo& gpu_info() const;
-
-  // Used only in testing. Sets a callback to invoke when GPU info is collected,
-  // regardless of whether it has been collected already or if it is partial
-  // or complete info. Set to NULL when the callback should no longer be called.
-  void set_gpu_info_collected_callback(Callback0::Type* callback) {
-    gpu_info_collected_callback_.reset(callback);
-  }
+  // TODO(apatrick): Remove this when mac does not use AcceleratedSurfaces for
+  // when running the GPU thread in the browser process.
+  static void SendToGpuHost(int host_id, IPC::Message* msg);
+#endif
 
  private:
-  friend struct DefaultSingletonTraits<GpuProcessHostUIShim>;
-
-  GpuProcessHostUIShim();
+  explicit GpuProcessHostUIShim(int host_id);
   virtual ~GpuProcessHostUIShim();
 
   // Message handlers.
-  void OnGraphicsInfoCollected(const GPUInfo& gpu_info);
   bool OnControlMessageReceived(const IPC::Message& message);
 
-#if defined(OS_LINUX)
-  void OnGetViewXID(gfx::NativeViewId id, IPC::Message* reply_msg);
-  void OnReleaseXID(unsigned long xid);
-  void OnResizeXID(unsigned long xid, gfx::Size size, IPC::Message* reply_msg);
+  void OnLogMessage(int level, const std::string& header,
+      const std::string& message);
+#if defined(OS_LINUX) && !defined(TOUCH_UI) || defined(OS_WIN)
+  void OnResizeView(int32 renderer_id,
+                    int32 render_view_id,
+                    int32 command_buffer_route_id,
+                    gfx::Size size);
 #elif defined(OS_MACOSX)
   void OnAcceleratedSurfaceSetIOSurface(
       const GpuHostMsg_AcceleratedSurfaceSetIOSurface_Params& params);
   void OnAcceleratedSurfaceBuffersSwapped(
       const GpuHostMsg_AcceleratedSurfaceBuffersSwapped_Params& params);
-#elif defined(OS_WIN)
-  void OnGetCompositorHostWindow(int renderer_id,
-                                 int render_view_id,
-                                 IPC::Message* reply_message);
+#endif
+#if defined(OS_WIN)
   void OnScheduleComposite(int32 renderer_id, int32 render_view_id);
 #endif
 
-  int last_routing_id_;
+  // The serial number of the GpuProcessHost / GpuProcessHostUIShim pair.
+  int host_id_;
 
-  GPUInfo gpu_info_;
+  // In single process and in process GPU mode, this references the
+  // GpuChannelManager or null otherwise. It must be called and deleted on the
+  // GPU thread.
+  GpuChannelManager* gpu_channel_manager_;
 
-  MessageRouter router_;
-
-  // Used only in testing. If set, the callback is invoked when the GPU info
-  // has been collected.
-  scoped_ptr<Callback0::Type> gpu_info_collected_callback_;
+  // This is likewise single process / in process GPU specific. This is a Sender
+  // implementation that forwards IPC messages to this UI shim on the UI thread.
+  IPC::Channel::Sender* ui_thread_sender_;
 };
 
 #endif  // CHROME_BROWSER_GPU_PROCESS_HOST_UI_SHIM_H_

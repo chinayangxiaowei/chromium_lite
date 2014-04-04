@@ -7,7 +7,9 @@
 #include <gtk/gtk.h>
 
 #include "base/logging.h"
+#include "ui/base/accessibility/accessibility_types.h"
 #include "views/focus/focus_manager.h"
+#include "views/widget/widget.h"
 
 namespace views {
 
@@ -63,17 +65,17 @@ void NativeControlGtk::VisibilityChanged(View* starting_from, bool is_visible) {
   }
 }
 
-void NativeControlGtk::Focus() {
+void NativeControlGtk::OnFocus() {
   DCHECK(native_view());
   gtk_widget_grab_focus(native_view());
-
-  GetParent()->NotifyAccessibilityEvent(AccessibilityTypes::EVENT_FOCUS);
+  GetWidget()->NotifyAccessibilityEvent(
+      parent(), ui::AccessibilityTypes::EVENT_FOCUS, true);
 }
 
 void NativeControlGtk::NativeControlCreated(GtkWidget* native_control) {
   Attach(native_control);
 
-  // Update the newly created GtkWdigetwith any resident enabled state.
+  // Update the newly created GtkWidget with any resident enabled state.
   gtk_widget_set_sensitive(native_view(), IsEnabled());
 
   // Listen for focus change event to update the FocusManager focused view.

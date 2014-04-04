@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,7 +8,7 @@ namespace extension_tabs_module_constants {
 
 const char kAllFramesKey[] = "allFrames";
 const char kCodeKey[] = "code";
-const char kFavIconUrlKey[] = "favIconUrl";
+const char kFaviconUrlKey[] = "favIconUrl";
 const char kFileKey[] = "file";
 const char kFocusedKey[] = "focused";
 const char kFormatKey[] = "format";
@@ -41,7 +41,7 @@ const char kWindowTypeKey[] = "type";
 
 const char kFormatValueJpeg[] = "jpeg";
 const char kFormatValuePng[] = "png";
-const char kMimeTypeJpeg[] = "image/jpg";
+const char kMimeTypeJpeg[] = "image/jpeg";
 const char kMimeTypePng[] = "image/png";
 const char kStatusValueComplete[] = "complete";
 const char kStatusValueLoading[] = "loading";
@@ -50,10 +50,15 @@ const char kStatusValueLoading[] = "loading";
 // panel, etc?
 const char kWindowTypeValueNormal[] = "normal";
 const char kWindowTypeValuePopup[] = "popup";
+const char kWindowTypeValuePanel[] = "panel";
 const char kWindowTypeValueApp[] = "app";
 
 const char kCanOnlyMoveTabsWithinNormalWindowsError[] = "Tabs can only be "
     "moved to and from normal windows.";
+const char kCanOnlyMoveTabsWithinSameProfileError[] = "Tabs can only be moved "
+    "between windows in the same profile.";
+const char kNoCrashBrowserError[] =
+    "I'm sorry. I'm afraid I can't do that.";
 const char kNoCurrentWindowError[] = "No current window";
 const char kNoLastFocusedWindowError[] = "No last-focused window";
 const char kWindowNotFoundError[] = "No window with id: *.";
@@ -61,6 +66,7 @@ const char kTabNotFoundError[] = "No tab with id: *.";
 const char kTabStripNotEditableError[] =
     "Tabs cannot be edited right now (user may be dragging a tab).";
 const char kNoSelectedTabError[] = "No selected tab";
+const char kIncognitoModeIsDisabled[] = "Incognito mode is disabled.";
 const char kInvalidUrlError[] = "Invalid url: \"*\".";
 const char kInternalVisibleTabCaptureError[] =
     "Internal error while trying to capture visible region of the current tab";

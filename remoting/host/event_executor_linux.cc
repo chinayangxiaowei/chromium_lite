@@ -1,13 +1,16 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "remoting/host/event_executor_linux.h"
+#include "remoting/host/event_executor.h"
 
 #include <X11/Xlib.h>
+#include <X11/XF86keysym.h>
 #include <X11/keysym.h>
 #include <X11/extensions/XTest.h>
 
+#include "base/basictypes.h"
+#include "base/compiler_specific.h"
 #include "base/logging.h"
 #include "base/message_loop.h"
 #include "base/task.h"
@@ -18,17 +21,44 @@ namespace remoting {
 using protocol::MouseEvent;
 using protocol::KeyEvent;
 
-static int MouseButtonToX11ButtonNumber(
-    protocol::MouseEvent::MouseButton button) {
+namespace {
+
+// A class to generate events on Linux.
+class EventExecutorLinux : public EventExecutor {
+ public:
+  EventExecutorLinux(MessageLoopForUI* message_loop, Capturer* capturer);
+  virtual ~EventExecutorLinux() {};
+
+  virtual void InjectKeyEvent(const KeyEvent* event, Task* done) OVERRIDE;
+  virtual void InjectMouseEvent(const MouseEvent* event, Task* done) OVERRIDE;
+
+ private:
+  bool Init();
+  MessageLoopForUI* message_loop_;
+  Capturer* capturer_;
+
+  // X11 graphics context.
+  Display* display_;
+  Window root_window_;
+  int width_;
+  int height_;
+
+  int test_event_base_;
+  int test_error_base_;
+
+  DISALLOW_COPY_AND_ASSIGN(EventExecutorLinux);
+};
+
+int MouseButtonToX11ButtonNumber(MouseEvent::MouseButton button) {
   switch (button) {
     case MouseEvent::BUTTON_LEFT:
       return 1;
 
     case MouseEvent::BUTTON_RIGHT:
-      return 2;
+      return 3;
 
     case MouseEvent::BUTTON_MIDDLE:
-      return 3;
+      return 2;
 
     case MouseEvent::BUTTON_UNDEFINED:
     default:
@@ -36,35 +66,43 @@ static int MouseButtonToX11ButtonNumber(
   }
 }
 
-// TODO(ajwong): Move this to a central keycodes translation file.
-const int kPepperToX11Keysym[256] = {
-   // 0x00 - 0x07
+// Hard-coded mapping from Virtual Key codes to X11 KeySyms.
+// This mapping is only valid if both client and host are using a
+// US English keyboard layout.
+// Because we're passing VK codes on the wire, with no Scancode,
+// "extended" flag, etc, things like distinguishing left & right
+// Shift keys doesn't work.
+//
+// TODO(wez): Replace this with something more closely tied to what
+// WebInputEventFactory does on Linux/GTK, and which respects the
+// host's keyboard layout (see http://crbug.com/74550 ).
+const int kUsVkeyToKeysym[256] = {
+  // 0x00 - 0x07
   -1, -1, -1, -1,
-   // 0x04 - 0x07
+  // 0x04 - 0x07
   -1, -1, -1, -1,
-   // 0x08 - 0x0B
+  // 0x08 - 0x0B
   XK_BackSpace, XK_Tab, -1, -1,
-   // 0x0C - 0x0F
+  // 0x0C - 0x0F
   XK_Clear, XK_Return, -1, -1,
 
   // 0x10 - 0x13
-  XK_Shift_L, XK_Control_L, XK_Menu, XK_Pause,
+  XK_Shift_L, XK_Control_L, XK_Alt_L, XK_Pause,
   // 0x14 - 0x17
-  /* VKEY_CAPITAL */ -1, XK_Kana_Shift, -1, /* VKEY_JUNJA */ -1,
+  XK_Caps_Lock, XK_Kana_Shift, -1, /* VKEY_JUNJA */ -1,
   // 0x18 - 0x1B
   /* VKEY_FINAL */ -1, XK_Kanji, -1, XK_Escape,
   // 0x1C - 0x1F
-  /* VKEY_CONVERT */ -1, /* VKEY_NONCONVERT */ -1, /* VKEY_ACCEPT */ -1,
-  XK_Mode_switch,
+  XK_Henkan, XK_Muhenkan, /* VKEY_ACCEPT */ -1, XK_Mode_switch,
 
   // 0x20 - 0x23
   XK_space, XK_Prior, XK_Next, XK_End,
   // 0x24 - 0x27
   XK_Home, XK_Left, XK_Up, XK_Right,
   // 0x28 - 0x2B
-  XK_Down, XK_Select, XK_Print, XK_Execute,
+  XK_Down, XK_Select, /* VK_PRINT */ -1, XK_Execute,
   // 0x2C - 0x2F
-  /* VKEY_SNAPSHOT */ -1, XK_Insert, XK_Delete, XK_Help,
+  XK_Print, XK_Insert, XK_Delete, XK_Help,
 
   // 0x30 - 0x33
   XK_0, XK_1, XK_2, XK_3,
@@ -76,7 +114,7 @@ const int kPepperToX11Keysym[256] = {
   -1, -1, -1, -1,
 
   // 0x40 - 0x43
-  XK_0, XK_A, XK_B, XK_C,
+  -1, XK_A, XK_B, XK_C,
   // 0x44 - 0x47
   XK_D, XK_E, XK_F, XK_G,
   // 0x48 - 0x4B
@@ -89,9 +127,9 @@ const int kPepperToX11Keysym[256] = {
   // 0x54 - 0x57
   XK_T, XK_U, XK_V, XK_W,
   // 0x58 - 0x5B
-  XK_X, XK_Y, XK_Z, XK_Meta_L,
+  XK_X, XK_Y, XK_Z, XK_Super_L,
   // 0x5C - 0x5F
-  XK_Meta_R, /* VKEY_APPS */ -1, -1, /* VKEY_SLEEP */-1,
+  XK_Super_R, XK_Menu, -1, /* VKEY_SLEEP */ -1,
 
   // 0x60 - 0x63
   XK_KP_0, XK_KP_1, XK_KP_2, XK_KP_3,
@@ -132,135 +170,86 @@ const int kPepperToX11Keysym[256] = {
   // 0xA0 - 0xA3
   XK_Num_Lock, XK_Scroll_Lock, XK_Control_L, XK_Control_R,
   // 0xA4 - 0xA7
-  XK_Meta_L, XK_Meta_R, /* VKEY_BROWSER_BACK */ -1,
-  /* VKEY_BROWSER_FORWARD */ -1,
+  XK_Meta_L, XK_Meta_R, XF86XK_Back, XF86XK_Forward,
   // 0xA8 - 0xAB
-  /* VKEY_BROWSER_REFRESH */ -1, /* VKEY_BROWSER_STOP */ -1,
-  /* VKEY_BROWSER_SEARCH */ -1, /* VKEY_BROWSER_FAVORITES */ -1,
+  XF86XK_Refresh, XF86XK_Stop, XF86XK_Search, XF86XK_Favorites,
   // 0xAC - 0xAF
-  /* VKEY_BROWSER_HOME */ -1, /* VKEY_VOLUME_MUTE */ -1,
-  /* VKEY_VOLUME_DOWN */ -1, /* VKEY_VOLUME_UP */ -1,
+  XF86XK_HomePage, XF86XK_AudioMute, XF86XK_AudioLowerVolume,
+  XF86XK_AudioRaiseVolume,
 
   // 0xB0 - 0xB3
-  /* VKEY_MEDIA_NEXT_TRACK */ -1, /* VKEY_MEDIA_PREV_TRACK */ -1,
-  /* VKEY_MEDIA_STOP */ -1, /* VKEY_MEDIA_PLAY_PAUSE */ -1,
+  XF86XK_AudioNext, XF86XK_AudioPrev, XF86XK_AudioStop, XF86XK_AudioPause,
   // 0xB4 - 0xB7
-  /* VKEY_MEDIA_LAUNCH_MAIL */ -1, /* VKEY_MEDIA_LAUNCH_MEDIA_SELECT */ -1,
-  /* VKEY_MEDIA_LAUNCH_APP1 */ -1, /* VKEY_MEDIA_MEDIA_LAUNCH_APP2 */ -1,
+  XF86XK_Mail, XF86XK_AudioMedia, XF86XK_Launch0, XF86XK_Launch1,
   // 0xB8 - 0xBB
-  -1, -1, /* VKEY_OEM_1 */ -1, /* VKEY_OEM_PLUS */ -1,
+  -1, -1, XK_semicolon, XK_plus,
   // 0xBC - 0xBF
-  /* VKEY_OEM_COMMA */ -1, /* VKEY_OEM_MINUS */ -1,
-  /* VKEY_OEM_PERIOD */ -1, /* VKEY_OEM_2 */ -1,
+  XK_comma, XK_minus, XK_period, XK_slash,
 
   // 0xC0 - 0xC3
-  /* VKEY_OEM_3 */ -1, -1, -1, -1,
+  XK_grave, -1, -1, -1,
   // 0xC4 - 0xC7
-  -1, -1, -1, -1
+  -1, -1, -1, -1,
   // 0xC8 - 0xCB
-  -1, -1, -1, -1
+  -1, -1, -1, -1,
   // 0xCC - 0xCF
-  -1, -1, -1, -1
+  -1, -1, -1, -1,
 
   // 0xD0 - 0xD3
-  -1, -1, -1, -1
+  -1, -1, -1, -1,
   // 0xD4 - 0xD7
-  -1, -1, -1, -1
+  -1, -1, -1, -1,
   // 0xD8 - 0xDB
-  -1, -1, -1, /* VKEY_OEM_4 */ -1,
+  -1, -1, -1, XK_bracketleft,
   // 0xDC - 0xDF
-  /* VKEY_OEM_5 */ -1, /* VKEY_OEM_6 */ -1, /* VKEY_OEM_7 */ -1,
+  XK_backslash, XK_bracketright, XK_apostrophe,
   /* VKEY_OEM_8 */ -1,
 
   // 0xE0 - 0xE3
-  -1, -1, /* VKEY_OEM_102 */ -1, -1
+  -1, -1, /* VKEY_OEM_102 */ -1, -1,
   // 0xE4 - 0xE7
-  -1, /* VKEY_PROCESSKEY */ -1, -1, /* VKEY_PACKET */ -1
+  -1, /* VKEY_PROCESSKEY */ -1, -1, /* VKEY_PACKET */ -1,
   // 0xE8 - 0xEB
   -1, -1, -1, -1,
   // 0xEC - 0xEF
   -1, -1, -1, -1,
 
   // 0xF0 - 0xF3
-  -1, -1, -1, -1
+  -1, -1, -1, -1,
   // 0xF4 - 0xF7
-  -1, -1, /* VKEY_ATTN */ -1, /* VKEY_CRSEL */ -1
+  -1, -1, /* VKEY_ATTN */ -1, /* VKEY_CRSEL */ -1,
   // 0xF8 - 0xFB
   /* VKEY_EXSEL */ -1, /* VKEY_EREOF */ -1, /* VKEY_PLAY */ -1,
   /* VKEY_ZOOM */ -1,
   // 0xFC - 0xFF
-  /* VKEY_NONAME */ -1, /* VKEY_PA1 */ -1, /* VKEY_OEM_CLEAR */ -1, -1,
+  /* VKEY_NONAME */ -1, /* VKEY_PA1 */ -1, /* VKEY_OEM_CLEAR */ -1, -1
 };
 
-static int ChromotocolKeycodeToX11Keysym(int32_t keycode) {
+int ChromotocolKeycodeToX11Keysym(int32_t keycode) {
   if (keycode < 0 || keycode > 255) {
     return -1;
   }
 
-  return kPepperToX11Keysym[keycode];
+  return kUsVkeyToKeysym[keycode];
 }
 
-class EventExecutorLinuxPimpl {
- public:
-  explicit EventExecutorLinuxPimpl(EventExecutorLinux* executor);
-  ~EventExecutorLinuxPimpl();
-
-  bool Init();  // TODO(ajwong): Do we really want this to be synchronous?
-
-  void HandleMouse(const MouseEvent* message);
-  void HandleKey(const KeyEvent* key_event);
-
- private:
-  void DeinitXlib();
-
-  // Reference to containing class so we can access friend functions.
-  // Not owned.
-  EventExecutorLinux* executor_;
-
-  // X11 graphics context.
-  Display* display_;
-  GC gc_;
-  Window root_window_;
-  int width_;
-  int height_;
-
-  int test_event_base_;
-  int test_error_base_;
-};
-
-EventExecutorLinuxPimpl::EventExecutorLinuxPimpl(EventExecutorLinux* executor)
-    : executor_(executor),
-      display_(NULL),
-      gc_(NULL),
+EventExecutorLinux::EventExecutorLinux(
+    MessageLoopForUI* message_loop, Capturer* capturer)
+    : message_loop_(message_loop),
+      capturer_(capturer),
+      display_(message_loop->GetDisplay()),
       root_window_(BadValue),
       width_(0),
       height_(0) {
+  CHECK(Init());
 }
 
-EventExecutorLinuxPimpl::~EventExecutorLinuxPimpl() {
-  DeinitXlib();
-}
-
-bool EventExecutorLinuxPimpl::Init() {
-  // TODO(ajwong): We should specify the display string we are attaching to
-  // in the constructor.
-  display_ = XOpenDisplay(NULL);
-  if (!display_) {
-    LOG(ERROR) << "Unable to open display";
-    return false;
-  }
+bool EventExecutorLinux::Init() {
+  CHECK(display_);
 
   root_window_ = RootWindow(display_, DefaultScreen(display_));
   if (root_window_ == BadValue) {
     LOG(ERROR) << "Unable to get the root window";
-    DeinitXlib();
-    return false;
-  }
-
-  gc_ = XCreateGC(display_, root_window_, 0, NULL);
-  if (gc_ == NULL) {
-    LOG(ERROR) << "Unable to get graphics context";
-    DeinitXlib();
     return false;
   }
 
@@ -270,7 +259,6 @@ bool EventExecutorLinuxPimpl::Init() {
   if (!XTestQueryExtension(display_, &test_event_base_, &test_error_base_,
                            &major, &minor)) {
     LOG(ERROR) << "Server does not support XTest.";
-    DeinitXlib();
     return false;
   }
 
@@ -280,22 +268,27 @@ bool EventExecutorLinuxPimpl::Init() {
   // TODO(ajwong): Handle resolution changes.
   if (!XGetWindowAttributes(display_, root_window_, &root_attr)) {
     LOG(ERROR) << "Unable to get window attributes";
-    DeinitXlib();
     return false;
   }
 
   width_ = root_attr.width;
   height_ = root_attr.height;
-
   return true;
 }
 
-void EventExecutorLinuxPimpl::HandleKey(const KeyEvent* key_event) {
+void EventExecutorLinux::InjectKeyEvent(const KeyEvent* event, Task* done) {
+  if (MessageLoop::current() != message_loop_) {
+    message_loop_->PostTask(
+        FROM_HERE,
+        NewRunnableMethod(this, &EventExecutorLinux::InjectKeyEvent,
+                          event, done));
+    return;
+  }
   // TODO(ajwong): This will only work for QWERTY keyboards.
-  int keysym = ChromotocolKeycodeToX11Keysym(key_event->keycode());
+  int keysym = ChromotocolKeycodeToX11Keysym(event->keycode());
 
   if (keysym == -1) {
-    LOG(WARNING) << "Ignoring unknown key: " << key_event->keycode();
+    LOG(WARNING) << "Ignoring unknown key: " << event->keycode();
     return;
   }
 
@@ -303,17 +296,28 @@ void EventExecutorLinuxPimpl::HandleKey(const KeyEvent* key_event) {
   int keycode = XKeysymToKeycode(display_, keysym);
   if (keycode == 0) {
     LOG(WARNING) << "Ignoring undefined keysym: " << keysym
-                 << " for key: " << key_event->keycode();
+                 << " for key: " << event->keycode();
     return;
   }
 
-  VLOG(3) << "Got pepper key: " << key_event->keycode()
+  VLOG(3) << "Got pepper key: " << event->keycode()
           << " sending keysym: " << keysym
           << " to keycode: " << keycode;
-  XTestFakeKeyEvent(display_, keycode, key_event->pressed(), CurrentTime);
+  XTestFakeKeyEvent(display_, keycode, event->pressed(), CurrentTime);
+
+  done->Run();
+  delete done;
 }
 
-void EventExecutorLinuxPimpl::HandleMouse(const MouseEvent* event) {
+void EventExecutorLinux::InjectMouseEvent(const MouseEvent* event,
+                                          Task* done) {
+  if (MessageLoop::current() != message_loop_) {
+    message_loop_->PostTask(
+        FROM_HERE,
+        NewRunnableMethod(this, &EventExecutorLinux::InjectMouseEvent,
+                          event, done));
+    return;
+  }
   if (event->has_x() && event->has_y()) {
     if (event->x() < 0 || event->y() < 0 ||
         event->x() > width_ || event->y() > height_) {
@@ -348,66 +352,19 @@ void EventExecutorLinuxPimpl::HandleMouse(const MouseEvent* event) {
   if (event->has_wheel_offset_x() && event->has_wheel_offset_y()) {
     NOTIMPLEMENTED() << "No scroll wheel support yet.";
   }
-}
 
-void EventExecutorLinuxPimpl::DeinitXlib() {
-  // TODO(ajwong): We should expose a "close" or "shutdown" method.
-  if (gc_) {
-    if (!XFreeGC(display_, gc_)) {
-      LOG(ERROR) << "Unable to free Xlib GC";
-    }
-    gc_ = NULL;
-  }
-
-  if (display_) {
-    if (!XCloseDisplay(display_)) {
-      LOG(ERROR) << "Unable to close the Xlib Display.";
-    }
-    display_ = NULL;
-  }
-}
-
-EventExecutorLinux::EventExecutorLinux(
-    MessageLoop* message_loop, Capturer* capturer)
-    : message_loop_(message_loop),
-      capturer_(capturer),
-      pimpl_(new EventExecutorLinuxPimpl(this)) {
-  CHECK(pimpl_->Init());
-}
-
-EventExecutorLinux::~EventExecutorLinux() {
-}
-
-void EventExecutorLinux::InjectKeyEvent(const KeyEvent* event, Task* done) {
-  if (MessageLoop::current() != message_loop_) {
-    message_loop_->PostTask(
-        FROM_HERE,
-        NewRunnableMethod(this, &EventExecutorLinux::InjectKeyEvent,
-                          event, done));
-    return;
-  }
-  pimpl_->HandleKey(event);
   done->Run();
   delete done;
 }
 
-void EventExecutorLinux::InjectMouseEvent(const MouseEvent* event,
-                                          Task* done) {
-  if (MessageLoop::current() != message_loop_) {
-    message_loop_->PostTask(
-        FROM_HERE,
-        NewRunnableMethod(this, &EventExecutorLinux::InjectMouseEvent,
-                          event, done));
-    return;
-  }
-  pimpl_->HandleMouse(event);
-  done->Run();
-  delete done;
-}
+}  // namespace
 
-protocol::InputStub* CreateEventExecutor(MessageLoop* message_loop,
-                                         Capturer* capturer) {
+EventExecutor* EventExecutor::Create(MessageLoopForUI* message_loop,
+                                     Capturer* capturer) {
   return new EventExecutorLinux(message_loop, capturer);
 }
 
 }  // namespace remoting
+
+DISABLE_RUNNABLE_METHOD_REFCOUNT(remoting::EventExecutorLinux);
+

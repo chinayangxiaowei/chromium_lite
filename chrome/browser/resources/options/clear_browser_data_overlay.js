@@ -3,7 +3,6 @@
 // found in the LICENSE file.
 
 cr.define('options', function() {
-
   var OptionsPage = options.OptionsPage;
 
   /**
@@ -12,12 +11,10 @@ cr.define('options', function() {
    * @class
    */
   function ClearBrowserDataOverlay() {
-    OptionsPage.call(this, 'clearBrowserDataOverlay',
-                     templateData.clearBrowserDataTitle,
+    OptionsPage.call(this, 'clearBrowserData',
+                     templateData.clearBrowserDataOverlayTabTitle,
                      'clearBrowserDataOverlay');
   }
-
-  ClearBrowserDataOverlay.throbIntervalId = 0;
 
   cr.addSingletonGetter(ClearBrowserDataOverlay);
 
@@ -92,10 +89,6 @@ cr.define('options', function() {
       ClearBrowserDataOverlay.getInstance().updateCommitButtonState_();
   };
 
-  ClearBrowserDataOverlay.setClearLocalDataLabel = function(label) {
-    $('deleteCookiesLabel').innerText = label;
-  };
-
   ClearBrowserDataOverlay.doneClearing = function() {
     // The delay gives the user some feedback that the clearing
     // actually worked. Otherwise the dialog just vanishes instantly in most
@@ -106,7 +99,7 @@ cr.define('options', function() {
   };
 
   ClearBrowserDataOverlay.dismiss = function() {
-    OptionsPage.clearOverlays();
+    OptionsPage.closeOverlay();
     this.setClearingState(false);
   };
 

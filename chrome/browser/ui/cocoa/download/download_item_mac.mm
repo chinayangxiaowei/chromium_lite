@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,7 +10,7 @@
 #include "chrome/browser/download/download_item_model.h"
 #import "chrome/browser/ui/cocoa/download/download_item_controller.h"
 #include "chrome/browser/ui/cocoa/download/download_util_mac.h"
-#include "skia/ext/skia_utils_mac.h"
+#include "ui/gfx/image.h"
 
 // DownloadItemMac -------------------------------------------------------------
 
@@ -56,6 +56,7 @@ void DownloadItemMac::OnDownloadUpdated(DownloadItem* download) {
       download_util::NotifySystemOfDownloadComplete(download->full_path());
       // fall through
     case DownloadItem::IN_PROGRESS:
+    case DownloadItem::INTERRUPTED:
     case DownloadItem::CANCELLED:
       [item_controller_ setStateFromDownload:download_model_.get()];
       break;
@@ -78,10 +79,9 @@ void DownloadItemMac::LoadIcon() {
 
   // We may already have this particular image cached.
   FilePath file = download_model_->download()->GetUserVerifiedFilePath();
-  SkBitmap* icon_bitmap = icon_manager->LookupIcon(file, IconLoader::SMALL);
-  if (icon_bitmap) {
-    NSImage* icon = gfx::SkBitmapToNSImage(*icon_bitmap);
-    [item_controller_ setIcon:icon];
+  gfx::Image* icon = icon_manager->LookupIcon(file, IconLoader::SMALL);
+  if (icon) {
+    [item_controller_ setIcon:*icon];
     return;
   }
 
@@ -92,10 +92,8 @@ void DownloadItemMac::LoadIcon() {
 }
 
 void DownloadItemMac::OnExtractIconComplete(IconManager::Handle handle,
-                                            SkBitmap* icon_bitmap) {
-  if (!icon_bitmap)
+                                            gfx::Image* icon) {
+  if (!icon)
     return;
-
-  NSImage* icon = gfx::SkBitmapToNSImage(*icon_bitmap);
-  [item_controller_ setIcon:icon];
+  [item_controller_ setIcon:*icon];
 }

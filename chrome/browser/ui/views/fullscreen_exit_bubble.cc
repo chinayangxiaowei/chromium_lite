@@ -6,12 +6,12 @@
 
 #include "base/utf_string_conversions.h"
 #include "chrome/app/chrome_command_ids.h"
-#include "gfx/canvas_skia.h"
 #include "grit/generated_resources.h"
 #include "ui/base/animation/slide_animation.h"
 #include "ui/base/keycodes/keyboard_codes.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/resource/resource_bundle.h"
+#include "ui/gfx/canvas_skia.h"
 #include "views/screen.h"
 #include "views/widget/root_view.h"
 #include "views/window/window.h"
@@ -39,7 +39,7 @@ class FullscreenExitBubble::FullscreenExitView : public views::View {
 
   // views::View
   virtual void Layout();
-  virtual void Paint(gfx::Canvas* canvas);
+  virtual void OnPaint(gfx::Canvas* canvas);
 
   // Clickable hint text to show in the bubble.
   views::Link link_;
@@ -83,7 +83,7 @@ void FullscreenExitBubble::FullscreenExitView::Layout() {
                   link_preferred_size.width(), link_preferred_size.height());
 }
 
-void FullscreenExitBubble::FullscreenExitView::Paint(gfx::Canvas* canvas) {
+void FullscreenExitBubble::FullscreenExitView::OnPaint(gfx::Canvas* canvas) {
   // Create a round-bottomed rect to fill the whole View.
   SkRect rect;
   SkScalar padding = SkIntToScalar(kPaddingPixels);
@@ -103,29 +103,6 @@ void FullscreenExitBubble::FullscreenExitView::Paint(gfx::Canvas* canvas) {
   paint.setColor(SK_ColorBLACK);
   canvas->AsCanvasSkia()->drawPath(path, paint);
 }
-
-
-// FullscreenExitPopup ---------------------------------------------------------
-
-#if defined(OS_WIN)
-class FullscreenExitBubble::FullscreenExitPopup : public views::WidgetWin {
- public:
-  FullscreenExitPopup() : views::WidgetWin() {}
-  virtual ~FullscreenExitPopup() {}
-
-  // views::WidgetWin:
-  virtual LRESULT OnMouseActivate(HWND window,
-                                  UINT hittest_code,
-                                  UINT message) {
-    // Prevent the popup from being activated, so it won't steal focus from the
-    // rest of the browser, and doesn't cause problems with the FocusManager's
-    // "RestoreFocusedView()" functionality.
-    return MA_NOACTIVATE;
-  }
-};
-#elif defined(OS_LINUX)
-// TODO: figure out the equivalent of MA_NOACTIVATE for gtk.
-#endif
 
 // FullscreenExitBubble --------------------------------------------------------
 
@@ -154,18 +131,13 @@ FullscreenExitBubble::FullscreenExitBubble(
       this, UTF16ToWideHack(accelerator.GetShortcutText()));
 
   // Initialize the popup.
-#if defined(OS_WIN)
-  popup_ = new FullscreenExitPopup();
-  popup_->set_window_style(WS_POPUP);
-  popup_->set_window_ex_style(WS_EX_LAYERED | WS_EX_TOOLWINDOW |
-                              l10n_util::GetExtendedTooltipStyles());
-#elif defined(OS_LINUX)
-  popup_ = new views::WidgetGtk(views::WidgetGtk::TYPE_POPUP);
-  popup_->MakeTransparent();
-#endif
+  views::Widget::CreateParams params(views::Widget::CreateParams::TYPE_POPUP);
+  params.transparent = true;
+  params.can_activate = false;
+  params.delete_on_destroy = false;
+  popup_ = views::Widget::CreateWidget(params);
   popup_->SetOpacity(static_cast<unsigned char>(0xff * kOpacity));
   popup_->Init(frame->GetNativeView(), GetPopupRect(false));
-  popup_->set_delete_on_destroy(false);
   popup_->SetContentsView(view_);
   popup_->Show();  // This does not activate the popup.
 
@@ -204,12 +176,7 @@ void FullscreenExitBubble::AnimationProgressed(
   if (popup_rect.IsEmpty()) {
     popup_->Hide();
   } else {
-#if defined(OS_WIN)
-    popup_->MoveWindow(popup_rect.x(), popup_rect.y(), popup_rect.width(),
-                       popup_rect.height());
-#elif defined(OS_LINUX)
     popup_->SetBounds(popup_rect);
-#endif
     popup_->Show();
   }
 }

@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,9 +10,9 @@
 
 #include "base/mac/scoped_cftyperef.h"
 
-#include "base/scoped_nsobject.h"
-#include "base/scoped_ptr.h"
-#include "base/scoped_vector.h"
+#include "base/memory/scoped_nsobject.h"
+#include "base/memory/scoped_ptr.h"
+#include "base/memory/scoped_vector.h"
 
 namespace tabpose {
 
@@ -47,6 +47,9 @@ class TabStripModelObserverBridge;
 
   // The layer showing the background layer. Covers the whole visible area.
   CALayer* bgLayer_;  // weak
+
+  // Top gradient.
+  CALayer* topGradient_;  // weak
 
   // The layer drawn behind the currently selected tile.
   CALayer* selectionHighlight_;  // weak

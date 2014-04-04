@@ -1,23 +1,35 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "chrome/test/webdriver/commands/url_command.h"
+
 #include <string>
 
-#include "chrome/test/webdriver/commands/url_command.h"
-#include "googleurl/src/gurl.h"
+#include "chrome/test/webdriver/commands/response.h"
 
 namespace webdriver {
 
-void URLCommand::ExecuteGet(Response* const response) {
-  GURL url;
-  if (!tab_->GetCurrentURL(&url)) {
-    SET_WEBDRIVER_ERROR(response, "GetCurrentURL failed", kInternalServerError);
-    return;
-  }
+URLCommand::URLCommand(const std::vector<std::string>& path_segments,
+                       const DictionaryValue* const parameters)
+    : WebDriverCommand(path_segments, parameters) {}
 
-  response->set_value(new StringValue(url.spec()));
-  response->set_status(kSuccess);
+URLCommand::~URLCommand() {}
+
+bool URLCommand::DoesGet() {
+  return true;
+}
+
+bool URLCommand::DoesPost() {
+  return true;
+}
+
+void URLCommand::ExecuteGet(Response* const response) {
+  std::string url;
+  ErrorCode code = session_->GetURL(&url);
+  if (code == kSuccess)
+    response->SetValue(new StringValue(url));
+  response->SetStatus(code);
 }
 
 void URLCommand::ExecutePost(Response* const response) {
@@ -28,17 +40,18 @@ void URLCommand::ExecutePost(Response* const response) {
     return;
   }
   // TODO(jmikhail): sniff for meta-redirects.
-  GURL rgurl(url);
-  if (!tab_->NavigateToURL(rgurl)) {
+  if (!session_->NavigateToURL(url)) {
     SET_WEBDRIVER_ERROR(response, "NavigateToURL failed",
                         kInternalServerError);
     return;
   }
 
-  session_->set_current_frame_xpath(L"");
-  response->set_value(new StringValue(url));
-  response->set_status(kSuccess);
+  response->SetValue(new StringValue(url));
+  response->SetStatus(kSuccess);
+}
+
+bool URLCommand::RequiresValidTab() {
+  return true;
 }
 
 }  // namespace webdriver
-

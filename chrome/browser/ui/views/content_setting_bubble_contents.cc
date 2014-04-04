@@ -10,15 +10,15 @@
 
 #include "base/utf_string_conversions.h"
 #include "chrome/browser/blocked_content_container.h"
-#include "chrome/browser/content_settings/host_content_settings_map.h"
 #include "chrome/browser/content_setting_bubble_model.h"
+#include "chrome/browser/content_settings/host_content_settings_map.h"
 #include "chrome/browser/plugin_updater.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/tab_contents/tab_contents.h"
 #include "chrome/browser/ui/views/browser_dialogs.h"
-#include "chrome/browser/ui/views/info_bubble.h"
-#include "chrome/common/notification_source.h"
-#include "chrome/common/notification_type.h"
+#include "chrome/browser/ui/views/bubble/bubble.h"
+#include "content/browser/tab_contents/tab_contents.h"
+#include "content/common/notification_source.h"
+#include "content/common/notification_type.h"
 #include "grit/generated_resources.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "views/controls/button/native_button.h"
@@ -26,12 +26,12 @@
 #include "views/controls/image_view.h"
 #include "views/controls/label.h"
 #include "views/controls/separator.h"
-#include "views/grid_layout.h"
-#include "views/standard_layout.h"
+#include "views/layout/grid_layout.h"
+#include "views/layout/layout_constants.h"
 #include "webkit/glue/plugins/plugin_list.h"
 
 #if defined(OS_LINUX)
-#include "gfx/gtk_util.h"
+#include "ui/gfx/gtk_util.h"
 #endif
 
 // If we don't clamp the maximum width, then very long URLs and titles can make
@@ -55,11 +55,10 @@ class ContentSettingBubbleContents::Favicon : public views::ImageView {
 #endif
 
   // views::View overrides:
-  virtual bool OnMousePressed(const views::MouseEvent& event);
-  virtual void OnMouseReleased(const views::MouseEvent& event, bool canceled);
-  virtual gfx::NativeCursor GetCursorForPoint(
-      views::Event::EventType event_type,
-      const gfx::Point& p);
+  virtual bool OnMousePressed(const views::MouseEvent& event) OVERRIDE;
+  virtual void OnMouseReleased(const views::MouseEvent& event) OVERRIDE;
+  virtual gfx::NativeCursor GetCursorForPoint(ui::EventType event_type,
+                                              const gfx::Point& p) OVERRIDE;
 
   ContentSettingBubbleContents* parent_;
   views::Link* link_;
@@ -87,16 +86,15 @@ bool ContentSettingBubbleContents::Favicon::OnMousePressed(
 }
 
 void ContentSettingBubbleContents::Favicon::OnMouseReleased(
-    const views::MouseEvent& event,
-    bool canceled) {
-  if (!canceled &&
-      (event.IsLeftMouseButton() || event.IsMiddleMouseButton()) &&
-      HitTest(event.location()))
-    parent_->LinkActivated(link_, event.GetFlags());
+    const views::MouseEvent& event) {
+  if ((event.IsLeftMouseButton() || event.IsMiddleMouseButton()) &&
+     HitTest(event.location())) {
+    parent_->LinkActivated(link_, event.flags());
+  }
 }
 
 gfx::NativeCursor ContentSettingBubbleContents::Favicon::GetCursorForPoint(
-    views::Event::EventType event_type,
+    ui::EventType event_type,
     const gfx::Point& p) {
 #if defined(OS_WIN)
   if (!g_hand_cursor)
@@ -114,7 +112,7 @@ ContentSettingBubbleContents::ContentSettingBubbleContents(
     : content_setting_bubble_model_(content_setting_bubble_model),
       profile_(profile),
       tab_contents_(tab_contents),
-      info_bubble_(NULL),
+      bubble_(NULL),
       custom_link_(NULL),
       manage_link_(NULL),
       close_button_(NULL) {
@@ -145,8 +143,8 @@ void ContentSettingBubbleContents::ViewHierarchyChanged(bool is_add,
 void ContentSettingBubbleContents::ButtonPressed(views::Button* sender,
                                                  const views::Event& event) {
   if (sender == close_button_) {
-    info_bubble_->set_fade_away_on_close(true);
-    info_bubble_->Close();  // CAREFUL: This deletes us.
+    bubble_->set_fade_away_on_close(true);
+    bubble_->Close();  // CAREFUL: This deletes us.
     return;
   }
 
@@ -164,12 +162,12 @@ void ContentSettingBubbleContents::LinkActivated(views::Link* source,
                                                  int event_flags) {
   if (source == custom_link_) {
     content_setting_bubble_model_->OnCustomLinkClicked();
-    info_bubble_->set_fade_away_on_close(true);
-    info_bubble_->Close();  // CAREFUL: This deletes us.
+    bubble_->set_fade_away_on_close(true);
+    bubble_->Close();  // CAREFUL: This deletes us.
     return;
   }
   if (source == manage_link_) {
-    info_bubble_->set_fade_away_on_close(true);
+    bubble_->set_fade_away_on_close(true);
     content_setting_bubble_model_->OnManageLinkClicked();
     // CAREFUL: Showing the settings window activates it, which deactivates the
     // info bubble, which causes it to close, which deletes us.
@@ -215,7 +213,7 @@ void ContentSettingBubbleContents::InitControlLayout() {
   const std::set<std::string>& plugins = bubble_content.resource_identifiers;
   if (!plugins.empty()) {
     if (!bubble_content_empty)
-      layout->AddPaddingRow(0, kRelatedControlVerticalSpacing);
+      layout->AddPaddingRow(0, views::kRelatedControlVerticalSpacing);
     for (std::set<std::string>::const_iterator it = plugins.begin();
         it != plugins.end(); ++it) {
       std::wstring name = UTF16ToWide(
@@ -235,7 +233,8 @@ void ContentSettingBubbleContents::InitControlLayout() {
         layout->AddColumnSet(popup_column_set_id);
     popup_column_set->AddColumn(GridLayout::LEADING, GridLayout::FILL, 0,
                                 GridLayout::USE_PREF, 0, 0);
-    popup_column_set->AddPaddingColumn(0, kRelatedControlHorizontalSpacing);
+    popup_column_set->AddPaddingColumn(
+        0, views::kRelatedControlHorizontalSpacing);
     popup_column_set->AddColumn(GridLayout::LEADING, GridLayout::FILL, 1,
                                 GridLayout::USE_PREF, 0, 0);
 
@@ -243,7 +242,7 @@ void ContentSettingBubbleContents::InitControlLayout() {
          i(bubble_content.popup_items.begin());
          i != bubble_content.popup_items.end(); ++i) {
       if (!bubble_content_empty)
-        layout->AddPaddingRow(0, kRelatedControlVerticalSpacing);
+        layout->AddPaddingRow(0, views::kRelatedControlVerticalSpacing);
       layout->StartRow(0, popup_column_set_id);
 
       views::Link* link = new views::Link(UTF8ToWide(i->title));
@@ -266,7 +265,7 @@ void ContentSettingBubbleContents::InitControlLayout() {
       radio->set_listener(this);
       radio_group_.push_back(radio);
       if (!bubble_content_empty)
-        layout->AddPaddingRow(0, kRelatedControlVerticalSpacing);
+        layout->AddPaddingRow(0, views::kRelatedControlVerticalSpacing);
       layout->StartRow(0, single_column_set_id);
       layout->AddView(radio);
       bubble_content_empty = false;
@@ -283,7 +282,8 @@ void ContentSettingBubbleContents::InitControlLayout() {
   // Insert a column set to indent the domain list.
   views::ColumnSet* indented_single_column_set =
       layout->AddColumnSet(indented_single_column_set_id);
-  indented_single_column_set->AddPaddingColumn(0, kPanelHorizIndentation);
+  indented_single_column_set->AddPaddingColumn(
+      0, views::kPanelHorizIndentation);
   indented_single_column_set->AddColumn(GridLayout::LEADING, GridLayout::FILL,
                                         1, GridLayout::USE_PREF, 0, 0);
   for (std::vector<ContentSettingBubbleModel::DomainList>::const_iterator i =
@@ -307,18 +307,18 @@ void ContentSettingBubbleContents::InitControlLayout() {
     custom_link_->SetEnabled(bubble_content.custom_link_enabled);
     custom_link_->SetController(this);
     if (!bubble_content_empty)
-      layout->AddPaddingRow(0, kRelatedControlVerticalSpacing);
+      layout->AddPaddingRow(0, views::kRelatedControlVerticalSpacing);
     layout->StartRow(0, single_column_set_id);
     layout->AddView(custom_link_);
     bubble_content_empty = false;
   }
 
   if (!bubble_content_empty) {
-    layout->AddPaddingRow(0, kRelatedControlVerticalSpacing);
+    layout->AddPaddingRow(0, views::kRelatedControlVerticalSpacing);
     layout->StartRow(0, single_column_set_id);
     layout->AddView(new views::Separator, 1, 1,
                     GridLayout::FILL, GridLayout::FILL);
-    layout->AddPaddingRow(0, kRelatedControlVerticalSpacing);
+    layout->AddPaddingRow(0, views::kRelatedControlVerticalSpacing);
   }
 
   const int double_column_set_id = 1;
@@ -326,7 +326,8 @@ void ContentSettingBubbleContents::InitControlLayout() {
       layout->AddColumnSet(double_column_set_id);
   double_column_set->AddColumn(GridLayout::LEADING, GridLayout::CENTER, 1,
                         GridLayout::USE_PREF, 0, 0);
-  double_column_set->AddPaddingColumn(0, kUnrelatedControlHorizontalSpacing);
+  double_column_set->AddPaddingColumn(
+      0, views::kUnrelatedControlHorizontalSpacing);
   double_column_set->AddColumn(GridLayout::TRAILING, GridLayout::CENTER, 0,
                         GridLayout::USE_PREF, 0, 0);
 

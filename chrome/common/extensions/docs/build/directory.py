@@ -225,7 +225,8 @@ class SamplesManifest(object):
     Args:
       path: The path to write the samples manifest file to.
     """
-    manifest_text = json.dumps(self._manifest_data, indent=2, sort_keys=True)
+    manifest_text = json.dumps(self._manifest_data, indent=2,
+                               sort_keys=True, separators=(',', ': '))
     output_path = os.path.realpath(path)
     try:
       output_file = open(output_path, 'w')
@@ -631,7 +632,10 @@ class Sample(dict):
 
     zip_filename = self._get_zip_filename()
     zip_path = os.path.join(sample_parentpath, zip_filename)
-    zip_manifest_path = os.path.join(sample_dirname, 'manifest.json')
+    # we pass zip_manifest_path to zipfile.getinfo(), which chokes on
+    # backslashes, so don't rely on os.path.join, use forward slash on
+    # all platforms.
+    zip_manifest_path = sample_dirname + '/manifest.json'
 
     zipfile.ZipFile.debug = 3
 

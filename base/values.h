@@ -27,16 +27,17 @@
 #include <string>
 #include <vector>
 
+#include "base/base_api.h"
 #include "base/basictypes.h"
 #include "base/string16.h"
 #include "build/build_config.h"
 
-class Value;
-class FundamentalValue;
-class StringValue;
 class BinaryValue;
 class DictionaryValue;
+class FundamentalValue;
 class ListValue;
+class StringValue;
+class Value;
 
 typedef std::vector<Value*> ValueVector;
 typedef std::map<std::string, Value*> ValueMap;
@@ -44,13 +45,13 @@ typedef std::map<std::string, Value*> ValueMap;
 // The Value class is the base class for Values.  A Value can be
 // instantiated via the Create*Value() factory methods, or by directly
 // creating instances of the subclasses.
-class Value {
+class BASE_API Value {
  public:
   enum ValueType {
     TYPE_NULL = 0,
     TYPE_BOOLEAN,
     TYPE_INTEGER,
-    TYPE_REAL,
+    TYPE_DOUBLE,
     TYPE_STRING,
     TYPE_BINARY,
     TYPE_DICTIONARY,
@@ -65,7 +66,7 @@ class Value {
   static Value* CreateNullValue();
   static FundamentalValue* CreateBooleanValue(bool in_value);
   static FundamentalValue* CreateIntegerValue(int in_value);
-  static FundamentalValue* CreateRealValue(double in_value);
+  static FundamentalValue* CreateDoubleValue(double in_value);
   static StringValue* CreateStringValue(const std::string& in_value);
   static StringValue* CreateStringValue(const string16& in_value);
 
@@ -89,7 +90,7 @@ class Value {
   // returned;  otherwise, false is returned and |out_value| is unchanged.
   virtual bool GetAsBoolean(bool* out_value) const;
   virtual bool GetAsInteger(int* out_value) const;
-  virtual bool GetAsReal(double* out_value) const;
+  virtual bool GetAsDouble(double* out_value) const;
   virtual bool GetAsString(std::string* out_value) const;
   virtual bool GetAsString(string16* out_value) const;
   virtual bool GetAsList(ListValue** out_value);
@@ -122,7 +123,7 @@ class Value {
 };
 
 // FundamentalValue represents the simple fundamental types of values.
-class FundamentalValue : public Value {
+class BASE_API FundamentalValue : public Value {
  public:
   explicit FundamentalValue(bool in_value);
   explicit FundamentalValue(int in_value);
@@ -132,7 +133,7 @@ class FundamentalValue : public Value {
   // Subclassed methods
   virtual bool GetAsBoolean(bool* out_value) const;
   virtual bool GetAsInteger(int* out_value) const;
-  virtual bool GetAsReal(double* out_value) const;
+  virtual bool GetAsDouble(double* out_value) const;
   virtual FundamentalValue* DeepCopy() const;
   virtual bool Equals(const Value* other) const;
 
@@ -140,13 +141,13 @@ class FundamentalValue : public Value {
   union {
     bool boolean_value_;
     int integer_value_;
-    double real_value_;
+    double double_value_;
   };
 
   DISALLOW_COPY_AND_ASSIGN(FundamentalValue);
 };
 
-class StringValue : public Value {
+class BASE_API StringValue : public Value {
  public:
   // Initializes a StringValue with a UTF-8 narrow character string.
   explicit StringValue(const std::string& in_value);
@@ -168,7 +169,7 @@ class StringValue : public Value {
   DISALLOW_COPY_AND_ASSIGN(StringValue);
 };
 
-class BinaryValue: public Value {
+class BASE_API BinaryValue: public Value {
  public:
   virtual ~BinaryValue();
 
@@ -205,7 +206,7 @@ class BinaryValue: public Value {
 // DictionaryValue provides a key-value dictionary with (optional) "path"
 // parsing for recursive access; see the comment at the top of the file. Keys
 // are |std::string|s and should be UTF-8 encoded.
-class DictionaryValue : public Value {
+class BASE_API DictionaryValue : public Value {
  public:
   DictionaryValue();
   virtual ~DictionaryValue();
@@ -237,7 +238,7 @@ class DictionaryValue : public Value {
   // value at that path, even if it has a different type.
   void SetBoolean(const std::string& path, bool in_value);
   void SetInteger(const std::string& path, int in_value);
-  void SetReal(const std::string& path, double in_value);
+  void SetDouble(const std::string& path, double in_value);
   void SetString(const std::string& path, const std::string& in_value);
   void SetString(const std::string& path, const string16& in_value);
 
@@ -259,7 +260,7 @@ class DictionaryValue : public Value {
   // the end of the path can be returned in the form specified.
   bool GetBoolean(const std::string& path, bool* out_value) const;
   bool GetInteger(const std::string& path, int* out_value) const;
-  bool GetReal(const std::string& path, double* out_value) const;
+  bool GetDouble(const std::string& path, double* out_value) const;
   bool GetString(const std::string& path, std::string* out_value) const;
   bool GetString(const std::string& path, string16* out_value) const;
   bool GetStringASCII(const std::string& path, std::string* out_value) const;
@@ -274,7 +275,7 @@ class DictionaryValue : public Value {
                                Value** out_value) const;
   bool GetIntegerWithoutPathExpansion(const std::string& key,
                                       int* out_value) const;
-  bool GetRealWithoutPathExpansion(const std::string& key,
+  bool GetDoubleWithoutPathExpansion(const std::string& key,
                                    double* out_value) const;
   bool GetStringWithoutPathExpansion(const std::string& key,
                                      std::string* out_value) const;
@@ -313,7 +314,7 @@ class DictionaryValue : public Value {
   // YOU SHOULD ALWAYS USE THE XXXWithoutPathExpansion() APIs WITH THESE, NOT
   // THE NORMAL XXX() APIs.  This makes sure things will work correctly if any
   // keys have '.'s in them.
-  class key_iterator
+  class BASE_API key_iterator
       : private std::iterator<std::input_iterator_tag, const std::string> {
    public:
     explicit key_iterator(ValueMap::const_iterator itr) { itr_ = itr; }
@@ -343,7 +344,7 @@ class DictionaryValue : public Value {
 };
 
 // This type of Value represents a list of other Value values.
-class ListValue : public Value {
+class BASE_API ListValue : public Value {
  public:
   typedef ValueVector::iterator iterator;
   typedef ValueVector::const_iterator const_iterator;
@@ -377,7 +378,7 @@ class ListValue : public Value {
   // in the specified form.
   bool GetBoolean(size_t index, bool* out_value) const;
   bool GetInteger(size_t index, int* out_value) const;
-  bool GetReal(size_t index, double* out_value) const;
+  bool GetDouble(size_t index, double* out_value) const;
   bool GetString(size_t index, std::string* out_value) const;
   bool GetString(size_t index, string16* out_value) const;
   bool GetBinary(size_t index, BinaryValue** out_value) const;
@@ -398,8 +399,9 @@ class ListValue : public Value {
   // Appends a Value to the end of the list.
   void Append(Value* in_value);
 
-  // Appends a Value if it's not already present.
-  // Returns true if successful, or false if the value was already present.
+  // Appends a Value if it's not already present. Takes ownership of the
+  // |in_value|. Returns true if successful, or false if the value was already
+  // present. If the value was already present the |in_value| is deleted.
   bool AppendIfNotPresent(Value* in_value);
 
   // Insert a Value at index.
@@ -431,7 +433,7 @@ class ListValue : public Value {
 
 // This interface is implemented by classes that know how to serialize and
 // deserialize Value objects.
-class ValueSerializer {
+class BASE_API ValueSerializer {
  public:
   virtual ~ValueSerializer();
 

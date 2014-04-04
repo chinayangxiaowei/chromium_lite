@@ -4,6 +4,8 @@
 
 #include "chrome_frame/chrome_frame_delegate.h"
 
+#include "chrome/common/automation_messages.h"
+
 bool ChromeFrameDelegateImpl::IsTabMessage(const IPC::Message& message) {
   bool is_tab_message = true;
   IPC_BEGIN_MESSAGE_MAP(ChromeFrameDelegateImpl, message)
@@ -15,6 +17,7 @@ bool ChromeFrameDelegateImpl::IsTabMessage(const IPC::Message& message) {
     IPC_MESSAGE_HANDLER_GENERIC(AutomationMsg_NavigationFailed, )
     IPC_MESSAGE_HANDLER_GENERIC(AutomationMsg_DidNavigate, )
     IPC_MESSAGE_HANDLER_GENERIC(AutomationMsg_TabLoaded, )
+    IPC_MESSAGE_HANDLER_GENERIC(AutomationMsg_MoveWindow, )
     IPC_MESSAGE_HANDLER_GENERIC(AutomationMsg_ForwardMessageToExternalHost, )
     IPC_MESSAGE_HANDLER_GENERIC(
         AutomationMsg_ForwardContextMenuToExternalHost, )
@@ -52,6 +55,7 @@ bool ChromeFrameDelegateImpl::OnMessageReceived(const IPC::Message& msg) {
     IPC_MESSAGE_HANDLER(AutomationMsg_NavigationFailed, OnNavigationFailed)
     IPC_MESSAGE_HANDLER(AutomationMsg_DidNavigate, OnDidNavigate)
     IPC_MESSAGE_HANDLER(AutomationMsg_TabLoaded, OnLoad)
+    IPC_MESSAGE_HANDLER(AutomationMsg_MoveWindow, OnMoveWindow)
     IPC_MESSAGE_HANDLER(AutomationMsg_ForwardMessageToExternalHost,
                         OnMessageFromChromeFrame)
     IPC_MESSAGE_HANDLER(AutomationMsg_ForwardContextMenuToExternalHost,

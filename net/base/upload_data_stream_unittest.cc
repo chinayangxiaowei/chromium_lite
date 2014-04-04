@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,7 +9,7 @@
 #include "base/basictypes.h"
 #include "base/file_path.h"
 #include "base/file_util.h"
-#include "base/scoped_ptr.h"
+#include "base/memory/scoped_ptr.h"
 #include "base/time.h"
 #include "net/base/net_errors.h"
 #include "net/base/upload_data.h"
@@ -50,7 +50,7 @@ TEST_F(UploadDataStreamTest, ConsumeAll) {
       UploadDataStream::Create(upload_data_, NULL));
   ASSERT_TRUE(stream.get());
   while (!stream->eof()) {
-    stream->DidConsume(stream->buf_len());
+    stream->MarkConsumedAndFillBuffer(stream->buf_len());
   }
 }
 
@@ -76,7 +76,7 @@ TEST_F(UploadDataStreamTest, FileSmallerThanLength) {
   uint64 read_counter = 0;
   while (!stream->eof()) {
     read_counter += stream->buf_len();
-    stream->DidConsume(stream->buf_len());
+    stream->MarkConsumedAndFillBuffer(stream->buf_len());
   }
   // UpdateDataStream will pad out the file with 0 bytes so that the HTTP
   // transaction doesn't hang.  Therefore we expected the full size.
@@ -98,9 +98,9 @@ void UploadDataStreamTest::FileChangedHelper(const FilePath& file_path,
   scoped_ptr<UploadDataStream> stream(
       UploadDataStream::Create(upload_data_, &error_code));
   if (error_expected)
-    ASSERT_TRUE(!stream.get() && error_code == net::ERR_UPLOAD_FILE_CHANGED);
+    ASSERT_TRUE(!stream.get() && error_code == ERR_UPLOAD_FILE_CHANGED);
   else
-    ASSERT_TRUE(stream.get() && error_code == net::OK);
+    ASSERT_TRUE(stream.get() && error_code == OK);
 }
 
 TEST_F(UploadDataStreamTest, FileChanged) {

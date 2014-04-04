@@ -1,11 +1,11 @@
-// Copyright (c) 2006-2008 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include <set>
 
 #include "base/file_util.h"
-#include "base/scoped_temp_dir.h"
+#include "base/memory/scoped_temp_dir.h"
 #include "base/path_service.h"
 #include "base/string_util.h"
 #include "chrome/common/chrome_paths.h"
@@ -71,7 +71,7 @@ class ZipTest : public PlatformTest {
     size_t expected_count = 0;
     for (std::set<FilePath>::iterator iter = zip_contents_.begin();
          iter != zip_contents_.end(); ++iter) {
-      if (expect_hidden_files || iter->BaseName().ToWStringHack()[0] != L'.')
+      if (expect_hidden_files || iter->BaseName().value()[0] != '.')
         ++expected_count;
     }
 

@@ -17,8 +17,8 @@
 #include "base/basictypes.h"
 #include "chrome/browser/first_run/first_run.h"
 #include "chrome/browser/ui/gtk/info_bubble_gtk.h"
-#include "chrome/common/notification_observer.h"
-#include "chrome/common/notification_registrar.h"
+#include "content/common/notification_observer.h"
+#include "content/common/notification_registrar.h"
 
 class Profile;
 
@@ -66,7 +66,7 @@ class FirstRunBubble : public InfoBubbleGtkDelegate,
   Profile* profile_;
 
   // Provides colors and stuff.
-  GtkThemeProvider* theme_provider_;
+  GtkThemeService* theme_service_;
 
   // The widget we anchor to, and a descendant of the toplevel window we
   // are transient for.

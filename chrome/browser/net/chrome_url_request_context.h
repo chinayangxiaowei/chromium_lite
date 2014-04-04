@@ -10,36 +10,31 @@
 #include <vector>
 
 #include "base/file_path.h"
-#include "chrome/browser/appcache/chrome_appcache_service.h"
-#include "chrome/browser/chrome_blob_storage_context.h"
 #include "chrome/browser/content_settings/host_content_settings_map.h"
 #include "chrome/browser/extensions/extension_info_map.h"
-#include "chrome/browser/host_zoom_map.h"
-#include "chrome/browser/io_thread.h"
-#include "chrome/browser/net/chrome_cookie_policy.h"
+#include "chrome/browser/extensions/extension_webrequest_api.h"
 #include "chrome/browser/prefs/pref_change_registrar.h"
 #include "chrome/browser/prefs/pref_service.h"
 #include "chrome/browser/prerender/prerender_manager.h"
 #include "chrome/common/extensions/extension_icon_set.h"
-#include "chrome/common/net/url_request_context_getter.h"
-#include "chrome/common/notification_registrar.h"
-#include "net/base/cookie_monster.h"
+#include "content/browser/appcache/chrome_appcache_service.h"
+#include "content/browser/chrome_blob_storage_context.h"
+#include "content/browser/host_zoom_map.h"
 #include "net/base/cookie_policy.h"
 #include "net/url_request/url_request_context.h"
-#include "webkit/database/database_tracker.h"
-#include "webkit/fileapi/sandboxed_file_system_context.h"
+#include "net/url_request/url_request_context_getter.h"
+#include "webkit/fileapi/file_system_context.h"
 
-class CommandLine;
-class PrefService;
-class Profile;
-
+class ChromeURLDataManagerBackend;
+class ChromeURLRequestContextFactory;
+class IOThread;
 namespace net {
 class DnsCertProvenanceChecker;
 class NetworkDelegate;
 }
-
-class ChromeURLRequestContext;
-class ChromeURLRequestContextFactory;
+class PrefService;
+class Profile;
+class ProfileIOData;
 
 // Subclass of net::URLRequestContext which can be used to store extra
 // information for requests.
@@ -49,6 +44,9 @@ class ChromeURLRequestContextFactory;
 class ChromeURLRequestContext : public net::URLRequestContext {
  public:
   ChromeURLRequestContext();
+
+  // Copies the state from |other| into this context.
+  void CopyFrom(ChromeURLRequestContext* other);
 
   // Gets the path to the directory user scripts are stored in.
   FilePath user_script_dir_path() const {
@@ -61,23 +59,18 @@ class ChromeURLRequestContext : public net::URLRequestContext {
     return appcache_service_.get();
   }
 
-  // Gets the database tracker associated with this context's profile.
-  webkit_database::DatabaseTracker* database_tracker() const {
-    return database_tracker_.get();
-  }
-
   // Gets the blob storage context associated with this context's profile.
   ChromeBlobStorageContext* blob_storage_context() const {
     return blob_storage_context_.get();
   }
 
   // Gets the file system host context with this context's profile.
-  fileapi::SandboxedFileSystemContext* file_system_context() const {
+  fileapi::FileSystemContext* file_system_context() const {
     return file_system_context_.get();
   }
 
-  bool is_off_the_record() const {
-    return is_off_the_record_;
+  bool is_incognito() const {
+    return is_incognito_;
   }
 
   virtual const std::string& GetUserAgent(const GURL& url) const;
@@ -92,51 +85,18 @@ class ChromeURLRequestContext : public net::URLRequestContext {
     return extension_info_map_;
   }
 
-  PrerenderManager* prerender_manager() {
+  prerender::PrerenderManager* prerender_manager() {
     return prerender_manager_.get();
   }
 
-  // Returns true if this context is an external request context, like
-  // ChromeFrame.
-  virtual bool IsExternal() const;
+  ChromeURLDataManagerBackend* GetChromeURLDataManagerBackend();
 
- protected:
-  virtual ~ChromeURLRequestContext();
-
- public:
   // Setters to simplify initializing from factory objects.
-
-  void set_accept_language(const std::string& accept_language) {
-    accept_language_ = accept_language;
-  }
-  void set_accept_charset(const std::string& accept_charset) {
-    accept_charset_ = accept_charset;
-  }
-  void set_referrer_charset(const std::string& referrer_charset) {
-    referrer_charset_ = referrer_charset;
-  }
-  void set_transport_security_state(
-      net::TransportSecurityState* state) {
-    transport_security_state_ = state;
-  }
-  void set_ssl_config_service(net::SSLConfigService* service) {
-    ssl_config_service_ = service;
-  }
-  void set_dns_cert_checker(net::DnsCertProvenanceChecker* ctx) {
-    dns_cert_checker_.reset(ctx);
-  }
-  void set_ftp_transaction_factory(net::FtpTransactionFactory* factory) {
-    ftp_transaction_factory_ = factory;
-  }
-  void set_cookie_policy(ChromeCookiePolicy* cookie_policy) {
-    chrome_cookie_policy_ = cookie_policy;  // Take a strong reference.
-    cookie_policy_ = cookie_policy;
-  }
   void set_user_script_dir_path(const FilePath& path) {
     user_script_dir_path_ = path;
   }
-  void set_is_off_the_record(bool is_off_the_record) {
-    is_off_the_record_ = is_off_the_record;
+  void set_is_incognito(bool is_incognito) {
+    is_incognito_ = is_incognito;
   }
   void set_host_content_settings_map(
       HostContentSettingsMap* host_content_settings_map) {
@@ -148,23 +108,16 @@ class ChromeURLRequestContext : public net::URLRequestContext {
   void set_appcache_service(ChromeAppCacheService* service) {
     appcache_service_ = service;
   }
-  void set_database_tracker(webkit_database::DatabaseTracker* tracker) {
-    database_tracker_ = tracker;
-  }
   void set_blob_storage_context(ChromeBlobStorageContext* context) {
     blob_storage_context_ = context;
   }
-  void set_file_system_context(fileapi::SandboxedFileSystemContext* context) {
+  void set_file_system_context(fileapi::FileSystemContext* context) {
     file_system_context_ = context;
   }
   void set_extension_info_map(ExtensionInfoMap* map) {
     extension_info_map_ = map;
   }
-  void set_network_delegate(
-      net::HttpNetworkDelegate* network_delegate) {
-    network_delegate_ = network_delegate;
-  }
-  void set_prerender_manager(PrerenderManager* prerender_manager) {
+  void set_prerender_manager(prerender::PrerenderManager* prerender_manager) {
     prerender_manager_ = prerender_manager;
   }
 
@@ -175,34 +128,45 @@ class ChromeURLRequestContext : public net::URLRequestContext {
   void OnDefaultCharsetChange(const std::string& default_charset);
 
  protected:
+  virtual ~ChromeURLRequestContext();
+
+ private:
+  // ---------------------------------------------------------------------------
+  // Important: When adding any new members below, consider whether they need to
+  // be added to CopyFrom.
+  // ---------------------------------------------------------------------------
+
   // Path to the directory user scripts are stored in.
   FilePath user_script_dir_path_;
 
   // TODO(willchan): Make these non-refcounted.
   scoped_refptr<ChromeAppCacheService> appcache_service_;
-  scoped_refptr<webkit_database::DatabaseTracker> database_tracker_;
-  scoped_refptr<ChromeCookiePolicy> chrome_cookie_policy_;
   scoped_refptr<HostContentSettingsMap> host_content_settings_map_;
   scoped_refptr<HostZoomMap> host_zoom_map_;
   scoped_refptr<ChromeBlobStorageContext> blob_storage_context_;
-  scoped_refptr<fileapi::SandboxedFileSystemContext> file_system_context_;
+  scoped_refptr<fileapi::FileSystemContext> file_system_context_;
   // TODO(aa): This should use chrome/common/extensions/extension_set.h.
   scoped_refptr<ExtensionInfoMap> extension_info_map_;
-  scoped_refptr<PrerenderManager> prerender_manager_;
+  scoped_refptr<prerender::PrerenderManager> prerender_manager_;
+  scoped_ptr<ChromeURLDataManagerBackend> chrome_url_data_manager_backend_;
 
-  bool is_off_the_record_;
+  bool is_incognito_;
 
- private:
+  // ---------------------------------------------------------------------------
+  // Important: When adding any new members above, consider whether they need to
+  // be added to CopyFrom.
+  // ---------------------------------------------------------------------------
+
   DISALLOW_COPY_AND_ASSIGN(ChromeURLRequestContext);
 };
 
-// A URLRequestContextGetter subclass used by the browser. This returns a
+// A net::URLRequestContextGetter subclass used by the browser. This returns a
 // subclass of net::URLRequestContext which can be used to store extra
 // information about requests.
 //
 // Most methods are expected to be called on the UI thread, except for
 // the destructor and GetURLRequestContext().
-class ChromeURLRequestContextGetter : public URLRequestContextGetter,
+class ChromeURLRequestContextGetter : public net::URLRequestContextGetter,
                                       public NotificationObserver {
  public:
   // Constructs a ChromeURLRequestContextGetter that will use |factory| to
@@ -214,12 +178,12 @@ class ChromeURLRequestContextGetter : public URLRequestContextGetter,
                                 ChromeURLRequestContextFactory* factory);
 
   // Note that GetURLRequestContext() can only be called from the IO
-  // thread (it will assert otherwise). GetCookieStore() and
+  // thread (it will assert otherwise). DONTUSEME_GetCookieStore() and
   // GetIOMessageLoopProxy however can be called from any thread.
   //
-  // URLRequestContextGetter implementation.
+  // net::URLRequestContextGetter implementation.
   virtual net::URLRequestContext* GetURLRequestContext();
-  virtual net::CookieStore* GetCookieStore();
+  virtual net::CookieStore* DONTUSEME_GetCookieStore();
   virtual scoped_refptr<base::MessageLoopProxy> GetIOMessageLoopProxy() const;
 
   // Releases |url_request_context_|.  It's invalid to call
@@ -235,28 +199,42 @@ class ChromeURLRequestContextGetter : public URLRequestContextGetter,
   // Create an instance for use with an 'original' (non-OTR) profile. This is
   // expected to get called on the UI thread.
   static ChromeURLRequestContextGetter* CreateOriginal(
-      Profile* profile, const FilePath& cookie_store_path,
-      const FilePath& disk_cache_path, int cache_size);
+      Profile* profile, const ProfileIOData* profile_io_data);
 
   // Create an instance for an original profile for media. This is expected to
   // get called on UI thread. This method takes a profile and reuses the
   // 'original' net::URLRequestContext for common files.
   static ChromeURLRequestContextGetter* CreateOriginalForMedia(
-      Profile* profile, const FilePath& disk_cache_path, int cache_size);
+      Profile* profile, const ProfileIOData* profile_io_data);
 
   // Create an instance for an original profile for extensions. This is expected
   // to get called on UI thread.
   static ChromeURLRequestContextGetter* CreateOriginalForExtensions(
-      Profile* profile, const FilePath& cookie_store_path);
+      Profile* profile, const ProfileIOData* profile_io_data);
+
+  // Create an instance for an original profile for an app with isolated
+  // storage. This is expected to get called on UI thread.
+  static ChromeURLRequestContextGetter* CreateOriginalForIsolatedApp(
+      Profile* profile,
+      const ProfileIOData* profile_io_data,
+      const std::string& app_id);
 
   // Create an instance for use with an OTR profile. This is expected to get
   // called on the UI thread.
-  static ChromeURLRequestContextGetter* CreateOffTheRecord(Profile* profile);
+  static ChromeURLRequestContextGetter* CreateOffTheRecord(
+      Profile* profile, const ProfileIOData* profile_io_data);
 
   // Create an instance for an OTR profile for extensions. This is expected
   // to get called on UI thread.
   static ChromeURLRequestContextGetter* CreateOffTheRecordForExtensions(
-      Profile* profile);
+      Profile* profile, const ProfileIOData* profile_io_data);
+
+  // Create an instance for an OTR profile for an app with isolated storage.
+  // This is expected to get called on UI thread.
+  static ChromeURLRequestContextGetter* CreateOffTheRecordForIsolatedApp(
+      Profile* profile,
+      const ProfileIOData* profile_io_data,
+      const std::string& app_id);
 
   // Clean up UI thread resources. This is expected to get called on the UI
   // thread before the instance is deleted on the IO thread.
@@ -274,13 +252,6 @@ class ChromeURLRequestContextGetter : public URLRequestContextGetter,
   // Registers an observer on |profile|'s preferences which will be used
   // to update the context when the default language and charset change.
   void RegisterPrefsObserver(Profile* profile);
-
-  // Creates a request context for media resources from a regular request
-  // context. This helper method is called from CreateOriginalForMedia and
-  // CreateOffTheRecordForMedia.
-  static ChromeURLRequestContextGetter* CreateRequestContextForMedia(
-      Profile* profile, const FilePath& disk_cache_path, int cache_size,
-      bool off_the_record);
 
   // These methods simply forward to the corresponding method on
   // ChromeURLRequestContext.
@@ -308,64 +279,6 @@ class ChromeURLRequestContextGetter : public URLRequestContextGetter,
   scoped_refptr<net::URLRequestContext> url_request_context_;
 
   DISALLOW_COPY_AND_ASSIGN(ChromeURLRequestContextGetter);
-};
-
-// Base class for a ChromeURLRequestContext factory. This includes
-// the shared functionality like extracting the default language/charset
-// from a profile.
-//
-// Except for the constructor, all methods of this class must be called from
-// the IO thread.
-class ChromeURLRequestContextFactory {
- public:
-  // Extract properties of interested from |profile|, for setting later into
-  // a ChromeURLRequestContext using ApplyProfileParametersToContext().
-  explicit ChromeURLRequestContextFactory(Profile* profile);
-
-  virtual ~ChromeURLRequestContextFactory();
-
-  // Called to create a new instance (will only be called once).
-  virtual ChromeURLRequestContext* Create() = 0;
-
- protected:
-  IOThread* io_thread() { return io_thread_; }
-
-  // Assigns this factory's properties to |context|.
-  void ApplyProfileParametersToContext(ChromeURLRequestContext* context);
-
-  // Values extracted from the Profile.
-  //
-  // NOTE: If you add any parameters here, keep it in sync with
-  // ApplyProfileParametersToContext().
-  bool is_media_;
-  bool is_off_the_record_;
-  bool clear_local_state_on_exit_;
-  std::string accept_language_;
-  std::string accept_charset_;
-  std::string referrer_charset_;
-
-  // TODO(aa): I think this can go away now as we no longer support standalone
-  // user scripts.
-  // TODO(willchan): Make these non-refcounted.
-  FilePath user_script_dir_path_;
-  scoped_refptr<HostContentSettingsMap> host_content_settings_map_;
-  scoped_refptr<ChromeAppCacheService> appcache_service_;
-  scoped_refptr<webkit_database::DatabaseTracker> database_tracker_;
-  scoped_refptr<HostZoomMap> host_zoom_map_;
-  scoped_refptr<net::TransportSecurityState> transport_security_state_;
-  scoped_refptr<net::SSLConfigService> ssl_config_service_;
-  scoped_refptr<net::CookieMonster::Delegate> cookie_monster_delegate_;
-  scoped_refptr<ChromeBlobStorageContext> blob_storage_context_;
-  scoped_refptr<fileapi::SandboxedFileSystemContext> file_system_context_;
-  scoped_refptr<ExtensionInfoMap> extension_info_map_;
-  scoped_refptr<PrerenderManager> prerender_manager_;
-
-  FilePath profile_dir_path_;
-
- private:
-  IOThread* const io_thread_;
-
-  DISALLOW_COPY_AND_ASSIGN(ChromeURLRequestContextFactory);
 };
 
 #endif  // CHROME_BROWSER_NET_CHROME_URL_REQUEST_CONTEXT_H_

@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,34 +8,53 @@
 
 #include <algorithm>
 
+#include "app/mac/nsimage_cache.h"
 #include "base/mac/mac_util.h"
 #include "base/mac/scoped_cftyperef.h"
-#include "base/scoped_callback_factory.h"
+#include "base/memory/scoped_callback_factory.h"
 #include "base/sys_string_conversions.h"
 #include "chrome/app/chrome_command_ids.h"
 #include "chrome/browser/browser_process.h"
 #import "chrome/browser/debugger/devtools_window.h"
+#include "chrome/browser/extensions/extension_tab_helper.h"
 #include "chrome/browser/prefs/pref_service.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/renderer_host/backing_store_mac.h"
-#include "chrome/browser/renderer_host/render_view_host.h"
 #include "chrome/browser/renderer_host/render_widget_host_view_mac.h"
-#include "chrome/browser/tab_contents/tab_contents.h"
 #include "chrome/browser/tab_contents/thumbnail_generator.h"
 #import "chrome/browser/ui/cocoa/bookmarks/bookmark_bar_constants.h"
 #import "chrome/browser/ui/cocoa/browser_window_controller.h"
+#import "chrome/browser/ui/cocoa/infobars/infobar_container_controller.h"
+#import "chrome/browser/ui/cocoa/tab_contents/favicon_util.h"
 #import "chrome/browser/ui/cocoa/tabs/tab_strip_controller.h"
 #import "chrome/browser/ui/cocoa/tabs/tab_strip_model_observer_bridge.h"
 #include "chrome/browser/ui/tab_contents/tab_contents_wrapper.h"
 #include "chrome/common/pref_names.h"
-#include "gfx/scoped_cg_context_state_mac.h"
+#include "content/browser/renderer_host/backing_store_mac.h"
+#include "content/browser/renderer_host/render_view_host.h"
+#include "content/browser/tab_contents/tab_contents.h"
 #include "grit/app_resources.h"
 #include "grit/theme_resources.h"
 #include "skia/ext/skia_utils_mac.h"
 #include "third_party/skia/include/utils/mac/SkCGUtils.h"
 #include "ui/base/resource/resource_bundle.h"
+#include "ui/gfx/image.h"
+#include "ui/gfx/scoped_cg_context_state_mac.h"
 
-const int kTopGradientHeight  = 15;
+// Height of the bottom gradient, in pixels.
+const CGFloat kBottomGradientHeight = 50;
+
+// The shade of gray at the top of the window. There's a  gradient from
+// this to |kCentralGray| at the top of the window.
+const CGFloat kTopGray = 0.77;
+
+// The shade of gray at the center of the window. Most of the window background
+// has this color.
+const CGFloat kCentralGray = 0.6;
+
+// The shade of gray at the bottom of the window. There's a gradient from
+// |kCentralGray| to this at the bottom of the window, |kBottomGradientHeight|
+// high.
+const CGFloat kBottomGray = 0.5;
 
 NSString* const kAnimationIdKey = @"AnimationId";
 NSString* const kAnimationIdFadeIn = @"FadeIn";
@@ -47,20 +66,33 @@ const CGFloat kObserverChangeAnimationDuration = 0.25;  // In seconds.
 const CGFloat kSelectionInset = 5;
 
 // CAGradientLayer is 10.6-only -- roll our own.
-@interface DarkGradientLayer : CALayer
+@interface GrayGradientLayer : CALayer {
+ @private
+  CGFloat startGray_;
+  CGFloat endGray_;
+}
+- (id)initWithStartGray:(CGFloat)startGray endGray:(CGFloat)endGray;
 - (void)drawInContext:(CGContextRef)context;
 @end
 
-@implementation DarkGradientLayer
+@implementation GrayGradientLayer
+- (id)initWithStartGray:(CGFloat)startGray endGray:(CGFloat)endGray {
+  if ((self = [super init])) {
+    startGray_ = startGray;
+    endGray_ = endGray;
+  }
+  return self;
+}
+
 - (void)drawInContext:(CGContextRef)context {
   base::mac::ScopedCFTypeRef<CGColorSpaceRef> grayColorSpace(
       CGColorSpaceCreateWithName(kCGColorSpaceGenericGray));
-  CGFloat grays[] = { 0.277, 1.0, 0.39, 1.0 };
+  CGFloat grays[] = { startGray_, 1.0, endGray_, 1.0 };
   CGFloat locations[] = { 0, 1 };
   base::mac::ScopedCFTypeRef<CGGradientRef> gradient(
       CGGradientCreateWithColorComponents(
           grayColorSpace.get(), grays, locations, arraysize(locations)));
-  CGPoint topLeft = CGPointMake(0.0, kTopGradientHeight);
+  CGPoint topLeft = CGPointMake(0.0, self.bounds.size.height);
   CGContextDrawLinearGradient(context, gradient.get(), topLeft, CGPointZero, 0);
 }
 @end
@@ -69,12 +101,12 @@ namespace tabpose {
 class ThumbnailLoader;
 }
 
-// A CALayer that draws a thumbnail for a TabContents object. The layer tries
-// to draw the TabContents's backing store directly if possible, and requests
-// a thumbnail bitmap from the TabContents's renderer process if not.
+// A CALayer that draws a thumbnail for a TabContentsWrapper object. The layer
+// tries to draw the TabContents's backing store directly if possible, and
+// requests a thumbnail bitmap from the TabContents's renderer process if not.
 @interface ThumbnailLayer : CALayer {
-  // The TabContents the thumbnail is for.
-  TabContents* contents_;  // weak
+  // The TabContentsWrapper the thumbnail is for.
+  TabContentsWrapper* contents_;  // weak
 
   // The size the thumbnail is drawn at when zoomed in.
   NSSize fullSize_;
@@ -89,7 +121,8 @@ class ThumbnailLoader;
   // True if the layer already sent a thumbnail request to a renderer.
   BOOL didSendLoad_;
 }
-- (id)initWithTabContents:(TabContents*)contents fullSize:(NSSize)fullSize;
+- (id)initWithTabContents:(TabContentsWrapper*)contents
+                 fullSize:(NSSize)fullSize;
 - (void)drawInContext:(CGContextRef)context;
 - (void)setThumbnail:(const SkBitmap&)bitmap;
 @end
@@ -160,7 +193,8 @@ void ThumbnailLoader::LoadThumbnail() {
 
 @implementation ThumbnailLayer
 
-- (id)initWithTabContents:(TabContents*)contents fullSize:(NSSize)fullSize {
+- (id)initWithTabContents:(TabContentsWrapper*)contents
+                 fullSize:(NSSize)fullSize {
   CHECK(contents);
   if ((self = [super init])) {
     contents_ = contents;
@@ -169,7 +203,7 @@ void ThumbnailLoader::LoadThumbnail() {
   return self;
 }
 
-- (void)setTabContents:(TabContents*)contents {
+- (void)setTabContents:(TabContentsWrapper*)contents {
   contents_ = contents;
 }
 
@@ -186,15 +220,25 @@ void ThumbnailLoader::LoadThumbnail() {
   int topOffset = 0;
 
   // Medium term, we want to show thumbs of the actual info bar views, which
-  // means I need to create InfoBarControllers here. At that point, we can get
-  // the height from that controller. Until then, hardcode. :-/
-  const int kInfoBarHeight = 31;
-  topOffset += contents_->infobar_delegate_count() * kInfoBarHeight;
+  // means I need to create InfoBarControllers here.
+  NSWindow* window = [contents_->tab_contents()->GetNativeView() window];
+  NSWindowController* windowController = [window windowController];
+  if ([windowController isKindOfClass:[BrowserWindowController class]]) {
+    BrowserWindowController* bwc =
+        static_cast<BrowserWindowController*>(windowController);
+    InfoBarContainerController* infoBarContainer =
+        [bwc infoBarContainerController];
+    // TODO(thakis|rsesek): This is not correct for background tabs with
+    // infobars as the aspect ratio will be wrong. Fix that.
+    topOffset += NSHeight([[infoBarContainer view] frame]) -
+        [infoBarContainer antiSpoofHeight];
+  }
 
   bool always_show_bookmark_bar =
       contents_->profile()->GetPrefs()->GetBoolean(prefs::kShowBookmarkBar);
   bool has_detached_bookmark_bar =
-      contents_->ShouldShowBookmarkBar() && !always_show_bookmark_bar;
+      contents_->tab_contents()->ShouldShowBookmarkBar() &&
+          !always_show_bookmark_bar;
   if (has_detached_bookmark_bar)
     topOffset += bookmarks::kNTPBookmarkBarHeight;
 
@@ -203,10 +247,11 @@ void ThumbnailLoader::LoadThumbnail() {
 
 - (int)bottomOffset {
   int bottomOffset = 0;
-  TabContents* devToolsContents =
-      DevToolsWindow::GetDevToolsContents(contents_);
-  if (devToolsContents && devToolsContents->render_view_host() &&
-      devToolsContents->render_view_host()->view()) {
+  TabContentsWrapper* devToolsContents =
+      DevToolsWindow::GetDevToolsContents(contents_->tab_contents());
+  if (devToolsContents && devToolsContents->tab_contents() &&
+      devToolsContents->tab_contents()->render_view_host() &&
+      devToolsContents->tab_contents()->render_view_host()->view()) {
     // The devtool's size might not be up-to-date, but since its height doesn't
     // change on window resize, and since most users don't use devtools, this is
     // good enough.
@@ -393,7 +438,7 @@ class Tile {
 
   NSRect GetFaviconStartRectRelativeTo(const Tile& tile) const;
   NSRect favicon_rect() const { return NSIntegralRect(favicon_rect_); }
-  SkBitmap favicon() const;
+  NSImage* favicon() const;
 
   // This changes |title_rect| and |favicon_rect| such that the favicon is on
   // the font's baseline and that the minimum distance between thumb rect and
@@ -410,10 +455,14 @@ class Tile {
   NSRect title_rect() const { return NSIntegralRect(title_rect_); }
 
   // Returns an unelided title. The view logic is responsible for eliding.
-  const string16& title() const { return contents_->GetTitle(); }
+  const string16& title() const {
+    return contents_->tab_contents()->GetTitle();
+  }
 
-  TabContents* tab_contents() const { return contents_; }
-  void set_tab_contents(TabContents* new_contents) { contents_ = new_contents; }
+  TabContentsWrapper* tab_contents() const { return contents_; }
+  void set_tab_contents(TabContentsWrapper* new_contents) {
+    contents_ = new_contents;
+  }
 
  private:
   friend class TileSet;
@@ -428,7 +477,7 @@ class Tile {
   CGFloat title_font_size_;
   NSRect title_rect_;
 
-  TabContents* contents_;  // weak
+  TabContentsWrapper* contents_;  // weak
 
   DISALLOW_COPY_AND_ASSIGN(Tile);
 };
@@ -450,13 +499,13 @@ NSRect Tile::GetFaviconStartRectRelativeTo(const Tile& tile) const {
   return rect;
 }
 
-SkBitmap Tile::favicon() const {
-  if (contents_->is_app()) {
-    SkBitmap* icon = contents_->GetExtensionAppIcon();
-    if (icon)
-      return *icon;
+NSImage* Tile::favicon() const {
+  if (contents_->extension_tab_helper()->is_app()) {
+    SkBitmap* bitmap = contents_->extension_tab_helper()->GetExtensionAppIcon();
+    if (bitmap)
+      return gfx::SkBitmapToNSImage(*bitmap);
   }
-  return contents_->GetFavIcon();
+  return mac::FaviconForTabContents(contents_->tab_contents());
 }
 
 NSRect Tile::GetTitleStartRectRelativeTo(const Tile& tile) const {
@@ -521,7 +570,7 @@ class TileSet {
 
   // Inserts a new Tile object containing |contents| at |index|. Does no
   // relayout.
-  void InsertTileAt(int index, TabContents* contents);
+  void InsertTileAt(int index, TabContentsWrapper* contents);
 
   // Removes the Tile object at |index|. Does no relayout.
   void RemoveTileAt(int index);
@@ -561,11 +610,11 @@ class TileSet {
 };
 
 void TileSet::Build(TabStripModel* source_model) {
-  selected_index_ =  source_model->selected_index();
+  selected_index_ =  source_model->active_index();
   tiles_.resize(source_model->count());
   for (size_t i = 0; i < tiles_.size(); ++i) {
     tiles_[i] = new Tile;
-    tiles_[i]->contents_ = source_model->GetTabContentsAt(i)->tab_contents();
+    tiles_[i]->contents_ = source_model->GetTabContentsAt(i);
   }
 }
 
@@ -787,7 +836,7 @@ int TileSet::previous_index() const {
   return new_index;
 }
 
-void TileSet::InsertTileAt(int index, TabContents* contents) {
+void TileSet::InsertTileAt(int index, TabContentsWrapper* contents) {
   tiles_.insert(tiles_.begin() + index, new Tile);
   tiles_[index]->contents_ = contents;
 }
@@ -1029,17 +1078,8 @@ void AnimateCALayerOpacityFromTo(
   NSFont* font = [NSFont systemFontOfSize:tile.title_font_size()];
   tile.set_font_metrics([font ascender], -[font descender]);
 
-  NSImage* nsFavicon = gfx::SkBitmapToNSImage(tile.favicon());
-  // Either we don't have a valid favicon or there was some issue converting
-  // it from an SkBitmap. Either way, just show the default.
-  if (!nsFavicon) {
-    NSImage* defaultFavIcon =
-        ResourceBundle::GetSharedInstance().GetNativeImageNamed(
-            IDR_DEFAULT_FAVICON);
-    nsFavicon = defaultFavIcon;
-  }
   base::mac::ScopedCFTypeRef<CGImageRef> favicon(
-      base::mac::CopyNSImageToCGImage(nsFavicon));
+      base::mac::CopyNSImageToCGImage(tile.favicon()));
 
   CALayer* faviconLayer = [CALayer layer];
   if (showZoom) {
@@ -1106,7 +1146,7 @@ void AnimateCALayerOpacityFromTo(
   {
     ScopedCAActionDisabler disabler;
     // Background layer -- the visible part of the window.
-    gray_.reset(CGColorCreateGenericGray(0.39, 1.0));
+    gray_.reset(CGColorCreateGenericGray(kCentralGray, 1.0));
     bgLayer_ = [CALayer layer];
     bgLayer_.backgroundColor = gray_;
     bgLayer_.frame = NSRectToCGRect(containingRect_);
@@ -1122,16 +1162,31 @@ void AnimateCALayerOpacityFromTo(
     selectionHighlight_.hidden = YES;
     [bgLayer_ addSublayer:selectionHighlight_];
 
-    // Top gradient.
-    CALayer* gradientLayer = [DarkGradientLayer layer];
+    // Bottom gradient.
+    CALayer* gradientLayer = [[[GrayGradientLayer alloc]
+        initWithStartGray:kCentralGray endGray:kBottomGray] autorelease];
     gradientLayer.frame = CGRectMake(
         0,
-        NSHeight(containingRect_) - kTopGradientHeight,
+        0,
         NSWidth(containingRect_),
-        kTopGradientHeight);
+        kBottomGradientHeight);
     [gradientLayer setNeedsDisplay];  // Draw once.
     [bgLayer_ addSublayer:gradientLayer];
   }
+  // Top gradient (fades in).
+  CGFloat toolbarHeight = NSHeight([self frame]) - NSHeight(containingRect_);
+  topGradient_ = [[[GrayGradientLayer alloc]
+      initWithStartGray:kTopGray endGray:kCentralGray] autorelease];
+  topGradient_.frame = CGRectMake(
+      0,
+      NSHeight([self frame]) - toolbarHeight,
+      NSWidth(containingRect_),
+      toolbarHeight);
+  [topGradient_ setNeedsDisplay];  // Draw once.
+  [rootLayer_ addSublayer:topGradient_];
+  NSTimeInterval interval =
+      kDefaultAnimationDuration * (slomo ? kSlomoFactor : 1);
+  AnimateCALayerOpacityFromTo(topGradient_, 0, 1, interval);
 
   // Layers for the tab thumbnails.
   tileSet_->Build(tabStripModel_);
@@ -1221,7 +1276,7 @@ void AnimateCALayerOpacityFromTo(
       [self fadeAwayInSlomo:([event modifierFlags] & NSShiftKeyMask) != 0];
       break;
     case '\e':  // Escape
-      tileSet_->set_selected_index(tabStripModel_->selected_index());
+      tileSet_->set_selected_index(tabStripModel_->active_index());
       [self fadeAwayInSlomo:([event modifierFlags] & NSShiftKeyMask) != 0];
       break;
   }
@@ -1391,8 +1446,8 @@ void AnimateCALayerOpacityFromTo(
 
   // Select chosen tab.
   if (tileSet_->selected_index() < tabStripModel_->count()) {
-    tabStripModel_->SelectTabContentsAt(tileSet_->selected_index(),
-                                        /*user_gesture=*/true);
+    tabStripModel_->ActivateTabAt(tileSet_->selected_index(),
+                                  /*user_gesture=*/true);
   } else {
     DCHECK_EQ(tileSet_->selected_index(), 0);
   }
@@ -1418,6 +1473,7 @@ void AnimateCALayerOpacityFromTo(
   ScopedCAActionSetDuration durationSetter(duration);
   for (int i = 0; i < tabStripModel_->count(); ++i)
     [self fadeAwayTileAtIndex:i];
+  AnimateCALayerOpacityFromTo(topGradient_, 1, 0, duration);
 }
 
 - (void)animationDidStop:(CAAnimation*)animation finished:(BOOL)finished {
@@ -1511,7 +1567,7 @@ void AnimateCALayerOpacityFromTo(
   ScopedCAActionSetDuration durationSetter(kObserverChangeAnimationDuration);
 
   // Insert new layer and relayout.
-  tileSet_->InsertTileAt(index, contents->tab_contents());
+  tileSet_->InsertTileAt(index, contents);
   tileSet_->Layout(containingRect_);
   [self  addLayersForTile:tileSet_->tile_at(index)
                  showZoom:NO
@@ -1636,16 +1692,16 @@ void AnimateCALayerOpacityFromTo(
   // For now, just make sure that we don't hold on to an invalid TabContents
   // object.
   tabpose::Tile& tile = tileSet_->tile_at(index);
-  if (contents->tab_contents() == tile.tab_contents()) {
+  if (contents == tile.tab_contents()) {
     // TODO(thakis): Install a timer to send a thumb request/update title/update
     // favicon after 20ms or so, and reset the timer every time this is called
     // to make sure we get an updated thumb, without requesting them all over.
     return;
   }
 
-  tile.set_tab_contents(contents->tab_contents());
+  tile.set_tab_contents(contents);
   ThumbnailLayer* thumbLayer = [allThumbnailLayers_ objectAtIndex:index];
-  [thumbLayer setTabContents:contents->tab_contents()];
+  [thumbLayer setTabContents:contents];
 }
 
 - (void)tabStripModelDeleted {

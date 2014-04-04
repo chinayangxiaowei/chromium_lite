@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,7 +6,7 @@
 #define CHROME_BROWSER_CHROMEOS_LOGIN_NETWORK_SELECTION_VIEW_H_
 #pragma once
 
-#include "base/scoped_ptr.h"
+#include "base/memory/scoped_ptr.h"
 #include "base/string16.h"
 #include "chrome/browser/chromeos/login/login_html_dialog.h"
 #include "chrome/browser/chromeos/views/dropdown_button.h"
@@ -45,7 +45,7 @@ class NetworkSelectionView : public views::View,
   void Init();
 
   // Update strings from the resources. Executed on language change.
-  void UpdateLocalizedStrings();
+  void UpdateLocalizedStringsAndFonts();
 
   // Returns top level native window for the view.
   gfx::NativeWindow GetNativeWindow() const;
@@ -80,9 +80,6 @@ class NetworkSelectionView : public views::View,
   virtual bool SkipDefaultKeyEventProcessing(const views::KeyEvent& e) {
     return true;
   }
-  virtual void ViewHierarchyChanged(bool is_add,
-                                    views::View* parent,
-                                    views::View* child);
 
   // LoginHtmlDialog::Delegate implementation:
   virtual void OnDialogClosed() {}

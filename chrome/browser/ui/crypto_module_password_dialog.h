@@ -7,15 +7,18 @@
 #pragma once
 
 #include <string>
+#include <vector>
 
 #include "base/callback.h"
+#include "base/memory/ref_counted.h"
 
-namespace base {
+namespace crypto {
 class CryptoModuleBlockingPasswordDelegate;
 }
 
 namespace net {
 class CryptoModule;
+typedef std::vector<scoped_refptr<CryptoModule> > CryptoModuleList;
 class X509Certificate;
 }
 
@@ -26,6 +29,7 @@ enum CryptoModulePasswordReason {
   kCryptoModulePasswordKeygen,
   kCryptoModulePasswordCertEnrollment,
   kCryptoModulePasswordClientAuth,
+  kCryptoModulePasswordListCerts,
   kCryptoModulePasswordCertImport,
   kCryptoModulePasswordCertExport,
 };
@@ -44,18 +48,18 @@ void ShowCryptoModulePasswordDialog(const std::string& module_name,
 
 // Returns a CryptoModuleBlockingPasswordDelegate to open a dialog and block
 // until returning. Should only be used on a worker thread.
-base::CryptoModuleBlockingPasswordDelegate*
+crypto::CryptoModuleBlockingPasswordDelegate*
     NewCryptoModuleBlockingDialogDelegate(
         CryptoModulePasswordReason reason,
         const std::string& server);
 
-// Asynchronously unlock |module|, if necessary.  |callback| is called when done
-// (regardless if module was successfully unlocked or not).  Should only be
-// called on UI thread.
-void UnlockSlotIfNecessary(net::CryptoModule* module,
-                           browser::CryptoModulePasswordReason reason,
-                           const std::string& server,
-                           Callback0::Type* callback);
+// Asynchronously unlock |modules|, if necessary.  |callback| is called when
+// done (regardless if any modules were successfully unlocked or not).  Should
+// only be called on UI thread.
+void UnlockSlotsIfNecessary(const net::CryptoModuleList& modules,
+                            browser::CryptoModulePasswordReason reason,
+                            const std::string& server,
+                            Callback0::Type* callback);
 
 // Asynchronously unlock the |cert|'s module, if necessary.  |callback| is
 // called when done (regardless if module was successfully unlocked or not).

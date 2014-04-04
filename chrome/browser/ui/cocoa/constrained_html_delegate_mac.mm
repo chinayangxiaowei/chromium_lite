@@ -1,17 +1,18 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "chrome/browser/dom_ui/constrained_html_ui.h"
+#include "chrome/browser/ui/webui/constrained_html_ui.h"
 
-#include "base/scoped_nsobject.h"
-#include "chrome/browser/dom_ui/html_dialog_ui.h"
-#include "chrome/browser/dom_ui/html_dialog_tab_contents_delegate.h"
-#include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/tab_contents/tab_contents.h"
-#include "chrome/browser/ui/cocoa/constrained_window_mac.h"
 #import <Cocoa/Cocoa.h>
-#include "ipc/ipc_message.h"
+
+#include "base/memory/scoped_nsobject.h"
+#include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/ui/cocoa/constrained_window_mac.h"
+#include "chrome/browser/ui/webui/html_dialog_ui.h"
+#include "chrome/browser/ui/webui/html_dialog_tab_contents_delegate.h"
+#include "content/browser/tab_contents/tab_contents.h"
+#include "ui/gfx/size.h"
 
 class ConstrainedHtmlDelegateMac :
     public ConstrainedWindowMacDelegateCustomSheet,
@@ -39,7 +40,6 @@ class ConstrainedHtmlDelegateMac :
 
   // HtmlDialogTabContentsDelegate ---------------------------------------------
   void MoveContents(TabContents* source, const gfx::Rect& pos) {}
-  void ToolbarSizeChanged(TabContents* source, bool is_animating) {}
   void HandleKeyboardEvent(const NativeWebKeyboardEvent& event) {}
 
   void set_window(ConstrainedWindow* window) {
@@ -51,7 +51,7 @@ class ConstrainedHtmlDelegateMac :
   HtmlDialogUIDelegate* html_delegate_;  // weak.
 
   // The constrained window that owns |this|. Saved here because it needs to be
-  // closed in response to the DOMUI OnDialogClose callback.
+  // closed in response to the WebUI OnDialogClose callback.
   ConstrainedWindow* constrained_window_;
 
   DISALLOW_COPY_AND_ASSIGN(ConstrainedHtmlDelegateMac);
@@ -122,7 +122,7 @@ void ConstrainedHtmlDelegateMac::OnDialogClose() {
 }
 
 // static
-void ConstrainedHtmlUI::CreateConstrainedHtmlDialog(
+ConstrainedWindow* ConstrainedHtmlUI::CreateConstrainedHtmlDialog(
     Profile* profile,
     HtmlDialogUIDelegate* delegate,
     TabContents* overshadowed) {
@@ -133,6 +133,7 @@ void ConstrainedHtmlUI::CreateConstrainedHtmlDialog(
   ConstrainedWindow* constrained_window =
       overshadowed->CreateConstrainedDialog(constrained_delegate);
   constrained_delegate->set_window(constrained_window);
+  return constrained_window;
 }
 
 @implementation ConstrainedHtmlDialogSheetCocoa

@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -28,8 +28,8 @@ namespace {
 // some conditions.  See http://crbug.com/4606.
 const int kCleanupInterval = 10;  // DO NOT INCREASE THIS TIMEOUT.
 
-// Indicate whether or not we should establish a new TCP connection after a
-// certain timeout has passed without receiving an ACK.
+// Indicate whether or not we should establish a new transport layer connection
+// after a certain timeout has passed without receiving an ACK.
 bool g_connect_backup_jobs_enabled = true;
 
 }  // namespace
@@ -114,10 +114,8 @@ void ConnectJob::LogConnectStart() {
 }
 
 void ConnectJob::LogConnectCompletion(int net_error) {
-  scoped_refptr<NetLog::EventParameters> params;
-  if (net_error != OK)
-    params = new NetLogIntegerParameter("net_error", net_error);
-  net_log().EndEvent(NetLog::TYPE_SOCKET_POOL_CONNECT_JOB_CONNECT, params);
+  net_log().EndEventWithNetErrorCode(
+      NetLog::TYPE_SOCKET_POOL_CONNECT_JOB_CONNECT, net_error);
 }
 
 void ConnectJob::OnTimeout() {
@@ -135,11 +133,13 @@ ClientSocketPoolBaseHelper::Request::Request(
     ClientSocketHandle* handle,
     CompletionCallback* callback,
     RequestPriority priority,
+    bool ignore_limits,
     Flags flags,
     const BoundNetLog& net_log)
     : handle_(handle),
       callback_(callback),
       priority_(priority),
+      ignore_limits_(ignore_limits),
       flags_(flags),
       net_log_(net_log) {}
 
@@ -165,7 +165,7 @@ ClientSocketPoolBaseHelper::ClientSocketPoolBaseHelper(
   DCHECK_LE(0, max_sockets_per_group);
   DCHECK_LE(max_sockets_per_group, max_sockets);
 
-  NetworkChangeNotifier::AddObserver(this);
+  NetworkChangeNotifier::AddIPAddressObserver(this);
 }
 
 ClientSocketPoolBaseHelper::~ClientSocketPoolBaseHelper() {
@@ -177,7 +177,7 @@ ClientSocketPoolBaseHelper::~ClientSocketPoolBaseHelper() {
   DCHECK(pending_callback_map_.empty());
   DCHECK_EQ(0, connecting_socket_count_);
 
-  NetworkChangeNotifier::RemoveObserver(this);
+  NetworkChangeNotifier::RemoveIPAddressObserver(this);
 }
 
 // InsertRequestIntoQueue inserts the request into the queue based on
@@ -196,7 +196,7 @@ void ClientSocketPoolBaseHelper::InsertRequestIntoQueue(
 // static
 const ClientSocketPoolBaseHelper::Request*
 ClientSocketPoolBaseHelper::RemoveRequestFromQueue(
-    RequestQueue::iterator it, Group* group) {
+    const RequestQueue::iterator& it, Group* group) {
   const Request* req = *it;
   group->mutable_pending_requests()->erase(it);
   // If there are no more requests, we kill the backup timer.
@@ -216,7 +216,7 @@ int ClientSocketPoolBaseHelper::RequestSocket(
 
   int rv = RequestSocketInternal(group_name, request);
   if (rv != ERR_IO_PENDING) {
-    request->net_log().EndEvent(NetLog::TYPE_SOCKET_POOL, NULL);
+    request->net_log().EndEventWithNetErrorCode(NetLog::TYPE_SOCKET_POOL, rv);
     CHECK(!request->handle()->is_initialized());
     delete request;
   } else {
@@ -246,12 +246,11 @@ void ClientSocketPoolBaseHelper::RequestSockets(
   // RequestSocketsInternal() may delete the group.
   bool deleted_group = false;
 
+  int rv = OK;
   for (int num_iterations_left = num_sockets;
        group->NumActiveSocketSlots() < num_sockets &&
        num_iterations_left > 0 ; num_iterations_left--) {
-    int rv = RequestSocketInternal(group_name, &request);
-    // TODO(willchan): Possibly check for ERR_PRECONNECT_MAX_SOCKET_LIMIT so we
-    // can log it into the NetLog.
+    rv = RequestSocketInternal(group_name, &request);
     if (rv < 0 && rv != ERR_IO_PENDING) {
       // We're encountering a synchronous error.  Give up.
       if (!ContainsKey(group_map_, group_name))
@@ -270,8 +269,10 @@ void ClientSocketPoolBaseHelper::RequestSockets(
   if (!deleted_group && group->IsEmpty())
     RemoveGroup(group_name);
 
-  request.net_log().EndEvent(
-      NetLog::TYPE_SOCKET_POOL_CONNECTING_N_SOCKETS, NULL);
+  if (rv == ERR_IO_PENDING)
+    rv = OK;
+  request.net_log().EndEventWithNetErrorCode(
+      NetLog::TYPE_SOCKET_POOL_CONNECTING_N_SOCKETS, rv);
 }
 
 int ClientSocketPoolBaseHelper::RequestSocketInternal(
@@ -292,13 +293,14 @@ int ClientSocketPoolBaseHelper::RequestSocketInternal(
     return ERR_IO_PENDING;
 
   // Can we make another active socket now?
-  if (!group->HasAvailableSocketSlot(max_sockets_per_group_)) {
+  if (!group->HasAvailableSocketSlot(max_sockets_per_group_) &&
+      !request->ignore_limits()) {
     request->net_log().AddEvent(
         NetLog::TYPE_SOCKET_POOL_STALLED_MAX_SOCKETS_PER_GROUP, NULL);
     return ERR_IO_PENDING;
   }
 
-  if (ReachedMaxSocketsLimit()) {
+  if (ReachedMaxSocketsLimit() && !request->ignore_limits()) {
     if (idle_socket_count() > 0) {
       bool closed = CloseOneIdleSocketExceptInGroup(group);
       if (preconnecting && !closed)
@@ -637,8 +639,15 @@ void ClientSocketPoolBaseHelper::RemoveGroup(GroupMap::iterator it) {
 }
 
 // static
-void ClientSocketPoolBaseHelper::set_connect_backup_jobs_enabled(bool enabled) {
+bool ClientSocketPoolBaseHelper::connect_backup_jobs_enabled() {
+  return g_connect_backup_jobs_enabled;
+}
+
+// static
+bool ClientSocketPoolBaseHelper::set_connect_backup_jobs_enabled(bool enabled) {
+  bool old_value = g_connect_backup_jobs_enabled;
   g_connect_backup_jobs_enabled = enabled;
+  return old_value;
 }
 
 void ClientSocketPoolBaseHelper::EnableConnectBackupJobs() {
@@ -784,8 +793,8 @@ void ClientSocketPoolBaseHelper::OnConnectJobComplete(
         HandOutSocket(socket.release(), false /* unused socket */, r->handle(),
                       base::TimeDelta(), group, r->net_log());
       }
-      r->net_log().EndEvent(NetLog::TYPE_SOCKET_POOL, make_scoped_refptr(
-          new NetLogIntegerParameter("net_error", result)));
+      r->net_log().EndEventWithNetErrorCode(NetLog::TYPE_SOCKET_POOL,
+                                            result);
       InvokeUserCallbackLater(r->handle(), r->callback(), result);
     } else {
       RemoveConnectJob(job, group);
@@ -845,10 +854,7 @@ void ClientSocketPoolBaseHelper::ProcessPendingRequest(
     if (group->IsEmpty())
       RemoveGroup(group_name);
 
-    scoped_refptr<NetLog::EventParameters> params;
-    if (rv != OK)
-      params = new NetLogIntegerParameter("net_error", rv);
-    request->net_log().EndEvent(NetLog::TYPE_SOCKET_POOL, params);
+    request->net_log().EndEventWithNetErrorCode(NetLog::TYPE_SOCKET_POOL, rv);
     InvokeUserCallbackLater(
         request->handle(), request->callback(), rv);
   }
@@ -941,7 +947,8 @@ bool ClientSocketPoolBaseHelper::ReachedMaxSocketsLimit() const {
   // Each connecting socket will eventually connect and be handed out.
   int total = handed_out_socket_count_ + connecting_socket_count_ +
       idle_socket_count();
-  DCHECK_LE(total, max_sockets_);
+  // There can be more sockets than the limit since some requests can ignore
+  // the limit
   if (total < max_sockets_)
     return false;
   return true;

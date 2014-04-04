@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,7 +10,6 @@
 #include "media/base/filter_host.h"
 #include "media/base/limits.h"
 #include "media/ffmpeg/ffmpeg_common.h"
-#include "media/filters/ffmpeg_interfaces.h"
 #include "media/video/omx_video_decode_engine.h"
 
 namespace media {
@@ -20,8 +19,7 @@ OmxVideoDecoder::OmxVideoDecoder(
     VideoDecodeContext* context)
     : message_loop_(message_loop),
       decode_engine_(new OmxVideoDecodeEngine()),
-      decode_context_(context),
-      width_(0), height_(0) {
+      decode_context_(context) {
   DCHECK(decode_engine_.get());
   memset(&info_, 0, sizeof(info_));
 }
@@ -31,14 +29,15 @@ OmxVideoDecoder::~OmxVideoDecoder() {
 }
 
 void OmxVideoDecoder::Initialize(DemuxerStream* demuxer_stream,
-                                 FilterCallback* callback) {
+                                 FilterCallback* callback,
+                                 StatisticsCallback* stats_callback) {
   if (MessageLoop::current() != message_loop_) {
     message_loop_->PostTask(
         FROM_HERE,
         NewRunnableMethod(this,
                           &OmxVideoDecoder::Initialize,
                           make_scoped_refptr(demuxer_stream),
-                          callback));
+                          callback, stats_callback));
     return;
   }
 
@@ -47,64 +46,51 @@ void OmxVideoDecoder::Initialize(DemuxerStream* demuxer_stream,
   DCHECK(!initialize_callback_.get());
 
   initialize_callback_.reset(callback);
+  statistics_callback_.reset(stats_callback);
   demuxer_stream_ = demuxer_stream;
 
   // We require bit stream converter for openmax hardware decoder.
   demuxer_stream->EnableBitstreamConverter();
 
-  // Get the AVStream by querying for the provider interface.
-  AVStreamProvider* av_stream_provider;
-  if (!demuxer_stream->QueryInterface(&av_stream_provider)) {
+  AVStream* av_stream = demuxer_stream->GetAVStream();
+  if (!av_stream) {
     VideoCodecInfo info = {0};
-    OmxVideoDecoder::OnInitializeComplete(info);
-    return;
-  }
-  AVStream* av_stream = av_stream_provider->GetAVStream();
-
-  // TODO(jiesun): shouldn't we check this in demuxer?
-  width_ = av_stream->codec->width;
-  height_ = av_stream->codec->height;
-  if (width_ > Limits::kMaxDimension ||
-      height_ > Limits::kMaxDimension ||
-      (width_ * height_) > Limits::kMaxCanvas) {
-    VideoCodecInfo info = {0};
-    OmxVideoDecoder::OnInitializeComplete(info);
+    OnInitializeComplete(info);
     return;
   }
 
-  VideoCodecConfig config;
-  switch (av_stream->codec->codec_id) {
-    case CODEC_ID_VC1:
-      config.codec = kCodecVC1; break;
-    case CODEC_ID_H264:
-      config.codec = kCodecH264; break;
-    case CODEC_ID_THEORA:
-      config.codec = kCodecTheora; break;
-    case CODEC_ID_MPEG2VIDEO:
-      config.codec = kCodecMPEG2; break;
-    case CODEC_ID_MPEG4:
-      config.codec = kCodecMPEG4; break;
-    default:
-      NOTREACHED();
+  int width = av_stream->codec->coded_width;
+  int height = av_stream->codec->coded_height;
+  if (width > Limits::kMaxDimension ||
+      height > Limits::kMaxDimension ||
+      (width * height) > Limits::kMaxCanvas) {
+    VideoCodecInfo info = {0};
+    OnInitializeComplete(info);
+    return;
   }
-  config.opaque_context = NULL;
-  config.width = width_;
-  config.height = height_;
+
+  VideoCodecConfig config(CodecIDToVideoCodec(av_stream->codec->codec_id),
+                          width, height,
+                          av_stream->r_frame_rate.num,
+                          av_stream->r_frame_rate.den,
+                          av_stream->codec->extradata,
+                          av_stream->codec->extradata_size);
   decode_engine_->Initialize(message_loop_, this, NULL, config);
 }
 
 void OmxVideoDecoder::OnInitializeComplete(const VideoCodecInfo& info) {
+  // TODO(scherkus): Dedup this from FFmpegVideoDecoder::OnInitializeComplete.
   DCHECK_EQ(MessageLoop::current(), message_loop_);
   DCHECK(initialize_callback_.get());
 
-  info_ = info;  // Save a copy.
+  info_ = info;
   AutoCallbackRunner done_runner(initialize_callback_.release());
 
   if (info.success) {
-    media_format_.SetAsString(MediaFormat::kMimeType,
-                              mime_type::kUncompressedVideo);
-    media_format_.SetAsInteger(MediaFormat::kWidth, width_);
-    media_format_.SetAsInteger(MediaFormat::kHeight, height_);
+    media_format_.SetAsInteger(MediaFormat::kWidth,
+                               info.stream_info.surface_width);
+    media_format_.SetAsInteger(MediaFormat::kHeight,
+                               info.stream_info.surface_height);
     media_format_.SetAsInteger(
         MediaFormat::kSurfaceType,
         static_cast<int>(info.stream_info.surface_type));
@@ -204,8 +190,10 @@ void OmxVideoDecoder::ProduceVideoSample(scoped_refptr<Buffer> buffer) {
   demuxer_stream_->Read(NewCallback(this, &OmxVideoDecoder::DemuxCompleteTask));
 }
 
-void OmxVideoDecoder::ConsumeVideoFrame(scoped_refptr<VideoFrame> frame) {
+void OmxVideoDecoder::ConsumeVideoFrame(scoped_refptr<VideoFrame> frame,
+                                        const PipelineStatistics& statistics) {
   DCHECK_EQ(message_loop_, MessageLoop::current());
+  statistics_callback_->Run(statistics);
   VideoFrameReady(frame);
 }
 

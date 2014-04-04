@@ -4,7 +4,7 @@
 
 #include "webkit/plugins/ppapi/ppapi_unittest.h"
 
-#include "base/scoped_ptr.h"
+#include "base/memory/scoped_ptr.h"
 #include "ppapi/c/pp_var.h"
 #include "ppapi/c/ppp_instance.h"
 #include "third_party/npapi/bindings/npruntime.h"
@@ -183,8 +183,7 @@ TEST_F(ResourceTrackerTest, DeleteObjectVarWithInstance) {
 
   // Make an object var.
   scoped_ptr<NPObject> npobject(NewTrackedNPObject());
-  PP_Var pp_object = ObjectVar::NPObjectToPPVar(instance2.get(),
-                                                npobject.get());
+  ObjectVar::NPObjectToPPVar(instance2.get(), npobject.get());
 
   EXPECT_EQ(1, g_npobjects_alive);
   EXPECT_EQ(1u, tracker().GetLiveObjectsForInstance(pp_instance2));

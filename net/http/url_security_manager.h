@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,8 +6,8 @@
 #define NET_HTTP_URL_SECURITY_MANAGER_H_
 #pragma once
 
-#include "base/scoped_ptr.h"
 #include "base/basictypes.h"
+#include "base/memory/scoped_ptr.h"
 
 class GURL;
 
@@ -73,25 +73,6 @@ class URLSecurityManagerWhitelist : public URLSecurityManager {
 
   DISALLOW_COPY_AND_ASSIGN(URLSecurityManagerWhitelist);
 };
-
-#if defined(UNIT_TEST)
-// An URLSecurityManager which is very permissive.
-class URLSecurityManagerAllow : public URLSecurityManager {
- public:
-  URLSecurityManagerAllow() {}
-  virtual ~URLSecurityManagerAllow() {}
-
-  virtual bool CanUseDefaultCredentials(const GURL& auth_origin) const {
-    return true;
-  }
-  virtual bool CanDelegate(const GURL& auth_origin) const {
-    return true;
-  }
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(URLSecurityManagerAllow);
-};
-#endif  // defined(UNIT_TEST)
 
 }  // namespace net
 

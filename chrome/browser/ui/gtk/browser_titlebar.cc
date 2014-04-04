@@ -11,14 +11,13 @@
 #include <vector>
 
 #include "base/command_line.h"
-#include "base/singleton.h"
+#include "base/memory/singleton.h"
 #include "base/string_piece.h"
 #include "base/string_tokenizer.h"
 #include "base/utf_string_conversions.h"
 #include "chrome/app/chrome_command_ids.h"
 #include "chrome/browser/prefs/pref_service.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/tab_contents/tab_contents.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/gtk/accelerators_gtk.h"
 #include "chrome/browser/ui/gtk/browser_window_gtk.h"
@@ -26,22 +25,23 @@
 #if defined(USE_GCONF)
 #include "chrome/browser/ui/gtk/gconf_titlebar_listener.h"
 #endif
-#include "chrome/browser/ui/gtk/gtk_theme_provider.h"
+#include "chrome/browser/ui/gtk/gtk_theme_service.h"
 #include "chrome/browser/ui/gtk/gtk_util.h"
 #include "chrome/browser/ui/gtk/menu_gtk.h"
 #include "chrome/browser/ui/gtk/nine_box.h"
 #include "chrome/browser/ui/gtk/tabs/tab_strip_gtk.h"
 #include "chrome/browser/ui/toolbar/encoding_menu_controller.h"
 #include "chrome/browser/ui/toolbar/wrench_menu_model.h"
-#include "chrome/common/notification_service.h"
 #include "chrome/common/pref_names.h"
-#include "gfx/gtk_util.h"
-#include "gfx/skbitmap_operations.h"
+#include "content/browser/tab_contents/tab_contents.h"
+#include "content/common/notification_service.h"
 #include "grit/app_resources.h"
 #include "grit/generated_resources.h"
 #include "grit/theme_resources.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/resource/resource_bundle.h"
+#include "ui/gfx/gtk_util.h"
+#include "ui/gfx/skbitmap_operations.h"
 
 namespace {
 
@@ -214,7 +214,7 @@ BrowserTitlebar::BrowserTitlebar(BrowserWindowGtk* browser_window,
       app_mode_title_(NULL),
       using_custom_frame_(false),
       window_has_focus_(false),
-      theme_provider_(NULL) {
+      theme_service_(NULL) {
   Init();
 }
 
@@ -357,11 +357,11 @@ void BrowserTitlebar::Init() {
 
     // Register with the theme provider to set the |app_mode_title_| label
     // color.
-    theme_provider_ = GtkThemeProvider::GetFrom(
+    theme_service_ = GtkThemeService::GetFrom(
         browser_window_->browser()->profile());
     registrar_.Add(this, NotificationType::BROWSER_THEME_CHANGED,
                    NotificationService::AllSources());
-    theme_provider_->InitThemesFor(this);
+    theme_service_->InitThemesFor(this);
     UpdateTitleAndIcon();
   }
 
@@ -671,7 +671,7 @@ void BrowserTitlebar::UpdateTextColor() {
   if (!app_mode_title_)
     return;
 
-  if (theme_provider_ && theme_provider_->UseGtkTheme()) {
+  if (theme_service_ && theme_service_->UseGtkTheme()) {
     // We don't really have any good options here.
     //
     // Colors from window manager themes aren't exposed in GTK; the window
@@ -687,11 +687,11 @@ void BrowserTitlebar::UpdateTextColor() {
     // color.
     GdkColor frame_color;
     if (window_has_focus_) {
-      frame_color = theme_provider_->GetGdkColor(
-          BrowserThemeProvider::COLOR_FRAME);
+      frame_color = theme_service_->GetGdkColor(
+          ThemeService::COLOR_FRAME);
     } else {
-      frame_color = theme_provider_->GetGdkColor(
-          BrowserThemeProvider::COLOR_FRAME_INACTIVE);
+      frame_color = theme_service_->GetGdkColor(
+          ThemeService::COLOR_FRAME_INACTIVE);
     }
     GdkColor text_color = PickLuminosityContrastingColor(
         &frame_color, &gtk_util::kGdkWhite, &gtk_util::kGdkBlack);
@@ -709,7 +709,7 @@ void BrowserTitlebar::ShowFaviconMenu(GdkEventButton* event) {
     favicon_menu_.reset(new MenuGtk(NULL, favicon_menu_model_.get()));
   }
 
-  favicon_menu_->Popup(app_mode_favicon_, reinterpret_cast<GdkEvent*>(event));
+  favicon_menu_->PopupForWidget(app_mode_favicon_, event->button, event->time);
 }
 
 void BrowserTitlebar::MaximizeButtonClicked() {
@@ -763,7 +763,7 @@ gboolean BrowserTitlebar::OnWindowStateChanged(GtkWindow* window,
 
 gboolean BrowserTitlebar::OnScroll(GtkWidget* widget, GdkEventScroll* event) {
   TabStripModel* tabstrip_model = browser_window_->browser()->tabstrip_model();
-  int index = tabstrip_model->selected_index();
+  int index = tabstrip_model->active_index();
   if (event->direction == GDK_SCROLL_LEFT ||
       event->direction == GDK_SCROLL_UP) {
     if (index != 0)
@@ -796,13 +796,14 @@ gboolean BrowserTitlebar::OnButtonPressed(GtkWidget* widget,
   return TRUE;
 }
 
-void BrowserTitlebar::ShowContextMenu() {
+void BrowserTitlebar::ShowContextMenu(GdkEventButton* event) {
   if (!context_menu_.get()) {
     context_menu_model_.reset(new ContextMenuModel(this));
     context_menu_.reset(new MenuGtk(NULL, context_menu_model_.get()));
   }
 
-  context_menu_->PopupAsContext(gtk_get_current_event_time());
+  context_menu_->PopupAsContext(gfx::Point(event->x_root, event->y_root),
+                                event->time);
 }
 
 bool BrowserTitlebar::IsCommandIdEnabled(int command_id) const {

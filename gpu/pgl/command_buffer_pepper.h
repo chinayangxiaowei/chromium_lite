@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -15,6 +15,10 @@
 #include "third_party/npapi/bindings/nphostapi.h"
 #endif  // __native_client__
 
+namespace {
+class SharedMemory;
+}
+
 // A CommandBuffer proxy implementation that uses the Pepper API to access
 // the command buffer.
 
@@ -27,14 +31,18 @@ class CommandBufferPepper : public gpu::CommandBuffer {
 
   // CommandBuffer implementation.
   virtual bool Initialize(int32 size);
+  virtual bool Initialize(base::SharedMemory* buffer, int32 size);
   virtual gpu::Buffer GetRingBuffer();
   virtual State GetState();
   virtual void Flush(int32 put_offset);
   virtual State FlushSync(int32 put_offset);
   virtual void SetGetOffset(int32 get_offset);
-  virtual int32 CreateTransferBuffer(size_t size);
+  virtual int32 CreateTransferBuffer(size_t size, int32 id_request);
   virtual void DestroyTransferBuffer(int32 id);
   virtual gpu::Buffer GetTransferBuffer(int32 handle);
+  virtual int32 RegisterTransferBuffer(base::SharedMemory* shared_memory,
+                                       size_t size,
+                                       int32 id_request);
   virtual void SetToken(int32 token);
   virtual void SetParseError(gpu::error::Error error);
 

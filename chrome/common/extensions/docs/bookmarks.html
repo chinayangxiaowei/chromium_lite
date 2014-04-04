@@ -81,6 +81,16 @@
             </dl>
           </dd>
 
+          <!-- OBJECT METHODS -->
+          <dd>
+            <div></div>
+          </dd>
+
+          <!-- OBJECT EVENT FIELDS -->
+          <dd>
+            <div></div>
+          </dd>
+
           <!-- FUNCTION PARAMETERS -->
           <dd>
             <div></div>
@@ -281,7 +291,7 @@
                     </ol>
                   </li>
                   <li>
-                    <a href="#methods">Methods</a>
+                    <a href="#global-methods">Methods</a>
                     <ol>
                       <li>
                         <a href="#method-create">create</a>
@@ -311,7 +321,7 @@
                     </ol>
                   </li>
                   <li>
-                    <a href="#events">Events</a>
+                    <a href="#global-events">Events</a>
                     <ol>
                       <li>
                         <a href="#event-onChanged">onChanged</a>
@@ -381,8 +391,8 @@ For example:</p>
 <p>
 Bookmarks are organized in a tree,
 where each node in the tree
-is either a bookmark or a group
-(a folder that can contain nodes).
+is either a bookmark or a folder
+(sometimes called a <em>group</em>).
 Each node in the tree
 is represented by a
 <a href="#type-BookmarkTreeNode"><code>BookmarkTreeNode</code></a> object.
@@ -400,6 +410,9 @@ See <a href="#type-BookmarkTreeNode"><code>BookmarkTreeNode</code></a>
 for information about the properties a node can have.
 </p>
 
+<p class="note"><b>Note:</b> You cannot use this API to add or remove entries
+in the root folder.  You also cannot rename, move, or remove the special
+"Bookmarks Bar" and "Other Bookmarks" folders.</p>
 
 <h2 id="overview-examples">Examples</h2>
 
@@ -464,8 +477,8 @@ For other examples and for help in viewing the source code, see
           </div> <!-- /apiGroup -->
 
           <!-- METHODS -->
-          <div class="apiGroup" id="methods">
-            <a name="methods"></a>
+          <div id="methodsTemplate" class="apiGroup">
+            <a name="global-methods"></a>
             <h3>Methods</h3>
 
             <!-- iterates over all functions -->
@@ -587,6 +600,16 @@ For other examples and for help in viewing the source code, see
             </dl>
           </dd>
 
+          <!-- OBJECT METHODS -->
+          <dd style="display: none; ">
+            <div></div>
+          </dd>
+
+          <!-- OBJECT EVENT FIELDS -->
+          <dd style="display: none; ">
+            <div></div>
+          </dd>
+
           <!-- FUNCTION PARAMETERS -->
           <dd style="display: none; ">
             <div></div>
@@ -645,6 +668,16 @@ For other examples and for help in viewing the source code, see
                 </div>
               </div>
             </dl>
+          </dd>
+
+          <!-- OBJECT METHODS -->
+          <dd style="display: none; ">
+            <div></div>
+          </dd>
+
+          <!-- OBJECT EVENT FIELDS -->
+          <dd style="display: none; ">
+            <div></div>
           </dd>
 
           <!-- FUNCTION PARAMETERS -->
@@ -707,6 +740,16 @@ For other examples and for help in viewing the source code, see
             </dl>
           </dd>
 
+          <!-- OBJECT METHODS -->
+          <dd style="display: none; ">
+            <div></div>
+          </dd>
+
+          <!-- OBJECT EVENT FIELDS -->
+          <dd style="display: none; ">
+            <div></div>
+          </dd>
+
           <!-- FUNCTION PARAMETERS -->
           <dd style="display: none; ">
             <div></div>
@@ -767,6 +810,16 @@ For other examples and for help in viewing the source code, see
             </dl>
           </dd>
 
+          <!-- OBJECT METHODS -->
+          <dd style="display: none; ">
+            <div></div>
+          </dd>
+
+          <!-- OBJECT EVENT FIELDS -->
+          <dd style="display: none; ">
+            <div></div>
+          </dd>
+
           <!-- FUNCTION PARAMETERS -->
           <dd style="display: none; ">
             <div></div>
@@ -775,6 +828,16 @@ For other examples and for help in viewing the source code, see
         </div>
               </div>
             </dl>
+          </dd>
+
+          <!-- OBJECT METHODS -->
+          <dd style="display: none; ">
+            <div></div>
+          </dd>
+
+          <!-- OBJECT EVENT FIELDS -->
+          <dd style="display: none; ">
+            <div></div>
           </dd>
 
           <!-- FUNCTION PARAMETERS -->
@@ -835,6 +898,16 @@ For other examples and for help in viewing the source code, see
                 </div>
               </div>
             </dl>
+          </dd>
+
+          <!-- OBJECT METHODS -->
+          <dd style="display: none; ">
+            <div></div>
+          </dd>
+
+          <!-- OBJECT EVENT FIELDS -->
+          <dd style="display: none; ">
+            <div></div>
           </dd>
 
           <!-- FUNCTION PARAMETERS -->
@@ -923,6 +996,16 @@ For other examples and for help in viewing the source code, see
                 </div>
               </div>
             </dl>
+          </dd>
+
+          <!-- OBJECT METHODS -->
+          <dd style="display: none; ">
+            <div></div>
+          </dd>
+
+          <!-- OBJECT EVENT FIELDS -->
+          <dd style="display: none; ">
+            <div></div>
           </dd>
 
           <!-- FUNCTION PARAMETERS -->
@@ -1080,6 +1163,16 @@ For other examples and for help in viewing the source code, see
             </dl>
           </dd>
 
+          <!-- OBJECT METHODS -->
+          <dd style="display: none; ">
+            <div></div>
+          </dd>
+
+          <!-- OBJECT EVENT FIELDS -->
+          <dd style="display: none; ">
+            <div></div>
+          </dd>
+
           <!-- FUNCTION PARAMETERS -->
           <dd style="display: none; ">
             <div></div>
@@ -1138,6 +1231,16 @@ For other examples and for help in viewing the source code, see
                 </div>
               </div>
             </dl>
+          </dd>
+
+          <!-- OBJECT METHODS -->
+          <dd style="display: none; ">
+            <div></div>
+          </dd>
+
+          <!-- OBJECT EVENT FIELDS -->
+          <dd style="display: none; ">
+            <div></div>
           </dd>
 
           <!-- FUNCTION PARAMETERS -->
@@ -1237,6 +1340,16 @@ For other examples and for help in viewing the source code, see
                 </div>
               </div>
             </dl>
+          </dd>
+
+          <!-- OBJECT METHODS -->
+          <dd style="display: none; ">
+            <div></div>
+          </dd>
+
+          <!-- OBJECT EVENT FIELDS -->
+          <dd style="display: none; ">
+            <div></div>
           </dd>
 
           <!-- FUNCTION PARAMETERS -->
@@ -1330,6 +1443,16 @@ For other examples and for help in viewing the source code, see
             </dl>
           </dd>
 
+          <!-- OBJECT METHODS -->
+          <dd style="display: none; ">
+            <div></div>
+          </dd>
+
+          <!-- OBJECT EVENT FIELDS -->
+          <dd style="display: none; ">
+            <div></div>
+          </dd>
+
           <!-- FUNCTION PARAMETERS -->
           <dd style="display: none; ">
             <div></div>
@@ -1388,6 +1511,16 @@ For other examples and for help in viewing the source code, see
                 </div>
               </div>
             </dl>
+          </dd>
+
+          <!-- OBJECT METHODS -->
+          <dd style="display: none; ">
+            <div></div>
+          </dd>
+
+          <!-- OBJECT EVENT FIELDS -->
+          <dd style="display: none; ">
+            <div></div>
           </dd>
 
           <!-- FUNCTION PARAMETERS -->
@@ -1487,6 +1620,16 @@ For other examples and for help in viewing the source code, see
                 </div>
               </div>
             </dl>
+          </dd>
+
+          <!-- OBJECT METHODS -->
+          <dd style="display: none; ">
+            <div></div>
+          </dd>
+
+          <!-- OBJECT EVENT FIELDS -->
+          <dd style="display: none; ">
+            <div></div>
           </dd>
 
           <!-- FUNCTION PARAMETERS -->
@@ -1578,6 +1721,16 @@ For other examples and for help in viewing the source code, see
             </dl>
           </dd>
 
+          <!-- OBJECT METHODS -->
+          <dd style="display: none; ">
+            <div></div>
+          </dd>
+
+          <!-- OBJECT EVENT FIELDS -->
+          <dd style="display: none; ">
+            <div></div>
+          </dd>
+
           <!-- FUNCTION PARAMETERS -->
           <dd style="display: none; ">
             <div></div>
@@ -1636,6 +1789,16 @@ For other examples and for help in viewing the source code, see
                 </div>
               </div>
             </dl>
+          </dd>
+
+          <!-- OBJECT METHODS -->
+          <dd style="display: none; ">
+            <div></div>
+          </dd>
+
+          <!-- OBJECT EVENT FIELDS -->
+          <dd style="display: none; ">
+            <div></div>
           </dd>
 
           <!-- FUNCTION PARAMETERS -->
@@ -1735,6 +1898,16 @@ For other examples and for help in viewing the source code, see
                 </div>
               </div>
             </dl>
+          </dd>
+
+          <!-- OBJECT METHODS -->
+          <dd style="display: none; ">
+            <div></div>
+          </dd>
+
+          <!-- OBJECT EVENT FIELDS -->
+          <dd style="display: none; ">
+            <div></div>
           </dd>
 
           <!-- FUNCTION PARAMETERS -->
@@ -1827,6 +2000,16 @@ For other examples and for help in viewing the source code, see
             </dl>
           </dd>
 
+          <!-- OBJECT METHODS -->
+          <dd style="display: none; ">
+            <div></div>
+          </dd>
+
+          <!-- OBJECT EVENT FIELDS -->
+          <dd style="display: none; ">
+            <div></div>
+          </dd>
+
           <!-- FUNCTION PARAMETERS -->
           <dd style="display: none; ">
             <div></div>
@@ -1924,6 +2107,16 @@ For other examples and for help in viewing the source code, see
                 </div>
               </div>
             </dl>
+          </dd>
+
+          <!-- OBJECT METHODS -->
+          <dd style="display: none; ">
+            <div></div>
+          </dd>
+
+          <!-- OBJECT EVENT FIELDS -->
+          <dd style="display: none; ">
+            <div></div>
           </dd>
 
           <!-- FUNCTION PARAMETERS -->
@@ -2084,6 +2277,16 @@ For other examples and for help in viewing the source code, see
             </dl>
           </dd>
 
+          <!-- OBJECT METHODS -->
+          <dd style="display: none; ">
+            <div></div>
+          </dd>
+
+          <!-- OBJECT EVENT FIELDS -->
+          <dd style="display: none; ">
+            <div></div>
+          </dd>
+
           <!-- FUNCTION PARAMETERS -->
           <dd style="display: none; ">
             <div></div>
@@ -2191,6 +2394,16 @@ For other examples and for help in viewing the source code, see
             </dl>
           </dd>
 
+          <!-- OBJECT METHODS -->
+          <dd style="display: none; ">
+            <div></div>
+          </dd>
+
+          <!-- OBJECT EVENT FIELDS -->
+          <dd style="display: none; ">
+            <div></div>
+          </dd>
+
           <!-- FUNCTION PARAMETERS -->
           <dd style="display: none; ">
             <div></div>
@@ -2251,6 +2464,16 @@ For other examples and for help in viewing the source code, see
             </dl>
           </dd>
 
+          <!-- OBJECT METHODS -->
+          <dd style="display: none; ">
+            <div></div>
+          </dd>
+
+          <!-- OBJECT EVENT FIELDS -->
+          <dd style="display: none; ">
+            <div></div>
+          </dd>
+
           <!-- FUNCTION PARAMETERS -->
           <dd style="display: none; ">
             <div></div>
@@ -2259,6 +2482,16 @@ For other examples and for help in viewing the source code, see
         </div>
               </div>
             </dl>
+          </dd>
+
+          <!-- OBJECT METHODS -->
+          <dd style="display: none; ">
+            <div></div>
+          </dd>
+
+          <!-- OBJECT EVENT FIELDS -->
+          <dd style="display: none; ">
+            <div></div>
           </dd>
 
           <!-- FUNCTION PARAMETERS -->
@@ -2319,6 +2552,16 @@ For other examples and for help in viewing the source code, see
                 </div>
               </div>
             </dl>
+          </dd>
+
+          <!-- OBJECT METHODS -->
+          <dd style="display: none; ">
+            <div></div>
+          </dd>
+
+          <!-- OBJECT EVENT FIELDS -->
+          <dd style="display: none; ">
+            <div></div>
           </dd>
 
           <!-- FUNCTION PARAMETERS -->
@@ -2407,6 +2650,16 @@ For other examples and for help in viewing the source code, see
                 </div>
               </div>
             </dl>
+          </dd>
+
+          <!-- OBJECT METHODS -->
+          <dd style="display: none; ">
+            <div></div>
+          </dd>
+
+          <!-- OBJECT EVENT FIELDS -->
+          <dd style="display: none; ">
+            <div></div>
           </dd>
 
           <!-- FUNCTION PARAMETERS -->
@@ -2500,6 +2753,16 @@ For other examples and for help in viewing the source code, see
             </dl>
           </dd>
 
+          <!-- OBJECT METHODS -->
+          <dd style="display: none; ">
+            <div></div>
+          </dd>
+
+          <!-- OBJECT EVENT FIELDS -->
+          <dd style="display: none; ">
+            <div></div>
+          </dd>
+
           <!-- FUNCTION PARAMETERS -->
           <dd style="display: none; ">
             <div></div>
@@ -2558,6 +2821,16 @@ For other examples and for help in viewing the source code, see
                 </div>
               </div>
             </dl>
+          </dd>
+
+          <!-- OBJECT METHODS -->
+          <dd style="display: none; ">
+            <div></div>
+          </dd>
+
+          <!-- OBJECT EVENT FIELDS -->
+          <dd style="display: none; ">
+            <div></div>
           </dd>
 
           <!-- FUNCTION PARAMETERS -->
@@ -2682,6 +2955,16 @@ For other examples and for help in viewing the source code, see
             </dl>
           </dd>
 
+          <!-- OBJECT METHODS -->
+          <dd style="display: none; ">
+            <div></div>
+          </dd>
+
+          <!-- OBJECT EVENT FIELDS -->
+          <dd style="display: none; ">
+            <div></div>
+          </dd>
+
           <!-- FUNCTION PARAMETERS -->
           <dd style="display: none; ">
             <div></div>
@@ -2740,6 +3023,16 @@ For other examples and for help in viewing the source code, see
                 </div>
               </div>
             </dl>
+          </dd>
+
+          <!-- OBJECT METHODS -->
+          <dd style="display: none; ">
+            <div></div>
+          </dd>
+
+          <!-- OBJECT EVENT FIELDS -->
+          <dd style="display: none; ">
+            <div></div>
           </dd>
 
           <!-- FUNCTION PARAMETERS -->
@@ -2864,6 +3157,16 @@ For other examples and for help in viewing the source code, see
             </dl>
           </dd>
 
+          <!-- OBJECT METHODS -->
+          <dd style="display: none; ">
+            <div></div>
+          </dd>
+
+          <!-- OBJECT EVENT FIELDS -->
+          <dd style="display: none; ">
+            <div></div>
+          </dd>
+
           <!-- FUNCTION PARAMETERS -->
           <dd style="display: none; ">
             <div></div>
@@ -2922,6 +3225,16 @@ For other examples and for help in viewing the source code, see
                 </div>
               </div>
             </dl>
+          </dd>
+
+          <!-- OBJECT METHODS -->
+          <dd style="display: none; ">
+            <div></div>
+          </dd>
+
+          <!-- OBJECT EVENT FIELDS -->
+          <dd style="display: none; ">
+            <div></div>
           </dd>
 
           <!-- FUNCTION PARAMETERS -->
@@ -3023,6 +3336,16 @@ For other examples and for help in viewing the source code, see
             </dl>
           </dd>
 
+          <!-- OBJECT METHODS -->
+          <dd style="display: none; ">
+            <div></div>
+          </dd>
+
+          <!-- OBJECT EVENT FIELDS -->
+          <dd style="display: none; ">
+            <div></div>
+          </dd>
+
           <!-- FUNCTION PARAMETERS -->
           <dd style="display: none; ">
             <div></div>
@@ -3113,6 +3436,16 @@ For other examples and for help in viewing the source code, see
                 </div>
               </div>
             </dl>
+          </dd>
+
+          <!-- OBJECT METHODS -->
+          <dd style="display: none; ">
+            <div></div>
+          </dd>
+
+          <!-- OBJECT EVENT FIELDS -->
+          <dd style="display: none; ">
+            <div></div>
           </dd>
 
           <!-- FUNCTION PARAMETERS -->
@@ -3222,6 +3555,16 @@ For other examples and for help in viewing the source code, see
             </dl>
           </dd>
 
+          <!-- OBJECT METHODS -->
+          <dd style="display: none; ">
+            <div></div>
+          </dd>
+
+          <!-- OBJECT EVENT FIELDS -->
+          <dd style="display: none; ">
+            <div></div>
+          </dd>
+
           <!-- FUNCTION PARAMETERS -->
           <dd style="display: none; ">
             <div></div>
@@ -3282,6 +3625,16 @@ For other examples and for help in viewing the source code, see
             </dl>
           </dd>
 
+          <!-- OBJECT METHODS -->
+          <dd style="display: none; ">
+            <div></div>
+          </dd>
+
+          <!-- OBJECT EVENT FIELDS -->
+          <dd style="display: none; ">
+            <div></div>
+          </dd>
+
           <!-- FUNCTION PARAMETERS -->
           <dd style="display: none; ">
             <div></div>
@@ -3290,6 +3643,16 @@ For other examples and for help in viewing the source code, see
         </div>
               </div>
             </dl>
+          </dd>
+
+          <!-- OBJECT METHODS -->
+          <dd style="display: none; ">
+            <div></div>
+          </dd>
+
+          <!-- OBJECT EVENT FIELDS -->
+          <dd style="display: none; ">
+            <div></div>
           </dd>
 
           <!-- FUNCTION PARAMETERS -->
@@ -3350,6 +3713,16 @@ For other examples and for help in viewing the source code, see
                 </div>
               </div>
             </dl>
+          </dd>
+
+          <!-- OBJECT METHODS -->
+          <dd style="display: none; ">
+            <div></div>
+          </dd>
+
+          <!-- OBJECT EVENT FIELDS -->
+          <dd style="display: none; ">
+            <div></div>
           </dd>
 
           <!-- FUNCTION PARAMETERS -->
@@ -3440,6 +3813,16 @@ For other examples and for help in viewing the source code, see
             </dl>
           </dd>
 
+          <!-- OBJECT METHODS -->
+          <dd style="display: none; ">
+            <div></div>
+          </dd>
+
+          <!-- OBJECT EVENT FIELDS -->
+          <dd style="display: none; ">
+            <div></div>
+          </dd>
+
           <!-- FUNCTION PARAMETERS -->
           <dd style="display: none; ">
             <div></div>
@@ -3465,10 +3848,9 @@ For other examples and for help in viewing the source code, see
           </div>  <!-- /apiGroup -->
 
           <!-- EVENTS -->
-          <div class="apiGroup">
-            <a name="events"></a>
-            <h3 id="events">Events</h3>
-
+          <div id="eventsTemplate" class="apiGroup">
+            <a name="global-events"></a>
+            <h3>Events</h3>
             <!-- iterates over all events -->
             <div class="apiItem">
               <a name="event-onChanged"></a>
@@ -3484,10 +3866,11 @@ For other examples and for help in viewing the source code, see
                 <p>Fired when a bookmark or folder changes.  <b>Note:</b> Currently, only title and url changes trigger this.</p>
 
                 <!-- PARAMETERS -->
-                <h4>Parameters</h4>
-                <dl>
-                  <div>
+                <div>
+                  <h4>Parameters</h4>
+                  <dl>
                     <div>
+                      <div>
           <dt>
             <var>id</var>
               <em>
@@ -3540,14 +3923,24 @@ For other examples and for help in viewing the source code, see
             </dl>
           </dd>
 
+          <!-- OBJECT METHODS -->
+          <dd style="display: none; ">
+            <div></div>
+          </dd>
+
+          <!-- OBJECT EVENT FIELDS -->
+          <dd style="display: none; ">
+            <div></div>
+          </dd>
+
           <!-- FUNCTION PARAMETERS -->
           <dd style="display: none; ">
             <div></div>
           </dd>
 
         </div>
-                  </div><div>
-                    <div>
+                    </div><div>
+                      <div>
           <dt>
             <var>changeInfo</var>
               <em>
@@ -3647,6 +4040,16 @@ For other examples and for help in viewing the source code, see
             </dl>
           </dd>
 
+          <!-- OBJECT METHODS -->
+          <dd style="display: none; ">
+            <div></div>
+          </dd>
+
+          <!-- OBJECT EVENT FIELDS -->
+          <dd style="display: none; ">
+            <div></div>
+          </dd>
+
           <!-- FUNCTION PARAMETERS -->
           <dd style="display: none; ">
             <div></div>
@@ -3707,6 +4110,16 @@ For other examples and for help in viewing the source code, see
             </dl>
           </dd>
 
+          <!-- OBJECT METHODS -->
+          <dd style="display: none; ">
+            <div></div>
+          </dd>
+
+          <!-- OBJECT EVENT FIELDS -->
+          <dd style="display: none; ">
+            <div></div>
+          </dd>
+
           <!-- FUNCTION PARAMETERS -->
           <dd style="display: none; ">
             <div></div>
@@ -3717,15 +4130,25 @@ For other examples and for help in viewing the source code, see
             </dl>
           </dd>
 
+          <!-- OBJECT METHODS -->
+          <dd style="display: none; ">
+            <div></div>
+          </dd>
+
+          <!-- OBJECT EVENT FIELDS -->
+          <dd style="display: none; ">
+            <div></div>
+          </dd>
+
           <!-- FUNCTION PARAMETERS -->
           <dd style="display: none; ">
             <div></div>
           </dd>
 
         </div>
-                  </div>
-                </dl>
-
+                    </div>
+                  </dl>
+                </div>
               </div> <!-- /decription -->
 
             </div><div class="apiItem">
@@ -3742,10 +4165,11 @@ For other examples and for help in viewing the source code, see
                 <p>Fired when the children of a folder have changed their order due to the order being sorted in the UI.  This is not called as a result of a move().</p>
 
                 <!-- PARAMETERS -->
-                <h4>Parameters</h4>
-                <dl>
-                  <div>
+                <div>
+                  <h4>Parameters</h4>
+                  <dl>
                     <div>
+                      <div>
           <dt>
             <var>id</var>
               <em>
@@ -3798,14 +4222,24 @@ For other examples and for help in viewing the source code, see
             </dl>
           </dd>
 
+          <!-- OBJECT METHODS -->
+          <dd style="display: none; ">
+            <div></div>
+          </dd>
+
+          <!-- OBJECT EVENT FIELDS -->
+          <dd style="display: none; ">
+            <div></div>
+          </dd>
+
           <!-- FUNCTION PARAMETERS -->
           <dd style="display: none; ">
             <div></div>
           </dd>
 
         </div>
-                  </div><div>
-                    <div>
+                    </div><div>
+                      <div>
           <dt>
             <var>reorderInfo</var>
               <em>
@@ -3916,6 +4350,16 @@ For other examples and for help in viewing the source code, see
             </dl>
           </dd>
 
+          <!-- OBJECT METHODS -->
+          <dd style="display: none; ">
+            <div></div>
+          </dd>
+
+          <!-- OBJECT EVENT FIELDS -->
+          <dd style="display: none; ">
+            <div></div>
+          </dd>
+
           <!-- FUNCTION PARAMETERS -->
           <dd style="display: none; ">
             <div></div>
@@ -3926,15 +4370,25 @@ For other examples and for help in viewing the source code, see
             </dl>
           </dd>
 
+          <!-- OBJECT METHODS -->
+          <dd style="display: none; ">
+            <div></div>
+          </dd>
+
+          <!-- OBJECT EVENT FIELDS -->
+          <dd style="display: none; ">
+            <div></div>
+          </dd>
+
           <!-- FUNCTION PARAMETERS -->
           <dd style="display: none; ">
             <div></div>
           </dd>
 
         </div>
-                  </div>
-                </dl>
-
+                    </div>
+                  </dl>
+                </div>
               </div> <!-- /decription -->
 
             </div><div class="apiItem">
@@ -3951,10 +4405,11 @@ For other examples and for help in viewing the source code, see
                 <p>Fired when a bookmark or folder is created.</p>
 
                 <!-- PARAMETERS -->
-                <h4>Parameters</h4>
-                <dl>
-                  <div>
+                <div>
+                  <h4>Parameters</h4>
+                  <dl>
                     <div>
+                      <div>
           <dt>
             <var>id</var>
               <em>
@@ -4007,14 +4462,24 @@ For other examples and for help in viewing the source code, see
             </dl>
           </dd>
 
+          <!-- OBJECT METHODS -->
+          <dd style="display: none; ">
+            <div></div>
+          </dd>
+
+          <!-- OBJECT EVENT FIELDS -->
+          <dd style="display: none; ">
+            <div></div>
+          </dd>
+
           <!-- FUNCTION PARAMETERS -->
           <dd style="display: none; ">
             <div></div>
           </dd>
 
         </div>
-                  </div><div>
-                    <div>
+                    </div><div>
+                      <div>
           <dt>
             <var>bookmark</var>
               <em>
@@ -4067,15 +4532,25 @@ For other examples and for help in viewing the source code, see
             </dl>
           </dd>
 
+          <!-- OBJECT METHODS -->
+          <dd style="display: none; ">
+            <div></div>
+          </dd>
+
+          <!-- OBJECT EVENT FIELDS -->
+          <dd style="display: none; ">
+            <div></div>
+          </dd>
+
           <!-- FUNCTION PARAMETERS -->
           <dd style="display: none; ">
             <div></div>
           </dd>
 
         </div>
-                  </div>
-                </dl>
-
+                    </div>
+                  </dl>
+                </div>
               </div> <!-- /decription -->
 
             </div><div class="apiItem">
@@ -4092,14 +4567,15 @@ For other examples and for help in viewing the source code, see
                 <p>Fired when a bookmark import session is begun.  Expensive observers should ignore handleCreated updates until onImportEnded is fired.  Observers should still handle other notifications immediately.</p>
 
                 <!-- PARAMETERS -->
-                <h4>Parameters</h4>
-                <dl>
-                  <div style="display: none; ">
+                <div style="display: none; ">
+                  <h4>Parameters</h4>
+                  <dl>
                     <div>
+                      <div>
+                      </div>
                     </div>
-                  </div>
-                </dl>
-
+                  </dl>
+                </div>
               </div> <!-- /decription -->
 
             </div><div class="apiItem">
@@ -4116,14 +4592,15 @@ For other examples and for help in viewing the source code, see
                 <p>Fired when a bookmark import session is ended.</p>
 
                 <!-- PARAMETERS -->
-                <h4>Parameters</h4>
-                <dl>
-                  <div style="display: none; ">
+                <div style="display: none; ">
+                  <h4>Parameters</h4>
+                  <dl>
                     <div>
+                      <div>
+                      </div>
                     </div>
-                  </div>
-                </dl>
-
+                  </dl>
+                </div>
               </div> <!-- /decription -->
 
             </div><div class="apiItem">
@@ -4140,10 +4617,11 @@ For other examples and for help in viewing the source code, see
                 <p>Fired when a bookmark or folder is moved to a different parent folder.</p>
 
                 <!-- PARAMETERS -->
-                <h4>Parameters</h4>
-                <dl>
-                  <div>
+                <div>
+                  <h4>Parameters</h4>
+                  <dl>
                     <div>
+                      <div>
           <dt>
             <var>id</var>
               <em>
@@ -4196,14 +4674,24 @@ For other examples and for help in viewing the source code, see
             </dl>
           </dd>
 
+          <!-- OBJECT METHODS -->
+          <dd style="display: none; ">
+            <div></div>
+          </dd>
+
+          <!-- OBJECT EVENT FIELDS -->
+          <dd style="display: none; ">
+            <div></div>
+          </dd>
+
           <!-- FUNCTION PARAMETERS -->
           <dd style="display: none; ">
             <div></div>
           </dd>
 
         </div>
-                  </div><div>
-                    <div>
+                    </div><div>
+                      <div>
           <dt>
             <var>moveInfo</var>
               <em>
@@ -4303,6 +4791,16 @@ For other examples and for help in viewing the source code, see
             </dl>
           </dd>
 
+          <!-- OBJECT METHODS -->
+          <dd style="display: none; ">
+            <div></div>
+          </dd>
+
+          <!-- OBJECT EVENT FIELDS -->
+          <dd style="display: none; ">
+            <div></div>
+          </dd>
+
           <!-- FUNCTION PARAMETERS -->
           <dd style="display: none; ">
             <div></div>
@@ -4361,6 +4859,16 @@ For other examples and for help in viewing the source code, see
                 </div>
               </div>
             </dl>
+          </dd>
+
+          <!-- OBJECT METHODS -->
+          <dd style="display: none; ">
+            <div></div>
+          </dd>
+
+          <!-- OBJECT EVENT FIELDS -->
+          <dd style="display: none; ">
+            <div></div>
           </dd>
 
           <!-- FUNCTION PARAMETERS -->
@@ -4423,6 +4931,16 @@ For other examples and for help in viewing the source code, see
             </dl>
           </dd>
 
+          <!-- OBJECT METHODS -->
+          <dd style="display: none; ">
+            <div></div>
+          </dd>
+
+          <!-- OBJECT EVENT FIELDS -->
+          <dd style="display: none; ">
+            <div></div>
+          </dd>
+
           <!-- FUNCTION PARAMETERS -->
           <dd style="display: none; ">
             <div></div>
@@ -4483,6 +5001,16 @@ For other examples and for help in viewing the source code, see
             </dl>
           </dd>
 
+          <!-- OBJECT METHODS -->
+          <dd style="display: none; ">
+            <div></div>
+          </dd>
+
+          <!-- OBJECT EVENT FIELDS -->
+          <dd style="display: none; ">
+            <div></div>
+          </dd>
+
           <!-- FUNCTION PARAMETERS -->
           <dd style="display: none; ">
             <div></div>
@@ -4493,15 +5021,25 @@ For other examples and for help in viewing the source code, see
             </dl>
           </dd>
 
+          <!-- OBJECT METHODS -->
+          <dd style="display: none; ">
+            <div></div>
+          </dd>
+
+          <!-- OBJECT EVENT FIELDS -->
+          <dd style="display: none; ">
+            <div></div>
+          </dd>
+
           <!-- FUNCTION PARAMETERS -->
           <dd style="display: none; ">
             <div></div>
           </dd>
 
         </div>
-                  </div>
-                </dl>
-
+                    </div>
+                  </dl>
+                </div>
               </div> <!-- /decription -->
 
             </div><div class="apiItem">
@@ -4518,10 +5056,11 @@ For other examples and for help in viewing the source code, see
                 <p>Fired when a bookmark or folder is removed.  When a folder is removed recursively, a single notification is fired for the folder, and none for its contents.</p>
 
                 <!-- PARAMETERS -->
-                <h4>Parameters</h4>
-                <dl>
-                  <div>
+                <div>
+                  <h4>Parameters</h4>
+                  <dl>
                     <div>
+                      <div>
           <dt>
             <var>id</var>
               <em>
@@ -4574,14 +5113,24 @@ For other examples and for help in viewing the source code, see
             </dl>
           </dd>
 
+          <!-- OBJECT METHODS -->
+          <dd style="display: none; ">
+            <div></div>
+          </dd>
+
+          <!-- OBJECT EVENT FIELDS -->
+          <dd style="display: none; ">
+            <div></div>
+          </dd>
+
           <!-- FUNCTION PARAMETERS -->
           <dd style="display: none; ">
             <div></div>
           </dd>
 
         </div>
-                  </div><div>
-                    <div>
+                    </div><div>
+                      <div>
           <dt>
             <var>removeInfo</var>
               <em>
@@ -4681,6 +5230,16 @@ For other examples and for help in viewing the source code, see
             </dl>
           </dd>
 
+          <!-- OBJECT METHODS -->
+          <dd style="display: none; ">
+            <div></div>
+          </dd>
+
+          <!-- OBJECT EVENT FIELDS -->
+          <dd style="display: none; ">
+            <div></div>
+          </dd>
+
           <!-- FUNCTION PARAMETERS -->
           <dd style="display: none; ">
             <div></div>
@@ -4741,6 +5300,16 @@ For other examples and for help in viewing the source code, see
             </dl>
           </dd>
 
+          <!-- OBJECT METHODS -->
+          <dd style="display: none; ">
+            <div></div>
+          </dd>
+
+          <!-- OBJECT EVENT FIELDS -->
+          <dd style="display: none; ">
+            <div></div>
+          </dd>
+
           <!-- FUNCTION PARAMETERS -->
           <dd style="display: none; ">
             <div></div>
@@ -4751,15 +5320,25 @@ For other examples and for help in viewing the source code, see
             </dl>
           </dd>
 
+          <!-- OBJECT METHODS -->
+          <dd style="display: none; ">
+            <div></div>
+          </dd>
+
+          <!-- OBJECT EVENT FIELDS -->
+          <dd style="display: none; ">
+            <div></div>
+          </dd>
+
           <!-- FUNCTION PARAMETERS -->
           <dd style="display: none; ">
             <div></div>
           </dd>
 
         </div>
-                  </div>
-                </dl>
-
+                    </div>
+                  </dl>
+                </div>
               </div> <!-- /decription -->
 
             </div> <!-- /apiItem -->
@@ -4872,6 +5451,16 @@ For other examples and for help in viewing the source code, see
             </dl>
           </dd>
 
+          <!-- OBJECT METHODS -->
+          <dd style="display: none; ">
+            <div></div>
+          </dd>
+
+          <!-- OBJECT EVENT FIELDS -->
+          <dd style="display: none; ">
+            <div></div>
+          </dd>
+
           <!-- FUNCTION PARAMETERS -->
           <dd style="display: none; ">
             <div></div>
@@ -4928,6 +5517,16 @@ For other examples and for help in viewing the source code, see
                 </div>
               </div>
             </dl>
+          </dd>
+
+          <!-- OBJECT METHODS -->
+          <dd style="display: none; ">
+            <div></div>
+          </dd>
+
+          <!-- OBJECT EVENT FIELDS -->
+          <dd style="display: none; ">
+            <div></div>
           </dd>
 
           <!-- FUNCTION PARAMETERS -->
@@ -4988,6 +5587,16 @@ For other examples and for help in viewing the source code, see
             </dl>
           </dd>
 
+          <!-- OBJECT METHODS -->
+          <dd style="display: none; ">
+            <div></div>
+          </dd>
+
+          <!-- OBJECT EVENT FIELDS -->
+          <dd style="display: none; ">
+            <div></div>
+          </dd>
+
           <!-- FUNCTION PARAMETERS -->
           <dd style="display: none; ">
             <div></div>
@@ -5044,6 +5653,16 @@ For other examples and for help in viewing the source code, see
                 </div>
               </div>
             </dl>
+          </dd>
+
+          <!-- OBJECT METHODS -->
+          <dd style="display: none; ">
+            <div></div>
+          </dd>
+
+          <!-- OBJECT EVENT FIELDS -->
+          <dd style="display: none; ">
+            <div></div>
           </dd>
 
           <!-- FUNCTION PARAMETERS -->
@@ -5104,6 +5723,16 @@ For other examples and for help in viewing the source code, see
             </dl>
           </dd>
 
+          <!-- OBJECT METHODS -->
+          <dd style="display: none; ">
+            <div></div>
+          </dd>
+
+          <!-- OBJECT EVENT FIELDS -->
+          <dd style="display: none; ">
+            <div></div>
+          </dd>
+
           <!-- FUNCTION PARAMETERS -->
           <dd style="display: none; ">
             <div></div>
@@ -5162,6 +5791,16 @@ For other examples and for help in viewing the source code, see
             </dl>
           </dd>
 
+          <!-- OBJECT METHODS -->
+          <dd style="display: none; ">
+            <div></div>
+          </dd>
+
+          <!-- OBJECT EVENT FIELDS -->
+          <dd style="display: none; ">
+            <div></div>
+          </dd>
+
           <!-- FUNCTION PARAMETERS -->
           <dd style="display: none; ">
             <div></div>
@@ -5218,6 +5857,16 @@ For other examples and for help in viewing the source code, see
                 </div>
               </div>
             </dl>
+          </dd>
+
+          <!-- OBJECT METHODS -->
+          <dd style="display: none; ">
+            <div></div>
+          </dd>
+
+          <!-- OBJECT EVENT FIELDS -->
+          <dd style="display: none; ">
+            <div></div>
           </dd>
 
           <!-- FUNCTION PARAMETERS -->
@@ -5289,6 +5938,16 @@ For other examples and for help in viewing the source code, see
             </dl>
           </dd>
 
+          <!-- OBJECT METHODS -->
+          <dd style="display: none; ">
+            <div></div>
+          </dd>
+
+          <!-- OBJECT EVENT FIELDS -->
+          <dd style="display: none; ">
+            <div></div>
+          </dd>
+
           <!-- FUNCTION PARAMETERS -->
           <dd style="display: none; ">
             <div></div>
@@ -5297,6 +5956,16 @@ For other examples and for help in viewing the source code, see
         </div>
               </div>
             </dl>
+          </dd>
+
+          <!-- OBJECT METHODS -->
+          <dd style="display: none; ">
+            <div></div>
+          </dd>
+
+          <!-- OBJECT EVENT FIELDS -->
+          <dd style="display: none; ">
+            <div></div>
           </dd>
 
           <!-- FUNCTION PARAMETERS -->

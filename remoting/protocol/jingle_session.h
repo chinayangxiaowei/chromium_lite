@@ -1,12 +1,12 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef REMOTING_PROTOCOL_JINGLE_SESSION_H_
 #define REMOTING_PROTOCOL_JINGLE_SESSION_H_
 
-#include "base/crypto/rsa_private_key.h"
-#include "base/ref_counted.h"
+#include "base/memory/ref_counted.h"
+#include "crypto/rsa_private_key.h"
 #include "net/base/completion_callback.h"
 #include "remoting/protocol/session.h"
 #include "third_party/libjingle/source/talk/base/sigslot.h"
@@ -15,6 +15,11 @@
 namespace cricket {
 class PseudoTcpChannel;
 }  // namespace cricket
+
+namespace jingle_glue {
+class StreamSocketAdapter;
+class TransportChannelSocketAdapter;
+}  // namespace jingle_glue
 
 namespace net {
 class CertVerifier;
@@ -26,12 +31,10 @@ class X509Certificate;
 
 namespace remoting {
 
-class StreamSocketAdapter;
-class TransportChannelSocketAdapter;
-
 namespace protocol {
 
 class JingleSessionManager;
+class SocketWrapper;
 
 // Implements protocol::Session that work over libjingle session (the
 // cricket::Session object is passed to Init() method). Created
@@ -50,7 +53,7 @@ class JingleSession : public protocol::Session,
   static JingleSession* CreateServerSession(
       JingleSessionManager* manager,
       scoped_refptr<net::X509Certificate> certificate,
-      base::RSAPrivateKey* key);
+      crypto::RSAPrivateKey* key);
 
   // Chromotocol Session interface.
   virtual void SetStateChangeCallback(StateChangeCallback* callback);
@@ -83,7 +86,7 @@ class JingleSession : public protocol::Session,
 
   JingleSession(JingleSessionManager* client,
                 scoped_refptr<net::X509Certificate> server_cert,
-                base::RSAPrivateKey* key);
+                crypto::RSAPrivateKey* key);
   virtual ~JingleSession();
 
   // Called by JingleSessionManager.
@@ -92,7 +95,7 @@ class JingleSession : public protocol::Session,
   void Init(cricket::Session* cricket_session);
 
   // Close all the channels and terminate the session.
-  void CloseInternal(Task* closed_task, int result);
+  void CloseInternal(int result, bool failed);
 
   bool HasSession(cricket::Session* cricket_session);
   cricket::Session* ReleaseSession();
@@ -101,11 +104,14 @@ class JingleSession : public protocol::Session,
   // provided. The resultant SSL socket is written to |ssl_socket|.
   // Return true if successful.
   bool EstablishSSLConnection(net::ClientSocket* adapter,
-                              scoped_ptr<net::Socket>* ssl_socket);
+                              scoped_ptr<SocketWrapper>* ssl_socket);
 
   // Used for Session.SignalState sigslot.
   void OnSessionState(cricket::BaseSession* session,
                       cricket::BaseSession::State state);
+  // Used for Session.SignalError sigslot.
+  void OnSessionError(cricket::BaseSession* session,
+                      cricket::BaseSession::Error error);
 
   void OnInitiate();
   void OnAccept();
@@ -123,12 +129,13 @@ class JingleSession : public protocol::Session,
   scoped_refptr<net::X509Certificate> server_cert_;
 
   // Private key used in SSL server sockets.
-  scoped_ptr<base::RSAPrivateKey> key_;
+  scoped_ptr<crypto::RSAPrivateKey> key_;
 
   State state_;
   scoped_ptr<StateChangeCallback> state_change_callback_;
 
   bool closed_;
+  bool closing_;
 
   // JID of the other side. Set when the connection is initialized,
   // and never changed after that.
@@ -146,19 +153,20 @@ class JingleSession : public protocol::Session,
   scoped_ptr<const CandidateSessionConfig> candidate_config_;
 
   // A channel is the the base channel created by libjingle.
-  // A channel adapter is used to convert a jingle channel to net::Socket.
-  // A SSL socket is a wrapper over a net::Socket to provide SSL functionality.
+  // A channel adapter is used to convert a jingle channel to net::Socket and
+  // then there is a SocketWrapper created over net::Socket.
+  // SSL socket uses SocketWrapper to provide SSL functionality.
   cricket::PseudoTcpChannel* control_channel_;
-  scoped_ptr<StreamSocketAdapter> control_channel_adapter_;
-  scoped_ptr<net::Socket> control_ssl_socket_;
+  scoped_ptr<jingle_glue::StreamSocketAdapter> control_channel_adapter_;
+  scoped_ptr<SocketWrapper> control_ssl_socket_;
 
   cricket::PseudoTcpChannel* event_channel_;
-  scoped_ptr<StreamSocketAdapter> event_channel_adapter_;
-  scoped_ptr<net::Socket> event_ssl_socket_;
+  scoped_ptr<jingle_glue::StreamSocketAdapter> event_channel_adapter_;
+  scoped_ptr<SocketWrapper> event_ssl_socket_;
 
   cricket::PseudoTcpChannel* video_channel_;
-  scoped_ptr<StreamSocketAdapter> video_channel_adapter_;
-  scoped_ptr<net::Socket> video_ssl_socket_;
+  scoped_ptr<jingle_glue::StreamSocketAdapter> video_channel_adapter_;
+  scoped_ptr<SocketWrapper> video_ssl_socket_;
 
   // Count the number of SSL connections esblished.
   int ssl_connections_;
@@ -166,8 +174,8 @@ class JingleSession : public protocol::Session,
   // Used to verify the certificate received in SSLClientSocket.
   scoped_ptr<net::CertVerifier> cert_verifier_;
 
-  scoped_ptr<TransportChannelSocketAdapter> video_rtp_channel_;
-  scoped_ptr<TransportChannelSocketAdapter> video_rtcp_channel_;
+  scoped_ptr<jingle_glue::TransportChannelSocketAdapter> video_rtp_channel_;
+  scoped_ptr<jingle_glue::TransportChannelSocketAdapter> video_rtcp_channel_;
 
   // Callback called by the SSL layer.
   scoped_ptr<net::CompletionCallback> connect_callback_;

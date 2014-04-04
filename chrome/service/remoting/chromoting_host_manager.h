@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,8 +7,9 @@
 
 #include <string>
 
-#include "base/ref_counted.h"
-#include "base/scoped_ptr.h"
+#include "base/memory/ref_counted.h"
+#include "base/memory/scoped_ptr.h"
+#include "base/message_loop.h"
 #include "remoting/host/chromoting_host.h"
 #include "remoting/host/chromoting_host_context.h"
 #include "remoting/host/host_config.h"
@@ -32,16 +33,20 @@ class ChromotingHostManager
   class Observer {
    public:
     virtual ~Observer() {}
-    virtual void OnChromotingHostEnabled() {}
-    virtual void OnChromotingHostDisabled() {}
+    virtual void OnChromotingHostEnabled() = 0;
+    virtual void OnChromotingHostDisabled() = 0;
   };
 
   // Caller keeps ownership of |observer|. |observer| must not be
   // destroyed while this object exists.
-  ChromotingHostManager(Observer* observer);
+  explicit ChromotingHostManager(Observer* observer);
 
-  void Initialize(base::MessageLoopProxy* file_message_loop);
-  void Teardown();
+  void Initialize(MessageLoopForUI* main_message_loop,
+                  base::MessageLoopProxy* file_message_loop);
+
+  // Shutdown ChromotingHostManager. |done_task| will be executed when done.
+  // This method must be called before ChromotingHostManager is destroyed.
+  void Teardown(Task* done_task);
 
   // Return the reference to the chromoting host only if it has started.
   remoting::ChromotingHost* GetChromotingHost() { return chromoting_host_; }
@@ -60,12 +65,15 @@ class ChromotingHostManager
   void GetHostInfo(ChromotingHostInfo* host_info);
 
  private:
+  friend class base::RefCountedThreadSafe<ChromotingHostManager>;
+  virtual ~ChromotingHostManager();
+
   bool IsConfigInitialized();
   void InitializeConfig();
 
   void SetEnabled(bool enabled);
   void Start();
-  void Stop();
+  void Stop(Task* done_task);
 
   void OnShutdown();
 
@@ -74,6 +82,9 @@ class ChromotingHostManager
   scoped_refptr<remoting::MutableHostConfig> chromoting_config_;
   scoped_ptr<remoting::ChromotingHostContext> chromoting_context_;
   scoped_refptr<remoting::ChromotingHost> chromoting_host_;
+
+  MessageLoopForUI* main_message_loop_;
+  scoped_ptr<Task> shutdown_task_;
 };
 
 }  // namespace remoting

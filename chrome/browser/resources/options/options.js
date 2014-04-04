@@ -2,12 +2,12 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-var AddStartupPageOverlay = options.AddStartupPageOverlay;
+var AddLanguageOverlay = options.AddLanguageOverlay;
 var AdvancedOptions = options.AdvancedOptions;
 var AlertOverlay = options.AlertOverlay;
-var AutoFillEditAddressOverlay = options.AutoFillEditAddressOverlay;
-var AutoFillEditCreditCardOverlay = options.AutoFillEditCreditCardOverlay;
-var AutoFillOptions = options.AutoFillOptions;
+var AutofillEditAddressOverlay = options.AutofillEditAddressOverlay;
+var AutofillEditCreditCardOverlay = options.AutofillEditCreditCardOverlay;
+var AutofillOptions = options.AutofillOptions;
 var BrowserOptions = options.BrowserOptions;
 var ClearBrowserDataOverlay = options.ClearBrowserDataOverlay;
 var ContentSettings = options.ContentSettings;
@@ -25,6 +25,7 @@ var Preferences = options.Preferences;
 var ProxyOptions = options.ProxyOptions;
 var SearchEngineManager = options.SearchEngineManager;
 var SearchPage = options.SearchPage;
+var SyncSetupOverlay = options.SyncSetupOverlay;
 
 /**
  * DOMContentLoaded handler, sets up the page.
@@ -43,7 +44,11 @@ function load() {
 
   var menuOffPattern = /(^\?|&)menu=off($|&)/;
   var menuDisabled = menuOffPattern.test(window.location.search);
-  document.documentElement.setAttribute('hide-menu', menuDisabled);
+  // document.documentElement.setAttribute('hide-menu', menuDisabled);
+  // We can't use an attribute on the html element because of webkit bug
+  // 12519. Instead, we add a class.
+  if (menuDisabled)
+    document.documentElement.classList.add('hide-menu');
 
   localStrings = new LocalStrings();
 
@@ -54,7 +59,7 @@ function load() {
                               BrowserOptions.getInstance(),
                               [$('defaultSearchManageEnginesButton')]);
   OptionsPage.register(PersonalOptions.getInstance());
-  OptionsPage.registerSubPage(AutoFillOptions.getInstance(),
+  OptionsPage.registerSubPage(AutofillOptions.getInstance(),
                               PersonalOptions.getInstance(),
                               [$('autofill-settings')]);
   OptionsPage.registerSubPage(PasswordManager.getInstance(),
@@ -69,22 +74,22 @@ function load() {
                                 [$('language-button')]);
     OptionsPage.registerSubPage(
         new OptionsPage('languageChewing',
-                        localStrings.getString('languageChewingPage'),
+                        templateData.languageChewingPageTabTitle,
                         'languageChewingPage'),
         LanguageOptions.getInstance());
     OptionsPage.registerSubPage(
         new OptionsPage('languageHangul',
-                        localStrings.getString('languageHangulPage'),
+                        templateData.languageHangulPageTabTitle,
                         'languageHangulPage'),
         LanguageOptions.getInstance());
     OptionsPage.registerSubPage(
         new OptionsPage('languageMozc',
-                        localStrings.getString('languageMozcPage'),
+                        templateData.languageMozcPageTabTitle,
                         'languageMozcPage'),
         LanguageOptions.getInstance());
     OptionsPage.registerSubPage(
         new OptionsPage('languagePinyin',
-                        localStrings.getString('languagePinyinPage'),
+                        templateData.languagePinyinPageTabTitle,
                         'languagePinyinPage'),
         LanguageOptions.getInstance());
     OptionsPage.register(InternetOptions.getInstance());
@@ -111,34 +116,51 @@ function load() {
     OptionsPage.registerSubPage(CertificateManager.getInstance(),
                                 AdvancedOptions.getInstance(),
                                 [$('show-cookies-button')]);
-    OptionsPage.registerOverlay(CertificateRestoreOverlay.getInstance());
-    OptionsPage.registerOverlay(CertificateBackupOverlay.getInstance());
-    OptionsPage.registerOverlay(CertificateEditCaTrustOverlay.getInstance());
-    OptionsPage.registerOverlay(CertificateImportErrorOverlay.getInstance());
+    OptionsPage.registerOverlay(CertificateRestoreOverlay.getInstance(),
+                                CertificateManager.getInstance());
+    OptionsPage.registerOverlay(CertificateBackupOverlay.getInstance(),
+                                CertificateManager.getInstance());
+    OptionsPage.registerOverlay(CertificateEditCaTrustOverlay.getInstance(),
+                                CertificateManager.getInstance());
+    OptionsPage.registerOverlay(CertificateImportErrorOverlay.getInstance(),
+                                CertificateManager.getInstance());
   }
-  OptionsPage.registerOverlay(AddStartupPageOverlay.getInstance());
+  OptionsPage.registerOverlay(AddLanguageOverlay.getInstance(),
+                              LanguageOptions.getInstance());
   OptionsPage.registerOverlay(AlertOverlay.getInstance());
-  OptionsPage.registerOverlay(AutoFillEditAddressOverlay.getInstance());
-  OptionsPage.registerOverlay(AutoFillEditCreditCardOverlay.getInstance());
+  OptionsPage.registerOverlay(AutofillEditAddressOverlay.getInstance(),
+                              AutofillOptions.getInstance());
+  OptionsPage.registerOverlay(AutofillEditCreditCardOverlay.getInstance(),
+                              AutofillOptions.getInstance());
   OptionsPage.registerOverlay(ClearBrowserDataOverlay.getInstance(),
+                              AdvancedOptions.getInstance(),
                               [$('privacyClearDataButton')]);
-  OptionsPage.registerOverlay(ImportDataOverlay.getInstance());
-  OptionsPage.registerOverlay(InstantConfirmOverlay.getInstance());
+  OptionsPage.registerOverlay(ImportDataOverlay.getInstance(),
+                              PersonalOptions.getInstance());
+  OptionsPage.registerOverlay(InstantConfirmOverlay.getInstance(),
+                              BrowserOptions.getInstance());
+  OptionsPage.registerOverlay(SyncSetupOverlay.getInstance(),
+                              PersonalOptions.getInstance());
 
   if (cr.isChromeOS) {
     OptionsPage.register(AccountsOptions.getInstance());
     OptionsPage.registerSubPage(ProxyOptions.getInstance(),
                                 AdvancedOptions.getInstance(),
                                 [$('proxiesConfigureButton')]);
+    OptionsPage.registerSubPage(ChangePictureOptions.getInstance(),
+                                PersonalOptions.getInstance(),
+                                [$('change-picture-button')]);
     OptionsPage.registerOverlay(new OptionsPage('detailsInternetPage',
                                                 'detailsInternetPage',
-                                                'detailsInternetPage'));
+                                                'detailsInternetPage'),
+                                InternetOptions.getInstance());
 
     var languageModifierKeysOverlay = new OptionsPage(
         'languageCustomizeModifierKeysOverlay',
         localStrings.getString('languageCustomizeModifierKeysOverlay'),
         'languageCustomizeModifierKeysOverlay')
     OptionsPage.registerOverlay(languageModifierKeysOverlay,
+                                SystemOptions.getInstance(),
                                 [$('modifier-keys-button')]);
   }
 
@@ -146,13 +168,11 @@ function load() {
   OptionsPage.initialize();
 
   var path = document.location.pathname;
-  var hash = document.location.hash;
 
   if (path.length > 1) {
     var pageName = path.slice(1);
-    OptionsPage.showPageByName(pageName);
-    if (hash.length > 1)
-      OptionsPage.handleHashForPage(pageName, hash.slice(1));
+    // Show page, but don't update history (there's already an entry for it).
+    OptionsPage.showPageByName(pageName, false);
   } else {
     OptionsPage.showDefaultPage();
   }
@@ -177,10 +197,12 @@ function load() {
   }
   if (cr.isViews)
     document.documentElement.setAttribute('toolkit', 'views');
+  if (navigator.plugins['Shockwave Flash'])
+    document.documentElement.setAttribute('hasFlashPlugin', '');
 
   // Clicking on the Settings title brings up the 'Basics' page.
   $('settings-title').onclick = function() {
-    OptionsPage.showPageByName(BrowserOptions.getInstance().name);
+    OptionsPage.navigateToPage(BrowserOptions.getInstance().name);
   };
 }
 
@@ -188,4 +210,8 @@ document.addEventListener('DOMContentLoaded', load);
 
 window.onpopstate = function(e) {
   options.OptionsPage.setState(e.state);
+};
+
+window.onbeforeunload = function() {
+  options.OptionsPage.willClose();
 };

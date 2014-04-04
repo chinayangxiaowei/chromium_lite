@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,28 +6,31 @@
 
 FaxNumber::FaxNumber() {}
 
+FaxNumber::FaxNumber(const FaxNumber& fax) : PhoneNumber(fax) {}
+
 FaxNumber::~FaxNumber() {}
 
-FormGroup* FaxNumber::Clone() const {
-  return new FaxNumber(*this);
+FaxNumber& FaxNumber::operator=(const FaxNumber& fax) {
+  PhoneNumber::operator=(fax);
+  return *this;
 }
 
-AutoFillFieldType FaxNumber::GetNumberType() const {
+AutofillFieldType FaxNumber::GetNumberType() const {
   return PHONE_FAX_NUMBER;
 }
 
-AutoFillFieldType FaxNumber::GetCityCodeType() const {
+AutofillFieldType FaxNumber::GetCityCodeType() const {
   return PHONE_FAX_CITY_CODE;
 }
 
-AutoFillFieldType FaxNumber::GetCountryCodeType() const {
+AutofillFieldType FaxNumber::GetCountryCodeType() const {
   return PHONE_FAX_COUNTRY_CODE;
 }
 
-AutoFillFieldType FaxNumber::GetCityAndNumberType() const {
+AutofillFieldType FaxNumber::GetCityAndNumberType() const {
   return PHONE_FAX_CITY_AND_NUMBER;
 }
 
-AutoFillFieldType FaxNumber::GetWholeNumberType() const {
+AutofillFieldType FaxNumber::GetWholeNumberType() const {
   return PHONE_FAX_WHOLE_NUMBER;
 }

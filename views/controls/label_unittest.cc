@@ -4,9 +4,10 @@
 
 #include "base/i18n/rtl.h"
 #include "base/utf_string_conversions.h"
-#include "gfx/canvas.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "ui/base/accessibility/accessible_view_state.h"
 #include "ui/base/l10n/l10n_util.h"
+#include "ui/gfx/canvas.h"
 #include "views/border.h"
 #include "views/controls/label.h"
 
@@ -159,13 +160,11 @@ TEST(LabelTest, Accessibility) {
   string16 test_text(ASCIIToUTF16("My special text."));
   label.SetText(UTF16ToWideHack(test_text));
 
-  EXPECT_EQ(AccessibilityTypes::ROLE_STATICTEXT, label.GetAccessibleRole());
-
-  string16 name;
-  EXPECT_TRUE(label.GetAccessibleName(&name));
-  EXPECT_EQ(test_text, name);
-
-  EXPECT_TRUE(AccessibilityTypes::STATE_READONLY & label.GetAccessibleState());
+  ui::AccessibleViewState state;
+  label.GetAccessibleState(&state);
+  EXPECT_EQ(ui::AccessibilityTypes::ROLE_STATICTEXT, state.role);
+  EXPECT_EQ(test_text, state.name);
+  EXPECT_TRUE(ui::AccessibilityTypes::STATE_READONLY & state.state);
 }
 
 TEST(LabelTest, SingleLineSizing) {
@@ -208,12 +207,12 @@ TEST(LabelTest, MultiLineSizing) {
 
   // SizeToFit with unlimited width.
   label.SizeToFit(0);
-  int required_width = label.GetLocalBounds(true).width();
+  int required_width = label.GetLocalBounds().width();
   EXPECT_GT(required_width, kMinTextDimension);
 
   // SizeToFit with limited width.
   label.SizeToFit(required_width - 1);
-  int constrained_width = label.GetLocalBounds(true).width();
+  int constrained_width = label.GetLocalBounds().width();
 #if defined(OS_WIN)
   // Canvas::SizeStringInt (in app/gfx/canvas_linux.cc)
   // has to be fixed to return the size that fits to given width/height.
@@ -223,7 +222,7 @@ TEST(LabelTest, MultiLineSizing) {
 
   // Change the width back to the desire width.
   label.SizeToFit(required_width);
-  EXPECT_EQ(required_width, label.GetLocalBounds(true).width());
+  EXPECT_EQ(required_width, label.GetLocalBounds().width());
 
   // General tests for GetHeightForWidth.
   int required_height = label.GetHeightForWidth(required_width);
@@ -249,7 +248,7 @@ TEST(LabelTest, MultiLineSizing) {
 
   // SizeToFit and borders.
   label.SizeToFit(0);
-  int required_width_with_border = label.GetLocalBounds(true).width();
+  int required_width_with_border = label.GetLocalBounds().width();
   EXPECT_EQ(required_width_with_border, required_width + border.width());
 
   // GetHeightForWidth and borders.

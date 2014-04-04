@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,8 +7,8 @@
 #pragma once
 
 #include "base/basictypes.h"
+#include "base/memory/scoped_ptr.h"
 #include "base/metrics/field_trial.h"
-#include "base/scoped_ptr.h"
 #include "base/tracked_objects.h"
 
 class BrowserThread;
@@ -80,6 +80,8 @@ class BrowserMainParts {
   void EarlyInitialization();
   void MainMessageLoopStart();
 
+  void SetupFieldTrials();
+
  protected:
   explicit BrowserMainParts(const MainFunctionParams& parameters);
 
@@ -116,12 +118,12 @@ class BrowserMainParts {
   // A/B test for spdy when --use-spdy not set.
   void SpdyFieldTrial();
 
-  // A/B test for prefetching with --(enable|disable)-prefetch not set.
-  void PrefetchFieldTrial();
-
   // A/B test for automatically establishing a backup TCP connection when a
   // specified timeout value is reached.
   void ConnectBackupJobsFieldTrial();
+
+  // A/B test for SSL False Start.
+  void SSLFalseStartFieldTrial();
 
   // Used to initialize NSPR where appropriate.
   virtual void InitializeSSL() = 0;
@@ -169,5 +171,9 @@ void RecordBreakpadStatusUMA(MetricsService* metrics);
 // Displays a warning message if some minimum level of OS support is not
 // present on the current platform.
 void WarnAboutMinimumSystemRequirements();
+
+// Records the time from our process' startup to the present time in
+// the UMA histogram |metric_name|.
+void RecordBrowserStartupTime();
 
 #endif  // CHROME_BROWSER_BROWSER_MAIN_H_

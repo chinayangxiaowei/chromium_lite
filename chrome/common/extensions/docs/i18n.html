@@ -81,6 +81,16 @@
             </dl>
           </dd>
 
+          <!-- OBJECT METHODS -->
+          <dd>
+            <div></div>
+          </dd>
+
+          <!-- OBJECT EVENT FIELDS -->
+          <dd>
+            <div></div>
+          </dd>
+
           <!-- FUNCTION PARAMETERS -->
           <dd>
             <div></div>
@@ -294,7 +304,7 @@
                     </ol>
                   </li>
                   <li>
-                    <a href="#methods">Methods</a>
+                    <a href="#global-methods">Methods</a>
                     <ol>
                       <li>
                         <a href="#method-getAcceptLanguages">getAcceptLanguages</a>
@@ -304,7 +314,7 @@
                     </ol>
                   </li>
                   <li style="display: none; ">
-                    <a href="#events">Events</a>
+                    <a>Events</a>
                     <ol>
                       <li>
                         <a href="#event-anchor">eventName</a>
@@ -613,8 +623,8 @@ padding-right: 1.5em;
 <h2 id="overview-locales">Locales</h2>
 
 <p>
-Extensions can use all the locales that Google Chrome supports,
-plus a few (such as <code>en</code>)
+You can choose from many locales,
+including some (such as <code>en</code>)
 that let a single translation support multiple variations of a language
 (such as <code>en_GB</code> and <code>en_US</code>).
 </p>
@@ -623,12 +633,8 @@ that let a single translation support multiple variations of a language
 <h3 id="locales-supported">Supported locales</h3>
 
 <p>
-Your extension can use any of the following locales:
-</p>
-
-<p>
-<code>am  ar  bg  bn  ca  cs  da  de  el  en  en_GB  en_US  es  es_419  et  fi  fil  fr  gu  he  hi  hr  hu  id  it  ja  kn  ko  lt
-lv  ml  mr <!-- nb --> nl  or  pl  pt  pt_BR  pt_PT  ro  ru  sk  sl  sr  sv  sw  ta  te  th  tr  uk  vi  zh  zh_CN  zh_TW</code>
+Extensions can use any of the
+<a href="http://code.google.com/chrome/webstore/docs/i18n.html#localeTable">locales that the Chrome Web Store supports</a>.
 </p>
 
 
@@ -926,8 +932,8 @@ For details on calling <code>getAcceptLanguages()</code>, see the
           </div> <!-- /apiGroup -->
 
           <!-- METHODS -->
-          <div class="apiGroup" id="methods">
-            <a name="methods"></a>
+          <div id="methodsTemplate" class="apiGroup">
+            <a name="global-methods"></a>
             <h3>Methods</h3>
 
             <!-- iterates over all functions -->
@@ -999,6 +1005,16 @@ For details on calling <code>getAcceptLanguages()</code>, see the
                 </div>
               </div>
             </dl>
+          </dd>
+
+          <!-- OBJECT METHODS -->
+          <dd style="display: none; ">
+            <div></div>
+          </dd>
+
+          <!-- OBJECT EVENT FIELDS -->
+          <dd style="display: none; ">
+            <div></div>
           </dd>
 
           <!-- FUNCTION PARAMETERS -->
@@ -1098,6 +1114,16 @@ For details on calling <code>getAcceptLanguages()</code>, see the
             </dl>
           </dd>
 
+          <!-- OBJECT METHODS -->
+          <dd style="display: none; ">
+            <div></div>
+          </dd>
+
+          <!-- OBJECT EVENT FIELDS -->
+          <dd style="display: none; ">
+            <div></div>
+          </dd>
+
           <!-- FUNCTION PARAMETERS -->
           <dd style="display: none; ">
             <div></div>
@@ -1187,6 +1213,16 @@ For details on calling <code>getAcceptLanguages()</code>, see the
             </dl>
           </dd>
 
+          <!-- OBJECT METHODS -->
+          <dd style="display: none; ">
+            <div></div>
+          </dd>
+
+          <!-- OBJECT EVENT FIELDS -->
+          <dd style="display: none; ">
+            <div></div>
+          </dd>
+
           <!-- FUNCTION PARAMETERS -->
           <dd style="display: none; ">
             <div></div>
@@ -1243,6 +1279,16 @@ For details on calling <code>getAcceptLanguages()</code>, see the
                 </div>
               </div>
             </dl>
+          </dd>
+
+          <!-- OBJECT METHODS -->
+          <dd style="display: none; ">
+            <div></div>
+          </dd>
+
+          <!-- OBJECT EVENT FIELDS -->
+          <dd style="display: none; ">
+            <div></div>
           </dd>
 
           <!-- FUNCTION PARAMETERS -->
@@ -1309,6 +1355,16 @@ For details on calling <code>getAcceptLanguages()</code>, see the
             </dl>
           </dd>
 
+          <!-- OBJECT METHODS -->
+          <dd style="display: none; ">
+            <div></div>
+          </dd>
+
+          <!-- OBJECT EVENT FIELDS -->
+          <dd style="display: none; ">
+            <div></div>
+          </dd>
+
           <!-- FUNCTION PARAMETERS -->
           <dd style="display: none; ">
             <div></div>
@@ -1356,10 +1412,9 @@ For details on calling <code>getAcceptLanguages()</code>, see the
           </div>  <!-- /apiGroup -->
 
           <!-- EVENTS -->
-          <div class="apiGroup" style="display: none; ">
-            <a name="events"></a>
-            <h3 id="events">Events</h3>
-
+          <div id="eventsTemplate" class="apiGroup" style="display: none; ">
+            <a></a>
+            <h3>Events</h3>
             <!-- iterates over all events -->
             <div class="apiItem">
               <a></a>
@@ -1377,14 +1432,15 @@ For details on calling <code>getAcceptLanguages()</code>, see the
                 </p>
 
                 <!-- PARAMETERS -->
-                <h4>Parameters</h4>
-                <dl>
-                  <div>
+                <div>
+                  <h4>Parameters</h4>
+                  <dl>
                     <div>
+                      <div>
+                      </div>
                     </div>
-                  </div>
-                </dl>
-
+                  </dl>
+                </div>
               </div> <!-- /decription -->
 
             </div> <!-- /apiItem -->

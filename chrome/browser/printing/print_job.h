@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,11 +7,11 @@
 #pragma once
 
 #include "base/basictypes.h"
+#include "base/memory/scoped_ptr.h"
 #include "base/message_loop.h"
-#include "base/scoped_ptr.h"
 #include "chrome/browser/printing/print_job_worker_owner.h"
-#include "chrome/common/notification_observer.h"
-#include "chrome/common/notification_registrar.h"
+#include "content/common/notification_observer.h"
+#include "content/common/notification_registrar.h"
 
 class GURL;
 class Thread;
@@ -42,8 +42,9 @@ class PrintJob : public PrintJobWorkerOwner,
   PrintJob();
 
   // Grabs the ownership of the PrintJobWorker from another job, which is
-  // usually a PrinterQuery.
-  void Initialize(PrintJobWorkerOwner* job, PrintedPagesSource* source);
+  // usually a PrinterQuery. Set the expected page count of the print job.
+  void Initialize(PrintJobWorkerOwner* job, PrintedPagesSource* source,
+                  int page_count);
 
   // NotificationObserver
   virtual void Observe(NotificationType type,
@@ -86,9 +87,6 @@ class PrintJob : public PrintJobWorkerOwner,
   // Returns true if the print job is pending, i.e. between a StartPrinting()
   // and the end of the spooling.
   bool is_job_pending() const;
-
-  // Returns true if the Print... dialog box is currently displayed.
-  bool is_print_dialog_box_shown() const;
 
   // Access the current printed document. Warning: may be NULL.
   PrintedDocument* document() const;
@@ -134,9 +132,6 @@ class PrintJob : public PrintJobWorkerOwner,
 
   // Is the worker thread printing.
   bool is_job_pending_;
-
-  // Is the Print... dialog box currently shown.
-  bool is_print_dialog_box_shown_;
 
   // Is Canceling? If so, try to not cause recursion if on FAILED notification,
   // the notified calls Cancel() again.

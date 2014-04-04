@@ -10,7 +10,7 @@
 #include "chrome/app/chrome_command_ids.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/gtk/gtk_theme_provider.h"
+#include "chrome/browser/ui/gtk/gtk_theme_service.h"
 #include "chrome/browser/ui/gtk/gtk_util.h"
 #include "chrome/browser/ui/gtk/menu_gtk.h"
 #include "chrome/browser/ui/toolbar/back_forward_menu_model.h"
@@ -43,7 +43,7 @@ BackForwardButtonGtk::BackForwardButtonGtk(Browser* browser, bool is_forward)
     stock = GTK_STOCK_GO_BACK;
   }
   button_.reset(new CustomDrawButton(
-      GtkThemeProvider::GetFrom(browser_->profile()),
+      GtkThemeService::GetFrom(browser_->profile()),
       normal, pushed, hover, disabled, stock, GTK_ICON_SIZE_SMALL_TOOLBAR));
   gtk_widget_set_tooltip_text(widget(),
                               l10n_util::GetStringUTF8(tooltip).c_str());
@@ -78,16 +78,10 @@ bool BackForwardButtonGtk::AlwaysShowIconForCmd(int command_id) const {
   return true;
 }
 
-void BackForwardButtonGtk::ShowBackForwardMenu() {
+void BackForwardButtonGtk::ShowBackForwardMenu(int button, guint32 event_time) {
   menu_.reset(new MenuGtk(this, menu_model_.get()));
   button_->SetPaintOverride(GTK_STATE_ACTIVE);
-
-  // gtk_menu_popup will ignore the first mouse button release if it matches
-  // the button type and is within a short span of the time we pass here.
-  // Since this menu is not popped up by a button press (instead, it is popped
-  // up either on a timer or on a drag) this doesn't apply to us and we can
-  // pass arbitrary values.
-  menu_->Popup(widget(), 1, gtk_get_current_event_time());
+  menu_->PopupForWidget(widget(), button, event_time);
 }
 
 void BackForwardButtonGtk::OnClick(GtkWidget* widget) {
@@ -101,7 +95,7 @@ void BackForwardButtonGtk::OnClick(GtkWidget* widget) {
 gboolean BackForwardButtonGtk::OnButtonPress(GtkWidget* widget,
                                              GdkEventButton* event) {
   if (event->button == 3)
-    ShowBackForwardMenu();
+    ShowBackForwardMenu(event->button, event->time);
 
   if (event->button != 1)
     return FALSE;
@@ -109,7 +103,8 @@ gboolean BackForwardButtonGtk::OnButtonPress(GtkWidget* widget,
   y_position_of_last_press_ = static_cast<int>(event->y);
   MessageLoop::current()->PostDelayedTask(FROM_HERE,
       show_menu_factory_.NewRunnableMethod(
-          &BackForwardButtonGtk::ShowBackForwardMenu),
+          &BackForwardButtonGtk::ShowBackForwardMenu,
+          event->button, event->time),
       kMenuTimerDelay);
   return FALSE;
 }
@@ -129,6 +124,6 @@ gboolean BackForwardButtonGtk::OnMouseMove(GtkWidget* widget,
 
   // We will show the menu now. Cancel the delayed event.
   show_menu_factory_.RevokeAll();
-  ShowBackForwardMenu();
+  ShowBackForwardMenu(/* button */ 1, event->time);
   return FALSE;
 }

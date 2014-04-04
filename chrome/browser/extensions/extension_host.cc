@@ -6,43 +6,42 @@
 
 #include <list>
 
+#include "base/memory/singleton.h"
 #include "base/message_loop.h"
-#include "base/singleton.h"
 #include "base/metrics/histogram.h"
 #include "base/string_util.h"
-#include "chrome/browser/browser_list.h"
 #include "chrome/browser/browser_shutdown.h"
-#include "chrome/browser/browser_window.h"
-#include "chrome/browser/browsing_instance.h"
-#include "chrome/browser/debugger/devtools_manager.h"
-#include "chrome/browser/dom_ui/dom_ui_factory.h"
-#include "chrome/browser/extensions/extension_message_service.h"
-#include "chrome/browser/extensions/extension_tabs_module.h"
 #include "chrome/browser/extensions/extension_service.h"
+#include "chrome/browser/extensions/extension_tabs_module.h"
 #include "chrome/browser/file_select_helper.h"
 #include "chrome/browser/platform_util.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/renderer_host/render_process_host.h"
-#include "chrome/browser/renderer_host/render_view_host.h"
-#include "chrome/browser/renderer_host/render_widget_host.h"
-#include "chrome/browser/renderer_host/render_widget_host_view.h"
-#include "chrome/browser/renderer_host/site_instance.h"
 #include "chrome/browser/renderer_preferences_util.h"
 #include "chrome/browser/tab_contents/popup_menu_helper_mac.h"
-#include "chrome/browser/tab_contents/tab_contents.h"
-#include "chrome/browser/tab_contents/tab_contents_view.h"
-#include "chrome/browser/themes/browser_theme_provider.h"
 #include "chrome/browser/ui/app_modal_dialogs/message_box_handler.h"
 #include "chrome/browser/ui/browser.h"
-#include "chrome/common/bindings_policy.h"
+#include "chrome/browser/ui/browser_list.h"
+#include "chrome/browser/ui/browser_window.h"
+#include "chrome/browser/ui/webui/chrome_web_ui_factory.h"
+#include "chrome/common/chrome_constants.h"
 #include "chrome/common/extensions/extension.h"
 #include "chrome/common/extensions/extension_constants.h"
-#include "chrome/common/native_web_keyboard_event.h"
-#include "chrome/common/notification_service.h"
 #include "chrome/common/render_messages.h"
-#include "chrome/common/render_messages_params.h"
 #include "chrome/common/url_constants.h"
 #include "chrome/common/view_types.h"
+#include "content/browser/browsing_instance.h"
+#include "content/browser/renderer_host/browser_render_process_host.h"
+#include "content/browser/renderer_host/render_process_host.h"
+#include "content/browser/renderer_host/render_view_host.h"
+#include "content/browser/renderer_host/render_widget_host.h"
+#include "content/browser/renderer_host/render_widget_host_view.h"
+#include "content/browser/site_instance.h"
+#include "content/browser/tab_contents/tab_contents.h"
+#include "content/browser/tab_contents/tab_contents_view.h"
+#include "content/common/bindings_policy.h"
+#include "content/common/native_web_keyboard_event.h"
+#include "content/common/notification_service.h"
+#include "content/common/view_messages.h"
 #include "grit/browser_resources.h"
 #include "grit/generated_resources.h"
 #include "ui/base/keycodes/keyboard_codes.h"
@@ -125,15 +124,22 @@ ExtensionHost::ExtensionHost(const Extension* extension,
                              const GURL& url,
                              ViewType::Type host_type)
     : extension_(extension),
+      extension_id_(extension->id()),
       profile_(site_instance->browsing_instance()->profile()),
       did_stop_loading_(false),
       document_element_available_(false),
       url_(url),
       extension_host_type_(host_type),
-      associated_tab_contents_(NULL) {
+      associated_tab_contents_(NULL),
+      suppress_javascript_messages_(false) {
   render_view_host_ = new RenderViewHost(site_instance, this, MSG_ROUTING_NONE,
                                          NULL);
   render_view_host_->set_is_extension_process(true);
+  if (extension->is_app()) {
+    BrowserRenderProcessHost* process = static_cast<BrowserRenderProcessHost*>(
+        render_view_host_->process());
+    process->set_installed_app(extension);
+  }
   render_view_host_->AllowBindings(BindingsPolicy::EXTENSION);
   if (enable_dom_automation_)
     render_view_host_->AllowBindings(BindingsPolicy::DOM_AUTOMATION);
@@ -228,8 +234,7 @@ void ExtensionHost::NavigateToURL(const GURL& url) {
   // Prevent explicit navigation to another extension id's pages.
   // This method is only called by some APIs, so we still need to protect
   // DidNavigate below (location = "").
-  if (url.SchemeIs(chrome::kExtensionScheme) &&
-      url.host() != extension_->id()) {
+  if (url.SchemeIs(chrome::kExtensionScheme) && url.host() != extension_id()) {
     // TODO(erikkay) communicate this back to the caller?
     return;
   }
@@ -253,7 +258,7 @@ void ExtensionHost::Observe(NotificationType type,
   switch (type.value) {
     case NotificationType::EXTENSION_BACKGROUND_PAGE_READY:
       DCHECK(profile_->GetExtensionService()->
-           IsBackgroundPageReady(extension_));
+          IsBackgroundPageReady(extension_));
       NavigateToURL(url_);
       break;
     case NotificationType::RENDERER_PROCESS_CREATED:
@@ -336,7 +341,7 @@ void ExtensionHost::DidNavigate(RenderViewHost* render_view_host,
   // will leave the host in kind of a bad state with poor UI and errors, but
   // it's better than the alternative.
   // TODO(erikkay) Perhaps we should display errors in developer mode.
-  if (params.url.host() != extension_->id()) {
+  if (params.url.host() != extension_id()) {
     extension_function_dispatcher_.reset(NULL);
     return;
   }
@@ -427,12 +432,29 @@ void ExtensionHost::RunJavaScriptMessage(const std::wstring& message,
                                          const int flags,
                                          IPC::Message* reply_msg,
                                          bool* did_suppress_message) {
-  *did_suppress_message = false;
-  // Unlike for page alerts, navigations aren't a good signal for when to
-  // resume showing alerts, so we can't reasonably stop showing them even if
-  // the extension is spammy.
-  RunJavascriptMessageBox(profile_, this, frame_url, flags, message,
-                          default_prompt, false, reply_msg);
+  base::TimeDelta time_since_last_message(
+      base::TimeTicks::Now() - last_javascript_message_dismissal_);
+
+  *did_suppress_message = suppress_javascript_messages_;
+  if (!suppress_javascript_messages_) {
+    bool show_suppress_checkbox = false;
+    // Show a checkbox offering to suppress further messages if this message is
+    // being displayed within kJavascriptMessageExpectedDelay of the last one.
+    if (time_since_last_message <
+        base::TimeDelta::FromMilliseconds(
+            chrome::kJavascriptMessageExpectedDelay))
+      show_suppress_checkbox = true;
+
+    // Unlike for page alerts, navigations aren't a good signal for when to
+    // resume showing alerts, so we can't reasonably stop showing them even if
+    // the extension is spammy.
+    RunJavascriptMessageBox(profile_, this, frame_url, flags, message,
+                            default_prompt, show_suppress_checkbox, reply_msg);
+  } else {
+    // If we are suppressing messages, just reply as is if the user immediately
+    // pressed "Cancel".
+    OnMessageBoxClosed(reply_msg, false, std::wstring());
+  }
 }
 
 gfx::NativeWindow ExtensionHost::GetMessageBoxRootWindow() {
@@ -463,7 +485,12 @@ ExtensionHost* ExtensionHost::AsExtensionHost() {
 void ExtensionHost::OnMessageBoxClosed(IPC::Message* reply_msg,
                                        bool success,
                                        const std::wstring& prompt) {
+  last_javascript_message_dismissal_ = base::TimeTicks::Now();
   render_view_host()->JavaScriptMessageBoxClosed(reply_msg, success, prompt);
+}
+
+void ExtensionHost::SetSuppressMessageBoxes(bool suppress_message_boxes) {
+  suppress_javascript_messages_ = suppress_message_boxes;
 }
 
 void ExtensionHost::Close(RenderViewHost* render_view_host) {
@@ -493,7 +520,7 @@ WebPreferences ExtensionHost::GetWebkitPrefs() {
   Profile* profile = render_view_host()->process()->profile();
   WebPreferences webkit_prefs =
       RenderViewHostDelegateHelper::GetWebkitPrefs(profile,
-                                                   false);  // is_dom_ui
+                                                   false);  // is_web_ui
   // Extensions are trusted so we override any user preferences for disabling
   // javascript or images.
   webkit_prefs.loads_images_automatically = true;
@@ -520,8 +547,8 @@ WebPreferences ExtensionHost::GetWebkitPrefs() {
   return webkit_prefs;
 }
 
-void ExtensionHost::ProcessDOMUIMessage(
-    const ViewHostMsg_DomMessage_Params& params) {
+void ExtensionHost::ProcessWebUIMessage(
+    const ExtensionHostMsg_DomMessage_Params& params) {
   if (extension_function_dispatcher_.get()) {
     extension_function_dispatcher_->HandleRequest(params);
   }
@@ -533,19 +560,18 @@ RenderViewHostDelegate::View* ExtensionHost::GetViewDelegate() {
 
 void ExtensionHost::CreateNewWindow(
     int route_id,
-    WindowContainerType window_container_type,
-    const string16& frame_name) {
+    const ViewHostMsg_CreateWindow_Params& params) {
   // TODO(aa): Use the browser's profile if the extension is split mode
   // incognito.
   TabContents* new_contents = delegate_view_helper_.CreateNewWindow(
       route_id,
       render_view_host()->process()->profile(),
       site_instance(),
-      DOMUIFactory::GetDOMUIType(render_view_host()->process()->profile(),
-          url_),
+      ChromeWebUIFactory::GetInstance()->GetWebUIType(
+          render_view_host()->process()->profile(), url_),
       this,
-      window_container_type,
-      frame_name);
+      params.window_container_type,
+      params.frame_name);
 
   TabContents* associated_contents = associated_tab_contents();
   if (associated_contents && associated_contents->delegate())
@@ -557,8 +583,7 @@ void ExtensionHost::CreateNewWidget(int route_id,
   CreateNewWidgetInternal(route_id, popup_type);
 }
 
-void ExtensionHost::CreateNewFullscreenWidget(int route_id,
-                                              WebKit::WebPopupType popup_type) {
+void ExtensionHost::CreateNewFullscreenWidget(int route_id) {
   NOTREACHED()
       << "ExtensionHost does not support showing full screen popups yet.";
 }
@@ -584,7 +609,10 @@ void ExtensionHost::ShowCreatedWindow(int route_id,
                                                contents->profile(),
                                                contents,
                                                initial_pos);
-    browser->window()->Show();
+    if (user_gesture)
+      browser->window()->Show();
+    else
+      browser->window()->ShowInactive();
     return;
   }
 
@@ -601,8 +629,8 @@ void ExtensionHost::ShowCreatedWindow(int route_id,
   TabContents* associated_contents = associated_tab_contents();
   if (associated_contents &&
       associated_contents->profile() == contents->profile()) {
-    associated_contents->AddNewContents(contents, disposition, initial_pos,
-                                        user_gesture);
+    associated_contents->AddOrBlockNewContents(
+        contents, disposition, initial_pos, user_gesture);
     return;
   }
 
@@ -619,9 +647,7 @@ void ExtensionHost::ShowCreatedWindow(int route_id,
     browser = Browser::Create(contents->profile());
     browser->window()->Show();
   }
-
-  if (browser)
-    browser->AddTabContents(contents, disposition, initial_pos, user_gesture);
+  browser->AddTabContents(contents, disposition, initial_pos, user_gesture);
 }
 
 void ExtensionHost::ShowCreatedWidget(int route_id,
@@ -684,7 +710,7 @@ void ExtensionHost::UpdateDragCursor(WebDragOperation operation) {
 }
 
 void ExtensionHost::GotFocus() {
-#if defined(TOOLKIT_VIEWS)
+#if defined(TOOLKIT_VIEWS) && !defined(TOUCH_UI)
   // Request focus so that the FocusManager has a focused view and can perform
   // normally its key event processing (so that it lets tab key events go to the
   // renderer).
@@ -758,6 +784,15 @@ ViewType::Type ExtensionHost::GetRenderViewType() const {
   return extension_host_type_;
 }
 
+bool ExtensionHost::OnMessageReceived(const IPC::Message& message) {
+  bool handled = true;
+  IPC_BEGIN_MESSAGE_MAP(ExtensionHost, message)
+    IPC_MESSAGE_HANDLER(ViewHostMsg_RunFileChooser, OnRunFileChooser)
+    IPC_MESSAGE_UNHANDLED(handled = false)
+  IPC_END_MESSAGE_MAP()
+  return handled;
+}
+
 const GURL& ExtensionHost::GetURL() const {
   return url_;
 }
@@ -780,12 +815,6 @@ void ExtensionHost::RenderViewCreated(RenderViewHost* render_view_host) {
   }
 }
 
-RenderViewHostDelegate::FileSelect* ExtensionHost::GetFileSelectDelegate() {
-  if (file_select_helper_.get() == NULL)
-    file_select_helper_.reset(new FileSelectHelper(profile()));
-  return file_select_helper_.get();
-}
-
 int ExtensionHost::GetBrowserWindowID() const {
   // Hosts not attached to any browser window have an id of -1.  This includes
   // those mentioned below, and background pages.
@@ -802,4 +831,12 @@ int ExtensionHost::GetBrowserWindowID() const {
     NOTREACHED();
   }
   return window_id;
+}
+
+void ExtensionHost::OnRunFileChooser(
+    const ViewHostMsg_RunFileChooser_Params& params) {
+  if (file_select_helper_.get() == NULL)
+    file_select_helper_.reset(new FileSelectHelper(profile()));
+  file_select_helper_->RunFileChooser(render_view_host_,
+                                      associated_tab_contents(), params);
 }

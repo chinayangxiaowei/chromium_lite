@@ -31,13 +31,13 @@ class ClientView : public View {
   virtual ~ClientView() {}
 
   // Manual RTTI ftw.
-  virtual DialogClientView* AsDialogClientView() { return NULL; }
+  virtual DialogClientView* AsDialogClientView();
 
   // Returns true to signal that the Window can be closed. Specialized
   // ClientView subclasses can override this default behavior to allow the
   // close to be blocked until the user corrects mistakes, accepts a warning
   // dialog, etc.
-  virtual bool CanClose() const { return true; }
+  virtual bool CanClose();
 
   // Notification that the window is closing.  The default implementation
   // forwards the notification to the delegate.
@@ -55,15 +55,15 @@ class ClientView : public View {
   virtual int NonClientHitTest(const gfx::Point& point);
 
   // Overridden from View:
-  virtual gfx::Size GetPreferredSize();
-  virtual void Layout();
+  virtual gfx::Size GetPreferredSize() OVERRIDE;
+  virtual void Layout() OVERRIDE;
 
  protected:
   // Overridden from View:
-  virtual void ViewHierarchyChanged(bool is_add, View* parent, View* child);
-  virtual void DidChangeBounds(const gfx::Rect& previous,
-                               const gfx::Rect& current);
-  virtual AccessibilityTypes::Role GetAccessibleRole();
+  virtual void ViewHierarchyChanged(
+      bool is_add, View* parent, View* child) OVERRIDE;
+  virtual void OnBoundsChanged(const gfx::Rect& previous_bounds) OVERRIDE;
+  virtual void GetAccessibleState(ui::AccessibleViewState* state) OVERRIDE;
 
   // Accessors for private data members.
   Window* window() const { return window_; }

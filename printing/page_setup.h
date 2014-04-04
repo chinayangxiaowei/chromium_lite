@@ -1,11 +1,11 @@
-// Copyright (c) 2006-2008 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef PRINTING_PAGE_SETUP_H_
 #define PRINTING_PAGE_SETUP_H_
 
-#include "gfx/rect.h"
+#include "ui/gfx/rect.h"
 
 namespace printing {
 
@@ -35,6 +35,7 @@ class PageMargins {
 class PageSetup {
  public:
   PageSetup();
+  ~PageSetup();
 
   void Clear();
 
@@ -45,6 +46,9 @@ class PageSetup {
             int text_height);
 
   void SetRequestedMargins(const PageMargins& requested_margins);
+
+  // Flips the orientation of the page and recalculates all page areas.
+  void FlipOrientation();
 
   const gfx::Size& physical_size() const { return physical_size_; }
   const gfx::Rect& overlay_area() const { return overlay_area_; }

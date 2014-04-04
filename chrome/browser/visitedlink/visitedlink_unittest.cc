@@ -12,14 +12,14 @@
 #include "base/process_util.h"
 #include "base/shared_memory.h"
 #include "base/string_util.h"
-#include "chrome/browser/browser_thread.h"
 #include "chrome/browser/visitedlink/visitedlink_master.h"
 #include "chrome/browser/visitedlink/visitedlink_event_listener.h"
-#include "chrome/browser/renderer_host/browser_render_process_host.h"
-#include "chrome/browser/renderer_host/test/test_render_view_host.h"
 #include "chrome/common/render_messages.h"
 #include "chrome/renderer/visitedlink_slave.h"
 #include "chrome/test/testing_profile.h"
+#include "content/browser/browser_thread.h"
+#include "content/browser/renderer_host/browser_render_process_host.h"
+#include "content/browser/renderer_host/test_render_view_host.h"
 #include "googleurl/src/gurl.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
@@ -51,7 +51,7 @@ class TrackingVisitedLinkEventListener : public VisitedLinkMaster::Listener {
            i < g_slaves.size(); i++) {
         base::SharedMemoryHandle new_handle = base::SharedMemory::NULLHandle();
         table->ShareToProcess(base::GetCurrentProcessHandle(), &new_handle);
-        g_slaves[i]->Init(new_handle);
+        g_slaves[i]->OnUpdateVisitedLinks(new_handle);
       }
     }
   }
@@ -134,8 +134,7 @@ class VisitedLinkTest : public testing::Test {
     base::SharedMemoryHandle new_handle = base::SharedMemory::NULLHandle();
     master_->shared_memory()->ShareToProcess(
         base::GetCurrentProcessHandle(), &new_handle);
-    bool success = slave.Init(new_handle);
-    ASSERT_TRUE(success);
+    slave.OnUpdateVisitedLinks(new_handle);
     g_slaves.push_back(&slave);
 
     bool found;
@@ -276,7 +275,7 @@ TEST_F(VisitedLinkTest, DeleteAll) {
     base::SharedMemoryHandle new_handle = base::SharedMemory::NULLHandle();
     master_->shared_memory()->ShareToProcess(
         base::GetCurrentProcessHandle(), &new_handle);
-    ASSERT_TRUE(slave.Init(new_handle));
+    slave.OnUpdateVisitedLinks(new_handle);
     g_slaves.push_back(&slave);
 
     // Add the test URLs.
@@ -325,8 +324,7 @@ TEST_F(VisitedLinkTest, Resizing) {
   base::SharedMemoryHandle new_handle = base::SharedMemory::NULLHandle();
   master_->shared_memory()->ShareToProcess(
       base::GetCurrentProcessHandle(), &new_handle);
-  bool success = slave.Init(new_handle);
-  ASSERT_TRUE(success);
+  slave.OnUpdateVisitedLinks(new_handle);
   g_slaves.push_back(&slave);
 
   int32 used_count = master_->GetUsedCount();
@@ -521,13 +519,14 @@ class VisitRelayingRenderProcessHost : public BrowserRenderProcessHost {
   virtual ~VisitRelayingRenderProcessHost() {
   }
 
-  virtual bool Init() { return true; }
+  virtual bool Init(bool is_accessibility_enabled, bool is_extension_process) {
+    return true;
+  }
 
   virtual void CancelResourceRequests(int render_widget_id) {
   }
 
-  virtual void CrossSiteClosePageACK(int new_render_process_host_id,
-                                     int new_request_id) {
+  virtual void CrossSiteClosePageACK(const ViewMsg_ClosePage_Params& params) {
   }
 
   virtual bool WaitForPaintMsg(int render_widget_id,
@@ -582,6 +581,7 @@ class VisitedLinkEventsTest : public RenderViewHostTestHarness {
  public:
   VisitedLinkEventsTest()
       : RenderViewHostTestHarness(),
+        ui_thread_(BrowserThread::UI, &message_loop_),
         file_thread_(BrowserThread::FILE, &message_loop_) {}
   ~VisitedLinkEventsTest() {
     // This ends up using the file thread to schedule the delete.
@@ -613,6 +613,7 @@ class VisitedLinkEventsTest : public RenderViewHostTestHarness {
 
  private:
   scoped_ptr<VisitedLinkEventListener> event_listener_;
+  BrowserThread ui_thread_;
   BrowserThread file_thread_;
 
   DISALLOW_COPY_AND_ASSIGN(VisitedLinkEventsTest);

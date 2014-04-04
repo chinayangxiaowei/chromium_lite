@@ -1,17 +1,18 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "chrome/browser/browser_list.h"
 #include "chrome/browser/extensions/extension_apitest.h"
-#include "chrome/browser/extensions/extension_dom_ui.h"
 #include "chrome/browser/extensions/extension_service.h"
+#include "chrome/browser/extensions/extension_web_ui.h"
 #include "chrome/browser/prefs/pref_service.h"
+#include "chrome/browser/prefs/scoped_user_pref_update.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/tab_contents/tab_contents.h"
 #include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_list.h"
 #include "chrome/common/url_constants.h"
 #include "chrome/test/ui_test_utils.h"
+#include "content/browser/tab_contents/tab_contents.h"
 
 class ExtensionOverrideTest : public ExtensionApiTest {
  protected:
@@ -19,7 +20,7 @@ class ExtensionOverrideTest : public ExtensionApiTest {
     // There should be no duplicate entries in the preferences.
     const DictionaryValue* overrides =
         browser()->profile()->GetPrefs()->GetDictionary(
-            ExtensionDOMUI::kExtensionURLOverrides);
+            ExtensionWebUI::kExtensionURLOverrides);
 
     ListValue* values = NULL;
     if (!overrides->GetList("history", &values))
@@ -119,7 +120,7 @@ IN_PROC_BROWSER_TEST_F(ExtensionOverrideTest, ShouldNotCreateDuplicateEntries) {
   // Simulate several LoadExtension() calls happening over the lifetime of
   // a preferences file without corresponding UnloadExtension() calls.
   for (size_t i = 0; i < 3; ++i) {
-    ExtensionDOMUI::RegisterChromeURLOverrides(
+    ExtensionWebUI::RegisterChromeURLOverrides(
         browser()->profile(),
         browser()->profile()->GetExtensionService()->extensions()->back()->
             GetChromeURLOverrides());
@@ -137,8 +138,11 @@ IN_PROC_BROWSER_TEST_F(ExtensionOverrideTest, ShouldCleanUpDuplicateEntries) {
   for (size_t i = 0; i < 3; ++i)
     list->Append(Value::CreateStringValue("http://www.google.com/"));
 
-  browser()->profile()->GetPrefs()->GetMutableDictionary(
-      ExtensionDOMUI::kExtensionURLOverrides)->Set("history", list);
+  {
+    DictionaryPrefUpdate update(browser()->profile()->GetPrefs(),
+                                ExtensionWebUI::kExtensionURLOverrides);
+    update.Get()->Set("history", list);
+  }
 
   ASSERT_FALSE(CheckHistoryOverridesContainsNoDupes());
 

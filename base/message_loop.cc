@@ -1,8 +1,13 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "base/message_loop.h"
+
+#if defined(OS_POSIX) && !defined(OS_MACOSX)
+#include <gdk/gdk.h>
+#include <gdk/gdkx.h>
+#endif
 
 #include <algorithm>
 
@@ -117,7 +122,11 @@ MessageLoop::MessageLoop(Type type)
     : type_(type),
       nestable_tasks_allowed_(true),
       exception_restoration_(false),
+      message_histogram_(NULL),
       state_(NULL),
+#ifdef OS_WIN
+      os_modal_loop_(false),
+#endif  // OS_WIN
       next_sequence_num_(0) {
   DCHECK(!current()) << "should only have one message loop per thread";
   lazy_tls_ptr.Pointer()->Set(this);
@@ -284,6 +293,12 @@ void MessageLoop::AddTaskObserver(TaskObserver* task_observer) {
 void MessageLoop::RemoveTaskObserver(TaskObserver* task_observer) {
   DCHECK_EQ(this, current());
   task_observers_.RemoveObserver(task_observer);
+}
+
+void MessageLoop::AssertIdle() const {
+  // We only check |incoming_queue_|, since we don't want to lock |work_queue_|.
+  base::AutoLock lock(incoming_queue_lock_);
+  DCHECK(incoming_queue_.empty());
 }
 
 //------------------------------------------------------------------------------
@@ -517,7 +532,7 @@ void MessageLoop::PostTask_Helper(
 // on each thread.
 
 void MessageLoop::StartHistogrammer() {
-  if (enable_histogrammer_ && !message_histogram_.get()
+  if (enable_histogrammer_ && !message_histogram_
       && base::StatisticsRecorder::IsActive()) {
     DCHECK(!thread_name_.empty());
     message_histogram_ = base::LinearHistogram::FactoryGet(
@@ -530,7 +545,7 @@ void MessageLoop::StartHistogrammer() {
 }
 
 void MessageLoop::HistogramEvent(int event) {
-  if (message_histogram_.get())
+  if (message_histogram_)
     message_histogram_->Add(event);
 }
 
@@ -657,6 +672,12 @@ void MessageLoopForUI::DidProcessMessage(const MSG& message) {
   pump_win()->DidProcessMessage(message);
 }
 #endif  // defined(OS_WIN)
+
+#if defined(USE_X11)
+Display* MessageLoopForUI::GetDisplay() {
+  return gdk_x11_get_default_xdisplay();
+}
+#endif  // defined(USE_X11)
 
 #if !defined(OS_MACOSX) && !defined(OS_NACL)
 void MessageLoopForUI::AddObserver(Observer* observer) {

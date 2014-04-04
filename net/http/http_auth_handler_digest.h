@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,7 +10,7 @@
 
 #include "base/basictypes.h"
 #include "base/gtest_prod_util.h"
-#include "base/scoped_ptr.h"
+#include "base/memory/scoped_ptr.h"
 #include "base/string16.h"
 #include "net/http/http_auth_handler.h"
 #include "net/http/http_auth_handler_factory.h"
@@ -62,6 +62,9 @@ class HttpAuthHandlerDigest : public HttpAuthHandler {
     Factory();
     virtual ~Factory();
 
+    // This factory owns the passed in |nonce_generator|.
+    void set_nonce_generator(const NonceGenerator* nonce_generator);
+
     virtual int CreateAuthHandler(HttpAuth::ChallengeTokenizer* challenge,
                                   HttpAuth::Target target,
                                   const GURL& origin,
@@ -69,9 +72,6 @@ class HttpAuthHandlerDigest : public HttpAuthHandler {
                                   int digest_nonce_count,
                                   const BoundNetLog& net_log,
                                   scoped_ptr<HttpAuthHandler>* handler);
-
-    // This factory owns the passed in |nonce_generator|.
-    void set_nonce_generator(const NonceGenerator* nonce_generator);
 
    private:
     scoped_ptr<const NonceGenerator> nonce_generator_;

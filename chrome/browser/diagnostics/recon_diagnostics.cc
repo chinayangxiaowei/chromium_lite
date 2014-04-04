@@ -18,7 +18,7 @@
 #include "chrome/common/chrome_constants.h"
 #include "chrome/common/chrome_paths.h"
 #include "chrome/common/chrome_version_info.h"
-#include "chrome/common/json_value_serializer.h"
+#include "content/common/json_value_serializer.h"
 
 #if defined(OS_WIN)
 #include "base/win/windows_version.h"
@@ -47,27 +47,20 @@ class OperatingSystemTest : public DiagnosticTest {
   virtual int GetId() { return 0; }
 
   virtual bool ExecuteImpl(DiagnosticsModel::Observer* observer) {
-    int version = 0;
-    int major = 0;
-    int minor = 0;
 #if defined(OS_WIN)
-    version = base::win::GetVersion();
-    if (version < base::win::VERSION_XP) {
-      RecordFailure(ASCIIToUTF16("Windows 2000 or earlier"));
-      return false;
-    }
-    base::win::GetServicePackLevel(&major, &minor);
-    if ((version == base::win::VERSION_XP) && (major < 2)) {
-      RecordFailure(ASCIIToUTF16("XP Service Pack 1 or earlier"));
+    base::win::Version version = base::win::GetVersion();
+    if ((version < base::win::VERSION_XP) ||
+        ((version == base::win::VERSION_XP) &&
+         (base::win::OSInfo::GetInstance()->service_pack().major < 2))) {
+      RecordFailure(ASCIIToUTF16("Must have Windows XP SP2 or later"));
       return false;
     }
 #else
     // TODO(port): define the OS criteria for Linux and Mac.
 #endif  // defined(OS_WIN)
-    RecordSuccess(ASCIIToUTF16(StringPrintf("%s %s (%d [%d:%d])",
+    RecordSuccess(ASCIIToUTF16(StringPrintf("%s %s",
         base::SysInfo::OperatingSystemName().c_str(),
-        base::SysInfo::OperatingSystemVersion().c_str(),
-        version, major, minor)));
+        base::SysInfo::OperatingSystemVersion().c_str())));
     return true;
   }
 
@@ -145,8 +138,7 @@ class InstallTypeTest : public DiagnosticTest {
       RecordFailure(ASCIIToUTF16("Path provider failure"));
       return false;
     }
-    user_level_ = InstallUtil::IsPerUserInstall(
-        chrome_exe.ToWStringHack().c_str());
+    user_level_ = InstallUtil::IsPerUserInstall(chrome_exe.value().c_str());
     const char* type = user_level_ ? "User Level" : "System Level";
     string16 install_type(ASCIIToUTF16(type));
 #else
@@ -215,8 +207,8 @@ const TestPathInfo kPathsToTest[] = {
       false, false, true, 500 * kOneKilo},
   {"Dictionaries Directory", chrome::DIR_APP_DICTIONARIES,
       true, true, false, 0},
-  {"Inspector Directory", chrome::DIR_INSPECTOR,
-      true, false, false, 0}
+  {"Resources file", chrome::FILE_RESOURCES_PACK,
+      false, false, false, 0}
 };
 
 // Check that the user's data directory exists and the paths are writable.
@@ -241,7 +233,8 @@ class PathTest : public DiagnosticTest {
       return false;
     }
     if (!file_util::PathExists(dir_or_file)) {
-      RecordFailure(ASCIIToUTF16("Path not found"));
+      RecordFailure(ASCIIToUTF16("Path not found: ") +
+                    dir_or_file.LossyDisplayName());
       return true;
     }
 
@@ -252,7 +245,8 @@ class PathTest : public DiagnosticTest {
       file_util::GetFileSize(dir_or_file, &dir_or_file_size);
     }
     if (!dir_or_file_size && !path_info_.is_optional) {
-      RecordFailure(ASCIIToUTF16("Cannot obtain size"));
+      RecordFailure(ASCIIToUTF16("Cannot obtain size for: ") +
+                    dir_or_file.LossyDisplayName());
       return true;
     }
     DataUnits units = GetByteDisplayUnits(dir_or_file_size);
@@ -260,7 +254,10 @@ class PathTest : public DiagnosticTest {
 
     if (path_info_.max_size > 0) {
       if (dir_or_file_size > path_info_.max_size) {
-        RecordFailure(ASCIIToUTF16("Path is too big: ") + printable_size);
+        RecordFailure(ASCIIToUTF16("Path contents too large (") +
+                      printable_size +
+                      ASCIIToUTF16(") for: ") +
+                      dir_or_file.LossyDisplayName());
         return true;
       }
     }
@@ -269,7 +266,8 @@ class PathTest : public DiagnosticTest {
       return true;
     }
     if (!file_util::PathIsWritable(dir_or_file)) {
-      RecordFailure(ASCIIToUTF16("Path is not writable"));
+      RecordFailure(ASCIIToUTF16("Path is not writable: ") +
+                    dir_or_file.LossyDisplayName());
       return true;
     }
     RecordSuccess(ASCIIToUTF16("Path exists and is writable: ")
@@ -316,7 +314,7 @@ class DiskSpaceTest : public DiagnosticTest {
 // Checks that a given json file can be correctly parsed.
 class JSONTest : public DiagnosticTest {
  public:
-  JSONTest(const FilePath& path, const string16 name, int64 max_file_size)
+  JSONTest(const FilePath& path, const string16& name, int64 max_file_size)
       : DiagnosticTest(name), path_(path), max_file_size_(max_file_size) {
   }
 
@@ -381,7 +379,7 @@ DiagnosticTest* MakeDictonaryDirTest() {
   return new PathTest(kPathsToTest[2]);
 }
 
-DiagnosticTest* MakeInspectorDirTest() {
+DiagnosticTest* MakeResourcesFileTest() {
   return new PathTest(kPathsToTest[3]);
 }
 

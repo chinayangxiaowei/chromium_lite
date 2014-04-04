@@ -1,6 +1,9 @@
-Name: SQLite
+Name: sqlite
 License File: src/LICENSE
 URL: http://sqlite.org/
+Version: 3.6.18
+Included In Release: Yes
+Security Critical: Yes
 
 Instructions for importing a new release of SQLite from sqlite.org.
 
@@ -42,11 +45,6 @@ cd sqlite
 # Run the google_generate_preprocessed.sh script:
 ./google_generate_preprocessed.sh
 
-# If there are any updates to os_unix.c, remember to keep
-# WebCore/platform/sql/chromium/SQLiteFileSystemChromiumPosix.cpp in sync.
-# This means preparing a separate patch for WebKit.
-# If you have questions about this part, ask phajdan.jr and dumi.
-
 # Find a sucker.  Send review.
 # TODO(shess) Describe an appropriate comment style.  Seems like it
 # should at least include the SQLite version number.
@@ -61,11 +59,13 @@ principle, exactly what is checked in:
 misc.patch
 preload-cache.patch
 safe-tolower.patch
-sqlite-poison.patch
 fts2.patch
 fts3.patch
 icu-regexp.patch
+icu-shell.patch
 attach-integer.patch
+webdb.patch
+test.patch
 
 So, e.g. you could do this to apply all our patches to vanilla SQLite:
 
@@ -73,11 +73,13 @@ cd sqlite-$LATEST
 patch -p0 < ../sqlite/misc.patch
 patch -p0 < ../sqlite/preload-cache.patch
 patch -p0 < ../sqlite/safe-tolower.patch
-patch -p0 < ../sqlite/sqlite-poison.patch
 patch -p0 < ../sqlite/fts2.patch
 patch -p0 < ../sqlite/fts3.patch
 patch -p0 < ../sqlite/icu-regexp.patch
+patch -p0 < ../sqlite/icu-shell.patch
 patch -p0 < ../sqlite/attach-integer.patch
+patch -p0 < ../sqlite/webdb.patch
+patch -p0 < ../sqlite/test.patch
 
 This will only be the case if all changes we make also update the corresponding
 patch files. Therefore please remember to do that whenever you make a change!
@@ -92,7 +94,7 @@ Prerequisties: On my corp Ubuntu 8.04 workstation, I needed to install the
 following packages:
 sudo apt-get install tcl8.4-dev libicu-dev
 
-cd src/third_party/sqlite
+cd src/third_party/sqlite/src
 mkdir build
 cd build
 make -f ../Makefile.linux-gcc testfixture
@@ -120,11 +122,9 @@ As of May 07, 2010, these are our changes from sqlite_vendor:
    tables.
  - fts2.c disables fts2_tokenizer().
  - fts3.c disables fts3_tokenizer().
- - sqlite3Poison() in src/btree.c.
  - Tweak to SQLITE_EXTENSION_INIT* in sqlite3ext.h.
    - That implied a change in src/test_autoext.c for testing.
- - Added fts.test and fts1.test in tests, modified quick.test.
- - src/os_symbian.cc.
+ - Added fts.test in tests, modified quick.test.
  - Modifications to Makefile.linux-gcc and main.mk for compiling
    SQLite tests.
  - Compile warning (cast to void* for sqlite3_free) fixed in func.c.
@@ -152,7 +152,7 @@ Changes from Chrome:
    our ICU data.  shell.c has been modifed to call into these files.
  - fts2_icu.c and fts3_icu.c have a critical bug. U8_NEXT is used over
    a UTF-16 string. It's rep$ by U16_NEXT (jungshik)
- - Added a new function sqlite3Preload we use to prime the database cache. It
+ - Added a new function sqlite3_preload we use to prime the database cache. It
    allows much faster performance by reading the file in one contiguous
    operation rather than bringing it in organically, which involves a lot of
    seeking. This change also required sqlite3PcacheGetCachesize to be compiled
@@ -160,3 +160,18 @@ Changes from Chrome:
  - Added a new function chromium_sqlite3_initialize_win_sqlite3_file()
    at the end of os_win.c. It allows the Windows-specific Chromium VFS
    to reuse most of the win32 SQLite VFS.
+ - Added a new function
+   chromium_sqlite3_initialize_unix_sqlite3_file() and made
+   fillInUnixFile() non-static in os_unix.c. It allows the
+   Linux-specific Chromium VFS to reuse most of the unix SQLite VFS.
+ - Exposed three functions that deal with unused file descriptors in
+   os_unix.c, to allow Chromium's Posix VFS implementation in
+   WebKit/WebCore/platform/sql/chromium/SQLiteFileSystemChromiumPosix.cpp
+   to correctly implement the "unused file descriptors" logic in the
+   xDlOpen() method. The new functions are
+   chromium_sqlite3_get_reusable_file_handle(),
+   chromium_sqlite3_update_reusable_file_handle() and
+   chromium_sqlite3_destroy_reusable_file_handle(). Also, added the
+   chromium_sqlite3_fill_in_unix_sqlite3_file() function that calls
+   fillInUnixFile(), which will be made static again as soon as a
+   WebKit patch using the new function lands.

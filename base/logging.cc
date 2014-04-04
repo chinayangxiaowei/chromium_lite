@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -14,7 +14,6 @@ typedef HANDLE MutexHandle;
 // Windows doesn't define STDERR_FILENO.  Define it here.
 #define STDERR_FILENO 2
 #elif defined(OS_MACOSX)
-#include <CoreFoundation/CoreFoundation.h>
 #include <mach/mach.h>
 #include <mach/mach_time.h>
 #include <mach-o/dyld.h>
@@ -40,10 +39,11 @@ typedef FILE* FileHandle;
 typedef pthread_mutex_t* MutexHandle;
 #endif
 
+#include <algorithm>
+#include <cstring>
 #include <ctime>
 #include <iomanip>
-#include <cstring>
-#include <algorithm>
+#include <ostream>
 
 #include "base/base_switches.h"
 #include "base/command_line.h"
@@ -56,10 +56,6 @@ typedef pthread_mutex_t* MutexHandle;
 #include "base/vlog.h"
 #if defined(OS_POSIX)
 #include "base/safe_strerror_posix.h"
-#endif
-#if defined(OS_MACOSX)
-#include "base/mac/scoped_cftyperef.h"
-#include "base/sys_string_conversions.h"
 #endif
 
 namespace logging {
@@ -503,12 +499,6 @@ void DisplayDebugMessageInDialog(const std::string& str) {
     MessageBoxW(NULL, &cmdline[0], L"Fatal error",
                 MB_OK | MB_ICONHAND | MB_TOPMOST);
   }
-#elif defined(OS_MACOSX)
-  base::mac::ScopedCFTypeRef<CFStringRef> message(
-      base::SysUTF8ToCFStringRef(str));
-  CFUserNotificationDisplayNotice(0, kCFUserNotificationStopAlertLevel,
-                                  NULL, NULL, NULL, CFSTR("Fatal Error"),
-                                  message, NULL);
 #else
   // We intentionally don't implement a dialog on other platforms.
   // You can just look at stderr.
@@ -540,17 +530,19 @@ LogMessage::LogMessage(const char* file, int line, LogSeverity severity)
   Init(file, line);
 }
 
-LogMessage::LogMessage(const char* file, int line, const CheckOpString& result)
+LogMessage::LogMessage(const char* file, int line, std::string* result)
     : severity_(LOG_FATAL), file_(file), line_(line) {
   Init(file, line);
-  stream_ << "Check failed: " << (*result.str_);
+  stream_ << "Check failed: " << *result;
+  delete result;
 }
 
 LogMessage::LogMessage(const char* file, int line, LogSeverity severity,
-                       const CheckOpString& result)
+                       std::string* result)
     : severity_(severity), file_(file), line_(line) {
   Init(file, line);
-  stream_ << "Check failed: " << (*result.str_);
+  stream_ << "Check failed: " << *result;
+  delete result;
 }
 
 LogMessage::~LogMessage() {
@@ -824,3 +816,15 @@ void RawLog(int level, const char* message) {
 std::ostream& operator<<(std::ostream& out, const wchar_t* wstr) {
   return out << WideToUTF8(std::wstring(wstr));
 }
+
+namespace base {
+
+// This was defined at the beginnig of this file.
+#undef write
+
+std::ostream& operator<<(std::ostream& o, const StringPiece& piece) {
+  o.write(piece.data(), static_cast<std::streamsize>(piece.size()));
+  return o;
+}
+
+}  // namespace base

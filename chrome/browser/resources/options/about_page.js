@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -15,7 +15,8 @@ cr.define('options', function() {
    * Encapsulated handling of about page.
    */
   function AboutPage() {
-    OptionsPage.call(this, 'about', templateData.aboutPage, 'aboutPage');
+    OptionsPage.call(this, 'about', templateData.aboutPageTabTitle,
+                     'aboutPage');
   }
 
   cr.addSingletonGetter(AboutPage);
@@ -37,6 +38,12 @@ cr.define('options', function() {
      */
     statusMessageQueueFlushStarted_: false,
 
+    /**
+     * The selected release channel.
+     * @type {string}
+     */
+    selectedChannel_: '',
+
     // Initialize AboutPage.
     initializePage: function() {
       // Call base class implementation to start preference initialization.
@@ -51,12 +58,12 @@ cr.define('options', function() {
         $('aboutPageMoreInfo').classList.remove('hidden');
       };
 
-      if (cr.commandLine.options['--bwsi']) {
+      if (!AccountsOptions.currentUserIsOwner()) {
         $('channelSelect').disabled = true;
       } else {
+        var self = this;
         $('channelSelect').onchange = function(event) {
-          var channel = event.target.value;
-          chrome.send('SetReleaseTrack', [channel]);
+          self.selectedOptionOnChange_(event.target.value);
         };
       }
 
@@ -68,6 +75,11 @@ cr.define('options', function() {
     updateOSVersion_: function(versionString) {
       $('osVersion0').textContent = versionString;
       $('osVersion1').textContent = versionString;
+    },
+
+    updateOSFirmware_: function(firmwareString) {
+      $('osFirmware0').textContent = firmwareString;
+      $('osFirmware1').textContent = firmwareString;
     },
 
     /**
@@ -116,6 +128,31 @@ cr.define('options', function() {
       $('checkNow').disabled = !enable;
     },
 
+    selectedOptionOnChange_: function(value) {
+      if (value == 'dev-channel') {
+        // Open confirm dialog.
+        var self = this;
+        AlertOverlay.show(
+          localStrings.getString('channel_warning_header'),
+          localStrings.getString('channel_warning_text'),
+          localStrings.getString('ok'),
+          localStrings.getString('cancel'),
+          function() {
+            // Ok, so set release track and update selected channel.
+            $('channelWarningBlock').hidden = false;
+            chrome.send('SetReleaseTrack', [value]);
+            self.selectedChannel_ = value; },
+          function() {
+            // Cancel, so switch back to previous selected channel.
+            self.updateSelectedOption_(self.selectedChannel_); }
+          );
+      } else {
+        $('channelWarningBlock').hidden = true;
+        chrome.send('SetReleaseTrack', [value]);
+        this.selectedChannel_ = value;
+      }
+    },
+
     // Updates the selected option in 'channelSelect' <select> element.
     updateSelectedOption_: function(value) {
       var options = $('channelSelect').querySelectorAll('option');
@@ -123,8 +160,11 @@ cr.define('options', function() {
         var option = options[i];
         if (option.value == value) {
           option.selected = true;
+          this.selectedChannel_ = value;
         }
       }
+      if (value == 'dev-channel')
+        $('channelWarningBlock').hidden = false;
     },
 
     // Changes the "check now" button to "restart now" button.
@@ -139,6 +179,10 @@ cr.define('options', function() {
 
   AboutPage.updateOSVersionCallback = function(versionString) {
     AboutPage.getInstance().updateOSVersion_(versionString);
+  };
+
+  AboutPage.updateOSFirmwareCallback = function(firmwareString) {
+    AboutPage.getInstance().updateOSFirmware_(firmwareString);
   };
 
   AboutPage.updateStatusCallback = function(message, insertDelay) {

@@ -11,10 +11,6 @@
         'webkit_src_dir': '../../third_party/WebKit',
       }],
     ],
-
-    'grit_info_cmd': ['python', '<(DEPTH)/tools/grit/grit_info.py',
-                      '<@(grit_defines)'],
-    'grit_cmd': ['python', '<(DEPTH)/tools/grit/grit.py'],
   },
   'targets': [
     {
@@ -28,48 +24,19 @@
         {
           'action_name': 'webkit_resources',
           'variables': {
-            'input_path': './webkit_resources.grd',
+            'grit_grd_file': 'webkit_resources.grd',
           },
-          'inputs': [
-            '<!@(<(grit_info_cmd) --inputs <(input_path))',
-          ],
-          'outputs': [
-            '<!@(<(grit_info_cmd) --outputs \'<(grit_out_dir)\' <(input_path))',
-          ],
-          'action': ['<@(grit_cmd)',
-                     '-i', '<(input_path)', 'build',
-                     '-o', '<(grit_out_dir)',
-                     '<@(grit_defines)'],
-          'message': 'Generating resources from <(input_path)',
+          'includes': [ '../../build/grit_action.gypi' ],
         },
         {
           'action_name': 'webkit_chromium_resources',
           'variables': {
-            'input_path': '<(webkit_src_dir)/Source/WebKit/chromium/WebKit.grd',
+            'grit_grd_file': '<(webkit_src_dir)/Source/WebKit/chromium/WebKit.grd',
           },
-          'inputs': [
-            '<!@(<(grit_info_cmd) --inputs <(input_path))',
-          ],
-          'outputs': [
-            '<!@(<(grit_info_cmd) --outputs \'<(grit_out_dir)\' <(input_path))',
-          ],
-          'action': ['<@(grit_cmd)',
-                     '-i', '<(input_path)', 'build',
-                     '-o', '<(grit_out_dir)',
-                     '<@(grit_defines)'],
-          'message': 'Generating resources from <(input_path)',
+          'includes': [ '../../build/grit_action.gypi' ],
         },
       ],
-      'direct_dependent_settings': {
-        'include_dirs': [
-          '<(SHARED_INTERMEDIATE_DIR)/webkit',
-        ],
-      },
-      'conditions': [
-        ['OS=="win"', {
-          'dependencies': ['<(DEPTH)/build/win/system.gyp:cygwin'],
-        }],
-      ],
+      'includes': [ '../../build/grit_target.gypi' ],
     },
     {
       'target_name': 'webkit_strings',
@@ -82,31 +49,12 @@
         {
           'action_name': 'webkit_strings',
           'variables': {
-            'input_path': './webkit_strings.grd',
+            'grit_grd_file': 'webkit_strings.grd',
           },
-          'inputs': [
-            '<!@(<(grit_info_cmd) --inputs <(input_path))',
-          ],
-          'outputs': [
-            '<!@(<(grit_info_cmd) --outputs \'<(grit_out_dir)\' <(input_path))',
-          ],
-          'action': ['<@(grit_cmd)',
-                     '-i', '<(input_path)', 'build',
-                     '-o', '<(grit_out_dir)',
-                     '<@(grit_defines)'],
-          'message': 'Generating resources from <(input_path)',
+          'includes': [ '../../build/grit_action.gypi' ],
         },
       ],
-      'direct_dependent_settings': {
-        'include_dirs': [
-          '<(SHARED_INTERMEDIATE_DIR)/webkit',
-        ],
-      },
-      'conditions': [
-        ['OS=="win"', {
-          'dependencies': ['<(DEPTH)/build/win/system.gyp:cygwin'],
-        }],
-      ],
+      'includes': [ '../../build/grit_target.gypi' ],
     },
     {
       'target_name': 'webkit_user_agent',
@@ -159,6 +107,7 @@
       'dependencies': [
         '<(DEPTH)/app/app.gyp:app_base',
         '<(DEPTH)/base/base.gyp:base_i18n',
+        '<(DEPTH)/gpu/gpu.gyp:gpu_common',
         '<(DEPTH)/gpu/gpu.gyp:gles2_implementation',
         '<(DEPTH)/net/net.gyp:net',
         '<(DEPTH)/ppapi/ppapi.gyp:ppapi_shared_impl',
@@ -192,7 +141,6 @@
         '../plugins/npapi/gtk_plugin_container_manager.h',
         '../plugins/npapi/npapi_extension_thunk.cc',
         '../plugins/npapi/npapi_extension_thunk.h',
-        '../plugins/npapi/nphostapi.h',
         '../plugins/npapi/plugin_constants_win.cc',
         '../plugins/npapi/plugin_constants_win.h',
         '../plugins/npapi/plugin_group.cc',
@@ -222,7 +170,6 @@
         '../plugins/npapi/plugin_string_stream.h',
         '../plugins/npapi/plugin_web_event_converter_mac.h',
         '../plugins/npapi/plugin_web_event_converter_mac.mm',
-        '../plugins/npapi/ppb_private.h',
         '../plugins/npapi/quickdraw_drawing_manager_mac.cc',
         '../plugins/npapi/quickdraw_drawing_manager_mac.h',
         '../plugins/npapi/webplugin.cc',
@@ -263,7 +210,11 @@
         '../plugins/ppapi/event_conversion.h',
         '../plugins/ppapi/file_callbacks.cc',
         '../plugins/ppapi/file_callbacks.h',
+        '../plugins/ppapi/file_path.cc',
+        '../plugins/ppapi/file_path.h',
         '../plugins/ppapi/fullscreen_container.h',
+        '../plugins/ppapi/message_channel.cc',
+        '../plugins/ppapi/message_channel.h',
         '../plugins/ppapi/npapi_glue.cc',
         '../plugins/ppapi/npapi_glue.h',
         '../plugins/ppapi/plugin_delegate.h',
@@ -277,12 +228,18 @@
         '../plugins/ppapi/ppapi_webplugin_impl.h',
         '../plugins/ppapi/ppb_audio_impl.cc',
         '../plugins/ppapi/ppb_audio_impl.h',
+        '../plugins/ppapi/ppb_broker_impl.cc',
+        '../plugins/ppapi/ppb_broker_impl.h',
         '../plugins/ppapi/ppb_buffer_impl.cc',
         '../plugins/ppapi/ppb_buffer_impl.h',
         '../plugins/ppapi/ppb_char_set_impl.cc',
         '../plugins/ppapi/ppb_char_set_impl.h',
+        '../plugins/ppapi/ppb_console_impl.cc',
+        '../plugins/ppapi/ppb_console_impl.h',
         '../plugins/ppapi/ppb_context_3d_impl.cc',
         '../plugins/ppapi/ppb_context_3d_impl.h',
+        '../plugins/ppapi/ppb_crypto_impl.cc',
+        '../plugins/ppapi/ppb_crypto_impl.h',
         '../plugins/ppapi/ppb_cursor_control_impl.cc',
         '../plugins/ppapi/ppb_cursor_control_impl.h',
         '../plugins/ppapi/ppb_directory_reader_impl.cc',
@@ -295,9 +252,17 @@
         '../plugins/ppapi/ppb_file_ref_impl.h',
         '../plugins/ppapi/ppb_file_system_impl.cc',
         '../plugins/ppapi/ppb_file_system_impl.h',
+        '../plugins/ppapi/ppb_flash_clipboard_impl.cc',
+        '../plugins/ppapi/ppb_flash_clipboard_impl.h',
+        '../plugins/ppapi/ppb_flash_file_impl.cc',
+        '../plugins/ppapi/ppb_flash_file_impl.h',
         '../plugins/ppapi/ppb_flash_impl.cc',
         '../plugins/ppapi/ppb_flash_impl.h',
         '../plugins/ppapi/ppb_flash_impl_linux.cc',
+        '../plugins/ppapi/ppb_flash_menu_impl.cc',
+        '../plugins/ppapi/ppb_flash_menu_impl.h',
+        '../plugins/ppapi/ppb_flash_net_connector_impl.cc',
+        '../plugins/ppapi/ppb_flash_net_connector_impl.h',
         '../plugins/ppapi/ppb_font_impl.cc',
         '../plugins/ppapi/ppb_font_impl.h',
         '../plugins/ppapi/ppb_gles_chromium_texture_mapping_impl.cc',
@@ -314,6 +279,8 @@
         '../plugins/ppapi/ppb_opengles_impl.h',
         '../plugins/ppapi/ppb_pdf_impl.cc',
         '../plugins/ppapi/ppb_pdf_impl.h',
+        '../plugins/ppapi/ppb_proxy_impl.cc',
+        '../plugins/ppapi/ppb_proxy_impl.h',
         '../plugins/ppapi/ppb_scrollbar_impl.cc',
         '../plugins/ppapi/ppb_scrollbar_impl.h',
         '../plugins/ppapi/ppb_surface_3d_impl.cc',
@@ -338,10 +305,12 @@
         '../plugins/ppapi/resource_tracker.h',
         '../plugins/ppapi/string.cc',
         '../plugins/ppapi/string.h',
+        '../plugins/ppapi/usb_code_for_event.cc',
+        '../plugins/ppapi/usb_code_for_event.h',
         '../plugins/ppapi/var.cc',
         '../plugins/ppapi/var.h',
-        '../plugins/ppapi/var_object_class.cc',
-        '../plugins/ppapi/var_object_class.h',
+        '../plugins/sad_plugin.cc',
+        '../plugins/sad_plugin.h',
         'media/audio_decoder.cc',
         'media/audio_decoder.h',
         'media/buffered_data_source.cc',
@@ -354,6 +323,8 @@
         'media/video_renderer_impl.h',
         'media/web_data_source.cc',
         'media/web_data_source.h',
+        'media/web_data_source_factory.cc',
+        'media/web_data_source_factory.h',
         'media/web_video_renderer.h',
         'alt_error_page_resource_fetcher.cc',
         'alt_error_page_resource_fetcher.h',
@@ -373,6 +344,8 @@
         'form_field.h',
         'ftp_directory_listing_response_delegate.cc',
         'ftp_directory_listing_response_delegate.h',
+        'gl_bindings_skia_cmd_buffer.cc',
+        'gl_bindings_skia_cmd_buffer.h',
         'glue_serialize.cc',
         'glue_serialize.h',
         'idb_bindings.cc',
@@ -385,6 +358,7 @@
         'multipart_response_delegate.h',
         'npruntime_util.cc',
         'npruntime_util.h',
+        'p2p_transport.h',
         'password_form.cc',
         'password_form.h',
         'password_form_dom_manager.cc',
@@ -418,17 +392,17 @@
         'webdropdata.h',
         'webfileutilities_impl.cc',
         'webfileutilities_impl.h',
+        'webkit_constants.h',
         'webkit_glue.cc',
         'webkit_glue.h',
         'webkitclient_impl.cc',
         'webkitclient_impl.h',
         'webmediaplayer_impl.h',
         'webmediaplayer_impl.cc',
+        'webmenuitem.cc',
         'webmenuitem.h',
         'webmenurunner_mac.h',
         'webmenurunner_mac.mm',
-        'webpasswordautocompletelistener_impl.cc',
-        'webpasswordautocompletelistener_impl.h',
         'webpreferences.cc',
         'webpreferences.h',
         'websocketstreamhandle_bridge.h',
@@ -451,8 +425,6 @@
         '../extensions/v8/benchmarking_extension.h',
         '../extensions/v8/gc_extension.cc',
         '../extensions/v8/gc_extension.h',
-        '../extensions/v8/gears_extension.cc',
-        '../extensions/v8/gears_extension.h',
         '../extensions/v8/heap_profiler_extension.cc',
         '../extensions/v8/heap_profiler_extension.h',
         '../extensions/v8/playback_extension.cc',
@@ -482,7 +454,7 @@
           'sources/': [['exclude', '_mac\\.(cc|mm)$']],
           'sources!': [
             'webthemeengine_impl_mac.cc',
-          ],          
+          ],
         }, {  # else: OS=="mac"
           'sources/': [['exclude', 'plugin_(lib|list)_posix\\.cc$']],
           'link_settings': {
@@ -496,11 +468,6 @@
             '../plugins/ppapi/ppb_graphics_3d_impl.cc',
             '../plugins/ppapi/ppb_graphics_3d_impl.h',
             '../plugins/ppapi/ppb_open_gl_es_impl.cc',
-          ],
-        }],
-        ['enable_gpu==1', {
-          'dependencies': [
-            '<(DEPTH)/gpu/gpu.gyp:gpu_plugin',
           ],
         }],
         ['OS!="win"', {
@@ -539,5 +506,28 @@
         }],
       ],
     },
+  ],
+  'conditions': [
+    ['use_third_party_translations==1', {
+      'targets': [
+        {
+          'target_name': 'inspector_strings',
+          'type': 'none',
+          'variables': {
+            'grit_out_dir': '<(PRODUCT_DIR)/resources/inspector/l10n',
+          },
+          'actions': [
+            {
+              'action_name': 'inspector_strings',
+              'variables': {
+                'grit_grd_file': 'inspector_strings.grd',
+              },
+              'includes': [ '../../build/grit_action.gypi' ],
+            },
+          ],
+          'includes': [ '../../build/grit_target.gypi' ],
+        },
+      ],
+    }],
   ],
 }

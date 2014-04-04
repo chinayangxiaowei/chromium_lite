@@ -1,12 +1,14 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/remoting/setup_flow_register_step.h"
 
+#include "chrome/browser/prefs/pref_service.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/remoting/setup_flow_login_step.h"
 #include "chrome/browser/remoting/setup_flow_start_host_step.h"
+#include "chrome/common/pref_names.h"
 #include "grit/generated_resources.h"
 #include "ui/base/l10n/l10n_util.h"
 
@@ -25,7 +27,7 @@ void SetupFlowRegisterStep::Cancel() {
 }
 
 void SetupFlowRegisterStep::DoStart() {
-  flow()->dom_ui()->CallJavascriptFunction(L"showSettingUp");
+  flow()->web_ui()->CallJavascriptFunction("showSettingUp");
 
   request_.reset(new DirectoryAddRequest(
       flow()->profile()->GetRequestContext()));
@@ -34,13 +36,20 @@ void SetupFlowRegisterStep::DoStart() {
                     NewCallback(this, &SetupFlowRegisterStep::OnRequestDone));
 }
 
+void SetupFlowRegisterStep::SetRemotingEnabled() {
+  flow()->profile()->GetPrefs()->SetBoolean(
+      prefs::kRemotingHasSetupCompleted, true);
+}
+
 void SetupFlowRegisterStep::OnRequestDone(DirectoryAddRequest::Result result,
                                           const std::string& error_message) {
   switch (result) {
     case DirectoryAddRequest::SUCCESS:
+      SetRemotingEnabled();
       FinishStep(new SetupFlowStartHostStep());
       break;
     case DirectoryAddRequest::ERROR_EXISTS:
+      SetRemotingEnabled();
       LOG(INFO) << "Chromoting host is already registered.";
       FinishStep(new SetupFlowStartHostStep());
       break;

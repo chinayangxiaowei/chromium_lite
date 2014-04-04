@@ -12,8 +12,8 @@
 
 #include "base/basictypes.h"
 #include "chrome/browser/extensions/image_loading_tracker.h"
-#include "gfx/insets.h"
 #include "third_party/skia/include/core/SkBitmap.h"
+#include "ui/gfx/insets.h"
 
 class Extension;
 
@@ -25,7 +25,7 @@ class ExtensionIconManager : public ImageLoadingTracker::Observer {
   // Start loading the icon for the given extension.
   void LoadIcon(const Extension* extension);
 
-  // This returns a bitmap of width/height kFavIconSize, loaded either from an
+  // This returns a bitmap of width/height kFaviconSize, loaded either from an
   // entry specified in the extension's 'icon' section of the manifest, or a
   // default extension icon.
   const SkBitmap& GetIcon(const std::string& extension_id);
@@ -34,7 +34,7 @@ class ExtensionIconManager : public ImageLoadingTracker::Observer {
   void RemoveIcon(const std::string& extension_id);
 
   // Implements the ImageLoadingTracker::Observer interface.
-  virtual void OnImageLoaded(SkBitmap* image, ExtensionResource resource,
+  virtual void OnImageLoaded(SkBitmap* image, const ExtensionResource& resource,
                              int index);
 
   void set_monochrome(bool value) { monochrome_ = value; }

@@ -6,10 +6,10 @@
 #define CHROME_BROWSER_TAB_CONTENTS_RENDER_VIEW_CONTEXT_MENU_GTK_H_
 #pragma once
 
-#include "base/scoped_ptr.h"
+#include "base/memory/scoped_ptr.h"
 #include "chrome/browser/tab_contents/render_view_context_menu.h"
 #include "chrome/browser/ui/gtk/menu_gtk.h"
-#include "gfx/point.h"
+#include "ui/gfx/point.h"
 
 struct ContextMenuParams;
 
@@ -26,7 +26,6 @@ class RenderViewContextMenuGtk : public RenderViewContextMenu,
   void Popup(const gfx::Point& point);
 
   // Menu::Delegate implementation ---------------------------------------------
-  virtual void StoppedShowing();
   virtual bool AlwaysShowIconForCmd(int command_id) const;
 
  protected:

@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,71 +7,12 @@
 #pragma once
 
 #include "base/basictypes.h"
+#include "base/compiler_specific.h"
+#include "policy/configuration_policy_type.h"
 
 class Value;
 
 namespace policy {
-
-enum ConfigurationPolicyType {
-  kPolicyHomePage,
-  kPolicyHomepageIsNewTabPage,
-  kPolicyRestoreOnStartup,
-  kPolicyURLsToRestoreOnStartup,
-  kPolicyDefaultSearchProviderEnabled,
-  kPolicyDefaultSearchProviderName,
-  kPolicyDefaultSearchProviderKeyword,
-  kPolicyDefaultSearchProviderSearchURL,
-  kPolicyDefaultSearchProviderSuggestURL,
-  kPolicyDefaultSearchProviderIconURL,
-  kPolicyDefaultSearchProviderInstantURL,
-  kPolicyDefaultSearchProviderEncodings,
-  kPolicyDisableSpdy,
-  kPolicyProxyMode,
-  kPolicyProxyServerMode,
-  kPolicyProxyServer,
-  kPolicyProxyPacUrl,
-  kPolicyProxyBypassList,
-  kPolicyAlternateErrorPagesEnabled,
-  kPolicySearchSuggestEnabled,
-  kPolicyDnsPrefetchingEnabled,
-  kPolicySafeBrowsingEnabled,
-  kPolicyMetricsReportingEnabled,
-  kPolicyPasswordManagerEnabled,
-  kPolicyPasswordManagerAllowShowPasswords,
-  kPolicyAutoFillEnabled,
-  kPolicySyncDisabled,
-  kPolicyApplicationLocale,
-  kPolicyExtensionInstallAllowList,
-  kPolicyExtensionInstallDenyList,
-  kPolicyShowHomeButton,
-  kPolicyDisabledPlugins,
-  kPolicyPrintingEnabled,
-  kPolicyChromeFrameRendererSettings,
-  kPolicyRenderInChromeFrameList,
-  kPolicyRenderInHostList,
-  kPolicyJavascriptEnabled,
-  kPolicySavingBrowserHistoryDisabled,
-  kPolicyDeveloperToolsDisabled,
-  kPolicyBlockThirdPartyCookies,
-  kPolicyDefaultCookiesSetting,
-  kPolicyDefaultImagesSetting,
-  kPolicyDefaultJavaScriptSetting,
-  kPolicyDefaultPluginsSetting,
-  kPolicyDefaultPopupsSetting,
-  kPolicyDefaultNotificationSetting,
-  kPolicyDefaultGeolocationSetting,
-  kPolicyExtensionInstallForceList,
-  kPolicyChromeOsLockOnIdleSuspend,
-  kPolicyAuthSchemes,
-  kPolicyDisableAuthNegotiateCnameLookup,
-  kPolicyEnableAuthNegotiatePort,
-  kPolicyAuthServerWhitelist,
-  kPolicyAuthNegotiateDelegateWhitelist,
-  kPolicyGSSAPILibraryName,
-  kPolicyDisable3DAPIs,
-  kPolicyPolicyRefreshRate,
-};
-
 
 // Constants for the "Proxy Server Mode" defined in the policies.
 // Note that these diverge from internal presentation defined in
@@ -107,6 +48,48 @@ class ConfigurationPolicyStoreInterface {
 
  private:
   DISALLOW_COPY_AND_ASSIGN(ConfigurationPolicyStoreInterface);
+};
+
+// Helper class. A pass-through ConfigurationPolicyStoreInterface, that observes
+// the application of well-known policies.
+class ObservingPolicyStoreInterface: public ConfigurationPolicyStoreInterface {
+ public:
+  explicit ObservingPolicyStoreInterface(
+      ConfigurationPolicyStoreInterface* next)
+      : next_(next),
+        proxy_policy_applied_(false) {}
+
+  // ConfigurationPolicyStoreInterface methods:
+  virtual void Apply(ConfigurationPolicyType policy, Value* value) OVERRIDE;
+
+  bool IsProxyPolicyApplied() const {
+    return proxy_policy_applied_;
+  }
+
+ private:
+  ConfigurationPolicyStoreInterface* next_;
+  bool proxy_policy_applied_;
+
+  DISALLOW_COPY_AND_ASSIGN(ObservingPolicyStoreInterface);
+};
+
+// Helper class. A ConfigurationPolicyStoreInterface that filters out most
+// policies, and only applies well-known policies.
+class FilteringPolicyStoreInterface: public ConfigurationPolicyStoreInterface {
+ public:
+  FilteringPolicyStoreInterface(ConfigurationPolicyStoreInterface* next,
+                                bool apply_proxy_policies)
+      : next_(next),
+        apply_proxy_policies_(apply_proxy_policies) {}
+
+  // ConfigurationPolicyStoreInterface methods:
+  virtual void Apply(ConfigurationPolicyType policy, Value* value) OVERRIDE;
+
+ private:
+  ConfigurationPolicyStoreInterface* next_;
+  bool apply_proxy_policies_;
+
+  DISALLOW_COPY_AND_ASSIGN(FilteringPolicyStoreInterface);
 };
 
 }  // namespace policy

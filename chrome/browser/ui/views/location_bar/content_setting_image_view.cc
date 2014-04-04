@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,17 +8,17 @@
 #include "base/utf_string_conversions.h"
 #include "chrome/browser/content_setting_bubble_model.h"
 #include "chrome/browser/content_setting_image_model.h"
-#include "chrome/browser/tab_contents/tab_contents.h"
 #include "chrome/browser/ui/tab_contents/tab_contents_wrapper.h"
 #include "chrome/browser/ui/views/content_setting_bubble_contents.h"
 #include "chrome/browser/ui/views/location_bar/location_bar_view.h"
 #include "chrome/common/chrome_switches.h"
-#include "gfx/canvas.h"
-#include "gfx/canvas_skia.h"
-#include "gfx/skia_util.h"
+#include "content/browser/tab_contents/tab_contents.h"
 #include "third_party/skia/include/core/SkShader.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/resource/resource_bundle.h"
+#include "ui/gfx/canvas.h"
+#include "ui/gfx/canvas_skia.h"
+#include "ui/gfx/skia_util.h"
 #include "views/border.h"
 
 namespace {
@@ -54,7 +54,7 @@ ContentSettingImageView::ContentSettingImageView(
               content_type)),
       parent_(parent),
       profile_(profile),
-      info_bubble_(NULL),
+      bubble_(NULL),
       animation_in_progress_(false),
       text_size_(0),
       visible_text_size_(0) {
@@ -62,21 +62,18 @@ ContentSettingImageView::ContentSettingImageView(
 }
 
 ContentSettingImageView::~ContentSettingImageView() {
-  if (info_bubble_)
-    info_bubble_->Close();
+  if (bubble_)
+    bubble_->Close();
 }
 
 void ContentSettingImageView::UpdateFromTabContents(TabContents* tab_contents) {
-  int old_icon = content_setting_image_model_->get_icon();
   content_setting_image_model_->UpdateFromTabContents(tab_contents);
   if (!content_setting_image_model_->is_visible()) {
     SetVisible(false);
     return;
   }
-  if (old_icon != content_setting_image_model_->get_icon()) {
-    SetImage(ResourceBundle::GetSharedInstance().GetBitmapNamed(
-        content_setting_image_model_->get_icon()));
-  }
+  SetImage(ResourceBundle::GetSharedInstance().GetBitmapNamed(
+      content_setting_image_model_->get_icon()));
   SetTooltipText(UTF8ToWide(content_setting_image_model_->get_tooltip()));
   SetVisible(true);
 
@@ -95,8 +92,8 @@ void ContentSettingImageView::UpdateFromTabContents(TabContents* tab_contents) {
       content_setting_image_model_->explanatory_string_id();
   // Check if the animation is enabled and if the string for animation is
   // available.
-  if (!CommandLine::ForCurrentProcess()->HasSwitch(
-      switches::kEnableBlockContentAnimation) || !animated_string_id)
+  if (CommandLine::ForCurrentProcess()->HasSwitch(
+      switches::kDisableBlockContentAnimation) || !animated_string_id)
     return;
 
   // Do not start animation if already in progress.
@@ -127,13 +124,18 @@ bool ContentSettingImageView::OnMousePressed(const views::MouseEvent& event) {
   return true;
 }
 
-void ContentSettingImageView::OnMouseReleased(const views::MouseEvent& event,
-                                              bool canceled) {
-  if (canceled || !HitTest(event.location()))
+void ContentSettingImageView::OnMouseReleased(const views::MouseEvent& event) {
+  if (!HitTest(event.location()))
     return;
 
   TabContents* tab_contents = parent_->GetTabContentsWrapper()->tab_contents();
   if (!tab_contents)
+    return;
+
+  // Prerender does not have a bubble.
+  ContentSettingsType content_settings_type =
+      content_setting_image_model_->get_content_settings_type();
+  if (content_settings_type == CONTENT_SETTINGS_TYPE_PRERENDER)
     return;
 
   gfx::Rect screen_bounds(GetImageBounds());
@@ -143,21 +145,20 @@ void ContentSettingImageView::OnMouseReleased(const views::MouseEvent& event,
   ContentSettingBubbleContents* bubble_contents =
       new ContentSettingBubbleContents(
           ContentSettingBubbleModel::CreateContentSettingBubbleModel(
-              tab_contents, profile_,
-              content_setting_image_model_->get_content_settings_type()),
+              tab_contents, profile_, content_settings_type),
           profile_, tab_contents);
-  info_bubble_ = InfoBubble::Show(GetWidget(), screen_bounds,
-      BubbleBorder::TOP_RIGHT, bubble_contents, this);
-  bubble_contents->set_info_bubble(info_bubble_);
+  bubble_ = Bubble::Show(GetWidget(), screen_bounds, BubbleBorder::TOP_RIGHT,
+                         bubble_contents, this);
+  bubble_contents->set_bubble(bubble_);
 }
 
 void ContentSettingImageView::VisibilityChanged(View* starting_from,
                                                 bool is_visible) {
-  if (!is_visible && info_bubble_)
-    info_bubble_->Close();
+  if (!is_visible && bubble_)
+    bubble_->Close();
 }
 
-void ContentSettingImageView::Paint(gfx::Canvas* canvas) {
+void ContentSettingImageView::OnPaint(gfx::Canvas* canvas) {
   gfx::Insets current_insets;
   if (border())
     border()->GetInsets(&current_insets);
@@ -179,7 +180,7 @@ void ContentSettingImageView::Paint(gfx::Canvas* canvas) {
     set_border(empty_border);
   }
   // Paint an icon with possibly non-empty left border.
-  views::ImageView::Paint(canvas);
+  views::ImageView::OnPaint(canvas);
   if (animation_in_progress_) {
     // Paint text to the right of the icon.
     ResourceBundle& rb = ResourceBundle::GetSharedInstance();
@@ -191,9 +192,9 @@ void ContentSettingImageView::Paint(gfx::Canvas* canvas) {
   }
 }
 
-void ContentSettingImageView::PaintBackground(gfx::Canvas* canvas) {
+void ContentSettingImageView::OnPaintBackground(gfx::Canvas* canvas) {
   if (!animation_in_progress_) {
-    views::ImageView::PaintBackground(canvas);
+    views::ImageView::OnPaintBackground(canvas);
     return;
   }
   // Paint yellow gradient background if in animation mode.
@@ -201,7 +202,8 @@ void ContentSettingImageView::PaintBackground(gfx::Canvas* canvas) {
   SkPaint paint;
   paint.setShader(gfx::CreateGradientShader(kEdgeThickness,
                   height() - (2 * kEdgeThickness),
-                  kTopBoxColor, kBottomBoxColor))->safeUnref();
+                  kTopBoxColor, kBottomBoxColor));
+  SkSafeUnref(paint.getShader());
   SkRect color_rect;
   color_rect.iset(0, 0, width() - 1, height() - 1);
   canvas->AsCanvasSkia()->drawRoundRect(color_rect, kBoxCornerRadius,
@@ -215,13 +217,17 @@ void ContentSettingImageView::PaintBackground(gfx::Canvas* canvas) {
                                         kBoxCornerRadius, outer_paint);
 }
 
-void ContentSettingImageView::InfoBubbleClosing(InfoBubble* info_bubble,
-                                                bool closed_by_escape) {
-  info_bubble_ = NULL;
+void ContentSettingImageView::BubbleClosing(Bubble* bubble,
+                                            bool closed_by_escape) {
+  bubble_ = NULL;
 }
 
 bool ContentSettingImageView::CloseOnEscape() {
   return true;
+}
+
+bool ContentSettingImageView::FadeInOnShow() {
+  return false;
 }
 
 void ContentSettingImageView::AnimateToState(double state) {

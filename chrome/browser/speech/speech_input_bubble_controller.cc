@@ -1,16 +1,16 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/speech/speech_input_bubble_controller.h"
 
-#include "chrome/browser/browser_thread.h"
-#include "chrome/browser/tab_contents/tab_contents.h"
 #include "chrome/browser/tab_contents/tab_util.h"
-#include "chrome/common/notification_registrar.h"
-#include "chrome/common/notification_source.h"
-#include "chrome/common/notification_type.h"
-#include "gfx/rect.h"
+#include "content/browser/browser_thread.h"
+#include "content/browser/tab_contents/tab_contents.h"
+#include "content/common/notification_registrar.h"
+#include "content/common/notification_source.h"
+#include "content/common/notification_type.h"
+#include "ui/gfx/rect.h"
 
 namespace speech_input {
 
@@ -21,7 +21,7 @@ SpeechInputBubbleController::SpeechInputBubbleController(Delegate* delegate)
 }
 
 SpeechInputBubbleController::~SpeechInputBubbleController() {
-  DCHECK(bubbles_.size() == 0);
+  DCHECK(bubbles_.empty());
 }
 
 void SpeechInputBubbleController::CreateBubble(int caller_id,
@@ -52,28 +52,34 @@ void SpeechInputBubbleController::CreateBubble(int caller_id,
 }
 
 void SpeechInputBubbleController::CloseBubble(int caller_id) {
-  ProcessRequestInUiThread(caller_id, REQUEST_CLOSE, string16(), 0);
+  ProcessRequestInUiThread(caller_id, REQUEST_CLOSE, string16(), 0, 0);
+}
+
+void SpeechInputBubbleController::SetBubbleWarmUpMode(int caller_id) {
+  ProcessRequestInUiThread(caller_id, REQUEST_SET_WARM_UP_MODE,
+                           string16(), 0, 0);
 }
 
 void SpeechInputBubbleController::SetBubbleRecordingMode(int caller_id) {
   ProcessRequestInUiThread(caller_id, REQUEST_SET_RECORDING_MODE,
-                           string16(), 0);
+                           string16(), 0, 0);
 }
 
 void SpeechInputBubbleController::SetBubbleRecognizingMode(int caller_id) {
   ProcessRequestInUiThread(caller_id, REQUEST_SET_RECOGNIZING_MODE,
-                           string16(), 0);
+                           string16(), 0, 0);
 }
 
 void SpeechInputBubbleController::SetBubbleInputVolume(int caller_id,
-                                                       float volume) {
+                                                       float volume,
+                                                       float noise_volume) {
   ProcessRequestInUiThread(caller_id, REQUEST_SET_INPUT_VOLUME, string16(),
-                           volume);
+                           volume, noise_volume);
 }
 
 void SpeechInputBubbleController::SetBubbleMessage(int caller_id,
                                                    const string16& text) {
-  ProcessRequestInUiThread(caller_id, REQUEST_SET_MESSAGE, text, 0);
+  ProcessRequestInUiThread(caller_id, REQUEST_SET_MESSAGE, text, 0, 0);
 }
 
 void SpeechInputBubbleController::UpdateTabContentsSubscription(
@@ -131,11 +137,12 @@ void SpeechInputBubbleController::Observe(NotificationType type,
 }
 
 void SpeechInputBubbleController::ProcessRequestInUiThread(
-    int caller_id, RequestType type, const string16& text, float volume) {
+    int caller_id, RequestType type, const string16& text, float volume,
+    float noise_volume) {
   if (!BrowserThread::CurrentlyOn(BrowserThread::UI)) {
     BrowserThread::PostTask(BrowserThread::UI, FROM_HERE, NewRunnableMethod(
         this, &SpeechInputBubbleController::ProcessRequestInUiThread,
-        caller_id, type, text, volume));
+        caller_id, type, text, volume, noise_volume));
     return;
   }
   DCHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
@@ -144,7 +151,7 @@ void SpeechInputBubbleController::ProcessRequestInUiThread(
   if (!bubbles_.count(caller_id))
     return;
 
-  bool change_active_bubble = (type == REQUEST_SET_RECORDING_MODE ||
+  bool change_active_bubble = (type == REQUEST_SET_WARM_UP_MODE ||
                                type == REQUEST_SET_MESSAGE);
   if (change_active_bubble) {
     if (current_bubble_caller_id_ && current_bubble_caller_id_ != caller_id)
@@ -154,6 +161,9 @@ void SpeechInputBubbleController::ProcessRequestInUiThread(
 
   SpeechInputBubble* bubble = bubbles_[caller_id];
   switch (type) {
+    case REQUEST_SET_WARM_UP_MODE:
+      bubble->SetWarmUpMode();
+      break;
     case REQUEST_SET_RECORDING_MODE:
       bubble->SetRecordingMode();
       break;
@@ -164,7 +174,7 @@ void SpeechInputBubbleController::ProcessRequestInUiThread(
       bubble->SetMessage(text);
       break;
     case REQUEST_SET_INPUT_VOLUME:
-      bubble->SetInputVolume(volume);
+      bubble->SetInputVolume(volume, noise_volume);
       break;
     case REQUEST_CLOSE:
       if (current_bubble_caller_id_ == caller_id)
@@ -201,7 +211,6 @@ void SpeechInputBubbleController::InfoBubbleFocusChanged() {
 
   int old_bubble_caller_id = current_bubble_caller_id_;
   current_bubble_caller_id_ = 0;
-  bubbles_[old_bubble_caller_id]->Hide();
 
   BrowserThread::PostTask(
       BrowserThread::IO, FROM_HERE,

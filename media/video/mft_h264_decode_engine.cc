@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -16,6 +16,7 @@
 #include "base/time.h"
 #include "base/message_loop.h"
 #include "media/base/limits.h"
+#include "media/base/pipeline.h"
 #include "media/video/video_decode_context.h"
 
 #pragma comment(lib, "dxva2.lib")
@@ -25,12 +26,12 @@
 
 using base::TimeDelta;
 
-namespace {
+namespace media {
 
 // Creates an empty Media Foundation sample with no buffers.
 static IMFSample* CreateEmptySample() {
   HRESULT hr;
-  ScopedComPtr<IMFSample> sample;
+  base::win::ScopedComPtr<IMFSample> sample;
   hr = MFCreateSample(sample.Receive());
   if (FAILED(hr)) {
     LOG(ERROR) << "Unable to create an empty sample";
@@ -44,11 +45,11 @@ static IMFSample* CreateEmptySample() {
 // If |align| is 0, then no alignment is specified.
 static IMFSample* CreateEmptySampleWithBuffer(int buffer_length, int align) {
   CHECK_GT(buffer_length, 0);
-  ScopedComPtr<IMFSample> sample;
+  base::win::ScopedComPtr<IMFSample> sample;
   sample.Attach(CreateEmptySample());
   if (!sample.get())
     return NULL;
-  ScopedComPtr<IMFMediaBuffer> buffer;
+  base::win::ScopedComPtr<IMFMediaBuffer> buffer;
   HRESULT hr;
   if (align == 0) {
     // Note that MFCreateMemoryBuffer is same as MFCreateAlignedMemoryBuffer
@@ -83,7 +84,7 @@ static IMFSample* CreateInputSample(const uint8* stream, int size,
                                     int min_size, int alignment) {
   CHECK(stream);
   CHECK_GT(size, 0);
-  ScopedComPtr<IMFSample> sample;
+  base::win::ScopedComPtr<IMFSample> sample;
   sample.Attach(CreateEmptySampleWithBuffer(std::max(min_size, size),
                                             alignment));
   if (!sample.get()) {
@@ -105,7 +106,7 @@ static IMFSample* CreateInputSample(const uint8* stream, int size,
       return NULL;
     }
   }
-  ScopedComPtr<IMFMediaBuffer> buffer;
+  base::win::ScopedComPtr<IMFMediaBuffer> buffer;
   hr = sample->GetBufferByIndex(0, buffer.Receive());
   if (FAILED(hr)) {
     LOG(ERROR) << "Failed to get buffer in sample";
@@ -131,11 +132,11 @@ static IMFSample* CreateInputSample(const uint8* stream, int size,
   return sample.Detach();
 }
 
-const GUID ConvertVideoFrameFormatToGuid(media::VideoFrame::Format format) {
+const GUID ConvertVideoFrameFormatToGuid(VideoFrame::Format format) {
   switch (format) {
-    case media::VideoFrame::NV12:
+    case VideoFrame::NV12:
       return MFVideoFormat_NV12;
-    case media::VideoFrame::YV12:
+    case VideoFrame::YV12:
       return MFVideoFormat_YV12;
     default:
       NOTREACHED() << "Unsupported VideoFrame format";
@@ -145,20 +146,17 @@ const GUID ConvertVideoFrameFormatToGuid(media::VideoFrame::Format format) {
   return GUID_NULL;
 }
 
-}  // namespace
-
-namespace media {
-
 // public methods
 
 MftH264DecodeEngine::MftH264DecodeEngine(bool use_dxva)
     : use_dxva_(use_dxva),
       state_(kUninitialized),
+      width_(0),
+      height_(0),
       event_handler_(NULL),
       context_(NULL) {
   memset(&input_stream_info_, 0, sizeof(input_stream_info_));
   memset(&output_stream_info_, 0, sizeof(output_stream_info_));
-  memset(&config_, 0, sizeof(config_));
   memset(&info_, 0, sizeof(info_));
 }
 
@@ -180,7 +178,6 @@ void MftH264DecodeEngine::Initialize(
     return;
   }
   context_ = context;
-  config_ = config;
   event_handler_ = event_handler;
   info_.provides_buffers = true;
 
@@ -240,8 +237,9 @@ void MftH264DecodeEngine::Seek() {
 
   // TODO(hclam): Seriously the logic in VideoRendererBase is flawed that we
   // have to perform the following hack to get playback going.
+  PipelineStatistics statistics;
   for (size_t i = 0; i < Limits::kMaxVideoFrames; ++i) {
-    event_handler_->ConsumeVideoFrame(output_frames_[0]);
+    event_handler_->ConsumeVideoFrame(output_frames_[0], statistics);
   }
 
   // Seek not implemented.
@@ -252,7 +250,8 @@ void MftH264DecodeEngine::ConsumeVideoSample(scoped_refptr<Buffer> buffer) {
   if (state_ == kUninitialized) {
     LOG(ERROR) << "ConsumeVideoSample: invalid state";
   }
-  ScopedComPtr<IMFSample> sample;
+  base::win::ScopedComPtr<IMFSample> sample;
+  PipelineStatistics statistics;
   if (!buffer->IsEndOfStream()) {
     sample.Attach(
         CreateInputSample(buffer->GetData(),
@@ -268,6 +267,8 @@ void MftH264DecodeEngine::ConsumeVideoSample(scoped_refptr<Buffer> buffer) {
         event_handler_->OnError();
       }
     }
+
+    statistics.video_bytes_decoded = buffer->GetDataSize();
   } else {
     if (state_ != MftH264DecodeEngine::kEosDrain) {
       // End of stream, send drain messages.
@@ -280,7 +281,7 @@ void MftH264DecodeEngine::ConsumeVideoSample(scoped_refptr<Buffer> buffer) {
       }
     }
   }
-  DoDecode();
+  DoDecode(statistics);
 }
 
 void MftH264DecodeEngine::ProduceVideoFrame(scoped_refptr<VideoFrame> frame) {
@@ -325,7 +326,7 @@ void MftH264DecodeEngine::ShutdownComLibraries() {
 bool MftH264DecodeEngine::EnableDxva() {
   IDirect3DDevice9* device = static_cast<IDirect3DDevice9*>(
       context_->GetDevice());
-  ScopedComPtr<IDirect3DDeviceManager9> device_manager;
+  base::win::ScopedComPtr<IDirect3DDeviceManager9> device_manager;
   UINT dev_manager_reset_token = 0;
   HRESULT hr = DXVA2CreateDirect3DDeviceManager9(&dev_manager_reset_token,
                                                  device_manager.Receive());
@@ -399,7 +400,7 @@ void MftH264DecodeEngine::OnAllocFramesDone() {
 }
 
 bool MftH264DecodeEngine::CheckDecodeEngineDxvaSupport() {
-  ScopedComPtr<IMFAttributes> attributes;
+  base::win::ScopedComPtr<IMFAttributes> attributes;
   HRESULT hr = decode_engine_->GetAttributes(attributes.Receive());
   if (FAILED(hr)) {
     LOG(ERROR) << "Unlock: Failed to get attributes, hr = "
@@ -426,7 +427,7 @@ bool MftH264DecodeEngine::SetDecodeEngineMediaTypes() {
 }
 
 bool MftH264DecodeEngine::SetDecodeEngineInputMediaType() {
-  ScopedComPtr<IMFMediaType> media_type;
+  base::win::ScopedComPtr<IMFMediaType> media_type;
   HRESULT hr = MFCreateMediaType(media_type.Receive());
   if (FAILED(hr)) {
     LOG(ERROR) << "Failed to create empty media type object";
@@ -472,8 +473,8 @@ bool MftH264DecodeEngine::SetDecodeEngineOutputMediaType(const GUID subtype) {
       hr = MFGetAttributeSize(out_media_type, MF_MT_FRAME_SIZE,
           reinterpret_cast<UINT32*>(&info_.stream_info.surface_width),
           reinterpret_cast<UINT32*>(&info_.stream_info.surface_height));
-      config_.width = info_.stream_info.surface_width;
-      config_.height = info_.stream_info.surface_height;
+      width_ = info_.stream_info.surface_width;
+      height_ = info_.stream_info.surface_height;
       if (FAILED(hr)) {
         LOG(ERROR) << "Failed to SetOutputType to |subtype| or obtain "
                    << "width/height " << std::hex << hr;
@@ -534,13 +535,13 @@ bool MftH264DecodeEngine::GetStreamsInfoAndBufferReqs() {
   return true;
 }
 
-bool MftH264DecodeEngine::DoDecode() {
+bool MftH264DecodeEngine::DoDecode(const PipelineStatistics& statistics) {
   if (state_ != kNormal && state_ != kEosDrain) {
     LOG(ERROR) << "DoDecode: not in normal or drain state";
     return false;
   }
   scoped_refptr<VideoFrame> frame;
-  ScopedComPtr<IMFSample> output_sample;
+  base::win::ScopedComPtr<IMFSample> output_sample;
   if (!use_dxva_) {
     output_sample.Attach(
         CreateEmptySampleWithBuffer(output_stream_info_.cbSize,
@@ -589,7 +590,7 @@ bool MftH264DecodeEngine::DoDecode() {
         // No more output from the decoder. Notify EOS and stop playback.
         scoped_refptr<VideoFrame> frame;
         VideoFrame::CreateEmptyFrame(&frame);
-        event_handler_->ConsumeVideoFrame(frame);
+        event_handler_->ConsumeVideoFrame(frame, statistics);
         state_ = MftH264DecodeEngine::kStopped;
         return false;
       }
@@ -632,14 +633,14 @@ bool MftH264DecodeEngine::DoDecode() {
     return true;
   }
 
-  ScopedComPtr<IMFMediaBuffer> output_buffer;
+  base::win::ScopedComPtr<IMFMediaBuffer> output_buffer;
   hr = output_sample->GetBufferByIndex(0, output_buffer.Receive());
   if (FAILED(hr)) {
     LOG(ERROR) << "Failed to get buffer from sample";
     return true;
   }
   if (use_dxva_) {
-    ScopedComPtr<IDirect3DSurface9, &IID_IDirect3DSurface9> surface;
+    base::win::ScopedComPtr<IDirect3DSurface9, &IID_IDirect3DSurface9> surface;
     hr = MFGetService(output_buffer, MR_BUFFER_SERVICE,
                       IID_PPV_ARGS(surface.Receive()));
     if (FAILED(hr)) {
@@ -653,7 +654,7 @@ bool MftH264DecodeEngine::DoDecode() {
     context_->ConvertToVideoFrame(
         surface.get(), output_frames_[0],
         NewRunnableMethod(this, &MftH264DecodeEngine::OnUploadVideoFrameDone,
-                          surface, output_frames_[0]));
+                          surface, output_frames_[0], statistics));
     return true;
   }
   // TODO(hclam): Remove this branch.
@@ -678,15 +679,16 @@ bool MftH264DecodeEngine::DoDecode() {
 
   memcpy(dst_y, src_y, current_length);
   CHECK(SUCCEEDED(output_buffer->Unlock()));
-  event_handler_->ConsumeVideoFrame(frame);
+  event_handler_->ConsumeVideoFrame(frame, statistics);
   return true;
 }
 
 void MftH264DecodeEngine::OnUploadVideoFrameDone(
-    ScopedComPtr<IDirect3DSurface9, &IID_IDirect3DSurface9> surface,
-    scoped_refptr<media::VideoFrame> frame) {
+    base::win::ScopedComPtr<IDirect3DSurface9, &IID_IDirect3DSurface9> surface,
+    scoped_refptr<VideoFrame> frame,
+    PipelineStatistics statistics) {
   // After this method is exited the reference to surface is released.
-  event_handler_->ConsumeVideoFrame(frame);
+  event_handler_->ConsumeVideoFrame(frame, statistics);
 }
 
 }  // namespace media

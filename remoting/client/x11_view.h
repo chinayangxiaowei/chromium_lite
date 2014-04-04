@@ -1,16 +1,16 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef REMOTING_CLIENT_X11_VIEW_H_
 #define REMOTING_CLIENT_X11_VIEW_H_
 
-#include "base/scoped_ptr.h"
+#include "base/memory/scoped_ptr.h"
 #include "base/task.h"
 #include "media/base/video_frame.h"
 #include "remoting/base/decoder.h"  // For UpdatedRects
-#include "remoting/client/frame_consumer.h"
 #include "remoting/client/chromoting_view.h"
+#include "remoting/client/frame_consumer.h"
 
 typedef unsigned long XID;
 typedef struct _XDisplay Display;
@@ -30,6 +30,7 @@ class X11View : public ChromotingView, public FrameConsumer {
   virtual void SetSolidFill(uint32 color);
   virtual void UnsetSolidFill();
   virtual void SetConnectionState(ConnectionState s);
+  virtual void UpdateLoginStatus(bool success, const std::string& info);
   virtual void SetViewport(int x, int y, int width, int height);
 
   // FrameConsumer implementation.

@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,92 +7,75 @@
 #pragma once
 
 #include <string>
-#include <vector>
 
-#include "base/scoped_ptr.h"
+#include "base/compiler_specific.h"
+#include "base/memory/scoped_ptr.h"
+#include "base/string16.h"
 #include "base/task.h"
 #include "base/timer.h"
-#include "chrome/browser/chromeos/login/background_view.h"
 #include "chrome/browser/chromeos/login/captcha_view.h"
+#include "chrome/browser/chromeos/login/login_display.h"
 #include "chrome/browser/chromeos/login/login_performer.h"
-#include "chrome/browser/chromeos/login/message_bubble.h"
+#include "chrome/browser/chromeos/login/login_utils.h"
+#include "chrome/browser/chromeos/login/ownership_status_checker.h"
 #include "chrome/browser/chromeos/login/password_changed_view.h"
-#include "chrome/browser/chromeos/login/user_controller.h"
 #include "chrome/browser/chromeos/login/user_manager.h"
 #include "chrome/browser/chromeos/wm_message_listener.h"
-#include "gfx/size.h"
+#include "content/common/notification_observer.h"
+#include "content/common/notification_registrar.h"
+#include "googleurl/src/gurl.h"
 #include "testing/gtest/include/gtest/gtest_prod.h"
+#include "ui/gfx/rect.h"
 
 namespace chromeos {
 
-class HelpAppLauncher;
-class MessageBubble;
+class LoginDisplayHost;
 class UserCrosSettingsProvider;
 
 // ExistingUserController is used to handle login when someone has
-// already logged into the machine. When Init is invoked, a
-// UserController is created for each of the Users's in the
-// UserManager (including one for new user and one for Guest login),
-// and the window manager is then told to show the windows.
-//
+// already logged into the machine.
 // To use ExistingUserController create an instance of it and invoke Init.
-//
+// When Init is called it creates LoginDisplay instance which encapsulates
+// all login UI implementation.
 // ExistingUserController maintains it's own life cycle and deletes itself when
 // the user logs in (or chooses to see other settings).
-class ExistingUserController : public WmMessageListener::Observer,
-                               public UserController::Delegate,
+class ExistingUserController : public LoginDisplay::Delegate,
+                               public NotificationObserver,
                                public LoginPerformer::Delegate,
-                               public MessageBubbleDelegate,
+                               public LoginUtils::Delegate,
                                public CaptchaView::Delegate,
                                public PasswordChangedView::Delegate {
  public:
-  // Initializes views for known users. |background_bounds| determines the
-  // bounds of background view.
-  ExistingUserController(const std::vector<UserManager::User>& users,
-                         const gfx::Rect& background_bounds);
+  // All UI initialization is deferred till Init() call.
+  explicit ExistingUserController(LoginDisplayHost* host);
+  ~ExistingUserController();
 
   // Returns the current existing user controller if it has been created.
   static ExistingUserController* current_controller() {
     return current_controller_;
   }
 
-  // Creates and shows the appropriate set of windows.
-  void Init();
+  // Creates and shows login UI for known users.
+  void Init(const UserVector& users);
 
-  // Takes ownership of the specified background widget and view.
-  void OwnBackground(views::Widget* background_widget,
-                     chromeos::BackgroundView* background_view);
+  // LoginDisplay::Delegate: implementation
+  virtual void CreateAccount() OVERRIDE;
+  virtual string16 GetConnectedNetworkName() OVERRIDE;
+  virtual void FixCaptivePortal() OVERRIDE;
+  virtual void Login(const std::string& username,
+                     const std::string& password) OVERRIDE;
+  virtual void LoginAsGuest() OVERRIDE;
+  virtual void OnUserSelected(const std::string& username) OVERRIDE;
+  virtual void OnStartEnterpriseEnrollment() OVERRIDE;
 
-  // Tries to login from new user pod with given user login and password.
-  // Called after creating new account.
-  void LoginNewUser(const std::string& username, const std::string& password);
-
-  // Selects new user pod.
-  void SelectNewUser();
+  // NotificationObserver implementation.
+  virtual void Observe(NotificationType type,
+                       const NotificationSource& source,
+                       const NotificationDetails& details);
 
  private:
-  friend class DeleteTask<ExistingUserController>;
+  friend class ExistingUserControllerTest;
   friend class MockLoginPerformerDelegate;
-
-  ~ExistingUserController();
-
-  // Cover for invoking the destructor. Used by delete_timer_.
-  void Delete();
-
-  // WmMessageListener::Observer:
-  virtual void ProcessWmMessage(const WmIpc::Message& message,
-                                GdkWindow* window);
-
-  // UserController::Delegate:
-  virtual void Login(UserController* source, const string16& password);
-  virtual void LoginOffTheRecord();
-  virtual void ClearErrors();
-  virtual void OnUserSelected(UserController* source);
-  virtual void ActivateWizard(const std::string& screen_name);
-  virtual void RemoveUser(UserController* source);
-  virtual void AddStartUrl(const GURL& start_url) { start_url_ = start_url; }
-  virtual void SelectUser(int index);
-  virtual void SetStatusAreaEnabled(bool enable);
 
   // LoginPerformer::Delegate implementation:
   virtual void OnLoginFailure(const LoginFailure& error);
@@ -106,14 +89,8 @@ class ExistingUserController : public WmMessageListener::Observer,
       const GaiaAuthConsumer::ClientLoginResult& credentials);
   virtual void WhiteListCheckFailed(const std::string& email);
 
-  // Overridden from views::InfoBubbleDelegate.
-  virtual void InfoBubbleClosing(InfoBubble* info_bubble,
-                                 bool closed_by_escape) {
-    bubble_ = NULL;
-  }
-  virtual bool CloseOnEscape() { return true; }
-  virtual bool FadeInOnShow() { return false; }
-  virtual void OnHelpLinkActivated();
+  // LoginUtils::Delegate implementation:
+  virtual void OnProfilePrepared(Profile* profile);
 
   // CaptchaView::Delegate:
   virtual void OnCaptchaEntered(const std::string& captcha);
@@ -122,73 +99,72 @@ class ExistingUserController : public WmMessageListener::Observer,
   virtual void RecoverEncryptedData(const std::string& old_password);
   virtual void ResyncEncryptedData();
 
-  // Adds start url to command line.
-  void AppendStartUrlToCmdline();
+  // Starts WizardController with the specified screen.
+  void ActivateWizard(const std::string& screen_name);
 
   // Returns corresponding native window.
   gfx::NativeWindow GetNativeWindow() const;
+
+  // Changes state of the status area. During login operation it's disabled.
+  void SetStatusAreaEnabled(bool enable);
 
   // Show error message. |error_id| error message ID in resources.
   // If |details| string is not empty, it specify additional error text
   // provided by authenticator, it is not localized.
   void ShowError(int error_id, const std::string& details);
 
-  // Send message to window manager to enable/disable click on other windows.
-  void SendSetLoginState(bool is_login);
+  // Handles result of ownership check and starts enterprise enrollment if
+  // applicable.
+  void OnEnrollmentOwnershipCheckCompleted(OwnershipService::Status status);
 
   void set_login_performer_delegate(LoginPerformer::Delegate* d) {
     login_performer_delegate_.reset(d);
   }
 
-  // Bounds of the background window.
-  const gfx::Rect background_bounds_;
-
-  // Background window/view.
-  views::Widget* background_window_;
-  BackgroundView* background_view_;
-
-  // The set of visible UserControllers.
-  std::vector<UserController*> controllers_;
-
-  // The set of invisible UserControllers.
-  std::vector<UserController*> invisible_controllers_;
-
   // Used to execute login operations.
   scoped_ptr<LoginPerformer> login_performer_;
+
+  // Login UI implementation instance.
+  LoginDisplay* login_display_;
 
   // Delegate for login performer to be overridden by tests.
   // |this| is used if |login_performer_delegate_| is NULL.
   scoped_ptr<LoginPerformer::Delegate> login_performer_delegate_;
 
-  // Index of selected view (user).
-  size_t selected_view_index_;
+  // Username of the last login attempt.
+  std::string last_login_attempt_username_;
+
+  // OOBE/login display host.
+  LoginDisplayHost* host_;
 
   // Number of login attempts. Used to show help link when > 1 unsuccessful
   // logins for the same user.
   size_t num_login_attempts_;
 
-  // See comment in ProcessWmMessage.
-  base::OneShotTimer<ExistingUserController> delete_timer_;
-
   // Pointer to the current instance of the controller to be used by
   // automation tests.
   static ExistingUserController* current_controller_;
 
-  // Pointer to shown message bubble. We don't need to delete it because
-  // it will be deleted on bubble closing.
-  MessageBubble* bubble_;
-
-  // URL that will be opened on browser startup.
-  GURL start_url_;
-
-  // Help application used for help dialogs.
-  scoped_ptr<HelpAppLauncher> help_app_;
-
   // Triggers prefetching of user settings.
   scoped_ptr<UserCrosSettingsProvider> user_settings_;
 
+  // URL to append to start Guest mode with.
+  GURL guest_mode_url_;
+
+  // Used for user image changed notifications.
+  NotificationRegistrar registrar_;
+
   // Factory of callbacks.
   ScopedRunnableMethodFactory<ExistingUserController> method_factory_;
+
+  // Whether everything is ready to launch the browser.
+  bool ready_for_browser_launch_;
+
+  // Whether two factor credentials were used.
+  bool two_factor_credentials_;
+
+  // Used to verify ownership before starting enterprise enrollment.
+  scoped_ptr<OwnershipStatusChecker> ownership_checker_;
 
   FRIEND_TEST_ALL_PREFIXES(ExistingUserControllerTest, NewUserLogin);
 

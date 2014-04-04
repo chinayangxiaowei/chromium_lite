@@ -4,7 +4,7 @@
 
 #include "base/command_line.h"
 #include "base/file_path.h"
-#include "base/scoped_ptr.h"
+#include "base/memory/scoped_ptr.h"
 #include "base/string_number_conversions.h"
 #include "base/test/test_timeouts.h"
 #include "chrome/app/chrome_command_ids.h"
@@ -33,7 +33,7 @@ class SessionRestoreUITest : public UITest {
 
   virtual void QuitBrowserAndRestore(int expected_tab_count) {
 #if defined(OS_MACOSX)
-    shutdown_type_ = ProxyLauncher::USER_QUIT;
+    set_shutdown_type(ProxyLauncher::USER_QUIT);
 #endif
     UITest::TearDown();
 
@@ -335,54 +335,8 @@ TEST_F(SessionRestoreUITest, NormalAndPopup) {
 }
 
 #if !defined(OS_MACOSX)
-// These tests don't apply to the Mac version; see
+// This test doesn't apply to the Mac version; see
 // LaunchAnotherBrowserBlockUntilClosed for details.
-
-// Creates a browser, goes incognito, closes browser, launches and make sure
-// we don't restore.
-//
-TEST_F(SessionRestoreUITest, DontRestoreWhileIncognito) {
-  NavigateToURL(url1_);
-
-  // Make sure we have one window.
-  int initial_window_count;
-  ASSERT_TRUE(automation()->GetBrowserWindowCount(&initial_window_count));
-  ASSERT_EQ(1, initial_window_count);
-
-  scoped_refptr<BrowserProxy> browser_proxy(automation()->GetBrowserWindow(0));
-  ASSERT_TRUE(browser_proxy.get());
-
-  // Create an off the record window.
-  ASSERT_TRUE(browser_proxy->RunCommand(IDC_NEW_INCOGNITO_WINDOW));
-  int window_count;
-  ASSERT_TRUE(automation()->GetBrowserWindowCount(&window_count));
-  ASSERT_EQ(2, window_count);
-
-  // Close the first window.
-  CloseWindow(0, 2);
-  browser_proxy = NULL;
-
-  // Launch the browser again. Note, this doesn't spawn a new process, instead
-  // it attaches to the current process.
-  include_testing_id_ = false;
-  clear_profile_ = false;
-  launch_arguments_.AppendSwitch(switches::kRestoreLastSession);
-  LaunchAnotherBrowserBlockUntilClosed(launch_arguments_);
-
-  // A new window should appear;
-  ASSERT_TRUE(automation()->WaitForWindowCountToBecome(2));
-
-  // And it shouldn't have url1_ in it.
-  browser_proxy = automation()->GetBrowserWindow(1);
-  ASSERT_TRUE(browser_proxy.get());
-  scoped_refptr<TabProxy> tab_proxy(browser_proxy->GetTab(0));
-  ASSERT_TRUE(tab_proxy.get());
-  ASSERT_TRUE(tab_proxy->WaitForTabToBeRestored(
-      TestTimeouts::action_max_timeout_ms()));
-  GURL url;
-  ASSERT_TRUE(tab_proxy->GetCurrentURL(&url));
-  ASSERT_TRUE(url != url1_);
-}
 
 // Launches an app window, closes tabbed browser, launches and makes sure
 // we restore the tabbed browser url.
@@ -450,7 +404,11 @@ TEST_F(SessionRestoreUITest, TwoWindowsCloseOneRestoreOnlyOne) {
 // process-per-site and process-per-site-instance, because we treat the new tab
 // as a special case in process-per-site-instance so that it only ever uses one
 // process.)
-// Flaky as per http://crbug.com/52022
+//
+// Flaky: http://code.google.com/p/chromium/issues/detail?id=52022
+// Unfortunately, the fix at http://codereview.chromium.org/6546078
+// breaks NTP background image refreshing, so ThemeSource had to revert to
+// replacing the existing data source.
 TEST_F(SessionRestoreUITest, FLAKY_ShareProcessesOnRestore) {
   if (ProxyLauncher::in_process_renderer()) {
     // No point in running this test in single process mode.
@@ -469,7 +427,8 @@ TEST_F(SessionRestoreUITest, FLAKY_ShareProcessesOnRestore) {
   ASSERT_TRUE(browser_proxy->GetTabCount(&new_tab_count));
   ASSERT_EQ(tab_count + 2, new_tab_count);
 
-  int expected_process_count = GetBrowserProcessCount();
+  int expected_process_count = 0;
+  ASSERT_TRUE(GetBrowserProcessCount(&expected_process_count));
   int expected_tab_count = new_tab_count;
 
   // Restart.
@@ -483,16 +442,16 @@ TEST_F(SessionRestoreUITest, FLAKY_ShareProcessesOnRestore) {
   ASSERT_TRUE(browser_proxy->GetTabCount(&tab_count));
   ASSERT_EQ(expected_tab_count, tab_count);
 
-  scoped_refptr<TabProxy> tab_proxy(browser_proxy->GetTab(tab_count - 2));
-  ASSERT_TRUE(tab_proxy.get() != NULL);
-  ASSERT_TRUE(tab_proxy->WaitForTabToBeRestored(
-      TestTimeouts::action_max_timeout_ms()));
-  tab_proxy = browser_proxy->GetTab(tab_count - 1);
-  ASSERT_TRUE(tab_proxy.get() != NULL);
-  ASSERT_TRUE(tab_proxy->WaitForTabToBeRestored(
-      TestTimeouts::action_max_timeout_ms()));
+  for (int i = 0; i < expected_tab_count; ++i) {
+    scoped_refptr<TabProxy> tab_proxy(browser_proxy->GetTab(i));
+    ASSERT_TRUE(tab_proxy.get() != NULL);
+    ASSERT_TRUE(tab_proxy->WaitForTabToBeRestored(
+                    TestTimeouts::action_max_timeout_ms()));
+  }
 
-  ASSERT_EQ(expected_process_count, GetBrowserProcessCount());
+  int process_count = 0;
+  ASSERT_TRUE(GetBrowserProcessCount(&process_count));
+  ASSERT_EQ(expected_process_count, process_count);
 }
 
 }  // namespace

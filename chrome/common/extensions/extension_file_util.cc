@@ -9,9 +9,9 @@
 
 #include "base/file_util.h"
 #include "base/logging.h"
+#include "base/memory/scoped_temp_dir.h"
 #include "base/metrics/histogram.h"
 #include "base/path_service.h"
-#include "base/scoped_temp_dir.h"
 #include "base/threading/thread_restrictions.h"
 #include "base/utf_string_conversions.h"
 #include "chrome/common/chrome_paths.h"
@@ -20,7 +20,8 @@
 #include "chrome/common/extensions/extension_l10n_util.h"
 #include "chrome/common/extensions/extension_constants.h"
 #include "chrome/common/extensions/extension_resource.h"
-#include "chrome/common/json_value_serializer.h"
+#include "chrome/common/extensions/extension_sidebar_defaults.h"
+#include "content/common/json_value_serializer.h"
 #include "grit/generated_resources.h"
 #include "net/base/escape.h"
 #include "net/base/file_stream.h"
@@ -87,7 +88,7 @@ void UninstallExtension(const FilePath& extensions_dir,
 
 scoped_refptr<Extension> LoadExtension(const FilePath& extension_path,
                                        Extension::Location location,
-                                       bool require_key,
+                                       int flags,
                                        std::string* error) {
   FilePath manifest_path =
       extension_path.Append(Extension::kManifestFilename);
@@ -123,7 +124,11 @@ scoped_refptr<Extension> LoadExtension(const FilePath& extension_path,
     return NULL;
 
   scoped_refptr<Extension> extension(Extension::Create(
-      extension_path, location, *manifest, require_key, error));
+      extension_path,
+      location,
+      *manifest,
+      flags,
+      error));
   if (!extension.get())
     return NULL;
 
@@ -160,7 +165,7 @@ bool ValidateExtension(Extension* extension, std::string* error) {
           if (!file_util::PathExists(image_path)) {
             *error =
                 l10n_util::GetStringFUTF8(IDS_EXTENSION_INVALID_IMAGE_PATH,
-                    WideToUTF16(image_path.ToWStringHack()));
+                                          image_path.LossyDisplayName());
             return false;
           }
         }
@@ -202,7 +207,7 @@ bool ValidateExtension(Extension* extension, std::string* error) {
       *error =
           l10n_util::GetStringFUTF8(
               IDS_EXTENSION_LOAD_PLUGIN_PATH_FAILED,
-              WideToUTF16(plugin.path.ToWStringHack()));
+              plugin.path.LossyDisplayName());
       return false;
     }
   }
@@ -240,8 +245,10 @@ bool ValidateExtension(Extension* extension, std::string* error) {
     }
   }
 
-  // Validate background page location.
-  if (!extension->background_url().is_empty()) {
+  // Validate background page location, except for hosted apps, which should use
+  // an external URL. Background page for hosted apps are verified when the
+  // extension is created (in Extension::InitFromValue)
+  if (!extension->background_url().is_empty() && !extension->is_hosted_app()) {
     FilePath page_path = ExtensionURLToRelativeFilePath(
         extension->background_url());
     const FilePath path = extension->GetResource(page_path).GetFilePath();
@@ -249,7 +256,7 @@ bool ValidateExtension(Extension* extension, std::string* error) {
       *error =
           l10n_util::GetStringFUTF8(
               IDS_EXTENSION_LOAD_BACKGROUND_PAGE_FAILED,
-              WideToUTF16(page_path.ToWStringHack()));
+              page_path.LossyDisplayName());
       return false;
     }
   }
@@ -264,7 +271,22 @@ bool ValidateExtension(Extension* extension, std::string* error) {
       *error =
           l10n_util::GetStringFUTF8(
               IDS_EXTENSION_LOAD_OPTIONS_PAGE_FAILED,
-              WideToUTF16(options_path.ToWStringHack()));
+              options_path.LossyDisplayName());
+      return false;
+    }
+  }
+
+  // Validate sidebar default page location.
+  ExtensionSidebarDefaults* sidebar_defaults = extension->sidebar_defaults();
+  if (sidebar_defaults && sidebar_defaults->default_page().is_valid()) {
+    FilePath page_path = ExtensionURLToRelativeFilePath(
+        sidebar_defaults->default_page());
+    const FilePath path = extension->GetResource(page_path).GetFilePath();
+    if (path.empty() || !file_util::PathExists(path)) {
+      *error =
+          l10n_util::GetStringFUTF8(
+              IDS_EXTENSION_LOAD_SIDEBAR_PAGE_FAILED,
+              page_path.LossyDisplayName());
       return false;
     }
   }
@@ -296,15 +318,21 @@ void GarbageCollectExtensions(
   FilePath extension_path;
   for (extension_path = enumerator.Next(); !extension_path.value().empty();
        extension_path = enumerator.Next()) {
-    std::string extension_id = WideToASCII(
-        extension_path.BaseName().ToWStringHack());
+    std::string extension_id;
+
+    FilePath basename = extension_path.BaseName();
+    if (IsStringASCII(basename.value())) {
+      extension_id = UTF16ToASCII(basename.LossyDisplayName());
+      if (!Extension::IdIsValid(extension_id))
+        extension_id.clear();
+    }
 
     // Delete directories that aren't valid IDs.
-    if (!Extension::IdIsValid(extension_id)) {
+    if (extension_id.empty()) {
       LOG(WARNING) << "Invalid extension ID encountered in extensions "
-                      "directory: " << extension_id;
+                      "directory: " << basename.value();
       VLOG(1) << "Deleting invalid extension directory "
-              << WideToASCII(extension_path.ToWStringHack()) << ".";
+              << extension_path.value() << ".";
       file_util::Delete(extension_path, true);  // Recursive.
       continue;
     }
@@ -317,7 +345,7 @@ void GarbageCollectExtensions(
     // complete, for example, when a plugin is in use at uninstall time.
     if (iter == extension_paths.end()) {
       VLOG(1) << "Deleting unreferenced install for directory "
-              << WideToASCII(extension_path.ToWStringHack()) << ".";
+              << extension_path.LossyDisplayName() << ".";
       file_util::Delete(extension_path, true);  // Recursive.
       continue;
     }
@@ -332,7 +360,7 @@ void GarbageCollectExtensions(
          version_dir = versions_enumerator.Next()) {
       if (version_dir.BaseName() != iter->second.BaseName()) {
         VLOG(1) << "Deleting old version for directory "
-                << WideToASCII(version_dir.ToWStringHack()) << ".";
+                << version_dir.LossyDisplayName() << ".";
         file_util::Delete(version_dir, true);  // Recursive.
       }
     }
@@ -412,7 +440,7 @@ static bool ValidateLocaleInfo(const Extension& extension, std::string* error) {
     if (!file_util::PathExists(messages_path)) {
       *error = base::StringPrintf(
           "%s %s", errors::kLocalesMessagesFileMissing,
-          WideToUTF8(messages_path.ToWStringHack()).c_str());
+          UTF16ToUTF8(messages_path.LossyDisplayName()).c_str());
       return false;
     }
 
@@ -438,14 +466,14 @@ static bool IsScriptValid(const FilePath& path,
       !file_util::ReadFileToString(path, &content)) {
     *error = l10n_util::GetStringFUTF8(
         message_id,
-        WideToUTF16(relative_path.ToWStringHack()));
+        relative_path.LossyDisplayName());
     return false;
   }
 
   if (!IsStringUTF8(content)) {
     *error = l10n_util::GetStringFUTF8(
         IDS_EXTENSION_BAD_FILE_ENCODING,
-        WideToUTF16(relative_path.ToWStringHack()));
+        relative_path.LossyDisplayName());
     return false;
   }
 
@@ -585,6 +613,10 @@ FilePath GetUserDataTempDir() {
     return temp_path;
 
   return FilePath();
+}
+
+void DeleteFile(const FilePath& path, bool recursive) {
+  file_util::Delete(path, recursive);
 }
 
 }  // namespace extension_file_util

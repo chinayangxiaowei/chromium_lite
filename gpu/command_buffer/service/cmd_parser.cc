@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -55,15 +55,16 @@ error::Error CommandParser::ProcessCommand() {
 
   error::Error result = handler_->DoCommand(
       header.command, header.size - 1, buffer_ + get);
+
   // TODO(gman): If you want to log errors this is the best place to catch them.
   //     It seems like we need an official way to turn on a debug mode and
   //     get these errors.
-  if (result != error::kNoError) {
+  if (error::IsError(result)) {
     ReportError(header.command, result);
   }
 
   // If get was not set somewhere else advance it.
-  if (get == get_)
+  if (result != error::kWaiting && get == get_)
     get_ = (get + header.size) % entry_count_;
   return result;
 }

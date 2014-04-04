@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -11,8 +11,8 @@
 #include "media/base/callback.h"
 #include "media/base/limits.h"
 #include "media/base/media_switches.h"
+#include "media/base/pipeline.h"
 #include "media/ffmpeg/ffmpeg_common.h"
-#include "media/ffmpeg/ffmpeg_util.h"
 #include "media/filters/ffmpeg_demuxer.h"
 #include "media/video/ffmpeg_video_allocator.h"
 
@@ -20,8 +20,9 @@ namespace media {
 
 FFmpegVideoDecodeEngine::FFmpegVideoDecodeEngine()
     : codec_context_(NULL),
-      av_stream_(NULL),
       event_handler_(NULL),
+      frame_rate_numerator_(0),
+      frame_rate_denominator_(0),
       direct_rendering_(false),
       pending_input_buffers_(0),
       pending_output_buffers_(0),
@@ -30,6 +31,11 @@ FFmpegVideoDecodeEngine::FFmpegVideoDecodeEngine()
 }
 
 FFmpegVideoDecodeEngine::~FFmpegVideoDecodeEngine() {
+  if (codec_context_) {
+    av_free(codec_context_->extradata);
+    avcodec_close(codec_context_);
+    av_free(codec_context_);
+  }
 }
 
 void FFmpegVideoDecodeEngine::Initialize(
@@ -51,8 +57,27 @@ void FFmpegVideoDecodeEngine::Initialize(
   static const int kDecodeThreads = 2;
   static const int kMaxDecodeThreads = 16;
 
-  av_stream_ = static_cast<AVStream*>(config.opaque_context);
-  codec_context_ = av_stream_->codec;
+  // Initialize AVCodecContext structure.
+  codec_context_ = avcodec_alloc_context();
+
+  // TODO(scherkus): should video format get passed in via VideoCodecConfig?
+  codec_context_->pix_fmt = PIX_FMT_YUV420P;
+  codec_context_->codec_type = AVMEDIA_TYPE_VIDEO;
+  codec_context_->codec_id = VideoCodecToCodecID(config.codec());
+  codec_context_->coded_width = config.width();
+  codec_context_->coded_height = config.height();
+
+  frame_rate_numerator_ = config.frame_rate_numerator();
+  frame_rate_denominator_ = config.frame_rate_denominator();
+
+  if (config.extra_data() != NULL) {
+    codec_context_->extradata_size = config.extra_data_size();
+    codec_context_->extradata =
+        reinterpret_cast<uint8_t*>(av_malloc(config.extra_data_size()));
+    memcpy(codec_context_->extradata, config.extra_data(),
+           config.extra_data_size());
+  }
+
   // Enable motion vector search (potentially slow), strong deblocking filter
   // for damaged macroblocks, and set our error detection sensitivity.
   codec_context_->error_concealment = FF_EC_GUESS_MVS | FF_EC_DEBLOCK;
@@ -92,8 +117,8 @@ void FFmpegVideoDecodeEngine::Initialize(
   info.provides_buffers = true;
   info.stream_info.surface_type = VideoFrame::TYPE_SYSTEM_MEMORY;
   info.stream_info.surface_format = GetSurfaceFormat();
-  info.stream_info.surface_width = config.width;
-  info.stream_info.surface_height = config.height;
+  info.stream_info.surface_width = config.width();
+  info.stream_info.surface_height = config.height();
 
   // If we do not have enough buffers, we will report error too.
   bool buffer_allocated = true;
@@ -103,8 +128,8 @@ void FFmpegVideoDecodeEngine::Initialize(
     for (size_t i = 0; i < Limits::kMaxVideoFrames; ++i) {
       scoped_refptr<VideoFrame> video_frame;
       VideoFrame::CreateFrame(VideoFrame::YV12,
-                              config.width,
-                              config.height,
+                              config.width(),
+                              config.height(),
                               kNoTimestamp,
                               kNoTimestamp,
                               &video_frame);
@@ -201,6 +226,9 @@ void FFmpegVideoDecodeEngine::DecodeFrame(scoped_refptr<Buffer> buffer) {
   packet.data = const_cast<uint8*>(buffer->GetData());
   packet.size = buffer->GetDataSize();
 
+  PipelineStatistics statistics;
+  statistics.video_bytes_decoded = buffer->GetDataSize();
+
   // Let FFmpeg handle presentation timestamp reordering.
   codec_context_->reordered_opaque = buffer->GetTimestamp().InMicroseconds();
 
@@ -221,7 +249,7 @@ void FFmpegVideoDecodeEngine::DecodeFrame(scoped_refptr<Buffer> buffer) {
             << buffer->GetDuration().InMicroseconds() << " us, packet size: "
             << buffer->GetDataSize() << " bytes";
     // TODO(jiesun): call event_handler_->OnError() instead.
-    event_handler_->ConsumeVideoFrame(video_frame);
+    event_handler_->ConsumeVideoFrame(video_frame, statistics);
     return;
   }
 
@@ -232,7 +260,7 @@ void FFmpegVideoDecodeEngine::DecodeFrame(scoped_refptr<Buffer> buffer) {
   // drained, we mark the flag. Otherwise we read from demuxer again.
   if (frame_decoded == 0) {
     if (buffer->IsEndOfStream()) {  // We had started flushing.
-      event_handler_->ConsumeVideoFrame(video_frame);
+      event_handler_->ConsumeVideoFrame(video_frame, statistics);
       output_eos_reached_ = true;
     } else {
       ReadInput();
@@ -247,30 +275,27 @@ void FFmpegVideoDecodeEngine::DecodeFrame(scoped_refptr<Buffer> buffer) {
       !av_frame_->data[VideoFrame::kUPlane] ||
       !av_frame_->data[VideoFrame::kVPlane]) {
     // TODO(jiesun): call event_handler_->OnError() instead.
-    event_handler_->ConsumeVideoFrame(video_frame);
+    event_handler_->ConsumeVideoFrame(video_frame, statistics);
     return;
   }
 
   // Determine timestamp and calculate the duration based on the repeat picture
   // count.  According to FFmpeg docs, the total duration can be calculated as
   // follows:
+  //   fps = 1 / time_base
+  //
   //   duration = (1 / fps) + (repeat_pict) / (2 * fps)
   //            = (2 + repeat_pict) / (2 * fps)
+  //            = (2 + repeat_pict) / (2 * (1 / time_base))
   DCHECK_LE(av_frame_->repeat_pict, 2);  // Sanity check.
-  // Even frame rate is fixed, for some streams and codecs, the value of
-  // |codec_context_->time_base| and |av_stream_->time_base| are not the
-  // inverse of the |av_stream_->r_frame_rate|. They use 1 milli-second as
-  // time-base units and use increment of av_packet->pts which is not one.
-  // Use the inverse of |av_stream_->r_frame_rate| instead of time_base.
   AVRational doubled_time_base;
-  doubled_time_base.den = av_stream_->r_frame_rate.num;
-  doubled_time_base.num = av_stream_->r_frame_rate.den;
-  doubled_time_base.den *= 2;
+  doubled_time_base.num = frame_rate_denominator_;
+  doubled_time_base.den = frame_rate_numerator_ * 2;
 
   base::TimeDelta timestamp =
       base::TimeDelta::FromMicroseconds(av_frame_->reordered_opaque);
   base::TimeDelta duration =
-      ConvertTimestamp(doubled_time_base, 2 + av_frame_->repeat_pict);
+      ConvertFromTimeBase(doubled_time_base, 2 + av_frame_->repeat_pict);
 
   if (!direct_rendering_) {
     // Available frame is guaranteed, because we issue as much reads as
@@ -296,7 +321,7 @@ void FFmpegVideoDecodeEngine::DecodeFrame(scoped_refptr<Buffer> buffer) {
   video_frame->SetDuration(duration);
 
   pending_output_buffers_--;
-  event_handler_->ConsumeVideoFrame(video_frame);
+  event_handler_->ConsumeVideoFrame(video_frame, statistics);
 }
 
 void FFmpegVideoDecodeEngine::Uninitialize() {
@@ -335,14 +360,6 @@ void FFmpegVideoDecodeEngine::Seek() {
     ReadInput();
 
   event_handler_->OnSeekComplete();
-}
-
-AVCodecContext* FFmpegVideoDecodeEngine::codec_context() const {
-  return codec_context_;
-}
-
-void FFmpegVideoDecodeEngine::SetCodecContextForTest(AVCodecContext* context) {
-  codec_context_ = context;
 }
 
 void FFmpegVideoDecodeEngine::ReadInput() {

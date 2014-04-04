@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -16,6 +16,7 @@
 #include "net/socket/client_socket_factory.h"
 #include "net/socket/tcp_client_socket.h"
 #include "net/socket/socket_test_util.h"
+#include "net/spdy/spdy_http_utils.h"
 #include "net/spdy/spdy_protocol.h"
 #include "net/spdy/spdy_session_pool.h"
 #include "net/spdy/spdy_test_util.h"
@@ -84,13 +85,13 @@ class SpdyProxyClientSocketTest : public PlatformTest {
   void AddAuthToCache() {
     const string16 kFoo(ASCIIToUTF16("foo"));
     const string16 kBar(ASCIIToUTF16("bar"));
-    session_->auth_cache()->Add(GURL(kProxyUrl),
-                                "MyRealm1",
-                                HttpAuth::AUTH_SCHEME_BASIC,
-                                "Basic realm=MyRealm1",
-                                kFoo,
-                                kBar,
-                                "/");
+    session_->http_auth_cache()->Add(GURL(kProxyUrl),
+                                     "MyRealm1",
+                                     HttpAuth::AUTH_SCHEME_BASIC,
+                                     "Basic realm=MyRealm1",
+                                     kFoo,
+                                     kBar,
+                                     "/");
   }
 
   void Run(int steps) {
@@ -118,7 +119,7 @@ class SpdyProxyClientSocketTest : public PlatformTest {
   HostPortPair endpoint_host_port_pair_;
   ProxyServer proxy_;
   HostPortProxyPair endpoint_host_port_proxy_pair_;
-  scoped_refptr<TCPSocketParams> tcp_params_;
+  scoped_refptr<TransportSocketParams> transport_params_;
 
   DISALLOW_COPY_AND_ASSIGN(SpdyProxyClientSocketTest);
 };
@@ -141,7 +142,11 @@ SpdyProxyClientSocketTest::SpdyProxyClientSocketTest()
       endpoint_host_port_pair_(kOriginHost, kOriginPort),
       proxy_(ProxyServer::SCHEME_HTTPS, proxy_host_port_),
       endpoint_host_port_proxy_pair_(endpoint_host_port_pair_, proxy_),
-      tcp_params_(new TCPSocketParams(proxy_host_port_, LOWEST, url_, false)) {
+      transport_params_(new TransportSocketParams(proxy_host_port_,
+                                            LOWEST,
+                                            url_,
+                                            false,
+                                            false)) {
 }
 
 void SpdyProxyClientSocketTest::TearDown() {
@@ -174,14 +179,14 @@ void SpdyProxyClientSocketTest::Initialize(MockRead* reads,
   // Creates a new spdy session
   spdy_session_ =
       session_->spdy_session_pool()->Get(endpoint_host_port_proxy_pair_,
-                                         session_->mutable_spdy_settings(),
                                          BoundNetLog());
 
   // Perform the TCP connect
   scoped_ptr<ClientSocketHandle> connection(new ClientSocketHandle);
   EXPECT_EQ(OK,
-            connection->Init(endpoint_host_port_pair_.ToString(), tcp_params_,
-                             LOWEST, NULL, session_->tcp_socket_pool(),
+            connection->Init(endpoint_host_port_pair_.ToString(),
+                             transport_params_,
+                             LOWEST, NULL, session_->transport_socket_pool(),
                              BoundNetLog()));
   spdy_session_->InitializeWithSocket(connection.release(), false, OK);
 
@@ -195,7 +200,7 @@ void SpdyProxyClientSocketTest::Initialize(MockRead* reads,
   sock_.reset(
       new SpdyProxyClientSocket(spdy_stream_, user_agent_,
                                 endpoint_host_port_pair_, url_,
-                                proxy_host_port_, session_->auth_cache(),
+                                proxy_host_port_, session_->http_auth_cache(),
                                 session_->http_auth_handler_factory()));
 }
 

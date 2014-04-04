@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 #include "chrome_frame/test/perf/chrome_frame_perftest.h"
@@ -14,9 +14,9 @@
 #include "base/debug/trace_event_win.h"
 #include "base/file_path.h"
 #include "base/file_util.h"
+#include "base/memory/scoped_ptr.h"
 #include "base/path_service.h"
 #include "base/process_util.h"
-#include "base/scoped_ptr.h"
 #include "base/string_util.h"
 #include "base/stringprintf.h"
 #include "base/threading/platform_thread.h"
@@ -290,17 +290,14 @@ class ChromeFrameStartupTest : public ChromeFramePerfTestBase {
   virtual void SetUp() {
     ASSERT_TRUE(PathService::Get(chrome::DIR_APP, &dir_app_));
 
-    chrome_dll_ = dir_app_.Append(FILE_PATH_LITERAL("chrome.dll"));
-    chrome_exe_ = dir_app_.Append(
-        FilePath::FromWStringHack(chrome::kBrowserProcessExecutableName));
-    chrome_frame_dll_ = dir_app_.Append(FILE_PATH_LITERAL("servers"));
-    chrome_frame_dll_ = chrome_frame_dll_.Append(
-        FilePath::FromWStringHack(kChromeFrameDllName));
-    icu_dll_ = dir_app_.Append(FILE_PATH_LITERAL("icudt42.dll"));
-    gears_dll_ = dir_app_.Append(FILE_PATH_LITERAL("gears.dll"));
-    avcodec52_dll_ = dir_app_.Append(FILE_PATH_LITERAL("avcodec-52.dll"));
-    avformat52_dll_ = dir_app_.Append(FILE_PATH_LITERAL("avformat-52.dll"));
-    avutil50_dll_ = dir_app_.Append(FILE_PATH_LITERAL("avutil-50.dll"));
+    chrome_dll_ = dir_app_.Append(L"chrome.dll");
+    chrome_exe_ = dir_app_.Append(chrome::kBrowserProcessExecutableName);
+    chrome_frame_dll_ = dir_app_.Append(L"servers");
+    chrome_frame_dll_ = chrome_frame_dll_.Append(kChromeFrameDllName);
+    icu_dll_ = dir_app_.Append(L"icudt.dll");
+    avcodec52_dll_ = dir_app_.Append(L"avcodec-52.dll");
+    avformat52_dll_ = dir_app_.Append(L"avformat-52.dll");
+    avutil50_dll_ = dir_app_.Append(L"avutil-50.dll");
   }
 
   // TODO(iyengar)
@@ -358,7 +355,6 @@ class ChromeFrameStartupTest : public ChromeFramePerfTestBase {
   FilePath chrome_exe_;
   FilePath chrome_frame_dll_;
   FilePath icu_dll_;
-  FilePath gears_dll_;
   FilePath avcodec52_dll_;
   FilePath avformat52_dll_;
   FilePath avutil50_dll_;
@@ -389,7 +385,8 @@ class ChromeFrameStartupTestActiveX : public ChromeFrameStartupTest {
  public:
   virtual void SetUp() {
     // Register the Chrome Frame DLL in the build directory.
-    chrome_frame_registrar_.reset(new ScopedChromeFrameRegistrar);
+    chrome_frame_registrar_.reset(new ScopedChromeFrameRegistrar(
+        ScopedChromeFrameRegistrar::SYSTEM_LEVEL));
 
     ChromeFrameStartupTest::SetUp();
   }
@@ -457,7 +454,8 @@ class ChromeFrameStartupTestActiveXReference
   // override the browser directory to use the reference build instead.
   virtual void SetUp() {
     // Register the reference build Chrome Frame DLL.
-    chrome_frame_registrar_.reset(new ScopedChromeFrameRegistrar);
+    chrome_frame_registrar_.reset(new ScopedChromeFrameRegistrar(
+        ScopedChromeFrameRegistrar::SYSTEM_LEVEL));
     chrome_frame_registrar_->RegisterReferenceChromeFrameBuild();
 
     ChromeFrameStartupTest::SetUp();
@@ -567,7 +565,8 @@ class ChromeFrameMemoryTest : public ChromeFramePerfTestBase {
 
   virtual void SetUp() {
     // Register the Chrome Frame DLL in the build directory.
-    chrome_frame_registrar_.reset(new ScopedChromeFrameRegistrar);
+    chrome_frame_registrar_.reset(new ScopedChromeFrameRegistrar(
+        ScopedChromeFrameRegistrar::SYSTEM_LEVEL));
   }
 
   void RunTest(const char* test_name, char* urls[], int total_urls) {
@@ -748,7 +747,8 @@ class ChromeFrameMemoryTest : public ChromeFramePerfTestBase {
 class ChromeFrameMemoryTestReference : public ChromeFrameMemoryTest {
  public:
   virtual void SetUp() {
-    chrome_frame_registrar_.reset(new ScopedChromeFrameRegistrar);
+    chrome_frame_registrar_.reset(new ScopedChromeFrameRegistrar(
+        ScopedChromeFrameRegistrar::SYSTEM_LEVEL));
     chrome_frame_registrar_->RegisterReferenceChromeFrameBuild();
   }
 
@@ -872,7 +872,8 @@ class ChromeFrameCreationTestReference : public ChromeFrameCreationTest {
  public:
   // override the browser directory to use the reference build instead.
   virtual void SetUp() {
-    chrome_frame_registrar_.reset(new ScopedChromeFrameRegistrar);
+    chrome_frame_registrar_.reset(new ScopedChromeFrameRegistrar(
+        ScopedChromeFrameRegistrar::SYSTEM_LEVEL));
     chrome_frame_registrar_->RegisterReferenceChromeFrameBuild();
     ChromeFrameStartupTest::SetUp();
   }
@@ -962,9 +963,10 @@ TEST_F(ChromeFrameBinariesLoadTest, PerfWarm) {
 
 TEST_F(ChromeFrameStartupTestActiveX, PerfCold) {
   SetConfigInt(L"PreRead", 0);
-  FilePath binaries_to_evict[] = { gears_dll_, avcodec52_dll_,
-      avformat52_dll_, avutil50_dll_, chrome_exe_, chrome_dll_,
-      chrome_frame_dll_};
+  FilePath binaries_to_evict[] = {
+    avcodec52_dll_, avformat52_dll_, avutil50_dll_, chrome_exe_, chrome_dll_,
+    chrome_frame_dll_
+  };
   RunStartupTest("cold", "t", "about:blank", true /* cold */,
                  arraysize(binaries_to_evict), binaries_to_evict,
                  false /* not important */, false);
@@ -973,9 +975,10 @@ TEST_F(ChromeFrameStartupTestActiveX, PerfCold) {
 
 TEST_F(ChromeFrameStartupTestActiveX, PerfColdPreRead) {
   SetConfigInt(L"PreRead", 1);
-  FilePath binaries_to_evict[] = { gears_dll_, avcodec52_dll_,
-      avformat52_dll_, avutil50_dll_, chrome_exe_, chrome_dll_,
-      chrome_frame_dll_};
+  FilePath binaries_to_evict[] = {
+    avcodec52_dll_, avformat52_dll_, avutil50_dll_, chrome_exe_, chrome_dll_,
+    chrome_frame_dll_
+  };
   RunStartupTest("cold_preread", "t", "about:blank", true /* cold */,
                  arraysize(binaries_to_evict), binaries_to_evict,
                  false /* not important */, false);
@@ -1108,7 +1111,7 @@ TEST_F(FlashCreationTest, PerfCold) {
   ASSERT_EQ(ERROR_SUCCESS, flash_key.ReadValue(L"", &plugin_path));
   ASSERT_FALSE(plugin_path.empty());
 
-  FilePath flash_path = FilePath::FromWStringHack(plugin_path);
+  FilePath flash_path = FilePath(plugin_path);
   FilePath binaries_to_evict[] = {flash_path};
 
   RunStartupTest("creation_cold", "t_flash", "", true /* cold */,
@@ -1129,7 +1132,7 @@ TEST_F(SilverlightCreationTest, DISABLED_PerfCold) {
   ASSERT_EQ(ERROR_SUCCESS, silverlight_key.ReadValue(L"", &plugin_path));
   ASSERT_FALSE(plugin_path.empty());
 
-  FilePath silverlight_path = FilePath::FromWStringHack(plugin_path);
+  FilePath silverlight_path = FilePath(plugin_path);
   FilePath binaries_to_evict[] = {silverlight_path};
 
   RunStartupTest("creation_cold", "t_silverlight", "", true /* cold */,
@@ -1355,7 +1358,8 @@ void PrintResultList(const std::string& measurement,
 
 bool RunSingleTestOutOfProc(const std::string& test_name) {
   FilePath path;
-  PathService::Get(base::DIR_EXE, &path);
+  if (!PathService::Get(base::DIR_EXE, &path))
+    return false;
   path = path.Append(L"chrome_frame_tests.exe");
 
   CommandLine cmd_line(path);
@@ -1380,6 +1384,8 @@ bool RunSingleTestOutOfProc(const std::string& test_name) {
       // Ensure that the process terminates.
       base::KillProcess(process_handle, -1, true);
   }
+
+  base::CloseProcessHandle(process_handle);
 
   return exit_code == 0;
 }

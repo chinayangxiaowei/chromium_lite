@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -11,8 +11,8 @@
 #include <atlmisc.h>
 
 #include "base/logging.h"
-#include "base/scoped_ptr.h"
-#include "gfx/native_theme_win.h"
+#include "base/memory/scoped_ptr.h"
+#include "ui/base/accessibility/accessibility_types.h"
 #include "ui/base/keycodes/keyboard_codes.h"
 #include "ui/base/keycodes/keyboard_code_conversion_win.h"
 #include "ui/base/l10n/l10n_util_win.h"
@@ -146,7 +146,7 @@ class NativeControlContainer : public CWindowImpl<NativeControlContainer,
         if (brush)
           return reinterpret_cast<LRESULT>(brush);
       }
-      ancestor = ancestor->GetParent();
+      ancestor = ancestor->parent();
     }
 
     // COLOR_BTNFACE is the default for dialog box backgrounds.
@@ -223,7 +223,7 @@ void NativeControl::Layout() {
     ValidateNativeControl();
 
   if (hwnd_view_) {
-    gfx::Rect lb = GetLocalBounds(false);
+    gfx::Rect lb = GetLocalBounds();
 
     int x = lb.x();
     int y = lb.y();
@@ -277,11 +277,14 @@ void NativeControl::OnContextMenu(const POINT& location) {
     ShowContextMenu(gfx::Point(location), true);
 }
 
-void NativeControl::Focus() {
+void NativeControl::OnFocus() {
   if (container_) {
     DCHECK(container_->GetControl());
     ::SetFocus(container_->GetControl());
-    NotifyAccessibilityEvent(AccessibilityTypes::EVENT_FOCUS, false);
+    if (GetWidget()) {
+      GetWidget()->NotifyAccessibilityEvent(
+          this, ui::AccessibilityTypes::EVENT_FOCUS, false);
+    }
   }
 }
 
@@ -318,7 +321,7 @@ void NativeControl::SetEnabled(bool enabled) {
   }
 }
 
-void NativeControl::Paint(gfx::Canvas* canvas) {
+void NativeControl::OnPaint(gfx::Canvas* canvas) {
 }
 
 void NativeControl::VisibilityChanged(View* starting_from, bool is_visible) {

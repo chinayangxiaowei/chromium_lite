@@ -13,27 +13,28 @@
 #include "base/string_util.h"
 #include "base/utf_string_conversions.h"
 #include "base/values.h"
-#include "chrome/browser/browser_thread.h"
-#include "chrome/browser/dom_ui/most_visited_handler.h"
 #include "chrome/browser/history/history_backend.h"
 #include "chrome/browser/history/history_notifications.h"
 #include "chrome/browser/history/page_usage_data.h"
 #include "chrome/browser/history/top_sites_backend.h"
 #include "chrome/browser/history/top_sites_cache.h"
 #include "chrome/browser/prefs/pref_service.h"
+#include "chrome/browser/prefs/scoped_user_pref_update.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/tab_contents/navigation_controller.h"
-#include "chrome/browser/tab_contents/navigation_entry.h"
+#include "chrome/browser/ui/webui/most_visited_handler.h"
 #include "chrome/common/chrome_switches.h"
-#include "chrome/common/notification_service.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/common/thumbnail_score.h"
-#include "gfx/codec/jpeg_codec.h"
+#include "content/browser/browser_thread.h"
+#include "content/browser/tab_contents/navigation_controller.h"
+#include "content/browser/tab_contents/navigation_entry.h"
+#include "content/common/notification_service.h"
 #include "grit/chromium_strings.h"
 #include "grit/generated_resources.h"
 #include "grit/locale_settings.h"
 #include "third_party/skia/include/core/SkBitmap.h"
 #include "ui/base/l10n/l10n_util.h"
+#include "ui/gfx/codec/jpeg_codec.h"
 
 namespace history {
 
@@ -127,7 +128,7 @@ class LoadThumbnailsFromHistoryTask : public HistoryDBTask {
 }  // namespace
 
 TopSites::TopSites(Profile* profile)
-    : backend_(new TopSitesBackend()),
+    : backend_(NULL),
       cache_(new TopSitesCache()),
       thread_safe_cache_(new TopSitesCache()),
       profile_(profile),
@@ -147,13 +148,25 @@ TopSites::TopSites(Profile* profile)
                    NotificationService::AllSources());
   }
 
-  blacklist_ = profile_->GetPrefs()->
-      GetMutableDictionary(prefs::kNTPMostVisitedURLsBlacklist);
-  pinned_urls_ = profile_->GetPrefs()->
-      GetMutableDictionary(prefs::kNTPMostVisitedPinnedURLs);
+  // We create update objects here to be sure that dictionaries are created
+  // in the user preferences.
+  DictionaryPrefUpdate(profile_->GetPrefs(),
+                       prefs::kNTPMostVisitedURLsBlacklist).Get();
+  DictionaryPrefUpdate(profile_->GetPrefs(),
+                       prefs::kNTPMostVisitedPinnedURLs).Get();
+
+  // Now the dictionaries are guaranteed to exist and we can cache pointers
+  // to them.
+  blacklist_ =
+      profile_->GetPrefs()->GetDictionary(prefs::kNTPMostVisitedURLsBlacklist);
+  pinned_urls_ =
+      profile_->GetPrefs()->GetDictionary(prefs::kNTPMostVisitedPinnedURLs);
 }
 
 void TopSites::Init(const FilePath& db_name) {
+  // Create the backend here, rather than in the constructor, so that
+  // unit tests that do not need the backend can run without a problem.
+  backend_ = new TopSitesBackend;
   backend_->Init(db_name);
   backend_->GetMostVisitedThumbnails(
       &cancelable_consumer_,
@@ -181,8 +194,8 @@ bool TopSites::SetPageThumbnail(const GURL& url,
   }
 
   bool add_temp_thumbnail = false;
-  if (!cache_->IsKnownURL(url)) {
-    if (cache_->top_sites().size() < kTopSitesNumber) {
+  if (!IsKnownURL(url)) {
+    if (!IsFull()) {
       add_temp_thumbnail = true;
     } else {
       return false;  // This URL is not known to us.
@@ -236,6 +249,26 @@ bool TopSites::GetPageThumbnail(const GURL& url,
   base::AutoLock lock(lock_);
   return thread_safe_cache_->GetPageThumbnail(url, bytes);
 }
+
+bool TopSites::GetPageThumbnailScore(const GURL& url,
+                                     ThumbnailScore* score) {
+  // WARNING: this may be invoked on any thread.
+  base::AutoLock lock(lock_);
+  return thread_safe_cache_->GetPageThumbnailScore(url, score);
+}
+
+bool TopSites::GetTemporaryPageThumbnailScore(const GURL& url,
+                                              ThumbnailScore* score) {
+  for (TempImages::iterator i = temp_images_.begin(); i != temp_images_.end();
+       ++i) {
+    if (i->first == url) {
+      *score = i->second.thumbnail_score;
+      return true;
+    }
+  }
+  return false;
+}
+
 
 // Returns the index of |url| in |urls|, or -1 if not found.
 static int IndexOf(const MostVisitedURLList& urls, const GURL& url) {
@@ -316,14 +349,24 @@ void TopSites::AddBlacklistedURL(const GURL& url) {
 
   RemovePinnedURL(url);
   Value* dummy = Value::CreateNullValue();
-  blacklist_->SetWithoutPathExpansion(GetURLHash(url), dummy);
+  {
+    DictionaryPrefUpdate update(profile_->GetPrefs(),
+                                prefs::kNTPMostVisitedURLsBlacklist);
+    DictionaryValue* blacklist = update.Get();
+    blacklist->SetWithoutPathExpansion(GetURLHash(url), dummy);
+  }
 
   ResetThreadSafeCache();
 }
 
 void TopSites::RemoveBlacklistedURL(const GURL& url) {
   DCHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
-  blacklist_->RemoveWithoutPathExpansion(GetURLHash(url), NULL);
+  {
+    DictionaryPrefUpdate update(profile_->GetPrefs(),
+                                prefs::kNTPMostVisitedURLsBlacklist);
+    DictionaryValue* blacklist = update.Get();
+    blacklist->RemoveWithoutPathExpansion(GetURLHash(url), NULL);
+  }
   ResetThreadSafeCache();
 }
 
@@ -334,7 +377,12 @@ bool TopSites::IsBlacklisted(const GURL& url) {
 
 void TopSites::ClearBlacklistedURLs() {
   DCHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
-  blacklist_->Clear();
+  {
+    DictionaryPrefUpdate update(profile_->GetPrefs(),
+                                prefs::kNTPMostVisitedURLsBlacklist);
+    DictionaryValue* blacklist = update.Get();
+    blacklist->Clear();
+  }
   ResetThreadSafeCache();
 }
 
@@ -349,7 +397,13 @@ void TopSites::AddPinnedURL(const GURL& url, size_t pinned_index) {
     RemovePinnedURL(url);
 
   Value* index = Value::CreateIntegerValue(pinned_index);
-  pinned_urls_->SetWithoutPathExpansion(GetURLString(url), index);
+
+  {
+    DictionaryPrefUpdate update(profile_->GetPrefs(),
+                                prefs::kNTPMostVisitedPinnedURLs);
+    DictionaryValue* pinned_urls = update.Get();
+    pinned_urls->SetWithoutPathExpansion(GetURLString(url), index);
+  }
 
   ResetThreadSafeCache();
 }
@@ -362,7 +416,12 @@ bool TopSites::IsURLPinned(const GURL& url) {
 void TopSites::RemovePinnedURL(const GURL& url) {
   DCHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
 
-  pinned_urls_->RemoveWithoutPathExpansion(GetURLString(url), NULL);
+  {
+    DictionaryPrefUpdate update(profile_->GetPrefs(),
+                                prefs::kNTPMostVisitedPinnedURLs);
+    DictionaryValue* pinned_urls = update.Get();
+    pinned_urls->RemoveWithoutPathExpansion(GetURLString(url), NULL);
+  }
 
   ResetThreadSafeCache();
 }
@@ -447,6 +506,14 @@ CancelableRequestProvider::Handle TopSites::StartQueryForMostVisited() {
         NewCallback(this, &TopSites::OnTopSitesAvailableFromHistory));
   }
   return 0;
+}
+
+bool TopSites::IsKnownURL(const GURL& url) {
+  return loaded_ && cache_->IsKnownURL(url);
+}
+
+bool TopSites::IsFull() {
+  return loaded_ && cache_->top_sites().size() >= kTopSitesNumber;
 }
 
 TopSites::~TopSites() {
@@ -604,7 +671,14 @@ void TopSites::MigratePinnedURLs() {
         tmp_map[GURL(url_string)] = index;
     }
   }
-  pinned_urls_->Clear();
+
+  {
+    DictionaryPrefUpdate update(profile_->GetPrefs(),
+                                prefs::kNTPMostVisitedPinnedURLs);
+    DictionaryValue* pinned_urls = update.Get();
+    pinned_urls->Clear();
+  }
+
   for (std::map<GURL, size_t>::iterator it = tmp_map.begin();
        it != tmp_map.end(); ++it)
     AddPinnedURL(it->first, it->second);
@@ -724,7 +798,7 @@ void TopSites::Observe(NotificationType type,
     }
     StartQueryForMostVisited();
   } else if (type == NotificationType::NAV_ENTRY_COMMITTED) {
-    if (cache_->top_sites().size() < kTopSitesNumber) {
+    if (!IsFull()) {
       NavigationController::LoadCommittedDetails* load_details =
           Details<NavigationController::LoadCommittedDetails>(details).ptr();
       if (!load_details)

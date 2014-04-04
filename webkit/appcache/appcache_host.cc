@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -33,7 +33,9 @@ void FillCacheInfo(
 
 AppCacheHost::AppCacheHost(int host_id, AppCacheFrontend* frontend,
                            AppCacheService* service)
-    : host_id_(host_id), parent_host_id_(kNoHostId), parent_process_id_(0),
+    : host_id_(host_id),
+      spawning_host_id_(kNoHostId), spawning_process_id_(0),
+      parent_host_id_(kNoHostId), parent_process_id_(0),
       pending_main_resource_cache_id_(kNoCacheId),
       pending_selected_cache_id_(kNoCacheId),
       frontend_(frontend), service_(service),
@@ -65,30 +67,12 @@ void AppCacheHost::SelectCache(const GURL& document_url,
                                const GURL& manifest_url) {
   DCHECK(!pending_start_update_callback_ &&
          !pending_swap_cache_callback_ &&
-         !pending_get_status_callback_);
+         !pending_get_status_callback_ &&
+         !is_selection_pending());
 
   if (main_resource_blocked_)
     frontend_->OnContentBlocked(host_id_,
                                 blocked_manifest_url_);
-
-  // First we handle an unusual case of SelectCache being called a second
-  // time. Generally this shouldn't happen, but with bad content I think
-  // this can occur... <html manifest=foo> <html manifest=bar></html></html>
-  // We handle this by killing whatever loading we have initiated, and by
-  // unassociating any hosts we currently have associated... and starting
-  // anew with the inputs to this SelectCache call.
-  // TODO(michaeln): at some point determine what behavior the algorithms
-  // described in the HTML5 draft produce and have our impl produce those
-  // results (or suggest changes to the algorihtms described in the spec
-  // if the resulting behavior is just too insane).
-  if (is_selection_pending()) {
-    service_->storage()->CancelDelegateCallbacks(this);
-    pending_selected_manifest_url_ = GURL();
-    pending_selected_cache_id_ = kNoCacheId;
-  } else if (associated_cache()) {
-    AssociateCache(NULL);
-  }
-  new_master_entry_url_ = GURL();
 
   // 6.9.6 The application cache selection algorithm.
   // The algorithm is started here and continues in FinishCacheSelection,
@@ -107,6 +91,7 @@ void AppCacheHost::SelectCache(const GURL& document_url,
     // Note: The client detects if the document was not loaded using HTTP GET
     // and invokes SelectCache without a manifest url, so that detection step
     // is also skipped here. See WebApplicationCacheHostImpl.cc
+    set_preferred_manifest_url(manifest_url);
     new_master_entry_url_ = document_url;
     LoadOrCreateGroup(manifest_url);
     return;
@@ -248,6 +233,17 @@ void AppCacheHost::DoPendingSwapCache() {
   pending_callback_param_ = NULL;
 }
 
+void AppCacheHost::SetSpawningHostId(
+    int spawning_process_id, int spawning_host_id) {
+  spawning_process_id_ = spawning_process_id;
+  spawning_host_id_ = spawning_host_id;
+}
+
+const AppCacheHost* AppCacheHost::GetSpawningHost() const {
+  AppCacheBackendImpl* backend = service_->GetBackend(spawning_process_id_);
+  return backend ? backend->GetHost(spawning_host_id_) : NULL;
+}
+
 AppCacheHost* AppCacheHost::GetParentAppCacheHost() const {
   DCHECK(is_for_dedicated_worker());
   AppCacheBackendImpl* backend = service_->GetBackend(parent_process_id_);
@@ -356,6 +352,7 @@ void AppCacheHost::FinishCacheSelection(
     // context being navigated.
     DCHECK(cache->owning_group());
     DCHECK(new_master_entry_url_.is_empty());
+    DCHECK_EQ(cache->owning_group()->manifest_url(), preferred_manifest_url_);
     AppCacheGroup* owing_group = cache->owning_group();
     const char* kFormatString =
         "Document was loaded from Application Cache with manifest %s";
@@ -376,6 +373,7 @@ void AppCacheHost::FinishCacheSelection(
     // resource from which document was loaded as the new master resourse.
     DCHECK(!group->is_obsolete());
     DCHECK(new_master_entry_url_.is_valid());
+    DCHECK_EQ(group->manifest_url(), preferred_manifest_url_);
     const char* kFormatString = group->HasCache() ?
         "Adding master entry to Application Cache with manifest %s" :
         "Creating Application Cache with manifest %s";

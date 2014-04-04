@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -11,7 +11,7 @@
 #include <chrome/common/pref_store.h>
 
 // This interface is complementary to the PrefStore interface, declaring
-// additional functionatliy that adds support for setting values and persisting
+// additional functionality that adds support for setting values and persisting
 // the data to some backing store.
 class PersistentPrefStore : public PrefStore {
  public:
@@ -34,18 +34,24 @@ class PersistentPrefStore : public PrefStore {
     PREF_READ_ERROR_FILE_NOT_SPECIFIED
   };
 
+  // Equivalent to PrefStore::GetValue but returns a mutable value.
+  virtual ReadResult GetMutableValue(const std::string& key,
+                                     Value** result) = 0;
+
+  // Triggers a value changed notification. This function needs to be called
+  // if one retrieves a list or dictionary with GetMutableValue and change its
+  // value. SetValue takes care of notifications itself. Note that
+  // ReportValueChanged will trigger notifications even if nothing has changed.
+  virtual void ReportValueChanged(const std::string& key) = 0;
+
   // Sets a |value| for |key| in the store. Assumes ownership of |value|, which
   // must be non-NULL.
   virtual void SetValue(const std::string& key, Value* value) = 0;
 
   // Same as SetValue, but doesn't generate notifications. This is used by
-  // GetMutableDictionary() and GetMutableList() in order to put empty entries
+  // PrefService::GetMutableUserPref() in order to put empty entries
   // into the user pref store. Using SetValue is not an option since existing
   // tests rely on the number of notifications generated.
-  //
-  // TODO(mnissler, danno): Can we replace GetMutableDictionary() and
-  // GetMutableList() with something along the lines of ScopedPrefUpdate that
-  // updates the value in the end?
   virtual void SetValueSilently(const std::string& key, Value* value) = 0;
 
   // Removes the value for |key|.
@@ -64,6 +70,9 @@ class PersistentPrefStore : public PrefStore {
 
   // Schedules an asynchronous write operation.
   virtual void ScheduleWritePrefs() = 0;
+
+  // Lands any pending writes to disk.
+  virtual void CommitPendingWrite() = 0;
 };
 
 #endif  // CHROME_COMMON_PERSISTENT_PREF_STORE_H_

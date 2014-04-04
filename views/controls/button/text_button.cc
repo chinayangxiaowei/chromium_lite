@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,11 +8,12 @@
 
 #include "base/logging.h"
 #include "base/utf_string_conversions.h"
-#include "gfx/canvas_skia.h"
 #include "ui/base/animation/throb_animation.h"
 #include "ui/base/resource/resource_bundle.h"
+#include "ui/gfx/canvas_skia.h"
 #include "views/controls/button/button.h"
-#include "views/event.h"
+#include "views/events/event.h"
+#include "views/widget/widget.h"
 #include "grit/app_resources.h"
 
 namespace views {
@@ -194,6 +195,10 @@ TextButton::TextButton(ButtonListener* listener, const std::wstring& text)
       color_hover_(kHoverColor),
       text_halo_color_(0),
       has_text_halo_(false),
+      active_text_shadow_color_(0),
+      inactive_text_shadow_color_(0),
+      has_shadow_(false),
+      shadow_offset_(gfx::Point(1, 1)),
       has_hover_icon_(false),
       has_pushed_icon_(false),
       max_width_(0),
@@ -257,6 +262,17 @@ void TextButton::SetTextHaloColor(SkColor color) {
   has_text_halo_ = true;
 }
 
+void TextButton::SetTextShadowColors(SkColor active_color,
+                                     SkColor inactive_color) {
+  active_text_shadow_color_ = active_color;
+  inactive_text_shadow_color_ = inactive_color;
+  has_shadow_ = true;
+}
+
+void TextButton::SetTextShadowOffset(int x, int y) {
+  shadow_offset_.SetPoint(x, y);
+}
+
 void TextButton::ClearMaxTextSize() {
   max_text_size_ = text_size_;
 }
@@ -269,10 +285,14 @@ void TextButton::SetShowMultipleIconStates(bool show_multiple_icon_states) {
   show_multiple_icon_states_ = show_multiple_icon_states;
 }
 
-void TextButton::Paint(gfx::Canvas* canvas, bool for_drag) {
-  if (!for_drag) {
-    PaintBackground(canvas);
+void TextButton::ClearEmbellishing() {
+  has_shadow_ = false;
+  has_text_halo_ = false;
+}
 
+void TextButton::PaintButton(gfx::Canvas* canvas, PaintButtonMode mode) {
+  if (mode == PB_NORMAL) {
+    OnPaintBackground(canvas);
     if (show_multiple_icon_states_ && hover_animation_->is_animating()) {
       // Draw the hover bitmap into an offscreen buffer, then blend it
       // back into the current canvas.
@@ -280,15 +300,15 @@ void TextButton::Paint(gfx::Canvas* canvas, bool for_drag) {
           static_cast<int>(hover_animation_->GetCurrentValue() * 255));
       canvas->AsCanvasSkia()->drawARGB(0, 255, 255, 255,
                                        SkXfermode::kClear_Mode);
-      PaintBorder(canvas);
+      OnPaintBorder(canvas);
       canvas->Restore();
     } else if ((show_multiple_icon_states_ &&
                 (state_ == BS_HOT || state_ == BS_PUSHED)) ||
                (state_ == BS_NORMAL && normal_has_border_)) {
-      PaintBorder(canvas);
+      OnPaintBorder(canvas);
     }
 
-    PaintFocusBorder(canvas);
+    OnPaintFocusBorder(canvas);
   }
 
   SkBitmap icon = icon_;
@@ -338,12 +358,12 @@ void TextButton::Paint(gfx::Canvas* canvas, bool for_drag) {
     // canvas, we can not mirror the button by simply flipping the canvas as
     // doing this will mirror the text itself. Flipping the canvas will also
     // make the icons look wrong because icons are almost always represented as
-    // direction insentisive bitmaps and such bitmaps should never be flipped
+    // direction-insensitive bitmaps and such bitmaps should never be flipped
     // horizontally.
     //
     // Due to the above, we must perform the flipping manually for RTL UIs.
     gfx::Rect text_bounds(text_x, text_y, text_width, text_size_.height());
-    text_bounds.set_x(MirroredLeftPointForRect(text_bounds));
+    text_bounds.set_x(GetMirroredXForRect(text_bounds));
 
     SkColor text_color = (show_multiple_icon_states_ &&
         (state() == BS_HOT || state() == BS_PUSHED)) ? color_hover_ : color_;
@@ -351,7 +371,7 @@ void TextButton::Paint(gfx::Canvas* canvas, bool for_drag) {
     int draw_string_flags = gfx::CanvasSkia::DefaultCanvasTextAlignment() |
         PrefixTypeToCanvasType(prefix_type_);
 
-    if (for_drag) {
+    if (mode == PB_FOR_DRAG) {
 #if defined(OS_WIN)
       // TODO(erg): Either port DrawStringWithHalo to linux or find an
       // alternative here.
@@ -374,6 +394,26 @@ void TextButton::Paint(gfx::Canvas* canvas, bool for_drag) {
           text_, font_, text_color, text_halo_color_,
           text_bounds.x(), text_bounds.y(), text_bounds.width(),
           text_bounds.height(), draw_string_flags);
+    } else if (has_shadow_) {
+      SkColor shadow_color =
+          GetWidget()->IsActive() ? active_text_shadow_color_ :
+                                    inactive_text_shadow_color_;
+      canvas->DrawStringInt(text_,
+                            font_,
+                            shadow_color,
+                            text_bounds.x() + shadow_offset_.x(),
+                            text_bounds.y() + shadow_offset_.y(),
+                            text_bounds.width(),
+                            text_bounds.height(),
+                            draw_string_flags);
+      canvas->DrawStringInt(text_,
+                            font_,
+                            text_color,
+                            text_bounds.x(),
+                            text_bounds.y(),
+                            text_bounds.width(),
+                            text_bounds.height(),
+                            draw_string_flags);
     } else {
       canvas->DrawStringInt(text_,
                             font_,
@@ -391,7 +431,7 @@ void TextButton::Paint(gfx::Canvas* canvas, bool for_drag) {
 
     // Mirroring the icon position if necessary.
     gfx::Rect icon_bounds(icon_x, icon_y, icon.width(), icon.height());
-    icon_bounds.set_x(MirroredLeftPointForRect(icon_bounds));
+    icon_bounds.set_x(GetMirroredXForRect(icon_bounds));
     canvas->DrawBitmapInt(icon, icon_bounds.x(), icon_bounds.y());
   }
 }
@@ -457,8 +497,8 @@ std::string TextButton::GetClassName() const {
   return kViewClassName;
 }
 
-void TextButton::Paint(gfx::Canvas* canvas) {
-  Paint(canvas, false);
+void TextButton::OnPaint(gfx::Canvas* canvas) {
+  PaintButton(canvas, PB_NORMAL);
 }
 
 }  // namespace views

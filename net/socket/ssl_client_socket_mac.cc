@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -563,7 +563,7 @@ int SSLClientSocketMac::Connect(CompletionCallback* callback) {
 
   int rv = InitializeSSLContext();
   if (rv != OK) {
-    net_log_.EndEvent(NetLog::TYPE_SSL_CONNECT, NULL);
+    net_log_.EndEventWithNetErrorCode(NetLog::TYPE_SSL_CONNECT, rv);
     return rv;
   }
 
@@ -572,7 +572,7 @@ int SSLClientSocketMac::Connect(CompletionCallback* callback) {
   if (rv == ERR_IO_PENDING) {
     user_connect_callback_ = callback;
   } else {
-    net_log_.EndEvent(NetLog::TYPE_SSL_CONNECT, NULL);
+    net_log_.EndEventWithNetErrorCode(NetLog::TYPE_SSL_CONNECT, rv);
   }
   return rv;
 }
@@ -616,6 +616,14 @@ bool SSLClientSocketMac::IsConnectedAndIdle() const {
 
 int SSLClientSocketMac::GetPeerAddress(AddressList* address) const {
   return transport_->socket()->GetPeerAddress(address);
+}
+
+int SSLClientSocketMac::GetLocalAddress(IPEndPoint* address) const {
+  return transport_->socket()->GetLocalAddress(address);
+}
+
+const BoundNetLog& SSLClientSocketMac::NetLog() const {
+  return net_log_;
 }
 
 void SSLClientSocketMac::SetSubresourceSpeculation() {
@@ -703,11 +711,11 @@ void SSLClientSocketMac::GetSSLInfo(SSLInfo* ssl_info) {
     return;
   }
 
-  // set cert
   ssl_info->cert = server_cert_;
-
-  // update status
   ssl_info->cert_status = server_cert_verify_result_.cert_status;
+  ssl_info->public_key_hashes = server_cert_verify_result_.public_key_hashes;
+  ssl_info->is_issued_by_known_root =
+      server_cert_verify_result_.is_issued_by_known_root;
 
   // security info
   SSLCipherSuite suite;
@@ -906,7 +914,7 @@ void SSLClientSocketMac::OnHandshakeIOComplete(int result) {
       DoReadCallback(rv);
       return;
     }
-    net_log_.EndEvent(NetLog::TYPE_SSL_CONNECT, NULL);
+    net_log_.EndEventWithNetErrorCode(NetLog::TYPE_SSL_CONNECT, rv);
     DoConnectCallback(rv);
   }
 }

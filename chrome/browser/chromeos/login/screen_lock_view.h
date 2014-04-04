@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,9 +8,9 @@
 
 #include "chrome/browser/chromeos/login/helper.h"
 #include "chrome/browser/chromeos/login/user_view.h"
-#include "chrome/common/notification_observer.h"
-#include "chrome/common/notification_registrar.h"
-#include "views/controls/textfield/textfield.h"
+#include "content/common/notification_observer.h"
+#include "content/common/notification_registrar.h"
+#include "views/controls/textfield/textfield_controller.h"
 #include "views/view.h"
 
 namespace views {
@@ -29,7 +29,7 @@ class ScreenLockerTester;
 // ScreenLockView creates view components necessary to authenticate
 // a user to unlock the screen.
 class ScreenLockView : public ThrobberHostView,
-                       public views::Textfield::Controller,
+                       public views::TextfieldController,
                        public NotificationObserver,
                        public UserView::Delegate {
  public:
@@ -47,31 +47,25 @@ class ScreenLockView : public ThrobberHostView,
   // Returns the bounds of the password field in ScreenLocker's coordinate.
   gfx::Rect GetPasswordBoundsRelativeTo(const views::View* view);
 
-  // views::View implementation:
+  // views::View:
   virtual void SetEnabled(bool enabled);
   virtual void Layout();
   virtual gfx::Size GetPreferredSize();
 
-  // NotificationObserver implementation:
+  // NotificationObserver:
   virtual void Observe(NotificationType type,
                        const NotificationSource& source,
                        const NotificationDetails& details);
 
-  // views::Textfield::Controller implementation:
+  // views::TextfieldController:
   virtual void ContentsChanged(views::Textfield* sender,
-                               const string16& new_contents) {}
+                               const string16& new_contents);
   virtual bool HandleKeyEvent(views::Textfield* sender,
                               const views::KeyEvent& keystroke);
 
-  // UserView::Delegate implementation:
+  // UserView::Delegate:
   virtual void OnSignout();
   virtual bool IsUserSelected() const { return true; }
-
- protected:
-  // views::View implementation:
-  virtual void ViewHierarchyChanged(bool is_add,
-                                    views::View* parent,
-                                    views::View* child);
 
  private:
   friend class test::ScreenLockerTester;

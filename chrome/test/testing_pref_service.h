@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,6 +6,7 @@
 #define CHROME_TEST_TESTING_PREF_SERVICE_H_
 #pragma once
 
+#include "base/memory/ref_counted.h"
 #include "chrome/browser/prefs/pref_service.h"
 
 class TestingPrefStore;
@@ -13,11 +14,9 @@ class TestingPrefStore;
 // A PrefService subclass for testing. It operates totally in memory and
 // provides additional API for manipulating preferences at the different levels
 // (managed, extension, user) conveniently.
-class TestingPrefService : public PrefService {
+class TestingPrefServiceBase : public PrefService {
  public:
-  // Create an empty instance.
-  TestingPrefService();
-  virtual ~TestingPrefService() {}
+  virtual ~TestingPrefServiceBase();
 
   // Read the value of a preference from the managed layer. Returns NULL if the
   // preference is not defined at the managed layer.
@@ -36,6 +35,17 @@ class TestingPrefService : public PrefService {
   void SetUserPref(const char* path, Value* value);
   void RemoveUserPref(const char* path);
 
+  // Similar to the above, but for recommended policy preferences.
+  const Value* GetRecommendedPref(const char* path) const;
+  void SetRecommendedPref(const char* path, Value* value);
+  void RemoveRecommendedPref(const char* path);
+
+ protected:
+  TestingPrefServiceBase(
+      TestingPrefStore* managed_platform_prefs,
+      TestingPrefStore* user_prefs,
+      TestingPrefStore* recommended_platform_prefs);
+
  private:
   // Reads the value of the preference indicated by |path| from |pref_store|.
   // Returns NULL if the preference was not found.
@@ -48,10 +58,20 @@ class TestingPrefService : public PrefService {
   void RemovePref(TestingPrefStore* pref_store, const char* path);
 
   // Pointers to the pref stores our value store uses.
-  TestingPrefStore* managed_platform_prefs_;  // weak
-  TestingPrefStore* device_management_prefs_;  // weak
-  TestingPrefStore* user_prefs_;  // weak
+  scoped_refptr<TestingPrefStore> managed_platform_prefs_;
+  scoped_refptr<TestingPrefStore> user_prefs_;
+  scoped_refptr<TestingPrefStore> recommended_platform_prefs_;
 
+  DISALLOW_COPY_AND_ASSIGN(TestingPrefServiceBase);
+};
+
+// Class for simplified construction of TestPrefServiceBase objects.
+class TestingPrefService : public TestingPrefServiceBase {
+ public:
+  TestingPrefService();
+  virtual ~TestingPrefService();
+
+ private:
   DISALLOW_COPY_AND_ASSIGN(TestingPrefService);
 };
 

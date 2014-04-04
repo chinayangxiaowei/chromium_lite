@@ -1,4 +1,4 @@
-// Copyright (c) 2006-2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -15,8 +15,8 @@
 #include "base/eintr_wrapper.h"
 #include "base/file_path.h"
 #include "base/file_util.h"
+#include "base/memory/scoped_ptr.h"
 #include "base/message_loop.h"
-#include "base/scoped_ptr.h"
 #include "base/test/multiprocess_test.h"
 #include "base/test/test_timeouts.h"
 #include "testing/multiprocess_func_list.h"
@@ -316,6 +316,25 @@ TEST_F(IPCChannelPosixTest, MultiConnection) {
   EXPECT_EQ(exit_code, 0);
   ASSERT_EQ(IPCChannelPosixTestListener::CHANNEL_ERROR, listener.status());
   ASSERT_FALSE(channel.HasAcceptedConnection());
+}
+
+TEST_F(IPCChannelPosixTest, DoubleServer) {
+  // Test setting up two servers with the same name.
+  IPCChannelPosixTestListener listener(false);
+  IPCChannelPosixTestListener listener2(false);
+  IPC::ChannelHandle chan_handle(kConnectionSocketTestName);
+  IPC::Channel channel(chan_handle, IPC::Channel::MODE_SERVER, &listener);
+  IPC::Channel channel2(chan_handle, IPC::Channel::MODE_SERVER, &listener2);
+  ASSERT_TRUE(channel.Connect());
+  ASSERT_FALSE(channel2.Connect());
+}
+
+TEST_F(IPCChannelPosixTest, BadMode) {
+  // Test setting up two servers with a bad mode.
+  IPCChannelPosixTestListener listener(false);
+  IPC::ChannelHandle chan_handle(kConnectionSocketTestName);
+  IPC::Channel channel(chan_handle, IPC::Channel::MODE_NONE, &listener);
+  ASSERT_FALSE(channel.Connect());
 }
 
 // A long running process that connects to us

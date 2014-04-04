@@ -10,7 +10,7 @@
 #include <shlobj.h>
 #include <string>
 
-#include "base/scoped_comptr_win.h"
+#include "base/win/scoped_comptr.h"
 #include "ui/base/dragdrop/os_exchange_data.h"
 
 namespace ui {
@@ -112,7 +112,7 @@ class DataObjectImpl : public DownloadFileObserver,
   typedef std::vector<StoredDataInfo*> StoredData;
   StoredData contents_;
 
-  ScopedComPtr<IDataObject> source_object_;
+  base::win::ScopedComPtr<IDataObject> source_object_;
 
   bool is_aborting_;
   bool in_async_mode_;
@@ -142,23 +142,23 @@ class OSExchangeDataProviderWin : public OSExchangeData::Provider {
   IAsyncOperation* async_operation() const { return data_.get(); }
 
   // OSExchangeData::Provider methods.
-  virtual void SetString(const std::wstring& data);
-  virtual void SetURL(const GURL& url, const std::wstring& title);
-  virtual void SetFilename(const std::wstring& full_path);
+  virtual void SetString(const string16& data);
+  virtual void SetURL(const GURL& url, const string16& title);
+  virtual void SetFilename(const FilePath& path);
   virtual void SetPickledData(OSExchangeData::CustomFormat format,
                               const Pickle& data);
-  virtual void SetFileContents(const std::wstring& filename,
+  virtual void SetFileContents(const FilePath& filename,
                                const std::string& file_contents);
-  virtual void SetHtml(const std::wstring& html, const GURL& base_url);
+  virtual void SetHtml(const string16& html, const GURL& base_url);
 
-  virtual bool GetString(std::wstring* data) const;
-  virtual bool GetURLAndTitle(GURL* url, std::wstring* title) const;
-  virtual bool GetFilename(std::wstring* full_path) const;
+  virtual bool GetString(string16* data) const;
+  virtual bool GetURLAndTitle(GURL* url, string16* title) const;
+  virtual bool GetFilename(FilePath* path) const;
   virtual bool GetPickledData(OSExchangeData::CustomFormat format,
                               Pickle* data) const;
-  virtual bool GetFileContents(std::wstring* filename,
+  virtual bool GetFileContents(FilePath* filename,
                                std::string* file_contents) const;
-  virtual bool GetHtml(std::wstring* html, GURL* base_url) const;
+  virtual bool GetHtml(string16* html, GURL* base_url) const;
   virtual bool HasString() const;
   virtual bool HasURL() const;
   virtual bool HasFile() const;
@@ -170,7 +170,7 @@ class OSExchangeDataProviderWin : public OSExchangeData::Provider {
 
  private:
   scoped_refptr<DataObjectImpl> data_;
-  ScopedComPtr<IDataObject> source_object_;
+  base::win::ScopedComPtr<IDataObject> source_object_;
 
   DISALLOW_COPY_AND_ASSIGN(OSExchangeDataProviderWin);
 };

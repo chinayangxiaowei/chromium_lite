@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -11,7 +11,7 @@
 #include "chrome/browser/defaults.h"
 #include "chrome/browser/net/url_fixer_upper.h"
 #include "chrome/browser/prefs/pref_service.h"
-#include "chrome/browser/prefs/scoped_pref_update.h"
+#include "chrome/browser/prefs/scoped_user_pref_update.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/common/pref_names.h"
 
@@ -70,9 +70,8 @@ void SessionStartupPref::SetStartupPref(PrefService* prefs,
     // Always save the URLs, that way the UI can remain consistent even if the
     // user changes the startup type pref.
     // Ownership of the ListValue retains with the pref service.
-    ScopedPrefUpdate update(prefs, prefs::kURLsToRestoreOnStartup);
-    ListValue* url_pref_list =
-        prefs->GetMutableList(prefs::kURLsToRestoreOnStartup);
+    ListPrefUpdate update(prefs, prefs::kURLsToRestoreOnStartup);
+    ListValue* url_pref_list = update.Get();
     DCHECK(url_pref_list);
     url_pref_list->Clear();
     for (size_t i = 0; i < pref.urls.size(); ++i) {

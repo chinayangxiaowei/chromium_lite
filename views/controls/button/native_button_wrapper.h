@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,12 +6,12 @@
 #define VIEWS_CONTROLS_BUTTON_NATIVE_BUTTON_WRAPPER_H_
 #pragma once
 
-#include "gfx/native_widget_types.h"
+#include "ui/gfx/native_widget_types.h"
 
 namespace views {
 
 class Checkbox;
-class NativeButton;
+class NativeButtonBase;
 class RadioButton;
 class View;
 
@@ -67,7 +67,8 @@ class NativeButtonWrapper {
   static int GetFixedWidth();
 
   // Creates an appropriate NativeButtonWrapper for the platform.
-  static NativeButtonWrapper* CreateNativeButtonWrapper(NativeButton* button);
+  static NativeButtonWrapper* CreateNativeButtonWrapper(
+      NativeButtonBase* button);
   static NativeButtonWrapper* CreateCheckboxWrapper(Checkbox* checkbox);
   static NativeButtonWrapper* CreateRadioButtonWrapper(
       RadioButton* radio_button);

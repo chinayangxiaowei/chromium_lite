@@ -1,15 +1,15 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "base/utf_string_conversions.h"
-#include "chrome/browser/browser_thread.h"
 #include "chrome/browser/speech/speech_input_bubble_controller.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/test/browser_with_test_window_test.h"
 #include "chrome/test/testing_profile.h"
-#include "gfx/rect.h"
+#include "content/browser/browser_thread.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "ui/gfx/rect.h"
 
 class SkBitmap;
 
@@ -59,7 +59,7 @@ class MockSpeechInputBubble : public SpeechInputBubbleBase {
   virtual void Show() {}
   virtual void Hide() {}
   virtual void UpdateLayout() {}
-  virtual void SetImage(const SkBitmap&) {}
+  virtual void UpdateImage() {}
 
  private:
   static BubbleType type_;
@@ -123,7 +123,7 @@ class SpeechInputBubbleControllerTest
   static void ActivateBubble() {
     if (MockSpeechInputBubble::type() ==
         MockSpeechInputBubble::BUBBLE_TEST_FOCUS_CHANGED) {
-      test_fixture_->controller_->SetBubbleRecordingMode(kBubbleCallerId);
+      test_fixture_->controller_->SetBubbleWarmUpMode(kBubbleCallerId);
     } else {
       test_fixture_->controller_->SetBubbleMessage(kBubbleCallerId,
                                                    ASCIIToUTF16("Test"));

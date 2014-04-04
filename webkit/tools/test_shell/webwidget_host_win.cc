@@ -1,11 +1,10 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "webkit/tools/test_shell/webwidget_host.h"
 
 #include "base/logging.h"
-#include "gfx/rect.h"
 #include "skia/ext/platform_canvas.h"
 #include "third_party/WebKit/Source/WebKit/chromium/public/WebInputEvent.h"
 #include "third_party/WebKit/Source/WebKit/chromium/public/WebPopupMenu.h"
@@ -14,6 +13,7 @@
 #include "third_party/WebKit/Source/WebKit/chromium/public/win/WebInputEventFactory.h"
 #include "third_party/WebKit/Source/WebKit/chromium/public/win/WebScreenInfoFactory.h"
 #include "ui/base/win/hwnd_util.h"
+#include "ui/gfx/rect.h"
 #include "webkit/tools/test_shell/test_shell.h"
 
 using WebKit::WebInputEvent;
@@ -251,12 +251,13 @@ void WebWidgetHost::Paint() {
   // Scroll the canvas if necessary
   scroll_rect_ = client_rect.Intersect(scroll_rect_);
   if (!scroll_rect_.IsEmpty()) {
-    HDC hdc = canvas_->getTopPlatformDevice().getBitmapDC();
+    HDC hdc = canvas_->beginPlatformPaint();
 
     RECT damaged_rect, r = scroll_rect_.ToRECT();
     ScrollDC(hdc, scroll_dx_, scroll_dy_, NULL, &r, NULL, &damaged_rect);
 
     PaintRect(gfx::Rect(damaged_rect));
+    canvas_->endPlatformPaint();
   }
   ResetScrollRect();
 

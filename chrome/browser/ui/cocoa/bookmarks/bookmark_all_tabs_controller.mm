@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,11 +7,11 @@
 #include "base/string16.h"
 #include "base/sys_string_conversions.h"
 #include "chrome/browser/bookmarks/bookmark_model.h"
-#include "chrome/browser/tab_contents/tab_contents.h"
 #include "chrome/browser/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_list.h"
 #include "chrome/browser/ui/tab_contents/tab_contents_wrapper.h"
+#include "content/browser/tab_contents/tab_contents.h"
 #include "grit/generated_resources.h"
 #include "ui/base/l10n/l10n_util_mac.h"
 
@@ -63,13 +63,13 @@
   const BookmarkNode* newParentNode = [self selectedNode];
   if (!newParentNode)
     return [NSNumber numberWithBool:NO];
-  int newIndex = newParentNode->GetChildCount();
+  int newIndex = newParentNode->child_count();
   // Create the new folder which will contain all of the tab URLs.
   NSString* newFolderName = [self displayName];
   string16 newFolderString = base::SysNSStringToUTF16(newFolderName);
   BookmarkModel* model = [self bookmarkModel];
-  const BookmarkNode* newFolder = model->AddGroup(newParentNode, newIndex,
-                                                  newFolderString);
+  const BookmarkNode* newFolder = model->AddFolder(newParentNode, newIndex,
+                                                   newFolderString);
   // Get a list of all open tabs, create nodes for them, and add
   // to the new folder node.
   [self UpdateActiveTabPairs];

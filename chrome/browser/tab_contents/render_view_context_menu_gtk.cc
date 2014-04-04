@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,7 +9,7 @@
 #include "base/string_util.h"
 #include "chrome/app/chrome_command_ids.h"
 #include "chrome/browser/renderer_host/render_widget_host_view_gtk.h"
-#include "chrome/browser/tab_contents/tab_contents.h"
+#include "content/browser/tab_contents/tab_contents.h"
 #include "webkit/glue/context_menu.h"
 
 RenderViewContextMenuGtk::RenderViewContextMenuGtk(
@@ -41,16 +41,7 @@ bool RenderViewContextMenuGtk::GetAcceleratorForCommandId(
 }
 
 void RenderViewContextMenuGtk::Popup(const gfx::Point& point) {
-  RenderWidgetHostView* rwhv = source_tab_contents_->GetRenderWidgetHostView();
-  if (rwhv)
-    rwhv->ShowingContextMenu(true);
-  menu_gtk_->PopupAsContextAt(triggering_event_time_, point);
-}
-
-void RenderViewContextMenuGtk::StoppedShowing() {
-  RenderWidgetHostView* rwhv = source_tab_contents_->GetRenderWidgetHostView();
-  if (rwhv)
-    rwhv->ShowingContextMenu(false);
+  menu_gtk_->PopupAsContext(point, triggering_event_time_);
 }
 
 bool RenderViewContextMenuGtk::AlwaysShowIconForCmd(int command_id) const {

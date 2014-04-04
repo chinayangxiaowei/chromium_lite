@@ -1,21 +1,27 @@
-// Copyright (c) 2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/autofill/form_field.h"
 
+#include <stddef.h>
+#include <string>
+#include <utility>
+
+#include "base/logging.h"
 #include "base/string_util.h"
+#include "base/stringprintf.h"
 #include "base/utf_string_conversions.h"
 #include "chrome/browser/autofill/address_field.h"
 #include "chrome/browser/autofill/autofill_field.h"
 #include "chrome/browser/autofill/credit_card_field.h"
-#include "chrome/browser/autofill/fax_field.h"
+#include "chrome/browser/autofill/field_types.h"
+#include "chrome/browser/autofill/form_structure.h"
 #include "chrome/browser/autofill/name_field.h"
 #include "chrome/browser/autofill/phone_field.h"
-#include "third_party/WebKit/Source/WebKit/chromium/public/WebRegularExpression.h"
-#include "third_party/WebKit/Source/WebKit/chromium/public/WebString.h"
 #include "grit/autofill_resources.h"
 #include "ui/base/l10n/l10n_util.h"
+#include "unicode/regex.h"
 
 // Field names from the ECML specification; see RFC 3106.  We've
 // made these names lowercase since we convert labels and field names to
@@ -64,28 +70,32 @@ const char kEcmlCardExpireDay[] = "ecom_payment_card_expdate_day";
 const char kEcmlCardExpireMonth[] = "ecom_payment_card_expdate_month";
 const char kEcmlCardExpireYear[] = "ecom_payment_card_expdate_year";
 
-namespace {
+namespace autofill {
 
-// The name of the hidden form control element.
-const char* const kControlTypeHidden = "hidden";
+bool MatchString(const string16& input, const string16& pattern) {
+  UErrorCode status = U_ZERO_ERROR;
+  icu::UnicodeString icu_pattern(pattern.data(), pattern.length());
+  icu::UnicodeString icu_input(input.data(), input.length());
+  icu::RegexMatcher matcher(icu_pattern, icu_input,
+                            UREGEX_CASE_INSENSITIVE, status);
+  DCHECK(U_SUCCESS(status));
 
-// The name of the radio form control element.
-const char* const kControlTypeRadio = "radio";
+  UBool match = matcher.find(0, status);
+  DCHECK(U_SUCCESS(status));
+  return !!match;
+}
 
-// The name of the checkbox form control element.
-const char* const kControlTypeCheckBox = "checkbox";
-
-}  // namespace
+}  // namespace autofill
 
 class EmailField : public FormField {
  public:
   virtual bool GetFieldInfo(FieldTypeMap* field_type_map) const {
-    bool ok = Add(field_type_map, field_, AutoFillType(EMAIL_ADDRESS));
+    bool ok = Add(field_type_map, field_, AutofillType(EMAIL_ADDRESS));
     DCHECK(ok);
     return true;
   }
 
-  static EmailField* Parse(std::vector<AutoFillField*>::const_iterator* iter,
+  static EmailField* Parse(std::vector<AutofillField*>::const_iterator* iter,
                           bool is_ecml) {
     string16 pattern;
     if (is_ecml) {
@@ -94,7 +104,7 @@ class EmailField : public FormField {
       pattern = l10n_util::GetStringUTF16(IDS_AUTOFILL_EMAIL_RE);
     }
 
-    AutoFillField* field;
+    AutofillField* field;
     if (ParseText(iter, pattern, &field))
       return new EmailField(field);
 
@@ -102,9 +112,9 @@ class EmailField : public FormField {
   }
 
  private:
-  explicit EmailField(AutoFillField *field) : field_(field) {}
+  explicit EmailField(AutofillField *field) : field_(field) {}
 
-  AutoFillField* field_;
+  AutofillField* field_;
 };
 
 FormFieldType FormField::GetFormFieldType() const {
@@ -112,59 +122,37 @@ FormFieldType FormField::GetFormFieldType() const {
 }
 
 // static
-bool FormField::Match(AutoFillField* field,
+bool FormField::Match(AutofillField* field,
                       const string16& pattern,
                       bool match_label_only) {
   if (match_label_only) {
-    if (MatchLabel(field, pattern)) {
+    if (autofill::MatchString(field->label, pattern)) {
       return true;
     }
   } else {
     // For now, we apply the same pattern to the field's label and the field's
     // name.  Matching the name is a bit of a long shot for many patterns, but
     // it generally doesn't hurt to try.
-    if (MatchLabel(field, pattern) || MatchName(field, pattern)) {
+    if (autofill::MatchString(field->label, pattern) ||
+        autofill::MatchString(field->name, pattern)) {
       return true;
     }
   }
-
   return false;
 }
 
-// static
-bool FormField::MatchName(AutoFillField* field, const string16& pattern) {
-  // TODO(jhawkins): Remove StringToLowerASCII.  WebRegularExpression needs to
-  // be fixed to take WebTextCaseInsensitive into account.
-  WebKit::WebRegularExpression re(WebKit::WebString(pattern),
-                                  WebKit::WebTextCaseInsensitive);
-  bool match = re.match(
-      WebKit::WebString(StringToLowerASCII(field->name()))) != -1;
-  return match;
-}
 
-// static
-bool FormField::MatchLabel(AutoFillField* field, const string16& pattern) {
-  // TODO(jhawkins): Remove StringToLowerASCII.  WebRegularExpression needs to
-  // be fixed to take WebTextCaseInsensitive into account.
-  WebKit::WebRegularExpression re(WebKit::WebString(pattern),
-                                  WebKit::WebTextCaseInsensitive);
-  bool match = re.match(
-      WebKit::WebString(StringToLowerASCII(field->label()))) != -1;
-  return match;
-}
 
 // static
 FormField* FormField::ParseFormField(
-    std::vector<AutoFillField*>::const_iterator* iter,
+    std::vector<AutofillField*>::const_iterator* iter,
     bool is_ecml) {
   FormField *field;
   field = EmailField::Parse(iter, is_ecml);
   if (field != NULL)
     return field;
+  // Parses both phone and fax.
   field = PhoneField::Parse(iter, is_ecml);
-  if (field != NULL)
-    return field;
-  field = FaxField::Parse(iter);
   if (field != NULL)
     return field;
   field = AddressField::Parse(iter, is_ecml);
@@ -180,46 +168,40 @@ FormField* FormField::ParseFormField(
 }
 
 // static
-bool FormField::ParseText(std::vector<AutoFillField*>::const_iterator* iter,
+bool FormField::ParseText(std::vector<AutofillField*>::const_iterator* iter,
                           const string16& pattern) {
-  AutoFillField* field;
+  AutofillField* field;
   return ParseText(iter, pattern, &field);
 }
 
 // static
-bool FormField::ParseText(std::vector<AutoFillField*>::const_iterator* iter,
+bool FormField::ParseText(std::vector<AutofillField*>::const_iterator* iter,
                           const string16& pattern,
-                          AutoFillField** dest) {
+                          AutofillField** dest) {
   return ParseText(iter, pattern, dest, false);
 }
 
 // static
 bool FormField::ParseEmptyText(
-    std::vector<AutoFillField*>::const_iterator* iter,
-    AutoFillField** dest) {
+    std::vector<AutofillField*>::const_iterator* iter,
+    AutofillField** dest) {
   return ParseLabelText(iter, ASCIIToUTF16("^$"), dest);
 }
 
 // static
 bool FormField::ParseLabelText(
-    std::vector<AutoFillField*>::const_iterator* iter,
+    std::vector<AutofillField*>::const_iterator* iter,
     const string16& pattern,
-    AutoFillField** dest) {
+    AutofillField** dest) {
   return ParseText(iter, pattern, dest, true);
 }
 
 // static
-bool FormField::ParseText(std::vector<AutoFillField*>::const_iterator* iter,
+bool FormField::ParseText(std::vector<AutofillField*>::const_iterator* iter,
                           const string16& pattern,
-                          AutoFillField** dest,
+                          AutofillField** dest,
                           bool match_label_only) {
-  // Some forms have one or more hidden fields before each visible input; skip
-  // past these.
-  while (**iter && LowerCaseEqualsASCII((**iter)->form_control_type(),
-                                        kControlTypeHidden))
-    (*iter)++;
-
-  AutoFillField* field = **iter;
+  AutofillField* field = **iter;
   if (!field)
     return false;
 
@@ -235,14 +217,15 @@ bool FormField::ParseText(std::vector<AutoFillField*>::const_iterator* iter,
 
 // static
 bool FormField::ParseLabelAndName(
-    std::vector<AutoFillField*>::const_iterator* iter,
+    std::vector<AutofillField*>::const_iterator* iter,
     const string16& pattern,
-    AutoFillField** dest) {
-  AutoFillField* field = **iter;
+    AutofillField** dest) {
+  AutofillField* field = **iter;
   if (!field)
     return false;
 
-  if (MatchLabel(field, pattern) && MatchName(field, pattern)) {
+  if (autofill::MatchString(field->label, pattern) &&
+      autofill::MatchString(field->name, pattern)) {
     if (dest)
       *dest = field;
     (*iter)++;
@@ -253,14 +236,14 @@ bool FormField::ParseLabelAndName(
 }
 
 // static
-bool FormField::ParseEmpty(std::vector<AutoFillField*>::const_iterator* iter) {
+bool FormField::ParseEmpty(std::vector<AutofillField*>::const_iterator* iter) {
   // TODO(jhawkins): Handle select fields.
   return ParseLabelAndName(iter, ASCIIToUTF16("^$"), NULL);
 }
 
 // static
-bool FormField::Add(FieldTypeMap* field_type_map, AutoFillField* field,
-               const AutoFillType& type) {
+bool FormField::Add(FieldTypeMap* field_type_map, AutofillField* field,
+               const AutofillType& type) {
   // Several fields are optional.
   if (field)
     field_type_map->insert(make_pair(field->unique_name(), type.field_type()));
@@ -287,19 +270,8 @@ FormFieldSet::FormFieldSet(FormStructure* fields) {
   bool is_ecml = CheckECML(fields);
 
   // Parse fields.
-  std::vector<AutoFillField*>::const_iterator field = fields->begin();
+  std::vector<AutofillField*>::const_iterator field = fields->begin();
   while (field != fields->end() && *field != NULL) {
-    // Don't parse hidden fields or radio or checkbox controls.
-    if (LowerCaseEqualsASCII((*field)->form_control_type(),
-                             kControlTypeHidden) ||
-        LowerCaseEqualsASCII((*field)->form_control_type(),
-                             kControlTypeRadio) ||
-        LowerCaseEqualsASCII((*field)->form_control_type(),
-                             kControlTypeCheckBox)) {
-      field++;
-      continue;
-    }
-
     FormField* form_field = FormField::ParseFormField(&field, is_ecml);
     if (!form_field) {
       field++;
@@ -383,7 +355,7 @@ bool FormFieldSet::CheckECML(FormStructure* fields) {
 
   const string16 ecom(ASCIIToUTF16("ecom"));
   for (size_t index = 0; index < num_fields; ++index) {
-    const string16& utf16_name = fields->field(index)->name();
+    const string16& utf16_name = fields->field(index)->name;
     if (StartsWith(utf16_name, ecom, true)) {
       std::string name(UTF16ToASCII(utf16_name));
       for (size_t i = 0; i < ARRAYSIZE_UNSAFE(form_fields); ++i) {

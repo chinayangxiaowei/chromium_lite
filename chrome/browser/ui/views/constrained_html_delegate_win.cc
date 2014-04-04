@@ -2,15 +2,14 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "chrome/browser/dom_ui/constrained_html_ui.h"
+#include "chrome/browser/ui/webui/constrained_html_ui.h"
 
-#include "chrome/browser/dom_ui/html_dialog_tab_contents_delegate.h"
-#include "chrome/browser/dom_ui/html_dialog_ui.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/tab_contents/tab_contents.h"
 #include "chrome/browser/ui/views/tab_contents/tab_contents_container.h"
-#include "gfx/rect.h"
-#include "ipc/ipc_message.h"
+#include "chrome/browser/ui/webui/html_dialog_tab_contents_delegate.h"
+#include "chrome/browser/ui/webui/html_dialog_ui.h"
+#include "content/browser/tab_contents/tab_contents.h"
+#include "ui/gfx/rect.h"
 #include "views/view.h"
 #include "views/widget/widget_win.h"
 #include "views/window/window_delegate.h"
@@ -34,12 +33,12 @@ class ConstrainedHtmlDelegateWin : public TabContentsContainer,
     return this;
   }
   virtual void WindowClosing() {
+    html_delegate_->OnWindowClosed();
     html_delegate_->OnDialogClosed("");
   }
 
   // HtmlDialogTabContentsDelegate interface.
   void MoveContents(TabContents* source, const gfx::Rect& pos) {}
-  void ToolbarSizeChanged(TabContents* source, bool is_animating) {}
   void HandleKeyboardEvent(const NativeWebKeyboardEvent& event) {}
 
   // Overridden from TabContentsContainer.
@@ -101,7 +100,7 @@ void ConstrainedHtmlDelegateWin::OnDialogClose() {
 }
 
 // static
-void ConstrainedHtmlUI::CreateConstrainedHtmlDialog(
+ConstrainedWindow* ConstrainedHtmlUI::CreateConstrainedHtmlDialog(
     Profile* profile,
     HtmlDialogUIDelegate* delegate,
     TabContents* container) {
@@ -110,4 +109,5 @@ void ConstrainedHtmlUI::CreateConstrainedHtmlDialog(
   ConstrainedWindow* constrained_window =
       container->CreateConstrainedDialog(constrained_delegate);
   constrained_delegate->set_window(constrained_window);
+  return constrained_window;
 }

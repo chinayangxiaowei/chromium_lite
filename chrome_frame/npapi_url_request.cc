@@ -6,6 +6,7 @@
 
 #include "base/string_number_conversions.h"
 #include "base/threading/platform_thread.h"
+#include "chrome/common/automation_messages.h"
 #include "chrome_frame/chrome_frame_npapi.h"
 #include "chrome_frame/np_browser_functions.h"
 #include "chrome_frame/np_utils.h"
@@ -69,6 +70,9 @@ NPAPIUrlRequest::~NPAPIUrlRequest() {
 bool NPAPIUrlRequest::Start() {
   NPError result = NPERR_GENERIC_ERROR;
   DVLOG(1) << "Starting URL request: " << url();
+  // Initialize the net::HostPortPair structure from the url
+  socket_address_ = net::HostPortPair::FromURL(GURL(url()));
+
   if (LowerCaseEqualsASCII(method(), "get")) {
     // TODO(joshia): if we have extra headers for HTTP GET, then implement
     // it using XHR
@@ -144,7 +148,8 @@ NPError NPAPIUrlRequest::OnStreamCreated(const char* mime_type,
   // Add support for passing persistent cookies and information about any URL
   // redirects to Chrome.
   delegate_->OnResponseStarted(id(), mime_type, stream->headers, stream->end,
-      base::Time::FromTimeT(stream->lastmodified), std::string(), 0);
+      base::Time::FromTimeT(stream->lastmodified), std::string(), 0,
+      socket_address_);
   return NPERR_NO_ERROR;
 }
 
@@ -268,26 +273,17 @@ void NPAPIUrlRequestManager::StopAll() {
 
 void NPAPIUrlRequestManager::SetCookiesForUrl(const GURL& url,
                                               const std::string& cookie) {
-  // Use the newer NPAPI way if available
   if (npapi::VersionMinor() >= NPVERS_HAS_URL_AND_AUTH_INFO) {
     npapi::SetValueForURL(instance_, NPNURLVCookie, url.spec().c_str(),
                           cookie.c_str(), cookie.length());
   } else {
-    DVLOG(1) << "Host does not support NPVERS_HAS_URL_AND_AUTH_INFO.  "
-                "Attempting to set cookie using XPCOM cookie service";
-    if (np_utils::SetCookiesUsingXPCOMCookieService(instance_, url.spec(),
-                                                    cookie)) {
-      DVLOG(1) << "Successfully set cookies using XPCOM cookie service "
-               << cookie;
-    } else {
-      NOTREACHED() << "Failed to set cookies for host";
-    }
+    NOTREACHED() << "Unsupported version";
   }
 }
 
 void NPAPIUrlRequestManager::GetCookiesForUrl(const GURL& url, int cookie_id) {
   std::string cookie_string;
-  bool success = true;
+  bool success = false;
 
   if (npapi::VersionMinor() >= NPVERS_HAS_URL_AND_AUTH_INFO) {
     char* cookies = NULL;
@@ -299,19 +295,10 @@ void NPAPIUrlRequestManager::GetCookiesForUrl(const GURL& url, int cookie_id) {
       DVLOG(1) << "Obtained cookies:" << cookies << " from host";
       cookie_string.append(cookies, cookie_length);
       npapi::MemFree(cookies);
-    } else {
-      success = false;
+      success = true;
     }
   } else {
-    DVLOG(1) << "Host does not support NPVERS_HAS_URL_AND_AUTH_INFO.  "
-                "Attempting to read cookie using XPCOM cookie service";
-    if (np_utils::GetCookiesUsingXPCOMCookieService(instance_, url.spec(),
-                                                    &cookie_string)) {
-      DVLOG(1) << "Successfully read cookies using XPCOM cookie service "
-               << cookie_string;
-    } else {
-      success = false;
-    }
+    NOTREACHED() << "Unsupported version";
   }
 
   if (!success)
@@ -325,9 +312,9 @@ void NPAPIUrlRequestManager::GetCookiesForUrl(const GURL& url, int cookie_id) {
 void NPAPIUrlRequestManager::OnResponseStarted(int request_id,
     const char* mime_type, const char* headers, int size,
     base::Time last_modified, const std::string& redirect_url,
-    int redirect_status) {
+    int redirect_status, const net::HostPortPair& socket_address) {
   delegate_->OnResponseStarted(request_id, mime_type, headers, size,
-      last_modified, redirect_url, redirect_status);
+      last_modified, redirect_url, redirect_status, socket_address);
 }
 
 void NPAPIUrlRequestManager::OnReadComplete(int request_id,
@@ -384,8 +371,9 @@ NPError NPAPIUrlRequestManager::NewStream(NPMIMEType type,
                << request->url()
                << " was redirected to:"
                << stream->url;
-      delegate_->OnResponseStarted(request->id(), "", "", 0, base::Time(),
-                                   stream->url, 302);
+      delegate_->OnResponseStarted(
+          request->id(), "", "", 0, base::Time(), stream->url, 302,
+          net::HostPortPair(net::HostPortPair::FromURL(GURL(stream->url))));
       return NPERR_GENERIC_ERROR;
     }
   }
@@ -442,8 +430,9 @@ void NPAPIUrlRequestManager::UrlRedirectNotify(const char* url, int status,
                                                void* notify_data) {
   NPAPIUrlRequest* request = RequestFromNotifyData(notify_data);
   if (request) {
-    delegate_->OnResponseStarted(request->id(), "", "", 0, base::Time(),
-                                 url, status);
+    delegate_->OnResponseStarted(
+        request->id(), "", "", 0, base::Time(), url, status,
+        net::HostPortPair(net::HostPortPair::FromURL(GURL(url))));
   } else {
     NOTREACHED() << "Received unexpected redirect notification for url:"
                  << url;

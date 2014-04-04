@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -93,9 +93,9 @@ bool GetState(BrowserAccessibility* accessibility, int state) {
 - (NSArray*)children {
   if (!children_.get()) {
     children_.reset([[NSMutableArray alloc]
-        initWithCapacity:browserAccessibility_->GetChildCount()] );
+        initWithCapacity:browserAccessibility_->child_count()] );
     for (uint32 index = 0;
-         index < browserAccessibility_->GetChildCount();
+         index < browserAccessibility_->child_count();
          ++index) {
       BrowserAccessibilityCocoa* child =
           browserAccessibility_->GetChild(index)->toBrowserAccessibilityCocoa();
@@ -112,7 +112,7 @@ bool GetState(BrowserAccessibility* accessibility, int state) {
   if (![self isIgnored]) {
     children_.reset();
   } else {
-    [browserAccessibility_->GetParent()->toBrowserAccessibilityCocoa()
+    [browserAccessibility_->parent()->toBrowserAccessibilityCocoa()
        childrenChanged];
   }
 }
@@ -127,15 +127,22 @@ bool GetState(BrowserAccessibility* accessibility, int state) {
 // This is relative to webkit's top-left origin, not Cocoa's
 // bottom-left origin.
 - (NSPoint)origin {
-  return NSMakePoint(browserAccessibility_->location().x,
-                     browserAccessibility_->location().y);
+  return NSMakePoint(browserAccessibility_->location().x(),
+                     browserAccessibility_->location().y());
 }
 
 // Returns a string indicating the role of this object.
 - (NSString*)role {
-  NSString* role = NSAccessibilityUnknownRole;
   WebAccessibility::Role value =
       static_cast<WebAccessibility::Role>( browserAccessibility_->role());
+
+  // Roles that we only determine at runtime.
+  if (value == WebAccessibility::ROLE_TEXT_FIELD &&
+      GetState(browserAccessibility_, WebAccessibility::STATE_PROTECTED)) {
+    return @"AXSecureTextField";
+  }
+
+  NSString* role = NSAccessibilityUnknownRole;
   const size_t numRoles = sizeof(roles) / sizeof(roles[0]);
   for (size_t i = 0; i < numRoles; ++i) {
     if (roles[i].value == value) {
@@ -143,6 +150,7 @@ bool GetState(BrowserAccessibility* accessibility, int state) {
       break;
     }
   }
+
   return role;
 }
 
@@ -163,8 +171,8 @@ bool GetState(BrowserAccessibility* accessibility, int state) {
 
 // Returns the size of this object.
 - (NSSize)size {
-  return NSMakeSize(browserAccessibility_->location().width,
-                    browserAccessibility_->location().height);
+  return NSMakeSize(browserAccessibility_->location().width(),
+                    browserAccessibility_->location().height());
 }
 
 // Returns the accessibility value for the given attribute.  If the value isn't
@@ -193,9 +201,9 @@ bool GetState(BrowserAccessibility* accessibility, int state) {
   }
   if ([attribute isEqualToString:NSAccessibilityParentAttribute]) {
     // A nil parent means we're the root.
-    if (browserAccessibility_->GetParent()) {
+    if (browserAccessibility_->parent()) {
       return NSAccessibilityUnignoredAncestor(
-          browserAccessibility_->GetParent()->toBrowserAccessibilityCocoa());
+          browserAccessibility_->parent()->toBrowserAccessibilityCocoa());
     } else {
       // Hook back up to RenderWidgetHostViewCocoa.
       return browserAccessibility_->manager()->GetParentView();
@@ -225,7 +233,8 @@ bool GetState(BrowserAccessibility* accessibility, int state) {
     } else if ([self role] == NSAccessibilityButtonRole) {
       // AXValue does not make sense for pure buttons.
       return @"";
-    } else if ([self role] == NSAccessibilityCheckBoxRole) {
+    } else if ([self role] == NSAccessibilityCheckBoxRole ||
+               [self role] == NSAccessibilityRadioButtonRole) {
       return [NSNumber numberWithInt:GetState(
           browserAccessibility_, WebAccessibility::STATE_CHECKED) ? 1 : 0];
     } else {
@@ -387,7 +396,7 @@ bool GetState(BrowserAccessibility* accessibility, int state) {
 }
 
 // Returns the index of the child in this objects array of children.
-- (NSUInteger)accessibilityIndexOfChild:(id)child {
+- (NSUInteger)accessibilityGetIndexOf:(id)child {
   NSUInteger index = 0;
   for (BrowserAccessibilityCocoa* childToCheck in [self children]) {
     if ([child isEqual:childToCheck])

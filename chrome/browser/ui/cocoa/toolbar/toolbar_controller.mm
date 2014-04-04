@@ -6,24 +6,20 @@
 
 #include <algorithm>
 
-#include "ui/base/l10n/l10n_util.h"
 #include "app/mac/nsimage_cache.h"
 #include "base/mac/mac_util.h"
-#include "base/singleton.h"
+#include "base/memory/singleton.h"
 #include "base/sys_string_conversions.h"
 #include "chrome/app/chrome_command_ids.h"
 #include "chrome/browser/autocomplete/autocomplete.h"
 #include "chrome/browser/autocomplete/autocomplete_classifier.h"
 #include "chrome/browser/autocomplete/autocomplete_edit_view.h"
 #include "chrome/browser/autocomplete/autocomplete_match.h"
-#include "chrome/browser/background_page_tracker.h"
 #include "chrome/browser/net/url_fixer_upper.h"
 #include "chrome/browser/prefs/pref_service.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/search_engines/template_url_model.h"
-#include "chrome/browser/tab_contents/tab_contents.h"
-#include "chrome/browser/themes/browser_theme_provider.h"
-#include "chrome/browser/upgrade_detector.h"
+#include "chrome/browser/themes/theme_service.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_window.h"
 #import "chrome/browser/ui/cocoa/accelerators_cocoa.h"
@@ -39,24 +35,29 @@
 #import "chrome/browser/ui/cocoa/menu_controller.h"
 #import "chrome/browser/ui/cocoa/toolbar/back_forward_menu_controller.h"
 #import "chrome/browser/ui/cocoa/toolbar/reload_button.h"
+#import "chrome/browser/ui/cocoa/toolbar/toolbar_button.h"
 #import "chrome/browser/ui/cocoa/toolbar/toolbar_view.h"
 #import "chrome/browser/ui/cocoa/view_id_util.h"
 #import "chrome/browser/ui/cocoa/wrench_menu/wrench_menu_controller.h"
 #include "chrome/browser/ui/toolbar/toolbar_model.h"
 #include "chrome/browser/ui/toolbar/wrench_menu_model.h"
-#include "chrome/common/notification_details.h"
-#include "chrome/common/notification_observer.h"
-#include "chrome/common/notification_service.h"
-#include "chrome/common/notification_type.h"
+#include "chrome/browser/upgrade_detector.h"
 #include "chrome/common/pref_names.h"
-#include "gfx/rect.h"
+#include "content/browser/tab_contents/tab_contents.h"
+#include "content/common/notification_details.h"
+#include "content/common/notification_observer.h"
+#include "content/common/notification_service.h"
+#include "content/common/notification_type.h"
 #include "grit/chromium_strings.h"
 #include "grit/generated_resources.h"
 #include "grit/theme_resources.h"
+#include "ui/base/l10n/l10n_util.h"
 #include "ui/base/l10n/l10n_util_mac.h"
 #include "ui/base/models/accelerator_cocoa.h"
 #include "ui/base/models/menu_model.h"
 #include "ui/base/resource/resource_bundle.h"
+#include "ui/gfx/image.h"
+#include "ui/gfx/rect.h"
 
 namespace {
 
@@ -129,9 +130,6 @@ class NotificationBridge : public NotificationObserver {
       : controller_(controller) {
     registrar_.Add(this, NotificationType::UPGRADE_RECOMMENDED,
                    NotificationService::AllSources());
-    registrar_.Add(this,
-                   NotificationType::BACKGROUND_PAGE_TRACKER_CHANGED,
-                   NotificationService::AllSources());
   }
 
   // Overridden from NotificationObserver:
@@ -142,8 +140,6 @@ class NotificationBridge : public NotificationObserver {
       case NotificationType::PREF_CHANGED:
         [controller_ prefChanged:Details<std::string>(details).ptr()];
         break;
-      case NotificationType::BACKGROUND_PAGE_TRACKER_CHANGED:
-        // fall-through
       case NotificationType::UPGRADE_RECOMMENDED:
         [controller_ badgeWrenchMenuIfNeeded];
         break;
@@ -254,6 +250,11 @@ class NotificationBridge : public NotificationObserver {
   [homeButton_ setShowsBorderOnlyWhileMouseInside:YES];
   [wrenchButton_ setShowsBorderOnlyWhileMouseInside:YES];
 
+  [backButton_ setHandleMiddleClick:YES];
+  [forwardButton_ setHandleMiddleClick:YES];
+  [reloadButton_ setHandleMiddleClick:YES];
+  [homeButton_ setHandleMiddleClick:YES];
+
   [self initCommandStatus:commands_];
   locationBarView_.reset(new LocationBarViewMac(locationBar_,
                                                 commands_, toolbarModel_,
@@ -266,8 +267,6 @@ class NotificationBridge : public NotificationObserver {
   PrefService* prefs = profile_->GetPrefs();
   showHomeButton_.Init(prefs::kShowHomeButton, prefs,
                        notificationBridge_.get());
-  showPageOptionButtons_.Init(prefs::kShowPageOptionsButtons, prefs,
-                              notificationBridge_.get());
   [self showOptionalHomeButton];
   [self installWrenchMenu];
 
@@ -291,12 +290,12 @@ class NotificationBridge : public NotificationObserver {
   // helps us remember to release it.
   locationBarRetainer_.reset([locationBar_ retain]);
   trackingArea_.reset(
-      [[NSTrackingArea alloc] initWithRect:NSZeroRect // Ignored
+      [[CrTrackingArea alloc] initWithRect:NSZeroRect // Ignored
                                    options:NSTrackingMouseMoved |
                                            NSTrackingInVisibleRect |
                                            NSTrackingMouseEnteredAndExited |
                                            NSTrackingActiveAlways
-                                     owner:self
+                              proxiedOwner:self
                                   userInfo:nil]);
   NSView* toolbarView = [self view];
   [toolbarView addTrackingArea:trackingArea_.get()];
@@ -546,9 +545,6 @@ class NotificationBridge : public NotificationObserver {
   int badgeResource = 0;
   if (UpgradeDetector::GetInstance()->notify_upgrade()) {
     badgeResource = IDR_UPDATE_BADGE;
-  } else if (BackgroundPageTracker::GetInstance()->
-             GetUnacknowledgedBackgroundPageCount() > 0) {
-    badgeResource = IDR_BACKGROUND_BADGE;
   } else {
     // No badge - clear the badge if one is already set.
     if ([[wrenchButton_ cell] overlayImage])
@@ -787,8 +783,7 @@ class NotificationBridge : public NotificationObserver {
   // If the input is plain text, classify the input and make the URL.
   AutocompleteMatch match;
   browser_->profile()->GetAutocompleteClassifier()->Classify(
-      base::SysNSStringToWide(text),
-      std::wstring(), false, &match, NULL);
+      base::SysNSStringToUTF16(text), string16(), false, &match, NULL);
   GURL url(match.destination_url);
 
   browser_->GetSelectedTabContents()->OpenURL(url, GURL(), CURRENT_TAB,

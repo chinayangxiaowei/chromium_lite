@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -11,7 +11,7 @@
 #include <vector>
 
 #include "base/file_path.h"
-#include "base/ref_counted.h"
+#include "base/memory/ref_counted.h"
 #include "base/message_loop_proxy.h"
 #include "base/threading/thread.h"
 #include "base/time.h"
@@ -91,6 +91,11 @@ class PrinterJobHandler : public base::RefCountedThreadSafe<PrinterJobHandler>,
      virtual void OnPrinterJobHandlerShutdown(
         PrinterJobHandler* job_handler, const std::string& printer_id) = 0;
      virtual void OnAuthError() = 0;
+     // Called when the PrinterJobHandler cannot find the printer locally. The
+     // delegate returns |delete_from_server| to true if the printer should be
+     // deleted from the server,false otherwise.
+     virtual void OnPrinterNotFound(const std::string& printer_name,
+                                    bool* delete_from_server) = 0;
 
    protected:
      virtual ~Delegate() {}

@@ -7,18 +7,28 @@
 #include <pk11pub.h>
 
 #include "base/logging.h"
-#include "chrome/browser/browser_thread.h"
+#include "content/browser/browser_thread.h"
 #include "net/base/crypto_module.h"
 #include "net/base/x509_certificate.h"
 
+#if defined(OS_CHROMEOS)
+#include "crypto/nss_util.h"
+#endif
+
 namespace {
+
+bool ShouldShowDialog(const net::CryptoModule* module) {
+  // The wincx arg is unused since we don't call PK11_SetIsLoggedInFunc.
+  return (PK11_NeedLogin(module->os_module_handle()) &&
+          !PK11_IsLoggedIn(module->os_module_handle(), NULL /* wincx */));
+}
 
 // Basically an asynchronous implementation of NSS's PK11_DoPassword.
 // Note: This currently handles only the simple case.  See the TODOs in
 // GotPassword for what is yet unimplemented.
 class SlotUnlocker {
  public:
-  SlotUnlocker(net::CryptoModule* module,
+  SlotUnlocker(const net::CryptoModuleList& modules,
                browser::CryptoModulePasswordReason reason,
                const std::string& host,
                Callback0::Type* callback);
@@ -29,18 +39,20 @@ class SlotUnlocker {
   void GotPassword(const char* password);
   void Done();
 
-  scoped_refptr<net::CryptoModule> module_;
+  size_t current_;
+  net::CryptoModuleList modules_;
   browser::CryptoModulePasswordReason reason_;
   std::string host_;
   Callback0::Type* callback_;
   PRBool retry_;
 };
 
-SlotUnlocker::SlotUnlocker(net::CryptoModule* module,
+SlotUnlocker::SlotUnlocker(const net::CryptoModuleList& modules,
                            browser::CryptoModulePasswordReason reason,
                            const std::string& host,
                            Callback0::Type* callback)
-    : module_(module),
+    : current_(0),
+      modules_(modules),
       reason_(reason),
       host_(host),
       callback_(callback),
@@ -51,12 +63,32 @@ SlotUnlocker::SlotUnlocker(net::CryptoModule* module,
 void SlotUnlocker::Start() {
   DCHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
 
-  ShowCryptoModulePasswordDialog(
-      module_->GetTokenName(),
-      retry_,
-      reason_,
-      host_,
-      NewCallback(this, &SlotUnlocker::GotPassword));
+  for (; current_ < modules_.size(); ++current_) {
+    if (ShouldShowDialog(modules_[current_].get())) {
+#if defined(OS_CHROMEOS)
+      if (crypto::IsTPMTokenReady()) {
+        std::string token_name;
+        std::string user_pin;
+        crypto::GetTPMTokenInfo(&token_name, &user_pin);
+        if (modules_[current_]->GetTokenName() == token_name) {
+          // The user PIN is a well known secret on this machine, and
+          // the user didn't set it, so we need to fetch the value and
+          // supply it for them here.
+          GotPassword(user_pin.c_str());
+          return;
+        }
+      }
+#endif
+      ShowCryptoModulePasswordDialog(
+          modules_[current_]->GetTokenName(),
+          retry_,
+          reason_,
+          host_,
+          NewCallback(this, &SlotUnlocker::GotPassword));
+      return;
+    }
+  }
+  Done();
 }
 
 void SlotUnlocker::GotPassword(const char* password) {
@@ -66,12 +98,13 @@ void SlotUnlocker::GotPassword(const char* password) {
 
   if (!password) {
     // User cancelled entering password.  Oh well.
-    Done();
+    ++current_;
+    Start();
     return;
   }
 
   // TODO(mattm): handle protectedAuthPath
-  SECStatus rv = PK11_CheckUserPassword(module_->os_module_handle(),
+  SECStatus rv = PK11_CheckUserPassword(modules_[current_]->os_module_handle(),
                                         password);
   if (rv == SECWouldBlock) {
     // Incorrect password.  Try again.
@@ -84,11 +117,13 @@ void SlotUnlocker::GotPassword(const char* password) {
   // non-friendly slots.  How important is that?
 
   // Correct password (SECSuccess) or too many attempts/other failure
-  // (SECFailure).  Either way we're done.
-  Done();
+  // (SECFailure).  Either way we're done with this slot.
+  ++current_;
+  Start();
 }
 
 void SlotUnlocker::Done() {
+  DCHECK_EQ(current_, modules_.size());
   callback_->Run();
   delete this;
 }
@@ -97,27 +132,28 @@ void SlotUnlocker::Done() {
 
 namespace browser {
 
-void UnlockSlotIfNecessary(net::CryptoModule* module,
-                           browser::CryptoModulePasswordReason reason,
-                           const std::string& host,
-                           Callback0::Type* callback) {
+void UnlockSlotsIfNecessary(const net::CryptoModuleList& modules,
+                            browser::CryptoModulePasswordReason reason,
+                            const std::string& host,
+                            Callback0::Type* callback) {
   DCHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
-  // The wincx arg is unused since we don't call PK11_SetIsLoggedInFunc.
-  if (PK11_NeedLogin(module->os_module_handle()) &&
-      !PK11_IsLoggedIn(module->os_module_handle(), NULL /* wincx */)) {
-    (new SlotUnlocker(module, reason, host, callback))->Start();
-  } else {
-    callback->Run();
+  for (size_t i = 0; i < modules.size(); ++i) {
+    if (ShouldShowDialog(modules[i].get())) {
+      (new SlotUnlocker(modules, reason, host, callback))->Start();
+      return;
+    }
   }
+  callback->Run();
 }
 
 void UnlockCertSlotIfNecessary(net::X509Certificate* cert,
                                browser::CryptoModulePasswordReason reason,
                                const std::string& host,
                                Callback0::Type* callback) {
-  scoped_refptr<net::CryptoModule> module(net::CryptoModule::CreateFromHandle(
+  net::CryptoModuleList modules;
+  modules.push_back(net::CryptoModule::CreateFromHandle(
       cert->os_cert_handle()->slot));
-  UnlockSlotIfNecessary(module.get(), reason, host, callback);
+  UnlockSlotsIfNecessary(modules, reason, host, callback);
 }
 
 }  // namespace browser

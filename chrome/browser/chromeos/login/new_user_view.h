@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -14,13 +14,13 @@
 #include "chrome/browser/chromeos/login/user_input.h"
 #include "views/accelerator.h"
 #include "views/controls/button/button.h"
-#include "views/controls/button/menu_button.h"
 #include "views/controls/link.h"
-#include "views/controls/textfield/textfield.h"
+#include "views/controls/textfield/textfield_controller.h"
 #include "views/view.h"
 
 namespace views {
 class Label;
+class MenuButton;
 class NativeButton;
 }  // namespace views
 
@@ -30,7 +30,7 @@ namespace chromeos {
 // allows to specify language preferences or initiate new account creation.
 class NewUserView : public ThrobberHostView,
                     public UserInput,
-                    public views::Textfield::Controller,
+                    public views::TextfieldController,
                     public views::LinkController,
                     public views::ButtonListener {
  public:
@@ -43,23 +43,20 @@ class NewUserView : public ThrobberHostView,
     virtual void OnLogin(const std::string& username,
                          const std::string& password) = 0;
 
-    // Initiates off the record (incognito) login.
-    virtual void OnLoginOffTheRecord() = 0;
+    // Initiates incognito login.
+    virtual void OnLoginAsGuest() = 0;
 
     // User initiated new account creation.
     virtual void OnCreateAccount() = 0;
 
-    // Adds start URL that will be opened after login.
-    virtual void AddStartUrl(const GURL& start_url) = 0;
+    // User requested enterprise enrollment.
+    virtual void OnStartEnterpriseEnrollment() = 0;
 
     // User started typing so clear all error messages.
     virtual void ClearErrors() = 0;
 
     // User tries to navigate away from NewUserView pod.
     virtual void NavigateAway() = 0;
-
-    // Enables/disables raw of controls at status area.
-    virtual void SetStatusAreaEnabled(bool enable) = 0;
   };
 
   // If |need_border| is true, RoundedRect border and background are required.
@@ -73,7 +70,7 @@ class NewUserView : public ThrobberHostView,
   void Init();
 
   // Update strings from the resources. Executed on language change.
-  void UpdateLocalizedStrings();
+  void UpdateLocalizedStringsAndFonts();
 
   // Returns bounds of password field in screen coordinates.
   gfx::Rect GetPasswordBounds() const;
@@ -81,7 +78,7 @@ class NewUserView : public ThrobberHostView,
   // Returns bounds of username field in screen coordinates.
   gfx::Rect GetUsernameBounds() const;
 
-  // Overridden from views::View:
+  // views::View:
   virtual gfx::Size GetPreferredSize();
   virtual void Layout();
   virtual void RequestFocus();
@@ -93,24 +90,24 @@ class NewUserView : public ThrobberHostView,
   // Attempt to login with the current field values.
   void Login();
 
-  // Overridden from views::Textfield::Controller
+  // views::TextfieldController:
   // Not thread-safe, by virtue of using SetupSession().
   virtual bool HandleKeyEvent(views::Textfield* sender,
                               const views::KeyEvent& keystroke);
   virtual void ContentsChanged(views::Textfield* sender,
                                const string16& new_contents);
 
-  // Overridden from views::ButtonListener.
+  // views::ButtonListener:
   virtual void ButtonPressed(views::Button* sender, const views::Event& event);
 
-  // Overridden from views::LinkController.
+  // views::LinkController:
   virtual void LinkActivated(views::Link* source, int event_flags);
   virtual bool AcceleratorPressed(const views::Accelerator& accelerator);
 
-  // Overridden from ThrobberHostView:
+  // ThrobberHostView:
   virtual gfx::Rect CalculateThrobberBounds(views::Throbber* throbber);
 
-  // Overridden from UserInput:
+  // UserInput:
   virtual void EnableInputControls(bool enabled);
   virtual void ClearAndFocusControls();
   virtual void ClearAndFocusPassword();
@@ -121,19 +118,14 @@ class NewUserView : public ThrobberHostView,
   bool NavigateAway();
 
  protected:
-  // views::View overrides:
+  // views::View:
   virtual void ViewHierarchyChanged(bool is_add,
                                     views::View *parent,
                                     views::View *child);
-  virtual void NativeViewHierarchyChanged(bool attached,
-                                          gfx::NativeView native_view,
-                                          views::RootView* root_view);
   virtual void OnLocaleChanged();
   void AddChildView(View* view);
 
  private:
-  void FocusFirstField();
-
   // Creates Link control and adds it as a child.
   void InitLink(views::Link** link);
 
@@ -162,12 +154,13 @@ class NewUserView : public ThrobberHostView,
   views::View* splitter_down1_;
   views::View* splitter_down2_;
   views::NativeButton* sign_in_button_;
-  views::Link* create_account_link_;
   views::Link* guest_link_;
+  views::Link* create_account_link_;
   views::MenuButton* languages_menubutton_;
 
   views::Accelerator accel_focus_pass_;
   views::Accelerator accel_focus_user_;
+  views::Accelerator accel_enterprise_enrollment_;
   views::Accelerator accel_login_off_the_record_;
   views::Accelerator accel_toggle_accessibility_;
 
@@ -177,10 +170,6 @@ class NewUserView : public ThrobberHostView,
   ScopedRunnableMethodFactory<NewUserView> focus_grabber_factory_;
 
   LanguageSwitchMenu language_switch_menu_;
-
-  // Indicates that this view was created when focus manager was unavailable
-  // (on the hidden tab, for example).
-  bool focus_delayed_;
 
   // True when login is in process.
   bool login_in_process_;
@@ -198,9 +187,6 @@ class NewUserView : public ThrobberHostView,
   // Ordinal position of controls inside view layout.
   int languages_menubutton_order_;
   int sign_in_button_order_;
-
-  FRIEND_TEST_ALL_PREFIXES(LoginScreenTest, IncognitoLogin);
-  friend class LoginScreenTest;
 
   DISALLOW_COPY_AND_ASSIGN(NewUserView);
 };

@@ -1,15 +1,16 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/renderer_host/render_widget_host_view_mac.h"
 
 #include "base/mac/scoped_nsautorelease_pool.h"
-#include "chrome/browser/browser_thread.h"
-#include "chrome/browser/renderer_host/test/test_render_view_host.h"
 #import "chrome/browser/ui/cocoa/cocoa_test_helper.h"
 #include "chrome/browser/ui/cocoa/test_event_utils.h"
+#include "content/browser/browser_thread.h"
+#include "content/browser/renderer_host/test_render_view_host.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "webkit/plugins/npapi/webplugin.h"
 
 class RenderWidgetHostViewMacTest : public RenderViewHostTestHarness {
  public:
@@ -56,7 +57,8 @@ class RenderWidgetHostViewMacTest : public RenderViewHostTestHarness {
 
     // The accelerated view isn't shown until it has a valid rect and has been
     // painted to.
-    rwhv_mac_->AcceleratedSurfaceBuffersSwapped(accelerated_handle, 0, 0, 0, 0);
+    rwhv_mac_->AcceleratedSurfaceBuffersSwapped(accelerated_handle,
+                                                0, 0, 0, 0, 0);
     webkit::npapi::WebPluginGeometry geom;
     gfx::Rect rect(0, 0, w, h);
     geom.window = accelerated_handle;
@@ -139,11 +141,13 @@ TEST_F(RenderWidgetHostViewMacTest, AcceptsFirstResponder) {
 }
 
 TEST_F(RenderWidgetHostViewMacTest, TakesFocusOnMouseDown) {
-  scoped_nsobject<NSWindow> window([[CocoaTestHelperWindow alloc] init]);
+  scoped_nsobject<CocoaTestHelperWindow>
+      window([[CocoaTestHelperWindow alloc] init]);
   [[window contentView] addSubview:rwhv_cocoa_.get()];
 
   // Even if the RWHVCocoa disallows first responder, clicking on it gives it
   // focus.
+  [window setPretendIsKeyWindow:YES];
   [window makeFirstResponder:nil];
   ASSERT_NE(rwhv_cocoa_.get(), [window firstResponder]);
 
@@ -170,8 +174,10 @@ TEST_F(RenderWidgetHostViewMacTest, TakesFocusOnMouseDownWithAcceleratedView) {
   EXPECT_FALSE([accelerated_view isHidden]);
 
   // Add the RWHVCocoa to the window and remove first responder status.
-  scoped_nsobject<NSWindow> window([[CocoaTestHelperWindow alloc] init]);
+  scoped_nsobject<CocoaTestHelperWindow>
+      window([[CocoaTestHelperWindow alloc] init]);
   [[window contentView] addSubview:rwhv_cocoa_.get()];
+  [window setPretendIsKeyWindow:YES];
   [window makeFirstResponder:nil];
   EXPECT_NE(rwhv_cocoa_.get(), [window firstResponder]);
 

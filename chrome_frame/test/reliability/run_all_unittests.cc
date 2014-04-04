@@ -13,13 +13,6 @@
 static const char kRegisterDllFlag[] = "register";
 
 int main(int argc, char **argv) {
-
-  // If --register is passed, then we need to ensure that Chrome Frame is
-  // registered before starting up the reliability tests.
-  CommandLine::Init(argc, argv);
-  CommandLine* cmd_line = CommandLine::ForCurrentProcess();
-  DCHECK(cmd_line);
-
   // We create this slightly early as it is the one who instantiates THE
   // AtExitManager which some of the other stuff below relies on.
   ReliabilityTestSuite test_suite(argc, argv);
@@ -28,12 +21,21 @@ int main(int argc, char **argv) {
   base::ProcessHandle crash_service = chrome_frame_test::StartCrashService();
 
   int result = -1;
+  // If --register is passed, then we need to ensure that Chrome Frame is
+  // registered before starting up the reliability tests.
+  CommandLine* cmd_line = CommandLine::ForCurrentProcess();
+  DCHECK(cmd_line);
+  if (!cmd_line) {
+    NOTREACHED() << "CommandLine object not initialized";
+    return result;
+  }
   if (cmd_line->HasSwitch(kRegisterDllFlag)) {
     std::wstring dll_path = cmd_line->GetSwitchValueNative(kRegisterDllFlag);
 
     // Run() must be called within the scope of the ScopedChromeFrameRegistrar
     // to ensure that the correct DLL remains registered during the tests.
-    ScopedChromeFrameRegistrar scoped_chrome_frame_registrar(dll_path);
+    ScopedChromeFrameRegistrar scoped_chrome_frame_registrar(
+        dll_path, ScopedChromeFrameRegistrar::SYSTEM_LEVEL);
     result = test_suite.Run();
   } else {
     result = test_suite.Run();

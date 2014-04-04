@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -15,9 +15,9 @@
 #include "chrome/browser/extensions/extension_event_router.h"
 #include "chrome/browser/extensions/extension_tabs_module.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/tab_contents/tab_contents.h"
 #include "chrome/browser/ui/tab_contents/tab_contents_wrapper.h"
 #include "chrome/common/devtools_messages.h"
+#include "content/browser/tab_contents/tab_contents.h"
 
 ExtensionDevToolsBridge::ExtensionDevToolsBridge(int tab_id,
                                                  Profile* profile)
@@ -34,16 +34,10 @@ ExtensionDevToolsBridge::ExtensionDevToolsBridge(int tab_id,
 ExtensionDevToolsBridge::~ExtensionDevToolsBridge() {
 }
 
-static std::string FormatDevToolsMessage(int seq,
-                                         const std::string& domain,
-                                         const std::string& command,
-                                         DictionaryValue* arguments) {
-
+static std::string FormatDevToolsMessage(int id, const std::string& method) {
   DictionaryValue message;
-  message.SetInteger("seq", seq);
-  message.SetString("domain", domain);
-  message.SetString("command", command);
-  message.Set("arguments", arguments);
+  message.SetInteger("id", id);
+  message.SetString("method", method);
 
   std::string json;
   base::JSONWriter::Write(&message, false, &json);
@@ -71,41 +65,23 @@ bool ExtensionDevToolsBridge::RegisterAsDevToolsClientHost() {
     // Following messages depend on inspector protocol that is not yet
     // finalized.
 
-    // 1. Set injected script content.
-    DictionaryValue* arguments = new DictionaryValue();
-    arguments->SetString("scriptSource", "'{}'");
-    devtools_manager->ForwardToDevToolsAgent(
-        this,
-        DevToolsAgentMsg_DispatchOnInspectorBackend(
-            FormatDevToolsMessage(0,
-                                  "Inspector",
-                                  "setInjectedScriptSource",
-                                  arguments)));
-
-    // 2. Report front-end is loaded.
+    // 1. Report front-end is loaded.
     devtools_manager->ForwardToDevToolsAgent(
         this,
         DevToolsAgentMsg_FrontendLoaded());
 
-    // 3. Do not break on exceptions.
-    arguments = new DictionaryValue();
-    arguments->SetInteger("pauseOnExceptionsState", 0);
+    // 2. Start timeline profiler.
     devtools_manager->ForwardToDevToolsAgent(
         this,
         DevToolsAgentMsg_DispatchOnInspectorBackend(
-            FormatDevToolsMessage(1,
-                                  "Debugger",
-                                  "setPauseOnExceptionsState",
-                                  arguments)));
+            FormatDevToolsMessage(2, "Timeline.start")));
 
-    // 4. Start timeline profiler.
+    // 3. Enable network resource tracking.
     devtools_manager->ForwardToDevToolsAgent(
         this,
         DevToolsAgentMsg_DispatchOnInspectorBackend(
-            FormatDevToolsMessage(2,
-                                  "Inspector",
-                                  "startTimelineProfiler",
-                                  new DictionaryValue())));
+            FormatDevToolsMessage(3, "Network.enable")));
+
     return true;
   }
   return false;
@@ -138,6 +114,12 @@ void ExtensionDevToolsBridge::SendMessageToClient(const IPC::Message& msg) {
                         OnDispatchOnInspectorFrontend);
     IPC_MESSAGE_UNHANDLED_ERROR()
   IPC_END_MESSAGE_MAP()
+}
+
+void ExtensionDevToolsBridge::TabReplaced(TabContentsWrapper* new_tab) {
+  DCHECK_EQ(profile_, new_tab->profile());
+  // We don't update the tab id as it needs to remain the same so that we can
+  // properly unregister.
 }
 
 void ExtensionDevToolsBridge::OnDispatchOnInspectorFrontend(

@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,16 +7,16 @@
 #pragma once
 
 #include "base/message_loop.h"
-#include "chrome/browser/browser_thread.h"
-#include "chrome/browser/renderer_host/test/test_render_view_host.h"
+#include "chrome/browser/ui/browser.h"
 #include "chrome/test/test_browser_window.h"
+#include "chrome/test/testing_browser_process_test.h"
+#include "chrome/test/testing_profile.h"
+#include "content/browser/browser_thread.h"
+#include "content/browser/renderer_host/test_render_view_host.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
-class Browser;
 class GURL;
 class NavigationController;
-class TestBrowserWindow;
-class TestingProfile;
 
 // Base class for browser based unit tests. BrowserWithTestWindowTest creates a
 // Browser with a TestingProfile and TestBrowserWindow. To add a tab use
@@ -39,7 +39,7 @@ class TestingProfile;
 //
 // Subclasses must invoke BrowserWithTestWindowTest::SetUp as it is responsible
 // for creating the various objects of this class.
-class BrowserWithTestWindowTest : public testing::Test {
+class BrowserWithTestWindowTest : public TestingBrowserProcessTest {
  public:
   BrowserWithTestWindowTest();
   virtual ~BrowserWithTestWindowTest();
@@ -86,11 +86,19 @@ class BrowserWithTestWindowTest : public testing::Test {
   // Navigates the current tab. This is a wrapper around NavigateAndCommit.
   void NavigateAndCommitActiveTab(const GURL& url);
 
- private:
+ protected:
+  // Destroys the browser and window created by this class. This is invoked from
+  // the destructor.
+  void DestroyBrowser();
 
+  // Creates the profile used by this test. The caller owners the return value.
+  virtual TestingProfile* CreateProfile();
+
+ private:
   // We need to create a MessageLoop, otherwise a bunch of things fails.
   MessageLoopForUI ui_loop_;
   BrowserThread ui_thread_;
+  BrowserThread file_thread_;
 
   scoped_ptr<TestingProfile> profile_;
   scoped_ptr<TestBrowserWindow> window_;

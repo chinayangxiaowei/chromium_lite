@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,25 +6,30 @@
 
 #import <Cocoa/Cocoa.h>
 
+#include "app/mac/nsimage_cache.h"
 #include "base/mac/mac_util.h"
 #include "base/process_util.h"
 #include "base/sys_string_conversions.h"
-#include "chrome/browser/browser_list.h"
-#include "chrome/browser/hung_renderer_dialog.h"
-#include "chrome/browser/renderer_host/render_process_host.h"
-#include "chrome/browser/renderer_host/render_view_host.h"
-#include "chrome/browser/tab_contents/tab_contents.h"
+#include "chrome/browser/favicon_helper.h"
+#include "chrome/browser/ui/browser_dialogs.h"
+#include "chrome/browser/ui/browser_list.h"
 #import "chrome/browser/ui/cocoa/multi_key_equivalent_button.h"
+#include "chrome/browser/ui/tab_contents/tab_contents_wrapper.h"
 #include "chrome/common/logging_chrome.h"
-#include "chrome/common/result_codes.h"
-#include "grit/chromium_strings.h"
+#include "content/browser/renderer_host/render_process_host.h"
+#include "content/browser/renderer_host/render_view_host.h"
+#include "content/browser/tab_contents/tab_contents.h"
+#import "chrome/browser/ui/cocoa/tab_contents/favicon_util.h"
+#include "content/common/result_codes.h"
 #include "grit/app_resources.h"
+#include "grit/chromium_strings.h"
 #include "grit/generated_resources.h"
 #include "grit/theme_resources.h"
 #include "skia/ext/skia_utils_mac.h"
 #include "third_party/GTM/AppKit/GTMUILocalizerAndLayoutTweaker.h"
 #include "ui/base/l10n/l10n_util_mac.h"
 #include "ui/base/resource/resource_bundle.h"
+#include "ui/gfx/image.h"
 
 namespace {
 // We only support showing one of these at a time per app.  The
@@ -123,7 +128,7 @@ HungRendererController* g_instance = NULL;
 - (void)windowWillClose:(NSNotification*)notification {
   // We have to reset g_instance before autoreleasing the window,
   // because we want to avoid reusing the same dialog if someone calls
-  // hung_renderer_dialog::ShowForTabContents() between the autorelease
+  // browser::ShowHungRendererDialog() between the autorelease
   // call and the actual dealloc.
   g_instance = nil;
 
@@ -136,21 +141,13 @@ HungRendererController* g_instance = NULL;
   scoped_nsobject<NSMutableArray> titles([[NSMutableArray alloc] init]);
   scoped_nsobject<NSMutableArray> favicons([[NSMutableArray alloc] init]);
   for (TabContentsIterator it; !it.done(); ++it) {
-    if (it->GetRenderProcessHost() == hungContents_->GetRenderProcessHost()) {
-      string16 title = (*it)->GetTitle();
+    if (it->tab_contents()->GetRenderProcessHost() ==
+        hungContents_->GetRenderProcessHost()) {
+      string16 title = (*it)->tab_contents()->GetTitle();
       if (title.empty())
-        title = TabContents::GetDefaultTitle();
+        title = TabContentsWrapper::GetDefaultTitle();
       [titles addObject:base::SysUTF16ToNSString(title)];
-
-      // TabContents can return a null SkBitmap if it has no favicon.  If this
-      // happens, use the default favicon.
-      const SkBitmap& bitmap = it->GetFavIcon();
-      if (!bitmap.isNull()) {
-        [favicons addObject:gfx::SkBitmapToNSImage(bitmap)];
-      } else {
-        ResourceBundle& rb = ResourceBundle::GetSharedInstance();
-        [favicons addObject:rb.GetNativeImageNamed(IDR_DEFAULT_FAVICON)];
-      }
+      [favicons addObject:mac::FaviconForTabContents(it->tab_contents())];
     }
   }
   hungTitles_.reset([titles copy]);
@@ -183,9 +180,9 @@ HungRendererController* g_instance = NULL;
 }
 @end
 
-namespace hung_renderer_dialog {
+namespace browser {
 
-void ShowForTabContents(TabContents* contents) {
+void ShowHungRendererDialog(TabContents* contents) {
   if (!logging::DialogsAreSuppressed()) {
     if (!g_instance)
       g_instance = [[HungRendererController alloc]
@@ -194,10 +191,9 @@ void ShowForTabContents(TabContents* contents) {
   }
 }
 
-// static
-void HideForTabContents(TabContents* contents) {
+void HideHungRendererDialog(TabContents* contents) {
   if (!logging::DialogsAreSuppressed() && g_instance)
     [g_instance endForTabContents:contents];
 }
 
-}  // namespace hung_renderer_dialog
+}  // namespace browser

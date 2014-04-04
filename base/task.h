@@ -1,4 +1,4 @@
-// Copyright (c) 2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,17 +6,18 @@
 #define BASE_TASK_H_
 #pragma once
 
-#include "base/raw_scoped_refptr_mismatch_checker.h"
+#include "base/base_api.h"
+#include "base/memory/raw_scoped_refptr_mismatch_checker.h"
+#include "base/memory/weak_ptr.h"
 #include "base/tracked.h"
 #include "base/tuple.h"
-#include "base/weak_ptr.h"
 
 // Task ------------------------------------------------------------------------
 //
 // A task is a generic runnable thingy, usually used for running code on a
 // different thread or for scheduling future tasks off of the message loop.
 
-class Task : public tracked_objects::Tracked {
+class BASE_API Task : public tracked_objects::Tracked {
  public:
   Task();
   virtual ~Task();
@@ -25,7 +26,7 @@ class Task : public tracked_objects::Tracked {
   virtual void Run() = 0;
 };
 
-class CancelableTask : public Task {
+class BASE_API CancelableTask : public Task {
  public:
   CancelableTask();
   virtual ~CancelableTask();
@@ -421,6 +422,21 @@ inline CancelableTask* NewRunnableMethod(T* object, Method method,
                                                           method,
                                                           MakeTuple(a, b, c, d,
                                                                     e, f, g));
+}
+
+template <class T, class Method, class A, class B, class C, class D, class E,
+          class F, class G, class H>
+inline CancelableTask* NewRunnableMethod(T* object, Method method,
+                                         const A& a, const B& b,
+                                         const C& c, const D& d, const E& e,
+                                         const F& f, const G& g, const H& h) {
+  return new RunnableMethod<T,
+                            Method,
+                            Tuple8<A, B, C, D, E, F, G, H> >(object,
+                                                             method,
+                                                             MakeTuple(a, b, c,
+                                                                       d, e, f,
+                                                                       g, h));
 }
 
 // RunnableFunction and NewRunnableFunction implementation ---------------------

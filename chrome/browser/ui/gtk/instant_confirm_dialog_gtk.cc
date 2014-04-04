@@ -34,8 +34,7 @@ InstantConfirmDialogGtk::InstantConfirmDialogGtk(
       GTK_STOCK_CANCEL, GTK_RESPONSE_REJECT,
       GTK_STOCK_OK, GTK_RESPONSE_ACCEPT,
       NULL);
-  g_signal_connect(dialog_, "response",
-                   G_CALLBACK(OnDialogResponseThunk), this);
+  g_signal_connect(dialog_, "response", G_CALLBACK(OnResponseThunk), this);
 
   GtkBox* vbox = GTK_BOX(GTK_DIALOG(dialog_)->vbox);
   gtk_box_set_spacing(vbox, gtk_util::kControlSpacing);
@@ -46,7 +45,7 @@ InstantConfirmDialogGtk::InstantConfirmDialogGtk(
   gtk_box_pack_start(vbox, label, FALSE, FALSE, 0);
 
   GtkWidget* link_button = gtk_chrome_link_button_new(
-      l10n_util::GetStringUTF8(IDS_OPTIONS_LEARN_MORE_LABEL).c_str());
+      l10n_util::GetStringUTF8(IDS_LEARN_MORE).c_str());
   g_signal_connect(link_button, "clicked",
                    G_CALLBACK(OnLinkButtonClickedThunk), this);
 
@@ -64,9 +63,8 @@ InstantConfirmDialogGtk::~InstantConfirmDialogGtk() {
   gtk_widget_destroy(dialog_);
 }
 
-void InstantConfirmDialogGtk::OnDialogResponse(GtkWidget* dialog,
-                                               int response) {
-  if (response == GTK_RESPONSE_ACCEPT)
+void InstantConfirmDialogGtk::OnResponse(GtkWidget* dialog, int response_id) {
+  if (response_id == GTK_RESPONSE_ACCEPT)
     InstantController::Enable(profile_);
 
   delete this;

@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -11,10 +11,6 @@
 
 #include "base/i18n/rtl.h"
 #include "base/string_util.h"
-#include "gfx/canvas_skia.h"
-#include "gfx/favicon_size.h"
-#include "gfx/font.h"
-#include "gfx/icon_util.h"
 #include "skia/ext/skia_utils_win.h"
 #include "third_party/skia/include/core/SkBitmap.h"
 #include "third_party/skia/include/core/SkColorFilter.h"
@@ -23,6 +19,10 @@
 #include "ui/base/models/table_model.h"
 #include "ui/base/resource/resource_bundle.h"
 #include "ui/base/win/hwnd_util.h"
+#include "ui/gfx/canvas_skia.h"
+#include "ui/gfx/favicon_size.h"
+#include "ui/gfx/font.h"
+#include "ui/gfx/icon_util.h"
 #include "views/controls/native/native_view_host.h"
 #include "views/controls/table/table_view_observer.h"
 
@@ -125,18 +125,6 @@ void TableView::SetSortDescriptors(const SortDescriptors& sort_descriptors) {
 
   SortItemsAndUpdateMapping();
 
-  SendMessage(list_view_, WM_SETREDRAW, static_cast<WPARAM>(TRUE), 0);
-}
-
-void TableView::DidChangeBounds(const gfx::Rect& previous,
-                                const gfx::Rect& current) {
-  if (!list_view_)
-    return;
-  SendMessage(list_view_, WM_SETREDRAW, static_cast<WPARAM>(FALSE), 0);
-  Layout();
-  if ((autosize_columns_ || !column_sizes_valid_) && width() > 0)
-    ResetColumnSizes();
-  UpdateContentOffset();
   SendMessage(list_view_, WM_SETREDRAW, static_cast<WPARAM>(TRUE), 0);
 }
 
@@ -788,6 +776,7 @@ HWND TableView::CreateNativeControl(HWND parent_container) {
                                 style,
                                 0, 0, width(), height(),
                                 parent_container, NULL, NULL, NULL);
+  ui::CheckWindowCreated(list_view_);
 
   // Reduce overdraw/flicker artifacts by double buffering.  Support tooltips
   // and display elided items completely on hover (see comments in OnNotify()
@@ -1274,7 +1263,7 @@ LRESULT TableView::OnCustomDraw(NMLVCUSTOMDRAW* draw_info) {
               // view when they are 16x16 so we get an extra pixel of padding).
               canvas.DrawBitmapInt(image, 0, 0,
                                    image.width(), image.height(),
-                                   1, 1, kFavIconSize, kFavIconSize, true);
+                                   1, 1, kFaviconSize, kFaviconSize, true);
 
               // Only paint the visible region of the icon.
               RECT to_draw = { intersection.left - icon_rect.left,
@@ -1510,6 +1499,17 @@ bool TableView::OnKeyDown(ui::KeyboardCode virtual_keycode) {
     table_view_observer_->OnKeyDown(virtual_keycode);
   }
   return false;  // Let the key event be processed as ususal.
+}
+
+void TableView::OnBoundsChanged(const gfx::Rect& previous_bounds) {
+  if (!list_view_)
+    return;
+  SendMessage(list_view_, WM_SETREDRAW, static_cast<WPARAM>(FALSE), 0);
+  Layout();
+  if ((autosize_columns_ || !column_sizes_valid_) && width() > 0)
+    ResetColumnSizes();
+  UpdateContentOffset();
+  SendMessage(list_view_, WM_SETREDRAW, static_cast<WPARAM>(TRUE), 0);
 }
 
 int TableView::PreviousSelectedViewIndex(int view_index) {

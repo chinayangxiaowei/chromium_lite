@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 //
@@ -13,7 +13,7 @@
 #include "base/basictypes.h"
 #include "base/file_path.h"
 #include "base/string16.h"
-#include "gfx/native_widget_types.h"
+#include "ui/gfx/native_widget_types.h"
 
 #if defined(TOOLKIT_VIEWS)
 #include "views/view.h"
@@ -21,6 +21,7 @@
 
 namespace gfx {
 class Canvas;
+class Image;
 }
 
 class BaseDownloadItemModel;
@@ -31,10 +32,13 @@ class GURL;
 class Profile;
 class ResourceDispatcherHost;
 class SkBitmap;
-class URLRequestContextGetter;
 
 struct DownloadCreateInfo;
 struct DownloadSaveInfo;
+
+namespace net {
+class URLRequestContextGetter;
+}
 
 namespace download_util {
 
@@ -114,6 +118,45 @@ enum PaintDownloadProgressSize {
   BIG
 };
 
+// We keep a count of how often various events occur in the
+// histogram "Download.Counts".
+enum DownloadCountTypes {
+  // The download was initiated by navigating to a URL (e.g. by user
+  // click).
+  INITIATED_BY_NAVIGATION_COUNT = 0,
+
+  // The download was initiated by invoking a context menu within a page.
+  INITIATED_BY_CONTEXT_MENU_COUNT,
+
+  // The download was initiated when the SavePackage system rejected
+  // a Save Page As ... by returning false from
+  // SavePackage::IsSaveableContents().
+  INITIATED_BY_SAVE_PACKAGE_FAILURE_COUNT,
+
+  // The download was initiated by a drag and drop from a drag-and-drop
+  // enabled web application.
+  INITIATED_BY_DRAG_N_DROP_COUNT,
+
+  // The download was initiated by explicit RPC from the renderer process
+  // (e.g. by Alt-click).
+  INITIATED_BY_RENDERER_COUNT,
+
+  // Downloads that made it to DownloadResourceHandler -- all of the
+  // above minus those blocked by DownloadThrottlingResourceHandler.
+  UNTHROTTLED_COUNT,
+
+  // Downloads that actually complete.
+  COMPLETED_COUNT,
+
+  // Downloads that are cancelled before completion (user action or error).
+  CANCELLED_COUNT,
+
+  DOWNLOAD_COUNT_TYPES_LAST_ENTRY
+};
+
+// Increment one of the above counts.
+void RecordDownloadCount(DownloadCountTypes type);
+
 // Paint the common download animation progress foreground and background,
 // clipping the foreground to 'percent' full. If percent is -1, then we don't
 // know the total size, so we just draw a rotating segment until we're done.
@@ -142,13 +185,22 @@ void PaintDownloadComplete(gfx::Canvas* canvas,
                            double animation_progress,
                            PaintDownloadProgressSize size);
 
+void PaintDownloadInterrupted(gfx::Canvas* canvas,
+#if defined(TOOLKIT_VIEWS)
+                              views::View* containing_view,
+#endif
+                              int origin_x,
+                              int origin_y,
+                              double animation_progress,
+                              PaintDownloadProgressSize size);
+
 // Drag support ----------------------------------------------------------------
 
 // Helper function for download views to use when acting as a drag source for a
 // DownloadItem. If |icon| is NULL, no image will be accompany the drag. |view|
 // is only required for Mac OS X, elsewhere it can be NULL.
 void DragDownload(const DownloadItem* download,
-                  SkBitmap* icon,
+                  gfx::Image* icon,
                   gfx::NativeView view);
 
 // Helpers ---------------------------------------------------------------------
@@ -186,13 +238,17 @@ void DownloadUrl(const GURL& url,
                  ResourceDispatcherHost* rdh,
                  int render_process_host_id,
                  int render_view_id,
-                 URLRequestContextGetter* request_context_getter);
+                 net::URLRequestContextGetter* request_context_getter);
 
 // Tells the resource dispatcher host to cancel a download request.
 // Must be called on the IO thread.
 void CancelDownloadRequest(ResourceDispatcherHost* rdh,
                            int render_process_id,
                            int request_id);
+
+// Sends a notification on downloads being initiated
+// Must be called on the UI thread.
+void NotifyDownloadInitiated(int render_process_id, int render_view_id);
 
 // Same as GetUniquePathNumber, except that it also checks the existence
 // of its .crdownload intermediate path.
@@ -207,8 +263,11 @@ void EraseUniqueDownloadFiles(const FilePath& path_prefix);
 // Returns a .crdownload intermediate path for the |suggested_path|.
 FilePath GetCrDownloadPath(const FilePath& suggested_path);
 
-// Whether a given download should be considered potentially dangerous.
-bool IsDangerous(DownloadCreateInfo *info, Profile* profile);
+// Returns true if this download should show the "dangerous file" warning.
+// Various factors are considered, such as the type of the file, whether a
+// user action initiated the download, and whether the user has explictly
+// marked the file type as "auto open".
+bool IsDangerous(DownloadCreateInfo* info, Profile* profile, bool auto_open);
 
 }  // namespace download_util
 

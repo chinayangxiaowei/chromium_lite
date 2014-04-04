@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,13 +6,13 @@
 
 #include <vector>
 
-#include "chrome/browser/browser_window.h"
 #include "chrome/browser/chromeos/wm_ipc.h"
 #include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window.h"
 #include "ui/base/x/x11_util.h"
 #include "views/controls/image_view.h"
 #include "views/controls/label.h"
-#include "views/grid_layout.h"
+#include "views/layout/grid_layout.h"
 
 using std::vector;
 
@@ -59,12 +59,7 @@ void WmOverviewSnapshot::SetImage(const SkBitmap& image) {
   snapshot_view_->SetImage(image);
 
   // Reset the bounds to the size of the image.
-  gfx::Rect bounds;
-  GetBounds(&bounds, false);
-  bounds.set_width(image.width());
-  bounds.set_height(image.height());
-  SetBounds(bounds);
-
+  SetBounds(gfx::Rect(image.width(), image.height()));
   configured_snapshot_ = true;
 }
 

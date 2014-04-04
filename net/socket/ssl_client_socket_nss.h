@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -14,7 +14,9 @@
 #include <string>
 #include <vector>
 
-#include "base/scoped_ptr.h"
+#include "base/memory/scoped_ptr.h"
+#include "base/synchronization/lock.h"
+#include "base/threading/platform_thread.h"
 #include "base/time.h"
 #include "base/timer.h"
 #include "net/base/cert_verify_result.h"
@@ -53,6 +55,9 @@ class SSLClientSocketNSS : public SSLClientSocket {
                      DnsCertProvenanceChecker* dnsrr_resolver);
   ~SSLClientSocketNSS();
 
+  // For tests
+  static void ClearSessionCache();
+
   // SSLClientSocket methods:
   virtual void GetSSLInfo(SSLInfo* ssl_info);
   virtual void GetSSLCertRequestInfo(SSLCertRequestInfo* cert_request_info);
@@ -65,6 +70,7 @@ class SSLClientSocketNSS : public SSLClientSocket {
   virtual bool IsConnected() const;
   virtual bool IsConnectedAndIdle() const;
   virtual int GetPeerAddress(AddressList* address) const;
+  virtual int GetLocalAddress(IPEndPoint* address) const;
   virtual const BoundNetLog& NetLog() const;
   virtual void SetSubresourceSpeculation();
   virtual void SetOmniboxSpeculation();
@@ -77,10 +83,18 @@ class SSLClientSocketNSS : public SSLClientSocket {
   virtual bool SetReceiveBufferSize(int32 size);
   virtual bool SetSendBufferSize(int32 size);
 
-  // For tests
-  static void ClearSessionCache();
-
  private:
+  enum State {
+    STATE_NONE,
+    STATE_HANDSHAKE,
+    STATE_VERIFY_DNSSEC,
+    STATE_VERIFY_DNSSEC_COMPLETE,
+    STATE_VERIFY_CERT,
+    STATE_VERIFY_CERT_COMPLETE,
+  };
+
+  int Init();
+
   // Initializes NSS SSL options.  Returns a net error code.
   int InitializeSSLOptions();
 
@@ -104,8 +118,6 @@ class SSLClientSocketNSS : public SSLClientSocket {
   int DoReadLoop(int result);
   int DoWriteLoop(int result);
 
-  int DoSnapStartLoadInfo();
-  int DoSnapStartWaitForWrite();
   int DoHandshake();
 
   int DoVerifyDNSSEC(int result);
@@ -115,17 +127,18 @@ class SSLClientSocketNSS : public SSLClientSocket {
   int DoPayloadRead();
   int DoPayloadWrite();
   void LogConnectionTypeMetrics() const;
-  int Init();
-  void SaveSnapStartInfo();
-  bool LoadSnapStartInfo();
-  bool IsNPNProtocolMispredicted();
+  void SaveSSLHostInfo();
   void UncorkAfterTimeout();
 
   bool DoTransportIO();
   int BufferSend(void);
-  int BufferRecv(void);
   void BufferSendComplete(int result);
+  int BufferRecv(void);
   void BufferRecvComplete(int result);
+
+  // Handles an NSS error generated while handshaking or performing IO.
+  // Returns a network error code mapped from the original NSS error.
+  int HandleNSSError(PRErrorCode error, bool handshake_error);
 
   // NSS calls this when checking certificates. We pass 'this' as the first
   // argument.
@@ -148,6 +161,11 @@ class SSLClientSocketNSS : public SSLClientSocket {
   // NSS calls this when handshake is completed.  We pass 'this' as the second
   // argument.
   static void HandshakeCallback(PRFileDesc* socket, void* arg);
+
+  // The following methods are for debugging bug 65948. Will remove this code
+  // after fixing bug 65948.
+  void EnsureThreadIdAssigned() const;
+  bool CalledOnValidThread() const;
 
   CompletionCallbackImpl<SSLClientSocketNSS> buffer_send_callback_;
   CompletionCallbackImpl<SSLClientSocketNSS> buffer_recv_callback_;
@@ -204,10 +222,6 @@ class SSLClientSocketNSS : public SSLClientSocket {
   // True if the SSL handshake has been completed.
   bool completed_handshake_;
 
-  // True if we are lying about being connected in order to merge the first
-  // Write call into a Snap Start handshake.
-  bool pseudo_connected_;
-
   // True iff we believe that the user has an ESET product intercepting our
   // HTTPS connections.
   bool eset_mitm_detected_;
@@ -224,16 +238,6 @@ class SSLClientSocketNSS : public SSLClientSocket {
   // The time when we started waiting for DNSSEC records.
   base::Time dnssec_wait_start_time_;
 
-  enum State {
-    STATE_NONE,
-    STATE_SNAP_START_LOAD_INFO,
-    STATE_SNAP_START_WAIT_FOR_WRITE,
-    STATE_HANDSHAKE,
-    STATE_VERIFY_DNSSEC,
-    STATE_VERIFY_DNSSEC_COMPLETE,
-    STATE_VERIFY_CERT,
-    STATE_VERIFY_CERT_COMPLETE,
-  };
   State next_handshake_state_;
 
   // The NSS SSL state machine
@@ -244,18 +248,18 @@ class SSLClientSocketNSS : public SSLClientSocket {
 
   BoundNetLog net_log_;
 
-  // When performing Snap Start we need to predict the NPN protocol which the
-  // server is going to speak before we actually perform the handshake. Thus
-  // the last NPN protocol used is serialised in |ssl_host_info_|
-  // and kept in these fields:
-  SSLClientSocket::NextProtoStatus predicted_npn_status_;
-  std::string predicted_npn_proto_;
-  bool predicted_npn_proto_used_;
-
   base::TimeTicks start_cert_verification_time_;
 
   scoped_ptr<SSLHostInfo> ssl_host_info_;
   DnsCertProvenanceChecker* const dns_cert_checker_;
+
+  // The following two variables are added for debugging bug 65948. Will
+  // remove this code after fixing bug 65948.
+  // Added the following code Debugging in release mode.
+  mutable base::Lock lock_;
+  // This is mutable so that CalledOnValidThread can set it.
+  // It's guarded by |lock_|.
+  mutable base::PlatformThreadId valid_thread_id_;
 };
 
 }  // namespace net

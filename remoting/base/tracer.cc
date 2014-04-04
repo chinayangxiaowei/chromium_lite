@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,9 +8,9 @@
 
 #include "base/basictypes.h"
 #include "base/lazy_instance.h"
+#include "base/memory/ref_counted.h"
 #include "base/message_loop.h"
 #include "base/rand_util.h"
-#include "base/ref_counted.h"
 #include "base/stl_util-inl.h"
 #include "base/synchronization/condition_variable.h"
 #include "base/threading/thread.h"
@@ -72,11 +72,11 @@ class OutputLogger {
       TraceBuffer* buffer = NULL;
       {
         base::AutoLock l(lock_);
-        if (buffers_.size() == 0) {
+        if (buffers_.empty()) {
           wake_.Wait();
         }
         // Check again since we might have woken for a stop signal.
-        if (buffers_.size() != 0) {
+        if (!buffers_.empty()) {
           buffer = buffers_.back();
           buffers_.pop_back();
         }

@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -69,6 +69,9 @@ class PreferenceModelAssociator
     // thread.
   }
 
+  // See ModelAssociator interface.
+  virtual bool CryptoReadyIfNecessary();
+
   // Not implemented.
   virtual const PrefService::Preference* GetChromeNodeFromSyncId(int64 sync_id);
 
@@ -108,10 +111,6 @@ class PreferenceModelAssociator
   // Perform any additional operations that need to happen after a preference
   // has been updated.
   void AfterUpdateOperations(const std::string& pref_name);
-
- protected:
-  // Returns sync service instance.
-  ProfileSyncService* sync_service() { return sync_service_; }
 
  private:
   typedef std::map<std::string, int64> PreferenceNameToSyncIdMap;

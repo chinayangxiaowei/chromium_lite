@@ -1,5 +1,5 @@
 #!/usr/bin/python
-# Copyright (c) 2010 The Chromium Authors. All rights reserved.
+# Copyright (c) 2011 The Chromium Authors. All rights reserved.
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
@@ -138,6 +138,9 @@ class DownloadsTest(pyauto.PyUITest):
     # Trigger download and wait in new incognito window.
     self.DownloadAndWaitForStart(file_url, 1)
     self.WaitForAllDownloadsToComplete(1)
+    # Remove next line when WaitForAllDownloadsToComplete can reliably wait
+    # for downloads in incognito window. crbug.com/69738
+    self.WaitForDownloadToComplete(downloaded_pkg)
     incognito_downloads = self.GetDownloadsInfo(1).Downloads()
 
     # Verify that download info exists in the correct profile.
@@ -212,10 +215,7 @@ class DownloadsTest(pyauto.PyUITest):
     self._ClearLocalDownloadState(downloaded_pkg)
     self.DownloadAndWaitForStart(file_url)
     self._DeleteAfterShutdown(downloaded_pkg)
-    # Waiting for big file to download might exceed automation timeout.
-    # Temporarily increase the automation timeout.
-    test_utils.CallFunctionWithNewTimeout(self, 4 * 60 * 1000,  # 4 min.
-                                          self.WaitForAllDownloadsToComplete)
+    self.WaitForAllDownloadsToComplete(timeout=self.large_test_timeout_ms());
     # Verify that the file was correctly downloaded
     self.assertTrue(os.path.exists(downloaded_pkg),
                     'Downloaded file %s missing.' % downloaded_pkg)
@@ -324,21 +324,6 @@ class DownloadsTest(pyauto.PyUITest):
     self.assertTrue(self.WaitUntil(
         lambda: len(self.GetDownloadsInfo().Downloads()) == num_downloads + 1))
 
-  def testNoUnsafeDownloadsOnRestart(self):
-    """Verify that unsafe file should not show up on session restart."""
-    file_path = self._GetDangerousDownload()
-    downloaded_pkg = os.path.join(self.GetDownloadDirectory().value(),
-                                  os.path.basename(file_path))
-    self._ClearLocalDownloadState(downloaded_pkg)
-    self._TriggerUnsafeDownload(os.path.basename(file_path))
-    self.assertTrue(self.IsDownloadShelfVisible())
-    # Restart the browser and assert that the download was removed.
-    self.RestartBrowser(clear_profile=False)
-    self.assertFalse(os.path.exists(downloaded_pkg))
-    self.assertFalse(self.IsDownloadShelfVisible())
-    self.NavigateToURL("chrome://downloads")
-    self.assertFalse(self.GetDownloadsInfo().Downloads())
-
   def testPauseAndResume(self):
     """Verify that pause and resume work while downloading a file.
 
@@ -371,11 +356,7 @@ class DownloadsTest(pyauto.PyUITest):
     resume_dict = self.PerformActionOnDownload(self._GetDownloadId(),
                                                'toggle_pause')
     self.assertFalse(resume_dict['is_paused'])
-
-    # Waiting for big file to download might exceed automation timeout.
-    # Temporarily increase the automation timeout.
-    test_utils.CallFunctionWithNewTimeout(self, 2 * 60 * 1000,  # 2 min.
-                                          self.WaitForAllDownloadsToComplete)
+    self.WaitForAllDownloadsToComplete(timeout=self.large_test_timeout_ms());
 
     # Verify that the file was correctly downloaded after pause and resume.
     self.assertTrue(os.path.exists(downloaded_pkg),

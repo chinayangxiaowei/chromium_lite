@@ -30,6 +30,27 @@ const FilePath::CharType kInternalFlashPluginFileName[] =
     FILE_PATH_LITERAL("libgcflashplayer.so");
 #endif
 
+// File name of the internal PDF plugin on different platforms.
+const FilePath::CharType kInternalPDFPluginFileName[] =
+#if defined(OS_WIN)
+    FILE_PATH_LITERAL("pdf.dll");
+#elif defined(OS_MACOSX)
+    FILE_PATH_LITERAL("PDF.plugin");
+#else  // Linux and Chrome OS
+    FILE_PATH_LITERAL("libpdf.so");
+#endif
+
+// File name of the internal NaCl plugin on different platforms.
+const FilePath::CharType kInternalNaClPluginFileName[] =
+#if defined(OS_WIN)
+    FILE_PATH_LITERAL("ppGoogleNaClPluginChrome.dll");
+#elif defined(OS_MACOSX)
+    // TODO(noelallen) Please verify this extention name is correct.
+    FILE_PATH_LITERAL("ppGoogleNaClPluginChrome.plugin");
+#else  // Linux and Chrome OS
+    FILE_PATH_LITERAL("libppGoogleNaClPluginChrome.so");
+#endif
+
 }  // namespace
 
 namespace chrome {
@@ -50,19 +71,6 @@ bool GetInternalPluginsDirectory(FilePath* result) {
 
   // The rest of the world expects plugins in the module directory.
   return PathService::Get(base::DIR_MODULE, result);
-}
-
-bool GetGearsPluginPathFromCommandLine(FilePath* path) {
-#ifndef NDEBUG
-  // for debugging, support a cmd line based override
-  FilePath plugin_path =
-      CommandLine::ForCurrentProcess()->GetSwitchValuePath(
-          switches::kGearsPluginPathOverride);
-  *path = plugin_path;
-  return !plugin_path.empty();
-#else
-  return false;
-#endif
 }
 
 bool PathProvider(int key, FilePath* result) {
@@ -187,6 +195,14 @@ bool PathProvider(int key, FilePath* result) {
       if (!GetInternalPluginsDirectory(&cur))
         return false;
       break;
+    case chrome::DIR_MEDIA_LIBS:
+#if defined(OS_MACOSX)
+      *result = base::mac::MainAppBundlePath();
+      *result = result->Append("Libraries");
+      return true;
+#else
+      return PathService::Get(chrome::DIR_APP, result);
+#endif
     case chrome::FILE_LOCAL_STATE:
       if (!PathService::Get(chrome::DIR_USER_DATA, &cur))
         return false;
@@ -196,29 +212,6 @@ bool PathProvider(int key, FilePath* result) {
       if (!PathService::Get(chrome::DIR_USER_DATA, &cur))
         return false;
       cur = cur.Append(FILE_PATH_LITERAL("script.log"));
-      break;
-    case chrome::FILE_GEARS_PLUGIN:
-      if (!GetGearsPluginPathFromCommandLine(&cur)) {
-#if defined(OS_WIN)
-        // Search for gears.dll alongside chrome.dll first.  This new model
-        // allows us to package gears.dll with the Chrome installer and update
-        // it while Chrome is running.
-        if (!GetInternalPluginsDirectory(&cur))
-          return false;
-        cur = cur.Append(FILE_PATH_LITERAL("gears.dll"));
-
-        if (!file_util::PathExists(cur)) {
-          if (!PathService::Get(base::DIR_EXE, &cur))
-            return false;
-          cur = cur.Append(FILE_PATH_LITERAL("plugins"));
-          cur = cur.Append(FILE_PATH_LITERAL("gears"));
-          cur = cur.Append(FILE_PATH_LITERAL("gears.dll"));
-        }
-#else
-        // No gears.dll on non-Windows systems.
-        return false;
-#endif
-      }
       break;
     case chrome::FILE_FLASH_PLUGIN:
       if (!GetInternalPluginsDirectory(&cur))
@@ -230,25 +223,12 @@ bool PathProvider(int key, FilePath* result) {
     case chrome::FILE_PDF_PLUGIN:
       if (!GetInternalPluginsDirectory(&cur))
         return false;
-#if defined(OS_WIN)
-      cur = cur.Append(FILE_PATH_LITERAL("pdf.dll"));
-#elif defined(OS_MACOSX)
-      cur = cur.Append(FILE_PATH_LITERAL("PDF.plugin"));
-#else  // Linux and Chrome OS
-      cur = cur.Append(FILE_PATH_LITERAL("libpdf.so"));
-#endif
+      cur = cur.Append(kInternalPDFPluginFileName);
       break;
     case chrome::FILE_NACL_PLUGIN:
       if (!GetInternalPluginsDirectory(&cur))
         return false;
-#if defined(OS_WIN)
-      cur = cur.Append(FILE_PATH_LITERAL("ppGoogleNaClPluginChrome.dll"));
-#elif defined(OS_MACOSX)
-      // TODO(noelallen) Please verify this extention name is correct.
-      cur = cur.Append(FILE_PATH_LITERAL("ppGoogleNaClPluginChrome.plugin"));
-#else  // Linux and Chrome OS
-      cur = cur.Append(FILE_PATH_LITERAL("libppGoogleNaClPluginChrome.so"));
-#endif
+      cur = cur.Append(kInternalNaClPluginFileName);
       break;
     case chrome::FILE_RESOURCES_PACK:
 #if defined(OS_MACOSX)
@@ -294,7 +274,7 @@ bool PathProvider(int key, FilePath* result) {
       if (!file_util::PathExists(cur))  // we don't want to create this
         return false;
       break;
-#if !defined(OS_MACOSX) && defined(OS_POSIX)
+#if defined(OS_POSIX) && !defined(OS_MACOSX)
     case chrome::DIR_POLICY_FILES: {
 #if defined(GOOGLE_CHROME_BUILD)
       cur = FilePath(FILE_PATH_LITERAL("/etc/opt/chrome/policies"));

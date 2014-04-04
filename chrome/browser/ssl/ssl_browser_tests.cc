@@ -1,18 +1,18 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "base/time.h"
 #include "chrome/app/chrome_command_ids.h"
-#include "chrome/browser/tab_contents/interstitial_page.h"
-#include "chrome/browser/tab_contents/navigation_entry.h"
-#include "chrome/browser/tab_contents/tab_contents.h"
 #include "chrome/browser/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_navigator.h"
 #include "chrome/browser/ui/tab_contents/tab_contents_wrapper.h"
 #include "chrome/test/in_process_browser_test.h"
 #include "chrome/test/ui_test_utils.h"
+#include "content/browser/tab_contents/interstitial_page.h"
+#include "content/browser/tab_contents/navigation_entry.h"
+#include "content/browser/tab_contents/tab_contents.h"
 #include "net/base/cert_status_flags.h"
 #include "net/test/test_server.h"
 
@@ -414,7 +414,7 @@ IN_PROC_BROWSER_TEST_F(SSLUITest, TestHTTPSErrorWithNoNavEntry) {
   GURL url = https_server_expired_.GetURL("files/ssl/google.htm");
   TabContentsWrapper* tab2 =
       browser()->AddSelectedTabWithURL(url, PageTransition::TYPED);
-  ui_test_utils::WaitForLoadStop(&(tab2->controller()));
+  ui_test_utils::WaitForLoadStop(tab2->tab_contents());
 
   // Verify our assumption that there was no prior navigation.
   EXPECT_FALSE(browser()->command_updater()->IsCommandEnabled(IDC_BACK));
@@ -760,8 +760,9 @@ IN_PROC_BROWSER_TEST_F(SSLUITest, DISABLED_TestCloseTabWithUnsafePopup) {
 }
 
 // Visit a page over bad https that is a redirect to a page with good https.
-// Marked as flaky, see bug 40932.
-IN_PROC_BROWSER_TEST_F(SSLUITest, FLAKY_TestRedirectBadToGoodHTTPS) {
+// Crashes: http://crbug.com/77374
+// Previously marked as flaky: http://crbug.com/40932
+IN_PROC_BROWSER_TEST_F(SSLUITest, DISABLED_TestRedirectBadToGoodHTTPS) {
   ASSERT_TRUE(https_server_.Start());
   ASSERT_TRUE(https_server_expired_.Start());
 

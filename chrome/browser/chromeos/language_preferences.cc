@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -18,10 +18,9 @@ const char kHotKeySectionName[] = "general/hotkey";
 const char kPreloadEnginesConfigName[] = "preload_engines";
 const char kNextEngineInMenuConfigName[] = "next_engine_in_menu";
 const char kPreviousEngineConfigName[] = "previous_engine";
-// ibus-daemon accepts up to 5 next-engine hot-keys.
 const char kHotkeyNextEngineInMenu[] =
     "Shift+Alt+Release+Shift_L,Shift+Alt+Release+Meta_L,Control+Shift+space,"
-    "Zenkaku_Hankaku,Hangul";
+    "Shift+Alt+Release+Shift_R,Shift+Alt+Release+Meta_R,Zenkaku_Hankaku,Hangul";
 const char kHotkeyPreviousEngine[] = "Control+space";
 
 // ---------------------------------------------------------------------------
@@ -36,15 +35,19 @@ const LanguageBooleanPrefs kChewingBooleanPrefs[] = {
     IDS_OPTIONS_SETTINGS_LANGUAGES_CHEWING_SETTING_AUTO_SHIFT_CUR},
   { prefs::kLanguageChewingAddPhraseDirection, false, "addPhraseDirection",
     IDS_OPTIONS_SETTINGS_LANGUAGES_CHEWING_SETTING_ADD_PHRASE_DIRECTION},
+  /* Temporarily disabled. (crosbug.com/14185)
   { prefs::kLanguageChewingEasySymbolInput, true, "easySymbolInput",
     IDS_OPTIONS_SETTINGS_LANGUAGES_CHEWING_SETTING_EASY_SYMBOL_INPUT},
+  */
   { prefs::kLanguageChewingEscCleanAllBuf, false, "escCleanAllBuf",
     IDS_OPTIONS_SETTINGS_LANGUAGES_CHEWING_SETTING_ESC_CLEAN_ALL_BUF},
   { prefs::kLanguageChewingForceLowercaseEnglish, false,
     "forceLowercaseEnglish",
     IDS_OPTIONS_SETTINGS_LANGUAGES_CHEWING_SETTING_FORCE_LOWER_CASE_ENGLISH},
+  /* Temporarily disabled. (crosbug.com/14185)
   { prefs::kLanguageChewingPlainZhuyin, false, "plainZhuyin",
     IDS_OPTIONS_SETTINGS_LANGUAGES_CHEWING_SETTING_PLAIN_ZHUYIN},
+  */
   { prefs::kLanguageChewingPhraseChoiceRearward, true, "phraseChoiceRearward",
     IDS_OPTIONS_SETTINGS_LANGUAGES_CHEWING_SETTING_PHRASE_CHOICE_REARWARD},
   { prefs::kLanguageChewingSpaceAsSelection, true, "spaceAsSelection",

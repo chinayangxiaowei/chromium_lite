@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,17 +9,17 @@
 #include "base/json/json_writer.h"
 #include "base/string_number_conversions.h"
 #include "base/values.h"
-#include "chrome/browser/bookmarks/bookmark_node_data.h"
 #include "chrome/browser/bookmarks/bookmark_model.h"
+#include "chrome/browser/bookmarks/bookmark_node_data.h"
 #include "chrome/browser/bookmarks/bookmark_utils.h"
-#include "chrome/browser/dom_ui/chrome_url_data_manager.h"
 #include "chrome/browser/extensions/extension_bookmark_helpers.h"
 #include "chrome/browser/extensions/extension_bookmarks_module_constants.h"
-#include "chrome/browser/extensions/extension_dom_ui.h"
 #include "chrome/browser/extensions/extension_event_router.h"
+#include "chrome/browser/extensions/extension_web_ui.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/renderer_host/render_view_host.h"
-#include "chrome/browser/tab_contents/tab_contents.h"
+#include "chrome/browser/ui/webui/chrome_url_data_manager.h"
+#include "content/browser/renderer_host/render_view_host.h"
+#include "content/browser/tab_contents/tab_contents.h"
 #include "grit/generated_resources.h"
 #include "ui/base/l10n/l10n_util.h"
 
@@ -43,10 +43,10 @@ const BookmarkNode* GetNodeFromArguments(BookmarkModel* model,
 // Gets a vector of bookmark nodes from the argument list of IDs.
 // This returns false in the case of failure.
 bool GetNodesFromArguments(BookmarkModel* model, const ListValue* args,
-    std::vector<const BookmarkNode*>* nodes) {
+    size_t args_index, std::vector<const BookmarkNode*>* nodes) {
 
   ListValue* ids;
-  if (!args->GetList(0, &ids))
+  if (!args->GetList(args_index, &ids))
     return false;
 
   size_t count = ids->GetSize();
@@ -80,7 +80,7 @@ void AddNodeToList(ListValue* list, const BookmarkNode& node) {
   std::string id_string = base::Int64ToString(node.id());
   dict->SetString(keys::kIdKey, id_string);
 
-  std::string parent_id_string = base::Int64ToString(node.GetParent()->id());
+  std::string parent_id_string = base::Int64ToString(node.parent()->id());
   dict->SetString(keys::kParentIdKey, parent_id_string);
 
   if (node.is_url())
@@ -89,7 +89,7 @@ void AddNodeToList(ListValue* list, const BookmarkNode& node) {
   dict->SetString(keys::kTitleKey, node.GetTitle());
 
   ListValue* children = new ListValue();
-  for (int i = 0; i < node.GetChildCount(); ++i)
+  for (int i = 0; i < node.child_count(); ++i)
     AddNodeToList(children, *node.GetChild(i));
   dict->Set(keys::kChildrenKey, children);
 
@@ -214,7 +214,7 @@ bool ClipboardBookmarkManagerFunction::CopyOrCut(bool cut) {
   BookmarkModel* model = profile()->GetBookmarkModel();
   std::vector<const BookmarkNode*> nodes;
   EXTENSION_FUNCTION_VALIDATE(GetNodesFromArguments(model, args_.get(),
-                                                    &nodes));
+                                                    0, &nodes));
   bookmark_utils::CopyToClipboard(model, nodes, cut);
   return true;
 }
@@ -224,10 +224,14 @@ bool CopyBookmarkManagerFunction::RunImpl() {
 }
 
 bool CutBookmarkManagerFunction::RunImpl() {
+  if (!EditBookmarksEnabled())
+    return false;
   return CopyOrCut(true);
 }
 
 bool PasteBookmarkManagerFunction::RunImpl() {
+  if (!EditBookmarksEnabled())
+    return false;
   BookmarkModel* model = profile()->GetBookmarkModel();
   const BookmarkNode* parent_node = GetNodeFromArguments(model, args_.get());
   if (!parent_node) {
@@ -237,11 +241,26 @@ bool PasteBookmarkManagerFunction::RunImpl() {
   bool can_paste = bookmark_utils::CanPasteFromClipboard(parent_node);
   if (!can_paste)
     return false;
-  bookmark_utils::PasteFromClipboard(model, parent_node, -1);
+
+  // We want to use the highest index of the selected nodes as a destination.
+  std::vector<const BookmarkNode*> nodes;
+  // No need to test return value, if we got an empty list, we insert at end.
+  GetNodesFromArguments(model, args_.get(), 1, &nodes);
+  int highest_index = -1;  // -1 means insert at end of list.
+  for (size_t node = 0; node < nodes.size(); ++node) {
+    // + 1 so that we insert after the selection.
+    int this_node_index = parent_node->GetIndexOf(nodes[node]) + 1;
+    if (this_node_index > highest_index)
+      highest_index = this_node_index;
+  }
+
+  bookmark_utils::PasteFromClipboard(model, parent_node, highest_index);
   return true;
 }
 
 bool CanPasteBookmarkManagerFunction::RunImpl() {
+  if (!EditBookmarksEnabled())
+    return false;
   BookmarkModel* model = profile()->GetBookmarkModel();
   const BookmarkNode* parent_node = GetNodeFromArguments(model, args_.get());
   if (!parent_node) {
@@ -255,6 +274,8 @@ bool CanPasteBookmarkManagerFunction::RunImpl() {
 }
 
 bool SortChildrenBookmarkManagerFunction::RunImpl() {
+  if (!EditBookmarksEnabled())
+    return false;
   BookmarkModel* model = profile()->GetBookmarkModel();
   const BookmarkNode* parent_node = GetNodeFromArguments(model, args_.get());
   if (!parent_node) {
@@ -337,17 +358,19 @@ bool BookmarkManagerGetStringsFunction::RunImpl() {
 }
 
 bool StartDragBookmarkManagerFunction::RunImpl() {
+  if (!EditBookmarksEnabled())
+    return false;
   BookmarkModel* model = profile()->GetBookmarkModel();
   std::vector<const BookmarkNode*> nodes;
   EXTENSION_FUNCTION_VALIDATE(
-      GetNodesFromArguments(model, args_.get(), &nodes));
+      GetNodesFromArguments(model, args_.get(), 0, &nodes));
 
   if (dispatcher()->render_view_host()->delegate()->GetRenderViewType() ==
       ViewType::TAB_CONTENTS) {
-    ExtensionDOMUI* dom_ui =
-        static_cast<ExtensionDOMUI*>(dispatcher()->delegate());
+    ExtensionWebUI* web_ui =
+        static_cast<ExtensionWebUI*>(dispatcher()->delegate());
     bookmark_utils::DragBookmarks(
-        profile(), nodes, dom_ui->tab_contents()->GetNativeView());
+        profile(), nodes, web_ui->tab_contents()->GetNativeView());
 
     return true;
   } else {
@@ -357,6 +380,9 @@ bool StartDragBookmarkManagerFunction::RunImpl() {
 }
 
 bool DropBookmarkManagerFunction::RunImpl() {
+  if (!EditBookmarksEnabled())
+    return false;
+
   BookmarkModel* model = profile()->GetBookmarkModel();
 
   int64 id;
@@ -378,14 +404,14 @@ bool DropBookmarkManagerFunction::RunImpl() {
   if (args_->GetSize() == 2)
     EXTENSION_FUNCTION_VALIDATE(args_->GetInteger(1, &drop_index));
   else
-    drop_index = drop_parent->GetChildCount();
+    drop_index = drop_parent->child_count();
 
   if (dispatcher()->render_view_host()->delegate()->GetRenderViewType() ==
       ViewType::TAB_CONTENTS) {
-    ExtensionDOMUI* dom_ui =
-        static_cast<ExtensionDOMUI*>(dispatcher()->delegate());
+    ExtensionWebUI* web_ui =
+        static_cast<ExtensionWebUI*>(dispatcher()->delegate());
     ExtensionBookmarkManagerEventRouter* router =
-        dom_ui->extension_bookmark_manager_event_router();
+        web_ui->extension_bookmark_manager_event_router();
 
     DCHECK(router);
     const BookmarkNodeData* drag_data = router->GetBookmarkNodeData();

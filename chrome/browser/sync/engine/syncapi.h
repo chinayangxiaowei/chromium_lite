@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -43,8 +43,10 @@
 #include <vector>
 
 #include "base/basictypes.h"
+#include "base/callback.h"
 #include "base/gtest_prod_util.h"
-#include "base/scoped_ptr.h"
+#include "base/memory/scoped_ptr.h"
+#include "base/tracked.h"
 #include "build/build_config.h"
 #include "chrome/browser/sync/protocol/password_specifics.pb.h"
 #include "chrome/browser/sync/syncable/autofill_migration.h"
@@ -53,9 +55,11 @@
 #include "chrome/common/net/gaia/google_service_auth_error.h"
 #include "googleurl/src/gurl.h"
 
+class DictionaryValue;
 class FilePath;
 
 namespace browser_sync {
+class JsBackend;
 class ModelSafeWorkerRegistrar;
 
 namespace sessions {
@@ -63,9 +67,9 @@ struct SyncSessionSnapshot;
 }
 }
 
-namespace notifier {
-struct NotifierOptions;
-}
+namespace sync_notifier {
+class SyncNotifier;
+}  // namespace sync_notifier
 
 // Forward declarations of internal class types so that sync API objects
 // may have opaque pointers to these types.
@@ -98,7 +102,6 @@ class TypedUrlSpecifics;
 
 namespace sync_api {
 
-// Forward declarations of classes to be defined later in this file.
 class BaseTransaction;
 class HttpPostProviderFactory;
 class SyncManager;
@@ -250,6 +253,14 @@ class BaseNode {
   virtual const syncable::Entry* GetEntry() const = 0;
   virtual const BaseTransaction* GetTransaction() const = 0;
 
+  // Dumps all node info into a DictionaryValue and returns it.
+  // Transfers ownership of the DictionaryValue to the caller.
+  DictionaryValue* ToValue() const;
+
+  // Does a case in-sensitive search for a given string, which must be
+  // lower case.
+  bool ContainsString(const std::string& lowercase_query) const;
+
  protected:
   BaseNode();
   virtual ~BaseNode();
@@ -260,14 +271,26 @@ class BaseNode {
 
   // Determines whether part of the entry is encrypted, and if so attempts to
   // decrypt it. Unless decryption is necessary and fails, this will always
-  // return |true|.
+  // return |true|. If the contents are encrypted, the decrypted data will be
+  // stored in |unencrypted_data_|.
+  // This method is invoked once when the BaseNode is initialized.
   bool DecryptIfNecessary(syncable::Entry* entry);
+
+  // Returns the unencrypted specifics associated with |entry|. If |entry| was
+  // not encrypted, it directly returns |entry|'s EntitySpecifics. Otherwise,
+  // returns |unencrypted_data_|.
+  // This method is invoked by the datatype specific Get<datatype>Specifics
+  // methods.
+  const sync_pb::EntitySpecifics& GetUnencryptedSpecifics(
+      const syncable::Entry* entry) const;
 
  private:
   void* operator new(size_t size);  // Node is meant for stack use only.
 
-  // If this node represents a password, this field will hold the actual
-  // decrypted password data.
+  // A holder for the unencrypted data stored in an encrypted node.
+  sync_pb::EntitySpecifics unencrypted_data_;
+
+  // Same as |unencrypted_data_|, but for legacy password encryption.
   scoped_ptr<sync_pb::PasswordSpecificsData> password_data_;
 
   friend class SyncApiTest;
@@ -382,6 +405,10 @@ class WriteNode : public BaseNode {
   // Should only be called if GetModelType() == SESSIONS.
   void SetSessionSpecifics(const sync_pb::SessionSpecifics& specifics);
 
+  // Resets the EntitySpecifics for this node based on the unencrypted data.
+  // Will encrypt if necessary.
+  void ResetFromSpecifics();
+
   // Implementation of BaseNode's abstract virtual accessors.
   virtual const syncable::Entry* GetEntry() const;
 
@@ -429,6 +456,9 @@ class WriteNode : public BaseNode {
   // Sets IS_UNSYNCED and SYNCING to ensure this entry is considered in an
   // upcoming commit pass.
   void MarkForSyncing();
+
+  // Encrypt the specifics if the datatype requries it.
+  void EncryptIfNecessary(sync_pb::EntitySpecifics* new_value);
 
   // The underlying syncable object which this class wraps.
   syncable::MutableEntry* entry_;
@@ -581,13 +611,21 @@ class SyncManager {
   // internal types from clients of the interface.
   class SyncInternal;
 
-  // TODO(tim): Depending on how multi-type encryption pans out, maybe we
-  // should turn ChangeRecord itself into a class.  Or we could template this
-  // wrapper / add a templated method to return unencrypted protobufs.
-  class ExtraChangeRecordData {
+  // TODO(zea): One day get passwords playing nicely with the rest of encryption
+  // and get rid of this.
+  class ExtraPasswordChangeRecordData {
    public:
-    ExtraChangeRecordData() {}
-    virtual ~ExtraChangeRecordData() {}
+    ExtraPasswordChangeRecordData();
+    explicit ExtraPasswordChangeRecordData(
+        const sync_pb::PasswordSpecificsData& data);
+    virtual ~ExtraPasswordChangeRecordData();
+
+    // Transfers ownership of the DictionaryValue to the caller.
+    virtual DictionaryValue* ToValue() const;
+
+    const sync_pb::PasswordSpecificsData& unencrypted() const;
+   private:
+    sync_pb::PasswordSpecificsData unencrypted_;
   };
 
   // ChangeRecord indicates a single item that changed as a result of a sync
@@ -603,24 +641,13 @@ class SyncManager {
     ChangeRecord();
     ~ChangeRecord();
 
+    // Transfers ownership of the DictionaryValue to the caller.
+    DictionaryValue* ToValue(const BaseTransaction* trans) const;
+
     int64 id;
     Action action;
     sync_pb::EntitySpecifics specifics;
-    linked_ptr<ExtraChangeRecordData> extra;
-  };
-
-  // Since PasswordSpecifics is just an encrypted blob, we extend to provide
-  // access to unencrypted bits.
-  class ExtraPasswordChangeRecordData : public ExtraChangeRecordData {
-   public:
-    explicit ExtraPasswordChangeRecordData(
-        const sync_pb::PasswordSpecificsData& data);
-    virtual ~ExtraPasswordChangeRecordData();
-    const sync_pb::PasswordSpecificsData& unencrypted() {
-      return unencrypted_;
-    }
-   private:
-    sync_pb::PasswordSpecificsData unencrypted_;
+    linked_ptr<ExtraPasswordChangeRecordData> extra;
   };
 
   // Status encapsulates detailed state about the internals of the SyncManager.
@@ -697,9 +724,6 @@ class SyncManager {
   // to dispatch to a native thread or synchronize accordingly.
   class Observer {
    public:
-    Observer() { }
-    virtual ~Observer() { }
-
     // Notify the observer that changes have been applied to the sync model.
     //
     // This will be invoked on the same thread as on which ApplyChanges was
@@ -761,6 +785,13 @@ class SyncManager {
     // encryption, |for_decryption| will be false.
     virtual void OnPassphraseRequired(bool for_decryption) = 0;
 
+    // Called only by SyncInternal::SetPassphrase to indiciate that an attempted
+    // passphrase failed to decrypt pending keys. This is different from
+    // OnPassphraseRequired in that it denotes we finished an attempt to set
+    // a passphrase. OnPassphraseRequired means we have data we could not
+    // decrypt yet, and can come from numerous places.
+    virtual void OnPassphraseFailed() = 0;
+
     // Called when the passphrase provided by the user has been accepted and is
     // now used to encrypt sync data.  |bootstrap_token| is an opaque base64
     // encoded representation of the key generated by the accepted passphrase,
@@ -777,12 +808,6 @@ class SyncManager {
     // message, unless otherwise specified, produces undefined behavior.
     virtual void OnInitializationComplete() = 0;
 
-    // The syncer thread has been paused.
-    virtual void OnPaused() = 0;
-
-    // The syncer thread has been resumed.
-    virtual void OnResumed() = 0;
-
     // We are no longer permitted to communicate with the server. Sync should
     // be disabled and state cleaned up at once.  This can happen for a number
     // of reasons, e.g. swapping from a test instance to production, or a
@@ -790,13 +815,19 @@ class SyncManager {
     virtual void OnStopSyncingPermanently() = 0;
 
     // After a request to clear server data, these callbacks are invoked to
-    // indicate success or failure
+    // indicate success or failure.
     virtual void OnClearServerDataSucceeded() = 0;
     virtual void OnClearServerDataFailed() = 0;
 
-   private:
-    DISALLOW_COPY_AND_ASSIGN(Observer);
+    // Called after we finish encrypting all appropriate datatypes.
+    virtual void OnEncryptionComplete(
+        const syncable::ModelTypeSet& encrypted_types) = 0;
+
+   protected:
+    virtual ~Observer();
   };
+
+  typedef Callback0::Type ModeChangeCallback;
 
   // Create an uninitialized SyncManager.  Callers must Init() before using.
   SyncManager();
@@ -814,7 +845,7 @@ class SyncManager {
   // |model_safe_worker| ownership is given to the SyncManager.
   // |user_agent| is a 7-bit ASCII string suitable for use as the User-Agent
   // HTTP header. Used internally when collecting stats to classify clients.
-  // |notifier_options| contains options specific to sync notifications.
+  // |sync_notifier| used to listen for notifications, not owned.
   bool Init(const FilePath& database_location,
             const char* sync_server_and_path,
             int sync_server_port,
@@ -823,7 +854,7 @@ class SyncManager {
             browser_sync::ModelSafeWorkerRegistrar* registrar,
             const char* user_agent,
             const SyncCredentials& credentials,
-            const notifier::NotifierOptions& notifier_options,
+            sync_notifier::SyncNotifier* sync_notifier,
             const std::string& restored_key_for_bootstrapping,
             bool setup_for_test_mode);
 
@@ -854,7 +885,12 @@ class SyncManager {
   // Update tokens that we're using in Sync. Email must stay the same.
   void UpdateCredentials(const SyncCredentials& credentials);
 
+  // Called when the user disables or enables a sync type.
+  void UpdateEnabledTypes();
+
   // Start the SyncerThread.
+  // TODO(tim): With the new impl, this would mean starting "NORMAL" operation.
+  // Rename this when switched over or at least update comment.
   void StartSyncing();
 
   // Attempt to set the passphrase. If the passphrase is valid,
@@ -870,21 +906,25 @@ class SyncManager {
   // *not* override an explicit passphrase set previously.
   void SetPassphrase(const std::string& passphrase, bool is_explicit);
 
-  // Requests the syncer thread to pause.  The observer's OnPause
-  // method will be called when the syncer thread is paused.  Returns
-  // false if the syncer thread can not be paused (e.g. if it is not
-  // started).
-  bool RequestPause();
+  // Set the datatypes we want to encrypt and encrypt any nodes as necessary.
+  // Note: |encrypted_types| will be unioned with the current set of encrypted
+  // types, as we do not currently support decrypting datatypes.
+  void EncryptDataTypes(const syncable::ModelTypeSet& encrypted_types);
 
-  // Requests the syncer thread to resume.  The observer's OnResume
-  // method will be called when the syncer thread is resumed.  Returns
-  // false if the syncer thread can not be resumed (e.g. if it is not
-  // paused).
-  bool RequestResume();
+  // Puts the SyncerThread into a mode where no normal nudge or poll traffic
+  // will occur, but calls to RequestConfig will be supported.  If |callback|
+  // is provided, it will be invoked (from the internal SyncerThread) when
+  // the thread has changed to configuration mode.
+  void StartConfigurationMode(ModeChangeCallback* callback);
+
+  // For the new SyncerThread impl, this switches the mode of operation to
+  // CONFIGURATION_MODE and schedules a config task to fetch updates for
+  // |types|. It is an error to call this with legacy SyncerThread in use.
+  void RequestConfig(const syncable::ModelTypeBitSet& types);
 
   // Request a nudge of the syncer, which will cause the syncer thread
   // to run at the next available opportunity.
-  void RequestNudge();
+  void RequestNudge(const tracked_objects::Location& nudge_location);
 
   // Request a clearing of all data on the server
   void RequestClearServerData();
@@ -892,12 +932,46 @@ class SyncManager {
   // Adds a listener to be notified of sync events.
   // NOTE: It is OK (in fact, it's probably a good idea) to call this before
   // having received OnInitializationCompleted.
-  void SetObserver(Observer* observer);
+  void AddObserver(Observer* observer);
 
-  // Remove the observer set by SetObserver (no op if none was set).
-  // Make sure to call this if the Observer set in SetObserver is being
-  // destroyed so the SyncManager doesn't potentially dereference garbage.
-  void RemoveObserver();
+  // Remove the given observer.  Make sure to call this if the
+  // Observer is being destroyed so the SyncManager doesn't
+  // potentially dereference garbage.
+  void RemoveObserver(Observer* observer);
+
+  // Returns a pointer to the JsBackend (which is owned by the sync
+  // manager).  Never returns NULL.  The following events are sent by
+  // the returned backend:
+  //
+  // onSyncNotificationStateChange(boolean notificationsEnabled):
+  //   Sent when notifications are enabled or disabled.
+  //
+  // onSyncIncomingNotification(array changedTypes):
+  //   Sent when an incoming notification arrives.  |changedTypes|
+  //   contains a list of sync types (strings) which have changed.
+  //
+  // The following messages are processed by the returned backend:
+  //
+  // getNotificationState():
+  //   If there is a parent router, sends the
+  //   onGetNotificationStateFinished(boolean notificationsEnabled)
+  //   event to |sender| via the parent router with whether or not
+  //   notifications are enabled.
+  //
+  // getRootNode():
+  //   If there is a parent router, sends the
+  //   onGetRootNodeFinished(dictionary nodeInfo) event to |sender|
+  //   via the parent router with information on the root node.
+  //
+  // getNodeById(string id):
+  //   If there is a parent router, sends the
+  //   onGetNodeByIdFinished(dictionary nodeInfo) event to |sender|
+  //   via the parent router with information on the node with the
+  //   given id (metahandle), if the id is valid and a node with that
+  //   id exists.  Otherwise, calls onGetNodeByIdFinished(null).
+  //
+  // All other messages are dropped.
+  browser_sync::JsBackend* GetJsBackend();
 
   // Status-related getters. Typically GetStatusSummary will suffice, but
   // GetDetailedSyncStatus can be useful for gathering debug-level details of
@@ -925,82 +999,19 @@ class SyncManager {
   // any remaining unsynced items.
   bool HasUnsyncedItems() const;
 
+  // Functions used for testing.
+
+  void TriggerOnNotificationStateChangeForTest(
+      bool notifications_enabled);
+
+  void TriggerOnIncomingNotificationForTest(
+      const syncable::ModelTypeBitSet& model_types);
+
  private:
   // An opaque pointer to the nested private class.
   SyncInternal* data_;
 
   DISALLOW_COPY_AND_ASSIGN(SyncManager);
-};
-
-// An interface the embedding application (e.g. Chromium) implements to
-// provide required HTTP POST functionality to the syncer backend.
-// This interface is designed for one-time use. You create one, use it, and
-// create another if you want to make a subsequent POST.
-// TODO(timsteele): Bug 1482576. Consider splitting syncapi.h into two files:
-// one for the API defining the exports, which doesn't need to be included from
-// anywhere internally, and another file for the interfaces like this one.
-class HttpPostProviderInterface {
- public:
-  HttpPostProviderInterface() { }
-  virtual ~HttpPostProviderInterface() { }
-
-  // Use specified user agent string when POSTing. If not called a default UA
-  // may be used.
-  virtual void SetUserAgent(const char* user_agent) = 0;
-
-  // Add additional headers to the request.
-  virtual void SetExtraRequestHeaders(const char * headers) = 0;
-
-  // Set the URL to POST to.
-  virtual void SetURL(const char* url, int port) = 0;
-
-  // Set the type, length and content of the POST payload.
-  // |content_type| is a null-terminated MIME type specifier.
-  // |content| is a data buffer; Do not interpret as a null-terminated string.
-  // |content_length| is the total number of chars in |content|. It is used to
-  // assign/copy |content| data.
-  virtual void SetPostPayload(const char* content_type, int content_length,
-                              const char* content) = 0;
-
-  // Returns true if the URL request succeeded. If the request failed,
-  // os_error() may be non-zero and hence contain more information.
-  virtual bool MakeSynchronousPost(int* os_error_code, int* response_code) = 0;
-
-  // Get the length of the content returned in the HTTP response.
-  // This does not count the trailing null-terminating character returned
-  // by GetResponseContent, so it is analogous to calling string.length.
-  virtual int GetResponseContentLength() const = 0;
-
-  // Get the content returned in the HTTP response.
-  // This is a null terminated string of characters.
-  // Value should be copied.
-  virtual const char* GetResponseContent() const = 0;
-
-  // Get the value of a header returned in the HTTP response.
-  // If the header is not present, returns the empty string.
-  virtual const std::string GetResponseHeaderValue(
-      const std::string& name) const = 0;
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(HttpPostProviderInterface);
-};
-
-// A factory to create HttpPostProviders to hide details about the
-// implementations and dependencies.
-// A factory instance itself should be owned by whomever uses it to create
-// HttpPostProviders.
-class HttpPostProviderFactory {
- public:
-  // Obtain a new HttpPostProviderInterface instance, owned by caller.
-  virtual HttpPostProviderInterface* Create() = 0;
-
-  // When the interface is no longer needed (ready to be cleaned up), clients
-  // must call Destroy().
-  // This allows actual HttpPostProvider subclass implementations to be
-  // reference counted, which is useful if a particular implementation uses
-  // multiple threads to serve network requests.
-  virtual void Destroy(HttpPostProviderInterface* http) = 0;
-  virtual ~HttpPostProviderFactory() { }
 };
 
 }  // namespace sync_api

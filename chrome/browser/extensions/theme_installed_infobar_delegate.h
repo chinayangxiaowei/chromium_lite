@@ -6,9 +6,10 @@
 #define CHROME_BROWSER_EXTENSIONS_THEME_INSTALLED_INFOBAR_DELEGATE_H_
 #pragma once
 
-#include "chrome/browser/tab_contents/infobar_delegate.h"
-#include "chrome/common/notification_registrar.h"
+#include "chrome/browser/tab_contents/confirm_infobar_delegate.h"
+#include "content/common/notification_registrar.h"
 
+class ThemeService;
 class Extension;
 class SkBitmap;
 class TabContents;
@@ -24,12 +25,12 @@ class ThemeInstalledInfoBarDelegate : public ConfirmInfoBarDelegate,
 
   // Returns true if the given theme is the same as the one associated with this
   // info bar.
-  bool MatchesTheme(const Extension* theme);
+  bool MatchesTheme(const Extension* theme) const;
 
  protected:
   virtual ~ThemeInstalledInfoBarDelegate();
 
-  Profile* profile() { return profile_; }
+  ThemeService* theme_service() { return theme_service_; }
 
   // ConfirmInfoBarDelegate:
   virtual bool Cancel();
@@ -49,6 +50,7 @@ class ThemeInstalledInfoBarDelegate : public ConfirmInfoBarDelegate,
                        const NotificationDetails& details);
 
   Profile* profile_;
+  ThemeService* theme_service_;
 
   // Name of theme that's just been installed.
   std::string name_;

@@ -11,22 +11,21 @@
 #include "base/i18n/rtl.h"
 #include "base/utf_string_conversions.h"
 #include "chrome/browser/blocked_content_container.h"
-#include "chrome/browser/content_settings/host_content_settings_map.h"
 #include "chrome/browser/content_setting_bubble_model.h"
+#include "chrome/browser/content_settings/host_content_settings_map.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/tab_contents/tab_contents.h"
 #include "chrome/browser/ui/gtk/gtk_chrome_link_button.h"
-#include "chrome/browser/ui/gtk/gtk_theme_provider.h"
+#include "chrome/browser/ui/gtk/gtk_theme_service.h"
 #include "chrome/browser/ui/gtk/gtk_util.h"
-#include "chrome/browser/ui/gtk/options/content_settings_window_gtk.h"
 #include "chrome/common/content_settings.h"
-#include "chrome/common/notification_source.h"
-#include "chrome/common/notification_type.h"
-#include "gfx/gtk_util.h"
+#include "content/browser/tab_contents/tab_contents.h"
+#include "content/common/notification_source.h"
+#include "content/common/notification_type.h"
 #include "grit/app_resources.h"
 #include "grit/generated_resources.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/text/text_elider.h"
+#include "ui/gfx/gtk_util.h"
 #include "webkit/plugins/npapi/plugin_list.h"
 
 namespace {
@@ -88,7 +87,7 @@ void ContentSettingBubbleGtk::Observe(NotificationType type,
 }
 
 void ContentSettingBubbleGtk::BuildBubble() {
-  GtkThemeProvider* theme_provider = GtkThemeProvider::GetFrom(profile_);
+  GtkThemeService* theme_provider = GtkThemeService::GetFrom(profile_);
 
   GtkWidget* bubble_content = gtk_vbox_new(FALSE, gtk_util::kControlSpacing);
   gtk_container_set_border_width(GTK_CONTAINER(bubble_content), kContentBorder);

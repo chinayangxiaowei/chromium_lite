@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,9 +8,11 @@
 
 #include "base/file_util.h"
 #include "base/process_util.h"
+#include "chrome/common/extensions/extension_messages.h"
+#include "chrome/common/print_messages.h"
 #include "chrome/common/render_messages.h"
-#include "chrome/common/render_messages_params.h"
 #include "chrome/common/url_constants.h"
+#include "content/common/view_messages.h"
 #include "ipc/ipc_message_utils.h"
 #include "ipc/ipc_sync_message.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -21,14 +23,10 @@ MockRenderThread::MockRenderThread()
       widget_(NULL),
       reply_deserializer_(NULL),
       printer_(new MockPrinter),
-      is_extension_process_(false) {
+      print_dialog_user_response_(true) {
 }
 
 MockRenderThread::~MockRenderThread() {
-}
-
-const ExtensionSet* MockRenderThread::GetExtensions() const {
-  return &extensions_;
 }
 
 // Called by the Widget. The routing_id must match the routing id assigned
@@ -53,6 +51,11 @@ void MockRenderThread::AddFilter(IPC::ChannelProxy::MessageFilter* filter) {
 // Called when the filter is removed.
 void MockRenderThread::RemoveFilter(IPC::ChannelProxy::MessageFilter* filter) {
   filter->OnFilterRemoved();
+}
+
+
+bool MockRenderThread::IsIncognitoProcess() const {
+  return false;
 }
 
 // Called by the Widget. Used to send messages to the browser.
@@ -94,28 +97,26 @@ bool MockRenderThread::OnMessageReceived(const IPC::Message& msg) {
   bool msg_is_ok = true;
   IPC_BEGIN_MESSAGE_MAP_EX(MockRenderThread, msg, msg_is_ok)
     IPC_MESSAGE_HANDLER(ViewHostMsg_CreateWidget, OnMsgCreateWidget)
-    IPC_MESSAGE_HANDLER(ViewHostMsg_OpenChannelToExtension,
+    IPC_MESSAGE_HANDLER(ExtensionHostMsg_OpenChannelToExtension,
                         OnMsgOpenChannelToExtension)
-    IPC_MESSAGE_HANDLER(ViewHostMsg_GetDefaultPrintSettings,
+    IPC_MESSAGE_HANDLER(PrintHostMsg_GetDefaultPrintSettings,
                         OnGetDefaultPrintSettings)
-    IPC_MESSAGE_HANDLER(ViewHostMsg_ScriptedPrint,
+    IPC_MESSAGE_HANDLER(PrintHostMsg_ScriptedPrint,
                         OnScriptedPrint)
 #if defined(OS_WIN) || defined(OS_MACOSX)
-    IPC_MESSAGE_HANDLER(ViewHostMsg_DidGetPrintedPagesCount,
+    IPC_MESSAGE_HANDLER(PrintHostMsg_DidGetPrintedPagesCount,
                         OnDidGetPrintedPagesCount)
-    IPC_MESSAGE_HANDLER(ViewHostMsg_DidPrintPage, OnDidPrintPage)
+    IPC_MESSAGE_HANDLER(PrintHostMsg_DidPrintPage, OnDidPrintPage)
 #endif
 #if defined(OS_WIN)
-    IPC_MESSAGE_HANDLER(ViewHostMsg_DuplicateSection, OnDuplicateSection)
+    IPC_MESSAGE_HANDLER(PrintHostMsg_DuplicateSection, OnDuplicateSection)
 #endif
-#if defined(OS_POSIX)
     IPC_MESSAGE_HANDLER(ViewHostMsg_AllocateSharedMemoryBuffer,
                         OnAllocateSharedMemoryBuffer)
-#endif
-#if defined(OS_LINUX)
-    IPC_MESSAGE_HANDLER(ViewHostMsg_AllocateTempFileForPrinting,
+#if defined(OS_CHROMEOS)
+    IPC_MESSAGE_HANDLER(PrintHostMsg_AllocateTempFileForPrinting,
                         OnAllocateTempFileForPrinting)
-    IPC_MESSAGE_HANDLER(ViewHostMsg_TempFileForPrintingWritten,
+    IPC_MESSAGE_HANDLER(PrintHostMsg_TempFileForPrintingWritten,
                         OnTempFileForPrintingWritten)
 #endif
     IPC_MESSAGE_UNHANDLED(handled = false)
@@ -148,7 +149,6 @@ void MockRenderThread::OnDuplicateSection(
 }
 #endif
 
-#if defined(OS_POSIX)
 void MockRenderThread::OnAllocateSharedMemoryBuffer(
     uint32 buffer_size, base::SharedMemoryHandle* handle) {
   base::SharedMemory shared_buf;
@@ -159,9 +159,8 @@ void MockRenderThread::OnAllocateSharedMemoryBuffer(
   }
   shared_buf.GiveToProcess(base::GetCurrentProcessHandle(), handle);
 }
-#endif
 
-#if defined(OS_LINUX)
+#if defined(OS_CHROMEOS)
 void MockRenderThread::OnAllocateTempFileForPrinting(
     base::FileDescriptor* renderer_fd,
     int* browser_fd) {
@@ -179,17 +178,18 @@ void MockRenderThread::OnAllocateTempFileForPrinting(
 void MockRenderThread::OnTempFileForPrintingWritten(int browser_fd) {
   close(browser_fd);
 }
-#endif
+#endif  // defined(OS_CHROMEOS)
 
-void MockRenderThread::OnGetDefaultPrintSettings(ViewMsg_Print_Params* params) {
+void MockRenderThread::OnGetDefaultPrintSettings(
+    PrintMsg_Print_Params* params) {
   if (printer_.get())
     printer_->GetDefaultPrintSettings(params);
 }
 
 void MockRenderThread::OnScriptedPrint(
-    const ViewHostMsg_ScriptedPrint_Params& params,
-    ViewMsg_PrintPages_Params* settings) {
-  if (printer_.get()) {
+    const PrintHostMsg_ScriptedPrint_Params& params,
+    PrintMsg_PrintPages_Params* settings) {
+  if (print_dialog_user_response_ && printer_.get()) {
     printer_->ScriptedPrint(params.cookie,
                             params.expected_pages_count,
                             params.has_selection,
@@ -203,7 +203,11 @@ void MockRenderThread::OnDidGetPrintedPagesCount(int cookie, int number_pages) {
 }
 
 void MockRenderThread::OnDidPrintPage(
-    const ViewHostMsg_DidPrintPage_Params& params) {
+    const PrintHostMsg_DidPrintPage_Params& params) {
   if (printer_.get())
     printer_->PrintPage(params);
+}
+
+void MockRenderThread::set_print_dialog_user_response(bool response) {
+  print_dialog_user_response_ = response;
 }

@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -16,20 +16,23 @@
 #include <vector>
 
 #include "base/compiler_specific.h"
+#include "base/memory/ref_counted.h"
 #include "base/observer_list.h"
 #include "chrome/browser/download/save_package.h"
 #include "chrome/common/automation_constants.h"
-#include "chrome/common/page_type.h"
 #include "chrome/common/security_style.h"
 #include "chrome/test/automation/automation_handle_tracker.h"
 #include "chrome/test/automation/dom_element_proxy.h"
 #include "chrome/test/automation/javascript_execution_controller.h"
+#include "content/common/page_type.h"
+#include "webkit/glue/window_open_disposition.h"
 
+class BrowserProxy;
 class GURL;
 class Value;
 namespace IPC {
 class Message;
-};
+}
 
 enum FindInPageDirection { BACK = 0, FWD = 1 };
 enum FindInPageCase { IGNORE_CASE = 0, CASE_SENSITIVE = 1 };
@@ -60,6 +63,9 @@ class TabProxy : public AutomationResourceProxy,
   TabProxy(AutomationMessageSender* sender,
            AutomationHandleTracker* tracker,
            int handle);
+
+  // Gets the browser that holds this tab.
+  scoped_refptr<BrowserProxy> GetParentBrowser() const;
 
   // Gets the current url of the tab.
   bool GetCurrentURL(GURL* url) const WARN_UNUSED_RESULT;
@@ -98,30 +104,6 @@ class TabProxy : public AutomationResourceProxy,
   // Returns a DOMElementProxyRef to the tab's current DOM document.
   // This proxy is invalidated when the document changes.
   DOMElementProxyRef GetDOMDocument();
-
-  // Configure extension automation mode. When extension automation
-  // mode is turned on, the automation host can overtake extension API calls
-  // e.g. to make UI tests for extensions easier to write.  Returns true if
-  // the message is successfully sent.
-  //
-  // Note that API calls in _any_ extension view will be routed to the current
-  // tab.  This is to enable UI testing of e.g. extension background pages.
-  //
-  // Enabling extension automation from more than one tab is an error.
-  //
-  // You must disable extension automation before destroying the tab.
-  //
-  // The parameter can take the following types of values:
-  // a) An empty list to turn off extension automation.
-  // b) A list with one item, "*", to turn extension automation on for all
-  //    functions.
-  // c) A list with one or more items which are the names of Chrome Extension
-  //    API functions that should be forwarded over the automation interface.
-  //    Other functions will continue to be fulfilled as normal. This lets you
-  //    write tests where some functionality continues to function as normal,
-  //    and other functionality is mocked out by the test.
-  bool SetEnableExtensionAutomation(
-    const std::vector<std::string>& functions_enabled) WARN_UNUSED_RESULT;
 
   // Navigates to a url. This method accepts the same kinds of URL input that
   // can be passed to Chrome on the command line. This is a synchronous call and
@@ -337,16 +319,16 @@ class TabProxy : public AutomationResourceProxy,
                 SavePackage::SavePackageType type) WARN_UNUSED_RESULT;
 
   // Retrieves the number of info-bars currently showing in |count|.
-  bool GetInfoBarCount(int* count) WARN_UNUSED_RESULT;
+  bool GetInfoBarCount(size_t* count) WARN_UNUSED_RESULT;
 
   // Waits until the infobar count is |count|.
   // Returns true on success.
-  bool WaitForInfoBarCount(int count) WARN_UNUSED_RESULT;
+  bool WaitForInfoBarCount(size_t count) WARN_UNUSED_RESULT;
 
   // Causes a click on the "accept" button of the info-bar at |info_bar_index|.
   // If |wait_for_navigation| is true, this call does not return until a
   // navigation has occurred.
-  bool ClickInfoBarAccept(int info_bar_index,
+  bool ClickInfoBarAccept(size_t info_bar_index,
                           bool wait_for_navigation) WARN_UNUSED_RESULT;
 
   // Retrieves the time at which the last navigation occurred.  This is intended

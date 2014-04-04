@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,11 +8,11 @@
 #include "base/time.h"
 #include "base/utf_string_conversions.h"
 #include "chrome/browser/chromeos/cros/cros_library.h"
-#include "gfx/canvas.h"
 #include "grit/generated_resources.h"
 #include "grit/theme_resources.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/resource/resource_bundle.h"
+#include "ui/gfx/canvas.h"
 
 namespace chromeos {
 
@@ -20,10 +20,10 @@ namespace chromeos {
 // PowerMenuButton
 
 // static
-const int PowerMenuButton::kNumPowerImages = 16;
+const int PowerMenuButton::kNumPowerImages = 19;
 
-PowerMenuButton::PowerMenuButton()
-    : StatusAreaButton(this),
+PowerMenuButton::PowerMenuButton(StatusAreaHost* host)
+    : StatusAreaButton(host, this),
       battery_is_present_(false),
       line_power_on_(false),
       battery_fully_charged_(false),
@@ -92,11 +92,16 @@ string16 PowerMenuButton::GetLabelAt(int index) const {
 }
 
 ////////////////////////////////////////////////////////////////////////////////
+// PowerMenuButton, views::View implementation:
+void PowerMenuButton::OnLocaleChanged() {
+  UpdateIconAndLabelInfo();
+}
+
+////////////////////////////////////////////////////////////////////////////////
 // PowerMenuButton, views::ViewMenuDelegate implementation:
 
 void PowerMenuButton::RunMenu(views::View* source, const gfx::Point& pt) {
   power_menu_.Rebuild();
-  power_menu_.UpdateStates();
   power_menu_.RunMenuAt(pt, views::Menu2::ALIGN_TOPRIGHT);
 }
 
@@ -157,6 +162,9 @@ void PowerMenuButton::UpdateIconAndLabelInfo() {
       IDR_STATUSBAR_BATTERY_CHARGING_14,
       IDR_STATUSBAR_BATTERY_CHARGING_15,
       IDR_STATUSBAR_BATTERY_CHARGING_16,
+      IDR_STATUSBAR_BATTERY_CHARGING_17,
+      IDR_STATUSBAR_BATTERY_CHARGING_18,
+      IDR_STATUSBAR_BATTERY_CHARGING_19,
     };
     static const int kDischargingImages[kNumPowerImages] = {
       IDR_STATUSBAR_BATTERY_DISCHARGING_1,
@@ -175,6 +183,9 @@ void PowerMenuButton::UpdateIconAndLabelInfo() {
       IDR_STATUSBAR_BATTERY_DISCHARGING_14,
       IDR_STATUSBAR_BATTERY_DISCHARGING_15,
       IDR_STATUSBAR_BATTERY_DISCHARGING_16,
+      IDR_STATUSBAR_BATTERY_DISCHARGING_17,
+      IDR_STATUSBAR_BATTERY_DISCHARGING_18,
+      IDR_STATUSBAR_BATTERY_DISCHARGING_19,
     };
 
     int index = static_cast<int>(battery_percentage_ / 100.0 *
@@ -186,6 +197,7 @@ void PowerMenuButton::UpdateIconAndLabelInfo() {
 
   SetIcon(*ResourceBundle::GetSharedInstance().GetBitmapNamed(icon_id_));
   SetTooltipText(UTF16ToWide(GetLabelAt(0)));
+  power_menu_.Rebuild();
   SchedulePaint();
 }
 

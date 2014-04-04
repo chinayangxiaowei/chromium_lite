@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -18,7 +18,7 @@
 
 namespace views {
 
-NativeButtonGtk::NativeButtonGtk(NativeButton* native_button)
+NativeButtonGtk::NativeButtonGtk(NativeButtonBase* native_button)
     : native_button_(native_button) {
   // Associates the actual GtkWidget with the native_button so the native_button
   // is the one considered as having the focus (not the wrapper) when the
@@ -74,7 +74,7 @@ View* NativeButtonGtk::GetView() {
 
 void NativeButtonGtk::SetFocus() {
   // Focus the associated widget.
-  Focus();
+  OnFocus();
 }
 
 bool NativeButtonGtk::UsesNativeLabel() const {
@@ -158,6 +158,8 @@ void NativeCheckboxGtk::OnClicked() {
   if (deliver_click_event_) {
     SyncCheckState();
     NativeButtonGtk::OnClicked();
+    GetWidget()->NotifyAccessibilityEvent(
+        checkbox(), ui::AccessibilityTypes::EVENT_VALUE_CHANGED, true);
   }
 }
 
@@ -233,14 +235,14 @@ void NativeRadioButtonGtk::SetGroupFrom(NativeButtonWrapper* wrapper) {
 ////////////////////////////////////////////////////////////////////////////////
 // NativeRadioButtonGtk, NativeControlGtk overrides:
 void NativeRadioButtonGtk::ViewHierarchyChanged(bool is_add,
-                                                View *parent, View *child) {
+                                                View* parent, View* child) {
   NativeControlGtk::ViewHierarchyChanged(is_add, parent, child);
 
   // look for the same group and update
   if (is_add && child == this) {
-    View* container = GetParent();
-    while (container && container->GetParent())
-      container = container->GetParent();
+    View* container = parent;
+    while (container && container->parent())
+      container = container->parent();
     if (container) {
       std::vector<View*> other;
       container->GetViewsWithGroup(native_button_->GetGroup(), &other);
@@ -283,7 +285,7 @@ int NativeButtonWrapper::GetFixedWidth() {
 
 // static
 NativeButtonWrapper* NativeButtonWrapper::CreateNativeButtonWrapper(
-    NativeButton* native_button) {
+    NativeButtonBase* native_button) {
   return new NativeButtonGtk(native_button);
 }
 

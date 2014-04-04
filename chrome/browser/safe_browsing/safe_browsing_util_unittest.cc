@@ -1,11 +1,11 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include <algorithm>
 
-#include "base/sha2.h"
 #include "base/string_util.h"
+#include "crypto/sha2.h"
 #include "chrome/browser/safe_browsing/safe_browsing_util.h"
 #include "googleurl/src/gurl.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -280,19 +280,19 @@ TEST(SafeBrowsingUtilTest, CanonicalizeUrl) {
   }
 }
 
-TEST(SafeBrowsingUtilTest, FullHashCompare) {
+TEST(SafeBrowsingUtilTest, GetUrlHashIndex) {
   GURL url("http://www.evil.com/phish.html");
   SBFullHashResult full_hash;
-  base::SHA256HashString(url.host() + url.path(),
+  crypto::SHA256HashString(url.host() + url.path(),
                          &full_hash.hash,
                          sizeof(SBFullHash));
   std::vector<SBFullHashResult> full_hashes;
   full_hashes.push_back(full_hash);
 
-  EXPECT_EQ(safe_browsing_util::CompareFullHashes(url, full_hashes), 0);
+  EXPECT_EQ(safe_browsing_util::GetUrlHashIndex(url, full_hashes), 0);
 
   url = GURL("http://www.evil.com/okay_path.html");
-  EXPECT_EQ(safe_browsing_util::CompareFullHashes(url, full_hashes), -1);
+  EXPECT_EQ(safe_browsing_util::GetUrlHashIndex(url, full_hashes), -1);
 }
 
 TEST(SafeBrowsingUtilTest, ListIdListNameConversion) {
@@ -333,4 +333,16 @@ TEST(SafeBrowsingUtilTest, ListIdVerification) {
   EXPECT_EQ(1, safe_browsing_util::PHISH % 2);
   EXPECT_EQ(0, safe_browsing_util::BINURL %2);
   EXPECT_EQ(1, safe_browsing_util::BINHASH % 2);
+}
+
+TEST(SafeBrowsingUtilTest, StringToSBFullHashAndSBFullHashToString) {
+  // 31 chars plus the last \0 as full_hash.
+  const std::string hash_in = "12345678902234567890323456789012";
+  SBFullHash hash_out;
+  safe_browsing_util::StringToSBFullHash(hash_in, &hash_out);
+  EXPECT_EQ(0x34333231, hash_out.prefix);
+  EXPECT_EQ(0, memcmp(hash_in.data(), hash_out.full_hash, sizeof(SBFullHash)));
+
+  std::string hash_final = safe_browsing_util::SBFullHashToString(hash_out);
+  EXPECT_EQ(hash_in, hash_final);
 }

@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -11,7 +11,7 @@
 #include <vector>
 
 #include "base/callback.h"
-#include "base/ref_counted.h"
+#include "base/memory/ref_counted.h"
 
 #include "printing/backend/print_backend.h"
 
@@ -158,7 +158,8 @@ class PrintSystem : public base::RefCountedThreadSafe<PrintSystem> {
   virtual PrintSystemResult Init() = 0;
 
   // Enumerates the list of installed local and network printers.
-  virtual void EnumeratePrinters(printing::PrinterList* printer_list) = 0;
+  virtual PrintSystemResult EnumeratePrinters(
+      printing::PrinterList* printer_list) = 0;
 
   // Gets the capabilities and defaults for a specific printer asynchronously.
   virtual void GetPrinterCapsAndDefaults(
@@ -183,6 +184,11 @@ class PrintSystem : public base::RefCountedThreadSafe<PrintSystem> {
   virtual PrinterWatcher* CreatePrinterWatcher(
       const std::string& printer_name) = 0;
   virtual JobSpooler* CreateJobSpooler() = 0;
+
+  // Returns a comma separated list of mimetypes for print data that are
+  // supported by this print system. The format of this string is the same as
+  // that used for the HTTP Accept: header.
+  virtual std::string GetSupportedMimeTypes() = 0;
 
   // Generate unique for proxy.
   static std::string GenerateProxyId();

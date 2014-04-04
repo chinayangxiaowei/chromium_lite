@@ -1,10 +1,10 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #import <Cocoa/Cocoa.h>
 
-#include "base/scoped_nsobject.h"
+#include "base/memory/scoped_nsobject.h"
 #include "base/utf_string_conversions.h"
 #import "chrome/browser/ui/cocoa/cocoa_test_helper.h"
 #import "chrome/browser/ui/cocoa/location_bar/autocomplete_text_field.h"
@@ -102,7 +102,7 @@ TEST_F(AutocompleteTextFieldCellTest, DISABLED_FocusedDisplay) {
 
   SelectedKeywordDecoration selected_keyword_decoration([view_ font]);
   selected_keyword_decoration.SetVisible(true);
-  selected_keyword_decoration.SetKeyword(std::wstring(L"Google"), false);
+  selected_keyword_decoration.SetKeyword(ASCIIToUTF16("Google"), false);
   [cell addLeftDecoration:&selected_keyword_decoration];
   EXPECT_NE(selected_keyword_decoration.GetWidthForSpace(kVeryWide),
             LocationBarDecoration::kOmittedWidth);

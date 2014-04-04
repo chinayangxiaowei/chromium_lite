@@ -6,16 +6,19 @@
 
 #include "base/utf_string_conversions.h"
 #include "base/values.h"
-#include "chrome/common/remoting/chromoting_host_info.h"
-#include "chrome/browser/dom_ui/dom_ui.h"
+#include "chrome/browser/prefs/pref_service.h"
+#include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/service/service_process_control_manager.h"
+#include "chrome/common/pref_names.h"
+#include "chrome/common/remoting/chromoting_host_info.h"
+#include "content/browser/webui/web_ui.h"
 #include "grit/generated_resources.h"
 #include "ui/base/l10n/l10n_util.h"
 
 namespace remoting {
 
 RemotingOptionsHandler::RemotingOptionsHandler()
-    : dom_ui_(NULL),
+    : web_ui_(NULL),
       process_control_(NULL) {
 }
 
@@ -24,18 +27,20 @@ RemotingOptionsHandler::~RemotingOptionsHandler() {
     process_control_->RemoveMessageHandler(this);
 }
 
-void RemotingOptionsHandler::Init(DOMUI* dom_ui) {
-  dom_ui_ = dom_ui;
+void RemotingOptionsHandler::Init(WebUI* web_ui) {
+  web_ui_ = web_ui;
 
   process_control_ =
       ServiceProcessControlManager::GetInstance()->GetProcessControl(
-          dom_ui_->GetProfile());
+          web_ui_->GetProfile());
   process_control_->AddMessageHandler(this);
 
   if (!process_control_->RequestRemotingHostStatus()) {
     // Assume that host is not started if we can't request status.
     SetStatus(false, "");
   }
+  web_ui_->GetProfile()->GetPrefs()->SetBoolean(
+      prefs::kRemotingHasSetupCompleted, false);
 }
 
 // ServiceProcessControl::MessageHandler interface
@@ -56,7 +61,7 @@ void RemotingOptionsHandler::SetStatus(
 
   FundamentalValue enabled_value(enabled);
   StringValue status_value(status);
-  dom_ui_->CallJavascriptFunction(L"options.AdvancedOptions.SetRemotingStatus",
+  web_ui_->CallJavascriptFunction("options.AdvancedOptions.SetRemotingStatus",
                                   enabled_value, status_value);
 }
 

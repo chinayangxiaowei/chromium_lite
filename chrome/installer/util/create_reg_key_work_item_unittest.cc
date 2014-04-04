@@ -1,11 +1,11 @@
-// Copyright (c) 2006-2008 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include <windows.h>
 
 #include "base/file_util.h"
-#include "base/scoped_ptr.h"
+#include "base/memory/scoped_ptr.h"
 #include "base/string_util.h"
 #include "base/win/registry.h"
 #include "chrome/installer/util/create_reg_key_work_item.h"
@@ -55,7 +55,7 @@ TEST_F(CreateRegKeyWorkItemTest, CreateKey) {
 
   scoped_ptr<CreateRegKeyWorkItem> work_item(
       WorkItem::CreateCreateRegKeyWorkItem(HKEY_CURRENT_USER,
-          key_to_create.ToWStringHack()));
+                                           key_to_create.value()));
 
   EXPECT_TRUE(work_item->Do());
 
@@ -81,7 +81,7 @@ TEST_F(CreateRegKeyWorkItemTest, CreateExistingKey) {
 
   scoped_ptr<CreateRegKeyWorkItem> work_item(
       WorkItem::CreateCreateRegKeyWorkItem(HKEY_CURRENT_USER,
-          key_to_create.ToWStringHack()));
+                                           key_to_create.value()));
 
   EXPECT_TRUE(work_item->Do());
 
@@ -109,7 +109,7 @@ TEST_F(CreateRegKeyWorkItemTest, CreateSharedKey) {
 
   scoped_ptr<CreateRegKeyWorkItem> work_item(
       WorkItem::CreateCreateRegKeyWorkItem(HKEY_CURRENT_USER,
-                                           key_to_create_3.ToWStringHack()));
+                                           key_to_create_3.value()));
 
   EXPECT_TRUE(work_item->Do());
 
@@ -148,7 +148,7 @@ TEST_F(CreateRegKeyWorkItemTest, RollbackWithMissingKey) {
 
   scoped_ptr<CreateRegKeyWorkItem> work_item(
       WorkItem::CreateCreateRegKeyWorkItem(HKEY_CURRENT_USER,
-                                           key_to_create_3.ToWStringHack()));
+                                           key_to_create_3.value()));
 
   EXPECT_TRUE(work_item->Do());
 
@@ -178,7 +178,7 @@ TEST_F(CreateRegKeyWorkItemTest, RollbackWithSetValue) {
 
   scoped_ptr<CreateRegKeyWorkItem> work_item(
       WorkItem::CreateCreateRegKeyWorkItem(HKEY_CURRENT_USER,
-                                           key_to_create.ToWStringHack()));
+                                           key_to_create.value()));
 
   EXPECT_TRUE(work_item->Do());
 

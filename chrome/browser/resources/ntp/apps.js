@@ -6,12 +6,6 @@ var MAX_APPS_PER_ROW = [];
 MAX_APPS_PER_ROW[LayoutMode.SMALL] = 4;
 MAX_APPS_PER_ROW[LayoutMode.NORMAL] = 6;
 
-// The URL prefix used in the app link 'ping' attributes.
-var PING_APP_LAUNCH_PREFIX = 'record-app-launch';
-
-// The URL prefix used in the webstore link 'ping' attributes.
-var PING_WEBSTORE_LAUNCH_PREFIX = 'record-webstore-launch';
-
 function getAppsCallback(data) {
   logEvent('received apps');
 
@@ -24,19 +18,22 @@ function getAppsCallback(data) {
   var appsSectionContent = $('apps-content');
   var appsMiniview = appsSection.getElementsByClassName('miniview')[0];
   var appsPromo = $('apps-promo');
-  var appsPromoPing = PING_WEBSTORE_LAUNCH_PREFIX + '+' + apps.showPromo;
+  var appsPromoLink = $('apps-promo-link');
+  var appsPromoPing = APP_LAUNCH_URL.PING_WEBSTORE + '+' + apps.showPromo;
   var webStoreEntry, webStoreMiniEntry;
 
   // Hide menu options that are not supported on the OS or windowing system.
 
   // The "Launch as Window" menu option.
-  $('apps-launch-type-window-menu-item').style.display =
-      (data.disableAppWindowLaunch ? 'none' : 'inline');
+  $('apps-launch-type-window-menu-item').hidden = data.disableAppWindowLaunch;
 
   // The "Create App Shortcut" menu option.
-  $('apps-create-shortcut-command-menu-item').style.display =
-      $('apps-create-shortcut-command-separator').style.display =
-      (data.disableCreateAppShortcut ? 'none' : '');
+  $('apps-create-shortcut-command-menu-item').hidden =
+      $('apps-create-shortcut-command-separator').hidden =
+          data.disableCreateAppShortcut;
+
+  // Hide the context menu, if there is any open.
+  cr.ui.contextMenuHandler.hideMenu();
 
   appsMiniview.textContent = '';
   appsSectionContent.textContent = '';
@@ -50,18 +47,47 @@ function getAppsCallback(data) {
   apps.detachWebstoreEntry =
       !apps.showPromo && data.apps.length >= MAX_APPS_PER_ROW[layoutMode];
 
+  markNewApps(data.apps);
   apps.data = data.apps;
-  if (!apps.detachWebstoreEntry)
-    apps.data.push('web-store-entry');
 
   clearClosedMenu(apps.menu);
+
+  // We wait for the app icons to load before displaying them, but never wait
+  // longer than 200ms.
+  apps.loadedImages = 0;
+  apps.imageTimer = setTimeout(apps.showImages.bind(apps), 200);
+
   data.apps.forEach(function(app) {
     appsSectionContent.appendChild(apps.createElement(app));
   });
 
-  webStoreEntry = apps.createWebStoreElement();
-  webStoreEntry.querySelector('a').setAttribute('ping', appsPromoPing);
-  appsSectionContent.appendChild(webStoreEntry);
+  if (data.showPromo) {
+    // Add the promo content...
+    $('apps-promo-heading').textContent = data.promoHeader;
+    appsPromoLink.href = data.promoLink;
+    appsPromoLink.textContent = data.promoButton;
+    appsPromoLink.ping = appsPromoPing;
+    $('apps-promo-hide').textContent = data.promoExpire;
+
+    // ... then display the promo.
+    document.documentElement.classList.add('apps-promo-visible');
+  } else {
+    document.documentElement.classList.remove('apps-promo-visible');
+  }
+
+  // Only show the web store entry if there are apps installed, since the promo
+  // is sufficient otherwise.
+  if (data.apps.length > 0) {
+    webStoreEntry = apps.createWebStoreElement();
+    webStoreEntry.querySelector('a').ping = appsPromoPing;
+    appsSectionContent.appendChild(webStoreEntry);
+    if (apps.detachWebstoreEntry) {
+      webStoreEntry.classList.add('loner');
+    } else {
+      webStoreEntry.classList.remove('loner');
+      apps.data.push('web-store-entry');
+    }
+  }
 
   data.apps.slice(0, MAX_MINIVIEW_ITEMS).forEach(function(app) {
     appsMiniview.appendChild(apps.createMiniviewElement(app));
@@ -69,42 +95,47 @@ function getAppsCallback(data) {
   });
   if (data.apps.length < MAX_MINIVIEW_ITEMS) {
     webStoreMiniEntry = apps.createWebStoreMiniElement();
-    webStoreEntry.querySelector('a').setAttribute('ping', appsPromoPing);
+    webStoreMiniEntry.querySelector('a').ping = appsPromoPing;
     appsMiniview.appendChild(webStoreMiniEntry);
     addClosedMenuEntryWithLink(apps.menu,
                                apps.createWebStoreClosedMenuElement());
   }
 
   if (!data.showLauncher)
-    appsSection.classList.add('disabled');
+    hideSection(Section.APPS);
   else
     appsSection.classList.remove('disabled');
 
   addClosedMenuFooter(apps.menu, 'apps', MENU_APPS, Section.APPS);
 
   apps.loaded = true;
-  if (apps.showPromo)
-    document.documentElement.classList.add('apps-promo-visible');
-  else
-    document.documentElement.classList.remove('apps-promo-visible');
 
-  var appsPromoLink = $('apps-promo-link');
   if (appsPromoLink)
-    appsPromoLink.setAttribute('ping', appsPromoPing);
+    appsPromoLink.ping = appsPromoPing;
   maybeDoneLoading();
 
   // Disable the animations when the app launcher is being (re)initailized.
   apps.layout({disableAnimations:true});
 
-  if (apps.detachWebstoreEntry)
-    webStoreEntry.classList.add('loner');
-  else
-    webStoreEntry.classList.remove('loner');
-
   if (isDoneLoading()) {
     updateMiniviewClipping(appsMiniview);
     layoutSections();
   }
+}
+
+function markNewApps(data) {
+  var oldData = apps.data;
+  data.forEach(function(app) {
+    if (hashParams['app-id'] == app['id']) {
+      delete hashParams['app-id'];
+      app.isNew = true;
+    } else if (oldData &&
+        !oldData.some(function(id) { return id == app.id; })) {
+      app.isNew = true;
+    } else {
+      app.isNew = false;
+    }
+  });
 }
 
 function appsPrefChangeCallback(data) {
@@ -114,6 +145,12 @@ function appsPrefChangeCallback(data) {
     if (appLink)
       appLink.setAttribute('launch-type', app['launch_type']);
   });
+}
+
+// Launches the specified app using the APP_LAUNCH_NTP_APP_RE_ENABLE histogram.
+// This should only be invoked from the AppLauncherHandler.
+function launchAppAfterEnable(appId) {
+  chrome.send('launchApp', [appId, APP_LAUNCH.NTP_APP_RE_ENABLE]);
 }
 
 var apps = (function() {
@@ -132,39 +169,43 @@ var apps = (function() {
     return div;
   }
 
-  function launchApp(appId) {
-    var appsSection = $('apps');
-    var expanded = !appsSection.classList.contains('collapsed');
-    var element = document.querySelector(
-        (expanded ? '.maxiview' : '.miniview') + ' a[app-id=' + appId + ']');
-
-    // TODO(arv): Handle zoom?
-    var rect = element.getBoundingClientRect();
-    var cs = getComputedStyle(element);
-    var size = cs.backgroundSize.split(/\s+/);  // background-size has the
-                                                // format '123px 456px'.
-
-    var width = parseInt(size[0], 10);
-    var height = parseInt(size[1], 10);
-
-    var top, left;
-    if (expanded) {
-      // We are using background-position-x 50%.
-      top = rect.top + parseInt(cs.backgroundPositionY, 10);
-      left = rect.left + ((rect.width - width) >> 1);  // Integer divide by 2.
-
-    } else {
-      // We are using background-position-y 50%.
-      top = rect.top + ((rect.height - width) >> 1);  // Integer divide by 2.
-      if (getComputedStyle(element).direction == 'rtl')
-        left = rect.left + rect.width - width;
-      else
-        left = rect.left;
+  /**
+   * Launches an application.
+   * @param {string} appId Application to launch.
+   * @param {MouseEvent} opt_mouseEvent Mouse event from the click that
+   *     triggered the launch, used to detect modifier keys that change
+   *     the tab's disposition.
+   */
+  function launchApp(appId, opt_mouseEvent) {
+    var args = [appId, getAppLaunchType()];
+    if (opt_mouseEvent) {
+      // Launch came from a click - add details of the click
+      // Otherwise it came from a 'command' event from elsewhere in the UI.
+      args.push(opt_mouseEvent.altKey, opt_mouseEvent.ctrlKey,
+                opt_mouseEvent.metaKey, opt_mouseEvent.shiftKey,
+                opt_mouseEvent.button);
     }
+    chrome.send('launchApp', args);
+  }
 
-    chrome.send('launchApp', [appId,
-                              String(left), String(top),
-                              String(width), String(height)]);
+  function isAppSectionMaximized() {
+    return getAppLaunchType() == APP_LAUNCH.NTP_APPS_MAXIMIZED &&
+      !$('apps').classList.contains('disabled');
+  }
+
+  function isAppsMenu(node) {
+    return node.id == 'apps-menu';
+  }
+
+  function getAppLaunchType() {
+    // We determine if the apps section is maximized, collapsed or in menu mode
+    // based on the class of the apps section.
+    if ($('apps').classList.contains('menu'))
+      return APP_LAUNCH.NTP_APPS_MENU;
+    else if ($('apps').classList.contains('collapsed'))
+      return APP_LAUNCH.NTP_APPS_COLLAPSED;
+    else
+      return APP_LAUNCH.NTP_APPS_MAXIMIZED;
   }
 
   /**
@@ -173,7 +214,7 @@ var apps = (function() {
   function handleClick(e) {
     var appId = e.currentTarget.getAttribute('app-id');
     if (!appDragAndDrop.isDragging())
-      launchApp(appId);
+      launchApp(appId, e);
     return false;
   }
 
@@ -193,6 +234,7 @@ var apps = (function() {
   };
 
   var currentApp;
+  var promoHasBeenSeen = false;
 
   function addContextMenu(el, app) {
     el.addEventListener('contextmenu', cr.ui.contextMenuHandler);
@@ -258,7 +300,8 @@ var apps = (function() {
       case 'apps-launch-type-fullscreen':
       case 'apps-launch-type-window':
         chrome.send('setLaunchType',
-            [currentApp['id'], e.command.getAttribute('launch-type')]);
+            [currentApp['id'],
+             Number(e.command.getAttribute('launch-type'))]);
         break;
     }
   });
@@ -269,8 +312,10 @@ var apps = (function() {
         e.canExecute = currentApp && currentApp['options_url'];
         break;
       case 'apps-launch-command':
-      case 'apps-uninstall-command':
         e.canExecute = true;
+        break;
+      case 'apps-uninstall-command':
+        e.canExecute = !currentApp['can_uninstall'];
         break;
     }
   });
@@ -319,6 +364,14 @@ var apps = (function() {
     set visible(visible) {
       this.visible_ = visible;
       this.invalidate_();
+    },
+
+    maybePingPromoSeen_: function() {
+      if (promoHasBeenSeen || !this.showPromo || !isAppSectionMaximized())
+        return;
+
+      promoHasBeenSeen = true;
+      chrome.send('promoSeen', []);
     },
 
     // DragAndDropDelegate
@@ -496,10 +549,11 @@ var apps = (function() {
       this.scrollMouseXY_ = null;
     },
 
-    saveDrag: function() {
+    saveDrag: function(draggedItem) {
       this.invalidate_();
       this.layout();
 
+      var draggedAppId = draggedItem.querySelector('a').getAttribute('app-id');
       var appIds = this.data.filter(function(id) {
         return id != 'web-store-entry';
       });
@@ -507,7 +561,7 @@ var apps = (function() {
       // Wait until the transitions are complete before notifying the browser.
       // Otherwise, the apps will be re-rendered while still transitioning.
       setTimeout(function() {
-        chrome.send('reorderApps', appIds);
+        chrome.send('reorderApps', [draggedAppId, appIds]);
       }, this.transitionsDuration + 10);
     },
 
@@ -537,9 +591,13 @@ var apps = (function() {
     },
 
     layoutImpl_: function() {
-      var apps = this.data;
+      var apps = this.data || [];
       var rects = this.getLayoutRects_(apps.length);
       var appsContent = this.dragContainer;
+
+      // Ping the PROMO_SEEN histogram only when the promo is maximized, and
+      // maximum once per NTP load.
+      this.maybePingPromoSeen_();
 
       if (!this.visible)
         return;
@@ -581,14 +639,53 @@ var apps = (function() {
       return rects;
     },
 
+    get loadedImages() {
+      return this.loadedImages_;
+    },
+
+    set loadedImages(value) {
+      this.loadedImages_ = value;
+      if (this.loadedImages_ == 0)
+        return;
+
+      // Each application icon is loaded asynchronously. Here, we display
+      // the icons once they've all been loaded to make it look nicer.
+      if (this.loadedImages_ == this.data.length) {
+        this.showImages();
+        return;
+      }
+
+      // We won't actually have the visible height until the sections have
+      // been layed out.
+      if (!maxiviewVisibleHeight)
+        return;
+
+      // If we know the visible height of the maxiview, then we can don't need
+      // to wait for all the icons. Instead, we wait until the visible portion
+      // have been loaded.
+      var appsPerRow = MAX_APPS_PER_ROW[layoutMode];
+      var rows = Math.ceil(maxiviewVisibleHeight / this.dimensions.height);
+      var count = Math.min(appsPerRow * rows, this.data.length);
+      if (this.loadedImages_ == count) {
+        this.showImages();
+        return;
+      }
+    },
+
+    showImages: function() {
+      $('apps-content').classList.add('visible');
+      clearTimeout(this.imageTimer);
+    },
+
     createElement: function(app) {
       var div = createElement(app);
       var a = div.firstChild;
 
       a.onclick = handleClick;
-      a.setAttribute('ping', PING_APP_LAUNCH_PREFIX + '+' + this.showPromo);
+      a.ping = getAppPingUrl(
+          'PING_BY_ID', this.showPromo, 'NTP_APPS_MAXIMIZED');
       a.style.backgroundImage = url(app['icon_big']);
-      if (hashParams['app-id'] == app['id']) {
+      if (app.isNew) {
         div.setAttribute('new', 'new');
         // Delay changing the attribute a bit to let the page settle down a bit.
         setTimeout(function() {
@@ -600,14 +697,13 @@ var apps = (function() {
         }, 500);
         div.addEventListener('webkitAnimationEnd', function(e) {
           div.removeAttribute('new');
-
-          // If we get new data (eg because something installs in another tab,
-          // or because we uninstall something here), don't run the install
-          // animation again.
-          document.documentElement.setAttribute("install-animation-enabled",
-                                                "false");
         });
       }
+
+      // CSS background images don't fire 'load' events, so we use an Image.
+      var img = new Image();
+      img.onload = function() { this.loadedImages++; }.bind(this);
+      img.src = app['icon_big'];
 
       var settingsButton = div.appendChild(new cr.ui.ContextMenuButton);
       settingsButton.className = 'app-settings';
@@ -626,7 +722,8 @@ var apps = (function() {
       a.textContent = app['name'];
       a.href = app['launch_url'];
       a.onclick = handleClick;
-      a.setAttribute('ping', PING_APP_LAUNCH_PREFIX + '+' + this.showPromo);
+      a.ping = getAppPingUrl(
+          'PING_BY_ID', this.showPromo, 'NTP_APPS_COLLAPSED');
       a.style.backgroundImage = url(app['icon_small']);
       a.className = 'item';
       span.appendChild(a);
@@ -642,7 +739,8 @@ var apps = (function() {
       a.textContent = app['name'];
       a.href = app['launch_url'];
       a.onclick = handleClick;
-      a.setAttribute('ping', PING_APP_LAUNCH_PREFIX + '+' + this.showPromo);
+      a.ping = getAppPingUrl(
+          'PING_BY_ID', this.showPromo, 'NTP_APPS_MENU');
       a.style.backgroundImage = url(app['icon_small']);
       a.className = 'item';
 

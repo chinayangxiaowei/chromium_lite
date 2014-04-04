@@ -8,9 +8,12 @@
 
 #include "views/widget/root_view.h"
 
+class AbstractTabStripView;
 class BrowserView;
+
+namespace ui {
 class OSExchangeData;
-class BaseTabStrip;
+}
 
 // RootView implementation used by BrowserFrame. This forwards drop events to
 // the TabStrip. Visually the tabstrip extends to the top of the frame, but in
@@ -22,15 +25,17 @@ class BrowserRootView : public views::RootView {
   // You must call set_tabstrip before this class will accept drops.
   BrowserRootView(BrowserView* browser_view, views::Widget* widget);
 
+  // Overridden from views::View:
   virtual bool GetDropFormats(
       int* formats,
-      std::set<OSExchangeData::CustomFormat>* custom_formats);
-  virtual bool AreDropTypesRequired();
-  virtual bool CanDrop(const OSExchangeData& data);
-  virtual void OnDragEntered(const views::DropTargetEvent& event);
-  virtual int OnDragUpdated(const views::DropTargetEvent& event);
-  virtual void OnDragExited();
-  virtual int OnPerformDrop(const views::DropTargetEvent& event);
+      std::set<ui::OSExchangeData::CustomFormat>* custom_formats) OVERRIDE;
+  virtual bool AreDropTypesRequired() OVERRIDE;
+  virtual bool CanDrop(const ui::OSExchangeData& data) OVERRIDE;
+  virtual void OnDragEntered(const views::DropTargetEvent& event) OVERRIDE;
+  virtual int OnDragUpdated(const views::DropTargetEvent& event) OVERRIDE;
+  virtual void OnDragExited() OVERRIDE;
+  virtual int OnPerformDrop(const views::DropTargetEvent& event) OVERRIDE;
+  virtual void GetAccessibleState(ui::AccessibleViewState* state) OVERRIDE;
 
  private:
   // Returns true if the event should be forwarded to the tabstrip.
@@ -40,14 +45,14 @@ class BrowserRootView : public views::RootView {
   // coordinate system.
   views::DropTargetEvent* MapEventToTabStrip(
       const views::DropTargetEvent& event,
-      const OSExchangeData& data);
+      const ui::OSExchangeData& data);
 
-  inline BaseTabStrip* tabstrip() const;
+  inline AbstractTabStripView* tabstrip() const;
 
   // Returns true if |data| has string contents and the user can "paste and go".
   // If |url| is non-NULL and the user can "paste and go", |url| is set to the
   // desired destination.
-  bool GetPasteAndGoURL(const OSExchangeData& data, GURL* url);
+  bool GetPasteAndGoURL(const ui::OSExchangeData& data, GURL* url);
 
   // The BrowserView.
   BrowserView* browser_view_;

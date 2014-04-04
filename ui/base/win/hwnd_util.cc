@@ -4,14 +4,9 @@
 
 #include "ui/base/win/hwnd_util.h"
 
-#include <dwmapi.h>
-
 #include "base/string_util.h"
-#include "base/win/windows_version.h"
-#include "gfx/rect.h"
-#include "gfx/size.h"
-
-#pragma comment(lib, "dwmapi.lib")
+#include "ui/gfx/rect.h"
+#include "ui/gfx/size.h"
 
 namespace ui {
 
@@ -87,6 +82,11 @@ void* SetWindowUserData(HWND hwnd, void* user_data) {
 }
 
 void* GetWindowUserData(HWND hwnd) {
+  DWORD process_id = 0;
+  DWORD thread_id = GetWindowThreadProcessId(hwnd, &process_id);
+  // A window outside the current process needs to be ignored.
+  if (process_id != ::GetCurrentProcessId())
+    return NULL;
   return reinterpret_cast<void*>(GetWindowLongPtr(hwnd, GWLP_USERDATA));
 }
 
@@ -169,13 +169,23 @@ void CenterAndSizeWindow(HWND parent,
   }
 }
 
-bool ShouldUseVistaFrame() {
-  if (base::win::GetVersion() < base::win::VERSION_VISTA)
-    return false;
-  // If composition is not enabled, we behave like on XP.
-  BOOL f;
-  DwmIsCompositionEnabled(&f);
-  return !!f;
+void CheckWindowCreated(HWND hwnd) {
+  if (hwnd)
+    return;
+
+  LPWSTR error_string = NULL;
+  DWORD last_error = GetLastError();
+  FormatMessage(FORMAT_MESSAGE_ALLOCATE_BUFFER |
+                FORMAT_MESSAGE_FROM_SYSTEM,
+                0,  // Use the internal message table.
+                last_error,
+                0,  // Use default language.
+                reinterpret_cast<LPWSTR>(&error_string),
+                0,  // Buffer size.
+                0);  // Arguments (unused).
+  // Typical reason for failure is ERROR_NOT_ENOUGH_MEMORY (8).
+  CHECK(false) << "Create failed error=" << last_error <<
+      " message=" << error_string;
 }
 
 }  // namespace ui

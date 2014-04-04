@@ -1,15 +1,15 @@
-// Copyright (c) 2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #import <Cocoa/Cocoa.h>
 
-#include "base/ref_counted.h"
+#include "base/memory/ref_counted.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/renderer_host/site_instance.h"
-#include "chrome/browser/renderer_host/test/test_render_view_host.h"
-#include "chrome/browser/tab_contents/test_tab_contents.h"
 #import "chrome/browser/ui/cocoa/content_settings/collected_cookies_mac.h"
+#include "content/browser/renderer_host/test_render_view_host.h"
+#include "content/browser/site_instance.h"
+#include "content/browser/tab_contents/test_tab_contents.h"
 #include "chrome/test/testing_profile.h"
 
 namespace {

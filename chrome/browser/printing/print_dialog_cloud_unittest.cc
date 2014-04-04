@@ -1,29 +1,30 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/printing/print_dialog_cloud.h"
 #include "chrome/browser/printing/print_dialog_cloud_internal.h"
 
+#include <string>
+#include <vector>
+
 #include "base/file_path.h"
 #include "base/file_util.h"
+#include "base/memory/weak_ptr.h"
 #include "base/path_service.h"
 #include "base/string_util.h"
 #include "base/utf_string_conversions.h"
 #include "base/values.h"
-#include "base/weak_ptr.h"
-#include "chrome/browser/browser_thread.h"
 #include "chrome/browser/printing/cloud_print/cloud_print_url.h"
 #include "chrome/common/chrome_paths.h"
-#include "chrome/common/notification_details.h"
-#include "chrome/common/notification_observer.h"
-#include "chrome/common/notification_registrar.h"
-#include "chrome/common/notification_source.h"
-#include "chrome/common/notification_type.h"
 #include "chrome/common/url_constants.h"
 #include "chrome/test/testing_profile.h"
-#include "testing/gtest/include/gtest/gtest.h"
+#include "content/browser/browser_thread.h"
+#include "content/common/notification_details.h"
+#include "content/common/notification_source.h"
+#include "content/common/notification_type.h"
 #include "testing/gmock/include/gmock/gmock.h"
+#include "testing/gtest/include/gtest/gtest.h"
 
 using testing::A;
 using testing::AtLeast;
@@ -81,8 +82,9 @@ class MockCloudPrintFlowHandler
       public base::SupportsWeakPtr<MockCloudPrintFlowHandler> {
  public:
   explicit MockCloudPrintFlowHandler(const FilePath& path,
-                                     const string16& title)
-      : CloudPrintFlowHandler(path, title) {}
+                                     const string16& title,
+                                     const std::string& file_type)
+      : CloudPrintFlowHandler(path, title, file_type) {}
   MOCK_METHOD0(DestructorCalled, void());
   MOCK_METHOD0(RegisterMessages, void());
   MOCK_METHOD3(Observe,
@@ -103,8 +105,8 @@ class MockCloudPrintHtmlDialogDelegate : public CloudPrintHtmlDialogDelegate {
       std::wstring());
   MOCK_CONST_METHOD0(GetDialogContentURL,
       GURL());
-  MOCK_CONST_METHOD1(GetDOMMessageHandlers,
-      void(std::vector<DOMMessageHandler*>* handlers));
+  MOCK_CONST_METHOD1(GetWebUIMessageHandlers,
+      void(std::vector<WebUIMessageHandler*>* handlers));
   MOCK_CONST_METHOD1(GetDialogSize,
       void(gfx::Size* size));
   MOCK_CONST_METHOD0(GetDialogArgs,
@@ -204,7 +206,7 @@ TEST_F(CloudPrintURLTest, CheckDefaultURLs) {
   EXPECT_TRUE(test_page_url.has_query());
 }
 
-// Testing for CloudPrintDataSender needs a mock DOMUI.
+// Testing for CloudPrintDataSender needs a mock WebUI.
 class CloudPrintDataSenderTest : public testing::Test {
  public:
   CloudPrintDataSenderTest()
@@ -216,7 +218,9 @@ class CloudPrintDataSenderTest : public testing::Test {
     string16 mock_job_title(ASCIIToUTF16(kMockJobTitle));
     mock_helper_.reset(new MockCloudPrintDataSenderHelper);
     print_data_sender_ =
-        new CloudPrintDataSender(mock_helper_.get(), mock_job_title);
+        new CloudPrintDataSender(mock_helper_.get(),
+                                 mock_job_title,
+                                 std::string("application/pdf"));
   }
 
   scoped_refptr<CloudPrintDataSender> print_data_sender_;
@@ -274,7 +278,7 @@ TEST_F(CloudPrintDataSenderTest, EmptyFile) {
 
 // Testing for CloudPrintFlowHandler needs a mock
 // CloudPrintHtmlDialogDelegate, mock CloudPrintDataSender, and a mock
-// DOMUI.
+// WebUI.
 
 // Testing for CloudPrintHtmlDialogDelegate needs a mock
 // CloudPrintFlowHandler.
@@ -291,13 +295,14 @@ class CloudPrintHtmlDialogDelegateTest : public testing::Test {
   virtual void SetUp() {
     FilePath mock_path;
     string16 mock_title;
+    std::string mock_file_type;
     MockCloudPrintFlowHandler* handler =
-        new MockCloudPrintFlowHandler(mock_path, mock_title);
+        new MockCloudPrintFlowHandler(mock_path, mock_title, mock_file_type);
     mock_flow_handler_ = handler->AsWeakPtr();
     EXPECT_CALL(*mock_flow_handler_.get(), SetDialogDelegate(_));
     EXPECT_CALL(*mock_flow_handler_.get(), SetDialogDelegate(NULL));
     delegate_.reset(new CloudPrintHtmlDialogDelegate(
-        mock_flow_handler_.get(), 100, 100, std::string()));
+        mock_flow_handler_.get(), 100, 100, std::string(), true));
   }
 
   virtual void TearDown() {
@@ -329,8 +334,8 @@ TEST_F(CloudPrintHtmlDialogDelegateTest, OwnedFlowDestroyed) {
 }
 
 TEST_F(CloudPrintHtmlDialogDelegateTest, UnownedFlowLetGo) {
-  std::vector<DOMMessageHandler*> handlers;
-  delegate_->GetDOMMessageHandlers(&handlers);
+  std::vector<WebUIMessageHandler*> handlers;
+  delegate_->GetWebUIMessageHandlers(&handlers);
   delegate_.reset();
   EXPECT_THAT(mock_flow_handler_.get(), NotNull());
 }

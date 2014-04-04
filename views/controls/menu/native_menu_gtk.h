@@ -11,7 +11,6 @@
 #include <vector>
 
 #include "base/message_loop.h"
-#include "base/task.h"
 #include "ui/base/gtk/gtk_signal.h"
 #include "views/controls/menu/menu_wrapper.h"
 
@@ -51,14 +50,14 @@ class NativeMenuGtk : public MenuWrapper,
 
   // Overriden from MessageLoopForUI::Dispatcher:
   virtual bool Dispatch(GdkEvent* event);
-#if defined(TOUCH_UI)
-  virtual bool Dispatch(XEvent* xevent);
-#endif
 
  private:
   CHROMEGTK_CALLBACK_0(NativeMenuGtk, void, OnMenuHidden);
   CHROMEGTK_CALLBACK_1(NativeMenuGtk, void, OnMenuMoveCurrent,
                        GtkMenuDirectionType);
+  CHROMEGTK_CALLBACK_1(NativeMenuGtk, void, AfterMenuMoveCurrent,
+                       GtkMenuDirectionType);
+  CHROMEGTK_CALLBACK_1(NativeMenuGtk, gboolean, OnExpose, GdkEventExpose*);
 
   void AddSeparatorAt(int index);
   GtkWidget* AddMenuItemAt(int index, GtkRadioMenuItem* radio_group,
@@ -93,6 +92,8 @@ class NativeMenuGtk : public MenuWrapper,
 
   // Notifies the model the user selected an item.
   void Activate();
+
+  void SendAccessibilityEvent();
 
   // A callback to delete menu2 object when the native widget is
   // destroyed first.
@@ -134,6 +135,7 @@ class NativeMenuGtk : public MenuWrapper,
   // used to delete the menu2 when its native menu gtk is destroyed first.
   Menu2* host_menu_;
   gulong destroy_handler_id_;
+  gulong expose_handler_id_;
 
   // The action that took place during the call to RunMenuAt.
   MenuAction menu_action_;

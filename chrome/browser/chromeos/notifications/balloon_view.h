@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,15 +9,15 @@
 #pragma once
 
 #include "base/basictypes.h"
-#include "base/scoped_ptr.h"
+#include "base/memory/scoped_ptr.h"
 #include "base/task.h"
 #include "chrome/browser/notifications/balloon.h"
-#include "chrome/common/notification_observer.h"
-#include "chrome/common/notification_registrar.h"
-#include "gfx/path.h"
-#include "gfx/point.h"
-#include "gfx/rect.h"
-#include "gfx/size.h"
+#include "content/common/notification_observer.h"
+#include "content/common/notification_registrar.h"
+#include "ui/gfx/path.h"
+#include "ui/gfx/point.h"
+#include "ui/gfx/rect.h"
+#include "ui/gfx/size.h"
 #include "views/view.h"
 
 namespace views {
@@ -25,7 +25,7 @@ class Menu2;
 class MenuButton;
 class MouseEvent;
 class TextButton;
-class WidgetGtk;
+class Widget;
 }  // namespace views
 
 class Notification;
@@ -42,7 +42,7 @@ class BalloonViewImpl : public BalloonView,
                         public views::View,
                         public NotificationObserver {
  public:
-  BalloonViewImpl(bool sticky, bool controls, bool dom_ui);
+  BalloonViewImpl(bool sticky, bool controls, bool web_ui);
   virtual ~BalloonViewImpl();
 
   // views::View interface.
@@ -113,7 +113,7 @@ class BalloonViewImpl : public BalloonView,
   ScopedRunnableMethodFactory<BalloonViewImpl> method_factory_;
 
   // A widget for ControlView.
-  scoped_ptr<views::WidgetGtk> control_view_host_;
+  scoped_ptr<views::Widget> control_view_host_;
 
   bool stale_;
   NotificationRegistrar notification_registrar_;
@@ -123,8 +123,8 @@ class BalloonViewImpl : public BalloonView,
   bool controls_;
   // True if the notification is being closed.
   bool closed_;
-  // True to enable domui in the notification.
-  bool dom_ui_;
+  // True to enable WebUI in the notification.
+  bool web_ui_;
 
   DISALLOW_COPY_AND_ASSIGN(BalloonViewImpl);
 };

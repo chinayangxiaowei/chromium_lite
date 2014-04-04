@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,12 +6,12 @@
 
 #include "base/hash_tables.h"
 #include "base/metrics/histogram.h"
-#include "chrome/browser/browser_thread.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/common/net/url_request_context_getter.h"
+#include "content/browser/browser_thread.h"
 #include "net/base/host_resolver.h"
 #include "net/base/load_flags.h"
 #include "net/base/net_errors.h"
+#include "net/url_request/url_request_context_getter.h"
 #include "net/websockets/websocket.h"
 
 using base::Histogram;
@@ -34,7 +34,7 @@ static std::string GetProtocolVersionName(
 
 URLFetcher* WebSocketExperimentTask::Context::CreateURLFetcher(
     const Config& config, URLFetcher::Delegate* delegate) {
-  URLRequestContextGetter* getter =
+  net::URLRequestContextGetter* getter =
       Profile::GetDefaultRequestContext();
   // Profile::GetDefaultRequestContext() is initialized lazily, on the UI
   // thread. So here, where we access it from the IO thread, if the task runs
@@ -53,7 +53,7 @@ URLFetcher* WebSocketExperimentTask::Context::CreateURLFetcher(
 
 net::WebSocket* WebSocketExperimentTask::Context::CreateWebSocket(
     const Config& config, net::WebSocketDelegate* delegate) {
-  URLRequestContextGetter* getter =
+  net::URLRequestContextGetter* getter =
       Profile::GetDefaultRequestContext();
   // Profile::GetDefaultRequestContext() is initialized lazily, on the UI
   // thread. So here, where we access it from the IO thread, if the task runs
@@ -114,6 +114,8 @@ WebSocketExperimentTask::Config::Config()
       websocket_close_deadline_ms(kWebSocketCloseDeadlineSec * 1000) {
 }
 
+WebSocketExperimentTask::Config::~Config() {}
+
 WebSocketExperimentTask::WebSocketExperimentTask(
     const Config& config,
     net::CompletionCallback* callback)
@@ -171,7 +173,6 @@ static Histogram* GetEnumsHistogramForConfig(
   Histogram* counter = LinearHistogram::FactoryGet(
       counter_name, 1, boundary_value, boundary_value + 1,
       Histogram::kUmaTargetedHistogramFlag);
-  counter->AddRef();  // Released in ReleaseHistogram().
   g_histogram_table->insert(std::make_pair(counter_name, counter));
   return counter;
 }
@@ -192,7 +193,6 @@ static Histogram* GetTimesHistogramForConfig(
   Histogram* counter = Histogram::FactoryTimeGet(
       counter_name, min, max, bucket_count,
       Histogram::kUmaTargetedHistogramFlag);
-  counter->AddRef();  // Released in ReleaseHistogram().
   g_histogram_table->insert(std::make_pair(counter_name, counter));
   return counter;
 }
@@ -221,15 +221,6 @@ static void UpdateHistogramTimes(
 /* static */
 void WebSocketExperimentTask::ReleaseHistogram() {
   DCHECK(g_histogram_table);
-  for (base::hash_map<std::string, Histogram*>::iterator iter =
-           g_histogram_table->begin();
-       iter != g_histogram_table->end();
-       ++iter) {
-    Histogram* counter = iter->second;
-    if (counter != NULL)
-      counter->Release();
-    iter->second = NULL;
-  }
   delete g_histogram_table;
   g_histogram_table = NULL;
 }

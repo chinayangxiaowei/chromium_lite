@@ -17,29 +17,33 @@
 #pragma once
 
 #include <map>
+#include <queue>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "base/basictypes.h"
 #include "base/callback.h"
 #include "base/file_path.h"
 #include "base/gtest_prod_util.h"
+#include "base/memory/linked_ptr.h"
+#include "base/memory/ref_counted.h"
+#include "base/memory/scoped_callback_factory.h"
+#include "base/memory/scoped_ptr.h"
 #include "base/platform_file.h"
-#include "base/ref_counted.h"
-#include "base/scoped_callback_factory.h"
-#include "base/scoped_ptr.h"
 #include "base/task.h"
-#include "chrome/browser/safe_browsing/csd.pb.h"
+#include "base/time.h"
 #include "chrome/common/net/url_fetcher.h"
 #include "googleurl/src/gurl.h"
-
-class URLRequestContextGetter;
+#include "net/base/net_util.h"
 
 namespace net {
+class URLRequestContextGetter;
 class URLRequestStatus;
 }  // namespace net
 
 namespace safe_browsing {
+class ClientPhishingRequest;
 
 class ClientSideDetectionService : public URLFetcher::Delegate {
  public:
@@ -55,7 +59,7 @@ class ClientSideDetectionService : public URLFetcher::Delegate {
   // The caller takes ownership of the object.  This function may return NULL.
   static ClientSideDetectionService* Create(
       const FilePath& model_path,
-      URLRequestContextGetter* request_context_getter);
+      net::URLRequestContextGetter* request_context_getter);
 
   // From the URLFetcher::Delegate interface.
   virtual void OnURLFetchComplete(const URLFetcher* source,
@@ -73,17 +77,43 @@ class ClientSideDetectionService : public URLFetcher::Delegate {
   // same thread as GetModelFile() was called.
   void GetModelFile(OpenModelDoneCallback* callback);
 
-  // Sends a request to the SafeBrowsing servers with the potentially phishing
-  // URL and the client-side phishing score.  The |phishing_url| scheme should
-  // be HTTP.  This method takes ownership of the |callback| and calls it once
-  // the result has come back from the server or if an error occurs during the
-  // fetch.  If an error occurs the phishing verdict will always be false.  The
-  // callback is always called after SendClientReportPhishingRequest() returns
-  // and on the same thread as SendClientReportPhishingRequest() was called.
-  void SendClientReportPhishingRequest(
-      const GURL& phishing_url,
-      double score,
+  // Sends a request to the SafeBrowsing servers with the ClientPhishingRequest.
+  // The URL scheme of the |url()| in the request should be HTTP.  This method
+  // takes ownership of the |verdict| as well as the |callback| and calls the
+  // the callback once the result has come back from the server or if an error
+  // occurs during the fetch.  If an error occurs the phishing verdict will
+  // always be false.  The callback is always called after
+  // SendClientReportPhishingRequest() returns and on the same thread as
+  // SendClientReportPhishingRequest() was called.
+  virtual void SendClientReportPhishingRequest(
+      ClientPhishingRequest* verdict,
       ClientReportPhishingRequestCallback* callback);
+
+  // Returns true if the given IP address string falls within a private
+  // (unroutable) network block.  Pages which are hosted on these IP addresses
+  // are exempt from client-side phishing detection.  This is called by the
+  // ClientSideDetectionHost prior to sending the renderer a
+  // SafeBrowsingMsg_StartPhishingDetection IPC.
+  //
+  // ip_address should be a dotted IPv4 address, or an unbracketed IPv6
+  // address.
+  virtual bool IsPrivateIPAddress(const std::string& ip_address) const;
+
+  // Returns true and sets is_phishing if url is in the cache and valid.
+  virtual bool GetValidCachedResult(const GURL& url, bool* is_phishing);
+
+  // Returns true if the url is in the cache.
+  virtual bool IsInCache(const GURL& url);
+
+  // Returns true if we have sent more than kMaxReportsPerInterval in the last
+  // kReportsInterval.
+  virtual bool OverReportLimit();
+
+ protected:
+  // Use Create() method to create an instance of this object.
+  ClientSideDetectionService(
+      const FilePath& model_path,
+      net::URLRequestContextGetter* request_context_getter);
 
  private:
   friend class ClientSideDetectionServiceTest;
@@ -97,12 +127,26 @@ class ClientSideDetectionService : public URLFetcher::Delegate {
     ERROR_STATUS,
   };
 
+  // CacheState holds all information necessary to respond to a caller without
+  // actually making a HTTP request.
+  struct CacheState {
+    bool is_phishing;
+    base::Time timestamp;
+
+    CacheState(bool phish, base::Time time);
+  };
+  typedef std::map<GURL, linked_ptr<CacheState> > PhishingCache;
+
+  // A tuple of (IP address block, prefix size) representing a private
+  // IP address range.
+  typedef std::pair<net::IPAddressNumber, size_t> AddressRange;
+
   static const char kClientReportPhishingUrl[];
   static const char kClientModelUrl[];
-
-  // Use Create() method to create an instance of this object.
-  ClientSideDetectionService(const FilePath& model_path,
-                             URLRequestContextGetter* request_context_getter);
+  static const int kMaxReportsPerInterval;
+  static const base::TimeDelta kReportsInterval;
+  static const base::TimeDelta kNegativeCacheInterval;
+  static const base::TimeDelta kPositiveCacheInterval;
 
   // Sets the model status and invokes all the pending callbacks in
   // |open_callbacks_| with the current |model_file_| as parameter.
@@ -134,11 +178,10 @@ class ClientSideDetectionService : public URLFetcher::Delegate {
   // Helper function which closes the |model_file_| if necessary.
   void CloseModelFile();
 
-  // Starts preparing the request to be sent to the client-side detection
-  // frontends.
+  // Starts sending the request to the client-side detection frontends.
+  // This method takes ownership of both pointers.
   void StartClientReportPhishingRequest(
-      const GURL& phishing_url,
-      double score,
+      ClientPhishingRequest* verdict,
       ClientReportPhishingRequestCallback* callback);
 
   // Starts getting the model file.
@@ -162,6 +205,16 @@ class ClientSideDetectionService : public URLFetcher::Delegate {
                              const ResponseCookies& cookies,
                              const std::string& data);
 
+  // Invalidate cache results which are no longer useful.
+  void UpdateCache();
+
+  // Get the number of phishing reports that we have sent over kReportsInterval
+  int GetNumReports();
+
+  // Initializes the |private_networks_| vector with the network blocks
+  // that we consider non-public IP addresses.  Returns true on success.
+  bool InitializePrivateNetworks();
+
   FilePath model_path_;
   ModelStatus model_status_;
   base::PlatformFile model_file_;
@@ -174,6 +227,19 @@ class ClientSideDetectionService : public URLFetcher::Delegate {
   struct ClientReportInfo;
   std::map<const URLFetcher*, ClientReportInfo*> client_phishing_reports_;
 
+  // Cache of completed requests. Used to satisfy requests for the same urls
+  // as long as the next request falls within our caching window (which is
+  // determined by kNegativeCacheInterval and kPositiveCacheInterval). The
+  // size of this cache is limited by kMaxReportsPerDay *
+  // ceil(InDays(max(kNegativeCacheInterval, kPositiveCacheInterval))).
+  // TODO(gcasto): Serialize this so that it doesn't reset on browser restart.
+  PhishingCache cache_;
+
+  // Timestamp of when we sent a phishing request. Used to limit the number
+  // of phishing requests that we send in a day.
+  // TODO(gcasto): Serialize this so that it doesn't reset on browser restart.
+  std::queue<base::Time> phishing_report_times_;
+
   // Used to asynchronously call the callbacks for GetModelFile and
   // SendClientReportPhishingRequest.
   ScopedRunnableMethodFactory<ClientSideDetectionService> method_factory_;
@@ -185,7 +251,10 @@ class ClientSideDetectionService : public URLFetcher::Delegate {
   base::ScopedCallbackFactory<ClientSideDetectionService> callback_factory_;
 
   // The context we use to issue network requests.
-  scoped_refptr<URLRequestContextGetter> request_context_getter_;
+  scoped_refptr<net::URLRequestContextGetter> request_context_getter_;
+
+  // The network blocks that we consider private IP address ranges.
+  std::vector<AddressRange> private_networks_;
 
   DISALLOW_COPY_AND_ASSIGN(ClientSideDetectionService);
 };

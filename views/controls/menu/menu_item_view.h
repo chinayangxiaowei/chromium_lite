@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -18,7 +18,7 @@
 #include "views/view.h"
 
 #if defined(OS_WIN)
-#include "gfx/native_theme_win.h"
+#include "ui/gfx/native_theme.h"
 #endif
 
 namespace ui {
@@ -31,6 +31,8 @@ class MenuButton;
 class MenuController;
 class MenuDelegate;
 class SubmenuView;
+
+struct MenuConfig;
 
 // MenuItemView --------------------------------------------------------------
 
@@ -93,9 +95,9 @@ class MenuItemView : public View {
   virtual ~MenuItemView();
 
   // Overridden from View:
-  virtual bool GetTooltipText(const gfx::Point& p, std::wstring* tooltip);
-  virtual AccessibilityTypes::Role GetAccessibleRole();
-  virtual AccessibilityTypes::State GetAccessibleState();
+  virtual bool GetTooltipText(const gfx::Point& p, std::wstring* tooltip)
+      OVERRIDE;
+  virtual void GetAccessibleState(ui::AccessibleViewState* state) OVERRIDE;
 
   // Returns the preferred height of menu items. This is only valid when the
   // menu is about to be shown.
@@ -199,10 +201,10 @@ class MenuItemView : public View {
   virtual SubmenuView* CreateSubmenu();
 
   // Returns true if this menu item has a submenu.
-  virtual bool HasSubmenu() const { return (submenu_ != NULL); }
+  virtual bool HasSubmenu() const;
 
   // Returns the view containing child menu items.
-  virtual SubmenuView* GetSubmenu() const { return submenu_; }
+  virtual SubmenuView* GetSubmenu() const;
 
   // Returns the parent menu item.
   MenuItemView* GetParentMenuItem() const { return parent_menu_item_; }
@@ -243,7 +245,7 @@ class MenuItemView : public View {
   int GetCommand() const { return command_; }
 
   // Paints the menu item.
-  virtual void Paint(gfx::Canvas* canvas);
+  virtual void OnPaint(gfx::Canvas* canvas);
 
   // Returns the preferred size of this item.
   virtual gfx::Size GetPreferredSize();
@@ -326,18 +328,17 @@ class MenuItemView : public View {
   // necessary.
   void AdjustBoundsForRTLUI(gfx::Rect* rect) const;
 
-  // Actual paint implementation. If for_drag is true, portions of the menu
+  // Actual paint implementation. If mode is PB_FOR_DRAG, portions of the menu
   // are not rendered.
-  void Paint(gfx::Canvas* canvas, bool for_drag);
+  enum PaintButtonMode { PB_NORMAL, PB_FOR_DRAG };
+  void PaintButton(gfx::Canvas* canvas, PaintButtonMode mode);
 
 #if defined(OS_WIN)
   // Paints the check/radio button indicator. |part_id| is the id passed to the
   // native theme drawing routines.
-  void PaintCheck(HDC dc,
-                  int part_id,
-                  gfx::NativeTheme::ControlState control_state,
-                  int icon_width,
-                  int icon_height);
+  void PaintCheck(gfx::Canvas* canvas,
+                  gfx::NativeTheme::State state,
+                  const MenuConfig& config);
 #endif
 
   // Paints the accelerator.
@@ -356,6 +357,9 @@ class MenuItemView : public View {
 
   // Returns the preferred width (and padding) of any children.
   int GetChildPreferredWidth();
+
+  // Calculates the preferred size.
+  gfx::Size CalculatePreferredSize();
 
   // The delegate. This is only valid for the root menu item. You shouldn't
   // use this directly, instead use GetDelegate() which walks the tree as
@@ -388,6 +392,9 @@ class MenuItemView : public View {
   // Title.
   string16 title_;
 
+  // Accessible name (doesn't include accelerators, etc.).
+  string16 accessible_name_;
+
   // Icon.
   SkBitmap icon_;
 
@@ -411,6 +418,10 @@ class MenuItemView : public View {
 
   // Preferred height of menu items. Reset every time a menu is run.
   static int pref_menu_height_;
+
+  // Previously calculated preferred size to reduce GetStringWidth calls in
+  // GetPreferredSize.
+  gfx::Size pref_size_;
 
   DISALLOW_COPY_AND_ASSIGN(MenuItemView);
 };

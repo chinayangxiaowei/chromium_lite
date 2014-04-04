@@ -19,35 +19,41 @@
 #include "chrome/browser/autocomplete/autocomplete_edit.h"
 #include "chrome/browser/autocomplete/autocomplete_match.h"
 #include "chrome/browser/browser_process.h"
-#include "chrome/browser/child_process_security_policy.h"
 #include "chrome/browser/debugger/devtools_manager.h"
 #include "chrome/browser/debugger/devtools_window.h"
 #include "chrome/browser/download/download_manager.h"
+#include "chrome/browser/download/download_util.h"
+#include "chrome/browser/download/save_package.h"
 #include "chrome/browser/extensions/extension_event_router.h"
 #include "chrome/browser/extensions/extension_service.h"
-#include "chrome/browser/fonts_languages_window.h"
 #include "chrome/browser/metrics/user_metrics.h"
 #include "chrome/browser/net/browser_url_util.h"
 #include "chrome/browser/page_info_window.h"
 #include "chrome/browser/platform_util.h"
 #include "chrome/browser/prefs/pref_member.h"
 #include "chrome/browser/prefs/pref_service.h"
+#include "chrome/browser/printing/print_preview_tab_controller.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/renderer_host/render_view_host.h"
 #include "chrome/browser/search_engines/template_url.h"
 #include "chrome/browser/search_engines/template_url_model.h"
 #include "chrome/browser/spellcheck_host.h"
 #include "chrome/browser/spellchecker_platform_engine.h"
-#include "chrome/browser/tab_contents/navigation_entry.h"
-#include "chrome/browser/tab_contents/tab_contents.h"
-#include "chrome/browser/translate/translate_prefs.h"
 #include "chrome/browser/translate/translate_manager.h"
+#include "chrome/browser/translate/translate_prefs.h"
+#include "chrome/browser/translate/translate_tab_helper.h"
+#include "chrome/browser/ui/download/download_tab_helper.h"
+#include "chrome/browser/ui/tab_contents/tab_contents_wrapper.h"
 #include "chrome/common/chrome_constants.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/common/content_restriction.h"
 #include "chrome/common/pref_names.h"
+#include "chrome/common/print_messages.h"
 #include "chrome/common/url_constants.h"
-#include "gfx/favicon_size.h"
+#include "content/browser/child_process_security_policy.h"
+#include "content/browser/renderer_host/render_view_host.h"
+#include "content/browser/renderer_host/render_widget_host_view.h"
+#include "content/browser/tab_contents/navigation_entry.h"
+#include "content/browser/tab_contents/tab_contents.h"
 #include "grit/generated_resources.h"
 #include "net/base/escape.h"
 #include "net/url_request/url_request.h"
@@ -55,10 +61,103 @@
 #include "third_party/WebKit/Source/WebKit/chromium/public/WebMediaPlayerAction.h"
 #include "third_party/WebKit/Source/WebKit/chromium/public/WebTextDirection.h"
 #include "ui/base/l10n/l10n_util.h"
+#include "ui/gfx/favicon_size.h"
 #include "webkit/glue/webmenuitem.h"
 
 using WebKit::WebContextMenuData;
 using WebKit::WebMediaPlayerAction;
+
+namespace {
+
+bool IsCustomItemEnabled(const std::vector<WebMenuItem>& items, int id) {
+  DCHECK(id >= IDC_CONTENT_CONTEXT_CUSTOM_FIRST &&
+         id <= IDC_CONTENT_CONTEXT_CUSTOM_LAST);
+  for (size_t i = 0; i < items.size(); ++i) {
+    int action_id = IDC_CONTENT_CONTEXT_CUSTOM_FIRST + items[i].action;
+    if (action_id == id)
+      return items[i].enabled;
+    if (items[i].type == WebMenuItem::SUBMENU) {
+      if (IsCustomItemEnabled(items[i].submenu, id))
+        return true;
+    }
+  }
+  return false;
+}
+
+bool IsCustomItemChecked(const std::vector<WebMenuItem>& items, int id) {
+  DCHECK(id >= IDC_CONTENT_CONTEXT_CUSTOM_FIRST &&
+         id <= IDC_CONTENT_CONTEXT_CUSTOM_LAST);
+  for (size_t i = 0; i < items.size(); ++i) {
+    int action_id = IDC_CONTENT_CONTEXT_CUSTOM_FIRST + items[i].action;
+    if (action_id == id)
+      return items[i].checked;
+    if (items[i].type == WebMenuItem::SUBMENU) {
+      if (IsCustomItemChecked(items[i].submenu, id))
+        return true;
+    }
+  }
+  return false;
+}
+
+const size_t kMaxCustomMenuDepth = 5;
+const size_t kMaxCustomMenuTotalItems = 1000;
+
+void AddCustomItemsToMenu(const std::vector<WebMenuItem>& items,
+                          size_t depth,
+                          size_t* total_items,
+                          ui::SimpleMenuModel::Delegate* delegate,
+                          ui::SimpleMenuModel* menu_model) {
+  if (depth > kMaxCustomMenuDepth) {
+    LOG(ERROR) << "Custom menu too deeply nested.";
+    return;
+  }
+  for (size_t i = 0; i < items.size(); ++i) {
+    if (IDC_CONTENT_CONTEXT_CUSTOM_FIRST + items[i].action >=
+        IDC_CONTENT_CONTEXT_CUSTOM_LAST) {
+      LOG(ERROR) << "Custom menu action value too big.";
+      return;
+    }
+    if (*total_items >= kMaxCustomMenuTotalItems) {
+      LOG(ERROR) << "Custom menu too large (too many items).";
+      return;
+    }
+    (*total_items)++;
+    switch (items[i].type) {
+      case WebMenuItem::OPTION:
+        menu_model->AddItem(
+            items[i].action + IDC_CONTENT_CONTEXT_CUSTOM_FIRST,
+            items[i].label);
+        break;
+      case WebMenuItem::CHECKABLE_OPTION:
+        menu_model->AddCheckItem(
+            items[i].action + IDC_CONTENT_CONTEXT_CUSTOM_FIRST,
+            items[i].label);
+        break;
+      case WebMenuItem::GROUP:
+        // TODO(viettrungluu): I don't know what this is supposed to do.
+        NOTREACHED();
+        break;
+      case WebMenuItem::SEPARATOR:
+        menu_model->AddSeparator();
+        break;
+      case WebMenuItem::SUBMENU: {
+        ui::SimpleMenuModel* submenu = new ui::SimpleMenuModel(delegate);
+        AddCustomItemsToMenu(items[i].submenu, depth + 1, total_items, delegate,
+                             submenu);
+        menu_model->AddSubMenu(
+            items[i].action + IDC_CONTENT_CONTEXT_CUSTOM_FIRST,
+            items[i].label,
+            submenu);
+        break;
+      }
+      default:
+        NOTREACHED();
+        break;
+    }
+  }
+}
+
+}  // namespace
 
 // static
 const size_t RenderViewContextMenu::kMaxExtensionItemTitleLength = 75;
@@ -107,11 +206,13 @@ static bool ExtensionContextMatch(const ContextMenuParams& params,
                                   ExtensionMenuItem::ContextList contexts) {
   bool has_link = !params.link_url.is_empty();
   bool has_selection = !params.selection_text.empty();
+  bool in_frame = !params.frame_url.is_empty();
 
   if (contexts.Contains(ExtensionMenuItem::ALL) ||
       (has_selection && contexts.Contains(ExtensionMenuItem::SELECTION)) ||
       (has_link && contexts.Contains(ExtensionMenuItem::LINK)) ||
-      (params.is_editable && contexts.Contains(ExtensionMenuItem::EDITABLE))) {
+      (params.is_editable && contexts.Contains(ExtensionMenuItem::EDITABLE)) ||
+      (in_frame && contexts.Contains(ExtensionMenuItem::FRAME))) {
     return true;
   }
 
@@ -130,7 +231,8 @@ static bool ExtensionContextMatch(const ContextMenuParams& params,
   }
 
   // PAGE is the least specific context, so we only examine that if none of the
-  // other contexts apply.
+  // other contexts apply (except for FRAME, which is included in PAGE for
+  // backwards compatibility).
   if (!has_link && !has_selection && !params.is_editable &&
       params.media_type == WebContextMenuData::MediaTypeNone &&
       contexts.Contains(ExtensionMenuItem::PAGE))
@@ -186,7 +288,6 @@ void RenderViewContextMenu::AppendExtensionItems(
   ExtensionService* service = profile_->GetExtensionService();
   ExtensionMenuManager* manager = service->menu_manager();
   const Extension* extension = service->GetExtensionById(extension_id, false);
-  bool can_cross_incognito = service->CanCrossIncognito(extension);
   DCHECK_GE(*index, 0);
   int max_index =
       IDC_EXTENSIONS_CONTEXT_CUSTOM_LAST - IDC_EXTENSIONS_CONTEXT_CUSTOM_FIRST;
@@ -197,6 +298,7 @@ void RenderViewContextMenu::AppendExtensionItems(
   const ExtensionMenuItem::List* all_items = manager->MenuItems(extension_id);
   if (!all_items || all_items->empty())
     return;
+  bool can_cross_incognito = service->CanCrossIncognito(extension);
   ExtensionMenuItem::List items =
       GetRelevantExtensionItems(*all_items, params_, profile_,
                                 can_cross_incognito);
@@ -270,7 +372,7 @@ void RenderViewContextMenu::RecursivelyAppendExtensionItems(
       ExtensionMenuItem::List children =
           GetRelevantExtensionItems(item->children(), params_,
                                     profile_, can_cross_incognito);
-      if (children.size() == 0) {
+      if (children.empty()) {
         menu_model->AddItem(menu_id, title);
       } else {
         ui::SimpleMenuModel* submenu = new ui::SimpleMenuModel(this);
@@ -309,8 +411,8 @@ void RenderViewContextMenu::SetExtensionIcon(const std::string& extension_id) {
   DCHECK_GE(index, 0);
 
   const SkBitmap& icon = menu_manager->GetIconForExtension(extension_id);
-  DCHECK(icon.width() == kFavIconSize);
-  DCHECK(icon.height() == kFavIconSize);
+  DCHECK(icon.width() == kFaviconSize);
+  DCHECK(icon.height() == kFaviconSize);
 
   menu_model_.SetIcon(index, icon);
 }
@@ -358,7 +460,9 @@ void RenderViewContextMenu::InitMenu() {
   bool has_selection = !params_.selection_text.empty();
 
   if (AppendCustomItems()) {
-    AppendDeveloperItems();
+    // Don't add items for Pepper menu.
+    if (!params_.custom_context.is_pepper_menu)
+      AppendDeveloperItems();
     return;
   }
 
@@ -369,15 +473,21 @@ void RenderViewContextMenu::InitMenu() {
       !has_link &&
       !params_.is_editable &&
       !has_selection) {
-    // If context is in subframe, show subframe options instead.
-    if (!params_.frame_url.is_empty()) {
-      is_devtools = IsDevToolsURL(params_.frame_url);
-      if (!is_devtools && !IsInternalResourcesURL(params_.frame_url))
-        AppendFrameItems();
-    } else if (!params_.page_url.is_empty()) {
+    if (!params_.page_url.is_empty()) {
       is_devtools = IsDevToolsURL(params_.page_url);
-      if (!is_devtools && !IsInternalResourcesURL(params_.page_url))
+      if (!is_devtools && !IsInternalResourcesURL(params_.page_url)) {
         AppendPageItems();
+        // Merge in frame items if we clicked within a frame that needs them.
+        if (!params_.frame_url.is_empty()) {
+          is_devtools = IsDevToolsURL(params_.frame_url);
+          if (!is_devtools && !IsInternalResourcesURL(params_.frame_url)) {
+            menu_model_.AddSeparator();
+            AppendFrameItems();
+          }
+        }
+      }
+    } else {
+      DCHECK(params_.frame_url.is_empty());
     }
   }
 
@@ -402,6 +512,10 @@ void RenderViewContextMenu::InitMenu() {
     case WebContextMenuData::MediaTypePlugin:
       AppendPluginItems();
       break;
+#ifdef WEBCONTEXT_MEDIATYPEFILE_DEFINED
+    case WebContextMenuData::MediaTypeFile:
+      break;
+#endif
   }
 
   if (params_.is_editable)
@@ -424,34 +538,19 @@ void RenderViewContextMenu::LookUpInDictionary() {
 }
 
 bool RenderViewContextMenu::AppendCustomItems() {
-  std::vector<WebMenuItem>& custom_items = params_.custom_items;
-  for (size_t i = 0; i < custom_items.size(); ++i) {
-    DCHECK(IDC_CONTENT_CONTEXT_CUSTOM_FIRST + custom_items[i].action <
-        IDC_CONTENT_CONTEXT_CUSTOM_LAST);
-    if (custom_items[i].type == WebMenuItem::SEPARATOR) {
-      menu_model_.AddSeparator();
-    } else if (custom_items[i].type == WebMenuItem::CHECKABLE_OPTION) {
-      menu_model_.AddCheckItem(
-          custom_items[i].action + IDC_CONTENT_CONTEXT_CUSTOM_FIRST,
-          custom_items[i].label);
-    } else {
-      menu_model_.AddItem(
-          custom_items[i].action + IDC_CONTENT_CONTEXT_CUSTOM_FIRST,
-          custom_items[i].label);
-    }
-  }
-  return custom_items.size() > 0;
+  size_t total_items = 0;
+  AddCustomItemsToMenu(params_.custom_items, 0, &total_items, this,
+                       &menu_model_);
+  return total_items > 0;
 }
 
 void RenderViewContextMenu::AppendDeveloperItems() {
-  if (g_browser_process->have_inspector_files()) {
-    // In the DevTools popup menu, "developer items" is normally the only
-    // section, so omit the separator there.
-    if (menu_model_.GetItemCount() > 0)
-      menu_model_.AddSeparator();
-    menu_model_.AddItemWithStringId(IDC_CONTENT_CONTEXT_INSPECTELEMENT,
-                                    IDS_CONTENT_CONTEXT_INSPECTELEMENT);
-  }
+  // In the DevTools popup menu, "developer items" is normally the only
+  // section, so omit the separator there.
+  if (menu_model_.GetItemCount() > 0)
+    menu_model_.AddSeparator();
+  menu_model_.AddItemWithStringId(IDC_CONTENT_CONTEXT_INSPECTELEMENT,
+                                  IDS_CONTENT_CONTEXT_INSPECTELEMENT);
 }
 
 void RenderViewContextMenu::AppendLinkItems() {
@@ -562,12 +661,8 @@ void RenderViewContextMenu::AppendPageItems() {
 }
 
 void RenderViewContextMenu::AppendFrameItems() {
-  menu_model_.AddItemWithStringId(IDC_BACK, IDS_CONTENT_CONTEXT_BACK);
-  menu_model_.AddItemWithStringId(IDC_FORWARD, IDS_CONTENT_CONTEXT_FORWARD);
-  menu_model_.AddSeparator();
   menu_model_.AddItemWithStringId(IDC_CONTENT_CONTEXT_RELOADFRAME,
                                   IDS_CONTENT_CONTEXT_RELOADFRAME);
-  menu_model_.AddSeparator();
   // These two menu items have yet to be implemented.
   // http://code.google.com/p/chromium/issues/detail?id=11827
   //   IDS_CONTENT_CONTEXT_SAVEFRAMEAS
@@ -592,8 +687,7 @@ void RenderViewContextMenu::AppendSearchProvider() {
 
   AutocompleteMatch match;
   profile_->GetAutocompleteClassifier()->Classify(
-      UTF16ToWideHack(params_.selection_text),
-      std::wstring(), false, &match, NULL);
+      params_.selection_text, string16(), false, &match, NULL);
   selection_navigation_url_ = match.destination_url;
   if (!selection_navigation_url_.is_valid())
     return;
@@ -633,12 +727,12 @@ void RenderViewContextMenu::AppendEditableItems() {
     menu_model_.AddItem(IDC_SPELLCHECK_SUGGESTION_0 + static_cast<int>(i),
                         params_.dictionary_suggestions[i]);
   }
-  if (params_.dictionary_suggestions.size() > 0)
+  if (!params_.dictionary_suggestions.empty())
     menu_model_.AddSeparator();
 
   // If word is misspelled, give option for "Add to dictionary"
   if (!params_.misspelled_word.empty()) {
-    if (params_.dictionary_suggestions.size() == 0) {
+    if (params_.dictionary_suggestions.empty()) {
       menu_model_.AddItem(0,
           l10n_util::GetStringUTF16(
               IDS_CONTENT_CONTEXT_NO_SPELLING_SUGGESTIONS));
@@ -774,28 +868,10 @@ bool RenderViewContextMenu::IsCommandIdEnabled(int id) const {
     return profile_->GetPrefs()->GetBoolean(prefs::kEnableSpellCheck);
   }
 
-  // Process custom actions range.
-  if ((id >= IDC_CONTENT_CONTEXT_CUSTOM_FIRST) &&
-      (id < IDC_CONTENT_CONTEXT_CUSTOM_LAST)) {
-    unsigned action = id - IDC_CONTENT_CONTEXT_CUSTOM_FIRST;
-    for (size_t i = 0; i < params_.custom_items.size(); ++i) {
-      if (params_.custom_items[i].action == action)
-        return params_.custom_items[i].enabled;
-    }
-    NOTREACHED();
-    return false;
-  }
-
-  // Custom WebKit items.
+  // Custom items.
   if (id >= IDC_CONTENT_CONTEXT_CUSTOM_FIRST &&
       id <= IDC_CONTENT_CONTEXT_CUSTOM_LAST) {
-    const std::vector<WebMenuItem>& custom_items = params_.custom_items;
-    for (size_t i = 0; i < custom_items.size(); ++i) {
-      int action_id = IDC_CONTENT_CONTEXT_CUSTOM_FIRST + custom_items[i].action;
-      if (action_id == id)
-        return custom_items[i].enabled;
-    }
-    return true;
+    return IsCustomItemEnabled(params_.custom_items, id);
   }
 
   // Extension items.
@@ -814,8 +890,9 @@ bool RenderViewContextMenu::IsCommandIdEnabled(int id) const {
       return source_tab_contents_->controller().CanGoForward();
 
     case IDC_RELOAD:
-      return source_tab_contents_->delegate()->CanReloadContents(
-          source_tab_contents_);
+      return source_tab_contents_->delegate() &&
+          source_tab_contents_->delegate()->CanReloadContents(
+              source_tab_contents_);
 
     case IDC_VIEW_SOURCE:
     case IDC_CONTENT_CONTEXT_VIEWFRAMESOURCE:
@@ -828,20 +905,26 @@ bool RenderViewContextMenu::IsCommandIdEnabled(int id) const {
       return IsDevCommandEnabled(id);
 
     case IDC_CONTENT_CONTEXT_TRANSLATE: {
+      TranslateTabHelper* helper =
+          TabContentsWrapper::GetCurrentWrapperForContents(
+              source_tab_contents_)->translate_tab_helper();
       std::string original_lang =
-          source_tab_contents_->language_state().original_language();
+          helper->language_state().original_language();
       std::string target_lang = g_browser_process->GetApplicationLocale();
       target_lang = TranslateManager::GetLanguageCode(target_lang);
+      // Note that we intentionally enable the menu even if the original and
+      // target languages are identical.  This is to give a way to user to
+      // translate a page that might contains text fragments in a different
+      // language.
       return !!(params_.edit_flags & WebContextMenuData::CanTranslate) &&
-             source_tab_contents_->language_state().page_translatable() &&
+             helper->language_state().page_translatable() &&
              !original_lang.empty() &&  // Did we receive the page language yet?
-             original_lang != target_lang &&
              // Only allow translating languages we explitly support and the
              // unknown language (in which case the page language is detected on
              // the server side).
              (original_lang == chrome::kUnknownLanguageCode ||
                  TranslateManager::IsSupportedLanguage(original_lang)) &&
-             !source_tab_contents_->language_state().IsPageTranslated() &&
+             !helper->language_state().IsPageTranslated() &&
              !source_tab_contents_->interstitial_page() &&
              TranslateManager::IsTranslatableURL(params_.page_url);
     }
@@ -944,14 +1027,20 @@ bool RenderViewContextMenu::IsCommandIdEnabled(int id) const {
       return !!(params_.edit_flags & WebContextMenuData::CanSelectAll);
 
     case IDC_CONTENT_CONTEXT_OPENLINKOFFTHERECORD:
-      return !profile_->IsOffTheRecord() && params_.link_url.is_valid();
+      return !profile_->IsOffTheRecord() && params_.link_url.is_valid() &&
+             profile_->GetPrefs()->GetBoolean(prefs::kIncognitoEnabled);
 
     case IDC_SPELLCHECK_ADD_TO_DICTIONARY:
       return !params_.misspelled_word.empty();
 
     case IDC_PRINT:
+      if (g_browser_process->local_state() &&
+          !g_browser_process->local_state()->GetBoolean(
+              prefs::kPrintingEnabled)) {
+        return false;
+      }
       return params_.media_type == WebContextMenuData::MediaTypeNone ||
-        params_.media_flags & WebContextMenuData::MediaCanPrint;
+             params_.media_flags & WebContextMenuData::MediaCanPrint;
 
     case IDC_CONTENT_CONTEXT_SEARCHWEBFOR:
     case IDC_CONTENT_CONTEXT_GOTOURL:
@@ -1017,19 +1106,13 @@ bool RenderViewContextMenu::IsCommandIdChecked(int id) const {
 
   if (id == IDC_CONTENT_CONTEXT_CONTROLS) {
     return (params_.media_flags &
-            WebContextMenuData::MediaControls) != 0;
+            WebContextMenuData::MediaControlRootElement) != 0;
   }
 
-  // Custom WebKit items.
+  // Custom items.
   if (id >= IDC_CONTENT_CONTEXT_CUSTOM_FIRST &&
       id <= IDC_CONTENT_CONTEXT_CUSTOM_LAST) {
-    const std::vector<WebMenuItem>& custom_items = params_.custom_items;
-    for (size_t i = 0; i < custom_items.size(); ++i) {
-      int action_id = IDC_CONTENT_CONTEXT_CUSTOM_FIRST + custom_items[i].action;
-      if (action_id == id)
-        return custom_items[i].checked;
-    }
-    return false;
+    return IsCustomItemChecked(params_.custom_items, id);
   }
 
   // Extension items.
@@ -1090,11 +1173,11 @@ void RenderViewContextMenu::ExecuteCommand(int id) {
   }
 
   // Process custom actions range.
-  if ((id >= IDC_CONTENT_CONTEXT_CUSTOM_FIRST) &&
-      (id < IDC_CONTENT_CONTEXT_CUSTOM_LAST)) {
+  if (id >= IDC_CONTENT_CONTEXT_CUSTOM_FIRST &&
+      id <= IDC_CONTENT_CONTEXT_CUSTOM_LAST) {
     unsigned action = id - IDC_CONTENT_CONTEXT_CUSTOM_FIRST;
-    source_tab_contents_->render_view_host()->
-        PerformCustomContextMenuAction(action);
+    source_tab_contents_->render_view_host()->PerformCustomContextMenuAction(
+        params_.custom_context, action);
     return;
   }
 
@@ -1133,6 +1216,8 @@ void RenderViewContextMenu::ExecuteCommand(int id) {
     case IDC_CONTENT_CONTEXT_SAVEAVAS:
     case IDC_CONTENT_CONTEXT_SAVEIMAGEAS:
     case IDC_CONTENT_CONTEXT_SAVELINKAS: {
+      download_util::RecordDownloadCount(
+          download_util::INITIATED_BY_CONTEXT_MENU_COUNT);
       const GURL& referrer =
           params_.frame_url.is_empty() ? params_.page_url : params_.frame_url;
       const GURL& url =
@@ -1219,9 +1304,13 @@ void RenderViewContextMenu::ExecuteCommand(int id) {
       source_tab_contents_->controller().GoForward();
       break;
 
-    case IDC_SAVE_PAGE:
-      source_tab_contents_->OnSavePage();
+    case IDC_SAVE_PAGE: {
+      TabContentsWrapper* wrapper =
+          TabContentsWrapper::GetCurrentWrapperForContents(
+              source_tab_contents_);
+      wrapper->download_tab_helper()->OnSavePage();
       break;
+    }
 
     case IDC_RELOAD:
       // Prevent the modal "Resubmit form post" dialog from appearing in the
@@ -1231,9 +1320,19 @@ void RenderViewContextMenu::ExecuteCommand(int id) {
 
     case IDC_PRINT:
       if (params_.media_type == WebContextMenuData::MediaTypeNone) {
-        source_tab_contents_->PrintPreview();
+        if (CommandLine::ForCurrentProcess()->HasSwitch(
+            switches::kEnablePrintPreview)) {
+          printing::PrintPreviewTabController::PrintPreview(
+              source_tab_contents_);
+        } else {
+          TabContentsWrapper* wrapper =
+              TabContentsWrapper::GetCurrentWrapperForContents(
+                  source_tab_contents_);
+          wrapper->print_view_manager()->PrintNow();
+        }
       } else {
-        source_tab_contents_->render_view_host()->PrintNodeUnderContextMenu();
+        RenderViewHost* rvh = source_tab_contents_->render_view_host();
+        rvh->Send(new PrintMsg_PrintNodeUnderContextMenu(rvh->routing_id()));
       }
       break;
 
@@ -1256,12 +1355,14 @@ void RenderViewContextMenu::ExecuteCommand(int id) {
     case IDC_CONTENT_CONTEXT_TRANSLATE: {
       // A translation might have been triggered by the time the menu got
       // selected, do nothing in that case.
-      if (source_tab_contents_->language_state().IsPageTranslated() ||
-          source_tab_contents_->language_state().translation_pending()) {
+      TranslateTabHelper* helper =
+          TabContentsWrapper::GetCurrentWrapperForContents(
+              source_tab_contents_)->translate_tab_helper();
+      if (helper->language_state().IsPageTranslated() ||
+          helper->language_state().translation_pending()) {
         return;
       }
-      std::string original_lang =
-          source_tab_contents_->language_state().original_language();
+      std::string original_lang = helper->language_state().original_language();
       std::string target_lang = g_browser_process->GetApplicationLocale();
       target_lang = TranslateManager::GetLanguageCode(target_lang);
       // Since the user decided to translate for that language and site, clears
@@ -1279,8 +1380,8 @@ void RenderViewContextMenu::ExecuteCommand(int id) {
       break;
 
     case IDC_CONTENT_CONTEXT_VIEWFRAMESOURCE:
-      OpenURL(GURL(chrome::kViewSourceScheme + std::string(":") +
-          params_.frame_url.spec()), NEW_FOREGROUND_TAB, PageTransition::LINK);
+      source_tab_contents_->ViewFrameSource(params_.frame_url,
+                                            params_.frame_content_state);
       break;
 
     case IDC_CONTENT_CONTEXT_VIEWFRAMEINFO: {
@@ -1361,12 +1462,12 @@ void RenderViewContextMenu::ExecuteCommand(int id) {
       break;
     }
 
-    case IDC_CONTENT_CONTEXT_LANGUAGE_SETTINGS:
-      ShowFontsLanguagesWindow(
-          platform_util::GetTopLevel(
-              source_tab_contents_->GetContentNativeView()),
-          LANGUAGES_PAGE, profile_);
+    case IDC_CONTENT_CONTEXT_LANGUAGE_SETTINGS: {
+      std::string url = std::string(chrome::kChromeUISettingsURL) +
+          chrome::kLanguageOptionsSubPage;
+      OpenURL(GURL(url), NEW_FOREGROUND_TAB, PageTransition::LINK);
       break;
+    }
 
     case IDC_SPELLPANEL_TOGGLE:
       source_tab_contents_->render_view_host()->ToggleSpellPanel(
@@ -1398,8 +1499,20 @@ void RenderViewContextMenu::ExecuteCommand(int id) {
   }
 }
 
+void RenderViewContextMenu::MenuWillShow() {
+  RenderWidgetHostView* view = source_tab_contents_->GetRenderWidgetHostView();
+  if (view)
+    view->ShowingContextMenu(true);
+}
+
 void RenderViewContextMenu::MenuClosed() {
-  source_tab_contents_->render_view_host()->ContextMenuClosed();
+  RenderWidgetHostView* view = source_tab_contents_->GetRenderWidgetHostView();
+  if (view)
+    view->ShowingContextMenu(false);
+  if (source_tab_contents_->render_view_host()) {
+    source_tab_contents_->render_view_host()->ContextMenuClosed(
+        params_.custom_context);
+  }
 }
 
 bool RenderViewContextMenu::IsDevCommandEnabled(int id) const {
@@ -1414,10 +1527,6 @@ bool RenderViewContextMenu::IsDevCommandEnabled(int id) const {
 
   // Don't inspect view source.
   if (active_entry->IsViewSourceMode())
-    return false;
-
-  // Don't inspect HTML dialogs (doesn't work anyway).
-  if (active_entry->url().SchemeIs(chrome::kGearsScheme))
     return false;
 
   // Don't inspect about:network, about:memory, etc.

@@ -1,44 +1,58 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
+
+// Defines the Chrome Extensions Proxy Settings API relevant classes to realize
+// the API as specified in chrome/common/extensions/api/extension_api.json.
 
 #ifndef CHROME_BROWSER_EXTENSIONS_EXTENSION_PROXY_API_H_
 #define CHROME_BROWSER_EXTENSIONS_EXTENSION_PROXY_API_H_
 
 #include <string>
 
-#include "chrome/browser/extensions/extension_function.h"
+#include "base/memory/singleton.h"
+#include "chrome/browser/extensions/extension_preference_api.h"
+#include "chrome/browser/prefs/proxy_prefs.h"
+#include "chrome/browser/profiles/profile.h"
 
-class DictionaryValue;
+class Value;
+class ExtensionEventRouterForwarder;
 
-class UseCustomProxySettingsFunction : public SyncExtensionFunction {
+// Class to convert between the representation of proxy settings used
+// in the Proxy Settings API and the representation used in the PrefStores.
+// This plugs into the ExtensionPreferenceAPI to get and set proxy settings.
+class ProxyPrefTransformer : public PrefTransformerInterface {
  public:
-  ~UseCustomProxySettingsFunction() {}
-  virtual bool RunImpl();
+  ProxyPrefTransformer();
+  virtual ~ProxyPrefTransformer();
 
-  DECLARE_EXTENSION_FUNCTION_NAME("experimental.proxy.useCustomProxySettings")
+  // Implementation of PrefTransformerInterface.
+  virtual Value* ExtensionToBrowserPref(const Value* extension_pref,
+                                        std::string* error) OVERRIDE;
+  virtual Value* BrowserToExtensionPref(const Value* browser_pref) OVERRIDE;
 
  private:
-  struct ProxyServer {
-    enum {
-      INVALID_PORT = -1
-    };
-    ProxyServer() : scheme("http"), host(""), port(INVALID_PORT) {}
+  DISALLOW_COPY_AND_ASSIGN(ProxyPrefTransformer);
+};
 
-    // The scheme of the proxy URI itself.
-    std::string scheme;
-    std::string host;
-    int port;
-  };
+// This class observes proxy error events and routes them to the appropriate
+// extensions listening to those events. All methods must be called on the IO
+// thread unless otherwise specified.
+class ExtensionProxyEventRouter {
+ public:
+  static ExtensionProxyEventRouter* GetInstance();
 
-  bool GetProxyServer(const DictionaryValue* dict, ProxyServer* proxy_server);
+  void OnProxyError(ExtensionEventRouterForwarder* event_router,
+                    ProfileId profile_id,
+                    int error_code);
 
-  bool ApplyMode(const std::string& mode);
-  bool ApplyPacScript(DictionaryValue* pac_dict);
-  bool ApplyProxyRules(DictionaryValue* proxy_rules);
+ private:
+  friend struct DefaultSingletonTraits<ExtensionProxyEventRouter>;
 
-  // Takes ownership of |pref_value|.
-  void ApplyPreference(const char* pref_path, Value* pref_value);
+  ExtensionProxyEventRouter();
+  ~ExtensionProxyEventRouter();
+
+  DISALLOW_COPY_AND_ASSIGN(ExtensionProxyEventRouter);
 };
 
 #endif  // CHROME_BROWSER_EXTENSIONS_EXTENSION_PROXY_API_H_

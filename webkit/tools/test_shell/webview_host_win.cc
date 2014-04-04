@@ -4,11 +4,11 @@
 
 #include "webkit/tools/test_shell/webview_host.h"
 
-#include "gfx/rect.h"
-#include "gfx/size.h"
 #include "skia/ext/platform_canvas.h"
 #include "third_party/WebKit/Source/WebKit/chromium/public/WebView.h"
 #include "ui/base/win/hwnd_util.h"
+#include "ui/gfx/rect.h"
+#include "ui/gfx/size.h"
 #include "webkit/glue/webpreferences.h"
 #include "webkit/tools/test_shell/test_webview_delegate.h"
 
@@ -42,7 +42,8 @@ WebViewHost* WebViewHost::Create(HWND parent_view,
                              GetModuleHandle(NULL), NULL);
   ui::SetWindowUserData(host->view_, host);
 
-  host->webwidget_ = WebView::create(delegate, dev_tools_client, NULL);
+  host->webwidget_ = WebView::create(delegate);
+  host->webview()->setDevToolsAgentClient(dev_tools_client);
   prefs.Apply(host->webview());
   host->webview()->initializeMainFrame(delegate);
 

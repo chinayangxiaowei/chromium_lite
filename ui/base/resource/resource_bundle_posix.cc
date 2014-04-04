@@ -9,9 +9,9 @@
 #include "base/string16.h"
 #include "base/string_piece.h"
 #include "base/synchronization/lock.h"
-#include "gfx/font.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/resource/data_pack.h"
+#include "ui/gfx/font.h"
 
 namespace ui {
 
@@ -31,9 +31,6 @@ DataPack* LoadResourcesDataPak(FilePath resources_pak_path) {
 
 ResourceBundle::~ResourceBundle() {
   FreeImages();
-#if defined(OS_POSIX) && !defined(OS_MACOSX)
-  FreeGdkPixBufs();
-#endif
   UnloadLocaleResources();
   STLDeleteContainerPointers(data_packs_.begin(),
                              data_packs_.end());
@@ -116,6 +113,14 @@ std::string ResourceBundle::LoadLocaleResources(
   locale_resources_data_ = LoadResourcesDataPak(locale_file_path);
   CHECK(locale_resources_data_) << "failed to load locale.pak";
   return app_locale;
+}
+
+void ResourceBundle::LoadTestResources(const FilePath& path) {
+  DCHECK(!resources_data_) << "resource already loaded";
+
+  // Use the given resource pak for both common and localized resources.
+  resources_data_ = LoadResourcesDataPak(path);
+  locale_resources_data_ = LoadResourcesDataPak(path);
 }
 
 }  // namespace ui

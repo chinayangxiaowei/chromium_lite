@@ -12,12 +12,12 @@
 #include "base/timer.h"
 #include "chrome/browser/ui/gtk/custom_button.h"
 #include "chrome/browser/ui/gtk/owned_widget_gtk.h"
-#include "chrome/common/notification_observer.h"
-#include "chrome/common/notification_registrar.h"
+#include "content/common/notification_observer.h"
+#include "content/common/notification_registrar.h"
 #include "ui/base/gtk/gtk_signal.h"
 
 class Browser;
-class GtkThemeProvider;
+class GtkThemeService;
 class LocationBarViewGtk;
 class Task;
 
@@ -77,7 +77,7 @@ class ReloadButtonGtk : public NotificationObserver {
   // Used to listen for theme change notifications.
   NotificationRegistrar registrar_;
 
-  GtkThemeProvider* theme_provider_;
+  GtkThemeService* theme_service_;
 
   CustomDrawButtonBase reload_;
   CustomDrawButtonBase stop_;

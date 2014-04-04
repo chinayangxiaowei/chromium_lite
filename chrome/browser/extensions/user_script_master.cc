@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -19,8 +19,8 @@
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/common/extensions/extension.h"
 #include "chrome/common/extensions/extension_resource.h"
-#include "chrome/common/notification_service.h"
 #include "chrome/common/url_constants.h"
+#include "content/common/notification_service.h"
 #include "net/base/net_util.h"
 
 
@@ -35,7 +35,7 @@ static bool GetDeclarationValue(const base::StringPiece& line,
   std::string temp(line.data() + index + prefix.length(),
                    line.length() - index - prefix.length());
 
-  if (temp.size() == 0 || !IsWhitespace(temp[0]))
+  if (temp.empty() || !IsWhitespace(temp[0]))
     return false;
 
   TrimWhitespaceASCII(temp, TRIM_ALL, value);
@@ -107,7 +107,8 @@ bool UserScriptMaster::ScriptReloader::ParseMetadataHeader(
         script->set_description(value);
       } else if (GetDeclarationValue(line, kMatchDeclaration, &value)) {
         URLPattern pattern(UserScript::kValidUserScriptSchemes);
-        if (URLPattern::PARSE_SUCCESS != pattern.Parse(value))
+        if (URLPattern::PARSE_SUCCESS !=
+            pattern.Parse(value, URLPattern::PARSE_LENIENT))
           return false;
         script->add_url_pattern(pattern);
       } else if (GetDeclarationValue(line, kRunAtDeclaration, &value)) {
@@ -125,7 +126,7 @@ bool UserScriptMaster::ScriptReloader::ParseMetadataHeader(
 
   // If no patterns were specified, default to @include *. This is what
   // Greasemonkey does.
-  if (script->globs().size() == 0 && script->url_patterns().size() == 0)
+  if (script->globs().empty() && script->url_patterns().empty())
     script->add_glob("*");
 
   return true;
@@ -237,7 +238,7 @@ static base::SharedMemory* Serialize(const UserScriptList& scripts) {
   for (size_t i = 0; i < scripts.size(); i++) {
     const UserScript& script = scripts[i];
     // TODO(aa): This can be replaced by sending content script metadata to
-    // renderers along with other extension data in ViewMsg_ExtensionLoaded.
+    // renderers along with other extension data in ExtensionMsg_Loaded.
     // See crbug.com/70516.
     script.Pickle(&pickle);
     // Write scripts as 'data' so that we can read it out in the slave without
@@ -343,15 +344,12 @@ void UserScriptMaster::Observe(NotificationType type,
       // Add any content scripts inside the extension.
       const Extension* extension = Details<const Extension>(details).ptr();
       bool incognito_enabled = profile_->GetExtensionService()->
-          IsIncognitoEnabled(extension);
-      bool allow_file_access = profile_->GetExtensionService()->
-          AllowFileAccess(extension);
+          IsIncognitoEnabled(extension->id());
       const UserScriptList& scripts = extension->content_scripts();
       for (UserScriptList::const_iterator iter = scripts.begin();
            iter != scripts.end(); ++iter) {
         lone_scripts_.push_back(*iter);
         lone_scripts_.back().set_incognito_enabled(incognito_enabled);
-        lone_scripts_.back().set_allow_file_access(allow_file_access);
       }
       if (extensions_service_ready_)
         StartScan();
@@ -379,14 +377,11 @@ void UserScriptMaster::Observe(NotificationType type,
       const Extension* extension = Details<const Extension>(details).ptr();
       UserScriptList new_lone_scripts;
       bool incognito_enabled = profile_->GetExtensionService()->
-          IsIncognitoEnabled(extension);
-      bool allow_file_access = profile_->GetExtensionService()->
-          AllowFileAccess(extension);
+          IsIncognitoEnabled(extension->id());
       for (UserScriptList::iterator iter = lone_scripts_.begin();
            iter != lone_scripts_.end(); ++iter) {
         if (iter->extension_id() == extension->id()) {
           iter->set_incognito_enabled(incognito_enabled);
-          iter->set_allow_file_access(allow_file_access);
         }
       }
       StartScan();

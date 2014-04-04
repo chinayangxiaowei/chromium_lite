@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 //
@@ -9,6 +9,7 @@
 #pragma once
 
 #include <string>
+#include <vector>
 
 #include "base/basictypes.h"
 #include "base/file_path.h"
@@ -32,15 +33,19 @@ struct DownloadCreateInfo {
   DownloadCreateInfo();
   ~DownloadCreateInfo();
 
+  // Indicates if the download is dangerous.
+  bool IsDangerous();
+
   std::string DebugString() const;
+
+  // The URL from which we are downloading. This is the final URL after any
+  // redirection by the server for |url_chain|.
+  const GURL& url() const;
 
   // DownloadItem fields
   FilePath path;
-  // The URL from which we are downloading. This is the final URL after any
-  // redirection by the server for |original_url_|.
-  GURL url;
-  // The original URL before any redirection by the server for this URL.
-  GURL original_url;
+  // The chain of redirects that leading up to and including the final URL.
+  std::vector<GURL> url_chain;
   GURL referrer_url;
   FilePath suggested_path;
   // A number that should be added to the suggested path to make it unique.
@@ -68,8 +73,10 @@ struct DownloadCreateInfo {
   // False if the UI should be supressed and the download performed to the
   // default location.
   bool prompt_user_for_save_location;
-  // Whether this download is potentially dangerous (ex: exe, dll, ...).
-  bool is_dangerous;
+  // Whether this download file is potentially dangerous (ex: exe, dll, ...).
+  bool is_dangerous_file;
+  // If safebrowsing believes this URL leads to malware.
+  bool is_dangerous_url;
   // The original name for a dangerous download.
   FilePath original_name;
   // Whether this download is for extension install or not.

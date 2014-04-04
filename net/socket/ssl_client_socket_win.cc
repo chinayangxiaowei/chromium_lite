@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -325,6 +325,13 @@ static BOOL WINAPI ClientCertFindCallback(PCCERT_CONTEXT cert_context,
   if (CertVerifyTimeValidity(NULL, cert_context->pCertInfo) != 0)
     return FALSE;
 
+  // Verify private key metadata is associated with this certificate.
+  DWORD size = 0;
+  if (!CertGetCertificateContextProperty(
+          cert_context, CERT_KEY_PROV_INFO_PROP_ID, NULL, &size)) {
+    return FALSE;
+  }
+
   return TRUE;
 }
 
@@ -426,6 +433,9 @@ void SSLClientSocketWin::GetSSLInfo(SSLInfo* ssl_info) {
 
   ssl_info->cert = server_cert_;
   ssl_info->cert_status = server_cert_verify_result_.cert_status;
+  ssl_info->public_key_hashes = server_cert_verify_result_.public_key_hashes;
+  ssl_info->is_issued_by_known_root =
+      server_cert_verify_result_.is_issued_by_known_root;
   SecPkgContext_ConnectionInfo connection_info;
   SECURITY_STATUS status = QueryContextAttributes(
       &ctxt_, SECPKG_ATTR_CONNECTION_INFO, &connection_info);
@@ -683,6 +693,10 @@ bool SSLClientSocketWin::IsConnectedAndIdle() const {
 
 int SSLClientSocketWin::GetPeerAddress(AddressList* address) const {
   return transport_->socket()->GetPeerAddress(address);
+}
+
+int SSLClientSocketWin::GetLocalAddress(IPEndPoint* address) const {
+  return transport_->socket()->GetLocalAddress(address);
 }
 
 void SSLClientSocketWin::SetSubresourceSpeculation() {

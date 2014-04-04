@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,6 +6,7 @@
 #define CHROME_BROWSER_UI_VIEWS_BROWSER_BUBBLE_H_
 #pragma once
 
+#include "chrome/browser/ui/views/bubble/bubble_border.h"
 #include "views/view.h"
 #include "views/widget/widget.h"
 
@@ -37,13 +38,17 @@ class BrowserBubble {
                                  bool lost_focus_to_child) {}
   };
 
-  // Note that the bubble will size itself to the preferred size of |view|.
-  // |view| is the embedded view, |frame| is widget that the bubble is being
-  // positioned relative to, |origin| is the location that the bubble will
-  // be positioned relative to |frame|.  Pass true through |drop_shadow| to
-  // surround the bubble widget with a drop-shadow.
-  BrowserBubble(views::View* view, views::Widget* frame,
-                const gfx::Point& origin, bool drop_shadow);
+  // Note that the bubble will size itself to the preferred size of |view| plus
+  // insets of bubble border. |view| is the embedded view, |frame| is widget
+  // that the bubble is being positioned relative to, |relative_to| is the
+  // location that the bubble is showing relative to in screen coordinates,
+  // e.g. if the buuble is showing for a toolbar button, |relative_to| usually
+  // would be the bounds of the toolbar button in screen coordiates,
+  // |arrow_location| is the location where the arrow should on the bubble.
+  BrowserBubble(views::View* view,
+                views::Widget* frame,
+                const gfx::Rect& relative_to,
+                BubbleBorder::ArrowLocation arrow_location);
   virtual ~BrowserBubble();
 
   // Call manually if you need to detach the bubble from tracking the browser's
@@ -94,6 +99,12 @@ class BrowserBubble {
   // Create the popup widget.
   virtual void InitPopup();
 
+  // Get |relative_to_| rect in screen coordinates.
+  gfx::Rect GetAbsoluteRelativeTo();
+
+  // Set bounds using screen coordinates.
+  void SetAbsoluteBounds(const gfx::Rect& window_bounds);
+
   // Move the popup to an absolute position.
   void MovePopup(int x, int y, int w, int h);
 
@@ -107,6 +118,12 @@ class BrowserBubble {
   // The view that is displayed in this bubble.
   views::View* view_;
 
+  // Anchor rect that this bubble is shown relative to, in frame coordinates.
+  gfx::Rect relative_to_;
+
+  // Arrow location of this bubble.
+  BubbleBorder::ArrowLocation arrow_location_;
+
   // The bounds relative to the frame.
   gfx::Rect bounds_;
 
@@ -118,9 +135,6 @@ class BrowserBubble {
 
   // Is the bubble attached to a Browser window.
   bool attached_;
-
-  // Does the bubble have a drop-shadow.
-  bool drop_shadow_enabled_;
 
   // Non-owning pointer to the host of this bubble.
   BrowserBubbleHost* bubble_host_;

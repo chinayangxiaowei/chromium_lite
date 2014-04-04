@@ -9,10 +9,11 @@
 #include "base/string_piece.h"
 #include "base/synchronization/lock.h"
 #include "build/build_config.h"
-#include "gfx/codec/png_codec.h"
-#include "gfx/font.h"
 #include "third_party/skia/include/core/SkBitmap.h"
 #include "ui/base/resource/data_pack.h"
+#include "ui/gfx/codec/png_codec.h"
+#include "ui/gfx/font.h"
+#include "ui/gfx/image.h"
 
 namespace ui {
 
@@ -64,6 +65,14 @@ std::string ResourceBundle::InitSharedInstance(
 }
 
 /* static */
+void ResourceBundle::InitSharedInstanceForTest(const FilePath& path) {
+  DCHECK(g_shared_instance_ == NULL) << "ResourceBundle initialized twice";
+  g_shared_instance_ = new ResourceBundle();
+
+  g_shared_instance_->LoadTestResources(path);
+}
+
+/* static */
 std::string ResourceBundle::ReloadSharedInstance(
     const std::string& pref_locale) {
   DCHECK(g_shared_instance_ != NULL) << "ResourceBundle not initialized";
@@ -94,49 +103,47 @@ ResourceBundle& ResourceBundle::GetSharedInstance() {
 }
 
 SkBitmap* ResourceBundle::GetBitmapNamed(int resource_id) {
-  // Check to see if we already have the Skia image in the cache.
-  {
-    base::AutoLock lock_scope(*lock_);
-    SkImageMap::const_iterator found = skia_images_.find(resource_id);
-    if (found != skia_images_.end())
-      return found->second;
-  }
-
-  scoped_ptr<SkBitmap> bitmap;
-
-  bitmap.reset(LoadBitmap(resources_data_, resource_id));
-
-  if (bitmap.get()) {
-    // We loaded successfully.  Cache the Skia version of the bitmap.
-    base::AutoLock lock_scope(*lock_);
-
-    // Another thread raced us, and has already cached the skia image.
-    if (skia_images_.count(resource_id))
-      return skia_images_[resource_id];
-
-    skia_images_[resource_id] = bitmap.get();
-    return bitmap.release();
-  }
-
-  // We failed to retrieve the bitmap, show a debugging red square.
-  {
-    LOG(WARNING) << "Unable to load bitmap with id " << resource_id;
-    NOTREACHED();  // Want to assert in debug mode.
-
-    base::AutoLock lock_scope(*lock_);  // Guard empty_bitmap initialization.
-
-    static SkBitmap* empty_bitmap = NULL;
-    if (!empty_bitmap) {
-      // The placeholder bitmap is bright red so people notice the problem.
-      // This bitmap will be leaked, but this code should never be hit.
-      empty_bitmap = new SkBitmap();
-      empty_bitmap->setConfig(SkBitmap::kARGB_8888_Config, 32, 32);
-      empty_bitmap->allocPixels();
-      empty_bitmap->eraseARGB(255, 255, 0, 0);
-    }
-    return empty_bitmap;
-  }
+  const SkBitmap* bitmap =
+      static_cast<const SkBitmap*>(GetImageNamed(resource_id));
+  return const_cast<SkBitmap*>(bitmap);
 }
+
+gfx::Image& ResourceBundle::GetImageNamed(int resource_id) {
+  // Check to see if the image is already in the cache.
+  {
+    base::AutoLock lock_scope(*lock_);
+    ImageMap::const_iterator found = images_.find(resource_id);
+    if (found != images_.end())
+      return *found->second;
+  }
+
+  scoped_ptr<SkBitmap> bitmap(LoadBitmap(resources_data_, resource_id));
+  if (bitmap.get()) {
+    // The load was successful, so cache the image.
+    base::AutoLock lock_scope(*lock_);
+
+    // Another thread raced the load and has already cached the image.
+    if (images_.count(resource_id))
+      return *images_[resource_id];
+
+    gfx::Image* image = new gfx::Image(bitmap.release());
+    images_[resource_id] = image;
+    return *image;
+  }
+
+  // The load failed to retrieve the image; show a debugging red square.
+  LOG(WARNING) << "Unable to load image with id " << resource_id;
+  NOTREACHED();  // Want to assert in debug mode.
+  return *GetEmptyImage();
+}
+
+#if !defined(OS_MACOSX) && !defined(OS_LINUX)
+// Only Mac and Linux have non-Skia native image types. All other platforms use
+// Skia natively, so just use GetImageNamed().
+gfx::Image& ResourceBundle::GetNativeImageNamed(int resource_id) {
+  return GetImageNamed(resource_id);
+}
+#endif
 
 RefCountedStaticMemory* ResourceBundle::LoadDataResourceBytes(
     int resource_id) const {
@@ -154,7 +161,10 @@ RefCountedStaticMemory* ResourceBundle::LoadDataResourceBytes(
 }
 
 const gfx::Font& ResourceBundle::GetFont(FontStyle style) {
-  LoadFontsIfNecessary();
+  {
+    base::AutoLock lock_scope(*lock_);
+    LoadFontsIfNecessary();
+  }
   switch (style) {
     case BoldFont:
       return *bold_font_;
@@ -171,15 +181,10 @@ const gfx::Font& ResourceBundle::GetFont(FontStyle style) {
   }
 }
 
-gfx::NativeImage ResourceBundle::GetNativeImageNamed(int resource_id) {
-  ResourceBundle& rb = ResourceBundle::GetSharedInstance();
-#if defined(OS_MACOSX)
-  return rb.GetNSImageNamed(resource_id);
-#elif defined(USE_X11) && !defined(TOOLKIT_VIEWS)
-  return rb.GetPixbufNamed(resource_id);
-#else
-  return rb.GetBitmapNamed(resource_id);
-#endif
+void ResourceBundle::ReloadFonts() {
+  base::AutoLock lock_scope(*lock_);
+  base_font_.reset();
+  LoadFontsIfNecessary();
 }
 
 ResourceBundle::ResourceBundle()
@@ -189,13 +194,13 @@ ResourceBundle::ResourceBundle()
 }
 
 void ResourceBundle::FreeImages() {
-  STLDeleteContainerPairSecondPointers(skia_images_.begin(),
-                                       skia_images_.end());
-  skia_images_.clear();
+  STLDeleteContainerPairSecondPointers(images_.begin(),
+                                       images_.end());
+  images_.clear();
 }
 
 void ResourceBundle::LoadFontsIfNecessary() {
-  base::AutoLock lock_scope(*lock_);
+  lock_->AssertAcquired();
   if (!base_font_.get()) {
     base_font_.reset(new gfx::Font());
 
@@ -235,6 +240,21 @@ SkBitmap* ResourceBundle::LoadBitmap(DataHandle data_handle, int resource_id) {
   return new SkBitmap(bitmap);
 }
 
+gfx::Image* ResourceBundle::GetEmptyImage() {
+  base::AutoLock lock(*lock_);
+
+  static gfx::Image* empty_image = NULL;
+  if (!empty_image) {
+    // The placeholder bitmap is bright red so people notice the problem.
+    // This bitmap will be leaked, but this code should never be hit.
+    SkBitmap* bitmap = new SkBitmap();
+    bitmap->setConfig(SkBitmap::kARGB_8888_Config, 32, 32);
+    bitmap->allocPixels();
+    bitmap->eraseARGB(255, 255, 0, 0);
+    empty_image = new gfx::Image(bitmap);
+  }
+  return empty_image;
+}
 
 // LoadedDataPack -------------------------------------------------------------
 
@@ -252,17 +272,22 @@ void ResourceBundle::LoadedDataPack::Load() {
   data_pack_.reset(new ui::DataPack);
   bool success = data_pack_->Load(path_);
   LOG_IF(ERROR, !success) << "Failed to load " << path_.value()
-      << "\nYou will not be able to use the Bookmarks Manager or "
-      << "about:net-internals.";
+      << "\nSome features may not be available.";
+  if (!success)
+    data_pack_.reset();
 }
 
 bool ResourceBundle::LoadedDataPack::GetStringPiece(
     int resource_id, base::StringPiece* data) const {
+  if (!data_pack_.get())
+    return false;
   return data_pack_->GetStringPiece(static_cast<uint32>(resource_id), data);
 }
 
 RefCountedStaticMemory* ResourceBundle::LoadedDataPack::GetStaticMemory(
     int resource_id) const {
+  if (!data_pack_.get())
+    return NULL;
   return data_pack_->GetStaticMemory(resource_id);
 }
 

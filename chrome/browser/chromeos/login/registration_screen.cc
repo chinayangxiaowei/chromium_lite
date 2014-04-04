@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,13 +7,13 @@
 #include "base/logging.h"
 #include "base/string_util.h"
 #include "chrome/browser/browser_process.h"
-#include "chrome/browser/child_process_security_policy.h"
 #include "chrome/browser/chromeos/input_method/input_method_util.h"
 #include "chrome/browser/profiles/profile_manager.h"
-#include "chrome/browser/renderer_host/render_view_host.h"
-#include "chrome/browser/renderer_host/site_instance.h"
-#include "chrome/browser/tab_contents/tab_contents.h"
 #include "chrome/common/url_constants.h"
+#include "content/browser/child_process_security_policy.h"
+#include "content/browser/renderer_host/render_view_host.h"
+#include "content/browser/site_instance.h"
+#include "content/browser/tab_contents/tab_contents.h"
 #include "googleurl/src/gurl.h"
 #include "net/url_request/url_request_about_job.h"
 #include "net/url_request/url_request_filter.h"
@@ -123,8 +123,10 @@ void RegistrationScreen::OnPageLoadFailed(const std::string& url) {
 void RegistrationScreen::HandleKeyboardEvent(
     const NativeWebKeyboardEvent& event) {
   views::Widget* widget = view()->GetWidget();
-  if (widget && event.os_event && !event.skip_in_browser)
-    static_cast<views::WidgetGtk*>(widget)->HandleKeyboardEvent(event.os_event);
+  if (widget && event.os_event && !event.skip_in_browser) {
+    views::KeyEvent views_event(reinterpret_cast<GdkEvent*>(event.os_event));
+    static_cast<views::WidgetGtk*>(widget)->HandleKeyboardEvent(views_event);
+  }
 }
 
 ///////////////////////////////////////////////////////////////////////////////

@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,12 +8,13 @@
 
 #include <string>
 
-#include "base/scoped_ptr.h"
-#include "base/scoped_temp_dir.h"
+#include "base/memory/scoped_ptr.h"
+#include "base/memory/scoped_temp_dir.h"
 #include "chrome/common/extensions/extension.h"
 
 class DictionaryValue;
 class ExtensionPrefs;
+class ExtensionPrefValueMap;
 class PrefService;
 
 // This is a test class intended to make it easier to work with ExtensionPrefs
@@ -24,6 +25,7 @@ class TestExtensionPrefs {
   virtual ~TestExtensionPrefs();
 
   ExtensionPrefs* prefs() { return prefs_.get(); }
+  const ExtensionPrefs& const_prefs() const { return *prefs_.get(); }
   PrefService* pref_service() { return pref_service_.get(); }
   const FilePath& temp_dir() const { return temp_dir_.path(); }
 
@@ -44,12 +46,15 @@ class TestExtensionPrefs {
   // assigned.
   std::string AddExtensionAndReturnId(std::string name);
 
+  PrefService* CreateIncognitoPrefService() const;
+
  protected:
   ScopedTempDir temp_dir_;
   FilePath preferences_file_;
   FilePath extensions_dir_;
   scoped_ptr<PrefService> pref_service_;
   scoped_ptr<ExtensionPrefs> prefs_;
+  scoped_ptr<ExtensionPrefValueMap> extension_pref_value_map_;
 
  private:
   DISALLOW_COPY_AND_ASSIGN(TestExtensionPrefs);

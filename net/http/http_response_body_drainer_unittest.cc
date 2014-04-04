@@ -16,7 +16,6 @@
 #include "net/http/http_network_session.h"
 #include "net/http/http_stream.h"
 #include "net/proxy/proxy_service.h"
-#include "net/spdy/spdy_session_pool.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 namespace net {
@@ -75,42 +74,48 @@ class MockHttpStream : public HttpStream {
   // HttpStream implementation:
   virtual int InitializeStream(const HttpRequestInfo* request_info,
                                const BoundNetLog& net_log,
-                               CompletionCallback* callback) {
+                               CompletionCallback* callback) OVERRIDE {
     return ERR_UNEXPECTED;
   }
   virtual int SendRequest(const HttpRequestHeaders& request_headers,
                           UploadDataStream* request_body,
                           HttpResponseInfo* response,
-                          CompletionCallback* callback) {
+                          CompletionCallback* callback) OVERRIDE {
     return ERR_UNEXPECTED;
   }
-  virtual uint64 GetUploadProgress() const  { return 0; }
-  virtual int ReadResponseHeaders(CompletionCallback* callback) {
+  virtual uint64 GetUploadProgress() const OVERRIDE { return 0; }
+  virtual int ReadResponseHeaders(CompletionCallback* callback) OVERRIDE {
     return ERR_UNEXPECTED;
   }
-  virtual const HttpResponseInfo* GetResponseInfo() const { return NULL; }
+  virtual const HttpResponseInfo* GetResponseInfo() const OVERRIDE {
+    return NULL;
+  }
 
-  virtual bool CanFindEndOfResponse() const { return true; }
-  virtual bool IsMoreDataBuffered() const { return false; }
-  virtual bool IsConnectionReused() const { return false; }
-  virtual void SetConnectionReused() {}
-  virtual void GetSSLInfo(SSLInfo* ssl_info) {}
-  virtual void GetSSLCertRequestInfo(SSLCertRequestInfo* cert_request_info) {}
+  virtual bool CanFindEndOfResponse() const OVERRIDE { return true; }
+  virtual bool IsMoreDataBuffered() const OVERRIDE { return false; }
+  virtual bool IsConnectionReused() const OVERRIDE { return false; }
+  virtual void SetConnectionReused() OVERRIDE {}
+  virtual bool IsConnectionReusable() const OVERRIDE { return false; }
+  virtual void GetSSLInfo(SSLInfo* ssl_info) OVERRIDE {}
+  virtual void GetSSLCertRequestInfo(
+      SSLCertRequestInfo* cert_request_info) OVERRIDE {}
 
   // Mocked API
   virtual int ReadResponseBody(IOBuffer* buf, int buf_len,
-                               CompletionCallback* callback);
-  virtual void Close(bool not_reusable) {
+                               CompletionCallback* callback) OVERRIDE;
+  virtual void Close(bool not_reusable) OVERRIDE {
     DCHECK(!closed_);
     closed_ = true;
     result_waiter_->set_result(not_reusable);
   }
 
-  virtual HttpStream* RenewStreamForAuth() {
+  virtual HttpStream* RenewStreamForAuth() OVERRIDE {
     return NULL;
   }
 
-  virtual bool IsResponseBodyComplete() const { return is_complete_; }
+  virtual bool IsResponseBodyComplete() const OVERRIDE { return is_complete_; }
+
+  virtual bool IsSpdyHttpStream() const OVERRIDE { return false; }
 
   // Methods to tweak/observer mock behavior:
   void StallReadsForever() { stall_reads_forever_ = true; }
@@ -174,23 +179,23 @@ void MockHttpStream::CompleteRead() {
 class HttpResponseBodyDrainerTest : public testing::Test {
  protected:
   HttpResponseBodyDrainerTest()
-      : session_(new HttpNetworkSession(
-          NULL /* host_resolver */,
-          NULL /* dnsrr_resolver */,
-          NULL /* dns_cert_checker */,
-          NULL,
-          NULL /* ssl_host_info_factory */,
-          ProxyService::CreateDirect(),
-          NULL,
-          new SSLConfigServiceDefaults,
-          new SpdySessionPool(NULL),
-          NULL,
-          NULL,
-          NULL)),
+      : proxy_service_(ProxyService::CreateDirect()),
+        ssl_config_service_(new SSLConfigServiceDefaults),
+        session_(CreateNetworkSession()),
         mock_stream_(new MockHttpStream(&result_waiter_)),
         drainer_(new HttpResponseBodyDrainer(mock_stream_)) {}
+
   ~HttpResponseBodyDrainerTest() {}
 
+  HttpNetworkSession* CreateNetworkSession() const {
+    HttpNetworkSession::Params params;
+    params.proxy_service = proxy_service_;
+    params.ssl_config_service = ssl_config_service_;
+    return new HttpNetworkSession(params);
+  }
+
+  scoped_refptr<ProxyService> proxy_service_;
+  scoped_refptr<SSLConfigService> ssl_config_service_;
   const scoped_refptr<HttpNetworkSession> session_;
   CloseResultWaiter result_waiter_;
   MockHttpStream* const mock_stream_;  // Owned by |drainer_|.

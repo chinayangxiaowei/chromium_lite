@@ -15,16 +15,16 @@
 #include "base/threading/thread.h"
 #include "base/utf_string_conversions.h"
 #include "chrome/browser/bookmarks/bookmark_node_data.h"
-#include "chrome/browser/browser_thread.h"
 #include "chrome/browser/download/download_util.h"
 #include "chrome/browser/download/drag_download_file.h"
 #include "chrome/browser/download/drag_download_util.h"
-#include "chrome/browser/tab_contents/tab_contents.h"
 #include "chrome/browser/tab_contents/web_drag_source_win.h"
 #include "chrome/browser/tab_contents/web_drag_utils_win.h"
 #include "chrome/browser/tab_contents/web_drop_target_win.h"
-#include "chrome/browser/ui/views/tab_contents/tab_contents_view_win.h"
+#include "chrome/browser/ui/views/tab_contents/native_tab_contents_view_win.h"
 #include "chrome/common/url_constants.h"
+#include "content/browser/browser_thread.h"
+#include "content/browser/tab_contents/tab_contents.h"
 #include "net/base/net_util.h"
 #include "views/drag_utils.h"
 #include "webkit/glue/webdropdata.h"
@@ -97,7 +97,7 @@ class DragDropThread : public base::Thread {
   DISALLOW_COPY_AND_ASSIGN(DragDropThread);
 };
 
-TabContentsDragWin::TabContentsDragWin(TabContentsViewWin* view)
+TabContentsDragWin::TabContentsDragWin(NativeTabContentsViewWin* view)
     : drag_drop_thread_id_(0),
       view_(view),
       drag_ended_(false),
@@ -116,10 +116,10 @@ void TabContentsDragWin::StartDragging(const WebDropData& drop_data,
   DCHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
 
   drag_source_ = new WebDragSource(view_->GetNativeView(),
-                                   view_->tab_contents());
+                                   view_->GetTabContents());
 
-  const GURL& page_url = view_->tab_contents()->GetURL();
-  const std::string& page_encoding = view_->tab_contents()->encoding();
+  const GURL& page_url = view_->GetTabContents()->GetURL();
+  const std::string& page_encoding = view_->GetTabContents()->encoding();
 
   // If it is not drag-out, do the drag-and-drop in the current UI thread.
   if (drop_data.download_metadata.empty()) {
@@ -214,7 +214,7 @@ void TabContentsDragWin::PrepareDragForDownload(
                            download_url,
                            page_url,
                            page_encoding,
-                           view_->tab_contents());
+                           view_->GetTabContents());
   ui::OSExchangeData::DownloadFileInfo file_download(FilePath(),
                                                      download_file.get());
   data->SetDownloadFileInfo(file_download);
@@ -231,7 +231,8 @@ void TabContentsDragWin::PrepareDragForFileContents(
   file_name = file_name.BaseName().RemoveExtension();
   if (file_name.value().empty()) {
     // Retrieve the name from the URL.
-    file_name = net::GetSuggestedFilename(drop_data.url, "", "", FilePath());
+    file_name = FilePath(
+        net::GetSuggestedFilename(drop_data.url, "", "", string16()));
     if (file_name.value().size() + drop_data.file_extension.size() + 1 >
         MAX_PATH) {
       file_name = FilePath(file_name.value().substr(
@@ -239,7 +240,7 @@ void TabContentsDragWin::PrepareDragForFileContents(
     }
   }
   file_name = file_name.ReplaceExtension(drop_data.file_extension);
-  data->SetFileContents(file_name.value(), drop_data.file_contents);
+  data->SetFileContents(file_name, drop_data.file_contents);
 }
 
 void TabContentsDragWin::PrepareDragForUrl(const WebDropData& drop_data,

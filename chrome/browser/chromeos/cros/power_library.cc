@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,8 +6,9 @@
 
 #include "base/message_loop.h"
 #include "base/string_util.h"
-#include "chrome/browser/browser_thread.h"
 #include "chrome/browser/chromeos/cros/cros_library.h"
+#include "content/browser/browser_thread.h"
+#include "third_party/cros/chromeos_resume.h"
 
 namespace chromeos {
 
@@ -15,6 +16,7 @@ class PowerLibraryImpl : public PowerLibrary {
  public:
   PowerLibraryImpl()
       : power_status_connection_(NULL),
+        resume_status_connection_(NULL),
         status_(chromeos::PowerStatus()) {
     if (CrosLibrary::Get()->EnsureLoaded()) {
       Init();
@@ -24,6 +26,11 @@ class PowerLibraryImpl : public PowerLibrary {
   ~PowerLibraryImpl() {
     if (power_status_connection_) {
       chromeos::DisconnectPowerStatus(power_status_connection_);
+      power_status_connection_ = NULL;
+    }
+    if (resume_status_connection_) {
+      chromeos::DisconnectResume(resume_status_connection_);
+      resume_status_connection_ = NULL;
     }
   }
 
@@ -94,9 +101,16 @@ class PowerLibraryImpl : public PowerLibrary {
     power->UpdatePowerStatus(status);
   }
 
+  static void SystemResumedHandler(void* object) {
+    PowerLibraryImpl* power = static_cast<PowerLibraryImpl*>(object);
+    power->SystemResumed();
+  }
+
   void Init() {
     power_status_connection_ = chromeos::MonitorPowerStatus(
         &PowerStatusChangedHandler, this);
+    resume_status_connection_ =
+        chromeos::MonitorResume(&SystemResumedHandler, this);
   }
 
   void UpdatePowerStatus(const chromeos::PowerStatus& status) {
@@ -118,11 +132,26 @@ class PowerLibraryImpl : public PowerLibrary {
     FOR_EACH_OBSERVER(Observer, observers_, PowerChanged(this));
   }
 
+  void SystemResumed() {
+    // Make sure we run on the UI thread.
+    if (!BrowserThread::CurrentlyOn(BrowserThread::UI)) {
+      BrowserThread::PostTask(
+          BrowserThread::UI, FROM_HERE,
+          NewRunnableMethod(this, &PowerLibraryImpl::SystemResumed));
+      return;
+    }
+
+    FOR_EACH_OBSERVER(Observer, observers_, SystemResumed());
+  }
+
   ObserverList<Observer> observers_;
 
   // A reference to the battery power api, to allow callbacks when the battery
   // status changes.
   chromeos::PowerStatusConnection power_status_connection_;
+
+  // A reference to the resume alerts.
+  chromeos::ResumeConnection resume_status_connection_;
 
   // The latest power status.
   chromeos::PowerStatus status_;
@@ -137,11 +166,11 @@ class PowerLibraryStubImpl : public PowerLibrary {
   void AddObserver(Observer* observer) {}
   void RemoveObserver(Observer* observer) {}
   bool line_power_on() const { return false; }
-  bool battery_is_present() const { return false; }
+  bool battery_is_present() const { return true; }
   bool battery_fully_charged() const { return false; }
-  double battery_percentage() const { return false; }
+  double battery_percentage() const { return 50.0; }
   base::TimeDelta battery_time_to_empty() const {
-    return base::TimeDelta::FromSeconds(0);
+    return base::TimeDelta::FromSeconds(10 * 60);
   }
   base::TimeDelta battery_time_to_full() const {
     return base::TimeDelta::FromSeconds(0);

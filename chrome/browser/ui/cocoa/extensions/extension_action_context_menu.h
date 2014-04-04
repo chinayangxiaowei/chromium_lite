@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,8 +8,8 @@
 
 #import <Cocoa/Cocoa.h>
 
-#include "base/scoped_ptr.h"
-#include "base/scoped_nsobject.h"
+#include "base/memory/scoped_nsobject.h"
+#include "base/memory/scoped_ptr.h"
 
 class AsyncUninstaller;
 class DevmodeObserver;
@@ -21,6 +21,7 @@ class Profile;
 namespace extension_action_context_menu {
 
 class DevmodeObserver;
+class ProfileObserverBridge;
 
 }  // namespace extension_action_context_menu
 
@@ -42,6 +43,10 @@ class DevmodeObserver;
   // The observer used to listen for pref changed notifications.
   scoped_ptr<extension_action_context_menu::DevmodeObserver> observer_;
 
+  // The observer used to reset |observer_| when the profile is destroyed.
+  scoped_ptr<extension_action_context_menu::ProfileObserverBridge>
+      profile_observer_;
+
   // Used to load the extension icon asynchronously on the I/O thread then show
   // the uninstall confirmation dialog.
   scoped_ptr<AsyncUninstaller> uninstaller_;
@@ -54,6 +59,10 @@ class DevmodeObserver;
 
 // Show or hide the inspector menu item.
 - (void)updateInspectorItem;
+
+// Notifies the ExtensionActionContextMenu that the profile is is being
+// destroyed.
+- (void)invalidateProfile;
 
 @end
 

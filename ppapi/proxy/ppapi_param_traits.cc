@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,11 +8,70 @@
 
 #include "ppapi/c/dev/pp_file_info_dev.h"
 #include "ppapi/c/pp_resource.h"
+#include "ppapi/proxy/host_resource.h"
 #include "ppapi/proxy/interface_proxy.h"
 #include "ppapi/proxy/ppapi_messages.h"
 #include "ppapi/proxy/serialized_var.h"
+#include "ppapi/proxy/serialized_flash_menu.h"
 
 namespace IPC {
+
+namespace {
+
+// Deserializes a vector from IPC. This special version must be used instead
+// of the default IPC version when the vector contains a SerializedVar, either
+// directly or indirectly (i.e. a vector of objects that have a SerializedVar
+// inside them).
+//
+// The default vector deserializer does resize and then we deserialize into
+// those allocated slots. However, the implementation of vector (at least in
+// GCC's implementation), creates a new empty object using the default
+// constructor, and then sets the rest of the items to that empty one using the
+// copy constructor.
+//
+// Since we allocate the inner class when you call the default constructor and
+// transfer the inner class when you do operator=, the entire vector will end
+// up referring to the same inner class. Deserializing into this will just end
+// up overwriting the same item over and over, since all the SerializedVars
+// will refer to the same thing.
+//
+// The solution is to make a new object for each deserialized item, and then
+// add it to the vector one at a time.
+template<typename T>
+bool ReadVectorWithoutCopy(const Message* m,
+                           void** iter,
+                           std::vector<T>* output) {
+  // This part is just a copy of the the default ParamTraits vector Read().
+  int size;
+  // ReadLength() checks for < 0 itself.
+  if (!m->ReadLength(iter, &size))
+    return false;
+  // Resizing beforehand is not safe, see BUG 1006367 for details.
+  if (INT_MAX / sizeof(T) <= static_cast<size_t>(size))
+    return false;
+
+  output->reserve(size);
+  for (int i = 0; i < size; i++) {
+    T cur;
+    if (!ReadParam(m, iter, &cur))
+      return false;
+    output->push_back(cur);
+  }
+  return true;
+}
+
+// This serializes the vector of items to the IPC message in exactly the same
+// way as the "regular" IPC vector serializer does. But having the code here
+// saves us from having to copy this code into all ParamTraits that use the
+// ReadVectorWithoutCopy function for deserializing.
+template<typename T>
+void WriteVectorWithoutCopy(Message* m, const std::vector<T>& p) {
+  WriteParam(m, static_cast<int>(p.size()));
+  for (size_t i = 0; i < p.size(); i++)
+    WriteParam(m, p[i]);
+}
+
+}  // namespace
 
 // PP_Bool ---------------------------------------------------------------------
 
@@ -187,7 +246,7 @@ void ParamTraits<pp::proxy::PPBFlash_DrawGlyphs_Params>::Write(
     Message* m,
     const param_type& p) {
   ParamTraits<PP_Instance>::Write(m, p.instance);
-  ParamTraits<PP_Resource>::Write(m, p.pp_image_data);
+  ParamTraits<pp::proxy::HostResource>::Write(m, p.image_data);
   ParamTraits<pp::proxy::SerializedFontDescription>::Write(m, p.font_desc);
   ParamTraits<uint32_t>::Write(m, p.color);
   ParamTraits<PP_Point>::Write(m, p.position);
@@ -212,7 +271,8 @@ bool ParamTraits<pp::proxy::PPBFlash_DrawGlyphs_Params>::Read(
     param_type* r) {
   return
       ParamTraits<PP_Instance>::Read(m, iter, &r->instance) &&
-      ParamTraits<PP_Resource>::Read(m, iter, &r->pp_image_data) &&
+      ParamTraits<pp::proxy::HostResource>::Read(m, iter,
+                                                       &r->image_data) &&
       ParamTraits<pp::proxy::SerializedFontDescription>::Read(m, iter,
                                                               &r->font_desc) &&
       ParamTraits<uint32_t>::Read(m, iter, &r->color) &&
@@ -238,14 +298,43 @@ void ParamTraits<pp::proxy::PPBFlash_DrawGlyphs_Params>::Log(
     std::string* l) {
 }
 
+// PPBFileRef_CreateInfo -------------------------------------------------------
+
+// static
+void ParamTraits<pp::proxy::PPBFileRef_CreateInfo>::Write(
+    Message* m,
+    const param_type& p) {
+  ParamTraits<pp::proxy::HostResource>::Write(m, p.resource);
+  ParamTraits<int>::Write(m, p.file_system_type);
+  ParamTraits<pp::proxy::SerializedVar>::Write(m, p.path);
+  ParamTraits<pp::proxy::SerializedVar>::Write(m, p.name);
+}
+
+// static
+bool ParamTraits<pp::proxy::PPBFileRef_CreateInfo>::Read(const Message* m,
+                                                         void** iter,
+                                                         param_type* r) {
+  return
+      ParamTraits<pp::proxy::HostResource>::Read(m, iter, &r->resource) &&
+      ParamTraits<int>::Read(m, iter, &r->file_system_type) &&
+      ParamTraits<pp::proxy::SerializedVar>::Read(m, iter, &r->path) &&
+      ParamTraits<pp::proxy::SerializedVar>::Read(m, iter, &r->name);
+}
+
+// static
+void ParamTraits<pp::proxy::PPBFileRef_CreateInfo>::Log(
+    const param_type& p,
+    std::string* l) {
+}
+
 // PPBFont_DrawTextAt_Params ---------------------------------------------------
 
 // static
 void ParamTraits<pp::proxy::PPBFont_DrawTextAt_Params>::Write(
     Message* m,
     const param_type& p) {
-  ParamTraits<PP_Resource>::Write(m, p.font);
-  ParamTraits<PP_Resource>::Write(m, p.image_data);
+  ParamTraits<pp::proxy::HostResource>::Write(m, p.font);
+  ParamTraits<pp::proxy::HostResource>::Write(m, p.image_data);
   ParamTraits<PP_Bool>::Write(m, p.text_is_rtl);
   ParamTraits<PP_Bool>::Write(m, p.override_direction);
   ParamTraits<PP_Point>::Write(m, p.position);
@@ -261,8 +350,9 @@ bool ParamTraits<pp::proxy::PPBFont_DrawTextAt_Params>::Read(
     void** iter,
     param_type* r) {
   return
-      ParamTraits<PP_Resource>::Read(m, iter, &r->font) &&
-      ParamTraits<PP_Resource>::Read(m, iter, &r->image_data) &&
+      ParamTraits<pp::proxy::HostResource>::Read(m, iter, &r->font) &&
+      ParamTraits<pp::proxy::HostResource>::Read(m, iter,
+                                                       &r->image_data) &&
       ParamTraits<PP_Bool>::Read(m, iter, &r->text_is_rtl) &&
       ParamTraits<PP_Bool>::Read(m, iter, &r->override_direction) &&
       ParamTraits<PP_Point>::Read(m, iter, &r->position) &&
@@ -274,6 +364,40 @@ bool ParamTraits<pp::proxy::PPBFont_DrawTextAt_Params>::Read(
 
 // static
 void ParamTraits<pp::proxy::PPBFont_DrawTextAt_Params>::Log(
+    const param_type& p,
+    std::string* l) {
+}
+
+// PPBURLLoader_UpdateProgress_Params ------------------------------------------
+
+// static
+void ParamTraits<pp::proxy::PPBURLLoader_UpdateProgress_Params>::Write(
+    Message* m,
+    const param_type& p) {
+  ParamTraits<PP_Instance>::Write(m, p.instance);
+  ParamTraits<pp::proxy::HostResource>::Write(m, p.resource);
+  ParamTraits<int64_t>::Write(m, p.bytes_sent);
+  ParamTraits<int64_t>::Write(m, p.total_bytes_to_be_sent);
+  ParamTraits<int64_t>::Write(m, p.bytes_received);
+  ParamTraits<int64_t>::Write(m, p.total_bytes_to_be_received);
+}
+
+// static
+bool ParamTraits<pp::proxy::PPBURLLoader_UpdateProgress_Params>::Read(
+    const Message* m,
+    void** iter,
+    param_type* r) {
+  return
+      ParamTraits<PP_Instance>::Read(m, iter, &r->instance) &&
+      ParamTraits<pp::proxy::HostResource>::Read(m, iter, &r->resource) &&
+      ParamTraits<int64_t>::Read(m, iter, &r->bytes_sent) &&
+      ParamTraits<int64_t>::Read(m, iter, &r->total_bytes_to_be_sent) &&
+      ParamTraits<int64_t>::Read(m, iter, &r->bytes_received) &&
+      ParamTraits<int64_t>::Read(m, iter, &r->total_bytes_to_be_received);
+}
+
+// static
+void ParamTraits<pp::proxy::PPBURLLoader_UpdateProgress_Params>::Log(
     const param_type& p,
     std::string* l) {
 }
@@ -298,26 +422,6 @@ bool ParamTraits<pp::proxy::SerializedDirEntry>::Read(const Message* m,
 // static
 void ParamTraits<pp::proxy::SerializedDirEntry>::Log(const param_type& p,
                                                      std::string* l) {
-}
-
-// SerializedVar ---------------------------------------------------------------
-
-// static
-void ParamTraits<pp::proxy::SerializedVar>::Write(Message* m,
-                                                  const param_type& p) {
-  p.WriteToMessage(m);
-}
-
-// static
-bool ParamTraits<pp::proxy::SerializedVar>::Read(const Message* m,
-                                                 void** iter,
-                                                 param_type* r) {
-  return r->ReadFromMessage(m, iter);
-}
-
-// static
-void ParamTraits<pp::proxy::SerializedVar>::Log(const param_type& p,
-                                                std::string* l) {
 }
 
 // pp::proxy::SerializedFontDescription ----------------------------------------
@@ -358,14 +462,59 @@ void ParamTraits<pp::proxy::SerializedFontDescription>::Log(
     std::string* l) {
 }
 
+// HostResource ----------------------------------------------------------
+
+// static
+void ParamTraits<pp::proxy::HostResource>::Write(Message* m,
+                                                 const param_type& p) {
+  ParamTraits<PP_Instance>::Write(m, p.instance());
+  ParamTraits<PP_Resource>::Write(m, p.host_resource());
+}
+
+// static
+bool ParamTraits<pp::proxy::HostResource>::Read(const Message* m,
+                                                void** iter,
+                                                param_type* r) {
+  PP_Instance instance;
+  PP_Resource resource;
+  if (!ParamTraits<PP_Instance>::Read(m, iter, &instance) ||
+      !ParamTraits<PP_Resource>::Read(m, iter, &resource))
+    return false;
+  r->SetHostResource(instance, resource);
+  return true;
+}
+
+// static
+void ParamTraits<pp::proxy::HostResource>::Log(const param_type& p,
+                                               std::string* l) {
+}
+
+// SerializedVar ---------------------------------------------------------------
+
+// static
+void ParamTraits<pp::proxy::SerializedVar>::Write(Message* m,
+                                                  const param_type& p) {
+  p.WriteToMessage(m);
+}
+
+// static
+bool ParamTraits<pp::proxy::SerializedVar>::Read(const Message* m,
+                                                 void** iter,
+                                                 param_type* r) {
+  return r->ReadFromMessage(m, iter);
+}
+
+// static
+void ParamTraits<pp::proxy::SerializedVar>::Log(const param_type& p,
+                                                std::string* l) {
+}
+
 // std::vector<SerializedVar> --------------------------------------------------
 
 void ParamTraits< std::vector<pp::proxy::SerializedVar> >::Write(
     Message* m,
     const param_type& p) {
-  WriteParam(m, static_cast<int>(p.size()));
-  for (size_t i = 0; i < p.size(); i++)
-    WriteParam(m, p[i]);
+  WriteVectorWithoutCopy(m, p);
 }
 
 // static
@@ -373,44 +522,55 @@ bool ParamTraits< std::vector<pp::proxy::SerializedVar> >::Read(
     const Message* m,
     void** iter,
     param_type* r) {
-  // This part is just a copy of the the default ParamTraits vector Read().
-  int size;
-  // ReadLength() checks for < 0 itself.
-  if (!m->ReadLength(iter, &size))
-    return false;
-  // Resizing beforehand is not safe, see BUG 1006367 for details.
-  if (INT_MAX / sizeof(pp::proxy::SerializedVar) <= static_cast<size_t>(size))
-    return false;
-
-  // The default vector deserializer does resize here and then we deserialize
-  // into those allocated slots. However, the implementation of vector (at
-  // least in GCC's implementation), creates a new empty object using the
-  // default constructor, and then sets the rest of the items to that empty
-  // one using the copy constructor.
-  //
-  // Since we allocate the inner class when you call the default constructor
-  // and transfer the inner class when you do operator=, the entire vector
-  // will end up referring to the same inner class. Deserializing into this
-  // will just end up overwriting the same item over and over, since all the
-  // SerializedVars will refer to the same thing.
-  //
-  // The solution is to make a new SerializedVar for each deserialized item,
-  // and then add it to the vector one at a time. Our copies are efficient so
-  // this is no big deal.
-  r->reserve(size);
-  for (int i = 0; i < size; i++) {
-    pp::proxy::SerializedVar var;
-    if (!ReadParam(m, iter, &var))
-      return false;
-    r->push_back(var);
-  }
-  return true;
+  return ReadVectorWithoutCopy(m, iter, r);
 }
 
 // static
 void ParamTraits< std::vector<pp::proxy::SerializedVar> >::Log(
     const param_type& p,
     std::string* l) {
+}
+
+// std::vector<PPBFileRef_CreateInfo> ------------------------------------------
+
+void ParamTraits< std::vector<pp::proxy::PPBFileRef_CreateInfo> >::Write(
+    Message* m,
+    const param_type& p) {
+  WriteVectorWithoutCopy(m, p);
+}
+
+// static
+bool ParamTraits< std::vector<pp::proxy::PPBFileRef_CreateInfo> >::Read(
+    const Message* m,
+    void** iter,
+    param_type* r) {
+  return ReadVectorWithoutCopy(m, iter, r);
+}
+
+// static
+void ParamTraits< std::vector<pp::proxy::PPBFileRef_CreateInfo> >::Log(
+    const param_type& p,
+    std::string* l) {
+}
+
+// SerializedFlashMenu ---------------------------------------------------------
+
+// static
+void ParamTraits<pp::proxy::SerializedFlashMenu>::Write(Message* m,
+                                                        const param_type& p) {
+  p.WriteToMessage(m);
+}
+
+// static
+bool ParamTraits<pp::proxy::SerializedFlashMenu>::Read(const Message* m,
+                                                       void** iter,
+                                                       param_type* r) {
+  return r->ReadFromMessage(m, iter);
+}
+
+// static
+void ParamTraits<pp::proxy::SerializedFlashMenu>::Log(const param_type& p,
+                                                      std::string* l) {
 }
 
 }  // namespace IPC

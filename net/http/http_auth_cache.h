@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,7 +10,7 @@
 #include <string>
 
 #include "base/gtest_prod_util.h"
-#include "base/ref_counted.h"
+#include "base/memory/ref_counted.h"
 #include "base/string16.h"
 #include "googleurl/src/gurl.h"
 #include "net/http/http_auth.h"
@@ -160,8 +160,15 @@ class HttpAuthCache::Entry {
   // already contained in the protection space, is a no-op.
   void AddPath(const std::string& path);
 
-  // Returns true if |dir| is contained within the realm's protection space.
-  bool HasEnclosingPath(const std::string& dir);
+  // Returns true if |dir| is contained within the realm's protection
+  // space.  |*path_len| is set to the length of the enclosing path if
+  // such a path exists and |path_len| is non-NULL.  If no enclosing
+  // path is found, |*path_len| is left unmodified.
+  //
+  // Note that proxy auth cache entries are associated with empty
+  // paths.  Therefore it is possible for HasEnclosingPath() to return
+  // true and set |*path_len| to 0.
+  bool HasEnclosingPath(const std::string& dir, size_t* path_len);
 
   // |origin_| contains the {protocol, host, port} of the server.
   GURL origin_;

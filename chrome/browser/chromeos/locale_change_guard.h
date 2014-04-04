@@ -6,41 +6,61 @@
 #define CHROME_BROWSER_CHROMEOS_LOCALE_CHANGE_GUARD_H_
 #pragma once
 
+#include <string>
+
 #include "base/lazy_instance.h"
-#include "base/scoped_ptr.h"
-#include "chrome/browser/profiles/profile.h"
+#include "base/memory/scoped_ptr.h"
+#include "chrome/browser/chromeos/notifications/system_notification.h"
+#include "content/common/notification_observer.h"
+#include "content/common/notification_registrar.h"
+#include "content/common/notification_type.h"
 
 class ListValue;
-class TabContents;
+class NotificationDetails;
+class NotificationSource;
+class Profile;
 
 namespace chromeos {
 
-class SystemNotification;
-
-class LocaleChangeGuard {
+// Performs check whether locale has been changed automatically recently
+// (based on synchronized user preference).  If so: shows notification that
+// allows user to revert change.
+class LocaleChangeGuard : public NotificationObserver {
  public:
-  // When called first time for user profile: performs check whether
-  // locale has been changed automatically recently (based on synchronized user
-  // preference).  If so: shows notification that allows user to revert change.
-  // On subsequent calls: does nothing (hopefully fast).
-  static void Check(TabContents* tab_contents);
+  explicit LocaleChangeGuard(Profile* profile);
+
+  // Called just before changing locale.
+  void PrepareChangingLocale(
+      const std::string& from_locale, const std::string& to_locale);
+
+  // Called after login.
+  void OnLogin();
 
  private:
   class Delegate;
 
-  LocaleChangeGuard();
-  void CheckLocaleChange(TabContents* tab_contents);
   void RevertLocaleChange(const ListValue* list);
   void AcceptLocaleChange();
+  void Check();
+
+  // NotificationObserver implementation.
+  virtual void Observe(NotificationType type,
+                       const NotificationSource& source,
+                       const NotificationDetails& details);
 
   std::string from_locale_;
   std::string to_locale_;
-  ProfileId profile_id_;
-  TabContents* tab_contents_;
+  Profile* profile_;
   scoped_ptr<chromeos::SystemNotification> note_;
   bool reverted_;
+  NotificationRegistrar registrar_;
 
-  friend struct base::DefaultLazyInstanceTraits<LocaleChangeGuard>;
+  // We want to show locale change notification in previous language however
+  // we cannot directly load strings for non-current locale.  So we cache
+  // messages before locale change.
+  string16 title_text_;
+  string16 message_text_;
+  string16 revert_link_text_;
 };
 
 }  // namespace chromeos

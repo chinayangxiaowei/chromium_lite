@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -23,7 +23,7 @@
 #import <Cocoa/Cocoa.h>
 
 #include "base/basictypes.h"
-#include "base/scoped_nsobject.h"
+#include "base/memory/scoped_nsobject.h"
 #include "chrome/browser/bookmarks/bookmark_model.h"
 #include "chrome/browser/bookmarks/bookmark_model_observer.h"
 
@@ -41,46 +41,22 @@ class BookmarkModelObserverForCocoa : public BookmarkModelObserver {
   BookmarkModelObserverForCocoa(const BookmarkNode* node,
                                 BookmarkModel* model,
                                 NSObject* object,
-                                SEL selector) {
-    DCHECK(model);
-    node_ = node;
-    model_ = model;
-    object_ = object;
-    selector_ = selector;
-    model_->AddObserver(this);
-  }
-  virtual ~BookmarkModelObserverForCocoa() {
-    model_->RemoveObserver(this);
-  }
+                                SEL selector);
+  virtual ~BookmarkModelObserverForCocoa();
 
-  virtual void BookmarkModelBeingDeleted(BookmarkModel* model) {
-    Notify();
-  }
+  virtual void BookmarkModelBeingDeleted(BookmarkModel* model);
   virtual void BookmarkNodeMoved(BookmarkModel* model,
                                  const BookmarkNode* old_parent,
                                  int old_index,
                                  const BookmarkNode* new_parent,
-                                 int new_index) {
-    // Editors often have a tree of parents, so movement of folders
-    // must cause a cancel.
-      Notify();
-  }
+                                 int new_index);
   virtual void BookmarkNodeRemoved(BookmarkModel* model,
                                    const BookmarkNode* parent,
                                    int old_index,
-                                   const BookmarkNode* node) {
-    // See comment in BookmarkNodeMoved.
-    Notify();
-  }
+                                   const BookmarkNode* node);
   virtual void BookmarkNodeChanged(BookmarkModel* model,
-                                   const BookmarkNode* node) {
-    if ((node_ == node) || (!node_))
-      Notify();
-  }
-  virtual void BookmarkImportBeginning(BookmarkModel* model) {
-    // Be conservative.
-    Notify();
-  }
+                                   const BookmarkNode* node);
+  virtual void BookmarkImportBeginning(BookmarkModel* model);
 
   // Some notifications we don't care about, but by being pure virtual
   // in the base class we must implement them.
@@ -90,7 +66,7 @@ class BookmarkModelObserverForCocoa : public BookmarkModelObserver {
                                  const BookmarkNode* parent,
                                  int index) {
   }
-  virtual void BookmarkNodeFavIconLoaded(BookmarkModel* model,
+  virtual void BookmarkNodeFaviconLoaded(BookmarkModel* model,
                                          const BookmarkNode* node) {
   }
   virtual void BookmarkNodeChildrenReordered(BookmarkModel* model,
@@ -106,9 +82,7 @@ class BookmarkModelObserverForCocoa : public BookmarkModelObserver {
   NSObject* object_; // Weak, like a delegate.
   SEL selector_;
 
-  void Notify() {
-    [object_ performSelector:selector_ withObject:nil];
-  }
+  void Notify();
 
   DISALLOW_COPY_AND_ASSIGN(BookmarkModelObserverForCocoa);
 };

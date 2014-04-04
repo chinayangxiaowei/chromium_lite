@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -11,8 +11,8 @@
 #include "base/compiler_specific.h"
 #include "base/basictypes.h"
 #include "base/gtest_prod_util.h"
-#include "base/ref_counted.h"
-#include "base/scoped_ptr.h"
+#include "base/memory/ref_counted.h"
+#include "base/memory/scoped_ptr.h"
 #include "net/base/completion_callback.h"
 #include "webkit/appcache/appcache_working_set.h"
 
@@ -114,7 +114,9 @@ class AppCacheStorage {
   // Schedules a query to identify a response for a main request. Upon
   // completion the delegate will be called back.
   virtual void FindResponseForMainRequest(
-      const GURL& url, Delegate* delegate) = 0;
+      const GURL& url,
+      const GURL& preferred_manifest_url,
+      Delegate* delegate) = 0;
 
   // Performs an immediate lookup of the in-memory cache to
   // identify a response for a sub resource request.
@@ -166,11 +168,6 @@ class AppCacheStorage {
       const GURL& manifest_url, const std::vector<int64>& response_ids) = 0;
 
   virtual void PurgeMemory() = 0;
-
-  // Maintain a collection of quota overrides in memory.
-  void SetOriginQuotaInMemory(const GURL& origin, int64 quota);
-  void ResetOriginQuotaInMemory(const GURL& origin);
-  int64 GetOriginQuotaInMemory(const GURL& origin);
 
   // Generates unique storage ids for different object types.
   int64 NewCacheId() {
@@ -282,11 +279,6 @@ class AppCacheStorage {
   int64 NewResponseId() {
     return ++last_response_id_;
   }
-
-  // Store quotas for extensions in memory, in order to prevent writing a row
-  // to quota_table_ every time an extention is loaded.
-  typedef std::map<GURL, int64> QuotaMap;
-  QuotaMap in_memory_quotas_;
 
   // The last storage id used for different object types.
   int64 last_cache_id_;

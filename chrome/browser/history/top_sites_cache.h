@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,7 +10,7 @@
 #include <map>
 #include <string>
 
-#include "base/ref_counted.h"
+#include "base/memory/ref_counted.h"
 #include "chrome/browser/history/history_types.h"
 
 class RefCountedBytes;
@@ -44,6 +44,10 @@ class TopSitesCache {
   // thumbnail for the specified url.
   bool GetPageThumbnail(const GURL& url,
                         scoped_refptr<RefCountedBytes>* bytes);
+
+  // Fetches the thumbnail score for the specified url. Returns true if
+  // there is a thumbnail score for the specified url.
+  bool GetPageThumbnailScore(const GURL& url, ThumbnailScore* score);
 
   // Returns the canonical URL for |url|.
   GURL GetCanonicalURL(const GURL& url);

@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -75,6 +75,8 @@ class TypedUrlModelAssociator
 
   virtual void AbortAssociation();
 
+  virtual bool CryptoReadyIfNecessary();
+
   // Not implemented.
   virtual const std::string* GetChromeNodeFromSyncId(int64 sync_id);
 
@@ -123,10 +125,6 @@ class TypedUrlModelAssociator
                          const sync_pb::TypedUrlSpecifics& new_url,
                          std::vector<base::Time>* new_visits,
                          history::VisitVector* removed_visits);
-
- protected:
-  // Returns sync service instance.
-  ProfileSyncService* sync_service() { return sync_service_; }
 
  private:
   typedef std::map<std::string, int64> TypedUrlToSyncIdMap;

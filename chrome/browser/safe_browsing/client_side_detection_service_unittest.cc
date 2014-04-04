@@ -1,8 +1,9 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include <map>
+#include <queue>
 #include <string>
 
 #include "base/callback.h"
@@ -10,19 +11,20 @@
 #include "base/file_util.h"
 #include "base/file_util_proxy.h"
 #include "base/logging.h"
+#include "base/memory/scoped_ptr.h"
+#include "base/memory/scoped_temp_dir.h"
 #include "base/message_loop.h"
 #include "base/platform_file.h"
-#include "base/scoped_ptr.h"
-#include "base/scoped_temp_dir.h"
 #include "base/task.h"
-#include "testing/gtest/include/gtest/gtest.h"
-#include "chrome/browser/browser_thread.h"
+#include "base/time.h"
 #include "chrome/browser/safe_browsing/client_side_detection_service.h"
-#include "chrome/browser/safe_browsing/csd.pb.h"
 #include "chrome/common/net/test_url_fetcher_factory.h"
 #include "chrome/common/net/url_fetcher.h"
+#include "chrome/common/safe_browsing/csd.pb.h"
+#include "content/browser/browser_thread.h"
 #include "googleurl/src/gurl.h"
 #include "net/url_request/url_request_status.h"
+#include "testing/gtest/include/gtest/gtest.h"
 
 namespace safe_browsing {
 
@@ -62,10 +64,13 @@ class ClientSideDetectionServiceTest : public testing::Test {
   }
 
   bool SendClientReportPhishingRequest(const GURL& phishing_url,
-                                       double score) {
+                                       float score) {
+    ClientPhishingRequest* request = new ClientPhishingRequest();
+    request->set_url(phishing_url.spec());
+    request->set_client_score(score);
+    request->set_is_phishing(true);  // client thinks the URL is phishing.
     csd_service_->SendClientReportPhishingRequest(
-        phishing_url,
-        score,
+        request,
         NewCallback(this, &ClientSideDetectionServiceTest::SendRequestDone));
     phishing_url_ = phishing_url;
     msg_loop_.Run();  // Waits until callback is called.
@@ -82,6 +87,66 @@ class ClientSideDetectionServiceTest : public testing::Test {
     factory_->SetFakeResponse(
         ClientSideDetectionService::kClientReportPhishingUrl,
         response_data, success);
+  }
+
+  int GetNumReports() {
+    return csd_service_->GetNumReports();
+  }
+
+  std::queue<base::Time>& GetPhishingReportTimes() {
+    return csd_service_->phishing_report_times_;
+  }
+
+  void SetCache(const GURL& gurl, bool is_phishing, base::Time time) {
+    csd_service_->cache_[gurl] =
+        make_linked_ptr(new ClientSideDetectionService::CacheState(is_phishing,
+                                                                   time));
+  }
+
+  void TestCache() {
+    ClientSideDetectionService::PhishingCache& cache = csd_service_->cache_;
+    base::Time now = base::Time::Now();
+    base::Time time = now - ClientSideDetectionService::kNegativeCacheInterval +
+        base::TimeDelta::FromMinutes(5);
+    cache[GURL("http://first.url.com/")] =
+        make_linked_ptr(new ClientSideDetectionService::CacheState(false,
+                                                                   time));
+
+    time = now - ClientSideDetectionService::kNegativeCacheInterval -
+        base::TimeDelta::FromHours(1);
+    cache[GURL("http://second.url.com/")] =
+        make_linked_ptr(new ClientSideDetectionService::CacheState(false,
+                                                                   time));
+
+    time = now - ClientSideDetectionService::kPositiveCacheInterval -
+        base::TimeDelta::FromMinutes(5);
+    cache[GURL("http://third.url.com/")] =
+        make_linked_ptr(new ClientSideDetectionService::CacheState(true, time));
+
+    time = now - ClientSideDetectionService::kPositiveCacheInterval +
+        base::TimeDelta::FromMinutes(5);
+    cache[GURL("http://fourth.url.com/")] =
+        make_linked_ptr(new ClientSideDetectionService::CacheState(true, time));
+
+    csd_service_->UpdateCache();
+
+    // 3 elements should be in the cache, the first, third, and fourth.
+    EXPECT_EQ(3U, cache.size());
+    EXPECT_TRUE(cache.find(GURL("http://first.url.com/")) != cache.end());
+    EXPECT_TRUE(cache.find(GURL("http://third.url.com/")) != cache.end());
+    EXPECT_TRUE(cache.find(GURL("http://fourth.url.com/")) != cache.end());
+
+    // While 3 elements remain, only the first and the fourth are actually
+    // valid.
+    bool is_phishing;
+    EXPECT_TRUE(csd_service_->GetValidCachedResult(
+        GURL("http://first.url.com"), &is_phishing));
+    EXPECT_FALSE(is_phishing);
+    EXPECT_FALSE(csd_service_->GetValidCachedResult(
+        GURL("http://third.url.com"), &is_phishing));
+    EXPECT_TRUE(csd_service_->GetValidCachedResult(
+        GURL("http://fourth.url.com"), &is_phishing));
+    EXPECT_TRUE(is_phishing);
   }
 
  protected:
@@ -164,7 +229,9 @@ TEST_F(ClientSideDetectionServiceTest, SendClientReportPhishingRequest) {
       tmp_dir.path().AppendASCII("model"), NULL));
 
   GURL url("http://a.com/");
-  double score = 0.4;  // Some random client score.
+  float score = 0.4f;  // Some random client score.
+
+  base::Time before = base::Time::Now();
 
   // Invalid response body from the server.
   SetClientReportPhishingResponse("invalid proto response", true /* success */);
@@ -176,10 +243,84 @@ TEST_F(ClientSideDetectionServiceTest, SendClientReportPhishingRequest) {
   SetClientReportPhishingResponse(response.SerializeAsString(),
                                   true /* success */);
   EXPECT_TRUE(SendClientReportPhishingRequest(url, score));
+
+  // This request will fail
+  GURL second_url("http://b.com/");
   response.set_phishy(false);
   SetClientReportPhishingResponse(response.SerializeAsString(),
-                                  true /* success */);
-  EXPECT_FALSE(SendClientReportPhishingRequest(url, score));
+                                  false /* success*/);
+  EXPECT_FALSE(SendClientReportPhishingRequest(second_url, score));
+
+  base::Time after = base::Time::Now();
+
+  // Check that we have recorded all 3 requests within the correct time range.
+  std::queue<base::Time>& report_times = GetPhishingReportTimes();
+  EXPECT_EQ(3U, report_times.size());
+  while (!report_times.empty()) {
+    base::Time time = report_times.back();
+    report_times.pop();
+    EXPECT_LE(before, time);
+    EXPECT_GE(after, time);
+  }
+
+  // Only the first url should be in the cache.
+  bool is_phishing;
+  EXPECT_TRUE(csd_service_->IsInCache(url));
+  EXPECT_TRUE(csd_service_->GetValidCachedResult(url, &is_phishing));
+  EXPECT_TRUE(is_phishing);
+  EXPECT_FALSE(csd_service_->IsInCache(second_url));
+}
+
+TEST_F(ClientSideDetectionServiceTest, GetNumReportTest) {
+  SetModelFetchResponse("bogus model", true /* success */);
+  ScopedTempDir tmp_dir;
+  ASSERT_TRUE(tmp_dir.CreateUniqueTempDir());
+  csd_service_.reset(ClientSideDetectionService::Create(
+      tmp_dir.path().AppendASCII("model"), NULL));
+
+  std::queue<base::Time>& report_times = GetPhishingReportTimes();
+  base::Time now = base::Time::Now();
+  base::TimeDelta twenty_five_hours = base::TimeDelta::FromHours(25);
+  report_times.push(now - twenty_five_hours);
+  report_times.push(now - twenty_five_hours);
+  report_times.push(now);
+  report_times.push(now);
+
+  EXPECT_EQ(2, GetNumReports());
+}
+
+TEST_F(ClientSideDetectionServiceTest, CacheTest) {
+  SetModelFetchResponse("bogus model", true /* success */);
+  ScopedTempDir tmp_dir;
+  ASSERT_TRUE(tmp_dir.CreateUniqueTempDir());
+  csd_service_.reset(ClientSideDetectionService::Create(
+      tmp_dir.path().AppendASCII("model"), NULL));
+
+  TestCache();
+}
+
+TEST_F(ClientSideDetectionServiceTest, IsPrivateIPAddress) {
+  SetModelFetchResponse("bogus model", true /* success */);
+  ScopedTempDir tmp_dir;
+  ASSERT_TRUE(tmp_dir.CreateUniqueTempDir());
+  csd_service_.reset(ClientSideDetectionService::Create(
+      tmp_dir.path().AppendASCII("model"), NULL));
+
+  EXPECT_TRUE(csd_service_->IsPrivateIPAddress("10.1.2.3"));
+  EXPECT_TRUE(csd_service_->IsPrivateIPAddress("127.0.0.1"));
+  EXPECT_TRUE(csd_service_->IsPrivateIPAddress("172.24.3.4"));
+  EXPECT_TRUE(csd_service_->IsPrivateIPAddress("192.168.1.1"));
+  EXPECT_TRUE(csd_service_->IsPrivateIPAddress("fc00::"));
+  EXPECT_TRUE(csd_service_->IsPrivateIPAddress("fec0::"));
+  EXPECT_TRUE(csd_service_->IsPrivateIPAddress("fec0:1:2::3"));
+  EXPECT_TRUE(csd_service_->IsPrivateIPAddress("::1"));
+
+  EXPECT_FALSE(csd_service_->IsPrivateIPAddress("1.2.3.4"));
+  EXPECT_FALSE(csd_service_->IsPrivateIPAddress("200.1.1.1"));
+  EXPECT_FALSE(csd_service_->IsPrivateIPAddress("2001:0db8:ac10:fe01::"));
+
+  // If the address can't be parsed, the default is true.
+  EXPECT_TRUE(csd_service_->IsPrivateIPAddress("blah"));
 }
 
 }  // namespace safe_browsing

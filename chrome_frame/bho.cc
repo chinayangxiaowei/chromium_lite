@@ -12,7 +12,7 @@
 #include "base/string_util.h"
 #include "base/stringprintf.h"
 #include "base/win/scoped_bstr.h"
-#include "chrome_tab.h" // NOLINT
+#include "chrome_frame/buggy_bho_handling.h"
 #include "chrome_frame/crash_reporting/crash_metrics.h"
 #include "chrome_frame/extra_system_apis.h"
 #include "chrome_frame/html_utils.h"
@@ -25,6 +25,7 @@
 #include "chrome_frame/vtable_patch_manager.h"
 
 static const int kIBrowserServiceOnHttpEquivIndex = 30;
+static const DWORD kMaxHttpConnections = 6;
 
 PatchHelper g_patch_helper;
 
@@ -83,19 +84,9 @@ class ReadyModeDelegateImpl : public ready_mode::Delegate {
   DISALLOW_COPY_AND_ASSIGN(ReadyModeDelegateImpl);
 };  // class ReadyModeDelegateImpl
 
-void SynchronizeEnablementState() {
-  std::string user_agent(http_utils::GetDefaultUserAgent());
-  bool enabled = user_agent.find("chromeframe") != std::string::npos;
-  ProtocolSinkWrap::set_ignore_xua(!enabled);
-}
-
 void ReadyModeDelegateImpl::DisableChromeFrame() {
-  if (GetIEVersion() != IE_9) {
-    SynchronizeEnablementState();
-  } else {
-    HttpNegotiatePatch::set_modify_user_agent(false);
-    ProtocolSinkWrap::set_ignore_xua(true);
-  }
+  HttpNegotiatePatch::set_modify_user_agent(false);
+  ProtocolSinkWrap::set_ignore_xua(true);
 }
 
 }  // namespace
@@ -103,24 +94,17 @@ void ReadyModeDelegateImpl::DisableChromeFrame() {
 STDMETHODIMP Bho::SetSite(IUnknown* site) {
   HRESULT hr = S_OK;
   if (site) {
-    ScopedComPtr<IWebBrowser2> web_browser2;
+    base::win::ScopedComPtr<IWebBrowser2> web_browser2;
     web_browser2.QueryFrom(site);
     if (web_browser2) {
       hr = DispEventAdvise(web_browser2, &DIID_DWebBrowserEvents2);
       DCHECK(SUCCEEDED(hr)) << "DispEventAdvise failed. Error: " << hr;
 
       ready_mode::Configure(new ReadyModeDelegateImpl(), web_browser2);
-
-      // At this time, the user agent has been updated to reflect the Ready Mode
-      // state. We should make sure to modify our recognition of meta tags
-      // accordingly. On IE 9, another method is used to manage meta tags.
-      if (GetIEVersion() != IE_9) {
-        SynchronizeEnablementState();
-      }
     }
 
     if (g_patch_helper.state() == PatchHelper::PATCH_IBROWSER) {
-      ScopedComPtr<IBrowserService> browser_service;
+      base::win::ScopedComPtr<IBrowserService> browser_service;
       hr = DoQueryService(SID_SShellBrowser, site, browser_service.Receive());
       DCHECK(browser_service) << "DoQueryService - SID_SShellBrowser failed."
           << " Site: " << site << " Error: " << hr;
@@ -136,8 +120,17 @@ STDMETHODIMP Bho::SetSite(IUnknown* site) {
     AddRef();
     RegisterThreadInstance();
     MetricsService::Start();
+
+    if (!IncreaseWinInetConnections(kMaxHttpConnections)) {
+      DLOG(WARNING) << "Failed to bump up HTTP connections. Error:"
+                    << ::GetLastError();
+    }
   } else {
     UnregisterThreadInstance();
+    buggy_bho::BuggyBhoTls::DestroyInstance();
+    base::win::ScopedComPtr<IWebBrowser2> web_browser2;
+    web_browser2.QueryFrom(m_spUnkSite);
+    DispEventUnadvise(web_browser2, &DIID_DWebBrowserEvents2);
     Release();
   }
 
@@ -152,7 +145,7 @@ STDMETHODIMP Bho::BeforeNavigate2(IDispatch* dispatch, VARIANT* url,
     return S_OK;
   }
 
-  ScopedComPtr<IWebBrowser2> web_browser2;
+  base::win::ScopedComPtr<IWebBrowser2> web_browser2;
   if (dispatch)
     web_browser2.QueryFrom(dispatch);
 
@@ -163,7 +156,7 @@ STDMETHODIMP Bho::BeforeNavigate2(IDispatch* dispatch, VARIANT* url,
 
   DVLOG(1) << "BeforeNavigate2: " << url->bstrVal;
 
-  ScopedComPtr<IBrowserService> browser_service;
+  base::win::ScopedComPtr<IBrowserService> browser_service;
   DoQueryService(SID_SShellBrowser, web_browser2, browser_service.Receive());
   if (!browser_service || !CheckForCFNavigation(browser_service, false)) {
     // TODO(tommi): Remove? Isn't this done below by calling set_referrer("")?
@@ -188,7 +181,7 @@ STDMETHODIMP_(void) Bho::NavigateComplete2(IDispatch* dispatch, VARIANT* url) {
 STDMETHODIMP_(void) Bho::DocumentComplete(IDispatch* dispatch, VARIANT* url) {
   DVLOG(1) << __FUNCTION__;
 
-  ScopedComPtr<IWebBrowser2> web_browser2;
+  base::win::ScopedComPtr<IWebBrowser2> web_browser2;
   if (dispatch)
     web_browser2.QueryFrom(dispatch);
 
@@ -206,12 +199,12 @@ namespace {
 
 // See comments in Bho::OnHttpEquiv for details.
 void ClearDocumentContents(IUnknown* browser) {
-  ScopedComPtr<IWebBrowser2> web_browser2;
+  base::win::ScopedComPtr<IWebBrowser2> web_browser2;
   if (SUCCEEDED(DoQueryService(SID_SWebBrowserApp, browser,
                                web_browser2.Receive()))) {
-    ScopedComPtr<IDispatch> doc_disp;
+    base::win::ScopedComPtr<IDispatch> doc_disp;
     web_browser2->get_Document(doc_disp.Receive());
-    ScopedComPtr<IHTMLDocument2> doc;
+    base::win::ScopedComPtr<IHTMLDocument2> doc;
     if (doc_disp && SUCCEEDED(doc.QueryFrom(doc_disp))) {
       SAFEARRAY* sa = ::SafeArrayCreateVector(VT_UI1, 0, 0);
       doc->write(sa);
@@ -225,17 +218,17 @@ void ClearDocumentContents(IUnknown* browser) {
 bool DocumentHasEmbeddedItems(IUnknown* browser) {
   bool has_embedded_items = false;
 
-  ScopedComPtr<IWebBrowser2> web_browser2;
-  ScopedComPtr<IDispatch> document;
+  base::win::ScopedComPtr<IWebBrowser2> web_browser2;
+  base::win::ScopedComPtr<IDispatch> document;
   if (SUCCEEDED(DoQueryService(SID_SWebBrowserApp, browser,
                                web_browser2.Receive())) &&
       SUCCEEDED(web_browser2->get_Document(document.Receive()))) {
-    ScopedComPtr<IOleContainer> container;
+    base::win::ScopedComPtr<IOleContainer> container;
     if (SUCCEEDED(container.QueryFrom(document))) {
-      ScopedComPtr<IEnumUnknown> enumerator;
+      base::win::ScopedComPtr<IEnumUnknown> enumerator;
       container->EnumObjects(OLECONTF_EMBEDDINGS, enumerator.Receive());
       if (enumerator) {
-        ScopedComPtr<IUnknown> unk;
+        base::win::ScopedComPtr<IUnknown> unk;
         DWORD fetched = 0;
         while (!has_embedded_items &&
                SUCCEEDED(enumerator->Next(1, unk.Receive(), &fetched))
@@ -244,7 +237,7 @@ bool DocumentHasEmbeddedItems(IUnknown* browser) {
           // that first the top level document finishes loading and then the
           // iframes load. We should only treat an embedded element as an
           // iframe if it supports the IWebBrowser interface.
-          ScopedComPtr<IWebBrowser2> embedded_web_browser2;
+          base::win::ScopedComPtr<IWebBrowser2> embedded_web_browser2;
           if (SUCCEEDED(embedded_web_browser2.QueryFrom(unk))) {
             // If we initiate a top level navigation then at times MSHTML
             // creates a temporary IWebBrowser2 interface which basically shows
@@ -347,7 +340,7 @@ void Bho::ProcessOptInUrls(IWebBrowser2* browser, BSTR url) {
     bool cf_protocol = StartsWith(current_url, kChromeProtocolPrefix, false);
     if (!cf_protocol && IsChrome(RendererTypeForUrl(current_url))) {
       DVLOG(1) << "Opt-in URL. Switching to cf.";
-      ScopedComPtr<IBrowserService> browser_service;
+      base::win::ScopedComPtr<IBrowserService> browser_service;
       DoQueryService(SID_SShellBrowser, browser, browser_service.Receive());
       DCHECK(browser_service) << "DoQueryService - SID_SShellBrowser failed.";
       MarkBrowserOnThreadForCFNavigation(browser_service);

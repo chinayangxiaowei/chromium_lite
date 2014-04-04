@@ -3,10 +3,9 @@
 // found in the LICENSE file.
 
 #include "base/command_line.h"
+#include "base/memory/scoped_ptr.h"
 #include "base/message_loop.h"
-#include "base/scoped_ptr.h"
 #include "chrome/browser/automation/ui_controls.h"
-#include "chrome/browser/browser_window.h"
 #include "chrome/browser/chromeos/cros/cros_in_process_browser_test.h"
 #include "chrome/browser/chromeos/cros/mock_input_method_library.h"
 #include "chrome/browser/chromeos/cros/mock_screen_lock_library.h"
@@ -14,12 +13,14 @@
 #include "chrome/browser/chromeos/login/screen_locker.h"
 #include "chrome/browser/chromeos/login/screen_locker_tester.h"
 #include "chrome/browser/chromeos/login/user_manager.h"
+#include "chrome/browser/profiles/profile_manager.h"
 #include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window.h"
 #include "chrome/browser/ui/views/browser_dialogs.h"
 #include "chrome/common/chrome_switches.h"
-#include "chrome/common/notification_service.h"
-#include "chrome/common/notification_type.h"
 #include "chrome/test/ui_test_utils.h"
+#include "content/common/notification_service.h"
+#include "content/common/notification_type.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "views/controls/textfield/textfield.h"
@@ -135,6 +136,18 @@ class ScreenLockerTest : public CrosInProcessBrowserTest {
     EXPECT_FALSE(tester->IsLocked());
   }
 
+  void LockScreenWithUser(test::ScreenLockerTester* tester,
+                          const std::string& user) {
+    UserManager::Get()->UserLoggedIn(user);
+    ScreenLocker::Show();
+    tester->EmulateWindowManagerReady();
+    if (!tester->IsLocked()) {
+      ui_test_utils::WaitForNotification(
+          NotificationType::SCREEN_LOCK_STATE_CHANGED);
+    }
+    EXPECT_TRUE(tester->IsLocked());
+  }
+
  private:
   virtual void SetUpInProcessBrowserTestFixture() {
     cros_mock_->InitStatusAreaMocks();
@@ -161,8 +174,9 @@ class ScreenLockerTest : public CrosInProcessBrowserTest {
   DISALLOW_COPY_AND_ASSIGN(ScreenLockerTest);
 };
 
-// PulseAudioMixer sometimes crashes at exit. See http://crosbug.om/9303
-IN_PROC_BROWSER_TEST_F(ScreenLockerTest, FLAKY_TestBasic) {
+// Temporarily disabling all screen locker tests while investigating the
+// issue crbug.com/78764.
+IN_PROC_BROWSER_TEST_F(ScreenLockerTest, DISABLED_TestBasic) {
   EXPECT_CALL(*mock_input_method_library_, GetNumActiveInputMethods())
       .Times(1)
       .WillRepeatedly((testing::Return(0)))
@@ -184,8 +198,7 @@ IN_PROC_BROWSER_TEST_F(ScreenLockerTest, FLAKY_TestBasic) {
   // Test to make sure that the widget is actually appearing and is of
   // reasonable size, preventing a regression of
   // http://code.google.com/p/chromium-os/issues/detail?id=5987
-  gfx::Rect lock_bounds;
-  tester->GetChildWidget()->GetBounds(&lock_bounds, true);
+  gfx::Rect lock_bounds = tester->GetChildWidget()->GetWindowScreenBounds();
   EXPECT_GT(lock_bounds.width(), 10);
   EXPECT_GT(lock_bounds.height(), 10);
 
@@ -206,7 +219,7 @@ IN_PROC_BROWSER_TEST_F(ScreenLockerTest, FLAKY_TestBasic) {
   EXPECT_FALSE(tester->IsLocked());
 }
 
-IN_PROC_BROWSER_TEST_F(ScreenLockerTest, TestFullscreenExit) {
+IN_PROC_BROWSER_TEST_F(ScreenLockerTest, DISABLED_TestFullscreenExit) {
   EXPECT_CALL(*mock_screen_lock_library_, NotifyScreenUnlockRequested())
       .Times(1)
       .RetiresOnSaturation();
@@ -242,7 +255,8 @@ void MouseMove(views::Widget* widget) {
   ui_controls::SendMouseMove(10, 10);
 }
 
-IN_PROC_BROWSER_TEST_F(ScreenLockerTest, TestNoPasswordWithMouseMove) {
+IN_PROC_BROWSER_TEST_F(ScreenLockerTest,
+                       DISABLED_TestNoPasswordWithMouseMove) {
   TestNoPassword(MouseMove);
 }
 
@@ -250,7 +264,8 @@ void MouseClick(views::Widget* widget) {
   ui_controls::SendMouseClick(ui_controls::RIGHT);
 }
 
-IN_PROC_BROWSER_TEST_F(ScreenLockerTest, TestNoPasswordWithMouseClick) {
+IN_PROC_BROWSER_TEST_F(ScreenLockerTest,
+                       DISABLED_TestNoPasswordWithMouseClick) {
   TestNoPassword(MouseClick);
 }
 
@@ -259,27 +274,47 @@ void KeyPress(views::Widget* widget) {
                             ui::VKEY_SPACE, false, false, false, false);
 }
 
-IN_PROC_BROWSER_TEST_F(ScreenLockerTest, TestNoPasswordWithKeyPress) {
+IN_PROC_BROWSER_TEST_F(ScreenLockerTest, DISABLED_TestNoPasswordWithKeyPress) {
   TestNoPassword(KeyPress);
 }
 
-IN_PROC_BROWSER_TEST_F(ScreenLockerTest, TestShowTwice) {
+IN_PROC_BROWSER_TEST_F(ScreenLockerTest, DISABLED_TestShowTwice) {
   EXPECT_CALL(*mock_screen_lock_library_, NotifyScreenLockCompleted())
       .Times(2)
       .RetiresOnSaturation();
-
-  UserManager::Get()->UserLoggedIn("user");
-  ScreenLocker::Show();
   scoped_ptr<test::ScreenLockerTester> tester(ScreenLocker::GetTester());
-  tester->EmulateWindowManagerReady();
-  if (!chromeos::ScreenLocker::GetTester()->IsLocked())
-    ui_test_utils::WaitForNotification(
-        NotificationType::SCREEN_LOCK_STATE_CHANGED);
-  EXPECT_TRUE(tester->IsLocked());
+  LockScreenWithUser(tester.get(), "user");
+
+  // Ensure there's a profile or this test crashes.
+  ProfileManager::GetDefaultProfile();
 
   // Calling Show again simply send LockCompleted signal.
   ScreenLocker::Show();
   EXPECT_TRUE(tester->IsLocked());
+
+  // Close the locker to match expectations.
+  ScreenLocker::Hide();
+  ui_test_utils::RunAllPendingInMessageLoop();
+  EXPECT_FALSE(tester->IsLocked());
+}
+
+IN_PROC_BROWSER_TEST_F(ScreenLockerTest, DISABLED_TestEscape) {
+  EXPECT_CALL(*mock_screen_lock_library_, NotifyScreenLockCompleted())
+      .Times(1)
+      .RetiresOnSaturation();
+  scoped_ptr<test::ScreenLockerTester> tester(ScreenLocker::GetTester());
+  LockScreenWithUser(tester.get(), "user");
+
+  // Ensure there's a profile or this test crashes.
+  ProfileManager::GetDefaultProfile();
+
+  tester->SetPassword("password");
+  EXPECT_EQ("password", tester->GetPassword());
+  // Escape clears the password.
+  ui_controls::SendKeyPress(GTK_WINDOW(tester->GetWidget()->GetNativeView()),
+                            ui::VKEY_ESCAPE, false, false, false, false);
+  ui_test_utils::RunAllPendingInMessageLoop();
+  EXPECT_EQ("", tester->GetPassword());
 
   // Close the locker to match expectations.
   ScreenLocker::Hide();

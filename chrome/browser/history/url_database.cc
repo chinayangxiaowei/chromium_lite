@@ -20,6 +20,19 @@ namespace history {
 const char URLDatabase::kURLRowFields[] = HISTORY_URL_ROW_FIELDS;
 const int URLDatabase::kNumURLRowFields = 9;
 
+URLDatabase::URLEnumeratorBase::URLEnumeratorBase()
+    : initialized_(false) {
+}
+
+URLDatabase::URLEnumeratorBase::~URLEnumeratorBase() {
+}
+
+URLDatabase::URLEnumerator::URLEnumerator() {
+}
+
+URLDatabase::IconMappingEnumerator::IconMappingEnumerator() {
+}
+
 bool URLDatabase::URLEnumerator::GetNextURL(URLRow* r) {
   if (statement_.Step()) {
     FillURLRow(statement_, r);
@@ -28,7 +41,17 @@ bool URLDatabase::URLEnumerator::GetNextURL(URLRow* r) {
   return false;
 }
 
-URLDatabase::URLDatabase() : has_keyword_search_terms_(false) {
+bool URLDatabase::IconMappingEnumerator::GetNextIconMapping(IconMapping* r) {
+  if (!statement_.Step())
+    return false;
+
+  r->page_url = GURL(statement_.ColumnString(0));
+  r->icon_id =  statement_.ColumnInt64(1);
+  return true;
+}
+
+URLDatabase::URLDatabase()
+    : has_keyword_search_terms_(false) {
 }
 
 URLDatabase::~URLDatabase() {
@@ -57,7 +80,6 @@ void URLDatabase::FillURLRow(sql::Statement& s, history::URLRow* i) {
   i->typed_count_ = s.ColumnInt(4);
   i->last_visit_ = base::Time::FromInternalValue(s.ColumnInt64(5));
   i->hidden_ = s.ColumnInt(6) != 0;
-  i->favicon_id_ = s.ColumnInt64(7);
 }
 
 bool URLDatabase::GetURLRow(URLID url_id, URLRow* info) {
@@ -112,7 +134,7 @@ bool URLDatabase::UpdateURLRow(URLID url_id,
                                const history::URLRow& info) {
   sql::Statement statement(GetDB().GetCachedStatement(SQL_FROM_HERE,
       "UPDATE urls SET title=?,visit_count=?,typed_count=?,last_visit_time=?,"
-        "hidden=?,favicon_id=?"
+        "hidden=?"
       "WHERE id=?"));
   if (!statement)
     return false;
@@ -122,8 +144,7 @@ bool URLDatabase::UpdateURLRow(URLID url_id,
   statement.BindInt(2, info.typed_count());
   statement.BindInt64(3, info.last_visit().ToInternalValue());
   statement.BindInt(4, info.hidden() ? 1 : 0);
-  statement.BindInt64(5, info.favicon_id());
-  statement.BindInt64(6, url_id);
+  statement.BindInt64(5, url_id);
   return statement.Run();
 }
 
@@ -135,8 +156,8 @@ URLID URLDatabase::AddURLInternal(const history::URLRow& info,
   // invalid in the insert syntax.
   #define ADDURL_COMMON_SUFFIX \
       " (url, title, visit_count, typed_count, "\
-      "last_visit_time, hidden, favicon_id) "\
-      "VALUES (?,?,?,?,?,?,?)"
+      "last_visit_time, hidden) "\
+      "VALUES (?,?,?,?,?,?)"
   const char* statement_name;
   const char* statement_sql;
   if (is_temporary) {
@@ -161,10 +182,12 @@ URLID URLDatabase::AddURLInternal(const history::URLRow& info,
   statement.BindInt(3, info.typed_count());
   statement.BindInt64(4, info.last_visit().ToInternalValue());
   statement.BindInt(5, info.hidden() ? 1 : 0);
-  statement.BindInt64(6, info.favicon_id());
 
-  if (!statement.Run())
+  if (!statement.Run()) {
+    VLOG(0) << "Failed to add url " << info.url().possibly_invalid_spec()
+            << " to table history.urls.";
     return 0;
+  }
   return GetDB().GetLastInsertRowId();
 }
 
@@ -235,14 +258,36 @@ bool URLDatabase::InitURLEnumeratorForEverything(URLEnumerator* enumerator) {
   return true;
 }
 
-bool URLDatabase::IsFavIconUsed(FavIconID favicon_id) {
-  sql::Statement statement(GetDB().GetCachedStatement(SQL_FROM_HERE,
-      "SELECT id FROM urls WHERE favicon_id=? LIMIT 1"));
-  if (!statement)
+bool URLDatabase::InitURLEnumeratorForSignificant(URLEnumerator* enumerator) {
+  DCHECK(!enumerator->initialized_);
+  std::string sql("SELECT ");
+  sql.append(kURLRowFields);
+  sql.append(" FROM urls WHERE last_visit_time >= ? OR visit_count > ? OR "
+             "typed_count > ?");
+  enumerator->statement_.Assign(GetDB().GetUniqueStatement(sql.c_str()));
+  if (!enumerator->statement_) {
+    NOTREACHED() << GetDB().GetErrorMessage();
     return false;
+  }
+  enumerator->statement_.BindInt64(
+      0, AutocompleteAgeThreshold().ToInternalValue());
+  enumerator->statement_.BindInt(1, kLowQualityMatchVisitLimit);
+  enumerator->statement_.BindInt(2, kLowQualityMatchTypedLimit);
+  enumerator->initialized_ = true;
+  return true;
+}
 
-  statement.BindInt64(0, favicon_id);
-  return statement.Step();
+bool URLDatabase::InitIconMappingEnumeratorForEverything(
+    IconMappingEnumerator* enumerator) {
+  DCHECK(!enumerator->initialized_);
+  enumerator->statement_.Assign(GetDB().GetUniqueStatement(
+      "SELECT url, favicon_id FROM urls WHERE favicon_id <> 0"));
+  if (!enumerator->statement_) {
+    NOTREACHED() << GetDB().GetErrorMessage();
+    return false;
+  }
+  enumerator->initialized_ = true;
+  return true;
 }
 
 void URLDatabase::AutocompleteForPrefix(const string16& prefix,
@@ -458,15 +503,6 @@ void URLDatabase::GetMostRecentKeywordSearchTerms(
   }
 }
 
-bool URLDatabase::MigrateFromVersion11ToVersion12() {
-  URLRow about_row;
-  if (GetRowForURL(GURL(chrome::kAboutBlankURL), &about_row)) {
-    about_row.set_favicon_id(0);
-    return UpdateURLRow(about_row.id(), about_row);
-  }
-  return true;
-}
-
 bool URLDatabase::DropStarredIDFromURLs() {
   if (!GetDB().DoesColumnExist("urls", "starred_id"))
     return true;  // urls is already updated, no need to continue.
@@ -490,9 +526,6 @@ bool URLDatabase::DropStarredIDFromURLs() {
   // Rename/commit the tmp table.
   CommitTemporaryURLTable();
 
-  // This isn't created by CommitTemporaryURLTable.
-  CreateSupplimentaryURLIndices();
-
   return true;
 }
 
@@ -512,7 +545,7 @@ bool URLDatabase::CreateURLTable(bool is_temporary) {
       "typed_count INTEGER DEFAULT 0 NOT NULL,"
       "last_visit_time INTEGER NOT NULL,"
       "hidden INTEGER DEFAULT 0 NOT NULL,"
-      "favicon_id INTEGER DEFAULT 0 NOT NULL)");
+      "favicon_id INTEGER DEFAULT 0 NOT NULL)"); // favicon_id is not used now.
 
   return GetDB().Execute(sql.c_str());
 }
@@ -521,11 +554,6 @@ void URLDatabase::CreateMainURLIndex() {
   // Index over URLs so we can quickly look up based on URL.  Ignore errors as
   // this likely already exists (and the same below).
   GetDB().Execute("CREATE INDEX urls_url_index ON urls (url)");
-}
-
-void URLDatabase::CreateSupplimentaryURLIndices() {
-  // Add a favicon index.  This is useful when we delete urls.
-  GetDB().Execute("CREATE INDEX urls_favicon_id_INDEX ON urls (favicon_id)");
 }
 
 }  // namespace history

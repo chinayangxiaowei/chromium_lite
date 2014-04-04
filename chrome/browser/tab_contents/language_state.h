@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,7 +9,7 @@
 #include <string>
 
 #include "base/basictypes.h"
-#include "chrome/browser/tab_contents/navigation_controller.h"
+#include "content/browser/tab_contents/navigation_controller.h"
 
 // This class holds the language state of the current page.
 // There is one LanguageState instance per TabContents.
@@ -107,4 +107,3 @@ class LanguageState {
 };
 
 #endif  // CHROME_BROWSER_TAB_CONTENTS_LANGUAGE_STATE_H_
-

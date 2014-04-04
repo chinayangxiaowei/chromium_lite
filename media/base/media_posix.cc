@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -24,8 +24,6 @@ namespace tp_ffmpeg = third_party_ffmpeg;
 
 namespace media {
 
-namespace {
-
 // Handy to prevent shooting ourselves in the foot with macro wizardry.
 #if !defined(LIBAVCODEC_VERSION_MAJOR) || \
     !defined(LIBAVFORMAT_VERSION_MAJOR) || \
@@ -39,18 +37,20 @@ namespace {
 
 #if defined(OS_MACOSX)
 #define DSO_NAME(MODULE, VERSION) ("lib" MODULE "." VERSION ".dylib")
-const FilePath::CharType sumo_name[] =
+static const FilePath::CharType sumo_name[] =
     FILE_PATH_LITERAL("libffmpegsumo.dylib");
 #elif defined(OS_POSIX)
 #define DSO_NAME(MODULE, VERSION) ("lib" MODULE ".so." VERSION)
-const FilePath::CharType sumo_name[] = FILE_PATH_LITERAL("libffmpegsumo.so");
+static const FilePath::CharType sumo_name[] =
+    FILE_PATH_LITERAL("libffmpegsumo.so");
 #else
 #error "Do not know how to construct DSO name for this OS."
 #endif
-const FilePath::CharType openmax_name[] = FILE_PATH_LITERAL("libOmxCore.so");
+static const FilePath::CharType openmax_name[] =
+    FILE_PATH_LITERAL("libOmxCore.so");
 
 // Retrieves the DSOName for the given key.
-std::string GetDSOName(tp_ffmpeg::StubModules stub_key) {
+static std::string GetDSOName(tp_ffmpeg::StubModules stub_key) {
   // TODO(ajwong): Remove this once mac is migrated. Either that, or have GYP
   // set a constant that we can switch implementations based off of.
   switch (stub_key) {
@@ -66,11 +66,14 @@ std::string GetDSOName(tp_ffmpeg::StubModules stub_key) {
   }
 }
 
-}  // namespace
+static bool g_media_library_is_initialized = false;
 
 // Attempts to initialize the media library (loading DSOs, etc.).
 // Returns true if everything was successfully initialized, false otherwise.
 bool InitializeMediaLibrary(const FilePath& module_dir) {
+  if (g_media_library_is_initialized)
+    return true;
+
   // TODO(ajwong): We need error resolution.
   tp_ffmpeg::StubPathMap paths;
   for (int i = 0; i < static_cast<int>(tp_ffmpeg::kNumStubModules); ++i) {
@@ -84,8 +87,12 @@ bool InitializeMediaLibrary(const FilePath& module_dir) {
     paths[module].push_back(path.value());
   }
 
-  bool ret = tp_ffmpeg::InitializeStubs(paths);
-  return ret;
+  g_media_library_is_initialized = tp_ffmpeg::InitializeStubs(paths);
+  return g_media_library_is_initialized;
+}
+
+bool IsMediaLibraryInitialized() {
+  return g_media_library_is_initialized;
 }
 
 #if defined(OS_LINUX)

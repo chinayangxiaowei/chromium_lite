@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,7 +9,7 @@
 #import <Cocoa/Cocoa.h>
 
 #import "base/mac/cocoa_protocols.h"
-#include "base/scoped_nsobject.h"
+#include "base/memory/scoped_nsobject.h"
 #import "chrome/browser/ui/cocoa/styled_text_field.h"
 #import "chrome/browser/ui/cocoa/url_drop_target.h"
 
@@ -74,6 +74,7 @@ class AutocompleteTextFieldObserver {
   // Called when the user begins editing the field, for every edit,
   // and when the user is done editing the field.
   virtual void OnDidBeginEditing() = 0;
+  virtual void OnBeforeChange() = 0;
   virtual void OnDidChange() = 0;
   virtual void OnDidEndEditing() = 0;
 
@@ -117,7 +118,7 @@ class AutocompleteTextFieldObserver {
   scoped_nsobject<NSMutableArray> currentToolTips_;
 }
 
-@property (nonatomic) AutocompleteTextFieldObserver* observer;
+@property(nonatomic) AutocompleteTextFieldObserver* observer;
 
 // Convenience method to return the cell, casted appropriately.
 - (AutocompleteTextFieldCell*)cell;

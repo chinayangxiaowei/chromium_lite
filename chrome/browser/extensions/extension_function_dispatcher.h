@@ -9,9 +9,9 @@
 #include <string>
 #include <vector>
 
-#include "base/ref_counted.h"
-#include "gfx/native_widget_types.h"
+#include "base/memory/ref_counted.h"
 #include "googleurl/src/gurl.h"
+#include "ui/gfx/native_widget_types.h"
 
 class Browser;
 class Extension;
@@ -20,7 +20,7 @@ class ListValue;
 class Profile;
 class RenderViewHost;
 class TabContents;
-struct ViewHostMsg_DomMessage_Params;
+struct ExtensionHostMsg_DomMessage_Params;
 
 // A factory function for creating new ExtensionFunction instances.
 typedef ExtensionFunction* (*ExtensionFunctionFactory)();
@@ -39,13 +39,6 @@ class ExtensionFunctionDispatcher {
     // Returns the native view for this extension view, if any. This may be NULL
     // if the view is not visible.
     virtual gfx::NativeView GetNativeViewOfHost() = 0;
-
-    // Typically, the window is assumed to be the window associated with the
-    // result of GetBrowser(). Implementations may override this behavior with
-    // this method.
-    virtual gfx::NativeWindow GetCustomFrameNativeWindow() {
-      return NULL;
-    }
 
     // Asks the delegate for any relevant TabContents associated with this
     // context. For example, the TabContents in which an infobar or
@@ -93,7 +86,7 @@ class ExtensionFunctionDispatcher {
   Delegate* delegate() { return delegate_; }
 
   // Handle a request to execute an extension function.
-  void HandleRequest(const ViewHostMsg_DomMessage_Params& params);
+  void HandleRequest(const ExtensionHostMsg_DomMessage_Params& params);
 
   // Send a response to a function.
   void SendResponse(ExtensionFunction* api, bool success);
@@ -142,13 +135,6 @@ class ExtensionFunctionDispatcher {
   std::string extension_id_;
 
   scoped_refptr<Peer> peer_;
-
-  // AutomationExtensionFunction requires access to the RenderViewHost
-  // associated with us.  We make it a friend rather than exposing the
-  // RenderViewHost as a public method as we wouldn't want everyone to
-  // start assuming a 1:1 relationship between us and RenderViewHost,
-  // whereas AutomationExtensionFunction is by necessity "tight" with us.
-  friend class AutomationExtensionFunction;
 };
 
 #endif  // CHROME_BROWSER_EXTENSIONS_EXTENSION_FUNCTION_DISPATCHER_H_

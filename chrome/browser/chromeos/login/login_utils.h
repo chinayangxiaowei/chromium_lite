@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,9 +10,14 @@
 
 #include "chrome/common/net/gaia/gaia_auth_consumer.h"
 
+class CommandLine;
 class GURL;
 class Profile;
 class PrefService;
+
+namespace {
+class BrowserGuestSessionNavigatorTest;
+}  // namespace
 
 namespace chromeos {
 
@@ -22,6 +27,12 @@ class LoginStatusConsumer;
 
 class LoginUtils {
  public:
+  class Delegate {
+   public:
+    // Called after profile is loaded and prepared for the session.
+    virtual void OnProfilePrepared(Profile* profile) = 0;
+  };
+
   // Get LoginUtils singleton object. If it was not set before, new default
   // instance will be created.
   static LoginUtils* Get();
@@ -35,14 +46,14 @@ class LoginUtils {
 
   virtual ~LoginUtils() {}
 
-  // Invoked after the user has successfully logged in. This launches a browser
-  // and does other bookkeeping after logging in.
+  // Loads and prepares profile for the session. Fires |delegate| in the end.
   // If |pending_requests| is true, there's a pending online auth request.
-  virtual void CompleteLogin(
+  virtual void PrepareProfile(
       const std::string& username,
       const std::string& password,
       const GaiaAuthConsumer::ClientLoginResult& credentials,
-      bool pending_requests) = 0;
+      bool pending_requests,
+      Delegate* delegate) = 0;
 
   // Invoked after the tmpfs is successfully mounted.
   // Asks session manager to restart Chrome in Browse Without Sign In mode.
@@ -56,13 +67,6 @@ class LoginUtils {
   // Creates and returns the authenticator to use. The caller owns the returned
   // Authenticator and must delete it when done.
   virtual Authenticator* CreateAuthenticator(LoginStatusConsumer* consumer) = 0;
-
-  // Used to postpone browser launch via DoBrowserLaunch() if some post
-  // login screen is to be shown.
-  virtual void EnableBrowserLaunch(bool enable) = 0;
-
-  // Returns if browser launch enabled now or not.
-  virtual bool IsBrowserLaunchEnabled() const = 0;
 
   // Prewarms the authentication network connection.
   virtual void PrewarmAuthentication() = 0;
@@ -83,6 +87,16 @@ class LoginUtils {
 
   // Gets the current background view.
   virtual BackgroundView* GetBackgroundView() = 0;
+
+ protected:
+  friend class ::BrowserGuestSessionNavigatorTest;
+
+  // Returns command line string to be used for the OTR process. Also modifies
+  // given command line.
+  virtual std::string GetOffTheRecordCommandLine(
+      const GURL& start_url,
+      const CommandLine& base_command_line,
+      CommandLine* command_line) = 0;
 };
 
 }  // namespace chromeos

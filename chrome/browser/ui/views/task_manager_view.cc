@@ -9,11 +9,12 @@
 #include "base/metrics/stats_table.h"
 #include "base/utf_string_conversions.h"
 #include "chrome/app/chrome_command_ids.h"
-#include "chrome/browser/browser_list.h"
 #include "chrome/browser/browser_process.h"
-#include "chrome/browser/browser_window.h"
 #include "chrome/browser/memory_purger.h"
 #include "chrome/browser/prefs/pref_service.h"
+#include "chrome/browser/prefs/scoped_user_pref_update.h"
+#include "chrome/browser/ui/browser_list.h"
+#include "chrome/browser/ui/browser_window.h"
 #include "chrome/browser/ui/views/browser_dialogs.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/common/pref_names.h"
@@ -29,7 +30,7 @@
 #include "views/controls/menu/menu.h"
 #include "views/controls/table/group_table_view.h"
 #include "views/controls/table/table_view_observer.h"
-#include "views/standard_layout.h"
+#include "views/layout/layout_constants.h"
 #include "views/widget/widget.h"
 #include "views/window/dialog_delegate.h"
 #include "views/window/window.h"
@@ -222,7 +223,7 @@ bool TaskManagerTableModel::IsBackgroundResource(int row) {
 class BackgroundColorGroupTableView : public views::GroupTableView {
  public:
   BackgroundColorGroupTableView(TaskManagerTableModel* model,
-                                std::vector<ui::TableColumn> columns,
+                                const std::vector<ui::TableColumn>& columns,
                                 bool highlight_background_resources)
       : views::GroupTableView(model, columns, views::ICON_AND_TEXT,
                               false, true, true, true),
@@ -300,9 +301,9 @@ class TaskManagerView : public views::View,
   void UpdateStatsCounters();
 
   // Menu::Delegate
-  virtual void ShowContextMenu(views::View* source,
-                               const gfx::Point& p,
-                               bool is_mouse_gesture);
+  virtual void ShowContextMenuForView(views::View* source,
+                                      const gfx::Point& p,
+                                      bool is_mouse_gesture);
   virtual bool IsItemChecked(int id) const;
   virtual void ExecuteCommand(int id);
 
@@ -505,31 +506,35 @@ void TaskManagerView::ViewHierarchyChanged(bool is_add,
 }
 
 void TaskManagerView::Layout() {
-  // kPanelHorizMargin is too big.
+  // views::kPanelHorizMargin is too big.
   const int kTableButtonSpacing = 12;
 
   gfx::Size size = kill_button_->GetPreferredSize();
   int prefered_width = size.width();
   int prefered_height = size.height();
 
-  tab_table_->SetBounds(x() + kPanelHorizMargin,
-                        y() + kPanelVertMargin,
-                        width() - 2 * kPanelHorizMargin,
-                        height() - 2 * kPanelVertMargin - prefered_height);
+  tab_table_->SetBounds(
+      x() + views::kPanelHorizMargin,
+      y() + views::kPanelVertMargin,
+      width() - 2 * views::kPanelHorizMargin,
+      height() - 2 * views::kPanelVertMargin - prefered_height);
 
   // y-coordinate of button top left.
-  gfx::Rect parent_bounds = GetParent()->GetLocalBounds(false);
-  int y_buttons = parent_bounds.bottom() - prefered_height - kButtonVEdgeMargin;
+  gfx::Rect parent_bounds = parent()->GetContentsBounds();
+  int y_buttons =
+      parent_bounds.bottom() - prefered_height - views::kButtonVEdgeMargin;
 
-  kill_button_->SetBounds(x() + width() - prefered_width - kPanelHorizMargin,
-                          y_buttons,
-                          prefered_width,
-                          prefered_height);
+  kill_button_->SetBounds(
+      x() + width() - prefered_width - views::kPanelHorizMargin,
+      y_buttons,
+      prefered_width,
+      prefered_height);
 
   if (purge_memory_button_) {
     size = purge_memory_button_->GetPreferredSize();
     purge_memory_button_->SetBounds(
-        kill_button_->x() - size.width() - kUnrelatedControlHorizontalSpacing,
+        kill_button_->x() - size.width() -
+            views::kUnrelatedControlHorizontalSpacing,
         y_buttons, size.width(), size.height());
   }
 
@@ -540,7 +545,7 @@ void TaskManagerView::Layout() {
   // bottom of buttons vertically.
   int link_y_offset = std::max(0, prefered_height - link_prefered_height) / 2;
   about_memory_link_->SetBounds(
-      x() + kPanelHorizMargin,
+      x() + views::kPanelHorizMargin,
       y_buttons + prefered_height - link_prefered_height - link_y_offset,
       link_prefered_width,
       link_prefered_height);
@@ -555,7 +560,7 @@ void TaskManagerView::Show(bool highlight_background_resources) {
   if (instance_) {
     if (instance_->highlight_background_resources_ !=
         highlight_background_resources) {
-      instance_->window()->Close();
+      instance_->window()->CloseWindow();
     } else {
       // If there's a Task manager window open already, just activate it.
       instance_->window()->Activate();
@@ -618,9 +623,9 @@ bool TaskManagerView::ExecuteWindowsCommand(int command_id) {
 
     // Save the state.
     if (g_browser_process->local_state()) {
-      DictionaryValue* window_preferences =
-          g_browser_process->local_state()->GetMutableDictionary(
-              WideToUTF8(GetWindowName()).c_str());
+      DictionaryPrefUpdate update(g_browser_process->local_state(),
+                                  WideToUTF8(GetWindowName()).c_str());
+      DictionaryValue* window_preferences = update.Get();
       window_preferences->SetBoolean("always_on_top", is_always_on_top_);
     }
     return true;
@@ -642,7 +647,10 @@ int TaskManagerView::GetDialogButtons() const {
 
 void TaskManagerView::WindowClosing() {
   // Now that the window is closed, we can allow a new one to be opened.
-  instance_ = NULL;
+  // (WindowClosing comes in asynchronously from the call to Close() and we
+  // may have already opened a new instance).
+  if (instance_ == this)
+    instance_ = NULL;
   task_manager_->OnWindowClosed();
 }
 
@@ -679,9 +687,9 @@ void TaskManagerView::LinkActivated(views::Link* source, int event_flags) {
   task_manager_->OpenAboutMemory();
 }
 
-void TaskManagerView::ShowContextMenu(views::View* source,
-                                      const gfx::Point& p,
-                                      bool is_mouse_gesture) {
+void TaskManagerView::ShowContextMenuForView(views::View* source,
+                                             const gfx::Point& p,
+                                             bool is_mouse_gesture) {
   UpdateStatsCounters();
   scoped_ptr<views::Menu> menu(views::Menu::Create(
       this, views::Menu::TOPLEFT, source->GetWidget()->GetNativeView()));

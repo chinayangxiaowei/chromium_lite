@@ -1,3 +1,7 @@
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Use of this source code is governed by a BSD-style license that can be
+// found in the LICENSE file.
+
 /**
  * @fileoverview This file is the controller for generating extension
  * doc pages.
@@ -15,7 +19,13 @@
  */
 
 var API_TEMPLATE = "template/api_template.html";
+var WEBKIT_PATH = "../../../../third_party/WebKit";
 var SCHEMA = "../api/extension_api.json";
+var DEVTOOLS_SCHEMA = WEBKIT_PATH +
+  "/Source/WebCore/inspector/front-end/ExtensionAPISchema.json";
+var USE_DEVTOOLS_SCHEMA =
+  /\.webInspector[^/]*\.html/.test(location.pathname);
+var API_MODULE_PREFIX = USE_DEVTOOLS_SCHEMA ? "" : "chrome.";
 var SAMPLES = "samples.json";
 var REQUEST_TIMEOUT = 2000;
 
@@ -96,7 +106,6 @@ function fetchStatic() {
   fetchContent(staticResource(pageBase), function(overviewContent) {
     document.getElementById("static").innerHTML = overviewContent;
     fetchSchema();
-
   }, function(error) {
     // Not fatal. Some api pages may not have matching static content.
     fetchSchema();
@@ -106,16 +115,34 @@ function fetchStatic() {
 function fetchSchema() {
   // Now the page is composed with the authored content, we fetch the schema
   // and populate the templates.
-  fetchContent(SCHEMA, function(schemaContent) {
-    schema = JSON.parse(schemaContent);
+  var is_experimental_index = /\/experimental\.html$/.test(location.pathname);
+
+  var schemas_to_retrieve = [];
+  if (!USE_DEVTOOLS_SCHEMA || is_experimental_index)
+    schemas_to_retrieve.push(SCHEMA);
+  if (USE_DEVTOOLS_SCHEMA || is_experimental_index)
+    schemas_to_retrieve.push(DEVTOOLS_SCHEMA);
+
+  var schemas_retrieved = 0;
+  schema = [];
+
+  function onSchemaContent(content) {
+    schema = schema.concat(JSON.parse(content));
+    if (++schemas_retrieved < schemas_to_retrieve.length)
+      return;
     if (pageName.toLowerCase() == "samples") {
       fetchSamples();
     } else {
       renderTemplate();
     }
-  }, function(error) {
-    alert("Failed to load " + SCHEMA);
-  });
+  }
+
+  for (var i = 0; i < schemas_to_retrieve.length; ++i) {
+    var schema_path = schemas_to_retrieve[i];
+    fetchContent(schema_path, onSchemaContent, function(error) {
+      alert("Failed to load " + schema_path);
+    });
+  }
 }
 
 function fetchSamples() {
@@ -184,7 +211,7 @@ function renderTemplate() {
       }
       // This page is an api page. Setup types and apiDefinition.
       module = mod;
-      apiModuleName = "chrome." + module.namespace;
+      apiModuleName = API_MODULE_PREFIX + module.namespace;
       pageData.apiDefinition = module;
     }
 
@@ -320,6 +347,14 @@ function experimentalAPIs() {
   }).sort();
 }
 
+function webInspectorAPIs() {
+  return schema.filter(function(module) {
+    return !module.nodoc && module.namespace.indexOf("webInspector.") !== 0;
+  }).map(function(module) {
+    return module.namespace;
+  }).sort();
+}
+
 function getDataFromPageHTML(id) {
   var node = document.getElementById(id);
   if (!node)
@@ -433,11 +468,15 @@ function getPageTitle() {
 }
 
 function getModuleName() {
-  return "chrome." + module.namespace;
+  return API_MODULE_PREFIX + module.namespace;
 }
 
-function getFullyQualifiedFunctionName(func) {
-  return getModuleName() + "." + func.name;
+function getFullyQualifiedFunctionName(scope, func) {
+  return (getObjectName(scope) || getModuleName()) + "." + func.name;
+}
+
+function getObjectName(typeName) {
+  return typeName.charAt(0).toLowerCase() + typeName.substring(1);
 }
 
 function isExperimentalAPIPage() {
@@ -452,6 +491,10 @@ function hasCallback(parameters) {
 
 function getCallbackParameters(parameters) {
   return parameters[parameters.length - 1];
+}
+
+function getAnchorName(type, name, scope) {
+  return type + "-" + (scope ? scope + "-" : "") + name;
 }
 
 function shouldExpandObject(object) {
@@ -491,6 +534,8 @@ function getTypeName(schema) {
 }
 
 function getSignatureString(parameters) {
+  if (!parameters)
+    return "";
   var retval = [];
   parameters.forEach(function(param, i) {
     retval.push(getTypeName(param) + " " + param.name);

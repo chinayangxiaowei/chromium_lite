@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -13,16 +13,18 @@
 #include "net/base/cert_verifier.h"
 #include "net/base/mock_host_resolver.h"
 #include "net/base/net_errors.h"
-#include "net/base/test_completion_callback.h"
 #include "net/base/ssl_config_service_defaults.h"
+#include "net/base/test_certificate_data.h"
+#include "net/base/test_completion_callback.h"
 #include "net/http/http_auth_handler_factory.h"
 #include "net/http/http_network_session.h"
 #include "net/http/http_request_headers.h"
 #include "net/http/http_response_headers.h"
-#include "net/socket/client_socket_factory.h"
+#include "net/proxy/proxy_service.h"
 #include "net/socket/client_socket_handle.h"
 #include "net/socket/client_socket_pool_histograms.h"
 #include "net/socket/socket_test_util.h"
+#include "net/spdy/spdy_session.h"
 #include "net/spdy/spdy_session_pool.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
@@ -36,56 +38,44 @@ const int kMaxSocketsPerGroup = 6;
 class SSLClientSocketPoolTest : public testing::Test {
  protected:
   SSLClientSocketPoolTest()
-      : host_resolver_(new MockHostResolver),
-        cert_verifier_(new CertVerifier),
+      : proxy_service_(ProxyService::CreateDirect()),
+        ssl_config_service_(new SSLConfigServiceDefaults),
         http_auth_handler_factory_(HttpAuthHandlerFactory::CreateDefault(
-            host_resolver_.get())),
-        session_(new HttpNetworkSession(host_resolver_.get(),
-                                        cert_verifier_.get(),
-                                        NULL /* dnsrr_resolver */,
-                                        NULL /* dns_cert_checker */,
-                                        NULL /* ssl_host_info_factory */,
-                                        ProxyService::CreateDirect(),
-                                        &socket_factory_,
-                                        new SSLConfigServiceDefaults,
-                                        new SpdySessionPool(NULL),
-                                        http_auth_handler_factory_.get(),
-                                        NULL,
-                                        NULL)),
-        direct_tcp_socket_params_(new TCPSocketParams(
-            HostPortPair("host", 443), MEDIUM, GURL(), false)),
-        tcp_histograms_("MockTCP"),
-        tcp_socket_pool_(
+            &host_resolver_)),
+        session_(CreateNetworkSession()),
+        direct_transport_socket_params_(new TransportSocketParams(
+            HostPortPair("host", 443), MEDIUM, GURL(), false, false)),
+        transport_histograms_("MockTCP"),
+        transport_socket_pool_(
             kMaxSockets,
             kMaxSocketsPerGroup,
-            &tcp_histograms_,
+            &transport_histograms_,
             &socket_factory_),
-        proxy_tcp_socket_params_(new TCPSocketParams(
-            HostPortPair("proxy", 443), MEDIUM, GURL(), false)),
+        proxy_transport_socket_params_(new TransportSocketParams(
+            HostPortPair("proxy", 443), MEDIUM, GURL(), false, false)),
         socks_socket_params_(new SOCKSSocketParams(
-            proxy_tcp_socket_params_, true, HostPortPair("sockshost", 443),
-            MEDIUM, GURL())),
+            proxy_transport_socket_params_, true,
+            HostPortPair("sockshost", 443), MEDIUM, GURL())),
         socks_histograms_("MockSOCKS"),
         socks_socket_pool_(
             kMaxSockets,
             kMaxSocketsPerGroup,
             &socks_histograms_,
-            &tcp_socket_pool_),
+            &transport_socket_pool_),
         http_proxy_socket_params_(new HttpProxySocketParams(
-            proxy_tcp_socket_params_, NULL, GURL("http://host"), "",
+            proxy_transport_socket_params_, NULL, GURL("http://host"), "",
             HostPortPair("host", 80),
-            session_->auth_cache(),
+            session_->http_auth_cache(),
             session_->http_auth_handler_factory(),
             session_->spdy_session_pool(),
-            session_->mutable_spdy_settings(),
             true)),
         http_proxy_histograms_("MockHttpProxy"),
         http_proxy_socket_pool_(
             kMaxSockets,
             kMaxSocketsPerGroup,
             &http_proxy_histograms_,
-            host_resolver_.get(),
-            &tcp_socket_pool_,
+            &host_resolver_,
+            &transport_socket_pool_,
             NULL,
             NULL) {
     scoped_refptr<SSLConfigService> ssl_config_service(
@@ -93,7 +83,7 @@ class SSLClientSocketPoolTest : public testing::Test {
     ssl_config_service->GetSSLConfig(&ssl_config_);
   }
 
-  void CreatePool(bool tcp_pool, bool http_proxy_pool, bool socks_pool) {
+  void CreatePool(bool transport_pool, bool http_proxy_pool, bool socks_pool) {
     ssl_histograms_.reset(new ClientSocketPoolHistograms("SSLUnitTest"));
     pool_.reset(new SSLClientSocketPool(
         kMaxSockets,
@@ -105,7 +95,7 @@ class SSLClientSocketPoolTest : public testing::Test {
         NULL /* dns_cert_checker */,
         NULL /* ssl_host_info_factory */,
         &socket_factory_,
-        tcp_pool ? &tcp_socket_pool_ : NULL,
+        transport_pool ? &transport_socket_pool_ : NULL,
         socks_pool ? &socks_socket_pool_ : NULL,
         http_proxy_pool ? &http_proxy_socket_pool_ : NULL,
         NULL,
@@ -115,7 +105,8 @@ class SSLClientSocketPoolTest : public testing::Test {
   scoped_refptr<SSLSocketParams> SSLParams(ProxyServer::Scheme proxy,
                                            bool want_spdy_over_npn) {
     return make_scoped_refptr(new SSLSocketParams(
-        proxy == ProxyServer::SCHEME_DIRECT ? direct_tcp_socket_params_ : NULL,
+        proxy == ProxyServer::SCHEME_DIRECT ?
+            direct_transport_socket_params_ : NULL,
         proxy == ProxyServer::SCHEME_SOCKS5 ? socks_socket_params_ : NULL,
         proxy == ProxyServer::SCHEME_HTTP ? http_proxy_socket_params_ : NULL,
         proxy,
@@ -129,26 +120,39 @@ class SSLClientSocketPoolTest : public testing::Test {
   void AddAuthToCache() {
     const string16 kFoo(ASCIIToUTF16("foo"));
     const string16 kBar(ASCIIToUTF16("bar"));
-    session_->auth_cache()->Add(GURL("http://proxy:443/"),
-                                "MyRealm1",
-                                HttpAuth::AUTH_SCHEME_BASIC,
-                                "Basic realm=MyRealm1",
-                                kFoo,
-                                kBar,
-                                "/");
+    session_->http_auth_cache()->Add(GURL("http://proxy:443/"),
+                                     "MyRealm1",
+                                     HttpAuth::AUTH_SCHEME_BASIC,
+                                     "Basic realm=MyRealm1",
+                                     kFoo,
+                                     kBar,
+                                     "/");
+  }
+
+  HttpNetworkSession* CreateNetworkSession() {
+    HttpNetworkSession::Params params;
+    params.host_resolver = &host_resolver_;
+    params.cert_verifier = &cert_verifier_;
+    params.proxy_service = proxy_service_;
+    params.client_socket_factory = &socket_factory_;
+    params.ssl_config_service = ssl_config_service_;
+    params.http_auth_handler_factory = http_auth_handler_factory_.get();
+    return new HttpNetworkSession(params);
   }
 
   MockClientSocketFactory socket_factory_;
-  scoped_ptr<HostResolver> host_resolver_;
-  scoped_ptr<CertVerifier> cert_verifier_;
-  scoped_ptr<HttpAuthHandlerFactory> http_auth_handler_factory_;
-  scoped_refptr<HttpNetworkSession> session_;
+  MockCachingHostResolver host_resolver_;
+  CertVerifier cert_verifier_;
+  const scoped_refptr<ProxyService> proxy_service_;
+  const scoped_refptr<SSLConfigService> ssl_config_service_;
+  const scoped_ptr<HttpAuthHandlerFactory> http_auth_handler_factory_;
+  const scoped_refptr<HttpNetworkSession> session_;
 
-  scoped_refptr<TCPSocketParams> direct_tcp_socket_params_;
-  ClientSocketPoolHistograms tcp_histograms_;
-  MockTCPClientSocketPool tcp_socket_pool_;
+  scoped_refptr<TransportSocketParams> direct_transport_socket_params_;
+  ClientSocketPoolHistograms transport_histograms_;
+  MockTransportClientSocketPool transport_socket_pool_;
 
-  scoped_refptr<TCPSocketParams> proxy_tcp_socket_params_;
+  scoped_refptr<TransportSocketParams> proxy_transport_socket_params_;
 
   scoped_refptr<SOCKSSocketParams> socks_socket_params_;
   ClientSocketPoolHistograms socks_histograms_;
@@ -643,6 +647,82 @@ TEST_F(SSLClientSocketPoolTest, NeedProxyAuth) {
       handle.release_pending_http_proxy_connection());
   EXPECT_TRUE(tunnel_handle->socket());
   EXPECT_FALSE(tunnel_handle->socket()->IsConnected());
+}
+
+TEST_F(SSLClientSocketPoolTest, IPPooling) {
+  const int kTestPort = 80;
+  struct TestHosts {
+    std::string name;
+    std::string iplist;
+    HostPortProxyPair pair;
+  } test_hosts[] = {
+    { "www.webkit.org",    "192.168.0.1,192.168.0.5" },
+    { "code.google.com",   "192.168.0.2,192.168.0.3,192.168.0.5" },
+    { "js.webkit.org",     "192.168.0.4,192.168.0.5" },
+  };
+
+  host_resolver_.set_synchronous_mode(true);
+  for (size_t i = 0; i < ARRAYSIZE_UNSAFE(test_hosts); i++) {
+    host_resolver_.rules()->AddIPLiteralRule(test_hosts[i].name,
+        test_hosts[i].iplist, "");
+
+    // This test requires that the HostResolver cache be populated.  Normal
+    // code would have done this already, but we do it manually.
+    HostResolver::RequestInfo info(HostPortPair(test_hosts[i].name, kTestPort));
+    AddressList result;
+    host_resolver_.Resolve(info, &result, NULL, NULL, BoundNetLog());
+
+    // Setup a HostPortProxyPair
+    test_hosts[i].pair = HostPortProxyPair(
+        HostPortPair(test_hosts[i].name, kTestPort), ProxyServer::Direct());
+  }
+
+  MockRead reads[] = {
+      MockRead(true, ERR_IO_PENDING),
+  };
+  StaticSocketDataProvider data(reads, arraysize(reads), NULL, 0);
+  socket_factory_.AddSocketDataProvider(&data);
+  SSLSocketDataProvider ssl(true, OK);
+  ssl.cert_ = X509Certificate::CreateFromBytes(
+      reinterpret_cast<const char*>(webkit_der), sizeof(webkit_der));
+  ssl.next_proto_status = SSLClientSocket::kNextProtoNegotiated;
+  ssl.next_proto = "spdy/2";
+  socket_factory_.AddSSLSocketDataProvider(&ssl);
+
+  CreatePool(true /* tcp pool */, false, false);
+  scoped_refptr<SSLSocketParams> params = SSLParams(ProxyServer::SCHEME_DIRECT,
+                                                    true);
+
+  scoped_ptr<ClientSocketHandle> handle(new ClientSocketHandle());
+  TestCompletionCallback callback;
+  int rv = handle->Init(
+      "a", params, MEDIUM, &callback, pool_.get(), BoundNetLog());
+  EXPECT_EQ(ERR_IO_PENDING, rv);
+  EXPECT_FALSE(handle->is_initialized());
+  EXPECT_FALSE(handle->socket());
+
+  EXPECT_EQ(OK, callback.WaitForResult());
+  EXPECT_TRUE(handle->is_initialized());
+  EXPECT_TRUE(handle->socket());
+
+  SSLClientSocket* ssl_socket = static_cast<SSLClientSocket*>(handle->socket());
+  EXPECT_TRUE(ssl_socket->was_npn_negotiated());
+  std::string proto;
+  ssl_socket->GetNextProto(&proto);
+  EXPECT_EQ(SSLClientSocket::NextProtoFromString(proto),
+            SSLClientSocket::kProtoSPDY2);
+
+  scoped_refptr<SpdySession> spdy_session;
+  rv = session_->spdy_session_pool()->GetSpdySessionFromSocket(
+    test_hosts[0].pair, handle.release(), BoundNetLog(), 0,
+      &spdy_session, true);
+  EXPECT_EQ(0, rv);
+
+  EXPECT_TRUE(session_->spdy_session_pool()->HasSession(test_hosts[0].pair));
+  EXPECT_FALSE(session_->spdy_session_pool()->HasSession(test_hosts[1].pair));
+  EXPECT_TRUE(session_->spdy_session_pool()->HasSession(test_hosts[2].pair));
+
+  session_->spdy_session_pool()->CloseAllSessions();
 }
 
 // It would be nice to also test the timeouts in SSLClientSocketPool.

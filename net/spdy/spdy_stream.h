@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,12 +10,13 @@
 #include <vector>
 
 #include "base/basictypes.h"
-#include "base/linked_ptr.h"
-#include "base/ref_counted.h"
-#include "base/scoped_ptr.h"
+#include "base/memory/linked_ptr.h"
+#include "base/memory/ref_counted.h"
+#include "base/memory/scoped_ptr.h"
 #include "googleurl/src/gurl.h"
 #include "net/base/bandwidth_metrics.h"
 #include "net/base/io_buffer.h"
+#include "net/base/upload_data.h"
 #include "net/base/net_log.h"
 #include "net/spdy/spdy_framer.h"
 #include "net/spdy/spdy_protocol.h"
@@ -23,6 +24,7 @@
 namespace net {
 
 class AddressList;
+class IPEndPoint;
 class SpdySession;
 class SSLCertRequestInfo;
 class SSLInfo;
@@ -34,7 +36,9 @@ class SSLInfo;
 // a SpdyNetworkTransaction) will maintain a reference to the stream.  When
 // initiated by the server, only the SpdySession will maintain any reference,
 // until such a time as a client object requests a stream for the path.
-class SpdyStream : public base::RefCounted<SpdyStream> {
+class SpdyStream
+    : public base::RefCounted<SpdyStream>,
+      public ChunkCallback {
  public:
   // Delegate handles protocol specific behavior of spdy stream.
   class Delegate {
@@ -50,9 +54,10 @@ class SpdyStream : public base::RefCounted<SpdyStream> {
     virtual int OnSendBody() = 0;
 
     // Called when data has been sent. |status| indicates network error
-    // or number of bytes has been sent.
-    // Returns true if no more data to be sent.
-    virtual bool OnSendBodyComplete(int status) = 0;
+    // or number of bytes that has been sent. On return, |eof| is set to true
+    // if no more data is available to send in the request body.
+    // Returns network error code. OK when it successfully sent data.
+    virtual int OnSendBodyComplete(int status, bool* eof) = 0;
 
     // Called when the SYN_STREAM, SYN_REPLY, or HEADERS frames are received.
     // Normal streams will receive a SYN_REPLY and optional HEADERS frames.
@@ -72,6 +77,9 @@ class SpdyStream : public base::RefCounted<SpdyStream> {
 
     // Called when SpdyStream is closed.
     virtual void OnClose(int status) = 0;
+
+    // Sets the callback to be invoked when a new chunk is available to upload.
+    virtual void set_chunk_callback(ChunkCallback* callback) = 0;
 
    protected:
     friend class base::RefCounted<Delegate>;
@@ -136,6 +144,7 @@ class SpdyStream : public base::RefCounted<SpdyStream> {
   void DecreaseSendWindowSize(int delta_window_size);
 
   int GetPeerAddress(AddressList* address) const;
+  int GetLocalAddress(IPEndPoint* address) const;
 
   // Returns true if the underlying transport socket ever had any reads or
   // writes.
@@ -221,6 +230,9 @@ class SpdyStream : public base::RefCounted<SpdyStream> {
   // Get the URL associated with this stream.  Only valid when has_url() is
   // true.
   GURL GetUrl() const;
+
+  // ChunkCallback methods.
+  virtual void OnChunkAvailable();
 
  private:
   enum State {

@@ -9,34 +9,34 @@
 
 #include "app/win/shell.h"
 #include "base/command_line.h"
-#include "base/scoped_comptr_win.h"
-#include "base/scoped_native_library.h"
+#include "base/memory/scoped_native_library.h"
 #include "base/synchronization/waitable_event.h"
+#include "base/win/scoped_comptr.h"
 #include "base/win/scoped_gdi_object.h"
 #include "base/win/scoped_hdc.h"
 #include "base/win/windows_version.h"
 #include "chrome/browser/app_icon_win.h"
-#include "chrome/browser/browser_list.h"
 #include "chrome/browser/browser_process.h"
-#include "chrome/browser/browser_thread.h"
-#include "chrome/browser/renderer_host/backing_store.h"
-#include "chrome/browser/renderer_host/render_view_host.h"
-#include "chrome/browser/tab_contents/tab_contents.h"
-#include "chrome/browser/tab_contents/tab_contents_delegate.h"
-#include "chrome/browser/tab_contents/tab_contents_view.h"
 #include "chrome/browser/tab_contents/thumbnail_generator.h"
 #include "chrome/browser/tabs/tab_strip_model.h"
+#include "chrome/browser/ui/browser_list.h"
 #include "chrome/browser/ui/tab_contents/tab_contents_wrapper.h"
 #include "chrome/common/chrome_constants.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/installer/util/browser_distribution.h"
-#include "gfx/gdi_util.h"
-#include "gfx/icon_util.h"
+#include "content/browser/browser_thread.h"
+#include "content/browser/renderer_host/backing_store.h"
+#include "content/browser/renderer_host/render_view_host.h"
+#include "content/browser/tab_contents/tab_contents.h"
+#include "content/browser/tab_contents/tab_contents_delegate.h"
+#include "content/browser/tab_contents/tab_contents_view.h"
 #include "skia/ext/image_operations.h"
 #include "skia/ext/platform_canvas.h"
 #include "third_party/skia/include/core/SkBitmap.h"
-#include "ui/base/win/hwnd_util.h"
 #include "ui/base/win/window_impl.h"
+#include "ui/gfx/gdi_util.h"
+#include "ui/gfx/icon_util.h"
+#include "views/widget/widget_win.h"
 
 namespace {
 
@@ -263,7 +263,7 @@ class RegisterThumbnailTask : public Task {
     // taskbar. But it seems to be OK to register it without checking the
     // message.
     // TODO(hbono): we need to check this registered message?
-    ScopedComPtr<ITaskbarList3> taskbar;
+    base::win::ScopedComPtr<ITaskbarList3> taskbar;
     if (FAILED(taskbar.CreateInstance(CLSID_TaskbarList, NULL,
                                       CLSCTX_INPROC_SERVER)) ||
         FAILED(taskbar->HrInit()) ||
@@ -588,7 +588,7 @@ class AeroPeekWindow : public ui::WindowImpl {
   // saves a copy of the given bitmap since it takes time to create a Windows
   // icon from this bitmap set it as the window icon. We will create a Windows
   // when Windows sends a WM_GETICON message to retrieve it.
-  void SetFavIcon(const SkBitmap& favicon);
+  void SetFavicon(const SkBitmap& favicon);
 
   // Returns the tab ID associated with this window.
   int tab_id() { return tab_id_; }
@@ -731,7 +731,7 @@ void AeroPeekWindow::Activate() {
   }
 
   // Notify Windows to set the thumbnail focus to this window.
-  ScopedComPtr<ITaskbarList3> taskbar;
+  base::win::ScopedComPtr<ITaskbarList3> taskbar;
   HRESULT result = taskbar.CreateInstance(CLSID_TaskbarList, NULL,
                                           CLSCTX_INPROC_SERVER);
   if (FAILED(result)) {
@@ -785,7 +785,7 @@ void AeroPeekWindow::Destroy() {
     return;
 
   // Remove this window from the tab list of Windows.
-  ScopedComPtr<ITaskbarList3> taskbar;
+  base::win::ScopedComPtr<ITaskbarList3> taskbar;
   HRESULT result = taskbar.CreateInstance(CLSID_TaskbarList, NULL,
                                           CLSCTX_INPROC_SERVER);
   if (FAILED(result))
@@ -805,7 +805,7 @@ void AeroPeekWindow::SetTitle(const std::wstring& title) {
   title_ = title;
 }
 
-void AeroPeekWindow::SetFavIcon(const SkBitmap& favicon) {
+void AeroPeekWindow::SetFavicon(const SkBitmap& favicon) {
   favicon_bitmap_ = favicon;
 }
 
@@ -1016,7 +1016,7 @@ bool AeroPeekManager::Enabled() {
   // flooding users with tab thumbnails.
   const CommandLine* command_line = CommandLine::ForCurrentProcess();
   return base::win::GetVersion() >= base::win::VERSION_WIN7 &&
-      ui::ShouldUseVistaFrame() &&
+      views::WidgetWin::IsAeroGlassEnabled() &&
       !command_line->HasSwitch(switches::kApp) &&
       command_line->HasSwitch(switches::kEnableAeroPeekTabs);
 }
@@ -1034,6 +1034,19 @@ void AeroPeekManager::DeleteAeroPeekWindow(int tab_id) {
     }
   }
 }
+
+void AeroPeekManager::DeleteAeroPeekWindowForTab(TabContentsWrapper* tab) {
+  // Delete the AeroPeekWindow object associated with this tab and all its
+  // resources. (AeroPeekWindow::Destory() also removes this tab from the tab
+  // list of Windows.)
+  AeroPeekWindow* window = GetAeroPeekWindow(GetTabID(tab->tab_contents()));
+  if (!window)
+    return;
+
+  window->Destroy();
+  DeleteAeroPeekWindow(GetTabID(tab->tab_contents()));
+}
+
 AeroPeekWindow* AeroPeekManager::GetAeroPeekWindow(int tab_id) const {
   size_t size = tab_list_.size();
   for (std::list<AeroPeekWindow*>::const_iterator i = tab_list_.begin();
@@ -1045,9 +1058,24 @@ AeroPeekWindow* AeroPeekManager::GetAeroPeekWindow(int tab_id) const {
   return NULL;
 }
 
+void AeroPeekManager::CreateAeroPeekWindowIfNecessary(TabContentsWrapper* tab,
+                                                      bool foreground) {
+  if (GetAeroPeekWindow(GetTabID(tab->tab_contents())))
+    return;
+
+  AeroPeekWindow* window =
+      new AeroPeekWindow(application_window_,
+                         this,
+                         GetTabID(tab->tab_contents()),
+                         foreground,
+                         tab->tab_contents()->GetTitle(),
+                         tab->tab_contents()->GetFavicon());
+  tab_list_.push_back(window);
+}
+
 TabContents* AeroPeekManager::GetTabContents(int tab_id) const {
   for (TabContentsIterator iterator; !iterator.done(); ++iterator) {
-    TabContents* target_contents = *iterator;
+    TabContents* target_contents = (*iterator)->tab_contents();
     if (target_contents->controller().session_id().id() == tab_id)
       return target_contents;
   }
@@ -1069,60 +1097,26 @@ void AeroPeekManager::TabInsertedAt(TabContentsWrapper* contents,
   if (!contents)
     return;
 
-  // If there are not any AeroPeekWindow objects associated with the given
-  // tab, Create a new AeroPeekWindow object and add it to the list.
-  if (GetAeroPeekWindow(GetTabID(contents->tab_contents())))
-    return;
-
-  AeroPeekWindow* window =
-      new AeroPeekWindow(application_window_,
-                         this,
-                         GetTabID(contents->tab_contents()),
-                         foreground,
-                         contents->tab_contents()->GetTitle(),
-                         contents->tab_contents()->GetFavIcon());
-  if (!window)
-    return;
-
-  tab_list_.push_back(window);
-}
-
-void AeroPeekManager::TabClosingAt(TabStripModel* tab_strip_model,
-                                   TabContentsWrapper* contents,
-                                   int index) {
-  if (!contents)
-    return;
-
-  // |tab_strip_model| is NULL when this is being called from TabDetachedAt
-  // below.
-  // Delete the AeroPeekWindow object associated with this tab and all its
-  // resources. (AeroPeekWindow::Destory() also removes this tab from the tab
-  // list of Windows.)
-  AeroPeekWindow* window =
-      GetAeroPeekWindow(GetTabID(contents->tab_contents()));
-  if (!window)
-    return;
-
-  window->Destroy();
-  DeleteAeroPeekWindow(GetTabID(contents->tab_contents()));
+  CreateAeroPeekWindowIfNecessary(contents, foreground);
 }
 
 void AeroPeekManager::TabDetachedAt(TabContentsWrapper* contents, int index) {
   if (!contents)
     return;
 
-  // Same as TabClosingAt(), we remove this tab from the tab list and delete
-  // its AeroPeekWindow.
   // Chrome will call TabInsertedAt() when this tab is inserted to another
   // TabStrip. We will re-create an AeroPeekWindow object for this tab and
   // re-add it to the tab list there.
-  TabClosingAt(NULL, contents, index);
+  DeleteAeroPeekWindowForTab(contents);
 }
 
 void AeroPeekManager::TabSelectedAt(TabContentsWrapper* old_contents,
                                     TabContentsWrapper* new_contents,
                                     int index,
                                     bool user_gesture) {
+  if (old_contents == new_contents)
+    return;
+
   // Deactivate the old window in the thumbnail list and activate the new one
   // to synchronize the thumbnail list with TabStrip.
   if (old_contents) {
@@ -1138,6 +1132,18 @@ void AeroPeekManager::TabSelectedAt(TabContentsWrapper* old_contents,
     if (new_window)
       new_window->Activate();
   }
+}
+
+void AeroPeekManager::TabReplacedAt(TabStripModel* tab_strip_model,
+                                    TabContentsWrapper* old_contents,
+                                    TabContentsWrapper* new_contents,
+                                    int index) {
+  DeleteAeroPeekWindowForTab(old_contents);
+
+  CreateAeroPeekWindowIfNecessary(new_contents,
+                                  (index == tab_strip_model->active_index()));
+  // We don't need to update the selection as if |new_contents| is selected the
+  // TabStripModel will send TabSelectedAt.
 }
 
 void AeroPeekManager::TabMoved(TabContentsWrapper* contents,
@@ -1168,7 +1174,7 @@ void AeroPeekManager::TabChangedAt(TabContentsWrapper* contents,
   // hurting the rendering performance. (These functions just save the
   // information needed for handling update requests from Windows.)
   window->SetTitle(contents->tab_contents()->GetTitle());
-  window->SetFavIcon(contents->tab_contents()->GetFavIcon());
+  window->SetFavicon(contents->tab_contents()->GetFavicon());
   window->Update(contents->tab_contents()->is_loading());
 }
 

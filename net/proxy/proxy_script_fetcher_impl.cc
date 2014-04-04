@@ -9,6 +9,7 @@
 #include "base/logging.h"
 #include "base/message_loop.h"
 #include "base/string_util.h"
+#include "net/base/data_url.h"
 #include "net/base/io_buffer.h"
 #include "net/base/load_flags.h"
 #include "net/base/net_errors.h"
@@ -16,7 +17,7 @@
 #include "net/url_request/url_request_context.h"
 
 // TODO(eroman):
-//   - Support auth-prompts.
+//   - Support auth-prompts (http://crbug.com/77366)
 
 namespace net {
 
@@ -123,6 +124,18 @@ int ProxyScriptFetcherImpl::Fetch(const GURL& url,
   DCHECK(callback);
   DCHECK(text);
 
+  // Handle base-64 encoded data-urls that contain custom PAC scripts.
+  if (url.SchemeIs("data")) {
+    std::string mime_type;
+    std::string charset;
+    std::string data;
+    if (!DataURL::Parse(url, &mime_type, &charset, &data))
+      return ERR_FAILED;
+
+    ConvertResponseToUTF16(charset, data, text);
+    return OK;
+  }
+
   cur_request_.reset(new URLRequest(url, this));
   cur_request_->set_context(url_request_context_);
   cur_request_->set_method("GET");
@@ -165,7 +178,7 @@ URLRequestContext* ProxyScriptFetcherImpl::GetRequestContext() {
 void ProxyScriptFetcherImpl::OnAuthRequired(URLRequest* request,
                                             AuthChallengeInfo* auth_info) {
   DCHECK_EQ(request, cur_request_.get());
-  // TODO(eroman):
+  // TODO(eroman): http://crbug.com/77366
   LOG(WARNING) << "Auth required to fetch PAC script, aborting.";
   result_code_ = ERR_NOT_IMPLEMENTED;
   request->CancelAuth();

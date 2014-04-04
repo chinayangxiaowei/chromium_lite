@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,16 +7,16 @@
 
 #include <algorithm>
 
-#include "base/crypto/scoped_nss_types.h"
 #include "base/file_path.h"
 #include "base/file_util.h"
-#include "base/nss_util.h"
-#include "base/nss_util_internal.h"
+#include "base/lazy_instance.h"
+#include "base/memory/scoped_temp_dir.h"
 #include "base/path_service.h"
-#include "base/scoped_temp_dir.h"
-#include "base/singleton.h"
 #include "base/string_util.h"
 #include "base/utf_string_conversions.h"
+#include "crypto/nss_util.h"
+#include "crypto/nss_util_internal.h"
+#include "crypto/scoped_nss_types.h"
 #include "net/base/cert_database.h"
 #include "net/base/cert_status_flags.h"
 #include "net/base/cert_verify_result.h"
@@ -105,10 +105,14 @@ bool ReadCertIntoList(const std::string& name, CertificateList* certs) {
 class CertDatabaseNSSTest : public testing::Test {
  public:
   virtual void SetUp() {
-    ASSERT_TRUE(temp_db_dir_.CreateUniqueTempDir());
-    ASSERT_TRUE(
-        base::OpenTestNSSDB(temp_db_dir_.path(), "CertDatabaseNSSTest db"));
-    slot_ = cert_db_.GetDefaultModule();
+    if (!temp_db_initialized_) {
+      ASSERT_TRUE(temp_db_dir_.Get().CreateUniqueTempDir());
+      ASSERT_TRUE(
+          crypto::OpenTestNSSDB(temp_db_dir_.Get().path(),
+                                "CertDatabaseNSSTest db"));
+      temp_db_initialized_ = true;
+    }
+    slot_ = cert_db_.GetPublicModule();
 
     // Test db should be empty at start of test.
     EXPECT_EQ(0U, ListCertsInSlot(slot_->os_module_handle()).size());
@@ -126,8 +130,14 @@ class CertDatabaseNSSTest : public testing::Test {
   CertDatabase cert_db_;
 
  private:
-  ScopedTempDir temp_db_dir_;
+  static base::LazyInstance<ScopedTempDir> temp_db_dir_;
+  static bool temp_db_initialized_;
 };
+
+// static
+base::LazyInstance<ScopedTempDir> CertDatabaseNSSTest::temp_db_dir_(
+    base::LINKER_INITIALIZED);
+bool CertDatabaseNSSTest::temp_db_initialized_ = false;
 
 TEST_F(CertDatabaseNSSTest, ListCerts) {
   // This test isn't terribly useful, though it will at least let valgrind test

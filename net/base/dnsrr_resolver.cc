@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -12,9 +12,9 @@
 #include <windns.h>
 #endif
 
+#include "base/memory/scoped_ptr.h"
+#include "base/memory/singleton.h"
 #include "base/message_loop.h"
-#include "base/scoped_ptr.h"
-#include "base/singleton.h"
 #include "base/stl_util-inl.h"
 #include "base/string_piece.h"
 #include "base/synchronization/lock.h"
@@ -499,6 +499,7 @@ class Buffer {
         if (offset >= packet_len_)
           return false;
         p = &packet_[offset];
+        len = packet_len_ - offset;
       } else if ((d & 0xc0) == 0) {
         uint8 label_len = d;
         if (len < label_len)

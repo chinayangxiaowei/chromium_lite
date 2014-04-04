@@ -6,14 +6,15 @@
 #include <list>
 #include <map>
 
-#include "chrome/browser/browser_thread.h"
-#include "chrome/browser/renderer_host/resource_dispatcher_host.h"
+#include "base/utf_string_conversions.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/login/login_prompt.h"
 #include "chrome/browser/ui/tab_contents/tab_contents_wrapper.h"
-#include "chrome/common/notification_service.h"
 #include "chrome/test/in_process_browser_test.h"
 #include "chrome/test/ui_test_utils.h"
+#include "content/browser/browser_thread.h"
+#include "content/browser/renderer_host/resource_dispatcher_host.h"
+#include "content/common/notification_service.h"
 #include "net/base/auth.h"
 
 namespace {
@@ -56,7 +57,8 @@ void LoginPromptBrowserTest::SetAuthFor(LoginHandler* handler) {
   EXPECT_TRUE(auth_map_.end() != i);
   if (i != auth_map_.end()) {
     const AuthInfo& info = i->second;
-    handler->SetAuth(info.username_, info.password_);
+    handler->SetAuth(WideToUTF16Hack(info.username_),
+                     WideToUTF16Hack(info.password_));
   }
 }
 
@@ -271,7 +273,14 @@ IN_PROC_BROWSER_TEST_F(LoginPromptBrowserTest, MultipleRealmCancellation) {
 
 // Similar to the MultipleRealmCancellation test above, but tests
 // whether supplying credentials work as exepcted.
-IN_PROC_BROWSER_TEST_F(LoginPromptBrowserTest, MultipleRealmConfirmation) {
+#if defined(OS_WIN)
+// See http://crbug.com/70960
+#define MAYBE_MultipleRealmConfirmation DISABLED_MultipleRealmConfirmation
+#else
+#define MAYBE_MultipleRealmConfirmation MultipleRealmConfirmation
+#endif
+IN_PROC_BROWSER_TEST_F(LoginPromptBrowserTest,
+                       MAYBE_MultipleRealmConfirmation) {
   ASSERT_TRUE(test_server()->Start());
   GURL test_page = test_server()->GetURL(kMultiRealmTestPage);
 
@@ -324,7 +333,7 @@ IN_PROC_BROWSER_TEST_F(LoginPromptBrowserTest, MultipleRealmConfirmation) {
 // there are multiple authenticated resources.
 // Marked as flaky.  See http://crbug.com/69266 and http://crbug.com/68860
 // TODO(asanka): Remove logging when timeout issues are resolved.
-IN_PROC_BROWSER_TEST_F(LoginPromptBrowserTest, FLAKY_IncorrectConfirmation) {
+IN_PROC_BROWSER_TEST_F(LoginPromptBrowserTest, DISABLED_IncorrectConfirmation) {
   ASSERT_TRUE(test_server()->Start());
   GURL test_page = test_server()->GetURL(kSingleRealmTestPage);
 
@@ -357,7 +366,8 @@ IN_PROC_BROWSER_TEST_F(LoginPromptBrowserTest, FLAKY_IncorrectConfirmation) {
     LoginHandler* handler = *observer.handlers_.begin();
 
     ASSERT_TRUE(handler);
-    handler->SetAuth(bad_username_, bad_password_);
+    handler->SetAuth(WideToUTF16Hack(bad_username_),
+                     WideToUTF16Hack(bad_password_));
     LOG(INFO) << "Waiting for initial AUTH_SUPPLIED";
     auth_supplied_waiter.Wait();
 
@@ -401,4 +411,60 @@ IN_PROC_BROWSER_TEST_F(LoginPromptBrowserTest, FLAKY_IncorrectConfirmation) {
   EXPECT_TRUE(test_server()->Stop());
   LOG(INFO) << "Done with test";
 }
+
+// If the favicon is an authenticated resource, we shouldn't prompt
+// for credentials.  The same URL, if requested elsewhere should
+// prompt for credentials.
+IN_PROC_BROWSER_TEST_F(LoginPromptBrowserTest, NoLoginPromptForFavicon) {
+  const char* kFaviconTestPage = "files/login/has_favicon.html";
+  const char* kFaviconResource = "auth-basic/favicon.gif";
+
+  ASSERT_TRUE(test_server()->Start());
+
+  TabContentsWrapper* contents =
+      browser()->GetSelectedTabContentsWrapper();
+  ASSERT_TRUE(contents);
+
+  NavigationController* controller = &contents->controller();
+  LoginPromptBrowserTestObserver observer;
+
+  observer.Register(Source<NavigationController>(controller));
+
+  // First load a page that has a favicon that requires
+  // authentication.  There should be no login prompt.
+  {
+    GURL test_page = test_server()->GetURL(kFaviconTestPage);
+    WindowedLoadStopObserver load_stop_waiter(controller);
+    browser()->OpenURL(test_page, GURL(), CURRENT_TAB, PageTransition::TYPED);
+    load_stop_waiter.Wait();
+  }
+
+  // Now request the same favicon, but directly as the document.
+  // There should be one login prompt.
+  {
+    GURL test_page = test_server()->GetURL(kFaviconResource);
+    WindowedLoadStopObserver load_stop_waiter(controller);
+    WindowedAuthNeededObserver auth_needed_waiter(controller);
+    browser()->OpenURL(test_page, GURL(), CURRENT_TAB, PageTransition::TYPED);
+    auth_needed_waiter.Wait();
+    ASSERT_EQ(1u, observer.handlers_.size());
+
+    while (!observer.handlers_.empty()) {
+      WindowedAuthCancelledObserver auth_cancelled_waiter(controller);
+      LoginHandler* handler = *observer.handlers_.begin();
+
+      ASSERT_TRUE(handler);
+      handler->CancelAuth();
+      auth_cancelled_waiter.Wait();
+    }
+
+    load_stop_waiter.Wait();
+  }
+
+  EXPECT_EQ(0, observer.auth_supplied_count_);
+  EXPECT_EQ(1, observer.auth_needed_count_);
+  EXPECT_EQ(1, observer.auth_cancelled_count_);
+  EXPECT_TRUE(test_server()->Stop());
+}
+
 }  // namespace

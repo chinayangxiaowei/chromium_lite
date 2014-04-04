@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,41 +10,45 @@
 #include "base/command_line.h"
 #include "base/file_path.h"
 #include "base/json/json_reader.h"
+#include "base/memory/scoped_ptr.h"
 #include "base/message_loop.h"
 #include "base/path_service.h"
 #include "base/process_util.h"
-#include "base/scoped_ptr.h"
 #include "base/utf_string_conversions.h"
 #include "base/values.h"
 #include "chrome/browser/automation/ui_controls.h"
-#include "chrome/browser/browser_list.h"
 #include "chrome/browser/browser_process.h"
-#include "chrome/browser/browser_window.h"
 #include "chrome/browser/dom_operation_notification_details.h"
 #include "chrome/browser/download/download_item.h"
 #include "chrome/browser/download/download_manager.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/renderer_host/render_process_host.h"
-#include "chrome/browser/renderer_host/render_view_host.h"
-#include "chrome/browser/tab_contents/navigation_controller.h"
-#include "chrome/browser/tab_contents/navigation_entry.h"
-#include "chrome/browser/tab_contents/tab_contents.h"
 #include "chrome/browser/tab_contents/thumbnail_generator.h"
 #include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_list.h"
+#include "chrome/browser/ui/browser_window.h"
+#include "chrome/browser/ui/find_bar/find_notification_details.h"
+#include "chrome/browser/ui/find_bar/find_tab_helper.h"
+#include "chrome/browser/ui/tab_contents/tab_contents_wrapper.h"
 #include "chrome/common/chrome_paths.h"
 #include "chrome/common/extensions/extension_action.h"
-#include "chrome/common/notification_type.h"
 #include "chrome/test/automation/javascript_execution_controller.h"
 #include "chrome/test/bookmark_load_observer.h"
-#if defined(TOOLKIT_VIEWS)
-#include "views/focus/accelerator_handler.h"
-#endif
-#include "gfx/size.h"
+#include "content/browser/renderer_host/render_process_host.h"
+#include "content/browser/renderer_host/render_view_host.h"
+#include "content/browser/tab_contents/navigation_controller.h"
+#include "content/browser/tab_contents/navigation_entry.h"
+#include "content/browser/tab_contents/tab_contents.h"
+#include "content/common/notification_type.h"
 #include "googleurl/src/gurl.h"
 #include "net/base/net_util.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/skia/include/core/SkBitmap.h"
 #include "third_party/skia/include/core/SkColor.h"
+#include "ui/gfx/size.h"
+
+#if defined(TOOLKIT_VIEWS)
+#include "views/focus/accelerator_handler.h"
+#endif
 
 namespace ui_test_utils {
 
@@ -57,14 +61,22 @@ class NavigationNotificationObserver : public NotificationObserver {
                                  int number_of_navigations)
       : navigation_started_(false),
         navigations_completed_(0),
-        number_of_navigations_(number_of_navigations) {
+        number_of_navigations_(number_of_navigations),
+        running_(false),
+        done_(false) {
     registrar_.Add(this, NotificationType::NAV_ENTRY_COMMITTED,
                    Source<NavigationController>(controller));
     registrar_.Add(this, NotificationType::LOAD_START,
                    Source<NavigationController>(controller));
     registrar_.Add(this, NotificationType::LOAD_STOP,
                    Source<NavigationController>(controller));
-    RunMessageLoop();
+  }
+
+  void Run() {
+    if (!done_) {
+      running_ = true;
+      RunMessageLoop();
+    }
   }
 
   virtual void Observe(NotificationType type,
@@ -77,7 +89,9 @@ class NavigationNotificationObserver : public NotificationObserver {
       if (navigation_started_ &&
           ++navigations_completed_ == number_of_navigations_) {
         navigation_started_ = false;
-        MessageLoopForUI::current()->Quit();
+        done_ = true;
+        if (running_)
+          MessageLoopForUI::current()->Quit();
       }
     }
   }
@@ -94,6 +108,13 @@ class NavigationNotificationObserver : public NotificationObserver {
   // The number of navigations to wait for.
   int number_of_navigations_;
 
+  // Calls to Observe() can happen early, before the user calls Run(), or
+  // after.  When we've seen all the navigations we're looking for, we set
+  // done_ to true; then when Run() is called we'll never need to run the
+  // event loop.  Also, we don't need to quit the event loop when we're
+  // done if we never had to start an event loop.
+  bool running_;
+  bool done_;
   DISALLOW_COPY_AND_ASSIGN(NavigationNotificationObserver);
 };
 
@@ -163,7 +184,7 @@ class DownloadsCompleteObserver : public DownloadManager::Observer,
       // are currently observing. Removing has no effect if we are not currently
       // an observer.
       (*it)->RemoveObserver(this);
-      if ((*it)->state() != DownloadItem::COMPLETE) {
+      if ((*it)->IsInProgress()) {
         (*it)->AddObserver(this);
         still_waiting = true;
       }
@@ -182,12 +203,10 @@ class DownloadsCompleteObserver : public DownloadManager::Observer,
 
   // DownloadItem::Observer
   virtual void OnDownloadUpdated(DownloadItem* download) {
-    if (download->state() == DownloadItem::COMPLETE) {
+    if (download->IsComplete())
       CheckAllDownloadsComplete();
-    }
   }
 
-  virtual void OnDownloadFileCompleted(DownloadItem* download) { }
   virtual void OnDownloadOpened(DownloadItem* download) {}
 
   // DownloadManager::Observer
@@ -223,13 +242,14 @@ class DownloadsCompleteObserver : public DownloadManager::Observer,
 
 class FindInPageNotificationObserver : public NotificationObserver {
  public:
-  explicit FindInPageNotificationObserver(TabContents* parent_tab)
+  explicit FindInPageNotificationObserver(TabContentsWrapper* parent_tab)
       : parent_tab_(parent_tab),
         active_match_ordinal_(-1),
         number_of_matches_(0) {
-    current_find_request_id_ = parent_tab->current_find_request_id();
+    current_find_request_id_ =
+        parent_tab->find_tab_helper()->current_find_request_id();
     registrar_.Add(this, NotificationType::FIND_RESULT_AVAILABLE,
-                   Source<TabContents>(parent_tab_));
+                   Source<TabContents>(parent_tab_->tab_contents()));
     ui_test_utils::RunMessageLoop();
   }
 
@@ -260,7 +280,7 @@ class FindInPageNotificationObserver : public NotificationObserver {
 
  private:
   NotificationRegistrar registrar_;
-  TabContents* parent_tab_;
+  TabContentsWrapper* parent_tab_;
   // We will at some point (before final update) be notified of the ordinal and
   // we need to preserve it so we can send it later.
   int active_match_ordinal_;
@@ -284,7 +304,8 @@ class InProcessJavaScriptExecutionController
   // Executes |script| and sets the JSON response |json|.
   virtual bool ExecuteJavaScriptAndGetJSON(const std::string& script,
                                            std::string* json) {
-    render_view_host_->ExecuteJavascriptInWebFrame(L"", UTF8ToWide(script));
+    render_view_host_->ExecuteJavascriptInWebFrame(string16(),
+                                                   UTF8ToUTF16(script));
     DOMOperationObserver dom_op_observer(render_view_host_);
     return dom_op_observer.GetResponse(json);
   }
@@ -319,7 +340,8 @@ bool ExecuteJavaScriptHelper(RenderViewHost* render_view_host,
   //                automation id.
   std::wstring script = L"window.domAutomationController.setAutomationId(0);" +
       original_script;
-  render_view_host->ExecuteJavascriptInWebFrame(frame_xpath, script);
+  render_view_host->ExecuteJavascriptInWebFrame(WideToUTF16Hack(frame_xpath),
+                                                WideToUTF16Hack(script));
   DOMOperationObserver dom_op_observer(render_view_host);
   std::string json;
   if (!dom_op_observer.GetResponse(&json))
@@ -377,7 +399,7 @@ bool GetCurrentTabTitle(const Browser* browser, string16* title) {
   NavigationEntry* last_entry = tab_contents->controller().GetActiveEntry();
   if (!last_entry)
     return false;
-  title->assign(last_entry->title());
+  title->assign(last_entry->GetTitleForDisplay(""));
   return true;
 }
 
@@ -405,6 +427,7 @@ void WaitForNavigation(NavigationController* controller) {
 void WaitForNavigations(NavigationController* controller,
                         int number_of_navigations) {
   NavigationNotificationObserver observer(controller, number_of_navigations);
+  observer.Run();
 }
 
 void WaitForNewTab(Browser* browser) {
@@ -419,10 +442,14 @@ void WaitForBrowserActionUpdated(ExtensionAction* browser_action) {
                   Source<ExtensionAction>(browser_action));
 }
 
-void WaitForLoadStop(NavigationController* controller) {
+void WaitForLoadStop(TabContents* tab) {
+  // In many cases, the load may have finished before we get here.  Only wait if
+  // the tab still has a pending navigation.
+  if (!tab->is_loading() && !tab->render_manager()->pending_render_view_host())
+    return;
   TestNotificationObserver observer;
   RegisterAndWait(&observer, NotificationType::LOAD_STOP,
-                  Source<NavigationController>(controller));
+                  Source<NavigationController>(&tab->controller()));
 }
 
 Browser* WaitForNewBrowser() {
@@ -465,6 +492,10 @@ static void NavigateToURLWithDispositionBlockUntilNavigationsComplete(
     int number_of_navigations,
     WindowOpenDisposition disposition,
     int browser_test_flags) {
+  NavigationNotificationObserver
+      same_tab_observer(&browser->GetSelectedTabContents()->controller(),
+                        number_of_navigations);
+
   std::set<Browser*> initial_browsers;
   for (std::vector<Browser*>::const_iterator iter = BrowserList::begin();
        iter != BrowserList::end();
@@ -483,7 +514,7 @@ static void NavigateToURLWithDispositionBlockUntilNavigationsComplete(
   TabContents* tab_contents = NULL;
   if (disposition == NEW_BACKGROUND_TAB) {
     // We've opened up a new tab, but not selected it.
-    tab_contents = browser->GetTabContentsAt(browser->selected_index() + 1);
+    tab_contents = browser->GetTabContentsAt(browser->active_index() + 1);
     EXPECT_TRUE(tab_contents != NULL)
         << " Unable to wait for navigation to \"" << url.spec()
         << "\" because the new tab is not available yet";
@@ -494,7 +525,10 @@ static void NavigateToURLWithDispositionBlockUntilNavigationsComplete(
     // The currently selected tab is the right one.
     tab_contents = browser->GetSelectedTabContents();
   }
-  if (tab_contents) {
+  if (disposition == CURRENT_TAB) {
+    same_tab_observer.Run();
+    return;
+  } else if (tab_contents) {
     NavigationController* controller = &tab_contents->controller();
     WaitForNavigations(controller, number_of_navigations);
     return;
@@ -612,10 +646,10 @@ void CrashTab(TabContents* tab) {
                   Source<RenderProcessHost>(rph));
 }
 
-void WaitForFocusChange(RenderViewHost* rvh) {
+void WaitForFocusChange(TabContents* tab_contents) {
   TestNotificationObserver observer;
   RegisterAndWait(&observer, NotificationType::FOCUS_CHANGED_IN_PAGE,
-                  Source<RenderViewHost>(rvh));
+                  Source<TabContents>(tab_contents));
 }
 
 void WaitForFocusInBrowser(Browser* browser) {
@@ -624,9 +658,10 @@ void WaitForFocusInBrowser(Browser* browser) {
                   Source<Browser>(browser));
 }
 
-int FindInPage(TabContents* tab_contents, const string16& search_string,
+int FindInPage(TabContentsWrapper* tab_contents, const string16& search_string,
                bool forward, bool match_case, int* ordinal) {
-  tab_contents->StartFinding(search_string, forward, match_case);
+  tab_contents->
+      find_tab_helper()->StartFinding(search_string, forward, match_case);
   FindInPageNotificationObserver observer(tab_contents);
   if (ordinal)
     *ordinal = observer.active_match_ordinal();
@@ -868,6 +903,20 @@ TestWebSocketServer::~TestWebSocketServer() {
   base::LaunchApp(*cmd_line.get(), true, false, NULL);
 }
 
+TestNotificationObserver::TestNotificationObserver()
+    : source_(NotificationService::AllSources()) {
+}
+
+TestNotificationObserver::~TestNotificationObserver() {}
+
+void TestNotificationObserver::Observe(NotificationType type,
+                                       const NotificationSource& source,
+                                       const NotificationDetails& details) {
+  source_ = source;
+  details_ = details;
+  MessageLoopForUI::current()->Quit();
+}
+
 WindowedNotificationObserver::WindowedNotificationObserver(
     NotificationType notification_type,
     const NotificationSource& source)
@@ -877,14 +926,13 @@ WindowedNotificationObserver::WindowedNotificationObserver(
   registrar_.Add(this, notification_type, waiting_for_);
 }
 
-void WindowedNotificationObserver::Wait() {
-  if (waiting_for_ == NotificationService::AllSources()) {
-    LOG(FATAL) << "Wait called when monitoring all sources. You must use "
-               << "WaitFor in this case.";
-  }
+WindowedNotificationObserver::~WindowedNotificationObserver() {}
 
-  if (seen_)
+void WindowedNotificationObserver::Wait() {
+  if (seen_ || (waiting_for_ == NotificationService::AllSources() &&
+                !sources_seen_.empty())) {
     return;
+  }
 
   running_ = true;
   ui_test_utils::RunMessageLoop();
@@ -907,7 +955,8 @@ void WindowedNotificationObserver::WaitFor(const NotificationSource& source) {
 void WindowedNotificationObserver::Observe(NotificationType type,
                                            const NotificationSource& source,
                                            const NotificationDetails& details) {
-  if (waiting_for_ == source) {
+  if (waiting_for_ == source ||
+      (running_ && waiting_for_ == NotificationService::AllSources())) {
     seen_ = true;
     if (running_)
       MessageLoopForUI::current()->Quit();
@@ -920,6 +969,8 @@ DOMMessageQueue::DOMMessageQueue() {
   registrar_.Add(this, NotificationType::DOM_OPERATION_RESPONSE,
                  NotificationService::AllSources());
 }
+
+DOMMessageQueue::~DOMMessageQueue() {}
 
 void DOMMessageQueue::Observe(NotificationType type,
                               const NotificationSource& source,

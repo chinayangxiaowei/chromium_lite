@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,16 +10,18 @@
 #include <string>
 #include <vector>
 
-#include "base/id_map.h"
+#include "base/basictypes.h"
 #include "base/callback.h"
+#include "base/id_map.h"
+#include "base/memory/scoped_ptr.h"
 #include "base/process.h"
-#include "base/scoped_ptr.h"
 #include "base/task.h"
-#include "chrome/common/notification_observer.h"
-#include "chrome/common/notification_registrar.h"
+#include "content/common/notification_observer.h"
+#include "content/common/notification_registrar.h"
 #include "ipc/ipc_sync_channel.h"
 
 class Profile;
+class CommandLine;
 
 namespace remoting {
 struct ChromotingHostInfo;
@@ -93,7 +95,7 @@ class ServiceProcessControl : public IPC::Channel::Sender,
 
   // Message handlers
   void OnCloudPrintProxyIsEnabled(bool enabled, std::string email);
-  void OnRemotingHostInfo(remoting::ChromotingHostInfo host_info);
+  void OnRemotingHostInfo(const remoting::ChromotingHostInfo& host_info);
 
   // Send a shutdown message to the service process. IPC channel will be
   // destroyed after calling this method.
@@ -114,6 +116,8 @@ class ServiceProcessControl : public IPC::Channel::Sender,
   bool DisableRemotingHost();
 
   // Send request for current status of the remoting service.
+  // MessageHandler::OnRemotingHostInfo() will be called when remoting host
+  // status is available.
   bool RequestRemotingHostStatus();
 
   // Add a message handler for receiving messages from the service
@@ -126,7 +130,36 @@ class ServiceProcessControl : public IPC::Channel::Sender,
   void RemoveMessageHandler(MessageHandler* message_handler);
 
  private:
-  class Launcher;
+  // This class is responsible for launching the service process on the
+  // PROCESS_LAUNCHER thread.
+  class Launcher
+      : public base::RefCountedThreadSafe<ServiceProcessControl::Launcher> {
+   public:
+    Launcher(ServiceProcessControl* process, CommandLine* cmd_line);
+    // Execute the command line to start the process asynchronously.
+    // After the comamnd is executed |task| is called with the process handle on
+    // the UI thread.
+    void Run(Task* task);
+
+    bool launched() const { return launched_; }
+
+   private:
+    friend class base::RefCountedThreadSafe<ServiceProcessControl::Launcher>;
+    virtual ~Launcher();
+
+#if !defined(OS_MACOSX)
+    void DoDetectLaunched();
+#endif  // !OS_MACOSX
+
+    void DoRun();
+    void Notify();
+    ServiceProcessControl* process_;
+    scoped_ptr<CommandLine> cmd_line_;
+    scoped_ptr<Task> notify_task_;
+    bool launched_;
+    uint32 retry_count_;
+  };
+
   typedef std::vector<Task*> TaskList;
 
   // Helper method to invoke all the callbacks based on success on failure.

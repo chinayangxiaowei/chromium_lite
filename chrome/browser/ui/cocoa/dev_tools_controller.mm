@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -11,9 +11,11 @@
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/debugger/devtools_window.h"
 #include "chrome/browser/prefs/pref_service.h"
-#include "chrome/browser/tab_contents/tab_contents.h"
+#include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/ui/tab_contents/tab_contents_wrapper.h"
 #import "chrome/browser/ui/cocoa/view_id_util.h"
 #include "chrome/common/pref_names.h"
+#include "content/browser/tab_contents/tab_contents.h"
 
 namespace {
 
@@ -28,7 +30,8 @@ const int kMinWebHeight = 50;
 
 
 @interface DevToolsController (Private)
-- (void)showDevToolsContents:(TabContents*)devToolsContents;
+- (void)showDevToolsContents:(TabContents*)devToolsContents
+                 withProfile:(Profile*)profile;
 - (void)resizeDevToolsToNewHeight:(CGFloat)height;
 @end
 
@@ -63,19 +66,23 @@ const int kMinWebHeight = 50;
   return splitView_.get();
 }
 
-- (void)updateDevToolsForTabContents:(TabContents*)contents {
+- (void)updateDevToolsForTabContents:(TabContents*)contents
+                         withProfile:(Profile*)profile {
   // Get current devtools content.
-  TabContents* devToolsContents = contents ?
+  TabContentsWrapper* devToolsTab = contents ?
       DevToolsWindow::GetDevToolsContents(contents) : NULL;
+  TabContents* devToolsContents = devToolsTab ?
+      devToolsTab->tab_contents() : NULL;
 
-  [self showDevToolsContents:devToolsContents];
+  [self showDevToolsContents:devToolsContents withProfile:profile];
 }
 
 - (void)ensureContentsVisible {
   [contentsController_ ensureContentsVisible];
 }
 
-- (void)showDevToolsContents:(TabContents*)devToolsContents {
+- (void)showDevToolsContents:(TabContents*)devToolsContents
+                 withProfile:(Profile*)profile {
   [contentsController_ ensureContentsSizeDoesNotChange];
 
   NSArray* subviews = [splitView_ subviews];
@@ -91,8 +98,8 @@ const int kMinWebHeight = 50;
     CGFloat splitOffset = 0;
     if ([subviews count] == 1) {
       // Load the default split offset.
-      splitOffset = g_browser_process->local_state()->GetInteger(
-          prefs::kDevToolsSplitLocation);
+      splitOffset = profile->GetPrefs()->
+          GetInteger(prefs::kDevToolsSplitLocation);
       if (splitOffset < 0) {
         // Initial load, set to default value.
         splitOffset = kDefaultContentsSplitOffset;
@@ -117,7 +124,8 @@ const int kMinWebHeight = 50;
       NSView* oldDevToolsContentsView = [subviews objectAtIndex:1];
       // Store split offset when hiding devtools window only.
       int splitOffset = NSHeight([oldDevToolsContentsView frame]);
-      g_browser_process->local_state()->SetInteger(
+
+      profile->GetPrefs()->SetInteger(
           prefs::kDevToolsSplitLocation, splitOffset);
       [oldDevToolsContentsView removeFromSuperview];
       [splitView_ adjustSubviews];

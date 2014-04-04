@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -12,7 +12,7 @@
 
 #include "base/gtest_prod_util.h"
 #include "base/hash_tables.h"
-#include "base/ref_counted.h"
+#include "base/memory/ref_counted.h"
 #include "base/time.h"
 #include "chrome/browser/net/chrome_net_log.h"
 #include "net/base/net_log.h"
@@ -200,10 +200,9 @@ class PassiveLogCollector : public ChromeNetLog::ThreadSafeObserver {
 
     explicit ConnectJobTracker(PassiveLogCollector* parent);
 
-   protected:
+   private:
     virtual Action DoAddEntry(const ChromeNetLog::Entry& entry,
                               SourceInfo* out_info);
-   private:
     DISALLOW_COPY_AND_ASSIGN(ConnectJobTracker);
   };
 
@@ -215,11 +214,10 @@ class PassiveLogCollector : public ChromeNetLog::ThreadSafeObserver {
 
     SocketTracker();
 
-   protected:
+   private:
     virtual Action DoAddEntry(const ChromeNetLog::Entry& entry,
                               SourceInfo* out_info);
 
-   private:
     DISALLOW_COPY_AND_ASSIGN(SocketTracker);
   };
 
@@ -231,11 +229,10 @@ class PassiveLogCollector : public ChromeNetLog::ThreadSafeObserver {
 
     explicit RequestTracker(PassiveLogCollector* parent);
 
-   protected:
+   private:
     virtual Action DoAddEntry(const ChromeNetLog::Entry& entry,
                               SourceInfo* out_info);
 
-   private:
     DISALLOW_COPY_AND_ASSIGN(RequestTracker);
   };
 
@@ -248,11 +245,10 @@ class PassiveLogCollector : public ChromeNetLog::ThreadSafeObserver {
 
     InitProxyResolverTracker();
 
-   protected:
+   private:
     virtual Action DoAddEntry(const ChromeNetLog::Entry& entry,
                               SourceInfo* out_info);
 
-   private:
     DISALLOW_COPY_AND_ASSIGN(InitProxyResolverTracker);
   };
 
@@ -264,11 +260,10 @@ class PassiveLogCollector : public ChromeNetLog::ThreadSafeObserver {
 
     SpdySessionTracker();
 
-   protected:
+   private:
     virtual Action DoAddEntry(const ChromeNetLog::Entry& entry,
                               SourceInfo* out_info);
 
-   private:
     DISALLOW_COPY_AND_ASSIGN(SpdySessionTracker);
   };
 
@@ -280,11 +275,10 @@ class PassiveLogCollector : public ChromeNetLog::ThreadSafeObserver {
 
     DNSRequestTracker();
 
-   protected:
+   private:
     virtual Action DoAddEntry(const ChromeNetLog::Entry& entry,
                               SourceInfo* out_info);
 
-   private:
     DISALLOW_COPY_AND_ASSIGN(DNSRequestTracker);
   };
 
@@ -296,11 +290,10 @@ class PassiveLogCollector : public ChromeNetLog::ThreadSafeObserver {
 
     DNSJobTracker();
 
-   protected:
+   private:
     virtual Action DoAddEntry(const ChromeNetLog::Entry& entry,
                               SourceInfo* out_info);
 
-   private:
     DISALLOW_COPY_AND_ASSIGN(DNSJobTracker);
   };
 
@@ -312,13 +305,42 @@ class PassiveLogCollector : public ChromeNetLog::ThreadSafeObserver {
 
     DiskCacheEntryTracker();
 
+   private:
+    virtual Action DoAddEntry(const ChromeNetLog::Entry& entry,
+                              SourceInfo* out_info);
+
+    DISALLOW_COPY_AND_ASSIGN(DiskCacheEntryTracker);
+  };
+
+  // Tracks the log entries for the last seen SOURCE_DISK_CACHE_ENTRY.
+  class MemCacheEntryTracker : public SourceTracker {
+   public:
+    static const size_t kMaxNumSources;
+    static const size_t kMaxGraveyardSize;
+
+    MemCacheEntryTracker();
+
    protected:
     virtual Action DoAddEntry(const ChromeNetLog::Entry& entry,
                               SourceInfo* out_info);
 
    private:
-    DISALLOW_COPY_AND_ASSIGN(DiskCacheEntryTracker);
+    DISALLOW_COPY_AND_ASSIGN(MemCacheEntryTracker);
   };
+
+  class HttpStreamJobTracker : public SourceTracker {
+   public:
+    static const size_t kMaxNumSources;
+    static const size_t kMaxGraveyardSize;
+
+    explicit HttpStreamJobTracker(PassiveLogCollector* parent);
+
+   private:
+    virtual Action DoAddEntry(const ChromeNetLog::Entry& entry,
+                              SourceInfo* out_info);
+    DISALLOW_COPY_AND_ASSIGN(HttpStreamJobTracker);
+  };
+
 
   PassiveLogCollector();
   ~PassiveLogCollector();
@@ -339,7 +361,7 @@ class PassiveLogCollector : public ChromeNetLog::ThreadSafeObserver {
 
  private:
   // Returns the tracker to use for sources of type |source_type|, or NULL.
-  SourceTrackerInterface* GetTrackerForSourceType_(
+  SourceTrackerInterface* GetTrackerForSourceType(
       net::NetLog::SourceType source_type);
 
   FRIEND_TEST_ALL_PREFIXES(PassiveLogCollectorTest,
@@ -357,6 +379,8 @@ class PassiveLogCollector : public ChromeNetLog::ThreadSafeObserver {
   DNSRequestTracker dns_request_tracker_;
   DNSJobTracker dns_job_tracker_;
   DiskCacheEntryTracker disk_cache_entry_tracker_;
+  MemCacheEntryTracker mem_cache_entry_tracker_;
+  HttpStreamJobTracker http_stream_job_tracker_;
 
   // This array maps each NetLog::SourceType to one of the tracker instances
   // defined above. Use of this array avoid duplicating the list of trackers

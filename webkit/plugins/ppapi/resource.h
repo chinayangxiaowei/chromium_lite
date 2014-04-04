@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,7 +6,7 @@
 #define WEBKIT_PLUGINS_PPAPI_RESOURCE_H_
 
 #include "base/basictypes.h"
-#include "base/ref_counted.h"
+#include "base/memory/ref_counted.h"
 #include "ppapi/c/pp_resource.h"
 #include "webkit/plugins/ppapi/resource_tracker.h"
 
@@ -18,6 +18,7 @@ namespace ppapi {
   F(MockResource) \
   F(PPB_AudioConfig_Impl) \
   F(PPB_Audio_Impl) \
+  F(PPB_Broker_Impl) \
   F(PPB_Buffer_Impl) \
   F(PPB_Context3D_Impl) \
   F(PPB_DirectoryReader_Impl) \
@@ -25,6 +26,7 @@ namespace ppapi {
   F(PPB_FileIO_Impl) \
   F(PPB_FileRef_Impl) \
   F(PPB_FileSystem_Impl) \
+  F(PPB_Flash_Menu_Impl) \
   F(PPB_Flash_NetConnector_Impl) \
   F(PPB_Font_Impl) \
   F(PPB_Graphics2D_Impl) \

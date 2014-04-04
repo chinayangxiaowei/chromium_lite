@@ -61,6 +61,9 @@
 
     <output filename="locale_settings_am.pak" type="data_package" lang="am" />
     <output filename="locale_settings_ar.pak" type="data_package" lang="ar" />
+    <if expr="pp_ifdef('use_third_party_translations')">
+      <output filename="locale_settings_ast.pak" type="data_package" lang="ast" />
+    </if>
     <output filename="locale_settings_bg.pak" type="data_package" lang="bg" />
     <output filename="locale_settings_bn.pak" type="data_package" lang="bn" />
     <output filename="locale_settings_ca.pak" type="data_package" lang="ca" />
@@ -73,10 +76,16 @@
     <output filename="locale_settings_es.pak" type="data_package" lang="es" />
     <output filename="locale_settings_es-419.pak" type="data_package" lang="es-419" />
     <output filename="locale_settings_et.pak" type="data_package" lang="et" />
+    <if expr="pp_ifdef('use_third_party_translations')">
+      <output filename="locale_settings_eu.pak" type="data_package" lang="eu" />
+    </if>
     <output filename="locale_settings_fa.pak" type="data_package" lang="fa" />
     <output filename="locale_settings_fi.pak" type="data_package" lang="fi" />
     <output filename="locale_settings_fil.pak" type="data_package" lang="fil" />
     <output filename="locale_settings_fr.pak" type="data_package" lang="fr" />
+    <if expr="pp_ifdef('use_third_party_translations')">
+      <output filename="locale_settings_gl.pak" type="data_package" lang="gl" />
+    </if>
     <output filename="locale_settings_gu.pak" type="data_package" lang="gu" />
     <output filename="locale_settings_he.pak" type="data_package" lang="he" />
     <output filename="locale_settings_hi.pak" type="data_package" lang="hi" />
@@ -85,8 +94,14 @@
     <output filename="locale_settings_id.pak" type="data_package" lang="id" />
     <output filename="locale_settings_it.pak" type="data_package" lang="it" />
     <output filename="locale_settings_ja.pak" type="data_package" lang="ja" />
+    <if expr="pp_ifdef('use_third_party_translations')">
+      <output filename="locale_settings_ka.pak" type="data_package" lang="ka" />
+    </if>
     <output filename="locale_settings_kn.pak" type="data_package" lang="kn" />
     <output filename="locale_settings_ko.pak" type="data_package" lang="ko" />
+    <if expr="pp_ifdef('use_third_party_translations')">
+      <output filename="locale_settings_ku.pak" type="data_package" lang="ku" />
+    </if>
     <output filename="locale_settings_lt.pak" type="data_package" lang="lt" />
     <output filename="locale_settings_lv.pak" type="data_package" lang="lv" />
     <output filename="locale_settings_ml.pak" type="data_package" lang="ml" />
@@ -109,6 +124,9 @@
     <output filename="locale_settings_te.pak" type="data_package" lang="te" />
     <output filename="locale_settings_th.pak" type="data_package" lang="th" />
     <output filename="locale_settings_tr.pak" type="data_package" lang="tr" />
+    <if expr="pp_ifdef('use_third_party_translations')">
+      <output filename="locale_settings_ug.pak" type="data_package" lang="ug" />
+    </if>
     <output filename="locale_settings_uk.pak" type="data_package" lang="uk" />
     <output filename="locale_settings_vi.pak" type="data_package" lang="vi" />
     <output filename="locale_settings_zh-CN.pak" type="data_package" lang="zh-CN" />
@@ -256,68 +274,6 @@
         en-US
       </message>
 
-      <!-- The width of the title column of the Options dialog box, in characters (see -->
-      <!-- above for defn of character width) -->
-      <message name="IDS_OPTIONS_DIALOG_LEFT_COLUMN_WIDTH_CHARS" use_name_for_id="true">
-        23
-      </message>
-
-      <!-- The width of the Options Reset confirmation box, in characters (see -->
-      <!-- above for defn of character width) -->
-      <message name="IDS_OPTIONS_RESET_CONFIRM_BOX_WIDTH_CHARS" use_name_for_id="true">
-        80
-      </message>
-
-      <!-- The width of the Content Settings dialog box, in characters (character width = -->
-      <!-- average character width for default dialog box font) -->
-      <message name="IDS_CONTENT_SETTINGS_DIALOG_WIDTH_CHARS" use_name_for_id="true">
-        76
-      </message>
-
-      <!-- The height of the Content Settings dialog box, in lines (line height = character -->
-      <!-- height for default dialog box font) -->
-      <message name="IDS_CONTENT_SETTINGS_DIALOG_HEIGHT_LINES" use_name_for_id="true">
-        24
-      </message>
-
-      <!-- The width of the list box in the Content Settings dialog box, in characters (character width = -->
-      <!-- average character width for default list box font) -->
-      <message name="IDS_CONTENT_SETTINGS_DIALOG_LISTBOX_WIDTH_CHARS" use_name_for_id="true">
-        18
-      </message>
-
-      <!-- The width and height of the URL picker dialog box in characters and lines -->
-      <!-- (See above). -->
-      <message name="IDS_URLPICKER_DIALOG_WIDTH_CHARS" use_name_for_id="true">
-        80
-      </message>
-      <message name="IDS_URLPICKER_DIALOG_HEIGHT_LINES" use_name_for_id="true">
-        30
-      </message>
-
-      <!-- The width of the page column of the URL picker dialog box, in characters.  -->
-      <message name="IDS_URLPICKER_DIALOG_LEFT_COLUMN_WIDTH_CHARS" use_name_for_id="true">
-        33
-      </message>
-
-      <!-- The width and height of the Passwords and Exceptions dialog box in -->
-      <!-- characters and lines (See above). -->
-      <message name="IDS_PASSWORDS_DIALOG_WIDTH_CHARS" use_name_for_id="true">
-        106
-      </message>
-      <message name="IDS_PASSWORDS_DIALOG_HEIGHT_LINES" use_name_for_id="true">
-        27
-      </message>
-
-      <!-- The width and height of the Clear Browsing Data dialog box in characters and -->
-      <!-- lines (See above). -->
-      <message name="IDS_CLEARDATA_DIALOG_WIDTH_CHARS" use_name_for_id="true">
-        63
-      </message>
-      <message name="IDS_CLEARDATA_DIALOG_HEIGHT_LINES" use_name_for_id="true">
-        17
-      </message>
-
       <!-- The width and height of the Import dialog box in characters and lines (See -->
       <!-- above). -->
       <message name="IDS_IMPORT_DIALOG_WIDTH_CHARS" use_name_for_id="true">
@@ -336,13 +292,13 @@
         4
       </message>
 
-      <!-- The width and height of the Fonts and Languages dialog box in characters and -->
-      <!-- lines (See above). -->
-      <message name="IDS_FONTSLANG_DIALOG_WIDTH_CHARS" use_name_for_id="true">
-        96
+      <!-- The width and height of the Join Wi-Fi network dialog box in -->
+      <!-- characters and lines (See above). -->
+      <message name="IDS_JOIN_WIFI_NETWORK_DIALOG_WIDTH_CHARS" use_name_for_id="true">
+        86
       </message>
-      <message name="IDS_FONTSLANG_DIALOG_HEIGHT_LINES" use_name_for_id="true">
-        26
+      <message name="IDS_JOIN_WIFI_NETWORK_DIALOG_MINIMUM_HEIGHT_LINES" use_name_for_id="true">
+        4
       </message>
 
       <!-- The width and height of the Page Info dialog box in characters and lines -->
@@ -396,15 +352,6 @@
           14
         </message>
       </if>
-
-      <!-- The width and height of the Cookies dialog box in characters and lines -->
-      <!-- (See above). -->
-      <message name="IDS_COOKIES_DIALOG_WIDTH_CHARS" use_name_for_id="true">
-        80
-      </message>
-      <message name="IDS_COOKIES_DIALOG_HEIGHT_LINES" use_name_for_id="true">
-        29
-      </message>
 
       <!-- The width and height of the Import Progress dialog box in characters and -->
       <!-- lines (See above). -->
@@ -491,16 +438,26 @@
 
       <!-- The width of the sync setup wizard / login dialog in characters. -->
       <message name="IDS_SYNC_SETUP_WIZARD_WIDTH_CHARS" use_name_for_id="true">
-        46
+        60
       </message>
 
       <!-- The height of the sync setup wizard / login dialog in lines. -->
       <message name="IDS_SYNC_SETUP_WIZARD_HEIGHT_LINES" use_name_for_id="true">
-        16
+        19
       </message>
 
       <message name="IDS_SYNC_GET_ACCESS_CODE_URL" translateable="false">
         https://www.google.com/accounts/IssuedAuthSubTokens?hl=[GRITLANGCODE]
+      </message>
+
+      <!-- The width of the remoting setup wizard / login dialog in characters. -->
+      <message name="IDS_REMOTING_SETUP_WIZARD_WIDTH_CHARS" use_name_for_id="true">
+        56
+      </message>
+
+      <!-- The height of the remoting setup wizard / login dialog in lines. -->
+      <message name="IDS_REMOTING_SETUP_WIZARD_HEIGHT_LINES" use_name_for_id="true">
+        16
       </message>
 
       <!-- The width of the cloud print setup wizard / login dialog in -->
@@ -531,22 +488,6 @@
         15
       </message>
 
-      <!-- The default width/height for confirmation dialogs. -->
-      <message name="IDS_CONFIRM_MESSAGE_BOX_DEFAULT_WIDTH_CHARS" use_name_for_id="true">
-        50
-      </message>
-      <message name="IDS_CONFIRM_MESSAGE_BOX_DEFAULT_HEIGHT_LINES" use_name_for_id="true">
-        5
-      </message>
-
-      <!-- The default width/height for the stop syncing confirmation dialog. -->
-      <message name="IDS_CONFIRM_STOP_SYNCING_DIALOG_WIDTH_CHARS" use_name_for_id="true">
-        60
-      </message>
-      <message name="IDS_CONFIRM_STOP_SYNCING_DIALOG_HEIGHT_LINES" use_name_for_id="true">
-        8
-      </message>
-
       <!-- The default width and min height for the 'download_in_progress' dialog. -->
       <message name="IDS_DOWNLOAD_IN_PROGRESS_WIDTH_CHARS" use_name_for_id="true">
         67
@@ -570,54 +511,6 @@
         </message>
       </if>
 
-      <!-- The width of the AutoFill dialog in characters. -->
-      <message name="IDS_AUTOFILL_DIALOG_WIDTH_CHARS" use_name_for_id="true">
-        94
-      </message>
-
-      <!-- The height of the AutoFill dialog in lines. -->
-      <message name="IDS_AUTOFILL_DIALOG_HEIGHT_LINES" use_name_for_id="true">
-        32
-      </message>
-
-      <!-- The width of the AutoFill edit Address dialog in characters. -->
-      <message name="IDS_AUTOFILL_DIALOG_EDIT_ADDRESS_WIDTH_CHARS" use_name_for_id="true">
-        80
-      </message>
-
-      <!-- The height of the AutoFill edit Address dialog in lines. -->
-      <message name="IDS_AUTOFILL_DIALOG_EDIT_ADDRESS_HEIGHT_LINES" use_name_for_id="true">
-        25
-      </message>
-
-      <!-- The width of the AutoFill edit Credit Card dialog in characters. -->
-      <message name="IDS_AUTOFILL_DIALOG_EDIT_CCARD_WIDTH_CHARS" use_name_for_id="true">
-        60
-      </message>
-
-      <!-- The height of the AutoFill edit Credit Card dialog in lines. -->
-      <message name="IDS_AUTOFILL_DIALOG_EDIT_CCARD_HEIGHT_LINES" use_name_for_id="true">
-        10
-      </message>
-
-      <!-- The width and height of the Content Settings Exceptions dialog box in -->
-      <!-- characters and lines (See above). -->
-      <message name="IDS_CONTENT_EXCEPTION_DIALOG_WIDTH_CHARS" use_name_for_id="true">
-        90
-      </message>
-      <message name="IDS_CONTENT_EXCEPTION_DIALOG_HEIGHT_LINES" use_name_for_id="true">
-        16
-      </message>
-
-      <!-- The width and height of the Simple Content Settings Exceptions -->
-      <!-- dialog box in characters and lines (See above). -->
-      <message name="IDS_SIMPLE_CONTENT_EXCEPTION_DIALOG_WIDTH_CHARS" use_name_for_id="true">
-        90
-      </message>
-      <message name="IDS_SIMPLE_CONTENT_EXCEPTION_DIALOG_HEIGHT_LINES" use_name_for_id="true">
-        16
-      </message>
-
       <!-- The width of the Instant confirm dialog box in characters. -->
       <message name="IDS_INSTANT_CONFIRM_DIALOG_WIDTH_CHARS" use_name_for_id="true">
         70
@@ -630,7 +523,7 @@
           60
         </message>
         <message name="IDS_CAPTCHA_INPUT_DIALOG_HEIGHT_LINES" use_name_for_id="true">
-          12
+          13
         </message>
 
         <!-- The width and height of the TPM setting dialog box in -->

@@ -1,19 +1,17 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "base/logging.h"
 #include "base/basictypes.h"
-#include "base/scoped_ptr.h"
+#include "base/memory/scoped_ptr.h"
 #include "base/time.h"
 #include "media/audio/audio_manager.h"
 #include "media/audio/fake_audio_output_stream.h"
 #include "media/audio/simple_sources.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
-namespace {
-
-void GenerateRandomData(char* buffer, uint32 len) {
+static void GenerateRandomData(char* buffer, uint32 len) {
   static bool called = false;
   if (!called) {
     called = true;
@@ -25,8 +23,6 @@ void GenerateRandomData(char* buffer, uint32 len) {
   for (uint32 i = 0; i < len; i++)
     buffer[i] = static_cast<char>(rand());
 }
-
-}  // namespace
 
 // To test write size smaller than read size.
 TEST(SimpleSourcesTest, PushSourceSmallerWrite) {

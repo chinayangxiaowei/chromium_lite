@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,10 +7,10 @@
 #pragma once
 
 #include <algorithm>
-#include <string>
-#include <vector>
 #include <map>
 #include <set>
+#include <string>
+#include <vector>
 
 #include "base/format_macros.h"
 #include "base/string16.h"
@@ -66,6 +66,30 @@ enum IPCMessageStart {
   IndexedDBMsgStart,
   PepperFileMsgStart,
   SpeechInputMsgStart,
+  PepperMsgStart,
+  AutofillMsgStart,
+  SafeBrowsingMsgStart,
+  P2PMsgStart,
+  SocketStreamMsgStart,
+  ResourceMsgStart,
+  FileSystemMsgStart,
+  ChildProcessMsgStart,
+  ClipboardMsgStart,
+  BlobMsgStart,
+  AppCacheMsgStart,
+  DeviceOrientationMsgStart,
+  DesktopNotificationMsgStart,
+  GeolocationMsgStart,
+  AudioMsgStart,
+  ChromeMsgStart,
+  DragMsgStart,
+  PrintMsgStart,
+  SpellCheckMsgStart,
+  ExtensionMsgStart,
+  VideoCaptureMsgStart,
+  QuotaMsgStart,
+  IconMsgStart,
+  LastIPCMsgStart      // Must come last.
 };
 
 class DictionaryValue;
@@ -116,6 +140,12 @@ class MessageIterator {
  private:
   const Message& msg_;
   mutable void* iter_;
+};
+
+//-----------------------------------------------------------------------------
+// A dummy struct to place first just to allow leading commas for all
+// members in the macro-generated constructor initializer lists.
+struct NoParams {
 };
 
 //-----------------------------------------------------------------------------
@@ -404,7 +434,7 @@ template <>
 struct ParamTraits<std::vector<unsigned char> > {
   typedef std::vector<unsigned char> param_type;
   static void Write(Message* m, const param_type& p) {
-    if (p.size() == 0) {
+    if (p.empty()) {
       m->WriteData(NULL, 0);
     } else {
       m->WriteData(reinterpret_cast<const char*>(&p.front()),
@@ -430,7 +460,7 @@ template <>
 struct ParamTraits<std::vector<char> > {
   typedef std::vector<char> param_type;
   static void Write(Message* m, const param_type& p) {
-    if (p.size() == 0) {
+    if (p.empty()) {
       m->WriteData(NULL, 0);
     } else {
       m->WriteData(&p.front(), static_cast<int>(p.size()));
@@ -763,8 +793,10 @@ struct ParamTraits<LogData> {
 template <>
 struct ParamTraits<Message> {
   static void Write(Message* m, const Message& p) {
-    m->WriteInt(p.size());
-    m->WriteData(reinterpret_cast<const char*>(p.data()), p.size());
+    DCHECK(p.size() <= INT_MAX);
+    int message_size = static_cast<int>(p.size());
+    m->WriteInt(message_size);
+    m->WriteData(reinterpret_cast<const char*>(p.data()), message_size);
   }
   static bool Read(const Message* m, void** iter, Message* r) {
     int size;

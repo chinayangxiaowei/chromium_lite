@@ -630,6 +630,11 @@ TEST_F(ContextMenuTest, IEOpen) {
 }
 
 TEST_F(ContextMenuTest, IEOpenInNewWindow) {
+  // See crbug.com/64794.
+  if (GetInstalledIEVersion() == IE_7) {
+    LOG(INFO) << "Not running test with IE7";
+    return;
+  }
   server_mock_.ExpectAndServeAnyRequests(CFInvocation::None());
   MockIEEventSink new_window_mock;
   new_window_mock.ExpectAnyNavigations();
@@ -700,6 +705,7 @@ TEST_F(ContextMenuTest, CFOpenLinkInNewWindow) {
 
   // Invoke 'Open link in new window' context menu item.
   EXPECT_CALL(acc_observer_, OnAccDocLoad(_))
+      .Times(testing::AtMost(2))
       .WillOnce(AccRightClick(AccObjectMatcher(L"", L"link")))
       .WillOnce(testing::Return());
   EXPECT_CALL(acc_observer_, OnMenuPopup(_))
@@ -959,7 +965,8 @@ TEST_F(ContextMenuTest, CFBackForward) {
   EXPECT_CALL(ie_mock_, OnLoad(IN_CF, StrEq(page3)))
       .WillOnce(CloseBrowserMock(&ie_mock_));
 
-  LaunchIEAndNavigate(page1);
+  LaunchIENavigateAndLoop(page1,
+                          kChromeFrameVeryLongNavigationTimeoutInSeconds);
 }
 
 }  // namespace chrome_frame_test

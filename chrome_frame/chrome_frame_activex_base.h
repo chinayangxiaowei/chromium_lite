@@ -24,7 +24,6 @@
 #include "base/win/scoped_comptr.h"
 #include "base/win/scoped_variant.h"
 #include "grit/chrome_frame_resources.h"
-#include "ceee/ie/common/ceee_util.h"
 #include "chrome/common/url_constants.h"
 #include "chrome_frame/chrome_frame_plugin.h"
 #include "chrome_frame/com_message_event.h"
@@ -118,26 +117,6 @@ class ATL_NO_VTABLE ProxyDIChromeFrameEvents
                          arraysize(args));
   }
 
-  void Fire_onextensionready(BSTR path, long response) {  // NOLINT
-    // Arguments in reverse order to the function declaration, because
-    // that's what DISPPARAMS requires.
-    VARIANT args[2] = { { VT_I4, }, { VT_BSTR, } };
-    args[0].lVal = response;
-    args[1].bstrVal = path;
-
-    FireMethodWithParams(CF_EVENT_DISPID_ONEXTENSIONREADY,
-                         args,
-                         arraysize(args));
-  }
-
-  void Fire_ongetenabledextensionscomplete(SAFEARRAY* extension_dirs) {
-    VARIANT args[1] = { { VT_ARRAY | VT_BSTR } };
-    args[0].parray = extension_dirs;
-
-    FireMethodWithParams(CF_EVENT_DISPID_ONGETENABLEDEXTENSIONSCOMPLETE,
-                         args, arraysize(args));
-  }
-
   void Fire_onchannelerror() {  // NOLINT
     FireMethodWithParams(CF_EVENT_DISPID_ONCHANNELERROR, NULL, 0);
   }
@@ -148,6 +127,18 @@ class ATL_NO_VTABLE ProxyDIChromeFrameEvents
 };
 
 extern bool g_first_launch_by_process_;
+
+namespace chrome_frame {
+// Implemented outside this file so that the header doesn't include
+// automation_messages.h.
+std::string ActiveXCreateUrl(const GURL& parsed_url,
+                             const AttachExternalTabParams& params);
+int GetDisposition(const AttachExternalTabParams& params);
+void GetMiniContextMenuData(UINT cmd,
+                            const MiniContextMenuParams& params,
+                            GURL* referrer,
+                            GURL* url);
+}  // namespace chrome_frame
 
 // Common implementation for ActiveX and Active Document
 template <class T, const CLSID& class_id>
@@ -163,7 +154,6 @@ class ATL_NO_VTABLE ChromeFrameActivexBase :  // NOLINT
   public com_util::IProvideClassInfo2Impl<class_id,
                                           DIID_DIChromeFrameEvents>,
   public com_util::IDispatchImpl<IChromeFrame>,
-  public IChromeFrameInternal,
   public IConnectionPointContainerImpl<T>,
   public ProxyDIChromeFrameEvents<T>,
   public IPropertyNotifySinkCP<T>,
@@ -197,7 +187,6 @@ DECLARE_NOT_AGGREGATABLE(T)
 BEGIN_COM_MAP(ChromeFrameActivexBase)
   COM_INTERFACE_ENTRY(IChromeFrame)
   COM_INTERFACE_ENTRY(IDispatch)
-  COM_INTERFACE_ENTRY(IChromeFrameInternal)
   COM_INTERFACE_ENTRY(IViewObjectEx)
   COM_INTERFACE_ENTRY(IViewObject2)
   COM_INTERFACE_ENTRY(IViewObject)
@@ -263,11 +252,11 @@ END_MSG_MAP()
     // Used to perform one time tasks.
     if (g_first_launch_by_process_) {
       g_first_launch_by_process_ = false;
-      THREAD_SAFE_UMA_HISTOGRAM_CUSTOM_COUNTS("ChromeFrame.IEVersion",
-                                              GetIEVersion(),
-                                              IE_INVALID,
-                                              IE_9,
-                                              IE_9 + 1);
+      UMA_HISTOGRAM_CUSTOM_COUNTS("ChromeFrame.IEVersion",
+                                  GetIEVersion(),
+                                  IE_INVALID,
+                                  IE_9,
+                                  IE_9 + 1);
     }
 
     return S_OK;
@@ -358,10 +347,8 @@ END_MSG_MAP()
         case IDS_CONTENT_CONTEXT_SAVEVIDEOAS:
         case IDS_CONTENT_CONTEXT_SAVEIMAGEAS:
         case IDS_CONTENT_CONTEXT_SAVELINKAS: {
-          const GURL& referrer = params.frame_url.is_empty() ?
-              params.page_url : params.frame_url;
-          const GURL& url = (cmd == IDS_CONTENT_CONTEXT_SAVELINKAS ?
-              params.link_url : params.src_url);
+          GURL referrer, url;
+          chrome_frame::GetMiniContextMenuData(cmd, params, &referrer, &url);
           DoFileDownloadInIE(UTF8ToWide(url.spec()).c_str());
           return true;
         }
@@ -398,12 +385,7 @@ END_MSG_MAP()
                  (lstrcmpi(profile_name.c_str(), kRundllProfileName) == 0);
     // Browsers without IDeleteBrowsingHistory in non-priv mode
     // have their profiles moved into "Temporary Internet Files".
-    //
-    // If CEEE is registered, we must have a persistent profile. We
-    // considered checking if e.g. ceee_ie.dll is loaded in the process
-    // but this gets into edge cases when the user enables the CEEE add-on
-    // after CF is first loaded.
-    if (is_IE && GetIEVersion() < IE_8 && !ceee_util::IsIeCeeeRegistered()) {
+    if (is_IE && GetIEVersion() < IE_8) {
       *profile_path = GetIETemporaryFilesFolder();
       *profile_path = profile_path->Append(L"Google Chrome Frame");
     } else {
@@ -498,17 +480,8 @@ END_MSG_MAP()
       parsed_url = parsed_url.ReplaceComponents(r);
     }
 
-    std::string url = base::StringPrintf(
-        "%hs?attach_external_tab&%I64u&%d&%d&%d&%d&%d&%hs",
-        parsed_url.GetOrigin().spec().c_str(),
-        params.cookie,
-        params.disposition,
-        params.dimensions.x(),
-        params.dimensions.y(),
-        params.dimensions.width(),
-        params.dimensions.height(),
-        params.profile_name.c_str());
-    HostNavigate(GURL(url), GURL(), params.disposition);
+    std::string url = chrome_frame::ActiveXCreateUrl(parsed_url, params);
+    HostNavigate(GURL(url), GURL(), chrome_frame::GetDisposition(params));
   }
 
   virtual void OnHandleContextMenu(HANDLE menu_handle,
@@ -786,7 +759,7 @@ END_MSG_MAP()
       return hr;
 
     DCHECK(handlers != NULL);
-    std::remove(handlers->begin(), handlers->end(), listener);
+    handlers->erase(base::win::ScopedComPtr<IDispatch>(listener));
 
     return hr;
   }
@@ -831,68 +804,18 @@ END_MSG_MAP()
   }
 
   STDMETHOD(installExtension)(BSTR crx_path) {
-    DCHECK(automation_client_.get());
-
-    if (NULL == crx_path) {
-      NOTREACHED();
-      return E_INVALIDARG;
-    }
-
-    if (!is_privileged()) {
-      DLOG(ERROR) << "Attempt to installExtension in non-privileged mode";
-      return E_ACCESSDENIED;
-    }
-
-    FilePath::StringType crx_path_str(crx_path);
-    FilePath crx_file_path(crx_path_str);
-
-    automation_client_->InstallExtension(crx_file_path, NULL);
-    return S_OK;
+    NOTREACHED();  // Deprecated.
+    return E_NOTIMPL;
   }
 
   STDMETHOD(loadExtension)(BSTR path) {
-    DCHECK(automation_client_.get());
-
-    if (NULL == path) {
-      NOTREACHED();
-      return E_INVALIDARG;
-    }
-
-    if (!is_privileged()) {
-      DLOG(ERROR) << "Attempt to loadExtension in non-privileged mode";
-      return E_ACCESSDENIED;
-    }
-
-    FilePath::StringType path_str(path);
-    FilePath file_path(path_str);
-
-    automation_client_->LoadExpandedExtension(file_path, NULL);
-    return S_OK;
+    NOTREACHED();  // Deprecated.
+    return E_NOTIMPL;
   }
 
   STDMETHOD(getEnabledExtensions)() {
-    DCHECK(automation_client_.get());
-
-    if (!is_privileged()) {
-      DLOG(ERROR) << "Attempt to getEnabledExtensions in non-privileged mode";
-      return E_ACCESSDENIED;
-    }
-
-    automation_client_->GetEnabledExtensions(NULL);
-    return S_OK;
-  }
-
-  STDMETHOD(getSessionId)(int* session_id) {
-    DCHECK(automation_client_.get());
-    DCHECK(session_id);
-
-    if (!is_privileged()) {
-      DLOG(ERROR) << "Attempt to getSessionId in non-privileged mode";
-      return E_ACCESSDENIED;
-    }
-
-    *session_id = automation_client_->GetSessionId();
-    return (*session_id) == -1 ? S_FALSE : S_OK;
+    NOTREACHED();  // Deprecated.
+    return E_NOTIMPL;
   }
 
   STDMETHOD(registerBhoIfNeeded)() {
@@ -1035,7 +958,8 @@ END_MSG_MAP()
       RECT dummy_pos_rect = {0};
       RECT dummy_clip_rect = {0};
       OLEINPLACEFRAMEINFO dummy_frame_info = {0};
-      if (FAILED(m_spInPlaceSite->GetWindowContext(in_place_frame_.Receive(),
+      if (!m_spInPlaceSite ||
+          FAILED(m_spInPlaceSite->GetWindowContext(in_place_frame_.Receive(),
                                                    dummy_ui_window.Receive(),
                                                    &dummy_pos_rect,
                                                    &dummy_clip_rect,

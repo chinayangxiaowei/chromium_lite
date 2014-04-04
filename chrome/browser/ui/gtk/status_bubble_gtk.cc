@@ -11,11 +11,11 @@
 #include "base/i18n/rtl.h"
 #include "base/message_loop.h"
 #include "base/utf_string_conversions.h"
-#include "chrome/browser/ui/gtk/gtk_theme_provider.h"
+#include "chrome/browser/ui/gtk/gtk_theme_service.h"
 #include "chrome/browser/ui/gtk/gtk_util.h"
 #include "chrome/browser/ui/gtk/rounded_window.h"
 #include "chrome/browser/ui/gtk/slide_animator_gtk.h"
-#include "chrome/common/notification_service.h"
+#include "content/common/notification_service.h"
 #include "ui/base/animation/slide_animation.h"
 #include "ui/base/text/text_elider.h"
 
@@ -38,9 +38,8 @@ const int kMousePadding = 20;
 }  // namespace
 
 StatusBubbleGtk::StatusBubbleGtk(Profile* profile)
-    : theme_provider_(GtkThemeProvider::GetFrom(profile)),
+    : theme_service_(GtkThemeService::GetFrom(profile)),
       padding_(NULL),
-      label_(NULL),
       flip_horizontally_(false),
       y_offset_(0),
       download_shelf_is_visible_(false),
@@ -49,12 +48,13 @@ StatusBubbleGtk::StatusBubbleGtk(Profile* profile)
       ignore_next_left_content_(false) {
   InitWidgets();
 
-  theme_provider_->InitThemesFor(this);
+  theme_service_->InitThemesFor(this);
   registrar_.Add(this, NotificationType::BROWSER_THEME_CHANGED,
                  NotificationService::AllSources());
 }
 
 StatusBubbleGtk::~StatusBubbleGtk() {
+  label_.Destroy();
   container_.Destroy();
 }
 
@@ -107,7 +107,7 @@ void StatusBubbleGtk::SetStatusTextToURL() {
   // TODO(tc): We don't actually use gfx::Font as the font in the status
   // bubble.  We should extend ui::ElideUrl to take some sort of pango font.
   url_text_ = UTF16ToUTF8(ui::ElideUrl(url_, gfx::Font(), desired_width,
-                          UTF16ToWideHack(languages_)));
+                          UTF16ToUTF8(languages_)));
   SetStatusTextTo(url_text_);
 }
 
@@ -134,9 +134,9 @@ void StatusBubbleGtk::SetStatusTextTo(const std::string& status_utf8) {
     hide_timer_.Start(base::TimeDelta::FromMilliseconds(kHideDelay),
                       this, &StatusBubbleGtk::Hide);
   } else {
-    gtk_label_set_text(GTK_LABEL(label_), status_utf8.c_str());
+    gtk_label_set_text(GTK_LABEL(label_.get()), status_utf8.c_str());
     GtkRequisition req;
-    gtk_widget_size_request(label_, &req);
+    gtk_widget_size_request(label_.get(), &req);
     desired_width_ = req.width;
 
     UpdateLabelSizeRequest();
@@ -245,14 +245,14 @@ void StatusBubbleGtk::Observe(NotificationType type,
 void StatusBubbleGtk::InitWidgets() {
   bool ltr = !base::i18n::IsRTL();
 
-  label_ = gtk_label_new(NULL);
+  label_.Own(gtk_label_new(NULL));
 
   padding_ = gtk_alignment_new(0, 0, 1, 1);
   gtk_alignment_set_padding(GTK_ALIGNMENT(padding_),
       kInternalTopBottomPadding, kInternalTopBottomPadding,
       kInternalLeftRightPadding + (ltr ? 0 : kCornerSize),
       kInternalLeftRightPadding + (ltr ? kCornerSize : 0));
-  gtk_container_add(GTK_CONTAINER(padding_), label_);
+  gtk_container_add(GTK_CONTAINER(padding_), label_.get());
   gtk_widget_show_all(padding_);
 
   container_.Own(gtk_event_box_new());
@@ -278,24 +278,24 @@ void StatusBubbleGtk::InitWidgets() {
 }
 
 void StatusBubbleGtk::UserChangedTheme() {
-  if (theme_provider_->UseGtkTheme()) {
-    gtk_widget_modify_fg(label_, GTK_STATE_NORMAL, NULL);
+  if (theme_service_->UseGtkTheme()) {
+    gtk_widget_modify_fg(label_.get(), GTK_STATE_NORMAL, NULL);
     gtk_widget_modify_bg(container_.get(), GTK_STATE_NORMAL, NULL);
   } else {
     // TODO(erg): This is the closest to "text that will look good on a
     // toolbar" that I can find. Maybe in later iterations of the theme system,
     // there will be a better color to pick.
     GdkColor bookmark_text =
-        theme_provider_->GetGdkColor(BrowserThemeProvider::COLOR_BOOKMARK_TEXT);
-    gtk_widget_modify_fg(label_, GTK_STATE_NORMAL, &bookmark_text);
+        theme_service_->GetGdkColor(ThemeService::COLOR_BOOKMARK_TEXT);
+    gtk_widget_modify_fg(label_.get(), GTK_STATE_NORMAL, &bookmark_text);
 
     GdkColor toolbar_color =
-        theme_provider_->GetGdkColor(BrowserThemeProvider::COLOR_TOOLBAR);
+        theme_service_->GetGdkColor(ThemeService::COLOR_TOOLBAR);
     gtk_widget_modify_bg(container_.get(), GTK_STATE_NORMAL, &toolbar_color);
   }
 
   gtk_util::SetRoundedWindowBorderColor(container_.get(),
-                                        theme_provider_->GetBorderColor());
+                                        theme_service_->GetBorderColor());
 }
 
 void StatusBubbleGtk::SetFlipHorizontally(bool flip_horizontally) {
@@ -324,7 +324,7 @@ void StatusBubbleGtk::SetFlipHorizontally(bool flip_horizontally) {
 }
 
 void StatusBubbleGtk::ExpandURL() {
-  start_width_ = label_->allocation.width;
+  start_width_ = label_.get()->allocation.width;
   expand_animation_.reset(new ui::SlideAnimation(this));
   expand_animation_->SetTweenType(ui::Tween::LINEAR);
   expand_animation_->Show();
@@ -334,13 +334,13 @@ void StatusBubbleGtk::ExpandURL() {
 
 void StatusBubbleGtk::UpdateLabelSizeRequest() {
   if (!expanded() || !expand_animation_->is_animating()) {
-    gtk_widget_set_size_request(label_, -1, -1);
+    gtk_widget_set_size_request(label_.get(), -1, -1);
     return;
   }
 
   int new_width = start_width_ +
       (desired_width_ - start_width_) * expand_animation_->GetCurrentValue();
-  gtk_widget_set_size_request(label_, new_width, -1);
+  gtk_widget_set_size_request(label_.get(), new_width, -1);
 }
 
 // See http://crbug.com/68897 for why we have to handle this event.

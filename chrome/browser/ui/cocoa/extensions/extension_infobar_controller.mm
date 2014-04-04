@@ -8,7 +8,7 @@
 
 #include "chrome/browser/extensions/extension_host.h"
 #include "chrome/browser/extensions/extension_infobar_delegate.h"
-#include "chrome/browser/tab_contents/tab_contents.h"
+#include "chrome/browser/extensions/image_loading_tracker.h"
 #import "chrome/browser/ui/cocoa/animatable_view.h"
 #import "chrome/browser/ui/cocoa/extensions/extension_action_context_menu.h"
 #import "chrome/browser/ui/cocoa/menu_button.h"
@@ -16,10 +16,11 @@
 #include "chrome/common/extensions/extension.h"
 #include "chrome/common/extensions/extension_icon_set.h"
 #include "chrome/common/extensions/extension_resource.h"
-#include "gfx/canvas_skia.h"
+#include "content/browser/tab_contents/tab_contents.h"
 #include "grit/theme_resources.h"
 #include "skia/ext/skia_utils_mac.h"
 #include "ui/base/resource/resource_bundle.h"
+#include "ui/gfx/canvas_skia.h"
 
 namespace {
 const CGFloat kAnimationDuration = 0.12;
@@ -82,7 +83,7 @@ class InfobarBridge : public ExtensionInfoBarDelegate::DelegateObserver,
   // TODO(andybons): The infobar view implementations share a lot of the same
   // code. Come up with a strategy to share amongst them.
   virtual void OnImageLoaded(
-      SkBitmap* image, ExtensionResource resource, int index) {
+      SkBitmap* image, const ExtensionResource& resource, int index) {
     if (!delegate_)
       return;  // The delegate can go away while the image asynchronously loads.
 

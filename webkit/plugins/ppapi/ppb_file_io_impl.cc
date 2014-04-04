@@ -205,7 +205,8 @@ PPB_FileIO_Impl::PPB_FileIO_Impl(PluginInstance* instance)
       ALLOW_THIS_IN_INITIALIZER_LIST(callback_factory_(this)),
       file_(base::kInvalidPlatformFileValue),
       callback_(),
-      info_(NULL) {
+      info_(NULL),
+      read_buffer_(NULL) {
 }
 
 PPB_FileIO_Impl::~PPB_FileIO_Impl() {
@@ -252,16 +253,29 @@ int32_t PPB_FileIO_Impl::Open(PPB_FileRef_Impl* file_ref,
   } else {
     flags |= base::PLATFORM_FILE_OPEN;
   }
-
   file_system_type_ = file_ref->GetFileSystemType();
-  if (!instance()->delegate()->AsyncOpenFile(
-          file_ref->GetSystemPath(), flags,
-          callback_factory_.NewCallback(
-              &PPB_FileIO_Impl::AsyncOpenFileCallback)))
-    return PP_ERROR_FAILED;
+  switch (file_system_type_) {
+    case PP_FILESYSTEMTYPE_EXTERNAL:
+      if (!instance()->delegate()->AsyncOpenFile(
+              file_ref->GetSystemPath(), flags,
+              callback_factory_.NewCallback(
+                  &PPB_FileIO_Impl::AsyncOpenFileCallback)))
+        return PP_ERROR_FAILED;
+      break;
+    case PP_FILESYSTEMTYPE_LOCALPERSISTENT:
+    case PP_FILESYSTEMTYPE_LOCALTEMPORARY:
+      if (!instance()->delegate()->AsyncOpenFileSystemURL(
+              file_ref->GetFileSystemURL(), flags,
+              callback_factory_.NewCallback(
+                  &PPB_FileIO_Impl::AsyncOpenFileCallback)))
+        return PP_ERROR_FAILED;
+      break;
+    default:
+      return PP_ERROR_FAILED;
+  }
 
   RegisterCallback(callback);
-  return PP_ERROR_WOULDBLOCK;
+  return PP_OK_COMPLETIONPENDING;
 }
 
 int32_t PPB_FileIO_Impl::Query(PP_FileInfo_Dev* info,
@@ -282,7 +296,7 @@ int32_t PPB_FileIO_Impl::Query(PP_FileInfo_Dev* info,
     return PP_ERROR_FAILED;
 
   RegisterCallback(callback);
-  return PP_ERROR_WOULDBLOCK;
+  return PP_OK_COMPLETIONPENDING;
 }
 
 int32_t PPB_FileIO_Impl::Touch(PP_Time last_access_time,
@@ -300,7 +314,7 @@ int32_t PPB_FileIO_Impl::Touch(PP_Time last_access_time,
     return PP_ERROR_FAILED;
 
   RegisterCallback(callback);
-  return PP_ERROR_WOULDBLOCK;
+  return PP_OK_COMPLETIONPENDING;
 }
 
 int32_t PPB_FileIO_Impl::Read(int64_t offset,
@@ -311,14 +325,18 @@ int32_t PPB_FileIO_Impl::Read(int64_t offset,
   if (rv != PP_OK)
     return rv;
 
+  // If |read_buffer__|, a callback should be pending (caught above).
+  DCHECK(!read_buffer_);
+  read_buffer_ = buffer;
+
   if (!base::FileUtilProxy::Read(
           instance()->delegate()->GetFileThreadMessageLoopProxy(),
-          file_, offset, buffer, bytes_to_read,
-          callback_factory_.NewCallback(&PPB_FileIO_Impl::ReadWriteCallback)))
+          file_, offset, bytes_to_read,
+          callback_factory_.NewCallback(&PPB_FileIO_Impl::ReadCallback)))
     return PP_ERROR_FAILED;
 
   RegisterCallback(callback);
-  return PP_ERROR_WOULDBLOCK;
+  return PP_OK_COMPLETIONPENDING;
 }
 
 int32_t PPB_FileIO_Impl::Write(int64_t offset,
@@ -332,11 +350,11 @@ int32_t PPB_FileIO_Impl::Write(int64_t offset,
   if (!base::FileUtilProxy::Write(
           instance()->delegate()->GetFileThreadMessageLoopProxy(),
           file_, offset, buffer, bytes_to_write,
-          callback_factory_.NewCallback(&PPB_FileIO_Impl::ReadWriteCallback)))
+          callback_factory_.NewCallback(&PPB_FileIO_Impl::WriteCallback)))
     return PP_ERROR_FAILED;
 
   RegisterCallback(callback);
-  return PP_ERROR_WOULDBLOCK;
+  return PP_OK_COMPLETIONPENDING;
 }
 
 int32_t PPB_FileIO_Impl::SetLength(int64_t length,
@@ -352,7 +370,7 @@ int32_t PPB_FileIO_Impl::SetLength(int64_t length,
     return PP_ERROR_FAILED;
 
   RegisterCallback(callback);
-  return PP_ERROR_WOULDBLOCK;
+  return PP_OK_COMPLETIONPENDING;
 }
 
 int32_t PPB_FileIO_Impl::Flush(PP_CompletionCallback callback) {
@@ -366,7 +384,7 @@ int32_t PPB_FileIO_Impl::Flush(PP_CompletionCallback callback) {
     return PP_ERROR_FAILED;
 
   RegisterCallback(callback);
-  return PP_ERROR_WOULDBLOCK;
+  return PP_OK_COMPLETIONPENDING;
 }
 
 void PPB_FileIO_Impl::Close() {
@@ -432,7 +450,7 @@ void PPB_FileIO_Impl::RegisterCallback(PP_CompletionCallback callback) {
       instance()->module()->GetCallbackTracker(), resource_id, callback);
 }
 
-void PPB_FileIO_Impl::RunPendingCallback(int result) {
+void PPB_FileIO_Impl::RunPendingCallback(int32_t result) {
   scoped_refptr<TrackedCompletionCallback> callback;
   callback.swap(callback_);
   callback->Run(result);  // Will complete abortively if necessary.
@@ -469,12 +487,29 @@ void PPB_FileIO_Impl::QueryInfoCallback(
   RunPendingCallback(PlatformFileErrorToPepperError(error_code));
 }
 
-void PPB_FileIO_Impl::ReadWriteCallback(base::PlatformFileError error_code,
-                                        int bytes_read_or_written) {
+void PPB_FileIO_Impl::ReadCallback(base::PlatformFileError error_code,
+                                   const char* data, int bytes_read) {
+  DCHECK(data);
+  DCHECK(read_buffer_);
+
+  int rv;
+  if (error_code == base::PLATFORM_FILE_OK) {
+    rv = bytes_read;
+    if (file_ != base::kInvalidPlatformFileValue)
+      memcpy(read_buffer_, data, bytes_read);
+  } else
+    rv = PlatformFileErrorToPepperError(error_code);
+
+  read_buffer_ = NULL;
+  RunPendingCallback(rv);
+}
+
+void PPB_FileIO_Impl::WriteCallback(base::PlatformFileError error_code,
+                                    int bytes_written) {
   if (error_code != base::PLATFORM_FILE_OK)
     RunPendingCallback(PlatformFileErrorToPepperError(error_code));
   else
-    RunPendingCallback(bytes_read_or_written);
+    RunPendingCallback(bytes_written);
 }
 
 }  // namespace ppapi

@@ -1,19 +1,34 @@
-#font-settings > section > .font-input-div {
-  -webkit-margin-end: 4em;
+#font-settings > section {
+  overflow: hidden;
+}
+
+#font-settings input[type="range"] {
+  width: 100%;
+}
+
+#minimum-font-sample {
+  height: 35px;
+  overflow: hidden;
+  width: 270px;
+}
+
+.font-input-div {
+  -webkit-margin-end: 3em;
+  width: 12em;
 }
 
 .font-input-div > div > select {
   margin-bottom: 10px;
 }
 
-.font-input-div > div > .font-input {
-  width: 12em;
+.font-input {
+  width: 100%;
 }
 
-#font-settings > section > .font-sample-div {
-  height: 90px;
+.font-sample-div {
+  height: 70px;
   overflow: hidden;
-  position: absolute;
+  width: 270px;
 }
 
 .font-settings-huge {

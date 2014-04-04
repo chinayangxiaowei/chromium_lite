@@ -35,7 +35,7 @@ class PageActionDecoration : public ImageDecoration,
 
   // Overridden from |ImageLoadingTracker::Observer|.
   virtual void OnImageLoaded(
-      SkBitmap* image, ExtensionResource resource, int index);
+      SkBitmap* image, const ExtensionResource& resource, int index);
 
   // Called to notify the Page Action that it should determine whether
   // to be visible or hidden. |contents| is the TabContents that is
@@ -52,19 +52,10 @@ class PageActionDecoration : public ImageDecoration,
 
   // Overridden from |LocationBarDecoration|
   virtual CGFloat GetWidthForSpace(CGFloat width);
-  virtual bool AcceptsMousePress() { return true; }
+  virtual bool AcceptsMousePress();
   virtual bool OnMousePressed(NSRect frame);
   virtual NSString* GetToolTip();
   virtual NSMenu* GetMenu();
-
- protected:
-  // For unit testing only.
-  PageActionDecoration() : owner_(NULL),
-                           profile_(NULL),
-                           page_action_(NULL),
-                           tracker_(this),
-                           current_tab_id_(-1),
-                           preview_enabled_(false) {}
 
  private:
   // Overridden from NotificationObserver:

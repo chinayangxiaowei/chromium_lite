@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,13 +10,14 @@
 
 #include "base/basictypes.h"
 #include "base/logging.h"
+#include "base/memory/ref_counted.h"
 #include "base/threading/platform_thread.h"
 #include "base/process_util.h"
-#include "base/ref_counted.h"
 #include "base/synchronization/waitable_event.h"
 #include "chrome/common/automation_constants.h"
 #include "chrome/common/automation_messages.h"
 #include "chrome/common/chrome_version_info.h"
+#include "chrome/test/automation/automation_json_requests.h"
 #include "chrome/test/automation/browser_proxy.h"
 #include "chrome/test/automation/extension_proxy.h"
 #include "chrome/test/automation/tab_proxy.h"
@@ -89,7 +90,7 @@ class AutomationMessageFilter : public IPC::ChannelProxy::MessageFilter {
 }  // anonymous namespace
 
 
-AutomationProxy::AutomationProxy(int command_execution_timeout_ms,
+AutomationProxy::AutomationProxy(int action_timeout_ms,
                                  bool disconnect_on_failure)
     : app_launched_(true, false),
       initial_loads_complete_(true, false),
@@ -98,13 +99,13 @@ AutomationProxy::AutomationProxy(int command_execution_timeout_ms,
       app_launch_signaled_(0),
       perform_version_check_(false),
       disconnect_on_failure_(disconnect_on_failure),
-      command_execution_timeout_(
-          TimeDelta::FromMilliseconds(command_execution_timeout_ms)),
+      action_timeout_(
+          TimeDelta::FromMilliseconds(action_timeout_ms)),
       listener_thread_id_(0) {
   // base::WaitableEvent::TimedWait() will choke if we give it a negative value.
   // Zero also seems unreasonable, since we need to wait for IPC, but at
   // least it is legal... ;-)
-  DCHECK_GE(command_execution_timeout_ms, 0);
+  DCHECK_GE(action_timeout_ms, 0);
   listener_thread_id_ = base::PlatformThread::CurrentId();
   InitializeHandleTracker();
   InitializeThread();
@@ -168,7 +169,7 @@ void AutomationProxy::InitializeHandleTracker() {
 
 AutomationLaunchResult AutomationProxy::WaitForAppLaunch() {
   AutomationLaunchResult result = AUTOMATION_SUCCESS;
-  if (app_launched_.TimedWait(command_execution_timeout_)) {
+  if (app_launched_.TimedWait(action_timeout_)) {
     if (perform_version_check_) {
       // Obtain our own version number and compare it to what the automation
       // provider sent.
@@ -203,12 +204,16 @@ void AutomationProxy::SignalAppLaunch(const std::string& version_string) {
   app_launched_.Signal();
 }
 
+bool AutomationProxy::WaitForProcessLauncherThreadToGoIdle() {
+  return Send(new AutomationMsg_WaitForProcessLauncherThreadToGoIdle());
+}
+
 bool AutomationProxy::WaitForInitialLoads() {
-  return initial_loads_complete_.TimedWait(command_execution_timeout_);
+  return initial_loads_complete_.TimedWait(action_timeout_);
 }
 
 bool AutomationProxy::WaitForInitialNewTabUILoad(int* load_time) {
-  if (new_tab_ui_load_complete_.TimedWait(command_execution_timeout_)) {
+  if (new_tab_ui_load_complete_.TimedWait(action_timeout_)) {
     *load_time = new_tab_ui_load_time_;
     new_tab_ui_load_complete_.Reset();
     return true;
@@ -248,11 +253,6 @@ void AutomationProxy::EnsureExtensionTestResult() {
     return;
   }
   ASSERT_TRUE(result) << "Extension test message: " << message;
-}
-
-bool AutomationProxy::GetEnabledExtensions(
-    std::vector<FilePath>* extension_directories) {
-  return Send(new AutomationMsg_GetEnabledExtensions(extension_directories));
 }
 
 bool AutomationProxy::GetBrowserWindowCount(int* num_windows) {
@@ -443,14 +443,18 @@ base::file_handle_mapping_vector AutomationProxy::fds_to_map() const {
 #endif  // defined(OS_POSIX)
 
 bool AutomationProxy::Send(IPC::Message* message) {
+  return Send(message,
+    static_cast<int>(action_timeout_.InMilliseconds()));
+}
+
+bool AutomationProxy::Send(IPC::Message* message, int timeout_ms) {
   if (!channel_.get()) {
     LOG(ERROR) << "Automation channel has been closed; dropping message!";
     delete message;
     return false;
   }
 
-  bool success = channel_->SendWithTimeout(message,
-                                           command_execution_timeout_ms());
+  bool success = channel_->SendWithTimeout(message, timeout_ms);
 
   if (!success && disconnect_on_failure_) {
     // Send failed (possibly due to a timeout). Browser is likely in a weird
@@ -546,4 +550,13 @@ bool AutomationProxy::LoginWithUserAndPass(const std::string& username,
 
 bool AutomationProxy::ResetToDefaultTheme() {
   return Send(new AutomationMsg_ResetToDefaultTheme());
+}
+
+bool AutomationProxy::SendJSONRequest(const std::string& request,
+                                      int timeout_ms,
+                                      std::string* response) {
+  bool result = false;
+  if (!SendAutomationJSONRequest(this, request, timeout_ms, response, &result))
+    return false;
+  return result;
 }

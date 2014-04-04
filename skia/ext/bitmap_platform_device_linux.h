@@ -6,7 +6,7 @@
 #define SKIA_EXT_BITMAP_PLATFORM_DEVICE_LINUX_H_
 #pragma once
 
-#include "base/ref_counted.h"
+#include "base/memory/ref_counted.h"
 #include "skia/ext/platform_device_linux.h"
 
 typedef struct _cairo_surface cairo_surface_t;
@@ -92,11 +92,12 @@ class BitmapPlatformDevice : public PlatformDevice {
 
   // Overridden from SkDevice:
   virtual SkDeviceFactory* getDeviceFactory();
-  virtual void setMatrixClip(const SkMatrix& transform, const SkRegion& region);
+  virtual void setMatrixClip(const SkMatrix& transform, const SkRegion& region,
+                             const SkClipStack&);
 
   // Overridden from PlatformDevice:
   virtual bool IsVectorial();
-  virtual cairo_t* beginPlatformPaint();
+  virtual cairo_t* BeginPlatformPaint();
 
  private:
   static BitmapPlatformDevice* Create(int width, int height, bool is_opaque,

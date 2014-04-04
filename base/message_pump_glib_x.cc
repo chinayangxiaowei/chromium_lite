@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -32,6 +32,11 @@ gboolean GtkWidgetRealizeCallback(GSignalInvocationHint* hint, guint nparams,
 
   DCHECK(window);  // TODO(sad): Remove once determined if necessary.
 
+  if (GDK_WINDOW_TYPE(window) != GDK_WINDOW_TOPLEVEL &&
+      GDK_WINDOW_TYPE(window) != GDK_WINDOW_CHILD &&
+      GDK_WINDOW_TYPE(window) != GDK_WINDOW_DIALOG)
+    return true;
+
   // TODO(sad): Do we need to set a flag on |window| to make sure we don't
   // select for the same GdkWindow multiple times? Does it matter?
   msgpump->SetupXInput2ForXWindow(GDK_WINDOW_XID(window));
@@ -44,15 +49,25 @@ gboolean GtkWidgetRealizeCallback(GSignalInvocationHint* hint, guint nparams,
 // signal for GTK+ widgets, so that whenever the signal triggers for any
 // GtkWidget, which means the GtkWidget should now have a GdkWindow, we can
 // setup XInput2 events for the GdkWindow.
+static guint realize_signal_id = 0;
+static guint realize_hook_id = 0;
+
 void SetupGtkWidgetRealizeNotifier(base::MessagePumpGlibX* msgpump) {
-  guint signal_id;
   gpointer klass = g_type_class_ref(GTK_TYPE_WIDGET);
 
-  g_signal_parse_name("realize", GTK_TYPE_WIDGET, &signal_id, NULL, FALSE);
-  g_signal_add_emission_hook(signal_id, 0, GtkWidgetRealizeCallback,
-      static_cast<gpointer>(msgpump), NULL);
+  g_signal_parse_name("realize", GTK_TYPE_WIDGET,
+                      &realize_signal_id, NULL, FALSE);
+  realize_hook_id = g_signal_add_emission_hook(realize_signal_id, 0,
+      GtkWidgetRealizeCallback, static_cast<gpointer>(msgpump), NULL);
 
   g_type_class_unref(klass);
+}
+
+void RemoveGtkWidgetRealizeNotifier() {
+  if (realize_signal_id != 0)
+    g_signal_remove_emission_hook(realize_signal_id, realize_hook_id);
+  realize_signal_id = 0;
+  realize_hook_id = 0;
 }
 
 #endif  // HAVE_XINPUT2
@@ -64,8 +79,7 @@ namespace base {
 MessagePumpGlibX::MessagePumpGlibX() : base::MessagePumpForUI(),
 #if defined(HAVE_XINPUT2)
     xiopcode_(-1),
-    masters_(),
-    slaves_(),
+    pointer_devices_(),
 #endif
     gdksource_(NULL),
     dispatching_event_(false),
@@ -80,6 +94,9 @@ MessagePumpGlibX::MessagePumpGlibX() : base::MessagePumpForUI(),
 }
 
 MessagePumpGlibX::~MessagePumpGlibX() {
+#if defined(HAVE_XINPUT2)
+  RemoveGtkWidgetRealizeNotifier();
+#endif
 }
 
 #if defined(HAVE_XINPUT2)
@@ -94,22 +111,17 @@ void MessagePumpGlibX::SetupXInput2ForXWindow(Window xwindow) {
   XISetMask(mask, XI_ButtonRelease);
   XISetMask(mask, XI_Motion);
 
-  // It is necessary to select only for the master devices. XInput2 provides
-  // enough information to the event callback to decide which slave device
-  // triggered the event, thus decide whether the 'pointer event' is a 'mouse
-  // event' or a 'touch event'. So it is not necessary to select for the slave
-  // devices here.
-  XIEventMask evmasks[masters_.size()];
+  XIEventMask evmasks[pointer_devices_.size()];
   int count = 0;
-  for (std::set<int>::const_iterator iter = masters_.begin();
-       iter != masters_.end();
+  for (std::set<int>::const_iterator iter = pointer_devices_.begin();
+       iter != pointer_devices_.end();
        ++iter, ++count) {
     evmasks[count].deviceid = *iter;
     evmasks[count].mask_len = sizeof(mask);
     evmasks[count].mask = mask;
   }
 
-  XISelectEvents(xdisplay, xwindow, evmasks, masters_.size());
+  XISelectEvents(xdisplay, xwindow, evmasks, pointer_devices_.size());
 
   // TODO(sad): Setup masks for keyboard events.
 
@@ -119,7 +131,7 @@ void MessagePumpGlibX::SetupXInput2ForXWindow(Window xwindow) {
 
 bool MessagePumpGlibX::RunOnce(GMainContext* context, bool block) {
   GdkDisplay* gdisp = gdk_display_get_default();
-  if (!gdisp)
+  if (!gdisp || !GetDispatcher())
     return MessagePumpForUI::RunOnce(context, block);
 
   Display* display = GDK_DISPLAY_XDISPLAY(gdisp);
@@ -145,7 +157,7 @@ bool MessagePumpGlibX::RunOnce(GMainContext* context, bool block) {
 
       MessagePumpGlibXDispatcher::DispatchStatus status =
           static_cast<MessagePumpGlibXDispatcher*>
-          (GetDispatcher())->Dispatch(&xev);
+          (GetDispatcher())->DispatchX(&xev);
 
       if (status == MessagePumpGlibXDispatcher::EVENT_QUIT) {
         should_quit = true;
@@ -206,7 +218,8 @@ void MessagePumpGlibX::EventDispatcherX(GdkEvent* event, gpointer data) {
 
   if (!pump_x->gdksource_) {
     pump_x->gdksource_ = g_main_current_source();
-    pump_x->gdkdispatcher_ = pump_x->gdksource_->source_funcs->dispatch;
+    if (pump_x->gdksource_)
+      pump_x->gdkdispatcher_ = pump_x->gdksource_->source_funcs->dispatch;
   } else if (!pump_x->IsDispatchingEvent()) {
     if (event->type != GDK_NOTHING &&
         pump_x->capture_gdk_events_[event->type]) {
@@ -271,22 +284,25 @@ void MessagePumpGlibX::InitializeXInput2(void) {
   SetupGtkWidgetRealizeNotifier(this);
 
   // Instead of asking X for the list of devices all the time, let's maintain a
-  // list of slave (physical) and master (virtual) pointer devices.
+  // list of pointer devices we care about.
+  // It is not necessary to select for slave devices. XInput2 provides enough
+  // information to the event callback to decide which slave device triggered
+  // the event, thus decide whether the 'pointer event' is a 'mouse event' or a
+  // 'touch event'.
+  // If the touch device has 'GrabDevice' set and 'SendCoreEvents' unset (which
+  // is possible), then the device is detected as a floating device, and a
+  // floating device is not connected to a master device. So it is necessary to
+  // also select on the floating devices.
   int count = 0;
   XIDeviceInfo* devices = XIQueryDevice(xdisplay, XIAllDevices, &count);
   for (int i = 0; i < count; i++) {
     XIDeviceInfo* devinfo = devices + i;
-    if (devinfo->use == XISlavePointer) {
-      slaves_.insert(devinfo->deviceid);
-    } else if (devinfo->use == XIMasterPointer) {
-      masters_.insert(devinfo->deviceid);
-    }
-    // We do not need to care about XIFloatingSlave, because the callback for
-    // XI_HierarchyChanged event will take care of it.
+    if (devinfo->use == XIFloatingSlave || devinfo->use == XIMasterPointer)
+      pointer_devices_.insert(devinfo->deviceid);
   }
   XIFreeDeviceInfo(devices);
 
-  // TODO(sad): Select on root for XI_HierarchyChanged so that slaves_ and
+  // TODO(sad): Select on root for XI_HierarchyChanged so that floats_ and
   // masters_ can be kept up-to-date. This is a relatively rare event, so we can
   // put it off for a later time.
   // Note: It is not necessary to listen for XI_DeviceChanged events.

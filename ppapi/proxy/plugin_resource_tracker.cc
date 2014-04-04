@@ -1,11 +1,11 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "ppapi/proxy/plugin_resource_tracker.h"
 
 #include "base/logging.h"
-#include "base/singleton.h"
+#include "base/memory/singleton.h"
 #include "ppapi/proxy/plugin_dispatcher.h"
 #include "ppapi/proxy/ppapi_messages.h"
 #include "ppapi/proxy/plugin_resource.h"
@@ -13,6 +13,13 @@
 
 namespace pp {
 namespace proxy {
+
+namespace {
+
+// When non-NULL, this object overrides the ResourceTrackerSingleton.
+PluginResourceTracker* g_resource_tracker_override = NULL;
+
+}  // namespace
 
 PluginResourceTracker::ResourceInfo::ResourceInfo() : ref_count(0) {
 }
@@ -39,14 +46,24 @@ PluginResourceTracker::ResourceInfo::operator=(
   return *this;
 }
 
-PluginResourceTracker::PluginResourceTracker() {
+// Start counting resources at a high number to avoid collisions with vars (to
+// help debugging).
+PluginResourceTracker::PluginResourceTracker()
+    : last_resource_id_(0x00100000) {
 }
 
 PluginResourceTracker::~PluginResourceTracker() {
 }
 
 // static
+void PluginResourceTracker::SetInstanceForTest(PluginResourceTracker* tracker) {
+  g_resource_tracker_override = tracker;
+}
+
+// static
 PluginResourceTracker* PluginResourceTracker::GetInstance() {
+  if (g_resource_tracker_override)
+    return g_resource_tracker_override;
   return Singleton<PluginResourceTracker>::get();
 }
 
@@ -58,37 +75,41 @@ PluginResource* PluginResourceTracker::GetResourceObject(
   return found->second.resource.get();
 }
 
-void PluginResourceTracker::AddResource(PP_Resource pp_resource,
-                                        linked_ptr<PluginResource> object) {
-  DCHECK(resource_map_.find(pp_resource) == resource_map_.end());
-  resource_map_[pp_resource] = ResourceInfo(1, object);
+PP_Resource PluginResourceTracker::AddResource(
+    linked_ptr<PluginResource> object) {
+  if (object->host_resource().is_null()) {
+    // Prevent adding null resources or GetResourceObject(0) will return a
+    // valid pointer!
+    NOTREACHED();
+    return 0;
+  }
+
+  PP_Resource plugin_resource = ++last_resource_id_;
+  DCHECK(resource_map_.find(plugin_resource) == resource_map_.end());
+  resource_map_[plugin_resource] = ResourceInfo(1, object);
+  host_resource_map_[object->host_resource()] = plugin_resource;
+  return plugin_resource;
 }
 
 void PluginResourceTracker::AddRefResource(PP_Resource resource) {
-  resource_map_[resource].ref_count++;
+  ResourceMap::iterator found = resource_map_.find(resource);
+  if (found == resource_map_.end()) {
+    NOTREACHED();
+    return;
+  }
+  found->second.ref_count++;
 }
 
 void PluginResourceTracker::ReleaseResource(PP_Resource resource) {
   ReleasePluginResourceRef(resource, true);
 }
 
-bool PluginResourceTracker::PreparePreviouslyTrackedResource(
-    PP_Resource resource) {
-  ResourceMap::iterator found = resource_map_.find(resource);
-  if (found == resource_map_.end())
-    return false;  // We've not seen this resource before.
-
-  // We have already seen this resource and the caller wants the plugin to
-  // have one more ref to the object (this function is called when retuning
-  // a resource).
-  //
-  // This is like the PluginVarTracker::ReceiveObjectPassRef. We do an AddRef
-  // in the plugin for the additional ref, and then a Release in the renderer
-  // because the code in the renderer addrefed on behalf of the caller.
-  found->second.ref_count++;
-
-  SendReleaseResourceToHost(resource, found->second.resource.get());
-  return true;
+PP_Resource PluginResourceTracker::PluginResourceForHostResource(
+    const HostResource& resource) const {
+  HostResourceMap::const_iterator found = host_resource_map_.find(resource);
+  if (found == host_resource_map_.end())
+    return 0;
+  return found->second;
 }
 
 void PluginResourceTracker::ReleasePluginResourceRef(
@@ -99,22 +120,24 @@ void PluginResourceTracker::ReleasePluginResourceRef(
     return;
   found->second.ref_count--;
   if (found->second.ref_count == 0) {
-    if (notify_browser_on_release)
-      SendReleaseResourceToHost(resource, found->second.resource.get());
+    // Keep a reference while removing in case the destructor ends up
+    // re-entering. That way, when the destructor is called, it's out of the
+    // maps.
+    linked_ptr<PluginResource> plugin_resource = found->second.resource;
+    PluginDispatcher* dispatcher =
+        PluginDispatcher::GetForInstance(plugin_resource->instance());
+    HostResource host_resource = plugin_resource->host_resource();
+    host_resource_map_.erase(host_resource);
     resource_map_.erase(found);
-  }
-}
+    plugin_resource.reset();
 
-void PluginResourceTracker::SendReleaseResourceToHost(
-    PP_Resource resource_id,
-    PluginResource* resource) {
-  PluginDispatcher* dispatcher =
-      PluginDispatcher::GetForInstance(resource->instance());
-  if (dispatcher) {
-    dispatcher->Send(new PpapiHostMsg_PPBCore_ReleaseResource(
-        INTERFACE_ID_PPB_CORE, resource_id));
-  } else {
-    NOTREACHED();
+    // dispatcher can be NULL if the plugin held on to a resource after the
+    // instance was destroyed. In that case the browser-side resource has
+    // already been freed correctly on the browser side.
+    if (notify_browser_on_release && dispatcher) {
+      dispatcher->Send(new PpapiHostMsg_PPBCore_ReleaseResource(
+          INTERFACE_ID_PPB_CORE, host_resource));
+    }
   }
 }
 

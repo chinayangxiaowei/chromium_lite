@@ -1,16 +1,15 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "webkit/plugins/npapi/webplugin_impl.h"
 
-#include "base/linked_ptr.h"
 #include "base/logging.h"
+#include "base/memory/linked_ptr.h"
 #include "base/message_loop.h"
 #include "base/string_util.h"
 #include "base/stringprintf.h"
 #include "base/utf_string_conversions.h"
-#include "gfx/rect.h"
 #include "googleurl/src/gurl.h"
 #include "net/base/escape.h"
 #include "net/base/net_errors.h"
@@ -20,7 +19,6 @@
 #include "third_party/WebKit/Source/WebKit/chromium/public/WebCookieJar.h"
 #include "third_party/WebKit/Source/WebKit/chromium/public/WebCString.h"
 #include "third_party/WebKit/Source/WebKit/chromium/public/WebCursorInfo.h"
-#include "third_party/WebKit/Source/WebKit/chromium/public/WebDevToolsAgent.h"
 #include "third_party/WebKit/Source/WebKit/chromium/public/WebData.h"
 #include "third_party/WebKit/Source/WebKit/chromium/public/WebDocument.h"
 #include "third_party/WebKit/Source/WebKit/chromium/public/WebFrame.h"
@@ -37,6 +35,7 @@
 #include "third_party/WebKit/Source/WebKit/chromium/public/WebURLLoaderClient.h"
 #include "third_party/WebKit/Source/WebKit/chromium/public/WebURLResponse.h"
 #include "third_party/WebKit/Source/WebKit/chromium/public/WebView.h"
+#include "ui/gfx/rect.h"
 #include "webkit/appcache/web_application_cache_host_impl.h"
 #include "webkit/glue/multipart_response_delegate.h"
 #include "webkit/plugins/npapi/plugin_host.h"
@@ -52,7 +51,6 @@ using WebKit::WebCString;
 using WebKit::WebCursorInfo;
 using WebKit::WebData;
 using WebKit::WebDataSource;
-using WebKit::WebDevToolsAgent;
 using WebKit::WebFrame;
 using WebKit::WebHTTPBody;
 using WebKit::WebHTTPHeaderVisitor;
@@ -112,14 +110,16 @@ class MultiPartResponseClient : public WebURLLoaderClient {
   }
 
   // Receives individual part data from a multipart response.
-  virtual void didReceiveData(
-      WebURLLoader*, const char* data, int data_size) {
+  virtual void didReceiveData(WebURLLoader*,
+                              const char* data,
+                              int data_length,
+                              int encoded_data_length) {
     // TODO(ananta)
     // We should defer further loads on multipart resources on the same lines
     // as regular resources requested by plugins to prevent reentrancy.
     resource_client_->DidReceiveData(
-        data, data_size, byte_range_lower_bound_);
-    byte_range_lower_bound_ += data_size;
+        data, data_length, byte_range_lower_bound_);
+    byte_range_lower_bound_ += data_length;
   }
 
   virtual void didFinishLoading(WebURLLoader*, double finishTime) {}
@@ -338,11 +338,6 @@ void WebPluginImpl::updateGeometry(
   geometry_ = new_geometry;
 #endif  // OS_WIN
   first_geometry_update_ = false;
-}
-
-unsigned WebPluginImpl::getBackingTextureId() {
-  // Regular plugins do not have a backing texture.
-  return 0;
 }
 
 void WebPluginImpl::updateFocus(bool focused) {
@@ -666,6 +661,7 @@ bool WebPluginImpl::IsValidUrl(const GURL& url, Referrer referrer_flag) {
 WebPluginImpl::RoutingStatus WebPluginImpl::RouteToFrame(
     const char* url,
     bool is_javascript_url,
+    bool popups_allowed,
     const char* method,
     const char* target,
     const char* buf,
@@ -722,6 +718,7 @@ WebPluginImpl::RoutingStatus WebPluginImpl::RouteToFrame(
   request.setHTTPMethod(WebString::fromUTF8(method));
   request.setFirstPartyForCookies(
       webframe_->document().firstPartyForCookies());
+  request.setHasUserGesture(popups_allowed);
   if (len > 0) {
     if (!SetPostData(&request, buf, len)) {
       // Uhoh - we're in trouble.  There isn't a good way
@@ -776,15 +773,6 @@ std::string WebPluginImpl::GetCookies(const GURL& url,
   }
 
   return UTF16ToUTF8(cookie_jar->cookies(url, first_party_for_cookies));
-}
-
-void WebPluginImpl::ShowModalHTMLDialog(const GURL& url, int width, int height,
-                                        const std::string& json_arguments,
-                                        std::string* json_retval) {
-  if (page_delegate_) {
-    page_delegate_->ShowModalHTMLDialogForPlugin(
-        url, gfx::Size(width, height), json_arguments, json_retval);
-  }
 }
 
 void WebPluginImpl::OnMissingPluginStatus(int status) {
@@ -944,12 +932,6 @@ void WebPluginImpl::didReceiveResponse(WebURLLoader* loader,
       response_info.last_modified,
       request_is_seekable);
 
-  if (WebDevToolsAgent* devtools_agent = GetDevToolsAgent()) {
-    ClientInfo* client_info = GetClientInfoFromLoader(loader);
-    if (client_info)
-      devtools_agent->didReceiveResponse(client_info->id, response);
-  }
-
   // Bug http://b/issue?id=925559. The flash plugin would not handle the HTTP
   // error codes in the stream header and as a result, was unaware of the
   // fate of the HTTP requests issued via NPN_GetURLNotify. Webkit and FF
@@ -971,26 +953,23 @@ void WebPluginImpl::didReceiveResponse(WebURLLoader* loader,
 
 void WebPluginImpl::didReceiveData(WebURLLoader* loader,
                                    const char *buffer,
-                                   int length) {
+                                   int data_length,
+                                   int encoded_data_length) {
   WebPluginResourceClient* client = GetClientFromLoader(loader);
   if (!client)
     return;
 
-  // ClientInfo can be removed from clients_ vector by next statements.
-  if (WebDevToolsAgent* devtools_agent = GetDevToolsAgent()) {
-    ClientInfo* client_info = GetClientInfoFromLoader(loader);
-    if (client_info)
-      devtools_agent->didReceiveData(client_info->id, length);
-  }
   MultiPartResponseHandlerMap::iterator index =
       multi_part_response_map_.find(client);
   if (index != multi_part_response_map_.end()) {
     MultipartResponseDelegate* multi_part_handler = (*index).second;
     DCHECK(multi_part_handler != NULL);
-    multi_part_handler->OnReceivedData(buffer, length);
+    multi_part_handler->OnReceivedData(buffer,
+                                       data_length,
+                                       encoded_data_length);
   } else {
     loader->setDefersLoading(true);
-    client->DidReceiveData(buffer, length, 0);
+    client->DidReceiveData(buffer, data_length, 0);
   }
 }
 
@@ -1011,9 +990,6 @@ void WebPluginImpl::didFinishLoading(WebURLLoader* loader, double finishTime) {
     // It is not safe to access this structure after that.
     client_info->client = NULL;
     resource_client->DidFinishLoading();
-
-    if (WebDevToolsAgent* devtools_agent = GetDevToolsAgent())
-      devtools_agent->didFinishLoading(client_info->id);
   }
 }
 
@@ -1027,9 +1003,6 @@ void WebPluginImpl::didFail(WebURLLoader* loader,
     // It is not safe to access this structure after that.
     client_info->client = NULL;
     resource_client->DidFail();
-
-    if (WebDevToolsAgent* devtools_agent = GetDevToolsAgent())
-      devtools_agent->didFailLoading(client_info->id, error);
   }
 }
 
@@ -1085,8 +1058,8 @@ void WebPluginImpl::HandleURLRequestInternal(const char* url,
   // to the plugin's frame.
   bool is_javascript_url = StartsWithASCII(url, "javascript:", false);
   RoutingStatus routing_status = RouteToFrame(
-      url, is_javascript_url, method, target, buf, len, notify_id,
-      referrer_flag);
+      url, is_javascript_url, popups_allowed, method, target, buf, len,
+      notify_id, referrer_flag);
   if (routing_status == ROUTED)
     return;
 
@@ -1185,12 +1158,6 @@ bool WebPluginImpl::InitiateHTTPRequest(unsigned long resource_id,
 
   SetReferrer(&info.request, referrer_flag);
 
-  if (WebDevToolsAgent* devtools_agent = GetDevToolsAgent()) {
-    devtools_agent->identifierForInitialRequest(resource_id, webframe_,
-                                                info.request);
-    devtools_agent->willSendRequest(resource_id, info.request);
-  }
-
   info.loader.reset(webframe_->createAssociatedURLLoader());
   if (!info.loader.get())
     return false;
@@ -1247,10 +1214,6 @@ void WebPluginImpl::SetDeferResourceLoading(unsigned long resource_id,
         client_info.loader->cancel();
         clients_.erase(client_index++);
         resource_client->DidFail();
-
-        // Report that resource loading finished.
-        if (WebDevToolsAgent* devtools_agent = GetDevToolsAgent())
-          devtools_agent->didFinishLoading(resource_id);
       }
       break;
     }
@@ -1379,15 +1342,6 @@ void WebPluginImpl::SetReferrer(WebKit::WebURLRequest* request,
     default:
       break;
   }
-}
-
-WebDevToolsAgent* WebPluginImpl::GetDevToolsAgent() {
-  if (!webframe_)
-    return NULL;
-  WebView* view = webframe_->view();
-  if (!view)
-    return NULL;
-  return view->devToolsAgent();
 }
 
 }  // namespace npapi

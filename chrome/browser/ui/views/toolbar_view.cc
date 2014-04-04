@@ -8,29 +8,28 @@
 #include "base/utf_string_conversions.h"
 #include "chrome/app/chrome_command_ids.h"
 #include "chrome/browser/accessibility/browser_accessibility_state.h"
-#include "chrome/browser/background_page_tracker.h"
 #include "chrome/browser/metrics/user_metrics.h"
 #include "chrome/browser/prefs/pref_service.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/themes/browser_theme_provider.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_window.h"
 #include "chrome/browser/ui/toolbar/wrench_menu_model.h"
 #include "chrome/browser/ui/view_ids.h"
 #include "chrome/browser/ui/views/browser_actions_container.h"
 #include "chrome/browser/ui/views/event_utils.h"
-#include "chrome/browser/ui/views/frame/browser_view.h"
 #include "chrome/browser/upgrade_detector.h"
-#include "chrome/common/notification_service.h"
 #include "chrome/common/pref_names.h"
-#include "gfx/canvas.h"
-#include "gfx/canvas_skia.h"
-#include "gfx/skbitmap_operations.h"
+#include "content/common/notification_service.h"
 #include "grit/chromium_strings.h"
 #include "grit/generated_resources.h"
 #include "grit/theme_resources.h"
+#include "ui/base/accessibility/accessible_view_state.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/resource/resource_bundle.h"
+#include "ui/base/theme_provider.h"
+#include "ui/gfx/canvas.h"
+#include "ui/gfx/canvas_skia.h"
+#include "ui/gfx/skbitmap_operations.h"
 #include "views/controls/button/button_dropdown.h"
 #include "views/focus/view_storage.h"
 #include "views/widget/tooltip_manager.h"
@@ -40,7 +39,6 @@
 #if defined(OS_CHROMEOS)
 #include "chrome/browser/chromeos/cros/cros_library.h"
 #include "chrome/browser/chromeos/cros/update_library.h"
-#include "chrome/browser/chromeos/dom_ui/wrench_menu_ui.h"
 #include "views/controls/menu/menu_2.h"
 #endif
 #include "chrome/browser/ui/views/wrench_menu.h"
@@ -87,9 +85,6 @@ ToolbarView::ToolbarView(Browser* browser)
       back_(NULL),
       forward_(NULL),
       reload_(NULL),
-#if defined(OS_CHROMEOS)
-      feedback_(NULL),
-#endif
       home_(NULL),
       location_bar_(NULL),
       browser_actions_(NULL),
@@ -97,7 +92,6 @@ ToolbarView::ToolbarView(Browser* browser)
       profile_(NULL),
       browser_(browser),
       profiles_menu_contents_(NULL),
-      ALLOW_THIS_IN_INITIALIZER_LIST(method_factory_(this)),
       destroyed_flag_(NULL) {
   SetID(VIEW_ID_TOOLBAR);
 
@@ -117,10 +111,7 @@ ToolbarView::ToolbarView(Browser* browser)
     registrar_.Add(this, NotificationType::UPGRADE_RECOMMENDED,
                    NotificationService::AllSources());
   }
-  registrar_.Add(this, NotificationType::MODULE_INCOMPATIBILITY_DETECTED,
-                 NotificationService::AllSources());
-  registrar_.Add(this,
-                 NotificationType::BACKGROUND_PAGE_TRACKER_CHANGED,
+  registrar_.Add(this, NotificationType::MODULE_INCOMPATIBILITY_BADGE_CHANGE,
                  NotificationService::AllSources());
 }
 
@@ -139,15 +130,9 @@ void ToolbarView::Init(Profile* profile) {
   forward_menu_model_.reset(new BackForwardMenuModel(
       browser_, BackForwardMenuModel::FORWARD_MENU));
   wrench_menu_model_.reset(new WrenchMenuModel(this, browser_));
-#if defined(OS_CHROMEOS)
-  if (chromeos::MenuUI::IsEnabled()) {
-      wrench_menu_2_.reset(
-          chromeos::WrenchMenuUI::CreateMenu2(wrench_menu_model_.get()));
-  }
-#endif
   back_ = new views::ButtonDropDown(this, back_menu_model_.get());
-  back_->set_triggerable_event_flags(views::Event::EF_LEFT_BUTTON_DOWN |
-                                     views::Event::EF_MIDDLE_BUTTON_DOWN);
+  back_->set_triggerable_event_flags(ui::EF_LEFT_BUTTON_DOWN |
+                                     ui::EF_MIDDLE_BUTTON_DOWN);
   back_->set_tag(IDC_BACK);
   back_->SetImageAlignment(views::ImageButton::ALIGN_RIGHT,
                            views::ImageButton::ALIGN_TOP);
@@ -157,8 +142,8 @@ void ToolbarView::Init(Profile* profile) {
   back_->SetID(VIEW_ID_BACK_BUTTON);
 
   forward_ = new views::ButtonDropDown(this, forward_menu_model_.get());
-  forward_->set_triggerable_event_flags(views::Event::EF_LEFT_BUTTON_DOWN |
-                                        views::Event::EF_MIDDLE_BUTTON_DOWN);
+  forward_->set_triggerable_event_flags(ui::EF_LEFT_BUTTON_DOWN |
+                                        ui::EF_MIDDLE_BUTTON_DOWN);
   forward_->set_tag(IDC_FORWARD);
   forward_->SetTooltipText(
       UTF16ToWide(l10n_util::GetStringUTF16(IDS_TOOLTIP_FORWARD)));
@@ -171,28 +156,17 @@ void ToolbarView::Init(Profile* profile) {
           LocationBarView::POPUP : LocationBarView::NORMAL);
 
   reload_ = new ReloadButton(location_bar_, browser_);
-  reload_->set_triggerable_event_flags(views::Event::EF_LEFT_BUTTON_DOWN |
-                                       views::Event::EF_MIDDLE_BUTTON_DOWN);
+  reload_->set_triggerable_event_flags(ui::EF_LEFT_BUTTON_DOWN |
+                                       ui::EF_MIDDLE_BUTTON_DOWN);
   reload_->set_tag(IDC_RELOAD);
   reload_->SetTooltipText(
       UTF16ToWide(l10n_util::GetStringUTF16(IDS_TOOLTIP_RELOAD)));
   reload_->SetAccessibleName(l10n_util::GetStringUTF16(IDS_ACCNAME_RELOAD));
   reload_->SetID(VIEW_ID_RELOAD_BUTTON);
 
-#if defined(OS_CHROMEOS)
-  feedback_ = new views::ImageButton(this);
-  feedback_->set_tag(IDC_FEEDBACK);
-  feedback_->set_triggerable_event_flags(views::Event::EF_LEFT_BUTTON_DOWN |
-                                         views::Event::EF_MIDDLE_BUTTON_DOWN);
-  feedback_->set_tag(IDC_FEEDBACK);
-  feedback_->SetTooltipText(
-      UTF16ToWide(l10n_util::GetStringUTF16(IDS_TOOLTIP_FEEDBACK)));
-  feedback_->SetID(VIEW_ID_FEEDBACK_BUTTON);
-#endif
-
   home_ = new views::ImageButton(this);
-  home_->set_triggerable_event_flags(views::Event::EF_LEFT_BUTTON_DOWN |
-                                     views::Event::EF_MIDDLE_BUTTON_DOWN);
+  home_->set_triggerable_event_flags(ui::EF_LEFT_BUTTON_DOWN |
+                                     ui::EF_MIDDLE_BUTTON_DOWN);
   home_->set_tag(IDC_HOME);
   home_->SetTooltipText(
       UTF16ToWide(l10n_util::GetStringUTF16(IDS_TOOLTIP_HOME)));
@@ -211,8 +185,7 @@ void ToolbarView::Init(Profile* profile) {
   app_menu_->SetID(VIEW_ID_APP_MENU);
 
   // Add any necessary badges to the menu item based on the system state.
-  if (IsUpgradeRecommended() || ShouldShowIncompatibilityWarning() ||
-      ShouldShowBackgroundPageBadge()) {
+  if (IsUpgradeRecommended() || ShouldShowIncompatibilityWarning()) {
     UpdateAppMenuBadge();
   }
   LoadImages();
@@ -224,9 +197,6 @@ void ToolbarView::Init(Profile* profile) {
   AddChildView(home_);
   AddChildView(location_bar_);
   AddChildView(browser_actions_);
-#if defined(OS_CHROMEOS)
-  AddChildView(feedback_);
-#endif
   AddChildView(app_menu_);
 
   location_bar_->Init();
@@ -272,24 +242,10 @@ bool ToolbarView::IsAppMenuFocused() {
 }
 
 void ToolbarView::AddMenuListener(views::MenuListener* listener) {
-#if defined(OS_CHROMEOS)
-  if (chromeos::MenuUI::IsEnabled()) {
-    DCHECK(wrench_menu_2_.get());
-    wrench_menu_2_->AddMenuListener(listener);
-    return;
-  }
-#endif
   menu_listeners_.push_back(listener);
 }
 
 void ToolbarView::RemoveMenuListener(views::MenuListener* listener) {
-#if defined(OS_CHROMEOS)
-  if (chromeos::MenuUI::IsEnabled()) {
-    DCHECK(wrench_menu_2_.get());
-    wrench_menu_2_->RemoveMenuListener(listener);
-    return;
-  }
-#endif
   for (std::vector<views::MenuListener*>::iterator i(menu_listeners_.begin());
        i != menu_listeners_.end(); ++i) {
     if (*i == listener) {
@@ -311,12 +267,13 @@ bool ToolbarView::SetPaneFocus(
   return true;
 }
 
-AccessibilityTypes::Role ToolbarView::GetAccessibleRole() {
-  return AccessibilityTypes::ROLE_TOOLBAR;
+void ToolbarView::GetAccessibleState(ui::AccessibleViewState* state) {
+  state->role = ui::AccessibilityTypes::ROLE_TOOLBAR;
+  state->name = l10n_util::GetStringUTF16(IDS_ACCNAME_TOOLBAR);
 }
 
 ////////////////////////////////////////////////////////////////////////////////
-// ToolbarView, Menu::BaseControllerDelegate overrides:
+// ToolbarView, Menu::Delegate overrides:
 
 bool ToolbarView::GetAcceleratorInfo(int id, ui::Accelerator* accel) {
   return GetWidget()->GetAccelerator(id, accel);
@@ -330,20 +287,6 @@ void ToolbarView::RunMenu(views::View* source, const gfx::Point& /* pt */) {
 
   bool destroyed_flag = false;
   destroyed_flag_ = &destroyed_flag;
-#if defined(OS_CHROMEOS)
-  if (chromeos::MenuUI::IsEnabled()) {
-    gfx::Point screen_loc;
-    views::View::ConvertPointToScreen(app_menu_, &screen_loc);
-    gfx::Rect bounds(screen_loc, app_menu_->size());
-    if (base::i18n::IsRTL())
-      bounds.set_x(bounds.x() - app_menu_->size().width());
-    wrench_menu_2_->RunMenuAt(gfx::Point(bounds.right(), bounds.bottom()),
-                              views::Menu2::ALIGN_TOPRIGHT);
-    // TODO(oshima): nuke this once we made decision about go or no go
-    // for domui menu.
-    goto cleanup;
-  }
-#endif
   wrench_menu_ = new WrenchMenu(browser_);
   wrench_menu_->Init(wrench_menu_model_.get());
 
@@ -352,21 +295,15 @@ void ToolbarView::RunMenu(views::View* source, const gfx::Point& /* pt */) {
 
   wrench_menu_->RunMenu(app_menu_);
 
-#if defined(OS_CHROMEOS)
- cleanup:
-#endif
   if (destroyed_flag)
     return;
   destroyed_flag_ = NULL;
-
-  // Stop showing the background app badge also.
-  BackgroundPageTracker::GetInstance()->AcknowledgeBackgroundPages();
 }
 
 ////////////////////////////////////////////////////////////////////////////////
 // ToolbarView, LocationBarView::Delegate implementation:
 
-TabContentsWrapper* ToolbarView::GetTabContentsWrapper() {
+TabContentsWrapper* ToolbarView::GetTabContentsWrapper() const {
   return browser_->GetSelectedTabContentsWrapper();
 }
 
@@ -432,15 +369,8 @@ void ToolbarView::Observe(NotificationType type,
       Layout();
       SchedulePaint();
     }
-  } else if (type == NotificationType::UPGRADE_RECOMMENDED) {
-    UpdateAppMenuBadge();
-  } else if (type == NotificationType::MODULE_INCOMPATIBILITY_DETECTED) {
-    bool confirmed_bad = *Details<bool>(details).ptr();
-    if (confirmed_bad)
-      UpdateAppMenuBadge();
-  } else if (type ==
-      NotificationType::BACKGROUND_PAGE_TRACKER_CHANGED) {
-    // Force a repaint to add/remove the badge.
+  } else if (type == NotificationType::UPGRADE_RECOMMENDED ||
+             type == NotificationType::MODULE_INCOMPATIBILITY_BADGE_CHANGE) {
     UpdateAppMenuBadge();
   }
 }
@@ -480,9 +410,6 @@ gfx::Size ToolbarView::GetPreferredSize() {
         (show_home_button_.GetValue() ?
             (home_->GetPreferredSize().width() + kButtonSpacing) : 0) +
         browser_actions_->GetPreferredSize().width() +
-#if defined(OS_CHROMEOS)
-        feedback_->GetPreferredSize().width() + kButtonSpacing +
-#endif
         app_menu_->GetPreferredSize().width() + kEdgeSpacing;
 
     static SkBitmap normal_background;
@@ -495,7 +422,7 @@ gfx::Size ToolbarView::GetPreferredSize() {
   }
 
   int vertical_spacing = PopupTopSpacing() +
-      (GetWindow()->GetNonClientView()->UseNativeFrame() ?
+      (GetWindow()->non_client_view()->UseNativeFrame() ?
           kPopupBottomSpacingGlass : kPopupBottomSpacingNonGlass);
   return gfx::Size(0, location_bar_->GetPreferredSize().height() +
       vertical_spacing);
@@ -506,9 +433,10 @@ void ToolbarView::Layout() {
   if (back_ == NULL)
     return;
 
+  bool maximized = browser_->window() && browser_->window()->IsMaximized();
   if (!IsDisplayModeNormal()) {
-    int edge_width = (browser_->window() && browser_->window()->IsMaximized()) ?
-        0 : kPopupBackgroundEdge->width();  // See Paint().
+    int edge_width = maximized ?
+        0 : kPopupBackgroundEdge->width();  // See OnPaint().
     location_bar_->SetBounds(edge_width, PopupTopSpacing(),
         width() - (edge_width * 2), location_bar_->GetPreferredSize().height());
     return;
@@ -527,7 +455,7 @@ void ToolbarView::Layout() {
   //                Layout() in this case.
   //                http://crbug.com/5540
   int back_width = back_->GetPreferredSize().width();
-  if (browser_->window() && browser_->window()->IsMaximized())
+  if (maximized)
     back_->SetBounds(0, child_y, back_width + kEdgeSpacing, child_height);
   else
     back_->SetBounds(kEdgeSpacing, child_y, back_width, child_height);
@@ -548,16 +476,9 @@ void ToolbarView::Layout() {
   }
 
   int browser_actions_width = browser_actions_->GetPreferredSize().width();
-#if defined(OS_CHROMEOS)
-  int feedback_menu_width = feedback_->GetPreferredSize().width() +
-                            kButtonSpacing;
-#endif
   int app_menu_width = app_menu_->GetPreferredSize().width();
   int location_x = home_->x() + home_->width() + kStandardSpacing;
   int available_width = width() - kEdgeSpacing - app_menu_width -
-#if defined(OS_CHROMEOS)
-      feedback_menu_width -
-#endif
       browser_actions_width - location_x;
 
   location_bar_->SetBounds(location_x, child_y, std::max(available_width, 0),
@@ -574,19 +495,16 @@ void ToolbarView::Layout() {
   //                required.
   browser_actions_->Layout();
 
-#if defined(OS_CHROMEOS)
-  feedback_->SetBounds(browser_actions_->x() + browser_actions_width, child_y,
-                       feedback_->GetPreferredSize().width(), child_height);
-  app_menu_->SetBounds(feedback_->x() + feedback_->width() + kButtonSpacing,
-                       child_y, app_menu_width, child_height);
-#else
+  // Extend the app menu to the screen's right edge in maximized mode just like
+  // we extend the back button to the left edge.
+  if (maximized)
+    app_menu_width += kEdgeSpacing;
   app_menu_->SetBounds(browser_actions_->x() + browser_actions_width, child_y,
                        app_menu_width, child_height);
-#endif
 }
 
-void ToolbarView::Paint(gfx::Canvas* canvas) {
-  View::Paint(canvas);
+void ToolbarView::OnPaint(gfx::Canvas* canvas) {
+  View::OnPaint(canvas);
 
   if (IsDisplayModeNormal())
     return;
@@ -603,8 +521,37 @@ void ToolbarView::Paint(gfx::Canvas* canvas) {
   // For glass, we need to draw a black line below the location bar to separate
   // it from the content area.  For non-glass, the NonClientView draws the
   // toolbar background below the location bar for us.
-  if (GetWindow()->GetNonClientView()->UseNativeFrame())
+  // NOTE: Keep this in sync with BrowserView::GetInfoBarSeparatorColor()!
+  if (GetWindow()->non_client_view()->UseNativeFrame())
     canvas->FillRectInt(SK_ColorBLACK, 0, height() - 1, width(), 1);
+}
+
+// Note this method is ignored on Windows, but needs to be implemented for
+// linux, where it is called before CanDrop().
+bool ToolbarView::GetDropFormats(
+    int* formats,
+    std::set<OSExchangeData::CustomFormat>* custom_formats) {
+  *formats = ui::OSExchangeData::URL | ui::OSExchangeData::STRING;
+  return true;
+}
+
+bool ToolbarView::CanDrop(const ui::OSExchangeData& data) {
+  // To support loading URLs by dropping into the toolbar, we need to support
+  // dropping URLs and/or text.
+  return data.HasURL() || data.HasString();
+}
+
+int ToolbarView::OnDragUpdated(const views::DropTargetEvent& event) {
+  if (event.source_operations() & ui::DragDropTypes::DRAG_COPY) {
+    return ui::DragDropTypes::DRAG_COPY;
+  } else if (event.source_operations() & ui::DragDropTypes::DRAG_LINK) {
+    return ui::DragDropTypes::DRAG_LINK;
+  }
+  return ui::DragDropTypes::DRAG_NONE;
+}
+
+int ToolbarView::OnPerformDrop(const views::DropTargetEvent& event) {
+  return location_bar_->location_entry()->OnPerformDrop(event);
 }
 
 void ToolbarView::OnThemeChanged() {
@@ -637,22 +584,42 @@ bool ToolbarView::IsUpgradeRecommended() {
 #endif
 }
 
-bool ToolbarView::ShouldShowBackgroundPageBadge() {
-  return BackgroundPageTracker::GetInstance()->
-      GetUnacknowledgedBackgroundPageCount() > 0;
+int ToolbarView::GetUpgradeRecommendedBadge() const {
+#if defined(OS_CHROMEOS)
+  return IDR_UPDATE_BADGE;
+#else
+  switch (UpgradeDetector::GetInstance()->upgrade_notification_stage()) {
+    case UpgradeDetector::UPGRADE_ANNOYANCE_SEVERE:
+      return IDR_UPDATE_BADGE4;
+    case UpgradeDetector::UPGRADE_ANNOYANCE_HIGH:
+      return IDR_UPDATE_BADGE3;
+    case UpgradeDetector::UPGRADE_ANNOYANCE_ELEVATED:
+      return IDR_UPDATE_BADGE2;
+    default:
+      return IDR_UPDATE_BADGE;
+  }
+#endif
 }
 
 bool ToolbarView::ShouldShowIncompatibilityWarning() {
 #if defined(OS_WIN)
   EnumerateModulesModel* loaded_modules = EnumerateModulesModel::GetInstance();
-  return loaded_modules->confirmed_bad_modules_detected() > 0;
+  return loaded_modules->ShouldShowConflictWarning();
 #else
   return false;
 #endif
 }
 
 int ToolbarView::PopupTopSpacing() const {
-  return GetWindow()->GetNonClientView()->UseNativeFrame() ?
+  // TODO(beng): For some reason GetWindow() returns NULL here in some
+  //             unidentified circumstances on ChromeOS. This means GetWidget()
+  //             succeeded but we were (probably) unable to locate a WidgetGtk*
+  //             on it using NativeWidget::GetNativeWidgetForNativeView.
+  //             I am throwing in a NULL check for now to stop the hurt, but
+  //             it's possible the crash may just show up somewhere else.
+  const views::Window* window = GetWindow();
+  DCHECK(window) << "If you hit this please talk to beng";
+  return window && window->non_client_view()->UseNativeFrame() ?
       0 : kPopupTopSpacingNonGlass;
 }
 
@@ -689,15 +656,6 @@ void ToolbarView::LoadImages() {
       tp->GetBitmapNamed(IDR_STOP_P));
   reload_->SetToggledImage(views::CustomButton::BS_DISABLED,
       tp->GetBitmapNamed(IDR_STOP_D));
-
-#if defined(OS_CHROMEOS)
-  feedback_->SetImage(views::CustomButton::BS_NORMAL,
-      tp->GetBitmapNamed(IDR_FEEDBACK));
-  feedback_->SetImage(views::CustomButton::BS_HOT,
-      tp->GetBitmapNamed(IDR_FEEDBACK_H));
-  feedback_->SetImage(views::CustomButton::BS_PUSHED,
-      tp->GetBitmapNamed(IDR_FEEDBACK_P));
-#endif
 
   home_->SetImage(views::CustomButton::BS_NORMAL, tp->GetBitmapNamed(IDR_HOME));
   home_->SetImage(views::CustomButton::BS_HOT, tp->GetBitmapNamed(IDR_HOME_H));
@@ -737,9 +695,7 @@ SkBitmap ToolbarView::GetAppMenuIcon(views::CustomButton::ButtonState state) {
   incompatibility_badge_showing = false;
 #endif
 
-  bool add_badge = IsUpgradeRecommended() ||
-                   ShouldShowIncompatibilityWarning() ||
-                   ShouldShowBackgroundPageBadge();
+  bool add_badge = IsUpgradeRecommended() || ShouldShowIncompatibilityWarning();
   if (!add_badge)
     return icon;
 
@@ -750,12 +706,9 @@ SkBitmap ToolbarView::GetAppMenuIcon(views::CustomButton::ButtonState state) {
 
   SkBitmap badge;
   // Only one badge can be active at any given time. The Upgrade notification
-  // is deemed most important, then the temporary background page badge,
-  // then the DLL conflict badge.
+  // is deemed most important, then the DLL conflict badge.
   if (IsUpgradeRecommended()) {
-    badge = *tp->GetBitmapNamed(IDR_UPDATE_BADGE);
-  } else if (ShouldShowBackgroundPageBadge()) {
-    badge = *tp->GetBitmapNamed(IDR_BACKGROUND_BADGE);
+    badge = *tp->GetBitmapNamed(GetUpgradeRecommendedBadge());
   } else if (ShouldShowIncompatibilityWarning()) {
 #if defined(OS_WIN)
     if (!was_showing)

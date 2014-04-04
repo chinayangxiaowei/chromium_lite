@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -16,7 +16,7 @@ std::string ProcessIDN(const std::string& input) {
   // Convert the ASCII input to a string16 for ICU.
   string16 input16;
   input16.reserve(input.length());
-  std::copy(input.begin(), input.end(), std::back_inserter(input16));
+  input16.insert(input16.end(), input.begin(), input.end());
 
   string16 output16;
   output16.resize(input.length());

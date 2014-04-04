@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -23,7 +23,7 @@
 
 #include <map>
 
-#include "base/scoped_nsobject.h"
+#include "base/memory/scoped_nsobject.h"
 #include "chrome/browser/bookmarks/bookmark_model_observer.h"
 
 class BookmarkNode;
@@ -55,7 +55,7 @@ class BookmarkMenuBridge : public BookmarkModelObserver {
                                    const BookmarkNode* node);
   virtual void BookmarkNodeChanged(BookmarkModel* model,
                                    const BookmarkNode* node);
-  virtual void BookmarkNodeFavIconLoaded(BookmarkModel* model,
+  virtual void BookmarkNodeFaviconLoaded(BookmarkModel* model,
                                          const BookmarkNode* node);
   virtual void BookmarkNodeChildrenReordered(BookmarkModel* model,
                                              const BookmarkNode* node);
@@ -80,10 +80,19 @@ class BookmarkMenuBridge : public BookmarkModelObserver {
                         const BookmarkNode* node,
                         NSString* title);
 
-  // Helper for recursively adding items to our bookmark menu
+  // Helper for recursively adding items to our bookmark menu.
   // All children of |node| will be added to |menu|.
   // TODO(jrg): add a counter to enforce maximum nodes added
   void AddNodeToMenu(const BookmarkNode* node, NSMenu* menu);
+
+  // Helper for adding an item to our bookmark menu. An item which has a
+  // localized title specified by |message_id| will be added to |menu|.
+  // The item is also bound to |node| by tag. |command_id| selects the action.
+  void AddItemToMenu(int command_id,
+                     int message_id,
+                     const BookmarkNode* node,
+                     NSMenu* menu,
+                     bool enabled);
 
   // This configures an NSMenuItem with all the data from a BookmarkNode. This
   // is used to update existing menu items, as well as to configure newly

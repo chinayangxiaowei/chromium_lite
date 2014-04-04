@@ -1,4 +1,4 @@
-// Copyright (c) 2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,8 +7,8 @@
 #pragma once
 
 #include "base/basictypes.h"
+#include "base/memory/scoped_ptr.h"
 #include "base/process_util.h"
-#include "base/scoped_ptr.h"
 #include "chrome/browser/importer/nss_decryptor.h"
 
 class FFDecryptorServerChannelListener;
@@ -35,10 +35,10 @@ class FFUnitTestDecryptorProxy {
 
   // Initialize a decryptor, returns true if the object was
   // constructed successfully.
-  bool Setup(const std::wstring& nss_path);
+  bool Setup(const FilePath& nss_path);
 
   // This match the parallel functions in NSSDecryptor.
-  bool DecryptorInit(const std::wstring& dll_path, const std::wstring& db_path);
+  bool DecryptorInit(const FilePath& dll_path, const FilePath& db_path);
   string16 Decrypt(const std::string& crypt);
 
  private:
@@ -68,12 +68,12 @@ FFUnitTestDecryptorProxy::FFUnitTestDecryptorProxy() {
 FFUnitTestDecryptorProxy::~FFUnitTestDecryptorProxy() {
 }
 
-bool FFUnitTestDecryptorProxy::Setup(const std::wstring& /* nss_path */) {
+bool FFUnitTestDecryptorProxy::Setup(const FilePath& nss_path) {
   return true;
 }
 
-bool FFUnitTestDecryptorProxy::DecryptorInit(const std::wstring& dll_path,
-    const std::wstring& db_path) {
+bool FFUnitTestDecryptorProxy::DecryptorInit(const FilePath& dll_path,
+                                             const FilePath& db_path) {
   return decryptor_.Init(dll_path, db_path);
 }
 

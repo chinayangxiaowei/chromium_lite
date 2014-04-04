@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,7 +8,7 @@
 
 #include <string>
 
-#include "base/ref_counted.h"
+#include "base/memory/ref_counted.h"
 #include "chrome/browser/debugger/devtools_client_host.h"
 #include "chrome/browser/extensions/extension_devtools_manager.h"
 #include "chrome/browser/extensions/extension_message_service.h"
@@ -31,8 +31,12 @@ class ExtensionDevToolsBridge : public DevToolsClientHost {
   // DevToolsClientHost, called to send a message to this host.
   virtual void SendMessageToClient(const IPC::Message& msg);
 
+  virtual void TabReplaced(TabContentsWrapper* new_tab);
+
  private:
   void OnDispatchOnInspectorFrontend(const std::string& data);
+
+  virtual void FrameNavigating(const std::string& url) {}
 
   // ID of the tab we are monitoring.
   int tab_id_;

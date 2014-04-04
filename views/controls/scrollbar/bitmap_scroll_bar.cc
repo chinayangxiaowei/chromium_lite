@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -13,11 +13,11 @@
 #include "base/message_loop.h"
 #include "base/string16.h"
 #include "base/utf_string_conversions.h"
-#include "gfx/canvas.h"
 #include "grit/app_strings.h"
 #include "third_party/skia/include/core/SkBitmap.h"
 #include "ui/base/keycodes/keyboard_codes.h"
 #include "ui/base/l10n/l10n_util.h"
+#include "ui/gfx/canvas.h"
 #include "views/controls/menu/menu.h"
 #include "views/controls/scroll_view.h"
 #include "views/widget/widget.h"
@@ -54,15 +54,18 @@ class AutorepeatButton : public ImageButton {
   virtual ~AutorepeatButton() {}
 
  protected:
-  virtual bool OnMousePressed(const MouseEvent& event) {
+  virtual bool OnMousePressed(const MouseEvent& event) OVERRIDE {
     Button::NotifyClick(event);
     repeater_.Start();
     return true;
   }
 
-  virtual void OnMouseReleased(const MouseEvent& event, bool canceled) {
+  virtual void OnMouseReleased(const MouseEvent& event) OVERRIDE {
+    OnMouseCaptureLost();
+  }
+
+  virtual void OnMouseCaptureLost() OVERRIDE {
     repeater_.Stop();
-    View::OnMouseReleased(event, canceled);
   }
 
  private:
@@ -74,9 +77,9 @@ class AutorepeatButton : public ImageButton {
 #elif defined(OS_LINUX)
     gfx::Point cursor_point = Screen::GetCursorScreenPoint();
 #endif
-    views::MouseEvent event(views::Event::ET_MOUSE_RELEASED,
+    views::MouseEvent event(ui::ET_MOUSE_RELEASED,
                             cursor_point.x(), cursor_point.y(),
-                            views::Event::EF_LEFT_BUTTON_DOWN);
+                            ui::EF_LEFT_BUTTON_DOWN);
     Button::NotifyClick(event);
   }
 
@@ -118,7 +121,7 @@ class BitmapScrollBarThumb : public View {
     } else {
       thumb_bounds.set_height(size);
     }
-    SetBounds(thumb_bounds);
+    SetBoundsRect(thumb_bounds);
   }
 
   // Retrieves the size (width or height) of the thumb.
@@ -137,7 +140,7 @@ class BitmapScrollBarThumb : public View {
     } else {
       thumb_bounds.set_y(track_bounds.y() + position);
     }
-    SetBounds(thumb_bounds);
+    SetBoundsRect(thumb_bounds);
   }
 
   // Gets the position of the thumb on the x or y axis.
@@ -149,7 +152,7 @@ class BitmapScrollBarThumb : public View {
   }
 
   // View overrides:
-  virtual gfx::Size GetPreferredSize() {
+  virtual gfx::Size GetPreferredSize() OVERRIDE {
     return gfx::Size(background_bitmap()->width(),
                      start_cap_bitmap()->height() +
                          end_cap_bitmap()->height() +
@@ -158,7 +161,7 @@ class BitmapScrollBarThumb : public View {
 
  protected:
   // View overrides:
-  virtual void Paint(gfx::Canvas* canvas) {
+  virtual void Paint(gfx::Canvas* canvas) OVERRIDE {
     canvas->DrawBitmapInt(*start_cap_bitmap(), 0, 0);
     int top_cap_height = start_cap_bitmap()->height();
     int bottom_cap_height = end_cap_bitmap()->height();
@@ -174,22 +177,22 @@ class BitmapScrollBarThumb : public View {
     canvas->DrawBitmapInt(*grippy_bitmap(), grippy_x, grippy_y);
   }
 
-  virtual void OnMouseEntered(const MouseEvent& event) {
+  virtual void OnMouseEntered(const MouseEvent& event) OVERRIDE {
     SetState(CustomButton::BS_HOT);
   }
 
-  virtual void OnMouseExited(const MouseEvent& event) {
+  virtual void OnMouseExited(const MouseEvent& event) OVERRIDE {
     SetState(CustomButton::BS_NORMAL);
   }
 
-  virtual bool OnMousePressed(const MouseEvent& event) {
+  virtual bool OnMousePressed(const MouseEvent& event) OVERRIDE {
     mouse_offset_ = scroll_bar_->IsHorizontal() ? event.x() : event.y();
     drag_start_position_ = GetPosition();
     SetState(CustomButton::BS_PUSHED);
     return true;
   }
 
-  virtual bool OnMouseDragged(const MouseEvent& event) {
+  virtual bool OnMouseDragged(const MouseEvent& event) OVERRIDE {
     // If the user moves the mouse more than |kScrollThumbDragOutSnap| outside
     // the bounds of the thumb, the scrollbar will snap the scroll back to the
     // point it was at before the drag began.
@@ -216,10 +219,12 @@ class BitmapScrollBarThumb : public View {
     return true;
   }
 
-  virtual void OnMouseReleased(const MouseEvent& event,
-                               bool canceled) {
+  virtual void OnMouseReleased(const MouseEvent& event) OVERRIDE {
+    OnMouseCaptureLost();
+  }
+
+  virtual void OnMouseCaptureLost() OVERRIDE {
     SetState(CustomButton::BS_HOT);
-    View::OnMouseReleased(event, canceled);
   }
 
  private:
@@ -394,11 +399,6 @@ void BitmapScrollBar::ScrollByContentsOffset(int contents_offset) {
   ScrollContentsToOffset();
 }
 
-void BitmapScrollBar::TrackClicked() {
-  if (last_scroll_amount_ != SCROLL_NONE)
-    ScrollByAmount(last_scroll_amount_);
-}
-
 ///////////////////////////////////////////////////////////////////////////////
 // BitmapScrollBar, View implementation:
 
@@ -407,14 +407,6 @@ gfx::Size BitmapScrollBar::GetPreferredSize() {
   // minimum allowable height.
   gfx::Size button_prefsize = prev_button_->GetPreferredSize();
   return gfx::Size(button_prefsize.width(), button_prefsize.height() * 2);
-}
-
-void BitmapScrollBar::Paint(gfx::Canvas* canvas) {
-  // Paint the track.
-  gfx::Rect track_bounds = GetTrackBounds();
-  canvas->TileImageInt(*images_[THUMB_TRACK][thumb_track_state_],
-                       track_bounds.x(), track_bounds.y(),
-                       track_bounds.width(), track_bounds.height());
 }
 
 void BitmapScrollBar::Layout() {
@@ -484,20 +476,18 @@ bool BitmapScrollBar::OnMousePressed(const MouseEvent& event) {
   return true;
 }
 
-void BitmapScrollBar::OnMouseReleased(const MouseEvent& event, bool canceled) {
-  SetThumbTrackState(CustomButton::BS_NORMAL);
-  repeater_.Stop();
-  View::OnMouseReleased(event, canceled);
+void BitmapScrollBar::OnMouseReleased(const MouseEvent& event) {
+  OnMouseCaptureLost();
 }
 
-bool BitmapScrollBar::OnMouseWheel(const MouseWheelEvent& event) {
-  ScrollByContentsOffset(event.GetOffset());
-  return true;
+void BitmapScrollBar::OnMouseCaptureLost() {
+  SetThumbTrackState(CustomButton::BS_NORMAL);
+  repeater_.Stop();
 }
 
 bool BitmapScrollBar::OnKeyPressed(const KeyEvent& event) {
   ScrollAmount amount = SCROLL_NONE;
-  switch (event.GetKeyCode()) {
+  switch (event.key_code()) {
     case ui::VKEY_UP:
       if (!IsHorizontal())
         amount = SCROLL_PREV_LINE;
@@ -534,6 +524,11 @@ bool BitmapScrollBar::OnKeyPressed(const KeyEvent& event) {
   return false;
 }
 
+bool BitmapScrollBar::OnMouseWheel(const MouseWheelEvent& event) {
+  ScrollByContentsOffset(event.offset());
+  return true;
+}
+
 ///////////////////////////////////////////////////////////////////////////////
 // BitmapScrollBar, ContextMenuController implementation:
 
@@ -547,12 +542,11 @@ enum ScrollBarContextMenuCommands {
   ScrollBarContextMenuCommand_ScrollNext
 };
 
-void BitmapScrollBar::ShowContextMenu(View* source,
-                                      const gfx::Point& p,
-                                      bool is_mouse_gesture) {
+void BitmapScrollBar::ShowContextMenuForView(View* source,
+                                             const gfx::Point& p,
+                                             bool is_mouse_gesture) {
   Widget* widget = GetWidget();
-  gfx::Rect widget_bounds;
-  widget->GetBounds(&widget_bounds, true);
+  gfx::Rect widget_bounds = widget->GetWindowScreenBounds();
   gfx::Point temp_pt(p.x() - widget_bounds.x(), p.y() - widget_bounds.y());
   View::ConvertPointFromWidget(this, &temp_pt);
   context_menu_mouse_position_ = IsHorizontal() ? temp_pt.x() : temp_pt.y();
@@ -695,7 +689,23 @@ int BitmapScrollBar::GetPosition() const {
 }
 
 ///////////////////////////////////////////////////////////////////////////////
+// BitmapScrollBar, View implementation:
+
+void BitmapScrollBar::OnPaint(gfx::Canvas* canvas) {
+  // Paint the track.
+  gfx::Rect track_bounds = GetTrackBounds();
+  canvas->TileImageInt(*images_[THUMB_TRACK][thumb_track_state_],
+                       track_bounds.x(), track_bounds.y(),
+                       track_bounds.width(), track_bounds.height());
+}
+
+///////////////////////////////////////////////////////////////////////////////
 // BitmapScrollBar, private:
+
+void BitmapScrollBar::TrackClicked() {
+  if (last_scroll_amount_ != SCROLL_NONE)
+    ScrollByAmount(last_scroll_amount_);
+}
 
 void BitmapScrollBar::ScrollContentsToOffset() {
   GetController()->ScrollToPosition(this, contents_scroll_offset_);

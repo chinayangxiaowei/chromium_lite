@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,7 +8,7 @@
 
 #include <string>
 
-#include "base/scoped_ptr.h"
+#include "base/memory/scoped_ptr.h"
 #include "base/task.h"
 #include "base/time.h"
 #include "chrome/browser/chromeos/login/captcha_view.h"
@@ -75,9 +75,8 @@ class ScreenLocker : public LoginStatusConsumer,
                               const GaiaAuthConsumer::ClientLoginResult& result,
                               bool pending_requests);
 
-  // Overridden from views::InfoBubbleDelegate.
-  virtual void InfoBubbleClosing(InfoBubble* info_bubble,
-                                 bool closed_by_escape);
+  // Overridden from views::BubbleDelegate.
+  virtual void BubbleClosing(Bubble* bubble, bool closed_by_escape);
   virtual bool CloseOnEscape() { return true; }
   virtual bool FadeInOnShow() { return false; }
   virtual void OnHelpLinkActivated() {}
@@ -114,6 +113,9 @@ class ScreenLocker : public LoginStatusConsumer,
   const UserManager::User& user() const {
     return user_;
   }
+
+  // Returns a view that has given view |id|, or null if it doesn't exist.
+  views::View* GetViewByID(int id);
 
   // Initialize ScreenLocker class. It will listen to
   // LOGIN_USER_CHANGED notification so that the screen locker accepts

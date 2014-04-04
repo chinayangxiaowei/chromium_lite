@@ -9,10 +9,11 @@
 #include "base/logging.h"
 #include "base/message_loop.h"
 #include "base/metrics/histogram.h"
+#include "base/string_util.h"
 #include "base/time.h"
-#include "chrome/renderer/render_view.h"
 #include "chrome/renderer/safe_browsing/feature_extractor_clock.h"
 #include "chrome/renderer/safe_browsing/features.h"
+#include "content/renderer/render_view.h"
 #include "net/base/registry_controlled_domain.h"
 #include "third_party/WebKit/Source/WebKit/chromium/public/WebDocument.h"
 #include "third_party/WebKit/Source/WebKit/chromium/public/WebElement.h"
@@ -25,7 +26,7 @@ namespace safe_browsing {
 
 // This time should be short enough that it doesn't noticeably disrupt the
 // user's interaction with the page.
-const int PhishingDOMFeatureExtractor::kMaxTimePerChunkMs = 50;
+const int PhishingDOMFeatureExtractor::kMaxTimePerChunkMs = 20;
 
 // Experimenting shows that we get a reasonable gain in performance by
 // increasing this up to around 10, but there's not much benefit in
@@ -146,11 +147,7 @@ void PhishingDOMFeatureExtractor::ExtractFeaturesWithTimeout() {
   if (!cur_frame_) {
     WebKit::WebView* web_view = render_view_->webview();
     if (!web_view) {
-      // When the WebView is going away, the render view should have called
-      // CancelPendingExtraction() which should have stopped any pending work,
-      // so this case should not happen.
-      NOTREACHED();
-      RunCallback(false);
+      RunCallback(false);  // The WebView is going away.
       return;
     }
     cur_frame_ = web_view->mainFrame();

@@ -205,6 +205,10 @@ int HttpProxyClientSocket::GetPeerAddress(AddressList* address) const {
   return transport_->socket()->GetPeerAddress(address);
 }
 
+int HttpProxyClientSocket::GetLocalAddress(IPEndPoint* address) const {
+  return transport_->socket()->GetLocalAddress(address);
+}
+
 int HttpProxyClientSocket::PrepareForAuthRestart() {
   if (!response_.headers.get())
     return ERR_CONNECTION_RESET;
@@ -299,25 +303,25 @@ int HttpProxyClientSocket::DoLoop(int last_io_result) {
         break;
       case STATE_SEND_REQUEST:
         DCHECK_EQ(OK, rv);
-        net_log_.BeginEvent(NetLog::TYPE_HTTP_TRANSACTION_TUNNEL_SEND_REQUEST,
-                            NULL);
+        net_log_.BeginEvent(
+            NetLog::TYPE_HTTP_TRANSACTION_TUNNEL_SEND_REQUEST, NULL);
         rv = DoSendRequest();
         break;
       case STATE_SEND_REQUEST_COMPLETE:
         rv = DoSendRequestComplete(rv);
-        net_log_.EndEvent(NetLog::TYPE_HTTP_TRANSACTION_TUNNEL_SEND_REQUEST,
-                          NULL);
+        net_log_.EndEventWithNetErrorCode(
+            NetLog::TYPE_HTTP_TRANSACTION_TUNNEL_SEND_REQUEST, rv);
         break;
       case STATE_READ_HEADERS:
         DCHECK_EQ(OK, rv);
-        net_log_.BeginEvent(NetLog::TYPE_HTTP_TRANSACTION_TUNNEL_READ_HEADERS,
-                            NULL);
+        net_log_.BeginEvent(
+            NetLog::TYPE_HTTP_TRANSACTION_TUNNEL_READ_HEADERS, NULL);
         rv = DoReadHeaders();
         break;
       case STATE_READ_HEADERS_COMPLETE:
         rv = DoReadHeadersComplete(rv);
-        net_log_.EndEvent(NetLog::TYPE_HTTP_TRANSACTION_TUNNEL_READ_HEADERS,
-                          NULL);
+        net_log_.EndEventWithNetErrorCode(
+            NetLog::TYPE_HTTP_TRANSACTION_TUNNEL_READ_HEADERS, rv);
         break;
       case STATE_DRAIN_BODY:
         DCHECK_EQ(OK, rv);

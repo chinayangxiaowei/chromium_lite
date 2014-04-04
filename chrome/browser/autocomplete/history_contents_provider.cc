@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -82,7 +82,13 @@ void HistoryContentsProvider::Start(const AutocompleteInput& input,
   if ((input.type() == AutocompleteInput::URL) ||
       (((input.type() == AutocompleteInput::REQUESTED_URL) ||
         (input.type() == AutocompleteInput::UNKNOWN)) &&
-       (input.text().find('.') != std::wstring::npos))) {
+       (input.text().find('.') != string16::npos))) {
+    Stop();
+    return;
+  }
+
+  if (input.matches_requested() == AutocompleteInput::BEST_MATCH) {
+    // None of our results are applicable for best match.
     Stop();
     return;
   }
@@ -105,7 +111,7 @@ void HistoryContentsProvider::Start(const AutocompleteInput& input,
     // allowed to keep running it, do so, and when it finishes, its results will
     // get marked up for this new input.  In synchronous_only mode, cancel the
     // history query.
-    if (input.synchronous_only()) {
+    if (input.matches_requested() != AutocompleteInput::ALL_MATCHES) {
       done_ = true;
       request_consumer_.CancelAllRequests();
     }
@@ -113,7 +119,7 @@ void HistoryContentsProvider::Start(const AutocompleteInput& input,
     return;
   }
 
-  if (results_.size() != 0) {
+  if (!results_.empty()) {
     // Clear the results. We swap in an empty one as the easy way to clear it.
     history::QueryResults empty_results;
     results_.Swap(&empty_results);
@@ -125,7 +131,7 @@ void HistoryContentsProvider::Start(const AutocompleteInput& input,
   // Convert the bookmark results.
   ConvertResults();
 
-  if (!input.synchronous_only()) {
+  if (input.matches_requested() == AutocompleteInput::ALL_MATCHES) {
     HistoryService* history =
         profile_->GetHistoryService(Profile::EXPLICIT_ACCESS);
     if (history) {
@@ -134,7 +140,7 @@ void HistoryContentsProvider::Start(const AutocompleteInput& input,
       history::QueryOptions options;
       options.SetRecentDayRange(kDaysToSearch);
       options.max_count = kMaxMatches;
-      history->QueryHistory(WideToUTF16(input.text()), options,
+      history->QueryHistory(input.text(), options,
           &request_consumer_,
           NewCallback(this, &HistoryContentsProvider::QueryComplete));
     }
@@ -212,7 +218,7 @@ AutocompleteMatch HistoryContentsProvider::ResultToMatch(
   match.destination_url = result.url();
   match.contents_class.push_back(
       ACMatchClassification(0, ACMatchClassification::URL));
-  match.description = UTF16ToWide(result.title());
+  match.description = result.title();
   match.starred =
       (profile_->GetBookmarkModel() &&
        profile_->GetBookmarkModel()->IsBookmarked(result.url()));
@@ -265,7 +271,7 @@ void HistoryContentsProvider::QueryBookmarks(const AutocompleteInput& input) {
 
   TimeTicks start_time = TimeTicks::Now();
   std::vector<bookmark_utils::TitleMatch> matches;
-  bookmark_model->GetBookmarksWithTitlesMatching(WideToUTF16Hack(input.text()),
+  bookmark_model->GetBookmarksWithTitlesMatching(input.text(),
                                                  kMaxMatches, &matches);
   for (size_t i = 0; i < matches.size(); ++i)
     AddBookmarkTitleMatchToResults(matches[i]);

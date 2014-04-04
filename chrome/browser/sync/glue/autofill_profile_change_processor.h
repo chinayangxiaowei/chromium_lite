@@ -1,6 +1,7 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
+
 #ifndef CHROME_BROWSER_SYNC_GLUE_AUTOFILL_PROFILE_CHANGE_PROCESSOR_H_
 #define CHROME_BROWSER_SYNC_GLUE_AUTOFILL_PROFILE_CHANGE_PROCESSOR_H_
 #pragma once
@@ -15,10 +16,10 @@
 #include "chrome/browser/sync/unrecoverable_error_handler.h"
 #include "chrome/browser/webdata/autofill_change.h"
 #include "chrome/browser/webdata/web_database.h"
-#include "chrome/common/notification_observer.h"
-#include "chrome/common/notification_registrar.h"
-#include "chrome/common/notification_service.h"
-#include "chrome/common/notification_type.h"
+#include "content/common/notification_observer.h"
+#include "content/common/notification_registrar.h"
+#include "content/common/notification_service.h"
+#include "content/common/notification_type.h"
 
 namespace browser_sync {
 
@@ -31,7 +32,7 @@ class AutofillProfileChangeProcessor : public ChangeProcessor,
       PersonalDataManager* personal_data_manager,
       UnrecoverableErrorHandler* error_handler);
 
-  virtual ~AutofillProfileChangeProcessor() {}
+  virtual ~AutofillProfileChangeProcessor();
 
   // Virtual methods from ChangeProcessor class.
   virtual void ApplyChangesFromSyncModel(
@@ -47,7 +48,7 @@ class AutofillProfileChangeProcessor : public ChangeProcessor,
                        const NotificationDetails& details);
 
 
-  static void WriteAutofillProfile(const AutoFillProfile& profile,
+  static void WriteAutofillProfile(const AutofillProfile& profile,
                                    sync_api::WriteNode* node);
 
  protected:
@@ -62,7 +63,7 @@ class AutofillProfileChangeProcessor : public ChangeProcessor,
     AutofillProfileChangeRecord(
         sync_api::SyncManager::ChangeRecord::Action action,
         int64 id,
-        const sync_pb::AutofillProfileSpecifics profile_specifics)
+        const sync_pb::AutofillProfileSpecifics& profile_specifics)
         : action_(action),
           id_(id),
           profile_specifics_(profile_specifics) {}
@@ -72,9 +73,9 @@ class AutofillProfileChangeProcessor : public ChangeProcessor,
 
   virtual void AddAutofillProfileSyncNode(sync_api::WriteTransaction* trans,
       sync_api::BaseNode& autofill_profile_root,
-      const AutoFillProfile& profile);
+      const AutofillProfile& profile);
 
-  void ActOnChange(AutofillProfileChangeGUID* change,
+  void ActOnChange(AutofillProfileChange* change,
       sync_api::WriteTransaction* trans,
       sync_api::ReadNode& autofill_root);
 

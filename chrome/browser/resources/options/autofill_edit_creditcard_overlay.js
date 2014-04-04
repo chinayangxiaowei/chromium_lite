@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,28 +8,20 @@ cr.define('options', function() {
   // The GUID of the loaded credit card.
   var guid_;
 
-  // The CC number of the profile, used to check for changes to the input field.
-  var storedCCNumber_;
-
-  // Set to true if the user has edited the CC number field. When saving the
-  // CC profile after editing, the stored CC number is saved if the input field
-  // has not been modified.
-  var hasEditedNumber_;
-
   /**
-   * AutoFillEditCreditCardOverlay class
+   * AutofillEditCreditCardOverlay class
    * Encapsulated handling of the 'Add Page' overlay page.
    * @class
    */
-  function AutoFillEditCreditCardOverlay() {
-    OptionsPage.call(this, 'autoFillEditCreditCardOverlay',
-                     templateData.autoFillEditCreditCardTitle,
-                     'autoFillEditCreditCardOverlay');
+  function AutofillEditCreditCardOverlay() {
+    OptionsPage.call(this, 'autofillEditCreditCard',
+                     templateData.autofillEditCreditCardTitle,
+                     'autofill-edit-credit-card-overlay');
   }
 
-  cr.addSingletonGetter(AutoFillEditCreditCardOverlay);
+  cr.addSingletonGetter(AutofillEditCreditCardOverlay);
 
-  AutoFillEditCreditCardOverlay.prototype = {
+  AutofillEditCreditCardOverlay.prototype = {
     __proto__: OptionsPage.prototype,
 
     /**
@@ -39,16 +31,15 @@ cr.define('options', function() {
       OptionsPage.prototype.initializePage.call(this);
 
       var self = this;
-      $('autoFillEditCreditCardCancelButton').onclick = function(event) {
+      $('autofill-edit-credit-card-cancel-button').onclick = function(event) {
         self.dismissOverlay_();
       }
-      $('autoFillEditCreditCardApplyButton').onclick = function(event) {
+      $('autofill-edit-credit-card-apply-button').onclick = function(event) {
         self.saveCreditCard_();
         self.dismissOverlay_();
       }
 
       self.guid_ = '';
-      self.storedCCNumber_ = '';
       self.hasEditedNumber_ = false;
       self.clearInputFields_();
       self.connectInputEvents_();
@@ -62,28 +53,22 @@ cr.define('options', function() {
     dismissOverlay_: function() {
       this.clearInputFields_();
       this.guid_ = '';
-      this.storedCCNumber_ = '';
       this.hasEditedNumber_ = false;
-      OptionsPage.clearOverlays();
+      OptionsPage.closeOverlay();
     },
 
     /**
      * Aggregates the values in the input fields into an array and sends the
-     * array to the AutoFill handler.
+     * array to the Autofill handler.
      * @private
      */
     saveCreditCard_: function() {
       var creditCard = new Array(5);
       creditCard[0] = this.guid_;
-      creditCard[1] = $('nameOnCard').value;
-      creditCard[3] = $('expirationMonth').value;
-      creditCard[4] = $('expirationYear').value;
-
-      if (this.hasEditedNumber_)
-        creditCard[2] = $('creditCardNumber').value;
-      else
-        creditCard[2] = this.storedCCNumber_;
-
+      creditCard[1] = $('name-on-card').value;
+      creditCard[2] = $('credit-card-number').value;
+      creditCard[3] = $('expiration-month').value;
+      creditCard[4] = $('expiration-year').value;
       chrome.send('setCreditCard', creditCard);
     },
 
@@ -94,8 +79,9 @@ cr.define('options', function() {
      * @private
      */
     connectInputEvents_: function() {
-      $('nameOnCard').oninput = $('creditCardNumber').oninput =
-          $('expirationMonth').onchange = $('expirationYear').onchange =
+      var ccNumber = $('credit-card-number');
+      $('name-on-card').oninput = ccNumber.oninput =
+          $('expiration-month').onchange = $('expiration-year').onchange =
               this.inputFieldChanged_.bind(this);
     },
 
@@ -106,19 +92,8 @@ cr.define('options', function() {
      * @private
      */
     inputFieldChanged_: function(opt_event) {
-      var ccNumber = $('creditCardNumber');
-      var disabled = !$('nameOnCard').value && !ccNumber.value;
-      $('autoFillEditCreditCardApplyButton').disabled = disabled;
-
-      if (opt_event && opt_event.target == ccNumber) {
-        // If the user hasn't edited the text yet, delete it all on edit.
-        if (!this.hasEditedNumber_ && this.storedCCNumber_.length &&
-            ccNumber.value != this.storedCCNumber_) {
-          ccNumber.value = '';
-        }
-
-        this.hasEditedNumber_ = true;
-      }
+      var disabled = !$('name-on-card').value && !$('credit-card-number');
+      $('autofill-edit-credit-card-apply-button').disabled = disabled;
     },
 
     /**
@@ -128,7 +103,7 @@ cr.define('options', function() {
      */
     setDefaultSelectOptions_: function() {
       // Set the 'Expiration month' default options.
-      var expirationMonth = $('expirationMonth');
+      var expirationMonth = $('expiration-month');
       expirationMonth.options.length = 0;
       for (var i = 1; i <= 12; ++i) {
         var text;
@@ -144,7 +119,7 @@ cr.define('options', function() {
       }
 
       // Set the 'Expiration year' default options.
-      var expirationYear = $('expirationYear');
+      var expirationYear = $('expiration-year');
       expirationYear.options.length = 0;
 
       var date = new Date();
@@ -163,10 +138,10 @@ cr.define('options', function() {
      * @private
      */
     clearInputFields_: function() {
-      $('nameOnCard').value = '';
-      $('creditCardNumber').value = '';
-      $('expirationMonth').selectedIndex = 0;
-      $('expirationYear').selectedIndex = 0;
+      $('name-on-card').value = '';
+      $('credit-card-number').value = '';
+      $('expiration-month').selectedIndex = 0;
+      $('expiration-year').selectedIndex = 0;
     },
 
     /**
@@ -174,8 +149,8 @@ cr.define('options', function() {
      * @private
      */
     setInputFields_: function(creditCard) {
-      $('nameOnCard').value = creditCard['nameOnCard'];
-      $('creditCardNumber').value = creditCard['obfuscatedCardNumber'];
+      $('name-on-card').value = creditCard['nameOnCard'];
+      $('credit-card-number').value = creditCard['creditCardNumber'];
 
       // The options for the year select control may be out-dated at this point,
       // e.g. the user opened the options page before midnight on New Year's Eve
@@ -184,7 +159,7 @@ cr.define('options', function() {
       this.setDefaultSelectOptions_();
 
       var idx = parseInt(creditCard['expirationMonth'], 10);
-      $('expirationMonth').selectedIndex = idx - 1;
+      $('expiration-month').selectedIndex = idx - 1;
 
       expYear = creditCard['expirationYear'];
       var date = new Date();
@@ -192,7 +167,7 @@ cr.define('options', function() {
       for (var i = 0; i < 10; ++i) {
         var text = year + i;
         if (expYear == String(text))
-          $('expirationYear').selectedIndex = i;
+          $('expiration-year').selectedIndex = i;
       }
     },
 
@@ -205,25 +180,23 @@ cr.define('options', function() {
       this.setInputFields_(creditCard);
       this.inputFieldChanged_();
       this.guid_ = creditCard['guid'];
-      this.storedCCNumber_ = creditCard['creditCardNumber'];
     },
   };
 
-  AutoFillEditCreditCardOverlay.clearInputFields = function(title) {
-    AutoFillEditCreditCardOverlay.getInstance().clearInputFields_();
+  AutofillEditCreditCardOverlay.clearInputFields = function(title) {
+    AutofillEditCreditCardOverlay.getInstance().clearInputFields_();
   };
 
-  AutoFillEditCreditCardOverlay.loadCreditCard = function(creditCard) {
-    AutoFillEditCreditCardOverlay.getInstance().loadCreditCard_(creditCard);
+  AutofillEditCreditCardOverlay.loadCreditCard = function(creditCard) {
+    AutofillEditCreditCardOverlay.getInstance().loadCreditCard_(creditCard);
   };
 
-  AutoFillEditCreditCardOverlay.setTitle = function(title) {
-    $('autoFillCreditCardTitle').textContent = title;
+  AutofillEditCreditCardOverlay.setTitle = function(title) {
+    $('autofill-credit-card-title').textContent = title;
   };
 
   // Export
   return {
-    AutoFillEditCreditCardOverlay: AutoFillEditCreditCardOverlay
+    AutofillEditCreditCardOverlay: AutofillEditCreditCardOverlay
   };
-
 });

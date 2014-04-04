@@ -1,4 +1,4 @@
-// Copyright (c) 2006-2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 //
@@ -35,12 +35,26 @@ class BrowserDistribution {
   enum Type {
     CHROME_BROWSER,
     CHROME_FRAME,
+    CHROME_BINARIES,
+    NUM_TYPES
+  };
+
+  // A struct for communicating what a UserExperiment contains. In these
+  // experiments we show toasts to the user if they are inactive for a certain
+  // amount of time.
+  struct UserExperiment {
+    std::wstring prefix;  // The experiment code prefix for this experiment,
+                          // also known as the 'TV' part in 'TV80'.
+    int flavor;           // The flavor index for this experiment.
+    int heading;          // The heading resource ID to use for this experiment.
+    int control_group;    // Size of the control group (in percentages). Control
+                          // group is the group that qualifies for the
+                          // experiment but does not participate.
   };
 
   static BrowserDistribution* GetDistribution();
 
-  static BrowserDistribution* GetSpecificDistribution(
-      Type type, const installer::MasterPreferences& prefs);
+  static BrowserDistribution* GetSpecificDistribution(Type type);
 
   Type GetType() const { return type_; }
 
@@ -91,58 +105,43 @@ class BrowserDistribution {
   virtual bool GetChromeChannel(std::wstring* channel);
 
   virtual void UpdateInstallStatus(bool system_install,
-      bool incremental_install, bool multi_install,
+      installer::ArchiveType archive_type,
       installer::InstallStatus install_status);
+
+  // Gets the experiment details for a given language-brand combo. If |flavor|
+  // is -1, then a flavor will be selected at random. |experiment| is the struct
+  // you want to write the experiment information to. Returns false if no
+  // experiment details could be gathered.
+  virtual bool GetExperimentDetails(UserExperiment* experiment, int flavor);
 
   // After an install or upgrade the user might qualify to participate in an
   // experiment. This function determines if the user qualifies and if so it
   // sets the wheels in motion or in simple cases does the experiment itself.
-  virtual void LaunchUserExperiment(installer::InstallStatus status,
-      const Version& version, const installer::Product& installation,
-      bool system_level);
+  virtual void LaunchUserExperiment(const FilePath& setup_path,
+                                    installer::InstallStatus status,
+                                    const Version& version,
+                                    const installer::Product& installation,
+                                    bool system_level);
 
   // The user has qualified for the inactive user toast experiment and this
   // function just performs it.
   virtual void InactiveUserToastExperiment(int flavor,
-      const installer::Product& installation);
-
-  // A key-file is a file such as a DLL on Windows that is expected to be
-  // in use when the product is being used.  For example "chrome.dll" for
-  // Chrome.  Before attempting to delete an installation directory during
-  // an uninstallation, the uninstaller will check if any one of a potential
-  // set of key files is in use and if they are, abort the delete operation.
-  // Only if none of the key files are in use, can the folder be deleted.
-  // Note that this function does not return a full path to the key file(s),
-  // only (a) file name(s).
-  virtual std::vector<FilePath> GetKeyFiles();
-
-  // Returns the list of Com Dlls that this product cares about having
-  // registered and unregistered. The list may be empty.
-  virtual std::vector<FilePath> GetComDllList();
-
-  // Given a command line, appends the set of uninstall flags the uninstaller
-  // for this distribution will require.
-  virtual void AppendUninstallCommandLineFlags(CommandLine* cmd_line);
-
-  // Returns true if install should create an uninstallation entry in the
-  // Add/Remove Programs dialog for this distribution.
-  virtual bool ShouldCreateUninstallEntry();
-
-  // Adds or removes product-specific flags in |channel_info|.  Returns true if
-  // |channel_info| is modified.
-  virtual bool SetChannelFlags(bool set, installer::ChannelInfo* channel_info);
+      const std::wstring& experiment_group,
+      const installer::Product& installation,
+      const FilePath& application_path);
 
  protected:
-  explicit BrowserDistribution(const installer::MasterPreferences& prefs);
+  explicit BrowserDistribution(Type type);
 
   template<class DistributionClass>
   static BrowserDistribution* GetOrCreateBrowserDistribution(
-      const installer::MasterPreferences& prefs,
       BrowserDistribution** dist);
 
-  Type type_;
+  const Type type_;
 
  private:
+  BrowserDistribution();
+
   DISALLOW_COPY_AND_ASSIGN(BrowserDistribution);
 };
 

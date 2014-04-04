@@ -10,7 +10,7 @@
 #include "base/message_loop.h"
 #include "base/string_util.h"
 #include "base/stringprintf.h"
-#include "chrome/browser/browser_thread.h"
+#include "content/browser/browser_thread.h"
 #include "chrome/browser/profiles/profile_manager.h"
 #include "chrome/common/net/url_fetcher.h"
 
@@ -54,9 +54,7 @@ void ImageDownloader::OnURLFetchComplete(const URLFetcher* source,
   }
 
   VLOG(1) << "Decoding the image...";
-  std::vector<unsigned char> image_data(data.begin(), data.end());
-  scoped_refptr<ImageDecoder> image_decoder = new ImageDecoder(delegate_,
-                                                               image_data);
+  scoped_refptr<ImageDecoder> image_decoder = new ImageDecoder(delegate_, data);
   image_decoder->Start();
   MessageLoop::current()->DeleteSoon(FROM_HERE, this);
 }

@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -44,18 +44,15 @@ class UpdateView : public views::View {
   // Usually is not called since we rely on API that will reboot after update.
   void ShowManualRebootInfo();
 
+  // Shows label for "Preparing updates" state.
+  void ShowPreparingUpdatesInfo(bool visible);
+
   // Whether curtain window with throbber and label in the center should
   // be shown.
   void ShowCurtain(bool show_curtain);
 
   // views::View implementation:
   virtual void Layout();
-
- protected:
-  // views::View implementation:
-  virtual void ViewHierarchyChanged(bool is_add,
-                                    views::View* parent,
-                                    views::View* child);
 
  private:
   // Creates Label control and adds it as a child.
@@ -69,6 +66,7 @@ class UpdateView : public views::View {
 
   // Dialog controls.
   views::Label* installing_updates_label_;
+  views::Label* preparing_updates_label_;
   views::Label* reboot_label_;
   views::Label* manual_reboot_label_;
   views::Label* escape_to_skip_label_;
@@ -83,6 +81,9 @@ class UpdateView : public views::View {
 
   // Show manual reboot label?
   bool show_manual_reboot_label_;
+
+  // Show preparing updates label?
+  bool show_preparing_updates_label_;
 
   // Notifications receiver.
   chromeos::ScreenObserver* observer_;

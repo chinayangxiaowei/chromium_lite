@@ -37,10 +37,7 @@
 #include "base/logging.h"
 #include "base/message_loop.h"
 #include "base/message_loop_proxy.h"
-#if defined(OS_MACOSX) || defined(OS_WIN)
-#include "base/nss_util.h"
-#endif
-#include "base/ref_counted.h"
+#include "base/memory/ref_counted.h"
 #include "base/time.h"
 #include "base/timer.h"
 #include "base/threading/thread.h"
@@ -57,21 +54,25 @@
 #include "net/http/http_request_headers.h"
 #include "net/http/http_response_headers.h"
 #include "net/proxy/proxy_service.h"
-#if defined(OS_WIN)
-#include "net/socket/ssl_client_socket_nss_factory.h"
-#endif
 #include "net/url_request/url_request.h"
 #include "net/url_request/url_request_job.h"
 #include "webkit/appcache/appcache_interfaces.h"
 #include "webkit/blob/blob_storage_controller.h"
 #include "webkit/blob/blob_url_request_job.h"
 #include "webkit/blob/deletable_file_reference.h"
+#include "webkit/fileapi/file_system_context.h"
+#include "webkit/fileapi/file_system_dir_url_request_job.h"
+#include "webkit/fileapi/file_system_url_request_job.h"
 #include "webkit/glue/resource_loader_bridge.h"
 #include "webkit/tools/test_shell/simple_appcache_system.h"
 #include "webkit/tools/test_shell/simple_file_writer.h"
 #include "webkit/tools/test_shell/simple_socket_stream_bridge.h"
 #include "webkit/tools/test_shell/test_shell_request_context.h"
 #include "webkit/tools/test_shell/test_shell_webblobregistry_impl.h"
+
+#if defined(OS_MACOSX) || defined(OS_WIN)
+#include "crypto/nss_util.h"
+#endif
 
 using webkit_glue::ResourceLoaderBridge;
 using webkit_glue::ResourceResponseInfo;
@@ -97,15 +98,42 @@ struct TestShellRequestContextParams {
   bool accept_all_cookies;
 };
 
-static net::URLRequestJob* BlobURLRequestJobFactory(net::URLRequest* request,
-                                                    const std::string& scheme) {
+net::URLRequestJob* BlobURLRequestJobFactory(net::URLRequest* request,
+                                             const std::string& scheme) {
   webkit_blob::BlobStorageController* blob_storage_controller =
       static_cast<TestShellRequestContext*>(request->context())->
           blob_storage_controller();
   return new webkit_blob::BlobURLRequestJob(
       request,
       blob_storage_controller->GetBlobDataFromUrl(request->url()),
-      NULL);
+      SimpleResourceLoaderBridge::GetIoThread());
+}
+
+
+net::URLRequestJob* FileSystemURLRequestJobFactory(net::URLRequest* request,
+                                                   const std::string& scheme) {
+  fileapi::FileSystemContext* fs_context =
+      static_cast<TestShellRequestContext*>(request->context())
+          ->file_system_context();
+  if (!fs_context) {
+    LOG(WARNING) << "No FileSystemContext found, ignoring filesystem: URL";
+    return NULL;
+  }
+
+  // If the path ends with a /, we know it's a directory. If the path refers
+  // to a directory and gets dispatched to FileSystemURLRequestJob, that class
+  // redirects back here, by adding a / to the URL.
+  const std::string path = request->url().path();
+  if (!path.empty() && path[path.size() - 1] == '/') {
+    return new fileapi::FileSystemDirURLRequestJob(
+        request,
+        fs_context,
+        SimpleResourceLoaderBridge::GetIoThread());
+  }
+  return new fileapi::FileSystemURLRequestJob(
+      request,
+      fs_context,
+      SimpleResourceLoaderBridge::GetIoThread());
 }
 
 TestShellRequestContextParams* g_request_context_params = NULL;
@@ -148,6 +176,8 @@ class IOThread : public base::Thread {
         g_request_context->blob_storage_controller());
 
     net::URLRequest::RegisterProtocolFactory("blob", &BlobURLRequestJobFactory);
+    net::URLRequest::RegisterProtocolFactory("filesystem",
+                                             &FileSystemURLRequestJobFactory);
   }
 
   virtual void CleanUp() {
@@ -253,10 +283,9 @@ class RequestProxy : public net::URLRequest::Delegate,
     }
   }
 
-  void NotifyReceivedResponse(const ResourceResponseInfo& info,
-                              bool content_filtered) {
+  void NotifyReceivedResponse(const ResourceResponseInfo& info) {
     if (peer_)
-      peer_->OnReceivedResponse(info, content_filtered);
+      peer_->OnReceivedResponse(info);
   }
 
   void NotifyReceivedData(int bytes_read) {
@@ -277,7 +306,7 @@ class RequestProxy : public net::URLRequest::Delegate,
     g_io_thread->message_loop()->PostTask(FROM_HERE, NewRunnableMethod(
         this, &RequestProxy::AsyncReadData));
 
-    peer_->OnReceivedData(buf_copy.get(), bytes_read);
+    peer_->OnReceivedData(buf_copy.get(), bytes_read, -1);
   }
 
   void NotifyDownloadedData(int bytes_read) {
@@ -405,10 +434,9 @@ class RequestProxy : public net::URLRequest::Delegate,
   }
 
   virtual void OnReceivedResponse(
-      const ResourceResponseInfo& info,
-      bool content_filtered) {
+      const ResourceResponseInfo& info) {
     owner_loop_->PostTask(FROM_HERE, NewRunnableMethod(
-        this, &RequestProxy::NotifyReceivedResponse, info, content_filtered));
+        this, &RequestProxy::NotifyReceivedResponse, info));
   }
 
   virtual void OnReceivedData(int bytes_read) {
@@ -452,7 +480,7 @@ class RequestProxy : public net::URLRequest::Delegate,
     if (request->status().is_success()) {
       ResourceResponseInfo info;
       PopulateResponseInfo(request, &info);
-      OnReceivedResponse(info, false);
+      OnReceivedResponse(info);
       AsyncReadData();  // start reading
     } else {
       Done();
@@ -597,9 +625,7 @@ class SyncRequestProxy : public RequestProxy {
     result_->url = new_url;
   }
 
-  virtual void OnReceivedResponse(
-      const ResourceResponseInfo& info,
-      bool content_filtered) {
+  virtual void OnReceivedResponse(const ResourceResponseInfo& info) {
     *static_cast<ResourceResponseInfo*>(result_) = info;
   }
 
@@ -885,15 +911,9 @@ bool SimpleResourceLoaderBridge::EnsureIOThread() {
   if (g_io_thread)
     return true;
 
-#if defined(OS_WIN)
-  // Use NSS for SSL on Windows.  TODO(wtc): this should eventually be hidden
-  // inside DefaultClientSocketFactory::CreateSSLClientSocket.
-  net::ClientSocketFactory::SetSSLClientSocketFactory(
-      net::SSLClientSocketNSSFactory);
-#endif
 #if defined(OS_MACOSX) || defined(OS_WIN)
   // We want to be sure to init NSPR on the main thread.
-  base::EnsureNSPRInit();
+  crypto::EnsureNSPRInit();
 #endif
 
   // Create the cache thread. We want the cache thread to outlive the IO thread,

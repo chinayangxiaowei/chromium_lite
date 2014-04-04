@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,11 +8,15 @@
 
 #include <set>
 
+#include "base/basictypes.h"
+#include "base/compiler_specific.h"
 #include "base/file_path.h"
 #include "base/gtest_prod_util.h"
+#include "base/string16.h"
 #include "chrome/browser/importer/importer.h"
-#include "chrome/browser/importer/importer_data_types.h"
+#include "chrome/browser/importer/profile_writer.h"
 
+class GURL;
 class TemplateURL;
 
 // Importer for Mozilla Firefox 2.
@@ -20,20 +24,20 @@ class Firefox2Importer : public Importer {
  public:
   Firefox2Importer();
 
-  // Importer methods.
-  virtual void StartImport(const importer::ProfileInfo& profile_info,
+  // Importer:
+  virtual void StartImport(const importer::SourceProfile& source_profile,
                            uint16 items,
-                           ImporterBridge* bridge);
+                           ImporterBridge* bridge) OVERRIDE;
 
   // Loads the default bookmarks in the Firefox installed at |firefox_app_path|,
   // and stores their locations in |urls|.
   static void LoadDefaultBookmarks(const FilePath& firefox_app_path,
-                                   std::set<GURL> *urls);
+                                   std::set<GURL>* urls);
 
   // Creates a TemplateURL with the |keyword| and |url|. |title| may be empty.
   // This function transfers ownership of the created TemplateURL to the caller.
-  static TemplateURL* CreateTemplateURL(const std::wstring& title,
-                                        const std::wstring& keyword,
+  static TemplateURL* CreateTemplateURL(const string16& title,
+                                        const string16& keyword,
                                         const GURL& url);
 
   // Imports the bookmarks from the specified file. |template_urls| and
@@ -43,15 +47,16 @@ class Firefox2Importer : public Importer {
       const FilePath& file_path,
       const std::set<GURL>& default_urls,
       bool import_to_bookmark_bar,
-      const std::wstring& first_folder_name,
+      const string16& first_folder_name,
       Importer* importer,
       std::vector<ProfileWriter::BookmarkEntry>* bookmarks,
       std::vector<TemplateURL*>* template_urls,
-      std::vector<history::ImportedFavIconUsage>* favicons);
+      std::vector<history::ImportedFaviconUsage>* favicons);
 
  private:
   FRIEND_TEST_ALL_PREFIXES(FirefoxImporterTest, Firefox2BookmarkParse);
   FRIEND_TEST_ALL_PREFIXES(FirefoxImporterTest, Firefox2CookesParse);
+  FRIEND_TEST_ALL_PREFIXES(FirefoxImporterTest, Firefox2BookmarkFileImport);
 
   virtual ~Firefox2Importer();
 
@@ -83,19 +88,32 @@ class Firefox2Importer : public Importer {
                                    std::string* charset);
   static bool ParseFolderNameFromLine(const std::string& line,
                                       const std::string& charset,
-                                      std::wstring* folder_name,
-                                      bool* is_toolbar_folder);
+                                      string16* folder_name,
+                                      bool* is_toolbar_folder,
+                                      base::Time* add_date);
   // See above, this will also put the data: URL of the favicon into *favicon
   // if there is a favicon given.  |post_data| is set for POST base keywords to
   // the contents of the actual POST (with %s for the search term).
   static bool ParseBookmarkFromLine(const std::string& line,
                                     const std::string& charset,
-                                    std::wstring* title,
+                                    string16* title,
                                     GURL* url,
                                     GURL* favicon,
-                                    std::wstring* shortcut,
+                                    string16* shortcut,
                                     base::Time* add_date,
-                                    std::wstring* post_data);
+                                    string16* post_data);
+  // Save bookmarks imported from browsers with Firefox2 compatible bookmark
+  // systems such as Epiphany. This bookmark format is the same as that of the
+  // basic Firefox bookmark, but it misses additional properties and uses
+  // lower-case tag:
+  //   ...<h1>Bookmarks</h1><dl>
+  //   <dt><a href="url">name</a></dt>
+  //   <dt><a href="url">name</a></dt>
+  //   </dl>
+  static bool ParseMinimumBookmarkFromLine(const std::string& line,
+                                           const std::string& charset,
+                                           string16* title,
+                                           GURL* url);
 
   // Fetches the given attribute value from the |tag|. Returns true if
   // successful, and |value| will contain the value.
@@ -106,7 +124,7 @@ class Firefox2Importer : public Importer {
   // There are some characters in html file will be escaped:
   //   '<', '>', '"', '\', '&'
   // Un-escapes them if the bookmark name has those characters.
-  static void HTMLUnescape(std::wstring* text);
+  static void HTMLUnescape(string16* text);
 
   // Fills |xml_files| with the file with an xml extension found under |dir|.
   static void FindXMLFilesInDir(const FilePath& dir,
@@ -118,7 +136,7 @@ class Firefox2Importer : public Importer {
   static void DataURLToFaviconUsage(
       const GURL& link_url,
       const GURL& favicon_data,
-      std::vector<history::ImportedFavIconUsage>* favicons);
+      std::vector<history::ImportedFaviconUsage>* favicons);
 
   FilePath source_path_;
   FilePath app_path_;

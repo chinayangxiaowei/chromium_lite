@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,6 +9,7 @@
 #include "chrome/browser/sync/glue/do_optimistic_refresh_task.h"
 #include "chrome/browser/sync/profile_sync_service.h"
 #include "chrome/browser/webdata/web_database.h"
+#include "chrome/common/guid.h"
 
 using sync_api::ReadNode;
 namespace browser_sync {
@@ -35,27 +36,34 @@ AutofillProfileModelAssociator::~AutofillProfileModelAssociator() {
   DCHECK(BrowserThread::CurrentlyOn(BrowserThread::DB));
 }
 
-AutofillProfileModelAssociator::AutofillProfileModelAssociator() {}
+AutofillProfileModelAssociator::AutofillProfileModelAssociator()
+    : sync_service_(NULL),
+      web_database_(NULL),
+      personal_data_(NULL),
+      autofill_node_id_(0),
+      abort_association_pending_(false),
+      number_of_profiles_created_(0) {
+}
 
-bool AutofillProfileModelAssociator::TraverseAndAssociateChromeAutoFillProfiles(
+bool AutofillProfileModelAssociator::TraverseAndAssociateChromeAutofillProfiles(
     sync_api::WriteTransaction* write_trans,
     const sync_api::ReadNode& autofill_root,
-    const std::vector<AutoFillProfile*>& all_profiles_from_db,
+    const std::vector<AutofillProfile*>& all_profiles_from_db,
     std::set<std::string>* current_profiles,
-    std::vector<AutoFillProfile*>* updated_profiles,
-    std::vector<AutoFillProfile*>* new_profiles,
+    std::vector<AutofillProfile*>* updated_profiles,
+    std::vector<AutofillProfile*>* new_profiles,
     std::vector<std::string>* profiles_to_delete) {
 
-  if (VLOG_IS_ON(1)) {
-    VLOG(1) << "[AUTOFILL MIGRATION]"
+  if (VLOG_IS_ON(2)) {
+    VLOG(2) << "[AUTOFILL MIGRATION]"
             << "Printing profiles from web db";
 
-    for (std::vector<AutoFillProfile*>::const_iterator ix =
+    for (std::vector<AutofillProfile*>::const_iterator ix =
         all_profiles_from_db.begin(); ix != all_profiles_from_db.end(); ++ix) {
-      AutoFillProfile* p = *ix;
-      VLOG(1) << "[AUTOFILL MIGRATION]  "
-              << p->GetFieldText(AutoFillType(NAME_FIRST))
-              << p->GetFieldText(AutoFillType(NAME_LAST))
+      AutofillProfile* p = *ix;
+      VLOG(2) << "[AUTOFILL MIGRATION]  "
+              << p->GetInfo(NAME_FIRST)
+              << p->GetInfo(NAME_LAST)
               << p->guid();
     }
   }
@@ -64,11 +72,15 @@ bool AutofillProfileModelAssociator::TraverseAndAssociateChromeAutoFillProfiles(
           << "Looking for the above data in sync db..";
 
   // Alias the all_profiles_from_db so we fit in 80 characters
-  const std::vector<AutoFillProfile*>& profiles(all_profiles_from_db);
-  for (std::vector<AutoFillProfile*>::const_iterator ix = profiles.begin();
+  const std::vector<AutofillProfile*>& profiles(all_profiles_from_db);
+  for (std::vector<AutofillProfile*>::const_iterator ix = profiles.begin();
       ix != profiles.end();
       ++ix) {
     std::string guid((*ix)->guid());
+    if (guid::IsValidGUID(guid) == false) {
+      DCHECK(false) << "Guid in the web db is invalid " << guid;
+      continue;
+    }
 
     ReadNode node(write_trans);
     if (node.InitByClientTagLookup(syncable::AUTOFILL_PROFILE, guid) &&
@@ -76,11 +88,10 @@ bool AutofillProfileModelAssociator::TraverseAndAssociateChromeAutoFillProfiles(
         // associated with another profile. That could happen if the user has
         // the same profile duplicated.
         current_profiles->find(guid) == current_profiles->end()) {
-
-      VLOG(1) << "[AUTOFILL MIGRATION]"
+      VLOG(2) << "[AUTOFILL MIGRATION]"
               << " Found in sync db: "
-              << (*ix)->GetFieldText(AutoFillType(NAME_FIRST))
-              << (*ix)->GetFieldText(AutoFillType(NAME_LAST))
+              << (*ix)->GetInfo(NAME_FIRST)
+              << (*ix)->GetInfo(NAME_LAST)
               << (*ix)->guid()
               << " so associating with node id " << node.GetId();
       const sync_pb::AutofillProfileSpecifics& autofill(
@@ -105,8 +116,7 @@ bool AutofillProfileModelAssociator::TraverseAndAssociateChromeAutoFillProfiles(
 bool AutofillProfileModelAssociator::GetSyncIdForTaggedNode(
     const std::string& tag,
     int64* sync_id) {
-  sync_api::ReadTransaction trans(
-      sync_service_->backend()->GetUserShareHandle());
+  sync_api::ReadTransaction trans(sync_service_->GetUserShare());
   sync_api::ReadNode sync_node(&trans);
   if (!sync_node.InitByTagLookup(tag.c_str()))
     return false;
@@ -115,11 +125,11 @@ bool AutofillProfileModelAssociator::GetSyncIdForTaggedNode(
 }
 
 bool AutofillProfileModelAssociator::LoadAutofillData(
-    std::vector<AutoFillProfile*>* profiles) {
+    std::vector<AutofillProfile*>* profiles) {
   if (IsAbortPending())
     return false;
 
-  if (!web_database_->GetAutoFillProfiles(profiles))
+  if (!web_database_->GetAutofillTable()->GetAutofillProfiles(profiles))
     return false;
 
   return true;
@@ -133,7 +143,7 @@ bool AutofillProfileModelAssociator::AssociateModels() {
     abort_association_pending_ = false;
   }
 
-  ScopedVector<AutoFillProfile> profiles;
+  ScopedVector<AutofillProfile> profiles;
 
   if (!LoadAutofillData(&profiles.get())) {
     LOG(ERROR) << "Could not get the autofill data from WebDatabase.";
@@ -147,8 +157,7 @@ bool AutofillProfileModelAssociator::AssociateModels() {
   {
     // The write transaction lock is held inside this block.
     // We do all the web db operations outside this block.
-    sync_api::WriteTransaction trans(
-        sync_service_->backend()->GetUserShareHandle());
+    sync_api::WriteTransaction trans(sync_service_->GetUserShare());
 
     sync_api::ReadNode autofill_root(&trans);
     if (!autofill_root.InitByTagLookup(kAutofillProfileTag)) {
@@ -157,7 +166,7 @@ bool AutofillProfileModelAssociator::AssociateModels() {
       return false;
     }
 
-    if (!TraverseAndAssociateChromeAutoFillProfiles(&trans, autofill_root,
+    if (!TraverseAndAssociateChromeAutofillProfiles(&trans, autofill_root,
             profiles.get(), &bundle.current_profiles,
             &bundle.updated_profiles,
             &bundle.new_profiles,
@@ -172,15 +181,15 @@ bool AutofillProfileModelAssociator::AssociateModels() {
     return false;
   }
 
-  if (sync_service_->backend()->GetAutofillMigrationState() !=
+  if (sync_service_->GetAutofillMigrationState() !=
      syncable::MIGRATED) {
     syncable::AutofillMigrationDebugInfo debug_info;
     debug_info.autofill_profile_added_during_migration =
         number_of_profiles_created_;
-    sync_service_->backend()->SetAutofillMigrationDebugInfo(
+    sync_service_->SetAutofillMigrationDebugInfo(
         syncable::AutofillMigrationDebugInfo::PROFILES_ADDED,
         debug_info);
-    sync_service()->backend()->SetAutofillMigrationState(
+    sync_service_->SetAutofillMigrationState(
         syncable::MIGRATED);
   }
 
@@ -190,6 +199,7 @@ bool AutofillProfileModelAssociator::AssociateModels() {
 }
 
 bool AutofillProfileModelAssociator::DisassociateModels() {
+  DCHECK(BrowserThread::CurrentlyOn(BrowserThread::DB));
   id_map_.clear();
   id_map_inverse_.clear();
   return true;
@@ -198,18 +208,17 @@ bool AutofillProfileModelAssociator::DisassociateModels() {
 // Helper to compare the local value and cloud value of a field, merge into
 // the local value if they differ, and return whether the merge happened.
 bool AutofillProfileModelAssociator::MergeField(FormGroup* f,
-    AutoFillFieldType t,
+    AutofillFieldType t,
     const std::string& specifics_field) {
-  if (UTF16ToUTF8(f->GetFieldText(AutoFillType(t))) == specifics_field)
+  if (UTF16ToUTF8(f->GetInfo(t)) == specifics_field)
     return false;
-  f->SetInfo(AutoFillType(t), UTF8ToUTF16(specifics_field));
+  f->SetInfo(t, UTF8ToUTF16(specifics_field));
   return true;
 }
 bool AutofillProfileModelAssociator::SyncModelHasUserCreatedNodes(
     bool *has_nodes) {
   CHECK_NE(has_nodes, reinterpret_cast<bool*>(NULL));
-  sync_api::ReadTransaction trans(
-      sync_service_->backend()->GetUserShareHandle());
+  sync_api::ReadTransaction trans(sync_service_->GetUserShare());
 
   sync_api::ReadNode node(&trans);
 
@@ -224,10 +233,10 @@ bool AutofillProfileModelAssociator::SyncModelHasUserCreatedNodes(
 }
 // static
 bool AutofillProfileModelAssociator::OverwriteProfileWithServerData(
-    AutoFillProfile* merge_into,
+    AutofillProfile* merge_into,
     const sync_pb::AutofillProfileSpecifics& specifics) {
   bool diff = false;
-  AutoFillProfile* p = merge_into;
+  AutofillProfile* p = merge_into;
   const sync_pb::AutofillProfileSpecifics& s(specifics);
   diff = MergeField(p, NAME_FIRST, s.name_first()) || diff;
   diff = MergeField(p, NAME_LAST, s.name_last()) || diff;
@@ -251,12 +260,12 @@ bool AutofillProfileModelAssociator::OverwriteProfileWithServerData(
 int64 AutofillProfileModelAssociator::FindSyncNodeWithProfile(
     sync_api::WriteTransaction* trans,
     const sync_api::BaseNode& autofill_root,
-    const AutoFillProfile& profile_from_db,
+    const AutofillProfile& profile_from_db,
     std::set<std::string>* current_profiles) {
   int64 sync_child_id = autofill_root.GetFirstChildId();
   while (sync_child_id != sync_api::kInvalidId) {
     ReadNode read_node(trans);
-    AutoFillProfile p;
+    AutofillProfile p;
     if (!read_node.InitByIdLookup(sync_child_id)) {
       LOG(ERROR) << "unable to find the id given by getfirst child " <<
         sync_child_id;
@@ -281,8 +290,8 @@ int64 AutofillProfileModelAssociator::FindSyncNodeWithProfile(
 bool AutofillProfileModelAssociator::MakeNewAutofillProfileSyncNodeIfNeeded(
     sync_api::WriteTransaction* trans,
     const sync_api::BaseNode& autofill_root,
-    const AutoFillProfile& profile,
-    std::vector<AutoFillProfile*>* new_profiles,
+    const AutofillProfile& profile,
+    std::vector<AutofillProfile*>* new_profiles,
     std::set<std::string>* current_profiles,
     std::vector<std::string>* profiles_to_delete) {
 
@@ -301,31 +310,40 @@ bool AutofillProfileModelAssociator::MakeNewAutofillProfileSyncNodeIfNeeded(
     }
     const sync_pb::AutofillProfileSpecifics& autofill_specifics(
         read_node.GetAutofillProfileSpecifics());
-    AutoFillProfile* p = new AutoFillProfile(autofill_specifics.guid());
+    if (guid::IsValidGUID(autofill_specifics.guid()) == false) {
+      NOTREACHED() << "Guid in the web db is invalid " <<
+          autofill_specifics.guid();
+      return false;
+    }
+    AutofillProfile* p = new AutofillProfile(autofill_specifics.guid());
     OverwriteProfileWithServerData(p, autofill_specifics);
     new_profiles->push_back(p);
     std::string guid = autofill_specifics.guid();
     Associate(&guid, sync_node_id);
     current_profiles->insert(autofill_specifics.guid());
-    VLOG(1) << "[AUTOFILL MIGRATION]"
+    VLOG(2) << "[AUTOFILL MIGRATION]"
             << "Found in sync db but with a different guid: "
-            << UTF16ToUTF8(profile.GetFieldText(AutoFillType(NAME_FIRST)))
-            << UTF16ToUTF8(profile.GetFieldText(AutoFillType(NAME_LAST)))
+            << UTF16ToUTF8(profile.GetInfo(NAME_FIRST))
+            << UTF16ToUTF8(profile.GetInfo(NAME_LAST))
             << "New guid " << autofill_specifics.guid() << " sync node id "
             << sync_node_id << " so associating. Profile to be deleted "
             << profile.guid();
   } else {
     sync_api::WriteNode node(trans);
+
+    // The profile.guid() is expected to be a valid guid. The caller is expected
+    // to pass in a valid profile object with a valid guid. Having to check in
+    // 2 places(the caller and here) is not optimal.
     if (!node.InitUniqueByCreation(
              syncable::AUTOFILL_PROFILE, autofill_root, profile.guid())) {
       LOG(ERROR) << "Failed to create autofill sync node.";
       return false;
     }
     node.SetTitle(UTF8ToWide(profile.guid()));
-    VLOG(1) << "[AUTOFILL MIGRATION]"
+    VLOG(2) << "[AUTOFILL MIGRATION]"
             << "NOT Found in sync db  "
-            << UTF16ToUTF8(profile.GetFieldText(AutoFillType(NAME_FIRST)))
-            << UTF16ToUTF8(profile.GetFieldText(AutoFillType(NAME_LAST)))
+            << UTF16ToUTF8(profile.GetInfo(NAME_FIRST))
+            << UTF16ToUTF8(profile.GetInfo(NAME_LAST))
             << profile.guid()
             << " so creating a new sync node. Sync node id "
             << node.GetId();
@@ -334,7 +352,6 @@ bool AutofillProfileModelAssociator::MakeNewAutofillProfileSyncNodeIfNeeded(
     std::string guid = profile.guid();
     Associate(&guid, node.GetId());
     number_of_profiles_created_++;
-
   }
   return true;
 }
@@ -370,7 +387,7 @@ void AutofillProfileModelAssociator::AddNativeProfileIfNeeded(
     const sync_api::ReadNode& node) {
   DCHECK(BrowserThread::CurrentlyOn(BrowserThread::DB));
 
-  VLOG(1) << "[AUTOFILL MIGRATION] "
+  VLOG(2) << "[AUTOFILL MIGRATION] "
           << "Trying to lookup "
           << profile.name_first()
           << " "
@@ -379,17 +396,22 @@ void AutofillProfileModelAssociator::AddNativeProfileIfNeeded(
           << " Guid " << profile.guid()
           << " in the web db";
 
+  if (guid::IsValidGUID(profile.guid()) == false) {
+    DCHECK(false) << "Guid in the sync db is invalid " << profile.guid();
+    return;
+  }
+
   if (bundle->current_profiles.find(profile.guid()) ==
       bundle->current_profiles.end()) {
     std::string guid(profile.guid());
     Associate(&guid, node.GetId());
-    AutoFillProfile* p = new AutoFillProfile(profile.guid());
+    AutofillProfile* p = new AutofillProfile(profile.guid());
     OverwriteProfileWithServerData(p, profile);
     bundle->new_profiles.push_back(p);
-    VLOG(1) << "[AUTOFILL MIGRATION] "
+    VLOG(2) << "[AUTOFILL MIGRATION] "
             << " Did not find one so creating it on web db";
   } else {
-    VLOG(1) << "[AUTOFILL MIGRATION] "
+    VLOG(2) << "[AUTOFILL MIGRATION] "
             << " Found it on web db. Moving on ";
   }
 }
@@ -404,21 +426,24 @@ bool AutofillProfileModelAssociator::SaveChangesToWebData(
   for (size_t i = 0; i < bundle.new_profiles.size(); i++) {
     if (IsAbortPending())
       return false;
-    if (!web_database_->AddAutoFillProfile(*bundle.new_profiles[i]))
+    if (!web_database_->GetAutofillTable()->AddAutofillProfile(
+        *bundle.new_profiles[i]))
       return false;
   }
 
   for (size_t i = 0; i < bundle.updated_profiles.size(); i++) {
     if (IsAbortPending())
       return false;
-    if (!web_database_->UpdateAutoFillProfile(*bundle.updated_profiles[i]))
+    if (!web_database_->GetAutofillTable()->UpdateAutofillProfile(
+        *bundle.updated_profiles[i]))
       return false;
   }
 
   for (size_t i = 0; i< bundle.profiles_to_delete.size(); ++i) {
     if (IsAbortPending())
       return false;
-    if (!web_database_->RemoveAutoFillProfile(bundle.profiles_to_delete[i]))
+    if (!web_database_->GetAutofillTable()->RemoveAutofillProfile(
+        bundle.profiles_to_delete[i]))
       return false;
   }
   return true;
@@ -471,6 +496,21 @@ const std::string* AutofillProfileModelAssociator::GetChromeNodeFromSyncId(
 bool AutofillProfileModelAssociator::IsAbortPending() {
   base::AutoLock lock(abort_association_pending_lock_);
   return abort_association_pending_;
+}
+
+AutofillProfileModelAssociator::DataBundle::DataBundle() {}
+
+AutofillProfileModelAssociator::DataBundle::~DataBundle() {
+  STLDeleteElements(&new_profiles);
+}
+
+bool AutofillProfileModelAssociator::CryptoReadyIfNecessary() {
+  // We only access the cryptographer while holding a transaction.
+  sync_api::ReadTransaction trans(sync_service_->GetUserShare());
+  syncable::ModelTypeSet encrypted_types;
+  sync_service_->GetEncryptedDataTypes(&encrypted_types);
+  return encrypted_types.count(syncable::AUTOFILL_PROFILE) == 0 ||
+         sync_service_->IsCryptographerReady(&trans);
 }
 
 }  // namespace browser_sync

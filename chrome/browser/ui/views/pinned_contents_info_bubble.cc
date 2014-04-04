@@ -4,7 +4,7 @@
 
 #include "chrome/browser/ui/views/pinned_contents_info_bubble.h"
 
-#include "chrome/browser/ui/views/bubble_border.h"
+#include "chrome/browser/ui/views/bubble/bubble_border.h"
 
 void PinnedContentsBorderContents::SizeAndGetBounds(
     const gfx::Rect& position_relative_to,
@@ -31,7 +31,7 @@ void PinnedContentsBorderContents::SizeAndGetBounds(
   window_bounds->Offset(0, -(kTopMargin + 1));
 }
 
-// InfoBubble -----------------------------------------------------------------
+// Bubble -----------------------------------------------------------------
 
 // static
 PinnedContentsInfoBubble* PinnedContentsInfoBubble::Show(
@@ -40,12 +40,12 @@ PinnedContentsInfoBubble* PinnedContentsInfoBubble::Show(
     BubbleBorder::ArrowLocation arrow_location,
     const gfx::Point& bubble_anchor,
     views::View* contents,
-    InfoBubbleDelegate* delegate) {
-  PinnedContentsInfoBubble* window =
+    BubbleDelegate* delegate) {
+  PinnedContentsInfoBubble* bubble =
       new PinnedContentsInfoBubble(bubble_anchor);
-  window->Init(parent, position_relative_to, arrow_location,
-               contents, delegate);
-  return window;
+  bubble->InitBubble(parent, position_relative_to, arrow_location,
+                     contents, delegate);
+  return bubble;
 }
 
 BorderContents* PinnedContentsInfoBubble::CreateBorderContents() {

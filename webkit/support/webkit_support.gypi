@@ -11,7 +11,7 @@
       'target_name': 'webkit_support',
       'type': '<(library)',
       'dependencies': [
-        '<(DEPTH)/gfx/gfx.gyp:gfx',
+        '<(DEPTH)/ui/ui.gyp:ui_gfx',
         '<(DEPTH)/media/media.gyp:media',
         '<(DEPTH)/skia/skia.gyp:skia',
         '<(DEPTH)/testing/gtest.gyp:gtest',
@@ -40,6 +40,7 @@
         'platform_support_win.cc',
         'test_webkit_client.cc',
         'test_webkit_client.h',
+        'test_webplugin_page_delegate.cc',
         'test_webplugin_page_delegate.h',
         'webkit_support.cc',
         'webkit_support.h',
@@ -72,6 +73,7 @@
       'target_name': 'webkit_support_common',
       'type': '<(library)',
       'dependencies': [
+        '<(DEPTH)/crypto/crypto.gyp:crypto',
         '<(DEPTH)/skia/skia.gyp:skia',
         'glue',
       ],
@@ -82,13 +84,11 @@
         '<(DEPTH)/webkit/tools/test_shell/mock_webclipboard_impl.h',
         '<(DEPTH)/webkit/tools/test_shell/simple_appcache_system.cc',
         '<(DEPTH)/webkit/tools/test_shell/simple_appcache_system.h',
+        '<(DEPTH)/webkit/tools/test_shell/simple_clipboard_impl.cc',
         '<(DEPTH)/webkit/tools/test_shell/simple_file_system.cc',
         '<(DEPTH)/webkit/tools/test_shell/simple_file_system.h',
         '<(DEPTH)/webkit/tools/test_shell/simple_file_writer.cc',
         '<(DEPTH)/webkit/tools/test_shell/simple_file_writer.h',
-        '<(DEPTH)/webkit/tools/test_shell/simple_clipboard_impl.cc',
-        '<(DEPTH)/webkit/tools/test_shell/simple_database_system.cc',
-        '<(DEPTH)/webkit/tools/test_shell/simple_database_system.h',
         '<(DEPTH)/webkit/tools/test_shell/simple_resource_loader_bridge.cc',
         '<(DEPTH)/webkit/tools/test_shell/simple_resource_loader_bridge.h',
         '<(DEPTH)/webkit/tools/test_shell/simple_socket_stream_bridge.cc',
@@ -101,6 +101,8 @@
         '<(DEPTH)/webkit/tools/test_shell/test_shell_webblobregistry_impl.h',
         '<(DEPTH)/webkit/tools/test_shell/test_shell_webmimeregistry_impl.cc',
         '<(DEPTH)/webkit/tools/test_shell/test_shell_webmimeregistry_impl.h',
+        'simple_database_system.cc',
+        'simple_database_system.h',
       ],
       'conditions': [
         ['inside_chromium_build==0', {

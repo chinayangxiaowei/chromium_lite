@@ -14,15 +14,18 @@
 #include "base/i18n/icu_util.h"
 #include "base/logging.h"
 #include "base/mac/scoped_nsautorelease_pool.h"
-#include "base/nss_util.h"
+#include "base/memory/scoped_ptr.h"
 #include "base/path_service.h"
 #include "base/process_util.h"
-#include "base/scoped_ptr.h"
 #include "base/test/multiprocess_test.h"
 #include "base/test/test_timeouts.h"
 #include "base/time.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "testing/multiprocess_func_list.h"
+
+#if defined(OS_MACOSX)
+#include "base/test/mock_chrome_application_mac.h"
+#endif
 
 #if defined(TOOLKIT_USES_GTK)
 #include <gtk/gtk.h>
@@ -45,6 +48,9 @@ class MaybeTestDisabler : public testing::EmptyTestEventListener {
 const char TestSuite::kStrictFailureHandling[] = "strict_failure_handling";
 
 TestSuite::TestSuite(int argc, char** argv) {
+#if defined(OS_WIN)
+  testing::GTEST_FLAG(catch_exceptions) = false;
+#endif
   base::EnableTerminationOnHeapCorruption();
   CommandLine::Init(argc, argv);
   testing::InitGoogleTest(&argc, argv);
@@ -171,6 +177,11 @@ void TestSuite::SuppressErrorDialogs() {
 }
 
 void TestSuite::Initialize() {
+#if defined(OS_MACOSX)
+  // Some of the app unit tests spin runloops.
+  mock_cr_app::RegisterMockCrApp();
+#endif
+
   // Initialize logging.
   FilePath exe;
   PathService::Get(base::FILE_EXE, &exe);
@@ -201,14 +212,6 @@ void TestSuite::Initialize() {
   }
 
   icu_util::Initialize();
-
-#if defined(USE_NSS)
-  // Trying to repeatedly initialize and cleanup NSS and NSPR may result in
-  // a deadlock. Such repeated initialization will happen when using test
-  // isolation. Prevent problems by initializing NSS here, so that the cleanup
-  // will be done only on process exit.
-  base::EnsureNSSInit();
-#endif  // defined(USE_NSS)
 
   CatchMaybeTests();
 

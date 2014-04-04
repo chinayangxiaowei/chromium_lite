@@ -1,4 +1,4 @@
-// Copyright (c) 2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,7 +8,7 @@
 
 #include <vector>
 
-#include "base/scoped_ptr.h"
+#include "base/memory/scoped_ptr.h"
 #include "base/threading/thread.h"
 #include "chrome/browser/password_manager/login_database.h"
 #include "chrome/browser/password_manager/password_store.h"
@@ -37,19 +37,19 @@ class PasswordStoreMac : public PasswordStore {
   virtual void ScheduleTask(Task* task);
 
  private:
-  void ReportMetricsImpl();
-  void AddLoginImpl(const webkit_glue::PasswordForm& form);
-  void UpdateLoginImpl(const webkit_glue::PasswordForm& form);
-  void RemoveLoginImpl(const webkit_glue::PasswordForm& form);
-  void RemoveLoginsCreatedBetweenImpl(const base::Time& delete_begin,
-                                      const base::Time& delete_end);
-  void GetLoginsImpl(GetLoginsRequest* request,
-                     const webkit_glue::PasswordForm& form);
-  void GetAutofillableLoginsImpl(GetLoginsRequest* request);
-  void GetBlacklistLoginsImpl(GetLoginsRequest* request);
-  bool FillAutofillableLogins(
+  virtual void ReportMetricsImpl();
+  virtual void AddLoginImpl(const webkit_glue::PasswordForm& form);
+  virtual void UpdateLoginImpl(const webkit_glue::PasswordForm& form);
+  virtual void RemoveLoginImpl(const webkit_glue::PasswordForm& form);
+  virtual void RemoveLoginsCreatedBetweenImpl(const base::Time& delete_begin,
+                                              const base::Time& delete_end);
+  virtual void GetLoginsImpl(GetLoginsRequest* request,
+                             const webkit_glue::PasswordForm& form);
+  virtual void GetAutofillableLoginsImpl(GetLoginsRequest* request);
+  virtual void GetBlacklistLoginsImpl(GetLoginsRequest* request);
+  virtual bool FillAutofillableLogins(
       std::vector<webkit_glue::PasswordForm*>* forms);
-  bool FillBlacklistLogins(
+  virtual bool FillBlacklistLogins(
       std::vector<webkit_glue::PasswordForm*>* forms);
 
   // Adds the given form to the Keychain if it's something we want to store

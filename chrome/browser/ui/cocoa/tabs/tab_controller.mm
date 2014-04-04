@@ -1,9 +1,9 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "base/mac/mac_util.h"
-#import "chrome/browser/themes/browser_theme_provider.h"
+#import "chrome/browser/themes/theme_service.h"
 #import "chrome/browser/ui/cocoa/menu_controller.h"
 #import "chrome/browser/ui/cocoa/tabs/tab_controller.h"
 #import "chrome/browser/ui/cocoa/tabs/tab_controller_target.h"
@@ -11,6 +11,7 @@
 #import "chrome/browser/ui/cocoa/themed_window.h"
 #import "chrome/common/extensions/extension.h"
 #include "grit/generated_resources.h"
+#import "third_party/GTM/AppKit/GTMFadeTruncatingTextFieldCell.h"
 #include "ui/base/l10n/l10n_util_mac.h"
 
 @implementation TabController
@@ -21,6 +22,7 @@
 @synthesize mini = mini_;
 @synthesize pinned = pinned_;
 @synthesize target = target_;
+@synthesize url = url_;
 @synthesize iconView = iconView_;
 @synthesize titleView = titleView_;
 @synthesize closeButton = closeButton_;
@@ -271,12 +273,12 @@ class MenuDelegate : public ui::SimpleMenuModel::Delegate {
   ui::ThemeProvider* theme = [[[self view] window] themeProvider];
   if (theme && ![self selected]) {
     titleColor =
-        theme->GetNSColor(BrowserThemeProvider::COLOR_BACKGROUND_TAB_TEXT,
+        theme->GetNSColor(ThemeService::COLOR_BACKGROUND_TAB_TEXT,
                           true);
   }
   // Default to the selected text color unless told otherwise.
   if (theme && !titleColor) {
-    titleColor = theme->GetNSColor(BrowserThemeProvider::COLOR_TAB_TEXT,
+    titleColor = theme->GetNSColor(ThemeService::COLOR_TAB_TEXT,
                                    true);
   }
   [titleView_ setTextColor:titleColor ? titleColor : [NSColor textColor]];

@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,7 +8,7 @@
 #include "base/file_path.h"
 #include "chrome/browser/net/chrome_url_request_context.h"
 #include "chrome/browser/prefs/pref_service_mock_builder.h"
-#include "chrome/browser/prefs/proxy_prefs.h"
+#include "chrome/browser/prefs/proxy_config_dictionary.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/test/testing_pref_service.h"
@@ -26,14 +26,17 @@ const char kFixedPacUrl[] = "http://chromium.org/fixed_pac_url";
 // Testing proxy config service that allows us to fire notifications at will.
 class TestProxyConfigService : public net::ProxyConfigService {
  public:
-  explicit TestProxyConfigService(const net::ProxyConfig& config)
-      : config_(config) {
-  }
+  TestProxyConfigService(const net::ProxyConfig& config,
+                         ConfigAvailability availability)
+      : config_(config),
+        availability_(availability) {}
 
-  void SetProxyConfig(const net::ProxyConfig config) {
+  void SetProxyConfig(const net::ProxyConfig config,
+                      ConfigAvailability availability) {
     config_ = config;
+    availability_ = availability;
     FOR_EACH_OBSERVER(net::ProxyConfigService::Observer, observers_,
-                      OnProxyConfigChanged(config_));
+                      OnProxyConfigChanged(config, availability));
   }
 
  private:
@@ -45,19 +48,23 @@ class TestProxyConfigService : public net::ProxyConfigService {
     observers_.RemoveObserver(observer);
   }
 
-  virtual bool GetLatestProxyConfig(net::ProxyConfig* config) {
+  virtual net::ProxyConfigService::ConfigAvailability GetLatestProxyConfig(
+      net::ProxyConfig* config) {
     *config = config_;
-    return true;
+    return availability_;
   }
 
   net::ProxyConfig config_;
+  ConfigAvailability availability_;
   ObserverList<net::ProxyConfigService::Observer, true> observers_;
 };
 
 // A mock observer for capturing callbacks.
 class MockObserver : public net::ProxyConfigService::Observer {
  public:
-  MOCK_METHOD1(OnProxyConfigChanged, void(const net::ProxyConfig&));
+  MOCK_METHOD2(OnProxyConfigChanged,
+               void(const net::ProxyConfig&,
+                    net::ProxyConfigService::ConfigAvailability));
 };
 
 template<typename TESTBASE>
@@ -69,9 +76,11 @@ class PrefProxyConfigServiceTestBase : public TESTBASE {
 
   virtual void Init(PrefService* pref_service) {
     ASSERT_TRUE(pref_service);
-    PrefProxyConfigService::RegisterUserPrefs(pref_service);
+    PrefProxyConfigService::RegisterPrefs(pref_service);
     fixed_config_.set_pac_url(GURL(kFixedPacUrl));
-    delegate_service_ = new TestProxyConfigService(fixed_config_);
+    delegate_service_ =
+        new TestProxyConfigService(fixed_config_,
+                                   net::ProxyConfigService::CONFIG_VALID);
     proxy_config_tracker_ = new PrefProxyConfigTracker(pref_service);
     proxy_config_service_.reset(
         new PrefProxyConfigService(proxy_config_tracker_.get(),
@@ -108,20 +117,20 @@ class PrefProxyConfigServiceTest
 
 TEST_F(PrefProxyConfigServiceTest, BaseConfiguration) {
   net::ProxyConfig actual_config;
-  proxy_config_service_->GetLatestProxyConfig(&actual_config);
+  EXPECT_EQ(net::ProxyConfigService::CONFIG_VALID,
+            proxy_config_service_->GetLatestProxyConfig(&actual_config));
   EXPECT_EQ(GURL(kFixedPacUrl), actual_config.pac_url());
 }
 
 TEST_F(PrefProxyConfigServiceTest, DynamicPrefOverrides) {
   pref_service_->SetManagedPref(
-      prefs::kProxyServer, Value::CreateStringValue("http://example.com:3128"));
-  pref_service_->SetManagedPref(
-      prefs::kProxyMode,
-      Value::CreateIntegerValue(ProxyPrefs::MODE_FIXED_SERVERS));
+      prefs::kProxy,
+      ProxyConfigDictionary::CreateFixedServers("http://example.com:3128", ""));
   loop_.RunAllPending();
 
   net::ProxyConfig actual_config;
-  proxy_config_service_->GetLatestProxyConfig(&actual_config);
+  EXPECT_EQ(net::ProxyConfigService::CONFIG_VALID,
+            proxy_config_service_->GetLatestProxyConfig(&actual_config));
   EXPECT_FALSE(actual_config.auto_detect());
   EXPECT_EQ(net::ProxyConfig::ProxyRules::TYPE_SINGLE_PROXY,
             actual_config.proxy_rules().type);
@@ -129,12 +138,12 @@ TEST_F(PrefProxyConfigServiceTest, DynamicPrefOverrides) {
             net::ProxyServer::FromURI("http://example.com:3128",
                                       net::ProxyServer::SCHEME_HTTP));
 
-  pref_service_->SetManagedPref(
-      prefs::kProxyMode,
-      Value::CreateIntegerValue(ProxyPrefs::MODE_AUTO_DETECT));
+  pref_service_->SetManagedPref(prefs::kProxy,
+                                ProxyConfigDictionary::CreateAutoDetect());
   loop_.RunAllPending();
 
-  proxy_config_service_->GetLatestProxyConfig(&actual_config);
+  EXPECT_EQ(net::ProxyConfigService::CONFIG_VALID,
+            proxy_config_service_->GetLatestProxyConfig(&actual_config));
   EXPECT_TRUE(actual_config.auto_detect());
 }
 
@@ -146,15 +155,17 @@ MATCHER_P(ProxyConfigMatches, config, "") {
 }
 
 TEST_F(PrefProxyConfigServiceTest, Observers) {
+  const net::ProxyConfigService::ConfigAvailability CONFIG_VALID =
+      net::ProxyConfigService::CONFIG_VALID;
   MockObserver observer;
   proxy_config_service_->AddObserver(&observer);
 
   // Firing the observers in the delegate should trigger a notification.
   net::ProxyConfig config2;
   config2.set_auto_detect(true);
-  EXPECT_CALL(observer,
-              OnProxyConfigChanged(ProxyConfigMatches(config2))).Times(1);
-  delegate_service_->SetProxyConfig(config2);
+  EXPECT_CALL(observer, OnProxyConfigChanged(ProxyConfigMatches(config2),
+                                             CONFIG_VALID)).Times(1);
+  delegate_service_->SetProxyConfig(config2, CONFIG_VALID);
   loop_.RunAllPending();
   Mock::VerifyAndClearExpectations(&observer);
 
@@ -162,51 +173,92 @@ TEST_F(PrefProxyConfigServiceTest, Observers) {
   net::ProxyConfig pref_config;
   pref_config.set_pac_url(GURL(kFixedPacUrl));
 
-  EXPECT_CALL(observer,
-              OnProxyConfigChanged(ProxyConfigMatches(pref_config))).Times(1);
-
-  pref_service_->SetManagedPref(prefs::kProxyPacUrl,
-                                Value::CreateStringValue(kFixedPacUrl));
-  // The above does not trigger a notification, because PrefProxyConfig still
-  // sees the mode as the default (ProxyPrefs::SYSTEM), so that it doesn't claim
-  // to have proxy config.
-  // TODO(battre): Remove this comment when http://crbug.com/65732 is
-  // resolved.
+  EXPECT_CALL(observer, OnProxyConfigChanged(ProxyConfigMatches(pref_config),
+                                             CONFIG_VALID)).Times(1);
   pref_service_->SetManagedPref(
-      prefs::kProxyMode,
-      Value::CreateIntegerValue(ProxyPrefs::MODE_PAC_SCRIPT));
+      prefs::kProxy,
+      ProxyConfigDictionary::CreatePacScript(kFixedPacUrl));
   loop_.RunAllPending();
   Mock::VerifyAndClearExpectations(&observer);
 
   // Since there are pref overrides, delegate changes should be ignored.
   net::ProxyConfig config3;
   config3.proxy_rules().ParseFromString("http=config3:80");
-  EXPECT_CALL(observer, OnProxyConfigChanged(_)).Times(0);
+  EXPECT_CALL(observer, OnProxyConfigChanged(_, _)).Times(0);
   fixed_config_.set_auto_detect(true);
-  delegate_service_->SetProxyConfig(config3);
+  delegate_service_->SetProxyConfig(config3, CONFIG_VALID);
   loop_.RunAllPending();
   Mock::VerifyAndClearExpectations(&observer);
 
   // Clear the override should switch back to the fixed configuration.
-  EXPECT_CALL(observer,
-              OnProxyConfigChanged(ProxyConfigMatches(config3))).Times(1);
-  pref_service_->RemoveManagedPref(prefs::kProxyMode);
-  // The above switches the mode to the default (ProxyPrefs::SYSTEM), so the
-  // next removal won't bother PrefProxyConfigService.
-  // TODO(battre): Remove this comment when http://crbug.com/65732 is
-  // completed.
-  pref_service_->RemoveManagedPref(prefs::kProxyPacUrl);
+  EXPECT_CALL(observer, OnProxyConfigChanged(ProxyConfigMatches(config3),
+                                             CONFIG_VALID)).Times(1);
+  pref_service_->RemoveManagedPref(prefs::kProxy);
   loop_.RunAllPending();
   Mock::VerifyAndClearExpectations(&observer);
 
   // Delegate service notifications should show up again.
   net::ProxyConfig config4;
   config4.proxy_rules().ParseFromString("socks:config4");
-  EXPECT_CALL(observer,
-              OnProxyConfigChanged(ProxyConfigMatches(config4))).Times(1);
-  delegate_service_->SetProxyConfig(config4);
+  EXPECT_CALL(observer, OnProxyConfigChanged(ProxyConfigMatches(config4),
+                                             CONFIG_VALID)).Times(1);
+  delegate_service_->SetProxyConfig(config4, CONFIG_VALID);
   loop_.RunAllPending();
   Mock::VerifyAndClearExpectations(&observer);
+
+  proxy_config_service_->RemoveObserver(&observer);
+}
+
+TEST_F(PrefProxyConfigServiceTest, Fallback) {
+  const net::ProxyConfigService::ConfigAvailability CONFIG_VALID =
+      net::ProxyConfigService::CONFIG_VALID;
+  MockObserver observer;
+  net::ProxyConfig actual_config;
+  delegate_service_->SetProxyConfig(net::ProxyConfig::CreateDirect(),
+                                    net::ProxyConfigService::CONFIG_UNSET);
+  proxy_config_service_->AddObserver(&observer);
+
+  // Prepare test data.
+  net::ProxyConfig recommended_config = net::ProxyConfig::CreateAutoDetect();
+  net::ProxyConfig user_config =
+      net::ProxyConfig::CreateFromCustomPacURL(GURL(kFixedPacUrl));
+
+  // Set a recommended pref.
+  EXPECT_CALL(observer,
+              OnProxyConfigChanged(ProxyConfigMatches(recommended_config),
+                                   CONFIG_VALID)).Times(1);
+  pref_service_->SetRecommendedPref(
+      prefs::kProxy,
+      ProxyConfigDictionary::CreateAutoDetect());
+  loop_.RunAllPending();
+  Mock::VerifyAndClearExpectations(&observer);
+  EXPECT_EQ(CONFIG_VALID,
+            proxy_config_service_->GetLatestProxyConfig(&actual_config));
+  EXPECT_TRUE(actual_config.Equals(recommended_config));
+
+  // Override in user prefs.
+  EXPECT_CALL(observer,
+              OnProxyConfigChanged(ProxyConfigMatches(user_config),
+                                   CONFIG_VALID)).Times(1);
+  pref_service_->SetManagedPref(
+      prefs::kProxy,
+      ProxyConfigDictionary::CreatePacScript(kFixedPacUrl));
+  loop_.RunAllPending();
+  Mock::VerifyAndClearExpectations(&observer);
+  EXPECT_EQ(CONFIG_VALID,
+            proxy_config_service_->GetLatestProxyConfig(&actual_config));
+  EXPECT_TRUE(actual_config.Equals(user_config));
+
+  // Go back to recommended pref.
+  EXPECT_CALL(observer,
+              OnProxyConfigChanged(ProxyConfigMatches(recommended_config),
+                                   CONFIG_VALID)).Times(1);
+  pref_service_->RemoveManagedPref(prefs::kProxy);
+  loop_.RunAllPending();
+  Mock::VerifyAndClearExpectations(&observer);
+  EXPECT_EQ(CONFIG_VALID,
+            proxy_config_service_->GetLatestProxyConfig(&actual_config));
+  EXPECT_TRUE(actual_config.Equals(recommended_config));
 
   proxy_config_service_->RemoveObserver(&observer);
 }
@@ -273,7 +325,8 @@ class PrefProxyConfigServiceCommandLineTest
 
 TEST_P(PrefProxyConfigServiceCommandLineTest, CommandLine) {
   net::ProxyConfig config;
-  proxy_config_service_->GetLatestProxyConfig(&config);
+  EXPECT_EQ(net::ProxyConfigService::CONFIG_VALID,
+            proxy_config_service_->GetLatestProxyConfig(&config));
 
   if (GetParam().is_null) {
     EXPECT_EQ(GURL(kFixedPacUrl), config.pac_url());

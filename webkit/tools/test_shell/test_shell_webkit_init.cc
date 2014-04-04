@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -13,7 +13,8 @@
 #include "third_party/WebKit/Source/WebKit/chromium/public/WebRuntimeFeatures.h"
 #include "third_party/WebKit/Source/WebKit/chromium/public/WebScriptController.h"
 #include "third_party/WebKit/Source/WebKit/chromium/public/WebSecurityPolicy.h"
-#include "webkit/extensions/v8/gears_extension.h"
+#include "ui/gfx/gl/gl_bindings_skia_in_process.h"
+#include "v8/include/v8.h"
 #include "webkit/tools/test_shell/test_shell.h"
 
 #if defined(OS_WIN)
@@ -30,12 +31,9 @@ TestShellWebKitInit::TestShellWebKitInit(bool layout_test_mode) {
   WebKit::WebSecurityPolicy::registerURLSchemeAsNoAccess(
       WebKit::WebString::fromUTF8("test-shell-resource"));
   WebKit::WebScriptController::enableV8SingleThreadMode();
-  WebKit::WebScriptController::registerExtension(
-      extensions_v8::GearsExtension::Get());
   WebKit::WebRuntimeFeatures::enableSockets(true);
   WebKit::WebRuntimeFeatures::enableApplicationCache(true);
   WebKit::WebRuntimeFeatures::enableDatabase(true);
-  WebKit::WebRuntimeFeatures::enableWebGL(true);
   WebKit::WebRuntimeFeatures::enablePushState(true);
   WebKit::WebRuntimeFeatures::enableNotifications(true);
   WebKit::WebRuntimeFeatures::enableTouch(true);
@@ -46,6 +44,9 @@ TestShellWebKitInit::TestShellWebKitInit(bool layout_test_mode) {
   // TODO(hwennborg): Enable this once the implementation supports it.
   WebKit::WebRuntimeFeatures::enableDeviceMotion(false);
   WebKit::WebRuntimeFeatures::enableDeviceOrientation(true);
+
+  // Enable experimental I18N API for testing.
+  WebKit::WebRuntimeFeatures::enableJavaScriptI18NAPI(true);
 
   // Load libraries for media and enable the media player.
   FilePath module_path;
@@ -90,6 +91,10 @@ TestShellWebKitInit::~TestShellWebKitInit() {
   WebKit::shutdown();
 }
 
+WebKit::WebMimeRegistry* TestShellWebKitInit::mimeRegistry() {
+  return mime_registry_.get();
+}
+
 WebKit::WebClipboard* TestShellWebKitInit::clipboard() {
   // Mock out clipboard calls in layout test mode so that tests don't mess
   // with each other's copies/pastes when running in parallel.
@@ -98,6 +103,71 @@ WebKit::WebClipboard* TestShellWebKitInit::clipboard() {
   } else {
     return &real_clipboard_;
   }
+}
+
+WebKit::WebFileUtilities* TestShellWebKitInit::fileUtilities() {
+  return &file_utilities_;
+}
+
+WebKit::WebSandboxSupport* TestShellWebKitInit::sandboxSupport() {
+  return NULL;
+}
+
+WebKit::WebCookieJar* TestShellWebKitInit::cookieJar() {
+  return &cookie_jar_;
+}
+
+WebKit::WebBlobRegistry* TestShellWebKitInit::blobRegistry() {
+  return blob_registry_.get();
+}
+
+WebKit::WebFileSystem* TestShellWebKitInit::fileSystem() {
+  return &file_system_;
+}
+
+bool TestShellWebKitInit::sandboxEnabled() {
+  return true;
+}
+
+WebKit::WebKitClient::FileHandle TestShellWebKitInit::databaseOpenFile(
+    const WebKit::WebString& vfs_file_name, int desired_flags) {
+  return SimpleDatabaseSystem::GetInstance()->OpenFile(
+      vfs_file_name, desired_flags);
+}
+
+int TestShellWebKitInit::databaseDeleteFile(
+    const WebKit::WebString& vfs_file_name,
+    bool sync_dir) {
+  return SimpleDatabaseSystem::GetInstance()->DeleteFile(
+      vfs_file_name, sync_dir);
+}
+
+long TestShellWebKitInit::databaseGetFileAttributes(
+    const WebKit::WebString& vfs_file_name) {
+  return SimpleDatabaseSystem::GetInstance()->GetFileAttributes(
+      vfs_file_name);
+}
+
+long long TestShellWebKitInit::databaseGetFileSize(
+    const WebKit::WebString& vfs_file_name) {
+  return SimpleDatabaseSystem::GetInstance()->GetFileSize(vfs_file_name);
+}
+
+unsigned long long TestShellWebKitInit::visitedLinkHash(
+    const char* canonicalURL,
+    size_t length) {
+  return 0;
+}
+
+bool TestShellWebKitInit::isLinkVisited(unsigned long long linkHash) {
+  return false;
+}
+
+WebKit::WebMessagePortChannel* TestShellWebKitInit::createMessagePortChannel() {
+  return NULL;
+}
+
+void TestShellWebKitInit::prefetchHostName(const WebKit::WebString&) {
 }
 
 WebKit::WebData TestShellWebKitInit::loadResource(const char* name) {
@@ -170,3 +240,56 @@ WebKit::WebString TestShellWebKitInit::queryLocalizedString(
   return WebKitClientImpl::queryLocalizedString(name, value1, value2);
 }
 
+WebKit::WebString TestShellWebKitInit::defaultLocale() {
+  return ASCIIToUTF16("en-US");
+}
+
+WebKit::WebStorageNamespace* TestShellWebKitInit::createLocalStorageNamespace(
+    const WebKit::WebString& path, unsigned quota) {
+  // Enforce quota here, ignoring the value from the renderer as in Chrome.
+  return WebKit::WebStorageNamespace::createLocalStorageNamespace(
+      path,
+      WebKit::WebStorageNamespace::m_localStorageQuota);
+}
+
+void TestShellWebKitInit::dispatchStorageEvent(
+    const WebKit::WebString& key,
+    const WebKit::WebString& old_value, const WebKit::WebString& new_value,
+    const WebKit::WebString& origin, const WebKit::WebURL& url,
+    bool is_local_storage) {
+  // The event is dispatched by the proxy.
+}
+
+WebKit::WebIDBFactory* TestShellWebKitInit::idbFactory() {
+  return WebKit::WebIDBFactory::create();
+}
+
+void TestShellWebKitInit::createIDBKeysFromSerializedValuesAndKeyPath(
+    const WebKit::WebVector<WebKit::WebSerializedScriptValue>& values,
+    const WebKit::WebString& keyPath,
+    WebKit::WebVector<WebKit::WebIDBKey>& keys_out) {
+  WebKit::WebVector<WebKit::WebIDBKey> keys(values.size());
+  for (size_t i = 0; i < values.size(); ++i) {
+    keys[i] = WebKit::WebIDBKey::createFromValueAndKeyPath(
+        values[i], WebKit::WebIDBKeyPath::create(keyPath));
+  }
+  keys_out.swap(keys);
+}
+
+WebKit::WebSerializedScriptValue
+TestShellWebKitInit::injectIDBKeyIntoSerializedValue(
+    const WebKit::WebIDBKey& key, const WebKit::WebSerializedScriptValue& value,
+    const WebKit::WebString& keyPath) {
+  return WebKit::WebIDBKey::injectIDBKeyIntoSerializedValue(
+      key, value, WebKit::WebIDBKeyPath::create(keyPath));
+}
+
+WebKit::WebSharedWorkerRepository*
+TestShellWebKitInit::sharedWorkerRepository() {
+  return NULL;
+}
+
+WebKit::WebGraphicsContext3D* TestShellWebKitInit::createGraphicsContext3D() {
+  gfx::BindSkiaToInProcessGL();
+  return new webkit::gpu::WebGraphicsContext3DInProcessImpl();
+}

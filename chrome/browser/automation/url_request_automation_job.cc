@@ -8,12 +8,13 @@
 #include "base/message_loop.h"
 #include "base/time.h"
 #include "chrome/browser/automation/automation_resource_message_filter.h"
-#include "chrome/browser/browser_thread.h"
-#include "chrome/browser/renderer_host/render_view_host.h"
-#include "chrome/browser/renderer_host/resource_dispatcher_host.h"
-#include "chrome/browser/renderer_host/resource_dispatcher_host_request_info.h"
 #include "chrome/common/automation_messages.h"
+#include "content/browser/browser_thread.h"
+#include "content/browser/renderer_host/render_view_host.h"
+#include "content/browser/renderer_host/resource_dispatcher_host.h"
+#include "content/browser/renderer_host/resource_dispatcher_host_request_info.h"
 #include "net/base/cookie_monster.h"
+#include "net/base/host_port_pair.h"
 #include "net/base/io_buffer.h"
 #include "net/base/net_errors.h"
 #include "net/http/http_response_headers.h"
@@ -104,12 +105,6 @@ net::URLRequestJob* URLRequestAutomationJob::Factory(
     if (request_info) {
       int child_id = request_info->child_id();
       int route_id = request_info->route_id();
-
-      if (request_info->process_type() == ChildProcessInfo::PLUGIN_PROCESS) {
-        child_id = request_info->host_renderer_id();
-        route_id = request_info->host_render_view_id();
-      }
-
       AutomationResourceMessageFilter::AutomationDetails details;
       if (AutomationResourceMessageFilter::LookupRegisteredRenderView(
               child_id, route_id, &details)) {
@@ -234,6 +229,24 @@ bool URLRequestAutomationJob::IsRedirectResponse(
   return true;
 }
 
+uint64 URLRequestAutomationJob::GetUploadProgress() const {
+  if (request_ && request_->status().is_success()) {
+    // We don't support incremental progress notifications in ChromeFrame. When
+    // we receive a response for the POST request from Chromeframe, it means
+    // that the upload is fully complete.
+    ResourceDispatcherHostRequestInfo* request_info =
+        ResourceDispatcherHost::InfoForRequest(request_);
+    if (request_info) {
+      return request_info->upload_size();
+    }
+  }
+  return 0;
+}
+
+net::HostPortPair URLRequestAutomationJob::GetSocketAddress() const {
+  return socket_address_;
+}
+
 bool URLRequestAutomationJob::MayFilterMessage(const IPC::Message& message,
                                                int* request_id) {
   switch (message.type()) {
@@ -282,6 +295,7 @@ void URLRequestAutomationJob::OnRequestStarted(
         net::HttpUtil::AssembleRawHeaders(response.headers.data(),
                                           response.headers.size()));
   }
+  socket_address_ = response.socket_address;
   NotifyHeadersComplete();
 }
 
@@ -362,7 +376,7 @@ void URLRequestAutomationJob::Cleanup() {
   id_ = 0;
   tab_ = 0;
 
-  DCHECK(message_filter_ == NULL);
+  DCHECK(!message_filter_);
   DisconnectFromMessageFilter();
 
   pending_buf_ = NULL;

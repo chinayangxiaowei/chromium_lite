@@ -1,18 +1,18 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "base/logging.h"
 #include "base/mac/mac_util.h"
-#include "chrome/browser/tab_contents/infobar_delegate.h"
-#include "chrome/browser/tab_contents/tab_contents.h"
+#include "chrome/browser/tab_contents/confirm_infobar_delegate.h"
 #import "chrome/browser/ui/cocoa/animatable_view.h"
 #include "chrome/browser/ui/cocoa/infobars/infobar.h"
 #import "chrome/browser/ui/cocoa/infobars/infobar_container_controller.h"
 #import "chrome/browser/ui/cocoa/infobars/infobar_controller.h"
 #import "chrome/browser/ui/cocoa/view_id_util.h"
-#include "chrome/common/notification_details.h"
-#include "chrome/common/notification_source.h"
+#include "content/browser/tab_contents/tab_contents.h"
+#include "content/common/notification_details.h"
+#include "content/common/notification_source.h"
 #include "skia/ext/skia_utils_mac.h"
 
 // C++ class that receives INFOBAR_ADDED and INFOBAR_REMOVED
@@ -68,6 +68,7 @@ class InfoBarNotificationObserver : public NotificationObserver {
 
 
 @implementation InfoBarContainerController
+
 - (id)initWithResizeDelegate:(id<ViewResizer>)resizeDelegate {
   DCHECK(resizeDelegate);
   if ((self = [super initWithNibName:@"InfoBarContainer"
@@ -78,12 +79,14 @@ class InfoBarNotificationObserver : public NotificationObserver {
     // NSMutableArray needs an initial capacity, and we rarely ever see
     // more than two infobars at a time, so that seems like a good choice.
     infobarControllers_.reset([[NSMutableArray alloc] initWithCapacity:2]);
+    closingInfoBars_.reset([[NSMutableSet alloc] initWithCapacity:2]);
   }
   return self;
 }
 
 - (void)dealloc {
-  DCHECK([infobarControllers_ count] == 0);
+  DCHECK_EQ([infobarControllers_ count], 0U);
+  DCHECK_EQ([closingInfoBars_ count], 0U);
   view_id_util::UnsetID([self view]);
   [super dealloc];
 }
@@ -99,6 +102,10 @@ class InfoBarNotificationObserver : public NotificationObserver {
   currentTabContents_->RemoveInfoBar(delegate);
 }
 
+- (void)willRemoveController:(InfoBarController*)controller {
+  [closingInfoBars_ addObject:controller];
+}
+
 - (void)removeController:(InfoBarController*)controller {
   if (![infobarControllers_ containsObject:controller])
     return;
@@ -109,6 +116,7 @@ class InfoBarNotificationObserver : public NotificationObserver {
   [[controller retain] autorelease];
   [[controller view] removeFromSuperview];
   [infobarControllers_ removeObject:controller];
+  [closingInfoBars_ removeObject:controller];
   [self positionInfoBarsAndRedraw];
 }
 
@@ -118,7 +126,7 @@ class InfoBarNotificationObserver : public NotificationObserver {
 
   currentTabContents_ = contents;
   if (currentTabContents_) {
-    for (int i = 0; i < currentTabContents_->infobar_delegate_count(); ++i) {
+    for (size_t i = 0; i < currentTabContents_->infobar_count(); ++i) {
       [self addInfoBar:currentTabContents_->GetInfoBarDelegateAt(i)
                animate:NO];
     }
@@ -138,6 +146,14 @@ class InfoBarNotificationObserver : public NotificationObserver {
 - (void)tabDetachedWithContents:(TabContents*)contents {
   if (currentTabContents_ == contents)
     [self changeTabContents:NULL];
+}
+
+- (NSUInteger)infobarCount {
+  return [infobarControllers_ count] - [closingInfoBars_ count];
+}
+
+- (CGFloat)antiSpoofHeight {
+  return 0;
 }
 
 - (void)resizeView:(NSView*)view newHeight:(CGFloat)height {
@@ -203,6 +219,7 @@ class InfoBarNotificationObserver : public NotificationObserver {
     [[controller view] removeFromSuperview];
   }
   [infobarControllers_ removeAllObjects];
+  [closingInfoBars_ removeAllObjects];
 }
 
 - (void)positionInfoBarsAndRedraw {
@@ -218,10 +235,11 @@ class InfoBarNotificationObserver : public NotificationObserver {
     NSView* view = [controller view];
     NSRect frame = [view frame];
     frame.origin.x = NSMinX(containerBounds);
-    frame.size.width = NSWidth(containerBounds);
     frame.origin.y = minY;
-    minY += frame.size.height;
+    frame.size.width = NSWidth(containerBounds);
     [view setFrame:frame];
+
+    minY += NSHeight(frame);
   }
 
   [resizeDelegate_ resizeView:[self view] newHeight:[self desiredHeight]];

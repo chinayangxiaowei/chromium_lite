@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,11 +6,15 @@
 #define CHROME_TEST_TESTING_PROFILE_H_
 #pragma once
 
-#include "base/ref_counted.h"
-#include "base/scoped_ptr.h"
-#include "base/scoped_temp_dir.h"
+#include "base/memory/ref_counted.h"
+#include "base/memory/scoped_ptr.h"
+#include "base/memory/scoped_temp_dir.h"
 #include "base/timer.h"
 #include "chrome/browser/profiles/profile.h"
+
+namespace content {
+class ResourceContextGetter;
+}
 
 namespace history {
 class TopSites;
@@ -20,13 +24,17 @@ namespace net {
 class CookieMonster;
 }
 
+namespace quota {
+class SpecialStoragePolicy;
+}
+
 class AutocompleteClassifier;
 class BookmarkModel;
-class BrowserThemeProvider;
 class CommandLine;
-class DesktopNotificationService;
-class ExtensionPrefStore;
 class ExtensionPrefs;
+class ExtensionPrefStore;
+class ExtensionPrefValueMap;
+class ExtensionSpecialStoragePolicy;
 class FaviconService;
 class FindBarState;
 class GeolocationContentSettingsMap;
@@ -34,12 +42,17 @@ class GeolocationPermissionContext;
 class HistoryService;
 class HostContentSettingsMap;
 class PrefService;
+class ProfileDependencyManager;
 class ProfileSyncService;
 class SessionService;
 class TemplateURLModel;
 class TestingPrefService;
-class URLRequestContextGetter;
+class ThemeService;
 class WebKitContext;
+
+namespace net {
+class URLRequestContextGetter;
+}
 
 class TestingProfile : public Profile {
  public:
@@ -83,6 +96,10 @@ class TestingProfile : public Profile {
   // AutocompleteClassifier is NULL.
   void CreateAutocompleteClassifier();
 
+  // Creates a ProtocolHandlerRegistry. If not invoked the protocol handler
+  // registry is NULL.
+  void CreateProtocolHandlerRegistry();
+
   // Creates the webdata service.  If |delete_file| is true, the webdata file is
   // deleted first, then the WebDataService is created.  As TestingProfile
   // deletes the directory containing the files used by WebDataService, this
@@ -107,113 +124,72 @@ class TestingProfile : public Profile {
   // Sets the TemplateURLModel. Takes ownership of it.
   void SetTemplateURLModel(TemplateURLModel* model);
 
-  // Uses a specific theme provider for this profile. TestingProfile takes
-  // ownership of |theme_provider|.
-  void UseThemeProvider(BrowserThemeProvider* theme_provider);
-
   // Creates an ExtensionService initialized with the testing profile and
   // returns it. The profile keeps its own copy of a scoped_refptr to the
   // ExtensionService to make sure that is still alive to be notified when the
   // profile is destroyed.
-  scoped_refptr<ExtensionService> CreateExtensionService(
-      const CommandLine* command_line,
-      const FilePath& install_directory);
+  ExtensionService* CreateExtensionService(const CommandLine* command_line,
+                                           const FilePath& install_directory,
+                                           bool autoupdate_enabled);
 
   TestingPrefService* GetTestingPrefService();
 
-  virtual ProfileId GetRuntimeId() {
-    return reinterpret_cast<ProfileId>(this);
-  }
+  virtual ProfileId GetRuntimeId();
 
   virtual FilePath GetPath();
 
-  // Sets whether we're off the record. Default is false.
-  void set_off_the_record(bool off_the_record) {
-    off_the_record_ = off_the_record;
+  // Sets whether we're incognito. Default is false.
+  void set_incognito(bool incognito) {
+    incognito_ = incognito;
   }
-  virtual bool IsOffTheRecord() { return off_the_record_; }
-  virtual Profile* GetOffTheRecordProfile() { return NULL; }
+  virtual bool IsOffTheRecord();
+  // Assumes ownership.
+  virtual void SetOffTheRecordProfile(Profile* profile);
+  virtual Profile* GetOffTheRecordProfile();
 
   virtual void DestroyOffTheRecordProfile() {}
 
-  virtual bool HasOffTheRecordProfile() { return false; }
+  virtual bool HasOffTheRecordProfile();
 
-  virtual Profile* GetOriginalProfile() { return this; }
-  virtual ChromeAppCacheService* GetAppCacheService() { return NULL; }
+  virtual Profile* GetOriginalProfile();
+  virtual ChromeAppCacheService* GetAppCacheService();
   virtual webkit_database::DatabaseTracker* GetDatabaseTracker();
-  virtual VisitedLinkMaster* GetVisitedLinkMaster() { return NULL; }
+  virtual VisitedLinkMaster* GetVisitedLinkMaster();
   virtual ExtensionService* GetExtensionService();
-  virtual UserScriptMaster* GetUserScriptMaster() { return NULL; }
-  virtual ExtensionDevToolsManager* GetExtensionDevToolsManager() {
-    return NULL;
-  }
-  virtual ExtensionProcessManager* GetExtensionProcessManager() { return NULL; }
-  virtual ExtensionMessageService* GetExtensionMessageService() { return NULL; }
-  virtual ExtensionEventRouter* GetExtensionEventRouter() { return NULL; }
-  virtual SSLHostState* GetSSLHostState() { return NULL; }
-  virtual net::TransportSecurityState* GetTransportSecurityState() {
-    return NULL;
-  }
-  virtual FaviconService* GetFaviconService(ServiceAccessType access) {
-    return favicon_service_.get();
-  }
-  virtual HistoryService* GetHistoryService(ServiceAccessType access) {
-    return history_service_.get();
-  }
-  virtual HistoryService* GetHistoryServiceWithoutCreating() {
-    return history_service_.get();
-  }
-  void set_has_history_service(bool has_history_service) {
-    has_history_service_ = has_history_service;
-  }
+  virtual UserScriptMaster* GetUserScriptMaster();
+  virtual ExtensionDevToolsManager* GetExtensionDevToolsManager();
+  virtual ExtensionProcessManager* GetExtensionProcessManager();
+  virtual ExtensionMessageService* GetExtensionMessageService();
+  virtual ExtensionEventRouter* GetExtensionEventRouter();
+  virtual ExtensionSpecialStoragePolicy* GetExtensionSpecialStoragePolicy();
+  virtual SSLHostState* GetSSLHostState();
+  virtual net::TransportSecurityState* GetTransportSecurityState();
+  virtual FaviconService* GetFaviconService(ServiceAccessType access);
+  virtual HistoryService* GetHistoryService(ServiceAccessType access);
+  virtual HistoryService* GetHistoryServiceWithoutCreating();
   // The CookieMonster will only be returned if a Context has been created. Do
   // this by calling CreateRequestContext(). See the note at GetRequestContext
   // for more information.
   net::CookieMonster* GetCookieMonster();
-  virtual AutocompleteClassifier* GetAutocompleteClassifier() {
-    return autocomplete_classifier_.get();
-  }
-  virtual WebDataService* GetWebDataService(ServiceAccessType access) {
-    return web_data_service_.get();
-  }
-  virtual WebDataService* GetWebDataServiceWithoutCreating() {
-    return web_data_service_.get();
-  }
-  virtual PasswordStore* GetPasswordStore(ServiceAccessType access) {
-    return NULL;
-  }
+  virtual AutocompleteClassifier* GetAutocompleteClassifier();
+  virtual WebDataService* GetWebDataService(ServiceAccessType access);
+  virtual WebDataService* GetWebDataServiceWithoutCreating();
+  virtual PasswordStore* GetPasswordStore(ServiceAccessType access);
   // Sets the profile's PrefService. If a pref service hasn't been explicitly
   // set GetPrefs creates one, so normally you need not invoke this. If you need
   // to set a pref service you must invoke this before GetPrefs.
   // TestingPrefService takes ownership of |prefs|.
   void SetPrefService(PrefService* prefs);
   virtual PrefService* GetPrefs();
-  virtual TemplateURLModel* GetTemplateURLModel() {
-    return template_url_model_.get();
-  }
-  virtual TemplateURLFetcher* GetTemplateURLFetcher() {
-    return template_url_fetcher_.get();
-  }
+  virtual TemplateURLModel* GetTemplateURLModel();
+  virtual TemplateURLFetcher* GetTemplateURLFetcher();
   virtual history::TopSites* GetTopSites();
-  virtual history::TopSites* GetTopSitesWithoutCreating() {
-    return top_sites_.get();
-  }
-  virtual DownloadManager* GetDownloadManager() { return NULL; }
-  virtual PersonalDataManager* GetPersonalDataManager() { return NULL; }
-  virtual fileapi::SandboxedFileSystemContext* GetFileSystemContext() {
-    return NULL;
-  }
-  virtual BrowserSignin* GetBrowserSignin() { return NULL; }
-  virtual bool HasCreatedDownloadManager() const { return false; }
-  virtual void InitThemes();
-  virtual void SetTheme(const Extension* extension) {}
-  virtual void SetNativeTheme() {}
-  virtual void ClearTheme() {}
-  virtual const Extension* GetTheme() { return NULL; }
-  virtual BrowserThemeProvider* GetThemeProvider() {
-    InitThemes();
-    return theme_provider_.get();
-  }
+  virtual history::TopSites* GetTopSitesWithoutCreating();
+  virtual DownloadManager* GetDownloadManager();
+  virtual PersonalDataManager* GetPersonalDataManager();
+  virtual fileapi::FileSystemContext* GetFileSystemContext();
+  virtual BrowserSignin* GetBrowserSignin();
+  virtual bool HasCreatedDownloadManager() const;
 
   // Returns a testing ContextGetter (if one has been created via
   // CreateRequestContext) or NULL. This is not done on-demand for two reasons:
@@ -223,82 +199,72 @@ class TestingProfile : public Profile {
   // leaking if they called this method without the necessary IO thread. This
   // getter is currently only capable of returning a Context that helps test
   // the CookieMonster. See implementation comments for more details.
-  virtual URLRequestContextGetter* GetRequestContext();
+  virtual net::URLRequestContextGetter* GetRequestContext();
+  virtual net::URLRequestContextGetter* GetRequestContextForPossibleApp(
+      const Extension* installed_app);
   void CreateRequestContext();
   // Clears out the created request context (which must be done before shutting
   // down the IO thread to avoid leaks).
   void ResetRequestContext();
 
-  virtual URLRequestContextGetter* GetRequestContextForMedia() { return NULL; }
-  virtual URLRequestContextGetter* GetRequestContextForExtensions();
+  virtual net::URLRequestContextGetter* GetRequestContextForMedia();
+  virtual net::URLRequestContextGetter* GetRequestContextForExtensions();
+  virtual net::URLRequestContextGetter* GetRequestContextForIsolatedApp(
+      const std::string& app_id);
 
-  virtual net::SSLConfigService* GetSSLConfigService() { return NULL; }
-  virtual UserStyleSheetWatcher* GetUserStyleSheetWatcher() { return NULL; }
+  virtual const content::ResourceContext& GetResourceContext();
+
+  virtual net::SSLConfigService* GetSSLConfigService();
+  virtual UserStyleSheetWatcher* GetUserStyleSheetWatcher();
   virtual FindBarState* GetFindBarState();
   virtual HostContentSettingsMap* GetHostContentSettingsMap();
   virtual GeolocationContentSettingsMap* GetGeolocationContentSettingsMap();
   virtual GeolocationPermissionContext* GetGeolocationPermissionContext();
-  virtual HostZoomMap* GetHostZoomMap() { return NULL; }
+  virtual HostZoomMap* GetHostZoomMap();
   void set_session_service(SessionService* session_service);
-  virtual SessionService* GetSessionService() { return session_service_.get(); }
+  virtual SessionService* GetSessionService();
   virtual void ShutdownSessionService() {}
-  virtual bool HasSessionService() const {
-    return (session_service_.get() != NULL);
-  }
-  virtual bool HasProfileSyncService() const {
-    return (profile_sync_service_.get() != NULL);
-  }
-  virtual std::wstring GetName() { return std::wstring(); }
+  virtual bool HasSessionService() const;
+  virtual bool HasProfileSyncService() const;
+  virtual std::wstring GetName();
   virtual void SetName(const std::wstring& name) {}
-  virtual std::wstring GetID() { return id_; }
-  virtual void SetID(const std::wstring& id) { id_ = id; }
+  virtual std::wstring GetID();
+  virtual void SetID(const std::wstring& id);
   void set_last_session_exited_cleanly(bool value) {
     last_session_exited_cleanly_ = value;
   }
-  virtual bool DidLastSessionExitCleanly() {
-    return last_session_exited_cleanly_;
-  }
+  virtual bool DidLastSessionExitCleanly();
   virtual void MergeResourceString(int message_id,
                                    std::wstring* output_string) {}
   virtual void MergeResourceInteger(int message_id, int* output_value) {}
   virtual void MergeResourceBoolean(int message_id, bool* output_value) {}
-  virtual BookmarkModel* GetBookmarkModel() {
-    return bookmark_bar_model_.get();
-  }
-  virtual bool IsSameProfile(Profile *p) { return this == p; }
-  virtual base::Time GetStartTime() const { return start_time_; }
-  virtual TabRestoreService* GetTabRestoreService() { return NULL; }
+  virtual BookmarkModel* GetBookmarkModel();
+  virtual bool IsSameProfile(Profile *p);
+  virtual base::Time GetStartTime() const;
+  virtual TabRestoreService* GetTabRestoreService();
+  virtual ProtocolHandlerRegistry* GetProtocolHandlerRegistry();
   virtual void ResetTabRestoreService() {}
-  virtual SpellCheckHost* GetSpellCheckHost() { return NULL; }
+  virtual SpellCheckHost* GetSpellCheckHost();
   virtual void ReinitializeSpellCheckHost(bool force) { }
   virtual WebKitContext* GetWebKitContext();
-  virtual WebKitContext* GetOffTheRecordWebKitContext() { return NULL; }
+  virtual WebKitContext* GetOffTheRecordWebKitContext();
   virtual void MarkAsCleanShutdown() {}
-  virtual void InitExtensions() {}
-  virtual void InitWebResources() {}
+  virtual void InitExtensions(bool extensions_enabled) {}
+  virtual void InitPromoResources() {}
+  virtual void InitRegisteredProtocolHandlers() {}
   virtual NTPResourceCache* GetNTPResourceCache();
 
-  virtual DesktopNotificationService* GetDesktopNotificationService();
-  virtual BackgroundContentsService* GetBackgroundContentsService() const {
-    return NULL;
-  }
-  virtual StatusTray* GetStatusTray() {
-    return NULL;
-  }
-  virtual FilePath last_selected_directory() {
-    return last_selected_directory_;
-  }
-  virtual void set_last_selected_directory(const FilePath& path) {
-    last_selected_directory_ = path;
-  }
+  virtual StatusTray* GetStatusTray();
+  virtual FilePath last_selected_directory();
+  virtual void set_last_selected_directory(const FilePath& path);
 #if defined(OS_CHROMEOS)
-  virtual chromeos::ProxyConfigServiceImpl*
-      GetChromeOSProxyConfigServiceImpl() {
-    return NULL;
-  }
   virtual void SetupChromeOSEnterpriseExtensionObserver() {
   }
-  virtual void ChangeApplicationLocale(const std::string&, bool) {
+  virtual void InitChromeOSPreferences() {
+  }
+  virtual void ChangeAppLocale(const std::string&, AppLocaleChangedVia) {
+  }
+  virtual void OnLogin() {
   }
 #endif  // defined(OS_CHROMEOS)
 
@@ -314,12 +280,19 @@ class TestingProfile : public Profile {
   virtual ProfileSyncService* GetProfileSyncService();
   virtual ProfileSyncService* GetProfileSyncService(
       const std::string& cros_notes);
-  virtual CloudPrintProxyService* GetCloudPrintProxyService() { return NULL; }
-  virtual ChromeBlobStorageContext* GetBlobStorageContext() { return NULL; }
-  virtual ExtensionInfoMap* GetExtensionInfoMap() { return NULL; }
-  virtual PromoCounter* GetInstantPromoCounter() { return NULL; }
-  virtual policy::ProfilePolicyContext* GetPolicyContext() { return NULL; }
-  virtual PrerenderManager* GetPrerenderManager() { return NULL; }
+  virtual CloudPrintProxyService* GetCloudPrintProxyService();
+  virtual ChromeBlobStorageContext* GetBlobStorageContext();
+  virtual ExtensionInfoMap* GetExtensionInfoMap();
+  virtual PromoCounter* GetInstantPromoCounter();
+  virtual policy::ProfilePolicyConnector* GetPolicyConnector();
+  virtual ChromeURLDataManager* GetChromeURLDataManager();
+  virtual prerender::PrerenderManager* GetPrerenderManager();
+  virtual PrefService* GetOffTheRecordPrefs();
+
+  // TODO(jam): remove me once webkit_context_unittest.cc doesn't use Profile
+  // and gets the quota::SpecialStoragePolicy* from whatever ends up replacing
+  // it in the content module.
+  quota::SpecialStoragePolicy* GetSpecialStoragePolicy();
 
  protected:
   base::Time start_time_;
@@ -347,6 +320,10 @@ class TestingProfile : public Profile {
   // The BookmarkModel. Only created if CreateBookmarkModel is invoked.
   scoped_ptr<BookmarkModel> bookmark_bar_model_;
 
+  // The ProtocolHandlerRegistry. Only created if CreateProtocolHandlerRegistry
+  // is invoked.
+  scoped_refptr<ProtocolHandlerRegistry> protocol_handler_registry_;
+
   // The TokenService. Created by CreateTokenService. Filled with dummy data.
   scoped_ptr<TokenService> token_service_;
 
@@ -372,22 +349,15 @@ class TestingProfile : public Profile {
   // The SessionService. Defaults to NULL, but can be set using the setter.
   scoped_refptr<SessionService> session_service_;
 
-  // The theme provider. Created lazily by GetThemeProvider()/InitThemes().
-  scoped_ptr<BrowserThemeProvider> theme_provider_;
-  bool created_theme_provider_;
-
   // Internally, this is a TestURLRequestContextGetter that creates a dummy
   // request context. Currently, only the CookieMonster is hooked up.
-  scoped_refptr<URLRequestContextGetter> request_context_;
-  scoped_refptr<URLRequestContextGetter> extensions_request_context_;
-
-  // Do we have a history service? This defaults to the value of
-  // history_service, but can be explicitly set.
-  bool has_history_service_;
+  scoped_refptr<net::URLRequestContextGetter> request_context_;
+  scoped_refptr<net::URLRequestContextGetter> extensions_request_context_;
 
   std::wstring id_;
 
-  bool off_the_record_;
+  bool incognito_;
+  scoped_ptr<Profile> incognito_profile_;
 
   // Did the last session exit cleanly? Default is true.
   bool last_session_exited_cleanly_;
@@ -403,16 +373,12 @@ class TestingProfile : public Profile {
   scoped_refptr<GeolocationContentSettingsMap>
       geolocation_content_settings_map_;
   scoped_refptr<GeolocationPermissionContext> geolocation_permission_context_;
-  scoped_ptr<DesktopNotificationService> desktop_notification_service_;
 
   // Find bar state.  Created lazily by GetFindBarState().
   scoped_ptr<FindBarState> find_bar_state_;
 
   FilePath last_selected_directory_;
   scoped_refptr<history::TopSites> top_sites_;  // For history and thumbnails.
-
-  // Extension pref store, created for use by |extension_prefs_|.
-  scoped_ptr<ExtensionPrefStore> extension_pref_store_;
 
   // The Extension Preferences. Only created if CreateExtensionService is
   // invoked.
@@ -422,11 +388,25 @@ class TestingProfile : public Profile {
   // is disposed.
   scoped_refptr<ExtensionService> extensions_service_;
 
+  scoped_ptr<ExtensionPrefValueMap> extension_pref_value_map_;
+
+  scoped_refptr<ExtensionSpecialStoragePolicy>
+      extension_special_storage_policy_;
+
   // The proxy prefs tracker.
   scoped_refptr<PrefProxyConfigTracker> pref_proxy_config_tracker_;
 
   // We use a temporary directory to store testing profile data.
   ScopedTempDir temp_dir_;
+
+  scoped_ptr<ChromeURLDataManager> chrome_url_data_manager_;
+
+  scoped_refptr<prerender::PrerenderManager> prerender_manager_;
+
+  // We keep a weak pointer to the dependency manager we want to notify on our
+  // death. Defaults to the Singleton implementation but overridable for
+  // testing.
+  ProfileDependencyManager* profile_dependency_manager_;
 };
 
 // A profile that derives from another profile.  This does not actually
@@ -434,12 +414,10 @@ class TestingProfile : public Profile {
 // site information.
 class DerivedTestingProfile : public TestingProfile {
  public:
-  explicit DerivedTestingProfile(Profile* profile)
-      : original_profile_(profile) {}
+  explicit DerivedTestingProfile(Profile* profile);
+  virtual ~DerivedTestingProfile();
 
-  virtual ProfileId GetRuntimeId() {
-    return original_profile_->GetRuntimeId();
-  }
+  virtual ProfileId GetRuntimeId();
 
  protected:
   Profile* original_profile_;

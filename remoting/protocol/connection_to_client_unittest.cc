@@ -1,12 +1,12 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "base/message_loop.h"
-#include "remoting/base/mock_objects.h"
+#include "remoting/base/base_mock_objects.h"
 #include "remoting/protocol/fake_session.h"
 #include "remoting/protocol/connection_to_client.h"
-#include "remoting/protocol/mock_objects.h"
+#include "remoting/protocol/protocol_mock_objects.h"
 #include "testing/gmock/include/gmock/gmock.h"
 
 using ::testing::_;
@@ -27,8 +27,9 @@ class ConnectionToClientTest : public testing::Test {
     session_->set_message_loop(&message_loop_);
 
     // Allocate a ClientConnection object with the mock objects.
-    viewer_ = new ConnectionToClient(&message_loop_, &handler_,
-                                     &host_stub_, &input_stub_);
+    viewer_ = new ConnectionToClient(&message_loop_, &handler_);
+    viewer_->set_host_stub(&host_stub_);
+    viewer_->set_input_stub(&input_stub_);
     viewer_->Init(session_);
     EXPECT_CALL(handler_, OnConnectionOpened(viewer_.get()));
     session_->state_change_callback()->Run(

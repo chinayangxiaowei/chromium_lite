@@ -7,17 +7,13 @@
 #include "base/stl_util-inl.h"
 #include "base/string_util.h"
 #include "base/utf_string_conversions.h"
-#include "chrome/browser/browser_window.h"
 #include "chrome/browser/extensions/extension_browser_event_router.h"
 #include "chrome/browser/extensions/extension_host.h"
-#include "chrome/browser/extensions/extension_tabs_module.h"
 #include "chrome/browser/extensions/extension_service.h"
+#include "chrome/browser/extensions/extension_tabs_module.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/renderer_host/render_view_host.h"
-#include "chrome/browser/renderer_host/render_widget_host_view.h"
-#include "chrome/browser/tab_contents/tab_contents.h"
-#include "chrome/browser/themes/browser_theme_provider.h"
 #include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_window.h"
 #include "chrome/browser/ui/view_ids.h"
 #include "chrome/browser/ui/views/detachable_toolbar_view.h"
 #include "chrome/browser/ui/views/extensions/browser_action_drag_data.h"
@@ -25,23 +21,28 @@
 #include "chrome/browser/ui/views/toolbar_view.h"
 #include "chrome/common/extensions/extension_action.h"
 #include "chrome/common/extensions/extension_resource.h"
-#include "chrome/common/notification_source.h"
-#include "chrome/common/notification_type.h"
 #include "chrome/common/pref_names.h"
-#include "gfx/canvas.h"
-#include "gfx/canvas_skia.h"
+#include "content/browser/renderer_host/render_view_host.h"
+#include "content/browser/renderer_host/render_widget_host_view.h"
+#include "content/browser/tab_contents/tab_contents.h"
+#include "content/common/notification_source.h"
+#include "content/common/notification_type.h"
 #include "grit/app_resources.h"
 #include "grit/generated_resources.h"
 #include "third_party/skia/include/core/SkBitmap.h"
-#include "third_party/skia/include/core/SkTypeface.h"
 #include "third_party/skia/include/effects/SkGradientShader.h"
+#include "ui/base/accessibility/accessible_view_state.h"
 #include "ui/base/animation/slide_animation.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/resource/resource_bundle.h"
+#include "ui/base/theme_provider.h"
+#include "ui/gfx/canvas.h"
+#include "ui/gfx/canvas_skia.h"
 #include "views/controls/button/menu_button.h"
 #include "views/controls/button/text_button.h"
 #include "views/controls/menu/menu_2.h"
 #include "views/drag_utils.h"
+#include "views/metrics.h"
 #include "views/window/window.h"
 
 #include "grit/theme_resources.h"
@@ -97,7 +98,7 @@ void BrowserActionButton::ViewHierarchyChanged(
 
     // LoadImage is not guaranteed to be synchronous, so we might see the
     // callback OnImageLoaded execute immediately. It (through UpdateState)
-    // expects GetParent() to return the owner for this button, so this
+    // expects parent() to return the owner for this button, so this
     // function is as early as we can start this request.
     tracker_.LoadImage(extension_, extension_->GetResource(relative_path),
                        gfx::Size(Extension::kBrowserActionIconMaxSize,
@@ -114,7 +115,7 @@ void BrowserActionButton::ButtonPressed(views::Button* sender,
 }
 
 void BrowserActionButton::OnImageLoaded(SkBitmap* image,
-                                        ExtensionResource resource,
+                                        const ExtensionResource& resource,
                                         int index) {
   if (image)
     default_icon_ = *image;
@@ -169,18 +170,7 @@ void BrowserActionButton::UpdateState() {
   if (name.empty())
     name = UTF8ToUTF16(extension()->name());
   SetTooltipText(UTF16ToWideHack(name));
-  SetAccessibleName(name);
-  GetParent()->SchedulePaint();
-}
-
-void BrowserActionButton::Observe(NotificationType type,
-                                  const NotificationSource& source,
-                                  const NotificationDetails& details) {
-  DCHECK(type == NotificationType::EXTENSION_BROWSER_ACTION_UPDATED);
-  UpdateState();
-  // The browser action may have become visible/hidden so we need to make
-  // sure the state gets updated.
-  panel_->OnBrowserActionVisibilityChanged();
+  parent()->SchedulePaint();
 }
 
 bool BrowserActionButton::IsPopup() {
@@ -191,6 +181,16 @@ bool BrowserActionButton::IsPopup() {
 GURL BrowserActionButton::GetPopupUrl() {
   int tab_id = panel_->GetCurrentTabId();
   return (tab_id < 0) ? GURL() : browser_action_->GetPopupUrl(tab_id);
+}
+
+void BrowserActionButton::Observe(NotificationType type,
+                                  const NotificationSource& source,
+                                  const NotificationDetails& details) {
+  DCHECK(type == NotificationType::EXTENSION_BROWSER_ACTION_UPDATED);
+  UpdateState();
+  // The browser action may have become visible/hidden so we need to make
+  // sure the state gets updated.
+  panel_->OnBrowserActionVisibilityChanged();
 }
 
 bool BrowserActionButton::Activate() {
@@ -209,10 +209,10 @@ bool BrowserActionButton::Activate() {
   return false;
 }
 
-bool BrowserActionButton::OnMousePressed(const views::MouseEvent& e) {
-  if (!e.IsRightMouseButton()) {
+bool BrowserActionButton::OnMousePressed(const views::MouseEvent& event) {
+  if (!event.IsRightMouseButton()) {
     return IsPopup() ?
-        MenuButton::OnMousePressed(e) : TextButton::OnMousePressed(e);
+        MenuButton::OnMousePressed(event) : TextButton::OnMousePressed(event);
   }
 
   // Get the top left point of this button in screen coordinates.
@@ -226,27 +226,26 @@ bool BrowserActionButton::OnMousePressed(const views::MouseEvent& e) {
   return false;
 }
 
-void BrowserActionButton::OnMouseReleased(const views::MouseEvent& e,
-                                          bool canceled) {
+void BrowserActionButton::OnMouseReleased(const views::MouseEvent& event) {
   if (IsPopup() || showing_context_menu_) {
     // TODO(erikkay) this never actually gets called (probably because of the
     // loss of focus).
-    MenuButton::OnMouseReleased(e, canceled);
+    MenuButton::OnMouseReleased(event);
   } else {
-    TextButton::OnMouseReleased(e, canceled);
+    TextButton::OnMouseReleased(event);
   }
 }
 
-bool BrowserActionButton::OnKeyReleased(const views::KeyEvent& e) {
-  return IsPopup() ?
-      MenuButton::OnKeyReleased(e) : TextButton::OnKeyReleased(e);
+void BrowserActionButton::OnMouseExited(const views::MouseEvent& event) {
+  if (IsPopup() || showing_context_menu_)
+    MenuButton::OnMouseExited(event);
+  else
+    TextButton::OnMouseExited(event);
 }
 
-void BrowserActionButton::OnMouseExited(const views::MouseEvent& e) {
-  if (IsPopup() || showing_context_menu_)
-    MenuButton::OnMouseExited(e);
-  else
-    TextButton::OnMouseExited(e);
+bool BrowserActionButton::OnKeyReleased(const views::KeyEvent& event) {
+  return IsPopup() ?
+      MenuButton::OnKeyReleased(event) : TextButton::OnKeyReleased(event);
 }
 
 void BrowserActionButton::ShowContextMenu(const gfx::Point& p,
@@ -291,8 +290,6 @@ BrowserActionView::BrowserActionView(const Extension* extension,
   button_->SetDragController(panel_);
   AddChildView(button_);
   button_->UpdateState();
-  SetAccessibleName(
-      l10n_util::GetStringUTF16(IDS_ACCNAME_EXTENSIONS_BROWSER_ACTION));
 }
 
 BrowserActionView::~BrowserActionView() {
@@ -318,10 +315,6 @@ gfx::Canvas* BrowserActionView::GetIconWithBadge() {
   return canvas;
 }
 
-AccessibilityTypes::Role BrowserActionView::GetAccessibleRole() {
-  return AccessibilityTypes::ROLE_GROUPING;
-}
-
 void BrowserActionView::Layout() {
   // We can't rely on button_->GetPreferredSize() here because that's not set
   // correctly until the first call to
@@ -332,6 +325,12 @@ void BrowserActionView::Layout() {
   // button should be regardless of what it's displaying.
   button_->SetBounds(0, ToolbarView::kVertSpacing, width(),
                      BrowserActionsContainer::IconHeight());
+}
+
+void BrowserActionView::GetAccessibleState(ui::AccessibleViewState* state) {
+  state->name = l10n_util::GetStringUTF16(
+      IDS_ACCNAME_EXTENSIONS_BROWSER_ACTION);
+  state->role = ui::AccessibilityTypes::ROLE_GROUPING;
 }
 
 void BrowserActionView::PaintChildren(gfx::Canvas* canvas) {
@@ -371,8 +370,6 @@ BrowserActionsContainer::BrowserActionsContainer(Browser* browser,
 
   resize_animation_.reset(new ui::SlideAnimation(this));
   resize_area_ = new views::ResizeArea(this);
-  resize_area_->SetAccessibleName(
-      l10n_util::GetStringUTF16(IDS_ACCNAME_SEPARATOR));
   AddChildView(resize_area_);
 
   chevron_ = new views::MenuButton(NULL, std::wstring(), this, false);
@@ -382,8 +379,6 @@ BrowserActionsContainer::BrowserActionsContainer(Browser* browser,
       l10n_util::GetStringUTF16(IDS_ACCNAME_EXTENSIONS_CHEVRON));
   chevron_->SetVisible(false);
   AddChildView(chevron_);
-
-  SetAccessibleName(l10n_util::GetStringUTF16(IDS_ACCNAME_EXTENSIONS));
 }
 
 BrowserActionsContainer::~BrowserActionsContainer() {
@@ -505,19 +500,18 @@ void BrowserActionsContainer::OnBrowserActionExecuted(
   // We can get the execute event for browser actions that are not visible,
   // since buttons can be activated from the overflow menu (chevron). In that
   // case we show the popup as originating from the chevron.
-  View* reference_view = button->GetParent()->IsVisible() ? button : chevron_;
+  View* reference_view = button->parent()->IsVisible() ? button : chevron_;
   gfx::Point origin;
   View::ConvertPointToScreen(reference_view, &origin);
   gfx::Rect rect = reference_view->bounds();
   rect.set_origin(origin);
 
-  gfx::NativeWindow frame_window = browser_->window()->GetNativeHandle();
   BubbleBorder::ArrowLocation arrow_location = base::i18n::IsRTL() ?
       BubbleBorder::TOP_LEFT : BubbleBorder::TOP_RIGHT;
 
-  popup_ = ExtensionPopup::Show(button->GetPopupUrl(), browser_,
-      browser_->profile(), frame_window, rect, arrow_location, true,
-      inspect_with_devtools, ExtensionPopup::BUBBLE_CHROME, this);
+  popup_ = ExtensionPopup::Show(button->GetPopupUrl(), browser_, rect,
+                                arrow_location, inspect_with_devtools,
+                                this);
   popup_button_ = button;
   popup_button_->SetButtonPushed();
 }
@@ -576,40 +570,6 @@ void BrowserActionsContainer::Layout() {
   }
 }
 
-void BrowserActionsContainer::Paint(gfx::Canvas* canvas) {
-  // TODO(sky/glen): Instead of using a drop indicator, animate the icons while
-  // dragging (like we do for tab dragging).
-  if (drop_indicator_position_ > -1) {
-    // The two-pixel width drop indicator.
-    static const int kDropIndicatorWidth = 2;
-    gfx::Rect indicator_bounds(
-        drop_indicator_position_ - (kDropIndicatorWidth / 2),
-        ToolbarView::kVertSpacing, kDropIndicatorWidth, IconHeight());
-
-    // Color of the drop indicator.
-    static const SkColor kDropIndicatorColor = SK_ColorBLACK;
-    canvas->FillRectInt(kDropIndicatorColor, indicator_bounds.x(),
-                        indicator_bounds.y(), indicator_bounds.width(),
-                        indicator_bounds.height());
-  }
-}
-
-void BrowserActionsContainer::ViewHierarchyChanged(bool is_add,
-                                                   views::View* parent,
-                                                   views::View* child) {
-  // No extensions (e.g., incognito).
-  if (!model_)
-    return;
-
-  if (is_add && child == this) {
-    // Initial toolbar button creation and placement in the widget hierarchy.
-    // We do this here instead of in the constructor because AddBrowserAction
-    // calls Layout on the Toolbar, which needs this object to be constructed
-    // before its Layout function is called.
-    CreateBrowserActionViews();
-  }
-}
-
 bool BrowserActionsContainer::GetDropFormats(
     int* formats,
     std::set<OSExchangeData::CustomFormat>* custom_formats) {
@@ -634,7 +594,7 @@ void BrowserActionsContainer::OnDragEntered(
 int BrowserActionsContainer::OnDragUpdated(
     const views::DropTargetEvent& event) {
   // First check if we are above the chevron (overflow) menu.
-  if (GetViewForPoint(event.location()) == chevron_) {
+  if (GetEventHandlerForPoint(event.location()) == chevron_) {
     if (show_menu_task_factory_.empty() && !overflow_menu_)
       StartShowFolderDropMenuTimer();
     return ui::DragDropTypes::DRAG_MOVE;
@@ -699,7 +659,7 @@ void BrowserActionsContainer::OnDragExited() {
 int BrowserActionsContainer::OnPerformDrop(
     const views::DropTargetEvent& event) {
   BrowserActionDragData data;
-  if (!data.Read(event.GetData()))
+  if (!data.Read(event.data()))
     return ui::DragDropTypes::DRAG_NONE;
 
   // Make sure we have the same view as we started with.
@@ -709,8 +669,7 @@ int BrowserActionsContainer::OnPerformDrop(
 
   size_t i = 0;
   for (; i < browser_action_views_.size(); ++i) {
-    int view_x =
-        browser_action_views_[i]->GetBounds(APPLY_MIRRORING_TRANSFORMATION).x();
+    int view_x = browser_action_views_[i]->GetMirroredBounds().x();
     if (!browser_action_views_[i]->IsVisible() ||
         (base::i18n::IsRTL() ? (view_x < drop_indicator_position_) :
             (view_x >= drop_indicator_position_))) {
@@ -738,12 +697,10 @@ int BrowserActionsContainer::OnPerformDrop(
   return ui::DragDropTypes::DRAG_MOVE;
 }
 
-void BrowserActionsContainer::OnThemeChanged() {
-  LoadImages();
-}
-
-AccessibilityTypes::Role BrowserActionsContainer::GetAccessibleRole() {
-  return AccessibilityTypes::ROLE_GROUPING;
+void BrowserActionsContainer::GetAccessibleState(
+    ui::AccessibleViewState* state) {
+  state->role = ui::AccessibilityTypes::ROLE_GROUPING;
+  state->name = l10n_util::GetStringUTF16(IDS_ACCNAME_EXTENSIONS);
 }
 
 void BrowserActionsContainer::RunMenu(View* source, const gfx::Point& pt) {
@@ -755,9 +712,9 @@ void BrowserActionsContainer::RunMenu(View* source, const gfx::Point& pt) {
   }
 }
 
-void BrowserActionsContainer::WriteDragData(View* sender,
-                                            const gfx::Point& press_pt,
-                                            OSExchangeData* data) {
+void BrowserActionsContainer::WriteDragDataForView(View* sender,
+                                                   const gfx::Point& press_pt,
+                                                   OSExchangeData* data) {
   DCHECK(data);
 
   for (size_t i = 0; i < browser_action_views_.size(); ++i) {
@@ -778,14 +735,14 @@ void BrowserActionsContainer::WriteDragData(View* sender,
   }
 }
 
-int BrowserActionsContainer::GetDragOperations(View* sender,
-                                               const gfx::Point& p) {
+int BrowserActionsContainer::GetDragOperationsForView(View* sender,
+                                                      const gfx::Point& p) {
   return ui::DragDropTypes::DRAG_MOVE;
 }
 
-bool BrowserActionsContainer::CanStartDrag(View* sender,
-                                           const gfx::Point& press_pt,
-                                           const gfx::Point& p) {
+bool BrowserActionsContainer::CanStartDragForView(View* sender,
+                                                  const gfx::Point& press_pt,
+                                                  const gfx::Point& p) {
   return true;
 }
 
@@ -868,6 +825,44 @@ void BrowserActionsContainer::TestSetIconVisibilityCount(size_t icons) {
   SchedulePaint();
 }
 
+void BrowserActionsContainer::OnPaint(gfx::Canvas* canvas) {
+  // TODO(sky/glen): Instead of using a drop indicator, animate the icons while
+  // dragging (like we do for tab dragging).
+  if (drop_indicator_position_ > -1) {
+    // The two-pixel width drop indicator.
+    static const int kDropIndicatorWidth = 2;
+    gfx::Rect indicator_bounds(
+        drop_indicator_position_ - (kDropIndicatorWidth / 2),
+        ToolbarView::kVertSpacing, kDropIndicatorWidth, IconHeight());
+
+    // Color of the drop indicator.
+    static const SkColor kDropIndicatorColor = SK_ColorBLACK;
+    canvas->FillRectInt(kDropIndicatorColor, indicator_bounds.x(),
+                        indicator_bounds.y(), indicator_bounds.width(),
+                        indicator_bounds.height());
+  }
+}
+
+void BrowserActionsContainer::OnThemeChanged() {
+  LoadImages();
+}
+
+void BrowserActionsContainer::ViewHierarchyChanged(bool is_add,
+                                                   views::View* parent,
+                                                   views::View* child) {
+  // No extensions (e.g., incognito).
+  if (!model_)
+    return;
+
+  if (is_add && child == this) {
+    // Initial toolbar button creation and placement in the widget hierarchy.
+    // We do this here instead of in the constructor because AddBrowserAction
+    // calls Layout on the Toolbar, which needs this object to be constructed
+    // before its Layout function is called.
+    CreateBrowserActionViews();
+  }
+}
+
 // static
 int BrowserActionsContainer::IconWidth(bool include_padding) {
   static bool initialized = false;
@@ -913,7 +908,7 @@ void BrowserActionsContainer::BrowserActionAdded(const Extension* extension,
     index = model_->OriginalIndexToIncognito(index);
   BrowserActionView* view = new BrowserActionView(extension, this);
   browser_action_views_.insert(browser_action_views_.begin() + index, view);
-  AddChildView(index, view);
+  AddChildViewAt(view, index);
 
   // If we are still initializing the container, don't bother animating.
   if (!model_->extensions_initialized())
@@ -1013,7 +1008,7 @@ void BrowserActionsContainer::StopShowFolderDropMenuTimer() {
 }
 
 void BrowserActionsContainer::StartShowFolderDropMenuTimer() {
-  int delay = View::GetMenuShowDelay();
+  int delay = views::GetMenuShowDelay();
   MessageLoop::current()->PostDelayedTask(FROM_HERE,
       show_menu_task_factory_.NewRunnableMethod(
           &BrowserActionsContainer::ShowDropFolder),
@@ -1101,6 +1096,7 @@ void BrowserActionsContainer::SaveDesiredSizeAndAnimate(
 bool BrowserActionsContainer::ShouldDisplayBrowserAction(
     const Extension* extension) {
   // Only display incognito-enabled extensions while in incognito mode.
-  return (!profile_->IsOffTheRecord() ||
-          profile_->GetExtensionService()->IsIncognitoEnabled(extension));
+  return
+      (!profile_->IsOffTheRecord() ||
+       profile_->GetExtensionService()->IsIncognitoEnabled(extension->id()));
 }

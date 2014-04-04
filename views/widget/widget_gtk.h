@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,10 +9,12 @@
 #include <gtk/gtk.h>
 
 #include "base/message_loop.h"
-#include "gfx/size.h"
 #include "ui/base/gtk/gtk_signal.h"
 #include "ui/base/x/active_window_watcher_x.h"
+#include "ui/gfx/size.h"
 #include "views/focus/focus_manager.h"
+#include "views/ime/input_method_delegate.h"
+#include "views/widget/native_widget.h"
 #include "views/widget/widget.h"
 
 namespace gfx {
@@ -28,18 +30,21 @@ using ui::OSExchangeDataProviderGtk;
 
 namespace views {
 
-class DefaultThemeProvider;
 class DropTargetGtk;
-class FocusSearch;
+class InputMethod;
 class TooltipManagerGtk;
 class View;
 class WindowGtk;
 
+namespace internal {
+class NativeWidgetDelegate;
+}
+
 // Widget implementation for GTK.
-class WidgetGtk
-    : public Widget,
-      public FocusTraversable,
-      public ui::ActiveWindowWatcherX::Observer {
+class WidgetGtk : public Widget,
+                  public NativeWidget,
+                  public ui::ActiveWindowWatcherX::Observer,
+                  public internal::InputMethodDelegate {
  public:
   // Type of widget.
   enum Type {
@@ -127,14 +132,6 @@ class WidgetGtk
   // Starts a drag on this widget. This blocks until the drag is done.
   void DoDrag(const OSExchangeData& data, int operation);
 
-  // Are we in PaintNow? See use in root_view_gtk for details on what this is
-  // used for.
-  bool in_paint_now() const { return in_paint_now_; }
-
-  // Sets the focus traversable parents.
-  void SetFocusTraversableParent(FocusTraversable* parent);
-  void SetFocusTraversableParentView(View* parent_view);
-
   // Invoked when the active status changes.
   virtual void IsActiveChanged();
 
@@ -143,96 +140,109 @@ class WidgetGtk
   // gets created. This will not be called on a TYPE_CHILD widget.
   virtual void SetInitialFocus() {}
 
-  // Gets the WidgetGtk in the userdata section of the widget.
-  static WidgetGtk* GetViewForNative(GtkWidget* widget);
-
   // Sets the drop target to NULL. This is invoked by DropTargetGTK when the
   // drop is done.
   void ResetDropTarget();
-
-  // Returns the RootView for |widget|.
-  static RootView* GetRootViewForWidget(GtkWidget* widget);
 
   // Gets the requested size of the widget.  This can be the size
   // stored in properties for a GtkViewsFixed, or in the requisitioned
   // size of other kinds of widgets.
   void GetRequestedSize(gfx::Size* out) const;
 
-  // Overriden from ui::ActiveWindowWatcherX::Observer.
+  // Overridden from ui::ActiveWindowWatcherX::Observer.
   virtual void ActiveWindowChanged(GdkWindow* active_window);
 
   // Overridden from Widget:
   virtual void Init(gfx::NativeView parent, const gfx::Rect& bounds);
   virtual void InitWithWidget(Widget* parent, const gfx::Rect& bounds);
-  virtual WidgetDelegate* GetWidgetDelegate();
-  virtual void SetWidgetDelegate(WidgetDelegate* delegate);
-  virtual void SetContentsView(View* view);
-  virtual void GetBounds(gfx::Rect* out, bool including_frame) const;
-  virtual void SetBounds(const gfx::Rect& bounds);
-  virtual void MoveAbove(Widget* other);
-  virtual void SetShape(gfx::NativeRegion region);
-  virtual void Close();
-  virtual void CloseNow();
-  virtual void Show();
-  virtual void Hide();
   virtual gfx::NativeView GetNativeView() const;
-  virtual void PaintNow(const gfx::Rect& update_rect);
-  virtual void SetOpacity(unsigned char opacity);
-  virtual void SetAlwaysOnTop(bool on_top);
-  virtual RootView* GetRootView();
-  virtual Widget* GetRootWidget() const;
-  virtual bool IsVisible() const;
-  virtual bool IsActive() const;
-  virtual bool IsAccessibleWidget() const;
-  virtual void GenerateMousePressedForView(View* view,
-                                           const gfx::Point& point);
-  virtual TooltipManager* GetTooltipManager();
   virtual bool GetAccelerator(int cmd_id, ui::Accelerator* accelerator);
   virtual Window* GetWindow();
   virtual const Window* GetWindow() const;
-  virtual void SetNativeWindowProperty(const char* name, void* value);
-  virtual void* GetNativeWindowProperty(const char* name);
-  virtual ThemeProvider* GetThemeProvider() const;
-  virtual ThemeProvider* GetDefaultThemeProvider() const;
-  virtual FocusManager* GetFocusManager();
   virtual void ViewHierarchyChanged(bool is_add, View *parent,
                                     View *child);
-  virtual bool ContainsNativeView(gfx::NativeView native_view);
-
-  // Overridden from FocusTraversable:
-  virtual FocusSearch* GetFocusSearch();
-  virtual FocusTraversable* GetFocusTraversableParent();
-  virtual View* GetFocusTraversableParentView();
+  virtual void NotifyAccessibilityEvent(
+      View* view,
+      ui::AccessibilityTypes::Event event_type,
+      bool send_native_event);
 
   // Clears the focus on the native widget having the focus.
   virtual void ClearNativeFocus();
 
   // Handles a keyboard event by sending it to our focus manager.
   // Returns true if it's handled by the focus manager.
-  bool HandleKeyboardEvent(GdkEventKey* event);
+  bool HandleKeyboardEvent(const KeyEvent& key);
 
-  // Returns the view::Event::flags for a GdkEventButton.
-  static int GetFlagsForEventButton(const GdkEventButton& event);
+  // Enables debug painting. See |debug_paint_enabled_| for details.
+  static void EnableDebugPaint();
+
+  // Sets and deletes FREEZE_UPDATES property on given |window|.
+  // It adds the property when |enable| is true and remove if false.
+  // Calling this method will realize the window if it's not realized yet.
+  // This property is used to help WindowManager know when the window
+  // is fully painted so that WM can map the fully painted window.
+  // The property is based on Owen Taylor's proposal at
+  // http://mail.gnome.org/archives/wm-spec-list/2009-June/msg00002.html.
+  // This is just a hint to WM, and won't change the behavior for WM
+  // which does not support this property.
+  static void UpdateFreezeUpdatesProperty(GtkWindow* window, bool enable);
+
+  // Registers a expose handler that removes FREEZE_UPDATES property.
+  // If you are adding a GtkWidget with its own GdkWindow that may
+  // fill the entire area of the WidgetGtk to the view hierachy, you
+  // need use this function to tell WM that when the widget is ready
+  // to be shown.
+  // Caller of this method do not need to disconnect this because the
+  // handler will be removed upon the first invocation of the handler,
+  // or when the widget is re-attached, and expose won't be emitted on
+  // detached widget.
+  static void RegisterChildExposeHandler(GtkWidget* widget);
+
+  // Overridden from NativeWidget:
+  virtual void SetCreateParams(const CreateParams& params) OVERRIDE;
+  virtual Widget* GetWidget() OVERRIDE;
+  virtual void SetNativeWindowProperty(const char* name, void* value) OVERRIDE;
+  virtual void* GetNativeWindowProperty(const char* name) OVERRIDE;
+  virtual TooltipManager* GetTooltipManager() const OVERRIDE;
+  virtual bool IsScreenReaderActive() const OVERRIDE;
+  virtual void SetMouseCapture() OVERRIDE;
+  virtual void ReleaseMouseCapture() OVERRIDE;
+  virtual bool HasMouseCapture() const OVERRIDE;
+  virtual InputMethod* GetInputMethodNative() OVERRIDE;
+  virtual void ReplaceInputMethod(InputMethod* input_method) OVERRIDE;
+  virtual gfx::Rect GetWindowScreenBounds() const OVERRIDE;
+  virtual gfx::Rect GetClientAreaScreenBounds() const OVERRIDE;
+  virtual void SetBounds(const gfx::Rect& bounds) OVERRIDE;
+  virtual void SetSize(const gfx::Size& size) OVERRIDE;
+  virtual void MoveAbove(gfx::NativeView native_view) OVERRIDE;
+  virtual void SetShape(gfx::NativeRegion shape) OVERRIDE;
+  virtual void Close() OVERRIDE;
+  virtual void CloseNow() OVERRIDE;
+  virtual void Show() OVERRIDE;
+  virtual void Hide() OVERRIDE;
+  virtual void SetOpacity(unsigned char opacity) OVERRIDE;
+  virtual void SetAlwaysOnTop(bool on_top) OVERRIDE;
+  virtual bool IsVisible() const OVERRIDE;
+  virtual bool IsActive() const OVERRIDE;
+  virtual bool IsAccessibleWidget() const OVERRIDE;
+  virtual bool ContainsNativeView(gfx::NativeView native_view) const OVERRIDE;
+  virtual void RunShellDrag(View* view,
+                            const ui::OSExchangeData& data,
+                            int operation) OVERRIDE;
+  virtual void SchedulePaintInRect(const gfx::Rect& rect) OVERRIDE;
+  virtual void SetCursor(gfx::NativeCursor cursor) OVERRIDE;
 
  protected:
-  // If widget containes another widget, translates event coordinates to the
-  // contained widget's coordinates, else returns original event coordinates.
-  template<class Event> bool GetContainedWidgetEventCoordinates(Event* event,
-                                                                int* x,
-                                                                int* y) {
-    if (event == NULL || x == NULL || y == NULL)
-      return false;
-    *x = event->x;
-    *y = event->y;
+  // Modifies event coordinates to the targeted widget contained by this widget.
+  template<class Event> GdkEvent* TransformEvent(Event* event) {
     GdkWindow* dest = GTK_WIDGET(window_contents_)->window;
-    if (event->window != dest) {
-      int dest_x, dest_y;
+    if (event && event->window != dest) {
+      gint dest_x, dest_y;
       gdk_window_get_root_origin(dest, &dest_x, &dest_y);
-      *x = event->x_root - dest_x;
-      *y = event->y_root - dest_y;
-      return true;
+      event->x = event->x_root - dest_x;
+      event->y = event->y_root - dest_y;
     }
-    return false;
+    return reinterpret_cast<GdkEvent*>(event);
   }
 
   // Event handlers:
@@ -270,51 +280,40 @@ class WidgetGtk
   CHROMEGTK_CALLBACK_1(WidgetGtk, void, OnGrabNotify, gboolean);
   CHROMEGTK_CALLBACK_0(WidgetGtk, void, OnDestroy);
   CHROMEGTK_CALLBACK_0(WidgetGtk, void, OnShow);
+  CHROMEGTK_CALLBACK_0(WidgetGtk, void, OnMap);
   CHROMEGTK_CALLBACK_0(WidgetGtk, void, OnHide);
 
-  void set_mouse_down(bool mouse_down) { is_mouse_down_ = mouse_down; }
-
-  // Do we own the mouse grab?
-  bool has_capture() const { return has_capture_; }
-
-  // Returns whether capture should be released on mouse release. The default
-  // is true.
-  virtual bool ReleaseCaptureOnMouseReleased() { return true; }
-
-  // Does a mouse grab on this widget.
-  virtual void DoGrab();
-
-  // Releases a grab done by this widget.
-  virtual void ReleaseGrab();
-
-  // Invoked when input grab is stolen by other GtkWidget in the same
+  // Invoked when gtk grab is stolen by other GtkWidget in the same
   // application.
-  virtual void HandleGrabBroke();
+  virtual void HandleGtkGrabBroke();
+
+  // Invoked when X input grab is broken. This typically happen
+  // when a window holding grab is closed without releasing grab.
+  virtual void HandleXGrabBroke();
 
   // Are we a subclass of WindowGtk?
   bool is_window_;
-
-  // For test code to provide a customized focus manager.
-  void set_focus_manager(FocusManager* focus_manager) {
-    delete focus_manager_;
-    focus_manager_ = focus_manager;
-  }
 
  private:
   class DropObserver;
   friend class DropObserver;
 
-  virtual RootView* CreateRootView();
+  // Overridden from Widget
+  virtual RootView* CreateRootView() OVERRIDE;
 
+  // Overridden from NativeWidget
+  virtual gfx::AcceleratedWidget GetAcceleratedWidget() OVERRIDE;
+
+  // Overridden from internal::InputMethodDelegate
+  virtual void DispatchKeyEventPostIME(const KeyEvent& key) OVERRIDE;
+
+  // This is called only when the window is transparent.
   CHROMEGTK_CALLBACK_1(WidgetGtk, gboolean, OnWindowPaint, GdkEventExpose*);
 
-  // Process a mouse click.
-  bool ProcessMousePressed(GdkEventButton* event);
-  void ProcessMouseReleased(GdkEventButton* event);
-  // Process scroll event.
-  bool ProcessScroll(GdkEventScroll* event);
-
-  static void SetRootViewForWidget(GtkWidget* widget, RootView* root_view);
+  // Callbacks for expose event on child widgets. See the description of
+  // RegisterChildChildExposeHandler.
+  void OnChildExpose(GtkWidget* child);
+  static gboolean ChildExposeHandler(GtkWidget* widget, GdkEventExpose* event);
 
   // Returns the first ancestor of |widget| that is a window.
   static Window* GetWindowImpl(GtkWidget* widget);
@@ -336,6 +335,9 @@ class WidgetGtk
   static void DrawTransparentBackground(GtkWidget* widget,
                                         GdkEventExpose* event);
 
+  // A delegate implementation that handles events received here.
+  internal::NativeWidgetDelegate* delegate_;
+
   const Type type_;
 
   // Our native views. If we're a window/popup, then widget_ is the window and
@@ -356,32 +358,6 @@ class WidgetGtk
 
   scoped_ptr<DropTargetGtk> drop_target_;
 
-  // The focus manager keeping track of focus for this Widget and any of its
-  // children.  NULL for non top-level widgets.
-  // WARNING: RootView's destructor calls into the FocusManager. As such, this
-  // must be destroyed AFTER root_view_.
-  FocusManager* focus_manager_;
-
-  // The root of the View hierarchy attached to this window.
-  scoped_ptr<RootView> root_view_;
-
-  // If true, the mouse is currently down.
-  bool is_mouse_down_;
-
-  // Have we done a mouse grab?
-  bool has_capture_;
-
-  // The following are used to detect duplicate mouse move events and not
-  // deliver them. Displaying a window may result in the system generating
-  // duplicate move events even though the mouse hasn't moved.
-
-  // If true, the last event was a mouse move event.
-  bool last_mouse_event_was_move_;
-
-  // Coordinates of the last mouse move event, in screen coordinates.
-  int last_mouse_move_x_;
-  int last_mouse_move_y_;
-
   // The following factory is used to delay destruction.
   ScopedRunnableMethodFactory<WidgetGtk> close_widget_factory_;
 
@@ -394,8 +370,6 @@ class WidgetGtk
   // See description above MakeIgnoreEvents for details.
   bool ignore_events_;
 
-  scoped_ptr<DefaultThemeProvider> default_theme_provider_;
-
   // See note in DropObserver for details on this.
   bool ignore_drag_leave_;
 
@@ -405,8 +379,9 @@ class WidgetGtk
   // for the drag.
   const OSExchangeDataProviderGtk* drag_data_;
 
-  // See description above getter for details.
-  bool in_paint_now_;
+  // True to enable debug painting. Enabling causes the damaged
+  // region to be painted to flash in red.
+  static bool debug_paint_enabled_;
 
   // Are we active?
   bool is_active_;
@@ -436,10 +411,6 @@ class WidgetGtk
   // this to determine whether we should process the event.
   bool has_focus_;
 
-  // Non owned pointer to optional delegate.  May be NULL if no delegate is
-  // being used.
-  WidgetDelegate* delegate_;
-
   // If true, the window stays on top of the screen. This is only used
   // for types other than TYPE_CHILD.
   bool always_on_top_;
@@ -450,6 +421,16 @@ class WidgetGtk
 
   // Indicates if we should handle the upcoming Alt key release event.
   bool should_handle_menu_key_release_;
+
+  // Valid for the lifetime of StartDragForViewFromMouseEvent, indicates the
+  // view the drag started from.
+  View* dragged_view_;
+
+  // If the widget has ever been painted. This is used to guarantee
+  // that window manager shows the window only after the window is painted.
+  bool painted_;
+
+  scoped_ptr<InputMethod> input_method_;
 
   DISALLOW_COPY_AND_ASSIGN(WidgetGtk);
 };

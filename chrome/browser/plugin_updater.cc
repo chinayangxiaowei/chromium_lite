@@ -1,25 +1,25 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/plugin_updater.h"
 
-#include <set>
 #include <string>
 
+#include "base/memory/scoped_ptr.h"
 #include "base/message_loop.h"
 #include "base/path_service.h"
-#include "base/scoped_ptr.h"
 #include "base/utf_string_conversions.h"
 #include "base/values.h"
 #include "base/version.h"
-#include "chrome/browser/browser_thread.h"
 #include "chrome/browser/prefs/pref_service.h"
+#include "chrome/browser/prefs/scoped_user_pref_update.h"
 #include "chrome/browser/profiles/profile.h"
+#include "chrome/common/chrome_content_client.h"
 #include "chrome/common/chrome_paths.h"
-#include "chrome/common/notification_service.h"
-#include "chrome/common/pepper_plugin_registry.h"
 #include "chrome/common/pref_names.h"
+#include "content/browser/browser_thread.h"
+#include "content/common/notification_service.h"
 #include "webkit/plugins/npapi/plugin_list.h"
 #include "webkit/plugins/npapi/webplugininfo.h"
 
@@ -79,35 +79,55 @@ void PluginUpdater::Observe(NotificationType type,
     NOTREACHED();
     return;
   }
-  if (*pref_name == prefs::kPluginsPluginsBlacklist) {
+  if (*pref_name == prefs::kPluginsDisabledPlugins ||
+      *pref_name == prefs::kPluginsDisabledPluginsExceptions ||
+      *pref_name == prefs::kPluginsEnabledPlugins) {
     PrefService* pref_service = Source<PrefService>(source).ptr();
-    const ListValue* list =
-        pref_service->GetList(prefs::kPluginsPluginsBlacklist);
-    DisablePluginsFromPolicy(list);
+    const ListValue* disabled_list =
+        pref_service->GetList(prefs::kPluginsDisabledPlugins);
+    const ListValue* exceptions_list =
+        pref_service->GetList(prefs::kPluginsDisabledPluginsExceptions);
+    const ListValue* enabled_list =
+        pref_service->GetList(prefs::kPluginsEnabledPlugins);
+    UpdatePluginsStateFromPolicy(disabled_list, exceptions_list, enabled_list);
   }
 }
 
-void PluginUpdater::DisablePluginsFromPolicy(const ListValue* plugin_names) {
-  // Generate the set of unique disabled plugin patterns from the disabled
-  // plugins list.
-  std::set<string16> policy_disabled_plugin_patterns;
-  if (plugin_names) {
-    ListValue::const_iterator end(plugin_names->end());
-    for (ListValue::const_iterator current(plugin_names->begin());
-         current != end; ++current) {
-      string16 plugin_name;
-      if ((*current)->GetAsString(&plugin_name)) {
-        policy_disabled_plugin_patterns.insert(plugin_name);
-      }
-    }
-  }
-  webkit::npapi::PluginGroup::SetPolicyDisabledPluginPatterns(
-      policy_disabled_plugin_patterns);
+void PluginUpdater::UpdatePluginsStateFromPolicy(
+    const ListValue* disabled_list,
+    const ListValue* exceptions_list,
+    const ListValue* enabled_list) {
+  std::set<string16> disabled_plugin_patterns;
+  std::set<string16> disabled_plugin_exception_patterns;
+  std::set<string16> enabled_plugin_patterns;
+
+  ListValueToStringSet(disabled_list, &disabled_plugin_patterns);
+  ListValueToStringSet(exceptions_list, &disabled_plugin_exception_patterns);
+  ListValueToStringSet(enabled_list, &enabled_plugin_patterns);
+
+  webkit::npapi::PluginGroup::SetPolicyEnforcedPluginPatterns(
+      disabled_plugin_patterns,
+      disabled_plugin_exception_patterns,
+      enabled_plugin_patterns);
 
   NotifyPluginStatusChanged();
 }
 
-void PluginUpdater::DisablePluginGroupsFromPrefs(Profile* profile) {
+void PluginUpdater::ListValueToStringSet(const ListValue* src,
+                                         std::set<string16>* dest) {
+  DCHECK(src);
+  DCHECK(dest);
+  ListValue::const_iterator end(src->end());
+  for (ListValue::const_iterator current(src->begin());
+       current != end; ++current) {
+    string16 plugin_name;
+    if ((*current)->GetAsString(&plugin_name)) {
+      dest->insert(plugin_name);
+    }
+  }
+}
+
+void PluginUpdater::UpdatePluginGroupsStateFromPrefs(Profile* profile) {
   bool update_internal_dir = false;
   FilePath last_internal_dir =
   profile->GetPrefs()->GetFilePath(prefs::kPluginsLastInternalDirectory);
@@ -121,7 +141,8 @@ void PluginUpdater::DisablePluginGroupsFromPrefs(Profile* profile) {
 
   bool force_enable_internal_pdf = false;
   bool internal_pdf_enabled = false;
-  string16 pdf_group_name = ASCIIToUTF16(PepperPluginRegistry::kPDFPluginName);
+  string16 pdf_group_name =
+      ASCIIToUTF16(chrome::ChromeContentClient::kPDFPluginName);
   FilePath pdf_path;
   PathService::Get(chrome::FILE_PDF_PLUGIN, &pdf_path);
   FilePath::StringType pdf_path_str = pdf_path.value();
@@ -133,65 +154,74 @@ void PluginUpdater::DisablePluginGroupsFromPrefs(Profile* profile) {
     force_enable_internal_pdf = true;
   }
 
-  if (ListValue* saved_plugins_list =
-          profile->GetPrefs()->GetMutableList(prefs::kPluginsPluginsList)) {
-    for (ListValue::const_iterator it = saved_plugins_list->begin();
-         it != saved_plugins_list->end();
-         ++it) {
-      if (!(*it)->IsType(Value::TYPE_DICTIONARY)) {
-        LOG(WARNING) << "Invalid entry in " << prefs::kPluginsPluginsList;
-        continue;  // Oops, don't know what to do with this item.
-      }
-
-      DictionaryValue* plugin = static_cast<DictionaryValue*>(*it);
-      string16 group_name;
-      bool enabled = true;
-      plugin->GetBoolean("enabled", &enabled);
-
-      FilePath::StringType path;
-      // The plugin list constains all the plugin files in addition to the
-      // plugin groups.
-      if (plugin->GetString("path", &path)) {
-        // Files have a path attribute, groups don't.
-        FilePath plugin_path(path);
-        if (update_internal_dir &&
-            FilePath::CompareIgnoreCase(plugin_path.DirName().value(),
-                last_internal_dir.value()) == 0) {
-          // If the internal plugin directory has changed and if the plugin
-          // looks internal, update its path in the prefs.
-          plugin_path = cur_internal_dir.Append(plugin_path.BaseName());
-          path = plugin_path.value();
-          plugin->SetString("path", path);
+  {  // Scoped update of prefs::kPluginsPluginsList.
+    ListPrefUpdate update(profile->GetPrefs(), prefs::kPluginsPluginsList);
+    ListValue* saved_plugins_list = update.Get();
+    if (saved_plugins_list) {
+      for (ListValue::const_iterator it = saved_plugins_list->begin();
+           it != saved_plugins_list->end();
+           ++it) {
+        if (!(*it)->IsType(Value::TYPE_DICTIONARY)) {
+          LOG(WARNING) << "Invalid entry in " << prefs::kPluginsPluginsList;
+          continue;  // Oops, don't know what to do with this item.
         }
 
-        if (FilePath::CompareIgnoreCase(path, pdf_path_str) == 0) {
-          if (!enabled && force_enable_internal_pdf) {
-            enabled = true;
-            plugin->SetBoolean("enabled", true);
+        DictionaryValue* plugin = static_cast<DictionaryValue*>(*it);
+        string16 group_name;
+        bool enabled = true;
+        plugin->GetBoolean("enabled", &enabled);
+
+        FilePath::StringType path;
+        // The plugin list constains all the plugin files in addition to the
+        // plugin groups.
+        if (plugin->GetString("path", &path)) {
+          // Files have a path attribute, groups don't.
+          FilePath plugin_path(path);
+          if (update_internal_dir &&
+              FilePath::CompareIgnoreCase(plugin_path.DirName().value(),
+                  last_internal_dir.value()) == 0) {
+            // If the internal plugin directory has changed and if the plugin
+            // looks internal, update its path in the prefs.
+            plugin_path = cur_internal_dir.Append(plugin_path.BaseName());
+            path = plugin_path.value();
+            plugin->SetString("path", path);
           }
 
-          internal_pdf_enabled = enabled;
+          if (FilePath::CompareIgnoreCase(path, pdf_path_str) == 0) {
+            if (!enabled && force_enable_internal_pdf) {
+              enabled = true;
+              plugin->SetBoolean("enabled", true);
+            }
+
+            internal_pdf_enabled = enabled;
+          }
+
+          if (!enabled)
+            webkit::npapi::PluginList::Singleton()->DisablePlugin(plugin_path);
+        } else if (!enabled && plugin->GetString("name", &group_name)) {
+          // Don't disable this group if it's for the pdf plugin and we just
+          // forced it on.
+          if (force_enable_internal_pdf && pdf_group_name == group_name)
+            continue;
+
+          // Otherwise this is a list of groups.
+          EnablePluginGroup(false, group_name);
         }
-
-        if (!enabled)
-          webkit::npapi::PluginList::Singleton()->DisablePlugin(plugin_path);
-      } else if (!enabled && plugin->GetString("name", &group_name)) {
-        // Don't disable this group if it's for the pdf plugin and we just
-        // forced it on.
-        if (force_enable_internal_pdf && pdf_group_name == group_name)
-          continue;
-
-        // Otherwise this is a list of groups.
-        EnablePluginGroup(false, group_name);
       }
     }
-  }
+  }  // Scoped update of prefs::kPluginsPluginsList.
 
-  // Build the set of policy-disabled plugin patterns once and cache it.
+  // Build the set of policy enabled/disabled plugin patterns once and cache it.
   // Don't do this in the constructor, there's no profile available there.
-  const ListValue* plugin_blacklist =
-      profile->GetPrefs()->GetList(prefs::kPluginsPluginsBlacklist);
-  DisablePluginsFromPolicy(plugin_blacklist);
+  const ListValue* disabled_plugins =
+      profile->GetPrefs()->GetList(prefs::kPluginsDisabledPlugins);
+  const ListValue* disabled_exception_plugins =
+      profile->GetPrefs()->GetList(prefs::kPluginsDisabledPluginsExceptions);
+  const ListValue* enabled_plugins =
+      profile->GetPrefs()->GetList(prefs::kPluginsEnabledPlugins);
+  UpdatePluginsStateFromPolicy(disabled_plugins,
+                               disabled_exception_plugins,
+                               enabled_plugins);
 
   if (force_enable_internal_pdf || internal_pdf_enabled) {
     // See http://crbug.com/50105 for background.
@@ -234,8 +264,8 @@ void PluginUpdater::OnUpdatePreferences(
     Profile* profile,
     const std::vector<webkit::npapi::WebPluginInfo>& plugins,
     const std::vector<webkit::npapi::PluginGroup>& groups) {
-  ListValue* plugins_list = profile->GetPrefs()->GetMutableList(
-      prefs::kPluginsPluginsList);
+  ListPrefUpdate update(profile->GetPrefs(), prefs::kPluginsPluginsList);
+  ListValue* plugins_list = update.Get();
   plugins_list->Clear();
 
   FilePath internal_dir;
@@ -246,11 +276,13 @@ void PluginUpdater::OnUpdatePreferences(
   // Add the plugin files.
   for (size_t i = 0; i < plugins.size(); ++i) {
     DictionaryValue* summary = CreatePluginFileSummary(plugins[i]);
-    // If the plugin is disabled only by policy don't store this state in the
-    // user pref store.
-    if (plugins[i].enabled ==
-        webkit::npapi::WebPluginInfo::USER_ENABLED_POLICY_DISABLED) {
-      summary->SetBoolean("enabled", true);
+    // If the plugin is managed by policy, store the user preferred state
+    // instead.
+    if (plugins[i].enabled & webkit::npapi::WebPluginInfo::MANAGED_MASK) {
+      bool user_enabled =
+          (plugins[i].enabled & webkit::npapi::WebPluginInfo::USER_MASK) ==
+              webkit::npapi::WebPluginInfo::USER_ENABLED;
+      summary->SetBoolean("enabled", user_enabled);
     }
     bool enabled_val;
     summary->GetBoolean("enabled", &enabled_val);

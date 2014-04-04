@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -11,24 +11,31 @@
 #include "chrome/browser/chromeos/status/network_menu_button.h"
 #include "chrome/browser/chromeos/status/power_menu_button.h"
 #include "chrome/browser/chromeos/status/status_area_host.h"
-#include "gfx/canvas.h"
+#include "chrome/browser/chromeos/status/window_switcher_button.h"
+#include "grit/theme_resources.h"
+#include "ui/base/resource/resource_bundle.h"
+#include "ui/gfx/canvas.h"
+#include "views/border.h"
+#include "views/controls/image_view.h"
 
 namespace chromeos {
 
 // Number of pixels to separate each icon.
-const int kSeparation = 1;
+const int kSeparation = 5;
 
 StatusAreaView::StatusAreaView(StatusAreaHost* host)
     : host_(host),
       clock_view_(NULL),
       input_method_view_(NULL),
       network_view_(NULL),
-      power_view_(NULL) {
+      power_view_(NULL),
+      window_switcher_view_(NULL) {
 }
 
 void StatusAreaView::Init() {
   // Clock.
   clock_view_ = new ClockMenuButton(host_);
+  clock_view_->set_border(views::Border::CreateEmptyBorder(0, 1, 0, 0));
   AddChildView(clock_view_);
 
   // InputMethod.
@@ -40,16 +47,22 @@ void StatusAreaView::Init() {
   AddChildView(network_view_);
 
   // Power.
-  power_view_ = new PowerMenuButton();
+  power_view_ = new PowerMenuButton(host_);
   AddChildView(power_view_);
+
+  // Window Switcher.
+  window_switcher_view_ = new WindowSwitcherButton(host_);
+  AddChildView(window_switcher_view_);
 }
 
 gfx::Size StatusAreaView::GetPreferredSize() {
   int result_w = kSeparation;
   int result_h = 0;
-  for (int i = 0; i < GetChildViewCount(); i++) {
+  int visible_count = 0;
+  for (int i = 0; i < child_count(); i++) {
     views::View* cur = GetChildViewAt(i);
     if (cur->IsVisible()) {
+      visible_count++;
       gfx::Size cur_size = cur->GetPreferredSize();
       // Add each width.
       result_w += cur_size.width() + kSeparation;
@@ -57,12 +70,14 @@ gfx::Size StatusAreaView::GetPreferredSize() {
       result_h = std::max(result_h, cur_size.height());
     }
   }
+  if (visible_count > 0)
+    result_w -= kSeparation;
   return gfx::Size(result_w, result_h);
 }
 
 void StatusAreaView::Layout() {
   int cur_x = kSeparation;
-  for (int i = 0; i < GetChildViewCount(); i++) {
+  for (int i = 0; i < child_count(); i++) {
     views::View* cur = GetChildViewAt(i);
     if (cur->IsVisible()) {
       gfx::Size cur_size = cur->GetPreferredSize();
@@ -88,11 +103,11 @@ void StatusAreaView::ChildPreferredSizeChanged(View* child) {
   PreferredSizeChanged();
 }
 
-void StatusAreaView::EnableButtons(bool enable) {
-  clock_view()->Enable(enable);
-  input_method_view()->Enable(enable);
-  network_view()->Enable(enable);
-  power_view()->Enable(enable);
+void StatusAreaView::MakeButtonsActive(bool active) {
+  clock_view()->set_active(active);
+  input_method_view()->set_active(active);
+  network_view()->set_active(active);
+  power_view()->set_active(active);
 }
 
 }  // namespace chromeos

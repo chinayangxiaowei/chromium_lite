@@ -1,4 +1,4 @@
-// Copyright (c) 2006-2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,7 +6,7 @@
 #define NET_DISK_CACHE_ENTRY_IMPL_H_
 #pragma once
 
-#include "base/scoped_ptr.h"
+#include "base/memory/scoped_ptr.h"
 #include "net/base/net_log.h"
 #include "net/disk_cache/disk_cache.h"
 #include "net/disk_cache/storage_block.h"
@@ -87,9 +87,17 @@ class EntryImpl : public Entry, public base::RefCounted<EntryImpl> {
   // is to be able to detect entries that are currently in use.
   bool Update();
 
-  // Returns true if this entry is marked as dirty on disk.
-  bool IsDirty(int32 current_id);
-  void ClearDirtyFlag();
+  bool dirty() {
+    return dirty_;
+  }
+
+  bool doomed() {
+    return doomed_;
+  }
+
+  // Marks this entry as dirty (in memory) if needed. This is intended only for
+  // entries that are being read from disk, to be called during loading.
+  void SetDirtyFlag(int32 current_id);
 
   // Fixes this entry so it can be treated as valid (to delete it).
   void SetPointerForInvalidEntry(int32 new_id);
@@ -234,6 +242,7 @@ class EntryImpl : public Entry, public base::RefCounted<EntryImpl> {
   int unreported_size_[kNumStreams];  // Bytes not reported yet to the backend.
   bool doomed_;               // True if this entry was removed from the cache.
   bool read_only_;            // True if not yet writing.
+  bool dirty_;                // True if we detected that this is a dirty entry.
   scoped_ptr<SparseControl> sparse_;  // Support for sparse entries.
 
   net::BoundNetLog net_log_;

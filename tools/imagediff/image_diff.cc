@@ -1,4 +1,4 @@
-// Copyright (c) 2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -18,11 +18,12 @@
 #include "base/file_path.h"
 #include "base/file_util.h"
 #include "base/logging.h"
+#include "base/memory/scoped_ptr.h"
 #include "base/process_util.h"
-#include "base/scoped_ptr.h"
 #include "base/string_util.h"
 #include "base/utf_string_conversions.h"
-#include "gfx/codec/png_codec.h"
+#include "ui/gfx/codec/png_codec.h"
+#include "ui/gfx/size.h"
 
 #if defined(OS_WIN)
 #include "windows.h"
@@ -100,7 +101,7 @@ class Image {
     unsigned char buf[buf_size];
     size_t num_read = 0;
     while ((num_read = fread(buf, 1, buf_size, f)) > 0) {
-      std::copy(buf, &buf[num_read], std::back_inserter(compressed));
+      compressed.insert(compressed.end(), buf, buf + num_read);
     }
 
     file_util::CloseFile(f);
@@ -316,8 +317,9 @@ int DiffImages(const FilePath& file1, const FilePath& file2,
 
   std::vector<unsigned char> png_encoding;
   gfx::PNGCodec::Encode(diff_image.data(), gfx::PNGCodec::FORMAT_RGBA,
-                        diff_image.w(), diff_image.h(), diff_image.w() * 4,
-                        false, &png_encoding);
+                        gfx::Size(diff_image.w(), diff_image.h()),
+                        diff_image.w() * 4, false,
+                        std::vector<gfx::PNGCodec::Comment>(), &png_encoding);
   if (file_util::WriteFile(out_file,
       reinterpret_cast<char*>(&png_encoding.front()), png_encoding.size()) < 0)
     return kStatusError;

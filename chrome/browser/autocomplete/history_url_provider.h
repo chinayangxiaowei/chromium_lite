@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -121,6 +121,9 @@ struct HistoryURLProviderParams {
   // Languages we should pass to gfx::GetCleanStringFromUrl.
   std::string languages;
 
+  // When true, we should avoid calling SuggestExactInput().
+  bool dont_suggest_exact_input;
+
  private:
   DISALLOW_COPY_AND_ASSIGN(HistoryURLProviderParams);
 };
@@ -175,7 +178,7 @@ class HistoryURLProvider : public HistoryProvider {
   void QueryComplete(HistoryURLProviderParams* params_gets_deleted);
 
  private:
-  ~HistoryURLProvider() {}
+  ~HistoryURLProvider();
 
   // Returns the set of prefixes to use for prefixes_.
   static history::Prefixes GetPrefixes();
@@ -192,7 +195,7 @@ class HistoryURLProvider : public HistoryProvider {
   // match's URL to just a host.  If this host still matches the user input,
   // return it.  Returns the empty string on failure.
   static GURL ConvertToHostOnly(const history::HistoryMatch& match,
-                                const std::wstring& input);
+                                const string16& input);
 
   // See if a shorter version of the best match should be created, and if so
   // place it at the front of |matches|.  This can suggest history URLs that
@@ -216,7 +219,7 @@ class HistoryURLProvider : public HistoryProvider {
   // |promote| is false, existing matches are left in place, and newly added
   // matches are placed at the back.
   static void EnsureMatchPresent(const history::URLRow& info,
-                                 std::wstring::size_type input_location,
+                                 string16::size_type input_location,
                                  bool match_in_scheme,
                                  history::HistoryMatches* matches,
                                  bool promote);
@@ -232,7 +235,7 @@ class HistoryURLProvider : public HistoryProvider {
   // prefix.  This is useful when you need to figure out the innermost match
   // for some user input in a URL.
   const history::Prefix* BestPrefix(const GURL& text,
-                                    const std::wstring& prefix_suffix) const;
+                                    const string16& prefix_suffix) const;
 
   // Returns a match corresponding to exactly what the user has typed.
   AutocompleteMatch SuggestExactInput(const AutocompleteInput& input,

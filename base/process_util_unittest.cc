@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,9 +10,9 @@
 #include "base/eintr_wrapper.h"
 #include "base/file_path.h"
 #include "base/logging.h"
+#include "base/memory/scoped_ptr.h"
 #include "base/path_service.h"
 #include "base/process_util.h"
-#include "base/scoped_ptr.h"
 #include "base/test/multiprocess_test.h"
 #include "base/test/test_timeouts.h"
 #include "base/threading/platform_thread.h"
@@ -658,12 +658,12 @@ TEST_F(ProcessUtilTest, GetAppOutputRestrictedNoZombies) {
   }
 }
 
-#if defined(OS_LINUX)
 TEST_F(ProcessUtilTest, GetParentProcessId) {
   base::ProcessId ppid = base::GetParentProcessId(base::GetCurrentProcId());
   EXPECT_EQ(ppid, getppid());
 }
 
+#if defined(OS_LINUX)
 TEST_F(ProcessUtilTest, ParseProcStatCPU) {
   // /proc/self/stat for a process running "top".
   const char kTopStat[] = "960 (top) S 16230 960 16230 34818 960 "
@@ -683,7 +683,7 @@ TEST_F(ProcessUtilTest, ParseProcStatCPU) {
 
   EXPECT_EQ(0, base::ParseProcStatCPU(kSelfStat));
 }
-#endif
+#endif  // defined(OS_LINUX)
 
 #endif  // defined(OS_POSIX)
 

@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,16 +7,17 @@
 #pragma once
 
 #include "base/basictypes.h"
-#include "base/scoped_ptr.h"
+#include "base/memory/scoped_ptr.h"
 #include "base/string16.h"
 #include "base/timer.h"
 #include "chrome/browser/instant/instant_commit_type.h"
 #include "chrome/browser/search_engines/template_url_id.h"
-#include "chrome/common/notification_observer.h"
-#include "chrome/common/notification_registrar.h"
-#include "chrome/common/page_transition_types.h"
-#include "gfx/rect.h"
+#include "chrome/common/instant_types.h"
+#include "content/common/notification_observer.h"
+#include "content/common/notification_registrar.h"
+#include "content/common/page_transition_types.h"
 #include "googleurl/src/gurl.h"
+#include "ui/gfx/rect.h"
 
 class InstantLoaderDelegate;
 class InstantLoaderManagerTest;
@@ -40,8 +41,9 @@ class InstantLoader : public NotificationObserver {
   virtual ~InstantLoader();
 
   // Invoked to load a URL. |tab_contents| is the TabContents the preview is
-  // going to be shown on top of and potentially replace.
-  void Update(TabContentsWrapper* tab_contents,
+  // going to be shown on top of and potentially replace. Returns true if the
+  // arguments differ from the last call to |Update|.
+  bool Update(TabContentsWrapper* tab_contents,
               const TemplateURL* template_url,
               const GURL& url,
               PageTransition::Type transition_type,
@@ -67,9 +69,10 @@ class InstantLoader : public NotificationObserver {
   bool ShouldCommitInstantOnMouseUp();
   void CommitInstantLoader();
 
+  // NotificationObserver:
   virtual void Observe(NotificationType type,
                        const NotificationSource& source,
-                       const NotificationDetails& details);
+                       const NotificationDetails& details) OVERRIDE;
 
   // The preview TabContents; may be null.
   TabContentsWrapper* preview_contents() const {
@@ -78,6 +81,13 @@ class InstantLoader : public NotificationObserver {
 
   // Returns true if the preview TabContents is ready to be shown.
   bool ready() const { return ready_; }
+
+  // Returns true if the current load returned a 200.
+  bool http_status_ok() const { return http_status_ok_; }
+
+  // Returns true if the url needs to be reloaded. This is set to true for
+  // downloads.
+  bool needs_reload() const { return needs_reload_; }
 
   const GURL& url() const { return url_; }
 
@@ -102,10 +112,14 @@ class InstantLoader : public NotificationObserver {
   // Invoked when the page wants to update the suggested text. If |user_text_|
   // starts with |suggested_text|, then the delegate is notified of the change,
   // which results in updating the omnibox.
-  void SetCompleteSuggestedText(const string16& suggested_text);
+  void SetCompleteSuggestedText(const string16& suggested_text,
+                                InstantCompleteBehavior behavior);
 
   // Invoked when the page paints.
   void PreviewPainted();
+
+  // Invoked when the http status code changes. This may notify the delegate.
+  void SetHTTPStatusOK(bool is_ok);
 
   // Invoked to show the preview. This is invoked in two possible cases: when
   // the renderer paints, or when an auth dialog is shown. This notifies the
@@ -158,6 +172,9 @@ class InstantLoader : public NotificationObserver {
   // Is the preview_contents ready to be shown?
   bool ready_;
 
+  // Was the last status code a 200?
+  bool http_status_ok_;
+
   // The text the user typed in the omnibox, stripped of the leading ?, if any.
   string16 user_text_;
 
@@ -186,6 +203,9 @@ class InstantLoader : public NotificationObserver {
 
   // Last value of verbatim passed to |Update|.
   bool verbatim_;
+
+  // True if the page needs to be reloaded.
+  bool needs_reload_;
 
   DISALLOW_COPY_AND_ASSIGN(InstantLoader);
 };

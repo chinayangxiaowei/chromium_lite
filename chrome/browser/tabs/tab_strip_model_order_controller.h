@@ -7,7 +7,7 @@
 #pragma once
 
 #include "chrome/browser/tabs/tab_strip_model.h"
-#include "chrome/common/page_transition_types.h"
+#include "content/common/page_transition_types.h"
 
 class TabContentsWrapper;
 
@@ -40,8 +40,7 @@ class TabStripModelOrderController : public TabStripModelObserver {
   int DetermineInsertionIndexForAppending();
 
   // Determine where to shift selection after a tab is closed.
-  // TODO(sky): nuke reason when we figure out what is causing 34135.
-  int DetermineNewSelectedIndex(int removed_index, volatile int* reason) const;
+  int DetermineNewSelectedIndex(int removed_index) const;
 
   // Overridden from TabStripModelObserver:
   virtual void TabSelectedAt(TabContentsWrapper* old_contents,

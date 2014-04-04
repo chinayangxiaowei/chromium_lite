@@ -13,87 +13,51 @@
 #include <vector>
 
 #include "jingle/notifier/listener/mediator_thread.h"
-#include "talk/xmpp/xmppclientsettings.h"
+
+namespace buzz {
+class XmppClientSettings;
+}
 
 namespace notifier {
 
 class MockMediatorThread : public MediatorThread {
  public:
-  MockMediatorThread() : observer_(NULL) {
-    Reset();
-  }
+  MockMediatorThread();
 
-  virtual ~MockMediatorThread() {}
+  virtual ~MockMediatorThread();
 
-  void Reset() {
-    login_calls = 0;
-    logout_calls = 0;
-    start_calls = 0;
-    subscribe_calls = 0;
-    listen_calls = 0;
-    send_calls = 0;
-  }
+  void Reset();
 
-  virtual void AddObserver(Observer* observer) {
-    observer_ = observer;
-  }
+  virtual void AddObserver(Observer* observer);
 
-  virtual void RemoveObserver(Observer* observer) {
-    observer_ = NULL;
-  }
+  virtual void RemoveObserver(Observer* observer);
 
   // Overridden from MediatorThread
-  virtual void Login(const buzz::XmppClientSettings& settings) {
-    login_calls++;
-    if (observer_) {
-      observer_->OnConnectionStateChange(true);
-    }
-  }
+  virtual void Login(const buzz::XmppClientSettings& settings);
 
-  virtual void Logout() {
-    logout_calls++;
-    if (observer_) {
-      observer_->OnConnectionStateChange(false);
-    }
-  }
+  virtual void Logout();
 
-  virtual void Start() {
-    start_calls++;
-  }
+  virtual void Start();
 
-  virtual void SubscribeForUpdates(
-      const std::vector<std::string>& subscribed_services_list) {
-    subscribe_calls++;
-    if (observer_) {
-      observer_->OnSubscriptionStateChange(true);
-    }
-  }
+  virtual void SubscribeForUpdates(const SubscriptionList& subscriptions);
 
-  virtual void ListenForUpdates() {
-    listen_calls++;
-  }
+  virtual void ListenForUpdates();
 
-  virtual void SendNotification(const OutgoingNotificationData &) {
-    send_calls++;
-    if (observer_) {
-      observer_->OnOutgoingNotification();
-    }
-  }
+  virtual void SendNotification(const Notification &);
+  virtual void UpdateXmppSettings(const buzz::XmppClientSettings& settings);
 
-  void ReceiveNotification(const IncomingNotificationData& data) {
-    if (observer_) {
-      observer_->OnIncomingNotification(data);
-    }
-  }
+
+  void ReceiveNotification(const Notification& data);
 
   Observer* observer_;
-  // Intneral State
+  // Internal State
   int login_calls;
   int logout_calls;
   int start_calls;
   int subscribe_calls;
   int listen_calls;
   int send_calls;
+  int update_settings_calls;
 };
 
 }  // namespace notifier

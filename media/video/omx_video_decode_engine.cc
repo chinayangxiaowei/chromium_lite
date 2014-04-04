@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -19,6 +19,7 @@
 #include "base/message_loop.h"
 #include "base/string_util.h"
 #include "media/base/buffers.h"
+#include "media/base/pipeline.h"
 
 namespace media {
 
@@ -89,8 +90,8 @@ void OmxVideoDecodeEngine::Initialize(
   message_loop_ = message_loop;
   event_handler_ = event_handler;
 
-  width_ = config.width;
-  height_ = config.height;
+  width_ = config.width();
+  height_ = config.height();
 
   // TODO(wjia): Find the right way to determine the codec type.
   OmxConfigurator::MediaFormat input_format, output_format;
@@ -114,8 +115,8 @@ void OmxVideoDecodeEngine::Initialize(
       uses_egl_image_ ? VideoFrame::TYPE_GL_TEXTURE
                       : VideoFrame::TYPE_SYSTEM_MEMORY;
   info.stream_info.surface_format = GetSurfaceFormat();
-  info.stream_info.surface_width = config.width;
-  info.stream_info.surface_height = config.height;
+  info.stream_info.surface_width = config.width();
+  info.stream_info.surface_height = config.height();
   event_handler_->OnInitializeComplete(info);
 }
 
@@ -325,10 +326,13 @@ void OmxVideoDecodeEngine::FinishFillBuffer(OMX_BUFFERHEADERTYPE* buffer) {
   // provides the buffer allocator.
   if (kClientFlushing == client_state_ && !uses_egl_image_) return;
 
+  PipelineStatistics statistics;
+  statistics.video_bytes_decoded = buffer->nFilledLen;
+
   frame->SetTimestamp(base::TimeDelta::FromMicroseconds(buffer->nTimeStamp));
   frame->SetDuration(frame->GetTimestamp() - last_pts_);
   last_pts_ = frame->GetTimestamp();
-  event_handler_->ConsumeVideoFrame(frame);
+  event_handler_->ConsumeVideoFrame(frame, statistics);
   output_pending_request_--;
 }
 
@@ -607,22 +611,26 @@ void OmxVideoDecodeEngine::ProduceVideoFrame(
   DCHECK(video_frame.get() && !video_frame->IsEndOfStream());
   output_pending_request_++;
 
+  PipelineStatistics statistics;
+
   if (!CanAcceptOutput()) {
     if (uses_egl_image_) {  // return it to owner.
       output_pending_request_--;
-      event_handler_->ConsumeVideoFrame(video_frame);
+      event_handler_->ConsumeVideoFrame(video_frame, statistics);
     }
     return;
   }
 
   OMX_BUFFERHEADERTYPE* omx_buffer = FindOmxBuffer(video_frame);
   if (omx_buffer) {
+    statistics.video_bytes_decoded = omx_buffer->nFilledLen;
+
     if (kClientRunning == client_state_) {
       SendOutputBufferToComponent(omx_buffer);
     } else if (kClientFlushing == client_state_) {
       if (uses_egl_image_) {  // return it to owner.
         output_pending_request_--;
-        event_handler_->ConsumeVideoFrame(video_frame);
+        event_handler_->ConsumeVideoFrame(video_frame, statistics);
       }
       if (InputPortFlushed() && OutputPortFlushed())
         ComponentFlushDone();
@@ -1220,11 +1228,14 @@ void OmxVideoDecodeEngine::FillBufferDoneTask(OMX_BUFFERHEADERTYPE* buffer) {
     return;
   }
 
+  PipelineStatistics statistics;
+  statistics.video_bytes_decoded = buffer->nFilledLen;
+
   if (!CanAcceptOutput()) {
     if (uses_egl_image_) {
       scoped_refptr<VideoFrame> frame;
       frame = static_cast<VideoFrame*>(buffer->pAppPrivate);
-      event_handler_->ConsumeVideoFrame(frame);
+      event_handler_->ConsumeVideoFrame(frame, statistics);
       output_pending_request_--;
     }
     return;
@@ -1244,7 +1255,7 @@ void OmxVideoDecodeEngine::FillBufferDoneTask(OMX_BUFFERHEADERTYPE* buffer) {
     // Singal end of stream.
     scoped_refptr<VideoFrame> frame;
     VideoFrame::CreateEmptyFrame(&frame);
-    event_handler_->ConsumeVideoFrame(frame);
+    event_handler_->ConsumeVideoFrame(frame, statistics);
   }
 
   if (client_state_ == kClientFlushing &&

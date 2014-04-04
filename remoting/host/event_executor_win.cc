@@ -1,13 +1,13 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "remoting/host/event_executor_win.h"
+#include "remoting/host/event_executor.h"
 
 #include <windows.h>
 
+#include "base/compiler_specific.h"
 #include "base/message_loop.h"
-#include "base/stl_util-inl.h"
 #include "remoting/host/capturer.h"
 #include "remoting/proto/event.pb.h"
 #include "ui/base/keycodes/keyboard_codes.h"
@@ -17,13 +17,31 @@ namespace remoting {
 using protocol::MouseEvent;
 using protocol::KeyEvent;
 
-EventExecutorWin::EventExecutorWin(
-    MessageLoop* message_loop, Capturer* capturer)
+namespace {
+
+// A class to generate events on Windows.
+class EventExecutorWin : public EventExecutor {
+ public:
+  EventExecutorWin(MessageLoopForUI* message_loop, Capturer* capturer);
+  virtual ~EventExecutorWin() {}
+
+  virtual void InjectKeyEvent(const KeyEvent* event, Task* done) OVERRIDE;
+  virtual void InjectMouseEvent(const MouseEvent* event, Task* done) OVERRIDE;
+
+ private:
+  void HandleKey(const KeyEvent* event);
+  void HandleMouse(const MouseEvent* event);
+
+  MessageLoopForUI* message_loop_;
+  Capturer* capturer_;
+
+  DISALLOW_COPY_AND_ASSIGN(EventExecutorWin);
+};
+
+EventExecutorWin::EventExecutorWin(MessageLoopForUI* message_loop,
+                                   Capturer* capturer)
     : message_loop_(message_loop),
       capturer_(capturer) {
-}
-
-EventExecutorWin::~EventExecutorWin() {
 }
 
 void EventExecutorWin::InjectKeyEvent(const KeyEvent* event, Task* done) {
@@ -61,6 +79,8 @@ void EventExecutorWin::HandleKey(const KeyEvent* event) {
   int scan_code = MapVirtualKeyEx(key, MAPVK_VK_TO_VSC_EX, hkl);
 
   INPUT input;
+  memset(&input, 0, sizeof(input));
+
   input.type = INPUT_KEYBOARD;
   input.ki.time = 0;
   input.ki.wVk = key;
@@ -80,11 +100,6 @@ void EventExecutorWin::HandleKey(const KeyEvent* event) {
   SendInput(1, &input, sizeof(INPUT));
 }
 
-protocol::InputStub* CreateEventExecutor(MessageLoop* message_loop,
-                                         Capturer* capturer) {
-  return new EventExecutorWin(message_loop, capturer);
-}
-
 void EventExecutorWin::HandleMouse(const MouseEvent* event) {
   // TODO(garykac) Collapse mouse (x,y) and button events into a single
   // input event when possible.
@@ -95,10 +110,13 @@ void EventExecutorWin::HandleMouse(const MouseEvent* event) {
     INPUT input;
     input.type = INPUT_MOUSE;
     input.mi.time = 0;
-    input.mi.dx = static_cast<int>((x * 65535) / capturer_->width());
-    input.mi.dy = static_cast<int>((y * 65535) / capturer_->height());
-    input.mi.dwFlags = MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE;
-    SendInput(1, &input, sizeof(INPUT));
+    gfx::Size screen_size = capturer_->size_most_recent();
+    if ((screen_size.width() > 0) && (screen_size.height() > 0)) {
+      input.mi.dx = static_cast<int>((x * 65535) / screen_size.width());
+      input.mi.dy = static_cast<int>((y * 65535) / screen_size.height());
+      input.mi.dwFlags = MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE;
+      SendInput(1, &input, sizeof(INPUT));
+    }
   }
 
   if (event->has_wheel_offset_x() && event->has_wheel_offset_y()) {
@@ -148,4 +166,14 @@ void EventExecutorWin::HandleMouse(const MouseEvent* event) {
   }
 }
 
+}  // namespace
+
+EventExecutor* EventExecutor::Create(MessageLoopForUI* message_loop,
+                                     Capturer* capturer) {
+  return new EventExecutorWin(message_loop, capturer);
+}
+
 }  // namespace remoting
+
+DISABLE_RUNNABLE_METHOD_REFCOUNT(remoting::EventExecutorWin);
+

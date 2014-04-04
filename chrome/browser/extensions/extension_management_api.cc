@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,6 +9,7 @@
 
 #include "base/basictypes.h"
 #include "base/json/json_writer.h"
+#include "base/metrics/histogram.h"
 #include "base/string_number_conversions.h"
 #include "base/string_util.h"
 #include "chrome/browser/extensions/extension_event_names.h"
@@ -17,13 +18,14 @@
 #include "chrome/browser/extensions/extension_updater.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/webui/extension_icon_source.h"
+#include "chrome/common/extensions/extension.h"
 #include "chrome/common/extensions/extension_constants.h"
 #include "chrome/common/extensions/extension_error_utils.h"
-#include "chrome/common/extensions/extension.h"
 #include "chrome/common/extensions/extension_icon_set.h"
 #include "chrome/common/extensions/url_pattern.h"
-#include "chrome/common/notification_service.h"
-#include "chrome/common/notification_type.h"
+#include "content/common/notification_service.h"
+#include "content/common/notification_type.h"
 
 using base::IntToString;
 namespace events = extension_event_names;
@@ -33,18 +35,21 @@ namespace {
 const char kAppLaunchUrlKey[] = "appLaunchUrl";
 const char kDescriptionKey[] = "description";
 const char kEnabledKey[] = "enabled";
+const char kHomepageURLKey[] = "homepageUrl";
 const char kIconsKey[] = "icons";
 const char kIdKey[] = "id";
 const char kIsAppKey[] = "isApp";
 const char kNameKey[] = "name";
 const char kOptionsUrlKey[] = "optionsUrl";
 const char kPermissionsKey[] = "permissions";
+const char kMayDisableKey[] = "mayDisable";
 const char kSizeKey[] = "size";
 const char kUrlKey[] = "url";
 const char kVersionKey[] = "version";
 
 const char kNoExtensionError[] = "No extension with id *";
 const char kNotAnAppError[] = "Extension * is not an App";
+const char kUserCantDisableError[] = "Extension * can not be disabled by user";
 }
 
 ExtensionService* ExtensionManagementFunction::service() {
@@ -58,10 +63,14 @@ static DictionaryValue* CreateExtensionInfo(const Extension& extension,
   info->SetBoolean(kIsAppKey, extension.is_app());
   info->SetString(kNameKey, extension.name());
   info->SetBoolean(kEnabledKey, enabled);
+  info->SetBoolean(kMayDisableKey,
+                   Extension::UserMayDisable(extension.location()));
   info->SetString(kVersionKey, extension.VersionString());
   info->SetString(kDescriptionKey, extension.description());
   info->SetString(kOptionsUrlKey,
                     extension.options_url().possibly_invalid_spec());
+  info->SetString(kHomepageURLKey,
+                    extension.GetHomepageURL().possibly_invalid_spec());
   if (extension.is_app())
     info->SetString(kAppLaunchUrlKey,
                     extension.GetFullLaunchURL().possibly_invalid_spec());
@@ -72,9 +81,11 @@ static DictionaryValue* CreateExtensionInfo(const Extension& extension,
     std::map<int, std::string>::const_iterator icon_iter;
     for (icon_iter = icons.begin(); icon_iter != icons.end(); ++icon_iter) {
       DictionaryValue* icon_info = new DictionaryValue();
-      GURL url = extension.GetResourceURL(icon_iter->second);
+      Extension::Icons size = static_cast<Extension::Icons>(icon_iter->first);
+      GURL url = ExtensionIconSource::GetIconURL(
+          &extension, size, ExtensionIconSet::MATCH_EXACTLY, false);
       icon_info->SetInteger(kSizeKey, icon_iter->first);
-      icon_info->SetString(kUrlKey, url.possibly_invalid_spec());
+      icon_info->SetString(kUrlKey, url.spec());
       icon_list->Append(icon_info);
     }
     info->Set("icons", icon_list);
@@ -167,8 +178,16 @@ bool LaunchAppFunction::RunImpl() {
     return false;
   }
 
-  extension_misc::LaunchContainer container = extension->launch_container();
-  Browser::OpenApplication(profile(), extension, container, NULL);
+  // Look at prefs to find the right launch container.
+  // |default_pref_value| is set to LAUNCH_REGULAR so that if
+  // the user has not set a preference, we open the app in a tab.
+  extension_misc::LaunchContainer launch_container =
+      service()->extension_prefs()->GetLaunchContainer(
+          extension, ExtensionPrefs::LAUNCH_DEFAULT);
+  Browser::OpenApplication(profile(), extension, launch_container, NULL);
+  UMA_HISTOGRAM_ENUMERATION(extension_misc::kAppLaunchHistogram,
+                            extension_misc::APP_LAUNCH_EXTENSION_API,
+                            extension_misc::APP_LAUNCH_BUCKET_BOUNDARY);
 
   return true;
 }
@@ -187,6 +206,13 @@ bool SetEnabledFunction::RunImpl() {
 
   ExtensionPrefs* prefs = service()->extension_prefs();
   Extension::State state = prefs->GetExtensionState(extension_id);
+
+  if (!Extension::UserMayDisable(
+      prefs->GetInstalledExtensionInfo(extension_id)->extension_location)) {
+    error_ = ExtensionErrorUtils::FormatErrorMessage(
+        kUserCantDisableError, extension_id);
+    return false;
+  }
 
   if (state == Extension::DISABLED && enable) {
     service()->EnableExtension(extension_id);
@@ -207,7 +233,17 @@ bool UninstallFunction::RunImpl() {
     return false;
   }
 
-  service()->UninstallExtension(extension_id, false /* external_uninstall */);
+  ExtensionPrefs* prefs = service()->extension_prefs();
+
+  if (!Extension::UserMayDisable(
+      prefs->GetInstalledExtensionInfo(extension_id)->extension_location)) {
+    error_ = ExtensionErrorUtils::FormatErrorMessage(
+        kUserCantDisableError, extension_id);
+    return false;
+  }
+
+  service()->UninstallExtension(extension_id, false /* external_uninstall */,
+                                NULL);
   return true;
 }
 
@@ -228,10 +264,13 @@ void ExtensionManagementEventRouter::Init() {
     NotificationType::EXTENSION_UNLOADED
   };
 
-  for (size_t i = 0; i < arraysize(types); i++) {
-    registrar_.Add(this,
-                   types[i],
-                   NotificationService::AllSources());
+  // Don't re-init (eg in the case of multiple profiles).
+  if (registrar_.IsEmpty()) {
+    for (size_t i = 0; i < arraysize(types); i++) {
+      registrar_.Add(this,
+                     types[i],
+                     NotificationService::AllSources());
+    }
   }
 }
 

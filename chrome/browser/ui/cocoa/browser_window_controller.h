@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -13,13 +13,13 @@
 
 #import <Cocoa/Cocoa.h>
 
-#include "base/scoped_nsobject.h"
-#include "base/scoped_ptr.h"
+#include "base/memory/scoped_nsobject.h"
+#include "base/memory/scoped_ptr.h"
 #include "chrome/browser/sync/sync_ui_util.h"
 #import "chrome/browser/ui/cocoa/bookmarks/bookmark_bar_controller.h"
 #import "chrome/browser/ui/cocoa/bookmarks/bookmark_bubble_controller.h"
 #import "chrome/browser/ui/cocoa/browser_command_executor.h"
-#import "chrome/browser/ui/cocoa/tab_contents_controller.h"
+#import "chrome/browser/ui/cocoa/tab_contents/tab_contents_controller.h"
 #import "chrome/browser/ui/cocoa/tabs/tab_strip_controller.h"
 #import "chrome/browser/ui/cocoa/tabs/tab_window_controller.h"
 #import "chrome/browser/ui/cocoa/themed_window.h"
@@ -156,6 +156,9 @@ class TabContents;
 // Return a weak pointer to the tab strip controller.
 - (TabStripController*)tabStripController;
 
+// Access the ObjC controller that contains the infobars.
+- (InfoBarContainerController*)infoBarContainerController;
+
 // Access the C++ bridge object representing the status bubble for the window.
 - (StatusBubbleMac*)statusBubble;
 
@@ -264,6 +267,7 @@ class TabContents;
 // Shows or hides the Instant preview contents.
 - (void)showInstant:(TabContents*)previewContents;
 - (void)hideInstant;
+- (void)commitInstant;
 
 // Returns the frame, in Cocoa (unflipped) screen coordinates, of the area where
 // Instant results are.  If Instant is not showing, returns the frame of where
@@ -316,6 +320,9 @@ class TabContents;
 
 // Methods having to do with fullscreen mode.
 @interface BrowserWindowController(Fullscreen)
+
+// Enters fullscreen mode.
+- (IBAction)enterFullscreen:(id)sender;
 
 // Enters (or exits) fullscreen mode.
 - (void)setFullscreen:(BOOL)fullscreen;

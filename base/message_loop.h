@@ -9,10 +9,11 @@
 #include <queue>
 #include <string>
 
+#include "base/base_api.h"
 #include "base/basictypes.h"
+#include "base/memory/ref_counted.h"
 #include "base/message_pump.h"
 #include "base/observer_list.h"
-#include "base/ref_counted.h"
 #include "base/synchronization/lock.h"
 #include "base/task.h"
 
@@ -24,6 +25,7 @@
 #include "base/message_pump_libevent.h"
 #if !defined(OS_MACOSX)
 #include "base/message_pump_glib.h"
+typedef struct _XDisplay Display;
 #endif
 #endif
 #if defined(TOUCH_UI)
@@ -64,7 +66,7 @@ class Histogram;
 // Please be SURE your task is reentrant (nestable) and all global variables
 // are stable and accessible before calling SetNestableTasksAllowed(true).
 //
-class MessageLoop : public base::MessagePump::Delegate {
+class BASE_API MessageLoop : public base::MessagePump::Delegate {
  public:
 #if defined(OS_WIN)
   typedef base::MessagePumpWin::Dispatcher Dispatcher;
@@ -116,7 +118,7 @@ class MessageLoop : public base::MessagePump::Delegate {
   // NOTE: Any tasks posted to the MessageLoop during this notification will
   // not be run.  Instead, they will be deleted.
   //
-  class DestructionObserver {
+  class BASE_API DestructionObserver {
    public:
     virtual void WillDestroyCurrentMessageLoop() = 0;
 
@@ -282,7 +284,7 @@ class MessageLoop : public base::MessagePump::Delegate {
   // MessageLoop.
   //
   // NOTE: A TaskObserver implementation should be extremely fast!
-  class TaskObserver {
+  class BASE_API TaskObserver {
    public:
     TaskObserver();
 
@@ -314,6 +316,19 @@ class MessageLoop : public base::MessagePump::Delegate {
   // When we go into high resolution timer mode, we will stay in hi-res mode
   // for at least 1s.
   static const int kHighResolutionTimerModeLeaseTimeMs = 1000;
+
+  // Asserts that the MessageLoop is "idle".
+  void AssertIdle() const;
+
+#if defined(OS_WIN)
+  void set_os_modal_loop(bool os_modal_loop) {
+    os_modal_loop_ = os_modal_loop;
+  }
+
+  bool os_modal_loop() const {
+    return os_modal_loop_;
+  }
+#endif  // OS_WIN
 
   //----------------------------------------------------------------------------
  protected:
@@ -458,20 +473,23 @@ class MessageLoop : public base::MessagePump::Delegate {
 
   std::string thread_name_;
   // A profiling histogram showing the counts of various messages and events.
-  scoped_refptr<base::Histogram> message_histogram_;
+  base::Histogram* message_histogram_;
 
   // A null terminated list which creates an incoming_queue of tasks that are
-  // aquired under a mutex for processing on this instance's thread. These tasks
-  // have not yet been sorted out into items for our work_queue_ vs items that
-  // will be handled by the TimerManager.
+  // acquired under a mutex for processing on this instance's thread. These
+  // tasks have not yet been sorted out into items for our work_queue_ vs
+  // items that will be handled by the TimerManager.
   TaskQueue incoming_queue_;
   // Protect access to incoming_queue_.
-  base::Lock incoming_queue_lock_;
+  mutable base::Lock incoming_queue_lock_;
 
   RunState* state_;
 
 #if defined(OS_WIN)
   base::TimeTicks high_resolution_timer_expiration_;
+  // Should be set to true before calling Windows APIs like TrackPopupMenu, etc
+  // which enter a modal message loop.
+  bool os_modal_loop_;
 #endif
 
   // The next sequence number to use for delayed tasks.
@@ -479,6 +497,7 @@ class MessageLoop : public base::MessagePump::Delegate {
 
   ObserverList<TaskObserver> task_observers_;
 
+ private:
   DISALLOW_COPY_AND_ASSIGN(MessageLoop);
 };
 
@@ -489,7 +508,7 @@ class MessageLoop : public base::MessagePump::Delegate {
 // This class is typically used like so:
 //   MessageLoopForUI::current()->...call some method...
 //
-class MessageLoopForUI : public MessageLoop {
+class BASE_API MessageLoopForUI : public MessageLoop {
  public:
   MessageLoopForUI() : MessageLoop(TYPE_UI) {
   }
@@ -504,6 +523,18 @@ class MessageLoopForUI : public MessageLoop {
 #if defined(OS_WIN)
   void DidProcessMessage(const MSG& message);
 #endif  // defined(OS_WIN)
+
+#if defined(USE_X11)
+  // Returns the Xlib Display that backs the MessagePump for this MessageLoop.
+  //
+  // This allows for raw access to the X11 server in situations where our
+  // abstractions do not provide enough power.
+  //
+  // Be careful how this is used. The MessagePump in general expects
+  // exclusive access to the Display. Calling things like XNextEvent() will
+  // likely break things in subtle, hard to detect, ways.
+  Display* GetDisplay();
+#endif  // defined(OS_X11)
 
 #if !defined(OS_MACOSX)
   // Please see message_pump_win/message_pump_glib for definitions of these
@@ -533,7 +564,7 @@ COMPILE_ASSERT(sizeof(MessageLoop) == sizeof(MessageLoopForUI),
 // This class is typically used like so:
 //   MessageLoopForIO::current()->...call some method...
 //
-class MessageLoopForIO : public MessageLoop {
+class BASE_API MessageLoopForIO : public MessageLoop {
  public:
 #if defined(OS_WIN)
   typedef base::MessagePumpForIO::IOHandler IOHandler;

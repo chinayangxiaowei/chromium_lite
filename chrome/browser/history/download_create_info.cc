@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -18,7 +18,7 @@ DownloadCreateInfo::DownloadCreateInfo(const FilePath& path,
                                        int32 download_id,
                                        bool has_user_gesture)
     : path(path),
-      url(url),
+      url_chain(1, url),
       path_uniquifier(0),
       start_time(start_time),
       received_bytes(received_bytes),
@@ -31,7 +31,8 @@ DownloadCreateInfo::DownloadCreateInfo(const FilePath& path,
       request_id(-1),
       db_handle(0),
       prompt_user_for_save_location(false),
-      is_dangerous(false),
+      is_dangerous_file(false),
+      is_dangerous_url(false),
       is_extension_install(false) {
 }
 
@@ -47,11 +48,16 @@ DownloadCreateInfo::DownloadCreateInfo()
       request_id(-1),
       db_handle(0),
       prompt_user_for_save_location(false),
-      is_dangerous(false),
+      is_dangerous_file(false),
+      is_dangerous_url(false),
       is_extension_install(false) {
 }
 
 DownloadCreateInfo::~DownloadCreateInfo() {
+}
+
+bool DownloadCreateInfo::IsDangerous() {
+  return is_dangerous_url || is_dangerous_file;
 }
 
 std::string DownloadCreateInfo::DebugString() const {
@@ -66,7 +72,7 @@ std::string DownloadCreateInfo::DebugString() const {
                             " download_id = %d"
                             " prompt_user_for_save_location = %c"
                             " }",
-                            url.spec().c_str(),
+                            url().spec().c_str(),
                             path.value().c_str(),
                             received_bytes,
                             total_bytes,
@@ -77,3 +83,6 @@ std::string DownloadCreateInfo::DebugString() const {
                             prompt_user_for_save_location ? 'T' : 'F');
 }
 
+const GURL& DownloadCreateInfo::url() const {
+  return url_chain.empty() ? GURL::EmptyGURL() : url_chain.back();
+}

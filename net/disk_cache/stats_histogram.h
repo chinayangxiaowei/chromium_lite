@@ -1,4 +1,4 @@
-// Copyright (c) 2008 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -35,8 +35,7 @@ class StatsHistogram : public base::Histogram {
       : Histogram(name, minimum, maximum, bucket_count), init_(false) {}
   ~StatsHistogram();
 
-  static scoped_refptr<StatsHistogram>
-      StatsHistogramFactoryGet(const std::string& name);
+  static StatsHistogram* StatsHistogramFactoryGet(const std::string& name);
 
   // We'll be reporting data from the given set of cache stats.
   bool Init(const Stats* stats);
@@ -45,6 +44,7 @@ class StatsHistogram : public base::Histogram {
   virtual size_t bucket_count() const;
   virtual void SnapshotSample(SampleSet* sample) const;
   virtual Inconsistencies FindCorruption(const SampleSet& snapshot) const;
+  virtual uint32 CalculateRangeChecksum() const;
 
  private:
   bool init_;

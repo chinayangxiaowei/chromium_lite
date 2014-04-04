@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -33,7 +33,7 @@ BookmarkNodeData::Element::Element(const BookmarkNode* node)
       url(node->GetURL()),
       title(node->GetTitle()),
       id_(node->id()) {
-  for (int i = 0; i < node->GetChildCount(); ++i)
+  for (int i = 0; i < node->child_count(); ++i)
     children.push_back(Element(node->GetChild(i)));
 }
 
@@ -224,9 +224,9 @@ void BookmarkNodeData::Write(Profile* profile, ui::OSExchangeData* data) const {
   // clipboard.
   if (elements.size() == 1 && elements[0].is_url) {
     if (elements[0].url.SchemeIs(chrome::kJavaScriptScheme)) {
-      data->SetString(UTF8ToWide(elements[0].url.spec()));
+      data->SetString(UTF8ToUTF16(elements[0].url.spec()));
     } else {
-      data->SetURL(elements[0].url, UTF16ToWide(elements[0].title));
+      data->SetURL(elements[0].url, elements[0].title);
     }
   }
 
@@ -251,9 +251,9 @@ bool BookmarkNodeData::Read(const ui::OSExchangeData& data) {
     // See if there is a URL on the clipboard.
     Element element;
     GURL url;
-    std::wstring title;
+    string16 title;
     if (data.GetURLAndTitle(&url, &title))
-      ReadFromTuple(url, WideToUTF16(title));
+      ReadFromTuple(url, title);
   }
 
   return is_valid();

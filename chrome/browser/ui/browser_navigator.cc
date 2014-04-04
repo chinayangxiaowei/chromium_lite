@@ -1,35 +1,39 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/ui/browser_navigator.h"
 
+#include <algorithm>
+
 #include "base/command_line.h"
-#include "chrome/browser/browser_list.h"
 #include "chrome/browser/browser_url_handler.h"
-#include "chrome/browser/browser_window.h"
+#include "chrome/browser/extensions/extension_tab_helper.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/renderer_host/site_instance.h"
 #include "chrome/browser/tabs/tab_strip_model.h"
-#include "chrome/browser/tab_contents/tab_contents.h"
 #include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/status_bubble.h"
+#include "chrome/browser/ui/browser_list.h"
+#include "chrome/browser/ui/browser_window.h"
 #include "chrome/browser/ui/omnibox/location_bar.h"
+#include "chrome/browser/ui/status_bubble.h"
 #include "chrome/browser/ui/tab_contents/tab_contents_wrapper.h"
+#include "chrome/browser/ui/webui/chrome_web_ui_factory.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/common/url_constants.h"
+#include "content/browser/site_instance.h"
+#include "content/browser/tab_contents/tab_contents.h"
 
 namespace {
 
-// Returns an appropriate SiteInstance for DOMUI URLs, or the SiteInstance for
+// Returns an appropriate SiteInstance for WebUI URLs, or the SiteInstance for
 // |source_contents| if it represents the same website as |url|.  Returns NULL
 // otherwise.
 SiteInstance* GetSiteInstance(TabContents* source_contents, Profile* profile,
                               const GURL& url) {
-  // If url is a DOMUI or extension, we need to be sure to use the right type
+  // If url is a WebUI or extension, we need to be sure to use the right type
   // of renderer process up front.  Otherwise, we create a normal SiteInstance
   // as part of creating the tab.
-  if (DOMUIFactory::UseDOMUIForURL(profile, url))
+  if (ChromeWebUIFactory::GetInstance()->UseWebUIForURL(profile, url))
     return SiteInstance::CreateSiteInstanceForURL(profile, url);
 
   if (!source_contents)
@@ -90,21 +94,28 @@ int GetIndexOfSingletonTab(browser::NavigateParams* params) {
                                            params->browser->profile(),
                                            &reverse_on_redirect);
 
-  for (int i = 0; i < params->browser->tab_count(); ++i) {
+  // If there are several matches: prefer the active tab by starting there.
+  int start_index = std::max(0, params->browser->active_index());
+  int tab_count = params->browser->tab_count();
+  for (int i = 0; i < tab_count; ++i) {
+    int tab_index = (start_index + i) % tab_count;
     TabContentsWrapper* tab =
-        params->browser->GetTabContentsWrapperAt(i);
+        params->browser->GetTabContentsWrapperAt(tab_index);
 
     url_canon::Replacements<char> replacements;
     replacements.ClearRef();
-    if (params->ignore_path)
+    if (params->path_behavior == browser::NavigateParams::IGNORE_AND_NAVIGATE ||
+        params->path_behavior == browser::NavigateParams::IGNORE_AND_STAY_PUT) {
       replacements.ClearPath();
+      replacements.ClearQuery();
+    }
 
     if (CompareURLsWithReplacements(tab->tab_contents()->GetURL(),
                                     params->url, replacements) ||
         CompareURLsWithReplacements(tab->tab_contents()->GetURL(),
                                     rewritten_url, replacements)) {
       params->target_contents = tab;
-      return i;
+      return tab_index;
     }
   }
 
@@ -113,7 +124,8 @@ int GetIndexOfSingletonTab(browser::NavigateParams* params) {
 
 // Change some of the navigation parameters based on the particular URL.
 // Currently this applies to chrome://settings and the bookmark manager,
-// which we always want to open in a normal (not incognito) window.
+// which we always want to open in a normal (not incognito) window. Guest
+// session is an exception.
 void AdjustNavigateParamsForURL(browser::NavigateParams* params) {
   if (!params->target_contents &&
       params->url.scheme() == chrome::kChromeUIScheme &&
@@ -122,13 +134,13 @@ void AdjustNavigateParamsForURL(browser::NavigateParams* params) {
     Profile* profile =
         params->browser ? params->browser->profile() : params->profile;
 
-    if (profile->IsOffTheRecord()) {
+    if (profile->IsOffTheRecord() && !Profile::IsGuestSession()) {
       profile = profile->GetOriginalProfile();
 
       params->disposition = SINGLETON_TAB;
       params->profile = profile;
       params->browser = Browser::GetOrCreateTabbedBrowser(profile);
-      params->show_window = true;
+      params->window_action = browser::NavigateParams::SHOW_WINDOW;
     }
   }
 }
@@ -170,13 +182,14 @@ Browser* GetBrowserForDisposition(browser::NavigateParams* params) {
       // |source| represents an app.
       Browser::Type type = Browser::TYPE_POPUP;
       if ((params->browser && (params->browser->type() & Browser::TYPE_APP)) ||
-          (params->source_contents && params->source_contents->is_app())) {
+          (params->source_contents &&
+           params->source_contents->extension_tab_helper()->is_app())) {
         type = Browser::TYPE_APP_POPUP;
       }
       if (profile) {
         Browser* browser = new Browser(type, profile);
         browser->set_override_bounds(params->window_bounds);
-        browser->CreateBrowserWindow();
+        browser->InitBrowserWindow();
         return browser;
       }
       return NULL;
@@ -185,7 +198,7 @@ Browser* GetBrowserForDisposition(browser::NavigateParams* params) {
       // Make a new normal browser window.
       if (profile) {
         Browser* browser = new Browser(Browser::TYPE_NORMAL, profile);
-        browser->CreateBrowserWindow();
+        browser->InitBrowserWindow();
         return browser;
       }
       return NULL;
@@ -222,21 +235,22 @@ void NormalizeDisposition(browser::NavigateParams* params) {
 
   switch (params->disposition) {
     case NEW_BACKGROUND_TAB:
-      // Disposition trumps add types. ADD_SELECTED is a default, so we need to
+      // Disposition trumps add types. ADD_ACTIVE is a default, so we need to
       // remove it if disposition implies the tab is going to open in the
       // background.
-      params->tabstrip_add_types &= ~TabStripModel::ADD_SELECTED;
+      params->tabstrip_add_types &= ~TabStripModel::ADD_ACTIVE;
       break;
 
     case NEW_WINDOW:
     case NEW_POPUP:
       // Code that wants to open a new window typically expects it to be shown
       // automatically.
-      params->show_window = true;
+      if (params->window_action == browser::NavigateParams::NO_ACTION)
+        params->window_action = browser::NavigateParams::SHOW_WINDOW;
       // Fall-through.
     case NEW_FOREGROUND_TAB:
     case SINGLETON_TAB:
-      params->tabstrip_add_types |= TabStripModel::ADD_SELECTED;
+      params->tabstrip_add_types |= TabStripModel::ADD_ACTIVE;
       break;
 
     default:
@@ -272,7 +286,9 @@ class ScopedBrowserDisplayer {
       : params_(params) {
   }
   ~ScopedBrowserDisplayer() {
-    if (params_->show_window)
+    if (params_->window_action == browser::NavigateParams::SHOW_WINDOW_INACTIVE)
+      params_->browser->window()->ShowInactive();
+    else if (params_->window_action == browser::NavigateParams::SHOW_WINDOW)
       params_->browser->window()->Show();
   }
  private:
@@ -328,9 +344,9 @@ NavigateParams::NavigateParams(
       disposition(CURRENT_TAB),
       transition(a_transition),
       tabstrip_index(-1),
-      tabstrip_add_types(TabStripModel::ADD_SELECTED),
-      show_window(false),
-      ignore_path(false),
+      tabstrip_add_types(TabStripModel::ADD_ACTIVE),
+      window_action(NO_ACTION),
+      path_behavior(RESPECT),
       browser(a_browser),
       profile(NULL) {
 }
@@ -342,9 +358,9 @@ NavigateParams::NavigateParams(Browser* a_browser,
       disposition(CURRENT_TAB),
       transition(PageTransition::LINK),
       tabstrip_index(-1),
-      tabstrip_add_types(TabStripModel::ADD_SELECTED),
-      show_window(false),
-      ignore_path(false),
+      tabstrip_add_types(TabStripModel::ADD_ACTIVE),
+      window_action(NO_ACTION),
+      path_behavior(RESPECT),
       browser(a_browser),
       profile(NULL) {
 }
@@ -368,10 +384,11 @@ void Navigate(NavigateParams* params) {
     params->referrer = GURL();
   }
 
-  if (source_browser != params->browser &&
+  if (params->window_action == browser::NavigateParams::NO_ACTION &&
+      source_browser != params->browser &&
       params->browser->tabstrip_model()->empty()) {
     // A new window has been created. So it needs to be displayed.
-    params->show_window = true;
+    params->window_action = browser::NavigateParams::SHOW_WINDOW;
   }
 
   // Make sure the Browser is shown if params call for it.
@@ -412,12 +429,13 @@ void Navigate(NavigateParams* params) {
       // This function takes ownership of |params->target_contents| until it
       // is added to a TabStripModel.
       target_contents_owner.TakeOwnership();
-      params->target_contents->SetExtensionAppById(params->extension_app_id);
+      params->target_contents->extension_tab_helper()->
+          SetExtensionAppById(params->extension_app_id);
       // TODO(sky): figure out why this is needed. Without it we seem to get
       // failures in startup tests.
       // By default, content believes it is not hidden.  When adding contents
       // in the background, tell it that it's hidden.
-      if ((params->tabstrip_add_types & TabStripModel::ADD_SELECTED) == 0) {
+      if ((params->tabstrip_add_types & TabStripModel::ADD_ACTIVE) == 0) {
         // TabStripModel::AddTabContents invokes HideContents if not foreground.
         params->target_contents->tab_contents()->WasHidden();
       }
@@ -468,16 +486,15 @@ void Navigate(NavigateParams* params) {
   if (singleton_index >= 0) {
     TabContents* target = params->browser->GetTabContentsAt(singleton_index);
 
-    // Load the URL if the target contents URL doesn't match. This can happen
-    // if the URL path is ignored when locating the singleton tab.
-    if (target->GetURL() != params->url) {
+    if (params->path_behavior == NavigateParams::IGNORE_AND_NAVIGATE &&
+        target->GetURL() != params->url) {
       target->controller().LoadURL(
           params->url, params->referrer, params->transition);
     }
 
     // If the singleton tab isn't already selected, select it.
     if (params->source_contents != params->target_contents)
-      params->browser->SelectTabContentsAt(singleton_index, user_initiated);
+      params->browser->ActivateTabAt(singleton_index, user_initiated);
   }
 }
 

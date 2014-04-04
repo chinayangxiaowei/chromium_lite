@@ -1,4 +1,4 @@
-// Copyright (c) 2006-2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 //
@@ -33,7 +33,6 @@
 #include "base/test/test_file_util.h"
 #include "base/time.h"
 #include "base/utf_string_conversions.h"
-#include "chrome/browser/browser_thread.h"
 #include "chrome/browser/net/url_fixer_upper.h"
 #include "chrome/browser/prefs/pref_service.h"
 #include "chrome/browser/prefs/pref_service_mock_builder.h"
@@ -55,6 +54,7 @@
 #include "chrome_frame/test/chrome_frame_test_utils.h"
 #include "chrome_frame/test/ie_event_sink.h"
 #include "chrome_frame/utils.h"
+#include "content/browser/browser_thread.h"
 #include "net/base/net_util.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -181,7 +181,7 @@ class PageLoadTest : public testing::Test {
     chrome_frame_test::TimedMsgLoop message_loop;
 
     // Launch IE.
-    ScopedComPtr<IWebBrowser2> web_browser2;
+    base::win::ScopedComPtr<IWebBrowser2> web_browser2;
     hr = chrome_frame_test::LaunchIEAsComServer(web_browser2.Receive());
     EXPECT_HRESULT_SUCCEEDED(hr);
     EXPECT_TRUE(web_browser2.get() != NULL);

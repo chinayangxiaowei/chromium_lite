@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,8 +8,9 @@
 
 #import <Cocoa/Cocoa.h>
 
-#include "base/scoped_nsobject.h"
+#include "base/memory/scoped_nsobject.h"
 #import "chrome/browser/ui/cocoa/bookmarks/bookmark_button.h"
+#import "chrome/browser/ui/cocoa/tracking_area.h"
 
 @class BookmarkBarController;
 @class BookmarkBarFolderView;
@@ -22,7 +23,8 @@
 // which look sort of like menus.
 @interface BookmarkBarFolderController :
     NSWindowController<BookmarkButtonDelegate,
-                       BookmarkButtonControllerProtocol> {
+                       BookmarkButtonControllerProtocol,
+                       NSUserInterfaceValidations> {
  @private
   // The button whose click opened us.
   scoped_nsobject<BookmarkButton> parentButton_;
@@ -118,7 +120,7 @@
   BookmarkBarFolderController* folderController_;
 
   // Implement basic menu scrolling through this tracking area.
-  scoped_nsobject<NSTrackingArea> scrollTrackingArea_;
+  ScopedCrTrackingArea scrollTrackingArea_;
 
   // Timer to continue scrolling as needed.  We own the timer but
   // don't release it when done (we invalidate it).
@@ -139,6 +141,9 @@
   // Set to YES to prevent any node animations. Useful for unit testing so that
   // incomplete animations do not cause valgrind complaints.
   BOOL ignoreAnimations_;
+
+  int selectedIndex_;
+  NSString* typedPrefix_;
 }
 
 // Designated initializer.
@@ -148,6 +153,20 @@
 
 // Return the parent button that owns the bookmark folder we represent.
 - (BookmarkButton*)parentButton;
+
+// Text typed by user, for type-select and arrow key support.
+// Returns YES if the menu should be closed now.
+- (BOOL)handleInputText:(NSString*)newText;
+
+// If you wanted to clear the type-select buffer. Currently only used
+// internally.
+- (void)clearInputText;
+
+// Gets notified when a fav icon asynchronously loads, so we can now use the
+// real icon instead of a generic placeholder.
+- (void)faviconLoadedForNode:(const BookmarkNode*)node;
+
+- (void)setSelectedButtonByIndex:(int)index;
 
 // Offset our folder menu window. This is usually needed in response to a
 // parent folder menu window or the bookmark bar changing position due to
@@ -168,6 +187,9 @@
 // Passed up by a child view to tell us of a desire to scroll.
 - (void)scrollWheel:(NSEvent *)theEvent;
 
+- (void)mouseDragged:(NSEvent*)theEvent;
+
+
 // Forwarded to the associated BookmarkBarController.
 - (IBAction)addFolder:(id)sender;
 - (IBAction)addPage:(id)sender;
@@ -180,12 +202,13 @@
 - (IBAction)openBookmarkInNewForegroundTab:(id)sender;
 - (IBAction)openBookmarkInNewWindow:(id)sender;
 
-@property (assign, nonatomic) BOOL subFolderGrowthToRight;
+@property(assign, nonatomic) BOOL subFolderGrowthToRight;
 
 @end
 
 @interface BookmarkBarFolderController(TestingAPI)
-- (NSPoint)windowTopLeftForWidth:(int)windowWidth;
+- (NSPoint)windowTopLeftForWidth:(int)windowWidth
+                          height:(int)windowHeight;
 - (NSArray*)buttons;
 - (BookmarkBarFolderController*)folderController;
 - (id)folderTarget;

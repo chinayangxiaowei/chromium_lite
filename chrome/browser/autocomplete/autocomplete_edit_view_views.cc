@@ -12,17 +12,22 @@
 #include "chrome/browser/autocomplete/autocomplete_match.h"
 #include "chrome/browser/autocomplete/autocomplete_popup_model.h"
 #include "chrome/browser/command_updater.h"
-#include "chrome/browser/tab_contents/tab_contents.h"
 #include "chrome/browser/ui/views/autocomplete/autocomplete_popup_contents_view.h"
+#include "chrome/browser/ui/views/autocomplete/touch_autocomplete_popup_contents_view.h"
 #include "chrome/browser/ui/views/location_bar/location_bar_view.h"
-#include "chrome/common/notification_service.h"
-#include "gfx/font.h"
+#include "content/browser/tab_contents/tab_contents.h"
+#include "content/common/notification_service.h"
 #include "googleurl/src/gurl.h"
 #include "grit/generated_resources.h"
 #include "net/base/escape.h"
+#include "ui/base/accessibility/accessible_view_state.h"
+#include "ui/base/dragdrop/drag_drop_types.h"
 #include "ui/base/l10n/l10n_util.h"
+#include "ui/base/resource/resource_bundle.h"
+#include "ui/gfx/font.h"
 #include "views/border.h"
-#include "views/fill_layout.h"
+#include "views/controls/textfield/textfield.h"
+#include "views/layout/fill_layout.h"
 
 namespace {
 
@@ -39,26 +44,27 @@ class AutocompleteTextfield : public views::Textfield {
   }
 
   // views::View implementation
-  virtual void DidGainFocus() {
-    views::Textfield::DidGainFocus();
+  virtual void OnFocus() OVERRIDE {
+    views::Textfield::OnFocus();
     autocomplete_edit_view_->HandleFocusIn();
   }
 
-  virtual void WillLoseFocus() {
-    views::Textfield::WillLoseFocus();
+  virtual void OnBlur() OVERRIDE {
+    views::Textfield::OnBlur();
     autocomplete_edit_view_->HandleFocusOut();
   }
 
-  virtual bool OnKeyPressed(const views::KeyEvent& e) {
-    bool handled = views::Textfield::OnKeyPressed(e);
-    return autocomplete_edit_view_->HandleAfterKeyEvent(e, handled) || handled;
+  virtual bool OnKeyPressed(const views::KeyEvent& event) OVERRIDE {
+    bool handled = views::Textfield::OnKeyPressed(event);
+    return autocomplete_edit_view_->HandleAfterKeyEvent(event, handled) ||
+        handled;
   }
 
-  virtual bool OnKeyReleased(const views::KeyEvent& e) {
-    return autocomplete_edit_view_->HandleKeyReleaseEvent(e);
+  virtual bool OnKeyReleased(const views::KeyEvent& event) OVERRIDE {
+    return autocomplete_edit_view_->HandleKeyReleaseEvent(event);
   }
 
-  virtual bool IsFocusable() const {
+  virtual bool IsFocusable() const OVERRIDE {
     // Bypass Textfield::IsFocusable. The omnibox in popup window requires
     // focus in order for text selection to work.
     return views::View::IsFocusable();
@@ -72,12 +78,12 @@ class AutocompleteTextfield : public views::Textfield {
 
 // Stores omnibox state for each tab.
 struct ViewState {
-  explicit ViewState(const views::TextRange& selection_range)
+  explicit ViewState(const ui::Range& selection_range)
       : selection_range(selection_range) {
   }
 
   // Range of selected text.
-  views::TextRange selection_range;
+  ui::Range selection_range;
 };
 
 struct AutocompleteEditState {
@@ -110,16 +116,14 @@ AutocompleteEditViewViews::AutocompleteEditViewViews(
     bool popup_window_mode,
     const views::View* location_bar)
     : model_(new AutocompleteEditModel(this, controller, profile)),
-      popup_view_(new AutocompletePopupContentsView(
-          gfx::Font(), this, model_.get(), profile, location_bar)),
+      popup_view_(CreatePopupView(profile, location_bar)),
       controller_(controller),
       toolbar_model_(toolbar_model),
       command_updater_(command_updater),
       popup_window_mode_(popup_window_mode),
       security_level_(ToolbarModel::NONE),
-      delete_was_pressed_(false),
+      ime_composing_before_change_(false),
       delete_at_end_pressed_(false) {
-  model_->SetPopupModel(popup_view_->GetModel());
   set_border(views::Border::CreateEmptyBorder(kAutocompleteVerticalMargin, 0,
                                               kAutocompleteVerticalMargin, 0));
 }
@@ -145,6 +149,11 @@ void AutocompleteEditViewViews::Init() {
   textfield_ = new AutocompleteTextfield(this);
   textfield_->SetController(this);
 
+#if defined(TOUCH_UI)
+  textfield_->SetFont(ui::ResourceBundle::GetSharedInstance().GetFont(
+                      ResourceBundle::LargeFont));
+#endif
+
   if (popup_window_mode_)
     textfield_->SetReadOnly(true);
 
@@ -161,46 +170,51 @@ void AutocompleteEditViewViews::SetBaseColor() {
 bool AutocompleteEditViewViews::HandleAfterKeyEvent(
     const views::KeyEvent& event,
     bool handled) {
-  handling_key_press_ = false;
-  if (content_maybe_changed_by_key_press_)
-    OnAfterPossibleChange();
-
-  if (event.GetKeyCode() == ui::VKEY_RETURN) {
+  if (event.key_code() == ui::VKEY_RETURN) {
     bool alt_held = event.IsAltDown();
     model_->AcceptInput(alt_held ? NEW_FOREGROUND_TAB : CURRENT_TAB, false);
     handled = true;
-  } else if (!handled && event.GetKeyCode() == ui::VKEY_ESCAPE) {
+  } else if (!handled && event.key_code() == ui::VKEY_ESCAPE) {
     // We can handle the Escape key if textfield did not handle it.
     // If it's not handled by us, then we need to propagate it up to the parent
     // widgets, so that Escape accelerator can still work.
     handled = model_->OnEscapeKeyPressed();
-  } else if (event.GetKeyCode() == ui::VKEY_CONTROL) {
+  } else if (event.key_code() == ui::VKEY_CONTROL) {
     // Omnibox2 can switch its contents while pressing a control key. To switch
     // the contents of omnibox2, we notify the AutocompleteEditModel class when
     // the control-key state is changed.
     model_->OnControlKeyChanged(true);
-  } else if (!text_changed_ && event.GetKeyCode() == ui::VKEY_DELETE &&
+  } else if (!handled && event.key_code() == ui::VKEY_DELETE &&
              event.IsShiftDown()) {
     // If shift+del didn't change the text, we let this delete an entry from
     // the popup.  We can't check to see if the IME handled it because even if
     // nothing is selected, the IME or the TextView still report handling it.
-    AutocompletePopupModel* popup_model = popup_view_->GetModel();
-    if (popup_model->IsOpen())
-      popup_model->TryDeletingCurrentItem();
-  } else if (!handled && event.GetKeyCode() == ui::VKEY_UP) {
+    if (model_->popup_model()->IsOpen())
+      model_->popup_model()->TryDeletingCurrentItem();
+  } else if (!handled && event.key_code() == ui::VKEY_UP) {
     model_->OnUpOrDownKeyPressed(-1);
     handled = true;
-  } else if (!handled && event.GetKeyCode() == ui::VKEY_DOWN) {
+  } else if (!handled && event.key_code() == ui::VKEY_DOWN) {
     model_->OnUpOrDownKeyPressed(1);
     handled = true;
   } else if (!handled &&
-             event.GetKeyCode() == ui::VKEY_TAB &&
+             event.key_code() == ui::VKEY_TAB &&
              !event.IsShiftDown() &&
              !event.IsControlDown()) {
-    if (model_->is_keyword_hint() && !model_->keyword().empty()) {
-      model_->AcceptKeyword();
-      handled = true;
+    if (model_->is_keyword_hint()) {
+      handled = model_->AcceptKeyword();
     } else {
+      string16::size_type start = 0;
+      string16::size_type end = 0;
+      size_t length = GetTextLength();
+      GetSelectionBounds(&start, &end);
+      if (start != end || start < length) {
+        OnBeforePossibleChange();
+        SelectRange(length, length);
+        OnAfterPossibleChange();
+        handled = true;
+      }
+
       // TODO(Oshima): handle instant
     }
   }
@@ -214,7 +228,7 @@ bool AutocompleteEditViewViews::HandleKeyReleaseEvent(
   // Omnibox2 can switch its contents while pressing a control key. To switch
   // the contents of omnibox2, we notify the AutocompleteEditModel class when
   // the control-key state is changed.
-  if (event.GetKeyCode() == ui::VKEY_CONTROL) {
+  if (event.key_code() == ui::VKEY_CONTROL) {
     // TODO(oshima): investigate if we need to support keyboard with two
     // controls. See autocomplete_edit_view_gtk.cc.
     model_->OnControlKeyChanged(false);
@@ -233,7 +247,7 @@ void AutocompleteEditViewViews::HandleFocusIn() {
 void AutocompleteEditViewViews::HandleFocusOut() {
   // TODO(oshima): we don't have native view. This requires
   // further refactoring.
-  controller_->OnAutocompleteLosingFocus(NULL);
+  model_->OnWillKillFocus(NULL);
   // Close the popup.
   ClosePopup();
   // Tell the model to reset itself.
@@ -243,23 +257,16 @@ void AutocompleteEditViewViews::HandleFocusOut() {
 
 ////////////////////////////////////////////////////////////////////////////////
 // AutocompleteEditViewViews, views::View implementation:
-
-bool AutocompleteEditViewViews::OnMousePressed(
-    const views::MouseEvent& event) {
-  if (event.IsLeftMouseButton()) {
-    // Button press event may change the selection, we need to record the change
-    // and report it to |model_| later when button is released.
-    OnBeforePossibleChange();
-  }
-  // Pass the event through to TextfieldViews.
-  return false;
-}
-
 void AutocompleteEditViewViews::Layout() {
   gfx::Insets insets = GetInsets();
   textfield_->SetBounds(insets.left(), insets.top(),
                         width() - insets.width(),
                         height() - insets.height());
+}
+
+void AutocompleteEditViewViews::GetAccessibleState(
+    ui::AccessibleViewState* state) {
+  state->name = l10n_util::GetStringUTF16(IDS_ACCNAME_LOCATION);
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -278,7 +285,7 @@ void AutocompleteEditViewViews::SaveStateToTab(TabContents* tab) {
 
   // NOTE: GetStateForTabSwitch may affect GetSelection, so order is important.
   AutocompleteEditModel::State model_state = model_->GetStateForTabSwitch();
-  views::TextRange selection;
+  ui::Range selection;
   textfield_->GetSelectedRange(&selection);
   GetStateAccessor()->SetProperty(
       tab->property_bag(),
@@ -288,7 +295,7 @@ void AutocompleteEditViewViews::SaveStateToTab(TabContents* tab) {
 void AutocompleteEditViewViews::Update(const TabContents* contents) {
   // NOTE: We're getting the URL text here from the ToolbarModel.
   bool visibly_changed_permanent_text =
-      model_->UpdatePermanentText(toolbar_model_->GetText());
+      model_->UpdatePermanentText(WideToUTF16Hack(toolbar_model_->GetText()));
 
   ToolbarModel::SecurityLevel security_level =
         toolbar_model_->GetSecurityLevel();
@@ -321,7 +328,7 @@ void AutocompleteEditViewViews::OpenURL(const GURL& url,
                                         PageTransition::Type transition,
                                         const GURL& alternate_nav_url,
                                         size_t selected_line,
-                                        const std::wstring& keyword) {
+                                        const string16& keyword) {
   if (!url.is_valid())
     return;
 
@@ -329,9 +336,9 @@ void AutocompleteEditViewViews::OpenURL(const GURL& url,
                   selected_line, keyword);
 }
 
-std::wstring AutocompleteEditViewViews::GetText() const {
+string16 AutocompleteEditViewViews::GetText() const {
   // TODO(oshima): IME support
-  return UTF16ToWide(textfield_->text());
+  return textfield_->text();
 }
 
 bool AutocompleteEditViewViews::IsEditingOrEmpty() const {
@@ -344,12 +351,12 @@ int AutocompleteEditViewViews::GetIcon() const {
       toolbar_model_->GetIcon();
 }
 
-void AutocompleteEditViewViews::SetUserText(const std::wstring& text) {
+void AutocompleteEditViewViews::SetUserText(const string16& text) {
   SetUserText(text, text, true);
 }
 
-void AutocompleteEditViewViews::SetUserText(const std::wstring& text,
-                                            const std::wstring& display_text,
+void AutocompleteEditViewViews::SetUserText(const string16& text,
+                                            const string16& display_text,
                                             bool update_popup) {
   model_->SetUserText(text);
   SetWindowTextAndCaretPos(display_text, display_text.length());
@@ -359,17 +366,17 @@ void AutocompleteEditViewViews::SetUserText(const std::wstring& text,
 }
 
 void AutocompleteEditViewViews::SetWindowTextAndCaretPos(
-    const std::wstring& text,
+    const string16& text,
     size_t caret_pos) {
-  const views::TextRange range(caret_pos, caret_pos);
+  const ui::Range range(caret_pos, caret_pos);
   SetTextAndSelectedRange(text, range);
 }
 
 void AutocompleteEditViewViews::SetForcedQuery() {
-  const std::wstring current_text(GetText());
-  const size_t start = current_text.find_first_not_of(kWhitespaceWide);
-  if (start == std::wstring::npos || (current_text[start] != '?')) {
-    SetUserText(L"?");
+  const string16 current_text(GetText());
+  const size_t start = current_text.find_first_not_of(kWhitespaceUTF16);
+  if (start == string16::npos || (current_text[start] != '?')) {
+    SetUserText(ASCIIToUTF16("?"));
   } else {
     SelectRange(current_text.size(), start + 1);
   }
@@ -385,9 +392,9 @@ bool AutocompleteEditViewViews::DeleteAtEndPressed() {
 }
 
 void AutocompleteEditViewViews::GetSelectionBounds(
-    std::wstring::size_type* start,
-    std::wstring::size_type* end) {
-  views::TextRange range;
+    string16::size_type* start,
+    string16::size_type* end) {
+  ui::Range range;
   textfield_->GetSelectedRange(&range);
   *start = static_cast<size_t>(range.end());
   *end = static_cast<size_t>(range.start());
@@ -413,19 +420,16 @@ void AutocompleteEditViewViews::UpdatePopup() {
 
   // Don't inline autocomplete when the caret/selection isn't at the end of
   // the text, or in the middle of composition.
-  views::TextRange sel;
+  ui::Range sel;
   textfield_->GetSelectedRange(&sel);
-  bool no_inline_autocomplete = sel.GetMax() < GetTextLength();
+  bool no_inline_autocomplete =
+      sel.GetMax() < GetTextLength() || textfield_->IsIMEComposing();
 
-  // TODO(oshima): Support IME. Don't show autocomplete if IME has some text.
   model_->StartAutocomplete(!sel.is_empty(), no_inline_autocomplete);
 }
 
 void AutocompleteEditViewViews::ClosePopup() {
-  if (popup_view_->GetModel()->IsOpen())
-    controller_->OnAutocompleteWillClosePopup();
-
-  popup_view_->GetModel()->StopAutocomplete();
+  model_->StopAutocomplete();
 }
 
 void AutocompleteEditViewViews::SetFocus() {
@@ -435,7 +439,7 @@ void AutocompleteEditViewViews::SetFocus() {
 }
 
 void AutocompleteEditViewViews::OnTemporaryTextMaybeChanged(
-    const std::wstring& display_text,
+    const string16& display_text,
     bool save_original_selection) {
   if (save_original_selection)
     textfield_->GetSelectedRange(&saved_temporary_selection_);
@@ -445,11 +449,11 @@ void AutocompleteEditViewViews::OnTemporaryTextMaybeChanged(
 }
 
 bool AutocompleteEditViewViews::OnInlineAutocompleteTextMaybeChanged(
-    const std::wstring& display_text,
+    const string16& display_text,
     size_t user_text_length) {
   if (display_text == GetText())
     return false;
-  views::TextRange range(display_text.size(), user_text_length);
+  ui::Range range(display_text.size(), user_text_length);
   SetTextAndSelectedRange(display_text, range);
   TextChanged();
   return true;
@@ -464,27 +468,18 @@ void AutocompleteEditViewViews::OnBeforePossibleChange() {
   // Record our state.
   text_before_change_ = GetText();
   textfield_->GetSelectedRange(&sel_before_change_);
+  ime_composing_before_change_ = textfield_->IsIMEComposing();
 }
 
 bool AutocompleteEditViewViews::OnAfterPossibleChange() {
-  // OnAfterPossibleChange should be called once per modification,
-  // and we should ignore if this is called while a key event is being handled
-  // because OnAfterPossibleChagne will be called after the key event is
-  // actually handled.
-  if (handling_key_press_) {
-    content_maybe_changed_by_key_press_ = true;
-    return false;
-  }
-  views::TextRange new_sel;
+  ui::Range new_sel;
   textfield_->GetSelectedRange(&new_sel);
 
-  size_t length = GetTextLength();
-  bool at_end_of_edit = (new_sel.start() == length && new_sel.end() == length);
-
   // See if the text or selection have changed since OnBeforePossibleChange().
-  std::wstring new_text = GetText();
-  text_changed_ = (new_text != text_before_change_);
-  bool selection_differs =
+  const string16 new_text = GetText();
+  const bool text_changed = (new_text != text_before_change_) ||
+      (ime_composing_before_change_ != textfield_->IsIMEComposing());
+  const bool selection_differs =
       !((sel_before_change_.is_empty() && new_sel.is_empty()) ||
         sel_before_change_.EqualsIgnoringDirection(new_sel));
 
@@ -493,28 +488,24 @@ bool AutocompleteEditViewViews::OnAfterPossibleChange() {
   // (or typing) the prefix of that selection.  (We detect these by making
   // sure the caret, which should be after any insertion, hasn't moved
   // forward of the old selection start.)
-  bool just_deleted_text =
+  const bool just_deleted_text =
       (text_before_change_.length() > new_text.length()) &&
       (new_sel.start() <= sel_before_change_.GetMin());
 
-  delete_at_end_pressed_ = false;
+  const bool something_changed = model_->OnAfterPossibleChange(
+      new_text, new_sel.start(), new_sel.end(), selection_differs,
+      text_changed, just_deleted_text, !textfield_->IsIMEComposing());
 
-  bool something_changed = model_->OnAfterPossibleChange(new_text,
-      selection_differs, text_changed_, just_deleted_text, at_end_of_edit);
-
-  // If only selection was changed, we don't need to call |controller_|'s
+  // If only selection was changed, we don't need to call |model_|'s
   // OnChanged() method, which is called in TextChanged().
   // But we still need to call EmphasizeURLComponents() to make sure the text
   // attributes are updated correctly.
-  if (something_changed && text_changed_) {
+  if (something_changed && text_changed)
     TextChanged();
-  } else if (selection_differs) {
+  else if (selection_differs)
     EmphasizeURLComponents();
-  } else if (delete_was_pressed_ && at_end_of_edit) {
-    delete_at_end_pressed_ = true;
-    controller_->OnChanged();
-  }
-  delete_was_pressed_ = false;
+  else if (delete_at_end_pressed_)
+    model_->OnChanged();
 
   return something_changed;
 }
@@ -527,10 +518,14 @@ CommandUpdater* AutocompleteEditViewViews::GetCommandUpdater() {
   return command_updater_;
 }
 
-views::View* AutocompleteEditViewViews::AddToView(views::View* parent) {
-  parent->AddChildView(this);
-  AddChildView(textfield_);
-  return this;
+void AutocompleteEditViewViews::SetInstantSuggestion(const string16& input,
+                                                     bool animate_to_complete) {
+  NOTIMPLEMENTED();
+}
+
+string16 AutocompleteEditViewViews::GetInstantSuggestion() const {
+  NOTIMPLEMENTED();
+  return string16();
 }
 
 int AutocompleteEditViewViews::TextWidth() const {
@@ -542,15 +537,16 @@ bool AutocompleteEditViewViews::IsImeComposing() const {
   return false;
 }
 
-bool AutocompleteEditViewViews::CommitInstantSuggestion(
-    const std::wstring& typed_text,
-    const std::wstring& suggested_text) {
-  model_->FinalizeInstantQuery(typed_text, suggested_text);
-  return true;
+views::View* AutocompleteEditViewViews::AddToView(views::View* parent) {
+  parent->AddChildView(this);
+  AddChildView(textfield_);
+  return this;
 }
 
-void AutocompleteEditViewViews::SetInstantSuggestion(const string16& input) {
+int AutocompleteEditViewViews::OnPerformDrop(
+    const views::DropTargetEvent& event) {
   NOTIMPLEMENTED();
+  return ui::DragDropTypes::DRAG_NONE;
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -564,31 +560,23 @@ void AutocompleteEditViewViews::Observe(NotificationType type,
 }
 
 ////////////////////////////////////////////////////////////////////////////////
-// AutocompleteEditViewViews, Textfield::Controller implementation:
+// AutocompleteEditViewViews, views::TextfieldController implementation:
 
 void AutocompleteEditViewViews::ContentsChanged(views::Textfield* sender,
                                                 const string16& new_contents) {
-  if (handling_key_press_)
-    content_maybe_changed_by_key_press_ = true;
 }
 
 bool AutocompleteEditViewViews::HandleKeyEvent(
     views::Textfield* textfield,
     const views::KeyEvent& event) {
-  delete_was_pressed_ = event.GetKeyCode() == ui::VKEY_DELETE;
+  delete_at_end_pressed_ = false;
 
-  // Reset |text_changed_| before passing the key event on to the text view.
-  text_changed_ = false;
-  OnBeforePossibleChange();
-  handling_key_press_ = true;
-  content_maybe_changed_by_key_press_ = false;
-
-  if (event.GetKeyCode() == ui::VKEY_BACK) {
+  if (event.key_code() == ui::VKEY_BACK) {
     // Checks if it's currently in keyword search mode.
     if (model_->is_keyword_hint() || model_->keyword().empty())
       return false;
     // If there is selection, let textfield handle the backspace.
-    if (!textfield_->GetSelectedText().empty())
+    if (textfield_->HasSelection())
       return false;
     // If not at the begining of the text, let textfield handle the backspace.
     if (textfield_->GetCursorPosition())
@@ -597,7 +585,21 @@ bool AutocompleteEditViewViews::HandleKeyEvent(
     return true;
   }
 
+  if (event.key_code() == ui::VKEY_DELETE && !event.IsAltDown()) {
+    delete_at_end_pressed_ =
+        (!textfield_->HasSelection() &&
+         textfield_->GetCursorPosition() == textfield_->text().length());
+  }
+
   return false;
+}
+
+void AutocompleteEditViewViews::OnBeforeUserAction(views::Textfield* sender) {
+  OnBeforePossibleChange();
+}
+
+void AutocompleteEditViewViews::OnAfterUserAction(views::Textfield* sender) {
+  OnAfterPossibleChange();
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -615,14 +617,14 @@ void AutocompleteEditViewViews::EmphasizeURLComponents() {
 
 void AutocompleteEditViewViews::TextChanged() {
   EmphasizeURLComponents();
-  controller_->OnChanged();
+  model_->OnChanged();
 }
 
 void AutocompleteEditViewViews::SetTextAndSelectedRange(
-    const std::wstring& text,
-    const views::TextRange& range) {
+    const string16& text,
+    const ui::Range& range) {
   if (text != GetText())
-    textfield_->SetText(WideToUTF16(text));
+    textfield_->SetText(text);
   textfield_->SelectRange(range);
 }
 
@@ -632,6 +634,17 @@ string16 AutocompleteEditViewViews::GetSelectedText() const {
 }
 
 void AutocompleteEditViewViews::SelectRange(size_t caret, size_t end) {
-  const views::TextRange range(caret, end);
+  const ui::Range range(caret, end);
   textfield_->SelectRange(range);
+}
+
+AutocompletePopupView* AutocompleteEditViewViews::CreatePopupView(
+    Profile* profile,
+    const View* location_bar) {
+#if defined(TOUCH_UI)
+  return new TouchAutocompletePopupContentsView(
+#else
+  return new AutocompletePopupContentsView(
+#endif
+      gfx::Font(), this, model_.get(), profile, location_bar);
 }

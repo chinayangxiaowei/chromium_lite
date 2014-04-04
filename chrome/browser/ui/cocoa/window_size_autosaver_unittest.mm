@@ -1,4 +1,4 @@
-// Copyright (c) 2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,8 +6,9 @@
 
 #import "chrome/browser/ui/cocoa/window_size_autosaver.h"
 
-#include "base/scoped_nsobject.h"
+#include "base/memory/scoped_nsobject.h"
 #include "chrome/browser/prefs/pref_service.h"
+#include "chrome/browser/prefs/scoped_user_pref_update.h"
 #include "chrome/browser/ui/cocoa/browser_test_helper.h"
 #import "chrome/browser/ui/cocoa/cocoa_test_helper.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -44,7 +45,9 @@ TEST_F(WindowSizeAutosaverTest, RestoresAndSavesPos) {
   ASSERT_TRUE(pref != NULL);
 
   // Check to make sure there is no existing pref for window placement.
-  ASSERT_TRUE(pref->GetDictionary(path_) == NULL);
+  const DictionaryValue* placement = pref->GetDictionary(path_);
+  ASSERT_TRUE(placement);
+  EXPECT_TRUE(placement->empty());
 
   // Replace the window with one that doesn't have resize controls.
   [window_ close];
@@ -93,7 +96,7 @@ TEST_F(WindowSizeAutosaverTest, RestoresAndSavesPos) {
   // ...and it should be in the profile, too.
   EXPECT_TRUE(pref->GetDictionary(path_) != NULL);
   int x, y;
-  DictionaryValue* windowPref = pref->GetMutableDictionary(path_);
+  const DictionaryValue* windowPref = pref->GetDictionary(path_);
   EXPECT_FALSE(windowPref->GetInteger("left", &x));
   EXPECT_FALSE(windowPref->GetInteger("right", &x));
   EXPECT_FALSE(windowPref->GetInteger("top", &x));
@@ -109,7 +112,9 @@ TEST_F(WindowSizeAutosaverTest, RestoresAndSavesRect) {
   ASSERT_TRUE(pref != NULL);
 
   // Check to make sure there is no existing pref for window placement.
-  ASSERT_TRUE(pref->GetDictionary(path_) == NULL);
+  const DictionaryValue* placement = pref->GetDictionary(path_);
+  ASSERT_TRUE(placement);
+  EXPECT_TRUE(placement->empty());
 
   // Ask the window to save its position, then check that a preference
   // exists.  We're technically passing in a pointer to the user prefs
@@ -150,7 +155,7 @@ TEST_F(WindowSizeAutosaverTest, RestoresAndSavesRect) {
   // ...and it should be in the profile, too.
   EXPECT_TRUE(pref->GetDictionary(path_) != NULL);
   int x1, y1, x2, y2;
-  DictionaryValue* windowPref = pref->GetMutableDictionary(path_);
+  const DictionaryValue* windowPref = pref->GetDictionary(path_);
   EXPECT_FALSE(windowPref->GetInteger("x", &x1));
   EXPECT_FALSE(windowPref->GetInteger("y", &x1));
   ASSERT_TRUE(windowPref->GetInteger("left", &x1));
@@ -168,7 +173,8 @@ TEST_F(WindowSizeAutosaverTest, DoesNotRestoreButClearsEmptyRect) {
   PrefService* pref = browser_helper_.profile()->GetPrefs();
   ASSERT_TRUE(pref != NULL);
 
-  DictionaryValue* windowPref = pref->GetMutableDictionary(path_);
+  DictionaryPrefUpdate update(pref, path_);
+  DictionaryValue* windowPref = update.Get();
   windowPref->SetInteger("left", 50);
   windowPref->SetInteger("right", 50);
   windowPref->SetInteger("top", 60);

@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,13 +7,13 @@
 #include "base/command_line.h"
 #include "chrome/browser/browser_shutdown.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/tab_contents/tab_contents.h"
-#include "chrome/browser/tab_contents/tab_contents_view.h"
 #include "chrome/browser/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/tab_contents/tab_contents_wrapper.h"
 #include "chrome/common/chrome_switches.h"
-#include "chrome/common/notification_service.h"
 #include "chrome/common/url_constants.h"
+#include "content/browser/tab_contents/tab_contents.h"
+#include "content/browser/tab_contents/tab_contents_view.h"
+#include "content/common/notification_service.h"
 
 namespace chromeos {
 
@@ -67,7 +67,8 @@ TabCloseableStateWatcher::TabCloseableStateWatcher()
       signing_off_(false),
       guest_session_(
           CommandLine::ForCurrentProcess()->HasSwitch(
-              switches::kGuestSession)) {
+              switches::kGuestSession)),
+      waiting_for_browser_(false) {
   BrowserList::AddObserver(this);
   notification_registrar_.Add(this, NotificationType::APP_EXITING,
       NotificationService::AllSources());
@@ -80,7 +81,8 @@ TabCloseableStateWatcher::~TabCloseableStateWatcher() {
 }
 
 bool TabCloseableStateWatcher::CanCloseTab(const Browser* browser) const {
-  return browser->type() != Browser::TYPE_NORMAL ? true : can_close_tab_;
+  return browser->type() != Browser::TYPE_NORMAL ? true :
+      (can_close_tab_ || waiting_for_browser_);
 }
 
 bool TabCloseableStateWatcher::CanCloseBrowser(Browser* browser) {
@@ -109,6 +111,8 @@ void TabCloseableStateWatcher::OnWindowCloseCanceled(Browser* browser) {
 // TabCloseableStateWatcher, BrowserList::Observer implementation:
 
 void TabCloseableStateWatcher::OnBrowserAdded(const Browser* browser) {
+  waiting_for_browser_ = false;
+
   // Only normal browsers may affect closeable state.
   if (browser->type() != Browser::TYPE_NORMAL)
     return;
@@ -156,6 +160,9 @@ void TabCloseableStateWatcher::Observe(NotificationType type,
 
 void TabCloseableStateWatcher::OnTabStripChanged(const Browser* browser,
     bool closing_last_tab) {
+  if (waiting_for_browser_)
+    return;
+
   if (!closing_last_tab) {
     CheckAndUpdateState(browser);
     return;
@@ -175,9 +182,7 @@ void TabCloseableStateWatcher::OnTabStripChanged(const Browser* browser,
 
 void TabCloseableStateWatcher::CheckAndUpdateState(
     const Browser* browser_to_check) {
-  // We shouldn't update state if we're signing off, or there's no normal
-  // browser, or browser is always closeable.
-  if (signing_off_ || tabstrip_watchers_.empty() ||
+  if (waiting_for_browser_ || signing_off_ || tabstrip_watchers_.empty() ||
       (browser_to_check && browser_to_check->type() != Browser::TYPE_NORMAL))
     return;
 
@@ -218,9 +223,14 @@ void TabCloseableStateWatcher::SetCloseableState(bool closeable) {
       Details<bool>(&can_close_tab_));
 }
 
-bool TabCloseableStateWatcher::CanCloseBrowserImpl(const Browser* browser,
-    BrowserActionType* action_type) const {
+bool TabCloseableStateWatcher::CanCloseBrowserImpl(
+    const Browser* browser,
+    BrowserActionType* action_type) {
   *action_type = NONE;
+
+  // If we're waiting for a new browser allow the close.
+  if (waiting_for_browser_)
+    return true;
 
   // Browser is always closeable when signing off.
   if (signing_off_)
@@ -234,10 +244,13 @@ bool TabCloseableStateWatcher::CanCloseBrowserImpl(const Browser* browser,
   if (tabstrip_watchers_.size() > 1)
     return true;
 
-  // If last normal browser is incognito, open a non-incognito window,
-  // and allow closing of incognito one (if not guest).
+  // If last normal browser is incognito, open a non-incognito window, and allow
+  // closing of incognito one (if not guest). When this happens we need to wait
+  // for the new browser before doing any other actions as the new browser may
+  // be created by way of session restore, which is async.
   if (browser->profile()->IsOffTheRecord() && !guest_session_) {
     *action_type = OPEN_WINDOW;
+    waiting_for_browser_ = true;
     return true;
   }
 

@@ -8,7 +8,6 @@
 
 #include <string>
 
-#include "chrome/common/net/url_request_context_getter.h"
 #include "net/base/cookie_monster.h"
 #include "net/base/cookie_policy.h"
 #include "net/base/host_resolver.h"
@@ -20,6 +19,7 @@
 #include "net/http/http_network_layer.h"
 #include "net/proxy/proxy_service.h"
 #include "net/url_request/url_request_context.h"
+#include "net/url_request/url_request_context_getter.h"
 
 namespace base {
 class MessageLoopProxy;
@@ -31,10 +31,8 @@ class MessageLoopProxy;
 //
 class ServiceURLRequestContext : public net::URLRequestContext {
  public:
-  explicit ServiceURLRequestContext(const std::string& user_agent);
-  void set_cookie_policy(net::CookiePolicy* policy) {
-    cookie_policy_ = policy;
-  }
+  explicit ServiceURLRequestContext(const std::string& user_agent,
+                                    net::ProxyService* net_proxy_service);
 
   // Overridden from net::URLRequestContext:
   virtual const std::string& GetUserAgent(const GURL& url) const;
@@ -46,10 +44,8 @@ class ServiceURLRequestContext : public net::URLRequestContext {
   std::string user_agent_;
 };
 
-class ServiceURLRequestContextGetter : public URLRequestContextGetter {
+class ServiceURLRequestContextGetter : public net::URLRequestContextGetter {
  public:
-  ServiceURLRequestContextGetter();
-
   virtual net::URLRequestContext* GetURLRequestContext();
   virtual scoped_refptr<base::MessageLoopProxy> GetIOMessageLoopProxy() const;
 
@@ -59,13 +55,18 @@ class ServiceURLRequestContextGetter : public URLRequestContextGetter {
   std::string user_agent() const {
     return user_agent_;
   }
+
  private:
+  friend class ServiceProcess;
+  ServiceURLRequestContextGetter();
   virtual ~ServiceURLRequestContextGetter();
+
+  void CreateProxyService();
 
   std::string user_agent_;
   scoped_refptr<net::URLRequestContext> url_request_context_;
   scoped_refptr<base::MessageLoopProxy> io_message_loop_proxy_;
+  scoped_refptr<net::ProxyService> proxy_service_;
 };
 
 #endif  // CHROME_SERVICE_NET_SERVICE_URL_REQUEST_CONTEXT_H_
-

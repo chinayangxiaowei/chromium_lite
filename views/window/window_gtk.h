@@ -8,6 +8,7 @@
 
 #include "base/basictypes.h"
 #include "views/widget/widget_gtk.h"
+#include "views/window/native_window.h"
 #include "views/window/window.h"
 
 namespace gfx {
@@ -16,50 +17,20 @@ class Size;
 };
 
 namespace views {
+namespace internal {
+class NativeWindowDelegate;
+}
 
 class Client;
 class WindowDelegate;
 
 // Window implementation for GTK.
-class WindowGtk : public WidgetGtk, public Window {
+class WindowGtk : public WidgetGtk, public NativeWindow, public Window {
  public:
   virtual ~WindowGtk();
 
-  // Overridden from Window:
-  virtual gfx::Rect GetBounds() const;
-  virtual gfx::Rect GetNormalBounds() const;
-  virtual void SetBounds(const gfx::Rect& bounds,
-                         gfx::NativeWindow other_window);
-  virtual void Show();
-  virtual void HideWindow();
-  virtual void Activate();
-  virtual void Deactivate();
-  virtual void Close();
-  virtual void Maximize();
-  virtual void Minimize();
-  virtual void Restore();
-  virtual bool IsActive() const;
-  virtual bool IsVisible() const;
-  virtual bool IsMaximized() const;
-  virtual bool IsMinimized() const;
-  virtual void SetFullscreen(bool fullscreen);
-  virtual bool IsFullscreen() const;
-  virtual void SetUseDragFrame(bool use_drag_frame);
-  virtual void EnableClose(bool enable);
-  virtual void UpdateWindowTitle();
-  virtual void UpdateWindowIcon();
-  virtual void SetIsAlwaysOnTop(bool always_on_top);
-  virtual NonClientFrameView* CreateFrameViewForWindow();
-  virtual void UpdateFrameAfterFrameChange();
-  virtual WindowDelegate* GetDelegate() const;
-  virtual NonClientView* GetNonClientView() const;
-  virtual ClientView* GetClientView() const;
-  virtual gfx::NativeWindow GetNativeWindow() const;
-  virtual bool ShouldUseNativeFrame() const;
-  virtual void FrameTypeChanged();
-
-  virtual Window* AsWindow() { return this; }
-  virtual const Window* AsWindow() const { return this; }
+  virtual Window* AsWindow();
+  virtual const Window* AsWindow() const;
 
   // Overridden from WidgetGtk:
   virtual gboolean OnButtonPress(GtkWidget* widget, GdkEventButton* event);
@@ -70,9 +41,50 @@ class WindowGtk : public WidgetGtk, public Window {
   virtual gboolean OnWindowStateEvent(GtkWidget* widget,
                                       GdkEventWindowState* event);
   virtual gboolean OnLeaveNotify(GtkWidget* widget, GdkEventCrossing* event);
+  virtual void IsActiveChanged();
   virtual void SetInitialFocus();
 
  protected:
+  // Overridden from NativeWindow:
+  virtual NativeWidget* AsNativeWidget() OVERRIDE;
+  virtual const NativeWidget* AsNativeWidget() const OVERRIDE;
+  virtual gfx::Rect GetRestoredBounds() const OVERRIDE;
+  virtual void ShowNativeWindow(ShowState state) OVERRIDE;
+  virtual void BecomeModal() OVERRIDE;
+  virtual void CenterWindow(const gfx::Size& size) OVERRIDE;
+  virtual void GetWindowBoundsAndMaximizedState(gfx::Rect* bounds,
+                                                bool* maximized) const OVERRIDE;
+  virtual void EnableClose(bool enable) OVERRIDE;
+  virtual void SetWindowTitle(const std::wstring& title) OVERRIDE;
+  virtual void SetWindowIcons(const SkBitmap& window_icon,
+                              const SkBitmap& app_icon) OVERRIDE;
+  virtual void SetAccessibleName(const std::wstring& name) OVERRIDE;
+  virtual void SetAccessibleRole(ui::AccessibilityTypes::Role role) OVERRIDE;
+  virtual void SetAccessibleState(ui::AccessibilityTypes::State state) OVERRIDE;
+  virtual Window* GetWindow() OVERRIDE;
+  virtual void SetWindowBounds(const gfx::Rect& bounds,
+                               gfx::NativeWindow other_window) OVERRIDE;
+  virtual void HideWindow() OVERRIDE;
+  virtual void Activate() OVERRIDE;
+  virtual void Deactivate() OVERRIDE;
+  virtual void Maximize() OVERRIDE;
+  virtual void Minimize() OVERRIDE;
+  virtual void Restore() OVERRIDE;
+  virtual bool IsActive() const OVERRIDE;
+  virtual bool IsVisible() const OVERRIDE;
+  virtual bool IsMaximized() const OVERRIDE;
+  virtual bool IsMinimized() const OVERRIDE;
+  virtual void SetFullscreen(bool fullscreen) OVERRIDE;
+  virtual bool IsFullscreen() const OVERRIDE;
+  virtual void SetAlwaysOnTop(bool always_on_top) OVERRIDE;
+  virtual bool IsAppWindow() const OVERRIDE;
+  virtual void SetUseDragFrame(bool use_drag_frame) OVERRIDE;
+  virtual NonClientFrameView* CreateFrameViewForWindow() OVERRIDE;
+  virtual void UpdateFrameAfterFrameChange() OVERRIDE;
+  virtual gfx::NativeWindow GetNativeWindow() const OVERRIDE;
+  virtual bool ShouldUseNativeFrame() const OVERRIDE;
+  virtual void FrameTypeChanged() OVERRIDE;
+
   // For  the constructor.
   friend class Window;
 
@@ -80,7 +92,7 @@ class WindowGtk : public WidgetGtk, public Window {
   explicit WindowGtk(WindowDelegate* window_delegate);
 
   // Initializes the window to the passed in bounds.
-  virtual void Init(GtkWindow* parent, const gfx::Rect& bounds);
+  virtual void InitWindow(GtkWindow* parent, const gfx::Rect& bounds);
 
   virtual void OnDestroy(GtkWidget* widget);
 
@@ -95,13 +107,8 @@ class WindowGtk : public WidgetGtk, public Window {
   // Asks the delegate if any to save the window's location and size.
   void SaveWindowPosition();
 
-  void SetInitialBounds(GtkWindow* parent, const gfx::Rect& bounds);
-  void SizeWindowToDefault(GtkWindow* parent);
-
-  // Whether or not the window is modal. This comes from the delegate and is
-  // cached at Init time to avoid calling back to the delegate from the
-  // destructor.
-  bool is_modal_;
+  // A delegate implementation that handles events received here.
+  internal::NativeWindowDelegate* delegate_;
 
   // Our window delegate.
   WindowDelegate* window_delegate_;

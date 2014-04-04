@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,14 +9,17 @@
 #include <vector>
 
 #include "base/logging.h"
-#include "base/scoped_vector.h"
+#include "base/memory/scoped_vector.h"
+#include "chrome/browser/extensions/extension_tab_helper.h"
+#include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/sync/engine/syncapi.h"
 #include "chrome/browser/sync/glue/session_model_associator.h"
-#include "chrome/browser/tab_contents/navigation_controller.h"
-#include "chrome/browser/tab_contents/tab_contents.h"
-#include "chrome/common/notification_details.h"
-#include "chrome/common/notification_service.h"
-#include "chrome/common/notification_source.h"
+#include "chrome/browser/sync/profile_sync_service.h"
+#include "content/browser/tab_contents/navigation_controller.h"
+#include "content/browser/tab_contents/tab_contents.h"
+#include "content/common/notification_details.h"
+#include "content/common/notification_service.h"
+#include "content/common/notification_source.h"
 
 namespace browser_sync {
 
@@ -25,7 +28,21 @@ SessionChangeProcessor::SessionChangeProcessor(
     SessionModelAssociator* session_model_associator)
     : ChangeProcessor(error_handler),
       session_model_associator_(session_model_associator),
-      profile_(NULL) {
+      profile_(NULL),
+      setup_for_test_(false) {
+  DCHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
+  DCHECK(error_handler);
+  DCHECK(session_model_associator_);
+}
+
+SessionChangeProcessor::SessionChangeProcessor(
+    UnrecoverableErrorHandler* error_handler,
+    SessionModelAssociator* session_model_associator,
+    bool setup_for_test)
+    : ChangeProcessor(error_handler),
+      session_model_associator_(session_model_associator),
+      profile_(NULL),
+      setup_for_test_(setup_for_test) {
   DCHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
   DCHECK(error_handler);
   DCHECK(session_model_associator_);
@@ -109,13 +126,13 @@ void SessionChangeProcessor::Observe(NotificationType type,
     }
 
     case NotificationType::TAB_CONTENTS_APPLICATION_EXTENSION_CHANGED: {
-      TabContents* tab_contents = Source<TabContents>(source).ptr();
-      DCHECK(tab_contents);
-      if (tab_contents->profile() != profile_) {
+      ExtensionTabHelper* extension_tab_helper =
+          Source<ExtensionTabHelper>(source).ptr();
+      if (extension_tab_helper->tab_contents()->profile() != profile_) {
         return;
       }
-      if (tab_contents->extension_app()) {
-        modified_tabs.push_back(tab_contents);
+      if (extension_tab_helper->extension_app()) {
+        modified_tabs.push_back(extension_tab_helper->tab_contents());
       }
       break;
     }
@@ -183,6 +200,15 @@ void SessionChangeProcessor::ApplyChangesFromSyncModel(
 
     const sync_pb::SessionSpecifics& specifics(
         sync_node.GetSessionSpecifics());
+    if (specifics.session_tag() ==
+            session_model_associator_->GetCurrentMachineTag() &&
+        !setup_for_test_) {
+      // We should only ever receive a change to our own machine's session info
+      // if encryption was turned on. In that case, the data is still the same,
+      // so we can ignore.
+      LOG(WARNING) << "Dropping modification to local session.";
+      return;
+    }
     const int64 mtime = sync_node.GetModificationTime();
     // Model associator handles foreign session update and add the same.
     session_model_associator_->AssociateForeignSpecifics(specifics, mtime);

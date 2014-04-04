@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,23 +9,21 @@
 
 #include "base/hash_tables.h"
 #include "base/logging.h"
-#include "base/singleton.h"
+#include "base/memory/singleton.h"
 #include "base/string_util.h"
 #include "base/task.h"
 #include "base/values.h"
 #include "chrome/browser/browser_process.h"
-#include "chrome/browser/browser_thread.h"
 #include "chrome/browser/chromeos/cros/cros_library.h"
 #include "chrome/browser/chromeos/cros/login_library.h"
+#include "chrome/browser/chromeos/cros/network_library.h"
 #include "chrome/browser/chromeos/cros_settings.h"
 #include "chrome/browser/chromeos/cros_settings_names.h"
 #include "chrome/browser/chromeos/login/ownership_service.h"
 #include "chrome/browser/chromeos/login/user_manager.h"
 #include "chrome/browser/prefs/pref_service.h"
-#include "chrome/common/notification_observer.h"
-#include "chrome/common/notification_registrar.h"
-#include "chrome/common/notification_service.h"
-#include "chrome/common/notification_type.h"
+#include "chrome/browser/prefs/scoped_user_pref_update.h"
+#include "content/browser/browser_thread.h"
 
 namespace chromeos {
 
@@ -37,10 +35,12 @@ const char kTrustedSuffix[] = "/trusted";
 
 // For all our boolean settings following is applicable:
 // true is default permissive value and false is safe prohibitic value.
+// Exception: kSignedDataRoamingEnabled which has default value of false.
 const char* kBooleanSettings[] = {
   kAccountsPrefAllowNewUser,
   kAccountsPrefAllowGuest,
-  kAccountsPrefShowUserNamesOnSignIn
+  kAccountsPrefShowUserNamesOnSignIn,
+  kSignedDataRoamingEnabled,
 };
 
 const char* kStringSettings[] = {
@@ -52,10 +52,13 @@ const char* kListSettings[] = {
 };
 
 bool IsControlledBooleanSetting(const std::string& pref_path) {
-  return std::find(kBooleanSettings,
-                   kBooleanSettings + arraysize(kBooleanSettings),
-                   pref_path) !=
-      kBooleanSettings + arraysize(kBooleanSettings);
+  // TODO(nkostylev): Using std::find for 4 value array generates this warning
+  // in chroot stl_algo.h:231: error: array subscript is above array bounds.
+  // GCC 4.4.3
+  return (pref_path == kAccountsPrefAllowNewUser) ||
+         (pref_path == kAccountsPrefAllowGuest) ||
+         (pref_path == kAccountsPrefShowUserNamesOnSignIn) ||
+         (pref_path == kSignedDataRoamingEnabled);
 }
 
 bool IsControlledStringSetting(const std::string& pref_path) {
@@ -76,7 +79,10 @@ void RegisterSetting(PrefService* local_state, const std::string& pref_path) {
   local_state->RegisterBooleanPref((pref_path + kTrustedSuffix).c_str(),
                                    false);
   if (IsControlledBooleanSetting(pref_path)) {
-    local_state->RegisterBooleanPref(pref_path.c_str(), true);
+    if (pref_path == kSignedDataRoamingEnabled)
+      local_state->RegisterBooleanPref(pref_path.c_str(), false);
+    else
+      local_state->RegisterBooleanPref(pref_path.c_str(), true);
   } else if (IsControlledStringSetting(pref_path)) {
     local_state->RegisterStringPref(pref_path.c_str(), "");
   } else {
@@ -85,10 +91,14 @@ void RegisterSetting(PrefService* local_state, const std::string& pref_path) {
   }
 }
 
-Value* CreateSettingsBooleanValue(bool value, bool managed) {
+// Create a settings boolean value with "managed" and "disabled" property.
+// "managed" property is true if the setting is managed by administrator.
+// "disabled" property is true if the UI for the setting should be disabled.
+Value* CreateSettingsBooleanValue(bool value, bool managed, bool disabled) {
   DictionaryValue* dict = new DictionaryValue;
   dict->Set("value", Value::CreateBooleanValue(value));
   dict->Set("managed", Value::CreateBooleanValue(managed));
+  dict->Set("disabled", Value::CreateBooleanValue(disabled));
   return dict;
 }
 
@@ -120,17 +130,17 @@ void UpdateCacheString(const std::string& name,
 }
 
 bool GetUserWhitelist(ListValue* user_list) {
+  PrefService* prefs = g_browser_process->local_state();
+  DCHECK(!prefs->IsManagedPreference(kAccountsPrefUsers));
+
   std::vector<std::string> whitelist;
-  if (!CrosLibrary::Get()->EnsureLoaded() ||
-      !CrosLibrary::Get()->GetLoginLibrary()->EnumerateWhitelisted(
-          &whitelist)) {
+  if (!SignedSettings::EnumerateWhitelist(&whitelist)) {
     LOG(WARNING) << "Failed to retrieve user whitelist.";
     return false;
   }
 
-  PrefService* prefs = g_browser_process->local_state();
-  ListValue* cached_whitelist = prefs->GetMutableList(kAccountsPrefUsers);
-  cached_whitelist->Clear();
+  ListPrefUpdate cached_whitelist_update(prefs, kAccountsPrefUsers);
+  cached_whitelist_update->Clear();
 
   const UserManager::User& self = UserManager::Get()->logged_in_user();
   bool is_owner = UserManager::Get()->current_user_is_owner();
@@ -146,38 +156,60 @@ bool GetUserWhitelist(ListValue* user_list) {
       user_list->Append(user);
     }
 
-    cached_whitelist->Append(Value::CreateStringValue(email));
+    cached_whitelist_update->Append(Value::CreateStringValue(email));
   }
 
   prefs->ScheduleSavePersistentPrefs();
-
   return true;
 }
 
-class UserCrosSettingsTrust : public SignedSettingsHelper::Callback,
-                              public NotificationObserver {
+class UserCrosSettingsTrust : public SignedSettingsHelper::Callback {
  public:
   static UserCrosSettingsTrust* GetInstance() {
     return Singleton<UserCrosSettingsTrust>::get();
   }
 
   // Working horse for UserCrosSettingsProvider::RequestTrusted* family.
-  bool RequestTrustedEntity(const std::string& name, Task* callback) {
-    if (GetOwnershipStatus() == OWNERSHIP_NONE)
+  bool RequestTrustedEntity(const std::string& name) {
+    OwnershipService::Status ownership_status =
+        ownership_service_->GetStatus(false);
+    if (ownership_status == OwnershipService::OWNERSHIP_NONE)
       return true;
-    if (GetOwnershipStatus() == OWNERSHIP_TAKEN) {
+    PrefService* prefs = g_browser_process->local_state();
+    if (prefs->IsManagedPreference(name.c_str()))
+      return true;
+    if (ownership_status == OwnershipService::OWNERSHIP_TAKEN) {
       DCHECK(g_browser_process);
       PrefService* prefs = g_browser_process->local_state();
       DCHECK(prefs);
       if (prefs->GetBoolean((name + kTrustedSuffix).c_str()))
         return true;
     }
-    if (callback)
-      callbacks_[name].push_back(callback);
     return false;
   }
 
+  bool RequestTrustedEntity(const std::string& name, Task* callback) {
+    if (RequestTrustedEntity(name)) {
+      delete callback;
+      return true;
+    } else {
+      if (callback)
+        callbacks_[name].push_back(callback);
+      return false;
+    }
+  }
+
+  void Reload() {
+    for (size_t i = 0; i < arraysize(kBooleanSettings); ++i)
+      StartFetchingSetting(kBooleanSettings[i]);
+    for (size_t i = 0; i < arraysize(kStringSettings); ++i)
+      StartFetchingSetting(kStringSettings[i]);
+  }
+
   void Set(const std::string& path, Value* in_value) {
+    PrefService* prefs = g_browser_process->local_state();
+    DCHECK(!prefs->IsManagedPreference(path.c_str()));
+
     if (!UserManager::Get()->current_user_is_owner()) {
       LOG(WARNING) << "Changing settings from non-owner, setting=" << path;
 
@@ -189,6 +221,7 @@ class UserCrosSettingsTrust : public SignedSettingsHelper::Callback,
     if (IsControlledBooleanSetting(path)) {
       bool bool_value = false;
       if (in_value->GetAsBoolean(&bool_value)) {
+        OnBooleanPropertyChange(path, bool_value);
         std::string value = bool_value ? kTrueIncantation : kFalseIncantation;
         SignedSettingsHelper::Get()->StartStorePropertyOp(path, value, this);
         UpdateCacheBool(path, bool_value, USE_VALUE_SUPPLIED);
@@ -207,32 +240,14 @@ class UserCrosSettingsTrust : public SignedSettingsHelper::Callback,
   }
 
  private:
-  // Listed in upgrade order.
-  enum OwnershipStatus {
-    OWNERSHIP_UNKNOWN = 0,
-    OWNERSHIP_NONE,
-    OWNERSHIP_TAKEN
-  };
-
-  // Used to discriminate different sources of ownership status info.
-  enum OwnershipSource {
-    SOURCE_FETCH,  // Info comes from FetchOwnershipStatus method.
-    SOURCE_OBSERVE // Info comes from Observe method.
-  };
-
   // upper bound for number of retries to fetch a signed setting.
   static const int kNumRetriesLimit = 9;
 
-  UserCrosSettingsTrust() : ownership_status_(OWNERSHIP_UNKNOWN),
-                            retries_left_(kNumRetriesLimit) {
-    notification_registrar_.Add(this,
-                                NotificationType::OWNERSHIP_TAKEN,
-                                NotificationService::AllSources());
-    // Start getting ownership status.
-    BrowserThread::PostTask(
-        BrowserThread::FILE,
-        FROM_HERE,
-        NewRunnableMethod(this, &UserCrosSettingsTrust::FetchOwnershipStatus));
+  UserCrosSettingsTrust()
+      : ownership_service_(OwnershipService::GetSharedInstance()),
+        retries_left_(kNumRetriesLimit) {
+    // Start prefetching Boolean and String preferences.
+    Reload();
   }
 
   ~UserCrosSettingsTrust() {
@@ -243,41 +258,34 @@ class UserCrosSettingsTrust : public SignedSettingsHelper::Callback,
     }
   }
 
-  void FetchOwnershipStatus() {
-    DCHECK(BrowserThread::CurrentlyOn(BrowserThread::FILE));
-    OwnershipStatus status =
-        OwnershipService::GetSharedInstance()->IsAlreadyOwned() ?
-        OWNERSHIP_TAKEN : OWNERSHIP_NONE;
-    BrowserThread::PostTask(BrowserThread::UI, FROM_HERE,
-        NewRunnableMethod(this, &UserCrosSettingsTrust::SetOwnershipStatus,
-            status, SOURCE_FETCH));
+  // Called right before boolean property is changed.
+  void OnBooleanPropertyChange(const std::string& path, bool new_value) {
+    if (path == kSignedDataRoamingEnabled) {
+      if (!CrosLibrary::Get()->EnsureLoaded())
+        return;
+
+      NetworkLibrary* cros = CrosLibrary::Get()->GetNetworkLibrary();
+      cros->SetCellularDataRoamingAllowed(new_value);
+    }
   }
 
-  void SetOwnershipStatus(OwnershipStatus new_status,
-                          OwnershipSource source) {
-    DCHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
-    DCHECK(new_status == OWNERSHIP_TAKEN || new_status == OWNERSHIP_NONE);
-    if (source == SOURCE_FETCH) {
-      DCHECK(ownership_status_ != OWNERSHIP_NONE);
-      if (ownership_status_ == OWNERSHIP_TAKEN) {
-        // OWNERSHIP_TAKEN notification was observed earlier.
+  // Called right after signed value was checked.
+  void OnBooleanPropertyRetrieve(const std::string& path,
+                                 bool value,
+                                 UseValue use_value) {
+    if (path == kSignedDataRoamingEnabled) {
+      if (!CrosLibrary::Get()->EnsureLoaded())
         return;
+
+      NetworkLibrary* cros = CrosLibrary::Get()->GetNetworkLibrary();
+      const NetworkDevice* cellular = cros->FindCellularDevice();
+      if (cellular) {
+        bool device_value = cellular->data_roaming_allowed();
+        bool new_value = (use_value == USE_VALUE_SUPPLIED) ? value : false;
+        if (device_value != new_value)
+          cros->SetCellularDataRoamingAllowed(new_value);
       }
     }
-    ownership_status_ = new_status;
-    if (source == SOURCE_FETCH) {
-      // Start prefetching Boolean and String preferences.
-      for (size_t i = 0; i < arraysize(kBooleanSettings); ++i)
-        StartFetchingSetting(kBooleanSettings[i]);
-      for (size_t i = 0; i < arraysize(kStringSettings); ++i)
-        StartFetchingSetting(kStringSettings[i]);
-    }
-  }
-
-  // Returns ownership status.
-  // Called on UI thread unlike OwnershipService::IsAlreadyOwned.
-  OwnershipStatus GetOwnershipStatus() {
-    return ownership_status_;
   }
 
   void StartFetchingSetting(const std::string& name) {
@@ -301,22 +309,24 @@ class UserCrosSettingsTrust : public SignedSettingsHelper::Callback,
       NOTREACHED();
       return;
     }
-    DCHECK(GetOwnershipStatus() != OWNERSHIP_UNKNOWN);
 
+    bool is_owned = ownership_service_->GetStatus(true) ==
+        OwnershipService::OWNERSHIP_TAKEN;
     PrefService* prefs = g_browser_process->local_state();
     switch (code) {
       case SignedSettings::SUCCESS:
       case SignedSettings::NOT_FOUND:
       case SignedSettings::KEY_UNAVAILABLE: {
-        bool fallback_to_default = (code == SignedSettings::NOT_FOUND) ||
-            (GetOwnershipStatus() == OWNERSHIP_NONE);
+        bool fallback_to_default = !is_owned
+            || (code == SignedSettings::NOT_FOUND);
         DCHECK(fallback_to_default || code == SignedSettings::SUCCESS);
         if (fallback_to_default)
           VLOG(1) << "Going default for cros setting " << name;
         else
           VLOG(1) << "Retrieved cros setting " << name << "=" << value;
         if (IsControlledBooleanSetting(name)) {
-          // We assume our boolean settings are true before explicitly set.
+          OnBooleanPropertyRetrieve(name, (value == kTrueIncantation),
+              fallback_to_default ? USE_VALUE_DEFAULT : USE_VALUE_SUPPLIED);
           UpdateCacheBool(name, (value == kTrueIncantation),
               fallback_to_default ? USE_VALUE_DEFAULT : USE_VALUE_SUPPLIED);
         } else if (IsControlledStringSetting(name)) {
@@ -328,7 +338,7 @@ class UserCrosSettingsTrust : public SignedSettingsHelper::Callback,
       case SignedSettings::OPERATION_FAILED:
       default: {
         DCHECK(code == SignedSettings::OPERATION_FAILED);
-        DCHECK(GetOwnershipStatus() == OWNERSHIP_TAKEN);
+        DCHECK(is_owned);
         LOG(ERROR) << "On owned device: failed to retrieve cros "
                       "setting, name=" << name;
         if (retries_left_ > 0) {
@@ -340,6 +350,7 @@ class UserCrosSettingsTrust : public SignedSettingsHelper::Callback,
         if (IsControlledBooleanSetting(name)) {
           // For boolean settings we can just set safe (false) values
           // and continue as trusted.
+          OnBooleanPropertyRetrieve(name, false, USE_VALUE_SUPPLIED);
           UpdateCacheBool(name, false, USE_VALUE_SUPPLIED);
         } else {
           prefs->ClearPref((name + kTrustedSuffix).c_str());
@@ -350,7 +361,6 @@ class UserCrosSettingsTrust : public SignedSettingsHelper::Callback,
     }
     prefs->SetBoolean((name + kTrustedSuffix).c_str(), true);
     {
-      DCHECK(GetOwnershipStatus() != OWNERSHIP_UNKNOWN);
       std::vector<Task*>& callbacks_vector = callbacks_[name];
       for (size_t i = 0; i < callbacks_vector.size(); ++i)
         MessageLoop::current()->PostTask(FROM_HERE, callbacks_vector[i]);
@@ -392,23 +402,10 @@ class UserCrosSettingsTrust : public SignedSettingsHelper::Callback,
       CrosSettings::Get()->FireObservers(kAccountsPrefUsers);
   }
 
-  // NotificationObserver implementation.
-  virtual void Observe(NotificationType type,
-                       const NotificationSource& source,
-                       const NotificationDetails& details) {
-    if (type.value == NotificationType::OWNERSHIP_TAKEN) {
-      SetOwnershipStatus(OWNERSHIP_TAKEN, SOURCE_OBSERVE);
-      notification_registrar_.RemoveAll();
-    } else {
-      NOTREACHED();
-    }
-  }
-
   // Pending callbacks that need to be invoked after settings verification.
   base::hash_map< std::string, std::vector< Task* > > callbacks_;
 
-  NotificationRegistrar notification_registrar_;
-  OwnershipStatus ownership_status_;
+  OwnershipService* ownership_service_;
 
   // In order to guard against occasional failure to fetch a property
   // we allow for some number of retries.
@@ -460,9 +457,19 @@ bool UserCrosSettingsProvider::RequestTrustedShowUsersOnSignin(Task* callback) {
       kAccountsPrefShowUserNamesOnSignIn, callback);
 }
 
+bool UserCrosSettingsProvider::RequestTrustedDataRoamingEnabled(
+    Task* callback) {
+  return UserCrosSettingsTrust::GetInstance()->RequestTrustedEntity(
+      kSignedDataRoamingEnabled, callback);
+}
+
 bool UserCrosSettingsProvider::RequestTrustedOwner(Task* callback) {
   return UserCrosSettingsTrust::GetInstance()->RequestTrustedEntity(
       kDeviceOwner, callback);
+}
+
+void UserCrosSettingsProvider::Reload() {
+  UserCrosSettingsTrust::GetInstance()->Reload();
 }
 
 // static
@@ -477,7 +484,15 @@ bool UserCrosSettingsProvider::cached_allow_new_user() {
   // Trigger prefetching if singleton object still does not exist.
   UserCrosSettingsTrust::GetInstance();
   return g_browser_process->local_state()->GetBoolean(
-    kAccountsPrefAllowNewUser);
+      kAccountsPrefAllowNewUser);
+}
+
+// static
+bool UserCrosSettingsProvider::cached_data_roaming_enabled() {
+  // Trigger prefetching if singleton object still does not exist.
+  UserCrosSettingsTrust::GetInstance();
+  return g_browser_process->local_state()->GetBoolean(
+      kSignedDataRoamingEnabled);
 }
 
 // static
@@ -492,14 +507,17 @@ bool UserCrosSettingsProvider::cached_show_users_on_signin() {
 const ListValue* UserCrosSettingsProvider::cached_whitelist() {
   PrefService* prefs = g_browser_process->local_state();
   const ListValue* cached_users = prefs->GetList(kAccountsPrefUsers);
-
-  if (!cached_users) {
-    // Update whitelist cache.
-    GetUserWhitelist(NULL);
-
-    cached_users = prefs->GetList(kAccountsPrefUsers);
+  if (!prefs->IsManagedPreference(kAccountsPrefUsers)) {
+    if (cached_users == NULL) {
+      // Update whitelist cache.
+      GetUserWhitelist(NULL);
+      cached_users = prefs->GetList(kAccountsPrefUsers);
+    }
   }
-
+  if (cached_users == NULL) {
+    NOTREACHED();
+    cached_users = new ListValue;
+  }
   return cached_users;
 }
 
@@ -535,8 +553,10 @@ void UserCrosSettingsProvider::DoSet(const std::string& path,
 bool UserCrosSettingsProvider::Get(const std::string& path,
                                    Value** out_value) const {
   if (IsControlledBooleanSetting(path)) {
+    PrefService* prefs = g_browser_process->local_state();
     *out_value = CreateSettingsBooleanValue(
-        g_browser_process->local_state()->GetBoolean(path.c_str()),
+        prefs->GetBoolean(path.c_str()),
+        prefs->IsManagedPreference(path.c_str()),
         !UserManager::Get()->current_user_is_owner());
     return true;
   } else if (path == kAccountsPrefUsers) {
@@ -550,15 +570,16 @@ bool UserCrosSettingsProvider::Get(const std::string& path,
 }
 
 bool UserCrosSettingsProvider::HandlesSetting(const std::string& path) {
-  return ::StartsWithASCII(path, "cros.accounts.", true);
+  return ::StartsWithASCII(path, "cros.accounts.", true) ||
+      ::StartsWithASCII(path, "cros.signed.", true);
 }
 
 void UserCrosSettingsProvider::WhitelistUser(const std::string& email) {
   SignedSettingsHelper::Get()->StartWhitelistOp(
       email, true, UserCrosSettingsTrust::GetInstance());
   PrefService* prefs = g_browser_process->local_state();
-  ListValue* cached_whitelist = prefs->GetMutableList(kAccountsPrefUsers);
-  cached_whitelist->Append(Value::CreateStringValue(email));
+  ListPrefUpdate cached_whitelist_update(prefs, kAccountsPrefUsers);
+  cached_whitelist_update->Append(Value::CreateStringValue(email));
   prefs->ScheduleSavePersistentPrefs();
 }
 
@@ -567,9 +588,9 @@ void UserCrosSettingsProvider::UnwhitelistUser(const std::string& email) {
       email, false, UserCrosSettingsTrust::GetInstance());
 
   PrefService* prefs = g_browser_process->local_state();
-  ListValue* cached_whitelist = prefs->GetMutableList(kAccountsPrefUsers);
+  ListPrefUpdate cached_whitelist_update(prefs, kAccountsPrefUsers);
   StringValue email_value(email);
-  if (cached_whitelist->Remove(email_value) != -1)
+  if (cached_whitelist_update->Remove(email_value) != -1)
     prefs->ScheduleSavePersistentPrefs();
 }
 

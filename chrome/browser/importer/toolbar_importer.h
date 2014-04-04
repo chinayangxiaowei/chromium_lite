@@ -12,52 +12,49 @@
 #include <string>
 #include <vector>
 
+#include "base/basictypes.h"
+#include "base/compiler_specific.h"
 #include "base/gtest_prod_util.h"
 #include "base/string16.h"
 #include "chrome/browser/importer/importer.h"
-#include "chrome/browser/importer/importer_data_types.h"
+#include "chrome/browser/importer/profile_writer.h"
 #include "chrome/common/net/url_fetcher.h"
 
 class ImporterBridge;
 class XmlReader;
 
-// Currently the only configuration information we need is to check whether or
-// not the user currently has their GAIA cookie.  This is done by the function
-// exposed through the ToolbarImportUtils namespace.
-namespace toolbar_importer_utils {
-bool IsGoogleGAIACookieInstalled();
-}  // namespace toolbar_importer_utils
-
 // Toolbar5Importer is a class which exposes the functionality needed to
 // communicate with the Google Toolbar v5 front-end, negotiate the download of
 // Toolbar bookmarks, parse them, and install them on the client.
-// Toolbar5Importer should not have StartImport called more than once.  Futher
-// if StartImport is called, then the class must not be destroyed until it
-// has either completed or Toolbar5Importer->Cancel() has been called.
+// Toolbar5Importer should not have StartImport called more than once. Futher
+// if StartImport is called, then the class must not be destroyed until it has
+// either completed or Toolbar5Importer->Cancel() has been called.
 class Toolbar5Importer : public URLFetcher::Delegate, public Importer {
  public:
   Toolbar5Importer();
 
-  // Importer view calls this method to begin the process.  The items parameter
-  // should only either be NONE or FAVORITES, since as of right now these are
-  // the only items this importer supports.  This method provides implementation
-  // of Importer::StartImport.
-  virtual void StartImport(const importer::ProfileInfo& profile_info,
-                           uint16 items,
-                           ImporterBridge* bridge);
+  // Begin Importer implementation:
 
-  // Importer view call this method when the user clicks the cancel button
-  // in the ImporterView UI.  We need to post a message to our loop
-  // to cancel network retrieval.
-  virtual void Cancel();
+  // This method is called to begin the import process. |items| should only
+  // either be NONE or FAVORITES, since as of right now these are the only
+  // items this importer supports.
+  virtual void StartImport(const importer::SourceProfile& source_profile,
+                           uint16 items,
+                           ImporterBridge* bridge) OVERRIDE;
+
+  // This method is called when the user clicks the cancel button on the UI
+  // dialog. We need to post a message to our loop to cancel network retrieval.
+  virtual void Cancel() OVERRIDE;
+
+  // End Importer implementation.
 
   // URLFetcher::Delegate method called back from the URLFetcher object.
   virtual void OnURLFetchComplete(const URLFetcher* source,
-                          const GURL& url,
-                          const net::URLRequestStatus& status,
-                          int response_code,
-                          const ResponseCookies& cookies,
-                          const std::string& data);
+                                  const GURL& url,
+                                  const net::URLRequestStatus& status,
+                                  int response_code,
+                                  const ResponseCookies& cookies,
+                                  const std::string& data);
 
  private:
   FRIEND_TEST_ALL_PREFIXES(Toolbar5ImporterTest, BookmarkParse);
@@ -74,7 +71,7 @@ class Toolbar5Importer : public URLFetcher::Delegate, public Importer {
     DONE
   };
 
-  typedef std::vector<std::wstring> BookmarkFolderType;
+  typedef std::vector<string16> BookmarkFolderType;
 
   // URLs for connecting to the toolbar front end are defined below.
   static const char kT5AuthorizationTokenUrl[];
@@ -156,11 +153,10 @@ class Toolbar5Importer : public URLFetcher::Delegate, public Importer {
   void AddBookmarksToChrome(
       const std::vector<ProfileWriter::BookmarkEntry>& bookmarks);
 
-  // Internal state is stored in state_.
   InternalStateEnum state_;
 
-  // Bitmask of Importer::ImportItem is stored in items_to_import_.
-  uint16  items_to_import_;
+  // Bitmask of Importer::ImportItem.
+  uint16 items_to_import_;
 
   // The fetchers need to be available to cancel the network call on user cancel
   // hence they are stored as member variables.

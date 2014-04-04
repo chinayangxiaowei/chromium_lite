@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -65,6 +65,8 @@ bool ExtensionContextMenuFunction::ParseContexts(
       tmp_result.Add(ExtensionMenuItem::VIDEO);
     } else if (value == "audio") {
       tmp_result.Add(ExtensionMenuItem::AUDIO);
+    } else if (value == "frame") {
+      tmp_result.Add(ExtensionMenuItem::FRAME);
     } else {
       error_ = ExtensionErrorUtils::FormatErrorMessage(kInvalidValueError, key);
       return false;
@@ -138,7 +140,10 @@ bool ExtensionContextMenuFunction::ParseURLPatterns(
       return false;
 
     URLPattern pattern(ExtensionMenuManager::kAllowedSchemes);
-    if (URLPattern::PARSE_SUCCESS != pattern.Parse(tmp)) {
+    // TODO(skerner):  Consider enabling strict pattern parsing
+    // if this extension's location indicates that it is under development.
+    if (URLPattern::PARSE_SUCCESS != pattern.Parse(tmp,
+                                                   URLPattern::PARSE_LENIENT)) {
       error_ = ExtensionErrorUtils::FormatErrorMessage(kInvalidURLPatternError,
                                                        tmp);
       return false;

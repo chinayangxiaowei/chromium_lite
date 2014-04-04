@@ -1,4 +1,4 @@
-# Copyright (c) 2010 The Chromium Authors. All rights reserved.
+# Copyright (c) 2011 The Chromium Authors. All rights reserved.
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
@@ -36,7 +36,8 @@
         'image_mac.cc',
         'image_win.cc',
         'image.h',
-        'native_metafile.h',
+        'metafile.h',
+        'metafile_impl.h',
         'page_number.cc',
         'page_number.h',
         'page_overlays.cc',
@@ -45,10 +46,12 @@
         'page_range.h',
         'page_setup.cc',
         'page_setup.h',
-        'pdf_metafile_mac.cc',
-        'pdf_metafile_mac.h',
-        'pdf_ps_metafile_cairo.cc',
-        'pdf_ps_metafile_cairo.h',
+        'pdf_metafile_cairo_linux.cc',
+        'pdf_metafile_cairo_linux.h',
+        'pdf_metafile_cg_mac.cc',
+        'pdf_metafile_cg_mac.h',
+        'pdf_metafile_skia.h',
+        'pdf_metafile_skia.cc',
         'printed_document_cairo.cc',
         'printed_document.cc',
         'printed_document.h',
@@ -66,6 +69,9 @@
         'printing_context_mac.h',
         'printing_context_win.cc',
         'printing_context_win.h',
+        'print_dialog_gtk_interface.h',
+        'print_job_constants.cc',
+        'print_job_constants.h',
         'print_settings.cc',
         'print_settings.h',
         'print_settings_initializer_gtk.cc',
@@ -92,6 +98,10 @@
             'sources/': [['exclude', '_posix\\.cc$']]
         }],
         ['OS=="linux" or OS=="freebsd" or OS=="openbsd"', {
+          'sources': [
+            'metafile_skia_wrapper.cc',
+            'metafile_skia_wrapper.h',
+          ],
           'dependencies': [
             # For FT_Init_FreeType and friends.
             '../build/linux/system.gyp:freetype2',
@@ -99,6 +109,9 @@
             '../build/linux/system.gyp:gtkprint',
           ],
         }],
+        ['OS=="mac"',
+          {'sources/': [['exclude', 'pdf_metafile_skia\\.(cc|h)$']]}
+        ],
         ['OS=="win"', {
           'defines': [
             # PRINT_BACKEND_AVAILABLE disables the default dummy implementation
@@ -136,7 +149,7 @@
                   '-lgcrypt',
                 ],
               },
-            }],              
+            }],
           ],
         }],
       ],
@@ -157,8 +170,8 @@
         'page_overlays_unittest.cc',
         'page_range_unittest.cc',
         'page_setup_unittest.cc',
-        'pdf_metafile_mac_unittest.cc',
-        'pdf_ps_metafile_cairo_unittest.cc',
+        'pdf_metafile_cairo_linux_unittest.cc',
+        'pdf_metafile_cg_mac_unittest.cc',
         'printed_page_unittest.cc',
         'printing_context_win_unittest.cc',
         'run_all_unittests.cc',

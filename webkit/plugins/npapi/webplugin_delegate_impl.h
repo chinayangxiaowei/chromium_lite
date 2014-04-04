@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,15 +8,15 @@
 #include <string>
 #include <list>
 
-#include "base/ref_counted.h"
-#include "base/scoped_ptr.h"
+#include "base/memory/ref_counted.h"
+#include "base/memory/scoped_ptr.h"
 #include "base/task.h"
 #include "base/time.h"
 #include "base/timer.h"
 #include "build/build_config.h"
-#include "gfx/native_widget_types.h"
-#include "gfx/rect.h"
 #include "third_party/npapi/bindings/npapi.h"
+#include "ui/gfx/native_widget_types.h"
+#include "ui/gfx/rect.h"
 #include "webkit/plugins/npapi/webplugin_delegate.h"
 #include "webkit/glue/webcursor.h"
 
@@ -101,7 +101,6 @@ class WebPluginDelegateImpl : public WebPluginDelegate {
   virtual void UpdateGeometry(const gfx::Rect& window_rect,
                               const gfx::Rect& clip_rect);
   virtual void Paint(WebKit::WebCanvas* canvas, const gfx::Rect& rect);
-  virtual void Print(gfx::NativeDrawingContext context);
   virtual void SetFocus(bool focused);
   virtual bool HandleInputEvent(const WebKit::WebInputEvent& event,
                                 WebKit::WebCursorInfo* cursor_info);
@@ -165,10 +164,12 @@ class WebPluginDelegateImpl : public WebPluginDelegate {
   // Informs the plugin that IME composition has completed.
   // If |text| is empty, IME was cancelled.
   void ImeCompositionCompleted(const string16& text);
+#ifndef NP_NO_CARBON
   // Informs the delegate that the plugin set a Carbon ThemeCursor.
   void SetThemeCursor(ThemeCursor cursor);
   // Informs the delegate that the plugin set a Carbon Cursor.
-  void SetCursor(const Cursor* cursor);
+  void SetCarbonCursor(const Cursor* cursor);
+#endif
   // Informs the delegate that the plugin set a Cocoa NSCursor.
   void SetNSCursor(NSCursor* cursor);
 

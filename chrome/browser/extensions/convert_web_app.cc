@@ -13,21 +13,21 @@
 #include "base/file_path.h"
 #include "base/file_util.h"
 #include "base/logging.h"
+#include "base/memory/scoped_temp_dir.h"
 #include "base/path_service.h"
-#include "base/scoped_temp_dir.h"
-#include "base/sha2.h"
 #include "base/stringprintf.h"
 #include "base/time.h"
 #include "base/utf_string_conversions.h"
+#include "crypto/sha2.h"
 #include "chrome/common/chrome_paths.h"
 #include "chrome/common/extensions/extension.h"
 #include "chrome/common/extensions/extension_constants.h"
 #include "chrome/common/extensions/extension_file_util.h"
-#include "chrome/common/json_value_serializer.h"
 #include "chrome/common/web_apps.h"
-#include "gfx/codec/png_codec.h"
+#include "content/common/json_value_serializer.h"
 #include "googleurl/src/gurl.h"
 #include "third_party/skia/include/core/SkBitmap.h"
+#include "ui/gfx/codec/png_codec.h"
 
 namespace keys = extension_manifest_keys;
 
@@ -46,12 +46,12 @@ const char kIconsDirName[] = "icons";
 // auto-updated using ExtensionUpdater. But Chrome does notice updates to the
 // manifest and regenerates these extensions.
 std::string GenerateKey(const GURL& manifest_url) {
-  char raw[base::SHA256_LENGTH] = {0};
+  char raw[crypto::SHA256_LENGTH] = {0};
   std::string key;
-  base::SHA256HashString(manifest_url.spec().c_str(),
-                         raw,
-                         base::SHA256_LENGTH);
-  base::Base64Encode(std::string(raw, base::SHA256_LENGTH), &key);
+  crypto::SHA256HashString(manifest_url.spec().c_str(),
+                           raw,
+                           crypto::SHA256_LENGTH);
+  base::Base64Encode(std::string(raw, crypto::SHA256_LENGTH), &key);
   return key;
 }
 
@@ -168,7 +168,11 @@ scoped_refptr<Extension> ConvertWebAppToExtension(
   // Finally, create the extension object to represent the unpacked directory.
   std::string error;
   scoped_refptr<Extension> extension = Extension::Create(
-      temp_dir.path(), Extension::INTERNAL, *root, false, &error);
+      temp_dir.path(),
+      Extension::INTERNAL,
+      *root,
+      Extension::STRICT_ERROR_CHECKS,
+      &error);
   if (!extension) {
     LOG(ERROR) << error;
     return NULL;

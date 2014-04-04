@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,12 +9,14 @@
 #include <string>
 
 #include "base/basictypes.h"
-#include "base/ref_counted.h"
+#include "base/memory/ref_counted.h"
 #include "base/string16.h"
 #include "googleurl/src/gurl.h"
 #include "third_party/skia/include/core/SkBitmap.h"
 
+class CommandLine;
 class FilePath;
+class PrefService;
 
 #if defined(USE_X11)
 namespace base {
@@ -56,7 +58,7 @@ class ShellIntegration {
     // If |extension_id| is non-empty, this is short cut is to an extension-app
     // and the launch url will be detected at start-up. In this case, |url|
     // is still used to generate the app id (windows app id, not chrome app id).
-    string16 extension_id;
+    std::string extension_id;
     string16 title;
     string16 description;
     SkBitmap favicon;
@@ -71,15 +73,14 @@ class ShellIntegration {
     bool create_in_quick_launch_bar;
   };
 
-  // Re-implementation of chrome_plugin_utill::CPB_GetCommandLineArgumentsCommon
-  // which is deprecated. If |extension_app_id| is non-empty, an arguments
-  // string is created using the kAppId=<id> flag. Otherwise, the kApp=<url> is
-  // used.
-  // NOTE: This function is dangerous, do not use!  You cannot treat
-  // command lines as plain strings as there are metacharacters.
-  // TODO(evanm): remove it.
-  static std::string GetCommandLineArgumentsCommon(const GURL& url,
-      const string16& extension_app_id);
+  // Set up command line arguments for launching a URL or an app.
+  // The new command line reuses the current process's user data directory (and
+  // login profile, for ChromeOS).
+  // If |extension_app_id| is non-empty, the arguments use kAppId=<id>.
+  // Otherwise, kApp=<url> is used.
+  static CommandLine CommandLineArgsForLauncher(
+      const GURL& url,
+      const std::string& extension_app_id);
 
 #if defined(USE_X11)
   // Returns filename of the desktop shortcut used to launch the browser.
@@ -95,8 +96,11 @@ class ShellIntegration {
   // and |title|. The |template_contents| should be contents of .desktop file
   // used to launch Chrome.
   static std::string GetDesktopFileContents(
-      const std::string& template_contents, const GURL& url,
-      const string16& extension_id, const string16& title,
+      const std::string& template_contents,
+      const std::string& app_name,
+      const GURL& url,
+      const std::string& extension_id,
+      const string16& title,
       const std::string& icon_name);
 
   static void CreateDesktopShortcut(const ShortcutInfo& shortcut_info,

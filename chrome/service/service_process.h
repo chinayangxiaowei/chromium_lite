@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,8 +9,8 @@
 #include <string>
 
 #include "base/gtest_prod_util.h"
-#include "base/ref_counted.h"
-#include "base/scoped_ptr.h"
+#include "base/memory/ref_counted.h"
+#include "base/memory/scoped_ptr.h"
 #include "base/threading/thread.h"
 #include "base/synchronization/waitable_event.h"
 #include "chrome/service/cloud_print/cloud_print_proxy.h"
@@ -18,6 +18,9 @@
 
 class ServiceProcessPrefs;
 class ServiceIPCServer;
+class CommandLine;
+class ServiceURLRequestContextGetter;
+class ServiceProcessState;
 
 namespace net {
 class NetworkChangeNotifier;
@@ -34,7 +37,10 @@ class ServiceProcess : public CloudPrintProxy::Client,
   ~ServiceProcess();
 
   // Initialize the ServiceProcess with the message loop that it should run on.
-  bool Initialize(MessageLoop* message_loop, const CommandLine& command_line);
+  // ServiceProcess takes ownership of |state|.
+  bool Initialize(MessageLoopForUI* message_loop,
+                  const CommandLine& command_line,
+                  ServiceProcessState* state);
   bool Teardown();
   // TODO(sanjeevr): Change various parts of the code such as
   // net::ProxyService::CreateSystemProxyConfigService to take in
@@ -86,8 +92,8 @@ class ServiceProcess : public CloudPrintProxy::Client,
   virtual void OnCloudPrintProxyDisabled(bool persist_state);
 
   // ChromotingHostManager::Observer interface.
-  virtual void OnRemotingHostEnabled();
-  virtual void OnRemotingHostDisabled();
+  virtual void OnChromotingHostEnabled();
+  virtual void OnChromotingHostDisabled();
 
 #if defined(ENABLE_REMOTING)
   // Return the reference to the chromoting host only if it has started.
@@ -95,6 +101,8 @@ class ServiceProcess : public CloudPrintProxy::Client,
     return remoting_host_manager_;
   }
 #endif
+
+  ServiceURLRequestContextGetter* GetServiceURLRequestContextGetter();
 
  private:
   // Schedule a call to ShutdownIfNeeded.
@@ -115,6 +123,7 @@ class ServiceProcess : public CloudPrintProxy::Client,
   scoped_ptr<CloudPrintProxy> cloud_print_proxy_;
   scoped_ptr<ServiceProcessPrefs> service_prefs_;
   scoped_ptr<ServiceIPCServer> ipc_server_;
+  scoped_ptr<ServiceProcessState> service_process_state_;
 
   // An event that will be signalled when we shutdown.
   base::WaitableEvent shutdown_event_;
@@ -128,12 +137,18 @@ class ServiceProcess : public CloudPrintProxy::Client,
   // Speficies whether a product update is available.
   bool update_available_;
 
+  scoped_refptr<ServiceURLRequestContextGetter> request_context_getter_;
+
 #if defined(ENABLE_REMOTING)
   scoped_refptr<remoting::ChromotingHostManager> remoting_host_manager_;
 #endif
 
   DISALLOW_COPY_AND_ASSIGN(ServiceProcess);
 };
+
+// Disable refcounting for runnable method because it is really not needed
+// when we post tasks on the main message loop.
+DISABLE_RUNNABLE_METHOD_REFCOUNT(ServiceProcess);
 
 extern ServiceProcess* g_service_process;
 

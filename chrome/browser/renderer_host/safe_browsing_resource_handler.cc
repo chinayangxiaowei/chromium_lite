@@ -5,12 +5,14 @@
 #include "chrome/browser/renderer_host/safe_browsing_resource_handler.h"
 
 #include "base/logging.h"
-#include "chrome/browser/renderer_host/global_request_id.h"
-#include "chrome/browser/renderer_host/resource_dispatcher_host.h"
-#include "chrome/browser/renderer_host/resource_message_filter.h"
-#include "chrome/common/resource_response.h"
-#include "net/base/net_errors.h"
+#include "content/browser/renderer_host/global_request_id.h"
+#include "content/browser/renderer_host/resource_dispatcher_host.h"
+#include "content/browser/renderer_host/resource_message_filter.h"
+#include "content/common/resource_response.h"
 #include "net/base/io_buffer.h"
+#include "net/base/load_flags.h"
+#include "net/base/net_errors.h"
+#include "net/url_request/url_request.h"
 
 // Maximum time in milliseconds to wait for the safe browsing service to
 // verify a URL. After this amount of time the outstanding check will be
@@ -29,6 +31,7 @@ SafeBrowsingResourceHandler::SafeBrowsingResourceHandler(
     ResourceDispatcherHost* resource_dispatcher_host)
     : state_(STATE_NONE),
       defer_state_(DEFERRED_NONE),
+      safe_browsing_result_(SafeBrowsingService::SAFE),
       deferred_request_id_(-1),
       next_handler_(handler),
       render_process_host_id_(render_process_host_id),
@@ -54,6 +57,9 @@ bool SafeBrowsingResourceHandler::OnRequestRedirected(
     bool* defer) {
   CHECK(state_ == STATE_NONE);
   CHECK(defer_state_ == DEFERRED_NONE);
+
+  // Save the redirect urls for possible malware detail reporting later.
+  redirect_urls_.push_back(new_url);
 
   // We need to check the new URL before following the redirect.
   if (CheckUrl(new_url)) {
@@ -85,7 +91,7 @@ void SafeBrowsingResourceHandler::OnCheckUrlTimeout() {
   CHECK(state_ == STATE_CHECKING_URL);
   CHECK(defer_state_ != DEFERRED_NONE);
   safe_browsing_->CancelCheck(this);
-  OnBrowseUrlCheckResult(deferred_url_, SafeBrowsingService::URL_SAFE);
+  OnBrowseUrlCheckResult(deferred_url_, SafeBrowsingService::SAFE);
 }
 
 bool SafeBrowsingResourceHandler::OnWillStart(int request_id,
@@ -145,7 +151,7 @@ void SafeBrowsingResourceHandler::OnBrowseUrlCheckResult(
   safe_browsing_result_ = result;
   state_ = STATE_NONE;
 
-  if (result == SafeBrowsingService::URL_SAFE) {
+  if (result == SafeBrowsingService::SAFE) {
     // Log how much time the safe browsing check cost us.
     base::TimeDelta pause_delta;
     pause_delta = base::TimeTicks::Now() - url_check_start_time_;
@@ -154,7 +160,15 @@ void SafeBrowsingResourceHandler::OnBrowseUrlCheckResult(
     // Continue the request.
     ResumeRequest();
   } else {
-    StartDisplayingBlockingPage(url, result);
+    const net::URLRequest* request = rdh_->GetURLRequest(
+        GlobalRequestID(render_process_host_id_, deferred_request_id_));
+    if (request->load_flags() & net::LOAD_PREFETCH) {
+      // Don't prefetch resources that fail safe browsing, disallow
+      // them.
+      rdh_->CancelRequest(render_process_host_id_, deferred_request_id_, false);
+    } else {
+      StartDisplayingBlockingPage(url, result);
+    }
   }
 
   Release();  // Balances the AddRef() in CheckingUrl().
@@ -180,8 +194,8 @@ void SafeBrowsingResourceHandler::StartDisplayingBlockingPage(
     original_url = url;
 
   safe_browsing_->DisplayBlockingPage(
-      url, original_url, resource_type_, result, this, render_process_host_id_,
-      render_view_id_);
+      url, original_url, redirect_urls_, resource_type_,
+      result, this, render_process_host_id_, render_view_id_);
 }
 
 // SafeBrowsingService::Client implementation, called on the IO thread when
@@ -191,8 +205,14 @@ void SafeBrowsingResourceHandler::OnBlockingPageComplete(bool proceed) {
   state_ = STATE_NONE;
 
   if (proceed) {
-    safe_browsing_result_ = SafeBrowsingService::URL_SAFE;
-    ResumeRequest();
+    safe_browsing_result_ = SafeBrowsingService::SAFE;
+    net::URLRequest* request = rdh_->GetURLRequest(
+        GlobalRequestID(render_process_host_id_, deferred_request_id_));
+
+    // The request could be canceled by renderer at this stage.
+    // As a result, click proceed will do nothing (crbug.com/76460).
+    if (request)
+      ResumeRequest();
   } else {
     rdh_->CancelRequest(render_process_host_id_, deferred_request_id_, false);
   }
@@ -215,7 +235,7 @@ bool SafeBrowsingResourceHandler::CheckUrl(const GURL& url) {
   CHECK(state_ == STATE_NONE);
   bool succeeded_synchronously = safe_browsing_->CheckBrowseUrl(url, this);
   if (succeeded_synchronously) {
-    safe_browsing_result_ = SafeBrowsingService::URL_SAFE;
+    safe_browsing_result_ = SafeBrowsingService::SAFE;
     safe_browsing_->LogPauseDelay(base::TimeDelta());  // No delay.
     return true;
   }

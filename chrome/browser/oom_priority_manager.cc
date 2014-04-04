@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,13 +10,13 @@
 #include "base/process_util.h"
 #include "base/threading/thread.h"
 #include "build/build_config.h"
-#include "chrome/browser/browser_list.h"
-#include "chrome/browser/browser_thread.h"
-#include "chrome/browser/renderer_host/render_process_host.h"
-#include "chrome/browser/tab_contents/tab_contents.h"
 #include "chrome/browser/tabs/tab_strip_model.h"
+#include "chrome/browser/ui/browser_list.h"
 #include "chrome/browser/ui/tab_contents/tab_contents_wrapper.h"
-#include "chrome/browser/zygote_host_linux.h"
+#include "content/browser/browser_thread.h"
+#include "content/browser/renderer_host/render_process_host.h"
+#include "content/browser/tab_contents/tab_contents.h"
+#include "content/browser/zygote_host_linux.h"
 
 #if !defined(OS_CHROMEOS)
 #error This file only meant to be compiled on ChromeOS

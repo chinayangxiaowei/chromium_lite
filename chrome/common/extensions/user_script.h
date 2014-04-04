@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -29,9 +29,9 @@ class UserScript {
   // The bitmask for valid user script injectable schemes used by URLPattern.
   static const int kValidUserScriptSchemes;
 
-  // Check if a file or URL has the user script file extension.
-  static bool HasUserScriptFileExtension(const GURL& url);
-  static bool HasUserScriptFileExtension(const FilePath& path);
+  // Check if a URL should be treated as a user script and converted to an
+  // extension.
+  static bool IsURLUserScript(const GURL& url, const std::string& mime_type);
 
   // Locations that user scripts can be run inside the document.
   enum RunLocation {
@@ -152,7 +152,6 @@ class UserScript {
   // against.
   const PatternList& url_patterns() const { return url_patterns_; }
   void add_url_pattern(const URLPattern& pattern);
-  void clear_url_patterns();
 
   // List of js scripts for this user script
   FileList& js_scripts() { return js_scripts_; }
@@ -167,9 +166,6 @@ class UserScript {
 
   bool is_incognito_enabled() const { return incognito_enabled_; }
   void set_incognito_enabled(bool enabled) { incognito_enabled_ = enabled; }
-
-  bool allow_file_access() const { return allow_file_access_; }
-  void set_allow_file_access(bool allowed) { allow_file_access_ = allowed; }
 
   bool is_standalone() const { return extension_id_.empty(); }
 
@@ -233,9 +229,6 @@ class UserScript {
 
   // True if the script should be injected into an incognito tab.
   bool incognito_enabled_;
-
-  // True if the user agreed to allow this script access to file URLs.
-  bool allow_file_access_;
 };
 
 typedef std::vector<UserScript> UserScriptList;

@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,6 +8,7 @@
 
 #include "base/json/json_reader.h"
 #include "base/logging.h"
+#include "base/test/test_timeouts.h"
 #include "base/threading/platform_thread.h"
 #include "base/time.h"
 #include "chrome/common/automation_constants.h"
@@ -16,7 +17,7 @@
 #include "chrome/test/automation/automation_proxy.h"
 #include "chrome/test/automation/tab_proxy.h"
 #include "chrome/test/automation/window_proxy.h"
-#include "gfx/point.h"
+#include "ui/gfx/point.h"
 
 using base::TimeDelta;
 using base::TimeTicks;
@@ -576,14 +577,18 @@ bool BrowserProxy::WaitForPopupMenuToOpen() {
 }
 
 bool BrowserProxy::SendJSONRequest(const std::string& request,
+                                   int timeout_ms,
                                    std::string* response) {
   if (!is_valid())
     return false;
 
   bool result = false;
-  return sender_->Send(new AutomationMsg_SendJSONRequest(handle_,
-                                                         request, response,
-                                                         &result));
+  if (!sender_->Send(new AutomationMsg_SendJSONRequest(handle_,
+                                                       request,
+                                                       response,
+                                                       &result),
+                                                       timeout_ms))
+    return false;
   return result;
 }
 
@@ -595,7 +600,9 @@ bool BrowserProxy::GetInitialLoadTimes(float* min_start_time,
 
   *max_stop_time = 0;
   *min_start_time = -1;
-  if (!SendJSONRequest(kJSONCommand, &json_response)) {
+  if (!SendJSONRequest(kJSONCommand,
+                       TestTimeouts::action_max_timeout_ms(),
+                       &json_response)) {
     // Older browser versions do not support GetInitialLoadTimes.
     // Fail gracefully and do not record them in this case.
     return false;
@@ -628,11 +635,11 @@ bool BrowserProxy::GetInitialLoadTimes(float* min_start_time,
     tab_dict = static_cast<DictionaryValue*>(tab_value);
 
     double temp;
-    if (!tab_dict->GetReal("load_start_ms", &temp))
+    if (!tab_dict->GetDouble("load_start_ms", &temp))
       return false;
     start_ms = static_cast<float>(temp);
     // load_stop_ms can only be null if WaitForInitialLoads did not run.
-    if (!tab_dict->GetReal("load_stop_ms", &temp))
+    if (!tab_dict->GetDouble("load_stop_ms", &temp))
       return false;
     stop_ms = static_cast<float>(temp);
 

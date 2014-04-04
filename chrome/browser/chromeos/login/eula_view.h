@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,11 +6,11 @@
 #define CHROME_BROWSER_CHROMEOS_LOGIN_EULA_VIEW_H_
 #pragma once
 
-#include "base/scoped_ptr.h"
+#include "base/memory/ref_counted.h"
 #include "chrome/browser/chromeos/login/message_bubble.h"
 #include "chrome/browser/chromeos/login/view_screen.h"
-#include "chrome/browser/tab_contents/tab_contents_delegate.h"
-#include "gfx/native_widget_types.h"
+#include "content/browser/tab_contents/tab_contents_delegate.h"
+#include "ui/gfx/native_widget_types.h"
 #include "views/controls/button/button.h"
 #include "views/controls/link.h"
 #include "views/view.h"
@@ -56,7 +56,6 @@ class EULATabContentsDelegate : public TabContentsDelegate {
   virtual void LoadingStateChanged(TabContents* source) {}
   virtual void CloseContents(TabContents* source) {}
   virtual bool IsPopup(TabContents* source) { return false; }
-  virtual void URLStarredChanged(TabContents* source, bool starred) {}
   virtual void UpdateTargetURL(TabContents* source, const GURL& url) {}
   virtual bool ShouldAddNavigationToHistory(
       const history::HistoryAddPageArgs& add_page_args,
@@ -64,7 +63,6 @@ class EULATabContentsDelegate : public TabContentsDelegate {
     return false;
   }
   virtual void MoveContents(TabContents* source, const gfx::Rect& pos) {}
-  virtual void ToolbarSizeChanged(TabContents* source, bool is_animating) {}
   virtual bool HandleContextMenu(const ContextMenuParams& params) {
     return true;
   }
@@ -110,18 +108,16 @@ class EulaView
                                       unsigned changed_flags);
   virtual void HandleKeyboardEvent(const NativeWebKeyboardEvent& event);
 
-  // Returns corresponding native window.
-  gfx::NativeWindow GetNativeWindow() const;
-
   // Loads specified URL to the specified DOMView and updates specified
   // label with its title.
   void LoadEulaView(DOMView* eula_view,
                     views::Label* eula_label,
                     const GURL& eula_url);
 
-  // Overridden from views::InfoBubbleDelegate.
-  virtual void InfoBubbleClosing(InfoBubble* info_bubble,
-                                 bool closed_by_escape) { bubble_ = NULL; }
+  // Overridden from views::BubbleDelegate.
+  virtual void BubbleClosing(Bubble* bubble, bool closed_by_escape) {
+    bubble_ = NULL;
+  }
   virtual bool CloseOnEscape() { return true; }
   virtual bool FadeInOnShow() { return false; }
   virtual void OnHelpLinkActivated() {}
@@ -143,7 +139,7 @@ class EulaView
   GURL oem_eula_page_;
 
   // Help application used for help dialogs.
-  scoped_ptr<HelpAppLauncher> help_app_;
+  scoped_refptr<HelpAppLauncher> help_app_;
 
   // Pointer to shown message bubble. We don't need to delete it because
   // it will be deleted on bubble closing.

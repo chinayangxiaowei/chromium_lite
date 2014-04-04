@@ -4,8 +4,8 @@
 
 #include "base/file_path.h"
 #include "base/logging.h"
-#include "base/ref_counted.h"
-#include "base/scoped_ptr.h"
+#include "base/memory/ref_counted.h"
+#include "base/memory/scoped_ptr.h"
 #include "base/values.h"
 #include "chrome/common/extensions/extension.h"
 #include "chrome/common/extensions/extension_set.h"
@@ -36,11 +36,10 @@ scoped_refptr<Extension> CreateTestExtension(const std::string& name,
     urls->Append(Value::CreateStringValue(extent));
   }
 
-  const bool kRequireKey = false;
   std::string error;
   scoped_refptr<Extension> extension(
-      Extension::Create(path, Extension::INTERNAL, manifest, kRequireKey,
-                        &error));
+      Extension::Create(path, Extension::INTERNAL, manifest,
+                        Extension::STRICT_ERROR_CHECKS, &error));
   EXPECT_TRUE(extension.get()) << error;
   return extension;
 }

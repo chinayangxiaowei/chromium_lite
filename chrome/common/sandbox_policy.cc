@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,7 +6,6 @@
 
 #include <string>
 
-#include "app/win/win_util.h"
 #include "base/command_line.h"
 #include "base/debug/debugger.h"
 #include "base/debug/trace_event.h"
@@ -18,11 +17,11 @@
 #include "base/string_number_conversions.h"
 #include "base/string_util.h"
 #include "base/win/windows_version.h"
-#include "chrome/common/child_process_info.h"
 #include "chrome/common/chrome_constants.h"
 #include "chrome/common/chrome_paths.h"
 #include "chrome/common/chrome_switches.h"
-#include "chrome/common/debug_flags.h"
+#include "content/common/child_process_info.h"
+#include "content/common/debug_flags.h"
 #include "sandbox/src/sandbox.h"
 
 static sandbox::BrokerServices* g_broker_services = NULL;
@@ -30,16 +29,18 @@ static sandbox::BrokerServices* g_broker_services = NULL;
 namespace {
 
 // The DLLs listed here are known (or under strong suspicion) of causing crashes
-// when they are loaded in the renderer.
+// when they are loaded in the renderer. Note: at runtime we generate short
+// versions of the dll name only if the dll has an extension.
 const wchar_t* const kTroublesomeDlls[] = {
   L"adialhk.dll",                 // Kaspersky Internet Security.
   L"acpiz.dll",                   // Unknown.
   L"avgrsstx.dll",                // AVG 8.
-  L"BabylonChromePI.dll",         // Babylon translator.
+  L"babylonchromepi.dll",         // Babylon translator.
   L"btkeyind.dll",                // Widcomm Bluetooth.
   L"cmcsyshk.dll",                // CMC Internet Security.
+  L"cooliris.dll",                // CoolIris.
   L"dockshellhook.dll",           // Stardock Objectdock.
-  L"GoogleDesktopNetwork3.DLL",   // Google Desktop Search v5.
+  L"googledesktopnetwork3.dll",   // Google Desktop Search v5.
   L"fwhook.dll",                  // PC Tools Firewall Plus.
   L"hookprocesscreation.dll",     // Blumentals Program protector.
   L"hookterminateapis.dll",       // Blumentals and Cyberprinter.
@@ -59,13 +60,17 @@ const wchar_t* const kTroublesomeDlls[] = {
   L"oawatch.dll",                 // Online Armor.
   L"pavhook.dll",                 // Panda Internet Security.
   L"pavshook.dll",                // Panda Antivirus.
+  L"pavshookwow.dll",             // Panda Antivirus.
   L"pctavhook.dll",               // PC Tools Antivirus.
   L"pctgmhk.dll",                 // PC Tools Spyware Doctor.
   L"prntrack.dll",                // Pharos Systems.
   L"radhslib.dll",                // Radiant Naomi Internet Filter.
   L"radprlib.dll",                // Radiant Naomi Internet Filter.
+  L"rapportnikko.dll",            // Trustware Rapport.
   L"rlhook.dll",                  // Trustware Bufferzone.
+  L"rooksdol.dll",                // Trustware Rapport.
   L"rpchromebrowserrecordhelper.dll",  // RealPlayer.
+  L"rpmainbrowserrecordplugin.dll",    // RealPlayer.
   L"r3hook.dll",                  // Kaspersky Internet Security.
   L"sahook.dll",                  // McAfee Site Advisor.
   L"sbrige.dll",                  // Unknown.
@@ -77,7 +82,7 @@ const wchar_t* const kTroublesomeDlls[] = {
   L"syncor11.dll",                // SynthCore Midi interface.
   L"systools.dll",                // Panda Antivirus.
   L"tfwah.dll",                   // Threatfire (PC tools).
-  L"YCWebCameraSource.ax",        // Cyberlink Camera helper.
+  L"ycwebcamerasource.ax",        // Cyberlink Camera helper.
   L"wblind.dll",                  // Stardock Object desktop.
   L"wbhelp.dll",                  // Stardock Object desktop.
   L"winstylerthemehelper.dll"     // Tuneup utilities 2006.
@@ -167,18 +172,58 @@ bool AddKeyAndSubkeys(std::wstring key,
   return true;
 }
 
+// Compares the loaded |module| file name matches |module_name|.
+bool IsExpandedModuleName(HMODULE module, const wchar_t* module_name) {
+  wchar_t path[MAX_PATH];
+  DWORD sz = ::GetModuleFileNameW(module, path, arraysize(path));
+  if ((sz == arraysize(path)) || (sz == 0)) {
+    // XP does not set the last error properly, so we bail out anyway.
+    return false;
+  }
+  if (!::GetLongPathName(path, path, arraysize(path)))
+    return false;
+  FilePath fname(path);
+  return (fname.BaseName().value() == module_name);
+}
+
+// Adds a single dll by |module_name| into the |policy| blacklist.
+// To minimize the list we only add an unload policy only if the dll is
+// also loaded in this process. All the injected dlls of interest do this.
+void BlacklistAddOneDll(const wchar_t* module_name,
+                        sandbox::TargetPolicy* policy) {
+  HMODULE module = ::GetModuleHandleW(module_name);
+  if (!module) {
+    // The module could have been loaded with a 8.3 short name. We use
+    // the most common case: 'thelongname.dll' becomes 'thelon~1.dll'.
+    std::wstring name(module_name);
+    size_t period = name.rfind(L'.');
+    DCHECK_NE(std::string::npos, period);
+    DCHECK_LE(3U, (name.size() - period));
+    if (period <= 8)
+      return;
+    std::wstring alt_name = name.substr(0, 6) + L"~1";
+    alt_name += name.substr(period, name.size());
+    module = ::GetModuleHandleW(alt_name.c_str());
+    if (!module)
+      return;
+    // We found it, but because it only has 6 significant letters, we
+    // want to make sure it is the right one.
+    if (!IsExpandedModuleName(module, module_name))
+      return;
+    // Found a match. We add both forms to the policy.
+    policy->AddDllToUnload(alt_name.c_str());
+  }
+  policy->AddDllToUnload(module_name);
+  VLOG(1) << "dll to unload found: " << module_name;
+  return;
+}
+
 // Adds policy rules for unloaded the known dlls that cause chrome to crash.
 // Eviction of injected DLLs is done by the sandbox so that the injected module
 // does not get a chance to execute any code.
 void AddDllEvictionPolicy(sandbox::TargetPolicy* policy) {
-  for (int ix = 0; ix != arraysize(kTroublesomeDlls); ++ix) {
-    // To minimize the list we only add an unload policy if the dll is also
-    // loaded in this process. All the injected dlls of interest do this.
-    if (::GetModuleHandleW(kTroublesomeDlls[ix])) {
-      VLOG(1) << "dll to unload found: " << kTroublesomeDlls[ix];
-      policy->AddDllToUnload(kTroublesomeDlls[ix]);
-    }
-  }
+  for (int ix = 0; ix != arraysize(kTroublesomeDlls); ++ix)
+    BlacklistAddOneDll(kTroublesomeDlls[ix], policy);
 }
 
 // Adds the generic policy rules to a sandbox TargetPolicy.
@@ -464,6 +509,28 @@ bool AddPolicyForPlugin(CommandLine* cmd_line,
   return false;
 }
 
+// For the GPU process we gotten as far as USER_LIMITED. The next level
+// which is USER_RESTRICTED breaks both the DirectX backend and the OpenGL
+// backend. Note that the GPU process is connected to the interactive
+// desktop.
+// TODO(cpu): Lock down the sandbox more if possible.
+// TODO(apatrick): Use D3D9Ex to render windowless.
+bool AddPolicyForGPU(CommandLine*, sandbox::TargetPolicy* policy) {
+  policy->SetJobLevel(sandbox::JOB_UNPROTECTED, 0);
+
+  if (base::win::GetVersion() > base::win::VERSION_XP) {
+    policy->SetTokenLevel(sandbox::USER_RESTRICTED_SAME_ACCESS,
+                          sandbox::USER_LIMITED);
+    policy->SetDelayedIntegrityLevel(sandbox::INTEGRITY_LEVEL_LOW);
+  } else {
+    policy->SetTokenLevel(sandbox::USER_UNPROTECTED,
+                          sandbox::USER_LIMITED);
+  }
+
+  AddDllEvictionPolicy(policy);
+  return true;
+}
+
 void AddPolicyForRenderer(sandbox::TargetPolicy* policy,
                           bool* on_sandbox_desktop) {
   policy->SetJobLevel(sandbox::JOB_LOCKDOWN, 0);
@@ -537,11 +604,10 @@ base::ProcessHandle StartProcessWithAccess(CommandLine* cmd_line,
   TRACE_EVENT_BEGIN("StartProcessWithAccess", 0, type_str);
 
   // To decide if the process is going to be sandboxed we have two cases.
-  // First case: all process types except the nacl broker, gpu process and
-  // the plugin process are sandboxed by default.
+  // First case: all process types except the nacl broker, and the plugin
+  // process are sandboxed by default.
   bool in_sandbox =
       (type != ChildProcessInfo::NACL_BROKER_PROCESS) &&
-      (type != ChildProcessInfo::GPU_PROCESS) &&
       (type != ChildProcessInfo::PLUGIN_PROCESS);
 
   // Second case: If it is the plugin process then it depends on it being
@@ -552,6 +618,14 @@ base::ProcessHandle StartProcessWithAccess(CommandLine* cmd_line,
           (IsBuiltInFlash(cmd_line, NULL) &&
            (base::win::GetVersion() > base::win::VERSION_XP) &&
            !browser_command_line.HasSwitch(switches::kDisableFlashSandbox));
+  }
+
+  // Third case: If it is the GPU process then it can be disabled by a
+  // command line flag.
+  if ((type == ChildProcessInfo::GPU_PROCESS) &&
+      (browser_command_line.HasSwitch(switches::kDisableGpuSandbox))) {
+    in_sandbox = false;
+    VLOG(1) << "GPU sandbox is disabled";
   }
 
   if (browser_command_line.HasSwitch(switches::kNoSandbox)) {
@@ -600,6 +674,9 @@ base::ProcessHandle StartProcessWithAccess(CommandLine* cmd_line,
   if (type == ChildProcessInfo::PLUGIN_PROCESS) {
     if (!AddPolicyForPlugin(cmd_line, policy))
       return 0;
+  } else if (type == ChildProcessInfo::GPU_PROCESS) {
+    if (!AddPolicyForGPU(cmd_line, policy))
+      return 0;
   } else {
     AddPolicyForRenderer(policy, &on_sandbox_desktop);
 
@@ -614,14 +691,14 @@ base::ProcessHandle StartProcessWithAccess(CommandLine* cmd_line,
   if (!exposed_dir.empty()) {
     result = policy->AddRule(sandbox::TargetPolicy::SUBSYS_FILES,
                              sandbox::TargetPolicy::FILES_ALLOW_ANY,
-                             exposed_dir.ToWStringHack().c_str());
+                             exposed_dir.value().c_str());
     if (result != sandbox::SBOX_ALL_OK)
       return 0;
 
     FilePath exposed_files = exposed_dir.AppendASCII("*");
     result = policy->AddRule(sandbox::TargetPolicy::SUBSYS_FILES,
                              sandbox::TargetPolicy::FILES_ALLOW_ANY,
-                             exposed_files.ToWStringHack().c_str());
+                             exposed_files.value().c_str());
     if (result != sandbox::SBOX_ALL_OK)
       return 0;
   }

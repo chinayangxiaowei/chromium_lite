@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -30,9 +30,9 @@ class BookmarkNode;
   scoped_nsobject<NSImage> arrowImage_;
 }
 
-@property (nonatomic, readwrite, assign) const BookmarkNode* bookmarkNode;
-@property (nonatomic, readwrite, assign) int startingChildIndex;
-@property (nonatomic, readwrite, assign) BOOL drawFolderArrow;
+@property(nonatomic, readwrite, assign) const BookmarkNode* bookmarkNode;
+@property(nonatomic, readwrite, assign) int startingChildIndex;
+@property(nonatomic, readwrite, assign) BOOL drawFolderArrow;
 
 // Create a button cell which draws with a theme.
 + (id)buttonCellForNode:(const BookmarkNode*)node
@@ -59,6 +59,8 @@ class BookmarkNode;
 
 // Set the color of text in this cell.
 - (void)setTextColor:(NSColor*)color;
+
+- (BOOL)isFolderButtonCell;
 
 @end
 

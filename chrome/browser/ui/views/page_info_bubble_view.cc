@@ -5,21 +5,22 @@
 #include "chrome/browser/ui/views/page_info_bubble_view.h"
 
 #include "base/utf_string_conversions.h"
-#include "chrome/browser/browser_list.h"
-#include "chrome/browser/cert_store.h"
-#include "chrome/browser/certificate_viewer.h"
 #include "chrome/browser/google/google_util.h"
+#include "chrome/browser/ui/browser_list.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
-#include "chrome/browser/ui/views/info_bubble.h"
+#include "chrome/browser/ui/views/bubble/bubble.h"
 #include "chrome/browser/ui/views/toolbar_view.h"
 #include "chrome/common/url_constants.h"
+#include "content/browser/cert_store.h"
+#include "content/browser/certificate_viewer.h"
 #include "grit/generated_resources.h"
 #include "grit/locale_settings.h"
 #include "ui/base/l10n/l10n_util.h"
+#include "ui/gfx/image.h"
 #include "views/controls/image_view.h"
 #include "views/controls/label.h"
 #include "views/controls/separator.h"
-#include "views/grid_layout.h"
+#include "views/layout/grid_layout.h"
 #include "views/widget/widget.h"
 #include "views/window/window.h"
 
@@ -81,6 +82,8 @@ class Section : public views::View,
 ////////////////////////////////////////////////////////////////////////////////
 // PageInfoBubbleView
 
+Bubble* PageInfoBubbleView::bubble_ = NULL;
+
 PageInfoBubbleView::PageInfoBubbleView(gfx::NativeWindow parent_window,
                                        Profile* profile,
                                        const GURL& url,
@@ -90,16 +93,17 @@ PageInfoBubbleView::PageInfoBubbleView(gfx::NativeWindow parent_window,
                                             show_history, this)),
       parent_window_(parent_window),
       cert_id_(ssl.cert_id()),
-      info_bubble_(NULL),
       help_center_link_(NULL),
       ALLOW_THIS_IN_INITIALIZER_LIST(resize_animation_(this)),
       animation_start_height_(0) {
+  if (bubble_)
+    bubble_->Close();
   if (cert_id_ > 0) {
     scoped_refptr<net::X509Certificate> cert;
     CertStore::GetInstance()->RetrieveCert(cert_id_, &cert);
-    // When running with fake certificate (Chrome Frame) or Gears in offline
-    // mode, we have no os certificate, so there is no cert to show. Don't
-    // bother showing the cert info link in that case.
+    // When running with fake certificate (Chrome Frame), we have no os
+    // certificate, so there is no cert to show. Don't bother showing the cert
+    // info link in that case.
     if (!cert.get() || !cert->os_cert_handle())
       cert_id_ = 0;
   }
@@ -142,7 +146,7 @@ void PageInfoBubbleView::LayoutSections() {
   for (int i = 0; i < count; ++i) {
     PageInfoModel::SectionInfo info = model_.GetSectionInfo(i);
     layout->StartRow(0, 0);
-    const SkBitmap* icon = model_.GetIconImage(info.icon_id);
+    const SkBitmap* icon = *model_.GetIconImage(info.icon_id);
     layout->AddView(new Section(this, info, icon, cert_id_ > 0));
 
     // Add separator after all sections.
@@ -168,7 +172,7 @@ gfx::Size PageInfoBubbleView::GetPreferredSize() {
   int count = model_.GetSectionCount();
   for (int i = 0; i < count; ++i) {
     PageInfoModel::SectionInfo info = model_.GetSectionInfo(i);
-    const SkBitmap* icon = model_.GetIconImage(info.icon_id);
+    const SkBitmap* icon = *model_.GetIconImage(info.icon_id);
     Section section(this, info, icon, cert_id_ > 0);
     size.Enlarge(0, section.GetHeightForWidth(size.width()));
   }
@@ -206,7 +210,29 @@ void PageInfoBubbleView::ModelChanged() {
   resize_animation_.Show();
 }
 
+void PageInfoBubbleView::BubbleClosing(Bubble* bubble, bool closed_by_escape) {
+  resize_animation_.Reset();
+  bubble_ = NULL;
+}
+
+bool PageInfoBubbleView::CloseOnEscape() {
+  return true;
+}
+
+bool PageInfoBubbleView::FadeInOnShow() {
+  return false;
+}
+
+std::wstring PageInfoBubbleView::accessible_name() {
+  return L"PageInfoBubble";
+}
+
 void PageInfoBubbleView::LinkActivated(views::Link* source, int event_flags) {
+  // We want to make sure the info bubble closes once the link is activated.  So
+  // we close it explicitly rather than relying on a side-effect of opening a
+  // new tab (see http://crosbug.com/10186).
+  bubble_->Close();
+
   GURL url = google_util::AppendGoogleLocaleParam(
       GURL(chrome::kPageInfoHelpCenterURL));
   Browser* browser = BrowserList::GetLastActive();
@@ -214,11 +240,11 @@ void PageInfoBubbleView::LinkActivated(views::Link* source, int event_flags) {
 }
 
 void PageInfoBubbleView::AnimationEnded(const ui::Animation* animation) {
-  info_bubble_->SizeToContents();
+  bubble_->SizeToContents();
 }
 
 void PageInfoBubbleView::AnimationProgressed(const ui::Animation* animation) {
-  info_bubble_->SizeToContents();
+  bubble_->SizeToContents();
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -342,14 +368,14 @@ void ShowPageInfoBubble(gfx::NativeWindow parent,
   bounds.set_origin(point);
   bounds.set_width(kIconHorizontalOffset);
 
-  // Show the bubble.
+  // Show the bubble. If the bubble already exist - it will be closed first.
   PageInfoBubbleView* page_info_bubble =
       new PageInfoBubbleView(parent, profile, url, ssl, show_history);
-  InfoBubble* info_bubble =
-      InfoBubble::Show(browser_view->GetWidget(), bounds,
-                       BubbleBorder::TOP_LEFT,
-                       page_info_bubble, page_info_bubble);
-  page_info_bubble->set_info_bubble(info_bubble);
+  Bubble* bubble =
+      Bubble::Show(browser_view->GetWidget(), bounds,
+                   BubbleBorder::TOP_LEFT,
+                   page_info_bubble, page_info_bubble);
+  page_info_bubble->set_bubble(bubble);
 }
 
 }

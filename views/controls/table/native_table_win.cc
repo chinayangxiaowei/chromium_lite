@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,14 +8,14 @@
 #include <windowsx.h>
 
 #include "base/logging.h"
-#include "gfx/canvas_skia.h"
-#include "gfx/favicon_size.h"
-#include "gfx/icon_util.h"
 #include "skia/ext/skia_utils_win.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/l10n/l10n_util_win.h"
 #include "ui/base/models/table_model.h"
 #include "ui/base/win/hwnd_util.h"
+#include "ui/gfx/canvas_skia.h"
+#include "ui/gfx/favicon_size.h"
+#include "ui/gfx/icon_util.h"
 #include "views/controls/table/table_view2.h"
 #include "views/controls/table/table_view_observer.h"
 #include "views/widget/widget.h"
@@ -104,7 +104,7 @@ View* NativeTableWin::GetView() {
 
 void NativeTableWin::SetFocus() {
   // Focus the associated HWND.
-  Focus();
+  OnFocus();
 }
 
 gfx::NativeView NativeTableWin::GetTestingHandle() const {
@@ -367,6 +367,7 @@ void NativeTableWin::CreateNativeControl() {
                                0, 0, width(), height(),
                                table_->GetWidget()->GetNativeView(),
                                NULL, NULL, NULL);
+  ui::CheckWindowCreated(hwnd);
 
   // Reduce overdraw/flicker artifacts by double buffering.  Support tooltips
   // and display elided items completely on hover (see comments in OnNotify()
@@ -537,7 +538,7 @@ LRESULT NativeTableWin::OnCustomDraw(NMLVCUSTOMDRAW* draw_info) {
               // view when they are 16x16 so we get an extra pixel of padding).
               canvas.DrawBitmapInt(image, 0, 0,
                                    image.width(), image.height(),
-                                   1, 1, kFavIconSize, kFavIconSize, true);
+                                   1, 1, kFaviconSize, kFaviconSize, true);
 
               // Only paint the visible region of the icon.
               RECT to_draw = { intersection.left - icon_rect.left,

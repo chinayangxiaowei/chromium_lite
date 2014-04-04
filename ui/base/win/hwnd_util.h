@@ -40,9 +40,9 @@ void CenterAndSizeWindow(HWND parent,
                          const gfx::Size& pref,
                          bool pref_is_client);
 
-// Returns true if we are on Windows Vista or greater and composition is
-// enabled.
-bool ShouldUseVistaFrame();
+// If |hwnd| is NULL logs various thing and CHECKs. Invoke right after calling
+// CreateWindow.
+void CheckWindowCreated(HWND hwnd);
 
 }  // namespace ui
 

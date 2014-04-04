@@ -2,8 +2,13 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include <utility>
+
+#include "base/basictypes.h"
 #include "chrome/installer/util/channel_info.h"
 #include "testing/gtest/include/gtest/gtest.h"
+
+using installer::ChannelInfo;
 
 namespace {
 
@@ -14,7 +19,7 @@ const std::wstring kChannelDev(L"dev");
 }  // namespace
 
 TEST(ChannelInfoTest, Channels) {
-  installer::ChannelInfo ci;
+  ChannelInfo ci;
   std::wstring channel;
 
   ci.set_value(L"");
@@ -55,7 +60,7 @@ TEST(ChannelInfoTest, Channels) {
 }
 
 TEST(ChannelInfoTest, CEEE) {
-  installer::ChannelInfo ci;
+  ChannelInfo ci;
 
   ci.set_value(L"");
   EXPECT_TRUE(ci.SetCeee(true));
@@ -87,7 +92,7 @@ TEST(ChannelInfoTest, CEEE) {
 }
 
 TEST(ChannelInfoTest, FullInstall) {
-  installer::ChannelInfo ci;
+  ChannelInfo ci;
 
   ci.set_value(L"");
   EXPECT_TRUE(ci.SetFullSuffix(true));
@@ -119,7 +124,7 @@ TEST(ChannelInfoTest, FullInstall) {
 }
 
 TEST(ChannelInfoTest, MultiInstall) {
-  installer::ChannelInfo ci;
+  ChannelInfo ci;
 
   ci.set_value(L"");
   EXPECT_TRUE(ci.SetMultiInstall(true));
@@ -151,10 +156,131 @@ TEST(ChannelInfoTest, MultiInstall) {
 }
 
 TEST(ChannelInfoTest, Combinations) {
-  installer::ChannelInfo ci;
+  ChannelInfo ci;
 
   ci.set_value(L"2.0-beta-chromeframe");
   EXPECT_FALSE(ci.IsChrome());
   ci.set_value(L"2.0-beta-chromeframe-chrome");
   EXPECT_TRUE(ci.IsChrome());
+}
+
+TEST(ChannelInfoTest, EqualsBaseOf) {
+  ChannelInfo ci1;
+  ChannelInfo ci2;
+
+  std::pair<std::wstring, std::wstring> trues[] = {
+    std::make_pair(std::wstring(L""), std::wstring(L"")),
+    std::make_pair(std::wstring(L"2.0-beta"), std::wstring(L"2.0-beta")),
+    std::make_pair(std::wstring(L"-full"), std::wstring(L"-full")),
+    std::make_pair(std::wstring(L""), std::wstring(L"-multi")),
+    std::make_pair(std::wstring(L"2.0-beta"),
+                   std::wstring(L"2.0-beta-stage:finishing")),
+    std::make_pair(std::wstring(L"2.0-beta-stage:finishing"),
+                   std::wstring(L"2.0-beta")),
+    std::make_pair(std::wstring(L"2.0-beta-stage:executing"),
+                   std::wstring(L"2.0-beta-stage:finishing")),
+    std::make_pair(std::wstring(L"2.0-beta-stage:spamming"),
+                   std::wstring(L"2.0-beta-stage:")),
+  };
+  for (int i = 0; i < arraysize(trues); ++i) {
+    std::pair<std::wstring, std::wstring>& the_pair = trues[i];
+    ci1.set_value(the_pair.first);
+    ci2.set_value(the_pair.second);
+    EXPECT_TRUE(ci1.EqualsBaseOf(ci2)) << the_pair.first << " "
+                                       << the_pair.second;
+  }
+
+  std::pair<std::wstring, std::wstring> falses[] = {
+    std::make_pair(std::wstring(L""), std::wstring(L"2.0-beta")),
+    std::make_pair(std::wstring(L"2.0-gamma"), std::wstring(L"2.0-beta")),
+    std::make_pair(std::wstring(L"spam-full"), std::wstring(L"-full")),
+    std::make_pair(std::wstring(L"multi"), std::wstring(L"-multi")),
+    std::make_pair(std::wstring(L"2.0-beta"),
+                   std::wstring(L"2.0-stage:finishing")),
+  };
+  for (int i = 0; i < arraysize(falses); ++i) {
+    std::pair<std::wstring, std::wstring>& the_pair = falses[i];
+    ci1.set_value(the_pair.first);
+    ci2.set_value(the_pair.second);
+    EXPECT_FALSE(ci1.EqualsBaseOf(ci2)) << the_pair.first << " "
+                                        << the_pair.second;
+  }
+}
+
+TEST(ChannelInfoTest, GetStage) {
+  ChannelInfo ci;
+
+  ci.set_value(L"");
+  EXPECT_EQ(L"", ci.GetStage());
+  ci.set_value(L"-stage");
+  EXPECT_EQ(L"", ci.GetStage());
+  ci.set_value(L"-stage:");
+  EXPECT_EQ(L"", ci.GetStage());
+  ci.set_value(L"-stage:spammy");
+  EXPECT_EQ(L"spammy", ci.GetStage());
+
+  ci.set_value(L"-multi");
+  EXPECT_EQ(L"", ci.GetStage());
+  ci.set_value(L"-stage-multi");
+  EXPECT_EQ(L"", ci.GetStage());
+  ci.set_value(L"-stage:-multi");
+  EXPECT_EQ(L"", ci.GetStage());
+  ci.set_value(L"-stage:spammy-multi");
+  EXPECT_EQ(L"spammy", ci.GetStage());
+
+  ci.set_value(L"2.0-beta-multi");
+  EXPECT_EQ(L"", ci.GetStage());
+  ci.set_value(L"2.0-beta-stage-multi");
+  EXPECT_EQ(L"", ci.GetStage());
+  ci.set_value(L"2.0-beta-stage:-multi");
+  EXPECT_EQ(L"", ci.GetStage());
+  ci.set_value(L"2.0-beta-stage:spammy-multi");
+  EXPECT_EQ(L"spammy", ci.GetStage());
+}
+
+TEST(ChannelInfoTest, SetStage) {
+  ChannelInfo ci;
+
+  ci.set_value(L"");
+  EXPECT_FALSE(ci.SetStage(NULL));
+  EXPECT_EQ(L"", ci.value());
+  EXPECT_TRUE(ci.SetStage(L"spammy"));
+  EXPECT_EQ(L"-stage:spammy", ci.value());
+  EXPECT_FALSE(ci.SetStage(L"spammy"));
+  EXPECT_EQ(L"-stage:spammy", ci.value());
+  EXPECT_TRUE(ci.SetStage(NULL));
+  EXPECT_EQ(L"", ci.value());
+  EXPECT_TRUE(ci.SetStage(L"spammy"));
+  EXPECT_TRUE(ci.SetStage(L""));
+  EXPECT_EQ(L"", ci.value());
+
+  ci.set_value(L"-multi");
+  EXPECT_FALSE(ci.SetStage(NULL));
+  EXPECT_EQ(L"-multi", ci.value());
+  EXPECT_TRUE(ci.SetStage(L"spammy"));
+  EXPECT_EQ(L"-stage:spammy-multi", ci.value());
+  EXPECT_FALSE(ci.SetStage(L"spammy"));
+  EXPECT_EQ(L"-stage:spammy-multi", ci.value());
+  EXPECT_TRUE(ci.SetStage(NULL));
+  EXPECT_EQ(L"-multi", ci.value());
+  EXPECT_TRUE(ci.SetStage(L"spammy"));
+  EXPECT_TRUE(ci.SetStage(L""));
+  EXPECT_EQ(L"-multi", ci.value());
+
+  ci.set_value(L"2.0-beta-multi");
+  EXPECT_FALSE(ci.SetStage(NULL));
+  EXPECT_EQ(L"2.0-beta-multi", ci.value());
+  EXPECT_TRUE(ci.SetStage(L"spammy"));
+  EXPECT_EQ(L"2.0-beta-stage:spammy-multi", ci.value());
+  EXPECT_FALSE(ci.SetStage(L"spammy"));
+  EXPECT_EQ(L"2.0-beta-stage:spammy-multi", ci.value());
+  EXPECT_TRUE(ci.SetStage(NULL));
+  EXPECT_EQ(L"2.0-beta-multi", ci.value());
+  EXPECT_TRUE(ci.SetStage(L"spammy"));
+  EXPECT_TRUE(ci.SetStage(L""));
+  EXPECT_EQ(L"2.0-beta-multi", ci.value());
+
+  ci.set_value(L"2.0-beta-stage:-multi");
+  EXPECT_TRUE(ci.SetStage(NULL));
+  EXPECT_EQ(L"2.0-beta-multi", ci.value());
 }
