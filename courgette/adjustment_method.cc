@@ -524,7 +524,7 @@ class AssignmentProblem {
   Node* MakeRootNode(const Trace& trace) {
     Node* node = new Node(NULL, NULL);
     all_nodes_.push_back(node);
-    for (size_t i = 0;  i < trace.size();  ++i) {
+    for (uint32 i = 0;  i < trace.size();  ++i) {
       ++node->count_;
       node->places_.push_back(i);
     }
@@ -595,7 +595,7 @@ class GraphAdjuster : public AdjustmentMethod {
 
   void CollectTraces(const AssemblyProgram* program, Trace* abs32, Trace* rel32,
                      bool is_model) {
-    const std::vector<Instruction*>& instructions = program->instructions();
+    const InstructionVector& instructions = program->instructions();
     for (size_t i = 0;  i < instructions.size();  ++i) {
       Instruction* instruction = instructions.at(i);
       if (Label* label = program->InstructionAbs32Label(instruction))
@@ -635,7 +635,8 @@ class GraphAdjuster : public AdjustmentMethod {
   }
 
   void ReferenceLabel(Trace* trace, Label* label, bool is_model) {
-    trace->push_back(MakeLabelInfo(label, is_model, trace->size()));
+    trace->push_back(MakeLabelInfo(label, is_model,
+                                   static_cast<uint32>(trace->size())));
   }
 
   LabelInfo* MakeLabelInfo(Label* label, bool is_model, uint32 position) {

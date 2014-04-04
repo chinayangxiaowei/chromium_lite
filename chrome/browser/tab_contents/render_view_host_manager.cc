@@ -8,8 +8,8 @@
 #include "base/logging.h"
 #include "chrome/browser/dom_ui/dom_ui.h"
 #include "chrome/browser/dom_ui/dom_ui_factory.h"
-#include "chrome/browser/extensions/extensions_service.h"
-#include "chrome/browser/profile.h"
+#include "chrome/browser/extensions/extension_service.h"
+#include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/renderer_host/render_view_host.h"
 #include "chrome/browser/renderer_host/render_view_host_delegate.h"
 #include "chrome/browser/renderer_host/render_view_host_factory.h"
@@ -17,6 +17,7 @@
 #include "chrome/browser/renderer_host/site_instance.h"
 #include "chrome/browser/tab_contents/navigation_controller.h"
 #include "chrome/browser/tab_contents/navigation_entry.h"
+#include "chrome/browser/tab_contents/tab_contents_view.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/common/notification_service.h"
 #include "chrome/common/notification_type.h"
@@ -291,12 +292,32 @@ bool RenderViewHostManager::ShouldSwapProcessesForNavigation(
     const NavigationEntry* new_entry) const {
   DCHECK(new_entry);
 
+  // Check for reasons to swap processes even if we are in a process model that
+  // doesn't usually swap (e.g., process-per-tab).
+
+  // For security, we should transition between processes when one is a DOM UI
+  // page and one isn't.  If there's no cur_entry, check the current RVH's
+  // site, which might already be committed to a DOM UI URL (such as the NTP).
+  const GURL& current_url = (cur_entry) ? cur_entry->url() :
+      render_view_host_->site_instance()->site();
+  Profile* profile = delegate_->GetControllerForRenderManager().profile();
+  if (DOMUIFactory::UseDOMUIForURL(profile, current_url)) {
+    // Force swap if it's not an acceptable URL for DOM UI.
+    if (!DOMUIFactory::IsURLAcceptableForDOMUI(profile, new_entry->url()))
+      return true;
+  } else {
+    // Force swap if it's a DOM UI URL.
+    if (DOMUIFactory::UseDOMUIForURL(profile, new_entry->url()))
+      return true;
+  }
+
   if (!cur_entry) {
     // Always choose a new process when navigating to extension URLs. The
     // process grouping logic will combine all of a given extension's pages
     // into the same process.
     if (new_entry->url().SchemeIs(chrome::kExtensionScheme))
       return true;
+
     return false;
   }
 
@@ -306,19 +327,6 @@ bool RenderViewHostManager::ShouldSwapProcessesForNavigation(
   // it as a new navigation). So require a view switch.
   if (cur_entry->IsViewSourceMode() != new_entry->IsViewSourceMode())
     return true;
-
-  // For security, we should transition between processes when one is a DOM UI
-  // page and one isn't.
-  Profile* profile = delegate_->GetControllerForRenderManager().profile();
-  if (DOMUIFactory::UseDOMUIForURL(profile, cur_entry->url())) {
-    // Force swap if it's not an acceptable URL for DOM UI.
-    if (!DOMUIFactory::IsURLAcceptableForDOMUI(profile, new_entry->url()))
-      return true;
-  } else {
-    // Force swap if it's a DOM UI URL.
-    if (DOMUIFactory::UseDOMUIForURL(profile, new_entry->url()))
-      return true;
-  }
 
   // Also, we must switch if one is an extension and the other is not the exact
   // same extension.
@@ -355,6 +363,8 @@ SiteInstance* RenderViewHostManager::GetSiteInstanceForEntry(
     return curr_instance;
 
   const GURL& dest_url = entry.url();
+  NavigationController& controller = delegate_->GetControllerForRenderManager();
+  Profile* profile = controller.profile();
 
   // If we haven't used our SiteInstance (and thus RVH) yet, then we can use it
   // for this entry.  We won't commit the SiteInstance to this site until the
@@ -367,28 +377,28 @@ SiteInstance* RenderViewHostManager::GetSiteInstanceForEntry(
     // to compare against the current URL and not the SiteInstance's site.  In
     // this case, there is no current URL, so comparing against the site is ok.
     // See additional comments below.)
-    if (curr_instance->HasRelatedSiteInstance(dest_url)) {
+    if (curr_instance->HasRelatedSiteInstance(dest_url))
       return curr_instance->GetRelatedSiteInstance(dest_url);
-    } else {
-      // Normally the "site" on the SiteInstance is set lazily when the load
-      // actually commits. This is to support better process sharing in case
-      // the site redirects to some other site: we want to use the destination
-      // site in the site instance.
-      //
-      // In the case of session restore, as it loads all the pages immediately
-      // we need to set the site first, otherwise after a restore none of the
-      // pages would share renderers.
-      //
-      // For DOM UI (this mostly comes up for the new tab page), the
-      // SiteInstance has special meaning: we never want to reassign the
-      // process. If you navigate to another site before the DOM UI commits,
-      // we still want to create a new process rather than re-using the
-      // existing DOM UI process.
-      if (entry.restore_type() != NavigationEntry::RESTORE_NONE ||
-          DOMUIFactory::HasDOMUIScheme(dest_url))
-        curr_instance->SetSite(dest_url);
-      return curr_instance;
-    }
+
+    // For extensions and DOM UI URLs (such as the new tab page), we do not
+    // want to use the curr_instance if it has no site, since it will have a
+    // RenderProcessHost of TYPE_NORMAL.  Create a new SiteInstance for this
+    // URL instead (with the correct process type).
+    if (DOMUIFactory::UseDOMUIForURL(profile, dest_url))
+      return SiteInstance::CreateSiteInstanceForURL(profile, dest_url);
+
+    // Normally the "site" on the SiteInstance is set lazily when the load
+    // actually commits. This is to support better process sharing in case
+    // the site redirects to some other site: we want to use the destination
+    // site in the site instance.
+    //
+    // In the case of session restore, as it loads all the pages immediately
+    // we need to set the site first, otherwise after a restore none of the
+    // pages would share renderers in process-per-site.
+    if (entry.restore_type() != NavigationEntry::RESTORE_NONE)
+      curr_instance->SetSite(dest_url);
+
+    return curr_instance;
   }
 
   // Otherwise, only create a new SiteInstance for cross-site navigation.
@@ -401,7 +411,6 @@ SiteInstance* RenderViewHostManager::GetSiteInstanceForEntry(
   // For now, though, we're in a hybrid model where you only switch
   // SiteInstances if you type in a cross-site URL.  This means we have to
   // compare the entry's URL to the last committed entry's URL.
-  NavigationController& controller = delegate_->GetControllerForRenderManager();
   NavigationEntry* curr_entry = controller.GetLastCommittedEntry();
   if (interstitial_page_) {
     // The interstitial is currently the last committed entry, but we want to
@@ -420,7 +429,6 @@ SiteInstance* RenderViewHostManager::GetSiteInstanceForEntry(
   // practice.)
   const GURL& current_url = (curr_entry) ? curr_entry->url() :
       curr_instance->site();
-  Profile* profile = controller.profile();
 
   if (SiteInstance::IsSameWebSite(profile, current_url, dest_url)) {
     return curr_instance;
@@ -479,8 +487,8 @@ bool RenderViewHostManager::InitRenderView(RenderViewHost* render_view_host,
 
   // Tell the RenderView whether it will be used for an extension process.
   Profile* profile = delegate_->GetControllerForRenderManager().profile();
-  bool is_extension_process = profile->GetExtensionsService() &&
-      profile->GetExtensionsService()->ExtensionBindingsAllowed(entry.url());
+  bool is_extension_process = profile->GetExtensionService() &&
+      profile->GetExtensionService()->ExtensionBindingsAllowed(entry.url());
   render_view_host->set_is_extension_process(is_extension_process);
 
   return delegate_->CreateRenderViewForRenderManager(render_view_host);
@@ -676,4 +684,46 @@ void RenderViewHostManager::RenderViewDeleted(RenderViewHost* rvh) {
     NOTREACHED();
     pending_render_view_host_ = NULL;
   }
+}
+
+void RenderViewHostManager::SwapInRenderViewHost(RenderViewHost* rvh) {
+  dom_ui_.reset();
+
+  // Hide the current view and prepare to destroy it.
+  if (render_view_host_->view())
+    render_view_host_->view()->Hide();
+  RenderViewHost* old_render_view_host = render_view_host_;
+
+  // Swap in the new view and make it active.
+  render_view_host_ = rvh;
+  render_view_host_->set_delegate(render_view_delegate_);
+  delegate_->CreateViewAndSetSizeForRVH(render_view_host_);
+  render_view_host_->ActivateDeferredPluginHandles();
+  // If the view is gone, then this RenderViewHost died while it was hidden.
+  // We ignored the RenderViewGone call at the time, so we should send it now
+  // to make sure the sad tab shows up, etc.
+  if (render_view_host_->view()) {
+    // TODO(tburkard,cbentzel): Figure out why this hack is needed and/or
+    // if it can be removed.  On Windows, prerendering will not work without
+    // doing a Hide before the Show.
+    render_view_host_->view()->Hide();
+    render_view_host_->view()->Show();
+  }
+
+  delegate_->UpdateRenderViewSizeForRenderManager();
+
+  RenderViewHostSwitchedDetails details;
+  details.new_host = render_view_host_;
+  details.old_host = old_render_view_host;
+  NotificationService::current()->Notify(
+      NotificationType::RENDER_VIEW_HOST_CHANGED,
+      Source<NavigationController>(&delegate_->GetControllerForRenderManager()),
+      Details<RenderViewHostSwitchedDetails>(&details));
+
+  // This will cause the old RenderViewHost to delete itself.
+  old_render_view_host->Shutdown();
+
+  // Let the task manager know that we've swapped RenderViewHosts, since it
+  // might need to update its process groupings.
+  delegate_->NotifySwappedFromRenderManager();
 }

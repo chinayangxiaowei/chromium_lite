@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,6 +8,7 @@
 #include <map>
 #include <string>
 #include "base/basictypes.h"
+#include "base/logging.h"
 #include "base/ref_counted.h"
 #include "gpu/command_buffer/service/gl_utils.h"
 #include "gpu/command_buffer/service/shader_translator.h"
@@ -29,12 +30,6 @@ class ShaderManager {
    public:
     typedef scoped_refptr<ShaderInfo> Ref;
     typedef ShaderTranslator::VariableInfo VariableInfo;
-
-    explicit ShaderInfo(GLuint service_id, GLenum shader_type)
-        : service_id_(service_id),
-          shader_type_(shader_type),
-          valid_(false) {
-    }
 
     void Update(const std::string& source) {
       source_ = source;
@@ -71,16 +66,25 @@ class ShaderManager {
       return service_id_ == 0;
     }
 
+    bool InUse() const {
+      DCHECK_GE(use_count_, 0);
+      return use_count_ != 0;
+    }
+
    private:
     typedef ShaderTranslator::VariableMap VariableMap;
 
     friend class base::RefCounted<ShaderInfo>;
     friend class ShaderManager;
-    ~ShaderInfo() { }
 
-    void MarkAsDeleted() {
-      service_id_ = 0;
-    }
+    ShaderInfo(GLuint service_id, GLenum shader_type);
+    ~ShaderInfo();
+
+    void IncUseCount();
+    void DecUseCount();
+    void MarkAsDeleted();
+
+    int use_count_;
 
     // The shader this ShaderInfo is tracking.
     GLuint service_id_;
@@ -116,16 +120,27 @@ class ShaderManager {
   // exists.
   ShaderInfo* GetShaderInfo(GLuint client_id);
 
-  // Deletes the shader info for the given shader.
-  void RemoveShaderInfo(GLuint client_id);
-
   // Gets a client id for a given service id.
   bool GetClientId(GLuint service_id, GLuint* client_id) const;
+
+  void MarkAsDeleted(ShaderInfo* info);
+
+  // Mark a shader as used
+  void UseShader(ShaderInfo* info);
+
+  // Unmark a shader as used. If it has been deleted and is not used
+  // then we free the info.
+  void UnuseShader(ShaderInfo* info);
+
+  // Check if a ShaderInfo is owned by this ShaderManager.
+  bool IsOwned(ShaderInfo* info);
 
  private:
   // Info for each shader by service side shader Id.
   typedef std::map<GLuint, ShaderInfo::Ref> ShaderInfoMap;
   ShaderInfoMap shader_infos_;
+
+  void RemoveShaderInfoIfUnused(ShaderInfo* info);
 
   DISALLOW_COPY_AND_ASSIGN(ShaderManager);
 };

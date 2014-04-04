@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,6 +10,7 @@
 #include <string>
 
 #include "base/callback.h"
+#include "base/threading/platform_thread.h"
 #include "net/base/net_errors.h"
 #include "net/http/http_response_headers.h"
 #include "net/url_request/url_request_status.h"
@@ -38,7 +39,8 @@ class UrlmonUrlRequest
   // Used from "DownloadRequestInHost".
   // Callback will be invoked either right away (if operation is finished) or
   // from inside ::OnStopBinding() when it is safe to reuse the bind_context.
-  typedef Callback2<IMoniker*, IBindCtx*>::Type TerminateBindCallback;
+  typedef Callback4<IMoniker*, IBindCtx*, IStream*, const char*>::Type
+      TerminateBindCallback;
   void TerminateBind(TerminateBindCallback* callback);
 
   // Parent Window for UrlMon error dialogs
@@ -163,7 +165,7 @@ class UrlmonUrlRequest
     // Assumes binding_->Abort() will be called!
     void SetRedirected(int http_code, const std::string& utf8_url) {
       DCHECK_EQ(state_, WORKING);
-      DCHECK_EQ(result_.status(), URLRequestStatus::SUCCESS);
+      DCHECK_EQ(result_.status(), net::URLRequestStatus::SUCCESS);
       redirect_.utf8_url = utf8_url;
 
       // At times we receive invalid redirect codes like 0, 200, etc. We
@@ -175,7 +177,7 @@ class UrlmonUrlRequest
       state_ = ABORTING;
     }
 
-    // Set the result as URLRequestStatus::CANCELED.
+    // Set the result as net::URLRequestStatus::CANCELED.
     // Switch to [ABORTING] state (if not already in that state).
     void Cancel() {
       if (state_ == DONE)
@@ -189,7 +191,7 @@ class UrlmonUrlRequest
         redirect_.utf8_url.clear();
       }
 
-      set_result(URLRequestStatus::CANCELED, 0);
+      set_result(net::URLRequestStatus::CANCELED, 0);
     }
 
     void Done() {
@@ -204,25 +206,25 @@ class UrlmonUrlRequest
       return redirect_;
     }
 
-    const URLRequestStatus& get_result() const {
+    const net::URLRequestStatus& get_result() const {
       return result_;
     }
 
-    void set_result(URLRequestStatus::Status status, int os_error) {
+    void set_result(net::URLRequestStatus::Status status, int os_error) {
       result_.set_status(status);
       result_.set_os_error(os_error);
     }
 
     void set_result(HRESULT hr) {
-      result_.set_status(FAILED(hr)? URLRequestStatus::FAILED:
-                                     URLRequestStatus::SUCCESS);
+      result_.set_status(FAILED(hr)? net::URLRequestStatus::FAILED:
+                                     net::URLRequestStatus::SUCCESS);
       result_.set_os_error(HresultToNetError(hr));
     }
 
    private:
     Redirection redirect_;
     State state_;
-    URLRequestStatus result_;
+    net::URLRequestStatus result_;
   };
 
   Status status_;
@@ -233,7 +235,7 @@ class UrlmonUrlRequest
   ScopedComPtr<IStream> pending_data_;
 
   size_t pending_read_size_;
-  PlatformThreadId thread_;
+  base::PlatformThreadId thread_;
   HWND parent_window_;
   bool headers_received_;
   int calling_delegate_;  // re-entrancy protection.
@@ -250,6 +252,8 @@ class UrlmonUrlRequest
   // when this object is destroyed. Happens if we return
   // INET_E_TERMINATE_BIND from OnDataAvailable in the last data notification.
   bool cleanup_transaction_;
+  // Copy of the request headers.
+  std::string request_headers_;
 
   DISALLOW_COPY_AND_ASSIGN(UrlmonUrlRequest);
 };

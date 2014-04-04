@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -12,6 +12,7 @@
 #include "base/scoped_ptr.h"
 #include "base/string_number_conversions.h"
 #include "base/stringprintf.h"
+#include "base/threading/platform_thread.h"
 #include "base/utf_string_conversions.h"
 #include "chrome_frame/bind_context_info.h"
 #include "chrome_frame/chrome_frame_activex_base.h"
@@ -47,8 +48,8 @@ std::string UrlmonUrlRequest::me() const {
 
 bool UrlmonUrlRequest::Start() {
   DVLOG(1) << __FUNCTION__ << me() << url();
-  DCHECK(thread_ == 0 || thread_ == PlatformThread::CurrentId());
-  thread_ = PlatformThread::CurrentId();
+  DCHECK(thread_ == 0 || thread_ == base::PlatformThread::CurrentId());
+  thread_ = base::PlatformThread::CurrentId();
   status_.Start();
   // The UrlmonUrlRequest instance can get destroyed in the context of
   // StartAsyncDownload if BindToStorage finishes synchronously with an error.
@@ -57,14 +58,14 @@ bool UrlmonUrlRequest::Start() {
   HRESULT hr = StartAsyncDownload();
   if (FAILED(hr) && status_.get_state() != UrlmonUrlRequest::Status::DONE) {
     status_.Done();
-    status_.set_result(URLRequestStatus::FAILED, HresultToNetError(hr));
+    status_.set_result(net::URLRequestStatus::FAILED, HresultToNetError(hr));
     NotifyDelegateAndDie();
   }
   return true;
 }
 
 void UrlmonUrlRequest::Stop() {
-  DCHECK_EQ(thread_, PlatformThread::CurrentId());
+  DCHECK_EQ(thread_, base::PlatformThread::CurrentId());
   DCHECK((status_.get_state() != Status::DONE) == (binding_ != NULL));
   Status::State state = status_.get_state();
   delegate_ = NULL;
@@ -92,7 +93,7 @@ void UrlmonUrlRequest::Stop() {
 }
 
 bool UrlmonUrlRequest::Read(int bytes_to_read) {
-  DCHECK_EQ(thread_, PlatformThread::CurrentId());
+  DCHECK_EQ(thread_, base::PlatformThread::CurrentId());
   DCHECK_GE(bytes_to_read, 0);
   DCHECK_EQ(0, calling_delegate_);
   DVLOG(1) << __FUNCTION__ << me();
@@ -136,8 +137,8 @@ HRESULT UrlmonUrlRequest::InitPending(const GURL& url, IMoniker* moniker,
   DCHECK(bind_context_ == NULL);
   DCHECK(moniker_ == NULL);
   DCHECK(cache_ == NULL);
-  DCHECK(thread_ == 0 || thread_ == PlatformThread::CurrentId());
-  thread_ = PlatformThread::CurrentId();
+  DCHECK(thread_ == 0 || thread_ == base::PlatformThread::CurrentId());
+  thread_ = base::PlatformThread::CurrentId();
   bind_context_ = bind_context;
   moniker_ = moniker;
   enable_frame_busting_ = enable_frame_busting;
@@ -156,12 +157,13 @@ HRESULT UrlmonUrlRequest::InitPending(const GURL& url, IMoniker* moniker,
 }
 
 void UrlmonUrlRequest::TerminateBind(TerminateBindCallback* callback) {
-  DCHECK_EQ(thread_, PlatformThread::CurrentId());
+  DCHECK_EQ(thread_, base::PlatformThread::CurrentId());
   DVLOG(1) << __FUNCTION__ << me();
   cleanup_transaction_ = false;
   if (status_.get_state() == Status::DONE) {
     // Binding is stopped. Note result could be an error.
-    callback->Run(moniker_, bind_context_);
+    callback->Run(moniker_, bind_context_, upload_data_,
+                  request_headers_.c_str());
     delete callback;
   } else {
     // WORKING (ABORTING?). Save the callback.
@@ -190,7 +192,7 @@ void UrlmonUrlRequest::TerminateBind(TerminateBindCallback* callback) {
 }
 
 size_t UrlmonUrlRequest::SendDataToDelegate(size_t bytes_to_read) {
-  DCHECK_EQ(thread_, PlatformThread::CurrentId());
+  DCHECK_EQ(thread_, base::PlatformThread::CurrentId());
   DCHECK_NE(id(), -1);
   DCHECK_GT(bytes_to_read, 0U);
   size_t bytes_copied = 0;
@@ -242,7 +244,7 @@ size_t UrlmonUrlRequest::SendDataToDelegate(size_t bytes_to_read) {
 
 STDMETHODIMP UrlmonUrlRequest::OnStartBinding(DWORD reserved,
                                               IBinding* binding) {
-  DCHECK_EQ(thread_, PlatformThread::CurrentId());
+  DCHECK_EQ(thread_, base::PlatformThread::CurrentId());
   binding_ = binding;
   if (pending_) {
     response_headers_ = GetHttpHeadersFromBinding(binding_);
@@ -264,7 +266,7 @@ STDMETHODIMP UrlmonUrlRequest::OnLowResource(DWORD reserved) {
 
 STDMETHODIMP UrlmonUrlRequest::OnProgress(ULONG progress, ULONG max_progress,
     ULONG status_code, LPCWSTR status_text) {
-  DCHECK_EQ(thread_, PlatformThread::CurrentId());
+  DCHECK_EQ(thread_, base::PlatformThread::CurrentId());
 
   if (status_.get_state() != Status::WORKING)
     return S_OK;
@@ -287,7 +289,7 @@ STDMETHODIMP UrlmonUrlRequest::OnProgress(ULONG progress, ULONG max_progress,
       ScopedComPtr<BindContextInfo> info;
       BindContextInfo::FromBindContext(bind_context_, info.Receive());
       DCHECK(info);
-      GURL previously_redirected(info ? info->url() : std::wstring());
+      GURL previously_redirected(info ? info->GetUrl() : std::wstring());
       if (GURL(status_text) != previously_redirected) {
         DVLOG(1) << __FUNCTION__ << me() << "redirect from " << url()
                  << " to " << status_text;
@@ -341,7 +343,7 @@ STDMETHODIMP UrlmonUrlRequest::OnProgress(ULONG progress, ULONG max_progress,
 }
 
 STDMETHODIMP UrlmonUrlRequest::OnStopBinding(HRESULT result, LPCWSTR error) {
-  DCHECK_EQ(thread_, PlatformThread::CurrentId());
+  DCHECK_EQ(thread_, base::PlatformThread::CurrentId());
   DVLOG(1) << __FUNCTION__ << me()
            << "- Request stopped, Result: " << std::hex << result;
   DCHECK(status_.get_state() == Status::WORKING ||
@@ -354,7 +356,8 @@ STDMETHODIMP UrlmonUrlRequest::OnStopBinding(HRESULT result, LPCWSTR error) {
 
   if (result == INET_E_TERMINATED_BIND) {
     if (terminate_requested()) {
-      terminate_bind_callback_->Run(moniker_, bind_context_);
+      terminate_bind_callback_->Run(moniker_, bind_context_, upload_data_,
+                                    request_headers_.c_str());
     } else {
       cleanup_transaction_ = true;
     }
@@ -372,8 +375,8 @@ STDMETHODIMP UrlmonUrlRequest::OnStopBinding(HRESULT result, LPCWSTR error) {
     if (result == E_ACCESSDENIED) {
       int http_code = GetHttpResponseStatusFromBinding(binding_);
       if (300 <= http_code && http_code < 400) {
-        status_.set_result(URLRequestStatus::FAILED,
-                          net::ERR_UNSAFE_REDIRECT);
+        status_.set_result(net::URLRequestStatus::FAILED,
+                           net::ERR_UNSAFE_REDIRECT);
       }
     }
 
@@ -436,16 +439,12 @@ STDMETHODIMP UrlmonUrlRequest::GetBindInfo(DWORD* bind_flags,
   if (load_flags_ & net::LOAD_BYPASS_CACHE)
     *bind_flags |= BINDF_GETNEWESTVERSION;
 
-  bool upload_data = false;
-
   if (LowerCaseEqualsASCII(method(), "get")) {
     bind_info->dwBindVerb = BINDVERB_GET;
   } else if (LowerCaseEqualsASCII(method(), "post")) {
     bind_info->dwBindVerb = BINDVERB_POST;
-    upload_data = true;
   } else if (LowerCaseEqualsASCII(method(), "put")) {
     bind_info->dwBindVerb = BINDVERB_PUT;
-    upload_data = true;
   } else {
     std::wstring verb(ASCIIToWide(StringToUpperASCII(method())));
     bind_info->dwBindVerb = BINDVERB_CUSTOM;
@@ -454,12 +453,12 @@ STDMETHODIMP UrlmonUrlRequest::GetBindInfo(DWORD* bind_flags,
     lstrcpyW(bind_info->szCustomVerb, verb.c_str());
   }
 
-  if (upload_data) {
-    // Bypass caching proxies on POSTs and PUTs and avoid writing responses to
-    // these requests to the browser's cache
+  if (post_data_len()) {
+    // Bypass caching proxies on upload requests and avoid writing responses to
+    // the browser's cache.
     *bind_flags |= BINDF_GETNEWESTVERSION | BINDF_PRAGMA_NO_CACHE;
 
-    // Attempt to avoid storing the response for XHR request.
+    // Attempt to avoid storing the response for upload requests.
     // See http://crbug.com/55918
     if (resource_type_ != ResourceType::MAIN_FRAME)
       *bind_flags |= BINDF_NOWRITECACHE;
@@ -467,7 +466,9 @@ STDMETHODIMP UrlmonUrlRequest::GetBindInfo(DWORD* bind_flags,
     // Initialize the STGMEDIUM.
     memset(&bind_info->stgmedData, 0, sizeof(STGMEDIUM));
     bind_info->grfBindInfoF = 0;
-    bind_info->szCustomVerb = NULL;
+
+    if (bind_info->dwBindVerb != BINDVERB_CUSTOM)
+      bind_info->szCustomVerb = NULL;
 
     if (get_upload_data(&bind_info->stgmedData.pstm) == S_OK) {
       bind_info->stgmedData.tymed = TYMED_ISTREAM;
@@ -485,7 +486,7 @@ STDMETHODIMP UrlmonUrlRequest::GetBindInfo(DWORD* bind_flags,
 STDMETHODIMP UrlmonUrlRequest::OnDataAvailable(DWORD flags, DWORD size,
                                                FORMATETC* formatetc,
                                                STGMEDIUM* storage) {
-  DCHECK_EQ(thread_, PlatformThread::CurrentId());
+  DCHECK_EQ(thread_, base::PlatformThread::CurrentId());
   DVLOG(1) << __FUNCTION__ << me() << "bytes available: " << size;
 
   if (terminate_requested()) {
@@ -538,7 +539,7 @@ STDMETHODIMP UrlmonUrlRequest::OnObjectAvailable(REFIID iid, IUnknown* object) {
 STDMETHODIMP UrlmonUrlRequest::BeginningTransaction(const wchar_t* url,
     const wchar_t* current_headers, DWORD reserved,
     wchar_t** additional_headers) {
-  DCHECK_EQ(thread_, PlatformThread::CurrentId());
+  DCHECK_EQ(thread_, base::PlatformThread::CurrentId());
   if (!additional_headers) {
     NOTREACHED();
     return E_POINTER;
@@ -607,14 +608,14 @@ STDMETHODIMP UrlmonUrlRequest::BeginningTransaction(const wchar_t* url,
                 new_headers.size());
     }
   }
-
+  request_headers_ = new_headers;
   return hr;
 }
 
 STDMETHODIMP UrlmonUrlRequest::OnResponse(DWORD dwResponseCode,
     const wchar_t* response_headers, const wchar_t* request_headers,
     wchar_t** additional_headers) {
-  DCHECK_EQ(thread_, PlatformThread::CurrentId());
+  DCHECK_EQ(thread_, base::PlatformThread::CurrentId());
   DVLOG(1) << __FUNCTION__ << me() << "headers: \n" << response_headers;
 
   if (!delegate_) {
@@ -829,7 +830,7 @@ HRESULT UrlmonUrlRequest::StartAsyncDownload() {
 }
 
 void UrlmonUrlRequest::NotifyDelegateAndDie() {
-  DCHECK_EQ(thread_, PlatformThread::CurrentId());
+  DCHECK_EQ(thread_, base::PlatformThread::CurrentId());
   DVLOG(1) << __FUNCTION__ << me();
 
   PluginUrlRequestDelegate* delegate = delegate_;
@@ -837,7 +838,7 @@ void UrlmonUrlRequest::NotifyDelegateAndDie() {
   ReleaseBindings();
   TerminateTransaction();
   if (delegate) {
-    URLRequestStatus result = status_.get_result();
+    net::URLRequestStatus result = status_.get_result();
     delegate->OnResponseEnd(id(), result);
   } else {
     DLOG(WARNING) << __FUNCTION__ << me() << "no delegate";
@@ -964,7 +965,7 @@ void UrlmonUrlRequestManager::SetInfoForUrl(const std::wstring& url,
 }
 
 void UrlmonUrlRequestManager::StartRequest(int request_id,
-    const IPC::AutomationURLRequest& request_info) {
+    const AutomationURLRequest& request_info) {
   DVLOG(1) << __FUNCTION__ << " id: " << request_id;
   DCHECK_EQ(0, calling_delegate_);
 
@@ -980,18 +981,17 @@ void UrlmonUrlRequestManager::StartRequest(int request_id,
   bool is_started = false;
   if (pending_request_) {
     if (pending_request_->url() != request_info.url) {
-      DVLOG(1) << __FUNCTION__
-               << "Received unexpected url request for url:"
-               << request_info.url
-               << ".Pending url request for url:"
-               << pending_request_->url()
-               << " was expected.";
-      URLRequestStatus result;
-      result.set_status(URLRequestStatus::FAILED);
+      DLOG(WARNING) << __FUNCTION__
+                    << "Received unexpected url request for url:"
+                    << request_info.url
+                    << ".Pending url request for url:"
+                    << pending_request_->url()
+                    << " was expected.";
+      net::URLRequestStatus result;
+      result.set_status(net::URLRequestStatus::FAILED);
       OnResponseEnd(request_id, result);
       return;
     }
-    DCHECK_EQ(pending_request_->url(), request_info.url);
     new_request.swap(pending_request_);
     is_started = true;
     DVLOG(1) << __FUNCTION__ << new_request->me()
@@ -1056,15 +1056,19 @@ void UrlmonUrlRequestManager::DownloadRequestInHost(int request_id) {
 }
 
 void UrlmonUrlRequestManager::BindTerminated(IMoniker* moniker,
-                                             IBindCtx* bind_ctx) {
-  // We use SendMessage and not PostMessage to make sure that if the
-  // notification window does not handle the message we won't leak
-  // the moniker.
-  ::SendMessage(notification_window_, WM_DOWNLOAD_IN_HOST,
-        reinterpret_cast<WPARAM>(bind_ctx),
-        reinterpret_cast<LPARAM>(moniker));
+                                             IBindCtx* bind_ctx,
+                                             IStream* post_data,
+                                             const char* request_headers) {
+  DownloadInHostParams* download_params = new DownloadInHostParams;
+  download_params->bind_ctx = bind_ctx;
+  download_params->moniker = moniker;
+  download_params->post_data = post_data;
+  if (request_headers) {
+    download_params->request_headers = request_headers;
+  }
+  ::PostMessage(notification_window_, WM_DOWNLOAD_IN_HOST,
+        reinterpret_cast<WPARAM>(download_params), 0);
 }
-
 
 void UrlmonUrlRequestManager::GetCookiesForUrl(const GURL& url, int cookie_id) {
   DWORD cookie_size = 0;
@@ -1148,7 +1152,7 @@ void UrlmonUrlRequestManager::StopAll() {
     it->second->Stop();
   }
 
-  request_map_.empty();
+  request_map_.clear();
 }
 
 void UrlmonUrlRequestManager::OnResponseStarted(int request_id,
@@ -1175,16 +1179,17 @@ void UrlmonUrlRequestManager::OnReadComplete(int request_id,
   DVLOG(1) << __FUNCTION__ << " done id: " << request_id;
 }
 
-void UrlmonUrlRequestManager::OnResponseEnd(int request_id,
-                                            const URLRequestStatus& status) {
+void UrlmonUrlRequestManager::OnResponseEnd(
+    int request_id,
+    const net::URLRequestStatus& status) {
   DCHECK_NE(request_id, -1);
   DVLOG(1) << __FUNCTION__;
-  DCHECK(status.status() != URLRequestStatus::CANCELED);
+  DCHECK(status.status() != net::URLRequestStatus::CANCELED);
   RequestMap::size_type n = request_map_.erase(request_id);
   if (n != 1u) {
-    DVLOG(1) << __FUNCTION__
-             << " Failed to find request id:"
-             << request_id;
+    DLOG(WARNING) << __FUNCTION__
+                  << " Failed to find request id:"
+                  << request_id;
   }
   ++calling_delegate_;
   delegate_->OnResponseEnd(request_id, status);

@@ -10,6 +10,7 @@
 #include "base/logging.h"
 #include "base/string_util.h"
 #include "base/stringprintf.h"
+#include "base/threading/platform_thread.h"
 #include "base/utf_string_conversions.h"
 #include "chrome_frame/bind_context_info.h"
 #include "chrome_frame/exception_barrier.h"
@@ -171,7 +172,7 @@ void SniffData::DetermineRendererType(bool last_chance) {
   if (is_undetermined()) {
     if (last_chance)
       renderer_type_ = OTHER;
-    if (IsChrome(RendererTypeForUrl(url_.c_str()))) {
+    if (IsChrome(RendererTypeForUrl(url_))) {
       renderer_type_ = CHROME;
     } else {
       if (is_cache_valid() && cache_) {
@@ -213,7 +214,7 @@ BSCBStorageBind::~BSCBStorageBind() {
 
 HRESULT BSCBStorageBind::Initialize(IMoniker* moniker, IBindCtx* bind_ctx) {
   DVLOG(1) << __FUNCTION__ << me()
-           << base::StringPrintf(" tid=%i", PlatformThread::CurrentId());
+           << base::StringPrintf(" tid=%i", base::PlatformThread::CurrentId());
 
   std::wstring url = GetActualUrlFromMoniker(moniker, bind_ctx,
                                              std::wstring());
@@ -239,7 +240,8 @@ STDMETHODIMP BSCBStorageBind::OnProgress(ULONG progress, ULONG progress_max,
                                     ULONG status_code, LPCWSTR status_text) {
   DVLOG(1) << __FUNCTION__ << me()
            << base::StringPrintf(" status=%i tid=%i %ls", status_code,
-                                 PlatformThread::CurrentId(), status_text);
+                                 base::PlatformThread::CurrentId(),
+                                 status_text);
   // Report all crashes in the exception handler if we wrap the callback.
   // Note that this avoids having the VEH report a crash if an SEH earlier in
   // the chain handles the exception.
@@ -247,15 +249,10 @@ STDMETHODIMP BSCBStorageBind::OnProgress(ULONG progress, ULONG progress_max,
 
   HRESULT hr = S_OK;
 
-  // Remember the last redirected URL in case we get switched into
-  // chrome frame
-  if (status_code == BINDSTATUS_REDIRECTING) {
-    ScopedComPtr<BindContextInfo> info;
-    BindContextInfo::FromBindContext(bind_ctx_, info.Receive());
-    DCHECK(info);
-    if (info)
-      info->set_url(status_text);
-  }
+  // TODO(ananta)
+  // ChromeFrame will not be informed of any redirects which occur while we
+  // switch into Chrome. This will only break the moniker patch which is
+  // legacy and needs to be deleted.
 
   if (ShouldCacheProgress(status_code)) {
     saved_progress_.push_back(new Progress(progress, progress_max, status_code,
@@ -273,7 +270,7 @@ STDMETHODIMP BSCBStorageBind::OnDataAvailable(DWORD flags, DWORD size,
                                               FORMATETC* format_etc,
                                               STGMEDIUM* stgmed) {
   DVLOG(1) << __FUNCTION__
-           << base::StringPrintf(" tid=%i", PlatformThread::CurrentId());
+           << base::StringPrintf(" tid=%i", base::PlatformThread::CurrentId());
   // Report all crashes in the exception handler if we wrap the callback.
   // Note that this avoids having the VEH report a crash if an SEH earlier in
   // the chain handles the exception.
@@ -316,7 +313,7 @@ STDMETHODIMP BSCBStorageBind::OnDataAvailable(DWORD flags, DWORD size,
 
 STDMETHODIMP BSCBStorageBind::OnStopBinding(HRESULT hresult, LPCWSTR error) {
   DVLOG(1) << __FUNCTION__
-           << base::StringPrintf(" tid=%i", PlatformThread::CurrentId());
+           << base::StringPrintf(" tid=%i", base::PlatformThread::CurrentId());
   // Report all crashes in the exception handler if we wrap the callback.
   // Note that this avoids having the VEH report a crash if an SEH earlier in
   // the chain handles the exception.
@@ -428,4 +425,3 @@ bool BSCBStorageBind::ShouldCacheProgress(unsigned long status_code) const {
 
   return false;
 }
-

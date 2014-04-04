@@ -6,6 +6,7 @@
 #define CHROME_FRAME_UTILS_H_
 
 #include <OAidl.h>
+#include <objidl.h>
 #include <windows.h>
 #include <wininet.h>
 
@@ -13,10 +14,11 @@
 #include <vector>
 
 #include "base/basictypes.h"
-#include "base/lock.h"
 #include "base/logging.h"
 #include "base/metrics/histogram.h"
-#include "base/thread.h"
+#include "base/synchronization/lock.h"
+#include "base/threading/thread.h"
+#include "base/win/scoped_comptr.h"
 #include "gfx/rect.h"
 #include "googleurl/src/gurl.h"
 
@@ -288,7 +290,7 @@ HRESULT DoQueryService(const IID& service_id, IUnknown* unk, T** service) {
   if (!unk)
     return E_INVALIDARG;
 
-  ScopedComPtr<IServiceProvider> service_provider;
+  base::win::ScopedComPtr<IServiceProvider> service_provider;
   HRESULT hr = service_provider.QueryFrom(unk);
   if (service_provider)
     hr = service_provider->QueryService(service_id, service);
@@ -301,7 +303,7 @@ HRESULT DoQueryService(const IID& service_id, IUnknown* unk, T** service) {
 // |headers| can be NULL.
 HRESULT NavigateBrowserToMoniker(IUnknown* browser, IMoniker* moniker,
                                  const wchar_t* headers, IBindCtx* bind_ctx,
-                                 const wchar_t* fragment);
+                                 const wchar_t* fragment, IStream* post_data);
 
 // Raises a flag on the current thread (using TLS) to indicate that an
 // in-progress navigation should be rendered in chrome frame.
@@ -362,7 +364,7 @@ STDMETHODIMP QueryInterfaceIfDelegateSupports(void* obj, REFIID iid,
   T* instance = reinterpret_cast<T*>(obj);
   IUnknown* delegate = instance ? instance->delegate() : NULL;
   if (delegate) {
-    ScopedComPtr<IUnknown> original;
+    base::win::ScopedComPtr<IUnknown> original;
     hr = delegate->QueryInterface(iid,
                                   reinterpret_cast<void**>(original.Receive()));
     if (original) {
@@ -424,7 +426,7 @@ bool IsTopLevelWindow(HWND window);
 // Seeks a stream back to position 0.
 HRESULT RewindStream(IStream* stream);
 
-extern Lock g_ChromeFrameHistogramLock;
+extern base::Lock g_ChromeFrameHistogramLock;
 
 // Thread safe versions of the UMA histogram macros we use for ChromeFrame.
 // These should be used for histograms in ChromeFrame. If other histogram
@@ -432,17 +434,17 @@ extern Lock g_ChromeFrameHistogramLock;
 // those should be defined and used.
 #define THREAD_SAFE_UMA_HISTOGRAM_CUSTOM_COUNTS(name, sample, min, max, \
                                                 bucket_count) { \
-  AutoLock lock(g_ChromeFrameHistogramLock); \
+  base::AutoLock lock(g_ChromeFrameHistogramLock); \
   UMA_HISTOGRAM_CUSTOM_COUNTS(name, sample, min, max, bucket_count); \
 }
 
 #define THREAD_SAFE_UMA_HISTOGRAM_TIMES(name, sample) { \
-  AutoLock lock(g_ChromeFrameHistogramLock); \
+  base::AutoLock lock(g_ChromeFrameHistogramLock); \
   UMA_HISTOGRAM_TIMES(name, sample); \
 }
 
 #define THREAD_SAFE_UMA_HISTOGRAM_COUNTS(name, sample) { \
-  AutoLock lock(g_ChromeFrameHistogramLock); \
+  base::AutoLock lock(g_ChromeFrameHistogramLock); \
   UMA_HISTOGRAM_COUNTS(name, sample); \
 }
 
@@ -455,6 +457,15 @@ extern Lock g_ChromeFrameHistogramLock;
 // NOTE: Since the message is sent synchronously, the handler should only
 // start asynchronous operations in order to not block the sender unnecessarily.
 #define WM_DOWNLOAD_IN_HOST (WM_APP + 2)
+
+// This structure contains the parameters sent over to initiate a download
+// request in the host browser.
+struct DownloadInHostParams {
+  base::win::ScopedComPtr<IBindCtx> bind_ctx;
+  base::win::ScopedComPtr<IMoniker> moniker;
+  base::win::ScopedComPtr<IStream> post_data;
+  std::string request_headers;
+};
 
 // Maps the InternetCookieState enum to the corresponding CookieAction values
 // used for IE privacy stuff.
@@ -564,12 +575,12 @@ class ChromeFrameUrl {
   std::string profile_name_;
 };
 
+class NavigationConstraints;
 // Returns true if we can navigate to this URL.
-// This function checks if the url scheme is valid for navigation within
-// chrome and whether it is a restricted URL as per IE settings. In either of
-// these cases it returns false.
-bool CanNavigate(const GURL& url, IInternetSecurityManager* security_manager,
-                 bool is_privileged);
+// These decisions are controlled by the NavigationConstraints object passed
+// in.
+bool CanNavigate(const GURL& url,
+                 NavigationConstraints* navigation_constraints);
 
 // Utility function that prevents the current module from ever being unloaded.
 // Call if you make irreversible patches.
@@ -610,5 +621,8 @@ void EnumerateKeyValues(HKEY parent_key, const wchar_t* sub_key_name,
 // using ',' iff no valid 'chrome=' value is found.
 bool CheckXUaCompatibleDirective(const std::string& directive,
                                  int ie_major_version);
+
+// Returns the version of the current module as a string.
+std::wstring GetCurrentModuleVersion();
 
 #endif  // CHROME_FRAME_UTILS_H_

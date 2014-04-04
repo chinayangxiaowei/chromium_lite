@@ -1,4 +1,4 @@
-// Copyright (c) 2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -11,8 +11,7 @@
 #include <map>
 #include <string>
 
-#include "base/lock.h"
-#include "base/thread.h"
+#include "base/threading/thread.h"
 #include "chrome_frame/plugin_url_request.h"
 #include "chrome_frame/urlmon_moniker.h"
 #include "chrome_frame/utils.h"
@@ -82,7 +81,7 @@ class UrlmonUrlRequestManager
   // PluginUrlRequestManager implementation.
   virtual PluginUrlRequestManager::ThreadSafeFlags GetThreadSafeFlags();
   virtual void StartRequest(int request_id,
-                            const IPC::AutomationURLRequest& request_info);
+                            const AutomationURLRequest& request_info);
   virtual void ReadRequest(int request_id, int bytes_to_read);
   virtual void EndRequest(int request_id);
   virtual void DownloadRequestInHost(int request_id);
@@ -97,7 +96,8 @@ class UrlmonUrlRequestManager
                                  const std::string& redirect_url,
                                  int redirect_status);
   virtual void OnReadComplete(int request_id, const std::string& data);
-  virtual void OnResponseEnd(int request_id, const URLRequestStatus& status);
+  virtual void OnResponseEnd(int request_id,
+                             const net::URLRequestStatus& status);
   virtual void OnCookiesRetrieved(bool success, const GURL& url,
                                   const std::string& cookie_string,
                                   int cookie_id);
@@ -105,7 +105,8 @@ class UrlmonUrlRequestManager
   // This method is passed as a callback to UrlmonUrlRequest::TerminateBind.
   // We simply forward moniker and bind_ctx to host ActiveX/ActiveDocument,
   // so it may start NavigateWithBindContext.
-  void BindTerminated(IMoniker* moniker, IBindCtx* bind_ctx);
+  void BindTerminated(IMoniker* moniker, IBindCtx* bind_ctx,
+                      IStream* post_data, const char* request_headers);
 
   // Map for (request_id <-> UrlmonUrlRequest)
   typedef std::map<int, scoped_refptr<UrlmonUrlRequest> > RequestMap;

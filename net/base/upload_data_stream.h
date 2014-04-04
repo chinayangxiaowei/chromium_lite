@@ -16,12 +16,12 @@ class IOBuffer;
 
 class UploadDataStream {
  public:
+  ~UploadDataStream();
+
   // Returns a new instance of UploadDataStream if it can be created and
   // initialized successfully. If not, NULL will be returned and the error
   // code will be set if the output parameter error_code is not empty.
   static UploadDataStream* Create(UploadData* data, int* error_code);
-
-  ~UploadDataStream();
 
   // Returns the stream's buffer and buffer length.
   IOBuffer* buf() const { return buf_; }
@@ -44,6 +44,8 @@ class UploadDataStream {
   bool eof() const { return eof_; }
 
  private:
+  enum { kBufSize = 16384 };
+
   // Protects from public access since now we have a static creator function
   // which will do both creation and initialization and might return an error.
   explicit UploadDataStream(UploadData* data);
@@ -53,13 +55,12 @@ class UploadDataStream {
   // Returns OK if the operation succeeds. Otherwise error code is returned.
   int FillBuf();
 
-  UploadData* data_;
+  scoped_refptr<UploadData> data_;
 
   // This buffer is filled with data to be uploaded.  The data to be sent is
   // always at the front of the buffer.  If we cannot send all of the buffer at
   // once, then we memmove the remaining portion and back-fill the buffer for
   // the next "write" call.  buf_len_ indicates how much data is in the buffer.
-  enum { kBufSize = 16384 };
   scoped_refptr<IOBuffer> buf_;
   size_t buf_len_;
 

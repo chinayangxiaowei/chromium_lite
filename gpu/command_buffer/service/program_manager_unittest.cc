@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -61,19 +61,11 @@ TEST_F(ProgramManagerTest, Basic) {
   // Check program got created.
   ProgramManager::ProgramInfo* info1 = manager_.GetProgramInfo(kClient1Id);
   ASSERT_TRUE(info1 != NULL);
-  EXPECT_EQ(kService1Id, info1->service_id());
-  EXPECT_FALSE(info1->CanLink());
-  EXPECT_STREQ("", info1->log_info().c_str());
   GLuint client_id = 0;
   EXPECT_TRUE(manager_.GetClientId(info1->service_id(), &client_id));
   EXPECT_EQ(kClient1Id, client_id);
   // Check we get nothing for a non-existent program.
   EXPECT_TRUE(manager_.GetProgramInfo(kClient2Id) == NULL);
-  // Check trying to a remove non-existent programs does not crash.
-  manager_.RemoveProgramInfo(kClient2Id);
-  // Check we can't get the program after we remove it.
-  manager_.RemoveProgramInfo(kClient1Id);
-  EXPECT_TRUE(manager_.GetProgramInfo(kClient1Id) == NULL);
 }
 
 TEST_F(ProgramManagerTest, Destroy) {
@@ -92,6 +84,43 @@ TEST_F(ProgramManagerTest, Destroy) {
   // Check the resources were released.
   info1 = manager_.GetProgramInfo(kClient1Id);
   ASSERT_TRUE(info1 == NULL);
+}
+
+TEST_F(ProgramManagerTest, DeleteBug) {
+  ShaderManager shader_manager;
+  const GLuint kClient1Id = 1;
+  const GLuint kClient2Id = 2;
+  const GLuint kService1Id = 11;
+  const GLuint kService2Id = 12;
+  // Check we can create program.
+  manager_.CreateProgramInfo(kClient1Id, kService1Id);
+  manager_.CreateProgramInfo(kClient2Id, kService2Id);
+  // Check program got created.
+  ProgramManager::ProgramInfo::Ref info1(manager_.GetProgramInfo(kClient1Id));
+  ProgramManager::ProgramInfo::Ref info2(manager_.GetProgramInfo(kClient2Id));
+  ASSERT_TRUE(info1.get() != NULL);
+  ASSERT_TRUE(info2.get() != NULL);
+  manager_.UseProgram(info1);
+  manager_.MarkAsDeleted(&shader_manager, info1);
+  manager_.MarkAsDeleted(&shader_manager, info2);
+  EXPECT_TRUE(manager_.IsOwned(info1));
+  EXPECT_FALSE(manager_.IsOwned(info2));
+}
+
+TEST_F(ProgramManagerTest, ProgramInfo) {
+  const GLuint kClient1Id = 1;
+  const GLuint kService1Id = 11;
+  // Check we can create program.
+  manager_.CreateProgramInfo(kClient1Id, kService1Id);
+  // Check program got created.
+  ProgramManager::ProgramInfo* info1 = manager_.GetProgramInfo(kClient1Id);
+  ASSERT_TRUE(info1 != NULL);
+  EXPECT_EQ(kService1Id, info1->service_id());
+  EXPECT_FALSE(info1->InUse());
+  EXPECT_FALSE(info1->IsValid());
+  EXPECT_FALSE(info1->IsDeleted());
+  EXPECT_FALSE(info1->CanLink());
+  EXPECT_STREQ("", info1->log_info().c_str());
 }
 
 class ProgramManagerWithShaderTest : public testing::Test {
@@ -431,19 +460,19 @@ TEST_F(ProgramManagerWithShaderTest, AttachDetachShader) {
   ShaderManager::ShaderInfo* fshader = shader_manager.GetShaderInfo(
       kFShaderClientId);
   fshader->SetStatus(true, "", NULL);
-  EXPECT_TRUE(program_info->AttachShader(vshader));
+  EXPECT_TRUE(program_info->AttachShader(&shader_manager, vshader));
   EXPECT_FALSE(program_info->CanLink());
-  EXPECT_TRUE(program_info->AttachShader(fshader));
+  EXPECT_TRUE(program_info->AttachShader(&shader_manager, fshader));
   EXPECT_TRUE(program_info->CanLink());
-  program_info->DetachShader(vshader);
+  program_info->DetachShader(&shader_manager, vshader);
   EXPECT_FALSE(program_info->CanLink());
-  EXPECT_TRUE(program_info->AttachShader(vshader));
+  EXPECT_TRUE(program_info->AttachShader(&shader_manager, vshader));
   EXPECT_TRUE(program_info->CanLink());
-  program_info->DetachShader(fshader);
+  program_info->DetachShader(&shader_manager, fshader);
   EXPECT_FALSE(program_info->CanLink());
-  EXPECT_FALSE(program_info->AttachShader(vshader));
+  EXPECT_FALSE(program_info->AttachShader(&shader_manager, vshader));
   EXPECT_FALSE(program_info->CanLink());
-  EXPECT_TRUE(program_info->AttachShader(fshader));
+  EXPECT_TRUE(program_info->AttachShader(&shader_manager, fshader));
   EXPECT_TRUE(program_info->CanLink());
   vshader->SetStatus(false, "", NULL);
   EXPECT_FALSE(program_info->CanLink());
@@ -453,6 +482,8 @@ TEST_F(ProgramManagerWithShaderTest, AttachDetachShader) {
   EXPECT_FALSE(program_info->CanLink());
   fshader->SetStatus(true, "", NULL);
   EXPECT_TRUE(program_info->CanLink());
+  EXPECT_TRUE(program_info->DetachShader(&shader_manager, fshader));
+  EXPECT_FALSE(program_info->DetachShader(&shader_manager, fshader));
   shader_manager.Destroy(false);
 }
 
@@ -585,7 +616,7 @@ TEST_F(ProgramManagerWithShaderTest, GLDriverReturnsWrongTypeInfo) {
   ProgramManager::ProgramInfo* program_info =
       manager_.GetProgramInfo(kClientProgramId);
   ASSERT_TRUE(program_info != NULL);
-  EXPECT_TRUE(program_info->AttachShader(shader_info));
+  EXPECT_TRUE(program_info->AttachShader(&shader_manager, shader_info));
   program_info->Update();
   // Check that we got the good type, not the bad.
   // Check Attribs
@@ -612,6 +643,108 @@ TEST_F(ProgramManagerWithShaderTest, GLDriverReturnsWrongTypeInfo) {
     EXPECT_EQ(static_cast<GLenum>(it->second.type), uniform_info->type);
     EXPECT_EQ(it->second.size, uniform_info->size);
   }
+  shader_manager.Destroy(false);
+}
+
+TEST_F(ProgramManagerWithShaderTest, ProgramInfoUseCount) {
+  ShaderManager shader_manager;
+  ProgramManager::ProgramInfo* program_info =
+      manager_.GetProgramInfo(kClientProgramId);
+  ASSERT_TRUE(program_info != NULL);
+  EXPECT_FALSE(program_info->CanLink());
+  const GLuint kVShaderClientId = 2001;
+  const GLuint kFShaderClientId = 2002;
+  const GLuint kVShaderServiceId = 3001;
+  const GLuint kFShaderServiceId = 3002;
+  shader_manager.CreateShaderInfo(
+      kVShaderClientId, kVShaderServiceId, GL_VERTEX_SHADER);
+  ShaderManager::ShaderInfo* vshader = shader_manager.GetShaderInfo(
+      kVShaderClientId);
+  ASSERT_TRUE(vshader != NULL);
+  vshader->SetStatus(true, "", NULL);
+  shader_manager.CreateShaderInfo(
+      kFShaderClientId, kFShaderServiceId, GL_FRAGMENT_SHADER);
+  ShaderManager::ShaderInfo* fshader = shader_manager.GetShaderInfo(
+      kFShaderClientId);
+  ASSERT_TRUE(fshader != NULL);
+  fshader->SetStatus(true, "", NULL);
+  EXPECT_FALSE(vshader->InUse());
+  EXPECT_FALSE(fshader->InUse());
+  EXPECT_TRUE(program_info->AttachShader(&shader_manager, vshader));
+  EXPECT_TRUE(vshader->InUse());
+  EXPECT_TRUE(program_info->AttachShader(&shader_manager, fshader));
+  EXPECT_TRUE(fshader->InUse());
+  EXPECT_TRUE(program_info->CanLink());
+  EXPECT_FALSE(program_info->InUse());
+  EXPECT_FALSE(program_info->IsDeleted());
+  manager_.UseProgram(program_info);
+  EXPECT_TRUE(program_info->InUse());
+  manager_.UseProgram(program_info);
+  EXPECT_TRUE(program_info->InUse());
+  manager_.MarkAsDeleted(&shader_manager, program_info);
+  EXPECT_TRUE(program_info->IsDeleted());
+  ProgramManager::ProgramInfo* info2 =
+      manager_.GetProgramInfo(kClientProgramId);
+  EXPECT_EQ(program_info, info2);
+  manager_.UnuseProgram(&shader_manager, program_info);
+  EXPECT_TRUE(program_info->InUse());
+  // this should delete the info.
+  manager_.UnuseProgram(&shader_manager, program_info);
+  info2 = manager_.GetProgramInfo(kClientProgramId);
+  EXPECT_TRUE(info2 == NULL);
+  EXPECT_FALSE(vshader->InUse());
+  EXPECT_FALSE(fshader->InUse());
+  shader_manager.Destroy(false);
+}
+
+TEST_F(ProgramManagerWithShaderTest, ProgramInfoUseCount2) {
+  ShaderManager shader_manager;
+  ProgramManager::ProgramInfo* program_info =
+      manager_.GetProgramInfo(kClientProgramId);
+  ASSERT_TRUE(program_info != NULL);
+  EXPECT_FALSE(program_info->CanLink());
+  const GLuint kVShaderClientId = 2001;
+  const GLuint kFShaderClientId = 2002;
+  const GLuint kVShaderServiceId = 3001;
+  const GLuint kFShaderServiceId = 3002;
+  shader_manager.CreateShaderInfo(
+      kVShaderClientId, kVShaderServiceId, GL_VERTEX_SHADER);
+  ShaderManager::ShaderInfo* vshader = shader_manager.GetShaderInfo(
+      kVShaderClientId);
+  ASSERT_TRUE(vshader != NULL);
+  vshader->SetStatus(true, "", NULL);
+  shader_manager.CreateShaderInfo(
+      kFShaderClientId, kFShaderServiceId, GL_FRAGMENT_SHADER);
+  ShaderManager::ShaderInfo* fshader = shader_manager.GetShaderInfo(
+      kFShaderClientId);
+  ASSERT_TRUE(fshader != NULL);
+  fshader->SetStatus(true, "", NULL);
+  EXPECT_FALSE(vshader->InUse());
+  EXPECT_FALSE(fshader->InUse());
+  EXPECT_TRUE(program_info->AttachShader(&shader_manager, vshader));
+  EXPECT_TRUE(vshader->InUse());
+  EXPECT_TRUE(program_info->AttachShader(&shader_manager, fshader));
+  EXPECT_TRUE(fshader->InUse());
+  EXPECT_TRUE(program_info->CanLink());
+  EXPECT_FALSE(program_info->InUse());
+  EXPECT_FALSE(program_info->IsDeleted());
+  manager_.UseProgram(program_info);
+  EXPECT_TRUE(program_info->InUse());
+  manager_.UseProgram(program_info);
+  EXPECT_TRUE(program_info->InUse());
+  manager_.UnuseProgram(&shader_manager, program_info);
+  EXPECT_TRUE(program_info->InUse());
+  manager_.UnuseProgram(&shader_manager, program_info);
+  EXPECT_FALSE(program_info->InUse());
+  ProgramManager::ProgramInfo* info2 =
+      manager_.GetProgramInfo(kClientProgramId);
+  EXPECT_EQ(program_info, info2);
+  // this should delete the program.
+  manager_.MarkAsDeleted(&shader_manager, program_info);
+  info2 = manager_.GetProgramInfo(kClientProgramId);
+  EXPECT_TRUE(info2 == NULL);
+  EXPECT_FALSE(vshader->InUse());
+  EXPECT_FALSE(fshader->InUse());
   shader_manager.Destroy(false);
 }
 
