@@ -215,6 +215,10 @@ std::string Label::GetClassName() const {
   return kViewClassName;
 }
 
+bool Label::HitTest(const gfx::Point& l) const {
+  return false;
+}
+
 void Label::OnMouseMoved(const MouseEvent& event) {
   UpdateContainsMouse(event);
 }
@@ -456,6 +460,15 @@ void Label::CalculateDrawStringParams(std::wstring* paint_text,
 
   *text_bounds = GetTextBounds();
   *flags = ComputeMultiLineFlags();
+  // If rtl_alignment_mode_ is AUTO_DETECT_ALIGNMENT (such as for text from
+  // webpage, not from chrome's UI), its directionality is forced to be RTL if
+  // it is right aligned. Otherwise, its directionality is forced to be LTR.
+  if (rtl_alignment_mode_ == AUTO_DETECT_ALIGNMENT) {
+    if (horiz_alignment_ == ALIGN_RIGHT)
+      *flags |= gfx::Canvas::FORCE_RTL_DIRECTIONALITY;
+    else
+      *flags |= gfx::Canvas::FORCE_LTR_DIRECTIONALITY;
+  }
 }
 
 }  // namespace views

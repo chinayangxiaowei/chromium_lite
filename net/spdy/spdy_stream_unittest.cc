@@ -9,6 +9,8 @@
 #include "net/spdy/spdy_test_util.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
+// TODO(ukai): factor out common part with spdy_http_stream_unittest.cc
+//
 namespace net {
 
 namespace {

@@ -15,9 +15,16 @@ namespace browser_sync {
 class Cryptographer;
 }
 
+namespace sync_pb {
+class EntitySpecifics;
+}
+
 namespace syncable {
 
+const char kEncryptedString[] = "encrypted";
+
 class BaseTransaction;
+class Entry;
 class ReadTransaction;
 class WriteTransaction;
 
@@ -39,12 +46,21 @@ bool VerifyUnsyncedChangesAreEncrypted(
 // or unencrypted, based on |encrypted_types|.
 bool ProcessUnsyncedChangesForEncryption(
     WriteTransaction* const trans,
-    const syncable::ModelTypeSet& encrypted_types,
     browser_sync::Cryptographer* cryptographer);
 
-// Verifies all data of type |type| is encrypted if |is_encrypted| is true or is
-// unencrypted otherwise.
+// Returns true if the entry requires encryption but is not encrypted, false
+// otherwise. Note: this does not check that already encrypted entries are
+// encrypted with the proper key.
+bool EntryNeedsEncryption(const ModelTypeSet& encrypted_types,
+                          const Entry& entry);
+
+// Same as EntryNeedsEncryption, but looks at specifics.
+bool SpecificsNeedsEncryption(const ModelTypeSet& encrypted_types,
+                              const sync_pb::EntitySpecifics& specifics);
+
+// Verifies all data of type |type| is encrypted appropriately.
 bool VerifyDataTypeEncryption(BaseTransaction* const trans,
+                              browser_sync::Cryptographer* cryptographer,
                               ModelType type,
                               bool is_encrypted);
 

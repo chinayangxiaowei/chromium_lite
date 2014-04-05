@@ -19,6 +19,7 @@
 #include "base/memory/scoped_ptr.h"
 #include "base/message_loop.h"
 #include "base/shared_memory.h"
+#include "gpu/command_buffer/service/context_group.h"
 #include "gpu/command_buffer/service/gpu_scheduler.h"
 #include "gpu/command_buffer/service/command_buffer_service.h"
 #include "gpu/command_buffer/client/gles2_implementation.h"
@@ -56,16 +57,17 @@ bool GLES2Demo::Setup(void* hwnd, int32 size) {
   if (!command_buffer->Initialize(size))
     return NULL;
 
-  GpuScheduler* gpu_scheduler = new GpuScheduler(command_buffer.get(),
-                                                 NULL,
-                                                 NULL);
+  gpu::gles2::ContextGroup::Ref group(new gpu::gles2::ContextGroup(true));
+  GpuScheduler* gpu_scheduler = GpuScheduler::Create(command_buffer.get(),
+                                                     NULL,
+                                                     NULL);
   if (!gpu_scheduler->Initialize(reinterpret_cast<HWND>(hwnd),
                                  gfx::Size(),
+                                 false,
                                  gpu::gles2::DisallowedExtensions(),
                                  NULL,
                                  std::vector<int32>(),
-                                 NULL,
-                                 0)) {
+                                 NULL)) {
     return NULL;
   }
 
@@ -92,7 +94,8 @@ bool GLES2Demo::Setup(void* hwnd, int32 size) {
                                               transfer_buffer.size,
                                               transfer_buffer.ptr,
                                               transfer_buffer_id,
-                                              false));
+                                              false,
+                                              true));
 
   GLFromCPPInit();
 

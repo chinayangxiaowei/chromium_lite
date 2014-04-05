@@ -6,6 +6,18 @@
 
 namespace printing {
 
+// True if this is the first preview request.
+const char kIsFirstRequest[] = "isFirstRequest";
+
+// Unique ID sent along every preview request.
+const char kPreviewRequestID[] = "requestID";
+
+// Unique ID to identify a print preview UI.
+const char kPreviewUIAddr[] = "previewUIAddr";
+
+// Print using cloud print: true if selected, false if not.
+const char kSettingCloudPrintId[] = "cloudPrintID";
+
 // Print job setting 'collate'.
 const char kSettingCollate[] = "collate";
 
@@ -38,5 +50,9 @@ const char kSettingPrinterName[] = "printerName";
 
 // Print to PDF option: true if selected, false if not.
 const char kSettingPrintToPDF[] = "printToPDF";
+
+// Indices used to represent first preview page and complete preview document.
+const int FIRST_PAGE_INDEX = 0;
+const int COMPLETE_PREVIEW_DOCUMENT_INDEX = -1;
 
 }  // namespace printing

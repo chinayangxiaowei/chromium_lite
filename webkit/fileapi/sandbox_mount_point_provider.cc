@@ -22,6 +22,7 @@
 #include "webkit/fileapi/file_system_util.h"
 #include "webkit/fileapi/local_file_system_file_util.h"
 #include "webkit/fileapi/obfuscated_file_system_file_util.h"
+#include "webkit/fileapi/quota_file_util.h"
 #include "webkit/fileapi/sandbox_mount_point_provider.h"
 #include "webkit/glue/webkit_glue.h"
 #include "webkit/quota/quota_manager.h"
@@ -278,9 +279,11 @@ SandboxMountPointProvider::SandboxMountPointProvider(
       path_manager_(path_manager),
       file_message_loop_(file_message_loop),
       profile_path_(profile_path),
+      quota_file_util_(QuotaFileUtil::GetInstance()),
       sandbox_file_util_(
           new ObfuscatedFileSystemFileUtil(
-              profile_path.Append(kNewFileSystemDirectory))) {
+              profile_path.Append(kNewFileSystemDirectory),
+              quota_file_util_)) {
 }
 
 SandboxMountPointProvider::~SandboxMountPointProvider() {
@@ -457,14 +460,6 @@ SandboxMountPointProvider::ValidateFileSystemRootAndGetPathOnFileThread(
       origin_url, type, create);
 }
 
-FilePath SandboxMountPointProvider::GetBaseDirectoryForOrigin(
-    const GURL& origin_url, bool create) const {
-
-  MigrateIfNeeded(sandbox_file_util_, old_base_path());
-
-  return sandbox_file_util_->GetDirectoryForOrigin(origin_url, create);
-}
-
 FilePath SandboxMountPointProvider::GetBaseDirectoryForOriginAndType(
     const GURL& origin_url, fileapi::FileSystemType type, bool create) const {
 
@@ -568,7 +563,7 @@ int64 SandboxMountPointProvider::GetOriginUsageOnFileThread(
       else
         usage += file_info.size;
     }
-    // TODO(dmikurube): Add some cost as described at crbug.com/86114.
+    usage += quota_file_util_->ComputeFilePathCost(file_path_each);
   }
   // This clears the dirty flag too.
   FileSystemUsageCache::UpdateUsage(usage_file_path, usage);

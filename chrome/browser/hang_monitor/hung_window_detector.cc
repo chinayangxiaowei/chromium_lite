@@ -1,4 +1,4 @@
-// Copyright (c) 2006-2008 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -59,6 +59,14 @@ void HungWindowDetector::OnTick() {
 
   EnumChildWindows(top_level_window_, ChildWndEnumProc,
                    reinterpret_cast<LPARAM>(this));
+
+  // The window shouldn't be disabled unless we're showing a modal dialog.
+  // If we're not, then reenable the window.
+  if (!::IsWindowEnabled(top_level_window_) &&
+      !::GetWindow(top_level_window_, GW_ENABLEDPOPUP)) {
+    ::EnableWindow(top_level_window_, TRUE);
+  }
+
   enumerating_ = false;
 }
 
@@ -148,7 +156,7 @@ bool HungWindowDetector::CheckChildWindow(HWND child_window) {
           if (process_id_check !=  child_window_process_id) {
             break;
           }
-          TerminateProcess(child_process, ResultCodes::HUNG);
+          TerminateProcess(child_process, content::RESULT_CODE_HUNG);
           WaitForSingleObject(child_process, kTerminateTimeout);
           child_process.Close();
           break;

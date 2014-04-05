@@ -31,12 +31,6 @@ class GLES2Implementation;
 }
 }
 
-namespace media {
-class VideoDecodeContext;
-class VideoDecodeEngine;
-class VideoDecodeRendererGLContext;
-}
-
 class RendererGLContext : public base::SupportsWeakPtr<RendererGLContext> {
  public:
   // These are the same error codes as used by EGL.
@@ -60,6 +54,18 @@ class RendererGLContext : public base::SupportsWeakPtr<RendererGLContext> {
     SAMPLES        = 0x3031,
     SAMPLE_BUFFERS = 0x3032,
     NONE           = 0x3038  // Attrib list = terminator
+  };
+
+  // Reasons that a lost context might have been provoked.
+  enum ContextLostReason {
+    // This context definitely provoked the loss of context.
+    kGuilty,
+
+    // This context definitely did not provoke the loss of context.
+    kInnocent,
+
+    // It is unknown whether this context provoked the loss of context.
+    kUnknown
   };
 
   // Initialize the library. This must have completed before any other
@@ -91,8 +97,9 @@ class RendererGLContext : public base::SupportsWeakPtr<RendererGLContext> {
   // more cross-platform.
   static RendererGLContext* CreateViewContext(
       GpuChannelHost* channel,
-      gfx::PluginWindowHandle render_surface,
       int render_view_id,
+      bool share_resources,
+      RendererGLContext* share_group,
       const char* allowed_extensions,
       const int32* attrib_list,
       const GURL& active_arl);
@@ -114,11 +121,16 @@ class RendererGLContext : public base::SupportsWeakPtr<RendererGLContext> {
   // attribute/value pairs.
   static RendererGLContext* CreateOffscreenContext(
       GpuChannelHost* channel,
-      RendererGLContext* parent,
       const gfx::Size& size,
+      bool share_resources,
+      RendererGLContext* share_group,
       const char* allowed_extensions,
       const int32* attrib_list,
       const GURL& active_url);
+
+  // Sets the parent context. If any parent textures have been created for
+  // another parent, it is important to delete them before changing the parent.
+  bool SetParent(RendererGLContext* parent);
 
   // Resize an offscreen frame buffer. The resize occurs on the next call to
   // SwapBuffers. This is to avoid waiting until all pending GL calls have been
@@ -143,7 +155,7 @@ class RendererGLContext : public base::SupportsWeakPtr<RendererGLContext> {
   // service side.
   void SetSwapBuffersCallback(Callback0::Type* callback);
 
-  void SetContextLostCallback(Callback0::Type* callback);
+  void SetContextLostCallback(Callback1<ContextLostReason>::Type* callback);
 
   // Set the current RendererGLContext for the calling thread.
   static bool MakeCurrent(RendererGLContext* context);
@@ -153,19 +165,6 @@ class RendererGLContext : public base::SupportsWeakPtr<RendererGLContext> {
   // that has been rendered since the last call to a copy that can be accessed
   // by the parent RendererGLContext.
   bool SwapBuffers();
-
-  // Create a hardware video decode engine corresponding to the
-  // RendererGLContext.
-  media::VideoDecodeEngine* CreateVideoDecodeEngine();
-
-  // Create a hardware video decode RendererGLContext to pair with the hardware
-  // video decode engine. It can also be used with a software decode engine.
-  //
-  // Set |hardware_decoder| to true if this RendererGLContext is for a hardware
-  // video engine. |message_loop| is where the decode RendererGLContext should
-  // run on.
-  media::VideoDecodeContext* CreateVideoDecodeContext(MessageLoop* message_loop,
-                                                      bool hardware_decoder);
 
   // Create a TransportTextureHost object associated with the context.
   scoped_refptr<TransportTextureHost> CreateTransportTextureHost();
@@ -186,29 +185,15 @@ class RendererGLContext : public base::SupportsWeakPtr<RendererGLContext> {
 
   CommandBufferProxy* GetCommandBufferProxy();
 
-  // Create a latch for synchronization between contexts using glSetLatch and
-  // glWaitLatch.
-  // CreateLatch will only fail if there is a generally unrecoverable
-  // error, in which case 0 is returned. Returns latch_id on success.
-  bool CreateLatch(uint32* ret_latch);
-
-  // Destroy a latch.
-  bool DestroyLatch(uint32 latch);
-
-  // All child contexts get a latch pair automatically. These latches are used
-  // for synchronization with parent context. If *this* context does not have a
-  // parent context, these methods will return false.
-  bool GetParentToChildLatch(uint32* parent_to_child_latch);
-  bool GetChildToParentLatch(uint32* child_to_parent_latch);
-
  private:
-  RendererGLContext(GpuChannelHost* channel,
-                    RendererGLContext* parent);
+  explicit RendererGLContext(GpuChannelHost* channel);
 
   bool Initialize(bool onscreen,
-                  gfx::PluginWindowHandle render_surface,
                   int render_view_id,
                   const gfx::Size& size,
+                  bool share_resources,
+                  bool bind_generates_resource,
+                  RendererGLContext* share_group,
                   const char* allowed_extensions,
                   const int32* attrib_list,
                   const GURL& active_url);
@@ -220,11 +205,8 @@ class RendererGLContext : public base::SupportsWeakPtr<RendererGLContext> {
   scoped_refptr<GpuChannelHost> channel_;
   base::WeakPtr<RendererGLContext> parent_;
   scoped_ptr<Callback0::Type> swap_buffers_callback_;
-  scoped_ptr<Callback0::Type> context_lost_callback_;
+  scoped_ptr<Callback1<ContextLostReason>::Type> context_lost_callback_;
   uint32 parent_texture_id_;
-  uint32 child_to_parent_latch_;
-  uint32 parent_to_child_latch_;
-  int32 latch_transfer_buffer_id_;
   CommandBufferProxy* command_buffer_;
   gpu::gles2::GLES2CmdHelper* gles2_helper_;
   int32 transfer_buffer_id_;

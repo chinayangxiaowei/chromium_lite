@@ -7,17 +7,44 @@
 #import <AppKit/AppKit.h>
 #include <Carbon/Carbon.h>
 
-#include "app/mac/nsimage_cache.h"
 #include "base/logging.h"
+#include "base/mac/mac_util.h"
 #include "base/mac/scoped_cftyperef.h"
 #include "base/memory/scoped_nsobject.h"
 #include "third_party/WebKit/Source/WebKit/chromium/public/WebCursorInfo.h"
 #include "third_party/WebKit/Source/WebKit/chromium/public/WebImage.h"
 #include "third_party/WebKit/Source/WebKit/chromium/public/WebSize.h"
+#include "ui/gfx/mac/nsimage_cache.h"
+
+#if WEBKIT_USING_SKIA
+#include "skia/ext/skia_utils_mac.h"
+#endif
 
 using WebKit::WebCursorInfo;
 using WebKit::WebImage;
 using WebKit::WebSize;
+
+// Declare symbols that are part of the 10.6 SDK.
+#if !defined(MAC_OS_X_VERSION_10_6) || \
+    MAC_OS_X_VERSION_MAX_ALLOWED < MAC_OS_X_VERSION_10_6
+
+@interface NSCursor (SnowLeopardSDKDeclarations)
++ (NSCursor*)contextualMenuCursor;
++ (NSCursor*)dragCopyCursor;
++ (NSCursor*)operationNotAllowedCursor;
+@end
+
+#endif  // MAC_OS_X_VERSION_10_6
+
+// Declare symbols that are part of the 10.7 SDK.
+#if !defined(MAC_OS_X_VERSION_10_7) || \
+    MAC_OS_X_VERSION_MAX_ALLOWED < MAC_OS_X_VERSION_10_7
+
+@interface NSCursor (LionSDKDeclarations)
++ (NSCursor*)IBeamCursorForVerticalLayout;
+@end
+
+#endif  // MAC_OS_X_VERSION_10_7
 
 namespace {
 
@@ -26,7 +53,7 @@ namespace {
 NSCursor* LoadCursor(const char* name, int x, int y) {
   NSString* file_name = [NSString stringWithUTF8String:name];
   DCHECK(file_name);
-  NSImage* cursor_image = app::mac::GetCachedImageWithName(file_name);
+  NSImage* cursor_image = gfx::GetCachedImageWithName(file_name);
   DCHECK(cursor_image);
   return [[[NSCursor alloc] initWithImage:cursor_image
                                   hotSpot:NSMakePoint(x, y)] autorelease];
@@ -90,9 +117,14 @@ NSCursor* WebCursor::GetCursor() const {
     case WebCursorInfo::TypePointer:
       return [NSCursor arrowCursor];
     case WebCursorInfo::TypeCross:
-      return LoadCursor("crossHairCursor", 11, 11);
+      return [NSCursor crosshairCursor];
     case WebCursorInfo::TypeHand:
-      return LoadCursor("linkCursor", 6, 1);
+      // If >= 10.7, the pointingHandCursor has a shadow so use it. Otherwise
+      // use the custom one.
+      if (base::mac::IsOSLionOrLater())
+        return [NSCursor pointingHandCursor];
+      else
+        return LoadCursor("linkCursor", 6, 1);
     case WebCursorInfo::TypeIBeam:
       return [NSCursor IBeamCursor];
     case WebCursorInfo::TypeWait:
@@ -139,11 +171,19 @@ NSCursor* WebCursor::GetCursor() const {
     case WebCursorInfo::TypeMove:
       return LoadCursor("moveCursor", 7, 7);
     case WebCursorInfo::TypeVerticalText:
-      return LoadCursor("verticalTextCursor", 7, 7);
+      // IBeamCursorForVerticalLayout is >= 10.7.
+      if ([NSCursor respondsToSelector:@selector(IBeamCursorForVerticalLayout)])
+        return [NSCursor IBeamCursorForVerticalLayout];
+      else
+        return LoadCursor("verticalTextCursor", 7, 7);
     case WebCursorInfo::TypeCell:
       return LoadCursor("cellCursor", 7, 7);
     case WebCursorInfo::TypeContextMenu:
-      return LoadCursor("contextMenuCursor", 3, 2);
+      // contextualMenuCursor is >= 10.6.
+      if ([NSCursor respondsToSelector:@selector(contextualMenuCursor)])
+        return [NSCursor contextualMenuCursor];
+      else
+        return LoadCursor("contextMenuCursor", 3, 2);
     case WebCursorInfo::TypeAlias:
       return LoadCursor("aliasCursor", 11, 3);
     case WebCursorInfo::TypeProgress:
@@ -151,11 +191,17 @@ NSCursor* WebCursor::GetCursor() const {
     case WebCursorInfo::TypeNoDrop:
       return LoadCursor("noDropCursor", 3, 1);
     case WebCursorInfo::TypeCopy:
-      return LoadCursor("copyCursor", 3, 2);
+      // dragCopyCursor is >= 10.6.
+      if ([NSCursor respondsToSelector:@selector(dragCopyCursor)])
+        return [NSCursor dragCopyCursor];
+      else
+        return LoadCursor("copyCursor", 3, 2);
     case WebCursorInfo::TypeNone:
       return LoadCursor("noneCursor", 7, 7);
     case WebCursorInfo::TypeNotAllowed:
-      return LoadCursor("notAllowedCursor", 11, 11);
+      // Docs say that operationNotAllowedCursor is >= 10.6, and it's not in the
+      // 10.5 SDK, but later SDKs note that it really is available on 10.5.
+     return [NSCursor operationNotAllowedCursor];
     case WebCursorInfo::TypeZoomIn:
       return LoadCursor("zoomInCursor", 7, 7);
     case WebCursorInfo::TypeZoomOut:
@@ -284,7 +330,11 @@ void WebCursor::InitFromCursor(const Cursor* cursor) {
   WebKit::WebCursorInfo cursor_info;
   cursor_info.type = WebCursorInfo::TypeCustom;
   cursor_info.hotSpot = WebKit::WebPoint(cursor->hotSpot.h, cursor->hotSpot.v);
+#if WEBKIT_USING_SKIA
+  cursor_info.customImage = gfx::CGImageToSkBitmap(cg_image.get());
+#else
   cursor_info.customImage = cg_image.get();
+#endif
 
   InitFromCursorInfo(cursor_info);
 }
@@ -316,6 +366,18 @@ void WebCursor::InitFromNSCursor(NSCursor* cursor) {
     cursor_info.type = WebCursorInfo::TypeGrab;
   } else if ([cursor isEqual:[NSCursor closedHandCursor]]) {
     cursor_info.type = WebCursorInfo::TypeGrabbing;
+  } else if ([cursor isEqual:[NSCursor operationNotAllowedCursor]]) {
+    cursor_info.type = WebCursorInfo::TypeNotAllowed;
+  } else if ([NSCursor respondsToSelector:@selector(dragCopyCursor)] &&
+             [cursor isEqual:[NSCursor dragCopyCursor]]) {
+    cursor_info.type = WebCursorInfo::TypeCopy;
+  } else if ([NSCursor respondsToSelector:@selector(contextualMenuCursor)] &&
+             [cursor isEqual:[NSCursor contextualMenuCursor]]) {
+    cursor_info.type = WebCursorInfo::TypeContextMenu;
+  } else if (
+      [NSCursor respondsToSelector:@selector(IBeamCursorForVerticalLayout)] &&
+      [cursor isEqual:[NSCursor IBeamCursorForVerticalLayout]]) {
+    cursor_info.type = WebCursorInfo::TypeVerticalText;
   } else {
     // Also handles the [NSCursor disappearingItemCursor] case. Quick-and-dirty
     // image conversion; TODO(avi): do better.
@@ -332,7 +394,11 @@ void WebCursor::InitFromNSCursor(NSCursor* cursor) {
       cursor_info.type = WebCursorInfo::TypeCustom;
       NSPoint hot_spot = [cursor hotSpot];
       cursor_info.hotSpot = WebKit::WebPoint(hot_spot.x, hot_spot.y);
+#if WEBKIT_USING_SKIA
+      cursor_info.customImage = gfx::CGImageToSkBitmap(cg_image);
+#else
       cursor_info.customImage = cg_image;
+#endif
     } else {
       cursor_info.type = WebCursorInfo::TypePointer;
     }

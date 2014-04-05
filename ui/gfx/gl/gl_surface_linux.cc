@@ -173,9 +173,13 @@ bool NativeViewGLSurfaceOSMesa::SwapBuffers() {
 
   gfx::Size size = GetSize();
 
-  // Copy the frame into the pixmap.
   XWindowAttributes attributes;
-  XGetWindowAttributes(g_osmesa_display, window_, &attributes);
+  if (!XGetWindowAttributes(g_osmesa_display, window_, &attributes)) {
+    LOG(ERROR) << "XGetWindowAttributes failed for window " << window_ << ".";
+    return false;
+  }
+
+  // Copy the frame into the pixmap.
   ui::PutARGBImage(g_osmesa_display,
                    attributes.visual,
                    attributes.depth,
@@ -200,7 +204,10 @@ bool NativeViewGLSurfaceOSMesa::SwapBuffers() {
 bool NativeViewGLSurfaceOSMesa::UpdateSize() {
   // Get the window size.
   XWindowAttributes attributes;
-  XGetWindowAttributes(g_osmesa_display, window_, &attributes);
+  if (!XGetWindowAttributes(g_osmesa_display, window_, &attributes)) {
+    LOG(ERROR) << "XGetWindowAttributes failed for window " << window_ << ".";
+    return false;
+  }
   gfx::Size window_size = gfx::Size(std::max(1, attributes.width),
                                     std::max(1, attributes.height));
 
@@ -244,7 +251,11 @@ bool NativeViewGLSurfaceOSMesa::UpdateSize() {
 }
 
 scoped_refptr<GLSurface> GLSurface::CreateViewGLSurface(
+    bool software,
     gfx::PluginWindowHandle window) {
+  if (software)
+    return NULL;
+
   switch (GetGLImplementation()) {
     case kGLImplementationOSMesaGL: {
       scoped_refptr<GLSurface> surface(
@@ -256,7 +267,7 @@ scoped_refptr<GLSurface> GLSurface::CreateViewGLSurface(
     }
     case kGLImplementationEGLGLES2: {
       scoped_refptr<GLSurface> surface(new NativeViewGLSurfaceEGL(
-          window));
+          false, window));
       if (!surface->Initialize())
         return NULL;
 
@@ -279,7 +290,11 @@ scoped_refptr<GLSurface> GLSurface::CreateViewGLSurface(
 }
 
 scoped_refptr<GLSurface> GLSurface::CreateOffscreenGLSurface(
+    bool software,
     const gfx::Size& size) {
+  if (software)
+    return NULL;
+
   switch (GetGLImplementation()) {
     case kGLImplementationOSMesaGL: {
       scoped_refptr<GLSurface> surface(new GLSurfaceOSMesa(OSMESA_RGBA,
@@ -290,7 +305,7 @@ scoped_refptr<GLSurface> GLSurface::CreateOffscreenGLSurface(
       return surface;
     }
     case kGLImplementationEGLGLES2: {
-      scoped_refptr<GLSurface> surface(new PbufferGLSurfaceEGL(size));
+      scoped_refptr<GLSurface> surface(new PbufferGLSurfaceEGL(false, size));
       if (!surface->Initialize())
         return NULL;
 

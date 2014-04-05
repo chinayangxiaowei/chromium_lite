@@ -8,7 +8,9 @@
 
 #include "content/browser/tab_contents/tab_contents_observer.h"
 
+struct PrintHostMsg_DidGetPreviewPageCount_Params;
 struct PrintHostMsg_DidPreviewDocument_Params;
+struct PrintHostMsg_DidPreviewPage_Params;
 
 namespace printing {
 
@@ -30,9 +32,13 @@ class PrintPreviewMessageHandler : public TabContentsObserver {
 
   // Message handlers.
   void OnRequestPrintPreview();
+  void OnDidGetPreviewPageCount(
+      const PrintHostMsg_DidGetPreviewPageCount_Params& params);
+  void OnDidPreviewPage(const PrintHostMsg_DidPreviewPage_Params& params);
   void OnPagesReadyForPreview(
       const PrintHostMsg_DidPreviewDocument_Params& params);
   void OnPrintPreviewFailed(int document_cookie);
+  void OnPrintPreviewCancelled(int document_cookie);
 
   DISALLOW_COPY_AND_ASSIGN(PrintPreviewMessageHandler);
 };

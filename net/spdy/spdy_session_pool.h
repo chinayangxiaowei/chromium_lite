@@ -99,7 +99,7 @@ class NET_API SpdySessionPool
 
   // Creates a Value summary of the state of the spdy session pool. The caller
   // responsible for deleting the returned value.
-  Value* SpdySessionPoolInfoToValue() const;
+  base::Value* SpdySessionPoolInfoToValue() const;
 
   SpdySettingsStorage* mutable_spdy_settings() { return &spdy_settings_; }
   const SpdySettingsStorage& spdy_settings() const { return spdy_settings_; }
@@ -181,7 +181,10 @@ class NET_API SpdySessionPool
   static bool g_enable_ip_pooling;
 
   const scoped_refptr<SSLConfigService> ssl_config_service_;
-  HostResolver* resolver_;
+  HostResolver* const resolver_;
+
+  // Defaults to true. May be controlled via SpdySessionPoolPeer for tests.
+  bool verify_domain_authentication_;
 
   DISALLOW_COPY_AND_ASSIGN(SpdySessionPool);
 };

@@ -24,7 +24,9 @@ MockRenderThread::MockRenderThread()
       widget_(NULL),
       reply_deserializer_(NULL),
       printer_(new MockPrinter),
-      print_dialog_user_response_(true) {
+      print_dialog_user_response_(true),
+      print_preview_cancel_page_number_(-1),
+      print_preview_pages_remaining_(0) {
 }
 
 MockRenderThread::~MockRenderThread() {
@@ -60,7 +62,7 @@ bool MockRenderThread::IsIncognitoProcess() const {
 }
 
 // Called by the Widget. Used to send messages to the browser.
-// We short-circuit the mechanim and handle the messages right here on this
+// We short-circuit the mechanism and handle the messages right here on this
 // class.
 bool MockRenderThread::Send(IPC::Message* msg) {
   // We need to simulate a synchronous channel, thus we are going to receive
@@ -102,13 +104,15 @@ bool MockRenderThread::OnMessageReceived(const IPC::Message& msg) {
                         OnMsgOpenChannelToExtension)
     IPC_MESSAGE_HANDLER(PrintHostMsg_GetDefaultPrintSettings,
                         OnGetDefaultPrintSettings)
-    IPC_MESSAGE_HANDLER(PrintHostMsg_ScriptedPrint,
-                        OnScriptedPrint)
-    IPC_MESSAGE_HANDLER(PrintHostMsg_UpdatePrintSettings,
-                        OnUpdatePrintSettings)
+    IPC_MESSAGE_HANDLER(PrintHostMsg_ScriptedPrint, OnScriptedPrint)
+    IPC_MESSAGE_HANDLER(PrintHostMsg_UpdatePrintSettings, OnUpdatePrintSettings)
     IPC_MESSAGE_HANDLER(PrintHostMsg_DidGetPrintedPagesCount,
                         OnDidGetPrintedPagesCount)
     IPC_MESSAGE_HANDLER(PrintHostMsg_DidPrintPage, OnDidPrintPage)
+    IPC_MESSAGE_HANDLER(PrintHostMsg_DidGetPreviewPageCount,
+                        OnDidGetPreviewPageCount)
+    IPC_MESSAGE_HANDLER(PrintHostMsg_DidPreviewPage, OnDidPreviewPage)
+    IPC_MESSAGE_HANDLER(PrintHostMsg_CheckForCancel, OnCheckForCancel)
 #if defined(OS_WIN)
     IPC_MESSAGE_HANDLER(PrintHostMsg_DuplicateSection, OnDuplicateSection)
 #endif
@@ -209,6 +213,24 @@ void MockRenderThread::OnDidPrintPage(
     printer_->PrintPage(params);
 }
 
+void MockRenderThread::OnDidGetPreviewPageCount(
+    const PrintHostMsg_DidGetPreviewPageCount_Params& params) {
+  print_preview_pages_remaining_ = params.page_count;
+}
+
+void MockRenderThread::OnDidPreviewPage(
+    const PrintHostMsg_DidPreviewPage_Params& params) {
+  DCHECK(params.page_number >= printing::FIRST_PAGE_INDEX);
+  print_preview_pages_remaining_--;
+}
+
+void MockRenderThread::OnCheckForCancel(const std::string& preview_ui_addr,
+                                        int preview_request_id,
+                                        bool* cancel) {
+  *cancel =
+      (print_preview_pages_remaining_ == print_preview_cancel_page_number_);
+}
+
 void MockRenderThread::OnUpdatePrintSettings(
     int document_cookie,
     const DictionaryValue& job_settings,
@@ -220,9 +242,12 @@ void MockRenderThread::OnUpdatePrintSettings(
       !job_settings.GetBoolean(printing::kSettingCollate, NULL) ||
       !job_settings.GetBoolean(printing::kSettingColor, NULL) ||
       !job_settings.GetBoolean(printing::kSettingPrintToPDF, NULL) ||
+      !job_settings.GetBoolean(printing::kIsFirstRequest, NULL) ||
       !job_settings.GetString(printing::kSettingDeviceName, &dummy_string) ||
       !job_settings.GetInteger(printing::kSettingDuplexMode, NULL) ||
-      !job_settings.GetInteger(printing::kSettingCopies, NULL)) {
+      !job_settings.GetInteger(printing::kSettingCopies, NULL) ||
+      !job_settings.GetString(printing::kPreviewUIAddr, &dummy_string) ||
+      !job_settings.GetInteger(printing::kPreviewRequestID, NULL)) {
     return;
   }
 
@@ -233,4 +258,12 @@ void MockRenderThread::OnUpdatePrintSettings(
 
 void MockRenderThread::set_print_dialog_user_response(bool response) {
   print_dialog_user_response_ = response;
+}
+
+void MockRenderThread::set_print_preview_cancel_page_number(int page) {
+  print_preview_cancel_page_number_ = page;
+}
+
+int MockRenderThread::print_preview_pages_remaining() {
+  return print_preview_pages_remaining_;
 }

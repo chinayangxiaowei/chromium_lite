@@ -30,15 +30,14 @@ TranslateInfoBarDelegate* TranslateInfoBarDelegate::CreateDelegate(
     const std::string& original_language,
     const std::string& target_language) {
   DCHECK_NE(TRANSLATION_ERROR, type);
+  // These must be validated by our callers.
+  DCHECK(TranslateManager::IsSupportedLanguage(target_language));
   // The original language can only be "unknown" for the "translating"
   // infobar, which is the case when the user started a translation from the
   // context menu.
-  DCHECK(type == TRANSLATING ||
-      original_language != chrome::kUnknownLanguageCode);
-  if ((original_language != chrome::kUnknownLanguageCode &&
-          !TranslateManager::IsSupportedLanguage(original_language)) ||
-      !TranslateManager::IsSupportedLanguage(target_language))
-    return NULL;
+  DCHECK(TranslateManager::IsSupportedLanguage(original_language) ||
+         ((type == TRANSLATING) &&
+          (original_language == chrome::kUnknownLanguageCode)));
   TranslateInfoBarDelegate* delegate =
       new TranslateInfoBarDelegate(type, TranslateErrors::NONE, tab_contents,
                                    original_language, target_language);
@@ -90,6 +89,7 @@ void TranslateInfoBarDelegate::SetOriginalLanguage(size_t language_index) {
 
 void TranslateInfoBarDelegate::SetTargetLanguage(size_t language_index) {
   DCHECK_LT(language_index, GetLanguageCount());
+  DCHECK_GE(language_index, 0U);
   target_language_index_ = language_index;
   if (infobar_view_)
     infobar_view_->TargetLanguageChanged();
@@ -111,8 +111,7 @@ void TranslateInfoBarDelegate::Translate() {
 
 void TranslateInfoBarDelegate::RevertTranslation() {
   TranslateManager::GetInstance()->RevertTranslation(tab_contents_);
-  TabContentsWrapper::GetCurrentWrapperForContents(tab_contents_)->
-      RemoveInfoBar(this);
+  RemoveSelf();
 }
 
 void TranslateInfoBarDelegate::ReportLanguageDetectionError() {
@@ -146,8 +145,7 @@ void TranslateInfoBarDelegate::ToggleLanguageBlacklist() {
     prefs_.RemoveLanguageFromBlacklist(original_lang);
   } else {
     prefs_.BlacklistLanguage(original_lang);
-    TabContentsWrapper::GetCurrentWrapperForContents(tab_contents_)->
-        RemoveInfoBar(this);
+    RemoveSelf();
   }
 }
 
@@ -165,8 +163,7 @@ void TranslateInfoBarDelegate::ToggleSiteBlacklist() {
     prefs_.RemoveSiteFromBlacklist(host);
   } else {
     prefs_.BlacklistSite(host);
-    TabContentsWrapper::GetCurrentWrapperForContents(tab_contents_)->
-        RemoveInfoBar(this);
+    RemoveSelf();
   }
 }
 
@@ -196,8 +193,7 @@ void TranslateInfoBarDelegate::NeverTranslatePageLanguage() {
   std::string original_lang = GetOriginalLanguageCode();
   DCHECK(!prefs_.IsLanguageBlacklisted(original_lang));
   prefs_.BlacklistLanguage(original_lang);
-  TabContentsWrapper::GetCurrentWrapperForContents(tab_contents_)->
-      RemoveInfoBar(this);
+  RemoveSelf();
 }
 
 string16 TranslateInfoBarDelegate::GetMessageInfoBarText() {
@@ -352,13 +348,14 @@ TranslateInfoBarDelegate::TranslateInfoBarDelegate(
     if (language_code == target_language)
       target_language_index_ = iter - languages_.begin();
   }
+  DCHECK_NE(kNoIndex, target_language_index_);
 }
 
 bool TranslateInfoBarDelegate::ShouldExpire(
     const content::LoadCommittedDetails& details) const {
   // Note: we allow closing this infobar even if the main frame navigation
   // was programmatic and not initiated by the user - crbug.com/70261 .
-  if (!details.is_user_initiated_main_frame_load() && !details.is_main_frame)
+  if (!details.is_navigation_to_different_page() && !details.is_main_frame)
     return false;
 
   return InfoBarDelegate::ShouldExpireInternal(details);

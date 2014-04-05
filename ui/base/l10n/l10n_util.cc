@@ -64,7 +64,7 @@ static const char* const kAcceptLanguageList[] = {
   "de-DE",  // German (Germany)
   "el",     // Greek
   "en",     // English
-  "en-AU",  // English (Austrailia)
+  "en-AU",  // English (Australia)
   "en-CA",  // English (Canada)
   "en-GB",  // English (UK)
   "en-NZ",  // English (New Zealand)
@@ -259,6 +259,14 @@ bool CheckAndResolveLocale(const std::string& locale,
     *resolved_locale = locale;
     return true;
   }
+
+  // If there's a variant, skip over it so we can try without the region
+  // code.  For example, ca_ES@valencia should cause us to try ca@valencia
+  // before ca.
+  std::string::size_type variant_pos = locale.find('@');
+  if (variant_pos != std::string::npos)
+    return false;
+
   // If the locale matches language but not country, use that instead.
   // TODO(jungshik) : Nothing is done about languages that Chrome
   // does not support but available on Windows. We fall
@@ -271,16 +279,32 @@ bool CheckAndResolveLocale(const std::string& locale,
     std::string tmp_locale(lang);
     // Map es-RR other than es-ES to es-419 (Chrome's Latin American
     // Spanish locale).
-    if (LowerCaseEqualsASCII(lang, "es") && !LowerCaseEqualsASCII(region, "es"))
+    if (LowerCaseEqualsASCII(lang, "es") &&
+        !LowerCaseEqualsASCII(region, "es")) {
       tmp_locale.append("-419");
-    else if (LowerCaseEqualsASCII(lang, "zh")) {
+    } else if (LowerCaseEqualsASCII(lang, "zh")) {
       // Map zh-HK and zh-MO to zh-TW. Otherwise, zh-FOO is mapped to zh-CN.
-     if (LowerCaseEqualsASCII(region, "hk") ||
-         LowerCaseEqualsASCII(region, "mo")) { // Macao
-       tmp_locale.append("-TW");
-     } else {
-       tmp_locale.append("-CN");
-     }
+      if (LowerCaseEqualsASCII(region, "hk") ||
+          LowerCaseEqualsASCII(region, "mo")) { // Macao
+        tmp_locale.append("-TW");
+      } else {
+        tmp_locale.append("-CN");
+      }
+#if defined(OS_CHROMEOS)
+    } else if (LowerCaseEqualsASCII(lang, "en")) {
+      // Map Australian, Canadian, New Zealand and South African English
+      // to British English for now.
+      // TODO(jungshik): en-CA may have to change sides once
+      // we have OS locale separate from app locale (Chrome's UI language).
+      if (LowerCaseEqualsASCII(region, "au") ||
+          LowerCaseEqualsASCII(region, "ca") ||
+          LowerCaseEqualsASCII(region, "nz") ||
+          LowerCaseEqualsASCII(region, "za")) {
+        tmp_locale.append("-GB");
+      } else {
+        tmp_locale.append("-US");
+      }
+#endif
     }
     if (IsLocaleAvailable(tmp_locale, locale_path)) {
       resolved_locale->swap(tmp_locale);
@@ -686,6 +710,21 @@ string16 GetStringFUTF16(int message_id,
   replacements.push_back(b);
   replacements.push_back(c);
   replacements.push_back(d);
+  return GetStringF(message_id, replacements, NULL);
+}
+
+string16 GetStringFUTF16(int message_id,
+                         const string16& a,
+                         const string16& b,
+                         const string16& c,
+                         const string16& d,
+                         const string16& e) {
+  std::vector<string16> replacements;
+  replacements.push_back(a);
+  replacements.push_back(b);
+  replacements.push_back(c);
+  replacements.push_back(d);
+  replacements.push_back(e);
   return GetStringF(message_id, replacements, NULL);
 }
 

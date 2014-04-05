@@ -7,7 +7,9 @@
 #include <algorithm>
 
 #include "base/message_loop.h"
+#include "base/string_number_conversions.h"
 #include "base/string_piece.h"
+#include "base/string_split.h"
 #include "base/string_util.h"
 #include "base/utf_string_conversions.h"
 #include "base/values.h"
@@ -21,95 +23,80 @@
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/resource/resource_bundle.h"
 
-namespace {
-
-void SetLocalizedStrings(DictionaryValue* localized_strings) {
-  localized_strings->SetString(std::string("title"),
-      l10n_util::GetStringUTF8(IDS_PRINT_PREVIEW_TITLE));
-  localized_strings->SetString(std::string("loading"),
-      l10n_util::GetStringUTF8(IDS_PRINT_PREVIEW_LOADING));
-#if defined(GOOGLE_CHROME_BUILD)
-  localized_strings->SetString(std::string("noPlugin"),
-      l10n_util::GetStringFUTF8(IDS_PRINT_PREVIEW_NO_PLUGIN,
-                                ASCIIToUTF16("chrome://plugins/")));
-#else
-  localized_strings->SetString(std::string("noPlugin"),
-      l10n_util::GetStringUTF8(IDS_PRINT_PREVIEW_NO_PLUGIN));
-#endif
-  localized_strings->SetString(std::string("previewFailed"),
-      l10n_util::GetStringUTF8(IDS_PRINT_PREVIEW_FAILED));
-  localized_strings->SetString(std::string("initiatorTabClosed"),
-      l10n_util::GetStringUTF8(IDS_PRINT_PREVIEW_INITIATOR_TAB_CLOSED));
-  localized_strings->SetString(std::string("reopenPage"),
-      l10n_util::GetStringUTF8(IDS_PRINT_PREVIEW_REOPEN_PAGE));
-
-  localized_strings->SetString(std::string("printButton"),
-      l10n_util::GetStringUTF8(IDS_PRINT_PREVIEW_PRINT_BUTTON));
-  localized_strings->SetString(std::string("cancelButton"),
-      l10n_util::GetStringUTF8(IDS_PRINT_PREVIEW_CANCEL_BUTTON));
-  localized_strings->SetString(std::string("printing"),
-      l10n_util::GetStringUTF8(IDS_PRINT_PREVIEW_PRINTING));
-
-  localized_strings->SetString(std::string("destinationLabel"),
-      l10n_util::GetStringUTF8(IDS_PRINT_PREVIEW_DESTINATION_LABEL));
-  localized_strings->SetString(std::string("copiesLabel"),
-      l10n_util::GetStringUTF8(IDS_PRINT_PREVIEW_COPIES_LABEL));
-  localized_strings->SetString(std::string("examplePageRangeText"),
-      l10n_util::GetStringUTF8(IDS_PRINT_PREVIEW_EXAMPLE_PAGE_RANGE_TEXT));
-  localized_strings->SetString(std::string("invalidNumberOfCopies"),
-      l10n_util::GetStringUTF8(IDS_PRINT_PREVIEW_INVALID_NUMBER_OF_COPIES));
-  localized_strings->SetString(std::string("layoutLabel"),
-      l10n_util::GetStringUTF8(IDS_PRINT_PREVIEW_LAYOUT_LABEL));
-  localized_strings->SetString(std::string("optionAllPages"),
-      l10n_util::GetStringUTF8(IDS_PRINT_PREVIEW_OPTION_ALL_PAGES));
-  localized_strings->SetString(std::string("optionBw"),
-      l10n_util::GetStringUTF8(IDS_PRINT_PREVIEW_OPTION_BW));
-  localized_strings->SetString(std::string("optionCollate"),
-      l10n_util::GetStringUTF8(IDS_PRINT_PREVIEW_OPTION_COLLATE));
-  localized_strings->SetString(std::string("optionColor"),
-      l10n_util::GetStringUTF8(IDS_PRINT_PREVIEW_OPTION_COLOR));
-  localized_strings->SetString(std::string("optionLandscape"),
-      l10n_util::GetStringUTF8(IDS_PRINT_PREVIEW_OPTION_LANDSCAPE));
-  localized_strings->SetString(std::string("optionPortrait"),
-      l10n_util::GetStringUTF8(IDS_PRINT_PREVIEW_OPTION_PORTRAIT));
-  localized_strings->SetString(std::string("optionTwoSided"),
-      l10n_util::GetStringUTF8(IDS_PRINT_PREVIEW_OPTION_TWO_SIDED));
-  localized_strings->SetString(std::string("pagesLabel"),
-      l10n_util::GetStringUTF8(IDS_PRINT_PREVIEW_PAGES_LABEL));
-  localized_strings->SetString(std::string("pageRangeTextBox"),
-      l10n_util::GetStringUTF8(IDS_PRINT_PREVIEW_PAGE_RANGE_TEXT));
-  localized_strings->SetString(std::string("pageRangeRadio"),
-      l10n_util::GetStringUTF8(IDS_PRINT_PREVIEW_PAGE_RANGE_RADIO));
-  localized_strings->SetString(std::string("printToPDF"),
-      l10n_util::GetStringUTF8(IDS_PRINT_PREVIEW_PRINT_TO_PDF));
-  localized_strings->SetString(std::string("printPreviewTitleFormat"),
-      l10n_util::GetStringUTF8(IDS_PRINT_PREVIEW_TITLE_FORMAT));
-  localized_strings->SetString(std::string("printPreviewSummaryFormatShort"),
-      l10n_util::GetStringUTF8(IDS_PRINT_PREVIEW_SUMMARY_FORMAT_SHORT));
-  localized_strings->SetString(std::string("printPreviewSummaryFormatLong"),
-      l10n_util::GetStringUTF8(IDS_PRINT_PREVIEW_SUMMARY_FORMAT_LONG));
-  localized_strings->SetString(std::string("printPreviewSheetsLabelSingular"),
-      l10n_util::GetStringUTF8(IDS_PRINT_PREVIEW_SHEETS_LABEL_SINGULAR));
-  localized_strings->SetString(std::string("printPreviewSheetsLabelPlural"),
-      l10n_util::GetStringUTF8(IDS_PRINT_PREVIEW_SHEETS_LABEL_PLURAL));
-  localized_strings->SetString(std::string("printPreviewPageLabelSingular"),
-      l10n_util::GetStringUTF8(IDS_PRINT_PREVIEW_PAGE_LABEL_SINGULAR));
-  localized_strings->SetString(std::string("printPreviewPageLabelPlural"),
-      l10n_util::GetStringUTF8(IDS_PRINT_PREVIEW_PAGE_LABEL_PLURAL));
-  localized_strings->SetString(std::string("systemDialogOption"),
-      l10n_util::GetStringUTF8(IDS_PRINT_PREVIEW_SYSTEM_DIALOG_OPTION));
-  localized_strings->SetString(std::string("pageRangeInstruction"),
-      l10n_util::GetStringUTF8(IDS_PRINT_PREVIEW_PAGE_RANGE_INSTRUCTION));
-  localized_strings->SetString(std::string("copiesInstruction"),
-      l10n_util::GetStringUTF8(IDS_PRINT_PREVIEW_COPIES_INSTRUCTION));
-  localized_strings->SetString(std::string("managePrinters"),
-      l10n_util::GetStringUTF8(IDS_PRINT_PREVIEW_MANAGE_PRINTERS));
-}
-
-}  // namespace
-
 PrintPreviewDataSource::PrintPreviewDataSource()
-    : DataSource(chrome::kChromeUIPrintHost, MessageLoop::current()) {
+    : ChromeWebUIDataSource(chrome::kChromeUIPrintHost) {
+
+  AddLocalizedString("title", IDS_PRINT_PREVIEW_TITLE);
+  AddLocalizedString("loading", IDS_PRINT_PREVIEW_LOADING);
+#if defined(GOOGLE_CHROME_BUILD)
+  AddString("noPlugin", l10n_util::GetStringFUTF16(
+      IDS_PRINT_PREVIEW_NO_PLUGIN, ASCIIToUTF16("chrome://plugins/")));
+#else
+  AddLocalizedString("noPlugin", IDS_PRINT_PREVIEW_NO_PLUGIN);
+#endif
+  AddLocalizedString("launchNativeDialog", IDS_PRINT_PREVIEW_NATIVE_DIALOG);
+  AddLocalizedString("previewFailed", IDS_PRINT_PREVIEW_FAILED);
+  AddLocalizedString("initiatorTabClosed",
+                     IDS_PRINT_PREVIEW_INITIATOR_TAB_CLOSED);
+  AddLocalizedString("reopenPage", IDS_PRINT_PREVIEW_REOPEN_PAGE);
+
+  AddLocalizedString("printButton", IDS_PRINT_PREVIEW_PRINT_BUTTON);
+  AddLocalizedString("cancelButton", IDS_PRINT_PREVIEW_CANCEL_BUTTON);
+  AddLocalizedString("printing", IDS_PRINT_PREVIEW_PRINTING);
+
+  AddLocalizedString("destinationLabel", IDS_PRINT_PREVIEW_DESTINATION_LABEL);
+  AddLocalizedString("copiesLabel", IDS_PRINT_PREVIEW_COPIES_LABEL);
+  AddLocalizedString("examplePageRangeText",
+                     IDS_PRINT_PREVIEW_EXAMPLE_PAGE_RANGE_TEXT);
+  AddLocalizedString("invalidNumberOfCopies",
+                     IDS_PRINT_PREVIEW_INVALID_NUMBER_OF_COPIES);
+  AddLocalizedString("layoutLabel", IDS_PRINT_PREVIEW_LAYOUT_LABEL);
+  AddLocalizedString("optionAllPages", IDS_PRINT_PREVIEW_OPTION_ALL_PAGES);
+  AddLocalizedString("optionBw", IDS_PRINT_PREVIEW_OPTION_BW);
+  AddLocalizedString("optionCollate", IDS_PRINT_PREVIEW_OPTION_COLLATE);
+  AddLocalizedString("optionColor", IDS_PRINT_PREVIEW_OPTION_COLOR);
+  AddLocalizedString("optionLandscape", IDS_PRINT_PREVIEW_OPTION_LANDSCAPE);
+  AddLocalizedString("optionPortrait", IDS_PRINT_PREVIEW_OPTION_PORTRAIT);
+  AddLocalizedString("optionTwoSided", IDS_PRINT_PREVIEW_OPTION_TWO_SIDED);
+  AddLocalizedString("pagesLabel", IDS_PRINT_PREVIEW_PAGES_LABEL);
+  AddLocalizedString("pageRangeTextBox", IDS_PRINT_PREVIEW_PAGE_RANGE_TEXT);
+  AddLocalizedString("pageRangeRadio", IDS_PRINT_PREVIEW_PAGE_RANGE_RADIO);
+  AddLocalizedString("printToPDF", IDS_PRINT_PREVIEW_PRINT_TO_PDF);
+  AddLocalizedString("printPreviewTitleFormat", IDS_PRINT_PREVIEW_TITLE_FORMAT);
+  AddLocalizedString("printPreviewSummaryFormatShort",
+                     IDS_PRINT_PREVIEW_SUMMARY_FORMAT_SHORT);
+  AddLocalizedString("printPreviewSummaryFormatLong",
+                     IDS_PRINT_PREVIEW_SUMMARY_FORMAT_LONG);
+  AddLocalizedString("printPreviewSheetsLabelSingular",
+                     IDS_PRINT_PREVIEW_SHEETS_LABEL_SINGULAR);
+  AddLocalizedString("printPreviewSheetsLabelPlural",
+                     IDS_PRINT_PREVIEW_SHEETS_LABEL_PLURAL);
+  AddLocalizedString("printPreviewPageLabelSingular",
+                     IDS_PRINT_PREVIEW_PAGE_LABEL_SINGULAR);
+  AddLocalizedString("printPreviewPageLabelPlural",
+                     IDS_PRINT_PREVIEW_PAGE_LABEL_PLURAL);
+  AddLocalizedString("systemDialogOption",
+                     IDS_PRINT_PREVIEW_SYSTEM_DIALOG_OPTION);
+  AddLocalizedString("pageRangeInstruction",
+                     IDS_PRINT_PREVIEW_PAGE_RANGE_INSTRUCTION);
+  AddLocalizedString("copiesInstruction", IDS_PRINT_PREVIEW_COPIES_INSTRUCTION);
+  AddLocalizedString("signIn", IDS_PRINT_PREVIEW_SIGN_IN);
+  AddLocalizedString("morePrinters", IDS_PRINT_PREVIEW_MORE_PRINTERS);
+  AddLocalizedString("addCloudPrinter", IDS_PRINT_PREVIEW_ADD_CLOUD_PRINTER);
+  AddLocalizedString("cloudPrinters", IDS_PRINT_PREVIEW_CLOUD_PRINTERS);
+  AddLocalizedString("localPrinters", IDS_PRINT_PREVIEW_LOCAL_PRINTERS);
+  AddLocalizedString("manageCloudPrinters",
+                     IDS_PRINT_PREVIEW_MANAGE_CLOUD_PRINTERS);
+  AddLocalizedString("manageLocalPrinters",
+                     IDS_PRINT_PREVIEW_MANAGE_LOCAL_PRINTERS);
+  AddLocalizedString("managePrinters", IDS_PRINT_PREVIEW_MANAGE_PRINTERS);
+  AddLocalizedString("incrementTitle", IDS_PRINT_PREVIEW_INCREMENT_TITLE);
+  AddLocalizedString("decrementTitle", IDS_PRINT_PREVIEW_DECREMENT_TITLE);
+  AddLocalizedString("printPagesLabel", IDS_PRINT_PREVIEW_PRINT_PAGES_LABEL);
+
+  set_json_path("strings.js");
+  add_resource_path("print_preview.js", IDR_PRINT_PREVIEW_JS);
+  set_default_resource(IDR_PRINT_PREVIEW_HTML);
 }
 
 PrintPreviewDataSource::~PrintPreviewDataSource() {
@@ -118,47 +105,26 @@ PrintPreviewDataSource::~PrintPreviewDataSource() {
 void PrintPreviewDataSource::StartDataRequest(const std::string& path,
                                               bool is_incognito,
                                               int request_id) {
-  scoped_refptr<RefCountedBytes> data(new RefCountedBytes);
-
-  bool preview_data_requested = EndsWith(path, "/print.pdf", true);
-  if (preview_data_requested) {
-    size_t index = path.rfind("/print.pdf");
-    PrintPreviewDataService::GetInstance()->GetDataEntry(path.substr(0, index),
-                                                         &data);
+  // Parent class handles most requests except for the print preview data.
+  if (!EndsWith(path, "/print.pdf", true)) {
+    ChromeWebUIDataSource::StartDataRequest(path, is_incognito, request_id);
+    return;
   }
 
-  if (path.empty()) {
-    // Print Preview Index page.
-    DictionaryValue localized_strings;
-    SetLocalizedStrings(&localized_strings);
-    SetFontAndTextDirection(&localized_strings);
-
-    static const base::StringPiece print_html(
-        ResourceBundle::GetSharedInstance().GetRawDataResource(
-            IDR_PRINT_PREVIEW_HTML));
-    const std::string full_html = jstemplate_builder::GetI18nTemplateHtml(
-        print_html, &localized_strings);
-
-    scoped_refptr<RefCountedBytes> html_bytes(new RefCountedBytes);
-    html_bytes->data.resize(full_html.size());
-    std::copy(full_html.begin(), full_html.end(), html_bytes->data.begin());
-
-    SendResponse(request_id, html_bytes);
-    return;
-  } else if (preview_data_requested && data->front()) {
-    // Print Preview data.
+  // Print Preview data.
+  scoped_refptr<RefCountedBytes> data;
+  std::vector<std::string> url_substr;
+  base::SplitString(path, '/', &url_substr);
+  int page_index = 0;
+  if (url_substr.size() == 3 && base::StringToInt(url_substr[1], &page_index)) {
+      PrintPreviewDataService::GetInstance()->GetDataEntry(
+          url_substr[0], page_index, &data);
+  }
+  if (data.get()) {
     SendResponse(request_id, data);
     return;
- } else {
-    // Invalid request.
-    scoped_refptr<RefCountedBytes> empty_bytes(new RefCountedBytes);
-    SendResponse(request_id, empty_bytes);
-    return;
   }
-}
-
-std::string PrintPreviewDataSource::GetMimeType(const std::string& path) const {
-  if (path.empty())
-    return "text/html";  // Print Preview Index Page.
-  return "application/pdf";  // Print Preview data
+  // Invalid request.
+  scoped_refptr<RefCountedBytes> empty_bytes(new RefCountedBytes);
+  SendResponse(request_id, empty_bytes);
 }

@@ -16,6 +16,7 @@
 #include "base/basictypes.h"
 #include "base/gtest_prod_util.h"
 #include "base/memory/scoped_ptr.h"
+#include "chrome/browser/io_thread.h"
 #include "chrome/common/metrics_helpers.h"
 #include "content/common/notification_observer.h"
 #include "content/common/notification_registrar.h"
@@ -27,13 +28,16 @@
 
 class BookmarkModel;
 class BookmarkNode;
-class DictionaryValue;
-class ListValue;
 class HistogramSynchronizer;
 class MetricsLogBase;
 class MetricsReportingScheduler;
 class PrefService;
-class TemplateURLModel;
+class TemplateURLService;
+
+namespace base {
+class DictionaryValue;
+class ListValue;
+}
 
 namespace webkit {
 namespace npapi {
@@ -97,7 +101,7 @@ class MetricsService : public NotificationObserver,
                                  NotificationObserver* observer);
 
   // Implementation of NotificationObserver
-  virtual void Observe(NotificationType type,
+  virtual void Observe(int type,
                        const NotificationSource& source,
                        const NotificationDetails& details);
 
@@ -133,6 +137,13 @@ class MetricsService : public NotificationObserver,
   bool recording_active() const;
   bool reporting_active() const;
 
+  // Redundant test to ensure that we are notified of a clean exit.
+  // This value should be true when process has completed shutdown.
+  static bool UmaMetricsProperlyShutdown();
+
+  // Set the dirty flag, which will require a later call to LogCleanShutdown().
+  static void LogNeedForCleanShutdown();
+
  private:
   // The MetricsService has a lifecycle that is stored as a state.
   // See metrics_service.cc for description of this lifecycle.
@@ -144,6 +155,11 @@ class MetricsService : public NotificationObserver,
     SEND_OLD_INITIAL_LOGS,  // Sending unsent logs from previous session.
     SENDING_OLD_LOGS,       // Sending unsent logs from previous session.
     SENDING_CURRENT_LOGS,   // Sending standard current logs as they acrue.
+  };
+
+  enum ShutdownCleanliness {
+    CLEANLY_SHUTDOWN = 0xdeadbeef,
+    NEED_TO_SHUTDOWN = ~CLEANLY_SHUTDOWN
   };
 
   class InitTask;
@@ -236,12 +252,12 @@ class MetricsService : public NotificationObserver,
   void RecallUnsentLogs();
   // Decode and verify written pref log data.
   static MetricsService::LogRecallStatus RecallUnsentLogsHelper(
-      const ListValue& list,
+      const base::ListValue& list,
       std::vector<std::string>* local_list);
   // Encode and write list size and checksum for perf log data.
   static void StoreUnsentLogsHelper(const std::vector<std::string>& local_list,
                                     const size_t kMaxLocalListSize,
-                                    ListValue* list);
+                                    base::ListValue* list);
   // Convert |pending_log_| to XML in |compressed_log_|, and compress it for
   // transmission.
   void PreparePendingLogText();
@@ -265,7 +281,7 @@ class MetricsService : public NotificationObserver,
   void LogBadResponseCode();
 
   // Records a window-related notification.
-  void LogWindowChange(NotificationType type,
+  void LogWindowChange(int type,
                        const NotificationSource& source,
                        const NotificationDetails& details);
 
@@ -301,13 +317,13 @@ class MetricsService : public NotificationObserver,
   // Records a child process related notification.  These are recorded to an
   // in-object buffer because these notifications are sent on page load, and we
   // don't want to slow that down.
-  void LogChildProcessChange(NotificationType type,
+  void LogChildProcessChange(int type,
                              const NotificationSource& source,
                              const NotificationDetails& details);
 
   // Logs keywords specific metrics. Keyword metrics are recorded in the
   // profile specific metrics.
-  void LogKeywords(const TemplateURLModel* url_model);
+  void LogKeywords(const TemplateURLService* url_model);
 
   // Saves plugin-related updates from the in-object buffer to Local State
   // for retrieval next time we send a Profile log (generally next launch).
@@ -321,12 +337,12 @@ class MetricsService : public NotificationObserver,
   void LogLoadStarted();
 
   // Records a page load notification.
-  void LogLoadComplete(NotificationType type,
+  void LogLoadComplete(int type,
                        const NotificationSource& source,
                        const NotificationDetails& details);
 
   // Checks whether a notification can be logged.
-  bool CanLogNotification(NotificationType type,
+  bool CanLogNotification(int type,
                           const NotificationSource& source,
                           const NotificationDetails& details);
 
@@ -359,6 +375,14 @@ class MetricsService : public NotificationObserver,
 
   // The URL for the metrics server.
   std::wstring server_url_;
+
+  // The TCP/UDP echo server to collect network connectivity stats.
+  std::string network_stats_server_;
+
+  // The IOThread for accessing global HostResolver to resolve
+  // network_stats_server_ host. |io_thread_| is accessed on IO thread and it is
+  // safe to access it on IO thread.
+  IOThread* io_thread_;
 
   // The identifier that's sent to the server with the log reports.
   std::string client_id_;
@@ -397,7 +421,7 @@ class MetricsService : public NotificationObserver,
 
   // Dictionary containing all the profile specific metrics. This is set
   // at creation time from the prefs.
-  scoped_ptr<DictionaryValue> profile_dictionary_;
+  scoped_ptr<base::DictionaryValue> profile_dictionary_;
 
   // The scheduler for determining when uploads should happen.
   scoped_ptr<MetricsReportingScheduler> scheduler_;
@@ -411,6 +435,10 @@ class MetricsService : public NotificationObserver,
   scoped_refptr<chromeos::ExternalMetrics> external_metrics_;
 #endif
 
+  // Reduntant marker to check that we completed our shutdown, and set the
+  // exited-cleanly bit in the prefs.
+  static ShutdownCleanliness clean_shutdown_status_;
+
   FRIEND_TEST_ALL_PREFIXES(MetricsServiceTest, EmptyLogList);
   FRIEND_TEST_ALL_PREFIXES(MetricsServiceTest, SingleElementLogList);
   FRIEND_TEST_ALL_PREFIXES(MetricsServiceTest, OverLimitLogList);
@@ -423,6 +451,19 @@ class MetricsService : public NotificationObserver,
   FRIEND_TEST_ALL_PREFIXES(MetricsServiceTest, ClientIdCorrectlyFormatted);
 
   DISALLOW_COPY_AND_ASSIGN(MetricsService);
+};
+
+// This class limits and documents access to the IsMetricsReportingEnabled()
+// method. Since the method is private, each user has to be explicitly declared
+// as a 'friend' below.
+class MetricsServiceHelper {
+ private:
+  friend class InstantFieldTrial;
+
+  // Returns true if prefs::kMetricsReportingEnabled is set.
+  static bool IsMetricsReportingEnabled();
+
+  DISALLOW_IMPLICIT_CONSTRUCTORS(MetricsServiceHelper);
 };
 
 #endif  // CHROME_BROWSER_METRICS_METRICS_SERVICE_H_

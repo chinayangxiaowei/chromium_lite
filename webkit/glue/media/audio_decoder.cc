@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2011 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,11 +8,13 @@
 #include "base/basictypes.h"
 #include "base/string_util.h"
 #include "base/time.h"
+#include "media/base/limits.h"
 #include "media/filters/audio_file_reader.h"
+#include "media/filters/in_memory_url_protocol.h"
 #include "third_party/WebKit/Source/WebKit/chromium/public/WebAudioBus.h"
 
 using media::AudioFileReader;
-using media::InMemoryDataReader;
+using media::InMemoryUrlProtocol;
 using std::vector;
 using WebKit::WebAudioBus;
 
@@ -27,8 +29,9 @@ bool DecodeAudioFileData(
     return false;
 
   // Uses the FFmpeg library for audio file reading.
-  InMemoryDataReader data_reader(data, data_size);
-  AudioFileReader reader(&data_reader);
+  InMemoryUrlProtocol url_protocol(reinterpret_cast<const uint8*>(data),
+                                   data_size, false);
+  AudioFileReader reader(&url_protocol);
 
   if (!reader.Open())
     return false;
@@ -37,6 +40,14 @@ bool DecodeAudioFileData(
   double file_sample_rate = reader.sample_rate();
   double duration = reader.duration().InSecondsF();
   size_t number_of_frames = static_cast<size_t>(reader.number_of_frames());
+
+  // Apply sanity checks to make sure crazy values aren't coming out of
+  // FFmpeg.
+  if (!number_of_channels ||
+      number_of_channels > static_cast<size_t>(media::Limits::kMaxChannels) ||
+      file_sample_rate < media::Limits::kMinSampleRate ||
+      file_sample_rate > media::Limits::kMaxSampleRate)
+    return false;
 
   // TODO(crogers) : do sample-rate conversion with FFmpeg.
   // For now, we're ignoring the requested 'sample_rate' and returning

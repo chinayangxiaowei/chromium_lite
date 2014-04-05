@@ -99,6 +99,8 @@ def _WritePolicyConstantHeader(template_file_contents, args, opts):
             'namespace key {\n\n')
     for policy_name in _GetPolicyNameList(template_file_contents):
       f.write('extern const char k' + policy_name + '[];\n')
+    f.write('\n// Only used in testing.'
+            '\nextern const char* kMapPolicyString[];\n')
     f.write('\n}  // namespace key\n\n'
             '}  // namespace policy\n\n'
             '#endif  // CHROME_COMMON_POLICY_CONSTANTS_H_\n')
@@ -124,6 +126,11 @@ def _WritePolicyConstantSource(template_file_contents, args, opts):
     f.write('namespace key {\n\n')
     for policy_name in _GetPolicyNameList(template_file_contents):
       f.write('const char k%s[] = "%s";\n' % (policy_name, policy_name))
+    f.write('\n// Only used in testing.'
+            '\nconst char* kMapPolicyString[] = {\n    ')
+    for policy_name in _GetPolicyNameList(template_file_contents):
+      f.write('\n    "%s",' % policy_name)
+    f.write('\n};\n')
     f.write('\n}  // namespace key\n\n'
             '}  // namespace policy\n')
 
@@ -164,6 +171,8 @@ message PolicyOptions {
     MANDATORY = 0;
     // The user may choose to override the given settings.
     RECOMMENDED = 1;
+    // No policy value is present and the policy should be ignored.
+    UNSET = 2;
   }
   optional PolicyMode mode = 1 [default = MANDATORY];
 }
@@ -294,22 +303,28 @@ def _WritePolicyCode(file, policy):
   file.write('    const em::%s& %s = policy.%s();\n' %
              (proto_type, proto_name, membername))
   file.write('    if (%s.has_%s()) {\n' % (proto_name, membername))
-  file.write('      Value* value = %s(%s.%s());\n' %
-             (_CreateValue(policy['type']), proto_name, membername))
   file.write('      PolicyMap* destination = mandatory;\n'
              '      if (%s.has_policy_options()) {\n'
              '        switch(%s.policy_options().mode()) {\n' %
-              (proto_name, proto_name))
-  file.write('          case em::PolicyOptions::RECOMMENDED:\n'
+             (proto_name, proto_name))
+  file.write('          case em::PolicyOptions::MANDATORY:\n'
+             '            destination = mandatory;\n'
+             '            break;\n'
+             '          case em::PolicyOptions::RECOMMENDED:\n'
              '            destination = recommended;\n'
              '            break;\n'
-             '          case em::PolicyOptions::MANDATORY:\n'
+             '          case em::PolicyOptions::UNSET:\n'
+             '          default:\n'
+             '            destination = NULL;\n'
              '            break;\n'
              '        }\n'
              '      }\n'
-             '      destination->Set(kPolicy%s, value);\n' %
-              policy['name'])
-  file.write('    }\n'
+             '      if (destination) {\n')
+  file.write('        Value* value = %s(%s.%s());\n' %
+             (_CreateValue(policy['type']), proto_name, membername))
+  file.write('        destination->Set(kPolicy%s, value);\n' % policy['name'])
+  file.write('      }\n'
+             '    }\n'
              '  }\n')
 
 

@@ -39,6 +39,16 @@
 }
 
 - (void)dealloc {
+  [menu_ setDelegate:nil];
+
+  // Close the menu if it is still open. This could happen if a tab gets closed
+  // while its context menu is still open.
+  if (isMenuOpen_) {
+    [menu_ cancelTracking];
+    model_->MenuClosed();
+    isMenuOpen_ = NO;
+  }
+
   model_ = NULL;
   [super dealloc];
 }
@@ -190,11 +200,13 @@
 }
 
 - (void)menuWillOpen:(NSMenu*)menu {
+  isMenuOpen_ = YES;
   model_->MenuWillShow();
 }
 
 - (void)menuDidClose:(NSMenu*)menu {
   model_->MenuClosed();
+  isMenuOpen_ = NO;
 }
 
 @end

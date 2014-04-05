@@ -14,8 +14,7 @@
 #include "base/memory/linked_ptr.h"
 #include "base/time.h"
 #include "googleurl/src/gurl.h"
-#include "chrome/browser/sessions/session_id.h"
-#include "chrome/browser/ssl/ssl_manager.h"
+#include "content/browser/ssl/ssl_manager.h"
 #include "content/common/navigation_types.h"
 #include "content/common/page_transition_types.h"
 
@@ -24,7 +23,6 @@ class Profile;
 class SessionStorageNamespace;
 class SiteInstance;
 class TabContents;
-class TabNavigation;
 struct ViewHostMsg_FrameNavigate_Params;
 
 namespace content {
@@ -66,10 +64,12 @@ class NavigationController {
   // using selected_navigation as the currently loaded entry. Before this call
   // the controller should be unused (there should be no current entry). If
   // from_last_session is true, navigations are from the previous session,
-  // otherwise they are from the current session (undo tab close).
+  // otherwise they are from the current session (undo tab close). This takes
+  // ownership of the NavigationEntrys in |entries| and clears it out.
   // This is used for session restore.
-  void RestoreFromState(const std::vector<TabNavigation>& navigations,
-                        int selected_navigation, bool from_last_session);
+  void Restore(int selected_navigation,
+               bool from_last_session,
+               std::vector<NavigationEntry*>* entries);
 
   // Active entry --------------------------------------------------------------
 
@@ -78,8 +78,17 @@ class NavigationController {
   // NOTE: This can be NULL!!
   //
   // If you are trying to get the current state of the NavigationController,
-  // this is the method you will typically want to call.
+  // this is the method you will typically want to call.  If you want to display
+  // the active entry to the user (e.g., in the location bar), use
+  // GetVisibleEntry instead.
   NavigationEntry* GetActiveEntry() const;
+
+  // Returns the same entry as GetActiveEntry, except that it ignores pending
+  // history navigation entries.  This should be used when displaying info to
+  // the user, so that the location bar and other indicators do not update for
+  // a back/forward navigation until the pending entry commits.  This approach
+  // guards against URL spoofs on slow history navigations.
+  NavigationEntry* GetVisibleEntry() const;
 
   // Returns the index from which we would go back/forward or reload.  This is
   // the last_committed_entry_index_ if pending_entry_index_ is -1.  Otherwise,
@@ -226,11 +235,7 @@ class NavigationController {
   //
   // In the case that nothing has changed, the details structure is undefined
   // and it will return false.
-  //
-  // |extra_invalidate_flags| are an additional set of flags (InvalidateTypes)
-  // added to the flags sent to the delegate's NotifyNavigationStateChanged.
   bool RendererDidNavigate(const ViewHostMsg_FrameNavigate_Params& params,
-                           int extra_invalidate_flags,
                            content::LoadCommittedDetails* details);
 
   // Notifies us that we just became active. This is used by the TabContents
@@ -268,24 +273,13 @@ class NavigationController {
   // this:   E F *G*   (last must be active or pending)
   // result: A B *G*
   // This ignores the transient index of the source and honors that of 'this'.
-  //
-  // If |remove_first_entry| is true, the first NavigationEntry is removed
-  // from this before merging.
-  void CopyStateFromAndPrune(NavigationController* source,
-                             bool remove_first_entry);
+  void CopyStateFromAndPrune(NavigationController* source);
 
   // Removes all the entries except the active entry. If there is a new pending
   // navigation it is preserved.
   void PruneAllButActive();
 
   // Random data ---------------------------------------------------------------
-
-  // Returns the identifier used by session restore.
-  const SessionID& session_id() const { return session_id_; }
-
-  // Identifier of the window we're in.
-  void SetWindowID(const SessionID& id);
-  const SessionID& window_id() const { return window_id_; }
 
   SSLManager* ssl_manager() { return &ssl_manager_; }
 
@@ -329,8 +323,7 @@ class NavigationController {
   bool IsInitialNavigation();
 
   // Creates navigation entry and translates the virtual url to a real one.
-  // Used when restoring a tab from a TabNavigation object and when navigating
-  // to a new URL using LoadURL.
+  // Used when navigating to a new URL using LoadURL.
   static NavigationEntry* CreateNavigationEntry(const GURL& url,
                                                 const GURL& referrer,
                                                 PageTransition::Type transition,
@@ -383,11 +376,7 @@ class NavigationController {
 
   // Allows the derived class to issue notifications that a load has been
   // committed. This will fill in the active entry to the details structure.
-  //
-  // |extra_invalidate_flags| are an additional set of flags (InvalidateTypes)
-  // added to the flags sent to the delegate's NotifyNavigationStateChanged.
-  void NotifyNavigationEntryCommitted(content::LoadCommittedDetails* details,
-                                      int extra_invalidate_flags);
+  void NotifyNavigationEntryCommitted(content::LoadCommittedDetails* details);
 
   // Updates the virtual URL of an entry to match a new URL, for cases where
   // the real renderer URL is derived from the virtual URL, like view-source:
@@ -417,12 +406,6 @@ class NavigationController {
   // Returns true if the navigation is likley to be automatic rather than
   // user-initiated.
   bool IsLikelyAutoNavigation(base::TimeTicks now);
-
-  // Creates a new NavigationEntry for each TabNavigation in navigations, adding
-  // the NavigationEntry to entries. This is used during session restore.
-  void CreateNavigationEntriesFromTabNavigations(
-      const std::vector<TabNavigation>& navigations,
-      std::vector<linked_ptr<NavigationEntry> >* entries);
 
   // Inserts up to |max_index| entries from |source| into this. This does NOT
   // adjust any of the members that reference entries_
@@ -476,14 +459,6 @@ class NavigationController {
 
   // Whether we need to be reloaded when made active.
   bool needs_reload_;
-
-  // Unique identifier of this controller for session restore. This id is only
-  // unique within the current session, and is not guaranteed to be unique
-  // across sessions.
-  SessionID session_id_;
-
-  // Unique identifier of the window we're in. Used by session restore.
-  SessionID window_id_;
 
   // The time ticks at which the last document was loaded.
   base::TimeTicks last_document_loaded_;

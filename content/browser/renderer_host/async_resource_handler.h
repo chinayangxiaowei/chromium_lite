@@ -47,6 +47,7 @@ class AsyncResourceHandler : public ResourceHandler {
   scoped_refptr<SharedIOBuffer> read_buffer_;
   ResourceMessageFilter* filter_;
   int routing_id_;
+  HostZoomMap* host_zoom_map_;
   ResourceDispatcherHost* rdh_;
 
   // |next_buffer_size_| is the size of the buffer to be allocated on the next

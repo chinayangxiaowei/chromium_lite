@@ -6,14 +6,19 @@
 #define CHROME_BROWSER_PRINTING_PRINTING_MESSAGE_FILTER_H_
 #pragma once
 
+#include <string>
+
 #include "content/browser/browser_message_filter.h"
 
 #if defined(OS_WIN)
 #include "base/shared_memory.h"
 #endif
 
-class DictionaryValue;
 struct PrintHostMsg_ScriptedPrint_Params;
+
+namespace base {
+class DictionaryValue;
+}
 
 namespace printing {
 class PrinterQuery;
@@ -68,11 +73,15 @@ class PrintingMessageFilter : public BrowserMessageFilter {
       IPC::Message* reply_msg);
 
   void OnUpdatePrintSettings(int document_cookie,
-                             const DictionaryValue& job_settings,
+                             const base::DictionaryValue& job_settings,
                              IPC::Message* reply_msg);
   void OnUpdatePrintSettingsReply(
       scoped_refptr<printing::PrinterQuery> printer_query,
       IPC::Message* reply_msg);
+
+  void OnCheckForCancel(const std::string& preview_ui_addr,
+                        int preview_request_id,
+                        bool* cancel);
 
   printing::PrintJobManager* print_job_manager_;
 

@@ -107,6 +107,7 @@ class WebPluginDelegateImpl : public WebPluginDelegate {
   virtual bool HandleInputEvent(const WebKit::WebInputEvent& event,
                                 WebKit::WebCursorInfo* cursor_info);
   virtual NPObject* GetPluginScriptableObject();
+  virtual bool GetFormValue(string16* value);
   virtual void DidFinishLoadWithReason(
       const GURL& url, NPReason reason, int notify_id);
   virtual int GetProcessId();
@@ -185,6 +186,7 @@ class WebPluginDelegateImpl : public WebPluginDelegate {
   // and all callers will use the Paint defined above.
   void CGPaint(CGContextRef context, const gfx::Rect& rect);
 
+  bool AllowBufferFlipping();
 #endif  // OS_MACOSX
 
   gfx::PluginWindowHandle windowed_handle() const {
@@ -407,9 +409,6 @@ class WebPluginDelegateImpl : public WebPluginDelegate {
 
   // Uses a CARenderer to draw the plug-in's layer in our OpenGL surface.
   void DrawLayerInSurface();
-
-  // Returns true if plugin IME is supported.
-  bool IsImeSupported();
 
 #ifndef NP_NO_CARBON
   // Moves our dummy window to match the current screen location of the plugin.

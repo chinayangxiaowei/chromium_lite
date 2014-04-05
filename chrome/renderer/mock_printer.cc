@@ -35,7 +35,9 @@ MockPrinter::MockPrinter()
     current_document_cookie_(0),
     printer_status_(PRINTER_READY),
     number_pages_(0),
-    page_number_(0) {
+    page_number_(0),
+    is_first_request_(true),
+    preview_request_id_(0) {
   page_size_.SetSize(static_cast<int>(8.5 * dpi_),
                      static_cast<int>(11.0 * dpi_));
   printable_size_.SetSize(static_cast<int>((7.5 * dpi_)),
@@ -58,7 +60,7 @@ void MockPrinter::GetDefaultPrintSettings(PrintMsg_Print_Params* params) {
 
   // Assign a unit document cookie and set the print settings.
   document_cookie_ = CreateDocumentCookie();
-  memset(params, 0, sizeof(PrintMsg_Print_Params));
+  params->Reset();
   SetPrintParams(params);
 }
 
@@ -81,7 +83,8 @@ void MockPrinter::ScriptedPrint(int cookie,
   // Verify the input parameters.
   EXPECT_EQ(document_cookie_, cookie);
 
-  memset(settings, 0, sizeof(PrintMsg_PrintPages_Params));
+  settings->Reset();
+
   settings->params.dpi = dpi_;
   settings->params.max_shrink = max_shrink_;
   settings->params.min_shrink = min_shrink_;
@@ -90,6 +93,8 @@ void MockPrinter::ScriptedPrint(int cookie,
   settings->params.document_cookie = document_cookie_;
   settings->params.page_size = page_size_;
   settings->params.printable_size = printable_size_;
+  settings->params.is_first_request = is_first_request_;
+  settings->params.preview_request_id = preview_request_id_;
   printer_status_ = PRINTER_PRINTING;
 }
 
@@ -97,7 +102,7 @@ void MockPrinter::UpdateSettings(int cookie,
                                  PrintMsg_PrintPages_Params* params) {
   EXPECT_EQ(document_cookie_, cookie);
 
-  memset(params, 0, sizeof(PrintMsg_PrintPages_Params));
+  params->Reset();
   SetPrintParams(&(params->params));
   printer_status_ = PRINTER_PRINTING;
 }
@@ -226,4 +231,6 @@ void MockPrinter::SetPrintParams(PrintMsg_Print_Params* params) {
   params->printable_size = printable_size_;
   params->margin_left = margin_left_;
   params->margin_top = margin_top_;
+  params->is_first_request = is_first_request_;
+  params->preview_request_id = preview_request_id_;
 }

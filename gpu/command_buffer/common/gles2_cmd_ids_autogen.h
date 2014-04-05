@@ -2,7 +2,9 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-// This file is auto-generated. DO NOT EDIT!
+// This file is auto-generated from
+// gpu/command_buffer/build_gles2_cmd_buffer.py
+// DO NOT EDIT!
 
 #ifndef GPU_COMMAND_BUFFER_COMMON_GLES2_CMD_IDS_AUTOGEN_H_
 #define GPU_COMMAND_BUFFER_COMMON_GLES2_CMD_IDS_AUTOGEN_H_
@@ -199,13 +201,15 @@
   OP(CompressedTexSubImage2DBucket)                            /* 444 */ \
   OP(RenderbufferStorageMultisampleEXT)                        /* 445 */ \
   OP(BlitFramebufferEXT)                                       /* 446 */ \
-  OP(CopyTextureToParentTextureCHROMIUM)                       /* 447 */ \
+  OP(Placeholder447CHROMIUM)                                   /* 447 */ \
   OP(ResizeCHROMIUM)                                           /* 448 */ \
   OP(GetRequestableExtensionsCHROMIUM)                         /* 449 */ \
   OP(RequestExtensionCHROMIUM)                                 /* 450 */ \
-  OP(SetLatchCHROMIUM)                                         /* 451 */ \
-  OP(WaitLatchCHROMIUM)                                        /* 452 */ \
+  OP(Placeholder451CHROMIUM)                                   /* 451 */ \
+  OP(Placeholder452CHROMIUM)                                   /* 452 */ \
   OP(SetSurfaceCHROMIUM)                                       /* 453 */ \
+  OP(GetMultipleIntegervCHROMIUM)                              /* 454 */ \
+  OP(GetProgramInfoCHROMIUM)                                   /* 455 */ \
 
 enum CommandId {
   kStartPoint = cmd::kLastCommonId,  // All GLES2 commands start after this.

@@ -13,19 +13,6 @@
 
 namespace skia {
 
-SkDevice* VectorPlatformDeviceSkiaFactory::newDevice(SkCanvas* canvas,
-                                                     SkBitmap::Config config,
-                                                     int width, int height,
-                                                     bool isOpaque,
-                                                     bool isForLayer) {
-  SkASSERT(config == SkBitmap::kARGB_8888_Config);
-  SkRefPtr<SkDevice> device = factory_.newDevice(canvas, config, width, height,
-                                                 isOpaque, isForLayer);
-  device->unref();  // SkRefPtr and new both took a reference.
-  SkPDFDevice* pdf_device = static_cast<SkPDFDevice*>(device.get());
-  return new VectorPlatformDeviceSkia(pdf_device);
-}
-
 static inline SkBitmap makeABitmap(int width, int height) {
   SkBitmap bitmap;
   bitmap.setConfig(SkBitmap::kNo_Config, width, height);
@@ -56,7 +43,7 @@ PlatformDevice::PlatformSurface VectorPlatformDeviceSkia::BeginPlatformPaint() {
                                                  pdf_device_->height(),
                                                  false, /* not opaque */
                                                  NULL);
-#elif defined(OS_LINUX)
+#elif defined(OS_POSIX) && !defined(OS_MACOSX)
   raster_surface_ = BitmapPlatformDevice::Create(pdf_device_->width(),
                                                  pdf_device_->height(),
                                                  false /* not opaque */);
@@ -199,6 +186,8 @@ void VectorPlatformDeviceSkia::drawDevice(const SkDraw& draw,
     // to unwrap the embedded SkPDFDevice.
     VectorPlatformDeviceSkia* vector_device =
         static_cast<VectorPlatformDeviceSkia*>(device);
+    vector_device->pdf_device_->setOrigin(vector_device->getOrigin().fX,
+                                          vector_device->getOrigin().fY);
     real_device = vector_device->pdf_device_.get();
   }
   pdf_device_->drawDevice(draw, real_device, x, y, paint);
@@ -211,10 +200,26 @@ void VectorPlatformDeviceSkia::DrawToNativeContext(HDC dc,
                                                    const RECT* src_rect) {
   SkASSERT(false);
 }
+#elif defined(OS_MACOSX)
+void VectorPlatformDeviceSkia::DrawToNativeContext(CGContext* context, int x,
+    int y, const CGRect* src_rect) {
+  SkASSERT(false);
+}
+
+CGContextRef VectorPlatformDeviceSkia::GetBitmapContext() {
+  SkASSERT(false);
+  return NULL;
+}
+
 #endif
 
-SkDeviceFactory* VectorPlatformDeviceSkia::onNewDeviceFactory() {
-  return SkNEW(VectorPlatformDeviceSkiaFactory);
+SkDevice* VectorPlatformDeviceSkia::onCreateCompatibleDevice(
+    SkBitmap::Config config, int width, int height, bool isOpaque, 
+    Usage /*usage*/) {
+  SkAutoTUnref<SkDevice> dev(pdf_device_->createCompatibleDevice(config, width,
+                                                                 height,
+                                                                 isOpaque));
+  return new VectorPlatformDeviceSkia(static_cast<SkPDFDevice*>(dev.get()));
 }
 
 }  // namespace skia

@@ -7,6 +7,7 @@
 #include "chrome/browser/dom_operation_notification_details.h"
 #include "chrome/browser/prefs/pref_service.h"
 #include "chrome/browser/tab_contents/chrome_interstitial_page.h"
+#include "chrome/common/chrome_notification_types.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/common/render_messages.h"
 #include "chrome/common/url_constants.h"
@@ -95,7 +96,7 @@ class TestInterstitialPage : public ChromeInterstitialPage {
 
   void TestDomOperationResponse(const std::string& json_string) {
     DomOperationNotificationDetails details(json_string, 1);
-    Observe(NotificationType::DOM_OPERATION_RESPONSE,
+    Observe(chrome::NOTIFICATION_DOM_OPERATION_RESPONSE,
             Source<RenderViewHost>(render_view_host()),
             Details<DomOperationNotificationDetails>(&details));
   }
@@ -218,7 +219,7 @@ TEST_F(TabContentsTest, UpdateTitle) {
                      PageTransition::TYPED);
 
   content::LoadCommittedDetails details;
-  controller().RendererDidNavigate(params, 0, &details);
+  controller().RendererDidNavigate(params, &details);
 
   contents()->UpdateTitle(rvh(), 0, L"    Lots O' Whitespace\n");
   EXPECT_EQ(ASCIIToUTF16("Lots O' Whitespace"), contents()->GetTitle());
@@ -240,7 +241,7 @@ TEST_F(TabContentsTest, NTPViewSource) {
   ViewHostMsg_FrameNavigate_Params params;
   InitNavigateParams(&params, 0, kGURL, PageTransition::TYPED);
   content::LoadCommittedDetails details;
-  controller().RendererDidNavigate(params, 0, &details);
+  controller().RendererDidNavigate(params, &details);
   // Also check title and url.
   EXPECT_EQ(ASCIIToUTF16(kUrl), contents()->GetTitle());
   EXPECT_TRUE(contents()->ShouldDisplayURL());
@@ -778,7 +779,7 @@ TEST_F(TabContentsTest, CrossSiteCantPreemptAfterUnload) {
 
   // Simulate the pending renderer's response, which leads to an unload request
   // being sent to orig_rvh.
-  contents()->OnCrossSiteResponse(0, 0);
+  contents()->render_manager()->OnCrossSiteResponse(0, 0);
 
   // Suppose the original renderer navigates now, while the unload request is in
   // flight.  We should ignore it, wait for the unload ack, and let the pending
@@ -1709,7 +1710,10 @@ TEST_F(TabContentsTest, CopyStateFromAndPruneSourceInterstitial) {
   scoped_ptr<TestTabContents> other_contents(CreateTestTabContents());
   NavigationController& other_controller = other_contents->controller();
   other_contents->NavigateAndCommit(url3);
-  other_controller.CopyStateFromAndPrune(&controller(), false);
+  other_contents->ExpectSetHistoryLengthAndPrune(
+      other_controller.GetEntryAtIndex(0)->site_instance(), 1,
+      other_controller.GetEntryAtIndex(0)->page_id());
+  other_controller.CopyStateFromAndPrune(&controller());
 
   // The merged controller should only have two entries: url1 and url2.
   ASSERT_EQ(2, other_controller.entry_count());
@@ -1749,8 +1753,10 @@ TEST_F(TabContentsTest, CopyStateFromAndPruneTargetInterstitial) {
   interstitial->TestDidNavigate(1, url3);
   EXPECT_TRUE(interstitial->is_showing());
   EXPECT_EQ(2, other_controller.entry_count());
-
-  other_controller.CopyStateFromAndPrune(&controller(), false);
+  other_contents->ExpectSetHistoryLengthAndPrune(
+      other_controller.GetEntryAtIndex(0)->site_instance(), 1,
+      other_controller.GetEntryAtIndex(0)->page_id());
+  other_controller.CopyStateFromAndPrune(&controller());
 
   // The merged controller should only have two entries: url1 and url2.
   ASSERT_EQ(2, other_controller.entry_count());

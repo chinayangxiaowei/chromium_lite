@@ -12,6 +12,7 @@
 #include "base/file_path.h"
 #include "base/file_util.h"
 #include "base/memory/scoped_ptr.h"
+#include "base/metrics/histogram.h"
 #include "base/utf_string_conversions.h"
 #include "net/base/auth.h"
 #include "net/base/capturing_net_log.h"
@@ -123,7 +124,6 @@ class HttpNetworkTransactionTest : public PlatformTest {
   };
 
   virtual void SetUp() {
-    disabled_spdy_session_domain_verification_ = false;
     NetworkChangeNotifier::NotifyObserversOfIPAddressChangeForTests();
     MessageLoop::current()->RunAllPending();
     spdy::SpdyFramer::set_enable_compression_default(false);
@@ -138,10 +138,6 @@ class HttpNetworkTransactionTest : public PlatformTest {
     PlatformTest::TearDown();
     NetworkChangeNotifier::NotifyObserversOfIPAddressChangeForTests();
     MessageLoop::current()->RunAllPending();
-    if (disabled_spdy_session_domain_verification_) {
-      SpdySession::SetDomainVerification(
-          spdy_session_domain_verification_old_value_);
-    }
   }
 
   void KeepAliveConnectionResendRequestTest(const MockRead& read_failure);
@@ -210,15 +206,6 @@ class HttpNetworkTransactionTest : public PlatformTest {
                                              int expected_status);
 
   void ConnectStatusHelper(const MockRead& status);
-
-  void DisableSpdySessionDomainVerification() {
-    disabled_spdy_session_domain_verification_ = true;
-    spdy_session_domain_verification_old_value_ =
-        SpdySession::SetDomainVerification(false);
-  }
-
-  bool disabled_spdy_session_domain_verification_;
-  bool spdy_session_domain_verification_old_value_;
 };
 
 // Fill |str| with a long header list that consumes >= |size| bytes.
@@ -334,7 +321,7 @@ CaptureGroupNameSSLSocketPool::CaptureGroupNameSocketPool(
     HostResolver* host_resolver,
     CertVerifier* cert_verifier)
     : SSLClientSocketPool(0, 0, NULL, host_resolver, cert_verifier, NULL, NULL,
-                          NULL, NULL, NULL, NULL, NULL, NULL, NULL) {}
+                          NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL) {}
 
 //-----------------------------------------------------------------------------
 
@@ -345,6 +332,34 @@ static const char kExpectedNPNString[] = "\x08http/1.1\x06spdy/2";
 // This is the expected return from a current server advertising SPDY.
 static const char kAlternateProtocolHttpHeader[] =
     "Alternate-Protocol: 443:npn-spdy/2\r\n\r\n";
+
+TEST_F(HttpNetworkTransactionTest, LogNumRttVsBytesMetrics_WarmestSocket) {
+  MockRead data_reads[1000];
+  data_reads[0] = MockRead("HTTP/1.0 200 OK\r\n\r\n");
+  for (int i = 1; i < 999; i++) {
+    data_reads[i] = MockRead("Gagan is a good boy!");
+  }
+  data_reads[999] = MockRead(false, OK);
+
+  net::SetSocketReusePolicy(0);
+  SimpleGetHelperResult out = SimpleGetHelper(data_reads,
+                                              arraysize(data_reads));
+
+  base::Histogram* histogram = NULL;
+  base::StatisticsRecorder::FindHistogram(
+      "Net.Num_RTT_vs_KB_warmest_socket_15KB", &histogram);
+  CHECK(histogram);
+
+  base::Histogram::SampleSet sample_set;
+  histogram->SnapshotSample(&sample_set);
+  EXPECT_EQ(1, sample_set.TotalCount());
+
+  EXPECT_EQ(OK, out.rv);
+  EXPECT_EQ("HTTP/1.0 200 OK", out.status_line);
+}
+
+// TODO(gagansingh): Add test for LogNumRttVsBytesMetrics_LastAccessSocket once
+// it is possible to clear histograms from previous tests.
 
 TEST_F(HttpNetworkTransactionTest, Basic) {
   SessionDependencies session_deps;
@@ -4923,7 +4938,8 @@ TEST_F(HttpNetworkTransactionTest, BuildRequest_Referer) {
   request.method = "GET";
   request.url = GURL("http://www.google.com/");
   request.load_flags = 0;
-  request.referrer = GURL("http://the.previous.site.com/");
+  request.extra_headers.SetHeader(HttpRequestHeaders::kReferer,
+                                  "http://the.previous.site.com/");
 
   SessionDependencies session_deps;
   scoped_ptr<HttpTransaction> trans(
@@ -5200,6 +5216,7 @@ TEST_F(HttpNetworkTransactionTest, BuildRequest_ExtraHeadersStripped) {
     MockWrite("GET / HTTP/1.1\r\n"
               "Host: www.google.com\r\n"
               "Connection: keep-alive\r\n"
+              "referer: www.foo.com\r\n"
               "hEllo: Kitty\r\n"
               "FoO: bar\r\n\r\n"),
   };
@@ -5770,8 +5787,9 @@ TEST_F(HttpNetworkTransactionTest, ResolveMadeWithReferrer) {
   // Issue a request, containing an HTTP referrer.
   HttpRequestInfo request;
   request.method = "GET";
-  request.referrer = referrer;
   request.url = GURL("http://www.google.com/");
+  request.extra_headers.SetHeader(HttpRequestHeaders::kReferer,
+                                  referrer.spec());
 
   SessionDependencies session_deps;
   scoped_ptr<HttpTransaction> trans(new HttpNetworkTransaction(
@@ -7080,9 +7098,11 @@ TEST_F(HttpNetworkTransactionTest,
   SSLConfig ssl_config;
   session->ssl_config_service()->GetSSLConfig(&ssl_config);
   scoped_ptr<ClientSocketHandle> ssl_connection(new ClientSocketHandle);
+  SSLClientSocketContext context;
+  context.cert_verifier = session_deps.cert_verifier.get();
   ssl_connection->set_socket(session_deps.socket_factory.CreateSSLClientSocket(
       connection.release(), HostPortPair("" , 443), ssl_config,
-      NULL /* ssl_host_info */, session_deps.cert_verifier.get(), NULL));
+      NULL /* ssl_host_info */, context));
   EXPECT_EQ(ERR_IO_PENDING, ssl_connection->socket()->Connect(&callback));
   EXPECT_EQ(OK, callback.WaitForResult());
 
@@ -8718,7 +8738,6 @@ void IPPoolingPreloadHostCache(MockCachingHostResolver* host_resolver,
 TEST_F(HttpNetworkTransactionTest, UseIPConnectionPooling) {
   HttpStreamFactory::set_use_alternate_protocols(true);
   HttpStreamFactory::set_next_protos(kExpectedNPNString);
-  DisableSpdySessionDomainVerification();
 
   // Set up a special HttpNetworkSession with a MockCachingHostResolver.
   SessionDependencies session_deps;
@@ -8734,6 +8753,7 @@ TEST_F(HttpNetworkTransactionTest, UseIPConnectionPooling) {
   params.net_log = session_deps.net_log;
   scoped_refptr<HttpNetworkSession> session(new HttpNetworkSession(params));
   SpdySessionPoolPeer pool_peer(session->spdy_session_pool());
+  pool_peer.DisableDomainAuthenticationVerification();
 
   SSLSocketDataProvider ssl(true, OK);
   ssl.next_proto_status = SSLClientSocket::kNextProtoNegotiated;
@@ -8867,7 +8887,6 @@ TEST_F(HttpNetworkTransactionTest,
        UseIPConnectionPoolingWithHostCacheExpiration) {
   HttpStreamFactory::set_use_alternate_protocols(true);
   HttpStreamFactory::set_next_protos(kExpectedNPNString);
-  DisableSpdySessionDomainVerification();
 
   // Set up a special HttpNetworkSession with a OneTimeCachingHostResolver.
   SessionDependencies session_deps;
@@ -8883,6 +8902,7 @@ TEST_F(HttpNetworkTransactionTest,
   params.net_log = session_deps.net_log;
   scoped_refptr<HttpNetworkSession> session(new HttpNetworkSession(params));
   SpdySessionPoolPeer pool_peer(session->spdy_session_pool());
+  pool_peer.DisableDomainAuthenticationVerification();
 
   SSLSocketDataProvider ssl(true, OK);
   ssl.next_proto_status = SSLClientSocket::kNextProtoNegotiated;

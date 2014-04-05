@@ -61,9 +61,10 @@ class ThreadSafeDisrupter : public Foo {
   Foo* doomed_;
 };
 
+template <typename ObserverListType>
 class AddInObserve : public Foo {
  public:
-  explicit AddInObserve(ObserverList<Foo>* observer_list)
+  explicit AddInObserve(ObserverListType* observer_list)
       : added(false),
         observer_list(observer_list),
         adder(1) {
@@ -76,13 +77,10 @@ class AddInObserve : public Foo {
   }
 
   bool added;
-  ObserverList<Foo>* observer_list;
+  ObserverListType* observer_list;
   Adder adder;
 };
 
-
-class ObserverListThreadSafeTest : public testing::Test {
-};
 
 static const int kThreadRunTime = 2000;  // ms to run the multi-threaded test.
 
@@ -175,7 +173,7 @@ class AddRemoveThread : public PlatformThread::Delegate,
 
 TEST(ObserverListTest, BasicTest) {
   ObserverList<Foo> observer_list;
-  Adder a(1), b(-1), c(1), d(-1);
+  Adder a(1), b(-1), c(1), d(-1), e(-1);
   Disrupter evil(&observer_list, &c);
 
   observer_list.AddObserver(&a);
@@ -187,12 +185,16 @@ TEST(ObserverListTest, BasicTest) {
   observer_list.AddObserver(&c);
   observer_list.AddObserver(&d);
 
+  // Removing an observer not in the list should do nothing.
+  observer_list.RemoveObserver(&e);
+
   FOR_EACH_OBSERVER(Foo, observer_list, Observe(10));
 
   EXPECT_EQ(a.total, 20);
   EXPECT_EQ(b.total, -20);
   EXPECT_EQ(c.total, 0);
   EXPECT_EQ(d.total, -10);
+  EXPECT_EQ(e.total, 0);
 }
 
 TEST(ObserverListThreadSafeTest, BasicTest) {
@@ -223,6 +225,35 @@ TEST(ObserverListThreadSafeTest, BasicTest) {
   EXPECT_EQ(b.total, -20);
   EXPECT_EQ(c.total, 0);
   EXPECT_EQ(d.total, -10);
+}
+
+TEST(ObserverListThreadSafeTest, RemoveObserver) {
+  MessageLoop loop;
+
+  scoped_refptr<ObserverListThreadSafe<Foo> > observer_list(
+      new ObserverListThreadSafe<Foo>);
+  Adder a(1), b(1);
+
+  // Should do nothing.
+  observer_list->RemoveObserver(&a);
+  observer_list->RemoveObserver(&b);
+
+  observer_list->Notify(&Foo::Observe, 10);
+  loop.RunAllPending();
+
+  EXPECT_EQ(a.total, 0);
+  EXPECT_EQ(b.total, 0);
+
+  observer_list->AddObserver(&a);
+
+  // Should also do nothing.
+  observer_list->RemoveObserver(&b);
+
+  observer_list->Notify(&Foo::Observe, 10);
+  loop.RunAllPending();
+
+  EXPECT_EQ(a.total, 10);
+  EXPECT_EQ(b.total, 0);
 }
 
 class FooRemover : public Foo {
@@ -324,10 +355,22 @@ TEST(ObserverListThreadSafeTest, CrossThreadNotifications) {
   ThreadSafeObserverHarness(3, true);
 }
 
+TEST(ObserverListThreadSafeTest, OutlivesMessageLoop) {
+  MessageLoop* loop = new MessageLoop;
+  scoped_refptr<ObserverListThreadSafe<Foo> > observer_list(
+      new ObserverListThreadSafe<Foo>);
+
+  Adder a(1);
+  observer_list->AddObserver(&a);
+  delete loop;
+  // Test passes if we don't crash here.
+  observer_list->Notify(&Foo::Observe, 1);
+}
+
 TEST(ObserverListTest, Existing) {
   ObserverList<Foo> observer_list(ObserverList<Foo>::NOTIFY_EXISTING_ONLY);
   Adder a(1);
-  AddInObserve b(&observer_list);
+  AddInObserve<ObserverList<Foo> > b(&observer_list);
 
   observer_list.AddObserver(&a);
   observer_list.AddObserver(&b);
@@ -341,6 +384,31 @@ TEST(ObserverListTest, Existing) {
 
   // Notify again to make sure b's adder is notified.
   FOR_EACH_OBSERVER(Foo, observer_list, Observe(1));
+  EXPECT_EQ(1, b.adder.total);
+}
+
+// Same as above, but for ObserverListThreadSafe
+TEST(ObserverListThreadSafeTest, Existing) {
+  MessageLoop loop;
+  scoped_refptr<ObserverListThreadSafe<Foo> > observer_list(
+      new ObserverListThreadSafe<Foo>(ObserverList<Foo>::NOTIFY_EXISTING_ONLY));
+  Adder a(1);
+  AddInObserve<ObserverListThreadSafe<Foo> > b(observer_list.get());
+
+  observer_list->AddObserver(&a);
+  observer_list->AddObserver(&b);
+
+  observer_list->Notify(&Foo::Observe, 1);
+  loop.RunAllPending();
+
+  EXPECT_TRUE(b.added);
+  // B's adder should not have been notified because it was added during
+  // notificaiton.
+  EXPECT_EQ(0, b.adder.total);
+
+  // Notify again to make sure b's adder is notified.
+  observer_list->Notify(&Foo::Observe, 1);
+  loop.RunAllPending();
   EXPECT_EQ(1, b.adder.total);
 }
 

@@ -735,18 +735,13 @@ Value* GpuBlacklist::GetFeatureStatus(bool gpu_access_allowed,
 
     // 2d_canvas.
     if (!gpu_access_allowed) {
-      if(enable_accelerated_2D_canvas)
+      if (enable_accelerated_2D_canvas)
         feature_status_list->Append(NewStatusValue("2d_canvas",
                                                    "unavailable_software"));
       else
         feature_status_list->Append(NewStatusValue("2d_canvas",
                                                    "software"));
     } else if (enable_accelerated_2D_canvas) {
-      if (IsFeatureBlacklisted(
-              GpuFeatureFlags::kGpuFeatureAccelerated2dCanvas))
-        feature_status_list->Append(NewStatusValue("2d_canvas",
-                                                   "unavailable_software"));
-      else
         feature_status_list->Append(NewStatusValue("2d_canvas",
                                                    "enabled"));
     } else {
@@ -797,7 +792,7 @@ Value* GpuBlacklist::GetFeatureStatus(bool gpu_access_allowed,
     if (!gpu_access_allowed)
       feature_status_list->Append(NewStatusValue("multisampling",
                                                  "unavailable_off"));
-    else if(disable_multisampling)
+    else if (disable_multisampling)
       feature_status_list->Append(NewStatusValue("multisampling",
                                                  "disabled_off"));
     else if (IsFeatureBlacklisted(
@@ -814,7 +809,7 @@ Value* GpuBlacklist::GetFeatureStatus(bool gpu_access_allowed,
   // Build the problems list.
   {
     ListValue* problem_list = new ListValue();
-    if(!gpu_access_allowed) {
+    if (!gpu_access_allowed) {
       DictionaryValue* problem = new DictionaryValue();
       problem->SetString("description",
           "GPU process was unable to boot. Access to GPU disallowed.");
@@ -822,7 +817,7 @@ Value* GpuBlacklist::GetFeatureStatus(bool gpu_access_allowed,
       problem->Set("webkitBugs", new ListValue());
       problem_list->Append(problem);
     }
-    if(!enable_accelerated_2D_canvas) {
+    if (!enable_accelerated_2D_canvas) {
       DictionaryValue* problem = new DictionaryValue();
       problem->SetString("description",
           "Accelerated 2D canvas has not been enabled "
@@ -831,7 +826,7 @@ Value* GpuBlacklist::GetFeatureStatus(bool gpu_access_allowed,
       problem->Set("webkitBugs", new ListValue());
       problem_list->Append(problem);
     }
-    if(disable_accelerated_compositing) {
+    if (disable_accelerated_compositing) {
       DictionaryValue* problem = new DictionaryValue();
       problem->SetString("description",
           "Accelerated compositing has been disabled, either via about:flags "
@@ -840,7 +835,7 @@ Value* GpuBlacklist::GetFeatureStatus(bool gpu_access_allowed,
       problem->Set("webkitBugs", new ListValue());
       problem_list->Append(problem);
     }
-    if(disable_experimental_webgl) {
+    if (disable_experimental_webgl) {
       DictionaryValue* problem = new DictionaryValue();
       problem->SetString("description",
           "WebGL has been disabled, either via about:flags "
@@ -849,7 +844,7 @@ Value* GpuBlacklist::GetFeatureStatus(bool gpu_access_allowed,
       problem->Set("webkitBugs", new ListValue());
       problem_list->Append(problem);
     }
-    if(disable_multisampling) {
+    if (disable_multisampling) {
       DictionaryValue* problem = new DictionaryValue();
       problem->SetString("description",
           "Multisampling has been disabled, either via about:flags "

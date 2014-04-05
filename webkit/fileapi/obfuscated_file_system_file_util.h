@@ -47,8 +47,11 @@ class FileSystemOperationContext;
 class ObfuscatedFileSystemFileUtil : public FileSystemFileUtil,
     public base::RefCountedThreadSafe<ObfuscatedFileSystemFileUtil> {
  public:
-
-  ObfuscatedFileSystemFileUtil(const FilePath& file_system_directory);
+  // |underlying_file_util| is not owned by the instance.  It will need to be
+  // a singleton or to be deleted by someone else.
+  ObfuscatedFileSystemFileUtil(
+      const FilePath& file_system_directory,
+      FileSystemFileUtil* underlying_file_util);
   virtual ~ObfuscatedFileSystemFileUtil();
 
   virtual base::PlatformFileError CreateOrOpen(
@@ -132,10 +135,6 @@ class ObfuscatedFileSystemFileUtil : public FileSystemFileUtil,
   FilePath GetDirectoryForOriginAndType(
       const GURL& origin, FileSystemType type, bool create);
 
-  // Gets the topmost directory specific to this origin.  This will
-  // contain both the filesystem type subdirectories.
-  FilePath GetDirectoryForOrigin(const GURL& origin, bool create);
-
   // Deletes the topmost directory specific to this origin and type.  This will
   // delete its directory database.
   bool DeleteDirectoryForOriginAndType(const GURL& origin, FileSystemType type);
@@ -188,6 +187,14 @@ class ObfuscatedFileSystemFileUtil : public FileSystemFileUtil,
   typedef FileSystemDirectoryDatabase::FileId FileId;
   typedef FileSystemDirectoryDatabase::FileInfo FileInfo;
 
+  base::PlatformFileError GetFileInfoInternal(
+      FileSystemDirectoryDatabase* db,
+      FileSystemOperationContext* context,
+      FileId file_id,
+      FileInfo* local_info,
+      base::PlatformFileInfo* file_info,
+      FilePath* platform_file_path);
+
   // Creates a new file, both the underlying backing file and the entry in the
   // database.  file_info is an in-out parameter.  Supply the name and
   // parent_id; data_path is ignored.  On success, data_path will
@@ -225,6 +232,9 @@ class ObfuscatedFileSystemFileUtil : public FileSystemFileUtil,
   // For read operations |create| should be false.
   FileSystemDirectoryDatabase* GetDirectoryDatabase(
       const GURL& origin_url, FileSystemType type, bool create);
+  // Gets the topmost directory specific to this origin.  This will
+  // contain both the filesystem type subdirectories.
+  FilePath GetDirectoryForOrigin(const GURL& origin, bool create);
   void MarkUsed();
   void DropDatabases();
   bool InitOriginDatabase(bool create);
@@ -234,6 +244,7 @@ class ObfuscatedFileSystemFileUtil : public FileSystemFileUtil,
   scoped_ptr<FileSystemOriginDatabase> origin_database_;
   FilePath file_system_directory_;
   base::OneShotTimer<ObfuscatedFileSystemFileUtil> timer_;
+  FileSystemFileUtil* underlying_file_util_;
 
   DISALLOW_COPY_AND_ASSIGN(ObfuscatedFileSystemFileUtil);
 };

@@ -13,7 +13,7 @@
 #include "base/file_util.h"
 #include "base/i18n/case_conversion.h"
 #include "base/path_service.h"
-#include "base/stl_util-inl.h"
+#include "base/stl_util.h"
 #include "base/string_util.h"
 #include "base/utf_string_conversions.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -141,6 +141,8 @@ TEST_F(L10nUtilTest, GetAppLocale) {
     "fil",
     "nb",
     "am",
+    "ca",
+    "ca@valencia",
   };
 
 #if defined(OS_WIN)
@@ -194,6 +196,21 @@ TEST_F(L10nUtilTest, GetAppLocale) {
   env->UnSetVar("LC_MESSAGES");
   EXPECT_EQ("nb", l10n_util::GetApplicationLocale(""));
   env->UnSetVar("LANG");
+
+  SetDefaultLocaleForTest("ca", env.get());
+  EXPECT_EQ("ca", l10n_util::GetApplicationLocale(""));
+
+  SetDefaultLocaleForTest("ca-ES", env.get());
+  EXPECT_EQ("ca", l10n_util::GetApplicationLocale(""));
+
+  SetDefaultLocaleForTest("ca@valencia", env.get());
+  EXPECT_EQ("ca@valencia", l10n_util::GetApplicationLocale(""));
+
+  SetDefaultLocaleForTest("ca_ES@valencia", env.get());
+  EXPECT_EQ("ca@valencia", l10n_util::GetApplicationLocale(""));
+
+  SetDefaultLocaleForTest("ca_ES.UTF8@valencia", env.get());
+  EXPECT_EQ("ca@valencia", l10n_util::GetApplicationLocale(""));
 #endif  // defined(OS_POSIX) && !defined(OS_CHROMEOS)
 
   SetDefaultLocaleForTest("en-US", env.get());
@@ -211,6 +228,17 @@ TEST_F(L10nUtilTest, GetAppLocale) {
   SetICUDefaultLocale("en-US");
   EXPECT_EQ("en-GB", l10n_util::GetApplicationLocale("en-GB"));
 
+  SetICUDefaultLocale("en-US");
+  EXPECT_EQ("en-GB", l10n_util::GetApplicationLocale("en-AU"));
+
+  SetICUDefaultLocale("en-US");
+  EXPECT_EQ("en-GB", l10n_util::GetApplicationLocale("en-NZ"));
+
+  SetICUDefaultLocale("en-US");
+  EXPECT_EQ("en-GB", l10n_util::GetApplicationLocale("en-CA"));
+
+  SetICUDefaultLocale("en-US");
+  EXPECT_EQ("en-GB", l10n_util::GetApplicationLocale("en-ZA"));
 #else  // defined(OS_CHROMEOS)
   SetDefaultLocaleForTest("en-GB", env.get());
   EXPECT_EQ("en-GB", l10n_util::GetApplicationLocale(""));

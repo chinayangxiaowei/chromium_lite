@@ -14,12 +14,17 @@ class ChromeContentClient : public content::ContentClient {
  public:
   static const char* kPDFPluginName;
   static const char* kNaClPluginName;
+  static const char* kNaClOldPluginName;
 
   virtual void SetActiveURL(const GURL& url);
   virtual void SetGpuInfo(const GPUInfo& gpu_info);
   virtual void AddPepperPlugins(std::vector<PepperPluginInfo>* plugins);
   virtual bool CanSendWhileSwappedOut(const IPC::Message* msg);
   virtual bool CanHandleWhileSwappedOut(const IPC::Message& msg);
+  virtual std::string GetUserAgent(bool mimic_windows) const;
+  virtual string16 GetLocalizedString(int message_id) const;
+  virtual base::StringPiece GetDataResource(int resource_id) const;
+
 #if defined(OS_WIN)
   virtual bool SandboxPlugin(CommandLine* command_line,
                              sandbox::TargetPolicy* policy);

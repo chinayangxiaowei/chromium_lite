@@ -22,9 +22,13 @@
 #include "webkit/fileapi/file_system_operation.h"
 #include "webkit/fileapi/file_system_operation.h"
 #include "webkit/fileapi/file_system_path_manager.h"
+#include "webkit/fileapi/file_system_quota_util.h"
+#include "webkit/fileapi/file_system_util.h"
 
 using fileapi::FileSystemCallbackDispatcher;
+using fileapi::FileSystemFileUtil;
 using fileapi::FileSystemOperation;
+using fileapi::FileSystemOperationContext;
 
 class BrowserFileSystemCallbackDispatcher
     : public FileSystemCallbackDispatcher {
@@ -77,19 +81,10 @@ class BrowserFileSystemCallbackDispatcher
       base::PlatformFile file,
       base::ProcessHandle peer_handle) {
     IPC::PlatformFileForTransit file_for_transit =
-        IPC::InvalidPlatformFileForTransit();
-    if (file != base::kInvalidPlatformFileValue) {
-#if defined(OS_WIN)
-      if (!::DuplicateHandle(::GetCurrentProcess(), file, peer_handle,
-                             &file_for_transit, 0, false,
-                             DUPLICATE_SAME_ACCESS | DUPLICATE_CLOSE_SOURCE))
-        file_for_transit = IPC::InvalidPlatformFileForTransit();
-#elif defined(OS_POSIX)
-      file_for_transit = base::FileDescriptor(file, true);
-#else
-  #error Not implemented.
-#endif
-    }
+        file != base::kInvalidPlatformFileValue ?
+            IPC::GetFileHandleForProcess(file, peer_handle, true) :
+            IPC::InvalidPlatformFileForTransit();
+
     dispatcher_host_->Send(new FileSystemMsg_DidOpenFile(
         request_id_, file_for_transit));
   }
@@ -134,6 +129,13 @@ void FileSystemDispatcherHost::OnChannelConnected(int32 peer_pid) {
   DCHECK(context_);
 }
 
+void FileSystemDispatcherHost::OverrideThreadForMessage(
+    const IPC::Message& message,
+    BrowserThread::ID* thread) {
+  if (message.type() == FileSystemHostMsg_SyncGetPlatformPath::ID)
+    *thread = BrowserThread::FILE;
+}
+
 bool FileSystemDispatcherHost::OnMessageReceived(
     const IPC::Message& message, bool* message_was_ok) {
   *message_was_ok = true;
@@ -152,6 +154,10 @@ bool FileSystemDispatcherHost::OnMessageReceived(
     IPC_MESSAGE_HANDLER(FileSystemHostMsg_TouchFile, OnTouchFile)
     IPC_MESSAGE_HANDLER(FileSystemHostMsg_CancelWrite, OnCancel)
     IPC_MESSAGE_HANDLER(FileSystemHostMsg_OpenFile, OnOpenFile)
+    IPC_MESSAGE_HANDLER(FileSystemHostMsg_WillUpdate, OnWillUpdate)
+    IPC_MESSAGE_HANDLER(FileSystemHostMsg_DidUpdate, OnDidUpdate)
+    IPC_MESSAGE_HANDLER(FileSystemHostMsg_SyncGetPlatformPath,
+                        OnSyncGetPlatformPath)
     IPC_MESSAGE_UNHANDLED(handled = false)
   IPC_END_MESSAGE_MAP_EX()
   return handled;
@@ -249,6 +255,52 @@ void FileSystemDispatcherHost::OnCancel(
 void FileSystemDispatcherHost::OnOpenFile(
     int request_id, const GURL& path, int file_flags) {
   GetNewOperation(request_id)->OpenFile(path, file_flags, peer_handle());
+}
+
+void FileSystemDispatcherHost::OnWillUpdate(const GURL& path) {
+  GURL origin_url;
+  fileapi::FileSystemType type;
+  if (!CrackFileSystemURL(path, &origin_url, &type, NULL))
+    return;
+  fileapi::FileSystemQuotaUtil* quota_util = context_->GetQuotaUtil(type);
+  if (!quota_util)
+    return;
+  quota_util->proxy()->StartUpdateOrigin(origin_url, type);
+}
+
+void FileSystemDispatcherHost::OnDidUpdate(const GURL& path, int64 delta) {
+  GURL origin_url;
+  fileapi::FileSystemType type;
+  if (!CrackFileSystemURL(path, &origin_url, &type, NULL))
+    return;
+  fileapi::FileSystemQuotaUtil* quota_util = context_->GetQuotaUtil(type);
+  if (!quota_util)
+    return;
+  quota_util->proxy()->UpdateOriginUsage(
+      context_->quota_manager_proxy(), origin_url, type, delta);
+  quota_util->proxy()->EndUpdateOrigin(origin_url, type);
+}
+
+void FileSystemDispatcherHost::OnSyncGetPlatformPath(
+    const GURL& path, FilePath* platform_path) {
+  DCHECK(BrowserThread::CurrentlyOn(BrowserThread::FILE));
+  DCHECK(platform_path);
+  *platform_path = FilePath();
+  base::PlatformFileInfo info;
+  GURL origin_url;
+  fileapi::FileSystemType type;
+  FilePath virtual_path;
+  if (!CrackFileSystemURL(path, &origin_url, &type, &virtual_path))
+    return;
+  FileSystemFileUtil* file_util =
+      context_->path_manager()->GetFileSystemFileUtil(type);
+  if (!file_util)
+    return;
+  FileSystemOperationContext operation_context(context_, file_util);
+  operation_context.set_src_origin_url(origin_url);
+  operation_context.set_src_type(type);
+  file_util->GetFileInfo(&operation_context, virtual_path,
+                         &info, platform_path);
 }
 
 FileSystemOperation* FileSystemDispatcherHost::GetNewOperation(

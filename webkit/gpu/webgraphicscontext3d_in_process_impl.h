@@ -65,9 +65,13 @@ class WebGraphicsContext3DInProcessImpl : public WebGraphicsContext3D {
 
   virtual bool isGLES2Compliant();
 
+  virtual bool setParentContext(WebGraphicsContext3D* parent_context);
+
   virtual void reshape(int width, int height);
 
   virtual bool readBackFramebuffer(unsigned char* pixels, size_t bufferSize);
+  virtual bool readBackFramebuffer(unsigned char* pixels, size_t buffer_size,
+                                   WebGLId framebuffer, int width, int height);
 
   virtual WebGLId getPlatformTextureId();
   virtual void prepareTexture();
@@ -89,11 +93,6 @@ class WebGraphicsContext3DInProcessImpl : public WebGraphicsContext3D {
   virtual void unmapTexSubImage2DCHROMIUM(const void*);
   virtual void copyTextureToParentTextureCHROMIUM(
       WebGLId texture, WebGLId parentTexture);
-
-  virtual void getParentToChildLatchCHROMIUM(WGC3Duint* latch_id);
-  virtual void getChildToParentLatchCHROMIUM(WGC3Duint* latch_id);
-  virtual void waitLatchCHROMIUM(WGC3Duint latch_id);
-  virtual void setLatchCHROMIUM(WGC3Duint latch_id);
 
   virtual void rateLimitOffscreenContextCHROMIUM() { }
 
@@ -407,6 +406,7 @@ class WebGraphicsContext3DInProcessImpl : public WebGraphicsContext3D {
 
   virtual void setContextLostCallback(
       WebGraphicsContext3D::WebGraphicsContextLostCallback* callback) {}
+  virtual WGC3Denum getGraphicsResetStatusARB();
 
  private:
   // ANGLE related.

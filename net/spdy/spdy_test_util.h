@@ -371,7 +371,7 @@ class SpdyURLRequestContext : public URLRequestContext {
   net::URLRequestContextStorage storage_;
 };
 
-const SpdyHeaderInfo make_spdy_header(spdy::SpdyControlType type);
+const SpdyHeaderInfo MakeSpdyHeader(spdy::SpdyControlType type);
 
 class SpdySessionPoolPeer {
  public:
@@ -384,6 +384,10 @@ class SpdySessionPoolPeer {
 
   void RemoveSpdySession(const scoped_refptr<SpdySession>& session) {
     pool_->Remove(session);
+  }
+
+  void DisableDomainAuthenticationVerification() {
+    pool_->verify_domain_authentication_ = false;
   }
 
  private:

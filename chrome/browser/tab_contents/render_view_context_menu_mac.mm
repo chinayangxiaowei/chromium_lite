@@ -11,6 +11,7 @@
 #include "chrome/app/chrome_command_ids.h"
 #import "chrome/browser/ui/cocoa/browser_window_controller.h"
 #import "chrome/browser/ui/cocoa/menu_controller.h"
+#import "content/common/chrome_application_mac.h"
 #include "grit/generated_resources.h"
 
 // Obj-C bridge class that is the target of all items in the context menu.
@@ -53,6 +54,13 @@ void RenderViewContextMenuMac::PlatformInit() {
     // Make sure events can be pumped while the menu is up.
     MessageLoop::ScopedNestableTaskAllower allow(MessageLoop::current());
 
+    // One of the events that could be pumped is |window.close()|.
+    // User-initiated event-tracking loops protect against this by
+    // setting flags in -[CrApplication sendEvent:], but since
+    // web-content menus are initiated by IPC message the setup has to
+    // be done manually.
+    chrome_application_mac::ScopedSendingEvent sendingEventScoper;
+
     // Show the menu.
     [NSMenu popUpContextMenu:[menuController_ menu]
                    withEvent:clickEvent
@@ -61,7 +69,13 @@ void RenderViewContextMenuMac::PlatformInit() {
 }
 
 void RenderViewContextMenuMac::ExecuteCommand(int id) {
-  [[[parent_view_ window] windowController] commitInstant];
+  // Auxiliary windows that do not have address bars (Panels for example)
+  // may not have Instant support.
+  NSWindow* parent_window = [parent_view_ window];
+  BrowserWindowController* controller =
+      [BrowserWindowController browserWindowControllerForWindow:parent_window];
+  [controller commitInstant];  // It's ok if controller is nil.
+
   RenderViewContextMenu::ExecuteCommand(id);
 }
 

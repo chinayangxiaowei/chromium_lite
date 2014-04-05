@@ -24,6 +24,7 @@
 #include "ui/gfx/size.h"
 #include "webkit/fileapi/file_system_types.h"
 #include "webkit/plugins/ppapi/dir_contents.h"
+#include "webkit/quota/quota_types.h"
 
 class AudioMessageFilter;
 class GURL;
@@ -46,6 +47,7 @@ class Rect;
 
 namespace gpu {
 class CommandBuffer;
+class CommandBufferHelper;
 }
 
 namespace ppapi {
@@ -172,7 +174,11 @@ class PluginDelegate {
     // This call will return the address of the command buffer for this context
     // that is constructed in Initialize() and is valid until this context is
     // destroyed.
-    virtual gpu::CommandBuffer* GetCommandBuffer() = 0;
+    virtual ::gpu::CommandBuffer* GetCommandBuffer() = 0;
+
+    // If the command buffer is routed in the GPU channel, return the route id.
+    // Otherwise return 0.
+    virtual int GetCommandBufferRouteId() = 0;
 
     // Set an optional callback that will be invoked when the context is lost
     // (e.g. gpu process crash). Takes ownership of the callback.
@@ -211,7 +217,7 @@ class PluginDelegate {
   // Interface for PlatformVideoDecoder is directly inherited from general media
   // VideoDecodeAccelerator interface.
   class PlatformVideoDecoder : public media::VideoDecodeAccelerator {
-   public:
+   protected:
     virtual ~PlatformVideoDecoder() {}
   };
 
@@ -258,7 +264,9 @@ class PluginDelegate {
 
   // The caller will own the pointer returned from this.
   virtual PlatformVideoDecoder* CreateVideoDecoder(
-      media::VideoDecodeAccelerator::Client* client) = 0;
+      media::VideoDecodeAccelerator::Client* client,
+      int32 command_buffer_route_id,
+      gpu::CommandBufferHelper* cmd_buffer_helper) = 0;
 
   // The caller is responsible for calling Shutdown() on the returned pointer
   // to clean up the corresponding resources allocated during this call.
@@ -287,7 +295,7 @@ class PluginDelegate {
       WebKit::WebFileChooserCompletion* chooser_completion) = 0;
 
   // Sends an async IPC to open a file.
-  typedef Callback2<base::PlatformFileError, base::PlatformFile
+  typedef Callback2<base::PlatformFileError, base::PassPlatformFile
                     >::Type AsyncOpenFileCallback;
   virtual bool AsyncOpenFile(const FilePath& path,
                              int flags,
@@ -320,6 +328,20 @@ class PluginDelegate {
       const GURL& directory_path,
       fileapi::FileSystemCallbackDispatcher* dispatcher) = 0;
 
+  // Takes a UTF-8 string representing the enterprise policy, and pushes it to
+  // every plugin instance that has called SubscribeToPolicyUpdates().
+  //
+  // This should be called when the enterprise policy is updated.
+  virtual void PublishPolicy(const std::string& policy_json) = 0;
+
+  // For quota handlings for FileIO API.
+  typedef Callback1<int64>::Type AvailableSpaceCallback;
+  virtual void QueryAvailableSpace(const GURL& origin,
+                                   quota::StorageType type,
+                                   AvailableSpaceCallback* callback) = 0;
+  virtual void WillUpdateFile(const GURL& file_path) = 0;
+  virtual void DidUpdateFile(const GURL& file_path, int64_t delta) = 0;
+
   virtual base::PlatformFileError OpenFile(const PepperFilePath& path,
                                            int flags,
                                            base::PlatformFile* file) = 0;
@@ -332,6 +354,10 @@ class PluginDelegate {
                                             base::PlatformFileInfo* info) = 0;
   virtual base::PlatformFileError GetDirContents(const PepperFilePath& path,
                                                  DirContents* contents) = 0;
+
+  // Synchronously returns the platform file path for a filesystem URL.
+  virtual void SyncGetFileSystemPlatformPath(const GURL& url,
+                                             FilePath* platform_path) = 0;
 
   // Returns a MessageLoopProxy instance associated with the message loop
   // of the file thread in this renderer.
@@ -368,6 +394,10 @@ class PluginDelegate {
   // Sets the mininum and maximium zoom factors.
   virtual void ZoomLimitsChanged(double minimum_factor,
                                  double maximum_factor) = 0;
+
+  // Subscribes the instances to notifications that the policy has been
+  // updated.
+  virtual void SubscribeToPolicyUpdates(PluginInstance* instance) = 0;
 
   // Retrieves the proxy information for the given URL in PAC format. On error,
   // this will return an empty string.

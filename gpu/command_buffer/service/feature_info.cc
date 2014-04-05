@@ -102,12 +102,9 @@ void FeatureInfo::AddFeatures(const char* desired_features) {
 
   bool npot_ok = false;
 
-  AddExtensionString("GL_CHROMIUM_map_sub");
-  AddExtensionString("GL_CHROMIUM_copy_texture_to_parent_texture");
   AddExtensionString("GL_CHROMIUM_resource_safe");
   AddExtensionString("GL_CHROMIUM_resize");
   AddExtensionString("GL_CHROMIUM_strict_attribs");
-  AddExtensionString("GL_CHROMIUM_latch");
   AddExtensionString("GL_CHROMIUM_swapbuffers_complete_callback");
   AddExtensionString("GL_CHROMIUM_rate_limit_offscreen_context");
 

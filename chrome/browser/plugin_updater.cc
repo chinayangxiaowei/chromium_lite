@@ -16,6 +16,7 @@
 #include "chrome/browser/prefs/scoped_user_pref_update.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/common/chrome_content_client.h"
+#include "chrome/common/chrome_notification_types.h"
 #include "chrome/common/chrome_paths.h"
 #include "chrome/common/pref_names.h"
 #include "content/browser/browser_thread.h"
@@ -70,10 +71,10 @@ void PluginUpdater::EnablePlugin(bool enable,
   NotifyPluginStatusChanged();
 }
 
-void PluginUpdater::Observe(NotificationType type,
+void PluginUpdater::Observe(int type,
                             const NotificationSource& source,
                             const NotificationDetails& details) {
-  DCHECK_EQ(NotificationType::PREF_CHANGED, type.value);
+  DCHECK_EQ(chrome::NOTIFICATION_PREF_CHANGED, type);
   const std::string* pref_name = Details<std::string>(details).ptr();
   if (!pref_name) {
     NOTREACHED();
@@ -154,10 +155,28 @@ void PluginUpdater::SetProfile(Profile* profile) {
     force_enable_internal_pdf = true;
   }
 
+  bool force_enable_nacl = false;
+  string16 nacl_group_name =
+      ASCIIToUTF16(chrome::ChromeContentClient::kNaClPluginName);
+  // Since the NaCl Plugin changed names between Chrome 13 and 14, we need to
+  // check for both because either could be stored as the plugin group name.
+  string16 old_nacl_group_name =
+      ASCIIToUTF16(chrome::ChromeContentClient::kNaClOldPluginName);
+  FilePath nacl_path;
+  PathService::Get(chrome::FILE_NACL_PLUGIN, &nacl_path);
+  FilePath::StringType nacl_path_str = nacl_path.value();
+  if (!profile->GetPrefs()->GetBoolean(prefs::kPluginsEnabledNaCl)) {
+    // We switched to the nacl plugin being on by default, and so we need to
+    // force it to be enabled.  We only want to do it this once though, i.e.
+    // we don't want to enable it again if the user disables it afterwards.
+    profile->GetPrefs()->SetBoolean(prefs::kPluginsEnabledNaCl, true);
+    force_enable_nacl = true;
+  }
+
   {  // Scoped update of prefs::kPluginsPluginsList.
     ListPrefUpdate update(profile->GetPrefs(), prefs::kPluginsPluginsList);
     ListValue* saved_plugins_list = update.Get();
-    if (saved_plugins_list) {
+    if (saved_plugins_list && !saved_plugins_list->empty()) {
       for (ListValue::const_iterator it = saved_plugins_list->begin();
            it != saved_plugins_list->end();
            ++it) {
@@ -168,8 +187,9 @@ void PluginUpdater::SetProfile(Profile* profile) {
 
         DictionaryValue* plugin = static_cast<DictionaryValue*>(*it);
         string16 group_name;
-        bool enabled = true;
-        plugin->GetBoolean("enabled", &enabled);
+        bool enabled;
+        if (!plugin->GetBoolean("enabled", &enabled))
+          enabled = true;
 
         FilePath::StringType path;
         // The plugin list constains all the plugin files in addition to the
@@ -194,20 +214,35 @@ void PluginUpdater::SetProfile(Profile* profile) {
             }
 
             internal_pdf_enabled = enabled;
+          } else if (FilePath::CompareIgnoreCase(path, nacl_path_str) == 0) {
+            if (!enabled && force_enable_nacl) {
+              enabled = true;
+              plugin->SetBoolean("enabled", true);
+            }
           }
 
           if (!enabled)
             webkit::npapi::PluginList::Singleton()->DisablePlugin(plugin_path);
         } else if (!enabled && plugin->GetString("name", &group_name)) {
-          // Don't disable this group if it's for the pdf plugin and we just
-          // forced it on.
+          // Don't disable this group if it's for the pdf or nacl plugins and
+          // we just forced it on.
           if (force_enable_internal_pdf && pdf_group_name == group_name)
+            continue;
+          if (force_enable_nacl && (nacl_group_name == group_name ||
+                                    old_nacl_group_name == group_name))
             continue;
 
           // Otherwise this is a list of groups.
           EnablePluginGroup(false, group_name);
         }
       }
+    } else {
+      // If the saved plugin list is empty, then the call to UpdatePreferences()
+      // below failed in an earlier run, possibly because the user closed the
+      // browser too quickly. Try to force enable the internal PDF and nacl
+      // plugins again.
+      force_enable_internal_pdf = true;
+      force_enable_nacl = true;
     }
   }  // Scoped update of prefs::kPluginsPluginsList.
 
@@ -235,7 +270,7 @@ void PluginUpdater::SetProfile(Profile* profile) {
         webkit::npapi::PluginGroup::kAdobeReaderGroupName));
   }
 
-  if (force_enable_internal_pdf) {
+  if (force_enable_internal_pdf || force_enable_nacl) {
     // We want to save this, but doing so requires loading the list of plugins,
     // so do it after a minute as to not impact startup performance.  Note that
     // plugins are loaded after 30s by the metrics service.
@@ -294,8 +329,6 @@ void PluginUpdater::OnUpdatePreferences(
               webkit::npapi::WebPluginInfo::USER_ENABLED;
       summary->SetBoolean("enabled", user_enabled);
     }
-    bool enabled_val;
-    summary->GetBoolean("enabled", &enabled_val);
     plugins_list->Append(summary);
   }
 
@@ -324,7 +357,7 @@ void PluginUpdater::NotifyPluginStatusChanged() {
 void PluginUpdater::OnNotifyPluginStatusChanged() {
   GetInstance()->notify_pending_ = false;
   NotificationService::current()->Notify(
-      NotificationType::PLUGIN_ENABLE_STATUS_CHANGED,
+      content::NOTIFICATION_PLUGIN_ENABLE_STATUS_CHANGED,
       Source<PluginUpdater>(GetInstance()),
       NotificationService::NoDetails());
 }

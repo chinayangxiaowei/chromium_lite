@@ -5,16 +5,11 @@
 #include "content/browser/renderer_host/sync_resource_handler.h"
 
 #include "base/logging.h"
-#include "chrome/browser/content_settings/host_content_settings_map.h"
-#include "chrome/browser/debugger/devtools_netlog_observer.h"
-#include "chrome/browser/net/load_timing_observer.h"
-#include "chrome/browser/profiles/profile_io_data.h"
-#include "chrome/common/render_messages.h"
+#include "content/browser/debugger/devtools_netlog_observer.h"
 #include "content/browser/renderer_host/global_request_id.h"
 #include "content/browser/renderer_host/resource_dispatcher_host.h"
-#include "content/browser/renderer_host/resource_dispatcher_host_request_info.h"
+#include "content/browser/renderer_host/resource_dispatcher_host_delegate.h"
 #include "content/browser/renderer_host/resource_message_filter.h"
-#include "content/browser/resource_context.h"
 #include "content/common/resource_messages.h"
 #include "net/base/io_buffer.h"
 #include "net/http/http_response_headers.h"
@@ -46,7 +41,9 @@ bool SyncResourceHandler::OnRequestRedirected(int request_id,
                                               bool* defer) {
   net::URLRequest* request = rdh_->GetURLRequest(
       GlobalRequestID(filter_->child_id(), request_id));
-  LoadTimingObserver::PopulateTimingInfo(request, response);
+  if (rdh_->delegate())
+    rdh_->delegate()->OnRequestRedirected(request, response, filter_);
+
   DevToolsNetLogObserver::PopulateResponseInfo(request, response);
   // TODO(darin): It would be much better if this could live in WebCore, but
   // doing so requires API changes at all levels.  Similar code exists in
@@ -63,19 +60,9 @@ bool SyncResourceHandler::OnResponseStarted(int request_id,
                                             ResourceResponse* response) {
   net::URLRequest* request = rdh_->GetURLRequest(
       GlobalRequestID(filter_->child_id(), request_id));
-  // We must send the content settings for the URL before sending response
-  // headers to the renderer.
-  const content::ResourceContext& resource_context =
-      filter_->resource_context();
-  ResourceDispatcherHostRequestInfo* info = rdh_->InfoForRequest(request);
-  ProfileIOData* io_data =
-      reinterpret_cast<ProfileIOData*>(resource_context.GetUserData(NULL));
-  HostContentSettingsMap* map = io_data->GetHostContentSettingsMap();
-  filter_->Send(new ViewMsg_SetContentSettingsForLoadingURL(
-      info->route_id(), request->url(),
-      map->GetContentSettings(request->url())));
+  if (rdh_->delegate())
+    rdh_->delegate()->OnResponseStarted(request, response, filter_);
 
-  LoadTimingObserver::PopulateTimingInfo(request, response);
   DevToolsNetLogObserver::PopulateResponseInfo(request, response);
 
   // We don't care about copying the status here.

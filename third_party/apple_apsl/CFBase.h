@@ -30,7 +30,7 @@
 
 #include "CFRuntime.h"
 
-struct ChromeCFAllocator9and10 {
+struct ChromeCFAllocatorLeopards {
     ChromeCFRuntimeBase _base;
 #if DEPLOYMENT_TARGET_MACOSX || DEPLOYMENT_TARGET_EMBEDDED
     size_t (*size)(struct _malloc_zone_t *zone, const void *ptr); /* returns the size of a block or 0 if not in this zone; must be fast, especially for negative answers */
@@ -50,7 +50,7 @@ struct ChromeCFAllocator9and10 {
     CFAllocatorContext _context;
 };
 
-struct ChromeCFAllocator11 {
+struct ChromeCFAllocatorLion {
     ChromeCFRuntimeBase _base;
 #if DEPLOYMENT_TARGET_MACOSX || DEPLOYMENT_TARGET_EMBEDDED
     size_t 	(*size)(struct _malloc_zone_t *zone, const void *ptr); /* returns the size of a block or 0 if not in this zone; must be fast, especially for negative answers */

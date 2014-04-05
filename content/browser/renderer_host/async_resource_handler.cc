@@ -10,14 +10,11 @@
 #include "base/hash_tables.h"
 #include "base/logging.h"
 #include "base/shared_memory.h"
-#include "chrome/browser/content_settings/host_content_settings_map.h"
-#include "chrome/browser/debugger/devtools_netlog_observer.h"
-#include "chrome/browser/net/load_timing_observer.h"
-#include "chrome/browser/profiles/profile_io_data.h"
-#include "chrome/common/render_messages.h"
+#include "content/browser/debugger/devtools_netlog_observer.h"
 #include "content/browser/host_zoom_map.h"
 #include "content/browser/renderer_host/global_request_id.h"
 #include "content/browser/renderer_host/resource_dispatcher_host.h"
+#include "content/browser/renderer_host/resource_dispatcher_host_delegate.h"
 #include "content/browser/renderer_host/resource_dispatcher_host_request_info.h"
 #include "content/browser/renderer_host/resource_message_filter.h"
 #include "content/browser/resource_context.h"
@@ -86,6 +83,7 @@ AsyncResourceHandler::AsyncResourceHandler(
     ResourceDispatcherHost* resource_dispatcher_host)
     : filter_(filter),
       routing_id_(routing_id),
+      host_zoom_map_(NULL),
       rdh_(resource_dispatcher_host),
       next_buffer_size_(kInitialReadBufSize) {
 }
@@ -107,7 +105,9 @@ bool AsyncResourceHandler::OnRequestRedirected(int request_id,
   *defer = true;
   net::URLRequest* request = rdh_->GetURLRequest(
       GlobalRequestID(filter_->child_id(), request_id));
-  LoadTimingObserver::PopulateTimingInfo(request, response);
+  if (rdh_->delegate())
+    rdh_->delegate()->OnRequestRedirected(request, response, filter_);
+
   DevToolsNetLogObserver::PopulateResponseInfo(request, response);
   return filter_->Send(new ResourceMsg_ReceivedRedirect(
       routing_id_, request_id, new_url, response->response_head));
@@ -123,26 +123,22 @@ bool AsyncResourceHandler::OnResponseStarted(int request_id,
   net::URLRequest* request = rdh_->GetURLRequest(
       GlobalRequestID(filter_->child_id(), request_id));
 
-  LoadTimingObserver::PopulateTimingInfo(request, response);
+  if (rdh_->delegate())
+    rdh_->delegate()->OnResponseStarted(request, response, filter_);
+
   DevToolsNetLogObserver::PopulateResponseInfo(request, response);
 
-  // We must send the content settings for the URL before sending response
-  // headers to the renderer.
   const content::ResourceContext& resource_context =
       filter_->resource_context();
-  ResourceDispatcherHostRequestInfo* info = rdh_->InfoForRequest(request);
-  GURL request_url(request->url());
-  ProfileIOData* io_data =
-      reinterpret_cast<ProfileIOData*>(resource_context.GetUserData(NULL));
-  HostContentSettingsMap* map = io_data->GetHostContentSettingsMap();
-  filter_->Send(new ViewMsg_SetContentSettingsForLoadingURL(
-      info->route_id(), request_url, map->GetContentSettings(request_url)));
-
   HostZoomMap* host_zoom_map = resource_context.host_zoom_map();
+
+  ResourceDispatcherHostRequestInfo* info = rdh_->InfoForRequest(request);
   if (info->resource_type() == ResourceType::MAIN_FRAME && host_zoom_map) {
+    GURL request_url(request->url());
     filter_->Send(new ViewMsg_SetZoomLevelForLoadingURL(
-        info->route_id(), request_url,
-        host_zoom_map->GetZoomLevel(net::GetHostOrSpecFromURL(request_url))));
+        info->route_id(),
+        request_url, host_zoom_map->GetZoomLevel(net::GetHostOrSpecFromURL(
+            request_url))));
   }
 
   filter_->Send(new ResourceMsg_ReceivedResponse(

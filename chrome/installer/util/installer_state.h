@@ -144,6 +144,11 @@ class InstallerState {
   // products are installed.  Ownership is passed to the caller.
   Version* GetCurrentVersion(const InstallationState& machine_state) const;
 
+  // Returns whether or not there is currently a Chrome Frame instance running.
+  // Note that there isn't a mechanism to lock Chrome Frame in place, so Chrome
+  // Frame may either exit or start up after this is called.
+  bool IsChromeFrameRunning(const InstallationState& machine_state) const;
+
   // Returns the path to the installer under Chrome version folder
   // (for example <target_path>\Google\Chrome\Application\<Version>\Installer)
   FilePath GetInstallerDirectory(const Version& version) const;
@@ -180,6 +185,8 @@ class InstallerState {
                             const std::wstring* launch_cmd) const;
 
  protected:
+  static bool IsFileInUse(const FilePath& file);
+
   FilePath GetDefaultProductInstallPath(BrowserDistribution* dist) const;
   bool CanAddProduct(const Product& product, const FilePath* product_dir) const;
   Product* AddProductInDirectory(const FilePath* product_dir,

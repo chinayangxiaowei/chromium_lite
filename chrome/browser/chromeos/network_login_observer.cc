@@ -13,8 +13,8 @@
 #include "chrome/browser/ui/browser_list.h"
 #include "chrome/browser/ui/browser_window.h"
 #include "chrome/browser/ui/views/window.h"
-#include "views/window/dialog_delegate.h"
-#include "views/window/window.h"
+#include "views/widget/widget.h"
+#include "views/widget/widget_delegate.h"
 
 namespace chromeos {
 
@@ -26,13 +26,13 @@ NetworkLoginObserver::~NetworkLoginObserver() {
   CrosLibrary::Get()->GetNetworkLibrary()->RemoveNetworkManagerObserver(this);
 }
 
-void NetworkLoginObserver::CreateModalPopup(views::WindowDelegate* view) {
+void NetworkLoginObserver::CreateModalPopup(views::WidgetDelegate* view) {
   Browser* browser = BrowserList::GetLastActive();
   if (browser && !browser->is_type_tabbed()) {
     browser = BrowserList::FindTabbedBrowser(browser->profile(), true);
   }
   if (browser) {
-    views::Window* window = browser::CreateViewsWindow(
+    views::Widget* window = browser::CreateViewsWindow(
         browser->window()->GetNativeHandle(), gfx::Rect(), view);
     window->SetAlwaysOnTop(true);
     window->Show();
@@ -70,9 +70,13 @@ void NetworkLoginObserver::OnNetworkManagerChanged(NetworkLibrary* cros) {
        it != virtual_networks.end(); it++) {
     VirtualNetwork* vpn = *it;
     if (vpn->notify_failure()) {
-      // Display login dialog again for bad_passphrase and errors.
+      // Display login dialog for bad_passphrase or connect_failed. VPN does
+      // not store user name or other properties, so may need additional info
+      // for a configured network.
       // Always re-display the login dialog for newly added networks.
-      if (vpn->error() == ERROR_BAD_PASSPHRASE || vpn->added()) {
+      if (vpn->error() == ERROR_BAD_PASSPHRASE ||
+          vpn->error() == ERROR_CONNECT_FAILED ||
+          vpn->added()) {
         CreateModalPopup(new NetworkConfigView(vpn));
         return;  // Only support one failure per notification.
       }

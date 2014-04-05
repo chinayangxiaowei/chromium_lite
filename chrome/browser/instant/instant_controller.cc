@@ -7,25 +7,36 @@
 #include "base/command_line.h"
 #include "base/message_loop.h"
 #include "base/metrics/histogram.h"
+#include "base/rand_util.h"
 #include "build/build_config.h"
 #include "chrome/browser/autocomplete/autocomplete_match.h"
 #include "chrome/browser/instant/instant_delegate.h"
+#include "chrome/browser/instant/instant_field_trial.h"
 #include "chrome/browser/instant/instant_loader.h"
 #include "chrome/browser/instant/instant_loader_manager.h"
 #include "chrome/browser/instant/promo_counter.h"
 #include "chrome/browser/platform_util.h"
 #include "chrome/browser/prefs/pref_service.h"
+#include "chrome/browser/prerender/prerender_manager.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/search_engines/template_url.h"
-#include "chrome/browser/search_engines/template_url_model.h"
+#include "chrome/browser/search_engines/template_url_service.h"
+#include "chrome/browser/search_engines/template_url_service_factory.h"
 #include "chrome/browser/ui/blocked_content/blocked_content_tab_helper.h"
 #include "chrome/browser/ui/tab_contents/tab_contents_wrapper.h"
+#include "chrome/common/chrome_notification_types.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/common/url_constants.h"
 #include "content/browser/renderer_host/render_widget_host_view.h"
 #include "content/browser/tab_contents/tab_contents.h"
 #include "content/common/notification_service.h"
+
+#if defined(TOOLKIT_VIEWS)
+#include "views/focus/focus_manager.h"
+#include "views/view.h"
+#include "views/widget/widget.h"
+#endif
 
 // Number of ms to delay between loading urls.
 static const int kUpdateDelayMS = 200;
@@ -46,9 +57,10 @@ InstantController::InstantController(Profile* profile,
       last_transition_type_(PageTransition::LINK),
       ALLOW_THIS_IN_INITIALIZER_LIST(destroy_factory_(this)) {
   PrefService* service = profile->GetPrefs();
-  if (service) {
-    // kInstantWasEnabledOnce was added after instant, set it now to make sure
-    // it is correctly set.
+  if (service &&
+      InstantFieldTrial::GetGroup(profile) == InstantFieldTrial::INACTIVE) {
+    // kInstantEnabledOnce was added after instant, set it now to make sure it
+    // is correctly set.
     service->SetBoolean(prefs::kInstantEnabledOnce, true);
   }
 }
@@ -97,7 +109,8 @@ void InstantController::RecordMetrics(Profile* profile) {
 // static
 bool InstantController::IsEnabled(Profile* profile) {
   PrefService* prefs = profile->GetPrefs();
-  return prefs->GetBoolean(prefs::kInstantEnabled);
+  return prefs->GetBoolean(prefs::kInstantEnabled) ||
+         InstantFieldTrial::IsExperimentGroup(profile);
 }
 
 // static
@@ -110,11 +123,11 @@ void InstantController::Enable(Profile* profile) {
   if (!service)
     return;
 
+  service->SetBoolean(prefs::kInstantEnabledOnce, true);
   service->SetBoolean(prefs::kInstantEnabled, true);
   service->SetBoolean(prefs::kInstantConfirmDialogShown, true);
   service->SetInt64(prefs::kInstantEnabledTime,
                     base::Time::Now().ToInternalValue());
-  service->SetBoolean(prefs::kInstantEnabledOnce, true);
 }
 
 // static
@@ -132,6 +145,13 @@ void InstantController::Disable(Profile* profile) {
                                 delta.InMinutes(), 1, 60 * 24 * 10, 50);
   }
 
+  if (InstantFieldTrial::IsExperimentGroup(profile)) {
+    UMA_HISTOGRAM_COUNTS(
+        "Instant.FieldTrialOptOut." + InstantFieldTrial::GetGroupName(profile),
+        1);
+  }
+
+  service->SetBoolean(prefs::kInstantEnabledOnce, true);
   service->SetBoolean(prefs::kInstantEnabled, false);
 }
 
@@ -166,7 +186,21 @@ void InstantController::Update(TabContentsWrapper* tab_contents,
     return;
   }
 
-  if (!ShouldShowPreviewFor(match, &template_url)) {
+  PreviewCondition preview_condition = GetPreviewConditionFor(match,
+                                                              &template_url);
+  if (preview_condition == PREVIEW_CONDITION_SUCCESS) {
+    // Do nothing if we should show it.
+  } else if (preview_condition == PREVIEW_CONDITION_INSTANT_SEARCH_ONLY) {
+    // Start Prerender of this page instead.
+    prerender::PrerenderManager* prerender_manager =
+        tab_contents_->profile()->GetPrerenderManager();
+    if (prerender_manager)
+      prerender_manager->AddPrerenderFromOmnibox(match.destination_url);
+
+    DestroyPreviewContentsAndLeaveActive();
+    return;
+  } else {
+    // Just destroy the preview and cancel the update.
     DestroyPreviewContentsAndLeaveActive();
     return;
   }
@@ -191,7 +225,7 @@ void InstantController::Update(TabContentsWrapper* tab_contents,
   }
 
   NotificationService::current()->Notify(
-      NotificationType::INSTANT_CONTROLLER_UPDATED,
+      chrome::NOTIFICATION_INSTANT_CONTROLLER_UPDATED,
       Source<InstantController>(this),
       NotificationService::NoDetails());
 }
@@ -240,8 +274,11 @@ void InstantController::DestroyPreviewContentsAndLeaveActive() {
 }
 
 bool InstantController::IsCurrent() {
+  // TODO(mmenke):  See if we can do something more intelligent in the
+  //                navigation pending case.
   return loader_manager_.get() && loader_manager_->active_loader() &&
       loader_manager_->active_loader()->ready() &&
+      !loader_manager_->active_loader()->IsNavigationPending() &&
       !loader_manager_->active_loader()->needs_reload() &&
       !update_timer_.IsRunning();
 }
@@ -256,18 +293,8 @@ void InstantController::CommitCurrentPreview(InstantCommitType type) {
   }
   DCHECK(loader_manager_.get());
   DCHECK(loader_manager_->current_loader());
-  bool showing_instant =
-      loader_manager_->current_loader()->is_showing_instant();
   TabContentsWrapper* tab = ReleasePreviewContents(type);
-  // If the loader was showing an instant page then it's navigation stack is
-  // something like: search-engine-home-page (eg google.com) search-term1
-  // search-term2 .... Each search-term navigation corresponds to the page
-  // deciding enough time has passed to commit a navigation. We don't want the
-  // searche-engine-home-page navigation in this case so we pass true to
-  // CopyStateFromAndPrune to have the search-engine-home-page navigation
-  // removed.
-  tab->controller().CopyStateFromAndPrune(
-      &tab_contents_->controller(), showing_instant);
+  tab->controller().CopyStateFromAndPrune(&tab_contents_->controller());
   delegate_->CommitInstant(tab);
   CompleteRelease(tab);
 }
@@ -289,7 +316,8 @@ void InstantController::OnAutocompleteLostFocus(
   // not receive a mouseDown event.  Therefore, we should destroy the preview.
   // Otherwise, the RWHV was clicked, so we commit the preview.
   if (!is_displayable() || !GetPreviewContents() ||
-      !IsMouseDownFromActivate()) {
+      !IsMouseDownFromActivate() ||
+      loader_manager_->active_loader()->IsNavigationPending()) {
     DestroyPreviewContents();
   } else if (IsShowingInstant()) {
     SetCommitOnMouseUp();
@@ -300,7 +328,8 @@ void InstantController::OnAutocompleteLostFocus(
 #else
 void InstantController::OnAutocompleteLostFocus(
     gfx::NativeView view_gaining_focus) {
-  if (!is_active() || !GetPreviewContents()) {
+  if (!is_active() || !GetPreviewContents() ||
+      loader_manager_->active_loader()->IsNavigationPending()) {
     DestroyPreviewContents();
     return;
   }
@@ -311,6 +340,25 @@ void InstantController::OnAutocompleteLostFocus(
     DestroyPreviewContents();
     return;
   }
+
+#if defined(TOOLKIT_VIEWS)
+  // For views the top level widget is always focused. If the focus change
+  // originated in views determine the child Widget from the view that is being
+  // focused.
+  if (view_gaining_focus) {
+    views::Widget* widget =
+        views::Widget::GetWidgetForNativeView(view_gaining_focus);
+    if (widget) {
+      views::FocusManager* focus_manager = widget->GetFocusManager();
+      if (focus_manager && focus_manager->is_changing_focus() &&
+          focus_manager->GetFocusedView() &&
+          focus_manager->GetFocusedView()->GetWidget()) {
+        view_gaining_focus =
+            focus_manager->GetFocusedView()->GetWidget()->GetNativeView();
+      }
+    }
+  }
+#endif
 
   gfx::NativeView tab_view =
       GetPreviewContents()->tab_contents()->GetNativeView();
@@ -359,18 +407,21 @@ void InstantController::OnAutocompleteLostFocus(
 void InstantController::OnAutocompleteGotFocus(
     TabContentsWrapper* tab_contents) {
   CommandLine* cl = CommandLine::ForCurrentProcess();
-  if (!cl->HasSwitch(switches::kPreloadInstantSearch))
+  if (!cl->HasSwitch(switches::kPreloadInstantSearch) &&
+      !InstantFieldTrial::IsExperimentGroup(tab_contents->profile())) {
     return;
+  }
 
   if (is_active_)
     return;
 
-  TemplateURLModel* model = tab_contents->profile()->GetTemplateURLModel();
+  TemplateURLService* model = TemplateURLServiceFactory::GetForProfile(
+      tab_contents->profile());
   if (!model)
     return;
 
   const TemplateURL* template_url = model->GetDefaultSearchProvider();
-  if (!template_url || !template_url->instant_url())
+  if (!template_url || !template_url->instant_url() || !template_url->id())
     return;
 
   if (tab_contents != tab_contents_)
@@ -552,7 +603,7 @@ void InstantController::UpdateDisplayableLoader() {
   } else {
     delegate_->ShowInstant(displayable_loader_->preview_contents());
     NotificationService::current()->Notify(
-        NotificationType::INSTANT_CONTROLLER_SHOWN,
+        chrome::NOTIFICATION_INSTANT_CONTROLLER_SHOWN,
         Source<InstantController>(this),
         NotificationService::NoDetails());
   }
@@ -659,9 +710,9 @@ void InstantController::UpdateLoader(const TemplateURL* template_url,
   UpdateDisplayableLoader();
 }
 
-bool InstantController::ShouldShowPreviewFor(const AutocompleteMatch& match,
-                                             const TemplateURL** template_url) {
-  const TemplateURL* t_url = GetTemplateURL(match);
+InstantController::PreviewCondition InstantController::GetPreviewConditionFor(
+    const AutocompleteMatch& match, const TemplateURL** template_url) {
+  const TemplateURL* t_url = match.template_url;
   if (t_url) {
     if (!t_url->id() ||
         !t_url->instant_url() ||
@@ -669,32 +720,33 @@ bool InstantController::ShouldShowPreviewFor(const AutocompleteMatch& match,
         !t_url->instant_url()->SupportsReplacement()) {
       // To avoid extra load on other search engines we only enable previews if
       // they support the instant API.
-      return false;
+      return PREVIEW_CONDITION_INVALID_TEMPLATE_URL;
     }
   }
   *template_url = t_url;
 
   if (match.destination_url.SchemeIs(chrome::kJavaScriptScheme))
-    return false;
+    return PREVIEW_CONDITION_JAVASCRIPT_SCHEME;
 
-  // Extension keywords don't have a real destionation URL.
+  // Extension keywords don't have a real destination URL.
   if (match.template_url && match.template_url->IsExtensionKeyword())
-    return false;
+    return PREVIEW_CONDITION_EXTENSION_KEYWORD;
 
   // Was the host blacklisted?
   if (host_blacklist_ && host_blacklist_->count(match.destination_url.host()))
-    return false;
+    return PREVIEW_CONDITION_BLACKLISTED;
 
   const CommandLine* cl = CommandLine::ForCurrentProcess();
-  if (cl->HasSwitch(switches::kRestrictInstantToSearch) &&
+  if ((cl->HasSwitch(switches::kRestrictInstantToSearch) ||
+       InstantFieldTrial::IsExperimentGroup(tab_contents_->profile())) &&
       match.type != AutocompleteMatch::SEARCH_WHAT_YOU_TYPED &&
       match.type != AutocompleteMatch::SEARCH_HISTORY &&
       match.type != AutocompleteMatch::SEARCH_SUGGEST &&
       match.type != AutocompleteMatch::SEARCH_OTHER_ENGINE) {
-    return false;
+    return PREVIEW_CONDITION_INSTANT_SEARCH_ONLY;
   }
 
-  return true;
+  return PREVIEW_CONDITION_SUCCESS;
 }
 
 void InstantController::BlacklistFromInstant(TemplateURLID id) {
@@ -720,16 +772,4 @@ void InstantController::ScheduleDestroy(InstantLoader* loader) {
 
 void InstantController::DestroyLoaders() {
   loaders_to_destroy_.reset();
-}
-
-const TemplateURL* InstantController::GetTemplateURL(
-    const AutocompleteMatch& match) {
-  const TemplateURL* template_url = match.template_url;
-  if (match.type == AutocompleteMatch::SEARCH_WHAT_YOU_TYPED ||
-      match.type == AutocompleteMatch::SEARCH_HISTORY ||
-      match.type == AutocompleteMatch::SEARCH_SUGGEST) {
-    TemplateURLModel* model = tab_contents_->profile()->GetTemplateURLModel();
-    template_url = model ? model->GetDefaultSearchProvider() : NULL;
-  }
-  return template_url;
 }

@@ -12,13 +12,15 @@
 #include "chrome/browser/instant/instant_loader_manager.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/search_engines/template_url.h"
-#include "chrome/browser/search_engines/template_url_model.h"
+#include "chrome/browser/search_engines/template_url_service.h"
+#include "chrome/browser/search_engines/template_url_service_factory.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_list.h"
 #include "chrome/browser/ui/browser_window.h"
 #include "chrome/browser/ui/omnibox/location_bar.h"
 #include "chrome/browser/ui/omnibox/omnibox_view.h"
 #include "chrome/browser/ui/tab_contents/tab_contents_wrapper.h"
+#include "chrome/common/chrome_notification_types.h"
 #include "chrome/common/url_constants.h"
 #include "chrome/test/in_process_browser_test.h"
 #include "chrome/test/ui_test_utils.h"
@@ -43,18 +45,19 @@ class InstantTest : public InProcessBrowserTest {
   }
 
   void SetupInstantProvider(const std::string& page) {
-    TemplateURLModel* model = browser()->profile()->GetTemplateURLModel();
+    TemplateURLService* model =
+        TemplateURLServiceFactory::GetForProfile(browser()->profile());
     ASSERT_TRUE(model);
 
     if (!model->loaded()) {
       model->Load();
       ui_test_utils::WaitForNotification(
-          NotificationType::TEMPLATE_URL_MODEL_LOADED);
+          chrome::NOTIFICATION_TEMPLATE_URL_SERVICE_LOADED);
     }
 
     ASSERT_TRUE(model->loaded());
 
-    // TemplateURLModel takes ownership of this.
+    // TemplateURLService takes ownership of this.
     TemplateURL* template_url = new TemplateURL();
 
     std::string url = StringPrintf(
@@ -121,7 +124,7 @@ class InstantTest : public InProcessBrowserTest {
     ASSERT_NO_FATAL_FAILURE(FindLocationBar());
     location_bar_->location_entry()->SetUserText(UTF8ToUTF16(text));
     ui_test_utils::WaitForNotification(
-        NotificationType::INSTANT_CONTROLLER_SHOWN);
+        chrome::NOTIFICATION_INSTANT_CONTROLLER_SHOWN);
   }
 
   const string16& GetSuggestion() const {
@@ -313,6 +316,9 @@ class InstantTest : public InProcessBrowserTest {
 // DISABLED http://crbug.com/80118
 #if defined(OS_LINUX)
 IN_PROC_BROWSER_TEST_F(InstantTest, DISABLED_OnChangeEvent) {
+#elif defined(OS_MACOSX)
+// http://crbug.com/85387
+IN_PROC_BROWSER_TEST_F(InstantTest, FLAKY_OnChangeEvent) {
 #else
 IN_PROC_BROWSER_TEST_F(InstantTest, OnChangeEvent) {
 #endif  // OS_LINUX
@@ -329,7 +335,8 @@ IN_PROC_BROWSER_TEST_F(InstantTest, OnChangeEvent) {
   // Make sure the url that will get committed when we press enter matches that
   // of the default search provider.
   const TemplateURL* default_turl =
-      browser()->profile()->GetTemplateURLModel()->GetDefaultSearchProvider();
+      TemplateURLServiceFactory::GetForProfile(browser()->profile())->
+      GetDefaultSearchProvider();
   ASSERT_TRUE(default_turl);
   ASSERT_TRUE(default_turl->url());
   EXPECT_EQ(default_turl->url()->ReplaceSearchTerms(
@@ -337,7 +344,7 @@ IN_PROC_BROWSER_TEST_F(InstantTest, OnChangeEvent) {
             browser()->instant()->GetCurrentURL().spec());
 
   // Check that the value is reflected and onchange is called.
-  EXPECT_EQ("true 0 0 1 2 d false def false 3 3",
+  EXPECT_EQ("true 0 0 1 1 d false def false 3 3",
             GetSearchStateAsString(preview_, true));
 }
 
@@ -593,7 +600,7 @@ IN_PROC_BROWSER_TEST_F(InstantTest, MAYBE_SearchServerDoesntSupportInstant) {
 
   // When the response comes back that the page doesn't support instant the tab
   // should be closed.
-  ui_test_utils::WaitForNotification(NotificationType::TAB_CLOSED);
+  ui_test_utils::WaitForNotification(content::NOTIFICATION_TAB_CLOSED);
   EXPECT_FALSE(browser()->instant()->IsShowingInstant());
   EXPECT_FALSE(browser()->instant()->is_displayable());
   EXPECT_TRUE(browser()->instant()->is_active());
@@ -643,7 +650,7 @@ IN_PROC_BROWSER_TEST_F(InstantTest,
 
   // When the response comes back that the page doesn't support instant the tab
   // should be closed.
-  ui_test_utils::WaitForNotification(NotificationType::TAB_CLOSED);
+  ui_test_utils::WaitForNotification(content::NOTIFICATION_TAB_CLOSED);
   EXPECT_FALSE(browser()->instant()->IsShowingInstant());
   EXPECT_FALSE(browser()->instant()->is_displayable());
   // But because the omnibox is still open, instant should be active.
@@ -699,7 +706,7 @@ IN_PROC_BROWSER_TEST_F(InstantTest, HideOn403) {
   ASSERT_FALSE(browser()->instant()->is_displayable());
 
   // When instant sees the 403, it should close the tab.
-  ui_test_utils::WaitForNotification(NotificationType::TAB_CLOSED);
+  ui_test_utils::WaitForNotification(content::NOTIFICATION_TAB_CLOSED);
   ASSERT_FALSE(browser()->instant()->GetPreviewContents());
   ASSERT_TRUE(browser()->instant()->is_active());
   ASSERT_FALSE(browser()->instant()->is_displayable());
@@ -717,6 +724,9 @@ IN_PROC_BROWSER_TEST_F(InstantTest, HideOn403) {
 // DISABLED http://crbug.com/80118
 #if defined(OS_LINUX)
 IN_PROC_BROWSER_TEST_F(InstantTest, DISABLED_OnSubmitEvent) {
+#elif defined(OS_MACOSX)
+// http://crbug.com/85387
+IN_PROC_BROWSER_TEST_F(InstantTest, FLAKY_OnSubmitEvent) {
 #else
 IN_PROC_BROWSER_TEST_F(InstantTest, OnSubmitEvent) {
 #endif  // OS_LINUX
@@ -737,12 +747,16 @@ IN_PROC_BROWSER_TEST_F(InstantTest, OnSubmitEvent) {
   TabContents* contents = browser()->GetSelectedTabContents();
   ASSERT_TRUE(contents);
 
+  // We should have two entries. One corresponding to the page the user was
+  // first on, and one for the search page.
+  ASSERT_EQ(2, contents->controller().entry_count());
+
   // Check that the value is reflected and onsubmit is called.
-  EXPECT_EQ("true 1 0 1 2 d false defghi true 3 3",
+  EXPECT_EQ("true 1 0 1 1 d false defghi true 3 3",
             GetSearchStateAsString(preview_, true));
 
   // Make sure the searchbox values were reset.
-  EXPECT_EQ("true 1 0 1 2 d false  false 0 0",
+  EXPECT_EQ("true 1 0 1 1 d false  false 0 0",
             GetSearchStateAsString(preview_, false));
 }
 
@@ -750,6 +764,9 @@ IN_PROC_BROWSER_TEST_F(InstantTest, OnSubmitEvent) {
 // DISABLED http://crbug.com/80118
 #if defined(OS_LINUX)
 IN_PROC_BROWSER_TEST_F(InstantTest, DISABLED_OnCancelEvent) {
+#elif defined(OS_MACOSX)
+// http://crbug.com/85387
+IN_PROC_BROWSER_TEST_F(InstantTest, FLAKY_OnCancelEvent) {
 #else
 IN_PROC_BROWSER_TEST_F(InstantTest, OnCancelEvent) {
 #endif  // OS_LINUX
@@ -772,11 +789,11 @@ IN_PROC_BROWSER_TEST_F(InstantTest, OnCancelEvent) {
   ASSERT_TRUE(contents);
 
   // Check that the value is reflected and oncancel is called.
-  EXPECT_EQ("true 0 1 1 2 d false def false 3 3",
+  EXPECT_EQ("true 0 1 1 1 d false def false 3 3",
             GetSearchStateAsString(preview_, true));
 
   // Make sure the searchbox values were reset.
-  EXPECT_EQ("true 0 1 1 2 d false  false 0 0",
+  EXPECT_EQ("true 0 1 1 1 d false  false 0 0",
             GetSearchStateAsString(preview_, false));
 }
 
@@ -857,7 +874,7 @@ IN_PROC_BROWSER_TEST_F(InstantTest, DontCrashOnBlockedJS) {
   ASSERT_NO_FATAL_FAILURE(SetupLocationBar());
   // Wait for notification that the instant API has been determined.
   ui_test_utils::WaitForNotification(
-      NotificationType::INSTANT_SUPPORT_DETERMINED);
+      chrome::NOTIFICATION_INSTANT_SUPPORT_DETERMINED);
   // As long as we get the notification we're good (the renderer didn't crash).
 }
 
@@ -882,11 +899,11 @@ IN_PROC_BROWSER_TEST_F(InstantTest, DownloadOnEnter) {
   // Wait for the load to fail (because instant disables downloads).
   printf("1\n");
   ui_test_utils::WaitForNotification(
-      NotificationType::FAIL_PROVISIONAL_LOAD_WITH_ERROR);
+      content::NOTIFICATION_FAIL_PROVISIONAL_LOAD_WITH_ERROR);
 
   printf("2\n");
   ui_test_utils::WindowedNotificationObserver download_observer(
-      NotificationType::DOWNLOAD_INITIATED,
+      chrome::NOTIFICATION_DOWNLOAD_INITIATED,
       NotificationService::AllSources());
   ASSERT_NO_FATAL_FAILURE(SendKey(ui::VKEY_RETURN));
   printf("3\n");
@@ -940,4 +957,63 @@ IN_PROC_BROWSER_TEST_F(InstantTest, DontPersistSearchbox) {
                   "window.chrome.searchBox.value.length == 0",
                   &result));
   EXPECT_TRUE(result);
+}
+
+// Verify that when the TabContents has a pending RenderViewHost, we won't use
+// the Instant TabContents.
+// DISABLED http://crbug.com/80118
+#if defined(OS_LINUX)
+IN_PROC_BROWSER_TEST_F(InstantTest, DISABLED_PendingRenderViewHost) {
+#else
+IN_PROC_BROWSER_TEST_F(InstantTest, PendingRenderViewHost) {
+#endif  // OS_LINUX
+  ASSERT_TRUE(test_server()->Start());
+  EnableInstant();
+
+  // Open and load URL.
+  GURL url(test_server()->GetURL("files/instant/empty.html"));
+  ASSERT_NO_FATAL_FAILURE(SetLocationBarText(url.spec()));
+
+  // Check that we have a preview TabContents.
+  ASSERT_TRUE(browser()->instant());
+  TabContentsWrapper* preview_contents_wrapper =
+      browser()->instant()->GetPreviewContents();
+  ASSERT_TRUE(preview_contents_wrapper);
+  ASSERT_TRUE(preview_contents_wrapper->tab_contents());
+
+  // Enter "chrome://about" in the location bar, as it will trigger a cross-site
+  // navigation in Instant's TabContents.
+  ASSERT_NO_FATAL_FAILURE(FindLocationBar());
+  location_bar_->location_entry()->SetUserText(
+      ASCIIToUTF16(chrome::kChromeUIAboutURL));
+
+  // Check that we reused the same Instant TabContentsWrapper.
+  ASSERT_TRUE(browser()->instant());
+  ASSERT_EQ(preview_contents_wrapper,
+            browser()->instant()->GetPreviewContents());
+
+  // Check that a new site instance is pending, indicating a cross-site
+  // navigation that has yet to complete.
+  ASSERT_NE(preview_contents_wrapper->tab_contents()->GetSiteInstance(),
+            preview_contents_wrapper->tab_contents()->GetPendingSiteInstance());
+
+  // We want to be able to wait until the old TabContents has navigated to
+  // the about page.  Since we navigate while the preview still has a pending
+  // RenderView, the navigation will occur in the original TabContents instead.
+  TabContents* contents = browser()->GetSelectedTabContents();
+  ui_test_utils::WindowedNotificationObserver notification_observer(
+      content::NOTIFICATION_LOAD_STOP,
+      Source<NavigationController>(&contents->controller()));
+
+  ASSERT_NO_FATAL_FAILURE(SendKey(ui::VKEY_RETURN));
+
+  // Check that we did not swap in the Instant TabContents, but destroyed it
+  // instead.
+  ASSERT_EQ(browser()->GetSelectedTabContents(), contents);
+  ASSERT_FALSE(browser()->instant()->GetPreviewContents());
+  ASSERT_FALSE(browser()->instant()->is_active());
+
+  // Make sure we navigated to the correct URL.
+  notification_observer.Wait();
+  EXPECT_EQ(contents->GetURL().spec(), std::string(chrome::kChromeUIAboutURL));
 }

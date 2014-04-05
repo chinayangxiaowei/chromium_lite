@@ -177,6 +177,12 @@ void ScaleYUVToRGB32(const uint8* y_buf,
                      YUVType yuv_type,
                      Rotate view_rotate,
                      ScaleFilter filter) {
+  // Handle zero sized sources and destinations.
+  if ((yuv_type == YV12 && (source_width < 2 || source_height < 2)) ||
+      (yuv_type == YV16 && (source_width < 2 || source_height < 1)) ||
+      width == 0 || height == 0)
+    return;
+
   // 4096 allows 3 buffers to fit in 12k.
   // Helps performance on CPU with 16K L1 cache.
   // Large enough for 3830x2160 and 30" displays which are 2560x1600.
@@ -216,12 +222,11 @@ void ScaleYUVToRGB32(const uint8* y_buf,
     source_height = -source_height;
   }
 
-  // Handle zero sized destination.
-  if (width == 0 || height == 0)
-    return;
   int source_dx = source_width * kFractionMax / width;
   int source_dy = source_height * kFractionMax / height;
+#if USE_MMX && defined(_MSC_VER)
   int source_dx_uv = source_dx;
+#endif
 
   if ((view_rotate == ROTATE_90) ||
       (view_rotate == ROTATE_270)) {
@@ -234,7 +239,9 @@ void ScaleYUVToRGB32(const uint8* y_buf,
     int original_dx = source_dx;
     int original_dy = source_dy;
     source_dx = ((original_dy >> kFractionBits) * y_pitch) << kFractionBits;
+#if USE_MMX && defined(_MSC_VER)
     source_dx_uv = ((original_dy >> kFractionBits) * uv_pitch) << kFractionBits;
+#endif
     source_dy = original_dx;
     if (view_rotate == ROTATE_90) {
       y_pitch = -1;

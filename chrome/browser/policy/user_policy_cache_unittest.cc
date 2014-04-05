@@ -20,6 +20,8 @@
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
+using testing::_;
+
 namespace policy {
 
 // Decodes a CloudPolicySettings object into two maps with mandatory and
@@ -32,13 +34,13 @@ void DecodePolicy(const em::CloudPolicySettings& policy,
 Value* DecodeIntegerValue(google::protobuf::int64 value);
 ListValue* DecodeStringList(const em::StringList& string_list);
 
-class MockConfigurationPolicyProviderObserver
-    : public ConfigurationPolicyProvider::Observer {
+class MockCloudPolicyCacheBaseObserver
+    : public CloudPolicyCacheBase::Observer {
  public:
-  MockConfigurationPolicyProviderObserver() {}
-  virtual ~MockConfigurationPolicyProviderObserver() {}
-  MOCK_METHOD0(OnUpdatePolicy, void());
-  void OnProviderGoingAway() {}
+  MockCloudPolicyCacheBaseObserver() {}
+  virtual ~MockCloudPolicyCacheBaseObserver() {}
+  MOCK_METHOD1(OnCacheUpdate, void(CloudPolicyCacheBase*));
+  void OnCacheGoingAway(CloudPolicyCacheBase*) {}
 };
 
 // Tests the device management policy cache.
@@ -103,14 +105,16 @@ class UserPolicyCacheTest : public testing::Test {
                  em::PolicyFetchResponse* policy_response,
                  bool expect_changed_policy) {
     scoped_ptr<em::PolicyFetchResponse> policy(policy_response);
-    ConfigurationPolicyObserverRegistrar registrar;
-    registrar.Init(cache->GetManagedPolicyProvider(), &observer);
+    cache->AddObserver(&observer);
+
     if (expect_changed_policy)
-      EXPECT_CALL(observer, OnUpdatePolicy()).Times(1);
+      EXPECT_CALL(observer, OnCacheUpdate(_)).Times(1);
     else
-      EXPECT_CALL(observer, OnUpdatePolicy()).Times(0);
+      EXPECT_CALL(observer, OnCacheUpdate(_)).Times(0);
     cache->SetPolicy(*policy);
     testing::Mock::VerifyAndClearExpectations(&observer);
+
+    cache->RemoveObserver(&observer);
   }
 
   FilePath test_file() {
@@ -126,7 +130,7 @@ class UserPolicyCacheTest : public testing::Test {
   }
 
   MessageLoop loop_;
-  MockConfigurationPolicyProviderObserver observer;
+  MockCloudPolicyCacheBaseObserver observer;
 
  private:
   ScopedTempDir temp_dir_;
@@ -143,6 +147,15 @@ TEST_F(UserPolicyCacheTest, DecodePolicy) {
   settings.mutable_policyrefreshrate()->set_policyrefreshrate(5);
   settings.mutable_policyrefreshrate()->mutable_policy_options()->set_mode(
       em::PolicyOptions::RECOMMENDED);
+  settings.mutable_showhomebutton()->set_showhomebutton(true);
+  settings.mutable_showhomebutton()->mutable_policy_options()->set_mode(
+      em::PolicyOptions::UNSET);
+#ifdef NDEBUG
+  // Setting an invalid PolicyMode enum value triggers a DCHECK in protobuf.
+  settings.mutable_homepageisnewtabpage()->set_homepageisnewtabpage(true);
+  settings.mutable_homepageisnewtabpage()->mutable_policy_options()->set_mode(
+      static_cast<em::PolicyOptions::PolicyMode>(-1));
+#endif
   PolicyMap mandatory_policy;
   PolicyMap recommended_policy;
   DecodePolicy(settings, &mandatory_policy, &recommended_policy);

@@ -2,7 +2,9 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-// This file is auto-generated. DO NOT EDIT!
+// This file is auto-generated from
+// gpu/command_buffer/build_gles2_cmd_buffer.py
+// DO NOT EDIT!
 
 // It is included by gles2_cmd_decoder.cc
 #ifndef GPU_COMMAND_BUFFER_SERVICE_GLES2_CMD_DECODER_AUTOGEN_H_
@@ -625,23 +627,6 @@ error::Error GLES2DecoderImpl::HandleDisableVertexAttribArray(
     uint32 immediate_data_size, const gles2::DisableVertexAttribArray& c) {
   GLuint index = static_cast<GLuint>(c.index);
   DoDisableVertexAttribArray(index);
-  return error::kNoError;
-}
-
-error::Error GLES2DecoderImpl::HandleDrawArrays(
-    uint32 immediate_data_size, const gles2::DrawArrays& c) {
-  GLenum mode = static_cast<GLenum>(c.mode);
-  GLint first = static_cast<GLint>(c.first);
-  GLsizei count = static_cast<GLsizei>(c.count);
-  if (!validators_->draw_mode.IsValid(mode)) {
-    SetGLError(GL_INVALID_ENUM, "glDrawArrays: mode GL_INVALID_ENUM");
-    return error::kNoError;
-  }
-  if (count < 0) {
-    SetGLError(GL_INVALID_VALUE, "glDrawArrays: count < 0");
-    return error::kNoError;
-  }
-  DoDrawArrays(mode, first, count);
   return error::kNoError;
 }
 
@@ -2583,15 +2568,6 @@ error::Error GLES2DecoderImpl::HandleGetMaxValueInBufferCHROMIUM(
   return error::kNoError;
 }
 
-error::Error GLES2DecoderImpl::HandleCopyTextureToParentTextureCHROMIUM(
-    uint32 immediate_data_size,
-    const gles2::CopyTextureToParentTextureCHROMIUM& c) {
-  GLuint client_child_id = c.client_child_id;
-  GLuint client_parent_id = c.client_parent_id;
-  DoCopyTextureToParentTextureCHROMIUM(client_child_id, client_parent_id);
-  return error::kNoError;
-}
-
 error::Error GLES2DecoderImpl::HandleResizeCHROMIUM(
     uint32 immediate_data_size, const gles2::ResizeCHROMIUM& c) {
   GLuint width = static_cast<GLuint>(c.width);
@@ -2607,5 +2583,17 @@ error::Error GLES2DecoderImpl::HandleSetSurfaceCHROMIUM(
   return error::kNoError;
 }
 
+error::Error GLES2DecoderImpl::HandlePlaceholder447CHROMIUM(
+    uint32 immediate_data_size, const gles2::Placeholder447CHROMIUM& c) {
+  return error::kUnknownCommand;
+}
+error::Error GLES2DecoderImpl::HandlePlaceholder451CHROMIUM(
+    uint32 immediate_data_size, const gles2::Placeholder451CHROMIUM& c) {
+  return error::kUnknownCommand;
+}
+error::Error GLES2DecoderImpl::HandlePlaceholder452CHROMIUM(
+    uint32 immediate_data_size, const gles2::Placeholder452CHROMIUM& c) {
+  return error::kUnknownCommand;
+}
 #endif  // GPU_COMMAND_BUFFER_SERVICE_GLES2_CMD_DECODER_AUTOGEN_H_
 
