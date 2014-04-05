@@ -21,6 +21,7 @@
 #include "content/common/child_process_info.h"
 #include "content/common/debug_flags.h"
 #include "sandbox/src/sandbox.h"
+#include "ui/gfx/gl/gl_switches.h"
 
 static sandbox::BrokerServices* g_broker_services = NULL;
 
@@ -216,6 +217,35 @@ void AddPluginDllEvictionPolicy(sandbox::TargetPolicy* policy) {
     BlacklistAddOneDll(kTroublesomePluginDlls[ix], false, policy);
 }
 
+// Returns the object path prepended with the current logon session.
+string16 PrependWindowsSessionPath(const char16* object) {
+  // Cache this because it can't change after process creation.
+  uintptr_t s_session_id = 0;
+  if (s_session_id == 0) {
+    HANDLE token;
+    DWORD session_id_length;
+    DWORD session_id = 0;
+
+    CHECK(::OpenProcessToken(::GetCurrentProcess(), TOKEN_QUERY, &token));
+    CHECK(::GetTokenInformation(token, TokenSessionId, &session_id,
+        sizeof(session_id), &session_id_length));
+    CloseHandle(token);
+    s_session_id = session_id;
+  }
+
+  return base::StringPrintf(L"\\Sessions\\%d%ls", s_session_id, object);
+}
+
+// Closes handles that are opened at process creation and initialization.
+void AddBaseHandleClosePolicy(sandbox::TargetPolicy* policy) {
+  // Being able to manipulate anything BaseNamedObjects is bad.
+  string16 object_path = PrependWindowsSessionPath(L"\\BaseNamedObjects");
+  policy->AddKernelObjectToClose(L"Directory", object_path.data());
+  object_path = PrependWindowsSessionPath(
+      L"\\BaseNamedObjects\\windows_shell_global_counters");
+  policy->AddKernelObjectToClose(L"Section", object_path.data());
+}
+
 // Adds the generic policy rules to a sandbox TargetPolicy.
 bool AddGenericPolicy(sandbox::TargetPolicy* policy) {
   sandbox::ResultCode result;
@@ -264,14 +294,30 @@ bool AddGenericPolicy(sandbox::TargetPolicy* policy) {
 // desktop.
 // TODO(cpu): Lock down the sandbox more if possible.
 // TODO(apatrick): Use D3D9Ex to render windowless.
-bool AddPolicyForGPU(CommandLine*, sandbox::TargetPolicy* policy) {
-  policy->SetJobLevel(sandbox::JOB_UNPROTECTED, 0);
-
+bool AddPolicyForGPU(CommandLine* cmd_line, sandbox::TargetPolicy* policy) {
   if (base::win::GetVersion() > base::win::VERSION_XP) {
     policy->SetTokenLevel(sandbox::USER_RESTRICTED_SAME_ACCESS,
                           sandbox::USER_LIMITED);
-    policy->SetDelayedIntegrityLevel(sandbox::INTEGRITY_LEVEL_LOW);
+    if (cmd_line->GetSwitchValueASCII(switches::kUseGL) ==
+        gfx::kGLImplementationDesktopName) {
+      policy->SetJobLevel(sandbox::JOB_UNPROTECTED, 0);
+      policy->SetDelayedIntegrityLevel(sandbox::INTEGRITY_LEVEL_LOW);
+    } else {
+      // UI restrictions break when we access Windows from outside our job.
+      // However, we don't want a proxy window in this process because it can
+      // introduce deadlocks where the renderer blocks on the gpu, which in
+      // turn blocks on the browser UI thread. So, instead we forgo a window
+      // message pump entirely and just add job restrictions to prevent child
+      // processes.
+      policy->SetJobLevel(sandbox::JOB_LIMITED_USER,
+                          JOB_OBJECT_UILIMIT_SYSTEMPARAMETERS |
+                          JOB_OBJECT_UILIMIT_DESKTOP |
+                          JOB_OBJECT_UILIMIT_EXITWINDOWS |
+                          JOB_OBJECT_UILIMIT_DISPLAYSETTINGS);
+      policy->SetIntegrityLevel(sandbox::INTEGRITY_LEVEL_LOW);
+    }
   } else {
+    policy->SetJobLevel(sandbox::JOB_UNPROTECTED, 0);
     policy->SetTokenLevel(sandbox::USER_UNPROTECTED,
                           sandbox::USER_LIMITED);
   }
@@ -437,6 +483,13 @@ base::ProcessHandle StartProcessWithAccess(CommandLine* cmd_line,
       return 0;
   } else {
     AddPolicyForRenderer(policy);
+    // TODO(jschuh): Need get these restrictions applied to NaCl and Pepper.
+    // Just have to figure out what needs to be warmed up first.
+    if (type == ChildProcessInfo::RENDER_PROCESS ||
+        type == ChildProcessInfo::WORKER_PROCESS) {
+      AddBaseHandleClosePolicy(policy);
+    }
+
     if (type_str != switches::kRendererProcess) {
       // Hack for Google Desktop crash. Trick GD into not injecting its DLL into
       // this subprocess. See

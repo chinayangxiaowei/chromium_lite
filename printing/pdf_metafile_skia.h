@@ -7,7 +7,7 @@
 
 #include "base/basictypes.h"
 #include "base/logging.h"
-#include "base/scoped_ptr.h"
+#include "base/memory/scoped_ptr.h"
 #include "build/build_config.h"
 #include "printing/metafile.h"
 
@@ -20,7 +20,7 @@ namespace printing {
 struct PdfMetafileSkiaData;
 
 // This class uses Skia graphics library to generate a PDF document.
-class PdfMetafileSkia : public Metafile {
+class PRINTING_EXPORT PdfMetafileSkia : public Metafile {
  public:
   PdfMetafileSkia();
   virtual ~PdfMetafileSkia();

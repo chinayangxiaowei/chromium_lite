@@ -8,9 +8,9 @@
 #include <utility>
 #include <vector>
 
+#include "chrome/browser/sync/engine/nigori_util.h"
 #include "chrome/browser/sync/engine/syncer_util.h"
 #include "chrome/browser/sync/syncable/directory_manager.h"
-#include "chrome/browser/sync/syncable/nigori_util.h"
 #include "chrome/browser/sync/syncable/syncable.h"
 #include "chrome/browser/sync/util/cryptographer.h"
 

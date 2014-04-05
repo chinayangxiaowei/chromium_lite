@@ -44,7 +44,7 @@ class JingleSignalingConnector : public SignalStrategy::Listener,
   virtual ~JingleSignalingConnector();
 
   // SignalStrategy::Listener interface.
-  virtual void OnIncomingStanza(const buzz::XmlElement* stanza) OVERRIDE;
+  virtual bool OnIncomingStanza(const buzz::XmlElement* stanza) OVERRIDE;
 
  private:
   typedef std::map<std::string, buzz::XmlElement*> IqRequestsMap;

@@ -402,28 +402,6 @@ TEST(X509CertificateTest, PaypalNullCertParsing) {
 #endif
 }
 
-// A certificate whose AIA extension contains an LDAP URL without a host name.
-// This certificate will expire on 2011-09-08.
-TEST(X509CertificateTest, UnoSoftCertParsing) {
-  FilePath certs_dir = GetTestCertsDirectory();
-  scoped_refptr<X509Certificate> unosoft_hu_cert(
-      ImportCertFromFile(certs_dir, "unosoft_hu_cert.der"));
-
-  ASSERT_NE(static_cast<X509Certificate*>(NULL), unosoft_hu_cert);
-
-  const SHA1Fingerprint& fingerprint =
-      unosoft_hu_cert->fingerprint();
-  for (size_t i = 0; i < 20; ++i)
-    EXPECT_EQ(unosoft_hu_fingerprint[i], fingerprint.data[i]);
-
-  int flags = 0;
-  CertVerifyResult verify_result;
-  int error = unosoft_hu_cert->Verify("www.unosoft.hu", flags,
-                                      &verify_result);
-  EXPECT_EQ(ERR_CERT_AUTHORITY_INVALID, error);
-  EXPECT_NE(0, verify_result.cert_status & CERT_STATUS_AUTHORITY_INVALID);
-}
-
 TEST(X509CertificateTest, SerialNumbers) {
   scoped_refptr<X509Certificate> google_cert(
       X509Certificate::CreateFromBytes(
@@ -450,6 +428,47 @@ TEST(X509CertificateTest, SerialNumbers) {
             paypal_null_cert->serial_number().size());
   EXPECT_TRUE(memcmp(paypal_null_cert->serial_number().data(),
                      paypal_null_serial, sizeof(paypal_null_serial)) == 0);
+}
+
+TEST(X509CertificateTest, ChainFingerprints) {
+  FilePath certs_dir = GetTestCertsDirectory();
+
+  scoped_refptr<X509Certificate> server_cert =
+      ImportCertFromFile(certs_dir, "salesforce_com_test.pem");
+  ASSERT_NE(static_cast<X509Certificate*>(NULL), server_cert);
+
+  scoped_refptr<X509Certificate> intermediate_cert1 =
+      ImportCertFromFile(certs_dir, "verisign_intermediate_ca_2011.pem");
+  ASSERT_NE(static_cast<X509Certificate*>(NULL), intermediate_cert1);
+
+  scoped_refptr<X509Certificate> intermediate_cert2 =
+      ImportCertFromFile(certs_dir, "verisign_intermediate_ca_2016.pem");
+  ASSERT_NE(static_cast<X509Certificate*>(NULL), intermediate_cert2);
+
+  X509Certificate::OSCertHandles intermediates;
+  intermediates.push_back(intermediate_cert1->os_cert_handle());
+  scoped_refptr<X509Certificate> cert_chain1 =
+      X509Certificate::CreateFromHandle(server_cert->os_cert_handle(),
+                                        intermediates);
+
+  intermediates.clear();
+  intermediates.push_back(intermediate_cert2->os_cert_handle());
+  scoped_refptr<X509Certificate> cert_chain2 =
+      X509Certificate::CreateFromHandle(server_cert->os_cert_handle(),
+                                        intermediates);
+
+  static const uint8 cert_chain1_fingerprint[20] = {
+    0x67, 0x78, 0x81, 0xd7, 0x78, 0xca, 0xd5, 0x04, 0x73, 0xf8,
+    0x95, 0xff, 0xf3, 0x39, 0xe4, 0xcd, 0x5e, 0xf0, 0x79, 0x76
+  };
+  static const uint8 cert_chain2_fingerprint[20] = {
+    0x8c, 0x93, 0x85, 0xb0, 0x15, 0xd3, 0xa3, 0x0e, 0xe7, 0x4f,
+    0x42, 0xf4, 0x30, 0xc3, 0xe9, 0x14, 0x12, 0x54, 0xb9, 0x9d
+  };
+  EXPECT_TRUE(memcmp(cert_chain1->chain_fingerprint().data,
+                     cert_chain1_fingerprint, 20) == 0);
+  EXPECT_TRUE(memcmp(cert_chain2->chain_fingerprint().data,
+                     cert_chain2_fingerprint, 20) == 0);
 }
 
 // A regression test for http://crbug.com/31497.
@@ -882,6 +901,148 @@ TEST(X509CertificateTest, IntermediateCertificates) {
 
   // Cleanup
   X509Certificate::FreeOSCertHandle(google_handle);
+}
+
+// Basic test for returning the chain in CertVerifyResult. Note that the
+// returned chain may just be a reflection of the originally supplied chain;
+// that is, if any errors occur, the default chain returned is an exact copy
+// of the certificate to be verified. The remaining VerifyReturn* tests are
+// used to ensure that the actual, verified chain is being returned by
+// Verify().
+TEST(X509CertificateTest, VerifyReturnChainBasic) {
+  FilePath certs_dir = GetTestCertsDirectory();
+  CertificateList certs = CreateCertificateListFromFile(
+      certs_dir, "x509_verify_results.chain.pem",
+      X509Certificate::FORMAT_AUTO);
+  ASSERT_EQ(3U, certs.size());
+
+  X509Certificate::OSCertHandles intermediates;
+  intermediates.push_back(certs[1]->os_cert_handle());
+  intermediates.push_back(certs[2]->os_cert_handle());
+
+  TestRootCerts::GetInstance()->Add(certs[2]);
+
+  scoped_refptr<X509Certificate> google_full_chain =
+      X509Certificate::CreateFromHandle(certs[0]->os_cert_handle(),
+                                        intermediates);
+  ASSERT_NE(static_cast<X509Certificate*>(NULL), google_full_chain);
+  ASSERT_EQ(2U, google_full_chain->GetIntermediateCertificates().size());
+
+  CertVerifyResult verify_result;
+  EXPECT_EQ(static_cast<X509Certificate*>(NULL), verify_result.verified_cert);
+  int error = google_full_chain->Verify("127.0.0.1", 0, &verify_result);
+  EXPECT_EQ(OK, error);
+  ASSERT_NE(static_cast<X509Certificate*>(NULL), verify_result.verified_cert);
+
+  EXPECT_NE(google_full_chain, verify_result.verified_cert);
+  EXPECT_TRUE(X509Certificate::IsSameOSCert(
+      google_full_chain->os_cert_handle(),
+      verify_result.verified_cert->os_cert_handle()));
+  const X509Certificate::OSCertHandles& return_intermediates =
+      verify_result.verified_cert->GetIntermediateCertificates();
+  ASSERT_EQ(2U, return_intermediates.size());
+  EXPECT_TRUE(X509Certificate::IsSameOSCert(return_intermediates[0],
+                                            certs[1]->os_cert_handle()));
+  EXPECT_TRUE(X509Certificate::IsSameOSCert(return_intermediates[1],
+                                            certs[2]->os_cert_handle()));
+
+  TestRootCerts::GetInstance()->Clear();
+}
+
+// Test that the certificate returned in CertVerifyResult is able to reorder
+// certificates that are not ordered from end-entity to root. While this is
+// a protocol violation if sent during a TLS handshake, if multiple sources
+// of intermediate certificates are combined, it's possible that order may
+// not be maintained.
+TEST(X509CertificateTest, VerifyReturnChainProperlyOrdered) {
+  FilePath certs_dir = GetTestCertsDirectory();
+  CertificateList certs = CreateCertificateListFromFile(
+      certs_dir, "x509_verify_results.chain.pem",
+      X509Certificate::FORMAT_AUTO);
+  ASSERT_EQ(3U, certs.size());
+
+  // Construct the chain out of order.
+  X509Certificate::OSCertHandles intermediates;
+  intermediates.push_back(certs[2]->os_cert_handle());
+  intermediates.push_back(certs[1]->os_cert_handle());
+
+  TestRootCerts::GetInstance()->Add(certs[2]);
+
+  scoped_refptr<X509Certificate> google_full_chain =
+      X509Certificate::CreateFromHandle(certs[0]->os_cert_handle(),
+                                        intermediates);
+  ASSERT_NE(static_cast<X509Certificate*>(NULL), google_full_chain);
+  ASSERT_EQ(2U, google_full_chain->GetIntermediateCertificates().size());
+
+  CertVerifyResult verify_result;
+  EXPECT_EQ(static_cast<X509Certificate*>(NULL), verify_result.verified_cert);
+  int error = google_full_chain->Verify("127.0.0.1", 0, &verify_result);
+  EXPECT_EQ(OK, error);
+  ASSERT_NE(static_cast<X509Certificate*>(NULL), verify_result.verified_cert);
+
+  EXPECT_NE(google_full_chain, verify_result.verified_cert);
+  EXPECT_TRUE(X509Certificate::IsSameOSCert(
+      google_full_chain->os_cert_handle(),
+      verify_result.verified_cert->os_cert_handle()));
+  const X509Certificate::OSCertHandles& return_intermediates =
+      verify_result.verified_cert->GetIntermediateCertificates();
+  ASSERT_EQ(2U, return_intermediates.size());
+  EXPECT_TRUE(X509Certificate::IsSameOSCert(return_intermediates[0],
+                                            certs[1]->os_cert_handle()));
+  EXPECT_TRUE(X509Certificate::IsSameOSCert(return_intermediates[1],
+                                            certs[2]->os_cert_handle()));
+
+  TestRootCerts::GetInstance()->Clear();
+}
+
+// Test that Verify() filters out certificates which are not related to
+// or part of the certificate chain being verified.
+TEST(X509CertificateTest, VerifyReturnChainFiltersUnrelatedCerts) {
+  FilePath certs_dir = GetTestCertsDirectory();
+  CertificateList certs = CreateCertificateListFromFile(
+      certs_dir, "x509_verify_results.chain.pem",
+      X509Certificate::FORMAT_AUTO);
+  ASSERT_EQ(3U, certs.size());
+  TestRootCerts::GetInstance()->Add(certs[2]);
+
+  scoped_refptr<X509Certificate> unrelated_dod_certificate =
+      ImportCertFromFile(certs_dir, "dod_ca_17_cert.der");
+  scoped_refptr<X509Certificate> unrelated_dod_certificate2 =
+      ImportCertFromFile(certs_dir, "dod_root_ca_2_cert.der");
+  ASSERT_NE(static_cast<X509Certificate*>(NULL), unrelated_dod_certificate);
+  ASSERT_NE(static_cast<X509Certificate*>(NULL), unrelated_dod_certificate2);
+
+  // Interject unrelated certificates into the list of intermediates.
+  X509Certificate::OSCertHandles intermediates;
+  intermediates.push_back(unrelated_dod_certificate->os_cert_handle());
+  intermediates.push_back(certs[1]->os_cert_handle());
+  intermediates.push_back(unrelated_dod_certificate2->os_cert_handle());
+  intermediates.push_back(certs[2]->os_cert_handle());
+
+  scoped_refptr<X509Certificate> google_full_chain =
+      X509Certificate::CreateFromHandle(certs[0]->os_cert_handle(),
+                                        intermediates);
+  ASSERT_NE(static_cast<X509Certificate*>(NULL), google_full_chain);
+  ASSERT_EQ(4U, google_full_chain->GetIntermediateCertificates().size());
+
+  CertVerifyResult verify_result;
+  EXPECT_EQ(static_cast<X509Certificate*>(NULL), verify_result.verified_cert);
+  int error = google_full_chain->Verify("127.0.0.1", 0, &verify_result);
+  EXPECT_EQ(OK, error);
+  ASSERT_NE(static_cast<X509Certificate*>(NULL), verify_result.verified_cert);
+
+  EXPECT_NE(google_full_chain, verify_result.verified_cert);
+  EXPECT_TRUE(X509Certificate::IsSameOSCert(
+      google_full_chain->os_cert_handle(),
+      verify_result.verified_cert->os_cert_handle()));
+  const X509Certificate::OSCertHandles& return_intermediates =
+      verify_result.verified_cert->GetIntermediateCertificates();
+  ASSERT_EQ(2U, return_intermediates.size());
+  EXPECT_TRUE(X509Certificate::IsSameOSCert(return_intermediates[0],
+                                            certs[1]->os_cert_handle()));
+  EXPECT_TRUE(X509Certificate::IsSameOSCert(return_intermediates[1],
+                                            certs[2]->os_cert_handle()));
+  TestRootCerts::GetInstance()->Clear();
 }
 
 #if defined(OS_MACOSX)

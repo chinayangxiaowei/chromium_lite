@@ -177,9 +177,8 @@ cr.define('print_preview', function() {
     /**
      * Updates |this.previouslySelectedPages_| with the currently selected
      * pages.
-     * @private
      */
-    updatePageSelection_: function() {
+    updatePageSelection: function() {
       this.previouslySelectedPages_ = this.selectedPagesSet;
     },
 
@@ -191,6 +190,14 @@ cr.define('print_preview', function() {
     hasPageSelectionChanged_: function() {
       return !areArraysEqual(this.previouslySelectedPages_,
                              this.selectedPagesSet);
+    },
+
+    /**
+     * Checks if the page selection has changed and is valid.
+     * @return {boolean} true if the page selection is changed and is valid.
+     */
+    hasPageSelectionChangedAndIsValid: function() {
+      return this.isPageSelectionValid() && this.hasPageSelectionChanged_();
     },
 
     /**
@@ -212,8 +219,8 @@ cr.define('print_preview', function() {
      * @return {boolean} true if a new preview was requested.
      */
     requestPrintPreviewIfNeeded: function() {
-      if (this.isPageSelectionValid() && this.hasPageSelectionChanged_()) {
-        this.updatePageSelection_();
+      if (this.hasPageSelectionChangedAndIsValid()) {
+        this.updatePageSelection();
         requestPrintPreview();
         return true;
       }
@@ -274,7 +281,6 @@ cr.define('print_preview', function() {
         cr.dispatchSimpleEvent(document, 'updatePrintButton');
         return;
       }
-      this.previouslySelectedPages_ = this.selectedPagesSet;
       requestPrintPreview();
     },
 
@@ -299,13 +305,17 @@ cr.define('print_preview', function() {
     },
 
     /**
-     * Handles the blur event of |this.selectedPagesTextfield|.
+     * Handles the blur event of |this.selectedPagesTextfield|. Un-checks
+     * |this.selectedPagesRadioButton| if the input field is empty.
      * @private
      */
     onSelectedPagesTextfieldBlur_: function() {
-      this.selectedPagesRadioButton.checked = true;
-      this.validateSelectedPages_();
-      cr.dispatchSimpleEvent(document, 'updatePrintButton');
+      clearTimeout(this.timerId_);
+      if (!this.selectedPagesText.length) {
+        this.allPagesRadioButton_.checked = true;
+        this.validateSelectedPages_();
+      }
+      this.onSelectedPagesMayHaveChanged_();
     },
 
     /**
@@ -343,16 +353,8 @@ cr.define('print_preview', function() {
           this.onSelectedPagesTextfieldInput_.bind(this);
       this.selectedPagesTextfield.onfocus =
           this.addTimerToSelectedPagesTextfield_.bind(this);
-
-      // Handler for the blur event on |this.selectedPagesTextfield|. Un-checks
-      // |this.selectedPagesRadioButton| if the input field is empty.
-      this.selectedPagesTextfield.onblur = function() {
-        if (!this.selectedPagesText.length)
-          this.allPagesRadioButton_.checked = true;
-
-        clearTimeout(this.timerId_);
-        this.onSelectedPagesMayHaveChanged_();
-      }.bind(this);
+      this.selectedPagesTextfield.onblur =
+          this.onSelectedPagesTextfieldBlur_.bind(this);
     }
   };
 

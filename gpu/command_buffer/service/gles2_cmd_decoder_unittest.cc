@@ -1073,6 +1073,37 @@ TEST_F(GLES2DecoderWithShaderTest, GetShaderInfoLogInvalidArgs) {
   EXPECT_EQ(GL_INVALID_VALUE, GetGLError());
 }
 
+TEST_F(GLES2DecoderTest, GetIntegervTextureSize) {
+  struct TestInfo {
+    GLenum pname;
+    GLint expected;
+  };
+  TestInfo tests[] = {
+    { GL_MAX_TEXTURE_SIZE, TestHelper::kMaxTextureSize, },
+    { GL_MAX_CUBE_MAP_TEXTURE_SIZE, TestHelper::kMaxCubeMapTextureSize, },
+  };
+  typedef GetIntegerv::Result Result;
+  for (size_t ii = 0; ii < 2; ++ii) {
+    const TestInfo& test = tests[ii];
+  Result* result = static_cast<Result*>(shared_memory_address_);
+  EXPECT_CALL(*gl_, GetError())
+      .WillOnce(Return(GL_NO_ERROR))
+      .WillOnce(Return(GL_NO_ERROR))
+      .RetiresOnSaturation();
+  EXPECT_CALL(*gl_, GetIntegerv(test.pname, _))
+      .Times(0);
+  result->size = 0;
+  GetIntegerv cmd2;
+  cmd2.Init(test.pname, shared_memory_id_, shared_memory_offset_);
+  EXPECT_EQ(error::kNoError, ExecuteCmd(cmd2));
+  EXPECT_EQ(
+      decoder_->GetGLES2Util()->GLGetNumValuesReturned(test.pname),
+      result->GetNumResults());
+  EXPECT_EQ(GL_NO_ERROR, GetGLError());
+  EXPECT_EQ(test.expected, result->GetData()[0]);
+  }
+}
+
 TEST_F(GLES2DecoderTest, CompileShaderValidArgs) {
   EXPECT_CALL(*gl_, ShaderSource(kServiceShaderId, 1, _, _));
   EXPECT_CALL(*gl_, CompileShader(kServiceShaderId));
@@ -2884,7 +2915,7 @@ TEST_F(GLES2DecoderWithShaderTest, VertexAttribPointer) {
       for (GLint size = 0; size < 5; ++size) {
         for (size_t oo = 0; oo < arraysize(offset_mult); ++oo) {
           GLuint offset = num_bytes * offset_mult[oo] + offset_offset[oo];
-          for (size_t ss = 0; ss <= arraysize(stride_mult); ++ss) {
+          for (size_t ss = 0; ss < arraysize(stride_mult); ++ss) {
             GLsizei stride = num_bytes * stride_mult[ss] + stride_offset[ss];
             for (int normalize = 0; normalize < 2; ++normalize) {
               bool index_good = index < static_cast<GLuint>(kNumVertexAttribs);
@@ -2950,45 +2981,6 @@ TEST_F(GLES2DecoderWithShaderTest, VertexAttribPointer) {
       }
     }
   }
-}
-
-TEST_F(GLES2DecoderTest, SetSurfaceCHROMIUMChangesSurfaceForExistentSurface) {
-  const int kSurfaceId = 1;
-  scoped_refptr<gfx::GLSurfaceStub> surface(new gfx::GLSurfaceStub);
-
-  EXPECT_CALL(*surface_manager_.get(), LookupSurface(kSurfaceId))
-      .WillOnce(Return(surface.get()))
-      .RetiresOnSaturation();
-
-  SetSurfaceCHROMIUM cmd;
-  cmd.Init(kSurfaceId);
-  EXPECT_EQ(error::kNoError, ExecuteCmd(cmd));
-
-  EXPECT_EQ(surface.get(), decoder_->GetGLSurface());
-}
-
-TEST_F(GLES2DecoderTest,
-    SetSurfaceCHROMIUMDoesNotChangeSurfaceWhenSurfaceDoesNotExist) {
-  const int kExistentSurfaceId = 1;
-  const int kNonexistentSurfaceId = 2;
-  scoped_refptr<gfx::GLSurfaceStub> surface(new gfx::GLSurfaceStub);
-
-  EXPECT_CALL(*surface_manager_.get(), LookupSurface(kExistentSurfaceId))
-      .WillOnce(Return(surface.get()))
-      .RetiresOnSaturation();
-
-  EXPECT_CALL(*surface_manager_.get(), LookupSurface(kNonexistentSurfaceId))
-      .WillOnce(Return(static_cast<gfx::GLSurface*>(NULL)))
-      .RetiresOnSaturation();
-
-  SetSurfaceCHROMIUM cmd;
-  cmd.Init(kExistentSurfaceId);
-  EXPECT_EQ(error::kNoError, ExecuteCmd(cmd));
-
-  cmd.Init(kNonexistentSurfaceId);
-  EXPECT_EQ(error::kNoError, ExecuteCmd(cmd));
-
-  EXPECT_EQ(surface.get(), decoder_->GetGLSurface());
 }
 
 // Test that with an RGB backbuffer if we set the color mask to 1,1,1,1 it is
@@ -4397,6 +4389,209 @@ TEST_F(GLES2DecoderWithShaderTest, GetProgramInfoCHROMIUMInvalidArgs) {
   EXPECT_EQ(0u, info->link_status);
   EXPECT_EQ(0u, info->num_attribs);
   EXPECT_EQ(0u, info->num_uniforms);
+}
+
+TEST_F(GLES2DecoderManualInitTest, EGLImageExternalBindTexture) {
+  InitDecoder(
+      "GL_OES_EGL_image_external",  // extensions
+      false,   // has alpha
+      false,   // has depth
+      false,   // has stencil
+      false,   // request alpha
+      false,   // request depth
+      false,   // request stencil
+      true);   // bind generates resource
+  EXPECT_CALL(*gl_, BindTexture(GL_TEXTURE_EXTERNAL_OES, kNewServiceId));
+  EXPECT_CALL(*gl_, GenTextures(1, _))
+     .WillOnce(SetArgumentPointee<1>(kNewServiceId));
+  BindTexture cmd;
+  cmd.Init(GL_TEXTURE_EXTERNAL_OES, kNewClientId);
+  EXPECT_EQ(error::kNoError, ExecuteCmd(cmd));
+  EXPECT_EQ(GL_NO_ERROR, GetGLError());
+  TextureManager::TextureInfo* info = GetTextureInfo(kNewClientId);
+  EXPECT_TRUE(info != NULL);
+  EXPECT_TRUE(info->target() == GL_TEXTURE_EXTERNAL_OES);
+}
+
+TEST_F(GLES2DecoderManualInitTest, EGLImageExternalGetBinding) {
+  InitDecoder(
+      "GL_OES_EGL_image_external",  // extensions
+      false,   // has alpha
+      false,   // has depth
+      false,   // has stencil
+      false,   // request alpha
+      false,   // request depth
+      false,   // request stencil
+      true);   // bind generates resource
+  DoBindTexture(GL_TEXTURE_EXTERNAL_OES, client_texture_id_, kServiceTextureId);
+
+  EXPECT_CALL(*gl_, GetError())
+      .WillOnce(Return(GL_NO_ERROR))
+      .WillOnce(Return(GL_NO_ERROR))
+      .RetiresOnSaturation();
+  typedef GetIntegerv::Result Result;
+  Result* result = static_cast<Result*>(shared_memory_address_);
+  EXPECT_CALL(*gl_, GetIntegerv(GL_TEXTURE_BINDING_EXTERNAL_OES,
+                                result->GetData()))
+      .Times(0);
+  result->size = 0;
+  GetIntegerv cmd;
+  cmd.Init(GL_TEXTURE_BINDING_EXTERNAL_OES,
+           shared_memory_id_,
+           shared_memory_offset_);
+  EXPECT_EQ(error::kNoError, ExecuteCmd(cmd));
+  EXPECT_EQ(decoder_->GetGLES2Util()->GLGetNumValuesReturned(
+      GL_TEXTURE_BINDING_EXTERNAL_OES), result->GetNumResults());
+  EXPECT_EQ(GL_NO_ERROR, GetGLError());
+  EXPECT_EQ(client_texture_id_, (uint32)result->GetData()[0]);
+}
+
+TEST_F(GLES2DecoderManualInitTest, EGLImageExternalTextureDefaults) {
+  InitDecoder(
+      "GL_OES_EGL_image_external",  // extensions
+      false,   // has alpha
+      false,   // has depth
+      false,   // has stencil
+      false,   // request alpha
+      false,   // request depth
+      false,   // request stencil
+      true);   // bind generates resource
+  DoBindTexture(GL_TEXTURE_EXTERNAL_OES, client_texture_id_, kServiceTextureId);
+
+  TextureManager::TextureInfo* info = GetTextureInfo(client_texture_id_);
+  EXPECT_TRUE(info != NULL);
+  EXPECT_TRUE(info->target() == GL_TEXTURE_EXTERNAL_OES);
+  EXPECT_TRUE(info->min_filter() == GL_LINEAR);
+  EXPECT_TRUE(info->wrap_s() == GL_CLAMP_TO_EDGE);
+  EXPECT_TRUE(info->wrap_t() == GL_CLAMP_TO_EDGE);
+}
+
+TEST_F(GLES2DecoderManualInitTest, EGLImageExternalTextureParam) {
+  InitDecoder(
+      "GL_OES_EGL_image_external",  // extensions
+      false,   // has alpha
+      false,   // has depth
+      false,   // has stencil
+      false,   // request alpha
+      false,   // request depth
+      false,   // request stencil
+      true);   // bind generates resource
+
+  DoBindTexture(GL_TEXTURE_EXTERNAL_OES, client_texture_id_, kServiceTextureId);
+
+  EXPECT_CALL(*gl_, TexParameteri(GL_TEXTURE_EXTERNAL_OES,
+                                  GL_TEXTURE_MIN_FILTER,
+                                  GL_NEAREST));
+  EXPECT_CALL(*gl_, TexParameteri(GL_TEXTURE_EXTERNAL_OES,
+                                  GL_TEXTURE_MIN_FILTER,
+                                  GL_LINEAR));
+  EXPECT_CALL(*gl_, TexParameteri(GL_TEXTURE_EXTERNAL_OES,
+                                  GL_TEXTURE_WRAP_S,
+                                  GL_CLAMP_TO_EDGE));
+  EXPECT_CALL(*gl_, TexParameteri(GL_TEXTURE_EXTERNAL_OES,
+                                  GL_TEXTURE_WRAP_T,
+                                  GL_CLAMP_TO_EDGE));
+  TexParameteri cmd;
+  cmd.Init(GL_TEXTURE_EXTERNAL_OES,
+           GL_TEXTURE_MIN_FILTER,
+           GL_NEAREST);
+  EXPECT_EQ(error::kNoError, ExecuteCmd(cmd));
+  EXPECT_EQ(GL_NO_ERROR, GetGLError());
+
+  cmd.Init(GL_TEXTURE_EXTERNAL_OES,
+           GL_TEXTURE_MIN_FILTER,
+           GL_LINEAR);
+  EXPECT_EQ(error::kNoError, ExecuteCmd(cmd));
+  EXPECT_EQ(GL_NO_ERROR, GetGLError());
+
+  cmd.Init(GL_TEXTURE_EXTERNAL_OES,
+           GL_TEXTURE_WRAP_S,
+           GL_CLAMP_TO_EDGE);
+  EXPECT_EQ(error::kNoError, ExecuteCmd(cmd));
+  EXPECT_EQ(GL_NO_ERROR, GetGLError());
+
+  cmd.Init(GL_TEXTURE_EXTERNAL_OES,
+           GL_TEXTURE_WRAP_T,
+           GL_CLAMP_TO_EDGE);
+  EXPECT_EQ(error::kNoError, ExecuteCmd(cmd));
+  EXPECT_EQ(GL_NO_ERROR, GetGLError());
+
+  TextureManager::TextureInfo* info = GetTextureInfo(client_texture_id_);
+  EXPECT_TRUE(info != NULL);
+  EXPECT_TRUE(info->target() == GL_TEXTURE_EXTERNAL_OES);
+  EXPECT_TRUE(info->min_filter() == GL_LINEAR);
+  EXPECT_TRUE(info->wrap_s() == GL_CLAMP_TO_EDGE);
+  EXPECT_TRUE(info->wrap_t() == GL_CLAMP_TO_EDGE);
+}
+
+TEST_F(GLES2DecoderManualInitTest, EGLImageExternalTextureParamInvalid) {
+  InitDecoder(
+      "GL_OES_EGL_image_external",  // extensions
+      false,   // has alpha
+      false,   // has depth
+      false,   // has stencil
+      false,   // request alpha
+      false,   // request depth
+      false,   // request stencil
+      true);   // bind generates resource
+
+  DoBindTexture(GL_TEXTURE_EXTERNAL_OES, client_texture_id_, kServiceTextureId);
+
+  TexParameteri cmd;
+  cmd.Init(GL_TEXTURE_EXTERNAL_OES,
+           GL_TEXTURE_MIN_FILTER,
+           GL_NEAREST_MIPMAP_NEAREST);
+  EXPECT_EQ(error::kNoError, ExecuteCmd(cmd));
+  EXPECT_EQ(GL_INVALID_ENUM, GetGLError());
+
+  cmd.Init(GL_TEXTURE_EXTERNAL_OES,
+           GL_TEXTURE_WRAP_S,
+           GL_REPEAT);
+  EXPECT_EQ(error::kNoError, ExecuteCmd(cmd));
+  EXPECT_EQ(GL_INVALID_ENUM, GetGLError());
+
+  cmd.Init(GL_TEXTURE_EXTERNAL_OES,
+           GL_TEXTURE_WRAP_T,
+           GL_REPEAT);
+  EXPECT_EQ(error::kNoError, ExecuteCmd(cmd));
+  EXPECT_EQ(GL_INVALID_ENUM, GetGLError());
+
+  TextureManager::TextureInfo* info = GetTextureInfo(client_texture_id_);
+  EXPECT_TRUE(info != NULL);
+  EXPECT_TRUE(info->target() == GL_TEXTURE_EXTERNAL_OES);
+  EXPECT_TRUE(info->min_filter() == GL_LINEAR);
+  EXPECT_TRUE(info->wrap_s() == GL_CLAMP_TO_EDGE);
+  EXPECT_TRUE(info->wrap_t() == GL_CLAMP_TO_EDGE);
+}
+
+TEST_F(GLES2DecoderManualInitTest, EGLImageExternalTexImage2DError) {
+  InitDecoder(
+      "GL_OES_EGL_image_external",  // extensions
+      false,   // has alpha
+      false,   // has depth
+      false,   // has stencil
+      false,   // request alpha
+      false,   // request depth
+      false,   // request stencil
+      true);   // bind generates resource
+
+  GLenum target = GL_TEXTURE_EXTERNAL_OES;
+  GLint level = 0;
+  GLenum internal_format = GL_RGBA;
+  GLsizei width = 2;
+  GLsizei height = 4;
+  GLint border = 0;
+  GLenum format = GL_RGBA;
+  GLenum type = GL_UNSIGNED_BYTE;
+  DoBindTexture(GL_TEXTURE_EXTERNAL_OES, client_texture_id_, kServiceTextureId);
+  ASSERT_TRUE(GetTextureInfo(client_texture_id_) != NULL);
+  TexImage2D cmd;
+  cmd.Init(target, level, internal_format, width, height, border, format,
+           type, kSharedMemoryId, kSharedMemoryOffset);
+  EXPECT_EQ(error::kNoError, ExecuteCmd(cmd));
+
+  // TexImage2D is not allowed with GL_TEXTURE_EXTERNAL_OES targets.
+  EXPECT_EQ(GL_INVALID_ENUM, GetGLError());
 }
 
 TEST_F(GLES2DecoderManualInitTest, BindGeneratesResourceFalse) {

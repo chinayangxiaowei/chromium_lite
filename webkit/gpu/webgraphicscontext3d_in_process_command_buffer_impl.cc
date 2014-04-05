@@ -28,7 +28,6 @@
 #include "gpu/command_buffer/service/context_group.h"
 #include "gpu/command_buffer/service/gpu_scheduler.h"
 #include "gpu/command_buffer/service/command_buffer_service.h"
-#include "gpu/GLES2/gles2_command_buffer.h"
 #include "third_party/WebKit/Source/WebKit/chromium/public/WebDocument.h"
 #include "third_party/WebKit/Source/WebKit/chromium/public/WebFrame.h"
 #include "third_party/WebKit/Source/WebKit/chromium/public/WebView.h"
@@ -103,13 +102,6 @@ class GLInProcessContext : public base::SupportsWeakPtr<GLInProcessContext> {
       const int32* attrib_list,
       const GURL& active_arl);
 
-#if defined(OS_MACOSX)
-  // On Mac OS X only, view GLInProcessContexts actually behave like offscreen
-  // GLInProcessContexts, and require an explicit resize operation which is
-  // slightly different from that of offscreen GLInProcessContexts.
-  void ResizeOnscreen(const gfx::Size& size);
-#endif
-
   // Create a GLInProcessContext that renders to an offscreen frame buffer. If
   // parent is not NULL, that GLInProcessContext can access a copy of the
   // created GLInProcessContext's frame buffer that is updated every time
@@ -125,13 +117,6 @@ class GLInProcessContext : public base::SupportsWeakPtr<GLInProcessContext> {
       const char* allowed_extensions,
       const int32* attrib_list,
       const GURL& active_url);
-
-  // Resize an offscreen frame buffer. The resize occurs on the next call to
-  // SwapBuffers. This is to avoid waiting until all pending GL calls have been
-  // executed by the GPU process. Everything rendered up to the call to
-  // SwapBuffers will be lost. A lost GLInProcessContext will be reported if the
-  // resize fails.
-  void ResizeOffscreen(const gfx::Size& size);
 
   // For an offscreen frame buffer GLInProcessContext, return the texture ID
   // with respect to the parent GLInProcessContext. Returns zero if
@@ -200,7 +185,6 @@ class GLInProcessContext : public base::SupportsWeakPtr<GLInProcessContext> {
   GLES2CmdHelper* gles2_helper_;
   int32 transfer_buffer_id_;
   GLES2Implementation* gles2_implementation_;
-  gfx::Size size_;
   Error last_error_;
 
   DISALLOW_COPY_AND_ASSIGN(GLInProcessContext);
@@ -214,8 +198,8 @@ const int32 kCommandBufferSize = 1024 * 1024;
 const int32 kTransferBufferSize = 1024 * 1024;
 
 static base::LazyInstance<
-    std::set<WebGraphicsContext3DInProcessCommandBufferImpl*> > g_all_contexts(
-        base::LINKER_INITIALIZED);
+    std::set<WebGraphicsContext3DInProcessCommandBufferImpl*> >
+        g_all_shared_contexts(base::LINKER_INITIALIZED);
 
 // Singleton used to initialize and terminate the gles2 library.
 class GLES2Initializer {
@@ -267,13 +251,6 @@ GLInProcessContext* GLInProcessContext::CreateViewContext(
 #endif
 }
 
-#if defined(OS_MACOSX)
-void GLInProcessContext::ResizeOnscreen(const gfx::Size& size) {
-  DCHECK(size.width() > 0 && size.height() > 0);
-  size_ = size;
-}
-#endif
-
 GLInProcessContext* GLInProcessContext::CreateOffscreenContext(
     GLInProcessContext* parent,
     const gfx::Size& size,
@@ -297,16 +274,6 @@ GLInProcessContext* GLInProcessContext::CreateOffscreenContext(
 #else
   return NULL;
 #endif
-}
-
-void GLInProcessContext::ResizeOffscreen(const gfx::Size& size) {
-  DCHECK(size.width() > 0 && size.height() > 0);
-  if (size_ != size) {
-    gpu_scheduler_->ResizeOffscreenFrameBuffer(size);
-    // TODO(gman): See if the next line is needed.
-    gles2_implementation_->ResizeCHROMIUM(size.width(),  size.height());
-    size_ = size;
-  }
 }
 
 void GLInProcessContext::PumpCommands() {
@@ -391,8 +358,7 @@ CommandBufferService* GLInProcessContext::GetCommandBufferService() {
 
 // TODO(gman): Remove This
 void GLInProcessContext::DisableShaderTranslation() {
-  gles2_implementation_->CommandBufferEnableCHROMIUM(
-      PEPPER3D_SKIP_GLSL_TRANSLATION);
+  NOTREACHED();
 }
 
 GLES2Implementation* GLInProcessContext::GetImplementation() {
@@ -470,7 +436,6 @@ bool GLInProcessContext::Initialize(bool onscreen,
   bool bind_generates_resource = false;
   gpu_scheduler_ = GpuScheduler::Create(
       command_buffer_.get(),
-      NULL,
       context_group ?
           context_group->gpu_scheduler_->decoder()->GetContextGroup() :
               new ::gpu::gles2::ContextGroup(bind_generates_resource));
@@ -550,8 +515,6 @@ bool GLInProcessContext::Initialize(bool onscreen,
       true,
       false);
 
-  size_ = size;
-
   return true;
 }
 
@@ -611,7 +574,7 @@ WebGraphicsContext3DInProcessCommandBufferImpl::
 
 WebGraphicsContext3DInProcessCommandBufferImpl::
     ~WebGraphicsContext3DInProcessCommandBufferImpl() {
-  g_all_contexts.Pointer()->erase(this);
+  g_all_shared_contexts.Pointer()->erase(this);
 }
 
 // This string should only be passed for WebGL contexts. Nothing ELSE!!!
@@ -626,7 +589,6 @@ bool WebGraphicsContext3DInProcessCommandBufferImpl::initialize(
     WebGraphicsContext3D::Attributes attributes,
     WebKit::WebView* web_view,
     bool render_directly_to_web_view) {
-  webkit_glue::BindSkiaToCommandBufferGL();
 
   // Convert WebGL context creation attributes into GLInProcessContext / EGL
   // size requests.
@@ -663,14 +625,10 @@ bool WebGraphicsContext3DInProcessCommandBufferImpl::initialize(
     }
   }
 
-  // HACK: Assume this is a WebGL context by looking for the noExtensions
-  // attribute. WebGL contexts must not go in the share group because they
-  // rely on destruction of the context to clean up owned resources. Putting
-  // them in a share group would prevent this from happening.
   WebGraphicsContext3DInProcessCommandBufferImpl* context_group = NULL;
-  if (!attributes.noExtensions)
-    context_group = g_all_contexts.Pointer()->empty() ?
-        NULL : *g_all_contexts.Pointer()->begin();
+  if (attributes.shareResources)
+    context_group = g_all_shared_contexts.Pointer()->empty() ?
+        NULL : *g_all_shared_contexts.Pointer()->begin();
 
   context_ = GLInProcessContext::CreateOffscreenContext(
       parent_context,
@@ -708,8 +666,8 @@ bool WebGraphicsContext3DInProcessCommandBufferImpl::initialize(
   }
   makeContextCurrent();
 
-  if (!attributes.noExtensions)
-    g_all_contexts.Pointer()->insert(this);
+  if (attributes.shareResources)
+    g_all_shared_contexts.Pointer()->insert(this);
 
   return true;
 }
@@ -768,17 +726,7 @@ void WebGraphicsContext3DInProcessCommandBufferImpl::reshape(
   // TODO(gmam): See if we can comment this in.
   // ClearContext();
 
-  if (web_view_) {
-#if defined(OS_MACOSX)
-    context_->ResizeOnscreen(gfx::Size(width, height));
-#else
-    gl_->ResizeCHROMIUM(width, height);
-#endif
-  } else {
-    context_->ResizeOffscreen(gfx::Size(width, height));
-    // Force a SwapBuffers to get the framebuffer to resize.
-    context_->SwapBuffers();
-  }
+  gl_->ResizeCHROMIUM(width, height);
 
 #ifdef FLIP_FRAMEBUFFER_VERTICALLY
   scanline_.reset(new uint8[width * 4]);
@@ -1628,6 +1576,13 @@ WGC3Denum WebGraphicsContext3DInProcessCommandBufferImpl::
   return context_lost_reason_;
 }
 
+#if WEBKIT_USING_SKIA
+GrGLInterface* WebGraphicsContext3DInProcessCommandBufferImpl::
+    onCreateGrGLInterface() {
+  return webkit_glue::CreateCommandBufferSkiaGLBinding();
+}
+#endif
+
 void WebGraphicsContext3DInProcessCommandBufferImpl::OnContextLost() {
   // TODO(kbr): improve the precision here.
   context_lost_reason_ = GL_UNKNOWN_CONTEXT_RESET_ARB;
@@ -1640,4 +1595,3 @@ void WebGraphicsContext3DInProcessCommandBufferImpl::OnContextLost() {
 }  // namespace webkit
 
 #endif  // defined(ENABLE_GPU)
-

@@ -12,16 +12,19 @@
 #include "base/utf_string_conversions.h"
 #include "chrome/browser/chromeos/choose_mobile_network_dialog.h"
 #include "chrome/browser/chromeos/cros/cros_library.h"
-#include "chrome/browser/chromeos/customization_document.h"
+#include "chrome/browser/chromeos/mobile_config.h"
 #include "chrome/browser/chromeos/options/network_config_view.h"
 #include "chrome/browser/chromeos/sim_dialog_delegate.h"
 #include "chrome/browser/chromeos/status/network_menu_icon.h"
 #include "chrome/browser/defaults.h"
+#include "chrome/browser/prefs/pref_service.h"
+#include "chrome/browser/profiles/profile_manager.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_list.h"
 #include "chrome/browser/ui/views/window.h"
 #include "chrome/common/url_constants.h"
 #include "chrome/common/chrome_switches.h"
+#include "chrome/common/pref_names.h"
 #include "content/browser/browser_thread.h"
 #include "grit/generated_resources.h"
 #include "grit/theme_resources.h"
@@ -34,6 +37,7 @@
 #include "ui/gfx/skbitmap_operations.h"
 #include "views/controls/menu/menu_item_view.h"
 #include "views/controls/menu/menu_model_adapter.h"
+#include "views/controls/menu/menu_runner.h"
 #include "views/controls/menu/submenu_view.h"
 #include "views/widget/widget.h"
 
@@ -503,7 +507,7 @@ void NetworkMenuModel::SetMenuModelDelegate(ui::MenuModelDelegate* delegate) {
 
 void NetworkMenuModel::ShowNetworkConfigView(NetworkConfigView* view) const {
   views::Widget* window = browser::CreateViewsWindow(
-      owner_->delegate()->GetNativeWindow(), gfx::Rect(), view);
+      owner_->delegate()->GetNativeWindow(), view);
   window->SetAlwaysOnTop(true);
   window->Show();
 }
@@ -708,20 +712,17 @@ void MainMenuModel::InitMenuItems(bool is_browser_mode,
     const NetworkDevice* cellular_device = cros->FindCellularDevice();
     if (cellular_device) {
       // Add "View Account" with top up URL if we know that.
-      ServicesCustomizationDocument* customization =
-          ServicesCustomizationDocument::GetInstance();
-      if (is_browser_mode && customization->IsReady()) {
+      MobileConfig* config = MobileConfig::GetInstance();
+      if (is_browser_mode && config->IsReady()) {
         std::string carrier_id = cros->GetCellularHomeCarrierId();
         // If we don't have top up URL cached.
         if (carrier_id != carrier_id_) {
           // Mark that we've checked this carrier ID.
           carrier_id_ = carrier_id;
           top_up_url_.clear();
-          // Ignoring deal restrictions, use any carrier information available.
-          const ServicesCustomizationDocument::CarrierDeal* deal =
-              customization->GetCarrierDeal(carrier_id, false);
-          if (deal && !deal->top_up_url().empty())
-            top_up_url_ = deal->top_up_url();
+          const MobileConfig::Carrier* carrier = config->GetCarrier(carrier_id);
+          if (carrier && !carrier->top_up_url().empty())
+            top_up_url_ = carrier->top_up_url();
         }
         if (!top_up_url_.empty()) {
           menu_items_.push_back(MenuItem(
@@ -937,20 +938,35 @@ void MoreMenuModel::InitMenuItems(
   bool oobe = !should_open_button_options;  // we don't show options for OOBE.
   bool connected = cros->Connected();  // always call for test expectations.
   if (!oobe) {
-    string16 label;
-    bool add_item = true;
+    int flags = FLAG_OPTIONS;
+    int message_id = -1;
     if (is_browser_mode) {
-      label = l10n_util::GetStringUTF16(
-        IDS_STATUSBAR_NETWORK_OPEN_OPTIONS_DIALOG);
+      message_id = IDS_STATUSBAR_NETWORK_OPEN_OPTIONS_DIALOG;
     } else if (connected) {
-      label = l10n_util::GetStringUTF16(
-        IDS_STATUSBAR_NETWORK_OPEN_PROXY_SETTINGS_DIALOG);
-    } else {
-      add_item = false;
+      const PrefService::Preference* proxy_pref =
+          ProfileManager::GetDefaultProfile()->GetPrefs()->FindPreference(
+              prefs::kProxy);
+      if (proxy_pref && (!proxy_pref->IsUserModifiable() ||
+                         proxy_pref->HasUserSetting())) {
+        flags |= FLAG_DISABLED;
+        if (proxy_pref->IsManaged()) {
+          message_id =
+              IDS_OPTIONS_SETTINGS_INTERNET_OPTIONS_POLICY_MANAGED_PROXY_TEXT;
+        } else if (proxy_pref->IsExtensionControlled()) {
+          message_id =
+             IDS_OPTIONS_SETTINGS_INTERNET_OPTIONS_EXTENSION_MANAGED_PROXY_TEXT;
+        } else {
+          message_id =
+             IDS_OPTIONS_SETTINGS_INTERNET_OPTIONS_UNMODIFIABLE_PROXY_TEXT;
+        }
+      } else {
+        message_id = IDS_STATUSBAR_NETWORK_OPEN_PROXY_SETTINGS_DIALOG;
+      }
     }
-    if (add_item) {
-      link_items.push_back(MenuItem(ui::MenuModel::TYPE_COMMAND, label,
-                                    SkBitmap(), std::string(), FLAG_OPTIONS));
+    if (message_id != -1) {
+      link_items.push_back(MenuItem(ui::MenuModel::TYPE_COMMAND,
+                                    l10n_util::GetStringUTF16(message_id),
+                                    SkBitmap(), std::string(), flags));
     }
   }
 
@@ -1011,14 +1027,16 @@ NetworkMenu::NetworkMenu(Delegate* delegate, bool is_browser_mode)
     : delegate_(delegate),
       is_browser_mode_(is_browser_mode),
       refreshing_menu_(false),
+      menu_item_view_(NULL),
       min_width_(kDefaultMinimumWidth) {
   main_menu_model_.reset(new MainMenuModel(this));
   menu_model_adapter_.reset(
       new views::MenuModelAdapter(main_menu_model_.get()));
-  menu_item_view_.reset(new views::MenuItemView(menu_model_adapter_.get()));
+  menu_item_view_ = new views::MenuItemView(menu_model_adapter_.get());
   menu_item_view_->set_has_icons(true);
   menu_item_view_->set_menu_position(
       views::MenuItemView::POSITION_BELOW_BOUNDS);
+  menu_runner_.reset(new views::MenuRunner(menu_item_view_));
 }
 
 NetworkMenu::~NetworkMenu() {
@@ -1029,7 +1047,7 @@ ui::MenuModel* NetworkMenu::GetMenuModel() {
 }
 
 void NetworkMenu::CancelMenu() {
-  menu_item_view_->Cancel();
+  menu_runner_->Cancel();
 }
 
 void NetworkMenu::UpdateMenu() {
@@ -1039,8 +1057,8 @@ void NetworkMenu::UpdateMenu() {
   main_menu_model_->InitMenuItems(
       is_browser_mode(), delegate_->ShouldOpenButtonOptions());
 
-  menu_model_adapter_->BuildMenu(menu_item_view_.get());
-  SetMenuMargins(menu_item_view_.get(), kTopMargin, kBottomMargin);
+  menu_model_adapter_->BuildMenu(menu_item_view_);
+  SetMenuMargins(menu_item_view_, kTopMargin, kBottomMargin);
   menu_item_view_->ChildrenChanged();
 
   refreshing_menu_ = false;
@@ -1052,21 +1070,14 @@ void NetworkMenu::RunMenu(views::View* source) {
 
   UpdateMenu();
 
-  // TODO(rhashimoto): Remove this workaround when WebUI provides a
-  // top-level widget on the ChromeOS login screen that is a window.
-  // The current BackgroundView class for the ChromeOS login screen
-  // creates a owning Widget that has a native GtkWindow but is not a
-  // Window.  This makes it impossible to get the NativeWindow via
-  // the views API.  This workaround casts the top-level NativeWidget
-  // to a NativeWindow that we can pass to MenuItemView::RunMenuAt().
-  gfx::NativeWindow window = GTK_WINDOW(source->GetWidget()->GetNativeView());
-
   gfx::Point screen_location;
   views::View::ConvertPointToScreen(source, &screen_location);
   gfx::Rect bounds(screen_location, source->size());
   menu_item_view_->GetSubmenu()->set_minimum_preferred_width(min_width_);
-  menu_item_view_->RunMenuAt(window, delegate_->GetMenuButton(), bounds,
-                             views::MenuItemView::TOPRIGHT, true);
+  if (menu_runner_->RunMenuAt(source->GetWidget()->GetTopLevelWidget(),
+          delegate_->GetMenuButton(), bounds, views::MenuItemView::TOPRIGHT,
+          views::MenuRunner::HAS_MNEMONICS) == views::MenuRunner::MENU_DELETED)
+    return;
 }
 
 void NetworkMenu::ShowTabbedNetworkSettings(const Network* network) const {

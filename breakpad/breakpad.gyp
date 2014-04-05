@@ -40,10 +40,8 @@
             'src/common/mac/SimpleStringDictionary.mm',
             'src/common/string_conversion.cc',
             'src/common/mac/string_utilities.cc',
+            'src/common/md5.c',
           ],
-          'link_settings': {
-            'libraries': ['$(SDKROOT)/usr/lib/libcrypto.dylib'],
-          }
         },
         {
           'target_name': 'crash_inspector',
@@ -106,6 +104,16 @@
         {
           'target_name': 'dump_syms',
           'type': 'executable',
+          'variables': {
+            # Turn off PIE because it may interfere with dump_syms' ability to
+            # allocate a contiguous region in memory large enough to mmap the
+            # entire unstripped framework in a 32-bit dump_syms process.
+            'mac_pie': 0,
+          },
+          'include_dirs++': [
+            # ++ ensures this comes before src brought in from target_defaults.
+            'pending/src',
+          ],
           'include_dirs': [
             'src/common/mac',
           ],
@@ -114,10 +122,10 @@
             'src/common/dwarf/dwarf2reader.cc',
             'src/common/dwarf/bytereader.cc',
             'src/common/dwarf_cfi_to_module.cc',
-            'src/common/dwarf_cu_to_module.cc',
+            'pending/src/common/dwarf_cu_to_module.cc',
             'src/common/dwarf_line_to_module.cc',
             'src/common/language.cc',
-            'src/common/module.cc',
+            'pending/src/common/module.cc',
             'src/common/mac/dump_syms.mm',
             'src/common/mac/file_id.cc',
             'src/common/mac/macho_id.cc',
@@ -127,6 +135,7 @@
             'src/common/stabs_reader.cc',
             'src/common/stabs_to_module.cc',
             'src/tools/mac/dump_syms/dump_syms_tool.mm',
+            'src/common/md5.c',
           ],
           'defines': [
             # For src/common/stabs_reader.h.
@@ -141,7 +150,6 @@
           'link_settings': {
             'libraries': [
               '$(SDKROOT)/System/Library/Frameworks/Foundation.framework',
-              '$(SDKROOT)/usr/lib/libcrypto.dylib',
             ],
           },
           'configurations': {
@@ -179,6 +187,9 @@
             'breakpad_utilities',
             'crash_inspector',
             'crash_report_sender',
+          ],
+          'defines': [
+            'USE_PROTECTED_ALLOCATIONS=1',
           ],
           'sources': [
             'src/client/mac/crash_generation/crash_generation_client.cc',
@@ -253,6 +264,8 @@
                 'src/common/language.h',
                 'src/common/linux/dump_symbols.cc',
                 'src/common/linux/dump_symbols.h',
+                'src/common/linux/elf_symbols_to_module.cc',
+                'src/common/linux/elf_symbols_to_module.h',
                 'src/common/linux/file_id.cc',
                 'src/common/linux/file_id.h',
                 'src/common/linux/guid_creator.h',
@@ -377,7 +390,9 @@
             'src/client/linux/minidump_writer/minidump_writer_unittest.cc',
             'src/common/linux/file_id_unittest.cc',
             'src/common/linux/linux_libc_support_unittest.cc',
+            'src/common/linux/synth_elf.cc',
             'src/common/memory_unittest.cc',
+            'src/common/test_assembler.cc',
           ],
 
           'include_dirs': [

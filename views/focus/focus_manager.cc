@@ -90,7 +90,7 @@ bool FocusManager::OnKeyEvent(const KeyEvent& event) {
   // Note that we don't do focus traversal if the root window is not part of the
   // active window hierarchy as this would mean we have no focused view and
   // would focus the first focusable view.
-#if defined(OS_WIN)
+#if defined(OS_WIN) && !defined(USE_AURA)
   HWND top_window = widget_->GetNativeView();
   HWND active_window = ::GetActiveWindow();
   if ((active_window == top_window || ::IsChild(active_window, top_window)) &&
@@ -464,25 +464,6 @@ void FocusManager::FocusNativeView(gfx::NativeView native_view) {
 // static
 bool FocusManager::IsTabTraversalKeyEvent(const KeyEvent& key_event) {
   return key_event.key_code() == ui::VKEY_TAB && !key_event.IsControlDown();
-}
-
-// static
-FocusManager* FocusManager::GetFocusManagerForNativeView(
-    gfx::NativeView native_view) {
-  // TODO(beng): This method probably isn't necessary.
-  Widget* widget = Widget::GetTopLevelWidgetForNativeView(native_view);
-  return widget ? widget->GetFocusManager() : NULL;
-}
-
-// static
-FocusManager* FocusManager::GetFocusManagerForNativeWindow(
-    gfx::NativeWindow native_window) {
-  // TODO(beng): This method probably isn't necessary.
-  Widget* widget = Widget::GetWidgetForNativeWindow(native_window);
-  if (!widget)
-    return NULL;
-  widget = widget->GetTopLevelWidget();
-  return widget ? widget->GetFocusManager() : NULL;
 }
 
 void FocusManager::ViewRemoved(View* removed) {

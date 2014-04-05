@@ -326,6 +326,7 @@ void X509Certificate::FreeOSCertHandle(OSCertHandle cert_handle) {
 void X509Certificate::Initialize() {
   crypto::EnsureOpenSSLInit();
   fingerprint_ = CalculateFingerprint(cert_handle_);
+  chain_fingerprint_ = CalculateChainFingerprint();
 
   ASN1_INTEGER* num = X509_get_serialNumber(cert_handle_);
   if (num) {
@@ -348,12 +349,33 @@ void X509Certificate::ResetCertStore() {
   X509InitSingleton::GetInstance()->ResetCertStore();
 }
 
+// static
 SHA1Fingerprint X509Certificate::CalculateFingerprint(OSCertHandle cert) {
   SHA1Fingerprint sha1;
   unsigned int sha1_size = static_cast<unsigned int>(sizeof(sha1.data));
   int ret = X509_digest(cert, EVP_sha1(), sha1.data, &sha1_size);
   CHECK(ret);
   CHECK_EQ(sha1_size, sizeof(sha1.data));
+  return sha1;
+}
+
+SHA1Fingerprint X509Certificate::CalculateChainFingerprint() const {
+  SHA1Fingerprint sha1;
+  memset(sha1.data, 0, sizeof(sha1.data));
+
+  SHA_CTX sha1_ctx;
+  SHA1_Init(&sha1_ctx);
+  DERCache der_cache;
+  if (!GetDERAndCacheIfNeeded(cert_handle_, &der_cache))
+    return sha1;
+  SHA1_Update(&sha1_ctx, der_cache.data, der_cache.data_length);
+  for (size_t i = 0; i < intermediate_ca_certs_.size(); ++i) {
+    if (!GetDERAndCacheIfNeeded(intermediate_ca_certs_[i], &der_cache))
+      return sha1;
+    SHA1_Update(&sha1_ctx, der_cache.data, der_cache.data_length);
+  }
+  SHA1_Final(sha1.data, &sha1_ctx);
+
   return sha1;
 }
 
@@ -404,7 +426,8 @@ X509Certificate* X509Certificate::CreateSelfSigned(
     const std::string& subject,
     uint32 serial_number,
     base::TimeDelta valid_duration) {
-  // TODO(port): Implement.
+  // TODO(port): Implement. See http://crbug.com/91512.
+  NOTIMPLEMENTED();
   return NULL;
 }
 
@@ -423,6 +446,8 @@ void X509Certificate::GetSubjectAltName(
 X509_STORE* X509Certificate::cert_store() {
   return X509InitSingleton::GetInstance()->store();
 }
+
+#if !defined(OS_ANDROID)
 
 int X509Certificate::VerifyInternal(const std::string& hostname,
                                     int flags,
@@ -462,8 +487,16 @@ int X509Certificate::VerifyInternal(const std::string& hostname,
     return MapCertStatusToNetError(verify_result->cert_status);
 
   STACK_OF(X509)* chain = X509_STORE_CTX_get_chain(ctx.get());
+  X509* verified_cert = NULL;
+  std::vector<X509*> verified_chain;
   for (int i = 0; i < sk_X509_num(chain); ++i) {
     X509* cert = sk_X509_value(chain, i);
+    if (i == 0) {
+      verified_cert = cert;
+    } else {
+      verified_chain.push_back(cert);
+    }
+
     DERCache der_cache;
     if (!GetDERAndCacheIfNeeded(cert, &der_cache))
       continue;
@@ -480,6 +513,11 @@ int X509Certificate::VerifyInternal(const std::string& hostname,
     verify_result->public_key_hashes.push_back(hash);
   }
 
+  if (verified_cert) {
+    verify_result->verified_cert = CreateFromHandle(verified_cert,
+                                                    verified_chain);
+  }
+
   // Currently we only ues OpenSSL's default root CA paths, so treat all
   // correctly verified certs as being from a known root. TODO(joth): if the
   // motivations described in http://src.chromium.org/viewvc/chrome?view=rev&revision=80778
@@ -489,6 +527,8 @@ int X509Certificate::VerifyInternal(const std::string& hostname,
 
   return OK;
 }
+
+#endif  // !defined(OS_ANDROID)
 
 bool X509Certificate::GetDEREncoded(std::string* encoded) {
   DERCache der_cache;

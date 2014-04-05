@@ -165,14 +165,14 @@ class MobileSetupHandler
   void Init(TabContents* contents);
 
   // WebUIMessageHandler implementation.
-  virtual WebUIMessageHandler* Attach(WebUI* web_ui);
-  virtual void RegisterMessages();
+  virtual WebUIMessageHandler* Attach(WebUI* web_ui) OVERRIDE;
+  virtual void RegisterMessages() OVERRIDE;
 
   // NetworkLibrary::NetworkManagerObserver implementation.
-  virtual void OnNetworkManagerChanged(chromeos::NetworkLibrary* obj);
+  virtual void OnNetworkManagerChanged(chromeos::NetworkLibrary* obj) OVERRIDE;
   // NetworkLibrary::NetworkObserver implementation.
   virtual void OnNetworkChanged(chromeos::NetworkLibrary* obj,
-                                const chromeos::Network* network);
+                                const chromeos::Network* network) OVERRIDE;
 
  private:
   typedef enum PlanActivationState {
@@ -1128,6 +1128,7 @@ void MobileSetupHandler::ChangeState(chromeos::CellularNetwork* network,
       // limbo by the network library.
       if (!reconnect_timer_.IsRunning()) {
         reconnect_timer_.Start(
+            FROM_HERE,
             base::TimeDelta::FromMilliseconds(kReconnectTimerDelayMS),
             this, &MobileSetupHandler::ReconnectTimerFired);
       }
@@ -1330,5 +1331,6 @@ MobileSetupUI::MobileSetupUI(TabContents* contents) : ChromeWebUI(contents) {
       new MobileSetupUIHTMLSource(service_path);
 
   // Set up the chrome://mobilesetup/ source.
-  contents->profile()->GetChromeURLDataManager()->AddDataSource(html_source);
+  Profile* profile = Profile::FromBrowserContext(contents->browser_context());
+  profile->GetChromeURLDataManager()->AddDataSource(html_source);
 }

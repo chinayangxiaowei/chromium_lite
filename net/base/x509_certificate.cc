@@ -32,16 +32,6 @@ namespace net {
 
 namespace {
 
-// Returns true if this cert fingerprint is the null (all zero) fingerprint.
-// We use this as a bogus fingerprint value.
-bool IsNullFingerprint(const SHA1Fingerprint& fingerprint) {
-  for (size_t i = 0; i < arraysize(fingerprint.data); ++i) {
-    if (fingerprint.data[i] != 0)
-      return false;
-  }
-  return true;
-}
-
 // Indicates the order to use when trying to decode binary data, which is
 // based on (speculation) as to what will be most common -> least common
 const X509Certificate::Format kFormatDecodePriority[] = {
@@ -241,7 +231,7 @@ bool X509Certificate::LessThan::operator()(X509Certificate* lhs,
     return false;
 
   SHA1FingerprintLessThan fingerprint_functor;
-  return fingerprint_functor(lhs->fingerprint_, rhs->fingerprint_);
+  return fingerprint_functor(lhs->chain_fingerprint_, rhs->chain_fingerprint_);
 }
 
 X509Certificate::X509Certificate(const std::string& subject,
@@ -254,6 +244,7 @@ X509Certificate::X509Certificate(const std::string& subject,
       valid_expiry_(expiration_date),
       cert_handle_(NULL) {
   memset(fingerprint_.data, 0, sizeof(fingerprint_.data));
+  memset(chain_fingerprint_.data, 0, sizeof(chain_fingerprint_.data));
 }
 
 // static
@@ -592,6 +583,7 @@ bool X509Certificate::VerifyHostname(
 int X509Certificate::Verify(const std::string& hostname, int flags,
                             CertVerifyResult* verify_result) const {
   verify_result->Reset();
+  verify_result->verified_cert = const_cast<X509Certificate*>(this);
 
   if (IsBlacklisted()) {
     verify_result->cert_status |= CERT_STATUS_REVOKED;
@@ -603,7 +595,7 @@ int X509Certificate::Verify(const std::string& hostname, int flags,
   // This check is done after VerifyInternal so that VerifyInternal can fill in
   // the list of public key hashes.
   if (IsPublicKeyBlacklisted(verify_result->public_key_hashes)) {
-    verify_result->cert_status |= CERT_STATUS_AUTHORITY_INVALID;
+    verify_result->cert_status |= CERT_STATUS_REVOKED;
     rv = MapCertStatusToNetError(verify_result->cert_status);
   }
 
@@ -967,7 +959,7 @@ bool X509Certificate::IsBlacklisted() const {
 // static
 bool X509Certificate::IsPublicKeyBlacklisted(
     const std::vector<SHA1Fingerprint>& public_key_hashes) {
-  static const unsigned kNumHashes = 5;
+  static const unsigned kNumHashes = 7;
   static const uint8 kHashes[kNumHashes][base::SHA1_LENGTH] = {
     // Subject: CN=DigiNotar Root CA
     // Issuer: CN=Entrust.net x2 and self-signed
@@ -989,6 +981,16 @@ bool X509Certificate::IsPublicKeyBlacklisted(
     // Issuer: CN=Staat der Nederlanden Overheid CA
     {0xe8, 0xf9, 0x12, 0x00, 0xc6, 0x5c, 0xee, 0x16, 0xe0, 0x39,
      0xb9, 0xf8, 0x83, 0x84, 0x16, 0x61, 0x63, 0x5f, 0x81, 0xc5},
+    // Subject: O=Digicert Sdn. Bhd.
+    // Issuer: CN=GTE CyberTrust Global Root
+    // Expires: Jul 17 15:16:54 2012 GMT
+    {0x01, 0x29, 0xbc, 0xd5, 0xb4, 0x48, 0xae, 0x8d, 0x24, 0x96,
+     0xd1, 0xc3, 0xe1, 0x97, 0x23, 0x91, 0x90, 0x88, 0xe1, 0x52},
+    // Subject: O=Digicert Sdn. Bhd.
+    // Issuer: CN=Entrust.net Certification Authority (2048)
+    // Expires: Jul 16 17:53:37 2015 GMT
+    {0xd3, 0x3c, 0x5b, 0x41, 0xe4, 0x5c, 0xc4, 0xb3, 0xbe, 0x9a,
+     0xd6, 0x95, 0x2c, 0x4e, 0xcc, 0x25, 0x28, 0x03, 0x29, 0x81},
   };
 
   for (unsigned i = 0; i < kNumHashes; i++) {

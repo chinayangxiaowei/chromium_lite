@@ -130,8 +130,8 @@ GL_APICALL void         GL_APIENTRY glGetShaderInfoLog (GLidShader shader, GLsiz
 GL_APICALL void         GL_APIENTRY glGetShaderPrecisionFormat (GLenumShaderType shadertype, GLenumShaderPrecision precisiontype, GLint* range, GLint* precision);
 GL_APICALL void         GL_APIENTRY glGetShaderSource (GLidShader shader, GLsizeiNotNegative bufsize, GLsizei* length, char* source);
 GL_APICALL const GLubyte* GL_APIENTRY glGetString (GLenumStringType name);
-GL_APICALL void         GL_APIENTRY glGetTexParameterfv (GLenumTextureTarget target, GLenumTextureParameter pname, GLfloat* params);
-GL_APICALL void         GL_APIENTRY glGetTexParameteriv (GLenumTextureTarget target, GLenumTextureParameter pname, GLint* params);
+GL_APICALL void         GL_APIENTRY glGetTexParameterfv (GLenumGetTexParamTarget target, GLenumTextureParameter pname, GLfloat* params);
+GL_APICALL void         GL_APIENTRY glGetTexParameteriv (GLenumGetTexParamTarget target, GLenumTextureParameter pname, GLint* params);
 GL_APICALL void         GL_APIENTRY glGetUniformfv (GLidProgram program, GLint location, GLfloat* params);
 GL_APICALL void         GL_APIENTRY glGetUniformiv (GLidProgram program, GLint location, GLint* params);
 GL_APICALL GLint        GL_APIENTRY glGetUniformLocation (GLidProgram program, const char* name);
@@ -208,7 +208,7 @@ GL_APICALL GLuint       GL_APIENTRY glGetMaxValueInBufferCHROMIUM (GLidBuffer bu
 GL_APICALL void         GL_APIENTRY glGenSharedIdsCHROMIUM (GLuint namespace_id, GLuint id_offset, GLsizeiNotNegative n, GLuint* ids);
 GL_APICALL void         GL_APIENTRY glDeleteSharedIdsCHROMIUM (GLuint namespace_id, GLsizeiNotNegative n, const GLuint* ids);
 GL_APICALL void         GL_APIENTRY glRegisterSharedIdsCHROMIUM (GLuint namespace_id, GLsizeiNotNegative n, const GLuint* ids);
-GL_APICALL GLboolean    GL_APIENTRY glCommandBufferEnableCHROMIUM (const char* feature);
+GL_APICALL GLboolean    GL_APIENTRY glEnableFeatureCHROMIUM (const char* feature);
 GL_APICALL void*        GL_APIENTRY glMapBufferSubDataCHROMIUM (GLuint target, GLintptrNotNegative offset, GLsizeiptr size, GLenum access);
 GL_APICALL void         GL_APIENTRY glUnmapBufferSubDataCHROMIUM (const void* mem);
 GL_APICALL void*        GL_APIENTRY glMapTexSubImage2DCHROMIUM (GLenum target, GLint level, GLint xoffset, GLint yoffset, GLsizei width, GLsizei height, GLenum format, GLenum type, GLenum access);
@@ -217,12 +217,12 @@ GL_APICALL void         GL_APIENTRY glResizeCHROMIUM (GLuint width, GLuint heigh
 GL_APICALL const GLchar* GL_APIENTRY glGetRequestableExtensionsCHROMIUM (void);
 GL_APICALL void         GL_APIENTRY glRequestExtensionCHROMIUM (const char* extension);
 GL_APICALL void         GL_APIENTRY glRateLimitOffscreenContextCHROMIUM (void);
-GL_APICALL void         GL_APIENTRY glSetSurfaceCHROMIUM (GLint surface_id);
 GL_APICALL void         GL_APIENTRY glGetMultipleIntegervCHROMIUM (const GLenum* pnames, GLuint count, GLint* results, GLsizeiptr size);
 GL_APICALL void         GL_APIENTRY glGetProgramInfoCHROMIUM (GLidProgram program, GLsizeiNotNegative bufsize, GLsizei* size, void* info);
 GL_APICALL void         GL_APIENTRY glPlaceholder447CHROMIUM (void);
 GL_APICALL void         GL_APIENTRY glPlaceholder451CHROMIUM (void);
 GL_APICALL void         GL_APIENTRY glPlaceholder452CHROMIUM (void);
+GL_APICALL void         GL_APIENTRY glPlaceholder453CHROMIUM (void);
 """
 
 # This is the list of all commmands that will be generated and their Id.
@@ -417,7 +417,7 @@ _CMD_ID_TABLE = {
   'GenSharedIdsCHROMIUM':                                      439,
   'DeleteSharedIdsCHROMIUM':                                   440,
   'RegisterSharedIdsCHROMIUM':                                 441,
-  'CommandBufferEnableCHROMIUM':                               442,
+  'EnableFeatureCHROMIUM':                                     442,
   'CompressedTexImage2DBucket':                                443,
   'CompressedTexSubImage2DBucket':                             444,
   'RenderbufferStorageMultisampleEXT':                         445,
@@ -428,7 +428,7 @@ _CMD_ID_TABLE = {
   'RequestExtensionCHROMIUM':                                  450,
   'Placeholder451CHROMIUM':                                    451,
   'Placeholder452CHROMIUM':                                    452,
-  'SetSurfaceCHROMIUM':                                        453,
+  'Placeholder453CHROMIUM':                                    453,
   'GetMultipleIntegervCHROMIUM':                               454,
   'GetProgramInfoCHROMIUM':                                    455,
 }
@@ -581,6 +581,21 @@ _ENUM_LISTS = {
     'invalid': [
       'GL_FOG_HINT',
     ],
+  },
+  'GetTexParamTarget': {
+    'type': 'GLenum',
+    'valid': [
+      'GL_TEXTURE_2D',
+      'GL_TEXTURE_CUBE_MAP_POSITIVE_X',
+      'GL_TEXTURE_CUBE_MAP_NEGATIVE_X',
+      'GL_TEXTURE_CUBE_MAP_POSITIVE_Y',
+      'GL_TEXTURE_CUBE_MAP_NEGATIVE_Y',
+      'GL_TEXTURE_CUBE_MAP_POSITIVE_Z',
+      'GL_TEXTURE_CUBE_MAP_NEGATIVE_Z',
+    ],
+    'invalid': [
+      'GL_PROXY_TEXTURE_CUBE_MAP',
+    ]
   },
   'TextureTarget': {
     'type': 'GLenum',
@@ -1154,10 +1169,10 @@ _FUNCTION_INFO = {
   },
   'ColorMask': {'decoder_func': 'DoColorMask', 'expectation': False},
   'ClearStencil': {'decoder_func': 'DoClearStencil'},
-  'CommandBufferEnableCHROMIUM': {
+  'EnableFeatureCHROMIUM': {
     'type': 'Custom',
     'immediate': False,
-    'decoder_func': 'DoCommandBufferEnableCHROMIUM',
+    'decoder_func': 'DoEnableFeatureCHROMIUM',
     'expectation': False,
     'cmd_args': 'GLuint bucket_id, GLint* result',
     'result': ['GLint'],
@@ -1532,12 +1547,6 @@ _FUNCTION_INFO = {
     'decoder_func': 'DoReleaseShaderCompiler',
     'unit_test': False,
   },
-  'SetSurfaceCHROMIUM': {
-    'decoder_func': 'DoSetSurfaceCHROMIUM',
-    'extension': True,
-    'chromium': True,
-    'unit_test': False,
-  },
   'ShaderBinary': {'type': 'Custom'},
   'ShaderSource': {
     'type': 'Manual',
@@ -1712,7 +1721,8 @@ _FUNCTION_INFO = {
                   'GLsizei stride, GLuint offset',
   },
   'ResizeCHROMIUM': {
-      'decoder_func': 'DoResizeCHROMIUM',
+      'type': 'Custom',
+      'impl_func': False,
       'unit_test': False,
       'extension': True,
       'chromium': True,
@@ -1745,6 +1755,9 @@ _FUNCTION_INFO = {
     'type': 'UnknownCommand',
   },
   'Placeholder452CHROMIUM': {
+    'type': 'UnknownCommand',
+  },
+  'Placeholder453CHROMIUM': {
     'type': 'UnknownCommand',
   },
 }
@@ -5740,10 +5753,10 @@ const size_t GLES2Util::enum_to_string_table_len_ =
       file.Write("typedef %s %s;\n" % (v, k))
     file.Write("#endif  // __gl2_h_\n\n")
 
-    file.Write("#define PPB_OPENGLES2_DEV_INTERFACE "
-        "\"PPB_OpenGLES(Dev);2.0\"\n")
+    file.Write("#define PPB_OPENGLES2_INTERFACE "
+        "\"PPB_OpenGLES;2.0\"\n")
 
-    file.Write("\nstruct PPB_OpenGLES2_Dev {\n")
+    file.Write("\nstruct PPB_OpenGLES2 {\n")
     for func in self.original_functions:
       if not func.IsCoreGLFunction():
         continue
@@ -5805,7 +5818,7 @@ const size_t GLES2Util::enum_to_string_table_len_ =
                   func.MakeOriginalArgString("")))
       file.Write("}\n\n")
 
-    file.Write("\nconst struct PPB_OpenGLES2_Dev ppb_opengles2 = {\n")
+    file.Write("\nconst struct PPB_OpenGLES2 ppb_opengles2 = {\n")
     file.Write("  &")
     file.Write(",\n  &".join(
       f.name for f in self.original_functions if f.IsCoreGLFunction()))
@@ -5815,7 +5828,7 @@ const size_t GLES2Util::enum_to_string_table_len_ =
     file.Write("}  // namespace\n")
 
     file.Write("""
-const PPB_OpenGLES2_Dev* OpenGLES2Impl::GetInterface() {
+const PPB_OpenGLES2* OpenGLES2Impl::GetInterface() {
   return &ppb_opengles2;
 }
 
@@ -5854,23 +5867,25 @@ const PPB_OpenGLES2_Dev* OpenGLES2Impl::GetInterface() {
 
   def WritePepperGLES2NaClProxy(self, filename):
     """Writes the Pepper OpenGLES interface implementation for NaCl."""
-
     file = CWriter(filename)
     file.Write(_LICENSE)
     file.Write(_DO_NOT_EDIT_WARNING)
 
     file.Write("#include \"native_client/src/shared/ppapi_proxy"
-        "/plugin_context_3d.h\"\n\n")
+        "/plugin_ppb_graphics_3d.h\"\n\n")
 
     file.Write("#include \"gpu/command_buffer/client/gles2_implementation.h\"")
-    file.Write("\n#include \"ppapi/c/dev/ppb_opengles_dev.h\"\n\n")
+    file.Write("\n#include \"native_client/src/third_party"
+        "/ppapi/c/dev/ppb_opengles_dev.h\"\n\n")
 
-    file.Write("using ppapi_proxy::PluginContext3D;\n")
+    file.Write("using ppapi_proxy::PluginGraphics3D;\n")
     file.Write("using ppapi_proxy::PluginResource;\n\n")
     file.Write("namespace {\n\n")
 
     for func in self.original_functions:
       if not func.IsCoreGLFunction():
+        continue
+      if func.IsType("UnknownCommand"):
         continue
       args = func.MakeTypedOriginalArgString("")
       if len(args) != 0:
@@ -5880,7 +5895,7 @@ const PPB_OpenGLES2_Dev* OpenGLES2Impl::GetInterface() {
       return_string = "return "
       if func.return_type == "void":
         return_string = ""
-      file.Write("  %sPluginContext3D::implFromResource(context)->"
+      file.Write("  %sPluginGraphics3D::implFromResource(context)->"
                  "%s(%s);\n" %
                  (return_string,
                   func.original_name,
@@ -5889,13 +5904,14 @@ const PPB_OpenGLES2_Dev* OpenGLES2Impl::GetInterface() {
 
     file.Write("\n} // namespace\n\n")
 
-    file.Write("const PPB_OpenGLES2_Dev* "
-               "PluginContext3D::GetOpenGLESInterface() {\n")
+    file.Write("const PPB_OpenGLES2* "
+               "PluginGraphics3D::GetOpenGLESInterface() {\n")
 
-    file.Write("  const static struct PPB_OpenGLES2_Dev ppb_opengles = {\n")
+    file.Write("  const static struct PPB_OpenGLES2 ppb_opengles = {\n")
     file.Write("    &")
     file.Write(",\n    &".join(
-      f.name for f in self.original_functions if f.IsCoreGLFunction()))
+      f.name for f in self.original_functions if (f.IsCoreGLFunction() and
+        not f.IsType("UnknownCommand"))))
     file.Write("\n")
     file.Write("  };\n")
     file.Write("  return &ppb_opengles;\n")

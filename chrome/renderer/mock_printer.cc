@@ -4,8 +4,11 @@
 
 #include "chrome/renderer/mock_printer.h"
 
+#include "base/basictypes.h"
 #include "base/file_util.h"
 #include "base/shared_memory.h"
+#include "base/string16.h"
+#include "base/utf_string_conversions.h"
 #include "chrome/common/print_messages.h"
 #include "ipc/ipc_message_utils.h"
 #include "printing/metafile_impl.h"
@@ -37,7 +40,12 @@ MockPrinter::MockPrinter()
     number_pages_(0),
     page_number_(0),
     is_first_request_(true),
-    preview_request_id_(0) {
+    preview_request_id_(0),
+    display_header_footer_(false),
+    date_(ASCIIToUTF16("date")),
+    title_(ASCIIToUTF16("title")),
+    url_(ASCIIToUTF16("url")),
+    use_invalid_settings_(false) {
   page_size_.SetSize(static_cast<int>(8.5 * dpi_),
                      static_cast<int>(11.0 * dpi_));
   printable_size_.SetSize(static_cast<int>((7.5 * dpi_)),
@@ -74,6 +82,16 @@ void MockPrinter::SetDefaultPrintSettings(const PrintMsg_Print_Params& params) {
   printable_size_ = params.printable_size;
   margin_left_ = params.margin_left;
   margin_top_ = params.margin_top;
+  display_header_footer_ = params.display_header_footer;
+  date_ = params.date;
+  title_ = params.title;
+  url_ = params.url;
+}
+
+void MockPrinter::UseInvalidSettings() {
+  use_invalid_settings_ = true;
+  PrintMsg_Print_Params empty_param;
+  SetDefaultPrintSettings(empty_param);
 }
 
 void MockPrinter::ScriptedPrint(int cookie,
@@ -95,14 +113,20 @@ void MockPrinter::ScriptedPrint(int cookie,
   settings->params.printable_size = printable_size_;
   settings->params.is_first_request = is_first_request_;
   settings->params.preview_request_id = preview_request_id_;
+  settings->params.display_header_footer = display_header_footer_;
+  settings->params.date = date_;
+  settings->params.title = title_;
+  settings->params.url = url_;
   printer_status_ = PRINTER_PRINTING;
 }
 
 void MockPrinter::UpdateSettings(int cookie,
-                                 PrintMsg_PrintPages_Params* params) {
+                                 PrintMsg_PrintPages_Params* params,
+                                 const std::vector<int>& pages) {
   EXPECT_EQ(document_cookie_, cookie);
 
   params->Reset();
+  params->pages = pages;
   SetPrintParams(&(params->params));
   printer_status_ = PRINTER_PRINTING;
 }
@@ -141,7 +165,11 @@ void MockPrinter::PrintPage(const PrintHostMsg_DidPrintPage_Params& params) {
   base::SharedMemory metafile_data(params.metafile_data_handle, true);
 #endif
   metafile_data.Map(params.data_size);
+#if defined(OS_MACOSX)
+  printing::PdfMetafileCg metafile;
+#else
   printing::NativeMetafile metafile;
+#endif
   metafile.InitFromData(metafile_data.memory(), params.data_size);
   printing::Image image(metafile);
   MockPrinterPage* page_data = new MockPrinterPage(metafile_data.memory(),
@@ -217,7 +245,7 @@ bool MockPrinter::SaveBitmap(
 }
 
 int MockPrinter::CreateDocumentCookie() {
-  return ++current_document_cookie_;
+  return use_invalid_settings_ ? 0 : ++current_document_cookie_;
 }
 
 void MockPrinter::SetPrintParams(PrintMsg_Print_Params* params) {
@@ -233,4 +261,8 @@ void MockPrinter::SetPrintParams(PrintMsg_Print_Params* params) {
   params->margin_top = margin_top_;
   params->is_first_request = is_first_request_;
   params->preview_request_id = preview_request_id_;
+  params->display_header_footer = display_header_footer_;
+  params->date = date_;
+  params->title = title_;
+  params->url = url_;
 }

@@ -71,12 +71,8 @@ class BookmarkBarView : public DetachableToolbarView,
   // Maximum size of buttons on the bookmark bar.
   static const int kMaxButtonWidth;
 
-  BookmarkBarView(Profile* profile, Browser* browser);
+  explicit BookmarkBarView(Browser* browser);
   virtual ~BookmarkBarView();
-
-  // Resets the profile. This removes any buttons for the current profile and
-  // recreates the models.
-  void SetProfile(Profile* profile);
 
   // Returns the current browser.
   Browser* browser() const { return browser_; }
@@ -363,8 +359,6 @@ class BookmarkBarView : public DetachableToolbarView,
 
   NotificationRegistrar registrar_;
 
-  Profile* profile_;
-
   // Used for opening urls.
   PageNavigator* page_navigator_;
 
@@ -410,7 +404,7 @@ class BookmarkBarView : public DetachableToolbarView,
 
   ButtonSeparatorView* bookmarks_separator_view_;
 
-  // Owning browser. This is NULL during testing.
+  // Owning browser.
   Browser* browser_;
 
   // True if the owning browser is showing an infobar.

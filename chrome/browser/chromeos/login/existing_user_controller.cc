@@ -5,6 +5,7 @@
 #include "chrome/browser/chromeos/login/existing_user_controller.h"
 
 #include "base/command_line.h"
+#include "base/logging.h"
 #include "base/message_loop.h"
 #include "base/stringprintf.h"
 #include "base/string_util.h"
@@ -45,9 +46,13 @@ namespace {
 // Url for setting up sync authentication.
 const char kSettingsSyncLoginURL[] = "chrome://settings/personal";
 
-// URL that will be opened on when user logs in first time on the device.
+// URL that will be opened when user logs in first time on the device.
 const char kGetStartedURLPattern[] =
     "http://www.gstatic.com/chromebook/gettingstarted/index-%s.html";
+
+// URL that will be opened when first user logs in first time on the device.
+const char kGetStartedOwnerURLPattern[] =
+    "http://www.gstatic.com/chromebook/gettingstarted/index-%s.html#first";
 
 // URL for account creation.
 const char kCreateAccountURL[] =
@@ -74,7 +79,8 @@ ExistingUserController::ExistingUserController(LoginDisplayHost* host)
       host_(host),
       num_login_attempts_(0),
       user_settings_(new UserCrosSettingsProvider),
-      method_factory_(this) {
+      method_factory_(this),
+      is_owner_login_(false) {
   DCHECK(current_controller_ == NULL);
   current_controller_ = this;
 
@@ -108,7 +114,6 @@ void ExistingUserController::Init(const UserVector& users) {
   LoginUtils::Get()->PrewarmAuthentication();
   if (CrosLibrary::Get()->EnsureLoaded())
     CrosLibrary::Get()->GetLoginLibrary()->EmitLoginPromptReady();
-  StartAutomaticFreeDiskSpaceControl();
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -129,6 +134,8 @@ void ExistingUserController::Observe(int type,
 // ExistingUserController, private:
 
 ExistingUserController::~ExistingUserController() {
+  LoginUtils::Get()->DelegateDeleted(this);
+
   if (current_controller_ == this) {
     current_controller_ = NULL;
   } else {
@@ -160,6 +167,8 @@ void ExistingUserController::FixCaptivePortal() {
 
 void ExistingUserController::CompleteLogin(const std::string& username,
                                            const std::string& password) {
+  SetOwnerUserInCryptohome();
+
   GaiaAuthConsumer::ClientLoginResult credentials;
   if (!login_performer_.get()) {
     LoginPerformer::Delegate* delegate = this;
@@ -168,6 +177,10 @@ void ExistingUserController::CompleteLogin(const std::string& username,
     // Only one instance of LoginPerformer should exist at a time.
     login_performer_.reset(new LoginPerformer(delegate));
   }
+
+  // If the device is not owned yet, successfully logged in user will be owner.
+  is_owner_login_ = OwnershipService::GetSharedInstance()->GetStatus(true) ==
+      OwnershipService::OWNERSHIP_NONE;
 
   login_performer_->CompleteLogin(username, password);
   WizardAccessibilityHelper::GetInstance()->MaybeSpeak(
@@ -182,6 +195,10 @@ void ExistingUserController::Login(const std::string& username,
   SetStatusAreaEnabled(false);
   // Disable clicking on other windows.
   login_display_->SetUIEnabled(false);
+
+  // If the device is not owned yet, successfully logged in user will be owner.
+  is_owner_login_ = OwnershipService::GetSharedInstance()->GetStatus(true) ==
+      OwnershipService::OWNERSHIP_NONE;
 
   BootTimesLoader::Get()->RecordLoginAttempted();
 
@@ -211,6 +228,7 @@ void ExistingUserController::LoginAsGuest() {
   SetStatusAreaEnabled(false);
   // Disable clicking on other windows.
   login_display_->SetUIEnabled(false);
+  SetOwnerUserInCryptohome();
 
   // Check allow_guest in case this call is fired from key accelerator.
   // Must not proceed without signature verification.
@@ -250,7 +268,8 @@ void ExistingUserController::OnStartEnterpriseEnrollment() {
 }
 
 void ExistingUserController::OnEnrollmentOwnershipCheckCompleted(
-    OwnershipService::Status status) {
+    OwnershipService::Status status,
+    bool current_user_is_owner) {
   if (status == OwnershipService::OWNERSHIP_NONE) {
     host_->StartWizard(WizardController::kEnterpriseEnrollmentScreenName,
                        GURL());
@@ -290,7 +309,7 @@ void ExistingUserController::OnLoginFailure(const LoginFailure& failure) {
         view->Init();
         view->set_delegate(this);
         views::Widget* window = browser::CreateViewsWindow(
-            GetNativeWindow(), gfx::Rect(), view);
+            GetNativeWindow(), view);
         window->SetAlwaysOnTop(true);
         window->Show();
       } else {
@@ -366,11 +385,6 @@ void ExistingUserController::OnLoginSuccess(
                                     this);
 
 
-  if (login_status_consumer_)
-    login_status_consumer_->OnLoginSuccess(username, password,
-                                           credentials, pending_requests,
-                                           using_oauth);
-
   // Notifiy LoginDisplay to allow it provide visual feedback to user.
   login_display_->OnLoginSuccess(username);
 }
@@ -386,8 +400,10 @@ void ExistingUserController::OnProfilePrepared(Profile* profile) {
         current_locale.find("en") != std::string::npos) {
       start_url = kChromeVoxTutorialURL;
     } else {
-      start_url = base::StringPrintf(kGetStartedURLPattern,
-                                     current_locale.c_str());
+      const char* url = kGetStartedURLPattern;
+      if (is_owner_login_)
+        url = kGetStartedOwnerURLPattern;
+      start_url = base::StringPrintf(url, current_locale.c_str());
     }
     CommandLine::ForCurrentProcess()->AppendArg(start_url);
 
@@ -426,6 +442,11 @@ void ExistingUserController::OnProfilePrepared(Profile* profile) {
 #endif
   } else {
     LoginUtils::DoBrowserLaunch(profile, host_);
+    // Inform |login_status_consumer_| about successful login after
+    // browser launch.  Set most params to empty since they're not needed.
+    if (login_status_consumer_)
+      login_status_consumer_->OnLoginSuccess(
+          "", "", GaiaAuthConsumer::ClientLoginResult(), false, false);
     host_ = NULL;
   }
   login_display_->OnFadeOut();
@@ -462,9 +483,7 @@ void ExistingUserController::OnPasswordChangeDetected(
   // TODO(gspencer): We shouldn't have to erase stateful data when
   // doing this.  See http://crosbug.com/9115 http://crosbug.com/7792
   PasswordChangedView* view = new PasswordChangedView(this, false);
-  views::Widget* window = browser::CreateViewsWindow(GetNativeWindow(),
-                                                     gfx::Rect(),
-                                                     view);
+  views::Widget* window = browser::CreateViewsWindow(GetNativeWindow(), view);
   window->SetAlwaysOnTop(true);
   window->Show();
 
@@ -520,6 +539,8 @@ gfx::NativeWindow ExistingUserController::GetNativeWindow() const {
 }
 
 void ExistingUserController::SetStatusAreaEnabled(bool enable) {
+  if (!host_)
+    return;
   host_->SetStatusAreaEnabled(enable);
 }
 
@@ -551,10 +572,10 @@ void ExistingUserController::ShowError(int error_id,
   login_display_->ShowError(error_id, num_login_attempts_, help_topic_id);
 }
 
-void ExistingUserController::StartAutomaticFreeDiskSpaceControl() {
+void ExistingUserController::SetOwnerUserInCryptohome() {
   bool trusted_owner_available = user_settings_->RequestTrustedOwner(
       method_factory_.NewRunnableMethod(
-          &ExistingUserController::StartAutomaticFreeDiskSpaceControl));
+          &ExistingUserController::SetOwnerUserInCryptohome));
   if (!trusted_owner_available) {
     // Value of owner email is still not verified.
     // Another attempt will be invoked after verification completion.
@@ -564,7 +585,10 @@ void ExistingUserController::StartAutomaticFreeDiskSpaceControl() {
     CryptohomeLibrary* cryptohomed = CrosLibrary::Get()->GetCryptohomeLibrary();
     cryptohomed->AsyncSetOwnerUser(
         UserCrosSettingsProvider::cached_owner(), NULL);
-    cryptohomed->AsyncDoAutomaticFreeDiskSpaceControl(NULL);
+
+    // Do not invoke AsyncDoAutomaticFreeDiskSpaceControl(NULL) here
+    // so it does not delay the following mount. Cleanup will be
+    // started in Cryptohomed by timer.
   }
 }
 

@@ -19,13 +19,13 @@
 #include "content/common/page_transition_types.h"
 
 class NavigationEntry;
-class Profile;
 class SessionStorageNamespace;
 class SiteInstance;
 class TabContents;
 struct ViewHostMsg_FrameNavigate_Params;
 
 namespace content {
+class BrowserContext;
 struct LoadCommittedDetails;
 }
 
@@ -46,18 +46,18 @@ class NavigationController {
   // ---------------------------------------------------------------------------
 
   NavigationController(TabContents* tab_contents,
-                       Profile* profile,
+                       content::BrowserContext* browser_context,
                        SessionStorageNamespace* session_storage_namespace);
   ~NavigationController();
 
-  // Returns the profile for this controller. It can never be NULL.
-  Profile* profile() const {
-    return profile_;
+  // Returns the browser context for this controller. It can never be NULL.
+  content::BrowserContext* browser_context() const {
+    return browser_context_;
   }
 
-  // Sets the profile for this controller.
-  void set_profile(Profile* profile) {
-    profile_ = profile;
+  // Sets the browser context for this controller.
+  void set_browser_context(content::BrowserContext* browser_context) {
+    browser_context_ = browser_context;
   }
 
   // Initializes this NavigationController with the given saved navigations,
@@ -175,6 +175,13 @@ class NavigationController {
   // Loads the specified URL.
   void LoadURL(const GURL& url, const GURL& referrer,
                PageTransition::Type type);
+
+  // Loads the specified URL, specifying extra http headers to add to the
+  // request.  Extra headers are separated by \n.
+  void LoadURLWithHeaders(const GURL& url,
+                          const GURL& referrer,
+                          PageTransition::Type type,
+                          const std::string& extra_headers);
 
   // Loads the current page if this NavigationController was restored from
   // history and the current page has not loaded yet.
@@ -323,11 +330,14 @@ class NavigationController {
   bool IsInitialNavigation();
 
   // Creates navigation entry and translates the virtual url to a real one.
-  // Used when navigating to a new URL using LoadURL.
-  static NavigationEntry* CreateNavigationEntry(const GURL& url,
-                                                const GURL& referrer,
-                                                PageTransition::Type transition,
-                                                Profile* profile);
+  // Used when navigating to a new URL using LoadURL.  Extra headers are
+  // separated by \n.
+  static NavigationEntry* CreateNavigationEntry(
+      const GURL& url,
+      const GURL& referrer,
+      PageTransition::Type transition,
+      const std::string& extra_headers,
+      content::BrowserContext* browser_context);
 
  private:
   class RestoreHelper;
@@ -415,8 +425,8 @@ class NavigationController {
 
   // ---------------------------------------------------------------------------
 
-  // The user profile associated with this controller
-  Profile* profile_;
+  // The user browser context associated with this controller.
+  content::BrowserContext* browser_context_;
 
   // List of NavigationEntry for this tab
   typedef std::vector<linked_ptr<NavigationEntry> > NavigationEntries;

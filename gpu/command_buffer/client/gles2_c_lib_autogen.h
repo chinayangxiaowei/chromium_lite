@@ -534,8 +534,8 @@ void GLES2RegisterSharedIdsCHROMIUM(
     GLuint namespace_id, GLsizei n, const GLuint* ids) {
   gles2::GetGLContext()->RegisterSharedIdsCHROMIUM(namespace_id, n, ids);
 }
-GLboolean GLES2CommandBufferEnableCHROMIUM(const char* feature) {
-  return gles2::GetGLContext()->CommandBufferEnableCHROMIUM(feature);
+GLboolean GLES2EnableFeatureCHROMIUM(const char* feature) {
+  return gles2::GetGLContext()->EnableFeatureCHROMIUM(feature);
 }
 void* GLES2MapBufferSubDataCHROMIUM(
     GLuint target, GLintptr offset, GLsizeiptr size, GLenum access) {
@@ -565,9 +565,6 @@ void GLES2RequestExtensionCHROMIUM(const char* extension) {
 }
 void GLES2RateLimitOffscreenContextCHROMIUM() {
   gles2::GetGLContext()->RateLimitOffscreenContextCHROMIUM();
-}
-void GLES2SetSurfaceCHROMIUM(GLint surface_id) {
-  gles2::GetGLContext()->SetSurfaceCHROMIUM(surface_id);
 }
 void GLES2GetMultipleIntegervCHROMIUM(
     const GLenum* pnames, GLuint count, GLint* results, GLsizeiptr size) {

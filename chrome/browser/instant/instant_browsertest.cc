@@ -22,8 +22,8 @@
 #include "chrome/browser/ui/tab_contents/tab_contents_wrapper.h"
 #include "chrome/common/chrome_notification_types.h"
 #include "chrome/common/url_constants.h"
-#include "chrome/test/in_process_browser_test.h"
-#include "chrome/test/ui_test_utils.h"
+#include "chrome/test/base/in_process_browser_test.h"
+#include "chrome/test/base/ui_test_utils.h"
 #include "content/browser/renderer_host/render_view_host.h"
 #include "content/browser/renderer_host/render_widget_host_view.h"
 #include "content/browser/tab_contents/tab_contents.h"
@@ -316,12 +316,10 @@ class InstantTest : public InProcessBrowserTest {
 // DISABLED http://crbug.com/80118
 #if defined(OS_LINUX)
 IN_PROC_BROWSER_TEST_F(InstantTest, DISABLED_OnChangeEvent) {
-#elif defined(OS_MACOSX)
+#else
 // http://crbug.com/85387
 IN_PROC_BROWSER_TEST_F(InstantTest, FLAKY_OnChangeEvent) {
-#else
-IN_PROC_BROWSER_TEST_F(InstantTest, OnChangeEvent) {
-#endif  // OS_LINUX
+#endif  // !OS_LINUX
   ASSERT_TRUE(test_server()->Start());
   EnableInstant();
   ASSERT_NO_FATAL_FAILURE(SetupInstantProvider("search.html"));
@@ -607,6 +605,17 @@ IN_PROC_BROWSER_TEST_F(InstantTest, MAYBE_SearchServerDoesntSupportInstant) {
   EXPECT_FALSE(browser()->instant()->IsCurrent());
 }
 
+// Verifies that Instant previews aren't shown for crash URLs.
+IN_PROC_BROWSER_TEST_F(InstantTest, CrashUrlCancelsInstant) {
+  ASSERT_TRUE(test_server()->Start());
+  EnableInstant();
+  ASSERT_NO_FATAL_FAILURE(SetupInstantProvider("empty.html"));
+  ASSERT_NO_FATAL_FAILURE(FindLocationBar());
+  location_bar_->location_entry()->SetUserText(ASCIIToUTF16("chrome://crash"));
+  ASSERT_TRUE(browser()->instant());
+  EXPECT_FALSE(browser()->instant()->IsShowingInstant());
+}
+
 // Verifies transitioning from loading a non-search string to a search string
 // with the provider not supporting instant works (meaning we don't display
 // anything).
@@ -724,12 +733,10 @@ IN_PROC_BROWSER_TEST_F(InstantTest, HideOn403) {
 // DISABLED http://crbug.com/80118
 #if defined(OS_LINUX)
 IN_PROC_BROWSER_TEST_F(InstantTest, DISABLED_OnSubmitEvent) {
-#elif defined(OS_MACOSX)
+#else
 // http://crbug.com/85387
 IN_PROC_BROWSER_TEST_F(InstantTest, FLAKY_OnSubmitEvent) {
-#else
-IN_PROC_BROWSER_TEST_F(InstantTest, OnSubmitEvent) {
-#endif  // OS_LINUX
+#endif  // !OS_LINUX
   ASSERT_TRUE(test_server()->Start());
   EnableInstant();
   ASSERT_NO_FATAL_FAILURE(SetupInstantProvider("search.html"));
@@ -764,12 +771,10 @@ IN_PROC_BROWSER_TEST_F(InstantTest, OnSubmitEvent) {
 // DISABLED http://crbug.com/80118
 #if defined(OS_LINUX)
 IN_PROC_BROWSER_TEST_F(InstantTest, DISABLED_OnCancelEvent) {
-#elif defined(OS_MACOSX)
+#else
 // http://crbug.com/85387
 IN_PROC_BROWSER_TEST_F(InstantTest, FLAKY_OnCancelEvent) {
-#else
-IN_PROC_BROWSER_TEST_F(InstantTest, OnCancelEvent) {
-#endif  // OS_LINUX
+#endif  // !OS_LINUX
   ASSERT_TRUE(test_server()->Start());
   EnableInstant();
   ASSERT_NO_FATAL_FAILURE(SetupInstantProvider("search.html"));
@@ -795,24 +800,6 @@ IN_PROC_BROWSER_TEST_F(InstantTest, OnCancelEvent) {
   // Make sure the searchbox values were reset.
   EXPECT_EQ("true 0 1 1 1 d false  false 0 0",
             GetSearchStateAsString(preview_, false));
-}
-
-// Make sure about:crash is shown.
-// DISABLED http://crbug.com/80118
-#if defined(OS_LINUX)
-IN_PROC_BROWSER_TEST_F(InstantTest, DISABLED_ShowAboutCrash) {
-#else
-IN_PROC_BROWSER_TEST_F(InstantTest, ShowAboutCrash) {
-#endif  // OS_LINUX
-  ASSERT_TRUE(test_server()->Start());
-  EnableInstant();
-
-  ASSERT_TRUE(ui_test_utils::BringBrowserWindowToFront(browser()));
-
-  ASSERT_NO_FATAL_FAILURE(SetLocationBarText(chrome::kAboutCrashURL));
-
-  // If we get here it means the preview was shown. If we time out, it means the
-  // preview was never shown.
 }
 
 // DISABLED http://crbug.com/80118

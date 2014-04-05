@@ -20,9 +20,12 @@
 #include "chrome/browser/browser_main.h"
 #include "chrome/browser/browser_process_sub_thread.h"
 #include "chrome/browser/browser_trial.h"
-#include "chrome/browser/debugger/browser_list_tabcontents_provider.h"
+#include "chrome/browser/chrome_plugin_service_filter.h"
+#include "chrome/browser/component_updater/component_updater_configurator.h"
+#include "chrome/browser/component_updater/component_updater_service.h"
 #include "chrome/browser/debugger/devtools_protocol_handler.h"
-#include "chrome/browser/download/download_file_manager.h"
+#include "chrome/browser/debugger/remote_debugging_server.h"
+#include "chrome/browser/download/download_request_limiter.h"
 #include "chrome/browser/extensions/extension_event_router_forwarder.h"
 #include "chrome/browser/extensions/extension_tab_id_map.h"
 #include "chrome/browser/extensions/user_script_listener.h"
@@ -52,6 +55,7 @@
 #include "chrome/browser/status_icons/status_tray.h"
 #include "chrome/browser/tab_closeable_state_watcher.h"
 #include "chrome/browser/ui/browser_list.h"
+#include "chrome/browser/web_resource/gpu_blacklist_updater.h"
 #include "chrome/common/chrome_constants.h"
 #include "chrome/common/chrome_notification_types.h"
 #include "chrome/common/chrome_paths.h"
@@ -67,8 +71,8 @@
 #include "content/browser/browser_child_process_host.h"
 #include "content/browser/browser_thread.h"
 #include "content/browser/child_process_security_policy.h"
-#include "content/browser/debugger/devtools_http_protocol_handler.h"
 #include "content/browser/debugger/devtools_manager.h"
+#include "content/browser/download/download_file_manager.h"
 #include "content/browser/download/mhtml_generation_manager.h"
 #include "content/browser/download/save_file_manager.h"
 #include "content/browser/gpu/gpu_process_host_ui_shim.h"
@@ -77,6 +81,7 @@
 #include "content/browser/renderer_host/render_process_host.h"
 #include "content/browser/renderer_host/resource_dispatcher_host.h"
 #include "content/common/notification_service.h"
+#include "content/common/url_fetcher.h"
 #include "ipc/ipc_logging.h"
 #include "net/socket/client_socket_pool_manager.h"
 #include "net/url_request/url_request_context_getter.h"
@@ -200,14 +205,20 @@ BrowserProcessImpl::~BrowserProcessImpl() {
   // those things during teardown.
   notification_ui_manager_.reset();
 
+  // FIXME - We shouldn't need this, it's because of DefaultRequestContext! :(
+  // We need to kill off all URLFetchers using profile related
+  // URLRequestContexts. Normally that'd be covered by deleting the Profiles,
+  // but we have some URLFetchers using the DefaultRequestContext, so they need
+  // to be cancelled too. Remove this when DefaultRequestContext goes away.
+  BrowserThread::PostTask(BrowserThread::IO, FROM_HERE,
+                          NewRunnableFunction(&URLFetcher::CancelAll));
+
   // Need to clear profiles (download managers) before the io_thread_.
   profile_manager_.reset();
 
   // Debugger must be cleaned up before IO thread and NotificationService.
-  if (devtools_http_handler_.get()) {
-    devtools_http_handler_->Stop();
-    devtools_http_handler_ = NULL;
-  }
+  remote_debugging_server_.reset();
+
   if (devtools_legacy_handler_.get()) {
     devtools_legacy_handler_->Stop();
     devtools_legacy_handler_ = NULL;
@@ -312,7 +323,7 @@ unsigned int BrowserProcessImpl::ReleaseModule() {
         FROM_HERE,
         NewRunnableFunction(&base::ThreadRestrictions::SetIOAllowed, true));
     MessageLoop::current()->PostTask(
-        FROM_HERE, NewRunnableFunction(DidEndMainMessageLoop));
+        FROM_HERE, NewRunnableFunction(content::DidEndMainMessageLoop));
     MessageLoop::current()->Quit();
   }
   return module_ref_count_;
@@ -521,15 +532,13 @@ AutomationProviderList* BrowserProcessImpl::InitAutomationProviderList() {
 }
 
 void BrowserProcessImpl::InitDevToolsHttpProtocolHandler(
+    Profile* profile,
     const std::string& ip,
     int port,
     const std::string& frontend_url) {
   DCHECK(CalledOnValidThread());
-  devtools_http_handler_ =
-      DevToolsHttpProtocolHandler::Start(ip,
-                                         port,
-                                         frontend_url,
-                                         new BrowserListTabContentsProvider());
+  remote_debugging_server_.reset(
+      new RemoteDebuggingServer(profile, ip, port, frontend_url));
 }
 
 void BrowserProcessImpl::InitDevToolsLegacyProtocolHandler(int port) {
@@ -595,6 +604,13 @@ DownloadStatusUpdater* BrowserProcessImpl::download_status_updater() {
   return &download_status_updater_;
 }
 
+DownloadRequestLimiter* BrowserProcessImpl::download_request_limiter() {
+  DCHECK(CalledOnValidThread());
+  if (!download_request_limiter_)
+    download_request_limiter_ = new DownloadRequestLimiter();
+  return download_request_limiter_;
+}
+
 TabCloseableStateWatcher* BrowserProcessImpl::tab_closeable_state_watcher() {
   DCHECK(CalledOnValidThread());
   if (!tab_closeable_state_watcher_.get())
@@ -656,7 +672,7 @@ void BrowserProcessImpl::Observe(int type,
 
 #if (defined(OS_WIN) || defined(OS_LINUX)) && !defined(OS_CHROMEOS)
 void BrowserProcessImpl::StartAutoupdateTimer() {
-  autoupdate_timer_.Start(
+  autoupdate_timer_.Start(FROM_HERE,
       base::TimeDelta::FromHours(kUpdateCheckIntervalHours),
       this,
       &BrowserProcessImpl::OnAutoupdateTimer);
@@ -679,6 +695,30 @@ MHTMLGenerationManager* BrowserProcessImpl::mhtml_generation_manager() {
     mhtml_generation_manager_ = new MHTMLGenerationManager();
 
   return mhtml_generation_manager_.get();
+}
+
+GpuBlacklistUpdater* BrowserProcessImpl::gpu_blacklist_updater() {
+  if (!gpu_blacklist_updater_.get())
+    gpu_blacklist_updater_ = new GpuBlacklistUpdater();
+
+  return gpu_blacklist_updater_.get();
+}
+
+ComponentUpdateService* BrowserProcessImpl::component_updater() {
+#if defined(OS_CHROMEOS)
+  return NULL;
+#else
+  if (!component_updater_.get()) {
+    ComponentUpdateService::Configurator* configurator =
+        MakeChromeComponentUpdaterConfigurator(
+            CommandLine::ForCurrentProcess(),
+            io_thread()->system_url_request_context_getter());
+    // Creating the component updater does not do anything, components
+    // need to be registered and Start() needs to be called.
+    component_updater_.reset(ComponentUpdateServiceFactory(configurator));
+  }
+  return component_updater_.get();
+#endif
 }
 
 void BrowserProcessImpl::CreateResourceDispatcherHost() {
@@ -719,7 +759,9 @@ void BrowserProcessImpl::CreateIOThread() {
   // it is predominantly used from the io thread, but must be created
   // on the main thread. The service ctor is inexpensive and does not
   // invoke the io_thread() accessor.
-  PluginService::GetInstance();
+  PluginService* plugin_service = PluginService::GetInstance();
+  plugin_service->set_filter(ChromePluginServiceFilter::GetInstance());
+  plugin_service->StartWatchingPlugins();
 
   // Add the Chrome specific plugins.
   chrome::RegisterInternalDefaultPlugin();
@@ -835,7 +877,9 @@ void BrowserProcessImpl::CreateProfileManager() {
   DCHECK(!created_profile_manager_ && profile_manager_.get() == NULL);
   created_profile_manager_ = true;
 
-  profile_manager_.reset(new ProfileManager());
+  FilePath user_data_dir;
+  PathService::Get(chrome::DIR_USER_DATA, &user_data_dir);
+  profile_manager_.reset(new ProfileManager(user_data_dir));
 }
 
 void BrowserProcessImpl::CreateLocalState() {
@@ -899,7 +943,7 @@ void BrowserProcessImpl::CreateIconManager() {
 void BrowserProcessImpl::CreateDevToolsManager() {
   DCHECK(devtools_manager_.get() == NULL);
   created_devtools_manager_ = true;
-  devtools_manager_ = new DevToolsManager();
+  devtools_manager_.reset(new DevToolsManager());
 }
 
 void BrowserProcessImpl::CreateSidebarManager() {

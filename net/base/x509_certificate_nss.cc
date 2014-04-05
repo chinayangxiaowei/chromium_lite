@@ -168,19 +168,27 @@ int MapCertErrorToCertStatus(int err) {
 // Saves some information about the certificate chain cert_list in
 // *verify_result.  The caller MUST initialize *verify_result before calling
 // this function.
-// Note that cert_list[0] is the end entity certificate and cert_list doesn't
-// contain the root CA certificate.
+// Note that cert_list[0] is the end entity certificate.
 void GetCertChainInfo(CERTCertList* cert_list,
+                      CERTCertificate* root_cert,
                       CertVerifyResult* verify_result) {
   // NOTE: Using a NSS library before 3.12.3.1 will crash below.  To see the
   // NSS version currently in use:
   // 1. use ldd on the chrome executable for NSS's location (ie. libnss3.so*)
   // 2. use ident libnss3.so* for the library's version
   DCHECK(cert_list);
+
+  CERTCertificate* verified_cert = NULL;
+  std::vector<CERTCertificate*> verified_chain;
   int i = 0;
   for (CERTCertListNode* node = CERT_LIST_HEAD(cert_list);
        !CERT_LIST_END(node, cert_list);
-       node = CERT_LIST_NEXT(node), i++) {
+       node = CERT_LIST_NEXT(node), ++i) {
+    if (i == 0) {
+      verified_cert = node->cert;
+    } else {
+      verified_chain.push_back(node->cert);
+    }
     SECAlgorithmID& signature = node->cert->signature;
     SECOidTag oid_tag = SECOID_FindOIDTag(&signature.algorithm);
     switch (oid_tag) {
@@ -201,6 +209,11 @@ void GetCertChainInfo(CERTCertList* cert_list,
         break;
     }
   }
+
+  if (root_cert)
+    verified_chain.push_back(root_cert);
+  verify_result->verified_cert =
+      X509Certificate::CreateFromHandle(verified_cert, verified_chain);
 }
 
 // IsKnownRoot returns true if the given certificate is one that we believe
@@ -601,6 +614,7 @@ void X509Certificate::Initialize() {
   ParseDate(&cert_handle_->validity.notAfter, &valid_expiry_);
 
   fingerprint_ = CalculateFingerprint(cert_handle_);
+  chain_fingerprint_ = CalculateChainFingerprint();
 
   serial_number_ = std::string(
       reinterpret_cast<char*>(cert_handle_->serialNumber.data),
@@ -811,6 +825,7 @@ int X509Certificate::VerifyInternal(const std::string& hostname,
   }
 
   GetCertChainInfo(cvout[cvout_cert_list_index].value.pointer.chain,
+                   cvout[cvout_trust_anchor_index].value.pointer.cert,
                    verify_result);
   if (IsCertStatusError(verify_result->cert_status))
     return MapCertStatusToNetError(verify_result->cert_status);
@@ -977,6 +992,26 @@ SHA1Fingerprint X509Certificate::CalculateFingerprint(
   SECStatus rv = HASH_HashBuf(HASH_AlgSHA1, sha1.data,
                               cert->derCert.data, cert->derCert.len);
   DCHECK_EQ(SECSuccess, rv);
+
+  return sha1;
+}
+
+SHA1Fingerprint X509Certificate::CalculateChainFingerprint() const {
+  SHA1Fingerprint sha1;
+  memset(sha1.data, 0, sizeof(sha1.data));
+
+  HASHContext* sha1_ctx = HASH_Create(HASH_AlgSHA1);
+  if (!sha1_ctx)
+    return sha1;
+  HASH_Begin(sha1_ctx);
+  HASH_Update(sha1_ctx, cert_handle_->derCert.data, cert_handle_->derCert.len);
+  for (size_t i = 0; i < intermediate_ca_certs_.size(); ++i) {
+    CERTCertificate* ca_cert = intermediate_ca_certs_[i];
+    HASH_Update(sha1_ctx, ca_cert->derCert.data, ca_cert->derCert.len);
+  }
+  unsigned int result_len;
+  HASH_End(sha1_ctx, sha1.data, &result_len, HASH_ResultLenContext(sha1_ctx));
+  HASH_Destroy(sha1_ctx);
 
   return sha1;
 }

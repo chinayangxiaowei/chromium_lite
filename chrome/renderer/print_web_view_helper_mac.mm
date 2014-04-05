@@ -12,6 +12,7 @@
 #include "chrome/common/print_messages.h"
 #include "printing/metafile.h"
 #include "printing/metafile_impl.h"
+#include "printing/page_size_margins.h"
 #include "third_party/WebKit/Source/WebKit/chromium/public/WebFrame.h"
 
 #if defined(USE_SKIA)
@@ -66,18 +67,30 @@ bool PrintWebViewHelper::RenderPreviewPage(int page_number) {
                          printParams.printable_size.width(),
                          printParams.printable_size.height());
 
+  scoped_ptr<printing::Metafile> draft_metafile;
   printing::Metafile* initial_render_metafile =
       print_preview_context_.metafile();
-  scoped_ptr<printing::PreviewMetafile> draft_metafile;
-#if !defined(USE_SKIA)
-  if (print_preview_context_.IsModifiable()) {
-    draft_metafile.reset(new printing::PreviewMetafile);
+
+#if defined(USE_SKIA)
+  bool render_to_draft = print_preview_context_.IsModifiable() &&
+                         is_print_ready_metafile_sent_;
+#else
+  // If the page needs to be in both draft metafile and print ready metafile,
+  // we should always render to the draft metafile first and then copy that
+  // into the print ready metafile because CG does not allow us to do it in
+  // the other order.
+  bool render_to_draft = print_preview_context_.IsModifiable() &&
+                         print_preview_context_.generate_draft_pages();
+#endif
+
+  if (render_to_draft) {
+    draft_metafile.reset(new printing::PreviewMetafile());
     if (!draft_metafile->Init()) {
+      LOG(ERROR) << "Draft PreviewMetafile Init failed";
       return false;
     }
     initial_render_metafile = draft_metafile.get();
   }
-#endif
 
   base::TimeTicks begin_time = base::TimeTicks::Now();
   RenderPage(printParams.page_size, content_area, scale_factor, page_number,
@@ -85,38 +98,44 @@ bool PrintWebViewHelper::RenderPreviewPage(int page_number) {
   print_preview_context_.RenderedPreviewPage(
       base::TimeTicks::Now() - begin_time);
 
-  if (print_preview_context_.IsModifiable()) {
-#if defined(USE_SKIA)
-    DCHECK(!draft_metafile.get());
-    draft_metafile.reset(reinterpret_cast<printing::PreviewMetafile*>(
-        print_preview_context_.metafile())->GetMetafileForCurrentPage());
-#else
+  if (draft_metafile.get()) {
     draft_metafile->FinishDocument();
-
-    // With CG, we rendered into a new metafile so we could get it as a draft
-    // document.  Now we need to add it to complete document.  But the document
-    // has already been scaled and adjusted for margins, so do a 1:1 drawing.
-    printing::Metafile* complete_metafile = print_preview_context_.metafile();
-    bool success = complete_metafile->StartPage(
-        printParams.page_size, gfx::Rect(printParams.page_size), 1.0);
-    DCHECK(success);
-    // StartPage unconditionally flips the content over, flip it back since it
-    // was already flipped in |draft_metafile|.
-    CGContextTranslateCTM(complete_metafile->context(), 0,
-                          printParams.page_size.height());
-    CGContextScaleCTM(complete_metafile->context(), 1.0, -1.0);
-
-    draft_metafile->RenderPage(1,
-                               complete_metafile->context(),
-                               draft_metafile->GetPageBounds(1).ToCGRect(),
-                               false /* shrink_to_fit */,
-                               false /* stretch_to_fit */,
-                               true  /* center_horizontally */,
-                               true  /* center_vertically */);
-    complete_metafile->FinishPage();
+#if !defined(USE_SKIA)
+    if (!is_print_ready_metafile_sent_) {
+      // With CG, we rendered into a new metafile so we could get it as a draft
+      // document.  Now we need to add it to print ready document.  But the
+      // document has already been scaled and adjusted for margins, so do a 1:1
+      // drawing.
+      printing::Metafile* print_ready_metafile =
+          print_preview_context_.metafile();
+      bool success = print_ready_metafile->StartPage(
+          printParams.page_size, gfx::Rect(printParams.page_size), 1.0);
+      DCHECK(success);
+      // StartPage unconditionally flips the content over, flip it back since it
+      // was already flipped in |draft_metafile|.
+      CGContextTranslateCTM(print_ready_metafile->context(), 0,
+                            printParams.page_size.height());
+      CGContextScaleCTM(print_ready_metafile->context(), 1.0, -1.0);
+      draft_metafile->RenderPage(1,
+                                 print_ready_metafile->context(),
+                                 draft_metafile->GetPageBounds(1).ToCGRect(),
+                                 false /* shrink_to_fit */,
+                                 false /* stretch_to_fit */,
+                                 true /* center_horizontally */,
+                                 true /* center_vertically */);
+      print_ready_metafile->FinishPage();
+    }
+#endif
+  } else {
+#if defined(USE_SKIA)
+    if (print_preview_context_.IsModifiable() &&
+        print_preview_context_.generate_draft_pages()) {
+      DCHECK(!draft_metafile.get());
+      draft_metafile.reset(
+          print_preview_context_.metafile()->GetMetafileForCurrentPage());
+    }
 #endif
   }
-
   return PreviewPageRendered(page_number, draft_metafile.get());
 }
 
@@ -134,8 +153,10 @@ void PrintWebViewHelper::RenderPage(
 
     SkRefPtr<skia::VectorCanvas> canvas = new skia::VectorCanvas(device);
     canvas->unref();  // SkRefPtr and new both took a reference.
-    WebKit::WebCanvas* canvasPtr = canvas.get();
-    printing::MetafileSkiaWrapper::SetMetafileOnCanvas(canvasPtr, metafile);
+    WebKit::WebCanvas* canvas_ptr = canvas.get();
+    printing::MetafileSkiaWrapper::SetMetafileOnCanvas(canvas.get(), metafile);
+    printing::MetafileSkiaWrapper::SetDraftMode(canvas.get(),
+                                                is_print_ready_metafile_sent_);
 #else
     bool success = metafile->StartPage(page_size, content_area, scale_factor);
     DCHECK(success);
@@ -144,9 +165,39 @@ void PrintWebViewHelper::RenderPage(
     // certain that there are no lingering references.
     base::mac::ScopedNSAutoreleasePool pool;
     CGContextRef cgContext = metafile->context();
-    CGContextRef canvasPtr = cgContext;
+    CGContextRef canvas_ptr = cgContext;
 #endif
-    frame->printPage(page_number, canvasPtr);
+
+    printing::PageSizeMargins page_layout_in_points;
+    GetPageSizeAndMarginsInPoints(frame, page_number,
+                                  print_pages_params_->params,
+                                  &page_layout_in_points);
+
+#if !defined(USE_SKIA)
+    // For CoreGraphics, print in the margins before printing in the content
+    // area so that we don't spill over. Webkit draws a white background in the
+    // content area and this acts as a clip.
+    // TODO(aayushkumar): Combine the calls to PrintHeaderAndFooter once we
+    // can draw in the margins safely in Skia in any order.
+    if (print_pages_params_->params.display_header_footer) {
+      PrintHeaderAndFooter(canvas_ptr, page_number + 1,
+                           print_preview_context_.total_page_count(),
+                           scale_factor, page_layout_in_points,
+                           *header_footer_info_);
+    }
+#endif  // !USE_SKIA
+
+    frame->printPage(page_number, canvas_ptr);
+
+#if defined(USE_SKIA)
+    if (print_pages_params_->params.display_header_footer) {
+      // |page_number| is 0-based, so 1 is added.
+      PrintHeaderAndFooter(canvas_ptr, page_number + 1,
+                           print_preview_context_.total_page_count(),
+                           scale_factor, page_layout_in_points,
+                           *header_footer_info_);
+    }
+#endif  // defined(USE_SKIA)
   }
 
   // Done printing. Close the device context to retrieve the compiled metafile.

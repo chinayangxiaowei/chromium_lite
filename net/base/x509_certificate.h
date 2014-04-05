@@ -15,7 +15,7 @@
 #include "base/memory/ref_counted.h"
 #include "base/string_piece.h"
 #include "base/time.h"
-#include "net/base/net_api.h"
+#include "net/base/net_export.h"
 #include "net/base/x509_cert_types.h"
 
 #if defined(OS_WIN)
@@ -52,7 +52,7 @@ typedef std::vector<scoped_refptr<X509Certificate> > CertificateList;
 // particular identity or end-entity certificate, such as an SSL server
 // identity or an SSL client certificate, and zero or more intermediate
 // certificates that may be used to build a path to a root certificate.
-class NET_API X509Certificate
+class NET_EXPORT X509Certificate
     : public base::RefCountedThreadSafe<X509Certificate> {
  public:
   // A handle to the certificate object in the underlying crypto library.
@@ -74,7 +74,7 @@ class NET_API X509Certificate
   typedef std::vector<OSCertHandle> OSCertHandles;
 
   // Predicate functor used in maps when X509Certificate is used as the key.
-  class NET_API LessThan {
+  class NET_EXPORT LessThan {
    public:
     bool operator() (X509Certificate* lhs,  X509Certificate* rhs) const;
   };
@@ -209,6 +209,11 @@ class NET_API X509Certificate
   // The fingerprint of this certificate.
   const SHA1Fingerprint& fingerprint() const { return fingerprint_; }
 
+  // The fingerprint of this certificate and its intermediate CA certificates.
+  const SHA1Fingerprint& chain_fingerprint() const {
+    return chain_fingerprint_;
+  }
+
   // Gets the DNS names in the certificate.  Pursuant to RFC 2818, Section 3.1
   // Server Identity, if the certificate has a subjectAltName extension of
   // type dNSName, this method gets the DNS names in that extension.
@@ -255,15 +260,6 @@ class NET_API X509Certificate
   // |*policy| and ownership transferred to the caller.
   static OSStatus CreateSSLClientPolicy(SecPolicyRef* policy);
 
-  // Creates a security policy for certificates used by SSL servers.
-  // |hostname| is an optionally-supplied string indicating the name to verify
-  // the server certificate as; if it is empty, no hostname verification will
-  // happen.
-  // If a policy is successfully created, it will be stored in |*policy| and
-  // ownership transferred to the caller.
-  static OSStatus CreateSSLServerPolicy(const std::string& hostname,
-                                        SecPolicyRef* policy);
-
   // Creates a security policy for basic X.509 validation. If the policy is
   // successfully created, it will be stored in |*policy| and ownership
   // transferred to the caller.
@@ -302,6 +298,12 @@ class NET_API X509Certificate
   //    this store so that we can close the system store when we finish
   //    searching for client certificates.
   static HCERTSTORE cert_store();
+#endif
+
+#if defined(OS_ANDROID)
+  // |chain_bytes| will contain the chain (including this certificate) encoded
+  // using GetChainDEREncodedBytes below.
+  void GetChainDEREncodedBytes(std::vector<std::string>* chain_bytes) const;
 #endif
 
 #if defined(USE_OPENSSL)
@@ -362,6 +364,10 @@ class NET_API X509Certificate
   // Calculates the SHA-1 fingerprint of the certificate.  Returns an empty
   // (all zero) fingerprint on failure.
   static SHA1Fingerprint CalculateFingerprint(OSCertHandle cert_handle);
+
+  // Calculates the SHA-1 fingerprint of the certificate and its intermediate
+  // CA certificates.  Returns an empty (all zero) fingerprint on failure.
+  SHA1Fingerprint CalculateChainFingerprint() const;
 
  private:
   friend class base::RefCountedThreadSafe<X509Certificate>;
@@ -468,6 +474,9 @@ class NET_API X509Certificate
 
   // The fingerprint of this certificate.
   SHA1Fingerprint fingerprint_;
+
+  // The fingerprint of this certificate and its intermediate CA certificates.
+  SHA1Fingerprint chain_fingerprint_;
 
   // The serial number of this certificate, DER encoded.
   std::string serial_number_;

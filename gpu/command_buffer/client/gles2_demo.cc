@@ -26,6 +26,7 @@
 #include "gpu/command_buffer/client/gles2_lib.h"
 #include "gpu/command_buffer/client/gles2_demo_c.h"
 #include "gpu/command_buffer/client/gles2_demo_cc.h"
+#include "ui/gfx/gl/gl_implementation.h"
 #include "ui/gfx/gl/gl_surface.h"
 
 using base::SharedMemory;
@@ -53,14 +54,19 @@ GLES2Demo::GLES2Demo() {
 }
 
 bool GLES2Demo::Setup(void* hwnd, int32 size) {
+#if defined(OS_WIN)
+  InitializeGLBindings(gfx::kGLImplementationEGLGLES2);
+#else
+  InitializeGLBindings(gfx::kGLImplementationDesktopGL);
+#endif
+
   scoped_ptr<CommandBufferService> command_buffer(new CommandBufferService);
   if (!command_buffer->Initialize(size))
     return NULL;
 
   gpu::gles2::ContextGroup::Ref group(new gpu::gles2::ContextGroup(true));
   GpuScheduler* gpu_scheduler = GpuScheduler::Create(command_buffer.get(),
-                                                     NULL,
-                                                     NULL);
+                                                     group.get());
   if (!gpu_scheduler->Initialize(reinterpret_cast<HWND>(hwnd),
                                  gfx::Size(),
                                  false,

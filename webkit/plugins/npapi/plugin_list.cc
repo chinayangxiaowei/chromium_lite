@@ -64,7 +64,8 @@ static const VersionRangeDefinition kQuicktimeVersionRange[] = {
 };
 static const VersionRangeDefinition kJavaVersionRange[] = {
     { "0", "13.0", "12.8.0", true },  // Leopard
-    { "13.0", "14.0", "13.4.0", true }  // Snow Leopard
+    { "13.0", "14.0", "13.5.0", true },  // Snow Leopard
+    { "14.0", "", "14.0.3", true }  // Lion
 };
 static const VersionRangeDefinition kFlip4MacVersionRange[] = {
     { "", "", "2.2.1", false }
@@ -93,7 +94,8 @@ static const VersionRangeDefinition kQuicktimeVersionRange[] = {
     { "", "", "7.6.9", true }
 };
 static const VersionRangeDefinition kJavaVersionRange[] = {
-    { "0", "7", "6.0.260", true }  // "260" is not a typo.
+    { "0", "7", "6.0.290", true },  // "290" is not a typo.
+    { "7", "", "10.1", true }  // JDK7u1 identifies itself as 10.1
 };
 // This is up to date with
 // http://www.adobe.com/support/security/bulletins/apsb11-08.html
@@ -146,12 +148,14 @@ static const PluginGroupDefinition kGroupDefinitions[] = { };
 
 #else  // Most importantly, covers desktop Linux.
 static const VersionRangeDefinition kJavaVersionRange[] = {
-    { "0", "1.7", "1.6.0.26", true }
+    { "0", "1.7", "1.6.0.29", true },
+    { "1.7", "", "1.7.0.1", true }
 };
 
 static const VersionRangeDefinition kRedhatIcedTeaVersionRange[] = {
-    { "0", "1.9", "1.8.8", true },
-    { "1.9", "1.10", "1.9.8", true },
+    { "0", "1.9", "1.8.10", true },
+    { "1.9", "1.10", "1.9.10", true },
+    { "1.10", "", "1.10.4", true }
 };
 
 static const PluginGroupDefinition kGroupDefinitions[] = {
@@ -210,7 +214,7 @@ void PluginList::AddExtraPluginDir(const FilePath& plugin_dir) {
 #endif
 }
 
-void PluginList::RegisterInternalPlugin(const WebPluginInfo& info) {
+void PluginList::RegisterInternalPlugin(const webkit::WebPluginInfo& info) {
   PluginEntryPoints entry_points = {0};
   InternalPlugin plugin = { info, entry_points };
 
@@ -230,9 +234,9 @@ void PluginList::RegisterInternalPlugin(const FilePath& filename,
   plugin.info.name = ASCIIToUTF16(name);
   plugin.info.version = ASCIIToUTF16("1");
   plugin.info.desc = ASCIIToUTF16(description);
-  plugin.info.enabled = WebPluginInfo::USER_ENABLED_POLICY_UNMANAGED;
+  plugin.info.enabled = webkit::WebPluginInfo::USER_ENABLED_POLICY_UNMANAGED;
 
-  WebPluginMimeType mime_type;
+  webkit::WebPluginMimeType mime_type;
   mime_type.mime_type = mime_type_str;
   plugin.info.mime_types.push_back(mime_type);
 
@@ -256,7 +260,7 @@ void PluginList::UnregisterInternalPlugin(const FilePath& path) {
 }
 
 bool PluginList::ReadPluginInfo(const FilePath& filename,
-                                WebPluginInfo* info,
+                                webkit::WebPluginInfo* info,
                                 const PluginEntryPoints** entry_points) {
   {
     base::AutoLock lock(lock_);
@@ -280,7 +284,7 @@ bool PluginList::ParseMimeTypes(
     const std::string& mime_types_str,
     const std::string& file_extensions_str,
     const string16& mime_type_descriptions_str,
-    std::vector<WebPluginMimeType>* parsed_mime_types) {
+    std::vector<webkit::WebPluginMimeType>* parsed_mime_types) {
   std::vector<std::string> mime_types, file_extensions;
   std::vector<string16> descriptions;
   base::SplitString(mime_types_str, '|', &mime_types);
@@ -321,7 +325,6 @@ bool PluginList::ParseMimeTypes(
 
 PluginList::PluginList()
     : plugins_need_refresh_(true),
-      disable_outdated_plugins_(false),
       group_definitions_(kGroupDefinitions),
       num_group_definitions_(ARRAYSIZE_UNSAFE(kGroupDefinitions)),
       default_plugin_enabled_(false) {
@@ -332,7 +335,6 @@ PluginList::PluginList()
 PluginList::PluginList(const PluginGroupDefinition* definitions,
                        size_t num_definitions)
     : plugins_need_refresh_(true),
-      disable_outdated_plugins_(false),
       group_definitions_(definitions),
       num_group_definitions_(num_definitions),
       default_plugin_enabled_(false) {
@@ -397,10 +399,10 @@ void PluginList::LoadPluginsInternal(ScopedVector<PluginGroup>* plugin_groups) {
     LoadPlugin(FilePath(kDefaultPluginLibraryName), plugin_groups);
 }
 
-void PluginList::LoadPlugins(bool refresh) {
+void PluginList::LoadPlugins() {
   {
     base::AutoLock lock(lock_);
-    if (!refresh && !plugins_need_refresh_)
+    if (!plugins_need_refresh_)
       return;
   }
 
@@ -411,9 +413,9 @@ void PluginList::LoadPlugins(bool refresh) {
 
   base::AutoLock lock(lock_);
   // Grab all plugins that were found before to copy enabled statuses.
-  std::vector<WebPluginInfo> old_plugins;
+  std::vector<webkit::WebPluginInfo> old_plugins;
   for (size_t i = 0; i < plugin_groups_.size(); ++i) {
-    const std::vector<WebPluginInfo>& gr_plugins =
+    const std::vector<webkit::WebPluginInfo>& gr_plugins =
         plugin_groups_[i]->web_plugins_info();
     old_plugins.insert(old_plugins.end(), gr_plugins.begin(), gr_plugins.end());
   }
@@ -422,7 +424,8 @@ void PluginList::LoadPlugins(bool refresh) {
     PluginGroup* group = new_plugin_groups[i];
     string16 group_name = group->GetGroupName();
 
-    std::vector<WebPluginInfo>& gr_plugins = group->GetPluginsContainer();
+    std::vector<webkit::WebPluginInfo>& gr_plugins =
+        group->GetPluginsContainer();
     for (size_t j = 0; j < gr_plugins.size(); ++j) {
       int plugin_found = -1;
       for (size_t k = 0; k < old_plugins.size(); ++k) {
@@ -447,8 +450,6 @@ void PluginList::LoadPlugins(bool refresh) {
     }
 
     group->EnforceGroupPolicy();
-    if (disable_outdated_plugins_)
-      group->DisableOutdatedPlugins();
   }
   // We flush the list of prematurely disabled plugins after the load has
   // finished. If for some reason a plugin reappears on a second load it is
@@ -482,7 +483,7 @@ void PluginList::LoadPlugin(const FilePath& path,
       // WebKit hands to the Plugin before it tries
       // to handle mimeTypes on its own.
       const std::string &mime_type = plugin_info.mime_types[i].mime_type;
-      if (mime_type == "*" )
+      if (mime_type == "*")
         return;
     }
   }
@@ -491,30 +492,13 @@ void PluginList::LoadPlugin(const FilePath& path,
   AddToPluginGroups(plugin_info, plugin_groups);
 }
 
-void PluginList::GetPlugins(bool refresh, std::vector<WebPluginInfo>* plugins) {
-  LoadPlugins(refresh);
-
+void PluginList::GetPlugins(std::vector<WebPluginInfo>* plugins) {
+  LoadPlugins();
   base::AutoLock lock(lock_);
   for (size_t i = 0; i < plugin_groups_.size(); ++i) {
-    const std::vector<WebPluginInfo>& gr_plugins =
+    const std::vector<webkit::WebPluginInfo>& gr_plugins =
         plugin_groups_[i]->web_plugins_info();
     plugins->insert(plugins->end(), gr_plugins.begin(), gr_plugins.end());
-  }
-}
-
-void PluginList::GetEnabledPlugins(bool refresh,
-                                   std::vector<WebPluginInfo>* plugins) {
-  LoadPlugins(refresh);
-
-  plugins->clear();
-  base::AutoLock lock(lock_);
-  for (size_t i = 0; i < plugin_groups_.size(); ++i) {
-    const std::vector<WebPluginInfo>& gr_plugins =
-        plugin_groups_[i]->web_plugins_info();
-    for (size_t i = 0; i < gr_plugins.size(); ++i) {
-      if (IsPluginEnabled(gr_plugins[i]))
-        plugins->push_back(gr_plugins[i]);
-    }
   }
 }
 
@@ -522,26 +506,29 @@ void PluginList::GetPluginInfoArray(
     const GURL& url,
     const std::string& mime_type,
     bool allow_wildcard,
-    std::vector<WebPluginInfo>* info,
+    bool* use_stale,
+    std::vector<webkit::WebPluginInfo>* info,
     std::vector<std::string>* actual_mime_types) {
   DCHECK(mime_type == StringToLowerASCII(mime_type));
   DCHECK(info);
 
-  LoadPlugins(false);
+  if (!use_stale)
+    LoadPlugins();
   base::AutoLock lock(lock_);
+  if (use_stale)
+    *use_stale = plugins_need_refresh_;
   info->clear();
   if (actual_mime_types)
     actual_mime_types->clear();
 
   std::set<FilePath> visited_plugins;
 
-  // Add in enabled plugins by mime type.
+  // Add in plugins by mime type.
   for (size_t i = 0; i < plugin_groups_.size(); ++i) {
-    const std::vector<WebPluginInfo>& plugins =
+    const std::vector<webkit::WebPluginInfo>& plugins =
         plugin_groups_[i]->web_plugins_info();
     for (size_t i = 0; i < plugins.size(); ++i) {
-      if (IsPluginEnabled(plugins[i]) && SupportsType(plugins[i],
-                                             mime_type, allow_wildcard)) {
+      if (SupportsType(plugins[i], mime_type, allow_wildcard)) {
         FilePath path = plugins[i].path;
         if (path.value() != kDefaultPluginLibraryName &&
             visited_plugins.insert(path).second) {
@@ -553,18 +540,17 @@ void PluginList::GetPluginInfoArray(
     }
   }
 
-  // Add in enabled plugins by url.
+  // Add in plugins by url.
   std::string path = url.path();
   std::string::size_type last_dot = path.rfind('.');
   if (last_dot != std::string::npos) {
     std::string extension = StringToLowerASCII(std::string(path, last_dot+1));
     std::string actual_mime_type;
     for (size_t i = 0; i < plugin_groups_.size(); ++i) {
-      const std::vector<WebPluginInfo>& plugins =
+      const std::vector<webkit::WebPluginInfo>& plugins =
           plugin_groups_[i]->web_plugins_info();
       for (size_t i = 0; i < plugins.size(); ++i) {
-        if (IsPluginEnabled(plugins[i]) &&
-            SupportsExtension(plugins[i], extension, &actual_mime_type)) {
+        if (SupportsExtension(plugins[i], extension, &actual_mime_type)) {
           FilePath path = plugins[i].path;
           if (path.value() != kDefaultPluginLibraryName &&
               visited_plugins.insert(path).second) {
@@ -572,24 +558,6 @@ void PluginList::GetPluginInfoArray(
             if (actual_mime_types)
               actual_mime_types->push_back(actual_mime_type);
           }
-        }
-      }
-    }
-  }
-
-  // Add in disabled plugins by mime type.
-  for (size_t i = 0; i < plugin_groups_.size(); ++i) {
-    const std::vector<WebPluginInfo>& plugins =
-        plugin_groups_[i]->web_plugins_info();
-    for (size_t i = 0; i < plugins.size(); ++i) {
-      if (!IsPluginEnabled(plugins[i]) &&
-          SupportsType(plugins[i], mime_type, allow_wildcard)) {
-        FilePath path = plugins[i].path;
-        if (path.value() != kDefaultPluginLibraryName &&
-            visited_plugins.insert(path).second) {
-          info->push_back(plugins[i]);
-          if (actual_mime_types)
-            actual_mime_types->push_back(mime_type);
         }
       }
     }
@@ -606,7 +574,7 @@ void PluginList::GetPluginInfoArray(
         kDefaultPluginLibraryName) == 0) {
 #endif
       DCHECK_NE(0U, plugin_groups_[i]->web_plugins_info().size());
-      const WebPluginInfo& default_info =
+      const webkit::WebPluginInfo& default_info =
           plugin_groups_[i]->web_plugins_info()[0];
       if (SupportsType(default_info, mime_type, allow_wildcard)) {
         info->push_back(default_info);
@@ -617,41 +585,12 @@ void PluginList::GetPluginInfoArray(
   }
 }
 
-bool PluginList::GetPluginInfo(const GURL& url,
-                               const std::string& mime_type,
-                               bool allow_wildcard,
-                               WebPluginInfo* info,
-                               std::string* actual_mime_type) {
-  DCHECK(info);
-  std::vector<WebPluginInfo> info_list;
-
-  // GetPluginInfoArray has slightly less work to do if we can pass
-  // NULL for the mime type list...
-  if (actual_mime_type) {
-    std::vector<std::string> mime_type_list;
-    GetPluginInfoArray(
-        url, mime_type, allow_wildcard, &info_list, &mime_type_list);
-    if (!info_list.empty()) {
-      *info = info_list[0];
-      *actual_mime_type = mime_type_list[0];
-      return true;
-    }
-  } else {
-    GetPluginInfoArray(url, mime_type, allow_wildcard, &info_list, NULL);
-    if (!info_list.empty()) {
-      *info = info_list[0];
-      return true;
-    }
-  }
-  return false;
-}
-
 bool PluginList::GetPluginInfoByPath(const FilePath& plugin_path,
-                                     WebPluginInfo* info) {
-  LoadPlugins(false);
+                                     webkit::WebPluginInfo* info) {
+  LoadPlugins();
   base::AutoLock lock(lock_);
   for (size_t i = 0; i < plugin_groups_.size(); ++i) {
-    const std::vector<WebPluginInfo>& plugins =
+    const std::vector<webkit::WebPluginInfo>& plugins =
         plugin_groups_[i]->web_plugins_info();
     for (size_t i = 0; i < plugins.size(); ++i) {
       if (plugins[i].path == plugin_path) {
@@ -668,7 +607,7 @@ void PluginList::GetPluginGroups(
     bool load_if_necessary,
     std::vector<PluginGroup>* plugin_groups) {
   if (load_if_necessary)
-    LoadPlugins(false);
+    LoadPlugins();
   base::AutoLock lock(lock_);
   plugin_groups->clear();
   for (size_t i = 0; i < plugin_groups_.size(); ++i) {
@@ -680,7 +619,7 @@ void PluginList::GetPluginGroups(
 }
 
 const PluginGroup* PluginList::GetPluginGroup(
-    const WebPluginInfo& web_plugin_info) {
+    const webkit::WebPluginInfo& web_plugin_info) {
   base::AutoLock lock(lock_);
   return AddToPluginGroups(web_plugin_info, &plugin_groups_);
 }
@@ -694,7 +633,7 @@ string16 PluginList::GetPluginGroupName(const std::string& identifier) {
 }
 
 std::string PluginList::GetPluginGroupIdentifier(
-    const WebPluginInfo& web_plugin_info) {
+    const webkit::WebPluginInfo& web_plugin_info) {
   base::AutoLock lock(lock_);
   PluginGroup* group = AddToPluginGroups(web_plugin_info, &plugin_groups_);
   return group->identifier();
@@ -708,7 +647,7 @@ void PluginList::AddHardcodedPluginGroups(ScopedVector<PluginGroup>* groups) {
 }
 
 PluginGroup* PluginList::AddToPluginGroups(
-    const WebPluginInfo& web_plugin_info,
+    const webkit::WebPluginInfo& web_plugin_info,
     ScopedVector<PluginGroup>* plugin_groups) {
   PluginGroup* group = NULL;
   for (size_t i = 0; i < plugin_groups->size(); ++i) {
@@ -789,7 +728,7 @@ bool PluginList::EnableGroup(bool enable, const string16& group_name) {
   return group->EnableGroup(enable);
 }
 
-bool PluginList::SupportsType(const WebPluginInfo& plugin,
+bool PluginList::SupportsType(const webkit::WebPluginInfo& plugin,
                               const std::string& mime_type,
                               bool allow_wildcard) {
   // Webkit will ask for a plugin to handle empty mime types.
@@ -797,7 +736,7 @@ bool PluginList::SupportsType(const WebPluginInfo& plugin,
     return false;
 
   for (size_t i = 0; i < plugin.mime_types.size(); ++i) {
-    const WebPluginMimeType& mime_info = plugin.mime_types[i];
+    const webkit::WebPluginMimeType& mime_info = plugin.mime_types[i];
     if (net::MatchesMimeType(mime_info.mime_type, mime_type)) {
       if (!allow_wildcard && mime_info.mime_type == "*")
         continue;
@@ -807,11 +746,11 @@ bool PluginList::SupportsType(const WebPluginInfo& plugin,
   return false;
 }
 
-bool PluginList::SupportsExtension(const WebPluginInfo& plugin,
+bool PluginList::SupportsExtension(const webkit::WebPluginInfo& plugin,
                                    const std::string& extension,
                                    std::string* actual_mime_type) {
   for (size_t i = 0; i < plugin.mime_types.size(); ++i) {
-    const WebPluginMimeType& mime_type = plugin.mime_types[i];
+    const webkit::WebPluginMimeType& mime_type = plugin.mime_types[i];
     for (size_t j = 0; j < mime_type.file_extensions.size(); ++j) {
       if (mime_type.file_extensions[j] == extension) {
         if (actual_mime_type)
@@ -821,10 +760,6 @@ bool PluginList::SupportsExtension(const WebPluginInfo& plugin,
     }
   }
   return false;
-}
-
-void PluginList::DisableOutdatedPluginGroups() {
-  disable_outdated_plugins_ = true;
 }
 
 PluginList::~PluginList() {

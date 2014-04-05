@@ -60,6 +60,13 @@ void RenderParamsFromPrintSettings(const printing::PrintSettings& settings,
   params->document_cookie = 0;
   params->selection_only = settings.selection_only;
   params->supports_alpha_blend = settings.supports_alpha_blend();
+
+  params->display_header_footer = settings.display_header_footer;
+  if (!settings.display_header_footer)
+    return;
+  params->date = settings.date;
+  params->title = settings.title;
+  params->url = settings.url;
 }
 
 }  // namespace
@@ -162,6 +169,7 @@ void PrintingMessageFilter::OnTempFileForPrintingWritten(int sequence_number) {
   if (cloud_print_enabled_)
     print_dialog_cloud::CreatePrintDialogForFile(
         it->second,
+        string16(),
         string16(),
         std::string("application/pdf"),
         true);

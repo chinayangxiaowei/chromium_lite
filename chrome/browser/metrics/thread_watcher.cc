@@ -19,9 +19,6 @@
 #include "base/win/windows_version.h"
 #endif
 
-// static
-const int ThreadWatcher::kPingCount = 6;
-
 // ThreadWatcher methods and members.
 ThreadWatcher::ThreadWatcher(const BrowserThread::ID& thread_id,
                              const std::string& thread_name,
@@ -39,7 +36,7 @@ ThreadWatcher::ThreadWatcher(const BrowserThread::ID& thread_id,
       pong_time_(ping_time_),
       ping_sequence_number_(0),
       active_(false),
-      ping_count_(kPingCount),
+      ping_count_(unresponsive_threshold),
       response_time_histogram_(NULL),
       unresponsive_time_histogram_(NULL),
       unresponsive_count_(0),
@@ -103,7 +100,7 @@ void ThreadWatcher::ActivateThreadWatching() {
   DCHECK(WatchDogThread::CurrentlyOnWatchDogThread());
   if (active_) return;
   active_ = true;
-  ping_count_ = kPingCount;
+  ping_count_ = unresponsive_threshold_;
   ResetHangCounters();
   MessageLoop::current()->PostTask(
       FROM_HERE,
@@ -132,11 +129,11 @@ void ThreadWatcher::WakeUp() {
   unresponsive_count_ = 0;
 
   if (ping_count_ <= 0) {
-    ping_count_ = kPingCount;
+    ping_count_ = unresponsive_threshold_;
     ResetHangCounters();
     PostPingMessage();
   } else {
-    ping_count_ = kPingCount;
+    ping_count_ = unresponsive_threshold_;
   }
 }
 
@@ -325,15 +322,12 @@ const int ThreadWatcherList::kSleepSeconds = 1;
 // static
 const int ThreadWatcherList::kUnresponsiveSeconds = 2;
 // static
-const int ThreadWatcherList::kUnresponsiveCount = 6;
+const int ThreadWatcherList::kUnresponsiveCount = 9;
 // static
 const int ThreadWatcherList::kLiveThreadsThreshold = 1;
 
 // static
 void ThreadWatcherList::StartWatchingAll(const CommandLine& command_line) {
-  ThreadWatcherObserver::SetupNotifications(
-      base::TimeDelta::FromSeconds(kSleepSeconds * ThreadWatcher::kPingCount));
-
   uint32 unresponsive_threshold;
   std::set<std::string> crash_on_hang_thread_names;
   uint32 live_threads_threshold;
@@ -341,6 +335,9 @@ void ThreadWatcherList::StartWatchingAll(const CommandLine& command_line) {
                    &unresponsive_threshold,
                    &crash_on_hang_thread_names,
                    &live_threads_threshold);
+
+  ThreadWatcherObserver::SetupNotifications(
+      base::TimeDelta::FromSeconds(kSleepSeconds * unresponsive_threshold));
 
   WatchDogThread::PostDelayedTask(
       FROM_HERE,
@@ -426,20 +423,22 @@ void ThreadWatcherList::ParseCommandLine(
   // Determine |unresponsive_threshold| based on switches::kCrashOnHangSeconds.
   *unresponsive_threshold = kUnresponsiveCount;
 
-  if (chrome::VersionInfo::GetChannel() == chrome::VersionInfo::CHANNEL_BETA) {
-    // Increase the unresponsive_threshold in Beta channel to reduce the number
-    // of crashes due to ThreadWatcher.
+  // Increase the unresponsive_threshold on the Stable and Beta channels to
+  // reduce the number of crashes due to ThreadWatcher.
+  chrome::VersionInfo::Channel channel = chrome::VersionInfo::GetChannel();
+  if (channel == chrome::VersionInfo::CHANNEL_STABLE) {
+    *unresponsive_threshold *= 4;
+  } else if (channel == chrome::VersionInfo::CHANNEL_BETA) {
     *unresponsive_threshold *= 2;
-  } else {
-    // In Canary and Dev channels, for Windows XP (old systems), double the
-    // unresponsive_threshold to give OS a chance to schedule UI/IO threads a
-    // time slice to respond with a pong message (to get around limitations with
-    // the OS).
-#if defined(OS_WIN)
-    if (base::win::GetVersion() <= base::win::VERSION_XP)
-      *unresponsive_threshold *= 2;
-#endif
   }
+
+#if defined(OS_WIN)
+  // For Windows XP (old systems), double the unresponsive_threshold to give
+  // the OS a chance to schedule UI/IO threads a time slice to respond with a
+  // pong message (to get around limitations with the OS).
+  if (base::win::GetVersion() <= base::win::VERSION_XP)
+    *unresponsive_threshold *= 2;
+#endif
 
   std::string crash_on_hang_seconds =
       command_line.GetSwitchValueASCII(switches::kCrashOnHangSeconds);
@@ -455,7 +454,7 @@ void ThreadWatcherList::ParseCommandLine(
 
   // Default to crashing the browser if UI or IO threads are not responsive
   // except in stable channel.
-  if (chrome::VersionInfo::GetChannel() == chrome::VersionInfo::CHANNEL_STABLE)
+  if (channel == chrome::VersionInfo::CHANNEL_STABLE)
     crash_on_hang_threads = "";
   else
     crash_on_hang_threads = "UI,IO";
@@ -688,4 +687,64 @@ void WatchDogThread::Init() {
 void WatchDogThread::CleanUp() {
   base::AutoLock lock(lock_);
   watchdog_thread_ = NULL;
+}
+
+namespace {
+
+// ShutdownWatchDogThread methods and members.
+//
+// Class for watching the jank during shutdown.
+class ShutdownWatchDogThread : public base::Watchdog {
+ public:
+  // Constructor specifies how long the ShutdownWatchDogThread will wait before
+  // alarming.
+  explicit ShutdownWatchDogThread(const base::TimeDelta& duration)
+      : base::Watchdog(duration, "Shutdown watchdog thread", true) {
+  }
+
+  // Alarm is called if the time expires after an Arm() without someone calling
+  // Disarm(). We crash the browser if this method is called.
+  virtual void Alarm() {
+    CHECK(false);
+  }
+
+  DISALLOW_COPY_AND_ASSIGN(ShutdownWatchDogThread);
+};
+}  // namespace
+
+// ShutdownWatcherHelper methods and members.
+//
+// ShutdownWatcherHelper is a wrapper class for watching the jank during
+// shutdown.
+ShutdownWatcherHelper::ShutdownWatcherHelper() : shutdown_watchdog_(NULL) {
+}
+
+ShutdownWatcherHelper::~ShutdownWatcherHelper() {
+  if (shutdown_watchdog_) {
+    shutdown_watchdog_->Disarm();
+    delete shutdown_watchdog_;
+    shutdown_watchdog_ = NULL;
+  }
+}
+
+void ShutdownWatcherHelper::Arm(const base::TimeDelta& duration) {
+  DCHECK(!shutdown_watchdog_);
+  base::TimeDelta actual_duration = duration;
+
+  chrome::VersionInfo::Channel channel = chrome::VersionInfo::GetChannel();
+  if (channel == chrome::VersionInfo::CHANNEL_STABLE) {
+    actual_duration *= 50;
+  } else if (channel == chrome::VersionInfo::CHANNEL_BETA ||
+             channel == chrome::VersionInfo::CHANNEL_DEV) {
+    actual_duration *= 25;
+  }
+
+#if defined(OS_WIN)
+  // On Windows XP, give twice the time for shutdown.
+  if (base::win::GetVersion() <= base::win::VERSION_XP)
+    actual_duration *= 2;
+#endif
+
+  shutdown_watchdog_ = new ShutdownWatchDogThread(actual_duration);
+  shutdown_watchdog_->Arm();
 }

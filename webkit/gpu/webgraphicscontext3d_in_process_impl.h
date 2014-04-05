@@ -408,6 +408,15 @@ class WebGraphicsContext3DInProcessImpl : public WebGraphicsContext3D {
       WebGraphicsContext3D::WebGraphicsContextLostCallback* callback) {}
   virtual WGC3Denum getGraphicsResetStatusARB();
 
+  virtual void setSwapBuffersCompleteCallbackCHROMIUM(
+      WebGraphicsContext3D::
+          WebGraphicsSwapBuffersCompleteCallbackCHROMIUM* callback) {}
+
+ protected:
+#if WEBKIT_USING_SKIA
+  virtual GrGLInterface* onCreateGrGLInterface();
+#endif
+
  private:
   // ANGLE related.
   struct ShaderSourceEntry;

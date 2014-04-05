@@ -54,6 +54,15 @@ using sessions::StatusController;
 using sessions::SyncSession;
 using sessions::ConflictProgress;
 
+Syncer::ScopedSyncStartStopTracker::ScopedSyncStartStopTracker(
+    sessions::SyncSession* session) : session_(session) {
+  session_->status_controller()->SetSyncInProgressAndUpdateStartTime(true);
+}
+
+Syncer::ScopedSyncStartStopTracker::~ScopedSyncStartStopTracker() {
+  session_->status_controller()->SetSyncInProgressAndUpdateStartTime(false);
+}
+
 Syncer::Syncer()
     : early_exit_requested_(false),
       pre_conflict_resolution_closure_(NULL) {
@@ -72,15 +81,19 @@ void Syncer::RequestEarlyExit() {
 }
 
 void Syncer::SyncShare(sessions::SyncSession* session,
-                       const SyncerStep first_step,
-                       const SyncerStep last_step) {
-  ScopedDirLookup dir(session->context()->directory_manager(),
-                      session->context()->account_name());
-  // The directory must be good here.
-  CHECK(dir.good());
+                       SyncerStep first_step,
+                       SyncerStep last_step) {
+  {
+    ScopedDirLookup dir(session->context()->directory_manager(),
+                        session->context()->account_name());
+    // The directory must be good here.
+    CHECK(dir.good());
+  }
 
   ScopedSessionContextConflictResolver scoped(session->context(),
                                               &resolver_);
+
+  ScopedSyncStartStopTracker start_stop_tracker(session);
   SyncerStep current_step = first_step;
 
   SyncerStep next_step = current_step;
@@ -153,14 +166,19 @@ void Syncer::SyncShare(sessions::SyncSession* session,
         VLOG(1) << "Applying Updates";
         ApplyUpdatesCommand apply_updates;
         apply_updates.Execute(session);
-        next_step = BUILD_COMMIT_REQUEST;
+        if (last_step == APPLY_UPDATES) {
+          // We're in configuration mode, but we still need to run the
+          // SYNCER_END step.
+          last_step = SYNCER_END;
+          next_step = SYNCER_END;
+        } else {
+          next_step = BUILD_COMMIT_REQUEST;
+        }
         break;
       }
       // These two steps are combined since they are executed within the same
       // write transaction.
       case BUILD_COMMIT_REQUEST: {
-        session->status_controller()->set_syncing(true);
-
         VLOG(1) << "Processing Commit Request";
         ScopedDirLookup dir(session->context()->directory_manager(),
                             session->context()->account_name());
@@ -264,6 +282,10 @@ void Syncer::SyncShare(sessions::SyncSession* session,
         break;
       }
       case SYNCER_END: {
+        VLOG(1) << "Syncer End";
+        SyncerEndCommand syncer_end_command;
+        syncer_end_command.Execute(session);
+        next_step = SYNCER_END;
         break;
       }
       default:
@@ -277,15 +299,6 @@ void Syncer::SyncShare(sessions::SyncSession* session,
       break;
     current_step = next_step;
   }
-
-  VLOG(1) << "Syncer End";
-  VLOG(2) << "last step: " << last_step << ", current step: "
-          << current_step << ", next step: "
-          << next_step << ", snapshot: "
-          << session->TakeSnapshot().ToString();
-  SyncerEndCommand syncer_end_command;
-  syncer_end_command.Execute(session);
-  return;
 }
 
 void Syncer::ProcessClientCommand(sessions::SyncSession* session) {
@@ -308,6 +321,11 @@ void Syncer::ProcessClientCommand(sessions::SyncSession* session) {
     session->delegate()->OnReceivedShortPollIntervalUpdate(
         TimeDelta::FromSeconds(command.set_sync_poll_interval()));
   }
+
+  if (command.has_sessions_commit_delay_seconds()) {
+    session->delegate()->OnReceivedSessionsCommitDelay(
+        TimeDelta::FromSeconds(command.sessions_commit_delay_seconds()));
+  }
 }
 
 void CopyServerFields(syncable::Entry* src, syncable::MutableEntry* dest) {
@@ -325,7 +343,7 @@ void CopyServerFields(syncable::Entry* src, syncable::MutableEntry* dest) {
 
 void ClearServerData(syncable::MutableEntry* entry) {
   entry->Put(SERVER_NON_UNIQUE_NAME, "");
-  entry->Put(SERVER_PARENT_ID, syncable::kNullId);
+  entry->Put(SERVER_PARENT_ID, syncable::GetNullId());
   entry->Put(SERVER_MTIME, 0);
   entry->Put(SERVER_CTIME, 0);
   entry->Put(SERVER_VERSION, 0);

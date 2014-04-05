@@ -16,6 +16,7 @@
 #include "ipc/ipc_message_utils.h"
 #include "ipc/ipc_sync_message.h"
 #include "printing/print_job_constants.h"
+#include "printing/page_range.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 MockRenderThread::MockRenderThread()
@@ -240,7 +241,7 @@ void MockRenderThread::OnUpdatePrintSettings(
   std::string dummy_string;
   if (!job_settings.GetBoolean(printing::kSettingLandscape, NULL) ||
       !job_settings.GetBoolean(printing::kSettingCollate, NULL) ||
-      !job_settings.GetBoolean(printing::kSettingColor, NULL) ||
+      !job_settings.GetInteger(printing::kSettingColor, NULL) ||
       !job_settings.GetBoolean(printing::kSettingPrintToPDF, NULL) ||
       !job_settings.GetBoolean(printing::kIsFirstRequest, NULL) ||
       !job_settings.GetString(printing::kSettingDeviceName, &dummy_string) ||
@@ -252,8 +253,29 @@ void MockRenderThread::OnUpdatePrintSettings(
   }
 
   // Just return the default settings.
-  if (printer_.get())
-    printer_->UpdateSettings(document_cookie, params);
+  if (printer_.get()) {
+    ListValue* page_range_array;
+    printing::PageRanges new_ranges;
+    if (job_settings.GetList(printing::kSettingPageRange, &page_range_array)) {
+      for (size_t index = 0; index < page_range_array->GetSize(); ++index) {
+        DictionaryValue* dict;
+        if (!page_range_array->GetDictionary(index, &dict))
+          continue;
+        printing::PageRange range;
+        if (!dict->GetInteger(printing::kSettingPageRangeFrom, &range.from) ||
+            !dict->GetInteger(printing::kSettingPageRangeTo, &range.to)) {
+          continue;
+        }
+        // Page numbers are 1-based in the dictionary.
+        // Page numbers are 0-based for the printing context.
+        range.from--;
+        range.to--;
+        new_ranges.push_back(range);
+      }
+    }
+    std::vector<int> pages(printing::PageRange::GetPages(new_ranges));
+    printer_->UpdateSettings(document_cookie, params, pages);
+  }
 }
 
 void MockRenderThread::set_print_dialog_user_response(bool response) {

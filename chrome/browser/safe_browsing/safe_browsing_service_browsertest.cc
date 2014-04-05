@@ -23,8 +23,8 @@
 #include "chrome/browser/ui/browser.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/common/pref_names.h"
-#include "chrome/test/in_process_browser_test.h"
-#include "chrome/test/ui_test_utils.h"
+#include "chrome/test/base/in_process_browser_test.h"
+#include "chrome/test/base/ui_test_utils.h"
 #include "content/browser/browser_thread.h"
 #include "content/browser/renderer_host/resource_dispatcher_host.h"
 #include "content/browser/tab_contents/tab_contents.h"
@@ -399,10 +399,8 @@ class SafeBrowsingServiceTest : public InProcessBrowserTest {
   }
 
   void CreateCSDService() {
-    ScopedTempDir tmp_dir;
-    ASSERT_TRUE(tmp_dir.CreateUniqueTempDir());
     safe_browsing::ClientSideDetectionService* csd_service =
-        safe_browsing::ClientSideDetectionService::Create(tmp_dir.path(), NULL);
+        safe_browsing::ClientSideDetectionService::Create(NULL);
     SafeBrowsingService* sb_service =
         g_browser_process->safe_browsing_service();
     sb_service->csd_service_.reset(csd_service);

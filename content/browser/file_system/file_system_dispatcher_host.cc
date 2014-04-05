@@ -11,12 +11,11 @@
 #include "base/platform_file.h"
 #include "base/threading/thread.h"
 #include "base/time.h"
-#include "chrome/browser/profiles/profile.h"
-#include "content/browser/resource_context.h"
 #include "content/common/file_system_messages.h"
 #include "googleurl/src/gurl.h"
 #include "ipc/ipc_platform_file.h"
 #include "net/url_request/url_request_context.h"
+#include "net/url_request/url_request_context_getter.h"
 #include "webkit/fileapi/file_system_callback_dispatcher.h"
 #include "webkit/fileapi/file_system_context.h"
 #include "webkit/fileapi/file_system_operation.h"
@@ -95,21 +94,22 @@ class BrowserFileSystemCallbackDispatcher
 };
 
 FileSystemDispatcherHost::FileSystemDispatcherHost(
-    const content::ResourceContext* resource_context)
-    : context_(NULL),
-      resource_context_(resource_context),
+    net::URLRequestContextGetter* request_context_getter,
+    fileapi::FileSystemContext* file_system_context)
+    : context_(file_system_context),
+      request_context_getter_(request_context_getter),
       request_context_(NULL) {
-  DCHECK(resource_context_);
+  DCHECK(context_);
+  DCHECK(request_context_getter_);
 }
 
 FileSystemDispatcherHost::FileSystemDispatcherHost(
     net::URLRequestContext* request_context,
     fileapi::FileSystemContext* file_system_context)
     : context_(file_system_context),
-      resource_context_(NULL),
       request_context_(request_context) {
-  DCHECK(request_context_);
   DCHECK(context_);
+  DCHECK(request_context_);
 }
 
 FileSystemDispatcherHost::~FileSystemDispatcherHost() {
@@ -118,15 +118,12 @@ FileSystemDispatcherHost::~FileSystemDispatcherHost() {
 void FileSystemDispatcherHost::OnChannelConnected(int32 peer_pid) {
   BrowserMessageFilter::OnChannelConnected(peer_pid);
 
-  if (resource_context_) {
+  if (request_context_getter_.get()) {
     DCHECK(!request_context_);
-    request_context_ = resource_context_->request_context();
-    DCHECK(!context_);
-    context_ = resource_context_->file_system_context();
-    resource_context_ = NULL;
+    request_context_ = request_context_getter_->GetURLRequestContext();
+    request_context_getter_ = NULL;
+    DCHECK(request_context_);
   }
-  DCHECK(request_context_);
-  DCHECK(context_);
 }
 
 void FileSystemDispatcherHost::OverrideThreadForMessage(
@@ -216,6 +213,11 @@ void FileSystemDispatcherHost::OnWrite(
     const GURL& path,
     const GURL& blob_url,
     int64 offset) {
+  if (!request_context_) {
+    // We can't write w/o a request context, trying to do so will crash.
+    NOTREACHED();
+    return;
+  }
   GetNewOperation(request_id)->Write(
       request_context_, path, blob_url, offset);
 }
@@ -292,8 +294,7 @@ void FileSystemDispatcherHost::OnSyncGetPlatformPath(
   FilePath virtual_path;
   if (!CrackFileSystemURL(path, &origin_url, &type, &virtual_path))
     return;
-  FileSystemFileUtil* file_util =
-      context_->path_manager()->GetFileSystemFileUtil(type);
+  FileSystemFileUtil* file_util = context_->path_manager()->GetFileUtil(type);
   if (!file_util)
     return;
   FileSystemOperationContext operation_context(context_, file_util);

@@ -70,7 +70,6 @@ void GLES2DecoderTestBase::InitDecoder(
     bool bind_generates_resource) {
   gl_.reset(new StrictMock<MockGLInterface>());
   ::gfx::GLInterface::SetGLInterface(gl_.get());
-  surface_manager_.reset(new StrictMock<MockSurfaceManager>);
   group_ = ContextGroup::Ref(new ContextGroup(bind_generates_resource));
 
   InSequence sequence;
@@ -112,6 +111,13 @@ void GLES2DecoderTestBase::InitDecoder(
     EXPECT_CALL(*gl_, ActiveTexture(GL_TEXTURE0 + tt))
         .Times(1)
         .RetiresOnSaturation();
+    if (group_->feature_info()->feature_flags().oes_egl_image_external) {
+      EXPECT_CALL(*gl_, BindTexture(
+              GL_TEXTURE_EXTERNAL_OES,
+              TestHelper::kServiceDefaultExternalTextureId))
+          .Times(1)
+          .RetiresOnSaturation();
+    }
     EXPECT_CALL(*gl_, BindTexture(
         GL_TEXTURE_CUBE_MAP, TestHelper::kServiceDefaultTextureCubemapId))
         .Times(1)
@@ -174,7 +180,7 @@ void GLES2DecoderTestBase::InitDecoder(
   };
   std::vector<int32> attribs(attributes, attributes + arraysize(attributes));
 
-  decoder_.reset(GLES2Decoder::Create(surface_manager_.get(), group_.get()));
+  decoder_.reset(GLES2Decoder::Create(group_.get()));
   decoder_->Initialize(
       surface_, context_, surface_->GetSize(), DisallowedExtensions(),
       NULL, attribs);

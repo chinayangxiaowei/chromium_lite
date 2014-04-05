@@ -21,8 +21,6 @@
 #include "chrome/browser/sync/syncable/directory_event.h"
 #include "chrome/browser/sync/syncable/model_type.h"
 #include "chrome/browser/sync/util/extensions_activity_monitor.h"
-#include "chrome/common/deprecated/event_sys.h"
-#include "chrome/common/deprecated/event_sys-inl.h"
 
 namespace syncable {
 class Directory;
@@ -74,8 +72,6 @@ class Syncer {
  public:
   typedef std::vector<int64> UnsyncedMetaHandles;
 
-  // The constructor may be called from a thread that is not the Syncer's
-  // dedicated thread, to allow some flexibility in the setup.
   Syncer();
   virtual ~Syncer();
 
@@ -84,11 +80,20 @@ class Syncer {
   bool ExitRequested();
   void RequestEarlyExit();
 
-  // Like SyncShare() above, but |first_step| and |last_step| are provided to
-  // perform a partial sync cycle, stopping after |last_step| is performed.
+  // Runs a sync cycle from |first_step| to |last_step|.
   virtual void SyncShare(sessions::SyncSession* session,
                          SyncerStep first_step,
                          SyncerStep last_step);
+
+  class ScopedSyncStartStopTracker {
+   public:
+    explicit ScopedSyncStartStopTracker(sessions::SyncSession* session);
+    ~ScopedSyncStartStopTracker();
+   private:
+    sessions::SyncSession* session_;
+
+    DISALLOW_COPY_AND_ASSIGN(ScopedSyncStartStopTracker);
+  };
 
  private:
   // Implements the PROCESS_CLIENT_COMMAND syncer step.
@@ -137,4 +142,3 @@ void ClearServerData(syncable::MutableEntry* entry);
 }  // namespace browser_sync
 
 #endif  // CHROME_BROWSER_SYNC_ENGINE_SYNCER_H_
-

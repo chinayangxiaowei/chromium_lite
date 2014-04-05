@@ -9,7 +9,6 @@
 #include <set>
 #include <queue>
 #include <GLES2/gl2ext.h>
-#include <GLES2/gles2_command_buffer.h>
 #include "../client/mapped_memory.h"
 #include "../client/program_info_manager.h"
 #include "../common/gles2_cmd_utils.h"
@@ -965,8 +964,9 @@ void GLES2Implementation::SwapBuffers() {
   swap_buffers_tokens_.push(helper_->InsertToken());
   helper_->SwapBuffers();
   helper_->CommandBufferHelper::Flush();
-  // Wait if we added too many swap buffers.
-  if (swap_buffers_tokens_.size() > kMaxSwapBuffers) {
+  // Wait if we added too many swap buffers. Add 1 to kMaxSwapBuffers to
+  // compensate for TODO above.
+  if (swap_buffers_tokens_.size() > kMaxSwapBuffers + 1) {
     helper_->WaitForToken(swap_buffers_tokens_.front());
     swap_buffers_tokens_.pop();
   }
@@ -1576,7 +1576,8 @@ void GLES2Implementation::TexSubImage2DImpl(
                                          static_cast<GLsizeiptr>(1));
     while (height) {
       GLint num_rows = std::min(height, max_rows);
-      GLsizeiptr part_size = num_rows * padded_row_size;
+      GLsizeiptr part_size =
+          (num_rows - 1) * padded_row_size + unpadded_row_size;
       void* buffer = transfer_buffer_.Alloc(part_size);
       GLint y;
       if (unpack_flip_y_) {
@@ -1593,7 +1594,7 @@ void GLES2Implementation::TexSubImage2DImpl(
           transfer_buffer_id_, transfer_buffer_.GetOffset(buffer), internal);
       transfer_buffer_.FreePendingToken(buffer, helper_->InsertToken());
       yoffset += num_rows;
-      source += part_size;
+      source += num_rows * padded_row_size;
       height -= num_rows;
     }
   } else {
@@ -1965,7 +1966,7 @@ void GLES2Implementation::ReadPixels(
       // Compute how much space those rows will take. The last row will not
       // include padding.
       GLsizeiptr part_size =
-          unpadded_row_size + (padded_row_size * std::max(num_rows - 1, 0));
+          unpadded_row_size + padded_row_size * (num_rows - 1);
       void* buffer = transfer_buffer_.Alloc(part_size);
       *result = 0;  // mark as failed.
       helper_->ReadPixels(
@@ -2344,16 +2345,16 @@ void GLES2Implementation::GetVertexAttribiv(
   });
 }
 
-GLboolean GLES2Implementation::CommandBufferEnableCHROMIUM(
+GLboolean GLES2Implementation::EnableFeatureCHROMIUM(
     const char* feature) {
-  GPU_CLIENT_LOG("[" << this << "] glCommandBufferEnableCHROMIUM("
+  GPU_CLIENT_LOG("[" << this << "] glEnableFeatureCHROMIUM("
                  << feature << ")");
-  TRACE_EVENT0("gpu", "GLES2::CommandBufferEnableCHROMIUM");
-  typedef CommandBufferEnableCHROMIUM::Result Result;
+  TRACE_EVENT0("gpu", "GLES2::EnableFeatureCHROMIUM");
+  typedef EnableFeatureCHROMIUM::Result Result;
   Result* result = GetResultAs<Result*>();
   *result = 0;
   SetBucketAsCString(kResultBucketId, feature);
-  helper_->CommandBufferEnableCHROMIUM(
+  helper_->EnableFeatureCHROMIUM(
       kResultBucketId, result_shm_id(), result_shm_offset());
   WaitForCmd();
   helper_->SetBucketSize(kResultBucketId, 0);
@@ -2407,6 +2408,7 @@ void GLES2Implementation::UnmapBufferSubDataCHROMIUM(const void* mem) {
   helper_->BufferSubData(
       mb.target, mb.offset, mb.size, mb.shm_id, mb.shm_offset);
   mapped_memory_->FreePendingToken(mb.shm_memory, helper_->InsertToken());
+  helper_->CommandBufferHelper::Flush();
   mapped_buffers_.erase(it);
 }
 
@@ -2477,7 +2479,14 @@ void GLES2Implementation::UnmapTexSubImage2DCHROMIUM(const void* mem) {
       mt.target, mt.level, mt.xoffset, mt.yoffset, mt.width, mt.height,
       mt.format, mt.type, mt.shm_id, mt.shm_offset, GL_FALSE);
   mapped_memory_->FreePendingToken(mt.shm_memory, helper_->InsertToken());
+  helper_->CommandBufferHelper::Flush();
   mapped_textures_.erase(it);
+}
+
+void GLES2Implementation::ResizeCHROMIUM(GLuint width, GLuint height) {
+  GPU_CLIENT_LOG("[" << this << "] glResizeCHROMIUM("
+                 << width << ", " << height << ")");
+  helper_->ResizeCHROMIUM(width, height);
 }
 
 const GLchar* GLES2Implementation::GetRequestableExtensionsCHROMIUM() {
@@ -2623,4 +2632,3 @@ void GLES2Implementation::GetProgramInfoCHROMIUM(
 
 }  // namespace gles2
 }  // namespace gpu
-

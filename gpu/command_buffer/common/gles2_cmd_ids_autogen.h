@@ -196,7 +196,7 @@
   OP(GenSharedIdsCHROMIUM)                                     /* 439 */ \
   OP(DeleteSharedIdsCHROMIUM)                                  /* 440 */ \
   OP(RegisterSharedIdsCHROMIUM)                                /* 441 */ \
-  OP(CommandBufferEnableCHROMIUM)                              /* 442 */ \
+  OP(EnableFeatureCHROMIUM)                                    /* 442 */ \
   OP(CompressedTexImage2DBucket)                               /* 443 */ \
   OP(CompressedTexSubImage2DBucket)                            /* 444 */ \
   OP(RenderbufferStorageMultisampleEXT)                        /* 445 */ \
@@ -207,7 +207,7 @@
   OP(RequestExtensionCHROMIUM)                                 /* 450 */ \
   OP(Placeholder451CHROMIUM)                                   /* 451 */ \
   OP(Placeholder452CHROMIUM)                                   /* 452 */ \
-  OP(SetSurfaceCHROMIUM)                                       /* 453 */ \
+  OP(Placeholder453CHROMIUM)                                   /* 453 */ \
   OP(GetMultipleIntegervCHROMIUM)                              /* 454 */ \
   OP(GetProgramInfoCHROMIUM)                                   /* 455 */ \
 

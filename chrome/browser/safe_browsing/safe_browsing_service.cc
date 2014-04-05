@@ -6,7 +6,6 @@
 
 #include "base/callback.h"
 #include "base/command_line.h"
-#include "base/file_path.h"
 #include "base/lazy_instance.h"
 #include "base/path_service.h"
 #include "base/stl_util.h"
@@ -168,14 +167,14 @@ SafeBrowsingService::SafeBrowsingService()
       download_urlcheck_timeout_ms_(kDownloadUrlCheckTimeoutMs),
       download_hashcheck_timeout_ms_(kDownloadHashCheckTimeoutMs) {
 #if !defined(OS_CHROMEOS)
-  FilePath model_file_dir;
   if (!CommandLine::ForCurrentProcess()->HasSwitch(
           switches::kDisableClientSidePhishingDetection) &&
-      CanReportStats() &&
-      PathService::Get(chrome::DIR_USER_DATA, &model_file_dir)) {
+      (!CommandLine::ForCurrentProcess()->HasSwitch(
+          switches::kDisableSanitizedClientSidePhishingDetection) ||
+       CanReportStats())) {
     csd_service_.reset(
         safe_browsing::ClientSideDetectionService::Create(
-            model_file_dir, g_browser_process->system_request_context()));
+            g_browser_process->system_request_context()));
   }
 #endif
 }
@@ -902,7 +901,10 @@ void SafeBrowsingService::Start() {
 #else
   enable_csd_whitelist_ =
       (!cmdline->HasSwitch(switches::kDisableClientSidePhishingDetection) &&
-       local_state && local_state->GetBoolean(prefs::kMetricsReportingEnabled));
+       (!cmdline->HasSwitch(
+           switches::kDisableSanitizedClientSidePhishingDetection) ||
+        (local_state &&
+         local_state->GetBoolean(prefs::kMetricsReportingEnabled))));
 #endif
 
   BrowserThread::PostTask(

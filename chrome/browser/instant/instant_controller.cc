@@ -38,11 +38,23 @@
 #include "views/widget/widget.h"
 #endif
 
+namespace {
+
 // Number of ms to delay between loading urls.
-static const int kUpdateDelayMS = 200;
+const int kUpdateDelayMS = 200;
 
 // Amount of time we delay before showing pages that have a non-200 status.
-static const int kShowDelayMS = 800;
+const int kShowDelayMS = 800;
+
+bool IsBlacklistedUrl(const GURL& url) {
+  for (int i = 0; i < chrome::kNumberOfChromeDebugURLs; ++i) {
+    if (url == GURL(chrome::kChromeDebugURLs[i]))
+      return true;
+  }
+  return false;
+}
+
+}
 
 // static
 InstantController::HostBlacklist* InstantController::host_blacklist_ = NULL;
@@ -498,7 +510,7 @@ void InstantController::InstantStatusChanged(InstantLoader* loader) {
     // Status isn't ok, start a timer that when fires shows the result. This
     // delays showing 403 pages and the like.
     show_timer_.Stop();
-    show_timer_.Start(
+    show_timer_.Start(FROM_HERE,
         base::TimeDelta::FromMilliseconds(kShowDelayMS),
         this, &InstantController::ShowTimerFired);
     UpdateDisplayableLoader();
@@ -647,7 +659,8 @@ void InstantController::ScheduleUpdate(const GURL& url) {
   scheduled_url_ = url;
 
   update_timer_.Stop();
-  update_timer_.Start(base::TimeDelta::FromMilliseconds(kUpdateDelayMS),
+  update_timer_.Start(FROM_HERE,
+                      base::TimeDelta::FromMilliseconds(kUpdateDelayMS),
                       this, &InstantController::ProcessScheduledUpdate);
 }
 
@@ -702,7 +715,7 @@ void InstantController::UpdateLoader(const TemplateURL* template_url,
                          user_text, verbatim, suggested_text)) {
     show_timer_.Stop();
     if (!new_loader->http_status_ok()) {
-      show_timer_.Start(
+      show_timer_.Start(FROM_HERE,
           base::TimeDelta::FromMilliseconds(kShowDelayMS),
           this, &InstantController::ShowTimerFired);
     }
@@ -734,7 +747,11 @@ InstantController::PreviewCondition InstantController::GetPreviewConditionFor(
 
   // Was the host blacklisted?
   if (host_blacklist_ && host_blacklist_->count(match.destination_url.host()))
-    return PREVIEW_CONDITION_BLACKLISTED;
+    return PREVIEW_CONDITION_BLACKLISTED_HOST;
+
+  // Was the URL blacklisted?
+  if (IsBlacklistedUrl(match.destination_url))
+    return PREVIEW_CONDITION_BLACKLISTED_URL;
 
   const CommandLine* cl = CommandLine::ForCurrentProcess();
   if ((cl->HasSwitch(switches::kRestrictInstantToSearch) ||

@@ -8,7 +8,6 @@
 #include <stdio.h>
 #include <GLES2/gl2.h>
 #include <GLES2/gl2ext.h>
-#include <GLES2/gles2_command_buffer.h>
 
 #include "../common/gles2_cmd_utils.h"
 #include "../common/gles2_cmd_format.h"
@@ -194,6 +193,8 @@ int GLES2Util::GLGetNumValuesReturned(int id) const {
       return 1;
     case GL_TEXTURE_BINDING_CUBE_MAP:
       return 1;
+    case GL_TEXTURE_BINDING_EXTERNAL_OES:
+      return 1;
     case GL_UNPACK_ALIGNMENT:
       return 1;
     case GL_VIEWPORT:
@@ -347,6 +348,7 @@ int BytesPerElement(int type) {
   switch (type) {
     case GL_FLOAT:
     case GL_UNSIGNED_INT_24_8_OES:
+    case GL_UNSIGNED_INT:
       return 4;
     case GL_HALF_FLOAT_OES:
     case GL_UNSIGNED_SHORT:
@@ -432,6 +434,8 @@ uint32 GLES2Util::GetGLDataTypeSizeForUniforms(int type) {
     case GL_SAMPLER_2D:
       return sizeof(GLint);                // NOLINT
     case GL_SAMPLER_CUBE:
+      return sizeof(GLint);                // NOLINT
+    case GL_SAMPLER_EXTERNAL_OES:
       return sizeof(GLint);                // NOLINT
     default:
       return 0;

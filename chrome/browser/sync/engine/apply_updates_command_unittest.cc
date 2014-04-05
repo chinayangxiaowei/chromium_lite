@@ -8,17 +8,17 @@
 #include "base/stringprintf.h"
 #include "base/tracked.h"
 #include "chrome/browser/sync/engine/apply_updates_command.h"
+#include "chrome/browser/sync/engine/nigori_util.h"
 #include "chrome/browser/sync/engine/syncer.h"
 #include "chrome/browser/sync/engine/syncer_util.h"
 #include "chrome/browser/sync/protocol/bookmark_specifics.pb.h"
 #include "chrome/browser/sync/protocol/password_specifics.pb.h"
 #include "chrome/browser/sync/sessions/sync_session.h"
 #include "chrome/browser/sync/syncable/directory_manager.h"
-#include "chrome/browser/sync/syncable/nigori_util.h"
 #include "chrome/browser/sync/syncable/syncable.h"
 #include "chrome/browser/sync/syncable/syncable_id.h"
-#include "chrome/test/sync/engine/syncer_command_test.h"
-#include "chrome/test/sync/engine/test_id_factory.h"
+#include "chrome/browser/sync/test/engine/syncer_command_test.h"
+#include "chrome/browser/sync/test/engine/test_id_factory.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 namespace browser_sync {
@@ -26,6 +26,7 @@ namespace browser_sync {
 using sessions::SyncSession;
 using std::string;
 using syncable::Entry;
+using syncable::GetAllRealModelTypes;
 using syncable::Id;
 using syncable::MutableEntry;
 using syncable::ReadTransaction;
@@ -92,7 +93,7 @@ class ApplyUpdatesCommandTest : public SyncerCommandTest {
     entry.Put(syncable::SERVER_VERSION, next_revision_++);
     entry.Put(syncable::IS_UNAPPLIED_UPDATE, true);
     entry.Put(syncable::SERVER_NON_UNIQUE_NAME, item_id);
-    entry.Put(syncable::SERVER_PARENT_ID, syncable::kNullId);
+    entry.Put(syncable::SERVER_PARENT_ID, syncable::GetNullId());
     entry.Put(syncable::SERVER_IS_DIR, false);
     entry.Put(syncable::SERVER_SPECIFICS, specifics);
     if (is_unique)  // For top-level nodes.
@@ -144,7 +145,7 @@ class ApplyUpdatesCommandTest : public SyncerCommandTest {
 };
 
 TEST_F(ApplyUpdatesCommandTest, Simple) {
-  string root_server_id = syncable::kNullId.GetServerId();
+  string root_server_id = syncable::GetNullId().GetServerId();
   CreateUnappliedNewItemWithParent("parent",
                                    DefaultBookmarkSpecifics(),
                                    root_server_id);
@@ -168,7 +169,7 @@ TEST_F(ApplyUpdatesCommandTest, Simple) {
 TEST_F(ApplyUpdatesCommandTest, UpdateWithChildrenBeforeParents) {
   // Set a bunch of updates which are difficult to apply in the order
   // they're received due to dependencies on other unseen items.
-  string root_server_id = syncable::kNullId.GetServerId();
+  string root_server_id = syncable::GetNullId().GetServerId();
   CreateUnappliedNewItemWithParent("a_child_created_first",
                                    DefaultBookmarkSpecifics(),
                                    "parent");
@@ -220,7 +221,7 @@ TEST_F(ApplyUpdatesCommandTest, NestedItemsWithUnknownParent) {
 
 TEST_F(ApplyUpdatesCommandTest, ItemsBothKnownAndUnknown) {
   // See what happens when there's a mixture of good and bad updates.
-  string root_server_id = syncable::kNullId.GetServerId();
+  string root_server_id = syncable::GetNullId().GetServerId();
   CreateUnappliedNewItemWithParent("first_unknown_item",
                                    DefaultBookmarkSpecifics(),
                                    "unknown_parent");
@@ -293,7 +294,7 @@ TEST_F(ApplyUpdatesCommandTest, UndecryptableData) {
   sync_pb::EntitySpecifics encrypted_bookmark;
   encrypted_bookmark.mutable_encrypted();
   AddDefaultExtensionValue(syncable::BOOKMARKS, &encrypted_bookmark);
-  string root_server_id = syncable::kNullId.GetServerId();
+  string root_server_id = syncable::GetNullId().GetServerId();
   CreateUnappliedNewItemWithParent("folder",
                                    encrypted_bookmark,
                                    root_server_id);
@@ -386,6 +387,7 @@ TEST_F(ApplyUpdatesCommandTest, NigoriUpdate) {
   Cryptographer* cryptographer;
   syncable::ModelTypeSet encrypted_types;
   encrypted_types.insert(syncable::PASSWORDS);
+  encrypted_types.insert(syncable::NIGORI);
   {
     ScopedDirLookup dir(syncdb()->manager(), syncdb()->name());
     ASSERT_TRUE(dir.good());
@@ -423,7 +425,7 @@ TEST_F(ApplyUpdatesCommandTest, NigoriUpdate) {
 
   EXPECT_FALSE(cryptographer->is_ready());
   EXPECT_TRUE(cryptographer->has_pending_keys());
-  EXPECT_EQ(encrypted_types, cryptographer->GetEncryptedTypes());
+  EXPECT_EQ(GetAllRealModelTypes(), cryptographer->GetEncryptedTypes());
 }
 
 TEST_F(ApplyUpdatesCommandTest, NigoriUpdateForDisabledTypes) {
@@ -432,6 +434,7 @@ TEST_F(ApplyUpdatesCommandTest, NigoriUpdateForDisabledTypes) {
   Cryptographer* cryptographer;
   syncable::ModelTypeSet encrypted_types;
   encrypted_types.insert(syncable::PASSWORDS);
+  encrypted_types.insert(syncable::NIGORI);
   {
     ScopedDirLookup dir(syncdb()->manager(), syncdb()->name());
     ASSERT_TRUE(dir.good());
@@ -471,7 +474,7 @@ TEST_F(ApplyUpdatesCommandTest, NigoriUpdateForDisabledTypes) {
 
   EXPECT_FALSE(cryptographer->is_ready());
   EXPECT_TRUE(cryptographer->has_pending_keys());
-  EXPECT_EQ(encrypted_types, cryptographer->GetEncryptedTypes());
+  EXPECT_EQ(GetAllRealModelTypes(), cryptographer->GetEncryptedTypes());
 }
 
 TEST_F(ApplyUpdatesCommandTest, EncryptUnsyncedChanges) {
@@ -480,6 +483,7 @@ TEST_F(ApplyUpdatesCommandTest, EncryptUnsyncedChanges) {
   Cryptographer* cryptographer;
   syncable::ModelTypeSet encrypted_types;
   encrypted_types.insert(syncable::PASSWORDS);
+  encrypted_types.insert(syncable::NIGORI);
   {
     ScopedDirLookup dir(syncdb()->manager(), syncdb()->name());
     ASSERT_TRUE(dir.good());
@@ -563,7 +567,7 @@ TEST_F(ApplyUpdatesCommandTest, EncryptUnsyncedChanges) {
 
     // If ProcessUnsyncedChangesForEncryption worked, all our unsynced changes
     // should be encrypted now.
-    EXPECT_EQ(encrypted_types, cryptographer->GetEncryptedTypes());
+    EXPECT_EQ(GetAllRealModelTypes(), cryptographer->GetEncryptedTypes());
     EXPECT_TRUE(VerifyUnsyncedChangesAreEncrypted(&trans, encrypted_types));
 
     Syncer::UnsyncedMetaHandles handles;
@@ -578,6 +582,7 @@ TEST_F(ApplyUpdatesCommandTest, CannotEncryptUnsyncedChanges) {
   Cryptographer* cryptographer;
   syncable::ModelTypeSet encrypted_types;
   encrypted_types.insert(syncable::PASSWORDS);
+  encrypted_types.insert(syncable::NIGORI);
   {
     ScopedDirLookup dir(syncdb()->manager(), syncdb()->name());
     ASSERT_TRUE(dir.good());
@@ -669,7 +674,7 @@ TEST_F(ApplyUpdatesCommandTest, CannotEncryptUnsyncedChanges) {
     encrypted_types.clear();
     encrypted_types.insert(syncable::PASSWORDS);
     encrypted_types.insert(syncable::BOOKMARKS);
-    EXPECT_EQ(encrypted_types, cryptographer->GetEncryptedTypes());
+    EXPECT_EQ(GetAllRealModelTypes(), cryptographer->GetEncryptedTypes());
 
     Syncer::UnsyncedMetaHandles handles;
     SyncerUtil::GetUnsyncedEntries(&trans, &handles);

@@ -43,6 +43,8 @@ VideoCodec CodecIDToVideoCodec(CodecID codec_id) {
 
 CodecID VideoCodecToCodecID(VideoCodec video_codec) {
   switch (video_codec) {
+    case kUnknown:
+      return CODEC_ID_NONE;
     case kCodecVC1:
       return CODEC_ID_VC1;
     case kCodecH264:
@@ -190,7 +192,7 @@ int GetSurfaceHeight(AVStream* stream) {
 }
 
 int GetSurfaceWidth(AVStream* stream) {
-  // Disabling aspect ratio code for 835 branch until we have a proper fix for
+  // Disabling aspect ratio code for 874 branch. Proper fix will be in M16.
   // http://crbug.com/94861
 #if 0
   double aspect_ratio;

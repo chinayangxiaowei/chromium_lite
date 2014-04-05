@@ -26,7 +26,6 @@
 #include "gpu/command_buffer/client/gles2_implementation.h"
 #include "gpu/command_buffer/client/gles2_lib.h"
 #include "gpu/command_buffer/common/constants.h"
-#include "gpu/GLES2/gles2_command_buffer.h"
 #endif  // ENABLE_GPU
 
 namespace {
@@ -83,7 +82,6 @@ RendererGLContext::~RendererGLContext() {
 RendererGLContext* RendererGLContext::CreateViewContext(
     GpuChannelHost* channel,
     int render_view_id,
-    bool share_resources,
     RendererGLContext* share_group,
     const char* allowed_extensions,
     const int32* attrib_list,
@@ -94,8 +92,6 @@ RendererGLContext* RendererGLContext::CreateViewContext(
       true,
       render_view_id,
       gfx::Size(),
-      share_resources,
-      false,
       share_group,
       allowed_extensions,
       attrib_list,
@@ -108,18 +104,9 @@ RendererGLContext* RendererGLContext::CreateViewContext(
 #endif
 }
 
-#if defined(OS_MACOSX)
-void RendererGLContext::ResizeOnscreen(const gfx::Size& size) {
-  DCHECK(size.width() > 0 && size.height() > 0);
-  size_ = size;
-  command_buffer_->SetWindowSize(size);
-}
-#endif
-
 RendererGLContext* RendererGLContext::CreateOffscreenContext(
     GpuChannelHost* channel,
     const gfx::Size& size,
-    bool share_resources,
     RendererGLContext* share_group,
     const char* allowed_extensions,
     const int32* attrib_list,
@@ -130,8 +117,6 @@ RendererGLContext* RendererGLContext::CreateOffscreenContext(
       false,
       0,
       size,
-      share_resources,
-      false,
       share_group,
       allowed_extensions,
       attrib_list,
@@ -192,14 +177,6 @@ bool RendererGLContext::SetParent(RendererGLContext* new_parent) {
   return true;
 }
 
-void RendererGLContext::ResizeOffscreen(const gfx::Size& size) {
-  DCHECK(size.width() > 0 && size.height() > 0);
-  if (size_ != size) {
-    command_buffer_->ResizeOffscreenFrameBuffer(size);
-    size_ = size;
-  }
-}
-
 uint32 RendererGLContext::GetParentTextureId() {
   return parent_texture_id_;
 }
@@ -213,10 +190,6 @@ uint32 RendererGLContext::CreateParentTexture(const gfx::Size& size) {
 
 void RendererGLContext::DeleteParentTexture(uint32 texture) {
   gles2_implementation_->DeleteTextures(1, &texture);
-}
-
-void RendererGLContext::SetSwapBuffersCallback(Callback0::Type* callback) {
-  swap_buffers_callback_.reset(callback);
 }
 
 void RendererGLContext::SetContextLostCallback(
@@ -252,7 +225,12 @@ bool RendererGLContext::SwapBuffers() {
     return false;
 
   gles2_implementation_->SwapBuffers();
+
   return true;
+}
+
+bool RendererGLContext::Echo(Task* task) {
+  return command_buffer_->Echo(task);
 }
 
 scoped_refptr<TransportTextureHost>
@@ -285,8 +263,7 @@ CommandBufferProxy* RendererGLContext::GetCommandBufferProxy() {
 
 // TODO(gman): Remove This
 void RendererGLContext::DisableShaderTranslation() {
-  gles2_implementation_->CommandBufferEnableCHROMIUM(
-      PEPPER3D_SKIP_GLSL_TRANSLATION);
+  NOTREACHED();
 }
 
 gpu::gles2::GLES2Implementation* RendererGLContext::GetImplementation() {
@@ -309,8 +286,6 @@ RendererGLContext::RendererGLContext(GpuChannelHost* channel)
 bool RendererGLContext::Initialize(bool onscreen,
                                    int render_view_id,
                                    const gfx::Size& size,
-                                   bool share_resources,
-                                   bool bind_generates_resource,
                                    RendererGLContext* share_group,
                                    const char* allowed_extensions,
                                    const int32* attrib_list,
@@ -325,6 +300,8 @@ bool RendererGLContext::Initialize(bool onscreen,
   // Ensure the gles2 library is initialized first in a thread safe way.
   g_gles2_initializer.Get();
 
+  bool share_resources = true;
+  bool bind_generates_resources = true;
   std::vector<int32> attribs;
   while (attrib_list) {
     int32 attrib = *attrib_list++;
@@ -340,6 +317,12 @@ bool RendererGLContext::Initialize(bool onscreen,
       case SAMPLE_BUFFERS:
         attribs.push_back(attrib);
         attribs.push_back(*attrib_list++);
+        break;
+      case SHARE_RESOURCES:
+        share_resources = !!(*attrib_list++);
+        break;
+      case BIND_GENERATES_RESOURCES:
+        bind_generates_resources = !!(*attrib_list++);
         break;
       case NONE:
         attribs.push_back(attrib);
@@ -386,9 +369,6 @@ bool RendererGLContext::Initialize(bool onscreen,
     }
   }
 
-  command_buffer_->SetSwapBuffersCallback(
-      NewCallback(this, &RendererGLContext::OnSwapBuffers));
-
   command_buffer_->SetChannelErrorCallback(
       NewCallback(this, &RendererGLContext::OnContextLost));
 
@@ -426,9 +406,7 @@ bool RendererGLContext::Initialize(bool onscreen,
       transfer_buffer.ptr,
       transfer_buffer_id_,
       share_resources,
-      bind_generates_resource);
-
-  size_ = size;
+      bind_generates_resources);
 
   return true;
 }
@@ -463,11 +441,6 @@ void RendererGLContext::Destroy() {
   }
 
   channel_ = NULL;
-}
-
-void RendererGLContext::OnSwapBuffers() {
-  if (swap_buffers_callback_.get())
-    swap_buffers_callback_->Run();
 }
 
 void RendererGLContext::OnContextLost() {

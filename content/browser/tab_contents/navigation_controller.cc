@@ -9,7 +9,7 @@
 #include "base/string_util.h"
 #include "base/time.h"
 #include "base/utf_string_conversions.h"
-#include "chrome/browser/profiles/profile.h"
+#include "content/browser/browser_context.h"
 #include "content/browser/browser_url_handler.h"
 #include "content/browser/child_process_security_policy.h"
 #include "content/browser/in_process_webkit/session_storage_namespace.h"
@@ -19,6 +19,7 @@
 #include "content/browser/tab_contents/navigation_entry.h"
 #include "content/browser/tab_contents/tab_contents.h"
 #include "content/browser/tab_contents/tab_contents_delegate.h"
+#include "content/browser/user_metrics.h"
 #include "content/common/content_constants.h"
 #include "content/common/navigation_types.h"
 #include "content/common/notification_service.h"
@@ -109,9 +110,9 @@ bool NavigationController::check_for_repost_ = true;
 
 NavigationController::NavigationController(
     TabContents* contents,
-    Profile* profile,
+    content::BrowserContext* browser_context,
     SessionStorageNamespace* session_storage_namespace)
-    : profile_(profile),
+    : browser_context_(browser_context),
       pending_entry_(NULL),
       last_committed_entry_index_(-1),
       pending_entry_index_(-1),
@@ -122,10 +123,10 @@ NavigationController::NavigationController(
       needs_reload_(false),
       session_storage_namespace_(session_storage_namespace),
       pending_reload_(NO_RELOAD) {
-  DCHECK(profile_);
+  DCHECK(browser_context_);
   if (!session_storage_namespace_) {
     session_storage_namespace_ = new SessionStorageNamespace(
-        profile_->GetWebKitContext());
+        browser_context_->GetWebKitContext());
   }
 }
 
@@ -220,7 +221,8 @@ bool NavigationController::IsInitialNavigation() {
 // static
 NavigationEntry* NavigationController::CreateNavigationEntry(
     const GURL& url, const GURL& referrer, PageTransition::Type transition,
-    Profile* profile) {
+    const std::string& extra_headers,
+    content::BrowserContext* browser_context) {
   // Allow the browser URL handler to rewrite the URL. This will, for example,
   // remove "view-source:" from the beginning of the URL to get the URL that
   // will actually be loaded. This real URL won't be shown to the user, just
@@ -228,7 +230,7 @@ NavigationEntry* NavigationController::CreateNavigationEntry(
   GURL loaded_url(url);
   bool reverse_on_redirect = false;
   BrowserURLHandler::GetInstance()->RewriteURLIfNecessary(
-      &loaded_url, profile, &reverse_on_redirect);
+      &loaded_url, browser_context, &reverse_on_redirect);
 
   NavigationEntry* entry = new NavigationEntry(
       NULL,  // The site instance for tabs is sent on navigation
@@ -241,6 +243,7 @@ NavigationEntry* NavigationController::CreateNavigationEntry(
   entry->set_virtual_url(url);
   entry->set_user_typed_url(url);
   entry->set_update_virtual_url_with_url(reverse_on_redirect);
+  entry->set_extra_headers(extra_headers);
   return entry;
 }
 
@@ -272,7 +275,7 @@ void NavigationController::LoadEntry(NavigationEntry* entry) {
   NotificationService::current()->Notify(
       content::NOTIFICATION_NAV_ENTRY_PENDING,
       Source<NavigationController>(this),
-      NotificationService::NoDetails());
+      Details<NavigationEntry>(entry));
   NavigateToPendingEntry(NO_RELOAD);
 }
 
@@ -464,7 +467,7 @@ void NavigationController::UpdateVirtualURLToURL(
     NavigationEntry* entry, const GURL& new_url) {
   GURL new_virtual_url(new_url);
   if (BrowserURLHandler::GetInstance()->ReverseURLRewrite(
-          &new_virtual_url, entry->virtual_url(), profile_)) {
+          &new_virtual_url, entry->virtual_url(), browser_context_)) {
     entry->set_virtual_url(new_virtual_url);
   }
 }
@@ -482,11 +485,22 @@ void NavigationController::AddTransientEntry(NavigationEntry* entry) {
 
 void NavigationController::LoadURL(const GURL& url, const GURL& referrer,
                                    PageTransition::Type transition) {
+  LoadURLWithHeaders(url, referrer, transition, std::string());
+}
+
+// TODO(rogerta): Remove this call and put the extra_headers argument directly
+// in LoadURL().
+void NavigationController::LoadURLWithHeaders(
+    const GURL& url,
+    const GURL& referrer,
+    PageTransition::Type transition,
+    const std::string& extra_headers) {
   // The user initiated a load, we don't need to reload anymore.
   needs_reload_ = false;
 
   NavigationEntry* entry = CreateNavigationEntry(url, referrer, transition,
-                                                 profile_);
+                                                 extra_headers,
+                                                 browser_context_);
 
   LoadEntry(entry);
 }
@@ -508,15 +522,10 @@ bool NavigationController::RendererDidNavigate(
     details->previous_entry_index = -1;
   }
 
-  // The pending_entry has no SiteInstance when we are restoring an entry.  We
-  // must fill it in here so we can find the entry later by calling
-  // GetEntryIndexWithPageID.  In all other cases, the SiteInstance should be
-  // assigned already and we shouldn't change it.
-  if (pending_entry_index_ >= 0 && !pending_entry_->site_instance()) {
-    DCHECK(pending_entry_->restore_type() != NavigationEntry::RESTORE_NONE);
-    pending_entry_->set_site_instance(tab_contents_->GetSiteInstance());
-    pending_entry_->set_restore_type(NavigationEntry::RESTORE_NONE);
-  }
+  // If we have a pending entry at this point, it should have a SiteInstance.
+  // Restored entries start out with a null SiteInstance, but we should have
+  // assigned one in NavigateToPendingEntry.
+  DCHECK(pending_entry_index_ == -1 || pending_entry_->site_instance());
 
   // is_in_page must be computed before the entry gets committed.
   details->is_in_page = IsURLInPageNavigation(params.url);
@@ -630,6 +639,13 @@ NavigationType::Type NavigationController::ClassifyNavigation(
     // back/forward entries (not likely since we'll usually tell it to navigate
     // to such entries). It could also mean that the renderer is smoking crack.
     NOTREACHED();
+
+    // Because the unknown entry has committed, we risk showing the wrong URL in
+    // release builds. Instead, we'll kill the renderer process to be safe.
+    LOG(ERROR) << "terminating renderer for bad navigation: " << params.url;
+    UserMetrics::RecordAction(UserMetricsAction("BadMessageTerminate_NC"));
+    if (tab_contents_->GetSiteInstance()->HasProcess())
+      tab_contents_->GetSiteInstance()->GetProcess()->ReceivedBadMessage();
     return NavigationType::NAV_IGNORE;
   }
   NavigationEntry* existing_entry = entries_[existing_entry_index].get();
@@ -1051,6 +1067,16 @@ void NavigationController::NavigateToPendingEntry(ReloadType reload_type) {
 
   if (!tab_contents_->NavigateToPendingEntry(reload_type))
     DiscardNonCommittedEntries();
+
+  // If the entry is being restored and doesn't have a SiteInstance yet, fill
+  // it in now that we know. This allows us to find the entry when it commits.
+  // This works for browser-initiated navigations. We handle renderer-initiated
+  // navigations to restored entries in TabContents::OnGoToEntryAtOffset.
+  if (pending_entry_ && !pending_entry_->site_instance() &&
+      pending_entry_->restore_type() != NavigationEntry::RESTORE_NONE) {
+    pending_entry_->set_site_instance(tab_contents_->GetPendingSiteInstance());
+    pending_entry_->set_restore_type(NavigationEntry::RESTORE_NONE);
+  }
 }
 
 void NavigationController::NotifyNavigationEntryCommitted(

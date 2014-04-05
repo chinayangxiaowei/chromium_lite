@@ -5,6 +5,7 @@
 #include "chrome/common/print_messages.h"
 
 #include "base/basictypes.h"
+#include "base/string16.h"
 #include "ui/gfx/size.h"
 
 PrintMsg_Print_Params::PrintMsg_Print_Params()
@@ -21,7 +22,11 @@ PrintMsg_Print_Params::PrintMsg_Print_Params()
     supports_alpha_blend(false),
     preview_ui_addr(),
     preview_request_id(0),
-    is_first_request(false) {
+    is_first_request(false),
+    display_header_footer(false),
+    date(),
+    title(),
+    url() {
 }
 
 PrintMsg_Print_Params::~PrintMsg_Print_Params() {}
@@ -41,6 +46,10 @@ void PrintMsg_Print_Params::Reset() {
   preview_ui_addr = std::string();
   preview_request_id = 0;
   is_first_request = false;
+  display_header_footer = false;
+  date = string16();
+  title = string16();
+  url = string16();
 }
 
 PrintMsg_PrintPages_Params::PrintMsg_PrintPages_Params()

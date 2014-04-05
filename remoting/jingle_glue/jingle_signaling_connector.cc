@@ -49,11 +49,14 @@ JingleSignalingConnector::~JingleSignalingConnector() {
                                        pending_requests_.end());
 }
 
-void JingleSignalingConnector::OnIncomingStanza(
+bool JingleSignalingConnector::OnIncomingStanza(
     const buzz::XmlElement* stanza) {
   if (session_manager_->IsSessionMessage(stanza)) {
     session_manager_->OnIncomingMessage(stanza);
-  } else if (stanza->Name() == buzz::QN_IQ) {
+    return true;
+  }
+
+  if (stanza->Name() == buzz::QN_IQ) {
     std::string type = stanza->Attr(buzz::QN_TYPE);
     std::string id = stanza->Attr(buzz::QN_ID);
     if ((type == "error" || type == "result") && !id.empty()) {
@@ -69,9 +72,12 @@ void JingleSignalingConnector::OnIncomingStanza(
         }
         delete it->second;
         pending_requests_.erase(it);
+        return true;
       }
     }
   }
+
+  return false;
 }
 
 void JingleSignalingConnector::OnOutgoingMessage(

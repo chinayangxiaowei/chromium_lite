@@ -1096,8 +1096,8 @@ function hideNotification() {
 
 function showPromoNotification() {
   showNotification(parseHtmlSubset(localStrings.getString('serverpromo')),
-                   undefined,
-                   function () {},
+                   localStrings.getString('syncpromotext'),
+                   function () { chrome.send('SyncLinkClicked'); },
                    60000);
   var notificationElement = $('notification');
   notification.classList.add('promo');
@@ -1463,6 +1463,7 @@ function setMostVisitedPages(data, hasBlacklistedUrls) {
   if (localStrings.getString('serverpromo')) {
     showPromoNotification();
   }
+
 }
 
 function maybeDoneLoading() {

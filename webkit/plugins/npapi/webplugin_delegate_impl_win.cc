@@ -534,14 +534,6 @@ void WebPluginDelegateImpl::Paint(WebKit::WebCanvas* canvas,
   }
 }
 
-void WebPluginDelegateImpl::InstallMissingPlugin() {
-  NPEvent evt;
-  evt.event = default_plugin::kInstallMissingPluginMessage;
-  evt.lParam = 0;
-  evt.wParam = 0;
-  instance()->NPP_HandleEvent(&evt);
-}
-
 bool WebPluginDelegateImpl::WindowedCreatePlugin() {
   DCHECK(!windowed_handle_);
 
@@ -673,6 +665,11 @@ void WebPluginDelegateImpl::OnThrottleMessage() {
     }
   }
 
+  // Due to re-entrancy, we must save our queue state now.  Otherwise, we may
+  // self-post below, and *also* start up another delayed task when the first
+  // entry is pushed onto the queue in ThrottleMessage().
+  bool throttle_queue_was_empty = throttle_queue->empty();
+
   for (it = notify_queue.begin(); it != notify_queue.end(); ++it) {
     const MSG& msg = *it;
     WNDPROC proc = reinterpret_cast<WNDPROC>(msg.time);
@@ -683,7 +680,7 @@ void WebPluginDelegateImpl::OnThrottleMessage() {
       CallWindowProc(proc, msg.hwnd, msg.message, msg.wParam, msg.lParam);
   }
 
-  if (!throttle_queue->empty()) {
+  if (!throttle_queue_was_empty) {
     MessageLoop::current()->PostDelayedTask(FROM_HERE,
         NewRunnableFunction(&WebPluginDelegateImpl::OnThrottleMessage),
         kFlashWMUSERMessageThrottleDelayMs);
@@ -1367,6 +1364,7 @@ bool WebPluginDelegateImpl::PlatformHandleInputEvent(
   ret = true;
 
   if (np_event.event == WM_MOUSEMOVE) {
+    current_windowless_cursor_.InitFromExternalCursor(GetCursor());
     // Snag a reference to the current cursor ASAP in case the plugin modified
     // it. There is a nasty race condition here with the multiprocess browser
     // as someone might be setting the cursor in the main process as well.
@@ -1468,19 +1466,7 @@ HCURSOR WINAPI WebPluginDelegateImpl::SetCursorPatch(HCURSOR cursor) {
     }
     return current_cursor;
   }
-
-  if (!g_current_plugin_instance->IsWindowless()) {
-    return ::SetCursor(cursor);
-  }
-
-  // It is ok to pass NULL here to GetCursor as we are not looking for cursor
-  // types defined by Webkit.
-  HCURSOR previous_cursor =
-      g_current_plugin_instance->current_windowless_cursor_.GetCursor(NULL);
-
-  g_current_plugin_instance->current_windowless_cursor_.InitFromExternalCursor(
-      cursor);
-  return previous_cursor;
+  return ::SetCursor(cursor);
 }
 
 LONG WINAPI WebPluginDelegateImpl::RegEnumKeyExWPatch(

@@ -18,6 +18,10 @@ class PrintPreviewDataService;
 class PrintPreviewHandler;
 struct PrintHostMsg_DidGetPreviewPageCount_Params;
 
+namespace printing {
+struct PageSizeMargins;
+}
+
 class PrintPreviewUI : public ChromeWebUI {
  public:
   explicit PrintPreviewUI(TabContents* contents);
@@ -37,6 +41,16 @@ class PrintPreviewUI : public ChromeWebUI {
   // Clear the existing print preview data.
   void ClearAllPreviewData();
 
+  // Returns the available draft page count.
+  int GetAvailableDraftPageCount();
+
+  // Setters
+  void SetInitiatorTabURLAndTitle(const std::string& initiator_url,
+                                  const string16& initiator_tab_title);
+
+  // Notify the Web UI about the initiator tab title.
+  void SendInitiatorTabTitle();
+
   // Determines whether to cancel a print preview request based on
   // |preview_ui_addr| and |request_id|.
   // Can be called from any thread.
@@ -50,43 +64,61 @@ class PrintPreviewUI : public ChromeWebUI {
   // Notifies the Web UI of a print preview request with |request_id|.
   void OnPrintPreviewRequest(int request_id);
 
+  // Notifies the Web UI to show the system dialog.
+  void OnShowSystemDialog();
+
   // Notifies the Web UI about the page count of the request preview.
   void OnDidGetPreviewPageCount(
       const PrintHostMsg_DidGetPreviewPageCount_Params& params);
 
-  // Notify the Web UI that the 0-based page |page_number| has been rendered.
+  // Notifies the Web UI of the default page layout according to the currently
+  // selected printer and page size.
+  void OnDidGetDefaultPageLayout(
+      const printing::PageSizeMargins& page_layout);
+
+  // Notifies the Web UI that the 0-based page |page_number| has been rendered.
   // |preview_request_id| indicates wich request resulted in this response.
   void OnDidPreviewPage(int page_number, int preview_request_id);
 
-  // Notify the Web UI renderer that preview data is available.
+  // Notifies the Web UI renderer that preview data is available.
   // |expected_pages_count| specifies the total number of pages.
-  // |job_title| is the title of the page being previewed.
-  // |preview_request_id| indicates wich request resulted in this response.
+  // |preview_request_id| indicates which request resulted in this response.
   void OnPreviewDataIsAvailable(int expected_pages_count,
-                                const string16& job_title,
                                 int preview_request_id);
 
+  // Notifies the Web UI renderer to reuse the preview data.
+  // |preview_request_id| indicates which request resulted in this response.
   void OnReusePreviewData(int preview_request_id);
 
-  // Notify the Web UI that a navigation has occurred in this tab. This is the
-  // last chance to communicate with the source tab before the assocation is
-  // erased.
-  void OnNavigation();
+  // Notifies the Web UI that preview tab is destroyed. This is the last chance
+  // to communicate with the source tab before the association is erased.
+  void OnTabDestroyed();
 
-  // Notify the Web UI that the print preview failed to render.
+  // Notifies the Web UI that the print preview failed to render.
   void OnPrintPreviewFailed();
 
-  // Notify the Web UI that initiator tab is closed, so we can disable all
-  // the controls that need the initiator tab for generating the preview data.
-  // |initiator_tab_url| is passed in order to display a more accurate error
-  // message.
-  void OnInitiatorTabClosed(const std::string& initiator_tab_url);
+  // Notifies the Web UI that initiator tab is closed, so we can disable all the
+  // controls that need the initiator tab for generating the preview data.
+  void OnInitiatorTabClosed();
 
-  // Notify the Web UI renderer that file selection has been cancelled.
+  // Notifies the Web UI that the initiator tab has crashed.
+  void OnInitiatorTabCrashed();
+
+  // Notifies the Web UI renderer that file selection has been cancelled.
   void OnFileSelectionCancelled();
 
+  // Notifies the Web UI that the printer is unavailable or its settings are
+  // invalid.
+  void OnInvalidPrinterSettings();
+
+  // Notifies the Web UI to cancel the pending preview request.
+  void OnCancelPendingPreviewRequest();
+
  private:
-  // Helper function
+  FRIEND_TEST_ALL_PREFIXES(PrintPreviewTabControllerUnitTest,
+                           TitleAfterReload);
+
+  // Returns the Singleton instance of the PrintPreviewDataService.
   PrintPreviewDataService* print_preview_data_service();
 
   base::TimeTicks initial_preview_start_time_;
@@ -96,6 +128,14 @@ class PrintPreviewUI : public ChromeWebUI {
 
   // Weak pointer to the WebUI handler.
   PrintPreviewHandler* handler_;
+
+  // Store the |initiator_url| in order to display an accurate error message
+  // when the initiator tab is closed/crashed.
+  std::string initiator_url_;
+
+  // Store the initiator tab title, used for populating the print preview tab
+  // title.
+  string16 initiator_tab_title_;
 
   DISALLOW_COPY_AND_ASSIGN(PrintPreviewUI);
 };

@@ -11,6 +11,7 @@
 #include "base/values.h"
 #include "base/shared_memory.h"
 #include "ipc/ipc_message_macros.h"
+#include "printing/page_size_margins.h"
 #include "ui/gfx/native_widget_types.h"
 #include "ui/gfx/rect.h"
 
@@ -38,6 +39,10 @@ struct PrintMsg_Print_Params {
   std::string preview_ui_addr;
   int preview_request_id;
   bool is_first_request;
+  bool display_header_footer;
+  string16 date;
+  string16 title;
+  string16 url;
 };
 
 struct PrintMsg_PrintPages_Params {
@@ -101,6 +106,18 @@ IPC_STRUCT_TRAITS_BEGIN(PrintMsg_Print_Params)
 
   // True if this is the first preview request.
   IPC_STRUCT_TRAITS_MEMBER(is_first_request)
+
+  // Specifies if the header and footer should be rendered.
+  IPC_STRUCT_TRAITS_MEMBER(display_header_footer)
+
+  // Date string to be printed as header if requested by the user.
+  IPC_STRUCT_TRAITS_MEMBER(date)
+
+  // Title string to be printed as header if requested by the user.
+  IPC_STRUCT_TRAITS_MEMBER(title)
+
+  // URL string to be printed as footer if requested by the user.
+  IPC_STRUCT_TRAITS_MEMBER(url)
 IPC_STRUCT_TRAITS_END()
 
 IPC_STRUCT_BEGIN(PrintMsg_PrintPage_Params)
@@ -112,6 +129,15 @@ IPC_STRUCT_BEGIN(PrintMsg_PrintPage_Params)
   // according to the layout specified in PrintMsg_Print_Params.
   IPC_STRUCT_MEMBER(int, page_number)
 IPC_STRUCT_END()
+
+IPC_STRUCT_TRAITS_BEGIN(printing::PageSizeMargins)
+  IPC_STRUCT_TRAITS_MEMBER(content_width)
+  IPC_STRUCT_TRAITS_MEMBER(content_height)
+  IPC_STRUCT_TRAITS_MEMBER(margin_left)
+  IPC_STRUCT_TRAITS_MEMBER(margin_right)
+  IPC_STRUCT_TRAITS_MEMBER(margin_top)
+  IPC_STRUCT_TRAITS_MEMBER(margin_bottom)
+IPC_STRUCT_TRAITS_END()
 
 IPC_STRUCT_TRAITS_BEGIN(PrintMsg_PrintPages_Params)
   // Parameters to render the page as a printed page. It must always be the same
@@ -176,6 +202,9 @@ IPC_STRUCT_BEGIN(PrintHostMsg_DidGetPreviewPageCount_Params)
 
   // The id of the preview request.
   IPC_STRUCT_MEMBER(int, preview_request_id)
+
+  // Indicates whether the existing preview data needs to be cleared or not.
+  IPC_STRUCT_MEMBER(bool, clear_preview_data)
 IPC_STRUCT_END()
 
 // Parameters to describe a rendered page.
@@ -321,6 +350,11 @@ IPC_MESSAGE_ROUTED0(PrintHostMsg_RequestPrintPreview)
 IPC_MESSAGE_ROUTED1(PrintHostMsg_DidGetPreviewPageCount,
                     PrintHostMsg_DidGetPreviewPageCount_Params /* params */)
 
+// Notify the browser of the default page layout according to the currently
+// selected printer and page size.
+IPC_MESSAGE_ROUTED1(PrintHostMsg_DidGetDefaultPageLayout,
+                    printing::PageSizeMargins /* page layout in points */)
+
 // Notify the browser a print preview page has been rendered.
 IPC_MESSAGE_ROUTED1(PrintHostMsg_DidPreviewPage,
                     PrintHostMsg_DidPreviewPage_Params /* params */)
@@ -331,10 +365,10 @@ IPC_SYNC_MESSAGE_ROUTED2_1(PrintHostMsg_CheckForCancel,
                            int /* request id */,
                            bool /* print preview cancelled */)
 
-// Sends back to the browser the complete rendered document for print preview
-// that was requested by a PrintMsg_PrintPreview message. The memory handle in
-// this message is already valid in the browser process.
-IPC_MESSAGE_ROUTED1(PrintHostMsg_PagesReadyForPreview,
+// Sends back to the browser the complete rendered document (non-draft mode,
+// used for printing) that was requested by a PrintMsg_PrintPreview message.
+// The memory handle in this message is already valid in the browser process.
+IPC_MESSAGE_ROUTED1(PrintHostMsg_MetafileReadyForPrinting,
                     PrintHostMsg_DidPreviewDocument_Params /* params */)
 
 // Tell the browser printing failed.
@@ -347,4 +381,10 @@ IPC_MESSAGE_ROUTED1(PrintHostMsg_PrintPreviewFailed,
 
 // Tell the browser print preview was cancelled.
 IPC_MESSAGE_ROUTED1(PrintHostMsg_PrintPreviewCancelled,
+                    int /* document cookie */)
+
+// Tell the browser print preview found the selected printer has invalid
+// settings (which typically caused by disconnected network printer or printer
+// driver is bogus).
+IPC_MESSAGE_ROUTED1(PrintHostMsg_PrintPreviewInvalidPrinterSettings,
                     int /* document cookie */)
