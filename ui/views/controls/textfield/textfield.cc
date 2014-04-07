@@ -17,6 +17,7 @@
 #include "ui/base/ui_base_switches.h"
 #include "ui/gfx/insets.h"
 #include "ui/gfx/selection_model.h"
+#include "ui/native_theme/native_theme.h"
 #include "ui/views/controls/native/native_view_host.h"
 #include "ui/views/controls/textfield/native_textfield_views.h"
 #include "ui/views/controls/textfield/native_textfield_wrapper.h"
@@ -35,22 +36,24 @@ namespace {
 // Default placeholder text color.
 const SkColor kDefaultPlaceholderTextColor = SK_ColorLTGRAY;
 
-#if defined(OS_WIN) && !defined(USE_AURA)
-bool UseNativeTextfieldViews() {
-  CommandLine* command_line = CommandLine::ForCurrentProcess();
-  return command_line->HasSwitch(switches::kEnableViewsTextfield);
-}
-#endif
-
 }  // namespace
 
 namespace views {
 
+/////////////////////////////////////////////////////////////////////////////
+// Textfield
+
 // static
 const char Textfield::kViewClassName[] = "views/Textfield";
 
-/////////////////////////////////////////////////////////////////////////////
-// Textfield
+// static
+bool Textfield::IsViewsTextfieldEnabled() {
+#if defined(OS_WIN) && !defined(USE_AURA)
+  return CommandLine::ForCurrentProcess()->HasSwitch(
+      switches::kEnableViewsTextfield);
+#endif
+  return true;
+}
 
 Textfield::Textfield()
     : native_wrapper_(NULL),
@@ -63,8 +66,6 @@ Textfield::Textfield()
       use_default_text_color_(true),
       background_color_(SK_ColorWHITE),
       use_default_background_color_(true),
-      cursor_color_(SK_ColorBLACK),
-      use_default_cursor_color_(true),
       initialized_(false),
       horizontal_margins_were_set_(false),
       vertical_margins_were_set_(false),
@@ -84,8 +85,6 @@ Textfield::Textfield(StyleFlags style)
       use_default_text_color_(true),
       background_color_(SK_ColorWHITE),
       use_default_background_color_(true),
-      cursor_color_(SK_ColorBLACK),
-      use_default_cursor_color_(true),
       initialized_(false),
       horizontal_margins_were_set_(false),
       vertical_margins_were_set_(false),
@@ -114,7 +113,6 @@ void Textfield::SetReadOnly(bool read_only) {
     native_wrapper_->UpdateReadOnly();
     native_wrapper_->UpdateTextColor();
     native_wrapper_->UpdateBackgroundColor();
-    native_wrapper_->UpdateCursorColor();
   }
 }
 
@@ -160,6 +158,18 @@ void Textfield::AppendText(const string16& text) {
     native_wrapper_->AppendText(text);
 }
 
+void Textfield::ReplaceSelection(const string16& text) {
+  if (native_wrapper_) {
+    native_wrapper_->ReplaceSelection(text);
+    text_ = native_wrapper_->GetText();
+  }
+}
+
+base::i18n::TextDirection Textfield::GetTextDirection() const {
+  return native_wrapper_ ? native_wrapper_->GetTextDirection() :
+      base::i18n::UNKNOWN_DIRECTION;
+}
+
 void Textfield::SelectAll(bool reversed) {
   if (native_wrapper_)
     native_wrapper_->SelectAll(reversed);
@@ -183,6 +193,15 @@ bool Textfield::HasSelection() const {
   return !range.is_empty();
 }
 
+SkColor Textfield::GetTextColor() const {
+  if (!use_default_text_color_)
+    return text_color_;
+
+  return GetNativeTheme()->GetSystemColor(read_only() ?
+      ui::NativeTheme::kColorId_TextfieldReadOnlyColor :
+      ui::NativeTheme::kColorId_TextfieldDefaultColor);
+}
+
 void Textfield::SetTextColor(SkColor color) {
   text_color_ = color;
   use_default_text_color_ = false;
@@ -194,6 +213,15 @@ void Textfield::UseDefaultTextColor() {
   use_default_text_color_ = true;
   if (native_wrapper_)
     native_wrapper_->UpdateTextColor();
+}
+
+SkColor Textfield::GetBackgroundColor() const {
+  if (!use_default_background_color_)
+    return background_color_;
+
+  return GetNativeTheme()->GetSystemColor(read_only() ?
+      ui::NativeTheme::kColorId_TextfieldReadOnlyBackground :
+      ui::NativeTheme::kColorId_TextfieldDefaultBackground);
 }
 
 void Textfield::SetBackgroundColor(SkColor color) {
@@ -209,17 +237,13 @@ void Textfield::UseDefaultBackgroundColor() {
     native_wrapper_->UpdateBackgroundColor();
 }
 
-void Textfield::SetCursorColor(SkColor color) {
-  cursor_color_ = color;
-  use_default_cursor_color_ = false;
-  if (native_wrapper_)
-    native_wrapper_->UpdateCursorColor();
+bool Textfield::GetCursorEnabled() const {
+  return native_wrapper_ && native_wrapper_->GetCursorEnabled();
 }
 
-void Textfield::UseDefaultCursorColor() {
-  use_default_cursor_color_ = true;
+void Textfield::SetCursorEnabled(bool enabled) {
   if (native_wrapper_)
-    native_wrapper_->UpdateCursorColor();
+    native_wrapper_->SetCursorEnabled(enabled);
 }
 
 void Textfield::SetFont(const gfx::Font& font) {
@@ -275,7 +299,6 @@ void Textfield::UpdateAllProperties() {
     native_wrapper_->UpdateText();
     native_wrapper_->UpdateTextColor();
     native_wrapper_->UpdateBackgroundColor();
-    native_wrapper_->UpdateCursorColor();
     native_wrapper_->UpdateReadOnly();
     native_wrapper_->UpdateFont();
     native_wrapper_->UpdateEnabled();
@@ -345,6 +368,10 @@ void Textfield::SetAccessibleName(const string16& name) {
   accessible_name_ = name;
 }
 
+void Textfield::ExecuteCommand(int command_id) {
+  native_wrapper_->ExecuteTextCommand(command_id);
+}
+
 ////////////////////////////////////////////////////////////////////////////////
 // Textfield, View overrides:
 
@@ -353,6 +380,15 @@ void Textfield::Layout() {
     native_wrapper_->GetView()->SetBoundsRect(GetLocalBounds());
     native_wrapper_->GetView()->Layout();
   }
+}
+
+int Textfield::GetBaseline() const {
+  gfx::Insets insets;
+  if (draw_border_ && native_wrapper_)
+    insets = native_wrapper_->CalculateInsets();
+  const int baseline = native_wrapper_ ?
+      native_wrapper_->GetTextfieldBaseline() : font_.GetBaseline();
+  return insets.top() + baseline;
 }
 
 gfx::Size Textfield::GetPreferredSize() {
@@ -405,6 +441,12 @@ bool Textfield::OnKeyPressed(const ui::KeyEvent& e) {
 
 bool Textfield::OnKeyReleased(const ui::KeyEvent& e) {
   return native_wrapper_ && native_wrapper_->HandleKeyReleased(e);
+}
+
+bool Textfield::OnMouseDragged(const ui::MouseEvent& e) {
+  if (!e.IsOnlyRightMouseButton())
+    return View::OnMouseDragged(e);
+  return true;
 }
 
 void Textfield::OnFocus() {
@@ -469,7 +511,7 @@ void Textfield::ViewHierarchyChanged(bool is_add, View* parent, View* child) {
     // initialization for the wrapper.
     //
     // Remove the include for native_textfield_win.h above when you fix this.
-    if (!UseNativeTextfieldViews())
+    if (!IsViewsTextfieldEnabled())
       static_cast<NativeTextfieldWin*>(native_wrapper_)->AttachHack();
 #endif
   }
@@ -486,7 +528,7 @@ std::string Textfield::GetClassName() const {
 NativeTextfieldWrapper* NativeTextfieldWrapper::CreateWrapper(
     Textfield* field) {
 #if defined(OS_WIN) && !defined(USE_AURA)
-  if (!UseNativeTextfieldViews())
+  if (!Textfield::IsViewsTextfieldEnabled())
     return new NativeTextfieldWin(field);
 #endif
   return new NativeTextfieldViews(field);

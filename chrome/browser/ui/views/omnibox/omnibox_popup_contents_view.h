@@ -35,8 +35,7 @@ class OmniboxPopupContentsView : public views::View,
   static OmniboxPopupView* Create(const gfx::Font& font,
                                   OmniboxView* omnibox_view,
                                   OmniboxEditModel* edit_model,
-                                  views::View* location_bar,
-                                  views::View* popup_parent_view);
+                                  views::View* location_bar);
 
   // Returns the bounds the popup should be shown at. This is the display bounds
   // and includes offsets for the dropshadow which this view's border renders.
@@ -71,8 +70,9 @@ class OmniboxPopupContentsView : public views::View,
   virtual void OnMouseMoved(const ui::MouseEvent& event) OVERRIDE;
   virtual void OnMouseEntered(const ui::MouseEvent& event) OVERRIDE;
   virtual void OnMouseExited(const ui::MouseEvent& event) OVERRIDE;
-  virtual ui::EventResult OnGestureEvent(
-      const ui::GestureEvent& event) OVERRIDE;
+
+  // Overridden from ui::EventHandler:
+  virtual void OnGestureEvent(ui::GestureEvent* event) OVERRIDE;
 
  protected:
   OmniboxPopupContentsView(const gfx::Font& font,
@@ -144,6 +144,8 @@ class OmniboxPopupContentsView : public views::View,
 
   // Returns the target bounds given the specified content height.
   gfx::Rect CalculateTargetBounds(int h);
+
+  OmniboxResultView* result_view_at(size_t i);
 
   // The popup that contains this view.  We create this, but it deletes itself
   // when its window is destroyed.  This is a WeakPtr because it's possible for

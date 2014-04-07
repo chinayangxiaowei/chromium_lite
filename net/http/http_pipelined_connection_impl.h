@@ -17,7 +17,6 @@
 #include "net/base/net_export.h"
 #include "net/base/net_log.h"
 #include "net/base/ssl_config_service.h"
-#include "net/base/upload_data_stream.h"
 #include "net/http/http_pipelined_connection.h"
 #include "net/http/http_request_info.h"
 #include "net/http/http_stream_parser.h"
@@ -100,7 +99,6 @@ class NET_EXPORT_PRIVATE HttpPipelinedConnectionImpl
   int SendRequest(int pipeline_id,
                   const std::string& request_line,
                   const HttpRequestHeaders& headers,
-                  scoped_ptr<UploadDataStream> request_body,
                   HttpResponseInfo* response,
                   const CompletionCallback& callback);
 
@@ -176,7 +174,6 @@ class NET_EXPORT_PRIVATE HttpPipelinedConnectionImpl
     int pipeline_id;
     std::string request_line;
     HttpRequestHeaders headers;
-    scoped_ptr<UploadDataStream> request_body;
     HttpResponseInfo* response;
     CompletionCallback callback;
   };

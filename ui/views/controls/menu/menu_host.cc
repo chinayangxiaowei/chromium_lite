@@ -4,18 +4,15 @@
 
 #include "ui/views/controls/menu/menu_host.h"
 
+#include "ui/gfx/path.h"
+#include "ui/native_theme/native_theme.h"
 #include "ui/views/controls/menu/menu_controller.h"
 #include "ui/views/controls/menu/menu_host_root_view.h"
 #include "ui/views/controls/menu/menu_item_view.h"
-#include "ui/views/controls/menu/native_menu_host.h"
 #include "ui/views/controls/menu/submenu_view.h"
+#include "ui/views/round_rect_painter.h"
 #include "ui/views/widget/native_widget_private.h"
 #include "ui/views/widget/widget.h"
-
-#if defined(USE_AURA)
-#include "base/command_line.h"
-#include "ui/views/widget/desktop_native_widget_aura.h"
-#endif
 
 namespace views {
 
@@ -37,13 +34,17 @@ void MenuHost::InitMenuHost(Widget* parent,
                             bool do_capture) {
   Widget::InitParams params(Widget::InitParams::TYPE_MENU);
   params.has_dropshadow = true;
-  params.parent_widget = parent;
+  params.parent = parent ? parent->GetNativeView() : NULL;
   params.bounds = bounds;
-#if defined(USE_AURA) && !defined(OS_CHROMEOS)
-  if (CommandLine::ForCurrentProcess()->HasSwitch("win-aura"))
-    params.native_widget = new DesktopNativeWidgetAura(this);
-#endif
   Init(params);
+
+  if (ui::NativeTheme::IsNewMenuStyleEnabled()) {
+    // TODO(yefim): Investigate it more on aura.
+    gfx::Path path;
+    RoundRectPainter::CreateRoundRectPath(bounds, &path);
+    SetShape(path.CreateNativeRegion());
+  }
+
   SetContentsView(contents_view);
   ShowMenuHost(do_capture);
 }

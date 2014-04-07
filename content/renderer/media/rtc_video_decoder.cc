@@ -26,6 +26,8 @@ using media::PipelineStatusCB;
 using media::StatisticsCB;
 using media::VideoDecoder;
 
+namespace content {
+
 RTCVideoDecoder::RTCVideoDecoder(base::TaskRunner* video_decoder_thread,
                                  base::TaskRunner* main_thread,
                                  webrtc::VideoTrackInterface* video_track)
@@ -145,6 +147,7 @@ void RTCVideoDecoder::RenderFrame(const cricket::VideoFrame* frame) {
   scoped_refptr<media::VideoFrame> video_frame =
       media::VideoFrame::CreateFrame(media::VideoFrame::YV12,
                                      visible_size_,
+                                     gfx::Rect(visible_size_),
                                      visible_size_,
                                      timestamp - start_time_);
   last_frame_timestamp_ = timestamp;
@@ -192,3 +195,5 @@ void RTCVideoDecoder::DeregisterFromVideoTrack() {
 RTCVideoDecoder::~RTCVideoDecoder() {
   DCHECK_NE(kNormal, state_);
 }
+
+}  // namespace content

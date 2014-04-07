@@ -13,7 +13,7 @@
 #include "content/public/browser/render_view_host.h"
 #include "content/public/browser/web_contents.h"
 
-int SessionTabHelper::kUserDataKey;
+DEFINE_WEB_CONTENTS_USER_DATA_KEY(SessionTabHelper)
 
 SessionTabHelper::SessionTabHelper(content::WebContents* contents)
     : content::WebContentsObserver(contents) {
@@ -24,11 +24,6 @@ SessionTabHelper::~SessionTabHelper() {
 
 void SessionTabHelper::SetWindowID(const SessionID& id) {
   window_id_ = id;
-
-  content::NotificationService::current()->Notify(
-      chrome::NOTIFICATION_TAB_PARENTED,
-      content::Source<content::WebContents>(web_contents()),
-      content::NotificationService::NoDetails());
 
   // Extension code in the renderer holds the ID of the window that hosts it.
   // Notify it that the window ID changed.

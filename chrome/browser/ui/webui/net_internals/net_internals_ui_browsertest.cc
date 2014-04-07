@@ -15,7 +15,7 @@
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_tabstrip.h"
-#include "chrome/browser/ui/tab_contents/tab_contents.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/ui/webui/web_ui_browsertest.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/test/base/ui_test_utils.h"
@@ -71,8 +71,7 @@ void AddCacheEntryOnIOThread(net::URLRequestContextGetter* context_getter,
 
   // Add entry to the cache.
   cache->Set(net::HostCache::Key(hostname, net::ADDRESS_FAMILY_UNSPECIFIED, 0),
-             net_error,
-             address_list,
+             net::HostCache::Entry(net_error, address_list),
              base::TimeTicks::Now(),
              ttl);
 }
@@ -133,6 +132,9 @@ class NetInternalsTest::MessageHandler : public content::WebUIMessageHandler {
   // must be an empty string.
   void AddCacheEntry(const base::ListValue* list_value);
 
+  // Opens the given URL in a new tab.
+  void LoadPage(const base::ListValue* list_value);
+
   // Opens a page in a new tab that prerenders the given URL.
   void PrerenderPage(const base::ListValue* list_value);
 
@@ -176,6 +178,9 @@ void NetInternalsTest::MessageHandler::RegisterMessages() {
   web_ui()->RegisterMessageCallback("addCacheEntry",
       base::Bind(&NetInternalsTest::MessageHandler::AddCacheEntry,
                  base::Unretained(this)));
+  web_ui()->RegisterMessageCallback("loadPage",
+      base::Bind(&NetInternalsTest::MessageHandler::LoadPage,
+                  base::Unretained(this)));
   web_ui()->RegisterMessageCallback("prerenderPage",
       base::Bind(&NetInternalsTest::MessageHandler::PrerenderPage,
                   base::Unretained(this)));
@@ -234,6 +239,18 @@ void NetInternalsTest::MessageHandler::AddCacheEntry(
                  static_cast<int>(expire_days_from_now)));
 }
 
+void NetInternalsTest::MessageHandler::LoadPage(
+    const ListValue* list_value) {
+  std::string url;
+  ASSERT_TRUE(list_value->GetString(0, &url));
+  LOG(WARNING) << "url: [" << url << "]";
+  ui_test_utils::NavigateToURLWithDisposition(
+      browser(),
+      GURL(url),
+      NEW_BACKGROUND_TAB,
+      ui_test_utils::BROWSER_TEST_NONE);
+}
+
 void NetInternalsTest::MessageHandler::PrerenderPage(
     const ListValue* list_value) {
   std::string prerender_url;
@@ -267,7 +284,7 @@ void NetInternalsTest::MessageHandler::CreateIncognitoBrowser(
 void NetInternalsTest::MessageHandler::CloseIncognitoBrowser(
     const ListValue* list_value) {
   ASSERT_TRUE(incognito_browser_);
-  chrome::CloseAllTabs(incognito_browser_);
+  incognito_browser_->tab_strip_model()->CloseAllTabs();
   // Closing all a Browser's tabs will ultimately result in its destruction,
   // thought it may not have been destroyed yet.
   incognito_browser_ = NULL;

@@ -25,13 +25,13 @@
 #include "chrome/browser/autocomplete/autocomplete_controller.h"
 #include "chrome/browser/bookmarks/bookmark_model.h"
 #include "chrome/browser/browser_process.h"
+#include "chrome/browser/extensions/extension_action.h"
 #include "chrome/browser/history/history_service_factory.h"
-#include "chrome/browser/infobars/infobar_tab_helper.h"
 #include "chrome/browser/prefs/pref_service.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/search_engines/template_url_service.h"
 #include "chrome/browser/search_engines/template_url_service_test_util.h"
-#include "chrome/browser/tab_contents/thumbnail_generator.h"
+#include "chrome/browser/thumbnails/render_widget_snapshot_taker.h"
 #include "chrome/browser/ui/app_modal_dialogs/app_modal_dialog.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_commands.h"
@@ -42,12 +42,11 @@
 #include "chrome/browser/ui/browser_window.h"
 #include "chrome/browser/ui/find_bar/find_notification_details.h"
 #include "chrome/browser/ui/find_bar/find_tab_helper.h"
+#include "chrome/browser/ui/host_desktop.h"
 #include "chrome/browser/ui/omnibox/location_bar.h"
 #include "chrome/browser/ui/omnibox/omnibox_view.h"
-#include "chrome/browser/ui/tab_contents/tab_contents.h"
 #include "chrome/common/chrome_notification_types.h"
 #include "chrome/common/chrome_paths.h"
-#include "chrome/common/extensions/extension_action.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/test/base/bookmark_load_observer.h"
 #include "content/public/browser/browser_thread.h"
@@ -73,6 +72,7 @@
 #include "third_party/skia/include/core/SkBitmap.h"
 #include "third_party/skia/include/core/SkColor.h"
 #include "ui/gfx/size.h"
+#include "ui/snapshot/snapshot.h"
 #include "ui/ui_controls/ui_controls.h"
 
 #if defined(USE_AURA)
@@ -97,14 +97,14 @@ namespace {
 
 class FindInPageNotificationObserver : public content::NotificationObserver {
  public:
-  explicit FindInPageNotificationObserver(TabContents* parent_tab)
-      : parent_tab_(parent_tab),
-        active_match_ordinal_(-1),
+  explicit FindInPageNotificationObserver(WebContents* parent_tab)
+      : active_match_ordinal_(-1),
         number_of_matches_(0) {
-    current_find_request_id_ =
-        parent_tab->find_tab_helper()->current_find_request_id();
+    FindTabHelper* find_tab_helper =
+        FindTabHelper::FromWebContents(parent_tab);
+    current_find_request_id_ = find_tab_helper->current_find_request_id();
     registrar_.Add(this, chrome::NOTIFICATION_FIND_RESULT_AVAILABLE,
-                   content::Source<WebContents>(parent_tab_->web_contents()));
+                   content::Source<WebContents>(parent_tab));
     message_loop_runner_ = new content::MessageLoopRunner;
     message_loop_runner_->Run();
   }
@@ -138,7 +138,6 @@ class FindInPageNotificationObserver : public content::NotificationObserver {
 
  private:
   content::NotificationRegistrar registrar_;
-  TabContents* parent_tab_;
   // We will at some point (before final update) be notified of the ordinal and
   // we need to preserve it so we can send it later.
   int active_match_ordinal_;
@@ -151,6 +150,31 @@ class FindInPageNotificationObserver : public content::NotificationObserver {
 
   DISALLOW_COPY_AND_ASSIGN(FindInPageNotificationObserver);
 };
+
+const char kSnapshotBaseName[] = "ChromiumSnapshot";
+const char kSnapshotExtension[] = ".png";
+
+FilePath GetSnapshotFileName(const FilePath& snapshot_directory) {
+  base::Time::Exploded the_time;
+
+  base::Time::Now().LocalExplode(&the_time);
+  std::string filename(StringPrintf("%s%04d%02d%02d%02d%02d%02d%s",
+      kSnapshotBaseName, the_time.year, the_time.month, the_time.day_of_month,
+      the_time.hour, the_time.minute, the_time.second, kSnapshotExtension));
+
+  FilePath snapshot_file = snapshot_directory.AppendASCII(filename);
+  if (file_util::PathExists(snapshot_file)) {
+    int index = 0;
+    std::string suffix;
+    FilePath trial_file;
+    do {
+      suffix = StringPrintf(" (%d)", ++index);
+      trial_file = snapshot_file.InsertBeforeExtensionASCII(suffix);
+    } while (file_util::PathExists(trial_file));
+    snapshot_file = trial_file;
+  }
+  return snapshot_file;
+}
 
 }  // namespace
 
@@ -195,9 +219,11 @@ Browser* WaitForBrowserNotInSet(std::set<Browser*> excluded_browsers) {
 }
 
 Browser* OpenURLOffTheRecord(Profile* profile, const GURL& url) {
-  chrome::OpenURLOffTheRecord(profile, url);
+  chrome::OpenURLOffTheRecord(profile, url, chrome::HOST_DESKTOP_TYPE_NATIVE);
   Browser* browser = browser::FindTabbedBrowser(
-      profile->GetOffTheRecordProfile(), false);
+      profile->GetOffTheRecordProfile(),
+      false,
+      chrome::HOST_DESKTOP_TYPE_NATIVE);
   WaitForNavigations(&chrome::GetActiveWebContents(browser)->GetController(),
                      1);
   return browser;
@@ -374,23 +400,17 @@ AppModalDialog* WaitForAppModalDialog() {
   return content::Source<AppModalDialog>(observer.source()).ptr();
 }
 
-int FindInPage(TabContents* tab_contents, const string16& search_string,
+int FindInPage(WebContents* tab, const string16& search_string,
                bool forward, bool match_case, int* ordinal,
                gfx::Rect* selection_rect) {
-  tab_contents->
-      find_tab_helper()->StartFinding(search_string, forward, match_case);
-  FindInPageNotificationObserver observer(tab_contents);
+  FindTabHelper* find_tab_helper = FindTabHelper::FromWebContents(tab);
+  find_tab_helper->StartFinding(search_string, forward, match_case);
+  FindInPageNotificationObserver observer(tab);
   if (ordinal)
     *ordinal = observer.active_match_ordinal();
   if (selection_rect)
     *selection_rect = observer.selection_rect();
   return observer.number_of_matches();
-}
-
-void CloseAllInfoBars(TabContents* tab) {
-  InfoBarTabHelper* infobar_helper = tab->infobar_tab_helper();
-  while (infobar_helper->GetInfoBarCount() > 0)
-    infobar_helper->RemoveInfoBar(infobar_helper->GetInfoBarDelegateAt(0));
 }
 
 void RegisterAndWait(content::NotificationObserver* observer,
@@ -429,7 +449,7 @@ void WaitForHistoryToLoad(HistoryService* history_service) {
 }
 
 void DownloadURL(Browser* browser, const GURL& download_url) {
-  ScopedTempDir downloads_directory;
+  base::ScopedTempDir downloads_directory;
   ASSERT_TRUE(downloads_directory.CreateUniqueTempDir());
   browser->profile()->GetPrefs()->SetFilePath(
       prefs::kDownloadDefaultDirectory, downloads_directory.path());
@@ -459,23 +479,6 @@ void SendToOmniboxAndSubmit(LocationBar* location_bar,
   }
 }
 
-bool GetNativeWindow(const Browser* browser, gfx::NativeWindow* native_window) {
-  BrowserWindow* window = browser->window();
-  if (!window)
-    return false;
-
-  *native_window = window->GetNativeWindow();
-  return *native_window;
-}
-
-bool BringBrowserWindowToFront(const Browser* browser) {
-  gfx::NativeWindow window = NULL;
-  if (!GetNativeWindow(browser, &window))
-    return false;
-
-  return ui_test_utils::ShowAndFocusNativeWindow(window);
-}
-
 Browser* GetBrowserNotInSet(std::set<Browser*> excluded_browsers) {
   for (BrowserList::const_iterator iter = BrowserList::begin();
        iter != BrowserList::end();
@@ -485,77 +488,6 @@ Browser* GetBrowserNotInSet(std::set<Browser*> excluded_browsers) {
   }
 
   return NULL;
-}
-
-bool SendKeyPressSync(const Browser* browser,
-                      ui::KeyboardCode key,
-                      bool control,
-                      bool shift,
-                      bool alt,
-                      bool command) {
-  gfx::NativeWindow window = NULL;
-  if (!GetNativeWindow(browser, &window))
-    return false;
-  scoped_refptr<content::MessageLoopRunner> runner =
-      new content::MessageLoopRunner;
-  bool result;
-  result = ui_controls::SendKeyPressNotifyWhenDone(
-      window, key, control, shift, alt, command, runner->QuitClosure());
-#if defined(OS_WIN)
-  if (!result && BringBrowserWindowToFront(browser)) {
-    result = ui_controls::SendKeyPressNotifyWhenDone(
-        window, key, control, shift, alt, command, runner->QuitClosure());
-  }
-#endif
-  if (!result) {
-    LOG(ERROR) << "ui_controls::SendKeyPressNotifyWhenDone failed";
-    return false;
-  }
-
-  // Run the message loop. It'll stop running when either the key was received
-  // or the test timed out (in which case testing::Test::HasFatalFailure should
-  // be set).
-  runner->Run();
-  return !testing::Test::HasFatalFailure();
-}
-
-bool SendKeyPressAndWait(const Browser* browser,
-                         ui::KeyboardCode key,
-                         bool control,
-                         bool shift,
-                         bool alt,
-                         bool command,
-                         int type,
-                         const content::NotificationSource& source) {
-  content::WindowedNotificationObserver observer(type, source);
-
-  if (!SendKeyPressSync(browser, key, control, shift, alt, command))
-    return false;
-
-  observer.Wait();
-  return !testing::Test::HasFatalFailure();
-}
-
-bool SendMouseMoveSync(const gfx::Point& location) {
-  scoped_refptr<content::MessageLoopRunner> runner =
-      new content::MessageLoopRunner;
-  if (!ui_controls::SendMouseMoveNotifyWhenDone(
-          location.x(), location.y(), runner->QuitClosure())) {
-    return false;
-  }
-  runner->Run();
-  return !testing::Test::HasFatalFailure();
-}
-
-bool SendMouseEventsSync(ui_controls::MouseButton type, int state) {
-  scoped_refptr<content::MessageLoopRunner> runner =
-      new content::MessageLoopRunner;
-  if (!ui_controls::SendMouseEventsNotifyWhenDone(
-          type, state, runner->QuitClosure())) {
-    return false;
-  }
-  runner->Run();
-  return !testing::Test::HasFatalFailure();
 }
 
 WindowedTabAddedNotificationObserver::WindowedTabAddedNotificationObserver(
@@ -609,44 +541,6 @@ Browser* BrowserAddedObserver::WaitForSingleNewBrowser() {
   return GetBrowserNotInSet(original_browsers_);
 }
 
-DOMMessageQueue::DOMMessageQueue() : waiting_for_message_(false) {
-  registrar_.Add(this, content::NOTIFICATION_DOM_OPERATION_RESPONSE,
-                 content::NotificationService::AllSources());
-}
-
-DOMMessageQueue::~DOMMessageQueue() {}
-
-void DOMMessageQueue::Observe(int type,
-                              const content::NotificationSource& source,
-                              const content::NotificationDetails& details) {
-  content::Details<DomOperationNotificationDetails> dom_op_details(details);
-  content::Source<RenderViewHost> sender(source);
-  message_queue_.push(dom_op_details->json);
-  if (waiting_for_message_) {
-    waiting_for_message_ = false;
-    message_loop_runner_->Quit();
-  }
-}
-
-void DOMMessageQueue::ClearQueue() {
-  message_queue_ = std::queue<std::string>();
-}
-
-bool DOMMessageQueue::WaitForMessage(std::string* message) {
-  if (message_queue_.empty()) {
-    waiting_for_message_ = true;
-    // This will be quit when a new message comes in.
-    message_loop_runner_ = new content::MessageLoopRunner;
-    message_loop_runner_->Run();
-  }
-  // The queue should not be empty, unless we were quit because of a timeout.
-  if (message_queue_.empty())
-    return false;
-  if (message)
-    *message = message_queue_.front();
-  return true;
-}
-
 // Coordinates taking snapshots of a |RenderWidget|.
 class SnapshotTaker {
  public:
@@ -657,10 +551,8 @@ class SnapshotTaker {
                                 const gfx::Size& desired_size,
                                 SkBitmap* bitmap) WARN_UNUSED_RESULT {
     bitmap_ = bitmap;
-    ThumbnailGenerator* generator = g_browser_process->GetThumbnailGenerator();
-    generator->MonitorRenderer(rwh, true);
     snapshot_taken_ = false;
-    generator->AskForSnapshot(
+    g_browser_process->GetRenderWidgetSnapshotTaker()->AskForSnapshot(
         rwh,
         base::Bind(&SnapshotTaker::OnSnapshotTaken, base::Unretained(this)),
         page_size,
@@ -696,7 +588,7 @@ class SnapshotTaker {
   }
 
  private:
-  // Called when the ThumbnailGenerator has taken the snapshot.
+  // Called when the RenderWidgetSnapshotTaker has taken the snapshot.
   void OnSnapshotTaken(const SkBitmap& bitmap) {
     *bitmap_ = bitmap;
     snapshot_taken_ = true;
@@ -725,6 +617,46 @@ bool TakeEntirePageSnapshot(RenderViewHost* rvh, SkBitmap* bitmap) {
   SnapshotTaker taker;
   return taker.TakeEntirePageSnapshot(rvh, bitmap);
 }
+
+#if defined(OS_WIN)
+
+bool SaveScreenSnapshotToDirectory(const FilePath& directory,
+                                   FilePath* screenshot_path) {
+  bool succeeded = false;
+  FilePath out_path(GetSnapshotFileName(directory));
+
+  MONITORINFO monitor_info = {};
+  monitor_info.cbSize = sizeof(monitor_info);
+  HMONITOR main_monitor = MonitorFromWindow(NULL, MONITOR_DEFAULTTOPRIMARY);
+  if (GetMonitorInfo(main_monitor, &monitor_info)) {
+    RECT& rect = monitor_info.rcMonitor;
+
+    std::vector<unsigned char> png_data;
+    gfx::Rect bounds(
+        gfx::Size(rect.right - rect.left, rect.bottom - rect.top));
+    if (ui::GrabWindowSnapshot(NULL, &png_data, bounds) &&
+        png_data.size() <= INT_MAX) {
+      int bytes = static_cast<int>(png_data.size());
+      int written = file_util::WriteFile(
+          out_path, reinterpret_cast<char*>(&png_data[0]), bytes);
+      succeeded = (written == bytes);
+    }
+  }
+
+  if (succeeded && screenshot_path != NULL)
+    *screenshot_path = out_path;
+
+  return succeeded;
+}
+
+bool SaveScreenSnapshotToDesktop(FilePath* screenshot_path) {
+  FilePath desktop;
+
+  return PathService::Get(base::DIR_USER_DESKTOP, &desktop) &&
+      SaveScreenSnapshotToDirectory(desktop, screenshot_path);
+}
+
+#endif  // defined(OS_WIN)
 
 void OverrideGeolocation(double latitude, double longitude) {
   content::Geoposition position;

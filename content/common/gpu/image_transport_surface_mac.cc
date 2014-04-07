@@ -16,6 +16,7 @@
 #include "ui/gl/gl_surface_cgl.h"
 #include "ui/surface/io_surface_support_mac.h"
 
+namespace content {
 namespace {
 
 // IOSurface dimensions will be rounded up to a multiple of this value in order
@@ -56,7 +57,8 @@ class IOSurfaceImageTransportSurface : public gfx::NoOpGLSurfaceCGL,
 
  protected:
   // ImageTransportSurface implementation
-  virtual void OnBufferPresented(uint32 sync_point) OVERRIDE;
+  virtual void OnBufferPresented(
+      const AcceleratedSurfaceMsg_BufferPresented_Params& params) OVERRIDE;
   virtual void OnResizeViewACK() OVERRIDE;
   virtual void OnResize(gfx::Size size) OVERRIDE;
 
@@ -149,15 +151,7 @@ bool IOSurfaceImageTransportSurface::Initialize() {
 }
 
 void IOSurfaceImageTransportSurface::Destroy() {
-  if (fbo_id_) {
-    glDeleteFramebuffersEXT(1, &fbo_id_);
-    fbo_id_ = 0;
-  }
-
-  if (texture_id_) {
-    glDeleteTextures(1, &texture_id_);
-    texture_id_ = 0;
-  }
+  UnrefIOSurface();
 
   helper_->Destroy();
   NoOpGLSurfaceCGL::Destroy();
@@ -233,6 +227,7 @@ bool IOSurfaceImageTransportSurface::SwapBuffers() {
 
   GpuHostMsg_AcceleratedSurfaceBuffersSwapped_Params params;
   params.surface_handle = io_surface_handle_;
+  params.size = GetSize();
   helper_->SendAcceleratedSurfaceBuffersSwapped(params);
 
   DCHECK(!is_swap_buffers_pending_);
@@ -253,6 +248,7 @@ bool IOSurfaceImageTransportSurface::PostSubBuffer(
   params.y = y;
   params.width = width;
   params.height = height;
+  params.surface_size = GetSize();
   helper_->SendAcceleratedSurfacePostSubBuffer(params);
 
   DCHECK(!is_swap_buffers_pending_);
@@ -272,7 +268,8 @@ gfx::Size IOSurfaceImageTransportSurface::GetSize() {
   return size_;
 }
 
-void IOSurfaceImageTransportSurface::OnBufferPresented(uint32 sync_point) {
+void IOSurfaceImageTransportSurface::OnBufferPresented(
+    const AcceleratedSurfaceMsg_BufferPresented_Params& /* params */) {
   DCHECK(is_swap_buffers_pending_);
   is_swap_buffers_pending_ = false;
   if (did_unschedule_) {
@@ -299,7 +296,13 @@ void IOSurfaceImageTransportSurface::OnResize(gfx::Size size) {
 }
 
 void IOSurfaceImageTransportSurface::UnrefIOSurface() {
-  DCHECK(context_->IsCurrent(this));
+  // If we have resources to destroy, then make sure that we have a current
+  // context which we can use to delete the resources.
+  if (context_ || fbo_id_ || texture_id_) {
+    DCHECK(gfx::GLContext::GetCurrent() == context_);
+    DCHECK(context_->IsCurrent(this));
+    DCHECK(CGLGetCurrentContext());
+  }
 
   if (fbo_id_) {
     glDeleteFramebuffersEXT(1, &fbo_id_);
@@ -437,5 +440,7 @@ scoped_refptr<gfx::GLSurface> ImageTransportSurface::CreateSurface(
   else
     return NULL;
 }
+
+}  // namespace content
 
 #endif  // defined(USE_GPU)

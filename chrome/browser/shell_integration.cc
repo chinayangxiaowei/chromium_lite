@@ -26,7 +26,8 @@ ShellIntegration::DefaultWebClientSetPermission
 }
 
 ShellIntegration::ShortcutInfo::ShortcutInfo()
-    : create_on_desktop(false),
+    : is_platform_app(false),
+      create_on_desktop(false),
       create_in_applications_menu(false),
       create_in_quick_launch_bar(false) {
 }
@@ -95,6 +96,12 @@ CommandLine ShellIntegration::CommandLineArgsForLauncher(
 #if !defined(OS_WIN)
 // static
 bool ShellIntegration::SetAsDefaultBrowserInteractive() {
+  return false;
+}
+
+// static
+bool ShellIntegration::SetAsDefaultProtocolClientInteractive(
+    const std::string& protocol) {
   return false;
 }
 #endif
@@ -194,13 +201,13 @@ void ShellIntegration::DefaultWebClientWorker::UpdateUI(
     DefaultWebClientState state) {
   if (observer_) {
     switch (state) {
-      case NOT_DEFAULT_WEB_CLIENT:
+      case NOT_DEFAULT:
         observer_->SetDefaultWebClientUIState(STATE_NOT_DEFAULT);
         break;
-      case IS_DEFAULT_WEB_CLIENT:
+      case IS_DEFAULT:
         observer_->SetDefaultWebClientUIState(STATE_IS_DEFAULT);
         break;
-      case UNKNOWN_DEFAULT_WEB_CLIENT:
+      case UNKNOWN_DEFAULT:
         observer_->SetDefaultWebClientUIState(STATE_UNKNOWN);
         break;
       default:
@@ -223,7 +230,7 @@ ShellIntegration::DefaultBrowserWorker::DefaultBrowserWorker(
 
 ShellIntegration::DefaultWebClientState
 ShellIntegration::DefaultBrowserWorker::CheckIsDefault() {
-  return ShellIntegration::IsDefaultBrowser();
+  return ShellIntegration::GetDefaultBrowser();
 }
 
 bool ShellIntegration::DefaultBrowserWorker::SetAsDefault(
@@ -264,5 +271,20 @@ ShellIntegration::DefaultProtocolClientWorker::CheckIsDefault() {
 
 bool ShellIntegration::DefaultProtocolClientWorker::SetAsDefault(
     bool interactive_permitted) {
-  return ShellIntegration::SetAsDefaultProtocolClient(protocol_);
+  bool result = false;
+  switch (ShellIntegration::CanSetAsDefaultProtocolClient()) {
+    case ShellIntegration::SET_DEFAULT_UNATTENDED:
+      result = ShellIntegration::SetAsDefaultProtocolClient(protocol_);
+      break;
+    case ShellIntegration::SET_DEFAULT_INTERACTIVE:
+      if (interactive_permitted) {
+        result = ShellIntegration::SetAsDefaultProtocolClientInteractive(
+            protocol_);
+      }
+      break;
+    default:
+      NOTREACHED();
+  }
+
+  return result;
 }

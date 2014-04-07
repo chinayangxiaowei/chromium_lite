@@ -15,7 +15,8 @@
 #include "googleurl/src/gurl.h"
 #include "grit/webkit_resources.h"
 #include "net/android/network_library.h"
-#include "media/base/android/media_player_bridge.h"
+#include "net/android/net_jni_registrar.h"
+#include "media/base/android/media_jni_registrar.h"
 #include "ui/base/resource/resource_bundle.h"
 #include "webkit/support/test_webkit_platform_support.h"
 #include "webkit/tools/test_shell/simple_resource_loader_bridge.h"
@@ -43,12 +44,15 @@ void BeforeInitialize(bool unit_test_mode) {
   // loading and complaining the non-exsistent /etc/xml/catalog file.
   setenv("XML_CATALOG_FILES", "", 0);
 
-  // For now TestWebKitAPI and webkit_unit_tests are standalone executables
-  // which don't have Java capabilities. Init Java for only DumpRenderTree.
+  JNIEnv* env = base::android::AttachCurrentThread();
+  net::android::RegisterNetworkLibrary(env);
+
+  // Chromium binaries will register their Jni bindings through the library
+  // loader that is part of content/. WebKit uses a different path, so the
+  // bindings have to be initialized separately as well.
   if (!unit_test_mode) {
-    JNIEnv* env = base::android::AttachCurrentThread();
-    media::MediaPlayerBridge::RegisterMediaPlayerListener(env);
-    net::android::RegisterNetworkLibrary(env);
+    media::RegisterJni(env);
+    net::android::RegisterJni(env);
   }
 }
 
@@ -62,15 +66,18 @@ void AfterInitialize(bool unit_test_mode) {
 
   // We enable file-over-http to bridge the file protocol to http protocol
   // in here, which can
-  // (1) run the layout tests on android target device, but never need to
-  // push the test files and corresponding resources to device, which saves
-  // huge running time.
+  // (1) run the layout and performance tests on android target device, but
+  // never need to push the test files and corresponding resources to device,
+  // which saves huge running time.
   // (2) still run non-http layout (tests not under LayoutTests/http) tests
   // via file protocol without breaking test environment / convention of webkit
   // layout tests, which are followed by current all webkit ports.
   SimpleResourceLoaderBridge::AllowFileOverHTTP(
       "third_party/WebKit/LayoutTests/",
       GURL("http://127.0.0.1:8000/all-tests/"));
+  SimpleResourceLoaderBridge::AllowFileOverHTTP(
+      "third_party/WebKit/PerformanceTests/",
+      GURL("http://127.0.0.1:8000/all-perf-tests/"));
 }
 
 void BeforeShutdown() {
@@ -114,6 +121,6 @@ base::StringPiece TestWebKitPlatformSupport::GetDataResource(
     }
   }
 
-  return ResourceBundle::GetSharedInstance().GetRawDataResource(
+  return ResourceBundle::GetSharedInstance().GetRawDataResourceForScale(
       resource_id, scale_factor);
 }

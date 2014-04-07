@@ -91,10 +91,9 @@ TEST_F(GLES2DecoderTest2, IsBufferInvalidArgsBadSharedMemoryId) {
 }
 
 TEST_F(GLES2DecoderTest2, IsEnabledValidArgs) {
-  EXPECT_CALL(*gl_, IsEnabled(GL_DITHER));
   SpecializedSetup<IsEnabled, 0>(true);
   IsEnabled cmd;
-  cmd.Init(GL_DITHER, shared_memory_id_, shared_memory_offset_);
+  cmd.Init(GL_BLEND, shared_memory_id_, shared_memory_offset_);
   EXPECT_EQ(error::kNoError, ExecuteCmd(cmd));
   EXPECT_EQ(GL_NO_ERROR, GetGLError());
 }
@@ -118,12 +117,11 @@ TEST_F(GLES2DecoderTest2, IsEnabledInvalidArgs0_1) {
 }
 
 TEST_F(GLES2DecoderTest2, IsEnabledInvalidArgsBadSharedMemoryId) {
-  EXPECT_CALL(*gl_, IsEnabled(GL_DITHER)).Times(0);
   SpecializedSetup<IsEnabled, 0>(false);
   IsEnabled cmd;
-  cmd.Init(GL_DITHER, kInvalidSharedMemoryId, shared_memory_offset_);
+  cmd.Init(GL_BLEND, kInvalidSharedMemoryId, shared_memory_offset_);
   EXPECT_EQ(error::kOutOfBounds, ExecuteCmd(cmd));
-  cmd.Init(GL_DITHER, shared_memory_id_, kInvalidSharedMemoryOffset);
+  cmd.Init(GL_BLEND, shared_memory_id_, kInvalidSharedMemoryOffset);
   EXPECT_EQ(error::kOutOfBounds, ExecuteCmd(cmd));
 }
 
@@ -217,12 +215,20 @@ TEST_F(GLES2DecoderTest2, IsTextureInvalidArgsBadSharedMemoryId) {
 }
 
 TEST_F(GLES2DecoderTest2, LineWidthValidArgs) {
-  EXPECT_CALL(*gl_, LineWidth(1));
+  EXPECT_CALL(*gl_, LineWidth(0.5f));
   SpecializedSetup<LineWidth, 0>(true);
   LineWidth cmd;
-  cmd.Init(1);
+  cmd.Init(0.5f);
   EXPECT_EQ(error::kNoError, ExecuteCmd(cmd));
   EXPECT_EQ(GL_NO_ERROR, GetGLError());
+}
+
+TEST_F(GLES2DecoderTest2, LineWidthInvalidValue0_0) {
+  SpecializedSetup<LineWidth, 0>(false);
+  LineWidth cmd;
+  cmd.Init(0.0f);
+  EXPECT_EQ(error::kNoError, ExecuteCmd(cmd));
+  EXPECT_EQ(GL_INVALID_VALUE, GetGLError());
 }
 
 TEST_F(GLES2DecoderTest2, LinkProgramValidArgs) {
@@ -361,19 +367,19 @@ TEST_F(GLES2DecoderTest2, StencilMaskSeparateValidArgs) {
 }
 
 TEST_F(GLES2DecoderTest2, StencilOpValidArgs) {
-  EXPECT_CALL(*gl_, StencilOp(GL_KEEP, GL_KEEP, GL_KEEP));
+  EXPECT_CALL(*gl_, StencilOp(GL_KEEP, GL_INCR, GL_KEEP));
   SpecializedSetup<StencilOp, 0>(true);
   StencilOp cmd;
-  cmd.Init(GL_KEEP, GL_KEEP, GL_KEEP);
+  cmd.Init(GL_KEEP, GL_INCR, GL_KEEP);
   EXPECT_EQ(error::kNoError, ExecuteCmd(cmd));
   EXPECT_EQ(GL_NO_ERROR, GetGLError());
 }
 
 TEST_F(GLES2DecoderTest2, StencilOpSeparateValidArgs) {
-  EXPECT_CALL(*gl_, StencilOpSeparate(GL_FRONT, GL_KEEP, GL_KEEP, GL_KEEP));
+  EXPECT_CALL(*gl_, StencilOpSeparate(GL_FRONT, GL_INCR, GL_KEEP, GL_KEEP));
   SpecializedSetup<StencilOpSeparate, 0>(true);
   StencilOpSeparate cmd;
-  cmd.Init(GL_FRONT, GL_KEEP, GL_KEEP, GL_KEEP);
+  cmd.Init(GL_FRONT, GL_INCR, GL_KEEP, GL_KEEP);
   EXPECT_EQ(error::kNoError, ExecuteCmd(cmd));
   EXPECT_EQ(GL_NO_ERROR, GetGLError());
 }
@@ -1737,6 +1743,6 @@ TEST_F(GLES2DecoderTest2, PopGroupMarkerEXTValidArgs) {
   EXPECT_EQ(error::kNoError, ExecuteCmd(cmd));
   EXPECT_EQ(GL_NO_ERROR, GetGLError());
 }
-// TODO(gman): SwapBuffers
+// TODO(gman): GenVertexArraysOES
 #endif  // GPU_COMMAND_BUFFER_SERVICE_GLES2_CMD_DECODER_UNITTEST_2_AUTOGEN_H_
 

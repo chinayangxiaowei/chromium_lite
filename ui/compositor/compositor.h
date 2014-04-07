@@ -9,9 +9,7 @@
 #include "base/memory/ref_counted.h"
 #include "base/memory/scoped_ptr.h"
 #include "base/observer_list.h"
-#include "third_party/WebKit/Source/Platform/chromium/public/WebLayer.h"
-#include "third_party/WebKit/Source/Platform/chromium/public/WebLayerTreeView.h"
-#include "third_party/WebKit/Source/Platform/chromium/public/WebLayerTreeViewClient.h"
+#include "cc/layer_tree_host_client.h"
 #include "ui/compositor/compositor_export.h"
 #include "ui/gfx/native_widget_types.h"
 #include "ui/gfx/size.h"
@@ -19,6 +17,12 @@
 #include "ui/gl/gl_share_group.h"
 
 class SkBitmap;
+
+namespace cc {
+class FontAtlas;
+class Layer;
+class LayerTreeHost;
+}
 
 namespace gfx {
 class GLContext;
@@ -28,11 +32,16 @@ class Point;
 class Rect;
 }
 
+namespace WebKit {
+class WebGraphicsContext3D;
+}
+
 namespace ui {
 
 class Compositor;
 class CompositorObserver;
 class Layer;
+class PostedSwapQueue;
 
 // This class abstracts the creation of the 3D context for the compositor. It is
 // a global object.
@@ -48,10 +57,10 @@ class COMPOSITOR_EXPORT ContextFactory {
   // created on the first call of GetInstance.
   static void SetInstance(ContextFactory* instance);
 
-  // Creates a context for given compositor. The factory may keep per-compositor
-  // data (e.g. a shared context), that needs to be cleaned up by calling
-  // RemoveCompositor when the compositor gets destroyed.
-  virtual WebKit::WebGraphicsContext3D* CreateContext(
+  // Creates an output surface for the given compositor. The factory may keep
+  // per-compositor data (e.g. a shared context), that needs to be cleaned up
+  // by calling RemoveCompositor when the compositor gets destroyed.
+  virtual cc::OutputSurface* CreateOutputSurface(
       Compositor* compositor) = 0;
 
   // Creates a context used for offscreen rendering. This context can be shared
@@ -69,7 +78,7 @@ class COMPOSITOR_EXPORT DefaultContextFactory : public ContextFactory {
   virtual ~DefaultContextFactory();
 
   // ContextFactory implementation
-  virtual WebKit::WebGraphicsContext3D* CreateContext(
+  virtual cc::OutputSurface* CreateOutputSurface(
       Compositor* compositor) OVERRIDE;
   virtual WebKit::WebGraphicsContext3D* CreateOffscreenContext() OVERRIDE;
   virtual void RemoveCompositor(Compositor* compositor) OVERRIDE;
@@ -94,23 +103,27 @@ class COMPOSITOR_EXPORT DefaultContextFactory : public ContextFactory {
 // to a layer.
 class COMPOSITOR_EXPORT Texture : public base::RefCounted<Texture> {
  public:
-  Texture(bool flipped, const gfx::Size& size);
+  Texture(bool flipped, const gfx::Size& size, float device_scale_factor);
 
-  unsigned int texture_id() const { return texture_id_; }
-  void set_texture_id(unsigned int id) { texture_id_ = id; }
   bool flipped() const { return flipped_; }
   gfx::Size size() const { return size_; }
+  float device_scale_factor() const { return device_scale_factor_; }
+
+  virtual unsigned int PrepareTexture() = 0;
   virtual WebKit::WebGraphicsContext3D* HostContext3D() = 0;
+
+  virtual void Consume(const gfx::Size& new_size) {}
+  virtual void Produce() {}
 
  protected:
   virtual ~Texture();
+  gfx::Size size_;  // in pixel
 
  private:
   friend class base::RefCounted<Texture>;
 
-  unsigned int texture_id_;
   bool flipped_;
-  gfx::Size size_;  // in pixel
+  float device_scale_factor_;
 
   DISALLOW_COPY_AND_ASSIGN(Texture);
 };
@@ -125,13 +138,39 @@ class COMPOSITOR_EXPORT CompositorDelegate {
   virtual ~CompositorDelegate() {}
 };
 
+// This class represents a lock on the compositor, that can be used to prevent
+// commits to the compositor tree while we're waiting for an asynchronous
+// event. The typical use case is when waiting for a renderer to produce a frame
+// at the right size. The caller keeps a reference on this object, and drops the
+// reference once it desires to release the lock.
+// Note however that the lock is cancelled after a short timeout to ensure
+// responsiveness of the UI, so the compositor tree should be kept in a
+// "reasonable" state while the lock is held.
+// Don't instantiate this class directly, use Compositor::GetCompositorLock.
+class COMPOSITOR_EXPORT CompositorLock
+    : public base::RefCounted<CompositorLock>,
+      public base::SupportsWeakPtr<CompositorLock> {
+ private:
+  friend class base::RefCounted<CompositorLock>;
+  friend class Compositor;
+
+  explicit CompositorLock(Compositor* compositor);
+  ~CompositorLock();
+
+  void CancelLock();
+
+  Compositor* compositor_;
+  DISALLOW_COPY_AND_ASSIGN(CompositorLock);
+};
+
+
 // Compositor object to take care of GPU painting.
 // A Browser compositor object is responsible for generating the final
 // displayable form of pixels comprising a single widget's contents. It draws an
 // appropriately transformed texture for each transformed view in the widget's
 // view hierarchy.
 class COMPOSITOR_EXPORT Compositor
-    : NON_EXPORTED_BASE(public WebKit::WebLayerTreeViewClient) {
+    : NON_EXPORTED_BASE(public cc::LayerTreeHostClient) {
  public:
   Compositor(CompositorDelegate* delegate,
              gfx::AcceleratedWidget widget);
@@ -151,6 +190,11 @@ class COMPOSITOR_EXPORT Compositor
   const Layer* root_layer() const { return root_layer_; }
   Layer* root_layer() { return root_layer_; }
   void SetRootLayer(Layer* root_layer);
+
+  // Called when we need the compositor to preserve the alpha channel in the
+  // output for situations when we want to render transparently atop something
+  // else, e.g. Aero glass.
+  void SetHostHasTransparentBackground(bool host_has_transparent_background);
 
   // The scale factor of the device that this compositor is
   // compositing layers on.
@@ -186,13 +230,9 @@ class COMPOSITOR_EXPORT Compositor
   void RemoveObserver(CompositorObserver* observer);
   bool HasObserver(CompositorObserver* observer);
 
-  // Returns whether a draw is pending, that is, if we're between the Draw call
-  // and the OnCompositingEnded.
-  bool DrawPending() const { return swap_posted_; }
-
-  // Returns whether the drawing is issued from a separate thread
-  // (i.e. |Compositor::Initialize(true)| was called).
-  bool IsThreaded() const;
+  // Creates a compositor lock. Returns NULL if it is not possible to lock at
+  // this time (i.e. we're waiting to complete a previous unlock).
+  scoped_refptr<CompositorLock> GetCompositorLock();
 
   // Internal functions, called back by command-buffer contexts on swap buffer
   // events.
@@ -206,23 +246,39 @@ class COMPOSITOR_EXPORT Compositor
   // Signals swap has aborted (e.g. lost context).
   void OnSwapBuffersAborted();
 
-  // WebLayerTreeViewClient implementation.
-  virtual void updateAnimations(double frameBeginTime);
-  virtual void layout();
-  virtual void applyScrollAndScale(const WebKit::WebSize& scrollDelta,
-                                   float scaleFactor);
-  virtual WebKit::WebCompositorOutputSurface* createOutputSurface();
-  virtual void didRecreateOutputSurface(bool success);
-  virtual void didCommit();
-  virtual void didCommitAndDrawFrame();
-  virtual void didCompleteSwapBuffers();
-  virtual void scheduleComposite();
+  // LayerTreeHostClient implementation.
+  virtual void willBeginFrame() OVERRIDE;
+  virtual void didBeginFrame() OVERRIDE;
+  virtual void animate(double frameBeginTime) OVERRIDE;
+  virtual void layout() OVERRIDE;
+  virtual void applyScrollAndScale(gfx::Vector2d scrollDelta,
+                                   float pageScale) OVERRIDE;
+  virtual scoped_ptr<cc::OutputSurface>
+      createOutputSurface() OVERRIDE;
+  virtual void didRecreateOutputSurface(bool success) OVERRIDE;
+  virtual scoped_ptr<cc::InputHandler> createInputHandler() OVERRIDE;
+  virtual void willCommit() OVERRIDE;
+  virtual void didCommit() OVERRIDE;
+  virtual void didCommitAndDrawFrame() OVERRIDE;
+  virtual void didCompleteSwapBuffers() OVERRIDE;
+  virtual void scheduleComposite() OVERRIDE;
+  virtual scoped_ptr<cc::FontAtlas> createFontAtlas() OVERRIDE;
+
 
   int last_started_frame() { return last_started_frame_; }
   int last_ended_frame() { return last_ended_frame_; }
 
+  bool IsLocked() { return compositor_lock_ != NULL; }
+
  private:
   friend class base::RefCounted<Compositor>;
+  friend class CompositorLock;
+
+  // Called by CompositorLock.
+  void UnlockCompositor();
+
+  // Called to release any pending CompositorLock
+  void CancelCompositorLock();
 
   // Notifies the compositor that compositing is complete.
   void NotifyEnd();
@@ -236,12 +292,11 @@ class COMPOSITOR_EXPORT Compositor
   ObserverList<CompositorObserver> observer_list_;
 
   gfx::AcceleratedWidget widget_;
-  scoped_ptr<WebKit::WebLayer> root_web_layer_;
-  scoped_ptr<WebKit::WebLayerTreeView> host_;
+  scoped_refptr<cc::Layer> root_web_layer_;
+  scoped_ptr<cc::LayerTreeHost> host_;
 
-  // This is set to true when the swap buffers has been posted and we're waiting
-  // for completion.
-  bool swap_posted_;
+  // Used to verify that we have at most one draw swap in flight.
+  scoped_ptr<PostedSwapQueue> posted_swaps_;
 
   // The device scale factor of the monitor that this compositor is compositing
   // layers on.
@@ -251,6 +306,8 @@ class COMPOSITOR_EXPORT Compositor
   int last_ended_frame_;
 
   bool disable_schedule_composite_;
+
+  CompositorLock* compositor_lock_;
 
   DISALLOW_COPY_AND_ASSIGN(Compositor);
 };

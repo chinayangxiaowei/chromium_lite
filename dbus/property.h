@@ -11,6 +11,7 @@
 #include "base/basictypes.h"
 #include "base/bind.h"
 #include "base/callback.h"
+#include "dbus/dbus_export.h"
 #include "dbus/message.h"
 #include "dbus/object_proxy.h"
 
@@ -194,7 +195,7 @@ class PropertyBase {
 //
 // After creation, client code should call ConnectSignals() and most likely
 // GetAll() to seed initial values and update as changes occur.
-class PropertySet {
+class CHROME_DBUS_EXPORT PropertySet {
  public:
   // Callback for changes to cached values of properties, either notified
   // via signal, or as a result of calls to Get() and GetAll(). The |name|
@@ -349,7 +350,7 @@ class PropertySet {
 // default value. Specializations for basic D-Bus types, strings, object
 // paths and arrays are provided for you.
 template <class T>
-class Property : public PropertyBase {
+class CHROME_DBUS_EXPORT Property : public PropertyBase {
  public:
   Property() {}
 
@@ -398,6 +399,66 @@ class Property : public PropertyBase {
   // Replacement value of the property.
   T set_value_;
 };
+
+template <> Property<uint8>::Property();
+template <> bool Property<uint8>::PopValueFromReader(MessageReader* reader);
+template <> void Property<uint8>::AppendSetValueToWriter(MessageWriter* writer);
+
+template <> Property<bool>::Property();
+template <> bool Property<bool>::PopValueFromReader(MessageReader* reader);
+template <> void Property<bool>::AppendSetValueToWriter(MessageWriter* writer);
+
+template <> Property<int16>::Property();
+template <> bool Property<int16>::PopValueFromReader(MessageReader* reader);
+template <> void Property<int16>::AppendSetValueToWriter(MessageWriter* writer);
+
+template <> Property<uint16>::Property();
+template <> bool Property<uint16>::PopValueFromReader(MessageReader* reader);
+template <> void Property<uint16>::AppendSetValueToWriter(
+  MessageWriter* writer);
+
+template <> Property<int32>::Property();
+template <> bool Property<int32>::PopValueFromReader(MessageReader* reader);
+template <> void Property<int32>::AppendSetValueToWriter(MessageWriter* writer);
+
+template <> Property<uint32>::Property();
+template <> bool Property<uint32>::PopValueFromReader(MessageReader* reader);
+template <> void Property<uint32>::AppendSetValueToWriter(
+  MessageWriter* writer);
+
+template <> Property<int64>::Property();
+template <> bool Property<int64>::PopValueFromReader(MessageReader* reader);
+template <> void Property<int64>::AppendSetValueToWriter(MessageWriter* writer);
+
+template <> Property<uint64>::Property();
+template <> bool Property<uint64>::PopValueFromReader(MessageReader* reader);
+template <> void Property<uint64>::AppendSetValueToWriter(
+  MessageWriter* writer);
+
+template <> Property<double>::Property();
+template <> bool Property<double>::PopValueFromReader(MessageReader* reader);
+template <> void Property<double>::AppendSetValueToWriter(
+  MessageWriter* writer);
+
+template <> bool Property<std::string>::PopValueFromReader(
+  MessageReader* reader);
+template <> void Property<std::string>::AppendSetValueToWriter(
+  MessageWriter* writer);
+
+template <> bool Property<ObjectPath>::PopValueFromReader(
+  MessageReader* reader);
+template <> void Property<ObjectPath>::AppendSetValueToWriter(
+  MessageWriter* writer);
+
+template <> bool Property<std::vector<std::string> >::PopValueFromReader(
+  MessageReader* reader);
+template <> void Property<std::vector<std::string> >::AppendSetValueToWriter(
+  MessageWriter* writer);
+
+template <> bool Property<std::vector<ObjectPath> >::PopValueFromReader(
+  MessageReader* reader);
+template <> void Property<std::vector<ObjectPath> >::AppendSetValueToWriter(
+  MessageWriter* writer);
 
 }  // namespace dbus
 

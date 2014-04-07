@@ -9,8 +9,8 @@
 
 #include "base/file_path.h"
 #include "base/file_util.h"
+#include "base/files/scoped_temp_dir.h"
 #include "base/path_service.h"
-#include "base/scoped_temp_dir.h"
 #include "base/stringprintf.h"
 #include "base/time.h"
 #include "base/utf_string_conversions.h"
@@ -20,8 +20,8 @@
 #include "chrome/common/extensions/extension_icon_set.h"
 #include "chrome/common/extensions/extension_resource.h"
 #include "chrome/common/extensions/permissions/permission_set.h"
-#include "chrome/common/extensions/url_pattern.h"
 #include "chrome/common/web_apps.h"
+#include "extensions/common/url_pattern.h"
 #include "googleurl/src/gurl.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "ui/gfx/codec/png_codec.h"
@@ -93,6 +93,9 @@ TEST(ExtensionFromWebApp, GenerateVersion) {
 }
 
 TEST(ExtensionFromWebApp, Basic) {
+  base::ScopedTempDir extensions_dir;
+  ASSERT_TRUE(extensions_dir.CreateUniqueTempDir());
+
   WebApplicationInfo web_app;
   web_app.manifest_url = GURL("http://aaronboodman.com/gearpad/manifest.json");
   web_app.title = ASCIIToUTF16("Gearpad");
@@ -109,15 +112,16 @@ TEST(ExtensionFromWebApp, Basic) {
   }
 
   scoped_refptr<Extension> extension = ConvertWebAppToExtension(
-      web_app, GetTestTime(1978, 12, 11, 0, 0, 0, 0));
+      web_app, GetTestTime(1978, 12, 11, 0, 0, 0, 0),
+      extensions_dir.path());
   ASSERT_TRUE(extension.get());
 
-  ScopedTempDir extension_dir;
+  base::ScopedTempDir extension_dir;
   EXPECT_TRUE(extension_dir.Set(extension->path()));
 
   EXPECT_TRUE(extension->is_app());
   EXPECT_TRUE(extension->is_hosted_app());
-  EXPECT_FALSE(extension->is_packaged_app());
+  EXPECT_FALSE(extension->is_legacy_packaged_app());
 
   EXPECT_EQ("lJqm1+jncOHClAuwif1QxNJKfeV9Fbl9IBZx7FkNwkA=",
             extension->public_key());
@@ -146,21 +150,25 @@ TEST(ExtensionFromWebApp, Basic) {
 }
 
 TEST(ExtensionFromWebApp, Minimal) {
+  base::ScopedTempDir extensions_dir;
+  ASSERT_TRUE(extensions_dir.CreateUniqueTempDir());
+
   WebApplicationInfo web_app;
   web_app.manifest_url = GURL("http://aaronboodman.com/gearpad/manifest.json");
   web_app.title = ASCIIToUTF16("Gearpad");
   web_app.app_url = GURL("http://aaronboodman.com/gearpad/");
 
   scoped_refptr<Extension> extension = ConvertWebAppToExtension(
-      web_app, GetTestTime(1978, 12, 11, 0, 0, 0, 0));
+      web_app, GetTestTime(1978, 12, 11, 0, 0, 0, 0),
+      extensions_dir.path());
   ASSERT_TRUE(extension.get());
 
-  ScopedTempDir extension_dir;
+  base::ScopedTempDir extension_dir;
   EXPECT_TRUE(extension_dir.Set(extension->path()));
 
   EXPECT_TRUE(extension->is_app());
   EXPECT_TRUE(extension->is_hosted_app());
-  EXPECT_FALSE(extension->is_packaged_app());
+  EXPECT_FALSE(extension->is_legacy_packaged_app());
 
   EXPECT_EQ("lJqm1+jncOHClAuwif1QxNJKfeV9Fbl9IBZx7FkNwkA=",
             extension->public_key());

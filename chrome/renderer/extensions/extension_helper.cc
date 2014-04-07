@@ -23,10 +23,11 @@
 #include "chrome/renderer/extensions/user_script_slave.h"
 #include "content/public/renderer/render_view.h"
 #include "content/public/renderer/render_view_visitor.h"
+#include "extensions/common/constants.h"
+#include "third_party/WebKit/Source/WebKit/chromium/public/platform/WebURLRequest.h"
 #include "third_party/WebKit/Source/WebKit/chromium/public/WebConsoleMessage.h"
 #include "third_party/WebKit/Source/WebKit/chromium/public/WebDocument.h"
 #include "third_party/WebKit/Source/WebKit/chromium/public/WebFrame.h"
-#include "third_party/WebKit/Source/WebKit/chromium/public/platform/WebURLRequest.h"
 #include "third_party/WebKit/Source/WebKit/chromium/public/WebScopedUserGesture.h"
 #include "third_party/WebKit/Source/WebKit/chromium/public/WebView.h"
 #include "webkit/glue/image_resource_fetcher.h"
@@ -80,7 +81,7 @@ class ViewAccumulator : public content::RenderViewVisitor {
       return true;
 
     GURL url = render_view->GetWebView()->mainFrame()->document().url();
-    if (!url.SchemeIs(chrome::kExtensionScheme))
+    if (!url.SchemeIs(extensions::kExtensionScheme))
       return true;
     const std::string& extension_id = url.host();
     if (extension_id != extension_id_)
@@ -221,6 +222,8 @@ bool ExtensionHelper::OnMessageReceived(const IPC::Message& message) {
                         OnNotifyRendererViewType)
     IPC_MESSAGE_HANDLER(ExtensionMsg_AddMessageToConsole,
                         OnAddMessageToConsole)
+    IPC_MESSAGE_HANDLER(ExtensionMsg_AppWindowClosed,
+                        OnAppWindowClosed);
     IPC_MESSAGE_UNHANDLED(handled = false)
   IPC_END_MESSAGE_MAP()
   return handled;
@@ -247,6 +250,8 @@ void ExtensionHelper::DidCreateDocumentElement(WebFrame* frame) {
   SchedulerMap::iterator i = g_schedulers.Get().find(frame);
   if (i != g_schedulers.Get().end())
     i->second->DidCreateDocumentElement();
+
+  dispatcher_->DidCreateDocumentElement(frame);
 }
 
 void ExtensionHelper::DidStartProvisionalLoad(WebKit::WebFrame* frame) {
@@ -261,9 +266,8 @@ void ExtensionHelper::DraggableRegionsChanged(WebKit::WebFrame* frame) {
   std::vector<extensions::DraggableRegion> regions;
   for (size_t i = 0; i < webregions.size(); ++i) {
     extensions::DraggableRegion region;
-    region.label = UTF16ToASCII(webregions[i].label);
     region.bounds = webregions[i].bounds;
-    region.clip = webregions[i].clip;
+    region.draggable = webregions[i].draggable;
     regions.push_back(region);
   }
   Send(new ExtensionHostMsg_UpdateDraggableRegions(routing_id(), regions));
@@ -407,6 +411,15 @@ void ExtensionHelper::OnUpdateBrowserWindowId(int window_id) {
 void ExtensionHelper::OnAddMessageToConsole(ConsoleMessageLevel level,
                                             const std::string& message) {
   AddMessageToRootConsole(level, UTF8ToUTF16(message));
+}
+
+void ExtensionHelper::OnAppWindowClosed() {
+  v8::HandleScope scope;
+  v8::Handle<v8::Context> script_context =
+      render_view()->GetWebView()->mainFrame()->mainWorldScriptContext();
+  ChromeV8Context* chrome_v8_context =
+      dispatcher_->v8_context_set().GetByV8Context(script_context);
+  chrome_v8_context->CallChromeHiddenMethod("OnAppWindowClosed", 0, NULL, NULL);
 }
 
 void ExtensionHelper::DidDownloadApplicationDefinition(

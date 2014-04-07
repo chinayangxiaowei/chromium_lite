@@ -31,9 +31,10 @@
 #include "ui/gfx/canvas_skia_paint.h"
 #include "ui/gfx/path.h"
 #include "ui/gfx/screen.h"
+#include "ui/native_theme/native_theme.h"
 #include "ui/views/accessibility/native_view_accessibility_win.h"
 #include "ui/views/controls/native_control_win.h"
-#include "ui/views/controls/textfield/native_textfield_views.h"
+#include "ui/views/controls/textfield/textfield.h"
 #include "ui/views/drag_utils.h"
 #include "ui/views/focus/accelerator_handler.h"
 #include "ui/views/focus/view_storage.h"
@@ -49,11 +50,6 @@
 #include "ui/views/win/fullscreen_handler.h"
 #include "ui/views/win/hwnd_message_handler.h"
 #include "ui/views/window/native_frame_view.h"
-
-#if !defined(USE_AURA)
-#include "base/command_line.h"
-#include "ui/base/ui_base_switches.h"
-#endif
 
 #pragma comment(lib, "dwmapi.lib")
 
@@ -148,7 +144,7 @@ void NativeWidgetWin::ClearAccessibilityViewEvent(View* view) {
 
 void NativeWidgetWin::InitNativeWidget(const Widget::InitParams& params) {
   SetInitParams(params);
-  message_handler_->Init(params.GetParent(), params.bounds);
+  message_handler_->Init(params.parent, params.bounds);
 }
 
 NonClientFrameView* NativeWidgetWin::CreateNonClientFrameView() {
@@ -193,9 +189,9 @@ ui::Compositor* NativeWidgetWin::GetCompositor() {
   return NULL;
 }
 
-void NativeWidgetWin::CalculateOffsetToAncestorWithLayer(
-    gfx::Point* offset,
+gfx::Vector2d NativeWidgetWin::CalculateOffsetToAncestorWithLayer(
     ui::Layer** layer_parent) {
+  return gfx::Vector2d();
 }
 
 void NativeWidgetWin::ViewRemoved(View* view) {
@@ -250,12 +246,8 @@ bool NativeWidgetWin::HasCapture() const {
 }
 
 InputMethod* NativeWidgetWin::CreateInputMethod() {
-#if !defined(USE_AURA)
-  CommandLine* command_line = CommandLine::ForCurrentProcess();
-  if (!command_line->HasSwitch(switches::kEnableViewsTextfield))
-    return NULL;
-#endif
-  return new InputMethodWin(GetMessageHandler(), GetMessageHandler()->hwnd());
+  return views::Textfield::IsViewsTextfieldEnabled() ?
+      new InputMethodWin(GetMessageHandler(), GetNativeWindow(), NULL) : NULL;
 }
 
 internal::InputMethodDelegate* NativeWidgetWin::GetInputMethodDelegate() {
@@ -455,8 +447,9 @@ bool NativeWidgetWin::IsAccessibleWidget() const {
 void NativeWidgetWin::RunShellDrag(View* view,
                                    const ui::OSExchangeData& data,
                                    const gfx::Point& location,
-                                   int operation) {
-  views::RunShellDrag(NULL, data, location, operation);
+                                   int operation,
+                                   ui::DragDropTypes::DragEventSource source) {
+  views::RunShellDrag(NULL, data, location, operation, source);
 }
 
 void NativeWidgetWin::SchedulePaintInRect(const gfx::Rect& rect) {
@@ -471,19 +464,16 @@ void NativeWidgetWin::ClearNativeFocus() {
   message_handler_->ClearNativeFocus();
 }
 
-void NativeWidgetWin::FocusNativeView(gfx::NativeView native_view) {
-  message_handler_->FocusHWND(native_view);
-}
-
 gfx::Rect NativeWidgetWin::GetWorkAreaBoundsInScreen() const {
-  return gfx::Screen::GetDisplayNearestWindow(GetNativeView()).work_area();
+  return gfx::Screen::GetNativeScreen()->GetDisplayNearestWindow(
+      GetNativeView()).work_area();
 }
 
 void NativeWidgetWin::SetInactiveRenderingDisabled(bool value) {
 }
 
 Widget::MoveLoopResult NativeWidgetWin::RunMoveLoop(
-    const gfx::Point& drag_offset) {
+    const gfx::Vector2d& drag_offset) {
   return message_handler_->RunMoveLoop(drag_offset) ?
       Widget::MOVE_LOOP_SUCCESSFUL : Widget::MOVE_LOOP_CANCELED;
 }
@@ -494,6 +484,10 @@ void NativeWidgetWin::EndMoveLoop() {
 
 void NativeWidgetWin::SetVisibilityChangedAnimationsEnabled(bool value) {
   message_handler_->SetVisibilityChangedAnimationsEnabled(value);
+}
+
+ui::NativeTheme* NativeWidgetWin::GetNativeTheme() const {
+  return ui::NativeTheme::instance();
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -567,7 +561,7 @@ bool NativeWidgetWin::CanSaveFocus() const {
 }
 
 void NativeWidgetWin::SaveFocusOnDeactivate() {
-  GetWidget()->GetFocusManager()->StoreFocusedView();
+  GetWidget()->GetFocusManager()->StoreFocusedView(true);
 }
 
 void NativeWidgetWin::RestoreFocusOnActivate() {
@@ -640,9 +634,14 @@ gfx::NativeViewAccessible NativeWidgetWin::GetNativeViewAccessible() {
 }
 
 void NativeWidgetWin::HandleAppDeactivated() {
-  // Another application was activated, we should reset any state that
-  // disables inactive rendering now.
-  delegate_->EnableInactiveRendering();
+  if (IsInactiveRenderingDisabled()) {
+    delegate_->EnableInactiveRendering();
+  } else {
+    // TODO(pkotwicz): Remove need for SchedulePaint(). crbug.com/165841
+    View* non_client_view = GetWidget()->non_client_view();
+    if (non_client_view)
+      non_client_view->SchedulePaint();
+  }
 }
 
 void NativeWidgetWin::HandleActivationChanged(bool active) {
@@ -766,11 +765,13 @@ void NativeWidgetWin::HandleNativeBlur(HWND focused_window) {
 }
 
 bool NativeWidgetWin::HandleMouseEvent(const ui::MouseEvent& event) {
-  return delegate_->OnMouseEvent(event);
+  delegate_->OnMouseEvent(const_cast<ui::MouseEvent*>(&event));
+  return event.handled();
 }
 
 bool NativeWidgetWin::HandleKeyEvent(const ui::KeyEvent& event) {
-  return delegate_->OnKeyEvent(event);
+  delegate_->OnKeyEvent(const_cast<ui::KeyEvent*>(&event));
+  return event.handled();
 }
 
 bool NativeWidgetWin::HandleUntranslatedKeyEvent(const ui::KeyEvent& event) {
@@ -858,90 +859,12 @@ void NativeWidgetWin::SetInitParams(const Widget::InitParams& params) {
   // Set non-style attributes.
   ownership_ = params.ownership;
 
-  DWORD style = WS_CLIPCHILDREN | WS_CLIPSIBLINGS;
-  DWORD ex_style = 0;
-  DWORD class_style = CS_DBLCLKS;
-
-  // Set type-independent style attributes.
-  if (params.child)
-    style |= WS_CHILD;
-  if (params.show_state == ui::SHOW_STATE_MAXIMIZED)
-    style |= WS_MAXIMIZE;
-  if (params.show_state == ui::SHOW_STATE_MINIMIZED)
-    style |= WS_MINIMIZE;
-  if (!params.accept_events)
-    ex_style |= WS_EX_TRANSPARENT;
-  if (!params.can_activate)
-    ex_style |= WS_EX_NOACTIVATE;
-  if (params.keep_on_top)
-    ex_style |= WS_EX_TOPMOST;
-  if (params.mirror_origin_in_rtl)
-    ex_style |= l10n_util::GetExtendedTooltipStyles();
-  if (params.transparent)
-    ex_style |= WS_EX_LAYERED;
-  if (params.has_dropshadow) {
-    class_style |= (base::win::GetVersion() < base::win::VERSION_XP) ?
-        0 : CS_DROPSHADOW;
-  }
-
-  // Set type-dependent style attributes.
-  switch (params.type) {
-    case Widget::InitParams::TYPE_PANEL:
-      ex_style |= WS_EX_TOPMOST;
-      // No break. Fall through to TYPE_WINDOW.
-    case Widget::InitParams::TYPE_WINDOW: {
-      style |= WS_SYSMENU | WS_CAPTION;
-      bool can_resize = GetWidget()->widget_delegate()->CanResize();
-      bool can_maximize = GetWidget()->widget_delegate()->CanMaximize();
-      if (can_maximize) {
-        style |= WS_OVERLAPPEDWINDOW;
-      } else if (can_resize) {
-        style |= WS_OVERLAPPED | WS_THICKFRAME;
-      }
-      if (delegate_->IsDialogBox()) {
-        style |= DS_MODALFRAME;
-        // NOTE: Turning this off means we lose the close button, which is bad.
-        // Turning it on though means the user can maximize or size the window
-        // from the system menu, which is worse. We may need to provide our own
-        // menu to get the close button to appear properly.
-        // style &= ~WS_SYSMENU;
-
-        // Set the WS_POPUP style for modal dialogs. This ensures that the owner
-        // window is activated on destruction. This style should not be set for
-        // non-modal non-top-level dialogs like constrained windows.
-        style |= delegate_->IsModal() ? WS_POPUP : 0;
-      }
-      ex_style |= delegate_->IsDialogBox() ? WS_EX_DLGMODALFRAME : 0;
-      break;
-    }
-    case Widget::InitParams::TYPE_CONTROL:
-      style |= WS_VISIBLE;
-      break;
-    case Widget::InitParams::TYPE_WINDOW_FRAMELESS:
-      style |= WS_POPUP;
-      break;
-    case Widget::InitParams::TYPE_BUBBLE:
-      style |= WS_POPUP;
-      style |= WS_CLIPCHILDREN;
-      break;
-    case Widget::InitParams::TYPE_POPUP:
-      style |= WS_POPUP;
-      ex_style |= WS_EX_TOOLWINDOW;
-      break;
-    case Widget::InitParams::TYPE_MENU:
-      style |= WS_POPUP;
-      break;
-    default:
-      NOTREACHED();
-  }
-
-  message_handler_->set_initial_class_style(class_style);
-  message_handler_->set_window_style(message_handler_->window_style() | style);
-  message_handler_->set_window_ex_style(
-      message_handler_->window_ex_style() | ex_style);
+  ConfigureWindowStyles(message_handler_.get(), params,
+                        GetWidget()->widget_delegate(), delegate_);
 
   has_non_client_view_ = Widget::RequiresNonClientView(params.type);
   message_handler_->set_remove_standard_frame(params.remove_standard_frame);
+  message_handler_->set_use_system_default_icon(params.use_system_default_icon);
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -982,7 +905,7 @@ bool Widget::ConvertRect(const Widget* source,
   if (::MapWindowPoints(source_hwnd, target_hwnd,
                         reinterpret_cast<LPPOINT>(&win_rect),
                         sizeof(RECT)/sizeof(POINT))) {
-    *rect = win_rect;
+    *rect = gfx::Rect(win_rect);
     return true;
   }
   return false;

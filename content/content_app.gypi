@@ -47,13 +47,13 @@
         'content.gyp:content_jni_headers',
         '../skia/skia.gyp:skia',
       ],
+      'includes': [
+        '../build/android/cpufeatures.gypi',
+      ],
     }],
     ['OS=="ios"', {
       'sources!': [
         'app/content_main.cc',
-        # TODO(ios): Remove this once content_main_runner builds
-        # for iOS.
-        'app/content_main_runner.cc',
       ],
     }],
   ],

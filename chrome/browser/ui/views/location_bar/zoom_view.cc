@@ -4,8 +4,8 @@
 
 #include "chrome/browser/ui/views/location_bar/zoom_view.h"
 
+#include "chrome/browser/ui/toolbar/toolbar_model.h"
 #include "chrome/browser/ui/view_ids.h"
-#include "chrome/browser/ui/views/browser_dialogs.h"
 #include "chrome/browser/ui/views/location_bar/zoom_bubble_view.h"
 #include "chrome/browser/ui/zoom/zoom_controller.h"
 #include "grit/generated_resources.h"
@@ -22,6 +22,7 @@ ZoomView::ZoomView(ToolbarModel* toolbar_model,
       location_bar_delegate_(location_bar_delegate) {
   set_accessibility_focusable(true);
   Update(NULL);
+  TouchableLocationBarView::Init(this);
 }
 
 ZoomView::~ZoomView() {
@@ -29,7 +30,7 @@ ZoomView::~ZoomView() {
 
 void ZoomView::Update(ZoomController* zoom_controller) {
   if (!zoom_controller || zoom_controller->IsAtDefaultZoom() ||
-      toolbar_model_->input_in_progress()) {
+      toolbar_model_->GetInputInProgress()) {
     SetVisible(false);
     ZoomBubbleView::CloseBubble();
     return;
@@ -58,10 +59,8 @@ bool ZoomView::OnMousePressed(const ui::MouseEvent& event) {
 }
 
 void ZoomView::OnMouseReleased(const ui::MouseEvent& event) {
-  if (event.IsOnlyLeftMouseButton() && HitTestPoint(event.location())) {
-    ZoomBubbleView::ShowBubble(
-        this, location_bar_delegate_->GetTabContents(), false);
-  }
+  if (event.IsOnlyLeftMouseButton() && HitTestPoint(event.location()))
+    ActivateBubble();
 }
 
 bool ZoomView::OnKeyPressed(const ui::KeyEvent& event) {
@@ -70,7 +69,22 @@ bool ZoomView::OnKeyPressed(const ui::KeyEvent& event) {
     return false;
   }
 
-  ZoomBubbleView::ShowBubble(
-      this, location_bar_delegate_->GetTabContents(), false);
+  ActivateBubble();
   return true;
+}
+
+void ZoomView::OnGestureEvent(ui::GestureEvent* event) {
+  if (event->type() == ui::ET_GESTURE_TAP) {
+    ActivateBubble();
+    event->SetHandled();
+  }
+}
+
+int ZoomView::GetBuiltInHorizontalPadding() const {
+  return GetBuiltInHorizontalPaddingImpl();
+}
+
+void ZoomView::ActivateBubble() {
+  ZoomBubbleView::ShowBubble(
+      this, location_bar_delegate_->GetWebContents(), false);
 }

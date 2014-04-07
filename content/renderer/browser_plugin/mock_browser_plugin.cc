@@ -3,6 +3,7 @@
 // found in the LICENSE file.
 
 #include "content/renderer/browser_plugin/mock_browser_plugin.h"
+#include "content/renderer/render_process_impl.h"
 
 namespace content {
 

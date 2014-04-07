@@ -9,6 +9,8 @@
 #include "ppapi/c/pp_errors.h"
 #include "ppapi/shared_impl/ppapi_preferences.h"
 #include "third_party/WebKit/Source/WebKit/chromium/public/platform/WebGamepads.h"
+#include "webkit/plugins/ppapi/mock_platform_image_2d.h"
+#include "webkit/plugins/ppapi/plugin_delegate.h"
 #include "webkit/plugins/ppapi/ppapi_plugin_instance.h"
 
 namespace webkit {
@@ -73,6 +75,12 @@ WebKit::WebPlugin* MockPluginDelegate::CreatePluginReplacement(
 MockPluginDelegate::PlatformImage2D* MockPluginDelegate::CreateImage2D(
     int width,
     int height) {
+  return new MockPlatformImage2D(width, height);
+}
+
+PluginDelegate::PlatformGraphics2D* MockPluginDelegate::GetGraphics2D(
+    PluginInstance* instance,
+    PP_Resource graphics_2d) {
   return NULL;
 }
 
@@ -175,6 +183,13 @@ bool MockPluginDelegate::Touch(
   return false;
 }
 
+bool MockPluginDelegate::SetLength(
+    const GURL& path,
+    int64_t length,
+    fileapi::FileSystemCallbackDispatcher* dispatcher) {
+  return false;
+}
+
 bool MockPluginDelegate::Delete(
     const GURL& path,
     fileapi::FileSystemCallbackDispatcher* dispatcher) {
@@ -203,47 +218,6 @@ void MockPluginDelegate::WillUpdateFile(const GURL& file_path) {
 }
 
 void MockPluginDelegate::DidUpdateFile(const GURL& file_path, int64_t delta) {
-}
-
-base::PlatformFileError MockPluginDelegate::OpenFile(
-    const ::ppapi::PepperFilePath& path,
-    int flags,
-    base::PlatformFile* file) {
-  return base::PLATFORM_FILE_ERROR_FAILED;
-}
-
-base::PlatformFileError MockPluginDelegate::RenameFile(
-    const ::ppapi::PepperFilePath& from_path,
-    const ::ppapi::PepperFilePath& to_path) {
-  return base::PLATFORM_FILE_ERROR_FAILED;
-}
-
-base::PlatformFileError MockPluginDelegate::DeleteFileOrDir(
-    const ::ppapi::PepperFilePath& path,
-    bool recursive) {
-  return base::PLATFORM_FILE_ERROR_FAILED;
-}
-
-base::PlatformFileError MockPluginDelegate::CreateDir(
-    const ::ppapi::PepperFilePath& path) {
-  return base::PLATFORM_FILE_ERROR_FAILED;
-}
-
-base::PlatformFileError MockPluginDelegate::QueryFile(
-    const ::ppapi::PepperFilePath& path,
-    base::PlatformFileInfo* info) {
-  return base::PLATFORM_FILE_ERROR_FAILED;
-}
-
-base::PlatformFileError MockPluginDelegate::GetDirContents(
-    const ::ppapi::PepperFilePath& path,
-    ::ppapi::DirContents* contents) {
-  return base::PLATFORM_FILE_ERROR_FAILED;
-}
-
-base::PlatformFileError MockPluginDelegate::CreateTemporaryFile(
-    base::PlatformFile* file) {
-  return base::PLATFORM_FILE_ERROR_FAILED;
 }
 
 void MockPluginDelegate::SyncGetFileSystemPlatformPath(
@@ -368,13 +342,6 @@ bool MockPluginDelegate::X509CertificateParseDER(
   return false;
 }
 
-int32_t MockPluginDelegate::ShowContextMenu(
-    PluginInstance* instance,
-    webkit::ppapi::PPB_Flash_Menu_Impl* menu,
-    const gfx::Point& position) {
-  return PP_ERROR_FAILED;
-}
-
 FullscreenContainer* MockPluginDelegate::CreateFullscreenContainer(
     PluginInstance* instance) {
   return NULL;
@@ -392,10 +359,6 @@ void MockPluginDelegate::ZoomLimitsChanged(double minimum_factor,
                                            double maximum_factor) {
 }
 
-std::string MockPluginDelegate::ResolveProxy(const GURL& url) {
-  return std::string();
-}
-
 void MockPluginDelegate::DidStartLoading() {
 }
 
@@ -408,12 +371,8 @@ void MockPluginDelegate::SetContentRestriction(int restrictions) {
 void MockPluginDelegate::SaveURLAs(const GURL& url) {
 }
 
-double MockPluginDelegate::GetLocalTimeZoneOffset(base::Time t) {
-  return 0.0;
-}
-
 base::SharedMemory* MockPluginDelegate::CreateAnonymousSharedMemory(
-    uint32_t size) {
+    size_t size) {
   return NULL;
 }
 
@@ -458,15 +417,6 @@ int MockPluginDelegate::EnumerateDevices(
 }
 
 void MockPluginDelegate::StopEnumerateDevices(int request_id) {
-}
-
-webkit_glue::ClipboardClient*
-MockPluginDelegate::CreateClipboardClient() const {
-  return NULL;
-}
-
-std::string MockPluginDelegate::GetDeviceID() {
-  return std::string();
 }
 
 PP_FlashLSORestrictions MockPluginDelegate::GetLocalDataRestrictions(

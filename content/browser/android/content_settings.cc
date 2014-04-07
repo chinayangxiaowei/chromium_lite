@@ -10,11 +10,11 @@
 #include "content/browser/renderer_host/render_view_host_delegate.h"
 #include "content/browser/renderer_host/render_view_host_impl.h"
 #include "content/public/browser/web_contents.h"
+#include "content/public/common/content_client.h"
 #include "jni/ContentSettings_jni.h"
 #include "webkit/glue/webkit_glue.h"
 #include "webkit/glue/webpreferences.h"
 #include "webkit/user_agent/user_agent.h"
-#include "webkit/user_agent/user_agent_util.h"
 
 using base::android::CheckException;
 using base::android::ConvertJavaStringToUTF16;
@@ -41,6 +41,7 @@ struct ContentSettings::FieldIds {
     // FIXME: we should be using a new GetFieldIDFromClassName() with caching.
     ScopedJavaLocalRef<jclass> clazz(
         GetClass(env, "org/chromium/content/browser/ContentSettings"));
+    text_size_percent = GetFieldID(env, clazz, "mTextSizePercent", "I");
     standard_fond_family =
         GetFieldID(env, clazz, "mStandardFontFamily", kStringClassName);
     fixed_font_family =
@@ -65,6 +66,8 @@ struct ContentSettings::FieldIds {
         GetFieldID(env, clazz, "mDefaultFixedFontSize", "I");
     load_images_automatically =
         GetFieldID(env, clazz, "mLoadsImagesAutomatically", "Z");
+    images_enabled =
+        GetFieldID(env, clazz, "mImagesEnabled", "Z");
     java_script_enabled =
         GetFieldID(env, clazz, "mJavaScriptEnabled", "Z");
     allow_universal_access_from_file_urls =
@@ -73,15 +76,14 @@ struct ContentSettings::FieldIds {
         GetFieldID(env, clazz, "mAllowFileAccessFromFileURLs", "Z");
     java_script_can_open_windows_automatically =
         GetFieldID(env, clazz, "mJavaScriptCanOpenWindowsAutomatically", "Z");
+    support_multiple_windows =
+        GetFieldID(env, clazz, "mSupportMultipleWindows", "Z");
     dom_storage_enabled =
         GetFieldID(env, clazz, "mDomStorageEnabled", "Z");
-    allow_file_url_access =
-        GetFieldID(env, clazz, "mAllowFileUrlAccess", "Z");
-    allow_content_url_access =
-        GetFieldID(env, clazz, "mAllowContentUrlAccess", "Z");
   }
 
   // Field ids
+  jfieldID text_size_percent;
   jfieldID standard_fond_family;
   jfieldID fixed_font_family;
   jfieldID sans_serif_font_family;
@@ -95,13 +97,13 @@ struct ContentSettings::FieldIds {
   jfieldID default_font_size;
   jfieldID default_fixed_font_size;
   jfieldID load_images_automatically;
+  jfieldID images_enabled;
   jfieldID java_script_enabled;
   jfieldID allow_universal_access_from_file_urls;
   jfieldID allow_file_access_from_file_urls;
   jfieldID java_script_can_open_windows_automatically;
+  jfieldID support_multiple_windows;
   jfieldID dom_storage_enabled;
-  jfieldID allow_file_url_access;
-  jfieldID allow_content_url_access;
 };
 
 ContentSettings::ContentSettings(JNIEnv* env,
@@ -109,20 +111,22 @@ ContentSettings::ContentSettings(JNIEnv* env,
                          WebContents* contents,
                          bool is_master_mode)
     : WebContentsObserver(contents),
-      is_master_mode_(is_master_mode) {
-  content_settings_.Reset(env, obj);
+      is_master_mode_(is_master_mode),
+      content_settings_(env, obj) {
 }
 
 ContentSettings::~ContentSettings() {
+  JNIEnv* env = base::android::AttachCurrentThread();
+  ScopedJavaLocalRef<jobject> obj = content_settings_.get(env);
+  if (obj.obj()) {
+    Java_ContentSettings_onNativeContentSettingsDestroyed(env, obj.obj(),
+        reinterpret_cast<jint>(this));
+  }
 }
 
 // static
 bool ContentSettings::RegisterContentSettings(JNIEnv* env) {
   return RegisterNativesImpl(env);
-}
-
-void ContentSettings::Destroy(JNIEnv* env, jobject obj) {
-  delete this;
 }
 
 void ContentSettings::SyncFromNativeImpl() {
@@ -131,9 +135,22 @@ void ContentSettings::SyncFromNativeImpl() {
   if (!field_ids_.get())
     field_ids_.reset(new FieldIds(env));
 
-  jobject obj = content_settings_.obj();
+  ScopedJavaLocalRef<jobject> scoped_obj = content_settings_.get(env);
+  jobject obj = scoped_obj.obj();
+  if (!obj)
+    return;
   RenderViewHost* render_view_host = web_contents()->GetRenderViewHost();
   WebPreferences prefs = render_view_host->GetDelegate()->GetWebkitPrefs();
+
+  Java_ContentSettings_setTextAutosizingEnabled(
+      env, obj, prefs.text_autosizing_enabled);
+  CheckException(env);
+
+  env->SetIntField(
+      obj,
+      field_ids_->text_size_percent,
+      prefs.font_scale_factor * 100.0f);
+  CheckException(env);
 
   ScopedJavaLocalRef<jstring> str =
       ConvertUTF16ToJavaString(env,
@@ -197,6 +214,11 @@ void ContentSettings::SyncFromNativeImpl() {
   CheckException(env);
 
   env->SetBooleanField(
+      obj,
+      field_ids_->images_enabled, prefs.images_enabled);
+  CheckException(env);
+
+  env->SetBooleanField(
       obj, field_ids_->java_script_enabled, prefs.javascript_enabled);
   CheckException(env);
 
@@ -218,8 +240,17 @@ void ContentSettings::SyncFromNativeImpl() {
       prefs.javascript_can_open_windows_automatically);
   CheckException(env);
 
+  env->SetBooleanField(
+      obj,
+      field_ids_->support_multiple_windows,
+      prefs.supports_multiple_windows);
+  CheckException(env);
+
   Java_ContentSettings_setPluginsDisabled(env, obj, !prefs.plugins_enabled);
   CheckException(env);
+
+  // We don't need to sync AppCache settings to Java, because there are
+  // no getters for them in the API.
 
   env->SetBooleanField(
       obj,
@@ -234,9 +265,19 @@ void ContentSettings::SyncToNativeImpl() {
   if (!field_ids_.get())
     field_ids_.reset(new FieldIds(env));
 
-  jobject obj = content_settings_.obj();
+  ScopedJavaLocalRef<jobject> scoped_obj = content_settings_.get(env);
+  jobject obj = scoped_obj.obj();
+  if (!obj)
+    return;
   RenderViewHost* render_view_host = web_contents()->GetRenderViewHost();
   WebPreferences prefs = render_view_host->GetDelegate()->GetWebkitPrefs();
+
+  prefs.text_autosizing_enabled =
+      Java_ContentSettings_getTextAutosizingEnabled(env, obj);
+
+  int text_size_percent = env->GetIntField(obj, field_ids_->text_size_percent);
+  prefs.font_scale_factor = text_size_percent / 100.0f;
+  prefs.force_enable_zoom = text_size_percent >= 130;
 
   ScopedJavaLocalRef<jstring> str(
       env, static_cast<jstring>(
@@ -294,6 +335,9 @@ void ContentSettings::SyncToNativeImpl() {
   prefs.loads_images_automatically =
       env->GetBooleanField(obj, field_ids_->load_images_automatically);
 
+  prefs.images_enabled =
+      env->GetBooleanField(obj, field_ids_->images_enabled);
+
   prefs.javascript_enabled =
       env->GetBooleanField(obj, field_ids_->java_script_enabled);
 
@@ -306,7 +350,13 @@ void ContentSettings::SyncToNativeImpl() {
   prefs.javascript_can_open_windows_automatically = env->GetBooleanField(
       obj, field_ids_->java_script_can_open_windows_automatically);
 
+  prefs.supports_multiple_windows = env->GetBooleanField(
+      obj, field_ids_->support_multiple_windows);
+
   prefs.plugins_enabled = !Java_ContentSettings_getPluginsDisabled(env, obj);
+
+  prefs.application_cache_enabled =
+      Java_ContentSettings_getAppCacheEnabled(env, obj);
 
   prefs.local_storage_enabled = env->GetBooleanField(
       obj, field_ids_->dom_storage_enabled);
@@ -327,20 +377,23 @@ void ContentSettings::RenderViewCreated(RenderViewHost* render_view_host) {
     SyncToNativeImpl();
 }
 
+void ContentSettings::WebContentsDestroyed(WebContents* web_contents) {
+  delete this;
+}
+
 static jint Init(JNIEnv* env, jobject obj, jint nativeContentViewCore,
                  jboolean is_master_mode) {
   WebContents* web_contents =
       reinterpret_cast<ContentViewCoreImpl*>(nativeContentViewCore)
-          ->web_contents();
+          ->GetWebContents();
   ContentSettings* content_settings =
       new ContentSettings(env, obj, web_contents, is_master_mode);
   return reinterpret_cast<jint>(content_settings);
 }
 
 static jstring GetDefaultUserAgent(JNIEnv* env, jclass clazz) {
-  // "Version/4.0" had been hardcoded in the legacy WebView.
-  std::string ua = webkit_glue::BuildUserAgentFromProduct("Version/4.0");
-  return base::android::ConvertUTF8ToJavaString(env, ua).Release();
+  return base::android::ConvertUTF8ToJavaString(
+      env, GetContentClient()->GetUserAgent()).Release();
 }
 
 }  // namespace content

@@ -10,7 +10,6 @@
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_tabstrip.h"
 #include "chrome/browser/ui/login/login_prompt.h"
-#include "chrome/browser/ui/tab_contents/tab_contents.h"
 #include "chrome/common/chrome_notification_types.h"
 #include "chrome/common/chrome_paths.h"
 #include "chrome/common/chrome_switches.h"
@@ -22,6 +21,7 @@
 #include "content/public/browser/web_contents.h"
 #include "content/public/browser/web_contents_observer.h"
 #include "content/public/test/browser_test_utils.h"
+#include "net/base/test_data_directory.h"
 #include "net/test/test_server.h"
 
 namespace {
@@ -51,6 +51,8 @@ class LoginPromptObserver : public content::NotificationObserver {
 
  private:
   bool auth_handled_;
+
+  DISALLOW_COPY_AND_ASSIGN(LoginPromptObserver);
 };
 
 class ProxyBrowserTest : public InProcessBrowserTest {
@@ -73,6 +75,10 @@ class ProxyBrowserTest : public InProcessBrowserTest {
 
  protected:
   net::TestServer proxy_server_;
+
+ private:
+
+  DISALLOW_COPY_AND_ASSIGN(ProxyBrowserTest);
 };
 
 #if defined(OS_CHROMEOS)
@@ -85,11 +91,10 @@ class ProxyBrowserTest : public InProcessBrowserTest {
 // that requires basic authentication.
 IN_PROC_BROWSER_TEST_F(ProxyBrowserTest, MAYBE_BasicAuthWSConnect) {
   // Launch WebSocket server.
-  content::TestWebSocketServer ws_server;
-  int port = ws_server.UseRandomPort();
-  FilePath ws_root_dir;
-  ASSERT_TRUE(PathService::Get(chrome::DIR_TEST_DATA, &ws_root_dir));
-  ASSERT_TRUE(ws_server.Start(ws_root_dir));
+  net::TestServer ws_server(net::TestServer::TYPE_WS,
+                            net::TestServer::kLocalhost,
+                            net::GetWebSocketTestDataDirectory());
+  ASSERT_TRUE(ws_server.Start());
 
   content::WebContents* tab = chrome::GetActiveWebContents(browser());
   content::NavigationController* controller = &tab->GetController();
@@ -105,10 +110,12 @@ IN_PROC_BROWSER_TEST_F(ProxyBrowserTest, MAYBE_BasicAuthWSConnect) {
 
   // Visit a page that tries to establish WebSocket connection. The title
   // of the page will be 'PASS' on success.
-  // TODO(bashi): Add TestWebSocketServer::GetURL() instead creating url here.
-  std::string url_path =
-      StringPrintf("%s%d%s", "http://localhost:", port, "/ws.html");
-  ui_test_utils::NavigateToURL(browser(), GURL(url_path));
+  std::string scheme("http");
+  GURL::Replacements replacements;
+  replacements.SetSchemeStr(scheme);
+  ui_test_utils::NavigateToURL(
+      browser(),
+      ws_server.GetURL("connect_check.html").ReplaceComponents(replacements));
 
   const string16 result = watcher.WaitAndGetTitle();
   EXPECT_TRUE(EqualsASCII(result, "PASS"));

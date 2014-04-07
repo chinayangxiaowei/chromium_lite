@@ -22,12 +22,12 @@ class BrowserPpapiHostTest {
   virtual ~BrowserPpapiHostTest();
 
   ppapi::proxy::ResourceMessageTestSink& sink() { return sink_; }
-  BrowserPpapiHost* GetPpapiHost();
+  BrowserPpapiHost* GetBrowserPpapiHost();
 
  private:
   ppapi::proxy::ResourceMessageTestSink sink_;
 
-  scoped_refptr<BrowserPpapiHostImpl> ppapi_host_;
+  scoped_ptr<BrowserPpapiHostImpl> ppapi_host_;
 
   DISALLOW_COPY_AND_ASSIGN(BrowserPpapiHostTest);
 };

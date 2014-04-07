@@ -6,8 +6,8 @@ namespace app.runtime {
 
   callback NullCallback = void ();
 
-  // A WebIntents intent object.
-  [inline_doc] dictionary Intent {
+  // A WebIntents intent object. Deprecated.
+  [nodoc] dictionary Intent {
     // The WebIntent being invoked.
     DOMString action;
 
@@ -24,13 +24,32 @@ namespace app.runtime {
     NullCallback postFailure;
   };
 
+  [inline_doc] dictionary LaunchItem {
+    // FileEntry for the file.
+    [instanceOf=FileEntry] object entry;
+
+    // The MIME type of the file.
+    DOMString type;
+  };
+
   // Optional data for the launch.
   [inline_doc] dictionary LaunchData {
-    Intent intent;
+    [nodoc] Intent intent;
+
+    // The id of the file handler that the app is being invoked with.
+    DOMString? id;
+
+    LaunchItem[]? items;
   };
 
   interface Events {
+    // Fired when an app is launched from the launcher or in response to a web
+    // intent.
     static void onLaunched(optional LaunchData launchData);
+
+    // Fired at Chrome startup to apps that were running when Chrome last shut
+    // down.
+    static void onRestarted();
   };
 
   dictionary IntentResponse {

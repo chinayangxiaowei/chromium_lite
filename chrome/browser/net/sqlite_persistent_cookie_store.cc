@@ -29,6 +29,7 @@
 #include "googleurl/src/gurl.h"
 #include "net/base/registry_controlled_domains/registry_controlled_domain.h"
 #include "net/cookies/canonical_cookie.h"
+#include "sql/error_delegate_util.h"
 #include "sql/meta_table.h"
 #include "sql/statement.h"
 #include "sql/transaction.h"
@@ -70,13 +71,12 @@ class SQLitePersistentCookieStore::Backend
         num_pending_(0),
         force_keep_session_state_(false),
         initialized_(false),
+        corruption_detected_(false),
         restore_old_session_cookies_(restore_old_session_cookies),
         clear_on_exit_policy_(clear_on_exit_policy),
         num_cookies_read_(0),
         num_priority_waiting_(0),
         total_priority_requests_(0) {
-    error_delegate_ =
-      new KillDatabaseErrorDelegate(this, GetErrorHandlerForCookieDb());
   }
 
   // Creates or loads the SQLite database.
@@ -109,37 +109,34 @@ class SQLitePersistentCookieStore::Backend
 
   class KillDatabaseErrorDelegate : public sql::ErrorDelegate {
    public:
-    KillDatabaseErrorDelegate(Backend* backend,
-                              sql::ErrorDelegate* wrapped_delegate);
+    KillDatabaseErrorDelegate(Backend* backend);
+
+    virtual ~KillDatabaseErrorDelegate() {}
+
     // ErrorDelegate implementation.
     virtual int OnError(int error,
                         sql::Connection* connection,
                         sql::Statement* stmt) OVERRIDE;
 
-    void reset_backend() {
-      backend_ = NULL;
-    }
-
-   protected:
-    virtual ~KillDatabaseErrorDelegate() {}
-
    private:
 
+    class HistogramUniquifier {
+     public:
+      static const char* name() { return "Sqlite.Cookie.Error"; }
+    };
+
     // Do not increment the count on Backend, as that would create a circular
-    // reference (Backend -> Connection -> ErrorDelegate -> Backend). Instead,
-    // Backend will call reset_backend() when it is going away.
+    // reference (Backend -> Connection -> ErrorDelegate -> Backend).
     Backend* backend_;
-    scoped_refptr<sql::ErrorDelegate> wrapped_delegate_;
+
+    // True if the delegate has previously attempted to kill the database.
+    bool attempted_to_kill_database_;
 
     DISALLOW_COPY_AND_ASSIGN(KillDatabaseErrorDelegate);
   };
 
   // You should call Close() before destructing this object.
   ~Backend() {
-    if (error_delegate_.get()) {
-      error_delegate_->reset_backend();
-      error_delegate_ = NULL;
-    }
     DCHECK(!db_.get()) << "Close should have already been called.";
     DCHECK(num_pending_ == 0 && pending_.empty());
   }
@@ -224,10 +221,10 @@ class SQLitePersistentCookieStore::Backend
   void DeleteSessionCookiesOnShutdown();
 
   void KillDatabase();
+  void ScheduleKillDatabase();
 
   FilePath path_;
   scoped_ptr<sql::Connection> db_;
-  scoped_refptr<KillDatabaseErrorDelegate> error_delegate_;
   sql::MetaTable meta_table_;
 
   typedef std::list<PendingOperation*> PendingOperationsList;
@@ -254,6 +251,9 @@ class SQLitePersistentCookieStore::Backend
 
   // Indicates if DB has been initialized.
   bool initialized_;
+
+  // Indicates if the kill-database callback has been scheduled.
+  bool corruption_detected_;
 
   // If false, we should filter out session cookies when reading the DB.
   bool restore_old_session_cookies_;
@@ -285,96 +285,21 @@ class SQLitePersistentCookieStore::Backend
 };
 
 SQLitePersistentCookieStore::Backend::KillDatabaseErrorDelegate::
-KillDatabaseErrorDelegate(Backend* backend,
-                          sql::ErrorDelegate* wrapped_delegate)
+KillDatabaseErrorDelegate(Backend* backend)
     : backend_(backend),
-      wrapped_delegate_(wrapped_delegate) {
+      attempted_to_kill_database_(false) {
 }
 
 int SQLitePersistentCookieStore::Backend::KillDatabaseErrorDelegate::OnError(
     int error, sql::Connection* connection, sql::Statement* stmt) {
-  if (wrapped_delegate_.get())
-    error = wrapped_delegate_->OnError(error, connection, stmt);
+  sql::LogAndRecordErrorInHistogram<HistogramUniquifier>(error, connection);
 
-  bool delete_db = false;
+  // Do not attempt to kill database more than once. If the first time failed,
+  // it is unlikely that a second time will be successful.
+  if (!attempted_to_kill_database_ && sql::IsErrorCatastrophic(error)) {
+    attempted_to_kill_database_ = true;
 
-  switch (error) {
-    case SQLITE_DONE:
-    case SQLITE_OK:
-      // Theoretically, the wrapped delegate might have resolved the error, and
-      // we would end up here.
-      break;
-
-    case SQLITE_CORRUPT:
-    case SQLITE_NOTADB:
-      // Highly unlikely we would ever recover from these.
-      delete_db = true;
-      break;
-
-    case SQLITE_CANTOPEN:
-      // TODO(erikwright): Figure out what this means.
-      break;
-
-    case SQLITE_IOERR:
-      // This could be broken blocks, in which case deleting the DB would be a
-      // good idea. But it might also be transient.
-      // TODO(erikwright): Figure out if we can distinguish between the two,
-      // or determine through metrics analysis to what extent these failures are
-      // transient.
-      break;
-
-    case SQLITE_BUSY:
-      // Presumably transient.
-      break;
-
-    case SQLITE_TOOBIG:
-    case SQLITE_FULL:
-    case SQLITE_NOMEM:
-      // Not a problem with the database.
-      break;
-
-    case SQLITE_READONLY:
-      // Presumably either transient or we don't have the privileges to
-      // move/delete the file anyway.
-      break;
-
-    case SQLITE_CONSTRAINT:
-    case SQLITE_ERROR:
-      // These probably indicate a programming error or a migration failure that
-      // we prefer not to mask.
-      break;
-
-    case SQLITE_LOCKED:
-    case SQLITE_INTERNAL:
-    case SQLITE_PERM:
-    case SQLITE_ABORT:
-    case SQLITE_INTERRUPT:
-    case SQLITE_NOTFOUND:
-    case SQLITE_PROTOCOL:
-    case SQLITE_EMPTY:
-    case SQLITE_SCHEMA:
-    case SQLITE_MISMATCH:
-    case SQLITE_MISUSE:
-    case SQLITE_NOLFS:
-    case SQLITE_AUTH:
-    case SQLITE_FORMAT:
-    case SQLITE_RANGE:
-    case SQLITE_ROW:
-      // None of these appear in error reports, so for now let's not try to
-      // guess at how to handle them.
-      break;
-  }
-
-  if (delete_db && backend_) {
-    // Don't just do the close/delete here, as we are being called by |db| and
-    // that seems dangerous.
-    MessageLoop::current()->PostTask(
-        FROM_HERE, base::Bind(&Backend::KillDatabase, backend_));
-
-    // Avoid being called more than once. There should still be a reference to
-    // this ErrorDelegate in the backend, but just in case don't refer to any
-    // members from here forward.
-    connection->set_error_delegate(wrapped_delegate_.get());
+    backend_->ScheduleKillDatabase();
   }
 
   return error;
@@ -607,9 +532,9 @@ void SQLitePersistentCookieStore::Backend::Notify(
 bool SQLitePersistentCookieStore::Backend::InitializeDatabase() {
   DCHECK(BrowserThread::CurrentlyOn(BrowserThread::DB));
 
-  if (initialized_) {
+  if (initialized_ || corruption_detected_) {
     // Return false if we were previously initialized but the DB has since been
-    // closed.
+    // closed, or if corruption caused a database reset during initialization.
     return db_ != NULL;
   }
 
@@ -627,16 +552,22 @@ bool SQLitePersistentCookieStore::Backend::InitializeDatabase() {
   }
 
   db_.reset(new sql::Connection);
-  db_->set_error_delegate(error_delegate_.get());
+  db_->set_error_delegate(new KillDatabaseErrorDelegate(this));
 
   if (!db_->Open(path_)) {
     NOTREACHED() << "Unable to open cookie DB.";
+    if (corruption_detected_)
+      db_->Raze();
+    meta_table_.Reset();
     db_.reset();
     return false;
   }
 
   if (!EnsureDatabaseVersion() || !InitTable(db_.get())) {
     NOTREACHED() << "Unable to open cookie DB.";
+    if (corruption_detected_)
+      db_->Raze();
+    meta_table_.Reset();
     db_.reset();
     return false;
   }
@@ -654,6 +585,9 @@ bool SQLitePersistentCookieStore::Backend::InitializeDatabase() {
     "SELECT DISTINCT host_key FROM cookies"));
 
   if (!smt.is_valid()) {
+    if (corruption_detected_)
+      db_->Raze();
+    meta_table_.Reset();
     db_.reset();
     return false;
   }
@@ -737,6 +671,7 @@ bool SQLitePersistentCookieStore::Backend::LoadCookiesForDomains(
   }
   if (!smt.is_valid()) {
     smt.Clear();  // Disconnect smt_ref from db_.
+    meta_table_.Reset();
     db_.reset();
     return false;
   }
@@ -1057,6 +992,7 @@ void SQLitePersistentCookieStore::Backend::InternalBackgroundClose() {
     DeleteSessionCookiesOnShutdown();
   }
 
+  meta_table_.Reset();
   db_.reset();
 }
 
@@ -1101,6 +1037,17 @@ void SQLitePersistentCookieStore::Backend::DeleteSessionCookiesOnShutdown() {
     LOG(WARNING) << "Unable to delete cookies on shutdown.";
 }
 
+void SQLitePersistentCookieStore::Backend::ScheduleKillDatabase() {
+  DCHECK(BrowserThread::CurrentlyOn(BrowserThread::DB));
+
+  corruption_detected_ = true;
+
+  // Don't just do the close/delete here, as we are being called by |db| and
+  // that seems dangerous.
+  MessageLoop::current()->PostTask(
+      FROM_HERE, base::Bind(&Backend::KillDatabase, this));
+}
+
 void SQLitePersistentCookieStore::Backend::KillDatabase() {
   DCHECK(BrowserThread::CurrentlyOn(BrowserThread::DB));
 
@@ -1110,6 +1057,7 @@ void SQLitePersistentCookieStore::Backend::KillDatabase() {
     bool success = db_->Raze();
     UMA_HISTOGRAM_BOOLEAN("Cookie.KillDatabaseResult", success);
     db_->Close();
+    meta_table_.Reset();
     db_.reset();
   }
 }

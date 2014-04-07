@@ -7,17 +7,19 @@
 #include <algorithm>
 
 #include "base/utf_string_conversions.h"
-#include "ui/app_list/app_list_constants.h"
 #include "ui/app_list/app_list_item_model.h"
 #include "ui/app_list/apps_grid_view.h"
-#include "ui/app_list/drop_shadow_label.h"
 #include "ui/base/accessibility/accessible_view_state.h"
 #include "ui/base/animation/throb_animation.h"
 #include "ui/base/resource/resource_bundle.h"
+#include "ui/compositor/layer.h"
+#include "ui/compositor/scoped_layer_animation_settings.h"
 #include "ui/gfx/canvas.h"
 #include "ui/gfx/font.h"
 #include "ui/gfx/image/image_skia_operations.h"
+#include "ui/gfx/transform_util.h"
 #include "ui/views/controls/image_view.h"
+#include "ui/views/controls/label.h"
 #include "ui/views/controls/menu/menu_item_view.h"
 #include "ui/views/controls/menu/menu_model_adapter.h"
 #include "ui/views/controls/menu/menu_runner.h"
@@ -32,7 +34,6 @@ const int kIconTitleSpacing = 7;
 
 const SkColor kTitleColor = SkColorSetRGB(0x5A, 0x5A, 0x5A);
 const SkColor kTitleHoverColor = SkColorSetRGB(0x3C, 0x3C, 0x3C);
-const SkColor kTitleBackgroundColor = SkColorSetRGB(0xFC, 0xFC, 0xFC);
 
 const SkColor kHoverAndPushedColor = SkColorSetARGB(0x19, 0, 0, 0);
 const SkColor kSelectedColor = SkColorSetARGB(0x0D, 0, 0, 0);
@@ -40,6 +41,12 @@ const SkColor kHighlightedColor = kHoverAndPushedColor;
 
 const int kTitleFontSize = 11;
 const int kLeftRightPaddingChars = 1;
+
+// Scale to transform the icon when a drag starts.
+const float kDraggingIconScale = 1.5f;
+
+// Delay in milliseconds of when the dragging UI should be shown for mouse drag.
+const int kMouseDragUIDelayInMs = 100;
 
 const gfx::Font& GetTitleFont() {
   static gfx::Font* font = NULL;
@@ -56,37 +63,27 @@ const gfx::Font& GetTitleFont() {
   return *font;
 }
 
-// An image view that is not interactive.
-class StaticImageView : public views::ImageView {
- public:
-  StaticImageView() : ImageView() {
-  }
-
- private:
-  // views::View overrides:
-  virtual bool HitTestRect(const gfx::Rect& rect) const OVERRIDE {
-    return false;
-  }
-
-  DISALLOW_COPY_AND_ASSIGN(StaticImageView);
-};
-
 }  // namespace
 
 // static
 const char AppListItemView::kViewClassName[] = "ui/app_list/AppListItemView";
 
 AppListItemView::AppListItemView(AppsGridView* apps_grid_view,
-                                 AppListItemModel* model,
-                                 views::ButtonListener* listener)
-    : CustomButton(listener),
+                                 AppListItemModel* model)
+    : CustomButton(apps_grid_view),
       model_(model),
       apps_grid_view_(apps_grid_view),
-      icon_(new StaticImageView),
-      title_(new DropShadowLabel) {
-  title_->SetBackgroundColor(kTitleBackgroundColor);
+      icon_(new views::ImageView),
+      title_(new views::Label),
+      ui_state_(UI_STATE_NORMAL),
+      touch_dragging_(false) {
+  icon_->set_interactive(false);
+
+  title_->SetBackgroundColor(0);
+  title_->SetAutoColorReadabilityEnabled(false);
   title_->SetEnabledColor(kTitleColor);
   title_->SetFont(GetTitleFont());
+  title_->SetHorizontalAlignment(gfx::ALIGN_LEFT);
 
   const gfx::ShadowValue kIconShadows[] = {
     gfx::ShadowValue(gfx::Point(0, 2), 2, SkColorSetARGB(0x24, 0, 0, 0)),
@@ -136,6 +133,43 @@ void AppListItemView::UpdateIcon() {
   icon_->SetImage(shadow);
 }
 
+void AppListItemView::SetUIState(UIState state) {
+  if (ui_state_ == state)
+    return;
+
+  ui_state_ = state;
+
+#if defined(USE_AURA)
+  ui::ScopedLayerAnimationSettings settings(layer()->GetAnimator());
+  switch (ui_state_) {
+    case UI_STATE_NORMAL:
+      title_->SetVisible(true);
+      layer()->SetTransform(gfx::Transform());
+      break;
+    case UI_STATE_DRAGGING:
+      title_->SetVisible(false);
+      const gfx::Rect bounds(layer()->bounds().size());
+      layer()->SetTransform(gfx::GetScaleTransform(
+          bounds.CenterPoint(),
+          kDraggingIconScale));
+      break;
+  }
+#endif
+}
+
+void AppListItemView::SetTouchDragging(bool touch_dragging) {
+  if (touch_dragging_ == touch_dragging)
+    return;
+
+  touch_dragging_ = touch_dragging;
+  SetUIState(touch_dragging_ ? UI_STATE_DRAGGING : UI_STATE_NORMAL);
+}
+
+void AppListItemView::OnMouseDragTimer() {
+  DCHECK(apps_grid_view_->IsDraggedView(this));
+  SetUIState(UI_STATE_DRAGGING);
+}
+
 void AppListItemView::ItemIconChanged() {
   UpdateIcon();
 }
@@ -145,7 +179,7 @@ void AppListItemView::ItemTitleChanged() {
 }
 
 void AppListItemView::ItemHighlightedChanged() {
-  apps_grid_view_->EnsureItemVisible(this);
+  apps_grid_view_->EnsureViewVisible(this);
   SchedulePaint();
 }
 
@@ -156,38 +190,39 @@ std::string AppListItemView::GetClassName() const {
 void AppListItemView::Layout() {
   gfx::Rect rect(GetContentsBounds());
 
-  int left_right_padding = kLeftRightPaddingChars *
+  const int left_right_padding = kLeftRightPaddingChars *
       title_->font().GetAverageCharacterWidth();
-  gfx::Size title_size = title_->GetPreferredSize();
-
-  rect.Inset(left_right_padding, kTopPadding);
-  int y = rect.y();
+  rect.Inset(left_right_padding, kTopPadding, left_right_padding, 0);
+  const int y = rect.y();
 
   gfx::Rect icon_bounds(rect.x(), y, rect.width(), icon_size_.height());
   icon_bounds.Inset(gfx::ShadowValue::GetMargin(icon_shadows_));
   icon_->SetBoundsRect(icon_bounds);
 
-  title_->SetBounds(rect.x(),
-                    y + icon_size_.height() + kIconTitleSpacing,
-                    rect.width(),
-                    title_size.height());
+  const gfx::Size title_size = title_->GetPreferredSize();
+  gfx::Rect title_bounds(rect.x() + (rect.width() - title_size.width()) / 2,
+                         y + icon_size_.height() + kIconTitleSpacing,
+                         title_size.width(),
+                         title_size.height());
+  title_bounds.Intersect(rect);
+  title_->SetBoundsRect(title_bounds);
 }
 
 void AppListItemView::OnPaint(gfx::Canvas* canvas) {
+  if (apps_grid_view_->IsDraggedView(this))
+    return;
+
   gfx::Rect rect(GetContentsBounds());
 
-  bool selected = apps_grid_view_->IsSelectedItem(this);
-
-  canvas->FillRect(rect, kContentsBackgroundColor);
   if (model_->highlighted()) {
     canvas->FillRect(rect, kHighlightedColor);
   } else if (hover_animation_->is_animating()) {
     int alpha = SkColorGetA(kHoverAndPushedColor) *
         hover_animation_->GetCurrentValue();
     canvas->FillRect(rect, SkColorSetA(kHoverAndPushedColor, alpha));
-  } else if (state() == BS_HOT || state() == BS_PUSHED) {
+  } else if (state() == STATE_HOVERED || state() == STATE_PRESSED) {
     canvas->FillRect(rect, kHoverAndPushedColor);
-  } else if (selected) {
+  } else if (apps_grid_view_->IsSelectedView(this)) {
     canvas->FillRect(rect, kSelectedColor);
   }
 }
@@ -215,13 +250,11 @@ void AppListItemView::ShowContextMenuForView(views::View* source,
 }
 
 void AppListItemView::StateChanged() {
-  if (state() == BS_HOT || state() == BS_PUSHED) {
-    // Don't auto select item if there is a running page transition.
-    if (!apps_grid_view_->HasPageTransition())
-      apps_grid_view_->SetSelectedItem(this);
+  if (state() == STATE_HOVERED || state() == STATE_PRESSED) {
+    apps_grid_view_->SetSelectedView(this);
     title_->SetEnabledColor(kTitleHoverColor);
   } else {
-    apps_grid_view_->ClearSelectedItem(this);
+    apps_grid_view_->ClearSelectedView(this);
     model_->SetHighlighted(false);
     title_->SetEnabledColor(kTitleColor);
   }
@@ -234,6 +267,93 @@ bool AppListItemView::ShouldEnterPushedState(const ui::Event& event) {
     return false;
 
   return views::CustomButton::ShouldEnterPushedState(event);
+}
+
+bool AppListItemView::OnMousePressed(const ui::MouseEvent& event) {
+  CustomButton::OnMousePressed(event);
+
+  if (!ShouldEnterPushedState(event))
+    return true;
+
+  apps_grid_view_->InitiateDrag(this, AppsGridView::MOUSE, event);
+
+  if (apps_grid_view_->IsDraggedView(this)) {
+    mouse_drag_timer_.Start(FROM_HERE,
+        base::TimeDelta::FromMilliseconds(kMouseDragUIDelayInMs),
+        this, &AppListItemView::OnMouseDragTimer);
+  }
+  return true;
+}
+
+void AppListItemView::OnMouseReleased(const ui::MouseEvent& event) {
+  CustomButton::OnMouseReleased(event);
+  apps_grid_view_->EndDrag(false);
+  mouse_drag_timer_.Stop();
+  SetUIState(UI_STATE_NORMAL);
+}
+
+void AppListItemView::OnMouseCaptureLost() {
+  CustomButton::OnMouseCaptureLost();
+  apps_grid_view_->EndDrag(true);
+  mouse_drag_timer_.Stop();
+  SetUIState(UI_STATE_NORMAL);
+}
+
+bool AppListItemView::OnMouseDragged(const ui::MouseEvent& event) {
+  CustomButton::OnMouseDragged(event);
+  apps_grid_view_->UpdateDrag(this, AppsGridView::MOUSE, event);
+
+  // Shows dragging UI when it's confirmed without waiting for the timer.
+  if (ui_state_ != UI_STATE_DRAGGING &&
+      apps_grid_view_->dragging() &&
+      apps_grid_view_->IsDraggedView(this)) {
+    mouse_drag_timer_.Stop();
+    SetUIState(UI_STATE_DRAGGING);
+  }
+  return true;
+}
+
+void AppListItemView::OnGestureEvent(ui::GestureEvent* event) {
+  switch (event->type()) {
+    case ui::ET_GESTURE_SCROLL_BEGIN:
+      if (touch_dragging_) {
+        apps_grid_view_->InitiateDrag(this, AppsGridView::TOUCH, *event);
+        event->SetHandled();
+      }
+      break;
+    case ui::ET_GESTURE_SCROLL_UPDATE:
+      if (touch_dragging_) {
+        apps_grid_view_->UpdateDrag(this, AppsGridView::TOUCH, *event);
+        event->SetHandled();
+      }
+      break;
+    case ui::ET_GESTURE_SCROLL_END:
+    case ui::ET_SCROLL_FLING_START:
+      if (touch_dragging_) {
+        SetTouchDragging(false);
+        apps_grid_view_->EndDrag(false);
+        event->SetHandled();
+      }
+      break;
+    case ui::ET_GESTURE_LONG_PRESS:
+      if (!apps_grid_view_->has_dragged_view())
+        SetTouchDragging(true);
+      event->SetHandled();
+      break;
+    case ui::ET_GESTURE_END:
+      if (touch_dragging_) {
+        SetTouchDragging(false);
+
+        gfx::Point location(event->location());
+        ConvertPointToScreen(this, &location);
+        ShowContextMenu(location, true);
+      }
+      break;
+    default:
+      break;
+  }
+  if (!event->handled())
+    CustomButton::OnGestureEvent(event);
 }
 
 }  // namespace app_list

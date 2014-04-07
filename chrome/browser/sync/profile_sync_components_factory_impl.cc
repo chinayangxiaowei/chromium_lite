@@ -10,6 +10,8 @@
 #include "chrome/browser/extensions/extension_system.h"
 #include "chrome/browser/extensions/extension_system_factory.h"
 #include "chrome/browser/extensions/settings/settings_frontend.h"
+#include "chrome/browser/history/history.h"
+#include "chrome/browser/history/history_service_factory.h"
 #include "chrome/browser/prefs/pref_model_associator.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/search_engines/template_url_service.h"
@@ -36,15 +38,16 @@
 #include "chrome/browser/sync/glue/session_model_associator.h"
 #include "chrome/browser/sync/glue/shared_change_processor.h"
 #include "chrome/browser/sync/glue/sync_backend_host.h"
-#include "chrome/browser/sync/glue/theme_change_processor.h"
 #include "chrome/browser/sync/glue/theme_data_type_controller.h"
-#include "chrome/browser/sync/glue/theme_model_associator.h"
 #include "chrome/browser/sync/glue/typed_url_change_processor.h"
 #include "chrome/browser/sync/glue/typed_url_data_type_controller.h"
 #include "chrome/browser/sync/glue/typed_url_model_associator.h"
 #include "chrome/browser/sync/glue/ui_data_type_controller.h"
 #include "chrome/browser/sync/profile_sync_components_factory_impl.h"
 #include "chrome/browser/sync/profile_sync_service.h"
+#include "chrome/browser/themes/theme_service_factory.h"
+#include "chrome/browser/themes/theme_service.h"
+#include "chrome/browser/themes/theme_syncable_service.h"
 #include "chrome/browser/webdata/autocomplete_syncable_service.h"
 #include "chrome/browser/webdata/autofill_profile_syncable_service.h"
 #include "chrome/browser/webdata/web_data_service.h"
@@ -76,9 +79,7 @@ using browser_sync::SessionDataTypeController;
 using browser_sync::SessionModelAssociator;
 using browser_sync::SharedChangeProcessor;
 using browser_sync::SyncBackendHost;
-using browser_sync::ThemeChangeProcessor;
 using browser_sync::ThemeDataTypeController;
-using browser_sync::ThemeModelAssociator;
 using browser_sync::TypedUrlChangeProcessor;
 using browser_sync::TypedUrlDataTypeController;
 using browser_sync::TypedUrlModelAssociator;
@@ -177,7 +178,7 @@ void ProfileSyncComponentsFactoryImpl::RegisterDesktopDataTypes(
   }
 #endif
 
-  // Search Engine sync is enabled by default.  Register only if explicitly
+  // Search Engine sync is enabled by default.  Register unless explicitly
   // disabled.
   if (!command_line_->HasSwitch(switches::kDisableSyncSearchEngines)) {
     pss->RegisterDataTypeController(
@@ -205,29 +206,46 @@ void ProfileSyncComponentsFactoryImpl::RegisterDesktopDataTypes(
         new AutofillProfileDataTypeController(this, profile_, pss));
   }
 
-  // App notifications sync is enabled by default.  Register only if
-  // explicitly disabled.
+  // App notifications sync is enabled by default.  Register unless explicitly
+  // disabled.
   if (!command_line_->HasSwitch(switches::kDisableSyncAppNotifications)) {
     pss->RegisterDataTypeController(
         new AppNotificationDataTypeController(this, profile_, pss));
   }
+
+  // Unless it is explicitly disabled, history delete directive sync is
+  // enabled whenever full history sync is enabled.
+  if (command_line_->HasSwitch(switches::kHistoryEnableFullHistorySync) &&
+      !command_line_->HasSwitch(
+          switches::kDisableSyncHistoryDeleteDirectives)) {
+    pss->RegisterDataTypeController(
+        new UIDataTypeController(
+            syncer::HISTORY_DELETE_DIRECTIVES, this, profile_, pss));
+  }
 }
 
 DataTypeManager* ProfileSyncComponentsFactoryImpl::CreateDataTypeManager(
+    const syncer::WeakHandle<syncer::DataTypeDebugInfoListener>&
+        debug_info_listener,
     SyncBackendHost* backend,
     const DataTypeController::TypeMap* controllers,
     DataTypeManagerObserver* observer) {
-  return new DataTypeManagerImpl(backend, controllers, observer);
+  return new DataTypeManagerImpl(debug_info_listener,
+                                 backend,
+                                 controllers,
+                                 observer);
 }
 
 browser_sync::GenericChangeProcessor*
     ProfileSyncComponentsFactoryImpl::CreateGenericChangeProcessor(
         ProfileSyncService* profile_sync_service,
         browser_sync::DataTypeErrorHandler* error_handler,
-        const base::WeakPtr<syncer::SyncableService>& local_service) {
+        const base::WeakPtr<syncer::SyncableService>& local_service,
+        const base::WeakPtr<syncer::SyncMergeResult>& merge_result) {
   syncer::UserShare* user_share = profile_sync_service->GetUserShare();
   return new GenericChangeProcessor(error_handler,
                                     local_service,
+                                    merge_result,
                                     user_share);
 }
 
@@ -267,13 +285,23 @@ base::WeakPtr<syncer::SyncableService> ProfileSyncComponentsFactoryImpl::
     case syncer::APP_NOTIFICATIONS:
       return extension_system_->extension_service()->
           app_notification_manager()->AsWeakPtr();
+#if defined(ENABLE_THEMES)
+    case syncer::THEMES:
+      return ThemeServiceFactory::GetForProfile(profile_)->
+          GetThemeSyncableService()->AsWeakPtr();
+#endif
+    case syncer::HISTORY_DELETE_DIRECTIVES: {
+      HistoryService* history =
+          HistoryServiceFactory::GetForProfile(
+              profile_, Profile::EXPLICIT_ACCESS);
+      return history ? history->AsWeakPtr() : base::WeakPtr<HistoryService>();
+    }
     default:
       // The following datatypes still need to be transitioned to the
       // syncer::SyncableService API:
       // Bookmarks
       // Passwords
       // Sessions
-      // Themes
       // Typed URLs
       NOTREACHED();
       return base::WeakPtr<syncer::SyncableService>();
@@ -319,19 +347,6 @@ ProfileSyncComponentsFactory::SyncComponents
                                   error_handler);
   return SyncComponents(model_associator, change_processor);
 }
-
-#if defined(ENABLE_THEMES)
-ProfileSyncComponentsFactory::SyncComponents
-    ProfileSyncComponentsFactoryImpl::CreateThemeSyncComponents(
-        ProfileSyncService* profile_sync_service,
-        DataTypeErrorHandler* error_handler) {
-  ThemeModelAssociator* model_associator =
-      new ThemeModelAssociator(profile_sync_service, error_handler);
-  ThemeChangeProcessor* change_processor =
-      new ThemeChangeProcessor(error_handler);
-  return SyncComponents(model_associator, change_processor);
-}
-#endif
 
 ProfileSyncComponentsFactory::SyncComponents
     ProfileSyncComponentsFactoryImpl::CreateTypedUrlSyncComponents(

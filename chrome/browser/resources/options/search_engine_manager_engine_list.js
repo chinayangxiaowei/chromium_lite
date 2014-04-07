@@ -3,6 +3,8 @@
 // found in the LICENSE file.
 
 cr.define('options.search_engines', function() {
+  /** @const */ var ControlledSettingIndicator =
+                    options.ControlledSettingIndicator;
   /** @const */ var InlineEditableItemList = options.InlineEditableItemList;
   /** @const */ var InlineEditableItem = options.InlineEditableItem;
   /** @const */ var ListSelectionController = cr.ui.ListSelectionController;
@@ -67,7 +69,7 @@ cr.define('options.search_engines', function() {
      */
     currentlyValid_: false,
 
-    /** @inheritDoc */
+    /** @override */
     decorate: function() {
       InlineEditableItem.prototype.decorate.call(this);
 
@@ -96,9 +98,11 @@ cr.define('options.search_engines', function() {
       // Add the favicon.
       var faviconDivEl = this.ownerDocument.createElement('div');
       faviconDivEl.className = 'favicon';
-      var imgEl = this.ownerDocument.createElement('img');
-      imgEl.src = 'chrome://favicon/iconurl/' + engine.iconURL;
-      faviconDivEl.appendChild(imgEl);
+      if (!this.isPlaceholder) {
+        faviconDivEl.style.backgroundImage =
+            url('chrome://favicon/iconurl@' + window.devicePixelRatio + 'x/' +
+                engine.iconURL);
+      }
       nameColEl.appendChild(faviconDivEl);
 
       var nameEl = this.createEditableTextCell(engine.displayName);
@@ -166,15 +170,24 @@ cr.define('options.search_engines', function() {
         this.addEventListener('commitedit', this.onEditCommitted_.bind(this));
       } else {
         this.editable = false;
+        this.querySelector('.row-delete-button').hidden = true;
+        var indicator = ControlledSettingIndicator();
+        indicator.setAttribute('setting', 'search-engine');
+        // Create a synthetic pref change event decorated as
+        // CoreOptionsHandler::CreateValueForPref() does.
+        var event = new cr.Event(this.contentType);
+        event.value = { controlledBy: 'policy' };
+        indicator.handlePrefChange(event);
+        this.appendChild(indicator);
       }
     },
 
-    /** @inheritDoc */
+    /** @override */
     get currentInputIsValid() {
       return !this.waitingForValidation_ && this.currentlyValid_;
     },
 
-    /** @inheritDoc */
+    /** @override */
     get hasBeenEdited() {
       var engine = this.searchEngine_;
       return this.nameField_.value != engine.name ||
@@ -278,12 +291,12 @@ cr.define('options.search_engines', function() {
   SearchEngineList.prototype = {
     __proto__: InlineEditableItemList.prototype,
 
-    /** @inheritDoc */
+    /** @override */
     createItem: function(searchEngine) {
       return new SearchEngineListItem(searchEngine);
     },
 
-    /** @inheritDoc */
+    /** @override */
     deleteItemAtIndex: function(index) {
       var modelIndex = this.dataModel.item(index).modelIndex;
       chrome.send('removeSearchEngine', [String(modelIndex)]);

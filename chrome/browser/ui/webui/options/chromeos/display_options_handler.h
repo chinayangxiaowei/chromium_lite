@@ -8,7 +8,7 @@
 #include <vector>
 
 #include "chrome/browser/ui/webui/options/options_ui.h"
-#include "ui/aura/display_observer.h"
+#include "ui/gfx/display_observer.h"
 
 namespace base {
 class DictionaryValue;
@@ -16,11 +16,13 @@ class ListValue;
 }
 
 namespace chromeos {
+class OverscanCalibrator;
+
 namespace options {
 
 // Display options overlay page UI handler.
 class DisplayOptionsHandler : public ::options::OptionsPageUIHandler,
-                              public aura::DisplayObserver {
+                              public gfx::DisplayObserver {
  public:
   DisplayOptionsHandler();
   virtual ~DisplayOptionsHandler();
@@ -33,7 +35,7 @@ class DisplayOptionsHandler : public ::options::OptionsPageUIHandler,
   // WebUIMessageHandler implementation.
   virtual void RegisterMessages() OVERRIDE;
 
-  // aura::DisplayObserver implementation.
+  // gfx::DisplayObserver implementation.
   virtual void OnDisplayBoundsChanged(const gfx::Display& display) OVERRIDE;
   virtual void OnDisplayAdded(const gfx::Display& new_display) OVERRIDE;
   virtual void OnDisplayRemoved(const gfx::Display& old_display) OVERRIDE;
@@ -47,18 +49,25 @@ class DisplayOptionsHandler : public ::options::OptionsPageUIHandler,
   void SendDisplayInfo();
 
   // Called when the fade-out animation for mirroring status change is finished.
-  void FadeOutForMirroringFinished(bool is_mirroring);
+  void OnFadeOutForMirroringFinished(bool is_mirroring);
 
   // Called when the fade-out animation for secondary display layout change is
   // finished.  |layout| specifies the four positions of the secondary display
   // (left/right/top/bottom), and |offset| is the offset length from the
   // left/top edge of the primary display.
-  void FadeOutForDisplayLayoutFinished(int layout, int offset);
+  void OnFadeOutForDisplayLayoutFinished(int layout, int offset);
 
   // Handlers of JS messages.
   void HandleDisplayInfo(const base::ListValue* unused_args);
   void HandleMirroring(const base::ListValue* args);
+  void HandleSetPrimary(const base::ListValue* args);
   void HandleDisplayLayout(const base::ListValue* args);
+  void HandleStartOverscanCalibration(const base::ListValue* args);
+  void HandleFinishOverscanCalibration(const base::ListValue* args);
+  void HandleClearOverscanCalibration(const base::ListValue* args);
+  void HandleUpdateOverscanCalibration(const base::ListValue* args);
+
+  scoped_ptr<OverscanCalibrator> overscan_calibrator_;
 
   DISALLOW_COPY_AND_ASSIGN(DisplayOptionsHandler);
 };

@@ -15,8 +15,8 @@ import org.chromium.base.JNINamespace;
 public abstract class WebContentsObserverAndroid {
     private int mNativeWebContentsObserverAndroid;
 
-    public WebContentsObserverAndroid(int webContentsPtr) {
-        mNativeWebContentsObserverAndroid = nativeInit(webContentsPtr);
+    public WebContentsObserverAndroid(ContentViewCore contentViewCore) {
+        mNativeWebContentsObserverAndroid = nativeInit(contentViewCore.getNativeContentViewCore());
     }
 
     /**
@@ -47,6 +47,43 @@ public abstract class WebContentsObserverAndroid {
     }
 
     /**
+     * Called when the main frame of the page has committed.
+     * @param url The validated url for the page.
+     * @param baseUrl The validated base url for the page.
+     */
+    @CalledByNative
+    public void didNavigateMainFrame(String url, String baseUrl) {
+    }
+
+    /**
+     * Similar to didNavigateMainFrame but also called on subframe navigations.
+     * @param url The validated url for the page.
+     * @param baseUrl The validated base url for the page.
+     * @param isReload True if this navigation is a reload.
+     */
+    @CalledByNative
+    public void didNavigateAnyFrame(String url, String baseUrl, boolean isReload) {
+    }
+
+    /**
+     * Notifies that a load is started for a given frame.
+     * @param frameId A positive, non-zero integer identifying the navigating frame.
+     * @param parentFrameId The frame identifier of the frame containing the navigating frame,
+     *                      or -1 if the frame is not contained in another frame.
+     * @param isMainFrame Whether the load is happening for the main frame.
+     * @param validatedUrl The validated URL that is being navigated to.
+     * @param isErrorPage Whether this is navigating to an error page.
+     */
+    @CalledByNative
+    public void didStartProvisionalLoadForFrame(
+            long frameId,
+            long parentFrameId,
+            boolean isMainFrame,
+            String validatedUrl,
+            boolean isErrorPage) {
+    }
+
+    /**
      * Destroy the corresponding native object.
      */
     @CalledByNative
@@ -57,6 +94,6 @@ public abstract class WebContentsObserverAndroid {
         }
     }
 
-    private native int nativeInit(int webContentsPtr);
+    private native int nativeInit(int contentViewCorePtr);
     private native void nativeDestroy(int nativeWebContentsObserverAndroid);
 }

@@ -29,6 +29,8 @@ class ObjectPath;
 
 namespace chromeos {
 
+class ShillPropertyChangedObserver;
+
 // ShillIPConfigClient is used to communicate with the Shill IPConfig
 // service.  All methods should be called from the origin thread which
 // initializes the DBusThreadManager instance.
@@ -43,14 +45,15 @@ class CHROMEOS_EXPORT ShillIPConfigClient {
   static ShillIPConfigClient* Create(DBusClientImplementationType type,
                                         dbus::Bus* bus);
 
-  // Sets PropertyChanged signal handler.
-  virtual void SetPropertyChangedHandler(
+  // Adds a property changed |observer| for the ipconfig at |ipconfig_path|.
+  virtual void AddPropertyChangedObserver(
       const dbus::ObjectPath& ipconfig_path,
-      const PropertyChangedHandler& handler) = 0;
+      ShillPropertyChangedObserver* observer) = 0;
 
-  // Resets PropertyChanged signal handler.
-  virtual void ResetPropertyChangedHandler(
-      const dbus::ObjectPath& ipconfig_path) = 0;
+  // Removes a property changed |observer| for the ipconfig at |ipconfig_path|.
+  virtual void RemovePropertyChangedObserver(
+      const dbus::ObjectPath& ipconfig_path,
+      ShillPropertyChangedObserver* observer) = 0;
 
   // Refreshes the active IP configuration after service property changes and
   // renews the DHCP lease, if any.
@@ -88,13 +91,6 @@ class CHROMEOS_EXPORT ShillIPConfigClient {
   // |callback| is called after the method call succeeds.
   virtual void Remove(const dbus::ObjectPath& ipconfig_path,
                       const VoidDBusMethodCallback& callback) = 0;
-
-  // DEPRECATED DO NOT USE: Calls Remove method and blocks until the method call
-  // finishes.
-  //
-  // TODO(hashimoto): Refactor CrosRemoveIPConfig to remove this method.
-  // crosbug.com/29902
-  virtual bool CallRemoveAndBlock(const dbus::ObjectPath& ipconfig_path) = 0;
 
  protected:
   // Create() should be used instead.

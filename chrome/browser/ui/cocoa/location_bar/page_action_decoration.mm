@@ -7,6 +7,7 @@
 #import "chrome/browser/ui/cocoa/location_bar/page_action_decoration.h"
 
 #include "base/sys_string_conversions.h"
+#include "chrome/browser/extensions/extension_action.h"
 #include "chrome/browser/extensions/extension_service.h"
 #include "chrome/browser/extensions/extension_tab_util.h"
 #include "chrome/browser/extensions/location_bar_controller.h"
@@ -19,14 +20,14 @@
 #import "chrome/browser/ui/cocoa/extensions/extension_popup_controller.h"
 #include "chrome/browser/ui/cocoa/last_active_browser_cocoa.h"
 #import "chrome/browser/ui/cocoa/location_bar/location_bar_view_mac.h"
-#include "chrome/browser/ui/tab_contents/tab_contents.h"
+#include "chrome/browser/ui/omnibox/location_bar_util.h"
 #include "chrome/browser/ui/webui/extensions/extension_info_ui.h"
 #include "chrome/common/chrome_notification_types.h"
-#include "chrome/common/extensions/extension_action.h"
 #include "chrome/common/extensions/extension_resource.h"
 #include "content/public/browser/notification_service.h"
 #include "content/public/browser/web_contents.h"
 #include "skia/ext/skia_utils_mac.h"
+#include "ui/gfx/canvas_skia_paint.h"
 
 using content::WebContents;
 using extensions::Extension;
@@ -53,7 +54,7 @@ PageActionDecoration::PageActionDecoration(
       preview_enabled_(false),
       ALLOW_THIS_IN_INITIALIZER_LIST(scoped_icon_animation_observer_(
           page_action->GetIconAnimation(
-              SessionID::IdForTab(owner->GetTabContents()->web_contents())),
+              SessionID::IdForTab(owner->GetWebContents())),
           this)) {
   const Extension* extension = browser->profile()->GetExtensionService()->
       GetExtensionById(page_action->extension_id(), false);
@@ -82,6 +83,26 @@ CGFloat PageActionDecoration::GetWidthForSpace(CGFloat width) {
   return Extension::kPageActionIconMaxSize;
 }
 
+void PageActionDecoration::DrawWithBackgroundInFrame(NSRect background_frame,
+                                                     NSRect frame,
+                                                     NSView* control_view) {
+  {
+    gfx::Rect bounds(NSRectToCGRect(background_frame));
+    gfx::CanvasSkiaPaint canvas(background_frame, /*opaque=*/false);
+    // set_composite_alpha(true) makes the extension action paint on top of the
+    // location bar instead of whatever's behind the Chrome window.
+    canvas.set_composite_alpha(true);
+    location_bar_util::PaintExtensionActionBackground(
+        *page_action_, current_tab_id_,
+        &canvas, bounds,
+        SK_ColorBLACK, SK_ColorWHITE);
+    // Destroying |canvas| draws the background.
+  }
+
+  ImageDecoration::DrawWithBackgroundInFrame(
+      background_frame, frame, control_view);
+}
+
 bool PageActionDecoration::AcceptsMousePress() {
   return true;
 }
@@ -93,15 +114,15 @@ bool PageActionDecoration::OnMousePressed(NSRect frame) {
 }
 
 bool PageActionDecoration::ActivatePageAction(NSRect frame) {
-  TabContents* tab_contents = owner_->GetTabContents();
-  if (!tab_contents) {
+  WebContents* web_contents = owner_->GetWebContents();
+  if (!web_contents) {
     // We don't want other code to try and handle this click. Returning true
     // prevents this by indicating that we handled it.
     return true;
   }
 
   LocationBarController* controller =
-      extensions::TabHelper::FromWebContents(tab_contents->web_contents())->
+      extensions::TabHelper::FromWebContents(web_contents)->
           location_bar_controller();
 
   // 1 is left click.
@@ -131,9 +152,9 @@ bool PageActionDecoration::ActivatePageAction(NSRect frame) {
 
 void PageActionDecoration::OnIconUpdated() {
   // If we have no owner, that means this class is still being constructed.
-  TabContents* tab_contents = owner_ ? owner_->GetTabContents() : NULL;
-  if (tab_contents) {
-    UpdateVisibility(tab_contents->web_contents(), current_url_);
+  WebContents* web_contents = owner_ ? owner_->GetWebContents() : NULL;
+  if (web_contents) {
+    UpdateVisibility(web_contents, current_url_);
     owner_->RedrawDecoration(this);
   }
 }
@@ -223,7 +244,7 @@ void PageActionDecoration::ShowPopup(const NSRect& frame,
   anchor = [field convertPoint:anchor toView:nil];
 
   [ExtensionPopupController showURL:popup_url
-                          inBrowser:browser::GetLastActiveBrowser()
+                          inBrowser:chrome::GetLastActiveBrowser()
                          anchoredAt:anchor
                       arrowLocation:info_bubble::kTopRight
                             devMode:NO];

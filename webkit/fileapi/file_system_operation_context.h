@@ -5,26 +5,26 @@
 #ifndef WEBKIT_FILEAPI_FILE_SYSTEM_OPERATION_CONTEXT_H_
 #define WEBKIT_FILEAPI_FILE_SYSTEM_OPERATION_CONTEXT_H_
 
-#include "base/logging.h"
 #include "base/memory/ref_counted.h"
-#include "base/sequenced_task_runner.h"
-#include "googleurl/src/gurl.h"
+#include "base/memory/weak_ptr.h"
 #include "webkit/fileapi/file_system_context.h"
-#include "webkit/fileapi/file_system_file_util.h"
-#include "webkit/fileapi/file_system_types.h"
-#include "webkit/fileapi/fileapi_export.h"
-#include "webkit/fileapi/media/media_file_system_config.h"
+#include "webkit/fileapi/media/mtp_device_file_system_config.h"
 #include "webkit/fileapi/task_runner_bound_observer_list.h"
+#include "webkit/storage/webkit_storage_export.h"
 
-#if defined(SUPPORT_MEDIA_FILESYSTEM)
-#include "webkit/fileapi/media/media_device_delegate.h"
+#if defined(SUPPORT_MTP_DEVICE_FILESYSTEM)
+#include "webkit/fileapi/media/mtp_device_delegate.h"
 #endif
+
+namespace base {
+class SequencedTaskRunner;
+}
 
 namespace fileapi {
 
 class MediaPathFilter;
 
-class FILEAPI_EXPORT_PRIVATE FileSystemOperationContext {
+class WEBKIT_STORAGE_EXPORT_PRIVATE FileSystemOperationContext {
  public:
   explicit FileSystemOperationContext(FileSystemContext* context);
   ~FileSystemOperationContext();
@@ -38,13 +38,15 @@ class FILEAPI_EXPORT_PRIVATE FileSystemOperationContext {
   }
   int64 allowed_bytes_growth() const { return allowed_bytes_growth_; }
 
-#if defined(SUPPORT_MEDIA_FILESYSTEM)
-  void set_media_device_delegate(MediaDeviceDelegate* delegate) {
-    media_device_delegate_ = delegate;
+#if defined(SUPPORT_MTP_DEVICE_FILESYSTEM)
+  // Initializes |mtp_device_delegate_url_| on the IO thread.
+  void set_mtp_device_delegate_url(const std::string& delegate_url) {
+    mtp_device_delegate_url_ = delegate_url;
   }
 
-  MediaDeviceDelegate* media_device_delegate() const {
-    return media_device_delegate_.get();
+  // Reads |mtp_device_delegate_url_| on |task_runner_|.
+  const std::string& mtp_device_delegate_url() const {
+    return mtp_device_delegate_url_;
   }
 #endif
 
@@ -91,9 +93,10 @@ class FILEAPI_EXPORT_PRIVATE FileSystemOperationContext {
   ChangeObserverList change_observers_;
   UpdateObserverList update_observers_;
 
-#if defined(SUPPORT_MEDIA_FILESYSTEM)
-  // Store the current media device.
-  scoped_refptr<MediaDeviceDelegate> media_device_delegate_;
+#if defined(SUPPORT_MTP_DEVICE_FILESYSTEM)
+  // URL for the media transfer protocol (MTP) device delegate.
+  // Initialized on IO thread and used on |task_runner_|.
+  std::string mtp_device_delegate_url_;
 #endif
 };
 

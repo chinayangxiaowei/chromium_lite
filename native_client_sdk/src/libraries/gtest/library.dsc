@@ -7,7 +7,7 @@
   # We can fix this by passing -Wno-unused-private-field to clang, but gcc
   # doesn't support this flag so we'll have to support splitting CXXFLAGS based
   # on TOOL first.
-  'TOOLS': ['newlib', 'glibc', 'win', 'linux'],
+  'TOOLS': ['newlib:x86', 'newlib:x64', 'glibc', 'win', 'linux'],
   'SEARCH': [
     '.',
     '../../../../testing/gtest/include/gtest',
@@ -29,9 +29,10 @@
         'gtest-typed-test.cc',
         'nacl_gtest_dummy_sys.cc',
       ],
-      # Ignore warning:
+      # Ignore warnings:
       #   gtest.cc:2555: error: enumeration value ‘COLOR_DEFAULT’ not handled in switch
-      'CXXFLAGS': ['-Wno-switch-enum'],
+      #   gtest-typed-test.h:239:47: error: anonymous variadic macros were introduced in C99 [-Werror=variadic-macros]
+      'CXXFLAGS': ['-Wno-switch-enum', '-Wno-variadic-macros'],
       'INCLUDES': [
         # See comment below about gtest-internal-inl.h
         '$(NACL_SDK_ROOT)/include/gtest/internal',
@@ -81,6 +82,6 @@
       'DEST': 'include/gtest/internal/src',
     },
   ],
-  'DEST': 'testing',
+  'DEST': 'testlibs',
   'NAME': 'gtest',
 }

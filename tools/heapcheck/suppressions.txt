@@ -129,8 +129,7 @@
    Heapcheck:Leak
    fun:sqlite3MemMalloc
    ...
-   fun:chromeos::OncNetworkParser::ParseServerOrCaCertificate
-   fun:chromeos::OncNetworkParser::ParseCertificate
+   fun:chromeos::onc::CertificateImporter::ParseServerOrCaCertificate
 }
 {
    bug_51988_i
@@ -200,7 +199,6 @@
 {
    bug_146464_c
    Heapcheck:Leak
-   fun:??
    ...
    fun:RootWindowHostLinux
    fun:aura::RootWindowHost::Create
@@ -218,34 +216,52 @@
    bug_148477_b
    Heapcheck:Leak
    ...
+   fun:gfx::RealGLApi::glCompileShaderFn
    fun:webkit::gpu::WebGraphicsContext3DInProcessImpl::compileShader
-   fun:WebCore::ProgramBindingBase::loadShader
-   fun:WebCore::ProgramBindingBase::init
-   fun:WebCore::ProgramBinding::ProgramBinding
+   fun:cc::ProgramBindingBase::loadShader
+   fun:cc::ProgramBindingBase::init
+   fun:ProgramBinding
    ...
-   fun:WebCore::CCSingleThreadProxy::commitAndComposite
-   fun:WebCore::CCSingleThreadProxy::compositeImmediately
-   fun:WebCore::CCLayerTreeHost::composite
-   fun:WebKit::WebLayerTreeViewImpl::composite
+   fun:cc::SingleThreadProxy::commitAndComposite
+   fun:cc::SingleThreadProxy::compositeImmediately
 }
 {
    bug_148477_c
    Heapcheck:Leak
    ...
+   fun:gfx::RealGLApi::glLinkProgramFn
    fun:webkit::gpu::WebGraphicsContext3DInProcessImpl::linkProgram
-   fun:WebCore::ProgramBindingBase::link
-   fun:WebCore::ProgramBinding::initialize
+   fun:cc::ProgramBindingBase::link
+   fun:cc::ProgramBinding::initialize
    ...
-   fun:WebCore::CCRendererGL::drawQuad
-   fun:WebCore::CCDirectRenderer::drawRenderPass
-   fun:WebCore::CCDirectRenderer::drawFrame
-   fun:WebCore::CCLayerTreeHostImpl::drawLayers
-   fun:WebCore::CCSingleThreadProxy::doComposite
-   fun:WebCore::CCSingleThreadProxy::commitAndComposite
-   fun:WebCore::CCSingleThreadProxy::compositeImmediately
-   fun:WebCore::CCLayerTreeHost::composite
-   fun:WebKit::WebLayerTreeViewImpl::composite
-   fun:ui::Compositor::Draw
+   fun:cc::GLRenderer::drawQuad
+   fun:cc::DirectRenderer::drawRenderPass
+   fun:cc::DirectRenderer::drawFrame
+}
+# There is not CloseTestNSSDB due to NSS bug 588269.
+# When NSS 3.14 is the minimum version required, this should be removed.
+# http://crbug.com/156433 .
+{
+   bug_156433_a
+   Heapcheck:Leak
+   fun:sqlite3MemMalloc
+   fun:crypto::::NSSInitSingleton::OpenUserDB
+   fun:crypto::::NSSInitSingleton::OpenTestNSSDB
+   fun:*ScopedTestNSSDB
+}
+{
+   bug_156433_b
+   Heapcheck:Leak
+   fun:PORT_Alloc_Util
+   fun:crypto::::NSSInitSingleton::OpenUserDB
+   fun:crypto::::NSSInitSingleton::OpenTestNSSDB
+   fun:*ScopedTestNSSDB
+}
+{
+   bug_156829
+   Heapcheck:Leak
+   ...
+   fun:content::AudioInputDeviceManager::EnumerateOnDeviceThread
 }
 
 
@@ -342,6 +358,22 @@
    fun:initSessionCacheLocksLazily
    ...
    fun:ssl_InitSessionCacheLocks
+}
+{
+   FileStream::Context can leak through WorkerPool by design (Linux)
+   Heapcheck:Leak
+   fun:net::FileStream::FileStream
+}
+{
+   FileStream::Context can leak through WorkerPool by design (CrOS)
+   Heapcheck:Leak
+   fun:FileStream
+}
+{
+   Tasks posted to WorkerPool can leak by design
+   Heapcheck:Leak
+   fun:base::internal::PostTaskAndReplyImpl::PostTaskAndReply
+   fun:base::WorkerPool::PostTaskAndReply
 }
 
 #-----------------------------------------------------------------------
@@ -1012,12 +1044,6 @@
    fun:v8::internal::Snapshot::Initialize
 }
 {
-   bug_99436
-   Heapcheck:Leak
-   ...
-   fun:chromeos::OncNetworkParserTest_TestCreateNetworkWifi*_Test::TestBody
-}
-{
    bug_100146
    Heapcheck:Leak
    fun:base::internal::WeakReferenceOwner::GetRef
@@ -1077,25 +1103,6 @@
    fun:PluginPrefsFactory::BuildServiceInstanceFor
 }
 {
-   bug_103192_a
-   Heapcheck:Leak
-   fun:MessageLoop
-   fun:MessageLoopForIO
-   fun:GViewRequestInterceptorTest
-}
-{
-   bug_103192_b
-   Heapcheck:Leak
-   fun:PluginService::GetPlugins
-   fun:chromeos::::GViewRequestInterceptorTest::SetUp
-}
-{
-   bug_103192_c
-   Heapcheck:Leak
-   fun:base::Bind
-   fun:chromeos::::GViewRequestInterceptorTest::SetUp
-}
-{
    bug_103704
    Heapcheck:Leak
    fun:std::string::_Rep::_S_create
@@ -1104,16 +1111,6 @@
    fun:TestingBrowserProcess
    fun:::ChromeTestSuiteInitializer::OnTestStart
    fun:testing::internal::TestEventRepeater::OnTestStart
-}
-{
-   bug_103945
-   Heapcheck:Leak
-   ...
-   fun:std::*string::_Rep::_S_create
-   ...
-   fun:PluginService::RegisterPepperPlugins
-   fun:PluginService::Init
-   fun:chromeos::::GViewRequestInterceptorTest::SetUp
 }
 {
    bug_111588a
@@ -1389,13 +1386,6 @@
    fun:TestingProfile::CreateWebDataService
 }
 {
-   bug_129392
-   Heapcheck:Leak
-   fun:::ChromeTestSuiteInitializer::SetUpHostResolver
-   fun:::ChromeTestSuiteInitializer::OnTestStart
-   fun:testing::internal::TestEventRepeater::OnTestStart
-}
-{
   bug_130640_a
   Heapcheck:Leak
   ...
@@ -1408,19 +1398,12 @@
   fun:GtkThemeService::GetDefaultFavicon
 }
 {
-   bug_132431
-   Heapcheck:Leak
-   ...
-   fun:gfx::::LoadDefaults
-   fun:gfx::GetDefaultWebKitFontRenderParams
-   fun:renderer_preferences_util::UpdateFromSystemSettings
-   fun:PrefsTabHelper::PrefsTabHelper
-   fun:TabContents::TabContents
-   fun:TabContents::Factory::CreateTabContents
-   fun:TabContentsTestHarness::SetContents
-   fun:content::RenderViewHostTestHarness::SetUp
-   fun:ChromeRenderViewHostTestHarness::SetUp
-   fun:TabContentsTestHarness::SetUp
+  bug_132431
+  Heapcheck:Leak
+  ...
+  fun:gfx::::LoadDefaults
+  ...
+  fun:::ChromeToMobileServiceTest_RequirementsToEnable_Test::TestBody
 }
 {
    bug_134527
@@ -1451,14 +1434,6 @@
    fun:ManagedMode::ManagedMode
    fun:*FakeManagedMode
    fun:ManagedModeTest::ManagedModeTest
-}
-{
-   bug_143563
-   Heapcheck:Leak
-   ...
-   fun:TaskManagerModel::RefreshVideoMemoryUsageStats
-   fun:TaskManagerModel::Refresh
-   fun:TaskManagerTest_RefreshCalled_Test::TestBody
 }
 {
    bug_143565
@@ -1523,10 +1498,155 @@
    fun:WTF::StringImpl::createUninitialized
    fun:WTF::StringImpl::create
    fun:WebKit::WebString::assign
-   fun:WebKit::WebString::WebString
+   fun:*WebString*
    fun:webkit_glue::CppBoundClass::BindToJavascript
    fun:::TestWebFrameClient::didClearWindowObject
    fun:WebKit::FrameLoaderClientImpl::dispatchDidClearWindowObjectInWorld
    fun:WebCore::FrameLoader::dispatchDidClearWindowObjectInWorld
-   fun:WebCore::V8DOMWindowShell::initializeIfNeeded
 }
+{
+   bug_151907
+   Heapcheck:Leak
+   fun:v8::internal::SkipList::Update
+   fun:v8::internal::PagedSpace::AllocateRaw
+   fun:v8::internal::Heap::ReserveSpace
+   fun:v8::internal::Deserializer::Deserialize
+   fun:v8::internal::Isolate::Init
+   fun:v8::internal::V8::Initialize
+   fun:v8::internal::Snapshot::Initialize
+   fun:v8::InitializeHelper
+}
+{
+   bug_153791
+   Heapcheck:Leak
+   ...
+   fun:PluginFinder::GetPluginMetadata
+   fun:PluginPrefs::EnablePlugin
+   fun:PluginPrefsTest::EnablePluginSynchronously
+   fun:PluginPrefsTest_UnifiedPepperFlashState_Test::TestBody
+}
+{
+   bug_151976_a
+   Heapcheck:Leak
+   ...
+   fun:TestURLRequestContext::Init
+   fun:TestURLRequestContext::TestURLRequestContext
+   fun:TestURLRequestContextGetter::GetURLRequestContext
+   fun:predictors::TestResourcePrefetcherDelegate::GetURLRequestContext
+   fun:predictors::ResourcePrefetcher::SendRequest
+   fun:predictors::ResourcePrefetcher::TryToLaunchPrefetchRequests
+   fun:predictors::ResourcePrefetcher::Start
+}
+{
+   bug_155530_a
+   Heapcheck:Leak
+   ...
+   fun:GeolocationInfoBarQueueControllerTests_OneObservationPerInfoBarCancelled_Test::TestBody
+}
+{
+   bug_155530_b
+   Heapcheck:Leak
+   ...
+   fun:::CreateLocaleDefaultValue
+   ...
+   fun:GeolocationInfoBarQueueControllerTests::SetUp
+}
+{
+   bug_157885
+   Heapcheck:Leak
+   ...
+   fun:dom_storage::DomStorageContext::CreateSessionNamespace
+}
+{
+   bug_159191
+   Heapcheck:Leak
+   ...
+   fun:FontConfigDirect::FontConfigDirect
+   fun:GetFcImpl
+   fun:SkFontHost::CreateTypeface
+   fun:SkTypeface::GetDefaultTypeface
+   fun:SkScalerContext::MakeRec
+   fun:SkPaint::descriptorProc
+   fun:SkPaint::detachCache
+   fun:SkAutoGlyphCache::SkAutoGlyphCache
+   fun:SkDraw::drawText
+   fun:SkDevice::drawText
+   fun:SkCanvas::drawText
+   fun:media::FakeVideoCaptureDevice::OnCaptureTask
+}
+# Need to figure out if the bug_159551 leaks are intentional or not.
+{
+   bug_159551_message_loop
+   Heapcheck:Leak
+   fun:MessageLoop::MessageLoop
+   ...
+   fun:testing::internal::TestFactoryImpl::CreateTest
+}
+{
+   bug_159551_bind_cros
+   Heapcheck:Leak
+   fun:base::Bind
+   fun:net::FileStream::Context::CloseAndDelete
+   fun:net::FileStream::Context::Orphan
+   fun:~FileStream
+}
+{
+   bug_159551_bind_linux
+   Heapcheck:Leak
+   fun:base::Bind
+   fun:net::FileStream::Context::CloseAndDelete
+   fun:net::FileStream::Context::Orphan
+   fun:net::FileStream::~FileStream
+}
+{
+   bug_161274
+   Heapcheck:Leak
+   ...
+   fun:net::FtpNetworkTransactionTest::ExecuteTransaction
+}
+{
+   bug_163111_a
+   Heapcheck:Leak
+   ...
+   fun:dbus::Response::FromMethodCall
+   fun:chromeos::ibus::IBusPanelServiceImpl::*Properties
+}
+{
+   bug_163111_b
+   Heapcheck:Leak
+   ...
+   fun:MethodCall
+   fun:chromeos::::ModemMessagingProxy::Delete
+   fun:chromeos::::ModemMessagingClientImpl::Delete
+   fun:chromeos::ModemMessagingClientTest_Delete_Test::TestBody
+}
+{
+   bug_163111_c
+   Heapcheck:Leak
+   ...
+   fun:dbus::MessageWriter::AppendBasic
+   fun:dbus::MessageWriter::AppendString
+   fun:chromeos::ibus::IBusObjectWriter::AddAttachment
+   fun:chromeos::ibus::AppendIBusLookupTable
+   fun:chromeos::ibus::IBusPanelServiceTest_UpdateLookupTableTest_Test::TestBody
+}
+{
+   bug_163111_d
+   Heapcheck:Leak
+   ...
+   fun:dbus::Response::FromMethodCall
+   fun:chromeos::ibus::IBusPanelServiceImpl::UpdateProperty
+}
+{
+   bug_164185
+   Heapcheck:Leak
+   ...
+   fun:BookmarkBarGtk::GetFirstHiddenBookmark
+   fun:BookmarkBarGtk::SetChevronState
+   fun:BookmarkBarGtk::BookmarkNodeAdded
+   fun:BookmarkModel::AddNode
+   fun:BookmarkModel::AddURLWithCreationTime
+   fun:BookmarkModel::AddURL
+   fun:BookmarkBarGtkUnittest_HidesHelpMessageWithBookmark_Test::TestBody
+}
+

@@ -5,12 +5,9 @@
 /**
  * This object encapsulates everything related to tasks execution.
  * @param {FileManager} fileManager FileManager instance.
- * @param {Array.<string>} urls List of file urls.
- * @param {Array.<string>=} opt_mimeTypes List of MIME types for each
- *     of the files.
  * @param {object} opt_params File manager load parameters.
  */
-function FileTasks(fileManager, urls, opt_mimeTypes, opt_params) {
+function FileTasks(fileManager, opt_params) {
   this.fileManager_ = fileManager;
   this.params_ = opt_params;
   this.tasks_ = null;
@@ -20,11 +17,6 @@ function FileTasks(fileManager, urls, opt_mimeTypes, opt_params) {
    * List of invocations to be called once tasks are available.
    */
   this.pendingInvocations_ = [];
-
-  /* TODO(kaznacheev): Remove urls and opt_mimeTypes from parameters and
-     call init directly from the client code.
-   */
-  this.init(urls, opt_mimeTypes);
 }
 
 /**
@@ -82,7 +74,7 @@ FileTasks.prototype.onTasks_ = function(tasks) {
  */
 FileTasks.prototype.processTasks_ = function(tasks) {
   this.tasks_ = [];
-  var id = util.getExtensionId();
+  var id = util.platform.getAppId();
   var is_on_drive = false;
   for (var index = 0; index < this.urls_.length; ++index) {
     if (FileType.isOnGDrive(this.urls_[index])) {
@@ -100,49 +92,53 @@ FileTasks.prototype.processTasks_ = function(tasks) {
 
     // Tweak images, titles of internal tasks.
     var task_parts = task.taskId.split('|');
-    if (task_parts[0] == id) {
-      if (task_parts[1] == 'play') {
+    if (task_parts[0] == id && task_parts[1] == 'file') {
+      if (task_parts[2] == 'play') {
         // TODO(serya): This hack needed until task.iconUrl is working
         //             (see GetFileTasksFileBrowserFunction::RunImpl).
         task.iconType = 'audio';
         task.title = loadTimeData.getString('ACTION_LISTEN');
-      } else if (task_parts[1] == 'mount-archive') {
+      } else if (task_parts[2] == 'mount-archive') {
         task.iconType = 'archive';
         task.title = loadTimeData.getString('MOUNT_ARCHIVE');
-      } else if (task_parts[1] == 'gallery') {
+      } else if (task_parts[2] == 'gallery') {
         task.iconType = 'image';
         task.title = loadTimeData.getString('ACTION_OPEN');
-      } else if (task_parts[1] == 'watch') {
+      } else if (task_parts[2] == 'watch') {
         task.iconType = 'video';
         task.title = loadTimeData.getString('ACTION_WATCH');
-      } else if (task_parts[1] == 'open-hosted-generic') {
+      } else if (task_parts[2] == 'open-hosted-generic') {
         if (this.urls_.length > 1)
           task.iconType = 'generic';
         else // Use specific icon.
           task.iconType = FileType.getIcon(this.urls_[0]);
         task.title = loadTimeData.getString('ACTION_OPEN');
-      } else if (task_parts[1] == 'open-hosted-gdoc') {
+      } else if (task_parts[2] == 'open-hosted-gdoc') {
         task.iconType = 'gdoc';
         task.title = loadTimeData.getString('ACTION_OPEN_GDOC');
-      } else if (task_parts[1] == 'open-hosted-gsheet') {
+      } else if (task_parts[2] == 'open-hosted-gsheet') {
         task.iconType = 'gsheet';
         task.title = loadTimeData.getString('ACTION_OPEN_GSHEET');
-      } else if (task_parts[1] == 'open-hosted-gslides') {
+      } else if (task_parts[2] == 'open-hosted-gslides') {
         task.iconType = 'gslides';
         task.title = loadTimeData.getString('ACTION_OPEN_GSLIDES');
-      } else if (task_parts[1] == 'view-pdf') {
+      } else if (task_parts[2] == 'view-pdf') {
         // Do not render this task if disabled.
         if (!loadTimeData.getBoolean('PDF_VIEW_ENABLED'))
           continue;
         task.iconType = 'pdf';
         task.title = loadTimeData.getString('ACTION_VIEW');
-      } else if (task_parts[1] == 'view-in-browser') {
+      } else if (task_parts[2] == 'view-in-browser') {
         task.iconType = 'generic';
         task.title = loadTimeData.getString('ACTION_VIEW');
-      } else if (task_parts[1] == 'install-crx') {
+      } else if (task_parts[2] == 'install-crx') {
         task.iconType = 'generic';
         task.title = loadTimeData.getString('INSTALL_CRX');
       }
+    }
+
+    if (!task.iconType && task_parts[1] == 'web-intent') {
+      task.iconType = 'generic';
     }
 
     this.tasks_.push(task);
@@ -201,14 +197,14 @@ FileTasks.prototype.executeDefault_ = function() {
 FileTasks.prototype.execute_ = function(taskId, opt_urls) {
   var urls = opt_urls || this.urls_;
   this.checkAvailability_(function() {
-    chrome.fileBrowserPrivate.executeTask(taskId, urls);
-
     var task_parts = taskId.split('|');
-    if (task_parts[0] == util.getExtensionId()) {
+    if (task_parts[0] == util.platform.getAppId() && task_parts[1] == 'file') {
       // For internal tasks we do not listen to the event to avoid
       // handling the same task instance from multiple tabs.
       // So, we manually execute the task.
-      this.executeInternalTask_(task_parts[1], urls);
+      this.executeInternalTask_(task_parts[2], urls);
+    } else {
+      chrome.fileBrowserPrivate.executeTask(taskId, urls);
     }
   }.bind(this));
 };
@@ -299,8 +295,24 @@ FileTasks.prototype.executeInternalTask_ = function(id, urls) {
       urls = fm.getAllUrlsInCurrentDirectory().filter(FileType.isAudio);
       position = urls.indexOf(selectedUrl);
     }
-    chrome.mediaPlayerPrivate.play(urls, position);
+    if (util.platform.v2()) {
+      chrome.runtime.getBackgroundPage(function(background) {
+        background.launchAudioPlayer({ items: urls, position: position });
+      });
+    } else {
+      chrome.mediaPlayerPrivate.play(urls, position);
+    }
     return;
+  }
+
+  if (util.platform.v2()) {
+    if (id == 'watch') {
+      console.assert(urls.length == 1, 'Cannot open multiple videos');
+      chrome.runtime.getBackgroundPage(function(background) {
+        background.launchVideoPlayer(urls[0]);
+      });
+      return;
+    }
   }
 
   if (id == 'mount-archive') {
@@ -376,17 +388,27 @@ FileTasks.prototype.openGallery = function(urls) {
 
   if (this.params_ && this.params_.gallery) {
     // Remove the Gallery state from the location, we do not need it any more.
-    util.updateLocation(
+    util.updateAppState(
         true /* replace */, null /* keep path */, '' /* remove search. */);
   }
 
+  var savedAppState = window.appState;
+  var savedTitle = document.title;
+
   // Push a temporary state which will be replaced every time the selection
   // changes in the Gallery and popped when the Gallery is closed.
-  util.updateLocation(false /*push*/);
+  util.updateAppState(false /*push*/);
 
   function onClose(selectedUrls) {
     fm.directoryModel_.selectUrls(selectedUrls);
-    history.back(1);  // This will restore document.title.
+    if (util.platform.v2()) {
+      fm.closeFilePopup_();  // Will call Gallery.unload.
+      window.appState = savedAppState;
+      util.saveAppState();
+      document.title = savedTitle;
+    } else {
+      history.back(1);  // This will restore document.title.
+    }
   }
 
   galleryFrame.onload = function() {
@@ -407,10 +429,15 @@ FileTasks.prototype.openGallery = function(urls) {
       // We show the root label in readonly warning (e.g. archive name).
       readonlyDirName: readonlyDirName,
       curDirEntry: currentDir,
-      saveDirEntry: readonly ? downloadsDir : currentDir,
+      saveDirEntry: readonly ? downloadsDir : null,
+      searchResults: fm.directoryModel_.isSearching(),
       metadataCache: fm.metadataCache_,
       pageState: this.params_,
       onClose: onClose,
+      allowMosaic: fm.isOnGData(),
+      onThumbnailError: function(imageURL) {
+        fm.metadataCache_.refreshFileMetadata(imageURL);
+      },
       displayStringFunction: strf
     };
     galleryFrame.contentWindow.Gallery.open(context, allUrls, urls);

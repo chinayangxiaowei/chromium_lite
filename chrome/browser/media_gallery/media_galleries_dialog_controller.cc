@@ -6,9 +6,11 @@
 
 #include "base/path_service.h"
 #include "base/utf_string_conversions.h"
-#include "chrome/browser/media_gallery/media_galleries_preferences_factory.h"
+#include "chrome/browser/browser_process.h"
+#include "chrome/browser/media_gallery/media_file_system_registry.h"
+#include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/system_monitor/media_storage_util.h"
 #include "chrome/browser/ui/chrome_select_file_policy.h"
-#include "chrome/browser/ui/tab_contents/tab_contents.h"
 #include "chrome/common/chrome_paths.h"
 #include "chrome/common/extensions/extension.h"
 #include "content/public/browser/web_contents.h"
@@ -20,28 +22,73 @@ using extensions::Extension;
 
 namespace chrome {
 
+namespace {
+
+bool IsAttachedDevice(const std::string& device_id) {
+  if (!MediaStorageUtil::IsRemovableDevice(device_id))
+    return false;
+
+  std::vector<base::SystemMonitor::RemovableStorageInfo> removable_storages =
+      base::SystemMonitor::Get()->GetAttachedRemovableStorage();
+  for (size_t i = 0; i < removable_storages.size(); ++i) {
+    if (removable_storages[i].device_id == device_id)
+      return true;
+  }
+  return false;
+}
+
+}  // namespace
+
 MediaGalleriesDialogController::MediaGalleriesDialogController(
-    TabContents* tab_contents,
+    content::WebContents* web_contents,
     const Extension& extension,
     const base::Closure& on_finish)
-      : tab_contents_(tab_contents),
+      : web_contents_(web_contents),
         extension_(&extension),
-        on_finish_(on_finish),
-        preferences_(MediaGalleriesPreferencesFactory::GetForProfile(
-            tab_contents_->profile())) {
-  LookUpPermissions();
+        on_finish_(on_finish) {
+  MediaFileSystemRegistry* registry =
+      g_browser_process->media_file_system_registry();
+  preferences_ = registry->GetPreferences(
+      Profile::FromBrowserContext(web_contents->GetBrowserContext()));
+  InitializePermissions();
 
   dialog_.reset(MediaGalleriesDialog::Create(this));
+
+  base::SystemMonitor* monitor = base::SystemMonitor::Get();
+  if (monitor)
+    monitor->AddDevicesChangedObserver(this);
 }
 
 MediaGalleriesDialogController::MediaGalleriesDialogController()
-    : tab_contents_(NULL),
+    : web_contents_(NULL),
       extension_(NULL),
       preferences_(NULL) {}
 
 MediaGalleriesDialogController::~MediaGalleriesDialogController() {
+  base::SystemMonitor* monitor = base::SystemMonitor::Get();
+  if (monitor)
+    monitor->RemoveDevicesChangedObserver(this);
+
   if (select_folder_dialog_.get())
     select_folder_dialog_->ListenerDestroyed();
+}
+
+// static
+string16 MediaGalleriesDialogController::GetGalleryDisplayName(
+    const MediaGalleryPrefInfo& gallery) {
+  string16 name = gallery.display_name;
+  if (IsAttachedDevice(gallery.device_id)) {
+    name += ASCIIToUTF16(" ");
+    name +=
+        l10n_util::GetStringUTF16(IDS_MEDIA_GALLERIES_DIALOG_DEVICE_ATTACHED);
+  }
+  return name;
+}
+
+// static
+string16 MediaGalleriesDialogController::GetGalleryTooltip(
+    const MediaGalleryPrefInfo& gallery) {
+  return gallery.AbsolutePath().LossyDisplayName();
 }
 
 string16 MediaGalleriesDialogController::GetHeader() const {
@@ -58,7 +105,7 @@ string16 MediaGalleriesDialogController::GetSubtext() const {
 
 bool MediaGalleriesDialogController::HasPermittedGalleries() const {
   for (KnownGalleryPermissions::const_iterator iter = permissions().begin();
-       iter != permissions().end(); iter++) {
+       iter != permissions().end(); ++iter) {
     if (iter->second.allowed)
       return true;
   }
@@ -75,7 +122,7 @@ void MediaGalleriesDialogController::OnAddFolderClicked() {
       l10n_util::GetStringUTF16(IDS_MEDIA_GALLERIES_DIALOG_ADD_GALLERY_TITLE),
       user_data_dir,
       NULL, 0, FILE_PATH_LITERAL(""),
-      tab_contents_->web_contents()->GetView()->GetTopLevelNativeWindow(),
+      web_contents_->GetView()->GetTopLevelNativeWindow(),
       NULL);
 }
 
@@ -115,14 +162,18 @@ MediaGalleriesDialogController::permissions() const {
   return known_galleries_;
 }
 
+content::WebContents* MediaGalleriesDialogController::web_contents() {
+  return web_contents_;
+}
+
 void MediaGalleriesDialogController::FileSelected(const FilePath& path,
-                                                  int index,
-                                                  void* params) {
+                                                  int /*index*/,
+                                                  void* /*params*/) {
   // Try to find it in |known_galleries_|.
   MediaGalleryPrefInfo gallery;
-  if (preferences_->LookUpGalleryByPath(path, &gallery) &&
-      gallery.type != MediaGalleryPrefInfo::kBlackListed) {
-    KnownGalleryPermissions::iterator iter =
+  bool gallery_exists = preferences_->LookUpGalleryByPath(path, &gallery);
+  if (gallery_exists && gallery.type != MediaGalleryPrefInfo::kBlackListed) {
+    KnownGalleryPermissions::const_iterator iter =
         known_galleries_.find(gallery.pref_id);
 
     if (iter == known_galleries_.end()) {
@@ -152,15 +203,28 @@ void MediaGalleriesDialogController::FileSelected(const FilePath& path,
   dialog_->UpdateGallery(&new_galleries_.back().pref_info, true);
 }
 
-void MediaGalleriesDialogController::LookUpPermissions() {
-  for (MediaGalleriesPrefInfoMap::const_iterator iter =
-           preferences_->known_galleries().begin();
-       iter != preferences_->known_galleries().end();
+void MediaGalleriesDialogController::OnRemovableStorageAttached(
+    const std::string& id,
+    const string16& /*name*/,
+    const FilePath::StringType& /*location*/) {
+  UpdateGalleryOnDeviceEvent(id, true /* attached */);
+}
+
+void MediaGalleriesDialogController::OnRemovableStorageDetached(
+    const std::string& id) {
+  UpdateGalleryOnDeviceEvent(id, false /* detached */);
+}
+
+void MediaGalleriesDialogController::InitializePermissions() {
+  const MediaGalleriesPrefInfoMap& galleries = preferences_->known_galleries();
+  for (MediaGalleriesPrefInfoMap::const_iterator iter = galleries.begin();
+       iter != galleries.end();
        ++iter) {
-    if (iter->second.type == MediaGalleryPrefInfo::kBlackListed)
+    const MediaGalleryPrefInfo& gallery = iter->second;
+    if (gallery.type == MediaGalleryPrefInfo::kBlackListed)
       continue;
 
-    known_galleries_[iter->first] = GalleryPermission(iter->second, false);
+    known_galleries_[iter->first] = GalleryPermission(gallery, false);
   }
 
   MediaGalleryPrefIdSet permitted =
@@ -173,13 +237,13 @@ void MediaGalleriesDialogController::LookUpPermissions() {
 }
 
 void MediaGalleriesDialogController::SavePermissions() {
-  for (KnownGalleryPermissions::iterator iter = known_galleries_.begin();
+  for (KnownGalleryPermissions::const_iterator iter = known_galleries_.begin();
        iter != known_galleries_.end(); ++iter) {
     preferences_->SetGalleryPermissionForExtension(
         *extension_, iter->first, iter->second.allowed);
   }
 
-  for (NewGalleryPermissions::iterator iter = new_galleries_.begin();
+  for (NewGalleryPermissions::const_iterator iter = new_galleries_.begin();
        iter != new_galleries_.end(); ++iter) {
     // If the user added a gallery then unchecked it, forget about it.
     if (!iter->allowed)
@@ -191,6 +255,31 @@ void MediaGalleriesDialogController::SavePermissions() {
     preferences_->SetGalleryPermissionForExtension(
         *extension_, id, true);
   }
+}
+
+void MediaGalleriesDialogController::UpdateGalleryOnDeviceEvent(
+    const std::string& device_id, bool attached) {
+  GalleryPermission* gallery = NULL;
+  for (KnownGalleryPermissions::iterator iter = known_galleries_.begin();
+       iter != known_galleries_.end(); ++iter) {
+    if (iter->second.pref_info.device_id == device_id) {
+      gallery = &iter->second;
+      break;
+    }
+  }
+
+  if (!gallery) {
+    for (NewGalleryPermissions::iterator iter = new_galleries_.begin();
+         iter != new_galleries_.end(); ++iter) {
+      if (iter->pref_info.device_id == device_id) {
+        gallery = &(*iter);
+        break;
+      }
+    }
+  }
+
+  if (gallery)
+    dialog_->UpdateGallery(&gallery->pref_info, gallery->allowed);
 }
 
 // MediaGalleries dialog -------------------------------------------------------

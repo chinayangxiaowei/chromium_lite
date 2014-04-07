@@ -133,8 +133,7 @@ def AddComputedActions(actions):
   # Actions for safe_browsing_blocking_page.cc.
   for interstitial in ('Phishing', 'Malware', 'Multiple'):
     for action in ('Show', 'Proceed', 'DontProceed', 'ForcedDontProceed'):
-      for group in ('', '_V1', '_V2'):
-        actions.add('SBInterstitial%s%s%s' % (interstitial, action, group))
+      actions.add('SBInterstitial%s%s' % (interstitial, action))
 
   # Actions for language_options_handler.cc (Chrome OS specific).
   for input_method_id in INPUT_METHOD_IDS:
@@ -187,6 +186,87 @@ def AddClosedSourceActions(actions):
   actions.add('PDF_Unsupported_Shared_Review')
   actions.add('PDF_Unsupported_Shared_Form')
   actions.add('PDF_Unsupported_Bookmarks')
+
+def AddAndroidActions(actions):
+  """Add actions that are used by Chrome on Android.
+
+  Arguments
+    actions: set of actions to add to.
+  """
+  actions.add('MobileBeamCallbackSuccess')
+  actions.add('MobileBeamInvalidAppState')
+  actions.add('MobileBreakpadUploadAttempt')
+  actions.add('MobileBreakpadUploadFailure')
+  actions.add('MobileBreakpadUploadSuccess')
+  actions.add('MobileContextMenuCopyImageLinkAddress')
+  actions.add('MobileContextMenuCopyLinkAddress')
+  actions.add('MobileContextMenuCopyLinkText')
+  actions.add('MobileContextMenuImage')
+  actions.add('MobileContextMenuLink')
+  actions.add('MobileContextMenuOpenImageInNewTab')
+  actions.add('MobileContextMenuOpenLink')
+  actions.add('MobileContextMenuOpenLinkInIncognito')
+  actions.add('MobileContextMenuOpenLinkInNewTab')
+  actions.add('MobileContextMenuSaveImage')
+  actions.add('MobileContextMenuShareLink')
+  actions.add('MobileContextMenuText')
+  actions.add('MobileContextMenuViewImage')
+  actions.add('MobileFreAttemptSignIn')
+  actions.add('MobileFreSignInSuccessful')
+  actions.add('MobileFreSkipSignIn')
+  actions.add('MobileMenuAddToBookmarks')
+  actions.add('MobileMenuAllBookmarks')
+  actions.add('MobileMenuBack')
+  actions.add('MobileMenuCloseAllTabs')
+  actions.add('MobileMenuCloseTab')
+  actions.add('MobileMenuFeedback')
+  actions.add('MobileMenuFindInPage')
+  actions.add('MobileMenuForward')
+  actions.add('MobileMenuFullscreen')
+  actions.add('MobileMenuNewIncognitoTab')
+  actions.add('MobileMenuNewTab')
+  actions.add('MobileMenuOpenTabs')
+  actions.add('MobileMenuQuit')
+  actions.add('MobileMenuReload')
+  actions.add('MobileMenuSettings')
+  actions.add('MobileMenuShare')
+  actions.add('MobileMenuShow')
+  actions.add('MobileNTPBookmark')
+  actions.add('MobileNTPForeignSession')
+  actions.add('MobileNTPMostVisited')
+  actions.add('MobileNTPSwitchToBookmarks')
+  actions.add('MobileNTPSwitchToIncognito')
+  actions.add('MobileNTPSwitchToMostVisited')
+  actions.add('MobileNTPSwitchToOpenTabs')
+  actions.add('MobileNewTabOpened')
+  actions.add('MobileOmniboxSearch')
+  actions.add('MobileOmniboxVoiceSearch')
+  actions.add('MobilePageLoaded')
+  actions.add('MobilePageLoadedDesktopUserAgent')
+  actions.add('MobilePageLoadedWithKeyboard')
+  actions.add('MobileReceivedExternalIntent')
+  actions.add('MobileRendererCrashed')
+  actions.add('MobileShortcutAllBookmarks')
+  actions.add('MobileShortcutFindInPage')
+  actions.add('MobileShortcutNewIncognitoTab')
+  actions.add('MobileShortcutNewTab')
+  actions.add('MobileSideSwipeFinished')
+  actions.add('MobileStackViewCloseTab')
+  actions.add('MobileStackViewSwipeCloseTab')
+  actions.add('MobileTabClobbered')
+  actions.add('MobileTabClosed')
+  actions.add('MobileTabStripCloseTab')
+  actions.add('MobileTabStripNewTab')
+  actions.add('MobileTabSwitched')
+  actions.add('MobileToolbarBack')
+  actions.add('MobileToolbarForward')
+  actions.add('MobileToolbarReload')
+  actions.add('MobileToolbarShowMenu')
+  actions.add('MobileToolbarShowStackView')
+  actions.add('MobileToolbarStackViewNewTab')
+  actions.add('MobileToolbarToggleBookmark')
+  actions.add('SystemBack')
+  actions.add('SystemBackForNavigation')
 
 def AddAboutFlagsActions(actions):
   """This parses the experimental feature flags for UMA actions.
@@ -426,6 +506,7 @@ def main(argv):
   AddClosedSourceActions(actions)
   AddChromeOSActions(actions)
   AddExtensionActions(actions)
+  AddAndroidActions(actions)
 
   if hash_output:
     f = open(chromeactions_path, "w")

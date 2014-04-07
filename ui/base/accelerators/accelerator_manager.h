@@ -70,9 +70,6 @@ class UI_EXPORT AcceleratorManager {
   // Whether the given |accelerator| has a priority handler associated with it.
   bool HasPriorityHandler(const Accelerator& accelerator) const;
 
-  // Returns false when Process() should never handle the |accelerator|.
-  bool ShouldHandle(const Accelerator& accelerator) const;
-
  private:
   // The accelerators and associated targets.
   typedef std::list<AcceleratorTarget*> AcceleratorTargetList;
@@ -81,9 +78,6 @@ class UI_EXPORT AcceleratorManager {
   typedef std::pair<bool, AcceleratorTargetList> AcceleratorTargets;
   typedef std::map<Accelerator, AcceleratorTargets> AcceleratorMap;
   AcceleratorMap accelerators_;
-
-  // An event passed to Process() last time.
-  EventType last_event_type_;
 
   DISALLOW_COPY_AND_ASSIGN(AcceleratorManager);
 };

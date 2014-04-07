@@ -160,27 +160,27 @@ cr.define('ntp', function() {
   var activeItemDelayTimerId;
 
   /**
-   * Enum for the different send notification types based on whether NTP has
-   * loaded sent notification.
+   * Enum for the different load states based on the initialization of the NTP.
    * @enum {number}
    */
-  var SendNotificationType = {
+  var LoadStatusType = {
     LOAD_NOT_DONE: 0,
-    LOAD_DONE_NOTIFICATION_NOT_SENT: 1,
-    LOAD_DONE_NOTIFICATION_SENT: 2
+    LOAD_IMAGES_COMPLETE: 1,
+    LOAD_BOOKMARKS_FINISHED: 2,
+    LOAD_COMPLETE: 3  // An OR'd combination of all necessary states.
   };
 
   /**
-   * Whether to send notification when page is done loading
-   * @type {boolean}
+   * The current loading status for the NTP.
+   * @type {LoadStatusType}
    */
-  var finishedLoadingSendNotification = SendNotificationType.LOAD_NOT_DONE;
+  var loadStatus_ = LoadStatusType.LOAD_NOT_DONE;
 
   /**
-   * Time the page load finished notification was last sent out
+   * Whether the loading complete notification has been sent.
    * @type {boolean}
    */
-  var timeLastSendNotification = 0;
+  var finishedLoadingNotificationSent_ = false;
 
   /**
    * Whether the NTP is in incognito mode or not.
@@ -243,10 +243,6 @@ cr.define('ntp', function() {
    * @type {string}
    */
   var promoInjectedComputerLastSyncedText = '';
-
-  function setIncognitoMode(incognito) {
-    isIncognito = incognito;
-  }
 
   /**
    * The different sections that are displayed.
@@ -325,6 +321,12 @@ cr.define('ntp', function() {
   var syncEnabled = undefined;
 
   /**
+   * The current most visited data being displayed.
+   * @type {Array.<Object>}
+   */
+  var mostVisitedData_ = [];
+
+  /**
    * The current bookmark data being displayed. Keep a reference to this data
    * in case the sync enabled state changes.  In this case, the bookmark data
    * will need to be refiltered.
@@ -363,6 +365,10 @@ cr.define('ntp', function() {
    */
   var bookmarkShortcutMode = false;
 
+  function setIncognitoMode(incognito) {
+    isIncognito = incognito;
+  }
+
   /**
    * Flag set to true when the page is loading its initial set of images. This
    * is set to false after all the initial images have loaded.
@@ -374,8 +380,7 @@ cr.define('ntp', function() {
         imagesBeingLoaded.splice(i, 1);
         if (imagesBeingLoaded.length == 0) {
           // To send out the NTP loading complete notification.
-          finishedLoadingSendNotification =
-              SendNotificationType.LOAD_DONE_NOTIFICATION_NOT_SENT;
+          loadStatus_ |= LoadStatusType.LOAD_IMAGES_COMPLETE;
           sendNTPNotification();
         }
       }
@@ -387,12 +392,16 @@ cr.define('ntp', function() {
    * we inform the browser via a hash change.
    */
   function trackImageLoad(url) {
-    if (finishedLoadingSendNotification != SendNotificationType.LOAD_NOT_DONE)
+    if (finishedLoadingNotificationSent_)
       return;
+
     for (var i = 0; i < imagesBeingLoaded.length; ++i) {
       if (imagesBeingLoaded[i].src == url)
         return;
     }
+
+    loadStatus_ &= (~LoadStatusType.LOAD_IMAGES_COMPLETE);
+
     var image = new Image();
     image.onload = onInitialImageLoaded;
     image.onerror = onInitialImageLoaded;
@@ -462,36 +471,17 @@ cr.define('ntp', function() {
    * Notifies the chrome process of the status of the NTP.
    */
   function sendNTPNotification() {
-    var now = new Date();
-    if (finishedLoadingSendNotification ==
-        SendNotificationType.LOAD_DONE_NOTIFICATION_NOT_SENT) {
-      finishedLoadingSendNotification ==
-          SendNotificationType.LOAD_DONE_NOTIFICATION_SENT;
-      timeLastSendNotification = now.getTime();
+    if (loadStatus_ != LoadStatusType.LOAD_COMPLETE)
+      return;
+
+    if (!finishedLoadingNotificationSent_) {
+      finishedLoadingNotificationSent_ = true;
       chrome.send('notifyNTPReady');
-    } else if (finishedLoadingSendNotification ==
-        SendNotificationType.LOAD_DONE_NOTIFICATION_SENT ||
-            ((now.getTime() - timeLastSendNotification) > 100)) {
+    } else {
       // Navigating after the loading complete notification has been sent
       // might break tests.
       chrome.send('NTPUnexpectedNavigation');
     }
-  }
-
-  /**
-   * Triggers the edit bookmark prompt for a given bookmark.
-   *
-   * @param {Object} item Object containing information for the selected
-   *     bookmark node.
-   */
-  function editBookmark(item) {
-    if (item['editable'] !== true)
-      return;
-    var editBookmarkUrl = 'chrome://editbookmark/' +
-        '?id=' + item.id;
-    if (item['folder'])
-      editBookmarkUrl += '&isfolder=true';
-    window.location = editBookmarkUrl;
   }
 
   /**
@@ -592,7 +582,7 @@ cr.define('ntp', function() {
 
     cell.setAttribute(CONTEXT_MENU_URL_KEY, item.url);
 
-    var iconUrl = item.icon || 'chrome://touch-icon/size/64/' + item.url;
+    var iconUrl = item.icon || 'chrome://touch-icon/size/16/' + item.url;
     var icon = createDiv('icon', iconUrl);
     trackImageLoad(iconUrl);
     cell.appendChild(icon);
@@ -655,10 +645,11 @@ cr.define('ntp', function() {
     var title = createDiv('title');
     title.textContent = item.title;
     var spacerImg = createElement('img', 'title-spacer');
+    spacerImg.alt = '';
     title.insertBefore(spacerImg, title.firstChild);
     thumbnailCell.appendChild(title);
 
-    wrapClickHandler(thumbnailContainer, item, opt_clickCallback);
+    wrapClickHandler(thumbnailCell, item, opt_clickCallback);
 
     thumbnailCell.setAttribute(CONTEXT_MENU_URL_KEY, item.url);
     thumbnailCell.contextMenuItem = item;
@@ -808,7 +799,9 @@ cr.define('ntp', function() {
     var listItem = createDiv('list-item');
     addActiveTouchListener(listItem, ACTIVE_LIST_ITEM_CSS_CLASS);
     listItem.setAttribute(CONTEXT_MENU_URL_KEY, item.url);
-    var iconUrl = item.icon || 'chrome://touch-icon/size/64/' + item.url;
+    var iconSize = item.iconSize || 64;
+    var iconUrl = item.icon ||
+        'chrome://touch-icon/size/' + iconSize + '/' + item.url;
     listItem.appendChild(createDiv('icon', iconUrl));
     trackImageLoad(iconUrl);
     var title = createElement('span', {
@@ -910,6 +903,9 @@ cr.define('ntp', function() {
       data.splice(8, data.length - 8);
     }
 
+    if (equals(data, mostVisitedData_))
+      return;
+
     var clickFunction = function(item) {
       chrome.send('metricsHandler:recordAction', ['MobileNTPMostVisited']);
       window.location = item.url;
@@ -917,6 +913,8 @@ cr.define('ntp', function() {
     populateData(findList('most_visited'), SectionType.MOST_VISITED, data,
         makeMostVisitedItem, clickFunction);
     computeDynamicLayout();
+
+    mostVisitedData_ = data;
   }
 
   /**
@@ -993,6 +991,12 @@ cr.define('ntp', function() {
 
     // update the shadows on the  breadcrumb bar
     computeDynamicLayout();
+
+    if ((loadStatus_ & LoadStatusType.LOAD_BOOKMARKS_FINISHED) !=
+        LoadStatusType.LOAD_BOOKMARKS_FINISHED) {
+      loadStatus_ |= LoadStatusType.LOAD_BOOKMARKS_FINISHED;
+      sendNTPNotification();
+    }
   }
 
   /**
@@ -1169,7 +1173,7 @@ cr.define('ntp', function() {
 
       case ContextMenuItemIds.BOOKMARK_EDIT:
         if (contextMenuItem != null)
-          editBookmark(contextMenuItem);
+          chrome.send('editBookmark', [contextMenuItem.id]);
         break;
 
       case ContextMenuItemIds.BOOKMARK_DELETE:
@@ -1723,19 +1727,19 @@ cr.define('ntp', function() {
         clientName = client.name;
 
       var iconStyle;
-      if (windows[0].deviceType == 'win' ||
-          windows[0].deviceType == 'macosx' ||
-          windows[0].deviceType == 'linux' ||
-          windows[0].deviceType == 'chromeos' ||
-          windows[0].deviceType == 'other') {
+      var deviceType = client.deviceType;
+      if (deviceType == 'win' ||
+          deviceType == 'macosx' ||
+          deviceType == 'linux' ||
+          deviceType == 'chromeos' ||
+          deviceType == 'other') {
         iconStyle = 'laptop';
-      } else if (windows[0].deviceType == 'phone') {
+      } else if (deviceType == 'phone') {
         iconStyle = 'phone';
-      } else if (windows[0].deviceType == 'tablet') {
+      } else if (deviceType == 'tablet') {
         iconStyle = 'tablet';
       } else {
-        console.error(
-            'Unknown sync device type found: ', windows[0].deviceType);
+        console.error('Unknown sync device type found: ', deviceType);
         iconStyle = 'laptop';
       }
       var headerList = [{
@@ -1770,6 +1774,7 @@ cr.define('ntp', function() {
             winNum: winNum,
             sessionId: tab.sessionId,
             icon: tab.icon,
+            iconSize: 32,
             divider: needSectionDivider ? 'section' : 'standard',
           });
         }
@@ -2441,7 +2446,7 @@ cr.define('ntp', function() {
         ],
         [
           ContextMenuItemIds.RECENTLY_CLOSED_REMOVE,
-          templateData.elementremove
+          templateData.removeall
         ]
       ];
     } else if (section == SectionType.FOREIGN_SESSION_HEADER) {
@@ -2488,6 +2493,31 @@ cr.define('ntp', function() {
 /////////////////////////////////////////////////////////////////////////////
 //Utility Functions.
 /////////////////////////////////////////////////////////////////////////////
+
+/**
+ * A best effort approach for checking simple data object equality.
+ * @param {?} val1 The first value to check equality for.
+ * @param {?} val2 The second value to check equality for.
+ * @return {boolean} Whether the two objects are equal(ish).
+ */
+function equals(val1, val2) {
+  if (typeof val1 != 'object' || typeof val2 != 'object')
+    return val1 === val2;
+
+  // Object and array equality checks.
+  var keyCountVal1 = 0;
+  for (var key in val1) {
+    if (!(key in val2) || !equals(val1[key], val2[key]))
+      return false;
+    keyCountVal1++;
+  }
+  var keyCountVal2 = 0;
+  for (var key in val2)
+    keyCountVal2++;
+  if (keyCountVal1 != keyCountVal2)
+    return false;
+  return true;
+}
 
 /**
  * Alias for document.getElementById.

@@ -10,7 +10,9 @@
 #include "chrome/browser/prefs/pref_service.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/browser_list.h"
+#include "chrome/browser/ui/browser_finder.h"
+#include "chrome/browser/ui/host_desktop.h"
+#include "chrome/common/chrome_switches.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/common/url_constants.h"
 #include "content/public/common/content_switches.h"
@@ -51,8 +53,11 @@ const char kActionSave[] = "http://webintents.org/save";
 const char kActionShare[] = "http://webintents.org/share";
 const char kActionSubscribe[] = "http://webintents.org/subscribe";
 const char kActionView[] = "http://webintents.org/view";
+const char kActionCrosEcho[] = "https://crosecho.com/startEcho";
 const char kQuickOfficeViewerServiceURL[] =
     "chrome-extension://gbkeegbaiigmenfmjfclcdgdpimamgkj/views/appViewer.html";
+const char kQuickOfficeViewerDevServiceURL[] =
+    "chrome-extension://ionpfmkccalenbmnddpbmocokhaknphg/views/appEditor.html";
 
 void RegisterUserPrefs(PrefService* user_prefs) {
   user_prefs->RegisterBooleanPref(prefs::kWebIntentsEnabled, true,
@@ -60,7 +65,8 @@ void RegisterUserPrefs(PrefService* user_prefs) {
 }
 
 bool IsWebIntentsEnabled(PrefService* prefs) {
-  return prefs->GetBoolean(prefs::kWebIntentsEnabled);
+  return CommandLine::ForCurrentProcess()->HasSwitch(
+      switches::kWebIntentsInvocationEnabled);
 }
 
 bool IsWebIntentsEnabledForProfile(Profile* profile) {
@@ -68,14 +74,11 @@ bool IsWebIntentsEnabledForProfile(Profile* profile) {
 }
 
 Browser* GetBrowserForBackgroundWebIntentDelivery(Profile* profile) {
-#if defined(OS_ANDROID)
-  return NULL;
-#else
-  Browser* browser = BrowserList::GetLastActive();
+  Browser* browser = chrome::FindLastActiveWithHostDesktopType(
+      chrome::GetActiveDesktop());
   if (browser && profile && browser->profile() != profile)
     return NULL;
   return browser;
-#endif  // defined(OS_ANDROID)
 }
 
 bool IsRecognizedAction(const string16& action) {

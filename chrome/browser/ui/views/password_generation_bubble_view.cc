@@ -118,7 +118,7 @@ gfx::Size TextfieldWrapper::GetImageSize() const {
 }  // namespace
 
 PasswordGenerationBubbleView::PasswordGenerationBubbleView(
-    const webkit::forms::PasswordForm& form,
+    const content::PasswordForm& form,
     const gfx::Rect& anchor_rect,
     views::View* anchor_view,
     content::RenderViewHost* render_view_host,
@@ -130,6 +130,8 @@ PasswordGenerationBubbleView::PasswordGenerationBubbleView(
       title_label_(NULL),
       accept_button_(NULL),
       textfield_(NULL),
+      regenerate_button_(NULL),
+      textfield_wrapper_(NULL),
       form_(form),
       anchor_rect_(anchor_rect),
       render_view_host_(render_view_host),
@@ -155,13 +157,13 @@ void PasswordGenerationBubbleView::Init() {
 
   regenerate_button_ = new views::ImageButton(this);
   regenerate_button_->SetImage(
-      views::CustomButton::BS_NORMAL,
+      views::CustomButton::STATE_NORMAL,
+      theme_provider_->GetImageSkiaNamed(IDR_RELOAD_DIMMED));
+  regenerate_button_->SetImage(
+      views::CustomButton::STATE_HOVERED,
       theme_provider_->GetImageSkiaNamed(IDR_RELOAD));
   regenerate_button_->SetImage(
-      views::CustomButton::BS_HOT,
-      theme_provider_->GetImageSkiaNamed(IDR_RELOAD));
-  regenerate_button_->SetImage(
-      views::CustomButton::BS_PUSHED,
+      views::CustomButton::STATE_PRESSED,
       theme_provider_->GetImageSkiaNamed(IDR_RELOAD));
 
   textfield_ = new views::Textfield();

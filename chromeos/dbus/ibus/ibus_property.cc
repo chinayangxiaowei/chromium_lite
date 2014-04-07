@@ -6,6 +6,7 @@
 
 #include <string>
 #include "base/logging.h"
+#include "chromeos/dbus/ibus/ibus_constants.h"
 #include "chromeos/dbus/ibus/ibus_object.h"
 #include "chromeos/dbus/ibus/ibus_text.h"
 #include "dbus/message.h"
@@ -13,13 +14,6 @@
 namespace chromeos {
 // TODO(nona): remove ibus namespace after complete libibus removal.
 namespace ibus {
-
-namespace {
-// Following variables indicate state of IBusProperty.
-const uint32 kIBusPropertyStateUnchecked = 0;
-const uint32 kIBusPropertyStateChecked = 1;
-const uint32 kIBusPropertyStateInconsistent = 2;
-};
 
 bool CHROMEOS_EXPORT PopIBusProperty(dbus::MessageReader* reader,
                                      IBusProperty* property) {
@@ -71,7 +65,7 @@ bool CHROMEOS_EXPORT PopIBusProperty(dbus::MessageReader* reader,
   }
   property->set_tooltip(tooltip);
 
-  // The 6th bool argument represents whther the property is event sensitive or
+  // The 6th bool argument represents whether the property is event sensitive or
   // not, but not supported in Chrome OS.
   bool sensitive = true;
   if (!ibus_property_reader.PopBool(&sensitive)) {
@@ -100,10 +94,10 @@ bool CHROMEOS_EXPORT PopIBusProperty(dbus::MessageReader* reader,
   }
 
   DCHECK_LE(state, 3UL);
-  if (state == kIBusPropertyStateInconsistent) {
+  if (state == IBUS_PROPERTY_STATE_INCONSISTENT) {
     LOG(ERROR) << "PROP_STATE_INCONSISTENT is not supported in Chrome OS.";
   } else {
-    property->set_checked(state == kIBusPropertyStateChecked);
+    property->set_checked(state == IBUS_PROPERTY_STATE_CHECKED);
   }
 
   if (!ibus_property_reader.PopIBusPropertyList(
@@ -145,6 +139,8 @@ bool CHROMEOS_EXPORT PopIBusPropertyList(dbus::MessageReader* reader,
 void CHROMEOS_EXPORT AppendIBusProperty(const IBusProperty& property,
                                         dbus::MessageWriter* writer) {
   IBusObjectWriter ibus_property_writer("IBusProperty", "suvsvbbuv", writer);
+  ibus_property_writer.CloseHeader();
+
   ibus_property_writer.AppendString(property.key());
   ibus_property_writer.AppendUint32(static_cast<uint32>(property.type()));
   ibus_property_writer.AppendStringAsIBusText(property.label());
@@ -162,6 +158,7 @@ void CHROMEOS_EXPORT AppendIBusPropertyList(
     const IBusPropertyList& property_list,
     dbus::MessageWriter* writer) {
   IBusObjectWriter ibus_property_list_writer("IBusPropList", "av", writer);
+  ibus_property_list_writer.CloseHeader();
   dbus::MessageWriter property_list_writer(NULL);
   ibus_property_list_writer.OpenArray("v", &property_list_writer);
   for (size_t i = 0; i < property_list.size(); ++i) {

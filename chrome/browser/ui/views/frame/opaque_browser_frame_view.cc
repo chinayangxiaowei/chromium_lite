@@ -12,9 +12,6 @@
 #include "base/utf_string_conversions.h"
 #include "chrome/browser/prefs/pref_service.h"
 #include "chrome/browser/themes/theme_service.h"
-#include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/search/search.h"
-#include "chrome/browser/ui/search/search_model.h"
 #include "chrome/browser/ui/views/avatar_menu_button.h"
 #include "chrome/browser/ui/views/frame/browser_frame.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
@@ -42,12 +39,13 @@
 #include "ui/gfx/path.h"
 #include "ui/views/controls/button/image_button.h"
 #include "ui/views/controls/image_view.h"
+#include "ui/views/controls/label.h"
 #include "ui/views/widget/root_view.h"
 #include "ui/views/window/frame_background.h"
 #include "ui/views/window/window_shape.h"
 
 #if defined(OS_WIN)
-#include "base/win/metro.h"
+#include "win8/util/win8_util.h"
 #endif  // OS_WIN
 
 using content::WebContents;
@@ -120,8 +118,8 @@ bool ConvertedContainsCheck(gfx::Rect bounds, const views::View* src,
 }
 
 bool ShouldAddDefaultCaptionButtons() {
-#if defined(OS_WIN) && !defined(USE_AURA)
-  return !base::win::IsMetroProcess();
+#if defined(OS_WIN)
+  return !win8::IsSingleWindowMetroMode();
 #endif  // OS_WIN
   return true;
 }
@@ -139,6 +137,7 @@ OpaqueBrowserFrameView::OpaqueBrowserFrameView(BrowserFrame* frame,
       restore_button_(NULL),
       close_button_(NULL),
       window_icon_(NULL),
+      window_title_(NULL),
       frame_background_(new views::FrameBackground()) {
   if (ShouldAddDefaultCaptionButtons()) {
     minimize_button_ = InitWindowCaptionButton(IDR_MINIMIZE,
@@ -170,6 +169,17 @@ OpaqueBrowserFrameView::OpaqueBrowserFrameView(BrowserFrame* frame,
     AddChildView(window_icon_);
     window_icon_->Update();
   }
+
+  window_title_ = new views::Label(browser_view->GetWindowTitle(),
+                                   BrowserFrame::GetTitleFont());
+  window_title_->SetVisible(browser_view->ShouldShowWindowTitle());
+  window_title_->SetEnabledColor(SK_ColorWHITE);
+  // TODO(msw): Use a transparent background color as a workaround to use the
+  // gfx::Canvas::NO_SUBPIXEL_RENDERING flag and avoid some visual artifacts.
+  window_title_->SetBackgroundColor(0x00000000);
+  window_title_->SetHorizontalAlignment(gfx::ALIGN_LEFT);
+  window_title_->SetElideBehavior(views::Label::ELIDE_AT_END);
+  AddChildView(window_title_);
 
   UpdateAvatarInfo();
   if (!browser_view->IsOffTheRecord()) {
@@ -367,14 +377,19 @@ void OpaqueBrowserFrameView::GetWindowMask(const gfx::Size& size,
 void OpaqueBrowserFrameView::ResetWindowControls() {
   if (!ShouldAddDefaultCaptionButtons())
     return;
-  restore_button_->SetState(views::CustomButton::BS_NORMAL);
-  minimize_button_->SetState(views::CustomButton::BS_NORMAL);
-  maximize_button_->SetState(views::CustomButton::BS_NORMAL);
+  restore_button_->SetState(views::CustomButton::STATE_NORMAL);
+  minimize_button_->SetState(views::CustomButton::STATE_NORMAL);
+  maximize_button_->SetState(views::CustomButton::STATE_NORMAL);
   // The close button isn't affected by this constraint.
 }
 
 void OpaqueBrowserFrameView::UpdateWindowIcon() {
   window_icon_->SchedulePaint();
+}
+
+void OpaqueBrowserFrameView::UpdateWindowTitle() {
+  if (!frame()->IsFullscreen())
+    window_title_->SchedulePaint();
 }
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -388,7 +403,15 @@ void OpaqueBrowserFrameView::OnPaint(gfx::Canvas* canvas) {
     PaintMaximizedFrameBorder(canvas);
   else
     PaintRestoredFrameBorder(canvas);
-  PaintTitleBar(canvas);
+
+  // The window icon and title are painted by their respective views.
+  /* TODO(pkasting):  If this window is active, we should also draw a drop
+   * shadow on the title.  This is tricky, because we don't want to hardcode a
+   * shadow color (since we want to work with various themes), but we can't
+   * alpha-blend either (since the Windows text APIs don't really do this).
+   * So we'd need to sample the background color at the right location and
+   * synthesize a good shadow color. */
+
   if (browser_view()->IsToolbarVisible())
     PaintToolbarBackground(canvas);
   if (!frame()->IsMaximized())
@@ -496,11 +519,11 @@ views::ImageButton* OpaqueBrowserFrameView::InitWindowCaptionButton(
     int accessibility_string_id) {
   views::ImageButton* button = new views::ImageButton(this);
   ui::ThemeProvider* tp = frame()->GetThemeProvider();
-  button->SetImage(views::CustomButton::BS_NORMAL,
+  button->SetImage(views::CustomButton::STATE_NORMAL,
                    tp->GetImageSkiaNamed(normal_image_id));
-  button->SetImage(views::CustomButton::BS_HOT,
+  button->SetImage(views::CustomButton::STATE_HOVERED,
                    tp->GetImageSkiaNamed(hot_image_id));
-  button->SetImage(views::CustomButton::BS_PUSHED,
+  button->SetImage(views::CustomButton::STATE_PRESSED,
                    tp->GetImageSkiaNamed(pushed_image_id));
   if (browser_view()->IsBrowserTypeNormal()) {
     button->SetBackground(
@@ -659,27 +682,6 @@ void OpaqueBrowserFrameView::PaintMaximizedFrameBorder(gfx::Canvas* canvas) {
   }
 }
 
-void OpaqueBrowserFrameView::PaintTitleBar(gfx::Canvas* canvas) {
-  // The window icon is painted by the TabIconView.
-  views::WidgetDelegate* delegate = frame()->widget_delegate();
-  if (!delegate) {
-    LOG(WARNING) << "delegate is NULL";
-    return;
-  }
-  if (delegate->ShouldShowWindowTitle()) {
-    canvas->DrawStringInt(delegate->GetWindowTitle(),
-                          BrowserFrame::GetTitleFont(),
-        SK_ColorWHITE, GetMirroredXForRect(title_bounds_),
-        title_bounds_.y(), title_bounds_.width(), title_bounds_.height());
-    /* TODO(pkasting):  If this window is active, we should also draw a drop
-     * shadow on the title.  This is tricky, because we don't want to hardcode a
-     * shadow color (since we want to work with various themes), but we can't
-     * alpha-blend either (since the Windows text APIs don't really do this).
-     * So we'd need to sample the background color at the right location and
-     * synthesize a good shadow color. */
-  }
-}
-
 void OpaqueBrowserFrameView::PaintToolbarBackground(gfx::Canvas* canvas) {
   gfx::Rect toolbar_bounds(browser_view()->GetToolbarBounds());
   if (toolbar_bounds.IsEmpty())
@@ -709,22 +711,14 @@ void OpaqueBrowserFrameView::PaintToolbarBackground(gfx::Canvas* canvas) {
   canvas->SaveLayerAlpha(
       255, gfx::Rect(x - kClientEdgeThickness, y, w + kClientEdgeThickness * 3,
                      h));
-  canvas->sk_canvas()->drawARGB(0, 255, 255, 255, SkXfermode::kClear_Mode);
-
-  // TODO(kuan): migrate background animation from cros to win by calling
-  // GetToolbarBackgound* with the correct mode, refer to
-  // BrowserNonClientFrameViewAsh.
-  SkColor background_color = browser_view()->GetToolbarBackgroundColor(
-      browser_view()->browser()->search_model()->mode().mode);
-  gfx::ImageSkia* theme_toolbar = browser_view()->GetToolbarBackgroundImage(
-      browser_view()->browser()->search_model()->mode().mode);
 
   // Paint the bottom rect.
   canvas->FillRect(gfx::Rect(x, bottom_y, w, bottom_edge_height),
-                   background_color);
+                   tp->GetColor(ThemeService::COLOR_TOOLBAR));
 
   // Tile the toolbar image starting at the frame edge on the left and where the
   // horizontal tabstrip is (or would be) on the top.
+  gfx::ImageSkia* theme_toolbar = tp->GetImageSkiaNamed(IDR_THEME_TOOLBAR);
   canvas->TileImageInt(*theme_toolbar,
                        x + GetThemeBackgroundXInset(),
                        bottom_y - GetTabStripInsets(false).top,
@@ -786,22 +780,13 @@ void OpaqueBrowserFrameView::PaintToolbarBackground(gfx::Canvas* canvas) {
       bottom_edge_height, right_x, bottom_y, toolbar_right->width(),
       bottom_edge_height, false);
 
-  // Only draw the content/toolbar separator if Instant Extended API is disabled
-  // or mode is DEFAULT.
-  Browser* browser = browser_view()->browser();
-  bool extended_instant_enabled = chrome::search::IsInstantExtendedAPIEnabled(
-      browser->profile());
-  if (!extended_instant_enabled ||
-      browser->search_model()->mode().is_default()) {
-    canvas->FillRect(
-        gfx::Rect(x + kClientEdgeThickness,
-                  toolbar_bounds.bottom() - kClientEdgeThickness,
-                  w - (2 * kClientEdgeThickness),
-                  kClientEdgeThickness),
-        ThemeService::GetDefaultColor(extended_instant_enabled ?
-            ThemeService::COLOR_SEARCH_SEPARATOR_LINE :
-                ThemeService::COLOR_TOOLBAR_SEPARATOR));
-  }
+  // Draw the content/toolbar separator.
+  canvas->FillRect(
+      gfx::Rect(x + kClientEdgeThickness,
+                toolbar_bounds.bottom() - kClientEdgeThickness,
+                w - (2 * kClientEdgeThickness),
+                kClientEdgeThickness),
+      ThemeService::GetDefaultColor(ThemeService::COLOR_TOOLBAR_SEPARATOR));
 }
 
 void OpaqueBrowserFrameView::PaintRestoredClientEdge(gfx::Canvas* canvas) {
@@ -810,8 +795,7 @@ void OpaqueBrowserFrameView::PaintRestoredClientEdge(gfx::Canvas* canvas) {
   int image_top = client_area_top;
 
   gfx::Rect client_area_bounds = CalculateClientAreaBounds(width(), height());
-  SkColor toolbar_color = browser_view()->GetToolbarBackgroundColor(
-      browser_view()->browser()->search_model()->mode().mode);
+  SkColor toolbar_color = tp->GetColor(ThemeService::COLOR_TOOLBAR);
 
   if (browser_view()->IsToolbarVisible()) {
     // The client edge images always start below the toolbar corner images.  The
@@ -1001,27 +985,21 @@ void OpaqueBrowserFrameView::LayoutWindowControls() {
 }
 
 void OpaqueBrowserFrameView::LayoutTitleBar() {
-  // The window title is based on the calculated icon position, even when there
-  // is no icon.
-  gfx::Rect icon_bounds(IconBounds());
-  views::WidgetDelegate* delegate = frame()->widget_delegate();
-  if (delegate && delegate->ShouldShowWindowIcon())
-    window_icon_->SetBoundsRect(icon_bounds);
+  const views::WidgetDelegate* delegate = frame()->widget_delegate();
+  if (delegate) {
+    gfx::Rect icon_bounds(IconBounds());
+    if (delegate->ShouldShowWindowIcon())
+      window_icon_->SetBoundsRect(icon_bounds);
 
-  // Size the title, if visible.
-  if (delegate && delegate->ShouldShowWindowTitle()) {
-    int title_x = delegate->ShouldShowWindowIcon() ?
-        icon_bounds.right() + kIconTitleSpacing : icon_bounds.x();
-    int title_height = BrowserFrame::GetTitleFont().GetHeight();
-    // We bias the title position so that when the difference between the icon
-    // and title heights is odd, the extra pixel of the title is above the
-    // vertical midline rather than below.  This compensates for how the icon is
-    // already biased downwards (see IconBounds()) and helps prevent descenders
-    // on the title from overlapping the 3D edge at the bottom of the titlebar.
-    title_bounds_.SetRect(title_x,
-        icon_bounds.y() + ((icon_bounds.height() - title_height - 1) / 2),
-        std::max(0, minimize_button_->x() - kTitleLogoSpacing - title_x),
-        title_height);
+    window_title_->SetVisible(delegate->ShouldShowWindowTitle());
+    if (delegate->ShouldShowWindowTitle()) {
+      window_title_->SetText(delegate->GetWindowTitle());
+      const int title_x = delegate->ShouldShowWindowIcon() ?
+          icon_bounds.right() + kIconTitleSpacing : icon_bounds.x();
+      window_title_->SetBounds(title_x, icon_bounds.y(),
+          std::max(0, minimize_button_->x() - kTitleLogoSpacing - title_x),
+          icon_bounds.height());
+    }
   }
 }
 

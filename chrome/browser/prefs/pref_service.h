@@ -14,11 +14,13 @@
 #include <set>
 #include <string>
 
+#include "base/callback.h"
 #include "base/memory/ref_counted.h"
 #include "base/memory/scoped_ptr.h"
-#include "base/threading/non_thread_safe.h"
+#include "base/hash_tables.h"
 #include "base/observer_list.h"
-#include "chrome/browser/api/prefs/pref_service_base.h"
+#include "base/prefs/public/pref_service_base.h"
+#include "base/threading/non_thread_safe.h"
 
 class CommandLine;
 class DefaultPrefStore;
@@ -26,9 +28,14 @@ class PersistentPrefStore;
 class PrefModelAssociator;
 class PrefNotifier;
 class PrefNotifierImpl;
+class PrefObserver;
 class PrefServiceObserver;
 class PrefStore;
 class PrefValueStore;
+
+namespace base {
+  class SequencedTaskRunner;
+}
 
 namespace syncer {
 class SyncableService;
@@ -85,14 +92,13 @@ class PrefService : public PrefServiceBase, public base::NonThreadSafe {
       return pref_service_->pref_value_store_.get();
     }
 
-    std::string name_;
+    const std::string name_;
 
-    base::Value::Type type_;
+    const base::Value::Type type_;
 
     // Reference to the PrefService in which this pref was created.
     const PrefService* pref_service_;
 
-    DISALLOW_COPY_AND_ASSIGN(Preference);
   };
 
   // Factory method that creates a new instance of a PrefService with the
@@ -108,10 +114,12 @@ class PrefService : public PrefServiceBase, public base::NonThreadSafe {
   // the created PrefService or NULL if creation has failed. Note, it is
   // guaranteed that in asynchronous version initialization happens after this
   // function returned.
-  static PrefService* CreatePrefService(const FilePath& pref_filename,
-                                        policy::PolicyService* policy_service,
-                                        PrefStore* extension_pref_store,
-                                        bool async);
+  static PrefService* CreatePrefService(
+      const FilePath& pref_filename,
+      base::SequencedTaskRunner* pref_io_task_runner,
+      policy::PolicyService* policy_service,
+      PrefStore* extension_pref_store,
+      bool async);
 
   // Creates an incognito copy of the pref service that shares most pref stores
   // but uses a fresh non-persistent overlay for the user pref store and an
@@ -130,14 +138,14 @@ class PrefService : public PrefServiceBase, public base::NonThreadSafe {
   // immediately (basically, during shutdown).
   void CommitPendingWrite();
 
+  void AddObserver(PrefServiceObserver* observer);
+  void RemoveObserver(PrefServiceObserver* observer);
+
   // Returns true if preferences state has synchronized with the remote
   // preferences. If true is returned it can be assumed the local preferences
   // has applied changes from the remote preferences. The two may not be
   // identical if a change is in flight (from either side).
   bool IsSyncing();
-
-  void AddObserver(PrefServiceObserver* observer);
-  void RemoveObserver(PrefServiceObserver* observer);
 
   // Invoked internally when the IsSyncing() state changes.
   void OnIsSyncingChanged();
@@ -271,6 +279,11 @@ class PrefService : public PrefServiceBase, public base::NonThreadSafe {
   // Do not call this after having derived an incognito or per tab pref service.
   void UpdateCommandLinePrefStore(CommandLine* command_line);
 
+  // We run the callback once, when initialization completes. The bool
+  // parameter will be set to true for successful initialization,
+  // false for unsuccessful.
+  void AddPrefInitObserver(base::Callback<void(bool)> callback);
+
  protected:
   // Construct a new pref service. This constructor is what
   // factory methods end up calling and what is used for unit tests.
@@ -287,13 +300,11 @@ class PrefService : public PrefServiceBase, public base::NonThreadSafe {
   scoped_ptr<PrefNotifierImpl> pref_notifier_;
 
  private:
-  class PreferencePathComparator {
-   public:
-    bool operator() (Preference* lhs, Preference* rhs) const {
-      return lhs->name() < rhs->name();
-    }
-  };
-  typedef std::set<Preference*, PreferencePathComparator> PreferenceSet;
+  // Hash map expected to be fastest here since it minimises expensive
+  // string comparisons. Order is unimportant, and deletions are rare.
+  // Confirmed on Android where this speeded Chrome startup by roughly 50ms
+  // vs. std::map, and by roughly 180ms vs. std::set of Preference pointers.
+  typedef base::hash_map<std::string, Preference> PreferenceMap;
 
   friend class PrefServiceMockBuilder;
 
@@ -302,9 +313,9 @@ class PrefService : public PrefServiceBase, public base::NonThreadSafe {
 
   // PrefServiceBase implementation (protected in base, private here).
   virtual void AddPrefObserver(const char* path,
-                               content::NotificationObserver* obs) OVERRIDE;
+                               PrefObserver* obs) OVERRIDE;
   virtual void RemovePrefObserver(const char* path,
-                                  content::NotificationObserver* obs) OVERRIDE;
+                                  PrefObserver* obs) OVERRIDE;
 
   // Sends notification of a changed preference. This needs to be called by
   // a ScopedUserPrefUpdate if a DictionaryValue or ListValue is changed.
@@ -336,6 +347,13 @@ class PrefService : public PrefServiceBase, public base::NonThreadSafe {
   base::Value* GetMutableUserPref(const char* path,
                                   base::Value::Type type);
 
+  // GetPreferenceValue is the equivalent of FindPreference(path)->GetValue(),
+  // it has been added for performance. If is faster because it does
+  // not need to find or create a Preference object to get the
+  // value (GetValue() calls back though the preference service to
+  // actually get the value.).
+  const base::Value* GetPreferenceValue(const std::string& path) const;
+
   // The PrefValueStore provides prioritized preference values. It is owned by
   // this PrefService. Subclasses may access it for unit testing.
   scoped_ptr<PrefValueStore> pref_value_store_;
@@ -347,7 +365,7 @@ class PrefService : public PrefServiceBase, public base::NonThreadSafe {
   // Local cache of registered Preference objects. The default_store_
   // is authoritative with respect to what the types and default values
   // of registered preferences are.
-  mutable PreferenceSet prefs_;
+  mutable PreferenceMap prefs_map_;
 
   // The model associator that maintains the links with the sync db.
   scoped_ptr<PrefModelAssociator> pref_sync_associator_;

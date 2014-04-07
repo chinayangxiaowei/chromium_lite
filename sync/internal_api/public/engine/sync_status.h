@@ -7,6 +7,7 @@
 
 #include <string>
 
+#include "base/time.h"
 #include "sync/base/sync_export.h"
 #include "sync/internal_api/public/base/model_type.h"
 #include "sync/internal_api/public/sync_encryption_handler.h"
@@ -39,9 +40,6 @@ struct SYNC_EXPORT SyncStatus {
   // Number of hierarchy conflicts counted during most recent sync cycle.
   int hierarchy_conflicts;
 
-  // Number of simple conflicts counted during most recent sync cycle.
-  int simple_conflicts;
-
   // Number of items the server refused to commit due to conflict during most
   // recent sync cycle.
   int server_conflicts;
@@ -50,8 +48,6 @@ struct SYNC_EXPORT SyncStatus {
   int committed_count;
 
   bool syncing;
-  // True after a client has done a first sync.
-  bool initial_sync_ended;
 
   // Total updates available.  If zero, nothing left to download.
   int64 updates_available;
@@ -81,6 +77,11 @@ struct SYNC_EXPORT SyncStatus {
   int useless_sync_cycles;
   int useful_sync_cycles;
 
+  // Nudge counts for each possible source
+  int nudge_source_notification;
+  int nudge_source_local;
+  int nudge_source_local_refresh;
+
   // Encryption related.
   ModelTypeSet encrypted_types;
   bool cryptographer_ready;
@@ -94,6 +95,10 @@ struct SYNC_EXPORT SyncStatus {
 
   // The unique identifer for this client.
   std::string unique_id;
+
+  // Counters grouped by model type
+  std::vector<int> num_entries_by_type;
+  std::vector<int> num_to_delete_entries_by_type;
 };
 
 }  // namespace syncer

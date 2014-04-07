@@ -11,6 +11,7 @@
 #include "chrome/browser/extensions/event_router.h"
 #include "chrome/browser/extensions/extension_prefs.h"
 #include "chrome/browser/extensions/extension_service.h"
+#include "chrome/browser/extensions/extension_system.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/signin/token_service.h"
 #include "chrome/browser/signin/token_service_factory.h"
@@ -166,15 +167,18 @@ void PermissionsUpdater::DispatchEvent(
     const std::string& extension_id,
     const char* event_name,
     const PermissionSet* changed_permissions) {
-  if (!profile_ || !profile_->GetExtensionEventRouter())
+  if (!profile_ ||
+      !extensions::ExtensionSystem::Get(profile_)->event_router())
     return;
 
   scoped_ptr<ListValue> value(new ListValue());
   scoped_ptr<api::permissions::Permissions> permissions =
-    PackPermissionSet(changed_permissions);
+      PackPermissionSet(changed_permissions);
   value->Append(permissions->ToValue().release());
-  profile_->GetExtensionEventRouter()->DispatchEventToExtension(
-      extension_id, event_name, value.Pass(), profile_, GURL());
+  scoped_ptr<Event> event(new Event(event_name, value.Pass()));
+  event->restrict_to_profile = profile_;
+  ExtensionSystem::Get(profile_)->event_router()->
+      DispatchEventToExtension(extension_id, event.Pass());
 }
 
 void PermissionsUpdater::NotifyPermissionsUpdated(
@@ -223,7 +227,8 @@ void PermissionsUpdater::NotifyPermissionsUpdated(
 }
 
 ExtensionPrefs* PermissionsUpdater::GetExtensionPrefs() {
-  return profile_->GetExtensionService()->extension_prefs();
+  return extensions::ExtensionSystem::Get(profile_)->extension_service()->
+      extension_prefs();
 }
 
 }  // namespace extensions

@@ -17,13 +17,27 @@ MockVideoFrameCapturer::MockVideoFrameCapturer() {}
 
 MockVideoFrameCapturer::~MockVideoFrameCapturer() {}
 
-MockCaptureCompletedCallback::MockCaptureCompletedCallback() {}
+MockVideoFrameCapturerDelegate::MockVideoFrameCapturerDelegate() {
+}
 
-MockCaptureCompletedCallback::~MockCaptureCompletedCallback() {}
+MockVideoFrameCapturerDelegate::~MockVideoFrameCapturerDelegate() {
+}
 
-void MockCaptureCompletedCallback::CaptureCompleted(
-    scoped_refptr<CaptureData> capture_data) {
-  CaptureCompletedPtr(capture_data.get());
+void MockVideoFrameCapturerDelegate::OnCursorShapeChanged(
+    scoped_ptr<protocol::CursorShapeInfo> cursor_shape) {
+  // Notify the mock method.
+  OnCursorShapeChangedPtr(cursor_shape.get());
+}
+
+MockDesktopEnvironmentFactory::MockDesktopEnvironmentFactory()
+    : DesktopEnvironmentFactory(NULL, NULL) {
+}
+
+MockDesktopEnvironmentFactory::~MockDesktopEnvironmentFactory() {}
+
+scoped_ptr<DesktopEnvironment> MockDesktopEnvironmentFactory::Create(
+    ClientSession* client) {
+  return scoped_ptr<DesktopEnvironment>(CreatePtr(client));
 }
 
 MockEventExecutor::MockEventExecutor() {}
@@ -33,11 +47,6 @@ MockEventExecutor::~MockEventExecutor() {}
 void MockEventExecutor::Start(
     scoped_ptr<protocol::ClipboardStub> client_clipboard) {
   StartPtr(client_clipboard.get());
-}
-
-void MockEventExecutor::StopAndDelete() {
-  StopAndDeleteMock();
-  delete this;
 }
 
 MockDisconnectWindow::MockDisconnectWindow() {}
@@ -60,17 +69,6 @@ MockLocalInputMonitor::MockLocalInputMonitor() {}
 
 MockLocalInputMonitor::~MockLocalInputMonitor() {}
 
-scoped_ptr<LocalInputMonitor> LocalInputMonitor::Create() {
-  return scoped_ptr<LocalInputMonitor>(new MockLocalInputMonitor());
-}
-
-MockChromotingHostContext::MockChromotingHostContext()
-    : ChromotingHostContext(new AutoThreadTaskRunner(
-          base::MessageLoopProxy::current())) {
-}
-
-MockChromotingHostContext::~MockChromotingHostContext() {}
-
 MockClientSessionEventHandler::MockClientSessionEventHandler() {}
 
 MockClientSessionEventHandler::~MockClientSessionEventHandler() {}
@@ -78,9 +76,5 @@ MockClientSessionEventHandler::~MockClientSessionEventHandler() {}
 MockHostStatusObserver::MockHostStatusObserver() {}
 
 MockHostStatusObserver::~MockHostStatusObserver() {}
-
-MockUserAuthenticator::MockUserAuthenticator() {}
-
-MockUserAuthenticator::~MockUserAuthenticator() {}
 
 }  // namespace remoting

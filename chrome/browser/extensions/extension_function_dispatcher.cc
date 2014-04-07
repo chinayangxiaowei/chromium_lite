@@ -152,6 +152,11 @@ void ExtensionFunctionDispatcher::DispatchOnIOThread(
   function->set_include_incognito(
       extension_info_map->IsIncognitoEnabled(extension->id()));
 
+  if (!CheckPermissions(function, extension, params, ipc_sender, routing_id)) {
+    LogFailure(extension, params.name, kAccessDenied);
+    return;
+  }
+
   ExtensionsQuotaService* quota = extension_info_map->GetQuotaService();
   std::string violation_error = quota->Assess(extension->id(),
                                               function,
@@ -214,6 +219,12 @@ void ExtensionFunctionDispatcher::Dispatch(
   function_ui->set_profile(profile_);
   function->set_include_incognito(service->CanCrossIncognito(extension));
 
+  if (!CheckPermissions(function, extension, params, render_view_host,
+                        render_view_host->GetRoutingID())) {
+    LogFailure(extension, params.name, kAccessDenied);
+    return;
+  }
+
   ExtensionsQuotaService* quota = service->quota_service();
   std::string violation_error = quota->Assess(extension->id(),
                                               function,
@@ -246,9 +257,52 @@ void ExtensionFunctionDispatcher::Dispatch(
 
 void ExtensionFunctionDispatcher::OnExtensionFunctionCompleted(
     const Extension* extension) {
-  profile()->GetExtensionProcessManager()->DecrementLazyKeepaliveCount(
-      extension);
+  extensions::ExtensionSystem::Get(profile())->process_manager()->
+      DecrementLazyKeepaliveCount(extension);
 }
+
+// static
+bool ExtensionFunctionDispatcher::CheckPermissions(
+    ExtensionFunction* function,
+    const Extension* extension,
+    const ExtensionHostMsg_Request_Params& params,
+    IPC::Sender* ipc_sender,
+    int routing_id) {
+  if (!function->HasPermission()) {
+    LOG(ERROR) << "Extension " << extension->id() << " does not have "
+               << "permission to function: " << params.name;
+    SendAccessDenied(ipc_sender, routing_id, params.request_id);
+    return false;
+  }
+  return true;
+}
+
+namespace {
+
+// Only COMPONENT hosted apps may call extension APIs, and they are limited
+// to just the permissions they explicitly request. They should not have access
+// to extension APIs like eg chrome.runtime, chrome.windows, etc. that normally
+// are available without permission.
+// TODO(asargent/kalman) - get rid of this when the features system can express
+// the "non permission" permissions.
+bool AllowHostedAppAPICall(const Extension& extension,
+                           const GURL& source_url,
+                           const std::string& function_name) {
+  if (extension.location() != Extension::COMPONENT)
+    return false;
+
+  if (!extension.web_extent().MatchesURL(source_url))
+    return false;
+
+  // We just allow the hosted app's explicit permissions, plus chrome.test.
+  scoped_refptr<const extensions::PermissionSet> permissions =
+      extension.GetActivePermissions();
+  return (permissions->HasAccessToFunction(function_name, false) ||
+          StartsWithASCII(function_name, "test.", true /*case_sensitive*/));
+}
+
+}  // namespace
+
 
 // static
 ExtensionFunction* ExtensionFunctionDispatcher::CreateExtensionFunction(
@@ -267,10 +321,20 @@ ExtensionFunction* ExtensionFunctionDispatcher::CreateExtensionFunction(
     return NULL;
   }
 
-  if (api->IsPrivileged(params.name) &&
-      !process_map.Contains(extension->id(), requesting_process_id)) {
-    LOG(ERROR) << "Extension API called from incorrect process "
-               << requesting_process_id
+  // Most hosted apps can't call APIs.
+  bool allowed = true;
+  if (extension->is_hosted_app())
+      allowed = AllowHostedAppAPICall(*extension, params.source_url,
+                                      params.name);
+
+  // Privileged APIs can only be called from the process the extension
+  // is running in.
+  if (allowed && api->IsPrivileged(params.name))
+    allowed = process_map.Contains(extension->id(), requesting_process_id);
+
+  if (!allowed) {
+    LOG(ERROR) << "Extension API call disallowed - name:" << params.name
+               << " pid:" << requesting_process_id
                << " from URL " << params.source_url.spec();
     SendAccessDenied(ipc_sender, routing_id, params.request_id);
     return NULL;
@@ -290,13 +354,6 @@ ExtensionFunction* ExtensionFunctionDispatcher::CreateExtensionFunction(
       function->AsUIThreadExtensionFunction();
   if (function_ui) {
     function_ui->SetRenderViewHost(render_view_host);
-  }
-
-  if (!function->HasPermission()) {
-    LOG(ERROR) << "Extension " << extension->id() << " does not have "
-               << "permission to function: " << params.name;
-    SendAccessDenied(ipc_sender, routing_id, params.request_id);
-    return NULL;
   }
 
   return function;

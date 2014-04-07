@@ -7,9 +7,9 @@
 
 #include <string>
 
+#include "base/files/scoped_temp_dir.h"
 #include "base/memory/ref_counted.h"
 #include "base/memory/scoped_ptr.h"
-#include "base/scoped_temp_dir.h"
 #include "base/timer.h"
 #include "chrome/browser/custom_handlers/protocol_handler_registry.h"
 #include "chrome/browser/profiles/profile.h"
@@ -84,10 +84,6 @@ class TestingProfile : public Profile {
     // Sets the PrefService to be used by this profile.
     void SetPrefService(scoped_ptr<PrefService> prefs);
 
-    // Sets the UserCloudPolicyManager to be used by this profile.
-    void SetUserCloudPolicyManager(
-        scoped_ptr<policy::UserCloudPolicyManager> manager);
-
     // Creates the TestingProfile using previously-set settings.
     scoped_ptr<TestingProfile> Build();
 
@@ -96,7 +92,6 @@ class TestingProfile : public Profile {
     bool build_called_;
 
     // Various staging variables where values are held until Build() is invoked.
-    scoped_ptr<policy::UserCloudPolicyManager> user_cloud_policy_manager_;
     scoped_ptr<PrefService> pref_service_;
     scoped_refptr<ExtensionSpecialStoragePolicy> extension_policy_;
     FilePath path_;
@@ -123,8 +118,7 @@ class TestingProfile : public Profile {
   TestingProfile(const FilePath& path,
                  Delegate* delegate,
                  scoped_refptr<ExtensionSpecialStoragePolicy> extension_policy,
-                 scoped_ptr<PrefService> prefs,
-                 scoped_ptr<policy::UserCloudPolicyManager> manager);
+                 scoped_ptr<PrefService> prefs);
 
   virtual ~TestingProfile();
 
@@ -178,6 +172,7 @@ class TestingProfile : public Profile {
 
   // content::BrowserContext
   virtual FilePath GetPath() OVERRIDE;
+  virtual scoped_refptr<base::SequencedTaskRunner> GetIOTaskRunner() OVERRIDE;
   virtual bool IsOffTheRecord() const OVERRIDE;
   virtual content::DownloadManagerDelegate*
       GetDownloadManagerDelegate() OVERRIDE;
@@ -197,7 +192,6 @@ class TestingProfile : public Profile {
       GetGeolocationPermissionContext() OVERRIDE;
   virtual content::SpeechRecognitionPreferences*
       GetSpeechRecognitionPreferences() OVERRIDE;
-  virtual bool DidLastSessionExitCleanly() OVERRIDE;
   virtual quota::SpecialStoragePolicy* GetSpecialStoragePolicy() OVERRIDE;
 
   virtual TestingProfile* AsTestingProfile() OVERRIDE;
@@ -210,11 +204,7 @@ class TestingProfile : public Profile {
   virtual GAIAInfoUpdateService* GetGAIAInfoUpdateService() OVERRIDE;
   virtual bool HasOffTheRecordProfile() OVERRIDE;
   virtual Profile* GetOriginalProfile() OVERRIDE;
-  virtual VisitedLinkMaster* GetVisitedLinkMaster() OVERRIDE;
   virtual ExtensionService* GetExtensionService() OVERRIDE;
-  virtual extensions::UserScriptMaster* GetUserScriptMaster() OVERRIDE;
-  virtual ExtensionProcessManager* GetExtensionProcessManager() OVERRIDE;
-  virtual extensions::EventRouter* GetExtensionEventRouter() OVERRIDE;
   void SetExtensionSpecialStoragePolicy(
       ExtensionSpecialStoragePolicy* extension_special_storage_policy);
   virtual ExtensionSpecialStoragePolicy*
@@ -224,7 +214,8 @@ class TestingProfile : public Profile {
   // for more information.
   net::CookieMonster* GetCookieMonster();
 
-  virtual policy::UserCloudPolicyManager* GetUserCloudPolicyManager() OVERRIDE;
+  virtual policy::ManagedModePolicyProvider*
+      GetManagedModePolicyProvider() OVERRIDE;
   virtual policy::PolicyService* GetPolicyService() OVERRIDE;
   // Sets the profile's PrefService. If a pref service hasn't been explicitly
   // set GetPrefs creates one, so normally you need not invoke this. If you need
@@ -247,9 +238,11 @@ class TestingProfile : public Profile {
       GetRequestContextForExtensions() OVERRIDE;
   virtual net::URLRequestContextGetter*
       GetMediaRequestContextForStoragePartition(
-          const std::string& partition_id) OVERRIDE;
+          const FilePath& partition_path,
+          bool in_memory) OVERRIDE;
   virtual net::URLRequestContextGetter* GetRequestContextForStoragePartition(
-      const std::string& partition_id) OVERRIDE;
+      const FilePath& partition_path,
+      bool in_memory) OVERRIDE;
   virtual net::SSLConfigService* GetSSLConfigService() OVERRIDE;
   virtual HostContentSettingsMap* GetHostContentSettingsMap() OVERRIDE;
   virtual std::wstring GetName();
@@ -266,12 +259,13 @@ class TestingProfile : public Profile {
   virtual bool IsSameProfile(Profile *p) OVERRIDE;
   virtual base::Time GetStartTime() const OVERRIDE;
   virtual ProtocolHandlerRegistry* GetProtocolHandlerRegistry() OVERRIDE;
-  virtual void MarkAsCleanShutdown() OVERRIDE {}
   virtual void InitPromoResources() OVERRIDE {}
 
   virtual FilePath last_selected_directory() OVERRIDE;
   virtual void set_last_selected_directory(const FilePath& path) OVERRIDE;
   virtual bool WasCreatedByVersionOrLater(const std::string& version) OVERRIDE;
+  virtual void SetExitType(ExitType exit_type) OVERRIDE {}
+  virtual ExitType GetLastSessionExitType() OVERRIDE;
 #if defined(OS_CHROMEOS)
   virtual void SetupChromeOSEnterpriseExtensionObserver() OVERRIDE {
   }
@@ -292,7 +286,9 @@ class TestingProfile : public Profile {
   void BlockUntilHistoryProcessesPendingRequests();
 
   virtual chrome_browser_net::Predictor* GetNetworkPredictor() OVERRIDE;
-  virtual void ClearNetworkingHistorySince(base::Time time) OVERRIDE;
+  virtual void ClearNetworkingHistorySince(
+      base::Time time,
+      const base::Closure& completion) OVERRIDE;
   virtual GURL GetHomePage() OVERRIDE;
 
   virtual PrefService* GetOffTheRecordPrefs() OVERRIDE;
@@ -348,13 +344,10 @@ class TestingProfile : public Profile {
   // The proxy prefs tracker.
   scoped_ptr<PrefProxyConfigTracker> pref_proxy_config_tracker_;
 
-  // UserCloudPolicyManager returned by GetUserCloudPolicyManager().
-  scoped_ptr<policy::UserCloudPolicyManager> user_cloud_policy_manager_;
-
   // We use a temporary directory to store testing profile data. In a multi-
   // profile environment, this is invalid and the directory is managed by the
   // TestingProfileManager.
-  ScopedTempDir temp_dir_;
+  base::ScopedTempDir temp_dir_;
   // The path to this profile. This will be valid in either of the two above
   // cases.
   FilePath profile_path_;

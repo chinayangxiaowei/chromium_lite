@@ -4,31 +4,33 @@
 
 #include "remoting/host/desktop_environment_factory.h"
 
+#include "base/single_thread_task_runner.h"
 #include "remoting/host/audio_capturer.h"
 #include "remoting/host/chromoting_host_context.h"
+#include "remoting/host/client_session.h"
 #include "remoting/host/desktop_environment.h"
 #include "remoting/host/event_executor.h"
 #include "remoting/host/video_frame_capturer.h"
 
 namespace remoting {
 
-DesktopEnvironmentFactory::DesktopEnvironmentFactory() {
+DesktopEnvironmentFactory::DesktopEnvironmentFactory(
+    scoped_refptr<base::SingleThreadTaskRunner> input_task_runner,
+    scoped_refptr<base::SingleThreadTaskRunner> ui_task_runner)
+    : input_task_runner_(input_task_runner),
+      ui_task_runner_(ui_task_runner) {
 }
 
 DesktopEnvironmentFactory::~DesktopEnvironmentFactory() {
 }
 
 scoped_ptr<DesktopEnvironment> DesktopEnvironmentFactory::Create(
-    ChromotingHostContext* context) {
-  scoped_ptr<AudioCapturer> audio_capturer = AudioCapturer::Create();
-  scoped_ptr<EventExecutor> event_executor = EventExecutor::Create(
-      context->desktop_task_runner(),
-      context->ui_task_runner());
-  scoped_ptr<VideoFrameCapturer> video_capturer(VideoFrameCapturer::Create());
-  return scoped_ptr<DesktopEnvironment>(new DesktopEnvironment(
-      audio_capturer.Pass(),
-      event_executor.Pass(),
-      video_capturer.Pass()));
+    ClientSession* client) {
+  scoped_ptr<DesktopEnvironment> environment(new DesktopEnvironment(
+      AudioCapturer::Create(),
+      EventExecutor::Create(input_task_runner_, ui_task_runner_),
+      VideoFrameCapturer::Create()));
+  return environment.Pass();
 }
 
 bool DesktopEnvironmentFactory::SupportsAudioCapture() const {

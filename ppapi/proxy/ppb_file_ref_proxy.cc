@@ -165,14 +165,6 @@ int FileRef::SendCallback(scoped_refptr<TrackedCallback> callback) {
   return next_callback_id_++;
 }
 
-namespace {
-
-InterfaceProxy* CreateFileRefProxy(Dispatcher* dispatcher) {
-  return new PPB_FileRef_Proxy(dispatcher);
-}
-
-}  // namespace
-
 PPB_FileRef_Proxy::PPB_FileRef_Proxy(Dispatcher* dispatcher)
     : InterfaceProxy(dispatcher),
       callback_factory_(ALLOW_THIS_IN_INITIALIZER_LIST(this)) {
@@ -200,6 +192,7 @@ PP_Resource PPB_FileRef_Proxy::CreateProxyResource(PP_Resource file_system,
 bool PPB_FileRef_Proxy::OnMessageReceived(const IPC::Message& msg) {
   bool handled = true;
   IPC_BEGIN_MESSAGE_MAP(PPB_FileRef_Proxy, msg)
+#if !defined(OS_NACL)
     IPC_MESSAGE_HANDLER(PpapiHostMsg_PPBFileRef_Create, OnMsgCreate)
     IPC_MESSAGE_HANDLER(PpapiHostMsg_PPBFileRef_GetParent, OnMsgGetParent)
     IPC_MESSAGE_HANDLER(PpapiHostMsg_PPBFileRef_MakeDirectory,
@@ -209,6 +202,7 @@ bool PPB_FileRef_Proxy::OnMessageReceived(const IPC::Message& msg) {
     IPC_MESSAGE_HANDLER(PpapiHostMsg_PPBFileRef_Rename, OnMsgRename)
     IPC_MESSAGE_HANDLER(PpapiHostMsg_PPBFileRef_GetAbsolutePath,
                         OnMsgGetAbsolutePath)
+#endif  // !defined(OS_NACL)
 
     IPC_MESSAGE_HANDLER(PpapiMsg_PPBFileRef_CallbackComplete,
                         OnMsgCallbackComplete)
@@ -233,6 +227,7 @@ PP_Resource PPB_FileRef_Proxy::DeserializeFileRef(
   return (new FileRef(serialized))->GetReference();
 }
 
+#if !defined(OS_NACL)
 void PPB_FileRef_Proxy::OnMsgCreate(const HostResource& file_system,
                                     const std::string& path,
                                     PPB_FileRef_CreateInfo* result) {
@@ -305,6 +300,7 @@ void PPB_FileRef_Proxy::OnMsgGetAbsolutePath(const HostResource& host_resource,
   if (enter.succeeded())
     result.Return(dispatcher(), enter.object()->GetAbsolutePath());
 }
+#endif  // !defined(OS_NACL)
 
 void PPB_FileRef_Proxy::OnMsgCallbackComplete(
     const HostResource& host_resource,
@@ -316,6 +312,7 @@ void PPB_FileRef_Proxy::OnMsgCallbackComplete(
     static_cast<FileRef*>(enter.object())->ExecuteCallback(callback_id, result);
 }
 
+#if !defined(OS_NACL)
 void PPB_FileRef_Proxy::OnCallbackCompleteInHost(
     int32_t result,
     const HostResource& host_resource,
@@ -324,6 +321,7 @@ void PPB_FileRef_Proxy::OnCallbackCompleteInHost(
   Send(new PpapiMsg_PPBFileRef_CallbackComplete(
       API_ID_PPB_FILE_REF, host_resource, callback_id, result));
 }
+#endif  // !defined(OS_NACL)
 
 }  // namespace proxy
 }  // namespace ppapi

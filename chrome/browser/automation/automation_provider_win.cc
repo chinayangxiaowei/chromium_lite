@@ -19,7 +19,6 @@
 #include "chrome/browser/sessions/session_tab_helper.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_window.h"
-#include "chrome/browser/ui/tab_contents/tab_contents.h"
 #include "chrome/common/automation_messages.h"
 #include "chrome/common/render_messages.h"
 #include "content/public/browser/navigation_controller.h"
@@ -305,22 +304,9 @@ void AutomationProvider::OnTabReposition(
 
 void AutomationProvider::OnForwardContextMenuCommandToChrome(int tab_handle,
                                                              int command) {
-  if (!tab_tracker_->ContainsHandle(tab_handle))
-    return;
-
-  NavigationController* tab = tab_tracker_->GetResource(tab_handle);
-  if (!tab) {
-    NOTREACHED();
-    return;
-  }
-
-  WebContents* web_contents = tab->GetWebContents();
-  if (!web_contents || !web_contents->GetDelegate()) {
-    NOTREACHED();
-    return;
-  }
-
-  web_contents->GetDelegate()->ExecuteContextMenuCommand(command);
+  ExternalTabContainer* external_tab = GetExternalTabForHandle(tab_handle);
+  if (external_tab)
+    external_tab->ExecuteContextMenuCommand(command);
 }
 
 void AutomationProvider::ConnectExternalTab(

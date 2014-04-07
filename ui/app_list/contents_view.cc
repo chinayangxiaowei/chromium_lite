@@ -6,9 +6,9 @@
 
 #include <algorithm>
 
+#include "ui/app_list/app_list_constants.h"
 #include "ui/app_list/app_list_view.h"
 #include "ui/app_list/apps_grid_view.h"
-#include "ui/app_list/page_switcher.h"
 #include "ui/app_list/pagination_model.h"
 #include "ui/app_list/search_result_list_view.h"
 #include "ui/base/events/event.h"
@@ -21,28 +21,20 @@ namespace app_list {
 namespace {
 
 const int kPreferredIconDimension = 48;
-const int kPreferredCols = 4;
-const int kPreferredRows = 4;
 
 // Indexes of interesting views in ViewModel of ContentsView.
 const int kIndexAppsGrid = 0;
-const int kIndexPageSwitcher = 1;
-const int kIndexSearchResults = 2;
+const int kIndexSearchResults = 1;
 
 const int kMinMouseWheelToSwitchPage = 20;
 const int kMinScrollToSwitchPage = 20;
 const int kMinHorizVelocityToSwitchPage = 800;
 
 const double kFinishTransitionThreshold = 0.33;
-const int kTransitionAnimationDurationInMs = 180;
 
 // Helpers to get certain child view from |model|.
 AppsGridView* GetAppsGridView(views::ViewModel* model) {
   return static_cast<AppsGridView*>(model->view_at(kIndexAppsGrid));
-}
-
-PageSwitcher* GetPageSwitcherView(views::ViewModel* model) {
-  return static_cast<PageSwitcher*>(model->view_at(kIndexPageSwitcher));
 }
 
 SearchResultListView* GetSearchResultListView(views::ViewModel* model) {
@@ -59,7 +51,9 @@ ContentsView::ContentsView(AppListView* app_list_view,
       view_model_(new views::ViewModel),
       ALLOW_THIS_IN_INITIALIZER_LIST(
           bounds_animator_(new views::BoundsAnimator(this))) {
-  pagination_model_->SetTransitionDuration(kTransitionAnimationDurationInMs);
+  pagination_model_->SetTransitionDurations(
+      kPageTransitionDurationInMs,
+      kOverscrollPageTransitionDurationMs);
 
   AppsGridView* apps_grid_view = new AppsGridView(app_list_view,
                                                   pagination_model);
@@ -68,10 +62,6 @@ ContentsView::ContentsView(AppListView* app_list_view,
                             kPreferredRows);
   AddChildView(apps_grid_view);
   view_model_->Add(apps_grid_view, kIndexAppsGrid);
-
-  PageSwitcher* page_switcher_view = new PageSwitcher(pagination_model);
-  AddChildView(page_switcher_view);
-  view_model_->Add(page_switcher_view, kIndexPageSwitcher);
 
   SearchResultListView* search_results_view = new SearchResultListView(
       app_list_view);
@@ -84,7 +74,7 @@ ContentsView::~ContentsView() {
 
 void ContentsView::SetModel(AppListModel* model) {
   if (model) {
-    GetAppsGridView(view_model_.get())->SetModel(model->apps());
+    GetAppsGridView(view_model_.get())->SetModel(model);
     GetSearchResultListView(view_model_.get())->SetResults(model->results());
   } else {
     GetAppsGridView(view_model_.get())->SetModel(NULL);
@@ -117,28 +107,12 @@ void ContentsView::CalculateIdealBounds() {
   if (rect.IsEmpty())
     return;
 
-  const int x = rect.x();
-  const int width = rect.width();
-
-  // AppsGridView and PageSwitcher uses a vertical box layout.
-  int y = rect.y();
-  const int grid_height =
-      GetAppsGridView(view_model_.get())->GetPreferredSize().height();
-  gfx::Rect grid_frame(gfx::Point(x, y), gfx::Size(width, grid_height));
-  grid_frame = rect.Intersect(grid_frame);
-
-  y = grid_frame.bottom();
-  const int page_switcher_height = rect.bottom() - y;
-  gfx::Rect page_switcher_frame(gfx::Point(x, y),
-                                gfx::Size(width, page_switcher_height));
-  page_switcher_frame = rect.Intersect(page_switcher_frame);
-
-  // SearchResultListView occupies the whole space when visible.
+  gfx::Rect grid_frame(rect);
   gfx::Rect results_frame(rect);
 
-  // Offsets apps grid, page switcher and result list based on |show_state_|.
-  // SearchResultListView is on top of apps grid + page switcher. Visible view
-  // is left in visible area and invisible ones is put out of the visible area.
+  // Offsets apps grid and result list based on |show_state_|.
+  // SearchResultListView is on top of apps grid. Visible view is left in
+  // visible area and invisible ones is put out of the visible area.
   int contents_area_height = rect.height();
   switch (show_state_) {
     case SHOW_APPS:
@@ -146,7 +120,6 @@ void ContentsView::CalculateIdealBounds() {
       break;
     case SHOW_SEARCH_RESULTS:
       grid_frame.Offset(0, contents_area_height);
-      page_switcher_frame.Offset(0, contents_area_height);
       break;
     default:
       NOTREACHED() << "Unknown show_state_ " << show_state_;
@@ -154,7 +127,6 @@ void ContentsView::CalculateIdealBounds() {
   }
 
   view_model_->set_ideal_bounds(kIndexAppsGrid, grid_frame);
-  view_model_->set_ideal_bounds(kIndexPageSwitcher, page_switcher_frame);
   view_model_->set_ideal_bounds(kIndexSearchResults, results_frame);
 }
 
@@ -173,57 +145,17 @@ void ContentsView::ShowSearchResults(bool show) {
 gfx::Size ContentsView::GetPreferredSize() {
   const gfx::Size grid_size =
       GetAppsGridView(view_model_.get())->GetPreferredSize();
-  const gfx::Size page_switcher_size =
-      GetPageSwitcherView(view_model_.get())->GetPreferredSize();
   const gfx::Size results_size =
       GetSearchResultListView(view_model_.get())->GetPreferredSize();
 
-  int width = std::max(
-      std::max(grid_size.width(), page_switcher_size.width()),
-      results_size.width());
-  int height = std::max(grid_size.height() + page_switcher_size.height(),
-                        results_size.height());
+  int width = std::max(grid_size.width(), results_size.width());
+  int height = std::max(grid_size.height(), results_size.height());
   return gfx::Size(width, height);
 }
 
 void ContentsView::Layout() {
   CalculateIdealBounds();
   views::ViewModelUtils::SetViewBoundsToIdealBounds(*view_model_);
-}
-
-ui::EventResult ContentsView::OnGestureEvent(
-    const ui::GestureEvent& event) {
-  if (show_state_ != SHOW_APPS)
-    return ui::ER_UNHANDLED;
-
-  switch (event.type()) {
-    case ui::ET_GESTURE_SCROLL_BEGIN:
-      pagination_model_->StartScroll();
-      return ui::ER_CONSUMED;
-    case ui::ET_GESTURE_SCROLL_UPDATE:
-      // event.details.scroll_x() > 0 means moving contents to right. That is,
-      // transitioning to previous page.
-      pagination_model_->UpdateScroll(
-          event.details().scroll_x() / GetContentsBounds().width());
-      return ui::ER_CONSUMED;
-    case ui::ET_GESTURE_SCROLL_END:
-      pagination_model_->EndScroll(pagination_model_->
-          transition().progress < kFinishTransitionThreshold);
-      return ui::ER_CONSUMED;
-    case ui::ET_SCROLL_FLING_START: {
-      pagination_model_->EndScroll(true);
-      if (fabs(event.details().velocity_x()) > kMinHorizVelocityToSwitchPage) {
-        pagination_model_->SelectPageRelative(
-            event.details().velocity_x() < 0 ? 1 : -1,
-            true);
-      }
-      return ui::ER_CONSUMED;
-    }
-    default:
-      break;
-  }
-
-  return ui::ER_UNHANDLED;
 }
 
 bool ContentsView::OnKeyPressed(const ui::KeyEvent& event) {
@@ -251,19 +183,54 @@ bool ContentsView::OnMouseWheel(const ui::MouseWheelEvent& event) {
   return false;
 }
 
-bool ContentsView::OnScrollEvent(const ui::ScrollEvent& event) {
+void ContentsView::OnGestureEvent(ui::GestureEvent* event) {
   if (show_state_ != SHOW_APPS)
-    return false;
+    return;
 
-  if (abs(event.x_offset()) > kMinScrollToSwitchPage) {
-    if (!pagination_model_->has_transition()) {
-      pagination_model_->SelectPageRelative(event.x_offset() > 0 ? -1 : 1,
-                                            true);
+  switch (event->type()) {
+    case ui::ET_GESTURE_SCROLL_BEGIN:
+      pagination_model_->StartScroll();
+      event->SetHandled();
+      return;
+    case ui::ET_GESTURE_SCROLL_UPDATE:
+      // event->details.scroll_x() > 0 means moving contents to right. That is,
+      // transitioning to previous page.
+      pagination_model_->UpdateScroll(
+          event->details().scroll_x() / GetContentsBounds().width());
+      event->SetHandled();
+      return;
+    case ui::ET_GESTURE_SCROLL_END:
+      pagination_model_->EndScroll(pagination_model_->
+          transition().progress < kFinishTransitionThreshold);
+      event->SetHandled();
+      return;
+    case ui::ET_SCROLL_FLING_START: {
+      pagination_model_->EndScroll(true);
+      if (fabs(event->details().velocity_x()) > kMinHorizVelocityToSwitchPage) {
+        pagination_model_->SelectPageRelative(
+            event->details().velocity_x() < 0 ? 1 : -1,
+            true);
+      }
+      event->SetHandled();
+      return;
     }
-    return true;
+    default:
+      break;
+  }
+}
+
+void ContentsView::OnScrollEvent(ui::ScrollEvent* event) {
+  if (show_state_ != SHOW_APPS ||
+      event->type() == ui::ET_SCROLL_FLING_CANCEL ||
+      abs(event->x_offset()) < kMinScrollToSwitchPage) {
+    return;
   }
 
-  return false;
+  if (!pagination_model_->has_transition()) {
+    pagination_model_->SelectPageRelative(event->x_offset() > 0 ? -1 : 1,
+                                          true);
+  }
+  event->SetHandled();
 }
 
 }  // namespace app_list

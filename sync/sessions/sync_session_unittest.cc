@@ -8,12 +8,10 @@
 #include "base/location.h"
 #include "base/memory/ref_counted.h"
 #include "base/message_loop.h"
-#include "sync/engine/conflict_resolver.h"
 #include "sync/engine/syncer_types.h"
 #include "sync/engine/throttled_data_type_tracker.h"
 #include "sync/internal_api/public/base/model_type.h"
-#include "sync/internal_api/public/base/model_type_state_map_test_util.h"
-#include "sync/sessions/session_state.h"
+#include "sync/internal_api/public/base/model_type_invalidation_map_test_util.h"
 #include "sync/sessions/status_controller.h"
 #include "sync/syncable/syncable_id.h"
 #include "sync/syncable/write_transaction.h"
@@ -162,37 +160,6 @@ TEST_F(SyncSessionTest, EnabledGroups) {
   EXPECT_EQ(expected_enabled_groups, session->GetEnabledGroups());
 }
 
-TEST_F(SyncSessionTest, EnabledGroupsWithConflictsEmpty) {
-  scoped_ptr<SyncSession> session(MakeSession());
-  // Auto-create conflict progress.  This shouldn't put that group in
-  // conflict.
-  session->mutable_status_controller()->
-      GetUnrestrictedMutableConflictProgressForTest(GROUP_PASSIVE);
-  EXPECT_TRUE(session->GetEnabledGroupsWithConflicts().empty());
-}
-
-TEST_F(SyncSessionTest, EnabledGroupsWithConflicts) {
-  scoped_ptr<SyncSession> session(MakeSession());
-  // Put GROUP_UI in conflict.
-  session->mutable_status_controller()->
-      GetUnrestrictedMutableConflictProgressForTest(GROUP_UI)->
-      AddSimpleConflictingItemById(syncable::Id());
-  std::set<ModelSafeGroup> expected_enabled_groups_with_conflicts;
-  expected_enabled_groups_with_conflicts.insert(GROUP_UI);
-  EXPECT_EQ(expected_enabled_groups_with_conflicts,
-            session->GetEnabledGroupsWithConflicts());
-}
-
-TEST_F(SyncSessionTest, ScopedContextHelpers) {
-  ConflictResolver resolver;
-  EXPECT_FALSE(context_->resolver());
-  {
-    ScopedSessionContextConflictResolver s_resolver(context_.get(), &resolver);
-    EXPECT_EQ(&resolver, context_->resolver());
-  }
-  EXPECT_FALSE(context_->resolver());
-}
-
 TEST_F(SyncSessionTest, SetWriteTransaction) {
   TestDirectorySetterUpper dir_maker;
   dir_maker.SetUp();
@@ -215,10 +182,6 @@ TEST_F(SyncSessionTest, MoreToDownloadIfDownloadFailed) {
   // When DownloadUpdatesCommand fails, these should be false.
   EXPECT_FALSE(status()->ServerSaysNothingMoreToDownload());
   EXPECT_FALSE(status()->download_updates_succeeded());
-
-  // Download updates has its own loop in the syncer; it shouldn't factor
-  // into HasMoreToSync.
-  EXPECT_FALSE(session_->HasMoreToSync());
 }
 
 TEST_F(SyncSessionTest, MoreToDownloadIfGotChangesRemaining) {
@@ -231,10 +194,6 @@ TEST_F(SyncSessionTest, MoreToDownloadIfGotChangesRemaining) {
      ->set_changes_remaining(1000L);
   EXPECT_FALSE(status()->ServerSaysNothingMoreToDownload());
   EXPECT_TRUE(status()->download_updates_succeeded());
-
-  // Download updates has its own loop in the syncer; it shouldn't factor
-  // into HasMoreToSync.
-  EXPECT_FALSE(session_->HasMoreToSync());
 }
 
 TEST_F(SyncSessionTest, MoreToDownloadIfGotNoChangesRemaining) {
@@ -245,40 +204,17 @@ TEST_F(SyncSessionTest, MoreToDownloadIfGotNoChangesRemaining) {
       ->set_changes_remaining(0);
   EXPECT_TRUE(status()->ServerSaysNothingMoreToDownload());
   EXPECT_TRUE(status()->download_updates_succeeded());
-
-  // Download updates has its own loop in the syncer; it shouldn't factor
-  // into HasMoreToSync.
-  EXPECT_FALSE(session_->HasMoreToSync());
-}
-
-TEST_F(SyncSessionTest, MoreToSyncIfConflictsResolved) {
-  // Conflict resolution happens after get updates and commit,
-  // so we need to loop back and get updates / commit again now
-  // that we have made forward progress.
-  status()->update_conflicts_resolved(true);
-  EXPECT_TRUE(session_->HasMoreToSync());
-}
-
-TEST_F(SyncSessionTest, ResetTransientState) {
-  status()->update_conflicts_resolved(true);
-  status()->increment_num_successful_commits();
-  EXPECT_TRUE(session_->HasMoreToSync());
-  session_->PrepareForAnotherSyncCycle();
-  EXPECT_EQ(sync_pb::GetUpdatesCallerInfo::SYNC_CYCLE_CONTINUATION,
-            session_->source().updates_source);
-  EXPECT_FALSE(status()->conflicts_resolved());
-  EXPECT_FALSE(session_->HasMoreToSync());
 }
 
 TEST_F(SyncSessionTest, Coalesce) {
   std::vector<ModelSafeWorker*> workers_one, workers_two;
   ModelSafeRoutingInfo routes_one, routes_two;
-  ModelTypeStateMap one_type =
-      ModelTypeSetToStateMap(
+  ModelTypeInvalidationMap one_type =
+      ModelTypeSetToInvalidationMap(
           ParamsMeaningJustOneEnabledType(),
           std::string());
-  ModelTypeStateMap all_types =
-      ModelTypeSetToStateMap(
+  ModelTypeInvalidationMap all_types =
+      ModelTypeSetToInvalidationMap(
           ParamsMeaningAllEnabledTypes(),
           std::string());
   SyncSourceInfo source_one(sync_pb::GetUpdatesCallerInfo::PERIODIC, one_type);
@@ -330,12 +266,12 @@ TEST_F(SyncSessionTest, Coalesce) {
 TEST_F(SyncSessionTest, RebaseRoutingInfoWithLatestRemoveOneType) {
   std::vector<ModelSafeWorker*> workers_one, workers_two;
   ModelSafeRoutingInfo routes_one, routes_two;
-  ModelTypeStateMap one_type =
-      ModelTypeSetToStateMap(
+  ModelTypeInvalidationMap one_type =
+      ModelTypeSetToInvalidationMap(
           ParamsMeaningJustOneEnabledType(),
           std::string());
-  ModelTypeStateMap all_types =
-      ModelTypeSetToStateMap(
+  ModelTypeInvalidationMap all_types =
+      ModelTypeSetToInvalidationMap(
           ParamsMeaningAllEnabledTypes(),
           std::string());
   SyncSourceInfo source_one(sync_pb::GetUpdatesCallerInfo::PERIODIC, one_type);
@@ -368,7 +304,7 @@ TEST_F(SyncSessionTest, RebaseRoutingInfoWithLatestRemoveOneType) {
   EXPECT_EQ(expected_enabled_groups_one, one.GetEnabledGroups());
   EXPECT_EQ(expected_enabled_groups_two, two.GetEnabledGroups());
 
-  two.RebaseRoutingInfoWithLatest(one);
+  two.RebaseRoutingInfoWithLatest(one.routing_info(), one.workers());
 
   EXPECT_EQ(expected_enabled_groups_one, one.GetEnabledGroups());
   EXPECT_EQ(expected_enabled_groups_one, two.GetEnabledGroups());
@@ -402,8 +338,8 @@ TEST_F(SyncSessionTest, RebaseRoutingInfoWithLatestRemoveOneType) {
 TEST_F(SyncSessionTest, RebaseRoutingInfoWithLatestWithSameType) {
   std::vector<ModelSafeWorker*> workers_first, workers_second;
   ModelSafeRoutingInfo routes_first, routes_second;
-  ModelTypeStateMap all_types =
-      ModelTypeSetToStateMap(
+  ModelTypeInvalidationMap all_types =
+      ModelTypeSetToInvalidationMap(
           ParamsMeaningAllEnabledTypes(),
           std::string());
   SyncSourceInfo source_first(sync_pb::GetUpdatesCallerInfo::PERIODIC,
@@ -438,7 +374,7 @@ TEST_F(SyncSessionTest, RebaseRoutingInfoWithLatestWithSameType) {
   EXPECT_EQ(expected_enabled_groups, first.GetEnabledGroups());
   EXPECT_EQ(expected_enabled_groups, second.GetEnabledGroups());
 
-  second.RebaseRoutingInfoWithLatest(first);
+  second.RebaseRoutingInfoWithLatest(first.routing_info(), first.workers());
 
   EXPECT_EQ(expected_enabled_groups, first.GetEnabledGroups());
   EXPECT_EQ(expected_enabled_groups, second.GetEnabledGroups());
@@ -482,23 +418,23 @@ TEST_F(SyncSessionTest, RebaseRoutingInfoWithLatestWithSameType) {
 }
 
 
-TEST_F(SyncSessionTest, MakeTypeStateMapFromBitSet) {
+TEST_F(SyncSessionTest, MakeTypeInvalidationMapFromBitSet) {
   ModelTypeSet types;
   std::string payload = "test";
-  ModelTypeStateMap type_state_map =
-      ModelTypeSetToStateMap(types, payload);
-  EXPECT_TRUE(type_state_map.empty());
+  ModelTypeInvalidationMap invalidation_map =
+      ModelTypeSetToInvalidationMap(types, payload);
+  EXPECT_TRUE(invalidation_map.empty());
 
   types.Put(BOOKMARKS);
   types.Put(PASSWORDS);
   types.Put(AUTOFILL);
   payload = "test2";
-  type_state_map = ModelTypeSetToStateMap(types, payload);
+  invalidation_map = ModelTypeSetToInvalidationMap(types, payload);
 
-  ASSERT_EQ(3U, type_state_map.size());
-  EXPECT_EQ(type_state_map[BOOKMARKS].payload, payload);
-  EXPECT_EQ(type_state_map[PASSWORDS].payload, payload);
-  EXPECT_EQ(type_state_map[AUTOFILL].payload, payload);
+  ASSERT_EQ(3U, invalidation_map.size());
+  EXPECT_EQ(invalidation_map[BOOKMARKS].payload, payload);
+  EXPECT_EQ(invalidation_map[PASSWORDS].payload, payload);
+  EXPECT_EQ(invalidation_map[AUTOFILL].payload, payload);
 }
 
 }  // namespace

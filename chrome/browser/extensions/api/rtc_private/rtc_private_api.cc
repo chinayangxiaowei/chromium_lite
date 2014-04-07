@@ -36,37 +36,25 @@ namespace {
 const char kOnLaunchEvent[] = "rtcPrivate.onLaunch";
 // Web intent data payload mimetype.
 const char kMimeTypeJson[] = "application/vnd.chromium.contact";
-// Web intent actions.
-const char kActivateAction[] = "activate";
-const char kChatAction[] = "chat";
-const char kVoiceAction[] = "voice";
-const char kVideoAction[] = "video";
 // Web intent data structure fields.
 const char kNameIntentField[] = "name";
 const char kPhoneIntentField[] = "phone";
 const char kEmailIntentField[] = "email";
 
-// Returns string representation of intent action.
-const char* GetLaunchAction(RtcPrivateEventRouter::LaunchAction action) {
-  const char* action_str = kActivateAction;
+// Returns the ActionType of intent action.
+api::rtc_private::ActionType GetLaunchAction(
+    RtcPrivateEventRouter::LaunchAction action) {
   switch (action) {
     case RtcPrivateEventRouter::LAUNCH_ACTIVATE:
-      action_str = kActivateAction;
-      break;
+      return api::rtc_private::RTC_PRIVATE_ACTION_TYPE_NONE;
     case RtcPrivateEventRouter::LAUNCH_CHAT:
-      action_str = kChatAction;
-      break;
+      return api::rtc_private::RTC_PRIVATE_ACTION_TYPE_CHAT;
     case RtcPrivateEventRouter::LAUNCH_VOICE:
-      action_str = kVoiceAction;
-      break;
+      return api::rtc_private::RTC_PRIVATE_ACTION_TYPE_VOICE;
     case RtcPrivateEventRouter::LAUNCH_VIDEO:
-      action_str = kVideoAction;
-      break;
-    default:
-      NOTREACHED() << "Unknown action " << action;
-      break;
+      return api::rtc_private::RTC_PRIVATE_ACTION_TYPE_VIDEO;
   }
-  return action_str;
+  return api::rtc_private::RTC_PRIVATE_ACTION_TYPE_NONE;
 }
 
 // Creates JSON payload string for contact web intent data.
@@ -103,12 +91,10 @@ void GetContactIntentData(const Contact& contact,
 void RtcPrivateEventRouter::DispatchLaunchEvent(
     Profile* profile, LaunchAction action, const Contact* contact) {
   if (action == RtcPrivateEventRouter::LAUNCH_ACTIVATE) {
-    extensions::ExtensionSystem::Get(profile)->event_router()->
-        DispatchEventToRenderers(
-            kOnLaunchEvent,
-            scoped_ptr<ListValue>(new ListValue()),
-            profile,
-            GURL());
+    scoped_ptr<Event> event(new Event(
+        kOnLaunchEvent, make_scoped_ptr(new ListValue())));
+    event->restrict_to_profile = profile;
+    ExtensionSystem::Get(profile)->event_router()->BroadcastEvent(event.Pass());
   } else {
     DCHECK(contact);
     extensions::api::rtc_private::LaunchData launch_data;
@@ -116,12 +102,10 @@ void RtcPrivateEventRouter::DispatchLaunchEvent(
     GetContactIntentData(*contact,
                          &launch_data.intent.data.additional_properties);
     launch_data.intent.type = kMimeTypeJson;
-    extensions::ExtensionSystem::Get(profile)->event_router()->
-        DispatchEventToRenderers(
-            kOnLaunchEvent,
-            extensions::api::rtc_private::OnLaunch::Create(launch_data),
-            profile,
-            GURL());
+    scoped_ptr<Event> event(new Event(
+        kOnLaunchEvent, api::rtc_private::OnLaunch::Create(launch_data)));
+    event->restrict_to_profile = profile;
+    ExtensionSystem::Get(profile)->event_router()->BroadcastEvent(event.Pass());
   }
 }
 

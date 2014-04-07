@@ -307,7 +307,7 @@ void PluginReverseInterface::OpenManifestEntry_MainThreadContinuation(
     } else {
       int32_t fd = PnaclResources::GetPnaclFD(
           plugin_,
-          PnaclUrls::StripPnaclComponentPrefix(mapped_url).c_str());
+          PnaclUrls::PnaclComponentURLToFilename(mapped_url).c_str());
       if (fd < 0) {
         // We should check earlier if the pnacl component wasn't installed
         // yet.  At this point, we can't do much anymore, so just continue
@@ -330,18 +330,30 @@ void PluginReverseInterface::OpenManifestEntry_MainThreadContinuation(
     NaClLog(4,
             "OpenManifestEntry_MainThreadContinuation: "
             "pulling down and translating.\n");
-    pp::CompletionCallback translate_callback =
-        WeakRefNewCallback(
-            anchor_,
-            this,
-            &PluginReverseInterface::BitcodeTranslate_MainThreadContinuation,
-            open_cont);
-    // Will always call the callback on success or failure.
-    pnacl_coordinator_.reset(
-        PnaclCoordinator::BitcodeToNative(plugin_,
-                                          mapped_url,
-                                          cache_identity,
-                                          translate_callback));
+    if (plugin_->nacl_interface()->IsPnaclEnabled()) {
+      pp::CompletionCallback translate_callback =
+          WeakRefNewCallback(
+              anchor_,
+              this,
+              &PluginReverseInterface::BitcodeTranslate_MainThreadContinuation,
+              open_cont);
+      // Will always call the callback on success or failure.
+      pnacl_coordinator_.reset(
+          PnaclCoordinator::BitcodeToNative(plugin_,
+                                            mapped_url,
+                                            cache_identity,
+                                            translate_callback));
+    } else {
+      // TODO(jvoung): Separate the error codes?
+      nacl::MutexLocker take(&mu_);
+      *p->op_complete_ptr = true;  // done...
+      *p->out_desc = -1;       // but failed.
+      p->error_info->SetReport(ERROR_MANIFEST_OPEN,
+                               "ServiceRuntime: GetPnaclFd failed -- pnacl not "
+                               "enabled with --enable-pnacl.");
+      NaClXCondVarBroadcast(&cv_);
+      return;
+    }
   }
   // p is deleted automatically
 }
@@ -698,29 +710,26 @@ bool ServiceRuntime::InitCommunication(nacl::DescWrapper* nacl_desc,
 }
 
 bool ServiceRuntime::Start(nacl::DescWrapper* nacl_desc,
-                           ErrorInfo* error_info, const nacl::string& url,
+                           ErrorInfo* error_info,
+                           const nacl::string& url,
+                           bool uses_ppapi,
+                           bool enable_ppapi_dev,
                            pp::CompletionCallback crash_cb) {
   PLUGIN_PRINTF(("ServiceRuntime::Start (nacl_desc=%p)\n",
                  reinterpret_cast<void*>(nacl_desc)));
 
-#ifdef NACL_STANDALONE
-  nacl::scoped_ptr<nacl::SelLdrLauncherStandalone>
-      tmp_subprocess(new nacl::SelLdrLauncherStandalone());
-#else
   nacl::scoped_ptr<SelLdrLauncherChrome>
       tmp_subprocess(new SelLdrLauncherChrome());
-#endif
   if (NULL == tmp_subprocess.get()) {
     PLUGIN_PRINTF(("ServiceRuntime::Start (subprocess create failed)\n"));
     error_info->SetReport(ERROR_SEL_LDR_CREATE_LAUNCHER,
                           "ServiceRuntime: failed to create sel_ldr launcher");
     return false;
   }
-#ifdef NACL_STANDALONE
-  bool started = tmp_subprocess->Start(url.c_str());
-#else
-  bool started = tmp_subprocess->Start(plugin_->pp_instance(), url.c_str());
-#endif
+  bool started = tmp_subprocess->Start(plugin_->pp_instance(),
+                                       url.c_str(),
+                                       uses_ppapi,
+                                       enable_ppapi_dev);
   if (!started) {
     PLUGIN_PRINTF(("ServiceRuntime::Start (start failed)\n"));
     error_info->SetReport(ERROR_SEL_LDR_LAUNCH,

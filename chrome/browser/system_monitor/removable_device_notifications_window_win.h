@@ -5,68 +5,58 @@
 #ifndef CHROME_BROWSER_SYSTEM_MONITOR_REMOVABLE_DEVICE_NOTIFICATIONS_WINDOW_WIN_H_
 #define CHROME_BROWSER_SYSTEM_MONITOR_REMOVABLE_DEVICE_NOTIFICATIONS_WINDOW_WIN_H_
 
-#include <windows.h>
-
-#include <map>
-#include <string>
-#include <vector>
-
 #include "base/basictypes.h"
-#include "base/file_path.h"
 #include "base/memory/ref_counted.h"
-#include "base/string16.h"
+#include "base/memory/scoped_ptr.h"
 #include "base/system_monitor/system_monitor.h"
+#include "chrome/browser/system_monitor/removable_storage_notifications.h"
+
+class FilePath;
 
 namespace chrome {
 
-// Gets device information given a |device_path|. On success, returns true and
-// fills in |unique_id|, |name|, and |removable|.
-typedef bool (*GetDeviceInfoFunc)(const FilePath& device,
-                                  string16* location,
-                                  std::string* unique_id,
-                                  string16* name,
-                                  bool* removable);
-
-// Returns a vector of all the removable devices that are connected.
-typedef std::vector<FilePath> (*GetAttachedDevicesFunc)();
-
-class RemovableDeviceNotificationsWindowWin;
-typedef RemovableDeviceNotificationsWindowWin RemovableDeviceNotifications;
+class PortableDeviceWatcherWin;
+class VolumeMountWatcherWin;
 
 class RemovableDeviceNotificationsWindowWin
-    : public base::RefCountedThreadSafe<RemovableDeviceNotificationsWindowWin> {
+    : public RemovableStorageNotifications {
  public:
-  // Should only be called by browser start up code.  Use GetInstance() instead.
-  RemovableDeviceNotificationsWindowWin();
+  // Creates an instance of RemovableDeviceNotificationsWindowWin. Should only
+  // be called by browser start up code. Use GetInstance() instead.
+  static RemovableDeviceNotificationsWindowWin* Create();
 
-  // base::SystemMonitor has a lifetime somewhat shorter than a Singleton and
-  // |this| is constructed/destroyed just after/before SystemMonitor.
-  static RemovableDeviceNotificationsWindowWin* GetInstance();
+  virtual ~RemovableDeviceNotificationsWindowWin();
 
   // Must be called after the file thread is created.
   void Init();
 
   // Finds the device that contains |path| and populates |device_info|.
   // Returns false if unable to find the device.
-  bool GetDeviceInfoForPath(
+  virtual bool GetDeviceInfoForPath(
       const FilePath& path,
-      base::SystemMonitor::RemovableStorageInfo* device_info);
+      base::SystemMonitor::RemovableStorageInfo* device_info) const OVERRIDE;
 
- protected:
-  // Only for use in unit tests.
-  void InitForTest(GetDeviceInfoFunc getDeviceInfo,
-                   GetAttachedDevicesFunc getAttachedDevices);
-
-  void OnDeviceChange(UINT event_type, LPARAM data);
+  virtual uint64 GetStorageSize(const std::string& location) const OVERRIDE;
 
  private:
-  friend class
-      base::RefCountedThreadSafe<RemovableDeviceNotificationsWindowWin>;
+  class PortableDeviceNotifications;
   friend class TestRemovableDeviceNotificationsWindowWin;
 
-  typedef std::map<FilePath, std::string> MountPointDeviceIdMap;
+  // To support unit tests, this constructor takes |volume_mount_watcher| and
+  // |portable_device_watcher| objects. These params are either constructed in
+  // unit tests or in RemovableDeviceNotificationsWindowWin::Create() function.
+  RemovableDeviceNotificationsWindowWin(
+      VolumeMountWatcherWin* volume_mount_watcher,
+      PortableDeviceWatcherWin* portable_device_watcher);
 
-  virtual ~RemovableDeviceNotificationsWindowWin();
+  // Gets the removable storage information given a |device_path|. On success,
+  // returns true and fills in |device_location|, |unique_id|, |name| and
+  // |removable|.
+  bool GetDeviceInfo(const FilePath& device_path,
+                     string16* device_location,
+                     std::string* unique_id,
+                     string16* name,
+                     bool* removable) const;
 
   static LRESULT CALLBACK WndProcThunk(HWND hwnd, UINT message, WPARAM wparam,
                                        LPARAM lparam);
@@ -74,29 +64,21 @@ class RemovableDeviceNotificationsWindowWin
   LRESULT CALLBACK WndProc(HWND hwnd, UINT message, WPARAM wparam,
                            LPARAM lparam);
 
-  void DoInit(GetAttachedDevicesFunc get_attached_devices_func);
-
-  void AddNewDevice(const FilePath& device_path);
-
-  void CheckDeviceTypeOnFileThread(const std::string& unique_id,
-                                   const FilePath::StringType& device_name,
-                                   const FilePath& device);
-
-  void ProcessDeviceAttachedOnUIThread(
-      const std::string& device_id,
-      const FilePath::StringType& device_name,
-      const FilePath& device);
+  void OnDeviceChange(UINT event_type, LPARAM data);
 
   // The window class of |window_|.
   ATOM window_class_;
+
   // The handle of the module that contains the window procedure of |window_|.
   HMODULE instance_;
   HWND window_;
 
-  GetDeviceInfoFunc get_device_info_func_;
+  // The volume mount point watcher, used to manage the mounted devices.
+  scoped_refptr<VolumeMountWatcherWin> volume_mount_watcher_;
 
-  // A map from device mount point to device id. Only accessed on the UI Thread.
-  MountPointDeviceIdMap device_ids_;
+  // The portable device watcher, used to manage media transfer protocol
+  // devices.
+  scoped_ptr<PortableDeviceWatcherWin> portable_device_watcher_;
 
   DISALLOW_COPY_AND_ASSIGN(RemovableDeviceNotificationsWindowWin);
 };

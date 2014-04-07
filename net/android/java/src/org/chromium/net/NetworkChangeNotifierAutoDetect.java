@@ -21,33 +21,72 @@ import org.chromium.base.ActivityStatus;
  * ACCESS_NETWORK_STATE permission.
  */
 public class NetworkChangeNotifierAutoDetect extends BroadcastReceiver
-        implements ActivityStatus.Listener {
+        implements ActivityStatus.StateListener {
+
+    /** Queries the ConnectivityManager for information about the current connection. */
+    static class ConnectivityManagerDelegate {
+        private final ConnectivityManager mConnectivityManager;
+
+        ConnectivityManagerDelegate(Context context) {
+            mConnectivityManager =
+                    (ConnectivityManager) context.getSystemService(Context.CONNECTIVITY_SERVICE);
+        }
+
+        // For testing.
+        ConnectivityManagerDelegate() {
+            // All the methods below should be overridden.
+            mConnectivityManager = null;
+        }
+
+        boolean activeNetworkExists() {
+            return mConnectivityManager.getActiveNetworkInfo() != null;
+        }
+
+        boolean isConnected() {
+            return mConnectivityManager.getActiveNetworkInfo().isConnected();
+        }
+
+        int getNetworkType() {
+            return mConnectivityManager.getActiveNetworkInfo().getType();
+        }
+
+        int getNetworkSubtype() {
+            return mConnectivityManager.getActiveNetworkInfo().getSubtype();
+        }
+    }
 
     private static final String TAG = "NetworkChangeNotifierAutoDetect";
 
     private final NetworkConnectivityIntentFilter mIntentFilter =
             new NetworkConnectivityIntentFilter();
 
-    private final NetworkChangeNotifier mOwner;
+    private final Observer mObserver;
 
-    private final Context mContext;
+    private Context mContext;
+    private ConnectivityManagerDelegate mConnectivityManagerDelegate;
     private boolean mRegistered;
     private int mConnectionType;
 
-    public NetworkChangeNotifierAutoDetect(NetworkChangeNotifier owner, Context context) {
-        mOwner = owner;
-        mContext = context;
-        mConnectionType = currentConnectionType(context);
-
-        ActivityStatus status = ActivityStatus.getInstance();
-        if (!status.isPaused()) {
-          registerReceiver();
-        }
-        status.registerListener(this);
+    /**
+     * Observer notified on the UI thread whenever a new connection type was detected.
+     */
+    public static interface Observer {
+        public void onConnectionTypeChanged(int newConnectionType);
     }
 
-    public int connectionType() {
-        return mConnectionType;
+    public NetworkChangeNotifierAutoDetect(Observer observer, Context context) {
+        mObserver = observer;
+        mContext = context;
+        mConnectivityManagerDelegate = new ConnectivityManagerDelegate(context);
+        mConnectionType = getCurrentConnectionType();
+        ActivityStatus.registerStateListener(this);
+    }
+
+    /**
+     * Allows overriding the ConnectivityManagerDelegate for tests.
+     */
+    void setConnectivityManagerDelegateForTests(ConnectivityManagerDelegate delegate) {
+        mConnectivityManagerDelegate = delegate;
     }
 
     public void destroy() {
@@ -74,16 +113,14 @@ public class NetworkChangeNotifierAutoDetect extends BroadcastReceiver
         }
     }
 
-    private int currentConnectionType(Context context) {
+    public int getCurrentConnectionType() {
         // Track exactly what type of connection we have.
-        ConnectivityManager connectivityManager = (ConnectivityManager)
-                context.getSystemService(Context.CONNECTIVITY_SERVICE);
-        NetworkInfo activeNetworkInfo = connectivityManager.getActiveNetworkInfo();
-        if (activeNetworkInfo == null) {
+        if (!mConnectivityManagerDelegate.activeNetworkExists() ||
+                !mConnectivityManagerDelegate.isConnected()) {
             return NetworkChangeNotifier.CONNECTION_NONE;
         }
 
-        switch (activeNetworkInfo.getType()) {
+        switch (mConnectivityManagerDelegate.getNetworkType()) {
             case ConnectivityManager.TYPE_ETHERNET:
                 return NetworkChangeNotifier.CONNECTION_ETHERNET;
             case ConnectivityManager.TYPE_WIFI:
@@ -92,7 +129,7 @@ public class NetworkChangeNotifierAutoDetect extends BroadcastReceiver
                 return NetworkChangeNotifier.CONNECTION_4G;
             case ConnectivityManager.TYPE_MOBILE:
                 // Use information from TelephonyManager to classify the connection.
-                switch (activeNetworkInfo.getSubtype()) {
+                switch (mConnectivityManagerDelegate.getNetworkSubtype()) {
                     case TelephonyManager.NETWORK_TYPE_GPRS:
                     case TelephonyManager.NETWORK_TYPE_EDGE:
                     case TelephonyManager.NETWORK_TYPE_CDMA:
@@ -122,26 +159,39 @@ public class NetworkChangeNotifierAutoDetect extends BroadcastReceiver
     // BroadcastReceiver
     @Override
     public void onReceive(Context context, Intent intent) {
-        boolean noConnection =
-                intent.getBooleanExtra(ConnectivityManager.EXTRA_NO_CONNECTIVITY, false);
-        int newConnectionType = noConnection ?
-                NetworkChangeNotifier.CONNECTION_NONE : currentConnectionType(context);
+        connectionTypeChanged();
+    }
 
-        if (newConnectionType != mConnectionType) {
-            mConnectionType = newConnectionType;
-            Log.d(TAG, "Network connectivity changed, type is: " + mConnectionType);
-            mOwner.notifyNativeObservers();
+    // ActivityStatus.StateListener
+    @Override
+    public void onActivityStateChange(int state) {
+        Context context = ActivityStatus.getActivity();
+        if (mContext != context && context != null) {
+            // Note that |context| can be null during testing. In this case |mContext| should not be
+            // overwritten.
+            mContext = context;
+        }
+        if (state == ActivityStatus.RESUMED) {
+            // Note that this also covers the case where the main activity is created. The CREATED
+            // event is always followed by the RESUMED event. This is a temporary "hack" until
+            // http://crbug.com/176837 is fixed. The CREATED event can't be used reliably for now
+            // since its notification is deferred. This means that it can immediately follow a
+            // DESTROYED/STOPPED/... event which is problematic.
+            // TODO(pliard): fix http://crbug.com/176837.
+            connectionTypeChanged();
+            registerReceiver();
+        } else if (state == ActivityStatus.PAUSED) {
+            unregisterReceiver();
         }
     }
 
-    // AcitivityStatus.Listener
-    @Override
-    public void onActivityStatusChanged(boolean isPaused) {
-        if (isPaused) {
-            unregisterReceiver();
-        } else {
-            registerReceiver();
-        }
+    private void connectionTypeChanged() {
+        int newConnectionType = getCurrentConnectionType();
+        if (newConnectionType == mConnectionType) return;
+
+        mConnectionType = newConnectionType;
+        Log.d(TAG, "Network connectivity changed, type is: " + mConnectionType);
+        mObserver.onConnectionTypeChanged(newConnectionType);
     }
 
     private static class NetworkConnectivityIntentFilter extends IntentFilter {

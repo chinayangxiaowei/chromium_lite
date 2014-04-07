@@ -7,8 +7,14 @@
 namespace chromeos {
 namespace switches {
 
+// Enables overriding the Chrome OS board type when running on Linux.
+const char kChromeOSReleaseBoard[] = "chromeos-release-board";
+
 // Forces the stub implementation of dbus clients.
 const char kDbusStub[] = "dbus-stub";
+
+// Enables the new NetworkStateHandler class.
+const char kEnableNewNetworkHandlers[] = "enable-new-network-handlers";
 
 // Sends test messages on first call to RequestUpdate (stub only).
 const char kSmsTestMessages[] = "sms-test-messages";

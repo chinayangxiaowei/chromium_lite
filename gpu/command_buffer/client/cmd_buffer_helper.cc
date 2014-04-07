@@ -28,7 +28,12 @@ CommandBufferHelper::CommandBufferHelper(CommandBuffer* command_buffer)
       commands_issued_(0),
       usable_(true),
       context_lost_(false),
+      flush_automatically_(true),
       last_flush_time_(0) {
+}
+
+void CommandBufferHelper::SetAutomaticFlushes(bool enabled) {
+  flush_automatically_ = enabled;
 }
 
 bool CommandBufferHelper::IsContextLost() {
@@ -172,7 +177,6 @@ int32 CommandBufferHelper::InsertToken() {
 // Waits until the current token value is greater or equal to the value passed
 // in argument.
 void CommandBufferHelper::WaitForToken(int32 token) {
-  TRACE_EVENT_IF_LONGER_THAN0(50, "gpu", "CommandBufferHelper::WaitForToken");
   if (!usable()) {
     return;
   }
@@ -241,8 +245,9 @@ void CommandBufferHelper::WaitForAvailableEntries(int32 count) {
       ((get_offset() == last_put_sent_) ? 16 : 2);
   if (pending > limit) {
     Flush();
-  } else if (commands_issued_ % kCommandsPerFlushCheck == 0) {
-#if !defined(OS_ANDROID) && !defined(OS_CHROMEOS)
+  } else if (flush_automatically_ &&
+             (commands_issued_ % kCommandsPerFlushCheck == 0)) {
+#if !defined(OS_ANDROID)
     // Allow this command buffer to be pre-empted by another if a "reasonable"
     // amount of work has been done. On highend machines, this reduces the
     // latency of GPU commands. However, on Android, this can cause the

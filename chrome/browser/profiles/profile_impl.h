@@ -13,8 +13,8 @@
 #include "base/gtest_prod_util.h"
 #include "base/memory/ref_counted.h"
 #include "base/memory/scoped_ptr.h"
+#include "base/prefs/public/pref_change_registrar.h"
 #include "base/timer.h"
-#include "chrome/browser/api/prefs/pref_change_registrar.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profile_impl_io_data.h"
 #include "content/public/browser/notification_observer.h"
@@ -22,9 +22,9 @@
 
 class NetPrefObserver;
 class PrefService;
+class PrefServiceBase;
 class PromoResourceService;
 class SSLConfigServiceManager;
-class VisitedLinkEventListener;
 
 #if defined(OS_CHROMEOS)
 namespace chromeos {
@@ -34,6 +34,10 @@ class Preferences;
 }
 #endif
 
+namespace base {
+class SequencedTaskRunner;
+}
+
 namespace content {
 class SpeechRecognitionPreferences;
 }
@@ -42,10 +46,17 @@ namespace extensions {
 class ExtensionSystem;
 }
 
+namespace policy {
+class UserCloudPolicyManager;
+}
+
 // The default profile implementation.
 class ProfileImpl : public Profile,
                     public content::NotificationObserver {
  public:
+  // Value written to prefs when the exit type is EXIT_NORMAL. Public for tests.
+  static const char* const kPrefExitTypeNormal;
+
   virtual ~ProfileImpl();
 
   static void RegisterUserPrefs(PrefService* prefs);
@@ -58,22 +69,24 @@ class ProfileImpl : public Profile,
   virtual net::URLRequestContextGetter* GetRequestContextForRenderProcess(
       int renderer_child_id) OVERRIDE;
   virtual net::URLRequestContextGetter* GetRequestContextForStoragePartition(
-      const std::string& partition_id) OVERRIDE;
+      const FilePath& partition_path,
+      bool in_memory) OVERRIDE;
   virtual net::URLRequestContextGetter* GetMediaRequestContext() OVERRIDE;
   virtual net::URLRequestContextGetter* GetMediaRequestContextForRenderProcess(
       int renderer_child_id) OVERRIDE;
   virtual net::URLRequestContextGetter*
       GetMediaRequestContextForStoragePartition(
-          const std::string& partition_id) OVERRIDE;
+          const FilePath& partition_path,
+          bool in_memory) OVERRIDE;
   virtual content::ResourceContext* GetResourceContext() OVERRIDE;
   virtual content::GeolocationPermissionContext*
       GetGeolocationPermissionContext() OVERRIDE;
   virtual content::SpeechRecognitionPreferences*
       GetSpeechRecognitionPreferences() OVERRIDE;
-  virtual bool DidLastSessionExitCleanly() OVERRIDE;
   virtual quota::SpecialStoragePolicy* GetSpecialStoragePolicy() OVERRIDE;
 
   // Profile implementation:
+  virtual scoped_refptr<base::SequencedTaskRunner> GetIOTaskRunner() OVERRIDE;
   virtual std::string GetProfileName() OVERRIDE;
   virtual bool IsOffTheRecord() const OVERRIDE;
   virtual Profile* GetOffTheRecordProfile() OVERRIDE;
@@ -82,15 +95,12 @@ class ProfileImpl : public Profile,
   virtual Profile* GetOriginalProfile() OVERRIDE;
   virtual history::TopSites* GetTopSites() OVERRIDE;
   virtual history::TopSites* GetTopSitesWithoutCreating() OVERRIDE;
-  virtual VisitedLinkMaster* GetVisitedLinkMaster() OVERRIDE;
   virtual ExtensionService* GetExtensionService() OVERRIDE;
-  virtual extensions::UserScriptMaster* GetUserScriptMaster() OVERRIDE;
-  virtual ExtensionProcessManager* GetExtensionProcessManager() OVERRIDE;
-  virtual extensions::EventRouter* GetExtensionEventRouter() OVERRIDE;
   virtual ExtensionSpecialStoragePolicy*
       GetExtensionSpecialStoragePolicy() OVERRIDE;
   virtual GAIAInfoUpdateService* GetGAIAInfoUpdateService() OVERRIDE;
-  virtual policy::UserCloudPolicyManager* GetUserCloudPolicyManager() OVERRIDE;
+  virtual policy::ManagedModePolicyProvider*
+      GetManagedModePolicyProvider() OVERRIDE;
   virtual policy::PolicyService* GetPolicyService() OVERRIDE;
   virtual PrefService* GetPrefs() OVERRIDE;
   virtual PrefService* GetOffTheRecordPrefs() OVERRIDE;
@@ -101,14 +111,17 @@ class ProfileImpl : public Profile,
   virtual ProtocolHandlerRegistry* GetProtocolHandlerRegistry() OVERRIDE;
   virtual bool IsSameProfile(Profile* profile) OVERRIDE;
   virtual base::Time GetStartTime() const OVERRIDE;
-  virtual void MarkAsCleanShutdown() OVERRIDE;
   virtual void InitPromoResources() OVERRIDE;
   virtual FilePath last_selected_directory() OVERRIDE;
   virtual void set_last_selected_directory(const FilePath& path) OVERRIDE;
   virtual chrome_browser_net::Predictor* GetNetworkPredictor() OVERRIDE;
-  virtual void ClearNetworkingHistorySince(base::Time time) OVERRIDE;
+  virtual void ClearNetworkingHistorySince(
+      base::Time time,
+      const base::Closure& completion) OVERRIDE;
   virtual GURL GetHomePage() OVERRIDE;
   virtual bool WasCreatedByVersionOrLater(const std::string& version) OVERRIDE;
+  virtual void SetExitType(ExitType exit_type) OVERRIDE;
+  virtual ExitType GetLastSessionExitType() OVERRIDE;
 
 #if defined(OS_CHROMEOS)
   virtual void ChangeAppLocale(const std::string& locale,
@@ -139,12 +152,18 @@ class ProfileImpl : public Profile,
 
   ProfileImpl(const FilePath& path,
               Delegate* delegate,
-              CreateMode create_mode);
+              CreateMode create_mode,
+              base::SequencedTaskRunner* sequenced_task_runner);
 
   // Does final initialization. Should be called after prefs were loaded.
   void DoFinalInit(bool is_new_profile);
 
   void InitHostZoomMap();
+
+  void OnDefaultZoomLevelChanged();
+
+  void OnInitializationCompleted(PrefServiceBase* pref_service,
+                                 bool succeeded);
 
   // Does final prefs initialization and calls Init().
   void OnPrefsLoaded(bool success);
@@ -187,12 +206,16 @@ class ProfileImpl : public Profile,
   //  that the declaration occurs AFTER things it depends on as destruction
   //  happens in reverse order of declaration.
 
+#if defined(ENABLE_CONFIGURATION_POLICY)
   // |prefs_| depends on |policy_service_|, which depends on
-  // |user_cloud_policy_manager_|.
-  // TODO(bauerb, mnissler): Once |prefs_| is a ProfileKeyedService,
-  // |policy_service_| and |user_cloud_policy_manager_| should become
-  // ProfiledKeyedServices as well.
+  // |user_cloud_policy_manager_| and |managed_mode_policy_provider_|.
+  // TODO(bauerb, mnissler): Once |prefs_| is a ProfileKeyedService, these
+  // should become proper ProfileKeyedServices as well.
+#if !defined(OS_CHROMEOS)
   scoped_ptr<policy::UserCloudPolicyManager> cloud_policy_manager_;
+#endif
+  scoped_ptr<policy::ManagedModePolicyProvider> managed_mode_policy_provider_;
+#endif
   scoped_ptr<policy::PolicyService> policy_service_;
 
   // Keep |prefs_| on top for destruction order because |extension_prefs_|,
@@ -200,8 +223,6 @@ class ProfileImpl : public Profile,
   // pointers to |prefs_| and shall be destructed first.
   scoped_ptr<PrefService> prefs_;
   scoped_ptr<PrefService> otr_prefs_;
-  scoped_ptr<VisitedLinkEventListener> visited_link_event_listener_;
-  scoped_ptr<VisitedLinkMaster> visited_link_master_;
   ProfileImplIOData::Handle io_data_;
   scoped_refptr<ExtensionSpecialStoragePolicy>
       extension_special_storage_policy_;
@@ -214,8 +235,9 @@ class ProfileImpl : public Profile,
   scoped_ptr<GAIAInfoUpdateService> gaia_info_update_service_;
   scoped_refptr<history::ShortcutsBackend> shortcuts_backend_;
 
-  // Whether or not the last session exited cleanly. This is set only once.
-  bool last_session_exited_cleanly_;
+  // Exit type the last time the profile was opened. This is set only once from
+  // prefs.
+  ExitType last_session_exit_type_;
 
 #if defined(ENABLE_SESSION_SERVICE)
   base::OneShotTimer<ProfileImpl> create_session_service_timer_;

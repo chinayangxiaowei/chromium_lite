@@ -5,10 +5,10 @@
 #include "gpu/command_buffer/service/vertex_attrib_manager.h"
 
 #include "base/memory/scoped_ptr.h"
-#include "gpu/command_buffer/common/gl_mock.h"
 #include "gpu/command_buffer/service/feature_info.h"
 #include "gpu/command_buffer/service/test_helper.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "ui/gl/gl_mock.h"
 
 using ::testing::Pointee;
 using ::testing::_;
@@ -37,19 +37,19 @@ class VertexAttribManagerTest : public testing::Test {
           .RetiresOnSaturation();
     }
 
-    manager_.reset(new VertexAttribManager());
+    manager_ = new VertexAttribManager();
     manager_->Initialize(kNumVertexAttribs);
   }
 
   virtual void TearDown() {
-    manager_.reset();
+    manager_ = NULL;
     ::gfx::GLInterface::SetGLInterface(NULL);
     gl_.reset();
   }
 
   // Use StrictMock to make 100% sure we know how GL will be called.
   scoped_ptr< ::testing::StrictMock< ::gfx::MockGLInterface> > gl_;
-  scoped_ptr<VertexAttribManager> manager_;
+  VertexAttribManager::Ref manager_;
 };
 
 // GCC requires these declarations, but MSVC requires they not be present
@@ -77,10 +77,6 @@ TEST_F(VertexAttribManagerTest, Basic) {
     EXPECT_EQ(GL_FALSE, info->normalized());
     EXPECT_EQ(0, info->gl_stride());
     EXPECT_FALSE(info->enabled());
-    EXPECT_EQ(0.0f, info->value().v[0]);
-    EXPECT_EQ(0.0f, info->value().v[1]);
-    EXPECT_EQ(0.0f, info->value().v[2]);
-    EXPECT_EQ(1.0f, info->value().v[3]);
     manager_->Enable(ii, true);
     EXPECT_TRUE(info->enabled());
   }
@@ -131,7 +127,7 @@ TEST_F(VertexAttribManagerTest, SetAttribInfo) {
 
   // The VertexAttribManager must be destroyed before the BufferManager
   // so it releases its buffers.
-  manager_.reset();
+  manager_ = NULL;
   buffer_manager.Destroy(false);
 }
 
@@ -185,7 +181,7 @@ TEST_F(VertexAttribManagerTest, CanAccess) {
 
   // The VertexAttribManager must be destroyed before the BufferManager
   // so it releases its buffers.
-  manager_.reset();
+  manager_ = NULL;
   buffer_manager.Destroy(false);
 }
 
@@ -222,7 +218,7 @@ TEST_F(VertexAttribManagerTest, Unbind) {
 
   // The VertexAttribManager must be destroyed before the BufferManager
   // so it releases its buffers.
-  manager_.reset();
+  manager_ = NULL;
   buffer_manager.Destroy(false);
 }
 

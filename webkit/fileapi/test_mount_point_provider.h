@@ -9,8 +9,8 @@
 #include "base/memory/ref_counted.h"
 #include "base/memory/scoped_ptr.h"
 #include "webkit/fileapi/file_system_mount_point_provider.h"
-#include "webkit/fileapi/fileapi_export.h"
 #include "webkit/fileapi/task_runner_bound_observer_list.h"
+#include "webkit/storage/webkit_storage_export.h"
 
 namespace base {
 class SequencedTaskRunner;
@@ -24,7 +24,7 @@ class FileSystemQuotaUtil;
 // This should be only used for testing.
 // This mount point provider uses LocalFileUtil and stores data file
 // under the given directory.
-class FILEAPI_EXPORT_PRIVATE TestMountPointProvider
+class WEBKIT_STORAGE_EXPORT_PRIVATE TestMountPointProvider
     : public FileSystemMountPointProvider {
  public:
   using FileSystemMountPointProvider::ValidateFileSystemCallback;
@@ -42,9 +42,7 @@ class FILEAPI_EXPORT_PRIVATE TestMountPointProvider
       bool create,
       const ValidateFileSystemCallback& callback) OVERRIDE;
   virtual FilePath GetFileSystemRootPathOnFileThread(
-      const GURL& origin_url,
-      FileSystemType type,
-      const FilePath& virtual_path,
+      const FileSystemURL& url,
       bool create) OVERRIDE;
   virtual bool IsAccessAllowed(const FileSystemURL& url) OVERRIDE;
   virtual bool IsRestrictedFileName(const FilePath& filename) const OVERRIDE;
@@ -58,6 +56,7 @@ class FILEAPI_EXPORT_PRIVATE TestMountPointProvider
   virtual webkit_blob::FileStreamReader* CreateFileStreamReader(
       const FileSystemURL& url,
       int64 offset,
+      const base::Time& expected_modification_time,
       FileSystemContext* context) const OVERRIDE;
   virtual FileStreamWriter* CreateFileStreamWriter(
       const FileSystemURL& url,

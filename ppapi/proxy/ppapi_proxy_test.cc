@@ -4,10 +4,13 @@
 
 #include "ppapi/proxy/ppapi_proxy_test.h"
 
+#include <sstream>
+
 #include "base/bind.h"
 #include "base/compiler_specific.h"
 #include "base/message_loop_proxy.h"
 #include "base/observer_list.h"
+#include "base/process_util.h"
 #include "ipc/ipc_sync_channel.h"
 #include "ppapi/c/pp_errors.h"
 #include "ppapi/c/private/ppb_proxy_private.h"
@@ -169,9 +172,9 @@ void PluginProxyTestHarness::SetUpHarness() {
 
   plugin_dispatcher_.reset(new PluginDispatcher(
       &MockGetInterface,
+      PpapiPermissions(),
       false));
   plugin_dispatcher_->InitWithTestSink(&sink());
-  plugin_dispatcher_->DidCreateInstance(pp_instance());
   // The plugin proxy delegate is needed for
   // |PluginProxyDelegate::GetBrowserSender| which is used
   // in |ResourceCreationProxy::GetConnection| to get the channel to the
@@ -179,6 +182,7 @@ void PluginProxyTestHarness::SetUpHarness() {
   // for test purposes.
   plugin_delegate_mock_.set_browser_sender(plugin_dispatcher_.get());
   PluginGlobals::Get()->set_plugin_proxy_delegate(&plugin_delegate_mock_);
+  plugin_dispatcher_->DidCreateInstance(pp_instance());
 }
 
 void PluginProxyTestHarness::SetUpHarnessWithChannel(
@@ -195,10 +199,14 @@ void PluginProxyTestHarness::SetUpHarnessWithChannel(
 
   plugin_dispatcher_.reset(new PluginDispatcher(
       &MockGetInterface,
+      PpapiPermissions(),
       false));
   plugin_dispatcher_->InitPluginWithChannel(&plugin_delegate_mock_,
+                                            base::kNullProcessId,
                                             channel_handle,
                                             is_client);
+  plugin_delegate_mock_.set_browser_sender(plugin_dispatcher_.get());
+  PluginGlobals::Get()->set_plugin_proxy_delegate(&plugin_delegate_mock_);
   plugin_dispatcher_->DidCreateInstance(pp_instance());
 }
 
@@ -223,7 +231,7 @@ PluginProxyTestHarness::PluginDelegateMock::GetShutdownEvent() {
 IPC::PlatformFileForTransit
 PluginProxyTestHarness::PluginDelegateMock::ShareHandleWithRemote(
     base::PlatformFile handle,
-    const IPC::SyncChannel& /* channel */,
+    base::ProcessId /* remote_pid */,
     bool should_close_source) {
   return IPC::GetFileHandleForProcess(handle,
                                       base::Process::Current().handle(),
@@ -242,12 +250,6 @@ uint32 PluginProxyTestHarness::PluginDelegateMock::Register(
 
 void PluginProxyTestHarness::PluginDelegateMock::Unregister(
     uint32 plugin_dispatcher_id) {
-}
-
-bool PluginProxyTestHarness::PluginDelegateMock::SendToBrowser(
-    IPC::Message* msg) {
-  NOTREACHED();
-  return false;
 }
 
 IPC::Sender* PluginProxyTestHarness::PluginDelegateMock::GetBrowserSender() {
@@ -314,7 +316,8 @@ void HostProxyTestHarness::SetUpHarness() {
   host_dispatcher_.reset(new HostDispatcher(
       pp_module(),
       &MockGetInterface,
-      status_receiver_.release()));
+      status_receiver_.release(),
+      PpapiPermissions::AllPermissions()));
   host_dispatcher_->InitWithTestSink(&sink());
   HostDispatcher::SetForInstance(pp_instance(), host_dispatcher_.get());
 }
@@ -333,9 +336,11 @@ void HostProxyTestHarness::SetUpHarnessWithChannel(
   host_dispatcher_.reset(new HostDispatcher(
       pp_module(),
       &MockGetInterface,
-      status_receiver_.release()));
+      status_receiver_.release(),
+      PpapiPermissions::AllPermissions()));
   ppapi::Preferences preferences;
-  host_dispatcher_->InitHostWithChannel(&delegate_mock_, channel_handle,
+  host_dispatcher_->InitHostWithChannel(&delegate_mock_,
+                                        base::kNullProcessId, channel_handle,
                                         is_client, preferences);
   HostDispatcher::SetForInstance(pp_instance(), host_dispatcher_.get());
 }
@@ -358,7 +363,7 @@ base::WaitableEvent* HostProxyTestHarness::DelegateMock::GetShutdownEvent() {
 IPC::PlatformFileForTransit
 HostProxyTestHarness::DelegateMock::ShareHandleWithRemote(
     base::PlatformFile handle,
-    const IPC::SyncChannel& /* channel */,
+    base::ProcessId /* remote_pid */,
     bool should_close_source) {
   return IPC::GetFileHandleForProcess(handle,
                                       base::Process::Current().handle(),
@@ -411,8 +416,11 @@ void TwoWayTest::SetUp() {
   io_thread_.StartWithOptions(options);
   plugin_thread_.Start();
 
-  IPC::ChannelHandle handle;
-  handle.name = "TwoWayTestChannel";
+  // Construct the IPC handle name using the process ID so we can safely run
+  // multiple |TwoWayTest|s concurrently.
+  std::ostringstream handle_name;
+  handle_name << "TwoWayTestChannel" << base::GetCurrentProcId();
+  IPC::ChannelHandle handle(handle_name.str());
   base::WaitableEvent remote_harness_set_up(true, false);
   plugin_thread_.message_loop_proxy()->PostTask(
       FROM_HERE,

@@ -23,7 +23,8 @@ HostController::HostController(int device_port,
       forward_to_host_(forward_to_host),
       forward_to_host_port_(forward_to_host_port),
       adb_port_(adb_port),
-      exit_notifier_fd_(exit_notifier_fd) {
+      exit_notifier_fd_(exit_notifier_fd),
+      ready_(false) {
   adb_control_socket_.set_exit_notifier_fd(exit_notifier_fd);
 }
 
@@ -34,7 +35,7 @@ void HostController::StartForwarder(
     scoped_ptr<Socket> host_server_data_socket) {
   scoped_ptr<Socket> adb_data_socket(new Socket);
   if (!adb_data_socket->ConnectTcp("", adb_port_)) {
-    LOG(ERROR) << "Could not Connect AdbDataSocket on port: "
+    LOG(ERROR) << "Could not connect AdbDataSocket on port: "
                << adb_port_;
     return;
   }
@@ -60,28 +61,48 @@ void HostController::StartForwarder(
   forwarder->Start();
 }
 
-void HostController::Run() {
+bool HostController::Connect() {
   if (!adb_control_socket_.ConnectTcp("", adb_port_)) {
-    LOG(ERROR) << "Could not Connect HostController socket on port: "
+    LOG(ERROR) << "Could not connect HostController socket on port: "
                << adb_port_;
-    return;
+    return false;
   }
   // Send the command to the device start listening to the "device_forward_port"
-  SendCommand(command::LISTEN, device_port_, &adb_control_socket_);
-  if (!ReceivedCommand(command::BIND_SUCCESS, &adb_control_socket_)) {
+  bool send_command_success = SendCommand(
+      command::LISTEN, device_port_, &adb_control_socket_);
+  CHECK(send_command_success);
+  int device_port_allocated;
+  command::Type command;
+  if (!ReadCommand(&adb_control_socket_, &device_port_allocated, &command) ||
+      command != command::BIND_SUCCESS) {
     LOG(ERROR) << "Device binding error using port " << device_port_;
     adb_control_socket_.Close();
-    return;
+    return false;
   }
+  // When doing dynamically allocation of port, we get the port from the
+  // BIND_SUCCESS command we received above.
+  device_port_ = device_port_allocated;
+  ready_ = true;
+  return true;
+}
+
+void HostController::Run() {
+  CHECK(ready_) << "HostController not ready. Must call Connect() first.";
   while (true) {
     if (!ReceivedCommand(command::ACCEPT_SUCCESS,
                          &adb_control_socket_)) {
+      // TODO(pliard): This can also happen if device_forwarder was
+      // intentionally killed before host_forwarder. In that case,
+      // device_forwarder should send a notification to the host.  Currently the
+      // error message below is always emitted to the log file although this is
+      // not necessarily an error.
       LOG(ERROR) << "Device socket error on accepting using port "
                  << device_port_;
       break;
     }
     // Try to connect to host server.
     scoped_ptr<Socket> host_server_data_socket(new Socket);
+    host_server_data_socket->set_exit_notifier_fd(exit_notifier_fd_);
     if (!host_server_data_socket->ConnectTcp(
             forward_to_host_, forward_to_host_port_)) {
       LOG(ERROR) << "Could not Connect HostServerData socket on port: "

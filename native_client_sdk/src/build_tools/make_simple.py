@@ -2,9 +2,10 @@
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
-# This is a simplified Makefile generator for single-target gyp files.
-# It was originally designed for generating readable Makefiles for the
-# the NaCL examples.
+"""This is a simplified Makefile generator for single-target gyp files.
+It was originally designed for generating readable Makefiles for the
+the NaCL examples.
+"""
 
 # pylint: disable=C0301
 
@@ -47,8 +48,9 @@ BUILDTYPES = %(all_configs)s
 # Check for valid build configuration
 ifeq (,$(findstring $(BUILDTYPE),$(BUILDTYPES)))
 $(warning Possible build configurations are: $(BUILDTYPES))
-$(error Can not use BUILDTYPE=$(BUILDTYPE) with this Makefile.)
-endif
+$(warning Cannot use BUILDTYPE=$(BUILDTYPE) with this Makefile.)
+all:
+else
 
 # Target toolchain
 CC.target ?= %(CC.target)s
@@ -127,7 +129,7 @@ $(TARGET): $(OBJS)
 link_section = """
 $(TARGET): $(OBJS)
 \t@mkdir -p $(dir $@)
-\t$(LINK.%(toolset)s) $(LDFLAGS_%(target_name_var)s_$(BUILDTYPE)) $(LDFLAGS.%(toolset)s) -o $@ -Wl,--start-group $^ -Wl,--end-group $(LIBS_%(target_name_var)s_$(BUILDTYPE))
+\t$(LINK.%(toolset)s) $(LDFLAGS_%(target_name_var)s_$(BUILDTYPE)) $(LDFLAGS.%(toolset)s) -o $@ -Wl,--start-group $^ $(LIBS_%(target_name_var)s_$(BUILDTYPE)) -Wl,--end-group
 """
 
 
@@ -294,6 +296,8 @@ def GenerateOutput(target_list, target_dicts, data, params):
   makefile.write('''
 # include (if they exists) the .d dependancy files that the compiler generates
 -include $(DEPFILES)
+
+endif
 ''')
 
   makefile.close()

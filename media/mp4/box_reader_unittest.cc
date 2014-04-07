@@ -86,7 +86,7 @@ TEST_F(BoxReaderTest, ExpectedOperationTest) {
   std::vector<uint8> buf = GetBuf();
   bool err;
   scoped_ptr<BoxReader> reader(
-      BoxReader::ReadTopLevelBox(&buf[0], buf.size(), &err));
+      BoxReader::ReadTopLevelBox(&buf[0], buf.size(), LogCB(), &err));
   EXPECT_FALSE(err);
   EXPECT_TRUE(reader.get());
 
@@ -114,7 +114,7 @@ TEST_F(BoxReaderTest, OuterTooShortTest) {
 
   // Create a soft failure by truncating the outer box.
   scoped_ptr<BoxReader> r(
-      BoxReader::ReadTopLevelBox(&buf[0], buf.size() - 2, &err));
+      BoxReader::ReadTopLevelBox(&buf[0], buf.size() - 2, LogCB(), &err));
 
   EXPECT_FALSE(err);
   EXPECT_FALSE(r.get());
@@ -127,7 +127,7 @@ TEST_F(BoxReaderTest, InnerTooLongTest) {
   // Make an inner box too big for its outer box.
   buf[25] = 1;
   scoped_ptr<BoxReader> reader(
-      BoxReader::ReadTopLevelBox(&buf[0], buf.size(), &err));
+      BoxReader::ReadTopLevelBox(&buf[0], buf.size(), LogCB(), &err));
 
   SkipBox box;
   EXPECT_FALSE(box.Parse(reader.get()));
@@ -140,16 +140,16 @@ TEST_F(BoxReaderTest, WrongFourCCTest) {
   // Set an unrecognized top-level FourCC.
   buf[5] = 1;
   scoped_ptr<BoxReader> reader(
-      BoxReader::ReadTopLevelBox(&buf[0], buf.size(), &err));
+      BoxReader::ReadTopLevelBox(&buf[0], buf.size(), LogCB(), &err));
   EXPECT_FALSE(reader.get());
   EXPECT_TRUE(err);
 }
 
-TEST_F(BoxReaderTest, ChildrenTest) {
+TEST_F(BoxReaderTest, ScanChildrenTest) {
   std::vector<uint8> buf = GetBuf();
   bool err;
   scoped_ptr<BoxReader> reader(
-      BoxReader::ReadTopLevelBox(&buf[0], buf.size(), &err));
+      BoxReader::ReadTopLevelBox(&buf[0], buf.size(), LogCB(), &err));
 
   EXPECT_TRUE(reader->SkipBytes(16) && reader->ScanChildren());
 
@@ -160,11 +160,25 @@ TEST_F(BoxReaderTest, ChildrenTest) {
 
   std::vector<PsshBox> kids;
 
-  EXPECT_TRUE(reader->ReadAllChildren(&kids));
+  EXPECT_TRUE(reader->ReadChildren(&kids));
   EXPECT_EQ(2u, kids.size());
   kids.clear();
   EXPECT_FALSE(reader->ReadChildren(&kids));
   EXPECT_TRUE(reader->MaybeReadChildren(&kids));
+}
+
+TEST_F(BoxReaderTest, ReadAllChildrenTest) {
+  std::vector<uint8> buf = GetBuf();
+  // Modify buffer to exclude its last 'free' box
+  buf[3] = 0x38;
+  bool err;
+  scoped_ptr<BoxReader> reader(
+      BoxReader::ReadTopLevelBox(&buf[0], buf.size(), LogCB(), &err));
+
+  std::vector<PsshBox> kids;
+  EXPECT_TRUE(reader->SkipBytes(16) && reader->ReadAllChildren(&kids));
+  EXPECT_EQ(2u, kids.size());
+  EXPECT_EQ(kids[0].val, 0xdeadbeef);   // Ensure order is preserved
 }
 
 }  // namespace mp4

@@ -38,6 +38,7 @@ class DialogFrameView : public views::NonClientFrameView,
                              gfx::Path* window_mask) OVERRIDE;
   virtual void ResetWindowControls() OVERRIDE;
   virtual void UpdateWindowIcon() OVERRIDE;
+  virtual void UpdateWindowTitle() OVERRIDE;
 
   // Overridden from View:
   virtual std::string GetClassName() const OVERRIDE;
@@ -52,6 +53,7 @@ class DialogFrameView : public views::NonClientFrameView,
   gfx::Insets GetPaddingInsets() const;
   gfx::Insets GetClientInsets() const;
 
+  scoped_ptr<gfx::Font> title_font_;
   gfx::Rect title_display_rect_;
 
   views::ImageButton* close_button_;

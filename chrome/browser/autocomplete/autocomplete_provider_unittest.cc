@@ -59,7 +59,7 @@ class TestProvider : public AutocompleteProvider {
   }
 
  private:
-  ~TestProvider() {}
+  virtual ~TestProvider() {}
 
   void Run();
 
@@ -137,7 +137,7 @@ void TestProvider::AddResultsWithSearchTermsArgs(
         new TemplateURLRef::SearchTermsArgs(search_terms_args));
     if (!match_keyword_.empty()) {
       match.keyword = match_keyword_;
-      ASSERT_TRUE(match.GetTemplateURL(profile_) != NULL);
+      ASSERT_TRUE(match.GetTemplateURL(profile_, false) != NULL);
     }
 
     matches_.push_back(match);
@@ -199,7 +199,7 @@ class AutocompleteProviderTest : public testing::Test,
   TestingProfile profile_;
 };
 
-void AutocompleteProviderTest:: RegisterTemplateURL(
+void AutocompleteProviderTest::RegisterTemplateURL(
     const string16 keyword,
     const std::string& template_url) {
   TemplateURLServiceFactory::GetInstance()->SetTestingFactoryAndUse(
@@ -212,6 +212,7 @@ void AutocompleteProviderTest:: RegisterTemplateURL(
       TemplateURLServiceFactory::GetForProfile(&profile_);
   turl_model->Add(default_t_url);
   turl_model->SetDefaultSearchProvider(default_t_url);
+  turl_model->Load();
   TemplateURLID default_provider_id = default_t_url->id();
   ASSERT_NE(0, default_provider_id);
 }
@@ -382,8 +383,9 @@ void AutocompleteProviderTest::RunAssistedQueryStatsTest(
 
 void AutocompleteProviderTest::RunQuery(const string16 query) {
   result_.Reset();
-  controller_->Start(query, string16(), true, false, true,
-      AutocompleteInput::ALL_MATCHES);
+  controller_->Start(AutocompleteInput(
+      query, string16::npos, string16(), true, false, true,
+      AutocompleteInput::ALL_MATCHES));
 
   if (!controller_->done())
     // The message loop will terminate when all autocomplete input has been
@@ -397,9 +399,9 @@ void AutocompleteProviderTest::RunExactKeymatchTest(
   // created in ResetControllerWithKeywordAndSearchProviders().  The default
   // match should thus be a keyword match iff |allow_exact_keyword_match| is
   // true.
-  controller_->Start(ASCIIToUTF16("k test"), string16(), true, false,
-                     allow_exact_keyword_match,
-                     AutocompleteInput::SYNCHRONOUS_MATCHES);
+  controller_->Start(AutocompleteInput(
+      ASCIIToUTF16("k test"), string16::npos, string16(), true, false,
+      allow_exact_keyword_match, AutocompleteInput::SYNCHRONOUS_MATCHES));
   EXPECT_TRUE(controller_->done());
   EXPECT_EQ(allow_exact_keyword_match ?
       AutocompleteProvider::TYPE_KEYWORD : AutocompleteProvider::TYPE_SEARCH,

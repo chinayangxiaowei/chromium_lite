@@ -66,7 +66,13 @@ BASE_EXPORT bool IsAltPressed();
 // if the OS is Vista or later.
 BASE_EXPORT bool UserAccountControlIsEnabled();
 
-// Sets the string value for given key in given IPropertyStore.
+// Sets the boolean value for a given key in given IPropertyStore.
+BASE_EXPORT bool SetBooleanValueForPropertyStore(
+    IPropertyStore* property_store,
+    const PROPERTYKEY& property_key,
+    bool property_bool_value);
+
+// Sets the string value for a given key in given IPropertyStore.
 BASE_EXPORT bool SetStringValueForPropertyStore(
     IPropertyStore* property_store,
     const PROPERTYKEY& property_key,
@@ -77,11 +83,6 @@ BASE_EXPORT bool SetStringValueForPropertyStore(
 // Win7.
 BASE_EXPORT bool SetAppIdForPropertyStore(IPropertyStore* property_store,
                                           const wchar_t* app_id);
-
-// Sets the DualModeApp property to |is_dual_mode| in |property_store|. This
-// method is intended for tagging dual mode applications in Win8+.
-BASE_EXPORT bool SetDualModeForPropertyStore(IPropertyStore* property_store,
-                                             bool is_dual_mode);
 
 // Adds the specified |command| using the specified |name| to the AutoRun key.
 // |root_key| could be HKCU or HKLM or the root of any user hive.
@@ -104,6 +105,10 @@ BASE_EXPORT bool ReadCommandFromAutoRun(HKEY root_key,
 // this. In particular, TerminateProcess() is not caught.
 BASE_EXPORT void SetShouldCrashOnProcessDetach(bool crash);
 BASE_EXPORT bool ShouldCrashOnProcessDetach();
+
+// Adjusts the abort behavior so that crash reports can be generated when the
+// process is aborted.
+BASE_EXPORT void SetAbortBehaviorForCrashReporting();
 
 // A tablet by this definition is something that has integrated multi-touch
 // ready to use and also has screen resolution not greater than 1366x768.

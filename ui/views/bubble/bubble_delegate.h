@@ -11,6 +11,10 @@
 #include "ui/views/widget/widget_delegate.h"
 #include "ui/views/widget/widget_observer.h"
 
+namespace gfx {
+class Rect;
+}
+
 namespace ui {
 class SlideAnimation;
 }
@@ -27,9 +31,6 @@ class VIEWS_EXPORT BubbleDelegateView : public WidgetDelegateView,
                                         public ui::AnimationDelegate,
                                         public WidgetObserver {
  public:
-  // The default bubble background color.
-  static const SkColor kBackgroundColor;
-
   BubbleDelegateView();
   BubbleDelegateView(View* anchor_view,
                      BubbleBorder::ArrowLocation arrow_location);
@@ -39,7 +40,6 @@ class VIEWS_EXPORT BubbleDelegateView : public WidgetDelegateView,
   static Widget* CreateBubble(BubbleDelegateView* bubble_delegate);
 
   // WidgetDelegate overrides:
-  virtual View* GetInitiallyFocusedView() OVERRIDE;
   virtual BubbleDelegateView* AsBubbleDelegate() OVERRIDE;
   virtual bool CanActivate() const OVERRIDE;
   virtual View* GetContentsView() OVERRIDE;
@@ -49,7 +49,8 @@ class VIEWS_EXPORT BubbleDelegateView : public WidgetDelegateView,
   virtual void OnWidgetClosing(Widget* widget) OVERRIDE;
   virtual void OnWidgetVisibilityChanged(Widget* widget, bool visible) OVERRIDE;
   virtual void OnWidgetActivationChanged(Widget* widget, bool active) OVERRIDE;
-  virtual void OnWidgetMoved(Widget* widget) OVERRIDE;
+  virtual void OnWidgetBoundsChanged(Widget* widget,
+                                     const gfx::Rect& new_bounds) OVERRIDE;
 
   bool close_on_esc() const { return close_on_esc_; }
   void set_close_on_esc(bool close_on_esc) { close_on_esc_ = close_on_esc; }
@@ -62,13 +63,22 @@ class VIEWS_EXPORT BubbleDelegateView : public WidgetDelegateView,
   View* anchor_view() const { return anchor_view_; }
   Widget* anchor_widget() const { return anchor_widget_; }
 
+  // The anchor point is used in the absence of an anchor view.
+  const gfx::Point& anchor_point() const { return anchor_point_; }
+
   BubbleBorder::ArrowLocation arrow_location() const { return arrow_location_; }
   void set_arrow_location(BubbleBorder::ArrowLocation arrow_location) {
     arrow_location_ = arrow_location;
   }
 
+  BubbleBorder::Shadow shadow() const { return shadow_; }
+  void set_shadow(BubbleBorder::Shadow shadow) { shadow_ = shadow; }
+
   SkColor color() const { return color_; }
-  void set_color(SkColor color) { color_ = color; }
+  void set_color(SkColor color) {
+    color_ = color;
+    color_explicitly_set_ = true;
+  }
 
   const gfx::Insets& margins() const { return margins_; }
   void set_margins(const gfx::Insets& margins) { margins_ = margins; }
@@ -87,10 +97,8 @@ class VIEWS_EXPORT BubbleDelegateView : public WidgetDelegateView,
   bool accept_events() const { return accept_events_; }
   void set_accept_events(bool accept_events) { accept_events_ = accept_events; }
 
-  bool try_mirroring_arrow() const { return try_mirroring_arrow_; }
-  void set_try_mirroring_arrow(bool try_mirroring_arrow) {
-    try_mirroring_arrow_ = try_mirroring_arrow;
-  }
+  bool adjust_if_offscreen() const { return adjust_if_offscreen_; }
+  void set_adjust_if_offscreen(bool adjust) { adjust_if_offscreen_ = adjust; }
 
   // Get the arrow's anchor rect in screen space.
   virtual gfx::Rect GetAnchorRect();
@@ -115,6 +123,7 @@ class VIEWS_EXPORT BubbleDelegateView : public WidgetDelegateView,
 
   // View overrides:
   virtual bool AcceleratorPressed(const ui::Accelerator& accelerator) OVERRIDE;
+  virtual void OnNativeThemeChanged(const ui::NativeTheme* theme) OVERRIDE;
 
   // ui::AnimationDelegate overrides:
   virtual void AnimationEnded(const ui::Animation* animation) OVERRIDE;
@@ -127,8 +136,8 @@ class VIEWS_EXPORT BubbleDelegateView : public WidgetDelegateView,
   // calling CreateBubble or Show.
   void set_anchor_view(View* anchor_view) { anchor_view_ = anchor_view; }
 
-  // Sets the anchor point used in the absence of an anchor view. This
-  // (or set_anchor_view) must be set before calling CreateBubble or Show.
+  // The anchor point or anchor view must be set before calling CreateBubble or
+  // Show.
   void set_anchor_point(gfx::Point anchor_point) {
     anchor_point_ = anchor_point;
   }
@@ -147,6 +156,9 @@ class VIEWS_EXPORT BubbleDelegateView : public WidgetDelegateView,
  private:
   FRIEND_TEST_ALL_PREFIXES(BubbleFrameViewTest, NonClientHitTest);
   FRIEND_TEST_ALL_PREFIXES(BubbleDelegateTest, CreateDelegate);
+
+  // Update the bubble color from |theme|, unless it was explicitly set.
+  void UpdateColorsFromTheme(const ui::NativeTheme* theme);
 
 #if defined(OS_WIN) && !defined(USE_AURA)
   // Get bounds for the Windows-only widget that hosts the bubble's contents.
@@ -173,8 +185,12 @@ class VIEWS_EXPORT BubbleDelegateView : public WidgetDelegateView,
   // The arrow's location on the bubble.
   BubbleBorder::ArrowLocation arrow_location_;
 
-  // The background color of the bubble.
+  // Bubble border shadow to use.
+  BubbleBorder::Shadow shadow_;
+
+  // The background color of the bubble; and flag for when it's explicitly set.
   SkColor color_;
+  bool color_explicitly_set_;
 
   // The margins between the content and the inside of the border.
   gfx::Insets margins_;
@@ -195,9 +211,9 @@ class VIEWS_EXPORT BubbleDelegateView : public WidgetDelegateView,
   // Specifies whether the popup accepts events or lets them pass through.
   bool accept_events_;
 
-  // If true (defaults to true), the arrow may be mirrored to fit the
-  // bubble on screen better.
-  bool try_mirroring_arrow_;
+  // If true (defaults to true), the arrow may be mirrored and moved to fit the
+  // bubble on screen better. It would be a no-op if the bubble has no arrow.
+  bool adjust_if_offscreen_;
 
   // Parent native window of the bubble.
   gfx::NativeView parent_window_;

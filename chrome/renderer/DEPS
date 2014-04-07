@@ -3,6 +3,7 @@ include_rules = [
   # TODO(jam): remove this once all of chrome doesn't depend on content/common.
   "-content/common",
   "+content/public/renderer",
+  "+extensions/common",
   "+grit",  # For generated headers
   "+media/base",  # For initializing media library and media switches.
   "+ppapi/native_client/src/trusted/plugin/nacl_entry_points.h",  # For NaCl registration.
@@ -14,7 +15,6 @@ include_rules = [
 
   "+webkit/extensions",
   "+webkit/fileapi",
-  "+webkit/forms",  # Defines some types that are marshalled over IPC.
   "+webkit/glue",
   "+webkit/glue/plugins",
   "+webkit/gpu",

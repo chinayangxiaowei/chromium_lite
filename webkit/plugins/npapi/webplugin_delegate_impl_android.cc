@@ -6,11 +6,8 @@
 
 #include "base/basictypes.h"
 #include "base/logging.h"
-#include "third_party/WebKit/Source/WebKit/chromium/public/WebCursorInfo.h"
-#include "third_party/WebKit/Source/WebKit/chromium/public/WebInputEvent.h"
 #include "webkit/plugins/npapi/plugin_instance.h"
 #include "webkit/plugins/npapi/webplugin.h"
-#include "webkit/glue/webkit_glue.h"
 
 using WebKit::WebCursorInfo;
 using WebKit::WebInputEvent;
@@ -19,14 +16,12 @@ namespace webkit {
 namespace npapi {
 
 WebPluginDelegateImpl::WebPluginDelegateImpl(
-    gfx::PluginWindowHandle containing_view,
     PluginInstance* instance)
     : windowed_handle_(0),
       windowed_did_set_window_(false),
       windowless_(false),
       plugin_(NULL),
       instance_(instance),
-      parent_(containing_view),
       quirks_(0),
       handle_event_depth_(0),
       first_set_window_call_(true) {

@@ -11,10 +11,11 @@
 #include "base/string_util.h"
 #include "base/threading/thread.h"
 #include "base/utf_string_conversions.h"
-#include "chrome/common/extensions/extension.h"
 #include "chrome/common/chrome_constants.h"
+#include "chrome/common/extensions/extension.h"
 #include "chrome/common/url_constants.h"
 #include "content/public/browser/browser_thread.h"
+#include "extensions/common/constants.h"
 
 using content::BrowserThread;
 
@@ -35,6 +36,16 @@ void DeleteShortcutsOnFileThread(
   FilePath shortcut_data_dir = web_app::GetWebAppDataDirectory(
       shortcut_info.profile_path, shortcut_info.extension_id, GURL());
   return web_app::internals::DeletePlatformShortcuts(
+      shortcut_data_dir, shortcut_info);
+}
+
+void UpdateShortcutsOnFileThread(
+    const ShellIntegration::ShortcutInfo& shortcut_info) {
+  DCHECK(BrowserThread::CurrentlyOn(BrowserThread::FILE));
+
+  FilePath shortcut_data_dir = web_app::GetWebAppDataDirectory(
+      shortcut_info.profile_path, shortcut_info.extension_id, GURL());
+  return web_app::internals::UpdatePlatformShortcuts(
       shortcut_data_dir, shortcut_info);
 }
 
@@ -148,6 +159,15 @@ void DeleteAllShortcuts(const ShellIntegration::ShortcutInfo& shortcut_info) {
       base::Bind(&DeleteShortcutsOnFileThread, shortcut_info));
 }
 
+void UpdateAllShortcuts(const ShellIntegration::ShortcutInfo& shortcut_info) {
+  DCHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
+
+  BrowserThread::PostTask(
+      BrowserThread::FILE,
+      FROM_HERE,
+      base::Bind(&UpdateShortcutsOnFileThread, shortcut_info));
+}
+
 bool CreateShortcutsOnFileThread(
     const ShellIntegration::ShortcutInfo& shortcut_info) {
   DCHECK(BrowserThread::CurrentlyOn(BrowserThread::FILE));
@@ -165,7 +185,7 @@ bool IsValidUrl(const GURL& url) {
       chrome::kFtpScheme,
       chrome::kHttpScheme,
       chrome::kHttpsScheme,
-      chrome::kExtensionScheme,
+      extensions::kExtensionScheme,
   };
 
   for (size_t i = 0; i < arraysize(kValidUrlSchemes); ++i) {

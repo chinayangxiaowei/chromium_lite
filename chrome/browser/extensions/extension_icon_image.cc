@@ -12,8 +12,10 @@
 #include "ui/gfx/canvas.h"
 #include "ui/gfx/image/canvas_image_source.h"
 #include "ui/gfx/image/image.h"
+#include "ui/gfx/image/image_skia_operations.h"
 #include "ui/gfx/image/image_skia_source.h"
 #include "ui/gfx/size.h"
+#include "ui/gfx/size_conversions.h"
 
 // The ImageSkia provided by extensions::IconImage contains ImageSkiaReps that
 // are computed and updated using the following algorithm (if no default icon
@@ -141,7 +143,10 @@ IconImage::IconImage(
       resource_size_in_dip_(resource_size_in_dip),
       observer_(observer),
       source_(NULL),
-      default_icon_(default_icon),
+      default_icon_(gfx::ImageSkiaOperations::CreateResizedImage(
+          default_icon,
+          skia::ImageOperations::RESIZE_BEST,
+          gfx::Size(resource_size_in_dip, resource_size_in_dip))),
       ALLOW_THIS_IN_INITIALIZER_LIST(tracker_(this)) {
   gfx::Size resource_size(resource_size_in_dip, resource_size_in_dip);
   source_ = new Source(this, resource_size);
@@ -168,23 +173,21 @@ gfx::ImageSkiaRep IconImage::LoadImageForScaleFactor(
   ExtensionResource resource;
 
   // Find extension resource for non bundled component extensions.
-  if (!ImageLoadingTracker::IsSpecialBundledExtensionId(extension_->id())) {
-    // We try loading bigger image only if resource size is >= 32.
-    if (resource_size_in_pixel >= kMatchBiggerTreshold) {
-      resource = GetExtensionIconResource(extension_, icon_set_,
-          resource_size_in_pixel, ExtensionIconSet::MATCH_BIGGER);
-    }
-
-    // If resource is not found by now, try matching smaller one.
-    if (resource.empty()) {
-      resource = GetExtensionIconResource(extension_, icon_set_,
-          resource_size_in_pixel, ExtensionIconSet::MATCH_SMALLER);
-    }
-
-    // If there is no resource found, return default icon.
-    if (resource.empty())
-      return default_icon_.GetRepresentation(scale_factor);
+  // We try loading bigger image only if resource size is >= 32.
+  if (resource_size_in_pixel >= kMatchBiggerTreshold) {
+    resource = GetExtensionIconResource(extension_, icon_set_,
+        resource_size_in_pixel, ExtensionIconSet::MATCH_BIGGER);
   }
+
+  // If resource is not found by now, try matching smaller one.
+  if (resource.empty()) {
+    resource = GetExtensionIconResource(extension_, icon_set_,
+        resource_size_in_pixel, ExtensionIconSet::MATCH_SMALLER);
+  }
+
+  // If there is no resource found, return default icon.
+  if (resource.empty())
+    return default_icon_.GetRepresentation(scale_factor);
 
   int id = tracker_.next_id();
   load_map_[id].scale_factor = scale_factor;
@@ -194,7 +197,8 @@ gfx::ImageSkiaRep IconImage::LoadImageForScaleFactor(
   info_list.push_back(ImageLoadingTracker::ImageRepresentation(
       resource,
       ImageLoadingTracker::ImageRepresentation::ALWAYS_RESIZE,
-      gfx::Size(resource_size_in_dip_, resource_size_in_dip_).Scale(scale),
+      gfx::ToFlooredSize(gfx::ScaleSize(
+          gfx::Size(resource_size_in_dip_, resource_size_in_dip_), scale)),
       scale_factor));
   tracker_.LoadImages(extension_, info_list, ImageLoadingTracker::DONT_CACHE);
 

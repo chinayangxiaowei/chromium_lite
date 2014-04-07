@@ -70,13 +70,13 @@ bool IsProcessImmersive(HANDLE process) {
   return false;
 }
 
-bool IsTsfAwareRequired() {
+bool IsTSFAwareRequired() {
   // Although this function is equal to IsMetroProcess at this moment,
   // Chrome for Win7 and Vista may support TSF in the future.
   return g_should_tsf_aware_required || IsMetroProcess();
 }
 
-void SetForceToUseTsf() {
+void SetForceToUseTSF() {
   g_should_tsf_aware_required = true;
 
   // Since Windows 8 Metro mode disables CUAS (Cicero Unaware Application
@@ -113,7 +113,7 @@ wchar_t* LocalAllocAndCopyString(const string16& src) {
 
 bool IsTouchEnabled() {
   int value = GetSystemMetrics(SM_DIGITIZER);
-  return value & (NID_READY | NID_INTEGRATED_TOUCH) ==
+  return (value & (NID_READY | NID_INTEGRATED_TOUCH)) ==
              (NID_READY | NID_INTEGRATED_TOUCH);
 }
 

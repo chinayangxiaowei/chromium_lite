@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,6 +10,7 @@
 
 #include "base/basictypes.h"
 #include "base/compiler_specific.h"
+#include "sync/base/sync_export.h"
 #include "sync/internal_api/public/base/model_type.h"
 #include "sync/internal_api/public/base_node.h"
 
@@ -30,7 +31,6 @@ class TypedUrlSpecifics;
 namespace syncer {
 
 class Cryptographer;
-class TestBookmarkModelAssociator;
 class WriteTransaction;
 
 namespace syncable {
@@ -40,7 +40,7 @@ class MutableEntry;
 
 // WriteNode extends BaseNode to add mutation, and wraps
 // syncable::MutableEntry. A WriteTransaction is needed to create a WriteNode.
-class WriteNode : public BaseNode {
+class SYNC_EXPORT WriteNode : public BaseNode {
  public:
   enum InitUniqueByCreationResult {
     INIT_SUCCESS,
@@ -113,12 +113,6 @@ class WriteNode : public BaseNode {
   // Should only be called if GetModelType() == BOOKMARK.
   void SetBookmarkSpecifics(const sync_pb::BookmarkSpecifics& specifics);
 
-  // Legacy, bookmark-specific setters that wrap SetBookmarkSpecifics() above.
-  // Should only be called if GetModelType() == BOOKMARK.
-  // TODO(ncarter): Remove these two datatype-specific accessors.
-  void SetURL(const GURL& url);
-  void SetFaviconBytes(const std::vector<unsigned char>& bytes);
-
   // Generic set specifics method. Will extract the model type from |specifics|.
   void SetEntitySpecifics(const sync_pb::EntitySpecifics& specifics);
 
@@ -163,6 +157,14 @@ class WriteNode : public BaseNode {
   // Set the session specifics (windows, tabs, navigations etc.).
   // Should only be called if GetModelType() == SESSIONS.
   void SetSessionSpecifics(const sync_pb::SessionSpecifics& specifics);
+
+  // Set the device info specifics.
+  // Should only be called if GetModelType() == DEVICE_INFO.
+  void SetDeviceInfoSpecifics(const sync_pb::DeviceInfoSpecifics& specifics);
+
+  // Set the experiments specifics.
+  // Should only be called if GetModelType() == EXPERIMENTS.
+  void SetExperimentsSpecifics(const sync_pb::ExperimentsSpecifics& specifics);
 
   // Implementation of BaseNode's abstract virtual accessors.
   virtual const syncable::Entry* GetEntry() const OVERRIDE;

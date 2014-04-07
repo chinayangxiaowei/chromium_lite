@@ -18,7 +18,6 @@ class BackingStore;
 class GURL;
 class PrefService;
 class SkBitmap;
-class TabContents;
 
 namespace base {
 class DictionaryValue;
@@ -29,7 +28,7 @@ class WebContents;
 }
 
 namespace skia {
-class PlatformCanvas;
+class PlatformBitmap;
 }
 
 // Windows
@@ -130,7 +129,7 @@ class UpdateTabFunction : public AsyncExtensionFunction {
                                   bool* is_async);
   virtual void PopulateResult();
 
-  TabContents* tab_contents_;
+  content::WebContents* web_contents_;
 
  private:
   virtual bool RunImpl() OVERRIDE;
@@ -192,7 +191,7 @@ class CaptureVisibleTabFunction : public AsyncExtensionFunction,
   void SendResultFromBitmap(const SkBitmap& screen_capture);
 
  private:
-  void CopyFromBackingStoreComplete(skia::PlatformCanvas* canvas,
+  void CopyFromBackingStoreComplete(skia::PlatformBitmap* bitmap,
                                     bool succeeded);
 
   content::NotificationRegistrar registrar_;

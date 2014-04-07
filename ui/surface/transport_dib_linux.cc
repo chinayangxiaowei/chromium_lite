@@ -22,6 +22,8 @@ TransportDIB::TransportDIB()
     : address_(kInvalidAddress),
       x_shm_(0),
       display_(NULL),
+      inflight_counter_(0),
+      detached_(false),
       size_(0) {
 }
 
@@ -39,14 +41,13 @@ TransportDIB::~TransportDIB() {
 
 // static
 TransportDIB* TransportDIB::Create(size_t size, uint32 sequence_num) {
-  // We use a mode of 0666 since the X server won't attach to memory which is
-  // 0600 since it can't know if it (as a root process) is being asked to map
-  // someone else's private shared memory region.
-  const int shmkey = shmget(IPC_PRIVATE, size, 0666);
+  const int shmkey = shmget(IPC_PRIVATE, size, 0600);
   if (shmkey == -1) {
     DLOG(ERROR) << "Failed to create SysV shared memory region"
                 << " errno:" << errno;
     return NULL;
+  } else {
+    VLOG(1) << "Created SysV shared memory region " << shmkey;
   }
 
   void* address = shmat(shmkey, NULL /* desired address */, 0 /* flags */);
@@ -93,10 +94,9 @@ bool TransportDIB::is_valid_id(Id id) {
 skia::PlatformCanvas* TransportDIB::GetPlatformCanvas(int w, int h) {
   if (address_ == kInvalidAddress && !Map())
     return NULL;
-  scoped_ptr<skia::PlatformCanvas> canvas(new skia::PlatformCanvas);
-  if (!canvas->initialize(w, h, true, reinterpret_cast<uint8_t*>(memory())))
-    return NULL;
-  return canvas.release();
+  return skia::CreatePlatformCanvas(w, h, true,
+                                    reinterpret_cast<uint8_t*>(memory()),
+                                    skia::RETURN_NULL_ON_FAILURE);
 }
 
 bool TransportDIB::Map() {
@@ -138,4 +138,18 @@ XID TransportDIB::MapToX(Display* display) {
   }
 
   return x_shm_;
+}
+
+void TransportDIB::DecreaseInFlightCounter() {
+  CHECK(inflight_counter_);
+  inflight_counter_--;
+  if (!inflight_counter_ && detached_)
+    delete this;
+}
+
+void TransportDIB::Detach() {
+  CHECK(!detached_);
+  detached_ = true;
+  if (!inflight_counter_)
+    delete this;
 }

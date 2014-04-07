@@ -31,7 +31,7 @@ Element.ALLOW_KEYBOARD_INPUT;
 /** @return {void} Nothing. */
 Element.prototype.webkitRequestFullScreen = function(flags) {};
 
-/** @type {{getRandomValues: function(Uint16Array):void}} */
+/** @type {{getRandomValues: function((Uint16Array|Uint8Array)):void}} */
 Window.prototype.crypto;
 
 /** @constructor
@@ -63,6 +63,3 @@ var WebKitMutationObserver = function(callback) {};
 /** @param {Element} element
     @param {Object} options */
 WebKitMutationObserver.prototype.observe = function(element, options) {};
-
-// This string is replaced with the actual value in build-webapp.py.
-var OAUTH2_USE_OFFICIAL_CLIENT_ID = false;

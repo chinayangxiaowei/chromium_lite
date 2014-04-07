@@ -237,7 +237,7 @@ void ChromeBrowserMainPartsMac::PreMainMessageLoopStart() {
     FilePath resources_pack_path;
     PathService::Get(chrome::FILE_RESOURCES_PACK, &resources_pack_path);
     ResourceBundle::GetSharedInstance().AddDataPackFromPath(
-        resources_pack_path, ui::SCALE_FACTOR_100P);
+        resources_pack_path, ui::SCALE_FACTOR_NONE);
   }
 
   // This is a no-op if the KeystoneRegistration framework is not present.
@@ -281,8 +281,8 @@ void ChromeBrowserMainPartsMac::PreMainMessageLoopStart() {
 }
 
 void ChromeBrowserMainPartsMac::PreProfileInit() {
-  removable_device_notifications_mac_.reset(
-      new chrome::RemovableDeviceNotificationsMac());
+  removable_device_notifications_mac_ =
+      new chrome::RemovableDeviceNotificationsMac();
   ChromeBrowserMainPartsPosix::PreProfileInit();
 }
 

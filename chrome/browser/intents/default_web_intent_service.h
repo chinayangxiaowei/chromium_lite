@@ -8,7 +8,7 @@
 #include <string>
 
 #include "base/string16.h"
-#include "chrome/common/extensions/url_pattern.h"
+#include "extensions/common/url_pattern.h"
 
 // Holds data related to a default settings for web intents service
 // selection. Holds data in a row in the web_intents_defaults table.
@@ -39,9 +39,7 @@ struct DefaultWebIntentService {
   // If the user did not set the default explicitly, is <= 0.
   int user_date;
 
-  // |suppression| holds a value indicating what the suppression context
-  // for the default should be. Currently it holds a hash value of the other
-  // current entries in the picker model when the default was set.
+  // Currently unused.
   int64 suppression;
 
   std::string service_url;

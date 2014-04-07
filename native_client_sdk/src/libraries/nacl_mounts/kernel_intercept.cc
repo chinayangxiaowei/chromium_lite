@@ -3,15 +3,35 @@
  * found in the LICENSE file.
  */
 #include "nacl_mounts/kernel_intercept.h"
-
 #include "nacl_mounts/kernel_proxy.h"
+#include "nacl_mounts/pepper_interface.h"
+#include "nacl_mounts/pepper_interface.h"
+#include "nacl_mounts/real_pepper_interface.h"
+#include "utils/macros.h"
+
+FORCE_LINK_THAT(kernel_wrap)
 
 static KernelProxy* s_kp;
 
 void ki_init(void* kp) {
+  ki_init_ppapi(kp, 0, NULL);
+}
+
+void ki_init_ppapi(void* kp,
+                   PP_Instance instance,
+                   PPB_GetInterface get_browser_interface) {
   if (kp == NULL) kp = new KernelProxy();
   s_kp = static_cast<KernelProxy*>(kp);
-  s_kp->Init();
+
+  PepperInterface* ppapi = NULL;
+  if (instance && get_browser_interface)
+    ppapi = new RealPepperInterface(instance, get_browser_interface);
+
+  s_kp->Init(ppapi);
+}
+
+int ki_is_initialized() {
+  return s_kp != NULL;
 }
 
 int ki_chdir(const char* path) {
@@ -50,9 +70,11 @@ int ki_mount(const char *source, const char *target, const char *filesystemtype,
              unsigned long mountflags, const void *data) {
   return s_kp->mount(source, target, filesystemtype, mountflags, data);
 }
+
 int ki_umount(const char *path) {
   return s_kp->umount(path);
 }
+
 int ki_open(const char *path, int oflag) {
   return s_kp->open(path, oflag);
 }
@@ -83,4 +105,20 @@ int ki_isatty(int fd) {
 
 int ki_close(int fd) {
   return s_kp->close(fd);
+}
+
+off_t ki_lseek(int fd, off_t offset, int whence) {
+  return s_kp->lseek(fd, offset, whence);
+}
+
+int ki_remove(const char* path) {
+  return s_kp->remove(path);
+}
+
+int ki_unlink(const char* path) {
+  return s_kp->unlink(path);
+}
+
+int ki_access(const char* path, int amode) {
+  return s_kp->access(path, amode);
 }

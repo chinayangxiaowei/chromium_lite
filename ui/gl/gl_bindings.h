@@ -53,6 +53,7 @@ typedef void (*OSMESAproc)();
 #if !defined(OS_MACOSX)
 
 // Forward declare EGL types.
+typedef uint64 EGLTimeKHR;
 typedef unsigned int EGLBoolean;
 typedef unsigned int EGLenum;
 typedef int EGLint;
@@ -62,6 +63,7 @@ typedef void *EGLDisplay;
 typedef void *EGLImageKHR;
 typedef void *EGLSurface;
 typedef void *EGLClientBuffer;
+typedef void *EGLSyncKHR;
 typedef void (*__eglMustCastToProperFunctionPointerType)(void);
 typedef void* GLeglImageOES;
 
@@ -95,6 +97,32 @@ typedef Window   EGLNativeWindowType;
 #endif
 
 namespace gfx {
+
+GL_EXPORT extern GLApi* g_current_gl_context;
+GL_EXPORT extern OSMESAApi* g_current_osmesa_context;
+GL_EXPORT extern DriverGL g_driver_gl;
+GL_EXPORT extern DriverOSMESA g_driver_osmesa;
+
+#if defined(OS_WIN)
+
+GL_EXPORT extern EGLApi* g_current_egl_context;
+GL_EXPORT extern WGLApi* g_current_wgl_context;
+GL_EXPORT extern DriverEGL g_driver_egl;
+GL_EXPORT extern DriverWGL g_driver_wgl;
+
+#elif defined(USE_X11)
+
+GL_EXPORT extern EGLApi* g_current_egl_context;
+GL_EXPORT extern GLXApi* g_current_glx_context;
+GL_EXPORT extern DriverEGL g_driver_egl;
+GL_EXPORT extern DriverGLX g_driver_glx;
+
+#elif defined(OS_ANDROID)
+
+GL_EXPORT extern EGLApi* g_current_egl_context;
+GL_EXPORT extern DriverEGL g_driver_egl;
+
+#endif
 
 // Find an entry point to the mock GL implementation.
 void* GL_BINDING_CALL GetMockGLProcAddress(const char* name);

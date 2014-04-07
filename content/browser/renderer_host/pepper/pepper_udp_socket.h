@@ -14,13 +14,15 @@
 #include "net/base/ip_endpoint.h"
 #include "ppapi/c/pp_stdint.h"
 
-class PepperMessageFilter;
 struct PP_NetAddress_Private;
 
 namespace net {
 class IOBuffer;
 class UDPServerSocket;
 }
+
+namespace content {
+class PepperMessageFilter;
 
 // PepperUDPSocket is used by PepperMessageFilter to handle requests from
 // the Pepper UDP socket API (PPB_UDPSocket_Private).
@@ -40,10 +42,10 @@ class PepperUDPSocket {
   void RecvFrom(int32_t num_bytes);
   void SendTo(const std::string& data, const PP_NetAddress_Private& addr);
   void SendBindACKError();
+  void SendSendToACKError();
 
  private:
   void SendRecvFromACKError();
-  void SendSendToACKError();
 
   void OnBindCompleted(int result);
   void OnRecvFromCompleted(int result);
@@ -66,5 +68,7 @@ class PepperUDPSocket {
 
   DISALLOW_COPY_AND_ASSIGN(PepperUDPSocket);
 };
+
+}  // namespace content
 
 #endif  // CONTENT_BROWSER_RENDERER_HOST_PEPPER_PEPPER_UDP_SOCKET_H_

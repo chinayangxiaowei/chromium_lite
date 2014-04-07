@@ -13,8 +13,7 @@ TabRendererData::TabRendererData()
       mini(false),
       blocked(false),
       app(false),
-      mode(chrome::search::Mode::MODE_DEFAULT),
-      gradient_background_opacity(1.0f) {
+      capture_state(CAPTURE_STATE_NONE) {
 }
 
 TabRendererData::~TabRendererData() {}
@@ -32,6 +31,5 @@ bool TabRendererData::Equals(const TabRendererData& data) {
       mini == data.mini &&
       blocked == data.blocked &&
       app == data.app &&
-      mode == data.mode &&
-      gradient_background_opacity == data.gradient_background_opacity;
+      capture_state == data.capture_state;
 }

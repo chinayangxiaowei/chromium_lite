@@ -19,7 +19,7 @@ namespace gles2 {
 // context using the same GLShareGroup with the corresponding service ID.
 class GPU_EXPORT TextureDefinition {
  public:
-  struct LevelInfo {
+  struct GPU_EXPORT LevelInfo {
     LevelInfo(GLenum target,
               GLenum internal_format,
               GLsizei width,
@@ -29,6 +29,8 @@ class GPU_EXPORT TextureDefinition {
               GLenum format,
               GLenum type,
               bool cleared);
+    LevelInfo();
+
     GLenum target;
     GLenum internal_format;
     GLsizei width;
@@ -46,6 +48,12 @@ class GPU_EXPORT TextureDefinition {
 
   TextureDefinition(GLenum target,
                     GLuint service_id,
+                    GLenum min_filter,
+                    GLenum mag_filter,
+                    GLenum wrap_s,
+                    GLenum wrap_t,
+                    GLenum usage,
+                    bool immutable,
                     const LevelInfos& level_infos);
   ~TextureDefinition();
 
@@ -54,6 +62,13 @@ class GPU_EXPORT TextureDefinition {
   }
 
   GLuint ReleaseServiceId();
+  GLenum min_filter() const { return min_filter_; }
+  GLenum mag_filter() const { return mag_filter_; }
+  GLenum wrap_s() const { return wrap_s_; }
+  GLenum wrap_t() const { return wrap_t_; }
+  GLenum usage() const { return usage_; }
+
+  bool immutable() const { return immutable_; }
 
   const LevelInfos& level_infos() const {
     return level_infos_;
@@ -62,6 +77,12 @@ class GPU_EXPORT TextureDefinition {
  private:
   GLenum target_;
   GLuint service_id_;
+  GLenum min_filter_;
+  GLenum mag_filter_;
+  GLenum wrap_s_;
+  GLenum wrap_t_;
+  GLenum usage_;
+  bool immutable_;
   std::vector<std::vector<LevelInfo> > level_infos_;
 
   DISALLOW_COPY_AND_ASSIGN(TextureDefinition);
@@ -71,5 +92,3 @@ class GPU_EXPORT TextureDefinition {
 }  // namespace gpu
 
 #endif  // GPU_COMMAND_BUFFER_SERVICE_TEXTURE_DEFINITION_H_
-
-

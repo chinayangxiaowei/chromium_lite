@@ -5,8 +5,8 @@
 #include "chrome/common/extensions/manifest_tests/extension_manifest_test.h"
 
 #include "base/command_line.h"
+#include "base/files/scoped_temp_dir.h"
 #include "base/json/json_file_value_serializer.h"
-#include "base/scoped_temp_dir.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/common/extensions/extension_manifest_constants.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -17,16 +17,22 @@ TEST_F(ExtensionManifestTest, PlatformApps) {
   scoped_refptr<extensions::Extension> extension =
       LoadAndExpectSuccess("init_valid_platform_app.json");
   EXPECT_TRUE(extension->is_storage_isolated());
+  EXPECT_TRUE(extension->incognito_split_mode());
 
   extension =
       LoadAndExpectSuccess("init_valid_platform_app_no_manifest_version.json");
   EXPECT_EQ(2, extension->manifest_version());
+
+  extension = LoadAndExpectSuccess("incognito_valid_platform_app.json");
+  EXPECT_TRUE(extension->incognito_split_mode());
 
   Testcase error_testcases[] = {
     Testcase("init_invalid_platform_app_2.json",
         errors::kBackgroundRequiredForPlatformApps),
     Testcase("init_invalid_platform_app_3.json",
         errors::kPlatformAppNeedsManifestVersion2),
+    Testcase("incognito_invalid_platform_app.json",
+        errors::kInvalidIncognitoModeForPlatformApp),
   };
   RunTestcases(error_testcases, arraysize(error_testcases), EXPECT_TYPE_ERROR);
 
@@ -48,6 +54,41 @@ TEST_F(ExtensionManifestTest, PlatformApps) {
       warning_testcases, arraysize(warning_testcases), EXPECT_TYPE_WARNING);
 }
 
+TEST_F(ExtensionManifestTest, PlatformAppContentSecurityPolicy) {
+  // Normal platform apps can't specify a CSP value.
+  Testcase warning_testcases[] = {
+    Testcase(
+        "init_platform_app_csp_warning_1.json",
+        "'content_security_policy' is only allowed for extensions and legacy "
+            "packaged apps, and this is a packaged app."),
+    Testcase(
+        "init_platform_app_csp_warning_2.json",
+        "'app.content_security_policy' is not allowed for specified extension "
+            "ID.")
+  };
+  RunTestcases(
+      warning_testcases, arraysize(warning_testcases), EXPECT_TYPE_WARNING);
+
+  // Whitelisted ones can (this is the ID corresponding to the base 64 encoded
+  // key in the init_platform_app_csp.json manifest.)
+  std::string test_id = "ahplfneplbnjcflhdgkkjeiglkkfeelb";
+  CommandLine::ForCurrentProcess()->AppendSwitchASCII(
+      switches::kWhitelistedExtensionID, test_id);
+  scoped_refptr<extensions::Extension> extension =
+      LoadAndExpectSuccess("init_platform_app_csp.json");
+  EXPECT_EQ(0U, extension->install_warnings().size())
+      << "Unexpected warning " << extension->install_warnings()[0].message;
+  EXPECT_TRUE(extension->is_platform_app());
+  EXPECT_EQ(
+      "default-src 'self' https://www.google.com",
+      extension->GetResourceContentSecurityPolicy(""));
+
+  // But even whitelisted ones must specify a secure policy.
+  LoadAndExpectError(
+      "init_platform_app_csp_insecure.json",
+      errors::kInsecureContentSecurityPolicy);
+}
+
 TEST_F(ExtensionManifestTest, CertainApisRequirePlatformApps) {
   // Put APIs here that should be restricted to platform apps, but that haven't
   // yet graduated from experimental.
@@ -65,7 +106,7 @@ TEST_F(ExtensionManifestTest, CertainApisRequirePlatformApps) {
   scoped_ptr<DictionaryValue> manifest(
       LoadManifestFile("init_valid_platform_app.json", &error));
 
-  ScopedTempDir temp_dir;
+  base::ScopedTempDir temp_dir;
   ASSERT_TRUE(temp_dir.CreateUniqueTempDir());
 
   // Create each manifest.

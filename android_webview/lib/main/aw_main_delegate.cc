@@ -4,33 +4,17 @@
 
 #include "android_webview/lib/main/aw_main_delegate.h"
 
+#include "android_webview/browser/aw_content_browser_client.h"
 #include "android_webview/lib/aw_browser_dependency_factory_impl.h"
-#include "android_webview/lib/aw_content_browser_client.h"
-#include "android_webview/renderer/aw_render_view_ext.h"
+#include "android_webview/native/aw_web_contents_view_delegate.h"
+#include "android_webview/renderer/aw_content_renderer_client.h"
 #include "base/lazy_instance.h"
 #include "base/logging.h"
-#include "chrome/common/chrome_paths.h"
-#include "chrome/renderer/chrome_content_renderer_client.h"
+#include "base/memory/scoped_ptr.h"
 #include "content/public/browser/browser_main_runner.h"
-#include "content/public/common/content_client.h"
 
 namespace android_webview {
 
-namespace {
-
-// TODO(joth): Remove chrome/ dependency; move into android_webview/renderer
-class AwContentRendererClient : public chrome::ChromeContentRendererClient {
- public:
-  virtual void RenderViewCreated(content::RenderView* render_view) {
-    chrome::ChromeContentRendererClient::RenderViewCreated(render_view);
-    AwRenderViewExt::RenderViewCreated(render_view);
-  }
-};
-
-}
-
-base::LazyInstance<AwContentBrowserClient>
-    g_webview_content_browser_client = LAZY_INSTANCE_INITIALIZER;
 base::LazyInstance<AwContentRendererClient>
     g_webview_content_renderer_client = LAZY_INSTANCE_INITIALIZER;
 
@@ -41,14 +25,12 @@ AwMainDelegate::~AwMainDelegate() {
 }
 
 bool AwMainDelegate::BasicStartupComplete(int* exit_code) {
-  content::SetContentClient(&chrome_content_client_);
+  content::SetContentClient(&content_client_);
 
   return false;
 }
 
 void AwMainDelegate::PreSandboxStartup() {
-  chrome::RegisterPathProvider();
-
   // TODO(torne): When we have a separate renderer process, we need to handle
   // being passed open FDs for the resource paks here.
 }
@@ -83,12 +65,16 @@ void AwMainDelegate::ProcessExiting(const std::string& process_type) {
 
 content::ContentBrowserClient*
     AwMainDelegate::CreateContentBrowserClient() {
-  return &g_webview_content_browser_client.Get();
+  content_browser_client_.reset(
+      new AwContentBrowserClient(&AwWebContentsViewDelegate::Create));
+
+  return content_browser_client_.get();
 }
 
 content::ContentRendererClient*
     AwMainDelegate::CreateContentRendererClient() {
-  return &g_webview_content_renderer_client.Get();
+  content_renderer_client_.reset(new AwContentRendererClient());
+  return content_renderer_client_.get();
 }
 
 }  // namespace android_webview

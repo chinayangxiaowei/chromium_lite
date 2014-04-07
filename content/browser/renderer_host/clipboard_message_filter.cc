@@ -20,7 +20,7 @@
 #include "ui/gfx/codec/png_codec.h"
 #include "ui/gfx/size.h"
 
-using content::BrowserThread;
+namespace content {
 
 #if defined(OS_WIN)
 
@@ -81,6 +81,7 @@ bool ClipboardMessageFilter::OnMessageReceived(const IPC::Message& message,
     IPC_MESSAGE_HANDLER(ClipboardHostMsg_ReadRTF, OnReadRTF)
     IPC_MESSAGE_HANDLER_DELAY_REPLY(ClipboardHostMsg_ReadImage, OnReadImage)
     IPC_MESSAGE_HANDLER(ClipboardHostMsg_ReadCustomData, OnReadCustomData)
+    IPC_MESSAGE_HANDLER(ClipboardHostMsg_ReadData, OnReadData)
 #if defined(OS_MACOSX)
     IPC_MESSAGE_HANDLER(ClipboardHostMsg_FindPboardWriteStringAsync,
                         OnFindPboardWriteString)
@@ -240,6 +241,11 @@ void ClipboardMessageFilter::OnReadCustomData(
   GetClipboard()->ReadCustomData(buffer, type, result);
 }
 
+void ClipboardMessageFilter::OnReadData(const ui::Clipboard::FormatType& format,
+                                        std::string* data) {
+  GetClipboard()->ReadData(format, data);
+}
+
 // static
 ui::Clipboard* ClipboardMessageFilter::GetClipboard() {
   // We have a static instance of the clipboard service for use by all message
@@ -247,3 +253,5 @@ ui::Clipboard* ClipboardMessageFilter::GetClipboard() {
   static ui::Clipboard* clipboard = ui::Clipboard::GetForCurrentThread();
   return clipboard;
 }
+
+}  // namespace content

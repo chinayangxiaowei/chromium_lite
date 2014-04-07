@@ -7,18 +7,23 @@
 #include "base/memory/scoped_ptr.h"
 #include "ui/aura/root_window.h"
 #include "ui/base/events/event.h"
+#include "ui/gfx/vector2d_conversions.h"
 
 #if defined(USE_X11)
 #include <X11/Xlib.h>
 #include "ui/base/x/x11_util.h"
 #endif
 
+#if defined(OS_WIN)
+#include "ui/base/keycodes/keyboard_code_conversion.h"
+#endif
+
 namespace {
 
 class TestKeyEvent : public ui::KeyEvent {
  public:
-  TestKeyEvent(const base::NativeEvent& native_event, int flags)
-      : KeyEvent(native_event, false /* is_char */) {
+  TestKeyEvent(const base::NativeEvent& native_event, int flags, bool is_char)
+      : KeyEvent(native_event, is_char) {
     set_flags(flags);
   }
 };
@@ -122,10 +127,11 @@ void EventGenerator::MoveMouseTo(const gfx::Point& point, int count) {
   DCHECK_GT(count, 0);
   const ui::EventType event_type = (flags_ & ui::EF_LEFT_MOUSE_BUTTON) ?
       ui::ET_MOUSE_DRAGGED : ui::ET_MOUSE_MOVED;
-  const gfx::Point diff = point.Subtract(current_location_);
-  for (int i = 1; i <= count; i++) {
-    const gfx::Point move_point = current_location_.Add(
-        gfx::Point(diff.x() / count * i, diff.y() / count * i));
+  gfx::Vector2dF diff(point - current_location_);
+  for (float i = 1; i <= count; i++) {
+    gfx::Vector2dF step(diff);
+    step.Scale(i / count);
+    gfx::Point move_point = current_location_ + gfx::ToRoundedVector2d(step);
     ui::MouseEvent mouseev(event_type, move_point, move_point, flags_);
     Dispatch(mouseev);
   }
@@ -309,17 +315,28 @@ void EventGenerator::DispatchKeyEvent(bool is_press,
                                       ui::KeyboardCode key_code,
                                       int flags) {
 #if defined(OS_WIN)
+  UINT key_press = WM_KEYDOWN;
+  uint16 character = ui::GetCharacterFromKeyCode(key_code, flags);
+  if (is_press && character) {
+    MSG native_event = { NULL, WM_KEYDOWN, key_code, 0 };
+    TestKeyEvent keyev(native_event, flags, false);
+    Dispatch(keyev);
+    // On Windows, WM_KEYDOWN event is followed by WM_CHAR with a character
+    // if the key event cooresponds to a real character.
+    key_press = WM_CHAR;
+    key_code = static_cast<ui::KeyboardCode>(character);
+  }
   MSG native_event =
-      { NULL, (is_press ? WM_KEYDOWN : WM_KEYUP), key_code, 0 };
-  TestKeyEvent keyev(native_event, flags);
+      { NULL, (is_press ? key_press : WM_KEYUP), key_code, 0 };
+  TestKeyEvent keyev(native_event, flags, key_press == WM_CHAR);
 #else
   ui::EventType type = is_press ? ui::ET_KEY_PRESSED : ui::ET_KEY_RELEASED;
 #if defined(USE_X11)
   scoped_ptr<XEvent> native_event(new XEvent);
   ui::InitXKeyEventForTesting(type, key_code, flags, native_event.get());
-  TestKeyEvent keyev(native_event.get(), flags);
+  TestKeyEvent keyev(native_event.get(), flags, false);
 #else
-  ui::KeyEvent keyev(type, key_code, flags);
+  ui::KeyEvent keyev(type, key_code, flags, false);
 #endif  // USE_X11
 #endif  // OS_WIN
   Dispatch(keyev);

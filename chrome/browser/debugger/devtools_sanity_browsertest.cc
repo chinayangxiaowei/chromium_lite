@@ -13,12 +13,13 @@
 #include "base/utf_string_conversions.h"
 #include "chrome/browser/debugger/devtools_window.h"
 #include "chrome/browser/extensions/extension_service.h"
+#include "chrome/browser/extensions/extension_system.h"
 #include "chrome/browser/extensions/unpacked_installer.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_commands.h"
 #include "chrome/browser/ui/browser_tabstrip.h"
-#include "chrome/browser/ui/tab_contents/tab_contents.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/common/chrome_notification_types.h"
 #include "chrome/common/chrome_paths.h"
 #include "chrome/common/chrome_switches.h"
@@ -193,7 +194,8 @@ class DevToolsExtensionTest : public DevToolsSanityTest,
 
  private:
   bool LoadExtensionFromPath(const FilePath& path) {
-    ExtensionService* service = browser()->profile()->GetExtensionService();
+    ExtensionService* service = extensions::ExtensionSystem::Get(
+        browser()->profile())->extension_service();
     size_t num_before = service->extensions()->size();
     {
       content::NotificationRegistrar registrar;
@@ -228,7 +230,8 @@ class DevToolsExtensionTest : public DevToolsSanityTest,
         FROM_HERE, timeout.callback(), base::TimeDelta::FromSeconds(4));
 
     ExtensionProcessManager* manager =
-          browser()->profile()->GetExtensionProcessManager();
+        extensions::ExtensionSystem::Get(browser()->profile())->
+            process_manager();
     ExtensionProcessManager::ViewSet all_views = manager->GetAllViews();
     for (ExtensionProcessManager::ViewSet::const_iterator iter =
              all_views.begin();
@@ -404,7 +407,7 @@ class WorkerDevToolsSanityTest : public InProcessBrowserTest {
 
   void CloseDevToolsWindow() {
     Browser* browser = window_->browser();
-    chrome::CloseAllTabs(browser);
+    browser->tab_strip_model()->CloseAllTabs();
     BrowserClosedObserver close_observer(browser);
   }
 
@@ -420,17 +423,9 @@ IN_PROC_BROWSER_TEST_F(DevToolsSanityTest, TestShowScriptsTab) {
 // Tests that scripts tab is populated with inspected scripts even if it
 // hadn't been shown by the moment inspected paged refreshed.
 // @see http://crbug.com/26312
-#if defined(OS_WIN)
-// http://crbug.com/141849
-#define MAYBE_TestScriptsTabIsPopulatedOnInspectedPageRefresh \
-        FLAKY_TestScriptsTabIsPopulatedOnInspectedPageRefresh
-#else
-#define MAYBE_TestScriptsTabIsPopulatedOnInspectedPageRefresh \
-        TestScriptsTabIsPopulatedOnInspectedPageRefresh
-#endif
 IN_PROC_BROWSER_TEST_F(
     DevToolsSanityTest,
-    MAYBE_TestScriptsTabIsPopulatedOnInspectedPageRefresh) {
+    TestScriptsTabIsPopulatedOnInspectedPageRefresh) {
   // Clear inspector settings to ensure that Elements will be
   // current panel when DevTools window is open.
   content::GetContentClient()->browser()->ClearInspectorSettings(
@@ -496,29 +491,18 @@ IN_PROC_BROWSER_TEST_F(DevToolsSanityTest, TestNetworkTiming) {
   RunTest("testNetworkTiming", kSlowTestPage);
 }
 
-// crbug.com/118165
-#if defined(OS_MACOSX)
-#define MAYBE_TestNetworkSize FAILS_TestNetworkSize
-#define MAYBE_TestNetworkSyncSize FAILS_TestNetworkSyncSize
-#define MAYBE_TestNetworkRawHeadersText FAILS_TestNetworkRawHeadersText
-#else
-#define MAYBE_TestNetworkSize TestNetworkSize
-#define MAYBE_TestNetworkSyncSize TestNetworkSyncSize
-#define MAYBE_TestNetworkRawHeadersText TestNetworkRawHeadersText
-#endif
-
 // Tests network size.
-IN_PROC_BROWSER_TEST_F(DevToolsSanityTest, MAYBE_TestNetworkSize) {
+IN_PROC_BROWSER_TEST_F(DevToolsSanityTest, TestNetworkSize) {
   RunTest("testNetworkSize", kChunkedTestPage);
 }
 
 // Tests raw headers text.
-IN_PROC_BROWSER_TEST_F(DevToolsSanityTest, MAYBE_TestNetworkSyncSize) {
+IN_PROC_BROWSER_TEST_F(DevToolsSanityTest, TestNetworkSyncSize) {
   RunTest("testNetworkSyncSize", kChunkedTestPage);
 }
 
 // Tests raw headers text.
-IN_PROC_BROWSER_TEST_F(DevToolsSanityTest, MAYBE_TestNetworkRawHeadersText) {
+IN_PROC_BROWSER_TEST_F(DevToolsSanityTest, TestNetworkRawHeadersText) {
   RunTest("testNetworkRawHeadersText", kChunkedTestPage);
 }
 

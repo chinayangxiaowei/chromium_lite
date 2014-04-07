@@ -41,13 +41,45 @@ void TestWidgetObserver::OnWidgetClosing(Widget* widget) {
   widget_ = NULL;
 }
 
+class TestBubbleDelegateView : public BubbleDelegateView {
+ public:
+  TestBubbleDelegateView(View* anchor_view);
+  virtual ~TestBubbleDelegateView();
+
+  virtual View* GetInitiallyFocusedView() OVERRIDE;
+
+ private:
+  View* view_;
+};
+
+TestBubbleDelegateView::TestBubbleDelegateView(View* anchor_view)
+    : BubbleDelegateView(anchor_view, BubbleBorder::TOP_LEFT),
+      view_(new View()) {
+  view_->set_focusable(true);
+  AddChildView(view_);
+}
+
+TestBubbleDelegateView::~TestBubbleDelegateView() {}
+
+View* TestBubbleDelegateView::GetInitiallyFocusedView() {
+  return view_;
+}
+
 }  // namespace
 
 typedef ViewsTestBase BubbleDelegateTest;
 
 TEST_F(BubbleDelegateTest, CreateDelegate) {
+  // Create the anchor and parent widgets.
+  Widget::InitParams params = CreateParams(Widget::InitParams::TYPE_WINDOW);
+  params.ownership = views::Widget::InitParams::WIDGET_OWNS_NATIVE_WIDGET;
+  scoped_ptr<Widget> anchor_widget(new Widget);
+  anchor_widget->Init(params);
+  anchor_widget->Show();
+
   BubbleDelegateView* bubble_delegate =
-      new BubbleDelegateView(NULL, BubbleBorder::NONE);
+      new BubbleDelegateView(anchor_widget->GetContentsView(),
+                             BubbleBorder::NONE);
   bubble_delegate->set_color(SK_ColorGREEN);
   Widget* bubble_widget(
       BubbleDelegateView::CreateBubble(bubble_delegate));
@@ -68,7 +100,7 @@ TEST_F(BubbleDelegateTest, CreateDelegate) {
 
 TEST_F(BubbleDelegateTest, CloseAnchorWidget) {
   // Create the anchor widget.
-  Widget::InitParams params(Widget::InitParams::TYPE_WINDOW);
+  Widget::InitParams params = CreateParams(Widget::InitParams::TYPE_WINDOW);
   params.ownership = views::Widget::InitParams::WIDGET_OWNS_NATIVE_WIDGET;
   scoped_ptr<Widget> anchor_widget(new Widget);
   anchor_widget->Init(params);
@@ -107,7 +139,7 @@ TEST_F(BubbleDelegateTest, CloseAnchorWidget) {
 
 TEST_F(BubbleDelegateTest, ResetAnchorWidget) {
   // Create the anchor and parent widgets.
-  Widget::InitParams params(Widget::InitParams::TYPE_WINDOW);
+  Widget::InitParams params = CreateParams(Widget::InitParams::TYPE_WINDOW);
   params.ownership = views::Widget::InitParams::WIDGET_OWNS_NATIVE_WIDGET;
   scoped_ptr<Widget> anchor_widget(new Widget);
   anchor_widget->Init(params);
@@ -158,6 +190,30 @@ TEST_F(BubbleDelegateTest, ResetAnchorWidget) {
   parent_widget->CloseNow();
   RunPendingMessages();
   EXPECT_TRUE(bubble_observer.widget_closed());
+}
+
+TEST_F(BubbleDelegateTest, InitiallyFocusedView) {
+  // Create the anchor and parent widgets.
+  Widget::InitParams params = CreateParams(Widget::InitParams::TYPE_WINDOW);
+  params.ownership = views::Widget::InitParams::WIDGET_OWNS_NATIVE_WIDGET;
+  scoped_ptr<Widget> anchor_widget(new Widget);
+  anchor_widget->Init(params);
+  anchor_widget->Show();
+
+  TestBubbleDelegateView* bubble_delegate =
+      new TestBubbleDelegateView(anchor_widget->GetContentsView());
+  Widget* bubble_widget = BubbleDelegateView::CreateBubble(bubble_delegate);
+  bubble_widget->Show();
+
+  View* expected_view = bubble_delegate->GetInitiallyFocusedView();
+  // TODO(ben|msw): The NativeWidgetWin::RestoreFocusOnActivate() workaround for
+  // http://crbug.com/125976 breaks this simple test by clearing proper focus.
+#if defined(OS_WIN) && !defined(USE_AURA)
+  expected_view = NULL;
+#endif
+
+  EXPECT_EQ(expected_view, bubble_widget->GetFocusManager()->GetFocusedView());
+  bubble_widget->CloseNow();
 }
 
 }  // namespace views

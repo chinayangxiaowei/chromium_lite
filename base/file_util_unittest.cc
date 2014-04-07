@@ -19,8 +19,9 @@
 #include "base/base_paths.h"
 #include "base/file_path.h"
 #include "base/file_util.h"
+#include "base/files/scoped_temp_dir.h"
 #include "base/path_service.h"
-#include "base/scoped_temp_dir.h"
+#include "base/test/test_file_util.h"
 #include "base/threading/platform_thread.h"
 #include "base/utf_string_conversions.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -142,7 +143,7 @@ class FileUtilTest : public PlatformTest {
     ASSERT_TRUE(temp_dir_.CreateUniqueTempDir());
   }
 
-  ScopedTempDir temp_dir_;
+  base::ScopedTempDir temp_dir_;
 };
 
 // Collects all the results from the given file enumerator, and provides an
@@ -626,6 +627,56 @@ TEST_F(FileUtilTest, GetPlatformFileInfoForDirectory) {
   EXPECT_EQ(0, info.size);
 }
 
+TEST_F(FileUtilTest, CreateTemporaryFileInDirLongPathTest) {
+  // Test that CreateTemporaryFileInDir() creates a path and returns a long path
+  // if it is available. This test requires that:
+  // - the filesystem at |temp_dir_| supports long filenames.
+  // - the account has FILE_LIST_DIRECTORY permission for all ancestor
+  //   directories of |temp_dir_|.
+  const FilePath::CharType kLongDirName[] = FPL("A long path");
+  const FilePath::CharType kTestSubDirName[] = FPL("test");
+  FilePath long_test_dir = temp_dir_.path().Append(kLongDirName);
+  ASSERT_TRUE(file_util::CreateDirectory(long_test_dir));
+
+  // kLongDirName is not a 8.3 component. So GetShortName() should give us a
+  // different short name.
+  WCHAR path_buffer[MAX_PATH];
+  DWORD path_buffer_length = GetShortPathName(long_test_dir.value().c_str(),
+                                              path_buffer, MAX_PATH);
+  ASSERT_LT(path_buffer_length, DWORD(MAX_PATH));
+  ASSERT_NE(DWORD(0), path_buffer_length);
+  FilePath short_test_dir(path_buffer);
+  ASSERT_STRNE(kLongDirName, short_test_dir.BaseName().value().c_str());
+
+  FilePath temp_file;
+  ASSERT_TRUE(file_util::CreateTemporaryFileInDir(short_test_dir, &temp_file));
+  EXPECT_STREQ(kLongDirName, temp_file.DirName().BaseName().value().c_str());
+  EXPECT_TRUE(file_util::PathExists(temp_file));
+
+  // Create a subdirectory of |long_test_dir| and make |long_test_dir|
+  // unreadable. We should still be able to create a temp file in the
+  // subdirectory, but we won't be able to determine the long path for it. This
+  // mimics the environment that some users run where their user profiles reside
+  // in a location where the don't have full access to the higher level
+  // directories. (Note that this assumption is true for NTFS, but not for some
+  // network file systems. E.g. AFS).
+  FilePath access_test_dir = long_test_dir.Append(kTestSubDirName);
+  ASSERT_TRUE(file_util::CreateDirectory(access_test_dir));
+  file_util::PermissionRestorer long_test_dir_restorer(long_test_dir);
+  ASSERT_TRUE(file_util::MakeFileUnreadable(long_test_dir));
+
+  // Use the short form of the directory to create a temporary filename.
+  ASSERT_TRUE(file_util::CreateTemporaryFileInDir(
+      short_test_dir.Append(kTestSubDirName), &temp_file));
+  EXPECT_TRUE(file_util::PathExists(temp_file));
+  EXPECT_TRUE(short_test_dir.IsParent(temp_file.DirName()));
+
+  // Check that the long path can't be determined for |temp_file|.
+  path_buffer_length = GetLongPathName(temp_file.value().c_str(),
+                                       path_buffer, MAX_PATH);
+  EXPECT_EQ(DWORD(0), path_buffer_length);
+}
+
 #endif  // defined(OS_WIN)
 
 #if defined(OS_POSIX)
@@ -1098,8 +1149,8 @@ TEST_F(FileUtilTest, MoveNew) {
   ASSERT_TRUE(file_util::PathExists(dir_name_from));
 
   // Create a file under the directory
-  FilePath file_name_from =
-      dir_name_from.Append(FILE_PATH_LITERAL("Move_Test_File.txt"));
+  FilePath txt_file_name(FILE_PATH_LITERAL("Move_Test_File.txt"));
+  FilePath file_name_from = dir_name_from.Append(txt_file_name);
   CreateTextFile(file_name_from, L"Gooooooooooooooooooooogle");
   ASSERT_TRUE(file_util::PathExists(file_name_from));
 
@@ -1117,6 +1168,17 @@ TEST_F(FileUtilTest, MoveNew) {
   EXPECT_FALSE(file_util::PathExists(dir_name_from));
   EXPECT_FALSE(file_util::PathExists(file_name_from));
   EXPECT_TRUE(file_util::PathExists(dir_name_to));
+  EXPECT_TRUE(file_util::PathExists(file_name_to));
+
+  // Test path traversal.
+  file_name_from = dir_name_to.Append(txt_file_name);
+  file_name_to = dir_name_to.Append(FILE_PATH_LITERAL(".."));
+  file_name_to = file_name_to.Append(txt_file_name);
+  EXPECT_FALSE(file_util::Move(file_name_from, file_name_to));
+  EXPECT_TRUE(file_util::PathExists(file_name_from));
+  EXPECT_FALSE(file_util::PathExists(file_name_to));
+  EXPECT_TRUE(file_util::MoveUnsafe(file_name_from, file_name_to));
+  EXPECT_FALSE(file_util::PathExists(file_name_from));
   EXPECT_TRUE(file_util::PathExists(file_name_to));
 }
 
@@ -1415,6 +1477,43 @@ TEST_F(FileUtilTest, CopyFileWithCopyDirectoryRecursiveToExistingDirectory) {
   EXPECT_TRUE(file_util::PathExists(file_name_to));
 }
 
+TEST_F(FileUtilTest, CopyDirectoryWithTrailingSeparators) {
+  // Create a directory.
+  FilePath dir_name_from =
+      temp_dir_.path().Append(FILE_PATH_LITERAL("Copy_From_Subdir"));
+  file_util::CreateDirectory(dir_name_from);
+  ASSERT_TRUE(file_util::PathExists(dir_name_from));
+
+  // Create a file under the directory.
+  FilePath file_name_from =
+      dir_name_from.Append(FILE_PATH_LITERAL("Copy_Test_File.txt"));
+  CreateTextFile(file_name_from, L"Gooooooooooooooooooooogle");
+  ASSERT_TRUE(file_util::PathExists(file_name_from));
+
+  // Copy the directory recursively.
+  FilePath dir_name_to =
+      temp_dir_.path().Append(FILE_PATH_LITERAL("Copy_To_Subdir"));
+  FilePath file_name_to =
+      dir_name_to.Append(FILE_PATH_LITERAL("Copy_Test_File.txt"));
+
+  // Create from path with trailing separators.
+#if defined(OS_WIN)
+  FilePath from_path =
+      temp_dir_.path().Append(FILE_PATH_LITERAL("Copy_From_Subdir\\\\\\"));
+#elif defined (OS_POSIX)
+  FilePath from_path =
+      temp_dir_.path().Append(FILE_PATH_LITERAL("Copy_From_Subdir///"));
+#endif
+
+  EXPECT_TRUE(file_util::CopyDirectory(from_path, dir_name_to, true));
+
+  // Check everything has been copied.
+  EXPECT_TRUE(file_util::PathExists(dir_name_from));
+  EXPECT_TRUE(file_util::PathExists(file_name_from));
+  EXPECT_TRUE(file_util::PathExists(dir_name_to));
+  EXPECT_TRUE(file_util::PathExists(file_name_to));
+}
+
 TEST_F(FileUtilTest, CopyFile) {
   // Create a directory
   FilePath dir_name_from =
@@ -1437,7 +1536,8 @@ TEST_F(FileUtilTest, CopyFile) {
   FilePath dest_file2(dir_name_from);
   dest_file2 = dest_file2.AppendASCII("..");
   dest_file2 = dest_file2.AppendASCII("DestFile.txt");
-  ASSERT_TRUE(file_util::CopyFile(file_name_from, dest_file2));
+  ASSERT_FALSE(file_util::CopyFile(file_name_from, dest_file2));
+  ASSERT_TRUE(file_util::CopyFileUnsafe(file_name_from, dest_file2));
 
   FilePath dest_file2_test(dir_name_from);
   dest_file2_test = dest_file2_test.DirName();

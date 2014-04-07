@@ -50,7 +50,10 @@ class MockAudioManager : public media::AudioManager {
 
   virtual scoped_refptr<base::MessageLoopProxy> GetMessageLoop() OVERRIDE;
 
-  virtual void Init() OVERRIDE;
+  virtual void AddOutputDeviceChangeListener(
+      AudioDeviceListener* listener) OVERRIDE;
+  virtual void RemoveOutputDeviceChangeListener(
+      AudioDeviceListener* listener) OVERRIDE;
 
  private:
   virtual ~MockAudioManager();

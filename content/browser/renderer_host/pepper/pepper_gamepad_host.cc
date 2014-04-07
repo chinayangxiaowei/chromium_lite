@@ -66,22 +66,19 @@ int32_t PepperGamepadHost::OnMsgRequestMemory(
   gamepad_service_->RegisterForUserGesture(
       base::Bind(&PepperGamepadHost::GotUserGesture,
                  weak_factory_.GetWeakPtr(),
-                 context->MakeReplyParams()));
+                 context->MakeReplyMessageContext()));
   return PP_OK_COMPLETIONPENDING;
 }
 
 void PepperGamepadHost::GotUserGesture(
-    const ppapi::proxy::ResourceMessageReplyParams& in_params) {
+    const ppapi::host::ReplyMessageContext& context) {
   base::SharedMemoryHandle handle =
       gamepad_service_->GetSharedMemoryHandleForProcess(
           browser_ppapi_host_->GetPluginProcessHandle());
 
-  // The shared memory handle is sent in the params struct, so we have to make
-  // a copy to mutate it.
-  ppapi::proxy::ResourceMessageReplyParams params = in_params;
-  params.AppendHandle(ppapi::proxy::SerializedHandle(
+  context.params.AppendHandle(ppapi::proxy::SerializedHandle(
       handle, sizeof(ppapi::ContentGamepadHardwareBuffer)));
-  host()->SendReply(params, PpapiPluginMsg_Gamepad_SendMemory());
+  host()->SendReply(context, PpapiPluginMsg_Gamepad_SendMemory());
 }
 
 }  // namespace content

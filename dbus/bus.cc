@@ -305,8 +305,21 @@ bool Bus::Connect() {
   }
   if (!connection_) {
     LOG(ERROR) << "Failed to connect to the bus: "
-               << (dbus_error_is_set(error.get()) ? error.message() : "");
+               << (error.is_set() ? error.message() : "");
     return false;
+  }
+
+  if (bus_type_ == CUSTOM_ADDRESS) {
+    // We should call dbus_bus_register here, otherwise unique name can not be
+    // acquired. According to dbus specification, it is responsible to call
+    // org.freedesktop.DBus.Hello method at the beging of bus connection to
+    // acquire unique name. In the case of dbus_bus_get, dbus_bus_register is
+    // called internally.
+    if (!dbus_bus_register(connection_, error.get())) {
+      LOG(ERROR) << "Failed to register the bus component: "
+                 << (error.is_set() ? error.message() : "");
+      return false;
+    }
   }
   // We shouldn't exit on the disconnected signal.
   dbus_connection_set_exit_on_disconnect(connection_, false);
@@ -429,7 +442,7 @@ bool Bus::RequestOwnershipAndBlock(const std::string& service_name) {
                                            error.get());
   if (result != DBUS_REQUEST_NAME_REPLY_PRIMARY_OWNER) {
     LOG(ERROR) << "Failed to get the ownership of " << service_name << ": "
-               << (dbus_error_is_set(error.get()) ? error.message() : "");
+               << (error.is_set() ? error.message() : "");
     return false;
   }
   owned_service_names_.insert(service_name);

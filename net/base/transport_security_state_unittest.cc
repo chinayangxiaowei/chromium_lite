@@ -21,6 +21,7 @@
 #include "net/base/net_log.h"
 #include "net/base/ssl_info.h"
 #include "net/base/test_completion_callback.h"
+#include "net/base/test_data_directory.h"
 #include "net/base/test_root_certs.h"
 #include "net/base/x509_cert_types.h"
 #include "net/base/x509_certificate.h"
@@ -238,6 +239,46 @@ TEST_F(TransportSecurityStateTest, ValidSTSHeaders) {
   EXPECT_EQ(expiry, state.upgrade_expiry);
   EXPECT_TRUE(state.include_subdomains);
 
+  EXPECT_TRUE(state.ParseSTSHeader(now, "incLudesUbdOmains; max-age=123"));
+  expiry = now + base::TimeDelta::FromSeconds(123);
+  EXPECT_EQ(expiry, state.upgrade_expiry);
+  EXPECT_TRUE(state.include_subdomains);
+
+  EXPECT_TRUE(state.ParseSTSHeader(now, "   incLudesUbdOmains; max-age=123"));
+  expiry = now + base::TimeDelta::FromSeconds(123);
+  EXPECT_EQ(expiry, state.upgrade_expiry);
+  EXPECT_TRUE(state.include_subdomains);
+
+  EXPECT_TRUE(state.ParseSTSHeader(now,
+      "   incLudesUbdOmains; max-age=123; pumpkin=kitten"));
+  expiry = now + base::TimeDelta::FromSeconds(123);
+  EXPECT_EQ(expiry, state.upgrade_expiry);
+  EXPECT_TRUE(state.include_subdomains);
+
+  EXPECT_TRUE(state.ParseSTSHeader(now,
+      "   pumpkin=894; incLudesUbdOmains; max-age=123  "));
+  expiry = now + base::TimeDelta::FromSeconds(123);
+  EXPECT_EQ(expiry, state.upgrade_expiry);
+  EXPECT_TRUE(state.include_subdomains);
+
+  EXPECT_TRUE(state.ParseSTSHeader(now,
+      "   pumpkin; incLudesUbdOmains; max-age=123  "));
+  expiry = now + base::TimeDelta::FromSeconds(123);
+  EXPECT_EQ(expiry, state.upgrade_expiry);
+  EXPECT_TRUE(state.include_subdomains);
+
+  EXPECT_TRUE(state.ParseSTSHeader(now,
+      "   pumpkin; incLudesUbdOmains; max-age=\"123\"  "));
+  expiry = now + base::TimeDelta::FromSeconds(123);
+  EXPECT_EQ(expiry, state.upgrade_expiry);
+  EXPECT_TRUE(state.include_subdomains);
+
+  EXPECT_TRUE(state.ParseSTSHeader(now,
+      "animal=\"squirrel; distinguished\"; incLudesUbdOmains; max-age=123"));
+  expiry = now + base::TimeDelta::FromSeconds(123);
+  EXPECT_EQ(expiry, state.upgrade_expiry);
+  EXPECT_TRUE(state.include_subdomains);
+
   EXPECT_TRUE(state.ParseSTSHeader(now, "max-age=394082;  incLudesUbdOmains"));
   expiry = now + base::TimeDelta::FromSeconds(394082);
   EXPECT_EQ(expiry, state.upgrade_expiry);
@@ -262,6 +303,12 @@ TEST_F(TransportSecurityStateTest, ValidSTSHeaders) {
   expiry = now + base::TimeDelta::FromSeconds(0);
   EXPECT_EQ(expiry, state.upgrade_expiry);
   EXPECT_TRUE(state.include_subdomains);
+  // When max-age == 0, we downgrade to MODE_DEFAULT rather than deleting
+  // the entire DomainState. (That is because we currently overload
+  // DomainState to also include pins, and we don't want to invalidate any
+  // opportunistic pins that may be in place.)
+  EXPECT_EQ(TransportSecurityState::DomainState::MODE_DEFAULT,
+            state.upgrade_mode);
 
   EXPECT_TRUE(state.ParseSTSHeader(
       now,
@@ -797,7 +844,7 @@ TEST_F(TransportSecurityStateTest, Preloaded) {
   EXPECT_FALSE(ShouldRedirect("foo.www.sandbox.mydigipass.com"));
 
   EXPECT_TRUE(ShouldRedirect("crypto.cat"));
-  EXPECT_TRUE(ShouldRedirect("foo.crypto.cat"));
+  EXPECT_FALSE(ShouldRedirect("foo.crypto.cat"));
 
   EXPECT_TRUE(ShouldRedirect("bigshinylock.minazo.net"));
   EXPECT_TRUE(ShouldRedirect("foo.bigshinylock.minazo.net"));

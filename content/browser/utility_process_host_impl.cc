@@ -7,7 +7,7 @@
 #include "base/bind.h"
 #include "base/bind_helpers.h"
 #include "base/command_line.h"
-#include "base/message_loop.h"
+#include "base/sequenced_task_runner.h"
 #include "base/utf_string_conversions.h"
 #include "content/browser/browser_child_process_host_impl.h"
 #include "content/common/child_process_host_impl.h"
@@ -19,25 +19,19 @@
 #include "ui/base/ui_base_switches.h"
 #include "webkit/plugins/plugin_switches.h"
 
-using content::BrowserThread;
-using content::ChildProcessHost;
-using content::UtilityProcessHostClient;
-
 namespace content {
 
 UtilityProcessHost* UtilityProcessHost::Create(
     UtilityProcessHostClient* client,
-    BrowserThread::ID client_thread_id) {
-  return new UtilityProcessHostImpl(client, client_thread_id);
+    base::SequencedTaskRunner* client_task_runner) {
+  return new UtilityProcessHostImpl(client, client_task_runner);
 }
-
-}  // namespace content
 
 UtilityProcessHostImpl::UtilityProcessHostImpl(
     UtilityProcessHostClient* client,
-    BrowserThread::ID client_thread_id)
+    base::SequencedTaskRunner* client_task_runner)
     : client_(client),
-      client_thread_id_(client_thread_id),
+      client_task_runner_(client_task_runner),
       is_batch_mode_(false),
       no_sandbox_(false),
 #if defined(OS_LINUX)
@@ -47,8 +41,7 @@ UtilityProcessHostImpl::UtilityProcessHostImpl(
 #endif
       use_linux_zygote_(false),
       started_(false) {
-  process_.reset(
-      new BrowserChildProcessHostImpl(content::PROCESS_TYPE_UTILITY, this));
+  process_.reset(new BrowserChildProcessHostImpl(PROCESS_TYPE_UTILITY, this));
 }
 
 UtilityProcessHostImpl::~UtilityProcessHostImpl() {
@@ -137,14 +130,17 @@ bool UtilityProcessHostImpl::StartProcess() {
   cmd_line->AppendSwitchASCII(switches::kProcessType,
                               switches::kUtilityProcess);
   cmd_line->AppendSwitchASCII(switches::kProcessChannelID, channel_id);
-  std::string locale =
-      content::GetContentClient()->browser()->GetApplicationLocale();
+  std::string locale = GetContentClient()->browser()->GetApplicationLocale();
   cmd_line->AppendSwitchASCII(switches::kLang, locale);
 
   if (browser_command_line.HasSwitch(switches::kChromeFrame))
     cmd_line->AppendSwitch(switches::kChromeFrame);
   if (no_sandbox_ || browser_command_line.HasSwitch(switches::kNoSandbox))
     cmd_line->AppendSwitch(switches::kNoSandbox);
+#if defined(OS_MACOSX)
+  if (browser_command_line.HasSwitch(switches::kEnableSandboxLogging))
+    cmd_line->AppendSwitch(switches::kEnableSandboxLogging);
+#endif
   if (browser_command_line.HasSwitch(switches::kDebugPluginLoading))
     cmd_line->AppendSwitch(switches::kDebugPluginLoading);
 
@@ -180,8 +176,8 @@ bool UtilityProcessHostImpl::StartProcess() {
 }
 
 bool UtilityProcessHostImpl::OnMessageReceived(const IPC::Message& message) {
-  BrowserThread::PostTask(
-      client_thread_id_, FROM_HERE,
+  client_task_runner_->PostTask(
+      FROM_HERE,
       base::Bind(base::IgnoreResult(
           &UtilityProcessHostClient::OnMessageReceived), client_.get(),
           message));
@@ -189,8 +185,10 @@ bool UtilityProcessHostImpl::OnMessageReceived(const IPC::Message& message) {
 }
 
 void UtilityProcessHostImpl::OnProcessCrashed(int exit_code) {
-  BrowserThread::PostTask(
-      client_thread_id_, FROM_HERE,
+  client_task_runner_->PostTask(
+      FROM_HERE,
       base::Bind(&UtilityProcessHostClient::OnProcessCrashed, client_.get(),
             exit_code));
 }
+
+}  // namespace content

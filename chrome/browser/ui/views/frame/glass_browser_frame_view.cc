@@ -9,9 +9,8 @@
 #include "chrome/app/chrome_command_ids.h"
 #include "chrome/app/chrome_dll_resource.h"
 #include "chrome/browser/prefs/pref_service.h"
+#include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/themes/theme_service.h"
-#include "chrome/browser/ui/search/search.h"
-#include "chrome/browser/ui/search/search_model.h"
 #include "chrome/browser/ui/views/avatar_menu_button.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
 #include "chrome/browser/ui/views/tabs/tab.h"
@@ -30,6 +29,10 @@
 #include "ui/gfx/icon_util.h"
 #include "ui/gfx/image/image.h"
 #include "ui/views/window/client_view.h"
+
+#if defined(USE_AURA)
+#include "ui/aura/root_window.h"
+#endif
 
 HICON GlassBrowserFrameView::throbber_icons_[
     GlassBrowserFrameView::kThrobberIconCount];
@@ -67,6 +70,14 @@ const int kNewTabCaptionMaximizedSpacing = 16;
 // How far to indent the tabstrip from the left side of the screen when there
 // is no avatar icon.
 const int kTabStripIndent = -6;
+
+HWND GetFrameHWND(BrowserFrame* frame) {
+#if defined(USE_AURA)
+  return frame->GetNativeWindow()->GetRootWindow()->GetAcceleratedWidget();
+#else
+  return frame->GetNativeWindow();
+#endif
+}
 }
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -171,7 +182,7 @@ gfx::Rect GlassBrowserFrameView::GetBoundsForClientView() const {
 
 gfx::Rect GlassBrowserFrameView::GetWindowBoundsForClientBounds(
     const gfx::Rect& client_bounds) const {
-  HWND hwnd = frame()->GetNativeWindow();
+  HWND hwnd = GetFrameHWND(frame());
   if (!browser_view()->IsTabStripVisible() && hwnd) {
     // If we don't have a tabstrip, we're either a popup or an app window, in
     // which case we have a standard size non-client area and can just use
@@ -287,11 +298,7 @@ void GlassBrowserFrameView::PaintToolbarBackground(gfx::Canvas* canvas) {
   int w = toolbar_bounds.width();
   int left_x = x - kContentEdgeShadowThickness;
 
-  // TODO(kuan): migrate background animation from cros to win by calling
-  // GetToolbarBackgound* with the correct mode, refer to
-  // BrowserNonClientFrameViewAsh.
-  gfx::ImageSkia* theme_toolbar = browser_view()->GetToolbarBackgroundImage(
-      browser_view()->browser()->search_model()->mode().mode);
+  gfx::ImageSkia* theme_toolbar = tp->GetImageSkiaNamed(IDR_THEME_TOOLBAR);
   gfx::ImageSkia* toolbar_left = tp->GetImageSkiaNamed(
       IDR_CONTENT_TOP_LEFT_CORNER);
   gfx::ImageSkia* toolbar_center = tp->GetImageSkiaNamed(
@@ -330,29 +337,25 @@ void GlassBrowserFrameView::PaintToolbarBackground(gfx::Canvas* canvas) {
   canvas->DrawImageInt(*toolbar_left, left_x, y);
 
   // Draw center edge.
-  canvas->TileImageInt(*toolbar_center, left_x + toolbar_left->width(), y,
+  int edge_y = y;
+    // TODO(beng): figure out why this is necessary to render correctly.
+#if defined(USE_AURA)
+  edge_y -= 2;
+#endif
+  canvas->TileImageInt(*toolbar_center, left_x + toolbar_left->width(), edge_y,
       right_x - (left_x + toolbar_left->width()), toolbar_center->height());
 
   // Right edge.
   canvas->DrawImageInt(*tp->GetImageSkiaNamed(IDR_CONTENT_TOP_RIGHT_CORNER),
                        right_x, y);
 
-  // Only draw the content/toolbar separator if Instant Extended API is disabled
-  // or mode is DEFAULT.
-  Browser* browser = browser_view()->browser();
-  bool extended_instant_enabled = chrome::search::IsInstantExtendedAPIEnabled(
-      browser->profile());
-  if (!extended_instant_enabled ||
-      browser->search_model()->mode().is_default()) {
-    canvas->FillRect(
-        gfx::Rect(x + kClientEdgeThickness,
-                  toolbar_bounds.bottom() - kClientEdgeThickness,
-                  w - (2 * kClientEdgeThickness),
-                  kClientEdgeThickness),
-        ThemeService::GetDefaultColor(extended_instant_enabled ?
-            ThemeService::COLOR_SEARCH_SEPARATOR_LINE :
-                ThemeService::COLOR_TOOLBAR_SEPARATOR));
-  }
+  // Draw the content/toolbar separator.
+  canvas->FillRect(
+      gfx::Rect(x + kClientEdgeThickness,
+                toolbar_bounds.bottom() - kClientEdgeThickness,
+                w - (2 * kClientEdgeThickness),
+                kClientEdgeThickness),
+      ThemeService::GetDefaultColor(ThemeService::COLOR_TOOLBAR_SEPARATOR));
 }
 
 void GlassBrowserFrameView::PaintRestoredClientEdge(gfx::Canvas* canvas) {
@@ -391,8 +394,7 @@ void GlassBrowserFrameView::PaintRestoredClientEdge(gfx::Canvas* canvas) {
   // where not covered by the toolbar image.  NOTE: We do this after drawing the
   // images because the images are meant to alpha-blend atop the frame whereas
   // these rects are meant to be fully opaque, without anything overlaid.
-  SkColor toolbar_color = browser_view()->GetToolbarBackgroundColor(
-      browser_view()->browser()->search_model()->mode().mode);
+  SkColor toolbar_color = tp->GetColor(ThemeService::COLOR_TOOLBAR);
   canvas->FillRect(gfx::Rect(client_area_bounds.x() - kClientEdgeThickness,
       client_area_top, kClientEdgeThickness,
       client_area_bottom + kClientEdgeThickness - client_area_top),
@@ -461,7 +463,7 @@ void GlassBrowserFrameView::StartThrobber() {
     throbber_running_ = true;
     throbber_frame_ = 0;
     InitThrobberIcons();
-    SendMessage(frame()->GetNativeWindow(), WM_SETICON,
+    SendMessage(GetFrameHWND(frame()), WM_SETICON,
                 static_cast<WPARAM>(ICON_SMALL),
                 reinterpret_cast<LPARAM>(throbber_icons_[throbber_frame_]));
   }
@@ -477,19 +479,19 @@ void GlassBrowserFrameView::StopThrobber() {
     if (browser_view()->ShouldShowWindowIcon()) {
       gfx::ImageSkia icon = browser_view()->GetWindowIcon();
       if (!icon.isNull())
-        frame_icon = IconUtil::CreateHICONFromSkBitmap(icon);
+        frame_icon = IconUtil::CreateHICONFromSkBitmap(*icon.bitmap());
     }
 
     // Fallback to class icon.
     if (!frame_icon) {
       frame_icon = reinterpret_cast<HICON>(GetClassLongPtr(
-          frame()->GetNativeWindow(), GCLP_HICONSM));
+          GetFrameHWND(frame()), GCLP_HICONSM));
     }
 
     // This will reset the small icon which we set in the throbber code.
     // WM_SETICON with NULL icon restores the icon for title bar but not
     // for taskbar. See http://crbug.com/29996
-    SendMessage(frame()->GetNativeWindow(), WM_SETICON,
+    SendMessage(GetFrameHWND(frame()), WM_SETICON,
                 static_cast<WPARAM>(ICON_SMALL),
                 reinterpret_cast<LPARAM>(frame_icon));
   }
@@ -497,7 +499,7 @@ void GlassBrowserFrameView::StopThrobber() {
 
 void GlassBrowserFrameView::DisplayNextThrobberFrame() {
   throbber_frame_ = (throbber_frame_ + 1) % kThrobberIconCount;
-  SendMessage(frame()->GetNativeWindow(), WM_SETICON,
+  SendMessage(GetFrameHWND(frame()), WM_SETICON,
               static_cast<WPARAM>(ICON_SMALL),
               reinterpret_cast<LPARAM>(throbber_icons_[throbber_frame_]));
 }

@@ -18,7 +18,6 @@
 #include "native_client/src/shared/srpc/nacl_srpc.h"
 #include "native_client/src/trusted/plugin/plugin.h"
 #include "ppapi/c/dev/ppb_gles_chromium_texture_mapping_dev.h"
-#include "ppapi/c/dev/ppb_layer_compositor_dev.h"
 #include "ppapi/c/dev/ppb_opengles2ext_dev.h"
 #include "ppapi/c/ppb_graphics_3d.h"
 #include "ppapi/c/ppb_opengles2.h"
@@ -211,8 +210,7 @@ const void* GetBrowserInterface(const char* interface_name) {
       PPB_OPENGLES2_FRAMEBUFFERMULTISAMPLE_INTERFACE,
       PPB_OPENGLES2_CHROMIUMENABLEFEATURE_INTERFACE,
       PPB_OPENGLES2_CHROMIUMMAPSUB_INTERFACE,
-      PPB_OPENGLES2_QUERY_INTERFACE,
-      PPB_LAYER_COMPOSITOR_DEV_INTERFACE
+      PPB_OPENGLES2_QUERY_INTERFACE
     };
     for (size_t i = 0; i < NACL_ARRAY_SIZE(disabled_interface_names); i++) {
       if (strcmp(interface_name, disabled_interface_names[i]) == 0)
@@ -377,11 +375,10 @@ const PPB_WheelInputEvent* PPBWheelInputEventInterface() {
   return ppb;
 }
 
-// Dev interfaces.
-const PPB_FileIO* PPBFileIOInterface() {
-  static const PPB_FileIO* ppb =
-      static_cast<const PPB_FileIO*>(
-        GetBrowserInterfaceSafe(PPB_FILEIO_INTERFACE));
+const PPB_FileIO_1_0* PPBFileIOInterface() {
+  static const PPB_FileIO_1_0* ppb =
+      static_cast<const PPB_FileIO_1_0*>(
+        GetBrowserInterfaceSafe(PPB_FILEIO_INTERFACE_1_0));
   return ppb;
 }
 

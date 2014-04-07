@@ -79,11 +79,14 @@ class ChromeRenderMessageFilter : public content::BrowserMessageFilter {
 
 #if !defined(DISABLE_NACL)
   void OnLaunchNaCl(const GURL& manifest_url,
+                    int render_view_id,
+                    uint32 permission_bits,
                     int socket_count,
                     IPC::Message* reply_msg);
   void OnGetReadonlyPnaclFd(const std::string& filename,
                             IPC::Message* reply_msg);
   void OnNaClCreateTemporaryFile(IPC::Message* reply_msg);
+  void OnNaClErrorStatus(int render_view_id, int error_id);
 #endif
   void OnDnsPrefetch(const std::vector<std::string>& hostnames);
   void OnResourceTypeStats(const WebKit::WebCache::ResourceTypeStats& stats);
@@ -100,6 +103,18 @@ class ChromeRenderMessageFilter : public content::BrowserMessageFilter {
                                         const std::string& source_extension_id,
                                         const std::string& target_extension_id,
                                         const std::string& channel_name);
+  void OnOpenChannelToNativeApp(int routing_id,
+                                const std::string& source_extension_id,
+                                const std::string& native_app_name,
+                                const std::string& channel_name,
+                                const std::string& connect_message,
+                                int* port_id);
+  void OpenChannelToNativeAppOnUIThread(int source_routing_id,
+                                        int receiver_port_id,
+                                        const std::string& source_extension_id,
+                                        const std::string& native_app_name,
+                                        const std::string& channel_name,
+                                        const std::string& connect_message);
   void OnOpenChannelToTab(int routing_id, int tab_id,
                           const std::string& extension_id,
                           const std::string& channel_name, int* port_id);

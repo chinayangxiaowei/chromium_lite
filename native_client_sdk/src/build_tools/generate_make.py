@@ -7,6 +7,7 @@ import buildbot_common
 import optparse
 import os
 import sys
+from generate_index import LandingPage
 from buildbot_common import ErrorExit
 from make_rules import MakeRules, SetVar, GenerateCleanRules, GenerateNMFRules
 
@@ -37,6 +38,10 @@ def WriteReplaced(srcpath, dstpath, replacements):
   open(dstpath, 'wb').write(text)
 
 
+def ShouldProcessHTML(desc):
+  return desc['DEST'] in ('examples', 'tests')
+
+
 def GenerateSourceCopyList(desc):
   sources = []
   # Add sources for each target
@@ -46,7 +51,7 @@ def GenerateSourceCopyList(desc):
   # And HTML and data files
   sources.extend(desc.get('DATA', []))
 
-  if desc['DEST'] == 'examples':
+  if ShouldProcessHTML(desc):
     sources.append('common.js')
 
   return sources
@@ -88,7 +93,7 @@ def GenerateToolDefaults(tools):
 
 def GenerateSettings(desc, tools):
   settings = SetVar('VALID_TOOLCHAINS', tools)
-  settings += 'TOOLCHAIN?=%s\n\n' % tools[0]
+  settings += 'TOOLCHAIN?=%s\n\n' % desc['TOOLS'][0]
   for target in desc['TARGETS']:
     project = target['NAME']
     macro = project.upper()
@@ -133,10 +138,17 @@ def GenerateRules(desc, tools):
       rules += SetVar('GLIBC_REMAP', glibc_rename)
 
   configs = desc.get('CONFIGS', ['Debug', 'Release'])
-  for tc in tools:
+  for tc, enabled_arches in tools.iteritems():
+    print tc
     makeobj = MakeRules(tc)
     arches = makeobj.GetArches()
     rules += makeobj.BuildDirectoryRules(configs)
+
+    if enabled_arches:
+      # filter out all arches that don't match the list
+      # of enabled arches
+      arches = [a for a in arches if a.get('<arch>') in enabled_arches]
+
     for cfg in configs:
       makeobj.SetConfig(cfg)
       for target in desc['TARGETS']:
@@ -147,7 +159,7 @@ def GenerateRules(desc, tools):
         incs = target.get('INCLUDES', [])
         libs = target.get('LIBS', [])
         makeobj.SetProject(project, ptype, defs=defs, incs=incs, libs=libs)
-        if ptype == 'main':
+        if ptype == 'main' and tc in ['linux', 'win']:
           rules += makeobj.GetPepperPlugin()
         for arch in arches:
           makeobj.SetArch(arch)
@@ -165,7 +177,6 @@ def GenerateRules(desc, tools):
   rules += '\nall: $(ALL_TARGETS)\n'
 
   return '', rules
-
 
 
 def GenerateReplacements(desc, tools):
@@ -193,7 +204,8 @@ def GenerateReplacements(desc, tools):
 
 # 'KEY' : ( <TYPE>, [Accepted Values], <Required?>)
 DSC_FORMAT = {
-    'TOOLS' : (list, ['newlib', 'glibc', 'pnacl', 'win', 'linux'], True),
+    'TOOLS' : (list, ['newlib:arm', 'newlib:x64', 'newlib:x86', 'newlib',
+                      'glibc', 'pnacl', 'win', 'linux'], True),
     'CONFIGS' : (list, ['Debug', 'Release'], False),
     'PREREQ' : (list, '', False),
     'TARGETS' : (list, {
@@ -202,9 +214,11 @@ DSC_FORMAT = {
         'SOURCES': (list, '', True),
         'CCFLAGS': (list, '', False),
         'CXXFLAGS': (list, '', False),
+        'DEFINES': (list, '', False),
         'LDFLAGS': (list, '', False),
         'INCLUDES': (list, '', False),
-        'LIBS' : (list, '', False)
+        'LIBS' : (list, '', False),
+        'DEPS' : (list, '', False)
     }, True),
     'HEADERS': (list, {
         'FILES': (list, '', True),
@@ -213,12 +227,13 @@ DSC_FORMAT = {
     'SEARCH': (list, '', False),
     'POST': (str, '', False),
     'PRE': (str, '', False),
-    'DEST': (str, ['examples', 'src', 'testing'], True),
+    'DEST': (str, ['examples', 'src', 'testlibs', 'tests'], True),
     'NAME': (str, '', False),
     'DATA': (list, '', False),
     'TITLE': (str, '', False),
     'DESC': (str, '', False),
-    'INFO': (str, '', False),
+    'FOCUS': (str, '', False),
+    'GROUP': (str, '', False),
     'EXPERIMENTAL': (bool, [True, False], False)
 }
 
@@ -269,7 +284,7 @@ def ValidateFormat(src, dsc_format, ErrorMsg=ErrorMsgFunc):
     if exp_type is str:
       if type(exp_value) is list and exp_value:
         if value not in exp_value:
-          ErrorMsg('Value %s not expected for %s.' % (value, key))
+          ErrorMsg("Value '%s' not expected for %s." % (value, key))
           failed = True
       continue
 
@@ -351,14 +366,21 @@ def ProcessHTML(srcroot, dstroot, desc, toolchains):
   srcfile = os.path.join(srcroot, 'index.html')
   tools = GetPlatforms(toolchains, desc['TOOLS'])
 
-  configs = ['Debug', 'Release']
+  if use_gyp and getos.GetPlatform() != 'win':
+    configs = ['debug', 'release']
+  else:
+    configs = ['Debug', 'Release']
 
   for tool in tools:
     for cfg in configs:
       dstfile = os.path.join(outdir, 'index_%s_%s.html' % (tool, cfg))
       print 'Writing from %s to %s' % (srcfile, dstfile)
+      if use_gyp:
+        path = "build/%s-%s" % (tool, cfg)
+      else:
+        path = "%s/%s" % (tool, cfg)
       replace = {
-        '<config>': cfg,
+        '<path>': path,
         '<NAME>': name,
         '<TITLE>': desc['TITLE'],
         '<tc>': tool
@@ -380,7 +402,7 @@ def LoadProject(filename, toolchains):
   if it matches the set of requested toolchains.  Return None if the
   project is filtered out."""
 
-  print '\n\nProcessing %s...' % filename
+  print 'Processing %s...' % filename
   # Default src directory is the directory the description was found in
   desc = open(filename, 'r').read()
   desc = eval(desc, {}, {})
@@ -407,9 +429,12 @@ def FindAndCopyFiles(src_files, root, search_dirs, dst_dir):
   for src_name in src_files:
     src_file = FindFile(src_name, root, search_dirs)
     if not src_file:
-      ErrorMsgFunc('Failed to find: ' + src_name)
-      return None
+      ErrorExit('Failed to find: ' + src_name)
     dst_file = os.path.join(dst_dir, src_name)
+    if os.path.exists(dst_file):
+      if os.stat(src_file).st_mtime <= os.stat(dst_file).st_mtime:
+        print 'Skipping "%s", destination "%s" is newer.' % (src_file, dst_file)
+        continue
     buildbot_common.CopyFile(src_file, dst_file)
 
 
@@ -456,15 +481,28 @@ def ProcessProject(srcroot, dstroot, desc, toolchains):
     else:
       template = os.path.join(SCRIPT_DIR, 'library.mk')
 
-    tools = []
+    tools = {}
+    tool_list = []
     for tool in desc['TOOLS']:
-      if tool in toolchains:
-        tools.append(tool)
+      if ':' in tool:
+        tool, arch = tool.split(':')
+      else:
+        arch = None
+      # Ignore tools that are not enabled in this SDK build
+      if tool not in toolchains:
+        continue
+      tools.setdefault(tool, [])
+      if tool not in tool_list:
+        tool_list.append(tool)
+      if arch:
+        tools[tool].append(arch)
 
+    desc['TOOLS'] = tool_list
 
     # Add Makefile and make.bat
     repdict = GenerateReplacements(desc, tools)
-    WriteReplaced(template, make_path, repdict)
+    if not 'Makefile' in desc.get('DATA', []):
+      WriteReplaced(template, make_path, repdict)
 
   outdir = os.path.dirname(os.path.abspath(make_path))
   pepperdir = os.path.dirname(os.path.dirname(outdir))
@@ -474,7 +512,34 @@ def ProcessProject(srcroot, dstroot, desc, toolchains):
 
 def GenerateMasterMakefile(in_path, out_path, projects):
   """Generate a Master Makefile that builds all examples. """
-  replace = {  '__PROJECT_LIST__' : SetVar('PROJECTS', projects) }
+  project_names = [project['NAME'] for project in projects]
+
+  # TODO(binji): This is kind of a hack; we use the target's LIBS to determine
+  # dependencies. This project-level dependency is then injected into the
+  # master Makefile.
+  dependencies = []
+  for project in projects:
+    project_deps_set = set()
+    for target in project['TARGETS']:
+      target_libs = target.get('LIBS', [])
+      dependent_libs = set(target_libs) & set(project_names)
+      project_deps_set.update(dependent_libs)
+
+    if project_deps_set:
+      # If project foo depends on projects bar and baz, generate:
+      #   "foo_TARGET: bar_TARGET baz_TARGET"
+      # _TARGET is appended for all targets in the master makefile template.
+      project_deps = ' '.join(p + '_TARGET' for p in project_deps_set)
+      project_deps_string = '%s_TARGET: %s' % (project['NAME'], project_deps)
+      dependencies.append(project_deps_string)
+
+  dependencies_string = '\n'.join(dependencies)
+
+  replace = {
+      '__PROJECT_LIST__' : SetVar('PROJECTS', project_names),
+      '__DEPENDENCIES__': dependencies_string,
+  }
+
   WriteReplaced(in_path, out_path, replace)
 
   outdir = os.path.dirname(os.path.abspath(out_path))
@@ -483,21 +548,22 @@ def GenerateMasterMakefile(in_path, out_path, projects):
 
 
 def main(argv):
-  parser = optparse.OptionParser()
+  usage = "usage: generate_make [options] <dsc_file ..>"
+  parser = optparse.OptionParser(usage=usage)
   parser.add_option('--dstroot', help='Set root for destination.',
-      dest='dstroot', default=os.path.join(OUT_DIR, 'pepper_canary'))
+      default=os.path.join(OUT_DIR, 'pepper_canary'))
   parser.add_option('--master', help='Create master Makefile.',
-      action='store_true', dest='master', default=False)
+      action='store_true', default=False)
   parser.add_option('--newlib', help='Create newlib examples.',
-      action='store_true', dest='newlib', default=False)
+      action='store_true', default=False)
   parser.add_option('--glibc', help='Create glibc examples.',
-      action='store_true', dest='glibc', default=False)
+      action='store_true', default=False)
   parser.add_option('--pnacl', help='Create pnacl examples.',
-      action='store_true', dest='pnacl', default=False)
+      action='store_true', default=False)
   parser.add_option('--host', help='Create host examples.',
-      action='store_true', dest='host', default=False)
+      action='store_true', default=False)
   parser.add_option('--experimental', help='Create experimental examples.',
-      action='store_true', dest='experimental', default=False)
+      action='store_true', default=False)
 
   toolchains = []
   platform = getos.GetPlatform()
@@ -517,12 +583,15 @@ def main(argv):
 
   # By default support newlib and glibc
   if not toolchains:
-    toolchains = ['newlib', 'glibc']
-    print 'Using default toolchains: ' + ' '.join(toolchains)
+    toolchains = ['newlib', 'glibc', 'pnacl']
 
   master_projects = {}
 
-  for filename in args:
+  landing_page = LandingPage()
+  for i, filename in enumerate(args):
+    if i:
+      # Print two newlines between each dsc file we process
+      print '\n'
     desc = LoadProject(filename, toolchains)
     if not desc:
       print 'Skipping %s, not in [%s].' % (filename, ', '.join(toolchains))
@@ -536,16 +605,28 @@ def main(argv):
     if not ProcessProject(srcroot, options.dstroot, desc, toolchains):
       ErrorExit('\n*** Failed to process project: %s ***' % filename)
 
-    # if this is an example update the html
-    if desc['DEST'] == 'examples':
+    # if this is an example update it's html file.
+    if ShouldProcessHTML(desc):
       ProcessHTML(srcroot, options.dstroot, desc, toolchains)
+
+    # if this is an example, update landing page html file.
+    if desc['DEST'] == 'examples':
+      landing_page.AddDesc(desc)
 
     # Create a list of projects for each DEST. This will be used to generate a
     # master makefile.
-    master_projects.setdefault(desc['DEST'], []).append(desc['NAME'])
+    master_projects.setdefault(desc['DEST'], []).append(desc)
+
+  # Generate the landing page text file.
+  index_html = os.path.join(options.dstroot, 'examples', 'index.html')
+  with open(index_html, 'w') as fh:
+    fh.write(landing_page.GeneratePage())
 
   if options.master:
-    master_in = os.path.join(SDK_EXAMPLE_DIR, 'Makefile')
+    if use_gyp:
+      master_in = os.path.join(SDK_EXAMPLE_DIR, 'Makefile_gyp')
+    else:
+      master_in = os.path.join(SDK_EXAMPLE_DIR, 'Makefile')
     for dest, projects in master_projects.iteritems():
       master_out = os.path.join(options.dstroot, dest, 'Makefile')
       GenerateMasterMakefile(master_in, master_out, projects)
@@ -555,3 +636,4 @@ def main(argv):
 
 if __name__ == '__main__':
   sys.exit(main(sys.argv[1:]))
+

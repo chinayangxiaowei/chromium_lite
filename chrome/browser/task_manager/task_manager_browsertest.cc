@@ -13,6 +13,7 @@
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/extensions/extension_browsertest.h"
 #include "chrome/browser/extensions/extension_service.h"
+#include "chrome/browser/extensions/extension_system.h"
 #include "chrome/browser/infobars/infobar_tab_helper.h"
 #include "chrome/browser/notifications/desktop_notification_service.h"
 #include "chrome/browser/notifications/notification.h"
@@ -26,7 +27,6 @@
 #include "chrome/browser/ui/browser_window.h"
 #include "chrome/browser/ui/panels/panel.h"
 #include "chrome/browser/ui/panels/panel_manager.h"
-#include "chrome/browser/ui/tab_contents/tab_contents.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/web_applications/web_app.h"
 #include "chrome/common/chrome_notification_types.h"
@@ -41,6 +41,9 @@
 #include "net/base/mock_host_resolver.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "ui/base/l10n/l10n_util.h"
+
+// http://crbug.com/31663
+#if !(defined(OS_WIN) && defined(USE_AURA))
 
 using content::WebContents;
 
@@ -67,10 +70,12 @@ class TaskManagerBrowserTest : public ExtensionBrowserTest {
   virtual void SetUpCommandLine(CommandLine* command_line) OVERRIDE {
     ExtensionBrowserTest::SetUpCommandLine(command_line);
 
-    // Do not prelaunch the GPU process for these tests because it will show
-    // up in task manager but whether it appears before or after the new tab
-    // renderer process is not well defined.
+    // Do not prelaunch the GPU process and disable accelerated compositing
+    // for these tests as the GPU process will show up in task manager but
+    // whether it appears before or after the new tab renderer process is not
+    // well defined.
     command_line->AppendSwitch(switches::kDisableGpuProcessPrelaunch);
+    command_line->AppendSwitch(switches::kDisableAcceleratedCompositing);
   }
 };
 
@@ -112,7 +117,7 @@ IN_PROC_BROWSER_TEST_F(TaskManagerBrowserTest, NoticeTabContentsChanges) {
 
   // Close the tab and verify that we notice.
   WebContents* first_tab =
-      chrome::GetTabContentsAt(browser(), 0)->web_contents();
+      browser()->tab_strip_model()->GetWebContentsAt(0);
   ASSERT_TRUE(first_tab);
   chrome::CloseWebContents(browser(), first_tab);
   TaskManagerBrowserTestUtil::WaitForWebResourceChange(1);
@@ -121,7 +126,7 @@ IN_PROC_BROWSER_TEST_F(TaskManagerBrowserTest, NoticeTabContentsChanges) {
 #if defined(USE_ASH)
 // This test fails on Ash because task manager treats view type
 // Panels differently for Ash.
-#define MAYBE_NoticePanelChanges FAILS_NoticePanelChanges
+#define MAYBE_NoticePanelChanges DISABLED_NoticePanelChanges
 #else
 #define MAYBE_NoticePanelChanges NoticePanelChanges
 #endif
@@ -251,6 +256,52 @@ IN_PROC_BROWSER_TEST_F(TaskManagerBrowserTest, KillBGContents) {
   EXPECT_EQ(0, TaskManager::GetBackgroundPageCount());
 }
 
+#if defined(USE_ASH) || defined(OS_WIN)
+// This test fails on Ash because task manager treats view type
+// Panels differently for Ash.
+// This test also fails on Windows, win_rel trybot. http://crbug.com/166322
+#define MAYBE_KillPanelExtension DISABLED_KillPanelExtension
+#else
+#define MAYBE_KillPanelExtension KillPanelExtension
+#endif
+IN_PROC_BROWSER_TEST_F(TaskManagerBrowserTest, MAYBE_KillPanelExtension) {
+  EXPECT_EQ(0, model()->ResourceCount());
+
+  // Show the task manager. This populates the model, and helps with debugging
+  // (you see the task manager).
+  browser()->window()->ShowTaskManager();
+
+  // New Tab Page.
+  TaskManagerBrowserTestUtil::WaitForWebResourceChange(1);
+  int resource_count = TaskManager::GetInstance()->model()->ResourceCount();
+
+  ASSERT_TRUE(LoadExtension(
+      test_data_dir_.AppendASCII("good").AppendASCII("Extensions")
+                    .AppendASCII("behllobkkfkfnphdnhnkndlbkcpglgmj")
+                    .AppendASCII("1.0.0.0")));
+
+  // Browser, the New Tab Page and Extension background page.
+  TaskManagerBrowserTestUtil::WaitForWebResourceChange(2);
+
+  // Open a new panel to an extension url and make sure we notice that.
+  GURL url(
+    "chrome-extension://behllobkkfkfnphdnhnkndlbkcpglgmj/french_sentence.html");
+  PanelManager::GetInstance()->CreatePanel(
+      web_app::GenerateApplicationNameFromExtensionId(
+          last_loaded_extension_id_),
+      browser()->profile(),
+      url,
+      gfx::Rect(300, 400),
+      PanelManager::CREATE_AS_DOCKED);
+  TaskManagerBrowserTestUtil::WaitForWebResourceChange(3);
+
+  // Kill the panel extension process and verify that it disappears from the
+  // model along with its panel.
+  ASSERT_TRUE(model()->IsBackgroundResource(resource_count));
+  TaskManager::GetInstance()->KillProcess(resource_count);
+  TaskManagerBrowserTestUtil::WaitForWebResourceChange(1);
+}
+
 IN_PROC_BROWSER_TEST_F(TaskManagerBrowserTest, NoticeExtensionChanges) {
   EXPECT_EQ(0, model()->ResourceCount());
   EXPECT_EQ(0, TaskManager::GetBackgroundPageCount());
@@ -331,7 +382,8 @@ IN_PROC_BROWSER_TEST_F(TaskManagerBrowserTest, NoticeAppTabs) {
   int resource_count = TaskManager::GetInstance()->model()->ResourceCount();
   ASSERT_TRUE(LoadExtension(
       test_data_dir_.AppendASCII("packaged_app")));
-  ExtensionService* service = browser()->profile()->GetExtensionService();
+  ExtensionService* service = extensions::ExtensionSystem::Get(
+      browser()->profile())->extension_service();
   const extensions::Extension* extension =
       service->GetExtensionById(last_loaded_extension_id_, false);
 
@@ -471,8 +523,8 @@ IN_PROC_BROWSER_TEST_F(TaskManagerBrowserTest,
   // Reload the extension using the "crashed extension" infobar while the task
   // manager is still visible. Make sure we don't crash and the extension
   // gets reloaded and noticed in the task manager.
-  InfoBarTabHelper* infobar_helper =
-      chrome::GetActiveTabContents(browser())->infobar_tab_helper();
+  InfoBarTabHelper* infobar_helper = InfoBarTabHelper::FromWebContents(
+      chrome::GetActiveWebContents(browser()));
   ASSERT_EQ(1U, infobar_helper->GetInfoBarCount());
   ConfirmInfoBarDelegate* delegate = infobar_helper->
       GetInfoBarDelegateAt(0)->AsConfirmInfoBarDelegate();
@@ -560,3 +612,5 @@ IN_PROC_BROWSER_TEST_F(TaskManagerBrowserTest,
   DCHECK_NE(model()->GetResourceWebCoreCSSCacheSize(resource_count),
             l10n_util::GetStringUTF16(IDS_TASK_MANAGER_NA_CELL_TEXT));
 }
+
+#endif

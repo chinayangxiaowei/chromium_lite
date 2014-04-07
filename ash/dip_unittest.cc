@@ -8,9 +8,6 @@
 #include "ash/launcher/launcher.h"
 #include "ash/shell.h"
 #include "ash/test/ash_test_base.h"
-#include "ash/wm/shadow.h"
-#include "ash/wm/shadow_controller.h"
-#include "ash/wm/shadow_types.h"
 #include "ash/wm/window_properties.h"
 #include "ash/wm/window_util.h"
 #include "base/memory/scoped_ptr.h"
@@ -21,25 +18,22 @@
 #include "ui/gfx/display.h"
 #include "ui/gfx/insets.h"
 #include "ui/gfx/screen.h"
+#include "ui/views/corewm/shadow.h"
+#include "ui/views/corewm/shadow_controller.h"
+#include "ui/views/corewm/shadow_types.h"
 #include "ui/views/widget/widget.h"
 
 namespace ash {
 
 typedef ash::test::AshTestBase DIPTest;
 
-#if defined(OS_WIN)
-// Windows/Aura doesn't have DIP support in display yet.
-#define MAYBE_WorkArea DISABLED_WorkArea
-#else
-#define MAYBE_WorkArea WorkArea
-#endif
-
 // Test if the WM sets correct work area under different density.
-TEST_F(DIPTest, MAYBE_WorkArea) {
+TEST_F(DIPTest, WorkArea) {
   ChangeDisplayConfig(1.0f, gfx::Rect(0, 0, 1000, 900));
 
   aura::RootWindow* root = Shell::GetPrimaryRootWindow();
-  const gfx::Display display = gfx::Screen::GetDisplayNearestWindow(root);
+  const gfx::Display display =
+      Shell::GetScreen()->GetDisplayNearestWindow(root);
 
   EXPECT_EQ("0,0 1000x900", display.bounds().ToString());
   gfx::Rect work_area = display.work_area();
@@ -48,7 +42,8 @@ TEST_F(DIPTest, MAYBE_WorkArea) {
 
   ChangeDisplayConfig(2.0f, gfx::Rect(0, 0, 2000, 1800));
 
-  const gfx::Display display_2x = gfx::Screen::GetDisplayNearestWindow(root);
+  const gfx::Display display_2x =
+      Shell::GetScreen()->GetDisplayNearestWindow(root);
 
   // The |bounds_in_pixel()| should report bounds in pixel coordinate.
   EXPECT_EQ("0,0 2000x1800", display_2x.bounds_in_pixel().ToString());
@@ -61,7 +56,7 @@ TEST_F(DIPTest, MAYBE_WorkArea) {
 
   // Sanity check if the workarea's inset hight is same as
   // the launcher's height.
-  Launcher* launcher = Shell::GetInstance()->launcher();
+  Launcher* launcher = Launcher::ForPrimaryDisplay();
   EXPECT_EQ(
       display_2x.bounds().InsetsFrom(work_area).height(),
       launcher->widget()->GetNativeView()->layer()->bounds().height());

@@ -8,18 +8,20 @@
 #include "ash/ash_switches.h"
 #include "ash/high_contrast/high_contrast_controller.h"
 #include "ash/magnifier/magnification_controller.h"
+#include "ash/magnifier/partial_magnification_controller.h"
 #include "ash/shell.h"
 #include "ash/wm/event_rewriter_event_filter.h"
 #include "ash/wm/property_util.h"
 #include "base/command_line.h"
 #include "chrome/browser/chromeos/accessibility/accessibility_util.h"
+#include "chrome/browser/chromeos/accessibility/magnification_manager.h"
 #include "chrome/browser/lifetime/application_lifetime.h"
 #include "chrome/browser/ui/ash/chrome_shell_delegate.h"
 #include "chrome/browser/ui/ash/event_rewriter.h"
 #include "chrome/browser/ui/ash/screenshot_taker.h"
 #include "chrome/common/chrome_switches.h"
 #include "ui/aura/aura_switches.h"
-#include "ui/aura/display_manager.h"
+#include "ui/aura/display_util.h"
 #include "ui/aura/env.h"
 #include "ui/aura/root_window.h"
 #include "ui/compositor/compositor_setup.h"
@@ -29,11 +31,9 @@
 #include "chrome/browser/chromeos/login/user_manager.h"
 #include "chrome/browser/ui/ash/brightness_controller_chromeos.h"
 #include "chrome/browser/ui/ash/ime_controller_chromeos.h"
-#include "chrome/browser/ui/ash/keyboard_brightness_controller_chromeos.h"
 #include "chrome/browser/ui/ash/volume_controller_chromeos.h"
 #include "ui/base/x/x11_util.h"
 #endif
-
 
 namespace chrome {
 
@@ -41,8 +41,19 @@ bool ShouldOpenAshOnStartup() {
 #if defined(OS_CHROMEOS)
   return true;
 #endif
-  return CommandLine::ForCurrentProcess()->HasSwitch(switches::kOpenAsh);
+  // TODO(scottmg): http://crbug.com/133312, will need this for Win8 too.
+  return false;
 }
+
+#if defined(OS_CHROMEOS)
+// Returns true if the cursor should be initially hidden.
+bool ShouldInitiallyHideCursor() {
+  if (base::chromeos::IsRunningOnChromeOS())
+    return !chromeos::UserManager::Get()->IsUserLoggedIn();
+  else
+    return CommandLine::ForCurrentProcess()->HasSwitch(switches::kLoginManager);
+}
+#endif
 
 void OpenAsh() {
   bool use_fullscreen = CommandLine::ForCurrentProcess()->HasSwitch(
@@ -56,16 +67,14 @@ void OpenAsh() {
     // Aura window is closed.
     ui::HideHostCursor();
   }
+
+  // Hide the mouse cursor completely at boot.
+  if (ShouldInitiallyHideCursor())
+    ash::Shell::set_initially_hide_cursor(true);
 #endif
 
-  if (use_fullscreen) {
-    aura::DisplayManager::set_use_fullscreen_host_window(true);
-#if defined(OS_CHROMEOS)
-    // Hide the mouse cursor completely at boot.
-    if (!chromeos::UserManager::Get()->IsUserLoggedIn())
-      ash::Shell::set_initially_hide_cursor(true);
-#endif
-  }
+  if (use_fullscreen)
+    aura::SetUseFullscreenHostWindow(true);
 
   // Its easier to mark all windows as persisting and exclude the ones we care
   // about (browser windows), rather than explicitly excluding certain windows.
@@ -83,14 +92,16 @@ void OpenAsh() {
           new BrightnessController).Pass());
   shell->accelerator_controller()->SetImeControlDelegate(
       scoped_ptr<ash::ImeControlDelegate>(new ImeController).Pass());
-  shell->accelerator_controller()->SetKeyboardBrightnessControlDelegate(
-      scoped_ptr<ash::KeyboardBrightnessControlDelegate>(
-          new KeyboardBrightnessController).Pass());
   ash::Shell::GetInstance()->high_contrast_controller()->SetEnabled(
       chromeos::accessibility::IsHighContrastEnabled());
 
+  DCHECK(chromeos::MagnificationManager::Get());
+  ash::MagnifierType magnifier_type =
+      chromeos::MagnificationManager::Get()->GetMagnifierType();
   ash::Shell::GetInstance()->magnification_controller()->SetEnabled(
-      chromeos::accessibility::IsScreenMagnifierEnabled());
+      magnifier_type == ash::MAGNIFIER_FULL);
+  ash::Shell::GetInstance()->partial_magnification_controller()->SetEnabled(
+      magnifier_type == ash::MAGNIFIER_PARTIAL);
 
   if (!CommandLine::ForCurrentProcess()->HasSwitch(
       switches::kDisableZeroBrowsersOpenForTests)) {
@@ -101,7 +112,7 @@ void OpenAsh() {
 }
 
 void CloseAsh() {
-  if (ash::Shell::GetInstance())
+  if (ash::Shell::HasInstance())
     ash::Shell::DeleteInstance();
 }
 

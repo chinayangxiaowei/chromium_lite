@@ -22,6 +22,11 @@
 #include "sync/syncable/write_transaction.h"
 #include "sync/util/time.h"
 
+// TODO(vishwath): Remove this include after node positions have
+// shifted to completely using Ordinals.
+// See http://crbug.com/145412 .
+#include "sync/internal_api/public/base/node_ordinal.h"
+
 using std::set;
 using std::string;
 using std::vector;
@@ -32,7 +37,6 @@ namespace syncer {
 using sessions::OrderedCommitSet;
 using sessions::StatusController;
 using sessions::SyncSession;
-using sessions::ConflictProgress;
 using syncable::WriteTransaction;
 using syncable::MutableEntry;
 using syncable::Entry;
@@ -46,7 +50,7 @@ using syncable::IS_UNSYNCED;
 using syncable::PARENT_ID;
 using syncable::SERVER_IS_DEL;
 using syncable::SERVER_PARENT_ID;
-using syncable::SERVER_POSITION_IN_PARENT;
+using syncable::SERVER_ORDINAL_IN_PARENT;
 using syncable::SERVER_VERSION;
 using syncable::SYNCER;
 using syncable::SYNCING;
@@ -110,7 +114,6 @@ SyncerError ProcessCommitResponseCommand::ProcessCommitResponse(
   int successes = 0;
 
   set<syncable::Id> deleted_folders;
-  ConflictProgress* conflict_progress = status->mutable_conflict_progress();
   OrderedCommitSet::Projection proj = status->commit_id_projection(
       commit_set_);
 
@@ -129,8 +132,7 @@ SyncerError ProcessCommitResponseCommand::ProcessCommitResponse(
           break;
         case CommitResponse::CONFLICT:
           ++conflicting_commits;
-          conflict_progress->AddServerConflictingItemById(
-              commit_set_.GetCommitIdAt(proj[i]));
+          status->increment_num_server_conflicts();
           break;
         case CommitResponse::SUCCESS:
           // TODO(sync): worry about sync_rate_ rate calc?
@@ -169,21 +171,9 @@ SyncerError ProcessCommitResponseCommand::ProcessCommitResponse(
     // to resolve the conflict.  That's not what this client does.
     //
     // We don't currently have any code to support that exceptional control
-    // flow.  We don't intend to add any because this response code will be
-    // deprecated soon.  Instead, we handle this in the same way that we handle
-    // transient errors.  We abort the current sync cycle, wait a little while,
-    // then try again.  The retry sync cycle will attempt to download updates
-    // which should be sufficient to trigger client-side conflict resolution.
-    //
-    // Not treating this as an error would be dangerous.  There's a risk that
-    // the commit loop would loop indefinitely.  The loop won't exit until the
-    // number of unsynced items hits zero or an error is detected.  If we're
-    // constantly receiving conflict responses and we don't treat them as
-    // errors, there would be no reason to leave that loop.
-    //
-    // TODO: Remove this option when the CONFLICT return value is fully
-    // deprecated.
-    return SERVER_RETURN_TRANSIENT_ERROR;
+    // flow.  Instead, we abort the current sync cycle and start a new one.  The
+    // end result is the same.
+    return SERVER_RETURN_CONFLICT;
   } else {
     LOG(FATAL) << "Inconsistent counts when processing commit response";
     return SYNCER_OK;
@@ -371,8 +361,9 @@ void ProcessCommitResponseCommand::UpdateServerFieldsAfterCommit(
                    ProtoTimeToTime(committed_entry.mtime()));
   local_entry->Put(syncable::SERVER_CTIME,
                    ProtoTimeToTime(committed_entry.ctime()));
-  local_entry->Put(syncable::SERVER_POSITION_IN_PARENT,
-      entry_response.position_in_parent());
+  local_entry->Put(syncable::SERVER_ORDINAL_IN_PARENT,
+                   Int64ToNodeOrdinal(entry_response.position_in_parent()));
+
   // TODO(nick): The server doesn't set entry_response.server_parent_id in
   // practice; to update SERVER_PARENT_ID appropriately here we'd need to
   // get the post-commit ID of the parent indicated by
@@ -420,7 +411,7 @@ void ProcessCommitResponseCommand::OverrideClientFieldsAfterCommit(
   if (entry_response.has_position_in_parent()) {
     // The SERVER_ field should already have been written.
     DCHECK_EQ(entry_response.position_in_parent(),
-        local_entry->Get(SERVER_POSITION_IN_PARENT));
+              NodeOrdinalToInt64(local_entry->Get(SERVER_ORDINAL_IN_PARENT)));
 
     // We just committed successfully, so we assume that the position
     // value we got applies to the PARENT_ID we submitted.

@@ -26,6 +26,7 @@
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/defaults.h"
 #include "chrome/browser/net/chrome_cookie_notification_details.h"
+#include "chrome/browser/prefs/pref_service.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/signin/signin_manager.h"
 #include "chrome/browser/signin/signin_manager_factory.h"
@@ -36,8 +37,10 @@
 #include "chrome/browser/sync/glue/chrome_encryptor.h"
 #include "chrome/browser/sync/glue/chrome_report_unrecoverable_error.h"
 #include "chrome/browser/sync/glue/data_type_controller.h"
+#include "chrome/browser/sync/glue/device_info.h"
 #include "chrome/browser/sync/glue/session_data_type_controller.h"
 #include "chrome/browser/sync/glue/session_model_associator.h"
+#include "chrome/browser/sync/glue/synced_device_tracker.h"
 #include "chrome/browser/sync/glue/typed_url_data_type_controller.h"
 #include "chrome/browser/sync/profile_sync_components_factory_impl.h"
 #include "chrome/browser/sync/sync_global_error.h"
@@ -50,6 +53,7 @@
 #include "chrome/common/chrome_notification_types.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/common/chrome_version_info.h"
+#include "chrome/common/pref_names.h"
 #include "chrome/common/time_format.h"
 #include "chrome/common/url_constants.h"
 #include "content/public/browser/notification_details.h"
@@ -65,6 +69,8 @@
 #include "sync/internal_api/public/util/sync_string_conversions.h"
 #include "sync/js/js_arg_list.h"
 #include "sync/js/js_event_details.h"
+#include "sync/notifier/invalidator_registrar.h"
+#include "sync/notifier/invalidator_state.h"
 #include "sync/util/cryptographer.h"
 #include "ui/base/l10n/l10n_util.h"
 
@@ -142,13 +148,8 @@ ProfileSyncService::ProfileSyncService(ProfileSyncComponentsFactory* factory,
       auto_start_enabled_(start_behavior == AUTO_START),
       failed_datatypes_handler_(ALLOW_THIS_IN_INITIALIZER_LIST(this)),
       configure_status_(DataTypeManager::UNKNOWN),
-      setup_in_progress_(false) {
-#if defined(OS_ANDROID)
-  chrome::VersionInfo version_info;
-  if (version_info.IsOfficialBuild()) {
-    sync_service_url_ = GURL(kSyncServerUrl);
-  }
-#else
+      setup_in_progress_(false),
+      invalidator_state_(syncer::DEFAULT_INVALIDATION_ERROR) {
   // By default, dev, canary, and unbranded Chromium users will go to the
   // development servers. Development servers have more features than standard
   // sync servers. Users with officially-branded Chrome stable and beta builds
@@ -161,12 +162,12 @@ ProfileSyncService::ProfileSyncService(ProfileSyncComponentsFactory* factory,
       channel == chrome::VersionInfo::CHANNEL_BETA) {
     sync_service_url_ = GURL(kSyncServerUrl);
   }
-#endif
 }
 
 ProfileSyncService::~ProfileSyncService() {
   sync_prefs_.RemoveSyncPrefObserver(this);
-  Shutdown();
+  // Shutdown() should have been called before destruction.
+  CHECK(!backend_initialized_);
 }
 
 bool ProfileSyncService::IsSyncEnabledAndLoggedIn() {
@@ -186,6 +187,9 @@ bool ProfileSyncService::IsSyncTokenAvailable() {
 }
 
 void ProfileSyncService::Initialize() {
+  DCHECK(!invalidator_registrar_.get());
+  invalidator_registrar_.reset(new syncer::InvalidatorRegistrar());
+
   InitSettings();
 
   // We clear this here (vs Shutdown) because we want to remember that an error
@@ -208,7 +212,43 @@ void ProfileSyncService::Initialize() {
     DisableForUser();
   }
 
+  TrySyncDatatypePrefRecovery();
+
   TryStart();
+}
+
+void ProfileSyncService::TrySyncDatatypePrefRecovery() {
+  DCHECK(!sync_initialized());
+  if (!HasSyncSetupCompleted())
+    return;
+
+  // There was a bug where OnUserChoseDatatypes was not properly called on
+  // configuration (see crbug.com/154940). We detect this by checking whether
+  // kSyncKeepEverythingSynced has a default value. If so, and sync setup has
+  // completed, it means sync was not properly configured, so we manually
+  // set kSyncKeepEverythingSynced.
+  PrefService* const pref_service = profile_->GetPrefs();
+  if (!pref_service)
+    return;
+  if (sync_prefs_.HasKeepEverythingSynced())
+    return;
+  const syncer::ModelTypeSet registered_types = GetRegisteredDataTypes();
+  if (sync_prefs_.GetPreferredDataTypes(registered_types).Size() > 1)
+    return;
+
+  const PrefService::Preference* keep_everything_synced =
+      pref_service->FindPreference(prefs::kSyncKeepEverythingSynced);
+  // This will be false if the preference was properly set or if it's controlled
+  // by policy.
+  if (!keep_everything_synced->IsDefaultValue())
+    return;
+
+  // kSyncKeepEverythingSynced was not properly set. Set it and the preferred
+  // types now, before we configure.
+  UMA_HISTOGRAM_COUNTS("Sync.DatatypePrefRecovery", 1);
+  sync_prefs_.SetKeepEverythingSynced(true);
+  sync_prefs_.SetPreferredDataTypes(registered_types,
+                                    registered_types);
 }
 
 void ProfileSyncService::TryStart() {
@@ -218,23 +258,27 @@ void ProfileSyncService::TryStart() {
   if (!token_service)
     return;
   // Don't start the backend if the token service hasn't finished loading tokens
-  // yet (if the backend is started before the sync token has been loaded,
-  // GetCredentials() will return bogus credentials). On auto_start platforms
+  // yet. Note if the backend is started before the sync token has been loaded,
+  // GetCredentials() will return bogus credentials. On auto_start platforms
   // (like ChromeOS) we don't start sync until tokens are loaded, because the
   // user can be "signed in" on those platforms long before the tokens get
   // loaded, and we don't want to generate spurious auth errors.
-  if (IsSyncTokenAvailable() ||
-      (!auto_start_enabled_ && token_service->TokensLoadedFromDB())) {
-    if (HasSyncSetupCompleted() || auto_start_enabled_) {
-      // If sync setup has completed we always start the backend.
-      // If autostart is enabled, but we haven't completed sync setup, we try to
-      // start sync anyway, since it's possible we crashed/shutdown after
-      // logging in but before the backend finished initializing the last time.
-      // Note that if we haven't finished setting up sync, backend bring up will
-      // be done by the wizard.
-      StartUp();
-    }
+  if (!IsSyncTokenAvailable() &&
+      !(!auto_start_enabled_ && token_service->TokensLoadedFromDB())) {
+    return;
   }
+
+  // If sync setup has completed we always start the backend. If the user is in
+  // the process of setting up now, we should start the backend to download
+  // account control state / encryption information). If autostart is enabled,
+  // but we haven't completed sync setup, we try to start sync anyway, since
+  // it's possible we crashed/shutdown after logging in but before the backend
+  // finished initializing the last time.
+  if (!HasSyncSetupCompleted() && !setup_in_progress_ && !auto_start_enabled_)
+    return;
+
+  // All systems Go for launch.
+  StartUp();
 }
 
 void ProfileSyncService::StartSyncingWithServer() {
@@ -276,6 +320,17 @@ browser_sync::SessionModelAssociator*
   return static_cast<browser_sync::SessionDataTypeController*>(
       data_type_controllers_.find(
       syncer::SESSIONS)->second.get())->GetModelAssociator();
+}
+
+scoped_ptr<browser_sync::DeviceInfo>
+ProfileSyncService::GetLocalDeviceInfo() const {
+  DCHECK(sync_initialized());
+  browser_sync::SyncedDeviceTracker* device_tracker =
+      backend_->GetSyncedDeviceTracker();
+  if (device_tracker)
+    return device_tracker->ReadLocalDeviceInfo();
+  else
+    return scoped_ptr<browser_sync::DeviceInfo>();
 }
 
 void ProfileSyncService::GetDataTypeControllerStates(
@@ -378,23 +433,11 @@ void ProfileSyncService::OnSyncConfigureDone(
 }
 
 void ProfileSyncService::OnSyncConfigureRetry() {
-  // In platforms with auto start we would just wait for the
-  // configure to finish. In other platforms we would throw
-  // an unrecoverable error. The reason we do this is so that
-  // the login dialog would show an error and the user would have
-  // to relogin.
-  // Also if backend has been initialized(the user is authenticated
-  // and nigori is downloaded) we would simply wait rather than going into
-  // unrecoverable error, even if the platform has auto start disabled.
-  // Note: In those scenarios the UI does not wait for the configuration
-  // to finish.
-  if (!auto_start_enabled_ && !backend_initialized_) {
-    OnInternalUnrecoverableError(FROM_HERE,
-                                 "Configure failed to download.",
-                                 true,
-                                 ERROR_REASON_CONFIGURATION_RETRY);
-  }
-
+  // Note: in order to handle auth failures that arise before the backend is
+  // initialized (e.g. from invalidation notifier, or downloading new control
+  // types), we have to gracefully handle configuration retries at all times.
+  // At this point an auth error badge should be shown, which once resolved
+  // will trigger a new sync cycle.
   NotifyObservers();
 }
 
@@ -432,7 +475,7 @@ void ProfileSyncService::StartUp() {
   // http://crbug.com/140354).
   if (backend_.get()) {
     backend_->UpdateRegisteredInvalidationIds(
-        invalidator_registrar_.GetAllRegisteredIds());
+        invalidator_registrar_->GetAllRegisteredIds());
   }
 
   if (!sync_global_error_.get()) {
@@ -447,29 +490,29 @@ void ProfileSyncService::StartUp() {
 
 void ProfileSyncService::RegisterInvalidationHandler(
     syncer::InvalidationHandler* handler) {
-  invalidator_registrar_.RegisterHandler(handler);
+  invalidator_registrar_->RegisterHandler(handler);
 }
 
 void ProfileSyncService::UpdateRegisteredInvalidationIds(
     syncer::InvalidationHandler* handler,
     const syncer::ObjectIdSet& ids) {
-  invalidator_registrar_.UpdateRegisteredIds(handler, ids);
+  invalidator_registrar_->UpdateRegisteredIds(handler, ids);
 
   // If |backend_| is NULL, its registered IDs will be updated when
   // it's created and initialized.
   if (backend_.get()) {
     backend_->UpdateRegisteredInvalidationIds(
-        invalidator_registrar_.GetAllRegisteredIds());
+        invalidator_registrar_->GetAllRegisteredIds());
   }
 }
 
 void ProfileSyncService::UnregisterInvalidationHandler(
     syncer::InvalidationHandler* handler) {
-  invalidator_registrar_.UnregisterHandler(handler);
+  invalidator_registrar_->UnregisterHandler(handler);
 }
 
 syncer::InvalidatorState ProfileSyncService::GetInvalidatorState() const {
-  return invalidator_registrar_.GetInvalidatorState();
+  return invalidator_registrar_->GetInvalidatorState();
 }
 
 void ProfileSyncService::EmitInvalidationForTest(
@@ -478,12 +521,17 @@ void ProfileSyncService::EmitInvalidationForTest(
   syncer::ObjectIdSet notify_ids;
   notify_ids.insert(id);
 
-  const syncer::ObjectIdStateMap& id_state_map =
-      ObjectIdSetToStateMap(notify_ids, payload);
-  OnIncomingInvalidation(id_state_map, syncer::REMOTE_INVALIDATION);
+  const syncer::ObjectIdInvalidationMap& invalidation_map =
+      ObjectIdSetToInvalidationMap(notify_ids, payload);
+  OnIncomingInvalidation(invalidation_map, syncer::REMOTE_INVALIDATION);
 }
 
 void ProfileSyncService::Shutdown() {
+  DCHECK(invalidator_registrar_.get());
+  // Reset |invalidator_registrar_| first so that ShutdownImpl cannot
+  // use it.
+  invalidator_registrar_.reset();
+
   ShutdownImpl(false);
 }
 
@@ -534,6 +582,9 @@ void ProfileSyncService::ShutdownImpl(bool sync_disabled) {
   expect_sync_configuration_aborted_ = false;
   is_auth_in_progress_ = false;
   backend_initialized_ = false;
+  // NULL if we're called from Shutdown().
+  if (invalidator_registrar_.get())
+    UpdateInvalidatorRegistrarState();
   cached_passphrase_.clear();
   encryption_pending_ = false;
   encrypt_everything_ = false;
@@ -599,14 +650,9 @@ void ProfileSyncService::ClearUnrecoverableError() {
 }
 
 // static
+// TODO(sync): Consider having syncer::Experiments provide this.
 std::string ProfileSyncService::GetExperimentNameForDataType(
     syncer::ModelType data_type) {
-  switch (data_type) {
-    case syncer::SESSIONS:
-      return "sync-tabs";
-    default:
-      break;
-  }
   NOTREACHED();
   return "";
 }
@@ -677,17 +723,22 @@ void ProfileSyncService::DisableBrokenDatatype(
 
 void ProfileSyncService::OnInvalidatorStateChange(
     syncer::InvalidatorState state) {
-  invalidator_registrar_.UpdateInvalidatorState(state);
+  invalidator_state_ = state;
+  UpdateInvalidatorRegistrarState();
 }
 
 void ProfileSyncService::OnIncomingInvalidation(
-    const syncer::ObjectIdStateMap& id_state_map,
+    const syncer::ObjectIdInvalidationMap& invalidation_map,
     syncer::IncomingInvalidationSource source) {
-  invalidator_registrar_.DispatchInvalidationsToHandlers(id_state_map, source);
+  invalidator_registrar_->DispatchInvalidationsToHandlers(invalidation_map,
+                                                          source);
 }
 
 void ProfileSyncService::OnBackendInitialized(
-    const syncer::WeakHandle<syncer::JsBackend>& js_backend, bool success) {
+    const syncer::WeakHandle<syncer::JsBackend>& js_backend,
+    const syncer::WeakHandle<syncer::DataTypeDebugInfoListener>&
+        debug_info_listener,
+    bool success) {
   is_first_time_sync_configure_ = !HasSyncSetupCompleted();
 
   if (is_first_time_sync_configure_) {
@@ -728,8 +779,10 @@ void ProfileSyncService::OnBackendInitialized(
   }
 
   backend_initialized_ = true;
+  UpdateInvalidatorRegistrarState();
 
   sync_js_controller_.AttachJsBackend(js_backend);
+  debug_info_listener_ = debug_info_listener;
 
   // If we have a cached passphrase use it to decrypt/encrypt data now that the
   // backend is initialized. We want to call this before notifying observers in
@@ -777,7 +830,7 @@ void ProfileSyncService::OnSyncCycleCompleted() {
 
 void ProfileSyncService::OnExperimentsChanged(
     const syncer::Experiments& experiments) {
-  if (current_experiments.Matches(experiments))
+  if (current_experiments_.Matches(experiments))
     return;
 
   // If this is a first time sync for a client, this will be called before
@@ -848,7 +901,13 @@ void ProfileSyncService::OnExperimentsChanged(
 #endif
   }
 
-  current_experiments = experiments;
+  if (experiments.keystore_encryption) {
+    about_flags::SetExperimentEnabled(g_browser_process->local_state(),
+                                      syncer::kKeystoreEncryptionFlag,
+                                      true);
+  }
+
+  current_experiments_ = experiments;
 }
 
 void ProfileSyncService::UpdateAuthErrorState(const AuthError& error) {
@@ -883,7 +942,10 @@ AuthError ConnectionStatusToAuthError(
 
 void ProfileSyncService::OnConnectionStatusChange(
     syncer::ConnectionStatus status) {
-  UpdateAuthErrorState(ConnectionStatusToAuthError(status));
+  const GoogleServiceAuthError auth_error =
+      ConnectionStatusToAuthError(status);
+  DVLOG(1) << "Connection status change: " << auth_error.ToString();
+  UpdateAuthErrorState(auth_error);
 }
 
 void ProfileSyncService::OnStopSyncingPermanently() {
@@ -1165,6 +1227,7 @@ void ProfileSyncService::SetSetupInProgress(bool setup_in_progress) {
       ReconfigureDatatypeManager();
     }
   }
+  NotifyObservers();
 }
 
 bool ProfileSyncService::sync_initialized() const {
@@ -1173,6 +1236,10 @@ bool ProfileSyncService::sync_initialized() const {
 
 bool ProfileSyncService::waiting_for_auth() const {
   return is_auth_in_progress_;
+}
+
+const syncer::Experiments& ProfileSyncService::current_experiments() const {
+  return current_experiments_;
 }
 
 bool ProfileSyncService::HasUnrecoverableError() const {
@@ -1238,7 +1305,7 @@ void ProfileSyncService::UpdateSelectedTypesHistogram(
     browser_sync::user_selectable_type::TYPED_URLS
   };
 
-  COMPILE_ASSERT(17 == syncer::MODEL_TYPE_COUNT, UpdateCustomConfigHistogram);
+  COMPILE_ASSERT(20 == syncer::MODEL_TYPE_COUNT, UpdateCustomConfigHistogram);
   COMPILE_ASSERT(arraysize(model_types) ==
                  browser_sync::user_selectable_type::SELECTABLE_DATATYPE_COUNT,
                  UpdateCustomConfigHistogram);
@@ -1330,7 +1397,17 @@ syncer::ModelTypeSet ProfileSyncService::GetRegisteredDataTypes() const {
 }
 
 bool ProfileSyncService::IsUsingSecondaryPassphrase() const {
-  return backend_->IsUsingExplicitPassphrase();
+  syncer::PassphraseType passphrase_type = GetPassphraseType();
+  return passphrase_type == syncer::FROZEN_IMPLICIT_PASSPHRASE ||
+         passphrase_type == syncer::CUSTOM_PASSPHRASE;
+}
+
+syncer::PassphraseType ProfileSyncService::GetPassphraseType() const {
+  return backend_->GetPassphraseType();
+}
+
+base::Time ProfileSyncService::GetExplicitPassphraseTime() const {
+  return backend_->GetExplicitPassphraseTime();
 }
 
 bool ProfileSyncService::IsCryptographerReady(
@@ -1357,7 +1434,8 @@ void ProfileSyncService::ConfigureDataTypeManager() {
   if (!data_type_manager_.get()) {
     restart = true;
     data_type_manager_.reset(
-        factory_->CreateDataTypeManager(backend_.get(),
+        factory_->CreateDataTypeManager(debug_info_listener_,
+                                        backend_.get(),
                                         &data_type_controllers_,
                                         this));
 
@@ -1437,10 +1515,10 @@ void ProfileSyncService::GetModelSafeRoutingInfo(
 }
 
 Value* ProfileSyncService::GetTypeStatusMap() const {
-  ListValue* result = new ListValue();
+  scoped_ptr<ListValue> result(new ListValue());
 
   if (!backend_.get() || !backend_initialized_) {
-    return result;
+    return result.release();
   }
 
   std::vector<syncer::SyncError> errors =
@@ -1466,13 +1544,21 @@ Value* ProfileSyncService::GetTypeStatusMap() const {
 
   SyncBackendHost::Status detailed_status = backend_->GetDetailedStatus();
   ModelTypeSet &throttled_types(detailed_status.throttled_types);
-
   ModelTypeSet registered = GetRegisteredDataTypes();
+  scoped_ptr<DictionaryValue> type_status_header(new DictionaryValue());
+
+  type_status_header->SetString("name", "Model Type");
+  type_status_header->SetString("status", "header");
+  type_status_header->SetString("value", "Group Type");
+  type_status_header->SetString("num_entries", "Total Entries");
+  type_status_header->SetString("num_live", "Live Entries");
+  result->Append(type_status_header.release());
+
+  scoped_ptr<DictionaryValue> type_status;
   for (ModelTypeSet::Iterator it = registered.First(); it.Good(); it.Inc()) {
     ModelType type = it.Get();
-    DictionaryValue* type_status = new DictionaryValue();
 
-    result->Append(type_status);
+    type_status.reset(new DictionaryValue());
     type_status->SetString("name", ModelTypeToString(type));
 
     if (error_map.find(type) != error_map.end()) {
@@ -1499,8 +1585,16 @@ Value* ProfileSyncService::GetTypeStatusMap() const {
       type_status->SetString("status", "warning");
       type_status->SetString("value", "Disabled by User");
     }
+
+    int live_count = detailed_status.num_entries_by_type[type] -
+        detailed_status.num_to_delete_entries_by_type[type];
+    type_status->SetInteger("num_entries",
+                            detailed_status.num_entries_by_type[type]);
+    type_status->SetInteger("num_live", live_count);
+
+    result->Append(type_status.release());
   }
-  return result;
+  return result.release();
 }
 
 void ProfileSyncService::ActivateDataType(
@@ -1552,8 +1646,9 @@ void ProfileSyncService::SetEncryptionPassphrase(const std::string& passphrase,
   DCHECK(sync_initialized());
   DCHECK(!(type == IMPLICIT && IsUsingSecondaryPassphrase())) <<
       "Data is already encrypted using an explicit passphrase";
-  DCHECK(!(type == EXPLICIT && IsPassphraseRequired())) <<
-      "Cannot switch to an explicit passphrase if a passphrase is required";
+  DCHECK(!(type == EXPLICIT &&
+           passphrase_required_reason_ == syncer::REASON_DECRYPTION)) <<
+         "Can not set explicit passphrase when decryption is needed.";
 
   if (type == EXPLICIT)
     UMA_HISTOGRAM_BOOLEAN("Sync.CustomPassphrase", true);
@@ -1619,11 +1714,9 @@ void ProfileSyncService::OnSyncManagedPrefChange(bool is_sync_managed) {
   NotifyObservers();
   if (is_sync_managed) {
     DisableForUser();
-  } else if (HasSyncSetupCompleted() &&
-             IsSyncEnabledAndLoggedIn() &&
-             IsSyncTokenAvailable()) {
-    // Previously-configured sync has been re-enabled, so start sync now.
-    StartUp();
+  } else {
+    // Sync is no longer disabled by policy. Try starting it up if appropriate.
+    TryStart();
   }
 }
 
@@ -1674,34 +1767,19 @@ void ProfileSyncService::Observe(int type,
       const TokenService::TokenAvailableDetails& token_details =
           *(content::Details<const TokenService::TokenAvailableDetails>(
               details).ptr());
-      if (IsTokenServiceRelevant(token_details.service()) &&
-          IsSyncEnabledAndLoggedIn() &&
-          IsSyncTokenAvailable()) {
-        if (backend_initialized_)
-          backend_->UpdateCredentials(GetCredentials());
-        else
-          StartUp();
-      }
-      break;
-    }
+      if (!IsTokenServiceRelevant(token_details.service()))
+        break;
+    } // Fall through.
     case chrome::NOTIFICATION_TOKEN_LOADING_FINISHED: {
       // This notification gets fired when TokenService loads the tokens
       // from storage.
-      if (IsSyncEnabledAndLoggedIn()) {
-        // Don't start up sync and generate an auth error on auto_start
-        // platforms as they have their own way to resolve TokenService errors.
-        // (crbug.com/128592).
-        if (auto_start_enabled_ && !IsSyncTokenAvailable())
-          break;
-
-        // Initialize the backend if sync is enabled. If the sync token was
-        // not loaded, GetCredentials() will generate invalid credentials to
-        // cause the backend to generate an auth error (crbug.com/121755).
-        if (backend_initialized_)
-          backend_->UpdateCredentials(GetCredentials());
-        else
-          StartUp();
-      }
+      // Initialize the backend if sync is enabled. If the sync token was
+      // not loaded, GetCredentials() will generate invalid credentials to
+      // cause the backend to generate an auth error (crbug.com/121755).
+      if (backend_.get())
+        backend_->UpdateCredentials(GetCredentials());
+      else
+        TryStart();
       break;
     }
     default: {
@@ -1805,6 +1883,17 @@ void ProfileSyncService::OnInternalUnrecoverableError(
   DCHECK(!HasUnrecoverableError());
   unrecoverable_error_reason_ = reason;
   OnUnrecoverableErrorImpl(from_here, message, delete_sync_database);
+}
+
+void ProfileSyncService::UpdateInvalidatorRegistrarState() {
+  const syncer::InvalidatorState effective_state =
+      backend_initialized_ ?
+      invalidator_state_ : syncer::TRANSIENT_INVALIDATION_ERROR;
+  DVLOG(1) << "New invalidator state: "
+           << syncer::InvalidatorStateToString(invalidator_state_)
+           << ", effective state: "
+           << syncer::InvalidatorStateToString(effective_state);
+  invalidator_registrar_->UpdateInvalidatorState(effective_state);
 }
 
 void ProfileSyncService::ResetForTest() {

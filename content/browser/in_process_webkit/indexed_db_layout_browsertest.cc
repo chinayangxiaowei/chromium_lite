@@ -4,17 +4,12 @@
 
 #include "content/test/layout_browsertest.h"
 
+namespace content {
+
 class IndexedDBLayoutTest : public InProcessBrowserLayoutTest {
  public:
   IndexedDBLayoutTest() : InProcessBrowserLayoutTest(
       FilePath(), FilePath().AppendASCII("storage").AppendASCII("indexeddb")) {
-  }
-
-  virtual void SetUpInProcessBrowserTestFixture() OVERRIDE {
-    InProcessBrowserLayoutTest::SetUpInProcessBrowserTestFixture();
-    AddResourceForLayoutTest(
-        FilePath().AppendASCII("fast").AppendASCII("js"),
-        FilePath().AppendASCII("resources"));
   }
 
   void RunLayoutTests(const char* file_names[]) {
@@ -41,6 +36,7 @@ static const char* kComplexTests[] = {
   "prefetch-bugfix-108071.html",
   // Flaky: http://crbug.com/123685
   // "pending-version-change-stuck-works-with-terminate.html",
+  "pending-version-change-on-exit.html",
   NULL
 };
 
@@ -49,7 +45,7 @@ static const char* kIndexTests[] = {
   // Flaky: http://crbug.com/123685
   // "index-basics-workers.html",
   "index-count.html",
-  "index-cursor.html",  // Locally takes ~6s compared to <1 for the others.
+  "index-cursor.html",
   "index-get-key-argument-required.html",
   "index-multientry.html",
   "index-population.html",
@@ -95,16 +91,17 @@ static const char* kRegressionTests[] = {
 
 const char* kIntVersionTests[] = {
   "intversion-abort-in-initial-upgradeneeded.html",
-  "intversion-and-setversion.html",
   "intversion-blocked.html",
-  "intversion-close-between-events.html",
+  // Flaky, http://crbug.com/163694
+  // "intversion-close-between-events.html",
   "intversion-close-in-oncomplete.html",
-//  "intversion-close-in-upgradeneeded.html", // crbug.com/150961
+  "intversion-close-in-upgradeneeded.html",
   "intversion-delete-in-upgradeneeded.html",
-//  "intversion-gated-on-delete.html", // behaves slightly differently in DRT
+  "intversion-gated-on-delete.html",
   "intversion-long-queue.html",
   "intversion-omit-parameter.html",
   "intversion-open-with-version.html",
+  "intversion-upgrades.html",
   NULL
 };
 
@@ -114,15 +111,23 @@ IN_PROC_BROWSER_TEST_F(IndexedDBLayoutTest, BasicTests) {
   RunLayoutTests(kBasicTests);
 }
 
+
 IN_PROC_BROWSER_TEST_F(IndexedDBLayoutTest, ComplexTests) {
   RunLayoutTests(kComplexTests);
 }
 
-IN_PROC_BROWSER_TEST_F(IndexedDBLayoutTest, IndexTests) {
+// TODO(dgrogan): times out flakily. http://crbug.com/153064
+IN_PROC_BROWSER_TEST_F(IndexedDBLayoutTest, DISABLED_IndexTests) {
   RunLayoutTests(kIndexTests);
 }
 
-IN_PROC_BROWSER_TEST_F(IndexedDBLayoutTest, KeyTests) {
+#if defined(OS_LINUX)
+#define MAYBE_KeyTests DISABLED_KeyTests
+#else
+#define MAYBE_KeyTests KeyTests
+#endif
+
+IN_PROC_BROWSER_TEST_F(IndexedDBLayoutTest, MAYBE_KeyTests) {
   RunLayoutTests(kKeyTests);
 }
 
@@ -134,7 +139,8 @@ IN_PROC_BROWSER_TEST_F(IndexedDBLayoutTest, IntVersionTests) {
   RunLayoutTests(kIntVersionTests);
 }
 
-// Frequent flaky timeouts.  http://crbug.com/123685
 IN_PROC_BROWSER_TEST_F(IndexedDBLayoutTest, RegressionTests) {
   RunLayoutTests(kRegressionTests);
 }
+
+}  // namespace content

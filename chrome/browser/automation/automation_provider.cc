@@ -56,7 +56,6 @@
 #include "chrome/browser/ui/find_bar/find_tab_helper.h"
 #include "chrome/browser/ui/login/login_prompt.h"
 #include "chrome/browser/ui/omnibox/location_bar.h"
-#include "chrome/browser/ui/tab_contents/tab_contents.h"
 #include "chrome/common/automation_constants.h"
 #include "chrome/common/automation_messages.h"
 #include "chrome/common/chrome_constants.h"
@@ -295,7 +294,8 @@ void AutomationProvider::DisableInitialLoadObservers() {
 int AutomationProvider::GetIndexForNavigationController(
     const NavigationController* controller, const Browser* parent) const {
   DCHECK(parent);
-  return chrome::GetIndexOfTab(parent, controller->GetWebContents());
+  return parent->tab_strip_model()->GetIndexOfWebContents(
+      controller->GetWebContents());
 }
 
 // TODO(phajdan.jr): move to TestingAutomationProvider.
@@ -471,7 +471,7 @@ Browser* AutomationProvider::FindAndActivateTab(
   content::WebContentsDelegate* d = controller->GetWebContents()->GetDelegate();
   if (d)
     d->ActivateContents(controller->GetWebContents());
-  return browser::FindBrowserWithWebContents(controller->GetWebContents());
+  return chrome::FindBrowserWithWebContents(controller->GetWebContents());
 }
 
 void AutomationProvider::HandleFindRequest(
@@ -513,9 +513,9 @@ void AutomationProvider::SendFindRequest(
   if (!with_json) {
     find_in_page_observer_.reset(observer);
   }
-  TabContents* tab_contents = TabContents::FromWebContents(web_contents);
-  if (tab_contents)
-    tab_contents->find_tab_helper()->set_current_find_request_id(request_id);
+  FindTabHelper* find_tab_helper = FindTabHelper::FromWebContents(web_contents);
+  if (find_tab_helper)
+    find_tab_helper->set_current_find_request_id(request_id);
 
   WebFindOptions options;
   options.forward = forward;

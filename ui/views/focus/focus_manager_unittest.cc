@@ -16,12 +16,25 @@
 #include "ui/views/focus/widget_focus_manager.h"
 #include "ui/views/widget/widget.h"
 
-#if !defined(USE_AURA)
+#if defined(USE_AURA)
+#include "ui/aura/client/focus_client.h"
+#include "ui/aura/window.h"
+#else
 #include "ui/views/controls/tabbed_pane/native_tabbed_pane_wrapper.h"
 #include "ui/views/controls/tabbed_pane/tabbed_pane.h"
 #endif
 
 namespace views {
+
+void FocusNativeView(gfx::NativeView view) {
+#if defined(USE_AURA)
+  aura::client::GetFocusClient(view)->FocusWindow(view, NULL);
+#elif defined(OS_WIN)
+  SetFocus(view);
+#else
+#error
+#endif
+}
 
 enum FocusTestEventType {
   ON_FOCUS = 0,
@@ -123,11 +136,10 @@ TEST_F(FocusManagerTest, WidgetFocusChangeListener) {
   TestWidgetFocusChangeListener widget_listener;
   AddWidgetFocusChangeListener(&widget_listener);
 
-  Widget::InitParams params;
-  params.type = views::Widget::InitParams::TYPE_WINDOW;
+  Widget::InitParams params = CreateParams(Widget::InitParams::TYPE_WINDOW);
   params.ownership = views::Widget::InitParams::WIDGET_OWNS_NATIVE_WIDGET;
   params.bounds = gfx::Rect(10, 10, 100, 100);
-  params.parent_widget = GetWidget();
+  params.parent = GetWidget()->GetNativeView();
 
   scoped_ptr<Widget> widget1(new Widget);
   widget1->Init(params);
@@ -139,14 +151,14 @@ TEST_F(FocusManagerTest, WidgetFocusChangeListener) {
 
   widget_listener.ClearFocusChanges();
   gfx::NativeView native_view1 = widget1->GetNativeView();
-  GetWidget()->FocusNativeView(native_view1);
+  FocusNativeView(native_view1);
   ASSERT_EQ(2, static_cast<int>(widget_listener.focus_changes().size()));
   EXPECT_EQ(native_view1, widget_listener.focus_changes()[0].second);
   EXPECT_EQ(native_view1, widget_listener.focus_changes()[1].second);
 
   widget_listener.ClearFocusChanges();
   gfx::NativeView native_view2 = widget2->GetNativeView();
-  GetWidget()->FocusNativeView(native_view2);
+  FocusNativeView(native_view2);
   ASSERT_EQ(2, static_cast<int>(widget_listener.focus_changes().size()));
   EXPECT_EQ(NativeViewPair(native_view1, native_view2),
             widget_listener.focus_changes()[0]);
@@ -173,7 +185,7 @@ class TestTabbedPane : public TabbedPane {
 
 // Tests that NativeControls do set the focused View appropriately on the
 // FocusManager.
-TEST_F(FocusManagerTest, FAILS_FocusNativeControls) {
+TEST_F(FocusManagerTest, DISABLED_FocusNativeControls) {
   TestTextfield* textfield = new TestTextfield();
   TestTabbedPane* tabbed_pane = new TestTabbedPane();
   tabbed_pane->set_use_native_win_control(true);
@@ -185,13 +197,13 @@ TEST_F(FocusManagerTest, FAILS_FocusNativeControls) {
   tabbed_pane->AddTab(ASCIIToUTF16("Awesome textfield"), textfield2);
 
   // Simulate the native view getting the native focus (such as by user click).
-  GetWidget()->FocusNativeView(textfield->TestGetNativeControlView());
+  FocusNativeView(textfield->TestGetNativeControlView());
   EXPECT_EQ(textfield, GetFocusManager()->GetFocusedView());
 
-  GetWidget()->FocusNativeView(tabbed_pane->TestGetNativeControlView());
+  FocusNativeView(tabbed_pane->TestGetNativeControlView());
   EXPECT_EQ(tabbed_pane, GetFocusManager()->GetFocusedView());
 
-  GetWidget()->FocusNativeView(textfield2->TestGetNativeControlView());
+  FocusNativeView(textfield2->TestGetNativeControlView());
   EXPECT_EQ(textfield2, GetFocusManager()->GetFocusedView());
 }
 #endif
@@ -646,5 +658,48 @@ TEST_F(FocusManagerDtorTest, FocusManagerDestructedLast) {
   ASSERT_STREQ("FocusManagerDtorTracked", dtor_tracker_[2].c_str());
 }
 #endif
+
+namespace {
+
+class FocusInAboutToRequestFocusFromTabTraversalView : public View {
+ public:
+  FocusInAboutToRequestFocusFromTabTraversalView() : view_to_focus_(NULL) {}
+
+  void set_view_to_focus(View* view) { view_to_focus_ = view; }
+
+  virtual void AboutToRequestFocusFromTabTraversal(bool reverse) OVERRIDE {
+    view_to_focus_->RequestFocus();
+  }
+
+ private:
+  views::View* view_to_focus_;
+
+  DISALLOW_COPY_AND_ASSIGN(FocusInAboutToRequestFocusFromTabTraversalView);
+};
+}  // namespace
+
+// Verifies a focus change done during a call to
+// AboutToRequestFocusFromTabTraversal() is honored.
+TEST_F(FocusManagerTest, FocusInAboutToRequestFocusFromTabTraversal) {
+  // Create 3 views focuses the 3 and advances to the second. The 2nd views
+  // implementation of AboutToRequestFocusFromTabTraversal() focuses the first.
+  views::View* v1 = new View;
+  v1->set_focusable(true);
+  GetContentsView()->AddChildView(v1);
+
+  FocusInAboutToRequestFocusFromTabTraversalView* v2 =
+      new FocusInAboutToRequestFocusFromTabTraversalView;
+  v2->set_focusable(true);
+  v2->set_view_to_focus(v1);
+  GetContentsView()->AddChildView(v2);
+
+  views::View* v3 = new View;
+  v3->set_focusable(true);
+  GetContentsView()->AddChildView(v3);
+
+  v3->RequestFocus();
+  GetWidget()->GetFocusManager()->AdvanceFocus(true);
+  EXPECT_TRUE(v1->HasFocus());
+}
 
 }  // namespace views

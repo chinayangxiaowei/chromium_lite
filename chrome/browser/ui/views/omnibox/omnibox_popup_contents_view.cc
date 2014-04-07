@@ -4,16 +4,21 @@
 
 #include "chrome/browser/ui/views/omnibox/omnibox_popup_contents_view.h"
 
+#include "chrome/browser/ui/omnibox/omnibox_popup_non_view.h"
 #include "chrome/browser/ui/omnibox/omnibox_view.h"
 #include "chrome/browser/ui/views/location_bar/location_bar_view.h"
-#include "chrome/browser/ui/views/omnibox/inline_omnibox_popup_view.h"
 #include "chrome/browser/ui/views/omnibox/omnibox_result_view.h"
 #include "chrome/browser/ui/views/omnibox/touch_omnibox_popup_contents_view.h"
+#include "chrome/browser/ui/search/search.h"
 #include "ui/base/theme_provider.h"
 #include "ui/gfx/canvas.h"
 #include "ui/gfx/image/image.h"
 #include "ui/gfx/path.h"
 #include "ui/views/widget/widget.h"
+
+#if defined(USE_AURA)
+#include "ui/views/corewm/window_animations.h"
+#endif
 
 #if defined(OS_WIN)
 #include <dwmapi.h>
@@ -22,9 +27,6 @@
 #if !defined(USE_AURA)
 #include "ui/base/win/shell.h"
 #endif
-#endif
-#if defined(USE_ASH)
-#include "ash/wm/window_animations.h"
 #endif
 
 namespace {
@@ -61,16 +63,9 @@ OmniboxPopupView* OmniboxPopupContentsView::Create(
     const gfx::Font& font,
     OmniboxView* omnibox_view,
     OmniboxEditModel* edit_model,
-    views::View* location_bar,
-    views::View* popup_parent_view) {
-  if (popup_parent_view) {
-    InlineOmniboxPopupView* inline_view =
-        new InlineOmniboxPopupView(font, omnibox_view, edit_model,
-                                   location_bar);
-    inline_view->Init();
-    popup_parent_view->AddChildView(inline_view);
-    return inline_view;
-  }
+    views::View* location_bar) {
+  if (chrome::search::IsInstantExtendedAPIEnabled(edit_model->profile()))
+    return new OmniboxPopupNonView(edit_model);
 
   OmniboxPopupContentsView* view = NULL;
   if (ui::GetDisplayLayout() == ui::LAYOUT_TOUCH) {
@@ -164,8 +159,7 @@ bool OmniboxPopupContentsView::IsOpen() const {
 }
 
 void OmniboxPopupContentsView::InvalidateLine(size_t line) {
-  OmniboxResultView* result = static_cast<OmniboxResultView*>(
-      child_at(static_cast<int>(line)));
+  OmniboxResultView* result = result_view_at(line);
   result->Invalidate();
 
   if (HasMatchAt(line) && GetMatchAtIndex(line).associated_keyword.get()) {
@@ -195,7 +189,7 @@ void OmniboxPopupContentsView::UpdatePopupAppearance() {
   size_t child_rv_count = child_count();
   const size_t result_size = model_->result().size();
   for (size_t i = 0; i < result_size; ++i) {
-    OmniboxResultView* view = static_cast<OmniboxResultView*>(child_at(i));
+    OmniboxResultView* view = result_view_at(i);
     view->SetMatch(GetMatchAtIndex(i));
     view->SetVisible(true);
   }
@@ -218,16 +212,19 @@ void OmniboxPopupContentsView::UpdatePopupAppearance() {
     views::Widget::InitParams params(views::Widget::InitParams::TYPE_POPUP);
     params.can_activate = false;
     params.transparent = true;
-    params.parent_widget = location_bar_->GetWidget();
+    params.parent = location_bar_->GetWidget()->GetNativeView();
     params.bounds = GetPopupBounds();
+    params.context = location_bar_->GetWidget()->GetNativeView();
     popup_->Init(params);
-#if defined(USE_ASH)
-    ash::SetWindowVisibilityAnimationType(
+#if defined(USE_AURA)
+    views::corewm::SetWindowVisibilityAnimationType(
         popup_->GetNativeView(),
-        ash::WINDOW_VISIBILITY_ANIMATION_TYPE_VERTICAL);
-    // No animation for autocomplete popup appearance.  see crbug.com/124104
-    ash::SetWindowVisibilityAnimationTransition(
-        popup_->GetNativeView(), ash::ANIMATE_HIDE);
+        views::corewm::WINDOW_VISIBILITY_ANIMATION_TYPE_VERTICAL);
+#if defined(OS_CHROMEOS)
+    // No animation for autocomplete popup appearance.
+    views::corewm::SetWindowVisibilityAnimationTransition(
+        popup_->GetNativeView(), views::corewm::ANIMATE_HIDE);
+#endif
 #endif
     popup_->SetContentsView(this);
     popup_->StackAbove(omnibox_view_->GetRelativeWindowForPopup());
@@ -359,29 +356,28 @@ void OmniboxPopupContentsView::OnMouseExited(
   model_->SetHoveredLine(OmniboxPopupModel::kNoMatch);
 }
 
-ui::EventResult OmniboxPopupContentsView::OnGestureEvent(
-    const ui::GestureEvent& event) {
-  switch (event.type()) {
+void OmniboxPopupContentsView::OnGestureEvent(ui::GestureEvent* event) {
+  switch (event->type()) {
     case ui::ET_GESTURE_TAP_DOWN:
     case ui::ET_GESTURE_SCROLL_BEGIN:
     case ui::ET_GESTURE_SCROLL_UPDATE:
-      UpdateLineEvent(event, true);
+      UpdateLineEvent(*event, true);
       break;
     case ui::ET_GESTURE_TAP:
     case ui::ET_GESTURE_SCROLL_END:
-      OpenSelectedLine(event, CURRENT_TAB);
+      OpenSelectedLine(*event, CURRENT_TAB);
       break;
     default:
-      return ui::ER_UNHANDLED;
+      return;
   }
-  return ui::ER_CONSUMED;
+  event->SetHandled();
 }
 
 ////////////////////////////////////////////////////////////////////////////////
 // OmniboxPopupContentsView, protected:
 
 void OmniboxPopupContentsView::PaintResultViews(gfx::Canvas* canvas) {
-  canvas->DrawColor(OmniboxResultView::GetColor(
+  canvas->DrawColor(result_view_at(0)->GetColor(
       OmniboxResultView::NORMAL, OmniboxResultView::BACKGROUND));
   View::PaintChildren(canvas);
 }
@@ -485,7 +481,7 @@ void OmniboxPopupContentsView::MakeCanvasTransparent(gfx::Canvas* canvas) {
   SkAlpha alpha = GetThemeProvider()->ShouldUseNativeFrame() ?
       kGlassPopupAlpha : kOpaquePopupAlpha;
   canvas->DrawColor(SkColorSetA(
-      OmniboxResultView::GetColor(OmniboxResultView::NORMAL,
+      result_view_at(0)->GetColor(OmniboxResultView::NORMAL,
           OmniboxResultView::BACKGROUND), alpha), SkXfermode::kDstIn_Mode);
 }
 
@@ -524,8 +520,7 @@ gfx::Rect OmniboxPopupContentsView::CalculateTargetBounds(int h) {
   if (border) {
     // Adjust for the border so that the bubble and location bar borders are
     // aligned.
-    gfx::Insets insets;
-    border->GetInsets(&insets);
+    gfx::Insets insets = border->GetInsets();
     location_bar_bounds.Inset(insets.left(), 0, insets.right(), 0);
   } else {
     // The normal location bar is drawn using a background graphic that includes
@@ -555,4 +550,8 @@ void OmniboxPopupContentsView::OpenSelectedLine(
     WindowOpenDisposition disposition) {
   size_t index = GetIndexForPoint(event.location());
   OpenIndex(index, disposition);
+}
+
+OmniboxResultView* OmniboxPopupContentsView::result_view_at(size_t i) {
+  return static_cast<OmniboxResultView*>(child_at(static_cast<int>(i)));
 }

@@ -52,8 +52,6 @@
 #include "base/memory/scoped_ptr.h"
 #include "chrome/browser/profiles/profile_keyed_service.h"
 #include "chrome/browser/webdata/web_data_service.h"
-#include "content/public/browser/notification_observer.h"
-#include "content/public/browser/notification_registrar.h"
 #include "google_apis/gaia/gaia_auth_consumer.h"
 #include "google_apis/gaia/gaia_auth_fetcher.h"
 #include "google_apis/gaia/google_service_auth_error.h"
@@ -69,8 +67,7 @@ class URLRequestContextGetter;
 // from the UI thread.
 class TokenService : public GaiaAuthConsumer,
                      public ProfileKeyedService,
-                     public WebDataServiceConsumer,
-                     public content::NotificationObserver {
+                     public WebDataServiceConsumer {
  public:
    TokenService();
    virtual ~TokenService();
@@ -103,18 +100,6 @@ class TokenService : public GaiaAuthConsumer,
     GoogleServiceAuthError error_;
   };
 
-  class CredentialsUpdatedDetails {
-   public:
-    CredentialsUpdatedDetails(const std::string& lsid,
-                              const std::string& sid)
-        : lsid_(lsid), sid_(sid) {}
-    const std::string& lsid() const { return lsid_; }
-    const std::string& sid() const { return sid_; }
-   private:
-    std::string lsid_;
-    std::string sid_;
-  };
-
   // Initialize this token service with a request source
   // (usually from a GaiaAuthConsumer constant), and the profile.
   // Typically you'd then update the credentials.
@@ -122,6 +107,10 @@ class TokenService : public GaiaAuthConsumer,
 
   // Used to determine whether Initialize() has been called.
   bool Initialized() const { return !source_.empty(); }
+
+  // Add a token not supported by a fetcher.
+  void AddAuthTokenManually(const std::string& service,
+                            const std::string& auth_token);
 
   // Update ClientLogin credentials in the token service.
   // Afterwards you can StartFetchingTokens.
@@ -143,7 +132,7 @@ class TokenService : public GaiaAuthConsumer,
   // Async load all tokens for services we know of from the DB.
   // You should do this at startup. Optionally you can do it again
   // after you reset in memory credentials.
-  void LoadTokensFromDB();
+  virtual void LoadTokensFromDB();
 
   // Clear all DB stored tokens for the current profile. Tokens may still be
   // available in memory. If a DB load is pending it may still be serviced.
@@ -154,8 +143,8 @@ class TokenService : public GaiaAuthConsumer,
   // called.
   bool TokensLoadedFromDB() const;
 
-  // Returns true if the token service has all credentials needed to fetch
-  // tokens.
+  // Returns true if the token service has either GAIA credentials or OAuth2
+  // tokens needed to fetch other service tokens.
   virtual bool AreCredentialsValid() const;
 
   // Tokens will be fetched for all services(sync, talk) in the background.
@@ -170,16 +159,13 @@ class TokenService : public GaiaAuthConsumer,
   // Typical use is to create an OAuth2 token for appropriate scope and then
   // use that token to call a Google API.
   virtual bool HasOAuthLoginToken() const;
+  virtual bool HasOAuthLoginAccessToken() const;
   virtual const std::string& GetOAuth2LoginRefreshToken() const;
   const std::string& GetOAuth2LoginAccessToken() const;
 
   // For tests only. Doesn't save to the WebDB.
   void IssueAuthTokenForTest(const std::string& service,
                              const std::string& auth_token);
-
-  const GaiaAuthConsumer::ClientLoginResult& credentials() const {
-    return credentials_;
-  }
 
   // GaiaAuthConsumer implementation.
   virtual void OnIssueAuthTokenSuccess(const std::string& service,
@@ -196,19 +182,19 @@ class TokenService : public GaiaAuthConsumer,
       WebDataService::Handle h,
       const WDTypedResult* result) OVERRIDE;
 
-  // content::NotificationObserver implementation.
-  virtual void Observe(int type,
-                       const content::NotificationSource& source,
-                       const content::NotificationDetails& details) OVERRIDE;
+ protected:
+  // Saves OAuth2 credentials.
+  void SaveOAuth2Credentials(const ClientOAuthResult& result);
+
+  void set_tokens_loaded(bool loaded) {
+    tokens_loaded_ = loaded;
+  }
 
  private:
 
   // Gets the list of all service names for which tokens will be retrieved.
   // This method is meant only for tests.
   static void GetServiceNamesForTesting(std::vector<std::string>* names);
-
-  void FireCredentialsUpdatedNotification(const std::string& lsid,
-                                          const std::string& sid);
 
   void FireTokenAvailableNotification(const std::string& service,
                                       const std::string& auth_token);
@@ -256,8 +242,6 @@ class TokenService : public GaiaAuthConsumer,
 
   // Map from service to token.
   std::map<std::string, std::string> token_map_;
-
-  content::NotificationRegistrar registrar_;
 
   friend class TokenServiceTest;
   FRIEND_TEST_ALL_PREFIXES(TokenServiceTest, LoadTokensIntoMemoryBasic);

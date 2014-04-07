@@ -33,6 +33,8 @@
     ['OS != "ios"', {
       'includes': [
         '../build/win_precompile.gypi',
+        'content_components_navigation_interception.gypi',
+        'content_components_web_contents_delegate_android.gypi',
         'content_shell.gypi',
       ],
     }],
@@ -272,7 +274,7 @@
           },
           'sources': [
             'public/android/java/src/org/chromium/content/common/ISandboxedProcessCallback.aidl',
-          'public/android/java/src/org/chromium/content/common/ISandboxedProcessService.aidl',
+            'public/android/java/src/org/chromium/content/common/ISandboxedProcessService.aidl',
           ],
           'includes': [ '../build/java_aidl.gypi' ],
         },
@@ -285,21 +287,63 @@
             '../ui/ui.gyp:ui_java',
             'common_aidl',
             'content_common',
-          ],
-          'export_dependent_settings': [
-            '../base/base.gyp:base',
-            '../net/net.gyp:net',
-            '../ui/ui.gyp:ui_java',
+            'page_transition_types_java',
           ],
           'variables': {
             'package_name': 'content',
             'java_in_dir': '../content/public/android/java',
+            'has_java_resources': 1,
+            'R_package': 'org.chromium.content',
+            'R_package_relpath': 'org/chromium/content',
           },
+          'conditions': [
+            ['android_build_type == 0', {
+              'dependencies': [
+                '../third_party/eyesfree/eyesfree.gyp:eyesfree_java',
+              ],
+            }],
+          ],
           'includes': [ '../build/java.gypi' ],
+        },
+        {
+          'target_name': 'page_transition_types_java',
+          'type': 'none',
+          'sources': [
+            'public/android/java/src/org/chromium/content/browser/PageTransitionTypes.template',
+          ],
+          'variables': {
+            'package_name': 'org.chromium.content.browser',
+            'template_deps': ['public/common/page_transition_types_list.h'],
+          },
+          'includes': [ '../build/android/java_cpp_template.gypi' ],
+        },
+        {
+          'target_name': 'surface_texture_jni_headers',
+          'type': 'none',
+          'variables': {
+            'jni_gen_dir': 'content',
+            'input_java_class': 'android/graphics/SurfaceTexture.class',
+            'input_jar_file': '<(android_sdk)/android.jar',
+          },
+          'includes': [ '../build/jar_file_jni_generator.gypi' ],
+        },
+        {
+          'target_name': 'surface_jni_headers',
+          'type': 'none',
+          'variables': {
+            'jni_gen_dir': 'content',
+            'input_java_class': 'android/view/Surface.class',
+            'input_jar_file': '<(android_sdk)/android.jar',
+          },
+          'includes': [ '../build/jar_file_jni_generator.gypi' ],
         },
         {
           'target_name': 'content_jni_headers',
           'type': 'none',
+          'dependencies': [
+            'surface_texture_jni_headers',
+            'surface_jni_headers',
+          ],
           'includes': [ 'content_jni.gypi' ],
         },
       ],

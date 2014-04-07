@@ -12,6 +12,8 @@
 #include "chrome/browser/extensions/api/commands/command_service.h"
 #include "chrome/browser/extensions/api/commands/command_service_factory.h"
 #include "chrome/browser/extensions/bundle_installer.h"
+#include "chrome/browser/extensions/extension_action.h"
+#include "chrome/browser/extensions/extension_action_manager.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_navigator.h"
 #include "chrome/browser/ui/browser_window.h"
@@ -24,8 +26,8 @@
 #include "chrome/browser/ui/cocoa/toolbar/toolbar_controller.h"
 #include "chrome/browser/ui/singleton_tabs.h"
 #include "chrome/common/chrome_notification_types.h"
+#include "chrome/common/extensions/api/omnibox/omnibox_handler.h"
 #include "chrome/common/extensions/extension.h"
-#include "chrome/common/extensions/extension_action.h"
 #include "chrome/common/url_constants.h"
 #include "content/public/browser/notification_details.h"
 #include "content/public/browser/notification_registrar.h"
@@ -90,7 +92,8 @@ class ExtensionLoadedNotificationObserver
 
 @synthesize extension = extension_;
 @synthesize bundle = bundle_;
-@synthesize pageActionRemoved = pageActionRemoved_;  // Exposed for unit test.
+// Exposed for unit test.
+@synthesize pageActionPreviewShowing = pageActionPreviewShowing_;
 
 - (id)initWithParentWindow:(NSWindow*)parentWindow
                  extension:(const Extension*)extension
@@ -107,16 +110,19 @@ class ExtensionLoadedNotificationObserver
     DCHECK(browser);
     browser_ = browser;
     icon_.reset([gfx::SkBitmapToNSImage(icon) retain]);
-    pageActionRemoved_ = NO;
+    pageActionPreviewShowing_ = NO;
+
+    extensions::ExtensionActionManager* extension_action_manager =
+        extensions::ExtensionActionManager::Get(browser_->profile());
 
     if (bundle_) {
       type_ = extension_installed_bubble::kBundle;
-    } else if (!extension->omnibox_keyword().empty()) {
+    } else if (!extensions::OmniboxInfo::GetKeyword(extension).empty()) {
       type_ = extension_installed_bubble::kOmniboxKeyword;
-    } else if (extension->browser_action()) {
+    } else if (extension_action_manager->GetBrowserAction(*extension)) {
       type_ = extension_installed_bubble::kBrowserAction;
-    } else if (extension->page_action() &&
-             extension->is_verbose_install_message()) {
+    } else if (extension_action_manager->GetPageAction(*extension) &&
+               extensions::OmniboxInfo::IsVerboseInstallMessage(extension)) {
       type_ = extension_installed_bubble::kPageAction;
     } else {
       type_ = extension_installed_bubble::kGeneric;
@@ -158,18 +164,22 @@ class ExtensionLoadedNotificationObserver
   [self close];
 }
 
-// Extracted to a function here so that it can be overwritten for unit
-// testing.
+// Extracted to a function here so that it can be overridden for unit testing.
 - (void)removePageActionPreviewIfNecessary {
-  if (!extension_ || !extension_->page_action() || pageActionRemoved_)
+  if (!extension_ || !pageActionPreviewShowing_)
     return;
-  pageActionRemoved_ = YES;
+  ExtensionAction* page_action =
+      extensions::ExtensionActionManager::Get(browser_->profile())->
+      GetPageAction(*extension_);
+  if (!page_action)
+    return;
+  pageActionPreviewShowing_ = NO;
 
   BrowserWindowCocoa* window =
       static_cast<BrowserWindowCocoa*>(browser_->window());
   LocationBarViewMac* locationBarView =
       [window->cocoa_controller() locationBarBridge];
-  locationBarView->SetPreviewEnabledPageAction(extension_->page_action(),
+  locationBarView->SetPreviewEnabledPageAction(page_action,
                                                false);  // disables preview.
 }
 
@@ -202,15 +212,19 @@ class ExtensionLoadedNotificationObserver
       LocationBarViewMac* locationBarView =
           [window->cocoa_controller() locationBarBridge];
 
+      ExtensionAction* page_action =
+          extensions::ExtensionActionManager::Get(browser_->profile())->
+          GetPageAction(*extension_);
+
       // Tell the location bar to show a preview of the page action icon, which
       // would ordinarily only be displayed on a page of the appropriate type.
       // We remove this preview when the extension installed bubble closes.
-      locationBarView->SetPreviewEnabledPageAction(extension_->page_action(),
-                                                   true);
+      locationBarView->SetPreviewEnabledPageAction(page_action, true);
+      pageActionPreviewShowing_ = YES;
 
       // Find the center of the bottom of the page action icon.
       arrowPoint =
-          locationBarView->GetPageActionBubblePoint(extension_->page_action());
+          locationBarView->GetPageActionBubblePoint(page_action);
       break;
     }
     case extension_installed_bubble::kBundle:
@@ -377,7 +391,7 @@ class ExtensionLoadedNotificationObserver
   if (type_ == extension_installed_bubble::kOmniboxKeyword) {
     [extraInfoMsg_ setStringValue:l10n_util::GetNSStringF(
         IDS_EXTENSION_INSTALLED_OMNIBOX_KEYWORD_INFO,
-        UTF8ToUTF16(extension_->omnibox_keyword()))];
+        UTF8ToUTF16(extensions::OmniboxInfo::GetKeyword(extension_)))];
     [extraInfoMsg_ setHidden:NO];
     [[extraInfoMsg_ cell]
         setFont:[NSFont systemFontOfSize:[NSFont smallSystemFontSize]]];
@@ -500,7 +514,7 @@ class ExtensionLoadedNotificationObserver
       extensionMessageFrame1.size.height +
       extension_installed_bubble::kOuterVerticalMargin);
   [extensionInstalledMsg_ setFrame:extensionMessageFrame1];
-  if (extension_->is_verbose_install_message()) {
+  if (extensions::OmniboxInfo::IsVerboseInstallMessage(extension_)) {
     // The extra message is only shown when appropriate.
     NSRect extraMessageFrame = [extraInfoMsg_ frame];
     extraMessageFrame.origin.y = extensionMessageFrame1.origin.y - (

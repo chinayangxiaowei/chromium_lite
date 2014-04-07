@@ -14,10 +14,13 @@
 
 #include <list>
 #include <map>
+#include <utility>
 #include <vector>
 
+#include <X11/extensions/XInput2.h>
 #include <X11/extensions/Xrandr.h>
 #include <X11/extensions/randr.h>
+#include <X11/extensions/shape.h>
 
 #include "base/bind.h"
 #include "base/command_line.h"
@@ -30,8 +33,12 @@
 #include "base/stringprintf.h"
 #include "base/sys_byteorder.h"
 #include "base/threading/thread.h"
+#include "ui/base/events/event_utils.h"
 #include "ui/base/keycodes/keyboard_code_conversion_x.h"
+#include "ui/base/touch/touch_factory.h"
+#include "ui/base/x/valuators.h"
 #include "ui/base/x/x11_util_internal.h"
+#include "ui/gfx/point_conversions.h"
 #include "ui/gfx/rect.h"
 #include "ui/gfx/size.h"
 
@@ -96,7 +103,7 @@ int DefaultX11ErrorHandler(Display* d, XErrorEvent* e) {
          base::Bind(&LogErrorEventDescription, d, *e));
   } else {
     LOG(ERROR)
-        << "X Error detected: "
+        << "X error received: "
         << "serial " << e->serial << ", "
         << "error_code " << static_cast<int>(e->error_code) << ", "
         << "request_code " << static_cast<int>(e->request_code) << ", "
@@ -107,7 +114,7 @@ int DefaultX11ErrorHandler(Display* d, XErrorEvent* e) {
 
 int DefaultX11IOErrorHandler(Display* d) {
   // If there's an IO error it likely means the X server has gone away
-  LOG(ERROR) << "X IO Error detected";
+  LOG(ERROR) << "X IO error received (X server probably went away)";
   _exit(1);
 }
 
@@ -167,7 +174,7 @@ unsigned int XKeyEventKeyCode(ui::KeyboardCode key_code,
 // A process wide singleton that manages the usage of X cursors.
 class XCursorCache {
  public:
-   XCursorCache() {}
+  XCursorCache() {}
   ~XCursorCache() {
     Clear();
   }
@@ -309,17 +316,19 @@ class XButtonMap {
 };
 
 bool IsRandRAvailable() {
-  static bool is_randr_available = false;
-  static bool is_randr_availability_cached = false;
-  if (is_randr_availability_cached)
-    return is_randr_available;
-
   int randr_version_major = 0;
   int randr_version_minor = 0;
-  is_randr_available = XRRQueryVersion(
+  static bool is_randr_available = XRRQueryVersion(
       GetXDisplay(), &randr_version_major, &randr_version_minor);
-  is_randr_availability_cached = true;
   return is_randr_available;
+}
+
+bool IsShapeAvailable() {
+  int dummy;
+  static bool is_shape_available =
+    XShapeQueryExtension(ui::GetXDisplay(), &dummy, &dummy);
+  return is_shape_available;
+
 }
 
 }  // namespace
@@ -353,9 +362,14 @@ static SharedMemorySupport DoQuerySharedMemorySupport(Display* dpy) {
 #endif
 
   // Next we probe to see if shared memory will really work
-  int shmkey = shmget(IPC_PRIVATE, 1, 0666);
-  if (shmkey == -1)
+  int shmkey = shmget(IPC_PRIVATE, 1, 0600);
+  if (shmkey == -1) {
+    LOG(WARNING) << "Failed to get shared memory segment.";
     return SHARED_MEMORY_NONE;
+  } else {
+    VLOG(1) << "Got shared memory segment " << shmkey;
+  }
+
   void* address = shmat(shmkey, NULL, 0);
   // Mark the shared memory region for deletion
   shmctl(shmkey, IPC_RMID, NULL);
@@ -366,12 +380,20 @@ static SharedMemorySupport DoQuerySharedMemorySupport(Display* dpy) {
 
   gdk_error_trap_push();
   bool result = XShmAttach(dpy, &shminfo);
+  if (result)
+    VLOG(1) << "X got shared memory segment " << shmkey;
+  else
+    LOG(WARNING) << "X failed to attach to shared memory segment " << shmkey;
   XSync(dpy, False);
   if (gdk_error_trap_pop())
     result = false;
   shmdt(address);
-  if (!result)
+  if (!result) {
+    LOG(WARNING) << "X failed to attach to shared memory segment " << shmkey;
     return SHARED_MEMORY_NONE;
+  }
+
+  VLOG(1) << "X attached to shared memory segment " << shmkey;
 
   XShmDetach(dpy, &shminfo);
   return pixmaps_supported ? SHARED_MEMORY_PIXMAP : SHARED_MEMORY_PUTIMAGE;
@@ -412,12 +434,6 @@ int GetDefaultScreen(Display* display) {
 
 ::Cursor GetXCursor(int cursor_shape) {
   CR_DEFINE_STATIC_LOCAL(XCursorCache, cache, ());
-
-  if (cursor_shape == kCursorClearXCursorCache) {
-    cache.Clear();
-    return 0;
-  }
-
   return cache.GetCursor(cursor_shape);
 }
 
@@ -455,7 +471,7 @@ XcursorImage* SkBitmapToXcursorImage(const SkBitmap* cursor_image,
         skia::ImageOperations::RESIZE_BETTER,
         static_cast<int>(cursor_image->width() * scale),
         static_cast<int>(cursor_image->height() * scale));
-    hotspot_point = hotspot.Scale(scale);
+    hotspot_point = gfx::ToFlooredPoint(gfx::ScalePoint(hotspot, scale));
     needs_scale = true;
   }
 
@@ -474,6 +490,91 @@ XcursorImage* SkBitmapToXcursorImage(const SkBitmap* cursor_image,
   }
 
   return image;
+}
+
+
+int CoalescePendingMotionEvents(const XEvent* xev,
+                                XEvent* last_event) {
+  XIDeviceEvent* xievent = static_cast<XIDeviceEvent*>(xev->xcookie.data);
+  int num_coalesed = 0;
+  Display* display = xev->xany.display;
+  int event_type = xev->xgeneric.evtype;
+
+#if defined(USE_XI2_MT)
+  float tracking_id = -1;
+  if (event_type == XI_TouchUpdate) {
+    if (!ui::ValuatorTracker::GetInstance()->ExtractValuator(*xev,
+          ui::ValuatorTracker::VAL_TRACKING_ID, &tracking_id))
+      tracking_id = -1;
+  }
+#endif
+
+  while (XPending(display)) {
+    XEvent next_event;
+    XPeekEvent(display, &next_event);
+
+    // If we can't get the cookie, abort the check.
+    if (!XGetEventData(next_event.xgeneric.display, &next_event.xcookie))
+      return num_coalesed;
+
+    // If this isn't from a valid device, throw the event away, as
+    // that's what the message pump would do. Device events come in pairs
+    // with one from the master and one from the slave so there will
+    // always be at least one pending.
+    if (!ui::TouchFactory::GetInstance()->ShouldProcessXI2Event(&next_event)) {
+      XFreeEventData(display, &next_event.xcookie);
+      XNextEvent(display, &next_event);
+      continue;
+    }
+
+    if (next_event.type == GenericEvent &&
+        next_event.xgeneric.evtype == event_type &&
+        !ui::GetScrollOffsets(&next_event, NULL, NULL, NULL) &&
+        !ui::GetFlingData(&next_event, NULL, NULL, NULL)) {
+      XIDeviceEvent* next_xievent =
+          static_cast<XIDeviceEvent*>(next_event.xcookie.data);
+#if defined(USE_XI2_MT)
+      float next_tracking_id = -1;
+      if (event_type == XI_TouchUpdate) {
+        // If this is a touch motion event (as opposed to mouse motion event),
+        // then make sure the events are from the same touch-point.
+        if (!ui::ValuatorTracker::GetInstance()->ExtractValuator(next_event,
+              ui::ValuatorTracker::VAL_TRACKING_ID, &next_tracking_id))
+          next_tracking_id = -1;
+      }
+#endif
+      // Confirm that the motion event is targeted at the same window
+      // and that no buttons or modifiers have changed.
+      if (xievent->event == next_xievent->event &&
+          xievent->child == next_xievent->child &&
+#if defined(USE_XI2_MT)
+          (event_type == XI_Motion || tracking_id == next_tracking_id) &&
+#endif
+          xievent->buttons.mask_len == next_xievent->buttons.mask_len &&
+          (memcmp(xievent->buttons.mask,
+                  next_xievent->buttons.mask,
+                  xievent->buttons.mask_len) == 0) &&
+          xievent->mods.base == next_xievent->mods.base &&
+          xievent->mods.latched == next_xievent->mods.latched &&
+          xievent->mods.locked == next_xievent->mods.locked &&
+          xievent->mods.effective == next_xievent->mods.effective) {
+        XFreeEventData(display, &next_event.xcookie);
+        // Free the previous cookie.
+        if (num_coalesed > 0)
+          XFreeEventData(display, &last_event->xcookie);
+        // Get the event and its cookie data.
+        XNextEvent(display, last_event);
+        XGetEventData(display, &last_event->xcookie);
+        ++num_coalesed;
+        continue;
+      } else {
+        // This isn't an event we want so free its cookie data.
+        XFreeEventData(display, &next_event.xcookie);
+      }
+    }
+    break;
+  }
+  return num_coalesed;
 }
 #endif
 
@@ -547,6 +648,26 @@ void SetHideTitlebarWhenMaximizedProperty(XID window,
       1);
 }
 
+void ClearX11DefaultRootWindow() {
+  Display* display = GetXDisplay();
+  XID root_window = GetX11RootWindow();
+  gfx::Rect root_bounds;
+  if (!GetWindowRect(root_window, &root_bounds)) {
+    LOG(ERROR) << "Failed to get the bounds of the X11 root window";
+    return;
+  }
+
+  XGCValues gc_values = {0};
+  gc_values.foreground = BlackPixel(display, DefaultScreen(display));
+  GC gc = XCreateGC(display, root_window, GCForeground, &gc_values);
+  XFillRectangle(display, root_window, gc,
+                 root_bounds.x(),
+                 root_bounds.y(),
+                 root_bounds.width(),
+                 root_bounds.height());
+  XFreeGC(display, gc);
+}
+
 int BitsPerPixelForPixmapDepth(Display* dpy, int depth) {
   int count;
   XPixmapFormatValues* formats = XListPixmapFormats(dpy, &count);
@@ -597,6 +718,48 @@ bool GetWindowRect(XID window, gfx::Rect* rect) {
   *rect = gfx::Rect(x, y, width, height);
   return true;
 }
+
+
+bool WindowContainsPoint(XID window, gfx::Point screen_loc) {
+  gfx::Rect window_rect;
+  if (!GetWindowRect(window, &window_rect))
+    return false;
+
+  if (!window_rect.Contains(screen_loc))
+    return false;
+
+  if (!IsShapeAvailable())
+    return true;
+
+  // According to http://www.x.org/releases/X11R7.6/doc/libXext/shapelib.html,
+  // if an X display supports the shape extension the bounds of a window are
+  // defined as the intersection of the window bounds and the interior
+  // rectangles. This means to determine if a point is inside a window for the
+  // purpose of input handling we have to check the rectangles in the ShapeInput
+  // list.
+  int dummy;
+  int input_rects_size = 0;
+  XRectangle* input_rects = XShapeGetRectangles(
+      ui::GetXDisplay(), window, ShapeInput, &input_rects_size, &dummy);
+  if (!input_rects)
+    return true;
+  bool is_in_input_rects = false;
+  for (int i = 0; i < input_rects_size; ++i) {
+    // The ShapeInput rects appear to be in window space, so we have to
+    // translate by the window_rect's offset to map to screen space.
+    gfx::Rect input_rect =
+        gfx::Rect(input_rects[i].x + window_rect.x(),
+                  input_rects[i].y + window_rect.y(),
+                  input_rects[i].width, input_rects[i].height);
+    if (input_rect.Contains(screen_loc)) {
+      is_in_input_rects = true;
+      break;
+    }
+  }
+  XFree(input_rects);
+  return is_in_input_rects;
+}
+
 
 bool PropertyExists(XID window, const std::string& property_name) {
   Atom type = None;
@@ -780,6 +943,12 @@ bool GetWindowDesktop(XID window, int* desktop) {
   return GetIntProperty(window, "_NET_WM_DESKTOP", desktop);
 }
 
+std::string GetX11ErrorString(Display* display, int err) {
+  char buffer[256];
+  XGetErrorText(display, err, buffer, arraysize(buffer));
+  return buffer;
+}
+
 // Returns true if |window| is a named window.
 bool IsWindowNamed(XID window) {
   XTextProperty prop;
@@ -902,8 +1071,13 @@ XSharedMemoryId AttachSharedMemory(Display* display, int shared_memory_key) {
   // This function is only called if QuerySharedMemorySupport returned true. In
   // which case we've already succeeded in having the X server attach to one of
   // our shared memory segments.
-  if (!XShmAttach(display, &shminfo))
+  if (!XShmAttach(display, &shminfo)) {
+    LOG(WARNING) << "X failed to attach to shared memory segment "
+                 << shminfo.shmid;
     NOTREACHED();
+  } else {
+    VLOG(1) << "X attached to shared memory segment " << shminfo.shmid;
+  }
 
   return shminfo.shmseg;
 }
@@ -1073,7 +1247,7 @@ bool GetOutputDeviceHandles(std::vector<XID>* outputs) {
 
 bool GetOutputDeviceData(XID output,
                          uint16* manufacturer_id,
-                         uint32* serial_number,
+                         uint16* product_code,
                          std::string* human_readable_name) {
   if (!IsRandRAvailable())
     return false;
@@ -1119,19 +1293,18 @@ bool GetOutputDeviceData(XID output,
   // See http://en.wikipedia.org/wiki/Extended_display_identification_data
   // for the details of EDID data format.  We use the following data:
   //   bytes 8-9: manufacturer EISA ID, in big-endian
-  //   bytes 12-15: represents serial number, in little-endian
+  //   bytes 10-11: represents product code, in little-endian
   //   bytes 54-125: four descriptors (18-bytes each) which may contain
   //     the display name.
   const unsigned int kManufacturerOffset = 8;
   const unsigned int kManufacturerLength = 2;
-  const unsigned int kSerialNumberOffset = 12;
-  const unsigned int kSerialNumberLength = 4;
+  const unsigned int kProductCodeOffset = 10;
+  const unsigned int kProductCodeLength = 2;
   const unsigned int kDescriptorOffset = 54;
   const unsigned int kNumDescriptors = 4;
   const unsigned int kDescriptorLength = 18;
   // The specifier types.
   const unsigned char kMonitorNameDescriptor = 0xfc;
-  const unsigned char kUnspecifiedTextDescriptor = 0xfe;
 
   if (manufacturer_id) {
     if (nitems < kManufacturerOffset + kManufacturerLength) {
@@ -1144,13 +1317,13 @@ bool GetOutputDeviceData(XID output,
 #endif
   }
 
-  if (serial_number) {
-    if (nitems < kSerialNumberOffset + kSerialNumberLength) {
+  if (product_code) {
+    if (nitems < kProductCodeOffset + kProductCodeLength) {
       XFree(prop);
       return false;
     }
-    *serial_number = base::ByteSwapToLE32(
-        *reinterpret_cast<uint32*>(prop + kSerialNumberOffset));
+    *product_code = base::ByteSwapToLE16(
+        *reinterpret_cast<const uint16*>(prop + kProductCodeOffset));
   }
 
   if (!human_readable_name) {
@@ -1158,7 +1331,6 @@ bool GetOutputDeviceData(XID output,
     return true;
   }
 
-  std::string name_candidate;
   human_readable_name->clear();
   for (unsigned int i = 0; i < kNumDescriptors; ++i) {
     if (nitems < kDescriptorOffset + (i + 1) * kDescriptorLength) {
@@ -1180,21 +1352,9 @@ bool GetOutputDeviceData(XID output,
             reinterpret_cast<char*>(desc_buf + 5), kDescriptorLength - 5);
         TrimWhitespaceASCII(found_name, TRIM_TRAILING, human_readable_name);
         break;
-      } else if (desc_buf[3] == kUnspecifiedTextDescriptor &&
-                 name_candidate.empty()) {
-        // Sometimes the default display of a laptop device doesn't have "FC"
-        // ("Monitor name") descriptor, but has some human readable text with
-        // "FE" ("Unspecified text"). Thus here use this value as the fallback
-        // if "FC" is missing. Note that multiple descriptors may have "FE",
-        // and the first one is the monitor name.
-        std::string found_name(
-            reinterpret_cast<char*>(desc_buf + 5), kDescriptorLength - 5);
-        TrimWhitespaceASCII(found_name, TRIM_TRAILING, &name_candidate);
       }
     }
   }
-  if (human_readable_name->empty() && !name_candidate.empty())
-    *human_readable_name = name_candidate;
 
   XFree(prop);
 
@@ -1554,8 +1714,8 @@ void LogErrorEventDescription(Display* dpy,
     XFreeExtensionList(ext_list);
   }
 
-  LOG(ERROR) 
-      << "X Error detected: "
+  LOG(ERROR)
+      << "X error received: "
       << "serial " << error_event.serial << ", "
       << "error_code " << static_cast<int>(error_event.error_code)
       << " (" << error_str << "), "

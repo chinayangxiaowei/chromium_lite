@@ -334,8 +334,10 @@ void Premultiply(SkBitmap bitmap) {
 void LoadPngFileToSkBitmap(const FilePath& filename,
                            SkBitmap* bitmap,
                            bool is_opaque) {
+  FilePath absolute_path(filename);
+  file_util::AbsolutePath(&absolute_path);
   std::string compressed;
-  file_util::ReadFileToString(filename, &compressed);
+  file_util::ReadFileToString(absolute_path, &compressed);
   ASSERT_TRUE(compressed.size());
 
   ASSERT_TRUE(gfx::PNGCodec::Decode(
@@ -390,9 +392,10 @@ class VectorCanvasTest : public ImageTest {
     size_ = size;
     context_ = new Context();
     bitmap_ = new Bitmap(*context_, size_, size_);
-    vcanvas_ = new VectorCanvas(VectorPlatformDeviceEmf::CreateDevice(
-        size_, size_, true, context_->context()));
-    pcanvas_ = new PlatformCanvas(size_, size_, false);
+    vcanvas_ = new VectorCanvas(
+        VectorPlatformDeviceEmf::CreateDevice(
+            size_, size_, true, context_->context()));
+    pcanvas_ = CreatePlatformCanvas(size_, size_, false);
 
     // Clear white.
     vcanvas_->drawARGB(255, 255, 255, 255, SkXfermode::kSrc_Mode);
@@ -447,6 +450,8 @@ class VectorCanvasTest : public ImageTest {
 
 ////////////////////////////////////////////////////////////////////////////////
 // Actual tests
+
+#if !defined(USE_AURA)  // http://crbug.com/154358
 
 TEST_F(VectorCanvasTest, BasicDrawing) {
   EXPECT_EQ(Image(*vcanvas_).PercentageDifferent(Image(*pcanvas_)), 0.)
@@ -727,9 +732,9 @@ TEST_F(VectorCanvasTest, MAYBE_PathEffects) {
   {
     SkPaint paint;
     SkScalar intervals[] = { 1, 1 };
-    SkPathEffect* effect = new SkDashPathEffect(intervals, arraysize(intervals),
-                                                0);
-    paint.setPathEffect(effect)->unref();
+    skia::RefPtr<SkPathEffect> effect = skia::AdoptRef(
+        new SkDashPathEffect(intervals, arraysize(intervals), 0));
+    paint.setPathEffect(effect.get());
     paint.setColor(SK_ColorMAGENTA);
     paint.setStyle(SkPaint::kStroke_Style);
 
@@ -747,9 +752,9 @@ TEST_F(VectorCanvasTest, MAYBE_PathEffects) {
   {
     SkPaint paint;
     SkScalar intervals[] = { 3, 5 };
-    SkPathEffect* effect = new SkDashPathEffect(intervals, arraysize(intervals),
-                                                0);
-    paint.setPathEffect(effect)->unref();
+    skia::RefPtr<SkPathEffect> effect = skia::AdoptRef(
+        new SkDashPathEffect(intervals, arraysize(intervals), 0));
+    paint.setPathEffect(effect.get());
     paint.setColor(SK_ColorMAGENTA);
     paint.setStyle(SkPaint::kStroke_Style);
 
@@ -765,9 +770,9 @@ TEST_F(VectorCanvasTest, MAYBE_PathEffects) {
   {
     SkPaint paint;
     SkScalar intervals[] = { 2, 1 };
-    SkPathEffect* effect = new SkDashPathEffect(intervals, arraysize(intervals),
-                                                0);
-    paint.setPathEffect(effect)->unref();
+    skia::RefPtr<SkPathEffect> effect = skia::AdoptRef(
+        new SkDashPathEffect(intervals, arraysize(intervals), 0));
+    paint.setPathEffect(effect.get());
     paint.setColor(SK_ColorMAGENTA);
     paint.setStyle(SkPaint::kStroke_Style);
 
@@ -781,9 +786,9 @@ TEST_F(VectorCanvasTest, MAYBE_PathEffects) {
   {
     SkPaint paint;
     SkScalar intervals[] = { 1, 1 };
-    SkPathEffect* effect = new SkDashPathEffect(intervals, arraysize(intervals),
-                                                0);
-    paint.setPathEffect(effect)->unref();
+    skia::RefPtr<SkPathEffect> effect = skia::AdoptRef(
+        new SkDashPathEffect(intervals, arraysize(intervals), 0));
+    paint.setPathEffect(effect.get());
     paint.setColor(SK_ColorMAGENTA);
     paint.setStyle(SkPaint::kStroke_Style);
 
@@ -960,5 +965,7 @@ TEST_F(VectorCanvasTest, DISABLED_Matrix) {
     EXPECT_EQ(0., ProcessImage(FILE_PATH_LITERAL("rotate")));
   }
 }
+
+#endif  // !defined(USE_AURA)
 
 }  // namespace skia

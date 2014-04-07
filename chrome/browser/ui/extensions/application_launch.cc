@@ -5,9 +5,7 @@
 #include "chrome/browser/ui/extensions/application_launch.h"
 
 #include "base/command_line.h"
-#include "base/metrics/field_trial.h"
 #include "base/metrics/histogram.h"
-#include "chrome/browser/extensions/default_apps_trial.h"
 #include "chrome/browser/extensions/extension_prefs.h"
 #include "chrome/browser/extensions/extension_service.h"
 #include "chrome/browser/extensions/platform_app_launcher.h"
@@ -18,7 +16,6 @@
 #include "chrome/browser/ui/browser_finder.h"
 #include "chrome/browser/ui/browser_tabstrip.h"
 #include "chrome/browser/ui/browser_window.h"
-#include "chrome/browser/ui/tab_contents/tab_contents.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/web_applications/web_app.h"
 #include "chrome/common/chrome_switches.h"
@@ -32,7 +29,7 @@
 #include "ui/gfx/rect.h"
 
 #if defined(OS_WIN)
-#include "base/win/metro.h"
+#include "win8/util/win8_util.h"
 #endif
 
 using content::WebContents;
@@ -93,7 +90,7 @@ WebContents* OpenApplicationWindow(
     window_bounds = override_bounds;
   }
 
-  Browser::CreateParams params(type, profile);
+  Browser::CreateParams params(type, profile, chrome::GetActiveDesktop());
   params.app_name = app_name;
   params.initial_bounds = window_bounds;
 
@@ -104,7 +101,7 @@ WebContents* OpenApplicationWindow(
     // LAUNCH_WINDOW launches in a normal app window.
     ExtensionPrefs::LaunchType launch_type =
         profile->GetExtensionService()->extension_prefs()->GetLaunchType(
-            extension->id(), ExtensionPrefs::LAUNCH_DEFAULT);
+            extension, ExtensionPrefs::LAUNCH_DEFAULT);
     if (launch_type == ExtensionPrefs::LAUNCH_FULLSCREEN)
       params.initial_show_state = ui::SHOW_STATE_MAXIMIZED;
     else if (launch_type == ExtensionPrefs::LAUNCH_WINDOW)
@@ -114,11 +111,11 @@ WebContents* OpenApplicationWindow(
 
   Browser* browser = NULL;
 #if defined(OS_WIN)
-  // In Chrome on Windows 8 in metro mode we don't allow multiple chrome
-  // windows to be created, as we don't have a good way to switch between
-  // them. We attempt to reuse an existing Browser window.
-  if (base::win::IsMetroProcess()) {
-    browser = browser::FindBrowserWithProfile(
+  // On Windows 8's single window Metro mode we don't allow multiple Chrome
+  // windows to be created. We instead attempt to reuse an existing Browser
+  // window.
+  if (win8::IsSingleWindowMetroMode()) {
+    browser = chrome::FindBrowserWithProfile(
         profile, chrome::HOST_DESKTOP_TYPE_NATIVE);
   }
 #endif
@@ -128,29 +125,32 @@ WebContents* OpenApplicationWindow(
   if (app_browser)
     *app_browser = browser;
 
-  TabContents* tab_contents = chrome::AddSelectedTabWithURL(
+  WebContents* web_contents = chrome::AddSelectedTabWithURL(
       browser, url, content::PAGE_TRANSITION_AUTO_TOPLEVEL);
-  WebContents* contents = tab_contents->web_contents();
-  contents->GetMutableRendererPrefs()->can_accept_load_drops = false;
-  contents->GetRenderViewHost()->SyncRendererPrefs();
+  web_contents->GetMutableRendererPrefs()->can_accept_load_drops = false;
+  web_contents->GetRenderViewHost()->SyncRendererPrefs();
 
   browser->window()->Show();
 
   // TODO(jcampan): http://crbug.com/8123 we should not need to set the initial
   //                focus explicitly.
-  contents->GetView()->SetInitialFocus();
-  return contents;
+  web_contents->GetView()->SetInitialFocus();
+  return web_contents;
 }
 
 WebContents* OpenApplicationTab(Profile* profile,
                                 const Extension* extension,
                                 const GURL& override_url,
                                 WindowOpenDisposition disposition) {
-  Browser* browser = browser::FindTabbedBrowser(profile, false);
+  Browser* browser = browser::FindTabbedBrowser(profile,
+                                                false,
+                                                chrome::GetActiveDesktop());
   WebContents* contents = NULL;
   if (!browser) {
     // No browser for this profile, need to open a new one.
-    browser = new Browser(Browser::CreateParams(profile));
+    browser = new Browser(Browser::CreateParams(Browser::TYPE_TABBED,
+                                                profile,
+                                                chrome::GetActiveDesktop()));
     browser->window()->Show();
     // There's no current tab in this browser window, so add a new one.
     disposition = NEW_FOREGROUND_TAB;
@@ -165,17 +165,8 @@ WebContents* OpenApplicationTab(Profile* profile,
 
   ExtensionPrefs::LaunchType launch_type =
       extension_service->extension_prefs()->GetLaunchType(
-          extension->id(), ExtensionPrefs::LAUNCH_DEFAULT);
+          extension, ExtensionPrefs::LAUNCH_DEFAULT);
   UMA_HISTOGRAM_ENUMERATION("Extensions.AppTabLaunchType", launch_type, 100);
-
-  static bool default_apps_trial_exists =
-      base::FieldTrialList::TrialExists(kDefaultAppsTrialName);
-  if (default_apps_trial_exists) {
-    UMA_HISTOGRAM_ENUMERATION(
-        base::FieldTrial::MakeName("Extensions.AppTabLaunchType",
-                                   kDefaultAppsTrialName),
-        launch_type, 100);
-  }
 
   int add_type = TabStripModel::ADD_ACTIVE;
   if (launch_type == ExtensionPrefs::LAUNCH_PINNED)
@@ -212,7 +203,7 @@ WebContents* OpenApplicationTab(Profile* profile,
     contents = existing_tab;
   } else {
     chrome::Navigate(&params);
-    contents = params.target_contents->web_contents();
+    contents = params.target_contents;
   }
 
 #if defined(USE_ASH)

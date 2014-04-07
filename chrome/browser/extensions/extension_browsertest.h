@@ -10,15 +10,22 @@
 #include "base/command_line.h"
 #include "base/compiler_specific.h"
 #include "base/file_path.h"
-#include "base/scoped_temp_dir.h"
+#include "base/files/scoped_temp_dir.h"
 #include "chrome/browser/extensions/extension_host.h"
+#include "chrome/browser/extensions/extension_system.h"
+#include "chrome/browser/ui/browser.h"
 #include "chrome/common/extensions/extension.h"
+#include "chrome/common/extensions/feature_switch.h"
 #include "chrome/common/extensions/features/feature.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "content/public/browser/notification_details.h"
 #include "content/public/browser/notification_observer.h"
 #include "content/public/browser/notification_types.h"
 #include "content/public/browser/web_contents.h"
+
+class ExtensionService;
+class ExtensionProcessManager;
+class Profile;
 
 // Base class for extension browser tests. Provides utilities for loading,
 // unloading, and installing extensions.
@@ -46,6 +53,12 @@ class ExtensionBrowserTest : virtual public InProcessBrowserTest,
 
   ExtensionBrowserTest();
   virtual ~ExtensionBrowserTest();
+
+  // Useful accessors.
+  Profile* profile() { return browser()->profile(); }
+  ExtensionService* extension_service() {
+    return extensions::ExtensionSystem::Get(profile())->extension_service();
+  }
 
   // InProcessBrowserTest
   virtual void SetUpCommandLine(CommandLine* command_line) OVERRIDE;
@@ -201,7 +214,7 @@ class ExtensionBrowserTest : virtual public InProcessBrowserTest,
 
  private:
   // Temporary directory for testing.
-  ScopedTempDir temp_dir_;
+  base::ScopedTempDir temp_dir_;
 
   // Specifies the type of UI (if any) to show during installation and what
   // user action to simulate.
@@ -249,6 +262,14 @@ class ExtensionBrowserTest : virtual public InProcessBrowserTest,
 
   // Make the current channel "dev" for the duration of the test.
   extensions::Feature::ScopedCurrentChannel current_channel_;
+
+  // Disable external install UI.
+  extensions::FeatureSwitch::ScopedOverride
+      override_prompt_for_external_extensions_;
+
+  // Disable the sideload wipeout UI.
+  extensions::FeatureSwitch::ScopedOverride
+      override_sideload_wipeout_;
 };
 
 #endif  // CHROME_BROWSER_EXTENSIONS_EXTENSION_BROWSERTEST_H_

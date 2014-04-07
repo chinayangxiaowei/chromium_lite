@@ -4,10 +4,10 @@
 
 #include "base/bind.h"
 #include "base/file_util.h"
+#include "base/files/scoped_temp_dir.h"
 #include "base/json/json_file_value_serializer.h"
 #include "base/message_loop.h"
 #include "base/path_service.h"
-#include "base/scoped_temp_dir.h"
 #include "base/synchronization/waitable_event.h"
 #include "base/utf_string_conversions.h"
 #include "chrome/browser/extensions/test_extension_service.h"
@@ -30,6 +30,8 @@ class MockExtensionService: public TestExtensionService {
   MOCK_CONST_METHOD0(extensions, const ExtensionSet*());
   MOCK_CONST_METHOD2(GetExtensionById,
                      const Extension*(const std::string&, bool));
+  MOCK_CONST_METHOD1(GetInstalledExtension,
+                     const Extension*(const std::string& id));
 };
 
 namespace {
@@ -132,7 +134,7 @@ class WebIntentsRegistryTest : public testing::Test {
   MockExtensionService extension_service_;
   ExtensionSet extensions_;
   WebIntentsRegistry registry_;
-  ScopedTempDir temp_dir_;
+  base::ScopedTempDir temp_dir_;
 };
 
 // Base consumer for WebIntentsRegistry results.
@@ -572,6 +574,10 @@ TEST_F(WebIntentsRegistryTest, TestGetAllDefaultIntentServices) {
 }
 
 TEST_F(WebIntentsRegistryTest, TestGetDefaults) {
+  // Ignore QO-default related calls.
+  EXPECT_CALL(extension_service_, GetInstalledExtension(testing::_)).
+      WillRepeatedly(testing::ReturnNull());
+
   DefaultWebIntentService default_service;
   default_service.action = ASCIIToUTF16("share");
   default_service.type = ASCIIToUTF16("text/*");
@@ -779,7 +785,7 @@ TEST_F(WebIntentsRegistryTest, UnregisterDefaultIntentServicesForServiceURL) {
   ASSERT_EQ(2U, consumer.services_.size());
 
   registry_.UnregisterServiceDefaults(service_url_0);
-  MessageLoop::current()->RunAllPending();
+  MessageLoop::current()->RunUntilIdle();
 
   registry_.GetAllDefaultIntentServices(
       base::Bind(&DefaultServiceListConsumer::Accept,

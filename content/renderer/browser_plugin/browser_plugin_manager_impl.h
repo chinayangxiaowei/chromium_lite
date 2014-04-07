@@ -9,13 +9,17 @@
 #include "googleurl/src/gurl.h"
 
 struct BrowserPluginMsg_UpdateRect_Params;
+class WebCursor;
+
+namespace gfx {
+class Point;
+}
 
 namespace content {
 
 class BrowserPluginManagerImpl : public BrowserPluginManager {
  public:
-  BrowserPluginManagerImpl();
-  virtual ~BrowserPluginManagerImpl();
+  BrowserPluginManagerImpl(RenderViewImpl* render_view);
 
   // BrowserPluginManager implementation.
   virtual BrowserPlugin* CreateBrowserPlugin(
@@ -26,15 +30,17 @@ class BrowserPluginManagerImpl : public BrowserPluginManager {
   // IPC::Sender implementation.
   virtual bool Send(IPC::Message* msg) OVERRIDE;
 
-  // RenderProcessObserver override. Call on render thread.
-  virtual bool OnControlMessageReceived(const IPC::Message& message) OVERRIDE;
+  // RenderViewObserver override. Call on render thread.
+  virtual bool OnMessageReceived(const IPC::Message& message) OVERRIDE;
  private:
-  void OnUpdateRect(int instance_id,
-                    int message_id,
-                    const BrowserPluginMsg_UpdateRect_Params& params);
-  void OnGuestCrashed(int instance_id);
-  void OnDidNavigate(int instance_id, const GURL& url);
-  void OnAdvanceFocus(int instance_id, bool reverse);
+  virtual ~BrowserPluginManagerImpl();
+
+  void OnPluginAtPositionRequest(const IPC::Message& message,
+                                 int request_id,
+                                 const gfx::Point& position);
+
+  // Returns whether a message should be forwarded to BrowserPlugins.
+  static bool ShouldForwardToBrowserPlugin(const IPC::Message& message);
 
   DISALLOW_COPY_AND_ASSIGN(BrowserPluginManagerImpl);
 };

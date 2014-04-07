@@ -4,13 +4,12 @@
 
 package org.chromium.content.browser;
 
-import android.os.Looper;
 import android.test.UiThreadTest;
 import android.test.InstrumentationTestCase;
 import android.test.suitebuilder.annotation.SmallTest;
 
 import org.chromium.base.ActivityStatus;
-import org.chromium.base.test.Feature;
+import org.chromium.base.test.util.Feature;
 
 /**
  * Test suite for LocationProvider.
@@ -61,9 +60,9 @@ public class LocationProviderTest extends InstrumentationTestCase {
     public void testStartPauseResumeStop() throws Exception {
         mLocationProvider.start(false);
         assertTrue("Should be running", mLocationProvider.isRunning());
-        ActivityStatus.getInstance().onPause();
+        ActivityStatus.onStateChange(null, ActivityStatus.PAUSED);
         assertFalse("Should have paused", mLocationProvider.isRunning());
-        ActivityStatus.getInstance().onResume();
+        ActivityStatus.onStateChange(null, ActivityStatus.RESUMED);
         assertTrue("Should have resumed", mLocationProvider.isRunning());
         mLocationProvider.stop();
         assertFalse("Should have stopped", mLocationProvider.isRunning());
@@ -77,10 +76,10 @@ public class LocationProviderTest extends InstrumentationTestCase {
     @UiThreadTest
     @Feature({"Location"})
     public void testPauseStartResumeStop() throws Exception {
-        ActivityStatus.getInstance().onPause();
+        ActivityStatus.onStateChange(null, ActivityStatus.PAUSED);
         mLocationProvider.start(false);
         assertFalse("Should not be running", mLocationProvider.isRunning());
-        ActivityStatus.getInstance().onResume();
+        ActivityStatus.onStateChange(null, ActivityStatus.RESUMED);
         assertTrue("Should have resumed", mLocationProvider.isRunning());
         mLocationProvider.stop();
         assertFalse("Should have stopped", mLocationProvider.isRunning());
@@ -95,11 +94,11 @@ public class LocationProviderTest extends InstrumentationTestCase {
     public void testStartPauseUpgradeResumeStop() throws Exception {
         mLocationProvider.start(false);
         assertTrue("Should be running", mLocationProvider.isRunning());
-        ActivityStatus.getInstance().onPause();
+        ActivityStatus.onStateChange(null, ActivityStatus.PAUSED);
         assertFalse("Should have paused", mLocationProvider.isRunning());
         mLocationProvider.start(true);
         assertFalse("Should be paused", mLocationProvider.isRunning());
-        ActivityStatus.getInstance().onResume();
+        ActivityStatus.onStateChange(null, ActivityStatus.RESUMED);
         assertTrue("Should have resumed", mLocationProvider.isRunning());
         mLocationProvider.stop();
         assertFalse("Should have stopped", mLocationProvider.isRunning());

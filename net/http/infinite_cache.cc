@@ -28,7 +28,12 @@
 #include "net/http/http_response_headers.h"
 #include "net/http/http_response_info.h"
 #include "net/http/http_util.h"
+
+#if defined(USE_SYSTEM_ZLIB)
+#include <zlib.h>
+#else
 #include "third_party/zlib/zlib.h"
+#endif
 
 using base::PlatformFile;
 using base::Time;
@@ -45,8 +50,13 @@ enum Flags {
   RESUMABLE = 1 << 4,
   REVALIDATEABLE = 1 << 5,
   DOOM_METHOD = 1 << 6,
-  CACHED = 1 << 7
+  CACHED = 1 << 7,
+  GA_JS_HTTP = 1 << 8,
+  GA_JS_HTTPS = 1 << 9,
 };
+
+const char kGaJsHttpUrl[] = "http://www.google-analytics.com/ga.js";
+const char kGaJsHttpsUrl[] = "https://ssl.google-analytics.com/ga.js";
 
 const int kKeySizeBytes = 20;
 COMPILE_ASSERT(base::kSHA1Length == static_cast<unsigned>(kKeySizeBytes),
@@ -72,10 +82,10 @@ const size_t kRecordSize = sizeof(Key) + sizeof(Details);
 
 // Some constants related to the database file.
 uint32 kMagicSignature = 0x1f00cace;
-uint32 kCurrentVersion = 0x10001;
+uint32 kCurrentVersion = 0x10002;
 
 // Basic limits for the experiment.
-int kMaxNumEntries = 200 * 1000;
+int kMaxNumEntries = 500 * 1000;
 int kMaxTrackingSize = 40 * 1024 * 1024;
 
 // Settings that control how we generate histograms.
@@ -206,6 +216,9 @@ void OnComplete(const net::CompletionCallback& callback, int* result) {
   callback.Run(*result);
 }
 
+#define CACHE_COUNT_HISTOGRAM(name, count) \
+    UMA_HISTOGRAM_CUSTOM_COUNTS(name, count, 0, kuint8max, 25)
+
 }  // namespace
 
 namespace BASE_HASH_NAMESPACE {
@@ -236,7 +249,7 @@ struct InfiniteCacheTransaction::ResourceData {
 };
 
 InfiniteCacheTransaction::InfiniteCacheTransaction(InfiniteCache* cache)
-    : cache_(cache->AsWeakPtr()), must_doom_entry_(false) {
+    : cache_(cache->AsWeakPtr()) {
 }
 
 InfiniteCacheTransaction::~InfiniteCacheTransaction() {
@@ -248,15 +261,27 @@ void InfiniteCacheTransaction::OnRequestStart(const HttpRequestInfo* request) {
     return;
 
   std::string method = request->method;
+  resource_data_.reset(new ResourceData);
   if (method == "POST" || method == "DELETE" || method == "PUT") {
-    must_doom_entry_ = true;
+    resource_data_->details.flags |= DOOM_METHOD;
   } else if (method != "GET") {
     cache_.reset();
     return;
   }
+  const std::string cache_key = cache_->GenerateKey(request);
+  if (cache_key == kGaJsHttpUrl) {
+    resource_data_->details.flags |= GA_JS_HTTP;
+  } else if (cache_key == kGaJsHttpsUrl) {
+    resource_data_->details.flags |= GA_JS_HTTPS;
+  }
 
-  resource_data_.reset(new ResourceData);
-  CryptoHash(cache_->GenerateKey(request), &resource_data_->key);
+  CryptoHash(cache_key, &resource_data_->key);
+}
+
+void InfiniteCacheTransaction::OnBackForwardNavigation() {
+  if (!cache_)
+    return;
+  UMA_HISTOGRAM_BOOLEAN("InfiniteCache.BackForwardNavigation", true);
 }
 
 void InfiniteCacheTransaction::OnResponseReceived(
@@ -265,6 +290,10 @@ void InfiniteCacheTransaction::OnResponseReceived(
     return;
 
   Details& details = resource_data_->details;
+
+  // Store the old flag values that we want to preserve.
+  const uint32 kPreserveFlagsBitMask = (GA_JS_HTTP | GA_JS_HTTPS | DOOM_METHOD);
+  uint32 old_flag_values = details.flags & kPreserveFlagsBitMask;
 
   details.expiration = GetExpiration(response);
   details.last_access = TimeToInt(response->request_time);
@@ -276,10 +305,11 @@ void InfiniteCacheTransaction::OnResponseReceived(
       TimeToInt(response->response_time) == details.expiration) {
     details.flags = EXPIRED;
   }
-  details.flags |= GetRevalidationFlags(response);
 
-  if (must_doom_entry_)
-    details.flags |= DOOM_METHOD;
+  // Restore the old flag values we wanted to preserve.
+  details.flags |= old_flag_values;
+
+  details.flags |= GetRevalidationFlags(response);
 
   Pickle pickle;
   response->Persist(&pickle, true, false);  // Skip transient headers.
@@ -320,8 +350,11 @@ void InfiniteCacheTransaction::OnServedFromCache(
     return;
 
   resource_data_->details.flags |= CACHED;
-  if (!resource_data_->details.last_access)
+  if (!resource_data_->details.last_access) {
     OnResponseReceived(response);
+    // For cached responses, the request time is the last revalidation time.
+    resource_data_->details.last_access = TimeToInt(Time::Now());
+  }
 }
 
 void InfiniteCacheTransaction::Finish() {
@@ -421,6 +454,8 @@ class InfiniteCache::Worker : public base::RefCountedThreadSafe<Worker> {
   // Bulk of report generation methods.
   void RecordHit(const Details& old, Details* details);
   void RecordUpdate(const Details& old, Details* details);
+  void RecordComparison(bool infinite_used_or_validated,
+                        bool http_used_or_validated) const;
   void GenerateHistograms();
 
   // Cache logic methods.
@@ -440,6 +475,7 @@ class InfiniteCache::Worker : public base::RefCountedThreadSafe<Worker> {
 void InfiniteCache::Worker::Init(const FilePath& path) {
   path_ = path;
   LoadData();
+  UMA_HISTOGRAM_BOOLEAN("InfiniteCache.NewSession", true);
 }
 
 void InfiniteCache::Worker::Cleanup() {
@@ -493,13 +529,28 @@ void InfiniteCache::Worker::Process(
   if (data->details.response_size > kMaxTrackingSize)
     return;
 
-  if (header_->num_entries == kMaxNumEntries)
+  if (header_->num_entries == kMaxNumEntries || header_->disabled)
     return;
+
+  UMA_HISTOGRAM_BOOLEAN("InfiniteCache.TotalRequests", true);
+  if (data->details.flags & NO_STORE)
+    UMA_HISTOGRAM_BOOLEAN("InfiniteCache.NoStore", true);
+
+  if (data->details.flags & (GA_JS_HTTP | GA_JS_HTTPS)) {
+    bool https = data->details.flags & GA_JS_HTTPS ? true : false;
+    UMA_HISTOGRAM_BOOLEAN("InfiniteCache.GaJs_Https", https);
+  }
+
+  // True if the first range of the http request was validated or used
+  // unconditionally, false if it was not found in the cache, was updated,
+  // or was found but was unconditionalizable.
+  bool http_used_or_validated = (data->details.flags & CACHED) == CACHED;
 
   header_->num_requests++;
   KeyMap::iterator i = map_.find(data->key);
   if (i != map_.end()) {
     if (data->details.flags & DOOM_METHOD) {
+      UMA_HISTOGRAM_BOOLEAN("InfiniteCache.DoomMethodHit", true);
       Remove(i->second);
       map_.erase(i);
       return;
@@ -509,6 +560,8 @@ void InfiniteCache::Worker::Process(
     bool reused = CanReuse(i->second, data->details);
     bool data_changed = DataChanged(i->second, data->details);
     bool headers_changed = HeadersChanged(i->second, data->details);
+
+    RecordComparison(reused, http_used_or_validated);
 
     if (reused && data_changed)
       header_->num_bad_hits++;
@@ -530,13 +583,17 @@ void InfiniteCache::Worker::Process(
 
     map_[data->key] = data->details;
     return;
+  } else {
+    RecordComparison(false, http_used_or_validated);
   }
 
   if (data->details.flags & NO_STORE)
     return;
 
-  if (data->details.flags & DOOM_METHOD)
+  if (data->details.flags & DOOM_METHOD) {
+    UMA_HISTOGRAM_BOOLEAN("InfiniteCache.DoomMethodHit", false);
     return;
+  }
 
   map_[data->key] = data->details;
   Add(data->details);
@@ -544,7 +601,7 @@ void InfiniteCache::Worker::Process(
 
 void InfiniteCache::Worker::LoadData() {
   if (path_.empty())
-    return InitializeData();;
+    return InitializeData();
 
   PlatformFile file = base::CreatePlatformFile(
       path_, base::PLATFORM_FILE_OPEN | base::PLATFORM_FILE_READ, NULL, NULL);
@@ -553,8 +610,10 @@ void InfiniteCache::Worker::LoadData() {
   if (!ReadData(file))
     InitializeData();
   base::ClosePlatformFile(file);
-  if (header_->disabled)
-    map_.clear();
+  if (header_->disabled) {
+    UMA_HISTOGRAM_BOOLEAN("InfiniteCache.Full", true);
+    InitializeData();
+  }
 }
 
 void InfiniteCache::Worker::StoreData() {
@@ -588,6 +647,7 @@ void InfiniteCache::Worker::InitializeData() {
   header_->magic = kMagicSignature;
   header_->version = kCurrentVersion;
   header_->creation_time = Time::Now().ToInternalValue();
+  map_.clear();
 
   UMA_HISTOGRAM_BOOLEAN("InfiniteCache.Initialize", true);
   init_ = true;
@@ -602,7 +662,7 @@ bool InfiniteCache::Worker::ReadData(PlatformFile file) {
   uint32 hash = adler32(0, Z_NULL, 0);
 
   for (int remaining_records = header_->num_entries; remaining_records;) {
-    int num_records = std::min(header_->num_entries,
+    int num_records = std::min(remaining_records,
                                static_cast<int>(kMaxRecordsToRead));
     size_t num_bytes = num_records * kRecordSize;
     remaining_records -= num_records;
@@ -648,11 +708,13 @@ bool InfiniteCache::Worker::WriteData(PlatformFile file) {
   scoped_array<char> buffer(new char[kBufferSize]);
   size_t offset = sizeof(Header);
   uint32 hash = adler32(0, Z_NULL, 0);
+  int unused_entries = 0;
+  static bool first_time = true;
 
   DCHECK_EQ(header_->num_entries, static_cast<int32>(map_.size()));
   KeyMap::iterator iterator = map_.begin();
   for (int remaining_records = header_->num_entries; remaining_records;) {
-    int num_records = std::min(header_->num_entries,
+    int num_records = std::min(remaining_records,
                                static_cast<int>(kMaxRecordsToRead));
     size_t num_bytes = num_records * kRecordSize;
     remaining_records -= num_records;
@@ -662,6 +724,22 @@ bool InfiniteCache::Worker::WriteData(PlatformFile file) {
         NOTREACHED();
         return false;
       }
+      int use_count = iterator->second.use_count;
+      if (!use_count)
+        unused_entries++;
+
+      if (first_time) {
+        int response_size = iterator->second.response_size;
+        if (response_size < 16 * 1024)
+          CACHE_COUNT_HISTOGRAM("InfiniteCache.Reuse-16k", use_count);
+        else if (response_size < 128 * 1024)
+          CACHE_COUNT_HISTOGRAM("InfiniteCache.Reuse-128k", use_count);
+        else if (response_size < 2048 * 1024)
+          CACHE_COUNT_HISTOGRAM("InfiniteCache.Reuse-2M", use_count);
+        else
+          CACHE_COUNT_HISTOGRAM("InfiniteCache.Reuse-40M", use_count);
+      }
+
       char* record = buffer.get() + i * kRecordSize;
       *reinterpret_cast<Key*>(record) = iterator->first;
       *reinterpret_cast<Details*>(record + sizeof(Key)) = iterator->second;
@@ -684,6 +762,17 @@ bool InfiniteCache::Worker::WriteData(PlatformFile file) {
     offset += num_bytes;
   }
   base::FlushPlatformFile(file);  // Ignore return value.
+  first_time = false;
+
+  if (header_->num_entries)
+    unused_entries = unused_entries * 100 / header_->num_entries;
+
+  UMA_HISTOGRAM_PERCENTAGE("InfiniteCache.UnusedEntries", unused_entries);
+  UMA_HISTOGRAM_COUNTS("InfiniteCache.StoredEntries", header_->num_entries);
+  if (base::RandInt(0, 99) < unused_entries) {
+    UMA_HISTOGRAM_COUNTS("InfiniteCache.UnusedEntriesByStoredEntries",
+                         header_->num_entries);
+  }
   return true;
 }
 
@@ -753,6 +842,7 @@ void InfiniteCache::Worker::Add(const Details& details) {
     int entry_size = static_cast<int>(header_->total_size / kMaxNumEntries);
     UMA_HISTOGRAM_COUNTS("InfiniteCache.FinalAvgEntrySize", entry_size);
     header_->disabled = 1;
+    header_->num_entries = 0;
     map_.clear();
   }
 }
@@ -772,33 +862,108 @@ void InfiniteCache::Worker::RecordHit(const Details& old, Details* details) {
   header_->num_hits++;
   int access_delta = (IntToTime(details->last_access) -
                       IntToTime(old.last_access)).InMinutes();
-  if (old.use_count)
-    UMA_HISTOGRAM_COUNTS("InfiniteCache.ReuseAge", access_delta);
-  else
-    UMA_HISTOGRAM_COUNTS("InfiniteCache.FirstReuseAge", access_delta);
+  if (old.use_count) {
+    UMA_HISTOGRAM_COUNTS("InfiniteCache.ReuseAge2", access_delta);
+    if (details->flags & GA_JS_HTTP) {
+      UMA_HISTOGRAM_COUNTS("InfiniteCache.GaJsHttpReuseAge2", access_delta);
+    } else if (details->flags & GA_JS_HTTPS) {
+      UMA_HISTOGRAM_COUNTS("InfiniteCache.GaJsHttpsReuseAge2", access_delta);
+    }
+  } else {
+    UMA_HISTOGRAM_COUNTS("InfiniteCache.FirstReuseAge2", access_delta);
+    if (details->flags & GA_JS_HTTP) {
+      UMA_HISTOGRAM_COUNTS(
+          "InfiniteCache.GaJsHttpFirstReuseAge2", access_delta);
+    } else if (details->flags & GA_JS_HTTPS) {
+      UMA_HISTOGRAM_COUNTS(
+          "InfiniteCache.GaJsHttpsFirstReuseAge2", access_delta);
+    }
+  }
 
   details->use_count = old.use_count;
   if (details->use_count < kuint8max)
     details->use_count++;
-  UMA_HISTOGRAM_CUSTOM_COUNTS("InfiniteCache.UseCount", details->use_count, 0,
-                              kuint8max, 25);
+  CACHE_COUNT_HISTOGRAM("InfiniteCache.UseCount", details->use_count);
+  if (details->flags & GA_JS_HTTP) {
+    CACHE_COUNT_HISTOGRAM("InfiniteCache.GaJsHttpUseCount", details->use_count);
+  } else if (details->flags & GA_JS_HTTPS) {
+    CACHE_COUNT_HISTOGRAM("InfiniteCache.GaJsHttpsUseCount",
+                          details->use_count);
+  }
 }
 
 void InfiniteCache::Worker::RecordUpdate(const Details& old, Details* details) {
   int access_delta = (IntToTime(details->last_access) -
                       IntToTime(old.last_access)).InMinutes();
-  if (old.update_count)
-    UMA_HISTOGRAM_COUNTS("InfiniteCache.UpdateAge", access_delta);
-  else
-    UMA_HISTOGRAM_COUNTS("InfiniteCache.FirstUpdateAge", access_delta);
+  if (old.update_count) {
+    UMA_HISTOGRAM_COUNTS("InfiniteCache.UpdateAge2", access_delta);
+    if (details->flags & GA_JS_HTTP) {
+      UMA_HISTOGRAM_COUNTS(
+          "InfiniteCache.GaJsHttpUpdateAge2", access_delta);
+    } else if (details->flags & GA_JS_HTTPS) {
+      UMA_HISTOGRAM_COUNTS(
+          "InfiniteCache.GaJsHttpsUpdateAge2", access_delta);
+    }
+  } else {
+    UMA_HISTOGRAM_COUNTS("InfiniteCache.FirstUpdateAge2", access_delta);
+    if (details->flags & GA_JS_HTTP) {
+      UMA_HISTOGRAM_COUNTS(
+          "InfiniteCache.GaJsHttpFirstUpdateAge2", access_delta);
+    } else if (details->flags & GA_JS_HTTPS) {
+      UMA_HISTOGRAM_COUNTS(
+          "InfiniteCache.GaJsHttpsFirstUpdateAge2", access_delta);
+    }
+  }
 
   details->update_count = old.update_count;
   if (details->update_count < kuint8max)
     details->update_count++;
 
-  UMA_HISTOGRAM_CUSTOM_COUNTS("InfiniteCache.UpdateCount",
-                              details->update_count, 0, kuint8max, 25);
+  CACHE_COUNT_HISTOGRAM("InfiniteCache.UpdateCount", details->update_count);
+  if (details->flags & GA_JS_HTTP) {
+    CACHE_COUNT_HISTOGRAM("InfiniteCache.GaJsHttpUpdateCount",
+                          details->update_count);
+  } else if (details->flags & GA_JS_HTTPS) {
+    CACHE_COUNT_HISTOGRAM("InfiniteCache.GaJsHttpsUpdateCount",
+                          details->update_count);
+  }
   details->use_count = 0;
+}
+
+void InfiniteCache::Worker::RecordComparison(
+    bool infinite_used_or_validated,
+    bool http_used_or_validated) const {
+  enum Comparison {
+    INFINITE_NOT_STRONG_HIT_HTTP_NOT_STRONG_HIT,
+    INFINITE_NOT_STRONG_HIT_HTTP_STRONG_HIT,
+    INFINITE_STRONG_HIT_HTTP_NOT_STRONG_HIT,
+    INFINITE_STRONG_HIT_HTTP_STRONG_HIT,
+    COMPARISON_ENUM_MAX,
+  };
+
+  Comparison comparison;
+  if (infinite_used_or_validated) {
+    if (http_used_or_validated)
+      comparison = INFINITE_STRONG_HIT_HTTP_STRONG_HIT;
+    else
+      comparison = INFINITE_STRONG_HIT_HTTP_NOT_STRONG_HIT;
+  } else {
+    if (http_used_or_validated)
+      comparison = INFINITE_NOT_STRONG_HIT_HTTP_STRONG_HIT;
+    else
+      comparison = INFINITE_NOT_STRONG_HIT_HTTP_NOT_STRONG_HIT;
+  }
+
+  UMA_HISTOGRAM_ENUMERATION("InfiniteCache.Comparison",
+                            comparison, COMPARISON_ENUM_MAX);
+  const int size_bucket =
+      static_cast<int>(header_->total_size / kReportSizeStep);
+  const int kComparisonBuckets = 50;
+  UMA_HISTOGRAM_ENUMERATION(
+      "InfiniteCache.ComparisonBySize",
+      comparison * kComparisonBuckets + std::min(size_bucket,
+                                                 kComparisonBuckets-1),
+      kComparisonBuckets * COMPARISON_ENUM_MAX);
 }
 
 void InfiniteCache::Worker::GenerateHistograms() {
@@ -869,8 +1034,7 @@ bool InfiniteCache::Worker::CanReuse(const Details& old,
   };
   int reason = REUSE_OK;
 
-  Time expiration = IntToTime(old.expiration);
-  if (expiration < Time::Now())
+  if (old.expiration < current.last_access)
     reason = REUSE_EXPIRED;
 
   if (old.flags & EXPIRED)
@@ -886,10 +1050,17 @@ bool InfiniteCache::Worker::CanReuse(const Details& old,
     reason = REUSE_VARY;
 
   bool have_to_drop  = (old.flags & TRUNCATED) && !(old.flags & RESUMABLE);
-  if (reason && (old.flags & REVALIDATEABLE) && !have_to_drop)
+  if (reason && (old.flags & (REVALIDATEABLE | RESUMABLE)) && !have_to_drop)
     reason += REUSE_REVALIDATEABLE;
 
-  UMA_HISTOGRAM_ENUMERATION("InfiniteCache.ReuseFailure", reason, 15);
+  UMA_HISTOGRAM_ENUMERATION("InfiniteCache.ReuseFailure2", reason, 15);
+  if (current.flags & GA_JS_HTTP) {
+    UMA_HISTOGRAM_ENUMERATION(
+        "InfiniteCache.GaJsHttpReuseFailure2", reason, 15);
+  } else if (current.flags & GA_JS_HTTPS) {
+    UMA_HISTOGRAM_ENUMERATION(
+        "InfiniteCache.GaJsHttpsReuseFailure2", reason, 15);
+  }
   return !reason;
 }
 

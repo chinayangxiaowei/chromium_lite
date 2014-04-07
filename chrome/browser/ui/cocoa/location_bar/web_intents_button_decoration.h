@@ -14,8 +14,11 @@
 #include "chrome/browser/ui/cocoa/location_bar/bubble_decoration.h"
 
 class LocationBarViewMac;
-class TabContents;
 @class WebIntentsButtonAnimationState;
+
+namespace content {
+class WebContents;
+}
 
 class WebIntentsButtonDecoration : public BubbleDecoration {
  public:
@@ -32,7 +35,7 @@ class WebIntentsButtonDecoration : public BubbleDecoration {
   virtual void DrawInFrame(NSRect frame, NSView* control_view) OVERRIDE;
 
   // Optionally display the web intents button.
-  void Update(TabContents* tab_contents);
+  void Update(content::WebContents* web_contents);
 
   // Called from internal animator.
   virtual void AnimationTimerFired();
@@ -40,9 +43,8 @@ class WebIntentsButtonDecoration : public BubbleDecoration {
  private:
   friend class WebIntentsButtonDecorationTest;
 
-  // Returns an attributed string with the animated text. Caller is responsible
-  // for releasing.
-  NSAttributedString* CreateAnimatedText();
+  // Returns an attributed string with the animated text.
+  scoped_nsobject<NSAttributedString> CreateAnimatedText();
 
   // Measure the width of the animated text.
   CGFloat MeasureTextWidth();
@@ -51,12 +53,11 @@ class WebIntentsButtonDecoration : public BubbleDecoration {
 
   // Used when the decoration has animated text.
   scoped_nsobject<WebIntentsButtonAnimationState> animation_;
-  CGFloat textWidth_;
-  scoped_nsobject<NSAttributedString> animatedText_;
-  bool ranAnimation_;
-  scoped_nsobject<NSImage> leftImage_;
-  scoped_nsobject<NSImage> centerImage_;
-  scoped_nsobject<NSImage> rightImage_;
+  CGFloat text_width_;
+  scoped_nsobject<NSAttributedString> animated_text_;
+  scoped_nsobject<NSImage> left_image_;
+  scoped_nsobject<NSImage> center_image_;
+  scoped_nsobject<NSImage> right_image_;
 
   DISALLOW_COPY_AND_ASSIGN(WebIntentsButtonDecoration);
 };

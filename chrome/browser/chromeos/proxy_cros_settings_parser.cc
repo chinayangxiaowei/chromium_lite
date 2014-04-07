@@ -56,7 +56,7 @@ namespace {
 base::Value* CreateServerHostValue(
     const ProxyConfigServiceImpl::ProxyConfig::ManualProxy& proxy) {
   return proxy.server.is_valid() ?
-         base::Value::CreateStringValue(proxy.server.host_port_pair().host()) :
+         new base::StringValue(proxy.server.host_port_pair().host()) :
          NULL;
 }
 
@@ -298,8 +298,7 @@ bool GetProxyPrefValue(Profile* profile,
     if (config.mode ==
             chromeos::ProxyConfigServiceImpl::ProxyConfig::MODE_PAC_SCRIPT &&
         config.automatic_proxy.pac_url.is_valid()) {
-      data =
-          base::Value::CreateStringValue(config.automatic_proxy.pac_url.spec());
+      data = new base::StringValue(config.automatic_proxy.pac_url.spec());
     }
   } else if (path == kProxySingleHttp) {
     data = CreateServerHostValue(config.single_proxy);
@@ -324,19 +323,19 @@ bool GetProxyPrefValue(Profile* profile,
       data = base::Value::CreateIntegerValue(1);
     }
     switch (config.state) {
-       case ProxyPrefs::CONFIG_POLICY:
-         controlled_by = "policyManagedPrefsBannerText";
-         break;
-       case ProxyPrefs::CONFIG_EXTENSION:
-         controlled_by = "extensionManagedPrefsBannerText";
-         break;
-       case ProxyPrefs::CONFIG_OTHER_PRECEDE:
-         controlled_by = "unmodifiablePrefsBannerText";
-         break;
-       default:
-         if (!config.user_modifiable)
-           controlled_by = "enableSharedProxiesBannerText";
-         break;
+      case ProxyPrefs::CONFIG_POLICY:
+        controlled_by = "policy";
+        break;
+      case ProxyPrefs::CONFIG_EXTENSION:
+        controlled_by = "extension";
+        break;
+      case ProxyPrefs::CONFIG_OTHER_PRECEDE:
+        controlled_by = "other";
+        break;
+      default:
+        if (!config.user_modifiable)
+          controlled_by = "shared";
+        break;
     }
   } else if (path == kProxySingle) {
     data = base::Value::CreateBooleanValue(config.mode ==
@@ -357,7 +356,7 @@ bool GetProxyPrefValue(Profile* profile,
     ListValue* list =  new ListValue();
     net::ProxyBypassRules::RuleList bypass_rules = config.bypass_rules.rules();
     for (size_t x = 0; x < bypass_rules.size(); x++) {
-      list->Append(base::Value::CreateStringValue(bypass_rules[x]->ToString()));
+      list->Append(new base::StringValue(bypass_rules[x]->ToString()));
     }
     data = list;
   } else {
@@ -368,7 +367,7 @@ bool GetProxyPrefValue(Profile* profile,
   // Decorate pref value as CoreOptionsHandler::CreateValueForPref() does.
   DictionaryValue* dict = new DictionaryValue;
   if (!data)
-    data = base::Value::CreateStringValue("");
+    data = new base::StringValue("");
   dict->Set("value", data);
   if (path == kProxyType) {
     dict->SetString("controlledBy", controlled_by);

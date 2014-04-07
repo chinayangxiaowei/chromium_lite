@@ -38,7 +38,7 @@ NativeWebKeyboardEvent::NativeWebKeyboardEvent()
 }
 
 NativeWebKeyboardEvent::NativeWebKeyboardEvent(gfx::NativeEvent native_event)
-    : WebKeyboardEvent(content::MakeWebKeyboardEvent(
+    : WebKeyboardEvent(MakeWebKeyboardEvent(
           static_cast<ui::KeyEvent*>(native_event))),
       os_event(CopyEvent(native_event)),
       skip_in_browser(false) {
@@ -78,6 +78,7 @@ NativeWebKeyboardEvent::NativeWebKeyboardEvent(
   text[0] = character;
   unmodifiedText[0] = character;
   isSystemKey = (state & ui::EF_ALT_DOWN) != 0;
+  setKeyIdentifierFromWindowsKeyCode();
 }
 
 NativeWebKeyboardEvent& NativeWebKeyboardEvent::operator=(

@@ -40,6 +40,9 @@ const bool kIsKeyHandled = false;
 const char kSurroundingText[] = "Surrounding Text";
 const uint32 kCursorPos = 2;
 const uint32 kAnchorPos = 7;
+const char kPropertyKey[] = "Property Key";
+const ibus::IBusPropertyState kPropertyState =
+    ibus::IBUS_PROPERTY_STATE_CHECKED;
 
 class MockCommitTextHandler {
  public:
@@ -279,7 +282,7 @@ class IBusInputContextClientTest : public testing::Test {
       const dbus::ObjectProxy::ErrorCallback& error_callback) {
     EXPECT_EQ(ibus::input_context::kServiceInterface,
               method_call->GetInterface());
-    EXPECT_EQ(ibus::input_context::kSetSurroundingText,
+    EXPECT_EQ(ibus::input_context::kSetSurroundingTextMethod,
               method_call->GetMember());
     dbus::MessageReader reader(method_call);
     std::string text;
@@ -294,6 +297,30 @@ class IBusInputContextClientTest : public testing::Test {
     EXPECT_EQ(kSurroundingText, text);
     EXPECT_EQ(kCursorPos, cursor_pos);
     EXPECT_EQ(kAnchorPos, anchor_pos);
+
+    message_loop_.PostTask(FROM_HERE, base::Bind(callback, response_));
+  }
+
+  // Handles PropertyActivate method call.
+  void OnPropertyActivate(
+      dbus::MethodCall* method_call,
+      int timeout_ms,
+      const dbus::ObjectProxy::ResponseCallback& callback,
+      const dbus::ObjectProxy::ErrorCallback& error_callback) {
+    EXPECT_EQ(ibus::input_context::kServiceInterface,
+              method_call->GetInterface());
+    EXPECT_EQ(ibus::input_context::kPropertyActivateMethod,
+              method_call->GetMember());
+    dbus::MessageReader reader(method_call);
+    std::string key;
+    uint32 state = 0;
+
+    EXPECT_TRUE(reader.PopString(&key));
+    EXPECT_TRUE(reader.PopUint32(&state));
+    EXPECT_FALSE(reader.HasMoreData());
+
+    EXPECT_EQ(kPropertyKey, key);
+    EXPECT_EQ(kPropertyState, static_cast<ibus::IBusPropertyState>(state));
 
     message_loop_.PostTask(FROM_HERE, base::Bind(callback, response_));
   }
@@ -339,7 +366,7 @@ TEST_F(IBusInputContextClientTest, CommitTextHandler) {
   EXPECT_CALL(handler, Run(IBusTextEq(&ibus_text)));
   client_->SetCommitTextHandler(base::Bind(&MockCommitTextHandler::Run,
                                            base::Unretained(&handler)));
-  message_loop_.RunAllPending();
+  message_loop_.RunUntilIdle();
 
   // Emit signal.
   dbus::Signal signal(ibus::input_context::kServiceInterface,
@@ -362,7 +389,7 @@ TEST_F(IBusInputContextClientTest, ForwardKeyEventHandlerTest) {
   client_->SetForwardKeyEventHandler(
       base::Bind(&MockForwardKeyEventHandler::Run,
                  base::Unretained(&handler)));
-  message_loop_.RunAllPending();
+  message_loop_.RunUntilIdle();
 
   // Emit signal.
   dbus::Signal signal(ibus::input_context::kServiceInterface,
@@ -390,7 +417,7 @@ TEST_F(IBusInputContextClientTest, HidePreeditTextHandlerTest) {
   client_->SetHidePreeditTextHandler(
       base::Bind(&MockHidePreeditTextHandler::Run,
                  base::Unretained(&handler)));
-  message_loop_.RunAllPending();
+  message_loop_.RunUntilIdle();
 
   // Emit signal.
   dbus::Signal signal(ibus::input_context::kServiceInterface,
@@ -414,7 +441,7 @@ TEST_F(IBusInputContextClientTest, ShowPreeditTextHandlerTest) {
   client_->SetShowPreeditTextHandler(
       base::Bind(&MockShowPreeditTextHandler::Run,
                  base::Unretained(&handler)));
-  message_loop_.RunAllPending();
+  message_loop_.RunUntilIdle();
 
   // Emit signal.
   dbus::Signal signal(ibus::input_context::kServiceInterface,
@@ -444,7 +471,7 @@ TEST_F(IBusInputContextClientTest, UpdatePreeditTextHandlerTest) {
   client_->SetUpdatePreeditTextHandler(
       base::Bind(&MockUpdatePreeditTextHandler::Run,
                  base::Unretained(&handler)));
-  message_loop_.RunAllPending();
+  message_loop_.RunUntilIdle();
 
   // Emit signal.
   dbus::Signal signal(ibus::input_context::kServiceInterface,
@@ -476,7 +503,7 @@ TEST_F(IBusInputContextClientTest, FocusInTest) {
   // Call FocusIn.
   client_->FocusIn();
   // Run the message loop.
-  message_loop_.RunAllPending();
+  message_loop_.RunUntilIdle();
 }
 
 TEST_F(IBusInputContextClientTest, FocusOutTest) {
@@ -490,7 +517,7 @@ TEST_F(IBusInputContextClientTest, FocusOutTest) {
   // Call FocusOut.
   client_->FocusOut();
   // Run the message loop.
-  message_loop_.RunAllPending();
+  message_loop_.RunUntilIdle();
 }
 
 TEST_F(IBusInputContextClientTest, ResetTest) {
@@ -504,7 +531,7 @@ TEST_F(IBusInputContextClientTest, ResetTest) {
   // Call Reset.
   client_->Reset();
   // Run the message loop.
-  message_loop_.RunAllPending();
+  message_loop_.RunUntilIdle();
 }
 
 TEST_F(IBusInputContextClientTest, SetCapabilitiesTest) {
@@ -518,7 +545,7 @@ TEST_F(IBusInputContextClientTest, SetCapabilitiesTest) {
   // Call SetCapabilities.
   client_->SetCapabilities(kCapabilities);
   // Run the message loop.
-  message_loop_.RunAllPending();
+  message_loop_.RunUntilIdle();
 }
 
 TEST_F(IBusInputContextClientTest, SetCursorLocationTest) {
@@ -533,7 +560,7 @@ TEST_F(IBusInputContextClientTest, SetCursorLocationTest) {
   // Call SetCursorLocation.
   client_->SetCursorLocation(kCursorX, kCursorY, kCursorWidth, kCursorHeight);
   // Run the message loop.
-  message_loop_.RunAllPending();
+  message_loop_.RunUntilIdle();
 }
 
 TEST_F(IBusInputContextClientTest, OnProcessKeyEvent) {
@@ -560,7 +587,7 @@ TEST_F(IBusInputContextClientTest, OnProcessKeyEvent) {
                            base::Bind(&MockProcessKeyEventErrorHandler::Run,
                                       base::Unretained(&error_callback)));
   // Run the message loop.
-  message_loop_.RunAllPending();
+  message_loop_.RunUntilIdle();
 }
 
 TEST_F(IBusInputContextClientTest, OnProcessKeyEventFail) {
@@ -588,7 +615,7 @@ TEST_F(IBusInputContextClientTest, OnProcessKeyEventFail) {
                            base::Bind(&MockProcessKeyEventErrorHandler::Run,
                                       base::Unretained(&error_callback)));
   // Run the message loop.
-  message_loop_.RunAllPending();
+  message_loop_.RunUntilIdle();
 }
 
 TEST_F(IBusInputContextClientTest, SetSurroundingTextTest) {
@@ -603,7 +630,21 @@ TEST_F(IBusInputContextClientTest, SetSurroundingTextTest) {
   // Call SetCursorLocation.
   client_->SetSurroundingText(kSurroundingText, kCursorPos, kAnchorPos);
   // Run the message loop.
-  message_loop_.RunAllPending();
+  message_loop_.RunUntilIdle();
 }
 
+TEST_F(IBusInputContextClientTest, PropertyActivateTest) {
+  // Set expectations.
+  EXPECT_CALL(*mock_proxy_, CallMethodWithErrorCallback(_, _, _, _))
+      .WillOnce(Invoke(this,
+                       &IBusInputContextClientTest::OnPropertyActivate));
+  // Create response.
+  scoped_ptr<dbus::Response> response(dbus::Response::CreateEmpty());
+  response_ = response.get();
+
+  // Call SetCursorLocation.
+  client_->PropertyActivate(kPropertyKey, kPropertyState);
+  // Run the message loop.
+  message_loop_.RunUntilIdle();
+}
 }  // namespace chromeos

@@ -6,6 +6,7 @@
 #include "base/path_service.h"
 #include "base/stringprintf.h"
 #include "base/utf_string_conversions.h"
+#include "chrome/browser/chrome_plugin_service_filter.h"
 #include "chrome/browser/content_settings/cookie_settings.h"
 #include "chrome/browser/content_settings/host_content_settings_map.h"
 #include "chrome/browser/content_settings/tab_specific_content_settings.h"
@@ -14,12 +15,14 @@
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_commands.h"
 #include "chrome/browser/ui/browser_tabstrip.h"
-#include "chrome/browser/ui/tab_contents/tab_contents.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/common/chrome_notification_types.h"
 #include "chrome/common/render_messages.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/ui_test_utils.h"
 #include "content/public/browser/browser_thread.h"
+#include "content/public/browser/plugin_service.h"
+#include "content/public/browser/render_process_host.h"
 #include "content/public/browser/render_view_host.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/common/content_switches.h"
@@ -33,6 +36,7 @@
 #endif
 
 using content::BrowserThread;
+using content::URLRequestMockHTTPJob;
 
 class ContentSettingsTest : public InProcessBrowserTest {
  public:
@@ -84,18 +88,16 @@ class ContentSettingsTest : public InProcessBrowserTest {
   }
 
   void PreBasic(const GURL& url) {
-    TabContents* tab = chrome::GetActiveTabContents(browser());
-    ASSERT_TRUE(GetCookies(tab->profile(), url).empty());
+    ASSERT_TRUE(GetCookies(browser()->profile(), url).empty());
 
     CookieCheckIncognitoWindow(url, true);
 
     ui_test_utils::NavigateToURL(browser(), url);
-    ASSERT_FALSE(GetCookies(tab->profile(), url).empty());
+    ASSERT_FALSE(GetCookies(browser()->profile(), url).empty());
   }
 
   void Basic(const GURL& url) {
-    TabContents* tab = chrome::GetActiveTabContents(browser());
-    ASSERT_FALSE(GetCookies(tab->profile(), url).empty());
+    ASSERT_FALSE(GetCookies(browser()->profile(), url).empty());
   }
 
   net::TestServer https_server_;
@@ -233,12 +235,12 @@ IN_PROC_BROWSER_TEST_F(ContentSettingsTest, RedirectLoopCookies) {
 
   ui_test_utils::NavigateToURL(browser(), test_url);
 
-  TabContents* tab_contents = chrome::GetActiveTabContents(browser());
+  content::WebContents* web_contents = chrome::GetActiveWebContents(browser());
   ASSERT_EQ(UTF8ToUTF16(test_url.spec() + " failed to load"),
-            tab_contents->web_contents()->GetTitle());
+            web_contents->GetTitle());
 
-  EXPECT_TRUE(tab_contents->content_settings()->IsContentBlocked(
-      CONTENT_SETTINGS_TYPE_COOKIES));
+  EXPECT_TRUE(TabSpecificContentSettings::FromWebContents(web_contents)->
+      IsContentBlocked(CONTENT_SETTINGS_TYPE_COOKIES));
 }
 
 IN_PROC_BROWSER_TEST_F(ContentSettingsTest, ContentSettingsBlockDataURLs) {
@@ -249,11 +251,11 @@ IN_PROC_BROWSER_TEST_F(ContentSettingsTest, ContentSettingsBlockDataURLs) {
 
   ui_test_utils::NavigateToURL(browser(), url);
 
-  TabContents* tab_contents = chrome::GetActiveTabContents(browser());
-  ASSERT_EQ(UTF8ToUTF16("Data URL"), tab_contents->web_contents()->GetTitle());
+  content::WebContents* web_contents = chrome::GetActiveWebContents(browser());
+  ASSERT_EQ(UTF8ToUTF16("Data URL"), web_contents->GetTitle());
 
-  EXPECT_TRUE(tab_contents->content_settings()->IsContentBlocked(
-      CONTENT_SETTINGS_TYPE_JAVASCRIPT));
+  EXPECT_TRUE(TabSpecificContentSettings::FromWebContents(web_contents)->
+      IsContentBlocked(CONTENT_SETTINGS_TYPE_JAVASCRIPT));
 }
 
 // Tests that if redirect across origins occurs, the new process still gets the
@@ -274,10 +276,10 @@ IN_PROC_BROWSER_TEST_F(ContentSettingsTest, RedirectCrossOrigin) {
 
   ui_test_utils::NavigateToURL(browser(), test_url);
 
-  TabContents* tab_contents = chrome::GetActiveTabContents(browser());
+  content::WebContents* web_contents = chrome::GetActiveWebContents(browser());
 
-  EXPECT_TRUE(tab_contents->content_settings()->IsContentBlocked(
-      CONTENT_SETTINGS_TYPE_COOKIES));
+  EXPECT_TRUE(TabSpecificContentSettings::FromWebContents(web_contents)->
+      IsContentBlocked(CONTENT_SETTINGS_TYPE_COOKIES));
 }
 
 #if !defined(USE_AURA)  // No NPAPI plugins with Aura.
@@ -312,6 +314,12 @@ IN_PROC_BROWSER_TEST_F(ClickToPlayPluginTest, Basic) {
 
   content::RenderViewHost* host =
       chrome::GetActiveWebContents(browser())->GetRenderViewHost();
+  ChromePluginServiceFilter* filter = ChromePluginServiceFilter::GetInstance();
+  int process_id = host->GetProcess()->GetID();
+  FilePath path(FILE_PATH_LITERAL("blah"));
+  EXPECT_FALSE(filter->CanLoadPlugin(process_id, path));
+  filter->AuthorizeAllPlugins(process_id);
+  EXPECT_TRUE(filter->CanLoadPlugin(process_id, path));
   host->Send(new ChromeViewMsg_LoadBlockedPlugins(
       host->GetRoutingID(), std::string()));
 
@@ -372,6 +380,8 @@ IN_PROC_BROWSER_TEST_F(ClickToPlayPluginTest, LoadAllBlockedPlugins) {
 
   content::RenderViewHost* host =
       chrome::GetActiveWebContents(browser())->GetRenderViewHost();
+  ChromePluginServiceFilter::GetInstance()->AuthorizeAllPlugins(
+      host->GetProcess()->GetID());
   host->Send(new ChromeViewMsg_LoadBlockedPlugins(
       host->GetRoutingID(), std::string()));
   EXPECT_EQ(expected_title1, title_watcher1.WaitAndGetTitle());
@@ -406,6 +416,8 @@ IN_PROC_BROWSER_TEST_F(ClickToPlayPluginTest, NoCallbackAtLoad) {
 
   content::RenderViewHost* host =
       chrome::GetActiveWebContents(browser())->GetRenderViewHost();
+  ChromePluginServiceFilter::GetInstance()->AuthorizeAllPlugins(
+      host->GetProcess()->GetID());
   host->Send(new ChromeViewMsg_LoadBlockedPlugins(
       host->GetRoutingID(), std::string()));
 
@@ -426,6 +438,8 @@ IN_PROC_BROWSER_TEST_F(ClickToPlayPluginTest, DeleteSelfAtLoad) {
 
   content::RenderViewHost* host =
       chrome::GetActiveWebContents(browser())->GetRenderViewHost();
+  ChromePluginServiceFilter::GetInstance()->AuthorizeAllPlugins(
+      host->GetProcess()->GetID());
   host->Send(new ChromeViewMsg_LoadBlockedPlugins(
       host->GetRoutingID(), std::string()));
 

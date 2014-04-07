@@ -415,9 +415,8 @@ std::string GetApplicationLocale(const std::string& pref_locale) {
 
 #elif defined(OS_ANDROID)
 
-  // TODO(jcivelli): use the application locale preference for now.
-  if (!pref_locale.empty())
-    candidates.push_back(pref_locale);
+  // On Android, query java.util.Locale for the default locale.
+  candidates.push_back(base::android::GetDefaultLocale());
 
 #elif defined(OS_LINUX)
   // If we're on a different Linux system, we have glib.
@@ -507,9 +506,9 @@ string16 GetDisplayNameForLocale(const std::string& locale,
     display_name.resize(actual_size);
   }
 
-  // Add an RTL mark so parentheses are properly placed.
+  // Add directional markup so parentheses are properly placed.
   if (is_for_ui && base::i18n::IsRTL())
-    display_name.push_back(static_cast<char16>(base::i18n::kRightToLeftMark));
+    base::i18n::AdjustStringForLocaleDirection(&display_name);
   return display_name;
 }
 

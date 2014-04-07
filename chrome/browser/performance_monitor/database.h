@@ -31,6 +31,7 @@ struct TimeRange {
 };
 
 class KeyBuilder;
+class DatabaseTestHelper;
 
 // The class supporting all performance monitor storage. This class wraps
 // multiple leveldb::DB objects. All methods must be called from a background
@@ -152,12 +153,10 @@ class Database {
   }
 
   // Add a metric instance to the database.
-  bool AddMetric(const std::string& activity,
-                 MetricType metric_type,
-                 const std::string& value);
+  bool AddMetric(const std::string& activity, const Metric& metric);
 
-  bool AddMetric(MetricType metric_type, const std::string& value) {
-    return AddMetric(kProcessChromeAggregate, metric_type, value);
+  bool AddMetric(const Metric& metric) {
+    return AddMetric(kProcessChromeAggregate, metric);
   }
 
   // Get the metrics that are active for the given process between |start|
@@ -191,25 +190,26 @@ class Database {
   }
 
   // Query given |metric_type| and |activity|.
-  MetricVector GetStatsForActivityAndMetric(const std::string& activity,
-                                            MetricType metric_type,
-                                            const base::Time& start,
-                                            const base::Time& end);
+  scoped_ptr<MetricVector> GetStatsForActivityAndMetric(
+      const std::string& activity,
+      MetricType metric_type,
+      const base::Time& start,
+      const base::Time& end);
 
-  MetricVector GetStatsForActivityAndMetric(MetricType metric_type,
-                                            const base::Time& start,
-                                            const base::Time& end) {
+  scoped_ptr<MetricVector> GetStatsForActivityAndMetric(
+      MetricType metric_type, const base::Time& start, const base::Time& end) {
     return GetStatsForActivityAndMetric(kProcessChromeAggregate, metric_type,
                                         start, end);
   }
 
-  MetricVector GetStatsForActivityAndMetric(const std::string& activity,
-                                            MetricType metric_type) {
+  scoped_ptr<MetricVector> GetStatsForActivityAndMetric(
+      const std::string& activity, MetricType metric_type) {
     return GetStatsForActivityAndMetric(activity, metric_type, base::Time(),
                                         clock_->GetTime());
   }
 
-  MetricVector GetStatsForActivityAndMetric(MetricType metric_type) {
+  scoped_ptr<MetricVector> GetStatsForActivityAndMetric(
+      MetricType metric_type) {
     return GetStatsForActivityAndMetric(kProcessChromeAggregate, metric_type,
                                         base::Time(), clock_->GetTime());
   }
@@ -236,8 +236,7 @@ class Database {
   }
 
  private:
-  FRIEND_TEST_ALL_PREFIXES(PerformanceMonitorDatabaseSetupTest, OpenClose);
-  FRIEND_TEST_ALL_PREFIXES(PerformanceMonitorDatabaseSetupTest, ActiveInterval);
+  friend class DatabaseTestHelper;
 
   typedef std::map<std::string, std::string> RecentMap;
   typedef std::map<std::string, double> MaxValueMap;

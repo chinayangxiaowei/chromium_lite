@@ -8,6 +8,9 @@
 // This file describes various types used to describe and filter notifications
 // that pass through the NotificationService.
 //
+// Only notifications that are fired from the content module should be here. We
+// should never have a notification that is fired by the embedder and listened
+// to by content.
 namespace content {
 
 enum NotificationType {
@@ -146,21 +149,6 @@ enum NotificationType {
   // controller associated with the state change.
   NOTIFICATION_SSL_INTERNAL_STATE_CHANGED,
 
-  // Application-wide ----------------------------------------------------------
-
-#if defined(OS_MACOSX)
-  // This message is sent when the application is made active (Mac OS X only
-  // at present). No source or details are passed.
-  NOTIFICATION_APP_ACTIVATED,
-#endif
-
-  // This message is sent when the application is terminating (the last
-  // browser window has shutdown as part of an explicit user-initiated exit,
-  // or the user closed the last browser window on Windows/Linux and there are
-  // no BackgroundContents keeping the browser running). No source or details
-  // are passed.
-  NOTIFICATION_APP_TERMINATING,
-
   // Devtools ------------------------------------------------------------------
 
   // Indicates that a devtools agent has attached to a client. The source is
@@ -184,7 +172,8 @@ enum NotificationType {
   // with another one, possibly changing processes. The source is a
   // Source<WebContents> with a pointer to the WebContents.  A
   // NOTIFICATION_WEB_CONTENTS_DISCONNECTED notification is guaranteed before
-  // the source pointer becomes junk.  No details are expected.
+  // the source pointer becomes junk.  Details are the RenderViewHost that
+  // has been replaced, or NULL if the old RVH was shut down.
   NOTIFICATION_WEB_CONTENTS_SWAPPED,
 
   // This message is sent after a WebContents is disconnected from the

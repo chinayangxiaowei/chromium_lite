@@ -9,8 +9,6 @@
   padding: 0;
 }
 
-/* TODO(pedrosimonetti): Confirm animated color transition, cursor, min-width,
-   and focused dot treatment with Marcin. */
 .dot {
   -webkit-transition: color 200ms;
   color: #666;

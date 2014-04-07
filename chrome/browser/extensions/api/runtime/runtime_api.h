@@ -23,7 +23,14 @@ class RuntimeEventRouter {
   // Dispatches the onInstalled event to the given extension.
   static void DispatchOnInstalledEvent(Profile* profile,
                                        const std::string& extension_id,
-                                       const Version& old_version);
+                                       const Version& old_version,
+                                       bool chrome_updated);
+
+  // Dispatches the onUpdateAvailable event to the given extension.
+  static void DispatchOnUpdateAvailableEvent(
+      Profile* profile,
+      const std::string& extension_id,
+      const base::DictionaryValue* manifest);
 };
 
 class RuntimeGetBackgroundPageFunction : public AsyncExtensionFunction {
@@ -36,6 +43,37 @@ class RuntimeGetBackgroundPageFunction : public AsyncExtensionFunction {
 
  private:
   void OnPageLoaded(ExtensionHost*);
+};
+
+class RuntimeReloadFunction : public SyncExtensionFunction {
+ public:
+  DECLARE_EXTENSION_FUNCTION_NAME("runtime.reload");
+
+ protected:
+  virtual ~RuntimeReloadFunction() {}
+  virtual bool RunImpl() OVERRIDE;
+};
+
+class RuntimeRequestUpdateCheckFunction : public AsyncExtensionFunction,
+                                          public content::NotificationObserver {
+ public:
+  DECLARE_EXTENSION_FUNCTION_NAME("runtime.requestUpdateCheck");
+
+  RuntimeRequestUpdateCheckFunction();
+ protected:
+  virtual ~RuntimeRequestUpdateCheckFunction() {}
+  virtual bool RunImpl() OVERRIDE;
+
+  // Implements content::NotificationObserver interface.
+  virtual void Observe(int type,
+                       const content::NotificationSource& source,
+                       const content::NotificationDetails& details) OVERRIDE;
+ private:
+  void CheckComplete();
+  void ReplyUpdateFound(const std::string& version);
+
+  content::NotificationRegistrar registrar_;
+  bool did_reply_;
 };
 
 }  // namespace extensions

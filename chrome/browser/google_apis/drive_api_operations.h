@@ -7,10 +7,13 @@
 
 #include <string>
 
-#include "chrome/browser/google_apis/operations_base.h"
+#include "chrome/browser/google_apis/base_operations.h"
 
-// TODO(kochi): Rename to namespace drive. http://crbug.com/136371
-namespace gdata {
+namespace net {
+class URLRequestContextGetter;
+}  // namespace net
+
+namespace google_apis {
 
 //============================== GetAboutOperation =============================
 
@@ -18,6 +21,7 @@ namespace gdata {
 class GetAboutOperation : public GetDataOperation {
  public:
   GetAboutOperation(OperationRegistry* registry,
+                    net::URLRequestContextGetter* url_request_context_getter,
                     const GetDataCallback& callback);
   virtual ~GetAboutOperation();
 
@@ -35,6 +39,7 @@ class GetAboutOperation : public GetDataOperation {
 class GetApplistOperation : public GetDataOperation {
  public:
   GetApplistOperation(OperationRegistry* registry,
+                      net::URLRequestContextGetter* url_request_context_getter,
                       const GetDataCallback& callback);
   virtual ~GetApplistOperation();
 
@@ -56,10 +61,12 @@ class GetChangelistOperation : public GetDataOperation {
   // |url| specifies URL for document feed fetching operation. If empty URL is
   // passed, the default URL is used and returns the first page of the result.
   // When non-first page result is requested, |url| should be specified.
-  GetChangelistOperation(OperationRegistry* registry,
-                         const GURL& url,
-                         int64 start_changestamp,
-                         const GetDataCallback& callback);
+  GetChangelistOperation(
+      OperationRegistry* registry,
+      net::URLRequestContextGetter* url_request_context_getter,
+      const GURL& url,
+      int64 start_changestamp,
+      const GetDataCallback& callback);
   virtual ~GetChangelistOperation();
 
  protected:
@@ -78,10 +85,12 @@ class GetChangelistOperation : public GetDataOperation {
 // This class performs the operation for fetching Filelist.
 class GetFilelistOperation : public GetDataOperation {
  public:
-  GetFilelistOperation(OperationRegistry* registry,
-                       const GURL& url,
-                       const std::string& search_string,
-                       const GetDataCallback& callback);
+  GetFilelistOperation(
+      OperationRegistry* registry,
+      net::URLRequestContextGetter* url_request_context_getter,
+      const GURL& url,
+      const std::string& search_string,
+      const GetDataCallback& callback);
   virtual ~GetFilelistOperation();
 
  protected:
@@ -101,6 +110,7 @@ class GetFilelistOperation : public GetDataOperation {
 class GetFileOperation : public GetDataOperation {
  public:
   GetFileOperation(OperationRegistry* registry,
+                   net::URLRequestContextGetter* url_request_context_getter,
                    const std::string& file_id,
                    const GetDataCallback& callback);
   virtual ~GetFileOperation();
@@ -115,6 +125,6 @@ class GetFileOperation : public GetDataOperation {
   DISALLOW_COPY_AND_ASSIGN(GetFileOperation);
 };
 
-}  // namespace gdata
+}  // namespace google_apis
 
 #endif  // CHROME_BROWSER_GOOGLE_APIS_DRIVE_API_OPERATIONS_H_

@@ -4,6 +4,7 @@
 
 #include "content/shell/shell_web_contents_view_delegate.h"
 
+#include "base/command_line.h"
 #include "content/public/browser/devtools_http_handler.h"
 #include "content/public/browser/render_process_host.h"
 #include "content/public/browser/render_view_host.h"
@@ -16,6 +17,7 @@
 #include "content/shell/shell_browser_main_parts.h"
 #include "content/shell/shell_content_browser_client.h"
 #include "content/shell/shell_devtools_delegate.h"
+#include "content/shell/shell_switches.h"
 #include "content/shell/shell_web_contents_view_delegate_creator.h"
 #include "third_party/WebKit/Source/WebKit/chromium/public/WebContextMenuData.h"
 
@@ -71,6 +73,9 @@ ShellWebContentsViewDelegate::~ShellWebContentsViewDelegate() {
 void ShellWebContentsViewDelegate::ShowContextMenu(
     const ContextMenuParams& params,
     ContextMenuSourceType type) {
+  if (CommandLine::ForCurrentProcess()->HasSwitch(switches::kDumpRenderTree))
+    return;
+
   params_ = params;
   bool has_link = !params_.unfiltered_link_url.is_empty();
   bool has_selection = !params_.selection_text.empty();
@@ -117,8 +122,7 @@ void ShellWebContentsViewDelegate::ShowContextMenu(
   }
 
   if (params_.is_editable) {
-    bool cut_enabled =
-        (params_.edit_flags & WebContextMenuData::CanCut) ? true : false;
+    bool cut_enabled = ((params_.edit_flags & WebContextMenuData::CanCut) != 0);
     MakeContextMenuItem(sub_menu,
                         index++,
                         L"Cut",
@@ -126,7 +130,7 @@ void ShellWebContentsViewDelegate::ShowContextMenu(
                         cut_enabled);
 
     bool copy_enabled =
-        (params_.edit_flags & WebContextMenuData::CanCopy) ? true : false;
+        ((params_.edit_flags & WebContextMenuData::CanCopy) != 0);
     MakeContextMenuItem(sub_menu,
                         index++,
                         L"Copy",
@@ -134,14 +138,14 @@ void ShellWebContentsViewDelegate::ShowContextMenu(
                         copy_enabled);
 
     bool paste_enabled =
-        (params_.edit_flags & WebContextMenuData::CanPaste) ? true : false;
+        ((params_.edit_flags & WebContextMenuData::CanPaste) != 0);
     MakeContextMenuItem(sub_menu,
                         index++,
                         L"Paste",
                         ShellContextMenuItemPasteId,
                         paste_enabled);
     bool delete_enabled =
-        (params_.edit_flags & WebContextMenuData::CanDelete) ? true : false;
+        ((params_.edit_flags & WebContextMenuData::CanDelete) != 0);
     MakeContextMenuItem(sub_menu,
                         index++,
                         L"Delete",
@@ -170,7 +174,7 @@ void ShellWebContentsViewDelegate::ShowContextMenu(
   NOTIMPLEMENTED();
 #else
   gfx::Point screen_point(params.x, params.y);
-  POINT point = screen_point.ToPOINT();;
+  POINT point = screen_point.ToPOINT();
   ClientToScreen(web_contents_->GetView()->GetNativeView(), &point);
 
   int selection =
@@ -187,7 +191,7 @@ void ShellWebContentsViewDelegate::ShowContextMenu(
 }
 
 void ShellWebContentsViewDelegate::MenuItemSelected(int selection) {
-  switch(selection) {
+  switch (selection) {
     case ShellContextMenuItemCutId:
       web_contents_->GetRenderViewHost()->Cut();
       break;
@@ -242,29 +246,23 @@ void ShellWebContentsViewDelegate::MenuItemSelected(int selection) {
 }
 
 WebDragDestDelegate* ShellWebContentsViewDelegate::GetDragDestDelegate() {
-  NOTIMPLEMENTED();
   return NULL;
 }
 
 void ShellWebContentsViewDelegate::StoreFocus() {
-  NOTIMPLEMENTED();
 }
 
 void ShellWebContentsViewDelegate::RestoreFocus() {
-  NOTIMPLEMENTED();
 }
 
 bool ShellWebContentsViewDelegate::Focus() {
-  NOTIMPLEMENTED();
   return false;
 }
 
 void ShellWebContentsViewDelegate::TakeFocus(bool reverse) {
-  NOTIMPLEMENTED();
 }
 
 void ShellWebContentsViewDelegate::SizeChanged(const gfx::Size& size) {
-  NOTIMPLEMENTED();
 }
 
 }  // namespace content

@@ -10,7 +10,7 @@
 
 namespace ui {
 
-AcceleratorManager::AcceleratorManager() : last_event_type_(ET_KEY_PRESSED) {
+AcceleratorManager::AcceleratorManager() {
 }
 
 AcceleratorManager::~AcceleratorManager() {
@@ -78,7 +78,7 @@ void AcceleratorManager::UnregisterAll(AcceleratorTarget* target) {
 bool AcceleratorManager::Process(const Accelerator& accelerator) {
   bool result = false;
   AcceleratorMap::iterator map_iter = accelerators_.find(accelerator);
-  if (map_iter != accelerators_.end() && ShouldHandle(accelerator)) {
+  if (map_iter != accelerators_.end()) {
     // We have to copy the target list here, because an AcceleratorPressed
     // event handler may modify the list.
     AcceleratorTargetList targets(map_iter->second.second);
@@ -91,7 +91,6 @@ bool AcceleratorManager::Process(const Accelerator& accelerator) {
       }
     }
   }
-  last_event_type_ = accelerator.type();
   return result;
 }
 
@@ -116,16 +115,6 @@ bool AcceleratorManager::HasPriorityHandler(
   // If the priority handler says it cannot handle the accelerator, we must not
   // count it as one.
   return map_iter->second.second.front()->CanHandleAccelerators();
-}
-
-bool AcceleratorManager::ShouldHandle(const Accelerator& accelerator) const {
-  if (accelerator.type() != ET_KEY_RELEASED)
-    return true;
-
-  // This check is necessary e.g. not to process the Shift+Alt+ET_KEY_RELEASED
-  // Accelerator for Chrome OS (see ash/accelerators/accelerator_controller.cc)
-  // when Shift+Alt+Tab is pressed and then Tab is released.
-  return last_event_type_ == ET_KEY_PRESSED;
 }
 
 }  // namespace ui

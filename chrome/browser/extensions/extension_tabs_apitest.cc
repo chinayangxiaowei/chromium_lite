@@ -121,10 +121,6 @@ IN_PROC_BROWSER_TEST_F(ExtensionApiTest, TabOpener) {
   ASSERT_TRUE(RunExtensionSubtest("tabs/basics", "opener.html")) << message_;
 }
 
-IN_PROC_BROWSER_TEST_F(ExtensionApiTest, TabCurrentWindow) {
-  ASSERT_TRUE(RunExtensionTest("tabs/current_window")) << message_;
-}
-
 IN_PROC_BROWSER_TEST_F(ExtensionApiTest, DISABLED_TabGetCurrent) {
   ASSERT_TRUE(RunExtensionTest("tabs/get_current")) << message_;
 }
@@ -143,7 +139,7 @@ IN_PROC_BROWSER_TEST_F(ExtensionApiTest, DISABLED_TabReload) {
   ASSERT_TRUE(RunExtensionTest("tabs/reload")) << message_;
 }
 
-IN_PROC_BROWSER_TEST_F(ExtensionApiTest, CaptureVisibleTabJpeg) {
+IN_PROC_BROWSER_TEST_F(ExtensionApiTest, DISABLED_CaptureVisibleTabJpeg) {
   host_resolver()->AddRule("a.com", "127.0.0.1");
   host_resolver()->AddRule("b.com", "127.0.0.1");
   ASSERT_TRUE(StartTestServer());

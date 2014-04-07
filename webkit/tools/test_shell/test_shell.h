@@ -13,19 +13,23 @@
 
 #include "base/basictypes.h"
 #include "base/file_path.h"
-#include "base/scoped_temp_dir.h"
-#include "base/string_piece.h"
-#if defined(OS_MACOSX)
+#include "base/files/scoped_temp_dir.h"
 #include "base/lazy_instance.h"
-#endif
 #include "base/memory/ref_counted.h"
 #include "base/memory/weak_ptr.h"
+#include "base/string_piece.h"
 #include "third_party/WebKit/Source/WebKit/chromium/public/WebNavigationPolicy.h"
 #include "ui/gfx/native_widget_types.h"
 #include "webkit/tools/test_shell/webview_host.h"
 #include "webkit/tools/test_shell/webwidget_host.h"
 
 typedef std::list<gfx::NativeWindow> WindowList;
+
+#if defined(OS_WIN)
+namespace ui {
+class ScopedOleInitializer;
+}
+#endif
 
 namespace webkit_glue {
 struct WebPreferences;
@@ -308,7 +312,6 @@ protected:
 
     static void PlatformShutdown();
 
-protected:
     gfx::NativeWindow       m_mainWnd;
     gfx::NativeEditView     m_editWnd;
     scoped_ptr<WebViewHost> m_webViewHost;
@@ -330,6 +333,8 @@ private:
 
 #if defined(OS_WIN)
     static HINSTANCE instance_handle_;
+
+    static ui::ScopedOleInitializer* ole_initializer_;
 #endif
 
     // True if developer extras should be enabled.

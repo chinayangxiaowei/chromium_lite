@@ -26,7 +26,7 @@ namespace media {
 class AudioManager;
 }
 
-namespace media_stream {
+namespace content {
 
 class AudioInputDeviceManagerEventHandler;
 
@@ -53,6 +53,9 @@ class CONTENT_EXPORT AudioInputDeviceManager : public MediaStreamProvider {
   // Stops the device referenced by the session id.
   void Stop(int session_id);
 
+  void UseFakeDevice();
+  bool ShouldUseFakeDevice() const;
+
  private:
   typedef std::map<int, AudioInputDeviceManagerEventHandler*> EventHandlerMap;
   typedef std::map<int, StreamDeviceInfo> StreamDeviceMap;
@@ -70,10 +73,10 @@ class CONTENT_EXPORT AudioInputDeviceManager : public MediaStreamProvider {
   void DevicesEnumeratedOnIOThread(StreamDeviceInfoArray* devices);
   // Callback used by OpenOnDeviceThread(), called with the session_id
   // referencing the opened device on IO thread.
-  void OpenedOnIOThread(content::MediaStreamDeviceType type, int session_id);
+  void OpenedOnIOThread(MediaStreamType type, int session_id);
   // Callback used by CloseOnDeviceThread(), called with the session_id
   // referencing the closed device on IO thread.
-  void ClosedOnIOThread(content::MediaStreamDeviceType type, int session_id);
+  void ClosedOnIOThread(MediaStreamType type, int session_id);
 
   // Verifies that the calling thread is media stream device thread.
   bool IsOnDeviceThread() const;
@@ -82,6 +85,7 @@ class CONTENT_EXPORT AudioInputDeviceManager : public MediaStreamProvider {
   MediaStreamProviderListener* listener_;
   int next_capture_session_id_;
   EventHandlerMap event_handlers_;
+  bool use_fake_device_;
 
   // Only accessed from media stream device thread.
   StreamDeviceMap devices_;
@@ -93,6 +97,6 @@ class CONTENT_EXPORT AudioInputDeviceManager : public MediaStreamProvider {
   DISALLOW_COPY_AND_ASSIGN(AudioInputDeviceManager);
 };
 
-}  // namespace media_stream
+}  // namespace content
 
 #endif  // CONTENT_BROWSER_RENDERER_HOST_MEDIA_AUDIO_INPUT_DEVICE_MANAGER_H_

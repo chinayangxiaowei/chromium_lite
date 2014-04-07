@@ -29,8 +29,7 @@ namespace content {
 
 ShellDownloadManagerDelegate::ShellDownloadManagerDelegate()
     : download_manager_(NULL),
-      suppress_prompting_(false),
-      last_download_db_handle_(DownloadItem::kUninitializedHandle) {
+      suppress_prompting_(false) {
   // Balanced in Shutdown();
   AddRef();
 }
@@ -70,7 +69,7 @@ bool ShellDownloadManagerDelegate::DetermineDownloadTarget(
   FilePath generated_name = net::GenerateFileName(
       download->GetURL(),
       download->GetContentDisposition(),
-      download->GetReferrerCharset(),
+      EmptyString(),
       download->GetSuggestedFilename(),
       download->GetMimeType(),
       "download");
@@ -111,7 +110,8 @@ void ShellDownloadManagerDelegate::OnDownloadPathGenerated(
   if (suppress_prompting_) {
     // Testing exit.
     callback.Run(suggested_path, DownloadItem::TARGET_DISPOSITION_OVERWRITE,
-                 DOWNLOAD_DANGER_TYPE_NOT_DANGEROUS, suggested_path);
+                 DOWNLOAD_DANGER_TYPE_NOT_DANGEROUS,
+                 suggested_path.AddExtension(FILE_PATH_LITERAL(".crdownload")));
     return;
   }
 
@@ -123,9 +123,8 @@ void ShellDownloadManagerDelegate::ChooseDownloadPath(
     const DownloadTargetCallback& callback,
     const FilePath& suggested_path) {
   DCHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
-  DownloadItem* item =
-      download_manager_->GetActiveDownloadItem(download_id);
-  if (!item)
+  DownloadItem* item = download_manager_->GetDownload(download_id);
+  if (!item || (item->GetState() != DownloadItem::IN_PROGRESS))
     return;
 
   FilePath result;
@@ -179,12 +178,6 @@ void ShellDownloadManagerDelegate::ChooseDownloadPath(
 
   callback.Run(result, DownloadItem::TARGET_DISPOSITION_PROMPT,
                DOWNLOAD_DANGER_TYPE_NOT_DANGEROUS, result);
-}
-
-void ShellDownloadManagerDelegate::AddItemToPersistentStore(
-    DownloadItem* item) {
-  download_manager_->OnItemAddedToPersistentStore(
-      item->GetId(), --last_download_db_handle_);
 }
 
 void ShellDownloadManagerDelegate::SetDownloadBehaviorForTesting(

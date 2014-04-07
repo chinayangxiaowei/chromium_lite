@@ -5,20 +5,23 @@
 cr.define('ntp', function() {
   'use strict';
 
-  var Tile = ntp.Tile2;
-  var TilePage = ntp.TilePage2;
+  var Tile = ntp.Tile;
+  var TilePage = ntp.TilePage;
 
   /**
    * Creates a new Thumbnail object for tiling.
+   * @param {Object=} opt_data The data representing the thumbnail.
    * @constructor
    * @extends {Tile}
    * @extends {HTMLAnchorElement}
-   * @param {Object} config Tile page configuration object.
    */
-  function Thumbnail(config) {
+  function Thumbnail(opt_data) {
     var el = cr.doc.createElement('a');
     el.__proto__ = Thumbnail.prototype;
-    el.initialize(config);
+    el.initialize();
+
+    if (opt_data)
+      el.data = opt_data;
 
     return el;
   }
@@ -28,21 +31,11 @@ cr.define('ntp', function() {
 
     /**
      * Initializes a Thumbnail.
-     * @param {Object} config TilePage configuration object.
      */
-    initialize: function(config) {
+    initialize: function() {
       Tile.prototype.initialize.apply(this, arguments);
       this.classList.add('thumbnail');
-      this.reset();
       this.addEventListener('mouseover', this.handleMouseOver_);
-    },
-
-    /**
-     * Thumbnail data object.
-     * @type {Object}
-     */
-    get data() {
-      return this.data_;
     },
 
     /**
@@ -65,15 +58,9 @@ cr.define('ntp', function() {
      * Update the appearance of this tile according to |data|.
      * @param {Object} data A dictionary of relevant data for the page.
      */
-    updateForData: function(data) {
-      // TODO(pedrosimonetti): Remove data.filler usage everywhere.
-      if (!data || data.filler) {
-        if (this.data_)
-          this.reset();
-        return;
-      }
-
-      this.data_ = data;
+    set data(data) {
+      Object.getOwnPropertyDescriptor(Tile.prototype, 'data').set.apply(this,
+          arguments);
 
       this.formatThumbnail_(data);
     },
@@ -101,9 +88,12 @@ cr.define('ntp', function() {
       if (banner)
         thumbnailImage.removeChild(banner);
 
-      var favicon = thumbnailImage.querySelector('.thumbnail-favicon');
-      if (favicon)
-        thumbnailImage.removeChild(favicon);
+      var favicon = this.querySelector('.thumbnail-favicon') ||
+                    this.ownerDocument.createElement('div');
+      favicon.className = 'thumbnail-favicon';
+      favicon.style.backgroundImage =
+          url('chrome://favicon/size/16/' + dataUrl);
+      this.appendChild(favicon);
 
       var self = this;
       var image = new Image();
@@ -119,14 +109,7 @@ cr.define('ntp', function() {
         // TODO(jeremycho): Consult with UX on URL truncation.
         banner.textContent = dataUrl.replace(/^(http:\/\/)?(www\.)?|\/$/gi, '');
         thumbnailImage.appendChild(banner);
-
-        favicon = thumbnailImage.querySelector('.thumbnail-favicon') ||
-            self.ownerDocument.createElement('div');
-        favicon.className = 'thumbnail-favicon';
-        favicon.style.backgroundImage =
-            url('chrome://favicon/size/16/' + dataUrl);
-        thumbnailImage.appendChild(favicon);
-      }
+      };
 
       var thumbnailUrl = ntp.getThumbnailUrl(dataUrl);
       thumbnailImage.style.backgroundImage = url(thumbnailUrl);
@@ -178,105 +161,16 @@ cr.define('ntp', function() {
   ThumbnailPage.prototype = {
     __proto__: TilePage.prototype,
 
-    config_: {
-      // The width of a cell.
-      cellWidth: 132,
-      // The start margin of a cell (left or right according to text direction).
-      cellMarginStart: 18,
-      // The border panel horizontal margin.
-      bottomPanelHorizontalMargin: 100,
-      // The height of the tile row.
-      rowHeight: 105,
-      // The maximum number of Tiles to be displayed.
-      maxTileCount: 10
-    },
-
-    // Thumbnail class used in this TilePage.
-    ThumbnailClass: Thumbnail,
-
     /**
      * Initializes a ThumbnailPage.
      */
     initialize: function() {
+      TilePage.prototype.initialize.apply(this, arguments);
+
       this.classList.add('thumbnail-page');
-      this.data_ = null;
     },
 
-    /**
-     * Create blank tiles.
-     * @private
-     * @param {number} count The number of Tiles to be created.
-     */
-    createTiles_: function(count) {
-      var Class = this.ThumbnailClass;
-      var config = this.config_;
-      count = Math.min(count, config.maxTileCount);
-      for (var i = 0; i < count; i++) {
-        this.appendTile(new Class(config));
-      }
-    },
-
-    /**
-     * Update the tiles after a change to |data_|.
-     */
-    updateTiles_: function() {
-      if (!this.hasBeenRendered())
-        this.layout_();
-
-      var maxTileCount = this.config_.maxTileCount;
-      var data = this.data_;
-      var tiles = this.tiles;
-      for (var i = 0; i < maxTileCount; i++) {
-        var page = data[i];
-        var tile = tiles[i];
-
-        // TODO(pedrosimonetti): What do we do when there's no tile here?
-        if (!tile)
-          return;
-
-        if (i >= data.length)
-          tile.reset();
-        else
-          tile.updateForData(page);
-      }
-    },
-
-    /**
-     * Returns an array of thumbnail data objects.
-     * @return {Array} An array of thumbnail data objects.
-     */
-    getData: function() {
-      return this.data_;
-    },
-
-    /**
-     * Sets the data that will be used to create Thumbnails.
-     * @param {Array} data The array of data.
-     */
-    setData: function(data) {
-      var maxTileCount = this.config_.maxTileCount;
-      this.data_ = data.slice(0, maxTileCount);
-
-      var dataLength = this.data_.length;
-      var tileCount = this.tileCount;
-      // Create or remove tiles if necessary.
-      if (tileCount < dataLength) {
-        this.createTiles_(dataLength - tileCount);
-      } else if (tileCount > dataLength) {
-        // TODO(jeremycho): Consider rewriting removeTile to be compatible with
-        // pages other than Apps and calling it here.
-        for (var i = 0; i < tileCount - dataLength; i++)
-          this.tiles_.pop();
-      }
-
-      // TODO(pedrosimonetti): Fix this as part of a larger restructuring of
-      // the layout/render logic.
-      if (dataLength != tileCount && this.hasBeenRendered())
-        this.renderGrid_();
-      this.updateTiles_();
-    },
-
-    /** @inheritDoc */
+    /** @override */
     shouldAcceptDrag: function(e) {
       return false;
     },
@@ -284,6 +178,6 @@ cr.define('ntp', function() {
 
   return {
     Thumbnail: Thumbnail,
-    ThumbnailPage: ThumbnailPage
+    ThumbnailPage: ThumbnailPage,
   };
 });

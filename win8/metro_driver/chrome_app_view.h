@@ -2,8 +2,8 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#ifndef CHROME_BROWSER_UI_METRO_DRIVER_CHROME_APP_VIEW_H_
-#define CHROME_BROWSER_UI_METRO_DRIVER_CHROME_APP_VIEW_H_
+#ifndef WIN8_METRO_DRIVER_CHROME_APP_VIEW_H_
+#define WIN8_METRO_DRIVER_CHROME_APP_VIEW_H_
 
 #include <windows.applicationmodel.core.h>
 #include <windows.ui.core.h>
@@ -24,6 +24,11 @@
 #include "win8/metro_driver/settings_handler.h"
 #include "win8/metro_driver/toast_notification_handler.h"
 
+namespace IPC {
+  class Listener;
+  class ChannelProxy;
+}
+
 class ChromeAppView
     : public mswr::RuntimeClass<winapp::Core::IFrameworkView> {
  public:
@@ -39,9 +44,6 @@ class ChromeAppView
 
   static LRESULT CALLBACK CoreWindowProc(HWND window, UINT message, WPARAM wp,
                                          LPARAM lp);
-
-  HRESULT TileRequestCreateDone(winfoundtn::IAsyncOperation<bool>* async,
-                                AsyncStatus status);
 
   bool osk_visible_notification_received() const {
     return osk_visible_notification_received_;
@@ -68,6 +70,9 @@ class ChromeAppView
 
   // Notification from chrome that a full screen operation is being performed.
   void SetFullscreen(bool fullscreen);
+
+  // Returns the current view state of the chrome window.
+  winui::ViewManagement::ApplicationViewState GetViewState();
 
  private:
   HRESULT OnActivate(winapp::Core::ICoreApplicationView* view,
@@ -134,18 +139,6 @@ class ChromeAppView
   MetroDialogBox dialog_box_;
 };
 
-class ChromeAppViewFactory
-    : public mswr::RuntimeClass<winapp::Core::IFrameworkViewSource> {
- public:
-  ChromeAppViewFactory(winapp::Core::ICoreApplication* icore_app,
-                       LPTHREAD_START_ROUTINE host_main,
-                       void* host_context);
-  IFACEMETHOD(CreateView)(winapp::Core::IFrameworkView** view);
-};
-
-// This function is exported by chrome.exe.
-typedef int (__cdecl *BreakpadExceptionHandler)(EXCEPTION_POINTERS* info);
-
 // Global information used across the metro driver.
 struct Globals {
   LPTHREAD_START_ROUTINE host_main;
@@ -168,10 +161,9 @@ struct Globals {
   // to be initiated from that thread, notably spawning file pickers.
   base::MessageLoopProxy* appview_msg_loop;
   winapp::Core::ICoreApplicationExit* app_exit;
-  BreakpadExceptionHandler breakpad_exception_handler;
   string16 metro_command_line_switches;
 };
 
 extern Globals globals;
 
-#endif  // CHROME_BROWSER_UI_METRO_DRIVER_CHROME_APP_VIEW_H_
+#endif  // WIN8_METRO_DRIVER_CHROME_APP_VIEW_H_

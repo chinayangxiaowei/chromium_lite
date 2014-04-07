@@ -7,10 +7,14 @@
 #include "content/common/browser_plugin_messages.h"
 #include "content/renderer/browser_plugin/browser_plugin.h"
 #include "content/renderer/render_thread_impl.h"
+#include "ui/gfx/point.h"
+#include "webkit/glue/webcursor.h"
 
 namespace content {
 
-BrowserPluginManagerImpl::BrowserPluginManagerImpl() {
+BrowserPluginManagerImpl::BrowserPluginManagerImpl(
+    RenderViewImpl* render_view)
+    : BrowserPluginManager(render_view) {
 }
 
 BrowserPluginManagerImpl::~BrowserPluginManagerImpl() {
@@ -20,7 +24,7 @@ BrowserPlugin* BrowserPluginManagerImpl::CreateBrowserPlugin(
     RenderViewImpl* render_view,
     WebKit::WebFrame* frame,
     const WebKit::WebPluginParams& params) {
-  return new BrowserPlugin(browser_plugin_counter_++,
+  return new BrowserPlugin(++browser_plugin_counter_,
                            render_view,
                            frame,
                            params);
@@ -30,45 +34,78 @@ bool BrowserPluginManagerImpl::Send(IPC::Message* msg) {
   return RenderThread::Get()->Send(msg);
 }
 
-bool BrowserPluginManagerImpl::OnControlMessageReceived(
+bool BrowserPluginManagerImpl::OnMessageReceived(
     const IPC::Message& message) {
-  DCHECK(CalledOnValidThread());
+  if (ShouldForwardToBrowserPlugin(message)) {
+    int instance_id = 0;
+    // All allowed messages must have instance_id as their first parameter.
+    PickleIterator iter(message);
+    bool success = iter.ReadInt(&instance_id);
+    DCHECK(success);
+    BrowserPlugin* plugin = GetBrowserPlugin(instance_id);
+    if (plugin && plugin->OnMessageReceived(message))
+      return true;
+  }
+
   bool handled = true;
   IPC_BEGIN_MESSAGE_MAP(BrowserPluginManagerImpl, message)
-    IPC_MESSAGE_HANDLER(BrowserPluginMsg_UpdateRect, OnUpdateRect)
-    IPC_MESSAGE_HANDLER(BrowserPluginMsg_GuestCrashed,OnGuestCrashed)
-    IPC_MESSAGE_HANDLER(BrowserPluginMsg_DidNavigate, OnDidNavigate)
-    IPC_MESSAGE_HANDLER(BrowserPluginMsg_AdvanceFocus, OnAdvanceFocus)
+    IPC_MESSAGE_HANDLER(BrowserPluginMsg_PluginAtPositionRequest,
+                        OnPluginAtPositionRequest);
     IPC_MESSAGE_UNHANDLED(handled = false)
   IPC_END_MESSAGE_MAP()
   return handled;
 }
 
-void BrowserPluginManagerImpl::OnUpdateRect(
-    int instance_id,
-    int message_id,
-    const BrowserPluginMsg_UpdateRect_Params& params) {
-  BrowserPlugin* plugin = GetBrowserPlugin(instance_id);
-  if (plugin)
-    plugin->UpdateRect(message_id, params);
+void BrowserPluginManagerImpl::OnPluginAtPositionRequest(
+    const IPC::Message& message,
+    int request_id,
+    const gfx::Point& position) {
+  int instance_id = -1;
+  IDMap<BrowserPlugin>::iterator it(&instances_);
+  gfx::Point local_position = position;
+  int source_routing_id = message.routing_id();
+  while (!it.IsAtEnd()) {
+    const BrowserPlugin* plugin = it.GetCurrentValue();
+    // We need to check the plugin's routing id too since BrowserPluginManager
+    // can manage plugins from other embedder (in the same process).
+    if (plugin->InBounds(position)) {
+      source_routing_id = plugin->render_view_routing_id();
+      instance_id = plugin->instance_id();
+      local_position = plugin->ToLocalCoordinates(position);
+      break;
+    }
+    it.Advance();
+  }
+
+  Send(new BrowserPluginHostMsg_PluginAtPositionResponse(
+       source_routing_id,
+       instance_id,
+       request_id,
+       local_position));
 }
 
-void BrowserPluginManagerImpl::OnGuestCrashed(int instance_id) {
-  BrowserPlugin* plugin = GetBrowserPlugin(instance_id);
-  if (plugin)
-    plugin->GuestCrashed();
-}
-
-void BrowserPluginManagerImpl::OnDidNavigate(int instance_id, const GURL& url) {
-  BrowserPlugin* plugin = GetBrowserPlugin(instance_id);
-  if (plugin)
-    plugin->DidNavigate(url);
-}
-
-void BrowserPluginManagerImpl::OnAdvanceFocus(int instance_id, bool reverse) {
-  BrowserPlugin* plugin = GetBrowserPlugin(instance_id);
-  if (plugin)
-    plugin->AdvanceFocus(reverse);
+// static
+bool BrowserPluginManagerImpl::ShouldForwardToBrowserPlugin(
+    const IPC::Message& message) {
+  switch (message.type()) {
+    case BrowserPluginMsg_UpdateRect::ID:
+    case BrowserPluginMsg_GuestGone::ID:
+    case BrowserPluginMsg_AdvanceFocus::ID:
+    case BrowserPluginMsg_GuestContentWindowReady::ID:
+    case BrowserPluginMsg_ShouldAcceptTouchEvents::ID:
+    case BrowserPluginMsg_LoadStart::ID:
+    case BrowserPluginMsg_LoadAbort::ID:
+    case BrowserPluginMsg_LoadRedirect::ID:
+    case BrowserPluginMsg_LoadCommit::ID:
+    case BrowserPluginMsg_LoadStop::ID:
+    case BrowserPluginMsg_SetCursor::ID:
+    case BrowserPluginMsg_GuestUnresponsive::ID:
+    case BrowserPluginMsg_GuestResponsive::ID:
+      return true;
+    default:
+      break;
+  }
+  return false;
 }
 
 }  // namespace content

@@ -12,11 +12,14 @@
 #include "ash/launcher/launcher_model.h"
 #include "ash/launcher/launcher_navigator.h"
 #include "ash/launcher/launcher_view.h"
+#include "ash/root_window_controller.h"
 #include "ash/shell.h"
 #include "ash/shell_delegate.h"
 #include "ash/shell_window_ids.h"
 #include "ash/wm/shelf_layout_manager.h"
+#include "ash/wm/window_properties.h"
 #include "grit/ash_resources.h"
+#include "ui/aura/root_window.h"
 #include "ui/aura/window.h"
 #include "ui/aura/window_observer.h"
 #include "ui/base/resource/resource_bundle.h"
@@ -100,13 +103,14 @@ class DimmerView : public views::WidgetDelegateView,
  private:
   // views::View overrides:
   virtual void OnPaintBackground(gfx::Canvas* canvas) OVERRIDE {
+    ResourceBundle& rb = ResourceBundle::GetSharedInstance();
+    const gfx::ImageSkia* launcher_background = rb.GetImageSkiaNamed(
+        internal::ShelfLayoutManager::ForLauncher(
+            launcher_->GetNativeView())->
+        SelectValueForShelfAlignment(IDR_AURA_LAUNCHER_DIMMING_BOTTOM,
+                                     IDR_AURA_LAUNCHER_DIMMING_LEFT,
+                                     IDR_AURA_LAUNCHER_DIMMING_RIGHT));
     SkPaint paint;
-    static const gfx::ImageSkia* launcher_background = NULL;
-    if (!launcher_background) {
-      ResourceBundle& rb = ResourceBundle::GetSharedInstance();
-      launcher_background =
-          rb.GetImageNamed(IDR_AURA_LAUNCHER_DIMMING).ToImageSkia();
-    }
     paint.setAlpha(kDimAlpha);
     canvas->DrawImageInt(
         *launcher_background,
@@ -164,12 +168,13 @@ void Launcher::DelegateView::Layout() {
 void Launcher::DelegateView::OnPaintBackground(gfx::Canvas* canvas) {
   if (launcher_->alignment_ == SHELF_ALIGNMENT_BOTTOM) {
     SkPaint paint;
-    static const gfx::ImageSkia* launcher_background = NULL;
-    if (!launcher_background) {
-      ResourceBundle& rb = ResourceBundle::GetSharedInstance();
-      launcher_background =
-          rb.GetImageNamed(IDR_AURA_LAUNCHER_BACKGROUND).ToImageSkia();
-    }
+    ResourceBundle& rb = ResourceBundle::GetSharedInstance();
+    const gfx::ImageSkia* launcher_background = rb.GetImageSkiaNamed(
+        internal::ShelfLayoutManager::ForLauncher(
+            launcher_->widget()->GetNativeView())->
+        SelectValueForShelfAlignment(IDR_AURA_LAUNCHER_BACKGROUND_BOTTOM,
+                                     IDR_AURA_LAUNCHER_BACKGROUND_LEFT,
+                                     IDR_AURA_LAUNCHER_BACKGROUND_RIGHT));
     paint.setAlpha(alpha_);
     canvas->DrawImageInt(
         *launcher_background,
@@ -194,20 +199,17 @@ void Launcher::DelegateView::UpdateBackground(int alpha) {
 
 // Launcher --------------------------------------------------------------------
 
-Launcher::Launcher(aura::Window* window_container,
+Launcher::Launcher(LauncherModel* launcher_model,
+                   LauncherDelegate* launcher_delegate,
+                   aura::Window* window_container,
                    internal::ShelfLayoutManager* shelf_layout_manager)
     : widget_(NULL),
       window_container_(window_container),
       delegate_view_(new DelegateView(this)),
       launcher_view_(NULL),
       alignment_(SHELF_ALIGNMENT_BOTTOM),
+      delegate_(launcher_delegate),
       background_animator_(delegate_view_, 0, kLauncherBackgroundAlpha) {
-  model_.reset(new LauncherModel);
-  if (Shell::GetInstance()->delegate()) {
-    delegate_.reset(
-        Shell::GetInstance()->delegate()->CreateLauncherDelegate(model_.get()));
-  }
-
   widget_.reset(new views::Widget);
   views::Widget::InitParams params(
       views::Widget::InitParams::TYPE_WINDOW_FRAMELESS);
@@ -217,27 +219,43 @@ Launcher::Launcher(aura::Window* window_container,
       window_container_->GetRootWindow(),
       ash::internal::kShellWindowId_LauncherContainer);
   launcher_view_ = new internal::LauncherView(
-      model_.get(), delegate_.get(), shelf_layout_manager);
+      launcher_model, delegate_, shelf_layout_manager);
   launcher_view_->Init();
   delegate_view_->AddChildView(launcher_view_);
   params.delegate = delegate_view_;
   widget_->Init(params);
   widget_->GetNativeWindow()->SetName("LauncherWindow");
-  gfx::Size pref =
-      static_cast<views::View*>(launcher_view_)->GetPreferredSize();
-  widget_->SetBounds(gfx::Rect(pref));
   // The launcher should not take focus when it is initially shown.
   widget_->set_focus_on_creation(false);
   widget_->SetContentsView(delegate_view_);
   widget_->GetNativeView()->SetName("LauncherView");
+  widget_->GetNativeView()->SetProperty(internal::kStayInSameRootWindowKey,
+                                        true);
+
+  // SetBounds() has to be called after kStayInSameRootWindowKey is set.
+  gfx::Size pref =
+      static_cast<views::View*>(launcher_view_)->GetPreferredSize();
+  widget_->SetBounds(gfx::Rect(pref));
 }
 
 Launcher::~Launcher() {
 }
 
+// static
+Launcher* Launcher::ForPrimaryDisplay() {
+  return internal::RootWindowController::ForLauncher(
+      Shell::GetPrimaryRootWindow())->launcher();
+}
+
+// static
+Launcher* Launcher::ForWindow(aura::Window* window) {
+  return internal::RootWindowController::ForLauncher(window)->launcher();
+}
+
 void Launcher::SetFocusCycler(internal::FocusCycler* focus_cycler) {
   delegate_view_->set_focus_cycler(focus_cycler);
-  focus_cycler->AddWidget(widget_.get());
+  if (focus_cycler)
+    focus_cycler->AddWidget(widget_.get());
 }
 
 internal::FocusCycler* Launcher::GetFocusCycler() {
@@ -246,7 +264,7 @@ internal::FocusCycler* Launcher::GetFocusCycler() {
 
 void Launcher::SetAlignment(ShelfAlignment alignment) {
   alignment_ = alignment;
-  launcher_view_->SetAlignment(alignment);
+  launcher_view_->OnShelfAlignmentChanged();
   // ShelfLayoutManager will resize the launcher.
 }
 
@@ -282,6 +300,8 @@ void Launcher::SetDimsShelf(bool value) {
   dimmer_->set_focus_on_creation(false);
   dimmer_->SetContentsView(new DimmerView(widget_.get()));
   dimmer_->GetNativeView()->SetName("LauncherDimmerView");
+  dimmer_->GetNativeView()->SetProperty(internal::kStayInSameRootWindowKey,
+                                        true);
   dimmer_->Show();
 }
 
@@ -298,9 +318,6 @@ void Launcher::SetStatusSize(const gfx::Size& size) {
 }
 
 gfx::Rect Launcher::GetScreenBoundsOfItemIconForWindow(aura::Window* window) {
-  if (!delegate_.get())
-    return gfx::Rect();
-
   LauncherID id = delegate_->GetIDByWindow(window);
   gfx::Rect bounds(launcher_view_->GetIdealBoundsOfItemIcon(id));
   if (bounds.IsEmpty())
@@ -315,13 +332,14 @@ gfx::Rect Launcher::GetScreenBoundsOfItemIconForWindow(aura::Window* window) {
 }
 
 void Launcher::ActivateLauncherItem(int index) {
-  DCHECK(delegate_.get());
-  const ash::LauncherItems& items = model_->items();
+  const ash::LauncherItems& items =
+      launcher_view_->model()->items();
   delegate_->ItemClicked(items[index], ui::EF_NONE);
 }
 
 void Launcher::CycleWindowLinear(CycleDirection direction) {
-  int item_index = GetNextActivatedItemIndex(*model(), direction);
+  int item_index = GetNextActivatedItemIndex(
+      *(launcher_view_->model()), direction);
   if (item_index >= 0)
     ActivateLauncherItem(item_index);
 }
@@ -336,6 +354,10 @@ void Launcher::RemoveIconObserver(LauncherIconObserver* observer) {
 
 bool Launcher::IsShowingMenu() const {
   return launcher_view_->IsShowingMenu();
+}
+
+void Launcher::ShowContextMenu(const gfx::Point& location) {
+  launcher_view_->ShowContextMenu(location, false);
 }
 
 bool Launcher::IsShowingOverflowBubble() const {
@@ -354,6 +376,34 @@ void Launcher::SetWidgetBounds(const gfx::Rect bounds) {
   widget_->SetBounds(bounds);
   if (dimmer_.get())
     dimmer_->SetBounds(bounds);
+}
+
+void Launcher::SwitchToWindow(int window_index) {
+  LauncherModel* launcher_model = launcher_view_->model();
+  const LauncherItems& items = launcher_model->items();
+  int item_count = launcher_model->item_count();
+  int indexes_left = window_index >= 0 ? window_index : item_count;
+  int found_index = -1;
+
+  // Iterating until we have hit the index we are interested in which
+  // is true once indexes_left becomes negative.
+  for (int i = 0; i < item_count && indexes_left >= 0; i++) {
+    if (items[i].type != TYPE_APP_LIST &&
+        items[i].type != TYPE_BROWSER_SHORTCUT) {
+      found_index = i;
+      indexes_left--;
+    }
+  }
+
+  // There are two ways how found_index can be valid: a.) the nth item was
+  // found (which is true when indexes_left is -1) or b.) the last item was
+  // requested (which is true when index was passed in as a negative number).
+  if (found_index >= 0 && (indexes_left == -1 || window_index < 0) &&
+      (items[found_index].status == ash::STATUS_RUNNING ||
+       items[found_index].status == ash::STATUS_CLOSED)) {
+    // Then set this one as active.
+    ActivateLauncherItem(found_index);
+  }
 }
 
 internal::LauncherView* Launcher::GetLauncherViewForTest() {

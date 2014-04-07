@@ -8,6 +8,7 @@
 #include "base/time.h"
 #include "base/values.h"
 #include "sync/internal_api/public/base/model_type.h"
+#include "sync/internal_api/public/base/node_ordinal.h"
 #include "sync/internal_api/public/util/immutable.h"
 #include "sync/protocol/sync.pb.h"
 #include "sync/syncable/metahandle_set.h"
@@ -15,14 +16,17 @@
 #include "sync/util/time.h"
 
 namespace syncer {
+
+class Cryptographer;
+
 namespace syncable {
 
 // Things you need to update if you change any of the fields below:
 //  - EntryKernel struct in this file
 //  - syncable_columns.h
 //  - syncable_enum_conversions{.h,.cc,_unittest.cc}
-//  - EntryKernel::EntryKernel(), EntryKernel::ToValue(), operator<<
-//    for Entry in syncable.cc
+//  - EntryKernel::EntryKernel(), EntryKernel::ToValue() in entry_kernel.cc
+//  - operator<< in Entry.cc
 //  - BindFields() and UnpackEntry() in directory_backing_store.cc
 //  - TestSimpleFieldsPreservedDuringSaveChanges in syncable_unittest.cc
 
@@ -47,14 +51,9 @@ enum BaseVersion {
 
 enum Int64Field {
   SERVER_VERSION = BASE_VERSION + 1,
-
-  // A numeric position value that indicates the relative ordering of
-  // this object among its siblings.
-  SERVER_POSITION_IN_PARENT,
-
   LOCAL_EXTERNAL_ID,  // ID of an item in the external local storage that this
                       // entry is associated with. (such as bookmarks.js)
-
+  TRANSACTION_VERSION,
   INT64_FIELDS_END
 };
 
@@ -143,9 +142,22 @@ enum ProtoField {
 };
 
 enum {
-  FIELD_COUNT = PROTO_FIELDS_END,
+  PROTO_FIELDS_COUNT = PROTO_FIELDS_END - PROTO_FIELDS_BEGIN,
+  ORDINAL_FIELDS_BEGIN = PROTO_FIELDS_END
+};
+
+enum OrdinalField {
+  // An Ordinal that identifies the relative ordering of this object
+  // among its siblings.
+  SERVER_ORDINAL_IN_PARENT = ORDINAL_FIELDS_BEGIN,
+  ORDINAL_FIELDS_END
+};
+
+enum {
+  ORDINAL_FIELDS_COUNT = ORDINAL_FIELDS_END - ORDINAL_FIELDS_BEGIN,
+  FIELD_COUNT = ORDINAL_FIELDS_END - BEGIN_FIELDS,
   // Past this point we have temporaries, stored in memory only.
-  BEGIN_TEMPS = PROTO_FIELDS_END,
+  BEGIN_TEMPS = ORDINAL_FIELDS_END,
   BIT_TEMPS_BEGIN = BEGIN_TEMPS,
 };
 
@@ -160,9 +172,6 @@ enum {
   BIT_TEMPS_COUNT = BIT_TEMPS_END - BIT_TEMPS_BEGIN
 };
 
-enum {
-  PROTO_FIELDS_COUNT = PROTO_FIELDS_END - PROTO_FIELDS_BEGIN
-};
 
 
 struct EntryKernel {
@@ -172,6 +181,7 @@ struct EntryKernel {
   int64 int64_fields[INT64_FIELDS_COUNT];
   base::Time time_fields[TIME_FIELDS_COUNT];
   Id id_fields[ID_FIELDS_COUNT];
+  NodeOrdinal ordinal_fields[ORDINAL_FIELDS_COUNT];
   std::bitset<BIT_FIELDS_COUNT> bit_fields;
   std::bitset<BIT_TEMPS_COUNT> bit_temps;
 
@@ -239,6 +249,9 @@ struct EntryKernel {
   inline void put(ProtoField field, const sync_pb::EntitySpecifics& value) {
     specifics_fields[field - PROTO_FIELDS_BEGIN].CopyFrom(value);
   }
+  inline void put(OrdinalField field, const NodeOrdinal& value) {
+    ordinal_fields[field - ORDINAL_FIELDS_BEGIN] = value;
+  }
   inline void put(BitTemp field, bool value) {
     bit_temps[field - BIT_TEMPS_BEGIN] = value;
   }
@@ -274,6 +287,9 @@ struct EntryKernel {
   inline const sync_pb::EntitySpecifics& ref(ProtoField field) const {
     return specifics_fields[field - PROTO_FIELDS_BEGIN];
   }
+  inline const NodeOrdinal& ref(OrdinalField field) const {
+    return ordinal_fields[field - ORDINAL_FIELDS_BEGIN];
+  }
   inline bool ref(BitTemp field) const {
     return bit_temps[field - BIT_TEMPS_BEGIN];
   }
@@ -288,12 +304,18 @@ struct EntryKernel {
   inline Id& mutable_ref(IdField field) {
     return id_fields[field - ID_FIELDS_BEGIN];
   }
+  inline NodeOrdinal& mutable_ref(OrdinalField field) {
+    return ordinal_fields[field - ORDINAL_FIELDS_BEGIN];
+  }
 
   ModelType GetServerModelType() const;
 
   // Dumps all kernel info into a DictionaryValue and returns it.
   // Transfers ownership of the DictionaryValue to the caller.
-  base::DictionaryValue* ToValue() const;
+  // Note: |cryptographer| is an optional parameter for use in decrypting
+  // encrypted specifics. If it is NULL or the specifics are not decryptsble,
+  // they will be serialized as empty proto's.
+  base::DictionaryValue* ToValue(Cryptographer* cryptographer) const;
 
  private:
   // Tracks whether this entry needs to be saved to the database.

@@ -10,15 +10,15 @@
 #include "base/bind.h"
 #include "base/file_util.h"
 #include "base/threading/sequenced_worker_pool.h"
+#include "chrome/browser/extensions/image_loader.h"
 #include "chrome/browser/ui/webui/extensions/extension_icon_source.h"
 #include "chrome/common/chrome_notification_types.h"
 #include "chrome/common/extensions/extension.h"
 #include "chrome/common/extensions/extension_constants.h"
+#include "chrome/common/extensions/extension_file_util.h"
 #include "chrome/common/extensions/extension_resource.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/notification_service.h"
-#include "grit/component_extension_resources_map.h"
-#include "grit/theme_resources.h"
 #include "skia/ext/image_operations.h"
 #include "third_party/skia/include/core/SkBitmap.h"
 #include "ui/base/resource/resource_bundle.h"
@@ -30,30 +30,6 @@ using content::BrowserThread;
 using extensions::Extension;
 
 namespace {
-
-struct ComponentExtensionResource {
-  const char* extension_id;
-  const int resource_id;
-};
-
-const ComponentExtensionResource kSpecialComponentExtensionResources[] = {
-  { extension_misc::kWebStoreAppId, IDR_WEBSTORE_ICON },
-  { extension_misc::kChromeAppId, IDR_PRODUCT_LOGO_128 },
-};
-
-// Finds special component extension resource id for given extension id.
-bool FindSpecialExtensionResourceId(const std::string& extension_id,
-                                    int* out_resource_id) {
-  for (size_t i = 0; i < arraysize(kSpecialComponentExtensionResources); ++i) {
-    if (extension_id == kSpecialComponentExtensionResources[i].extension_id) {
-      if (out_resource_id)
-        *out_resource_id = kSpecialComponentExtensionResources[i].resource_id;
-      return true;
-    }
-  }
-
-  return false;
-}
 
 bool ShouldResizeImageRepresentation(
     ImageLoadingTracker::ImageRepresentation::ResizeCondition resize_method,
@@ -207,8 +183,9 @@ class ImageLoadingTracker::ImageLoader
     DCHECK(BrowserThread::GetBlockingPool()->RunsTasksOnCurrentThread());
     // TODO(xiyuan): Clean up to use SkBitmap here and in LoadOnBlockingPool.
     scoped_ptr<SkBitmap> bitmap(new SkBitmap);
+    gfx::Size original_size(image.width(), image.height());
     *bitmap = ResizeIfNeeded(*image.bitmap(), image_info);
-    ReportBack(bitmap.release(), image_info, image_info.desired_size, id);
+    ReportBack(bitmap.release(), image_info, original_size, id);
   }
 
   void ReportBack(const SkBitmap* bitmap, const ImageRepresentation& image_info,
@@ -265,13 +242,6 @@ class ImageLoadingTracker::ImageLoader
 ////////////////////////////////////////////////////////////////////////////////
 // ImageLoadingTracker
 
-// static
-bool ImageLoadingTracker::IsSpecialBundledExtensionId(
-    const std::string& extension_id) {
-  int resource_id = -1;
-  return FindSpecialExtensionResourceId(extension_id, &resource_id);
-}
-
 ImageLoadingTracker::ImageLoadingTracker(Observer* observer)
     : observer_(observer),
       next_id_(0) {
@@ -313,16 +283,6 @@ void ImageLoadingTracker::LoadImages(
 
   for (std::vector<ImageRepresentation>::const_iterator it = info_list.begin();
        it != info_list.end(); ++it) {
-    int resource_id = -1;
-
-    // Load resources for special component extensions.
-    if (FindSpecialExtensionResourceId(load_info.extension_id, &resource_id)) {
-      if (!loader_)
-        loader_ = new ImageLoader(this);
-      loader_->LoadResource(*it, id, resource_id);
-      continue;
-    }
-
     // If we don't have a path we don't need to do any further work, just
     // respond back.
     if (it->resource.relative_path().empty()) {
@@ -345,35 +305,15 @@ void ImageLoadingTracker::LoadImages(
     if (!loader_)
       loader_ = new ImageLoader(this);
 
-    if (IsComponentExtensionResource(extension, it->resource, resource_id))
+    int resource_id = -1;
+    if (extension->location() == Extension::COMPONENT &&
+        extensions::ImageLoader::IsComponentExtensionResource(
+            extension->path(), it->resource.relative_path(), &resource_id)) {
       loader_->LoadResource(*it, id, resource_id);
-    else
+    } else {
       loader_->LoadImage(*it, id);
-  }
-}
-
-bool ImageLoadingTracker::IsComponentExtensionResource(
-    const Extension* extension,
-    const ExtensionResource& resource,
-    int& resource_id) const {
-  if (extension->location() != Extension::COMPONENT)
-    return false;
-
-  FilePath directory_path = extension->path();
-  FilePath relative_path = directory_path.BaseName().Append(
-      resource.relative_path());
-
-  for (size_t i = 0; i < kComponentExtensionResourcesSize; ++i) {
-    FilePath resource_path =
-        FilePath().AppendASCII(kComponentExtensionResources[i].name);
-    resource_path = resource_path.NormalizePathSeparators();
-
-    if (relative_path == resource_path) {
-      resource_id = kComponentExtensionResources[i].value;
-      return true;
     }
   }
-  return false;
 }
 
 void ImageLoadingTracker::OnBitmapLoaded(

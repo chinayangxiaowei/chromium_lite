@@ -11,6 +11,8 @@
 #include <propvarutil.h>
 #include <sddl.h>
 #include <shlobj.h>
+#include <signal.h>
+#include <stdlib.h>
 
 #include "base/logging.h"
 #include "base/memory/scoped_ptr.h"
@@ -22,13 +24,6 @@
 #include "base/win/windows_version.h"
 
 namespace {
-
-// TODO(gab): These definitions are temporary and should be removed once the
-// win8 SDK defines them.
-DEFINE_PROPERTYKEY(PKEY_AppUserModel_DualMode, 0x9F4C2855, 0x9F79,
-                   0x4B39, 0xA8, 0xD0, 0xE1, 0xD4, 0x2D, 0xE1, 0xD5, 0xF3, 11);
-DEFINE_PROPERTYKEY(PKEY_AppUserModel_DualMode_UK, 0x9F4C2855, 0x9F79,
-                   0x4B39, 0xA8, 0xD0, 0xE1, 0xD4, 0x2D, 0xE1, 0xD5, 0xF3, 18);
 
 // Sets the value of |property_key| to |property_value| in |property_store|.
 // Clears the PropVariant contained in |property_value|.
@@ -44,6 +39,10 @@ bool SetPropVariantValueForPropertyStore(
 
   PropVariantClear(property_value);
   return SUCCEEDED(result);
+}
+
+void __cdecl ForceCrashOnSigAbort(int) {
+  *((int*)0) = 0x1337;
 }
 
 }  // namespace
@@ -139,18 +138,6 @@ bool SetBooleanValueForPropertyStore(IPropertyStore* property_store,
                                              &property_value);
 }
 
-bool SetUInt32ValueForPropertyStore(IPropertyStore* property_store,
-                                    const PROPERTYKEY& property_key,
-                                    uint32 property_uint32_value) {
-  PROPVARIANT property_value;
-  if (FAILED(InitPropVariantFromUInt32(property_uint32_value, &property_value)))
-    return false;
-
-  return SetPropVariantValueForPropertyStore(property_store,
-                                             property_key,
-                                             &property_value);
-}
-
 bool SetStringValueForPropertyStore(IPropertyStore* property_store,
                                     const PROPERTYKEY& property_key,
                                     const wchar_t* property_string_value) {
@@ -173,19 +160,6 @@ bool SetAppIdForPropertyStore(IPropertyStore* property_store,
   return SetStringValueForPropertyStore(property_store,
                                         PKEY_AppUserModel_ID,
                                         app_id);
-}
-
-bool SetDualModeForPropertyStore(IPropertyStore* property_store,
-                                 bool is_dual_mode) {
-  return SetBooleanValueForPropertyStore(property_store,
-                                         PKEY_AppUserModel_DualMode,
-                                         is_dual_mode) &&
-         // TODO (gab): This property no longer exists in the final Win8 release
-         // and should be deleted from all shortcuts as it could interfere with
-         // a future (Win9+) property.
-         SetUInt32ValueForPropertyStore(property_store,
-                                        PKEY_AppUserModel_DualMode_UK,
-                                        is_dual_mode ? 1U : 0U);
 }
 
 static const char16 kAutoRunKeyPath[] =
@@ -218,6 +192,19 @@ bool ShouldCrashOnProcessDetach() {
   return g_crash_on_process_detach;
 }
 
+void SetAbortBehaviorForCrashReporting() {
+  // Prevent CRT's abort code from prompting a dialog or trying to "report" it.
+  // Disabling the _CALL_REPORTFAULT behavior is important since otherwise it
+  // has the sideffect of clearing our exception filter, which means we
+  // don't get any crash.
+  _set_abort_behavior(0, _WRITE_ABORT_MSG | _CALL_REPORTFAULT);
+
+  // Set a SIGABRT handler for good measure. We will crash even if the default
+  // is left in place, however this allows us to crash earlier. And it also
+  // lets us crash in response to code which might directly call raise(SIGABRT)
+  signal(SIGABRT, ForceCrashOnSigAbort);
+}
+
 bool IsMachineATablet() {
   if (base::win::GetVersion() < base::win::VERSION_WIN7)
     return false;
@@ -228,7 +215,10 @@ bool IsMachineATablet() {
   if ((sm & kMultiTouch) == kMultiTouch) {
     int cx = GetSystemMetrics(SM_CXSCREEN);
     int cy = GetSystemMetrics(SM_CYSCREEN);
-    return cx <= kMaxTabletScreenWidth && cy <= kMaxTabletScreenHeight;
+    // Handle landscape and portrait modes.
+    return cx > cy ?
+        (cx <= kMaxTabletScreenWidth && cy <= kMaxTabletScreenHeight) :
+        (cy <= kMaxTabletScreenWidth && cx <= kMaxTabletScreenHeight);
   }
   return false;
 }

@@ -8,13 +8,13 @@
 #include "base/command_line.h"
 #include "base/i18n/time_formatting.h"
 #include "base/metrics/histogram.h"
+#include "base/prefs/public/pref_member.h"
 #include "base/string_split.h"
 #include "base/string_util.h"
 #include "base/utf_string_conversions.h"
-#include "chrome/browser/api/prefs/pref_member.h"
 #include "chrome/browser/browser_process.h"
-#include "chrome/browser/chromeos/display/display_preferences.h"
-#include "chrome/browser/chromeos/gdata/drive_file_system_util.h"
+#include "chrome/browser/chromeos/drive/drive_file_system_util.h"
+#include "chrome/browser/chromeos/input_method/input_method_configuration.h"
 #include "chrome/browser/chromeos/input_method/input_method_manager.h"
 #include "chrome/browser/chromeos/input_method/input_method_util.h"
 #include "chrome/browser/chromeos/input_method/xkeyboard.h"
@@ -30,10 +30,9 @@
 #include "chrome/common/chrome_notification_types.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/common/pref_names.h"
-#include "content/public/browser/notification_details.h"
-#include "content/public/browser/notification_source.h"
 #include "googleurl/src/gurl.h"
 #include "ui/base/events/event_constants.h"
+#include "ui/base/events/event_utils.h"
 #include "unicode/timezone.h"
 
 namespace chromeos {
@@ -42,16 +41,14 @@ static const char kFallbackInputMethodLocale[] = "en-US";
 
 Preferences::Preferences()
     : prefs_(NULL),
-      input_method_manager_(input_method::InputMethodManager::GetInstance()) {
+      input_method_manager_(input_method::GetInputMethodManager()) {
 }
 
 Preferences::Preferences(input_method::InputMethodManager* input_method_manager)
     : input_method_manager_(input_method_manager) {
 }
 
-Preferences::~Preferences() {
-  prefs_->RemoveObserver(this);
-}
+Preferences::~Preferences() {}
 
 // static
 void Preferences::RegisterUserPrefs(PrefService* prefs) {
@@ -59,7 +56,7 @@ void Preferences::RegisterUserPrefs(PrefService* prefs) {
   // TODO(yusukes): Remove the runtime hack.
   if (base::chromeos::IsRunningOnChromeOS()) {
     input_method::InputMethodManager* manager =
-        input_method::InputMethodManager::GetInstance();
+        input_method::GetInputMethodManager();
     if (manager) {
       hardware_keyboard_id =
           manager->GetInputMethodUtil()->GetHardwareInputMethodId();
@@ -71,7 +68,13 @@ void Preferences::RegisterUserPrefs(PrefService* prefs) {
   prefs->RegisterBooleanPref(prefs::kTapToClickEnabled,
                              true,
                              PrefService::SYNCABLE_PREF);
+  prefs->RegisterBooleanPref(prefs::kTapDraggingEnabled,
+                             false,
+                             PrefService::SYNCABLE_PREF);
   prefs->RegisterBooleanPref(prefs::kEnableTouchpadThreeFingerClick,
+                             false,
+                             PrefService::UNSYNCABLE_PREF);
+  prefs->RegisterBooleanPref(prefs::kEnableTouchpadThreeFingerSwipe,
                              false,
                              PrefService::UNSYNCABLE_PREF);
   prefs->RegisterBooleanPref(
@@ -104,6 +107,17 @@ void Preferences::RegisterUserPrefs(PrefService* prefs) {
   if (prefs->FindPreference(prefs::kScreenMagnifierEnabled) == NULL) {
     prefs->RegisterBooleanPref(prefs::kScreenMagnifierEnabled,
                                false,
+                               PrefService::SYNCABLE_PREF);
+  }
+  if (prefs->FindPreference(prefs::kScreenMagnifierScale) == NULL) {
+    prefs->RegisterDoublePref(prefs::kScreenMagnifierScale,
+                              std::numeric_limits<double>::min(),
+                              PrefService::UNSYNCABLE_PREF);
+  }
+  if (prefs->FindPreference(prefs::kShouldAlwaysShowAccessibilityMenu) ==
+      NULL) {
+    prefs->RegisterBooleanPref(prefs::kShouldAlwaysShowAccessibilityMenu,
+                               false,
                                PrefService::UNSYNCABLE_PREF);
   }
   if (prefs->FindPreference(prefs::kVirtualKeyboardEnabled) == NULL) {
@@ -120,13 +134,13 @@ void Preferences::RegisterUserPrefs(PrefService* prefs) {
   prefs->RegisterBooleanPref(prefs::kUse24HourClock,
                              base::GetHourClockType() == base::k24HourClock,
                              PrefService::SYNCABLE_PREF);
-  prefs->RegisterBooleanPref(prefs::kDisableGData,
+  prefs->RegisterBooleanPref(prefs::kDisableDrive,
                              false,
                              PrefService::SYNCABLE_PREF);
-  prefs->RegisterBooleanPref(prefs::kDisableGDataOverCellular,
+  prefs->RegisterBooleanPref(prefs::kDisableDriveOverCellular,
                              true,
                              PrefService::SYNCABLE_PREF);
-  prefs->RegisterBooleanPref(prefs::kDisableGDataHostedFiles,
+  prefs->RegisterBooleanPref(prefs::kDisableDriveHostedFiles,
                              false,
                              PrefService::SYNCABLE_PREF);
   // We don't sync prefs::kLanguageCurrentInputMethod and PreviousInputMethod
@@ -260,13 +274,15 @@ void Preferences::RegisterUserPrefs(PrefService* prefs) {
                             "0.0.0.0",
                             PrefService::SYNCABLE_PREF);
 
-  // OAuth1 all access token and secret pair.
-  prefs->RegisterStringPref(prefs::kOAuth1Token,
-                            "",
-                            PrefService::UNSYNCABLE_PREF);
-  prefs->RegisterStringPref(prefs::kOAuth1Secret,
-                            "",
-                            PrefService::UNSYNCABLE_PREF);
+  if (CommandLine::ForCurrentProcess()->HasSwitch(switches::kForceOAuth1)) {
+    // Legacy OAuth1 all access token and secret pair.
+    prefs->RegisterStringPref(prefs::kOAuth1Token,
+                              "",
+                              PrefService::UNSYNCABLE_PREF);
+    prefs->RegisterStringPref(prefs::kOAuth1Secret,
+                              "",
+                              PrefService::UNSYNCABLE_PREF);
+  }
 
   // TODO(wad): Once UI is connected, a final default can be set. At that point
   // change this pref from UNSYNCABLE to SYNCABLE.
@@ -277,95 +293,101 @@ void Preferences::RegisterUserPrefs(PrefService* prefs) {
   prefs->RegisterBooleanPref(prefs::kExternalStorageDisabled,
                              false,
                              PrefService::UNSYNCABLE_PREF);
-
-  RegisterDisplayPrefs(prefs);
 }
 
 void Preferences::InitUserPrefs(PrefService* prefs) {
   prefs_ = prefs;
 
-  tap_to_click_enabled_.Init(prefs::kTapToClickEnabled, prefs, this);
+  BooleanPrefMember::NamedChangeCallback callback =
+      base::Bind(&Preferences::OnPreferenceChanged, base::Unretained(this));
+
+  tap_to_click_enabled_.Init(prefs::kTapToClickEnabled, prefs, callback);
+  tap_dragging_enabled_.Init(prefs::kTapDraggingEnabled, prefs, callback);
   three_finger_click_enabled_.Init(prefs::kEnableTouchpadThreeFingerClick,
-      prefs, this);
-  natural_scroll_.Init(prefs::kNaturalScroll, prefs, this);
-  accessibility_enabled_.Init(prefs::kSpokenFeedbackEnabled, prefs, this);
-  mouse_sensitivity_.Init(prefs::kMouseSensitivity, prefs, this);
-  touchpad_sensitivity_.Init(prefs::kTouchpadSensitivity, prefs, this);
-  use_24hour_clock_.Init(prefs::kUse24HourClock, prefs, this);
-  disable_drive_.Init(prefs::kDisableGData, prefs, this);
-  disable_drive_over_cellular_.Init(prefs::kDisableGDataOverCellular,
-                                   prefs, this);
-  disable_drive_hosted_files_.Init(prefs::kDisableGDataHostedFiles,
-                                   prefs, this);
+      prefs, callback);
+  three_finger_swipe_enabled_.Init(prefs::kEnableTouchpadThreeFingerSwipe,
+      prefs, callback);
+  natural_scroll_.Init(prefs::kNaturalScroll, prefs, callback);
+  accessibility_enabled_.Init(prefs::kSpokenFeedbackEnabled, prefs, callback);
+  screen_magnifier_enabled_.Init(prefs::kScreenMagnifierEnabled,
+                                 prefs, callback);
+  screen_magnifier_scale_.Init(prefs::kScreenMagnifierScale, prefs, callback);
+  mouse_sensitivity_.Init(prefs::kMouseSensitivity, prefs, callback);
+  touchpad_sensitivity_.Init(prefs::kTouchpadSensitivity, prefs, callback);
+  use_24hour_clock_.Init(prefs::kUse24HourClock, prefs, callback);
+  disable_drive_.Init(prefs::kDisableDrive, prefs, callback);
+  disable_drive_over_cellular_.Init(prefs::kDisableDriveOverCellular,
+                                   prefs, callback);
+  disable_drive_hosted_files_.Init(prefs::kDisableDriveHostedFiles,
+                                   prefs, callback);
   download_default_directory_.Init(prefs::kDownloadDefaultDirectory,
-                                   prefs, this);
+                                   prefs, callback);
   primary_mouse_button_right_.Init(prefs::kPrimaryMouseButtonRight,
-                                   prefs, this);
+                                   prefs, callback);
   preferred_languages_.Init(prefs::kLanguagePreferredLanguages,
-                            prefs, this);
-  preload_engines_.Init(prefs::kLanguagePreloadEngines, prefs, this);
+                            prefs, callback);
+  preload_engines_.Init(prefs::kLanguagePreloadEngines, prefs, callback);
   filtered_extension_imes_.Init(prefs::kLanguageFilteredExtensionImes,
-                                prefs, this);
-  current_input_method_.Init(prefs::kLanguageCurrentInputMethod, prefs, this);
-  previous_input_method_.Init(prefs::kLanguagePreviousInputMethod, prefs, this);
+                                prefs, callback);
+  current_input_method_.Init(prefs::kLanguageCurrentInputMethod,
+                             prefs, callback);
+  previous_input_method_.Init(prefs::kLanguagePreviousInputMethod,
+                              prefs, callback);
 
   for (size_t i = 0; i < language_prefs::kNumChewingBooleanPrefs; ++i) {
     chewing_boolean_prefs_[i].Init(
-        language_prefs::kChewingBooleanPrefs[i].pref_name, prefs, this);
+        language_prefs::kChewingBooleanPrefs[i].pref_name, prefs, callback);
   }
   for (size_t i = 0; i < language_prefs::kNumChewingMultipleChoicePrefs; ++i) {
     chewing_multiple_choice_prefs_[i].Init(
-        language_prefs::kChewingMultipleChoicePrefs[i].pref_name, prefs, this);
+        language_prefs::kChewingMultipleChoicePrefs[i].pref_name,
+        prefs, callback);
   }
   chewing_hsu_sel_key_type_.Init(
-      language_prefs::kChewingHsuSelKeyType.pref_name, prefs, this);
+      language_prefs::kChewingHsuSelKeyType.pref_name, prefs, callback);
   for (size_t i = 0; i < language_prefs::kNumChewingIntegerPrefs; ++i) {
     chewing_integer_prefs_[i].Init(
-        language_prefs::kChewingIntegerPrefs[i].pref_name, prefs, this);
+        language_prefs::kChewingIntegerPrefs[i].pref_name, prefs, callback);
   }
-  hangul_keyboard_.Init(prefs::kLanguageHangulKeyboard, prefs, this);
+  hangul_keyboard_.Init(prefs::kLanguageHangulKeyboard, prefs, callback);
   hangul_hanja_binding_keys_.Init(
-      prefs::kLanguageHangulHanjaBindingKeys, prefs, this);
+      prefs::kLanguageHangulHanjaBindingKeys, prefs, callback);
   for (size_t i = 0; i < language_prefs::kNumPinyinBooleanPrefs; ++i) {
     pinyin_boolean_prefs_[i].Init(
-        language_prefs::kPinyinBooleanPrefs[i].pref_name, prefs, this);
+        language_prefs::kPinyinBooleanPrefs[i].pref_name, prefs, callback);
   }
   for (size_t i = 0; i < language_prefs::kNumPinyinIntegerPrefs; ++i) {
     pinyin_int_prefs_[i].Init(
-        language_prefs::kPinyinIntegerPrefs[i].pref_name, prefs, this);
+        language_prefs::kPinyinIntegerPrefs[i].pref_name, prefs, callback);
   }
   pinyin_double_pinyin_schema_.Init(
-      language_prefs::kPinyinDoublePinyinSchema.pref_name, prefs, this);
+      language_prefs::kPinyinDoublePinyinSchema.pref_name, prefs, callback);
   for (size_t i = 0; i < language_prefs::kNumMozcBooleanPrefs; ++i) {
     mozc_boolean_prefs_[i].Init(
-        language_prefs::kMozcBooleanPrefs[i].pref_name, prefs, this);
+        language_prefs::kMozcBooleanPrefs[i].pref_name, prefs, callback);
   }
   for (size_t i = 0; i < language_prefs::kNumMozcMultipleChoicePrefs; ++i) {
     mozc_multiple_choice_prefs_[i].Init(
-        language_prefs::kMozcMultipleChoicePrefs[i].pref_name, prefs, this);
+        language_prefs::kMozcMultipleChoicePrefs[i].pref_name, prefs, callback);
   }
   for (size_t i = 0; i < language_prefs::kNumMozcIntegerPrefs; ++i) {
     mozc_integer_prefs_[i].Init(
-        language_prefs::kMozcIntegerPrefs[i].pref_name, prefs, this);
+        language_prefs::kMozcIntegerPrefs[i].pref_name, prefs, callback);
   }
   xkb_auto_repeat_enabled_.Init(
-      prefs::kLanguageXkbAutoRepeatEnabled, prefs, this);
+      prefs::kLanguageXkbAutoRepeatEnabled, prefs, callback);
   xkb_auto_repeat_delay_pref_.Init(
-      prefs::kLanguageXkbAutoRepeatDelay, prefs, this);
+      prefs::kLanguageXkbAutoRepeatDelay, prefs, callback);
   xkb_auto_repeat_interval_pref_.Init(
-      prefs::kLanguageXkbAutoRepeatInterval, prefs, this);
+      prefs::kLanguageXkbAutoRepeatInterval, prefs, callback);
 
-  enable_screen_lock_.Init(prefs::kEnableScreenLock, prefs, this);
+  enable_screen_lock_.Init(prefs::kEnableScreenLock, prefs, callback);
 
-  enable_drm_.Init(prefs::kEnableCrosDRM, prefs, this);
+  enable_drm_.Init(prefs::kEnableCrosDRM, prefs, callback);
 }
 
 void Preferences::Init(PrefService* prefs) {
   InitUserPrefs(prefs);
-
-  // This causes OnIsSyncingChanged to be called when the value of
-  // PrefService::IsSyncing() changes.
-  prefs->AddObserver(this);
 
   // Initialize preferences to currently saved state.
   NotifyPrefChanged(NULL);
@@ -375,8 +397,6 @@ void Preferences::Init(PrefService* prefs) {
   if (CommandLine::ForCurrentProcess()->HasSwitch(switches::kGuestSession)) {
     LoginUtils::Get()->SetFirstLoginPrefs(prefs);
   }
-
-  NotifyDisplayPrefChanged(prefs);
 }
 
 void Preferences::InitUserPrefsForTesting(PrefService* prefs) {
@@ -387,11 +407,8 @@ void Preferences::SetInputMethodListForTesting() {
   SetInputMethodList();
 }
 
-void Preferences::Observe(int type,
-                          const content::NotificationSource& source,
-                          const content::NotificationDetails& details) {
-  if (type == chrome::NOTIFICATION_PREF_CHANGED)
-    NotifyPrefChanged(content::Details<std::string>(details).ptr());
+void Preferences::OnPreferenceChanged(const std::string& pref_name) {
+  NotifyPrefChanged(&pref_name);
 }
 
 void Preferences::NotifyPrefChanged(const std::string* pref_name) {
@@ -410,6 +427,14 @@ void Preferences::NotifyPrefChanged(const std::string* pref_name) {
         prefs->SetBoolean(prefs::kOwnerTapToClickEnabled, enabled);
     }
   }
+  if (!pref_name || *pref_name == prefs::kTapDraggingEnabled) {
+    const bool enabled = tap_dragging_enabled_.GetValue();
+    system::touchpad_settings::SetTapDragging(enabled);
+    if (pref_name)
+      UMA_HISTOGRAM_BOOLEAN("Touchpad.TapDragging.Changed", enabled);
+    else
+      UMA_HISTOGRAM_BOOLEAN("Touchpad.TapDragging.Started", enabled);
+  }
   if (!pref_name || *pref_name == prefs::kEnableTouchpadThreeFingerClick) {
     const bool enabled = three_finger_click_enabled_.GetValue();
     system::touchpad_settings::SetThreeFingerClick(enabled);
@@ -418,12 +443,28 @@ void Preferences::NotifyPrefChanged(const std::string* pref_name) {
     else
       UMA_HISTOGRAM_BOOLEAN("Touchpad.ThreeFingerClick.Started", enabled);
   }
+  if (!pref_name || *pref_name == prefs::kEnableTouchpadThreeFingerSwipe) {
+    const bool enabled = three_finger_swipe_enabled_.GetValue();
+    system::touchpad_settings::SetThreeFingerSwipe(enabled);
+    if (pref_name)
+      UMA_HISTOGRAM_BOOLEAN("Touchpad.ThreeFingerSwipe.Changed", enabled);
+    else
+      UMA_HISTOGRAM_BOOLEAN("Touchpad.ThreeFingerSwipe.Started", enabled);
+  }
   if (!pref_name || *pref_name == prefs::kNaturalScroll) {
-    // Force natural scroll default if we've sync'd and if the cmd line arg is
-    // set.
-    ForceNaturalScrollDefault();
+    // Force natural scroll to on if kNaturalScrollDefault is specified on the
+    // cmd line.
+    if (CommandLine::ForCurrentProcess()->HasSwitch(
+            switches::kNaturalScrollDefault) &&
+        !pref_name &&
+        !prefs_->GetUserPrefValue(prefs::kNaturalScroll)) {
+      natural_scroll_.SetValue(true);
+      DVLOG(1) << "Natural scroll forced to true";
+      UMA_HISTOGRAM_BOOLEAN("Touchpad.NaturalScroll.Forced", true);
+    }
 
     const bool enabled = natural_scroll_.GetValue();
+    DVLOG(1) << "Natural scroll set to " << enabled;
     ui::SetNaturalScroll(enabled);
     if (pref_name)
       UMA_HISTOGRAM_BOOLEAN("Touchpad.NaturalScroll.Changed", enabled);
@@ -468,7 +509,7 @@ void Preferences::NotifyPrefChanged(const std::string* pref_name) {
     }
   }
   if (!pref_name || *pref_name == prefs::kDownloadDefaultDirectory) {
-    const bool default_download_to_drive = gdata::util::IsUnderDriveMountPoint(
+    const bool default_download_to_drive = drive::util::IsUnderDriveMountPoint(
         download_default_directory_.GetValue());
     if (pref_name)
       UMA_HISTOGRAM_BOOLEAN(
@@ -625,33 +666,16 @@ void Preferences::NotifyPrefChanged(const std::string* pref_name) {
     system::ToggleDrm(enable_drm_.GetValue());
   }
 
-  // Change the download directory to the default value if a GData directory is
-  // selected and GData is disabled.
-  if (!pref_name || *pref_name == prefs::kDisableGData) {
+  // Change the download directory to the default value if a Drive directory is
+  // selected and Drive is disabled.
+  if (!pref_name || *pref_name == prefs::kDisableDrive) {
     if (disable_drive_.GetValue()) {
-      if (gdata::util::IsUnderDriveMountPoint(
+      if (drive::util::IsUnderDriveMountPoint(
           download_default_directory_.GetValue())) {
         prefs_->SetFilePath(prefs::kDownloadDefaultDirectory,
                             download_util::GetDefaultDownloadDirectory());
       }
     }
-  }
-}
-
-void Preferences::OnIsSyncingChanged() {
-  DVLOG(1) << "OnIsSyncingChanged";
-  ForceNaturalScrollDefault();
-}
-
-void Preferences::ForceNaturalScrollDefault() {
-  DVLOG(1) << "ForceNaturalScrollDefault";
-  if (CommandLine::ForCurrentProcess()->HasSwitch(
-          switches::kNaturalScrollDefault) &&
-      prefs_->IsSyncing() &&
-      !prefs_->GetUserPrefValue(prefs::kNaturalScroll)) {
-    DVLOG(1) << "Natural scroll forced to true";
-    natural_scroll_.SetValue(true);
-    UMA_HISTOGRAM_BOOLEAN("Touchpad.NaturalScroll.Forced", true);
   }
 }
 

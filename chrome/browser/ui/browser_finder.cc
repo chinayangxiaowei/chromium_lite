@@ -8,14 +8,11 @@
 #include "chrome/browser/ui/browser_list.h"
 #include "chrome/browser/ui/browser_list_impl.h"
 #include "chrome/browser/ui/browser_window.h"
-#include "chrome/browser/ui/tab_contents/tab_contents.h"
 #include "chrome/browser/ui/tab_contents/tab_contents_iterator.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "content/public/browser/navigation_controller.h"
 
 using content::WebContents;
-
-namespace browser {
 
 namespace {
 
@@ -127,29 +124,44 @@ size_t GetBrowserCountImpl(Profile* profile,
 
 }  // namespace
 
-Browser* FindTabbedBrowser(Profile* profile, bool match_original_profiles) {
+namespace browser {
+
+Browser* FindTabbedBrowser(Profile* profile,
+                           bool match_original_profiles,
+                           chrome::HostDesktopType type) {
   return FindBrowserWithTabbedOrAnyType(profile,
-                                        kDefaultHostDesktopType,
+                                        type,
                                         true,
                                         match_original_profiles);
 }
 
-Browser* FindOrCreateTabbedBrowser(Profile* profile) {
-  Browser* browser = FindTabbedBrowser(profile, false);
+Browser* FindOrCreateTabbedBrowserDeprecated(Profile* profile) {
+  return FindOrCreateTabbedBrowser(profile, chrome::HOST_DESKTOP_TYPE_NATIVE);
+}
+
+Browser* FindOrCreateTabbedBrowser(Profile* profile,
+                                   chrome::HostDesktopType type) {
+  Browser* browser = FindTabbedBrowser(profile, false, type);
   if (!browser)
-    browser = new Browser(Browser::CreateParams(profile));
+    browser = new Browser(Browser::CreateParams(profile, type));
   return browser;
 }
 
-Browser* FindAnyBrowser(Profile* profile, bool match_original_profiles) {
+}  // namespace browser
+
+namespace chrome {
+
+Browser* FindAnyBrowser(Profile* profile,
+                        bool match_original_profiles,
+                        HostDesktopType type) {
   return FindBrowserWithTabbedOrAnyType(profile,
-                                        kDefaultHostDesktopType,
+                                        type,
                                         false,
                                         match_original_profiles);
 }
 
 Browser* FindBrowserWithProfile(Profile* profile,
-                                chrome::HostDesktopType desktop_type) {
+                                HostDesktopType desktop_type) {
   return FindBrowserWithTabbedOrAnyType(profile, desktop_type, false, false);
 }
 
@@ -175,23 +187,28 @@ Browser* FindBrowserWithWindow(gfx::NativeWindow window) {
 Browser* FindBrowserWithWebContents(const WebContents* web_contents) {
   DCHECK(web_contents);
   for (TabContentsIterator it; !it.done(); ++it) {
-    if (it->web_contents() == web_contents)
+    if (*it == web_contents)
       return it.browser();
   }
   return NULL;
 }
 
-Browser* FindLastActiveWithProfile(Profile* profile) {
-  // We are only interested in last active browsers, so we don't fall back to
-  // all browsers like FindBrowserWith* do.
-  return FindBrowserMatching(
-      BrowserList::begin_last_active(), BrowserList::end_last_active(), profile,
-      Browser::FEATURE_NONE, kMatchAny);
+chrome::HostDesktopType FindHostDesktopTypeForWebContents(
+    const WebContents* web_contents) {
+  Browser* browser = FindBrowserWithWebContents(web_contents);
+  return browser ? browser->host_desktop_type() : HOST_DESKTOP_TYPE_NATIVE;
 }
 
-Browser* FindLastActiveWithHostDesktopType(chrome::HostDesktopType type) {
-  chrome::BrowserListImpl* browser_list_impl =
-      chrome::BrowserListImpl::GetInstance(type);
+Browser* FindLastActiveWithProfile(Profile* profile, HostDesktopType type) {
+  BrowserListImpl* list = BrowserListImpl::GetInstance(type);
+  // We are only interested in last active browsers, so we don't fall back to
+  // all browsers like FindBrowserWith* do.
+  return FindBrowserMatching(list->begin_last_active(), list->end_last_active(),
+                             profile, Browser::FEATURE_NONE, kMatchAny);
+}
+
+Browser* FindLastActiveWithHostDesktopType(HostDesktopType type) {
+  BrowserListImpl* browser_list_impl = BrowserListImpl::GetInstance(type);
   if (browser_list_impl)
     return browser_list_impl->GetLastActive();
   return NULL;
@@ -205,4 +222,4 @@ size_t GetTabbedBrowserCount(Profile* profile) {
   return GetBrowserCountImpl(profile, kDefaultHostDesktopType, kMatchTabbed);
 }
 
-}  // namespace browser
+}  // namespace chrome

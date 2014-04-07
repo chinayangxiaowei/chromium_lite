@@ -19,7 +19,7 @@
 #include "sync/notifier/fake_invalidation_handler.h"
 #include "sync/notifier/fake_invalidator.h"
 #include "sync/notifier/invalidator_test_template.h"
-#include "sync/notifier/object_id_state_map_test_util.h"
+#include "sync/notifier/object_id_invalidation_map_test_util.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
@@ -38,7 +38,7 @@ class BridgedInvalidatorTestDelegate {
         bridge_(&mock_profile_, ui_loop_.message_loop_proxy()),
         fake_delegate_(NULL) {
     // Pump |ui_loop_| to fully initialize |bridge_|.
-    ui_loop_.RunAllPending();
+    ui_loop_.RunUntilIdle();
   }
 
   ~BridgedInvalidatorTestDelegate() {
@@ -72,7 +72,7 @@ class BridgedInvalidatorTestDelegate {
     invalidator_.reset();
     fake_delegate_ = NULL;
     bridge_.StopForShutdown();
-    ui_loop_.RunAllPending();
+    ui_loop_.RunUntilIdle();
   }
 
   void WaitForInvalidator() {
@@ -84,9 +84,9 @@ class BridgedInvalidatorTestDelegate {
   }
 
   void TriggerOnIncomingInvalidation(
-      const syncer::ObjectIdStateMap& id_state_map,
+      const syncer::ObjectIdInvalidationMap& invalidation_map,
       syncer::IncomingInvalidationSource source) {
-    fake_delegate_->EmitOnIncomingInvalidation(id_state_map, source);
+    fake_delegate_->EmitOnIncomingInvalidation(invalidation_map, source);
   }
 
   static bool InvalidatorHandlesDeprecatedState() {
@@ -170,11 +170,11 @@ TEST_F(BridgedInvalidatorTest, SendInvalidation) {
   syncer::ObjectIdSet ids;
   ids.insert(invalidation::ObjectId(1, "id1"));
   ids.insert(invalidation::ObjectId(2, "id2"));
-  const syncer::ObjectIdStateMap& id_state_map =
-      syncer::ObjectIdSetToStateMap(ids, "payload");
-  delegate_.GetInvalidator()->SendInvalidation(id_state_map);
-  EXPECT_THAT(id_state_map,
-              Eq(delegate_.GetFakeDelegate()->GetLastSentIdStateMap()));
+  const syncer::ObjectIdInvalidationMap& invalidation_map =
+      syncer::ObjectIdSetToInvalidationMap(ids, "payload");
+  delegate_.GetInvalidator()->SendInvalidation(invalidation_map);
+  EXPECT_THAT(invalidation_map,
+              Eq(delegate_.GetFakeDelegate()->GetLastSentInvalidationMap()));
 }
 
 }  // namespace

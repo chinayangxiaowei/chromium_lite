@@ -4,13 +4,13 @@
 
 #include "chromeos/dbus/mock_dbus_thread_manager.h"
 
+#include "chromeos/dbus/dbus_thread_manager_observer.h"
 #include "chromeos/dbus/mock_bluetooth_adapter_client.h"
 #include "chromeos/dbus/mock_bluetooth_device_client.h"
 #include "chromeos/dbus/mock_bluetooth_input_client.h"
 #include "chromeos/dbus/mock_bluetooth_manager_client.h"
 #include "chromeos/dbus/mock_bluetooth_node_client.h"
 #include "chromeos/dbus/mock_bluetooth_out_of_band_client.h"
-#include "chromeos/dbus/mock_cashew_client.h"
 #include "chromeos/dbus/mock_cros_disks_client.h"
 #include "chromeos/dbus/mock_cryptohome_client.h"
 #include "chromeos/dbus/mock_debug_daemon_client.h"
@@ -23,10 +23,10 @@
 #include "chromeos/dbus/mock_gsm_sms_client.h"
 #include "chromeos/dbus/mock_image_burner_client.h"
 #include "chromeos/dbus/mock_introspectable_client.h"
-#include "chromeos/dbus/mock_media_transfer_protocol_daemon_client.h"
 #include "chromeos/dbus/mock_modem_messaging_client.h"
 #include "chromeos/dbus/mock_permission_broker_client.h"
 #include "chromeos/dbus/mock_power_manager_client.h"
+#include "chromeos/dbus/mock_root_power_manager_client.h"
 #include "chromeos/dbus/mock_session_manager_client.h"
 #include "chromeos/dbus/mock_sms_client.h"
 #include "chromeos/dbus/mock_speech_synthesizer_client.h"
@@ -46,7 +46,6 @@ MockDBusThreadManager::MockDBusThreadManager()
       mock_bluetooth_manager_client_(new MockBluetoothManagerClient),
       mock_bluetooth_node_client_(new MockBluetoothNodeClient),
       mock_bluetooth_out_of_band_client_(new MockBluetoothOutOfBandClient),
-      mock_cashew_client_(new MockCashewClient),
       mock_cros_disks_client_(new MockCrosDisksClient),
       mock_cryptohome_client_(new MockCryptohomeClient),
       mock_debugdaemon_client_(new MockDebugDaemonClient),
@@ -59,11 +58,10 @@ MockDBusThreadManager::MockDBusThreadManager()
       mock_gsm_sms_client_(new MockGsmSMSClient),
       mock_image_burner_client_(new MockImageBurnerClient),
       mock_introspectable_client_(new MockIntrospectableClient),
-      mock_media_transfer_protocol_daemon_client_(
-          new MockMediaTransferProtocolDaemonClient),
       mock_modem_messaging_client_(new MockModemMessagingClient),
       mock_permission_broker_client_(new MockPermissionBrokerClient),
       mock_power_manager_client_(new MockPowerManagerClient),
+      mock_root_power_manager_client_(new MockRootPowerManagerClient),
       mock_session_manager_client_(new MockSessionManagerClient),
       mock_sms_client_(new MockSMSClient),
       mock_speech_synthesizer_client_(new MockSpeechSynthesizerClient),
@@ -80,8 +78,6 @@ MockDBusThreadManager::MockDBusThreadManager()
       .WillRepeatedly(Return(mock_bluetooth_node_client_.get()));
   EXPECT_CALL(*this, GetBluetoothOutOfBandClient())
       .WillRepeatedly(Return(mock_bluetooth_out_of_band_client_.get()));
-  EXPECT_CALL(*this, GetCashewClient())
-      .WillRepeatedly(Return(mock_cashew_client()));
   EXPECT_CALL(*this, GetCrosDisksClient())
       .WillRepeatedly(Return(mock_cros_disks_client()));
   EXPECT_CALL(*this, GetCryptohomeClient())
@@ -106,12 +102,12 @@ MockDBusThreadManager::MockDBusThreadManager()
       .WillRepeatedly(Return(mock_image_burner_client()));
   EXPECT_CALL(*this, GetIntrospectableClient())
       .WillRepeatedly(Return(mock_introspectable_client()));
-  EXPECT_CALL(*this, GetMediaTransferProtocolDaemonClient())
-      .WillRepeatedly(Return(mock_media_transfer_protocol_daemon_client()));
   EXPECT_CALL(*this, GetModemMessagingClient())
       .WillRepeatedly(Return(mock_modem_messaging_client()));
   EXPECT_CALL(*this, GetPowerManagerClient())
       .WillRepeatedly(Return(mock_power_manager_client_.get()));
+  EXPECT_CALL(*this, GetRootPowerManagerClient())
+      .WillRepeatedly(Return(mock_root_power_manager_client_.get()));
   EXPECT_CALL(*this, GetSessionManagerClient())
       .WillRepeatedly(Return(mock_session_manager_client_.get()));
   EXPECT_CALL(*this, GetSMSClient())
@@ -128,6 +124,10 @@ MockDBusThreadManager::MockDBusThreadManager()
   EXPECT_CALL(*mock_power_manager_client_.get(), AddObserver(_))
       .Times(AnyNumber());
   EXPECT_CALL(*mock_power_manager_client_.get(), RemoveObserver(_))
+      .Times(AnyNumber());
+  EXPECT_CALL(*mock_root_power_manager_client_.get(), AddObserver(_))
+      .Times(AnyNumber());
+  EXPECT_CALL(*mock_root_power_manager_client_.get(), RemoveObserver(_))
       .Times(AnyNumber());
   EXPECT_CALL(*mock_session_manager_client_.get(), AddObserver(_))
       .Times(AnyNumber());
@@ -182,6 +182,20 @@ MockDBusThreadManager::MockDBusThreadManager()
       .Times(AnyNumber());
 }
 
-MockDBusThreadManager::~MockDBusThreadManager() {}
+MockDBusThreadManager::~MockDBusThreadManager() {
+  FOR_EACH_OBSERVER(DBusThreadManagerObserver, observers_,
+                    OnDBusThreadManagerDestroying(this));
+}
+
+void MockDBusThreadManager::AddObserver(DBusThreadManagerObserver* observer) {
+  DCHECK(observer);
+  observers_.AddObserver(observer);
+}
+
+void MockDBusThreadManager::RemoveObserver(
+    DBusThreadManagerObserver* observer) {
+  DCHECK(observer);
+  observers_.RemoveObserver(observer);
+}
 
 }  // namespace chromeos

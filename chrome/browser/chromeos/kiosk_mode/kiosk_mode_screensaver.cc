@@ -17,6 +17,7 @@
 #include "chrome/browser/chromeos/login/user_manager.h"
 #include "chrome/browser/chromeos/login/webui_login_display_host.h"
 #include "chrome/browser/extensions/extension_service.h"
+#include "chrome/browser/extensions/extension_system.h"
 #include "chrome/browser/extensions/sandboxed_unpacker.h"
 #include "chrome/browser/policy/app_pack_updater.h"
 #include "chrome/browser/policy/browser_policy_connector.h"
@@ -176,12 +177,20 @@ void KioskModeScreensaver::ScreensaverPathCallback(
   if (screensaver_crx.empty())
     return;
 
+  Profile* default_profile = ProfileManager::GetDefaultProfile();
+  if (!default_profile)
+    return;
+  FilePath extensions_dir = extensions::ExtensionSystem::Get(default_profile)->
+      extension_service()->install_directory();
   scoped_refptr<SandboxedUnpacker> screensaver_unpacker(
       new SandboxedUnpacker(
           screensaver_crx,
           true,
           Extension::COMPONENT,
           Extension::NO_FLAGS,
+          extensions_dir,
+          content::BrowserThread::GetMessageLoopProxyForThread(
+              content::BrowserThread::FILE),
           new ScreensaverUnpackerClient(
               screensaver_crx,
               base::Bind(
@@ -211,7 +220,8 @@ void KioskModeScreensaver::SetupScreensaver(
   Profile* default_profile = ProfileManager::GetDefaultProfile();
   // Add the extension to the extension service and display the screensaver.
   if (default_profile) {
-    default_profile->GetExtensionService()->AddExtension(extension);
+    extensions::ExtensionSystem::Get(default_profile)->extension_service()->
+        AddExtension(extension);
     ash::ShowScreensaver(extension->GetFullLaunchURL());
   } else {
     LOG(ERROR) << "Couldn't get default profile. Unable to load screensaver!";
@@ -242,7 +252,7 @@ void KioskModeScreensaver::OnUserActivity() {
     ExistingUserController* controller =
         ExistingUserController::current_controller();
     if (controller && !chromeos::UserManager::Get()->IsUserLoggedIn())
-      controller->LoginAsDemoUser();
+      controller->LoginAsRetailModeUser();
   } else {
     // No default host for the WebUiLoginDisplay means that we're already in the
     // process of logging in - shut down screensaver and do nothing else.

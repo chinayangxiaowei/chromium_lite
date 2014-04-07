@@ -7,18 +7,101 @@
 
 #include "win8/delegate_execute/command_execute_impl.h"
 
+#include <shlguid.h>
+
 #include "base/file_util.h"
 #include "base/path_service.h"
 #include "base/utf_string_conversions.h"
 #include "base/win/registry.h"
 #include "base/win/scoped_co_mem.h"
 #include "base/win/scoped_handle.h"
+#include "base/win/scoped_process_information.h"
 #include "base/win/win_util.h"
 #include "chrome/common/chrome_constants.h"
 #include "chrome/common/chrome_paths.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/installer/util/util_constants.h"
+#include "ui/base/clipboard/clipboard_util_win.h"
 #include "win8/delegate_execute/chrome_util.h"
+#include "win8/delegate_execute/delegate_execute_util.h"
+
+namespace {
+
+// Helper function to retrieve the url from IShellItem interface passed in.
+// Returns S_OK on success.
+HRESULT GetUrlFromShellItem(IShellItem* shell_item, string16* url) {
+  DCHECK(shell_item);
+  DCHECK(url);
+  // First attempt to get the url from the underlying IDataObject if any. This
+  // ensures that we get the full url, i.e. including the anchor.
+  // If we fail to get the underlying IDataObject we retrieve the url via the
+  // IShellItem::GetDisplayName function.
+  CComPtr<IDataObject> object;
+  HRESULT hr = shell_item->BindToHandler(NULL,
+                                         BHID_DataObject,
+                                         IID_IDataObject,
+                                         reinterpret_cast<void**>(&object));
+  if (SUCCEEDED(hr)) {
+    DCHECK(object);
+    if (ui::ClipboardUtil::GetPlainText(object, url))
+      return S_OK;
+  }
+
+  base::win::ScopedCoMem<wchar_t> name;
+  hr = shell_item->GetDisplayName(SIGDN_URL, &name);
+  if (hr != S_OK) {
+    AtlTrace("Failed to get display name\n");
+    return hr;
+  }
+
+  *url = static_cast<const wchar_t*>(name);
+  AtlTrace("Retrieved url from display name %ls\n", url->c_str());
+  return S_OK;
+}
+
+bool LaunchChromeBrowserProcess() {
+  FilePath delegate_exe_path;
+  if (!PathService::Get(base::FILE_EXE, &delegate_exe_path))
+    return false;
+
+  // First try and go up a level to find chrome.exe.
+  FilePath chrome_exe_path =
+      delegate_exe_path.DirName()
+                       .DirName()
+                       .Append(chrome::kBrowserProcessExecutableName);
+  if (!file_util::PathExists(chrome_exe_path)) {
+    // Try looking in the current directory if we couldn't find it one up in
+    // order to support developer installs.
+    chrome_exe_path =
+        delegate_exe_path.DirName()
+                         .Append(chrome::kBrowserProcessExecutableName);
+  }
+
+  if (!file_util::PathExists(chrome_exe_path)) {
+    AtlTrace("Could not locate chrome.exe at: %ls\n",
+             chrome_exe_path.value().c_str());
+    return false;
+  }
+
+  CommandLine cl(chrome_exe_path);
+
+  // Prevent a Chrome window from showing up on the desktop.
+  cl.AppendSwitch(switches::kSilentLaunch);
+
+  // Tell Chrome the IPC channel name to use.
+  // TODO(robertshield): Figure out how to get this name to both the launched
+  // desktop browser process and the resulting activated metro process.
+  cl.AppendSwitchASCII(switches::kViewerConnection, "viewer");
+
+  base::LaunchOptions launch_options;
+  launch_options.start_hidden = true;
+
+  return base::LaunchProcess(cl, launch_options, NULL);
+}
+
+}  // namespace
+
+bool CommandExecuteImpl::path_provider_initialized_ = false;
 
 // CommandExecuteImpl is resposible for activating chrome in Windows 8. The
 // flow is complicated and this tries to highlight the important events.
@@ -60,7 +143,7 @@
 // 7- Windows calls CommandExecuteImpl::Execute()
 //    Here we call GetLaunchMode() which returns the cached answer
 //    computed at step 5c. which can be:
-//    a) ECHUIM_DESKTOP then we call LaunchDestopChrome() that calls
+//    a) ECHUIM_DESKTOP then we call LaunchDesktopChrome() that calls
 //       ::CreateProcess and we exit at this point even on failure.
 //    b) else we call one of the IApplicationActivationManager activation
 //       functions depending on the parameters passed in step 4.
@@ -76,14 +159,20 @@
 // a slow way to start chrome.
 //
 CommandExecuteImpl::CommandExecuteImpl()
-    : integrity_level_(base::INTEGRITY_UNKNOWN),
+    : parameters_(CommandLine::NO_PROGRAM),
       launch_scheme_(INTERNET_SCHEME_DEFAULT),
+      integrity_level_(base::INTEGRITY_UNKNOWN),
       chrome_mode_(ECHUIM_SYSTEM_LAUNCHER) {
   memset(&start_info_, 0, sizeof(start_info_));
   start_info_.cb = sizeof(start_info_);
+
   // We need to query the user data dir of chrome so we need chrome's
-  // path provider.
-  chrome::RegisterPathProvider();
+  // path provider. We can be created multiplie times in a single instance
+  // however so make sure we do this only once.
+  if (!path_provider_initialized_) {
+    chrome::RegisterPathProvider();
+    path_provider_initialized_ = true;
+  }
 }
 
 // CommandExecuteImpl
@@ -94,9 +183,7 @@ STDMETHODIMP CommandExecuteImpl::SetKeyState(DWORD key_state) {
 
 STDMETHODIMP CommandExecuteImpl::SetParameters(LPCWSTR params) {
   AtlTrace("In %hs [%S]\n", __FUNCTION__, params);
-  if (params) {
-    parameters_ = params;
-  }
+  parameters_ = delegate_execute::CommandLineFromParameters(params);
   return S_OK;
 }
 
@@ -137,12 +224,31 @@ STDMETHODIMP CommandExecuteImpl::GetValue(enum AHE_TYPE* pahe) {
     return S_OK;
   }
 
+  if (GetAsyncKeyState(VK_SHIFT) && GetAsyncKeyState(VK_F11)) {
+    AtlTrace("Using Shift-F11 debug hook, returning AHE_IMMERSIVE\n");
+    *pahe = AHE_IMMERSIVE;
+
+#if defined(USE_AURA)
+    // Launch the chrome browser process that metro chrome will connect to.
+    LaunchChromeBrowserProcess();
+#endif
+
+    return S_OK;
+  }
+
+  if (GetAsyncKeyState(VK_SHIFT) && GetAsyncKeyState(VK_F12)) {
+    AtlTrace("Using Shift-F12 debug hook, returning AHE_DESKTOP\n");
+    *pahe = AHE_DESKTOP;
+    return S_OK;
+  }
+
   FilePath user_data_dir;
   if (!PathService::Get(chrome::DIR_USER_DATA, &user_data_dir))  {
     AtlTrace("Failed to get chrome's data dir path, E_FAIL\n");
     return E_FAIL;
   }
 
+  bool decision_made = false;
   HWND chrome_window = ::FindWindowEx(HWND_MESSAGE, NULL,
                                       chrome::kMessageWindowClass,
                                       user_data_dir.value().c_str());
@@ -164,6 +270,7 @@ STDMETHODIMP CommandExecuteImpl::GetValue(enum AHE_TYPE* pahe) {
       AtlTrace("Failed to open chrome's process [%d], E_FAIL\n", chrome_pid);
       return E_FAIL;
     }
+
     if (IsImmersiveProcess(process.Get())) {
       AtlTrace("Chrome [%d] is inmmersive, AHE_IMMERSIVE\n", chrome_pid);
       chrome_mode_ = ECHUIM_IMMERSIVE;
@@ -173,11 +280,20 @@ STDMETHODIMP CommandExecuteImpl::GetValue(enum AHE_TYPE* pahe) {
       chrome_mode_ = ECHUIM_DESKTOP;
       *pahe = AHE_DESKTOP;
     }
-    return S_OK;
+
+    decision_made = true;
   }
 
-  EC_HOST_UI_MODE mode = GetLaunchMode();
-  *pahe = (mode == ECHUIM_DESKTOP) ? AHE_DESKTOP : AHE_IMMERSIVE;
+  if (!decision_made) {
+    EC_HOST_UI_MODE mode = GetLaunchMode();
+    *pahe = (mode == ECHUIM_DESKTOP) ? AHE_DESKTOP : AHE_IMMERSIVE;
+  }
+
+#if defined(USE_AURA)
+  if (*pahe == AHE_IMMERSIVE)
+    LaunchChromeBrowserProcess();
+#endif
+
   return S_OK;
 }
 
@@ -308,14 +424,13 @@ bool CommandExecuteImpl::GetLaunchScheme(
     return false;
   }
 
-  base::win::ScopedCoMem<wchar_t> name;
-  hr = shell_item->GetDisplayName(SIGDN_URL, &name);
-  if (hr != S_OK) {
-    AtlTrace("Failed to get display name\n");
+  hr = GetUrlFromShellItem(shell_item, display_name);
+  if (FAILED(hr)) {
+    AtlTrace("Failed to get url. Error 0x%x\n", hr);
     return false;
   }
 
-  AtlTrace("Display name is [%ls]\n", name);
+  AtlTrace("url [%ls]\n", display_name->c_str());
 
   wchar_t scheme_name[16];
   URL_COMPONENTS components = {0};
@@ -323,13 +438,12 @@ bool CommandExecuteImpl::GetLaunchScheme(
   components.dwSchemeLength = sizeof(scheme_name)/sizeof(scheme_name[0]);
 
   components.dwStructSize = sizeof(components);
-  if (!InternetCrackUrlW(name, 0, 0, &components)) {
-    AtlTrace("Failed to crack url %ls\n", name);
+  if (!InternetCrackUrlW(display_name->c_str(), 0, 0, &components)) {
+    AtlTrace("Failed to crack url %ls\n", display_name->c_str());
     return false;
   }
 
   AtlTrace("Launch scheme is [%ls] (%d)\n", scheme_name, components.nScheme);
-  *display_name = name;
   *scheme = components.nScheme;
   return true;
 }
@@ -352,32 +466,21 @@ HRESULT CommandExecuteImpl::LaunchDesktopChrome() {
       break;
   }
 
-  string16 command_line = L"\"";
-  command_line += chrome_exe_.value();
-  command_line += L"\"";
-
-  if (!parameters_.empty()) {
-    AtlTrace("Adding parameters %ls to command line\n", parameters_.c_str());
-    command_line += L" ";
-    command_line += parameters_.c_str();
-  }
-
-  if (!display_name.empty()) {
-    command_line += L" -- ";
-    command_line += display_name;
-  }
+  CommandLine chrome(
+      delegate_execute::MakeChromeCommandLine(chrome_exe_, parameters_,
+                                              display_name));
+  string16 command_line(chrome.GetCommandLineString());
 
   AtlTrace("Formatted command line is %ls\n", command_line.c_str());
 
-  PROCESS_INFORMATION proc_info = {0};
-  BOOL ret = CreateProcess(NULL, const_cast<LPWSTR>(command_line.c_str()),
+  base::win::ScopedProcessInformation proc_info;
+  BOOL ret = CreateProcess(chrome_exe_.value().c_str(),
+                           const_cast<LPWSTR>(command_line.c_str()),
                            NULL, NULL, FALSE, 0, NULL, NULL, &start_info_,
-                           &proc_info);
+                           proc_info.Receive());
   if (ret) {
-    AtlTrace("Process id is %d\n", proc_info.dwProcessId);
-    AllowSetForegroundWindow(proc_info.dwProcessId);
-    CloseHandle(proc_info.hProcess);
-    CloseHandle(proc_info.hThread);
+    AtlTrace("Process id is %d\n", proc_info.process_id());
+    AllowSetForegroundWindow(proc_info.process_id());
   } else {
     AtlTrace("Process launch failed, error %d\n", ::GetLastError());
   }
@@ -402,14 +505,14 @@ EC_HOST_UI_MODE CommandExecuteImpl::GetLaunchMode() {
     return launch_mode;
   }
 
-  if (parameters_ == ASCIIToWide(switches::kForceImmersive)) {
+  if (parameters_.HasSwitch(switches::kForceImmersive)) {
     launch_mode = ECHUIM_IMMERSIVE;
     launch_mode_determined = true;
-    parameters_.clear();
-  } else if (parameters_ == ASCIIToWide(switches::kForceDesktop)) {
+    parameters_ = CommandLine(CommandLine::NO_PROGRAM);
+  } else if (parameters_.HasSwitch(switches::kForceDesktop)) {
     launch_mode = ECHUIM_DESKTOP;
     launch_mode_determined = true;
-    parameters_.clear();
+    parameters_ = CommandLine(CommandLine::NO_PROGRAM);
   }
 
   base::win::RegKey reg_key;

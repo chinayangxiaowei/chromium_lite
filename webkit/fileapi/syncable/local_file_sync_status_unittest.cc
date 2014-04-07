@@ -27,9 +27,10 @@ FileSystemURL URL(const char* spec) {
 
 TEST(LocalFileSyncStatusTest, WritingSimple) {
   LocalFileSyncStatus status;
-  ASSERT_TRUE(status.TryIncrementWriting(URL(kFile)));
-  ASSERT_TRUE(status.TryIncrementWriting(URL(kFile)));
-  status.DecrementWriting(URL(kFile));
+
+  status.StartWriting(URL(kFile));
+  status.StartWriting(URL(kFile));
+  status.EndWriting(URL(kFile));
 
   EXPECT_TRUE(status.IsWriting(URL(kFile)));
   EXPECT_TRUE(status.IsWriting(URL(kParent)));
@@ -37,16 +38,31 @@ TEST(LocalFileSyncStatusTest, WritingSimple) {
   EXPECT_FALSE(status.IsWriting(URL(kOther1)));
   EXPECT_FALSE(status.IsWriting(URL(kOther2)));
 
-  status.DecrementWriting(URL(kFile));
+  // Adding writers doesn't change the entry's writability.
+  EXPECT_TRUE(status.IsWritable(URL(kFile)));
+  EXPECT_TRUE(status.IsWritable(URL(kParent)));
+  EXPECT_TRUE(status.IsWritable(URL(kChild)));
+  EXPECT_TRUE(status.IsWritable(URL(kOther1)));
+  EXPECT_TRUE(status.IsWritable(URL(kOther2)));
+
+  // Adding writers makes the entry non-syncable.
+  EXPECT_FALSE(status.IsSyncable(URL(kFile)));
+  EXPECT_FALSE(status.IsSyncable(URL(kParent)));
+  EXPECT_FALSE(status.IsSyncable(URL(kChild)));
+  EXPECT_TRUE(status.IsSyncable(URL(kOther1)));
+  EXPECT_TRUE(status.IsSyncable(URL(kOther2)));
+
+  status.EndWriting(URL(kFile));
 
   EXPECT_FALSE(status.IsWriting(URL(kFile)));
   EXPECT_FALSE(status.IsWriting(URL(kParent)));
   EXPECT_FALSE(status.IsWriting(URL(kChild)));
 }
 
-TEST(LocalFileSyncStatusTest, DisableWritingSimple) {
+TEST(LocalFileSyncStatusTest, SyncingSimple) {
   LocalFileSyncStatus status;
-  ASSERT_TRUE(status.TryDisableWriting(URL(kFile)));
+
+  status.StartSyncing(URL(kFile));
 
   EXPECT_FALSE(status.IsWritable(URL(kFile)));
   EXPECT_FALSE(status.IsWritable(URL(kParent)));
@@ -54,47 +70,18 @@ TEST(LocalFileSyncStatusTest, DisableWritingSimple) {
   EXPECT_TRUE(status.IsWritable(URL(kOther1)));
   EXPECT_TRUE(status.IsWritable(URL(kOther2)));
 
-  status.EnableWriting(URL(kFile));
+  // New sync cannot be started for entries that are already in syncing.
+  EXPECT_FALSE(status.IsSyncable(URL(kFile)));
+  EXPECT_FALSE(status.IsSyncable(URL(kParent)));
+  EXPECT_FALSE(status.IsSyncable(URL(kChild)));
+  EXPECT_TRUE(status.IsSyncable(URL(kOther1)));
+  EXPECT_TRUE(status.IsSyncable(URL(kOther2)));
+
+  status.EndSyncing(URL(kFile));
 
   EXPECT_TRUE(status.IsWritable(URL(kFile)));
   EXPECT_TRUE(status.IsWritable(URL(kParent)));
   EXPECT_TRUE(status.IsWritable(URL(kChild)));
-}
-
-TEST(LocalFileSyncStatusTest, TryWriting) {
-  LocalFileSyncStatus status;
-
-  ASSERT_TRUE(status.TryDisableWriting(URL(kFile)));
-  EXPECT_FALSE(status.IsWritable(URL(kFile)));
-
-  ASSERT_FALSE(status.TryIncrementWriting(URL(kFile)));
-  ASSERT_FALSE(status.TryIncrementWriting(URL(kParent)));
-  ASSERT_FALSE(status.TryIncrementWriting(URL(kChild)));
-
-  status.EnableWriting(URL(kFile));
-  EXPECT_TRUE(status.IsWritable(URL(kFile)));
-
-  ASSERT_TRUE(status.TryIncrementWriting(URL(kFile)));
-  ASSERT_TRUE(status.TryIncrementWriting(URL(kParent)));
-  ASSERT_TRUE(status.TryIncrementWriting(URL(kChild)));
-}
-
-TEST(LocalFileSyncStatusTest, TryDisableWriting) {
-  LocalFileSyncStatus status;
-
-  ASSERT_TRUE(status.TryIncrementWriting(URL(kFile)));
-  EXPECT_TRUE(status.IsWritable(URL(kFile)));
-
-  ASSERT_FALSE(status.TryDisableWriting(URL(kFile)));
-  ASSERT_FALSE(status.TryDisableWriting(URL(kParent)));
-  ASSERT_FALSE(status.TryDisableWriting(URL(kChild)));
-
-  status.DecrementWriting(URL(kFile));
-  EXPECT_FALSE(status.IsWriting(URL(kFile)));
-
-  ASSERT_TRUE(status.TryDisableWriting(URL(kFile)));
-  ASSERT_TRUE(status.TryDisableWriting(URL(kParent)));
-  ASSERT_TRUE(status.TryDisableWriting(URL(kChild)));
 }
 
 }  // namespace fileapi

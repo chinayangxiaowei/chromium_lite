@@ -6,15 +6,17 @@
 
 #include <string>
 
-#include "base/values.h"
 #include "base/string_number_conversions.h"
 #include "base/string_util.h"
+#include "base/values.h"
 #include "chrome/browser/extensions/extension_service.h"
 #include "chrome/browser/extensions/menu_manager.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/common/extensions/api/context_menus.h"
-#include "chrome/common/extensions/extension_error_utils.h"
-#include "chrome/common/extensions/url_pattern_set.h"
+#include "extensions/common/error_utils.h"
+#include "extensions/common/url_pattern_set.h"
+
+using extensions::ErrorUtils;
 
 namespace {
 
@@ -34,6 +36,8 @@ const char kParentsMustBeNormalError[] =
     "Parent items must have type \"normal\"";
 const char kTitleNeededError[] =
     "All menu items except for separators must have a title";
+const char kLauncherNotAllowedError[] =
+    "Only packaged apps are allowed to use 'launcher' context";
 
 std::string GetIDString(const extensions::MenuItem::Id& id) {
   if (id.uid == 0)
@@ -75,6 +79,11 @@ extensions::MenuItem::ContextList GetContexts(
       case PropertyWithEnumT::CONTEXTS_ELEMENT_FRAME:
         contexts.Add(extensions::MenuItem::FRAME);
         break;
+      case PropertyWithEnumT::CONTEXTS_ELEMENT_LAUNCHER:
+        contexts.Add(extensions::MenuItem::LAUNCHER);
+        break;
+      case PropertyWithEnumT::CONTEXTS_ELEMENT_NONE:
+        NOTREACHED();
     }
   }
   return contexts;
@@ -121,7 +130,7 @@ extensions::MenuItem* GetParent(extensions::MenuItem::Id parent_id,
                                 std::string* error) {
   extensions::MenuItem* parent = menu_manager->GetItemById(parent_id);
   if (!parent) {
-    *error = ExtensionErrorUtils::FormatErrorMessage(
+    *error = ErrorUtils::FormatErrorMessage(
         kCannotFindItemError, GetIDString(parent_id));
     return NULL;
   }
@@ -168,7 +177,7 @@ bool CreateContextMenuFunction::RunImpl() {
   MenuManager* menu_manager = profile()->GetExtensionService()->menu_manager();
 
   if (menu_manager->GetItemById(id)) {
-    error_ = ExtensionErrorUtils::FormatErrorMessage(kDuplicateIDError,
+    error_ = ErrorUtils::FormatErrorMessage(kDuplicateIDError,
                                                      GetIDString(id));
     return false;
   }
@@ -184,6 +193,12 @@ bool CreateContextMenuFunction::RunImpl() {
     contexts = GetContexts(params->create_properties);
   else
     contexts.Add(MenuItem::PAGE);
+
+  if (contexts.Contains(MenuItem::LAUNCHER) &&
+      !GetExtension()->is_platform_app()) {
+    error_ = kLauncherNotAllowedError;
+    return false;
+  }
 
   MenuItem::Type type = GetType(params->create_properties);
 
@@ -243,13 +258,15 @@ bool UpdateContextMenuFunction::RunImpl() {
     case Update::Params::ID_INTEGER:
       item_id.uid = *params->id_integer;
       break;
+    case Update::Params::ID_NONE:
+      NOTREACHED();
   }
 
   ExtensionService* service = profile()->GetExtensionService();
   MenuManager* manager = service->menu_manager();
   MenuItem* item = manager->GetItemById(item_id);
   if (!item || item->extension_id() != extension_id()) {
-    error_ = ExtensionErrorUtils::FormatErrorMessage(
+    error_ = ErrorUtils::FormatErrorMessage(
         kCannotFindItemError, GetIDString(item_id));
     return false;
   }
@@ -299,6 +316,13 @@ bool UpdateContextMenuFunction::RunImpl() {
   MenuItem::ContextList contexts;
   if (params->update_properties.contexts.get()) {
     contexts = GetContexts(params->update_properties);
+
+    if (contexts.Contains(MenuItem::LAUNCHER) &&
+        !GetExtension()->is_platform_app()) {
+      error_ = kLauncherNotAllowedError;
+      return false;
+    }
+
     if (contexts != item->contexts())
       item->set_contexts(contexts);
   }
@@ -344,12 +368,15 @@ bool RemoveContextMenuFunction::RunImpl() {
       break;
     case Remove::Params::MENU_ITEM_ID_INTEGER:
       id.uid = *params->menu_item_id_integer;
+      break;
+    case Remove::Params::MENU_ITEM_ID_NONE:
+      NOTREACHED();
   }
 
   MenuItem* item = manager->GetItemById(id);
   // Ensure one extension can't remove another's menu items.
   if (!item || item->extension_id() != extension_id()) {
-    error_ = ExtensionErrorUtils::FormatErrorMessage(
+    error_ = ErrorUtils::FormatErrorMessage(
         kCannotFindItemError, GetIDString(id));
     return false;
   }

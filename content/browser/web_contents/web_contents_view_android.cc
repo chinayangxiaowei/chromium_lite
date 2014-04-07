@@ -6,11 +6,12 @@
 
 #include "base/logging.h"
 #include "content/browser/android/content_view_core_impl.h"
+#include "content/browser/android/media_player_manager_android.h"
 #include "content/browser/renderer_host/render_widget_host_view_android.h"
 #include "content/browser/renderer_host/render_view_host_factory.h"
 #include "content/browser/renderer_host/render_view_host_impl.h"
+#include "content/browser/web_contents/interstitial_page_impl.h"
 #include "content/browser/web_contents/web_contents_impl.h"
-#include "content/public/browser/interstitial_page.h"
 #include "content/public/browser/web_contents_delegate.h"
 
 namespace content {
@@ -42,12 +43,19 @@ void WebContentsViewAndroid::SetContentViewCore(
       web_contents_->GetRenderWidgetHostView());
   if (rwhv)
     rwhv->SetContentViewCore(content_view_core_);
+
   if (web_contents_->ShowingInterstitialPage()) {
-    NOTIMPLEMENTED() << "not upstreamed yet";
+    rwhv = static_cast<RenderWidgetHostViewAndroid*>(
+        static_cast<InterstitialPageImpl*>(
+            web_contents_->GetInterstitialPage())->
+                GetRenderViewHost()->GetView());
+    if (rwhv)
+      rwhv->SetContentViewCore(content_view_core_);
   }
 }
 
-void WebContentsViewAndroid::CreateView(const gfx::Size& initial_size) {
+void WebContentsViewAndroid::CreateView(
+    const gfx::Size& initial_size, gfx::NativeView context) {
 }
 
 RenderWidgetHostView* WebContentsViewAndroid::CreateViewForWidget(
@@ -67,7 +75,9 @@ RenderWidgetHostView* WebContentsViewAndroid::CreateViewForWidget(
   // order to paint it. See ContentView::GetRenderWidgetHostViewAndroid for an
   // example of how this is achieved for InterstitialPages.
   RenderWidgetHostImpl* rwhi = RenderWidgetHostImpl::From(render_widget_host);
-  return new RenderWidgetHostViewAndroid(rwhi, content_view_core_);
+  RenderWidgetHostView* view = new RenderWidgetHostViewAndroid(
+      rwhi, content_view_core_);
+  return view;
 }
 
 gfx::NativeView WebContentsViewAndroid::GetNativeView() const {
@@ -83,8 +93,9 @@ gfx::NativeWindow WebContentsViewAndroid::GetTopLevelNativeWindow() const {
 }
 
 void WebContentsViewAndroid::GetContainerBounds(gfx::Rect* out) const {
-  if (content_view_core_)
-    *out = content_view_core_->GetBounds();
+  RenderWidgetHostView* rwhv = web_contents_->GetRenderWidgetHostView();
+  if (rwhv)
+    *out = rwhv->GetViewBounds();
 }
 
 void WebContentsViewAndroid::SetPageTitle(const string16& title) {
@@ -94,7 +105,12 @@ void WebContentsViewAndroid::SetPageTitle(const string16& title) {
 
 void WebContentsViewAndroid::OnTabCrashed(base::TerminationStatus status,
                                           int error_code) {
-  NOTIMPLEMENTED() << "not upstreamed yet";
+  RenderViewHostImpl* rvh = static_cast<RenderViewHostImpl*>(
+      web_contents_->GetRenderViewHost());
+  if (rvh->media_player_manager())
+    rvh->media_player_manager()->DestroyAllMediaPlayers();
+  if (content_view_core_)
+    content_view_core_->OnTabCrashed();
 }
 
 void WebContentsViewAndroid::SizeContents(const gfx::Size& size) {
@@ -129,15 +145,6 @@ void WebContentsViewAndroid::RestoreFocus() {
   NOTIMPLEMENTED();
 }
 
-bool WebContentsViewAndroid::IsDoingDrag() const {
-  NOTIMPLEMENTED();
-  return false;
-}
-
-void WebContentsViewAndroid::CancelDragAndCloseTab() {
-  NOTIMPLEMENTED();
-}
-
 WebDropData* WebContentsViewAndroid::GetDropData() const {
   NOTIMPLEMENTED();
   return NULL;
@@ -153,15 +160,16 @@ void WebContentsViewAndroid::CloseTabAfterEventTracking() {
 }
 
 gfx::Rect WebContentsViewAndroid::GetViewBounds() const {
-  if (content_view_core_)
-    return content_view_core_->GetBounds();
+  RenderWidgetHostView* rwhv = web_contents_->GetRenderWidgetHostView();
+  if (rwhv)
+    return rwhv->GetViewBounds();
   else
     return gfx::Rect();
 }
 
 void WebContentsViewAndroid::ShowContextMenu(
     const ContextMenuParams& params,
-    content::ContextMenuSourceType type) {
+    ContextMenuSourceType type) {
   if (delegate_.get())
     delegate_->ShowContextMenu(params, type);
 }
@@ -184,7 +192,8 @@ void WebContentsViewAndroid::StartDragging(
     const WebDropData& drop_data,
     WebKit::WebDragOperationsMask allowed_ops,
     const gfx::ImageSkia& image,
-    const gfx::Point& image_offset) {
+    const gfx::Vector2d& image_offset,
+    const DragEventSourceInfo& event_info) {
   NOTIMPLEMENTED();
 }
 

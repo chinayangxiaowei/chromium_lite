@@ -27,13 +27,15 @@
             'nlib_target': 'libppapi_proxy_untrusted.a',
             'build_glibc': 0,
             'build_newlib': 1,
+            'defines': [
+              'NACL_PPAPI_IPC_PROXY',
+              # Enable threading for the untrusted side of the proxy.
+              # TODO(bbudge) remove when this is the default.
+              'ENABLE_PEPPER_THREADING',
+            ],
           },
-          'defines': [
-            'NACL_PPAPI_IPC_PROXY',
-          ],
           'include_dirs': [
             '..',
-            '../third_party/khronos',
           ],
           'dependencies': [
             '../native_client/tools.gyp:prep_toolchain',
@@ -47,6 +49,8 @@
             '../ipc/ipc_untrusted.gyp:ipc_untrusted',
             '../ppapi/ppapi_shared_untrusted.gyp:ppapi_shared_untrusted',
             '../ppapi/ppapi_ipc_untrusted.gyp:ppapi_ipc_untrusted',
+            '../third_party/khronos/khronos.gyp:khronos_headers',
+            '../content/content_components_tracing_untrusted.gyp:tracing_untrusted',
           ],
         },
       ],

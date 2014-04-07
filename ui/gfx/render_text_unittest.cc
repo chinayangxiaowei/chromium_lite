@@ -7,7 +7,6 @@
 #include "base/memory/scoped_ptr.h"
 #include "base/utf_string_conversions.h"
 #include "testing/gtest/include/gtest/gtest.h"
-#include "ui/base/l10n/l10n_util.h"
 #include "ui/gfx/text_constants.h"
 
 #if defined(OS_WIN)
@@ -38,6 +37,7 @@ bool IndexInRange(const ui::Range& range, size_t index) {
   return index >= range.start() && index < range.end();
 }
 
+#if !defined(OS_MACOSX)
 // A test utility function to set the application default text direction.
 void SetRTL(bool rtl) {
   // Override the current locale/direction.
@@ -48,6 +48,7 @@ void SetRTL(bool rtl) {
 #endif
   EXPECT_EQ(rtl, base::i18n::IsRTL());
 }
+#endif
 
 }  // namespace
 
@@ -98,7 +99,7 @@ TEST_F(RenderTextTest, CustomDefaultStyle) {
   render_text->set_default_style(strike);
   render_text->ApplyDefaultStyle();
   EXPECT_EQ(1U, render_text->style_ranges().size());
-  EXPECT_EQ(true, render_text->style_ranges()[0].strike);
+  EXPECT_TRUE(render_text->style_ranges()[0].strike);
   EXPECT_EQ(strike.foreground, render_text->style_ranges()[0].foreground);
 }
 
@@ -323,6 +324,7 @@ TEST_F(RenderTextTest, StyleRangesAdjust) {
 void TestVisualCursorMotionInObscuredField(RenderText* render_text,
                                            const string16& text,
                                            bool select) {
+  ASSERT_TRUE(render_text->obscured());
   render_text->SetText(text);
   int len = text.length();
   render_text->MoveCursor(LINE_BREAK, CURSOR_RIGHT, select);
@@ -347,49 +349,70 @@ void TestVisualCursorMotionInObscuredField(RenderText* render_text,
   EXPECT_EQ(SelectionModel(0, CURSOR_BACKWARD), render_text->selection_model());
 }
 
-TEST_F(RenderTextTest, PasswordCensorship) {
+TEST_F(RenderTextTest, ObscuredText) {
   const string16 seuss = ASCIIToUTF16("hop on pop");
   const string16 no_seuss = ASCIIToUTF16("**********");
   scoped_ptr<RenderText> render_text(RenderText::CreateInstance());
 
-  // GetObscuredText returns asterisks when the obscured bit is set.
+  // GetLayoutText() returns asterisks when the obscured bit is set.
   render_text->SetText(seuss);
   render_text->SetObscured(true);
   EXPECT_EQ(seuss, render_text->text());
-  EXPECT_EQ(no_seuss, render_text->GetDisplayText());
+  EXPECT_EQ(no_seuss, render_text->GetLayoutText());
   render_text->SetObscured(false);
   EXPECT_EQ(seuss, render_text->text());
-  EXPECT_EQ(seuss, render_text->GetDisplayText());
+  EXPECT_EQ(seuss, render_text->GetLayoutText());
 
-// TODO(benrg): No Windows implementation yet.
-#if !defined(OS_WIN)
   render_text->SetObscured(true);
 
   // Surrogate pairs are counted as one code point.
   const char16 invalid_surrogates[] = {0xDC00, 0xD800, 0};
   render_text->SetText(invalid_surrogates);
-  EXPECT_EQ(ASCIIToUTF16("**"), render_text->GetDisplayText());
+  EXPECT_EQ(ASCIIToUTF16("**"), render_text->GetLayoutText());
   const char16 valid_surrogates[] = {0xD800, 0xDC00, 0};
   render_text->SetText(valid_surrogates);
-  EXPECT_EQ(ASCIIToUTF16("*"), render_text->GetDisplayText());
+  EXPECT_EQ(ASCIIToUTF16("*"), render_text->GetLayoutText());
   EXPECT_EQ(0U, render_text->cursor_position());
   render_text->MoveCursor(CHARACTER_BREAK, CURSOR_RIGHT, false);
   EXPECT_EQ(2U, render_text->cursor_position());
 
-  // Cursoring is independent of the underlying characters when the text is
-  // obscured.
+  // Test index conversion and cursor validity with a valid surrogate pair.
+  EXPECT_EQ(0U, render_text->TextIndexToLayoutIndex(0U));
+  EXPECT_EQ(1U, render_text->TextIndexToLayoutIndex(1U));
+  EXPECT_EQ(1U, render_text->TextIndexToLayoutIndex(2U));
+  EXPECT_EQ(0U, render_text->LayoutIndexToTextIndex(0U));
+  EXPECT_EQ(2U, render_text->LayoutIndexToTextIndex(1U));
+  EXPECT_TRUE(render_text->IsCursorablePosition(0U));
+  EXPECT_FALSE(render_text->IsCursorablePosition(1U));
+  EXPECT_TRUE(render_text->IsCursorablePosition(2U));
+
+  // FindCursorPosition() should not return positions between a surrogate pair.
+  render_text->SetDisplayRect(Rect(0, 0, 20, 20));
+  EXPECT_EQ(render_text->FindCursorPosition(Point(0, 0)).caret_pos(), 0U);
+  EXPECT_EQ(render_text->FindCursorPosition(Point(20, 0)).caret_pos(), 2U);
+  for (int x = -1; x <= 20; ++x) {
+    SelectionModel selection = render_text->FindCursorPosition(Point(x, 0));
+    EXPECT_TRUE(selection.caret_pos() == 0U || selection.caret_pos() == 2U);
+  }
+
+  // GetGlyphBounds() should yield the entire string bounds for text index 0.
+  int height = 0;
+  ui::Range bounds;
+  render_text->GetGlyphBounds(0U, &bounds, &height);
+  EXPECT_EQ(render_text->GetStringSize().width(),
+            static_cast<int>(bounds.length()));
+
+  // Cursoring is independent of underlying characters when text is obscured.
   const wchar_t* const texts[] = {
-    L"hop on pop",           // word boundaries
-    L"ab \x5D0\x5D1" L"12",  // bidi embedding level of 2
-    L"\x5D0\x5D1" L"12",     // RTL paragraph direction on Linux
-    L"\x5D0\x5D1"            // pure RTL
+    kWeak, kLtr, kLtrRtl, kLtrRtlLtr, kRtl, kRtlLtr, kRtlLtrRtl,
+    L"hop on pop",                             // Check LTR word boundaries.
+    L"\x05d0\x05d1 \x05d0\x05d2 \x05d1\x05d2", // Check RTL word boundaries.
   };
-  for (size_t i = 0; i < ARRAYSIZE_UNSAFE(texts); ++i) {
+  for (size_t i = 0; i < arraysize(texts); ++i) {
     string16 text = WideToUTF16(texts[i]);
     TestVisualCursorMotionInObscuredField(render_text.get(), text, false);
     TestVisualCursorMotionInObscuredField(render_text.get(), text, true);
   }
-#endif  // !defined(OS_WIN)
 }
 
 TEST_F(RenderTextTest, GetTextDirection) {
@@ -1096,7 +1119,13 @@ TEST_F(RenderTextTest, CursorBoundsInReplacementMode) {
   EXPECT_EQ(cursor_around_b.right(), cursor_before_c.x());
 }
 
-TEST_F(RenderTextTest, OriginForDrawing) {
+// http://crbug.com/161902
+#if defined(OS_LINUX)
+#define MAYBE_OriginForDrawing DISABLED_OriginForDrawing
+#else
+#define MAYBE_OriginForDrawing OriginForDrawing
+#endif
+TEST_F(RenderTextTest, MAYBE_OriginForDrawing) {
   scoped_ptr<RenderText> render_text(RenderText::CreateInstance());
   render_text->SetText(ASCIIToUTF16("abcdefg"));
   render_text->SetFontList(FontList("Arial, 13px"));
@@ -1106,17 +1135,18 @@ TEST_F(RenderTextTest, OriginForDrawing) {
   Rect display_rect(0, 0, 100, font_height);
   render_text->SetDisplayRect(display_rect);
 
-  Point origin = render_text->GetOriginForDrawing();
-  EXPECT_EQ(origin.x(), 0);
-  EXPECT_EQ(origin.y(), 0);
+  Vector2d offset = render_text->GetOffsetForDrawing();
+  EXPECT_TRUE(offset.IsZero());
 
   // Set display area's height greater than font height.
-  display_rect = Rect(0, 0, 100, font_height + 2);
+  const int kEnlargement = 2;
+  display_rect = Rect(0, 0, 100, font_height + kEnlargement);
   render_text->SetDisplayRect(display_rect);
 
-  origin = render_text->GetOriginForDrawing();
-  EXPECT_EQ(origin.x(), 0);
-  EXPECT_EQ(origin.y(), 1);
+  // Text should be vertically centered.
+  offset = render_text->GetOffsetForDrawing();
+  EXPECT_EQ(offset.x(), 0);
+  EXPECT_EQ(offset.y(), kEnlargement / 2);
 }
 
 TEST_F(RenderTextTest, SameFontForParentheses) {
@@ -1194,6 +1224,14 @@ TEST_F(RenderTextTest, SameFontForParentheses) {
   }
 }
 
+// Make sure the caret width is always >=1 so that the correct
+// caret is drawn at high DPI. crbug.com/164100.
+TEST_F(RenderTextTest, CaretWidth) {
+  scoped_ptr<RenderText> render_text(RenderText::CreateInstance());
+  render_text->SetText(ASCIIToUTF16("abcdefg"));
+  EXPECT_GE(render_text->GetUpdatedCursorBounds().width(), 1);
+}
+
 // TODO(asvitkine): Cursor movements tests disabled on Mac because RenderTextMac
 //                  does not implement this yet. http://crbug.com/131618
 #if !defined(OS_MACOSX)
@@ -1212,8 +1250,11 @@ TEST_F(RenderTextTest, DisplayRectShowsCursorLTR) {
   // Ensure that shrinking the display rectangle keeps the cursor in view.
   render_text->SetDisplayRect(Rect(width - 10, 1));
   EXPECT_EQ(render_text->display_rect().width() - 1,
-            render_text->GetUpdatedCursorBounds().x());
+            render_text->GetUpdatedCursorBounds().right());
 
+  // TODO(msw): Investigate why this test passes with
+  // |GetUpdateCursorBounds().x()|, while the above have to use
+  // |.right()|.
   // Ensure that the text will pan to fill its expanding display rectangle.
   render_text->SetDisplayRect(Rect(width - 5, 1));
   EXPECT_EQ(render_text->display_rect().width() - 1,
@@ -1237,7 +1278,7 @@ TEST_F(RenderTextTest, DisplayRectShowsCursorLTR) {
   // Ensure that shrinking the display rectangle keeps the cursor in view.
   render_text->SetDisplayRect(Rect(width - 10, 1));
   EXPECT_EQ(render_text->display_rect().width() - 1,
-            render_text->GetUpdatedCursorBounds().x());
+            render_text->GetUpdatedCursorBounds().right());
 
   // Ensure that the text will pan to fill its expanding display rectangle.
   render_text->SetDisplayRect(Rect(width - 5, 1));

@@ -8,7 +8,6 @@
 #include "base/callback_forward.h"
 #include "base/memory/ref_counted.h"
 #include "base/memory/scoped_ptr.h"
-#include "base/time.h"
 
 namespace base {
 class SingleThreadTaskRunner;
@@ -34,7 +33,7 @@ class AudioScheduler : public base::RefCountedThreadSafe<AudioScheduler> {
   // |audio_task_runner|. |audio_stub| tasks are dispatched via the
   // |network_task_runner|. The caller must ensure that the |audio_capturer| and
   // |audio_stub| exist until the scheduler is stopped using Stop() method.
-  AudioScheduler(
+  static scoped_refptr<AudioScheduler> Create(
       scoped_refptr<base::SingleThreadTaskRunner> audio_task_runner,
       scoped_refptr<base::SingleThreadTaskRunner> network_task_runner,
       AudioCapturer* audio_capturer,
@@ -44,25 +43,33 @@ class AudioScheduler : public base::RefCountedThreadSafe<AudioScheduler> {
   // Stop the recording session.
   void Stop(const base::Closure& done_task);
 
-  // Called when a client disconnects.
-  void OnClientDisconnected();
+  // Enable or disable audio on a running session.
+  // This leaves the audio capturer running, and only affects whether or not the
+  // captured audio is encoded and sent on the wire.
+  void SetEnabled(bool enabled);
 
  private:
   friend class base::RefCountedThreadSafe<AudioScheduler>;
+
+  AudioScheduler(
+      scoped_refptr<base::SingleThreadTaskRunner> audio_task_runner,
+      scoped_refptr<base::SingleThreadTaskRunner> network_task_runner,
+      AudioCapturer* audio_capturer,
+      scoped_ptr<AudioEncoder> audio_encoder,
+      protocol::AudioStub* audio_stub);
   virtual ~AudioScheduler();
 
-  void NotifyAudioPacketCaptured(scoped_ptr<AudioPacket> packet);
+  // Called on the audio thread to start capturing.
+  void StartOnAudioThread();
 
-  void DoStart();
+  // Called on the audio thread to stop capturing.
+  void StopOnAudioThread(const base::Closure& done_task);
 
-  // Sends an audio packet to the client.
-  void DoSendAudioPacket(scoped_ptr<AudioPacket> packet);
+  // Called on the audio thread when a new audio packet is available.
+  void EncodeAudioPacket(scoped_ptr<AudioPacket> packet);
 
-  // Signal network thread to cease activities.
-  void DoStopOnNetworkThread(const base::Closure& done_task);
-
-  // Called when an AudioPacket has been delivered to the client.
-  void OnCaptureCallbackNotified();
+  // Called on the network thread to send a captured packet to the audio stub.
+  void SendAudioPacket(scoped_ptr<AudioPacket> packet);
 
   scoped_refptr<base::SingleThreadTaskRunner> audio_task_runner_;
   scoped_refptr<base::SingleThreadTaskRunner> network_task_runner_;
@@ -74,6 +81,8 @@ class AudioScheduler : public base::RefCountedThreadSafe<AudioScheduler> {
   protocol::AudioStub* audio_stub_;
 
   bool network_stopped_;
+
+  bool enabled_;
 
   DISALLOW_COPY_AND_ASSIGN(AudioScheduler);
 };

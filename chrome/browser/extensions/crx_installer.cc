@@ -9,25 +9,26 @@
 
 #include "base/bind.h"
 #include "base/file_util.h"
+#include "base/files/scoped_temp_dir.h"
 #include "base/lazy_instance.h"
-#include "base/metrics/field_trial.h"
 #include "base/metrics/histogram.h"
 #include "base/path_service.h"
-#include "base/scoped_temp_dir.h"
+#include "base/sequenced_task_runner.h"
 #include "base/string_util.h"
 #include "base/stringprintf.h"
 #include "base/threading/thread_restrictions.h"
 #include "base/time.h"
+#include "base/threading/sequenced_worker_pool.h"
 #include "base/utf_string_conversions.h"
 #include "base/version.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/extensions/convert_user_script.h"
 #include "chrome/browser/extensions/convert_web_app.h"
-#include "chrome/browser/extensions/default_apps_trial.h"
 #include "chrome/browser/extensions/extension_error_reporter.h"
 #include "chrome/browser/extensions/extension_install_ui.h"
 #include "chrome/browser/extensions/extension_service.h"
 #include "chrome/browser/extensions/extension_system.h"
+#include "chrome/browser/extensions/management_policy.h"
 #include "chrome/browser/extensions/permissions_updater.h"
 #include "chrome/browser/extensions/requirements_checker.h"
 #include "chrome/browser/extensions/webstore_installer.h"
@@ -39,7 +40,7 @@
 #include "chrome/common/extensions/extension_constants.h"
 #include "chrome/common/extensions/extension_file_util.h"
 #include "chrome/common/extensions/extension_icon_set.h"
-#include "chrome/common/extensions/extension_switch_utils.h"
+#include "chrome/common/extensions/feature_switch.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/notification_service.h"
 #include "content/public/browser/resource_dispatcher_host.h"
@@ -105,7 +106,9 @@ CrxInstaller::CrxInstaller(
       record_oauth2_grant_(false),
       error_on_unsupported_requirements_(false),
       requirements_checker_(new extensions::RequirementsChecker()),
-      has_requirement_errors_(false) {
+      has_requirement_errors_(false),
+      install_wait_for_idle_(true) {
+  installer_task_runner_ = frontend_weak->GetFileTaskRunner();
   if (!approval)
     return;
 
@@ -124,22 +127,11 @@ CrxInstaller::CrxInstaller(
     expected_id_ = approval->extension_id;
     record_oauth2_grant_ = approval->record_oauth2_grant;
   }
+
+  show_dialog_callback_ = approval->show_dialog_callback;
 }
 
 CrxInstaller::~CrxInstaller() {
-  // Delete the temp directory and crx file as necessary. Note that the
-  // destructor might be called on any thread, so we post a task to the file
-  // thread to make sure the delete happens there. This is a best effort
-  // operation since the browser can be shutting down so there might not
-  // be a file thread to post to.
-  if (!temp_dir_.value().empty()) {
-    BrowserThread::PostTask(BrowserThread::FILE, FROM_HERE,
-        base::Bind(&extension_file_util::DeleteFile, temp_dir_, true));
-  }
-  if (delete_source_) {
-    BrowserThread::PostTask(BrowserThread::FILE, FROM_HERE,
-        base::Bind(&extension_file_util::DeleteFile, source_file_, false));
-  }
   // Make sure the UI is deleted on the ui thread.
   if (client_) {
     BrowserThread::DeleteSoon(BrowserThread::UI, FROM_HERE, client_);
@@ -156,10 +148,12 @@ void CrxInstaller::InstallCrx(const FilePath& source_file) {
           content::ResourceDispatcherHost::Get() != NULL,
           install_source_,
           creation_flags_,
+          install_directory_,
+          installer_task_runner_,
           this));
 
-  if (!BrowserThread::PostTask(
-          BrowserThread::FILE, FROM_HERE,
+  if (!installer_task_runner_->PostTask(
+          FROM_HERE,
           base::Bind(&SandboxedUnpacker::Start, unpacker.get())))
     NOTREACHED();
 }
@@ -171,8 +165,8 @@ void CrxInstaller::InstallUserScript(const FilePath& source_file,
   source_file_ = source_file;
   download_url_ = download_url;
 
-  if (!BrowserThread::PostTask(
-          BrowserThread::FILE, FROM_HERE,
+  if (!installer_task_runner_->PostTask(
+          FROM_HERE,
           base::Bind(&CrxInstaller::ConvertUserScriptOnFileThread, this)))
     NOTREACHED();
 }
@@ -180,7 +174,7 @@ void CrxInstaller::InstallUserScript(const FilePath& source_file,
 void CrxInstaller::ConvertUserScriptOnFileThread() {
   string16 error;
   scoped_refptr<Extension> extension = ConvertUserScriptToExtension(
-      source_file_, download_url_, &error);
+      source_file_, download_url_, install_directory_, &error);
   if (!extension) {
     ReportFailureFromFileThread(CrxInstallerError(error));
     return;
@@ -190,17 +184,20 @@ void CrxInstaller::ConvertUserScriptOnFileThread() {
 }
 
 void CrxInstaller::InstallWebApp(const WebApplicationInfo& web_app) {
-  if (!BrowserThread::PostTask(
-          BrowserThread::FILE, FROM_HERE,
-          base::Bind(&CrxInstaller::ConvertWebAppOnFileThread, this, web_app)))
+  if (!installer_task_runner_->PostTask(
+          FROM_HERE,
+          base::Bind(&CrxInstaller::ConvertWebAppOnFileThread,
+                     this,
+                     web_app,
+                     install_directory_)))
     NOTREACHED();
 }
 
 void CrxInstaller::ConvertWebAppOnFileThread(
-    const WebApplicationInfo& web_app) {
+    const WebApplicationInfo& web_app, const FilePath& install_directory) {
   string16 error;
   scoped_refptr<Extension> extension(
-      ConvertWebAppToExtension(web_app, base::Time::Now()));
+      ConvertWebAppToExtension(web_app, base::Time::Now(), install_directory));
   if (!extension) {
     // Validation should have stopped any potential errors before getting here.
     NOTREACHED() << "Could not convert web app to extension.";
@@ -213,7 +210,7 @@ void CrxInstaller::ConvertWebAppOnFileThread(
 }
 
 CrxInstallerError CrxInstaller::AllowInstall(const Extension* extension) {
-  DCHECK(BrowserThread::CurrentlyOn(BrowserThread::FILE));
+  DCHECK(installer_task_runner_->RunsTasksOnCurrentThread());
 
   // Make sure the expected ID matches if one was supplied or if we want to
   // bypass the prompt.
@@ -255,7 +252,7 @@ CrxInstallerError CrxInstaller::AllowInstall(const Extension* extension) {
   }
 
   if (install_cause_ == extension_misc::INSTALL_CAUSE_USER_DOWNLOAD) {
-    if (switch_utils::IsEasyOffStoreInstallEnabled()) {
+    if (FeatureSwitch::easy_off_store_install()->IsEnabled()) {
       const char* kHistogramName = "Extensions.OffStoreInstallDecisionEasy";
       if (is_gallery_install()) {
         UMA_HISTOGRAM_ENUMERATION(kHistogramName, OnStoreInstall,
@@ -342,7 +339,7 @@ CrxInstallerError CrxInstaller::AllowInstall(const Extension* extension) {
 }
 
 void CrxInstaller::OnUnpackFailure(const string16& error_message) {
-  DCHECK(BrowserThread::CurrentlyOn(BrowserThread::FILE));
+  DCHECK(installer_task_runner_->RunsTasksOnCurrentThread());
 
   UMA_HISTOGRAM_ENUMERATION("Extensions.UnpackFailureInstallSource",
                             install_source(), Extension::NUM_LOCATIONS);
@@ -358,7 +355,7 @@ void CrxInstaller::OnUnpackSuccess(const FilePath& temp_dir,
                                    const FilePath& extension_dir,
                                    const DictionaryValue* original_manifest,
                                    const Extension* extension) {
-  DCHECK(BrowserThread::CurrentlyOn(BrowserThread::FILE));
+  DCHECK(installer_task_runner_->RunsTasksOnCurrentThread());
 
   UMA_HISTOGRAM_ENUMERATION("Extensions.UnpackSuccessInstallSource",
                             install_source(), Extension::NUM_LOCATIONS);
@@ -400,13 +397,8 @@ void CrxInstaller::OnUnpackSuccess(const FilePath& temp_dir,
 
 void CrxInstaller::CheckRequirements() {
   DCHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
-  if (!frontend_weak_.get())
+  if (!frontend_weak_.get() || frontend_weak_->browser_terminating())
     return;
-#if defined(OS_CHROMEOS)
-  // TODO(jamescook): Remove ifdef after M23 backport, crbug.com/155994
-  if (frontend_weak_->browser_terminating())
-    return;
-#endif
   AddRef();  // Balanced in OnRequirementsChecked().
   requirements_checker_->Check(extension_,
                                base::Bind(&CrxInstaller::OnRequirementsChecked,
@@ -431,13 +423,8 @@ void CrxInstaller::OnRequirementsChecked(
 
 void CrxInstaller::ConfirmInstall() {
   DCHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
-  if (!frontend_weak_.get())
+  if (!frontend_weak_.get() || frontend_weak_->browser_terminating())
     return;
-#if defined(OS_CHROMEOS)
-  // TODO(jamescook): Remove ifdef after M23 backport, crbug.com/155994
-  if (frontend_weak_->browser_terminating())
-    return;
-#endif
 
   string16 error;
   if (!ExtensionSystem::Get(profile_)->management_policy()->
@@ -465,10 +452,10 @@ void CrxInstaller::ConfirmInstall() {
 
   if (client_ && (!allow_silent_install_ || !approved_)) {
     AddRef();  // Balanced in Proceed() and Abort().
-    client_->ConfirmInstall(this, extension_.get());
+    client_->ConfirmInstall(this, extension_.get(), show_dialog_callback_);
   } else {
-    if (!BrowserThread::PostTask(
-            BrowserThread::FILE, FROM_HERE,
+    if (!installer_task_runner_->PostTask(
+            FROM_HERE,
             base::Bind(&CrxInstaller::CompleteInstall, this)))
       NOTREACHED();
   }
@@ -476,8 +463,8 @@ void CrxInstaller::ConfirmInstall() {
 }
 
 void CrxInstaller::InstallUIProceed() {
-  if (!BrowserThread::PostTask(
-          BrowserThread::FILE, FROM_HERE,
+  if (!installer_task_runner_->PostTask(
+          FROM_HERE,
           base::Bind(&CrxInstaller::CompleteInstall, this)))
     NOTREACHED();
 
@@ -507,7 +494,7 @@ void CrxInstaller::InstallUIAbort(bool user_initiated) {
 }
 
 void CrxInstaller::CompleteInstall() {
-  DCHECK(BrowserThread::CurrentlyOn(BrowserThread::FILE));
+  DCHECK(installer_task_runner_->RunsTasksOnCurrentThread());
 
   if (!current_version_.empty()) {
     Version current_version(current_version_);
@@ -566,7 +553,7 @@ void CrxInstaller::CompleteInstall() {
 }
 
 void CrxInstaller::ReportFailureFromFileThread(const CrxInstallerError& error) {
-  DCHECK(BrowserThread::CurrentlyOn(BrowserThread::FILE));
+  DCHECK(installer_task_runner_->RunsTasksOnCurrentThread());
   if (!BrowserThread::PostTask(
           BrowserThread::UI, FROM_HERE,
           base::Bind(&CrxInstaller::ReportFailureFromUIThread, this, error))) {
@@ -595,41 +582,32 @@ void CrxInstaller::ReportFailureFromUIThread(const CrxInstallerError& error) {
     client_->OnInstallFailure(error);
 
   NotifyCrxInstallComplete(NULL);
+
+  // Delete temporary files.
+  CleanupTempFiles();
 }
 
 void CrxInstaller::ReportSuccessFromFileThread() {
-  DCHECK(BrowserThread::CurrentlyOn(BrowserThread::FILE));
+  DCHECK(installer_task_runner_->RunsTasksOnCurrentThread());
 
   // Tracking number of extensions installed by users
-  if (install_cause() == extension_misc::INSTALL_CAUSE_USER_DOWNLOAD) {
+  if (install_cause() == extension_misc::INSTALL_CAUSE_USER_DOWNLOAD)
     UMA_HISTOGRAM_ENUMERATION("Extensions.ExtensionInstalled", 1, 2);
-
-    static bool default_apps_trial_exists =
-        base::FieldTrialList::TrialExists(kDefaultAppsTrialName);
-    if (default_apps_trial_exists) {
-      UMA_HISTOGRAM_ENUMERATION(
-          base::FieldTrial::MakeName("Extensions.ExtensionInstalled",
-                                     kDefaultAppsTrialName),
-          1, 2);
-    }
-  }
 
   if (!BrowserThread::PostTask(
           BrowserThread::UI, FROM_HERE,
           base::Bind(&CrxInstaller::ReportSuccessFromUIThread, this)))
     NOTREACHED();
+
+  // Delete temporary files.
+  CleanupTempFiles();
 }
 
 void CrxInstaller::ReportSuccessFromUIThread() {
   DCHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
 
-  if (!frontend_weak_.get())
+  if (!frontend_weak_.get() || frontend_weak_->browser_terminating())
     return;
-#if defined(OS_CHROMEOS)
-  // TODO(jamescook): Remove ifdef after M23 backport, crbug.com/155994
-  if (frontend_weak_->browser_terminating())
-    return;
-#endif
 
   // If there is a client, tell the client about installation.
   if (client_) {
@@ -650,9 +628,9 @@ void CrxInstaller::ReportSuccessFromUIThread() {
   // Tell the frontend about the installation and hand off ownership of
   // extension_ to it.
   frontend_weak_->OnExtensionInstalled(extension_,
-                                       is_gallery_install(),
                                        page_ordinal_,
-                                       has_requirement_errors_);
+                                       has_requirement_errors_,
+                                       install_wait_for_idle_);
 
   NotifyCrxInstallComplete(extension_.get());
 
@@ -672,6 +650,28 @@ void CrxInstaller::NotifyCrxInstallComplete(const Extension* extension) {
       chrome::NOTIFICATION_CRX_INSTALLER_DONE,
       content::Source<CrxInstaller>(this),
       content::Details<const Extension>(extension));
+}
+
+void CrxInstaller::CleanupTempFiles() {
+  if (!installer_task_runner_->RunsTasksOnCurrentThread()) {
+    if (!installer_task_runner_->PostTask(
+            FROM_HERE,
+            base::Bind(&CrxInstaller::CleanupTempFiles, this))) {
+      NOTREACHED();
+    }
+    return;
+  }
+
+  // Delete the temp directory and crx file as necessary.
+  if (!temp_dir_.value().empty()) {
+    extension_file_util::DeleteFile(temp_dir_, true);
+    temp_dir_ = FilePath();
+  }
+
+  if (delete_source_ && !source_file_.value().empty()) {
+    extension_file_util::DeleteFile(source_file_, false);
+    source_file_ = FilePath();
+  }
 }
 
 }  // namespace extensions

@@ -10,7 +10,10 @@
 #include "ppapi/c/pp_errors.h"
 #include "ppapi/c/ppb_url_loader.h"
 #include "ppapi/c/trusted/ppb_url_loader_trusted.h"
+#include "ppapi/shared_impl/ppapi_globals.h"
+#include "ppapi/shared_impl/url_response_info_data.h"
 #include "ppapi/thunk/enter.h"
+#include "ppapi/thunk/ppb_url_request_info_api.h"
 #include "third_party/WebKit/Source/WebKit/chromium/public/WebDocument.h"
 #include "third_party/WebKit/Source/WebKit/chromium/public/WebElement.h"
 #include "third_party/WebKit/Source/WebKit/chromium/public/WebFrame.h"
@@ -27,9 +30,9 @@
 #include "webkit/plugins/ppapi/common.h"
 #include "webkit/plugins/ppapi/plugin_module.h"
 #include "webkit/plugins/ppapi/ppapi_plugin_instance.h"
-#include "webkit/plugins/ppapi/ppb_url_request_info_impl.h"
-#include "webkit/plugins/ppapi/ppb_url_response_info_impl.h"
 #include "webkit/plugins/ppapi/resource_helper.h"
+#include "webkit/plugins/ppapi/url_request_info_util.h"
+#include "webkit/plugins/ppapi/url_response_info_util.h"
 
 using appcache::WebApplicationCacheHostImpl;
 using ppapi::Resource;
@@ -97,17 +100,11 @@ PPB_URLLoader_API* PPB_URLLoader_Impl::AsPPB_URLLoader_API() {
 }
 
 void PPB_URLLoader_Impl::InstanceWasDeleted() {
-  Resource::InstanceWasDeleted();
   loader_.reset();
 }
 
 int32_t PPB_URLLoader_Impl::Open(PP_Resource request_id,
                                  scoped_refptr<TrackedCallback> callback) {
-  // Main document loads are already open, so don't allow people to open them
-  // again.
-  if (main_document_loader_)
-    return PP_ERROR_INPROGRESS;
-
   EnterResourceNoLock<PPB_URLRequestInfo_API> enter_request(request_id, true);
   if (enter_request.failed()) {
     Log(PP_LOGLEVEL_ERROR,
@@ -116,14 +113,28 @@ int32_t PPB_URLLoader_Impl::Open(PP_Resource request_id,
         " else the request will be null.)");
     return PP_ERROR_BADARGUMENT;
   }
-  PPB_URLRequestInfo_Impl* request = static_cast<PPB_URLRequestInfo_Impl*>(
-      enter_request.object());
+  return Open(enter_request.object()->GetData(), 0, callback);
+}
+
+int32_t PPB_URLLoader_Impl::Open(
+    const ::ppapi::URLRequestInfoData& request_data,
+    int requestor_pid,
+    scoped_refptr<TrackedCallback> callback) {
+  // Main document loads are already open, so don't allow people to open them
+  // again.
+  if (main_document_loader_)
+    return PP_ERROR_INPROGRESS;
 
   int32_t rv = ValidateCallback(callback);
   if (rv != PP_OK)
     return rv;
 
-  if (request->RequiresUniversalAccess() && !has_universal_access_) {
+  // Create a copy of the request data since CreateWebURLRequest will populate
+  // the file refs.
+  ::ppapi::URLRequestInfoData filled_in_request_data = request_data;
+
+  if (URLRequestRequiresUniversalAccess(filled_in_request_data) &&
+      !has_universal_access_) {
     Log(PP_LOGLEVEL_ERROR, "PPB_URLLoader.Open: The URL you're requesting is "
         " on a different security origin than your plugin. To request "
         " cross-origin resources, see "
@@ -138,13 +149,14 @@ int32_t PPB_URLLoader_Impl::Open(PP_Resource request_id,
   if (!frame)
     return PP_ERROR_FAILED;
   WebURLRequest web_request;
-  if (!request->ToWebURLRequest(frame, &web_request))
+  if (!CreateWebURLRequest(&filled_in_request_data, frame, &web_request))
     return PP_ERROR_FAILED;
+  web_request.setRequestorProcessID(requestor_pid);
 
   // Save a copy of the request info so the plugin can continue to use and
   // change it while we're doing the request without affecting us. We must do
-  // this after ToWebURLRequest since that fills out the file refs.
-  request_data_ = request->GetData();
+  // this after CreateWebURLRequest since that fills out the file refs.
+  request_data_ = filled_in_request_data;
 
   WebURLLoaderOptions options;
   if (has_universal_access_) {
@@ -184,8 +196,6 @@ int32_t PPB_URLLoader_Impl::FollowRedirect(
   if (rv != PP_OK)
     return rv;
 
-  WebURL redirect_url = GURL(response_info_->redirect_url());
-
   SetDefersLoading(false);  // Allow the redirect to continue.
   RegisterCallback(callback);
   return PP_OK_COMPLETIONPENDING;
@@ -217,9 +227,20 @@ PP_Bool PPB_URLLoader_Impl::GetDownloadProgress(
 }
 
 PP_Resource PPB_URLLoader_Impl::GetResponseInfo() {
-  if (!response_info_)
+  ::ppapi::thunk::EnterResourceCreationNoLock enter(pp_instance());
+  if (enter.failed() || !response_info_.get())
     return 0;
-  return response_info_->GetReference();
+
+  // Since we're the "host" the process-local resource for the file ref is
+  // the same as the host resource. We pass a ref to the file ref.
+  if (!response_info_->body_as_file_ref.resource.is_null()) {
+    ::ppapi::PpapiGlobals::Get()->GetResourceTracker()->AddRefResource(
+        response_info_->body_as_file_ref.resource.host_resource());
+  }
+  return enter.functions()->CreateURLResponseInfo(
+      pp_instance(),
+      *response_info_,
+      response_info_->body_as_file_ref.resource.host_resource());
 }
 
 int32_t PPB_URLLoader_Impl::ReadResponseBody(
@@ -229,7 +250,8 @@ int32_t PPB_URLLoader_Impl::ReadResponseBody(
   int32_t rv = ValidateCallback(callback);
   if (rv != PP_OK)
     return rv;
-  if (!response_info_ || response_info_->body())
+  if (!response_info_.get() ||
+      !response_info_->body_as_file_ref.resource.is_null())
     return PP_ERROR_FAILED;
   if (bytes_to_read <= 0 || !buffer)
     return PP_ERROR_BADARGUMENT;
@@ -256,7 +278,8 @@ int32_t PPB_URLLoader_Impl::FinishStreamingToFile(
   int32_t rv = ValidateCallback(callback);
   if (rv != PP_OK)
     return rv;
-  if (!response_info_ || !response_info_->body())
+  if (!response_info_.get() ||
+      response_info_->body_as_file_ref.resource.is_null())
     return PP_ERROR_FAILED;
 
   // We may have already reached EOF.
@@ -277,8 +300,12 @@ void PPB_URLLoader_Impl::Close() {
     loader_->cancel();
   else if (main_document_loader_)
     GetFrameForResource(this)->stopLoading();
-  // TODO(viettrungluu): Check what happens to the callback (probably the
-  // wrong thing). May need to post abort here. crbug.com/69457
+
+  // We must not access the buffer provided by the caller from this point on.
+  user_buffer_ = NULL;
+  user_buffer_size_ = 0;
+  if (TrackedCallback::IsPending(pending_callback_))
+    pending_callback_->PostAbort();
 }
 
 void PPB_URLLoader_Impl::GrantUniversalAccess() {
@@ -288,6 +315,21 @@ void PPB_URLLoader_Impl::GrantUniversalAccess() {
 void PPB_URLLoader_Impl::SetStatusCallback(
     PP_URLLoaderTrusted_StatusCallback cb) {
   status_callback_ = cb;
+}
+
+bool PPB_URLLoader_Impl::GetResponseInfoData(
+    ::ppapi::URLResponseInfoData* data) {
+  if (!response_info_.get())
+    return false;
+
+  *data = *response_info_;
+
+  // We transfer one plugin reference to the FileRef to the caller.
+  if (!response_info_->body_as_file_ref.resource.is_null()) {
+    ::ppapi::PpapiGlobals::Get()->GetResourceTracker()->AddRefResource(
+        response_info_->body_as_file_ref.resource.host_resource());
+  }
+  return true;
 }
 
 void PPB_URLLoader_Impl::willSendRequest(
@@ -371,6 +413,9 @@ void PPB_URLLoader_Impl::didFail(WebURLLoader* loader,
     // TODO(bbudge): Extend pp_errors.h to cover interesting network errors
     // from the net error domain.
     switch (error.reason) {
+      case net::ERR_ABORTED:
+        pp_error = PP_ERROR_ABORTED;
+        break;
       case net::ERR_ACCESS_DENIED:
       case net::ERR_NETWORK_ACCESS_DENIED:
         pp_error = PP_ERROR_NOACCESS;
@@ -433,10 +478,16 @@ void PPB_URLLoader_Impl::RunCallback(int32_t result) {
     return;
   }
 
-  // If |user_buffer_| was set as part of registering the callback, ensure
-  // it got cleared since the callback is now free to delete it.
+  // If |user_buffer_| was set as part of registering a callback, the paths
+  // which trigger that callack must have cleared it since the callback is now
+  // free to delete it.
   DCHECK(!user_buffer_);
-  TrackedCallback::ClearAndRun(&pending_callback_, result);
+
+  // As a second line of defense, clear the |user_buffer_| in case the
+  // callbacks get called in an unexpected order.
+  user_buffer_ = NULL;
+  user_buffer_size_ = 0;
+  pending_callback_->Run(result);
 }
 
 size_t PPB_URLLoader_Impl::FillUserBuffer() {
@@ -462,10 +513,13 @@ size_t PPB_URLLoader_Impl::FillUserBuffer() {
 }
 
 void PPB_URLLoader_Impl::SaveResponse(const WebURLResponse& response) {
-  scoped_refptr<PPB_URLResponseInfo_Impl> response_info(
-      new PPB_URLResponseInfo_Impl(pp_instance()));
-  if (response_info->Initialize(response))
-    response_info_ = response_info;
+  // DataFromWebURLResponse returns a file ref with one reference to it, which
+  // we take over via our ScopedPPResource.
+  response_info_.reset(new ::ppapi::URLResponseInfoData(
+      DataFromWebURLResponse(pp_instance(), response)));
+  response_info_file_ref_ = ::ppapi::ScopedPPResource(
+      ::ppapi::ScopedPPResource::PassRef(),
+      response_info_->body_as_file_ref.resource.host_resource());
 }
 
 void PPB_URLLoader_Impl::UpdateStatus() {

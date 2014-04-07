@@ -16,6 +16,8 @@ class WebSecurityOrigin;
 class WebString;
 }
 
+namespace content {
+
 class RendererWebIDBFactoryImpl : public WebKit::WebIDBFactory {
  public:
   RendererWebIDBFactoryImpl();
@@ -35,6 +37,15 @@ class RendererWebIDBFactoryImpl : public WebKit::WebIDBFactory {
       const WebKit::WebSecurityOrigin& origin,
       WebKit::WebFrame* web_frame,
       const WebKit::WebString& data_dir);
+  virtual void open(
+      const WebKit::WebString& name,
+      long long version,
+      long long transaction_id,
+      WebKit::WebIDBCallbacks* callbacks,
+      WebKit::WebIDBDatabaseCallbacks* databaseCallbacks,
+      const WebKit::WebSecurityOrigin& origin,
+      WebKit::WebFrame* web_frame,
+      const WebKit::WebString& data_dir);
   virtual void deleteDatabase(
       const WebKit::WebString& name,
       WebKit::WebIDBCallbacks* callbacks,
@@ -42,5 +53,7 @@ class RendererWebIDBFactoryImpl : public WebKit::WebIDBFactory {
       WebKit::WebFrame* web_frame,
       const WebKit::WebString& data_dir);
 };
+
+}  // namespace content
 
 #endif  // CONTENT_COMMON_INDEXED_DB_PROXY_WEBIDBFACTORY_IMPL_H_

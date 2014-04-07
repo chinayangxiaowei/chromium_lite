@@ -7,7 +7,7 @@
 #include "base/debug/trace_event.h"
 #include "base/logging.h"
 #include "base/memory/scoped_ptr.h"
-#include "third_party/mesa/MesaLib/include/GL/osmesa.h"
+#include "third_party/mesa/include/osmesa.h"
 #include "ui/gl/gl_bindings.h"
 #include "ui/gl/gl_context_egl.h"
 #include "ui/gl/gl_context_osmesa.h"
@@ -54,10 +54,6 @@ scoped_refptr<GLContext> GLContext::CreateGLContext(
       NOTREACHED();
       return NULL;
   }
-}
-
-bool GLContext::SupportsDualGpus() {
-  return false;
 }
 
 }  // namespace gfx

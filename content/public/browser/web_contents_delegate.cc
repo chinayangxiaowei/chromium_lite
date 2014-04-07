@@ -29,9 +29,9 @@ bool WebContentsDelegate::IsPopupOrPanel(const WebContents* source) const {
   return false;
 }
 
-bool WebContentsDelegate::IsApplication() const { return false; }
-
 bool WebContentsDelegate::CanLoadDataURLsInWebUI() const { return false; }
+
+bool WebContentsDelegate::CanOverscrollContent() const { return false; }
 
 gfx::Rect WebContentsDelegate::GetRootWindowResizerRect() const {
   return gfx::Rect();
@@ -78,10 +78,6 @@ bool WebContentsDelegate::HandleContextMenu(
   return false;
 }
 
-bool WebContentsDelegate::ExecuteContextMenuCommand(int command) {
-  return false;
-}
-
 void WebContentsDelegate::ViewSourceForTab(WebContents* source,
                                            const GURL& page_url) {
   // Fall back implementation based entirely on the view-source scheme.
@@ -116,16 +112,6 @@ bool WebContentsDelegate::OnGoToEntryOffset(int offset) {
   return true;
 }
 
-bool WebContentsDelegate::ShouldAddNavigationToHistory(
-    const history::HistoryAddPageArgs& add_page_args,
-    NavigationType navigation_type) {
-  return true;
-}
-
-gfx::NativeWindow WebContentsDelegate::GetFrameNativeWindow() {
-  return NULL;
-}
-
 bool WebContentsDelegate::ShouldCreateWebContents(
     WebContents* web_contents,
     int route_id,
@@ -134,12 +120,6 @@ bool WebContentsDelegate::ShouldCreateWebContents(
     const GURL& target_url) {
   return true;
 }
-
-#if defined(OS_ANDROID)
-bool WebContentsDelegate::ShouldOverrideLoading(const GURL& url) {
-  return false;
-}
-#endif
 
 JavaScriptDialogCreator* WebContentsDelegate::GetJavaScriptDialogCreator() {
   return NULL;
@@ -163,6 +143,14 @@ void WebContentsDelegate::WebIntentDispatch(
   // The caller passes this method ownership of the |intents_dispatcher|, but
   // this empty implementation will not use it, so we delete it immediately.
   delete intents_dispatcher;
+}
+
+bool WebContentsDelegate::RequestPpapiBrokerPermission(
+    WebContents* web_contents,
+    const GURL& url,
+    const FilePath& plugin_path,
+    const base::Callback<void(bool)>& callback) {
+  return false;
 }
 
 WebContentsDelegate::~WebContentsDelegate() {

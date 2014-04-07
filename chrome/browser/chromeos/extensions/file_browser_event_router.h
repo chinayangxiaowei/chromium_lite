@@ -15,18 +15,22 @@
 #include "base/string16.h"
 #include "base/synchronization/lock.h"
 #include "chrome/browser/chromeos/cros/network_library.h"
-#include "chrome/browser/chromeos/gdata/drive_file_system_interface.h"
-#include "chrome/browser/chromeos/gdata/drive_service_interface.h"
+#include "chrome/browser/chromeos/drive/drive_file_system_observer.h"
+#include "chrome/browser/chromeos/drive/drive_resource_metadata.h"
+#include "chrome/browser/google_apis/drive_service_interface.h"
+#include "chrome/browser/google_apis/operation_registry.h"
 #include "chrome/browser/profiles/refcounted_profile_keyed_service.h"
 #include "chrome/browser/profiles/refcounted_profile_keyed_service_factory.h"
 #include "chromeos/disks/disk_mount_manager.h"
-#include "content/public/browser/notification_details.h"
-#include "content/public/browser/notification_observer.h"
-#include "content/public/browser/notification_source.h"
 
 class FileBrowserNotifications;
 class PrefChangeRegistrar;
 class Profile;
+
+namespace drive {
+class DriveEntryProto;
+class DriveFileSystemInterface;
+}
 
 // Monitors changes in disk mounts, network connection state and preferences
 // affecting File Manager. Dispatches appropriate File Browser events.
@@ -34,15 +38,13 @@ class FileBrowserEventRouter
     : public RefcountedProfileKeyedService,
       public chromeos::disks::DiskMountManager::Observer,
       public chromeos::NetworkLibrary::NetworkManagerObserver,
-      public content::NotificationObserver,
-      public gdata::DriveServiceObserver,
-      public gdata::DriveFileSystemInterface::Observer {
+      public drive::DriveFileSystemObserver,
+      public google_apis::DriveServiceObserver {
  public:
   // RefcountedProfileKeyedService overrides.
   virtual void ShutdownOnUIThread() OVERRIDE;
 
-  // Starts observing file system change events. Currently only
-  // CrosDisksClient events are being observed.
+  // Starts observing file system change events.
   void ObserveFileSystemEvents();
 
   // File watch setup routines.
@@ -57,34 +59,35 @@ class FileBrowserEventRouter
   void MountDrive(const base::Closure& callback);
 
   // CrosDisksClient::Observer overrides.
-  virtual void DiskChanged(chromeos::disks::DiskMountManagerEventType event,
-                           const chromeos::disks::DiskMountManager::Disk* disk)
-      OVERRIDE;
-  virtual void DeviceChanged(chromeos::disks::DiskMountManagerEventType event,
-                             const std::string& device_path) OVERRIDE;
-  virtual void MountCompleted(
-      chromeos::disks::DiskMountManager::MountEvent event_type,
+  virtual void OnDiskEvent(
+      chromeos::disks::DiskMountManager::DiskEvent event,
+      const chromeos::disks::DiskMountManager::Disk* disk) OVERRIDE;
+  virtual void OnDeviceEvent(
+      chromeos::disks::DiskMountManager::DeviceEvent event,
+      const std::string& device_path) OVERRIDE;
+  virtual void OnMountEvent(
+      chromeos::disks::DiskMountManager::MountEvent event,
       chromeos::MountError error_code,
       const chromeos::disks::DiskMountManager::MountPointInfo& mount_info)
       OVERRIDE;
+  virtual void OnFormatEvent(
+      chromeos::disks::DiskMountManager::FormatEvent event,
+      chromeos::FormatError error_code,
+      const std::string& device_path) OVERRIDE;
 
   // chromeos::NetworkLibrary::NetworkManagerObserver override.
   virtual void OnNetworkManagerChanged(
       chromeos::NetworkLibrary* network_library) OVERRIDE;
 
-  // Overridden from content::NotificationObserver:
-  virtual void Observe(int type,
-                       const content::NotificationSource& source,
-                       const content::NotificationDetails& details) OVERRIDE;
-
-  // gdata::DriveServiceObserver overrides.
+  // drive::DriveServiceObserver overrides.
   virtual void OnProgressUpdate(
-      const gdata::OperationProgressStatusList& list) OVERRIDE;
-  virtual void OnAuthenticationFailed(gdata::GDataErrorCode error) OVERRIDE;
+      const google_apis::OperationProgressStatusList& list) OVERRIDE;
+  virtual void OnAuthenticationFailed(
+      google_apis::GDataErrorCode error) OVERRIDE;
 
-  // gdata::DriveFileSystemInterface::Observer overrides.
+  // drive::DriveFileSystemInterface::Observer overrides.
   virtual void OnDirectoryChanged(const FilePath& directory_path) OVERRIDE;
-  virtual void OnDocumentFeedFetched(int num_accumulated_entries) OVERRIDE;
+  virtual void OnResourceListFetched(int num_accumulated_entries) OVERRIDE;
   virtual void OnFileSystemMounted() OVERRIDE;
   virtual void OnFileSystemBeingUnmounted() OVERRIDE;
 
@@ -153,22 +156,28 @@ class FileBrowserEventRouter
   void OnDeviceAdded(const std::string& device_path);
   void OnDeviceRemoved(const std::string& device_path);
   void OnDeviceScanned(const std::string& device_path);
-  void OnFormattingStarted(const std::string& device_path, bool success);
-  void OnFormattingFinished(const std::string& device_path, bool success);
+  void OnFormatStarted(const std::string& device_path, bool success);
+  void OnFormatCompleted(const std::string& device_path, bool success);
+
+  // Called on change to kExternalStorageDisabled pref.
+  void OnExternalStorageDisabledChanged();
+
+  // Called when prefs related to file browser change.
+  void OnFileBrowserPrefsChanged();
 
   // Process file watch notifications.
   void HandleFileWatchNotification(const FilePath& path,
                                    bool got_error);
 
-  // Sends folder change event.
-  void DispatchFolderChangeEvent(const FilePath& path, bool error,
-                                 const ExtensionUsageRegistry& extensions);
+  // Sends directory change event.
+  void DispatchDirectoryChangeEvent(const FilePath& path, bool error,
+                                    const ExtensionUsageRegistry& extensions);
 
   // Sends filesystem changed extension message to all renderers.
   void DispatchDiskEvent(const chromeos::disks::DiskMountManager::Disk* disk,
                          bool added);
 
-  void DispatchMountCompletedEvent(
+  void DispatchMountEvent(
       chromeos::disks::DiskMountManager::MountEvent event,
       chromeos::MountError error_code,
       const chromeos::disks::DiskMountManager::MountPointInfo& mount_info);
@@ -182,7 +191,7 @@ class FileBrowserEventRouter
                       bool small);
 
   // Returns the DriveFileSystem for the current profile.
-  gdata::DriveFileSystemInterface* GetRemoteFileSystem() const;
+  drive::DriveFileSystemInterface* GetRemoteFileSystem() const;
 
   // Handles requests to start and stop periodic updates on remote file system.
   // When |start| is set to true, this function starts periodic updates only if
@@ -190,11 +199,6 @@ class FileBrowserEventRouter
   // periodic updates only if the number of outstanding update requests reaches
   // zero.
   void HandleRemoteUpdateRequestOnUIThread(bool start);
-
-  // Used to implement MountDrive(). Called after the authentication.
-  void OnAuthenticated(const base::Closure& callback,
-                       gdata::GDataErrorCode error,
-                       const std::string& tokeni);
 
   scoped_refptr<FileWatcherDelegate> delegate_;
   WatcherMap file_watchers_;

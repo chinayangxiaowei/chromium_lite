@@ -29,21 +29,22 @@
 #include "net/base/net_util.h"
 #include "net/test/test_server.h"
 
+namespace content {
 namespace {
 
 bool CompareTrees(base::DictionaryValue* first, base::DictionaryValue* second) {
   string16 name1;
   string16 name2;
-  if (!first->GetString(content::kFrameTreeNodeNameKey, &name1) ||
-      !second->GetString(content::kFrameTreeNodeNameKey, &name2))
+  if (!first->GetString(kFrameTreeNodeNameKey, &name1) ||
+      !second->GetString(kFrameTreeNodeNameKey, &name2))
     return false;
   if (name1 != name2)
     return false;
 
   int id1 = 0;
   int id2 = 0;
-  if (!first->GetInteger(content::kFrameTreeNodeIdKey, &id1) ||
-      !second->GetInteger(content::kFrameTreeNodeIdKey, &id2)) {
+  if (!first->GetInteger(kFrameTreeNodeIdKey, &id1) ||
+      !second->GetInteger(kFrameTreeNodeIdKey, &id2)) {
     return false;
   }
   if (id1 != id2)
@@ -51,8 +52,8 @@ bool CompareTrees(base::DictionaryValue* first, base::DictionaryValue* second) {
 
   ListValue* subtree1 = NULL;
   ListValue* subtree2 = NULL;
-  bool result1 = first->GetList(content::kFrameTreeNodeSubtreeKey, &subtree1);
-  bool result2 = second->GetList(content::kFrameTreeNodeSubtreeKey, &subtree2);
+  bool result1 = first->GetList(kFrameTreeNodeSubtreeKey, &subtree1);
+  bool result2 = second->GetList(kFrameTreeNodeSubtreeKey, &subtree2);
   if (!result1 && !result2)
     return true;
   if (!result1 || !result2)
@@ -75,7 +76,7 @@ bool CompareTrees(base::DictionaryValue* first, base::DictionaryValue* second) {
   return true;
 }
 
-base::DictionaryValue* GetTree(content::RenderViewHostImpl* rvh) {
+base::DictionaryValue* GetTree(RenderViewHostImpl* rvh) {
   std::string frame_tree = rvh->frame_tree();
   EXPECT_FALSE(frame_tree.empty());
   base::Value* v = base::JSONReader::Read(frame_tree);
@@ -86,8 +87,6 @@ base::DictionaryValue* GetTree(content::RenderViewHostImpl* rvh) {
 }
 
 } // namespace
-
-namespace content {
 
 class RenderViewHostManagerTest : public ContentBrowserTest {
  public:
@@ -455,6 +454,87 @@ IN_PROC_BROWSER_TEST_F(RenderViewHostManagerTest,
   close_observer.Wait();
 }
 
+// Test that setting the opener to null in a window affects cross-process
+// navigations, including those to existing entries.  http://crbug.com/156669.
+IN_PROC_BROWSER_TEST_F(RenderViewHostManagerTest, DisownOpener) {
+  // Start two servers with different sites.
+  ASSERT_TRUE(test_server()->Start());
+  net::TestServer https_server(
+      net::TestServer::TYPE_HTTPS,
+      net::TestServer::kLocalhost,
+      FilePath(FILE_PATH_LITERAL("content/test/data")));
+  ASSERT_TRUE(https_server.Start());
+
+  // Load a page with links that open in a new window.
+  std::string replacement_path;
+  ASSERT_TRUE(GetFilePathWithHostAndPortReplacement(
+      "files/click-noreferrer-links.html",
+      https_server.host_port_pair(),
+      &replacement_path));
+  NavigateToURL(shell(), test_server()->GetURL(replacement_path));
+
+  // Get the original SiteInstance for later comparison.
+  scoped_refptr<SiteInstance> orig_site_instance(
+      shell()->web_contents()->GetSiteInstance());
+  EXPECT_TRUE(orig_site_instance != NULL);
+
+  // Test clicking a target=_blank link.
+  ShellAddedObserver new_shell_observer;
+  bool success = false;
+  EXPECT_TRUE(ExecuteJavaScriptAndExtractBool(
+      shell()->web_contents()->GetRenderViewHost(), L"",
+      L"window.domAutomationController.send(clickSameSiteTargetBlankLink());",
+      &success));
+  EXPECT_TRUE(success);
+  Shell* new_shell = new_shell_observer.GetShell();
+
+  // Wait for the navigation in the new tab to finish, if it hasn't.
+  WaitForLoadStop(new_shell->web_contents());
+  EXPECT_EQ("/files/title2.html",
+            new_shell->web_contents()->GetURL().path());
+
+  // Should have the same SiteInstance.
+  scoped_refptr<SiteInstance> blank_site_instance(
+      new_shell->web_contents()->GetSiteInstance());
+  EXPECT_EQ(orig_site_instance, blank_site_instance);
+
+  // Now navigate the new tab to a different site.
+  NavigateToURL(new_shell, https_server.GetURL("files/title1.html"));
+  scoped_refptr<SiteInstance> new_site_instance(
+      new_shell->web_contents()->GetSiteInstance());
+  EXPECT_NE(orig_site_instance, new_site_instance);
+
+  // Now disown the opener.
+  EXPECT_TRUE(ExecuteJavaScript(
+      new_shell->web_contents()->GetRenderViewHost(), L"",
+      L"window.opener = null;"));
+
+  // Go back and ensure the opener is still null.
+  {
+    WindowedNotificationObserver back_nav_load_observer(
+        NOTIFICATION_NAV_ENTRY_COMMITTED,
+        Source<NavigationController>(
+            &new_shell->web_contents()->GetController()));
+    new_shell->web_contents()->GetController().GoBack();
+    back_nav_load_observer.Wait();
+  }
+  success = false;
+  EXPECT_TRUE(ExecuteJavaScriptAndExtractBool(
+      new_shell->web_contents()->GetRenderViewHost(), L"",
+      L"window.domAutomationController.send(window.opener == null);",
+      &success));
+  EXPECT_TRUE(success);
+
+  // Now navigate forward again (creating a new process) and check opener.
+  NavigateToURL(new_shell, https_server.GetURL("files/title1.html"));
+  success = false;
+  EXPECT_TRUE(ExecuteJavaScriptAndExtractBool(
+      new_shell->web_contents()->GetRenderViewHost(), L"",
+      L"window.domAutomationController.send(window.opener == null);",
+      &success));
+  EXPECT_TRUE(success);
+}
+
 // Test for crbug.com/99202.  PostMessage calls should still work after
 // navigating the source and target windows to different sites.
 // Specifically:
@@ -596,35 +676,8 @@ IN_PROC_BROWSER_TEST_F(RenderViewHostManagerTest,
   // SiteInstance in the target=_blank window.
   EXPECT_TRUE(new_manager->GetSwappedOutRenderViewHost(foo_site_instance));
 
-  NavigateToURL(new_shell, https_server.GetURL("files/post_message2.html"));
-
-  // 5) Now verify that posting a message from the foo window to a subframe of
-  // the opener window works fine. The opener subframe will reply, causing the
-  // foo window to update its own title.
-  WindowedNotificationObserver title_observer3(
-      NOTIFICATION_WEB_CONTENTS_TITLE_UPDATED,
-      Source<WebContents>(new_shell->web_contents()));
-  EXPECT_TRUE(ExecuteJavaScriptAndExtractBool(
-      foo_contents->GetRenderViewHost(), L"",
-      L"window.domAutomationController.send(postToOpenerFrame('msg3','*'));",
-      &success));
-  EXPECT_TRUE(success);
-  title_observer3.Wait();
-  EXPECT_EQ(ASCIIToUTF16("msg3"), new_shell->web_contents()->GetTitle());
-
-  // 6) Lastly, verify that the _blank window can post a message to a subframe
-  // of the foo window. The subframe of foo will set the foo window title and
-  // will reply, setting the _blank window title.
-  WindowedNotificationObserver title_observer4(
-      NOTIFICATION_WEB_CONTENTS_TITLE_UPDATED,
-      Source<WebContents>(new_shell2->web_contents()));
-  EXPECT_TRUE(ExecuteJavaScriptAndExtractBool(
-      new_contents->GetRenderViewHost(), L"",
-      L"window.domAutomationController.send(postToFooFrame('msg4'));",
-      &success));
-  EXPECT_TRUE(success);
-  title_observer4.Wait();
-  EXPECT_EQ(ASCIIToUTF16("msg4"), new_shell2->web_contents()->GetTitle());
+  // TODO(nasko): Test subframe targeting of postMessage once
+  // http://crbug.com/153701 is fixed.
 }
 
 // Test for crbug.com/116192.  Navigations to a window's opener should
@@ -1090,11 +1143,11 @@ IN_PROC_BROWSER_TEST_F(RenderViewHostManagerTest, LeakingRenderViewHosts) {
 
   // Let's ensure that when we start with a blank window, navigating away to a
   // view-source URL, we create a new SiteInstance.
-  content::RenderViewHost* blank_rvh = shell()->web_contents()->
+  RenderViewHost* blank_rvh = shell()->web_contents()->
       GetRenderViewHost();
   SiteInstance* blank_site_instance = blank_rvh->GetSiteInstance();
   EXPECT_EQ(shell()->web_contents()->GetURL(), GURL::EmptyGURL());
-  EXPECT_EQ(blank_site_instance->GetSite(), GURL::EmptyGURL());
+  EXPECT_EQ(blank_site_instance->GetSiteURL(), GURL::EmptyGURL());
   rvh_observers.AddObserverToRVH(blank_rvh);
 
   // Now navigate to the view-source URL and ensure we got a different
@@ -1141,7 +1194,9 @@ IN_PROC_BROWSER_TEST_F(RenderViewHostManagerTest, LeakingRenderViewHosts) {
 // swapped out views must have a matching frame hierarchy. The test checks
 // that frame hierarchies are kept in sync through navigations, reloading, and
 // JavaScript manipulation of the frame tree.
-IN_PROC_BROWSER_TEST_F(RenderViewHostManagerTest, FrameTreeUpdates) {
+//
+// Disable the test until http://crbug.com/153701 is fixed.
+IN_PROC_BROWSER_TEST_F(RenderViewHostManagerTest, DISABLED_FrameTreeUpdates) {
   // Start two servers to allow using different sites.
   EXPECT_TRUE(test_server()->Start());
   net::TestServer https_server(
@@ -1171,11 +1226,11 @@ IN_PROC_BROWSER_TEST_F(RenderViewHostManagerTest, FrameTreeUpdates) {
   RenderViewHostManager* opener_rvhm = static_cast<WebContentsImpl*>(
       opener_contents)->GetRenderManagerForTesting();
   frames = GetTree(opener_rvhm->current_host());
-  EXPECT_FALSE(frames->GetList(content::kFrameTreeNodeSubtreeKey, &subtree));
+  EXPECT_FALSE(frames->GetList(kFrameTreeNodeSubtreeKey, &subtree));
 
   NavigateToURL(shell(), frame_tree_url);
   frames = GetTree(opener_rvhm->current_host());
-  EXPECT_TRUE(frames->GetList(content::kFrameTreeNodeSubtreeKey, &subtree));
+  EXPECT_TRUE(frames->GetList(kFrameTreeNodeSubtreeKey, &subtree));
   EXPECT_TRUE(subtree->GetSize() == 3);
 
   scoped_refptr<SiteInstance> orig_site_instance(
@@ -1270,14 +1325,14 @@ IN_PROC_BROWSER_TEST_F(RenderViewHostManagerTest, FrameTreeUpdates) {
       &success));
   EXPECT_TRUE(success);
   frames = GetTree(opener_rvhm->current_host());
-  EXPECT_TRUE(frames->GetList(content::kFrameTreeNodeSubtreeKey, &subtree));
+  EXPECT_TRUE(frames->GetList(kFrameTreeNodeSubtreeKey, &subtree));
   EXPECT_EQ(subtree->GetSize(), 2U);
 
   // Create a load observer for the iframe that will be created by the
   // JavaScript code we will execute.
   WindowedNotificationObserver load_observer(
       NOTIFICATION_LOAD_STOP,
-      content::Source<NavigationController>(
+      Source<NavigationController>(
               &opener_contents->GetController()));
   EXPECT_TRUE(ExecuteJavaScriptAndExtractBool(
       opener_contents->GetRenderViewHost(), L"",
@@ -1287,7 +1342,7 @@ IN_PROC_BROWSER_TEST_F(RenderViewHostManagerTest, FrameTreeUpdates) {
   load_observer.Wait();
 
   frames = GetTree(opener_rvhm->current_host());
-  EXPECT_TRUE(frames->GetList(content::kFrameTreeNodeSubtreeKey, &subtree));
+  EXPECT_TRUE(frames->GetList(kFrameTreeNodeSubtreeKey, &subtree));
   EXPECT_EQ(subtree->GetSize(), 3U);
 
   EXPECT_TRUE(CompareTrees(

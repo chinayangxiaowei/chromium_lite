@@ -24,7 +24,6 @@
 #include "chrome/browser/ui/browser_window.h"
 #include "chrome/browser/ui/omnibox/location_bar.h"
 #include "chrome/browser/ui/omnibox/omnibox_view.h"
-#include "chrome/browser/ui/tab_contents/tab_contents.h"
 #include "chrome/common/chrome_notification_types.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/common/pref_names.h"
@@ -42,7 +41,7 @@
 using content::NavigationController;
 using content::NavigationEntry;
 
-int OmniboxSearchHint::kUserDataKey;
+DEFINE_WEB_CONTENTS_USER_DATA_KEY(OmniboxSearchHint)
 
 // The URLs of search engines for which we want to trigger the infobar.
 const char* const kSearchEngineURLs[] = {
@@ -216,12 +215,12 @@ void OmniboxSearchHint::Observe(int type,
 
 void OmniboxSearchHint::ShowInfoBar() {
   InfoBarTabHelper* infobar_tab_helper =
-      TabContents::FromWebContents(web_contents_)->infobar_tab_helper();
+      InfoBarTabHelper::FromWebContents(web_contents_);
   infobar_tab_helper->AddInfoBar(new HintInfoBar(this, infobar_tab_helper));
 }
 
 void OmniboxSearchHint::ShowEnteringQuery() {
-  LocationBar* location_bar = browser::FindBrowserWithWebContents(
+  LocationBar* location_bar = chrome::FindBrowserWithWebContents(
       web_contents_)->window()->GetLocationBar();
   OmniboxView* omnibox_view = location_bar->GetLocationEntry();
   location_bar->FocusLocation(true);

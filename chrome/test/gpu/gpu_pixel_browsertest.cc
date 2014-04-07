@@ -14,6 +14,7 @@
 #include "chrome/browser/ui/browser_window.h"
 #include "chrome/browser/ui/window_snapshot/window_snapshot.h"
 #include "chrome/common/chrome_paths.h"
+#include "chrome/common/chrome_switches.h"
 #include "chrome/common/chrome_version_info.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/test_launcher_utils.h"
@@ -23,7 +24,6 @@
 #include "content/public/browser/web_contents.h"
 #include "content/public/common/content_switches.h"
 #include "content/public/test/browser_test_utils.h"
-#include "content/test/gpu/test_switches.h"
 #include "googleurl/src/gurl.h"
 #include "net/base/net_util.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -167,9 +167,9 @@ class GpuPixelBrowserTest : public InProcessBrowserTest {
     ASSERT_TRUE(tracing::BeginTracing("-test_*"));
 #endif
 
-    ASSERT_TRUE(ui_test_utils::BringBrowserWindowToFront(browser()));
+    browser()->window()->Activate();
 
-    ui_test_utils::DOMMessageQueue message_queue;
+    content::DOMMessageQueue message_queue;
     ui_test_utils::NavigateToURL(browser(), net::FilePathToFileURL(url));
 
     // Wait for notification that page is loaded.

@@ -21,8 +21,8 @@
 #include "chrome/browser/webdata/web_data_service_factory.h"
 #include "chrome/browser/webdata/web_database.h"
 #include "chrome/common/chrome_notification_types.h"
+#include "chrome/common/form_field_data.h"
 #include "chrome/test/base/thread_observer_helper.h"
-#include "webkit/forms/form_field.h"
 
 using base::WaitableEvent;
 using content::BrowserThread;
@@ -159,11 +159,11 @@ PersonalDataManager* GetPersonalDataManager(int index) {
 }
 
 void AddKeys(int profile, const std::set<AutofillKey>& keys) {
-  std::vector<webkit::forms::FormField> form_fields;
+  std::vector<FormFieldData> form_fields;
   for (std::set<AutofillKey>::const_iterator i = keys.begin();
        i != keys.end();
        ++i) {
-    webkit::forms::FormField field;
+    FormFieldData field;
     field.name = i->name();
     field.value = i->value();
     form_fields.push_back(field);
@@ -261,7 +261,7 @@ void UpdateProfile(int profile,
   for (size_t i = 0; i < all_profiles.size(); ++i) {
     profiles.push_back(*all_profiles[i]);
     if (all_profiles[i]->guid() == guid)
-      profiles.back().SetInfo(type.field_type(), value);
+      profiles.back().SetRawInfo(type.field_type(), value);
   }
   autofill_helper::SetProfiles(profile, &profiles);
 }

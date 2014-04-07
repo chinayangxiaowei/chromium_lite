@@ -3,7 +3,7 @@
 // found in the LICENSE file.
 
 #include "base/file_util.h"
-#include "base/scoped_temp_dir.h"
+#include "base/files/scoped_temp_dir.h"
 #include "content/browser/browser_thread_impl.h"
 #include "content/browser/in_process_webkit/indexed_db_context_impl.h"
 #include "content/public/browser/storage_partition.h"
@@ -16,10 +16,9 @@
 #include "webkit/quota/quota_manager.h"
 #include "webkit/quota/special_storage_policy.h"
 
-using content::BrowserContext;
-using content::BrowserThread;
-using content::BrowserThreadImpl;
 using webkit_database::DatabaseUtil;
+
+namespace content {
 
 class IndexedDBTest : public testing::Test {
  public:
@@ -40,7 +39,7 @@ class IndexedDBTest : public testing::Test {
 };
 
 TEST_F(IndexedDBTest, ClearSessionOnlyDatabases) {
-  ScopedTempDir temp_dir;
+  base::ScopedTempDir temp_dir;
   ASSERT_TRUE(temp_dir.CreateUniqueTempDir());
 
   FilePath normal_path;
@@ -49,7 +48,7 @@ TEST_F(IndexedDBTest, ClearSessionOnlyDatabases) {
   // Create the scope which will ensure we run the destructor of the webkit
   // context which should trigger the clean up.
   {
-    content::TestBrowserContext browser_context;
+    TestBrowserContext browser_context;
 
     const GURL kNormalOrigin("http://normal/");
     const GURL kSessionOnlyOrigin("http://session-only/");
@@ -74,17 +73,17 @@ TEST_F(IndexedDBTest, ClearSessionOnlyDatabases) {
         DatabaseUtil::GetOriginIdentifier(kSessionOnlyOrigin));
     ASSERT_TRUE(file_util::CreateDirectory(normal_path));
     ASSERT_TRUE(file_util::CreateDirectory(session_only_path));
-    message_loop_.RunAllPending();
+    message_loop_.RunUntilIdle();
   }
 
-  message_loop_.RunAllPending();
+  message_loop_.RunUntilIdle();
 
   EXPECT_TRUE(file_util::DirectoryExists(normal_path));
   EXPECT_FALSE(file_util::DirectoryExists(session_only_path));
 }
 
 TEST_F(IndexedDBTest, SetForceKeepSessionState) {
-  ScopedTempDir temp_dir;
+  base::ScopedTempDir temp_dir;
   ASSERT_TRUE(temp_dir.CreateUniqueTempDir());
 
   FilePath normal_path;
@@ -93,7 +92,7 @@ TEST_F(IndexedDBTest, SetForceKeepSessionState) {
   // Create the scope which will ensure we run the destructor of the webkit
   // context.
   {
-    content::TestBrowserContext browser_context;
+    TestBrowserContext browser_context;
 
     const GURL kNormalOrigin("http://normal/");
     const GURL kSessionOnlyOrigin("http://session-only/");
@@ -121,11 +120,11 @@ TEST_F(IndexedDBTest, SetForceKeepSessionState) {
         DatabaseUtil::GetOriginIdentifier(kSessionOnlyOrigin));
     ASSERT_TRUE(file_util::CreateDirectory(normal_path));
     ASSERT_TRUE(file_util::CreateDirectory(session_only_path));
-    message_loop_.RunAllPending();
+    message_loop_.RunUntilIdle();
   }
 
   // Make sure we wait until the destructor has run.
-  message_loop_.RunAllPending();
+  message_loop_.RunUntilIdle();
 
   // No data was cleared because of SetForceKeepSessionState.
   EXPECT_TRUE(file_util::DirectoryExists(normal_path));
@@ -157,7 +156,7 @@ class MockWebIDBDatabase : public WebKit::WebIDBDatabase
 
 
 TEST_F(IndexedDBTest, ForceCloseOpenDatabasesOnDelete) {
-  ScopedTempDir temp_dir;
+  base::ScopedTempDir temp_dir;
   ASSERT_TRUE(temp_dir.CreateUniqueTempDir());
 
   FilePath test_path;
@@ -165,7 +164,7 @@ TEST_F(IndexedDBTest, ForceCloseOpenDatabasesOnDelete) {
   // Create the scope which will ensure we run the destructor of the webkit
   // context.
   {
-    content::TestBrowserContext browser_context;
+    TestBrowserContext browser_context;
 
     const GURL kTestOrigin("http://test/");
 
@@ -192,11 +191,13 @@ TEST_F(IndexedDBTest, ForceCloseOpenDatabasesOnDelete) {
 
     idb_context->DeleteForOrigin(kTestOrigin);
 
-    message_loop_.RunAllPending();
+    message_loop_.RunUntilIdle();
   }
 
   // Make sure we wait until the destructor has run.
-  message_loop_.RunAllPending();
+  message_loop_.RunUntilIdle();
 
   EXPECT_FALSE(file_util::DirectoryExists(test_path));
 }
+
+}  // namespace content

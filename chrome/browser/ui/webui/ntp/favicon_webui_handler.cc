@@ -37,7 +37,8 @@ StringValue* SkColorToCss(SkColor color) {
 base::StringValue* GetDominantColorCssString(
     scoped_refptr<base::RefCountedMemory> png) {
   color_utils::GridSampler sampler;
-  SkColor color = color_utils::CalculateKMeanColorOfPNG(png, 100, 665, sampler);
+  SkColor color =
+      color_utils::CalculateKMeanColorOfPNG(png, 100, 665, &sampler);
   return SkColorToCss(color);
 }
 
@@ -83,9 +84,10 @@ void FaviconWebUIHandler::RegisterMessages() {
 void FaviconWebUIHandler::HandleGetFaviconDominantColor(const ListValue* args) {
   std::string path;
   CHECK(args->GetString(0, &path));
-  DCHECK(StartsWithASCII(path, "chrome://favicon/size/16/", false)) <<
-      "path is " << path;
-  path = path.substr(arraysize("chrome://favicon/size/16/") - 1);
+  std::string prefix = "chrome://favicon/size/";
+  DCHECK(StartsWithASCII(path, prefix, false)) << "path is " << path;
+  size_t slash = path.find("/", prefix.length());
+  path = path.substr(slash + 1);
 
   std::string dom_id;
   CHECK(args->GetString(1, &dom_id));
@@ -110,25 +112,22 @@ void FaviconWebUIHandler::HandleGetFaviconDominantColor(const ListValue* args) {
   }
 
   dom_id_map_[id_] = dom_id;
-  FaviconService::Handle handle = favicon_service->GetRawFaviconForURL(
+  favicon_service->GetRawFaviconForURL(
       FaviconService::FaviconForURLParams(
           Profile::FromWebUI(web_ui()),
           url,
           history::FAVICON,
-          gfx::kFaviconSize,
-          &consumer_),
+          gfx::kFaviconSize),
       ui::SCALE_FACTOR_100P,
       base::Bind(&FaviconWebUIHandler::OnFaviconDataAvailable,
-                 base::Unretained(this)));
-  consumer_.SetClientData(favicon_service, handle, id_++);
+                 base::Unretained(this),
+                 id_++),
+      &cancelable_task_tracker_);
 }
 
 void FaviconWebUIHandler::OnFaviconDataAvailable(
-    FaviconService::Handle request_handle,
+    int id,
     const history::FaviconBitmapResult& bitmap_result) {
-  FaviconService* favicon_service = FaviconServiceFactory::GetForProfile(
-      Profile::FromWebUI(web_ui()), Profile::EXPLICIT_ACCESS);
-  int id = consumer_.GetClientData(favicon_service, request_handle);
   scoped_ptr<StringValue> color_value;
 
   if (bitmap_result.is_valid())

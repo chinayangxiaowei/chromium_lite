@@ -22,13 +22,20 @@ cr.define('options', function() {
     this.lastFocusedElement = null;
   }
 
-  /** @const */ var HORIZONTAL_OFFSET = 155;
-
   /**
    * This is the absolute difference maintained between standard and
    * fixed-width font sizes. Refer http://crbug.com/91922.
+   * @const
    */
   OptionsPage.SIZE_DIFFERENCE_FIXED_STANDARD = 3;
+
+  /**
+   * Offset of page container in pixels, to allow room for side menu.
+   * Simplified settings pages can override this if they don't use the menu.
+   * The default (155) comes from -webkit-margin-start in uber_shared.css
+   * @private
+   */
+  OptionsPage.horizontalOffset = 155;
 
   /**
    * Main level option pages. Maps lower-case page names to the respective page
@@ -81,6 +88,9 @@ cr.define('options', function() {
                                         opt_propertyBag) {
     // If |opt_propertyBag| is non-truthy, homogenize to object.
     opt_propertyBag = opt_propertyBag || {};
+
+    // If a bubble is currently being shown, hide it.
+    this.hideBubble();
 
     // Find the currently visible root-level page.
     var rootPage = null;
@@ -148,6 +158,10 @@ cr.define('options', function() {
     // Update tab title.
     this.setTitle_(targetPage.title);
 
+    // Update focus if any other control was focused before.
+    if (document.activeElement != document.body)
+      targetPage.focus();
+
     // Notify pages if they were shown.
     for (var i = 0; i < allPageNames.length; ++i) {
       var name = allPageNames[i];
@@ -197,6 +211,10 @@ cr.define('options', function() {
     var path = window.location.pathname + window.location.hash;
     if (path)
       path = path.slice(1).replace(/\/(?:#|$)/, '');  // Remove trailing slash.
+
+    // Update tab title.
+    this.setTitle_(page.title);
+
     // The page is already in history (the user may have clicked the same link
     // twice). Do nothing.
     if (path == page.name &&
@@ -219,9 +237,6 @@ cr.define('options', function() {
                          {pageName: page.name},
                          page.title,
                          '/' + page.name + hash);
-
-    // Update tab title.
-    this.setTitle_(page.title);
   };
 
   /**
@@ -251,7 +266,17 @@ cr.define('options', function() {
     // Update tab title.
     this.setTitle_(overlay.title);
 
+    // Change focus to the overlay if any other control was focused before.
+    if (document.activeElement != document.body)
+      overlay.focus();
+
     $('searchBox').setAttribute('aria-hidden', true);
+
+    if ($('search-field').value == '') {
+      var section = overlay.associatedSection;
+      if (section)
+        options.BrowserOptions.scrollToSection(section);
+    }
 
     return true;
   };
@@ -378,12 +403,42 @@ cr.define('options', function() {
   };
 
   /**
-   * Updates managed banner visibility state based on the topmost page.
+   * Returns the currently visible bubble, or null if no bubble is visible.
+   * @return {OptionsBubble} The bubble currently being shown.
    */
-  OptionsPage.updateManagedBannerVisibility = function() {
-    var topPage = this.getTopmostVisiblePage();
-    if (topPage)
-      topPage.updateManagedBannerVisibility();
+  OptionsPage.getVisibleBubble = function() {
+    var bubble = OptionsPage.bubble_;
+    return bubble && !bubble.hidden ? bubble : null;
+  };
+
+  /**
+   * Shows an informational bubble displaying |content| and pointing at the
+   * |target| element. If |content| has focusable elements, they join the
+   * current page's tab order as siblings of |domSibling|.
+   * @param {HTMLDivElement} content The content of the bubble.
+   * @param {HTMLElement} target The element at which the bubble points.
+   * @param {HTMLElement} domSibling The element after which the bubble is added
+   *                      to the DOM.
+   * @param {cr.ui.ArrowLocation} location The arrow location.
+   */
+  OptionsPage.showBubble = function(content, target, domSibling, location) {
+    OptionsPage.hideBubble();
+
+    var bubble = new options.OptionsBubble;
+    bubble.anchorNode = target;
+    bubble.domSibling = domSibling;
+    bubble.arrowLocation = location;
+    bubble.content = content;
+    bubble.show();
+    OptionsPage.bubble_ = bubble;
+  };
+
+  /**
+   * Hides the currently visible bubble, if any.
+   */
+  OptionsPage.hideBubble = function() {
+    if (OptionsPage.bubble_)
+      OptionsPage.bubble_.hide();
   };
 
   /**
@@ -620,10 +675,20 @@ cr.define('options', function() {
    * @private
    */
   OptionsPage.updateFrozenElementHorizontalPosition_ = function(e) {
-    if (isRTL())
-      e.style.right = HORIZONTAL_OFFSET + 'px';
-    else
-      e.style.left = HORIZONTAL_OFFSET - document.body.scrollLeft + 'px';
+    if (isRTL()) {
+      e.style.right = OptionsPage.horizontalOffset + 'px';
+    } else {
+      e.style.left = OptionsPage.horizontalOffset -
+          document.body.scrollLeft + 'px';
+    }
+  };
+
+  /**
+   * Change the horizontal offset used to reposition elements while showing an
+   * overlay from the default.
+   */
+  OptionsPage.setHorizontalOffset = function(value) {
+    OptionsPage.horizontalOffset = value;
   };
 
   OptionsPage.setClearPluginLSODataEnabled = function(enabled) {
@@ -675,55 +740,18 @@ cr.define('options', function() {
     initializePage: function() {},
 
     /**
-     * Updates managed banner visibility state. This function iterates over
-     * all input fields of a page and if any of these is marked as managed
-     * it triggers the managed banner to be visible. The banner can be enforced
-     * being on through the managed flag of this class but it can not be forced
-     * being off if managed items exist.
+     * Sets focus on the first focusable element. Override for a custom focus
+     * strategy.
      */
-    updateManagedBannerVisibility: function() {
-      var bannerDiv = this.pageDiv.querySelector('.managed-prefs-banner');
-      // Create a banner for the overlay if we don't have one.
-      if (!bannerDiv) {
-        bannerDiv = $('managed-prefs-banner').cloneNode(true);
-        bannerDiv.id = null;
-
-        if (this.isOverlay) {
-          var content = this.pageDiv.querySelector('.content-area');
-          content.parentElement.insertBefore(bannerDiv, content);
-        } else {
-          bannerDiv.classList.add('main-page-banner');
-          var header = this.pageDiv.querySelector('header');
-          header.appendChild(bannerDiv);
-        }
-      }
-
-      var controlledByPolicy = false;
-      var controlledByExtension = false;
-      var inputElements = this.pageDiv.querySelectorAll('input[controlled-by]');
-      for (var i = 0; i < inputElements.length; i++) {
-        if (inputElements[i].controlledBy == 'policy')
-          controlledByPolicy = true;
-        else if (inputElements[i].controlledBy == 'extension')
-          controlledByExtension = true;
-      }
-
-      if (!controlledByPolicy && !controlledByExtension) {
-        this.pageDiv.classList.remove('showing-banner');
-      } else {
-        this.pageDiv.classList.add('showing-banner');
-
-        var text = bannerDiv.querySelector('#managed-prefs-text');
-        if (controlledByPolicy && !controlledByExtension) {
-          text.textContent =
-              loadTimeData.getString('policyManagedPrefsBannerText');
-        } else if (!controlledByPolicy && controlledByExtension) {
-          text.textContent =
-              loadTimeData.getString('extensionManagedPrefsBannerText');
-        } else if (controlledByPolicy && controlledByExtension) {
-          text.textContent = loadTimeData.getString(
-              'policyAndExtensionManagedPrefsBannerText');
-        }
+    focus: function() {
+      var elements = this.pageDiv.querySelectorAll(
+          'input, list, select, textarea, button');
+      for (var i = 0; i < elements.length; i++) {
+        var element = elements[i];
+        // Try to focus. If fails, then continue.
+        element.focus();
+        if (document.activeElement == element)
+          return;
       }
     },
 
@@ -852,7 +880,6 @@ cr.define('options', function() {
      */
     onVisibilityChanged_: function() {
       OptionsPage.updateRootPageFreezeState();
-      OptionsPage.updateManagedBannerVisibility();
 
       if (this.isOverlay && !this.visible)
         OptionsPage.updateScrollPosition_();

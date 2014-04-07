@@ -360,6 +360,9 @@ bool SyncTest::SetupSync() {
 }
 
 void SyncTest::CleanUpOnMainThread() {
+  // Some of the pending messages might rely on browser windows still being
+  // around, so run messages both before and after closing all browsers.
+  content::RunAllPendingInMessageLoop();
   // Close all browser windows.
   browser::CloseAllBrowsers();
   content::RunAllPendingInMessageLoop();
@@ -421,7 +424,7 @@ void SyncTest::SetupMockGaiaResponses() {
       true);
   fake_factory_->SetFakeResponse(
       GaiaUrls::GetInstance()->get_user_info_url(),
-      "email=user@gmail.com",
+      "email=user@gmail.com\ndisplayEmail=user@gmail.com",
       true);
   fake_factory_->SetFakeResponse(
       GaiaUrls::GetInstance()->issue_auth_token_url(),
@@ -674,8 +677,8 @@ void SyncTest::TriggerNotification(syncer::ModelTypeSet changed_types) {
       syncer::P2PNotificationData(
           "from_server",
           syncer::NOTIFY_ALL,
-          syncer::ObjectIdSetToStateMap(
-              syncer::ModelTypeSetToObjectIdSet(changed_types), ""),
+          syncer::ObjectIdSetToInvalidationMap(
+              syncer::ModelTypeSetToObjectIdSet(changed_types), std::string()),
           syncer::REMOTE_INVALIDATION).ToString();
   const std::string& path =
       std::string("chromiumsync/sendnotification?channel=") +
@@ -728,6 +731,12 @@ void SyncTest::TriggerTransientError() {
 void SyncTest::TriggerAuthError() {
   ASSERT_TRUE(ServerSupportsErrorTriggering());
   std::string path = "chromiumsync/cred";
+  ui_test_utils::NavigateToURL(browser(), sync_server_.GetURL(path));
+}
+
+void SyncTest::TriggerXmppAuthError() {
+  ASSERT_TRUE(ServerSupportsErrorTriggering());
+  std::string path = "chromiumsync/xmppcred";
   ui_test_utils::NavigateToURL(browser(), sync_server_.GetURL(path));
 }
 

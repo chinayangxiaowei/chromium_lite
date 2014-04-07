@@ -3,6 +3,7 @@
 // found in the LICENSE file.
 
 #include "stdafx.h"
+#include "win8/metro_driver/metro_driver.h"
 
 #include <roerrorapi.h>
 #include <shobjidl.h>
@@ -12,9 +13,12 @@
 #include "base/logging.h"
 #include "base/logging_win.h"
 #include "base/win/scoped_comptr.h"
-#include "win8/metro_driver/chrome_app_view.h"
 #include "win8/metro_driver/winrt_utils.h"
 #include "sandbox/win/src/sidestep/preamble_patcher.h"
+
+#if !defined(USE_AURA)
+#include "win8/metro_driver/chrome_app_view.h"
+#endif
 
 // TODO(siggi): Move this to GYP.
 #pragma comment(lib, "runtimeobject.lib")
@@ -143,14 +147,6 @@ int InitMetro(LPTHREAD_START_ROUTINE thread_proc, void* context) {
 
 #if defined(NDEBUG)
   logging::SetMinLogLevel(logging::LOG_ERROR);
-  // Bind to the breakpad handling function.
-  globals.breakpad_exception_handler =
-      reinterpret_cast<BreakpadExceptionHandler>(
-          ::GetProcAddress(::GetModuleHandle(NULL),
-                           "CrashForException"));
-  if (!globals.breakpad_exception_handler) {
-    DVLOG(0) << "CrashForException export not found";
-  }
 #else
   logging::SetMinLogLevel(logging::LOG_VERBOSE);
   // Set the error reporting flags to always raise an exception,
@@ -180,9 +176,11 @@ int InitMetro(LPTHREAD_START_ROUTINE thread_proc, void* context) {
   if (FAILED(hr))
     return 1;
 
+#if !defined(USE_AURA)
   // The metro specific hacks code assumes that there is only one thread active
   // at the moment. This better be the case or we may have race conditions.
   Hacks::MetroSpecificHacksInitialize();
+#endif
 
   auto view_factory = mswr::Make<ChromeAppViewFactory>(
       core_app.Get(), thread_proc, context);

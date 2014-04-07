@@ -7,6 +7,7 @@
 #include <cstddef>
 
 #include "base/bind.h"
+#include "base/bind_helpers.h"
 #include "base/compiler_specific.h"
 #include "base/location.h"
 #include "base/memory/ref_counted.h"
@@ -22,9 +23,9 @@
 #include "content/public/browser/notification_service.h"
 #include "content/public/test/test_browser_thread.h"
 #include "sync/internal_api/public/base/model_type.h"
-#include "sync/internal_api/public/base/model_type_state_map.h"
+#include "sync/internal_api/public/base/model_type_invalidation_map.h"
 #include "sync/notifier/fake_invalidation_handler.h"
-#include "sync/notifier/object_id_state_map_test_util.h"
+#include "sync/notifier/object_id_invalidation_map_test_util.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
@@ -32,9 +33,6 @@ namespace browser_sync {
 namespace {
 
 using ::testing::NiceMock;
-
-// Needed by BlockForSyncThread().
-void DoNothing() {}
 
 // Since all the interesting stuff happens on the sync thread, we have
 // to be careful to use GTest/GMock only on the main thread since they
@@ -68,14 +66,14 @@ class ChromeSyncNotificationBridgeTest : public testing::Test {
   }
 
   void VerifyAndDestroyObserver(
-      const syncer::ModelTypeStateMap& expected_states,
+      const syncer::ModelTypeInvalidationMap& expected_invalidations,
       syncer::IncomingInvalidationSource expected_source) {
     ASSERT_TRUE(sync_thread_.message_loop_proxy()->PostTask(
         FROM_HERE,
         base::Bind(&ChromeSyncNotificationBridgeTest::
                        VerifyAndDestroyObserverOnSyncThread,
                    base::Unretained(this),
-                   expected_states,
+                   expected_invalidations,
                    expected_source)));
     BlockForSyncThread();
   }
@@ -102,25 +100,27 @@ class ChromeSyncNotificationBridgeTest : public testing::Test {
 
   void TriggerRefreshNotification(
       int type,
-      const syncer::ModelTypeStateMap& state_map) {
+      const syncer::ModelTypeInvalidationMap& invalidation_map) {
     content::NotificationService::current()->Notify(
         type,
         content::Source<Profile>(&mock_profile_),
-        content::Details<const syncer::ModelTypeStateMap>(&state_map));
+        content::Details<const syncer::ModelTypeInvalidationMap>(
+            &invalidation_map));
     BlockForSyncThread();
   }
 
  private:
   void VerifyAndDestroyObserverOnSyncThread(
-      const syncer::ModelTypeStateMap& expected_states,
+      const syncer::ModelTypeInvalidationMap& expected_invalidations,
       syncer::IncomingInvalidationSource expected_source) {
     DCHECK(sync_thread_.message_loop_proxy()->RunsTasksOnCurrentThread());
     if (sync_handler_.get()) {
       sync_handler_notification_success_ =
           (sync_handler_->GetInvalidationCount() == 1) &&
-          ObjectIdStateMapEquals(
-              sync_handler_->GetLastInvalidationIdStateMap(),
-              syncer::ModelTypeStateMapToObjectIdStateMap(expected_states)) &&
+          ObjectIdInvalidationMapEquals(
+              sync_handler_->GetLastInvalidationMap(),
+              syncer::ModelTypeInvalidationMapToObjectIdInvalidationMap(
+                  expected_invalidations)) &&
           (sync_handler_->GetLastInvalidationSource() == expected_source);
       bridge_->UnregisterHandler(sync_handler_.get());
     } else {
@@ -148,7 +148,7 @@ class ChromeSyncNotificationBridgeTest : public testing::Test {
     base::RunLoop run_loop;
     ASSERT_TRUE(sync_thread_.message_loop_proxy()->PostTaskAndReply(
         FROM_HERE,
-        base::Bind(&DoNothing),
+        base::Bind(&base::DoNothing),
         run_loop.QuitClosure()));
     run_loop.Run();
   }
@@ -167,28 +167,28 @@ class ChromeSyncNotificationBridgeTest : public testing::Test {
 // invalidation, and ensures the bridge posts a LOCAL_INVALIDATION
 // with the proper state to it.
 TEST_F(ChromeSyncNotificationBridgeTest, LocalNotification) {
-  syncer::ModelTypeStateMap state_map;
-  state_map.insert(
-      std::make_pair(syncer::SESSIONS, syncer::InvalidationState()));
+  const syncer::ModelTypeSet types(syncer::SESSIONS);
+  const syncer::ModelTypeInvalidationMap& invalidation_map =
+      ModelTypeSetToInvalidationMap(types, std::string());
   CreateObserver();
   UpdateEnabledTypes(syncer::ModelTypeSet(syncer::SESSIONS));
   TriggerRefreshNotification(chrome::NOTIFICATION_SYNC_REFRESH_LOCAL,
-                             state_map);
-  VerifyAndDestroyObserver(state_map, syncer::LOCAL_INVALIDATION);
+                             invalidation_map);
+  VerifyAndDestroyObserver(invalidation_map, syncer::LOCAL_INVALIDATION);
 }
 
 // Adds an observer on the sync thread, triggers a remote refresh
 // invalidation, and ensures the bridge posts a REMOTE_INVALIDATION
 // with the proper state to it.
 TEST_F(ChromeSyncNotificationBridgeTest, RemoteNotification) {
-  syncer::ModelTypeStateMap state_map;
-  state_map.insert(
-      std::make_pair(syncer::SESSIONS, syncer::InvalidationState()));
+  const syncer::ModelTypeSet types(syncer::SESSIONS);
+  const syncer::ModelTypeInvalidationMap& invalidation_map =
+      ModelTypeSetToInvalidationMap(types, std::string());
   CreateObserver();
   UpdateEnabledTypes(syncer::ModelTypeSet(syncer::SESSIONS));
   TriggerRefreshNotification(chrome::NOTIFICATION_SYNC_REFRESH_REMOTE,
-                             state_map);
-  VerifyAndDestroyObserver(state_map, syncer::REMOTE_INVALIDATION);
+                             invalidation_map);
+  VerifyAndDestroyObserver(invalidation_map, syncer::REMOTE_INVALIDATION);
 }
 
 // Adds an observer on the sync thread, triggers a local refresh
@@ -197,14 +197,14 @@ TEST_F(ChromeSyncNotificationBridgeTest, RemoteNotification) {
 TEST_F(ChromeSyncNotificationBridgeTest, LocalNotificationEmptyPayloadMap) {
   const syncer::ModelTypeSet enabled_types(
       syncer::BOOKMARKS, syncer::PASSWORDS);
-  const syncer::ModelTypeStateMap enabled_types_state_map =
-      syncer::ModelTypeSetToStateMap(enabled_types, std::string());
+  const syncer::ModelTypeInvalidationMap enabled_types_invalidation_map =
+      syncer::ModelTypeSetToInvalidationMap(enabled_types, std::string());
   CreateObserver();
   UpdateEnabledTypes(enabled_types);
   TriggerRefreshNotification(chrome::NOTIFICATION_SYNC_REFRESH_LOCAL,
-                             syncer::ModelTypeStateMap());
+                             syncer::ModelTypeInvalidationMap());
   VerifyAndDestroyObserver(
-      enabled_types_state_map, syncer::LOCAL_INVALIDATION);
+      enabled_types_invalidation_map, syncer::LOCAL_INVALIDATION);
 }
 
 // Adds an observer on the sync thread, triggers a remote refresh
@@ -213,14 +213,14 @@ TEST_F(ChromeSyncNotificationBridgeTest, LocalNotificationEmptyPayloadMap) {
 TEST_F(ChromeSyncNotificationBridgeTest, RemoteNotificationEmptyPayloadMap) {
   const syncer::ModelTypeSet enabled_types(
       syncer::BOOKMARKS, syncer::TYPED_URLS);
-  const syncer::ModelTypeStateMap enabled_types_state_map =
-      syncer::ModelTypeSetToStateMap(enabled_types, std::string());
+  const syncer::ModelTypeInvalidationMap enabled_types_invalidation_map =
+      syncer::ModelTypeSetToInvalidationMap(enabled_types, std::string());
   CreateObserver();
   UpdateEnabledTypes(enabled_types);
   TriggerRefreshNotification(chrome::NOTIFICATION_SYNC_REFRESH_REMOTE,
-                             syncer::ModelTypeStateMap());
+                             syncer::ModelTypeInvalidationMap());
   VerifyAndDestroyObserver(
-      enabled_types_state_map, syncer::REMOTE_INVALIDATION);
+      enabled_types_invalidation_map, syncer::REMOTE_INVALIDATION);
 }
 
 }  // namespace

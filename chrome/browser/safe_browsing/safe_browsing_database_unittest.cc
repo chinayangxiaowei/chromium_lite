@@ -5,11 +5,10 @@
 // Unit tests for the SafeBrowsing storage system.
 
 #include "base/file_util.h"
+#include "base/files/scoped_temp_dir.h"
 #include "base/logging.h"
 #include "base/message_loop.h"
-#include "base/scoped_temp_dir.h"
 #include "base/time.h"
-#include "chrome/browser/safe_browsing/bloom_filter.h"
 #include "chrome/browser/safe_browsing/safe_browsing_database.h"
 #include "chrome/browser/safe_browsing/safe_browsing_store_file.h"
 #include "chrome/browser/safe_browsing/safe_browsing_store_unittest_helper.h"
@@ -268,7 +267,7 @@ class SafeBrowsingDatabaseTest : public PlatformTest {
 
   scoped_ptr<SafeBrowsingDatabaseNew> database_;
   FilePath database_filename_;
-  ScopedTempDir temp_dir_;
+  base::ScopedTempDir temp_dir_;
 };
 
 // Tests retrieving list name information.
@@ -321,8 +320,8 @@ TEST_F(SafeBrowsingDatabaseTest, ListNameForBrowse) {
   EXPECT_EQ(lists[0].subs, "7");
   if (lists.size() == 2) {
     // Old style database won't have the second entry since it creates the lists
-    // when it receives an update containing that list. The new bloom filter
-    // based database has these values hard coded.
+    // when it receives an update containing that list. The filter-based
+    // database has these values hard coded.
     EXPECT_TRUE(lists[1].name == safe_browsing_util::kPhishingList);
     EXPECT_TRUE(lists[1].adds.empty());
     EXPECT_TRUE(lists[1].subs.empty());
@@ -1113,7 +1112,7 @@ TEST_F(SafeBrowsingDatabaseTest, DISABLED_FileCorruptionHandling) {
 
     // Flush through the corruption-handler task.
     VLOG(1) << "Expect failed check on: SafeBrowsing database reset";
-    MessageLoop::current()->RunAllPending();
+    MessageLoop::current()->RunUntilIdle();
   }
 
   // Database file should not exist.
@@ -1640,61 +1639,6 @@ TEST_F(SafeBrowsingDatabaseTest, FilterFile) {
   database_.reset(new SafeBrowsingDatabaseNew);
   database_->Init(database_filename_);
   EXPECT_FALSE(database_->ContainsBrowseUrl(
-      GURL("http://www.evil.com/malware.html"),
-      &matching_list, &prefix_hits, &full_hashes, now));
-  EXPECT_FALSE(database_->ContainsBrowseUrl(
-      GURL("http://www.good.com/goodware.html"),
-      &matching_list, &prefix_hits, &full_hashes, now));
-}
-
-TEST_F(SafeBrowsingDatabaseTest, PrefixSetTransition) {
-  // Create a database with trivial example data and write it out.
-  {
-    SBChunkList chunks;
-    SBChunk chunk;
-
-    // Prime the database.
-    std::vector<SBListChunkRanges> lists;
-    EXPECT_TRUE(database_->UpdateStarted(&lists));
-
-    InsertAddChunkHostPrefixUrl(&chunk, 1, "www.evil.com/",
-                                "www.evil.com/malware.html");
-    chunks.clear();
-    chunks.push_back(chunk);
-    database_->InsertChunks(safe_browsing_util::kMalwareList, chunks);
-    database_->UpdateFinished(true);
-  }
-
-  // Some helpful paths.
-  FilePath prefix_set_file = database_->PrefixSetForFilename(
-      database_->BrowseDBFilename(database_filename_));
-  FilePath bloom_filter_file = database_->BloomFilterForFilename(
-      database_->BrowseDBFilename(database_filename_));
-
-  // Manually create a bloom filter for the prefixes and write it out.
-  {
-    scoped_refptr<BloomFilter> filter(
-        new BloomFilter(BloomFilter::kBloomFilterSizeRatio *
-                        BloomFilter::kBloomFilterMinSize));
-    filter->Insert(Sha256Prefix("www.evil.com/"));
-    filter->Insert(Sha256Prefix("www.evil.com/malware.html"));
-    ASSERT_TRUE(filter->WriteFile(bloom_filter_file));
-  }
-
-  file_util::Delete(prefix_set_file, false);
-  ASSERT_FALSE(file_util::PathExists(prefix_set_file));
-  ASSERT_TRUE(file_util::PathExists(bloom_filter_file));
-
-  // Reload the database.
-  database_.reset(new SafeBrowsingDatabaseNew);
-  database_->Init(database_filename_);
-
-  // Should find the malware.
-  const Time now = Time::Now();
-  std::vector<SBFullHashResult> full_hashes;
-  std::vector<SBPrefix> prefix_hits;
-  std::string matching_list;
-  EXPECT_TRUE(database_->ContainsBrowseUrl(
       GURL("http://www.evil.com/malware.html"),
       &matching_list, &prefix_hits, &full_hashes, now));
   EXPECT_FALSE(database_->ContainsBrowseUrl(

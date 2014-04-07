@@ -4,17 +4,20 @@
 
 #include "chrome/browser/ui/views/browser_actions_container.h"
 
+#include "base/compiler_specific.h"
 #include "base/stl_util.h"
 #include "chrome/browser/extensions/extension_service.h"
+#include "chrome/browser/extensions/extension_system.h"
+#include "chrome/browser/extensions/tab_helper.h"
 #include "chrome/browser/prefs/pref_service.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/sessions/session_tab_helper.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_tabstrip.h"
-#include "chrome/browser/ui/tab_contents/tab_contents.h"
 #include "chrome/browser/ui/view_ids.h"
 #include "chrome/browser/ui/views/browser_action_view.h"
 #include "chrome/browser/ui/views/extensions/browser_action_drag_data.h"
+#include "chrome/browser/ui/views/extensions/extension_keybinding_registry_views.h"
 #include "chrome/browser/ui/views/extensions/extension_popup.h"
 #include "chrome/browser/ui/views/toolbar_view.h"
 #include "chrome/common/pref_names.h"
@@ -68,9 +71,6 @@ BrowserActionsContainer::BrowserActionsContainer(Browser* browser,
       container_width_(0),
       chevron_(NULL),
       overflow_menu_(NULL),
-      extension_keybinding_registry_(browser->profile(),
-          owner_view->GetFocusManager(),
-          extensions::ExtensionKeybindingRegistry::ALL_EXTENSIONS),
       suppress_chevron_(false),
       resize_amount_(0),
       animation_target_size_(0),
@@ -79,10 +79,18 @@ BrowserActionsContainer::BrowserActionsContainer(Browser* browser,
       ALLOW_THIS_IN_INITIALIZER_LIST(show_menu_task_factory_(this)) {
   set_id(VIEW_ID_BROWSER_ACTION_TOOLBAR);
 
-  if (profile_->GetExtensionService()) {
-    model_ = profile_->GetExtensionService()->toolbar_model();
+  ExtensionService* service =
+      extensions::ExtensionSystem::Get(profile_)->extension_service();
+  if (service) {
+    model_ = service->toolbar_model();
     model_->AddObserver(this);
   }
+
+  extension_keybinding_registry_.reset(new ExtensionKeybindingRegistryViews(
+      browser->profile(),
+      owner_view->GetFocusManager(),
+      extensions::ExtensionKeybindingRegistry::ALL_EXTENSIONS,
+      this)),
 
   resize_animation_.reset(new ui::SlideAnimation(this));
   resize_area_ = new views::ResizeArea(this);
@@ -383,7 +391,8 @@ void BrowserActionsContainer::WriteDragDataForView(View* sender,
     if (button == sender) {
       // Set the dragging image for the icon.
       gfx::ImageSkia badge(browser_action_views_[i]->GetIconWithBadge());
-      drag_utils::SetDragImageOnDataObject(badge, button->size(), press_pt,
+      drag_utils::SetDragImageOnDataObject(badge, button->size(),
+                                           press_pt.OffsetFromOrigin(),
                                            data);
 
       // Fill in the remaining info.
@@ -441,7 +450,7 @@ void BrowserActionsContainer::AnimationEnded(const ui::Animation* animation) {
 
 void BrowserActionsContainer::NotifyMenuDeleted(
     BrowserActionOverflowMenuController* controller) {
-  DCHECK(controller == overflow_menu_);
+  DCHECK_EQ(overflow_menu_, controller);
   overflow_menu_ = NULL;
 }
 
@@ -484,9 +493,19 @@ gfx::Point BrowserActionsContainer::GetViewContentOffset() const {
   return gfx::Point(0, ToolbarView::kVertSpacing);
 }
 
+extensions::ActiveTabPermissionGranter*
+    BrowserActionsContainer::GetActiveTabPermissionGranter() {
+  content::WebContents* web_contents = chrome::GetActiveWebContents(browser_);
+  if (!web_contents)
+    return NULL;
+  return extensions::TabHelper::FromWebContents(web_contents)->
+      active_tab_permission_granter();
+}
+
 void BrowserActionsContainer::MoveBrowserAction(const std::string& extension_id,
                                                 size_t new_index) {
-  ExtensionService* service = profile_->GetExtensionService();
+  ExtensionService* service =
+      extensions::ExtensionSystem::Get(profile_)->extension_service();
   if (service) {
     const Extension* extension = service->GetExtensionById(extension_id, false);
     model_->MoveBrowserAction(extension, new_index);
@@ -611,7 +630,8 @@ void BrowserActionsContainer::BrowserActionAdded(const Extension* extension,
   // Enlarge the container if it was already at maximum size and we're not in
   // the middle of upgrading.
   if ((model_->GetVisibleIconCount() < 0) &&
-      !profile_->GetExtensionService()->IsBeingUpgraded(extension)) {
+      !extensions::ExtensionSystem::Get(profile_)->extension_service()->
+          IsBeingUpgraded(extension)) {
     suppress_chevron_ = true;
     SaveDesiredSizeAndAnimate(ui::Tween::LINEAR, visible_actions + 1);
   } else {
@@ -635,7 +655,8 @@ void BrowserActionsContainer::BrowserActionRemoved(const Extension* extension) {
 
       // If the extension is being upgraded we don't want the bar to shrink
       // because the icon is just going to get re-added to the same location.
-      if (profile_->GetExtensionService()->IsBeingUpgraded(extension))
+      if (extensions::ExtensionSystem::Get(profile_)->extension_service()->
+              IsBeingUpgraded(extension))
         return;
 
       if (browser_action_views_.size() > visible_actions) {
@@ -794,7 +815,8 @@ bool BrowserActionsContainer::ShouldDisplayBrowserAction(
   // Only display incognito-enabled extensions while in incognito mode.
   return
       (!profile_->IsOffTheRecord() ||
-       profile_->GetExtensionService()->IsIncognitoEnabled(extension->id()));
+       extensions::ExtensionSystem::Get(profile_)->extension_service()->
+           IsIncognitoEnabled(extension->id()));
 }
 
 void BrowserActionsContainer::ShowPopup(

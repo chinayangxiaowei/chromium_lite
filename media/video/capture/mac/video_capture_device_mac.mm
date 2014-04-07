@@ -10,6 +10,13 @@
 #include "base/time.h"
 #include "media/video/capture/mac/video_capture_device_qtkit_mac.h"
 
+namespace {
+
+const int kMinFrameRate = 1;
+const int kMaxFrameRate = 30;
+
+}
+
 namespace media {
 
 void VideoCaptureDevice::GetDeviceNames(Names* device_names) {
@@ -49,7 +56,6 @@ VideoCaptureDeviceMac::~VideoCaptureDeviceMac() {
 
 void VideoCaptureDeviceMac::Allocate(int width, int height, int frame_rate,
                                      EventHandler* observer) {
-  base::AutoLock auto_lock(lock_);
   if (state_ != kIdle) {
     return;
   }
@@ -57,10 +63,17 @@ void VideoCaptureDeviceMac::Allocate(int width, int height, int frame_rate,
   NSString* deviceId =
       [NSString stringWithUTF8String:device_name_.unique_id.c_str()];
 
+  [capture_device_ setFrameReceiver:this];
+
   if (![capture_device_ setCaptureDevice:deviceId]) {
     SetErrorState("Could not open capture device.");
     return;
   }
+  if (frame_rate < kMinFrameRate)
+    frame_rate = kMinFrameRate;
+  else if (frame_rate > kMaxFrameRate)
+    frame_rate = kMaxFrameRate;
+
   if (![capture_device_ setCaptureHeight:height
                                    width:width
                                frameRate:frame_rate]) {
@@ -86,19 +99,16 @@ void VideoCaptureDeviceMac::Start() {
     SetErrorState("Could not start capture device.");
     return;
   }
-  base::AutoLock auto_lock(lock_);
   state_ = kCapturing;
 }
 
 void VideoCaptureDeviceMac::Stop() {
   DCHECK_EQ(state_, kCapturing);
   [capture_device_ stopCapture];
-  base::AutoLock auto_lock(lock_);
   state_ = kAllocated;
 }
 
 void VideoCaptureDeviceMac::DeAllocate() {
-  base::AutoLock auto_lock(lock_);
   if (state_ != kAllocated && state_ != kCapturing) {
     return;
   }
@@ -106,6 +116,8 @@ void VideoCaptureDeviceMac::DeAllocate() {
     [capture_device_ stopCapture];
   }
   [capture_device_ setCaptureDevice:nil];
+  [capture_device_ setFrameReceiver:nil];
+
   state_ = kIdle;
 }
 
@@ -138,16 +150,12 @@ void VideoCaptureDeviceMac::ReceiveFrame(
     const uint8* video_frame,
     int video_frame_length,
     const VideoCaptureCapability& frame_info) {
-  base::AutoLock auto_lock(lock_);
-  if (state_ == kCapturing) {
-    observer_->OnIncomingCapturedFrame(video_frame, video_frame_length,
-                                       base::Time::Now());
-  }
+  observer_->OnIncomingCapturedFrame(video_frame, video_frame_length,
+                                     base::Time::Now());
 }
 
 void VideoCaptureDeviceMac::SetErrorState(const std::string& reason) {
   DLOG(ERROR) << reason;
-  base::AutoLock auto_lock(lock_);
   state_ = kError;
   observer_->OnError();
 }

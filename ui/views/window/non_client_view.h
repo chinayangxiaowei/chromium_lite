@@ -6,13 +6,14 @@
 #define UI_VIEWS_WINDOW_NON_CLIENT_VIEW_H_
 
 #include "ui/views/view.h"
-#include "ui/views/window/client_view.h"
 
 namespace gfx {
 class Path;
 }
 
 namespace views {
+
+class ClientView;
 
 ////////////////////////////////////////////////////////////////////////////////
 // NonClientFrameView
@@ -65,6 +66,7 @@ class VIEWS_EXPORT NonClientFrameView : public View {
                              gfx::Path* window_mask) = 0;
   virtual void ResetWindowControls() = 0;
   virtual void UpdateWindowIcon() = 0;
+  virtual void UpdateWindowTitle() = 0;
 
   // Overridden from View:
   virtual bool HitTestRect(const gfx::Rect& rect) const OVERRIDE;
@@ -183,6 +185,10 @@ class VIEWS_EXPORT NonClientView : public View {
 
   // Tells the NonClientView to invalidate the NonClientFrameView's window icon.
   void UpdateWindowIcon();
+
+  // Tells the NonClientView to invalidate the NonClientFrameView's window
+  // title.
+  void UpdateWindowTitle();
 
   // Get/Set client_view property.
   ClientView* client_view() const { return client_view_; }

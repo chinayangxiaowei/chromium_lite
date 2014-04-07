@@ -7,7 +7,7 @@
 #ifndef CHROME_BROWSER_CHROME_BROWSER_MAIN_WIN_H_
 #define CHROME_BROWSER_CHROME_BROWSER_MAIN_WIN_H_
 
-#include "base/memory/ref_counted.h"
+#include "base/memory/scoped_ptr.h"
 #include "chrome/browser/chrome_browser_main.h"
 
 class CommandLine;
@@ -36,6 +36,7 @@ class ChromeBrowserMainPartsWin : public ChromeBrowserMainParts {
   virtual void PreMainMessageLoopRun() OVERRIDE;
 
   // ChromeBrowserMainParts overrides.
+  virtual void PreInteractiveFirstRunInit() OVERRIDE;
   virtual void ShowMissingLocaleMessageBox() OVERRIDE;
 
   // Prepares the localized strings that are going to be displayed to
@@ -67,7 +68,7 @@ class ChromeBrowserMainPartsWin : public ChromeBrowserMainParts {
   static void SetupInstallerUtilStrings();
 
  private:
-  scoped_refptr<chrome::RemovableDeviceNotificationsWindowWin>
+  scoped_ptr<chrome::RemovableDeviceNotificationsWindowWin>
       removable_device_notifications_window_;
   DISALLOW_COPY_AND_ASSIGN(ChromeBrowserMainPartsWin);
 };

@@ -11,6 +11,9 @@
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/cros_system_api/dbus/service_constants.h"
 
+using testing::_;
+using testing::ByRef;
+
 namespace chromeos {
 
 namespace {
@@ -33,7 +36,7 @@ class ShillIPConfigClientTest : public ShillClientUnittestBase {
     client_.reset(ShillIPConfigClient::Create(
         REAL_DBUS_CLIENT_IMPLEMENTATION, mock_bus_));
     // Run the message loop to run the signal connection result callback.
-    message_loop_.RunAllPending();
+    message_loop_.RunUntilIdle();
   }
 
   virtual void TearDown() {
@@ -54,15 +57,27 @@ TEST_F(ShillIPConfigClientTest, PropertyChanged) {
   dbus::AppendBasicTypeValueDataAsVariant(&writer, kConnected);
 
   // Set expectations.
-  client_->SetPropertyChangedHandler(dbus::ObjectPath(kExampleIPConfigPath),
-                                     base::Bind(&ExpectPropertyChanged,
-                                                flimflam::kConnectedProperty,
-                                                &kConnected));
+  MockPropertyChangeObserver observer;
+  EXPECT_CALL(observer, OnPropertyChanged(flimflam::kConnectedProperty,
+                                          ValueEq(ByRef(kConnected)))).Times(1);
+
+  // Add the observer
+  client_->AddPropertyChangedObserver(
+      dbus::ObjectPath(kExampleIPConfigPath),
+      &observer);
+
   // Run the signal callback.
   SendPropertyChangedSignal(&signal);
 
-  // Reset the handler.
-  client_->ResetPropertyChangedHandler(dbus::ObjectPath(kExampleIPConfigPath));
+  // Remove the observer.
+  client_->RemovePropertyChangedObserver(
+      dbus::ObjectPath(kExampleIPConfigPath),
+      &observer);
+
+  EXPECT_CALL(observer, OnPropertyChanged(_, _)).Times(0);
+
+  // Run the signal callback again and make sure the observer isn't called.
+  SendPropertyChangedSignal(&signal);
 }
 
 TEST_F(ShillIPConfigClientTest, GetProperties) {
@@ -102,7 +117,7 @@ TEST_F(ShillIPConfigClientTest, GetProperties) {
   client_->GetProperties(dbus::ObjectPath(kExampleIPConfigPath),
                          base::Bind(&ExpectDictionaryValueResult, &value));
   // Run the message loop.
-  message_loop_.RunAllPending();
+  message_loop_.RunUntilIdle();
 }
 
 TEST_F(ShillIPConfigClientTest, CallGetPropertiesAndBlock) {
@@ -165,7 +180,7 @@ TEST_F(ShillIPConfigClientTest, SetProperty) {
                        value,
                        base::Bind(&ExpectNoResultValue));
   // Run the message loop.
-  message_loop_.RunAllPending();
+  message_loop_.RunUntilIdle();
 }
 
 TEST_F(ShillIPConfigClientTest, ClearProperty) {
@@ -182,7 +197,7 @@ TEST_F(ShillIPConfigClientTest, ClearProperty) {
                        flimflam::kAddressProperty,
                        base::Bind(&ExpectNoResultValue));
   // Run the message loop.
-  message_loop_.RunAllPending();
+  message_loop_.RunUntilIdle();
 }
 
 TEST_F(ShillIPConfigClientTest, Remove) {
@@ -198,20 +213,7 @@ TEST_F(ShillIPConfigClientTest, Remove) {
                   base::Bind(&ExpectNoResultValue));
 
   // Run the message loop.
-  message_loop_.RunAllPending();
-}
-
-TEST_F(ShillIPConfigClientTest, CallRemoveAndBlock) {
-  // Create response.
-  scoped_ptr<dbus::Response> response(dbus::Response::CreateEmpty());
-
-  // Set expectations.
-  PrepareForMethodCall(flimflam::kRemoveConfigFunction,
-                       base::Bind(&ExpectNoArgument),
-                       response.get());
-  // Call method.
-  EXPECT_TRUE(client_->CallRemoveAndBlock(
-      dbus::ObjectPath(kExampleIPConfigPath)));
+  message_loop_.RunUntilIdle();
 }
 
 }  // namespace chromeos

@@ -18,25 +18,41 @@
 #include <limits>
 
 #include "base/basictypes.h"
+#include "base/command_line.h"
 #include "base/logging.h"
+#include "base/string_number_conversions.h"
 #include "base/time.h"
 #include "media/audio/audio_parameters.h"
 #include "media/base/audio_bus.h"
+#include "media/base/media_switches.h"
 
 #if defined(OS_MACOSX)
 #include "media/audio/mac/audio_low_latency_input_mac.h"
 #include "media/audio/mac/audio_low_latency_output_mac.h"
 #elif defined(OS_WIN)
-#include "base/command_line.h"
 #include "base/win/windows_version.h"
 #include "media/audio/audio_manager_base.h"
 #include "media/audio/win/audio_low_latency_input_win.h"
 #include "media/audio/win/audio_low_latency_output_win.h"
+#include "media/audio/win/core_audio_util_win.h"
 #include "media/base/limits.h"
-#include "media/base/media_switches.h"
 #endif
 
 namespace media {
+
+// Returns user buffer size as specified on the command line or 0 if no buffer
+// size has been specified.
+static int GetUserBufferSize() {
+  const CommandLine* cmd_line = CommandLine::ForCurrentProcess();
+  int buffer_size = 0;
+  std::string buffer_size_str(cmd_line->GetSwitchValueASCII(
+      switches::kAudioBufferSize));
+  if (base::StringToInt(buffer_size_str, &buffer_size) && buffer_size > 0) {
+    return buffer_size;
+  }
+
+  return 0;
+}
 
 // TODO(fbarchard): Convert to intrinsics for better efficiency.
 template<class Fixed>
@@ -66,42 +82,6 @@ static int AddSaturated(int val, int adder) {
   if (sum < min_value)
     return min_value;
   return static_cast<int>(sum);
-}
-
-// FoldChannels() downmixes multichannel (ie 5.1 Surround Sound) to Stereo.
-// Left and Right channels are preserved asis, and Center channel is
-// distributed equally to both sides.  To be perceptually 1/2 volume on
-// both channels, 1/sqrt(2) is used instead of 1/2.
-// Fixed point math is used for efficiency.  16 bits of fraction and 8,16 or 32
-// bits of integer are used.
-// 8 bit samples are unsigned and 128 represents 0, so a bias is removed before
-// doing calculations, then readded for the final output.
-template<class Format, class Fixed, int min_value, int max_value, int bias>
-static void FoldChannels(Format* buf_out,
-                         int sample_count,
-                         const float volume,
-                         int channels) {
-  Format* buf_in = buf_out;
-  const int center_volume = static_cast<int>(volume * 0.707f * 65536);
-  const int fixed_volume = static_cast<int>(volume * 65536);
-
-  for (int i = 0; i < sample_count; ++i) {
-    int center = static_cast<int>(buf_in[kChannel_C] - bias);
-    int left = static_cast<int>(buf_in[kChannel_L] - bias);
-    int right = static_cast<int>(buf_in[kChannel_R] - bias);
-
-    center = ScaleChannel<Fixed>(center, center_volume);
-    left = ScaleChannel<Fixed>(left, fixed_volume);
-    right = ScaleChannel<Fixed>(right, fixed_volume);
-
-    buf_out[0] = static_cast<Format>(
-        AddSaturated<Fixed, min_value, max_value>(left, center) + bias);
-    buf_out[1] = static_cast<Format>(
-        AddSaturated<Fixed, min_value, max_value>(right, center) + bias);
-
-    buf_out += 2;
-    buf_in += channels;
-  }
 }
 
 // AdjustVolume() does an in place audio sample change.
@@ -136,42 +116,6 @@ bool AdjustVolume(void* buf,
       AdjustVolume<int32, int64, 0>(reinterpret_cast<int32*>(buf),
                                     sample_count,
                                     fixed_volume);
-      return true;
-    }
-  }
-  return false;
-}
-
-bool FoldChannels(void* buf,
-                  size_t buflen,
-                  int channels,
-                  int bytes_per_sample,
-                  float volume) {
-  DCHECK(buf);
-  if (volume < 0.0f || volume > 1.0f)
-    return false;
-  if (channels > 2 && channels <= 8 && bytes_per_sample > 0) {
-    int sample_count = buflen / (channels * bytes_per_sample);
-    if (bytes_per_sample == 1) {
-      FoldChannels<uint8, int32, -128, 127, 128>(
-          reinterpret_cast<uint8*>(buf),
-          sample_count,
-          volume,
-          channels);
-      return true;
-    } else if (bytes_per_sample == 2) {
-      FoldChannels<int16, int32, -32768, 32767, 0>(
-          reinterpret_cast<int16*>(buf),
-          sample_count,
-          volume,
-          channels);
-      return true;
-    } else if (bytes_per_sample == 4) {
-      FoldChannels<int32, int64, 0x80000000, 0x7fffffff, 0>(
-          reinterpret_cast<int32*>(buf),
-          sample_count,
-          volume,
-          channels);
       return true;
     }
   }
@@ -216,21 +160,23 @@ void MixStreams(void* dst,
   DCHECK_LE(volume, 1.0f);
   switch (bytes_per_sample) {
     case 1:
-      MixStreams<uint8, int32, -128, 127, 128>(static_cast<uint8*>(dst),
-                                               static_cast<uint8*>(src),
-                                               buflen,
-                                               volume);
+      MixStreams<uint8, int32, kint8min, kint8max, 128>(
+          static_cast<uint8*>(dst),
+          static_cast<uint8*>(src),
+          buflen,
+          volume);
       break;
     case 2:
       DCHECK_EQ(0u, buflen % 2);
-      MixStreams<int16, int32, -32768, 32767, 0>(static_cast<int16*>(dst),
-                                                 static_cast<int16*>(src),
-                                                 buflen / 2,
-                                                 volume);
+      MixStreams<int16, int32, kint16min, kint16max, 0>(
+          static_cast<int16*>(dst),
+          static_cast<int16*>(src),
+          buflen / 2,
+          volume);
       break;
     case 4:
       DCHECK_EQ(0u, buflen % 4);
-      MixStreams<int32, int64, 0x80000000, 0x7fffffff, 0>(
+      MixStreams<int32, int64, kint32min, kint32max, 0>(
           static_cast<int32*>(dst),
           static_cast<int32*>(src),
           buflen / 4,
@@ -247,7 +193,7 @@ int GetAudioHardwareSampleRate() {
   // Hardware sample-rate on the Mac can be configured, so we must query.
   return AUAudioOutputStream::HardwareSampleRate();
 #elif defined(OS_WIN)
-  if (!IsWASAPISupported()) {
+  if (!CoreAudioUtil::IsSupported()) {
     // Fall back to Windows Wave implementation on Windows XP or lower
     // and use 48kHz as default input sample rate.
     return 48000;
@@ -284,7 +230,7 @@ int GetAudioInputHardwareSampleRate(const std::string& device_id) {
 #if defined(OS_MACOSX)
   return AUAudioInputStream::HardwareSampleRate();
 #elif defined(OS_WIN)
-  if (!IsWASAPISupported()) {
+  if (!CoreAudioUtil::IsSupported()) {
     return 48000;
   }
   return WASAPIAudioInputStream::HardwareSampleRate(device_id);
@@ -296,6 +242,10 @@ int GetAudioInputHardwareSampleRate(const std::string& device_id) {
 }
 
 size_t GetAudioHardwareBufferSize() {
+  int user_buffer_size = GetUserBufferSize();
+  if (user_buffer_size)
+    return user_buffer_size;
+
   // The sizes here were determined by experimentation and are roughly
   // the lowest value (for low latency) that still allowed glitch-free
   // audio under high loads.
@@ -309,7 +259,7 @@ size_t GetAudioHardwareBufferSize() {
   // Buffer size to use when a proper size can't be determined from the system.
   static const int kFallbackBufferSize = 2048;
 
-  if (!IsWASAPISupported()) {
+  if (!CoreAudioUtil::IsSupported()) {
     // Fall back to Windows Wave implementation on Windows XP or lower
     // and assume 48kHz as default sample rate.
     return kFallbackBufferSize;
@@ -321,6 +271,15 @@ size_t GetAudioHardwareBufferSize() {
   const CommandLine* cmd_line = CommandLine::ForCurrentProcess();
   if (cmd_line->HasSwitch(switches::kEnableExclusiveAudio)) {
     return 256;
+  }
+
+  // TODO(henrika): remove when the --enable-webaudio-input flag is no longer
+  // utilized.
+  if (cmd_line->HasSwitch(switches::kEnableWebAudioInput)) {
+    AudioParameters params;
+    HRESULT hr = CoreAudioUtil::GetPreferredAudioParameters(eRender, eConsole,
+                                                            &params);
+    return FAILED(hr) ? kFallbackBufferSize : params.frames_per_buffer();
   }
 
   // This call must be done on a COM thread configured as MTA.
@@ -361,7 +320,7 @@ ChannelLayout GetAudioInputHardwareChannelLayout(const std::string& device_id) {
 #if defined(OS_MACOSX)
   return CHANNEL_LAYOUT_MONO;
 #elif defined(OS_WIN)
-  if (!IsWASAPISupported()) {
+  if (!CoreAudioUtil::IsSupported()) {
     // Fall back to Windows Wave implementation on Windows XP or lower and
     // use stereo by default.
     return CHANNEL_LAYOUT_STEREO;
@@ -376,6 +335,10 @@ ChannelLayout GetAudioInputHardwareChannelLayout(const std::string& device_id) {
 // Computes a buffer size based on the given |sample_rate|. Must be used in
 // conjunction with AUDIO_PCM_LINEAR.
 size_t GetHighLatencyOutputBufferSize(int sample_rate) {
+  int user_buffer_size = GetUserBufferSize();
+  if (user_buffer_size)
+    return user_buffer_size;
+
   // TODO(vrk/crogers): The buffer sizes that this function computes is probably
   // overly conservative. However, reducing the buffer size to 2048-8192 bytes
   // caused crbug.com/108396. This computation should be revisited while making
@@ -407,13 +370,15 @@ size_t GetHighLatencyOutputBufferSize(int sample_rate) {
 
 #if defined(OS_WIN)
 
-bool IsWASAPISupported() {
-  // Note: that function correctly returns that Windows Server 2003 does not
-  // support WASAPI.
-  return base::win::GetVersion() >= base::win::VERSION_VISTA;
-}
-
 int NumberOfWaveOutBuffers() {
+  // Use the user provided buffer count if provided.
+  int buffers = 0;
+  std::string buffers_str(CommandLine::ForCurrentProcess()->GetSwitchValueASCII(
+      switches::kWaveOutBuffers));
+  if (base::StringToInt(buffers_str, &buffers) && buffers > 0) {
+    return buffers;
+  }
+
   // Use 4 buffers for Vista, 3 for everyone else:
   //  - The entire Windows audio stack was rewritten for Windows Vista and wave
   //    out performance was degraded compared to XP.

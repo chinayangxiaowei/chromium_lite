@@ -8,6 +8,7 @@
 #include "base/perftimer.h"
 #include "base/stl_util.h"
 #include "base/string_number_conversions.h"
+#include "sync/internal_api/public/base/node_ordinal.h"
 #include "sync/internal_api/public/util/unrecoverable_error_handler.h"
 #include "sync/syncable/base_transaction.h"
 #include "sync/syncable/entry.h"
@@ -50,10 +51,10 @@ bool ParentIdAndHandleIndexer::Comparator::operator() (
   if (cmp != 0)
     return cmp < 0;
 
-  int64 a_position = a->ref(SERVER_POSITION_IN_PARENT);
-  int64 b_position = b->ref(SERVER_POSITION_IN_PARENT);
-  if (a_position != b_position)
-    return a_position < b_position;
+  const NodeOrdinal& a_position = a->ref(SERVER_ORDINAL_IN_PARENT);
+  const NodeOrdinal& b_position = b->ref(SERVER_ORDINAL_IN_PARENT);
+  if (!a_position.Equals(b_position))
+    return a_position.LessThan(b_position);
 
   cmp = a->ref(ID).compare(b->ref(ID));
   return cmp < 0;
@@ -82,6 +83,7 @@ Directory::PersistedKernelInfo::PersistedKernelInfo()
     : next_id(0) {
   for (int i = FIRST_REAL_MODEL_TYPE; i < MODEL_TYPE_COUNT; ++i) {
     reset_download_progress(ModelTypeFromInt(i));
+    transaction_version[i] = 0;
   }
 }
 
@@ -594,8 +596,8 @@ bool Directory::PurgeEntriesWithTypeIn(ModelTypeSet types) {
       // Ensure meta tracking for these data types reflects the deleted state.
       for (ModelTypeSet::Iterator it = types.First();
            it.Good(); it.Inc()) {
-        set_initial_sync_ended_for_type_unsafe(it.Get(), false);
         kernel_->persisted_info.reset_download_progress(it.Get());
+        kernel_->persisted_info.transaction_version[it.Get()] = 0;
       }
     }
   }
@@ -654,14 +656,40 @@ void Directory::SetDownloadProgress(
   kernel_->info_status = KERNEL_SHARE_INFO_DIRTY;
 }
 
-ModelTypeSet Directory::initial_sync_ended_types() const {
-  ScopedKernelLock lock(this);
-  return kernel_->persisted_info.initial_sync_ended;
+int64 Directory::GetTransactionVersion(ModelType type) const {
+  kernel_->transaction_mutex.AssertAcquired();
+  return kernel_->persisted_info.transaction_version[type];
 }
 
-bool Directory::initial_sync_ended_for_type(ModelType type) const {
-  ScopedKernelLock lock(this);
-  return kernel_->persisted_info.initial_sync_ended.Has(type);
+void Directory::IncrementTransactionVersion(ModelType type) {
+  kernel_->transaction_mutex.AssertAcquired();
+  kernel_->persisted_info.transaction_version[type]++;
+}
+
+ModelTypeSet Directory::InitialSyncEndedTypes() {
+  syncable::ReadTransaction trans(FROM_HERE, this);
+  const ModelTypeSet all_types = ModelTypeSet::All();
+  ModelTypeSet initial_sync_ended_types;
+  for (ModelTypeSet::Iterator i = all_types.First(); i.Good(); i.Inc()) {
+    if (InitialSyncEndedForType(&trans, i.Get())) {
+      initial_sync_ended_types.Put(i.Get());
+    }
+  }
+  return initial_sync_ended_types;
+}
+
+bool Directory::InitialSyncEndedForType(ModelType type) {
+  syncable::ReadTransaction trans(FROM_HERE, this);
+  return InitialSyncEndedForType(&trans, type);
+}
+
+bool Directory::InitialSyncEndedForType(
+    BaseTransaction* trans, ModelType type) {
+  // True iff the type's root node has been received and applied.
+  syncable::Entry entry(trans,
+                        syncable::GET_BY_SERVER_TAG,
+                        ModelTypeToRootTag(type));
+  return entry.good() && entry.Get(syncable::BASE_VERSION) != CHANGES_VERSION;
 }
 
 template <class T> void Directory::TestAndSet(
@@ -670,23 +698,6 @@ template <class T> void Directory::TestAndSet(
     *kernel_data = *data_to_set;
     kernel_->info_status = KERNEL_SHARE_INFO_DIRTY;
   }
-}
-
-void Directory::set_initial_sync_ended_for_type(ModelType type, bool x) {
-  ScopedKernelLock lock(this);
-  set_initial_sync_ended_for_type_unsafe(type, x);
-}
-
-void Directory::set_initial_sync_ended_for_type_unsafe(ModelType type,
-                                                       bool x) {
-  if (kernel_->persisted_info.initial_sync_ended.Has(type) == x)
-    return;
-  if (x) {
-    kernel_->persisted_info.initial_sync_ended.Put(type);
-  } else {
-    kernel_->persisted_info.initial_sync_ended.Remove(type);
-  }
-  kernel_->info_status = KERNEL_SHARE_INFO_DIRTY;
 }
 
 void Directory::SetNotificationStateUnsafe(
@@ -808,6 +819,22 @@ void Directory::GetUnappliedUpdateMetaHandles(
                 kernel_->unapplied_update_metahandles[type].end(),
                 back_inserter(*result));
     }
+  }
+}
+
+void Directory::CollectMetaHandleCounts(
+    std::vector<int>* num_entries_by_type,
+    std::vector<int>* num_to_delete_entries_by_type) {
+  syncable::ReadTransaction trans(FROM_HERE, this);
+  ScopedKernelLock lock(this);
+
+  MetahandlesIndex::iterator it = kernel_->metahandles_index->begin();
+  for( ; it != kernel_->metahandles_index->end(); ++it) {
+    EntryKernel* entry = *it;
+    const ModelType type = GetModelTypeFromSpecifics(entry->ref(SPECIFICS));
+    (*num_entries_by_type)[type]++;
+    if(entry->ref(IS_DEL))
+      (*num_to_delete_entries_by_type)[type]++;
   }
 }
 
@@ -1132,8 +1159,11 @@ Id Directory::ComputePrevIdFromServerPosition(
 
   // Find the natural insertion point in the parent_id_child_index, and
   // work back from there, filtering out ineligible candidates.
-  ParentIdChildIndex::iterator sibling = LocateInParentChildIndex(lock,
-      parent_id, entry->ref(SERVER_POSITION_IN_PARENT), entry->ref(ID));
+  ParentIdChildIndex::iterator sibling = LocateInParentChildIndex(
+      lock,
+      parent_id,
+      NodeOrdinalToInt64(entry->ref(SERVER_ORDINAL_IN_PARENT)),
+      entry->ref(ID));
   ParentIdChildIndex::iterator first_sibling =
       GetParentChildIndexLowerBound(lock, parent_id);
 
@@ -1176,7 +1206,8 @@ Directory::ParentIdChildIndex::iterator Directory::LocateInParentChildIndex(
     int64 position_in_parent,
     const Id& item_id_for_tiebreaking) {
   kernel_->needle.put(PARENT_ID, parent_id);
-  kernel_->needle.put(SERVER_POSITION_IN_PARENT, position_in_parent);
+  kernel_->needle.put(SERVER_ORDINAL_IN_PARENT,
+                      Int64ToNodeOrdinal(position_in_parent));
   kernel_->needle.put(ID, item_id_for_tiebreaking);
   return kernel_->parent_id_child_index->lower_bound(&kernel_->needle);
 }

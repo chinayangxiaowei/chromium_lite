@@ -5,21 +5,21 @@
 #ifndef CONTENT_PUBLIC_BROWSER_WEB_CONTENTS_OBSERVER_H_
 #define CONTENT_PUBLIC_BROWSER_WEB_CONTENTS_OBSERVER_H_
 
-#include "base/callback_forward.h"
 #include "base/process_util.h"
 #include "content/common/content_export.h"
 #include "content/public/browser/navigation_controller.h"
 #include "content/public/common/page_transition_types.h"
+#include "content/public/common/three_d_api_types.h"
 #include "ipc/ipc_listener.h"
 #include "ipc/ipc_sender.h"
 #include "webkit/glue/window_open_disposition.h"
-
-class WebContentsImpl;
 
 namespace content {
 
 class RenderViewHost;
 class WebContents;
+class WebContentsImpl;
+struct FaviconURL;
 struct FrameNavigateParams;
 struct LoadCommittedDetails;
 struct Referrer;
@@ -49,16 +49,19 @@ class CONTENT_EXPORT WebContentsObserver : public IPC::Listener,
       const LoadCommittedDetails& details,
       const FrameNavigateParams& params) {}
   // |render_view_host| is the RenderViewHost for which the provisional load is
-  // happening.
+  // happening. |frame_id| is a positive, non-zero integer identifying the
+  // navigating frame in the given |render_view_host|. |parent_frame_id| is the
+  // frame identifier of the frame containing the navigating frame, or -1 if the
+  // frame is not contained in another frame.
   virtual void DidStartProvisionalLoadForFrame(
       int64 frame_id,
+      int64 parent_frame_id,
       bool is_main_frame,
       const GURL& validated_url,
       bool is_error_page,
       RenderViewHost* render_view_host) {}
   virtual void ProvisionalChangeToMainFrameUrl(
       const GURL& url,
-      const GURL& opener_url,
       RenderViewHost* render_view_host) {}
   virtual void DidCommitProvisionalLoadForFrame(
       int64 frame_id,
@@ -91,11 +94,6 @@ class CONTENT_EXPORT WebContentsObserver : public IPC::Listener,
   virtual void DidGetUserGesture() {}
   virtual void DidGetIgnoredUIEvent() {}
   virtual void StopNavigation() {}
-
-  virtual void DidOpenURL(const GURL& url,
-                          const Referrer& referrer,
-                          WindowOpenDisposition disposition,
-                          PageTransition transition) {}
 
   virtual void DidOpenRequestedURL(WebContents* new_contents,
                                    const GURL& url,
@@ -134,17 +132,15 @@ class CONTENT_EXPORT WebContentsObserver : public IPC::Listener,
   // Called when the user agent override for a WebContents has been changed.
   virtual void UserAgentOverrideSet(const std::string& user_agent) {}
 
-  // Requests permission to access the PPAPI broker. If the object handles the
-  // request, it should return true and eventually call the passed in |callback|
-  // with the result. Otherwise it should return false, in which case the next
-  // observer will be called.
-  // Implementations should make sure not to call the callback after the
-  // WebContents has been destroyed.
-  virtual bool RequestPpapiBrokerPermission(
-      WebContents* web_contents,
-      const GURL& url,
-      const FilePath& plugin_path,
-      const base::Callback<void(bool)>& callback);
+  // Indicates that client 3D APIs (Pepper 3D, WebGL) were just
+  // blocked on the current page, specifically because the GPU was
+  // reset recently.
+  virtual void DidBlock3DAPIs(const GURL& url,
+                              ThreeDAPIType requester) {}
+
+  // Invoked when new FaviconURL candidates are received from the renderer.
+  virtual void DidUpdateFaviconURL(int32 page_id,
+                                   const std::vector<FaviconURL>& candidates) {}
 
   // IPC::Listener implementation.
   virtual bool OnMessageReceived(const IPC::Message& message) OVERRIDE;
@@ -171,7 +167,7 @@ class CONTENT_EXPORT WebContentsObserver : public IPC::Listener,
   WebContents* web_contents() const;
 
  private:
-  friend class ::WebContentsImpl;
+  friend class WebContentsImpl;
 
   // Invoked from WebContentsImpl. Invokes WebContentsDestroyed and NULL out
   // |web_contents_|.

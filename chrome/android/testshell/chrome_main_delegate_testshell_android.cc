@@ -5,11 +5,23 @@
 #include "chrome/android/testshell/chrome_main_delegate_testshell_android.h"
 
 #include "base/android/jni_android.h"
+#include "chrome/browser/search_engines/template_url_prepopulate_data.h"
+
+static const char kDefaultCountryCode[] = "US";
+
+ChromeMainDelegateAndroid* ChromeMainDelegateAndroid::Create() {
+  return new ChromeMainDelegateTestShellAndroid();
+}
 
 ChromeMainDelegateTestShellAndroid::ChromeMainDelegateTestShellAndroid() {
 }
 
 ChromeMainDelegateTestShellAndroid::~ChromeMainDelegateTestShellAndroid() {
+}
+
+bool ChromeMainDelegateTestShellAndroid::BasicStartupComplete(int* exit_code) {
+  TemplateURLPrepopulateData::InitCountryCode(kDefaultCountryCode);
+  return ChromeMainDelegateAndroid::BasicStartupComplete(exit_code);
 }
 
 bool ChromeMainDelegateTestShellAndroid::RegisterApplicationNativeMethods(

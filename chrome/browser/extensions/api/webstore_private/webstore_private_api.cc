@@ -14,10 +14,11 @@
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/extensions/crx_installer.h"
 #include "chrome/browser/extensions/extension_function_dispatcher.h"
-#include "chrome/browser/extensions/extension_install_dialog.h"
 #include "chrome/browser/extensions/extension_prefs.h"
 #include "chrome/browser/extensions/extension_service.h"
+#include "chrome/browser/extensions/extension_system.h"
 #include "chrome/browser/extensions/webstore_installer.h"
+#include "chrome/browser/gpu/gpu_feature_checker.h"
 #include "chrome/browser/prefs/pref_service.h"
 #include "chrome/browser/profiles/profile_manager.h"
 #include "chrome/browser/signin/token_service.h"
@@ -27,13 +28,13 @@
 #include "chrome/common/chrome_notification_types.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/common/extensions/extension_constants.h"
-#include "chrome/common/extensions/extension_error_utils.h"
 #include "chrome/common/extensions/extension_l10n_util.h"
 #include "chrome/common/pref_names.h"
 #include "content/public/browser/gpu_data_manager.h"
 #include "content/public/browser/notification_details.h"
 #include "content/public/browser/notification_source.h"
 #include "content/public/browser/web_contents.h"
+#include "extensions/common/error_utils.h"
 #include "google_apis/gaia/gaia_constants.h"
 #include "grit/chromium_strings.h"
 #include "grit/generated_resources.h"
@@ -101,18 +102,6 @@ const char kNoPreviousBeginInstallWithManifestError[] =
     "* does not match a previous call to beginInstallWithManifest3";
 const char kUserCancelledError[] = "User cancelled install";
 
-ProfileSyncService* test_sync_service = NULL;
-
-// Returns either the test sync service, or the real one from |profile|.
-ProfileSyncService* GetSyncService(Profile* profile) {
-  // TODO(webstore): It seems |test_sync_service| is not used anywhere. It
-  // should be removed.
-  if (test_sync_service)
-    return test_sync_service;
-  else
-    return ProfileSyncServiceFactory::GetInstance()->GetForProfile(profile);
-}
-
 // Helper to create a dictionary with login and token properties set from
 // the appropriate values in the passed-in |profile|.
 DictionaryValue* CreateLoginResult(Profile* profile) {
@@ -136,12 +125,6 @@ DictionaryValue* CreateLoginResult(Profile* profile) {
 WebstoreInstaller::Delegate* test_webstore_installer_delegate = NULL;
 
 }  // namespace
-
-// static
-void WebstorePrivateApi::SetTestingProfileSyncService(
-    ProfileSyncService* service) {
-  test_sync_service = service;
-}
 
 // static
 void WebstorePrivateApi::SetWebstoreInstallerDelegateForTesting(
@@ -341,9 +324,15 @@ void BeginInstallWithManifestFunction::OnWebstoreParseSuccess(
     return;
   }
 
-  install_prompt_.reset(
-      chrome::CreateExtensionInstallPromptWithBrowser(GetCurrentBrowser()));
-  install_prompt_->ConfirmWebstoreInstall(this, dummy_extension_, &icon_);
+  content::WebContents* web_contents = GetAssociatedWebContents();
+  if (!web_contents)  // The browser window has gone away.
+    return;
+  install_prompt_.reset(new ExtensionInstallPrompt(web_contents));
+  install_prompt_->ConfirmWebstoreInstall(
+      this,
+      dummy_extension_,
+      &icon_,
+      ExtensionInstallPrompt::GetDefaultShowDialogCallback());
   // Control flow finishes up in InstallUIProceed or InstallUIAbort.
 }
 
@@ -433,15 +422,17 @@ bool CompleteInstallFunction::RunImpl() {
   scoped_ptr<WebstoreInstaller::Approval> approval(
       g_pending_approvals.Get().PopApproval(profile(), id));
   if (!approval.get()) {
-    error_ = ExtensionErrorUtils::FormatErrorMessage(
+    error_ = ErrorUtils::FormatErrorMessage(
         kNoPreviousBeginInstallWithManifestError, id);
     return false;
   }
 
+  AddRef();
+
   // The extension will install through the normal extension install flow, but
   // the whitelist entry will bypass the normal permissions install dialog.
   scoped_refptr<WebstoreInstaller> installer = new WebstoreInstaller(
-      profile(), test_webstore_installer_delegate,
+      profile(), this,
       &(dispatcher()->delegate()->GetAssociatedWebContents()->GetController()),
       id, approval.Pass(), WebstoreInstaller::FLAG_NONE);
   installer->Start();
@@ -449,13 +440,42 @@ bool CompleteInstallFunction::RunImpl() {
   return true;
 }
 
+void CompleteInstallFunction::OnExtensionInstallSuccess(
+    const std::string& id) {
+  if (test_webstore_installer_delegate)
+    test_webstore_installer_delegate->OnExtensionInstallSuccess(id);
+
+  SendResponse(true);
+
+  // Matches the AddRef in RunImpl().
+  Release();
+}
+
+void CompleteInstallFunction::OnExtensionInstallFailure(
+    const std::string& id,
+    const std::string& error,
+    WebstoreInstaller::FailureReason reason) {
+  if (test_webstore_installer_delegate) {
+    test_webstore_installer_delegate->OnExtensionInstallFailure(
+        id, error, reason);
+  }
+
+  error_ = error;
+  SendResponse(false);
+
+  // Matches the AddRef in RunImpl().
+  Release();
+}
+
+
 bool GetBrowserLoginFunction::RunImpl() {
   SetResult(CreateLoginResult(profile_->GetOriginalProfile()));
   return true;
 }
 
 bool GetStoreLoginFunction::RunImpl() {
-  ExtensionService* service = profile_->GetExtensionService();
+  ExtensionService* service =
+      extensions::ExtensionSystem::Get(profile_)->extension_service();
   ExtensionPrefs* prefs = service->extension_prefs();
   std::string login;
   if (prefs->GetWebStoreLogin(&login)) {
@@ -469,7 +489,8 @@ bool GetStoreLoginFunction::RunImpl() {
 bool SetStoreLoginFunction::RunImpl() {
   std::string login;
   EXTENSION_FUNCTION_VALIDATE(args_->GetString(0, &login));
-  ExtensionService* service = profile_->GetExtensionService();
+  ExtensionService* service =
+      extensions::ExtensionSystem::Get(profile_)->extension_service();
   ExtensionPrefs* prefs = service->extension_prefs();
   prefs->SetWebStoreLogin(login);
   return true;

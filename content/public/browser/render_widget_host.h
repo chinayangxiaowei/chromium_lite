@@ -27,7 +27,7 @@ class Rect;
 }
 
 namespace skia {
-class PlatformCanvas;
+class PlatformBitmap;
 }
 
 namespace content {
@@ -178,7 +178,7 @@ class CONTENT_EXPORT RenderWidgetHost : public IPC::Sender {
   virtual void CopyFromBackingStore(const gfx::Rect& src_rect,
                                     const gfx::Size& accelerated_dest_size,
                                     const base::Callback<void(bool)>& callback,
-                                    skia::PlatformCanvas* output) = 0;
+                                    skia::PlatformBitmap* output) = 0;
 #if defined(TOOLKIT_GTK)
   // Paint the backing store into the target's |dest_rect|.
   virtual bool CopyFromBackingStoreToGtkWindow(const gfx::Rect& dest_rect,
@@ -201,7 +201,7 @@ class CONTENT_EXPORT RenderWidgetHost : public IPC::Sender {
   virtual void ForwardKeyboardEvent(
       const NativeWebKeyboardEvent& key_event) = 0;
 
-  virtual const gfx::Point& GetLastScrollOffset() const = 0;
+  virtual const gfx::Vector2d& GetLastScrollOffset() const = 0;
 
   virtual RenderProcessHost* GetProcess() const = 0;
 
@@ -265,9 +265,6 @@ class CONTENT_EXPORT RenderWidgetHost : public IPC::Sender {
 
   // Remove a keyboard listener.
   virtual void RemoveKeyboardListener(KeyboardListener* listener) = 0;
-
-  // Update the device scale factor.
-  virtual void SetDeviceScaleFactor(float scale) = 0;
 
  protected:
   friend class RenderWidgetHostImpl;

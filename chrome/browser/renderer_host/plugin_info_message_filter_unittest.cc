@@ -27,12 +27,15 @@ class FakePluginServiceFilter : public content::PluginServiceFilter {
   FakePluginServiceFilter() {}
   virtual ~FakePluginServiceFilter() {}
 
-  virtual bool ShouldUsePlugin(int render_process_id,
+  virtual bool IsPluginEnabled(int render_process_id,
                                int render_view_id,
                                const void* context,
                                const GURL& url,
                                const GURL& policy_url,
                                webkit::WebPluginInfo* plugin) OVERRIDE;
+
+  virtual bool CanLoadPlugin(int render_process_id,
+                             const FilePath& path) OVERRIDE;
 
   void set_plugin_enabled(const FilePath& plugin_path, bool enabled) {
     plugin_state_[plugin_path] = enabled;
@@ -42,7 +45,7 @@ class FakePluginServiceFilter : public content::PluginServiceFilter {
   std::map<FilePath, bool> plugin_state_;
 };
 
-bool FakePluginServiceFilter::ShouldUsePlugin(int render_process_id,
+bool FakePluginServiceFilter::IsPluginEnabled(int render_process_id,
                                               int render_view_id,
                                               const void* context,
                                               const GURL& url,
@@ -56,6 +59,11 @@ bool FakePluginServiceFilter::ShouldUsePlugin(int render_process_id,
   return it->second;
 }
 
+bool FakePluginServiceFilter::CanLoadPlugin(int render_process_id,
+                                            const FilePath& path) {
+  return true;
+}
+
 }  // namespace
 
 class PluginInfoMessageFilterTest : public ::testing::Test {
@@ -63,8 +71,7 @@ class PluginInfoMessageFilterTest : public ::testing::Test {
   PluginInfoMessageFilterTest() :
       foo_plugin_path_(FILE_PATH_LITERAL("/path/to/foo")),
       bar_plugin_path_(FILE_PATH_LITERAL("/path/to/bar")),
-      file_thread_(content::BrowserThread::FILE, &message_loop_),
-      plugin_list_(NULL, 0) {
+      file_thread_(content::BrowserThread::FILE, &message_loop_) {
   }
 
   virtual void SetUp() OVERRIDE {
@@ -122,7 +129,8 @@ TEST_F(PluginInfoMessageFilterTest, FindEnabledPlugin) {
     webkit::WebPluginInfo plugin;
     std::string actual_mime_type;
     EXPECT_TRUE(context_.FindEnabledPlugin(
-        0, GURL(), GURL(), "foo/bar", &status, &plugin, &actual_mime_type));
+        0, GURL(), GURL(), "foo/bar", &status, &plugin, &actual_mime_type,
+        NULL));
     EXPECT_EQ(ChromeViewHostMsg_GetPluginInfo_Status::kAllowed, status.value);
     EXPECT_EQ(foo_plugin_path_.value(), plugin.path.value());
   }
@@ -133,7 +141,8 @@ TEST_F(PluginInfoMessageFilterTest, FindEnabledPlugin) {
     webkit::WebPluginInfo plugin;
     std::string actual_mime_type;
     EXPECT_TRUE(context_.FindEnabledPlugin(
-        0, GURL(), GURL(), "foo/bar", &status, &plugin, &actual_mime_type));
+        0, GURL(), GURL(), "foo/bar", &status, &plugin, &actual_mime_type,
+        NULL));
     EXPECT_EQ(ChromeViewHostMsg_GetPluginInfo_Status::kAllowed, status.value);
     EXPECT_EQ(bar_plugin_path_.value(), plugin.path.value());
   }
@@ -143,8 +152,11 @@ TEST_F(PluginInfoMessageFilterTest, FindEnabledPlugin) {
     ChromeViewHostMsg_GetPluginInfo_Status status;
     webkit::WebPluginInfo plugin;
     std::string actual_mime_type;
+    std::string identifier;
+    string16 plugin_name;
     EXPECT_FALSE(context_.FindEnabledPlugin(
-        0, GURL(), GURL(), "foo/bar", &status, &plugin, &actual_mime_type));
+        0, GURL(), GURL(), "foo/bar", &status, &plugin, &actual_mime_type,
+        NULL));
     EXPECT_EQ(ChromeViewHostMsg_GetPluginInfo_Status::kDisabled, status.value);
     EXPECT_EQ(foo_plugin_path_.value(), plugin.path.value());
   }
@@ -153,7 +165,8 @@ TEST_F(PluginInfoMessageFilterTest, FindEnabledPlugin) {
     webkit::WebPluginInfo plugin;
     std::string actual_mime_type;
     EXPECT_FALSE(context_.FindEnabledPlugin(
-        0, GURL(), GURL(), "baz/blurp", &status, &plugin, &actual_mime_type));
+        0, GURL(), GURL(), "baz/blurp", &status, &plugin, &actual_mime_type,
+        NULL));
     EXPECT_EQ(ChromeViewHostMsg_GetPluginInfo_Status::kNotFound, status.value);
     EXPECT_EQ(FILE_PATH_LITERAL(""), plugin.path.value());
   }

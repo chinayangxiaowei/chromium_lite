@@ -130,7 +130,7 @@ logging::LogMessageHandlerFunction g_logging_old_handler = NULL;
 // String sent in the "hello" message to the plugin to describe features.
 const char ChromotingInstance::kApiFeatures[] =
     "highQualityScaling injectKeyEvent sendClipboardItem remapKey trapKey "
-    "notifyClientDimensions pauseVideo";
+    "notifyClientDimensions pauseVideo pauseAudio";
 
 bool ChromotingInstance::ParseAuthMethods(const std::string& auth_methods_str,
                                           ClientConfig* config) {
@@ -193,17 +193,17 @@ ChromotingInstance::~ChromotingInstance() {
   view_.reset();
 
   if (client_.get()) {
-    base::WaitableEvent done_event(true, false);
-    client_->Stop(base::Bind(&base::WaitableEvent::Signal,
-                             base::Unretained(&done_event)));
-    done_event.Wait();
+    client_->Stop(base::Bind(&PluginThreadTaskRunner::Quit,
+                  plugin_task_runner_));
+  } else {
+    plugin_task_runner_->Quit();
   }
+
+  // Ensure that nothing touches the plugin thread delegate after this point.
+  plugin_task_runner_->DetachAndRunShutdownLoop();
 
   // Stopping the context shuts down all chromoting threads.
   context_.Stop();
-
-  // Ensure that nothing touches the plugin thread delegate after this point.
-  plugin_task_runner_->Detach();
 }
 
 bool ChromotingInstance::Init(uint32_t argc,
@@ -355,6 +355,13 @@ void ChromotingInstance::HandleMessage(const pp::Var& message) {
       return;
     }
     PauseVideo(pause);
+  } else if (method == "pauseAudio") {
+    bool pause = false;
+    if (!data->GetBoolean("pause", &pause)) {
+      LOG(ERROR) << "Invalid pauseAudio.";
+      return;
+    }
+    PauseAudio(pause);
   }
 }
 
@@ -374,7 +381,7 @@ bool ChromotingInstance::HandleInputEvent(const pp::InputEvent& event) {
 
   // TODO(wez): When we have a good hook into Host dimensions changes, move
   // this there.
-  mouse_input_filter_.set_output_size(view_->get_screen_size());
+  mouse_input_filter_.set_output_size(view_->get_source_size());
 
   return input_handler_.HandleInputEvent(event);
 }
@@ -436,18 +443,22 @@ void ChromotingInstance::SetCursorShape(
     return;
   }
 
-  if (pp::ImageData::GetNativeImageDataFormat() !=
-      PP_IMAGEDATAFORMAT_BGRA_PREMUL) {
-    VLOG(2) << "Unable to set cursor shape - non-native image format";
-    return;
-  }
-
   int width = cursor_shape.width();
   int height = cursor_shape.height();
+
+  if (width < 0 || height < 0) {
+    return;
+  }
 
   if (width > 32 || height > 32) {
     VLOG(2) << "Cursor too large for SetCursor: "
             << width << "x" << height << " > 32x32";
+    return;
+  }
+
+  if (pp::ImageData::GetNativeImageDataFormat() !=
+      PP_IMAGEDATAFORMAT_BGRA_PREMUL) {
+    VLOG(2) << "Unable to set cursor shape - non-native image format";
     return;
   }
 
@@ -588,6 +599,15 @@ void ChromotingInstance::PauseVideo(bool pause) {
   protocol::VideoControl video_control;
   video_control.set_enable(!pause);
   host_connection_->host_stub()->ControlVideo(video_control);
+}
+
+void ChromotingInstance::PauseAudio(bool pause) {
+  if (!IsConnected()) {
+    return;
+  }
+  protocol::AudioControl audio_control;
+  audio_control.set_enable(!pause);
+  host_connection_->host_stub()->ControlAudio(audio_control);
 }
 
 ChromotingStats* ChromotingInstance::GetStats() {

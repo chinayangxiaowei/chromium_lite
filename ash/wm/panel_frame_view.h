@@ -22,10 +22,17 @@ class FramePainter;
 class ASH_EXPORT PanelFrameView : public views::NonClientFrameView,
                                   public views::ButtonListener {
  public:
-  explicit PanelFrameView(views::Widget* frame);
+  enum FrameType {
+    FRAME_NONE,
+    FRAME_ASH
+  };
+
+  PanelFrameView(views::Widget* frame, FrameType frame_type);
   virtual ~PanelFrameView();
 
  private:
+  void InitFramePainter(views::Widget* frame);
+
   // Overridden from views::NonClientFrameView:
   virtual gfx::Rect GetBoundsForClientView() const OVERRIDE;
   virtual gfx::Rect GetWindowBoundsForClientBounds(
@@ -35,6 +42,7 @@ class ASH_EXPORT PanelFrameView : public views::NonClientFrameView,
                              gfx::Path* window_mask) OVERRIDE;
   virtual void ResetWindowControls() OVERRIDE;
   virtual void UpdateWindowIcon() OVERRIDE;
+  virtual void UpdateWindowTitle() OVERRIDE;
 
   // Overridden from views::View:
   virtual void Layout() OVERRIDE;

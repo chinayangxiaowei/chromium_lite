@@ -40,15 +40,14 @@
 #include "base/message_loop_proxy.h"
 #include "base/platform_file.h"
 #include "base/values.h"
+#include "chrome/browser/chromeos/drive/drive_file_system_util.h"
 #include "chrome/browser/chromeos/extensions/file_handler_util.h"
 #include "chrome/browser/chromeos/extensions/file_manager_util.h"
-#include "chrome/browser/chromeos/gdata/drive_file_system_util.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/browser_tabstrip.h"
 #include "chrome/browser/ui/browser_window.h"
 #include "chrome/browser/ui/chrome_select_file_policy.h"
-#include "chrome/browser/ui/tab_contents/tab_contents.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/common/extensions/api/file_browser_handler_internal.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/child_process_security_policy.h"
@@ -56,9 +55,9 @@
 #include "content/public/browser/render_view_host.h"
 #include "content/public/browser/storage_partition.h"
 #include "googleurl/src/gurl.h"
+#include "ui/base/dialogs/select_file_dialog.h"
 #include "webkit/fileapi/file_system_context.h"
 #include "webkit/fileapi/file_system_mount_point_provider.h"
-#include "ui/base/dialogs/select_file_dialog.h"
 
 using content::BrowserContext;
 using content::BrowserThread;
@@ -203,12 +202,13 @@ bool FileSelectorImpl::StartSelectFile(
   if (!browser->window())
     return false;
 
-  TabContents* tab_contents = chrome::GetActiveTabContents(browser);
-  if (!tab_contents)
+  content::WebContents* web_contents =
+      browser->tab_strip_model()->GetActiveWebContents();
+  if (!web_contents)
     return false;
 
   dialog_ = ui::SelectFileDialog::Create(
-      this, new ChromeSelectFilePolicy(tab_contents->web_contents()));
+      this, new ChromeSelectFilePolicy(web_contents));
 
   // Convert |allowed_extensions| to ui::SelectFileDialog::FileTypeInfo.
   ui::SelectFileDialog::FileTypeInfo allowed_file_info =
@@ -384,7 +384,7 @@ void FileHandlerSelectFileFunction::GrantPermissions() {
       full_path_,
       file_handler_util::GetReadWritePermissions()));
 
-  if (!gdata::util::IsUnderDriveMountPoint(full_path_)) {
+  if (!drive::util::IsUnderDriveMountPoint(full_path_)) {
     // If the file is not on drive, we have to only grant permission for the
     // file's virtual path.
     OnGotPermissionsToGrant();
@@ -396,7 +396,7 @@ void FileHandlerSelectFileFunction::GrantPermissions() {
   scoped_ptr<std::vector<FilePath> > gdata_paths(new std::vector<FilePath>());
   gdata_paths->push_back(virtual_path_);
 
-  gdata::util::InsertDriveCachePathsPermissions(
+  drive::util::InsertDriveCachePathsPermissions(
       profile(),
       gdata_paths.Pass(),
       &permissions_to_grant_,

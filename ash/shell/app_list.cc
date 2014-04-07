@@ -210,7 +210,6 @@ class ExampleAppListViewDelegate : public app_list::AppListViewDelegate {
                          SK_ColorBLACK,
                          0, 0, icon_size.width(), icon_size.height(),
                          gfx::Canvas::TEXT_ALIGN_CENTER |
-                             gfx::Canvas::TEXT_VALIGN_MIDDLE |
                              gfx::Canvas::NO_SUBPIXEL_RENDERING);
 
     return gfx::ImageSkia(canvas.ExtractImageRep());
@@ -273,14 +272,18 @@ class ExampleAppListViewDelegate : public app_list::AppListViewDelegate {
     // Nothing needs to be done.
   }
 
-  virtual void Close() OVERRIDE {
+  virtual void Dismiss() OVERRIDE {
     DCHECK(ash::Shell::HasInstance());
     if (Shell::GetInstance()->GetAppListTargetVisibility())
-      Shell::GetInstance()->ToggleAppList();
+      Shell::GetInstance()->ToggleAppList(NULL);
   }
 
-  virtual gfx::ImageSkia GetWindowAppIcon() OVERRIDE {
-    return gfx::ImageSkia();
+  virtual void ViewClosing() OVERRIDE {
+    // Nothing needs to be done.
+  }
+
+  virtual void ViewActivationChanged(bool active) OVERRIDE {
+    // Nothing needs to be done.
   }
 
   app_list::AppListModel* model_;

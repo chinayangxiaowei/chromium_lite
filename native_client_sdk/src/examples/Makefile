@@ -34,6 +34,7 @@ endef
 # Define the various targets via the Macro
 $(foreach proj,$(PROJECTS),$(eval $(call TARGET,$(proj))))
 
+__DEPENDENCIES__
 
 all: $(TARGET_LIST)
 	echo "Done building targets."
@@ -41,7 +42,7 @@ all: $(TARGET_LIST)
 clean: $(CLEAN_LIST)
 	echo "Done cleaning targets."
 
+.PHONY: RUN
 RUN: all
-	echo "Staring up python webserver."
-	python httpd.py
-
+	echo "Starting up python webserver."
+	python ../tools/httpd.py

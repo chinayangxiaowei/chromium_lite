@@ -7,13 +7,12 @@
 #include "base/memory/ref_counted.h"
 #include "base/memory/scoped_ptr.h"
 #include "base/message_loop.h"
-#include "base/single_thread_task_runner.h"
 #include "chrome/browser/policy/cloud_policy_refresh_scheduler.h"
 #include "chrome/browser/policy/mock_cloud_policy_client.h"
 #include "chrome/browser/policy/mock_cloud_policy_store.h"
+#include "chrome/browser/policy/test_task_runner.h"
 #include "chrome/browser/prefs/browser_prefs.h"
-#include "chrome/common/pref_names.h"
-#include "chrome/test/base/testing_pref_service.h"
+#include "policy/policy_constants.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
@@ -27,35 +26,14 @@ using testing::_;
 namespace policy {
 
 namespace {
-
 const int64 kPolicyRefreshRate = 4 * 60 * 60 * 1000;
-
-class TestTaskRunner : public base::TaskRunner {
- public:
-  TestTaskRunner() {}
-
-  virtual bool RunsTasksOnCurrentThread() const OVERRIDE { return true; }
-  MOCK_METHOD3(PostDelayedTask, bool(const tracked_objects::Location&,
-                                     const base::Closure&,
-                                     base::TimeDelta));
-
- protected:
-  virtual ~TestTaskRunner() {}
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(TestTaskRunner);
-};
-
 }  // namespace
 
 class CloudPolicyRefreshSchedulerTest : public testing::Test {
  protected:
   CloudPolicyRefreshSchedulerTest()
       : task_runner_(new TestTaskRunner()),
-        network_change_notifier_(net::NetworkChangeNotifier::CreateMock()) {
-    chrome::RegisterLocalState(&prefs_);
-    prefs_.SetInteger(prefs::kUserPolicyRefreshRate, kPolicyRefreshRate);
-  }
+        network_change_notifier_(net::NetworkChangeNotifier::CreateMock()) {}
 
   virtual void SetUp() OVERRIDE {
     client_.SetDMToken("token");
@@ -79,14 +57,15 @@ class CloudPolicyRefreshSchedulerTest : public testing::Test {
   }
 
   CloudPolicyRefreshScheduler* CreateRefreshScheduler() {
-    return new CloudPolicyRefreshScheduler(&client_, &store_, &prefs_,
-                                         prefs::kUserPolicyRefreshRate,
-                                         task_runner_);
+    CloudPolicyRefreshScheduler* scheduler =
+        new CloudPolicyRefreshScheduler(&client_, &store_, task_runner_);
+    scheduler->SetRefreshDelay(kPolicyRefreshRate);
+    return scheduler;
   }
 
   void NotifyIPAddressChanged() {
     net::NetworkChangeNotifier::NotifyObserversOfIPAddressChangeForTests();
-    loop_.RunAllPending();
+    loop_.RunUntilIdle();
   }
 
   void CheckTiming(int64 expected_delay_ms) {
@@ -100,7 +79,6 @@ class CloudPolicyRefreshSchedulerTest : public testing::Test {
   MessageLoop loop_;
   MockCloudPolicyClient client_;
   MockCloudPolicyStore store_;
-  TestingPrefService prefs_;
   scoped_refptr<TestTaskRunner> task_runner_;
   scoped_ptr<net::NetworkChangeNotifier> network_change_notifier_;
 
@@ -154,19 +132,19 @@ TEST_F(CloudPolicyRefreshSchedulerTest, Unregistered) {
   client_.NotifyPolicyFetched();
   client_.NotifyRegistrationStateChanged();
   client_.NotifyClientError();
+  scheduler->SetRefreshDelay(12 * 60 * 60 * 1000);
   store_.NotifyStoreLoaded();
   store_.NotifyStoreError();
-  prefs_.SetInteger(prefs::kUserPolicyRefreshRate, 12 * 60 * 60 * 1000);
 }
 
 class CloudPolicyRefreshSchedulerSteadyStateTest
     : public CloudPolicyRefreshSchedulerTest {
  protected:
   CloudPolicyRefreshSchedulerSteadyStateTest()
-      : refresh_scheduler_(&client_, &store_, &prefs_,
-                           prefs::kUserPolicyRefreshRate, task_runner_) {}
+      : refresh_scheduler_(&client_, &store_, task_runner_) {}
 
   virtual void SetUp() OVERRIDE {
+    refresh_scheduler_.SetRefreshDelay(kPolicyRefreshRate);
     CloudPolicyRefreshSchedulerTest::SetUp();
     last_refresh_ = base::Time::NowFromSystemTime();
     client_.NotifyPolicyFetched();
@@ -203,15 +181,15 @@ TEST_F(CloudPolicyRefreshSchedulerSteadyStateTest, OnStoreError) {
 
 TEST_F(CloudPolicyRefreshSchedulerSteadyStateTest, RefreshDelayChange) {
   const int delay_short_ms = 5 * 60 * 1000;
-  prefs_.SetInteger(prefs::kUserPolicyRefreshRate, delay_short_ms);
+  refresh_scheduler_.SetRefreshDelay(delay_short_ms);
   CheckTiming(CloudPolicyRefreshScheduler::kRefreshDelayMinMs);
 
   const int delay_ms = 12 * 60 * 60 * 1000;
-  prefs_.SetInteger(prefs::kUserPolicyRefreshRate, delay_ms);
+  refresh_scheduler_.SetRefreshDelay(delay_ms);
   CheckTiming(delay_ms);
 
   const int delay_long_ms = 2 * 24 * 60 * 60 * 1000;
-  prefs_.SetInteger(prefs::kUserPolicyRefreshRate, delay_long_ms);
+  refresh_scheduler_.SetRefreshDelay(delay_long_ms);
   CheckTiming(CloudPolicyRefreshScheduler::kRefreshDelayMaxMs);
 }
 
@@ -251,7 +229,7 @@ static const ClientErrorTestParam kClientErrorTestCases[] = {
     kPolicyRefreshRate, 1 },
   { DM_STATUS_SERVICE_INVALID_SERIAL_NUMBER,
     -1, 1 },
-  { DM_STATUS_MISSING_LICENSES,
+  { DM_STATUS_SERVICE_MISSING_LICENSES,
     -1, 1 },
   { DM_STATUS_SERVICE_DEVICE_ID_CONFLICT,
     -1, 1 },

@@ -90,6 +90,13 @@ cr.define('options', function() {
         }
       };
 
+      if (!cr.isMac) {
+        // Set up the button for editing custom spelling dictionary.
+        $('edit-dictionary-button') .onclick = function(e) {
+          OptionsPage.navigateToPage('editDictionary');
+        };
+      }
+
       if (cr.isChromeOS) {
         // Listen to user clicks on the add language list.
         var addLanguageList = $('add-language-overlay-language-list');
@@ -107,7 +114,7 @@ cr.define('options', function() {
             this.handleAddLanguageOkButtonClick_.bind(this));
 
         // Show experimental features if enabled.
-        if (loadTimeData.getBoolean('experimentalSpellCheckFeatures'))
+        if (loadTimeData.getBoolean('enableSpellingAutoCorrect'))
           $('auto-spell-correction-option').hidden = false;
 
         // Handle spell check enable/disable.
@@ -115,13 +122,16 @@ cr.define('options', function() {
           Preferences.getInstance().addEventListener(
               this.enableSpellCheckPref,
               this.updateEnableSpellCheck_.bind(this));
-
-          var spellCheckLanguageButton = getRequiredElement(
-              'language-options-spell-check-language-button');
-          spellCheckLanguageButton.addEventListener(
-              'click',
-              this.handleSpellCheckLanguageButtonClick_.bind(this));
         }
+      }
+
+      // Handle clicks on "Use this language for spell checking" button.
+      if (!cr.isMac) {
+        var spellCheckLanguageButton = getRequiredElement(
+            'language-options-spell-check-language-button');
+        spellCheckLanguageButton.addEventListener(
+            'click',
+            this.handleSpellCheckLanguageButtonClick_.bind(this));
       }
 
       if (cr.isChromeOS) {
@@ -691,8 +701,9 @@ cr.define('options', function() {
      */
      updateEnableSpellCheck_: function() {
        var value = !$('enable-spell-check').checked;
-
        $('language-options-spell-check-language-button').disabled = value;
+       if (!cr.IsMac)
+         $('edit-dictionary-button').hidden = value;
      },
 
     /**

@@ -31,7 +31,6 @@
 #include "third_party/WebKit/Source/WebKit/chromium/public/WebView.h"
 #include "third_party/WebKit/Source/WebKit/chromium/public/platform/WebURLRequest.h"
 #include "third_party/WebKit/Source/WebKit/chromium/public/platform/WebVector.h"
-#include "ui/base/layout.h"
 #include "ui/base/resource/resource_bundle.h"
 
 using WebKit::WebFrame;
@@ -55,12 +54,15 @@ int UserScriptSlave::GetIsolatedWorldIdForExtension(const Extension* extension,
 
   IsolatedWorldMap::iterator iter = isolated_world_ids_.find(extension->id());
   if (iter != isolated_world_ids_.end()) {
-    // We need to set the isolated world origin even if it's not a new world
-    // since that is stored per frame, and we might not have used this isolated
-    // world in this frame before.
+    // We need to set the isolated world origin and CSP even if it's not a new
+    // world since these are stored per frame, and we might not have used this
+    // isolated world in this frame before.
     frame->setIsolatedWorldSecurityOrigin(
         iter->second,
         WebSecurityOrigin::create(extension->url()));
+    frame->setIsolatedWorldContentSecurityPolicy(
+        iter->second,
+        WebString::fromUTF8(extension->content_security_policy()));
     return iter->second;
   }
 
@@ -74,6 +76,9 @@ int UserScriptSlave::GetIsolatedWorldIdForExtension(const Extension* extension,
   frame->setIsolatedWorldSecurityOrigin(
       new_id,
       WebSecurityOrigin::create(extension->url()));
+  frame->setIsolatedWorldContentSecurityPolicy(
+      new_id,
+      WebString::fromUTF8(extension->content_security_policy()));
   return new_id;
 }
 
@@ -121,7 +126,7 @@ UserScriptSlave::UserScriptSlave(const ExtensionSet* extensions)
       script_deleter_(&scripts_),
       extensions_(extensions) {
   api_js_ = ResourceBundle::GetSharedInstance().GetRawDataResource(
-                IDR_GREASEMONKEY_API_JS, ui::SCALE_FACTOR_NONE);
+      IDR_GREASEMONKEY_API_JS);
 }
 
 UserScriptSlave::~UserScriptSlave() {}
@@ -262,7 +267,7 @@ void UserScriptSlave::InjectScripts(WebFrame* frame,
   int num_css = 0;
   int num_scripts = 0;
 
-  std::set<std::string> extensions_executing_scripts;
+  ExecutingScriptsMap extensions_executing_scripts;
 
   for (size_t i = 0; i < scripts_.size(); ++i) {
     std::vector<WebScriptSource> sources;
@@ -332,7 +337,11 @@ void UserScriptSlave::InjectScripts(WebFrame* frame,
           EXTENSION_GROUP_CONTENT_SCRIPTS);
       UMA_HISTOGRAM_TIMES("Extensions.InjectScriptTime", exec_timer.Elapsed());
 
-      extensions_executing_scripts.insert(extension->id());
+      for (std::vector<WebScriptSource>::const_iterator iter = sources.begin();
+           iter != sources.end(); ++iter) {
+        extensions_executing_scripts[extension->id()].insert(
+            GURL(iter->url).path());
+      }
     }
   }
 

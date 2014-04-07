@@ -12,6 +12,7 @@
 #include "base/values.h"
 #include "chrome/browser/extensions/api/web_navigation/web_navigation_api_constants.h"
 #include "chrome/browser/extensions/event_router.h"
+#include "chrome/browser/extensions/extension_system.h"
 #include "chrome/browser/extensions/extension_tab_util.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/common/extensions/event_filtering_info.h"
@@ -42,9 +43,11 @@ void DispatchEvent(content::BrowserContext* browser_context,
   info.SetURL(url);
 
   Profile* profile = Profile::FromBrowserContext(browser_context);
-  if (profile && profile->GetExtensionEventRouter()) {
-    profile->GetExtensionEventRouter()->DispatchEventToRenderers(
-        event_name, args.Pass(), profile, GURL(), info);
+  if (profile && extensions::ExtensionSystem::Get(profile)->event_router()) {
+    scoped_ptr<Event> event(new Event(event_name, args.Pass()));
+    event->restrict_to_profile = profile;
+    event->filter_info = info;
+    ExtensionSystem::Get(profile)->event_router()->BroadcastEvent(event.Pass());
   }
 }
 
@@ -59,6 +62,8 @@ void DispatchOnBeforeNavigate(content::WebContents* web_contents,
                               int render_process_id,
                               int64 frame_id,
                               bool is_main_frame,
+                              int64 parent_frame_id,
+                              bool parent_is_main_frame,
                               const GURL& validated_url) {
   scoped_ptr<ListValue> args(new ListValue());
   DictionaryValue* dict = new DictionaryValue();
@@ -66,6 +71,8 @@ void DispatchOnBeforeNavigate(content::WebContents* web_contents,
   dict->SetString(keys::kUrlKey, validated_url.spec());
   dict->SetInteger(keys::kProcessIdKey, render_process_id);
   dict->SetInteger(keys::kFrameIdKey, GetFrameId(is_main_frame, frame_id));
+  dict->SetInteger(keys::kParentFrameIdKey,
+                   GetFrameId(parent_is_main_frame, parent_frame_id));
   dict->SetDouble(keys::kTimeStampKey, MilliSecondsFromTime(base::Time::Now()));
   args->Append(dict);
 
@@ -90,9 +97,15 @@ void DispatchOnCommitted(const char* event_name,
   dict->SetInteger(keys::kProcessIdKey,
                    web_contents->GetRenderViewHost()->GetProcess()->GetID());
   dict->SetInteger(keys::kFrameIdKey, GetFrameId(is_main_frame, frame_id));
+  const char *transition_type_as_string =
+      content::PageTransitionGetCoreTransitionString(transition_type);
+  // See http://crbug.com/166166. If you trigger this, please add repro steps
+  // to the bug (or at least report what transition_type you saw).
+  DCHECK(transition_type_as_string)
+      << "Navigation with invalid transition type " << transition_type;
   dict->SetString(
       keys::kTransitionTypeKey,
-      content::PageTransitionGetCoreTransitionString(transition_type));
+      transition_type_as_string ? transition_type_as_string : "unknown");
   ListValue* qualifiers = new ListValue();
   if (transition_type & content::PAGE_TRANSITION_CLIENT_REDIRECT)
     qualifiers->Append(Value::CreateStringValue("client_redirect"));

@@ -33,29 +33,24 @@ TEST_F(ProtoEnumConversionsTest, GetBrowserTypeString) {
 }
 
 TEST_F(ProtoEnumConversionsTest, GetPageTransitionString) {
-  // We have a gap, so we need to do two ranges.
   TestEnumStringFunction(
       GetPageTransitionString,
       sync_pb::SyncEnums::PageTransition_MIN,
-      sync_pb::SyncEnums::KEYWORD_GENERATED);
-  TestEnumStringFunction(
-      GetPageTransitionString,
-      sync_pb::SyncEnums::CHAIN_START,
       sync_pb::SyncEnums::PageTransition_MAX);
 }
 
 TEST_F(ProtoEnumConversionsTest, GetPageTransitionQualifierString) {
   TestEnumStringFunction(
-      GetPageTransitionQualifierString,
-      sync_pb::SyncEnums::PageTransitionQualifier_MIN,
-      sync_pb::SyncEnums::PageTransitionQualifier_MAX);
+      GetPageTransitionRedirectTypeString,
+      sync_pb::SyncEnums::PageTransitionRedirectType_MIN,
+      sync_pb::SyncEnums::PageTransitionRedirectType_MAX);
 }
 
 TEST_F(ProtoEnumConversionsTest, GetUpdatesSourceString) {
   TestEnumStringFunction(
       GetUpdatesSourceString,
       sync_pb::GetUpdatesCallerInfo::GetUpdatesSource_MIN,
-      sync_pb::GetUpdatesCallerInfo::SYNC_CYCLE_CONTINUATION);
+      sync_pb::GetUpdatesCallerInfo::PERIODIC);
   TestEnumStringFunction(
       GetUpdatesSourceString,
       sync_pb::GetUpdatesCallerInfo::NEWLY_SUPPORTED_DATATYPE,

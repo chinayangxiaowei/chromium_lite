@@ -96,14 +96,6 @@ ImageEditor.prototype.onContentUpdate_ = function() {
 };
 
 /**
- * Request prefetch for an image.
- * @param {string} url Image url.
- */
-ImageEditor.prototype.prefetchImage = function(url) {
-  this.imageView_.prefetch(url);
-};
-
-/**
  * Open the editing session for a new image.
  *
  * @param {string} url Image url.
@@ -122,7 +114,7 @@ ImageEditor.prototype.openSession = function(
 
   var self = this;
   this.imageView_.load(
-      url, metadata, effect, displayCallback, function(loadType) {
+      url, metadata, effect, displayCallback, function(loadType, delay, error) {
     self.lockUI(false);
     self.commandQueue_ = new CommandQueue(
         self.container_.ownerDocument,
@@ -131,7 +123,7 @@ ImageEditor.prototype.openSession = function(
     self.commandQueue_.attachUI(
         self.getImageView(), self.getPrompt(), self.lockUI.bind(self));
     self.updateUndoRedo();
-    loadCallback(loadType);
+    loadCallback(loadType, delay, error);
   });
 };
 
@@ -173,6 +165,13 @@ ImageEditor.prototype.executeWhenReady = function(callback) {
 };
 
 /**
+ * @return {boolean} True if undo queue is not empty.
+ */
+ImageEditor.prototype.canUndo = function() {
+  return this.commandQueue_ && this.commandQueue_.canUndo();
+};
+
+  /**
  * Undo the recently executed command.
  */
 ImageEditor.prototype.undo = function() {
@@ -919,8 +918,7 @@ ImageEditor.Toolbar.prototype.addLabel = function(name) {
  */
 ImageEditor.Toolbar.prototype.addButton = function(
     name, handler, opt_class) {
-  var button = this.create_('div');
-  button.classList.add('button');
+  var button = this.create_('button');
   if (opt_class) button.classList.add(opt_class);
   button.textContent = this.displayStringFunction_(name);
   button.addEventListener('click', handler, false);

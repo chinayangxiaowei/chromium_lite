@@ -8,9 +8,10 @@
 #include "base/file_path.h"
 #include "base/file_util_proxy.h"
 #include "base/memory/ref_counted.h"
+#include "base/memory/scoped_ptr.h"
 #include "base/platform_file.h"
 #include "webkit/fileapi/file_system_url.h"
-#include "webkit/fileapi/fileapi_export.h"
+#include "webkit/storage/webkit_storage_export.h"
 
 namespace base {
 class Time;
@@ -31,7 +32,7 @@ class FileSystemOperationContext;
 //
 // Layering structure of the FileSystemFileUtil was split out.
 // See http://crbug.com/128136 if you need it.
-class FILEAPI_EXPORT FileSystemFileUtil {
+class WEBKIT_STORAGE_EXPORT FileSystemFileUtil {
  public:
   // It will be implemented by each subclass such as FileSystemFileEnumerator.
   class AbstractFileEnumerator {
@@ -120,7 +121,7 @@ class FILEAPI_EXPORT FileSystemFileUtil {
   //
   // The supplied context must remain valid at least lifetime of the enumerator
   // instance.
-  virtual AbstractFileEnumerator* CreateFileEnumerator(
+  virtual scoped_ptr<AbstractFileEnumerator> CreateFileEnumerator(
       FileSystemOperationContext* context,
       const FileSystemURL& root_url,
       bool recursive) = 0;

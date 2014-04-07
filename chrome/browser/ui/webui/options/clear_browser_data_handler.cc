@@ -41,8 +41,9 @@ ClearBrowserDataHandler::~ClearBrowserDataHandler() {
 
 void ClearBrowserDataHandler::InitializeHandler() {
   clear_plugin_lso_data_enabled_.Init(prefs::kClearPluginLSODataEnabled,
-                                      Profile::FromWebUI(web_ui())->GetPrefs(),
-                                      NULL);
+                                      Profile::FromWebUI(web_ui())->GetPrefs());
+  pepper_flash_settings_enabled_.Init(prefs::kPepperFlashSettingsEnabled,
+                                      Profile::FromWebUI(web_ui())->GetPrefs());
 }
 
 void ClearBrowserDataHandler::GetLocalizedValues(
@@ -94,8 +95,8 @@ void ClearBrowserDataHandler::GetLocalizedValues(
         break;
     }
     ListValue* option = new ListValue();
-    option->Append(Value::CreateIntegerValue(i));
-    option->Append(Value::CreateStringValue(label_string));
+    option->Append(new base::FundamentalValue(i));
+    option->Append(new base::StringValue(label_string));
     time_list->Append(option);
   }
   localized_strings->Set("clearBrowserDataTimeList", time_list);
@@ -135,8 +136,11 @@ void ClearBrowserDataHandler::HandleClearBrowserData(const ListValue* value) {
     remove_mask |= BrowsingDataRemover::REMOVE_PASSWORDS;
   if (prefs->GetBoolean(prefs::kDeleteFormData))
     remove_mask |= BrowsingDataRemover::REMOVE_FORM_DATA;
-  if (prefs->GetBoolean(prefs::kDeauthorizeContentLicenses))
+  // Clearing Content Licenses is only supported in Pepper Flash.
+  if (prefs->GetBoolean(prefs::kDeauthorizeContentLicenses) &&
+      *pepper_flash_settings_enabled_) {
     remove_mask |= BrowsingDataRemover::REMOVE_CONTENT_LICENSES;
+  }
   if (prefs->GetBoolean(prefs::kDeleteHostedAppsData)) {
     remove_mask |= site_data_mask;
     origin_mask |= BrowsingDataHelper::PROTECTED_WEB;

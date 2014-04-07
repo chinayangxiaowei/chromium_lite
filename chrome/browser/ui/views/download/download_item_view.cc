@@ -84,10 +84,10 @@ using content::DownloadItem;
 
 DownloadItemView::DownloadItemView(DownloadItem* download,
     DownloadShelfView* parent,
-    BaseDownloadItemModel* model)
+    DownloadItemModel* model)
   : warning_icon_(NULL),
     download_(download),
-    parent_(parent),
+    shelf_(parent),
     status_text_(l10n_util::GetStringUTF16(IDS_DOWNLOAD_STATUS_STARTING)),
     body_state_(NORMAL),
     drop_down_state_(NORMAL),
@@ -202,22 +202,13 @@ DownloadItemView::DownloadItemView(DownloadItem* download,
   body_hover_animation_.reset(new ui::SlideAnimation(this));
   drop_hover_animation_.reset(new ui::SlideAnimation(this));
 
-  UpdateDropDownButtonPosition();
-
-  tooltip_text_ = model_->GetTooltipText(font_, kTooltipMaxWidth);
-
-  if (model_->IsDangerous())
-    ShowWarningDialog();
-
-  UpdateAccessibleName();
   set_accessibility_focusable(true);
 
-  // Set up our animation.
-  StartDownloadProgress();
+  OnDownloadUpdated(download_);
+  UpdateDropDownButtonPosition();
 }
 
 DownloadItemView::~DownloadItemView() {
-  icon_consumer_.CancelAllRequests();
   StopDownloadProgress();
   download_->RemoveObserver(this);
 }
@@ -243,10 +234,9 @@ void DownloadItemView::StopDownloadProgress() {
   progress_timer_.Stop();
 }
 
-void DownloadItemView::OnExtractIconComplete(IconManager::Handle handle,
-                                             gfx::Image* icon_bitmap) {
+void DownloadItemView::OnExtractIconComplete(gfx::Image* icon_bitmap) {
   if (icon_bitmap)
-    parent()->SchedulePaint();
+    shelf_->SchedulePaint();
 }
 
 // DownloadObserver interface.
@@ -254,7 +244,7 @@ void DownloadItemView::OnExtractIconComplete(IconManager::Handle handle,
 // Update the progress graphic on the icon and our text status label
 // to reflect our current bytes downloaded, time remaining.
 void DownloadItemView::OnDownloadUpdated(DownloadItem* download) {
-  DCHECK(download == download_);
+  DCHECK_EQ(download_, download);
 
   if (IsShowingWarningDialog() && !model_->IsDangerous()) {
     // We have been approved.
@@ -262,7 +252,7 @@ void DownloadItemView::OnDownloadUpdated(DownloadItem* download) {
   } else if (!IsShowingWarningDialog() && model_->IsDangerous()) {
     ShowWarningDialog();
     // Force the shelf to layout again as our size has changed.
-    parent_->Layout();
+    shelf_->Layout();
     SchedulePaint();
   } else {
     string16 status_text = model_->GetStatusText();
@@ -283,7 +273,7 @@ void DownloadItemView::OnDownloadUpdated(DownloadItem* download) {
         break;
       case DownloadItem::COMPLETE:
         if (download_->GetAutoOpened()) {
-          parent_->RemoveDownloadView(this);  // This will delete us!
+          shelf_->RemoveDownloadView(this);  // This will delete us!
           return;
         }
         StopDownloadProgress();
@@ -315,11 +305,11 @@ void DownloadItemView::OnDownloadUpdated(DownloadItem* download) {
   // We use the parent's (DownloadShelfView's) SchedulePaint, since there
   // are spaces between each DownloadItemView that the parent is responsible
   // for painting.
-  parent()->SchedulePaint();
+  shelf_->SchedulePaint();
 }
 
 void DownloadItemView::OnDownloadDestroyed(DownloadItem* download) {
-  parent_->RemoveDownloadView(this);  // This will delete us!
+  shelf_->RemoveDownloadView(this);  // This will delete us!
 }
 
 void DownloadItemView::OnDownloadOpened(DownloadItem* download) {
@@ -332,7 +322,7 @@ void DownloadItemView::OnDownloadOpened(DownloadItem* download) {
       base::TimeDelta::FromMilliseconds(kDisabledOnOpenDuration));
 
   // Notify our parent.
-  parent_->OpenedDownload(this);
+  shelf_->OpenedDownload(this);
 }
 
 // View overrides
@@ -426,9 +416,7 @@ bool DownloadItemView::OnMouseDragged(const ui::MouseEvent& event) {
                                     widget ? widget->GetNativeView() : NULL);
       }
     }
-  } else if (ExceededDragThreshold(
-                 event.location().x() - drag_start_point_.x(),
-                 event.location().y() - drag_start_point_.y())) {
+  } else if (ExceededDragThreshold(event.location() - drag_start_point_)) {
     dragging_ = true;
   }
   return true;
@@ -447,9 +435,8 @@ void DownloadItemView::OnMouseCaptureLost() {
     // Starting a drag results in a MouseCaptureLost.
     dragging_ = false;
     starting_drag_ = false;
-  } else {
-    SetState(NORMAL, NORMAL);
   }
+  SetState(NORMAL, NORMAL);
 }
 
 void DownloadItemView::OnMouseMoved(const ui::MouseEvent& event) {
@@ -459,15 +446,6 @@ void DownloadItemView::OnMouseMoved(const ui::MouseEvent& event) {
 
   bool on_body = !InDropDownButtonXCoordinateRange(event.x());
   SetState(on_body ? HOT : NORMAL, on_body ? NORMAL : HOT);
-  if (on_body) {
-    if (!IsShowingWarningDialog())
-      body_hover_animation_->Show();
-    drop_hover_animation_->Hide();
-  } else {
-    if (!IsShowingWarningDialog())
-      body_hover_animation_->Hide();
-    drop_hover_animation_->Show();
-  }
 }
 
 void DownloadItemView::OnMouseExited(const ui::MouseEvent& event) {
@@ -476,9 +454,6 @@ void DownloadItemView::OnMouseExited(const ui::MouseEvent& event) {
     return;
 
   SetState(NORMAL, drop_down_pressed_ ? PUSHED : NORMAL);
-  if (!IsShowingWarningDialog())
-    body_hover_animation_->Hide();
-  drop_hover_animation_->Hide();
 }
 
 bool DownloadItemView::OnKeyPressed(const ui::KeyEvent& event) {
@@ -492,22 +467,6 @@ bool DownloadItemView::OnKeyPressed(const ui::KeyEvent& event) {
     return true;
   }
   return false;
-}
-
-ui::EventResult DownloadItemView::OnGestureEvent(
-    const ui::GestureEvent& event) {
-  if (event.type() == ui::ET_GESTURE_TAP_DOWN) {
-    HandlePressEvent(event, true);
-    return ui::ER_CONSUMED;
-  }
-
-  if (event.type() == ui::ET_GESTURE_TAP) {
-    HandleClickEvent(event, true);
-    return ui::ER_CONSUMED;
-  }
-
-  SetState(NORMAL, NORMAL);
-  return views::View::OnGestureEvent(event);
 }
 
 bool DownloadItemView::GetTooltipText(const gfx::Point& p,
@@ -534,6 +493,23 @@ void DownloadItemView::GetAccessibleState(ui::AccessibleViewState* state) {
 
 void DownloadItemView::OnThemeChanged() {
   UpdateColorsFromTheme();
+}
+
+void DownloadItemView::OnGestureEvent(ui::GestureEvent* event) {
+  if (event->type() == ui::ET_GESTURE_TAP_DOWN) {
+    HandlePressEvent(*event, true);
+    event->SetHandled();
+    return;
+  }
+
+  if (event->type() == ui::ET_GESTURE_TAP) {
+    HandleClickEvent(*event, true);
+    event->SetHandled();
+    return;
+  }
+
+  SetState(NORMAL, NORMAL);
+  views::View::OnGestureEvent(event);
 }
 
 void DownloadItemView::ShowContextMenuForView(View* source,
@@ -689,7 +665,7 @@ void DownloadItemView::OnPaint(gfx::Canvas* canvas) {
     // (hot_)body_image_set->bottom_left, and drop_down_image_set,
     // for RTL UI, we flip the canvas to draw those images mirrored.
     // Consequently, we do not need to mirror the x-axis of those images.
-    canvas->Translate(gfx::Point(width(), 0));
+    canvas->Translate(gfx::Vector2d(width(), 0));
     canvas->Scale(-1, 1);
   }
   PaintImages(canvas,
@@ -712,7 +688,6 @@ void DownloadItemView::OnPaint(gfx::Canvas* canvas) {
       body_hover_animation_->GetCurrentValue() > 0) {
     canvas->SaveLayerAlpha(
         static_cast<int>(body_hover_animation_->GetCurrentValue() * 255));
-    canvas->sk_canvas()->drawARGB(0, 255, 255, 255, SkXfermode::kClear_Mode);
 
     int x = kLeftPadding;
     PaintImages(canvas,
@@ -746,7 +721,6 @@ void DownloadItemView::OnPaint(gfx::Canvas* canvas) {
     if (drop_hover_animation_->GetCurrentValue() > 0) {
       canvas->SaveLayerAlpha(
           static_cast<int>(drop_hover_animation_->GetCurrentValue() * 255));
-      canvas->sk_canvas()->drawARGB(0, 255, 255, 255, SkXfermode::kClear_Mode);
 
       PaintImages(canvas,
                   drop_down_image_set->top, drop_down_image_set->center,
@@ -872,9 +846,10 @@ void DownloadItemView::LoadIcon() {
   IconManager* im = g_browser_process->icon_manager();
   last_download_item_path_ = download_->GetUserVerifiedFilePath();
   im->LoadIcon(last_download_item_path_,
-               IconLoader::SMALL, &icon_consumer_,
+               IconLoader::SMALL,
                base::Bind(&DownloadItemView::OnExtractIconComplete,
-                          base::Unretained(this)));
+                          base::Unretained(this)),
+               &cancelable_task_tracker_);
 }
 
 void DownloadItemView::LoadIconIfItemPathChanged() {
@@ -928,7 +903,7 @@ void DownloadItemView::ShowContextMenuImpl(const gfx::Point& p,
   if (!context_menu_.get()) {
     context_menu_.reset(
         new DownloadShelfContextMenuView(model_.get(),
-                                         parent_->GetNavigator()));
+                                         shelf_->GetNavigator()));
   }
   context_menu_->Run(GetWidget()->GetTopLevelWidget(),
                      gfx::Rect(point, size));
@@ -1001,22 +976,26 @@ void DownloadItemView::PaintImages(gfx::Canvas* canvas,
                        x, y, width, bottom_image->height(), false);
 }
 
-void DownloadItemView::SetState(State body_state, State drop_down_state) {
+void DownloadItemView::SetState(State new_body_state, State new_drop_state) {
   // If we are showing a warning dialog, we don't change body state.
   if (IsShowingWarningDialog()) {
-    body_state = NORMAL;
+    new_body_state = NORMAL;
 
     // Current body_state_ should always be NORMAL for warning dialogs.
-    DCHECK(body_state_ == NORMAL);
+    DCHECK_EQ(NORMAL, body_state_);
     // We shouldn't be calling SetState if we are in DANGEROUS_MODE.
-    DCHECK(mode_ != DANGEROUS_MODE);
+    DCHECK_NE(DANGEROUS_MODE, mode_);
   }
   // Avoid extra SchedulePaint()s if the state is going to be the same.
-  if (body_state_ == body_state && drop_down_state_ == drop_down_state)
+  if (body_state_ == new_body_state && drop_down_state_ == new_drop_state)
     return;
 
-  body_state_ = body_state;
-  drop_down_state_ = drop_down_state;
+  AnimateStateTransition(body_state_, new_body_state,
+                         body_hover_animation_.get());
+  AnimateStateTransition(drop_down_state_, new_drop_state,
+                         drop_hover_animation_.get());
+  body_state_ = new_body_state;
+  drop_down_state_ = new_drop_state;
   SchedulePaint();
 }
 
@@ -1052,8 +1031,8 @@ void DownloadItemView::ClearWarningDialog() {
   LoadIcon();
 
   // Force the shelf to layout again as our size has changed.
-  parent_->Layout();
-  parent_->SchedulePaint();
+  shelf_->Layout();
+  shelf_->SchedulePaint();
 
   TooltipTextChanged();
 }
@@ -1087,7 +1066,7 @@ void DownloadItemView::ShowWarningDialog() {
   string16 dangerous_label = model_->GetWarningText(font_, kTextWidth);
   dangerous_download_label_ = new views::Label(dangerous_label);
   dangerous_download_label_->SetMultiLine(true);
-  dangerous_download_label_->SetHorizontalAlignment(views::Label::ALIGN_LEFT);
+  dangerous_download_label_->SetHorizontalAlignment(gfx::ALIGN_LEFT);
   dangerous_download_label_->SetAutoColorReadabilityEnabled(false);
   AddChildView(dangerous_download_label_);
   SizeLabelToMinWidth();
@@ -1231,5 +1210,16 @@ void DownloadItemView::UpdateDropDownButtonPosition() {
     drop_down_x_left_ =
       size.width() - normal_drop_down_image_set_.top->width();
     drop_down_x_right_ = size.width();
+  }
+}
+
+void DownloadItemView::AnimateStateTransition(State from, State to,
+                                              ui::SlideAnimation* animation) {
+  if (from == NORMAL && to == HOT) {
+    animation->Show();
+  } else if (from == HOT && to == NORMAL) {
+    animation->Hide();
+  } else if (from != to) {
+    animation->Reset((to == HOT) ? 1.0 : 0.0);
   }
 }

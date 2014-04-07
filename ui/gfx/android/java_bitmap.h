@@ -15,29 +15,34 @@ namespace gfx {
 // This class wraps a JNI AndroidBitmap object to make it easier to use. It
 // handles locking and unlocking of the underlying pixels, along with wrapping
 // various JNI methods.
-UI_EXPORT class JavaBitmap {
+class UI_EXPORT JavaBitmap {
  public:
   explicit JavaBitmap(jobject bitmap);
   ~JavaBitmap();
 
-  void* pixels() { return pixels_; }
-  gfx::Size Size() const;
+  inline void* pixels() { return pixels_; }
+  inline const gfx::Size& size() const { return size_; }
   // Formats are in android/bitmap.h; e.g. ANDROID_BITMAP_FORMAT_RGBA_8888
-  int Format() const;
-  uint32_t Stride() const;
+  inline int format() const { return format_; }
+  inline uint32_t stride() const { return stride_; }
 
  private:
   jobject bitmap_;
   void* pixels_;
+  gfx::Size size_;
+  int format_;
+  uint32_t stride_;
 
   DISALLOW_COPY_AND_ASSIGN(JavaBitmap);
 };
 
-base::android::ScopedJavaLocalRef<jobject> CreateJavaBitmap(
+UI_EXPORT base::android::ScopedJavaLocalRef<jobject> CreateJavaBitmap(
     const gfx::Size& size);
 
-base::android::ScopedJavaLocalRef<jobject> ConvertToJavaBitmap(
+UI_EXPORT base::android::ScopedJavaLocalRef<jobject> ConvertToJavaBitmap(
     const SkBitmap* skbitmap);
+
+SkBitmap CreateSkBitmapFromResource(const char* name);
 
 }  // namespace gfx
 

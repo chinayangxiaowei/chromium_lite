@@ -9,8 +9,30 @@
 
 #include "base/base_export.h"
 #include "base/basictypes.h"
+#include "base/memory/scoped_ptr.h"
 
 namespace base {
+
+class DictionaryValue;
+class HistogramSamples;
+class ListValue;
+
+////////////////////////////////////////////////////////////////////////////////
+// These enums are used to facilitate deserialization of histograms from other
+// processes into the browser. If you create another class that inherits from
+// HistogramBase, add new histogram types and names below.
+
+enum BASE_EXPORT HistogramType {
+  HISTOGRAM,
+  LINEAR_HISTOGRAM,
+  BOOLEAN_HISTOGRAM,
+  CUSTOM_HISTOGRAM,
+  SPARSE_HISTOGRAM,
+};
+
+std::string HistogramTypeToString(HistogramType type);
+
+////////////////////////////////////////////////////////////////////////////////
 
 class BASE_EXPORT HistogramBase {
  public:
@@ -34,7 +56,6 @@ class BASE_EXPORT HistogramBase {
     kHexRangePrintingFlag = 0x8000,
   };
 
-
   HistogramBase(const std::string& name);
   virtual ~HistogramBase();
 
@@ -45,12 +66,38 @@ class BASE_EXPORT HistogramBase {
   void SetFlags(int32 flags);
   void ClearFlags(int32 flags);
 
+  virtual HistogramType GetHistogramType() const = 0;
+
+  // Whether the histogram has construction arguments as parameters specified.
+  // For histograms that don't have the concept of minimum, maximum or
+  // bucket_count, this function always returns false.
+  virtual bool HasConstructionArguments(Sample minimum,
+                                        Sample maximum,
+                                        size_t bucket_count) const = 0;
+
   virtual void Add(Sample value) = 0;
+
+  // Snapshot the current complete set of sample data.
+  // Override with atomic/locked snapshot if needed.
+  virtual scoped_ptr<HistogramSamples> SnapshotSamples() const = 0;
 
   // The following methods provide graphical histogram displays.
   virtual void WriteHTMLGraph(std::string* output) const = 0;
   virtual void WriteAscii(std::string* output) const = 0;
 
+  // Produce a JSON representation of the histogram. This is implemented with
+  // the help of GetParameters and GetCountAndBucketData; overwrite them to
+  // customize the output.
+  void WriteJSON(std::string* output) const;
+
+protected:
+  // Writes information about the construction parameters in |params|.
+  virtual void GetParameters(DictionaryValue* params) const = 0;
+
+  // Writes information about the current (non-empty) buckets and their sample
+  // counts to |buckets| and the total sample count to |count|.
+  virtual void GetCountAndBucketData(Count* count,
+                                     ListValue* buckets) const = 0;
  private:
   const std::string histogram_name_;
   int32 flags_;

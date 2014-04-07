@@ -9,9 +9,9 @@
 #include <string>
 
 #include "base/gtest_prod_util.h"
+#include "base/prefs/public/pref_change_registrar.h"
 #include "base/time.h"
 #include "base/timer.h"
-#include "chrome/browser/api/prefs/pref_change_registrar.h"
 #include "chrome/browser/sessions/tab_restore_service.h"
 #include "chrome/browser/ui/webui/chrome_url_data_manager.h"
 #include "content/public/browser/notification_observer.h"
@@ -99,9 +99,12 @@ class NewTabUI : public content::WebUIController,
  private:
   FRIEND_TEST_ALL_PREFIXES(NewTabUITest, UpdateUserPrefsVersion);
 
+  // content::NotificationObserver implementation.
   virtual void Observe(int type,
                        const content::NotificationSource& source,
                        const content::NotificationDetails& details) OVERRIDE;
+
+  void OnShowBookmarkBarChanged();
 
   // Reset the CSS caches.
   void InitializeCSSCaches();

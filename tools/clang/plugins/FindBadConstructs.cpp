@@ -13,13 +13,14 @@
 // - Classes that derive from base::RefCounted / base::RefCountedThreadSafe
 //   should have protected or private destructors.
 
-#include "clang/Frontend/FrontendPluginRegistry.h"
 #include "clang/AST/ASTConsumer.h"
 #include "clang/AST/AST.h"
+#include "clang/AST/Attr.h"
 #include "clang/AST/CXXInheritance.h"
 #include "clang/AST/TypeLoc.h"
 #include "clang/Basic/SourceManager.h"
 #include "clang/Frontend/CompilerInstance.h"
+#include "clang/Frontend/FrontendPluginRegistry.h"
 #include "llvm/Support/raw_ostream.h"
 
 #include "ChromeClassTester.h"
@@ -29,7 +30,7 @@ using namespace clang;
 namespace {
 
 bool TypeHasNonTrivialDtor(const Type* type) {
-  if (const CXXRecordDecl* cxx_r = type->getCXXRecordDeclForPointerType())
+  if (const CXXRecordDecl* cxx_r = type->getPointeeCXXRecordDecl())
     return cxx_r->hasTrivialDestructor();
 
   return false;
@@ -50,9 +51,8 @@ class FindBadConstructsConsumer : public ChromeClassTester {
  public:
   FindBadConstructsConsumer(CompilerInstance& instance,
                             bool check_refcounted_dtors,
-                            bool check_virtuals_in_implementations,
-                            bool check_cc_directory)
-      : ChromeClassTester(instance, check_cc_directory),
+                            bool check_virtuals_in_implementations)
+      : ChromeClassTester(instance),
         check_refcounted_dtors_(check_refcounted_dtors),
         check_virtuals_in_implementations_(check_virtuals_in_implementations) {
   }
@@ -396,8 +396,7 @@ class FindBadConstructsAction : public PluginASTAction {
  public:
   FindBadConstructsAction()
       : check_refcounted_dtors_(true),
-        check_virtuals_in_implementations_(true),
-        check_cc_directory_(false) {
+        check_virtuals_in_implementations_(true) {
   }
 
  protected:
@@ -405,8 +404,7 @@ class FindBadConstructsAction : public PluginASTAction {
   virtual ASTConsumer* CreateASTConsumer(CompilerInstance& instance,
                                          llvm::StringRef ref) {
     return new FindBadConstructsConsumer(
-        instance, check_refcounted_dtors_, check_virtuals_in_implementations_,
-        check_cc_directory_);
+        instance, check_refcounted_dtors_, check_virtuals_in_implementations_);
   }
 
   virtual bool ParseArgs(const CompilerInstance& instance,
@@ -418,11 +416,9 @@ class FindBadConstructsAction : public PluginASTAction {
         check_refcounted_dtors_ = false;
       } else if (args[i] == "skip-virtuals-in-implementations") {
         check_virtuals_in_implementations_ = false;
-      } else if (args[i] == "check-cc-directory") {
-        check_cc_directory_ = true;
       } else {
         parsed = false;
-        llvm::errs() << "Unknown argument: " << args[i] << "\n";
+        llvm::errs() << "Unknown clang plugin argument: " << args[i] << "\n";
       }
     }
 
@@ -432,7 +428,6 @@ class FindBadConstructsAction : public PluginASTAction {
  private:
   bool check_refcounted_dtors_;
   bool check_virtuals_in_implementations_;
-  bool check_cc_directory_;
 };
 
 }  // namespace

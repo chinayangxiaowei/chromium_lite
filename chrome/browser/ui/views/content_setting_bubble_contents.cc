@@ -11,6 +11,9 @@
 
 #include "base/utf_string_conversions.h"
 #include "chrome/browser/content_settings/host_content_settings_map.h"
+#include "chrome/browser/plugins/plugin_finder.h"
+#include "chrome/browser/plugins/plugin_metadata.h"
+#include "chrome/browser/ui/chrome_style.h"
 #include "chrome/browser/ui/content_settings/content_setting_bubble_model.h"
 #include "chrome/browser/ui/views/browser_dialogs.h"
 #include "content/public/browser/notification_source.h"
@@ -44,7 +47,7 @@ using content::WebContents;
 
 class ContentSettingBubbleContents::Favicon : public views::ImageView {
  public:
-  Favicon(const SkBitmap& image,
+  Favicon(const gfx::Image& image,
           ContentSettingBubbleContents* parent,
           views::Link* link);
   virtual ~Favicon();
@@ -60,12 +63,12 @@ class ContentSettingBubbleContents::Favicon : public views::ImageView {
 };
 
 ContentSettingBubbleContents::Favicon::Favicon(
-    const SkBitmap& image,
+    const gfx::Image& image,
     ContentSettingBubbleContents* parent,
     views::Link* link)
     : parent_(parent),
       link_(link) {
-  SetImage(image);
+  SetImage(image.AsImageSkia());
 }
 
 ContentSettingBubbleContents::Favicon::~Favicon() {
@@ -131,8 +134,8 @@ void ContentSettingBubbleContents::Init() {
   GridLayout* layout = new views::GridLayout(this);
   SetLayoutManager(layout);
 
-  const int single_column_set_id = 0;
-  views::ColumnSet* column_set = layout->AddColumnSet(single_column_set_id);
+  const int kSingleColumnSetId = 0;
+  views::ColumnSet* column_set = layout->AddColumnSet(kSingleColumnSetId);
   column_set->AddColumn(GridLayout::LEADING, GridLayout::FILL, 1,
                         GridLayout::USE_PREF, 0, 0);
 
@@ -143,7 +146,7 @@ void ContentSettingBubbleContents::Init() {
   if (!bubble_content.title.empty()) {
     views::Label* title_label = new views::Label(UTF8ToUTF16(
         bubble_content.title));
-    layout->StartRow(0, single_column_set_id);
+    layout->StartRow(0, kSingleColumnSetId);
     layout->AddView(title_label);
     bubble_content_empty = false;
   }
@@ -152,12 +155,11 @@ void ContentSettingBubbleContents::Init() {
   if (!plugins.empty()) {
     if (!bubble_content_empty)
       layout->AddPaddingRow(0, views::kRelatedControlVerticalSpacing);
+    PluginFinder* finder = PluginFinder::GetInstance();
     for (std::set<std::string>::const_iterator i(plugins.begin());
          i != plugins.end(); ++i) {
-      string16 name = PluginService::GetInstance()->GetPluginGroupName(*i);
-      if (name.empty())
-        name = UTF8ToUTF16(*i);
-      layout->StartRow(0, single_column_set_id);
+      string16 name = finder->FindPluginNameWithIdentifier(*i);
+      layout->StartRow(0, kSingleColumnSetId);
       layout->AddView(new views::Label(name));
       bubble_content_empty = false;
     }
@@ -165,9 +167,9 @@ void ContentSettingBubbleContents::Init() {
 
   if (content_setting_bubble_model_->content_type() ==
       CONTENT_SETTINGS_TYPE_POPUPS) {
-    const int popup_column_set_id = 2;
+    const int kPopupColumnSetId = 2;
     views::ColumnSet* popup_column_set =
-        layout->AddColumnSet(popup_column_set_id);
+        layout->AddColumnSet(kPopupColumnSetId);
     popup_column_set->AddColumn(GridLayout::LEADING, GridLayout::FILL, 0,
                                 GridLayout::USE_PREF, 0, 0);
     popup_column_set->AddPaddingColumn(
@@ -180,17 +182,26 @@ void ContentSettingBubbleContents::Init() {
          i != bubble_content.popup_items.end(); ++i) {
       if (!bubble_content_empty)
         layout->AddPaddingRow(0, views::kRelatedControlVerticalSpacing);
-      layout->StartRow(0, popup_column_set_id);
+      layout->StartRow(0, kPopupColumnSetId);
 
       views::Link* link = new views::Link(UTF8ToUTF16(i->title));
       link->set_listener(this);
       link->SetElideBehavior(views::Label::ELIDE_IN_MIDDLE);
       popup_links_[link] = i - bubble_content.popup_items.begin();
-      layout->AddView(new Favicon(i->bitmap, this, link));
+      layout->AddView(new Favicon(i->image, this, link));
       layout->AddView(link);
       bubble_content_empty = false;
     }
   }
+
+  const int indented_kSingleColumnSetId = 3;
+  // Insert a column set with greater indent.
+  views::ColumnSet* indented_single_column_set =
+      layout->AddColumnSet(indented_kSingleColumnSetId);
+  indented_single_column_set->AddPaddingColumn(
+      0, chrome_style::kCheckboxIndent);
+  indented_single_column_set->AddColumn(GridLayout::LEADING, GridLayout::FILL,
+                                        1, GridLayout::USE_PREF, 0, 0);
 
   const ContentSettingBubbleModel::RadioGroup& radio_group =
       bubble_content.radio_group;
@@ -204,7 +215,7 @@ void ContentSettingBubbleContents::Init() {
       radio->SetEnabled(bubble_content.radio_group_enabled);
       radio->set_listener(this);
       radio_group_.push_back(radio);
-      layout->StartRow(0, single_column_set_id);
+      layout->StartRow(0, indented_kSingleColumnSetId);
       layout->AddView(radio);
       bubble_content_empty = false;
     }
@@ -216,25 +227,17 @@ void ContentSettingBubbleContents::Init() {
 
   gfx::Font domain_font =
       views::Label().font().DeriveFont(0, gfx::Font::BOLD);
-  const int indented_single_column_set_id = 3;
-  // Insert a column set to indent the domain list.
-  views::ColumnSet* indented_single_column_set =
-      layout->AddColumnSet(indented_single_column_set_id);
-  indented_single_column_set->AddPaddingColumn(
-      0, views::kPanelHorizIndentation);
-  indented_single_column_set->AddColumn(GridLayout::LEADING, GridLayout::FILL,
-                                        1, GridLayout::USE_PREF, 0, 0);
   for (std::vector<ContentSettingBubbleModel::DomainList>::const_iterator i(
        bubble_content.domain_lists.begin());
        i != bubble_content.domain_lists.end(); ++i) {
-    layout->StartRow(0, single_column_set_id);
+    layout->StartRow(0, kSingleColumnSetId);
     views::Label* section_title = new views::Label(UTF8ToUTF16(i->title));
     section_title->SetMultiLine(true);
-    section_title->SetHorizontalAlignment(views::Label::ALIGN_LEFT);
+    section_title->SetHorizontalAlignment(gfx::ALIGN_LEFT);
     layout->AddView(section_title, 1, 1, GridLayout::FILL, GridLayout::LEADING);
     for (std::set<std::string>::const_iterator j = i->hosts.begin();
          j != i->hosts.end(); ++j) {
-      layout->StartRow(0, indented_single_column_set_id);
+      layout->StartRow(0, indented_kSingleColumnSetId);
       layout->AddView(new views::Label(UTF8ToUTF16(*j), domain_font));
     }
     bubble_content_empty = false;
@@ -246,22 +249,22 @@ void ContentSettingBubbleContents::Init() {
     custom_link_->set_listener(this);
     if (!bubble_content_empty)
       layout->AddPaddingRow(0, views::kRelatedControlVerticalSpacing);
-    layout->StartRow(0, single_column_set_id);
+    layout->StartRow(0, kSingleColumnSetId);
     layout->AddView(custom_link_);
     bubble_content_empty = false;
   }
 
   if (!bubble_content_empty) {
     layout->AddPaddingRow(0, views::kRelatedControlVerticalSpacing);
-    layout->StartRow(0, single_column_set_id);
+    layout->StartRow(0, kSingleColumnSetId);
     layout->AddView(new views::Separator, 1, 1,
                     GridLayout::FILL, GridLayout::FILL);
     layout->AddPaddingRow(0, views::kRelatedControlVerticalSpacing);
   }
 
-  const int double_column_set_id = 1;
+  const int kDoubleColumnSetId = 1;
   views::ColumnSet* double_column_set =
-      layout->AddColumnSet(double_column_set_id);
+      layout->AddColumnSet(kDoubleColumnSetId);
   double_column_set->AddColumn(GridLayout::LEADING, GridLayout::CENTER, 1,
                         GridLayout::USE_PREF, 0, 0);
   double_column_set->AddPaddingColumn(
@@ -269,7 +272,7 @@ void ContentSettingBubbleContents::Init() {
   double_column_set->AddColumn(GridLayout::TRAILING, GridLayout::CENTER, 0,
                         GridLayout::USE_PREF, 0, 0);
 
-  layout->StartRow(0, double_column_set_id);
+  layout->StartRow(0, kDoubleColumnSetId);
   manage_link_ = new views::Link(UTF8ToUTF16(bubble_content.manage_link));
   manage_link_->set_listener(this);
   layout->AddView(manage_link_);
@@ -321,7 +324,7 @@ void ContentSettingBubbleContents::Observe(
     int type,
     const content::NotificationSource& source,
     const content::NotificationDetails& details) {
-  DCHECK(type == content::NOTIFICATION_WEB_CONTENTS_DESTROYED);
+  DCHECK_EQ(content::NOTIFICATION_WEB_CONTENTS_DESTROYED, type);
   DCHECK(source == content::Source<WebContents>(web_contents_));
   web_contents_ = NULL;
 }

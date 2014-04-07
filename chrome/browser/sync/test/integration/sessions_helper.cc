@@ -18,7 +18,6 @@
 #include "chrome/browser/sync/test/integration/sync_datatype_helper.h"
 #include "chrome/browser/sync/test/integration/sync_test.h"
 #include "chrome/browser/ui/singleton_tabs.h"
-#include "chrome/browser/ui/tab_contents/tab_contents.h"
 #include "chrome/test/base/ui_test_utils.h"
 #include "content/public/browser/browser_thread.h"
 #include "googleurl/src/gurl.h"
@@ -90,8 +89,10 @@ bool ModelAssociatorHasTabWithUrl(int index, const GURL& url) {
       nav = (*tab_it)->navigations[nav_index];
       if (nav.virtual_url() == url) {
         DVLOG(1) << "Found tab with url " << url.spec();
+        DVLOG(1) << "Timestamp is "
+                 << SessionTypesTestHelper::GetTimestamp(nav).ToInternalValue();
         if (nav.title().empty()) {
-          DVLOG(1) << "No title!";
+          DVLOG(1) << "Title empty -- tab hasn't finished loading yet";
           continue;
         }
         return true;

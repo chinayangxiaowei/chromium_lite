@@ -89,7 +89,8 @@ class DownloadTestObserver : public DownloadManager::Observer,
   virtual void OnDownloadDestroyed(DownloadItem* download) OVERRIDE;
 
   // DownloadManager::Observer
-  virtual void ModelChanged(DownloadManager* manager) OVERRIDE;
+  virtual void OnDownloadCreated(
+      DownloadManager* manager, DownloadItem* item) OVERRIDE;
 
   size_t NumDangerousDownloadsSeen() const;
 
@@ -138,14 +139,13 @@ class DownloadTestObserver : public DownloadManager::Observer,
   // The number of downloads to wait on completing.
   size_t wait_count_;
 
-  // The number of downloads entered in final state in initial
-  // ModelChanged().  We use |finished_downloads_| to track the incoming
-  // transitions to final state we should ignore, and to track the
-  // number of final state transitions that occurred between
-  // construction and return from wait.  But some downloads may be in our
-  // final state (and thus be entered into |finished_downloads_|) when we
-  // construct this class.  We don't want to count those in our transition
-  // to finished.
+  // The number of downloads entered in final state in Init().  We use
+  // |finished_downloads_| to track the incoming transitions to final state we
+  // should ignore, and to track the number of final state transitions that
+  // occurred between construction and return from wait.  But some downloads may
+  // be in our final state (and thus be entered into |finished_downloads_|) when
+  // we construct this class.  We don't want to count those in our transition to
+  // finished.
   int finished_downloads_at_construction_;
 
   // Whether an internal message loop has been started and must be quit upon
@@ -221,7 +221,9 @@ class DownloadTestFlushObserver
   void WaitForFlush();
 
   // DownloadsManager observer methods.
-  virtual void ModelChanged(DownloadManager* manager) OVERRIDE;
+  virtual void OnDownloadCreated(
+      DownloadManager* manager,
+      DownloadItem* item) OVERRIDE;
 
   // DownloadItem observer methods.
   virtual void OnDownloadUpdated(DownloadItem* download) OVERRIDE;
@@ -260,7 +262,7 @@ class DownloadTestItemCreationObserver
 
   void WaitForDownloadItemCreation();
 
-  DownloadId download_id() const { return download_id_; }
+  int download_id() const { return download_id_; }
   net::Error error() const { return error_; }
   bool started() const { return called_back_count_ > 0; }
   bool succeeded() const { return started() && (error_ == net::OK); }
@@ -272,12 +274,10 @@ class DownloadTestItemCreationObserver
 
   ~DownloadTestItemCreationObserver();
 
-  void DownloadItemCreationCallback(DownloadId download_id,
-                                    net::Error error);
+  void DownloadItemCreationCallback(DownloadItem* item, net::Error error);
 
   // The download creation information we received.
-  DownloadId download_id_;
-
+  int download_id_;
   net::Error error_;
 
   // Count of callbacks.

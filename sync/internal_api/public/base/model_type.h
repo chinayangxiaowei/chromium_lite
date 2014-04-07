@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -13,7 +13,6 @@
 #include <string>
 
 #include "base/logging.h"
-#include "base/time.h"
 #include "sync/base/sync_export.h"
 #include "sync/internal_api/public/base/enum_set.h"
 
@@ -82,12 +81,18 @@ enum ModelType {
   EXTENSION_SETTINGS,
   // App notifications.
   APP_NOTIFICATIONS,
-  LAST_USER_MODEL_TYPE = APP_NOTIFICATIONS,
+  // History delete directives.
+  HISTORY_DELETE_DIRECTIVES,
+  LAST_USER_MODEL_TYPE = HISTORY_DELETE_DIRECTIVES,
 
   // An object representing a set of Nigori keys.
   NIGORI,
   FIRST_CONTROL_MODEL_TYPE = NIGORI,
-  LAST_CONTROL_MODEL_TYPE = NIGORI,
+  // Client-specific metadata.
+  DEVICE_INFO,
+  // Flags to enable experimental features.
+  EXPERIMENTS,
+  LAST_CONTROL_MODEL_TYPE = EXPERIMENTS,
 
   LAST_REAL_MODEL_TYPE = LAST_CONTROL_MODEL_TYPE,
 
@@ -132,7 +137,10 @@ bool ShouldMaintainPosition(ModelType model_type);
 
 // These are the user-selectable data types.  Note that some of these share a
 // preference flag, so not all of them are individually user-selectable.
-ModelTypeSet UserTypes();
+SYNC_EXPORT ModelTypeSet UserTypes();
+
+// This is the subset of UserTypes() that can be encrypted.
+ModelTypeSet EncryptableUserTypes();
 
 // Returns a list of all control types.
 //
@@ -144,15 +152,33 @@ ModelTypeSet UserTypes();
 // - Their contents are not encrypted automatically.
 // - They support custom update application and conflict resolution logic.
 // - All change processing occurs on the sync thread (GROUP_PASSIVE).
-ModelTypeSet ControlTypes();
+SYNC_EXPORT ModelTypeSet ControlTypes();
 
 // Returns true if this is a control type.
 //
 // See comment above for more information on what makes these types special.
-bool IsControlType(ModelType model_type);
+SYNC_EXPORT bool IsControlType(ModelType model_type);
 
 // Determine a model type from the field number of its associated
-// EntitySpecifics field.
+// EntitySpecifics field.  Returns UNSPECIFIED if the field number is
+// not recognized.
+//
+// If you're putting the result in a ModelTypeSet, you should use the
+// following pattern:
+//
+//   ModelTypeSet model_types;
+//   // Say we're looping through a list of items, each of which has a
+//   // field number.
+//   for (...) {
+//     int field_number = ...;
+//     ModelType model_type =
+//         GetModelTypeFromSpecificsFieldNumber(field_number);
+//     if (!IsRealDataType(model_type)) {
+//       DLOG(WARNING) << "Unknown field number " << field_number;
+//       continue;
+//     }
+//     model_types.Put(model_type);
+//   }
 ModelType GetModelTypeFromSpecificsFieldNumber(int field_number);
 
 // Return the field number of the EntitySpecifics field associated with

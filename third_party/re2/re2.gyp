@@ -8,7 +8,7 @@
   'targets': [
     {
       'target_name': 're2',
-      'type': '<(library)',
+      'type': 'static_library',
       'include_dirs': [
         '.',
         '<(DEPTH)',
@@ -78,7 +78,7 @@
           'include_dirs': [
             'mswin'
           ],
-          'msvs_disabled_warnings': [ 4018 ],
+          'msvs_disabled_warnings': [ 4018, 4722 ],
         }]
       ]
     },

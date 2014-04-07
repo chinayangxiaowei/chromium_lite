@@ -12,6 +12,7 @@
 #include "ash/launcher/launcher_icon_observer.h"
 #include "ash/launcher/launcher_model.h"
 #include "ash/launcher/launcher_tooltip_manager.h"
+#include "ash/root_window_controller.h"
 #include "ash/shell.h"
 #include "ash/test/ash_test_base.h"
 #include "ash/test/launcher_view_test_api.h"
@@ -74,8 +75,7 @@ class LauncherViewIconObserverTest : public ash::test::AshTestBase {
 
   virtual void SetUp() OVERRIDE {
     AshTestBase::SetUp();
-
-    Launcher* launcher = Shell::GetInstance()->launcher();
+    Launcher* launcher = Launcher::ForPrimaryDisplay();
     observer_.reset(new TestLauncherIconObserver(launcher));
 
     launcher_view_test_.reset(new LauncherViewTestAPI(
@@ -90,7 +90,7 @@ class LauncherViewIconObserverTest : public ash::test::AshTestBase {
 
   TestLauncherIconObserver* observer() { return observer_.get(); }
 
-  LauncherViewTestAPI* launcher_vew_test() {
+  LauncherViewTestAPI* launcher_view_test() {
     return launcher_view_test_.get();
   }
 
@@ -113,19 +113,19 @@ TEST_F(LauncherViewIconObserverTest, AddRemove) {
   scoped_ptr<views::Widget> widget(new views::Widget());
   widget->Init(params);
   launcher_delegate->AddLauncherItem(widget->GetNativeWindow());
-  launcher_vew_test()->RunMessageLoopUntilAnimationsDone();
+  launcher_view_test()->RunMessageLoopUntilAnimationsDone();
   EXPECT_TRUE(observer()->change_notified());
   observer()->Reset();
 
   widget->Show();
   widget->GetNativeWindow()->parent()->RemoveChild(widget->GetNativeWindow());
-  launcher_vew_test()->RunMessageLoopUntilAnimationsDone();
+  launcher_view_test()->RunMessageLoopUntilAnimationsDone();
   EXPECT_TRUE(observer()->change_notified());
   observer()->Reset();
 }
 
 TEST_F(LauncherViewIconObserverTest, BoundsChanged) {
-  Launcher* launcher = Shell::GetInstance()->launcher();
+  Launcher* launcher = Launcher::ForPrimaryDisplay();
   gfx::Size launcher_size =
       launcher->widget()->GetWindowBoundsInScreen().size();
   int total_width = launcher_size.width() / 2;
@@ -145,8 +145,7 @@ class MockLauncherDelegate : public ash::LauncherDelegate {
   virtual ~MockLauncherDelegate() {}
 
   // LauncherDelegate overrides:
-  virtual void CreateNewTab() OVERRIDE {}
-  virtual void CreateNewWindow() OVERRIDE {}
+  virtual void OnBrowserShortcutClicked(int event_flags) OVERRIDE {}
   virtual void ItemClicked(const ash::LauncherItem& item,
                            int event_flags) OVERRIDE {}
   virtual int GetBrowserShortcutResourceId() OVERRIDE {
@@ -156,10 +155,8 @@ class MockLauncherDelegate : public ash::LauncherDelegate {
     return string16();
   }
   virtual ui::MenuModel* CreateContextMenu(
-      const ash::LauncherItem& item) OVERRIDE {
-    return NULL;
-  }
-  virtual ui::MenuModel* CreateContextMenuForLauncher() OVERRIDE {
+      const ash::LauncherItem& item,
+      aura::RootWindow* root_window) OVERRIDE {
     return NULL;
   }
   virtual ash::LauncherID GetIDByWindow(aura::Window* window) OVERRIDE {
@@ -182,7 +179,9 @@ class LauncherViewTest : public AshTestBase {
     model_.reset(new LauncherModel);
 
     launcher_view_.reset(new internal::LauncherView(
-        model_.get(), &delegate_, NULL));
+        model_.get(),
+        &delegate_,
+        Shell::GetPrimaryRootWindowController()->shelf()));
     launcher_view_->Init();
     // The bounds should be big enough for 4 buttons + overflow chevron.
     launcher_view_->SetBounds(0, 0, 500, 50);
@@ -224,9 +223,25 @@ class LauncherViewTest : public AshTestBase {
     return id;
   }
 
+  LauncherID AddPanel() {
+    LauncherID id = AddPanelNoWait();
+    test_api_->RunMessageLoopUntilAnimationsDone();
+    return id;
+  }
+
   LauncherID AddPlatformAppNoWait() {
     LauncherItem item;
     item.type = TYPE_PLATFORM_APP;
+    item.status = STATUS_RUNNING;
+
+    LauncherID id = model_->next_id();
+    model_->Add(item);
+    return id;
+  }
+
+  LauncherID AddPanelNoWait() {
+    LauncherItem item;
+    item.type = TYPE_APP_PANEL;
     item.status = STATUS_RUNNING;
 
     LauncherID id = model_->next_id();
@@ -337,12 +352,15 @@ TEST_F(LauncherViewTest, AddBrowserUntilOverflow) {
             test_api_->GetButtonCount());
 
   // Add tabbed browser until overflow.
+  int items_added = 0;
   LauncherID last_added = AddTabbedBrowser();
   while (!test_api_->IsOverflowButtonVisible()) {
     // Added button is visible after animation while in this loop.
     EXPECT_TRUE(GetButtonByID(last_added)->visible());
 
     last_added = AddTabbedBrowser();
+    ++items_added;
+    ASSERT_LT(items_added, 10000);
   }
 
   // The last added button should be invisible.
@@ -360,18 +378,73 @@ TEST_F(LauncherViewTest, AddAppShortcutWithBrowserButtonUntilOverflow) {
   LauncherID browser_button_id = AddTabbedBrowser();
 
   // Add app shortcut until overflow.
+  int items_added = 0;
   LauncherID last_added = AddAppShortcut();
   while (!test_api_->IsOverflowButtonVisible()) {
     // Added button is visible after animation while in this loop.
     EXPECT_TRUE(GetButtonByID(last_added)->visible());
 
     last_added = AddAppShortcut();
+    ++items_added;
+    ASSERT_LT(items_added, 10000);
   }
 
   // The last added app short button should be visible.
   EXPECT_TRUE(GetButtonByID(last_added)->visible());
   // And the browser button is invisible.
   EXPECT_FALSE(GetButtonByID(browser_button_id)->visible());
+}
+
+TEST_F(LauncherViewTest, AddPanelHidesTabbedBrowser) {
+  ASSERT_EQ(test_api_->GetLastVisibleIndex() + 1,
+            test_api_->GetButtonCount());
+
+  // Add tabbed browser until overflow, remember last visible tabbed browser.
+  int items_added = 0;
+  LauncherID first_added = AddTabbedBrowser();
+  EXPECT_TRUE(GetButtonByID(first_added)->visible());
+  LauncherID last_visible = first_added;
+  while (true) {
+    LauncherID added = AddTabbedBrowser();
+    if (test_api_->IsOverflowButtonVisible()) {
+      EXPECT_FALSE(GetButtonByID(added)->visible());
+      break;
+    }
+    last_visible = added;
+    ++items_added;
+    ASSERT_LT(items_added, 10000);
+  }
+
+  LauncherID panel = AddPanel();
+  EXPECT_TRUE(GetButtonByID(panel)->visible());
+  EXPECT_FALSE(GetButtonByID(last_visible)->visible());
+
+  RemoveByID(panel);
+  EXPECT_TRUE(GetButtonByID(last_visible)->visible());
+}
+
+TEST_F(LauncherViewTest, PanelsHideLast) {
+  ASSERT_EQ(test_api_->GetLastVisibleIndex() + 1,
+            test_api_->GetButtonCount());
+
+  // Add tabbed browser.
+  LauncherID browser = AddTabbedBrowser();
+  LauncherID first_panel = AddPanel();
+
+  EXPECT_TRUE(GetButtonByID(browser)->visible());
+  EXPECT_TRUE(GetButtonByID(first_panel)->visible());
+
+  LauncherID last_panel = first_panel;
+  int items_added = 0;
+  while (!test_api_->IsOverflowButtonVisible()) {
+    last_panel = AddPanel();
+    ++items_added;
+    ASSERT_LT(items_added, 10000);
+  }
+
+  EXPECT_TRUE(GetButtonByID(last_panel)->visible());
+  EXPECT_TRUE(GetButtonByID(first_panel)->visible());
+  EXPECT_FALSE(GetButtonByID(browser)->visible());
 }
 
 // Adds button until overflow then removes first added one. Verifies that
@@ -383,10 +456,14 @@ TEST_F(LauncherViewTest, RemoveButtonRevealsOverflowed) {
             test_api_->GetButtonCount());
 
   // Add tabbed browser until overflow.
-  LauncherID first_added= AddTabbedBrowser();
+  int items_added = 0;
+  LauncherID first_added = AddTabbedBrowser();
   LauncherID last_added = first_added;
-  while (!test_api_->IsOverflowButtonVisible())
+  while (!test_api_->IsOverflowButtonVisible()) {
     last_added = AddTabbedBrowser();
+    ++items_added;
+    ASSERT_LT(items_added, 10000);
+  }
 
   // Expect add more than 1 button. First added is visible and last is not.
   EXPECT_NE(first_added, last_added);
@@ -409,9 +486,13 @@ TEST_F(LauncherViewTest, RemoveLastOverflowed) {
             test_api_->GetButtonCount());
 
   // Add tabbed browser until overflow.
-  LauncherID last_added= AddTabbedBrowser();
-  while (!test_api_->IsOverflowButtonVisible())
+  int items_added = 0;
+  LauncherID last_added = AddTabbedBrowser();
+  while (!test_api_->IsOverflowButtonVisible()) {
     last_added = AddTabbedBrowser();
+    ++items_added;
+    ASSERT_LT(items_added, 10000);
+  }
 
   RemoveByID(last_added);
   EXPECT_FALSE(test_api_->IsOverflowButtonVisible());
@@ -429,6 +510,7 @@ TEST_F(LauncherViewTest, AddButtonQuickly) {
   while (!test_api_->IsOverflowButtonVisible()) {
     AddTabbedBrowserNoWait();
     ++added_count;
+    ASSERT_LT(added_count, 10000);
   }
 
   // LauncherView should be big enough to hold at least 3 new buttons.
@@ -650,7 +732,7 @@ TEST_F(LauncherViewTest, ShouldHideTooltipTest) {
   gfx::Rect tab_button_rect = GetButtonByID(tab_button_id)->GetMirroredBounds();
   ASSERT_FALSE(app_button_rect.Intersects(tab_button_rect));
   EXPECT_FALSE(launcher_view_->ShouldHideTooltip(
-      app_button_rect.Union(tab_button_rect).CenterPoint()));
+      gfx::UnionRects(app_button_rect, tab_button_rect).CenterPoint()));
 
   // The tooltip should hide if it's outside of all buttons.
   gfx::Rect all_area;
@@ -659,10 +741,9 @@ TEST_F(LauncherViewTest, ShouldHideTooltipTest) {
     if (!button)
       continue;
 
-    all_area = all_area.Union(button->GetMirroredBounds());
+    all_area.Union(button->GetMirroredBounds());
   }
-  all_area = all_area.Union(
-      launcher_view_->GetAppListButtonView()->GetMirroredBounds());
+  all_area.Union(launcher_view_->GetAppListButtonView()->GetMirroredBounds());
   EXPECT_FALSE(launcher_view_->ShouldHideTooltip(all_area.origin()));
   EXPECT_FALSE(launcher_view_->ShouldHideTooltip(
       gfx::Point(all_area.right() - 1, all_area.bottom() - 1)));
@@ -677,7 +758,7 @@ TEST_F(LauncherViewTest, ShouldHideTooltipTest) {
 }
 
 TEST_F(LauncherViewTest, ShouldHideTooltipWithAppListWindowTest) {
-  Shell::GetInstance()->ToggleAppList();
+  Shell::GetInstance()->ToggleAppList(NULL);
   ASSERT_TRUE(Shell::GetInstance()->GetAppListWindow());
 
   // The tooltip shouldn't hide if the mouse is on normal buttons.
@@ -707,10 +788,13 @@ TEST_F(LauncherViewTest, ResizeDuringOverflowAddAnimation) {
 
   // Add buttons until overflow. Let the non-overflow add animations finish but
   // leave the last running.
+  int items_added = 0;
   AddTabbedBrowserNoWait();
   while (!test_api_->IsOverflowButtonVisible()) {
     test_api_->RunMessageLoopUntilAnimationsDone();
     AddTabbedBrowserNoWait();
+    ++items_added;
+    ASSERT_LT(items_added, 10000);
   }
 
   // Resize launcher view with that animation running and stay overflown.

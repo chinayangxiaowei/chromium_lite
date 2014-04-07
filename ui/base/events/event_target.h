@@ -5,6 +5,7 @@
 #ifndef UI_BASE_EVENTS_EVENT_TARGET_H_
 #define UI_BASE_EVENTS_EVENT_TARGET_H_
 
+#include "base/basictypes.h"
 #include "base/compiler_specific.h"
 #include "ui/base/events/event_handler.h"
 #include "ui/base/ui_export.h"
@@ -32,10 +33,25 @@ class UI_EXPORT EventTarget : public EventHandler {
     DISALLOW_COPY_AND_ASSIGN(TestApi);
   };
 
+  class DispatcherApi {
+   public:
+    explicit DispatcherApi(EventTarget* target) : target_(target) {}
+
+    const EventHandlerList& pre_target_list() const {
+      return target_->pre_target_list_;
+    }
+
+   private:
+    DispatcherApi();
+    EventTarget* target_;
+
+    DISALLOW_COPY_AND_ASSIGN(DispatcherApi);
+  };
+
   EventTarget();
   virtual ~EventTarget();
 
-  virtual bool CanAcceptEvents() = 0;
+  virtual bool CanAcceptEvent(const ui::Event& event) = 0;
   virtual EventTarget* GetParentTarget() = 0;
 
   // Adds a handler to receive events before the target. The handler must be
@@ -55,6 +71,14 @@ class UI_EXPORT EventTarget : public EventHandler {
     target_handler_ = handler;
   }
 
+  // Overridden from EventHandler:
+  virtual void OnEvent(Event* event) OVERRIDE;
+  virtual void OnKeyEvent(KeyEvent* event) OVERRIDE;
+  virtual void OnMouseEvent(MouseEvent* event) OVERRIDE;
+  virtual void OnScrollEvent(ScrollEvent* event) OVERRIDE;
+  virtual void OnTouchEvent(TouchEvent* event) OVERRIDE;
+  virtual void OnGestureEvent(GestureEvent* event) OVERRIDE;
+
  private:
   friend class EventDispatcher;
 
@@ -67,13 +91,6 @@ class UI_EXPORT EventTarget : public EventHandler {
   // target. The handlers from the outermost target are last in the list, and
   // the handlers on |this| are the first in the list.
   void GetPostTargetHandlers(EventHandlerList* list);
-
-  // Overridden from EventHandler:
-  virtual EventResult OnKeyEvent(KeyEvent* event) OVERRIDE;
-  virtual EventResult OnMouseEvent(MouseEvent* event) OVERRIDE;
-  virtual EventResult OnScrollEvent(ScrollEvent* event) OVERRIDE;
-  virtual TouchStatus OnTouchEvent(TouchEvent* event) OVERRIDE;
-  virtual EventResult OnGestureEvent(GestureEvent* event) OVERRIDE;
 
   EventHandlerList pre_target_list_;
   EventHandlerList post_target_list_;

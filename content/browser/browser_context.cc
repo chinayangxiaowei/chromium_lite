@@ -6,13 +6,10 @@
 
 #if !defined(OS_IOS)
 #include "content/browser/appcache/chrome_appcache_service.h"
-#include "webkit/database/database_tracker.h"
 #include "content/browser/dom_storage/dom_storage_context_impl.h"
-#include "content/browser/download/download_file_manager.h"
 #include "content/browser/download/download_manager_impl.h"
 #include "content/browser/in_process_webkit/indexed_db_context_impl.h"
-#include "content/browser/renderer_host/resource_dispatcher_host_impl.h"
-#include "content/public/browser/resource_context.h"
+#include "content/browser/loader/resource_dispatcher_host_impl.h"
 #include "content/public/browser/site_instance.h"
 #include "content/browser/storage_partition_impl.h"
 #include "content/browser/storage_partition_impl_map.h"
@@ -25,6 +22,7 @@
 #include "net/cookies/cookie_store.h"
 #include "net/url_request/url_request_context.h"
 #include "net/url_request/url_request_context_getter.h"
+#include "webkit/database/database_tracker.h"
 #endif // !OS_IOS
 
 using base::UserDataAdapter;
@@ -39,9 +37,8 @@ namespace {
 const char* kDownloadManagerKeyName = "download_manager";
 const char* kStorageParitionMapKeyName = "content_storage_partition_map";
 
-StoragePartition* GetStoragePartitionByPartitionId(
-    BrowserContext* browser_context,
-    const std::string& partition_id) {
+StoragePartitionImplMap* GetStoragePartitionMap(
+    BrowserContext* browser_context) {
   StoragePartitionImplMap* partition_map =
       static_cast<StoragePartitionImplMap*>(
           browser_context->GetUserData(kStorageParitionMapKeyName));
@@ -49,13 +46,25 @@ StoragePartition* GetStoragePartitionByPartitionId(
     partition_map = new StoragePartitionImplMap(browser_context);
     browser_context->SetUserData(kStorageParitionMapKeyName, partition_map);
   }
+  return partition_map;
+}
 
-  return partition_map->Get(partition_id);
+StoragePartition* GetStoragePartitionFromConfig(
+    BrowserContext* browser_context,
+    const std::string& partition_domain,
+    const std::string& partition_name,
+    bool in_memory) {
+  StoragePartitionImplMap* partition_map =
+      GetStoragePartitionMap(browser_context);
+
+  if (browser_context->IsOffTheRecord())
+    in_memory = true;
+
+  return partition_map->Get(partition_domain, partition_name, in_memory);
 }
 
 // Run |callback| on each DOMStorageContextImpl in |browser_context|.
-void PurgeDOMStorageContextInPartition(const std::string& id,
-                                       StoragePartition* storage_partition) {
+void PurgeDOMStorageContextInPartition(StoragePartition* storage_partition) {
   static_cast<StoragePartitionImpl*>(storage_partition)->
       GetDOMStorageContext()->PurgeMemory();
 }
@@ -82,18 +91,32 @@ void PurgeMemoryOnIOThread(appcache::AppCacheService* appcache_service) {
 
 }  // namespace
 
+// static
+void BrowserContext::AsyncObliterateStoragePartition(
+    BrowserContext* browser_context,
+    const GURL& site,
+    const base::Closure& on_gc_required) {
+  GetStoragePartitionMap(browser_context)->AsyncObliterate(site,
+                                                           on_gc_required);
+}
+
+// static
+void BrowserContext::GarbageCollectStoragePartitions(
+      BrowserContext* browser_context,
+      scoped_ptr<base::hash_set<FilePath> > active_paths,
+      const base::Closure& done) {
+  GetStoragePartitionMap(browser_context)->GarbageCollect(
+      active_paths.Pass(), done);
+}
+
 DownloadManager* BrowserContext::GetDownloadManager(
     BrowserContext* context) {
   DCHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
   if (!context->GetUserData(kDownloadManagerKeyName)) {
     ResourceDispatcherHostImpl* rdh = ResourceDispatcherHostImpl::Get();
     DCHECK(rdh);
-    DownloadFileManager* file_manager = rdh->download_file_manager();
-    DCHECK(file_manager);
     scoped_refptr<DownloadManager> download_manager =
         new DownloadManagerImpl(
-            file_manager,
-            scoped_ptr<DownloadItemFactory>(),
             GetContentClient()->browser()->GetNetLog());
 
     context->SetUserData(
@@ -110,25 +133,35 @@ DownloadManager* BrowserContext::GetDownloadManager(
 StoragePartition* BrowserContext::GetStoragePartition(
     BrowserContext* browser_context,
     SiteInstance* site_instance) {
-  std::string partition_id;  // Default to "" for NULL |site_instance|.
+  std::string partition_domain;
+  std::string partition_name;
+  bool in_memory = false;
 
   // TODO(ajwong): After GetDefaultStoragePartition() is removed, get rid of
   // this conditional and require that |site_instance| is non-NULL.
   if (site_instance) {
-    partition_id = GetContentClient()->browser()->
-        GetStoragePartitionIdForSite(browser_context, site_instance->GetSite());
+    GetContentClient()->browser()->GetStoragePartitionConfigForSite(
+        browser_context, site_instance->GetSiteURL(), true,
+        &partition_domain, &partition_name, &in_memory);
   }
 
-  return GetStoragePartitionByPartitionId(browser_context, partition_id);
+  return GetStoragePartitionFromConfig(
+      browser_context, partition_domain, partition_name, in_memory);
 }
 
 StoragePartition* BrowserContext::GetStoragePartitionForSite(
     BrowserContext* browser_context,
     const GURL& site) {
-  std::string partition_id = GetContentClient()->browser()->
-      GetStoragePartitionIdForSite(browser_context, site);
+  std::string partition_domain;
+  std::string partition_name;
+  bool in_memory;
 
-  return GetStoragePartitionByPartitionId(browser_context, partition_id);
+  GetContentClient()->browser()->GetStoragePartitionConfigForSite(
+      browser_context, site, true, &partition_domain, &partition_name,
+      &in_memory);
+
+  return GetStoragePartitionFromConfig(
+      browser_context, partition_domain, partition_name, in_memory);
 }
 
 void BrowserContext::ForEachStoragePartition(

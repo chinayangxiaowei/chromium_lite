@@ -19,7 +19,6 @@
 #include "ui/aura/client/stacking_client.h"
 #include "ui/aura/client/visibility_client.h"
 #include "ui/aura/env.h"
-#include "ui/aura/event_filter.h"
 #include "ui/aura/focus_manager.h"
 #include "ui/aura/layout_manager.h"
 #include "ui/aura/root_window.h"
@@ -33,18 +32,6 @@
 #include "ui/gfx/screen.h"
 
 namespace aura {
-
-namespace {
-
-Window* GetParentForWindow(Window* window, Window* suggested_parent) {
-  if (suggested_parent)
-    return suggested_parent;
-  if (client::GetStackingClient())
-    return client::GetStackingClient()->GetDefaultParent(window, gfx::Rect());
-  return NULL;
-}
-
-}  // namespace
 
 Window::TestApi::TestApi(Window* window) : window_(window) {}
 
@@ -174,6 +161,7 @@ ui::Layer* Window::RecreateLayer() {
   layer_->SetVisible(old_layer->visible());
   layer_->set_scale_content(old_layer->scale_content());
   layer_->set_delegate(this);
+  layer_->SetMasksToBounds(old_layer->GetMasksToBounds());
   UpdateLayerName(name_);
   layer_->SetFillsBoundsOpaquely(!transparent_);
   // Install new layer as a sibling of the old layer, stacked on top of it.
@@ -268,7 +256,7 @@ gfx::Rect Window::GetBoundsInScreen() const {
   return bounds;
 }
 
-void Window::SetTransform(const ui::Transform& transform) {
+void Window::SetTransform(const gfx::Transform& transform) {
   RootWindow* root_window = GetRootWindow();
   bool contained_mouse = IsVisible() && root_window &&
       ContainsPointInRoot(root_window->GetLastMouseLocationInRoot());
@@ -328,13 +316,20 @@ void Window::SchedulePaintInRect(const gfx::Rect& rect) {
 
 void Window::SetExternalTexture(ui::Texture* texture) {
   layer_->SetExternalTexture(texture);
-  gfx::Rect region(bounds().size());
-  FOR_EACH_OBSERVER(
-      WindowObserver, observers_, OnWindowPaintScheduled(this, region));
 }
 
-void Window::SetParent(Window* parent) {
-  GetParentForWindow(this, parent)->AddChild(this);
+void Window::SetDefaultParentByRootWindow(RootWindow* root_window,
+                                          const gfx::Rect& bounds_in_screen) {
+  // TODO(erg): Enable this DCHECK once it is safe.
+  //  DCHECK(root_window);
+
+  // Stacking clients are mandatory on RootWindow objects.
+  client::StackingClient* client = client::GetStackingClient(root_window);
+  DCHECK(client);
+
+  aura::Window* default_parent = client->GetDefaultParent(
+      root_window, this, bounds_in_screen);
+  default_parent->AddChild(this);
 }
 
 void Window::StackChildAtTop(Window* child) {
@@ -428,18 +423,13 @@ void Window::ConvertPointToTarget(const Window* source,
   if (!source)
     return;
   if (source->GetRootWindow() != target->GetRootWindow()) {
-    const gfx::Point source_origin =
-        gfx::Screen::GetDisplayNearestWindow(
-            const_cast<Window*>(source)).bounds().origin();
-    const gfx::Point target_origin =
-        gfx::Screen::GetDisplayNearestWindow(
-            const_cast<Window*>(target)).bounds().origin();
-    ui::Layer::ConvertPointToLayer(
-        source->layer(), source->GetRootWindow()->layer(), point);
-    const gfx::Point offset = source_origin.Subtract(target_origin);
-    point->Offset(offset.x(), offset.y());
-    ui::Layer::ConvertPointToLayer(
-        target->GetRootWindow()->layer(), target->layer(), point);
+    client::ScreenPositionClient* source_client =
+        GetScreenPositionClient(source->GetRootWindow());
+    source_client->ConvertPointToScreen(source, point);
+
+    client::ScreenPositionClient* target_client =
+        GetScreenPositionClient(target->GetRootWindow());
+    target_client->ConvertPointFromScreen(target, point);
   } else {
     ui::Layer::ConvertPointToLayer(source->layer(), target->layer(), point);
   }
@@ -457,7 +447,7 @@ gfx::NativeCursor Window::GetCursor(const gfx::Point& point) const {
   return delegate_ ? delegate_->GetCursor(point) : gfx::kNullCursor;
 }
 
-void Window::SetEventFilter(EventFilter* event_filter) {
+void Window::SetEventFilter(ui::EventHandler* event_filter) {
   if (event_filter_.get())
     RemovePreTargetHandler(event_filter_.get());
   event_filter_.reset(event_filter);
@@ -471,6 +461,10 @@ void Window::AddObserver(WindowObserver* observer) {
 
 void Window::RemoveObserver(WindowObserver* observer) {
   observers_.RemoveObserver(observer);
+}
+
+bool Window::HasObserver(WindowObserver* observer) {
+  return observers_.HasObserver(observer);
 }
 
 bool Window::ContainsPointInRoot(const gfx::Point& point_in_root) const {
@@ -526,18 +520,20 @@ Window* Window::GetToplevelWindow() {
 }
 
 void Window::Focus() {
-  DCHECK(GetFocusManager());
-  GetFocusManager()->SetFocusedWindow(this, NULL);
+  client::FocusClient* client = client::GetFocusClient(this);
+  DCHECK(client);
+  client->FocusWindow(this, NULL);
 }
 
 void Window::Blur() {
-  DCHECK(GetFocusManager());
-  GetFocusManager()->SetFocusedWindow(NULL, NULL);
+  client::FocusClient* client = client::GetFocusClient(this);
+  DCHECK(client);
+  client->FocusWindow(NULL, NULL);
 }
 
 bool Window::HasFocus() const {
-  const FocusManager* focus_manager = GetFocusManager();
-  return focus_manager ? focus_manager->IsFocusedWindow(this) : false;
+  client::FocusClient* client = client::GetFocusClient(this);
+  return client && client->GetFocusedWindow() == this;
 }
 
 bool Window::CanFocus() const {
@@ -564,15 +560,6 @@ bool Window::CanReceiveEvents() const {
     return false;
 
   return parent_ && IsVisible() && parent_->CanReceiveEvents();
-}
-
-FocusManager* Window::GetFocusManager() {
-  return const_cast<FocusManager*>(
-      static_cast<const Window*>(this)->GetFocusManager());
-}
-
-const FocusManager* Window::GetFocusManager() const {
-  return parent_ ? parent_->GetFocusManager() : NULL;
 }
 
 void Window::SetCapture() {
@@ -606,7 +593,7 @@ void Window::SuppressPaint() {
 
 void Window::SetNativeWindowProperty(const char* key, void* value) {
   SetPropertyInternal(
-      key, key, NULL, reinterpret_cast<intptr_t>(value), 0);
+      key, key, NULL, reinterpret_cast<int64>(value), 0);
 }
 
 void* Window::GetNativeWindowProperty(const char* key) const {
@@ -642,12 +629,12 @@ void Window::PrintWindowHierarchy(int depth) const {
 ///////////////////////////////////////////////////////////////////////////////
 // Window, private:
 
-intptr_t Window::SetPropertyInternal(const void* key,
-                                     const char* name,
-                                     PropertyDeallocator deallocator,
-                                     intptr_t value,
-                                     intptr_t default_value) {
-  intptr_t old = GetPropertyInternal(key, default_value);
+int64 Window::SetPropertyInternal(const void* key,
+                                  const char* name,
+                                  PropertyDeallocator deallocator,
+                                  int64 value,
+                                  int64 default_value) {
+  int64 old = GetPropertyInternal(key, default_value);
   if (value == default_value) {
     prop_map_.erase(key);
   } else {
@@ -662,8 +649,8 @@ intptr_t Window::SetPropertyInternal(const void* key,
   return old;
 }
 
-intptr_t Window::GetPropertyInternal(const void* key,
-                                     intptr_t default_value) const {
+int64 Window::GetPropertyInternal(const void* key,
+                                  int64 default_value) const {
   std::map<const void*, Value>::const_iterator iter = prop_map_.find(key);
   if (iter == prop_map_.end())
     return default_value;
@@ -698,6 +685,9 @@ void Window::SetBoundsInternal(const gfx::Rect& new_bounds) {
 void Window::SetVisible(bool visible) {
   if (visible == layer_->GetTargetVisibility())
     return;  // No change.
+
+  FOR_EACH_OBSERVER(WindowObserver, observers_,
+                    OnWindowVisibilityChanging(this, visible));
 
   RootWindow* root_window = GetRootWindow();
   if (client::GetVisibilityClient(root_window)) {
@@ -786,15 +776,13 @@ Window* Window::GetWindowForPoint(const gfx::Point& local_point,
 }
 
 void Window::RemoveChildImpl(Window* child, Window* new_parent) {
-  Windows::iterator i = std::find(children_.begin(), children_.end(), child);
-  DCHECK(i != children_.end());
   if (layout_manager_.get())
     layout_manager_->OnWillRemoveWindowFromLayout(child);
   FOR_EACH_OBSERVER(WindowObserver, observers_, OnWillRemoveWindow(child));
   RootWindow* root_window = child->GetRootWindow();
-  if (root_window &&
-      (!new_parent || new_parent->GetRootWindow() != root_window)) {
-    root_window->OnWindowRemovedFromRootWindow(child);
+  RootWindow* new_root_window = new_parent ? new_parent->GetRootWindow() : NULL;
+  if (root_window && root_window != new_root_window) {
+    root_window->OnWindowRemovedFromRootWindow(child, new_root_window);
     child->NotifyRemovingFromRootWindow();
   }
   child->parent_ = NULL;
@@ -803,6 +791,8 @@ void Window::RemoveChildImpl(Window* child, Window* new_parent) {
   // expect the hierarchy to go unchanged as the Window is destroyed.
   if (child->layer_owner_.get())
     layer_->Remove(child->layer_);
+  Windows::iterator i = std::find(children_.begin(), children_.end(), child);
+  DCHECK(i != children_.end());
   children_.erase(i);
   child->OnParentChanged();
   if (layout_manager_.get())
@@ -940,8 +930,15 @@ base::Closure Window::PrepareForLayerBoundsChange() {
                     bounds(), ContainsMouse());
 }
 
-bool Window::CanAcceptEvents() {
-  return CanReceiveEvents();
+bool Window::CanAcceptEvent(const ui::Event& event) {
+  // The client may forbid certain windows from receiving events at a given
+  // point in time.
+  client::EventClient* client = client::GetEventClient(GetRootWindow());
+  if (client && !client->CanProcessEventsWithinSubtree(this))
+    return false;
+
+  bool visible = event.dispatch_to_hidden_targets() || IsVisible();
+  return visible && (!parent_ || parent_->CanAcceptEvent(event));
 }
 
 ui::EventTarget* Window::GetParentTarget() {

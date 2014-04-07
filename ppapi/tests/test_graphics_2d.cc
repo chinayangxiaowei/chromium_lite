@@ -14,11 +14,14 @@
 #include "ppapi/c/ppb_graphics_2d.h"
 #include "ppapi/cpp/completion_callback.h"
 #include "ppapi/cpp/dev/graphics_2d_dev.h"
+#include "ppapi/cpp/dev/graphics_2d_dev.h"
 #include "ppapi/cpp/graphics_2d.h"
+#include "ppapi/cpp/graphics_3d.h"
 #include "ppapi/cpp/image_data.h"
 #include "ppapi/cpp/instance.h"
 #include "ppapi/cpp/module.h"
 #include "ppapi/cpp/rect.h"
+#include "ppapi/tests/test_utils.h"
 #include "ppapi/tests/testing_instance.h"
 
 REGISTER_TEST_CASE(Graphics2D);
@@ -34,6 +37,12 @@ void FlushCallbackQuitMessageLoop(void* data, int32_t result) {
 }
 
 }  // namespace
+
+TestGraphics2D::TestGraphics2D(TestingInstance* instance)
+  : TestCase(instance),
+    is_view_changed_(false),
+    post_quit_on_view_changed_(false) {
+}
 
 bool TestGraphics2D::Init() {
   graphics_2d_interface_ = static_cast<const PPB_Graphics2D*>(
@@ -54,8 +63,10 @@ void TestGraphics2D::RunTests(const std::string& filter) {
   RUN_TEST_FORCEASYNC_AND_NOT(Scroll, filter);
   RUN_TEST_FORCEASYNC_AND_NOT(Replace, filter);
   RUN_TEST_FORCEASYNC_AND_NOT(Flush, filter);
+  RUN_TEST_FORCEASYNC_AND_NOT(FlushOffscreenUpdate, filter);
   RUN_TEST(Dev, filter);
   RUN_TEST(ReplaceContentsCaching, filter);
+  RUN_TEST(BindNull, filter);
 }
 
 void TestGraphics2D::QuitMessageLoop() {
@@ -80,6 +91,29 @@ bool TestGraphics2D::IsDCUniformColor(const pp::Graphics2D& dc,
   if (!ReadImageData(dc, &readback, pp::Point(0, 0)))
     return false;
   return IsSquareInImage(readback, 0, pp::Rect(dc.size()), color);
+}
+
+bool TestGraphics2D::ResourceHealthCheck(pp::Instance* instance,
+                                         pp::Graphics2D* context) {
+  TestCompletionCallback callback(instance->pp_instance(), callback_type());
+  callback.WaitForResult(context->Flush(callback));
+  if (callback.result() < 0)
+    return callback.result() != PP_ERROR_FAILED;
+  else if (callback.result() == 0)
+    return false;
+  return true;
+}
+
+bool TestGraphics2D::ResourceHealthCheckForC(pp::Instance* instance,
+                                             PP_Resource graphics_2d) {
+  TestCompletionCallback callback(instance->pp_instance(), callback_type());
+  callback.WaitForResult(graphics_2d_interface_->Flush(
+      graphics_2d, callback.GetCallback().pp_completion_callback()));
+  if (callback.result() < 0)
+    return callback.result() != PP_ERROR_FAILED;
+  else if (callback.result() == 0)
+    return false;
+  return true;
 }
 
 bool TestGraphics2D::FlushAndWaitForDone(pp::Graphics2D* context) {
@@ -253,31 +287,40 @@ std::string TestGraphics2D::TestInvalidResource() {
 
 std::string TestGraphics2D::TestInvalidSize() {
   pp::Graphics2D a(instance_, pp::Size(16, 0), false);
-  if (!a.is_null())
+  if (ResourceHealthCheck(instance_, &a))
     return "0 height accepted";
 
   pp::Graphics2D b(instance_, pp::Size(0, 16), false);
-  if (!b.is_null())
-    return "0 width accepted";
+  if (ResourceHealthCheck(instance_, &b))
+    return "0 height accepted";
 
   // Need to use the C API since pp::Size prevents negative sizes.
   PP_Size size;
   size.width = 16;
   size.height = -16;
-  ASSERT_FALSE(!!graphics_2d_interface_->Create(
-      instance_->pp_instance(), &size, PP_FALSE));
+  PP_Resource graphics = graphics_2d_interface_->Create(
+      instance_->pp_instance(), &size, PP_FALSE);
+  ASSERT_FALSE(ResourceHealthCheckForC(instance_, graphics));
 
   size.width = -16;
   size.height = 16;
-  ASSERT_FALSE(!!graphics_2d_interface_->Create(
-      instance_->pp_instance(), &size, PP_FALSE));
+  graphics = graphics_2d_interface_->Create(
+      instance_->pp_instance(), &size, PP_FALSE);
+  ASSERT_FALSE(ResourceHealthCheckForC(instance_, graphics));
+
+  // Overflow to negative size
+  size.width = std::numeric_limits<int32_t>::max();
+  size.height = std::numeric_limits<int32_t>::max();
+  graphics = graphics_2d_interface_->Create(
+      instance_->pp_instance(), &size, PP_FALSE);
+  ASSERT_FALSE(ResourceHealthCheckForC(instance_, graphics));
 
   PASS();
 }
 
 std::string TestGraphics2D::TestHumongous() {
   pp::Graphics2D a(instance_, pp::Size(100000, 100000), false);
-  if (!a.is_null())
+  if (ResourceHealthCheck(instance_, &a))
     return "Humongous device created";
   PASS();
 }
@@ -565,7 +608,7 @@ std::string TestGraphics2D::TestReplace() {
   dc.PaintImageData(background, pp::Point(0, 0));
 
   // Replace with a green background but don't flush yet.
-  const int32_t swapped_color = 0xFF0000FF;
+  const int32_t swapped_color = 0x00FF00FF;
   pp::ImageData swapped(instance_, PP_IMAGEDATAFORMAT_BGRA_PREMUL,
                         pp::Size(w, h), true);
   if (swapped.is_null())
@@ -645,6 +688,86 @@ std::string TestGraphics2D::TestFlush() {
         return "Second flush succeeded before callback ran.";
     }
   }
+
+  PASS();
+}
+
+void TestGraphics2D::DidChangeView(const pp::View& view) {
+  if (post_quit_on_view_changed_) {
+    post_quit_on_view_changed_ = false;
+    is_view_changed_ = true;
+    testing_interface_->QuitMessageLoop(instance_->pp_instance());
+  }
+}
+
+void TestGraphics2D::ResetViewChangedState() {
+  is_view_changed_ = false;
+}
+
+bool TestGraphics2D::WaitUntilViewChanged() {
+  // Run a nested message loop. It will exit either on ViewChanged or if the
+  // timeout happens.
+
+  // If view changed before we have chance to run message loop, return directly.
+  if (is_view_changed_)
+    return true;
+
+  post_quit_on_view_changed_ = true;
+  testing_interface_->RunMessageLoop(instance_->pp_instance());
+  post_quit_on_view_changed_ = false;
+
+  return is_view_changed_;
+}
+
+std::string TestGraphics2D::TestFlushOffscreenUpdate() {
+  // Tests that callback of offscreen updates should be delayed.
+  const PP_Time kFlushDelaySec = 1. / 30;  // 30 fps
+  const int w = 80, h = 80;
+  pp::Graphics2D dc(instance_, pp::Size(w, h), true);
+  if (dc.is_null())
+    return "Failure creating a boring device";
+  if (!instance_->BindGraphics(dc))
+    return "Failure to bind the boring device.";
+
+  // Squeeze from top until bottom half of plugin is out of screen.
+  ResetViewChangedState();
+  instance_->EvalScript(
+      "var big = document.createElement('div');"
+      "var offset = "
+      "    window.innerHeight - plugin.offsetTop - plugin.offsetHeight / 2;"
+      "big.setAttribute('id', 'big-div');"
+      "big.setAttribute('style', 'height: ' + offset + '; width: 100%;');"
+      "document.body.insertBefore(big, document.body.firstChild);");
+  if (!WaitUntilViewChanged())
+    return "View didn't change as expected";
+
+  // Allocate a red image chunk
+  pp::ImageData chunk(instance_, PP_IMAGEDATAFORMAT_RGBA_PREMUL,
+                      pp::Size(w/8, h/8), true);
+  if (chunk.is_null())
+    return "Failure to allocate image";
+  const uint32_t kRed = 0xff0000ff;
+  FillRectInImage(&chunk, pp::Rect(chunk.size()), kRed);
+
+  // Paint a invisable chunk, expecting Flush to invoke callback slowly.
+  dc.PaintImageData(chunk, pp::Point(0, h*0.75));
+
+  PP_Time begin = pp::Module::Get()->core()->GetTime();
+  if (!FlushAndWaitForDone(&dc))
+    return "Couldn't flush an invisible paint";
+  PP_Time actual_time_elapsed = pp::Module::Get()->core()->GetTime() - begin;
+  // Expect actual_time_elapsed >= kFlushDelaySec, but loose a bit to avoid
+  // precision issue.
+  if (actual_time_elapsed < kFlushDelaySec * 0.9)
+    return "Offscreen painting should be delayed";
+
+  // Remove the padding on the top since test cases here isn't independent.
+  instance_->EvalScript(
+      "var big = document.getElementById('big-div');"
+      "big.parentNode.removeChild(big);");
+  ResetViewChangedState();
+  if (!WaitUntilViewChanged())
+    return "View didn't change as expected";
 
   PASS();
 }
@@ -729,3 +852,24 @@ std::string TestGraphics2D::TestReplaceContentsCaching() {
 
   PASS();
 }
+
+std::string TestGraphics2D::TestBindNull() {
+  // Binding a null resource is not an error, it should clear all bound
+  // resources. We can't easily test what resource is bound, but we can test
+  // that this doesn't throw an error.
+  ASSERT_TRUE(instance_->BindGraphics(pp::Graphics2D()));
+  ASSERT_TRUE(instance_->BindGraphics(pp::Graphics3D()));
+
+  const int w = 115, h = 117;
+  pp::Graphics2D dc(instance_, pp::Size(w, h), false);
+  if (dc.is_null())
+    return "Failure creating device.";
+  if (!instance_->BindGraphics(dc))
+    return "Failure to bind the boring device.";
+
+  ASSERT_TRUE(instance_->BindGraphics(pp::Graphics2D()));
+  ASSERT_TRUE(instance_->BindGraphics(pp::Graphics3D()));
+
+  PASS();
+}
+

@@ -29,7 +29,7 @@ const char kRegisteredAlarms[] = "alarms";
 const char kAlarmGranularity[] = "granularity";
 
 // The minimum period between polling for alarms to run.
-const base::TimeDelta kDefaultMinPollPeriod = base::TimeDelta::FromMinutes(5);
+const base::TimeDelta kDefaultMinPollPeriod = base::TimeDelta::FromMinutes(1);
 
 class DefaultAlarmDelegate : public AlarmManager::Delegate {
  public:
@@ -40,8 +40,9 @@ class DefaultAlarmDelegate : public AlarmManager::Delegate {
                        const Alarm& alarm) {
     scoped_ptr<ListValue> args(new ListValue());
     args->Append(alarm.js_alarm->ToValue().release());
+    scoped_ptr<Event> event(new Event(kOnAlarmEvent, args.Pass()));
     ExtensionSystem::Get(profile_)->event_router()->DispatchEventToExtension(
-        extension_id, kOnAlarmEvent, args.Pass(), NULL, GURL());
+        extension_id, event.Pass());
   }
 
  private:

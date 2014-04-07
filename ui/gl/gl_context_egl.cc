@@ -23,6 +23,8 @@ extern "C" {
 }
 #endif
 
+using ui::GetLastEGLErrorString;
+
 namespace gfx {
 
 GLContextEGL::GLContextEGL(GLShareGroup* share_group)
@@ -118,6 +120,7 @@ bool GLContextEGL::MakeCurrent(GLSurface* surface) {
     return false;
   }
 
+  SetRealGLApi();
   return true;
 }
 

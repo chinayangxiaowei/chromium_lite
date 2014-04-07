@@ -15,18 +15,19 @@
 
 #include "base/bind.h"
 #include "base/bind_helpers.h"
+#include "base/containers/stack_container.h"
 #include "base/file_util.h"
 #include "base/logging.h"
 #include "base/message_loop.h"
 #include "base/path_service.h"
 #include "base/process_util.h"
 #include "base/rand_util.h"
-#include "base/stack_container.h"
 #include "base/string_util.h"
 #include "base/threading/thread_restrictions.h"
 #include "chrome/browser/history/history.h"
 #include "chrome/browser/history/history_service_factory.h"
 #include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/visitedlink/visitedlink_event_listener.h"
 #include "content/public/browser/browser_thread.h"
 
 using content::BrowserThread;
@@ -150,7 +151,7 @@ class VisitedLinkMaster::TableBuilder
   void DisownMaster();
 
   // HistoryService::URLEnumerator
-  virtual void OnURL(const GURL& url);
+  virtual void OnURL(const history::URLRow& url_row);
   virtual void OnComplete(bool succeed);
 
  private:
@@ -177,17 +178,22 @@ class VisitedLinkMaster::TableBuilder
 
 // VisitedLinkMaster ----------------------------------------------------------
 
-VisitedLinkMaster::VisitedLinkMaster(Listener* listener,
-                                     Profile* profile) {
-  InitMembers(listener, profile);
+VisitedLinkMaster::VisitedLinkMaster(Profile* profile)
+    : profile_(profile) {
+  listener_.reset(new VisitedLinkEventListener(profile));
+  DCHECK(listener_.get());
+  InitMembers();
 }
 
 VisitedLinkMaster::VisitedLinkMaster(Listener* listener,
                                      HistoryService* history_service,
                                      bool suppress_rebuild,
                                      const FilePath& filename,
-                                     int32 default_table_size) {
-  InitMembers(listener, NULL);
+                                     int32 default_table_size)
+    : profile_(NULL) {
+  listener_.reset(listener);
+  DCHECK(listener_.get());
+  InitMembers();
 
   database_name_override_ = filename;
   table_size_override_ = default_table_size;
@@ -208,10 +214,7 @@ VisitedLinkMaster::~VisitedLinkMaster() {
   // So nothing should be done here.
 }
 
-void VisitedLinkMaster::InitMembers(Listener* listener, Profile* profile) {
-  DCHECK(listener);
-
-  listener_ = listener;
+void VisitedLinkMaster::InitMembers() {
   file_ = NULL;
   shared_memory_ = NULL;
   shared_memory_serial_ = 0;
@@ -219,7 +222,6 @@ void VisitedLinkMaster::InitMembers(Listener* listener, Profile* profile) {
   table_size_override_ = 0;
   history_service_override_ = NULL;
   suppress_rebuild_ = false;
-  profile_ = profile;
   sequence_token_ = BrowserThread::GetBlockingPool()->GetSequenceToken();
 
 #ifndef NDEBUG
@@ -456,7 +458,7 @@ bool VisitedLinkMaster::DeleteFingerprint(Fingerprint fingerprint,
   // instead we just remove them all and re-add them (minus our deleted one).
   // This will mean there's a small window of time where the affected links
   // won't be marked visited.
-  StackVector<Fingerprint, 32> shuffled_fingerprints;
+  base::StackVector<Fingerprint, 32> shuffled_fingerprints;
   Hash stop_loop = IncrementHash(end_range);  // The end range is inclusive.
   for (Hash i = deleted_hash; i != stop_loop; i = IncrementHash(i)) {
     if (hash_table_[i] != fingerprint) {
@@ -956,7 +958,8 @@ void VisitedLinkMaster::TableBuilder::DisownMaster() {
   master_ = NULL;
 }
 
-void VisitedLinkMaster::TableBuilder::OnURL(const GURL& url) {
+void VisitedLinkMaster::TableBuilder::OnURL(const history::URLRow& url_row) {
+  const GURL& url(url_row.url());
   if (!url.is_empty()) {
     fingerprints_.push_back(VisitedLinkMaster::ComputeURLFingerprint(
         url.spec().data(), url.spec().length(), salt_));

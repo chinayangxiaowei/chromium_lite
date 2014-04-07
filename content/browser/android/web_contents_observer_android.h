@@ -45,6 +45,17 @@ class WebContentsObserverAndroid : public WebContentsObserver {
                            int error_code,
                            const string16& error_description,
                            RenderViewHost* render_view_host) OVERRIDE;
+  virtual void DidNavigateMainFrame(const LoadCommittedDetails& details,
+                                    const FrameNavigateParams& params) OVERRIDE;
+  virtual void DidNavigateAnyFrame(const LoadCommittedDetails& details,
+                                   const FrameNavigateParams& params) OVERRIDE;
+  virtual void DidStartProvisionalLoadForFrame(
+      int64 frame_id,
+      int64 parent_frame_id,
+      bool is_main_frame,
+      const GURL& validated_url,
+      bool is_error_page,
+      RenderViewHost* render_view_host) OVERRIDE;
   virtual void WebContentsDestroyed(WebContents* web_contents) OVERRIDE;
 
   void DidFailLoadInternal(bool is_provisional_load,

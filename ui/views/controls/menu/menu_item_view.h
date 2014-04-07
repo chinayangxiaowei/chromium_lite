@@ -14,12 +14,13 @@
 #include "build/build_config.h"
 #include "ui/base/models/menu_separator_types.h"
 #include "ui/gfx/image/image_skia.h"
+#include "ui/views/controls/menu/menu_config.h"
 #include "ui/views/view.h"
 
 #if defined(OS_WIN)
 #include <windows.h>
 
-#include "ui/base/native_theme/native_theme.h"
+#include "ui/native_theme/native_theme.h"
 #endif
 
 namespace gfx {
@@ -28,6 +29,7 @@ class Font;
 
 namespace ui {
 class MenuModel;
+class NativeTheme;
 }
 
 namespace views {
@@ -36,7 +38,6 @@ namespace internal {
 class MenuRunnerImpl;
 }
 
-struct MenuConfig;
 class MenuController;
 class MenuDelegate;
 class SubmenuView;
@@ -320,6 +321,9 @@ class VIEWS_EXPORT MenuItemView : public View {
     use_right_margin_ = use_right_margin;
   }
 
+  // Returns a reference to MenuConfig to be used with this menu.
+  const MenuConfig& GetMenuConfig() const;
+
  protected:
   // Creates a MenuItemView. This is used by the various AddXXX methods.
   MenuItemView(MenuItemView* parent, int command, Type type);
@@ -341,6 +345,8 @@ class VIEWS_EXPORT MenuItemView : public View {
  private:
   friend class internal::MenuRunnerImpl;  // For access to ~MenuItemView.
 
+  enum PaintButtonMode { PB_NORMAL, PB_FOR_DRAG };
+
   // Calculates all sizes that we can from the OS.
   //
   // This is invoked prior to Running a menu.
@@ -353,8 +359,10 @@ class VIEWS_EXPORT MenuItemView : public View {
             MenuDelegate* delegate);
 
   // The RunXXX methods call into this to set up the necessary state before
-  // running.
-  void PrepareForRun(bool has_mnemonics, bool show_mnemonics);
+  // running. |is_first_menu| is true if no menus are currently showing.
+  void PrepareForRun(bool is_first_menu,
+                     bool has_mnemonics,
+                     bool show_mnemonics);
 
   // Returns the flags passed to DrawStringInt.
   int GetDrawStringFlags();
@@ -376,8 +384,10 @@ class VIEWS_EXPORT MenuItemView : public View {
 
   // Actual paint implementation. If mode is PB_FOR_DRAG, portions of the menu
   // are not rendered.
-  enum PaintButtonMode { PB_NORMAL, PB_FOR_DRAG };
   void PaintButton(gfx::Canvas* canvas, PaintButtonMode mode);
+
+  // Paints menu item using skia (platform independent).
+  void PaintButtonCommon(gfx::Canvas* canvas, PaintButtonMode mode);
 
 #if defined(OS_WIN)
   enum SelectionState { SELECTED, UNSELECTED };
@@ -387,6 +397,10 @@ class VIEWS_EXPORT MenuItemView : public View {
                   ui::NativeTheme::State state,
                   SelectionState selection_state,
                   const MenuConfig& config);
+#endif
+
+#if defined(USE_AURA)
+  void PaintButtonAura(gfx::Canvas* canvas, PaintButtonMode mode);
 #endif
 
   // Paints the accelerator.

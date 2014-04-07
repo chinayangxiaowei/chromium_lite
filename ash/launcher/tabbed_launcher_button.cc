@@ -51,7 +51,7 @@ TabbedLauncherButton::IconView::~IconView() {
 void TabbedLauncherButton::IconView::AnimationEnded(
     const ui::Animation* animation) {
   AnimationProgressed(animation);
-  animating_image_ = SkBitmap();
+  animating_image_ = gfx::ImageSkia();
 }
 
 void TabbedLauncherButton::IconView::AnimationProgressed(
@@ -115,17 +115,20 @@ const gfx::ImageSkia*
 TabbedLauncherButton* TabbedLauncherButton::Create(
     views::ButtonListener* listener,
     LauncherButtonHost* host,
+    ShelfLayoutManager* shelf_layout_manager,
     IncognitoState is_incognito) {
-  TabbedLauncherButton* button =
-      new TabbedLauncherButton(listener, host, is_incognito);
+  TabbedLauncherButton* button = new TabbedLauncherButton(
+      listener, host, shelf_layout_manager, is_incognito);
   button->Init();
   return button;
 }
 
-TabbedLauncherButton::TabbedLauncherButton(views::ButtonListener* listener,
-                                           LauncherButtonHost* host,
-                                           IncognitoState is_incognito)
-    : LauncherButton(listener, host),
+TabbedLauncherButton::TabbedLauncherButton(
+    views::ButtonListener* listener,
+    LauncherButtonHost* host,
+    ShelfLayoutManager* shelf_layout_manager,
+    IncognitoState is_incognito)
+    : LauncherButton(listener, host, shelf_layout_manager),
       is_incognito_(is_incognito) {
   set_accessibility_focusable(true);
 }

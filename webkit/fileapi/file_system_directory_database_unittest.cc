@@ -5,11 +5,12 @@
 #include "webkit/fileapi/file_system_directory_database.h"
 
 #include <math.h>
+#include <limits>
 
 #include "base/file_util.h"
-#include "base/platform_file.h"
+#include "base/files/scoped_temp_dir.h"
 #include "base/memory/scoped_ptr.h"
-#include "base/scoped_temp_dir.h"
+#include "base/platform_file.h"
 #include "base/string_number_conversions.h"
 #include "base/string_util.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -136,7 +137,7 @@ class FileSystemDirectoryDatabaseTest : public testing::Test {
 
  protected:
   // Common temp base for nondestructive uses.
-  ScopedTempDir base_;
+  base::ScopedTempDir base_;
   scoped_ptr<FileSystemDirectoryDatabase> db_;
 
   DISALLOW_COPY_AND_ASSIGN(FileSystemDirectoryDatabaseTest);

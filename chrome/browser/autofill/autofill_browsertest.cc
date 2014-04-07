@@ -28,7 +28,6 @@
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_tabstrip.h"
 #include "chrome/browser/ui/browser_window.h"
-#include "chrome/browser/ui/tab_contents/tab_contents.h"
 #include "chrome/common/chrome_notification_types.h"
 #include "chrome/common/render_messages.h"
 #include "chrome/test/base/in_process_browser_test.h"
@@ -135,7 +134,7 @@ class WindowedPersonalDataManagerObserver
                        const content::NotificationDetails& details) OVERRIDE {
     // Accept in the infobar.
     infobar_service_ =
-        InfoBarService::ForTab(chrome::GetActiveTabContents(browser_));
+        InfoBarService::FromWebContents(chrome::GetActiveWebContents(browser_));
     InfoBarDelegate* infobar = infobar_service_->GetInfoBarDelegateAt(0);
 
     ConfirmInfoBarDelegate* confirm_infobar =
@@ -346,7 +345,8 @@ class AutofillTest : public InProcessBrowserTest {
 
   void FocusFirstNameField() {
     LOG(WARNING) << "Clicking on the tab.";
-    content::SimulateMouseClick(chrome::GetActiveWebContents(browser()));
+    content::SimulateMouseClick(chrome::GetActiveWebContents(browser()), 0,
+        WebKit::WebMouseEvent::ButtonLeft);
 
     LOG(WARNING) << "Focusing the first name field.";
     bool result = false;
@@ -375,8 +375,8 @@ class AutofillTest : public InProcessBrowserTest {
   void SendKeyAndWait(ui::KeyboardCode key, int notification_type) {
     content::WindowedNotificationObserver observer(
         notification_type, content::Source<RenderViewHost>(render_view_host()));
-    content::SimulateKeyPress(chrome::GetActiveWebContents(
-        browser()), key, false, false, false, false);
+    content::SimulateKeyPress(chrome::GetActiveWebContents(browser()),
+                              key, false, false, false, false);
     observer.Wait();
   }
 
@@ -421,8 +421,14 @@ class AutofillTest : public InProcessBrowserTest {
   net::TestURLFetcherFactory url_fetcher_factory_;
 };
 
+// http://crbug.com/150084
+#if defined(OS_MACOSX)
+#define MAYBE_BasicFormFill BasicFormFill
+#else
+#define MAYBE_BasicFormFill DISABLED_BasicFormFill
+#endif
 // Test that basic form fill is working.
-IN_PROC_BROWSER_TEST_F(AutofillTest, BasicFormFill) {
+IN_PROC_BROWSER_TEST_F(AutofillTest, MAYBE_BasicFormFill) {
   CreateTestProfile();
 
   // Load the test page.
@@ -433,12 +439,17 @@ IN_PROC_BROWSER_TEST_F(AutofillTest, BasicFormFill) {
   TryBasicFormFill();
 }
 
+// http://crbug.com/150084
+#if defined(OS_MACOSX)
+#define MAYBE_AutofillViaDownArrow AutofillViaDownArrow
+#else
+#define MAYBE_AutofillViaDownArrow DISABLED_AutofillViaDownArrow
+#endif
 // Test that form filling can be initiated by pressing the down arrow.
-IN_PROC_BROWSER_TEST_F(AutofillTest, AutofillViaDownArrow) {
+IN_PROC_BROWSER_TEST_F(AutofillTest, MAYBE_AutofillViaDownArrow) {
   CreateTestProfile();
 
   // Load the test page.
-  ASSERT_TRUE(ui_test_utils::BringBrowserWindowToFront(browser()));
   ASSERT_NO_FATAL_FAILURE(ui_test_utils::NavigateToURL(browser(),
       GURL(std::string(kDataURIPrefix) + kTestFormString)));
 
@@ -463,8 +474,14 @@ IN_PROC_BROWSER_TEST_F(AutofillTest, AutofillViaDownArrow) {
   ExpectFilledTestForm();
 }
 
+// http://crbug.com/150084
+#if defined(OS_MACOSX)
+#define MAYBE_OnChangeAfterAutofill OnChangeAfterAutofill
+#else
+#define MAYBE_OnChangeAfterAutofill DISABLED_OnChangeAfterAutofill
+#endif
 // Test that a JavaScript onchange event is fired after auto-filling a form.
-IN_PROC_BROWSER_TEST_F(AutofillTest, OnChangeAfterAutofill) {
+IN_PROC_BROWSER_TEST_F(AutofillTest, MAYBE_OnChangeAfterAutofill) {
   CreateTestProfile();
 
   const char* kOnChangeScript =
@@ -489,7 +506,6 @@ IN_PROC_BROWSER_TEST_F(AutofillTest, OnChangeAfterAutofill) {
       "</script>";
 
   // Load the test page.
-  ASSERT_TRUE(ui_test_utils::BringBrowserWindowToFront(browser()));
   ASSERT_NO_FATAL_FAILURE(ui_test_utils::NavigateToURL(browser(),
       GURL(std::string(kDataURIPrefix) + kTestFormString + kOnChangeScript)));
 
@@ -548,7 +564,8 @@ IN_PROC_BROWSER_TEST_F(AutofillTest, OnChangeAfterAutofill) {
 }
 
 // Test that we can autofill forms distinguished only by their |id| attribute.
-IN_PROC_BROWSER_TEST_F(AutofillTest, AutofillFormsDistinguishedById) {
+// DISABLED: http://crbug.com/150084
+IN_PROC_BROWSER_TEST_F(AutofillTest, DISABLED_AutofillFormsDistinguishedById) {
   CreateTestProfile();
 
   // Load the test page.
@@ -563,7 +580,6 @@ IN_PROC_BROWSER_TEST_F(AutofillTest, AutofillFormsDistinguishedById) {
       "newForm.id = 'newForm';"
       "mainForm.parentNode.insertBefore(newForm, mainForm);"
       "</script>";
-  ASSERT_TRUE(ui_test_utils::BringBrowserWindowToFront(browser()));
   ASSERT_NO_FATAL_FAILURE(ui_test_utils::NavigateToURL(browser(), GURL(kURL)));
 
   // Invoke Autofill.
@@ -574,11 +590,11 @@ IN_PROC_BROWSER_TEST_F(AutofillTest, AutofillFormsDistinguishedById) {
 // In the wild, the repeated fields are typically either email fields
 // (duplicated for "confirmation"); or variants that are hot-swapped via
 // JavaScript, with only one actually visible at any given time.
-IN_PROC_BROWSER_TEST_F(AutofillTest, AutofillFormWithRepeatedField) {
+// DISABLED: http://crbug.com/150084
+IN_PROC_BROWSER_TEST_F(AutofillTest, DISABLED_AutofillFormWithRepeatedField) {
   CreateTestProfile();
 
   // Load the test page.
-  ASSERT_TRUE(ui_test_utils::BringBrowserWindowToFront(browser()));
   ASSERT_NO_FATAL_FAILURE(ui_test_utils::NavigateToURL(browser(),
       GURL(std::string(kDataURIPrefix) +
            "<form action=\"http://www.example.com/\" method=\"POST\">"
@@ -619,13 +635,13 @@ IN_PROC_BROWSER_TEST_F(AutofillTest, AutofillFormWithRepeatedField) {
   ExpectFieldValue(L"state_freeform", "");
 }
 
-#if defined(OS_WIN)
-// Has been observed to fail on windows.  crbug.com/100062
-#define MAYBE_AutofillFormWithNonAutofillableField \
-    DISABLED_AutofillFormWithNonAutofillableField
-#else
+// http://crbug.com/150084
+#if defined(OS_MAC)
 #define MAYBE_AutofillFormWithNonAutofillableField \
     AutofillFormWithNonAutofillableField
+#else
+#define MAYBE_AutofillFormWithNonAutofillableField \
+    DISABLED_AutofillFormWithNonAutofillableField
 #endif
 
 // Test that we properly autofill forms with non-autofillable fields.
@@ -634,7 +650,6 @@ IN_PROC_BROWSER_TEST_F(AutofillTest,
   CreateTestProfile();
 
   // Load the test page.
-  ASSERT_TRUE(ui_test_utils::BringBrowserWindowToFront(browser()));
   ASSERT_NO_FATAL_FAILURE(ui_test_utils::NavigateToURL(browser(),
       GURL(std::string(kDataURIPrefix) +
            "<form action=\"http://www.example.com/\" method=\"POST\">"
@@ -674,11 +689,11 @@ IN_PROC_BROWSER_TEST_F(AutofillTest,
 }
 
 // Test that we can Autofill dynamically generated forms.
-IN_PROC_BROWSER_TEST_F(AutofillTest, DynamicFormFill) {
+// DISABLED: http://crbug.com/150084
+IN_PROC_BROWSER_TEST_F(AutofillTest, DISABLED_DynamicFormFill) {
   CreateTestProfile();
 
   // Load the test page.
-  ASSERT_TRUE(ui_test_utils::BringBrowserWindowToFront(browser()));
   ASSERT_NO_FATAL_FAILURE(ui_test_utils::NavigateToURL(browser(),
       GURL(std::string(kDataURIPrefix) +
            "<form id=\"form\" action=\"http://www.example.com/\""
@@ -765,11 +780,11 @@ IN_PROC_BROWSER_TEST_F(AutofillTest, DynamicFormFill) {
 // Test that form filling works after reloading the current page.
 // This test brought to you by http://crbug.com/69204
 #if defined(OS_MACOSX)
-// Sometimes times out on Mac: http://crbug.com/81451
-// Currently enabled for logging.
+// Now flaky on everything but mac.
+// http://crbug.com/150084
 #define MAYBE_AutofillAfterReload AutofillAfterReload
 #else
-#define MAYBE_AutofillAfterReload AutofillAfterReload
+#define MAYBE_AutofillAfterReload DISABLED_AutofillAfterReload
 #endif
 IN_PROC_BROWSER_TEST_F(AutofillTest, MAYBE_AutofillAfterReload) {
   LOG(WARNING) << "Creating test profile.";
@@ -777,7 +792,6 @@ IN_PROC_BROWSER_TEST_F(AutofillTest, MAYBE_AutofillAfterReload) {
 
   // Load the test page.
   LOG(WARNING) << "Bringing browser window to front.";
-  ASSERT_TRUE(ui_test_utils::BringBrowserWindowToFront(browser()));
   LOG(WARNING) << "Navigating to URL.";
   ASSERT_NO_FATAL_FAILURE(ui_test_utils::NavigateToURL(browser(),
       GURL(std::string(kDataURIPrefix) + kTestFormString)));
@@ -793,13 +807,8 @@ IN_PROC_BROWSER_TEST_F(AutofillTest, MAYBE_AutofillAfterReload) {
   TryBasicFormFill();
 }
 
-#if defined(OS_MACOSX) || defined(OS_CHROMEOS)
-// Test that autofill works after page translation.
-// http://crbug.com/81451
+// DISABLED: http://crbug.com/150084
 IN_PROC_BROWSER_TEST_F(AutofillTest, DISABLED_AutofillAfterTranslate) {
-#else
-IN_PROC_BROWSER_TEST_F(AutofillTest, AutofillAfterTranslate) {
-#endif
   CreateTestProfile();
 
   GURL url(std::string(kDataURIPrefix) +
@@ -833,7 +842,6 @@ IN_PROC_BROWSER_TEST_F(AutofillTest, AutofillAfterTranslate) {
                "<label for=\"ph\">Phone number:</label>"
                " <input type=\"text\" id=\"ph\"><br>"
                "</form>");
-  ASSERT_TRUE(ui_test_utils::BringBrowserWindowToFront(browser()));
   ASSERT_NO_FATAL_FAILURE(ui_test_utils::NavigateToURL(browser(), url));
 
   // Get translation bar.
@@ -841,7 +849,7 @@ IN_PROC_BROWSER_TEST_F(AutofillTest, AutofillAfterTranslate) {
       render_view_host(),
       ChromeViewHostMsg_TranslateLanguageDetermined(0, "ja", true));
   TranslateInfoBarDelegate* infobar =
-      InfoBarService::ForTab(chrome::GetActiveTabContents(browser()))->
+      InfoBarService::FromWebContents(chrome::GetActiveWebContents(browser()))->
           GetInfoBarDelegateAt(0)->AsTranslateInfoBarDelegate();
 
   ASSERT_TRUE(infobar != NULL);
@@ -876,93 +884,149 @@ IN_PROC_BROWSER_TEST_F(AutofillTest, AutofillAfterTranslate) {
 IN_PROC_BROWSER_TEST_F(AutofillTest, FillProfileCrazyCharacters) {
   std::vector<AutofillProfile> profiles;
   AutofillProfile profile1;
-  profile1.SetInfo(NAME_FIRST, WideToUTF16(L"\u0623\u0648\u0628\u0627\u0645\u0627 \u064a\u0639\u062a\u0630\u0631 \u0647\u0627\u062a\u0641\u064a\u0627 \u0644\u0645\u0648\u0638\u0641\u0629 \u0633\u0648\u062f\u0627\u0621 \u0627\u0633\u062a\u0642\u0627\u0644\u062a \u0628\u0633\u0628\u0628 \u062a\u0635\u0631\u064a\u062d\u0627\u062a \u0645\u062c\u062a\u0632\u0623\u0629"));
-  profile1.SetInfo(NAME_MIDDLE, WideToUTF16(L"BANK\xcBERF\xc4LLE"));
-  profile1.SetInfo(EMAIL_ADDRESS, WideToUTF16(L"\uacbd\uc81c \ub274\uc2a4 \ub354\ubcf4\uae30@google.com"));
-  profile1.SetInfo(ADDRESS_HOME_LINE1, WideToUTF16(L"\uad6d\uc815\uc6d0\xb7\uac80\ucc30, \ub178\ubb34\ud604\uc815\ubd80 \ub300\ubd81\uc811\ucd09 \ub2f4\ub2f9 \uc778\uc0ac\ub4e4 \uc870\uc0ac"));
-  profile1.SetInfo(ADDRESS_HOME_CITY, WideToUTF16(L"\u653f\u5e9c\u4e0d\u6392\u9664\u7acb\u6cd5\u898f\u7ba1\u5c0e\u904a"));
-  profile1.SetInfo(ADDRESS_HOME_ZIP, WideToUTF16(L"YOHO_54676"));
-  profile1.SetInfo(PHONE_HOME_WHOLE_NUMBER, WideToUTF16(L"861088828000"));
-  profile1.SetInfo(ADDRESS_HOME_COUNTRY, WideToUTF16(L"India"));
+  profile1.SetRawInfo(NAME_FIRST,
+                      WideToUTF16(L"\u0623\u0648\u0628\u0627\u0645\u0627 "
+                                  L"\u064a\u0639\u062a\u0630\u0631 "
+                                  L"\u0647\u0627\u062a\u0641\u064a\u0627 "
+                                  L"\u0644\u0645\u0648\u0638\u0641\u0629 "
+                                  L"\u0633\u0648\u062f\u0627\u0621 "
+                                  L"\u0627\u0633\u062a\u0642\u0627\u0644\u062a "
+                                  L"\u0628\u0633\u0628\u0628 "
+                                  L"\u062a\u0635\u0631\u064a\u062d\u0627\u062a "
+                                  L"\u0645\u062c\u062a\u0632\u0623\u0629"));
+  profile1.SetRawInfo(NAME_MIDDLE, WideToUTF16(L"BANK\xcBERF\xc4LLE"));
+  profile1.SetRawInfo(EMAIL_ADDRESS,
+                      WideToUTF16(L"\uacbd\uc81c \ub274\uc2a4 "
+                                  L"\ub354\ubcf4\uae30@google.com"));
+  profile1.SetRawInfo(ADDRESS_HOME_LINE1,
+                      WideToUTF16(L"\uad6d\uc815\uc6d0\xb7\uac80\ucc30, "
+                                  L"\ub178\ubb34\ud604\uc815\ubd80 "
+                                  L"\ub300\ubd81\uc811\ucd09 \ub2f4\ub2f9 "
+                                  L"\uc778\uc0ac\ub4e4 \uc870\uc0ac"));
+  profile1.SetRawInfo(ADDRESS_HOME_CITY,
+                      WideToUTF16(L"\u653f\u5e9c\u4e0d\u6392\u9664\u7acb\u6cd5"
+                                  L"\u898f\u7ba1\u5c0e\u904a"));
+  profile1.SetRawInfo(ADDRESS_HOME_ZIP, WideToUTF16(L"YOHO_54676"));
+  profile1.SetRawInfo(PHONE_HOME_WHOLE_NUMBER, WideToUTF16(L"861088828000"));
+  profile1.SetRawInfo(ADDRESS_HOME_COUNTRY, WideToUTF16(L"India"));
   profiles.push_back(profile1);
 
   AutofillProfile profile2;
-  profile2.SetInfo(NAME_FIRST, WideToUTF16(L"\u4e0a\u6d77\u5e02\u91d1\u5c71\u533a \u677e\u9690\u9547\u4ead\u67ab\u516c\u8def1915\u53f7"));
-  profile2.SetInfo(NAME_LAST, WideToUTF16(L"aguantó"));
-  profile2.SetInfo(ADDRESS_HOME_ZIP, WideToUTF16(L"HOME 94043"));
+  profile2.SetRawInfo(NAME_FIRST,
+                      WideToUTF16(L"\u4e0a\u6d77\u5e02\u91d1\u5c71\u533a "
+                                  L"\u677e\u9690\u9547\u4ead\u67ab\u516c"
+                                  L"\u8def1915\u53f7"));
+  profile2.SetRawInfo(NAME_LAST, WideToUTF16(L"aguantó"));
+  profile2.SetRawInfo(ADDRESS_HOME_ZIP, WideToUTF16(L"HOME 94043"));
   profiles.push_back(profile2);
 
   AutofillProfile profile3;
-  profile3.SetInfo(EMAIL_ADDRESS, WideToUTF16(L"sue@example.com"));
-  profile3.SetInfo(COMPANY_NAME, WideToUTF16(L"Company X"));
+  profile3.SetRawInfo(EMAIL_ADDRESS, WideToUTF16(L"sue@example.com"));
+  profile3.SetRawInfo(COMPANY_NAME, WideToUTF16(L"Company X"));
   profiles.push_back(profile3);
 
   AutofillProfile profile4;
-  profile4.SetInfo(NAME_FIRST, WideToUTF16(L"Joe 3254"));
-  profile4.SetInfo(NAME_LAST, WideToUTF16(L"\u8bb0\u8d262\u5e74\u591a"));
-  profile4.SetInfo(ADDRESS_HOME_ZIP, WideToUTF16(L"\uff08\u90ae\u7f16\uff1a201504\uff09"));
-  profile4.SetInfo(EMAIL_ADDRESS, WideToUTF16(L"télévision@example.com"));
-  profile4.SetInfo(COMPANY_NAME, WideToUTF16(L"\u0907\u0932\u0947\u0915\u093f\u091f\u094d\u0930\u0928\u093f\u0915\u094d\u0938, \u0905\u092a\u094b\u0932\u094b \u091f\u093e\u092f\u0930\u094d\u0938 \u0906\u0926\u093f"));
+  profile4.SetRawInfo(NAME_FIRST, WideToUTF16(L"Joe 3254"));
+  profile4.SetRawInfo(NAME_LAST, WideToUTF16(L"\u8bb0\u8d262\u5e74\u591a"));
+  profile4.SetRawInfo(ADDRESS_HOME_ZIP,
+                      WideToUTF16(L"\uff08\u90ae\u7f16\uff1a201504\uff09"));
+  profile4.SetRawInfo(EMAIL_ADDRESS, WideToUTF16(L"télévision@example.com"));
+  profile4.SetRawInfo(COMPANY_NAME,
+                      WideToUTF16(L"\u0907\u0932\u0947\u0915\u093f\u091f\u094d"
+                                  L"\u0930\u0928\u093f\u0915\u094d\u0938, "
+                                  L"\u0905\u092a\u094b\u0932\u094b "
+                                  L"\u091f\u093e\u092f\u0930\u094d\u0938 "
+                                  L"\u0906\u0926\u093f"));
   profiles.push_back(profile4);
 
   AutofillProfile profile5;
-  profile5.SetInfo(NAME_FIRST, WideToUTF16(L"Larry"));
-  profile5.SetInfo(NAME_LAST, WideToUTF16(L"\u0938\u094d\u091f\u093e\u0902\u092a \u0921\u094d\u092f\u0942\u091f\u0940"));
-  profile5.SetInfo(ADDRESS_HOME_ZIP, WideToUTF16(L"111111111111110000GOOGLE"));
-  profile5.SetInfo(EMAIL_ADDRESS, WideToUTF16(L"page@000000.com"));
-  profile5.SetInfo(COMPANY_NAME, WideToUTF16(L"Google"));
+  profile5.SetRawInfo(NAME_FIRST, WideToUTF16(L"Larry"));
+  profile5.SetRawInfo(NAME_LAST,
+                      WideToUTF16(L"\u0938\u094d\u091f\u093e\u0902\u092a "
+                                  L"\u0921\u094d\u092f\u0942\u091f\u0940"));
+  profile5.SetRawInfo(ADDRESS_HOME_ZIP,
+                      WideToUTF16(L"111111111111110000GOOGLE"));
+  profile5.SetRawInfo(EMAIL_ADDRESS, WideToUTF16(L"page@000000.com"));
+  profile5.SetRawInfo(COMPANY_NAME, WideToUTF16(L"Google"));
   profiles.push_back(profile5);
 
   AutofillProfile profile6;
-  profile6.SetInfo(NAME_FIRST, WideToUTF16(L"\u4e0a\u6d77\u5e02\u91d1\u5c71\u533a \u677e\u9690\u9547\u4ead\u67ab\u516c\u8def1915\u53f7"));
-  profile6.SetInfo(NAME_LAST, WideToUTF16(L"\u0646\u062c\u0627\u0645\u064a\u0646\u0627 \u062f\u0639\u0645\u0647\u0627 \u0644\u0644\u0631\u0626\u064a\u0633 \u0627\u0644\u0633\u0648\u062f\u0627\u0646\u064a \u0639\u0645\u0631 \u0627\u0644\u0628\u0634\u064a\u0631"));
-  profile6.SetInfo(ADDRESS_HOME_ZIP, WideToUTF16(L"HOME 94043"));
+  profile6.SetRawInfo(NAME_FIRST,
+                      WideToUTF16(L"\u4e0a\u6d77\u5e02\u91d1\u5c71\u533a "
+                                  L"\u677e\u9690\u9547\u4ead\u67ab\u516c"
+                                  L"\u8def1915\u53f7"));
+  profile6.SetRawInfo(NAME_LAST,
+                      WideToUTF16(L"\u0646\u062c\u0627\u0645\u064a\u0646\u0627 "
+                                  L"\u062f\u0639\u0645\u0647\u0627 "
+                                  L"\u0644\u0644\u0631\u0626\u064a\u0633 "
+                                  L"\u0627\u0644\u0633\u0648\u062f\u0627\u0646"
+                                  L"\u064a \u0639\u0645\u0631 "
+                                  L"\u0627\u0644\u0628\u0634\u064a\u0631"));
+  profile6.SetRawInfo(ADDRESS_HOME_ZIP, WideToUTF16(L"HOME 94043"));
   profiles.push_back(profile6);
 
   AutofillProfile profile7;
-  profile7.SetInfo(NAME_FIRST, WideToUTF16(L"&$%$$$ TESTO *&*&^&^& MOKO"));
-  profile7.SetInfo(NAME_MIDDLE, WideToUTF16(L"WOHOOOO$$$$$$$$****"));
-  profile7.SetInfo(EMAIL_ADDRESS, WideToUTF16(L"yuvu@example.com"));
-  profile7.SetInfo(ADDRESS_HOME_LINE1, WideToUTF16(L"34544, anderson ST.(120230)"));
-  profile7.SetInfo(ADDRESS_HOME_CITY, WideToUTF16(L"Sunnyvale"));
-  profile7.SetInfo(ADDRESS_HOME_STATE, WideToUTF16(L"CA"));
-  profile7.SetInfo(ADDRESS_HOME_ZIP, WideToUTF16(L"94086"));
-  profile7.SetInfo(PHONE_HOME_WHOLE_NUMBER, WideToUTF16(L"15466784565"));
-  profile7.SetInfo(ADDRESS_HOME_COUNTRY, WideToUTF16(L"United States"));
+  profile7.SetRawInfo(NAME_FIRST, WideToUTF16(L"&$%$$$ TESTO *&*&^&^& MOKO"));
+  profile7.SetRawInfo(NAME_MIDDLE, WideToUTF16(L"WOHOOOO$$$$$$$$****"));
+  profile7.SetRawInfo(EMAIL_ADDRESS, WideToUTF16(L"yuvu@example.com"));
+  profile7.SetRawInfo(ADDRESS_HOME_LINE1,
+                      WideToUTF16(L"34544, anderson ST.(120230)"));
+  profile7.SetRawInfo(ADDRESS_HOME_CITY, WideToUTF16(L"Sunnyvale"));
+  profile7.SetRawInfo(ADDRESS_HOME_STATE, WideToUTF16(L"CA"));
+  profile7.SetRawInfo(ADDRESS_HOME_ZIP, WideToUTF16(L"94086"));
+  profile7.SetRawInfo(PHONE_HOME_WHOLE_NUMBER, WideToUTF16(L"15466784565"));
+  profile7.SetRawInfo(ADDRESS_HOME_COUNTRY, WideToUTF16(L"United States"));
   profiles.push_back(profile7);
 
   SetProfiles(&profiles);
-  ASSERT_EQ(profiles.size(), personal_data_manager()->profiles().size());
+  ASSERT_EQ(profiles.size(), personal_data_manager()->GetProfiles().size());
   for (size_t i = 0; i < profiles.size(); ++i)
-    ASSERT_EQ(profiles[i], *personal_data_manager()->profiles()[i]);
+    ASSERT_EQ(profiles[i], *personal_data_manager()->GetProfiles()[i]);
 
   std::vector<CreditCard> cards;
   CreditCard card1;
-  card1.SetInfo(CREDIT_CARD_NAME, WideToUTF16(L"\u751f\u6d3b\u5f88\u6709\u89c4\u5f8b \u4ee5\u73a9\u4e3a\u4e3b"));
-  card1.SetInfo(CREDIT_CARD_NUMBER, WideToUTF16(L"6011111111111117"));
-  card1.SetInfo(CREDIT_CARD_EXP_MONTH, WideToUTF16(L"12"));
-  card1.SetInfo(CREDIT_CARD_EXP_4_DIGIT_YEAR, WideToUTF16(L"2011"));
+  card1.SetRawInfo(CREDIT_CARD_NAME,
+                   WideToUTF16(L"\u751f\u6d3b\u5f88\u6709\u89c4\u5f8b "
+                               L"\u4ee5\u73a9\u4e3a\u4e3b"));
+  card1.SetRawInfo(CREDIT_CARD_NUMBER, WideToUTF16(L"6011111111111117"));
+  card1.SetRawInfo(CREDIT_CARD_EXP_MONTH, WideToUTF16(L"12"));
+  card1.SetRawInfo(CREDIT_CARD_EXP_4_DIGIT_YEAR, WideToUTF16(L"2011"));
   cards.push_back(card1);
 
   CreditCard card2;
-  card2.SetInfo(CREDIT_CARD_NAME, WideToUTF16(L"John Williams"));
-  card2.SetInfo(CREDIT_CARD_NUMBER, WideToUTF16(L"WokoAwesome12345"));
-  card2.SetInfo(CREDIT_CARD_EXP_MONTH, WideToUTF16(L"10"));
-  card2.SetInfo(CREDIT_CARD_EXP_4_DIGIT_YEAR, WideToUTF16(L"2015"));
+  card2.SetRawInfo(CREDIT_CARD_NAME, WideToUTF16(L"John Williams"));
+  card2.SetRawInfo(CREDIT_CARD_NUMBER, WideToUTF16(L"WokoAwesome12345"));
+  card2.SetRawInfo(CREDIT_CARD_EXP_MONTH, WideToUTF16(L"10"));
+  card2.SetRawInfo(CREDIT_CARD_EXP_4_DIGIT_YEAR, WideToUTF16(L"2015"));
   cards.push_back(card2);
 
   CreditCard card3;
-  card3.SetInfo(CREDIT_CARD_NAME, WideToUTF16(L"\u0623\u062d\u0645\u062f\u064a \u0646\u062c\u0627\u062f \u0644\u0645\u062d\u0627\u0648\u0644\u0647 \u0627\u063a\u062a\u064a\u0627\u0644 \u0641\u064a \u0645\u062f\u064a\u0646\u0629 \u0647\u0645\u062f\u0627\u0646 "));
-  card3.SetInfo(CREDIT_CARD_NUMBER, WideToUTF16(L"\u092a\u0941\u0928\u0930\u094d\u091c\u0940\u0935\u093f\u0924 \u0939\u094b\u0917\u093e \u0928\u093e\u0932\u0902\u0926\u093e"));
-  card3.SetInfo(CREDIT_CARD_EXP_MONTH, WideToUTF16(L"10"));
-  card3.SetInfo(CREDIT_CARD_EXP_4_DIGIT_YEAR, WideToUTF16(L"2015"));
+  card3.SetRawInfo(CREDIT_CARD_NAME,
+                   WideToUTF16(L"\u0623\u062d\u0645\u062f\u064a "
+                               L"\u0646\u062c\u0627\u062f "
+                               L"\u0644\u0645\u062d\u0627\u0648\u0644\u0647 "
+                               L"\u0627\u063a\u062a\u064a\u0627\u0644 "
+                               L"\u0641\u064a \u0645\u062f\u064a\u0646\u0629 "
+                               L"\u0647\u0645\u062f\u0627\u0646 "));
+  card3.SetRawInfo(CREDIT_CARD_NUMBER,
+                   WideToUTF16(L"\u092a\u0941\u0928\u0930\u094d\u091c\u0940"
+                               L"\u0935\u093f\u0924 \u0939\u094b\u0917\u093e "
+                               L"\u0928\u093e\u0932\u0902\u0926\u093e"));
+  card3.SetRawInfo(CREDIT_CARD_EXP_MONTH, WideToUTF16(L"10"));
+  card3.SetRawInfo(CREDIT_CARD_EXP_4_DIGIT_YEAR, WideToUTF16(L"2015"));
   cards.push_back(card3);
 
   CreditCard card4;
-  card4.SetInfo(CREDIT_CARD_NAME, WideToUTF16(L"\u039d\u03ad\u03b5\u03c2 \u03c3\u03c5\u03b3\u03c7\u03c9\u03bd\u03b5\u03cd\u03c3\u03b5\u03b9\u03c2 \u03ba\u03b1\u03b9 \u03ba\u03b1\u03c4\u03b1\u03c1\u03b3\u03ae\u03c3\u03b5\u03b9\u03c2"));
-  card4.SetInfo(CREDIT_CARD_NUMBER, WideToUTF16(L"00000000000000000000000"));
-  card4.SetInfo(CREDIT_CARD_EXP_MONTH, WideToUTF16(L"01"));
-  card4.SetInfo(CREDIT_CARD_EXP_4_DIGIT_YEAR, WideToUTF16(L"2016"));
+  card4.SetRawInfo(CREDIT_CARD_NAME,
+                   WideToUTF16(L"\u039d\u03ad\u03b5\u03c2 "
+                               L"\u03c3\u03c5\u03b3\u03c7\u03c9\u03bd\u03b5"
+                               L"\u03cd\u03c3\u03b5\u03b9\u03c2 "
+                               L"\u03ba\u03b1\u03b9 "
+                               L"\u03ba\u03b1\u03c4\u03b1\u03c1\u03b3\u03ae"
+                               L"\u03c3\u03b5\u03b9\u03c2"));
+  card4.SetRawInfo(CREDIT_CARD_NUMBER, WideToUTF16(L"00000000000000000000000"));
+  card4.SetRawInfo(CREDIT_CARD_EXP_MONTH, WideToUTF16(L"01"));
+  card4.SetRawInfo(CREDIT_CARD_EXP_4_DIGIT_YEAR, WideToUTF16(L"2016"));
   cards.push_back(card4);
 
   SetCards(&cards);
@@ -978,27 +1042,29 @@ IN_PROC_BROWSER_TEST_F(AutofillTest, FillProfileCrazyCharacters) {
 IN_PROC_BROWSER_TEST_F(AutofillTest, Invalid) {
   // First try profiles with invalid ZIP input.
   AutofillProfile without_invalid;
-  without_invalid.SetInfo(NAME_FIRST, ASCIIToUTF16("Will"));
-  without_invalid.SetInfo(ADDRESS_HOME_CITY, ASCIIToUTF16("Sunnyvale"));
-  without_invalid.SetInfo(ADDRESS_HOME_STATE, ASCIIToUTF16("CA"));
-  without_invalid.SetInfo(ADDRESS_HOME_ZIP, ASCIIToUTF16("my_zip"));
-  without_invalid.SetInfo(ADDRESS_HOME_COUNTRY, ASCIIToUTF16("United States"));
+  without_invalid.SetRawInfo(NAME_FIRST, ASCIIToUTF16("Will"));
+  without_invalid.SetRawInfo(ADDRESS_HOME_CITY, ASCIIToUTF16("Sunnyvale"));
+  without_invalid.SetRawInfo(ADDRESS_HOME_STATE, ASCIIToUTF16("CA"));
+  without_invalid.SetRawInfo(ADDRESS_HOME_ZIP, ASCIIToUTF16("my_zip"));
+  without_invalid.SetRawInfo(ADDRESS_HOME_COUNTRY,
+                             ASCIIToUTF16("United States"));
 
   AutofillProfile with_invalid = without_invalid;
-  with_invalid.SetInfo(PHONE_HOME_WHOLE_NUMBER, ASCIIToUTF16("Invalid_Phone_Number"));
+  with_invalid.SetRawInfo(PHONE_HOME_WHOLE_NUMBER,
+                          ASCIIToUTF16("Invalid_Phone_Number"));
   SetProfile(with_invalid);
 
-  ASSERT_EQ(1u, personal_data_manager()->profiles().size());
-  AutofillProfile profile = *personal_data_manager()->profiles()[0];
-  ASSERT_NE(without_invalid.GetInfo(PHONE_HOME_WHOLE_NUMBER),
-            profile.GetInfo(PHONE_HOME_WHOLE_NUMBER));
+  ASSERT_EQ(1u, personal_data_manager()->GetProfiles().size());
+  AutofillProfile profile = *personal_data_manager()->GetProfiles()[0];
+  ASSERT_NE(without_invalid.GetRawInfo(PHONE_HOME_WHOLE_NUMBER),
+            profile.GetRawInfo(PHONE_HOME_WHOLE_NUMBER));
 }
 
 // Test invalid credit card numbers typed in prefs should be saved as-is.
 // TODO(isherman): rewrite as WebUI test?
 IN_PROC_BROWSER_TEST_F(AutofillTest, PrefsStringSavedAsIs) {
   CreditCard card;
-  card.SetInfo(CREDIT_CARD_NUMBER, ASCIIToUTF16("Not_0123-5Checked"));
+  card.SetRawInfo(CREDIT_CARD_NUMBER, ASCIIToUTF16("Not_0123-5Checked"));
   SetCard(card);
 
   ASSERT_EQ(1u, personal_data_manager()->credit_cards().size());
@@ -1015,8 +1081,8 @@ IN_PROC_BROWSER_TEST_F(AutofillTest, InvalidCreditCardNumberIsNotAggregated) {
   ASSERT_FALSE(CreditCard::IsValidCreditCardNumber(ASCIIToUTF16(card)));
   SubmitCreditCard("Bob Smith", card.c_str(), "12", "2014");
   ASSERT_EQ(0u,
-            InfoBarService::ForTab(chrome::GetActiveTabContents(browser()))->
-                GetInfoBarCount());
+            InfoBarService::FromWebContents(
+                chrome::GetActiveWebContents(browser()))->GetInfoBarCount());
 }
 
 // Test whitespaces and separator chars are stripped for valid CC numbers.
@@ -1029,10 +1095,10 @@ IN_PROC_BROWSER_TEST_F(AutofillTest,
   SubmitCreditCard("Jane Doe", "4417-1234-5678-9113", "10", "2013");
 
   ASSERT_EQ(2u, personal_data_manager()->credit_cards().size());
-  string16 cc1 = personal_data_manager()->credit_cards()[0]->GetInfo(
+  string16 cc1 = personal_data_manager()->credit_cards()[0]->GetRawInfo(
       CREDIT_CARD_NUMBER);
   ASSERT_TRUE(CreditCard::IsValidCreditCardNumber(cc1));
-  string16 cc2 = personal_data_manager()->credit_cards()[1]->GetInfo(
+  string16 cc2 = personal_data_manager()->credit_cards()[1]->GetRawInfo(
       CREDIT_CARD_NUMBER);
   ASSERT_TRUE(CreditCard::IsValidCreditCardNumber(cc2));
 }
@@ -1051,7 +1117,7 @@ IN_PROC_BROWSER_TEST_F(AutofillTest, AggregatesMinValidProfile) {
   data["ADDRESS_HOME_ZIP"] = "94043";
   FillFormAndSubmit("duplicate_profiles_test.html", data);
 
-  ASSERT_EQ(1u, personal_data_manager()->profiles().size());
+  ASSERT_EQ(1u, personal_data_manager()->GetProfiles().size());
 }
 
 // Test Autofill does not aggregate profiles with no address info.
@@ -1068,7 +1134,7 @@ IN_PROC_BROWSER_TEST_F(AutofillTest, ProfilesNotAggregatedWithNoAddress) {
   data["PHONE_HOME_WHOLE_NUMBER"] = "650-555-4567";
   FillFormAndSubmit("duplicate_profiles_test.html", data);
 
-  ASSERT_TRUE(personal_data_manager()->profiles().empty());
+  ASSERT_TRUE(personal_data_manager()->GetProfiles().empty());
 }
 
 // Test Autofill does not aggregate profiles with an invalid email.
@@ -1086,24 +1152,30 @@ IN_PROC_BROWSER_TEST_F(AutofillTest, ProfilesNotAggregatedWithInvalidEmail) {
   data["PHONE_HOME_WHOLE_NUMBER"] = "408-871-4567";
   FillFormAndSubmit("duplicate_profiles_test.html", data);
 
-  ASSERT_TRUE(personal_data_manager()->profiles().empty());
+  ASSERT_TRUE(personal_data_manager()->GetProfiles().empty());
 }
 
+// http://crbug.com/150084
+#if defined(OS_MACOSX)
+#define MAYBE_ComparePhoneNumbers ComparePhoneNumbers
+#else
+#define MAYBE_ComparePhoneNumbers DISABLED_ComparePhoneNumbers
+#endif
 // Test phone fields parse correctly from a given profile.
 // The high level key presses execute the following: Select the first text
 // field, invoke the autofill popup list, select the first profile within the
 // list, and commit to the profile to populate the form.
-IN_PROC_BROWSER_TEST_F(AutofillTest, ComparePhoneNumbers) {
+IN_PROC_BROWSER_TEST_F(AutofillTest, MAYBE_ComparePhoneNumbers) {
   ASSERT_TRUE(test_server()->Start());
 
   AutofillProfile profile;
-  profile.SetInfo(NAME_FIRST, ASCIIToUTF16("Bob"));
-  profile.SetInfo(NAME_LAST, ASCIIToUTF16("Smith"));
-  profile.SetInfo(ADDRESS_HOME_LINE1, ASCIIToUTF16("1234 H St."));
-  profile.SetInfo(ADDRESS_HOME_CITY, ASCIIToUTF16("San Jose"));
-  profile.SetInfo(ADDRESS_HOME_STATE, ASCIIToUTF16("CA"));
-  profile.SetInfo(ADDRESS_HOME_ZIP, ASCIIToUTF16("95110"));
-  profile.SetInfo(PHONE_HOME_WHOLE_NUMBER, ASCIIToUTF16("1-408-555-4567"));
+  profile.SetRawInfo(NAME_FIRST, ASCIIToUTF16("Bob"));
+  profile.SetRawInfo(NAME_LAST, ASCIIToUTF16("Smith"));
+  profile.SetRawInfo(ADDRESS_HOME_LINE1, ASCIIToUTF16("1234 H St."));
+  profile.SetRawInfo(ADDRESS_HOME_CITY, ASCIIToUTF16("San Jose"));
+  profile.SetRawInfo(ADDRESS_HOME_STATE, ASCIIToUTF16("CA"));
+  profile.SetRawInfo(ADDRESS_HOME_ZIP, ASCIIToUTF16("95110"));
+  profile.SetRawInfo(PHONE_HOME_WHOLE_NUMBER, ASCIIToUTF16("1-408-555-4567"));
   SetProfile(profile);
 
   GURL url = test_server()->GetURL("files/autofill/form_phones.html");
@@ -1132,7 +1204,9 @@ IN_PROC_BROWSER_TEST_F(AutofillTest, ComparePhoneNumbers) {
 // Test profile is saved if phone number is valid in selected country.
 // The data file contains two profiles with valid phone numbers and two
 // profiles with invalid phone numbers from their respective country.
-IN_PROC_BROWSER_TEST_F(AutofillTest, ProfileSavedWithValidCountryPhone) {
+// DISABLED: http://crbug.com/150084
+IN_PROC_BROWSER_TEST_F(AutofillTest,
+                       DISABLED_ProfileSavedWithValidCountryPhone) {
   ASSERT_TRUE(test_server()->Start());
   std::vector<FormMap> profiles;
 
@@ -1183,12 +1257,12 @@ IN_PROC_BROWSER_TEST_F(AutofillTest, ProfileSavedWithValidCountryPhone) {
   for (size_t i = 0; i < profiles.size(); ++i)
     FillFormAndSubmit("autofill_test_form.html", profiles[i]);
 
-  ASSERT_EQ(2u, personal_data_manager()->profiles().size());
+  ASSERT_EQ(2u, personal_data_manager()->GetProfiles().size());
   ASSERT_EQ(ASCIIToUTF16("(408) 871-4567"),
-            personal_data_manager()->profiles()[0]->GetInfo(
+            personal_data_manager()->GetProfiles()[0]->GetRawInfo(
                 PHONE_HOME_WHOLE_NUMBER));
   ASSERT_EQ(ASCIIToUTF16("+49 40/808179000"),
-            personal_data_manager()->profiles()[1]->GetInfo(
+            personal_data_manager()->GetProfiles()[1]->GetRawInfo(
                 PHONE_HOME_WHOLE_NUMBER));
 }
 
@@ -1209,9 +1283,9 @@ IN_PROC_BROWSER_TEST_F(AutofillTest, AppendCountryCodeForAggregatedPhones) {
   data["PHONE_HOME_WHOLE_NUMBER"] = "(08) 450 777-777";
   FillFormAndSubmit("autofill_test_form.html", data);
 
-  ASSERT_EQ(1u, personal_data_manager()->profiles().size());
-  string16 phone =
-      personal_data_manager()->profiles()[0]->GetInfo(PHONE_HOME_WHOLE_NUMBER);
+  ASSERT_EQ(1u, personal_data_manager()->GetProfiles().size());
+  string16 phone = personal_data_manager()->GetProfiles()[0]->GetRawInfo(
+      PHONE_HOME_WHOLE_NUMBER);
   ASSERT_TRUE(StartsWith(phone, ASCIIToUTF16("+49"), true));
 }
 
@@ -1229,26 +1303,32 @@ IN_PROC_BROWSER_TEST_F(AutofillTest, CCInfoNotStoredWhenAutocompleteOff) {
   FillFormAndSubmit("cc_autocomplete_off_test.html", data);
 
   ASSERT_EQ(0u,
-            InfoBarService::ForTab(chrome::GetActiveTabContents(browser()))->
-                GetInfoBarCount());
+            InfoBarService::FromWebContents(
+                chrome::GetActiveWebContents(browser()))->GetInfoBarCount());
 }
 
+// http://crbug.com/150084
+#if defined(OS_MACOSX)
+#define MAYBE_NoAutofillForReadOnlyFields NoAutofillForReadOnlyFields
+#else
+#define MAYBE_NoAutofillForReadOnlyFields DISABLED_NoAutofillForReadOnlyFields
+#endif
 // Test that Autofill does not fill in read-only fields.
-IN_PROC_BROWSER_TEST_F(AutofillTest, NoAutofillForReadOnlyFields) {
+IN_PROC_BROWSER_TEST_F(AutofillTest, MAYBE_NoAutofillForReadOnlyFields) {
   ASSERT_TRUE(test_server()->Start());
 
   std::string addr_line1("1234 H St.");
 
   AutofillProfile profile;
-  profile.SetInfo(NAME_FIRST, ASCIIToUTF16("Bob"));
-  profile.SetInfo(NAME_LAST, ASCIIToUTF16("Smith"));
-  profile.SetInfo(EMAIL_ADDRESS, ASCIIToUTF16("bsmith@gmail.com"));
-  profile.SetInfo(ADDRESS_HOME_LINE1, ASCIIToUTF16(addr_line1));
-  profile.SetInfo(ADDRESS_HOME_CITY, ASCIIToUTF16("San Jose"));
-  profile.SetInfo(ADDRESS_HOME_STATE, ASCIIToUTF16("CA"));
-  profile.SetInfo(ADDRESS_HOME_ZIP, ASCIIToUTF16("95110"));
-  profile.SetInfo(COMPANY_NAME, ASCIIToUTF16("Company X"));
-  profile.SetInfo(PHONE_HOME_WHOLE_NUMBER, ASCIIToUTF16("408-871-4567"));
+  profile.SetRawInfo(NAME_FIRST, ASCIIToUTF16("Bob"));
+  profile.SetRawInfo(NAME_LAST, ASCIIToUTF16("Smith"));
+  profile.SetRawInfo(EMAIL_ADDRESS, ASCIIToUTF16("bsmith@gmail.com"));
+  profile.SetRawInfo(ADDRESS_HOME_LINE1, ASCIIToUTF16(addr_line1));
+  profile.SetRawInfo(ADDRESS_HOME_CITY, ASCIIToUTF16("San Jose"));
+  profile.SetRawInfo(ADDRESS_HOME_STATE, ASCIIToUTF16("CA"));
+  profile.SetRawInfo(ADDRESS_HOME_ZIP, ASCIIToUTF16("95110"));
+  profile.SetRawInfo(COMPANY_NAME, ASCIIToUTF16("Company X"));
+  profile.SetRawInfo(PHONE_HOME_WHOLE_NUMBER, ASCIIToUTF16("408-871-4567"));
   SetProfile(profile);
 
   GURL url = test_server()->GetURL("files/autofill/read_only_field_test.html");
@@ -1259,12 +1339,18 @@ IN_PROC_BROWSER_TEST_F(AutofillTest, NoAutofillForReadOnlyFields) {
   ExpectFieldValue(L"address", addr_line1);
 }
 
+// http://crbug.com/150084
+#if defined(OS_MACOSX)
+#define MAYBE_FormFillableOnReset FormFillableOnReset
+#else
+#define MAYBE_FormFillableOnReset DISABLED_FormFillableOnReset
+#endif
 // Test form is fillable from a profile after form was reset.
 // Steps:
 //   1. Fill form using a saved profile.
 //   2. Reset the form.
 //   3. Fill form using a saved profile.
-IN_PROC_BROWSER_TEST_F(AutofillTest, FormFillableOnReset) {
+IN_PROC_BROWSER_TEST_F(AutofillTest, MAYBE_FormFillableOnReset) {
   ASSERT_TRUE(test_server()->Start());
 
   CreateTestProfile();
@@ -1290,8 +1376,16 @@ IN_PROC_BROWSER_TEST_F(AutofillTest, FormFillableOnReset) {
   ExpectFieldValue(L"PHONE_HOME_WHOLE_NUMBER", "5125551234");
 }
 
+// http://crbug.com/150084
+#if defined(OS_MACOSX)
+#define MAYBE_DistinguishMiddleInitialWithinName \
+    DistinguishMiddleInitialWithinName
+#else
+#define MAYBE_DistinguishMiddleInitialWithinName \
+    DISABLED_DistinguishMiddleInitialWithinName
+#endif
 // Test Autofill distinguishes a middle initial in a name.
-IN_PROC_BROWSER_TEST_F(AutofillTest, DistinguishMiddleInitialWithinName) {
+IN_PROC_BROWSER_TEST_F(AutofillTest, MAYBE_DistinguishMiddleInitialWithinName) {
   ASSERT_TRUE(test_server()->Start());
 
   CreateTestProfile();
@@ -1304,18 +1398,27 @@ IN_PROC_BROWSER_TEST_F(AutofillTest, DistinguishMiddleInitialWithinName) {
   ExpectFieldValue(L"NAME_MIDDLE", "C");
 }
 
+// http://crbug.com/150084
+#if defined(OS_MACOSX)
+#define MAYBE_MultipleEmailFilledByOneUserGesture \
+    MultipleEmailFilledByOneUserGesture
+#else
+#define MAYBE_MultipleEmailFilledByOneUserGesture \
+    DISABLED_MultipleEmailFilledByOneUserGesture
+#endif
 // Test forms with multiple email addresses are filled properly.
 // Entire form should be filled with one user gesture.
-IN_PROC_BROWSER_TEST_F(AutofillTest, MultipleEmailFilledByOneUserGesture) {
+IN_PROC_BROWSER_TEST_F(AutofillTest,
+                       MAYBE_MultipleEmailFilledByOneUserGesture) {
   ASSERT_TRUE(test_server()->Start());
 
   std::string email("bsmith@gmail.com");
 
   AutofillProfile profile;
-  profile.SetInfo(NAME_FIRST, ASCIIToUTF16("Bob"));
-  profile.SetInfo(NAME_LAST, ASCIIToUTF16("Smith"));
-  profile.SetInfo(EMAIL_ADDRESS, ASCIIToUTF16(email));
-  profile.SetInfo(PHONE_HOME_WHOLE_NUMBER, ASCIIToUTF16("4088714567"));
+  profile.SetRawInfo(NAME_FIRST, ASCIIToUTF16("Bob"));
+  profile.SetRawInfo(NAME_LAST, ASCIIToUTF16("Smith"));
+  profile.SetRawInfo(EMAIL_ADDRESS, ASCIIToUTF16(email));
+  profile.SetRawInfo(PHONE_HOME_WHOLE_NUMBER, ASCIIToUTF16("4088714567"));
   SetProfile(profile);
 
   GURL url = test_server()->GetURL(
@@ -1342,15 +1445,20 @@ IN_PROC_BROWSER_TEST_F(AutofillTest, ProfileWithEmailInOtherFieldNotSaved) {
   data["PHONE_HOME_WHOLE_NUMBER"] = "408-871-4567";
   FillFormAndSubmit("duplicate_profiles_test.html", data);
 
-  ASSERT_EQ(0u, personal_data_manager()->profiles().size());
+  ASSERT_EQ(0u, personal_data_manager()->GetProfiles().size());
 }
 
+// http://crbug.com/150084
+#if defined(OS_MACOSX)
+#define MAYBE_FormFillLatencyAfterSubmit FormFillLatencyAfterSubmit
+#else
+#define MAYBE_FormFillLatencyAfterSubmit DISABLED_FormFillLatencyAfterSubmit
+#endif
 // Test latency time on form submit with lots of stored Autofill profiles.
 // This test verifies when a profile is selected from the Autofill dictionary
 // that consists of thousands of profiles, the form does not hang after being
 // submitted.
-// crbug.com/150084
-IN_PROC_BROWSER_TEST_F(AutofillTest, FLAKY_FormFillLatencyAfterSubmit) {
+IN_PROC_BROWSER_TEST_F(AutofillTest, MAYBE_FormFillLatencyAfterSubmit) {
   ASSERT_TRUE(test_server()->Start());
 
   std::vector<std::string> cities;
@@ -1377,13 +1485,13 @@ IN_PROC_BROWSER_TEST_F(AutofillTest, FLAKY_FormFillLatencyAfterSubmit) {
         streets[base::RandInt(0, streets.size() - 1)]);
     string16 city = ASCIIToUTF16(cities[base::RandInt(0, cities.size() - 1)]);
     string16 zip(base::IntToString16(base::RandInt(0, 10000)));
-    profile.SetInfo(NAME_FIRST, name);
-    profile.SetInfo(EMAIL_ADDRESS, email);
-    profile.SetInfo(ADDRESS_HOME_LINE1, street);
-    profile.SetInfo(ADDRESS_HOME_CITY, city);
-    profile.SetInfo(ADDRESS_HOME_STATE, WideToUTF16(L"CA"));
-    profile.SetInfo(ADDRESS_HOME_ZIP, zip);
-    profile.SetInfo(ADDRESS_HOME_COUNTRY, WideToUTF16(L"United States"));
+    profile.SetRawInfo(NAME_FIRST, name);
+    profile.SetRawInfo(EMAIL_ADDRESS, email);
+    profile.SetRawInfo(ADDRESS_HOME_LINE1, street);
+    profile.SetRawInfo(ADDRESS_HOME_CITY, city);
+    profile.SetRawInfo(ADDRESS_HOME_STATE, WideToUTF16(L"CA"));
+    profile.SetRawInfo(ADDRESS_HOME_ZIP, zip);
+    profile.SetRawInfo(ADDRESS_HOME_COUNTRY, WideToUTF16(L"United States"));
     profiles.push_back(profile);
   }
   SetProfiles(&profiles);
@@ -1409,42 +1517,87 @@ IN_PROC_BROWSER_TEST_F(AutofillTest, FLAKY_FormFillLatencyAfterSubmit) {
   load_stop_observer.Wait();
 }
 
+// http://crbug.com/150084
+#if defined(OS_MACOSX)
+#define MAYBE_DisableAutocompleteWhileFilling DisableAutocompleteWhileFilling
+#else
+#define MAYBE_DisableAutocompleteWhileFilling \
+    DISABLED_DisableAutocompleteWhileFilling
+#endif
+// Test that Chrome doesn't crash when autocomplete is disabled while the user
+// is interacting with the form.  This is a regression test for
+// http://crbug.com/160476
+IN_PROC_BROWSER_TEST_F(AutofillTest, MAYBE_DisableAutocompleteWhileFilling) {
+  CreateTestProfile();
+
+  // Load the test page.
+  ASSERT_NO_FATAL_FAILURE(ui_test_utils::NavigateToURL(browser(),
+      GURL(std::string(kDataURIPrefix) + kTestFormString)));
+
+  // Invoke Autofill: Start filling the first name field with "M" and wait for
+  // the popup to be shown.
+  FocusFirstNameField();
+  SendKeyAndWait(
+      ui::VKEY_M, chrome::NOTIFICATION_AUTOFILL_DID_SHOW_SUGGESTIONS);
+
+  // Now that the popup with suggestions is showing, disable autocomplete for
+  // the active field.
+  ASSERT_TRUE(content::ExecuteJavaScript(
+      render_view_host(), L"",
+      L"document.querySelector('input').autocomplete = 'off';"));
+
+  // Press the down arrow to select the suggestion and attempt to preview the
+  // autofilled form.
+  content::SimulateKeyPress(chrome::GetActiveWebContents(browser()),
+                            ui::VKEY_DOWN, false, false, false, false);
+
+  // Wait for any IPCs to complete by performing an action that generates an
+  // IPC that's easy to wait for.  Chrome shouldn't crash.
+  bool result = false;
+  ASSERT_TRUE(content::ExecuteJavaScriptAndExtractBool(
+      render_view_host(), L"",
+      L"var city = document.getElementById('city');"
+      L"city.onfocus = function() { domAutomationController.send(true); };"
+      L"city.focus()",
+      &result));
+  ASSERT_TRUE(result);
+  SendKeyAndWait(
+      ui::VKEY_A, chrome::NOTIFICATION_AUTOFILL_DID_SHOW_SUGGESTIONS);
+}
+
 // Test that profiles merge for aggregated data with same address.
 // The criterion for when two profiles are expected to be merged is when their
 // 'Address Line 1' and 'City' data match. When two profiles are merged, any
 // remaining address fields are expected to be overwritten. Any non-address
 // fields should accumulate multi-valued data.
-IN_PROC_BROWSER_TEST_F(AutofillTest, MergeAggregatedProfilesWithSameAddress) {
+// DISABLED: http://crbug.com/150084
+IN_PROC_BROWSER_TEST_F(AutofillTest,
+                       DISABLED_MergeAggregatedProfilesWithSameAddress) {
   AggregateProfilesIntoAutofillPrefs("dataset_2.txt");
 
-  ASSERT_EQ(3u, personal_data_manager()->profiles().size());
+  ASSERT_EQ(3u, personal_data_manager()->GetProfiles().size());
 }
 
 // Test profiles are not merged without mininum address values.
 // Mininum address values needed during aggregation are: address line 1, city,
 // state, and zip code.
 // Profiles are merged when data for address line 1 and city match.
-IN_PROC_BROWSER_TEST_F(AutofillTest, ProfilesNotMergedWhenNoMinAddressData) {
+// DISABLED: http://crbug.com/150084
+IN_PROC_BROWSER_TEST_F(AutofillTest,
+                       DISABLED_ProfilesNotMergedWhenNoMinAddressData) {
   AggregateProfilesIntoAutofillPrefs("dataset_no_address.txt");
 
-  ASSERT_EQ(0u, personal_data_manager()->profiles().size());
+  ASSERT_EQ(0u, personal_data_manager()->GetProfiles().size());
 }
-
-#if defined(OS_LINUX)
-// Has been observed to fail on linux.  crbug.com/146688
-#define MAYBE_MergeAggregatedDuplicatedProfiles \
-    DISABLED_MergeAggregatedDuplicatedProfiles
-#else
-#define MAYBE_MergeAggregatedDuplicatedProfiles \
-    MergeAggregatedDuplicatedProfiles
-#endif
 
 // Test Autofill ability to merge duplicate profiles and throw away junk.
 // TODO(isherman): this looks redundant, consider removing.
-IN_PROC_BROWSER_TEST_F(AutofillTest, MAYBE_MergeAggregatedDuplicatedProfiles) {
+// DISABLED: http://crbug.com/150084
+IN_PROC_BROWSER_TEST_F(AutofillTest,
+                       DISABLED_MergeAggregatedDuplicatedProfiles) {
   int num_of_profiles =
       AggregateProfilesIntoAutofillPrefs("dataset_no_address.txt");
 
   ASSERT_GT(num_of_profiles,
-            static_cast<int>(personal_data_manager()->profiles().size()));
+            static_cast<int>(personal_data_manager()->GetProfiles().size()));
 }

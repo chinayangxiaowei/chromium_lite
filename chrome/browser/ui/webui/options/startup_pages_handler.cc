@@ -90,7 +90,10 @@ void StartupPagesHandler::InitializeHandler() {
   startup_custom_pages_table_model_->SetObserver(this);
 
   pref_change_registrar_.Init(profile->GetPrefs());
-  pref_change_registrar_.Add(prefs::kURLsToRestoreOnStartup, this);
+  pref_change_registrar_.Add(
+      prefs::kURLsToRestoreOnStartup,
+      base::Bind(&StartupPagesHandler::UpdateStartupPages,
+                 base::Unretained(this)));
 
   autocomplete_controller_.reset(new AutocompleteController(profile, this,
       AutocompleteClassifier::kDefaultOmniboxProviders));
@@ -128,22 +131,6 @@ void StartupPagesHandler::OnItemsAdded(int start, int length) {
 
 void StartupPagesHandler::OnItemsRemoved(int start, int length) {
   OnModelChanged();
-}
-
-void StartupPagesHandler::Observe(
-    int type,
-    const content::NotificationSource& source,
-    const content::NotificationDetails& details) {
-  if (type == chrome::NOTIFICATION_PREF_CHANGED) {
-    std::string* pref = content::Details<std::string>(details).ptr();
-    if (*pref == prefs::kURLsToRestoreOnStartup) {
-      UpdateStartupPages();
-    } else {
-      NOTREACHED();
-    }
-  } else {
-    NOTREACHED();
-  }
 }
 
 void StartupPagesHandler::SetStartupPagesToCurrentPages(
@@ -201,6 +188,12 @@ void StartupPagesHandler::EditStartupPage(const ListValue* args) {
 void StartupPagesHandler::DragDropStartupPage(const ListValue* args) {
   CHECK_EQ(args->GetSize(), 2U);
 
+  // TODO(dcheng): Due to http://crbug.com/122102, we can receive drag and drop
+  // events even if there are no entries in the model. Remove this check once
+  // that bug is fixed.
+  if (startup_custom_pages_table_model_->RowCount() == 0)
+    return;
+
   std::string value;
   int to_index;
 
@@ -247,8 +240,9 @@ void StartupPagesHandler::RequestAutocompleteSuggestions(
   CHECK_EQ(args->GetSize(), 1U);
   CHECK(args->GetString(0, &input));
 
-  autocomplete_controller_->Start(input, string16(), true, false, false,
-                                  AutocompleteInput::ALL_MATCHES);
+  autocomplete_controller_->Start(AutocompleteInput(
+      input, string16::npos, string16(), true,
+      false, false, AutocompleteInput::ALL_MATCHES));
 }
 
 void StartupPagesHandler::OnResultChanged(bool default_match_changed) {

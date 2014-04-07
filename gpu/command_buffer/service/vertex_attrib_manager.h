@@ -2,9 +2,13 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#ifndef GPU_COMMAND_BUFFER_SERVICE_VERTEX_ATTRIB_MANAGER_H_
+#define GPU_COMMAND_BUFFER_SERVICE_VERTEX_ATTRIB_MANAGER_H_
+
 #include <list>
+#include <vector>
 #include "base/logging.h"
-#include "base/memory/scoped_ptr.h"
+#include "base/memory/ref_counted.h"
 #include "build/build_config.h"
 #include "gpu/command_buffer/service/buffer_manager.h"
 #include "gpu/command_buffer/service/gl_utils.h"
@@ -13,18 +17,22 @@
 namespace gpu {
 namespace gles2 {
 
+class VertexArrayManager;
+
 // Manages vertex attributes.
-class GPU_EXPORT VertexAttribManager {
+// This class also acts as the service-side representation of a
+// vertex array object and it's contained state.
+class GPU_EXPORT VertexAttribManager :
+    public base::RefCounted<VertexAttribManager> {
  public:
+  typedef scoped_refptr<VertexAttribManager> Ref;
+
   // Info about Vertex Attributes. This is used to track what the user currently
   // has bound on each Vertex Attribute so that checking can be done at
   // glDrawXXX time.
   class GPU_EXPORT VertexAttribInfo {
    public:
     typedef std::list<VertexAttribInfo*> VertexAttribInfoList;
-    struct Vec4 {
-      float v[4];
-    };
 
     VertexAttribInfo();
     ~VertexAttribInfo();
@@ -66,14 +74,6 @@ class GPU_EXPORT VertexAttribManager {
 
     bool enabled() const {
       return enabled_;
-    }
-
-    void set_value(const Vec4& value) {
-      value_ = value;
-    }
-
-    const Vec4& value() const {
-      return value_;
     }
 
     // Find the maximum vertex accessed, accounting for instancing.
@@ -160,9 +160,6 @@ class GPU_EXPORT VertexAttribManager {
 
     GLsizei divisor_;
 
-    // The current value of the attrib.
-    Vec4 value_;
-
     // The buffer bound to this attribute.
     BufferManager::BufferInfo::Ref buffer_;
 
@@ -176,9 +173,8 @@ class GPU_EXPORT VertexAttribManager {
   typedef std::list<VertexAttribInfo*> VertexAttribInfoList;
 
   VertexAttribManager();
-  ~VertexAttribManager();
 
-  void Initialize(uint32 num_vertex_attribs);
+  void Initialize(uint32 num_vertex_attribs, bool init_attribs = true);
 
   bool Enable(GLuint index, bool enable);
 
@@ -191,7 +187,7 @@ class GPU_EXPORT VertexAttribManager {
   }
 
   VertexAttribInfo* GetVertexAttribInfo(GLuint index) {
-    if (index < max_vertex_attribs_) {
+    if (index < vertex_attrib_infos_.size()) {
       return &vertex_attrib_infos_[index];
     }
     return NULL;
@@ -226,22 +222,74 @@ class GPU_EXPORT VertexAttribManager {
     }
   }
 
+  void SetElementArrayBuffer(BufferManager::BufferInfo* buffer) {
+    element_array_buffer_ = buffer;
+  }
+
+  BufferManager::BufferInfo* element_array_buffer() const {
+    return element_array_buffer_;
+  }
+
+  GLuint service_id() const {
+    return service_id_;
+  }
+
   void Unbind(BufferManager::BufferInfo* buffer);
 
+  bool IsDeleted() const {
+    return deleted_;
+  }
+
+  bool IsValid() const {
+    return !IsDeleted();
+  }
+
+  size_t num_attribs() const {
+    return vertex_attrib_infos_.size();
+  }
+
  private:
-  uint32 max_vertex_attribs_;
+  friend class VertexArrayManager;
+  friend class VertexArrayManagerTest;
+  friend class base::RefCounted<VertexAttribManager>;
+
+  // Used when creating from a VertexArrayManager
+  VertexAttribManager(VertexArrayManager* manager, GLuint service_id,
+      uint32 num_vertex_attribs);
+
+  ~VertexAttribManager();
+
+  void MarkAsDeleted() {
+    deleted_ = true;
+  }
 
   // number of attribs using type GL_FIXED.
   int num_fixed_attribs_;
 
   // Info for each vertex attribute saved so we can check at glDrawXXX time
   // if it is safe to draw.
-  scoped_array<VertexAttribInfo> vertex_attrib_infos_;
+  std::vector<VertexAttribInfo> vertex_attrib_infos_;
+
+  // The currently bound element array buffer. If this is 0 it is illegal
+  // to call glDrawElements.
+  BufferManager::BufferInfo::Ref element_array_buffer_;
 
   // Lists for which vertex attribs are enabled, disabled.
   VertexAttribInfoList enabled_vertex_attribs_;
   VertexAttribInfoList disabled_vertex_attribs_;
+
+  // The VertexArrayManager that owns this VertexAttribManager
+  VertexArrayManager* manager_;
+
+  // True if deleted.
+  bool deleted_;
+
+  // Service side vertex array object id.
+  GLuint service_id_;
 };
 
 }  // namespace gles2
 }  // namespace gpu
+
+#endif  // GPU_COMMAND_BUFFER_SERVICE_VERTEX_ATTRIB_MANAGER_H_
+

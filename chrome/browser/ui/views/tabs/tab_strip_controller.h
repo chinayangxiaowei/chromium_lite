@@ -7,8 +7,8 @@
 
 #include "chrome/browser/ui/views/tabs/tab_strip_types.h"
 
-class BaseTab;
 class GURL;
+class Tab;
 class TabStrip;
 class TabStripSelectionModel;
 
@@ -63,7 +63,7 @@ class TabStripController {
   virtual void CloseTab(int index, CloseTabSource source) = 0;
 
   // Shows a context menu for the tab at the specified point in screen coords.
-  virtual void ShowContextMenuForTab(BaseTab* tab, const gfx::Point& p) = 0;
+  virtual void ShowContextMenuForTab(Tab* tab, const gfx::Point& p) = 0;
 
   // Updates the loading animations of all the tabs.
   virtual void UpdateLoadingAnimations() = 0;
@@ -86,10 +86,6 @@ class TabStripController {
 
   // Creates the new tab.
   virtual void CreateNewTab() = 0;
-
-  // Informs that an active tab is selected when already active (ie - clicked
-  // when already active/foreground).
-  virtual void ClickActiveTab(int index) = 0;
 
   // Returns true if the tab strip is in an incognito window.
   virtual bool IsIncognito() = 0;

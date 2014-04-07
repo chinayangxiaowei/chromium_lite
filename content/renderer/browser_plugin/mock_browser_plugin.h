@@ -21,7 +21,8 @@ class MockBrowserPlugin : public BrowserPlugin {
 
   // Allow poking at a few private members.
   using BrowserPlugin::guest_crashed_;
-  using BrowserPlugin::resize_pending_;
+  using BrowserPlugin::pending_damage_buffer_;
+  using BrowserPlugin::damage_buffer_sequence_id_;
 };
 
 }  // namespace content

@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -14,12 +14,11 @@
 #include "chrome/app/chrome_command_ids.h"
 #include "chrome/browser/alternate_nav_url_fetcher.h"
 #import "chrome/browser/app_controller_mac.h"
-#include "chrome/browser/chrome_to_mobile_service.h"
-#include "chrome/browser/chrome_to_mobile_service_factory.h"
 #include "chrome/browser/command_updater.h"
 #include "chrome/browser/defaults.h"
+#include "chrome/browser/extensions/api/omnibox/omnibox_api.h"
 #include "chrome/browser/extensions/api/tabs/tabs.h"
-#include "chrome/browser/extensions/extension_service.h"
+#include "chrome/browser/extensions/extension_action.h"
 #include "chrome/browser/extensions/location_bar_controller.h"
 #include "chrome/browser/extensions/tab_helper.h"
 #include "chrome/browser/prefs/pref_service.h"
@@ -29,7 +28,6 @@
 #include "chrome/browser/search_engines/template_url_service_factory.h"
 #include "chrome/browser/ui/browser_instant_controller.h"
 #include "chrome/browser/ui/browser_list.h"
-#include "chrome/browser/ui/browser_tabstrip.h"
 #import "chrome/browser/ui/cocoa/content_settings/content_setting_bubble_cocoa.h"
 #include "chrome/browser/ui/cocoa/event_utils.h"
 #import "chrome/browser/ui/cocoa/extensions/extension_action_context_menu.h"
@@ -53,13 +51,13 @@
 #include "chrome/browser/ui/intents/web_intent_picker_controller.h"
 #include "chrome/browser/ui/omnibox/location_bar_util.h"
 #import "chrome/browser/ui/omnibox/omnibox_popup_model.h"
-#include "chrome/browser/ui/tab_contents/tab_contents.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
+#include "chrome/browser/ui/zoom/zoom_controller.h"
 #include "chrome/common/chrome_notification_types.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/common/extensions/extension.h"
-#include "chrome/common/extensions/extension_action.h"
 #include "chrome/common/extensions/extension_resource.h"
-#include "chrome/common/extensions/extension_switch_utils.h"
+#include "chrome/common/extensions/feature_switch.h"
 #include "chrome/common/pref_names.h"
 #include "content/public/browser/notification_service.h"
 #include "content/public/browser/web_contents.h"
@@ -115,7 +113,7 @@ LocationBarViewMac::LocationBarViewMac(
           content::PAGE_TRANSITION_TYPED |
           content::PAGE_TRANSITION_FROM_ADDRESS_BAR)),
       weak_ptr_factory_(this) {
-  if (extensions::switch_utils::IsActionBoxEnabled()) {
+  if (extensions::FeatureSwitch::action_box()->IsEnabled()) {
     plus_decoration_.reset(new PlusDecoration(this, browser_));
   }
 
@@ -139,8 +137,11 @@ LocationBarViewMac::LocationBarViewMac(
       chrome::NOTIFICATION_EXTENSION_LOCATION_BAR_UPDATED,
       content::Source<Profile>(browser_->profile()));
 
-  edit_bookmarks_enabled_.Init(prefs::kEditBookmarksEnabled,
-                               profile_->GetPrefs(), this);
+  edit_bookmarks_enabled_.Init(
+      prefs::kEditBookmarksEnabled,
+      profile_->GetPrefs(),
+      base::Bind(&LocationBarViewMac::OnEditBookmarksEnabledChanged,
+                 base::Unretained(this)));
 }
 
 LocationBarViewMac::~LocationBarViewMac() {
@@ -179,9 +180,9 @@ string16 LocationBarViewMac::GetInputString() const {
   return location_input_;
 }
 
-void LocationBarViewMac::SetSuggestedText(const string16& text,
-                                          InstantCompleteBehavior behavior) {
-  omnibox_view_->model()->SetSuggestedText(text, behavior);
+void LocationBarViewMac::SetInstantSuggestion(
+    const InstantSuggestion& suggestion) {
+  omnibox_view_->model()->SetInstantSuggestion(suggestion);
 }
 
 WindowOpenDisposition LocationBarViewMac::GetWindowOpenDisposition() const {
@@ -208,7 +209,7 @@ void LocationBarViewMac::FocusSearch() {
 
 void LocationBarViewMac::UpdateContentSettingsIcons() {
   if (RefreshContentSettingsDecorations()) {
-    [field_ updateCursorAndToolTipRects];
+    [field_ updateMouseTracking];
     [field_ setNeedsDisplay:YES];
   }
 }
@@ -255,7 +256,6 @@ void LocationBarViewMac::Update(const WebContents* contents,
   command_updater_->UpdateCommandEnabled(IDC_BOOKMARK_PAGE, IsStarEnabled());
   UpdateStarDecorationVisibility();
   UpdatePlusDecorationVisibility();
-  UpdateChromeToMobileEnabled();
   UpdateZoomDecoration();
   RefreshPageActionDecorations();
   RefreshContentSettingsDecorations();
@@ -315,7 +315,7 @@ void LocationBarViewMac::OnSelectionBoundsChanged() {
 }
 
 void LocationBarViewMac::OnInputInProgress(bool in_progress) {
-  toolbar_model_->set_input_in_progress(in_progress);
+  toolbar_model_->SetInputInProgress(in_progress);
   Update(NULL, false);
 }
 
@@ -337,11 +337,8 @@ string16 LocationBarViewMac::GetTitle() const {
 }
 
 InstantController* LocationBarViewMac::GetInstant() {
-  return browser_->instant_controller()->instant();
-}
-
-TabContents* LocationBarViewMac::GetTabContents() const {
-  return chrome::GetActiveTabContents(browser_);
+  return browser_->instant_controller() ?
+      browser_->instant_controller()->instant() : NULL;
 }
 
 void LocationBarViewMac::Revert() {
@@ -375,7 +372,7 @@ int LocationBarViewMac::PageActionVisibleCount() {
 }
 
 WebContents* LocationBarViewMac::GetWebContents() const {
-  return chrome::GetActiveWebContents(browser_);
+  return browser_->tab_strip_model()->GetActiveWebContents();
 }
 
 PageActionDecoration* LocationBarViewMac::GetPageActionDecoration(
@@ -479,11 +476,19 @@ void LocationBarViewMac::TestPageActionPressed(size_t index) {
     page_action_decorations_[index]->OnMousePressed(NSZeroRect);
 }
 
+void LocationBarViewMac::TestActionBoxMenuItemSelected(int command_id) {
+  plus_decoration_->action_box_button_controller()->ExecuteCommand(command_id);
+}
+
+bool LocationBarViewMac::GetBookmarkStarVisibility() {
+  DCHECK(star_decoration_.get());
+  return star_decoration_->IsVisible();
+}
+
 void LocationBarViewMac::SetEditable(bool editable) {
   [field_ setEditable:editable ? YES : NO];
   UpdateStarDecorationVisibility();
   UpdatePlusDecorationVisibility();
-  UpdateChromeToMobileEnabled();
   UpdateZoomDecoration();
   UpdatePageActions();
   Layout();
@@ -496,7 +501,7 @@ bool LocationBarViewMac::IsEditable() {
 void LocationBarViewMac::OnDecorationsChanged() {
   // TODO(shess): The field-editor frame and cursor rects should not
   // change, here.
-  [field_ updateCursorAndToolTipRects];
+  [field_ updateMouseTracking];
   [field_ resetFieldEditorFrameIfNeeded];
   [field_ setNeedsDisplay:YES];
 }
@@ -507,8 +512,13 @@ void LocationBarViewMac::SetStarred(bool starred) {
   OnDecorationsChanged();
 }
 
+void LocationBarViewMac::ResetActionBoxIcon() {
+  plus_decoration_->ResetIcon();
+  OnDecorationsChanged();
+}
+
 void LocationBarViewMac::SetActionBoxIcon(int image_id) {
-  plus_decoration_->SetImage(OmniboxViewMac::ImageForResource(image_id));
+  plus_decoration_->SetTemporaryIcon(image_id);
   OnDecorationsChanged();
 }
 
@@ -521,8 +531,7 @@ void LocationBarViewMac::ZoomChangedForActiveTab(bool can_show_bubble) {
 }
 
 NSPoint LocationBarViewMac::GetActionBoxAnchorPoint() const {
-  NSPoint point = plus_decoration_->GetActionBoxAnchorPoint();
-  return [field_ convertPoint:point toView:nil];
+  return plus_decoration_->GetActionBoxAnchorPoint();
 }
 
 NSPoint LocationBarViewMac::GetBookmarkBubblePoint() const {
@@ -554,8 +563,8 @@ NSImage* LocationBarViewMac::GetKeywordImage(const string16& keyword) {
   const TemplateURL* template_url = TemplateURLServiceFactory::GetForProfile(
       profile_)->GetTemplateURLForKeyword(keyword);
   if (template_url && template_url->IsExtensionKeyword()) {
-    return profile_->GetExtensionService()->GetOmniboxIcon(
-        template_url->GetExtensionId()).AsNSImage();
+    return extensions::OmniboxAPI::Get(profile_)->
+        GetOmniboxIcon(template_url->GetExtensionId()).AsNSImage();
   }
 
   return OmniboxViewMac::ImageForResource(IDR_OMNIBOX_SEARCH);
@@ -570,7 +579,7 @@ void LocationBarViewMac::Observe(int type,
       if (content::Details<WebContents>(contents) != details)
         return;
 
-      [field_ updateCursorAndToolTipRects];
+      [field_ updateMouseTracking];
       [field_ setNeedsDisplay:YES];
       break;
     }
@@ -578,21 +587,20 @@ void LocationBarViewMac::Observe(int type,
     case chrome::NOTIFICATION_EXTENSION_LOCATION_BAR_UPDATED: {
       // Only update if the updated action box was for the active tab contents.
       WebContents* target_tab = content::Details<WebContents>(details).ptr();
-      if (target_tab == GetTabContents()->web_contents())
+      if (target_tab == GetWebContents())
         UpdatePageActions();
       break;
     }
-
-    case chrome::NOTIFICATION_PREF_CHANGED:
-      UpdateStarDecorationVisibility();
-      UpdateChromeToMobileEnabled();
-      OnChanged();
-      break;
 
     default:
       NOTREACHED() << "Unexpected notification";
       break;
   }
+}
+
+void LocationBarViewMac::OnEditBookmarksEnabledChanged() {
+  UpdateStarDecorationVisibility();
+  OnChanged();
 }
 
 void LocationBarViewMac::PostNotification(NSString* notification) {
@@ -601,9 +609,9 @@ void LocationBarViewMac::PostNotification(NSString* notification) {
 }
 
 bool LocationBarViewMac::RefreshContentSettingsDecorations() {
-  const bool input_in_progress = toolbar_model_->input_in_progress();
-  WebContents* web_contents =
-      input_in_progress ? NULL : chrome::GetActiveWebContents(browser_);
+  const bool input_in_progress = toolbar_model_->GetInputInProgress();
+  WebContents* web_contents = input_in_progress ?
+      NULL : browser_->tab_strip_model()->GetActiveWebContents();
   bool icons_updated = false;
   for (size_t i = 0; i < content_setting_decorations_.size(); ++i) {
     icons_updated |=
@@ -627,14 +635,14 @@ void LocationBarViewMac::RefreshPageActionDecorations() {
     return;
   }
 
-  TabContents* tab_contents = GetTabContents();
-  if (!tab_contents) {
+  WebContents* web_contents = GetWebContents();
+  if (!web_contents) {
     DeletePageActionDecorations();  // Necessary?
     return;
   }
 
   std::vector<ExtensionAction*> new_page_actions =
-      extensions::TabHelper::FromWebContents(tab_contents->web_contents())->
+      extensions::TabHelper::FromWebContents(web_contents)->
           location_bar_controller()->GetCurrentActions();
 
   if (new_page_actions != page_actions_) {
@@ -649,20 +657,19 @@ void LocationBarViewMac::RefreshPageActionDecorations() {
   GURL url = toolbar_model_->GetURL();
   for (size_t i = 0; i < page_action_decorations_.size(); ++i) {
     page_action_decorations_[i]->UpdateVisibility(
-        toolbar_model_->input_in_progress() ?
-            NULL : tab_contents->web_contents(),
+        toolbar_model_->GetInputInProgress() ? NULL : web_contents,
         url);
   }
 }
 
 void LocationBarViewMac::RefreshWebIntentsButtonDecoration() {
-  TabContents* tab_contents = GetTabContents();
-  if (!tab_contents) {
+  WebContents* web_contents = GetWebContents();
+  if (!web_contents) {
     web_intents_button_decoration_->SetVisible(false);
     return;
   }
 
-  web_intents_button_decoration_->Update(tab_contents);
+  web_intents_button_decoration_->Update(web_contents);
 }
 
 // TODO(shess): This function should over time grow to closely match
@@ -750,38 +757,30 @@ void LocationBarViewMac::RedrawDecoration(LocationBarDecoration* decoration) {
 bool LocationBarViewMac::IsStarEnabled() {
   return [field_ isEditable] &&
          browser_defaults::bookmarks_enabled &&
-         !toolbar_model_->input_in_progress() &&
+         !toolbar_model_->GetInputInProgress() &&
          edit_bookmarks_enabled_.GetValue();
 }
 
-void LocationBarViewMac::UpdateChromeToMobileEnabled() {
-  ChromeToMobileService* chrome_to_mobile_service =
-      ChromeToMobileServiceFactory::GetForProfile(profile_);
-  command_updater_->UpdateCommandEnabled(IDC_CHROME_TO_MOBILE_PAGE,
-      [field_ isEditable] && !toolbar_model_->input_in_progress() &&
-      chrome_to_mobile_service && chrome_to_mobile_service->HasMobiles());
-}
-
 void LocationBarViewMac::UpdateZoomDecoration() {
-  TabContents* tab_contents = GetTabContents();
-  if (!tab_contents)
+  WebContents* web_contents = GetWebContents();
+  if (!web_contents)
     return;
 
-  zoom_decoration_->Update(tab_contents->zoom_controller());
+  zoom_decoration_->Update(ZoomController::FromWebContents(web_contents));
 }
 
 void LocationBarViewMac::UpdateStarDecorationVisibility() {
   // If the action box is enabled, only show the star if it's lit.
   bool visible = IsStarEnabled();
   if (!star_decoration_->starred() &&
-      extensions::switch_utils::IsActionBoxEnabled())
+      extensions::FeatureSwitch::action_box()->IsEnabled())
     visible = false;
   star_decoration_->SetVisible(visible);
 }
 
 void LocationBarViewMac::UpdatePlusDecorationVisibility() {
-  if (extensions::switch_utils::IsActionBoxEnabled()) {
+  if (extensions::FeatureSwitch::action_box()->IsEnabled()) {
     // If the action box is enabled, hide it when input is in progress.
-    plus_decoration_->SetVisible(!toolbar_model_->input_in_progress());
+    plus_decoration_->SetVisible(!toolbar_model_->GetInputInProgress());
   }
 }

@@ -15,11 +15,11 @@
 #include "base/memory/scoped_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "googleurl/src/gurl.h"
-#include "webkit/fileapi/fileapi_export.h"
 #include "webkit/fileapi/file_system_mount_point_provider.h"
 #include "webkit/fileapi/file_system_options.h"
 #include "webkit/fileapi/file_system_quota_util.h"
 #include "webkit/fileapi/task_runner_bound_observer_list.h"
+#include "webkit/storage/webkit_storage_export.h"
 
 namespace base {
 class SequencedTaskRunner;
@@ -31,6 +31,7 @@ class QuotaManagerProxy;
 
 namespace fileapi {
 
+class LocalFileSystemOperation;
 class ObfuscatedFileUtil;
 class SandboxQuotaObserver;
 
@@ -39,7 +40,7 @@ class SandboxQuotaObserver;
 // profile directory in a sandboxed way.
 // This interface also lets one enumerate and remove storage for the origins
 // that use the filesystem.
-class FILEAPI_EXPORT SandboxMountPointProvider
+class WEBKIT_STORAGE_EXPORT SandboxMountPointProvider
     : public FileSystemMountPointProvider,
       public FileSystemQuotaUtil {
  public:
@@ -59,13 +60,8 @@ class FILEAPI_EXPORT SandboxMountPointProvider
     virtual bool HasFileSystemType(FileSystemType type) const = 0;
   };
 
-  // The legacy [pre-obfuscation] FileSystem directory name, kept around for
-  // migration and migration testing.
-  static const FilePath::CharType kOldFileSystemDirectory[];
   // The FileSystem directory name.
-  static const FilePath::CharType kNewFileSystemDirectory[];
-  // Where we move the old filesystem directory if migration fails.
-  static const FilePath::CharType kRenamedOldFileSystemDirectory[];
+  static const FilePath::CharType kFileSystemDirectory[];
 
   static bool CanHandleType(FileSystemType type);
 
@@ -85,9 +81,7 @@ class FILEAPI_EXPORT SandboxMountPointProvider
       bool create,
       const ValidateFileSystemCallback& callback) OVERRIDE;
   virtual FilePath GetFileSystemRootPathOnFileThread(
-      const GURL& origin_url,
-      FileSystemType type,
-      const FilePath& virtual_path,
+      const FileSystemURL& url,
       bool create) OVERRIDE;
   virtual bool IsAccessAllowed(const FileSystemURL& url) OVERRIDE;
   virtual bool IsRestrictedFileName(const FilePath& filename) const OVERRIDE;
@@ -101,6 +95,7 @@ class FILEAPI_EXPORT SandboxMountPointProvider
   virtual webkit_blob::FileStreamReader* CreateFileStreamReader(
       const FileSystemURL& url,
       int64 offset,
+      const base::Time& expected_modification_time,
       FileSystemContext* context) const OVERRIDE;
   virtual FileStreamWriter* CreateFileStreamWriter(
       const FileSystemURL& url,
@@ -112,10 +107,6 @@ class FILEAPI_EXPORT SandboxMountPointProvider
       FileSystemType type,
       FileSystemContext* context,
       const DeleteFileSystemCallback& callback) OVERRIDE;
-
-  FilePath old_base_path() const;
-  FilePath new_base_path() const;
-  FilePath renamed_old_base_path() const;
 
   // Returns an origin enumerator of this provider.
   // This method can only be called on the file thread.
@@ -161,27 +152,51 @@ class FILEAPI_EXPORT SandboxMountPointProvider
   // Returns update observers for the given type.
   const UpdateObserverList* GetUpdateObservers(FileSystemType type) const;
 
-  // Reset all observers.
-  void ResetObservers();
+  void AddSyncableFileUpdateObserver(FileUpdateObserver* observer,
+                                     base::SequencedTaskRunner* task_runner);
+  void AddSyncableFileChangeObserver(FileChangeObserver* observer,
+                                     base::SequencedTaskRunner* task_runner);
+
+  // Returns a LocalFileSystemOperation that can be used to apply changes
+  // to the syncable filesystem.
+  LocalFileSystemOperation* CreateFileSystemOperationForSync(
+      FileSystemContext* file_system_context);
 
  private:
   friend class SandboxQuotaObserver;
+  friend class LocalFileSystemTestOriginHelper;
+  friend class SandboxMountPointProviderMigrationTest;
+  friend class SandboxMountPointProviderOriginEnumeratorTest;
+
+  // Temporarily allowing them to access enable_sync_directory_operation_
+  friend class CannedSyncableFileSystem;
+  friend class ObfuscatedFileUtil;
+  friend class SyncableFileSystemOperation;
 
   // Returns a path to the usage cache file.
   FilePath GetUsageCachePathForOriginAndType(
       const GURL& origin_url,
       FileSystemType type) const;
 
-  FilePath OldCreateFileSystemRootPath(
-      const GURL& origin_url, FileSystemType type);
+  // Returns a path to the usage cache file (static version).
+  static FilePath GetUsageCachePathForOriginAndType(
+      ObfuscatedFileUtil* sandbox_file_util,
+      const GURL& origin_url,
+      FileSystemType type,
+      base::PlatformFileError* error_out);
 
   // Returns true if the given |url|'s scheme is allowed to access
   // filesystem.
   bool IsAllowedScheme(const GURL& url) const;
 
-  friend class LocalFileSystemTestOriginHelper;
-  friend class SandboxMountPointProviderMigrationTest;
-  friend class SandboxMountPointProviderOriginEnumeratorTest;
+  // Enables or disables directory operations in Syncable FileSystem.
+  void set_enable_sync_directory_operation(bool flag) {
+    enable_sync_directory_operation_ = flag;
+  }
+
+  bool is_sync_directory_operation_enabled() const {
+    return enable_sync_directory_operation_;
+  }
 
   scoped_refptr<base::SequencedTaskRunner> file_task_runner_;
 
@@ -200,7 +215,19 @@ class FILEAPI_EXPORT SandboxMountPointProvider
   UpdateObserverList update_observers_;
   AccessObserverList access_observers_;
 
+  // Observers for syncable file systems.
+  UpdateObserverList syncable_update_observers_;
+  ChangeObserverList syncable_change_observers_;
+
   base::Time next_release_time_for_open_filesystem_stat_;
+
+  // Indicates if we allow directory operations in syncable file system
+  // or not. This flag is disabled by default but can be overridden by
+  // a command-line switch (--enable-sync-directory-operations) or by
+  // calling set_enable_sync_directory_operation().
+  // This flag should be used only for testing and should go away when
+  // we fully support directory operations. (http://crbug.com/161442)
+  bool enable_sync_directory_operation_;
 
   base::WeakPtrFactory<SandboxMountPointProvider> weak_factory_;
 

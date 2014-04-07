@@ -28,7 +28,7 @@ using content::BrowserThread;
 
 namespace {
 void SetUrlRequestMock(const FilePath& path) {
-  URLRequestMockHTTPJob::AddUrlHandler(path);
+  content::URLRequestMockHTTPJob::AddUrlHandler(path);
 }
 }
 
@@ -65,7 +65,7 @@ class BrowsingDataRemoverBrowserTest : public InProcessBrowserTest {
 
 // Test BrowsingDataRemover for downloads.
 IN_PROC_BROWSER_TEST_F(BrowsingDataRemoverBrowserTest, Download) {
-  ScopedTempDir downloads_directory;
+  base::ScopedTempDir downloads_directory;
   ASSERT_TRUE(downloads_directory.CreateUniqueTempDir());
   browser()->profile()->GetPrefs()->SetFilePath(
       prefs::kDownloadDefaultDirectory, downloads_directory.path());
@@ -97,7 +97,7 @@ IN_PROC_BROWSER_TEST_F(BrowsingDataRemoverBrowserTest, Download) {
 
 // Verify can modify database after deleting it.
 IN_PROC_BROWSER_TEST_F(BrowsingDataRemoverBrowserTest, Database) {
-  GURL url(URLRequestMockHTTPJob::GetMockUrl(
+  GURL url(content::URLRequestMockHTTPJob::GetMockUrl(
       FilePath().AppendASCII("simple_database.html")));
   ui_test_utils::NavigateToURL(browser(), url);
 
@@ -112,3 +112,8 @@ IN_PROC_BROWSER_TEST_F(BrowsingDataRemoverBrowserTest, Database) {
   RunScriptAndCheckResult(L"insertRecord('text2')", "done");
   RunScriptAndCheckResult(L"getRecords()", "text2");
 }
+
+// Profile::ClearNetworkingHistorySince should be exercised here too see whether
+// the call gets delegated through ProfileIO[Impl]Data properly, which is hard
+// to write unit-tests for. Currently this is done by both of the above tests.
+// Add standalone test if this changes.

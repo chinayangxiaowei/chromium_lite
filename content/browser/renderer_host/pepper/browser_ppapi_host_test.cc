@@ -10,18 +10,20 @@
 namespace content {
 
 BrowserPpapiHostTest::BrowserPpapiHostTest()
-    : sink_(),
-      ppapi_host_(new BrowserPpapiHostImpl(
-            &sink_,
-            ppapi::PpapiPermissions::AllPermissions())) {
+    : sink_() {
+  ppapi_host_.reset(new BrowserPpapiHostImpl(
+                        &sink_,
+                        ppapi::PpapiPermissions::AllPermissions(),
+                        std::string(),
+                        FilePath()));
   ppapi_host_->set_plugin_process_handle(base::GetCurrentProcessHandle());
 }
 
 BrowserPpapiHostTest::~BrowserPpapiHostTest() {
 }
 
-BrowserPpapiHost* BrowserPpapiHostTest::GetPpapiHost() {
-  return ppapi_host_;
+BrowserPpapiHost* BrowserPpapiHostTest::GetBrowserPpapiHost() {
+  return ppapi_host_.get();
 }
 
 }  // namespace content

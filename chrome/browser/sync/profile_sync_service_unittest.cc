@@ -30,7 +30,7 @@
 #include "sync/notifier/fake_invalidation_handler.h"
 #include "sync/notifier/invalidator.h"
 #include "sync/notifier/invalidator_test_template.h"
-#include "sync/notifier/object_id_state_map_test_util.h"
+#include "sync/notifier/object_id_invalidation_map_test_util.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "webkit/user_agent/user_agent.h"
@@ -75,15 +75,18 @@ class ProfileSyncServiceTestHarness {
 
   void TearDown() {
     // Kill the service before the profile.
+    if (service.get()) {
+      service->Shutdown();
+    }
     service.reset();
     profile.reset();
     // Pump messages posted by the sync thread (which may end up
     // posting on the IO thread).
-    ui_loop_.RunAllPending();
+    ui_loop_.RunUntilIdle();
     io_thread_.Stop();
     file_thread_.Stop();
     // Ensure that the sync objects destruct to avoid memory leaks.
-    ui_loop_.RunAllPending();
+    ui_loop_.RunUntilIdle();
   }
 
   // TODO(akalin): Refactor the StartSyncService*() functions below.
@@ -110,8 +113,7 @@ class ProfileSyncServiceTestHarness {
           profile.get(),
           signin,
           ProfileSyncService::AUTO_START,
-          true,
-          base::Closure()));
+          true));
       if (!set_initial_sync_ended)
         service->dont_set_initial_sync_ended_on_init();
       if (synchronous_sync_configuration)
@@ -121,7 +123,7 @@ class ProfileSyncServiceTestHarness {
         profile->GetPrefs()->SetBoolean(prefs::kSyncHasSetupCompleted, false);
 
       // Register the bookmark data type.
-      ON_CALL(*factory, CreateDataTypeManager(_, _, _)).
+      ON_CALL(*factory, CreateDataTypeManager(_, _, _, _)).
           WillByDefault(ReturnNewDataTypeManager());
 
       if (issue_auth_token) {
@@ -154,6 +156,19 @@ class ProfileSyncServiceTestHarness {
   content::TestBrowserThread io_thread_;
 };
 
+class TestProfileSyncServiceObserver : public ProfileSyncServiceObserver {
+ public:
+  explicit TestProfileSyncServiceObserver(ProfileSyncService* service)
+      : service_(service), first_setup_in_progress_(false) {}
+  virtual void OnStateChanged() OVERRIDE {
+    first_setup_in_progress_ = service_->FirstSetupInProgress();
+  }
+  bool first_setup_in_progress() const { return first_setup_in_progress_; }
+ private:
+  ProfileSyncService* service_;
+  bool first_setup_in_progress_;
+};
+
 class ProfileSyncServiceTest : public testing::Test {
  protected:
   virtual void SetUp() {
@@ -175,13 +190,27 @@ TEST_F(ProfileSyncServiceTest, InitialState) {
       harness_.profile.get(),
       signin,
       ProfileSyncService::MANUAL_START,
-      true,
-      base::Closure()));
+      true));
+  harness_.service->Initialize();
   EXPECT_TRUE(
       harness_.service->sync_service_url().spec() ==
         ProfileSyncService::kSyncServerUrl ||
       harness_.service->sync_service_url().spec() ==
         ProfileSyncService::kDevServerUrl);
+}
+
+// Tests that the sync service doesn't forget to notify observers about
+// setup state.
+TEST(ProfileSyncServiceTestBasic, SetupInProgress) {
+  ProfileSyncService service(
+      NULL, NULL, NULL, ProfileSyncService::MANUAL_START);
+  TestProfileSyncServiceObserver observer(&service);
+  service.AddObserver(&observer);
+  service.SetSetupInProgress(true);
+  EXPECT_TRUE(observer.first_setup_in_progress());
+  service.SetSetupInProgress(false);
+  EXPECT_FALSE(observer.first_setup_in_progress());
+  service.RemoveObserver(&observer);
 }
 
 TEST_F(ProfileSyncServiceTest, DisabledByPolicy) {
@@ -195,8 +224,7 @@ TEST_F(ProfileSyncServiceTest, DisabledByPolicy) {
       harness_.profile.get(),
       signin,
       ProfileSyncService::MANUAL_START,
-      true,
-      base::Closure()));
+      true));
   harness_.service->Initialize();
   EXPECT_TRUE(harness_.service->IsManaged());
 }
@@ -212,9 +240,8 @@ TEST_F(ProfileSyncServiceTest, AbortedByShutdown) {
       harness_.profile.get(),
       signin,
       ProfileSyncService::AUTO_START,
-      true,
-      base::Closure()));
-  EXPECT_CALL(*factory, CreateDataTypeManager(_, _, _)).Times(0);
+      true));
+  EXPECT_CALL(*factory, CreateDataTypeManager(_, _, _, _)).Times(0);
   EXPECT_CALL(*factory, CreateBookmarkSyncComponents(_, _)).
       Times(0);
   harness_.service->RegisterDataTypeController(
@@ -237,10 +264,9 @@ TEST_F(ProfileSyncServiceTest, DisableAndEnableSyncTemporarily) {
       harness_.profile.get(),
       signin,
       ProfileSyncService::AUTO_START,
-      true,
-      base::Closure()));
+      true));
   // Register the bookmark data type.
-  EXPECT_CALL(*factory, CreateDataTypeManager(_, _, _)).
+  EXPECT_CALL(*factory, CreateDataTypeManager(_, _, _, _)).
       WillRepeatedly(ReturnNewDataTypeManager());
 
   harness_.IssueTestTokens();
@@ -359,7 +385,7 @@ TEST_F(ProfileSyncServiceTest, TestStartupWithOldSyncData) {
   ASSERT_NE(-1,
             file_util::WriteFile(sync_file3, nonsense3, strlen(nonsense3)));
 
-  harness_.StartSyncServiceAndSetInitialSyncEnded(false, false, true, false,
+  harness_.StartSyncServiceAndSetInitialSyncEnded(true, false, true, false,
                                                   syncer::STORAGE_ON_DISK);
   EXPECT_FALSE(harness_.service->HasSyncSetupCompleted());
   EXPECT_FALSE(harness_.service->sync_initialized());
@@ -370,6 +396,7 @@ TEST_F(ProfileSyncServiceTest, TestStartupWithOldSyncData) {
 
   // Stop the service so we can read the new Sync Data files that were
   // created.
+  harness_.service->Shutdown();
   harness_.service.reset();
 
   // This file should have been deleted when the whole directory was nuked.
@@ -394,6 +421,45 @@ TEST_F(ProfileSyncServiceTest, FailToOpenDatabase) {
   EXPECT_FALSE(harness_.service->sync_initialized());
 }
 
+// This setup will allow the database to exist, but leave it empty.  The attempt
+// to download control types will silently fail (no downloads have any effect in
+// these tests).  The sync_backend_host will notice this and inform the profile
+// sync service of the failure to initialize the backed.
+TEST_F(ProfileSyncServiceTest, FailToDownloadControlTypes) {
+  harness_.StartSyncServiceAndSetInitialSyncEnded(false, true, true, true,
+                                                  syncer::STORAGE_IN_MEMORY);
+
+  // The backend is not ready.  Ensure the PSS knows this.
+  EXPECT_FALSE(harness_.service->sync_initialized());
+}
+
+// Register a handler with the ProfileSyncService, and disable and
+// reenable sync.  The handler should get notified of the state
+// changes.
+// Flaky on all platforms. http://crbug.com/154491
+TEST_F(ProfileSyncServiceTest, FLAKY_DisableInvalidationsOnStop) {
+  harness_.StartSyncServiceAndSetInitialSyncEnded(
+      true, true, true, true, syncer::STORAGE_IN_MEMORY);
+
+  syncer::FakeInvalidationHandler handler;
+  harness_.service->RegisterInvalidationHandler(&handler);
+
+  SyncBackendHostForProfileSyncTest* const backend =
+      harness_.service->GetBackendForTest();
+
+  backend->EmitOnInvalidatorStateChange(syncer::INVALIDATIONS_ENABLED);
+  EXPECT_EQ(syncer::INVALIDATIONS_ENABLED, handler.GetInvalidatorState());
+
+  harness_.service->StopAndSuppress();
+  EXPECT_EQ(syncer::TRANSIENT_INVALIDATION_ERROR,
+            handler.GetInvalidatorState());
+
+  harness_.service->UnsuppressAndStart();
+  EXPECT_EQ(syncer::INVALIDATIONS_ENABLED, handler.GetInvalidatorState());
+
+  harness_.service->UnregisterInvalidationHandler(&handler);
+}
+
 // Register for some IDs with the ProfileSyncService, restart sync,
 // and trigger some invalidation messages.  They should still be
 // received by the handler.
@@ -402,8 +468,8 @@ TEST_F(ProfileSyncServiceTest, UpdateRegisteredInvalidationIdsPersistence) {
 
   syncer::ObjectIdSet ids;
   ids.insert(invalidation::ObjectId(3, "id3"));
-  const syncer::ObjectIdStateMap& states =
-      syncer::ObjectIdSetToStateMap(ids, "payload");
+  const syncer::ObjectIdInvalidationMap& states =
+      syncer::ObjectIdSetToInvalidationMap(ids, "payload");
 
   syncer::FakeInvalidationHandler handler;
 
@@ -420,12 +486,14 @@ TEST_F(ProfileSyncServiceTest, UpdateRegisteredInvalidationIdsPersistence) {
   EXPECT_EQ(syncer::INVALIDATIONS_ENABLED, handler.GetInvalidatorState());
 
   backend->EmitOnIncomingInvalidation(states, syncer::REMOTE_INVALIDATION);
-  EXPECT_THAT(states, Eq(handler.GetLastInvalidationIdStateMap()));
+  EXPECT_THAT(states, Eq(handler.GetLastInvalidationMap()));
   EXPECT_EQ(syncer::REMOTE_INVALIDATION, handler.GetLastInvalidationSource());
 
   backend->EmitOnInvalidatorStateChange(syncer::TRANSIENT_INVALIDATION_ERROR);
   EXPECT_EQ(syncer::TRANSIENT_INVALIDATION_ERROR,
             handler.GetInvalidatorState());
+
+  harness_.service->UnregisterInvalidationHandler(&handler);
 }
 
 // Thin Invalidator wrapper around ProfileSyncService.
@@ -469,7 +537,7 @@ class ProfileSyncServiceInvalidator : public syncer::Invalidator {
   }
 
   virtual void SendInvalidation(
-      const syncer::ObjectIdStateMap& id_state_map) OVERRIDE {
+      const syncer::ObjectIdInvalidationMap& invalidation_map) OVERRIDE {
     // Do nothing.
   }
 
@@ -521,10 +589,10 @@ class ProfileSyncServiceInvalidatorTestDelegate {
   }
 
   void TriggerOnIncomingInvalidation(
-      const syncer::ObjectIdStateMap& id_state_map,
+      const syncer::ObjectIdInvalidationMap& invalidation_map,
       syncer::IncomingInvalidationSource source) {
     harness_.service->GetBackendForTest()->EmitOnIncomingInvalidation(
-        id_state_map, source);
+        invalidation_map, source);
   }
 
   static bool InvalidatorHandlesDeprecatedState() {

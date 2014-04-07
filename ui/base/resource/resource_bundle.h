@@ -33,6 +33,7 @@ class RefCountedStaticMemory;
 
 namespace ui {
 
+class DataPack;
 class ResourceHandle;
 
 // ResourceBundle is a central facility to load images and other resources,
@@ -115,7 +116,17 @@ class UI_EXPORT ResourceBundle {
   // the |delegate| value. Returns the language selected.
   // NOTE: Mac ignores this and always loads up resources for the language
   // defined by the Cocoa UI (i.e., NSBundle does the language work).
+  //
+  // TODO(sergeyu): This method also loads common resources (i.e. chrome.pak).
+  // There is no way to specify which resource files are loaded, i.e. names of
+  // the files are hardcoded in ResourceBundle. Fix it to allow to specify which
+  // files are loaded (e.g. add a new method in Delegate).
   static std::string InitSharedInstanceWithLocale(
+      const std::string& pref_locale, Delegate* delegate);
+
+  // Same as InitSharedInstanceWithLocale(), but loads only localized resources,
+  // without default resource packs.
+  static std::string InitSharedInstanceLocaleOnly(
       const std::string& pref_locale, Delegate* delegate);
 
   // Initialize the ResourceBundle using given file. The second argument
@@ -165,20 +176,12 @@ class UI_EXPORT ResourceBundle {
   // on another thread.
   std::string ReloadLocaleResources(const std::string& pref_locale);
 
-  // Gets the bitmap with the specified resource_id from the current module
-  // data. Returns a pointer to a shared instance of the SkBitmap. This shared
-  // bitmap is owned by the resource bundle and should not be freed.
-  //
-  // !! THIS IS DEPRECATED. PLEASE USE THE METHOD BELOW. !!
-  SkBitmap* GetBitmapNamed(int resource_id);
-
   // Gets image with the specified resource_id from the current module data.
   // Returns a pointer to a shared instance of gfx::ImageSkia. This shared
   // instance is owned by the resource bundle and should not be freed.
   // TODO(pkotwicz): Make method return const gfx::ImageSkia*
   //
-  // NOTE: It is preferrable to use GetImageNamed such that code is more
-  // portable.
+  // NOTE: GetNativeImageNamed is preferred for cross-platform gfx::Image use.
   gfx::ImageSkia* GetImageSkiaNamed(int resource_id);
 
   // Gets an image resource from the current module data. This will load the
@@ -199,19 +202,28 @@ class UI_EXPORT ResourceBundle {
   // Same as GetNativeImageNamed() except that RTL is not enabled.
   gfx::Image& GetNativeImageNamed(int resource_id);
 
+  // Loads the raw bytes of a scale independent data resource.
+  base::RefCountedStaticMemory* LoadDataResourceBytes(int resource_id) const;
+
   // Loads the raw bytes of a data resource nearest the scale factor
-  // |scale_factor| into |bytes|, without doing any processing or interpretation
-  // of the resource. Use ResourceHandle::SCALE_FACTOR_NONE for non-image
-  // resources. Returns NULL if we fail to read the resource.
-  base::RefCountedStaticMemory* LoadDataResourceBytes(
+  // |scale_factor| into |bytes|, without doing any processing or
+  // interpretation of the resource. Use ResourceHandle::SCALE_FACTOR_NONE
+  // for scale independent image resources (such as wallpaper).
+  // Returns NULL if we fail to read the resource.
+  base::RefCountedStaticMemory* LoadDataResourceBytesForScale(
       int resource_id,
       ScaleFactor scale_factor) const;
 
+  // Return the contents of a scale independent resource in a
+  // StringPiece given the resource id
+  base::StringPiece GetRawDataResource(int resource_id) const;
+
   // Return the contents of a resource in a StringPiece given the resource id
   // nearest the scale factor |scale_factor|.
-  // Use ResourceHanlde::SCALE_FACTOR_NONE for non-image resources.
-  base::StringPiece GetRawDataResource(int resource_id,
-                                       ScaleFactor scale_factor) const;
+  // Use ResourceHandle::SCALE_FACTOR_NONE for scale independent image resources
+  // (such as wallpaper).
+  base::StringPiece GetRawDataResourceForScale(int resource_id,
+                                               ScaleFactor scale_factor) const;
 
   // Get a localized string given a message id.  Returns an empty
   // string if the message_id is not found.
@@ -235,18 +247,19 @@ class UI_EXPORT ResourceBundle {
   FilePath GetLocaleFilePath(const std::string& app_locale,
                              bool test_file_exists);
 
+  // Returns the maximum scale factor currently loaded.
+  // Returns SCALE_FACTOR_100P if no resource is loaded.
+  ScaleFactor max_scale_factor() const {
+    return max_scale_factor_;
+  }
+
  private:
-  FRIEND_TEST_ALL_PREFIXES(ResourceBundle, DelegateGetPathForResourcePack);
-  FRIEND_TEST_ALL_PREFIXES(ResourceBundle, DelegateGetPathForLocalePack);
-  FRIEND_TEST_ALL_PREFIXES(ResourceBundle, DelegateGetImageNamed);
-  FRIEND_TEST_ALL_PREFIXES(ResourceBundle, DelegateGetNativeImageNamed);
-  FRIEND_TEST_ALL_PREFIXES(ResourceBundle, DelegateLoadDataResourceBytes);
-  FRIEND_TEST_ALL_PREFIXES(ResourceBundle, DelegateGetRawDataResource);
-  FRIEND_TEST_ALL_PREFIXES(ResourceBundle, DelegateGetLocalizedString);
-  FRIEND_TEST_ALL_PREFIXES(ResourceBundle, DelegateGetFont);
-  FRIEND_TEST_ALL_PREFIXES(ResourceBundle, GetRawDataResource);
-  FRIEND_TEST_ALL_PREFIXES(ResourceBundle, LoadDataResourceBytes);
-  FRIEND_TEST_ALL_PREFIXES(ResourceBundle, LocaleDataPakExists);
+  FRIEND_TEST_ALL_PREFIXES(ResourceBundleTest, DelegateGetPathForLocalePack);
+  FRIEND_TEST_ALL_PREFIXES(ResourceBundleTest, DelegateGetImageNamed);
+  FRIEND_TEST_ALL_PREFIXES(ResourceBundleTest, DelegateGetNativeImageNamed);
+
+  friend class ResourceBundleImageTest;
+  friend class ResourceBundleTest;
 
   class ResourceBundleImageSource;
   friend class ResourceBundleImageSource;
@@ -267,6 +280,10 @@ class UI_EXPORT ResourceBundle {
                                    ScaleFactor scale_factor,
                                    bool optional);
 
+  // Inserts |data_pack| to |data_pack_| and updates |max_scale_factor_|
+  // accordingly.
+  void AddDataPack(DataPack* data_pack);
+
   // Try to load the locale specific strings from an external data module.
   // Returns the locale that is loaded.
   std::string LoadLocaleResources(const std::string& pref_locale);
@@ -282,14 +299,24 @@ class UI_EXPORT ResourceBundle {
   // Initialize all the gfx::Font members if they haven't yet been initialized.
   void LoadFontsIfNecessary();
 
-  // Creates and returns a new SkBitmap given the data file to look in and the
-  // |resource_id|.  It's up to the caller to free the returned bitmap when
-  // done.
-  SkBitmap* LoadBitmap(const ResourceHandle& dll_inst, int resource_id) const;
+  // Fills the |bitmap| given the data file to look in and the |resource_id|.
+  // Returns false if the resource does not exist.
+  //
+  // If the call succeeds, |fell_back_to_1x| indicates whether Chrome's custom
+  // csCl PNG chunk is present (added by GRIT if it falls back to a 100% image).
+  bool LoadBitmap(const ResourceHandle& data_handle,
+                  int resource_id,
+                  SkBitmap* bitmap,
+                  bool* fell_back_to_1x) const;
 
-  // Creates and returns a new SkBitmap for |resource_id| and |scale_factor|.
-  // Returns NULL if the resource does not exist.
-  SkBitmap* LoadBitmap(int resource_id, ScaleFactor scale_factor) const;
+  // Fills the |bitmap| given the |resource_id| and |scale_factor|.
+  // Returns false if the resource does not exist. This may fall back to
+  // the data pack with SCALE_FACTOR_NONE, and when this happens,
+  // |scale_factor| will be set to SCALE_FACTOR_100P.
+  bool LoadBitmap(int resource_id,
+                  ScaleFactor* scale_factor,
+                  SkBitmap* bitmap,
+                  bool* fell_back_to_1x) const;
 
   // Returns an empty image for when a resource cannot be loaded. This is a
   // bright red bitmap.
@@ -310,6 +337,9 @@ class UI_EXPORT ResourceBundle {
   // Handles for data sources.
   scoped_ptr<ResourceHandle> locale_resources_data_;
   ScopedVector<ResourceHandle> data_packs_;
+
+  // The maximum scale factor currently loaded.
+  ScaleFactor max_scale_factor_;
 
   // Cached images. The ResourceBundle caches all retrieved images and keeps
   // ownership of the pointers.

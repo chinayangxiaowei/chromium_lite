@@ -12,10 +12,16 @@
 #include "base/message_loop.h"
 #include "chromeos/dbus/dbus_method_call_status.h"
 #include "chromeos/dbus/shill_client_helper.h"
+#include "chromeos/dbus/shill_property_changed_observer.h"
 #include "dbus/mock_bus.h"
 #include "dbus/mock_object_proxy.h"
 #include "dbus/object_proxy.h"
 #include "testing/gtest/include/gtest/gtest.h"
+
+using ::testing::MatcherInterface;
+using ::testing::MatchResultListener;
+using ::testing::Matcher;
+using ::testing::MakeMatcher;
 
 namespace base {
 
@@ -32,6 +38,25 @@ class MessageReader;
 
 namespace chromeos {
 
+// A gmock matcher for base::Value types, so we can match them in expectations.
+class ValueMatcher : public MatcherInterface<const base::Value&> {
+ public:
+  explicit ValueMatcher(const base::Value& value);
+
+  // MatcherInterface overrides.
+  virtual bool MatchAndExplain(const base::Value& value,
+                               MatchResultListener* listener) const OVERRIDE;
+  virtual void DescribeTo(::std::ostream* os) const OVERRIDE;
+  virtual void DescribeNegationTo(::std::ostream* os) const OVERRIDE;
+
+ private:
+  scoped_ptr<base::Value> expected_value_;
+};
+
+inline Matcher<const base::Value&> ValueEq(const base::Value& expected_value) {
+  return MakeMatcher(new ValueMatcher(expected_value));
+}
+
 // A class to provide functionalities needed for testing Shill D-Bus clients.
 class ShillClientUnittestBase : public testing::Test {
  public:
@@ -44,14 +69,32 @@ class ShillClientUnittestBase : public testing::Test {
     base::Closure GetCallback();
   };
 
+  class MockListValueCallback {
+   public:
+    MockListValueCallback();
+    ~MockListValueCallback();
+    MOCK_METHOD1(Run, void(const base::ListValue& list));
+    ShillClientHelper::ListValueCallback GetCallback();
+  };
+
   // A mock ErrorCallback.
   class MockErrorCallback {
    public:
     MockErrorCallback();
     ~MockErrorCallback();
     MOCK_METHOD2(Run, void(const std::string& error_name,
-                           const std::string& error_mesage));
+                           const std::string& error_message));
     ShillClientHelper::ErrorCallback GetCallback();
+  };
+
+  // A mock PropertyChangedObserver that can be used to check expected values.
+  class MockPropertyChangeObserver
+      : public ShillPropertyChangedObserver {
+   public:
+    MockPropertyChangeObserver();
+    ~MockPropertyChangeObserver();
+    MOCK_METHOD2(OnPropertyChanged, void(const std::string& name,
+                                         const base::Value& value));
   };
 
   explicit ShillClientUnittestBase(const std::string& interface_name,
@@ -87,6 +130,10 @@ class ShillClientUnittestBase : public testing::Test {
   static void ExpectStringArgument(const std::string& expected_string,
                                    dbus::MessageReader* reader);
 
+  static void ExpectArrayOfStringsArgument(
+      const std::vector<std::string>& expected_strings,
+      dbus::MessageReader* reader);
+
   // Expects the reader to have a Value.
   static void ExpectValueArgument(const base::Value* expected_value,
                                   dbus::MessageReader* reader);
@@ -105,9 +152,19 @@ class ShillClientUnittestBase : public testing::Test {
                                      const dbus::ObjectPath& result);
 
   // Checks the result and expects the call status to be SUCCESS.
+  static void ExpectObjectPathResultWithoutStatus(
+      const dbus::ObjectPath& expected_result,
+      const dbus::ObjectPath& result);
+
+  // Checks the result and expects the call status to be SUCCESS.
   static void ExpectDictionaryValueResult(
       const base::DictionaryValue* expected_result,
       DBusMethodCallStatus call_status,
+      const base::DictionaryValue& result);
+
+  // Expects the |expected_result| to match the |result|.
+  static void ExpectDictionaryValueResultWithoutStatus(
+      const base::DictionaryValue* expected_result,
       const base::DictionaryValue& result);
 
   // A message loop to emulate asynchronous behavior.

@@ -81,6 +81,13 @@ class ImageLoadingTrackerTest : public testing::Test,
     if (!valid_value.get())
       return NULL;
 
+    if (location == Extension::COMPONENT) {
+      if (!PathService::Get(chrome::DIR_RESOURCES, &test_file)) {
+        EXPECT_FALSE(true);
+        return NULL;
+      }
+      test_file = test_file.AppendASCII(name);
+    }
     return Extension::Create(test_file, location, *valid_value,
                              Extension::NO_FLAGS, &error);
   }
@@ -236,25 +243,4 @@ TEST_F(ImageLoadingTrackerTest, MultipleImages) {
             img_rep1->pixel_width());
   EXPECT_EQ(extension_misc::EXTENSION_ICON_SMALLISH,
             img_rep2->pixel_width());
-}
-
-// Tests IsComponentExtensionResource function.
-TEST_F(ImageLoadingTrackerTest, IsComponentExtensionResource) {
-  scoped_refptr<Extension> extension(CreateExtension(
-      "file_manager", Extension::COMPONENT));
-  ASSERT_TRUE(extension.get() != NULL);
-
-  ExtensionResource resource =
-      extension->GetIconResource(extension_misc::EXTENSION_ICON_BITTY,
-                                 ExtensionIconSet::MATCH_EXACTLY);
-
-#if defined(FILE_MANAGER_EXTENSION)
-  ImageLoadingTracker loader(this);
-  int resource_id;
-  ASSERT_EQ(true,
-            loader.IsComponentExtensionResource(extension.get(),
-                                                resource,
-                                                resource_id));
-  ASSERT_EQ(IDR_FILE_MANAGER_ICON_16, resource_id);
-#endif
 }

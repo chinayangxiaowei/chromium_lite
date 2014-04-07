@@ -5,6 +5,7 @@
 #include "base/base_switches.h"
 #include "base/command_line.h"
 #include "base/debug/debugger.h"
+#include "base/debug/stack_trace.h"
 #include "base/debug/trace_event.h"
 #include "base/hi_res_timer_manager.h"
 #include "base/i18n/rtl.h"
@@ -24,6 +25,7 @@
 #include "content/public/common/content_switches.h"
 #include "content/public/common/main_function_params.h"
 #include "content/public/renderer/content_renderer_client.h"
+#include "content/renderer/browser_plugin/browser_plugin_manager_impl.h"
 #include "content/renderer/render_process_impl.h"
 #include "content/renderer/render_thread_impl.h"
 #include "content/renderer/renderer_main_platform_delegate.h"
@@ -37,48 +39,10 @@
 
 #include "base/mac/mac_util.h"
 #include "base/mac/scoped_nsautorelease_pool.h"
-#include "third_party/mach_override/mach_override.h"
 #include "third_party/WebKit/Source/WebKit/chromium/public/WebView.h"
 #endif  // OS_MACOSX
 
-namespace {
-
-#if defined(OS_MACOSX)
-
-CFArrayRef ChromeTISCreateInputSourceList(
-   CFDictionaryRef properties,
-   Boolean includeAllInstalled) {
-  CFTypeRef values[] = { CFSTR("") };
-  return CFArrayCreate(
-      kCFAllocatorDefault, values, arraysize(values), &kCFTypeArrayCallBacks);
-}
-
-void InstallFrameworkHacks() {
-  // See http://crbug.com/31225
-  // TODO: Don't do this on newer OS X revisions that have a fix for
-  // http://openradar.appspot.com/radar?id=1156410
-  // To check if this is broken:
-  // 1. Enable Multi language input (simplified chinese)
-  // 2. Ensure "Show/Hide Trackpad Handwriting" shortcut works.
-  //    (ctrl+shift+space).
-  // 3. Now open a new tab in Google Chrome or start Google Chrome
-  // 4. Try ctrl+shift+space shortcut again. Shortcut will not work, IME will
-  //    either not appear or (worse) not disappear on ctrl-shift-space.
-  //    (Run `ps aux | grep Chinese` (10.6/10.7) or `ps aux | grep Trackpad`
-  //    and then kill that pid to make it go away.)
-
-  // Chinese Handwriting was introduced in 10.6 and is confirmed broken on
-  // 10.6, 10.7, and 10.8.
-  mach_error_t err = mach_override_ptr(
-      (void*)&TISCreateInputSourceList,
-      (void*)&ChromeTISCreateInputSourceList,
-      NULL);
-  CHECK_EQ(err_none, err);
-}
-
-#endif  // OS_MACOSX
-
-}  // namespace
+namespace content {
 
 // This function provides some ways to test crash and assertion handling
 // behavior of the renderer.
@@ -121,14 +85,13 @@ class RendererMessageLoopObserver : public MessageLoop::TaskObserver {
 };
 
 // mainline routine for running as the Renderer process
-int RendererMain(const content::MainFunctionParams& parameters) {
+int RendererMain(const MainFunctionParams& parameters) {
   TRACE_EVENT_BEGIN_ETW("RendererMain", 0, "");
 
   const CommandLine& parsed_command_line = parameters.command_line;
 
 #if defined(OS_MACOSX)
   base::mac::ScopedNSAutoreleasePool* pool = parameters.autorelease_pool;
-  InstallFrameworkHacks();
 #endif  // OS_MACOSX
 
 #if defined(OS_CHROMEOS)
@@ -153,7 +116,7 @@ int RendererMain(const content::MainFunctionParams& parameters) {
 
   webkit::ppapi::PpapiInterfaceFactoryManager* factory_manager =
       webkit::ppapi::PpapiInterfaceFactoryManager::GetInstance();
-  content::GetContentClient()->renderer()->RegisterPPAPIInterfaceFactories(
+  GetContentClient()->renderer()->RegisterPPAPIInterfaceFactories(
       factory_manager);
 
   base::StatsCounterTimer stats_counter_timer("Content.RendererInit");
@@ -216,7 +179,7 @@ int RendererMain(const content::MainFunctionParams& parameters) {
       // For convenience, we print the stack trace for crashes. We can't get
       // symbols when the sandbox is enabled, so only try when the sandbox is
       // disabled.
-      base::EnableInProcessStackDumping();
+      base::debug::EnableInProcessStackDumping();
 #endif
     }
 #if defined(OS_POSIX) && !defined(OS_MACOSX)
@@ -224,7 +187,7 @@ int RendererMain(const content::MainFunctionParams& parameters) {
     new RenderThreadImpl();
 #endif
 
-    platform.RunSandboxTests();
+    platform.RunSandboxTests(no_sandbox);
 
     startup_timer.Stop();  // End of Startup Time Measurement.
 
@@ -242,3 +205,5 @@ int RendererMain(const content::MainFunctionParams& parameters) {
   TRACE_EVENT_END_ETW("RendererMain", 0, "");
   return 0;
 }
+
+}  // namespace content

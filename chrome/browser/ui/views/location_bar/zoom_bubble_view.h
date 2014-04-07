@@ -12,7 +12,9 @@
 #include "ui/views/controls/button/text_button.h"
 #include "ui/views/controls/label.h"
 
-class TabContents;
+namespace content {
+class WebContents;
+}
 
 // View used to display the zoom percentage when it has changed.
 class ZoomBubbleView : public views::BubbleDelegateView,
@@ -21,14 +23,18 @@ class ZoomBubbleView : public views::BubbleDelegateView,
   // Shows the bubble and automatically closes it after a short time period if
   // |auto_close| is true.
   static void ShowBubble(views::View* anchor_view,
-                         TabContents* tab_contents,
+                         content::WebContents* web_contents,
                          bool auto_close);
+
+  // Closes the showing bubble (if one exists).
   static void CloseBubble();
+
+  // Whether the zoom bubble is currently showing.
   static bool IsShowing();
 
  private:
   ZoomBubbleView(views::View* anchor_view,
-                 TabContents* tab_contents,
+                 content::WebContents* web_contents,
                  bool auto_close);
   virtual ~ZoomBubbleView();
 
@@ -47,6 +53,9 @@ class ZoomBubbleView : public views::BubbleDelegateView,
   // views::View method.
   virtual void OnMouseEntered(const ui::MouseEvent& event) OVERRIDE;
   virtual void OnMouseExited(const ui::MouseEvent& event) OVERRIDE;
+
+  // ui::EventHandler method.
+  virtual void OnGestureEvent(ui::GestureEvent* event) OVERRIDE;
 
   // views::ButtonListener method.
   virtual void ButtonPressed(views::Button* sender,
@@ -67,8 +76,8 @@ class ZoomBubbleView : public views::BubbleDelegateView,
   // Label displaying the zoom percentage.
   views::Label* label_;
 
-  // The TabContents for the page whose zoom has changed.
-  TabContents* tab_contents_;
+  // The WebContents for the page whose zoom has changed.
+  content::WebContents* web_contents_;
 
   // Whether the currently displayed bubble will automatically close.
   bool auto_close_;

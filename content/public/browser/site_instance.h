@@ -10,10 +10,9 @@
 #include "content/common/content_export.h"
 #include "googleurl/src/gurl.h"
 
-class BrowsingInstance;
-
 namespace content {
 class BrowserContext;
+class BrowsingInstance;
 class RenderProcessHost;
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -89,7 +88,7 @@ class CONTENT_EXPORT SiteInstance : public base::RefCounted<SiteInstance> {
 
   // Get the web site that this SiteInstance is rendering pages for.
   // This includes the scheme and registered domain, but not the port.
-  virtual const GURL& GetSite() const = 0;
+  virtual const GURL& GetSiteURL() const = 0;
 
   // Gets a SiteInstance for the given URL that shares the current
   // BrowsingInstance, creating a new SiteInstance if necessary.  This ensures
@@ -134,6 +133,10 @@ class CONTENT_EXPORT SiteInstance : public base::RefCounted<SiteInstance> {
   // if they both set their document.domain properties to google.com.)
   static bool IsSameWebSite(content::BrowserContext* browser_context,
                             const GURL& url1, const GURL& url2);
+
+  // Returns the site for the given URL, which includes only the scheme and
+  // registered domain.  Returns an empty GURL if the URL has no host.
+  static GURL GetSiteForURL(BrowserContext* context, const GURL& url);
 
  protected:
   friend class base::RefCounted<SiteInstance>;

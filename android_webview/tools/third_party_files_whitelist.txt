@@ -1,4 +1,3 @@
-#!/usr/bin/python
 # Copyright (c) 2012 The Chromium Authors. All rights reserved.
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
@@ -39,8 +38,6 @@ chrome/app/chromium_strings.grd
 chrome/app/generated_resources.grd
 # String 'copyright' used in resources.
 chrome/app/google_chrome_strings.grd
-# String 'copyright' used in resources.
-chrome/app/theme/chromium/BRANDING
 # Copyright Netscape Communications Corporation; MPL, GPL v2 or LGPL v2
 # license. This third-party code is taken from Mozilla, the license for which
 # we already pick up from third_party/npapi/.
@@ -100,7 +97,7 @@ chrome/browser/resources/help/help.html
 # String 'copyright' used in code.
 chrome/browser/resources/shared/css/about_version.css
 # String 'copyright' used in code.
-chrome/browser/ui/webui/about_ui.cc
+chrome/browser/ui/webui/version_ui.cc
 # String 'copyright' used in code.
 chrome/browser/ui/webui/help/help_handler.cc
 # Copyright Google Inc; no license. Example code only.
@@ -113,11 +110,9 @@ chrome_frame/cfinstall/examples/simple.html
 # on Android.
 chrome_frame/CFInstance.js
 # String 'copyright' used in resources.
-chrome_frame/chrome_frame_helper_version.rc
+chrome_frame/chrome_frame_version.rc.version
 # String 'copyright' used in resources.
-chrome_frame/chrome_launcher_version.rc
-# String 'copyright' used in resources.
-chrome_frame/chrome_tab_version.rc
+chrome_frame/npchrome_frame_version.rc.version
 # Copyright Mark Mentovai; MPL, GPL v2 or LGPL v2 license. Not used on Android.
 chrome/installer/mac/pkg-dmg
 # String 'copyright' used in resources.
@@ -146,11 +141,6 @@ content/browser/renderer_host/web_input_event_aurax11.cc
 google_update/google_update_idl.idl
 # Uses word 'copyright'.
 LICENSE
-# Copyright Loren Merritt, Anton Mitrofanov and Jason Garrett-Glaser; ISC
-# license. Not used on Android.
-media/base/simd/x86inc.asm
-# String 'copyright' used in resources.
-media/tools/player_wtl/player_wtl.rc
 # Copyright The Chromium Authors and Netscape Communications Corporation; BSD
 # and (MPL, GPL v2 or LGPL v2) licenses. This third-party code is taken from
 # Mozilla, the license for which we already pick up from third_party/npapi/.
@@ -215,7 +205,7 @@ remoting/branding_Chromium
 # String 'copyright' used in project file.
 remoting/host/installer/mac/uninstaller/remoting_uninstaller-Info.plist
 # String 'copyright' used in project file.
-remoting/host/me2me_preference_pane-Info.plist
+remoting/host/mac/me2me_preference_pane-Info.plist
 # String 'copyright' used in project file.
 remoting/host/remoting_me2me_host-Info.plist
 # String 'copyright' used in file.
@@ -246,6 +236,8 @@ tools/git/update-copyrights.sh
 tools/json_schema_compiler/cpp_util.py
 # String 'copyright' used in code.
 tools/json_schema_compiler/idl_schema.py
+# String 'copyright' used in code.
+tools/json_to_struct/json_to_struct.py
 # String 'copyright' used in resources.
 tools/measure_page_load_time/ie_bho/MeasurePageLoadTime.rc
 # String 'copyright' used in code.

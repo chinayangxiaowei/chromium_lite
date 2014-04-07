@@ -106,10 +106,6 @@ class UI_EXPORT TouchFactory {
   // is immediately displayed.
   bool is_cursor_visible_;
 
-  // Touch events are currently disabled by default. It can be turned on using
-  // |kEnableTouchEvents| switch.
-  bool touch_events_allowed_;
-
   // The cursor is hidden if it is idle for a certain amount time. This timer
   // is used to keep track of the idleness.
   base::OneShotTimer<TouchFactory> cursor_timer_;
@@ -139,8 +135,8 @@ class UI_EXPORT TouchFactory {
   // Indicates whether a touch device is currently available or not.
   bool touch_device_available_;
 
-  // Whether IsTouchDevicePresent() has been called yet.
-  bool touch_present_called_;
+  // Indicates whether touch events are explicitly disabled.
+  bool touch_events_disabled_;
 
   // The list of touch devices. For testing/debugging purposes, a single-pointer
   // device (mouse or touch screen without sufficient X/driver support for MT)

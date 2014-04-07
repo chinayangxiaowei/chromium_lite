@@ -74,9 +74,19 @@ void RenderTextMac::GetGlyphBounds(size_t index,
   // TODO(asvitkine): Implement this. http://crbug.com/131618
 }
 
-std::vector<Rect> RenderTextMac::GetSubstringBounds(ui::Range range) {
+std::vector<Rect> RenderTextMac::GetSubstringBounds(const ui::Range& range) {
   // TODO(asvitkine): Implement this. http://crbug.com/131618
   return std::vector<Rect>();
+}
+
+size_t RenderTextMac::TextIndexToLayoutIndex(size_t index) const {
+  // TODO(asvitkine): Implement this. http://crbug.com/131618
+  return index;
+}
+
+size_t RenderTextMac::LayoutIndexToTextIndex(size_t index) const {
+  // TODO(asvitkine): Implement this. http://crbug.com/131618
+  return index;
 }
 
 bool RenderTextMac::IsCursorablePosition(size_t position) {
@@ -222,13 +232,13 @@ void RenderTextMac::ComputeRuns() {
   CFArrayRef ct_runs = CTLineGetGlyphRuns(line_);
   const CFIndex ct_runs_count = CFArrayGetCount(ct_runs);
 
-  Point offset(GetTextOrigin());
+  gfx::Vector2d text_offset = GetTextOffset();
   // Skia will draw glyphs with respect to the baseline.
-  offset.Offset(0, common_baseline_);
+  text_offset += gfx::Vector2d(0, common_baseline_);
 
-  const SkScalar x = SkIntToScalar(offset.x());
-  const SkScalar y = SkIntToScalar(offset.y());
-  SkPoint run_origin = SkPoint::Make(offset.x(), offset.y());
+  const SkScalar x = SkIntToScalar(text_offset.x());
+  const SkScalar y = SkIntToScalar(text_offset.y());
+  SkPoint run_origin = SkPoint::Make(x, y);
 
   const CFRange empty_cf_range = CFRangeMake(0, 0);
   for (CFIndex i = 0; i < ct_runs_count; ++i) {

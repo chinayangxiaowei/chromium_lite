@@ -17,6 +17,7 @@
 #include "base/observer_list.h"
 #include "base/time.h"
 #include "googleurl/src/gurl.h"
+#include "webkit/storage/webkit_storage_export.h"
 
 class FilePath;
 class NullableString16;
@@ -36,6 +37,8 @@ class DomStorageNamespace;
 class DomStorageSession;
 class DomStorageTaskRunner;
 class SessionStorageDatabase;
+struct LocalStorageUsageInfo;
+struct SessionStorageUsageInfo;
 
 // The Context is the root of an object containment hierachy for
 // Namespaces and Areas related to the owning profile.
@@ -56,18 +59,9 @@ class SessionStorageDatabase;
 // Classes intended to be used by an embedder are DomStorageContext,
 // DomStorageHost, and DomStorageSession. The other classes are for
 // internal consumption.
-class DomStorageContext
+class WEBKIT_STORAGE_EXPORT DomStorageContext
     : public base::RefCountedThreadSafe<DomStorageContext> {
  public:
-  struct UsageInfo {
-    GURL origin;
-    size_t data_size;
-    base::Time last_modified;
-
-    UsageInfo();
-    ~UsageInfo();
-  };
-
   // An interface for observing Local and Session Storage events on the
   // background thread.
   class EventObserver {
@@ -110,8 +104,11 @@ class DomStorageContext
   DomStorageTaskRunner* task_runner() const { return task_runner_; }
   DomStorageNamespace* GetStorageNamespace(int64 namespace_id);
 
-  void GetUsageInfo(std::vector<UsageInfo>* infos, bool include_file_info);
-  void DeleteOrigin(const GURL& origin);
+  void GetLocalStorageUsage(std::vector<LocalStorageUsageInfo>* infos,
+                            bool include_file_info);
+  void GetSessionStorageUsage(std::vector<SessionStorageUsageInfo>* infos);
+  void DeleteLocalStorage(const GURL& origin);
+  void DeleteSessionStorage(const SessionStorageUsageInfo& usage_info);
   void PurgeMemory();
 
   // Used by content settings to alter the behavior around
@@ -222,6 +219,10 @@ class DomStorageContext
   // Persistent namespace IDs to protect from gradual deletion (they will
   // be needed for session restore).
   std::set<std::string> protected_persistent_session_ids_;
+
+  // Mapping between persistent namespace IDs and namespace IDs for
+  // sessionStorage.
+  std::map<std::string, int64> persistent_namespace_id_to_namespace_id_;
 };
 
 }  // namespace dom_storage

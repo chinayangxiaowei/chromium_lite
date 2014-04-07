@@ -9,7 +9,7 @@
 
 #include "content/test/net/url_request_mock_http_job.h"
 
-class URLRequestMockLinkDoctorJob : public URLRequestMockHTTPJob {
+class URLRequestMockLinkDoctorJob : public content::URLRequestMockHTTPJob {
  public:
   URLRequestMockLinkDoctorJob(net::URLRequest* request,
                               net::NetworkDelegate* network_delegate);
@@ -17,7 +17,7 @@ class URLRequestMockLinkDoctorJob : public URLRequestMockHTTPJob {
   static net::URLRequest::ProtocolFactory Factory;
 
   // Adds the testing URLs to the net::URLRequestFilter.
-  static void AddUrlHandler();
+  static void AddUrlHandler(const FilePath& base_path);
 
  private:
   virtual ~URLRequestMockLinkDoctorJob() {}

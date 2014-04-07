@@ -90,12 +90,6 @@ struct WDKeywordsResult {
   int64 default_search_provider_id;
   // Version of the built-in keywords. A value of 0 indicates a first run.
   int builtin_keyword_version;
-  // Backup of the default search provider, and whether the backup is valid.
-  bool backup_valid;
-  TemplateURLData default_search_provider_backup;
-  // Indicates if default search provider has been changed by something
-  // other than user's action in the browser.
-  bool did_default_search_provider_change;
 };
 
 class WebDataServiceConsumer;
@@ -299,8 +293,8 @@ class WebDataService
 
   // Get all web intent services registered for the specified |action|.
   // |consumer| must not be NULL.
-  Handle GetWebIntentServices(const string16& action,
-                              WebDataServiceConsumer* consumer);
+  Handle GetWebIntentServicesForAction(const string16& action,
+                                       WebDataServiceConsumer* consumer);
 
   // Get all web intent services registered using the specified |service_url|.
   // |consumer| must not be NULL.
@@ -375,7 +369,7 @@ class WebDataService
 
   // AutofillWebData implementation.
   virtual void AddFormFields(
-      const std::vector<webkit::forms::FormField>& fields) OVERRIDE;
+      const std::vector<FormFieldData>& fields) OVERRIDE;
   virtual Handle GetFormValuesForElementName(
       const string16& name,
       const string16& prefix,
@@ -550,7 +544,7 @@ class WebDataService
   //
   //////////////////////////////////////////////////////////////////////////////
   void AddFormElementsImpl(
-      GenericRequest<std::vector<webkit::forms::FormField> >* request);
+      GenericRequest<std::vector<FormFieldData> >* request);
   void GetFormValuesForElementNameImpl(WebDataRequest* request,
       const string16& name, const string16& prefix, int limit);
   void RemoveFormElementsAddedBetweenImpl(

@@ -12,6 +12,8 @@
 namespace ppapi {
 
 class TrackedCallback;
+struct URLRequestInfoData;
+struct URLResponseInfoData;
 
 namespace thunk {
 
@@ -19,8 +21,17 @@ class PPB_URLLoader_API {
  public:
   virtual ~PPB_URLLoader_API() {}
 
+  // Open given the resource ID of a PPB_URLRequestInfo resource.
   virtual int32_t Open(PP_Resource request_id,
                        scoped_refptr<TrackedCallback> callback) = 0;
+
+  // Internal open given a URLRequestInfoData and requestor_pid, which
+  // indicates the process that requested and will consume the data.
+  // Pass 0 for requestor_pid to indicate the current process.
+  virtual int32_t Open(const URLRequestInfoData& data,
+                       int requestor_pid,
+                       scoped_refptr<TrackedCallback> callback) = 0;
+
   virtual int32_t FollowRedirect(scoped_refptr<TrackedCallback> callback) = 0;
   virtual PP_Bool GetUploadProgress(int64_t* bytes_sent,
                                     int64_t* total_bytes_to_be_sent) = 0;
@@ -37,6 +48,14 @@ class PPB_URLLoader_API {
   // Trusted API.
   virtual void GrantUniversalAccess() = 0;
   virtual void SetStatusCallback(PP_URLLoaderTrusted_StatusCallback cb) = 0;
+
+  // Internal function. This will fill in the given response info data and
+  // return true on sucesss. If the dowbload was to a file, there will be one
+  // plugin reference transferred to the caller. On failure, returns false.
+  //
+  // If body_as_file_ref is non-zero, this will transfer one plugin reference
+  // to that object to the caller.
+  virtual bool GetResponseInfoData(URLResponseInfoData* data) = 0;
 };
 
 }  // namespace thunk

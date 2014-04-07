@@ -4,6 +4,7 @@
 
 #include "win8/metro_driver/stdafx.h"
 #include "win8/metro_driver/chrome_app_view.h"
+#include "win8/metro_driver/direct3d_helper.h"
 
 #include <algorithm>
 #include <windows.applicationModel.datatransfer.h>
@@ -13,8 +14,12 @@
 #include "base/message_loop.h"
 #include "base/win/metro.h"
 
+#include "ui/gfx/native_widget_types.h"
+#include "ui/metro_viewer/metro_viewer_messages.h"
+
 // This include allows to send WM_SYSCOMMANDs to chrome.
 #include "chrome/app/chrome_command_ids.h"
+#include "win8/metro_driver/metro_driver.h"
 #include "win8/metro_driver/winrt_utils.h"
 #include "ui/base/ui_base_switches.h"
 
@@ -38,6 +43,14 @@ typedef winfoundtn::ITypedEventHandler<
     winui::ViewManagement::InputPane*,
     winui::ViewManagement::InputPaneVisibilityEventArgs*>
     InputPaneEventHandler;
+
+typedef winfoundtn::ITypedEventHandler<
+    winui::Core::CoreWindow*,
+    winui::Core::PointerEventArgs*> PointerEventHandler;
+
+typedef winfoundtn::ITypedEventHandler<
+    winui::Core::CoreWindow*,
+    winui::Core::KeyEventArgs*> KeyEventHandler;
 
 struct Globals globals;
 
@@ -129,19 +142,27 @@ void SendMnemonic(WORD mnemonic_char, Modifier modifiers, bool extended,
   }
 }
 
-void MetroExit() {
-  if (globals.core_window == ::GetForegroundWindow()) {
+// Helper function to Exit metro chrome cleanly. If we are in the foreground
+// then we try and exit by sending an Alt+F4 key combination to the core
+// window which ensures that the chrome application tile does not show up in
+// the running metro apps list on the top left corner. We have seen cases
+// where this does work. To workaround that we invoke the
+// ICoreApplicationExit::Exit function in a background delayed task which
+// ensures that chrome exits.
+void MetroExit(bool send_alt_f4_mnemonic) {
+  if (send_alt_f4_mnemonic && globals.core_window == ::GetForegroundWindow()) {
     DVLOG(1) << "We are in the foreground. Exiting via Alt F4";
     SendMnemonic(VK_F4, ALT, false, false);
     DWORD core_window_process_id = 0;
     DWORD core_window_thread_id = GetWindowThreadProcessId(
         globals.core_window, &core_window_process_id);
     if (core_window_thread_id != ::GetCurrentThreadId()) {
-      // Sleep to give time to the core window thread to get this message.
-      Sleep(100);
+      globals.appview_msg_loop->PostDelayedTask(
+        FROM_HERE,
+        base::Bind(&MetroExit, false),
+        base::TimeDelta::FromMilliseconds(100));
     }
   } else {
-    DVLOG(1) << "We are not in the foreground. Exiting normally";
     globals.app_exit->Exit();
     globals.core_window = NULL;
   }
@@ -238,8 +259,17 @@ void SetFrameWindowInternal(HWND hwnd) {
 
   globals.host_windows.push_front(std::make_pair(hwnd, window_scrolled_state));
 
-  if (new_window)
+  if (new_window) {
     AdjustFrameWindowStyleForMetro(hwnd);
+  } else {
+    DVLOG(1) << "Adjusting new top window to core window size";
+    AdjustToFitWindow(hwnd, 0);
+  }
+  if (globals.view->GetViewState() ==
+      winui::ViewManagement::ApplicationViewState_Snapped) {
+    DVLOG(1) << "Enabling Metro snap state on new window: " << hwnd;
+    ::PostMessageW(hwnd, WM_SYSCOMMAND, IDC_METRO_SNAP_ENABLE, 0);
+  }
 }
 
 void CloseFrameWindowInternal(HWND hwnd) {
@@ -256,7 +286,7 @@ void CloseFrameWindowInternal(HWND hwnd) {
   } else {
     // time to quit
     DVLOG(1) << "Last host window closed. Calling Exit().";
-    MetroExit();
+    MetroExit(true);
   }
 }
 
@@ -283,20 +313,6 @@ void FlipFrameWindowsInternal() {
 }
 
 }  // namespace
-
-HRESULT ChromeAppView::TileRequestCreateDone(
-    winfoundtn::IAsyncOperation<bool>* async,
-    AsyncStatus status) {
-  if (status == Completed) {
-    unsigned char result;
-    CheckHR(async->GetResults(&result));
-    DVLOG(1) << __FUNCTION__ << " result " << static_cast<int>(result);
-  } else {
-    LOG(ERROR) << __FUNCTION__ << " Unexpected async status " << status;
-  }
-
-  return S_OK;
-}
 
 void ChromeAppView::DisplayNotification(
     const ToastNotificationHandler::DesktopNotification& notification) {
@@ -399,6 +415,13 @@ void ChromeAppView::SetFullscreen(bool fullscreen) {
   }
 }
 
+winui::ViewManagement::ApplicationViewState ChromeAppView::GetViewState() {
+  winui::ViewManagement::ApplicationViewState view_state =
+      winui::ViewManagement::ApplicationViewState_FullScreenLandscape;
+  app_view_->get_Value(&view_state);
+  return view_state;
+}
+
 void UnsnapHelper() {
   ChromeAppView::Unsnap();
 }
@@ -490,7 +513,9 @@ extern "C" __declspec(dllexport)
 void DisplayNotification(const char* origin_url, const char* icon_url,
                          const wchar_t* title, const wchar_t* body,
                          const wchar_t* display_source,
-                         const char* notification_id) {
+                         const char* notification_id,
+                         base::win::MetroNotificationClickedHandler handler,
+                         const wchar_t* handler_context) {
   // TODO(ananta)
   // Needs implementation.
   DVLOG(1) << __FUNCTION__;
@@ -500,7 +525,9 @@ void DisplayNotification(const char* origin_url, const char* icon_url,
                                                              title,
                                                              body,
                                                              display_source,
-                                                             notification_id);
+                                                             notification_id,
+                                                             handler,
+                                                             handler_context);
   globals.appview_msg_loop->PostTask(
       FROM_HERE, base::Bind(&ChromeAppView::DisplayNotification,
                             globals.view, notification));
@@ -586,17 +613,6 @@ void SetFullscreen(bool fullscreen) {
           globals.view, fullscreen));
 }
 
-BOOL CALLBACK CoreWindowFinder(HWND hwnd, LPARAM) {
-  char classname[128];
-  if (::GetClassNameA(hwnd, classname, ARRAYSIZE(classname))) {
-    if (lstrcmpiA("Windows.UI.Core.CoreWindow", classname) == 0) {
-      globals.core_window = hwnd;
-      return FALSE;
-    }
-  }
-  return TRUE;
-}
-
 template <typename ContainerT>
 void CloseSecondaryWindows(ContainerT& windows) {
   DVLOG(1) << "Closing secondary windows", windows.size();
@@ -627,7 +643,7 @@ DWORD WINAPI HostMainThreadProc(void*) {
   DWORD exit_code = globals.host_main(globals.host_context);
 
   DVLOG(1) << "host thread done, exit_code=" << exit_code;
-  MetroExit();
+  MetroExit(true);
   return exit_code;
 }
 
@@ -662,7 +678,6 @@ ChromeAppView::SetWindow(winui::Core::ICoreWindow* window) {
 
   HRESULT hr = url_launch_handler_.Initialize();
   CheckHR(hr, "Failed to initialize url launch handler.");
-
   // Register for size notifications.
   hr = window_->add_SizeChanged(mswr::Callback<SizeChangedHandler>(
       this, &ChromeAppView::OnSizeChanged).Get(),
@@ -707,7 +722,6 @@ ChromeAppView::SetWindow(winui::Core::ICoreWindow* window) {
   // The documented InputPane notifications don't fire on Windows 8 in metro
   // chrome. Uncomment this once we figure out why they don't fire.
   // RegisterInputPaneNotifications();
-
   hr = winrt_utils::CreateActivationFactory(
       RuntimeClass_Windows_UI_ViewManagement_ApplicationView,
       app_view_.GetAddressOf());
@@ -786,7 +800,7 @@ void ChromeAppView::CheckForOSKActivation() {
 
 IFACEMETHODIMP
 ChromeAppView::Run() {
-  DVLOG(1) << __FUNCTION__ << ", hwnd=" << LONG_PTR(window_.Get());
+  DVLOG(1) << __FUNCTION__;
   mswr::ComPtr<winui::Core::ICoreDispatcher> dispatcher;
   HRESULT hr = window_->get_Dispatcher(&dispatcher);
   CheckHR(hr, "Dispatcher failed.");
@@ -905,10 +919,8 @@ HRESULT ChromeAppView::OnActivate(winapp::Core::ICoreApplicationView*,
     return S_OK;
   }
 
-  do {
-    ::Sleep(10);
-    ::EnumThreadWindows(globals.main_thread_id, &CoreWindowFinder, 0);
-  } while (globals.core_window == NULL);
+  globals.core_window =
+      winrt_utils::FindCoreWindow(globals.main_thread_id, 10);
 
   DVLOG(1) << "CoreWindow found: " << std::hex << globals.core_window;
 
@@ -916,7 +928,7 @@ HRESULT ChromeAppView::OnActivate(winapp::Core::ICoreApplicationView*,
     DWORD chrome_ui_thread_id = 0;
     globals.host_thread =
         ::CreateThread(NULL, 0, HostMainThreadProc, NULL, 0,
-                       &chrome_ui_thread_id);
+                      &chrome_ui_thread_id);
 
     if (!globals.host_thread) {
       NOTREACHED() << "thread creation failed.";

@@ -12,6 +12,7 @@
 #include "base/string_util.h"
 #include "base/utf_string_conversions.h"
 #include "base/win/windows_version.h"
+#include "ui/base/text/utf16_indexing.h"
 #include "ui/gfx/canvas.h"
 #include "ui/gfx/font_fallback_win.h"
 #include "ui/gfx/font_smoothing_win.h"
@@ -222,7 +223,7 @@ SelectionModel RenderTextWin::FindCursorPosition(const Point& point) {
   DCHECK(SUCCEEDED(hr));
   DCHECK_GE(trailing, 0);
   position += run->range.start();
-  size_t cursor = position + trailing;
+  const size_t cursor = LayoutIndexToTextIndex(position + trailing);
   DCHECK_LE(cursor, text().length());
   return SelectionModel(cursor, trailing ? CURSOR_BACKWARD : CURSOR_FORWARD);
 }
@@ -231,8 +232,11 @@ std::vector<RenderText::FontSpan> RenderTextWin::GetFontSpansForTesting() {
   EnsureLayout();
 
   std::vector<RenderText::FontSpan> spans;
-  for (size_t i = 0; i < runs_.size(); ++i)
-    spans.push_back(RenderText::FontSpan(runs_[i]->font, runs_[i]->range));
+  for (size_t i = 0; i < runs_.size(); ++i) {
+    spans.push_back(RenderText::FontSpan(runs_[i]->font,
+        ui::Range(LayoutIndexToTextIndex(runs_[i]->range.start()),
+                  LayoutIndexToTextIndex(runs_[i]->range.end()))));
+  }
 
   return spans;
 }
@@ -258,12 +262,12 @@ SelectionModel RenderTextWin::AdjacentCharSelectionModel(
     bool forward_motion =
         run->script_analysis.fRTL == (direction == CURSOR_LEFT);
     if (forward_motion) {
-      if (caret < run->range.end()) {
+      if (caret < LayoutIndexToTextIndex(run->range.end())) {
         caret = IndexOfAdjacentGrapheme(caret, CURSOR_FORWARD);
         return SelectionModel(caret, CURSOR_BACKWARD);
       }
     } else {
-      if (caret > run->range.start()) {
+      if (caret > LayoutIndexToTextIndex(run->range.start())) {
         caret = IndexOfAdjacentGrapheme(caret, CURSOR_BACKWARD);
         return SelectionModel(caret, CURSOR_FORWARD);
       }
@@ -284,6 +288,9 @@ SelectionModel RenderTextWin::AdjacentCharSelectionModel(
 SelectionModel RenderTextWin::AdjacentWordSelectionModel(
     const SelectionModel& selection,
     VisualCursorDirection direction) {
+  if (obscured())
+    return EdgeSelectionModel(direction);
+
   base::i18n::BreakIterator iter(text(), base::i18n::BreakIterator::BREAK_WORD);
   bool success = iter.Init();
   DCHECK(success);
@@ -338,41 +345,43 @@ void RenderTextWin::SetSelectionModel(const SelectionModel& model) {
 void RenderTextWin::GetGlyphBounds(size_t index,
                                    ui::Range* xspan,
                                    int* height) {
-  size_t run_index =
+  const size_t run_index =
       GetRunContainingCaret(SelectionModel(index, CURSOR_FORWARD));
   DCHECK_LT(run_index, runs_.size());
   internal::TextRun* run = runs_[run_index];
-  xspan->set_start(GetGlyphXBoundary(run, index, false));
-  xspan->set_end(GetGlyphXBoundary(run, index, true));
+  const size_t layout_index = TextIndexToLayoutIndex(index);
+  xspan->set_start(GetGlyphXBoundary(run, layout_index, false));
+  xspan->set_end(GetGlyphXBoundary(run, layout_index, true));
   *height = run->font.GetHeight();
 }
 
-std::vector<Rect> RenderTextWin::GetSubstringBounds(ui::Range range) {
+std::vector<Rect> RenderTextWin::GetSubstringBounds(const ui::Range& range) {
   DCHECK(!needs_layout_);
   DCHECK(ui::Range(0, text().length()).Contains(range));
-  Point display_offset(GetUpdatedDisplayOffset());
-  HRESULT hr = 0;
+  ui::Range layout_range(TextIndexToLayoutIndex(range.start()),
+                         TextIndexToLayoutIndex(range.end()));
+  DCHECK(ui::Range(0, GetLayoutText().length()).Contains(layout_range));
 
   std::vector<Rect> bounds;
-  if (range.is_empty())
+  if (layout_range.is_empty())
     return bounds;
 
   // Add a Rect for each run/selection intersection.
   // TODO(msw): The bounds should probably not always be leading the range ends.
   for (size_t i = 0; i < runs_.size(); ++i) {
     internal::TextRun* run = runs_[visual_to_logical_[i]];
-    ui::Range intersection = run->range.Intersect(range);
+    ui::Range intersection = run->range.Intersect(layout_range);
     if (intersection.IsValid()) {
       DCHECK(!intersection.is_reversed());
-      ui::Range range(GetGlyphXBoundary(run, intersection.start(), false),
-                      GetGlyphXBoundary(run, intersection.end(), false));
-      Rect rect(range.GetMin(), 0, range.length(), run->font.GetHeight());
+      ui::Range range_x(GetGlyphXBoundary(run, intersection.start(), false),
+                        GetGlyphXBoundary(run, intersection.end(), false));
+      Rect rect(range_x.GetMin(), 0, range_x.length(), run->font.GetHeight());
       // Center the rect vertically in the display area.
       rect.Offset(0, (display_rect().height() - rect.height()) / 2);
       rect.set_origin(ToViewPoint(rect.origin()));
       // Union this with the last rect if they're adjacent.
       if (!bounds.empty() && rect.SharesEdgeWith(bounds.back())) {
-        rect = rect.Union(bounds.back());
+        rect.Union(bounds.back());
         bounds.pop_back();
       }
       bounds.push_back(rect);
@@ -381,22 +390,44 @@ std::vector<Rect> RenderTextWin::GetSubstringBounds(ui::Range range) {
   return bounds;
 }
 
+size_t RenderTextWin::TextIndexToLayoutIndex(size_t index) const {
+  if (!obscured())
+    return index;
+
+  DCHECK_LE(index, text().length());
+  const ptrdiff_t offset = ui::UTF16IndexToOffset(text(), 0, index);
+  DCHECK_GE(offset, 0);
+  DCHECK_LE(static_cast<size_t>(offset), GetLayoutText().length());
+  return static_cast<size_t>(offset);
+}
+
+size_t RenderTextWin::LayoutIndexToTextIndex(size_t index) const {
+  if (!obscured())
+    return index;
+
+  DCHECK_LE(index, GetLayoutText().length());
+  const size_t text_index = ui::UTF16OffsetToIndex(text(), 0, index);
+  DCHECK_LE(text_index, text().length());
+  return text_index;
+}
+
 bool RenderTextWin::IsCursorablePosition(size_t position) {
   if (position == 0 || position == text().length())
     return true;
 
   EnsureLayout();
-  size_t run_index =
+  const size_t run_index =
       GetRunContainingCaret(SelectionModel(position, CURSOR_FORWARD));
   if (run_index >= runs_.size())
     return false;
 
   internal::TextRun* run = runs_[run_index];
-  size_t start = run->range.start();
-  if (position == start)
+  const size_t start = run->range.start();
+  const size_t layout_position = TextIndexToLayoutIndex(position);
+  if (layout_position == start)
     return true;
-  return run->logical_clusters[position - start] !=
-         run->logical_clusters[position - start - 1];
+  return run->logical_clusters[layout_position - start] !=
+         run->logical_clusters[layout_position - start - 1];
 }
 
 void RenderTextWin::ResetLayout() {
@@ -417,9 +448,8 @@ void RenderTextWin::EnsureLayout() {
 void RenderTextWin::DrawVisualText(Canvas* canvas) {
   DCHECK(!needs_layout_);
 
-  Point offset(GetOriginForDrawing());
   // Skia will draw glyphs with respect to the baseline.
-  offset.Offset(0, common_baseline_);
+  Vector2d offset(GetOffsetForDrawing() + Vector2d(0, common_baseline_));
 
   SkScalar x = SkIntToScalar(offset.x());
   SkScalar y = SkIntToScalar(offset.y());
@@ -483,18 +513,16 @@ void RenderTextWin::ItemizeLogicalText() {
   if (text().empty())
     return;
 
-  const wchar_t* raw_text = text().c_str();
-  const int text_length = text().length();
-
   HRESULT hr = E_OUTOFMEMORY;
   int script_items_count = 0;
   std::vector<SCRIPT_ITEM> script_items;
+  const int text_length = GetLayoutText().length();
   for (size_t n = kGuessItems; hr == E_OUTOFMEMORY && n < kMaxItems; n *= 2) {
     // Derive the array of Uniscribe script items from the logical text.
     // ScriptItemize always adds a terminal array item so that the length of the
     // last item can be derived from the terminal SCRIPT_ITEM::iCharPos.
     script_items.resize(n);
-    hr = ScriptItemize(raw_text,
+    hr = ScriptItemize(GetLayoutText().c_str(),
                        text_length,
                        n - 1,
                        &script_control_,
@@ -527,8 +555,8 @@ void RenderTextWin::ItemizeLogicalText() {
     run->script_analysis = script_item->a;
 
     // Find the range end and advance the structures as needed.
-    int script_item_end = (script_item + 1)->iCharPos;
-    int style_range_end = style->range.end();
+    const int script_item_end = (script_item + 1)->iCharPos;
+    const int style_range_end = TextIndexToLayoutIndex(style->range.end());
     run_break = std::min(script_item_end, style_range_end);
     if (script_item_end <= style_range_end)
       script_item++;
@@ -599,7 +627,7 @@ void RenderTextWin::LayoutVisualText() {
 
 void RenderTextWin::LayoutTextRun(internal::TextRun* run) {
   const size_t run_length = run->range.length();
-  const wchar_t* run_text = &(text()[run->range.start()]);
+  const wchar_t* run_text = &(GetLayoutText()[run->range.start()]);
   Font original_font = run->font;
   LinkedFontsIterator fonts(original_font);
   bool tried_cached_font = false;
@@ -669,7 +697,7 @@ void RenderTextWin::LayoutTextRun(internal::TextRun* run) {
   }
 
   // If a font was able to partially display the run, use that now.
-  if (best_partial_font_missing_char_count != INT_MAX) {
+  if (best_partial_font_missing_char_count < static_cast<int>(run_length)) {
     // Re-shape the run only if |best_partial_font| differs from the last font.
     if (best_partial_font.GetNativeFont() != run->font.GetNativeFont())
       ShapeTextRunWithFont(run, best_partial_font);
@@ -677,13 +705,30 @@ void RenderTextWin::LayoutTextRun(internal::TextRun* run) {
   }
 
   // If no font was able to partially display the run, replace all glyphs
-  // with |wgDefault| to ensure they don't hold garbage values.
+  // with |wgDefault| from the original font to ensure to they don't hold
+  // garbage values.
+  // First, clear the cache and select the original font on the HDC.
+  ScriptFreeCache(&run->script_cache);
+  run->font = original_font;
+  SelectObject(cached_hdc_, run->font.GetNativeFont());
+
+  // Now, get the font's properties.
   SCRIPT_FONTPROPERTIES properties;
   memset(&properties, 0, sizeof(properties));
   properties.cBytes = sizeof(properties);
-  ScriptGetFontProperties(cached_hdc_, &run->script_cache, &properties);
-  for (int i = 0; i < run->glyph_count; ++i)
-    run->glyphs[i] = properties.wgDefault;
+  HRESULT hr = ScriptGetFontProperties(cached_hdc_, &run->script_cache,
+                                       &properties);
+  if (hr == S_OK) {
+    // Finally, initialize |glyph_count|, |glyphs| and |visible_attributes| on
+    // the run (since they may not have been set yet).
+    run->glyph_count = run_length;
+    memset(run->visible_attributes.get(), 0,
+           run->glyph_count * sizeof(SCRIPT_VISATTR));
+    for (int i = 0; i < run->glyph_count; ++i) {
+      run->glyphs[i] = IsWhitespace(run_text[i]) ? properties.wgBlank :
+                                                   properties.wgDefault;
+    }
+  }
 
   // TODO(msw): Don't use SCRIPT_UNDEFINED. Apparently Uniscribe can
   //            crash on certain surrogate pairs with SCRIPT_UNDEFINED.
@@ -709,7 +754,7 @@ HRESULT RenderTextWin::ShapeTextRunWithFont(internal::TextRun* run,
 
   HRESULT hr = E_OUTOFMEMORY;
   const size_t run_length = run->range.length();
-  const wchar_t* run_text = &(text()[run->range.start()]);
+  const wchar_t* run_text = &(GetLayoutText()[run->range.start()]);
   // Max glyph guess: http://msdn.microsoft.com/en-us/library/dd368564.aspx
   size_t max_glyphs = static_cast<size_t>(1.5 * run_length + 16);
   while (hr == E_OUTOFMEMORY && max_glyphs < kMaxGlyphs) {
@@ -738,7 +783,7 @@ int RenderTextWin::CountCharsWithMissingGlyphs(internal::TextRun* run) const {
   properties.cBytes = sizeof(properties);
   ScriptGetFontProperties(cached_hdc_, &run->script_cache, &properties);
 
-  const wchar_t* run_text = &(text()[run->range.start()]);
+  const wchar_t* run_text = &(GetLayoutText()[run->range.start()]);
   for (size_t char_index = 0; char_index < run->range.length(); ++char_index) {
     const int glyph_index = run->logical_clusters[char_index];
     DCHECK_GE(glyph_index, 0);
@@ -767,11 +812,11 @@ int RenderTextWin::CountCharsWithMissingGlyphs(internal::TextRun* run) const {
 
 size_t RenderTextWin::GetRunContainingCaret(const SelectionModel& caret) const {
   DCHECK(!needs_layout_);
-  size_t position = caret.caret_pos();
+  size_t layout_position = TextIndexToLayoutIndex(caret.caret_pos());
   LogicalCursorDirection affinity = caret.caret_affinity();
   size_t run = 0;
   for (; run < runs_.size(); ++run)
-    if (RangeContainsCaret(runs_[run]->range, position, affinity))
+    if (RangeContainsCaret(runs_[run]->range, layout_position, affinity))
       break;
   return run;
 }
@@ -789,14 +834,16 @@ size_t RenderTextWin::GetRunContainingPoint(const Point& point) const {
 
 SelectionModel RenderTextWin::FirstSelectionModelInsideRun(
     const internal::TextRun* run) {
-  size_t cursor = IndexOfAdjacentGrapheme(run->range.start(), CURSOR_FORWARD);
-  return SelectionModel(cursor, CURSOR_BACKWARD);
+  size_t position = LayoutIndexToTextIndex(run->range.start());
+  position = IndexOfAdjacentGrapheme(position, CURSOR_FORWARD);
+  return SelectionModel(position, CURSOR_BACKWARD);
 }
 
 SelectionModel RenderTextWin::LastSelectionModelInsideRun(
     const internal::TextRun* run) {
-  size_t caret = IndexOfAdjacentGrapheme(run->range.end(), CURSOR_BACKWARD);
-  return SelectionModel(caret, CURSOR_FORWARD);
+  size_t position = LayoutIndexToTextIndex(run->range.end());
+  position = IndexOfAdjacentGrapheme(position, CURSOR_BACKWARD);
+  return SelectionModel(position, CURSOR_FORWARD);
 }
 
 RenderText* RenderText::CreateInstance() {

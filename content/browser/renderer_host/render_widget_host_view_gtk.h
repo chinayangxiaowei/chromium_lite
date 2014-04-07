@@ -27,13 +27,12 @@
 #include "webkit/glue/webcursor.h"
 #include "webkit/plugins/npapi/gtk_plugin_container_manager.h"
 
-class GtkKeyBindingsHandler;
-
 typedef struct _GtkClipboard GtkClipboard;
 typedef struct _GtkSelectionData GtkSelectionData;
 
 namespace content {
 class GtkIMContextWrapper;
+class GtkKeyBindingsHandler;
 class RenderWidgetHost;
 class RenderWidgetHostImpl;
 struct NativeWebKeyboardEvent;
@@ -74,7 +73,7 @@ class CONTENT_EXPORT RenderWidgetHostViewGtk
   virtual void WasShown() OVERRIDE;
   virtual void WasHidden() OVERRIDE;
   virtual void MovePluginWindows(
-      const gfx::Point& scroll_offset,
+      const gfx::Vector2d& scroll_offset,
       const std::vector<webkit::npapi::WebPluginGeometry>& moves) OVERRIDE;
   virtual void Focus() OVERRIDE;
   virtual void Blur() OVERRIDE;
@@ -84,7 +83,8 @@ class CONTENT_EXPORT RenderWidgetHostViewGtk
       const ViewHostMsg_TextInputState_Params& params) OVERRIDE;
   virtual void ImeCancelComposition() OVERRIDE;
   virtual void DidUpdateBackingStore(
-      const gfx::Rect& scroll_rect, int scroll_dx, int scroll_dy,
+      const gfx::Rect& scroll_rect,
+      const gfx::Vector2d& scroll_delta,
       const std::vector<gfx::Rect>& copy_rects) OVERRIDE;
   virtual void RenderViewGone(base::TerminationStatus status,
                               int error_code) OVERRIDE;
@@ -104,7 +104,7 @@ class CONTENT_EXPORT RenderWidgetHostViewGtk
       const gfx::Rect& src_subrect,
       const gfx::Size& dst_size,
       const base::Callback<void(bool)>& callback,
-      skia::PlatformCanvas* output) OVERRIDE;
+      skia::PlatformBitmap* output) OVERRIDE;
   virtual void OnAcceleratedCompositingStateChange() OVERRIDE;
   virtual void AcceleratedSurfaceBuffersSwapped(
       const GpuHostMsg_AcceleratedSurfaceBuffersSwapped_Params& params,
@@ -116,8 +116,6 @@ class CONTENT_EXPORT RenderWidgetHostViewGtk
   virtual bool HasAcceleratedSurface(const gfx::Size& desired_size) OVERRIDE;
   virtual void CreatePluginContainer(gfx::PluginWindowHandle id) OVERRIDE;
   virtual void DestroyPluginContainer(gfx::PluginWindowHandle id) OVERRIDE;
-  virtual void ProcessTouchAck(WebKit::WebInputEvent::Type type,
-                               bool processed) OVERRIDE;
   virtual void SetHasHorizontalScrollbar(
       bool has_horizontal_scrollbar) OVERRIDE;
   virtual void SetScrollOffsetPinning(
@@ -274,6 +272,9 @@ class CONTENT_EXPORT RenderWidgetHostViewGtk
   gfx::Point global_mouse_position_;
   // Indicates when mouse motion is valid after the widget has moved.
   bool mouse_has_been_warped_to_new_center_;
+  // Indicates the cursor has been warped to the unlocked position,
+  // but a move event has not yet been received for it there.
+  bool mouse_is_being_warped_to_unlocked_position_;
 
   // For full-screen windows we have a OnDestroy handler that we need to remove,
   // so we keep it ID here.

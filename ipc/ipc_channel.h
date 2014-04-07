@@ -17,10 +17,6 @@
 #include "ipc/ipc_message.h"
 #include "ipc/ipc_sender.h"
 
-// TODO(brettw) remove this and update files that depend on this being included
-// from here.
-#include "ipc/ipc_listener.h"
-
 namespace IPC {
 
 class Listener;
@@ -133,7 +129,14 @@ class IPC_EXPORT Channel : public Sender {
   void set_listener(Listener* listener);
 
   // Get the process ID for the connected peer.
-  // Returns base::kNullProcessId if the peer is not connected yet.
+  //
+  // Returns base::kNullProcessId if the peer is not connected yet. Watch out
+  // for race conditions. You can easily get a channel to another process, but
+  // if your process has not yet processed the "hello" message from the remote
+  // side, this will fail. You should either make sure calling this is either
+  // in response to a message from the remote side (which guarantees that it's
+  // been connected), or you wait for the "connected" notification on the
+  // listener.
   base::ProcessId peer_pid() const;
 
   // Send a message over the Channel to the listener on the other end.
@@ -179,6 +182,7 @@ class IPC_EXPORT Channel : public Sender {
   // ID. Even if true, the server may have already accepted a connection.
   static bool IsNamedServerInitialized(const std::string& channel_id);
 
+#if !defined(OS_NACL)
   // Generates a channel ID that's non-predictable and unique.
   static std::string GenerateUniqueRandomChannelID();
 
@@ -187,6 +191,7 @@ class IPC_EXPORT Channel : public Sender {
   // require additional this is simply calls GenerateUniqueRandomChannelID().
   // For portability the prefix should not include the \ character.
   static std::string GenerateVerifiedChannelID(const std::string& prefix);
+#endif
 
 #if defined(OS_LINUX)
   // Sandboxed processes live in a PID namespace, so when sending the IPC hello

@@ -12,11 +12,13 @@
 #include <vector>
 
 #include "base/format_macros.h"
+#include "base/memory/scoped_vector.h"
 #include "base/platform_file.h"
 #include "base/string16.h"
 #include "base/stringprintf.h"
 #include "base/string_util.h"
 #include "base/tuple.h"
+#include "ipc/ipc_message_start.h"
 #include "ipc/ipc_param_traits.h"
 #include "ipc/ipc_sync_message.h"
 
@@ -43,73 +45,6 @@
 #error "Please add the noinline property for your new compiler here."
 #endif
 
-// Used by IPC_BEGIN_MESSAGES so that each message class starts from a unique
-// base.  Messages have unique IDs across channels in order for the IPC logging
-// code to figure out the message class from its ID.
-enum IPCMessageStart {
-  AutomationMsgStart = 0,
-  ViewMsgStart,
-  PluginMsgStart,
-  ProfileImportMsgStart,
-  TestMsgStart,
-  DevToolsMsgStart,
-  WorkerMsgStart,
-  NaClMsgStart,
-  UtilityMsgStart,
-  GpuMsgStart,
-  ServiceMsgStart,
-  PpapiMsgStart,
-  FirefoxImporterUnittestMsgStart,
-  FileUtilitiesMsgStart,
-  MimeRegistryMsgStart,
-  DatabaseMsgStart,
-  DOMStorageMsgStart,
-  IndexedDBMsgStart,
-  PepperFileMsgStart,
-  SpeechRecognitionMsgStart,
-  PepperMsgStart,
-  AutofillMsgStart,
-  SafeBrowsingMsgStart,
-  P2PMsgStart,
-  SocketStreamMsgStart,
-  ResourceMsgStart,
-  FileSystemMsgStart,
-  ChildProcessMsgStart,
-  ClipboardMsgStart,
-  BlobMsgStart,
-  AppCacheMsgStart,
-  DeviceMotionMsgStart,
-  DeviceOrientationMsgStart,
-  DesktopNotificationMsgStart,
-  GeolocationMsgStart,
-  AudioMsgStart,
-  ChromeMsgStart,
-  DragMsgStart,
-  PrintMsgStart,
-  SpellCheckMsgStart,
-  ExtensionMsgStart,
-  VideoCaptureMsgStart,
-  QuotaMsgStart,
-  IconMsgStart,
-  TextInputClientMsgStart,
-  ChromeUtilityMsgStart,
-  MediaStreamMsgStart,
-  ChromeBenchmarkingMsgStart,
-  IntentsMsgStart,
-  JavaBridgeMsgStart,
-  GamepadMsgStart,
-  ShellMsgStart,
-  AccessibilityMsgStart,
-  PrerenderMsgStart,
-  ChromotingMsgStart,
-  OldBrowserPluginMsgStart,
-  BrowserPluginMsgStart,
-  HyphenatorMsgStart,
-  AndroidWebViewMsgStart,
-  ViewerMsgStart,
-  LastIPCMsgStart      // Must come last.
-};
-
 class FilePath;
 class NullableString16;
 
@@ -125,19 +60,6 @@ struct FileDescriptor;
 namespace IPC {
 
 struct ChannelHandle;
-
-//-----------------------------------------------------------------------------
-// An iterator class for reading the fields contained within a Message.
-class IPC_EXPORT MessageIterator {
- public:
-  explicit MessageIterator(const Message& m);
-
-  int NextInt() const;
-  const std::string NextString() const;
-
- private:
-  mutable PickleIterator iter_;
-};
 
 // -----------------------------------------------------------------------------
 // How we send IPC message logs across channels.
@@ -158,8 +80,8 @@ struct IPC_EXPORT LogData {
   std::string params;
 };
 
-
 //-----------------------------------------------------------------------------
+
 // A dummy struct to place first just to allow leading commas for all
 // members in the macro-generated constructor initializer lists.
 struct NoParams {
@@ -696,6 +618,37 @@ struct ParamTraits< Tuple5<A, B, C, D, E> > {
     LogParam(p.d, l);
     l->append(", ");
     LogParam(p.e, l);
+  }
+};
+
+template<class P>
+struct ParamTraits<ScopedVector<P> > {
+  typedef ScopedVector<P> param_type;
+  static void Write(Message* m, const param_type& p) {
+    WriteParam(m, static_cast<int>(p.size()));
+    for (size_t i = 0; i < p.size(); i++)
+      WriteParam(m, *p[i]);
+  }
+  static bool Read(const Message* m, PickleIterator* iter, param_type* r) {
+    int size = 0;
+    if (!m->ReadLength(iter, &size))
+      return false;
+    if (INT_MAX/sizeof(P) <= static_cast<size_t>(size))
+      return false;
+    r->resize(size);
+    for (int i = 0; i < size; i++) {
+      (*r)[i] = new P();
+      if (!ReadParam(m, iter, (*r)[i]))
+        return false;
+    }
+    return true;
+  }
+  static void Log(const param_type& p, std::string* l) {
+    for (size_t i = 0; i < p.size(); ++i) {
+      if (i != 0)
+        l->append(" ");
+      LogParam(*p[i], l);
+    }
   }
 };
 

@@ -38,7 +38,7 @@ void PepperFlashSettingsHelperImpl::OpenChannelToBroker(
 
   callback_ = callback;
   PluginServiceImpl* plugin_service = PluginServiceImpl::GetInstance();
-  plugin_service->OpenChannelToPpapiBroker(path, this);
+  plugin_service->OpenChannelToPpapiBroker(0, path, this);
 }
 
 void PepperFlashSettingsHelperImpl::GetPpapiChannelInfo(
@@ -50,6 +50,7 @@ void PepperFlashSettingsHelperImpl::GetPpapiChannelInfo(
 
 void PepperFlashSettingsHelperImpl::OnPpapiChannelOpened(
     const IPC::ChannelHandle& channel_handle,
+    base::ProcessId /* plugin_pid */,
     int /* plugin_child_id */) {
   DCHECK(BrowserThread::CurrentlyOn(BrowserThread::IO));
   DCHECK(!callback_.is_null());

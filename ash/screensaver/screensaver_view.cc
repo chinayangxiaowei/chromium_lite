@@ -10,6 +10,7 @@
 #include "base/logging.h"
 #include "content/public/browser/browser_context.h"
 #include "content/public/browser/browser_thread.h"
+#include "content/public/browser/web_contents.h"
 #include "ui/aura/root_window.h"
 #include "ui/gfx/screen.h"
 #include "ui/views/controls/webview/webview.h"
@@ -129,7 +130,7 @@ void ScreensaverView::LoadScreensaver() {
 void ScreensaverView::ShowWindow() {
   aura::RootWindow* root_window = ash::Shell::GetPrimaryRootWindow();
   gfx::Rect screen_rect =
-      gfx::Screen::GetDisplayNearestWindow(root_window).bounds();
+      Shell::GetScreen()->GetDisplayNearestWindow(root_window).bounds();
 
   // We want to be the fullscreen topmost child of the root window.
   // There should be nothing ever really that should show up on top of us.

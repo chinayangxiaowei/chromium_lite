@@ -11,11 +11,10 @@
 #include "base/sys_string_conversions.h"
 #include "base/win/windows_version.h"
 #include "sandbox/win/src/sandbox_factory.h"
-#include "sandbox/win/src/sandbox_utils.h"
 
 namespace {
 
-static const int kDefaultTimeout = 10000;
+static const int kDefaultTimeout = 60000;
 
 // Constructs a full path to a file inside the system32 folder.
 std::wstring MakePathToSys32(const wchar_t* name, bool is_obj_man_path) {
@@ -109,6 +108,7 @@ void TestRunner::Init(JobLevel job_level, TokenLevel startup_token,
   timeout_ = kDefaultTimeout;
   state_ = AFTER_REVERT;
   is_async_= false;
+  kill_on_destruction_ = true;
   target_process_id_ = 0;
 
   broker_ = GetBroker();
@@ -130,7 +130,7 @@ TargetPolicy* TestRunner::GetPolicy() {
 }
 
 TestRunner::~TestRunner() {
-  if (target_process_)
+  if (target_process_ && kill_on_destruction_)
     ::TerminateProcess(target_process_, 0);
 
   if (policy_)
@@ -300,10 +300,9 @@ int DispatchCall(int argc, wchar_t **argv) {
     return SBOX_TEST_INVALID_PARAMETER;
 
   HMODULE module;
-  if (!GetModuleHandleHelper(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
-                                 GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
-                             reinterpret_cast<wchar_t*>(&DispatchCall),
-                             &module))
+  if (!GetModuleHandleEx(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
+                             GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                         reinterpret_cast<wchar_t*>(&DispatchCall), &module))
     return SBOX_TEST_FAILED_TO_EXECUTE_COMMAND;
 
   std::string command_name = base::SysWideToMultiByte(argv[3], CP_UTF8);

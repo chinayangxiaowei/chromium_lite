@@ -6,8 +6,8 @@
 
 #include "base/file_path.h"
 #include "base/file_util.h"
+#include "base/files/scoped_temp_dir.h"
 #include "base/path_service.h"
-#include "base/scoped_temp_dir.h"
 #include "chrome/common/chrome_paths.h"
 #include "sql/init_status.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -15,7 +15,7 @@
 namespace history {
 
 TEST(HistoryDatabaseTest, DropBookmarks) {
-  ScopedTempDir temp_dir;
+  base::ScopedTempDir temp_dir;
   FilePath db_file;
 
   ASSERT_TRUE(temp_dir.CreateUniqueTempDir());
@@ -34,7 +34,7 @@ TEST(HistoryDatabaseTest, DropBookmarks) {
   // migration leaves it in a state fit to load again later.
   for (int i = 0; i < 2; ++i) {
     HistoryDatabase history_db;
-    ASSERT_EQ(sql::INIT_OK, history_db.Init(db_file));
+    ASSERT_EQ(sql::INIT_OK, history_db.Init(db_file, NULL));
     HistoryDatabase::URLEnumerator url_enumerator;
     ASSERT_TRUE(history_db.InitURLEnumeratorForEverything(&url_enumerator));
     int num_urls = 0;

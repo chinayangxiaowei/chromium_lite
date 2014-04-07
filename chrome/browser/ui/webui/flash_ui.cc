@@ -20,7 +20,7 @@
 #include "base/utf_string_conversions.h"
 #include "base/values.h"
 #include "chrome/browser/crash_upload_list.h"
-#include "chrome/browser/plugin_prefs.h"
+#include "chrome/browser/plugins/plugin_prefs.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/webui/chrome_url_data_manager.h"
 #include "chrome/browser/ui/webui/chrome_web_ui_data_source.h"
@@ -41,6 +41,7 @@
 #include "grit/theme_resources.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/resource/resource_bundle.h"
+#include "webkit/plugins/plugin_constants.h"
 #include "webkit/plugins/webplugininfo.h"
 
 #if defined(OS_WIN)
@@ -54,6 +55,8 @@ using content::WebContents;
 using content::WebUIMessageHandler;
 
 namespace {
+
+const char kFlashPlugin[] = "Flash plugin";
 
 ChromeWebUIDataSource* CreateFlashUIHTMLSource() {
   ChromeWebUIDataSource* source =
@@ -267,21 +270,27 @@ void FlashDOMHandler::MaybeRespondToPage() {
   // Obtain the version of the Flash plugins.
   std::vector<webkit::WebPluginInfo> info_array;
   PluginService::GetInstance()->GetPluginInfoArray(
-      GURL(), "application/x-shockwave-flash", false, &info_array, NULL);
-  string16 flash_version;
+      GURL(), kFlashPluginSwfMimeType, false, &info_array, NULL);
   if (info_array.empty()) {
-    AddPair(list, ASCIIToUTF16("Flash plugin"), "Disabled");
+    AddPair(list, ASCIIToUTF16(kFlashPlugin), "Not installed");
   } else {
     PluginPrefs* plugin_prefs =
         PluginPrefs::GetForProfile(Profile::FromWebUI(web_ui()));
+    bool found_enabled = false;
     for (size_t i = 0; i < info_array.size(); ++i) {
+      string16 flash_version = info_array[i].version + ASCIIToUTF16(" ") +
+                               info_array[i].path.LossyDisplayName();
       if (plugin_prefs->IsPluginEnabled(info_array[i])) {
-        flash_version = info_array[i].version + ASCIIToUTF16(" ") +
-                        info_array[i].path.LossyDisplayName();
-        if (i != 0)
+        // If we have already found an enabled Flash version, this one
+        // is not used.
+        if (found_enabled)
           flash_version += ASCIIToUTF16(" (not used)");
-        AddPair(list, ASCIIToUTF16("Flash plugin"), flash_version);
+
+        found_enabled = true;
+      } else {
+        flash_version += ASCIIToUTF16(" (disabled)");
       }
+      AddPair(list, ASCIIToUTF16(kFlashPlugin), flash_version);
     }
   }
 

@@ -10,6 +10,7 @@
 #include "base/basictypes.h"
 #include "base/gtest_prod_util.h"
 #include "base/memory/ref_counted.h"
+#include "base/memory/scoped_ptr.h"
 #include "ui/base/ui_export.h"
 #include "ui/gfx/image/image_skia_rep.h"
 
@@ -45,26 +46,22 @@ class UI_EXPORT ImageSkia {
   // ImageSkia owns |source|.
   ImageSkia(ImageSkiaSource* source, const gfx::Size& size);
 
+  // Creates an instance that uses the |source|. The constructor loads the image
+  // at |scale_factor| and uses its dimensions to calculate the size in DIP.
+  // ImageSkia owns |source|.
+  ImageSkia(ImageSkiaSource* source, ui::ScaleFactor scale_factor);
+
   // Adds ref to passed in bitmap.
   // DIP width and height are set based on scale factor of 1x.
-  // TODO(pkotwicz): This is temporary till conversion to gfx::ImageSkia is
-  // done.
-  ImageSkia(const SkBitmap& bitmap);
+  explicit ImageSkia(const SkBitmap& bitmap);
 
-  ImageSkia(const gfx::ImageSkiaRep& image_rep);
+  explicit ImageSkia(const gfx::ImageSkiaRep& image_rep);
 
   // Copies a reference to |other|'s storage.
   ImageSkia(const ImageSkia& other);
 
   // Copies a reference to |other|'s storage.
   ImageSkia& operator=(const ImageSkia& other);
-
-#if defined(OS_WIN)
-  // Converts to gfx::ImageSkiaRep and SkBitmap.
-  // TODO(pkotwicz): This is temporary till conversion to gfx::ImageSkia is
-  // done.
-  operator SkBitmap&() const { return GetBitmap(); }
-#endif
 
   ~ImageSkia();
 
@@ -75,7 +72,7 @@ class UI_EXPORT ImageSkia {
   // If you want to create a deep copy with ImageSkiaReps for supported
   // scale factors, you need to explicitly call
   // |EnsureRepsForSupportedScaleFactors()| first.
-  ImageSkia DeepCopy() const;
+  scoped_ptr<ImageSkia> DeepCopy() const;
 
   // Returns true if this object is backed by the same ImageSkiaStorage as
   // |other|. Will also return true if both images are isNull().

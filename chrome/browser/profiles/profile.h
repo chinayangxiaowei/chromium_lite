@@ -18,7 +18,6 @@
 
 class ChromeAppCacheService;
 class ChromeURLDataManager;
-class ExtensionProcessManager;
 class ExtensionService;
 class ExtensionSpecialStoragePolicy;
 class FaviconService;
@@ -29,7 +28,6 @@ class PrefService;
 class PromoCounter;
 class ProtocolHandlerRegistry;
 class TestingProfile;
-class VisitedLinkMaster;
 class WebDataService;
 
 namespace android {
@@ -37,6 +35,7 @@ class TabContentsProvider;
 }
 
 namespace base {
+class SequencedTaskRunner;
 class Time;
 }
 
@@ -53,11 +52,6 @@ namespace content {
 class WebUI;
 }
 
-namespace extensions {
-class EventRouter;
-class UserScriptMaster;
-}
-
 namespace fileapi {
 class FileSystemContext;
 }
@@ -72,8 +66,8 @@ class SSLConfigService;
 }
 
 namespace policy {
+class ManagedModePolicyProvider;
 class PolicyService;
-class UserCloudPolicyManager;
 }
 
 class Profile : public content::BrowserContext {
@@ -117,6 +111,17 @@ class Profile : public content::BrowserContext {
     CREATE_MODE_ASYNCHRONOUS
   };
 
+  enum ExitType {
+    // A normal shutdown. The user clicked exit/closed last window of the
+    // profile.
+    EXIT_NORMAL,
+
+    // The exit was the result of the system shutting down.
+    EXIT_SESSION_ENDED,
+
+    EXIT_CRASHED,
+  };
+
   class Delegate {
    public:
     // Called when creation of the profile is finished.
@@ -135,6 +140,10 @@ class Profile : public content::BrowserContext {
   // time.
   static void RegisterUserPrefs(PrefService* prefs);
 
+  // Gets task runner for I/O operations associated with |profile|.
+  static scoped_refptr<base::SequencedTaskRunner> GetTaskRunnerForProfile(
+      Profile* profile);
+
   // Create a new profile given a path. If |create_mode| is
   // CREATE_MODE_ASYNCHRONOUS then the profile is initialized asynchronously.
   static Profile* CreateProfile(const FilePath& path,
@@ -151,6 +160,10 @@ class Profile : public content::BrowserContext {
 
   // Typesafe upcast.
   virtual TestingProfile* AsTestingProfile();
+
+  // Returns sequenced task runner where browser context dependent I/O
+  // operations should be performed.
+  virtual scoped_refptr<base::SequencedTaskRunner> GetIOTaskRunner() = 0;
 
   // Returns the name associated with this profile. This name is displayed in
   // the browser frame.
@@ -182,34 +195,11 @@ class Profile : public content::BrowserContext {
   // Variant of GetTopSites that doesn't force creation.
   virtual history::TopSites* GetTopSitesWithoutCreating() = 0;
 
-  // Retrieves a pointer to the VisitedLinkMaster associated with this
-  // profile.  The VisitedLinkMaster is lazily created the first time
-  // that this method is called.
-  virtual VisitedLinkMaster* GetVisitedLinkMaster() = 0;
-
   // DEPRECATED. Instead, use ExtensionSystem::extension_service().
   // Retrieves a pointer to the ExtensionService associated with this
   // profile. The ExtensionService is created at startup.
   // TODO(yoz): remove this accessor (bug 104095).
   virtual ExtensionService* GetExtensionService() = 0;
-
-  // DEPRECATED. Instead, use ExtensionSystem::user_script_master().
-  // Retrieves a pointer to the extensions::UserScriptMaster associated with
-  // this profile.  The extensions::UserScriptMaster is lazily created the first
-  // time that this method is called.
-  // TODO(yoz): remove this accessor (bug 104095).
-  virtual extensions::UserScriptMaster* GetUserScriptMaster() = 0;
-
-  // DEPRECATED. Instead, use ExtensionSystem::process_manager().
-  // Retrieves a pointer to the ExtensionProcessManager associated with this
-  // profile.  The instance is created at startup.
-  // TODO(yoz): remove this accessor (bug 104095).
-  virtual ExtensionProcessManager* GetExtensionProcessManager() = 0;
-
-  // DEPRECATED. Instead, use ExtensionSystem::event_router().
-  // Accessor. The instance is created at startup.
-  // TODO(yoz): remove this accessor (bug 104095).
-  virtual extensions::EventRouter* GetExtensionEventRouter() = 0;
 
   // Accessor. The instance is created upon first access.
   virtual ExtensionSpecialStoragePolicy*
@@ -218,9 +208,8 @@ class Profile : public content::BrowserContext {
   // Accessor. The instance is created upon first access.
   virtual GAIAInfoUpdateService* GetGAIAInfoUpdateService() = 0;
 
-  // Returns the UserCloudPolicyManager (if any) that handles this profile's
-  // connection to the cloud-based management service.
-  virtual policy::UserCloudPolicyManager* GetUserCloudPolicyManager() = 0;
+  // Returns the ManagedModePolicyProvider for this profile, if it exists.
+  virtual policy::ManagedModePolicyProvider* GetManagedModePolicyProvider() = 0;
 
   // Returns the PolicyService that provides policies for this profile.
   virtual policy::PolicyService* GetPolicyService() = 0;
@@ -243,7 +232,8 @@ class Profile : public content::BrowserContext {
 
   // Returns the request context used within |partition_id|.
   virtual net::URLRequestContextGetter* GetRequestContextForStoragePartition(
-      const std::string& partition_id) = 0;
+      const FilePath& partition_path,
+      bool in_memory) = 0;
 
   // Returns the SSLConfigService for this profile.
   virtual net::SSLConfigService* GetSSLConfigService() = 0;
@@ -266,12 +256,6 @@ class Profile : public content::BrowserContext {
   // this profile. For the single profile case, this corresponds to the time
   // the user started chrome.
   virtual base::Time GetStartTime() const = 0;
-
-  // Marks the profile as cleanly shutdown.
-  //
-  // NOTE: this is invoked internally on a normal shutdown, but is public so
-  // that it can be invoked when the user logs out/powers down (WM_ENDSESSION).
-  virtual void MarkAsCleanShutdown() = 0;
 
   // Start up service that gathers data from a promo resource feed.
   virtual void InitPromoResources() = 0;
@@ -314,10 +298,13 @@ class Profile : public content::BrowserContext {
   virtual chrome_browser_net::Predictor* GetNetworkPredictor() = 0;
 
   // Deletes all network related data since |time|. It deletes transport
-  // security state since |time| and it also delete HttpServerProperties data.
-  // The implementation is free to run this on a background thread, so when this
-  // method returns data is not guaranteed to be deleted.
-  virtual void ClearNetworkingHistorySince(base::Time time) = 0;
+  // security state since |time| and it also deletes HttpServerProperties data.
+  // Works asynchronously, however if the |completion| callback is non-null, it
+  // will be posted on the UI thread once the removal process completes.
+  // Be aware that theoretically it is possible that |completion| will be
+  // invoked after the Profile instance has been destroyed.
+  virtual void ClearNetworkingHistorySince(base::Time time,
+                                           const base::Closure& completion) = 0;
 
   // Returns the home page for this profile.
   virtual GURL GetHomePage() = 0;
@@ -329,7 +316,7 @@ class Profile : public content::BrowserContext {
   std::string GetDebugName();
 
   // Returns whether it is a guest session.
-  static bool IsGuestSession();
+  bool IsGuestSession();
 
   // Did the user restore the last session? This is set by SessionRestore.
   void set_restored_last_session(bool restored_last_session) {
@@ -338,6 +325,19 @@ class Profile : public content::BrowserContext {
   bool restored_last_session() const {
     return restored_last_session_;
   }
+
+  // Sets the ExitType for the profile. This may be invoked multiple times
+  // during shutdown; only the first such change (the transition from
+  // EXIT_CRASHED to one of the other values) is written to prefs, any
+  // later calls are ignored.
+  //
+  // NOTE: this is invoked internally on a normal shutdown, but is public so
+  // that it can be invoked when the user logs out/powers down (WM_ENDSESSION),
+  // or to handle backgrounding/foregrounding on mobile.
+  virtual void SetExitType(ExitType exit_type) = 0;
+
+  // Returns how the last session was shutdown.
+  virtual ExitType GetLastSessionExitType() = 0;
 
   // Stop sending accessibility events until ResumeAccessibilityEvents().
   // Calls to Pause nest; no events will be sent until the number of

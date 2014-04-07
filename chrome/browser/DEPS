@@ -4,7 +4,10 @@ include_rules = [
   "+chrome/installer",
   "+chrome/tools/profiles",  # For history unit tests.
   "+chromeos",
+  "+content/components",
   "+content/public/browser",
+  "+device/bluetooth",
+  "+extensions/common",
   "+google/cacheinvalidation",  # Sync invalidation API protobuf files.
   "+google_apis",
   "+google_update",
@@ -27,6 +30,7 @@ include_rules = [
   "+sync/notifier",  # Sync invalidation API files.
   "+sync/protocol",  # Sync protobuf files.
   "+third_party/cros_system_api",
+  "+win8/util",
   "+xib_localizers", # For generated mac localization helpers
 
   # TODO(stuartmorgan): Remove these by refactoring necessary code out of
@@ -35,9 +39,8 @@ include_rules = [
   "+webkit/appcache",
   "+webkit/blob",
   "+webkit/database",
-  "+webkit/dom_storage",
+  "+webkit/dom_storage/dom_storage_types.h",
   "+webkit/fileapi",
-  "+webkit/forms",  # Defines some types that are marshalled over IPC.
   "+webkit/plugins",  # Defines some types that are marshalled over IPC.
   "+webkit/quota",
   "+webkit/user_agent",
@@ -69,7 +72,6 @@ include_rules = [
   # TODO(tfarina): Remove all these. crbug.com/125846.
   # DO NOT ADD ANY MORE ITEMS TO THE LIST BELOW!
   "!chrome/browser/ui/views/extensions/extension_view_views.h",
-  "!chrome/browser/ui/views/frame/browser_view.h",
   "!chrome/browser/ui/views/location_bar/location_bar_view.h",
   "!chrome/browser/ui/views/location_bar/location_icon_view.h",
   "!chrome/browser/ui/views/notifications/balloon_view.h",

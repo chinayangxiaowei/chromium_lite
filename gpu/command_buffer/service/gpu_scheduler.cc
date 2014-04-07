@@ -62,18 +62,11 @@ void GpuScheduler::PutChanged() {
   if (!IsScheduled())
     return;
 
+  base::TimeTicks begin_time(base::TimeTicks::HighResNow());
   error::Error error = error::kNoError;
   while (!parser_->IsEmpty()) {
-    if (preempt_by_counter_.get() &&
-        !was_preempted_ &&
-        !preempt_by_counter_->IsZero()) {
-      TRACE_COUNTER_ID1("gpu","GpuScheduler::Preempted", this, 1);
-      was_preempted_ = true;
-      return;
-    } else if (was_preempted_) {
-      TRACE_COUNTER_ID1("gpu","GpuScheduler::Preempted", this, 0);
-      was_preempted_ = false;
-    }
+    if (IsPreempted())
+      break;
 
     DCHECK(IsScheduled());
     DCHECK(unschedule_fences_.empty());
@@ -82,7 +75,7 @@ void GpuScheduler::PutChanged() {
 
     if (error == error::kDeferCommandUntilLater) {
       DCHECK(unscheduled_count_ > 0);
-      return;
+      break;
     }
 
     // TODO(piman): various classes duplicate various pieces of state, leading
@@ -95,14 +88,23 @@ void GpuScheduler::PutChanged() {
                  << "GPU PARSE ERROR: " << error;
       command_buffer_->SetContextLostReason(decoder_->GetContextLostReason());
       command_buffer_->SetParseError(error);
-      return;
+      break;
     }
 
     if (!command_processed_callback_.is_null())
       command_processed_callback_.Run();
 
     if (unscheduled_count_ > 0)
-      return;
+      break;
+  }
+
+  if (decoder_) {
+    if (!error::IsError(error) && decoder_->WasContextLost()) {
+      command_buffer_->SetContextLostReason(decoder_->GetContextLostReason());
+      command_buffer_->SetParseError(error::kLostContext);
+    }
+    decoder_->AddProcessingCommandsTime(
+        base::TimeTicks::HighResNow() - begin_time);
   }
 }
 
@@ -124,7 +126,8 @@ void GpuScheduler::SetScheduled(bool scheduled) {
     DCHECK_GE(unscheduled_count_, 0);
 
     if (unscheduled_count_ == 0) {
-      TRACE_EVENT_ASYNC_END1("gpu", "Descheduled", this, "GpuScheduler", this);
+      TRACE_EVENT_ASYNC_END1("gpu", "ProcessingSwap", this,
+                             "GpuScheduler", this);
       // When the scheduler transitions from the unscheduled to the scheduled
       // state, cancel the task that would reschedule it after a timeout.
       reschedule_task_factory_.InvalidateWeakPtrs();
@@ -134,7 +137,7 @@ void GpuScheduler::SetScheduled(bool scheduled) {
     }
   } else {
     if (unscheduled_count_ == 0) {
-      TRACE_EVENT_ASYNC_BEGIN1("gpu", "Descheduled", this,
+      TRACE_EVENT_ASYNC_BEGIN1("gpu", "ProcessingSwap", this,
                                "GpuScheduler", this);
 #if defined(OS_WIN)
       // When the scheduler transitions from scheduled to unscheduled, post a
@@ -242,6 +245,21 @@ bool GpuScheduler::PollUnscheduleFences() {
   }
 
   return true;
+}
+
+bool GpuScheduler::IsPreempted() {
+  if (!preemption_flag_.get())
+    return false;
+
+  if (!was_preempted_ && !preemption_flag_->IsSet()) {
+    TRACE_COUNTER_ID1("gpu", "GpuScheduler::Preempted", this, 1);
+    was_preempted_ = true;
+  } else if (was_preempted_) {
+    TRACE_COUNTER_ID1("gpu", "GpuScheduler::Preempted", this, 0);
+    was_preempted_ = false;
+  }
+
+  return !preemption_flag_->IsSet();
 }
 
 void GpuScheduler::RescheduleTimeOut() {

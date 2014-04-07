@@ -4,6 +4,9 @@
 
 #include "chrome/browser/chrome_browser_main_linux.h"
 
+#include "chrome/browser/media_transfer_protocol/media_transfer_protocol_manager.h"
+#include "chrome/browser/system_monitor/media_transfer_protocol_device_observer_linux.h"
+
 #if !defined(OS_CHROMEOS)
 #include "chrome/browser/system_monitor/removable_device_notifications_linux.h"
 #endif
@@ -30,12 +33,7 @@
 namespace {
 
 #if defined(USE_LINUX_BREAKPAD)
-#if defined(OS_CHROMEOS)
-void ChromeOSVersionCallback(chromeos::VersionLoader::Handle,
-                             const std::string& version) {
-  base::SetLinuxDistro(std::string("CrOS ") + version);
-}
-#else
+#if !defined(OS_CHROMEOS)
 void GetLinuxDistroCallback() {
   base::GetLinuxDistro();  // Initialize base::linux_distro if needed.
 }
@@ -78,19 +76,18 @@ bool IsCrashReportingEnabled(const PrefService* local_state) {
 
 ChromeBrowserMainPartsLinux::ChromeBrowserMainPartsLinux(
     const content::MainFunctionParams& parameters)
-    : ChromeBrowserMainPartsPosix(parameters) {
+    : ChromeBrowserMainPartsPosix(parameters),
+      did_pre_profile_init_(false) {
 }
 
 ChromeBrowserMainPartsLinux::~ChromeBrowserMainPartsLinux() {
+  if (did_pre_profile_init_)
+    chrome::MediaTransferProtocolManager::Shutdown();
 }
 
 void ChromeBrowserMainPartsLinux::PreProfileInit() {
 #if defined(USE_LINUX_BREAKPAD)
-#if defined(OS_CHROMEOS)
-  cros_version_loader_.GetVersion(&cros_consumer_,
-                                  base::Bind(&ChromeOSVersionCallback),
-                                  chromeos::VersionLoader::VERSION_FULL);
-#else
+#if !defined(OS_CHROMEOS)
   // Needs to be called after we have chrome::DIR_USER_DATA and
   // g_browser_process.  This happens in PreCreateThreads.
   content::BrowserThread::PostTask(content::BrowserThread::FILE,
@@ -109,7 +106,18 @@ void ChromeBrowserMainPartsLinux::PreProfileInit() {
   removable_device_notifications_linux_->Init();
 #endif
 
+  chrome::MediaTransferProtocolManager::Initialize();
+
+  did_pre_profile_init_ = true;
+
   ChromeBrowserMainPartsPosix::PreProfileInit();
+}
+
+void ChromeBrowserMainPartsLinux::PostProfileInit() {
+  media_transfer_protocol_device_observer_.reset(
+      new chrome::MediaTransferProtocolDeviceObserverLinux());
+
+  ChromeBrowserMainPartsPosix::PostProfileInit();
 }
 
 void ChromeBrowserMainPartsLinux::PostMainMessageLoopRun() {
@@ -119,6 +127,8 @@ void ChromeBrowserMainPartsLinux::PostMainMessageLoopRun() {
   // single browser_test.
   removable_device_notifications_linux_ = NULL;
 #endif
+
+  media_transfer_protocol_device_observer_.reset();
 
   ChromeBrowserMainPartsPosix::PostMainMessageLoopRun();
 }

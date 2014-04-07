@@ -32,12 +32,12 @@
 #include <fstream>
 
 #include "base/basictypes.h"
-#include "base/eintr_wrapper.h"
 #include "base/file_path.h"
 #include "base/logging.h"
 #include "base/memory/scoped_ptr.h"
 #include "base/memory/singleton.h"
 #include "base/path_service.h"
+#include "base/posix/eintr_wrapper.h"
 #include "base/stl_util.h"
 #include "base/string_util.h"
 #include "base/stringprintf.h"
@@ -249,7 +249,7 @@ bool Delete(const FilePath& path, bool recursive) {
   return success;
 }
 
-bool Move(const FilePath& from_path, const FilePath& to_path) {
+bool MoveUnsafe(const FilePath& from_path, const FilePath& to_path) {
   base::ThreadRestrictions::AssertIOAllowed();
   // Windows compatibility: if to_path exists, from_path and to_path
   // must be the same type, either both files, or both directories.
@@ -343,15 +343,15 @@ bool CopyDirectory(const FilePath& from_path,
   DCHECK(recursive || S_ISDIR(info.stat.st_mode));
 
   while (success && !current.empty()) {
-    // current is the source path, including from_path, so paste
-    // the suffix after from_path onto to_path to create the target_path.
-    std::string suffix(&current.value().c_str()[from_path_base.value().size()]);
-    // Strip the leading '/' (if any).
-    if (!suffix.empty()) {
-      DCHECK_EQ('/', suffix[0]);
-      suffix.erase(0, 1);
+    // current is the source path, including from_path, so append
+    // the suffix after from_path to to_path to create the target_path.
+    FilePath target_path(to_path);
+    if (from_path_base != current) {
+      if (!from_path_base.AppendRelativePath(current, &target_path)) {
+        success = false;
+        break;
+      }
     }
-    const FilePath target_path = to_path.Append(suffix);
 
     if (S_ISDIR(info.stat.st_mode)) {
       if (mkdir(target_path.value().c_str(), info.stat.st_mode & 01777) != 0 &&
@@ -1040,7 +1040,7 @@ FilePath GetHomeDir() {
   return FilePath("/tmp");
 }
 
-bool CopyFile(const FilePath& from_path, const FilePath& to_path) {
+bool CopyFileUnsafe(const FilePath& from_path, const FilePath& to_path) {
   base::ThreadRestrictions::AssertIOAllowed();
   int infile = HANDLE_EINTR(open(from_path.value().c_str(), O_RDONLY));
   if (infile < 0)

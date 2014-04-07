@@ -21,19 +21,24 @@ class WebrtcTestBase(pyauto.PyUITest):
     extra_flags = ['--enable-media-stream', '--enable-peer-connection']
     return pyauto.PyUITest.ExtraChromeFlags(self) + extra_flags
 
-  def GetUserMedia(self, tab_index, action='allow'):
+  def GetUserMedia(self, tab_index, action='accept',
+                   request_video=True, request_audio=True):
     """Acquires webcam or mic for one tab and returns the result.
 
     Args:
       tab_index: The tab to request user media on.
-      action: The action to take on the info bar. Can be 'allow', 'deny' or
+      action: The action to take on the info bar. Can be 'accept', 'cancel' or
           'dismiss'.
+      request_video: Whether to request video.
+      request_audio: Whether to request audio.
 
     Returns:
       A string as specified by the getUserMedia javascript function.
     """
+    constraints = '{ video: %s, audio: %s }' % (str(request_video).lower(),
+                                                str(request_audio).lower())
     self.assertEquals('ok-requested', self.ExecuteJavascript(
-        'getUserMedia(true, true)', tab_index=tab_index))
+        'getUserMedia("%s")' % constraints, tab_index=tab_index))
 
     self.WaitForInfobarCount(1, tab_index=tab_index)
     self.PerformActionOnInfobar(action, infobar_index=0, tab_index=tab_index)
@@ -83,14 +88,27 @@ class WebrtcTestBase(pyauto.PyUITest):
         tab_index=tab_index))
     self.AssertNoFailures(tab_index)
 
-  def EstablishCall(self, from_tab_with_index):
-    self.assertEquals('ok-call-established', self.ExecuteJavascript(
-        'call()', tab_index=from_tab_with_index))
+  def EstablishCall(self, from_tab_with_index, to_tab_with_index):
+    self.WaitUntilPeerConnects(tab_index=from_tab_with_index)
+
+    self.assertEquals('ok-peerconnection-created', self.ExecuteJavascript(
+        'preparePeerConnection()', tab_index=from_tab_with_index))
     self.AssertNoFailures(from_tab_with_index)
 
+    self.assertEquals('ok-added', self.ExecuteJavascript(
+        'addLocalStream()', tab_index=from_tab_with_index))
+    self.AssertNoFailures(from_tab_with_index)
+
+    self.assertEquals('ok-negotiating', self.ExecuteJavascript(
+        'negotiateCall()', tab_index=from_tab_with_index))
+    self.AssertNoFailures(from_tab_with_index)
+
+    self.WaitUntilReadyState(ready_state='active',
+                             tab_index=from_tab_with_index)
+
     # Double-check the call reached the other side.
-    self.assertEquals('yes', self.ExecuteJavascript(
-        'isCallActive()', tab_index=from_tab_with_index))
+    self.WaitUntilReadyState(ready_state='active',
+                             tab_index=to_tab_with_index)
 
   def HangUp(self, from_tab_with_index):
     self.assertEquals('ok-call-hung-up', self.ExecuteJavascript(
@@ -98,13 +116,26 @@ class WebrtcTestBase(pyauto.PyUITest):
     self.WaitUntilHangUpVerified(tab_index=from_tab_with_index)
     self.AssertNoFailures(tab_index=from_tab_with_index)
 
-  def WaitUntilHangUpVerified(self, tab_index):
-    hung_up = self.WaitUntil(
-        function=lambda: self.ExecuteJavascript('isCallActive()',
+  def WaitUntilPeerConnects(self, tab_index):
+    peer_connected = self.WaitUntil(
+        function=lambda: self.ExecuteJavascript('remotePeerIsConnected()',
                                                 tab_index=tab_index),
-        expect_retval='no')
-    self.assertTrue(hung_up,
-                    msg='Timed out while waiting for hang-up to be confirmed.')
+        expect_retval='peer-connected')
+    self.assertTrue(peer_connected,
+                    msg='Timed out while waiting for peer to connect.')
+
+  def WaitUntilReadyState(self, ready_state, tab_index):
+    got_ready_state = self.WaitUntil(
+        function=lambda: self.ExecuteJavascript('getPeerConnectionReadyState()',
+                                                tab_index=tab_index),
+        expect_retval=ready_state)
+    self.assertTrue(got_ready_state,
+                    msg=('Timed out while waiting for peer connection ready '
+                         'state to change to %s for tab %d.' % (ready_state,
+                                                                tab_index)))
+
+  def WaitUntilHangUpVerified(self, tab_index):
+    self.WaitUntilReadyState('no-peer-connection', tab_index=tab_index)
 
   def Disconnect(self, tab_index):
     self.assertEquals('ok-disconnected', self.ExecuteJavascript(

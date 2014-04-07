@@ -15,7 +15,7 @@ namespace {
 
 class TestWebContentsCountFocus : public TestWebContents {
  public:
-  explicit TestWebContentsCountFocus(content::BrowserContext* browser_context)
+  explicit TestWebContentsCountFocus(BrowserContext* browser_context)
       : TestWebContents(browser_context), focus_called_(0) {
   }
 
@@ -34,7 +34,7 @@ class TestWebContentsCountFocus : public TestWebContents {
 class TestWebContentsCountSetFocusToLocationBar : public TestWebContents {
  public:
   explicit TestWebContentsCountSetFocusToLocationBar(
-      content::BrowserContext* browser_context)
+      BrowserContext* browser_context)
       : TestWebContents(browser_context), focus_called_(0) {
   }
 
@@ -67,7 +67,7 @@ WebContents* WebContentsTester::CreateTestWebContentsCountSetFocusToLocationBar(
     SiteInstance* instance) {
   TestWebContentsCountSetFocusToLocationBar* web_contents =
       new TestWebContentsCountSetFocusToLocationBar(browser_context);
-  web_contents->Init(browser_context, instance, MSG_ROUTING_NONE, NULL);
+  web_contents->Init(WebContents::CreateParams(browser_context, instance));
   return web_contents;
 }
 
@@ -77,7 +77,7 @@ WebContents* WebContentsTester::CreateTestWebContentsCountFocus(
     SiteInstance* instance) {
   TestWebContentsCountFocus* web_contents =
       new TestWebContentsCountFocus(browser_context);
-  web_contents->Init(browser_context, instance, MSG_ROUTING_NONE, NULL);
+  web_contents->Init(WebContents::CreateParams(browser_context, instance));
   return web_contents;
 }
 

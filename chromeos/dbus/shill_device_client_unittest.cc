@@ -12,6 +12,9 @@
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/cros_system_api/dbus/service_constants.h"
 
+using testing::_;
+using testing::ByRef;
+
 namespace chromeos {
 
 namespace {
@@ -59,7 +62,7 @@ class ShillDeviceClientTest : public ShillClientUnittestBase {
     client_.reset(ShillDeviceClient::Create(REAL_DBUS_CLIENT_IMPLEMENTATION,
                                                mock_bus_));
     // Run the message loop to run the signal connection result callback.
-    message_loop_.RunAllPending();
+    message_loop_.RunUntilIdle();
   }
 
   virtual void TearDown() {
@@ -81,16 +84,32 @@ TEST_F(ShillDeviceClientTest, PropertyChanged) {
 
   // Set expectations.
   const base::FundamentalValue value(kValue);
-  client_->SetPropertyChangedHandler(
+  MockPropertyChangeObserver observer;
+  EXPECT_CALL(observer,
+              OnPropertyChanged(
+                  flimflam::kCellularAllowRoamingProperty,
+                  ValueEq(ByRef(value)))).Times(1);
+
+  // Add the observer
+  client_->AddPropertyChangedObserver(
       dbus::ObjectPath(kExampleDevicePath),
-      base::Bind(&ExpectPropertyChanged,
-                 flimflam::kCellularAllowRoamingProperty,
-                 &value));
+      &observer);
+
   // Run the signal callback.
   SendPropertyChangedSignal(&signal);
 
-  // Reset the handler.
-  client_->ResetPropertyChangedHandler(dbus::ObjectPath(kExampleDevicePath));
+  // Remove the observer.
+  client_->RemovePropertyChangedObserver(
+      dbus::ObjectPath(kExampleDevicePath),
+      &observer);
+
+  EXPECT_CALL(observer,
+              OnPropertyChanged(
+                  flimflam::kCellularAllowRoamingProperty,
+                  ValueEq(ByRef(value)))).Times(0);
+
+  // Run the signal callback again and make sure the observer isn't called.
+  SendPropertyChangedSignal(&signal);
 }
 
 TEST_F(ShillDeviceClientTest, GetProperties) {
@@ -118,7 +137,7 @@ TEST_F(ShillDeviceClientTest, GetProperties) {
   client_->GetProperties(dbus::ObjectPath(kExampleDevicePath),
                          base::Bind(&ExpectDictionaryValueResult, &value));
   // Run the message loop.
-  message_loop_.RunAllPending();
+  message_loop_.RunUntilIdle();
 }
 
 TEST_F(ShillDeviceClientTest, CallGetPropertiesAndBlock) {
@@ -161,7 +180,7 @@ TEST_F(ShillDeviceClientTest, ProposeScan) {
   client_->ProposeScan(dbus::ObjectPath(kExampleDevicePath),
                        base::Bind(&ExpectNoResultValue));
   // Run the message loop.
-  message_loop_.RunAllPending();
+  message_loop_.RunUntilIdle();
 }
 
 TEST_F(ShillDeviceClientTest, SetProperty) {
@@ -177,12 +196,18 @@ TEST_F(ShillDeviceClientTest, SetProperty) {
                                   &value),
                        response.get());
   // Call method.
+  MockClosure mock_closure;
+  MockErrorCallback mock_error_callback;
   client_->SetProperty(dbus::ObjectPath(kExampleDevicePath),
                        flimflam::kCellularAllowRoamingProperty,
                        value,
-                       base::Bind(&ExpectNoResultValue));
+                       mock_closure.GetCallback(),
+                       mock_error_callback.GetCallback());
+  EXPECT_CALL(mock_closure, Run()).Times(1);
+  EXPECT_CALL(mock_error_callback, Run(_, _)).Times(0);
+
   // Run the message loop.
-  message_loop_.RunAllPending();
+  message_loop_.RunUntilIdle();
 }
 
 TEST_F(ShillDeviceClientTest, ClearProperty) {
@@ -199,7 +224,7 @@ TEST_F(ShillDeviceClientTest, ClearProperty) {
                          flimflam::kCellularAllowRoamingProperty,
                          base::Bind(&ExpectNoResultValue));
   // Run the message loop.
-  message_loop_.RunAllPending();
+  message_loop_.RunUntilIdle();
 }
 
 TEST_F(ShillDeviceClientTest, AddIPConfig) {
@@ -218,24 +243,7 @@ TEST_F(ShillDeviceClientTest, AddIPConfig) {
                        flimflam::kTypeDHCP,
                        base::Bind(&ExpectObjectPathResult, expected_result));
   // Run the message loop.
-  message_loop_.RunAllPending();
-}
-
-TEST_F(ShillDeviceClientTest, CallAddIPConfigAndBlock) {
-  const dbus::ObjectPath expected_result("/result/path");
-  // Create response.
-  scoped_ptr<dbus::Response> response(dbus::Response::CreateEmpty());
-  dbus::MessageWriter writer(response.get());
-  writer.AppendObjectPath(expected_result);
-
-  // Set expectations.
-  PrepareForMethodCall(flimflam::kAddIPConfigFunction,
-                       base::Bind(&ExpectStringArgument, flimflam::kTypeDHCP),
-                       response.get());
-  // Call method.
-  const dbus::ObjectPath result = client_->CallAddIPConfigAndBlock(
-      dbus::ObjectPath(kExampleDevicePath), flimflam::kTypeDHCP);
-  EXPECT_EQ(expected_result, result);
+  message_loop_.RunUntilIdle();
 }
 
 TEST_F(ShillDeviceClientTest, RequirePin) {
@@ -253,6 +261,7 @@ TEST_F(ShillDeviceClientTest, RequirePin) {
                                   kRequired),
                        response.get());
   EXPECT_CALL(mock_closure, Run()).Times(1);
+  EXPECT_CALL(mock_error_callback, Run(_, _)).Times(0);
   // Call method.
   client_->RequirePin(dbus::ObjectPath(kExampleDevicePath),
                       kPin,
@@ -260,7 +269,7 @@ TEST_F(ShillDeviceClientTest, RequirePin) {
                       mock_closure.GetCallback(),
                       mock_error_callback.GetCallback());
   // Run the message loop.
-  message_loop_.RunAllPending();
+  message_loop_.RunUntilIdle();
 }
 
 TEST_F(ShillDeviceClientTest, EnterPin) {
@@ -276,13 +285,15 @@ TEST_F(ShillDeviceClientTest, EnterPin) {
                                   kPin),
                        response.get());
   EXPECT_CALL(mock_closure, Run()).Times(1);
+  EXPECT_CALL(mock_error_callback, Run(_, _)).Times(0);
+
   // Call method.
   client_->EnterPin(dbus::ObjectPath(kExampleDevicePath),
                     kPin,
                     mock_closure.GetCallback(),
                     mock_error_callback.GetCallback());
   // Run the message loop.
-  message_loop_.RunAllPending();
+  message_loop_.RunUntilIdle();
 }
 
 TEST_F(ShillDeviceClientTest, UnblockPin) {
@@ -298,6 +309,8 @@ TEST_F(ShillDeviceClientTest, UnblockPin) {
                        base::Bind(&ExpectTwoStringArguments, kPuk, kPin),
                        response.get());
   EXPECT_CALL(mock_closure, Run()).Times(1);
+  EXPECT_CALL(mock_error_callback, Run(_, _)).Times(0);
+
   // Call method.
   client_->UnblockPin(dbus::ObjectPath(kExampleDevicePath),
                       kPuk,
@@ -305,7 +318,7 @@ TEST_F(ShillDeviceClientTest, UnblockPin) {
                       mock_closure.GetCallback(),
                       mock_error_callback.GetCallback());
   // Run the message loop.
-  message_loop_.RunAllPending();
+  message_loop_.RunUntilIdle();
 }
 
 TEST_F(ShillDeviceClientTest, ChangePin) {
@@ -323,6 +336,8 @@ TEST_F(ShillDeviceClientTest, ChangePin) {
                                   kNewPin),
                        response.get());
   EXPECT_CALL(mock_closure, Run()).Times(1);
+  EXPECT_CALL(mock_error_callback, Run(_, _)).Times(0);
+
   // Call method.
   client_->ChangePin(dbus::ObjectPath(kExampleDevicePath),
                      kOldPin,
@@ -330,7 +345,7 @@ TEST_F(ShillDeviceClientTest, ChangePin) {
                      mock_closure.GetCallback(),
                      mock_error_callback.GetCallback());
   // Run the message loop.
-  message_loop_.RunAllPending();
+  message_loop_.RunUntilIdle();
 }
 
 TEST_F(ShillDeviceClientTest, Register) {
@@ -345,13 +360,15 @@ TEST_F(ShillDeviceClientTest, Register) {
                        base::Bind(&ExpectStringArgument, kNetworkId),
                        response.get());
   EXPECT_CALL(mock_closure, Run()).Times(1);
+  EXPECT_CALL(mock_error_callback, Run(_, _)).Times(0);
+
   // Call method.
   client_->Register(dbus::ObjectPath(kExampleDevicePath),
                     kNetworkId,
                     mock_closure.GetCallback(),
                     mock_error_callback.GetCallback());
   // Run the message loop.
-  message_loop_.RunAllPending();
+  message_loop_.RunUntilIdle();
 }
 
 TEST_F(ShillDeviceClientTest, SetCarrier) {
@@ -372,7 +389,26 @@ TEST_F(ShillDeviceClientTest, SetCarrier) {
                     mock_closure.GetCallback(),
                     mock_error_callback.GetCallback());
   // Run the message loop.
-  message_loop_.RunAllPending();
+  message_loop_.RunUntilIdle();
+}
+
+TEST_F(ShillDeviceClientTest, Reset) {
+  // Create response.
+  scoped_ptr<dbus::Response> response(dbus::Response::CreateEmpty());
+
+  // Set expectations.
+  MockClosure mock_closure;
+  MockErrorCallback mock_error_callback;
+  PrepareForMethodCall("Reset",
+                       base::Bind(&ExpectNoArgument),
+                       response.get());
+  EXPECT_CALL(mock_closure, Run()).Times(1);
+  // Call method.
+  client_->Reset(dbus::ObjectPath(kExampleDevicePath),
+                 mock_closure.GetCallback(),
+                 mock_error_callback.GetCallback());
+  // Run the message loop.
+  message_loop_.RunUntilIdle();
 }
 
 }  // namespace chromeos

@@ -13,6 +13,7 @@
 
 #include "base/auto_reset.h"
 #include "base/basictypes.h"
+#include "base/bind.h"
 #include "base/i18n/rtl.h"
 #include "base/lazy_instance.h"
 #include "base/memory/ref_counted.h"
@@ -32,6 +33,7 @@
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/omnibox/omnibox_edit_controller.h"
+#include "chrome/browser/ui/omnibox/omnibox_edit_model.h"
 #include "chrome/browser/ui/omnibox/omnibox_popup_model.h"
 #include "chrome/browser/ui/search/search.h"
 #include "chrome/browser/ui/views/location_bar/location_bar_view.h"
@@ -53,6 +55,8 @@
 #include "ui/base/dragdrop/os_exchange_data_provider_win.h"
 #include "ui/base/events/event.h"
 #include "ui/base/events/event_constants.h"
+#include "ui/base/ime/win/tsf_bridge.h"
+#include "ui/base/ime/win/tsf_event_router.h"
 #include "ui/base/keycodes/keyboard_codes.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/l10n/l10n_util_win.h"
@@ -65,6 +69,7 @@
 #include "ui/views/controls/menu/menu_runner.h"
 #include "ui/views/controls/textfield/native_textfield_win.h"
 #include "ui/views/widget/widget.h"
+#include "win8/util/win8_util.h"
 
 #pragma comment(lib, "oleacc.lib")  // Needed for accessibility support.
 
@@ -118,8 +123,8 @@ struct AutocompleteEditState : public base::SupportsUserData::Data {
 // Returns true if the current point is far enough from the origin that it
 // would be considered a drag.
 bool IsDrag(const POINT& origin, const POINT& current) {
-  return views::View::ExceededDragThreshold(current.x - origin.x,
-                                            current.y - origin.y);
+  return views::View::ExceededDragThreshold(
+      gfx::Point(current) - gfx::Point(origin));
 }
 
 // Write |text| and an optional |url| to the clipboard.
@@ -451,13 +456,11 @@ OmniboxViewWin::OmniboxViewWin(OmniboxEditController* controller,
                                LocationBarView* parent_view,
                                CommandUpdater* command_updater,
                                bool popup_window_mode,
-                               views::View* location_bar,
-                               views::View* popup_parent_view)
+                               views::View* location_bar)
     : OmniboxView(parent_view->profile(), controller, toolbar_model,
           command_updater),
       popup_view_(OmniboxPopupContentsView::Create(
-          parent_view->font(), this, model(), location_bar,
-          popup_parent_view)),
+          parent_view->font(), this, model(), location_bar)),
       parent_view_(parent_view),
       popup_window_mode_(popup_window_mode),
       force_hidden_(false),
@@ -473,10 +476,13 @@ OmniboxViewWin::OmniboxViewWin(OmniboxEditController* controller,
       initiated_drag_(false),
       drop_highlight_position_(-1),
       ime_candidate_window_open_(false),
-      background_color_(skia::SkColorToCOLORREF(LocationBarView::GetColor(
+      background_color_(skia::SkColorToCOLORREF(parent_view->GetColor(
           ToolbarModel::NONE, LocationBarView::BACKGROUND))),
       security_level_(ToolbarModel::NONE),
-      text_object_model_(NULL) {
+      text_object_model_(NULL),
+      ALLOW_THIS_IN_INITIALIZER_LIST(
+          tsf_event_router_(base::win::IsTSFAwareRequired() ?
+              new ui::TSFEventRouter(this) : NULL)) {
   if (!loaded_library_module_)
     loaded_library_module_ = LoadLibrary(kRichEditDLLName);
 
@@ -526,15 +532,17 @@ OmniboxViewWin::OmniboxViewWin(OmniboxEditController* controller,
 
   SetBackgroundColor(background_color_);
 
-  // By default RichEdit has a drop target. Revoke it so that we can install our
-  // own. Revoke takes care of deleting the existing one.
-  RevokeDragDrop(m_hWnd);
-
-  // Register our drop target. RichEdit appears to invoke RevokeDropTarget when
-  // done so that we don't have to explicitly.
   if (!popup_window_mode_) {
-    scoped_refptr<EditDropTarget> drop_target = new EditDropTarget(this);
-    RegisterDragDrop(m_hWnd, drop_target.get());
+    // Non-read-only edit controls have a drop target.  Revoke it so that we can
+    // install our own.  Revoking automatically deletes the existing one.
+    HRESULT hr = RevokeDragDrop(m_hWnd);
+    DCHECK_EQ(S_OK, hr);
+
+    // Register our drop target.  The scoped_refptr here will delete the drop
+    // target if it fails to register itself correctly on |m_hWnd|.  Otherwise,
+    // the edit control will invoke RevokeDragDrop when it's being destroyed, so
+    // we don't have to do so.
+    scoped_refptr<EditDropTarget> drop_target(new EditDropTarget(this));
   }
 }
 
@@ -754,6 +762,42 @@ void OmniboxViewWin::UpdatePopup() {
 
 void OmniboxViewWin::SetFocus() {
   ::SetFocus(m_hWnd);
+  // Restore caret visibility if focus is explicitly requested. This is
+  // necessary because if we already have invisible focus, the ::SetFocus()
+  // call above will short-circuit, preventing us from reaching
+  // OmniboxEditModel::OnSetFocus(), which handles restoring visibility when the
+  // omnibox regains focus after losing focus.
+  model()->SetCaretVisibility(true);
+}
+
+void OmniboxViewWin::ApplyCaretVisibility() {
+  // We hide the caret just before destroying it, since destroying a caret that
+  // is in the "solid" phase of its blinking will leave a solid vertical bar.
+  // We even hide and destroy the caret if we're going to create it again below.
+  // If the caret was already visible on entry to this function, the
+  // CreateCaret() call (which first destroys the old caret) might leave a solid
+  // vertical bar for the same reason as above.  Unconditionally hiding prevents
+  // this.  The caret could be visible on entry to this function if the
+  // underlying edit control had re-created it automatically (see comments in
+  // OnPaint()).
+  HideCaret();
+  // We use DestroyCaret()/CreateCaret() instead of simply HideCaret()/
+  // ShowCaret() because HideCaret() is not sticky across paint events, e.g. a
+  // window resize will effectively restore caret visibility, regardless of
+  // whether HideCaret() was called before. While we do catch and handle these
+  // paint events (see OnPaint()), it doesn't seem to be enough to simply call
+  // HideCaret() while handling them because of the unpredictability of this
+  // Windows API. According to the documentation, it should be a cumulative call
+  // e.g. 5 hide calls should be balanced by 5 show calls. We have not found
+  // this to be true, which may be explained by the fact that this API is called
+  // internally in Windows, as well.
+  ::DestroyCaret();
+  if (model()->is_caret_visible()) {
+    ::CreateCaret(m_hWnd, (HBITMAP) NULL, 1, font_.GetHeight());
+    // According to the Windows API documentation, a newly created caret needs
+    // ShowCaret to be visible.
+    ShowCaret();
+  }
 }
 
 void OmniboxViewWin::SetDropHighlightPosition(int position) {
@@ -910,6 +954,29 @@ bool OmniboxViewWin::OnAfterPossibleChangeInternal(bool force_text_changed) {
   return something_changed;
 }
 
+void OmniboxViewWin::OnCandidateWindowCountChanged(size_t window_count) {
+  ime_candidate_window_open_ = (window_count != 0);
+  if (ime_candidate_window_open_) {
+    CloseOmniboxPopup();
+  } else if (model()->user_input_in_progress()) {
+    // UpdatePopup assumes user input is in progress, so only call it if
+    // that's the case. Otherwise, autocomplete may run on an empty user
+    // text.
+    UpdatePopup();
+  }
+}
+
+void OmniboxViewWin::OnTextUpdated(const ui::Range& /*composition_range*/) {
+  if (ignore_ime_messages_)
+    return;
+  OnAfterPossibleChangeInternal(true);
+  // Call OnBeforePossibleChange function here to get correct diff in next IME
+  // update. The Text Services Framework does not provide any notification
+  // before entering edit session, therefore we don't have good place to call
+  // OnBeforePossibleChange.
+  OnBeforePossibleChange();
+}
+
 gfx::NativeView OmniboxViewWin::GetNativeView() const {
   return m_hWnd;
 }
@@ -931,9 +998,8 @@ gfx::NativeView OmniboxViewWin::GetRelativeWindowForPopup() const {
   return GetRelativeWindowForNativeView(GetNativeView());
 }
 
-void OmniboxViewWin::SetInstantSuggestion(const string16& suggestion,
-                                          bool animate_to_complete) {
-  parent_view_->SetInstantSuggestion(suggestion, animate_to_complete);
+void OmniboxViewWin::SetInstantSuggestion(const string16& suggestion) {
+  parent_view_->SetInstantSuggestion(suggestion);
 }
 
 int OmniboxViewWin::TextWidth() const {
@@ -945,6 +1011,8 @@ string16 OmniboxViewWin::GetInstantSuggestion() const {
 }
 
 bool OmniboxViewWin::IsImeComposing() const {
+  if (tsf_event_router_)
+    return tsf_event_router_->IsImeComposing();
   bool ime_composing = false;
   HIMC context = ImmGetContext(m_hWnd);
   if (context) {
@@ -1364,11 +1432,23 @@ void OmniboxViewWin::OnCopy() {
 }
 
 LRESULT OmniboxViewWin::OnCreate(const CREATESTRUCTW* /*create_struct*/) {
-  if (base::win::IsTsfAwareRequired()) {
+  if (base::win::IsTSFAwareRequired()) {
     // Enable TSF support of RichEdit.
     SetEditStyle(SES_USECTF, SES_USECTF);
   }
+  if (base::win::GetVersion() >= base::win::VERSION_WIN8) {
+    BOOL touch_mode = RegisterTouchWindow(m_hWnd, TWF_WANTPALM);
+    DCHECK(touch_mode);
+  }
   SetMsgHandled(FALSE);
+
+  // When TSF is enabled, OnTextUpdated() may be called without any previous
+  // call that would have indicated the start of an editing session.  In order
+  // to guarantee we've always called OnBeforePossibleChange() before
+  // OnAfterPossibleChange(), we therefore call that here.  Note that multiple
+  // (i.e. unmatched) calls to this function in a row are safe.
+  if (base::win::IsTSFAwareRequired())
+    OnBeforePossibleChange();
   return 0;
 }
 
@@ -1458,26 +1538,26 @@ LRESULT OmniboxViewWin::OnImeNotify(UINT message,
   return DefWindowProc(message, wparam, lparam);
 }
 
-LRESULT OmniboxViewWin::OnPointerDown(UINT message,
-                                      WPARAM wparam,
-                                      LPARAM lparam) {
-  if (!model()->has_focus())
-    SetFocus();
-
-  if (IS_POINTER_FIRSTBUTTON_WPARAM(wparam)) {
-    TrackMousePosition(kLeft, CPoint(GET_X_LPARAM(lparam),
-                                     GET_Y_LPARAM(lparam)));
+LRESULT OmniboxViewWin::OnTouchEvent(UINT message,
+                                     WPARAM wparam,
+                                     LPARAM lparam) {
+  // There is a bug in Windows 8 where in the generated mouse messages
+  // after touch go to the window which previously had focus. This means that
+  // if a user taps the omnibox to give it focus, we don't get the simulated
+  // WM_LBUTTONDOWN, and thus don't properly select all the text. To ensure
+  // that we get this message, we capture the mouse when the user is doing a
+  // single-point tap on an unfocused model.
+  if ((wparam == 1) && !model()->has_focus()) {
+    TOUCHINPUT point = {0};
+    if (GetTouchInputInfo(reinterpret_cast<HTOUCHINPUT>(lparam), 1,
+                          &point, sizeof(TOUCHINPUT))) {
+      if (point.dwFlags & TOUCHEVENTF_DOWN)
+        SetCapture();
+      else if (point.dwFlags & TOUCHEVENTF_UP)
+        ReleaseCapture();
+    }
   }
-
   SetMsgHandled(false);
-
-  return 0;
-}
-
-LRESULT OmniboxViewWin::OnPointerUp(UINT message, WPARAM wparam,
-                                    LPARAM lparam) {
-  SetMsgHandled(false);
-
   return 0;
 }
 
@@ -1575,6 +1655,9 @@ void OmniboxViewWin::OnKillFocus(HWND focus_wnd) {
   // view, we work around this CRichEditCtrl bug.
   SelectAll(true);
   PlaceCaretAt(0);
+
+  if (tsf_event_router_)
+    tsf_event_router_->SetManager(NULL);
 }
 
 void OmniboxViewWin::OnLButtonDblClk(UINT keys, const CPoint& point) {
@@ -1691,12 +1774,24 @@ LRESULT OmniboxViewWin::OnMouseActivate(HWND window,
   // reached before OnXButtonDown(), preventing us from detecting this properly
   // there.  Also in those cases, we need to already know in OnSetFocus() that
   // we should not restore the saved selection.
-  if (!model()->has_focus() &&
-      ((mouse_message == WM_LBUTTONDOWN || mouse_message == WM_RBUTTONDOWN ||
-        mouse_message == WM_POINTERDOWN)) &&
+  if ((!model()->has_focus() ||
+       (model()->focus_state() == OMNIBOX_FOCUS_INVISIBLE)) &&
+      ((mouse_message == WM_LBUTTONDOWN || mouse_message == WM_RBUTTONDOWN)) &&
       (result == MA_ACTIVATE)) {
-    DCHECK(!gaining_focus_.get());
+    if (gaining_focus_) {
+      // On Windows 8 in metro mode, we get two WM_MOUSEACTIVATE messages when
+      // we click on the omnibox with the mouse.
+      DCHECK(win8::IsSingleWindowMetroMode());
+      return result;
+    }
     gaining_focus_.reset(new ScopedFreeze(this, GetTextObjectModel()));
+
+    // Restore caret visibility whenever the user clicks in the omnibox in a
+    // way that would give it focus.  We must handle this case separately here
+    // because if the omnibox currently has invisible focus, the mouse event
+    // won't trigger either SetFocus() or OmniboxEditModel::OnSetFocus().
+    model()->SetCaretVisibility(true);
+
     // NOTE: Despite |mouse_message| being WM_XBUTTONDOWN here, we're not
     // guaranteed to call OnXButtonDown() later!  Specifically, if this is the
     // second click of a double click, we'll reach here but later call
@@ -1845,6 +1940,21 @@ void OmniboxViewWin::OnPaint(HDC bogus_hdc) {
          rect.left, rect.top, SRCCOPY);
   memory_dc.SelectBitmap(old_bitmap);
   edit_hwnd = old_edit_hwnd;
+
+  // If textfield has focus, reaffirm its caret visibility (without focus, a new
+  // caret could be created and confuse the user as to where the focus is). This
+  // needs to be called regardless of the current visibility of the caret. This
+  // is because the underlying edit control will automatically re-create the
+  // caret when it receives certain events that trigger repaints, e.g. window
+  // resize events. This also checks for the existence of selected text, in
+  // which case there shouldn't be a recreated caret since this would create
+  // both a highlight and a blinking caret.
+  if (model()->has_focus()) {
+    CHARRANGE sel;
+    GetSel(sel);
+    if (sel.cpMin == sel.cpMax)
+      ApplyCaretVisibility();
+  }
 }
 
 void OmniboxViewWin::OnPaste() {
@@ -1898,7 +2008,16 @@ void OmniboxViewWin::OnSetFocus(HWND focus_wnd) {
     saved_selection_for_focus_change_.cpMin = -1;
   }
 
-  SetMsgHandled(false);
+  if (!tsf_event_router_) {
+    SetMsgHandled(false);
+  } else {
+    DefWindowProc();
+    // Document manager created by RichEdit can be obtained only after
+    // WM_SETFOCUS event is handled.
+    tsf_event_router_->SetManager(
+        ui::TSFBridge::GetInstance()->GetThreadManager());
+    SetMsgHandled(true);
+  }
 }
 
 LRESULT OmniboxViewWin::OnSetText(const wchar_t* text) {
@@ -1911,7 +2030,8 @@ LRESULT OmniboxViewWin::OnSetText(const wchar_t* text) {
   // We wouldn't need to do this update anyway, because either we're in the
   // middle of updating the omnibox already or the caller of SetWindowText()
   // is going to update the omnibox next.
-  AutoReset<bool> auto_reset_ignore_ime_messages(&ignore_ime_messages_, true);
+  base::AutoReset<bool> auto_reset_ignore_ime_messages(
+      &ignore_ime_messages_, true);
   return DefWindowProc(WM_SETTEXT, 0, reinterpret_cast<LPARAM>(text));
 }
 
@@ -2302,13 +2422,16 @@ void OmniboxViewWin::EmphasizeURLComponents() {
       GetText(), model()->GetDesiredTLD(), &scheme, &host);
   const bool emphasize = model()->CurrentTextIsURL() && (host.len > 0);
 
+  bool instant_extended_api_enabled =
+      chrome::search::IsInstantExtendedAPIEnabled(parent_view_->profile());
+
   // Set the baseline emphasis.
   CHARFORMAT cf = {0};
   cf.dwMask = CFM_COLOR;
   // If we're going to emphasize parts of the text, then the baseline state
   // should be "de-emphasized".  If not, then everything should be rendered in
   // the standard text color.
-  cf.crTextColor = skia::SkColorToCOLORREF(LocationBarView::GetColor(
+  cf.crTextColor = skia::SkColorToCOLORREF(parent_view_->GetColor(
       security_level_,
       emphasize ? LocationBarView::DEEMPHASIZED_TEXT : LocationBarView::TEXT));
   // NOTE: Don't use SetDefaultCharFormat() instead of the below; that sets the
@@ -2319,7 +2442,7 @@ void OmniboxViewWin::EmphasizeURLComponents() {
 
   if (emphasize) {
     // We've found a host name, give it more emphasis.
-    cf.crTextColor = skia::SkColorToCOLORREF(LocationBarView::GetColor(
+    cf.crTextColor = skia::SkColorToCOLORREF(parent_view_->GetColor(
         security_level_, LocationBarView::TEXT));
     SetSelection(host.begin, host.end());
     SetSelectionCharFormat(cf);
@@ -2327,13 +2450,13 @@ void OmniboxViewWin::EmphasizeURLComponents() {
 
   // Emphasize the scheme for security UI display purposes (if necessary).
   insecure_scheme_component_.reset();
-  if (!model()->user_input_in_progress() && scheme.is_nonempty() &&
-      (security_level_ != ToolbarModel::NONE)) {
+  if (!model()->user_input_in_progress() && model()->CurrentTextIsURL() &&
+      scheme.is_nonempty() && (security_level_ != ToolbarModel::NONE)) {
     if (security_level_ == ToolbarModel::SECURITY_ERROR) {
       insecure_scheme_component_.begin = scheme.begin;
       insecure_scheme_component_.len = scheme.len;
     }
-    cf.crTextColor = skia::SkColorToCOLORREF(LocationBarView::GetColor(
+    cf.crTextColor = skia::SkColorToCOLORREF(parent_view_->GetColor(
         security_level_, LocationBarView::SECURITY_TEXT));
     SetSelection(scheme.begin, scheme.end());
     SetSelectionCharFormat(cf);
@@ -2426,12 +2549,15 @@ void OmniboxViewWin::DrawSlashForInsecureScheme(HDC hdc,
       SkIntToScalar(PosFromChar(sel.cpMax).x - scheme_rect.left),
       SkIntToScalar(scheme_rect.Height()) };
 
+  bool instant_extended_api_enabled =
+      chrome::search::IsInstantExtendedAPIEnabled(parent_view_->profile());
+
   // Draw the unselected portion of the stroke.
   sk_canvas->save();
   if (selection_rect.isEmpty() ||
       sk_canvas->clipRect(selection_rect, SkRegion::kDifference_Op)) {
-    paint.setColor(LocationBarView::GetColor(security_level_,
-                                             LocationBarView::SECURITY_TEXT));
+    paint.setColor(parent_view_->GetColor(security_level_,
+                                          LocationBarView::SECURITY_TEXT));
     sk_canvas->drawLine(start_point.fX, start_point.fY,
                         end_point.fX, end_point.fY, paint);
   }
@@ -2439,8 +2565,8 @@ void OmniboxViewWin::DrawSlashForInsecureScheme(HDC hdc,
 
   // Draw the selected portion of the stroke.
   if (!selection_rect.isEmpty() && sk_canvas->clipRect(selection_rect)) {
-    paint.setColor(LocationBarView::GetColor(security_level_,
-                                             LocationBarView::SELECTED_TEXT));
+    paint.setColor(parent_view_->GetColor(security_level_,
+                                          LocationBarView::SELECTED_TEXT));
     sk_canvas->drawLine(start_point.fX, start_point.fY,
                         end_point.fX, end_point.fY, paint);
   }
@@ -2550,7 +2676,7 @@ void OmniboxViewWin::StartDragIfNecessary(const CPoint& point) {
 
   scoped_refptr<ui::DragSource> drag_source(new ui::DragSource);
   DWORD dropped_mode;
-  AutoReset<bool> auto_reset_in_drag(&in_drag_, true);
+  base::AutoReset<bool> auto_reset_in_drag(&in_drag_, true);
   if (DoDragDrop(ui::OSExchangeDataProviderWin::GetIDataObject(data),
                  drag_source, supported_modes, &dropped_mode) ==
           DRAGDROP_S_DROP) {

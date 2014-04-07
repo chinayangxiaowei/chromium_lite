@@ -32,6 +32,8 @@
         'backend/print_backend_consts.cc',
         'backend/print_backend_consts.h',
         'backend/print_backend_dummy.cc',
+        'backend/printing_info_win.cc',
+        'backend/printing_info_win.h',
         'emf_win.cc',
         'emf_win.h',
         'image.cc',
@@ -132,6 +134,9 @@
           ],
         }],
         ['OS=="win"', {
+          'dependencies': [
+            '../win8/win8.gyp:win8_util',
+          ],
           'conditions': [
             ['use_aura==0', {
               'sources': [
@@ -247,6 +252,8 @@
           'dependencies': [
             '../build/linux/system.gyp:gtk',
           ],
+        }],
+        [ 'os_posix == 1 and OS != "mac" and OS != "android" and OS != "ios"', {
           'conditions': [
             ['linux_use_tcmalloc == 1', {
               'dependencies': [

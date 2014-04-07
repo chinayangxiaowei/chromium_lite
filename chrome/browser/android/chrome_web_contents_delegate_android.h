@@ -7,7 +7,8 @@
 
 #include <jni.h>
 
-#include "chrome/browser/component/web_contents_delegate_android/web_contents_delegate_android.h"
+#include "base/time.h"
+#include "content/components/web_contents_delegate_android/web_contents_delegate_android.h"
 #include "content/public/browser/notification_observer.h"
 #include "content/public/browser/notification_registrar.h"
 
@@ -30,7 +31,7 @@ namespace android {
 // Should contain any WebContentsDelegate implementations required by
 // the Chromium Android port but not to be shared with WebView.
 class ChromeWebContentsDelegateAndroid
-    : public web_contents_delegate_android::WebContentsDelegateAndroid,
+    : public content::WebContentsDelegateAndroid,
       public content::NotificationObserver {
  public:
   ChromeWebContentsDelegateAndroid(JNIEnv* env, jobject obj);
@@ -50,6 +51,16 @@ class ChromeWebContentsDelegateAndroid
                                    int version,
                                    const std::vector<gfx::RectF>& rects,
                                    const gfx::RectF& active_rect) OVERRIDE;
+  virtual content::JavaScriptDialogCreator*
+  GetJavaScriptDialogCreator() OVERRIDE;
+  virtual bool CanDownload(content::RenderViewHost* source,
+                           int request_id,
+                           const std::string& request_method) OVERRIDE;
+  virtual void OnStartDownload(content::WebContents* source,
+                               content::DownloadItem* download) OVERRIDE;
+  virtual void DidNavigateToPendingEntry(content::WebContents* source) OVERRIDE;
+  virtual void DidNavigateMainFramePostCommit(
+      content::WebContents* source) OVERRIDE;
 
  private:
   // NotificationObserver implementation.
@@ -61,6 +72,8 @@ class ChromeWebContentsDelegateAndroid
                              const FindNotificationDetails* find_result);
 
   content::NotificationRegistrar notification_registrar_;
+
+  base::TimeTicks navigation_start_time_;
 };
 
 // Register the native methods through JNI.

@@ -9,6 +9,7 @@
 
 #include "base/callback_forward.h"
 #include "base/memory/ref_counted.h"
+#include "base/single_thread_task_runner.h"
 #include "base/synchronization/lock.h"
 #include "base/synchronization/waitable_event.h"
 #include "base/win/scoped_comptr.h"
@@ -57,11 +58,18 @@ class SURFACE_EXPORT AcceleratedPresenter
   void ReleaseSurface();
 
   // The public member functions are called on the main thread.
-  bool Present(HDC dc);
-  bool CopyTo(const gfx::Rect& src_subrect,
-              const gfx::Size& dst_size,
-              void* buf);
+  void Present(HDC dc);
+  void AsyncCopyTo(const gfx::Rect& src_subrect,
+                   const gfx::Size& dst_size,
+                   void* buf,
+                   const base::Callback<void(bool)>& callback);
   void Invalidate();
+
+#if defined(USE_AURA)
+  // TODO(scottmg): This is a temporary hack until we have a two-worlds ash/aura
+  // separation.
+  void SetNewTargetWindow(gfx::PluginWindowHandle window);
+#endif
 
  private:
   friend class base::RefCountedThreadSafe<AcceleratedPresenter>;
@@ -75,9 +83,26 @@ class SURFACE_EXPORT AcceleratedPresenter
       int64 surface_handle,
       const CompletionTask& completion_task);
   void DoSuspend();
-  void DoPresent(HDC dc, bool* presented);
-  bool DoRealPresent(HDC dc);
+  void DoPresent(const base::Closure& composite_task);
   void DoReleaseSurface();
+  void DoCopyToAndAcknowledge(
+      const gfx::Rect& src_subrect,
+      const gfx::Size& dst_size,
+      void* buf,
+      scoped_refptr<base::SingleThreadTaskRunner> callback_runner,
+      const base::Callback<void(bool)>& callback);
+  bool DoCopyTo(const gfx::Rect& src_subrect,
+                const gfx::Size& dst_size,
+                void* buf);
+
+  void PresentWithGDI(HDC dc);
+  gfx::Size GetWindowSize();
+
+  // This function tries to guess whether Direct3D will be able to reliably
+  // present to the window. When the window is resizing, presenting with
+  // Direct3D causes other regions of the window rendered with GDI to
+  // flicker transparent / non-transparent.
+  bool CheckDirect3DWillWork();
 
   // The thread with which this presenter has affinity.
   PresentThread* const present_thread_;
@@ -114,6 +139,13 @@ class SURFACE_EXPORT AcceleratedPresenter
   // last hidden.
   bool hidden_;
 
+  // These are used to detect when the window is resizing. For some reason,
+  // presenting with D3D while the window resizes causes those parts not
+  // drawn with D3D (e.g. with GDI) to flicker visible / invisible.
+  // http://crbug.com/120904
+  gfx::Size last_window_size_;
+  base::Time last_window_resize_time_;
+
   DISALLOW_COPY_AND_ASSIGN(AcceleratedPresenter);
 };
 
@@ -123,16 +155,17 @@ class SURFACE_EXPORT AcceleratedSurface {
   ~AcceleratedSurface();
 
   // Synchronously present a frame with no acknowledgement.
-  bool Present(HDC dc);
+  void Present(HDC dc);
 
   // Copies the surface data to |buf|. The copied region is specified with
   // |src_subrect| and the image data is transformed so that it fits in
   // |dst_size|.
   // Caller must ensure that |buf| is allocated with the size no less than
   // |4 * dst_size.width() * dst_size.height()| bytes.
-  bool CopyTo(const gfx::Rect& src_subrect,
-              const gfx::Size& dst_size,
-              void* buf);
+  void AsyncCopyTo(const gfx::Rect& src_subrect,
+                   const gfx::Size& dst_size,
+                   void* buf,
+                   const base::Callback<void(bool)>& callback);
 
   // Temporarily release resources until a new surface is asynchronously
   // presented. Present will not be able to represent the last surface after

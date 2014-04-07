@@ -30,20 +30,20 @@ class IdlSchemaTest(unittest.TestCase):
 
   def testSimpleCallbacks(self):
     schema = self.idl_basics
-    expected = [{'type':'function', 'name':'Callback1', 'parameters':[]}]
+    expected = [{'type':'function', 'name':'cb', 'parameters':[]}]
     self.assertEquals(expected, getParams(schema, 'function4'))
 
-    expected = [{'type':'function', 'name':'Callback2',
+    expected = [{'type':'function', 'name':'cb',
                  'parameters':[{'name':'x', 'type':'integer'}]}]
     self.assertEquals(expected, getParams(schema, 'function5'))
 
-    expected = [{'type':'function', 'name':'Callback3',
+    expected = [{'type':'function', 'name':'cb',
                  'parameters':[{'name':'arg', '$ref':'idl_basics.MyType1'}]}]
     self.assertEquals(expected, getParams(schema, 'function6'))
 
   def testCallbackWithArrayArgument(self):
     schema = self.idl_basics
-    expected = [{'type':'function', 'name':'Callback4',
+    expected = [{'type':'function', 'name':'cb',
                  'parameters':[{'name':'arg', 'type':'array',
                                 'items':{'$ref':'idl_basics.MyType2'}}]}]
     self.assertEquals(expected, getParams(schema, 'function12'))
@@ -59,7 +59,7 @@ class IdlSchemaTest(unittest.TestCase):
   def testLegalValues(self):
     self.assertEquals({
         'x': {'name': 'x', 'type': 'integer', 'enum': [1,2],
-              'description': 'This comment tests \\\"double-quotes\\\".'},
+              'description': 'This comment tests "double-quotes".'},
         'y': {'name': 'y', 'type': 'string'}},
       getType(self.idl_basics, 'idl_basics.MyType1')['properties'])
 
@@ -70,7 +70,7 @@ class IdlSchemaTest(unittest.TestCase):
     self.assertEquals(expected, getType(schema, expected['id']))
 
     expected = [{'name':'type', '$ref':'idl_basics.EnumType'},
-                {'type':'function', 'name':'Callback5',
+                {'type':'function', 'name':'cb',
                   'parameters':[{'name':'type', '$ref':'idl_basics.EnumType'}]}]
     self.assertEquals(expected, getParams(schema, 'function13'))
 
@@ -90,6 +90,20 @@ class IdlSchemaTest(unittest.TestCase):
     self.assertTrue(idl_basics['internal'])
     self.assertFalse(idl_basics['nodoc'])
 
+  def testCallbackComment(self):
+    schema = self.idl_basics
+    self.assertEquals('A comment on a callback.',
+                      getParams(schema, 'function16')[0]['description'])
+    self.assertEquals(
+        'A parameter.',
+        getParams(schema, 'function16')[0]['parameters'][0]['description'])
+    self.assertEquals(
+        'Just a parameter comment, with no comment on the callback.',
+        getParams(schema, 'function17')[0]['parameters'][0]['description'])
+    self.assertEquals(
+        'Override callback comment.',
+        getParams(schema, 'function18')[0]['description'])
+
   def testFunctionComment(self):
     schema = self.idl_basics
     func = getFunction(schema, 'function3')
@@ -103,9 +117,28 @@ class IdlSchemaTest(unittest.TestCase):
           '$ref': 'idl_basics.MyType1'}],
         func['parameters'])
     func = getFunction(schema, 'function4')
-    self.assertEquals(('This tests if \\\"double-quotes\\\" are escaped '
-                       'correctly.'),
+    self.assertEquals(('This tests if "double-quotes" are escaped correctly.'
+                       '<br/><br/> It also tests a comment with two newlines.'),
                       func['description'])
+
+  def testReservedWords(self):
+    schema = idl_schema.Load('test/idl_reserved_words.idl')[0]
+
+    foo_type = getType(schema, 'reserved_words.Foo')
+    self.assertEquals(['float', 'DOMString'], foo_type['enum'])
+
+    enum_type = getType(schema, 'reserved_words.enum')
+    self.assertEquals(['callback', 'namespace'], enum_type['enum'])
+
+    dictionary = getType(schema, 'reserved_words.dictionary');
+    self.assertEquals('integer', dictionary['properties']['long']['type'])
+
+    mytype = getType(schema, 'reserved_words.MyType')
+    self.assertEquals('string', mytype['properties']['interface']['type'])
+
+    params = getParams(schema, 'static')
+    self.assertEquals('reserved_words.Foo', params[0]['$ref'])
+    self.assertEquals('reserved_words.enum', params[1]['$ref'])
 
 if __name__ == '__main__':
   unittest.main()

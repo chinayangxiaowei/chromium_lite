@@ -11,6 +11,7 @@
 #include "base/base64.h"
 #include "base/bind.h"
 #include "base/bind_helpers.h"
+#include "base/command_line.h"
 #include "base/i18n/file_util_icu.h"
 #include "base/i18n/number_formatting.h"
 #include "base/json/json_reader.h"
@@ -35,10 +36,10 @@
 #include "chrome/browser/printing/printer_manager_dialog.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/chrome_select_file_policy.h"
-#include "chrome/browser/ui/tab_contents/tab_contents.h"
 #include "chrome/browser/ui/webui/print_preview/print_preview_ui.h"
 #include "chrome/browser/ui/webui/print_preview/sticky_settings.h"
 #include "chrome/common/chrome_paths.h"
+#include "chrome/common/chrome_switches.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/common/print_messages.h"
 #include "content/public/browser/browser_context.h"
@@ -58,15 +59,10 @@
 #include "printing/print_settings.h"
 #include "unicode/ulocdata.h"
 
-#ifdef OS_CHROMEOS
+#if defined(OS_CHROMEOS)
 // TODO(kinaba): provide more non-intrusive way for handling local/remote
 // distinction and remove these ugly #ifdef's. http://crbug.com/140425
-#include "chrome/browser/chromeos/gdata/drive_file_system_util.h"
-#endif
-
-#if !defined(OS_MACOSX)
-#include "base/command_line.h"
-#include "chrome/common/chrome_switches.h"
+#include "chrome/browser/chromeos/drive/drive_file_system_util.h"
 #endif
 
 using content::BrowserThread;
@@ -105,6 +101,7 @@ enum PrintSettingsBuckets {
 
 enum UiBucketGroups {
   DESTINATION_SEARCH,
+  GCP_PROMO,
   UI_BUCKET_GROUP_BOUNDARY
 };
 
@@ -115,6 +112,13 @@ enum PrintDestinationBuckets {
   SIGNIN_PROMPT,
   SIGNIN_TRIGGERED,
   PRINT_DESTINATION_BUCKET_BOUNDARY
+};
+
+enum GcpPromoBuckets {
+  PROMO_SHOWN,
+  PROMO_CLOSED,
+  PROMO_CLICKED,
+  GCP_PROMO_BUCKET_BOUNDARY
 };
 
 void ReportUserActionHistogram(enum UserActionBuckets event) {
@@ -130,6 +134,11 @@ void ReportPrintSettingHistogram(enum PrintSettingsBuckets setting) {
 void ReportPrintDestinationHistogram(enum PrintDestinationBuckets event) {
   UMA_HISTOGRAM_ENUMERATION("PrintPreview.DestinationAction", event,
                             PRINT_DESTINATION_BUCKET_BOUNDARY);
+}
+
+void ReportGcpPromoHistogram(enum GcpPromoBuckets event) {
+  UMA_HISTOGRAM_ENUMERATION("PrintPreview.GcpPromo", event,
+                            GCP_PROMO_BUCKET_BOUNDARY);
 }
 
 // Name of a dictionary field holding cloud print related data;
@@ -225,9 +234,9 @@ void PrintToPdfCallback(Metafile* metafile, const FilePath& path) {
 
 #ifdef OS_CHROMEOS
 void PrintToPdfCallbackWithCheck(Metafile* metafile,
-                                 gdata::DriveFileError error,
+                                 drive::DriveFileError error,
                                  const FilePath& path) {
-  if (error != gdata::DRIVE_FILE_OK) {
+  if (error != drive::DRIVE_FILE_OK) {
     LOG(ERROR) << "Save to pdf failed to write: " << error;
   } else {
     metafile->SaveTo(path);
@@ -311,10 +320,6 @@ void PrintPreviewHandler::RegisterMessages() {
                  base::Unretained(this)));
 }
 
-TabContents* PrintPreviewHandler::preview_tab_contents() const {
-  return TabContents::FromWebContents(preview_web_contents());
-}
-
 WebContents* PrintPreviewHandler::preview_web_contents() const {
   return web_ui()->GetWebContents();
 }
@@ -352,7 +357,7 @@ void PrintPreviewHandler::HandleGetPreview(const ListValue* args) {
   // Increment request count.
   ++regenerate_preview_request_count_;
 
-  TabContents* initiator_tab = GetInitiatorTab();
+  WebContents* initiator_tab = GetInitiatorTab();
   if (!initiator_tab) {
     ReportUserActionHistogram(INITIATOR_TAB_CLOSED);
     print_preview_ui->OnClosePrintPreviewTab();
@@ -368,10 +373,9 @@ void PrintPreviewHandler::HandleGetPreview(const ListValue* args) {
   }
   if (display_header_footer) {
     settings->SetString(printing::kSettingHeaderFooterTitle,
-                        initiator_tab->web_contents()->GetTitle());
+                        initiator_tab->GetTitle());
     std::string url;
-    NavigationEntry* entry =
-        initiator_tab->web_contents()->GetController().GetActiveEntry();
+    NavigationEntry* entry = initiator_tab->GetController().GetActiveEntry();
     if (entry)
       url = entry->GetVirtualURL().spec();
     settings->SetString(printing::kSettingHeaderFooterURL, url);
@@ -399,7 +403,7 @@ void PrintPreviewHandler::HandleGetPreview(const ListValue* args) {
   }
 
   VLOG(1) << "Print preview request start";
-  RenderViewHost* rvh = initiator_tab->web_contents()->GetRenderViewHost();
+  RenderViewHost* rvh = initiator_tab->GetRenderViewHost();
   rvh->Send(new PrintMsg_PrintPreview(rvh->GetRoutingID(), *settings));
 }
 
@@ -411,9 +415,9 @@ void PrintPreviewHandler::HandlePrint(const ListValue* args) {
   UMA_HISTOGRAM_COUNTS("PrintPreview.RegeneratePreviewRequest.BeforePrint",
                        regenerate_preview_request_count_);
 
-  TabContents* initiator_tab = GetInitiatorTab();
+  WebContents* initiator_tab = GetInitiatorTab();
   if (initiator_tab) {
-    RenderViewHost* rvh = initiator_tab->web_contents()->GetRenderViewHost();
+    RenderViewHost* rvh = initiator_tab->GetRenderViewHost();
     rvh->Send(new PrintMsg_ResetScriptedPrintCount(rvh->GetRoutingID()));
   }
 
@@ -440,10 +444,7 @@ void PrintPreviewHandler::HandlePrint(const ListValue* args) {
   }
 
   if (is_cloud_printer) {
-    std::string print_ticket;
-    bool res = args->GetString(1, &print_ticket);
-    DCHECK(res);
-    SendCloudPrintJob(*settings, print_ticket);
+    SendCloudPrintJob();
   } else if (print_to_pdf) {
     HandlePrintToPdf(*settings);
   } else if (is_cloud_dialog) {
@@ -476,8 +477,7 @@ void PrintPreviewHandler::HandlePrint(const ListValue* args) {
     // call.
     if (initiator_tab) {
       printing::PrintViewManager* print_view_manager =
-          printing::PrintViewManager::FromWebContents(
-              initiator_tab->web_contents());
+          printing::PrintViewManager::FromWebContents(initiator_tab);
       print_view_manager->PrintPreviewDone();
     }
   }
@@ -525,11 +525,11 @@ void PrintPreviewHandler::HandleHidePreview(const ListValue* /*args*/) {
 
 void PrintPreviewHandler::HandleCancelPendingPrintRequest(
     const ListValue* /*args*/) {
-  TabContents* initiator_tab = GetInitiatorTab();
+  WebContents* initiator_tab = GetInitiatorTab();
   if (initiator_tab)
     ClearInitiatorTabDetails();
   gfx::NativeWindow parent = initiator_tab ?
-      initiator_tab->web_contents()->GetView()->GetTopLevelNativeWindow() :
+      initiator_tab->GetView()->GetTopLevelNativeWindow() :
       NULL;
   chrome::ShowPrintErrorDialog(parent);
 }
@@ -630,13 +630,12 @@ void PrintPreviewHandler::HandleShowSystemDialog(const ListValue* /*args*/) {
   ReportStats();
   ReportUserActionHistogram(FALLBACK_TO_ADVANCED_SETTINGS_DIALOG);
 
-  TabContents* initiator_tab = GetInitiatorTab();
+  WebContents* initiator_tab = GetInitiatorTab();
   if (!initiator_tab)
     return;
 
   printing::PrintViewManager* print_view_manager =
-      printing::PrintViewManager::FromWebContents(
-          initiator_tab->web_contents());
+      printing::PrintViewManager::FromWebContents(initiator_tab);
   print_view_manager->set_observer(this);
   print_view_manager->PrintForSystemDialogNow();
 
@@ -708,10 +707,18 @@ void PrintPreviewHandler::HandleReportUiEvent(const ListValue* args) {
   switch (ui_bucket_group) {
     case DESTINATION_SEARCH: {
       enum PrintDestinationBuckets event =
-            static_cast<enum PrintDestinationBuckets>(event_number);
+          static_cast<enum PrintDestinationBuckets>(event_number);
       if (event >= PRINT_DESTINATION_BUCKET_BOUNDARY)
         return;
       ReportPrintDestinationHistogram(event);
+      break;
+    }
+    case GCP_PROMO: {
+      enum GcpPromoBuckets event =
+          static_cast<enum GcpPromoBuckets>(event_number);
+      if (event >= GCP_PROMO_BUCKET_BOUNDARY)
+        return;
+      ReportGcpPromoHistogram(event);
       break;
     }
     default:
@@ -739,27 +746,19 @@ void PrintPreviewHandler::SendInitialSettings(
     initial_settings.SetString(kAppState,
                                *sticky_settings->printer_app_state());
 
-#if defined(OS_MACOSX)
-  bool kiosk_mode = false;  // No kiosk mode on Mac yet.
-#else
   CommandLine* cmdline = CommandLine::ForCurrentProcess();
-  bool kiosk_mode = (cmdline->HasSwitch(switches::kKioskMode) &&
-                     cmdline->HasSwitch(switches::kKioskModePrinting));
-#endif
-  initial_settings.SetBoolean(kPrintAutomaticallyInKioskMode, kiosk_mode);
+  initial_settings.SetBoolean(kPrintAutomaticallyInKioskMode,
+                              cmdline->HasSwitch(switches::kKioskModePrinting));
 
-  if (print_preview_ui->source_is_modifiable()) {
+  if (print_preview_ui->source_is_modifiable())
     GetNumberFormatAndMeasurementSystem(&initial_settings);
-  }
   web_ui()->CallJavascriptFunction("setInitialSettings", initial_settings);
 }
 
 void PrintPreviewHandler::ActivateInitiatorTabAndClosePreviewTab() {
-  TabContents* initiator_tab = GetInitiatorTab();
-  if (initiator_tab) {
-    WebContents* web_contents = initiator_tab->web_contents();
-    web_contents->GetDelegate()->ActivateContents(web_contents);
-  }
+  WebContents* initiator_tab = GetInitiatorTab();
+  if (initiator_tab)
+    initiator_tab->GetDelegate()->ActivateContents(initiator_tab);
   PrintPreviewUI* print_preview_ui = static_cast<PrintPreviewUI*>(
       web_ui()->GetController());
   print_preview_ui->OnClosePrintPreviewTab();
@@ -795,8 +794,7 @@ void PrintPreviewHandler::SendCloudPrintEnabled() {
   }
 }
 
-void PrintPreviewHandler::SendCloudPrintJob(const DictionaryValue& settings,
-                                            std::string print_ticket) {
+void PrintPreviewHandler::SendCloudPrintJob() {
   ReportUserActionHistogram(PRINT_WITH_CLOUD_PRINT);
   scoped_refptr<base::RefCountedBytes> data;
   PrintPreviewUI* print_preview_ui = static_cast<PrintPreviewUI*>(
@@ -804,13 +802,6 @@ void PrintPreviewHandler::SendCloudPrintJob(const DictionaryValue& settings,
   print_preview_ui->GetPrintPreviewDataForIndex(
       printing::COMPLETE_PREVIEW_DOCUMENT_INDEX, &data);
   if (data.get() && data->size() > 0U && data->front()) {
-    printing::PrintViewManager* print_view_manager =
-        printing::PrintViewManager::FromWebContents(
-            preview_tab_contents()->web_contents());
-    string16 print_job_title_utf16 = print_view_manager->RenderSourceName();
-    std::string print_job_title = UTF16ToUTF8(print_job_title_utf16);
-    std::string printer_id;
-    settings.GetString(printing::kSettingCloudPrintId, &printer_id);
     // BASE64 encode the job data.
     std::string raw_data(reinterpret_cast<const char*>(data->front()),
                          data->size());
@@ -818,51 +809,18 @@ void PrintPreviewHandler::SendCloudPrintJob(const DictionaryValue& settings,
     if (!base::Base64Encode(raw_data, &base64_data)) {
       NOTREACHED() << "Base64 encoding PDF data.";
     }
-
-    const char boundary[] = "----CloudPrintFormBoundaryjc9wuprokl8i";
-    const char prolog[] = "--%s\r\n"
-      "Content-Disposition: form-data; name=\"capabilities\"\r\n\r\n%s\r\n"
-      "--%s\r\n"
-      "Content-Disposition: form-data; name=\"contentType\"\r\n\r\ndataUrl\r\n"
-      "--%s\r\n"
-      "Content-Disposition: form-data; name=\"title\"\r\n\r\n%s\r\n"
-      "--%s\r\n"
-      "Content-Disposition: form-data; name=\"printerid\"\r\n\r\n%s\r\n"
-      "--%s\r\n"
-      "Content-Disposition: form-data; name=\"content\"\r\n\r\n"
-      "data:application/pdf;base64,%s\r\n"
-      "--%s\r\n";
-
-    // TODO(abodenha@chromium.org) This implies a large copy operation.
-    // Profile this and optimize if necessary.
-    std::string final_data;
-    base::SStringPrintf(&final_data,
-                        prolog,
-                        boundary,
-                        print_ticket.c_str(),
-                        boundary,
-                        boundary,
-                        print_job_title.c_str(),
-                        boundary,
-                        printer_id.c_str(),
-                        boundary,
-                        base64_data.c_str(),
-                        boundary);
-
-    StringValue data_value(final_data);
+    StringValue data_value(base64_data);
 
     web_ui()->CallJavascriptFunction("printToCloud", data_value);
-  } else {
-    NOTREACHED();
   }
 }
 
-TabContents* PrintPreviewHandler::GetInitiatorTab() const {
+WebContents* PrintPreviewHandler::GetInitiatorTab() const {
   printing::PrintPreviewTabController* tab_controller =
       printing::PrintPreviewTabController::GetInstance();
   if (!tab_controller)
     return NULL;
-  return tab_controller->GetInitiatorTab(preview_tab_contents());
+  return tab_controller->GetInitiatorTab(preview_web_contents());
 }
 
 void PrintPreviewHandler::OnPrintDialogShown() {
@@ -873,6 +831,7 @@ void PrintPreviewHandler::SelectFile(const FilePath& default_filename) {
   ui::SelectFileDialog::FileTypeInfo file_type_info;
   file_type_info.extensions.resize(1);
   file_type_info.extensions[0].push_back(FILE_PATH_LITERAL("pdf"));
+  file_type_info.support_gdata = true;
 
   // Initializing save_path_ if it is not already initialized.
   printing::StickySettings* sticky_settings = GetStickySettings();
@@ -902,13 +861,12 @@ void PrintPreviewHandler::SelectFile(const FilePath& default_filename) {
 }
 
 void PrintPreviewHandler::OnTabDestroyed() {
-  TabContents* initiator_tab = GetInitiatorTab();
+  WebContents* initiator_tab = GetInitiatorTab();
   if (!initiator_tab)
     return;
 
   printing::PrintViewManager* print_view_manager =
-      printing::PrintViewManager::FromWebContents(
-          initiator_tab->web_contents());
+      printing::PrintViewManager::FromWebContents(initiator_tab);
   print_view_manager->set_observer(NULL);
 }
 
@@ -951,7 +909,7 @@ void PrintPreviewHandler::PostPrintToPdfTask(base::RefCountedBytes* data) {
   // PrintToPdfCallback takes ownership of |metafile|.
 #ifdef OS_CHROMEOS
   DCHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
-  gdata::util::PrepareWritableFileAndRun(
+  drive::util::PrepareWritableFileAndRun(
       Profile::FromBrowserContext(preview_web_contents()->GetBrowserContext()),
       *print_to_pdf_path_,
       base::Bind(&PrintToPdfCallbackWithCheck, metafile));
@@ -972,7 +930,7 @@ void PrintPreviewHandler::FileSelectionCanceled(void* params) {
 }
 
 void PrintPreviewHandler::ClearInitiatorTabDetails() {
-  TabContents* initiator_tab = GetInitiatorTab();
+  WebContents* initiator_tab = GetInitiatorTab();
   if (!initiator_tab)
     return;
 
@@ -982,5 +940,5 @@ void PrintPreviewHandler::ClearInitiatorTabDetails() {
   printing::PrintPreviewTabController* tab_controller =
       printing::PrintPreviewTabController::GetInstance();
   if (tab_controller)
-    tab_controller->EraseInitiatorTabInfo(preview_tab_contents());
+    tab_controller->EraseInitiatorTabInfo(preview_web_contents());
 }

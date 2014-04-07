@@ -90,11 +90,9 @@ void TestMountPointProvider::ValidateFileSystemRoot(
 }
 
 FilePath TestMountPointProvider::GetFileSystemRootPathOnFileThread(
-    const GURL& origin_url,
-    FileSystemType type,
-    const FilePath& virtual_path,
+    const FileSystemURL& url,
     bool create) {
-  DCHECK_EQ(kFileSystemTypeTest, type);
+  DCHECK_EQ(kFileSystemTypeTest, url.type());
   bool success = true;
   if (create)
     success = file_util::CreateDirectory(base_path_);
@@ -134,8 +132,10 @@ FileSystemOperation* TestMountPointProvider::CreateFileSystemOperation(
 webkit_blob::FileStreamReader* TestMountPointProvider::CreateFileStreamReader(
     const FileSystemURL& url,
     int64 offset,
+    const base::Time& expected_modification_time,
     FileSystemContext* context) const {
-  return new FileSystemFileStreamReader(context, url, offset);
+  return new FileSystemFileStreamReader(
+      context, url, offset, expected_modification_time);
 }
 
 fileapi::FileStreamWriter* TestMountPointProvider::CreateFileStreamWriter(

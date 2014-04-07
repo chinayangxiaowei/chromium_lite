@@ -8,6 +8,7 @@
 #include "base/message_loop.h"
 #include "chrome/browser/debugger/devtools_window.h"
 #include "chrome/browser/extensions/extension_process_manager.h"
+#include "chrome/browser/extensions/extension_system.h"
 #include "chrome/browser/platform_util.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser.h"
@@ -23,10 +24,7 @@
 
 #if defined(USE_AURA)
 #include "ui/aura/window.h"
-#endif
-
-#if defined(USE_ASH)
-#include "ash/wm/window_animations.h"
+#include "ui/views/corewm/window_animations.h"
 #endif
 
 using content::RenderViewHost;
@@ -180,18 +178,18 @@ ExtensionPopup* ExtensionPopup::ShowPopup(
     views::BubbleBorder::ArrowLocation arrow_location,
     ShowAction show_action) {
   ExtensionProcessManager* manager =
-      browser->profile()->GetExtensionProcessManager();
+      extensions::ExtensionSystem::Get(browser->profile())->process_manager();
   extensions::ExtensionHost* host = manager->CreatePopupHost(url, browser);
   ExtensionPopup* popup = new ExtensionPopup(browser, host, anchor_view,
       arrow_location, show_action);
   views::BubbleDelegateView::CreateBubble(popup);
 
-#if defined(USE_ASH)
+#if defined(USE_AURA)
   gfx::NativeView native_view = popup->GetWidget()->GetNativeView();
-  ash::SetWindowVisibilityAnimationType(
+  views::corewm::SetWindowVisibilityAnimationType(
       native_view,
-      ash::WINDOW_VISIBILITY_ANIMATION_TYPE_VERTICAL);
-  ash::SetWindowVisibilityAnimationVerticalPosition(
+      views::corewm::WINDOW_VISIBILITY_ANIMATION_TYPE_VERTICAL);
+  views::corewm::SetWindowVisibilityAnimationVerticalPosition(
       native_view,
       -3.0f);
 #endif

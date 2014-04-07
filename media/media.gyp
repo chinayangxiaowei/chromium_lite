@@ -26,6 +26,8 @@
         '../base/base.gyp:base',
         '../build/temp_gyp/googleurl.gyp:googleurl',
         '../crypto/crypto.gyp:crypto',
+        '../skia/skia.gyp:skia',
+        '../third_party/opus/opus.gyp:opus',
         '../ui/ui.gyp:ui',
       ],
       'defines': [
@@ -133,22 +135,37 @@
         'audio/scoped_loop_observer.h',
         'audio/simple_sources.cc',
         'audio/simple_sources.h',
+        'audio/virtual_audio_input_stream.cc',
+        'audio/virtual_audio_input_stream.h',
+        'audio/virtual_audio_output_stream.cc',
+        'audio/virtual_audio_output_stream.h',
+        'audio/win/audio_device_listener_win.cc',
+        'audio/win/audio_device_listener_win.h',
         'audio/win/audio_low_latency_input_win.cc',
         'audio/win/audio_low_latency_input_win.h',
         'audio/win/audio_low_latency_output_win.cc',
         'audio/win/audio_low_latency_output_win.h',
         'audio/win/audio_manager_win.cc',
         'audio/win/audio_manager_win.h',
+        'audio/win/audio_unified_win.cc',
+        'audio/win/audio_unified_win.h',
         'audio/win/avrt_wrapper_win.cc',
         'audio/win/avrt_wrapper_win.h',
         'audio/win/device_enumeration_win.cc',
         'audio/win/device_enumeration_win.h',
+        'audio/win/core_audio_util_win.cc',
+        'audio/win/core_audio_util_win.h',
         'audio/win/wavein_input_win.cc',
         'audio/win/wavein_input_win.h',
         'audio/win/waveout_output_win.cc',
         'audio/win/waveout_output_win.h',
-        'base/android/media_jni_registrar.cc',
-        'base/android/media_jni_registrar.h',
+        'base/android/cookie_getter.cc',
+        'base/android/cookie_getter.h',
+        'base/android/media_player_bridge_manager.cc',
+        'base/android/media_player_bridge_manager.h',
+        'base/audio_capturer_source.h',
+        'base/audio_converter.cc',
+        'base/audio_converter.h',
         'base/audio_decoder.cc',
         'base/audio_decoder.h',
         'base/audio_decoder_config.cc',
@@ -159,10 +176,15 @@
         'base/audio_pull_fifo.h',
         'base/audio_renderer.cc',
         'base/audio_renderer.h',
+        'base/audio_renderer_sink.h',
         'base/audio_renderer_mixer.cc',
         'base/audio_renderer_mixer.h',
         'base/audio_renderer_mixer_input.cc',
         'base/audio_renderer_mixer_input.h',
+        'base/audio_splicer.cc',
+        'base/audio_splicer.h',
+        'base/audio_timestamp_helper.cc',
+        'base/audio_timestamp_helper.h',
         'base/bind_to_loop.h',
         'base/bitstream_buffer.h',
         'base/bit_reader.cc',
@@ -171,6 +193,8 @@
         'base/buffers.h',
         'base/byte_queue.cc',
         'base/byte_queue.h',
+        'base/channel_mixer.cc',
+        'base/channel_mixer.h',
         'base/clock.cc',
         'base/clock.h',
         'base/data_buffer.cc',
@@ -179,6 +203,9 @@
         'base/data_source.h',
         'base/decoder_buffer.cc',
         'base/decoder_buffer.h',
+        'base/decoder_buffer_queue.cc',
+        'base/decoder_buffer_queue.h',
+        'base/decryptor.cc',
         'base/decryptor.h',
         'base/decryptor_client.h',
         'base/decrypt_config.cc',
@@ -235,16 +262,24 @@
         'crypto/aes_decryptor.h',
         'ffmpeg/ffmpeg_common.cc',
         'ffmpeg/ffmpeg_common.h',
-        'ffmpeg/file_protocol.cc',
-        'ffmpeg/file_protocol.h',
+        'filters/audio_decoder_selector.cc',
+        'filters/audio_decoder_selector.h',
         'filters/audio_file_reader.cc',
         'filters/audio_file_reader.h',
         'filters/audio_renderer_algorithm.cc',
         'filters/audio_renderer_algorithm.h',
         'filters/audio_renderer_impl.cc',
         'filters/audio_renderer_impl.h',
+        'filters/blocking_url_protocol.cc',
+        'filters/blocking_url_protocol.h',
         'filters/chunk_demuxer.cc',
         'filters/chunk_demuxer.h',
+        'filters/decrypting_audio_decoder.cc',
+        'filters/decrypting_audio_decoder.h',
+        'filters/decrypting_demuxer_stream.cc',
+        'filters/decrypting_demuxer_stream.h',
+        'filters/decrypting_video_decoder.cc',
+        'filters/decrypting_video_decoder.h',
         'filters/dummy_demuxer.cc',
         'filters/dummy_demuxer.h',
         'filters/ffmpeg_audio_decoder.cc',
@@ -265,8 +300,14 @@
         'filters/h264_to_annex_b_bitstream_converter.h',
         'filters/in_memory_url_protocol.cc',
         'filters/in_memory_url_protocol.h',
+        'filters/opus_audio_decoder.cc',
+        'filters/opus_audio_decoder.h',
+        'filters/skcanvas_video_renderer.cc',
+        'filters/skcanvas_video_renderer.h',
         'filters/source_buffer_stream.cc',
         'filters/source_buffer_stream.h',
+        'filters/video_decoder_selector.cc',
+        'filters/video_decoder_selector.h',
         'filters/video_frame_generator.cc',
         'filters/video_frame_generator.h',
         'filters/video_renderer_base.cc',
@@ -286,6 +327,8 @@
         'video/capture/video_capture_proxy.cc',
         'video/capture/video_capture_proxy.h',
         'video/capture/video_capture_types.h',
+        'video/capture/win/capability_list_win.cc',
+        'video/capture/win/capability_list_win.h',
         'video/capture/win/filter_base_win.cc',
         'video/capture/win/filter_base_win.h',
         'video/capture/win/pin_base_win.cc',
@@ -295,6 +338,8 @@
         'video/capture/win/sink_filter_win.h',
         'video/capture/win/sink_input_pin_win.cc',
         'video/capture/win/sink_input_pin_win.h',
+        'video/capture/win/video_capture_device_mf_win.cc',
+        'video/capture/win/video_capture_device_mf_win.h',
         'video/capture/win/video_capture_device_win.cc',
         'video/capture/win/video_capture_device_win.h',
         'video/picture.cc',
@@ -323,6 +368,11 @@
         ],
       },
       'conditions': [
+        ['arm_neon == 1', {
+          'defines': [
+            'USE_NEON'
+          ],
+        }],
         ['OS != "ios"', {
           'dependencies': [
             '../base/third_party/dynamic_annotations/dynamic_annotations.gyp:dynamic_annotations',
@@ -340,12 +390,12 @@
             'base/media_posix.cc',
             'ffmpeg/ffmpeg_common.cc',
             'ffmpeg/ffmpeg_common.h',
-            'ffmpeg/file_protocol.cc',
-            'ffmpeg/file_protocol.h',
             'filters/audio_file_reader.cc',
             'filters/audio_file_reader.h',
             'filters/chunk_demuxer.cc',
             'filters/chunk_demuxer.h',
+            'filters/blocking_url_protocol.cc',
+            'filters/blocking_url_protocol.h',
             'filters/ffmpeg_audio_decoder.cc',
             'filters/ffmpeg_audio_decoder.h',
             'filters/ffmpeg_demuxer.cc',
@@ -356,8 +406,6 @@
             'filters/ffmpeg_h264_to_annex_b_bitstream_converter.h',
             'filters/ffmpeg_video_decoder.cc',
             'filters/ffmpeg_video_decoder.h',
-            'filters/gpu_video_decoder.cc',
-            'filters/gpu_video_decoder.h',
             'webm/webm_cluster_parser.cc',
             'webm/webm_cluster_parser.h',
             'webm/webm_stream_parser.cc',
@@ -396,6 +444,7 @@
           'link_settings': {
             'libraries': [
               '$(SDKROOT)/System/Library/Frameworks/AudioToolbox.framework',
+              '$(SDKROOT)/System/Library/Frameworks/AVFoundation.framework',
               '$(SDKROOT)/System/Library/Frameworks/CoreAudio.framework',
             ],
           },
@@ -413,7 +462,6 @@
         # A simple WebM encoder for animated avatars on ChromeOS.
         ['chromeos==1', {
           'dependencies': [
-            '../skia/skia.gyp:skia',
             '../third_party/libvpx/libvpx.gyp:libvpx',
             '../third_party/libyuv/libyuv.gyp:libyuv',
           ],
@@ -525,6 +573,36 @@
             'video/capture/video_capture_device_dummy.cc',
             'video/capture/video_capture_device_dummy.h',
           ],
+          'link_settings':  {
+            'libraries': [
+              '-lmf.lib',
+              '-lmfplat.lib',
+              '-lmfreadwrite.lib',
+              '-lmfuuid.lib',
+            ],
+          },
+          # Specify delayload for media.dll.
+          'msvs_settings': {
+            'VCLinkerTool': {
+              'DelayLoadDLLs': [
+                'mf.dll',
+                'mfplat.dll',
+                'mfreadwrite.dll',
+              ],
+            },
+          },
+          # Specify delayload for components that link with media.lib.
+          'all_dependent_settings': {
+            'msvs_settings': {
+              'VCLinkerTool': {
+                'DelayLoadDLLs': [
+                  'mf.dll',
+                  'mfplat.dll',
+                  'mfreadwrite.dll',
+                ],
+              },
+            },
+          },
         }],
         ['proprietary_codecs==1 or branding=="Chrome"', {
           'sources': [
@@ -568,6 +646,7 @@
         '../base/base.gyp:base',
         '../base/base.gyp:base_i18n',
         '../base/base.gyp:test_support_base',
+        '../skia/skia.gyp:skia',
         '../testing/gmock.gyp:gmock',
         '../testing/gtest.gyp:gtest',
         '../ui/ui.gyp:ui',
@@ -585,27 +664,39 @@
         'audio/audio_parameters_unittest.cc',
         'audio/audio_util_unittest.cc',
         'audio/cross_process_notification_unittest.cc',
+        'audio/fake_audio_output_stream_unittest.cc',
         'audio/ios/audio_manager_ios_unittest.cc',
         'audio/linux/alsa_output_unittest.cc',
         'audio/mac/audio_low_latency_input_mac_unittest.cc',
         'audio/mac/audio_output_mac_unittest.cc',
         'audio/simple_sources_unittest.cc',
+        'audio/virtual_audio_input_stream_unittest.cc',
+        'audio/virtual_audio_output_stream_unittest.cc',
+        'audio/win/audio_device_listener_win_unittest.cc',
         'audio/win/audio_low_latency_input_win_unittest.cc',
         'audio/win/audio_low_latency_output_win_unittest.cc',
         'audio/win/audio_output_win_unittest.cc',
+        'audio/win/audio_unified_win_unittest.cc',
+        'audio/win/core_audio_util_win_unittest.cc',
         'base/audio_bus_unittest.cc',
+        'base/audio_converter_unittest.cc',
         'base/audio_fifo_unittest.cc',
         'base/audio_pull_fifo_unittest.cc',
         'base/audio_renderer_mixer_input_unittest.cc',
         'base/audio_renderer_mixer_unittest.cc',
+        'base/audio_splicer_unittest.cc',
+        'base/audio_timestamp_helper_unittest.cc',
         'base/bit_reader_unittest.cc',
         'base/bind_to_loop_unittest.cc',
         'base/buffers_unittest.cc',
+        'base/channel_mixer_unittest.cc',
         'base/clock_unittest.cc',
         'base/data_buffer_unittest.cc',
         'base/decoder_buffer_unittest.cc',
+        'base/decoder_buffer_queue_unittest.cc',
         'base/djb2_unittest.cc',
         'base/filter_collection_unittest.cc',
+        'base/gmock_callback_support_unittest.cc',
         'base/multi_channel_resampler_unittest.cc',
         'base/pipeline_unittest.cc',
         'base/ranges_unittest.cc',
@@ -621,11 +712,16 @@
         'base/yuv_convert_unittest.cc',
         'crypto/aes_decryptor_unittest.cc',
         'ffmpeg/ffmpeg_common_unittest.cc',
+        'filters/audio_decoder_selector_unittest.cc',
+        'filters/audio_file_reader_unittest.cc',
         'filters/audio_renderer_algorithm_unittest.cc',
         'filters/audio_renderer_impl_unittest.cc',
+        'filters/blocking_url_protocol_unittest.cc',
         'filters/chunk_demuxer_unittest.cc',
+        'filters/decrypting_audio_decoder_unittest.cc',
+        'filters/decrypting_demuxer_stream_unittest.cc',
+        'filters/decrypting_video_decoder_unittest.cc',
         'filters/ffmpeg_audio_decoder_unittest.cc',
-        'filters/ffmpeg_decoder_unittest.h',
         'filters/ffmpeg_demuxer_unittest.cc',
         'filters/ffmpeg_glue_unittest.cc',
         'filters/ffmpeg_h264_to_annex_b_bitstream_converter_unittest.cc',
@@ -634,7 +730,9 @@
         'filters/h264_to_annex_b_bitstream_converter_unittest.cc',
         'filters/pipeline_integration_test.cc',
         'filters/pipeline_integration_test_base.cc',
+        'filters/skcanvas_video_renderer_unittest.cc',
         'filters/source_buffer_stream_unittest.cc',
+        'filters/video_decoder_selector_unittest.cc',
         'filters/video_renderer_base_unittest.cc',
         'video/capture/video_capture_device_unittest.cc',
         'webm/cluster_builder.cc',
@@ -644,6 +742,11 @@
         'webm/webm_parser_unittest.cc',
       ],
       'conditions': [
+        ['arm_neon == 1', {
+          'defines': [
+            'USE_NEON'
+          ],
+        }],
         ['OS != "ios"', {
           'dependencies': [
             'shared_memory_support',
@@ -681,6 +784,8 @@
             'base/test_data_util.cc',
             'base/test_data_util.h',
             'ffmpeg/ffmpeg_common_unittest.cc',
+            'filters/audio_file_reader_unittest.cc',
+            'filters/blocking_url_protocol_unittest.cc',
             'filters/chunk_demuxer_unittest.cc',
             'filters/ffmpeg_audio_decoder_unittest.cc',
             'filters/ffmpeg_demuxer_unittest.cc',
@@ -747,16 +852,17 @@
         'audio/test_audio_input_controller_factory.h',
         'base/fake_audio_render_callback.cc',
         'base/fake_audio_render_callback.h',
+        'base/gmock_callback_support.h',
         'base/mock_audio_renderer_sink.cc',
         'base/mock_audio_renderer_sink.h',
-        'base/mock_callback.cc',
-        'base/mock_callback.h',
         'base/mock_data_source_host.cc',
         'base/mock_data_source_host.h',
         'base/mock_demuxer_host.cc',
         'base/mock_demuxer_host.h',
         'base/mock_filters.cc',
         'base/mock_filters.h',
+        'base/test_helpers.cc',
+        'base/test_helpers.h',
       ],
     },
   ],
@@ -792,21 +898,14 @@
             '..',
           ],
           'conditions': [
-            ['order_profiling != 0', {
-              'target_conditions' : [
-                ['_toolset=="target"', {
-                  'cflags!': [ '-finstrument-functions' ],
-                }],
-              ],
-            }],
             [ 'target_arch == "ia32" or target_arch == "x64"', {
               'dependencies': [
                 'yuv_convert_simd_x86',
               ],
             }],
-            [ 'target_arch == "arm"', {
+            [ 'target_arch == "arm" or target_arch == "mipsel"', {
               'dependencies': [
-                'yuv_convert_simd_arm',
+                'yuv_convert_simd_c',
               ],
             }],
           ],
@@ -846,13 +945,6 @@
             'base/simd/yuv_to_rgb_table.h',
           ],
           'conditions': [
-            ['order_profiling != 0', {
-              'target_conditions' : [
-                ['_toolset=="target"', {
-                  'cflags!': [ '-finstrument-functions' ],
-                }],
-              ],
-            }],
             [ 'target_arch == "x64"', {
               # Source files optimized for X64 systems.
               'sources': [
@@ -889,11 +981,23 @@
             }],
             [ 'OS=="mac"', {
               'variables': {
-                'yasm_flags': [
-                  '-DPREFIX',
-                  '-DMACHO',
-                  '-DCHROMIUM',
-                  '-Isimd',
+                'conditions': [
+                  [ 'target_arch=="ia32"', {
+                    'yasm_flags': [
+                      '-DPREFIX',
+                      '-DMACHO',
+                      '-DCHROMIUM',
+                      '-Isimd',
+                    ],
+                  }, {
+                    'yasm_flags': [
+                      '-DPREFIX',
+                      '-DARCH_X86_64',
+                      '-DMACHO',
+                      '-DCHROMIUM',
+                      '-Isimd',
+                    ],
+                  }],
                 ],
               },
             }],
@@ -922,6 +1026,11 @@
           ],
           'variables': {
             'yasm_output_path': '<(SHARED_INTERMEDIATE_DIR)/media',
+            'yasm_flags': [
+              # In addition to the same path as source asm, let yasm %include
+              # search path be relative to src/ per Chromium policy.
+              '-I..',
+            ],
           },
           'msvs_2010_disable_uldi_when_referenced': 1,
           'includes': [
@@ -929,7 +1038,7 @@
           ],
         },
         {
-          'target_name': 'yuv_convert_simd_arm',
+          'target_name': 'yuv_convert_simd_c',
           'type': 'static_library',
           'include_dirs': [
             '..',
@@ -977,47 +1086,20 @@
             'tools/seek_tester/seek_tester.cc',
           ],
         },
-      ],
-    }],
-    ['OS=="win"', {
-      'targets': [
         {
-          'target_name': 'player_wtl',
+          'target_name': 'demuxer_bench',
           'type': 'executable',
           'dependencies': [
             'media',
-            'yuv_convert',
             '../base/base.gyp:base',
-            '../base/third_party/dynamic_annotations/dynamic_annotations.gyp:dynamic_annotations',
-            '../ui/ui.gyp:ui',
-          ],
-          'include_dirs': [
-            '<(DEPTH)/third_party/wtl/include',
           ],
           'sources': [
-            'tools/player_wtl/list.h',
-            'tools/player_wtl/mainfrm.h',
-            'tools/player_wtl/movie.cc',
-            'tools/player_wtl/movie.h',
-            'tools/player_wtl/player_wtl.cc',
-            'tools/player_wtl/player_wtl.rc',
-            'tools/player_wtl/props.h',
-            'tools/player_wtl/resource.h',
-            'tools/player_wtl/seek.h',
-            'tools/player_wtl/view.h',
-          ],
-          'msvs_settings': {
-            'VCLinkerTool': {
-              'SubSystem': '2',         # Set /SUBSYSTEM:WINDOWS
-            },
-          },
-          'defines': [
-            '_CRT_SECURE_NO_WARNINGS=1',
+            'tools/demuxer_bench/demuxer_bench.cc',
           ],
         },
       ],
     }],
-    ['OS == "win" or toolkit_uses_gtk == 1', {
+    ['(OS == "win" or toolkit_uses_gtk == 1) and use_aura != 1', {
       'targets': [
         {
           'target_name': 'shader_bench',
@@ -1064,7 +1146,7 @@
         },
       ],
     }],
-    ['OS == "linux" and target_arch != "arm"', {
+    ['OS == "linux" and target_arch != "arm" and target_arch != "mipsel"', {
       'targets': [
         {
           'target_name': 'tile_render_bench',
@@ -1136,10 +1218,24 @@
     }],
     ['OS == "android"', {
       'targets': [
+         {
+          'target_name': 'media_player_jni_headers',
+          'type': 'none',
+          'variables': {
+            'jni_gen_dir': 'media',
+            'input_java_class': 'android/media/MediaPlayer.class',
+            'input_jar_file': '<(android_sdk)/android.jar',
+          },
+          'includes': [ '../build/jar_file_jni_generator.gypi' ],
+        },
         {
           'target_name': 'player_android_jni_headers',
           'type': 'none',
+          'dependencies': [
+            'media_player_jni_headers',
+          ],
           'sources': [
+            'base/android/java/src/org/chromium/media/MediaPlayerBridge.java',
             'base/android/java/src/org/chromium/media/MediaPlayerListener.java',
           ],
           'variables': {
@@ -1151,8 +1247,12 @@
           'target_name': 'player_android',
           'type': 'static_library',
           'sources': [
+            'base/android/media_jni_registrar.cc',
+            'base/android/media_jni_registrar.h',
             'base/android/media_player_bridge.cc',
             'base/android/media_player_bridge.h',
+            'base/android/media_player_listener.cc',
+            'base/android/media_player_listener.h',
           ],
           'dependencies': [
             '../base/base.gyp:base',

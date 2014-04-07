@@ -11,13 +11,15 @@
 #include "base/at_exit.h"
 #include "base/command_line.h"
 #include "base/file_util.h"
+#include "base/memory/scoped_ptr.h"
 #include "base/process_util.h"
 #include "base/string16.h"
-#include "base/utf_string_conversions.h"
 #include "base/win/scoped_com_initializer.h"
 #include "base/win/scoped_handle.h"
+#include "breakpad/src/client/windows/handler/exception_handler.h"
 #include "chrome/common/chrome_switches.h"
 #include "command_execute_impl.h"
+#include "win8/delegate_execute/crash_server_init.h"
 #include "win8/delegate_execute/delegate_execute_operation.h"
 #include "win8/delegate_execute/resource.h"
 
@@ -30,6 +32,10 @@ class DelegateExecuteModule
 
   DECLARE_REGISTRY_APPID_RESOURCEID(IDR_DELEGATEEXECUTE,
                                     "{B1935DA1-112F-479A-975B-AB8588ABA636}")
+
+  HRESULT RegisterServer(BOOL reg_type_lib) {
+    return ParentClass::RegisterServer(FALSE);
+  }
 
   virtual HRESULT AddCommonRGSReplacements(IRegistrarBase* registrar) throw() {
     AtlTrace(L"In %hs\n", __FUNCTION__);
@@ -85,12 +91,12 @@ int RelaunchChrome(const DelegateExecuteOperation& operation) {
 
   base::win::ScopedCOMInitializer com_initializer;
 
-  string16 flags(ASCIIToWide(operation.relaunch_flags()));
+  string16 relaunch_flags(operation.relaunch_flags());
   SHELLEXECUTEINFO sei = { sizeof(sei) };
   sei.fMask = SEE_MASK_FLAG_LOG_USAGE;
   sei.nShow = SW_SHOWNORMAL;
   sei.lpFile = operation.shortcut().value().c_str();
-  sei.lpParameters = flags.c_str();
+  sei.lpParameters = relaunch_flags.c_str();
 
   AtlTrace(L"Relaunching Chrome via shortcut [%ls]\n", sei.lpFile);
 
@@ -103,6 +109,9 @@ int RelaunchChrome(const DelegateExecuteOperation& operation) {
 }
 
 extern "C" int WINAPI _tWinMain(HINSTANCE , HINSTANCE, LPTSTR, int nShowCmd) {
+  scoped_ptr<google_breakpad::ExceptionHandler> breakpad =
+      delegate_execute::InitializeCrashReporting();
+
   base::AtExitManager exit_manager;
   AtlTrace("delegate_execute enter\n");
 

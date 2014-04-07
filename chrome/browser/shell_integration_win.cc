@@ -24,7 +24,6 @@
 #include "base/win/windows_version.h"
 #include "chrome/browser/web_applications/web_app.h"
 #include "chrome/common/chrome_constants.h"
-#include "chrome/common/chrome_paths.h"
 #include "chrome/common/chrome_paths_internal.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/installer/setup/setup_util.h"
@@ -41,6 +40,12 @@
 using content::BrowserThread;
 
 namespace {
+
+#if defined(GOOGLE_CHROME_BUILD)
+const wchar_t kAppListAppName[] = L"ChromeAppList";
+#else
+const wchar_t kAppListAppName[] = L"ChromiumAppList";
+#endif
 
 // Helper function for ShellIntegration::GetAppId to generates profile id
 // from profile path. "profile_id" is composed of sanitized basenames of
@@ -140,9 +145,12 @@ bool GetExpectedAppId(const FilePath& chrome_exe,
   } else if (command_line.HasSwitch(switches::kAppId)) {
     app_name = UTF8ToUTF16(web_app::GenerateApplicationNameFromExtensionId(
         command_line.GetSwitchValueASCII(switches::kAppId)));
+  } else if (command_line.HasSwitch(switches::kShowAppList)) {
+    app_name = kAppListAppName;
   } else {
     BrowserDistribution* dist = BrowserDistribution::GetDistribution();
-    app_name = ShellUtil::GetBrowserModelId(dist, chrome_exe.value());
+    app_name = ShellUtil::GetBrowserModelId(
+        dist, InstallUtil::IsPerUserInstall(chrome_exe.value().c_str()));
   }
 
   expected_app_id->assign(
@@ -209,10 +217,10 @@ void MigrateChromiumShortcutsCallback() {
     const wchar_t* sub_dir;
   } kLocations[] = {
     {
-      base::DIR_APP_DATA,
-      L"Microsoft\\Internet Explorer\\Quick Launch\\User Pinned\\TaskBar"
+      base::DIR_TASKBAR_PINS,
+      NULL
     }, {
-      chrome::DIR_USER_DESKTOP,
+      base::DIR_USER_DESKTOP,
       NULL
     }, {
       base::DIR_START_MENU,
@@ -242,12 +250,12 @@ ShellIntegration::DefaultWebClientState
         ShellUtil::DefaultState default_state) {
   switch (default_state) {
     case ShellUtil::NOT_DEFAULT:
-      return ShellIntegration::NOT_DEFAULT_WEB_CLIENT;
+      return ShellIntegration::NOT_DEFAULT;
     case ShellUtil::IS_DEFAULT:
-      return ShellIntegration::IS_DEFAULT_WEB_CLIENT;
+      return ShellIntegration::IS_DEFAULT;
     default:
       DCHECK_EQ(ShellUtil::UNKNOWN_DEFAULT, default_state);
-      return ShellIntegration::UNKNOWN_DEFAULT_WEB_CLIENT;
+      return ShellIntegration::UNKNOWN_DEFAULT;
   }
 }
 
@@ -293,7 +301,7 @@ bool ShellIntegration::SetAsDefaultProtocolClient(const std::string& protocol) {
     return false;
   }
 
-  string16 wprotocol = UTF8ToUTF16(protocol);
+  string16 wprotocol(UTF8ToUTF16(protocol));
   BrowserDistribution* dist = BrowserDistribution::GetDistribution();
   if (!ShellUtil::MakeChromeDefaultProtocolClient(dist, chrome_exe.value(),
         wprotocol)) {
@@ -319,11 +327,31 @@ bool ShellIntegration::SetAsDefaultBrowserInteractive() {
     return false;
   }
 
-  VLOG(1) << "Set-as-default Windows UI triggered.";
+  VLOG(1) << "Set-default-browser Windows UI completed.";
   return true;
 }
 
-ShellIntegration::DefaultWebClientState ShellIntegration::IsDefaultBrowser() {
+bool ShellIntegration::SetAsDefaultProtocolClientInteractive(
+    const std::string& protocol) {
+  FilePath chrome_exe;
+  if (!PathService::Get(base::FILE_EXE, &chrome_exe)) {
+    NOTREACHED() << "Error getting app exe path";
+    return false;
+  }
+
+  BrowserDistribution* dist = BrowserDistribution::GetDistribution();
+  string16 wprotocol(UTF8ToUTF16(protocol));
+  if (!ShellUtil::ShowMakeChromeDefaultProtocolClientSystemUI(
+          dist, chrome_exe.value(), wprotocol)) {
+    LOG(ERROR) << "Failed to launch the set-default-client Windows UI.";
+    return false;
+  }
+
+  VLOG(1) << "Set-default-client Windows UI completed.";
+  return true;
+}
+
+ShellIntegration::DefaultWebClientState ShellIntegration::GetDefaultBrowser() {
   return GetDefaultWebClientStateFromShellUtilDefaultState(
       ShellUtil::GetChromeDefaultState());
 }
@@ -386,32 +414,43 @@ string16 ShellIntegration::GetChromiumModelIdForProfile(
     return dist->GetBaseAppId();
   }
   return GetAppModelIdForProfile(
-      ShellUtil::GetBrowserModelId(dist, chrome_exe.value()), profile_path);
+      ShellUtil::GetBrowserModelId(
+           dist, InstallUtil::IsPerUserInstall(chrome_exe.value().c_str())),
+      profile_path);
 }
 
-string16 ShellIntegration::GetChromiumIconPath() {
-  // Determine the app path. If we can't determine what that is, we have
-  // bigger fish to fry...
-  FilePath app_path;
-  if (!PathService::Get(base::FILE_EXE, &app_path)) {
+string16 ShellIntegration::GetAppListAppModelIdForProfile(
+    const FilePath& profile_path) {
+  return ShellIntegration::GetAppModelIdForProfile(kAppListAppName,
+                                                   profile_path);
+}
+
+string16 ShellIntegration::GetChromiumIconLocation() {
+  // Determine the path to chrome.exe. If we can't determine what that is,
+  // we have bigger fish to fry...
+  FilePath chrome_exe;
+  if (!PathService::Get(base::FILE_EXE, &chrome_exe)) {
     NOTREACHED();
     return string16();
   }
 
-  string16 icon_path(app_path.value());
-  icon_path.push_back(',');
-  icon_path += base::IntToString16(
+  return ShellUtil::FormatIconLocation(
+      chrome_exe.value(),
       BrowserDistribution::GetDistribution()->GetIconIndex());
-  return icon_path;
 }
 
 void ShellIntegration::MigrateChromiumShortcuts() {
   if (base::win::GetVersion() < base::win::VERSION_WIN7)
     return;
 
-  BrowserThread::PostTask(
+  // This needs to happen eventually (e.g. so that the appid is fixed and the
+  // run-time Chrome icon is merged with the taskbar shortcut), but this is not
+  // urgent and shouldn't delay Chrome startup.
+  static const int64 kMigrateChromiumShortcutsDelaySeconds = 15;
+  BrowserThread::PostDelayedTask(
       BrowserThread::FILE, FROM_HERE,
-      base::Bind(&MigrateChromiumShortcutsCallback));
+      base::Bind(&MigrateChromiumShortcutsCallback),
+      base::TimeDelta::FromSeconds(kMigrateChromiumShortcutsDelaySeconds));
 }
 
 FilePath ShellIntegration::GetStartMenuShortcut(const FilePath& chrome_exe) {
@@ -433,7 +472,8 @@ FilePath ShellIntegration::GetStartMenuShortcut(const FilePath& chrome_exe) {
       continue;
     }
 
-    shortcut = shortcut.Append(shortcut_name).Append(shortcut_name + L".lnk");
+    shortcut = shortcut.Append(shortcut_name).Append(shortcut_name +
+                                                     installer::kLnkExt);
     if (file_util::PathExists(shortcut))
       return shortcut;
   }

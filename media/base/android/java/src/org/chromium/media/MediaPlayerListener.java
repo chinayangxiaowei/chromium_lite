@@ -4,7 +4,13 @@
 
 package org.chromium.media;
 
+import android.Manifest.permission;
+import android.content.Context;
+import android.content.pm.PackageManager;
+import android.media.AudioManager;
 import android.media.MediaPlayer;
+import android.telephony.PhoneStateListener;
+import android.telephony.TelephonyManager;
 
 import org.chromium.base.CalledByNative;
 import org.chromium.base.JNINamespace;
@@ -12,66 +18,31 @@ import org.chromium.base.JNINamespace;
 // This class implements all the listener interface for android mediaplayer.
 // Callbacks will be sent to the native class for processing.
 @JNINamespace("media")
-class MediaPlayerListener implements MediaPlayer.OnPreparedListener,
-                                     MediaPlayer.OnCompletionListener,
-                                     MediaPlayer.OnBufferingUpdateListener,
-                                     MediaPlayer.OnSeekCompleteListener,
-                                     MediaPlayer.OnVideoSizeChangedListener,
-                                     MediaPlayer.OnErrorListener,
-                                     MediaPlayer.OnInfoListener {
+class MediaPlayerListener extends PhoneStateListener implements MediaPlayer.OnPreparedListener,
+    MediaPlayer.OnCompletionListener,
+    MediaPlayer.OnBufferingUpdateListener,
+    MediaPlayer.OnSeekCompleteListener,
+    MediaPlayer.OnVideoSizeChangedListener,
+    MediaPlayer.OnErrorListener,
+    AudioManager.OnAudioFocusChangeListener {
     // These values are mirrored as enums in media/base/android/media_player_bridge.h.
     // Please ensure they stay in sync.
-    private static final int MEDIA_ERROR_UNKNOWN = 0;
-    private static final int MEDIA_ERROR_SERVER_DIED = 1;
+    private static final int MEDIA_ERROR_FORMAT = 0;
+    private static final int MEDIA_ERROR_DECODE = 1;
     private static final int MEDIA_ERROR_NOT_VALID_FOR_PROGRESSIVE_PLAYBACK = 2;
     private static final int MEDIA_ERROR_INVALID_CODE = 3;
 
-    private static final int MEDIA_INFO_UNKNOWN = 0;
-    private static final int MEDIA_INFO_VIDEO_TRACK_LAGGING = 1;
-    private static final int MEDIA_INFO_BUFFERING_START = 2;
-    private static final int MEDIA_INFO_BUFFERING_END = 3;
-    private static final int MEDIA_INFO_BAD_INTERLEAVING = 4;
-    private static final int MEDIA_INFO_NOT_SEEKABLE = 5;
-    private static final int MEDIA_INFO_METADATA_UPDATE = 6;
+    // These values are copied from android media player.
+    public static final int MEDIA_ERROR_MALFORMED = -1007;
+    public static final int MEDIA_ERROR_TIMED_OUT = -110;
 
     // Used to determine the class instance to dispatch the native call to.
-    private int mNativeMediaPlayerBridge = 0;
+    private int mNativeMediaPlayerListener = 0;
+    private final Context mContext;
 
-    private MediaPlayerListener(int nativeMediaPlayerBridge) {
-        mNativeMediaPlayerBridge = nativeMediaPlayerBridge;
-    }
-
-    @Override
-    public boolean onInfo(MediaPlayer mp, int what, int extra) {
-        int infoType;
-        switch (what) {
-            case MediaPlayer.MEDIA_INFO_UNKNOWN:
-                infoType = MEDIA_INFO_UNKNOWN;
-                break;
-            case MediaPlayer.MEDIA_INFO_VIDEO_TRACK_LAGGING:
-                infoType = MEDIA_INFO_VIDEO_TRACK_LAGGING;
-                break;
-            case MediaPlayer.MEDIA_INFO_BUFFERING_START:
-                infoType = MEDIA_INFO_BUFFERING_START;
-                break;
-            case MediaPlayer.MEDIA_INFO_BUFFERING_END:
-                infoType = MEDIA_INFO_BUFFERING_END;
-                break;
-            case MediaPlayer.MEDIA_INFO_BAD_INTERLEAVING:
-                infoType = MEDIA_INFO_BAD_INTERLEAVING;
-                break;
-            case MediaPlayer.MEDIA_INFO_NOT_SEEKABLE:
-                infoType = MEDIA_INFO_NOT_SEEKABLE;
-                break;
-            case MediaPlayer.MEDIA_INFO_METADATA_UPDATE:
-                infoType = MEDIA_INFO_METADATA_UPDATE;
-                break;
-            default:
-                infoType = MEDIA_INFO_UNKNOWN;
-                break;
-        }
-        nativeOnMediaInfo(mNativeMediaPlayerBridge, infoType);
-        return true;
+    private MediaPlayerListener(int nativeMediaPlayerListener, Context context) {
+        mNativeMediaPlayerListener = nativeMediaPlayerListener;
+        mContext = context;
     }
 
     @Override
@@ -79,10 +50,20 @@ class MediaPlayerListener implements MediaPlayer.OnPreparedListener,
         int errorType;
         switch (what) {
             case MediaPlayer.MEDIA_ERROR_UNKNOWN:
-                errorType = MEDIA_ERROR_UNKNOWN;
+                switch (extra) {
+                    case MEDIA_ERROR_MALFORMED:
+                        errorType = MEDIA_ERROR_DECODE;
+                        break;
+                    case MEDIA_ERROR_TIMED_OUT:
+                        errorType = MEDIA_ERROR_INVALID_CODE;
+                        break;
+                    default:
+                        errorType = MEDIA_ERROR_FORMAT;
+                        break;
+                }
                 break;
             case MediaPlayer.MEDIA_ERROR_SERVER_DIED:
-                errorType = MEDIA_ERROR_SERVER_DIED;
+                errorType = MEDIA_ERROR_DECODE;
                 break;
             case MediaPlayer.MEDIA_ERROR_NOT_VALID_FOR_PROGRESSIVE_PLAYBACK:
                 errorType = MEDIA_ERROR_NOT_VALID_FOR_PROGRESSIVE_PLAYBACK;
@@ -95,62 +76,119 @@ class MediaPlayerListener implements MediaPlayer.OnPreparedListener,
                 errorType = MEDIA_ERROR_INVALID_CODE;
                 break;
         }
-        nativeOnMediaError(mNativeMediaPlayerBridge, errorType);
+        nativeOnMediaError(mNativeMediaPlayerListener, errorType);
         return true;
     }
 
     @Override
     public void onVideoSizeChanged(MediaPlayer mp, int width, int height) {
-        nativeOnVideoSizeChanged(mNativeMediaPlayerBridge, width, height);
+        nativeOnVideoSizeChanged(mNativeMediaPlayerListener, width, height);
     }
 
     @Override
     public void onSeekComplete(MediaPlayer mp) {
-        nativeOnSeekComplete(mNativeMediaPlayerBridge);
+        nativeOnSeekComplete(mNativeMediaPlayerListener);
     }
 
     @Override
     public void onBufferingUpdate(MediaPlayer mp, int percent) {
-        nativeOnBufferingUpdate(mNativeMediaPlayerBridge, percent);
+        nativeOnBufferingUpdate(mNativeMediaPlayerListener, percent);
     }
 
     @Override
     public void onCompletion(MediaPlayer mp) {
-        nativeOnPlaybackComplete(mNativeMediaPlayerBridge);
+        nativeOnPlaybackComplete(mNativeMediaPlayerListener);
     }
 
     @Override
     public void onPrepared(MediaPlayer mp) {
-        nativeOnMediaPrepared(mNativeMediaPlayerBridge);
+        nativeOnMediaPrepared(mNativeMediaPlayerListener);
+    }
+
+    @Override
+    public void onCallStateChanged(int type, String number) {
+        if (type != TelephonyManager.CALL_STATE_IDLE) {
+            nativeOnMediaInterrupted(mNativeMediaPlayerListener);
+        }
+    }
+
+    @Override
+    public void onAudioFocusChange(int focusChange) {
+        if (focusChange == AudioManager.AUDIOFOCUS_LOSS) {
+            nativeOnMediaInterrupted(mNativeMediaPlayerListener);
+        }
     }
 
     @CalledByNative
-    private static MediaPlayerListener create(int nativeMediaPlayerBridge) {
-        return new MediaPlayerListener(nativeMediaPlayerBridge);
+    public void releaseResources() {
+        if (mContext != null) {
+            // Unregister the listener.
+            TelephonyManager mgr =
+                    (TelephonyManager) mContext.getSystemService(Context.TELEPHONY_SERVICE);
+            if (mgr != null) {
+                mgr.listen(this, PhoneStateListener.LISTEN_NONE);
+            }
+
+            // Unregister the wish for audio focus.
+            AudioManager am = (AudioManager) mContext.getSystemService(Context.AUDIO_SERVICE);
+            if (am != null) {
+                am.abandonAudioFocus(this);
+            }
+        }
+    }
+
+    @CalledByNative
+    private static MediaPlayerListener create(int nativeMediaPlayerListener,
+            Context context, MediaPlayer mediaPlayer) {
+        final MediaPlayerListener listener =
+            new MediaPlayerListener(nativeMediaPlayerListener, context);
+        mediaPlayer.setOnBufferingUpdateListener(listener);
+        mediaPlayer.setOnCompletionListener(listener);
+        mediaPlayer.setOnErrorListener(listener);
+        mediaPlayer.setOnPreparedListener(listener);
+        mediaPlayer.setOnSeekCompleteListener(listener);
+        mediaPlayer.setOnVideoSizeChangedListener(listener);
+        if (PackageManager.PERMISSION_GRANTED ==
+                context.checkCallingOrSelfPermission(permission.WAKE_LOCK)) {
+            mediaPlayer.setWakeMode(context, android.os.PowerManager.FULL_WAKE_LOCK);
+        }
+
+        TelephonyManager mgr =
+                (TelephonyManager) context.getSystemService(Context.TELEPHONY_SERVICE);
+        if (mgr != null) {
+            mgr.listen(listener, PhoneStateListener.LISTEN_CALL_STATE);
+        }
+
+        AudioManager am = (AudioManager) context.getSystemService(Context.AUDIO_SERVICE);
+        am.requestAudioFocus(
+                listener,
+                AudioManager.STREAM_MUSIC,
+
+                // Request permanent focus.
+                AudioManager.AUDIOFOCUS_GAIN);
+        return listener;
     }
 
     /**
-     * See media/base/android/media_player_bridge.cc for all the following functions.
+     * See media/base/android/media_player_listener.cc for all the following functions.
      */
     private native void nativeOnMediaError(
-            int nativeMediaPlayerBridge,
+            int nativeMediaPlayerListener,
             int errorType);
 
-    private native void nativeOnMediaInfo(
-            int nativeMediaPlayerBridge,
-            int infoType);
-
     private native void nativeOnVideoSizeChanged(
-            int nativeMediaPlayerBridge,
+            int nativeMediaPlayerListener,
             int width, int height);
 
     private native void nativeOnBufferingUpdate(
-            int nativeMediaPlayerBridge,
+            int nativeMediaPlayerListener,
             int percent);
 
-    private native void nativeOnMediaPrepared(int nativeMediaPlayerBridge);
+    private native void nativeOnMediaPrepared(int nativeMediaPlayerListener);
 
-    private native void nativeOnPlaybackComplete(int nativeMediaPlayerBridge);
+    private native void nativeOnPlaybackComplete(int nativeMediaPlayerListener);
 
-    private native void nativeOnSeekComplete(int nativeMediaPlayerBridge);
+    private native void nativeOnSeekComplete(int nativeMediaPlayerListener);
+
+    private native void nativeOnMediaInterrupted(int nativeMediaPlayerListener);
 }

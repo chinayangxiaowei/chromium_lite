@@ -18,11 +18,11 @@ class Window;
 namespace ash {
 namespace internal {
 
-class BaseWorkspaceManager;
 class ShelfLayoutManager;
 class WorkspaceControllerTestHelper;
+class WorkspaceCycler;
 class WorkspaceEventHandler;
-class WorkspaceLayoutManager;
+class WorkspaceManager;
 
 // WorkspaceController acts as a central place that ties together all the
 // various workspace pieces.
@@ -31,12 +31,6 @@ class ASH_EXPORT WorkspaceController
  public:
   explicit WorkspaceController(aura::Window* viewport);
   virtual ~WorkspaceController();
-
-  // Returns true if Workspace2 is enabled.
-  static bool IsWorkspace2Enabled();
-
-  // Returns true if in maximized or fullscreen mode.
-  bool IsInMaximizedMode() const;
 
   // Returns the current window state.
   WorkspaceWindowState GetWindowState() const;
@@ -53,24 +47,19 @@ class ASH_EXPORT WorkspaceController
   void DoInitialAnimation();
 
   // aura::client::ActivationChangeObserver overrides:
-  virtual void OnWindowActivated(aura::Window* window,
-                                 aura::Window* old_active) OVERRIDE;
+  virtual void OnWindowActivated(aura::Window* gained_active,
+                                 aura::Window* lost_active) OVERRIDE;
 
  private:
   friend class WorkspaceControllerTestHelper;
 
   aura::Window* viewport_;
 
-  scoped_ptr<BaseWorkspaceManager> workspace_manager_;
+  scoped_ptr<WorkspaceManager> workspace_manager_;
 
-  // TODO(sky): remove |layout_manager_| and |event_handler_| when Workspace2
-  // is the default.
-
-  // Owned by the window its attached to.
-  WorkspaceLayoutManager* layout_manager_;
-
-  // Owned by |viewport_|.
-  WorkspaceEventHandler* event_handler_;
+  // Cycles through the WorkspaceManager's workspaces in response to a three
+  // finger vertical scroll.
+  scoped_ptr<WorkspaceCycler> workspace_cycler_;
 
   DISALLOW_COPY_AND_ASSIGN(WorkspaceController);
 };

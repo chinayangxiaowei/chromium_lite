@@ -97,12 +97,16 @@ void CustomFrameViewAsh::GetWindowMask(const gfx::Size& size,
 }
 
 void CustomFrameViewAsh::ResetWindowControls() {
-  maximize_button_->SetState(views::CustomButton::BS_NORMAL);
+  maximize_button_->SetState(views::CustomButton::STATE_NORMAL);
 }
 
 void CustomFrameViewAsh::UpdateWindowIcon() {
   if (window_icon_)
     window_icon_->SchedulePaint();
+}
+
+void CustomFrameViewAsh::UpdateWindowTitle() {
+  frame_painter_->SchedulePaintForTitle(this, GetTitleFont());
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -143,6 +147,10 @@ std::string CustomFrameViewAsh::GetClassName() const {
 
 gfx::Size CustomFrameViewAsh::GetMinimumSize() {
   return frame_painter_->GetMinimumSize(this);
+}
+
+gfx::Size CustomFrameViewAsh::GetMaximumSize() {
+  return frame_painter_->GetMaximumSize(this);
 }
 
 ////////////////////////////////////////////////////////////////////////////////

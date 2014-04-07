@@ -80,10 +80,21 @@ FeatureInfo::FeatureFlags::FeatureFlags()
       occlusion_query_boolean(false),
       use_arb_occlusion_query2_for_occlusion_query_boolean(false),
       use_arb_occlusion_query_for_occlusion_query_boolean(false),
+      native_vertex_array_object(false),
       disable_workarounds(false),
-      is_intel(false),
-      is_nvidia(false),
-      is_amd(false) {
+      enable_shader_name_hashing(false) {
+}
+
+FeatureInfo::Workarounds::Workarounds()
+    : clear_alpha_in_readpixels(false),
+      needs_glsl_built_in_function_emulation(false),
+      needs_offscreen_buffer_workaround(false),
+      reverse_point_sprite_coord_origin(false),
+      set_texture_filter_before_generating_mipmap(false),
+      use_current_program_after_successful_link(false),
+      restore_scissor_on_fbo_change(false),
+      max_texture_size(0),
+      max_cube_map_texture_size(0) {
 }
 
 FeatureInfo::FeatureInfo() {
@@ -196,16 +207,22 @@ void FeatureInfo::AddFeatures(const char* desired_features) {
     GL_VENDOR,
     GL_RENDERER,
   };
+  bool is_intel = false;
+  bool is_nvidia = false;
+  bool is_amd = false;
+  bool is_mesa = false;
+  bool is_qualcomm = false;
   for (size_t ii = 0; ii < arraysize(string_ids); ++ii) {
     const char* str = reinterpret_cast<const char*>(
           glGetString(string_ids[ii]));
     if (str) {
       std::string lstr(StringToLowerASCII(std::string(str)));
       StringSet string_set(lstr);
-      feature_flags_.is_intel |= string_set.Contains("intel");
-      feature_flags_.is_nvidia |= string_set.Contains("nvidia");
-      feature_flags_.is_amd |=
-          string_set.Contains("amd") || string_set.Contains("ati");
+      is_intel |= string_set.Contains("intel");
+      is_nvidia |= string_set.Contains("nvidia");
+      is_amd |= string_set.Contains("amd") || string_set.Contains("ati");
+      is_mesa |= string_set.Contains("mesa");
+      is_qualcomm |= string_set.Contains("qualcomm");
     }
   }
 
@@ -213,14 +230,23 @@ void FeatureInfo::AddFeatures(const char* desired_features) {
       CommandLine::ForCurrentProcess()->HasSwitch(
           switches::kDisableGpuDriverBugWorkarounds);
 
+  feature_flags_.enable_shader_name_hashing =
+      CommandLine::ForCurrentProcess()->HasSwitch(
+          switches::kEnableShaderNameHashing);
+
+
   bool npot_ok = false;
 
   AddExtensionString("GL_ANGLE_translated_shader_source");
+  AddExtensionString("GL_CHROMIUM_async_pixel_transfers");
   AddExtensionString("GL_CHROMIUM_bind_uniform_location");
   AddExtensionString("GL_CHROMIUM_command_buffer_query");
+  AddExtensionString("GL_CHROMIUM_command_buffer_latency_query");
   AddExtensionString("GL_CHROMIUM_copy_texture");
-  AddExtensionString("GL_CHROMIUM_discard_framebuffer");
+  AddExtensionString("GL_CHROMIUM_discard_backbuffer");
   AddExtensionString("GL_CHROMIUM_get_error_query");
+  AddExtensionString("GL_CHROMIUM_lose_context");
+  AddExtensionString("GL_CHROMIUM_pixel_transfer_buffer_object");
   AddExtensionString("GL_CHROMIUM_rate_limit_offscreen_context");
   AddExtensionString("GL_CHROMIUM_resize");
   AddExtensionString("GL_CHROMIUM_resource_safe");
@@ -343,6 +369,25 @@ void FeatureInfo::AddFeatures(const char* desired_features) {
     validators_.render_buffer_format.AddValue(GL_DEPTH24_STENCIL8);
   }
 
+  if (ext.Desire("GL_OES_vertex_array_object")) {
+    if (ext.Have("GL_OES_vertex_array_object") ||
+        ext.Have("GL_ARB_vertex_array_object") ||
+        ext.Have("GL_APPLE_vertex_array_object")) {
+      feature_flags_.native_vertex_array_object = true;
+    }
+
+    // OES_vertex_array_object is emulated if not present natively,
+    // so the extension string is always exposed.
+    AddExtensionString("GL_OES_vertex_array_object");
+  }
+
+  if (ext.Desire("GL_OES_element_index_uint")) {
+    if (ext.Have("GL_OES_element_index_uint") || gfx::HasDesktopGLFeatures()) {
+      AddExtensionString("GL_OES_element_index_uint");
+      validators_.index_type.AddValue(GL_UNSIGNED_INT);
+    }
+  }
+
   bool enable_texture_format_bgra8888 = false;
   bool enable_read_format_bgra = false;
   // Check if we should allow GL_EXT_texture_format_BGRA8888
@@ -458,10 +503,15 @@ void FeatureInfo::AddFeatures(const char* desired_features) {
   }
 
   // Check for multisample support
+  bool ext_has_multisample = ext.Have("GL_EXT_framebuffer_multisample");
+  if (!is_qualcomm || feature_flags_.disable_workarounds) {
+    // Some Android Qualcomm drivers falsely report this ANGLE extension string.
+    // See http://crbug.com/165736
+    ext_has_multisample |= ext.Have("GL_ANGLE_framebuffer_multisample");
+  }
   if (!disallowed_features_.multisampling &&
       ext.Desire("GL_CHROMIUM_framebuffer_multisample") &&
-      (ext.Have("GL_EXT_framebuffer_multisample") ||
-       ext.Have("GL_ANGLE_framebuffer_multisample"))) {
+      ext_has_multisample) {
     feature_flags_.chromium_framebuffer_multisample = true;
     validators_.frame_buffer_target.AddValue(GL_READ_FRAMEBUFFER_EXT);
     validators_.frame_buffer_target.AddValue(GL_DRAW_FRAMEBUFFER_EXT);
@@ -495,6 +545,11 @@ void FeatureInfo::AddFeatures(const char* desired_features) {
     validators_.g_l_state.AddValue(GL_TEXTURE_BINDING_EXTERNAL_OES);
   }
 
+  if (ext.HaveAndDesire("GL_OES_compressed_ETC1_RGB8_texture")) {
+    AddExtensionString("GL_OES_compressed_ETC1_RGB8_texture");
+    validators_.compressed_texture_format.AddValue(GL_ETC1_RGB8_OES);
+  }
+
   if (ext.Desire("GL_CHROMIUM_stream_texture")) {
     AddExtensionString("GL_CHROMIUM_stream_texture");
     feature_flags_.chromium_stream_texture = true;
@@ -526,7 +581,6 @@ void FeatureInfo::AddFeatures(const char* desired_features) {
 
   // TODO(gman): Add support for these extensions.
   //     GL_OES_depth32
-  //     GL_OES_element_index_uint
 
   feature_flags_.enable_texture_float_linear |= enable_texture_float_linear;
   feature_flags_.enable_texture_half_float_linear |=
@@ -580,7 +634,7 @@ void FeatureInfo::AddFeatures(const char* desired_features) {
 #if defined(OS_LINUX)
   if (!feature_flags_.disable_workarounds) {
     // Intel drivers on Linux appear to be buggy.
-    ext_occlusion_query_disallowed = feature_flags_.is_intel;
+    ext_occlusion_query_disallowed = is_intel;
   }
 #endif
 
@@ -609,6 +663,51 @@ void FeatureInfo::AddFeatures(const char* desired_features) {
 
   if (!disallowed_features_.swap_buffer_complete_callback)
     AddExtensionString("GL_CHROMIUM_swapbuffers_complete_callback");
+
+  if (!feature_flags_.disable_workarounds) {
+    workarounds_.set_texture_filter_before_generating_mipmap = true;
+    workarounds_.clear_alpha_in_readpixels = true;
+
+    if (is_nvidia) {
+      workarounds_.use_current_program_after_successful_link = true;
+    }
+
+    if (is_qualcomm) {
+      workarounds_.restore_scissor_on_fbo_change = true;
+    }
+
+#if defined(OS_MACOSX)
+    workarounds_.needs_offscreen_buffer_workaround = is_nvidia;
+    workarounds_.needs_glsl_built_in_function_emulation = is_amd;
+
+    if ((is_amd || is_intel) &&
+        gfx::GetGLImplementation() == gfx::kGLImplementationDesktopGL) {
+      workarounds_.reverse_point_sprite_coord_origin = true;
+    }
+
+    // Limit Intel on Mac to 4096 max tex size and 1024 max cube map tex size.
+    // Limit AMD on Mac to 4096 max tex size and max cube map tex size.
+    // TODO(gman): Update this code to check for a specific version of
+    // the drivers above which we no longer need this fix.
+    if (is_intel) {
+      workarounds_.max_texture_size = 4096;
+      workarounds_.max_cube_map_texture_size = 1024;
+      // Cubemaps > 512 in size were broken before 10.7.3.
+      int32 major = 0;
+      int32 minor = 0;
+      int32 bugfix = 0;
+      base::SysInfo::OperatingSystemVersionNumbers(&major, &minor, &bugfix);
+      if (major < 10 ||
+          (major == 10 && ((minor == 7 && bugfix < 3) || (minor < 7))))
+        workarounds_.max_cube_map_texture_size = 512;
+    }
+
+    if (is_amd) {
+      workarounds_.max_texture_size = 4096;
+      workarounds_.max_cube_map_texture_size = 4096;
+    }
+#endif
+  }
 }
 
 void FeatureInfo::AddExtensionString(const std::string& str) {

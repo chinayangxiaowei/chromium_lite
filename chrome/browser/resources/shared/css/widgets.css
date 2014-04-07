@@ -1,12 +1,10 @@
 /* Copyright (c) 2012 The Chromium Authors. All rights reserved.
  * Use of this source code is governed by a BSD-style license that can be
- * found in the LICENSE file.
- */
+ * found in the LICENSE file. */
 
 /* This file defines styles for form controls. The order of rule blocks is
  * important as there are some rules with equal specificity that rely on order
- * as a tiebreaker. These are marked with OVERRIDE.
- */
+ * as a tiebreaker. These are marked with OVERRIDE. */
 
 /* Default state **************************************************************/
 
@@ -110,6 +108,12 @@ input[type='search'] {
   /* NOTE: Keep a relatively high min-width for this so we don't obscure the end
    * of the default text in relatively spacious languages (i.e. German). */
   min-width: 160px;
+}
+
+/* Remove when https://bugs.webkit.org/show_bug.cgi?id=51499 is fixed.
+ * TODO(dbeam): are there more types that would benefit from this? */
+input[type='search']::-webkit-textfield-decoration-container {
+  direction: inherit;
 }
 
 /* Checked ********************************************************************/

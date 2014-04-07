@@ -22,7 +22,7 @@ namespace ash {
 // Makes sure invoking SetStatusSize on the launcher changes the size of the
 // LauncherView.
 TEST_F(LauncherTest, SetStatusSize) {
-  Launcher* launcher = Shell::GetInstance()->launcher();
+  Launcher* launcher = Launcher::ForPrimaryDisplay();
   LauncherView* launcher_view = launcher->GetLauncherViewForTest();
 
   gfx::Size launcher_size =
@@ -35,7 +35,7 @@ TEST_F(LauncherTest, SetStatusSize) {
 
 // Tests that the dimmer widget resizes itself as appropriate.
 TEST_F(LauncherTest, DimmerSize) {
-  Launcher* launcher = Shell::GetInstance()->launcher();
+  Launcher* launcher = Launcher::ForPrimaryDisplay();
   launcher->SetDimsShelf(true);
 
   gfx::Size launcher_size =
@@ -54,11 +54,11 @@ TEST_F(LauncherTest, DimmerSize) {
 // Confirm that launching a browser gets the appropriate state reflected in
 // its button.
 TEST_F(LauncherTest, OpenBrowser) {
-  Launcher* launcher = Shell::GetInstance()->launcher();
+  Launcher* launcher = Launcher::ForPrimaryDisplay();
   ASSERT_TRUE(launcher);
   LauncherView* launcher_view = launcher->GetLauncherViewForTest();
   test::LauncherViewTestAPI test(launcher_view);
-  LauncherModel* model = launcher->model();
+  LauncherModel* model = launcher_view->model();
 
   // Initially we have the app list and chrome icon.
   int button_count = test.GetButtonCount();
@@ -75,6 +75,33 @@ TEST_F(LauncherTest, OpenBrowser) {
   // Remove it.
   model->RemoveItemAt(index);
   ASSERT_EQ(--button_count, test.GetButtonCount());
+}
+
+TEST_F(LauncherTest, ShowOverflowBubble) {
+  Launcher* launcher = Launcher::ForPrimaryDisplay();
+  ASSERT_TRUE(launcher);
+
+  LauncherView* launcher_view = launcher->GetLauncherViewForTest();
+  test::LauncherViewTestAPI test(launcher_view);
+  test.SetAnimationDuration(1);  // Speeds up animation for test.
+
+  LauncherModel* model = launcher_view->model();
+
+  // Add tabbed browser until overflow.
+  int items_added = 0;
+  while (!test.IsOverflowButtonVisible()) {
+    LauncherItem item;
+    item.type = TYPE_TABBED;
+    item.status = STATUS_RUNNING;
+    model->Add(item);
+
+    ++items_added;
+    ASSERT_LT(items_added, 10000);
+  }
+
+  // Shows overflow bubble.
+  test.ShowOverflowBubble();
+  EXPECT_TRUE(launcher->IsShowingOverflowBubble());
 }
 
 }  // namespace ash

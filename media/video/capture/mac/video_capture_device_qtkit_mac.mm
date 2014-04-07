@@ -7,6 +7,8 @@
 #import <QTKit/QTKit.h>
 
 #include "base/logging.h"
+#include "base/mac/crash_logging.h"
+#include "base/mac/scoped_nsexception_enabler.h"
 #include "media/video/capture/mac/video_capture_device_mac.h"
 #include "media/video/capture/video_capture_device.h"
 #include "media/video/capture/video_capture_types.h"
@@ -16,8 +18,14 @@
 #pragma mark Class methods
 
 + (void)getDeviceNames:(NSMutableDictionary*)deviceNames {
+  // Third-party drivers often throw exceptions, which are fatal in
+  // Chromium (see comments in scoped_nsexception_enabler.h).  The
+  // following catches any exceptions and continues in an orderly
+  // fashion with no devices detected.
   NSArray* captureDevices =
-      [QTCaptureDevice inputDevicesWithMediaType:QTMediaTypeVideo];
+      base::mac::RunBlockIgnoringExceptions(^() {
+          return [QTCaptureDevice inputDevicesWithMediaType:QTMediaTypeVideo];
+      });
 
   for (QTCaptureDevice* device in captureDevices) {
     [deviceNames setObject:[device localizedDisplayName]
@@ -43,6 +51,7 @@
   self = [super init];
   if (self) {
     frameReceiver_ = frameReceiver;
+    lock_ = [[NSLock alloc] init];
   }
   return self;
 }
@@ -50,8 +59,13 @@
 - (void)dealloc {
   [captureSession_ release];
   [captureDeviceInput_ release];
-  [captureDecompressedOutput_ release];
   [super dealloc];
+}
+
+- (void)setFrameReceiver:(media::VideoCaptureDeviceMac *)frameReceiver {
+  [lock_ lock];
+  frameReceiver_ = frameReceiver;
+  [lock_ unlock];
 }
 
 - (BOOL)setCaptureDevice:(NSString *)deviceId {
@@ -81,14 +95,19 @@
     captureDeviceInput_ = [[QTCaptureDeviceInput alloc] initWithDevice:device];
     captureSession_ = [[QTCaptureSession alloc] init];
 
-    captureDecompressedOutput_ =
-        [[QTCaptureDecompressedVideoOutput alloc] init];
-    [captureDecompressedOutput_ setDelegate:self];
-    if (![captureSession_ addOutput:captureDecompressedOutput_ error:&error]) {
+    QTCaptureDecompressedVideoOutput *captureDecompressedOutput =
+        [[[QTCaptureDecompressedVideoOutput alloc] init] autorelease];
+    [captureDecompressedOutput setDelegate:self];
+    if (![captureSession_ addOutput:captureDecompressedOutput error:&error]) {
       DLOG(ERROR) << "Could not connect video capture output."
                   << [[error localizedDescription] UTF8String];
       return NO;
     }
+
+    // This key can be used to check if video capture code was related to a
+    // particular crash.
+    base::mac::SetCrashKeyValue(@"VideoCaptureDeviceQTKit", @"OpenedDevice");
+
     return YES;
   } else {
     // Remove the previously set capture device.
@@ -122,8 +141,6 @@
     captureSession_ = nil;
     [captureDeviceInput_ release];
     captureDeviceInput_ = nil;
-    [captureDecompressedOutput_ release];
-    captureDecompressedOutput_ = nil;
     return YES;
   }
 }
@@ -135,6 +152,10 @@
   }
   if ([[captureSession_ outputs] count] != 1) {
     DLOG(ERROR) << "Video capture capabilities already set.";
+    return NO;
+  }
+  if (frameRate <= 0) {
+    DLOG(ERROR) << "Wrong frame rate.";
     return NO;
   }
 
@@ -154,6 +175,9 @@
           nil];
   [[[captureSession_ outputs] objectAtIndex:0]
       setPixelBufferAttributes:captureDictionary];
+
+  [[[captureSession_ outputs] objectAtIndex:0]
+      setMinimumVideoFrameInterval:(NSTimeInterval)1/(float)frameRate];
   return YES;
 }
 
@@ -187,7 +211,9 @@
   didOutputVideoFrame:(CVImageBufferRef)videoFrame
      withSampleBuffer:(QTSampleBuffer *)sampleBuffer
        fromConnection:(QTCaptureConnection *)connection {
+  [lock_ lock];
   if(!frameReceiver_) {
+    [lock_ unlock];
     return;
   }
 
@@ -237,6 +263,7 @@
 
     CVPixelBufferUnlockBaseAddress(videoFrame, kLockFlags);
   }
+  [lock_ unlock];
 }
 
 @end

@@ -12,7 +12,6 @@
 #include "grit/ash_resources.h"
 #include "grit/ash_strings.h"
 #include "third_party/skia/include/core/SkPath.h"
-#include "ui/aura/focus_manager.h"
 #include "ui/aura/window.h"
 #include "ui/base/animation/animation.h"
 #include "ui/base/l10n/l10n_util.h"
@@ -67,8 +66,7 @@ class MaximizeBubbleBorder : public views::BubbleBorder {
                               const gfx::Size& contents_size) const OVERRIDE;
 
   // Overridden from views::Border.
-  virtual void Paint(const views::View& view,
-                     gfx::Canvas* canvas) const OVERRIDE;
+  virtual void Paint(const views::View& view, gfx::Canvas* canvas) OVERRIDE;
 
  private:
   // Note: Animations can continue after then main window frame was destroyed.
@@ -86,15 +84,14 @@ MaximizeBubbleBorder::MaximizeBubbleBorder(views::View* content_view,
     : views::BubbleBorder(views::BubbleBorder::TOP_RIGHT,
                           views::BubbleBorder::NO_SHADOW),
       anchor_size_(anchor->size()),
-      anchor_screen_origin_(0,0),
+      anchor_screen_origin_(0, 0),
       content_view_(content_view) {
   views::View::ConvertPointToScreen(anchor, &anchor_screen_origin_);
   set_alignment(views::BubbleBorder::ALIGN_EDGE_TO_ANCHOR_EDGE);
 }
 
 void MaximizeBubbleBorder::GetMask(gfx::Path* mask) {
-  gfx::Insets inset;
-  GetInsets(&inset);
+  gfx::Insets inset = GetInsets();
   // Note: Even though the tip could be added as activatable, it is left out
   // since it would not change the action behavior in any way plus it makes
   // more sense to keep the focus on the underlying button for clicks.
@@ -114,8 +111,7 @@ gfx::Rect MaximizeBubbleBorder::GetBounds(
     const gfx::Rect& position_relative_to,
     const gfx::Size& contents_size) const {
   gfx::Size border_size(contents_size);
-  gfx::Insets insets;
-  GetInsets(&insets);
+  gfx::Insets insets = GetInsets();
   border_size.Enlarge(insets.width(), insets.height());
 
   // Position the bubble to center the box on the anchor.
@@ -129,10 +125,8 @@ gfx::Rect MaximizeBubbleBorder::GetBounds(
   return gfx::Rect(view_origin, border_size);
 }
 
-void MaximizeBubbleBorder::Paint(const views::View& view,
-                                 gfx::Canvas* canvas) const {
-  gfx::Insets inset;
-  GetInsets(&inset);
+void MaximizeBubbleBorder::Paint(const views::View& view, gfx::Canvas* canvas) {
+  gfx::Insets inset = GetInsets();
 
   // Draw the border line around everything.
   int y = inset.top();
@@ -226,8 +220,8 @@ class MaximizeBubbleController::Bubble : public views::BubbleDelegateView,
   virtual bool CanActivate() const OVERRIDE { return false; }
 
   // Overridden from views::WidgetDelegateView.
-  virtual bool HasHitTestMask() const OVERRIDE;
-  virtual void GetHitTestMask(gfx::Path* mask) const OVERRIDE;
+  virtual bool WidgetHasHitTestMask() const OVERRIDE;
+  virtual void GetWidgetHitTestMask(gfx::Path* mask) const OVERRIDE;
 
   // Implementation of MouseWatcherListener.
   virtual void MouseMovedOutOfHost();
@@ -399,7 +393,7 @@ MaximizeBubbleController::Bubble::Bubble(
   set_parent_window(parent);
 
   set_notify_enter_exit_on_child(true);
-  set_try_mirroring_arrow(false);
+  set_adjust_if_offscreen(false);
   SetPaintToLayer(true);
   SetFillsBoundsOpaquely(false);
   set_color(kBubbleBackgroundColor);
@@ -473,11 +467,12 @@ void MaximizeBubbleController::Bubble::AnimationProgressed(
   bubble_widget_->GetNativeWindow()->SetBounds(rect);
 }
 
-bool MaximizeBubbleController::Bubble::HasHitTestMask() const {
+bool MaximizeBubbleController::Bubble::WidgetHasHitTestMask() const {
   return bubble_border_ != NULL;
 }
 
-void MaximizeBubbleController::Bubble::GetHitTestMask(gfx::Path* mask) const {
+void MaximizeBubbleController::Bubble::GetWidgetHitTestMask(
+    gfx::Path* mask) const {
   DCHECK(mask);
   DCHECK(bubble_border_);
   bubble_border_->GetMask(mask);
@@ -489,7 +484,7 @@ void MaximizeBubbleController::Bubble::MouseMovedOutOfHost() {
   // When we leave the bubble, we might be still be in gesture mode or over
   // the maximize button. So only close if none of the other cases apply.
   if (!owner_->frame_maximize_button()->is_snap_enabled()) {
-    gfx::Point screen_location = gfx::Screen::GetCursorScreenPoint();
+    gfx::Point screen_location = Shell::GetScreen()->GetCursorScreenPoint();
     if (!owner_->frame_maximize_button()->GetBoundsInScreen().Contains(
         screen_location)) {
         owner_->RequestDestructionThroughOwner();
@@ -694,7 +689,6 @@ BubbleContentsView::BubbleContentsView(
 
   label_view_ = new views::Label();
   SetSnapType(SNAP_NONE);
-  label_view_->SetHorizontalAlignment(views::Label::ALIGN_CENTER);
   label_view_->SetBackgroundColor(kBubbleBackgroundColor);
   label_view_->SetEnabledColor(kBubbleTextColor);
   label_view_->set_border(views::Border::CreateEmptyBorder(
@@ -822,9 +816,11 @@ BubbleDialogButton::BubbleDialogButton(
     : views::ImageButton(button_row),
       button_row_(button_row) {
   ui::ResourceBundle& rb = ui::ResourceBundle::GetSharedInstance();
-  SetImage(views::CustomButton::BS_NORMAL, rb.GetImageSkiaNamed(normal_image));
-  SetImage(views::CustomButton::BS_HOT, rb.GetImageSkiaNamed(hovered_image));
-  SetImage(views::CustomButton::BS_PUSHED,
+  SetImage(views::CustomButton::STATE_NORMAL,
+           rb.GetImageSkiaNamed(normal_image));
+  SetImage(views::CustomButton::STATE_HOVERED,
+           rb.GetImageSkiaNamed(hovered_image));
+  SetImage(views::CustomButton::STATE_PRESSED,
            rb.GetImageSkiaNamed(pressed_image));
   button_row->AddChildView(this);
 }

@@ -13,9 +13,14 @@
 #include "ipc/ipc_message.h"
 #include "ipc/ipc_message_macros.h"
 #include "ppapi/host/ppapi_host.h"
+#include "ppapi/proxy/browser_font_resource_trusted.h"
 #include "ppapi/proxy/file_chooser_resource.h"
+#include "ppapi/proxy/graphics_2d_resource.h"
 #include "ppapi/proxy/ppapi_messages.h"
 #include "ppapi/proxy/printing_resource.h"
+#include "ppapi/proxy/url_request_info_resource.h"
+#include "ppapi/proxy/url_response_info_resource.h"
+#include "ppapi/proxy/websocket_resource.h"
 #include "ppapi/shared_impl/ppapi_globals.h"
 #include "ppapi/shared_impl/ppapi_permissions.h"
 #include "ppapi/shared_impl/resource_tracker.h"
@@ -39,6 +44,21 @@ PepperInProcessResourceCreation::PepperInProcessResourceCreation(
 PepperInProcessResourceCreation::~PepperInProcessResourceCreation() {
 }
 
+PP_Resource PepperInProcessResourceCreation::CreateBrowserFont(
+    PP_Instance instance,
+    const PP_BrowserFont_Trusted_Description* description) {
+  if (!ppapi::proxy::BrowserFontResource_Trusted::IsPPFontDescriptionValid(
+      *description))
+    return 0;
+  ppapi::Preferences prefs(
+      host_impl_->GetRenderViewForInstance(instance)->GetWebkitPreferences());
+  return (new ppapi::proxy::BrowserFontResource_Trusted(
+      host_impl_->in_process_router()->GetPluginConnection(),
+      instance,
+      *description,
+      prefs))->GetReference();
+}
+
 PP_Resource PepperInProcessResourceCreation::CreateFileChooser(
     PP_Instance instance,
     PP_FileChooserMode_Dev mode,
@@ -48,9 +68,42 @@ PP_Resource PepperInProcessResourceCreation::CreateFileChooser(
       instance, mode, accept_types))->GetReference();
 }
 
+PP_Resource PepperInProcessResourceCreation::CreateGraphics2D(
+    PP_Instance instance,
+    const PP_Size& size,
+    PP_Bool is_always_opaque) {
+  return (new ppapi::proxy::Graphics2DResource(
+          host_impl_->in_process_router()->GetPluginConnection(),
+          instance, size, is_always_opaque))->GetReference();
+}
+
 PP_Resource PepperInProcessResourceCreation::CreatePrinting(
     PP_Instance instance) {
   return (new ppapi::proxy::PrintingResource(
+      host_impl_->in_process_router()->GetPluginConnection(),
+      instance))->GetReference();
+}
+
+PP_Resource PepperInProcessResourceCreation::CreateURLRequestInfo(
+    PP_Instance instance,
+    const ::ppapi::URLRequestInfoData& data) {
+  return (new ppapi::proxy::URLRequestInfoResource(
+      host_impl_->in_process_router()->GetPluginConnection(),
+      instance, data))->GetReference();
+}
+
+PP_Resource PepperInProcessResourceCreation::CreateURLResponseInfo(
+    PP_Instance instance,
+    const ::ppapi::URLResponseInfoData& data,
+    PP_Resource file_ref_resource) {
+  return (new ppapi::proxy::URLResponseInfoResource(
+      host_impl_->in_process_router()->GetPluginConnection(),
+      instance, data, file_ref_resource))->GetReference();
+}
+
+PP_Resource PepperInProcessResourceCreation::CreateWebSocket(
+    PP_Instance instance) {
+  return (new ppapi::proxy::WebSocketResource(
       host_impl_->in_process_router()->GetPluginConnection(),
       instance))->GetReference();
 }

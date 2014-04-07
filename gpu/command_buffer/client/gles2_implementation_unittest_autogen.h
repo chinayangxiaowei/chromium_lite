@@ -33,6 +33,9 @@ TEST_F(GLES2ImplementationTest, BindBuffer) {
 
   gl_->BindBuffer(GL_ARRAY_BUFFER, 2);
   EXPECT_EQ(0, memcmp(&expected, commands_, sizeof(expected)));
+  ClearCommands();
+  gl_->BindBuffer(GL_ARRAY_BUFFER, 2);
+  EXPECT_TRUE(NoCommandsWritten());
 }
 
 TEST_F(GLES2ImplementationTest, BindFramebuffer) {
@@ -44,6 +47,9 @@ TEST_F(GLES2ImplementationTest, BindFramebuffer) {
 
   gl_->BindFramebuffer(GL_FRAMEBUFFER, 2);
   EXPECT_EQ(0, memcmp(&expected, commands_, sizeof(expected)));
+  ClearCommands();
+  gl_->BindFramebuffer(GL_FRAMEBUFFER, 2);
+  EXPECT_TRUE(NoCommandsWritten());
 }
 
 TEST_F(GLES2ImplementationTest, BindRenderbuffer) {
@@ -55,17 +61,9 @@ TEST_F(GLES2ImplementationTest, BindRenderbuffer) {
 
   gl_->BindRenderbuffer(GL_RENDERBUFFER, 2);
   EXPECT_EQ(0, memcmp(&expected, commands_, sizeof(expected)));
-}
-
-TEST_F(GLES2ImplementationTest, BindTexture) {
-  struct Cmds {
-    BindTexture cmd;
-  };
-  Cmds expected;
-  expected.cmd.Init(GL_TEXTURE_2D, 2);
-
-  gl_->BindTexture(GL_TEXTURE_2D, 2);
-  EXPECT_EQ(0, memcmp(&expected, commands_, sizeof(expected)));
+  ClearCommands();
+  gl_->BindRenderbuffer(GL_RENDERBUFFER, 2);
+  EXPECT_TRUE(NoCommandsWritten());
 }
 
 TEST_F(GLES2ImplementationTest, BlendColor) {
@@ -84,9 +82,9 @@ TEST_F(GLES2ImplementationTest, BlendEquation) {
     BlendEquation cmd;
   };
   Cmds expected;
-  expected.cmd.Init(GL_FUNC_ADD);
+  expected.cmd.Init(GL_FUNC_SUBTRACT);
 
-  gl_->BlendEquation(GL_FUNC_ADD);
+  gl_->BlendEquation(GL_FUNC_SUBTRACT);
   EXPECT_EQ(0, memcmp(&expected, commands_, sizeof(expected)));
 }
 
@@ -95,9 +93,9 @@ TEST_F(GLES2ImplementationTest, BlendEquationSeparate) {
     BlendEquationSeparate cmd;
   };
   Cmds expected;
-  expected.cmd.Init(GL_FUNC_ADD, GL_FUNC_ADD);
+  expected.cmd.Init(GL_FUNC_SUBTRACT, GL_FUNC_ADD);
 
-  gl_->BlendEquationSeparate(GL_FUNC_ADD, GL_FUNC_ADD);
+  gl_->BlendEquationSeparate(GL_FUNC_SUBTRACT, GL_FUNC_ADD);
   EXPECT_EQ(0, memcmp(&expected, commands_, sizeof(expected)));
 }
 
@@ -366,17 +364,6 @@ TEST_F(GLES2ImplementationTest, DetachShader) {
   EXPECT_EQ(0, memcmp(&expected, commands_, sizeof(expected)));
 }
 
-TEST_F(GLES2ImplementationTest, Disable) {
-  struct Cmds {
-    Disable cmd;
-  };
-  Cmds expected;
-  expected.cmd.Init(GL_DITHER);
-
-  gl_->Disable(GL_DITHER);
-  EXPECT_EQ(0, memcmp(&expected, commands_, sizeof(expected)));
-}
-
 TEST_F(GLES2ImplementationTest, DisableVertexAttribArray) {
   struct Cmds {
     DisableVertexAttribArray cmd;
@@ -396,17 +383,6 @@ TEST_F(GLES2ImplementationTest, DrawArrays) {
   expected.cmd.Init(GL_POINTS, 2, 3);
 
   gl_->DrawArrays(GL_POINTS, 2, 3);
-  EXPECT_EQ(0, memcmp(&expected, commands_, sizeof(expected)));
-}
-
-TEST_F(GLES2ImplementationTest, Enable) {
-  struct Cmds {
-    Enable cmd;
-  };
-  Cmds expected;
-  expected.cmd.Init(GL_DITHER);
-
-  gl_->Enable(GL_DITHER);
   EXPECT_EQ(0, memcmp(&expected, commands_, sizeof(expected)));
 }
 
@@ -1050,9 +1026,9 @@ TEST_F(GLES2ImplementationTest, StencilOp) {
     StencilOp cmd;
   };
   Cmds expected;
-  expected.cmd.Init(GL_KEEP, GL_KEEP, GL_KEEP);
+  expected.cmd.Init(GL_KEEP, GL_INCR, GL_KEEP);
 
-  gl_->StencilOp(GL_KEEP, GL_KEEP, GL_KEEP);
+  gl_->StencilOp(GL_KEEP, GL_INCR, GL_KEEP);
   EXPECT_EQ(0, memcmp(&expected, commands_, sizeof(expected)));
 }
 
@@ -1061,9 +1037,9 @@ TEST_F(GLES2ImplementationTest, StencilOpSeparate) {
     StencilOpSeparate cmd;
   };
   Cmds expected;
-  expected.cmd.Init(GL_FRONT, GL_KEEP, GL_KEEP, GL_KEEP);
+  expected.cmd.Init(GL_FRONT, GL_INCR, GL_KEEP, GL_KEEP);
 
-  gl_->StencilOpSeparate(GL_FRONT, GL_KEEP, GL_KEEP, GL_KEEP);
+  gl_->StencilOpSeparate(GL_FRONT, GL_INCR, GL_KEEP, GL_KEEP);
   EXPECT_EQ(0, memcmp(&expected, commands_, sizeof(expected)));
 }
 
@@ -1607,6 +1583,56 @@ TEST_F(GLES2ImplementationTest, PopGroupMarkerEXT) {
   gl_->PopGroupMarkerEXT();
   EXPECT_EQ(0, memcmp(&expected, commands_, sizeof(expected)));
 }
+
+TEST_F(GLES2ImplementationTest, GenVertexArraysOES) {
+  GLuint ids[2] = { 0, };
+  struct Cmds {
+    GenVertexArraysOESImmediate gen;
+    GLuint data[2];
+  };
+  Cmds expected;
+  expected.gen.Init(arraysize(ids), &ids[0]);
+  expected.data[0] = kVertexArraysStartId;
+  expected.data[1] = kVertexArraysStartId + 1;
+  gl_->GenVertexArraysOES(arraysize(ids), &ids[0]);
+  EXPECT_EQ(0, memcmp(&expected, commands_, sizeof(expected)));
+  EXPECT_EQ(kVertexArraysStartId, ids[0]);
+  EXPECT_EQ(kVertexArraysStartId + 1, ids[1]);
+}
+
+TEST_F(GLES2ImplementationTest, DeleteVertexArraysOES) {
+  GLuint ids[2] = { kVertexArraysStartId, kVertexArraysStartId + 1 };
+  struct Cmds {
+    DeleteVertexArraysOESImmediate del;
+    GLuint data[2];
+  };
+  Cmds expected;
+  expected.del.Init(arraysize(ids), &ids[0]);
+  expected.data[0] = kVertexArraysStartId;
+  expected.data[1] = kVertexArraysStartId + 1;
+  gl_->DeleteVertexArraysOES(arraysize(ids), &ids[0]);
+  EXPECT_EQ(0, memcmp(&expected, commands_, sizeof(expected)));
+}
+
+TEST_F(GLES2ImplementationTest, IsVertexArrayOES) {
+  struct Cmds {
+    IsVertexArrayOES cmd;
+  };
+
+  typedef IsVertexArrayOES::Result Result;
+  Cmds expected;
+  ExpectedMemoryInfo result1 =
+      GetExpectedResultMemory(sizeof(IsVertexArrayOES::Result));
+  expected.cmd.Init(1, result1.id, result1.offset);
+
+  EXPECT_CALL(*command_buffer(), OnFlush())
+      .WillOnce(SetMemory(result1.ptr, uint32(1)))
+      .RetiresOnSaturation();
+
+  GLboolean result = gl_->IsVertexArrayOES(1);
+  EXPECT_EQ(0, memcmp(&expected, commands_, sizeof(expected)));
+  EXPECT_TRUE(result);
+}
 // TODO: Implement unit test for GenSharedIdsCHROMIUM
 // TODO: Implement unit test for DeleteSharedIdsCHROMIUM
 // TODO: Implement unit test for RegisterSharedIdsCHROMIUM
@@ -1710,5 +1736,66 @@ TEST_F(GLES2ImplementationTest, ConsumeTextureCHROMIUM) {
   EXPECT_EQ(0, memcmp(&expected, commands_, sizeof(expected)));
 }
 // TODO: Implement unit test for BindUniformLocationCHROMIUM
+
+TEST_F(GLES2ImplementationTest, BindTexImage2DCHROMIUM) {
+  struct Cmds {
+    BindTexImage2DCHROMIUM cmd;
+  };
+  Cmds expected;
+  expected.cmd.Init(GL_TEXTURE_2D, 2);
+
+  gl_->BindTexImage2DCHROMIUM(GL_TEXTURE_2D, 2);
+  EXPECT_EQ(0, memcmp(&expected, commands_, sizeof(expected)));
+}
+
+TEST_F(GLES2ImplementationTest, ReleaseTexImage2DCHROMIUM) {
+  struct Cmds {
+    ReleaseTexImage2DCHROMIUM cmd;
+  };
+  Cmds expected;
+  expected.cmd.Init(GL_TEXTURE_2D, 2);
+
+  gl_->ReleaseTexImage2DCHROMIUM(GL_TEXTURE_2D, 2);
+  EXPECT_EQ(0, memcmp(&expected, commands_, sizeof(expected)));
+}
+
+TEST_F(GLES2ImplementationTest, TraceEndCHROMIUM) {
+  struct Cmds {
+    TraceEndCHROMIUM cmd;
+  };
+  Cmds expected;
+  expected.cmd.Init();
+
+  gl_->TraceEndCHROMIUM();
+  EXPECT_EQ(0, memcmp(&expected, commands_, sizeof(expected)));
+}
+
+TEST_F(GLES2ImplementationTest, DiscardFramebufferEXT) {
+  struct Cmds {
+    DiscardFramebufferEXTImmediate cmd;
+    GLenum data[2][1];
+  };
+
+  Cmds expected;
+  for (int ii = 0; ii < 2; ++ii) {
+    for (int jj = 0; jj < 1; ++jj) {
+      expected.data[ii][jj] = static_cast<GLenum>(ii * 1 + jj);
+    }
+  }
+  expected.cmd.Init(1, 2, &expected.data[0][0]);
+  gl_->DiscardFramebufferEXT(1, 2, &expected.data[0][0]);
+  EXPECT_EQ(0, memcmp(&expected, commands_, sizeof(expected)));
+}
+
+TEST_F(GLES2ImplementationTest, LoseContextCHROMIUM) {
+  struct Cmds {
+    LoseContextCHROMIUM cmd;
+  };
+  Cmds expected;
+  expected.cmd.Init(1, 2);
+
+  gl_->LoseContextCHROMIUM(1, 2);
+  EXPECT_EQ(0, memcmp(&expected, commands_, sizeof(expected)));
+}
 #endif  // GPU_COMMAND_BUFFER_CLIENT_GLES2_IMPLEMENTATION_UNITTEST_AUTOGEN_H_
 

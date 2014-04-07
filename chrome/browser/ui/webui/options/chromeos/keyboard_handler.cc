@@ -63,6 +63,9 @@ void KeyboardHandler::GetLocalizedValues(DictionaryValue* localized_strings) {
   localized_strings->SetString("remapCapsLockKeyToContent",
       l10n_util::GetStringUTF16(
           IDS_OPTIONS_SETTINGS_LANGUAGES_KEY_CAPS_LOCK_LABEL));
+  localized_strings->SetString("changeLanguageAndInputSettings",
+      l10n_util::GetStringUTF16(
+          IDS_OPTIONS_SETTINGS_CHANGE_LANGUAGE_AND_INPUT_SETTINGS));
 
   for (size_t i = 0; i < arraysize(kDataValuesNames); ++i) {
     ListValue* list_value = new ListValue();
@@ -77,8 +80,8 @@ void KeyboardHandler::GetLocalizedValues(DictionaryValue* localized_strings) {
         continue;
       }
       ListValue* option = new ListValue();
-      option->Append(Value::CreateIntegerValue(value));
-      option->Append(Value::CreateStringValue(l10n_util::GetStringUTF16(
+      option->Append(new base::FundamentalValue(value));
+      option->Append(new base::StringValue(l10n_util::GetStringUTF16(
           message_id)));
       list_value->Append(option);
     }
@@ -87,12 +90,15 @@ void KeyboardHandler::GetLocalizedValues(DictionaryValue* localized_strings) {
 }
 
 void KeyboardHandler::InitializePage() {
-  if (CommandLine::ForCurrentProcess()->HasSwitch(
-          switches::kHasChromeOSKeyboard))
-    return;
+  bool chromeos_keyboard = CommandLine::ForCurrentProcess()->HasSwitch(
+      switches::kHasChromeOSKeyboard);
+
   const base::FundamentalValue show_options(true);
-  web_ui()->CallJavascriptFunction(
-      "options.KeyboardOverlay.showCapsLockOptions", show_options);
+
+  if (!chromeos_keyboard) {
+    web_ui()->CallJavascriptFunction(
+        "options.KeyboardOverlay.showCapsLockOptions", show_options);
+  }
 }
 
 }  // namespace options

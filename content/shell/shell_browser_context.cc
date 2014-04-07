@@ -16,6 +16,7 @@
 #include "content/shell/shell_resource_context.h"
 #include "content/shell/shell_switches.h"
 #include "content/shell/shell_url_request_context_getter.h"
+#include "content/public/common/content_switches.h"
 
 #if defined(OS_WIN)
 #include "base/base_paths_win.h"
@@ -42,12 +43,9 @@ ShellBrowserContext::~ShellBrowserContext() {
 
 void ShellBrowserContext::InitWhileIOAllowed() {
   CommandLine* cmd_line = CommandLine::ForCurrentProcess();
-  if (cmd_line->HasSwitch(switches::kDumpRenderTree))
+  if (cmd_line->HasSwitch(switches::kIgnoreCertificateErrors) ||
+      cmd_line->HasSwitch(switches::kDumpRenderTree)) {
     ignore_certificate_errors_ = true;
-  if (cmd_line->HasSwitch(switches::kDumpRenderTree)) {
-    CHECK(testing_path_.CreateUniqueTempDir());
-    path_ = testing_path_.path();
-    return;
   }
   if (cmd_line->HasSwitch(switches::kContentShellDataPath)) {
     path_ = cmd_line->GetSwitchValuePath(switches::kContentShellDataPath);
@@ -126,13 +124,15 @@ net::URLRequestContextGetter*
 
 net::URLRequestContextGetter*
     ShellBrowserContext::GetMediaRequestContextForStoragePartition(
-        const std::string& partition_id) {
+        const FilePath& partition_path,
+        bool in_memory) {
   return GetRequestContext();
 }
 
 net::URLRequestContextGetter*
     ShellBrowserContext::GetRequestContextForStoragePartition(
-        const std::string& partition_id)  {
+        const FilePath& partition_path,
+        bool in_memory) {
   return NULL;
 }
 
@@ -152,10 +152,6 @@ GeolocationPermissionContext*
 SpeechRecognitionPreferences*
     ShellBrowserContext::GetSpeechRecognitionPreferences() {
   return NULL;
-}
-
-bool ShellBrowserContext::DidLastSessionExitCleanly()  {
-  return true;
 }
 
 quota::SpecialStoragePolicy* ShellBrowserContext::GetSpecialStoragePolicy() {

@@ -9,6 +9,7 @@
 #include "base/process_util.h"
 #include "base/string16.h"
 #include "content/common/content_export.h"
+#include "content/port/common/input_event_ack_state.h"
 #include "content/public/browser/render_widget_host_view.h"
 #include "third_party/WebKit/Source/WebKit/chromium/public/WebPopupType.h"
 #include "third_party/WebKit/Source/WebKit/chromium/public/WebTextDirection.h"
@@ -34,6 +35,10 @@ namespace WebKit {
 struct WebScreenInfo;
 }
 #endif
+
+namespace skia {
+class PlatformBitmap;
+};
 
 namespace content {
 class BackingStore;
@@ -75,7 +80,7 @@ class CONTENT_EXPORT RenderWidgetHostViewPort : public RenderWidgetHostView {
   // Moves all plugin windows as described in the given list.
   // |scroll_offset| is the scroll offset of the render view.
   virtual void MovePluginWindows(
-      const gfx::Point& scroll_offset,
+      const gfx::Vector2d& scroll_offset,
       const std::vector<webkit::npapi::WebPluginGeometry>& moves) = 0;
 
   // Take focus from the associated View component.
@@ -118,7 +123,8 @@ class CONTENT_EXPORT RenderWidgetHostViewPort : public RenderWidgetHostView {
   // Thus implementers should generally paint as much of |rect| as possible
   // synchronously with as little overpainting as possible.
   virtual void DidUpdateBackingStore(
-      const gfx::Rect& scroll_rect, int scroll_dx, int scroll_dy,
+      const gfx::Rect& scroll_rect,
+      const gfx::Vector2d& scroll_delta,
       const std::vector<gfx::Rect>& copy_rects) = 0;
 
   // Notifies the View that the renderer has ceased to exist.
@@ -146,6 +152,9 @@ class CONTENT_EXPORT RenderWidgetHostViewPort : public RenderWidgetHostView {
                                       const gfx::Rect& end_rect,
                                       WebKit::WebTextDirection end_direction) {}
 
+  // Notifies the view that the scroll offset has changed.
+  virtual void ScrollOffsetChanged() {}
+
   // Allocate a backing store for this view.
   virtual BackingStore* AllocBackingStore(const gfx::Size& size) = 0;
 
@@ -161,7 +170,7 @@ class CONTENT_EXPORT RenderWidgetHostViewPort : public RenderWidgetHostView {
       const gfx::Rect& src_subrect,
       const gfx::Size& dst_size,
       const base::Callback<void(bool)>& callback,
-      skia::PlatformCanvas* output) = 0;
+      skia::PlatformBitmap* output) = 0;
 
   // Called when accelerated compositing state changes.
   virtual void OnAcceleratedCompositingStateChange() = 0;
@@ -222,11 +231,22 @@ class CONTENT_EXPORT RenderWidgetHostViewPort : public RenderWidgetHostView {
       TransportDIB::Handle transport_dib) = 0;
 #endif
 
-  virtual void AcceleratedSurfaceNew(
-      int32 width_in_pixel,
-      int32 height_in_pixel,
-      uint64 surface_id) {}
-  virtual void AcceleratedSurfaceRelease(uint64 surface_id) {}
+#if defined(OS_ANDROID)
+  virtual void ShowDisambiguationPopup(const gfx::Rect& target_rect,
+                                       const SkBitmap& zoomed_bitmap) = 0;
+  virtual void SetCachedPageScaleFactorLimits(float minimum_scale,
+                                              float maximum_scale) = 0;
+  virtual void UpdateFrameInfo(const gfx::Vector2d& scroll_offset,
+                               float page_scale_factor,
+                               float min_page_scale_factor,
+                               float max_page_scale_factor,
+                               const gfx::Size& content_size) = 0;
+  virtual void HasTouchEventHandlers(bool need_touch_events) = 0;
+#endif
+
+  virtual void AcceleratedSurfaceNew(uint64 surface_id,
+                                     const std::string& mailbox_name) {}
+  virtual void AcceleratedSurfaceRelease() {}
 
 #if defined(TOOLKIT_GTK)
   virtual void CreatePluginContainer(gfx::PluginWindowHandle id) = 0;
@@ -241,22 +261,26 @@ class CONTENT_EXPORT RenderWidgetHostViewPort : public RenderWidgetHostView {
   static void GetDefaultScreenInfo(
       WebKit::WebScreenInfo* results);
   virtual void GetScreenInfo(WebKit::WebScreenInfo* results) = 0;
-  virtual gfx::Rect GetBoundsInRootWindow() = 0;
 #endif
+
+  // Gets the bounds of the window, in screen coordinates.
+  virtual gfx::Rect GetBoundsInRootWindow() = 0;
 
   virtual gfx::GLSurfaceHandle GetCompositingSurface() = 0;
 
   // Because the associated remote WebKit instance can asynchronously
   // prevent-default on a dispatched touch event, the touch events are queued in
-  // the GestureRecognizer until invocation of ProcessTouchAck releases it to be
-  // processed (when |processed| is false) or ignored (when |processed| is true)
-  virtual void ProcessTouchAck(WebKit::WebInputEvent::Type type,
-                               bool processed) = 0;
+  // the GestureRecognizer until invocation of ProcessAckedTouchEvent releases
+  // it to be consumed (when |ack_result| is NOT_CONSUMED OR NO_CONSUMER_EXISTS)
+  // or ignored (when |ack_result| is CONSUMED).
+  virtual void ProcessAckedTouchEvent(const WebKit::WebTouchEvent& touch,
+                                      InputEventAckState ack_result) = 0;
 
   // Asks the view to create a smooth scroll gesture that will be used to
   // simulate a user-initiated scroll.
   virtual SmoothScrollGesture* CreateSmoothScrollGesture(
-      bool scroll_down, bool scroll_far) = 0;
+      bool scroll_down, int pixels_to_scroll, int mouse_event_x,
+      int mouse_event_y) = 0;
 
   virtual void SetHasHorizontalScrollbar(bool has_horizontal_scrollbar) = 0;
   virtual void SetScrollOffsetPinning(

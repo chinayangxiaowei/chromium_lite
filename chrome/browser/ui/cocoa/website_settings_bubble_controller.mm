@@ -11,13 +11,15 @@
 #include "base/string_number_conversions.h"
 #include "base/sys_string_conversions.h"
 #import "chrome/browser/certificate_viewer.h"
+#include "chrome/browser/infobars/infobar_tab_helper.h"
 #import "chrome/browser/ui/browser_dialogs.h"
 #import "chrome/browser/ui/cocoa/browser_window_controller.h"
+#import "chrome/browser/ui/cocoa/flipped_view.h"
 #import "chrome/browser/ui/cocoa/hyperlink_button_cell.h"
 #import "chrome/browser/ui/cocoa/info_bubble_view.h"
 #import "chrome/browser/ui/cocoa/info_bubble_window.h"
 #import "chrome/browser/ui/cocoa/location_bar/location_bar_view_mac.h"
-#include "chrome/browser/ui/tab_contents/tab_contents.h"
+#include "chrome/browser/ui/website_settings/website_settings_utils.h"
 #include "chrome/common/url_constants.h"
 #include "content/public/browser/cert_store.h"
 #include "content/public/browser/page_navigator.h"
@@ -34,9 +36,9 @@
 
 namespace {
 
-// The width of the window, in view coordinates. The height will be determined
-// by the content.
-const CGFloat kWindowWidth = 310;
+// The default width of the window, in view coordinates. It may be larger to
+// fit the content.
+const CGFloat kDefaultWindowWidth = 310;
 
 // Spacing in between sections.
 const CGFloat kVerticalSpacing = 10;
@@ -81,23 +83,24 @@ const CGFloat kPermissionsHeadlineSpacing = 2;
 // The amount of horizontal space between a permission label and the popup.
 const CGFloat kPermissionPopUpXSpacing = 3;
 
+// The amount of horizontal space between the permission popup title and the
+// arrow icon.
+const CGFloat kPermissionButtonTitleRightPadding = 4;
+
 // The extra space to the left of the first tab in the tab strip.
-const CGFloat kTabStripXPadding = kFramePadding - 1;
+const CGFloat kTabStripXPadding = kFramePadding;
 
 // The amount of space between the visual borders of adjacent tabs.
 const CGFloat kTabSpacing = 4;
 
-// The extra width outside the hit rect used by the visual borders of the tab.
-const CGFloat kTabBorderExtraWidth = 16;
+// The amount of space above the tab strip.
+const CGFloat kTabStripTopSpacing = 14;
 
-// The height of the clickable area of the tab strip.
-const CGFloat kTabHeight = 27;
-
-// The height of the background image for the tab strip.
-const CGFloat kTabStripHeight = 44;
+// The height of the clickable area of the tab.
+const CGFloat kTabHeight = 28;
 
 // The amount of space above tab labels.
-const CGFloat kTabLabelTopPadding = 20;
+const CGFloat kTabLabelTopPadding = 6;
 
 // The amount of padding to leave on either side of the tab label.
 const CGFloat kTabLabelXPadding = 12;
@@ -115,19 +118,12 @@ NSColor* IdentityVerifiedTextColor() {
 
 }  // namespace
 
-// A simple container to hold all the contents of the website settings bubble.
-// It uses a flipped coordinate system to make text layout easier.
-@interface WebsiteSettingsContentView : NSView
-@end
-@implementation WebsiteSettingsContentView
-- (BOOL)isFlipped {
-  return YES;
-}
-@end
-
 @interface WebsiteSettingsTabSegmentedCell : NSSegmentedCell {
  @private
-  scoped_nsobject<NSImage> tabBackgroundImage_;
+  scoped_nsobject<NSImage> tabstripCenterImage_;
+  scoped_nsobject<NSImage> tabstripLeftImage_;
+  scoped_nsobject<NSImage> tabstripRightImage_;
+
   scoped_nsobject<NSImage> tabCenterImage_;
   scoped_nsobject<NSImage> tabLeftImage_;
   scoped_nsobject<NSImage> tabRightImage_;
@@ -142,14 +138,19 @@ NSColor* IdentityVerifiedTextColor() {
 - (id)init {
   if ((self = [super init])) {
     ResourceBundle& rb = ResourceBundle::GetSharedInstance();
-    tabBackgroundImage_.reset(rb.GetNativeImageNamed(
-        IDR_WEBSITE_SETTINGS_TAB_BACKGROUND).CopyNSImage());
+    tabstripCenterImage_.reset(rb.GetNativeImageNamed(
+        IDR_WEBSITE_SETTINGS_TABSTRIP_CENTER).CopyNSImage());
+    tabstripLeftImage_.reset(rb.GetNativeImageNamed(
+        IDR_WEBSITE_SETTINGS_TABSTRIP_LEFT).CopyNSImage());
+    tabstripRightImage_.reset(rb.GetNativeImageNamed(
+        IDR_WEBSITE_SETTINGS_TABSTRIP_RIGHT).CopyNSImage());
+
     tabCenterImage_.reset(
-        rb.GetNativeImageNamed(IDR_WEBSITE_SETTINGS_TAB_CENTER).CopyNSImage());
+        rb.GetNativeImageNamed(IDR_WEBSITE_SETTINGS_TAB_CENTER2).CopyNSImage());
     tabLeftImage_.reset(
-        rb.GetNativeImageNamed(IDR_WEBSITE_SETTINGS_TAB_LEFT).CopyNSImage());
+        rb.GetNativeImageNamed(IDR_WEBSITE_SETTINGS_TAB_LEFT2).CopyNSImage());
     tabRightImage_.reset(
-        rb.GetNativeImageNamed(IDR_WEBSITE_SETTINGS_TAB_RIGHT).CopyNSImage());
+        rb.GetNativeImageNamed(IDR_WEBSITE_SETTINGS_TAB_RIGHT2).CopyNSImage());
   }
   return self;
 }
@@ -173,14 +174,12 @@ NSColor* IdentityVerifiedTextColor() {
 }
 
 - (void)drawWithFrame:(NSRect)cellFrame inView:(NSView*)controlView {
-  // Draw the tab for the selected segment. The drawing area is slightly
-  // larger than the hit rect for the tab.
-  NSRect tabRect = [self hitRectForSegment:[self selectedSegment]];
-  tabRect.origin.x -= kTabBorderExtraWidth;
-  tabRect.size.width += 2 * kTabBorderExtraWidth;
+  CGFloat tabstripHeight = [tabCenterImage_ size].height;
 
+  // Draw the tab for the selected segment.
+  NSRect tabRect = [self hitRectForSegment:[self selectedSegment]];
   tabRect.origin.y = 0;
-  tabRect.size.height = kTabStripHeight;
+  tabRect.size.height = tabstripHeight;
 
   NSDrawThreePartImage(tabRect,
                        tabLeftImage_,
@@ -192,11 +191,11 @@ NSColor* IdentityVerifiedTextColor() {
                        /*flipped=*/ YES);
 
   // Draw the background to the left of the selected tab.
-  NSRect backgroundRect = NSMakeRect(0, 0, NSMinX(tabRect), kTabStripHeight);
+  NSRect backgroundRect = NSMakeRect(0, 0, NSMinX(tabRect), tabstripHeight);
   NSDrawThreePartImage(backgroundRect,
                        nil,
-                       tabBackgroundImage_,
-                       nil,
+                       tabstripCenterImage_,
+                       tabstripLeftImage_,
                        /*vertical=*/ NO,
                        NSCompositeSourceOver,
                        1,
@@ -204,10 +203,10 @@ NSColor* IdentityVerifiedTextColor() {
 
   // Draw the background to the right of the selected tab.
   backgroundRect.origin.x = NSMaxX(tabRect);
-  backgroundRect.size.width = kWindowWidth - NSMaxX(tabRect);
+  backgroundRect.size.width = NSMaxX(cellFrame) - NSMaxX(tabRect);
   NSDrawThreePartImage(backgroundRect,
-                       nil,
-                       tabBackgroundImage_,
+                       tabstripRightImage_,
+                       tabstripCenterImage_,
                        nil,
                        /*vertical=*/ NO,
                        NSCompositeSourceOver,
@@ -230,7 +229,10 @@ NSColor* IdentityVerifiedTextColor() {
 // Return the hit rect (i.e., the visual bounds of the tab) for
 // the given segment.
 - (NSRect)hitRectForSegment:(NSInteger)segment {
-  NSRect rect = NSMakeRect(0, kTabStripHeight - kTabHeight,
+  CGFloat tabstripHeight = [tabCenterImage_ size].height;
+  DCHECK_GT(tabstripHeight, kTabHeight);
+
+  NSRect rect = NSMakeRect(0, tabstripHeight - kTabHeight,
                            [self widthForSegment:segment], kTabHeight);
   for (NSInteger i = 0; i < segment; ++i) {
     rect.origin.x += [self widthForSegment:i];
@@ -272,22 +274,34 @@ NSColor* IdentityVerifiedTextColor() {
 // segmented control. Otherwise, clicks on the lower part of a tab will be
 // ignored.
 - (NSSize)cellSizeForBounds:(NSRect)aRect {
-  return NSMakeSize([super cellSizeForBounds:aRect].width, NSHeight(aRect));
+  return NSMakeSize([super cellSizeForBounds:aRect].width,
+                    [tabstripCenterImage_ size].height);
+}
+
+// Returns the minimum size required to display this cell.
+// It should always be exactly as tall as the tabstrip background image.
+- (NSSize)cellSize {
+  return NSMakeSize([super cellSize].width,
+                    [tabstripCenterImage_ size].height);
 }
 @end
 
 @implementation WebsiteSettingsBubbleController
 
+- (CGFloat)defaultWindowWidth {
+  return kDefaultWindowWidth;
+}
+
 - (id)initWithParentWindow:(NSWindow*)parentWindow
    websiteSettingsUIBridge:(WebsiteSettingsUIBridge*)bridge
-               tabContents:(TabContents*)tabContents
+               webContents:(content::WebContents*)webContents
             isInternalPage:(BOOL)isInternalPage {
   DCHECK(parentWindow);
 
-  tabContents_ = tabContents;
+  webContents_ = webContents;
 
   // Use an arbitrary height; it will be changed in performLayout.
-  NSRect contentRect = NSMakeRect(0, 0, kWindowWidth, 1);
+  NSRect contentRect = NSMakeRect(0, 0, [self defaultWindowWidth], 1);
   // Create an empty window into which content is placed.
   scoped_nsobject<InfoBubbleWindow> window(
       [[InfoBubbleWindow alloc] initWithContentRect:contentRect
@@ -301,9 +315,9 @@ NSColor* IdentityVerifiedTextColor() {
     [[self bubble] setArrowLocation:info_bubble::kTopLeft];
 
     // Create the container view that uses flipped coordinates.
-    NSRect contentFrame = NSMakeRect(0, 0, kWindowWidth, 300);
+    NSRect contentFrame = NSMakeRect(0, 0, [self defaultWindowWidth], 300);
     contentView_.reset(
-        [[WebsiteSettingsContentView alloc] initWithFrame:contentFrame]);
+        [[FlippedView alloc] initWithFrame:contentFrame]);
 
     // Replace the window's content.
     [[[self window] contentView] setSubviews:
@@ -359,7 +373,7 @@ NSColor* IdentityVerifiedTextColor() {
   // Adjust the contentView to fit everything.
   CGFloat maxY = std::max(NSMaxY([imageView frame]), NSMaxY(textFrame));
   [contentView_ setFrame:NSMakeRect(
-      0, 0, kWindowWidth, maxY + kInternalPageFramePadding)];
+      0, 0, [self defaultWindowWidth], maxY + kInternalPageFramePadding)];
 
   [self sizeAndPositionWindow];
 }
@@ -389,14 +403,18 @@ NSColor* IdentityVerifiedTextColor() {
 
   // Create the tab view and its two tabs.
 
-  NSRect initialFrame = NSMakeRect(0, 0, kWindowWidth, kTabStripHeight);
+  scoped_nsobject<WebsiteSettingsTabSegmentedCell> cell(
+      [[WebsiteSettingsTabSegmentedCell alloc] init]);
+  CGFloat tabstripHeight = [cell cellSize].height;
+  NSRect tabstripFrame = NSMakeRect(
+      0, 0, [self defaultWindowWidth], tabstripHeight);
   segmentedControl_.reset(
-      [[NSSegmentedControl alloc] initWithFrame:initialFrame]);
-  [segmentedControl_ setCell:
-      [[[WebsiteSettingsTabSegmentedCell alloc] init] autorelease]];
+      [[NSSegmentedControl alloc] initWithFrame:tabstripFrame]);
+  [segmentedControl_ setCell:cell];
   [segmentedControl_ setSegmentCount:WebsiteSettingsUI::NUM_TAB_IDS];
   [segmentedControl_ setTarget:self];
   [segmentedControl_ setAction:@selector(tabSelected:)];
+  [segmentedControl_ setAutoresizingMask:NSViewWidthSizable];
 
   NSFont* smallSystemFont =
       [NSFont systemFontOfSize:[NSFont smallSystemFontSize]];
@@ -435,7 +453,7 @@ NSColor* IdentityVerifiedTextColor() {
   [segmentedControl_ setFont:smallSystemFont];
   [contentView_ addSubview:segmentedControl_];
 
-  NSRect tabFrame = NSMakeRect(0, 0, kWindowWidth, 300);
+  NSRect tabFrame = NSMakeRect(0, 0, [self defaultWindowWidth], 300);
   tabView_.reset([[NSTabView alloc] initWithFrame:tabFrame]);
   [tabView_ setTabViewType:NSNoTabsNoBorder];
   [tabView_ setDrawsBackground:NO];
@@ -455,15 +473,18 @@ NSColor* IdentityVerifiedTextColor() {
   scoped_nsobject<NSTabViewItem> item([[NSTabViewItem alloc] init]);
   [tabView_ insertTabViewItem:item.get()
                       atIndex:WebsiteSettingsUI::TAB_ID_PERMISSIONS];
-  scoped_nsobject<NSView> contentView([[WebsiteSettingsContentView alloc]
+  scoped_nsobject<NSView> contentView([[FlippedView alloc]
       initWithFrame:[tabView_ contentRect]]);
+  [contentView setAutoresizingMask:NSViewWidthSizable];
   [item setView:contentView.get()];
 
   // Initialize the two containers that hold the controls. The initial frames
   // are arbitrary, and will be adjusted after the controls are laid out.
-  cookiesView_ = [[[WebsiteSettingsContentView alloc]
+  cookiesView_ = [[[FlippedView alloc]
       initWithFrame:[tabView_ contentRect]] autorelease];
-  permissionsView_ = [[[WebsiteSettingsContentView alloc]
+  [cookiesView_ setAutoresizingMask:NSViewWidthSizable];
+
+  permissionsView_ = [[[FlippedView alloc]
       initWithFrame:[tabView_ contentRect]] autorelease];
 
   [contentView addSubview:cookiesView_];
@@ -483,23 +504,23 @@ NSColor* IdentityVerifiedTextColor() {
 
 // Handler for the link button below the list of cookies.
 - (void)showCookiesAndSiteData:(id)sender {
-  DCHECK(tabContents_);
+  DCHECK(webContents_);
   content::RecordAction(
       content::UserMetricsAction("WebsiteSettings_CookiesDialogOpened"));
-  chrome::ShowCollectedCookiesDialog(tabContents_);
+  chrome::ShowCollectedCookiesDialog(webContents_);
 }
 
 // Handler for the link button to show certificate information.
 - (void)showCertificateInfo:(id)sender {
   DCHECK(certificateId_);
-  ShowCertificateViewerByID(tabContents_->web_contents(),
+  ShowCertificateViewerByID(webContents_,
                             [self parentWindow],
                             certificateId_);
 }
 
 // Handler for the link to show help information about the connection tab.
 - (void)showHelpPage:(id)sender {
-  tabContents_->web_contents()->OpenURL(content::OpenURLParams(
+  webContents_->OpenURL(content::OpenURLParams(
       GURL(chrome::kPageInfoHelpCenterURL),
       content::Referrer(),
       NEW_FOREGROUND_TAB,
@@ -511,8 +532,9 @@ NSColor* IdentityVerifiedTextColor() {
 // Returns a weak reference to the tab view item's view.
 - (NSView*)addConnectionTabToTabView:(NSTabView*)tabView {
   scoped_nsobject<NSTabViewItem> item([[NSTabViewItem alloc] init]);
-  scoped_nsobject<NSView> contentView([[WebsiteSettingsContentView alloc]
+  scoped_nsobject<NSView> contentView([[FlippedView alloc]
       initWithFrame:[tabView_ contentRect]]);
+  [contentView setAutoresizingMask:NSViewWidthSizable];
 
   // Place all the text and images at the same position. The positions will be
   // adjusted in performLayout.
@@ -531,7 +553,9 @@ NSColor* IdentityVerifiedTextColor() {
                bold:NO
              toView:contentView.get()
             atPoint:textPosition];
+
   separatorAfterIdentity_ = [self addSeparatorToView:contentView];
+  [separatorAfterIdentity_ setAutoresizingMask:NSViewWidthSizable];
 
   connectionStatusIcon_ = [self addImageWithSize:imageSize
                                           toView:contentView
@@ -544,6 +568,7 @@ NSColor* IdentityVerifiedTextColor() {
             atPoint:textPosition];
   certificateInfoButton_ = nil;  // This will be created only if necessary.
   separatorAfterConnection_ = [self addSeparatorToView:contentView];
+  [separatorAfterConnection_ setAutoresizingMask:NSViewWidthSizable];
 
   firstVisitIcon_ = [self addImageWithSize:imageSize
                                     toView:contentView
@@ -562,6 +587,8 @@ NSColor* IdentityVerifiedTextColor() {
             atPoint:textPosition];
 
   separatorAfterFirstVisit_ = [self addSeparatorToView:contentView];
+  [separatorAfterFirstVisit_ setAutoresizingMask:NSViewWidthSizable];
+
   NSString* helpButtonText = l10n_util::GetNSString(
       IDS_PAGE_INFO_HELP_CENTER_LINK);
   helpButton_ = [self addLinkButtonWithText:helpButtonText
@@ -585,9 +612,25 @@ NSColor* IdentityVerifiedTextColor() {
   return position + NSHeight(frame);
 }
 
+- (void)setWidthOfView:(NSView*)view to:(CGFloat)width {
+  [view setFrameSize:NSMakeSize(width, NSHeight([view frame]))];
+}
+
 // Layout all of the controls in the window. This should be called whenever
 // the content has changed.
 - (void)performLayout {
+  // Make the content at least as wide as the permissions view.
+  CGFloat contentWidth = std::max([self defaultWindowWidth],
+                                  NSWidth([permissionsView_ frame]));
+
+  // Set the width of the content view now, so that all the text fields will
+  // be sized to fit before their heights and vertical positions are adjusted.
+  // The tab view will only resize the currently selected tab, so resize both
+  // tab content views manually.
+  [self setWidthOfView:contentView_ to:contentWidth];
+  [self setWidthOfView:permissionsTabContentView_ to:contentWidth];
+  [self setWidthOfView:connectionTabContentView_ to:contentWidth];
+
   // Place the identity status immediately below the identity.
   [self sizeTextFieldHeightToFit:identityField_];
   [self sizeTextFieldHeightToFit:identityStatusField_];
@@ -595,6 +638,7 @@ NSColor* IdentityVerifiedTextColor() {
   yPos = [self setYPositionOfView:identityStatusField_ to:yPos];
 
   // Lay out the Permissions tab.
+
   yPos = [self setYPositionOfView:cookiesView_ to:kFramePadding];
 
   // Put the link button for cookies and site data just below the cookie info.
@@ -649,29 +693,21 @@ NSColor* IdentityVerifiedTextColor() {
 
   // Adjust the tab view size and place it below the identity status.
 
-  yPos = [self setYPositionOfView:segmentedControl_
-                               to:NSMaxY([identityStatusField_ frame])];
+  yPos = NSMaxY([identityStatusField_ frame]) + kTabStripTopSpacing;
+  yPos = [self setYPositionOfView:segmentedControl_ to:yPos];
+
+  CGFloat connectionTabHeight = NSMaxY([helpButton_ frame]) + kVerticalSpacing;
 
   NSRect tabViewFrame = [tabView_ frame];
   tabViewFrame.origin.y = yPos;
-
-  // Determine the height of the tab contents.
-
-  CGFloat connectionTabHeight = std::max(
-      NSMaxY([firstVisitDescriptionField_ frame]),
-      NSMaxY([firstVisitIcon_ frame ]));
-  connectionTabHeight += kVerticalSpacing;
-
-  CGFloat permissionsTabHeight = NSMaxY([permissionsView_ frame]);
-  CGFloat tabContentHeight = std::max(connectionTabHeight,
-                                      permissionsTabHeight);
-  tabViewFrame.size.height = tabContentHeight +
-      NSHeight(tabViewFrame) - NSHeight([tabView_ contentRect]);
+  tabViewFrame.size.height =
+      std::max(connectionTabHeight, NSMaxY([permissionsView_ frame]));
+  tabViewFrame.size.width = contentWidth;
   [tabView_ setFrame:tabViewFrame];
 
   // Adjust the contentView to fit everything.
   [contentView_ setFrame:NSMakeRect(
-      0, 0, kWindowWidth, NSMaxY([tabView_ frame]))];
+      0, 0, NSWidth(tabViewFrame), NSMaxY(tabViewFrame))];
 
   [self sizeAndPositionWindow];
 }
@@ -679,8 +715,7 @@ NSColor* IdentityVerifiedTextColor() {
 // Adjust the size of the window to match the size of the content, and position
 // the bubble anchor appropriately.
 - (void)sizeAndPositionWindow {
-  NSRect windowFrame =
-      NSMakeRect(0, 0, kWindowWidth, NSHeight([contentView_ frame]));
+  NSRect windowFrame = [contentView_ frame];
   windowFrame.size = [[[self window] contentView] convertSize:windowFrame.size
                                                        toView:nil];
   // Adjust the origin by the difference in height.
@@ -755,6 +790,7 @@ NSColor* IdentityVerifiedTextColor() {
                       : [NSFont systemFontOfSize:fontSize];
   [textField setFont:font];
   [self sizeTextFieldHeightToFit:textField];
+  [textField setAutoresizingMask:NSViewWidthSizable];
   [view addSubview:textField.get()];
   return textField.get();
 }
@@ -797,9 +833,24 @@ NSColor* IdentityVerifiedTextColor() {
   [button setBezelStyle:NSRegularSquareBezelStyle];
   [view addSubview:button.get()];
 
-  // Call size-to-fit to fixup for the localized string.
   [GTMUILocalizerAndLayoutTweaker sizeToFitView:button.get()];
   return button.get();
+}
+
+// Determine the size of a popup button with the given title.
+- (NSSize)sizeForPopUpButton:(NSPopUpButton*)button
+                   withTitle:(NSString*)title {
+  NSDictionary* textAttributes =
+      [NSDictionary dictionaryWithObject:[button font]
+                                  forKey:NSFontAttributeName];
+  NSSize titleSize = [title sizeWithAttributes:textAttributes];
+
+  NSRect buttonFrame = [button frame];
+  NSRect titleRect = [[button cell] titleRectForBounds:buttonFrame];
+  CGFloat width = titleSize.width + NSWidth(buttonFrame) - NSWidth(titleRect);
+
+  return NSMakeSize(width + kPermissionButtonTitleRightPadding,
+                    NSHeight(buttonFrame));
 }
 
 // Add a pop-up button for |permissionInfo| to the given view.
@@ -821,16 +872,16 @@ NSColor* IdentityVerifiedTextColor() {
   // Create the popup menu.
   // TODO(dubroy): Refactor this code to use PermissionMenuModel.
 
-  // Media stream permission does not support "Always allow".
-  if (permissionInfo.type != CONTENT_SETTINGS_TYPE_MEDIASTREAM) {
+  // Media stream permission only support "Always allow" for https.
+  if (permissionInfo.type != CONTENT_SETTINGS_TYPE_MEDIASTREAM ||
+      (webContents_ && webContents_->GetURL().SchemeIsSecure())) {
     [button addItemWithTitle:
         l10n_util::GetNSString(IDS_WEBSITE_SETTINGS_MENU_ITEM_ALLOW)];
     [[button lastItem] setTag:CONTENT_SETTING_ALLOW];
   }
 
-  // Fullscreen and media stream do not support "Always block".
-  if (permissionInfo.type != CONTENT_SETTINGS_TYPE_FULLSCREEN &&
-      permissionInfo.type != CONTENT_SETTINGS_TYPE_MEDIASTREAM) {
+  // Fullscreen does not support "Always block".
+  if (permissionInfo.type != CONTENT_SETTINGS_TYPE_FULLSCREEN) {
     [button addItemWithTitle:
         l10n_util::GetNSString(IDS_WEBSITE_SETTINGS_MENU_ITEM_BLOCK)];
     [[button lastItem] setTag:CONTENT_SETTING_BLOCK];
@@ -855,21 +906,27 @@ NSColor* IdentityVerifiedTextColor() {
   [[button cell] setMenuItem:titleItem.get()];
   [button sizeToFit];
 
-  // Determine the size of the title, and size the control accordingly.
-  // Using |sizeToFit| results in way too much extra space after the text.
-  NSDictionary* textAttributes =
-      [NSDictionary dictionaryWithObject:[button font]
-                                  forKey:NSFontAttributeName];
-  NSSize titleSize = [[button title] sizeWithAttributes:textAttributes];
+  // Determine the largest possible size for this button.
+  CGFloat maxTitleWidth = 0;
+  for (NSInteger i = 0; i < [button numberOfItems]; ++i) {
+    string16 title = WebsiteSettingsUI::PermissionActionToUIString(
+        static_cast<ContentSetting>([[button itemAtIndex:i] tag]),
+        permissionInfo.default_setting,
+        content_settings::SETTING_SOURCE_USER);
+    NSSize size = [self sizeForPopUpButton:button
+                                 withTitle:base::SysUTF16ToNSString(title)];
+    maxTitleWidth = std::max(maxTitleWidth, size.width);
+  }
+  // Ensure the containing view is large enough to contain the button with its
+  // widest possible title.
+  NSRect containerFrame = [view frame];
+  containerFrame.size.width = std::max(
+      NSWidth(containerFrame), point.x + maxTitleWidth + kFramePadding);
+  [view setFrame:containerFrame];
 
-  // Adjust the button frame to have a titleRect that exactly fits the title.
-  NSRect buttonFrame = [button frame];
-  NSRect titleRect = [[button cell] titleRectForBounds:buttonFrame];
-  buttonFrame.size.width =
-      titleSize.width + NSWidth(buttonFrame) - NSWidth(titleRect);
-  [button setFrame:buttonFrame];
-  DCHECK_EQ(NSWidth([[button cell] titleRectForBounds:buttonFrame]),
-            titleSize.width);
+  // Size the button to just fit the title.
+  [button setFrameSize:[self sizeForPopUpButton:button
+                                      withTitle:[button title]]];
 
   [view addSubview:button.get()];
   return button.get();
@@ -893,7 +950,7 @@ NSColor* IdentityVerifiedTextColor() {
 
 // Adds a new row to the UI listing the permissions. Returns the amount of
 // vertical space that was taken up by the row.
-- (CGFloat)addPermission:
+- (NSPoint)addPermission:
     (const WebsiteSettingsUI::PermissionInfo&)permissionInfo
                   toView:(NSView*)view
                  atPoint:(NSPoint)point {
@@ -942,7 +999,8 @@ NSColor* IdentityVerifiedTextColor() {
     [button setEnabled:NO];
   }
 
-  return NSHeight([label frame]);
+  NSRect buttonFrame = [button frame];
+  return NSMakePoint(NSMaxX(buttonFrame), NSMaxY(buttonFrame));
 }
 
 // Align an image with a text field by vertically centering the image on
@@ -985,10 +1043,6 @@ NSColor* IdentityVerifiedTextColor() {
                               toView:view
                              atPoint:point];
 
-  // Shrink the label to fit the text width.
-  NSSize requiredSize = [[label cell] cellSizeForBounds:[label frame]];
-  [label setFrameSize:requiredSize];
-
   // Align the icon with the text.
   [self alignPermissionIcon:imageView withTextField:label];
 
@@ -1004,7 +1058,6 @@ NSColor* IdentityVerifiedTextColor() {
 
   WebsiteSettings::SiteIdentityStatus status = identityInfo.identity_status;
   if (status == WebsiteSettings::SITE_IDENTITY_STATUS_CERT ||
-      status == WebsiteSettings::SITE_IDENTITY_STATUS_DNSSEC_CERT ||
       status == WebsiteSettings::SITE_IDENTITY_STATUS_EV_CERT) {
     [identityStatusField_ setTextColor:IdentityVerifiedTextColor()];
   }
@@ -1037,6 +1090,11 @@ NSColor* IdentityVerifiedTextColor() {
 }
 
 - (void)setCookieInfo:(const CookieInfoList&)cookieInfoList {
+  // The contents of the permissions view can cause the whole window to get
+  // bigger, but currently permissions are always set before cookie info.
+  // Check to make sure that's still the case.
+  DCHECK_GT([[permissionsView_ subviews] count], 0U);
+
   [cookiesView_ setSubviews:[NSArray array]];
   NSPoint controlOrigin = NSMakePoint(kFramePadding, 0);
 
@@ -1047,7 +1105,6 @@ NSColor* IdentityVerifiedTextColor() {
                                  bold:YES
                                toView:cookiesView_
                               atPoint:controlOrigin];
-  [self sizeTextFieldHeightToFit:header];
   controlOrigin.y += NSHeight([header frame]) + kPermissionsHeadlineSpacing;
 
   for (CookieInfoList::const_iterator it = cookieInfoList.begin();
@@ -1061,7 +1118,9 @@ NSColor* IdentityVerifiedTextColor() {
   }
 
   controlOrigin.y += kPermissionsTabSpacing;
-  [cookiesView_ setFrameSize:NSMakeSize(kWindowWidth, controlOrigin.y)];
+  [cookiesView_ setFrameSize:
+      NSMakeSize(NSWidth([cookiesView_ frame]), controlOrigin.y)];
+
   [self performLayout];
 }
 
@@ -1084,13 +1143,15 @@ NSColor* IdentityVerifiedTextColor() {
        permission != permissionInfoList.end();
        ++permission) {
     controlOrigin.y += kPermissionsTabSpacing;
-    CGFloat rowHeight = [self addPermission:*permission
-                                     toView:permissionsView_
-                                    atPoint:controlOrigin];
-    controlOrigin.y += rowHeight;
+    NSPoint rowBottomRight = [self addPermission:*permission
+                                          toView:permissionsView_
+                                         atPoint:controlOrigin];
+    controlOrigin.y = rowBottomRight.y;
   }
   controlOrigin.y += kFramePadding;
-  [permissionsView_ setFrameSize:NSMakeSize(kWindowWidth, controlOrigin.y)];
+  [permissionsView_ setFrameSize:
+      NSMakeSize(NSWidth([permissionsView_ frame]), controlOrigin.y)];
+  [self performLayout];
 }
 
 - (void)setFirstVisit:(const string16&)firstVisit {
@@ -1123,21 +1184,21 @@ void WebsiteSettingsUIBridge::set_bubble_controller(
 
 void WebsiteSettingsUIBridge::Show(gfx::NativeWindow parent,
                                    Profile* profile,
-                                   TabContents* tab_contents,
+                                   content::WebContents* web_contents,
                                    const GURL& url,
                                    const content::SSLStatus& ssl) {
-  bool is_internal_page = url.SchemeIs(chrome::kChromeInternalScheme) ||
-                          url.SchemeIs(chrome::kChromeUIScheme);
+  bool is_internal_page = InternalChromePage(url);
 
   // Create the bridge. This will be owned by the bubble controller.
   WebsiteSettingsUIBridge* bridge = new WebsiteSettingsUIBridge();
 
   // Create the bubble controller. It will dealloc itself when it closes.
   WebsiteSettingsBubbleController* bubble_controller =
-      [[WebsiteSettingsBubbleController alloc] initWithParentWindow:parent
-          websiteSettingsUIBridge:bridge
-          tabContents:tab_contents
-          isInternalPage:is_internal_page];
+      [[WebsiteSettingsBubbleController alloc]
+          initWithParentWindow:parent
+       websiteSettingsUIBridge:bridge
+                   webContents:web_contents
+                isInternalPage:is_internal_page];
 
   if (!is_internal_page) {
     // Initialize the presenter, which holds the model and controls the UI.
@@ -1145,8 +1206,8 @@ void WebsiteSettingsUIBridge::Show(gfx::NativeWindow parent,
     WebsiteSettings* presenter = new WebsiteSettings(
         bridge,
         profile,
-        tab_contents->content_settings(),
-        tab_contents->infobar_tab_helper(),
+        TabSpecificContentSettings::FromWebContents(web_contents),
+        InfoBarTabHelper::FromWebContents(web_contents),
         url,
         ssl,
         content::CertStore::GetInstance());

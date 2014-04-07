@@ -6,7 +6,11 @@
 
 #include "base/compiler_specific.h"
 #include "sync/syncable/directory.h"
+#include "sync/syncable/mutable_entry.h"
+#include "sync/syncable/write_transaction.h"
 #include "sync/test/engine/test_directory_setter_upper.h"
+#include "sync/test/engine/test_id_factory.h"
+#include "sync/test/engine/test_syncable_utils.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 namespace syncer {
@@ -41,6 +45,18 @@ UserShare* TestUserShare::user_share() {
 
 SyncEncryptionHandler* TestUserShare::encryption_handler() {
   return dir_maker_->encryption_handler();
+}
+
+syncable::TestTransactionObserver* TestUserShare::transaction_observer() {
+  return dir_maker_->transaction_observer();
+}
+
+/* static */
+bool TestUserShare::CreateRoot(ModelType model_type, UserShare* user_share) {
+  syncer::syncable::Directory* directory = user_share->directory.get();
+  syncable::WriteTransaction wtrans(FROM_HERE, syncable::UNITTEST, directory);
+  CreateTypeRoot(&wtrans, directory, model_type);
+  return true;
 }
 
 }  // namespace syncer

@@ -10,6 +10,7 @@
 #include "ash/system/power/power_status_view.h"
 #include "ash/system/power/power_supply_status.h"
 #include "ash/system/tray/system_tray_delegate.h"
+#include "ash/system/tray/system_tray_notifier.h"
 #include "ash/system/tray/tray_constants.h"
 #include "ash/system/tray/tray_notification_view.h"
 #include "ash/system/tray/tray_views.h"
@@ -100,8 +101,8 @@ class PowerTrayView : public views::ImageView {
 
 class PowerNotificationView : public TrayNotificationView {
  public:
-  explicit PowerNotificationView(TrayPower* tray)
-      : TrayNotificationView(tray, 0),
+  explicit PowerNotificationView(TrayPower* owner)
+      : TrayNotificationView(owner, 0),
         battery_icon_index_(-1) {
     power_status_view_ =
         new PowerStatusView(PowerStatusView::VIEW_NOTIFICATION, true);
@@ -133,13 +134,16 @@ class PowerNotificationView : public TrayNotificationView {
 
 using tray::PowerNotificationView;
 
-TrayPower::TrayPower()
-    : power_tray_(NULL),
+TrayPower::TrayPower(SystemTray* system_tray)
+    : SystemTrayItem(system_tray),
+      power_tray_(NULL),
       notification_view_(NULL),
       notification_state_(NOTIFICATION_NONE) {
+  Shell::GetInstance()->system_tray_notifier()->AddPowerStatusObserver(this);
 }
 
 TrayPower::~TrayPower() {
+  Shell::GetInstance()->system_tray_notifier()->RemovePowerStatusObserver(this);
 }
 
 // static
@@ -177,7 +181,7 @@ views::View* TrayPower::CreateTrayView(user::LoginStatus status) {
   // there is a battery or not. So always create this, and adjust visibility as
   // necessary.
   PowerSupplyStatus power_status =
-      ash::Shell::GetInstance()->tray_delegate()->GetPowerSupplyStatus();
+      ash::Shell::GetInstance()->system_tray_delegate()->GetPowerSupplyStatus();
   CHECK(power_tray_ == NULL);
   power_tray_ = new tray::PowerTrayView();
   power_tray_->UpdatePowerStatus(power_status);
@@ -186,14 +190,14 @@ views::View* TrayPower::CreateTrayView(user::LoginStatus status) {
 
 views::View* TrayPower::CreateDefaultView(user::LoginStatus status) {
   // Make sure icon status is up-to-date. (Also triggers stub activation).
-  ash::Shell::GetInstance()->tray_delegate()->RequestStatusUpdate();
+  ash::Shell::GetInstance()->system_tray_delegate()->RequestStatusUpdate();
   return NULL;
 }
 
 views::View* TrayPower::CreateNotificationView(user::LoginStatus status) {
   CHECK(notification_view_ == NULL);
   PowerSupplyStatus power_status =
-      ash::Shell::GetInstance()->tray_delegate()->GetPowerSupplyStatus();
+      ash::Shell::GetInstance()->system_tray_delegate()->GetPowerSupplyStatus();
   if (!power_status.battery_is_present)
     return NULL;
 
@@ -227,13 +231,10 @@ void TrayPower::OnPowerStatusChanged(const PowerSupplyStatus& status) {
   if (notification_view_)
     notification_view_->UpdatePowerStatus(status);
 
-  if (!CommandLine::ForCurrentProcess()->HasSwitch(
-          switches::kAshNotifyDisabled)) {
-    if (UpdateNotificationState(status))
-      ShowNotificationView();
-    else if (notification_state_ == NOTIFICATION_NONE)
-      HideNotificationView();
-  }
+  if (UpdateNotificationState(status))
+    ShowNotificationView();
+  else if (notification_state_ == NOTIFICATION_NONE)
+    HideNotificationView();
 }
 
 bool TrayPower::UpdateNotificationState(const PowerSupplyStatus& status) {
@@ -244,7 +245,7 @@ bool TrayPower::UpdateNotificationState(const PowerSupplyStatus& status) {
     return false;
   }
 
-  int remaining_seconds = status.battery_seconds_to_empty;
+  int remaining_seconds = status.averaged_battery_time_to_empty;
   if (remaining_seconds >= kNoWarningSeconds) {
     notification_state_ = NOTIFICATION_NONE;
     return false;

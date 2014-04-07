@@ -16,8 +16,6 @@
 #include "base/system_monitor/system_monitor.h"
 #endif
 
-extern int BrowserMain(const content::MainFunctionParams&);
-
 namespace {
 
 #if defined(OS_POSIX)
@@ -38,6 +36,8 @@ static void DumpStackTraceSignalHandler(int signal) {
 }  // namespace
 
 namespace content {
+
+extern int BrowserMain(const content::MainFunctionParams&);
 
 BrowserTestBase::BrowserTestBase() {
 #if defined(OS_MACOSX)
@@ -60,6 +60,8 @@ void BrowserTestBase::SetUp() {
   command_line->AppendSwitch(switches::kAllowFileAccessFromFiles);
 
   command_line->AppendSwitch(switches::kDomAutomationController);
+
+  command_line->AppendSwitch(switches::kSkipGpuDataLoading);
 
   MainFunctionParams params(*command_line);
   params.ui_task =
@@ -84,12 +86,12 @@ void BrowserTestBase::ProxyRunTestOnMainThreadLoop() {
   RunTestOnMainThreadLoop();
 }
 
-void BrowserTestBase::CreateTestServer(const char* test_server_base) {
+void BrowserTestBase::CreateTestServer(const FilePath& test_server_base) {
   CHECK(!test_server_.get());
   test_server_.reset(new net::TestServer(
       net::TestServer::TYPE_HTTP,
       net::TestServer::kLocalhost,
-      FilePath().AppendASCII(test_server_base)));
+      test_server_base));
 }
 
 }  // namespace content

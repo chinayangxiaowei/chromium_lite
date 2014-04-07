@@ -24,6 +24,7 @@
 #include "ui/gfx/selection_model.h"
 #include "ui/gfx/shadow_value.h"
 #include "ui/gfx/text_constants.h"
+#include "ui/gfx/vector2d.h"
 
 class SkCanvas;
 class SkDrawLooper;
@@ -160,7 +161,7 @@ class UI_EXPORT RenderText {
   void set_default_style(const StyleRange& style) { default_style_ = style; }
 
   // In an obscured (password) field, all text is drawn as asterisks or bullets.
-  bool is_obscured() const { return obscured_; }
+  bool obscured() const { return obscured_; }
   void SetObscured(bool obscured);
 
   const Rect& display_rect() const { return display_rect_; }
@@ -294,7 +295,7 @@ class UI_EXPORT RenderText {
  protected:
   RenderText();
 
-  const Point& GetUpdatedDisplayOffset();
+  const Vector2d& GetUpdatedDisplayOffset();
 
   void set_cached_bounds_and_offset_valid(bool valid) {
     cached_bounds_and_offset_valid_ = valid;
@@ -339,7 +340,13 @@ class UI_EXPORT RenderText {
   // These bounds are in local coordinates, but may be outside the visible
   // region if the text is longer than the textfield. Subsequent text, cursor,
   // or bounds changes may invalidate returned values.
-  virtual std::vector<Rect> GetSubstringBounds(ui::Range range) = 0;
+  virtual std::vector<Rect> GetSubstringBounds(const ui::Range& range) = 0;
+
+  // Convert between indices into |text_| and indices into |obscured_text_|,
+  // which differ when the text is obscured. Regardless of whether or not the
+  // text is obscured, the character (code point) offsets always match.
+  virtual size_t TextIndexToLayoutIndex(size_t index) const = 0;
+  virtual size_t LayoutIndexToTextIndex(size_t index) const = 0;
 
   // Return true if cursor can appear in front of the character at |position|,
   // which means it is a grapheme boundary or the first character in the text.
@@ -354,16 +361,16 @@ class UI_EXPORT RenderText {
   // Draw the text.
   virtual void DrawVisualText(Canvas* canvas) = 0;
 
-  // Like text() except that it returns asterisks or bullets if this is an
-  // obscured field.
-  string16 GetDisplayText() const;
+  // Returns the text used for layout, which may be |obscured_text_|.
+  const string16& GetLayoutText() const;
 
   // Apply composition style (underline) to composition range and selection
   // style (foreground) to selection range.
   void ApplyCompositionAndSelectionStyles(StyleRanges* style_ranges);
 
-  // Returns the text origin after applying text alignment and display offset.
-  Point GetTextOrigin();
+  // Returns the text offset from the origin after applying text alignment and
+  // display offset.
+  Vector2d GetTextOffset();
 
   // Convert points from the text space to the view space and back.
   // Handles the display area, display offset, and the application LTR/RTL mode.
@@ -375,11 +382,11 @@ class UI_EXPORT RenderText {
   int GetContentWidth();
 
   // Returns display offset based on current text alignment.
-  Point GetAlignmentOffset();
+  Vector2d GetAlignmentOffset();
 
-  // Returns the origin point for drawing text. Does not account for font
+  // Returns the offset for drawing text. Does not account for font
   // baseline, as needed by Skia.
-  Point GetOriginForDrawing();
+  Vector2d GetOffsetForDrawing();
 
   // Applies fade effects to |renderer|.
   void ApplyFadeEffects(internal::SkiaTextRenderer* renderer);
@@ -400,7 +407,7 @@ class UI_EXPORT RenderText {
   FRIEND_TEST_ALL_PREFIXES(RenderTextTest, CustomDefaultStyle);
   FRIEND_TEST_ALL_PREFIXES(RenderTextTest, ApplyStyleRange);
   FRIEND_TEST_ALL_PREFIXES(RenderTextTest, StyleRangesAdjust);
-  FRIEND_TEST_ALL_PREFIXES(RenderTextTest, PasswordCensorship);
+  FRIEND_TEST_ALL_PREFIXES(RenderTextTest, ObscuredText);
   FRIEND_TEST_ALL_PREFIXES(RenderTextTest, GraphemePositions);
   FRIEND_TEST_ALL_PREFIXES(RenderTextTest, EdgeSelectionModels);
   FRIEND_TEST_ALL_PREFIXES(RenderTextTest, OriginForDrawing);
@@ -411,6 +418,9 @@ class UI_EXPORT RenderText {
   // If the |position| is not a cursorable position (not on grapheme boundary),
   // it is a NO-OP.
   void MoveCursorTo(size_t position, bool select);
+
+  // Updates |obscured_text_| if the text is obscured.
+  void UpdateObscuredText();
 
   // Update the cached bounds and display offset to ensure that the current
   // cursor is within the visible display area.
@@ -473,8 +483,10 @@ class UI_EXPORT RenderText {
   // The default text style.
   StyleRange default_style_;
 
-  // True if this is an obscured (password) field.
+  // A flag and the text to display for obscured (password) fields.
+  // Asterisks are used instead of the actual text glyphs when true.
   bool obscured_;
+  string16 obscured_text_;
 
   // Fade text head and/or tail, if text doesn't fit into |display_rect_|.
   bool fade_head_;
@@ -494,7 +506,7 @@ class UI_EXPORT RenderText {
 
   // The offset for the text to be drawn, relative to the display area.
   // Get this point with GetUpdatedDisplayOffset (or risk using a stale value).
-  Point display_offset_;
+  Vector2d display_offset_;
 
   // The cached bounds and offset are invalidated by changes to the cursor,
   // selection, font, and other operations that adjust the visible text bounds.

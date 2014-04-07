@@ -9,15 +9,16 @@
 #include "base/values.h"
 #include "chrome/common/extensions/draggable_region.h"
 #include "chrome/common/extensions/extension.h"
-#include "chrome/common/extensions/permissions/filesystem_permission.h"
-#include "chrome/common/extensions/permissions/media_galleries_permission.h"
+#include "chrome/common/extensions/permissions/bluetooth_device_permission_data.h"
 #include "chrome/common/extensions/permissions/permission_set.h"
 #include "chrome/common/extensions/permissions/socket_permission_data.h"
-#include "chrome/common/extensions/url_pattern.h"
-#include "chrome/common/extensions/url_pattern_set.h"
+#include "chrome/common/extensions/permissions/usb_device_permission_data.h"
 #include "chrome/common/view_type.h"
 #include "chrome/common/web_apps.h"
 #include "content/public/common/common_param_traits.h"
+#include "content/public/common/socket_permission_request.h"
+#include "extensions/common/url_pattern.h"
+#include "extensions/common/url_pattern_set.h"
 #include "googleurl/src/gurl.h"
 #include "ipc/ipc_message_macros.h"
 
@@ -101,9 +102,30 @@ IPC_STRUCT_TRAITS_BEGIN(WebApplicationInfo)
 IPC_STRUCT_TRAITS_END()
 
 IPC_STRUCT_TRAITS_BEGIN(extensions::DraggableRegion)
-  IPC_STRUCT_TRAITS_MEMBER(label)
+  IPC_STRUCT_TRAITS_MEMBER(draggable)
   IPC_STRUCT_TRAITS_MEMBER(bounds)
-  IPC_STRUCT_TRAITS_MEMBER(clip)
+IPC_STRUCT_TRAITS_END()
+
+IPC_ENUM_TRAITS(content::SocketPermissionRequest::OperationType)
+
+IPC_STRUCT_TRAITS_BEGIN(content::SocketPermissionRequest)
+  IPC_STRUCT_TRAITS_MEMBER(type)
+  IPC_STRUCT_TRAITS_MEMBER(host)
+  IPC_STRUCT_TRAITS_MEMBER(port)
+IPC_STRUCT_TRAITS_END()
+
+IPC_STRUCT_TRAITS_BEGIN(extensions::SocketPermissionData)
+  IPC_STRUCT_TRAITS_MEMBER(pattern())
+  IPC_STRUCT_TRAITS_MEMBER(match_subdomains())
+IPC_STRUCT_TRAITS_END()
+
+IPC_STRUCT_TRAITS_BEGIN(extensions::BluetoothDevicePermissionData)
+  IPC_STRUCT_TRAITS_MEMBER(device_address())
+IPC_STRUCT_TRAITS_END()
+
+IPC_STRUCT_TRAITS_BEGIN(extensions::UsbDevicePermissionData)
+  IPC_STRUCT_TRAITS_MEMBER(vendor_id())
+  IPC_STRUCT_TRAITS_MEMBER(product_id())
 IPC_STRUCT_TRAITS_END()
 
 // Singly-included section for custom IPC traits.
@@ -114,6 +136,9 @@ IPC_STRUCT_TRAITS_END()
 // to typedef it to avoid that.
 // Substitution map for l10n messages.
 typedef std::map<std::string, std::string> SubstitutionMap;
+
+// Map of extensions IDs to the executing script paths.
+typedef std::map<std::string, std::set<std::string> > ExecutingScriptsMap;
 
 struct ExtensionMsg_Loaded_Params {
   ExtensionMsg_Loaded_Params();
@@ -135,8 +160,8 @@ struct ExtensionMsg_Loaded_Params {
 
   // The extension's active permissions.
   extensions::APIPermissionSet apis;
-  URLPatternSet explicit_hosts;
-  URLPatternSet scriptable_hosts;
+  extensions::URLPatternSet explicit_hosts;
+  extensions::URLPatternSet scriptable_hosts;
 
   // We keep this separate so that it can be used in logging.
   std::string id;
@@ -156,8 +181,8 @@ struct ParamTraits<URLPattern> {
 };
 
 template <>
-struct ParamTraits<URLPatternSet> {
-  typedef URLPatternSet param_type;
+struct ParamTraits<extensions::URLPatternSet> {
+  typedef extensions::URLPatternSet param_type;
   static void Write(Message* m, const param_type& p);
   static bool Read(const Message* m, PickleIterator* iter, param_type* p);
   static void Log(const param_type& p, std::string* l);
@@ -180,30 +205,6 @@ struct ParamTraits<extensions::APIPermission*> {
 template <>
 struct ParamTraits<extensions::APIPermissionSet> {
   typedef extensions::APIPermissionSet param_type;
-  static void Write(Message* m, const param_type& p);
-  static bool Read(const Message* m, PickleIterator* iter, param_type* r);
-  static void Log(const param_type& p, std::string* l);
-};
-
-template <>
-struct ParamTraits<extensions::SocketPermissionData> {
-  typedef extensions::SocketPermissionData param_type;
-  static void Write(Message* m, const param_type& p);
-  static bool Read(const Message* m, PickleIterator* iter, param_type* r);
-  static void Log(const param_type& p, std::string* l);
-};
-
-template <>
-struct ParamTraits<extensions::MediaGalleriesPermission::PermissionTypes> {
-  typedef extensions::MediaGalleriesPermission::PermissionTypes param_type;
-  static void Write(Message* m, const param_type& p);
-  static bool Read(const Message* m, PickleIterator* iter, param_type* r);
-  static void Log(const param_type& p, std::string* l);
-};
-
-template <>
-struct ParamTraits<extensions::FileSystemPermission::PermissionTypes> {
-  typedef extensions::FileSystemPermission::PermissionTypes param_type;
   static void Write(Message* m, const param_type& p);
   static bool Read(const Message* m, PickleIterator* iter, param_type* r);
   static void Log(const param_type& p, std::string* l);
@@ -298,15 +299,15 @@ IPC_MESSAGE_CONTROL5(ExtensionMsg_UpdatePermissions,
                      int /* UpdateExtensionPermissionsInfo::REASON */,
                      std::string /* extension_id */,
                      extensions::APIPermissionSet /* permissions */,
-                     URLPatternSet /* explicit_hosts */,
-                     URLPatternSet /* scriptable_hosts */)
+                     extensions::URLPatternSet /* explicit_hosts */,
+                     extensions::URLPatternSet /* scriptable_hosts */)
 
 // Tell the renderer about new tab-specific permissions for an extension.
 IPC_MESSAGE_CONTROL4(ExtensionMsg_UpdateTabSpecificPermissions,
                      int32 /* page_id (only relevant for the target tab) */,
                      int /* tab_id */,
                      std::string /* extension_id */,
-                     URLPatternSet /* hosts */)
+                     extensions::URLPatternSet /* hosts */)
 
 // Tell the renderer to clear tab-specific permissions for some extensions.
 IPC_MESSAGE_CONTROL2(ExtensionMsg_ClearTabSpecificPermissions,
@@ -385,6 +386,9 @@ IPC_MESSAGE_ROUTED2(ExtensionMsg_AddMessageToConsole,
                     content::ConsoleMessageLevel /* level */,
                     std::string /* message */)
 
+// Notify the renderer that its window has closed.
+IPC_MESSAGE_ROUTED0(ExtensionMsg_AppWindowClosed)
+
 // Messages sent from the renderer to the browser.
 
 // A renderer sends this message when an extension process starts an API
@@ -451,6 +455,14 @@ IPC_SYNC_MESSAGE_CONTROL4_1(ExtensionHostMsg_OpenChannelToExtension,
                             std::string /* channel_name */,
                             int /* port_id */)
 
+IPC_SYNC_MESSAGE_CONTROL5_1(ExtensionHostMsg_OpenChannelToNativeApp,
+                            int /* routing_id */,
+                            std::string /* source_extension_id */,
+                            std::string /* native_app_name */,
+                            std::string /* channel_name */,
+                            std::string /* connection_message */,
+                            int /* port_id */)
+
 // Get a port handle to the given tab.  The handle can be used for sending
 // messages to the extension.
 IPC_SYNC_MESSAGE_CONTROL4_1(ExtensionHostMsg_OpenChannelToTab,
@@ -481,8 +493,10 @@ IPC_SYNC_MESSAGE_CONTROL1_1(ExtensionHostMsg_GetMessageBundle,
 IPC_MESSAGE_ROUTED5(ExtensionHostMsg_ExecuteCodeFinished,
                     int /* request id */,
                     std::string /* error; empty implies success */,
-                    int32 /* page_id the code executed on, if successful */,
-                    GURL /* URL of the code executed on, if successful */,
+                    int32 /* page_id the code executed on.
+                             May be -1 if unsuccessful */,
+                    GURL /* URL of the code executed on.
+                            May be empty if unsuccessful. */,
                     ListValue /* result of the script */)
 
 // Sent from the renderer to the browser to notify that content scripts are
@@ -491,7 +505,7 @@ IPC_MESSAGE_ROUTED5(ExtensionHostMsg_ExecuteCodeFinished,
 // frame (e.g. if executing in an iframe this is the page ID of the parent,
 // unless the parent is an iframe... etc).
 IPC_MESSAGE_ROUTED3(ExtensionHostMsg_ContentScriptsExecuting,
-                    std::set<std::string> /* extensions that have scripts */,
+                    ExecutingScriptsMap,
                     int32 /* page_id of the _topmost_ frame */,
                     GURL /* url of the _topmost_ frame */)
 

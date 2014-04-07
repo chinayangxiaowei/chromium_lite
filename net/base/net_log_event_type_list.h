@@ -699,6 +699,8 @@ EVENT_TYPE(SOCKET_POOL_CONNECTING_N_SOCKETS)
 //      "url": <String of URL being loaded>,
 //      "method": <The method ("POST" or "GET" or "HEAD" etc..)>,
 //      "load_flags": <Numeric value of the combined load flags>,
+//      "priority": <Numeric priority of the request>,
+//      "upload_id" <String of upload body identifier, if present>,
 //   }
 //
 // For the END phase, if there was an error, the following parameters are
@@ -715,8 +717,13 @@ EVENT_TYPE(URL_REQUEST_START_JOB)
 //   }
 EVENT_TYPE(URL_REQUEST_REDIRECTED)
 
-// Measures the time a net::URLRequest is blocked waiting for a delegate
-// (usually an extension) to respond to the onBeforeRequest extension event.
+// Measures the time a net::URLRequest is blocked waiting for either the
+// NetworkDelegate or a URLRequest::Delegate to respond.
+//
+// The parameters attached to the event are:
+//   {
+//     "delegate": <What's blocking the request, if known>,
+//   }
 EVENT_TYPE(URL_REQUEST_BLOCKED_ON_DELEGATE)
 
 // The specified number of bytes were read from the net::URLRequest.
@@ -913,6 +920,16 @@ EVENT_TYPE(HTTP_TRANSACTION_SEND_REQUEST)
 //     "headers": <The list of header:value pairs>,
 //   }
 EVENT_TYPE(HTTP_TRANSACTION_SEND_REQUEST_HEADERS)
+
+// Logged when a request body is sent.
+// The following parameters are attached:
+//   {
+//     "did_merge": <True if the body was merged with the headers for writing>,
+//     "is_chunked": <True if chunked>,
+//     "length": <The length of the body.  May not be accurate when body is not
+//                in memory>
+//   }
+EVENT_TYPE(HTTP_TRANSACTION_SEND_REQUEST_BODY)
 
 // This event is sent for a HTTP request over a SPDY stream.
 // The following parameters are attached:
@@ -1283,10 +1300,24 @@ EVENT_TYPE(APPCACHE_DELIVERING_ERROR_RESPONSE)
 // These are events which are not grouped by source id, as they have no
 // context.
 
-// This event is emitted whenever NetworkChangeNotifier determines that the
-// underlying network has changed.
+// This event is emitted whenever NetworkChangeNotifier determines that an
+// active network adapter's IP address has changed.
 EVENT_TYPE(NETWORK_IP_ADDRESSES_CHANGED)
 
+// This event is emitted whenever NetworkChangeNotifier determines that an
+// active network adapter's connectivity status has changed.
+//   {
+//     "new_connection_type": <Type of the new connection>
+//   }
+EVENT_TYPE(NETWORK_CONNECTIVITY_CHANGED)
+
+// This event is emitted whenever NetworkChangeNotifier determines that a change
+// occurs to the host computer's hardware or software that affects the route
+// network packets take to any network server.
+//   {
+//     "new_connection_type": <Type of the new connection>
+//   }
+EVENT_TYPE(NETWORK_CHANGED)
 
 // This event is emitted whenever HostResolverImpl receives a new DnsConfig
 // from the DnsConfigService.
@@ -1536,6 +1567,8 @@ EVENT_TYPE(DOWNLOAD_URL_REQUEST)
 //   }
 // The END event will occur when the download is interrupted, canceled or
 // completed.
+// DownloadItems that are loaded from history and are never active simply ADD
+// one of these events.
 EVENT_TYPE(DOWNLOAD_ITEM_ACTIVE)
 
 // This event is created when a download item has been checked by the
@@ -1545,13 +1578,6 @@ EVENT_TYPE(DOWNLOAD_ITEM_ACTIVE)
 //     "safety_state": <SAFE, DANGEROUS, DANGEROUS_BUT_VALIDATED>,
 //   }
 EVENT_TYPE(DOWNLOAD_ITEM_SAFETY_STATE_UPDATED)
-
-// This event is created when a download item has been inserted into the
-// history database.
-//   {
-//     "db_handle": <The database handle for the item>,
-//   }
-EVENT_TYPE(DOWNLOAD_ITEM_IN_HISTORY)
 
 // This event is created when a download item is updated.
 //   {
@@ -1569,7 +1595,7 @@ EVENT_TYPE(DOWNLOAD_ITEM_RENAMED)
 
 // This event is created when a download item is interrupted.
 //   {
-//     "reason": <The reason for the interruption>,
+//     "interrupt_reason": <The reason for the interruption>,
 //     "bytes_so_far": <Number of bytes received>,
 //     "hash_state": <Current hash state, as a hex-encoded binary string>,
 //   }
@@ -1584,10 +1610,16 @@ EVENT_TYPE(DOWNLOAD_ITEM_INTERRUPTED)
 //   }
 EVENT_TYPE(DOWNLOAD_ITEM_RESUMED)
 
-// This event is created when a download item is finished.
+// This event is created when a download item is completing.
 //   {
 //     "bytes_so_far": <Number of bytes received>,
 //     "final_hash": <Final hash, as a hex-encoded binary string>,
+//   }
+EVENT_TYPE(DOWNLOAD_ITEM_COMPLETING)
+
+// This event is created when a download item is finished.
+//   {
+//     "auto_opened": <Whether or not the download was auto-opened>
 //   }
 EVENT_TYPE(DOWNLOAD_ITEM_FINISHED)
 
@@ -1640,6 +1672,8 @@ EVENT_TYPE(DOWNLOAD_FILE_DELETED)
 //   {
 //     "operation": <open, write, close, etc>,
 //     "net_error": <net::Error code>,
+//     "os_error": <OS depedent error code>
+//     "interrupt_reason": <Download interrupt reason>
 //   }
 EVENT_TYPE(DOWNLOAD_FILE_ERROR)
 
@@ -1675,10 +1709,6 @@ EVENT_TYPE(FILE_STREAM_BOUND_TO_OWNER)
 //   }
 EVENT_TYPE(FILE_STREAM_OPEN)
 
-// This event is created when a file stream's Close() is called.
-// This may occur even when the file is not open.
-EVENT_TYPE(FILE_STREAM_CLOSE)
-
 // This event is created when a file stream operation has an error.
 //   {
 //     "operation": <open, write, close, etc>,
@@ -1702,3 +1732,36 @@ EVENT_TYPE(FILE_STREAM_ERROR)
 //                  if any>
 //   }
 EVENT_TYPE(IPV6_PROBE_RUNNING)
+
+// -----------------------------------------------------------------------------
+// FTP events.
+// -----------------------------------------------------------------------------
+
+// This event is created when an FTP command is sent. It contains following
+// parameters:
+//   {
+//     "command": <String - the command sent to remote server>
+//   }
+EVENT_TYPE(FTP_COMMAND_SENT)
+
+// This event is created when FTP control connection is made. It contains
+// following parameters:
+//   {
+//     "source_dependency": <id of log for control connection socket>
+//   }
+EVENT_TYPE(FTP_CONTROL_CONNECTION)
+
+// This event is created when FTP data connection is made. It contains
+// following parameters:
+//   {
+//     "source_dependency": <id of log for data connection socket>
+//   }
+EVENT_TYPE(FTP_DATA_CONNECTION)
+
+// This event is created when FTP control connection response is processed.
+// It contains following parameters:
+//   {
+//     "lines": <list of strings - each representing a line of the response>
+//     "status_code": <numeric status code of the response>
+//   }
+EVENT_TYPE(FTP_CONTROL_RESPONSE)

@@ -10,6 +10,7 @@
 #include "base/logging.h"
 #include "base/memory/linked_ptr.h"
 #include "base/run_loop.h"
+#include "base/string_util.h"
 #include "base/test/test_file_util.h"
 #include "chrome/app/chrome_main_delegate.h"
 #include "chrome/common/chrome_switches.h"
@@ -33,7 +34,7 @@
 
 const char kEmptyTestName[] = "InProcessBrowserTest.Empty";
 
-class ChromeTestLauncherDelegate : public test_launcher::TestLauncherDelegate {
+class ChromeTestLauncherDelegate : public content::TestLauncherDelegate {
  public:
   ChromeTestLauncherDelegate() {}
   virtual ~ChromeTestLauncherDelegate() {}
@@ -109,9 +110,14 @@ class ChromeTestLauncherDelegate : public test_launcher::TestLauncherDelegate {
 };
 
 int main(int argc, char** argv) {
+// http://crbug.com/163931 Disabled until browser_tests ready on Linux Aura.
+#if defined(OS_LINUX) && defined(USE_AURA) && !defined(OS_CHROMEOS)
+  return 0;
+#endif
+
 #if defined(OS_MACOSX)
   chrome_browser_application_mac::RegisterBrowserCrApp();
 #endif
   ChromeTestLauncherDelegate launcher_delegate;
-  return test_launcher::LaunchTests(&launcher_delegate, argc, argv);
+  return content::LaunchTests(&launcher_delegate, argc, argv);
 }

@@ -65,7 +65,7 @@ IPC::SyncChannel* MockRenderThread::GetChannel() {
 }
 
 std::string MockRenderThread::GetLocale() {
-  return std::string();
+  return "en-US";
 }
 
 IPC::SyncMessageFilter* MockRenderThread::GetSyncMessageFilter() {
@@ -119,15 +119,14 @@ void MockRenderThread::SetOutgoingMessageFilter(
     IPC::ChannelProxy::OutgoingMessageFilter* filter) {
 }
 
-void MockRenderThread::AddObserver(content::RenderProcessObserver* observer) {
+void MockRenderThread::AddObserver(RenderProcessObserver* observer) {
 }
 
-void MockRenderThread::RemoveObserver(
-    content::RenderProcessObserver* observer) {
+void MockRenderThread::RemoveObserver(RenderProcessObserver* observer) {
 }
 
 void MockRenderThread::SetResourceDispatcherDelegate(
-    content::ResourceDispatcherDelegate* delegate) {
+    ResourceDispatcherDelegate* delegate) {
 }
 
 void MockRenderThread::WidgetHidden() {
@@ -142,16 +141,16 @@ void MockRenderThread::EnsureWebKitInitialized() {
 void MockRenderThread::RecordUserMetrics(const std::string& action) {
 }
 
-base::SharedMemoryHandle MockRenderThread::HostAllocateSharedMemoryBuffer(
-    uint32 buffer_size) {
-  base::SharedMemory shared_buf;
-  if (!shared_buf.CreateAndMapAnonymous(buffer_size)) {
+scoped_ptr<base::SharedMemory>
+    MockRenderThread::HostAllocateSharedMemoryBuffer(
+        size_t buffer_size) {
+  scoped_ptr<base::SharedMemory> shared_buf(new base::SharedMemory);
+  if (!shared_buf->CreateAndMapAnonymous(buffer_size)) {
     NOTREACHED() << "Cannot map shared memory buffer";
-    return base::SharedMemory::NULLHandle();
+    return scoped_ptr<base::SharedMemory>();
   }
-  base::SharedMemoryHandle handle;
-  shared_buf.GiveToProcess(base::GetCurrentProcessHandle(), &handle);
-  return handle;
+
+  return scoped_ptr<base::SharedMemory>(shared_buf.release());
 }
 
 void MockRenderThread::RegisterExtension(v8::Extension* extension) {

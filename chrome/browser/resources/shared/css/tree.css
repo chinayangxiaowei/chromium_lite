@@ -1,7 +1,6 @@
 /* Copyright (c) 2012 The Chromium Authors. All rights reserved.
  * Use of this source code is governed by a BSD-style license that can be
- * found in the LICENSE file.
- */
+ * found in the LICENSE file. */
 
 tree {
   display: block;
@@ -150,7 +149,7 @@ tree[icon-visibility=parent] .tree-row[has-children=false] > .tree-label {
 }
 
 /* We need to ensure that even empty labels take up space */
-.tree-label:empty:after {
+.tree-label:empty::after {
   content: ' ';
   white-space: pre;
 }

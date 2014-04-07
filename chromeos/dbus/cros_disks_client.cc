@@ -28,8 +28,9 @@ const char* kDefaultMountOptions[] = {
 
 const char* kDefaultUnmountOptions[] = {
   "force",
-  "lazy",
 };
+
+const char kLazyUnmountOption[] = "lazy";
 
 const char kMountLabelOption[] = "mountlabel";
 
@@ -150,15 +151,20 @@ class CrosDisksClientImpl : public CrosDisksClient {
 
   // CrosDisksClient override.
   virtual void Unmount(const std::string& device_path,
+                       UnmountOptions options,
                        const UnmountCallback& callback,
-                       const ErrorCallback& error_callback) OVERRIDE {
+                       const UnmountCallback& error_callback) OVERRIDE {
     dbus::MethodCall method_call(cros_disks::kCrosDisksInterface,
                                  cros_disks::kUnmount);
     dbus::MessageWriter writer(&method_call);
     writer.AppendString(device_path);
-    std::vector<std::string> unmount_options(kDefaultUnmountOptions,
-                                             kDefaultUnmountOptions +
-                                             arraysize(kDefaultUnmountOptions));
+
+    std::vector<std::string> unmount_options(
+        kDefaultUnmountOptions,
+        kDefaultUnmountOptions + arraysize(kDefaultUnmountOptions));
+    if (options == UNMOUNT_OPTIONS_LAZY)
+      unmount_options.push_back(kLazyUnmountOption);
+
     writer.AppendArrayOfStrings(unmount_options);
     proxy_->CallMethod(&method_call, dbus::ObjectProxy::TIMEOUT_USE_DEFAULT,
                        base::Bind(&CrosDisksClientImpl::OnUnmount,
@@ -223,13 +229,13 @@ class CrosDisksClientImpl : public CrosDisksClient {
       const MountEventHandler& mount_event_handler,
       const MountCompletedHandler& mount_completed_handler) OVERRIDE {
     static const SignalEventTuple kSignalEventTuples[] = {
-      { cros_disks::kDeviceAdded, DEVICE_ADDED },
-      { cros_disks::kDeviceScanned, DEVICE_SCANNED },
-      { cros_disks::kDeviceRemoved, DEVICE_REMOVED },
-      { cros_disks::kDiskAdded, DISK_ADDED },
-      { cros_disks::kDiskChanged, DISK_CHANGED },
-      { cros_disks::kDiskRemoved, DISK_REMOVED },
-      { cros_disks::kFormattingFinished, FORMATTING_FINISHED },
+      { cros_disks::kDeviceAdded, CROS_DISKS_DEVICE_ADDED },
+      { cros_disks::kDeviceScanned, CROS_DISKS_DEVICE_SCANNED },
+      { cros_disks::kDeviceRemoved, CROS_DISKS_DEVICE_REMOVED },
+      { cros_disks::kDiskAdded, CROS_DISKS_DISK_ADDED },
+      { cros_disks::kDiskChanged, CROS_DISKS_DISK_CHANGED },
+      { cros_disks::kDiskRemoved, CROS_DISKS_DISK_REMOVED },
+      { cros_disks::kFormattingFinished, CROS_DISKS_FORMATTING_FINISHED },
     };
     const size_t kNumSignalEventTuples = arraysize(kSignalEventTuples);
 
@@ -276,10 +282,10 @@ class CrosDisksClientImpl : public CrosDisksClient {
   // Handles the result of Unount and calls |callback| or |error_callback|.
   void OnUnmount(const std::string& device_path,
                  const UnmountCallback& callback,
-                 const ErrorCallback& error_callback,
+                 const UnmountCallback& error_callback,
                  dbus::Response* response) {
     if (!response) {
-      error_callback.Run();
+      error_callback.Run(device_path);
       return;
     }
     callback.Run(device_path);
@@ -373,8 +379,8 @@ class CrosDisksClientImpl : public CrosDisksClient {
   // Handles the result of signal connection setup.
   void OnSignalConnected(const std::string& interface,
                          const std::string& signal,
-                         bool successed) {
-    LOG_IF(ERROR, !successed) << "Connect to " << interface << " " <<
+                         bool succeeded) {
+    LOG_IF(ERROR, !succeeded) << "Connect to " << interface << " " <<
         signal << " failed.";
   }
 
@@ -400,8 +406,9 @@ class CrosDisksClientStubImpl : public CrosDisksClient {
                      const MountCallback& callback,
                      const ErrorCallback& error_callback) OVERRIDE {}
   virtual void Unmount(const std::string& device_path,
+                       UnmountOptions options,
                        const UnmountCallback& callback,
-                       const ErrorCallback& error_callback) OVERRIDE {}
+                       const UnmountCallback& error_callback) OVERRIDE {}
   virtual void EnumerateAutoMountableDevices(
       const EnumerateAutoMountableDevicesCallback& callback,
       const ErrorCallback& error_callback) OVERRIDE {}

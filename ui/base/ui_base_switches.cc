@@ -6,46 +6,34 @@
 
 namespace switches {
 
-// Disable support for bezel touch.
+// Disable touch adjustment.
+const char kDisableTouchAdjustment[] = "disable-touch-adjustment";
+
+// Enable support for bezel touch.
 const char kEnableBezelTouch[] = "enable-bezel-touch";
 
-// Whether or not ImageSkiaOperations methods can scale one of images
-// if they don't have the same scale factor.
-const char kDisableScalingInImageSkiaOperations[] =
-    "disable-scaling-in-image-skia-operations";
+// Enables the new dialog style wherever it is available.
+const char kEnableNewDialogStyle[] = "enable-new-dialog-style";
 
-// Let text glyphs have X-positions that aren't snapped to the pixel grid in
-// the browser UI.
-const char kEnableBrowserTextSubpixelPositioning[] =
-    "enable-browser-text-subpixel-positioning";
+// Enables new menu UI.
+const char kEnableNewMenuStyle[] = "enable-new-menu-style";
 
-// Enable touch screen calibration.
-const char kEnableTouchCalibration[] = "enable-touch-calibration";
-
-// Enable support for touch event calibration in x direction.
-const char kEnableTouchCalibrationX[] = "enable-touch-calibration-x";
-
-// Enable support for touch events.
-const char kEnableTouchEvents[] = "enable-touch-events";
+const char kEnableTouchDragDrop[] = "enable-touch-drag-drop";
 
 // Enables the Views textfield on Windows.
 const char kEnableViewsTextfield[] = "enable-views-textfield";
-
-// Enable text glyphs to have X-positions that aren't snapped to the pixel grid
-// in webkit renderers.
-const char kEnableWebkitTextSubpixelPositioning[] =
-    "enable-webkit-text-subpixel-positioning";
 
 // Overrides the device scale factor for the browser UI and the
 // contents.
 const char kForceDeviceScaleFactor[] = "force-device-scale-factor";
 
-// Generates a 2x version of resources for which no 2x version is available or
-// the 2x version is of an incorrect size and applies a red mask to the
+// If a resource is requested at a scale factor at which it is not available
+// or the resource is the incorrect size (based on the size of the 1x resource),
+// generates the missing resource and applies a red mask to the generated
 // resource. Resources for which hidpi is not supported because of software
 // reasons will show up pixelated.
-const char kHighlightMissing2xResources[] =
-    "highlight-missing-2x-resources";
+const char kHighlightMissingScaledResources[] =
+    "highlight-missing-scaled-resources";
 
 // The language file that we want to try to open. Of the form
 // language[-country] where language is the 2 letter code from ISO-639.
@@ -56,16 +44,27 @@ const char kLang[] = "lang";
 const char kLocalePak[] = "locale_pak";
 
 // Disables the new appearance for checkboxes and radio buttons.
-const char kOldCheckboxStyle[]           = "old-checkbox-style";
+const char kOldCheckboxStyle[] = "old-checkbox-style";
 
 // Disable ui::MessageBox. This is useful when running as part of scripts that
 // do not have a user interface.
 const char kNoMessageBox[] = "no-message-box";
 
+// Enable support for touch events.
+const char kTouchEvents[] = "touch-events";
+
+// The values the kTouchEvents switch may have, as in --touch-events=disabled.
+//   auto: enabled at startup when an attached touchscreen is present.
+const char kTouchEventsAuto[] = "auto";
+//   enabled: touch events always enabled.
+const char kTouchEventsEnabled[] = "enabled";
+//   disabled: touch events are disabled.
+const char kTouchEventsDisabled[] = "disabled";
+
 // Enables UI changes that make it easier to use with a touchscreen.
 // WARNING: Do not check this flag directly when deciding what UI to draw,
 // instead you must call ui::GetDisplayLayout
-const char kTouchOptimizedUI[]              = "touch-optimized-ui";
+const char kTouchOptimizedUI[] = "touch-optimized-ui";
 
 // The values the kTouchOptimizedUI switch may have, as in
 // "--touch-optimized-ui=disabled".
@@ -75,6 +74,11 @@ const char kTouchOptimizedUIAuto[] = "auto";
 const char kTouchOptimizedUIEnabled[] = "enabled";
 //   disabled: never optimized for touch.
 const char kTouchOptimizedUIDisabled[] = "disabled";
+
+#if defined(USE_XI2_MT)
+// The calibration factors given as "<left>,<right>,<top>,<bottom>".
+const char kTouchCalibration[] = "touch-calibration";
+#endif
 
 #if defined(OS_MACOSX)
 const char kDisableCompositedCoreAnimationPlugins[] =

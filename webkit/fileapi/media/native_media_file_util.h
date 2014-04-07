@@ -5,15 +5,17 @@
 #ifndef WEBKIT_FILEAPI_MEDIA_NATIVE_MEDIA_FILE_UTIL_H_
 #define WEBKIT_FILEAPI_MEDIA_NATIVE_MEDIA_FILE_UTIL_H_
 
-#include "webkit/fileapi/fileapi_export.h"
+#include "base/memory/scoped_ptr.h"
 #include "webkit/fileapi/isolated_file_util.h"
+#include "webkit/storage/webkit_storage_export.h"
 
 namespace fileapi {
 
 // This class handles native file system operations with media type filtering
 // which is passed to each method via FileSystemOperationContext as
 // MediaPathFilter.
-class FILEAPI_EXPORT_PRIVATE NativeMediaFileUtil : public IsolatedFileUtil {
+class WEBKIT_STORAGE_EXPORT_PRIVATE NativeMediaFileUtil
+    : public IsolatedFileUtil {
  public:
   NativeMediaFileUtil();
 
@@ -26,7 +28,7 @@ class FILEAPI_EXPORT_PRIVATE NativeMediaFileUtil : public IsolatedFileUtil {
   virtual PlatformFileError EnsureFileExists(
       FileSystemOperationContext* context,
       const FileSystemURL& url, bool* created) OVERRIDE;
-  virtual AbstractFileEnumerator* CreateFileEnumerator(
+  virtual scoped_ptr<AbstractFileEnumerator> CreateFileEnumerator(
       FileSystemOperationContext* context,
       const FileSystemURL& root_url,
       bool recursive) OVERRIDE;

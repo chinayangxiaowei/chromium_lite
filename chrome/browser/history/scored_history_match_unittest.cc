@@ -15,12 +15,12 @@ namespace history {
 class ScoredHistoryMatchTest : public testing::Test {
  protected:
   // Convenience function to create a URLRow with basic data for |url|, |title|,
-  // |visit_count|, and |typed_count|. |last_visit_ago| gives the number of
-  // days from now to set the URL's last_visit.
+  // |visit_count|, and |typed_count|. |days_since_last_visit| gives the number
+  // of days ago to which to set the URL's last_visit.
   URLRow MakeURLRow(const char* url,
                     const char* title,
                     int visit_count,
-                    int last_visit_ago,
+                    int days_since_last_visit,
                     int typed_count);
 
   // Convenience functions for easily creating vectors of search terms.
@@ -39,28 +39,28 @@ class ScoredHistoryMatchTest : public testing::Test {
 URLRow ScoredHistoryMatchTest::MakeURLRow(const char* url,
                                           const char* title,
                                           int visit_count,
-                                          int last_visit_ago,
+                                          int days_since_last_visit,
                                           int typed_count) {
   URLRow row(GURL(url), 0);
-  row.set_title(UTF8ToUTF16(title));
+  row.set_title(ASCIIToUTF16(title));
   row.set_visit_count(visit_count);
   row.set_typed_count(typed_count);
   row.set_last_visit(base::Time::NowFromSystemTime() -
-                     base::TimeDelta::FromDays(last_visit_ago));
+                     base::TimeDelta::FromDays(days_since_last_visit));
   return row;
 }
 
 String16Vector ScoredHistoryMatchTest::Make1Term(const char* term) const {
   String16Vector original_terms;
-  original_terms.push_back(UTF8ToUTF16(term));
+  original_terms.push_back(ASCIIToUTF16(term));
   return original_terms;
 }
 
 String16Vector ScoredHistoryMatchTest::Make2Terms(const char* term_1,
                                                   const char* term_2) const {
   String16Vector original_terms;
-  original_terms.push_back(UTF8ToUTF16(term_1));
-  original_terms.push_back(UTF8ToUTF16(term_2));
+  original_terms.push_back(ASCIIToUTF16(term_1));
+  original_terms.push_back(ASCIIToUTF16(term_2));
   return original_terms;
 }
 
@@ -77,12 +77,92 @@ float ScoredHistoryMatchTest::GetTopicalityScoreOfTermAgainstURLAndTitle(
       1, url, url_matches, title_matches, word_starts);
 }
 
+TEST_F(ScoredHistoryMatchTest, MakeTermMatchesOnlyAtWordBoundaries) {
+  TermMatches matches, matches_at_word_boundaries;
+  WordStarts word_starts;
+
+  // no matches but some word starts -> no matches at word boundary
+  matches.clear();
+  word_starts.clear();
+  word_starts.push_back(2);
+  word_starts.push_back(5);
+  word_starts.push_back(10);
+  ScoredHistoryMatch::MakeTermMatchesOnlyAtWordBoundaries(
+      matches, word_starts, &matches_at_word_boundaries);
+  EXPECT_EQ(0u, matches_at_word_boundaries.size());
+
+  // matches but no word starts -> no matches at word boundary
+  matches.clear();
+  matches.push_back(TermMatch(0, 1, 2));  // 2-character match at pos 1
+  matches.push_back(TermMatch(0, 7, 2));  // 2-character match at pos 7
+  word_starts.clear();
+  ScoredHistoryMatch::MakeTermMatchesOnlyAtWordBoundaries(
+      matches, word_starts, &matches_at_word_boundaries);
+  EXPECT_EQ(0u, matches_at_word_boundaries.size());
+
+  // matches and word starts don't overlap -> no matches at word boundary
+  matches.clear();
+  matches.push_back(TermMatch(0, 1, 2));  // 2-character match at pos 1
+  matches.push_back(TermMatch(0, 7, 2));  // 2-character match at pos 7
+  word_starts.clear();
+  word_starts.push_back(2);
+  word_starts.push_back(5);
+  word_starts.push_back(10);
+  ScoredHistoryMatch::MakeTermMatchesOnlyAtWordBoundaries(
+      matches, word_starts, &matches_at_word_boundaries);
+  EXPECT_EQ(0u, matches_at_word_boundaries.size());
+
+  // some matches are at word boundary and some aren't
+  matches.clear();
+  matches.push_back(TermMatch(0, 1, 2));  // 2-character match at pos 1
+  matches.push_back(TermMatch(1, 6, 3));  // 3-character match at pos 6
+  matches.push_back(TermMatch(0, 8, 2));  // 2-character match at pos 8
+  matches.push_back(TermMatch(2, 15, 7));  // 7-character match at pos 15
+  matches.push_back(TermMatch(1, 26, 3));  // 3-character match at pos 26
+  word_starts.clear();
+  word_starts.push_back(0);
+  word_starts.push_back(6);
+  word_starts.push_back(9);
+  word_starts.push_back(15);
+  word_starts.push_back(24);
+  ScoredHistoryMatch::MakeTermMatchesOnlyAtWordBoundaries(
+      matches, word_starts, &matches_at_word_boundaries);
+  EXPECT_EQ(2u, matches_at_word_boundaries.size());
+  EXPECT_EQ(1, matches_at_word_boundaries[0].term_num);
+  EXPECT_EQ(6u, matches_at_word_boundaries[0].offset);
+  EXPECT_EQ(3u, matches_at_word_boundaries[0].length);
+  EXPECT_EQ(2, matches_at_word_boundaries[1].term_num);
+  EXPECT_EQ(15u, matches_at_word_boundaries[1].offset);
+  EXPECT_EQ(7u, matches_at_word_boundaries[1].length);
+
+  // all matches are at word boundary
+  matches.clear();
+  matches.push_back(TermMatch(0, 2, 2));  // 2-character match at pos 2
+  matches.push_back(TermMatch(1, 9, 3));  // 3-character match at pos 9
+  word_starts.clear();
+  word_starts.push_back(0);
+  word_starts.push_back(2);
+  word_starts.push_back(6);
+  word_starts.push_back(9);
+  word_starts.push_back(15);
+  ScoredHistoryMatch::MakeTermMatchesOnlyAtWordBoundaries(
+      matches, word_starts, &matches_at_word_boundaries);
+  EXPECT_EQ(2u, matches_at_word_boundaries.size());
+  EXPECT_EQ(0, matches_at_word_boundaries[0].term_num);
+  EXPECT_EQ(2u, matches_at_word_boundaries[0].offset);
+  EXPECT_EQ(2u, matches_at_word_boundaries[0].length);
+  EXPECT_EQ(1, matches_at_word_boundaries[1].term_num);
+  EXPECT_EQ(9u, matches_at_word_boundaries[1].offset);
+  EXPECT_EQ(3u, matches_at_word_boundaries[1].length);
+}
+
 TEST_F(ScoredHistoryMatchTest, Scoring) {
   URLRow row_a(MakeURLRow("http://abcdef", "fedcba", 3, 30, 1));
   // We use NowFromSystemTime() because MakeURLRow uses the same function
   // to calculate last visit time when building a row.
   base::Time now = base::Time::NowFromSystemTime();
   RowWordStarts word_starts;
+
   // Test scores based on position.
   // TODO(mpearson): Test new_scoring if we're actually going to turn it
   // on by default.  This requires setting word_starts, which isn't done
@@ -92,31 +172,37 @@ TEST_F(ScoredHistoryMatchTest, Scoring) {
   ScoredHistoryMatch scored_b(row_a, ASCIIToUTF16("bcd"), Make1Term("bcd"),
                               word_starts, now, NULL);
   EXPECT_GT(scored_a.raw_score, scored_b.raw_score);
+
   // Test scores based on length.
   ScoredHistoryMatch scored_c(row_a, ASCIIToUTF16("abcd"), Make1Term("abcd"),
                               word_starts, now, NULL);
   EXPECT_LT(scored_a.raw_score, scored_c.raw_score);
+
   // Test scores based on order.
   ScoredHistoryMatch scored_d(row_a, ASCIIToUTF16("abcdef"),
                               Make2Terms("abc", "def"), word_starts, now, NULL);
   ScoredHistoryMatch scored_e(row_a, ASCIIToUTF16("def abc"),
                               Make2Terms("def", "abc"), word_starts, now, NULL);
   EXPECT_GT(scored_d.raw_score, scored_e.raw_score);
+
   // Test scores based on visit_count.
   URLRow row_b(MakeURLRow("http://abcdef", "fedcba", 10, 30, 1));
   ScoredHistoryMatch scored_f(row_b, ASCIIToUTF16("abc"), Make1Term("abc"),
                               word_starts, now, NULL);
   EXPECT_GT(scored_f.raw_score, scored_a.raw_score);
+
   // Test scores based on last_visit.
   URLRow row_c(MakeURLRow("http://abcdef", "fedcba", 3, 10, 1));
   ScoredHistoryMatch scored_g(row_c, ASCIIToUTF16("abc"), Make1Term("abc"),
                               word_starts, now, NULL);
   EXPECT_GT(scored_g.raw_score, scored_a.raw_score);
+
   // Test scores based on typed_count.
   URLRow row_d(MakeURLRow("http://abcdef", "fedcba", 3, 30, 10));
   ScoredHistoryMatch scored_h(row_d, ASCIIToUTF16("abc"), Make1Term("abc"),
                               word_starts, now, NULL);
   EXPECT_GT(scored_h.raw_score, scored_a.raw_score);
+
   // Test scores based on a terms appearing multiple times.
   URLRow row_i(MakeURLRow("http://csi.csi.csi/csi_csi",
       "CSI Guide to CSI Las Vegas, CSI New York, CSI Provo", 3, 30, 10));
@@ -186,7 +272,7 @@ TEST_F(ScoredHistoryMatchTest, Inlining) {
 
 class BookmarkServiceMock : public BookmarkService {
  public:
-  BookmarkServiceMock(const GURL& url);
+  explicit BookmarkServiceMock(const GURL& url);
   virtual ~BookmarkServiceMock() {}
 
   // Returns true if the given |url| is the same as |url_|.
@@ -312,19 +398,15 @@ TEST_F(ScoredHistoryMatchTest, GetTopicalityScore) {
   // various types of URL matches.
   EXPECT_GT(title_score, arg_score);
   EXPECT_GT(arg_score, title_mid_word_score);
-  EXPECT_GT(title_mid_word_score, arg_mid_word_score);
   // Finally, verify that protocol matches and top level domain name
   // matches (.com, .net, etc.) score worse than everything (except
-  // possibly mid-word matches in the ?arg section of the URL--I can
-  // imagine scoring those pretty harshly as well).
+  // possibly mid-word matches in the ?arg section of the URL and
+  // mid-word title matches--I can imagine scoring those pretty
+  // harshly as well).
   EXPECT_GT(path_mid_word_score, protocol_score);
   EXPECT_GT(path_mid_word_score, protocol_mid_word_score);
-  EXPECT_GT(title_mid_word_score, protocol_score);
-  EXPECT_GT(title_mid_word_score, protocol_mid_word_score);
   EXPECT_GT(path_mid_word_score, tld_score);
   EXPECT_GT(path_mid_word_score, tld_mid_word_score);
-  EXPECT_GT(title_mid_word_score, tld_score);
-  EXPECT_GT(title_mid_word_score, tld_mid_word_score);
 }
 
 }  // namespace history

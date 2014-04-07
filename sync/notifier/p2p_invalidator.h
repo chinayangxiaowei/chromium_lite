@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 //
@@ -17,6 +17,7 @@
 #include "base/observer_list.h"
 #include "base/threading/thread_checker.h"
 #include "jingle/notifier/listener/push_client_observer.h"
+#include "sync/base/sync_export.h"
 #include "sync/internal_api/public/base/model_type.h"
 #include "sync/notifier/invalidator.h"
 #include "sync/notifier/invalidator_registrar.h"
@@ -29,7 +30,7 @@ class PushClient;
 namespace syncer {
 
 // The channel to use for sync notifications.
-extern const char kSyncP2PNotificationChannel[];
+SYNC_EXPORT_PRIVATE extern const char kSyncP2PNotificationChannel[];
 
 // The intended recipient(s) of a P2P notification.
 enum P2PNotificationTarget {
@@ -49,14 +50,14 @@ P2PNotificationTarget P2PNotificationTargetFromString(
 
 // Helper notification data class that can be serialized to and
 // deserialized from a string.
-class P2PNotificationData {
+class SYNC_EXPORT_PRIVATE P2PNotificationData {
  public:
   // Initializes with an empty sender ID, target set to NOTIFY_SELF,
   // and empty changed types.
   P2PNotificationData();
   P2PNotificationData(const std::string& sender_id,
                       P2PNotificationTarget target,
-                      const ObjectIdStateMap& id_state_map,
+                      const ObjectIdInvalidationMap& invalidation_map,
                       IncomingInvalidationSource source);
 
   ~P2PNotificationData();
@@ -64,7 +65,7 @@ class P2PNotificationData {
   // Returns true if the given ID is targeted by this notification.
   bool IsTargeted(const std::string& id) const;
 
-  const ObjectIdStateMap& GetIdStateMap() const;
+  const ObjectIdInvalidationMap& GetIdInvalidationMap() const;
 
   IncomingInvalidationSource GetSource() const;
 
@@ -81,8 +82,8 @@ class P2PNotificationData {
   std::string sender_id_;
   // The intendent recipient(s) of the notification.
   P2PNotificationTarget target_;
-  // The state map for the notification.
-  ObjectIdStateMap id_state_map_;
+  // The invalidation map for the notification.
+  ObjectIdInvalidationMap invalidation_map_;
   // The source of the invalidation.
   IncomingInvalidationSource source_;
 };
@@ -110,7 +111,8 @@ class P2PInvalidator : public Invalidator,
   virtual void SetStateDeprecated(const std::string& state) OVERRIDE;
   virtual void UpdateCredentials(
       const std::string& email, const std::string& token) OVERRIDE;
-  virtual void SendInvalidation(const ObjectIdStateMap& id_state_map) OVERRIDE;
+  virtual void SendInvalidation(
+      const ObjectIdInvalidationMap& invalidation_map) OVERRIDE;
 
   // PushClientObserver implementation.
   virtual void OnNotificationsEnabled() OVERRIDE;

@@ -5,10 +5,12 @@
 #include "webkit/fileapi/file_util_helper.h"
 
 #include <stack>
+#include <utility>
 
 #include "webkit/fileapi/file_system_file_util.h"
 #include "webkit/fileapi/file_system_operation_context.h"
 #include "webkit/fileapi/file_system_url.h"
+#include "webkit/fileapi/file_system_util.h"
 
 using base::PlatformFileError;
 
@@ -229,8 +231,6 @@ PlatformFileError CrossFileUtilHelper::CopyOrMoveDirectory(
   }
 
   if (operation_ == OPERATION_MOVE) {
-#ifndef OS_WIN
-    // TODO(nhiroki): Support Windows (http://crbug.com/137807).
     // Restore modified timestamp of destination directories.
     for (MovedDirectories::const_iterator it(directories.begin());
          it != directories.end(); ++it) {
@@ -238,7 +238,6 @@ PlatformFileError CrossFileUtilHelper::CopyOrMoveDirectory(
       if (error != base::PLATFORM_FILE_OK)
         return error;
     }
-#endif
 
     error = FileUtilHelper::Delete(
         context_, src_util_, src_url, true /* recursive */);
@@ -370,7 +369,7 @@ base::PlatformFileError FileUtilHelper::ReadDirectory(
   while (!(current = file_enum->Next()).empty()) {
     base::FileUtilProxy::Entry entry;
     entry.is_directory = file_enum->IsDirectory();
-    entry.name = current.BaseName().value();
+    entry.name = VirtualPath::BaseName(current).value();
     entry.size = file_enum->Size();
     entry.last_modified_time = file_enum->LastModifiedTime();
     entries->push_back(entry);

@@ -29,8 +29,8 @@
 #include "content/public/browser/save_page_type.h"
 
 #if defined(OS_CHROMEOS)
-#include "chrome/browser/chromeos/gdata/drive_file_system_util.h"
-#include "chrome/browser/chromeos/gdata/drive_system_service.h"
+#include "chrome/browser/chromeos/drive/drive_file_system_util.h"
+#include "chrome/browser/chromeos/drive/drive_system_service.h"
 #endif
 
 using content::BrowserContext;
@@ -39,9 +39,9 @@ using content::DownloadManager;
 
 DownloadPrefs::DownloadPrefs(Profile* profile) : profile_(profile) {
   PrefService* prefs = profile->GetPrefs();
-  prompt_for_download_.Init(prefs::kPromptForDownload, prefs, NULL);
-  download_path_.Init(prefs::kDownloadDefaultDirectory, prefs, NULL);
-  save_file_type_.Init(prefs::kSaveFileType, prefs, NULL);
+  prompt_for_download_.Init(prefs::kPromptForDownload, prefs);
+  download_path_.Init(prefs::kDownloadDefaultDirectory, prefs);
+  save_file_type_.Init(prefs::kSaveFileType, prefs);
 
   // We store any file extension that should be opened automatically at
   // download completion in this pref.
@@ -130,8 +130,8 @@ FilePath DownloadPrefs::DownloadPath() const {
   // If the download path is under /drive, and DriveSystemService isn't
   // available (which it isn't for incognito mode, for instance), use the
   // default download directory (/Downloads).
-  if (gdata::util::IsUnderDriveMountPoint(*download_path_) &&
-      !gdata::DriveSystemServiceFactory::GetForProfile(profile_))
+  if (drive::util::IsUnderDriveMountPoint(*download_path_) &&
+      !drive::DriveSystemServiceFactory::GetForProfile(profile_))
     return download_util::GetDefaultDownloadDirectory();
 #endif
   return *download_path_;

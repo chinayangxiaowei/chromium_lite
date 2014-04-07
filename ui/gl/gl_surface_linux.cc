@@ -8,7 +8,7 @@
 #include "base/logging.h"
 #include "base/memory/scoped_ptr.h"
 #include "base/message_loop.h"
-#include "third_party/mesa/MesaLib/include/GL/osmesa.h"
+#include "third_party/mesa/include/osmesa.h"
 #include "ui/gl/gl_bindings.h"
 #include "ui/gl/gl_implementation.h"
 #include "ui/gl/gl_surface_egl.h"
@@ -135,6 +135,8 @@ void NativeViewGLSurfaceOSMesa::Destroy() {
     XFreeGC(g_osmesa_display, window_graphics_context_);
     window_graphics_context_ = NULL;
   }
+
+  XSync(g_osmesa_display, False);
 }
 
 bool NativeViewGLSurfaceOSMesa::Resize(const gfx::Size& new_size) {

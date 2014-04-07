@@ -7,9 +7,10 @@
 
 #include "base/file_path.h"
 #include "base/file_util_proxy.h"
+#include "base/memory/scoped_ptr.h"
 #include "base/platform_file.h"
-#include "webkit/fileapi/fileapi_export.h"
 #include "webkit/fileapi/file_system_file_util.h"
+#include "webkit/storage/webkit_storage_export.h"
 
 namespace base {
 class Time;
@@ -22,7 +23,7 @@ using base::PlatformFileError;
 
 // TODO(dmikurube): Add unit tests for NativeFileUtil.
 // This class handles accessing the OS native filesystem.
-class FILEAPI_EXPORT_PRIVATE NativeFileUtil {
+class WEBKIT_STORAGE_EXPORT_PRIVATE NativeFileUtil {
  public:
   static PlatformFileError CreateOrOpen(
       const FilePath& path,
@@ -37,9 +38,9 @@ class FILEAPI_EXPORT_PRIVATE NativeFileUtil {
                                            bool recursive);
   static PlatformFileError GetFileInfo(const FilePath& path,
                                        base::PlatformFileInfo* file_info);
-  static FileSystemFileUtil::AbstractFileEnumerator* CreateFileEnumerator(
-      const FilePath& root_path,
-      bool recursive);
+  static scoped_ptr<FileSystemFileUtil::AbstractFileEnumerator>
+      CreateFileEnumerator(const FilePath& root_path,
+                           bool recursive);
   static PlatformFileError Touch(const FilePath& path,
                                  const base::Time& last_access_time,
                                  const base::Time& last_modified_time);

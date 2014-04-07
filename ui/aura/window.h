@@ -27,22 +27,19 @@
 #include "ui/gfx/native_widget_types.h"
 #include "ui/gfx/rect.h"
 
-class SkCanvas;
-
 namespace gfx {
 class Display;
+class Transform;
 }
 
 namespace ui {
+class EventHandler;
 class Layer;
 class Texture;
-class Transform;
 }
 
 namespace aura {
 
-class EventFilter;
-class FocusManager;
 class LayoutManager;
 class RootWindow;
 class WindowDelegate;
@@ -147,7 +144,7 @@ class AURA_EXPORT Window : public ui::LayerDelegate,
   // |aura::client::ScreenPositionClient| interface.
   gfx::Rect GetBoundsInScreen() const;
 
-  virtual void SetTransform(const ui::Transform& transform);
+  virtual void SetTransform(const gfx::Transform& transform);
 
   // Assigns a LayoutManager to size and place child windows.
   // The Window takes ownership of the LayoutManager.
@@ -173,9 +170,12 @@ class AURA_EXPORT Window : public ui::LayerDelegate,
   // Assigns a new external texture to the window's layer.
   void SetExternalTexture(ui::Texture* texture);
 
-  // Sets the parent window of the window. If NULL, the window is parented to
-  // the root window.
-  void SetParent(Window* parent);
+  // Places this window per |root_window|'s stacking client. The final location
+  // may be a RootWindow other than the one passed in. |root_window| may not be
+  // NULL. |bounds_in_screen| may be empty; it is more optional context that
+  // may, but isn't necessarily used.
+  void SetDefaultParentByRootWindow(RootWindow* root_window,
+                                    const gfx::Rect& bounds_in_screen);
 
   // Stacks the specified child of this Window at the front of the z-order.
   void StackChildAtTop(Window* child);
@@ -232,13 +232,16 @@ class AURA_EXPORT Window : public ui::LayerDelegate,
   // Returns the cursor for the specified point, in window coordinates.
   gfx::NativeCursor GetCursor(const gfx::Point& point) const;
 
-  // Window takes ownership of the EventFilter.
-  void SetEventFilter(EventFilter* event_filter);
-  EventFilter* event_filter() { return event_filter_.get(); }
+  // Sets an 'event filter' for the window. An 'event filter' for a Window is
+  // a pre-target event handler, where the window owns the handler. A window
+  // can have only one such event filter. Setting a new filter removes and
+  // destroys any previously installed filter.
+  void SetEventFilter(ui::EventHandler* event_filter);
 
   // Add/remove observer.
   void AddObserver(WindowObserver* observer);
   void RemoveObserver(WindowObserver* observer);
+  bool HasObserver(WindowObserver* observer);
 
   void set_ignore_events(bool ignore_events) { ignore_events_ = ignore_events; }
 
@@ -306,11 +309,6 @@ class AURA_EXPORT Window : public ui::LayerDelegate,
   // Returns true if the Window can receive events.
   virtual bool CanReceiveEvents() const;
 
-  // Returns the FocusManager for the Window, which may be attached to a parent
-  // Window. Can return NULL if the Window has no FocusManager.
-  virtual FocusManager* GetFocusManager();
-  virtual const FocusManager* GetFocusManager() const;
-
   // Does a capture on the window. This does nothing if the window isn't showing
   // (VISIBILITY_SHOWN) or isn't contained in a valid window hierarchy.
   void SetCapture();
@@ -348,7 +346,7 @@ class AURA_EXPORT Window : public ui::LayerDelegate,
   void* GetNativeWindowProperty(const char* key) const;
 
   // Type of a function to delete a property that this window owns.
-  typedef void (*PropertyDeallocator)(intptr_t value);
+  typedef void (*PropertyDeallocator)(int64 value);
 
   // Overridden from ui::LayerDelegate:
   virtual void OnDeviceScaleFactorChanged(float device_scale_factor) OVERRIDE;
@@ -369,12 +367,12 @@ class AURA_EXPORT Window : public ui::LayerDelegate,
   };
 
   // Called by the public {Set,Get,Clear}Property functions.
-  intptr_t SetPropertyInternal(const void* key,
-                               const char* name,
-                               PropertyDeallocator deallocator,
-                               intptr_t value,
-                               intptr_t default_value);
-  intptr_t GetPropertyInternal(const void* key, intptr_t default_value) const;
+  int64 SetPropertyInternal(const void* key,
+                            const char* name,
+                            PropertyDeallocator deallocator,
+                            int64 value,
+                            int64 default_value);
+  int64 GetPropertyInternal(const void* key, int64 default_value) const;
 
   // Changes the bounds of the window without condition.
   void SetBoundsInternal(const gfx::Rect& new_bounds);
@@ -433,7 +431,7 @@ class AURA_EXPORT Window : public ui::LayerDelegate,
   virtual base::Closure PrepareForLayerBoundsChange() OVERRIDE;
 
   // Overridden from ui::EventTarget:
-  virtual bool CanAcceptEvents() OVERRIDE;
+  virtual bool CanAcceptEvent(const ui::Event& event) OVERRIDE;
   virtual EventTarget* GetParentTarget() OVERRIDE;
 
   // Updates the layer name with a name based on the window's name and id.
@@ -474,7 +472,7 @@ class AURA_EXPORT Window : public ui::LayerDelegate,
   // Whether layer is initialized as non-opaque.
   bool transparent_;
 
-  scoped_ptr<EventFilter> event_filter_;
+  scoped_ptr<ui::EventHandler> event_filter_;
   scoped_ptr<LayoutManager> layout_manager_;
 
   void* user_data_;
@@ -494,7 +492,7 @@ class AURA_EXPORT Window : public ui::LayerDelegate,
   // WindowProperty<>.
   struct Value {
     const char* name;
-    intptr_t value;
+    int64 value;
     PropertyDeallocator deallocator;
   };
 

@@ -5,7 +5,7 @@
 #ifndef CHROME_BROWSER_UI_WEBUI_OPTIONS_CLEAR_BROWSER_DATA_HANDLER_H_
 #define CHROME_BROWSER_UI_WEBUI_OPTIONS_CLEAR_BROWSER_DATA_HANDLER_H_
 
-#include "chrome/browser/api/prefs/pref_member.h"
+#include "base/prefs/public/pref_member.h"
 #include "chrome/browser/browsing_data/browsing_data_remover.h"
 #include "chrome/browser/ui/webui/options/options_ui.h"
 
@@ -39,6 +39,10 @@ class ClearBrowserDataHandler : public OptionsPageUIHandler,
 
   // Keeps track of whether clearing LSO data is supported.
   BooleanPrefMember clear_plugin_lso_data_enabled_;
+
+  // Keeps track of whether Pepper Flash is enabled and thus Flapper-specific
+  // settings and removal options (e.g. Content Licenses) are available.
+  BooleanPrefMember pepper_flash_settings_enabled_;
 
   DISALLOW_COPY_AND_ASSIGN(ClearBrowserDataHandler);
 };

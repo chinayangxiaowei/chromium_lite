@@ -13,12 +13,11 @@
       'dependencies': [
         '<(DEPTH)/base/base.gyp:base',
         '<(DEPTH)/base/third_party/dynamic_annotations/dynamic_annotations.gyp:dynamic_annotations',
+        '<(DEPTH)/cc/cc.gyp:cc',
         '<(DEPTH)/skia/skia.gyp:skia',
         '<(DEPTH)/third_party/WebKit/Source/WebKit/chromium/WebKit.gyp:webkit',
         '<(DEPTH)/ui/gl/gl.gyp:gl',
         '<(DEPTH)/ui/ui.gyp:ui',
-        '<(DEPTH)/webkit/support/webkit_support.gyp:fileapi',
-        '<(DEPTH)/webkit/support/webkit_support.gyp:glue',
         '<(DEPTH)/webkit/support/webkit_support.gyp:webkit_gpu',
       ],
       'defines': [
@@ -99,6 +98,8 @@
       'dependencies': [
         '<(DEPTH)/base/base.gyp:base',
         '<(DEPTH)/base/base.gyp:test_support_base',
+        '<(DEPTH)/cc/cc.gyp:cc',
+        '<(DEPTH)/cc/cc_tests.gyp:cc_test_utils',
         '<(DEPTH)/skia/skia.gyp:skia',
         '<(DEPTH)/testing/gtest.gyp:gtest',
         '<(DEPTH)/ui/gl/gl.gyp:gl',

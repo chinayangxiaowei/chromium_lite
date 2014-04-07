@@ -32,7 +32,8 @@ class MEDIA_EXPORT MP4StreamParser : public StreamParser {
                     const NewBuffersCB& video_cb,
                     const NeedKeyCB& need_key_cb,
                     const NewMediaSegmentCB& new_segment_cb,
-                    const base::Closure& end_of_segment_cb) OVERRIDE;
+                    const base::Closure& end_of_segment_cb,
+                    const LogCB& log_cb) OVERRIDE;
   virtual void Flush() OVERRIDE;
   virtual bool Parse(const uint8* buf, int size) OVERRIDE;
 
@@ -48,7 +49,9 @@ class MEDIA_EXPORT MP4StreamParser : public StreamParser {
   bool ParseMoov(mp4::BoxReader* reader);
   bool ParseMoof(mp4::BoxReader* reader);
 
-  bool EmitKeyNeeded(const TrackEncryption& track_encryption);
+  // Returns 'true' if sent or not required, 'false' if there was an error.
+  bool EmitNeedKeyIfNecessary(
+      const std::vector<ProtectionSystemSpecificHeader>& headers);
 
   // To retain proper framing, each 'mdat' atom must be read; to limit memory
   // usage, the atom's data needs to be discarded incrementally as frames are
@@ -83,6 +86,7 @@ class MEDIA_EXPORT MP4StreamParser : public StreamParser {
   NeedKeyCB need_key_cb_;
   NewMediaSegmentCB new_segment_cb_;
   base::Closure end_of_segment_cb_;
+  LogCB log_cb_;
 
   OffsetByteQueue queue_;
 
@@ -104,6 +108,8 @@ class MEDIA_EXPORT MP4StreamParser : public StreamParser {
   uint32 audio_track_id_;
   uint32 video_track_id_;
   bool has_sbr_;
+  bool is_audio_track_encrypted_;
+  bool is_video_track_encrypted_;
 
   DISALLOW_COPY_AND_ASSIGN(MP4StreamParser);
 };

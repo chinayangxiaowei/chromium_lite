@@ -5,6 +5,7 @@
 #include "chrome/browser/profiles/profile_impl.h"
 
 #include "base/bind.h"
+#include "base/callback.h"
 #include "base/command_line.h"
 #include "base/compiler_specific.h"
 #include "base/environment.h"
@@ -12,10 +13,13 @@
 #include "base/file_util.h"
 #include "base/memory/scoped_ptr.h"
 #include "base/path_service.h"
+#include "base/prefs/json_pref_store.h"
 #include "base/string_number_conversions.h"
 #include "base/string_tokenizer.h"
 #include "base/string_util.h"
 #include "base/stringprintf.h"
+#include "base/synchronization/waitable_event.h"
+#include "base/threading/sequenced_worker_pool.h"
 #include "base/utf_string_conversions.h"
 #include "base/version.h"
 #include "chrome/browser/autocomplete/autocomplete_classifier.h"
@@ -30,16 +34,14 @@
 #include "chrome/browser/download/chrome_download_manager_delegate.h"
 #include "chrome/browser/download/download_service.h"
 #include "chrome/browser/download/download_service_factory.h"
-#include "chrome/browser/extensions/event_router.h"
 #include "chrome/browser/extensions/extension_pref_store.h"
 #include "chrome/browser/extensions/extension_pref_value_map.h"
 #include "chrome/browser/extensions/extension_pref_value_map_factory.h"
-#include "chrome/browser/extensions/extension_process_manager.h"
 #include "chrome/browser/extensions/extension_service.h"
 #include "chrome/browser/extensions/extension_special_storage_policy.h"
 #include "chrome/browser/extensions/extension_system.h"
-#include "chrome/browser/extensions/user_script_master.h"
 #include "chrome/browser/geolocation/chrome_geolocation_permission_context.h"
+#include "chrome/browser/geolocation/chrome_geolocation_permission_context_factory.h"
 #include "chrome/browser/history/shortcuts_backend.h"
 #include "chrome/browser/history/top_sites.h"
 #include "chrome/browser/metrics/metrics_service.h"
@@ -49,9 +51,7 @@
 #include "chrome/browser/net/proxy_service_factory.h"
 #include "chrome/browser/net/ssl_config_service_manager.h"
 #include "chrome/browser/net/url_fixer_upper.h"
-#include "chrome/browser/plugin_prefs.h"
-#include "chrome/browser/policy/policy_service.h"
-#include "chrome/browser/policy/user_cloud_policy_manager.h"
+#include "chrome/browser/plugins/plugin_prefs.h"
 #include "chrome/browser/prefs/browser_prefs.h"
 #include "chrome/browser/prefs/scoped_user_pref_update.h"
 #include "chrome/browser/prerender/prerender_manager_factory.h"
@@ -68,8 +68,6 @@
 #include "chrome/browser/ui/startup/startup_browser_creator.h"
 #include "chrome/browser/ui/webui/extensions/extension_icon_source.h"
 #include "chrome/browser/user_style_sheet_watcher.h"
-#include "chrome/browser/visitedlink/visitedlink_event_listener.h"
-#include "chrome/browser/visitedlink/visitedlink_master.h"
 #include "chrome/browser/web_resource/promo_resource_service.h"
 #include "chrome/browser/webdata/web_data_service.h"
 #include "chrome/common/chrome_constants.h"
@@ -93,6 +91,11 @@
 
 #if defined(ENABLE_CONFIGURATION_POLICY)
 #include "chrome/browser/policy/browser_policy_connector.h"
+#include "chrome/browser/policy/managed_mode_policy_provider.h"
+#if !defined(OS_CHROMEOS)
+#include "chrome/browser/policy/user_cloud_policy_manager.h"
+#include "chrome/browser/policy/user_cloud_policy_manager_factory.h"
+#endif
 #else
 #include "chrome/browser/policy/policy_service_stub.h"
 #endif  // defined(ENABLE_CONFIGURATION_POLICY)
@@ -120,7 +123,8 @@ namespace {
 
 // Constrict us to a very specific platform and architecture to make sure
 // ifdefs don't cause problems with the check.
-#if defined(OS_LINUX) && defined(TOOLKIT_GTK) && defined(ARCH_CPU_X86_64)
+#if defined(OS_LINUX) && defined(TOOLKIT_GTK) && defined(ARCH_CPU_X86_64) && \
+  !defined(_GLIBCXX_DEBUG)
 // Make sure that the ProfileImpl doesn't grow. We're currently trying to drive
 // the number of services that are included in ProfileImpl (instead of using
 // ProfileKeyedServiceFactory) to zero.
@@ -147,11 +151,40 @@ static const char kReadmeText[] =
     "information and MUST not be extracted, overwritten or modified except "
     "through %s defined APIs.";
 
+// Value written to prefs for EXIT_CRASHED and EXIT_SESSION_ENDED.
+const char* const kPrefExitTypeCrashed = "Crashed";
+const char* const kPrefExitTypeSessionEnded = "SessionEnded";
+
 // Helper method needed because PostTask cannot currently take a Callback
 // function with non-void return type.
-// TODO(jhawkins): Remove once IgnoreResult is fixed.
-void CreateDirectoryNoResult(const FilePath& path) {
+void CreateDirectoryAndSignal(const FilePath& path,
+                              base::WaitableEvent* done_creating) {
+  DVLOG(1) << "Creating directory " << path.value();
   file_util::CreateDirectory(path);
+  done_creating->Signal();
+}
+
+// Task that blocks the FILE thread until CreateDirectoryAndSignal() finishes on
+// blocking I/O pool.
+void BlockFileThreadOnDirectoryCreate(base::WaitableEvent* done_creating) {
+  done_creating->Wait();
+}
+
+// Initiates creation of profile directory on |sequenced_task_runner| and
+// ensures that FILE thread is blocked until that operation finishes.
+void CreateProfileDirectory(base::SequencedTaskRunner* sequenced_task_runner,
+                            const FilePath& path) {
+  base::WaitableEvent* done_creating = new base::WaitableEvent(false, false);
+  sequenced_task_runner->PostTask(FROM_HERE,
+                                  base::Bind(&CreateDirectoryAndSignal,
+                                             path,
+                                             done_creating));
+  // Block the FILE thread until directory is created on I/O pool to make sure
+  // that we don't attempt any operation until that part completes.
+  BrowserThread::PostTask(
+      BrowserThread::FILE, FROM_HERE,
+      base::Bind(&BlockFileThreadOnDirectoryCreate,
+                 base::Owned(done_creating)));
 }
 
 FilePath GetCachePath(const FilePath& base) {
@@ -175,18 +208,44 @@ void EnsureReadmeFile(const FilePath& base) {
   }
 }
 
+// Converts the kSessionExitedCleanly pref to the corresponding EXIT_TYPE.
+Profile::ExitType SessionTypePrefValueToExitType(const std::string& value) {
+  if (value == kPrefExitTypeSessionEnded)
+    return Profile::EXIT_SESSION_ENDED;
+  if (value == kPrefExitTypeCrashed)
+    return Profile::EXIT_CRASHED;
+  return Profile::EXIT_NORMAL;
+}
+
+// Converts an ExitType into a string that is written to prefs.
+std::string ExitTypeToSessionTypePrefValue(Profile::ExitType type) {
+  switch (type) {
+    case Profile::EXIT_NORMAL:
+        return ProfileImpl::kPrefExitTypeNormal;
+    case Profile::EXIT_SESSION_ENDED:
+      return kPrefExitTypeSessionEnded;
+    case Profile::EXIT_CRASHED:
+      return kPrefExitTypeCrashed;
+  }
+  NOTREACHED();
+  return std::string();
+}
+
 }  // namespace
 
 // static
 Profile* Profile::CreateProfile(const FilePath& path,
                                 Delegate* delegate,
                                 CreateMode create_mode) {
+  // Get sequenced task runner for making sure that file operations of
+  // this profile (defined by |path|) are executed in expected order
+  // (what was previously assured by the FILE thread).
+  scoped_refptr<base::SequencedTaskRunner> sequenced_task_runner =
+      JsonPrefStore::GetTaskRunnerForFile(path,
+                                          BrowserThread::GetBlockingPool());
   if (create_mode == CREATE_MODE_ASYNCHRONOUS) {
     DCHECK(delegate);
-    // This is safe while all file operations are done on the FILE thread.
-    BrowserThread::PostTask(
-        BrowserThread::FILE, FROM_HERE,
-        base::Bind(&CreateDirectoryNoResult, path));
+    CreateProfileDirectory(sequenced_task_runner, path);
   } else if (create_mode == CREATE_MODE_SYNCHRONOUS) {
     if (!file_util::PathExists(path)) {
       // TODO(tc): http://b/1094718 Bad things happen if we can't write to the
@@ -199,15 +258,21 @@ Profile* Profile::CreateProfile(const FilePath& path,
     NOTREACHED();
   }
 
-  return new ProfileImpl(path, delegate, create_mode);
+  return new ProfileImpl(path, delegate, create_mode, sequenced_task_runner);
 }
 
 // static
 int ProfileImpl::create_readme_delay_ms = 60000;
 
 // static
+const char* const ProfileImpl::kPrefExitTypeNormal = "Normal";
+
+// static
 void ProfileImpl::RegisterUserPrefs(PrefService* prefs) {
   prefs->RegisterBooleanPref(prefs::kSavingBrowserHistoryDisabled,
+                             false,
+                             PrefService::UNSYNCABLE_PREF);
+  prefs->RegisterBooleanPref(prefs::kForceSafeSearch,
                              false,
                              PrefService::UNSYNCABLE_PREF);
   prefs->RegisterIntegerPref(prefs::kProfileAvatarIndex,
@@ -249,14 +314,15 @@ void ProfileImpl::RegisterUserPrefs(PrefService* prefs) {
                              PrefService::SYNCABLE_PREF);
 }
 
-ProfileImpl::ProfileImpl(const FilePath& path,
-                         Delegate* delegate,
-                         CreateMode create_mode)
+ProfileImpl::ProfileImpl(
+    const FilePath& path,
+    Delegate* delegate,
+    CreateMode create_mode,
+    base::SequencedTaskRunner* sequenced_task_runner)
     : path_(path),
-      ALLOW_THIS_IN_INITIALIZER_LIST(visited_link_event_listener_(
-          new VisitedLinkEventListener(this))),
       ALLOW_THIS_IN_INITIALIZER_LIST(io_data_(this)),
       host_content_settings_map_(NULL),
+      last_session_exit_type_(EXIT_NORMAL),
       start_time_(Time::Now()),
       delegate_(delegate),
       predictor_(NULL) {
@@ -277,33 +343,53 @@ ProfileImpl::ProfileImpl(const FilePath& path,
       g_browser_process->profile_manager() == NULL);
 
 #if defined(ENABLE_CONFIGURATION_POLICY)
-  // TODO(atwilson): Change these to ProfileKeyedServices once PrefService is
-  // a ProfileKeyedService (policy must be initialized before PrefService
-  // because PrefService depends on policy loading to get overridden pref
-  // values).
-  cloud_policy_manager_ =
-      g_browser_process->browser_policy_connector()->CreateCloudPolicyManager(
-          this);
+  // If we are creating the profile synchronously, then we should load the
+  // policy data immediately.
+  bool force_immediate_policy_load = (create_mode == CREATE_MODE_SYNCHRONOUS);
+
+  // TODO(atwilson): Change |cloud_policy_manager_| and
+  // |managed_mode_policy_provider_| to proper ProfileKeyedServices once
+  // PrefService is a ProfileKeyedService (policy must be initialized before
+  // PrefService because PrefService depends on policy loading to get overridden
+  // pref values).
+#if !defined(OS_CHROMEOS)
+  if (command_line->HasSwitch(switches::kLoadCloudPolicyOnSignin)) {
+    cloud_policy_manager_ =
+        policy::UserCloudPolicyManagerFactory::CreateForProfile(
+            this, force_immediate_policy_load);
+    cloud_policy_manager_->Init();
+  }
+#endif
+  managed_mode_policy_provider_ =
+      policy::ManagedModePolicyProvider::Create(this,
+                                                sequenced_task_runner,
+                                                force_immediate_policy_load);
+  managed_mode_policy_provider_->Init();
   policy_service_ =
       g_browser_process->browser_policy_connector()->CreatePolicyService(this);
 #else
   policy_service_.reset(new policy::PolicyServiceStub());
 #endif
+
   if (create_mode == CREATE_MODE_ASYNCHRONOUS) {
     prefs_.reset(PrefService::CreatePrefService(
         GetPrefFilePath(),
+        sequenced_task_runner,
         policy_service_.get(),
         new ExtensionPrefStore(
             ExtensionPrefValueMapFactory::GetForProfile(this), false),
         true));
-    // Wait for the notification that prefs has been loaded (successfully or
-    // not).
-    registrar_.Add(this, chrome::NOTIFICATION_PREF_INITIALIZATION_COMPLETED,
-                   content::Source<PrefService>(prefs_.get()));
+    // Wait for the notification that prefs has been loaded
+    // (successfully or not).  Note that we can use base::Unretained
+    // because the PrefService is owned by this class and lives on
+    // the same thread.
+    prefs_->AddPrefInitObserver(base::Bind(&ProfileImpl::OnPrefsLoaded,
+                                           base::Unretained(this)));
   } else if (create_mode == CREATE_MODE_SYNCHRONOUS) {
     // Load prefs synchronously.
     prefs_.reset(PrefService::CreatePrefService(
         GetPrefFilePath(),
+        sequenced_task_runner,
         policy_service_.get(),
         new ExtensionPrefStore(
             ExtensionPrefValueMapFactory::GetForProfile(this), false),
@@ -317,19 +403,32 @@ ProfileImpl::ProfileImpl(const FilePath& path,
 void ProfileImpl::DoFinalInit(bool is_new_profile) {
   PrefService* prefs = GetPrefs();
   pref_change_registrar_.Init(prefs);
-  pref_change_registrar_.Add(prefs::kGoogleServicesUsername, this);
-  pref_change_registrar_.Add(prefs::kDefaultZoomLevel, this);
-  pref_change_registrar_.Add(prefs::kProfileAvatarIndex, this);
-  pref_change_registrar_.Add(prefs::kProfileName, this);
+  pref_change_registrar_.Add(
+      prefs::kGoogleServicesUsername,
+      base::Bind(&ProfileImpl::UpdateProfileUserNameCache,
+                 base::Unretained(this)));
+  pref_change_registrar_.Add(
+      prefs::kDefaultZoomLevel,
+      base::Bind(&ProfileImpl::OnDefaultZoomLevelChanged,
+                 base::Unretained(this)));
+  pref_change_registrar_.Add(
+      prefs::kProfileAvatarIndex,
+      base::Bind(&ProfileImpl::UpdateProfileAvatarCache,
+                 base::Unretained(this)));
+  pref_change_registrar_.Add(
+      prefs::kProfileName,
+      base::Bind(&ProfileImpl::UpdateProfileNameCache,
+                 base::Unretained(this)));
 
   // It would be nice to use PathService for fetching this directory, but
   // the cache directory depends on the profile directory, which isn't available
   // to PathService.
   chrome::GetUserCacheDirectory(path_, &base_cache_path_);
   // Always create the cache directory asynchronously.
-  BrowserThread::PostTask(
-      BrowserThread::FILE, FROM_HERE,
-      base::Bind(&CreateDirectoryNoResult, base_cache_path_));
+  scoped_refptr<base::SequencedTaskRunner> sequenced_task_runner =
+      JsonPrefStore::GetTaskRunnerForFile(base_cache_path_,
+                                          BrowserThread::GetBlockingPool());
+  CreateProfileDirectory(sequenced_task_runner, base_cache_path_);
 
   // Now that the profile is hooked up to receive pref change notifications to
   // kGoogleServicesUsername, initialize components that depend on it to reflect
@@ -395,7 +494,7 @@ void ProfileImpl::DoFinalInit(bool is_new_profile) {
           *CommandLine::ForCurrentProcess(), this).type;
 #endif
   bool restore_old_session_cookies =
-      (!DidLastSessionExitCleanly() ||
+      (GetLastSessionExitType() == Profile::EXIT_CRASHED ||
        startup_pref_type == SessionStartupPref::LAST);
 
   InitHostZoomMap();
@@ -460,7 +559,7 @@ void ProfileImpl::InitHostZoomMap() {
   }
 
   registrar_.Add(this, content::NOTIFICATION_ZOOM_LEVEL_CHANGED,
-               content::Source<HostZoomMap>(host_zoom_map));
+                 content::Source<HostZoomMap>(host_zoom_map));
 }
 
 void ProfileImpl::InitPromoResources() {
@@ -514,9 +613,14 @@ ProfileImpl::~ProfileImpl() {
   if (host_content_settings_map_)
     host_content_settings_map_->ShutdownOnUIThread();
 
+#if defined(ENABLE_CONFIGURATION_POLICY)
+  if (managed_mode_policy_provider_)
+    managed_mode_policy_provider_->Shutdown();
+#endif
+
   // This causes the Preferences file to be written to disk.
   if (prefs_loaded)
-    MarkAsCleanShutdown();
+    SetExitType(EXIT_NORMAL);
 }
 
 std::string ProfileImpl::GetProfileName() {
@@ -525,6 +629,11 @@ std::string ProfileImpl::GetProfileName() {
 
 FilePath ProfileImpl::GetPath() {
   return path_;
+}
+
+scoped_refptr<base::SequencedTaskRunner> ProfileImpl::GetIOTaskRunner() {
+  return JsonPrefStore::GetTaskRunnerForFile(
+      GetPath(), BrowserThread::GetBlockingPool());
 }
 
 bool ProfileImpl::IsOffTheRecord() const {
@@ -558,32 +667,8 @@ Profile* ProfileImpl::GetOriginalProfile() {
   return this;
 }
 
-VisitedLinkMaster* ProfileImpl::GetVisitedLinkMaster() {
-  if (!visited_link_master_.get()) {
-    scoped_ptr<VisitedLinkMaster> visited_links(
-      new VisitedLinkMaster(visited_link_event_listener_.get(), this));
-    if (!visited_links->Init())
-      return NULL;
-    visited_link_master_.swap(visited_links);
-  }
-
-  return visited_link_master_.get();
-}
-
 ExtensionService* ProfileImpl::GetExtensionService() {
   return extensions::ExtensionSystem::Get(this)->extension_service();
-}
-
-extensions::UserScriptMaster* ProfileImpl::GetUserScriptMaster() {
-  return extensions::ExtensionSystem::Get(this)->user_script_master();
-}
-
-ExtensionProcessManager* ProfileImpl::GetExtensionProcessManager() {
-  return extensions::ExtensionSystem::Get(this)->process_manager();
-}
-
-extensions::EventRouter* ProfileImpl::GetExtensionEventRouter() {
-  return extensions::ExtensionSystem::Get(this)->event_router();
 }
 
 ExtensionSpecialStoragePolicy*
@@ -609,13 +694,26 @@ void ProfileImpl::OnPrefsLoaded(bool success) {
   // TODO(mirandac): remove migration code after 6 months (crbug.com/69995).
   if (g_browser_process->local_state())
     chrome::MigrateBrowserPrefs(this, g_browser_process->local_state());
+  // TODO(ivankr): remove cleanup code eventually (crbug.com/165672).
+  chrome::MigrateUserPrefs(this);
 
-  // The last session exited cleanly if there is no pref for
-  // kSessionExitedCleanly or the value for kSessionExitedCleanly is true.
-  last_session_exited_cleanly_ =
-      prefs_->GetBoolean(prefs::kSessionExitedCleanly);
+  // |kSessionExitType| was added after |kSessionExitedCleanly|. If the pref
+  // value is empty fallback to checking for |kSessionExitedCleanly|.
+  const std::string exit_type_pref_value(
+      prefs_->GetString(prefs::kSessionExitType));
+  if (exit_type_pref_value.empty()) {
+    last_session_exit_type_ =
+        prefs_->GetBoolean(prefs::kSessionExitedCleanly) ?
+          EXIT_NORMAL : EXIT_CRASHED;
+  } else {
+    last_session_exit_type_ =
+        SessionTypePrefValueToExitType(exit_type_pref_value);
+  }
   // Mark the session as open.
-  prefs_->SetBoolean(prefs::kSessionExitedCleanly, false);
+  prefs_->SetString(prefs::kSessionExitType, kPrefExitTypeCrashed);
+  // Force this to true in case we fallback and use it.
+  // TODO(sky): remove this in a couple of releases (m28ish).
+  prefs_->SetBoolean(prefs::kSessionExitedCleanly, true);
 
   ProfileDependencyManager::GetInstance()->CreateProfileServices(this, false);
 
@@ -637,8 +735,37 @@ bool ProfileImpl::WasCreatedByVersionOrLater(const std::string& version) {
   return (profile_version.CompareTo(arg_version) >= 0);
 }
 
-policy::UserCloudPolicyManager* ProfileImpl::GetUserCloudPolicyManager() {
-  return cloud_policy_manager_.get();
+void ProfileImpl::SetExitType(ExitType exit_type) {
+  if (!prefs_)
+    return;
+  ExitType current_exit_type = SessionTypePrefValueToExitType(
+      prefs_->GetString(prefs::kSessionExitType));
+  // This may be invoked multiple times during shutdown. Only persist the value
+  // first passed in (unless it's a reset to the crash state, which happens when
+  // foregrounding the app on mobile).
+  if (exit_type == EXIT_CRASHED || current_exit_type == EXIT_CRASHED) {
+    prefs_->SetString(prefs::kSessionExitType,
+                      ExitTypeToSessionTypePrefValue(exit_type));
+
+    // NOTE: If you change what thread this writes on, be sure and update
+    // ChromeFrame::EndSession().
+    prefs_->CommitPendingWrite();
+  }
+}
+
+Profile::ExitType ProfileImpl::GetLastSessionExitType() {
+  // last_session_exited_cleanly_ is set when the preferences are loaded. Force
+  // it to be set by asking for the prefs.
+  GetPrefs();
+  return last_session_exit_type_;
+}
+
+policy::ManagedModePolicyProvider* ProfileImpl::GetManagedModePolicyProvider() {
+#if defined(ENABLE_CONFIGURATION_POLICY)
+  return managed_mode_policy_provider_.get();
+#else
+  return NULL;
+#endif
 }
 
 policy::PolicyService* ProfileImpl::GetPolicyService() {
@@ -674,28 +801,10 @@ net::URLRequestContextGetter* ProfileImpl::GetRequestContext() {
 
 net::URLRequestContextGetter* ProfileImpl::GetRequestContextForRenderProcess(
     int renderer_child_id) {
-  ExtensionService* extension_service =
-      extensions::ExtensionSystem::Get(this)->extension_service();
-  if (extension_service) {
-    const extensions::Extension* installed_app = extension_service->
-        GetInstalledAppForRenderer(renderer_child_id);
-    if (installed_app && installed_app->is_storage_isolated())
-      return GetRequestContextForStoragePartition(installed_app->id());
-  }
-
   content::RenderProcessHost* rph = content::RenderProcessHost::FromID(
       renderer_child_id);
-  if (rph && rph->IsGuest()) {
-    // For guest processes (used by the browser tag), we need to isolate the
-    // storage.
-    // TODO(nasko): Until we have proper storage partitions, create a
-    // non-persistent context using the RPH's id.
-    std::string id("guest-");
-    id.append(base::IntToString(renderer_child_id));
-    return GetRequestContextForStoragePartition(id);
-  }
 
-  return GetRequestContext();
+  return rph->GetStoragePartition()->GetURLRequestContext();
 }
 
 net::URLRequestContextGetter* ProfileImpl::GetMediaRequestContext() {
@@ -706,34 +815,19 @@ net::URLRequestContextGetter* ProfileImpl::GetMediaRequestContext() {
 net::URLRequestContextGetter*
 ProfileImpl::GetMediaRequestContextForRenderProcess(
     int renderer_child_id) {
-  ExtensionService* extension_service =
-      extensions::ExtensionSystem::Get(this)->extension_service();
-  if (extension_service) {
-    const extensions::Extension* installed_app = extension_service->
-        GetInstalledAppForRenderer(renderer_child_id);
-    if (installed_app && installed_app->is_storage_isolated())
-      return io_data_.GetIsolatedMediaRequestContextGetter(installed_app->id());
-  }
-
   content::RenderProcessHost* rph = content::RenderProcessHost::FromID(
       renderer_child_id);
-  if (rph && rph->IsGuest()) {
-    // For guest processes (used by the browser tag), we need to isolate the
-    // storage.
-    // TODO(nasko): Until we have proper storage partitions, create a
-    // non-persistent context using the RPH's id.
-    std::string id("guest-");
-    id.append(base::IntToString(renderer_child_id));
-    return io_data_.GetIsolatedMediaRequestContextGetter(id);
-  }
+  content::StoragePartition* storage_partition = rph->GetStoragePartition();
 
-  return io_data_.GetMediaRequestContextGetter();
+  return storage_partition->GetMediaURLRequestContext();
 }
 
 net::URLRequestContextGetter*
 ProfileImpl::GetMediaRequestContextForStoragePartition(
-    const std::string& partition_id) {
-  return io_data_.GetIsolatedMediaRequestContextGetter(partition_id);
+    const FilePath& partition_path,
+    bool in_memory) {
+  return io_data_.GetIsolatedMediaRequestContextGetter(partition_path,
+                                                       in_memory);
 }
 
 content::ResourceContext* ProfileImpl::GetResourceContext() {
@@ -745,8 +839,9 @@ net::URLRequestContextGetter* ProfileImpl::GetRequestContextForExtensions() {
 }
 
 net::URLRequestContextGetter* ProfileImpl::GetRequestContextForStoragePartition(
-    const std::string& partition_id) {
-  return io_data_.GetIsolatedAppRequestContextGetter(partition_id);
+    const FilePath& partition_path,
+    bool in_memory) {
+  return io_data_.GetIsolatedAppRequestContextGetter(partition_path, in_memory);
 }
 
 net::SSLConfigService* ProfileImpl::GetSSLConfigService() {
@@ -764,7 +859,7 @@ content::GeolocationPermissionContext*
     ProfileImpl::GetGeolocationPermissionContext() {
   if (!geolocation_permission_context_.get()) {
     geolocation_permission_context_ =
-        new ChromeGeolocationPermissionContext(this);
+        ChromeGeolocationPermissionContextFactory::Create(this);
   }
   return geolocation_permission_context_.get();
 }
@@ -789,13 +884,6 @@ GAIAInfoUpdateService* ProfileImpl::GetGAIAInfoUpdateService() {
 DownloadManagerDelegate* ProfileImpl::GetDownloadManagerDelegate() {
   return DownloadServiceFactory::GetForProfile(this)->
       GetDownloadManagerDelegate();
-}
-
-bool ProfileImpl::DidLastSessionExitCleanly() {
-  // last_session_exited_cleanly_ is set when the preferences are loaded. Force
-  // it to be set by asking for the prefs.
-  GetPrefs();
-  return last_session_exited_cleanly_;
 }
 
 quota::SpecialStoragePolicy* ProfileImpl::GetSpecialStoragePolicy() {
@@ -833,47 +921,10 @@ history::TopSites* ProfileImpl::GetTopSitesWithoutCreating() {
   return top_sites_;
 }
 
-void ProfileImpl::MarkAsCleanShutdown() {
-  if (prefs_.get()) {
-    // The session cleanly exited, set kSessionExitedCleanly appropriately.
-    prefs_->SetBoolean(prefs::kSessionExitedCleanly, true);
-
-    // NOTE: If you change what thread this writes on, be sure and update
-    // ChromeFrame::EndSession().
-    prefs_->CommitPendingWrite();
-  }
-}
-
 void ProfileImpl::Observe(int type,
                           const content::NotificationSource& source,
                           const content::NotificationDetails& details) {
   switch (type) {
-    case chrome::NOTIFICATION_PREF_INITIALIZATION_COMPLETED: {
-      bool* succeeded = content::Details<bool>(details).ptr();
-      PrefService *prefs = content::Source<PrefService>(source).ptr();
-      DCHECK(prefs == prefs_.get());
-      registrar_.Remove(this,
-                        chrome::NOTIFICATION_PREF_INITIALIZATION_COMPLETED,
-                        content::Source<PrefService>(prefs));
-      OnPrefsLoaded(*succeeded);
-      break;
-    }
-    case chrome::NOTIFICATION_PREF_CHANGED: {
-      std::string* pref_name_in = content::Details<std::string>(details).ptr();
-      PrefService* prefs = content::Source<PrefService>(source).ptr();
-      DCHECK(pref_name_in && prefs);
-      if (*pref_name_in == prefs::kGoogleServicesUsername) {
-        UpdateProfileUserNameCache();
-      } else if (*pref_name_in == prefs::kProfileAvatarIndex) {
-        UpdateProfileAvatarCache();
-      } else if (*pref_name_in == prefs::kProfileName) {
-        UpdateProfileNameCache();
-      } else if (*pref_name_in == prefs::kDefaultZoomLevel) {
-          HostZoomMap::GetForBrowserContext(this)->SetDefaultZoomLevel(
-              prefs->GetDouble(prefs::kDefaultZoomLevel));
-      }
-      break;
-    }
     case chrome::NOTIFICATION_BOOKMARK_MODEL_LOADED:
       // Causes lazy-load if sync is enabled.
       ProfileSyncServiceFactory::GetInstance()->GetForProfile(this);
@@ -900,6 +951,11 @@ void ProfileImpl::Observe(int type,
     default:
       NOTREACHED();
   }
+}
+
+void ProfileImpl::OnDefaultZoomLevelChanged() {
+  HostZoomMap::GetForBrowserContext(this)->SetDefaultZoomLevel(
+      pref_change_registrar_.prefs()->GetDouble(prefs::kDefaultZoomLevel));
 }
 
 #if defined(ENABLE_SESSION_SERVICE)
@@ -1018,8 +1074,9 @@ chrome_browser_net::Predictor* ProfileImpl::GetNetworkPredictor() {
   return predictor_;
 }
 
-void ProfileImpl::ClearNetworkingHistorySince(base::Time time) {
-  io_data_.ClearNetworkingHistorySince(time);
+void ProfileImpl::ClearNetworkingHistorySince(base::Time time,
+                                              const base::Closure& completion) {
+  io_data_.ClearNetworkingHistorySince(time, completion);
 }
 
 GURL ProfileImpl::GetHomePage() {

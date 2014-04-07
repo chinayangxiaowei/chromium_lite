@@ -6,13 +6,14 @@
 
 #include "ash/accelerators/accelerator_controller.h"
 #include "ash/ash_switches.h"
-#include "ash/display/multi_display_manager.h"
+#include "ash/display/display_manager.h"
 #include "ash/launcher/launcher.h"
 #include "ash/launcher/launcher_model.h"
 #include "ash/shell.h"
 #include "ash/system/brightness/brightness_control_delegate.h"
 #include "ash/system/tray/system_tray_delegate.h"
 #include "ash/test/ash_test_base.h"
+#include "ash/test/shell_test_api.h"
 #include "ash/test/test_launcher_delegate.h"
 #include "ash/volume_control_delegate.h"
 #include "ash/wm/gestures/long_press_affordance_handler.h"
@@ -20,11 +21,11 @@
 #include "base/command_line.h"
 #include "base/time.h"
 #include "base/timer.h"
-#include "ui/aura/env.h"
 #include "ui/aura/root_window.h"
 #include "ui/aura/test/event_generator.h"
 #include "ui/aura/test/test_windows.h"
 #include "ui/base/events/event.h"
+#include "ui/base/hit_test.h"
 #include "ui/base/ui_base_switches.h"
 #include "ui/gfx/screen.h"
 #include "ui/views/widget/widget_delegate.h"
@@ -134,7 +135,7 @@ class SystemGestureEventFilterTest : public AshTestBase {
   virtual ~SystemGestureEventFilterTest() {}
 
   internal::LongPressAffordanceHandler* GetLongPressAffordance() {
-    Shell::TestApi shell_test(Shell::GetInstance());
+    ShellTestApi shell_test(Shell::GetInstance());
     return shell_test.system_gesture_event_filter()->
         long_press_affordance_.get();
   }
@@ -161,9 +162,8 @@ class SystemGestureEventFilterTest : public AshTestBase {
         ::switches::kEnableBezelTouch);
     test::AshTestBase::SetUp();
     // Enable brightness key.
-    static_cast<internal::MultiDisplayManager*>(
-        aura::Env::GetInstance()->display_manager())->
-        EnableInternalDisplayForTest();
+    Shell::GetInstance()->display_manager()->
+        SetFirstDisplayAsInternalDisplayForTest();
   }
 
  private:
@@ -186,7 +186,7 @@ ui::GestureEvent* CreateGesture(ui::EventType type,
 TEST_F(SystemGestureEventFilterTest, TapOutsideRootWindow) {
   aura::RootWindow* root_window = Shell::GetPrimaryRootWindow();
 
-  Shell::TestApi shell_test(Shell::GetInstance());
+  test::ShellTestApi shell_test(Shell::GetInstance());
 
   const int kTouchId = 5;
 
@@ -203,7 +203,7 @@ TEST_F(SystemGestureEventFilterTest, TapOutsideRootWindow) {
 
   // Without the event filter, the touch shouldn't be consumed by the
   // system event handler.
-  Shell::GetInstance()->RemoveEnvEventFilter(
+  Shell::GetInstance()->RemovePreTargetHandler(
       shell_test.system_gesture_event_filter());
 
   scoped_ptr<ui::GestureEvent> event2(CreateGesture(
@@ -272,7 +272,7 @@ void MoveToDeviceControlBezelStartPosition(
 TEST_F(SystemGestureEventFilterTest, DeviceControl) {
   aura::RootWindow* root_window = Shell::GetPrimaryRootWindow();
 
-  gfx::Rect screen = gfx::Screen::GetPrimaryDisplay().bounds();
+  gfx::Rect screen = Shell::GetScreen()->GetPrimaryDisplay().bounds();
   int ypos_half = screen.height() / 2;
 
   ash::AcceleratorController* accelerator =
@@ -285,7 +285,7 @@ TEST_F(SystemGestureEventFilterTest, DeviceControl) {
 
   DummyVolumeControlDelegate* delegateVolume =
       new DummyVolumeControlDelegate();
-  ash::Shell::GetInstance()->tray_delegate()->SetVolumeControlDelegate(
+  ash::Shell::GetInstance()->system_tray_delegate()->SetVolumeControlDelegate(
       scoped_ptr<VolumeControlDelegate>(delegateVolume).Pass());
 
   const int kTouchId = 5;
@@ -376,7 +376,7 @@ TEST_F(SystemGestureEventFilterTest, DeviceControl) {
 TEST_F(SystemGestureEventFilterTest, ApplicationControl) {
   aura::RootWindow* root_window = Shell::GetPrimaryRootWindow();
 
-  gfx::Rect screen = gfx::Screen::GetPrimaryDisplay().bounds();
+  gfx::Rect screen = Shell::GetScreen()->GetPrimaryDisplay().bounds();
   int ypos_half = screen.height() / 2;
 
   aura::test::TestWindowDelegate delegate;
@@ -639,6 +639,33 @@ TEST_F(SystemGestureEventFilterTest, TwoFingerDrag) {
   gfx::Rect current_bounds = toplevel->GetWindowBoundsInScreen();
   EXPECT_NE(current_bounds.ToString(), left_tile_bounds.ToString());
   EXPECT_EQ(current_bounds.ToString(), right_tile_bounds.ToString());
+}
+
+TEST_F(SystemGestureEventFilterTest, TwoFingerDragEdge) {
+  gfx::Rect bounds(0, 0, 100, 100);
+  aura::RootWindow* root_window = Shell::GetPrimaryRootWindow();
+  views::Widget* toplevel = views::Widget::CreateWindowWithBounds(
+      new ResizableWidgetDelegate, bounds);
+  toplevel->Show();
+
+  const int kSteps = 15;
+  const int kTouchPoints = 2;
+  gfx::Point points[kTouchPoints] = {
+    gfx::Point(30, 20),  // Caption
+    gfx::Point(0, 40),   // Left edge
+  };
+
+  EXPECT_EQ(HTLEFT, toplevel->GetNativeWindow()->delegate()->
+        GetNonClientComponent(points[1]));
+
+  aura::test::EventGenerator generator(root_window,
+                                       toplevel->GetNativeWindow());
+
+  bounds = toplevel->GetNativeWindow()->bounds();
+  // Swipe down. Nothing should happen.
+  generator.GestureMultiFingerScroll(kTouchPoints, points, 15, kSteps, 0, 150);
+  EXPECT_EQ(bounds.ToString(),
+            toplevel->GetNativeWindow()->bounds().ToString());
 }
 
 }  // namespace test

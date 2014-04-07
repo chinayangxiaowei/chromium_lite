@@ -15,7 +15,6 @@
 #include "webkit/fileapi/file_system_context.h"
 #include "webkit/fileapi/file_system_file_util_proxy.h"
 #include "webkit/fileapi/file_system_mount_point_provider.h"
-#include "webkit/fileapi/file_system_operation_context.h"
 #include "webkit/fileapi/file_system_task_runners.h"
 #include "webkit/fileapi/file_system_types.h"
 #include "webkit/fileapi/file_system_url.h"
@@ -37,7 +36,7 @@ bool IsMediaFileSystemType(FileSystemType type) {
 }
 
 bool IsCrossOperationAllowed(FileSystemType src_type,
-                                                FileSystemType dest_type) {
+                             FileSystemType dest_type) {
   // If two types are supposed to run on different task runners we should not
   // allow cross FileUtil operations at this layer.
   return IsMediaFileSystemType(src_type) == IsMediaFileSystemType(dest_type);
@@ -117,6 +116,7 @@ void LocalFileSystemOperation::Copy(const FileSystemURL& src_url,
                                     const FileSystemURL& dest_url,
                                     const StatusCallback& callback) {
   DCHECK(SetPendingOperationType(kOperationCopy));
+  is_cross_operation_ = (src_url.type() != dest_url.type());
 
   base::PlatformFileError result = SetUp(src_url, &src_util_, SETUP_FOR_READ);
   if (result == base::PLATFORM_FILE_OK)
@@ -138,33 +138,22 @@ void LocalFileSystemOperation::Copy(const FileSystemURL& src_url,
       base::Bind(callback, base::PLATFORM_FILE_ERROR_FAILED));
 }
 
-void LocalFileSystemOperation::CopyInForeignFile(
-    const FilePath& src_local_disk_file_path,
-    const FileSystemURL& dest_url,
-    const StatusCallback& callback) {
-  DCHECK(SetPendingOperationType(kOperationCopyInForeignFile));
-
-  base::PlatformFileError result = SetUp(
-      dest_url, &dest_util_, SETUP_FOR_CREATE);
-  if (result != base::PLATFORM_FILE_OK) {
-    callback.Run(result);
-    delete this;
-    return;
-  }
-
-  GetUsageAndQuotaThenRunTask(
-      dest_url,
-      base::Bind(&LocalFileSystemOperation::DoCopyInForeignFile,
-                 base::Unretained(this), src_local_disk_file_path, dest_url,
-                 callback),
-      base::Bind(callback, base::PLATFORM_FILE_ERROR_FAILED));
-}
-
 void LocalFileSystemOperation::Move(const FileSystemURL& src_url,
                                     const FileSystemURL& dest_url,
                                     const StatusCallback& callback) {
   DCHECK(SetPendingOperationType(kOperationMove));
+  is_cross_operation_ = (src_url.type() != dest_url.type());
+
   scoped_ptr<LocalFileSystemOperation> deleter(this);
+
+  // Temporarily disables cross-filesystem move.
+  // TODO(kinuko,tzik,kinaba): This special handling must be removed once
+  // we support saner cross-filesystem operation.
+  // (See http://crbug.com/130055)
+  if (is_cross_operation_) {
+    callback.Run(base::PLATFORM_FILE_ERROR_INVALID_OPERATION);
+    return;
+  }
 
   base::PlatformFileError result = SetUp(src_url, &src_util_, SETUP_FOR_WRITE);
   if (result == base::PLATFORM_FILE_OK)
@@ -175,17 +164,6 @@ void LocalFileSystemOperation::Move(const FileSystemURL& src_url,
   }
   if (result != base::PLATFORM_FILE_OK) {
     callback.Run(result);
-    return;
-  }
-
-  // Temporarily disables cross-filesystem move for sandbox filesystems.
-  // TODO(kinuko,tzik,kinaba): This special handling must be removed once
-  // we support saner cross-filesystem operation.
-  // (See http://crbug.com/130055)
-  if (src_url.type() != dest_url.type() &&
-      (src_url.type() == kFileSystemTypeTemporary ||
-       src_url.type() == kFileSystemTypePersistent)) {
-    callback.Run(base::PLATFORM_FILE_ERROR_INVALID_OPERATION);
     return;
   }
 
@@ -289,39 +267,7 @@ void LocalFileSystemOperation::Write(
     const GURL& blob_url,
     int64 offset,
     const WriteCallback& callback) {
-  DCHECK(SetPendingOperationType(kOperationWrite));
-
-  base::PlatformFileError result = SetUp(url, &src_util_, SETUP_FOR_WRITE);
-  if (result != base::PLATFORM_FILE_OK) {
-    callback.Run(result, 0, false);
-    delete this;
-    return;
-  }
-
-  FileSystemMountPointProvider* provider = file_system_context()->
-      GetMountPointProvider(url.type());
-  DCHECK(provider);
-  scoped_ptr<FileStreamWriter> writer(provider->CreateFileStreamWriter(
-          url, offset, file_system_context()));
-
-  if (!writer.get()) {
-    // Write is not supported.
-    callback.Run(base::PLATFORM_FILE_ERROR_SECURITY, 0, false);
-    delete this;
-    return;
-  }
-
-  DCHECK(blob_url.is_valid());
-  file_writer_delegate_.reset(new FileWriterDelegate(
-      base::Bind(&LocalFileSystemOperation::DidWrite,
-                 weak_factory_.GetWeakPtr(), url),
-      writer.Pass()));
-
-  set_write_callback(callback);
-  scoped_ptr<net::URLRequest> blob_request(url_request_context->CreateRequest(
-      blob_url, file_writer_delegate_.get()));
-
-  file_writer_delegate_->Start(blob_request.Pass());
+  GetWriteClosure(url_request_context, url, blob_url, offset, callback).Run();
 }
 
 void LocalFileSystemOperation::Truncate(const FileSystemURL& url, int64 length,
@@ -482,12 +428,35 @@ void LocalFileSystemOperation::CreateSnapshotFile(
                  base::Owned(this), callback));
 }
 
+void LocalFileSystemOperation::CopyInForeignFile(
+    const FilePath& src_local_disk_file_path,
+    const FileSystemURL& dest_url,
+    const StatusCallback& callback) {
+  DCHECK(SetPendingOperationType(kOperationCopyInForeignFile));
+
+  base::PlatformFileError result = SetUp(
+      dest_url, &dest_util_, SETUP_FOR_CREATE);
+  if (result != base::PLATFORM_FILE_OK) {
+    callback.Run(result);
+    delete this;
+    return;
+  }
+
+  GetUsageAndQuotaThenRunTask(
+      dest_url,
+      base::Bind(&LocalFileSystemOperation::DoCopyInForeignFile,
+                 base::Unretained(this), src_local_disk_file_path, dest_url,
+                 callback),
+      base::Bind(callback, base::PLATFORM_FILE_ERROR_FAILED));
+}
+
 LocalFileSystemOperation::LocalFileSystemOperation(
     FileSystemContext* file_system_context,
     scoped_ptr<FileSystemOperationContext> operation_context)
     : operation_context_(operation_context.Pass()),
       src_util_(NULL),
       dest_util_(NULL),
+      is_cross_operation_(false),
       peer_handle_(base::kNullProcessHandle),
       pending_operation_(kOperationNone),
       weak_factory_(ALLOW_THIS_IN_INITIALIZER_LIST(this)) {
@@ -531,6 +500,54 @@ void LocalFileSystemOperation::DidGetUsageAndQuotaAndRunTask(
 
   operation_context_->set_allowed_bytes_growth(quota - usage);
   task.Run();
+}
+
+base::Closure LocalFileSystemOperation::GetWriteClosure(
+    const net::URLRequestContext* url_request_context,
+    const FileSystemURL& url,
+    const GURL& blob_url,
+    int64 offset,
+    const WriteCallback& callback) {
+  DCHECK(SetPendingOperationType(kOperationWrite));
+
+  base::PlatformFileError result = SetUp(url, &src_util_, SETUP_FOR_WRITE);
+  if (result != base::PLATFORM_FILE_OK) {
+    return base::Bind(&LocalFileSystemOperation::DidFailWrite,
+                      base::Owned(this), callback, result);
+  }
+
+  FileSystemMountPointProvider* provider = file_system_context()->
+      GetMountPointProvider(url.type());
+  DCHECK(provider);
+  scoped_ptr<FileStreamWriter> writer(provider->CreateFileStreamWriter(
+          url, offset, file_system_context()));
+
+  if (!writer.get()) {
+    // Write is not supported.
+    return base::Bind(&LocalFileSystemOperation::DidFailWrite,
+                      base::Owned(this), callback,
+                      base::PLATFORM_FILE_ERROR_SECURITY);
+  }
+
+  DCHECK(blob_url.is_valid());
+  file_writer_delegate_.reset(new FileWriterDelegate(
+      base::Bind(&LocalFileSystemOperation::DidWrite,
+                 weak_factory_.GetWeakPtr(), url),
+      writer.Pass()));
+
+  set_write_callback(callback);
+  scoped_ptr<net::URLRequest> blob_request(url_request_context->CreateRequest(
+      blob_url, file_writer_delegate_.get()));
+
+  return base::Bind(&FileWriterDelegate::Start,
+                    base::Unretained(file_writer_delegate_.get()),
+                    base::Passed(&blob_request));
+}
+
+void LocalFileSystemOperation::DidFailWrite(
+    const WriteCallback& callback,
+    base::PlatformFileError result) {
+  callback.Run(result, 0, false);
 }
 
 void LocalFileSystemOperation::DoCreateFile(
@@ -754,8 +771,14 @@ base::PlatformFileError LocalFileSystemOperation::SetUp(
     return base::PLATFORM_FILE_ERROR_SECURITY;
 
   if (mode == SETUP_FOR_READ) {
-    operation_context_->access_observers()->Notify(
-        &FileAccessObserver::OnAccess, MakeTuple(url));
+    // TODO(kinuko): This doesn't work well for cross-filesystem operation
+    // in the current architecture since the operation context (thus the
+    // observers) is configured for the destination URL while this method
+    // could be called for both src and dest URL.
+    if (!is_cross_operation_) {
+      operation_context_->access_observers()->Notify(
+          &FileAccessObserver::OnAccess, MakeTuple(url));
+    }
     return base::PLATFORM_FILE_OK;
   }
 

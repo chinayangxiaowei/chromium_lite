@@ -12,7 +12,6 @@
 
 #include "base/bind.h"
 #include "base/bind_helpers.h"
-#include "base/eintr_wrapper.h"
 #include "base/file_path.h"
 #include "base/format_macros.h"
 #include "base/linux_util.h"
@@ -20,6 +19,7 @@
 #include "base/memory/singleton.h"
 #include "base/message_loop.h"
 #include "base/path_service.h"
+#include "base/posix/eintr_wrapper.h"
 #include "base/rand_util.h"
 #include "base/string_util.h"
 #include "base/stringprintf.h"
@@ -324,6 +324,7 @@ void CrashHandlerHostLinux::OnFileCanReadWithoutBlocking(int fd) {
   // Freed in CrashDumpTask();
   BreakpadInfo* info = new BreakpadInfo;
 
+  info->fd = -1;
   info->process_type_length = process_type_.length();
   char* process_type_str = new char[info->process_type_length + 1];
   process_type_.copy(process_type_str, info->process_type_length);
@@ -380,8 +381,11 @@ void CrashHandlerHostLinux::WriteDumpFile(BreakpadInfo* info,
                          rand);
 
   if (!google_breakpad::WriteMinidump(minidump_filename.c_str(),
+                                      kMaxMinidumpFileSize,
                                       crashing_pid, crash_context,
-                                      kCrashContextSize)) {
+                                      kCrashContextSize,
+                                      google_breakpad::MappingList(),
+                                      google_breakpad::AppMemoryList())) {
     LOG(ERROR) << "Failed to write crash dump for pid " << crashing_pid;
   }
 #if defined(ADDRESS_SANITIZER)

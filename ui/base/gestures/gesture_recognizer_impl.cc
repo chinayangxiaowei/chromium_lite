@@ -17,22 +17,6 @@ namespace ui {
 
 namespace {
 
-// This is used to pop a std::queue when returning from a function.
-class ScopedPop {
- public:
-  explicit ScopedPop(std::queue<TouchEvent*>* queue) : queue_(queue) {
-  }
-
-  ~ScopedPop() {
-    delete queue_->front();
-    queue_->pop();
-  }
-
- private:
-  std::queue<TouchEvent*>* queue_;
-  DISALLOW_COPY_AND_ASSIGN(ScopedPop);
-};
-
 // CancelledTouchEvent mirrors a TouchEvent object.
 class MirroredTouchEvent : public TouchEvent {
  public:
@@ -54,30 +38,12 @@ class MirroredTouchEvent : public TouchEvent {
   DISALLOW_COPY_AND_ASSIGN(MirroredTouchEvent);
 };
 
-class QueuedTouchEvent : public MirroredTouchEvent {
- public:
-  QueuedTouchEvent(const TouchEvent* real, TouchStatus status)
-      : MirroredTouchEvent(real),
-        status_(status) {
-  }
-
-  virtual ~QueuedTouchEvent() {
-  }
-
-  TouchStatus status() const { return status_; }
-
- private:
-  TouchStatus status_;
-
-  DISALLOW_COPY_AND_ASSIGN(QueuedTouchEvent);
-};
-
 // A mirrored event, except for the type, which is always ET_TOUCH_CANCELLED.
 class CancelledTouchEvent : public MirroredTouchEvent {
  public:
   explicit CancelledTouchEvent(const TouchEvent* src)
       : MirroredTouchEvent(src) {
-    set_type(ET_TOUCH_CANCELLED);
+    SetType(ET_TOUCH_CANCELLED);
   }
 
   virtual ~CancelledTouchEvent() {}
@@ -139,7 +105,6 @@ GestureRecognizerImpl::GestureRecognizerImpl(GestureEventHelper* helper)
 
 GestureRecognizerImpl::~GestureRecognizerImpl() {
   STLDeleteValues(&consumer_sequence_);
-  STLDeleteValues(&event_queue_);
 }
 
 // Checks if this finger is already down, if so, returns the current target.
@@ -160,19 +125,20 @@ GestureConsumer* GestureRecognizerImpl::GetTargetForGestureEvent(
 GestureConsumer* GestureRecognizerImpl::GetTargetForLocation(
     const gfx::Point& location) {
   const GesturePoint* closest_point = NULL;
-  int closest_distance_squared = 0;
+  int64 closest_distance_squared = 0;
   std::map<GestureConsumer*, GestureSequence*>::iterator i;
   for (i = consumer_sequence_.begin(); i != consumer_sequence_.end(); ++i) {
     const GesturePoint* points = i->second->points();
     for (int j = 0; j < GestureSequence::kMaxGesturePoints; ++j) {
       if (!points[j].in_use())
         continue;
-      gfx::Point delta =
-          points[j].last_touch_position().Subtract(location);
-      int distance = delta.x() * delta.x() + delta.y() * delta.y();
-      if (!closest_point || distance < closest_distance_squared) {
+      gfx::Vector2d delta = points[j].last_touch_position() - location;
+      // Relative distance is all we need here, so LengthSquared() is
+      // appropriate, and cheaper than Length().
+      int64 distance_squared = delta.LengthSquared();
+      if (!closest_point || distance_squared < closest_distance_squared) {
         closest_point = &points[j];
-        closest_distance_squared = distance;
+        closest_distance_squared = distance_squared;
       }
     }
   }
@@ -208,7 +174,6 @@ void GestureRecognizerImpl::TransferEventsTo(GestureConsumer* current_consumer,
                                  &touch_id_target_);
     TransferTouchIdToConsumerMap(current_consumer, new_consumer,
                                  &touch_id_target_for_gestures_);
-    TransferConsumer(current_consumer, new_consumer, &event_queue_);
     TransferConsumer(current_consumer, new_consumer, &consumer_sequence_);
   }
 }
@@ -256,101 +221,19 @@ void GestureRecognizerImpl::SetupTargets(const TouchEvent& event,
   }
 }
 
-GestureSequence::Gestures* GestureRecognizerImpl::AdvanceTouchQueueByOne(
-    GestureConsumer* consumer,
-    ui::TouchStatus status) {
-  CHECK(event_queue_[consumer]);
-  CHECK(!event_queue_[consumer]->empty());
-
-  ScopedPop pop(event_queue_[consumer]);
-  TouchEvent* event = event_queue_[consumer]->front();
-  GestureSequence* sequence = GetGestureSequenceForConsumer(consumer);
-  if (status != ui::TOUCH_STATUS_UNKNOWN &&
-      event->type() == ui::ET_TOUCH_RELEASED) {
-    // A touch release was was processed (e.g. preventDefault()ed by a
-    // web-page), but we still need to process a touch cancel.
-    CancelledTouchEvent cancelled(event);
-    return sequence->ProcessTouchEventForGesture(cancelled,
-                                                 ui::TOUCH_STATUS_UNKNOWN);
-  }
-  return sequence->ProcessTouchEventForGesture(*event, status);
-}
-
 GestureSequence::Gestures* GestureRecognizerImpl::ProcessTouchEventForGesture(
     const TouchEvent& event,
-    ui::TouchStatus status,
+    ui::EventResult result,
     GestureConsumer* target) {
-  if (event_queue_[target] && event_queue_[target]->size() > 0) {
-    // There are some queued touch-events for this target. Processing |event|
-    // before those queued events will result in unexpected gestures. So
-    // postpone the processing of the events until the queued events have been
-    // processed.
-    event_queue_[target]->push(new QueuedTouchEvent(&event, status));
-    return NULL;
-  }
-
   SetupTargets(event, target);
-
   GestureSequence* gesture_sequence = GetGestureSequenceForConsumer(target);
-  return gesture_sequence->ProcessTouchEventForGesture(event, status);
+  return gesture_sequence->ProcessTouchEventForGesture(event, result);
 }
 
-void GestureRecognizerImpl::QueueTouchEventForGesture(GestureConsumer* consumer,
-                                                      const TouchEvent& event) {
-  if (!event_queue_[consumer])
-    event_queue_[consumer] = new std::queue<TouchEvent*>();
-  event_queue_[consumer]->push(
-      new QueuedTouchEvent(&event, TOUCH_STATUS_QUEUED));
-
-  SetupTargets(event, consumer);
-}
-
-GestureSequence::Gestures* GestureRecognizerImpl::AdvanceTouchQueue(
-    GestureConsumer* consumer,
-    bool processed) {
-  if (!event_queue_[consumer] || event_queue_[consumer]->empty()) {
-    LOG(ERROR) << "Trying to advance an empty gesture queue for " << consumer;
-    return NULL;
-  }
-
-  scoped_ptr<GestureSequence::Gestures> gestures(
-      AdvanceTouchQueueByOne(consumer, processed ? TOUCH_STATUS_CONTINUE :
-                                                   TOUCH_STATUS_UNKNOWN));
-
-  // Are there any queued touch-events that should be auto-dequeued?
-  while (!event_queue_[consumer]->empty()) {
-    QueuedTouchEvent* event =
-      static_cast<QueuedTouchEvent*>(event_queue_[consumer]->front());
-    if (event->status() == TOUCH_STATUS_QUEUED)
-      break;
-
-    scoped_ptr<GestureSequence::Gestures> current_gestures(
-        AdvanceTouchQueueByOne(consumer, event->status()));
-    if (current_gestures.get()) {
-      if (!gestures.get()) {
-        gestures.reset(current_gestures.release());
-      } else {
-        gestures->insert(gestures->end(), current_gestures->begin(),
-                                          current_gestures->end());
-        // The gestures in |current_gestures| are now owned by |gestures|. Make
-        // sure they don't get freed with |current_gestures|.
-        current_gestures->weak_clear();
-      }
-    }
-  }
-
-  return gestures.release();
-}
-
-void GestureRecognizerImpl::FlushTouchQueue(GestureConsumer* consumer) {
+void GestureRecognizerImpl::CleanupStateForConsumer(GestureConsumer* consumer) {
   if (consumer_sequence_.count(consumer)) {
     delete consumer_sequence_[consumer];
     consumer_sequence_.erase(consumer);
-  }
-
-  if (event_queue_.count(consumer)) {
-    delete event_queue_[consumer];
-    event_queue_.erase(consumer);
   }
 
   RemoveConsumerFromMap(consumer, &touch_id_target_);

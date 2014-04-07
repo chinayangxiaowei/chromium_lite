@@ -13,21 +13,26 @@
 #include "base/utf_string_conversions.h"
 #include "printing/backend/print_backend.h"
 #include "printing/backend/print_backend_consts.h"
+#include "printing/backend/printing_info_win.h"
 
 namespace {
+
 typedef HRESULT (WINAPI* PTOpenProviderProc)(PCWSTR printer_name,
                                              DWORD version,
                                              HPTPROVIDER* provider);
+
 typedef HRESULT (WINAPI* PTGetPrintCapabilitiesProc)(HPTPROVIDER provider,
                                                      IStream* print_ticket,
                                                      IStream* capabilities,
                                                      BSTR* error_message);
+
 typedef HRESULT (WINAPI* PTConvertDevModeToPrintTicketProc)(
     HPTPROVIDER provider,
     ULONG devmode_size_in_bytes,
     PDEVMODE devmode,
     EPrintTicketScope scope,
     IStream* print_ticket);
+
 typedef HRESULT (WINAPI* PTConvertPrintTicketToDevModeProc)(
     HPTPROVIDER provider,
     IStream* print_ticket,
@@ -36,6 +41,7 @@ typedef HRESULT (WINAPI* PTConvertPrintTicketToDevModeProc)(
     ULONG* devmode_byte_count,
     PDEVMODE* devmode,
     BSTR* error_message);
+
 typedef HRESULT (WINAPI* PTMergeAndValidatePrintTicketProc)(
     HPTPROVIDER provider,
     IStream* base_ticket,
@@ -43,8 +49,11 @@ typedef HRESULT (WINAPI* PTMergeAndValidatePrintTicketProc)(
     EPrintTicketScope scope,
     IStream* result_ticket,
     BSTR* error_message);
+
 typedef HRESULT (WINAPI* PTReleaseMemoryProc)(PVOID buffer);
+
 typedef HRESULT (WINAPI* PTCloseProviderProc)(HPTPROVIDER provider);
+
 typedef HRESULT (WINAPI* StartXpsPrintJobProc)(
     const LPCWSTR printer_name,
     const LPCWSTR job_name,
@@ -66,49 +75,8 @@ PTReleaseMemoryProc g_release_memory_proc = NULL;
 PTCloseProviderProc g_close_provider_proc = NULL;
 StartXpsPrintJobProc g_start_xps_print_job_proc = NULL;
 
-// Returns pointer to structure allocated in |buffer|. So pointer is only valide
-// until |buffer| is destroyed.
-const PRINTER_INFO_2* GetPrinterInfo2(HANDLE printer,
-                                      scoped_array<BYTE>* buffer) {
-  DCHECK(printer);
-  DCHECK(buffer);
-  DWORD bytes_needed = 0;
-  const DWORD kLevel = 2;
-  ::GetPrinter(printer, kLevel, NULL, 0, &bytes_needed);
-  if (!bytes_needed)
-    return NULL;
-  buffer->reset(new BYTE[bytes_needed]);
-  if (!buffer->get())
-    return NULL;
-  if (!::GetPrinter(printer, kLevel, buffer->get(), bytes_needed,
-                    &bytes_needed)) {
-    return NULL;
-  }
-  return reinterpret_cast<const PRINTER_INFO_2*>(buffer->get());
-}
-
-// Returns pointer to structure allocated in |buffer|. So pointer is only valide
-// until |buffer| is destroyed.
-const DRIVER_INFO_6* GetDriverInfo6(HANDLE printer,
-                                    scoped_array<BYTE>* buffer) {
-  DCHECK(printer);
-  DCHECK(buffer);
-  DWORD bytes_needed = 0;
-  const DWORD kLevel = 6;
-  ::GetPrinterDriver(printer, NULL, kLevel, NULL, 0, &bytes_needed);
-  if (!bytes_needed)
-    return NULL;
-  buffer->reset(new BYTE[bytes_needed]);
-  if (!buffer->get())
-    return NULL;
-  if (!::GetPrinterDriver(printer, NULL, kLevel, buffer->get(), bytes_needed,
-                          &bytes_needed)) {
-    return NULL;
-  }
-  return reinterpret_cast<const DRIVER_INFO_6*>(buffer->get());
-}
-
 }  // namespace
+
 
 namespace printing {
 
@@ -239,29 +207,29 @@ HRESULT XPSModule::CloseProvider(HPTPROVIDER provider) {
 }
 
 ScopedXPSInitializer::ScopedXPSInitializer() : initialized_(false) {
-  if (XPSModule::Init()) {
-    // Calls to XPS APIs typically require the XPS provider to be opened with
-    // PTOpenProvider. PTOpenProvider calls CoInitializeEx with
-    // COINIT_MULTITHREADED. We have seen certain buggy HP printer driver DLLs
-    // that call CoInitializeEx with COINIT_APARTMENTTHREADED in the context of
-    // PTGetPrintCapabilities. This call fails but the printer driver calls
-    // CoUninitialize anyway. This results in the apartment being torn down too
-    // early and the msxml DLL being unloaded which in turn causes code in
-    // unidrvui.dll to have a dangling pointer to an XML document which causes a
-    // crash. To protect ourselves from such drivers we make sure we always have
-    // an extra CoInitialize (calls to CoInitialize/CoUninitialize are
-    // refcounted).
-    HRESULT coinit_ret = CoInitializeEx(NULL, COINIT_MULTITHREADED);
-    // If this succeeded we are done because the PTOpenProvider call will
-    // provide the extra refcount on the apartment. If it failed because someone
-    // already called CoInitializeEx with COINIT_APARTMENTTHREADED, we try
-    // the other model to provide the additional refcount (since we don't know
-    // which model buggy printer drivers will use).
-    if (coinit_ret == RPC_E_CHANGED_MODE)
-      coinit_ret = CoInitializeEx(NULL, COINIT_APARTMENTTHREADED);
-    DCHECK(SUCCEEDED(coinit_ret));
-    initialized_ = true;
-  }
+  if (!XPSModule::Init())
+    return;
+  // Calls to XPS APIs typically require the XPS provider to be opened with
+  // PTOpenProvider. PTOpenProvider calls CoInitializeEx with
+  // COINIT_MULTITHREADED. We have seen certain buggy HP printer driver DLLs
+  // that call CoInitializeEx with COINIT_APARTMENTTHREADED in the context of
+  // PTGetPrintCapabilities. This call fails but the printer driver calls
+  // CoUninitialize anyway. This results in the apartment being torn down too
+  // early and the msxml DLL being unloaded which in turn causes code in
+  // unidrvui.dll to have a dangling pointer to an XML document which causes a
+  // crash. To protect ourselves from such drivers we make sure we always have
+  // an extra CoInitialize (calls to CoInitialize/CoUninitialize are
+  // refcounted).
+  HRESULT hr = CoInitializeEx(NULL, COINIT_MULTITHREADED);
+  // If this succeeded we are done because the PTOpenProvider call will provide
+  // the extra refcount on the apartment. If it failed because someone already
+  // called CoInitializeEx with COINIT_APARTMENTTHREADED, we try the other model
+  // to provide the additional refcount (since we don't know which model buggy
+  // printer drivers will use).
+  if (!SUCCEEDED(hr))
+    hr = CoInitializeEx(NULL, COINIT_APARTMENTTHREADED);
+  DCHECK(SUCCEEDED(hr));
+  initialized_ = true;
 }
 
 ScopedXPSInitializer::~ScopedXPSInitializer() {
@@ -317,22 +285,20 @@ bool InitBasicPrinterInfo(HANDLE printer, PrinterBasicInfo* printer_info) {
   if (!printer)
     return false;
 
-  scoped_array<BYTE> printer_info_buffer;
-  const PRINTER_INFO_2* info2 = GetPrinterInfo2(printer, &printer_info_buffer);
-
-  if (!info2)
+  PrinterInfo2 info_2;
+  if (!info_2.Init(printer))
     return false;
-  printer_info->printer_name = WideToUTF8(info2->pPrinterName);
-  if (info2->pComment)
-    printer_info->printer_description =
-        WideToUTF8(info2->pComment);
-  if (info2->pLocation)
+
+  printer_info->printer_name = WideToUTF8(info_2.get()->pPrinterName);
+  if (info_2.get()->pComment)
+    printer_info->printer_description = WideToUTF8(info_2.get()->pComment);
+  if (info_2.get()->pLocation)
     printer_info->options[kLocationTagName] =
-        WideToUTF8(info2->pLocation);
-  if (info2->pDriverName)
+        WideToUTF8(info_2.get()->pLocation);
+  if (info_2.get()->pDriverName)
     printer_info->options[kDriverNameTagName] =
-        WideToUTF8(info2->pDriverName);
-  printer_info->printer_status = info2->Status;
+        WideToUTF8(info_2.get()->pDriverName);
+  printer_info->printer_status = info_2.get()->Status;
 
   std::string driver_info = GetDriverInfo(printer);
   if (!driver_info.empty())
@@ -347,19 +313,18 @@ std::string GetDriverInfo(HANDLE printer) {
   if (!printer)
     return driver_info;
 
-  scoped_array<BYTE> driver_info_buffer;
-  const DRIVER_INFO_6* driver = GetDriverInfo6(printer, &driver_info_buffer);
-  if (!driver)
+  DriverInfo6 info_6;
+  if (!info_6.Init(printer))
     return driver_info;
 
   std::string info[4];
-  if (driver->pName)
-    info[0] = WideToUTF8(driver->pName);
+  if (info_6.get()->pName)
+    info[0] = WideToUTF8(info_6.get()->pName);
 
-  if (driver->pDriverPath) {
+  if (info_6.get()->pDriverPath) {
     scoped_ptr<FileVersionInfo> version_info(
         FileVersionInfo::CreateFileVersionInfo(
-            FilePath(driver->pDriverPath)));
+            FilePath(info_6.get()->pDriverPath)));
     if (version_info.get()) {
       info[1] = WideToUTF8(version_info->file_version());
       info[2] = WideToUTF8(version_info->product_name());

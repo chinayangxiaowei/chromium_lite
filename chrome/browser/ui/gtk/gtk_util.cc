@@ -29,6 +29,7 @@
 #include "chrome/browser/ui/gtk/browser_window_gtk.h"
 #include "chrome/browser/ui/gtk/gtk_theme_service.h"
 #include "googleurl/src/gurl.h"
+#include "grit/chrome_unscaled_resources.h"
 #include "grit/theme_resources.h"
 #include "ui/base/gtk/gtk_compat.h"
 #include "ui/base/gtk/gtk_hig_constants.h"
@@ -484,8 +485,7 @@ void ConvertWidgetPointToScreen(GtkWidget* widget, gfx::Point* p) {
   DCHECK(widget);
   DCHECK(p);
 
-  gfx::Point position = ui::GetWidgetScreenPosition(widget);
-  p->SetPoint(p->x() + position.x(), p->y() + position.y());
+  *p += ui::GetWidgetScreenOffset(widget);
 }
 
 GtkWidget* CenterWidgetInHBox(GtkWidget* hbox, GtkWidget* widget,
@@ -728,9 +728,9 @@ void DrawThemedToolbarBackground(GtkWidget* widget,
   // The toolbar is supposed to blend in with the active tab, so we have to pass
   // coordinates for the IDR_THEME_TOOLBAR bitmap relative to the top of the
   // tab strip.
-  const gfx::Image* background =
+  const gfx::Image background =
       theme_service->GetImageNamed(IDR_THEME_TOOLBAR);
-  background->ToCairo()->SetSource(cr, widget,
+  background.ToCairo()->SetSource(cr, widget,
                                    tabstrip_origin.x(), tabstrip_origin.y());
   // We tile the toolbar background in both directions.
   cairo_pattern_set_extend(cairo_get_source(cr), CAIRO_EXTEND_REPEAT);

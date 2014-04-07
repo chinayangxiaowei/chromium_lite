@@ -20,6 +20,12 @@ var gFailures = [];
 var gReturnCallback = sendToPyAuto;
 
 /**
+ * The callback to send debug messages to. By default we assume console.log.
+ * @private
+ */
+var gDebugCallback = consoleLog_;
+
+/**
  * Returns the list of errors and clears the list.
  *
  * @return {string} Returns either the string ok-no-errors or a text message
@@ -37,13 +43,23 @@ function getAnyTestFailures() {
 }
 
 /**
- * Replaces the test message callback. Test messages are messages send by the
+ * Replaces the test message callback. Test messages are messages sent by the
  * returnToTest function.
  *
  * @param callback A function that takes a single string (the message).
  */
 function replaceReturnCallback(callback) {
   gReturnCallback = callback;
+}
+
+/**
+ * Replaces the debug message callback. Debug messages are messages sent by the
+ * debug function.
+ *
+ * @param callback A function that takes a single string (the message).
+ */
+function replaceDebugCallback(callback) {
+  gDebugCallback = callback;
 }
 
 // Helper / error handling functions.
@@ -57,7 +73,7 @@ function debug(txt) {
   else
     prefix = gOurClientName + ' says: ';
 
-  console.log(prefix + txt)
+  gDebugCallback(prefix + txt);
 }
 
 /**
@@ -95,10 +111,21 @@ function addTestFailure(reason) {
 }
 
 /**
- * Follows the same contract as addTestFailure but also throws an exception to
- * stop the control flow locally.
+ * Follows the same contract as addTestFailure. This is a convenience function
+ * that should be invoked like this since you probably want to break the flow of
+ * the test on failure and yet point to the right line in a JavaScript debugger:
+ *
+ * throw failTest('my reason');
+ *
+ * @return {!Error}
  */
 function failTest(reason) {
   addTestFailure(reason);
-  throw new Error(reason);
+  return new Error(reason);
+}
+
+/** @private */
+function consoleLog_(message) {
+  // It is not legal to treat console.log as a first-class object, so wrap it.
+  console.log(message);
 }

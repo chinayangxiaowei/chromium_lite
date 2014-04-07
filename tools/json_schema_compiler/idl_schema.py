@@ -56,18 +56,19 @@ def ProcessComment(comment):
       }
     )
   '''
-
-  # Escape double quotes.
-  comment = comment.replace('"', '\\"');
-
   # Find all the parameter comments of the form '|name|: comment'.
-  parameter_starts = list(re.finditer(r'\n *\|([^|]*)\| *: *', comment))
+  parameter_starts = list(re.finditer(r' *\|([^|]*)\| *: *', comment))
 
   # Get the parent comment (everything before the first parameter comment.
   first_parameter_location = (parameter_starts[0].start()
                               if parameter_starts else len(comment))
   parent_comment = comment[:first_parameter_location]
-  parent_comment = parent_comment.replace('\n', '').strip()
+
+  # We replace \n\n with <br/><br/> here and below, because the documentation
+  # needs to know where the newlines should be, and this is easier than
+  # escaping \n.
+  parent_comment = (parent_comment.strip().replace('\n\n', '<br/><br/>')
+                                          .replace('\n', ''))
 
   params = {}
   for (cur_param, next_param) in itertools.izip_longest(parameter_starts,
@@ -78,8 +79,9 @@ def ProcessComment(comment):
     # beginning of the next parameter's introduction.
     param_comment_start = cur_param.end()
     param_comment_end = next_param.start() if next_param else len(comment)
-    params[param_name] = comment[param_comment_start:param_comment_end
-                                 ].replace('\n', '').strip()
+    params[param_name] = (comment[param_comment_start:param_comment_end
+                                  ].strip().replace('\n\n', '<br/><br/>')
+                                           .replace('\n', ''))
   return (parent_comment, params)
 
 class Callspec(object):
@@ -227,10 +229,16 @@ class Typeref(object):
       properties['type'] = 'function'
     else:
       if self.typeref in callbacks:
+        # Do not override name and description if they are already specified.
+        name = properties.get('name', None)
+        description = properties.get('description', None)
         properties.update(callbacks[self.typeref])
+        if description is not None:
+          properties['description'] = description
+        if name is not None:
+          properties['name'] = name
       else:
         properties['$ref'] = self.typeref
-
     return result
 
 

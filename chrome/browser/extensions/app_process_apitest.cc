@@ -5,15 +5,16 @@
 #include "chrome/browser/extensions/extension_apitest.h"
 #include "chrome/browser/extensions/extension_host.h"
 #include "chrome/browser/extensions/extension_service.h"
+#include "chrome/browser/extensions/extension_system.h"
 #include "chrome/browser/extensions/process_map.h"
 #include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/ui/blocked_content/blocked_content_tab_helper.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_commands.h"
 #include "chrome/browser/ui/browser_finder.h"
 #include "chrome/browser/ui/browser_list.h"
 #include "chrome/browser/ui/browser_tabstrip.h"
 #include "chrome/browser/ui/browser_window.h"
-#include "chrome/browser/ui/tab_contents/tab_contents.h"
 #include "chrome/common/chrome_notification_types.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/common/extensions/extension.h"
@@ -62,8 +63,8 @@ class AppApiTest : public ExtensionApiTest {
   void TestAppInstancesHelper(std::string app_name) {
     LOG(INFO) << "Start of test.";
 
-    extensions::ProcessMap* process_map =
-        browser()->profile()->GetExtensionService()->process_map();
+    extensions::ProcessMap* process_map = extensions::ExtensionSystem::Get(
+        browser()->profile())->extension_service()->process_map();
 
     host_resolver()->AddRule("*", "127.0.0.1");
     ASSERT_TRUE(test_server()->Start());
@@ -110,11 +111,21 @@ class AppApiTest : public ExtensionApiTest {
 
     // Opening tabs with window.open should keep the page in the opener's
     // process.
-    ASSERT_EQ(1u, browser::GetBrowserCount(browser()->profile()));
+    ASSERT_EQ(1u, chrome::GetBrowserCount(browser()->profile()));
     OpenWindow(tab1, base_url.Resolve("path1/empty.html"), true, NULL);
     LOG(INFO) << "WindowOpenHelper 1.";
     OpenWindow(tab2, base_url.Resolve("path2/empty.html"), true, NULL);
     LOG(INFO) << "End of test.";
+  }
+};
+
+// Omits the disable-popup-blocking flag so we can cover that case.
+class BlockedAppApiTest : public AppApiTest {
+ protected:
+  void SetUpCommandLine(CommandLine* command_line) {
+    ExtensionApiTest::SetUpCommandLine(command_line);
+    CommandLine::ForCurrentProcess()->AppendSwitch(
+        switches::kAllowHTTPBackgroundPage);
   }
 };
 
@@ -123,8 +134,8 @@ class AppApiTest : public ExtensionApiTest {
 IN_PROC_BROWSER_TEST_F(AppApiTest, AppProcess) {
   LOG(INFO) << "Start of test.";
 
-  extensions::ProcessMap* process_map =
-      browser()->profile()->GetExtensionService()->process_map();
+  extensions::ProcessMap* process_map = extensions::ExtensionSystem::Get(
+      browser()->profile())->extension_service()->process_map();
 
   host_resolver()->AddRule("*", "127.0.0.1");
   ASSERT_TRUE(test_server()->Start());
@@ -180,7 +191,7 @@ IN_PROC_BROWSER_TEST_F(AppApiTest, AppProcess) {
             chrome::GetWebContentsAt(browser(), 3)->GetRenderProcessHost());
 
   // Now let's do the same using window.open. The same should happen.
-  ASSERT_EQ(1u, browser::GetBrowserCount(browser()->profile()));
+  ASSERT_EQ(1u, chrome::GetBrowserCount(browser()->profile()));
   OpenWindow(tab, base_url.Resolve("path1/empty.html"), true, NULL);
   LOG(INFO) << "WindowOpenHelper 1.";
   OpenWindow(tab, base_url.Resolve("path2/empty.html"), true, NULL);
@@ -231,14 +242,22 @@ IN_PROC_BROWSER_TEST_F(AppApiTest, AppProcessInstances) {
 // Test that hosted apps with the background permission but that set
 // allow_js_access to false also use a process per app instance model.
 // Separate instances should be in separate processes.
-IN_PROC_BROWSER_TEST_F(AppApiTest, AppProcessBackgroundInstances) {
+// Flaky on XP: http://crbug.com/165834
+#if defined(OS_WIN)
+#define MAYBE_AppProcessBackgroundInstances \
+    DISABLED_AppProcessBackgroundInstances
+#else
+#define MAYBE_AppProcessBackgroundInstances AppProcessBackgroundInstances
+#endif
+IN_PROC_BROWSER_TEST_F(AppApiTest, MAYBE_AppProcessBackgroundInstances) {
   TestAppInstancesHelper("app_process_background_instances");
 }
 
 // Tests that bookmark apps do not use the app process model and are treated
 // like normal web pages instead.  http://crbug.com/104636.
 IN_PROC_BROWSER_TEST_F(AppApiTest, BookmarkAppGetsNormalProcess) {
-  ExtensionService* service = browser()->profile()->GetExtensionService();
+  ExtensionService* service = extensions::ExtensionSystem::Get(
+      browser()->profile())->extension_service();
   extensions::ProcessMap* process_map = service->process_map();
 
   host_resolver()->AddRule("*", "127.0.0.1");
@@ -252,9 +271,10 @@ IN_PROC_BROWSER_TEST_F(AppApiTest, BookmarkAppGetsNormalProcess) {
       Extension::LOAD,
       Extension::FROM_BOOKMARK,
       &error));
-  service->OnExtensionInstalled(extension, false,
+  service->OnExtensionInstalled(extension,
                                 syncer::StringOrdinal::CreateInitialOrdinal(),
-                                false /* no requirement errors */);
+                                false /* no requirement errors */,
+                                false /* don't wait for idle */);
   ASSERT_TRUE(extension.get());
   ASSERT_TRUE(extension->from_bookmark());
 
@@ -287,7 +307,7 @@ IN_PROC_BROWSER_TEST_F(AppApiTest, BookmarkAppGetsNormalProcess) {
             chrome::GetWebContentsAt(browser(), 2)->GetRenderProcessHost());
 
   // Now let's do the same using window.open. The same should happen.
-  ASSERT_EQ(1u, browser::GetBrowserCount(browser()->profile()));
+  ASSERT_EQ(1u, chrome::GetBrowserCount(browser()->profile()));
   OpenWindow(tab, base_url.Resolve("path1/empty.html"), true, NULL);
   OpenWindow(tab, base_url.Resolve("path2/empty.html"), true, NULL);
 
@@ -356,8 +376,8 @@ IN_PROC_BROWSER_TEST_F(AppApiTest, AppProcessRedirectBack) {
 #define MAYBE_ReloadIntoAppProcess ReloadIntoAppProcess
 #endif
 IN_PROC_BROWSER_TEST_F(AppApiTest, MAYBE_ReloadIntoAppProcess) {
-  extensions::ProcessMap* process_map =
-      browser()->profile()->GetExtensionService()->process_map();
+  extensions::ProcessMap* process_map = extensions::ExtensionSystem::Get(
+      browser()->profile())->extension_service()->process_map();
 
   host_resolver()->AddRule("*", "127.0.0.1");
   ASSERT_TRUE(test_server()->Start());
@@ -439,8 +459,8 @@ IN_PROC_BROWSER_TEST_F(AppApiTest, MAYBE_ReloadIntoAppProcess) {
 // empty.html) results in the new window being in an app process. See
 // http://crbug.com/89272 for more details.
 IN_PROC_BROWSER_TEST_F(AppApiTest, OpenAppFromIframe) {
-  extensions::ProcessMap* process_map =
-      browser()->profile()->GetExtensionService()->process_map();
+  extensions::ProcessMap* process_map = extensions::ExtensionSystem::Get(
+      browser()->profile())->extension_service()->process_map();
 
   host_resolver()->AddRule("*", "127.0.0.1");
   ASSERT_TRUE(test_server()->Start());
@@ -453,8 +473,8 @@ IN_PROC_BROWSER_TEST_F(AppApiTest, OpenAppFromIframe) {
   ASSERT_TRUE(app);
 
   content::WindowedNotificationObserver popup_observer(
-        content::NOTIFICATION_RENDER_VIEW_HOST_CREATED,
-        content::NotificationService::AllSources());
+      content::NOTIFICATION_RENDER_VIEW_HOST_CREATED,
+      content::NotificationService::AllSources());
   ui_test_utils::NavigateToURL(browser(),
                                base_url.Resolve("path3/container.html"));
   EXPECT_FALSE(process_map->Contains(
@@ -465,6 +485,39 @@ IN_PROC_BROWSER_TEST_F(AppApiTest, OpenAppFromIframe) {
   RenderViewHost* popup_host =
       content::Source<RenderViewHost>(popup_observer.source()).ptr();
   EXPECT_TRUE(process_map->Contains(popup_host->GetProcess()->GetID()));
+}
+
+// Similar to the previous test, but ensure that popup blocking bypass
+// isn't granted to the iframe.  See crbug.com/117446.
+#if defined(OS_CHROMEOS)
+// http://crbug.com/153513
+#define MAYBE_OpenAppFromIframe DISABLED_OpenAppFromIframe
+#else
+#define MAYBE_OpenAppFromIframe OpenAppFromIframe
+#endif
+IN_PROC_BROWSER_TEST_F(BlockedAppApiTest, MAYBE_OpenAppFromIframe) {
+  host_resolver()->AddRule("*", "127.0.0.1");
+  ASSERT_TRUE(test_server()->Start());
+
+  // Load app and start URL (not in the app).
+  const Extension* app =
+      LoadExtension(test_data_dir_.AppendASCII("app_process"));
+  ASSERT_TRUE(app);
+
+  content::WindowedNotificationObserver blocker_observer(
+      chrome::NOTIFICATION_CONTENT_BLOCKED_STATE_CHANGED,
+      content::NotificationService::AllSources());
+  ui_test_utils::NavigateToURL(
+      browser(), GetTestBaseURL("app_process").Resolve("path3/container.html"));
+
+  blocker_observer.Wait();
+
+  WebContents* tab = chrome::GetActiveWebContents(browser());
+  BlockedContentTabHelper* blocked_content_tab_helper =
+      BlockedContentTabHelper::FromWebContents(tab);
+  std::vector<WebContents*> blocked_contents;
+  blocked_content_tab_helper->GetBlockedContents(&blocked_contents);
+  EXPECT_EQ(blocked_contents.size(), 1u);
 }
 
 // Tests that if an extension launches an app via chrome.tabs.create with an URL
@@ -517,8 +570,8 @@ IN_PROC_BROWSER_TEST_F(AppApiTest, OpenAppFromExtension) {
 // missing special permissions and should be scriptable from the iframe.
 // See http://crbug.com/92669 for more details.
 IN_PROC_BROWSER_TEST_F(AppApiTest, OpenWebPopupFromWebIframe) {
-  extensions::ProcessMap* process_map =
-      browser()->profile()->GetExtensionService()->process_map();
+  extensions::ProcessMap* process_map = extensions::ExtensionSystem::Get(
+      browser()->profile())->extension_service()->process_map();
 
   host_resolver()->AddRule("*", "127.0.0.1");
   ASSERT_TRUE(test_server()->Start());
@@ -555,8 +608,8 @@ IN_PROC_BROWSER_TEST_F(AppApiTest, OpenWebPopupFromWebIframe) {
 #define MAYBE_ReloadAppAfterCrash ReloadAppAfterCrash
 #endif
 IN_PROC_BROWSER_TEST_F(AppApiTest, MAYBE_ReloadAppAfterCrash) {
-  extensions::ProcessMap* process_map =
-      browser()->profile()->GetExtensionService()->process_map();
+  extensions::ProcessMap* process_map = extensions::ExtensionSystem::Get(
+      browser()->profile())->extension_service()->process_map();
 
   host_resolver()->AddRule("*", "127.0.0.1");
   ASSERT_TRUE(test_server()->Start());

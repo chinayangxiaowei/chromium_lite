@@ -6,6 +6,7 @@
 
 #include "base/bind.h"
 #include "base/message_loop.h"
+#include "chromeos/cryptohome/async_method_caller.h"
 #include "chromeos/dbus/blocking_method_caller.h"
 #include "dbus/bus.h"
 #include "dbus/message.h"
@@ -125,14 +126,14 @@ class CryptohomeClientImpl : public CryptohomeClient {
   // CryptohomeClient override.
   virtual void AsyncMount(const std::string& username,
                           const std::string& key,
-                          const bool create_if_missing,
+                          int flags,
                           const AsyncMethodCallback& callback) OVERRIDE {
     INITIALIZE_METHOD_CALL(method_call, cryptohome::kCryptohomeAsyncMount);
     dbus::MessageWriter writer(&method_call);
     writer.AppendString(username);
     writer.AppendString(key);
-    writer.AppendBool(create_if_missing);
-    writer.AppendBool(false);  // deprecated_replace_tracked_subdirectories
+    writer.AppendBool(flags & cryptohome::CREATE_IF_MISSING);
+    writer.AppendBool(flags & cryptohome::ENSURE_EPHEMERAL);
     // deprecated_tracked_subdirectories
     writer.AppendArrayOfStrings(std::vector<std::string>());
     proxy_->CallMethod(&method_call, dbus::ObjectProxy::TIMEOUT_USE_DEFAULT,
@@ -289,8 +290,8 @@ class CryptohomeClientImpl : public CryptohomeClient {
   }
 
   // CryptohomeClient override.
-  virtual bool InstallAttributesIsFirstInstall(bool* is_first_install) OVERRIDE
-  {
+  virtual bool InstallAttributesIsFirstInstall(
+      bool* is_first_install) OVERRIDE {
     INITIALIZE_METHOD_CALL(
         method_call, cryptohome::kCryptohomeInstallAttributesIsFirstInstall);
     return CallBoolMethodAndBlock(&method_call, is_first_install);
@@ -418,8 +419,8 @@ class CryptohomeClientImpl : public CryptohomeClient {
   // Handles the result of signal connection setup.
   void OnSignalConnected(const std::string& interface,
                          const std::string& signal,
-                         bool successed) {
-    LOG_IF(ERROR, !successed) << "Connect to " << interface << " " <<
+                         bool succeeded) {
+    LOG_IF(ERROR, !succeeded) << "Connect to " << interface << " " <<
         signal << " failed.";
   }
 
@@ -501,7 +502,7 @@ class CryptohomeClientStubImpl : public CryptohomeClient {
   // CryptohomeClient override.
   virtual void AsyncMount(const std::string& username,
                           const std::string& key,
-                          const bool create_if_missing,
+                          int flags,
                           const AsyncMethodCallback& callback) OVERRIDE {
     ReturnAsyncMethodResult(callback);
   }
@@ -620,8 +621,8 @@ class CryptohomeClientStubImpl : public CryptohomeClient {
   }
 
   // CryptohomeClient override.
-  virtual bool InstallAttributesIsFirstInstall(bool* is_first_install) OVERRIDE
-  {
+  virtual bool InstallAttributesIsFirstInstall(
+      bool* is_first_install) OVERRIDE {
     *is_first_install = !locked_;
     return true;
   }
@@ -660,7 +661,7 @@ class CryptohomeClientStubImpl : public CryptohomeClient {
   DISALLOW_COPY_AND_ASSIGN(CryptohomeClientStubImpl);
 };
 
-} // namespace
+}  // namespace
 
 ////////////////////////////////////////////////////////////////////////////////
 // CryptohomeClient

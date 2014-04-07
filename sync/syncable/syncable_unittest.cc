@@ -4,19 +4,21 @@
 
 #include <string>
 
+#include "base/basictypes.h"
 #include "base/compiler_specific.h"
 #include "base/file_path.h"
 #include "base/file_util.h"
+#include "base/files/scoped_temp_dir.h"
 #include "base/location.h"
 #include "base/logging.h"
 #include "base/memory/scoped_ptr.h"
 #include "base/message_loop.h"
-#include "base/scoped_temp_dir.h"
 #include "base/stringprintf.h"
 #include "base/synchronization/condition_variable.h"
 #include "base/test/values_test_util.h"
 #include "base/threading/platform_thread.h"
 #include "base/values.h"
+#include "sync/internal_api/public/base/node_ordinal.h"
 #include "sync/protocol/bookmark_specifics.pb.h"
 #include "sync/syncable/directory_backing_store.h"
 #include "sync/syncable/directory_change_delegate.h"
@@ -48,7 +50,7 @@ class SyncableKernelTest : public testing::Test {};
 
 TEST_F(SyncableKernelTest, ToValue) {
   EntryKernel kernel;
-  scoped_ptr<DictionaryValue> value(kernel.ToValue());
+  scoped_ptr<DictionaryValue> value(kernel.ToValue(NULL));
   if (value.get()) {
     // Not much to check without repeating the ToValue() code.
     EXPECT_TRUE(value->HasKey("isDirty"));
@@ -96,7 +98,7 @@ class SyncableGeneralTest : public testing::Test {
   }
  protected:
   MessageLoop message_loop_;
-  ScopedTempDir temp_dir_;
+  base::ScopedTempDir temp_dir_;
   NullDirectoryChangeDelegate delegate_;
   FakeEncryptor encryptor_;
   TestUnrecoverableErrorHandler handler_;
@@ -390,7 +392,7 @@ TEST_F(SyncableGeneralTest, ToValue) {
     Entry e(&rtrans, GET_BY_ID, id);
     EXPECT_FALSE(e.good());  // Hasn't been written yet.
 
-    scoped_ptr<DictionaryValue> value(e.ToValue());
+    scoped_ptr<DictionaryValue> value(e.ToValue(NULL));
     ExpectDictBooleanValue(false, *value, "good");
     EXPECT_EQ(1u, value->size());
   }
@@ -403,7 +405,7 @@ TEST_F(SyncableGeneralTest, ToValue) {
     me.Put(ID, id);
     me.Put(BASE_VERSION, 1);
 
-    scoped_ptr<DictionaryValue> value(me.ToValue());
+    scoped_ptr<DictionaryValue> value(me.ToValue(NULL));
     ExpectDictBooleanValue(true, *value, "good");
     EXPECT_TRUE(value->HasKey("kernel"));
     ExpectDictStringValue("Unspecified", *value, "modelType");
@@ -458,9 +460,9 @@ class SyncableDirectoryTest : public testing::Test {
       ReadTransaction trans(FROM_HERE, dir_.get());
       MetahandleSet all_set;
       dir_->GetAllMetaHandles(&trans, &all_set);
-      EXPECT_EQ(3U, all_set.size());
+      EXPECT_EQ(4U, all_set.size());
       if (before_reload)
-        EXPECT_EQ(4U, dir_->kernel_->metahandles_to_purge->size());
+        EXPECT_EQ(6U, dir_->kernel_->metahandles_to_purge->size());
       for (MetahandleSet::iterator iter = all_set.begin();
            iter != all_set.end(); ++iter) {
         Entry e(&trans, GET_BY_HANDLE, *iter);
@@ -479,10 +481,10 @@ class SyncableDirectoryTest : public testing::Test {
 
     for (ModelTypeSet::Iterator it = types_to_purge.First();
          it.Good(); it.Inc()) {
-      EXPECT_FALSE(dir_->initial_sync_ended_for_type(it.Get()));
+      EXPECT_FALSE(dir_->InitialSyncEndedForType(it.Get()));
     }
     EXPECT_FALSE(types_to_purge.Has(BOOKMARKS));
-    EXPECT_TRUE(dir_->initial_sync_ended_for_type(BOOKMARKS));
+    EXPECT_TRUE(dir_->InitialSyncEndedForType(BOOKMARKS));
   }
 
   FakeEncryptor encryptor_;
@@ -1366,6 +1368,39 @@ TEST_F(SyncableDirectoryTest, OldClientLeftUnsyncedDeletedLocalItem) {
   }
 }
 
+TEST_F(SyncableDirectoryTest, OrdinalWithNullSurvivesSaveAndReload) {
+  TestIdFactory id_factory;
+  Id null_child_id;
+  const char null_cstr[] = "\0null\0test";
+  std::string null_str(null_cstr, arraysize(null_cstr) - 1);
+  NodeOrdinal null_ord = NodeOrdinal(null_str);
+
+  {
+    WriteTransaction trans(FROM_HERE, UNITTEST, dir_.get());
+
+    MutableEntry parent(&trans, CREATE, id_factory.root(), "parent");
+    parent.Put(IS_DIR, true);
+    parent.Put(IS_UNSYNCED, true);
+
+    MutableEntry child(&trans, CREATE, parent.Get(ID), "child");
+    child.Put(IS_UNSYNCED, true);
+    child.Put(SERVER_ORDINAL_IN_PARENT, null_ord);
+
+    null_child_id = child.Get(ID);
+  }
+
+  EXPECT_EQ(OPENED, SimulateSaveAndReloadDir());
+
+  {
+    ReadTransaction trans(FROM_HERE, dir_.get());
+
+    Entry null_ordinal_child(&trans, GET_BY_ID, null_child_id);
+    EXPECT_TRUE(
+        null_ord.Equals(null_ordinal_child.Get(SERVER_ORDINAL_IN_PARENT)));
+  }
+
+}
+
 // An OnDirectoryBackingStore that can be set to always fail SaveChanges.
 class TestBackingStore : public OnDiskDirectoryBackingStore {
  public:
@@ -1448,7 +1483,7 @@ TestDirectory::~TestDirectory() { }
 TEST(OnDiskSyncableDirectory, FailInitialWrite) {
   FakeEncryptor encryptor;
   TestUnrecoverableErrorHandler handler;
-  ScopedTempDir temp_dir;
+  base::ScopedTempDir temp_dir;
   ASSERT_TRUE(temp_dir.CreateUniqueTempDir());
   FilePath file_path = temp_dir.path().Append(
       FILE_PATH_LITERAL("Test.sqlite3"));
@@ -1504,7 +1539,7 @@ class OnDiskSyncableDirectoryTest : public SyncableDirectoryTest {
   }
 
   TestDirectory *test_directory_;  // mirrors scoped_ptr<Directory> dir_
-  ScopedTempDir temp_dir_;
+  base::ScopedTempDir temp_dir_;
   FilePath file_path_;
 };
 
@@ -1515,9 +1550,6 @@ TEST_F(OnDiskSyncableDirectoryTest, TestPurgeEntriesWithTypeIn) {
   AddDefaultFieldValue(BOOKMARKS, &bookmark_specs);
   AddDefaultFieldValue(PREFERENCES, &preference_specs);
   AddDefaultFieldValue(AUTOFILL, &autofill_specs);
-  dir_->set_initial_sync_ended_for_type(BOOKMARKS, true);
-  dir_->set_initial_sync_ended_for_type(PREFERENCES, true);
-  dir_->set_initial_sync_ended_for_type(AUTOFILL, true);
 
   ModelTypeSet types_to_purge(PREFERENCES, AUTOFILL);
 
@@ -1525,6 +1557,15 @@ TEST_F(OnDiskSyncableDirectoryTest, TestPurgeEntriesWithTypeIn) {
   // Create some items for each type.
   {
     WriteTransaction trans(FROM_HERE, UNITTEST, dir_.get());
+
+    // Make it look like these types have completed initial sync.
+    CreateTypeRoot(&trans, dir_.get(), BOOKMARKS);
+    CreateTypeRoot(&trans, dir_.get(), PREFERENCES);
+    CreateTypeRoot(&trans, dir_.get(), AUTOFILL);
+
+    // Add more nodes for this type.  Technically, they should be placed under
+    // the proper type root nodes but the assertions in this test won't notice
+    // if their parent isn't quite right.
     MutableEntry item1(&trans, CREATE, trans.root_id(), "Item");
     ASSERT_TRUE(item1.good());
     item1.Put(SPECIFICS, bookmark_specs);
@@ -1567,7 +1608,7 @@ TEST_F(OnDiskSyncableDirectoryTest, TestPurgeEntriesWithTypeIn) {
     ReadTransaction trans(FROM_HERE, dir_.get());
     MetahandleSet all_set;
     GetAllMetaHandles(&trans, &all_set);
-    ASSERT_EQ(7U, all_set.size());
+    ASSERT_EQ(10U, all_set.size());
   }
 
   dir_->PurgeEntriesWithTypeIn(types_to_purge);
@@ -1580,7 +1621,6 @@ TEST_F(OnDiskSyncableDirectoryTest, TestPurgeEntriesWithTypeIn) {
 }
 
 TEST_F(OnDiskSyncableDirectoryTest, TestShareInfo) {
-  dir_->set_initial_sync_ended_for_type(AUTOFILL, true);
   dir_->set_store_birthday("Jan 31st");
   dir_->SetNotificationState("notification_state");
   const char* const bag_of_chips_array = "\0bag of chips";
@@ -1589,8 +1629,6 @@ TEST_F(OnDiskSyncableDirectoryTest, TestShareInfo) {
   dir_->set_bag_of_chips(bag_of_chips_string);
   {
     ReadTransaction trans(FROM_HERE, dir_.get());
-    EXPECT_TRUE(dir_->initial_sync_ended_for_type(AUTOFILL));
-    EXPECT_FALSE(dir_->initial_sync_ended_for_type(BOOKMARKS));
     EXPECT_EQ("Jan 31st", dir_->store_birthday());
     EXPECT_EQ("notification_state", dir_->GetNotificationState());
     EXPECT_EQ(bag_of_chips_string, dir_->bag_of_chips());
@@ -1604,8 +1642,6 @@ TEST_F(OnDiskSyncableDirectoryTest, TestShareInfo) {
   dir_->SaveChanges();
   {
     ReadTransaction trans(FROM_HERE, dir_.get());
-    EXPECT_TRUE(dir_->initial_sync_ended_for_type(AUTOFILL));
-    EXPECT_FALSE(dir_->initial_sync_ended_for_type(BOOKMARKS));
     EXPECT_EQ("April 10th", dir_->store_birthday());
     EXPECT_EQ("notification_state2", dir_->GetNotificationState());
     EXPECT_EQ(bag_of_chips2_string, dir_->bag_of_chips());
@@ -1615,8 +1651,6 @@ TEST_F(OnDiskSyncableDirectoryTest, TestShareInfo) {
   SaveAndReloadDir();
   {
     ReadTransaction trans(FROM_HERE, dir_.get());
-    EXPECT_TRUE(dir_->initial_sync_ended_for_type(AUTOFILL));
-    EXPECT_FALSE(dir_->initial_sync_ended_for_type(BOOKMARKS));
     EXPECT_EQ("April 10th", dir_->store_birthday());
     EXPECT_EQ("notification_state2", dir_->GetNotificationState());
     EXPECT_EQ(bag_of_chips2_string, dir_->bag_of_chips());
@@ -1641,6 +1675,7 @@ TEST_F(OnDiskSyncableDirectoryTest,
     specifics.mutable_bookmark()->set_favicon("PNG");
     specifics.mutable_bookmark()->set_url("http://nowhere");
     create.Put(SPECIFICS, specifics);
+    update.Put(SPECIFICS, specifics);
     create_pre_save = create.GetKernelCopy();
     update_pre_save = update.GetKernelCopy();
     create_id = create.Get(ID);
@@ -1667,10 +1702,12 @@ TEST_F(OnDiskSyncableDirectoryTest,
   }
   int i = BEGIN_FIELDS;
   for ( ; i < INT64_FIELDS_END ; ++i) {
-    EXPECT_EQ(create_pre_save.ref((Int64Field)i),
+    EXPECT_EQ(create_pre_save.ref((Int64Field)i) +
+                  (i == TRANSACTION_VERSION ? 1 : 0),
               create_post_save.ref((Int64Field)i))
               << "int64 field #" << i << " changed during save/load";
-    EXPECT_EQ(update_pre_save.ref((Int64Field)i),
+    EXPECT_EQ(update_pre_save.ref((Int64Field)i) +
+              (i == TRANSACTION_VERSION ? 1 : 0),
               update_post_save.ref((Int64Field)i))
               << "int64 field #" << i << " changed during save/load";
   }
@@ -1712,6 +1749,14 @@ TEST_F(OnDiskSyncableDirectoryTest,
               << "Blob field #" << i << " changed during save/load";
     EXPECT_EQ(update_pre_save.ref((ProtoField)i).SerializeAsString(),
               update_post_save.ref((ProtoField)i).SerializeAsString())
+              << "Blob field #" << i << " changed during save/load";
+  }
+  for ( ; i < ORDINAL_FIELDS_END; ++i) {
+    EXPECT_EQ(create_pre_save.ref((OrdinalField)i).ToInternalValue(),
+              create_post_save.ref((OrdinalField)i).ToInternalValue())
+              << "Blob field #" << i << " changed during save/load";
+    EXPECT_EQ(update_pre_save.ref((OrdinalField)i).ToInternalValue(),
+              update_post_save.ref((OrdinalField)i).ToInternalValue())
               << "Blob field #" << i << " changed during save/load";
   }
 }
@@ -1896,7 +1941,7 @@ class SyncableDirectoryManagement : public testing::Test {
   }
  protected:
   MessageLoop message_loop_;
-  ScopedTempDir temp_dir_;
+  base::ScopedTempDir temp_dir_;
   FakeEncryptor encryptor_;
   TestUnrecoverableErrorHandler handler_;
   NullDirectoryChangeDelegate delegate_;
@@ -1965,7 +2010,7 @@ class StressTransactionsDelegate : public base::PlatformThread::Delegate {
 
 TEST(SyncableDirectory, StressTransactions) {
   MessageLoop message_loop;
-  ScopedTempDir temp_dir;
+  base::ScopedTempDir temp_dir;
   ASSERT_TRUE(temp_dir.CreateUniqueTempDir());
   FakeEncryptor encryptor;
   TestUnrecoverableErrorHandler handler;

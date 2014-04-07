@@ -4,6 +4,7 @@
 
 #include "chrome/browser/chromeos/login/helper.h"
 
+#include "ash/shell.h"
 #include "base/command_line.h"
 #include "base/file_util.h"
 #include "base/utf_string_conversions.h"
@@ -57,7 +58,7 @@ views::Throbber* CreateDefaultThrobber() {
 }
 
 gfx::Rect CalculateScreenBounds(const gfx::Size& size) {
-  gfx::Rect bounds(gfx::Screen::GetPrimaryDisplay().bounds());
+  gfx::Rect bounds(ash::Shell::GetScreen()->GetPrimaryDisplay().bounds());
   if (!size.IsEmpty()) {
     int horizontal_diff = bounds.width() - size.width();
     int vertical_diff = bounds.height() - size.height();
@@ -112,9 +113,8 @@ int GetCurrentUserImageSize() {
   float scale_factor = gfx::Display::GetForcedDeviceScaleFactor();
   if (scale_factor > 1.0f)
     return static_cast<int>(scale_factor * kBaseUserImageSize);
-  // Use maximum supported scale factor.
   return kBaseUserImageSize *
-      ui::GetScaleFactorScale(ui::GetSupportedScaleFactors().back());
+      ui::GetScaleFactorScale(ui::GetMaxScaleFactor());
 }
 
 }  // namespace chromeos

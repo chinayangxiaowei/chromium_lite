@@ -800,6 +800,9 @@ class ProxyService::PacRequest
   int QueryDidComplete(int result_code) {
     DCHECK(!was_cancelled());
 
+    // Note that DidFinishResolvingProxy might modify |results_|.
+    int rv = service_->DidFinishResolvingProxy(results_, result_code, net_log_);
+
     // Make a note in the results which configuration was in use at the
     // time of the resolve.
     results_->config_id_ = config_id_;
@@ -811,7 +814,7 @@ class ProxyService::PacRequest
     config_id_ = ProxyConfig::kInvalidConfigID;
     config_source_ = PROXY_CONFIG_SOURCE_UNKNOWN;
 
-    return service_->DidFinishResolvingProxy(results_, result_code, net_log_);
+    return rv;
   }
 
   BoundNetLog* net_log() { return &net_log_; }
@@ -1172,6 +1175,12 @@ int ProxyService::ReconsiderProxyAfterError(const GURL& url,
   return did_fallback ? OK : ERR_FAILED;
 }
 
+bool ProxyService::MarkProxyAsBad(const ProxyInfo& result,
+                                  const BoundNetLog& net_log) {
+  result.proxy_list_.UpdateRetryInfoOnFallback(&proxy_retry_info_, net_log);
+  return result.proxy_list_.HasUntriedProxies(proxy_retry_info_);
+}
+
 void ProxyService::ReportSuccess(const ProxyInfo& result) {
   DCHECK(CalledOnValidThread());
 
@@ -1356,7 +1365,7 @@ ProxyConfigService* ProxyService::CreateSystemProxyConfigService(
 #elif defined(OS_ANDROID)
   return new ProxyConfigServiceAndroid(
       io_thread_task_runner,
-      MessageLoopForUI::current()->message_loop_proxy());
+      MessageLoop::current()->message_loop_proxy());
 #else
   LOG(WARNING) << "Failed to choose a system proxy settings fetcher "
                   "for this platform.";

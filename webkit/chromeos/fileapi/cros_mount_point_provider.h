@@ -14,11 +14,12 @@
 #include "base/memory/scoped_ptr.h"
 #include "base/synchronization/lock.h"
 #include "webkit/fileapi/file_system_mount_point_provider.h"
-#include "webkit/fileapi/fileapi_export.h"
 #include "webkit/quota/special_storage_policy.h"
+#include "webkit/storage/webkit_storage_export.h"
 
 namespace fileapi {
 class FileSystemFileUtil;
+class FileSystemURL;
 class IsolatedContext;
 class LocalFileUtil;
 }
@@ -28,7 +29,7 @@ namespace chromeos {
 class FileAccessPermissions;
 
 // An interface to provide local filesystem paths.
-class FILEAPI_EXPORT CrosMountPointProvider
+class WEBKIT_STORAGE_EXPORT CrosMountPointProvider
     : public fileapi::ExternalFileSystemMountPointProvider {
  public:
   using fileapi::FileSystemMountPointProvider::ValidateFileSystemCallback;
@@ -50,9 +51,7 @@ class FILEAPI_EXPORT CrosMountPointProvider
       bool create,
       const ValidateFileSystemCallback& callback) OVERRIDE;
   virtual FilePath GetFileSystemRootPathOnFileThread(
-      const GURL& origin_url,
-      fileapi::FileSystemType type,
-      const FilePath& virtual_path,
+      const fileapi::FileSystemURL& url,
       bool create) OVERRIDE;
   virtual bool IsAccessAllowed(const fileapi::FileSystemURL& url) OVERRIDE;
   virtual bool IsRestrictedFileName(const FilePath& filename) const OVERRIDE;
@@ -67,6 +66,7 @@ class FILEAPI_EXPORT CrosMountPointProvider
   virtual webkit_blob::FileStreamReader* CreateFileStreamReader(
       const fileapi::FileSystemURL& path,
       int64 offset,
+      const base::Time& expected_modification_time,
       fileapi::FileSystemContext* context) const OVERRIDE;
   virtual fileapi::FileStreamWriter* CreateFileStreamWriter(
       const fileapi::FileSystemURL& url,

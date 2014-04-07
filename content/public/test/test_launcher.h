@@ -19,9 +19,6 @@ class RunLoop;
 
 namespace content {
 class ContentMainDelegate;
-}
-
-namespace test_launcher {
 
 extern const char kEmptyTestName[];
 extern const char kGTestFilterFlag[];
@@ -30,11 +27,10 @@ extern const char kGTestListTestsFlag[];
 extern const char kGTestRepeatFlag[];
 extern const char kGTestRunDisabledTestsFlag[];
 extern const char kGTestOutputFlag[];
-extern const char kLaunchAsBrowser[];
-extern const char kSingleProcessTestsFlag[];
-extern const char kSingleProcessTestsAndChromeFlag[];
-extern const char kRunManualTestsFlag[];
 extern const char kHelpFlag[];
+extern const char kLaunchAsBrowser[];
+extern const char kRunManualTestsFlag[];
+extern const char kSingleProcessTestsFlag[];
 
 // Flag that causes only the kEmptyTestName test to be run.
 extern const char kWarmupFlag[];
@@ -47,7 +43,7 @@ class TestLauncherDelegate {
                                              const FilePath& temp_data_dir) = 0;
   virtual void PreRunMessageLoop(base::RunLoop* run_loop) {}
   virtual void PostRunMessageLoop() {}
-  virtual content::ContentMainDelegate* CreateContentMainDelegate() = 0;
+  virtual ContentMainDelegate* CreateContentMainDelegate() = 0;
 
  protected:
   virtual ~TestLauncherDelegate();
@@ -59,6 +55,6 @@ int LaunchTests(TestLauncherDelegate* launcher_delegate,
 
 TestLauncherDelegate* GetCurrentTestLauncherDelegate();
 
-}  // namespace test_launcher
+}  // namespace content
 
 #endif  // CONTENT_PUBLIC_TEST_TEST_LAUNCHER_H_

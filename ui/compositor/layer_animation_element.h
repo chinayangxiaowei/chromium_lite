@@ -8,6 +8,7 @@
 #include <set>
 
 #include "base/time.h"
+#include "third_party/skia/include/core/SkColor.h"
 #include "ui/base/animation/tween.h"
 #include "ui/compositor/compositor_export.h"
 #include "ui/gfx/rect.h"
@@ -17,7 +18,6 @@ namespace ui {
 
 class InterpolatedTransform;
 class LayerAnimationDelegate;
-class Transform;
 
 // LayerAnimationElements represent one segment of an animation between two
 // keyframes. They know how to update a LayerAnimationDelegate given a value
@@ -30,7 +30,8 @@ class COMPOSITOR_EXPORT LayerAnimationElement {
     OPACITY,
     VISIBILITY,
     BRIGHTNESS,
-    GRAYSCALE
+    GRAYSCALE,
+    COLOR,
   };
 
   struct COMPOSITOR_EXPORT TargetValue {
@@ -39,11 +40,12 @@ class COMPOSITOR_EXPORT LayerAnimationElement {
     explicit TargetValue(const LayerAnimationDelegate* delegate);
 
     gfx::Rect bounds;
-    Transform transform;
+    gfx::Transform transform;
     float opacity;
     bool visibility;
     float brightness;
     float grayscale;
+    SkColor color;
   };
 
   typedef std::set<AnimatableProperty> AnimatableProperties;
@@ -55,7 +57,7 @@ class COMPOSITOR_EXPORT LayerAnimationElement {
   // Creates an element that transitions to the given transform. The caller owns
   // the return value.
   static LayerAnimationElement* CreateTransformElement(
-      const Transform& transform,
+      const gfx::Transform& transform,
       base::TimeDelta duration);
 
   // Creates an element that transitions to another in a way determined by an
@@ -105,11 +107,30 @@ class COMPOSITOR_EXPORT LayerAnimationElement {
       const AnimatableProperties& properties,
       base::TimeDelta duration);
 
-  // Updates the delegate to the appropriate value for |t|, which is in the
-  // range [0, 1] (0 for initial, and 1 for final). If the animation is not
-  // aborted, it is guaranteed that Progress will eventually be called with
-  // t = 1.0. Returns true if a redraw is required.
-  bool Progress(double t, LayerAnimationDelegate* delegate);
+  // Creates an element that transitions to the given color. The caller owns the
+  // return value.
+  static LayerAnimationElement* CreateColorElement(
+      SkColor color,
+      base::TimeDelta duration);
+
+  // Sets the start time for the animation. This must be called before the first
+  // call to {Progress, IsFinished}. Once the animation is finished, this must
+  // be called again in order to restart the animation.
+  void set_start_time(base::TimeTicks start_time) { start_time_ = start_time; }
+  base::TimeTicks start_time() const { return start_time_; }
+
+  // Updates the delegate to the appropriate value for |now|. Returns true
+  // if a redraw is required.
+  bool Progress(base::TimeTicks now, LayerAnimationDelegate* delegate);
+
+  // If calling Progress now, with the given time, will finish the animation,
+  // returns true and sets |end_duration| to the actual duration for this
+  // animation, incuding any queueing delays.
+  bool IsFinished(base::TimeTicks time, base::TimeDelta* total_duration);
+
+  // Updates the delegate to the end of the animation. Returns true if a
+  // redraw is required.
+  bool ProgressToEnd(LayerAnimationDelegate* delegate);
 
   // Called if the animation is not allowed to complete. This may be called
   // before OnStarted or Progress.
@@ -120,9 +141,6 @@ class COMPOSITOR_EXPORT LayerAnimationElement {
 
   // The properties that the element modifies.
   const AnimatableProperties& properties() const { return properties_; }
-
-  // The duration of the animation
-  base::TimeDelta duration() const { return duration_; }
 
   Tween::Type tween_type() const { return tween_type_; }
   void set_tween_type(Tween::Type tween_type) { tween_type_ = tween_type; }
@@ -143,6 +161,7 @@ class COMPOSITOR_EXPORT LayerAnimationElement {
 
   bool first_frame_;
   const AnimatableProperties properties_;
+  base::TimeTicks start_time_;
   const base::TimeDelta duration_;
   Tween::Type tween_type_;
 

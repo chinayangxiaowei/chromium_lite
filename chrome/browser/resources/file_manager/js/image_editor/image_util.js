@@ -30,7 +30,7 @@ ImageUtil.trace = (function() {
       }
     }
     this.lines_[key].textContent = key + ': ' + value;
-    if (localStorage.logTrace) this.dumpLine(key);
+    if (ImageUtil.trace.log) this.dumpLine(key);
   };
 
   PerformanceTrace.prototype.resetTimer = function(key) {
@@ -416,8 +416,22 @@ ImageUtil.setClass = function(element, className, on) {
  */
 ImageUtil.ImageLoader = function(document) {
   this.document_ = document;
-  this.image_ = null;
+  this.image_ = new Image();
   this.generation_ = 0;
+};
+
+/**
+ * Max size of image to be displayed (in pixels)
+ */
+ImageUtil.ImageLoader.IMAGE_SIZE_LIMIT = 25 * 1000 * 1000;
+
+/**
+ * @param {HTMLImageElement|HTMLCanvasElement|Object} image Image or image
+ *   metadata, should have |width| and |height| properties.
+ * @return {boolean} True if the image is too large to be loaded.
+ */
+ImageUtil.ImageLoader.isTooLarge = function(image) {
+  return image.width * image.height > ImageUtil.ImageLoader.IMAGE_SIZE_LIMIT;
 };
 
 /**
@@ -449,21 +463,31 @@ ImageUtil.ImageLoader.prototype.load = function(
     this.timeout_ = null;
     // The clients of this class sometimes request the same url repeatedly.
     // The onload fires only if the src is different from the previous value.
-    // To work around that we create a new Image every time.
-    this.image_ = new Image();
-    this.image_.onload = function(e) {
-      this.image = null;
-      transformFetcher(url, onTransform.bind(this, e.target));
-    }.bind(this);
-    this.image_.onerror = function() {
-      this.image_ = null;
+    // To work around that we reset the src temporarily.
+    this.image_.src = '';
+    var errorCallback = function(error) {
+      this.image_.onerror = null;
+      this.image_.onload = null;
+      var tmpCallback = this.callback_;
       this.callback_ = null;
       var emptyCanvas = this.document_.createElement('canvas');
       emptyCanvas.width = 0;
       emptyCanvas.height = 0;
-      callback(emptyCanvas);
+      tmpCallback(emptyCanvas, error);
     }.bind(this);
-    this.image_.src = url;
+    this.image_.onload = function(e) {
+      this.image_.onerror = null;
+      this.image_.onload = null;
+      if (ImageUtil.ImageLoader.isTooLarge(this.image_)) {
+        errorCallback('IMAGE_TOO_BIG_ERROR');
+        return;
+      }
+      transformFetcher(url, onTransform.bind(this, e.target));
+    }.bind(this);
+    // errorCallback has an optional error argument, which in case of general
+    // error should not be specified
+    this.image_.onerror = errorCallback.bind(this, 'IMAGE_ERROR');
+    this.remoteLoader_ = util.loadImage(this.image_, url);
   }.bind(this);
   if (opt_delay) {
     this.timeout_ = setTimeout(startLoad, opt_delay);
@@ -506,7 +530,12 @@ ImageUtil.ImageLoader.prototype.cancel = function() {
   }
   if (this.image_) {
     this.image_.onload = function() {};
-    this.image_ = null;
+    this.image_.onerror = function() {};
+    this.image_.src = '';
+  }
+  if (this.remoteLoader_) {
+    this.remoteLoader_.cancel();
+    this.remoteLoader_ = null;
   }
   this.generation_++;  // Silence the transform fetcher if it is in progress.
 };

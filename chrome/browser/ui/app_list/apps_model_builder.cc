@@ -7,8 +7,10 @@
 #include <algorithm>
 #include <vector>
 
+#include "base/auto_reset.h"
 #include "chrome/browser/extensions/extension_prefs.h"
 #include "chrome/browser/extensions/extension_service.h"
+#include "chrome/browser/extensions/extension_system.h"
 #include "chrome/browser/prefs/pref_service.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/app_list/extension_app_item.h"
@@ -38,12 +40,14 @@ bool AppPrecedes(const ExtensionAppItem* app1, const ExtensionAppItem* app2) {
 
 AppsModelBuilder::AppsModelBuilder(Profile* profile,
                                    app_list::AppListModel::Apps* model,
-                                   AppListController* controller)
+                                   AppListControllerDelegate* controller)
     : profile_(profile),
       controller_(controller),
-      model_(model) {
+      model_(model),
+      ignore_changes_(false) {
   extensions::ExtensionPrefs* extension_prefs =
-      profile_->GetExtensionService()->extension_prefs();
+      extensions::ExtensionSystem::Get(profile_)->extension_service()->
+          extension_prefs();
 
   registrar_.Add(this, chrome::NOTIFICATION_EXTENSION_LOADED,
       content::Source<Profile>(profile_));
@@ -55,10 +59,15 @@ AppsModelBuilder::AppsModelBuilder(Profile* profile,
       content::Source<Profile>(profile_));
 
   pref_change_registrar_.Init(extension_prefs->pref_service());
-  pref_change_registrar_.Add(extensions::ExtensionPrefs::kExtensionsPref, this);
+  pref_change_registrar_.Add(extensions::ExtensionPrefs::kExtensionsPref,
+                             base::Bind(&AppsModelBuilder::ResortApps,
+                                        base::Unretained(this)));
+
+  model_->AddObserver(this);
 }
 
 AppsModelBuilder::~AppsModelBuilder() {
+  model_->RemoveObserver(this);
 }
 
 void AppsModelBuilder::Build() {
@@ -69,7 +78,8 @@ void AppsModelBuilder::Build() {
 }
 
 void AppsModelBuilder::PopulateApps() {
-  ExtensionService* service = profile_->GetExtensionService();
+  ExtensionService* service =
+      extensions::ExtensionSystem::Get(profile_)->extension_service();
   if (!service)
     return;
 
@@ -77,7 +87,7 @@ void AppsModelBuilder::PopulateApps() {
   const ExtensionSet* extensions = service->extensions();
   for (ExtensionSet::const_iterator app = extensions->begin();
        app != extensions->end(); ++app) {
-    if ((*app)->ShouldDisplayInLauncher())
+    if ((*app)->ShouldDisplayInAppLauncher())
       apps.push_back(new ExtensionAppItem(profile_, *app, controller_));
   }
 
@@ -103,31 +113,18 @@ void AppsModelBuilder::ResortApps() {
 
   std::sort(apps.begin(), apps.end(), &AppPrecedes);
 
+  base::AutoReset<bool> auto_reset(&ignore_changes_, true);
+
   // Adjusts the order of apps as needed in |model_| based on |apps|.
   for (size_t i = 0; i < apps.size(); ++i) {
     ExtensionAppItem* app_item = apps[i];
 
-    const size_t insert_index = i;
-
-    bool found = false;
-    size_t index = 0;
-
     // Finds |app_item| in remaining unsorted part in |model_|.
-    for (size_t j = insert_index; j < model_->item_count(); ++j) {
+    for (size_t j = i; j < model_->item_count(); ++j) {
       if (GetAppAt(j) == app_item) {
-        found = true;
-        index = j;
+        model_->Move(j, i);
         break;
       }
-    }
-
-    if (found) {
-      if (index != insert_index) {
-        model_->RemoveAt(index);
-        model_->AddAt(insert_index, app_item);
-      }
-    } else {
-      NOTREACHED();
     }
   }
 }
@@ -188,7 +185,7 @@ void AppsModelBuilder::Observe(int type,
     case chrome::NOTIFICATION_EXTENSION_LOADED: {
       const Extension* extension =
           content::Details<const Extension>(details).ptr();
-      if (!extension->ShouldDisplayInLauncher())
+      if (!extension->ShouldDisplayInAppLauncher())
         return;
 
       if (FindApp(extension->id()) != -1)
@@ -216,11 +213,27 @@ void AppsModelBuilder::Observe(int type,
       HighlightApp();
       break;
     }
-    case chrome::NOTIFICATION_PREF_CHANGED: {
-      ResortApps();
-      break;
-    }
     default:
       NOTREACHED();
   }
+}
+
+void AppsModelBuilder::ListItemsAdded(size_t start, size_t count) {
+}
+
+void AppsModelBuilder::ListItemsRemoved(size_t start, size_t count) {
+}
+
+void AppsModelBuilder::ListItemMoved(size_t index, size_t target_index) {
+  if (ignore_changes_)
+    return;
+
+  ExtensionAppItem* prev = target_index > 0 ? GetAppAt(target_index - 1) : NULL;
+  ExtensionAppItem* next = target_index + 1 < model_->item_count() ?
+      GetAppAt(target_index + 1) : NULL;
+  GetAppAt(target_index)->Move(prev, next);
+}
+
+void AppsModelBuilder::ListItemsChanged(size_t start, size_t count) {
+  NOTREACHED();
 }

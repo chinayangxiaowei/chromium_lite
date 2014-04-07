@@ -8,11 +8,20 @@
 #include "third_party/WebKit/Source/WebKit/chromium/public/WebPlugin.h"
 
 #include "base/memory/scoped_ptr.h"
+#include "base/memory/weak_ptr.h"
+#include "base/process_util.h"
 #include "base/sequenced_task_runner_helpers.h"
+#if defined(OS_WIN)
+#include "base/shared_memory.h"
+#endif
 #include "content/renderer/browser_plugin/browser_plugin_backing_store.h"
 #include "content/renderer/browser_plugin/browser_plugin_bindings.h"
 #include "content/renderer/render_view_impl.h"
+#include "third_party/WebKit/Source/WebKit/chromium/public/WebDragStatus.h"
 
+struct BrowserPluginHostMsg_AutoSize_Params;
+struct BrowserPluginHostMsg_ResizeGuest_Params;
+struct BrowserPluginMsg_LoadCommit_Params;
 struct BrowserPluginMsg_UpdateRect_Params;
 
 namespace content {
@@ -23,37 +32,91 @@ class MockBrowserPlugin;
 class CONTENT_EXPORT BrowserPlugin :
     NON_EXPORTED_BASE(public WebKit::WebPlugin) {
  public:
+  RenderViewImpl* render_view() const { return render_view_.get(); }
   // Called only by tests to clean up before we blow away the MockRenderProcess.
   void Cleanup();
 
-  // Get the src attribute value of the BrowserPlugin instance if the guest
-  // has not crashed.
-  std::string GetSrcAttribute() const;
-  // Set the src attribute value of the BrowserPlugin instance and reset
-  // the guest_crashed_ flag.
-  void SetSrcAttribute(const std::string& src);
+  virtual bool OnMessageReceived(const IPC::Message& msg);
 
-  // Inform the BrowserPlugin to update its backing store with the pixels in
-  // its damage buffer.
-  void UpdateRect(int message_id,
-                  const BrowserPluginMsg_UpdateRect_Params& params);
-  // Inform the BrowserPlugin that its guest has crashed.
-  void GuestCrashed();
-  // Informs the BrowserPlugin that the guest has navigated to a new URL.
-  void DidNavigate(const GURL& url);
-  // Tells the BrowserPlugin to advance the focus to the next (or previous)
-  // element.
-  void AdvanceFocus(bool reverse);
+  // Update Browser Plugin's DOM Node attribute |attribute_name| with the value
+  // |attribute_value|.
+  void UpdateDOMAttribute(const std::string& attribute_name,
+                          const std::string& attribute_value);
 
-  // Indicates whether there are any Javascript listeners attached to a
-  // provided event_name.
-  bool HasListeners(const std::string& event_name);
-  // Add a custom event listener to this BrowserPlugin instance.
-  bool AddEventListener(const std::string& event_name,
-                        v8::Local<v8::Function> function);
-  // Remove a custom event listener from this BrowserPlugin instance.
-  bool RemoveEventListener(const std::string& event_name,
-                        v8::Local<v8::Function> function);
+  // Get the src attribute value of the BrowserPlugin instance.
+  std::string src_attribute() const { return src_; }
+  // Set the src attribute value of the BrowserPlugin instance.
+  bool SetSrcAttribute(const std::string& src, std::string* error_message);
+  // Get the autosize attribute value.
+  bool auto_size_attribute() const { return auto_size_; }
+  // Sets the autosize attribute value.
+  void SetAutoSizeAttribute(bool auto_size);
+  // Get the maxheight attribute value.
+  int max_height_attribute() const { return max_height_; }
+  // Set the maxheight attribute value.
+  void SetMaxHeightAttribute(int maxheight);
+  // Get the maxwidth attribute value.
+  int max_width_attribute() const { return max_width_; }
+  // Set the maxwidth attribute value.
+  void SetMaxWidthAttribute(int max_width);
+  // Get the minheight attribute value.
+  int min_height_attribute() const { return min_height_; }
+  // Set the minheight attribute value.
+  void SetMinHeightAttribute(int minheight);
+  // Get the minwidth attribute value.
+  int min_width_attribute() const { return min_width_; }
+  // Set the minwidth attribute value.
+  void SetMinWidthAttribute(int minwidth);
+  bool InAutoSizeBounds(const gfx::Size& size) const;
+
+  // Get the guest's DOMWindow proxy.
+  NPObject* GetContentWindow() const;
+
+  // Returns Chrome's process ID for the current guest.
+  int process_id() const { return process_id_; }
+  // The partition identifier string is stored as UTF-8.
+  std::string GetPartitionAttribute() const;
+  // Query whether the guest can navigate back to the previous entry.
+  bool CanGoBack() const;
+  // Query whether the guest can navigation forward to the next entry.
+  bool CanGoForward() const;
+  // This method can be successfully called only before the first navigation for
+  // this instance of BrowserPlugin. If an error occurs, the |error_message| is
+  // set appropriately to indicate the failure reason.
+  bool SetPartitionAttribute(const std::string& partition_id,
+                             std::string* error_message);
+
+  // Inform the BrowserPlugin of the focus state of the embedder RenderView.
+  void SetEmbedderFocus(bool focused);
+  // Informs the guest of an updated focus state.
+  void UpdateGuestFocusState();
+  // Indicates whether the guest should be focused.
+  bool ShouldGuestBeFocused() const;
+
+  // Tells the BrowserPlugin to tell the guest to navigate to the previous
+  // navigation entry in the navigation history.
+  void Back();
+  // Tells the BrowserPlugin to tell the guest to navigate to the next
+  // navigation entry in the navigation history.
+  void Forward();
+  // Tells the BrowserPlugin to tell the guest to navigate to a position
+  // relative to the current index in its navigation history.
+  void Go(int relativeIndex);
+  // Tells the BrowserPlugin to terminate the guest process.
+  void TerminateGuest();
+
+  // A request from Javascript has been made to stop the loading of the page.
+  void Stop();
+  // A request from Javascript has been made to reload the page.
+  void Reload();
+
+  // Returns true if |point| lies within the bounds of the plugin rectangle.
+  // Not OK to use this function for making security-sensitive decision since it
+  // can return false positives when the plugin has rotation transformation
+  // applied.
+  bool InBounds(const gfx::Point& point) const;
+
+  gfx::Point ToLocalCoordinates(const gfx::Point& point) const;
 
   // WebKit::WebPlugin implementation.
   virtual WebKit::WebPluginContainer* container() const OVERRIDE;
@@ -61,6 +124,7 @@ class CONTENT_EXPORT BrowserPlugin :
   virtual void destroy() OVERRIDE;
   virtual NPObject* scriptableObject() OVERRIDE;
   virtual bool supportsKeyboardFocus() const OVERRIDE;
+  virtual bool canProcessDrag() const OVERRIDE;
   virtual void paint(
       WebKit::WebCanvas* canvas,
       const WebKit::WebRect& rect) OVERRIDE;
@@ -75,6 +139,11 @@ class CONTENT_EXPORT BrowserPlugin :
   virtual bool handleInputEvent(
       const WebKit::WebInputEvent& event,
       WebKit::WebCursorInfo& cursor_info) OVERRIDE;
+  virtual bool handleDragStatusUpdate(WebKit::WebDragStatus drag_status,
+                                      const WebKit::WebDragData& drag_data,
+                                      WebKit::WebDragOperationsMask mask,
+                                      const WebKit::WebPoint& position,
+                                      const WebKit::WebPoint& screen) OVERRIDE;
   virtual void didReceiveResponse(
       const WebKit::WebURLResponse& response) OVERRIDE;
   virtual void didReceiveData(const char* data, int data_length) OVERRIDE;
@@ -87,7 +156,7 @@ class CONTENT_EXPORT BrowserPlugin :
       const WebKit::WebURL& url,
       void* notify_data,
       const WebKit::WebURLError& error) OVERRIDE;
- protected:
+ private:
   friend class base::DeleteHelper<BrowserPlugin>;
   // Only the manager is allowed to create a BrowserPlugin.
   friend class BrowserPluginManagerImpl;
@@ -112,35 +181,147 @@ class CONTENT_EXPORT BrowserPlugin :
 
   int width() const { return plugin_rect_.width(); }
   int height() const { return plugin_rect_.height(); }
+  int instance_id() const { return instance_id_; }
+  int render_view_routing_id() const { return render_view_routing_id_; }
+  BrowserPluginManager* browser_plugin_manager() const {
+    return browser_plugin_manager_;
+  }
 
   // Virtual to allow for mocking in tests.
   virtual float GetDeviceScaleFactor() const;
 
-  // Parses the source URL of the browser plugin from the element's attributes
-  // and outputs them.
-  bool ParseSrcAttribute(const WebKit::WebPluginParams& params,
-                         std::string* src);
+  // Parses the attributes of the browser plugin from the element's attributes
+  // and sets them appropriately.
+  void ParseAttributes(const WebKit::WebPluginParams& params);
 
-  // Cleanup event listener state to free v8 resources when a BrowserPlugin
-  // is destroyed.
-  void RemoveEventListeners();
+  // Triggers the event-listeners for |event_name|. Note that the function
+  // frees all the values in |props|.
+  void TriggerEvent(const std::string& event_name,
+                    std::map<std::string, base::Value*>* props);
+
+  // Creates and maps a shared damage buffer.
+  virtual base::SharedMemory* CreateDamageBuffer(
+      const size_t size,
+      base::SharedMemoryHandle* shared_memory_handle);
+  // Swaps out the |current_damage_buffer_| with the |pending_damage_buffer_|.
+  void SwapDamageBuffers();
+
+  // Populates BrowserPluginHostMsg_ResizeGuest_Params with resize state and
+  // allocates a new |pending_damage_buffer_| if in software rendering mode.
+  void PopulateResizeGuestParameters(
+      BrowserPluginHostMsg_ResizeGuest_Params* params,
+      const gfx::Size& view_size);
+
+  // Populates BrowserPluginHostMsg_AutoSize_Params object with autosize state.
+  void PopulateAutoSizeParameters(
+      BrowserPluginHostMsg_AutoSize_Params* params);
+
+  // Populates both AutoSize and ResizeGuest parameters based on the current
+  // autosize state.
+  void GetDamageBufferWithSizeParams(
+      BrowserPluginHostMsg_AutoSize_Params* auto_size_params,
+      BrowserPluginHostMsg_ResizeGuest_Params* resize_guest_params);
+
+  // Informs the guest of an updated autosize state.
+  void UpdateGuestAutoSizeState();
+
+  // Informs the BrowserPlugin that guest has changed its size in autosize mode.
+  void SizeChangedDueToAutoSize(const gfx::Size& old_view_size);
+
+  // Indicates whether a damage buffer was used by the guest process for the
+  // provided |params|.
+  static bool UsesDamageBuffer(
+      const BrowserPluginMsg_UpdateRect_Params& params);
+
+  // Indicates whether the |pending_damage_buffer_| was used to copy over pixels
+  // given the provided |params|.
+  bool UsesPendingDamageBuffer(
+      const BrowserPluginMsg_UpdateRect_Params& params);
+
+  // IPC message handlers.
+  // Please keep in alphabetical order.
+  void OnAdvanceFocus(int instance_id, bool reverse);
+  void OnGuestContentWindowReady(int instance_id,
+                                 int content_window_routing_id);
+  void OnGuestGone(int instance_id, int process_id, int status);
+  void OnGuestResponsive(int instance_id, int process_id);
+  void OnGuestUnresponsive(int instance_id, int process_id);
+  void OnLoadAbort(int instance_id,
+                   const GURL& url,
+                   bool is_top_level,
+                   const std::string& type);
+  void OnLoadCommit(int instance_id,
+                    const BrowserPluginMsg_LoadCommit_Params& params);
+  void OnLoadRedirect(int instance_id,
+                      const GURL& old_url,
+                      const GURL& new_url,
+                      bool is_top_level);
+  void OnLoadStart(int instance_id, const GURL& url, bool is_top_level);
+  void OnLoadStop(int instance_id);
+  void OnSetCursor(int instance_id, const WebCursor& cursor);
+  void OnShouldAcceptTouchEvents(int instance_id, bool accept);
+  void OnUpdateRect(int instance_id,
+                    int message_id,
+                    const BrowserPluginMsg_UpdateRect_Params& params);
 
   int instance_id_;
-  RenderViewImpl* render_view_;
+  base::WeakPtr<RenderViewImpl> render_view_;
+  // We cache the |render_view_|'s routing ID because we need it on destruction.
+  // If the |render_view_| is destroyed before the BrowserPlugin is destroyed
+  // then we will attempt to access a NULL pointer.
+  int render_view_routing_id_;
   WebKit::WebPluginContainer* container_;
   scoped_ptr<BrowserPluginBindings> bindings_;
   scoped_ptr<BrowserPluginBackingStore> backing_store_;
-  TransportDIB* damage_buffer_;
+  scoped_ptr<base::SharedMemory> current_damage_buffer_;
+  scoped_ptr<base::SharedMemory> pending_damage_buffer_;
+  uint32 damage_buffer_sequence_id_;
   gfx::Rect plugin_rect_;
   // Bitmap for crashed plugin. Lazily initialized, non-owning pointer.
   SkBitmap* sad_guest_;
   bool guest_crashed_;
-  bool resize_pending_;
-  long long parent_frame_;
+  scoped_ptr<BrowserPluginHostMsg_ResizeGuest_Params> pending_resize_params_;
+  // True if we have ever sent a NavigateGuest message to the embedder.
+  bool navigate_src_sent_;
   std::string src_;
-  typedef std::vector<v8::Persistent<v8::Function> > EventListeners;
-  typedef std::map<std::string, EventListeners> EventListenerMap;
-  EventListenerMap event_listener_map_;
+  bool auto_size_;
+  int max_height_;
+  int max_width_;
+  int min_height_;
+  int min_width_;
+  int process_id_;
+  std::string storage_partition_id_;
+  bool persist_storage_;
+  bool valid_partition_id_;
+  int content_window_routing_id_;
+  bool plugin_focused_;
+  bool embedder_focused_;
+  // Tracks the visibility of the browser plugin regardless of the whole
+  // embedder RenderView's visibility.
+  bool visible_;
+
+  WebCursor cursor_;
+
+  gfx::Size last_view_size_;
+  bool size_changed_in_flight_;
+
+  // BrowserPlugin outlives RenderViewImpl in Chrome Apps and so we need to
+  // store the BrowserPlugin's BrowserPluginManager in a member variable to
+  // avoid accessing the RenderViewImpl.
+  scoped_refptr<BrowserPluginManager> browser_plugin_manager_;
+
+  // Important: Do not add more history state here.
+  // We strongly discourage storing additional history state (such as page IDs)
+  // in the embedder process, at the risk of having incorrect information that
+  // can lead to broken back/forward logic in apps.
+  // It's also important that this state does not get modified by any logic in
+  // the embedder process. It should only be updated in response to navigation
+  // events in the guest.  No assumptions should be made about how the index
+  // will change after a navigation (e.g., for back, forward, or go), because
+  // the changes are not always obvious.  For example, there is a maximum
+  // number of entries and earlier ones will automatically be pruned.
+  int current_nav_entry_index_;
+  int nav_entry_count_;
   DISALLOW_COPY_AND_ASSIGN(BrowserPlugin);
 };
 

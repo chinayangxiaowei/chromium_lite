@@ -9,6 +9,7 @@
 
 #include "base/compiler_specific.h"
 #include "chrome/browser/media_gallery/media_galleries_dialog_controller.h"
+#include "ui/views/controls/button/button.h"
 #include "ui/views/window/dialog_delegate.h"
 
 class ConstrainedWindowViews;
@@ -34,12 +35,15 @@ class MediaGalleriesDialogViews : public MediaGalleriesDialog,
                              bool permitted) OVERRIDE;
 
   // views::DialogDelegate implementation:
+  virtual string16 GetWindowTitle() const OVERRIDE;
+  virtual bool ShouldShowWindowTitle() const OVERRIDE;
   virtual void DeleteDelegate() OVERRIDE;
   virtual views::Widget* GetWidget() OVERRIDE;
   virtual const views::Widget* GetWidget() const OVERRIDE;
   virtual views::View* GetContentsView() OVERRIDE;
   virtual string16 GetDialogButtonLabel(ui::DialogButton button) const OVERRIDE;
   virtual bool IsDialogButtonEnabled(ui::DialogButton button) const OVERRIDE;
+  virtual ui::ModalType GetModalType() const OVERRIDE;
   virtual views::View* GetExtraView() OVERRIDE;
   virtual bool Cancel() OVERRIDE;
   virtual bool Accept() OVERRIDE;
@@ -55,8 +59,7 @@ class MediaGalleriesDialogViews : public MediaGalleriesDialog,
 
   // Adds a checkbox or updates an existing checkbox. Returns true if a new one
   // was added.
-  bool AddOrUpdateGallery(const MediaGalleryPrefInfo* gallery,
-                          bool permitted);
+  bool AddOrUpdateGallery(const MediaGalleryPrefInfo* gallery, bool permitted);
 
   MediaGalleriesDialogController* controller_;
 

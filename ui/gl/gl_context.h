@@ -9,12 +9,15 @@
 
 #include "base/basictypes.h"
 #include "base/memory/ref_counted.h"
+#include "base/memory/scoped_ptr.h"
 #include "ui/gl/gl_share_group.h"
 #include "ui/gl/gpu_preference.h"
 
 namespace gfx {
 
 class GLSurface;
+class VirtualGLApi;
+class GLStateRestorer;
 
 // Encapsulates an OpenGL context, hiding platform specific management.
 class GL_EXPORT GLContext : public base::RefCounted<GLContext> {
@@ -44,11 +47,19 @@ class GL_EXPORT GLContext : public base::RefCounted<GLContext> {
   // Get the underlying platform specific GL context "handle".
   virtual void* GetHandle() = 0;
 
+  // Gets the GLStateRestore for the context.
+  virtual GLStateRestorer* GetGLStateRestorer();
+
   // Set swap interval. This context must be current.
   virtual void SetSwapInterval(int interval) = 0;
 
   // Returns space separated list of extensions. The context must be current.
   virtual std::string GetExtensions();
+
+  // Returns in bytes the total amount of GPU memory for the GPU which this
+  // context is currently rendering on. Returns false if no extension exists
+  // to get the exact amount of GPU memory.
+  virtual bool GetTotalGpuMemory(size_t* bytes);
 
   // Returns whether the current context supports the named extension. The
   // context must be current.
@@ -66,14 +77,25 @@ class GL_EXPORT GLContext : public base::RefCounted<GLContext> {
 
   static bool LosesAllContextsOnContextLost();
 
-  static bool SupportsDualGpus();
-
   static GLContext* GetCurrent();
 
   virtual bool WasAllocatedUsingRobustnessExtension();
 
+  // Use this context for virtualization.
+  void SetupForVirtualization();
+
+  // Make this context current when used for context virtualization.
+  bool MakeVirtuallyCurrent(GLContext* virtual_context, GLSurface* surface);
+
+  // Notify this context that |virtual_context|, that was using us, is
+  // being destroyed.
+  void OnDestroyVirtualContext(GLContext* virtual_context);
+
  protected:
   virtual ~GLContext();
+
+  // Sets the GL api to the real hardware API (vs the VirtualAPI)
+  static void SetRealGLApi();
   static void SetCurrent(GLContext* context, GLSurface* surface);
 
   // Initialize function pointers to extension functions in the GL
@@ -85,6 +107,7 @@ class GL_EXPORT GLContext : public base::RefCounted<GLContext> {
   friend class base::RefCounted<GLContext>;
 
   scoped_refptr<GLShareGroup> share_group_;
+  scoped_ptr<VirtualGLApi> virtual_gl_api_;
 
   DISALLOW_COPY_AND_ASSIGN(GLContext);
 };

@@ -28,6 +28,10 @@ class PlatformAppBrowserTest : public ExtensionApiTest {
   // until it is launched.
   const Extension* LoadAndLaunchPlatformApp(const char* name);
 
+  // Installs and runs the app named |name| out of the platform_apps
+  // subdirectory. Waits until it is launched.
+  const Extension* InstallAndLaunchPlatformApp(const char* name);
+
   // Gets the WebContents associated with the first shell window that is found
   // (most tests only deal with one platform app window, so this is good
   // enough).
@@ -62,6 +66,11 @@ class PlatformAppBrowserTest : public ExtensionApiTest {
 
   // Closes |window| and waits until it's gone.
   void CloseShellWindow(ShellWindow* window);
+};
+
+class ExperimentalPlatformAppBrowserTest : public PlatformAppBrowserTest {
+ public:
+  virtual void SetUpCommandLine(CommandLine* command_line) OVERRIDE;
 };
 
 }

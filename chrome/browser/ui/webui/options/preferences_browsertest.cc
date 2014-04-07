@@ -10,8 +10,9 @@
 #include "base/json/json_reader.h"
 #include "base/json/json_writer.h"
 #include "base/memory/scoped_ptr.h"
+#include "base/prefs/public/pref_service_base.h"
+#include "base/stl_util.h"
 #include "base/values.h"
-#include "chrome/browser/api/prefs/pref_service_base.h"
 #include "chrome/browser/policy/browser_policy_connector.h"
 #include "chrome/browser/policy/policy_map.h"
 #include "chrome/browser/profiles/profile.h"
@@ -31,9 +32,9 @@
 #include "testing/gtest/include/gtest/gtest.h"
 
 #if defined(OS_CHROMEOS)
-#include "chrome/browser/chromeos/settings/cros_settings_names.h"
-#include "chrome/browser/chromeos/settings/cros_settings.h"
 #include "chrome/browser/chromeos/proxy_cros_settings_parser.h"
+#include "chrome/browser/chromeos/settings/cros_settings.h"
+#include "chrome/browser/chromeos/settings/cros_settings_names.h"
 #endif
 
 using testing::AllOf;
@@ -78,11 +79,11 @@ void PreferencesBrowserTest::SetUpOnMainThread() {
   render_view_host_ = web_contents->GetRenderViewHost();
   ASSERT_TRUE(render_view_host_);
   pref_change_registrar_.Init(
-      PrefServiceBase::ForContext(browser()->profile()));
+      PrefServiceBase::FromBrowserContext(browser()->profile()));
   pref_service_ = browser()->profile()->GetPrefs();
   ASSERT_TRUE(content::ExecuteJavaScript(render_view_host_, L"",
       L"function TestEnv() {"
-      L"  this.sentinelName_ = 'profile.exited_cleanly';"
+      L"  this.sentinelName_ = 'download.prompt_for_download';"
       L"  this.prefs_ = [];"
       L"  TestEnv.instance_ = this;"
       L"}"
@@ -161,15 +162,8 @@ void PreferencesBrowserTest::SetUpOnMainThread() {
 }
 
 // Forwards notifications received when pref values change in the backend.
-void PreferencesBrowserTest::Observe(
-    int type,
-    const content::NotificationSource& source,
-    const content::NotificationDetails& details) {
-  ASSERT_EQ(chrome::NOTIFICATION_PREF_CHANGED, type);
-  ASSERT_EQ(pref_service_, content::Source<PrefService>(source).ptr());
-  std::string* name = content::Details<std::string>(details).ptr();
-  ASSERT_TRUE(name);
-  OnCommit(pref_service_->FindPreference(name->c_str()));
+void PreferencesBrowserTest::OnPreferenceChanged(const std::string& pref_name) {
+  OnCommit(pref_service_->FindPreference(pref_name.c_str()));
 }
 
 // Sets up a mock user policy provider.
@@ -181,8 +175,8 @@ void PreferencesBrowserTest::SetUpInProcessBrowserTestFixture() {
 };
 
 void PreferencesBrowserTest::TearDownInProcessBrowserTestFixture() {
-  DeleteValues(default_values_);
-  DeleteValues(non_default_values_);
+  STLDeleteElements(&default_values_);
+  STLDeleteElements(&non_default_values_);
 }
 
 void PreferencesBrowserTest::SetUserPolicies(
@@ -207,20 +201,12 @@ void PreferencesBrowserTest::SetUserValues(
     pref_service_->Set(names[i].c_str(), *values[i]);
 }
 
-void PreferencesBrowserTest::DeleteValues(std::vector<base::Value*>& values){
-  for (std::vector<base::Value*>::iterator value = values.begin();
-       value != values.end(); ++value)
-    delete *value;
-  values.clear();
-}
-
-void PreferencesBrowserTest::VerifyKeyValue(const base::DictionaryValue* dict,
+void PreferencesBrowserTest::VerifyKeyValue(const base::DictionaryValue& dict,
                                             const std::string& key,
-                                            base::Value* expected) {
+                                            const base::Value& expected) {
   const base::Value* actual = NULL;
-  EXPECT_TRUE(dict->Get(key, &actual)) << "Was checking key: " << key;
-  EXPECT_EQ(*expected, *actual) << "Was checking key: " << key;
-  delete expected;
+  EXPECT_TRUE(dict.Get(key, &actual)) << "Was checking key: " << key;
+  EXPECT_EQ(expected, *actual) << "Was checking key: " << key;
 }
 
 void PreferencesBrowserTest::VerifyPref(const base::DictionaryValue* prefs,
@@ -233,21 +219,20 @@ void PreferencesBrowserTest::VerifyPref(const base::DictionaryValue* prefs,
   const base::DictionaryValue* dict;
   ASSERT_TRUE(prefs->GetWithoutPathExpansion(name, &pref));
   ASSERT_TRUE(pref->GetAsDictionary(&dict));
-  VerifyKeyValue(dict, "value", value->DeepCopy());
+  VerifyKeyValue(*dict, "value", *value);
   if (!controlledBy.empty()) {
-    VerifyKeyValue(dict, "controlledBy",
-                   base::Value::CreateStringValue(controlledBy));
+    VerifyKeyValue(*dict, "controlledBy", base::StringValue(controlledBy));
   } else {
     EXPECT_FALSE(dict->HasKey("controlledBy"));
   }
   if (disabled)
-    VerifyKeyValue(dict, "disabled", base::Value::CreateBooleanValue(true));
+    VerifyKeyValue(*dict, "disabled", base::FundamentalValue(true));
   else if (dict->HasKey("disabled"))
-    VerifyKeyValue(dict, "disabled", base::Value::CreateBooleanValue(false));
+    VerifyKeyValue(*dict, "disabled", base::FundamentalValue(false));
   if (uncommitted)
-    VerifyKeyValue(dict, "uncommitted", base::Value::CreateBooleanValue(true));
+    VerifyKeyValue(*dict, "uncommitted", base::FundamentalValue(true));
   else if (dict->HasKey("uncommitted"))
-    VerifyKeyValue(dict, "uncommitted", base::Value::CreateBooleanValue(false));
+    VerifyKeyValue(*dict, "uncommitted", base::FundamentalValue(false));
 }
 
 void PreferencesBrowserTest::VerifyObservedPref(const std::string& json,
@@ -280,14 +265,20 @@ void PreferencesBrowserTest::VerifyObservedPrefs(
 }
 
 void PreferencesBrowserTest::ExpectNoCommit(const std::string& name) {
-  pref_change_registrar_.Add(name.c_str(), this);
+  pref_change_registrar_.Add(
+      name.c_str(),
+      base::Bind(&PreferencesBrowserTest::OnPreferenceChanged,
+                 base::Unretained(this)));
   EXPECT_CALL(*this, OnCommit(Property(&PrefService::Preference::name, name)))
       .Times(0);
 }
 
 void PreferencesBrowserTest::ExpectSetCommit(const std::string& name,
                                              const base::Value* value) {
-  pref_change_registrar_.Add(name.c_str(), this);
+  pref_change_registrar_.Add(
+      name.c_str(),
+      base::Bind(&PreferencesBrowserTest::OnPreferenceChanged,
+                 base::Unretained(this)));
   EXPECT_CALL(*this, OnCommit(AllOf(
       Property(&PrefService::Preference::name, name),
       Property(&PrefService::Preference::IsUserControlled, true),
@@ -295,7 +286,10 @@ void PreferencesBrowserTest::ExpectSetCommit(const std::string& name,
 }
 
 void PreferencesBrowserTest::ExpectClearCommit(const std::string& name) {
-  pref_change_registrar_.Add(name.c_str(), this);
+  pref_change_registrar_.Add(
+      name.c_str(),
+      base::Bind(&PreferencesBrowserTest::OnPreferenceChanged,
+                 base::Unretained(this)));
   EXPECT_CALL(*this, OnCommit(AllOf(
       Property(&PrefService::Preference::name, name),
       Property(&PrefService::Preference::IsUserControlled, false))));
@@ -330,7 +324,7 @@ void PreferencesBrowserTest::VerifySetPref(const std::string& name,
     ExpectSetCommit(name, value);
   else
     ExpectNoCommit(name);
-  scoped_ptr<base::Value> commit_ptr(base::Value::CreateBooleanValue(commit));
+  scoped_ptr<base::Value> commit_ptr(new base::FundamentalValue(commit));
   std::string value_json;
   std::string commit_json;
   base::JSONWriter::Write(value, &value_json);
@@ -355,7 +349,7 @@ void PreferencesBrowserTest::VerifyClearPref(const std::string& name,
     ExpectClearCommit(name);
   else
     ExpectNoCommit(name);
-  scoped_ptr<base::Value> commit_ptr(base::Value::CreateBooleanValue(commit));
+  scoped_ptr<base::Value> commit_ptr(new base::FundamentalValue(commit));
   std::string commit_json;
   base::JSONWriter::Write(commit_ptr.get(), &commit_json);
   std::wstringstream javascript;
@@ -428,26 +422,26 @@ void PreferencesBrowserTest::UseDefaultTestPrefs(bool includeListPref) {
   types_.push_back("Boolean");
   pref_names_.push_back(prefs::kAlternateErrorPagesEnabled);
   policy_names_.push_back(policy::key::kAlternateErrorPagesEnabled);
-  non_default_values_.push_back(base::Value::CreateBooleanValue(false));
+  non_default_values_.push_back(new base::FundamentalValue(false));
 
   // Integer pref.
   types_.push_back("Integer");
   pref_names_.push_back(prefs::kRestoreOnStartup);
   policy_names_.push_back(policy::key::kRestoreOnStartup);
-  non_default_values_.push_back(base::Value::CreateIntegerValue(4));
+  non_default_values_.push_back(new base::FundamentalValue(4));
 
   // String pref.
   types_.push_back("String");
   pref_names_.push_back(prefs::kEnterpriseWebStoreName);
   policy_names_.push_back(policy::key::kEnterpriseWebStoreName);
-  non_default_values_.push_back(base::Value::CreateStringValue("Store"));
+  non_default_values_.push_back(new base::StringValue("Store"));
 
   // URL pref.
   types_.push_back("URL");
   pref_names_.push_back(prefs::kEnterpriseWebStoreURL);
   policy_names_.push_back(policy::key::kEnterpriseWebStoreURL);
   non_default_values_.push_back(
-      base::Value::CreateStringValue("http://www.google.com/"));
+      new base::StringValue("http://www.google.com/"));
 
   // List pref.
   if (includeListPref) {
@@ -455,8 +449,8 @@ void PreferencesBrowserTest::UseDefaultTestPrefs(bool includeListPref) {
     pref_names_.push_back(prefs::kURLsToRestoreOnStartup);
     policy_names_.push_back(policy::key::kRestoreOnStartupURLs);
     base::ListValue* list = new base::ListValue;
-    list->Append(base::Value::CreateStringValue("http://www.google.com"));
-    list->Append(base::Value::CreateStringValue("http://example.com"));
+    list->Append(new base::StringValue("http://www.google.com"));
+    list->Append(new base::StringValue("http://example.com"));
     non_default_values_.push_back(list);
   }
 
@@ -646,16 +640,15 @@ IN_PROC_BROWSER_TEST_F(PreferencesBrowserTest, ChromeOSDeviceFetchPrefs) {
 
   // Boolean pref.
   pref_names_.push_back(chromeos::kAccountsPrefAllowGuest);
-  default_values_.push_back(base::Value::CreateBooleanValue(true));
-  non_default_values_.push_back(base::Value::CreateBooleanValue(false));
+  default_values_.push_back(new base::FundamentalValue(true));
+  non_default_values_.push_back(new base::FundamentalValue(false));
   decorated_non_default_values.push_back(
       non_default_values_.back()->DeepCopy());
 
   // String pref.
   pref_names_.push_back(chromeos::kReleaseChannel);
-  default_values_.push_back(base::Value::CreateStringValue(""));
-  non_default_values_.push_back(
-      base::Value::CreateStringValue("stable-channel"));
+  default_values_.push_back(new base::StringValue(""));
+  non_default_values_.push_back(new base::StringValue("stable-channel"));
   decorated_non_default_values.push_back(
       non_default_values_.back()->DeepCopy());
 
@@ -663,8 +656,8 @@ IN_PROC_BROWSER_TEST_F(PreferencesBrowserTest, ChromeOSDeviceFetchPrefs) {
   pref_names_.push_back(chromeos::kAccountsPrefUsers);
   default_values_.push_back(new base::ListValue);
   base::ListValue* list = new base::ListValue;
-  list->Append(base::Value::CreateStringValue("me@google.com"));
-  list->Append(base::Value::CreateStringValue("you@google.com"));
+  list->Append(new base::StringValue("me@google.com"));
+  list->Append(new base::StringValue("you@google.com"));
   non_default_values_.push_back(list);
   list = new base::ListValue;
   base::DictionaryValue* dict = new base::DictionaryValue;
@@ -697,7 +690,7 @@ IN_PROC_BROWSER_TEST_F(PreferencesBrowserTest, ChromeOSDeviceFetchPrefs) {
   VerifyObservedPrefs(observed_json, pref_names_, decorated_non_default_values,
                       "", true, false);
 
-  DeleteValues(decorated_non_default_values);
+  STLDeleteElements(&decorated_non_default_values);
 }
 
 // Verifies that initializing the JavaScript Preferences class fires the correct
@@ -708,25 +701,25 @@ IN_PROC_BROWSER_TEST_F(PreferencesBrowserTest, ChromeOSProxyFetchPrefs) {
 
   // Boolean pref.
   pref_names_.push_back(chromeos::kProxySingle);
-  default_values_.push_back(base::Value::CreateBooleanValue(false));
-  non_default_values_.push_back(base::Value::CreateBooleanValue(true));
+  default_values_.push_back(new base::FundamentalValue(false));
+  non_default_values_.push_back(new base::FundamentalValue(true));
 
   // Integer pref.
   pref_names_.push_back(chromeos::kProxySingleHttpPort);
-  default_values_.push_back(base::Value::CreateStringValue(""));
-  non_default_values_.push_back(base::Value::CreateIntegerValue(8080));
+  default_values_.push_back(new base::StringValue(""));
+  non_default_values_.push_back(new base::FundamentalValue(8080));
 
   // String pref.
   pref_names_.push_back(chromeos::kProxySingleHttp);
-  default_values_.push_back(base::Value::CreateStringValue(""));
-  non_default_values_.push_back(base::Value::CreateStringValue("127.0.0.1"));
+  default_values_.push_back(new base::StringValue(""));
+  non_default_values_.push_back(new base::StringValue("127.0.0.1"));
 
   // List pref.
   pref_names_.push_back(chromeos::kProxyIgnoreList);
   default_values_.push_back(new base::ListValue());
   base::ListValue* list = new base::ListValue();
-  list->Append(base::Value::CreateStringValue("www.google.com"));
-  list->Append(base::Value::CreateStringValue("example.com"));
+  list->Append(new base::StringValue("www.google.com"));
+  list->Append(new base::StringValue("example.com"));
   non_default_values_.push_back(list);
 
   // Verify notifications when default values are in effect.

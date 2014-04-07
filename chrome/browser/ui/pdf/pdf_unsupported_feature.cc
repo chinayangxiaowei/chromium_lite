@@ -5,41 +5,40 @@
 #include "chrome/browser/ui/pdf/pdf_unsupported_feature.h"
 
 #include "base/bind.h"
+#include "base/memory/scoped_ptr.h"
 #include "base/utf_string_conversions.h"
 #include "base/values.h"
 #include "base/version.h"
-#include "chrome/browser/api/infobars/confirm_infobar_delegate.h"
 #include "chrome/browser/chrome_plugin_service_filter.h"
-#include "chrome/browser/infobars/infobar_tab_helper.h"
 #include "chrome/browser/lifetime/application_lifetime.h"
-#include "chrome/browser/plugin_finder.h"
-#include "chrome/browser/plugin_installer.h"
-#include "chrome/browser/plugin_prefs.h"
+#include "chrome/browser/plugins/plugin_finder.h"
+#include "chrome/browser/plugins/plugin_metadata.h"
+#include "chrome/browser/plugins/plugin_prefs.h"
 #include "chrome/browser/prefs/pref_service.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/renderer_preferences_util.h"
 #include "chrome/browser/tab_contents/tab_util.h"
 #include "chrome/browser/ui/pdf/open_pdf_in_reader_prompt_delegate.h"
 #include "chrome/browser/ui/pdf/pdf_tab_helper.h"
-#include "chrome/browser/ui/tab_contents/tab_contents.h"
 #include "chrome/common/chrome_content_client.h"
 #include "chrome/common/jstemplate_builder.h"
 #include "chrome/common/pref_names.h"
 #include "content/public/browser/interstitial_page.h"
 #include "content/public/browser/interstitial_page_delegate.h"
+#include "content/public/browser/navigation_details.h"
+#include "content/public/browser/navigation_entry.h"
 #include "content/public/browser/plugin_service.h"
 #include "content/public/browser/render_process_host.h"
 #include "content/public/browser/render_view_host.h"
 #include "content/public/browser/user_metrics.h"
 #include "content/public/browser/web_contents.h"
+#include "content/public/common/page_transition_types.h"
 #include "grit/browser_resources.h"
 #include "grit/generated_resources.h"
 #include "grit/theme_resources.h"
 #include "ui/base/l10n/l10n_util.h"
-#include "ui/base/layout.h"
 #include "ui/base/resource/resource_bundle.h"
 #include "ui/gfx/image/image.h"
-#include "webkit/plugins/npapi/plugin_group.h"
 
 #if defined(OS_WIN)
 #include "base/win/metro.h"
@@ -51,31 +50,30 @@ using content::PluginService;
 using content::Referrer;
 using content::UserMetricsAction;
 using content::WebContents;
-using webkit::npapi::PluginGroup;
 using webkit::WebPluginInfo;
 
 namespace {
 
-static const char kReaderUpdateUrl[] =
+static const char kAdobeReaderIdentifier[] = "adobe-reader";
+static const char kAdobeReaderUpdateUrl[] =
     "http://www.adobe.com/go/getreader_chrome";
 
-// The info bar delegate used to ask the user if they want to use Adobe Reader
-// by default.  We want the infobar to have [No][Yes], so we swap the text on
-// the buttons, and the meaning of the delegate callbacks.
-class PDFEnableAdobeReaderInfoBarDelegate : public ConfirmInfoBarDelegate {
+// The prompt delegate used to ask the user if they want to use Adobe Reader
+// by default.
+class PDFEnableAdobeReaderPromptDelegate
+    : public OpenPDFInReaderPromptDelegate {
  public:
-  explicit PDFEnableAdobeReaderInfoBarDelegate(
-      InfoBarTabHelper* infobar_helper,
-      Profile* profile);
-  virtual ~PDFEnableAdobeReaderInfoBarDelegate();
+  explicit PDFEnableAdobeReaderPromptDelegate(Profile* profile);
+  virtual ~PDFEnableAdobeReaderPromptDelegate();
 
-  // ConfirmInfoBarDelegate
-  virtual void InfoBarDismissed() OVERRIDE;
-  virtual Type GetInfoBarType() const OVERRIDE;
-  virtual bool Accept() OVERRIDE;
-  virtual bool Cancel() OVERRIDE;
-  virtual string16 GetButtonLabel(InfoBarButton button) const OVERRIDE;
+  // OpenPDFInReaderPromptDelegate
   virtual string16 GetMessageText() const OVERRIDE;
+  virtual string16 GetAcceptButtonText() const OVERRIDE;
+  virtual string16 GetCancelButtonText() const OVERRIDE;
+  virtual bool ShouldExpire(
+      const content::LoadCommittedDetails& details) const OVERRIDE;
+  virtual void Accept() OVERRIDE;
+  virtual void Cancel() OVERRIDE;
 
  private:
   void OnYes();
@@ -83,85 +81,74 @@ class PDFEnableAdobeReaderInfoBarDelegate : public ConfirmInfoBarDelegate {
 
   Profile* profile_;
 
-  DISALLOW_IMPLICIT_CONSTRUCTORS(PDFEnableAdobeReaderInfoBarDelegate);
+  DISALLOW_IMPLICIT_CONSTRUCTORS(PDFEnableAdobeReaderPromptDelegate);
 };
 
-PDFEnableAdobeReaderInfoBarDelegate::PDFEnableAdobeReaderInfoBarDelegate(
-    InfoBarTabHelper* infobar_helper, Profile* profile)
-    : ConfirmInfoBarDelegate(infobar_helper),
-      profile_(profile) {
+PDFEnableAdobeReaderPromptDelegate::PDFEnableAdobeReaderPromptDelegate(
+    Profile* profile)
+    : profile_(profile) {
   content::RecordAction(UserMetricsAction("PDF_EnableReaderInfoBarShown"));
 }
 
-PDFEnableAdobeReaderInfoBarDelegate::~PDFEnableAdobeReaderInfoBarDelegate() {
+PDFEnableAdobeReaderPromptDelegate::~PDFEnableAdobeReaderPromptDelegate() {
 }
 
-void PDFEnableAdobeReaderInfoBarDelegate::InfoBarDismissed() {
-  OnNo();
+bool PDFEnableAdobeReaderPromptDelegate::ShouldExpire(
+    const content::LoadCommittedDetails& details) const {
+  content::PageTransition transition =
+      content::PageTransitionStripQualifier(details.entry->GetTransitionType());
+  // We don't want to expire on a reload, because that is how we open the PDF in
+  // Reader.
+  return !details.is_in_page && transition != content::PAGE_TRANSITION_RELOAD;
 }
 
-InfoBarDelegate::Type
-    PDFEnableAdobeReaderInfoBarDelegate::GetInfoBarType() const {
-  return PAGE_ACTION_TYPE;
-}
-
-bool PDFEnableAdobeReaderInfoBarDelegate::Accept() {
-  profile_->GetPrefs()->SetBoolean(
-      prefs::kPluginsShowSetReaderDefaultInfobar, false);
-  OnNo();
-  return true;
-}
-
-bool PDFEnableAdobeReaderInfoBarDelegate::Cancel() {
-  OnYes();
-  return true;
-}
-
-string16 PDFEnableAdobeReaderInfoBarDelegate::GetButtonLabel(
-    InfoBarButton button) const {
-  return l10n_util::GetStringUTF16((button == BUTTON_OK) ?
-      IDS_PDF_INFOBAR_NEVER_USE_READER_BUTTON :
-      IDS_PDF_INFOBAR_ALWAYS_USE_READER_BUTTON);
-}
-
-string16 PDFEnableAdobeReaderInfoBarDelegate::GetMessageText() const {
-  return l10n_util::GetStringUTF16(IDS_PDF_INFOBAR_QUESTION_ALWAYS_USE_READER);
-}
-
-void PDFEnableAdobeReaderInfoBarDelegate::OnYes() {
+void PDFEnableAdobeReaderPromptDelegate::Accept() {
   content::RecordAction(UserMetricsAction("PDF_EnableReaderInfoBarOK"));
   PluginPrefs* plugin_prefs = PluginPrefs::GetForProfile(profile_);
   plugin_prefs->EnablePluginGroup(
-      true, ASCIIToUTF16(webkit::npapi::PluginGroup::kAdobeReaderGroupName));
+      true, ASCIIToUTF16(PluginMetadata::kAdobeReaderGroupName));
   plugin_prefs->EnablePluginGroup(
       false, ASCIIToUTF16(chrome::ChromeContentClient::kPDFPluginName));
 }
 
-void PDFEnableAdobeReaderInfoBarDelegate::OnNo() {
+void PDFEnableAdobeReaderPromptDelegate::Cancel() {
   content::RecordAction(UserMetricsAction("PDF_EnableReaderInfoBarCancel"));
 }
 
+string16 PDFEnableAdobeReaderPromptDelegate::GetAcceptButtonText() const {
+  return l10n_util::GetStringUTF16(IDS_PDF_INFOBAR_ALWAYS_USE_READER_BUTTON);
+}
+
+string16 PDFEnableAdobeReaderPromptDelegate::GetCancelButtonText() const {
+  return l10n_util::GetStringUTF16(IDS_DONE);
+}
+
+string16 PDFEnableAdobeReaderPromptDelegate::GetMessageText() const {
+  return l10n_util::GetStringUTF16(IDS_PDF_INFOBAR_QUESTION_ALWAYS_USE_READER);
+}
+
 // Launch the url to get the latest Adbobe Reader installer.
-void OpenReaderUpdateURL(WebContents* tab) {
+void OpenReaderUpdateURL(WebContents* web_contents) {
   OpenURLParams params(
-      GURL(kReaderUpdateUrl), Referrer(), NEW_FOREGROUND_TAB,
+      GURL(kAdobeReaderUpdateUrl), Referrer(), NEW_FOREGROUND_TAB,
       content::PAGE_TRANSITION_LINK, false);
-  tab->OpenURL(params);
+  web_contents->OpenURL(params);
 }
 
 // Opens the PDF using Adobe Reader.
-void OpenUsingReader(TabContents* tab,
+void OpenUsingReader(WebContents* web_contents,
                      const WebPluginInfo& reader_plugin,
-                     InfoBarDelegate* delegate) {
+                     OpenPDFInReaderPromptDelegate* delegate) {
   ChromePluginServiceFilter::GetInstance()->OverridePluginForTab(
-      tab->web_contents()->GetRenderProcessHost()->GetID(),
-      tab->web_contents()->GetRenderViewHost()->GetRoutingID(),
-      tab->web_contents()->GetURL(),
-      ASCIIToUTF16(PluginGroup::kAdobeReaderGroupName));
-  tab->web_contents()->GetRenderViewHost()->ReloadFrame();
+      web_contents->GetRenderProcessHost()->GetID(),
+      web_contents->GetRenderViewHost()->GetRoutingID(),
+      web_contents->GetURL(),
+      reader_plugin);
+  web_contents->GetRenderViewHost()->ReloadFrame();
 
+  PDFTabHelper* pdf_tab_helper = PDFTabHelper::FromWebContents(web_contents);
   if (delegate)
-    tab->infobar_tab_helper()->AddInfoBar(delegate);
+    pdf_tab_helper->ShowOpenInReaderPrompt(make_scoped_ptr(delegate));
 }
 
 // An interstitial to be used when the user chooses to open a PDF using Adobe
@@ -170,13 +157,13 @@ class PDFUnsupportedFeatureInterstitial
     : public content::InterstitialPageDelegate {
  public:
   PDFUnsupportedFeatureInterstitial(
-      TabContents* tab,
+      WebContents* web_contents,
       const WebPluginInfo& reader_webplugininfo)
-      : tab_contents_(tab),
+      : web_contents_(web_contents),
         reader_webplugininfo_(reader_webplugininfo) {
     content::RecordAction(UserMetricsAction("PDF_ReaderInterstitialShown"));
     interstitial_page_ = InterstitialPage::Create(
-        tab->web_contents(), false, tab->web_contents()->GetURL(), this);
+        web_contents, false, web_contents->GetURL(), this);
     interstitial_page_->Show();
   }
 
@@ -205,8 +192,7 @@ class PDFUnsupportedFeatureInterstitial
         l10n_util::GetStringUTF16(IDS_READER_OUT_OF_DATE_BLOCKING_PAGE_CANCEL));
 
     base::StringPiece html(ResourceBundle::GetSharedInstance().
-        GetRawDataResource(IDR_READER_OUT_OF_DATE_HTML,
-                           ui::SCALE_FACTOR_NONE));
+                           GetRawDataResource(IDR_READER_OUT_OF_DATE_HTML));
 
     return jstemplate_builder::GetI18nTemplateHtml(html, &strings);
   }
@@ -222,11 +208,13 @@ class PDFUnsupportedFeatureInterstitial
     if (command == "1") {
       content::RecordAction(
           UserMetricsAction("PDF_ReaderInterstitialUpdate"));
-      OpenReaderUpdateURL(tab_contents_->web_contents());
+      OpenReaderUpdateURL(web_contents_);
     } else if (command == "2") {
       content::RecordAction(
           UserMetricsAction("PDF_ReaderInterstitialIgnore"));
-      OpenUsingReader(tab_contents_, reader_webplugininfo_, NULL);
+      // Pretend that the plug-in is up-to-date so that we don't block it.
+      reader_webplugininfo_.version = ASCIIToUTF16("11.0.0.0");
+      OpenUsingReader(web_contents_, reader_webplugininfo_, NULL);
     } else {
       NOTREACHED();
     }
@@ -235,12 +223,13 @@ class PDFUnsupportedFeatureInterstitial
 
   virtual void OverrideRendererPrefs(
       content::RendererPreferences* prefs) OVERRIDE {
-    renderer_preferences_util::UpdateFromSystemSettings(
-        prefs, tab_contents_->profile());
+    Profile* profile =
+        Profile::FromBrowserContext(web_contents_->GetBrowserContext());
+    renderer_preferences_util::UpdateFromSystemSettings(prefs, profile);
   }
 
  private:
-  TabContents* tab_contents_;
+  WebContents* web_contents_;
   WebPluginInfo reader_webplugininfo_;
   InterstitialPage* interstitial_page_;  // Owns us.
 
@@ -253,7 +242,7 @@ class PDFUnsupportedFeaturePromptDelegate
     : public OpenPDFInReaderPromptDelegate {
  public:
   // |reader| is NULL if Adobe Reader isn't installed.
-  PDFUnsupportedFeaturePromptDelegate(TabContents* tab_contents,
+  PDFUnsupportedFeaturePromptDelegate(WebContents* web_contents,
                                       const webkit::WebPluginInfo* reader,
                                       PluginFinder* plugin_finder);
   virtual ~PDFUnsupportedFeaturePromptDelegate();
@@ -262,11 +251,13 @@ class PDFUnsupportedFeaturePromptDelegate
   virtual string16 GetMessageText() const OVERRIDE;
   virtual string16 GetAcceptButtonText() const OVERRIDE;
   virtual string16 GetCancelButtonText() const OVERRIDE;
+  virtual bool ShouldExpire(
+      const content::LoadCommittedDetails& details) const OVERRIDE;
   virtual void Accept() OVERRIDE;
   virtual void Cancel() OVERRIDE;
 
  private:
-  TabContents* tab_contents_;
+  WebContents* web_contents_;
   bool reader_installed_;
   bool reader_vulnerable_;
   WebPluginInfo reader_webplugininfo_;
@@ -275,10 +266,10 @@ class PDFUnsupportedFeaturePromptDelegate
 };
 
 PDFUnsupportedFeaturePromptDelegate::PDFUnsupportedFeaturePromptDelegate(
-    TabContents* tab_contents,
+    WebContents* web_contents,
     const webkit::WebPluginInfo* reader,
     PluginFinder* plugin_finder)
-    : tab_contents_(tab_contents),
+    : web_contents_(web_contents),
       reader_installed_(!!reader),
       reader_vulnerable_(false) {
   if (!reader_installed_) {
@@ -291,12 +282,11 @@ PDFUnsupportedFeaturePromptDelegate::PDFUnsupportedFeaturePromptDelegate(
   reader_webplugininfo_ = *reader;
 
 #if defined(ENABLE_PLUGIN_INSTALLATION)
-  PluginInstaller* installer =
-      plugin_finder->FindPluginWithIdentifier("adobe-reader");
+  scoped_ptr<PluginMetadata> plugin_metadata(
+      plugin_finder->GetPluginMetadata(reader_webplugininfo_));
 
-  reader_vulnerable_ =
-      installer->GetSecurityStatus(*reader) !=
-          PluginInstaller::SECURITY_STATUS_UP_TO_DATE;
+  reader_vulnerable_ = plugin_metadata->GetSecurityStatus(*reader) !=
+                       PluginMetadata::SECURITY_STATUS_UP_TO_DATE;
 #else
   NOTREACHED();
 #endif
@@ -325,6 +315,11 @@ string16 PDFUnsupportedFeaturePromptDelegate::GetCancelButtonText() const {
   return l10n_util::GetStringUTF16(IDS_DONE);
 }
 
+bool PDFUnsupportedFeaturePromptDelegate::ShouldExpire(
+    const content::LoadCommittedDetails& details) const {
+  return !details.is_in_page;
+}
+
 void PDFUnsupportedFeaturePromptDelegate::Accept() {
 #if defined(OS_WIN)
   if (base::win::IsMetroProcess()) {
@@ -335,26 +330,23 @@ void PDFUnsupportedFeaturePromptDelegate::Accept() {
 
   if (!reader_installed_) {
     content::RecordAction(UserMetricsAction("PDF_InstallReaderInfoBarOK"));
-    OpenReaderUpdateURL(tab_contents_->web_contents());
+    OpenReaderUpdateURL(web_contents_);
     return;
   }
 
   content::RecordAction(UserMetricsAction("PDF_UseReaderInfoBarOK"));
 
   if (reader_vulnerable_) {
-    new PDFUnsupportedFeatureInterstitial(tab_contents_, reader_webplugininfo_);
+    new PDFUnsupportedFeatureInterstitial(web_contents_, reader_webplugininfo_);
     return;
   }
 
-  if (tab_contents_->profile()->GetPrefs()->GetBoolean(
-      prefs::kPluginsShowSetReaderDefaultInfobar)) {
-    InfoBarDelegate* bar = new PDFEnableAdobeReaderInfoBarDelegate(
-        tab_contents_->infobar_tab_helper(), tab_contents_->profile());
-    OpenUsingReader(tab_contents_, reader_webplugininfo_, bar);
-    return;
-  }
+  Profile* profile =
+      Profile::FromBrowserContext(web_contents_->GetBrowserContext());
+  OpenPDFInReaderPromptDelegate* delegate =
+      new PDFEnableAdobeReaderPromptDelegate(profile);
 
-  OpenUsingReader(tab_contents_, reader_webplugininfo_, NULL);
+  OpenUsingReader(web_contents_, reader_webplugininfo_, delegate);
 }
 
 void PDFUnsupportedFeaturePromptDelegate::Cancel() {
@@ -363,49 +355,43 @@ void PDFUnsupportedFeaturePromptDelegate::Cancel() {
                         UserMetricsAction("PDF_InstallReaderInfoBarCancel"));
 }
 
+#if defined(OS_WIN) && defined(ENABLE_PLUGIN_INSTALLATION)
 void GotPluginsCallback(int process_id,
                         int routing_id,
-                        PluginFinder* plugin_finder,
                         const std::vector<webkit::WebPluginInfo>& plugins) {
   WebContents* web_contents =
       tab_util::GetWebContentsByID(process_id, routing_id);
   if (!web_contents)
     return;
 
-  TabContents* tab = TabContents::FromWebContents(web_contents);
-  if (!tab)
-    return;
-
-  string16 reader_group_name(ASCIIToUTF16(PluginGroup::kAdobeReaderGroupName));
-  // If the Reader plugin is disabled by policy, don't prompt them.
-  PluginPrefs* plugin_prefs = PluginPrefs::GetForProfile(tab->profile());
-  if (plugin_prefs->PolicyStatusForPlugin(reader_group_name) ==
-      PluginPrefs::POLICY_DISABLED) {
-    return;
-  }
-
   const webkit::WebPluginInfo* reader = NULL;
+  PluginFinder* plugin_finder = PluginFinder::GetInstance();
   for (size_t i = 0; i < plugins.size(); ++i) {
-    PluginInstaller* installer = plugin_finder->GetPluginInstaller(plugins[i]);
-    if (reader_group_name == installer->name()) {
-      DCHECK(!reader);
-      reader = &plugins[i];
+    scoped_ptr<PluginMetadata> plugin_metadata(
+        plugin_finder->GetPluginMetadata(plugins[i]));
+    if (plugin_metadata->identifier() != kAdobeReaderIdentifier)
+      continue;
+
+    DCHECK(!reader);
+    reader = &plugins[i];
+    // If the Reader plugin is disabled by policy, don't prompt them.
+    Profile* profile =
+        Profile::FromBrowserContext(web_contents->GetBrowserContext());
+    PluginPrefs* plugin_prefs = PluginPrefs::GetForProfile(profile);
+    if (plugin_prefs->PolicyStatusForPlugin(plugin_metadata->name()) ==
+        PluginPrefs::POLICY_DISABLED) {
+      return;
     }
+    break;
   }
 
   scoped_ptr<OpenPDFInReaderPromptDelegate> prompt(
-      new PDFUnsupportedFeaturePromptDelegate(tab, reader, plugin_finder));
+      new PDFUnsupportedFeaturePromptDelegate(
+          web_contents, reader, plugin_finder));
   PDFTabHelper* pdf_tab_helper = PDFTabHelper::FromWebContents(web_contents);
   pdf_tab_helper->ShowOpenInReaderPrompt(prompt.Pass());
 }
-
-void GotPluginFinderCallback(int process_id,
-                             int routing_id,
-                             PluginFinder* plugin_finder) {
-  PluginService::GetInstance()->GetPlugins(
-      base::Bind(&GotPluginsCallback, process_id, routing_id,
-                 base::Unretained(plugin_finder)));
-}
+#endif  // defined(OS_WIN) && defined(ENABLE_PLUGIN_INSTALLATION)
 
 }  // namespace
 
@@ -413,7 +399,7 @@ void PDFHasUnsupportedFeature(content::WebContents* web_contents) {
 #if defined(OS_WIN) && defined(ENABLE_PLUGIN_INSTALLATION)
   // Only works for Windows for now.  For Mac, we'll have to launch the file
   // externally since Adobe Reader doesn't work inside Chrome.
-  PluginFinder::Get(base::Bind(&GotPluginFinderCallback,
+  PluginService::GetInstance()->GetPlugins(base::Bind(&GotPluginsCallback,
       web_contents->GetRenderProcessHost()->GetID(),
       web_contents->GetRenderViewHost()->GetRoutingID()));
 #endif

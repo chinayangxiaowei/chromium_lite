@@ -24,7 +24,7 @@ class MockStorageInfoProvider : public StorageInfoProvider {
   MockStorageInfoProvider() : is_watching_(false) {
   }
   virtual ~MockStorageInfoProvider() {
-    StopWatching();
+    Stop();
   }
 
   virtual bool QueryInfo(StorageInfo* info) OVERRIDE {
@@ -32,7 +32,8 @@ class MockStorageInfoProvider : public StorageInfoProvider {
 
     linked_ptr<StorageUnitInfo> unit(new StorageUnitInfo());
     unit->id = "0xbeaf";
-    unit->type = systeminfo::kStorageTypeUnknown;
+    unit->type = api::experimental_system_info_storage::
+        EXPERIMENTAL_SYSTEM_INFO_STORAGE_STORAGE_UNIT_TYPE_UNKNOWN;
     unit->capacity = 4098;
     unit->available_capacity = 1024;
 
@@ -45,7 +46,7 @@ class MockStorageInfoProvider : public StorageInfoProvider {
     return false;
   }
 
-  bool StartWatching() {
+  bool Start() {
     if (is_watching_) return false;
 
     // Start the timer to emulate storage.onChanged event.
@@ -57,7 +58,7 @@ class MockStorageInfoProvider : public StorageInfoProvider {
     return true;
   }
 
-  bool StopWatching() {
+  bool Stop() {
     if (!is_watching_) return false;
     is_watching_ = false;
     timer_.Stop();
@@ -109,7 +110,7 @@ IN_PROC_BROWSER_TEST_F(SystemInfoStorageApiTest, Storage) {
   ui_test_utils::NavigateToURL(browser(), page_url);
   EXPECT_TRUE(listener.WaitUntilSatisfied());
 
-  provider->StartWatching();
+  provider->Start();
   listener.Reply("go");
   EXPECT_TRUE(catcher.GetNextResult()) << catcher.message();
 }

@@ -5,12 +5,13 @@
 // This file exists to aggregate all of the javascript used by the
 // settings page into a single file which will be flattened and served
 // as a single resource.
+<include src="preferences.js"></include>
+<include src="options_bubble.js"></include>
 <include src="controlled_setting.js"></include>
 <include src="deletable_item_list.js"></include>
 <include src="editable_text_field.js"></include>
 <include src="inline_editable_list.js"></include>
 <include src="options_page.js"></include>
-<include src="preferences.js"></include>
 <include src="pref_ui.js"></include>
 <include src="settings_dialog.js"></include>
 <if expr="pp_ifdef('chromeos')">
@@ -41,10 +42,6 @@
   var PointerOverlay = options.PointerOverlay;
   var UIAccountTweaks = uiAccountTweaks.UIAccountTweaks;
 </if>
-<if expr="pp_ifdef('chromeos') and pp_ifdef('use_ash')">
-  <include src="chromeos/set_wallpaper_options.js"></include>
-  var SetWallpaperOptions = options.SetWallpaperOptions;
-</if>
 <if expr="pp_ifdef('use_nss')">
   <include src="certificate_tree.js"></include>
   <include src="certificate_manager.js"></include>
@@ -67,21 +64,25 @@
 <include src="browser_options_profile_list.js"></include>
 <include src="browser_options_startup_page_list.js"></include>
 <include src="clear_browser_data_overlay.js"></include>
+<include src="confirm_dialog.js"></include>
 <include src="content_settings.js"></include>
+<include src="content_settings2.js"></include>
 <include src="content_settings_exceptions_area.js"></include>
 <include src="content_settings_ui.js"></include>
 <include src="cookies_list.js"></include>
 <include src="cookies_view.js"></include>
-<include src="cookies_view_app.js"></include>
-<include src="do_not_track_confirm_overlay.js"></include>
 <include src="factory_reset_overlay.js"></include>
+<include src="managed_user_settings.js"></include>
 <include src="font_settings.js"></include>
 <include src="handler_options.js"></include>
 <include src="handler_options_list.js"></include>
 <include src="home_page_overlay.js"></include>
 <include src="import_data_overlay.js"></include>
-<include src="instant_confirm_overlay.js"></include>
 <include src="language_add_language_overlay.js"></include>
+<if expr="not is_macosx">
+  <include src="language_dictionary_overlay_word_list.js"></include>
+  <include src="language_dictionary_overlay.js"></include>
+</if>
 <include src="language_list.js"></include>
 <include src="language_options.js"></include>
 <include src="manage_profile_overlay.js"></include>
@@ -94,8 +95,10 @@
 <include src="search_engine_manager.js"></include>
 <include src="search_engine_manager_engine_list.js"></include>
 <include src="search_page.js"></include>
-<include src="spelling_confirm_overlay.js"></include>
 <include src="startup_overlay.js"></include>
 <include src="../sync_setup_overlay.js"></include>
 <include src="../uber/uber_utils.js"></include>
 <include src="options.js"></include>
+<if expr="pp_ifdef('enable_settings_app')">
+  <include src="options_settings_app.js"></include>
+</if>

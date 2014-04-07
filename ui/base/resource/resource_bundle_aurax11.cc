@@ -35,25 +35,13 @@ void ResourceBundle::LoadCommonResources() {
   // scale factor to gfx::ImageSkia::AddRepresentation.
 
   AddDataPackFromPath(GetResourcesPakFilePath("chrome.pak"),
-                      SCALE_FACTOR_100P);
+                      SCALE_FACTOR_NONE);
+  AddDataPackFromPath(GetResourcesPakFilePath(
+      "chrome_100_percent.pak"), SCALE_FACTOR_100P);
 
-  if (ui::GetDisplayLayout() == ui::LAYOUT_TOUCH) {
-    // 1x touch
-    AddDataPackFromPath(GetResourcesPakFilePath(
-                        "chrome_touch_100_percent.pak"),
-                        SCALE_FACTOR_100P);
-  } else {
-    // 1x non touch
-    AddDataPackFromPath(GetResourcesPakFilePath(
-                        "chrome_100_percent.pak"),
-                        SCALE_FACTOR_100P);
-
-    // 2x non touch
-    // TODO(flackr): Don't log an error message if these are not found as this
-    // is an expected case in ChromeOS.
+  if (ui::IsScaleFactorSupported(SCALE_FACTOR_200P)) {
     AddOptionalDataPackFromPath(GetResourcesPakFilePath(
-                                "chrome_200_percent.pak"),
-                                SCALE_FACTOR_200P);
+        "chrome_200_percent.pak"), SCALE_FACTOR_200P);
   }
 }
 

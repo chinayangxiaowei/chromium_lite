@@ -14,11 +14,12 @@
 #include "base/debug/debugger.h"
 #include "base/file_util.h"
 #include "base/file_version_info.h"
+#include "base/files/scoped_temp_dir.h"
 #include "base/i18n/icu_util.h"
 #include "base/lazy_instance.h"
 #include "base/memory/scoped_ptr.h"
 #include "base/path_service.h"
-#include "base/scoped_temp_dir.h"
+#include "base/prefs/json_pref_store.h"
 #include "base/string_piece.h"
 #include "base/string_util.h"
 #include "base/stringprintf.h"
@@ -26,7 +27,6 @@
 #include "base/test/test_timeouts.h"
 #include "base/threading/platform_thread.h"
 #include "base/threading/thread.h"
-#include "base/win/scoped_com_initializer.h"
 #include "base/win/scoped_comptr.h"
 #include "base/win/scoped_handle.h"
 #include "chrome/app/chrome_main_delegate.h"
@@ -168,7 +168,7 @@ class FakeMainDelegate : public content::ContentMainDelegate {
 
 void FilterDisabledTests() {
   if (::testing::FLAGS_gtest_filter.length() &&
-      ::testing::FLAGS_gtest_filter.Compare("*") != 0) {
+      ::testing::FLAGS_gtest_filter != "*") {
     // Don't override user specified filters.
     return;
   }
@@ -203,6 +203,18 @@ void FilterDisabledTests() {
     "URLRequestTestHTTP.VaryHeader",
     "URLRequestTestHTTP.GetZippedTest",
 
+    // Tests that requests can be blocked asynchronously in states
+    // OnBeforeURLRequest, OnBeforeSendHeaders and OnHeadersReceived. At least
+    // the second state is not supported by CF.
+    "URLRequestTestHTTP.NetworkDelegateBlockAsynchronously",
+
+    // Tests for cancelling requests in states OnBeforeSendHeaders and
+    // OnHeadersReceived, which do not seem supported by CF.
+    "URLRequestTestHTTP.NetworkDelegateCancelRequestSynchronously2",
+    "URLRequestTestHTTP.NetworkDelegateCancelRequestSynchronously3",
+    "URLRequestTestHTTP.NetworkDelegateCancelRequestAsynchronously2",
+    "URLRequestTestHTTP.NetworkDelegateCancelRequestAsynchronously3",
+
     // Tests that requests can be cancelled while blocking in
     // OnBeforeSendHeaders state. But this state is not supported by CF.
     "URLRequestTestHTTP.NetworkDelegateCancelWhileWaiting2",
@@ -230,6 +242,13 @@ void FilterDisabledTests() {
     // now.
     "URLRequestTestHTTP.GetTest_NoCache",
 
+    // These tests use HTTPS, and IE's trust store does not have the test
+    // certs. So these tests time out waiting for user input. The
+    // functionality they test (HTTP Strict Transport Security) does not
+    // work in Chrome Frame anyway.
+    "URLRequestTestHTTP.ProcessSTS",
+    "URLRequestTestHTTP.ProcessSTSOnce",
+
     // These tests have been disabled as the Chrome cookie policies don't make
     // sense or have not been implemented for the host network stack.
     "URLRequestTest.DoNotSaveCookies_ViaPolicy",
@@ -246,9 +265,10 @@ void FilterDisabledTests() {
     "URLRequestTestHTTP.ProxyTunnelRedirectTest",
     "URLRequestTestHTTP.UnexpectedServerAuthTest",
 
-    // This test is disabled as it expects an empty UA to be echoed back from
-    // the server which is not the case in ChromeFrame.
+    // These tests are disabled as they expect an empty UA to be echoed back
+    // from the server which is not the case in ChromeFrame.
     "URLRequestTestHTTP.DefaultUserAgent",
+    "URLRequestTestHTTP.EmptyHttpUserAgentSettings",
     // This test modifies the UploadData object after it has been marshaled to
     // ChromeFrame. We don't support this.
     "URLRequestTestHTTP.TestPostChunkedDataAfterStart",
@@ -260,6 +280,7 @@ void FilterDisabledTests() {
 
     // Not supported in ChromeFrame as we use IE's network stack.
     "URLRequestTest.NetworkDelegateProxyError",
+    "URLRequestTest.AcceptClockSkewCookieWithWrongDateTimezone",
 
     // URLRequestAutomationJob needs to support NeedsAuth.
     // http://crbug.com/98446
@@ -276,12 +297,13 @@ void FilterDisabledTests() {
 
     // These tests are unsupported in CF.
     "HTTPSRequestTest.HTTPSPreloadedHSTSTest",
+    "HTTPSRequestTest.HTTPSErrorsNoClobberTSSTest",
+    "HTTPSRequestTest.HSTSPreservesPosts",
     "HTTPSRequestTest.ResumeTest",
     "HTTPSRequestTest.SSLSessionCacheShardTest",
     "HTTPSRequestTest.SSLSessionCacheShardTest",
     "HTTPSRequestTest.SSLv3Fallback",
     "HTTPSRequestTest.TLSv1Fallback",
-    "HTTPSRequestTest.HTTPSErrorsNoClobberTSSTest",
     "HTTPSOCSPTest.*",
     "HTTPSEVCRLSetTest.*",
     "HTTPSCRLSetTest.*"
@@ -333,8 +355,9 @@ void FilterDisabledTests() {
 // Same as BrowserProcessImpl, but uses custom profile manager.
 class FakeBrowserProcessImpl : public BrowserProcessImpl {
  public:
-  explicit FakeBrowserProcessImpl(const CommandLine& command_line)
-      : BrowserProcessImpl(command_line) {
+  FakeBrowserProcessImpl(base::SequencedTaskRunner* local_state_task_runner,
+                         const CommandLine& command_line)
+      : BrowserProcessImpl(local_state_task_runner, command_line) {
     profiles_dir_.CreateUniqueTempDir();
   }
 
@@ -357,7 +380,7 @@ class FakeBrowserProcessImpl : public BrowserProcessImpl {
   }
 
  private:
-  ScopedTempDir profiles_dir_;
+  base::ScopedTempDir profiles_dir_;
   scoped_ptr<ProfileManager> profile_manager_;
 };
 
@@ -475,12 +498,18 @@ void FakeExternalTab::Initialize() {
   cmd->AppendSwitch(switches::kDisableWebResources);
   cmd->AppendSwitch(switches::kSingleProcess);
 
-  browser_process_.reset(new FakeBrowserProcessImpl(*cmd));
+  FilePath local_state_path;
+  CHECK(PathService::Get(chrome::FILE_LOCAL_STATE, &local_state_path));
+  scoped_refptr<base::SequencedTaskRunner> local_state_task_runner =
+      JsonPrefStore::GetTaskRunnerForFile(local_state_path,
+                                          BrowserThread::GetBlockingPool());
+  browser_process_.reset(new FakeBrowserProcessImpl(local_state_task_runner,
+                                                    *cmd));
   // BrowserProcessImpl's constructor should set g_browser_process.
   DCHECK(g_browser_process);
   g_browser_process->SetApplicationLocale("en-US");
 
-  content::RenderProcessHost::set_run_renderer_in_process(true);
+  content::RenderProcessHost::SetRunRendererInProcess(true);
 
   browser_process_->local_state()->RegisterBooleanPref(
       prefs::kMetricsReportingEnabled, false);
@@ -522,7 +551,6 @@ void CFUrlRequestUnittestRunner::StartChromeFrameInHostBrowser() {
   if (!launch_browser_)
     return;
 
-  base::win::ScopedCOMInitializer com;
   chrome_frame_test::CloseAllIEWindows();
 
   // Tweak IE settings to make it amenable to testing before launching it.
@@ -551,10 +579,8 @@ void CFUrlRequestUnittestRunner::StartChromeFrameInHostBrowser() {
 }
 
 void CFUrlRequestUnittestRunner::ShutDownHostBrowser() {
-  if (launch_browser_) {
-    base::win::ScopedCOMInitializer com;
+  if (launch_browser_)
     chrome_frame_test::CloseAllIEWindows();
-  }
 }
 
 void CFUrlRequestUnittestRunner::OnIEShutdownFailure() {
@@ -713,10 +739,8 @@ void CFUrlRequestUnittestRunner::OnInitializationTimeout() {
 
   StopFileLogger(true);
 
-  if (launch_browser_) {
-    base::win::ScopedCOMInitializer com;
+  if (launch_browser_)
     chrome_frame_test::CloseAllIEWindows();
-  }
 
   if (ie_configurator_.get() != NULL)
     ie_configurator_->RevertSettings();
@@ -729,7 +753,7 @@ void CFUrlRequestUnittestRunner::OnInitializationTimeout() {
 
 void CFUrlRequestUnittestRunner::OverrideHttpHost() {
   override_http_host_.reset(
-      new ScopedCustomUrlRequestTestHttpHost(
+      new net::ScopedCustomUrlRequestTestHttpHost(
           chrome_frame_test::GetLocalIPv4Address()));
 }
 
@@ -770,6 +794,8 @@ void CFUrlRequestUnittestRunner::PreMainMessageLoopRun() {
       base::Bind(
           &CFUrlRequestUnittestRunner::ProcessSingletonNotificationCallback,
           base::Unretained(this)));
+  // Call Create directly instead of NotifyOtherProcessOrCreate as failure is
+  // prefered to notifying another process here.
   if (!process_singleton_->Create(callback)) {
     LOG(FATAL) << "Failed to start up ProcessSingleton. Is another test "
                << "executable or Chrome Frame running?";

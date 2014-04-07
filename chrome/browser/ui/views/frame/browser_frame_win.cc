@@ -46,6 +46,7 @@
 #include "ui/views/widget/widget.h"
 #include "ui/views/window/non_client_view.h"
 #include "webkit/glue/window_open_disposition.h"
+#include "win8/util/win8_util.h"
 
 #pragma comment(lib, "dwmapi.lib")
 
@@ -78,12 +79,12 @@ views::Button* MakeWindowSwitcherButton(views::ButtonListener* listener,
   // The button in the incognito window has the hot-cold images inverted
   // with respect to the regular browser window.
   switcher_button->SetImage(
-      views::ImageButton::BS_NORMAL,
+      views::ImageButton::STATE_NORMAL,
       ui::ResourceBundle::GetSharedInstance().GetImageSkiaNamed(
           is_off_the_record ? IDR_INCOGNITO_SWITCH_ON :
                               IDR_INCOGNITO_SWITCH_OFF));
   switcher_button->SetImage(
-      views::ImageButton::BS_HOT,
+      views::ImageButton::STATE_HOVERED,
       ui::ResourceBundle::GetSharedInstance().GetImageSkiaNamed(
           is_off_the_record ? IDR_INCOGNITO_SWITCH_OFF :
                               IDR_INCOGNITO_SWITCH_ON));
@@ -91,20 +92,6 @@ views::Button* MakeWindowSwitcherButton(views::ButtonListener* listener,
                                      views::ImageButton::ALIGN_MIDDLE);
   return switcher_button;
 }
-
-static int GetMinimizeButtonOffsetForWindow(gfx::NativeView window) {
-  // The WM_GETTITLEBARINFOEX message can fail if we are not active/visible.
-  TITLEBARINFOEX titlebar_info = {0};
-  titlebar_info.cbSize = sizeof(TITLEBARINFOEX);
-  SendMessage(window, WM_GETTITLEBARINFOEX, 0,
-              reinterpret_cast<WPARAM>(&titlebar_info));
-
-  CPoint minimize_button_corner(titlebar_info.rgrect[2].left,
-                                titlebar_info.rgrect[2].top);
-  MapWindowPoints(HWND_DESKTOP, window, &minimize_button_corner, 1);
-  return minimize_button_corner.x;
-}
-
 
 ///////////////////////////////////////////////////////////////////////////////
 // BrowserFrameWin, public:
@@ -115,9 +102,8 @@ BrowserFrameWin::BrowserFrameWin(BrowserFrame* browser_frame,
       browser_view_(browser_view),
       browser_frame_(browser_frame),
       system_menu_delegate_(new SystemMenuModelDelegate(browser_view,
-          browser_view->browser())),
-      cached_minimize_button_x_delta_(0) {
-  if (base::win::IsMetroProcess()) {
+          browser_view->browser())) {
+  if (win8::IsSingleWindowMetroMode()) {
     browser_view->SetWindowSwitcherButton(
         MakeWindowSwitcherButton(this, browser_view->IsOffTheRecord()));
   }
@@ -192,10 +178,9 @@ bool BrowserFrameWin::GetClientAreaInsets(gfx::Insets* insets) const {
 }
 
 void BrowserFrameWin::HandleFrameChanged() {
-  // We need to update the glass region on or off before the base class adjusts
-  // the window region.
-  UpdateDWMFrame();
+  // Handle window frame layout changes, then set the updated glass region.
   NativeWidgetWin::HandleFrameChanged();
+  UpdateDWMFrame();
 }
 
 bool BrowserFrameWin::PreHandleMSG(UINT message,
@@ -219,10 +204,10 @@ bool BrowserFrameWin::PreHandleMSG(UINT message,
   switch (message) {
   case WM_ACTIVATE:
     if (LOWORD(w_param) != WA_INACTIVE)
-      CacheMinimizeButtonDelta();
+      minimize_button_metrics_.OnHWNDActivated();
     return false;
   case WM_PRINT:
-    if (base::win::IsMetroProcess()) {
+    if (win8::IsSingleWindowMetroMode()) {
       // This message is sent by the AnimateWindow API which is used in metro
       // mode to flip between active chrome windows.
       RECT client_rect = {0};
@@ -252,6 +237,9 @@ void BrowserFrameWin::PostHandleMSG(UINT message,
                                     WPARAM w_param,
                                     LPARAM l_param) {
   switch (message) {
+  case WM_CREATE:
+    minimize_button_metrics_.Init(GetNativeView());
+    break;
   case WM_WINDOWPOSCHANGED:
     UpdateDWMFrame();
 
@@ -276,7 +264,7 @@ void BrowserFrameWin::PostHandleMSG(UINT message,
 }
 
 void BrowserFrameWin::OnScreenReaderDetected() {
-  BrowserAccessibilityState::GetInstance()->OnScreenReaderDetected();
+  content::BrowserAccessibilityState::GetInstance()->OnScreenReaderDetected();
   NativeWidgetWin::OnScreenReaderDetected();
 }
 
@@ -323,7 +311,7 @@ void BrowserFrameWin::FrameTypeChanged() {
   // In Windows 8 metro mode the frame type is set to FRAME_TYPE_FORCE_CUSTOM
   // by default. We reset it back to FRAME_TYPE_DEFAULT to ensure that we
   // don't end up defaulting to BrowserNonClientFrameView in all cases.
-  if (base::win::IsMetroProcess())
+  if (win8::IsSingleWindowMetroMode())
     browser_frame_->set_frame_type(views::Widget::FRAME_TYPE_DEFAULT);
 
   views::NativeWidgetWin::FrameTypeChanged();
@@ -331,12 +319,12 @@ void BrowserFrameWin::FrameTypeChanged() {
   // In Windows 8 metro mode we call Show on the BrowserFrame instance to
   // ensure that the window can be styled appropriately, i.e. no sysmenu,
   // etc.
-  if (base::win::IsMetroProcess())
+  if (win8::IsSingleWindowMetroMode())
     Show();
 }
 
 void BrowserFrameWin::SetFullscreen(bool fullscreen) {
-  if (base::win::IsMetroProcess()) {
+  if (win8::IsSingleWindowMetroMode()) {
     HMODULE metro = base::win::GetMetroModule();
     if (metro) {
       MetroSetFullscreen set_full_screen = reinterpret_cast<MetroSetFullscreen>(
@@ -358,7 +346,7 @@ void BrowserFrameWin::Activate() {
   // being displayed is hidden and the new window being activated becomes
   // visible. This is achieved by calling AdjustFrameForImmersiveMode()
   // followed by ShowWindow().
-  if (base::win::IsMetroProcess()) {
+  if (win8::IsSingleWindowMetroMode()) {
     AdjustFrameForImmersiveMode();
     ::ShowWindow(browser_frame_->GetNativeWindow(), SW_SHOWNORMAL);
   } else {
@@ -392,25 +380,7 @@ void BrowserFrameWin::InitSystemContextMenu() {
 }
 
 int BrowserFrameWin::GetMinimizeButtonOffset() const {
-  int minimize_button_offset =
-      GetMinimizeButtonOffsetForWindow(GetNativeView());
-
-  if (minimize_button_offset > 0)
-    return minimize_button_offset;
-
-  // If we fail to get the minimize button offset via the WM_GETTITLEBARINFOEX
-  // message then calculate and return this via the
-  // cached_minimize_button_x_delta_ member value. Please see
-  // CacheMinimizeButtonDelta() for more details.
-  DCHECK(cached_minimize_button_x_delta_);
-
-  RECT client_rect = {0};
-  GetClientRect(GetNativeView(), &client_rect);
-
-  if (base::i18n::IsRTL())
-    return cached_minimize_button_x_delta_;
-  else
-    return client_rect.right - cached_minimize_button_x_delta_;
+  return minimize_button_metrics_.GetMinimizeButtonOffsetX();
 }
 
 void BrowserFrameWin::TabStripDisplayModeChanged() {
@@ -437,8 +407,8 @@ void BrowserFrameWin::ButtonPressed(views::Button* sender,
 
   DCHECK(profile_to_switch_to);
 
-  Browser* browser_to_switch_to =
-      browser::FindTabbedBrowser(profile_to_switch_to, false);
+  Browser* browser_to_switch_to = browser::FindTabbedBrowser(
+      profile_to_switch_to, false, chrome::HOST_DESKTOP_TYPE_NATIVE);
 
   DCHECK(browser_to_switch_to);
 
@@ -485,7 +455,7 @@ void BrowserFrameWin::UpdateDWMFrame() {
     }
     // In maximized mode, we only have a titlebar strip of glass, no side/bottom
     // borders.
-    if (!browser_view_->IsFullscreen()) {
+    if (!IsFullscreen()) {
       gfx::Rect tabstrip_bounds(
           browser_frame_->GetBoundsForTabStrip(browser_view_->tabstrip()));
       margins.cyTopHeight = tabstrip_bounds.bottom() + kDWMFrameTopOffset;
@@ -625,24 +595,6 @@ void BrowserFrameWin::GetMetroCurrentTabInfo(WPARAM w_param) {
       UTF8ToWide(current_tab->GetURL().spec()));
 }
 
-void BrowserFrameWin::CacheMinimizeButtonDelta() {
-  int minimize_offset = GetMinimizeButtonOffsetForWindow(GetNativeView());
-  if (!minimize_offset)
-    return;
-
-  RECT rect = {0};
-  GetClientRect(GetNativeView(), &rect);
-  // Calculate and cache the value of the minimize button delta, i.e. the
-  // offset to be applied to the left or right edge of the client rect
-  // depending on whether the language is RTL or not.
-  // This cached value is only used if the WM_GETTITLEBARINFOEX message fails
-  // to get the offset of the minimize button.
-  if (base::i18n::IsRTL())
-    cached_minimize_button_x_delta_ = minimize_offset;
-  else
-    cached_minimize_button_x_delta_ = rect.right - minimize_offset;
-}
-
 ////////////////////////////////////////////////////////////////////////////////
 // BrowserFrame, public:
 
@@ -654,7 +606,7 @@ const gfx::Font& BrowserFrame::GetTitleFont() {
 }
 
 bool BrowserFrame::ShouldLeaveOffsetNearTopBorder() {
-  if (base::win::IsMetroProcess()) {
+  if (win8::IsSingleWindowMetroMode()) {
     if (ui::GetDisplayLayout() == ui::LAYOUT_DESKTOP)
       return false;
   }

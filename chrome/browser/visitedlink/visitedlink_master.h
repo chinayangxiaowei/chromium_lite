@@ -19,6 +19,7 @@
 #include "base/threading/sequenced_worker_pool.h"
 #include "chrome/browser/history/history.h"
 #include "chrome/browser/history/history_types.h"
+#include "chrome/browser/profiles/profile_keyed_service.h"
 #include "chrome/common/visitedlink_common.h"
 
 class GURL;
@@ -30,7 +31,8 @@ class Profile;
 // This class will defer writing operations to the file thread. This means that
 // class destruction, the file may still be open since operations are pending on
 // another thread.
-class VisitedLinkMaster : public VisitedLinkCommon {
+class VisitedLinkMaster : public VisitedLinkCommon,
+                          public ProfileKeyedService  {
  public:
   // Listens to the link coloring database events. The master is given this
   // event as a constructor argument and dispatches events using it.
@@ -51,8 +53,7 @@ class VisitedLinkMaster : public VisitedLinkCommon {
     virtual void Reset() = 0;
   };
 
-  // The |listener| may not be NULL.
-  VisitedLinkMaster(Listener* listener, Profile* profile);
+  explicit VisitedLinkMaster(Profile* profile);
 
   // In unit test mode, we allow the caller to optionally specify the database
   // filename so that it can be run from a unit test. The directory where this
@@ -75,6 +76,9 @@ class VisitedLinkMaster : public VisitedLinkCommon {
                     const FilePath& filename,
                     int32 default_table_size);
   virtual ~VisitedLinkMaster();
+
+  // Return the VisitedLinkMaster instance for a profile.
+  static VisitedLinkMaster* FromProfile(Profile* profile);
 
   // Must be called immediately after object creation. Nothing else will work
   // until this is called. Returns true on success, false means that this
@@ -112,6 +116,11 @@ class VisitedLinkMaster : public VisitedLinkCommon {
   // returns the number of items in the table for testing verification
   int32 GetUsedCount() const {
     return used_items_;
+  }
+
+  // Returns the listener.
+  VisitedLinkMaster::Listener* GetListener() const {
+    return listener_.get();
   }
 
   // Call to cause the entire database file to be re-written from scratch
@@ -154,7 +163,7 @@ class VisitedLinkMaster : public VisitedLinkCommon {
   static const size_t kBigDeleteThreshold;
 
   // Backend for the constructors initializing the members.
-  void InitMembers(Listener* listener, Profile* profile);
+  void InitMembers();
 
   // If a rebuild is in progress, we save the URL in the temporary list.
   // Otherwise, we add this to the table. Returns the index of the
@@ -302,8 +311,6 @@ class VisitedLinkMaster : public VisitedLinkCommon {
     return hash - 1;
   }
 
-  Listener* listener_;
-
 #ifndef NDEBUG
   // Indicates whether any asynchronous operation has ever been completed.
   // We do some synchronous reads that require that no asynchronous operations
@@ -316,6 +323,9 @@ class VisitedLinkMaster : public VisitedLinkCommon {
   // Reference to the user profile that this object belongs to
   // (it knows the path to where the data is stored)
   Profile* profile_;
+
+  // VisitedLinkEventListener to handle incoming events.
+  scoped_ptr<Listener> listener_;
 
   // Lazily initialized sequence token for posting file tasks.
   base::SequencedWorkerPool::SequenceToken sequence_token_;

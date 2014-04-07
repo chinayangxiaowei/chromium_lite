@@ -120,41 +120,50 @@ bool MoveRect(const gfx::Rect& work_area,
 }  // namespace
 
 bool WindowSizer::GetBoundsOverrideAsh(const gfx::Rect& specified_bounds,
-                                       gfx::Rect* bounds_in_screen) const {
+                                       gfx::Rect* bounds_in_screen,
+                                       ui::WindowShowState* show_state) const {
+  DCHECK(show_state);
+  DCHECK(bounds_in_screen);
   *bounds_in_screen = specified_bounds;
   DCHECK(bounds_in_screen->IsEmpty());
 
-  if (!GetSavedWindowBounds(bounds_in_screen))
+  ui::WindowShowState passed_show_state = *show_state;
+  if (!GetSavedWindowBounds(bounds_in_screen, show_state))
     GetDefaultWindowBounds(bounds_in_screen);
 
-  if (browser_ != NULL && browser_->type() == Browser::TYPE_TABBED) {
+  if (browser_ && browser_->is_type_tabbed()) {
     gfx::Rect work_area =
         monitor_info_provider_->GetMonitorWorkAreaMatching(*bounds_in_screen);
     // This is a window / app. See if there is no window and try to place it.
     int count = GetNumberOfValidTopLevelBrowserWindows(work_area);
     aura::Window* top_window = GetTopWindow(work_area);
-
+    // The window should not be able to reflect on itself.
+    if (browser_->window() &&
+        top_window == browser_->window()->GetNativeWindow())
+      return true;
     // If there is no valid other window we take the coordinates as is.
-    if (!count || !top_window || ash::wm::IsWindowMaximized(top_window))
+    if (!count || !top_window)
       return true;
 
-    gfx::Rect other_bounds_in_screen = top_window->GetBoundsInScreen();
-    bool move_right =
-        other_bounds_in_screen.CenterPoint().x() < work_area.CenterPoint().x();
-
-    // In case we have only one window, we move the other window fully to the
-    // "other side" - making room for this new window.
-    if (count == 1) {
-      gfx::Display display =
-            gfx::Screen::GetDisplayMatching(
-                top_window->GetRootWindow()->GetBoundsInScreen());
-      if (MoveRect(work_area, other_bounds_in_screen, !move_right))
-        top_window->SetBoundsInScreen(other_bounds_in_screen, display);
+    bool maximized = ash::wm::IsWindowMaximized(top_window);
+    // We ignore the saved show state, but look instead for the top level
+    // window's show state.
+    if (passed_show_state == ui::SHOW_STATE_DEFAULT) {
+      *show_state = maximized ? ui::SHOW_STATE_MAXIMIZED :
+                                ui::SHOW_STATE_DEFAULT;
     }
+
+    if (maximized)
+      return true;
+
     // Use the size of the other window, and mirror the location to the
     // opposite side. Then make sure that it is inside our work area
     // (if possible).
-    *bounds_in_screen = other_bounds_in_screen;
+    *bounds_in_screen = top_window->GetBoundsInScreen();
+
+    bool move_right =
+        bounds_in_screen->CenterPoint().x() < work_area.CenterPoint().x();
+
     MoveRect(work_area, *bounds_in_screen, move_right);
     if (bounds_in_screen->bottom() > work_area.bottom())
       bounds_in_screen->set_y(std::max(work_area.y(),

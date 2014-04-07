@@ -18,7 +18,7 @@
 #include "base/utf_string_conversions.h"
 #include "chrome/app/chrome_command_ids.h"
 #include "chrome/browser/browser_process.h"
-#include "chrome/browser/managed_mode.h"
+#include "chrome/browser/managed_mode/managed_mode.h"
 #include "chrome/browser/prefs/pref_service.h"
 #include "chrome/browser/profiles/avatar_menu_model.h"
 #include "chrome/browser/profiles/profile.h"
@@ -550,8 +550,8 @@ void BrowserTitlebar::GetButtonResources(const std::string& button_name,
 void BrowserTitlebar::UpdateButtonBackground(CustomDrawButton* button) {
   SkColor color = theme_service_->GetColor(
       ThemeService::COLOR_BUTTON_BACKGROUND);
-  SkBitmap* background =
-      theme_service_->GetBitmapNamed(IDR_THEME_WINDOW_CONTROL_BACKGROUND);
+  SkBitmap background = theme_service_->GetImageNamed(
+      IDR_THEME_WINDOW_CONTROL_BACKGROUND).AsBitmap();
 
   // TODO(erg): For now, we just use a completely black mask and we can get
   // away with this in the short term because our buttons are rectangles. We
@@ -564,7 +564,7 @@ void BrowserTitlebar::UpdateButtonBackground(CustomDrawButton* button) {
   mask.allocPixels();
   mask.eraseColor(SK_ColorBLACK);
 
-  button->SetBackground(color, background, &mask);
+  button->SetBackground(color, background, mask);
 }
 
 void BrowserTitlebar::UpdateCustomFrame(bool use_custom_frame) {
@@ -969,13 +969,15 @@ void BrowserTitlebar::ExecuteCommand(int command_id) {
 }
 
 bool BrowserTitlebar::GetAcceleratorForCommandId(
-    int command_id, ui::Accelerator* accelerator) {
-  const ui::AcceleratorGtk* accelerator_gtk =
+    int command_id,
+    ui::Accelerator* out_accelerator) {
+  const ui::Accelerator* accelerator =
       AcceleratorsGtk::GetInstance()->GetPrimaryAcceleratorForCommand(
           command_id);
-  if (accelerator_gtk)
-    *accelerator = *accelerator_gtk;
-  return accelerator_gtk;
+  if (!accelerator)
+    return false;
+  *out_accelerator = *accelerator;
+  return true;
 }
 
 void BrowserTitlebar::Observe(int type,
@@ -1029,18 +1031,6 @@ bool BrowserTitlebar::ShouldDisplayAvatar() {
 
 bool BrowserTitlebar::IsOffTheRecord() {
   return browser_window_->browser()->profile()->IsOffTheRecord();
-}
-
-GtkWidget* BrowserTitlebar::widget() const {
-  return container_;
-}
-
-void BrowserTitlebar::set_window(GtkWindow* window) {
-  window_ = window;
-}
-
-AvatarMenuButtonGtk* BrowserTitlebar::avatar_button() const {
-  return avatar_button_.get();
 }
 
 BrowserTitlebar::ContextMenuModel::ContextMenuModel(
