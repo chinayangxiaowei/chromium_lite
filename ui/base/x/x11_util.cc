@@ -8,12 +8,16 @@
 
 #include "ui/base/x/x11_util.h"
 
+#include <ctype.h>
 #include <sys/ipc.h>
 #include <sys/shm.h>
 
 #include <list>
 #include <map>
 #include <vector>
+
+#include <X11/extensions/Xrandr.h>
+#include <X11/extensions/randr.h>
 
 #include "base/bind.h"
 #include "base/command_line.h"
@@ -24,6 +28,7 @@
 #include "base/string_number_conversions.h"
 #include "base/string_util.h"
 #include "base/stringprintf.h"
+#include "base/sys_byteorder.h"
 #include "base/threading/thread.h"
 #include "ui/base/keycodes/keyboard_code_conversion_x.h"
 #include "ui/base/x/x11_util_internal.h"
@@ -31,16 +36,23 @@
 #include "ui/gfx/size.h"
 
 #if defined(OS_FREEBSD)
-#include <sys/types.h>
 #include <sys/sysctl.h>
+#include <sys/types.h>
 #endif
 
-#if defined(TOOLKIT_USES_GTK)
+#if defined(USE_AURA)
+#include <X11/Xcursor/Xcursor.h>
+#include "skia/ext/image_operations.h"
+#include "third_party/skia/include/core/SkBitmap.h"
+#include "ui/gfx/skia_util.h"
+#endif
+
+#if defined(TOOLKIT_GTK)
 #include <gdk/gdk.h>
 #include <gdk/gdkx.h>
 #include <gtk/gtk.h>
-#include "ui/base/gtk/gtk_compat.h"
 #include "ui/base/gtk/gdk_x_compat.h"
+#include "ui/base/gtk/gtk_compat.h"
 #else
 // TODO(sad): Use the new way of handling X errors when
 // http://codereview.chromium.org/7889040/ lands.
@@ -160,10 +172,10 @@ class XCursorCache {
     Clear();
   }
 
-  Cursor GetCursor(int cursor_shape) {
+  ::Cursor GetCursor(int cursor_shape) {
     // Lookup cursor by attempting to insert a null value, which avoids
     // a second pass through the map after a cache miss.
-    std::pair<std::map<int, Cursor>::iterator, bool> it = cache_.insert(
+    std::pair<std::map<int, ::Cursor>::iterator, bool> it = cache_.insert(
         std::make_pair(cursor_shape, 0));
     if (it.second) {
       Display* display = base::MessagePumpForUI::GetDefaultXDisplay();
@@ -174,7 +186,7 @@ class XCursorCache {
 
   void Clear() {
     Display* display = base::MessagePumpForUI::GetDefaultXDisplay();
-    for (std::map<int, Cursor>::iterator it =
+    for (std::map<int, ::Cursor>::iterator it =
         cache_.begin(); it != cache_.end(); ++it) {
       XFreeCursor(display, it->second);
     }
@@ -183,10 +195,88 @@ class XCursorCache {
 
  private:
   // Maps X11 font cursor shapes to Cursor IDs.
-  std::map<int, Cursor> cache_;
+  std::map<int, ::Cursor> cache_;
 
   DISALLOW_COPY_AND_ASSIGN(XCursorCache);
 };
+
+#if defined(USE_AURA)
+// A process wide singleton cache for custom X cursors.
+class XCustomCursorCache {
+ public:
+  static XCustomCursorCache* GetInstance() {
+    return Singleton<XCustomCursorCache>::get();
+  }
+
+  ::Cursor InstallCustomCursor(XcursorImage* image) {
+    XCustomCursor* custom_cursor = new XCustomCursor(image);
+    ::Cursor xcursor = custom_cursor->cursor();
+    cache_[xcursor] = custom_cursor;
+    return xcursor;
+  }
+
+  void Ref(::Cursor cursor) {
+    cache_[cursor]->Ref();
+  }
+
+  void Unref(::Cursor cursor) {
+    if (cache_[cursor]->Unref())
+      cache_.erase(cursor);
+  }
+
+  void Clear() {
+    cache_.clear();
+  }
+
+ private:
+  friend struct DefaultSingletonTraits<XCustomCursorCache>;
+
+  class XCustomCursor {
+   public:
+    // This takes ownership of the image.
+    XCustomCursor(XcursorImage* image)
+        : image_(image),
+          ref_(1) {
+      cursor_ = XcursorImageLoadCursor(GetXDisplay(), image);
+    }
+
+    ~XCustomCursor() {
+      XcursorImageDestroy(image_);
+      XFreeCursor(GetXDisplay(), cursor_);
+    }
+
+    ::Cursor cursor() const { return cursor_; }
+
+    void Ref() {
+      ++ref_;
+    }
+
+    // Returns true if the cursor was destroyed because of the unref.
+    bool Unref() {
+      if (--ref_ == 0) {
+        delete this;
+        return true;
+      }
+      return false;
+    }
+
+   private:
+    XcursorImage* image_;
+    int ref_;
+    ::Cursor cursor_;
+
+    DISALLOW_COPY_AND_ASSIGN(XCustomCursor);
+  };
+
+  XCustomCursorCache() {}
+  ~XCustomCursorCache() {
+    Clear();
+  }
+
+  std::map< ::Cursor, XCustomCursor*> cache_;
+  DISALLOW_COPY_AND_ASSIGN(XCustomCursorCache);
+};
+#endif  // defined(USE_AURA)
 
 // A singleton object that remembers remappings of mouse buttons.
 class XButtonMap {
@@ -217,6 +307,20 @@ class XButtonMap {
 
   DISALLOW_COPY_AND_ASSIGN(XButtonMap);
 };
+
+bool IsRandRAvailable() {
+  static bool is_randr_available = false;
+  static bool is_randr_availability_cached = false;
+  if (is_randr_availability_cached)
+    return is_randr_available;
+
+  int randr_version_major = 0;
+  int randr_version_minor = 0;
+  is_randr_available = XRRQueryVersion(
+      GetXDisplay(), &randr_version_major, &randr_version_minor);
+  is_randr_availability_cached = true;
+  return is_randr_available;
+}
 
 }  // namespace
 
@@ -306,7 +410,7 @@ int GetDefaultScreen(Display* display) {
   return XDefaultScreen(display);
 }
 
-Cursor GetXCursor(int cursor_shape) {
+::Cursor GetXCursor(int cursor_shape) {
   CR_DEFINE_STATIC_LOCAL(XCursorCache, cache, ());
 
   if (cursor_shape == kCursorClearXCursorCache) {
@@ -317,6 +421,84 @@ Cursor GetXCursor(int cursor_shape) {
   return cache.GetCursor(cursor_shape);
 }
 
+#if defined(USE_AURA)
+::Cursor CreateReffedCustomXCursor(XcursorImage* image) {
+  return XCustomCursorCache::GetInstance()->InstallCustomCursor(image);
+}
+
+void RefCustomXCursor(::Cursor cursor) {
+  XCustomCursorCache::GetInstance()->Ref(cursor);
+}
+
+void UnrefCustomXCursor(::Cursor cursor) {
+  XCustomCursorCache::GetInstance()->Unref(cursor);
+}
+
+XcursorImage* SkBitmapToXcursorImage(const SkBitmap* cursor_image,
+                                     const gfx::Point& hotspot) {
+  DCHECK(cursor_image->config() == SkBitmap::kARGB_8888_Config);
+  gfx::Point hotspot_point = hotspot;
+  SkBitmap scaled;
+
+  // X11 seems to have issues with cursors when images get larger than 64
+  // pixels. So rescale the image if necessary.
+  const float kMaxPixel = 64.f;
+  bool needs_scale = false;
+  if (cursor_image->width() > kMaxPixel || cursor_image->height() > kMaxPixel) {
+    float scale = 1.f;
+    if (cursor_image->width() > cursor_image->height())
+      scale = kMaxPixel / cursor_image->width();
+    else
+      scale = kMaxPixel / cursor_image->height();
+
+    scaled = skia::ImageOperations::Resize(*cursor_image,
+        skia::ImageOperations::RESIZE_BETTER,
+        static_cast<int>(cursor_image->width() * scale),
+        static_cast<int>(cursor_image->height() * scale));
+    hotspot_point = hotspot.Scale(scale);
+    needs_scale = true;
+  }
+
+  const SkBitmap* bitmap = needs_scale ? &scaled : cursor_image;
+  XcursorImage* image = XcursorImageCreate(bitmap->width(), bitmap->height());
+  image->xhot = hotspot_point.x();
+  image->yhot = hotspot_point.y();
+
+  if (bitmap->width() && bitmap->height()) {
+    bitmap->lockPixels();
+    // The |bitmap| contains ARGB image, so just copy it.
+    memcpy(image->pixels,
+           bitmap->getPixels(),
+           bitmap->width() * bitmap->height() * 4);
+    bitmap->unlockPixels();
+  }
+
+  return image;
+}
+#endif
+
+void HideHostCursor() {
+  CR_DEFINE_STATIC_LOCAL(XScopedCursor, invisible_cursor,
+                         (CreateInvisibleCursor(), ui::GetXDisplay()));
+  XDefineCursor(ui::GetXDisplay(), DefaultRootWindow(ui::GetXDisplay()),
+                invisible_cursor.get());
+}
+
+::Cursor CreateInvisibleCursor() {
+  Display* xdisplay = ui::GetXDisplay();
+  ::Cursor invisible_cursor;
+  char nodata[] = { 0, 0, 0, 0, 0, 0, 0, 0 };
+  XColor black;
+  black.red = black.green = black.blue = 0;
+  Pixmap blank = XCreateBitmapFromData(xdisplay,
+                                       DefaultRootWindow(xdisplay),
+                                       nodata, 8, 8);
+  invisible_cursor = XCreatePixmapCursor(xdisplay, blank, blank,
+                                         &black, &black, 0, 0);
+  XFreePixmap(xdisplay, blank);
+  return invisible_cursor;
+}
+
 XID GetX11RootWindow() {
   return DefaultRootWindow(GetXDisplay());
 }
@@ -325,7 +507,7 @@ bool GetCurrentDesktop(int* desktop) {
   return GetIntProperty(GetX11RootWindow(), "_NET_CURRENT_DESKTOP", desktop);
 }
 
-#if defined(TOOLKIT_USES_GTK)
+#if defined(TOOLKIT_GTK)
 XID GetX11WindowFromGtkWidget(GtkWidget* widget) {
   return GDK_WINDOW_XID(gtk_widget_get_window(widget));
 }
@@ -350,7 +532,20 @@ GtkWindow* GetGtkWindowFromX11Window(XID xid) {
 void* GetVisualFromGtkWidget(GtkWidget* widget) {
   return GDK_VISUAL_XVISUAL(gtk_widget_get_visual(widget));
 }
-#endif  // defined(TOOLKIT_USES_GTK)
+#endif  // defined(TOOLKIT_GTK)
+
+void SetHideTitlebarWhenMaximizedProperty(XID window,
+                                          HideTitlebarWhenMaximized property) {
+  uint32 hide = property;
+  XChangeProperty(GetXDisplay(),
+      window,
+      GetAtom("_GTK_HIDE_TITLEBAR_WHEN_MAXIMIZED"),
+      XA_CARDINAL,
+      32,  // size in bits
+      PropModeReplace,
+      reinterpret_cast<unsigned char*>(&hide),
+      1);
+}
 
 int BitsPerPixelForPixmapDepth(Display* dpy, int depth) {
   int count;
@@ -550,7 +745,7 @@ bool SetIntArrayProperty(XID window,
 }
 
 Atom GetAtom(const char* name) {
-#if defined(TOOLKIT_USES_GTK)
+#if defined(TOOLKIT_GTK)
   return gdk_x11_get_xatom_by_name_for_display(
       gdk_display_get_default(), name);
 #else
@@ -638,6 +833,25 @@ bool EnumerateChildren(EnumerateWindowsDelegate* delegate, XID window,
 bool EnumerateAllWindows(EnumerateWindowsDelegate* delegate, int max_depth) {
   XID root = GetX11RootWindow();
   return EnumerateChildren(delegate, root, max_depth, 0);
+}
+
+void EnumerateTopLevelWindows(ui::EnumerateWindowsDelegate* delegate) {
+  std::vector<XID> stack;
+  if (!ui::GetXWindowStack(ui::GetX11RootWindow(), &stack)) {
+    // Window Manager doesn't support _NET_CLIENT_LIST_STACKING, so fall back
+    // to old school enumeration of all X windows.  Some WMs parent 'top-level'
+    // windows in unnamed actual top-level windows (ion WM), so extend the
+    // search depth to all children of top-level windows.
+    const int kMaxSearchDepth = 1;
+    ui::EnumerateAllWindows(delegate, kMaxSearchDepth);
+    return;
+  }
+
+  std::vector<XID>::iterator iter;
+  for (iter = stack.begin(); iter != stack.end(); iter++) {
+    if (delegate->ShouldStopIterating(*iter))
+      return;
+  }
 }
 
 bool GetXWindowStack(Window window, std::vector<XID>* windows) {
@@ -839,6 +1053,193 @@ void FreePixmap(Display* display, XID pixmap) {
   XFreePixmap(display, pixmap);
 }
 
+bool GetOutputDeviceHandles(std::vector<XID>* outputs) {
+  DCHECK(outputs);
+  outputs->clear();
+
+  if (!IsRandRAvailable())
+    return false;
+
+  Display* display = GetXDisplay();
+
+  Window root_window = DefaultRootWindow(display);
+  XRRScreenResources* screen_resources =
+      XRRGetScreenResources(display, root_window);
+  for (int i = 0; i < screen_resources->noutput; ++i)
+    outputs->push_back(screen_resources->outputs[i]);
+  XRRFreeScreenResources(screen_resources);
+  return true;
+}
+
+bool GetOutputDeviceData(XID output,
+                         uint16* manufacturer_id,
+                         uint32* serial_number,
+                         std::string* human_readable_name) {
+  if (!IsRandRAvailable())
+    return false;
+
+  static Atom edid_property = GetAtom(RR_PROPERTY_RANDR_EDID);
+
+  Display* display = GetXDisplay();
+
+  bool has_edid_property = false;
+  int num_properties = 0;
+  Atom* properties = XRRListOutputProperties(display, output, &num_properties);
+  for (int i = 0; i < num_properties; ++i) {
+    if (properties[i] == edid_property) {
+      has_edid_property = true;
+      break;
+    }
+  }
+  XFree(properties);
+  if (!has_edid_property)
+    return false;
+
+  Atom actual_type;
+  int actual_format;
+  unsigned long nitems;
+  unsigned long bytes_after;
+  unsigned char *prop;
+  XRRGetOutputProperty(display,
+                       output,
+                       edid_property,
+                       0,                // offset
+                       128,              // length
+                       false,            // _delete
+                       false,            // pending
+                       AnyPropertyType,  // req_type
+                       &actual_type,
+                       &actual_format,
+                       &nitems,
+                       &bytes_after,
+                       &prop);
+  DCHECK_EQ(XA_INTEGER, actual_type);
+  DCHECK_EQ(8, actual_format);
+
+  // See http://en.wikipedia.org/wiki/Extended_display_identification_data
+  // for the details of EDID data format.  We use the following data:
+  //   bytes 8-9: manufacturer EISA ID, in big-endian
+  //   bytes 12-15: represents serial number, in little-endian
+  //   bytes 54-125: four descriptors (18-bytes each) which may contain
+  //     the display name.
+  const unsigned int kManufacturerOffset = 8;
+  const unsigned int kManufacturerLength = 2;
+  const unsigned int kSerialNumberOffset = 12;
+  const unsigned int kSerialNumberLength = 4;
+  const unsigned int kDescriptorOffset = 54;
+  const unsigned int kNumDescriptors = 4;
+  const unsigned int kDescriptorLength = 18;
+  // The specifier types.
+  const unsigned char kMonitorNameDescriptor = 0xfc;
+  const unsigned char kUnspecifiedTextDescriptor = 0xfe;
+
+  if (manufacturer_id) {
+    if (nitems < kManufacturerOffset + kManufacturerLength) {
+      XFree(prop);
+      return false;
+    }
+    *manufacturer_id = *reinterpret_cast<uint16*>(prop + kManufacturerOffset);
+#if defined(ARCH_CPU_LITTLE_ENDIAN)
+    *manufacturer_id = base::ByteSwap(*manufacturer_id);
+#endif
+  }
+
+  if (serial_number) {
+    if (nitems < kSerialNumberOffset + kSerialNumberLength) {
+      XFree(prop);
+      return false;
+    }
+    *serial_number = base::ByteSwapToLE32(
+        *reinterpret_cast<uint32*>(prop + kSerialNumberOffset));
+  }
+
+  if (!human_readable_name) {
+    XFree(prop);
+    return true;
+  }
+
+  std::string name_candidate;
+  human_readable_name->clear();
+  for (unsigned int i = 0; i < kNumDescriptors; ++i) {
+    if (nitems < kDescriptorOffset + (i + 1) * kDescriptorLength) {
+      break;
+    }
+
+    unsigned char* desc_buf = prop + kDescriptorOffset + i * kDescriptorLength;
+    // If the descriptor contains the display name, it has the following
+    // structure:
+    //   bytes 0-2, 4: \0
+    //   byte 3: descriptor type, defined above.
+    //   bytes 5-17: text data, ending with \r, padding with spaces
+    // we should check bytes 0-2 and 4, since it may have other values in
+    // case that the descriptor contains other type of data.
+    if (desc_buf[0] == 0 && desc_buf[1] == 0 && desc_buf[2] == 0 &&
+        desc_buf[4] == 0) {
+      if (desc_buf[3] == kMonitorNameDescriptor) {
+        std::string found_name(
+            reinterpret_cast<char*>(desc_buf + 5), kDescriptorLength - 5);
+        TrimWhitespaceASCII(found_name, TRIM_TRAILING, human_readable_name);
+        break;
+      } else if (desc_buf[3] == kUnspecifiedTextDescriptor &&
+                 name_candidate.empty()) {
+        // Sometimes the default display of a laptop device doesn't have "FC"
+        // ("Monitor name") descriptor, but has some human readable text with
+        // "FE" ("Unspecified text"). Thus here use this value as the fallback
+        // if "FC" is missing. Note that multiple descriptors may have "FE",
+        // and the first one is the monitor name.
+        std::string found_name(
+            reinterpret_cast<char*>(desc_buf + 5), kDescriptorLength - 5);
+        TrimWhitespaceASCII(found_name, TRIM_TRAILING, &name_candidate);
+      }
+    }
+  }
+  if (human_readable_name->empty() && !name_candidate.empty())
+    *human_readable_name = name_candidate;
+
+  XFree(prop);
+
+  if (human_readable_name->empty())
+    return false;
+
+  // Verify if the |human_readable_name| consists of printable characters only.
+  for (size_t i = 0; i < human_readable_name->size(); ++i) {
+    char c = (*human_readable_name)[i];
+    if (!isascii(c) || !isprint(c)) {
+      human_readable_name->clear();
+      return false;
+    }
+  }
+
+  return true;
+}
+
+std::vector<std::string> GetDisplayNames(const std::vector<XID>& output_ids) {
+  std::vector<std::string> names;
+  for (size_t i = 0; i < output_ids.size(); ++i) {
+    std::string display_name;
+    if (GetOutputDeviceData(output_ids[i], NULL, NULL, &display_name))
+      names.push_back(display_name);
+  }
+  return names;
+}
+
+std::vector<std::string> GetOutputNames(const std::vector<XID>& output_ids) {
+  std::vector<std::string> names;
+  Display* display = GetXDisplay();
+  Window root_window = DefaultRootWindow(display);
+  XRRScreenResources* screen_resources =
+      XRRGetScreenResources(display, root_window);
+  for (std::vector<XID>::const_iterator iter = output_ids.begin();
+       iter != output_ids.end(); ++iter) {
+    XRROutputInfo* output =
+        XRRGetOutputInfo(display, screen_resources, *iter);
+    names.push_back(std::string(output->name));
+    XRRFreeOutputInfo(output);
+  }
+  XRRFreeScreenResources(screen_resources);
+  return names;
+}
+
 bool GetWindowManagerName(std::string* wm_name) {
   DCHECK(wm_name);
   int wm_window = 0;
@@ -941,7 +1342,7 @@ bool IsX11WindowFullScreen(XID window) {
           != atom_properties.end())
     return true;
 
-#if defined(TOOLKIT_USES_GTK)
+#if defined(TOOLKIT_GTK)
   // As the last resort, check if the window size is as large as the main
   // screen.
   GdkRectangle monitor_rect;
@@ -1001,6 +1402,41 @@ void InitXKeyEventForTesting(EventType type,
   key_event.same_screen = 1;
   event->type = key_event.type;
   event->xkey = key_event;
+}
+
+XScopedString::~XScopedString() {
+  XFree(string_);
+}
+
+XScopedImage::~XScopedImage() {
+  reset(NULL);
+}
+
+void XScopedImage::reset(XImage* image) {
+  if (image_ == image)
+    return;
+  if (image_)
+    XDestroyImage(image_);
+  image_ = image;
+}
+
+XScopedCursor::XScopedCursor(::Cursor cursor, Display* display)
+    : cursor_(cursor),
+      display_(display) {
+}
+
+XScopedCursor::~XScopedCursor() {
+  reset(0U);
+}
+
+::Cursor XScopedCursor::get() const {
+  return cursor_;
+}
+
+void XScopedCursor::reset(::Cursor cursor) {
+  if (cursor_)
+    XFreeCursor(display_, cursor_);
+  cursor_ = cursor;
 }
 
 // ----------------------------------------------------------------------------

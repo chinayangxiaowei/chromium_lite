@@ -1,34 +1,28 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CHROME_BROWSER_UI_COCOA_OMNIBOX_OMNIBOX_VIEW_MAC_H_
 #define CHROME_BROWSER_UI_COCOA_OMNIBOX_OMNIBOX_VIEW_MAC_H_
-#pragma once
 
 #import <Cocoa/Cocoa.h>
 
 #include "base/memory/scoped_ptr.h"
 #include "base/string16.h"
-#include "chrome/browser/autocomplete/autocomplete_match.h"
 #include "chrome/browser/ui/cocoa/location_bar/autocomplete_text_field.h"
 #include "chrome/browser/ui/omnibox/omnibox_view.h"
 
-class AutocompleteEditController;
 class OmniboxPopupViewMac;
-class Profile;
-class ToolbarModel;
 
 namespace ui {
 class Clipboard;
 }
 
 // Implements OmniboxView on an AutocompleteTextField.
-
 class OmniboxViewMac : public OmniboxView,
                        public AutocompleteTextFieldObserver {
  public:
-  OmniboxViewMac(AutocompleteEditController* controller,
+  OmniboxViewMac(OmniboxEditController* controller,
                  ToolbarModel* toolbar_model,
                  Profile* profile,
                  CommandUpdater* command_updater,
@@ -36,34 +30,23 @@ class OmniboxViewMac : public OmniboxView,
   virtual ~OmniboxViewMac();
 
   // OmniboxView:
-  virtual AutocompleteEditModel* model() OVERRIDE;
-  virtual const AutocompleteEditModel* model() const OVERRIDE;
   virtual void SaveStateToTab(content::WebContents* tab) OVERRIDE;
   virtual void Update(
       const content::WebContents* tab_for_state_restoring) OVERRIDE;
-  virtual void OpenMatch(const AutocompleteMatch& match,
-                         WindowOpenDisposition disposition,
-                         const GURL& alternate_nav_url,
-                         size_t index,
-                         const string16& keyword) OVERRIDE;
   virtual string16 GetText() const OVERRIDE;
-  virtual bool IsEditingOrEmpty() const OVERRIDE;
-  virtual int GetIcon() const OVERRIDE;
-  virtual void SetUserText(const string16& text) OVERRIDE;
-  virtual void SetUserText(const string16& text,
-                           const string16& display_text,
-                           bool update_popup) OVERRIDE;
   virtual void SetWindowTextAndCaretPos(const string16& text,
-                                        size_t caret_pos) OVERRIDE;
+                                        size_t caret_pos,
+                                        bool update_popup,
+                                        bool notify_text_changed) OVERRIDE;
   virtual void SetForcedQuery() OVERRIDE;
-  virtual bool IsSelectAll() OVERRIDE;
+  virtual bool IsSelectAll() const OVERRIDE;
   virtual bool DeleteAtEndPressed() OVERRIDE;
   virtual void GetSelectionBounds(string16::size_type* start,
                                   string16::size_type* end) const OVERRIDE;
   virtual void SelectAll(bool reversed) OVERRIDE;
   virtual void RevertAll() OVERRIDE;
   virtual void UpdatePopup() OVERRIDE;
-  virtual void ClosePopup() OVERRIDE;
+  virtual void CloseOmniboxPopup() OVERRIDE;
   virtual void SetFocus() OVERRIDE;
   virtual void OnTemporaryTextMaybeChanged(
       const string16& display_text,
@@ -76,7 +59,6 @@ class OmniboxViewMac : public OmniboxView,
   virtual bool OnAfterPossibleChange() OVERRIDE;
   virtual gfx::NativeView GetNativeView() const OVERRIDE;
   virtual gfx::NativeView GetRelativeWindowForPopup() const OVERRIDE;
-  virtual CommandUpdater* GetCommandUpdater() OVERRIDE;
   virtual void SetInstantSuggestion(const string16& input,
                                     bool animate_to_complete) OVERRIDE;
   virtual string16 GetInstantSuggestion() const OVERRIDE;
@@ -89,11 +71,14 @@ class OmniboxViewMac : public OmniboxView,
   virtual void OnControlKeyChanged(bool pressed) OVERRIDE;
   virtual bool CanCopy() OVERRIDE;
   virtual void CopyToPasteboard(NSPasteboard* pboard) OVERRIDE;
+  virtual void CopyURLToPasteboard(NSPasteboard* pboard) OVERRIDE;
   virtual void OnPaste() OVERRIDE;
+  virtual bool ShouldEnableCopyURL() OVERRIDE;
   virtual bool CanPasteAndGo() OVERRIDE;
   virtual int GetPasteActionStringId() OVERRIDE;
   virtual void OnPasteAndGo() OVERRIDE;
   virtual void OnFrameChanged() OVERRIDE;
+  virtual void ClosePopup() OVERRIDE;
   virtual void OnDidBeginEditing() OVERRIDE;
   virtual void OnBeforeChange() OVERRIDE;
   virtual void OnDidChange() OVERRIDE;
@@ -104,10 +89,6 @@ class OmniboxViewMac : public OmniboxView,
 
   // Helper for LocationBarViewMac.  Optionally selects all in |field_|.
   void FocusLocation(bool select_all);
-
-  // Helper to get appropriate contents from |clipboard|.  Returns
-  // empty string if no appropriate data is found on |clipboard|.
-  static string16 GetClipboardText(ui::Clipboard* clipboard);
 
   // Helper to get the font to use in the field, exposed for the
   // popup.
@@ -162,7 +143,7 @@ class OmniboxViewMac : public OmniboxView,
   // Pass the current content of |field_| to SetText(), maintaining
   // any selection.  Named to be consistent with GTK and Windows,
   // though here we cannot really do the in-place operation they do.
-  void EmphasizeURLComponents();
+  virtual void EmphasizeURLComponents() OVERRIDE;
 
   // Calculates text attributes according to |display_text| and applies them
   // to the given |as| object.
@@ -171,23 +152,13 @@ class OmniboxViewMac : public OmniboxView,
 
   // Return the number of UTF-16 units in the current buffer, excluding the
   // suggested text.
+  virtual int GetOmniboxTextLength() const OVERRIDE;
   NSUInteger GetTextLength() const;
-
-  // Places the caret at the given position. This clears any selection.
-  void PlaceCaretAt(NSUInteger pos);
 
   // Returns true if the caret is at the end of the content.
   bool IsCaretAtEnd() const;
 
-  scoped_ptr<AutocompleteEditModel> model_;
   scoped_ptr<OmniboxPopupViewMac> popup_view_;
-
-  AutocompleteEditController* controller_;
-  ToolbarModel* toolbar_model_;
-
-  // The object that handles additional command functionality exposed on the
-  // edit, such as invoking the keyword editor.
-  CommandUpdater* command_updater_;
 
   AutocompleteTextField* field_;  // owned by tab controller
 

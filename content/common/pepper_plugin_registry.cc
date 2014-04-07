@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,12 +6,14 @@
 
 #include "base/command_line.h"
 #include "base/file_util.h"
+#include "base/logging.h"
 #include "base/native_library.h"
 #include "base/string_split.h"
 #include "base/string_util.h"
 #include "base/utf_string_conversions.h"
 #include "content/public/common/content_client.h"
 #include "content/public/common/content_switches.h"
+#include "ppapi/shared_impl/ppapi_permissions.h"
 #include "webkit/plugins/npapi/plugin_list.h"
 
 namespace {
@@ -69,6 +71,11 @@ void ComputePluginsFromCommandLine(
       plugin.mime_types.push_back(mime_type);
     }
 
+    // Command-line plugins get full permissions.
+    plugin.permissions = ppapi::PERMISSION_DEV |
+                         ppapi::PERMISSION_PRIVATE |
+                         ppapi::PERMISSION_BYPASS_USER_GESTURE;
+
     plugins->push_back(plugin);
   }
 }
@@ -90,6 +97,12 @@ webkit::WebPluginInfo content::PepperPluginInfo::ToWebPluginInfo() const {
   info.version = ASCIIToUTF16(version);
   info.desc = ASCIIToUTF16(description);
   info.mime_types = mime_types;
+  info.pepper_permissions = permissions;
+
+  // TODO(brettw) bug 147507: remove this logging.
+  LOG(INFO) << "PepperPluginInfo::ToWebPluginInfo \""
+            << UTF16ToUTF8(info.path.LossyDisplayName()) << "\" "
+            << "permissions = " << permissions;
 
   return info;
 }
@@ -108,6 +121,12 @@ bool MakePepperPluginInfo(const webkit::WebPluginInfo& webplugin_info,
   pepper_info->description = UTF16ToASCII(webplugin_info.desc);
   pepper_info->version = UTF16ToASCII(webplugin_info.version);
   pepper_info->mime_types = webplugin_info.mime_types;
+  pepper_info->permissions = webplugin_info.pepper_permissions;
+
+  LOG(INFO) << "PepperPluginInfo::ToWebPluginInfo \""
+            << UTF16ToUTF8(pepper_info->path.LossyDisplayName()) << "\" "
+            << "permissions = " << pepper_info->permissions;
+
   return true;
 }
 
@@ -216,8 +235,14 @@ PepperPluginRegistry::PepperPluginRegistry() {
     if (current.is_out_of_process)
       continue;  // Out of process plugins need no special pre-initialization.
 
+    // TODO(brettw) bug 147507: Remove this logging.
+    LOG(INFO) << "PepperPluginRegistry::PepperPluginRegistry \""
+              << UTF16ToUTF8(current.path.LossyDisplayName()) << "\" "
+              << " permissions =" << current.permissions;
+
     scoped_refptr<webkit::ppapi::PluginModule> module =
-        new webkit::ppapi::PluginModule(current.name, current.path, this);
+        new webkit::ppapi::PluginModule(current.name, current.path, this,
+            ppapi::PpapiPermissions(current.permissions));
     AddLiveModule(current.path, module);
     if (current.is_internal) {
       if (!module->InitAsInternalPlugin(current.internal_entry_points)) {

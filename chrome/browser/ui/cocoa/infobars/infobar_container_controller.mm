@@ -5,15 +5,15 @@
 #include "base/logging.h"
 #include "base/mac/bundle_locations.h"
 #include "base/mac/mac_util.h"
+#include "chrome/browser/api/infobars/confirm_infobar_delegate.h"
 #include "chrome/browser/infobars/infobar.h"
 #include "chrome/browser/infobars/infobar_tab_helper.h"
-#include "chrome/browser/tab_contents/confirm_infobar_delegate.h"
 #import "chrome/browser/ui/cocoa/animatable_view.h"
 #import "chrome/browser/ui/cocoa/browser_window_controller.h"
 #import "chrome/browser/ui/cocoa/infobars/infobar_container_controller.h"
 #import "chrome/browser/ui/cocoa/infobars/infobar_controller.h"
 #import "chrome/browser/ui/cocoa/view_id_util.h"
-#include "chrome/browser/ui/tab_contents/tab_contents_wrapper.h"
+#include "chrome/browser/ui/tab_contents/tab_contents.h"
 #include "chrome/common/chrome_notification_types.h"
 #include "content/public/browser/notification_details.h"
 #include "content/public/browser/notification_source.h"
@@ -136,7 +136,7 @@ class InfoBarNotificationObserver : public content::NotificationObserver {
   return controller;
 }
 
-- (void)changeTabContents:(TabContentsWrapper*)contents {
+- (void)changeTabContents:(TabContents*)contents {
   registrar_.RemoveAll();
   [self removeAllInfoBars];
 
@@ -144,7 +144,7 @@ class InfoBarNotificationObserver : public content::NotificationObserver {
   if (currentTabContents_) {
     InfoBarTabHelper* infobar_helper =
         currentTabContents_->infobar_tab_helper();
-    for (size_t i = 0; i < infobar_helper->infobar_count(); ++i) {
+    for (size_t i = 0; i < infobar_helper->GetInfoBarCount(); ++i) {
       InfoBar* infobar = infobar_helper->
           GetInfoBarDelegateAt(i)->CreateInfoBar(infobar_helper);
       [self addInfoBar:infobar animate:NO];
@@ -162,7 +162,7 @@ class InfoBarNotificationObserver : public content::NotificationObserver {
   [self positionInfoBarsAndRedraw];
 }
 
-- (void)tabDetachedWithContents:(TabContentsWrapper*)contents {
+- (void)tabDetachedWithContents:(TabContents*)contents {
   if (currentTabContents_ == contents)
     [self changeTabContents:NULL];
 }

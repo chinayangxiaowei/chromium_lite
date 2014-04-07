@@ -1,19 +1,22 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
+
+#include "chrome/browser/autocomplete/autocomplete_result.h"
 
 #include "base/string_number_conversions.h"
 #include "base/string_util.h"
 #include "base/utf_string_conversions.h"
-#include "chrome/browser/autocomplete/autocomplete.h"
+#include "chrome/browser/autocomplete/autocomplete_input.h"
 #include "chrome/browser/autocomplete/autocomplete_match.h"
+#include "chrome/browser/autocomplete/autocomplete_provider.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 class AutocompleteResultTest : public testing::Test  {
  public:
   struct TestData {
     // Used to build a url for the AutocompleteMatch. The URL becomes
-    // 'http://' + |url_id|.
+    // "http://" + ('a' + |url_id|) (e.g. an ID of 2 yields "http://b").
     int url_id;
 
     // ID of the provider.
@@ -184,4 +187,41 @@ TEST_F(AutocompleteResultTest, CopyOldMatches2) {
       RunCopyOldMatchesTest(last, ARRAYSIZE_UNSAFE(last),
                             current, ARRAYSIZE_UNSAFE(current),
                             result, ARRAYSIZE_UNSAFE(result)));
+}
+
+// Tests that matches with empty destination URLs aren't treated as duplicates
+// and culled.
+TEST_F(AutocompleteResultTest, SortAndCullEmptyDestinationURLs) {
+  TestData data[] = {
+    { 1, 0, 500 },
+    { 0, 0, 1100 },
+    { 1, 0, 1000 },
+    { 0, 0, 1300 },
+    { 0, 0, 1200 },
+  };
+
+  ACMatches matches;
+  PopulateAutocompleteMatches(data, arraysize(data), &matches);
+  matches[1].destination_url = GURL();
+  matches[3].destination_url = GURL();
+  matches[4].destination_url = GURL();
+
+  AutocompleteResult result;
+  result.AppendMatches(matches);
+  AutocompleteInput input(string16(), string16(), false, false, false,
+                          AutocompleteInput::ALL_MATCHES);
+  result.SortAndCull(input);
+
+  // Of the two results with the same non-empty destination URL, the
+  // lower-relevance one should be dropped.  All of the results with empty URLs
+  // should be kept.
+  ASSERT_EQ(4U, result.size());
+  EXPECT_TRUE(result.match_at(0)->destination_url.is_empty());
+  EXPECT_EQ(1300, result.match_at(0)->relevance);
+  EXPECT_TRUE(result.match_at(1)->destination_url.is_empty());
+  EXPECT_EQ(1200, result.match_at(1)->relevance);
+  EXPECT_TRUE(result.match_at(2)->destination_url.is_empty());
+  EXPECT_EQ(1100, result.match_at(2)->relevance);
+  EXPECT_EQ("http://b/", result.match_at(3)->destination_url.spec());
+  EXPECT_EQ(1000, result.match_at(3)->relevance);
 }

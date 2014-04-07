@@ -4,7 +4,6 @@
 
 #ifndef UI_VIEWS_EXAMPLES_MESSAGE_BOX_EXAMPLE_H_
 #define UI_VIEWS_EXAMPLES_MESSAGE_BOX_EXAMPLE_H_
-#pragma once
 
 #include <string>
 
@@ -29,7 +28,7 @@ class MessageBoxExample : public ExampleBase, public ButtonListener {
 
  private:
   // Overridden from ButtonListener:
-  virtual void ButtonPressed(Button* sender, const Event& event) OVERRIDE;
+  virtual void ButtonPressed(Button* sender, const ui::Event& event) OVERRIDE;
 
   // The MessageBoxView to be tested.
   MessageBoxView* message_box_view_;

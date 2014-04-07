@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,22 +8,24 @@
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/views/browser_actions_container.h"
+#include "chrome/common/chrome_notification_types.h"
 #include "chrome/common/extensions/extension_action.h"
+#include "chrome/common/extensions/extension_constants.h"
+#include "chrome/common/extensions/extension_icon_set.h"
 #include "chrome/common/extensions/extension_resource.h"
+#include "content/public/test/test_utils.h"
+
+using extensions::Extension;
 
 class BrowserActionsContainerTest : public ExtensionBrowserTest {
  public:
-  BrowserActionsContainerTest() : browser_(NULL) {
+  BrowserActionsContainerTest() {
   }
   virtual ~BrowserActionsContainerTest() {}
 
-  virtual Browser* CreateBrowser(Profile* profile) {
-    browser_ = InProcessBrowserTest::CreateBrowser(profile);
-    browser_actions_bar_.reset(new BrowserActionTestUtil(browser_));
-    return browser_;
+  virtual void SetUpOnMainThread() OVERRIDE {
+    browser_actions_bar_.reset(new BrowserActionTestUtil(browser()));
   }
-
-  Browser* browser() { return browser_; }
 
   BrowserActionTestUtil* browser_actions_bar() {
     return browser_actions_bar_.get();
@@ -34,19 +36,28 @@ class BrowserActionsContainerTest : public ExtensionBrowserTest {
     if (!browser_actions_bar_->HasIcon(extension_index)) {
       // The icon is loaded asynchronously and a notification is then sent to
       // observers. So we wait on it.
-      browser_actions_bar_->WaitForBrowserActionUpdated(extension_index);
+      ExtensionAction* browser_action =
+          browser_actions_bar_->GetExtensionAction(extension_index);
+
+      content::WindowedNotificationObserver observer(
+          chrome::NOTIFICATION_EXTENSION_BROWSER_ACTION_UPDATED,
+          content::Source<ExtensionAction>(browser_action));
+      observer.Wait();
     }
     EXPECT_TRUE(browser_actions_bar()->HasIcon(extension_index));
   }
 
  private:
   scoped_ptr<BrowserActionTestUtil> browser_actions_bar_;
-
-  Browser* browser_;  // Weak.
 };
 
 // Test the basic functionality.
+// http://crbug.com/120770
+#if defined(OS_WIN)
+IN_PROC_BROWSER_TEST_F(BrowserActionsContainerTest, DISABLED_Basic) {
+#else
 IN_PROC_BROWSER_TEST_F(BrowserActionsContainerTest, Basic) {
+#endif
   BrowserActionsContainer::disable_animations_during_testing_ = true;
 
   // Load an extension with no browser action.
@@ -69,7 +80,6 @@ IN_PROC_BROWSER_TEST_F(BrowserActionsContainerTest, Basic) {
   EXPECT_EQ(0, browser_actions_bar()->NumberOfBrowserActions());
 }
 
-// TODO(mpcomplete): http://code.google.com/p/chromium/issues/detail?id=38992
 IN_PROC_BROWSER_TEST_F(BrowserActionsContainerTest, Visibility) {
   BrowserActionsContainer::disable_animations_during_testing_ = true;
 
@@ -229,8 +239,8 @@ IN_PROC_BROWSER_TEST_F(BrowserActionsContainerTest, ForceHide) {
 
   // Force hide this browser action.
   ExtensionService* service = browser()->profile()->GetExtensionService();
-  service->SetBrowserActionVisibility(service->GetExtensionById(idA, false),
-                                      false);
+  service->extension_prefs()->SetBrowserActionVisibility(
+      service->GetExtensionById(idA, false), false);
   EXPECT_EQ(0, browser_actions_bar()->VisibleBrowserActions());
 
   ReloadExtension(idA);
@@ -264,10 +274,13 @@ IN_PROC_BROWSER_TEST_F(BrowserActionsContainerTest, TestCrash57536) {
 
   gfx::Size size(Extension::kBrowserActionIconMaxSize,
                  Extension::kBrowserActionIconMaxSize);
-  extension->SetCachedImage(
-      extension->GetResource(extension->browser_action()->default_icon_path()),
-      bitmap,
-      size);
+  const ExtensionIconSet* default_icon =
+      extension->browser_action()->default_icon();
+  const std::string path =
+      default_icon->Get(extension_misc::EXTENSION_ICON_ACTION,
+                        ExtensionIconSet::MATCH_EXACTLY);
+
+  extension->SetCachedImage(extension->GetResource(path), bitmap, size);
 
   LOG(INFO) << "Disabling extension\n" << std::flush;
   DisableExtension(extension->id());

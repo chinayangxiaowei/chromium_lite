@@ -4,7 +4,6 @@
 
 #ifndef UI_GFX_PLATFORM_FONT_PANGO_H_
 #define UI_GFX_PLATFORM_FONT_PANGO_H_
-#pragma once
 
 #include "base/compiler_specific.h"
 #include "base/memory/scoped_ptr.h"
@@ -19,7 +18,6 @@ namespace gfx {
 class UI_EXPORT PlatformFontPango : public PlatformFont {
  public:
   PlatformFontPango();
-  explicit PlatformFontPango(const Font& other);
   explicit PlatformFontPango(NativeFont native_font);
   PlatformFontPango(const std::string& font_name, int font_size);
 
@@ -34,7 +32,7 @@ class UI_EXPORT PlatformFontPango : public PlatformFont {
 
   // Position as an offset from the height of the drawn text, used to draw
   // an underline. This is a negative number, so the underline would be
-  // drawn at y + height + underline_position;
+  // drawn at y + height + underline_position.
   double underline_position() const;
   // The thickness to draw the underline.
   double underline_thickness() const;
@@ -44,6 +42,7 @@ class UI_EXPORT PlatformFontPango : public PlatformFont {
   virtual int GetHeight() const OVERRIDE;
   virtual int GetBaseline() const OVERRIDE;
   virtual int GetAverageCharacterWidth() const OVERRIDE;
+  virtual int GetStringWidth(const string16& text) const OVERRIDE;
   virtual int GetExpectedTextWidth(int length) const OVERRIDE;
   virtual int GetStyle() const OVERRIDE;
   virtual std::string GetFontName() const OVERRIDE;
@@ -70,7 +69,7 @@ class UI_EXPORT PlatformFontPango : public PlatformFont {
   // Potentially slow call to get pango metrics (average width, underline info).
   void InitPangoMetrics();
 
-  // Setup a Skia context to use the current typeface
+  // Setup a Skia context to use the current typeface.
   void PaintSetup(SkPaint* paint) const;
 
   // Make |this| a copy of |other|.
@@ -91,7 +90,7 @@ class UI_EXPORT PlatformFontPango : public PlatformFont {
   int font_size_pixels_;
   int style_;
 
-  // Cached metrics, generated at construction
+  // Cached metrics, generated at construction.
   int height_pixels_;
   int ascent_pixels_;
 
@@ -104,6 +103,8 @@ class UI_EXPORT PlatformFontPango : public PlatformFont {
 
   // The default font, used for the default constructor.
   static Font* default_font_;
+
+  DISALLOW_COPY_AND_ASSIGN(PlatformFontPango);
 };
 
 }  // namespace gfx

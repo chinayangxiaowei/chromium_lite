@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -45,22 +45,31 @@ function checkHostPermission(item, perm) {
 var tests = [
   function simple() {
     chrome.management.getAll(callback(function(items) {
-      chrome.test.assertEq(7, items.length);
+      chrome.test.assertEq(10, items.length);
 
-      checkItemInList(items, "Extension Management API Test", true, false);
-      checkItemInList(items, "description", true, false,
-                { "description": "a short description" });
-      checkItemInList(items, "enabled_app", true, true,
-                { "appLaunchUrl": "http://www.google.com/",
-                  "offlineEnabled": true,
-                  "updateUrl": "http://example.com/update.xml" });
-      checkItemInList(items, "disabled_app", false, true,
-                     { "disabledReason": "unknown" });
-      checkItemInList(items, "enabled_extension", true, false,
-                     { "homepageUrl": "http://example.com/" });
-      checkItemInList(items, "disabled_extension", false, false,
-                { "optionsUrl": "chrome-extension://<ID>/pages/options.html",
-                  "disabledReason": "unknown" });
+      checkItemInList(items, "Extension Management API Test", true,
+                      "extension");
+      checkItemInList(items, "description", true, "extension",
+          { "description": "a short description" });
+      checkItemInList(items, "enabled_app", true, "hosted_app",
+          { "appLaunchUrl": "http://www.google.com/",
+            "offlineEnabled": true,
+            "updateUrl": "http://example.com/update.xml" });
+      checkItemInList(items, "disabled_app", false, "hosted_app",
+          { "disabledReason": "unknown" });
+      checkItemInList(items, "enabled_extension", true, "extension",
+          { "homepageUrl": "http://example.com/" });
+      checkItemInList(items, "disabled_extension", false, "extension",
+          { "optionsUrl": "chrome-extension://<ID>/pages/options.html",
+            "disabledReason": "unknown" });
+      checkItemInList(items, "description", true, "extension",
+          { "installType": "development" });
+      checkItemInList(items, "internal_extension", true, "extension",
+          { "installType": "normal" });
+      checkItemInList(items, "external_extension", true, "extension",
+          { "installType": "sideload" });
+      checkItemInList(items, "admin_extension", true, "extension",
+          { "installType": "admin" });
 
       // Check that we got the icons correctly
       var extension = getItemNamed(items, "enabled_extension");
@@ -72,7 +81,7 @@ var tests = [
       // Check that we can retrieve this extension by ID.
       chrome.management.get(extension.id, callback(function(same_extension) {
         checkItem(same_extension, extension.name, extension.enabled,
-                  extension.isApp, extension.additional_properties);
+                  extension.type, extension.additional_properties);
       }));
 
       // Check that we have a permission defined.
@@ -97,12 +106,14 @@ var tests = [
     chrome.management.getPermissionWarningsByManifest(
         manifest_str, callback(function(warnings) {
       chrome.test.assertEq(5, warnings.length);
-      chrome.test.assertEq("Your data on *.flickr.com and api.flickr.com",
-                           warnings[0]);
-      chrome.test.assertEq("Your bookmarks", warnings[1]);
-      chrome.test.assertEq("Your physical location", warnings[2]);
-      chrome.test.assertEq("Your browsing history", warnings[3]);
-      chrome.test.assertEq("Your tabs and browsing activity", warnings[4]);
+      chrome.test.assertEq(
+        "Access your data on *.flickr.com and api.flickr.com", warnings[0]);
+      chrome.test.assertEq("Read and modify your bookmarks", warnings[1]);
+      chrome.test.assertEq("Detect your physical location", warnings[2]);
+      chrome.test.assertEq("Read and modify your browsing history",
+                           warnings[3]);
+      chrome.test.assertEq("Access your tabs and browsing activity",
+                           warnings[4]);
     }));
 
     chrome.management.getAll(callback(function(items) {
@@ -110,7 +121,7 @@ var tests = [
       chrome.management.getPermissionWarningsById(extension.id,
                                                   callback(function(warnings) {
         chrome.test.assertEq(1, warnings.length);
-        chrome.test.assertEq("Your list of apps, extensions, and themes",
+        chrome.test.assertEq("Manage your apps, extensions, and themes",
                              warnings[0]);
       }));
     }));
@@ -124,10 +135,10 @@ var tests = [
 
     chrome.management.getAll(callback(function(items) {
       var enabled_app = getItemNamed(items, "enabled_app");
-      checkItem(enabled_app, "enabled_app", true, true);
+      checkItem(enabled_app, "enabled_app", true, "hosted_app");
       chrome.management.setEnabled(enabled_app.id, false, callback(function() {
         chrome.management.get(enabled_app.id, callback(function(now_disabled) {
-          checkItem(now_disabled, "enabled_app", false, true);
+          checkItem(now_disabled, "enabled_app", false, "hosted_app");
         }));
       }));
     }));
@@ -140,10 +151,10 @@ var tests = [
     });
     chrome.management.getAll(callback(function(items) {
       var disabled = getItemNamed(items, "disabled_extension");
-      checkItem(disabled, "disabled_extension", false, false);
+      checkItem(disabled, "disabled_extension", false, "extension");
       chrome.management.setEnabled(disabled.id, true, callback(function() {
         chrome.management.get(disabled.id, callback(function(now_enabled) {
-          checkItem(now_enabled, "disabled_extension", true, false);
+          checkItem(now_enabled, "disabled_extension", true, "extension");
         }));
       }));
     }));

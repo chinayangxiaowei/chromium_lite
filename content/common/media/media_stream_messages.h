@@ -7,17 +7,20 @@
 
 #include <string>
 
+#include "content/common/content_export.h"
 #include "content/common/media/media_stream_options.h"
+#include "googleurl/src/gurl.h"
 #include "ipc/ipc_message_macros.h"
 
+#undef IPC_MESSAGE_EXPORT
+#define IPC_MESSAGE_EXPORT CONTENT_EXPORT
 #define IPC_MESSAGE_START MediaStreamMsgStart
 
 IPC_ENUM_TRAITS(media_stream::MediaStreamType)
-IPC_ENUM_TRAITS(media_stream::StreamOptions::VideoOption)
 
 IPC_STRUCT_TRAITS_BEGIN(media_stream::StreamOptions)
-  IPC_STRUCT_TRAITS_MEMBER(audio)
-  IPC_STRUCT_TRAITS_MEMBER(video_option)
+  IPC_STRUCT_TRAITS_MEMBER(audio_type)
+  IPC_STRUCT_TRAITS_MEMBER(video_type)
 IPC_STRUCT_TRAITS_END()
 
 IPC_STRUCT_TRAITS_BEGIN(media_stream::StreamDeviceInfo)
@@ -52,8 +55,9 @@ IPC_MESSAGE_ROUTED2(MediaStreamHostMsg_AudioDeviceFailed,
                     int /* index */)
 
 // The browser has enumerated devices successfully.
-IPC_MESSAGE_ROUTED2(MediaStreamMsg_DevicesEnumerated,
+IPC_MESSAGE_ROUTED3(MediaStreamMsg_DevicesEnumerated,
                     int /* request id */,
+                    std::string /* label */,
                     media_stream::StreamDeviceInfoArray /* device_list */)
 
 // The browser has failed to enumerate devices.
@@ -78,8 +82,21 @@ IPC_MESSAGE_ROUTED1(MediaStreamMsg_DeviceOpenFailed,
 IPC_MESSAGE_CONTROL4(MediaStreamHostMsg_GenerateStream,
                      int /* render view id */,
                      int /* request id */,
-                     media_stream::StreamOptions /* options */,
-                     std::string /* security origin */)
+                     media_stream::StreamOptions /* components */,
+                     GURL /* security origin */)
+
+// Request a new media stream for a specific device.
+IPC_MESSAGE_CONTROL5(MediaStreamHostMsg_GenerateStreamForDevice,
+                     int /* render view id */,
+                     int /* request id */,
+                     media_stream::StreamOptions /* components */,
+                     std::string /* device_id */,
+                     GURL /* security origin */)
+
+// Request to cancel the request for a new media stream.
+IPC_MESSAGE_CONTROL2(MediaStreamHostMsg_CancelGenerateStream,
+                     int /* render view id */,
+                     int /* request id */)
 
 // Request to stop streaming from the media stream.
 IPC_MESSAGE_CONTROL2(MediaStreamHostMsg_StopGeneratedStream,
@@ -91,7 +108,7 @@ IPC_MESSAGE_CONTROL4(MediaStreamHostMsg_EnumerateDevices,
                      int /* render view id */,
                      int /* request id */,
                      media_stream::MediaStreamType /* type */,
-                     std::string /* security origin */)
+                     GURL /* security origin */)
 
 // Request to open the device.
 IPC_MESSAGE_CONTROL5(MediaStreamHostMsg_OpenDevice,
@@ -99,4 +116,4 @@ IPC_MESSAGE_CONTROL5(MediaStreamHostMsg_OpenDevice,
                      int /* request id */,
                      std::string /* device_id */,
                      media_stream::MediaStreamType /* type */,
-                     std::string /* security origin */)
+                     GURL /* security origin */)

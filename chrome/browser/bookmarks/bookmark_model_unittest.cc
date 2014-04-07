@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -18,9 +18,11 @@
 #include "base/string_util.h"
 #include "base/utf_string_conversions.h"
 #include "chrome/browser/bookmarks/bookmark_model.h"
+#include "chrome/browser/bookmarks/bookmark_model_factory.h"
 #include "chrome/browser/bookmarks/bookmark_model_observer.h"
 #include "chrome/browser/bookmarks/bookmark_utils.h"
 #include "chrome/browser/history/history_notifications.h"
+#include "chrome/browser/history/history_service_factory.h"
 #include "chrome/common/chrome_constants.h"
 #include "chrome/common/chrome_notification_types.h"
 #include "chrome/common/chrome_paths.h"
@@ -30,7 +32,7 @@
 #include "content/public/browser/notification_details.h"
 #include "content/public/browser/notification_registrar.h"
 #include "content/public/browser/notification_source.h"
-#include "content/test/test_browser_thread.h"
+#include "content/public/test/test_browser_thread.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "ui/base/models/tree_node_iterator.h"
 #include "ui/base/models/tree_node_model.h"
@@ -169,9 +171,19 @@ class BookmarkModelTest : public testing::Test,
     // gets invoked.
   }
 
+  virtual void ExtensiveBookmarkChangesBeginning(
+      BookmarkModel* model) OVERRIDE {
+    ++extensive_changes_beginning_count_;
+  }
+
+  virtual void ExtensiveBookmarkChangesEnded(BookmarkModel* model) OVERRIDE {
+    ++extensive_changes_ended_count_;
+  }
+
   void ClearCounts() {
     added_count_ = moved_count_ = removed_count_ = changed_count_ =
-        reordered_count_ = 0;
+        reordered_count_ = extensive_changes_beginning_count_ =
+        extensive_changes_ended_count_ = 0;
   }
 
   void AssertObserverCount(int added_count,
@@ -186,6 +198,14 @@ class BookmarkModelTest : public testing::Test,
     EXPECT_EQ(reordered_count_, reordered_count);
   }
 
+  void AssertExtensiveChangesObserverCount(
+      int extensive_changes_beginning_count,
+      int extensive_changes_ended_count) {
+    EXPECT_EQ(extensive_changes_beginning_count_,
+              extensive_changes_beginning_count);
+    EXPECT_EQ(extensive_changes_ended_count_, extensive_changes_ended_count);
+  }
+
  protected:
   BookmarkModel model_;
   ObserverDetails observer_details_;
@@ -196,6 +216,8 @@ class BookmarkModelTest : public testing::Test,
   int removed_count_;
   int changed_count_;
   int reordered_count_;
+  int extensive_changes_beginning_count_;
+  int extensive_changes_ended_count_;
 
   DISALLOW_COPY_AND_ASSIGN(BookmarkModelTest);
 };
@@ -225,6 +247,27 @@ TEST_F(BookmarkModelTest, AddURL) {
   const BookmarkNode* root = model_.bookmark_bar_node();
   const string16 title(ASCIIToUTF16("foo"));
   const GURL url("http://foo.com");
+
+  const BookmarkNode* new_node = model_.AddURL(root, 0, title, url);
+  AssertObserverCount(1, 0, 0, 0, 0);
+  observer_details_.ExpectEquals(root, NULL, 0, -1);
+
+  ASSERT_EQ(1, root->child_count());
+  ASSERT_EQ(title, new_node->GetTitle());
+  ASSERT_TRUE(url == new_node->url());
+  ASSERT_EQ(BookmarkNode::URL, new_node->type());
+  ASSERT_TRUE(new_node == model_.GetMostRecentlyAddedNodeForURL(url));
+
+  EXPECT_TRUE(new_node->id() != root->id() &&
+              new_node->id() != model_.other_node()->id() &&
+              new_node->id() != model_.mobile_node()->id());
+}
+
+TEST_F(BookmarkModelTest, AddURLWithUnicodeTitle) {
+  const BookmarkNode* root = model_.bookmark_bar_node();
+  const string16 title(WideToUTF16(
+      L"\u767e\u5ea6\u4e00\u4e0b\uff0c\u4f60\u5c31\u77e5\u9053"));
+  const GURL url("https://www.baidu.com/");
 
   const BookmarkNode* new_node = model_.AddURL(root, 0, title, url);
   AssertObserverCount(1, 0, 0, 0, 0);
@@ -592,13 +635,21 @@ TEST_F(BookmarkModelTest, GetMostRecentlyAddedNodeForURL) {
 // Makes sure GetBookmarks removes duplicates.
 TEST_F(BookmarkModelTest, GetBookmarksWithDups) {
   const GURL url("http://foo.com/0");
-  model_.AddURL(model_.bookmark_bar_node(), 0, ASCIIToUTF16("blah"), url);
-  model_.AddURL(model_.bookmark_bar_node(), 1, ASCIIToUTF16("blah"), url);
+  const string16 title(ASCIIToUTF16("blah"));
+  model_.AddURL(model_.bookmark_bar_node(), 0, title, url);
+  model_.AddURL(model_.bookmark_bar_node(), 1, title, url);
 
-  std::vector<GURL> urls;
-  model_.GetBookmarks(&urls);
-  EXPECT_EQ(1U, urls.size());
-  ASSERT_TRUE(urls[0] == url);
+  std::vector<BookmarkService::URLAndTitle> bookmarks;
+  model_.GetBookmarks(&bookmarks);
+  ASSERT_EQ(1U, bookmarks.size());
+  EXPECT_EQ(url, bookmarks[0].url);
+  EXPECT_EQ(title, bookmarks[0].title);
+
+  model_.AddURL(model_.bookmark_bar_node(), 2, ASCIIToUTF16("Title2"), url);
+  // Only one returned, even titles are different.
+  bookmarks.clear();
+  model_.GetBookmarks(&bookmarks);
+  EXPECT_EQ(1U, bookmarks.size());
 }
 
 TEST_F(BookmarkModelTest, HasBookmarks) {
@@ -765,7 +816,8 @@ void PopulateBookmarkNode(TestNode* parent,
 class BookmarkModelTestWithProfile : public testing::Test {
  public:
   BookmarkModelTestWithProfile()
-      : ui_thread_(BrowserThread::UI, &message_loop_),
+      : bb_model_(NULL),
+        ui_thread_(BrowserThread::UI, &message_loop_),
         file_thread_(BrowserThread::FILE, &message_loop_) {}
 
   // testing::Test:
@@ -803,7 +855,7 @@ class BookmarkModelTestWithProfile : public testing::Test {
   }
 
   void BlockTillBookmarkModelLoaded() {
-    bb_model_ = profile_->GetBookmarkModel();
+    bb_model_ = BookmarkModelFactory::GetForProfile(profile_.get());
     profile_->BlockUntilBookmarkModelLoaded();
   }
 
@@ -878,161 +930,11 @@ TEST_F(BookmarkModelTestWithProfile, CreateAndRestore) {
   }
 }
 
-// Test class that creates a BookmarkModel with a real history backend.
-class BookmarkModelTestWithProfile2 : public BookmarkModelTestWithProfile {
- public:
-  virtual void SetUp() {
-    profile_.reset(new TestingProfile());
-  }
-
- protected:
-  // Verifies the state of the model matches that of the state in the saved
-  // history file.
-  void VerifyExpectedState() {
-    // Here's the structure we expect:
-    // bbn
-    //   www.google.com - Google
-    //   F1
-    //     http://www.google.com/intl/en/ads/ - Google Advertising
-    //     F11
-    //       http://www.google.com/services/ - Google Business Solutions
-    // other
-    //   OF1
-    //   http://www.google.com/intl/en/about.html - About Google
-    const BookmarkNode* bbn = bb_model_->bookmark_bar_node();
-    ASSERT_EQ(2, bbn->child_count());
-
-    const BookmarkNode* child = bbn->GetChild(0);
-    ASSERT_EQ(BookmarkNode::URL, child->type());
-    ASSERT_EQ(ASCIIToUTF16("Google"), child->GetTitle());
-    ASSERT_TRUE(child->url() == GURL("http://www.google.com"));
-
-    child = bbn->GetChild(1);
-    ASSERT_TRUE(child->is_folder());
-    ASSERT_EQ(ASCIIToUTF16("F1"), child->GetTitle());
-    ASSERT_EQ(2, child->child_count());
-
-    const BookmarkNode* parent = child;
-    child = parent->GetChild(0);
-    ASSERT_EQ(BookmarkNode::URL, child->type());
-    ASSERT_EQ(ASCIIToUTF16("Google Advertising"), child->GetTitle());
-    ASSERT_TRUE(child->url() == GURL("http://www.google.com/intl/en/ads/"));
-
-    child = parent->GetChild(1);
-    ASSERT_TRUE(child->is_folder());
-    ASSERT_EQ(ASCIIToUTF16("F11"), child->GetTitle());
-    ASSERT_EQ(1, child->child_count());
-
-    parent = child;
-    child = parent->GetChild(0);
-    ASSERT_EQ(BookmarkNode::URL, child->type());
-    ASSERT_EQ(ASCIIToUTF16("Google Business Solutions"), child->GetTitle());
-    ASSERT_TRUE(child->url() == GURL("http://www.google.com/services/"));
-
-    parent = bb_model_->other_node();
-    ASSERT_EQ(2, parent->child_count());
-
-    child = parent->GetChild(0);
-    ASSERT_TRUE(child->is_folder());
-    ASSERT_EQ(ASCIIToUTF16("OF1"), child->GetTitle());
-    ASSERT_EQ(0, child->child_count());
-
-    child = parent->GetChild(1);
-    ASSERT_EQ(BookmarkNode::URL, child->type());
-    ASSERT_EQ(ASCIIToUTF16("About Google"), child->GetTitle());
-    ASSERT_TRUE(child->url() ==
-                GURL("http://www.google.com/intl/en/about.html"));
-
-    parent = bb_model_->mobile_node();
-    ASSERT_EQ(0, parent->child_count());
-
-    ASSERT_TRUE(bb_model_->IsBookmarked(GURL("http://www.google.com")));
-  }
-
-  void VerifyUniqueIDs() {
-    std::set<int64> ids;
-    bool has_unique = true;
-    VerifyUniqueIDImpl(bb_model_->bookmark_bar_node(), &ids, &has_unique);
-    VerifyUniqueIDImpl(bb_model_->other_node(), &ids, &has_unique);
-    ASSERT_TRUE(has_unique);
-  }
-
- private:
-  void VerifyUniqueIDImpl(const BookmarkNode* node,
-                          std::set<int64>* ids,
-                          bool* has_unique) {
-    if (!*has_unique)
-      return;
-    if (ids->count(node->id()) != 0) {
-      *has_unique = false;
-      return;
-    }
-    ids->insert(node->id());
-    for (int i = 0; i < node->child_count(); ++i) {
-      VerifyUniqueIDImpl(node->GetChild(i), ids, has_unique);
-      if (!*has_unique)
-        return;
-    }
-  }
-};
-
-// Tests migrating bookmarks from db into file. This copies an old history db
-// file containing bookmarks and make sure they are loaded correctly and
-// persisted correctly.
-TEST_F(BookmarkModelTestWithProfile2, MigrateFromDBToFileTest) {
-  // Copy db file over that contains starred table.
-  FilePath old_history_path;
-  PathService::Get(chrome::DIR_TEST_DATA, &old_history_path);
-  old_history_path = old_history_path.AppendASCII("bookmarks");
-  old_history_path = old_history_path.AppendASCII("History_with_starred");
-  FilePath new_history_path = profile_->GetPath();
-  file_util::Delete(new_history_path, true);
-  file_util::CreateDirectory(new_history_path);
-  FilePath new_history_file = new_history_path.Append(
-      chrome::kHistoryFilename);
-  ASSERT_TRUE(file_util::CopyFile(old_history_path, new_history_file));
-
-  // Create the history service making sure it doesn't blow away the file we
-  // just copied.
-  profile_->CreateHistoryService(false, false);
-  profile_->CreateBookmarkModel(true);
-  BlockTillBookmarkModelLoaded();
-
-  // Make sure we loaded OK.
-  VerifyExpectedState();
-  if (HasFatalFailure())
-    return;
-
-  // Make sure the ids are unique.
-  VerifyUniqueIDs();
-  if (HasFatalFailure())
-    return;
-
-  // Create again. This time we shouldn't load from history at all.
-  profile_->CreateBookmarkModel(false);
-  BlockTillBookmarkModelLoaded();
-
-  // Make sure we loaded OK.
-  VerifyExpectedState();
-  if (HasFatalFailure())
-    return;
-
-  VerifyUniqueIDs();
-  if (HasFatalFailure())
-    return;
-
-  // Recreate the history service (with a clean db). Do this just to make sure
-  // we're loading correctly from the bookmarks file.
-  profile_->CreateHistoryService(true, false);
-  profile_->CreateBookmarkModel(false);
-  BlockTillBookmarkModelLoaded();
-  VerifyExpectedState();
-  VerifyUniqueIDs();
-}
-
 // Simple test that removes a bookmark. This test exercises the code paths in
 // History that block till bookmark bar model is loaded.
-TEST_F(BookmarkModelTestWithProfile2, RemoveNotification) {
+TEST_F(BookmarkModelTestWithProfile, RemoveNotification) {
+  profile_.reset(new TestingProfile());
+
   profile_->CreateHistoryService(false, false);
   profile_->CreateBookmarkModel(true);
   BlockTillBookmarkModelLoaded();
@@ -1041,13 +943,15 @@ TEST_F(BookmarkModelTestWithProfile2, RemoveNotification) {
   GURL url("http://www.google.com");
   bookmark_utils::AddIfNotBookmarked(bb_model_, url, string16());
 
-  profile_->GetHistoryService(Profile::EXPLICIT_ACCESS)->AddPage(
-      url, NULL, 1, GURL(), content::PAGE_TRANSITION_TYPED,
-      history::RedirectList(), history::SOURCE_BROWSED, false);
+  HistoryServiceFactory::GetForProfile(
+      profile_.get(), Profile::EXPLICIT_ACCESS)->AddPage(
+          url, NULL, 1, GURL(), content::PAGE_TRANSITION_TYPED,
+          history::RedirectList(), history::SOURCE_BROWSED, false);
 
   // This won't actually delete the URL, rather it'll empty out the visits.
   // This triggers blocking on the BookmarkModel.
-  profile_->GetHistoryService(Profile::EXPLICIT_ACCESS)->DeleteURL(url);
+  HistoryServiceFactory::GetForProfile(
+      profile_.get(), Profile::EXPLICIT_ACCESS)->DeleteURL(url);
 }
 
 TEST_F(BookmarkModelTest, Sort) {
@@ -1113,6 +1017,34 @@ TEST_F(BookmarkModelTest, MobileNodeVisibileWithChildren) {
 
   model_.AddURL(root, 0, title, url);
   EXPECT_TRUE(model_.mobile_node()->IsVisible());
+}
+
+TEST_F(BookmarkModelTest, ExtensiveChangesObserver) {
+  AssertExtensiveChangesObserverCount(0, 0);
+  EXPECT_FALSE(model_.IsDoingExtensiveChanges());
+  model_.BeginExtensiveChanges();
+  EXPECT_TRUE(model_.IsDoingExtensiveChanges());
+  AssertExtensiveChangesObserverCount(1, 0);
+  model_.EndExtensiveChanges();
+  EXPECT_FALSE(model_.IsDoingExtensiveChanges());
+  AssertExtensiveChangesObserverCount(1, 1);
+}
+
+TEST_F(BookmarkModelTest, MultipleExtensiveChangesObserver) {
+  AssertExtensiveChangesObserverCount(0, 0);
+  EXPECT_FALSE(model_.IsDoingExtensiveChanges());
+  model_.BeginExtensiveChanges();
+  EXPECT_TRUE(model_.IsDoingExtensiveChanges());
+  AssertExtensiveChangesObserverCount(1, 0);
+  model_.BeginExtensiveChanges();
+  EXPECT_TRUE(model_.IsDoingExtensiveChanges());
+  AssertExtensiveChangesObserverCount(1, 0);
+  model_.EndExtensiveChanges();
+  EXPECT_TRUE(model_.IsDoingExtensiveChanges());
+  AssertExtensiveChangesObserverCount(1, 0);
+  model_.EndExtensiveChanges();
+  EXPECT_FALSE(model_.IsDoingExtensiveChanges());
+  AssertExtensiveChangesObserverCount(1, 1);
 }
 
 }  // namespace

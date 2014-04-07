@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -19,12 +19,15 @@
 #include "chrome/common/extensions/extension.h"
 #include "chrome/common/extensions/extension_icon_set.h"
 #include "chrome/common/extensions/extension_resource.h"
+#include "chrome/common/extensions/permissions/permission_set.h"
 #include "chrome/common/extensions/url_pattern.h"
 #include "chrome/common/web_apps.h"
 #include "googleurl/src/gurl.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "ui/gfx/codec/png_codec.h"
 #include "webkit/glue/image_decoder.h"
+
+namespace extensions {
 
 namespace {
 
@@ -172,3 +175,5 @@ TEST(ExtensionFromWebApp, Minimal) {
   EXPECT_EQ("*://aaronboodman.com/*",
             extension->web_extent().patterns().begin()->GetAsString());
 }
+
+}  // namespace extensions

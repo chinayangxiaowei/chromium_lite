@@ -4,15 +4,14 @@
 
 #ifndef UI_VIEWS_CONTROLS_BUTTON_TEXT_BUTTON_H_
 #define UI_VIEWS_CONTROLS_BUTTON_TEXT_BUTTON_H_
-#pragma once
 
 #include <string>
 
 #include "base/compiler_specific.h"
 #include "base/string16.h"
-#include "third_party/skia/include/core/SkBitmap.h"
 #include "third_party/skia/include/core/SkColor.h"
 #include "ui/gfx/font.h"
+#include "ui/gfx/image/image_skia.h"
 #include "ui/views/border.h"
 #include "ui/views/controls/button/custom_button.h"
 #include "ui/views/native_theme_delegate.h"
@@ -44,15 +43,15 @@ class VIEWS_EXPORT TextButtonBorder : public Border {
 
  protected:
   struct BorderImageSet {
-    SkBitmap* top_left;
-    SkBitmap* top;
-    SkBitmap* top_right;
-    SkBitmap* left;
-    SkBitmap* center;
-    SkBitmap* right;
-    SkBitmap* bottom_left;
-    SkBitmap* bottom;
-    SkBitmap* bottom_right;
+    const gfx::ImageSkia* top_left;
+    const gfx::ImageSkia* top;
+    const gfx::ImageSkia* top_right;
+    const gfx::ImageSkia* left;
+    const gfx::ImageSkia* center;
+    const gfx::ImageSkia* right;
+    const gfx::ImageSkia* bottom_left;
+    const gfx::ImageSkia* bottom;
+    const gfx::ImageSkia* bottom_right;
   };
 
   void Paint(const View& view,
@@ -92,7 +91,7 @@ class VIEWS_EXPORT TextButtonBorder : public Border {
 ////////////////////////////////////////////////////////////////////////////////
 class VIEWS_EXPORT TextButtonNativeThemeBorder : public Border {
  public:
-   TextButtonNativeThemeBorder(NativeThemeDelegate* delegate);
+  explicit TextButtonNativeThemeBorder(NativeThemeDelegate* delegate);
   virtual ~TextButtonNativeThemeBorder();
 
   // Implementation of Border:
@@ -206,8 +205,7 @@ class VIEWS_EXPORT TextButtonBase : public CustomButton,
   virtual int GetHeightForWidth(int w) OVERRIDE;
   virtual void OnEnabledChanged() OVERRIDE;
   virtual void OnPaint(gfx::Canvas* canvas) OVERRIDE;
-
-  // Returns views/TextButton.
+  virtual void OnBoundsChanged(const gfx::Rect& previous_bounds) OVERRIDE;
   virtual std::string GetClassName() const OVERRIDE;
 
  protected:
@@ -226,15 +224,15 @@ class VIEWS_EXPORT TextButtonBase : public CustomButton,
 
   // Overridden from NativeThemeDelegate:
   virtual gfx::Rect GetThemePaintRect() const OVERRIDE;
-  virtual gfx::NativeTheme::State GetThemeState(
-      gfx::NativeTheme::ExtraParams* params) const OVERRIDE;
+  virtual ui::NativeTheme::State GetThemeState(
+      ui::NativeTheme::ExtraParams* params) const OVERRIDE;
   virtual const ui::Animation* GetThemeAnimation() const OVERRIDE;
-  virtual gfx::NativeTheme::State GetBackgroundThemeState(
-      gfx::NativeTheme::ExtraParams* params) const OVERRIDE;
-  virtual gfx::NativeTheme::State GetForegroundThemeState(
-      gfx::NativeTheme::ExtraParams* params) const OVERRIDE;
+  virtual ui::NativeTheme::State GetBackgroundThemeState(
+      ui::NativeTheme::ExtraParams* params) const OVERRIDE;
+  virtual ui::NativeTheme::State GetForegroundThemeState(
+      ui::NativeTheme::ExtraParams* params) const OVERRIDE;
 
-  virtual void GetExtraParams(gfx::NativeTheme::ExtraParams* params) const;
+  virtual void GetExtraParams(ui::NativeTheme::ExtraParams* params) const;
 
   virtual gfx::Rect GetTextBounds() const;
 
@@ -321,20 +319,23 @@ class VIEWS_EXPORT TextButton : public TextButtonBase {
   }
 
   // Sets the icon.
-  virtual void SetIcon(const SkBitmap& icon);
-  virtual void SetHoverIcon(const SkBitmap& icon);
-  virtual void SetPushedIcon(const SkBitmap& icon);
+  virtual void SetIcon(const gfx::ImageSkia& icon);
+  virtual void SetHoverIcon(const gfx::ImageSkia& icon);
+  virtual void SetPushedIcon(const gfx::ImageSkia& icon);
 
-  bool HasIcon() const { return !icon_.empty(); }
+  bool HasIcon() const { return !icon_.isNull(); }
 
   // Meanings are reversed for right-to-left layouts.
   enum IconPlacement {
     ICON_ON_LEFT,
-    ICON_ON_RIGHT
+    ICON_ON_RIGHT,
+    ICON_CENTERED  // Centered is valid only when text is empty.
   };
 
   IconPlacement icon_placement() { return icon_placement_; }
   void set_icon_placement(IconPlacement icon_placement) {
+    // ICON_CENTERED works only when |text_| is empty.
+    DCHECK((icon_placement != ICON_CENTERED) || text_.empty());
     icon_placement_ = icon_placement;
   }
 
@@ -349,16 +350,16 @@ class VIEWS_EXPORT TextButton : public TextButtonBase {
   virtual void PaintButton(gfx::Canvas* canvas, PaintButtonMode mode) OVERRIDE;
 
  protected:
-  SkBitmap icon() const { return icon_; }
+  gfx::ImageSkia icon() const { return icon_; }
 
-  virtual const SkBitmap& GetImageToPaint() const;
+  virtual const gfx::ImageSkia& GetImageToPaint() const;
 
   // Overridden from NativeThemeDelegate:
-  virtual gfx::NativeTheme::Part GetThemePart() const OVERRIDE;
+  virtual ui::NativeTheme::Part GetThemePart() const OVERRIDE;
 
   // Overridden from TextButtonBase:
   virtual void GetExtraParams(
-      gfx::NativeTheme::ExtraParams* params) const OVERRIDE;
+      ui::NativeTheme::ExtraParams* params) const OVERRIDE;
   virtual gfx::Rect GetTextBounds() const OVERRIDE;
 
  private:
@@ -366,14 +367,14 @@ class VIEWS_EXPORT TextButton : public TextButtonBase {
   IconPlacement icon_placement_;
 
   // An icon displayed with the text.
-  SkBitmap icon_;
+  gfx::ImageSkia icon_;
 
   // An optional different version of the icon for hover state.
-  SkBitmap icon_hover_;
+  gfx::ImageSkia icon_hover_;
   bool has_hover_icon_;
 
   // An optional different version of the icon for pushed state.
-  SkBitmap icon_pushed_;
+  gfx::ImageSkia icon_pushed_;
   bool has_pushed_icon_;
 
   // Space between icon and text.
@@ -399,23 +400,22 @@ class VIEWS_EXPORT NativeTextButton : public TextButton {
   // The button's class name.
   static const char kViewClassName[];
 
-  NativeTextButton(ButtonListener* listener);
+  explicit NativeTextButton(ButtonListener* listener);
   NativeTextButton(ButtonListener* listener, const string16& text);
-
-  // Overridden from TextButton:
-  virtual gfx::Size GetMinimumSize() OVERRIDE;
-
-  virtual std::string GetClassName() const OVERRIDE;
-
- private:
-  void Init();
 
   // Overridden from View:
   virtual void OnPaintFocusBorder(gfx::Canvas* canvas) OVERRIDE;
 
   // Overridden from TextButton:
+  virtual gfx::Size GetMinimumSize() OVERRIDE;
+  virtual std::string GetClassName() const OVERRIDE;
+
+ private:
+  void Init();
+
+  // Overridden from TextButton:
   virtual void GetExtraParams(
-      gfx::NativeTheme::ExtraParams* params) const OVERRIDE;
+      ui::NativeTheme::ExtraParams* params) const OVERRIDE;
 
   DISALLOW_COPY_AND_ASSIGN(NativeTextButton);
 };

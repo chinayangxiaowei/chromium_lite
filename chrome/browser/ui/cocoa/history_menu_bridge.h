@@ -4,7 +4,6 @@
 
 #ifndef CHROME_BROWSER_UI_COCOA_HISTORY_MENU_BRIDGE_H_
 #define CHROME_BROWSER_UI_COCOA_HISTORY_MENU_BRIDGE_H_
-#pragma once
 
 #import <Cocoa/Cocoa.h>
 #include <map>
@@ -191,8 +190,9 @@ class HistoryMenuBridge : public content::NotificationObserver,
   // request it. This decodes the raw data, updates the HistoryItem, and then
   // sets the image on the menu. Called on the same same thread that
   // GetFaviconForHistoryItem() was called on (UI thread).
-  void GotFaviconData(FaviconService::Handle handle,
-                      history::FaviconData favicon);
+  void GotFaviconData(
+      FaviconService::Handle handle,
+      const history::FaviconImageResult& image_result);
 
   // Cancels a favicon load request for a given HistoryItem, if one is in
   // progress.

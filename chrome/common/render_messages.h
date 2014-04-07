@@ -26,6 +26,7 @@
 #include "chrome/common/translate_errors.h"
 #include "content/public/common/common_param_traits.h"
 #include "content/public/common/webkit_param_traits.h"
+#include "ipc/ipc_channel_handle.h"
 #include "ipc/ipc_message_macros.h"
 #include "ipc/ipc_platform_file.h"
 #include "third_party/skia/include/core/SkBitmap.h"
@@ -85,7 +86,7 @@ struct ParamTraits<gfx::NativeView> {
     NOTIMPLEMENTED();
   }
 
-  static bool Read(const Message* m, void** iter, param_type* p) {
+  static bool Read(const Message* m, PickleIterator* iter, param_type* p) {
     NOTIMPLEMENTED();
     *p = NULL;
     return true;
@@ -102,7 +103,7 @@ template <>
 struct ParamTraits<ContentSettingsPattern> {
   typedef ContentSettingsPattern param_type;
   static void Write(Message* m, const param_type& p);
-  static bool Read(const Message* m, void** iter, param_type* r);
+  static bool Read(const Message* m, PickleIterator* iter, param_type* r);
   static void Log(const param_type& p, std::string* l);
 };
 
@@ -114,6 +115,8 @@ struct ParamTraits<ContentSettingsPattern> {
 
 IPC_ENUM_TRAITS(ChromeViewHostMsg_GetPluginInfo_Status::Value)
 IPC_ENUM_TRAITS(InstantCompleteBehavior)
+IPC_ENUM_TRAITS(InstantSizeUnits)
+IPC_ENUM_TRAITS(InstantSuggestionType)
 IPC_ENUM_TRAITS(search_provider::OSDDType)
 IPC_ENUM_TRAITS(search_provider::InstallState)
 IPC_ENUM_TRAITS(TranslateErrors::Type)
@@ -140,6 +143,20 @@ IPC_STRUCT_TRAITS_BEGIN(ContentSettingPatternSource)
   IPC_STRUCT_TRAITS_MEMBER(setting)
   IPC_STRUCT_TRAITS_MEMBER(source)
   IPC_STRUCT_TRAITS_MEMBER(incognito)
+IPC_STRUCT_TRAITS_END()
+
+IPC_STRUCT_TRAITS_BEGIN(InstantAutocompleteResult)
+  IPC_STRUCT_TRAITS_MEMBER(provider)
+  IPC_STRUCT_TRAITS_MEMBER(is_search)
+  IPC_STRUCT_TRAITS_MEMBER(contents)
+  IPC_STRUCT_TRAITS_MEMBER(destination_url)
+  IPC_STRUCT_TRAITS_MEMBER(relevance)
+IPC_STRUCT_TRAITS_END()
+
+IPC_STRUCT_TRAITS_BEGIN(InstantSuggestion)
+  IPC_STRUCT_TRAITS_MEMBER(text)
+  IPC_STRUCT_TRAITS_MEMBER(behavior)
+  IPC_STRUCT_TRAITS_MEMBER(type)
 IPC_STRUCT_TRAITS_END()
 
 IPC_STRUCT_TRAITS_BEGIN(RendererContentSettingRules)
@@ -229,37 +246,19 @@ IPC_MESSAGE_CONTROL0(ChromeViewMsg_VisitedLink_Reset)
 IPC_MESSAGE_CONTROL1(ChromeViewMsg_SetContentSettingRules,
                      RendererContentSettingRules /* rules */)
 
-// Tells the render view to load all blocked plugins.
-IPC_MESSAGE_ROUTED0(ChromeViewMsg_LoadBlockedPlugins)
+// Tells the render view to load all blocked plugins with the given identifier.
+IPC_MESSAGE_ROUTED1(ChromeViewMsg_LoadBlockedPlugins,
+                    std::string /* identifier */)
 
 // Asks the renderer to send back stats on the WebCore cache broken down by
 // resource types.
 IPC_MESSAGE_CONTROL0(ChromeViewMsg_GetCacheResourceStats)
-
-// Asks the renderer to send back Histograms.
-IPC_MESSAGE_CONTROL1(ChromeViewMsg_GetRendererHistograms,
-                     int /* sequence number of Renderer Histograms. */)
 
 // Tells the renderer to create a FieldTrial, and by using a 100% probability
 // for the FieldTrial, forces the FieldTrial to have assigned group name.
 IPC_MESSAGE_CONTROL2(ChromeViewMsg_SetFieldTrialGroup,
                      std::string /* field trial name */,
                      std::string /* group name that was assigned. */)
-
-#if defined(USE_TCMALLOC)
-// Asks the renderer to send back tcmalloc stats.
-IPC_MESSAGE_CONTROL0(ChromeViewMsg_GetRendererTcmalloc)
-// Asks the renderer to enable/disable Tcmalloc heap profiling.
-// Note: filename_prefix arg is effectively ignored since the render process
-// will be unable to write files to disk. Instead use WriteTcmallocHeapProfile
-// to write a profile file.
-IPC_MESSAGE_CONTROL2(ChromeViewMsg_SetTcmallocHeapProfiling,
-                     bool /* enable profiling */,
-                     std::string /* filename prefix for profiles */)
-// Asks the renderer to write the Tcmalloc heap profile to a file.
-IPC_MESSAGE_CONTROL1(ChromeViewMsg_WriteTcmallocHeapProfile,
-                     FilePath::StringType /* filepath */)
-#endif
 
 // Asks the renderer to send back V8 heap stats.
 IPC_MESSAGE_CONTROL0(ChromeViewMsg_GetV8HeapStats)
@@ -273,19 +272,26 @@ IPC_MESSAGE_ROUTED3(ChromeViewMsg_HandleMessageFromExternalHost,
 IPC_MESSAGE_ROUTED4(ChromeViewMsg_SearchBoxChange,
                     string16 /* value */,
                     bool /* verbatim */,
-                    int /* selection_start */,
-                    int /* selection_end */)
-IPC_MESSAGE_ROUTED2(ChromeViewMsg_SearchBoxSubmit,
-                    string16 /* value */,
-                    bool /* verbatim */)
-IPC_MESSAGE_ROUTED0(ChromeViewMsg_SearchBoxCancel)
+                    size_t /* selection_start */,
+                    size_t /* selection_end */)
+
+IPC_MESSAGE_ROUTED1(ChromeViewMsg_SearchBoxSubmit,
+                    string16 /* value */)
+
+IPC_MESSAGE_ROUTED1(ChromeViewMsg_SearchBoxCancel,
+                    string16 /* value */)
+
 IPC_MESSAGE_ROUTED1(ChromeViewMsg_SearchBoxResize,
                     gfx::Rect /* search_box_bounds */)
-IPC_MESSAGE_ROUTED4(ChromeViewMsg_DetermineIfPageSupportsInstant,
-                    string16 /* value*/,
-                    bool /* verbatim */,
-                    int /* selection_start */,
-                    int /* selection_end */)
+
+IPC_MESSAGE_ROUTED0(ChromeViewMsg_DetermineIfPageSupportsInstant)
+
+IPC_MESSAGE_ROUTED1(ChromeViewMsg_SearchBoxAutocompleteResults,
+                    std::vector<InstantAutocompleteResult>
+                        /* native_suggestions */)
+
+IPC_MESSAGE_ROUTED1(ChromeViewMsg_SearchBoxUpOrDownKeyPressed,
+                    int /* count */)
 
 // Toggles visual muting of the render view area. This is on when a constrained
 // window is showing.
@@ -306,12 +312,6 @@ IPC_MESSAGE_ROUTED4(ChromeViewMsg_TranslatePage,
 // contents.
 IPC_MESSAGE_ROUTED1(ChromeViewMsg_RevertTranslation,
                     int /* page id */)
-
-// Tells a renderer if it's currently being prerendered.  Must only be set
-// to true before any navigation occurs, and only set to false at most once
-// after that.
-IPC_MESSAGE_ROUTED1(ChromeViewMsg_SetIsPrerendering,
-                    bool /* whether the RenderView is prerendering */)
 
 // Sent on process startup to indicate whether this process is running in
 // incognito mode.
@@ -352,8 +352,12 @@ IPC_MESSAGE_ROUTED0(ChromeViewMsg_GetFPS)
 // Tells the view it is displaying an interstitial page.
 IPC_MESSAGE_ROUTED0(ChromeViewMsg_SetAsInterstitial)
 
+// Tells the renderer to suspend/resume the webkit timers.
+IPC_MESSAGE_CONTROL1(ChromeViewMsg_ToggleWebKitSharedTimer,
+                     bool /* suspend */)
+
 //-----------------------------------------------------------------------------
-// TabContents messages
+// Misc messages
 // These are messages sent from the renderer to the browser process.
 
 // Provides the contents for the given page that was loaded recently.
@@ -434,8 +438,8 @@ IPC_MESSAGE_ROUTED2(ChromeViewHostMsg_FindMissingPlugin,
                     std::string /* mime_type */)
 
 // Notifies the browser that a missing plug-in placeholder has been removed, so
-// the corresponding MissingPluginHost can be deleted.
-IPC_MESSAGE_ROUTED1(ChromeViewHostMsg_RemoveMissingPluginHost,
+// the corresponding PluginPlaceholderHost can be deleted.
+IPC_MESSAGE_ROUTED1(ChromeViewHostMsg_RemovePluginPlaceholderHost,
                     int /* placeholder_id */)
 
 // Notifies a missing plug-in placeholder that a plug-in with name |plugin_name|
@@ -460,10 +464,18 @@ IPC_MESSAGE_ROUTED1(ChromeViewMsg_ErrorDownloadingPlugin,
                     std::string /* message */)
 #endif  // defined(ENABLE_PLUGIN_INSTALLATION)
 
+// Notifies a missing plug-in placeholder that the user cancelled downloading
+// the plug-in.
+IPC_MESSAGE_ROUTED0(ChromeViewMsg_CancelledDownloadingPlugin)
+
 // Tells the browser to open chrome://plugins in a new tab. We use a separate
 // message because renderer processes aren't allowed to directly navigate to
 // chrome:// URLs.
 IPC_MESSAGE_ROUTED0(ChromeViewHostMsg_OpenAboutPlugins)
+
+// Tells the browser that there was an error loading a plug-in.
+IPC_MESSAGE_ROUTED1(ChromeViewHostMsg_CouldNotLoadPlugin,
+                    FilePath /* plugin_path */)
 
 // Specifies the URL as the first parameter (a wstring) and thumbnail as
 // binary data as the second parameter.
@@ -476,15 +488,6 @@ IPC_MESSAGE_ROUTED3(ChromeViewHostMsg_Thumbnail,
 IPC_MESSAGE_ROUTED1(ChromeViewHostMsg_Snapshot,
                     SkBitmap /* bitmap */)
 
-// Following message is used to communicate the values received by the
-// callback binding the JS to Cpp.
-// An instance of browser that has an automation host listening to it can
-// have a javascript send a native value (string, number, boolean) to the
-// listener in Cpp. (DomAutomationController)
-IPC_MESSAGE_ROUTED2(ChromeViewHostMsg_DomOperationResponse,
-                    std::string  /* json_string */,
-                    int  /* automation_id */)
-
 // A message for an external host.
 IPC_MESSAGE_ROUTED3(ChromeViewHostMsg_ForwardMessageToExternalHost,
                     std::string  /* message */,
@@ -493,14 +496,25 @@ IPC_MESSAGE_ROUTED3(ChromeViewHostMsg_ForwardMessageToExternalHost,
 
 // A renderer sends this to the browser process when it wants to start
 // a new instance of the Native Client process. The browser will launch
-// the process and return a handle to an IMC channel.
-IPC_SYNC_MESSAGE_CONTROL2_3(ChromeViewHostMsg_LaunchNaCl,
-                            std::wstring /* url for the NaCl module */,
+// the process and return an IPC channel handle. This handle will only
+// be valid if the NaCl IPC proxy is enabled.
+IPC_SYNC_MESSAGE_CONTROL2_2(ChromeViewHostMsg_LaunchNaCl,
+                            GURL /* manifest_url */,
                             int /* socket count */,
                             std::vector<nacl::FileDescriptor>
                                 /* imc channel handles */,
-                            base::ProcessHandle /* NaCl process handle */,
-                            base::ProcessId /* NaCl process id */)
+                            IPC::ChannelHandle /* ipc_channel_handle */)
+
+// A renderer sends this to the browser process when it wants to
+// open a file for from the Pnacl component directory.
+IPC_SYNC_MESSAGE_CONTROL1_1(ChromeViewHostMsg_GetReadonlyPnaclFD,
+                            std::string /* name of requested PNaCl file */,
+                            IPC::PlatformFileForTransit /* output file */)
+
+// A renderer sends this to the browser process when it wants to
+// create a temporary file.
+IPC_SYNC_MESSAGE_CONTROL0_1(ChromeViewHostMsg_NaClCreateTemporaryFile,
+                            IPC::PlatformFileForTransit /* out file */)
 
 // Notification that the page has an OpenSearch description document
 // associated with it.
@@ -521,16 +535,6 @@ IPC_MESSAGE_CONTROL2(ChromeViewHostMsg_RendererHistograms,
                      int, /* sequence number of Renderer Histograms. */
                      std::vector<std::string>)
 
-#if defined USE_TCMALLOC
-// Send back tcmalloc stats output.
-IPC_MESSAGE_CONTROL1(ChromeViewHostMsg_RendererTcmalloc,
-                     std::string  /* tcmalloc debug output */)
-// Send back tcmalloc profile to write to a file.
-IPC_MESSAGE_CONTROL2(ChromeViewHostMsg_WriteTcmallocHeapProfile_ACK,
-                     FilePath::StringType  /* filepath */,
-                     std::string  /* heap profile */)
-#endif
-
 // Sends back stats about the V8 heap.
 IPC_MESSAGE_CONTROL2(ChromeViewHostMsg_V8HeapStats,
                      int /* size of heap (allocated from the OS) */,
@@ -543,8 +547,14 @@ IPC_MESSAGE_CONTROL1(ChromeViewHostMsg_DnsPrefetch,
 
 // Notifies when a plugin couldn't be loaded because it's outdated.
 IPC_MESSAGE_ROUTED2(ChromeViewHostMsg_BlockedOutdatedPlugin,
-                    string16, /* name */
-                    GURL      /* update_url */)
+                    int /* placeholder ID */,
+                    std::string /* plug-in group identifier */)
+
+// Notifies when a plugin couldn't be loaded because it requires
+// user authorization.
+IPC_MESSAGE_ROUTED2(ChromeViewHostMsg_BlockedUnauthorizedPlugin,
+                    string16 /* name */,
+                    std::string /* plug-in group identifier */)
 
 // Provide the browser process with information about the WebCore resource
 // cache and current renderer framerate.
@@ -597,14 +607,22 @@ IPC_MESSAGE_ROUTED0(ChromeViewHostMsg_FocusedEditableNodeTouched)
 
 // Suggest results -----------------------------------------------------------
 
-IPC_MESSAGE_ROUTED3(ChromeViewHostMsg_SetSuggestions,
-                    int32 /* page_id */,
-                    std::vector<std::string> /* suggestions */,
-                    InstantCompleteBehavior)
+// Sent by the Instant preview to populate the omnibox with query suggestions.
+IPC_MESSAGE_ROUTED2(ChromeViewHostMsg_SetSuggestions,
+                    int /* page_id */,
+                    std::vector<InstantSuggestion> /* suggestions */)
 
+// Sent by the Instant preview indicating whether the page supports the Instant
+// API or not (http://dev.chromium.org/searchbox).
 IPC_MESSAGE_ROUTED2(ChromeViewHostMsg_InstantSupportDetermined,
-                    int32 /* page_id */,
-                    bool  /* result */)
+                    int /* page_id */,
+                    bool /* result */)
+
+// Sent by the Instant preview asking to resize itself to the given height.
+IPC_MESSAGE_ROUTED3(ChromeViewHostMsg_SetInstantPreviewHeight,
+                    int /* page_id */,
+                    int /* height */,
+                    InstantSizeUnits /* units */)
 
 // The currently displayed PDF has an unsupported feature.
 IPC_MESSAGE_ROUTED0(ChromeViewHostMsg_PDFHasUnsupportedFeature)

@@ -7,22 +7,26 @@
 #include "base/mac/bundle_locations.h"
 #include "base/mac/mac_util.h"
 #include "base/sys_string_conversions.h"
+#include "grit/ui_resources.h"
 #include "chrome/browser/ui/cocoa/browser_window_controller.h"
 #import "chrome/browser/ui/cocoa/find_bar/find_bar_bridge.h"
 #import "chrome/browser/ui/cocoa/find_bar/find_bar_cocoa_controller.h"
 #import "chrome/browser/ui/cocoa/find_bar/find_bar_text_field.h"
 #import "chrome/browser/ui/cocoa/find_bar/find_bar_text_field_cell.h"
-#import "chrome/browser/ui/cocoa/focus_tracker.h"
+#import "chrome/browser/ui/cocoa/image_button_cell.h"
 #import "chrome/browser/ui/cocoa/nsview_additions.h"
 #import "chrome/browser/ui/cocoa/tabs/tab_strip_controller.h"
 #include "chrome/browser/ui/find_bar/find_bar_controller.h"
 #include "chrome/browser/ui/find_bar/find_tab_helper.h"
-#include "chrome/browser/ui/tab_contents/tab_contents_wrapper.h"
-#import "content/browser/find_pasteboard.h"
-#include "content/browser/renderer_host/render_view_host.h"
+#include "chrome/browser/ui/tab_contents/tab_contents.h"
+#include "content/public/browser/render_view_host.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/browser/web_contents_view.h"
 #import "third_party/GTM/AppKit/GTMNSAnimation+Duration.h"
+#import "ui/base/cocoa/find_pasteboard.h"
+#import "ui/base/cocoa/focus_tracker.h"
+
+using content::NativeWebKeyboardEvent;
 
 const float kFindBarOpenDuration = 0.2;
 const float kFindBarCloseDuration = 0.15;
@@ -72,8 +76,8 @@ const float kRightEdgeOffset = 25;
 }
 
 - (void)dealloc {
-  // All animations should be explicitly stopped by the TabContents before a tab
-  // is closed.
+  // All animations should be explicitly stopped by the TabContents
+  // before a tab is closed.
   DCHECK(!showHideAnimation_.get());
   DCHECK(!moveAnimation_.get());
   [[NSNotificationCenter defaultCenter] removeObserver:self];
@@ -91,6 +95,15 @@ const float kRightEdgeOffset = 25;
 }
 
 - (void)awakeFromNib {
+  [[closeButton_ cell] setImageID:IDR_CLOSE_BAR
+                   forButtonState:image_button_cell::kDefaultState];
+  [[closeButton_ cell] setImageID:IDR_CLOSE_BAR_H
+                   forButtonState:image_button_cell::kHoverState];
+  [[closeButton_ cell] setImageID:IDR_CLOSE_BAR_P
+                   forButtonState:image_button_cell::kPressedState];
+  [[closeButton_ cell] setImageID:IDR_CLOSE_BAR
+                   forButtonState:image_button_cell::kDisabledState];
+
   [findBarView_ setFrame:[self hiddenFindBarFrame]];
   defaultWidth_ = NSWidth([findBarView_ frame]);
 
@@ -103,7 +116,8 @@ const float kRightEdgeOffset = 25;
 - (IBAction)close:(id)sender {
   if (findBarBridge_)
     findBarBridge_->GetFindBarController()->EndFindSession(
-        FindBarController::kKeepSelection);
+        FindBarController::kKeepSelectionOnPage,
+        FindBarController::kKeepResultsInFindBox);
 }
 
 - (IBAction)previousResult:(id)sender {
@@ -165,7 +179,7 @@ const float kRightEdgeOffset = 25;
   if (!findBarBridge_)
     return;
 
-  TabContentsWrapper* tab_contents =
+  TabContents* tab_contents =
       findBarBridge_->GetFindBarController()->tab_contents();
   if (!tab_contents)
     return;
@@ -181,7 +195,7 @@ const float kRightEdgeOffset = 25;
         StartFinding(base::SysNSStringToUTF16(findText), true, false);
   } else {
     // The textbox is empty so we reset.
-    find_tab_helper->StopFinding(FindBarController::kClearSelection);
+    find_tab_helper->StopFinding(FindBarController::kClearSelectionOnPage);
     [self updateUIForFindResult:find_tab_helper->find_result()
                        withText:string16()];
   }
@@ -205,7 +219,8 @@ const float kRightEdgeOffset = 25;
     // Pressing Ctrl-Return
     if (findBarBridge_) {
       findBarBridge_->GetFindBarController()->EndFindSession(
-          FindBarController::kActivateSelection);
+          FindBarController::kActivateSelectionOnPage,
+          FindBarController::kClearResultsInFindBox);
     }
     return YES;
   } else if (command == @selector(pageUp:) ||
@@ -218,7 +233,7 @@ const float kRightEdgeOffset = 25;
              command == @selector(scrollToEndOfDocument:) ||
              command == @selector(moveUp:) ||
              command == @selector(moveDown:)) {
-    TabContentsWrapper* contents =
+    TabContents* contents =
         findBarBridge_->GetFindBarController()->tab_contents();
     if (!contents)
       return NO;
@@ -234,7 +249,7 @@ const float kRightEdgeOffset = 25;
     // |ForwardKeyboardEvent()| directly ignores edit commands, which breaks
     // cmd-up/down if we ever decide to include |moveToBeginningOfDocument:| in
     // the list above.
-    RenderViewHost* render_view_host =
+    content::RenderViewHost* render_view_host =
         contents->web_contents()->GetRenderViewHost();
     render_view_host->ForwardKeyboardEvent(NativeWebKeyboardEvent(event));
     return YES;
@@ -420,7 +435,7 @@ const float kRightEdgeOffset = 25;
       [[NSViewAnimation alloc]
         initWithViewAnimations:[NSArray arrayWithObjects:dict, nil]];
   [animation gtm_setDuration:duration
-                           eventMask:NSLeftMouseUpMask];
+                   eventMask:NSLeftMouseUpMask];
   [animation setDelegate:self];
   [animation startAnimation];
   return animation;
@@ -462,7 +477,7 @@ const float kRightEdgeOffset = 25;
 
   if (!findBarBridge_ || !findBarBridge_->GetFindBarController())
     return frame.origin.x;
-  TabContentsWrapper* contents =
+  TabContents* contents =
       findBarBridge_->GetFindBarController()->tab_contents();
   if (!contents)
     return frame.origin.x;
@@ -503,6 +518,8 @@ const float kRightEdgeOffset = 25;
   NSView* view = [self view];
   NSRect frame = [view frame];
   float x = [self findBarHorizontalPosition];
+  if (frame.origin.x == x)
+    return;
 
   if (animate) {
     [moveAnimation_ stopAnimation];
@@ -524,11 +541,11 @@ const float kRightEdgeOffset = 25;
   // End the find session, hide the "x of y" text and disable the
   // buttons, but do not close the find bar or raise the window here.
   if (stopSearch && findBarBridge_) {
-    TabContentsWrapper* contents =
+    TabContents* contents =
         findBarBridge_->GetFindBarController()->tab_contents();
     if (contents) {
       FindTabHelper* find_tab_helper = contents->find_tab_helper();
-      find_tab_helper->StopFinding(FindBarController::kClearSelection);
+      find_tab_helper->StopFinding(FindBarController::kClearSelectionOnPage);
       findBarBridge_->ClearResults(find_tab_helper->find_result());
     }
   }

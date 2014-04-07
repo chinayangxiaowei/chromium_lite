@@ -1,16 +1,16 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CHROME_BROWSER_SYNC_TEST_INTEGRATION_AUTOFILL_HELPER_H_
 #define CHROME_BROWSER_SYNC_TEST_INTEGRATION_AUTOFILL_HELPER_H_
-#pragma once
 
 #include <set>
 #include <string>
 #include <vector>
 
 #include "base/compiler_specific.h"
+#include "base/memory/ref_counted.h"
 #include "base/string16.h"
 #include "chrome/browser/sync/test/integration/sync_datatype_helper.h"
 
@@ -18,6 +18,7 @@ class AutofillEntry;
 class AutofillKey;
 class AutofillProfile;
 class AutofillType;
+class CreditCard;
 class PersonalDataManager;
 class WebDataService;
 
@@ -31,7 +32,7 @@ enum ProfileType {
 };
 
 // Used to access the web data service within a particular sync profile.
-WebDataService* GetWebDataService(int index) WARN_UNUSED_RESULT;
+scoped_refptr<WebDataService> GetWebDataService(int index) WARN_UNUSED_RESULT;
 
 // Used to access the personal data manager within a particular sync profile.
 PersonalDataManager* GetPersonalDataManager(int index) WARN_UNUSED_RESULT;
@@ -44,6 +45,9 @@ void AddKeys(int profile, const std::set<AutofillKey>& keys);
 // |profile|.
 void RemoveKey(int profile, const AutofillKey& key);
 
+// Removes all of the keys from the WebDataService of sync profile |profile|.
+void RemoveKeys(int profile);
+
 // Gets all the form fields in the WebDataService of sync profile |profile|.
 std::set<AutofillEntry> GetAllKeys(int profile) WARN_UNUSED_RESULT;
 
@@ -54,6 +58,10 @@ bool KeysMatch(int profile_a, int profile_b) WARN_UNUSED_RESULT;
 // Replaces the Autofill profiles in sync profile |profile| with
 // |autofill_profiles|.
 void SetProfiles(int profile, std::vector<AutofillProfile>* autofill_profiles);
+
+// Replaces the CreditCard profiles in sync profile |profile| with
+// |credit_cards|.
+void SetCreditCards(int profile, std::vector<CreditCard>* credit_cards);
 
 // Adds the autofill profile |autofill_profile| to sync profile |profile|.
 void AddProfile(int profile, const AutofillProfile& autofill_profile);

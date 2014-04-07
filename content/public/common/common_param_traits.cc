@@ -1,16 +1,19 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "content/public/common/common_param_traits.h"
 
 #include "content/public/common/content_constants.h"
+#include "content/public/common/referrer.h"
 #include "net/base/host_port_pair.h"
 #include "net/base/upload_data.h"
 #include "net/http/http_response_headers.h"
 #include "third_party/skia/include/core/SkBitmap.h"
 #include "ui/base/range/range.h"
 #include "ui/gfx/rect.h"
+#include "ui/gfx/rect_f.h"
+#include "webkit/glue/resource_request_body.h"
 
 namespace {
 
@@ -55,7 +58,7 @@ void ParamTraits<GURL>::Write(Message* m, const GURL& p) {
   // TODO(brettw) bug 684583: Add encoding for query params.
 }
 
-bool ParamTraits<GURL>::Read(const Message* m, void** iter, GURL* p) {
+bool ParamTraits<GURL>::Read(const Message* m, PickleIterator* iter, GURL* p) {
   std::string s;
   if (!m->ReadString(iter, &s) || s.length() > content::kMaxURLChars) {
     *p = GURL();
@@ -69,83 +72,14 @@ void ParamTraits<GURL>::Log(const GURL& p, std::string* l) {
   l->append(p.spec());
 }
 
-void ParamTraits<ResourceType::Type>::Write(Message* m, const param_type& p) {
-  m->WriteInt(p);
-}
-
-bool ParamTraits<ResourceType::Type>::Read(const Message* m,
-                                           void** iter,
-                                           param_type* p) {
-  int type;
-  if (!m->ReadInt(iter, &type) || !ResourceType::ValidType(type))
-    return false;
-  *p = ResourceType::FromInt(type);
-  return true;
-}
-
-void ParamTraits<ResourceType::Type>::Log(const param_type& p, std::string* l) {
-  std::string type;
-  switch (p) {
-    case ResourceType::MAIN_FRAME:
-      type = "MAIN_FRAME";
-      break;
-    case ResourceType::SUB_FRAME:
-      type = "SUB_FRAME";
-      break;
-    case ResourceType::STYLESHEET:
-      type = "STYLESHEET";
-      break;
-    case ResourceType::SCRIPT:
-      type = "SCRIPT";
-      break;
-    case ResourceType::IMAGE:
-      type = "IMAGE";
-      break;
-    case ResourceType::FONT_RESOURCE:
-      type = "FONT_RESOURCE";
-      break;
-    case ResourceType::SUB_RESOURCE:
-      type = "SUB_RESOURCE";
-      break;
-    case ResourceType::OBJECT:
-      type = "OBJECT";
-      break;
-    case ResourceType::MEDIA:
-      type = "MEDIA";
-      break;
-    case ResourceType::WORKER:
-      type = "WORKER";
-      break;
-    case ResourceType::SHARED_WORKER:
-      type = "SHARED_WORKER";
-      break;
-    case ResourceType::PREFETCH:
-      type = "PREFETCH";
-      break;
-    case ResourceType::PRERENDER:
-      type = "PRERENDER";
-      break;
-    case ResourceType::FAVICON:
-      type = "FAVICON";
-      break;
-    case ResourceType::XHR:
-      type = "XHR";
-      break;
-    default:
-      type = "UNKNOWN";
-      break;
-  }
-
-  LogParam(type, l);
-}
-
 void ParamTraits<net::URLRequestStatus>::Write(Message* m,
                                                const param_type& p) {
   WriteParam(m, static_cast<int>(p.status()));
   WriteParam(m, p.error());
 }
 
-bool ParamTraits<net::URLRequestStatus>::Read(const Message* m, void** iter,
+bool ParamTraits<net::URLRequestStatus>::Read(const Message* m,
+                                              PickleIterator* iter,
                                               param_type* r) {
   int status, error;
   if (!ReadParam(m, iter, &status) || !ReadParam(m, iter, &error))
@@ -164,9 +98,6 @@ void ParamTraits<net::URLRequestStatus>::Log(const param_type& p,
       break;
     case net::URLRequestStatus::IO_PENDING:
       status = "IO_PENDING ";
-      break;
-    case net::URLRequestStatus::HANDLED_EXTERNALLY:
-      status = "HANDLED_EXTERNALLY";
       break;
     case net::URLRequestStatus::CANCELED:
       status = "CANCELED";
@@ -194,55 +125,31 @@ void ParamTraits<net::URLRequestStatus>::Log(const param_type& p,
 // keep this in the implementation file so we can forward declare UploadData in
 // the header.
 template <>
-struct ParamTraits<net::UploadData::Element> {
-  typedef net::UploadData::Element param_type;
+struct ParamTraits<net::UploadElement> {
+  typedef net::UploadElement param_type;
   static void Write(Message* m, const param_type& p) {
     WriteParam(m, static_cast<int>(p.type()));
     switch (p.type()) {
-      case net::UploadData::TYPE_BYTES: {
-        m->WriteData(&p.bytes()[0], static_cast<int>(p.bytes().size()));
+      case net::UploadElement::TYPE_BYTES: {
+        m->WriteData(p.bytes(), static_cast<int>(p.bytes_length()));
         break;
       }
-      case net::UploadData::TYPE_CHUNK: {
-        std::string chunk_length = StringPrintf(
-            "%X\r\n", static_cast<unsigned int>(p.bytes().size()));
-        std::vector<char> bytes;
-        bytes.insert(bytes.end(), chunk_length.data(),
-                     chunk_length.data() + chunk_length.length());
-        const char* data = &p.bytes()[0];
-        bytes.insert(bytes.end(), data, data + p.bytes().size());
-        const char* crlf = "\r\n";
-        bytes.insert(bytes.end(), crlf, crlf + strlen(crlf));
-        if (p.is_last_chunk()) {
-          const char* end_of_data = "0\r\n\r\n";
-          bytes.insert(bytes.end(), end_of_data,
-                       end_of_data + strlen(end_of_data));
-        }
-        m->WriteData(&bytes[0], static_cast<int>(bytes.size()));
-        // If this element is part of a chunk upload then send over information
-        // indicating if this is the last chunk.
-        WriteParam(m, p.is_last_chunk());
-        break;
-      }
-      case net::UploadData::TYPE_FILE: {
+      default: {
+        DCHECK(p.type() == net::UploadElement::TYPE_FILE);
         WriteParam(m, p.file_path());
         WriteParam(m, p.file_range_offset());
         WriteParam(m, p.file_range_length());
         WriteParam(m, p.expected_file_modification_time());
         break;
       }
-      default: {
-        WriteParam(m, p.blob_url());
-        break;
-      }
     }
   }
-  static bool Read(const Message* m, void** iter, param_type* r) {
+  static bool Read(const Message* m, PickleIterator* iter, param_type* r) {
     int type;
     if (!ReadParam(m, iter, &type))
       return false;
     switch (type) {
-      case net::UploadData::TYPE_BYTES: {
+      case net::UploadElement::TYPE_BYTES: {
         const char* data;
         int len;
         if (!m->ReadData(iter, &data, &len))
@@ -250,22 +157,8 @@ struct ParamTraits<net::UploadData::Element> {
         r->SetToBytes(data, len);
         break;
       }
-      case net::UploadData::TYPE_CHUNK: {
-        const char* data;
-        int len;
-        if (!m->ReadData(iter, &data, &len))
-          return false;
-        r->SetToBytes(data, len);
-        // If this element is part of a chunk upload then we need to explicitly
-        // set the type of the element and whether it is the last chunk.
-        bool is_last_chunk = false;
-        if (!ReadParam(m, iter, &is_last_chunk))
-          return false;
-        r->set_type(net::UploadData::TYPE_CHUNK);
-        r->set_is_last_chunk(is_last_chunk);
-        break;
-      }
-      case net::UploadData::TYPE_FILE: {
+      default: {
+        DCHECK(type == net::UploadElement::TYPE_FILE);
         FilePath file_path;
         uint64 offset, length;
         base::Time expected_modification_time;
@@ -281,19 +174,11 @@ struct ParamTraits<net::UploadData::Element> {
                               expected_modification_time);
         break;
       }
-      default: {
-        DCHECK(type == net::UploadData::TYPE_BLOB);
-        GURL blob_url;
-        if (!ReadParam(m, iter, &blob_url))
-          return false;
-        r->SetToBlobUrl(blob_url);
-        break;
-      }
     }
     return true;
   }
   static void Log(const param_type& p, std::string* l) {
-    l->append("<net::UploadData::Element>");
+    l->append("<net::UploadElement>");
   }
 };
 
@@ -304,18 +189,19 @@ void ParamTraits<scoped_refptr<net::UploadData> >::Write(Message* m,
     WriteParam(m, *p->elements());
     WriteParam(m, p->identifier());
     WriteParam(m, p->is_chunked());
+    WriteParam(m, p->last_chunk_appended());
   }
 }
 
 bool ParamTraits<scoped_refptr<net::UploadData> >::Read(const Message* m,
-                                                        void** iter,
+                                                        PickleIterator* iter,
                                                         param_type* r) {
   bool has_object;
   if (!ReadParam(m, iter, &has_object))
     return false;
   if (!has_object)
     return true;
-  std::vector<net::UploadData::Element> elements;
+  std::vector<net::UploadElement> elements;
   if (!ReadParam(m, iter, &elements))
     return false;
   int64 identifier;
@@ -324,10 +210,14 @@ bool ParamTraits<scoped_refptr<net::UploadData> >::Read(const Message* m,
   bool is_chunked = false;
   if (!ReadParam(m, iter, &is_chunked))
     return false;
+  bool last_chunk_appended = false;
+  if (!ReadParam(m, iter, &last_chunk_appended))
+    return false;
   *r = new net::UploadData;
   (*r)->swap_elements(&elements);
   (*r)->set_identifier(identifier);
   (*r)->set_is_chunked(is_chunked);
+  (*r)->set_last_chunk_appended(last_chunk_appended);
   return true;
 }
 
@@ -336,12 +226,149 @@ void ParamTraits<scoped_refptr<net::UploadData> >::Log(const param_type& p,
   l->append("<net::UploadData>");
 }
 
+void ParamTraits<webkit_base::DataElement>::Write(
+    Message* m, const param_type& p) {
+  WriteParam(m, static_cast<int>(p.type()));
+  switch (p.type()) {
+    case webkit_base::DataElement::TYPE_BYTES: {
+      m->WriteData(p.bytes(), static_cast<int>(p.length()));
+      break;
+    }
+    case webkit_base::DataElement::TYPE_FILE: {
+      WriteParam(m, p.path());
+      WriteParam(m, p.offset());
+      WriteParam(m, p.length());
+      WriteParam(m, p.expected_modification_time());
+      break;
+    }
+    case webkit_base::DataElement::TYPE_FILE_FILESYSTEM: {
+      WriteParam(m, p.url());
+      WriteParam(m, p.offset());
+      WriteParam(m, p.length());
+      WriteParam(m, p.expected_modification_time());
+      break;
+    }
+    default: {
+      DCHECK(p.type() == webkit_base::DataElement::TYPE_BLOB);
+      WriteParam(m, p.url());
+      WriteParam(m, p.offset());
+      WriteParam(m, p.length());
+      break;
+    }
+  }
+}
+
+bool ParamTraits<webkit_base::DataElement>::Read(
+    const Message* m, PickleIterator* iter, param_type* r) {
+  int type;
+  if (!ReadParam(m, iter, &type))
+    return false;
+  switch (type) {
+    case webkit_base::DataElement::TYPE_BYTES: {
+      const char* data;
+      int len;
+      if (!m->ReadData(iter, &data, &len))
+        return false;
+      r->SetToBytes(data, len);
+      break;
+    }
+    case webkit_base::DataElement::TYPE_FILE: {
+      FilePath file_path;
+      uint64 offset, length;
+      base::Time expected_modification_time;
+      if (!ReadParam(m, iter, &file_path))
+        return false;
+      if (!ReadParam(m, iter, &offset))
+        return false;
+      if (!ReadParam(m, iter, &length))
+        return false;
+      if (!ReadParam(m, iter, &expected_modification_time))
+        return false;
+      r->SetToFilePathRange(file_path, offset, length,
+                            expected_modification_time);
+      break;
+    }
+    case webkit_base::DataElement::TYPE_FILE_FILESYSTEM: {
+      GURL file_system_url;
+      uint64 offset, length;
+      base::Time expected_modification_time;
+      if (!ReadParam(m, iter, &file_system_url))
+        return false;
+      if (!ReadParam(m, iter, &offset))
+        return false;
+      if (!ReadParam(m, iter, &length))
+        return false;
+      if (!ReadParam(m, iter, &expected_modification_time))
+        return false;
+      r->SetToFileSystemUrlRange(file_system_url, offset, length,
+                                 expected_modification_time);
+      break;
+    }
+    default: {
+      DCHECK(type == webkit_base::DataElement::TYPE_BLOB);
+      GURL blob_url;
+      uint64 offset, length;
+      if (!ReadParam(m, iter, &blob_url))
+        return false;
+      if (!ReadParam(m, iter, &offset))
+        return false;
+      if (!ReadParam(m, iter, &length))
+        return false;
+      r->SetToBlobUrlRange(blob_url, offset, length);
+      break;
+    }
+  }
+  return true;
+}
+
+void ParamTraits<webkit_base::DataElement>::Log(
+    const param_type& p, std::string* l) {
+  l->append("<webkit_base::DataElement>");
+}
+
+void ParamTraits<scoped_refptr<webkit_glue::ResourceRequestBody> >::Write(
+    Message* m,
+    const param_type& p) {
+  WriteParam(m, p.get() != NULL);
+  if (p) {
+    WriteParam(m, *p->elements());
+    WriteParam(m, p->identifier());
+  }
+}
+
+bool ParamTraits<scoped_refptr<webkit_glue::ResourceRequestBody> >::Read(
+    const Message* m,
+    PickleIterator* iter,
+    param_type* r) {
+  bool has_object;
+  if (!ReadParam(m, iter, &has_object))
+    return false;
+  if (!has_object)
+    return true;
+  std::vector<webkit_base::DataElement> elements;
+  if (!ReadParam(m, iter, &elements))
+    return false;
+  int64 identifier;
+  if (!ReadParam(m, iter, &identifier))
+    return false;
+  *r = new webkit_glue::ResourceRequestBody;
+  (*r)->swap_elements(&elements);
+  (*r)->set_identifier(identifier);
+  return true;
+}
+
+void ParamTraits<scoped_refptr<webkit_glue::ResourceRequestBody> >::Log(
+    const param_type& p, std::string* l) {
+  l->append("<webkit_glue::ResourceRequestBody>");
+}
+
 void ParamTraits<net::HostPortPair>::Write(Message* m, const param_type& p) {
   WriteParam(m, p.host());
   WriteParam(m, p.port());
 }
 
-bool ParamTraits<net::HostPortPair>::Read(const Message* m, void** iter,
+bool ParamTraits<net::HostPortPair>::Read(const Message* m,
+                                          PickleIterator* iter,
                                           param_type* r) {
   std::string host;
   uint16 port;
@@ -367,7 +394,7 @@ void ParamTraits<scoped_refptr<net::HttpResponseHeaders> >::Write(
 }
 
 bool ParamTraits<scoped_refptr<net::HttpResponseHeaders> >::Read(
-    const Message* m, void** iter, param_type* r) {
+    const Message* m, PickleIterator* iter, param_type* r) {
   bool has_object;
   if (!ReadParam(m, iter, &has_object))
     return false;
@@ -386,7 +413,7 @@ void ParamTraits<net::IPEndPoint>::Write(Message* m, const param_type& p) {
   WriteParam(m, p.port());
 }
 
-bool ParamTraits<net::IPEndPoint>::Read(const Message* m, void** iter,
+bool ParamTraits<net::IPEndPoint>::Read(const Message* m, PickleIterator* iter,
                                         param_type* p) {
   net::IPAddressNumber address;
   int port;
@@ -400,46 +427,23 @@ void ParamTraits<net::IPEndPoint>::Log(const param_type& p, std::string* l) {
   LogParam("IPEndPoint:" + p.ToString(), l);
 }
 
-void ParamTraits<base::PlatformFileInfo>::Write(
+void ParamTraits<content::Referrer>::Write(
     Message* m, const param_type& p) {
-  WriteParam(m, p.size);
-  WriteParam(m, p.is_directory);
-  WriteParam(m, p.last_modified.ToDoubleT());
-  WriteParam(m, p.last_accessed.ToDoubleT());
-  WriteParam(m, p.creation_time.ToDoubleT());
+  WriteParam(m, p.url);
+  WriteParam(m, p.policy);
 }
 
-bool ParamTraits<base::PlatformFileInfo>::Read(
-    const Message* m, void** iter, param_type* p) {
-  double last_modified;
-  double last_accessed;
-  double creation_time;
-  bool result =
-      ReadParam(m, iter, &p->size) &&
-      ReadParam(m, iter, &p->is_directory) &&
-      ReadParam(m, iter, &last_modified) &&
-      ReadParam(m, iter, &last_accessed) &&
-      ReadParam(m, iter, &creation_time);
-  if (result) {
-    p->last_modified = base::Time::FromDoubleT(last_modified);
-    p->last_accessed = base::Time::FromDoubleT(last_accessed);
-    p->creation_time = base::Time::FromDoubleT(creation_time);
-  }
-  return result;
+bool ParamTraits<content::Referrer>::Read(
+    const Message* m, PickleIterator* iter, param_type* r) {
+  return ReadParam(m, iter, &r->url) && ReadParam(m, iter, &r->policy);
 }
 
-void ParamTraits<base::PlatformFileInfo>::Log(
+void ParamTraits<content::Referrer>::Log(
     const param_type& p, std::string* l) {
   l->append("(");
-  LogParam(p.size, l);
+  LogParam(p.url, l);
   l->append(",");
-  LogParam(p.is_directory, l);
-  l->append(",");
-  LogParam(p.last_modified.ToDoubleT(), l);
-  l->append(",");
-  LogParam(p.last_accessed.ToDoubleT(), l);
-  l->append(",");
-  LogParam(p.creation_time.ToDoubleT(), l);
+  LogParam(p.policy, l);
   l->append(")");
 }
 
@@ -448,7 +452,7 @@ void ParamTraits<gfx::Point>::Write(Message* m, const gfx::Point& p) {
   m->WriteInt(p.y());
 }
 
-bool ParamTraits<gfx::Point>::Read(const Message* m, void** iter,
+bool ParamTraits<gfx::Point>::Read(const Message* m, PickleIterator* iter,
                                    gfx::Point* r) {
   int x, y;
   if (!m->ReadInt(iter, &x) ||
@@ -468,7 +472,9 @@ void ParamTraits<gfx::Size>::Write(Message* m, const gfx::Size& p) {
   m->WriteInt(p.height());
 }
 
-bool ParamTraits<gfx::Size>::Read(const Message* m, void** iter, gfx::Size* r) {
+bool ParamTraits<gfx::Size>::Read(const Message* m,
+                                  PickleIterator* iter,
+                                  gfx::Size* r) {
   int w, h;
   if (!m->ReadInt(iter, &w) ||
       !m->ReadInt(iter, &h))
@@ -489,7 +495,9 @@ void ParamTraits<gfx::Rect>::Write(Message* m, const gfx::Rect& p) {
   m->WriteInt(p.height());
 }
 
-bool ParamTraits<gfx::Rect>::Read(const Message* m, void** iter, gfx::Rect* r) {
+bool ParamTraits<gfx::Rect>::Read(const Message* m,
+                                  PickleIterator* iter,
+                                  gfx::Rect* r) {
   int x, y, w, h;
   if (!m->ReadInt(iter, &x) ||
       !m->ReadInt(iter, &y) ||
@@ -508,14 +516,44 @@ void ParamTraits<gfx::Rect>::Log(const gfx::Rect& p, std::string* l) {
                                p.width(), p.height()));
 }
 
-void ParamTraits<ui::Range>::Write(Message* m, const ui::Range& r) {
-  m->WriteSize(r.start());
-  m->WriteSize(r.end());
+void ParamTraits<gfx::RectF>::Write(Message* m, const gfx::RectF& p) {
+  ParamTraits<float>::Write(m, p.x());
+  ParamTraits<float>::Write(m, p.y());
+  ParamTraits<float>::Write(m, p.width());
+  ParamTraits<float>::Write(m, p.height());
 }
 
-bool ParamTraits<ui::Range>::Read(const Message* m, void** iter, ui::Range* r) {
-  size_t start, end;
-  if (!m->ReadSize(iter, &start) || !m->ReadSize(iter, &end))
+bool ParamTraits<gfx::RectF>::Read(const Message* m,
+                                   PickleIterator* iter,
+                                   gfx::RectF* r) {
+  float x, y, w, h;
+  if (!ParamTraits<float>::Read(m, iter, &x) ||
+      !ParamTraits<float>::Read(m, iter, &y) ||
+      !ParamTraits<float>::Read(m, iter, &w) ||
+      !ParamTraits<float>::Read(m, iter, &h))
+    return false;
+  r->set_x(x);
+  r->set_y(y);
+  r->set_width(w);
+  r->set_height(h);
+  return true;
+}
+
+void ParamTraits<gfx::RectF>::Log(const gfx::RectF& p, std::string* l) {
+  l->append(base::StringPrintf("(%f, %f, %f, %f)", p.x(), p.y(),
+                               p.width(), p.height()));
+}
+
+void ParamTraits<ui::Range>::Write(Message* m, const ui::Range& r) {
+  m->WriteUInt64(r.start());
+  m->WriteUInt64(r.end());
+}
+
+bool ParamTraits<ui::Range>::Read(const Message* m,
+                                  PickleIterator* iter,
+                                  ui::Range* r) {
+  uint64 start, end;
+  if (!m->ReadUInt64(iter, &start) || !m->ReadUInt64(iter, &end))
     return false;
   r->set_start(start);
   r->set_end(end);
@@ -538,7 +576,9 @@ void ParamTraits<SkBitmap>::Write(Message* m, const SkBitmap& p) {
                static_cast<int>(pixel_size));
 }
 
-bool ParamTraits<SkBitmap>::Read(const Message* m, void** iter, SkBitmap* r) {
+bool ParamTraits<SkBitmap>::Read(const Message* m,
+                                 PickleIterator* iter,
+                                 SkBitmap* r) {
   const char* fixed_data;
   int fixed_data_size = 0;
   if (!m->ReadData(iter, &fixed_data, &fixed_data_size) ||
@@ -565,4 +605,25 @@ void ParamTraits<SkBitmap>::Log(const SkBitmap& p, std::string* l) {
   l->append("<SkBitmap>");
 }
 
+}  // namespace IPC
+
+// Generate param traits write methods.
+#include "ipc/param_traits_write_macros.h"
+namespace IPC {
+#undef CONTENT_PUBLIC_COMMON_COMMON_PARAM_TRAITS_MACROS_H_
+#include "content/public/common/common_param_traits_macros.h"
+}  // namespace IPC
+
+// Generate param traits read methods.
+#include "ipc/param_traits_read_macros.h"
+namespace IPC {
+#undef CONTENT_PUBLIC_COMMON_COMMON_PARAM_TRAITS_MACROS_H_
+#include "content/public/common/common_param_traits_macros.h"
+}  // namespace IPC
+
+// Generate param traits log methods.
+#include "ipc/param_traits_log_macros.h"
+namespace IPC {
+#undef CONTENT_PUBLIC_COMMON_COMMON_PARAM_TRAITS_MACROS_H_
+#include "content/public/common/common_param_traits_macros.h"
 }  // namespace IPC

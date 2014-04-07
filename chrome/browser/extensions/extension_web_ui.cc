@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,17 +7,19 @@
 #include <set>
 #include <vector>
 
+#include "base/command_line.h"
 #include "base/string_util.h"
 #include "base/utf_string_conversions.h"
 #include "chrome/browser/bookmarks/bookmark_manager_extension_api.h"
 #include "chrome/browser/extensions/extension_service.h"
+#include "chrome/browser/extensions/extension_tab_util.h"
 #include "chrome/browser/extensions/image_loading_tracker.h"
 #include "chrome/browser/prefs/pref_service.h"
 #include "chrome/browser/prefs/scoped_user_pref_update.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/browser_list.h"
-#include "chrome/browser/ui/tab_contents/tab_contents_wrapper.h"
+#include "chrome/browser/ui/tab_contents/tab_contents.h"
+#include "chrome/browser/ui/tab_contents/tab_contents_iterator.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/common/extensions/extension.h"
 #include "chrome/common/extensions/extension_constants.h"
@@ -27,14 +29,15 @@
 #include "content/public/browser/navigation_controller.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/browser/web_ui.h"
-#include "content/public/common/page_transition_types.h"
 #include "content/public/common/bindings_policy.h"
+#include "content/public/common/page_transition_types.h"
 #include "net/base/file_stream.h"
 #include "third_party/skia/include/core/SkBitmap.h"
 #include "ui/gfx/codec/png_codec.h"
 #include "ui/gfx/favicon_size.h"
 
 using content::WebContents;
+using extensions::Extension;
 
 namespace {
 
@@ -57,6 +60,24 @@ void CleanUpDuplicates(ListValue* list) {
   }
 }
 
+// Reloads the page in |web_contents| if it uses the same profile as |profile|
+// and if the current URL is a chrome URL.
+void UnregisterAndReplaceOverrideForWebContents(
+    const std::string& page, Profile* profile, WebContents* web_contents) {
+  if (Profile::FromBrowserContext(web_contents->GetBrowserContext()) != profile)
+    return;
+
+  GURL url = web_contents->GetURL();
+  if (!url.SchemeIs(chrome::kChromeUIScheme) || url.host() != page)
+    return;
+
+  // Don't use Reload() since |url| isn't the same as the internal URL that
+  // NavigationController has.
+  web_contents->GetController().LoadURL(
+      url, content::Referrer(url, WebKit::WebReferrerPolicyDefault),
+      content::PAGE_TRANSITION_RELOAD, std::string());
+}
+
 // Helper class that is used to track the loading of the favicon of an
 // extension.
 class ExtensionWebUIImageLoadingTracker : public ImageLoadingTracker::Observer {
@@ -77,42 +98,58 @@ class ExtensionWebUIImageLoadingTracker : public ImageLoadingTracker::Observer {
   void Init() {
     if (extension_) {
       ExtensionResource icon_resource =
-          extension_->GetIconResource(Extension::EXTENSION_ICON_BITTY,
+          extension_->GetIconResource(extension_misc::EXTENSION_ICON_BITTY,
                                       ExtensionIconSet::MATCH_EXACTLY);
 
       tracker_.LoadImage(extension_, icon_resource,
                          gfx::Size(gfx::kFaviconSize, gfx::kFaviconSize),
                          ImageLoadingTracker::DONT_CACHE);
     } else {
-      ForwardResult(NULL);
+      ForwardResult(gfx::Image());
     }
   }
 
-  virtual void OnImageLoaded(SkBitmap* image, const ExtensionResource& resource,
-                             int index) {
-    if (image) {
-      std::vector<unsigned char> image_data;
-      if (!gfx::PNGCodec::EncodeBGRASkBitmap(*image, false, &image_data)) {
-        NOTREACHED() << "Could not encode extension favicon";
-      }
-      ForwardResult(RefCountedBytes::TakeVector(&image_data));
-    } else {
-      ForwardResult(NULL);
-    }
+  virtual void OnImageLoaded(const gfx::Image& image,
+                             const std::string& extension_id,
+                             int index) OVERRIDE {
+    ForwardResult(image);
   }
 
  private:
   ~ExtensionWebUIImageLoadingTracker() {}
 
-  // Forwards the result on the request. If no favicon was available then
-  // |icon_data| may be backed by NULL. Once the result has been forwarded the
-  // instance is deleted.
-  void ForwardResult(scoped_refptr<RefCountedMemory> icon_data) {
-    history::FaviconData favicon;
-    favicon.known_icon = icon_data.get() != NULL && icon_data->size() > 0;
-    favicon.image_data = icon_data;
-    favicon.icon_type = history::FAVICON;
-    request_->ForwardResultAsync(request_->handle(), favicon);
+  // Forwards the result of the request. If no favicon was available then
+  // |icon| will be empty. Once the result has been forwarded the instance is
+  // deleted.
+  void ForwardResult(const gfx::Image& icon) {
+    std::vector<history::FaviconBitmapResult> favicon_bitmap_results;
+    history::IconURLSizesMap icon_url_sizes;
+    SkBitmap icon_bitmap = icon.AsBitmap();
+    if (!icon_bitmap.empty()) {
+      scoped_refptr<base::RefCountedBytes> icon_data(
+          new base::RefCountedBytes());
+      if (gfx::PNGCodec::EncodeBGRASkBitmap(icon_bitmap, false,
+                                            &icon_data->data())) {
+        history::FaviconBitmapResult bitmap_result;
+        bitmap_result.bitmap_data = icon_data;
+        bitmap_result.pixel_size = gfx::Size(icon_bitmap.width(),
+                                             icon_bitmap.height());
+        // Leave |bitmap_result|'s icon URL as the default of GURL().
+        bitmap_result.icon_type = history::FAVICON;
+
+        favicon_bitmap_results.push_back(bitmap_result);
+
+        // Build IconURLSizesMap such that the requirement that all the icon
+        // URLs in |favicon_bitmap_results| be present in |icon_url_sizes|
+        // holds. Set the favicon sizes to the pixel size of |icon_bitmap|.
+        icon_url_sizes[GURL()].push_back(bitmap_result.pixel_size);
+      } else {
+        NOTREACHED() << "Could not encode extension favicon";
+      }
+    }
+
+    request_->ForwardResultAsync(request_->handle(), favicon_bitmap_results,
+                                 icon_url_sizes);
     delete this;
   }
 
@@ -167,8 +204,7 @@ ExtensionWebUI::ExtensionWebUI(content::WebUI* web_ui, const GURL& url)
 
   // Hack: A few things we specialize just for the bookmark manager.
   if (extension->id() == extension_misc::kBookmarkManagerId) {
-    TabContentsWrapper* tab = TabContentsWrapper::GetCurrentWrapperForContents(
-        web_ui->GetWebContents());
+    TabContents* tab = TabContents::FromWebContents(web_ui->GetWebContents());
     DCHECK(tab);
     bookmark_manager_extension_event_router_.reset(
         new BookmarkManagerExtensionEventRouter(profile, tab));
@@ -203,7 +239,7 @@ bool ExtensionWebUI::HandleChromeURLOverride(
   const DictionaryValue* overrides =
       profile->GetPrefs()->GetDictionary(kExtensionURLOverrides);
   std::string page = url->host();
-  ListValue* url_list;
+  const ListValue* url_list;
   if (!overrides || !overrides->GetList(page, &url_list))
     return false;
 
@@ -211,7 +247,7 @@ bool ExtensionWebUI::HandleChromeURLOverride(
 
   size_t i = 0;
   while (i < url_list->GetSize()) {
-    Value* val = NULL;
+    const Value* val = NULL;
     url_list->Get(i, &val);
 
     // Verify that the override value is good.  If not, unregister it and find
@@ -222,6 +258,9 @@ bool ExtensionWebUI::HandleChromeURLOverride(
       UnregisterChromeURLOverride(page, profile, val);
       continue;
     }
+
+    if (!url->query().empty())
+      override += "?" + url->query();
     if (!url->ref().empty())
       override += "#" + url->ref();
     GURL extension_url(override);
@@ -273,7 +312,7 @@ bool ExtensionWebUI::HandleChromeURLOverrideReverse(
   // chrome://bookmarks/#1 for display in the omnibox.
   for (DictionaryValue::key_iterator it = overrides->begin_keys(),
        end = overrides->end_keys(); it != end; ++it) {
-    ListValue* url_list;
+    const ListValue* url_list;
     if (!overrides->GetList(*it, &url_list))
       continue;
 
@@ -341,35 +380,22 @@ void ExtensionWebUI::RegisterChromeURLOverrides(
 void ExtensionWebUI::UnregisterAndReplaceOverride(const std::string& page,
                                                   Profile* profile,
                                                   ListValue* list,
-                                                  Value* override) {
+                                                  const Value* override) {
   size_t index = 0;
   bool found = list->Remove(*override, &index);
   if (found && index == 0) {
     // This is the active override, so we need to find all existing
     // tabs for this override and get them to reload the original URL.
-    for (TabContentsIterator iterator; !iterator.done(); ++iterator) {
-      WebContents* tab = (*iterator)->web_contents();
-      Profile* tab_profile =
-          Profile::FromBrowserContext(tab->GetBrowserContext());
-      if (tab_profile != profile)
-        continue;
-
-      GURL url = tab->GetURL();
-      if (!url.SchemeIs(chrome::kChromeUIScheme) || url.host() != page)
-        continue;
-
-      // Don't use Reload() since |url| isn't the same as the internal URL
-      // that NavigationController has.
-      tab->GetController().LoadURL(
-          url, content::Referrer(url, WebKit::WebReferrerPolicyDefault),
-          content::PAGE_TRANSITION_RELOAD, std::string());
-    }
+    base::Callback<void(WebContents*)> callback =
+        base::Bind(&UnregisterAndReplaceOverrideForWebContents, page, profile);
+    ExtensionTabUtil::ForEachTab(callback);
   }
 }
 
 // static
 void ExtensionWebUI::UnregisterChromeURLOverride(const std::string& page,
-    Profile* profile, Value* override) {
+                                                 Profile* profile,
+                                                 const Value* override) {
   if (!override)
     return;
   PrefService* prefs = profile->GetPrefs();

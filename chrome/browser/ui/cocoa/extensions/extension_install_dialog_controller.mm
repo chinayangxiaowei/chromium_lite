@@ -1,32 +1,42 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #import "chrome/browser/ui/cocoa/extensions/extension_install_dialog_controller.h"
 
+#include "base/auto_reset.h"
+#include "base/i18n/rtl.h"
 #include "base/mac/bundle_locations.h"
 #include "base/mac/mac_util.h"
 #include "base/memory/scoped_nsobject.h"
 #include "base/string_util.h"
 #include "base/sys_string_conversions.h"
 #include "base/utf_string_conversions.h"
+#include "chrome/browser/extensions/bundle_installer.h"
 #include "chrome/browser/extensions/extension_install_dialog.h"
-#include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/browser_list.h"
-#include "chrome/browser/ui/browser_window.h"
 #include "chrome/common/extensions/extension.h"
+#include "content/public/browser/page_navigator.h"
 #include "grit/generated_resources.h"
 #include "skia/ext/skia_utils_mac.h"
 #import "third_party/GTM/AppKit/GTMUILocalizerAndLayoutTweaker.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/l10n/l10n_util_mac.h"
+#include "ui/gfx/image/image_skia_util_mac.h"
 
 using content::OpenURLParams;
 using content::Referrer;
+using extensions::BundleInstaller;
 
 @interface ExtensionInstallDialogController ()
-- (bool)isInlineInstall;
-- (void)appendRatingStar:(const SkBitmap*)skiaImage;
+- (BOOL)isBundleInstall;
+- (BOOL)isInlineInstall;
+- (void)appendRatingStar:(const gfx::ImageSkia*)skiaImage;
+- (void)onOutlineViewRowCountDidChange;
+- (NSDictionary*)buildItemWithTitle:(NSString*)title
+                        isGroupItem:(BOOL)isGroupItem
+                           children:(NSArray*)children;
+- (NSDictionary*)buildIssue:(const IssueAdviceInfoEntry&)issue;
+- (NSArray*)buildWarnings:(const ExtensionInstallPrompt::Prompt&)prompt;
 @end
 
 namespace {
@@ -39,31 +49,74 @@ const CGFloat kWarningsSeparatorPadding = 14;
 // contents.
 const CGFloat kMaxControlHeight = 400;
 
-// Adjust a control's height so that its content its not clipped. Returns the
-// amount the control's height had to be adjusted.
-CGFloat AdjustControlHeightToFitContent(NSControl* control) {
+NSString* const kTitleKey = @"title";
+NSString* const kIsGroupItemKey = @"isGroupItem";
+NSString* const kChildrenKey = @"children";
+NSString* const kCanExpandKey = @"canExpand";
+
+// Adjust the |control|'s height so that its content is not clipped.
+// This also adds the change in height to the |totalOffset| and shifts the
+// control down by that amount.
+void OffsetControlVerticallyToFitContent(NSControl* control,
+                                         CGFloat* totalOffset) {
+  // Adjust the control's height so that its content is not clipped.
   NSRect currentRect = [control frame];
   NSRect fitRect = currentRect;
   fitRect.size.height = kMaxControlHeight;
   CGFloat desiredHeight = [[control cell] cellSizeForBounds:fitRect].height;
-  CGFloat offset = desiredHeight - currentRect.size.height;
+  CGFloat offset = desiredHeight - NSHeight(currentRect);
 
-  [control setFrameSize:NSMakeSize(currentRect.size.width,
-                                   currentRect.size.height + offset)];
-  return offset;
-}
+  [control setFrameSize:NSMakeSize(NSWidth(currentRect),
+                                   NSHeight(currentRect) + offset)];
 
-// Moves the control vertically by the specified amount.
-void OffsetControlVertically(NSControl* control, CGFloat amount) {
+  *totalOffset += offset;
+
+  // Move the control vertically by the new total offset.
   NSPoint origin = [control frame].origin;
-  origin.y += amount;
+  origin.y -= *totalOffset;
   [control setFrameOrigin:origin];
 }
 
-void AppendRatingStarsShim(const SkBitmap* skiaImage, void* data) {
+// Gets the desired height of |outlineView|. Simply using the view's frame
+// doesn't work if an animation is pending.
+CGFloat GetDesiredOutlineViewHeight(NSOutlineView* outlineView) {
+  CGFloat height = 0;
+  for (NSInteger i = 0; i < [outlineView numberOfRows]; ++i)
+    height += NSHeight([outlineView rectOfRow:i]);
+  return height;
+}
+
+void OffsetOutlineViewVerticallyToFitContent(NSOutlineView* outlineView,
+                                             CGFloat* totalOffset) {
+  NSScrollView* scrollView = [outlineView enclosingScrollView];
+  NSRect frame = [scrollView frame];
+  CGFloat desiredHeight = GetDesiredOutlineViewHeight(outlineView);
+  CGFloat offset = desiredHeight - NSHeight(frame);
+  frame.size.height += offset;
+
+  *totalOffset += offset;
+
+  // Move the control vertically by the new total offset.
+  frame.origin.y -= *totalOffset;
+  [scrollView setFrame:frame];
+}
+
+void AppendRatingStarsShim(const gfx::ImageSkia* skiaImage, void* data) {
   ExtensionInstallDialogController* controller =
       static_cast<ExtensionInstallDialogController*>(data);
   [controller appendRatingStar:skiaImage];
+}
+
+void DrawBulletInFrame(NSRect frame) {
+  NSRect rect;
+  rect.size.width = std::min(NSWidth(frame), NSHeight(frame)) * 0.38;
+  rect.size.height = NSWidth(rect);
+  rect.origin.x = frame.origin.x + (NSWidth(frame) - NSWidth(rect)) / 2.0;
+  rect.origin.y = frame.origin.y + (NSHeight(frame) - NSHeight(rect)) / 2.0;
+  rect = NSIntegralRect(rect);
+
+  [[NSColor colorWithCalibratedWhite:0.0 alpha:0.42] set];
+  [[NSBezierPath bezierPathWithOvalInRect:rect] fill];
 }
 
 }
@@ -72,31 +125,35 @@ void AppendRatingStarsShim(const SkBitmap* skiaImage, void* data) {
 
 @synthesize iconView = iconView_;
 @synthesize titleField = titleField_;
-@synthesize subtitleField = subtitleField_;
-@synthesize warningsField = warningsField_;
+@synthesize itemsField = itemsField_;
 @synthesize cancelButton = cancelButton_;
 @synthesize okButton = okButton_;
+@synthesize outlineView = outlineView_;
 @synthesize warningsSeparator = warningsSeparator_;
 @synthesize ratingStars = ratingStars_;
 @synthesize ratingCountField = ratingCountField_;
 @synthesize userCountField = userCountField_;
 
 - (id)initWithParentWindow:(NSWindow*)window
-                   profile:(Profile*)profile
-                 extension:(const Extension*)extension
-                  delegate:(ExtensionInstallUI::Delegate*)delegate
-                      icon:(SkBitmap*)icon
-                    prompt:(const ExtensionInstallUI::Prompt&)prompt {
+                 navigator:(content::PageNavigator*)navigator
+                  delegate:(ExtensionInstallPrompt::Delegate*)delegate
+                    prompt:(const ExtensionInstallPrompt::Prompt&)prompt {
   NSString* nibpath = nil;
+  warnings_.reset([[self buildWarnings:prompt] retain]);
 
-  // We use a different XIB in the case of inline installs or no permission
-  // warnings, that respectively show webstore ratings data and are a more
-  // nicely laid out.
-  if (prompt.type() == ExtensionInstallUI::INLINE_INSTALL_PROMPT) {
+  // We use a different XIB in the case of bundle installs, inline installs or
+  // no permission warnings. These are laid out nicely for the data they
+  // display.
+  if (prompt.type() == ExtensionInstallPrompt::BUNDLE_INSTALL_PROMPT) {
+    nibpath = [base::mac::FrameworkBundle()
+               pathForResource:@"ExtensionInstallPromptBundle"
+                        ofType:@"nib"];
+  } else if (prompt.type() == ExtensionInstallPrompt::INLINE_INSTALL_PROMPT) {
     nibpath = [base::mac::FrameworkBundle()
                pathForResource:@"ExtensionInstallPromptInline"
                         ofType:@"nib"];
-  } else if (prompt.GetPermissionCount() == 0) {
+  } else if (prompt.GetPermissionCount() == 0 &&
+             prompt.GetOAuthIssueCount() == 0) {
     nibpath = [base::mac::FrameworkBundle()
                pathForResource:@"ExtensionInstallPromptNoWarnings"
                         ofType:@"nib"];
@@ -108,11 +165,9 @@ void AppendRatingStarsShim(const SkBitmap* skiaImage, void* data) {
 
   if ((self = [super initWithWindowNibPath:nibpath owner:self])) {
     parentWindow_ = window;
-    profile_ = profile;
-    icon_ = *icon;
+    navigator_ = navigator;
     delegate_ = delegate;
-    extension_ = extension;
-    prompt_.reset(new ExtensionInstallUI::Prompt(prompt));
+    prompt_.reset(new ExtensionInstallPrompt::Prompt(prompt));
   }
   return self;
 }
@@ -126,9 +181,9 @@ void AppendRatingStarsShim(const SkBitmap* skiaImage, void* data) {
 }
 
 - (IBAction)storeLinkClicked:(id)sender {
-  GURL store_url(
-      extension_urls::GetWebstoreItemDetailURLPrefix() + extension_->id());
-  BrowserList::GetLastActiveWithProfile(profile_)->OpenURL(OpenURLParams(
+  GURL store_url(extension_urls::GetWebstoreItemDetailURLPrefix() +
+                 prompt_->extension()->id());
+  navigator_->OpenURL(OpenURLParams(
       store_url, Referrer(), NEW_FOREGROUND_TAB, content::PAGE_TRANSITION_LINK,
       false));
 
@@ -152,8 +207,7 @@ void AppendRatingStarsShim(const SkBitmap* skiaImage, void* data) {
                       [[self window] delegate]));
 
   // Set control labels.
-  [titleField_ setStringValue:base::SysUTF16ToNSString(
-      prompt_->GetHeading(extension_->name()))];
+  [titleField_ setStringValue:base::SysUTF16ToNSString(prompt_->GetHeading())];
   [okButton_ setTitle:base::SysUTF16ToNSString(
       prompt_->GetAcceptButtonLabel())];
   [cancelButton_ setTitle:prompt_->HasAbortButtonLabel() ?
@@ -167,18 +221,19 @@ void AppendRatingStarsShim(const SkBitmap* skiaImage, void* data) {
         prompt_->GetUserCount())];
   }
 
-  NSImage* image = gfx::SkBitmapToNSImage(icon_);
-  [iconView_ setImage:image];
+  // The bundle install dialog has no icon.
+  if (![self isBundleInstall])
+    [iconView_ setImage:prompt_->icon().ToNSImage()];
 
-  // Resize |titleField_| to fit the title.
-  CGFloat originalTitleWidth = [titleField_ frame].size.width;
-  [titleField_ sizeToFit];
-  CGFloat newTitleWidth = [titleField_ frame].size.width;
-  if (newTitleWidth > originalTitleWidth) {
-    NSRect frame = [[self window] frame];
-    frame.size.width += newTitleWidth - originalTitleWidth;
-    [[self window] setFrame:frame display:NO];
-  }
+  // The dialog is laid out in the NIB exactly how we want it assuming that
+  // each label fits on one line. However, for each label, we want to allow
+  // wrapping onto multiple lines. So we accumulate an offset by measuring how
+  // big each label wants to be, and comparing it to how big it actually is.
+  // Then we shift each label down and resize by the appropriate amount, then
+  // finally resize the window.
+  CGFloat totalOffset = 0.0;
+
+  OffsetControlVerticallyToFitContent(titleField_, &totalOffset);
 
   // Resize |okButton_| and |cancelButton_| to fit the button labels, but keep
   // them right-aligned.
@@ -194,57 +249,48 @@ void AppendRatingStarsShim(const SkBitmap* skiaImage, void* data) {
                                          -buttonDelta.width, 0)];
   }
 
-  CGFloat totalOffset = 0.0;
-  // If there are any warnings, then we have to do some special layout.
-  if (prompt_->GetPermissionCount() > 0) {
-    [subtitleField_ setStringValue:base::SysUTF16ToNSString(
-        prompt_->GetPermissionsHeader())];
+  if ([self isBundleInstall]) {
+    // We display the list of extension names as a simple text string, seperated
+    // by newlines.
+    BundleInstaller::ItemList items = prompt_->bundle()->GetItemsWithState(
+        BundleInstaller::Item::STATE_PENDING);
 
-    // We display the permission warnings as a simple text string, separated by
-    // newlines.
-    NSMutableString* joinedWarnings = [NSMutableString string];
-    for (size_t i = 0; i < prompt_->GetPermissionCount(); ++i) {
+    NSMutableString* joinedItems = [NSMutableString string];
+    for (size_t i = 0; i < items.size(); ++i) {
       if (i > 0)
-        [joinedWarnings appendString:@"\n"];
-      [joinedWarnings appendString:base::SysUTF16ToNSString(
-          prompt_->GetPermission(i))];
+        [joinedItems appendString:@"\n"];
+      [joinedItems appendString:base::SysUTF16ToNSString(
+          items[i].GetNameForDisplay())];
     }
-    [warningsField_ setStringValue:joinedWarnings];
+    [itemsField_ setStringValue:joinedItems];
 
-    // The dialog is laid out in the NIB exactly how we want it assuming that
-    // each label fits on one line. However, for each label, we want to allow
-    // wrapping onto multiple lines. So we accumulate an offset by measuring how
-    // big each label wants to be, and comparing it to how big it actually is.
-    // Then we shift each label down and resize by the appropriate amount, then
-    // finally resize the window.
+    // Adjust the controls to fit the list of extensions.
+    OffsetControlVerticallyToFitContent(itemsField_, &totalOffset);
+  }
 
-    // Additionally, in the store version of the dialog the icon extends past
-    // the one-line version of the permission field. Therefore when increasing
-    // the window size for multi-line permissions we don't have to add the full
-    // offset, only the part that extends past the icon.
-    CGFloat warningsGrowthSlack = 0;
-    if ([warningsField_ frame].origin.y > [iconView_ frame].origin.y) {
-      warningsGrowthSlack =
-          [warningsField_ frame].origin.y - [iconView_ frame].origin.y;
+  // If there are any warnings or OAuth issues, then we have to do some special
+  // layout.
+  if (prompt_->GetPermissionCount() > 0 || prompt_->GetOAuthIssueCount() > 0) {
+    NSSize spacing = [outlineView_ intercellSpacing];
+    spacing.width += 2;
+    spacing.height += 2;
+    [outlineView_ setIntercellSpacing:spacing];
+    [[[[outlineView_ tableColumns] objectAtIndex:0] dataCell] setWraps:YES];
+    for (id item in warnings_.get()) {
+      if ([[item objectForKey:kIsGroupItemKey] boolValue])
+        [outlineView_ expandItem:item expandChildren:NO];
     }
-
-    totalOffset += AdjustControlHeightToFitContent(subtitleField_);
-    OffsetControlVertically(subtitleField_, -totalOffset);
-
-    totalOffset += AdjustControlHeightToFitContent(warningsField_);
-    OffsetControlVertically(warningsField_, -totalOffset);
-    totalOffset = MAX(totalOffset - warningsGrowthSlack, 0);
-  } else if ([self isInlineInstall]) {
-    // Inline installs that don't have a permissions section need to hide
-    // controls related to that and shrink the window by the space they take
-    // up.
+    // Adjust the outline view to fit the warnings.
+    OffsetOutlineViewVerticallyToFitContent(outlineView_, &totalOffset);
+  } else if ([self isInlineInstall] || [self isBundleInstall]) {
+    // Inline and bundle installs that don't have a permissions section need to
+    // hide controls related to that and shrink the window by the space they
+    // take up.
     NSRect hiddenRect = NSUnionRect([warningsSeparator_ frame],
-                                    [subtitleField_ frame]);
-    hiddenRect = NSUnionRect(hiddenRect, [warningsField_ frame]);
+                                    [[outlineView_ enclosingScrollView] frame]);
     [warningsSeparator_ setHidden:YES];
-    [subtitleField_ setHidden:YES];
-    [warningsField_ setHidden:YES];
-    totalOffset -= hiddenRect.size.height + kWarningsSeparatorPadding;
+    [[outlineView_ enclosingScrollView] setHidden:YES];
+    totalOffset -= NSHeight(hiddenRect) + kWarningsSeparatorPadding;
   }
 
   // If necessary, adjust the window size.
@@ -252,9 +298,9 @@ void AppendRatingStarsShim(const SkBitmap* skiaImage, void* data) {
     NSRect currentRect = [[self window] frame];
     [[self window] setFrame:NSMakeRect(currentRect.origin.x,
                                        currentRect.origin.y - totalOffset,
-                                       currentRect.size.width,
-                                       currentRect.size.height + totalOffset)
-                   display:NO];
+                                       NSWidth(currentRect),
+                                       NSHeight(currentRect) + totalOffset)
+                    display:NO];
   }
 }
 
@@ -268,12 +314,16 @@ void AppendRatingStarsShim(const SkBitmap* skiaImage, void* data) {
   [self autorelease];
 }
 
-- (bool)isInlineInstall {
-  return prompt_->type() == ExtensionInstallUI::INLINE_INSTALL_PROMPT;
+- (BOOL)isBundleInstall {
+  return prompt_->type() == ExtensionInstallPrompt::BUNDLE_INSTALL_PROMPT;
 }
 
-- (void)appendRatingStar:(const SkBitmap*)skiaImage {
-  NSImage* image = gfx::SkBitmapToNSImageWithColorSpace(
+- (BOOL)isInlineInstall {
+  return prompt_->type() == ExtensionInstallPrompt::INLINE_INSTALL_PROMPT;
+}
+
+- (void)appendRatingStar:(const gfx::ImageSkia*)skiaImage {
+  NSImage* image = gfx::NSImageFromImageSkiaWithColorSpace(
       *skiaImage, base::mac::GetSystemColorSpace());
   NSRect frame = NSMakeRect(0, 0, skiaImage->width(), skiaImage->height());
   scoped_nsobject<NSImageView> view([[NSImageView alloc] initWithFrame:frame]);
@@ -290,35 +340,210 @@ void AppendRatingStarsShim(const SkBitmap* skiaImage, void* data) {
   [ratingStars_ addSubview:view];
 }
 
+- (void)onOutlineViewRowCountDidChange {
+  // Force the outline view to update.
+  [outlineView_ reloadData];
+
+  CGFloat totalOffset = 0.0;
+  OffsetOutlineViewVerticallyToFitContent(outlineView_, &totalOffset);
+  if (totalOffset) {
+    NSRect currentRect = [[self window] frame];
+    currentRect.origin.y -= totalOffset;
+    currentRect.size.height += totalOffset;
+    [[self window] setFrame:currentRect
+                    display:YES];
+  }
+}
+
+- (id)outlineView:(NSOutlineView*)outlineView
+            child:(NSInteger)index
+           ofItem:(id)item {
+  if (!item)
+    return [warnings_ objectAtIndex:index];
+  if ([item isKindOfClass:[NSDictionary class]])
+    return [[item objectForKey:kChildrenKey] objectAtIndex:index];
+  NOTREACHED();
+  return nil;
+}
+
+- (BOOL)outlineView:(NSOutlineView*)outlineView
+   isItemExpandable:(id)item {
+  return [self outlineView:outlineView numberOfChildrenOfItem:item] > 0;
+}
+
+- (NSInteger)outlineView:(NSOutlineView*)outlineView
+  numberOfChildrenOfItem:(id)item {
+  if (!item)
+    return [warnings_ count];
+  if ([item isKindOfClass:[NSDictionary class]])
+    return [[item objectForKey:kChildrenKey] count];
+  NOTREACHED();
+  return 0;
+}
+
+- (id)outlineView:(NSOutlineView*)outlineView
+    objectValueForTableColumn:(NSTableColumn *)tableColumn
+                       byItem:(id)item {
+  return [item objectForKey:kTitleKey];
+}
+
+- (BOOL)outlineView:(NSOutlineView *)outlineView
+   shouldExpandItem:(id)item {
+  return [[item objectForKey:kCanExpandKey] boolValue];
+}
+
+- (void)outlineViewItemDidExpand:sender {
+  // Call via run loop to avoid animation glitches.
+  [self performSelector:@selector(onOutlineViewRowCountDidChange)
+             withObject:nil
+             afterDelay:0];
+}
+
+- (void)outlineViewItemDidCollapse:sender {
+  // Call via run loop to avoid animation glitches.
+  [self performSelector:@selector(onOutlineViewRowCountDidChange)
+             withObject:nil
+             afterDelay:0];
+}
+
+- (CGFloat)outlineView:(NSOutlineView *)outlineView
+     heightOfRowByItem:(id)item {
+  // Prevent reentrancy due to the frameOfCellAtColumn:row: call below.
+  if (isComputingRowHeight_)
+    return 1;
+  AutoReset<BOOL> reset(&isComputingRowHeight_, YES);
+
+  NSCell* cell = [[[outlineView_ tableColumns] objectAtIndex:0] dataCell];
+  [cell setStringValue:[item objectForKey:kTitleKey]];
+  NSRect bounds = NSZeroRect;
+  NSInteger row = [outlineView_ rowForItem:item];
+  bounds.size.width = NSWidth([outlineView_ frameOfCellAtColumn:0 row:row]);
+  bounds.size.height = kMaxControlHeight;
+
+  return [cell cellSizeForBounds:bounds].height;
+}
+
+- (BOOL)outlineView:(NSOutlineView*)outlineView
+    shouldShowOutlineCellForItem:(id)item {
+  // The top most group header items are always expanded so hide their
+  // disclosure trianggles.
+  return ![[item objectForKey:kIsGroupItemKey] boolValue];
+}
+
+- (void)outlineView:(NSOutlineView*)outlineView
+    willDisplayCell:(id)cell
+     forTableColumn:(NSTableColumn *)tableColumn
+               item:(id)item {
+  if ([[item objectForKey:kIsGroupItemKey] boolValue])
+    [cell setFont:[NSFont boldSystemFontOfSize:11.0]];
+  else
+    [cell setFont:[NSFont systemFontOfSize:11.0]];
+}
+
+- (void)outlineView:(NSOutlineView *)outlineView
+    willDisplayOutlineCell:(id)cell
+            forTableColumn:(NSTableColumn *)tableColumn
+                      item:(id)item {
+  // Replace disclosure triangles with bullet lists for leaf nodes.
+  if (![[item objectForKey:kCanExpandKey] boolValue]) {
+    [cell setImagePosition:NSNoImage];
+    DrawBulletInFrame([outlineView_ frameOfOutlineCellAtRow:
+        [outlineView_ rowForItem:item]]);
+  } else {
+    // Reset image to default value.
+    [cell setImagePosition:NSImageOverlaps];
+  }
+}
+
+- (BOOL)outlineView:(NSOutlineView *)outlineView
+   shouldSelectItem:(id)item {
+  return false;
+}
+
+- (NSDictionary*)buildItemWithTitle:(NSString*)title
+                        isGroupItem:(BOOL)isGroupItem
+                           children:(NSArray*)children {
+  BOOL canExpand = YES;
+  if (!children) {
+    // Add a dummy child even though this is a leaf node. This will cause
+    // the outline view to show a disclosure triangle for this item.
+    // This is later overriden in willDisplayOutlineCell: to draw a bullet
+    // instead. (The bullet could be placed in the title instead but then
+    // the bullet wouldn't line up with disclosure triangles of sibling nodes.)
+    children = [NSArray arrayWithObject:[NSDictionary dictionary]];
+    canExpand = NO;
+  }
+
+  return [NSDictionary dictionaryWithObjectsAndKeys:
+      title, kTitleKey,
+      [NSNumber numberWithBool:isGroupItem], kIsGroupItemKey,
+      children, kChildrenKey,
+      [NSNumber numberWithBool:canExpand], kCanExpandKey,
+      nil];
+}
+
+- (NSDictionary*)buildIssue:(const IssueAdviceInfoEntry&)issue {
+  if (issue.details.empty()) {
+    return [self buildItemWithTitle:SysUTF16ToNSString(issue.description)
+                        isGroupItem:NO
+                           children:nil];
+  }
+
+  NSMutableArray* details = [NSMutableArray array];
+  for (size_t j = 0; j < issue.details.size(); ++j) {
+    [details addObject:
+        [self buildItemWithTitle:SysUTF16ToNSString(issue.details[j])
+                     isGroupItem:NO
+                        children:nil]];
+   }
+  return [self buildItemWithTitle:SysUTF16ToNSString(issue.description)
+                      isGroupItem:NO
+                         children:details];
+}
+
+- (NSArray*)buildWarnings:(const ExtensionInstallPrompt::Prompt&)prompt {
+  NSMutableArray* warnings = [NSMutableArray array];
+
+  if (prompt.GetPermissionCount() > 0) {
+    NSMutableArray* children = [NSMutableArray array];
+    for (size_t i = 0; i < prompt.GetPermissionCount(); ++i) {
+      [children addObject:
+          [self buildItemWithTitle:SysUTF16ToNSString(prompt.GetPermission(i))
+                       isGroupItem:NO
+                          children:nil]];
+    }
+    [warnings addObject:[self
+        buildItemWithTitle:SysUTF16ToNSString(prompt.GetPermissionsHeading())
+               isGroupItem:YES
+                  children:children]];
+  }
+
+  if (prompt.GetOAuthIssueCount() > 0) {
+    NSMutableArray* children = [NSMutableArray array];
+    for (size_t i = 0; i < prompt.GetOAuthIssueCount(); ++i)
+      [children addObject:[self buildIssue:prompt.GetOAuthIssue(i)]];
+    [warnings addObject:
+        [self buildItemWithTitle:SysUTF16ToNSString(prompt.GetOAuthHeading())
+                     isGroupItem:YES
+                        children:children]];
+  }
+
+  return warnings;
+}
+
+
 @end  // ExtensionInstallDialogController
 
 void ShowExtensionInstallDialogImpl(
-    Profile* profile,
-    ExtensionInstallUI::Delegate* delegate,
-    const Extension* extension,
-    SkBitmap* icon,
-    const ExtensionInstallUI::Prompt& prompt) {
-  Browser* browser = BrowserList::GetLastActiveWithProfile(profile);
-  if (!browser) {
-    delegate->InstallUIAbort(false);
-    return;
-  }
-
-  BrowserWindow* window = browser->window();
-  if (!window) {
-    delegate->InstallUIAbort(false);
-    return;
-  }
-
-  gfx::NativeWindow native_window = window->GetNativeHandle();
-
+    gfx::NativeWindow parent,
+    content::PageNavigator* navigator,
+    ExtensionInstallPrompt::Delegate* delegate,
+    const ExtensionInstallPrompt::Prompt& prompt) {
   ExtensionInstallDialogController* controller =
       [[ExtensionInstallDialogController alloc]
-        initWithParentWindow:native_window
-                     profile:profile
-                   extension:extension
+        initWithParentWindow:parent
+                     navigator:navigator
                     delegate:delegate
-                        icon:icon
                       prompt:prompt];
 
   // TODO(mihaip): Switch this to be tab-modal (http://crbug.com/95455)

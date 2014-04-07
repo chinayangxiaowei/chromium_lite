@@ -1,69 +1,126 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "content/test/test_launcher.h"
+#include "content/public/test/test_launcher.h"
 
 #include "base/base_paths.h"
 #include "base/command_line.h"
 #include "base/logging.h"
 #include "base/path_service.h"
-#include "base/scoped_temp_dir.h"
 #include "base/test/test_suite.h"
-#include "content/app/content_main.h"
+#include "content/browser/renderer_host/media/media_stream_manager.h"
 #include "content/public/common/content_switches.h"
+#include "content/public/test/content_test_suite_base.h"
+#include "content/shell/shell_content_browser_client.h"
+#include "content/shell/shell_content_client.h"
 #include "content/shell/shell_main_delegate.h"
+#include "content/shell/shell_switches.h"
+#include "testing/gtest/include/gtest/gtest.h"
 
 #if defined(OS_WIN)
 #include "content/public/app/startup_helper_win.h"
-#include "sandbox/src/sandbox_types.h"
+#include "sandbox/win/src/sandbox_types.h"
+#include "ui/base/win/scoped_ole_initializer.h"
 #endif  // defined(OS_WIN)
+
+namespace content {
+
+class ContentShellTestSuiteInitializer
+    : public testing::EmptyTestEventListener {
+ public:
+  ContentShellTestSuiteInitializer() {
+  }
+
+  virtual void OnTestStart(const testing::TestInfo& test_info) OVERRIDE {
+    DCHECK(!GetContentClient());
+    content_client_.reset(new ShellContentClient);
+    browser_content_client_.reset(new ShellContentBrowserClient());
+    content_client_->set_browser_for_testing(browser_content_client_.get());
+    SetContentClient(content_client_.get());
+  }
+
+  virtual void OnTestEnd(const testing::TestInfo& test_info) OVERRIDE {
+    DCHECK_EQ(content_client_.get(), GetContentClient());
+    browser_content_client_.reset();
+    content_client_.reset();
+    SetContentClient(NULL);
+  }
+
+ private:
+  scoped_ptr<ShellContentClient> content_client_;
+  scoped_ptr<ShellContentBrowserClient> browser_content_client_;
+
+  DISALLOW_COPY_AND_ASSIGN(ContentShellTestSuiteInitializer);
+};
+
+class ContentBrowserTestSuite : public ContentTestSuiteBase {
+ public:
+  ContentBrowserTestSuite(int argc, char** argv)
+      : ContentTestSuiteBase(argc, argv) {
+  }
+  virtual ~ContentBrowserTestSuite() {
+  }
+
+ protected:
+  virtual void Initialize() OVERRIDE {
+    ContentTestSuiteBase::Initialize();
+
+    testing::TestEventListeners& listeners =
+      testing::UnitTest::GetInstance()->listeners();
+    listeners.Append(new ContentShellTestSuiteInitializer);
+  }
+  virtual void Shutdown() OVERRIDE {
+    base::TestSuite::Shutdown();
+  }
+
+  virtual ContentClient* CreateClientForInitialization() OVERRIDE {
+    return new ShellContentClient();
+  }
+
+#if defined(OS_WIN)
+  ui::ScopedOleInitializer ole_initializer_;
+#endif
+
+  DISALLOW_COPY_AND_ASSIGN(ContentBrowserTestSuite);
+};
 
 class ContentTestLauncherDelegate : public test_launcher::TestLauncherDelegate {
  public:
-  ContentTestLauncherDelegate() {
-  }
+  ContentTestLauncherDelegate() {}
+  virtual ~ContentTestLauncherDelegate() {}
 
-  virtual ~ContentTestLauncherDelegate() {
-  }
-
-  virtual void EarlyInitialize() OVERRIDE {
-  }
-
-  virtual bool Run(int argc, char** argv, int* return_code) OVERRIDE {
-#if defined(OS_WIN)
-    CommandLine* command_line = CommandLine::ForCurrentProcess();
-    if (command_line->HasSwitch(switches::kProcessType)) {
-      sandbox::SandboxInterfaceInfo sandbox_info = {0};
-      content::InitializeSandboxInfo(&sandbox_info);
-      ShellMainDelegate delegate;
-      *return_code =
-          content::ContentMain(GetModuleHandle(NULL), &sandbox_info, &delegate);
-      return true;
-    }
-#endif  // defined(OS_WIN)
-
-    return false;
+  virtual std::string GetEmptyTestName() OVERRIDE {
+    return std::string();
   }
 
   virtual int RunTestSuite(int argc, char** argv) OVERRIDE {
-    return base::TestSuite(argc, argv).Run();
+    return ContentBrowserTestSuite(argc, argv).Run();
   }
 
   virtual bool AdjustChildProcessCommandLine(
-      CommandLine* command_line) OVERRIDE {
-    FilePath file_exe;
-    if (!PathService::Get(base::FILE_EXE, &file_exe))
-      return false;
-    command_line->AppendSwitchPath(switches::kBrowserSubprocessPath, file_exe);
+      CommandLine* command_line, const FilePath& temp_data_dir) OVERRIDE {
+    command_line->AppendSwitchPath(switches::kContentShellDataPath,
+                                   temp_data_dir);
     return true;
+  }
+
+ protected:
+  virtual content::ContentMainDelegate* CreateContentMainDelegate() OVERRIDE {
+    return new ShellMainDelegate();
   }
 
  private:
   DISALLOW_COPY_AND_ASSIGN(ContentTestLauncherDelegate);
 };
 
+}  // namespace content
+
 int main(int argc, char** argv) {
-  ContentTestLauncherDelegate launcher_delegate;
+  // Always use fake WebRTC devices in this binary since we want to be able
+  // to test WebRTC even if we don't have any devices on the system.
+  media_stream::MediaStreamManager::AlwaysUseFakeDevice();
+
+  content::ContentTestLauncherDelegate launcher_delegate;
   return test_launcher::LaunchTests(&launcher_delegate, argc, argv);
 }

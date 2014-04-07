@@ -1,11 +1,10 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "base/command_line.h"
 #include "base/file_path.h"
 #include "base/file_util.h"
-#include "base/json/json_value_serializer.h"
 #include "base/path_service.h"
 #include "base/string_util.h"
 #include "base/test/test_timeouts.h"
@@ -17,6 +16,7 @@
 #include "chrome/test/perf/perf_test.h"
 #include "chrome/test/ui/javascript_test_util.h"
 #include "chrome/test/ui/ui_perf_test.h"
+#include "content/public/test/browser_test_utils.h"
 #include "googleurl/src/gurl.h"
 #include "net/base/net_util.h"
 
@@ -34,10 +34,12 @@ class DromaeoTest : public UIPerfTest {
   }
 
   void RunTest(const std::string& suite) {
+    if (!CommandLine::ForCurrentProcess()->HasSwitch(kRunDromaeo))
+      return;
     FilePath test_path = GetDromaeoDir();
     std::string query_string = suite + "&automated";
     test_path = test_path.Append(FILE_PATH_LITERAL("index.html"));
-    GURL test_url(ui_test_utils::GetFileUrlWithQuery(test_path, query_string));
+    GURL test_url(content::GetFileUrlWithQuery(test_path, query_string));
 
     scoped_refptr<TabProxy> tab(GetActiveTab());
     ASSERT_EQ(AUTOMATION_MSG_NAVIGATION_SUCCESS, tab->NavigateToURL(test_url));
@@ -61,7 +63,7 @@ class DromaeoTest : public UIPerfTest {
 
   bool WaitUntilTestCompletes(TabProxy* tab, const GURL& test_url) {
     return WaitUntilCookieValue(tab, test_url, "__done",
-                                TestTimeouts::large_test_timeout_ms(), "1");
+                                TestTimeouts::large_test_timeout(), "1");
   }
 
   bool GetScore(TabProxy* tab, std::string* score) {
@@ -134,32 +136,140 @@ class DromaeoReferenceTest : public DromaeoTest {
   }
 };
 
-TEST_F(DromaeoTest, DOMCorePerf) {
-  if (!CommandLine::ForCurrentProcess()->HasSwitch(kRunDromaeo))
-    return;
-
+#if defined(OS_WIN)
+// http://crbug.com/134570 - is flaky on Win7 perf bot
+#define MAYBE_DOMCorePerf DISABLED_DOMCorePerf
+#define MAYBE_DOMCoreModifyPerf DISABLED_DOMCoreModifyPerf
+#else
+#define MAYBE_DOMCorePerf DOMCorePerf
+#define MAYBE_DOMCoreModifyPerf DOMCoreModifyPerf
+#endif
+TEST_F(DromaeoTest, MAYBE_DOMCorePerf) {
   RunTest("dom");
+}
+
+TEST_F(DromaeoTest, DOMCoreAttrPerf) {
+  RunTest("dom-attr");
+}
+
+TEST_F(DromaeoTest, MAYBE_DOMCoreModifyPerf) {
+  RunTest("dom-modify");
+}
+
+TEST_F(DromaeoTest, DOMCoreQueryPerf) {
+  RunTest("dom-query");
+}
+
+TEST_F(DromaeoTest, DOMCoreTraversePerf) {
+  RunTest("dom-traverse");
 }
 
 TEST_F(DromaeoTest, JSLibPerf) {
-  if (!CommandLine::ForCurrentProcess()->HasSwitch(kRunDromaeo))
-    return;
-
   RunTest("jslib");
 }
 
-TEST_F(DromaeoReferenceTest, DOMCorePerf) {
-  if (!CommandLine::ForCurrentProcess()->HasSwitch(kRunDromaeo))
-    return;
+TEST_F(DromaeoTest, JSLibAttrJqueryPerf) {
+  RunTest("jslib-attr-jquery");
+}
 
+TEST_F(DromaeoTest, JSLibAttrPrototypePerf) {
+  RunTest("jslib-attr-prototype");
+}
+
+TEST_F(DromaeoTest, JSLibEventJqueryPerf) {
+  RunTest("jslib-event-jquery");
+}
+
+TEST_F(DromaeoTest, JSLibEventPrototypePerf) {
+  RunTest("jslib-event-prototype");
+}
+
+TEST_F(DromaeoTest, JSLibModifyJqueryPerf) {
+  RunTest("jslib-modify-jquery");
+}
+
+TEST_F(DromaeoTest, JSLibModifyPrototypePerf) {
+  RunTest("jslib-modify-prototype");
+}
+
+TEST_F(DromaeoTest, JSLibTraverseJqueryPerf) {
+  RunTest("jslib-traverse-jquery");
+}
+
+TEST_F(DromaeoTest, JSLibTraversePrototypePerf) {
+  RunTest("jslib-traverse-prototype");
+}
+
+TEST_F(DromaeoTest, JSLibStyleJqueryPerf) {
+  RunTest("jslib-style-jquery");
+}
+
+TEST_F(DromaeoTest, JSLibStylePrototypePerf) {
+  RunTest("jslib-style-prototype");
+}
+
+TEST_F(DromaeoReferenceTest, MAYBE_DOMCorePerf) {
   RunTest("dom");
 }
 
-TEST_F(DromaeoReferenceTest, JSLibPerf) {
-  if (!CommandLine::ForCurrentProcess()->HasSwitch(kRunDromaeo))
-    return;
+TEST_F(DromaeoReferenceTest, DOMCoreAttrPerf) {
+  RunTest("dom-attr");
+}
 
+TEST_F(DromaeoReferenceTest, MAYBE_DOMCoreModifyPerf) {
+  RunTest("dom-modify");
+}
+
+TEST_F(DromaeoReferenceTest, DOMCoreQueryPerf) {
+  RunTest("dom-query");
+}
+
+TEST_F(DromaeoReferenceTest, DOMCoreTraversePerf) {
+  RunTest("dom-traverse");
+}
+
+TEST_F(DromaeoReferenceTest, JSLibPerf) {
   RunTest("jslib");
+}
+
+TEST_F(DromaeoReferenceTest, JSLibAttrJqueryPerf) {
+  RunTest("jslib-attr-jquery");
+}
+
+TEST_F(DromaeoReferenceTest, JSLibAttrPrototypePerf) {
+  RunTest("jslib-attr-prototype");
+}
+
+TEST_F(DromaeoReferenceTest, JSLibEventJqueryPerf) {
+  RunTest("jslib-event-jquery");
+}
+
+TEST_F(DromaeoReferenceTest, JSLibEventPrototypePerf) {
+  RunTest("jslib-event-prototype");
+}
+
+TEST_F(DromaeoReferenceTest, JSLibModifyJqueryPerf) {
+  RunTest("jslib-modify-jquery");
+}
+
+TEST_F(DromaeoReferenceTest, JSLibModifyPrototypePerf) {
+  RunTest("jslib-modify-prototype");
+}
+
+TEST_F(DromaeoReferenceTest, JSLibTraverseJqueryPerf) {
+  RunTest("jslib-traverse-jquery");
+}
+
+TEST_F(DromaeoReferenceTest, JSLibTraversePrototypePerf) {
+  RunTest("jslib-traverse-prototype");
+}
+
+TEST_F(DromaeoReferenceTest, JSLibStyleJqueryPerf) {
+  RunTest("jslib-style-jquery");
+}
+
+TEST_F(DromaeoReferenceTest, JSLibStylePrototypePerf) {
+  RunTest("jslib-style-prototype");
 }
 
 

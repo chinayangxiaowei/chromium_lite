@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -11,7 +11,7 @@
 #undef None
 
 #include "testing/gtest/include/gtest/gtest.h"
-#include "ui/base/events.h"
+#include "ui/base/events/event_constants.h"
 #include "ui/gfx/point.h"
 
 namespace ui {
@@ -94,25 +94,44 @@ TEST(EventsXTest, ButtonEvents) {
   EXPECT_TRUE(ui::IsMouseEvent(&event));
   EXPECT_EQ(0, ui::GetMouseWheelOffset(&event));
 
-#if defined(OS_CHROMEOS)
-  // Scroll up.
-  InitButtonEvent(&event, true, location, 8, 0);
-  EXPECT_EQ(ui::ET_MOUSEWHEEL, ui::EventTypeFromNative(&event));
-  EXPECT_EQ(0, ui::EventFlagsFromNative(&event));
-  EXPECT_EQ(location, ui::EventLocationFromNative(&event));
-  EXPECT_TRUE(ui::IsMouseEvent(&event));
-  EXPECT_GT(ui::GetMouseWheelOffset(&event), 0);
+  // TODO(derat): Test XInput code.
+}
 
-  // Scroll down.
-  InitButtonEvent(&event, true, location, 9, 0);
+TEST(EventsXTest, AvoidExtraEventsOnWheelRelease) {
+  XEvent event;
+  gfx::Point location(5, 10);
+
+  InitButtonEvent(&event, true, location, 4, 0);
   EXPECT_EQ(ui::ET_MOUSEWHEEL, ui::EventTypeFromNative(&event));
-  EXPECT_EQ(0, ui::EventFlagsFromNative(&event));
-  EXPECT_EQ(location, ui::EventLocationFromNative(&event));
-  EXPECT_TRUE(ui::IsMouseEvent(&event));
-  EXPECT_LT(ui::GetMouseWheelOffset(&event), 0);
-#endif
+
+  // We should return ET_UNKNOWN for the release event instead of returning
+  // ET_MOUSEWHEEL; otherwise we'll scroll twice for each scrollwheel step.
+  InitButtonEvent(&event, false, location, 4, 0);
+  EXPECT_EQ(ui::ET_UNKNOWN, ui::EventTypeFromNative(&event));
 
   // TODO(derat): Test XInput code.
+}
+
+TEST(EventsXTest, EnterLeaveEvent) {
+  XEvent event;
+  event.xcrossing.type = EnterNotify;
+  event.xcrossing.x = 10;
+  event.xcrossing.y = 20;
+  event.xcrossing.x_root = 110;
+  event.xcrossing.y_root = 120;
+
+  EXPECT_EQ(ui::ET_MOUSE_ENTERED, ui::EventTypeFromNative(&event));
+  EXPECT_EQ("10,20", ui::EventLocationFromNative(&event).ToString());
+  EXPECT_EQ("110,120", ui::EventSystemLocationFromNative(&event).ToString());
+
+  event.xcrossing.type = LeaveNotify;
+  event.xcrossing.x = 30;
+  event.xcrossing.y = 40;
+  event.xcrossing.x_root = 230;
+  event.xcrossing.y_root = 240;
+  EXPECT_EQ(ui::ET_MOUSE_EXITED, ui::EventTypeFromNative(&event));
+  EXPECT_EQ("30,40", ui::EventLocationFromNative(&event).ToString());
+  EXPECT_EQ("230,240", ui::EventSystemLocationFromNative(&event).ToString());
 }
 
 }  // namespace ui

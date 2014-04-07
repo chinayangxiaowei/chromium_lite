@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 //
@@ -27,25 +27,31 @@
 
 #ifndef CHROME_BROWSER_SAFE_BROWSING_SAFE_BROWSING_BLOCKING_PAGE_H_
 #define CHROME_BROWSER_SAFE_BROWSING_SAFE_BROWSING_BLOCKING_PAGE_H_
-#pragma once
 
 #include <map>
+#include <string>
 #include <vector>
 
+#include "base/gtest_prod_util.h"
+#include "base/time.h"
 #include "chrome/browser/safe_browsing/safe_browsing_service.h"
-#include "chrome/browser/tab_contents/chrome_interstitial_page.h"
+#include "content/public/browser/interstitial_page_delegate.h"
 #include "googleurl/src/gurl.h"
 
+class MalwareDetails;
 class MessageLoop;
 class SafeBrowsingBlockingPageFactory;
-class MalwareDetails;
-class TabContents;
 
 namespace base {
 class DictionaryValue;
 }
 
-class SafeBrowsingBlockingPage : public ChromeInterstitialPage {
+namespace content {
+class InterstitialPage;
+class WebContents;
+}
+
+class SafeBrowsingBlockingPage : public content::InterstitialPageDelegate {
  public:
   typedef std::vector<SafeBrowsingService::UnsafeResource> UnsafeResourceList;
   typedef std::map<content::WebContents*, UnsafeResourceList> UnsafeResourceMap;
@@ -67,16 +73,20 @@ class SafeBrowsingBlockingPage : public ChromeInterstitialPage {
     factory_ = factory;
   }
 
-  // ChromeInterstitialPage method:
-  virtual std::string GetHTMLContents() OVERRIDE;
-  virtual void Proceed() OVERRIDE;
-  virtual void DontProceed() OVERRIDE;
+  // InterstitialPageDelegate method:
+  virtual void CommandReceived(const std::string& command) OVERRIDE;
+  virtual void OverrideRendererPrefs(
+      content::RendererPreferences* prefs) OVERRIDE;
+  virtual void OnProceed() OVERRIDE;
+  virtual void OnDontProceed() OVERRIDE;
 
  protected:
   friend class SafeBrowsingBlockingPageTest;
-
-  // ChromeInterstitialPage method:
-  virtual void CommandReceived(const std::string& command) OVERRIDE;
+  FRIEND_TEST_ALL_PREFIXES(SafeBrowsingBlockingPageTest,
+                           ProceedThenDontProceed);
+  friend class SafeBrowsingBlockingPageV2Test;
+  FRIEND_TEST_ALL_PREFIXES(SafeBrowsingBlockingPageV2Test,
+                           ProceedThenDontProceed);
 
   void SetReportingPreference(bool report);
 
@@ -90,9 +100,12 @@ class SafeBrowsingBlockingPage : public ChromeInterstitialPage {
   // MalwareDetails::FinishCollection() by this much time (in
   // milliseconds), in order to get data from the blocked resource itself.
   int64 malware_details_proceed_delay_ms_;
+  content::InterstitialPage* interstitial_page() const {
+    return interstitial_page_;
+  }
 
- private:
   FRIEND_TEST_ALL_PREFIXES(SafeBrowsingBlockingPageTest, MalwareReports);
+  FRIEND_TEST_ALL_PREFIXES(SafeBrowsingBlockingPageV2Test, MalwareReports);
 
   enum BlockingPageEvent {
     SHOW,
@@ -100,24 +113,14 @@ class SafeBrowsingBlockingPage : public ChromeInterstitialPage {
     DONT_PROCEED,
   };
 
-  // Fills the passed dictionary with the strings passed to JS Template when
-  // creating the HTML.
-  void PopulateMultipleThreatStringDictionary(base::DictionaryValue* strings);
-  void PopulateMalwareStringDictionary(base::DictionaryValue* strings);
-  void PopulatePhishingStringDictionary(base::DictionaryValue* strings);
-
-  // A helper method used by the Populate methods above used to populate common
-  // fields.
-  void PopulateStringDictionary(base::DictionaryValue* strings,
-                                const string16& title,
-                                const string16& headline,
-                                const string16& description1,
-                                const string16& description2,
-                                const string16& description3);
-
   // Records a user action for this interstitial, using the form
   // SBInterstitial[Phishing|Malware|Multiple][Show|Proceed|DontProceed].
   void RecordUserAction(BlockingPageEvent event);
+
+  // Records the time it took for the user to react to the
+  // interstitial.  We won't double-count if this method is called
+  // multiple times.
+  void RecordUserReactionTime(const std::string& command);
 
   // Checks if we should even show the malware details option. For example, we
   // don't show it in incognito mode.
@@ -128,6 +131,10 @@ class SafeBrowsingBlockingPage : public ChromeInterstitialPage {
   // preferences, and if the option to send malware details is
   // enabled, the report is scheduled to be sent on the |sb_service_|.
   void FinishMalwareDetails(int64 delay_ms);
+
+  // Returns the boolean value of the given |pref| from the PrefService of the
+  // Profile associated with |web_contents_|.
+  bool IsPrefEnabled(const char* pref);
 
   // A list of SafeBrowsingService::UnsafeResource for a tab that the user
   // should be warned about.  They are queued when displaying more than one
@@ -169,12 +176,93 @@ class SafeBrowsingBlockingPage : public ChromeInterstitialPage {
   // is gone (if the user enables the feature).
   scoped_refptr<MalwareDetails> malware_details_;
 
+  bool proceeded_;
+
+  content::WebContents* web_contents_;
+  GURL url_;
+  content::InterstitialPage* interstitial_page_;  // Owns us
+
+  // Time when the interstitial was show.  This variable is set in
+  // GetHTMLContents() which is called right before the interstitial
+  // is shown to the user. Will return is_null() once we reported the
+  // user action.
+  base::TimeTicks interstitial_show_time_;
+
+  // Whether the user has expanded the "see more" section of the page already
+  // during this interstitial page.
+  bool has_expanded_see_more_section_;
+
+  // Which type of interstitial this is.
+  enum {
+    TYPE_MALWARE,
+    TYPE_PHISHING,
+    TYPE_MALWARE_AND_PHISHING,
+  } interstitial_type_;
+
   // The factory used to instanciate SafeBrowsingBlockingPage objects.
   // Usefull for tests, so they can provide their own implementation of
   // SafeBrowsingBlockingPage.
   static SafeBrowsingBlockingPageFactory* factory_;
 
   DISALLOW_COPY_AND_ASSIGN(SafeBrowsingBlockingPage);
+};
+
+class SafeBrowsingBlockingPageV1 : public SafeBrowsingBlockingPage {
+ public:
+  // Don't instanciate this class directly, use ShowBlockingPage instead.
+  SafeBrowsingBlockingPageV1(SafeBrowsingService* service,
+                             content::WebContents* web_contents,
+                             const UnsafeResourceList& unsafe_resources);
+
+  // InterstitialPageDelegate method:
+  virtual std::string GetHTMLContents() OVERRIDE;
+
+ private:
+  // Fills the passed dictionary with the strings passed to JS Template when
+  // creating the HTML.
+  void PopulateMultipleThreatStringDictionary(base::DictionaryValue* strings);
+  void PopulateMalwareStringDictionary(base::DictionaryValue* strings);
+  void PopulatePhishingStringDictionary(base::DictionaryValue* strings);
+
+  // A helper method used by the Populate methods above used to populate common
+  // fields.
+  void PopulateStringDictionary(base::DictionaryValue* strings,
+                                const string16& title,
+                                const string16& headline,
+                                const string16& description1,
+                                const string16& description2,
+                                const string16& description3);
+
+  DISALLOW_COPY_AND_ASSIGN(SafeBrowsingBlockingPageV1);
+};
+
+class SafeBrowsingBlockingPageV2 : public SafeBrowsingBlockingPage {
+ public:
+  // Don't instanciate this class directly, use ShowBlockingPage instead.
+  SafeBrowsingBlockingPageV2(SafeBrowsingService* service,
+                             content::WebContents* web_contents,
+                             const UnsafeResourceList& unsafe_resources);
+
+  // InterstitialPageDelegate method:
+  virtual std::string GetHTMLContents() OVERRIDE;
+
+ private:
+  // Fills the passed dictionary with the strings passed to JS Template when
+  // creating the HTML.
+  void PopulateMultipleThreatStringDictionary(base::DictionaryValue* strings);
+  void PopulateMalwareStringDictionary(base::DictionaryValue* strings);
+  void PopulatePhishingStringDictionary(base::DictionaryValue* strings);
+
+  // A helper method used by the Populate methods above used to populate common
+  // fields.
+  void PopulateStringDictionary(base::DictionaryValue* strings,
+                                const string16& title,
+                                const string16& headline,
+                                const string16& description1,
+                                const string16& description2,
+                                const string16& description3);
+
+  DISALLOW_COPY_AND_ASSIGN(SafeBrowsingBlockingPageV2);
 };
 
 // Factory for creating SafeBrowsingBlockingPage.  Useful for tests.

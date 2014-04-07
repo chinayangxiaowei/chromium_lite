@@ -6,13 +6,13 @@
 
 #ifndef CHROME_BROWSER_NET_URL_REQUEST_MOCK_LINK_DOCTOR_JOB_H_
 #define CHROME_BROWSER_NET_URL_REQUEST_MOCK_LINK_DOCTOR_JOB_H_
-#pragma once
 
-#include "content/browser/net/url_request_mock_http_job.h"
+#include "content/test/net/url_request_mock_http_job.h"
 
 class URLRequestMockLinkDoctorJob : public URLRequestMockHTTPJob {
  public:
-  explicit URLRequestMockLinkDoctorJob(net::URLRequest* request);
+  URLRequestMockLinkDoctorJob(net::URLRequest* request,
+                              net::NetworkDelegate* network_delegate);
 
   static net::URLRequest::ProtocolFactory Factory;
 

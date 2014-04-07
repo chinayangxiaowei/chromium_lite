@@ -4,7 +4,6 @@
 
 #ifndef CHROME_TEST_BASE_MENU_MODEL_TEST_H_
 #define CHROME_TEST_BASE_MENU_MODEL_TEST_H_
-#pragma once
 
 #include "ui/base/accelerators/accelerator.h"
 #include "ui/base/models/simple_menu_model.h"
@@ -24,17 +23,12 @@ class MenuModelTest {
    public:
     Delegate() : execute_count_(0), enable_count_(0) {}
 
-    virtual bool IsCommandIdChecked(int command_id) const OVERRIDE {
-      return false;
-    }
-    virtual bool IsCommandIdEnabled(int command_id) const OVERRIDE {
-      ++enable_count_;
-      return true;
-    }
+    virtual bool IsCommandIdChecked(int command_id) const OVERRIDE;
+    virtual bool IsCommandIdEnabled(int command_id) const OVERRIDE;
     virtual bool GetAcceleratorForCommandId(
         int command_id,
-        ui::Accelerator* accelerator) OVERRIDE { return false; }
-    virtual void ExecuteCommand(int command_id) OVERRIDE { ++execute_count_; }
+        ui::Accelerator* accelerator) OVERRIDE;
+    virtual void ExecuteCommand(int command_id) OVERRIDE;
 
     int execute_count_;
     mutable int enable_count_;

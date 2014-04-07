@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,9 +6,9 @@
 #include <string>
 
 #include "base/memory/scoped_ptr.h"
-#include "chrome/common/extensions/extension_message_bundle.h"
 #include "chrome/common/extensions/extension_localization_peer.h"
-#include "ipc/ipc_message.h"
+#include "chrome/common/extensions/message_bundle.h"
+#include "ipc/ipc_sender.h"
 #include "ipc/ipc_sync_message.h"
 #include "net/base/net_errors.h"
 #include "net/url_request/url_request_status.h"
@@ -36,7 +36,7 @@ void MessageDeleter(IPC::Message* message) {
   delete message;
 }
 
-class MockIpcMessageSender : public IPC::Message::Sender {
+class MockIpcMessageSender : public IPC::Sender {
  public:
   MockIpcMessageSender() {
     ON_CALL(*this, Send(_))
@@ -69,8 +69,9 @@ class MockResourceLoaderBridgePeer
   MOCK_METHOD3(OnReceivedData, void(const char* data,
                                     int data_length,
                                     int encoded_data_length));
-  MOCK_METHOD3(OnCompletedRequest, void(
-      const net::URLRequestStatus& status,
+  MOCK_METHOD4(OnCompletedRequest, void(
+      int error_code,
+      bool was_ignored_by_handler,
       const std::string& security_info,
       const base::TimeTicks& completion_time));
 
@@ -142,11 +143,10 @@ TEST_F(ExtensionLocalizationPeerTest, OnCompletedRequestBadURLRequestStatus) {
 
   EXPECT_CALL(*original_peer_, OnReceivedResponse(_));
   EXPECT_CALL(*original_peer_, OnCompletedRequest(
-    IsURLRequestEqual(net::URLRequestStatus::CANCELED), "", base::TimeTicks()));
+    net::ERR_ABORTED, false, "", base::TimeTicks()));
 
-  net::URLRequestStatus status;
-  status.set_status(net::URLRequestStatus::FAILED);
-  filter_peer->OnCompletedRequest(status, "", base::TimeTicks());
+  filter_peer->OnCompletedRequest(net::ERR_FAILED, false, "",
+                                  base::TimeTicks());
 }
 
 TEST_F(ExtensionLocalizationPeerTest, OnCompletedRequestEmptyData) {
@@ -158,12 +158,9 @@ TEST_F(ExtensionLocalizationPeerTest, OnCompletedRequestEmptyData) {
 
   EXPECT_CALL(*original_peer_, OnReceivedResponse(_));
   EXPECT_CALL(*original_peer_, OnCompletedRequest(
-      IsURLRequestEqual(net::URLRequestStatus::SUCCESS), "",
-      base::TimeTicks()));
+      net::OK, false, "", base::TimeTicks()));
 
-  net::URLRequestStatus status;
-  status.set_status(net::URLRequestStatus::SUCCESS);
-  filter_peer->OnCompletedRequest(status, "", base::TimeTicks());
+  filter_peer->OnCompletedRequest(net::OK, false, "", base::TimeTicks());
 }
 
 TEST_F(ExtensionLocalizationPeerTest, OnCompletedRequestNoCatalogs) {
@@ -180,19 +177,16 @@ TEST_F(ExtensionLocalizationPeerTest, OnCompletedRequestNoCatalogs) {
 
   EXPECT_CALL(*original_peer_, OnReceivedResponse(_)).Times(2);
   EXPECT_CALL(*original_peer_, OnCompletedRequest(
-      IsURLRequestEqual(
-          net::URLRequestStatus::SUCCESS), "", base::TimeTicks())).Times(2);
+          net::OK, false, "", base::TimeTicks())).Times(2);
 
-  net::URLRequestStatus status;
-  status.set_status(net::URLRequestStatus::SUCCESS);
-  filter_peer->OnCompletedRequest(status, "", base::TimeTicks());
+  filter_peer->OnCompletedRequest(net::OK, false, "", base::TimeTicks());
 
   // Test if Send gets called again (it shouldn't be) when first call returned
   // an empty dictionary.
   filter_peer =
       CreateExtensionLocalizationPeer("text/css", GURL(kExtensionUrl_1));
   SetData(filter_peer, "some text");
-  filter_peer->OnCompletedRequest(status, "", base::TimeTicks());
+  filter_peer->OnCompletedRequest(net::OK, false, "", base::TimeTicks());
 }
 
 TEST_F(ExtensionLocalizationPeerTest, OnCompletedRequestWithCatalogs) {
@@ -200,10 +194,10 @@ TEST_F(ExtensionLocalizationPeerTest, OnCompletedRequestWithCatalogs) {
   ExtensionLocalizationPeer* filter_peer =
       CreateExtensionLocalizationPeer("text/css", GURL(kExtensionUrl_2));
 
-  L10nMessagesMap messages;
+  extensions::L10nMessagesMap messages;
   messages.insert(std::make_pair("text", "new text"));
-  ExtensionToL10nMessagesMap& l10n_messages_map =
-      *GetExtensionToL10nMessagesMap();
+  extensions::ExtensionToL10nMessagesMap& l10n_messages_map =
+      *extensions::GetExtensionToL10nMessagesMap();
   l10n_messages_map["some_id2"] = messages;
 
   SetData(filter_peer, "some __MSG_text__");
@@ -218,12 +212,9 @@ TEST_F(ExtensionLocalizationPeerTest, OnCompletedRequestWithCatalogs) {
 
   EXPECT_CALL(*original_peer_, OnReceivedResponse(_));
   EXPECT_CALL(*original_peer_, OnCompletedRequest(
-      IsURLRequestEqual(net::URLRequestStatus::SUCCESS), "",
-      base::TimeTicks()));
+      net::OK, false, "", base::TimeTicks()));
 
-  net::URLRequestStatus status;
-  status.set_status(net::URLRequestStatus::SUCCESS);
-  filter_peer->OnCompletedRequest(status, "", base::TimeTicks());
+  filter_peer->OnCompletedRequest(net::OK, false, "", base::TimeTicks());
 }
 
 TEST_F(ExtensionLocalizationPeerTest, OnCompletedRequestReplaceMessagesFails) {
@@ -231,10 +222,10 @@ TEST_F(ExtensionLocalizationPeerTest, OnCompletedRequestReplaceMessagesFails) {
   ExtensionLocalizationPeer* filter_peer =
       CreateExtensionLocalizationPeer("text/css", GURL(kExtensionUrl_3));
 
-  L10nMessagesMap messages;
+  extensions::L10nMessagesMap messages;
   messages.insert(std::make_pair("text", "new text"));
-  ExtensionToL10nMessagesMap& l10n_messages_map =
-      *GetExtensionToL10nMessagesMap();
+  extensions::ExtensionToL10nMessagesMap& l10n_messages_map =
+      *extensions::GetExtensionToL10nMessagesMap();
   l10n_messages_map["some_id3"] = messages;
 
   std::string message("some __MSG_missing_message__");
@@ -249,10 +240,7 @@ TEST_F(ExtensionLocalizationPeerTest, OnCompletedRequestReplaceMessagesFails) {
 
   EXPECT_CALL(*original_peer_, OnReceivedResponse(_));
   EXPECT_CALL(*original_peer_, OnCompletedRequest(
-      IsURLRequestEqual(net::URLRequestStatus::SUCCESS), "",
-      base::TimeTicks()));
+      net::OK, false, "", base::TimeTicks()));
 
-  net::URLRequestStatus status;
-  status.set_status(net::URLRequestStatus::SUCCESS);
-  filter_peer->OnCompletedRequest(status, "", base::TimeTicks());
+  filter_peer->OnCompletedRequest(net::OK, false, "", base::TimeTicks());
 }

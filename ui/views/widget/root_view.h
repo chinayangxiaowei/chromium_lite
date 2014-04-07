@@ -4,7 +4,6 @@
 
 #ifndef UI_VIEWS_WIDGET_ROOT_VIEW_H_
 #define UI_VIEWS_WIDGET_ROOT_VIEW_H_
-#pragma once
 
 #include <string>
 
@@ -66,7 +65,7 @@ class VIEWS_EXPORT RootView : public View, public FocusTraversable {
   // Process a key event. Send the event to the focused view and up the focus
   // path, and finally to the default keyboard handler, until someone consumes
   // it. Returns whether anyone consumed the event.
-  bool OnKeyEvent(const KeyEvent& event);
+  bool OnKeyEvent(const ui::KeyEvent& event);
 
   // Focus ---------------------------------------------------------------------
 
@@ -98,15 +97,17 @@ class VIEWS_EXPORT RootView : public View, public FocusTraversable {
   virtual bool IsDrawn() const OVERRIDE;
   virtual std::string GetClassName() const OVERRIDE;
   virtual void SchedulePaintInRect(const gfx::Rect& rect) OVERRIDE;
-  virtual bool OnMousePressed(const MouseEvent& event) OVERRIDE;
-  virtual bool OnMouseDragged(const MouseEvent& event) OVERRIDE;
-  virtual void OnMouseReleased(const MouseEvent& event) OVERRIDE;
+  virtual bool OnMousePressed(const ui::MouseEvent& event) OVERRIDE;
+  virtual bool OnMouseDragged(const ui::MouseEvent& event) OVERRIDE;
+  virtual void OnMouseReleased(const ui::MouseEvent& event) OVERRIDE;
   virtual void OnMouseCaptureLost() OVERRIDE;
-  virtual void OnMouseMoved(const MouseEvent& event) OVERRIDE;
-  virtual void OnMouseExited(const MouseEvent& event) OVERRIDE;
-  virtual bool OnMouseWheel(const MouseWheelEvent& event) OVERRIDE;
-  virtual ui::TouchStatus OnTouchEvent(const TouchEvent& event) OVERRIDE;
-  virtual ui::GestureStatus OnGestureEvent(const GestureEvent& event) OVERRIDE;
+  virtual void OnMouseMoved(const ui::MouseEvent& event) OVERRIDE;
+  virtual void OnMouseExited(const ui::MouseEvent& event) OVERRIDE;
+  virtual bool OnMouseWheel(const ui::MouseWheelEvent& event) OVERRIDE;
+  virtual bool OnScrollEvent(const ui::ScrollEvent& event) OVERRIDE;
+  virtual ui::TouchStatus OnTouchEvent(const ui::TouchEvent& event) OVERRIDE;
+  virtual ui::EventResult OnGestureEvent(
+      const ui::GestureEvent& event) OVERRIDE;
   virtual void SetMouseHandler(View* new_mouse_handler) OVERRIDE;
   virtual void GetAccessibleState(ui::AccessibleViewState* state) OVERRIDE;
   virtual void ReorderChildLayers(ui::Layer* parent_layer) OVERRIDE;
@@ -131,12 +132,12 @@ class VIEWS_EXPORT RootView : public View, public FocusTraversable {
   // cursor during drag operations. The location of the mouse should be in the
   // current coordinate system (i.e. any necessary transformation should be
   // applied to the point prior to calling this).
-  void UpdateCursor(const MouseEvent& event);
+  void UpdateCursor(const ui::MouseEvent& event);
 
   // Updates the last_mouse_* fields from e. The location of the mouse should be
   // in the current coordinate system (i.e. any necessary transformation should
   // be applied to the point prior to calling this).
-  void SetMouseLocationAndFlags(const MouseEvent& event);
+  void SetMouseLocationAndFlags(const ui::MouseEvent& event);
 
   //////////////////////////////////////////////////////////////////////////////
 
@@ -169,8 +170,13 @@ class VIEWS_EXPORT RootView : public View, public FocusTraversable {
   // The view currently handling touch events.
   View* touch_pressed_handler_;
 
-  // The view currently handling gesture events.
-  View* gesture_handling_view_;
+  // The view currently handling gesture events. When set, this handler receives
+  // all gesture events, except when there is an event handler for the specific
+  // gesture (e.g. scroll).
+  View* gesture_handler_;
+
+  // The view currently handling scroll gesture events.
+  View* scroll_gesture_handler_;
 
   // Focus ---------------------------------------------------------------------
 

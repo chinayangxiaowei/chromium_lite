@@ -1,14 +1,14 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CHROME_BROWSER_SESSIONS_BASE_SESSION_SERVICE_H_
 #define CHROME_BROWSER_SESSIONS_BASE_SESSION_SERVICE_H_
-#pragma once
 
 #include "base/basictypes.h"
 #include "base/callback.h"
 #include "base/file_path.h"
+#include "base/gtest_prod_util.h"
 #include "base/location.h"
 #include "base/memory/ref_counted.h"
 #include "base/memory/weak_ptr.h"
@@ -21,10 +21,6 @@ class Profile;
 class SessionBackend;
 class SessionCommand;
 class TabNavigation;
-
-namespace content {
-class NavigationEntry;
-}
 
 // BaseSessionService is the super class of both tab restore service and
 // session service. It contains commonality needed by both, in particular
@@ -65,9 +61,7 @@ class BaseSessionService : public CancelableRequestProvider,
   class InternalGetCommandsRequest :
       public CancelableRequest<InternalGetCommandsCallback> {
    public:
-    explicit InternalGetCommandsRequest(const CallbackType& callback)
-        : CancelableRequest<InternalGetCommandsCallback>(callback) {
-    }
+    explicit InternalGetCommandsRequest(const CallbackType& callback);
 
     // The commands. The backend fills this in for us.
     std::vector<SessionCommand*> commands;
@@ -115,14 +109,26 @@ class BaseSessionService : public CancelableRequestProvider,
   SessionCommand* CreateUpdateTabNavigationCommand(
       SessionID::id_type command_id,
       SessionID::id_type tab_id,
-      int index,
-      const content::NavigationEntry& entry);
+      const TabNavigation& navigation);
 
   // Creates a SessionCommand that represents marking a tab as an application.
   SessionCommand* CreateSetTabExtensionAppIDCommand(
       SessionID::id_type command_id,
       SessionID::id_type tab_id,
       const std::string& extension_id);
+
+  // Creates a SessionCommand that containing user agent override used by a
+  // tab's navigations.
+  SessionCommand* CreateSetTabUserAgentOverrideCommand(
+      SessionID::id_type command_id,
+      SessionID::id_type tab_id,
+      const std::string& user_agent_override);
+
+  // Creates a SessionCommand stores a browser window's app name.
+  SessionCommand* CreateSetWindowAppNameCommand(
+      SessionID::id_type command_id,
+      SessionID::id_type window_id,
+      const std::string& app_name);
 
   // Converts a SessionCommand previously created by
   // CreateUpdateTabNavigationCommand into a TabNavigation. Returns true
@@ -139,6 +145,20 @@ class BaseSessionService : public CancelableRequestProvider,
       SessionID::id_type* tab_id,
       std::string* extension_app_id);
 
+  // Extracts a SessionCommand as previously created by
+  // CreateSetTabUserAgentOverrideCommand into the tab id and user agent.
+  bool RestoreSetTabUserAgentOverrideCommand(
+      const SessionCommand& command,
+      SessionID::id_type* tab_id,
+      std::string* user_agent_override);
+
+  // Extracts a SessionCommand as previously created by
+  // CreateSetWindowAppNameCommand into the window id and application name.
+  bool RestoreSetWindowAppNameCommand(
+      const SessionCommand& command,
+      SessionID::id_type* window_id,
+      std::string* app_name);
+
   // Returns true if the entry at specified |url| should be written to disk.
   bool ShouldTrackEntry(const GURL& url);
 
@@ -148,16 +168,15 @@ class BaseSessionService : public CancelableRequestProvider,
       InternalGetCommandsRequest* request,
       CancelableRequestConsumerBase* consumer);
 
-  // Returns true if we appear to be running in production, false if
-  // we appear to be running as part of a unit test or if the FILE
-  // thread has gone away.
-  bool RunningInProduction() const;
-
   // In production, this posts the task to the FILE thread.  For
   // tests, it immediately runs the specified task on the current
   // thread.
   bool RunTaskOnBackendThread(const tracked_objects::Location& from_here,
                               const base::Closure& task);
+
+  // Returns true if we appear to be running in production, false if we appear
+  // to be running as part of a unit test or if the FILE thread has gone away.
+  bool RunningInProduction() const;
 
   // Max number of navigation entries in each direction we'll persist.
   static const int max_persist_navigation_count;
@@ -165,9 +184,6 @@ class BaseSessionService : public CancelableRequestProvider,
  private:
   // The profile. This may be null during testing.
   Profile* profile_;
-
-  // Path to read from. This is only used if profile_ is NULL.
-  const FilePath& path_;
 
   // The backend.
   scoped_refptr<SessionBackend> backend_;

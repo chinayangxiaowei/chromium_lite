@@ -1,5 +1,5 @@
 # -*- python -*-
-# Copyright (c) 2011 The Native Client Authors.  All rights reserved.
+# Copyright (c) 2012 The Native Client Authors.  All rights reserved.
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
@@ -10,16 +10,21 @@
 
 Import('env')
 
+# TODO(jvoung): Make a pnacl version of the nmf / or make the pexe generator
+# compatible with CopyLibsForExtension().
+if env.Bit('pnacl_generate_pexe'):
+  Return()
+
 env.Prepend(CPPDEFINES=['XP_UNIX'])
 env.Replace(TEST_DIR='${SOURCE_ROOT}/ppapi/native_client/tests/ppapi_browser/' +
                      'extension_mime_handler')
 
-nexe = 'ppapi_extension_mime_handler_%s' % env.get('TARGET_FULLARCH')
+nexe = env.ProgramNameForNmf('ppapi_extension_mime_handler')
 
 env.ComponentProgram(
     nexe,
     ['ppapi_extension_mime_handler.cc'],
-    EXTRA_LIBS=['${PPAPI_LIBS}',
+    EXTRA_LIBS=['ppapi',
                 'ppapi_test_lib',
                 'pthread',
                 'platform',
@@ -49,7 +54,19 @@ node = env.PPAPIBrowserTester('ppapi_extension_mime_handler.out',
 
 env.Depends(node, dest_copy)
 
+# If this test is run in the standalone NaCl build, Chromium will use
+# out-of-sync versions of service_runtime and the IRT.  Chromium will
+# use its (old) built-in versions of the trusted NaCl plugin and
+# service_runtime, but these will use the locally-built (new) version
+# of the IRT supplied via the NACL_IRT_LIBRARY environment variable.
+# This version skew can cause the test to fail in some circumstances,
+# so we disable this test in the standalone NaCl build, where running
+# Chromium tests is deprecated anyway.  For more info, see:
+# http://code.google.com/p/chromium/issues/detail?id=138289
+is_broken = (env.PPAPIBrowserTesterIsBroken() or
+             not env.Bit('disable_dynamic_plugin_loading'))
+
 env.AddNodeToTestSuite(node,
                        ['chrome_browser_tests'],
                        'run_ppapi_extension_mime_handler_browser_test',
-                       is_broken=env.PPAPIBrowserTesterIsBroken())
+                       is_broken=is_broken)

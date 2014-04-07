@@ -15,6 +15,8 @@
 
 #if defined(OS_ANDROID)
 #include "base/os_compat_android.h"
+#elif defined(OS_NACL)
+#include "base/os_compat_nacl.h"
 #endif
 
 namespace base {
@@ -32,7 +34,7 @@ struct timespec TimeDelta::ToTimeSpec() const {
   }
   struct timespec result =
       {seconds,
-       microseconds * Time::kNanosecondsPerMicrosecond};
+       static_cast<long>(microseconds * Time::kNanosecondsPerMicrosecond)};
   return result;
 }
 
@@ -68,6 +70,10 @@ Time Time::Now() {
   struct timezone tz = { 0, 0 };  // UTC
   if (gettimeofday(&tv, &tz) != 0) {
     DCHECK(0) << "Could not determine time of day";
+    LOG_ERRNO(ERROR) << "Call to gettimeofday failed.";
+    // Return null instead of uninitialized |tv| value, which contains random
+    // garbage data. This may result in the crash seen in crbug.com/147570.
+    return Time();
   }
   // Combine seconds and microseconds in a 64-bit field containing microseconds
   // since the epoch.  That's enough for nearly 600 centuries.  Adjust from
@@ -187,7 +193,7 @@ Time Time::FromExploded(bool is_local, const Exploded& exploded) {
 
 // TimeTicks ------------------------------------------------------------------
 // FreeBSD 6 has CLOCK_MONOLITHIC but defines _POSIX_MONOTONIC_CLOCK to -1.
-#if (defined(OS_POSIX) &&                                               \
+#if (defined(OS_POSIX) && !defined(OS_NACL) &&                          \
      defined(_POSIX_MONOTONIC_CLOCK) && _POSIX_MONOTONIC_CLOCK >= 0) || \
      defined(OS_BSD) || defined(OS_ANDROID)
 
@@ -226,10 +232,67 @@ TimeTicks TimeTicks::HighResNow() {
   return Now();
 }
 
+#if defined(OS_CHROMEOS)
+// Force definition of the system trace clock; it is a chromeos-only api
+// at the moment and surfacing it in the right place requires mucking
+// with glibc et al.
+#define CLOCK_SYSTEM_TRACE 11
+
+// static
+TimeTicks TimeTicks::NowFromSystemTraceTime() {
+  uint64_t absolute_micro;
+
+  struct timespec ts;
+  if (clock_gettime(CLOCK_SYSTEM_TRACE, &ts) != 0) {
+    // NB: fall-back for a chrome os build running on linux
+    return HighResNow();
+  }
+
+  absolute_micro =
+      (static_cast<int64>(ts.tv_sec) * Time::kMicrosecondsPerSecond) +
+      (static_cast<int64>(ts.tv_nsec) / Time::kNanosecondsPerMicrosecond);
+
+  return TimeTicks(absolute_micro);
+}
+
+#else // !defined(OS_CHROMEOS)
+
+// static
+TimeTicks TimeTicks::NowFromSystemTraceTime() {
+  return HighResNow();
+}
+
+#endif // defined(OS_CHROMEOS)
+
 #endif  // !OS_MACOSX
+
+// static
+Time Time::FromTimeVal(struct timeval t) {
+  DCHECK_LT(t.tv_usec, static_cast<int>(Time::kMicrosecondsPerSecond));
+  DCHECK_GE(t.tv_usec, 0);
+  if (t.tv_usec == 0 && t.tv_sec == 0)
+    return Time();
+  if (t.tv_usec == static_cast<suseconds_t>(Time::kMicrosecondsPerSecond) - 1 &&
+      t.tv_sec == std::numeric_limits<time_t>::max())
+    return Max();
+  return Time(
+      (static_cast<int64>(t.tv_sec) * Time::kMicrosecondsPerSecond) +
+      t.tv_usec +
+      kTimeTToMicrosecondsOffset);
+}
 
 struct timeval Time::ToTimeVal() const {
   struct timeval result;
+  if (is_null()) {
+    result.tv_sec = 0;
+    result.tv_usec = 0;
+    return result;
+  }
+  if (is_max()) {
+    result.tv_sec = std::numeric_limits<time_t>::max();
+    result.tv_usec = static_cast<suseconds_t>(Time::kMicrosecondsPerSecond) - 1;
+    return result;
+  }
   int64 us = us_ - kTimeTToMicrosecondsOffset;
   result.tv_sec = us / Time::kMicrosecondsPerSecond;
   result.tv_usec = us % Time::kMicrosecondsPerSecond;

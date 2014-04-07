@@ -1,27 +1,35 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CHROME_BROWSER_UI_WEBUI_OPTIONS_CERTIFICATE_MANAGER_HANDLER_H_
 #define CHROME_BROWSER_UI_WEBUI_OPTIONS_CERTIFICATE_MANAGER_HANDLER_H_
-#pragma once
 
 #include <string>
 
 #include "base/compiler_specific.h"
 #include "base/memory/scoped_ptr.h"
+#include "base/memory/weak_ptr.h"
 #include "chrome/browser/cancelable_request.h"
 #include "chrome/browser/certificate_manager_model.h"
-#include "chrome/browser/ui/select_file_dialog.h"
 #include "chrome/browser/ui/webui/options/options_ui.h"
-#include "net/base/cert_database.h"
+#include "net/base/nss_cert_database.h"
+#include "ui/base/dialogs/select_file_dialog.h"
 #include "ui/gfx/native_widget_types.h"
 
+#if defined(OS_CHROMEOS)
+#include "chromeos/dbus/cryptohome_client.h"
+#endif
+
+namespace options {
+
+class CertIdMap;
 class FileAccessProvider;
 
-class CertificateManagerHandler : public OptionsPageUIHandler,
-    public CertificateManagerModel::Observer,
-    public SelectFileDialog::Listener {
+class CertificateManagerHandler
+    : public OptionsPageUIHandler,
+      public CertificateManagerModel::Observer,
+      public ui::SelectFileDialog::Listener {
  public:
   CertificateManagerHandler();
   virtual ~CertificateManagerHandler();
@@ -138,11 +146,14 @@ class CertificateManagerHandler : public OptionsPageUIHandler,
   // attempted to import.
   void ShowImportErrors(
       const std::string& title,
-      const net::CertDatabase::ImportCertFailureList& not_imported) const;
+      const net::NSSCertDatabase::ImportCertFailureList& not_imported) const;
 
 #if defined(OS_CHROMEOS)
   // Check whether Tpm token is ready and notifiy JS side.
   void CheckTpmTokenReady(const base::ListValue* args);
+  void CheckTpmTokenReadyInternal(
+      chromeos::DBusMethodCallStatus call_status,
+      bool is_tpm_token_ready);
 #endif
 
   gfx::NativeWindow GetParentWindow() const;
@@ -158,14 +169,20 @@ class CertificateManagerHandler : public OptionsPageUIHandler,
   bool use_hardware_backed_;
   std::string file_data_;
   net::CertificateList selected_cert_list_;
-  scoped_refptr<SelectFileDialog> select_file_dialog_;
+  scoped_refptr<ui::SelectFileDialog> select_file_dialog_;
   scoped_refptr<net::CryptoModule> module_;
 
   // Used in reading and writing certificate files.
   CancelableRequestConsumer consumer_;
   scoped_refptr<FileAccessProvider> file_access_provider_;
 
+  base::WeakPtrFactory<CertificateManagerHandler> weak_ptr_factory_;
+
+  scoped_ptr<CertIdMap> cert_id_map_;
+
   DISALLOW_COPY_AND_ASSIGN(CertificateManagerHandler);
 };
+
+}  // namespace options
 
 #endif  // CHROME_BROWSER_UI_WEBUI_OPTIONS_CERTIFICATE_MANAGER_HANDLER_H_

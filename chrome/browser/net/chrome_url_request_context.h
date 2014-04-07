@@ -1,28 +1,28 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CHROME_BROWSER_NET_CHROME_URL_REQUEST_CONTEXT_H_
 #define CHROME_BROWSER_NET_CHROME_URL_REQUEST_CONTEXT_H_
-#pragma once
 
 #include <string>
-#include <vector>
 
 #include "base/memory/scoped_ptr.h"
-#include "chrome/browser/prefs/pref_change_registrar.h"
+#include "chrome/browser/api/prefs/pref_change_registrar.h"
 #include "content/public/browser/notification_observer.h"
 #include "content/public/browser/notification_registrar.h"
 #include "net/url_request/url_request_context.h"
 #include "net/url_request/url_request_context_getter.h"
+#include "net/url_request/url_request_job_factory.h"
 
 class ChromeURLDataManagerBackend;
 class ChromeURLRequestContextFactory;
 class IOThread;
 class Profile;
 class ProfileIOData;
-namespace base {
-class WaitableEvent;
+
+namespace chrome_browser_net {
+class LoadTimeStats;
 }
 
 // Subclass of net::URLRequestContext which can be used to store extra
@@ -32,7 +32,19 @@ class WaitableEvent;
 // including the constructor and destructor.
 class ChromeURLRequestContext : public net::URLRequestContext {
  public:
-  ChromeURLRequestContext();
+  enum ContextType {
+    CONTEXT_TYPE_MAIN,
+    CONTEXT_TYPE_MEDIA,
+    CONTEXT_TYPE_EXTENSIONS,
+    CONTEXT_TYPE_APP
+  };
+  ChromeURLRequestContext(ContextType type,
+                          chrome_browser_net::LoadTimeStats* load_time_stats);
+  virtual ~ChromeURLRequestContext();
+
+  base::WeakPtr<ChromeURLRequestContext> GetWeakPtr() {
+    return weak_factory_.GetWeakPtr();
+  }
 
   // Copies the state from |other| into this context.
   void CopyFrom(ChromeURLRequestContext* other);
@@ -60,10 +72,9 @@ class ChromeURLRequestContext : public net::URLRequestContext {
   // Callback for when the default charset changes.
   void OnDefaultCharsetChange(const std::string& default_charset);
 
- protected:
-  virtual ~ChromeURLRequestContext();
-
  private:
+  base::WeakPtrFactory<ChromeURLRequestContext> weak_factory_;
+
   // ---------------------------------------------------------------------------
   // Important: When adding any new members below, consider whether they need to
   // be added to CopyFrom.
@@ -71,6 +82,7 @@ class ChromeURLRequestContext : public net::URLRequestContext {
 
   ChromeURLDataManagerBackend* chrome_url_data_manager_backend_;
   bool is_incognito_;
+  chrome_browser_net::LoadTimeStats* load_time_stats_;
 
   // ---------------------------------------------------------------------------
   // Important: When adding any new members above, consider whether they need to
@@ -98,14 +110,13 @@ class ChromeURLRequestContextGetter : public net::URLRequestContextGetter,
                                 ChromeURLRequestContextFactory* factory);
 
   // Note that GetURLRequestContext() can only be called from the IO
-  // thread (it will assert otherwise). DONTUSEME_GetCookieStore() and
+  // thread (it will assert otherwise).
   // GetIOMessageLoopProxy however can be called from any thread.
   //
   // net::URLRequestContextGetter implementation.
   virtual net::URLRequestContext* GetURLRequestContext() OVERRIDE;
-  virtual net::CookieStore* DONTUSEME_GetCookieStore() OVERRIDE;
-  virtual scoped_refptr<base::MessageLoopProxy>
-      GetIOMessageLoopProxy() const OVERRIDE;
+  virtual scoped_refptr<base::SingleThreadTaskRunner>
+      GetNetworkTaskRunner() const OVERRIDE;
 
   // Convenience overload of GetURLRequestContext() that returns a
   // ChromeURLRequestContext* rather than a net::URLRequestContext*.
@@ -134,6 +145,16 @@ class ChromeURLRequestContextGetter : public net::URLRequestContextGetter,
   static ChromeURLRequestContextGetter* CreateOriginalForIsolatedApp(
       Profile* profile,
       const ProfileIOData* profile_io_data,
+      const std::string& app_id,
+      scoped_ptr<net::URLRequestJobFactory::Interceptor>
+          protocol_handler_interceptor);
+
+  // Create an instance for an original profile for media with isolated
+  // storage. This is expected to get called on UI thread.
+  static ChromeURLRequestContextGetter* CreateOriginalForIsolatedMedia(
+      Profile* profile,
+      ChromeURLRequestContextGetter* app_context,
+      const ProfileIOData* profile_io_data,
       const std::string& app_id);
 
   // Create an instance for use with an OTR profile. This is expected to get
@@ -151,7 +172,9 @@ class ChromeURLRequestContextGetter : public net::URLRequestContextGetter,
   static ChromeURLRequestContextGetter* CreateOffTheRecordForIsolatedApp(
       Profile* profile,
       const ProfileIOData* profile_io_data,
-      const std::string& app_id);
+      const std::string& app_id,
+      scoped_ptr<net::URLRequestJobFactory::Interceptor>
+          protocol_handler_interceptor);
 
   // Clean up UI thread resources. This is expected to get called on the UI
   // thread before the instance is deleted on the IO thread.
@@ -174,11 +197,6 @@ class ChromeURLRequestContextGetter : public net::URLRequestContextGetter,
   // ChromeURLRequestContext.
   void OnAcceptLanguageChange(const std::string& accept_language);
   void OnDefaultCharsetChange(const std::string& default_charset);
-  void OnClearSiteDataOnExitChange(bool clear_site_data);
-
-  // Saves the cookie store to |result| and signals |completion|.
-  void GetCookieStoreAsyncHelper(base::WaitableEvent* completion,
-                                 net::CookieStore** result);
 
   PrefChangeRegistrar registrar_;
 
@@ -186,10 +204,10 @@ class ChromeURLRequestContextGetter : public net::URLRequestContextGetter,
   // Access only from the IO thread.
   scoped_ptr<ChromeURLRequestContextFactory> factory_;
 
-  // NULL if not yet initialized. Otherwise, it is the net::URLRequestContext
+  // NULL if not yet initialized. Otherwise, it is the ChromeURLRequestContext
   // instance that was lazily created by GetURLRequestContext().
   // Access only from the IO thread.
-  base::WeakPtr<net::URLRequestContext> url_request_context_;
+  base::WeakPtr<ChromeURLRequestContext> url_request_context_;
 
   DISALLOW_COPY_AND_ASSIGN(ChromeURLRequestContextGetter);
 };

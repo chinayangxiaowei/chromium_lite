@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-# Copyright (c) 2011 The Chromium Authors. All rights reserved.
+# Copyright (c) 2012 The Chromium Authors. All rights reserved.
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
@@ -48,7 +48,6 @@ class SyncTest(pyauto.PyUITest):
     test_utils.SignInToSyncAndVerifyState(self, 'test_google_account')
     self.RestartBrowser(clear_profile=False)
     self.assertTrue(self.AwaitSyncRestart())
-    self.assertTrue(self.GetSyncInfo()['summary'] == 'READY')
     self.assertTrue(self.GetSyncInfo()['last synced'] == 'Just now')
     self.assertTrue(self.GetSyncInfo()['updates received'] == 0)
 
@@ -62,10 +61,10 @@ class SyncTest(pyauto.PyUITest):
     customize_button = 'Customize'
     stop_button = 'Stop Sync'
     signed_in_text = 'Google Dashboard'
-    chrome_personal_stuff_url = 'chrome://settings/personal'
+    chrome_settings_url = 'chrome://settings-frame'
     new_timeout = pyauto.PyUITest.ActionTimeoutChanger(self,
                                                        2 * 60 * 1000)  # 2 min.
-    self.AppendTab(pyauto.GURL(chrome_personal_stuff_url))
+    self.AppendTab(pyauto.GURL(chrome_settings_url))
     self.assertTrue(self.WaitUntil(
         lambda: self.FindInPage(default_text, tab_index=1)['match_count'],
                 expect_retval=1),
@@ -76,7 +75,7 @@ class SyncTest(pyauto.PyUITest):
         'No set up sync button.')
 
     self.assertTrue(self.SignInToSync(username, password))
-    self.GetBrowserWindow(0).GetTab(1).Reload()
+    self.ReloadTab(1)
     self.assertTrue(self.WaitUntil(
         lambda: self.FindInPage(username, tab_index=1)['match_count'],
                 expect_retval=1),
@@ -154,73 +153,6 @@ class SyncIntegrationTest(pyauto.PyUITest):
     self.assertEqual(bar_child['type'], 'url')
     self.assertEqual(bar_child['name'], name)
     self.assertTrue(url in bar_child['url'])
-
-  def testAutofillProfileSync(self):
-    """Verify a single Autofill profile syncs between two browsers.
-
-    Integration tests between Autofill and sync feature. A single profile is
-    added to one instance of the browser, the profile is synced to the account,
-    a new instance of the browser is launched, the account is synced and the
-    profile is synced to the new browser.
-    """
-    profile = [{'NAME_FIRST': ['Bob',], 'NAME_LAST': ['Smith',],
-                'ADDRESS_HOME_ZIP': ['94043',],
-                'EMAIL_ADDRESS': ['bsmith@gmail.com',],
-                'COMPANY_NAME': ['Smith, Inc',],}]
-    # Launch a new instance of the browser with a clean profile (Browser 2).
-    browser2 = pyauto.ExtraBrowser(
-        self.ChromeFlagsForSyncTestServer(**self._sync_server.ports))
-
-    account_key = 'test_sync_account'
-    test_utils.SignInToSyncAndVerifyState(self, account_key)
-    self.AwaitSyncCycleCompletion()
-
-    # Add a single profile.
-    self.FillAutofillProfile(profiles=profile)
-    browser1_profile = self.GetAutofillProfile()
-
-    # Log into the account and sync the second browser to the account.
-    test_utils.SignInToSyncAndVerifyState(browser2, account_key)
-    browser2.AwaitSyncCycleCompletion()
-
-    # Verify browser 2 contains the profile.
-    browser2_profile = browser2.GetAutofillProfile()
-    self.assertEqual(
-        profile, browser2_profile['profiles'],
-        msg=('Browser 1 profile %s does not match Browser 2 profile %s'
-             % (browser1_profile, browser2_profile)))
-
-  def testNoCreditCardSync(self):
-    """Verify credit card info does not sync between two browsers."""
-    credit_card = [{'CREDIT_CARD_NUMBER': '6011111111111117',
-                    'CREDIT_CARD_EXP_MONTH': '12',
-                    'CREDIT_CARD_EXP_4_DIGIT_YEAR': '2011',
-                    'CREDIT_CARD_NAME': 'Bob C. Smith'}]
-    # Launch a new instance of the browser with a clean profile (Browser 2).
-    browser2 = pyauto.ExtraBrowser(
-        self.ChromeFlagsForSyncTestServer(**self._sync_server.ports))
-
-    account_key = 'test_sync_account'
-    test_utils.SignInToSyncAndVerifyState(self, account_key)
-    self.AwaitSyncCycleCompletion()
-
-    # Add a credit card.
-    self.FillAutofillProfile(credit_cards=credit_card)
-    browser1_profile = self.GetAutofillProfile()
-    # Verify credit card was added successfully.
-    self.assertEqual(credit_card, browser1_profile['credit_cards'],
-                     msg='Credit card info was not added to browser 1.')
-
-    # Log into the account and sync the second browser to the account.
-    test_utils.SignInToSyncAndVerifyState(browser2, account_key)
-    browser2.AwaitSyncCycleCompletion()
-
-    # Verify browser 2 does not contain credit card info.
-    browser2_profile = browser2.GetAutofillProfile()
-    num_cc_profiles = len(browser2_profile['credit_cards'])
-    self.assertEqual(0, num_cc_profiles,
-                     msg='Browser 2 unexpectedly contains credit card info.')
-
 
 if __name__ == '__main__':
   pyauto_functional.Main()

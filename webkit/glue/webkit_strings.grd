@@ -219,6 +219,21 @@ below:
       <message name="IDS_SEARCHABLE_INDEX_INTRO" desc="Text that appears at the start of nearly-obsolete webpages in the form of a 'searchable index'.">
         This is a searchable index. Enter search keywords: '''
       </message>
+      <message name="IDS_FORM_CALENDAR_CLEAR" desc="Label for a button which clears a date input field.">
+        Clear
+      </message>
+      <message name="IDS_FORM_CALENDAR_TODAY" desc="Label for a button which sets today to a date input field.">
+        Today
+      </message>
+      <message name="IDS_FORM_DATE_FORMAT_DAY_IN_MONTH" desc="Short word to indicate which is the day-in-month part in a date format. e.g. 'Day' in 'Month/Day/Year'">
+        Day
+      </message>
+      <message name="IDS_FORM_DATE_FORMAT_MONTH" desc="Short word to indicate which is the month part in a date format. e.g. 'Month' in 'Month/Day/Year'">
+        Month
+      </message>
+      <message name="IDS_FORM_DATE_FORMAT_YEAR" desc="Short word to indicate which is the year part in a date format. e.g. 'Year' in 'Month/Day/Year'">
+        Year
+      </message>
       <message name="IDS_FORM_SUBMIT_LABEL" desc="Default label for Submit buttons in forms on webpages.">
         Submit
       </message>
@@ -242,6 +257,9 @@ below:
       </message>
       <message name="IDS_FORM_FILE_MULTIPLE_UPLOAD" desc="text to display next to file buttons in HTML forms when 2 or more files are selected for uploading. This is not used for a case that just 1 file is selected.">
         <ph name="NUMBER_OF_FILES">$1<ex>3</ex></ph> files
+      </message>
+      <message name="IDS_FORM_OTHER_COLOR_LABEL" desc="Label for button that opens a full color chooser so the user can choose colors other than the ones in the list.">
+        Other...
       </message>
 
       <message name="IDS_RECENT_SEARCHES_NONE" desc="Label for only item in menu that appears when clicking on the search field image, when no searches have been performed">
@@ -273,6 +291,12 @@ below:
       <message name="IDS_AX_ROLE_HEADING" desc="accessibility role description for headings">
         heading
       </message>
+      <message name="IDS_AX_ROLE_FOOTER" desc="accessibility role description for footers">
+        footer
+      </message>
+      <message name="IDS_AX_ROLE_STEPPER" desc="accessibility role description for a stepper - a control where you can use up/down arrows to increment or decrement it. The name 'stepper' is how this user interface element is described by VoiceOver on Mac OS X; the translation should be consistent with VoiceOver.">
+        stepper
+      </message>
 
       <message name="IDS_AX_BUTTON_ACTION_VERB" desc="Verb stating the action that will occur when a button is pressed, as used by accessibility.">
         press
@@ -291,6 +315,46 @@ below:
       </message>
       <message name="IDS_AX_LINK_ACTION_VERB" desc="Verb stating the action that will occur when a link is clicked, as used by accessibility.">
         jump
+      </message>
+
+      <message name="IDS_AX_AM_PM_FIELD_TEXT" desc="Accessible description of the AM/PM field in a date/time control">
+        AM/PM
+      </message>
+
+      <message name="IDS_AX_DAY_OF_MONTH_FIELD_TEXT" desc="Accessible description of the day of month field in a date/time control">
+        Day
+      </message>
+
+      <message name="IDS_AX_DATE_TIME_FIELD_EMPTY_VALUE_TEXT" desc="Accessible description of empty value of field in a date/time control">
+        blank
+      </message>
+
+      <message name="IDS_AX_HOUR_FIELD_TEXT" desc="Accessible description of the hour field in a date/time control">
+        Hours
+      </message>
+
+      <message name="IDS_AX_MILLISECOND_FIELD_TEXT" desc="Accessible description of the millisecond field in a date/time control">
+        Milliseconds
+      </message>
+
+      <message name="IDS_AX_MINUTE_FIELD_TEXT" desc="Accessible description of the minute field in a date/time control">
+        Minutes
+      </message>
+
+      <message name="IDS_AX_MONTH_FIELD_TEXT" desc="Accessible description of the month field in a date/time control">
+        Month
+      </message>
+
+      <message name="IDS_AX_SECOND_FIELD_TEXT" desc="Accessible description of the second field in a date/time control">
+        Seconds
+      </message>
+
+      <message name="IDS_AX_WEEK_OF_YEAR_FIELD_TEXT" desc="Accessible description of the week of year field in a date/time control">
+        Week
+      </message>
+
+      <message name="IDS_AX_YEAR_FIELD_TEXT" desc="Accessible description of the year field in a date/time control">
+        Year
       </message>
 
       <message name="IDS_KEYGEN_HIGH_GRADE_KEY" desc="High-grade cryptographic key size menu item">
@@ -406,7 +470,11 @@ below:
       <message name="IDS_PDF_PROGRESS_LOADING" desc="A message displayed on the progress control over PDF page during document loading.">
         Loading
       </message>
-      
+
+      <message name="IDS_PLUGIN_INITIALIZATION_ERROR" desc="A message displayed when a plug-in failed to load">
+        Couldn't load plug-in.
+      </message>
+
     </messages>
   </release>
 </grit>

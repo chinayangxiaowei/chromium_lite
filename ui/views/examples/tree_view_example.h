@@ -4,7 +4,6 @@
 
 #ifndef UI_VIEWS_EXAMPLES_TREE_VIEW_EXAMPLE_H_
 #define UI_VIEWS_EXAMPLES_TREE_VIEW_EXAMPLE_H_
-#pragma once
 
 #include "base/basictypes.h"
 #include "base/compiler_specific.h"
@@ -49,7 +48,7 @@ class TreeViewExample : public ExampleBase,
   bool IsCommandIdEnabled(int command_id);
 
   // ButtonListener:
-  virtual void ButtonPressed(Button* sender, const Event& event) OVERRIDE;
+  virtual void ButtonPressed(Button* sender, const ui::Event& event) OVERRIDE;
 
   // TreeViewController:
   virtual void OnTreeViewSelectionChanged(TreeView* tree_view) OVERRIDE;
@@ -57,8 +56,7 @@ class TreeViewExample : public ExampleBase,
 
   // ContextMenuController:
   virtual void ShowContextMenuForView(View* source,
-                                      const gfx::Point& p,
-                                      bool is_mouse_gesture) OVERRIDE;
+                                      const gfx::Point& point) OVERRIDE;
 
   // SimpleMenuModel::Delegate:
   virtual bool IsCommandIdChecked(int command_id) const OVERRIDE;

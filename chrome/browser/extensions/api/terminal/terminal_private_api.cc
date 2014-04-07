@@ -5,12 +5,13 @@
 #include "chrome/browser/extensions/api/terminal/terminal_private_api.h"
 
 #include "base/bind.h"
+#include "base/chromeos/chromeos_version.h"
 #include "base/json/json_writer.h"
 #include "base/values.h"
 #include "chrome/browser/chromeos/process_proxy/process_proxy_registry.h"
-#include "chrome/browser/chromeos/system/runtime_environment.h"
-#include "chrome/browser/extensions/extension_event_names.h"
-#include "chrome/browser/extensions/extension_event_router.h"
+#include "chrome/browser/extensions/api/terminal/terminal_extension_helper.h"
+#include "chrome/browser/extensions/event_names.h"
+#include "chrome/browser/extensions/event_router.h"
 #include "chrome/browser/extensions/extension_service.h"
 #include "chrome/browser/profiles/profile.h"
 #include "content/public/browser/browser_thread.h"
@@ -23,7 +24,7 @@ const char kCroshCommand[] = "/usr/bin/crosh";
 const char kStubbedCroshCommand[] = "cat";
 
 const char* GetCroshPath() {
-  if (chromeos::system::runtime_environment::IsRunningOnChromeOS())
+  if (base::chromeos::IsRunningOnChromeOS())
     return kCroshCommand;
   else
     return kStubbedCroshCommand;
@@ -49,38 +50,31 @@ void NotifyProcessOutput(Profile* profile,
     return;
   }
 
-  base::ListValue args;
-  args.Append(new base::FundamentalValue(pid));
-  args.Append(new base::StringValue(output_type));
-  args.Append(new base::StringValue(output));
-
-  std::string args_json;
-  base::JSONWriter::Write(&args, false /* pretty_print */, &args_json);
+  scoped_ptr<base::ListValue> args(new base::ListValue());
+  args->Append(new base::FundamentalValue(pid));
+  args->Append(new base::StringValue(output_type));
+  args->Append(new base::StringValue(output));
 
   if (profile && profile->GetExtensionEventRouter()) {
     profile->GetExtensionEventRouter()->DispatchEventToExtension(
-        extension_id, extension_event_names::kOnTerminalProcessOutput,
-        args_json, NULL, GURL());
+        extension_id, extensions::event_names::kOnTerminalProcessOutput,
+        args.Pass(), NULL, GURL());
   }
 }
 
 }  // namespace
 
-TerminalPrivateFunction::TerminalPrivateFunction() {
-}
+TerminalPrivateFunction::TerminalPrivateFunction() {}
 
-TerminalPrivateFunction::~TerminalPrivateFunction() {
-}
+TerminalPrivateFunction::~TerminalPrivateFunction() {}
 
 bool TerminalPrivateFunction::RunImpl() {
   return RunTerminalFunction();
 }
 
-OpenTerminalProcessFunction::OpenTerminalProcessFunction() : command_(NULL) {
-}
+OpenTerminalProcessFunction::OpenTerminalProcessFunction() : command_(NULL) {}
 
-OpenTerminalProcessFunction::~OpenTerminalProcessFunction() {
-}
+OpenTerminalProcessFunction::~OpenTerminalProcessFunction() {}
 
 bool OpenTerminalProcessFunction::RunTerminalFunction() {
   if (args_->GetSize() != 1)
@@ -117,8 +111,10 @@ void OpenTerminalProcessFunction::OpenOnFileThread() {
       base::Bind(&OpenTerminalProcessFunction::RespondOnUIThread, this, pid));
 }
 
+SendInputToTerminalProcessFunction::~SendInputToTerminalProcessFunction() {}
+
 void OpenTerminalProcessFunction::RespondOnUIThread(pid_t pid) {
-  result_.reset(new base::FundamentalValue(pid));
+  SetResult(new base::FundamentalValue(pid));
   SendResponse(true);
 }
 
@@ -148,9 +144,11 @@ void SendInputToTerminalProcessFunction::SendInputOnFileThread(pid_t pid,
 }
 
 void SendInputToTerminalProcessFunction::RespondOnUIThread(bool success) {
-  result_.reset(new base::FundamentalValue(success));
+  SetResult(new base::FundamentalValue(success));
   SendResponse(true);
 }
+
+CloseTerminalProcessFunction::~CloseTerminalProcessFunction() {}
 
 bool CloseTerminalProcessFunction::RunTerminalFunction() {
   if (args_->GetSize() != 1)
@@ -175,6 +173,47 @@ void CloseTerminalProcessFunction::CloseOnFileThread(pid_t pid) {
 }
 
 void CloseTerminalProcessFunction::RespondOnUIThread(bool success) {
-  result_.reset(new base::FundamentalValue(success));
+  SetResult(new base::FundamentalValue(success));
+  SendResponse(true);
+}
+
+OnTerminalResizeFunction::~OnTerminalResizeFunction() {}
+
+bool OnTerminalResizeFunction::RunTerminalFunction() {
+  if (args_->GetSize() != 3)
+    return false;
+
+  pid_t pid;
+  if (!args_->GetInteger(0, &pid))
+    return false;
+
+  int width;
+  if (!args_->GetInteger(1, &width))
+    return false;
+
+  int height;
+  if (!args_->GetInteger(2, &height))
+    return false;
+
+  // Registry lives on the FILE thread.
+  content::BrowserThread::PostTask(content::BrowserThread::FILE, FROM_HERE,
+      base::Bind(&OnTerminalResizeFunction::OnResizeOnFileThread, this, pid,
+                 width, height));
+
+  return true;
+}
+
+void OnTerminalResizeFunction::OnResizeOnFileThread(pid_t pid,
+                                                    int width, int height) {
+  bool success = ProcessProxyRegistry::Get()->OnTerminalResize(pid,
+                                                               width, height);
+
+  content::BrowserThread::PostTask(content::BrowserThread::UI, FROM_HERE,
+      base::Bind(&OnTerminalResizeFunction::RespondOnUIThread, this,
+      success));
+}
+
+void OnTerminalResizeFunction::RespondOnUIThread(bool success) {
+  SetResult(new base::FundamentalValue(success));
   SendResponse(true);
 }

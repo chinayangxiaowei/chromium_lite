@@ -1,10 +1,9 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CHROME_BROWSER_JUMPLIST_WIN_H_
 #define CHROME_BROWSER_JUMPLIST_WIN_H_
-#pragma once
 
 #include <list>
 #include <string>
@@ -18,7 +17,11 @@
 #include "chrome/browser/history/history_types.h"
 #include "chrome/browser/sessions/tab_restore_service.h"
 #include "chrome/browser/sessions/tab_restore_service_observer.h"
+#include "third_party/skia/include/core/SkBitmap.h"
 
+namespace content {
+class NotificationRegistrar;
+}
 class FilePath;
 class Profile;
 class PageUsageData;
@@ -49,7 +52,7 @@ class ShellLinkItem : public base::RefCountedThreadSafe<ShellLinkItem> {
   const std::wstring& title() const { return title_; }
   const std::wstring& icon() const { return icon_; }
   int index() const { return index_; }
-  scoped_refptr<RefCountedMemory> data() const { return data_; }
+  const SkBitmap& data() const { return data_; }
 
   void SetArguments(const std::wstring& arguments) {
     arguments_ = arguments;
@@ -65,7 +68,7 @@ class ShellLinkItem : public base::RefCountedThreadSafe<ShellLinkItem> {
     favicon_ = favicon;
   }
 
-  void SetIconData(scoped_refptr<RefCountedMemory> data) {
+  void SetIconData(const SkBitmap& data) {
     data_ = data;
   }
 
@@ -77,7 +80,7 @@ class ShellLinkItem : public base::RefCountedThreadSafe<ShellLinkItem> {
   std::wstring arguments_;
   std::wstring title_;
   std::wstring icon_;
-  scoped_refptr<RefCountedMemory> data_;
+  SkBitmap data_;
   int index_;
   bool favicon_;
 
@@ -158,8 +161,10 @@ class JumpList : public TabRestoreServiceObserver,
                  size_t max_items);
 
   // Starts loading a favicon for each URL in |icon_urls_|.
-  // This function just sends a query to HistoryService.
-  bool StartLoadingFavicon();
+  // This function sends a query to HistoryService.
+  // When finishing loading all favicons, this function posts a task that
+  // decompresses collected favicons and updates a JumpList.
+  void StartLoadingFavicon();
 
   // A callback function for HistoryService that notify when the "Most Visited"
   // list is available.
@@ -172,10 +177,9 @@ class JumpList : public TabRestoreServiceObserver,
   // is available.
   // To avoid file operations, this function just attaches the given data to
   // a ShellLinkItem object.
-  // When finishing loading all favicons, this function posts a task that
-  // decompresses collected favicons and updates a JumpList.
-  void OnFaviconDataAvailable(HistoryService::Handle handle,
-                              history::FaviconData favicon);
+  void OnFaviconDataAvailable(
+      HistoryService::Handle handle,
+      const history::FaviconImageResult& image_result);
 
   // Callback for TopSites that notifies when the "Most
   // Visited" list is available. This function updates the ShellLinkItemList
@@ -188,9 +192,9 @@ class JumpList : public TabRestoreServiceObserver,
   // has been fetched.
   void RunUpdate();
 
-  // Helper method for RunUpdate to decode the data about the asynchrounously
+  // Helper method for RunUpdate to create icon files for the asynchrounously
   // loaded icons.
-  void DecodeIconData(const ShellLinkItemList& item_list);
+  void CreateIconFiles(const ShellLinkItemList& item_list);
 
  private:
   friend class base::RefCountedThreadSafe<JumpList>;
@@ -204,7 +208,8 @@ class JumpList : public TabRestoreServiceObserver,
   // The Profile object is used to listen for events
   Profile* profile_;
 
-  content::NotificationRegistrar registrar_;
+  // Lives on the UI thread.
+  scoped_ptr<content::NotificationRegistrar> registrar_;
 
   // App id to associate with the jump list.
   std::wstring app_id_;

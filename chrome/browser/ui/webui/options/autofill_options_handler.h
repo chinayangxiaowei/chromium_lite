@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -18,6 +18,8 @@ class DictionaryValue;
 class ListValue;
 }
 
+namespace options {
+
 class AutofillOptionsHandler : public OptionsPageUIHandler,
                                public PersonalDataManagerObserver {
  public:
@@ -27,7 +29,8 @@ class AutofillOptionsHandler : public OptionsPageUIHandler,
   // OptionsPageUIHandler implementation.
   virtual void GetLocalizedValues(
       base::DictionaryValue* localized_strings) OVERRIDE;
-  virtual void Initialize() OVERRIDE;
+  virtual void InitializeHandler() OVERRIDE;
+  virtual void InitializePage() OVERRIDE;
   virtual void RegisterMessages() OVERRIDE;
 
   // PersonalDataManagerObserver implementation.
@@ -79,11 +82,16 @@ class AutofillOptionsHandler : public OptionsPageUIHandler,
   // array of numbers, and the country code string set on the profile.
   void ValidatePhoneNumbers(const base::ListValue* args);
 
+  // Returns true if |personal_data_| is non-null and loaded.
+  bool IsPersonalDataLoaded() const;
+
   // The personal data manager, used to load Autofill profiles and credit cards.
   // Unowned pointer, may not be NULL.
   PersonalDataManager* personal_data_;
 
   DISALLOW_COPY_AND_ASSIGN(AutofillOptionsHandler);
 };
+
+}  // namespace options
 
 #endif  // CHROME_BROWSER_UI_WEBUI_OPTIONS_AUTOFILL_OPTIONS_HANDLER_H_

@@ -4,30 +4,36 @@
 
 #include "content/shell/shell_url_request_context_getter.h"
 
+#include "base/command_line.h"
 #include "base/logging.h"
 #include "base/string_split.h"
+#include "base/threading/worker_pool.h"
 #include "content/public/browser/browser_thread.h"
+#include "content/shell/shell_network_delegate.h"
 #include "net/base/cert_verifier.h"
-#include "net/base/cookie_monster.h"
-#include "net/base/default_origin_bound_cert_store.h"
+#include "net/base/default_server_bound_cert_store.h"
 #include "net/base/host_resolver.h"
-#include "net/base/origin_bound_cert_service.h"
+#include "net/base/server_bound_cert_service.h"
 #include "net/base/ssl_config_service_defaults.h"
+#include "net/cookies/cookie_monster.h"
 #include "net/http/http_auth_handler_factory.h"
 #include "net/http/http_cache.h"
+#include "net/http/http_network_session.h"
 #include "net/http/http_server_properties_impl.h"
 #include "net/proxy/proxy_service.h"
 #include "net/url_request/url_request_context.h"
 #include "net/url_request/url_request_context_storage.h"
-#include "net/url_request/url_request_job_factory.h"
+#include "net/url_request/url_request_job_factory_impl.h"
 
 namespace content {
 
 ShellURLRequestContextGetter::ShellURLRequestContextGetter(
+    bool ignore_certificate_errors,
     const FilePath& base_path,
     MessageLoop* io_loop,
     MessageLoop* file_loop)
-    : base_path_(base_path),
+    : ignore_certificate_errors_(ignore_certificate_errors),
+      base_path_(base_path),
       io_loop_(io_loop),
       file_loop_(file_loop) {
   // Must first be created on the UI thread.
@@ -38,7 +44,7 @@ ShellURLRequestContextGetter::ShellURLRequestContextGetter(
   // the URLRequestContextStorage on the IO thread in GetURLRequestContext().
   proxy_config_service_.reset(
       net::ProxyService::CreateSystemProxyConfigService(
-          io_loop_, file_loop_));
+          io_loop_->message_loop_proxy(), file_loop_));
 }
 
 ShellURLRequestContextGetter::~ShellURLRequestContextGetter() {
@@ -47,13 +53,16 @@ ShellURLRequestContextGetter::~ShellURLRequestContextGetter() {
 net::URLRequestContext* ShellURLRequestContextGetter::GetURLRequestContext() {
   DCHECK(BrowserThread::CurrentlyOn(BrowserThread::IO));
 
-  if (!url_request_context_) {
-    url_request_context_ = new net::URLRequestContext();
-    storage_.reset(new net::URLRequestContextStorage(url_request_context_));
-
+  if (!url_request_context_.get()) {
+    url_request_context_.reset(new net::URLRequestContext());
+    network_delegate_.reset(new ShellNetworkDelegate);
+    url_request_context_->set_network_delegate(network_delegate_.get());
+    storage_.reset(
+        new net::URLRequestContextStorage(url_request_context_.get()));
     storage_->set_cookie_store(new net::CookieMonster(NULL, NULL));
-    storage_->set_origin_bound_cert_service(new net::OriginBoundCertService(
-        new net::DefaultOriginBoundCertStore(NULL)));
+    storage_->set_server_bound_cert_service(new net::ServerBoundCertService(
+        new net::DefaultServerBoundCertStore(NULL),
+        base::WorkerPool::GetTaskRunner(true)));
     url_request_context_->set_accept_language("en-us,en");
     url_request_context_->set_accept_charset("iso-8859-1,*,utf-8");
 
@@ -61,7 +70,7 @@ net::URLRequestContext* ShellURLRequestContextGetter::GetURLRequestContext() {
         net::CreateSystemHostResolver(net::HostResolver::kDefaultParallelism,
                                       net::HostResolver::kDefaultRetryAttempts,
                                       NULL));
-    storage_->set_cert_verifier(new net::CertVerifier);
+    storage_->set_cert_verifier(net::CertVerifier::CreateDefault());
     // TODO(jam): use v8 if possible, look at chrome code.
     storage_->set_proxy_service(
         net::ProxyService::CreateUsingSystemProxyResolver(
@@ -83,36 +92,38 @@ net::URLRequestContext* ShellURLRequestContextGetter::GetURLRequestContext() {
             BrowserThread::GetMessageLoopProxyForThread(
                 BrowserThread::CACHE));
 
+    net::HttpNetworkSession::Params network_session_params;
+    network_session_params.host_resolver =
+        url_request_context_->host_resolver();
+    network_session_params.cert_verifier =
+        url_request_context_->cert_verifier();
+    network_session_params.server_bound_cert_service =
+        url_request_context_->server_bound_cert_service();
+    network_session_params.proxy_service =
+        url_request_context_->proxy_service();
+    network_session_params.ssl_config_service =
+        url_request_context_->ssl_config_service();
+    network_session_params.http_auth_handler_factory =
+        url_request_context_->http_auth_handler_factory();
+    network_session_params.network_delegate =
+        url_request_context_->network_delegate();
+    network_session_params.http_server_properties =
+        url_request_context_->http_server_properties();
+    network_session_params.ignore_certificate_errors =
+        ignore_certificate_errors_;
+
     net::HttpCache* main_cache = new net::HttpCache(
-        url_request_context_->host_resolver(),
-        url_request_context_->cert_verifier(),
-        url_request_context_->origin_bound_cert_service(),
-        NULL, // tranport_security_state
-        url_request_context_->proxy_service(),
-        "", // ssl_session_cache_shard
-        url_request_context_->ssl_config_service(),
-        url_request_context_->http_auth_handler_factory(),
-        NULL,  // network_delegate
-        url_request_context_->http_server_properties(),
-        NULL,
-        main_backend);
+        network_session_params, main_backend);
     storage_->set_http_transaction_factory(main_cache);
 
-    storage_->set_job_factory(new net::URLRequestJobFactory);
+    storage_->set_job_factory(new net::URLRequestJobFactoryImpl);
   }
 
-  return url_request_context_;
+  return url_request_context_.get();
 }
 
-net::CookieStore* ShellURLRequestContextGetter::DONTUSEME_GetCookieStore() {
-  if (BrowserThread::CurrentlyOn(BrowserThread::IO))
-    return GetURLRequestContext()->cookie_store();
-  NOTIMPLEMENTED();
-  return NULL;
-}
-
-scoped_refptr<base::MessageLoopProxy>
-    ShellURLRequestContextGetter::GetIOMessageLoopProxy() const {
+scoped_refptr<base::SingleThreadTaskRunner>
+    ShellURLRequestContextGetter::GetNetworkTaskRunner() const {
   return BrowserThread::GetMessageLoopProxyForThread(BrowserThread::IO);
 }
 

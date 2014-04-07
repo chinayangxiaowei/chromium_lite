@@ -5,21 +5,36 @@
 #ifndef CHROME_BROWSER_CHROMEOS_CHROME_BROWSER_MAIN_CHROMEOS_H_
 #define CHROME_BROWSER_CHROMEOS_CHROME_BROWSER_MAIN_CHROMEOS_H_
 
+#include "base/memory/ref_counted.h"
 #include "base/memory/scoped_ptr.h"
 #include "chrome/browser/chrome_browser_main_linux.h"
 
 namespace chromeos {
 class BrightnessObserver;
+class OutputObserver;
+class PowerButtonObserver;
+class PowerStateOverride;
+class RemovableDeviceNotificationsCros;
 class ResumeObserver;
+class ScreenDimmingObserver;
 class ScreenLockObserver;
 class SessionManagerObserver;
+class UserActivityNotifier;
+class VideoActivityNotifier;
 
-#if defined(USE_AURA)
-class InitialBrowserWindowObserver;
-class PowerButtonObserver;
-class VideoPropertyWriter;
-#endif
+namespace mtp {
+class MediaTransferProtocolDeviceObserverCros;
+}  // namespace mtp
+
+namespace default_app_order {
+class ExternalLoader;
+}
+
 }  // namespace chromeos
+
+namespace contacts {
+class ContactManager;
+}  // namespace contacts
 
 class ChromeBrowserMainPartsChromeos : public ChromeBrowserMainPartsLinux {
  public:
@@ -41,18 +56,27 @@ class ChromeBrowserMainPartsChromeos : public ChromeBrowserMainPartsLinux {
 
   virtual void PostMainMessageLoopRun() OVERRIDE;
 
+  virtual void SetupPlatformFieldTrials() OVERRIDE;
+
  private:
+  // Set up field trial for low memory headroom settings.
+  void SetupLowMemoryHeadroomFieldTrial();
+
+  scoped_ptr<contacts::ContactManager> contact_manager_;
   scoped_ptr<chromeos::BrightnessObserver> brightness_observer_;
+  scoped_ptr<chromeos::mtp::MediaTransferProtocolDeviceObserverCros>
+      media_transfer_protocol_device_observer_;
+  scoped_ptr<chromeos::default_app_order::ExternalLoader> app_order_loader_;
+  scoped_ptr<chromeos::OutputObserver> output_observer_;
   scoped_ptr<chromeos::ResumeObserver> resume_observer_;
   scoped_ptr<chromeos::ScreenLockObserver> screen_lock_observer_;
-  scoped_ptr<chromeos::SessionManagerObserver> session_manager_observer_;
-
-#if defined(USE_AURA)
-  scoped_ptr<chromeos::InitialBrowserWindowObserver>
-      initial_browser_window_observer_;
   scoped_ptr<chromeos::PowerButtonObserver> power_button_observer_;
-  scoped_ptr<chromeos::VideoPropertyWriter> video_property_writer_;
-#endif
+  scoped_ptr<chromeos::PowerStateOverride> power_state_override_;
+  scoped_ptr<chromeos::UserActivityNotifier> user_activity_notifier_;
+  scoped_ptr<chromeos::VideoActivityNotifier> video_activity_notifier_;
+  scoped_ptr<chromeos::ScreenDimmingObserver> screen_dimming_observer_;
+  scoped_refptr<chromeos::RemovableDeviceNotificationsCros>
+      removable_device_notifications_;
 
   DISALLOW_COPY_AND_ASSIGN(ChromeBrowserMainPartsChromeos);
 };

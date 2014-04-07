@@ -1,13 +1,14 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef BASE_SYS_INFO_H_
 #define BASE_SYS_INFO_H_
-#pragma once
 
 #include "base/base_export.h"
 #include "base/basictypes.h"
+#include "base/file_path.h"
+#include "base/time.h"
 
 #include <string>
 
@@ -54,6 +55,10 @@ class BASE_EXPORT SysInfo {
   // across platforms.
   static std::string CPUArchitecture();
 
+  // Returns the CPU model name of the system. If it can not be figured out,
+  // an empty string is returned.
+  static std::string CPUModelName();
+
   // Return the smallest amount of memory (in bytes) which the VM system will
   // allocate.
   static size_t VMAllocationGranularity();
@@ -61,7 +66,7 @@ class BASE_EXPORT SysInfo {
 #if defined(OS_POSIX) && !defined(OS_MACOSX)
   // Returns the maximum SysV shared memory segment size.
   static size_t MaxSharedMemorySize();
-#endif
+#endif // defined(OS_POSIX) && !defined(OS_MACOSX)
 
 #if defined(OS_CHROMEOS)
   // Returns the name of the version entry we wish to look up in the
@@ -74,7 +79,23 @@ class BASE_EXPORT SysInfo {
                               int32* major_version,
                               int32* minor_version,
                               int32* bugfix_version);
-#endif
+
+  // Returns the path to the lsb-release file.
+  static FilePath GetLsbReleaseFilePath();
+#endif // defined(OS_CHROMEOS)
+
+#if defined(OS_ANDROID)
+  // Returns the Android build's codename.
+  static std::string GetAndroidBuildCodename();
+
+  // Returns the Android build ID.
+  static std::string GetAndroidBuildID();
+
+  // Returns the device's name.
+  static std::string GetDeviceName();
+
+  static int DalvikHeapSizeMB();
+#endif // defined(OS_ANDROID)
 };
 
 }  // namespace base

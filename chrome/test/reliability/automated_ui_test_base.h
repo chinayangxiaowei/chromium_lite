@@ -4,7 +4,6 @@
 
 #ifndef CHROME_TEST_RELIABILITY_AUTOMATED_UI_TEST_BASE_H_
 #define CHROME_TEST_RELIABILITY_AUTOMATED_UI_TEST_BASE_H_
-#pragma once
 
 #include <string>
 
@@ -107,10 +106,6 @@ class AutomatedUITestBase : public UITest {
   // Activates the previous tab on the active browser window.
   // Returns true on success.
   bool SelectPreviousTab();
-
-  // Displays the bookmark bar.
-  // Returns true on success.
-  bool ShowBookmarkBar();
 
   // Opens the Downloads page in the current active browser window.
   // Returns true on success.

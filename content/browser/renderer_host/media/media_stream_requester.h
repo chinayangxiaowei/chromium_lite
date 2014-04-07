@@ -17,7 +17,8 @@ namespace media_stream {
 // success and error for a request.
 class CONTENT_EXPORT MediaStreamRequester {
  public:
-  // Called as a reply of a successful call to GenerateStream.
+  // Called as a reply of a successful call to GenerateStream or
+  // GenerateStreamForDevice.
   virtual void StreamGenerated(const std::string& label,
                                const StreamDeviceInfoArray& audio_devices,
                                const StreamDeviceInfoArray& video_devices) = 0;
@@ -33,13 +34,9 @@ class CONTENT_EXPORT MediaStreamRequester {
   // Called as a reply of a successful call to EnumerateDevices.
   virtual void DevicesEnumerated(const std::string& label,
                                  const StreamDeviceInfoArray& devices) = 0;
-  // Called if EnumerateDevices failed.
-  virtual void DevicesEnumerationFailed(const std::string& label) = 0;
   // Called as a reply of a successful call to OpenDevice.
   virtual void DeviceOpened(const std::string& label,
                             const StreamDeviceInfo& device_info) = 0;
-  // Called if OpenDevice failed.
-  virtual void DeviceOpenFailed(const std::string& label) = 0;
 
  protected:
   virtual ~MediaStreamRequester() {

@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -13,6 +13,7 @@
 #include "ppapi/proxy/serialized_var.h"
 #include "ppapi/proxy/serialized_flash_menu.h"
 #include "ppapi/shared_impl/host_resource.h"
+#include "ppapi/shared_impl/private/ppb_x509_certificate_private_shared.h"
 
 namespace IPC {
 
@@ -39,7 +40,7 @@ namespace {
 // add it to the vector one at a time.
 template<typename T>
 bool ReadVectorWithoutCopy(const Message* m,
-                           void** iter,
+                           PickleIterator* iter,
                            std::vector<T>* output) {
   // This part is just a copy of the the default ParamTraits vector Read().
   int size;
@@ -81,7 +82,9 @@ void ParamTraits<PP_Bool>::Write(Message* m, const param_type& p) {
 }
 
 // static
-bool ParamTraits<PP_Bool>::Read(const Message* m, void** iter, param_type* r) {
+bool ParamTraits<PP_Bool>::Read(const Message* m,
+                                PickleIterator* iter,
+                                param_type* r) {
   // We specifically want to be strict here about what types of input we accept,
   // which ParamTraits<bool> does for us. We don't want to deserialize "2" into
   // a PP_Bool, for example.
@@ -109,7 +112,7 @@ void ParamTraits<PP_FileInfo>::Write(Message* m, const param_type& p) {
 }
 
 // static
-bool ParamTraits<PP_FileInfo>::Read(const Message* m, void** iter,
+bool ParamTraits<PP_FileInfo>::Read(const Message* m, PickleIterator* iter,
                                         param_type* r) {
   int type, system_type;
   if (!ParamTraits<int64_t>::Read(m, iter, &r->size) ||
@@ -148,7 +151,7 @@ void ParamTraits<PP_NetAddress_Private>::Write(Message* m,
 
 // static
 bool ParamTraits<PP_NetAddress_Private>::Read(const Message* m,
-                                              void** iter,
+                                              PickleIterator* iter,
                                               param_type* p) {
   uint16 size;
   if (!ReadParam(m, iter, &size))
@@ -181,7 +184,7 @@ void ParamTraits<PP_ObjectProperty>::Write(Message* m, const param_type& p) {
 
 // static
 bool ParamTraits<PP_ObjectProperty>::Read(const Message* m,
-                                          void** iter,
+                                          PickleIterator* iter,
                                           param_type* r) {
   // FIXME(brettw);
   return true;
@@ -191,8 +194,190 @@ bool ParamTraits<PP_ObjectProperty>::Read(const Message* m,
 void ParamTraits<PP_ObjectProperty>::Log(const param_type& p, std::string* l) {
 }
 
-// PPBFlash_DrawGlyphs_Params --------------------------------------------------
+// PPB_FileRef_CreateInfo ------------------------------------------------------
 
+// static
+void ParamTraits<ppapi::PPB_FileRef_CreateInfo>::Write(Message* m,
+                                                       const param_type& p) {
+  ParamTraits<ppapi::HostResource>::Write(m, p.resource);
+  ParamTraits<int>::Write(m, p.file_system_type);
+  ParamTraits<std::string>::Write(m, p.path);
+  ParamTraits<std::string>::Write(m, p.name);
+}
+
+// static
+bool ParamTraits<ppapi::PPB_FileRef_CreateInfo>::Read(const Message* m,
+                                                      PickleIterator* iter,
+                                                      param_type* r) {
+  return
+      ParamTraits<ppapi::HostResource>::Read(m, iter, &r->resource) &&
+      ParamTraits<int>::Read(m, iter, &r->file_system_type) &&
+      ParamTraits<std::string>::Read(m, iter, &r->path) &&
+      ParamTraits<std::string>::Read(m, iter, &r->name);
+}
+
+// static
+void ParamTraits<ppapi::PPB_FileRef_CreateInfo>::Log(const param_type& p,
+                                                     std::string* l) {
+}
+
+// HostResource ----------------------------------------------------------------
+
+// static
+void ParamTraits<ppapi::HostResource>::Write(Message* m,
+                                             const param_type& p) {
+  ParamTraits<PP_Instance>::Write(m, p.instance());
+  ParamTraits<PP_Resource>::Write(m, p.host_resource());
+}
+
+// static
+bool ParamTraits<ppapi::HostResource>::Read(const Message* m,
+                                            PickleIterator* iter,
+                                            param_type* r) {
+  PP_Instance instance;
+  PP_Resource resource;
+  if (!ParamTraits<PP_Instance>::Read(m, iter, &instance) ||
+      !ParamTraits<PP_Resource>::Read(m, iter, &resource))
+    return false;
+  r->SetHostResource(instance, resource);
+  return true;
+}
+
+// static
+void ParamTraits<ppapi::HostResource>::Log(const param_type& p,
+                                           std::string* l) {
+}
+
+// SerializedVar ---------------------------------------------------------------
+
+// static
+void ParamTraits<ppapi::proxy::SerializedVar>::Write(Message* m,
+                                                     const param_type& p) {
+  p.WriteToMessage(m);
+}
+
+// static
+bool ParamTraits<ppapi::proxy::SerializedVar>::Read(const Message* m,
+                                                    PickleIterator* iter,
+                                                    param_type* r) {
+  return r->ReadFromMessage(m, iter);
+}
+
+// static
+void ParamTraits<ppapi::proxy::SerializedVar>::Log(const param_type& p,
+                                                   std::string* l) {
+}
+
+// std::vector<SerializedVar> --------------------------------------------------
+
+void ParamTraits< std::vector<ppapi::proxy::SerializedVar> >::Write(
+    Message* m,
+    const param_type& p) {
+  WriteVectorWithoutCopy(m, p);
+}
+
+// static
+bool ParamTraits< std::vector<ppapi::proxy::SerializedVar> >::Read(
+    const Message* m,
+    PickleIterator* iter,
+    param_type* r) {
+  return ReadVectorWithoutCopy(m, iter, r);
+}
+
+// static
+void ParamTraits< std::vector<ppapi::proxy::SerializedVar> >::Log(
+    const param_type& p,
+    std::string* l) {
+}
+
+// std::vector<PPB_FileRef_CreateInfo> -----------------------------------------
+
+void ParamTraits< std::vector<ppapi::PPB_FileRef_CreateInfo> >::Write(
+    Message* m,
+    const param_type& p) {
+  WriteVectorWithoutCopy(m, p);
+}
+
+// static
+bool ParamTraits< std::vector<ppapi::PPB_FileRef_CreateInfo> >::Read(
+    const Message* m,
+    PickleIterator* iter,
+    param_type* r) {
+  return ReadVectorWithoutCopy(m, iter, r);
+}
+
+// static
+void ParamTraits< std::vector<ppapi::PPB_FileRef_CreateInfo> >::Log(
+    const param_type& p,
+    std::string* l) {
+}
+
+// SerializedHandle ------------------------------------------------------------
+
+// static
+void ParamTraits<ppapi::proxy::SerializedHandle>::Write(Message* m,
+                                                        const param_type& p) {
+  ppapi::proxy::SerializedHandle::WriteHeader(p.header(), m);
+  switch (p.type()) {
+    case ppapi::proxy::SerializedHandle::SHARED_MEMORY:
+      ParamTraits<base::SharedMemoryHandle>::Write(m, p.shmem());
+      break;
+    case ppapi::proxy::SerializedHandle::SOCKET:
+    case ppapi::proxy::SerializedHandle::CHANNEL_HANDLE:
+      ParamTraits<IPC::PlatformFileForTransit>::Write(m, p.descriptor());
+      break;
+    case ppapi::proxy::SerializedHandle::INVALID:
+      break;
+    // No default so the compiler will warn on new types.
+  }
+}
+
+// static
+bool ParamTraits<ppapi::proxy::SerializedHandle>::Read(const Message* m,
+                                                       PickleIterator* iter,
+                                                       param_type* r) {
+  ppapi::proxy::SerializedHandle::Header header;
+  if (!ppapi::proxy::SerializedHandle::ReadHeader(iter, &header))
+    return false;
+  switch (header.type) {
+    case ppapi::proxy::SerializedHandle::SHARED_MEMORY: {
+      base::SharedMemoryHandle handle;
+      if (ParamTraits<base::SharedMemoryHandle>::Read(m, iter, &handle)) {
+        r->set_shmem(handle, header.size);
+        return true;
+      }
+      break;
+    }
+    case ppapi::proxy::SerializedHandle::SOCKET: {
+      IPC::PlatformFileForTransit socket;
+      if (ParamTraits<IPC::PlatformFileForTransit>::Read(m, iter, &socket)) {
+        r->set_socket(socket);
+        return true;
+      }
+      break;
+    }
+    case ppapi::proxy::SerializedHandle::CHANNEL_HANDLE: {
+      IPC::PlatformFileForTransit desc;
+      if (ParamTraits<IPC::PlatformFileForTransit>::Read(m, iter, &desc)) {
+        r->set_channel_handle(desc);
+        return true;
+      }
+      break;
+    }
+    case ppapi::proxy::SerializedHandle::INVALID:
+      return true;
+    // No default so the compiler will warn us if a new type is added.
+  }
+  return false;
+}
+
+// static
+void ParamTraits<ppapi::proxy::SerializedHandle>::Log(const param_type& p,
+                                                      std::string* l) {
+}
+
+#if !defined(OS_NACL) && !defined(NACL_WIN64)
+// PPBFlash_DrawGlyphs_Params --------------------------------------------------
 // static
 void ParamTraits<ppapi::proxy::PPBFlash_DrawGlyphs_Params>::Write(
     Message* m,
@@ -220,7 +405,7 @@ void ParamTraits<ppapi::proxy::PPBFlash_DrawGlyphs_Params>::Write(
 // static
 bool ParamTraits<ppapi::proxy::PPBFlash_DrawGlyphs_Params>::Read(
     const Message* m,
-    void** iter,
+    PickleIterator* iter,
     param_type* r) {
   return
       ParamTraits<PP_Instance>::Read(m, iter, &r->instance) &&
@@ -251,33 +436,6 @@ void ParamTraits<ppapi::proxy::PPBFlash_DrawGlyphs_Params>::Log(
     std::string* l) {
 }
 
-// PPB_FileRef_CreateInfo ------------------------------------------------------
-
-// static
-void ParamTraits<ppapi::PPB_FileRef_CreateInfo>::Write(Message* m,
-                                                       const param_type& p) {
-  ParamTraits<ppapi::HostResource>::Write(m, p.resource);
-  ParamTraits<int>::Write(m, p.file_system_type);
-  ParamTraits<std::string>::Write(m, p.path);
-  ParamTraits<std::string>::Write(m, p.name);
-}
-
-// static
-bool ParamTraits<ppapi::PPB_FileRef_CreateInfo>::Read(const Message* m,
-                                                      void** iter,
-                                                      param_type* r) {
-  return
-      ParamTraits<ppapi::HostResource>::Read(m, iter, &r->resource) &&
-      ParamTraits<int>::Read(m, iter, &r->file_system_type) &&
-      ParamTraits<std::string>::Read(m, iter, &r->path) &&
-      ParamTraits<std::string>::Read(m, iter, &r->name);
-}
-
-// static
-void ParamTraits<ppapi::PPB_FileRef_CreateInfo>::Log(const param_type& p,
-                                                     std::string* l) {
-}
-
 // PPBURLLoader_UpdateProgress_Params ------------------------------------------
 
 // static
@@ -295,7 +453,7 @@ void ParamTraits<ppapi::proxy::PPBURLLoader_UpdateProgress_Params>::Write(
 // static
 bool ParamTraits<ppapi::proxy::PPBURLLoader_UpdateProgress_Params>::Read(
     const Message* m,
-    void** iter,
+    PickleIterator* iter,
     param_type* r) {
   return
       ParamTraits<PP_Instance>::Read(m, iter, &r->instance) &&
@@ -323,7 +481,7 @@ void ParamTraits<ppapi::proxy::SerializedDirEntry>::Write(Message* m,
 
 // static
 bool ParamTraits<ppapi::proxy::SerializedDirEntry>::Read(const Message* m,
-                                                         void** iter,
+                                                         PickleIterator* iter,
                                                          param_type* r) {
   return ParamTraits<std::string>::Read(m, iter, &r->name) &&
          ParamTraits<bool>::Read(m, iter, &r->is_dir);
@@ -353,7 +511,7 @@ void ParamTraits<ppapi::proxy::SerializedFontDescription>::Write(
 // static
 bool ParamTraits<ppapi::proxy::SerializedFontDescription>::Read(
     const Message* m,
-    void** iter,
+    PickleIterator* iter,
     param_type* r) {
   return
       ParamTraits<ppapi::proxy::SerializedVar>::Read(m, iter, &r->face) &&
@@ -372,97 +530,6 @@ void ParamTraits<ppapi::proxy::SerializedFontDescription>::Log(
     std::string* l) {
 }
 
-// HostResource ----------------------------------------------------------------
-
-// static
-void ParamTraits<ppapi::HostResource>::Write(Message* m,
-                                             const param_type& p) {
-  ParamTraits<PP_Instance>::Write(m, p.instance());
-  ParamTraits<PP_Resource>::Write(m, p.host_resource());
-}
-
-// static
-bool ParamTraits<ppapi::HostResource>::Read(const Message* m,
-                                            void** iter,
-                                            param_type* r) {
-  PP_Instance instance;
-  PP_Resource resource;
-  if (!ParamTraits<PP_Instance>::Read(m, iter, &instance) ||
-      !ParamTraits<PP_Resource>::Read(m, iter, &resource))
-    return false;
-  r->SetHostResource(instance, resource);
-  return true;
-}
-
-// static
-void ParamTraits<ppapi::HostResource>::Log(const param_type& p,
-                                           std::string* l) {
-}
-
-// SerializedVar ---------------------------------------------------------------
-
-// static
-void ParamTraits<ppapi::proxy::SerializedVar>::Write(Message* m,
-                                                     const param_type& p) {
-  p.WriteToMessage(m);
-}
-
-// static
-bool ParamTraits<ppapi::proxy::SerializedVar>::Read(const Message* m,
-                                                    void** iter,
-                                                    param_type* r) {
-  return r->ReadFromMessage(m, iter);
-}
-
-// static
-void ParamTraits<ppapi::proxy::SerializedVar>::Log(const param_type& p,
-                                                   std::string* l) {
-}
-
-// std::vector<SerializedVar> --------------------------------------------------
-
-void ParamTraits< std::vector<ppapi::proxy::SerializedVar> >::Write(
-    Message* m,
-    const param_type& p) {
-  WriteVectorWithoutCopy(m, p);
-}
-
-// static
-bool ParamTraits< std::vector<ppapi::proxy::SerializedVar> >::Read(
-    const Message* m,
-    void** iter,
-    param_type* r) {
-  return ReadVectorWithoutCopy(m, iter, r);
-}
-
-// static
-void ParamTraits< std::vector<ppapi::proxy::SerializedVar> >::Log(
-    const param_type& p,
-    std::string* l) {
-}
-
-// std::vector<PPB_FileRef_CreateInfo> -----------------------------------------
-
-void ParamTraits< std::vector<ppapi::PPB_FileRef_CreateInfo> >::Write(
-    Message* m,
-    const param_type& p) {
-  WriteVectorWithoutCopy(m, p);
-}
-
-// static
-bool ParamTraits< std::vector<ppapi::PPB_FileRef_CreateInfo> >::Read(
-    const Message* m,
-    void** iter,
-    param_type* r) {
-  return ReadVectorWithoutCopy(m, iter, r);
-}
-
-// static
-void ParamTraits< std::vector<ppapi::PPB_FileRef_CreateInfo> >::Log(
-    const param_type& p,
-    std::string* l) {
-}
-
 // SerializedFlashMenu ---------------------------------------------------------
 
 // static
@@ -474,13 +541,35 @@ void ParamTraits<ppapi::proxy::SerializedFlashMenu>::Write(
 
 // static
 bool ParamTraits<ppapi::proxy::SerializedFlashMenu>::Read(const Message* m,
-                                                          void** iter,
+                                                          PickleIterator* iter,
                                                           param_type* r) {
   return r->ReadFromMessage(m, iter);
 }
 
 // static
 void ParamTraits<ppapi::proxy::SerializedFlashMenu>::Log(const param_type& p,
+                                                         std::string* l) {
+}
+#endif  // !defined(OS_NACL) && !defined(NACL_WIN64)
+
+// PPB_X509Certificate_Fields --------------------------------------------------
+
+// static
+void ParamTraits<ppapi::PPB_X509Certificate_Fields>::Write(
+    Message* m,
+    const param_type& p) {
+  ParamTraits<ListValue>::Write(m, p.values_);
+}
+
+// static
+bool ParamTraits<ppapi::PPB_X509Certificate_Fields>::Read(const Message* m,
+                                                          PickleIterator* iter,
+                                                          param_type* r) {
+  return ParamTraits<ListValue>::Read(m, iter, &(r->values_));
+}
+
+// static
+void ParamTraits<ppapi::PPB_X509Certificate_Fields>::Log(const param_type& p,
                                                          std::string* l) {
 }
 

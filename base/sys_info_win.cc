@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,6 +10,7 @@
 #include "base/logging.h"
 #include "base/memory/scoped_ptr.h"
 #include "base/stringprintf.h"
+#include "base/threading/thread_restrictions.h"
 #include "base/win/windows_version.h"
 
 namespace base {
@@ -36,6 +37,8 @@ int64 SysInfo::AmountOfPhysicalMemory() {
 
 // static
 int64 SysInfo::AmountOfFreeDiskSpace(const FilePath& path) {
+  base::ThreadRestrictions::AssertIOAllowed();
+
   ULARGE_INTEGER available, total, free;
   if (!GetDiskFreeSpaceExW(path.value().c_str(), &available, &total, &free)) {
     return -1;
@@ -68,12 +71,17 @@ std::string SysInfo::OperatingSystemVersion() {
 
 // TODO: Implement OperatingSystemVersionComplete, which would include
 // patchlevel/service pack number.
-// See chrome/browser/ui/views/bug_report_view.cc, BugReportView::SetOSVersion.
+// See chrome/browser/feedback/feedback_util.h, FeedbackUtil::SetOSVersion.
 
 // static
 std::string SysInfo::CPUArchitecture() {
   // TODO: Make this vary when we support any other architectures.
   return "x86";
+}
+
+// static
+std::string SysInfo::CPUModelName() {
+  return win::OSInfo::GetInstance()->processor_model_name();
 }
 
 // static

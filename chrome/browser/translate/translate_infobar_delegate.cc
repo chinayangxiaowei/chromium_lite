@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -13,13 +13,13 @@
 #include "chrome/browser/translate/translate_infobar_view.h"
 #include "chrome/browser/translate/translate_manager.h"
 #include "chrome/browser/translate/translate_tab_helper.h"
-#include "chrome/browser/ui/tab_contents/tab_contents_wrapper.h"
+#include "chrome/browser/ui/tab_contents/tab_contents.h"
 #include "chrome/common/chrome_constants.h"
 #include "content/public/browser/navigation_details.h"
 #include "content/public/browser/navigation_entry.h"
 #include "content/public/browser/web_contents.h"
 #include "grit/generated_resources.h"
-#include "grit/theme_resources_standard.h"
+#include "grit/theme_resources.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/resource/resource_bundle.h"
 
@@ -114,29 +114,29 @@ void TranslateInfoBarDelegate::SetTargetLanguage(size_t language_index) {
 
 void TranslateInfoBarDelegate::Translate() {
   const std::string& original_language_code = GetOriginalLanguageCode();
-  if (!owner()->web_contents()->GetBrowserContext()->IsOffTheRecord()) {
+  if (!owner()->GetWebContents()->GetBrowserContext()->IsOffTheRecord()) {
     prefs_.ResetTranslationDeniedCount(original_language_code);
     prefs_.IncrementTranslationAcceptedCount(original_language_code);
   }
 
-  TranslateManager::GetInstance()->TranslatePage(owner()->web_contents(),
+  TranslateManager::GetInstance()->TranslatePage(owner()->GetWebContents(),
       GetLanguageCodeAt(original_language_index()),
       GetLanguageCodeAt(target_language_index()));
 }
 
 void TranslateInfoBarDelegate::RevertTranslation() {
-  TranslateManager::GetInstance()->RevertTranslation(owner()->web_contents());
+  TranslateManager::GetInstance()->RevertTranslation(owner()->GetWebContents());
   RemoveSelf();
 }
 
 void TranslateInfoBarDelegate::ReportLanguageDetectionError() {
   TranslateManager::GetInstance()->
-      ReportLanguageDetectionError(owner()->web_contents());
+      ReportLanguageDetectionError(owner()->GetWebContents());
 }
 
 void TranslateInfoBarDelegate::TranslationDeclined() {
   const std::string& original_language_code = GetOriginalLanguageCode();
-  if (!owner()->web_contents()->GetBrowserContext()->IsOffTheRecord()) {
+  if (!owner()->GetWebContents()->GetBrowserContext()->IsOffTheRecord()) {
     prefs_.ResetTranslationAcceptedCount(original_language_code);
     prefs_.IncrementTranslationDeniedCount(original_language_code);
   }
@@ -146,8 +146,8 @@ void TranslateInfoBarDelegate::TranslationDeclined() {
   // translations when getting a LANGUAGE_DETERMINED from the page, which
   // happens when a load stops. That could happen multiple times, including
   // after the user already declined the translation.)
-  TranslateTabHelper* helper = TabContentsWrapper::GetCurrentWrapperForContents(
-      owner()->web_contents())->translate_tab_helper();
+  TranslateTabHelper* helper = TabContents::FromWebContents(
+      owner()->GetWebContents())->translate_tab_helper();
   helper->language_state().set_translation_declined(true);
 }
 
@@ -263,7 +263,7 @@ void TranslateInfoBarDelegate::MessageInfoBarButtonPressed() {
     return;
   }
   // This is the "Try again..." case.
-  TranslateManager::GetInstance()->TranslatePage(owner()->web_contents(),
+  TranslateManager::GetInstance()->TranslatePage(owner()->GetWebContents(),
       GetOriginalLanguageCode(), GetTargetLanguageCode());
 }
 
@@ -273,13 +273,13 @@ bool TranslateInfoBarDelegate::ShouldShowMessageInfoBarButton() {
 
 bool TranslateInfoBarDelegate::ShouldShowNeverTranslateButton() {
   DCHECK_EQ(BEFORE_TRANSLATE, type_);
-  return !owner()->web_contents()->GetBrowserContext()->IsOffTheRecord() &&
+  return !owner()->GetWebContents()->GetBrowserContext()->IsOffTheRecord() &&
       (prefs_.GetTranslationDeniedCount(GetOriginalLanguageCode()) >= 3);
 }
 
 bool TranslateInfoBarDelegate::ShouldShowAlwaysTranslateButton() {
   DCHECK_EQ(BEFORE_TRANSLATE, type_);
-  return !owner()->web_contents()->GetBrowserContext()->IsOffTheRecord() &&
+  return !owner()->GetWebContents()->GetBrowserContext()->IsOffTheRecord() &&
       (prefs_.GetTranslationAcceptedCount(GetOriginalLanguageCode()) >= 3);
 }
 
@@ -402,6 +402,6 @@ TranslateInfoBarDelegate*
 
 std::string TranslateInfoBarDelegate::GetPageHost() {
   NavigationEntry* entry =
-      owner()->web_contents()->GetController().GetActiveEntry();
+      owner()->GetWebContents()->GetController().GetActiveEntry();
   return entry ? entry->GetURL().HostNoBrackets() : std::string();
 }

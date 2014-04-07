@@ -4,7 +4,6 @@
 
 #ifndef CHROME_BROWSER_UI_COCOA_CONSTRAINED_WINDOW_MAC_H_
 #define CHROME_BROWSER_UI_COCOA_CONSTRAINED_WINDOW_MAC_H_
-#pragma once
 
 #import <Cocoa/Cocoa.h>
 
@@ -13,11 +12,19 @@
 #include "base/memory/scoped_nsobject.h"
 #include "chrome/browser/ui/constrained_window.h"
 
-@class BrowserWindowController;
+class ConstrainedWindowMac;
 @class GTMWindowSheetController;
 @class NSView;
 @class NSWindow;
-class TabContentsWrapper;
+class TabContents;
+
+// Window controllers that allow hosting constrained windows should
+// implement this protocol.
+@protocol ConstrainedWindowSupport
+
+- (GTMWindowSheetController*)sheetController;
+
+@end
 
 // Base class for constrained dialog delegates. Never inherit from this
 // directly.
@@ -110,34 +117,35 @@ class ConstrainedWindowMacDelegateCustomSheet
 //    deleted.
 class ConstrainedWindowMac : public ConstrainedWindow {
  public:
-  ConstrainedWindowMac(TabContentsWrapper* wrapper,
+  ConstrainedWindowMac(TabContents* tab_contents,
                        ConstrainedWindowMacDelegate* delegate);
   virtual ~ConstrainedWindowMac();
 
   // Overridden from ConstrainedWindow:
   virtual void ShowConstrainedWindow() OVERRIDE;
   virtual void CloseConstrainedWindow() OVERRIDE;
+  virtual bool CanShowConstrainedWindow() OVERRIDE;
 
-  // Returns the TabContentsWrapper that constrains this Constrained Window.
-  TabContentsWrapper* owner() const { return wrapper_; }
+  // Returns the TabContents that constrains this Constrained Window.
+  TabContents* owner() const { return tab_contents_; }
 
   // Returns the window's delegate.
   ConstrainedWindowMacDelegate* delegate() { return delegate_; }
 
   // Makes the constrained window visible, if it is not yet visible.
-  void Realize(BrowserWindowController* controller);
+  void Realize(NSWindowController<ConstrainedWindowSupport>* controller);
 
  private:
   friend class ConstrainedWindow;
 
-  // The TabContentsWrapper that owns and constrains this ConstrainedWindow.
-  TabContentsWrapper* wrapper_;
+  // The TabContents that owns and constrains this ConstrainedWindow.
+  TabContents* tab_contents_;
 
   // Delegate that provides the contents of this constrained window.
   ConstrainedWindowMacDelegate* delegate_;
 
   // Controller of the window that contains this sheet.
-  BrowserWindowController* controller_;
+  NSWindowController<ConstrainedWindowSupport>* controller_;
 
   // Stores if |ShowConstrainedWindow()| was called.
   bool should_be_visible_;

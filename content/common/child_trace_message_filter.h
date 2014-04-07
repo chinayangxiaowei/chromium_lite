@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -15,12 +15,14 @@
 class ChildTraceMessageFilter : public IPC::ChannelProxy::MessageFilter {
  public:
   ChildTraceMessageFilter();
-  virtual ~ChildTraceMessageFilter();
 
   // IPC::ChannelProxy::MessageFilter implementation.
   virtual void OnFilterAdded(IPC::Channel* channel) OVERRIDE;
   virtual void OnFilterRemoved() OVERRIDE;
   virtual bool OnMessageReceived(const IPC::Message& message) OVERRIDE;
+
+ protected:
+  virtual ~ChildTraceMessageFilter();
 
  private:
   // Message handlers.
@@ -28,12 +30,14 @@ class ChildTraceMessageFilter : public IPC::ChannelProxy::MessageFilter {
                       const std::vector<std::string>& excluded_categories);
   void OnEndTracing();
   void OnGetTraceBufferPercentFull();
+  void OnSetWatchEvent(const std::string& category_name,
+                       const std::string& event_name);
+  void OnCancelWatchEvent();
 
   // Callback from trace subsystem.
   void OnTraceDataCollected(
-      const scoped_refptr<base::debug::TraceLog::RefCountedString>&
-          events_str_ptr);
-  void OnTraceBufferFull();
+      const scoped_refptr<base::RefCountedString>& events_str_ptr);
+  void OnTraceNotification(int notification);
 
   IPC::Channel* channel_;
 

@@ -4,9 +4,9 @@
 
 #ifndef CHROME_BROWSER_CHROMEOS_CROS_ONC_NETWORK_PARSER_H_
 #define CHROME_BROWSER_CHROMEOS_CROS_ONC_NETWORK_PARSER_H_
-#pragma once
 
 #include <string>
+#include <vector>
 
 #include "base/compiler_specific.h"  // for OVERRIDE
 #include "base/gtest_prod_util.h"
@@ -28,6 +28,8 @@ typedef std::vector<scoped_refptr<X509Certificate> > CertificateList;
 }
 
 namespace chromeos {
+
+class IssuerSubjectPattern;
 
 // This is a simple representation of the signature of an ONC typed
 // field, used in validation and translation.  It could be extended
@@ -59,6 +61,12 @@ class OncNetworkParser : public NetworkParser {
   virtual ~OncNetworkParser();
   static const EnumMapper<PropertyIndex>* property_mapper();
 
+  // Certificates pushed from a policy source with Web trust are only imported
+  // with ParseCertificate() if this permission is granted.
+  void set_allow_web_trust_from_policy(bool allow) {
+    allow_web_trust_from_policy_ = allow;
+  }
+
   // Returns the number of networks in the "NetworkConfigs" list.
   int GetNetworkConfigsSize() const;
 
@@ -68,7 +76,9 @@ class OncNetworkParser : public NetworkParser {
 
   // Call to create the network by parsing network config in the nth position.
   // (0-based). CHECKs if |n| is out of range and returns NULL on parse errors.
-  Network* ParseNetwork(int n);
+  // |removed| is set to true if the network should be removed.  |removed| may
+  // be NULL.
+  Network* ParseNetwork(int n, bool* marked_for_removal);
 
   // Returns the number of certificates in the "Certificates" list.
   int GetCertificatesSize() const;
@@ -138,11 +148,19 @@ class OncNetworkParser : public NetworkParser {
   static std::string GetPkcs11IdFromCertGuid(const std::string& guid);
 
   // Process ProxySettings dictionary into a format which is then updated into
-  // ProxyConfig property in flimflam.
+  // ProxyConfig property in shill.
   static bool ProcessProxySettings(OncNetworkParser* parser,
                                    const base::Value& value,
                                    Network* network);
 
+  static ClientCertType ParseClientCertType(const std::string& type);
+
+  // Parse ClientCertPattern dictionary that specifies certificate pattern for
+  // VPN and WiFi EAP certificates.
+  static bool ParseClientCertPattern(OncNetworkParser* parser,
+                                     PropertyIndex index,
+                                     const base::Value& value,
+                                     Network* network);
  private:
   FRIEND_TEST_ALL_PREFIXES(OncNetworkParserTest, TestAddClientCertificate);
   FRIEND_TEST_ALL_PREFIXES(OncNetworkParserTest, TestUpdateClientCertificate);
@@ -194,11 +212,30 @@ class OncNetworkParser : public NetworkParser {
   static net::ProxyServer ParseProxyLocationValue(int property_index,
                                                   const base::Value& value);
 
+  // Parse IssuerSubjectPattern dictionary for certificate pattern fields.
+  static bool ParseIssuerPattern(OncNetworkParser* parser,
+                                 PropertyIndex index,
+                                 const base::Value& value,
+                                 Network* network);
+  static bool ParseSubjectPattern(OncNetworkParser* parser,
+                                  PropertyIndex index,
+                                  const base::Value& value,
+                                  Network* network);
+  static bool ParseIssuerSubjectPattern(IssuerSubjectPattern* pattern,
+                                        OncNetworkParser* parser,
+                                        PropertyIndex index,
+                                        const base::Value& value,
+                                        Network* network);
+
   // Error message from the JSON parser, if applicable.
   std::string parse_error_;
 
   // Where the ONC blob comes from.
   NetworkUIData::ONCSource onc_source_;
+
+  // Whether certificates with Web trust should be stored when pushed from a
+  // policy source.
+  bool allow_web_trust_from_policy_;
 
   scoped_ptr<base::DictionaryValue> root_dict_;
   base::ListValue* network_configs_;

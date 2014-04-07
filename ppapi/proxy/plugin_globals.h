@@ -6,7 +6,9 @@
 #define PPAPI_PROXY_PLUGIN_GLOBALS_H_
 
 #include "base/compiler_specific.h"
+#include "base/memory/scoped_ptr.h"
 #include "base/synchronization/lock.h"
+#include "base/threading/thread_local_storage.h"
 #include "ppapi/proxy/plugin_resource_tracker.h"
 #include "ppapi/proxy/plugin_var_tracker.h"
 #include "ppapi/proxy/ppapi_proxy_export.h"
@@ -16,6 +18,7 @@
 namespace ppapi {
 namespace proxy {
 
+class MessageLoopResource;
 class PluginProxyDelegate;
 
 class PPAPI_PROXY_EXPORT PluginGlobals : public PpapiGlobals {
@@ -37,9 +40,13 @@ class PPAPI_PROXY_EXPORT PluginGlobals : public PpapiGlobals {
   virtual VarTracker* GetVarTracker() OVERRIDE;
   virtual CallbackTracker* GetCallbackTrackerForInstance(
       PP_Instance instance) OVERRIDE;
-  virtual FunctionGroupBase* GetFunctionAPI(PP_Instance inst,
-                                            ApiID id) OVERRIDE;
+  virtual thunk::PPB_Instance_API* GetInstanceAPI(
+      PP_Instance instance) OVERRIDE;
+  virtual thunk::ResourceCreationAPI* GetResourceCreationAPI(
+      PP_Instance instance) OVERRIDE;
   virtual PP_Module GetModuleForInstance(PP_Instance instance) OVERRIDE;
+  virtual std::string GetCmdLine() OVERRIDE;
+  virtual void PreCacheFontForFlash(const void* logfontw) OVERRIDE;
   virtual base::Lock* GetProxyLock() OVERRIDE;
   virtual void LogWithSource(PP_Instance instance,
                              PP_LogLevel_Dev level,
@@ -66,9 +73,31 @@ class PPAPI_PROXY_EXPORT PluginGlobals : public PpapiGlobals {
     plugin_proxy_delegate_ = d;
   }
 
+  // Returns the TLS slot that holds the message loop TLS.
+  //
+  // If we end up needing more TLS storage for more stuff, we should probably
+  // have a struct in here for the different items.
+  base::ThreadLocalStorage::Slot* msg_loop_slot() {
+    return msg_loop_slot_.get();
+  }
+
+  // Sets the message loop slot, takes ownership of the given heap-alloated
+  // pointer.
+  void set_msg_loop_slot(base::ThreadLocalStorage::Slot* slot) {
+    msg_loop_slot_.reset(slot);
+  }
+
+  // Return the special Resource that represents the MessageLoop for the main
+  // thread. This Resource is not associated with any instance, and lives as
+  // long as the plugin.
+  MessageLoopResource* loop_for_main_thread();
+
   // The embedder should call this function when the name of the plugin module
   // is known. This will be used for error logging.
   void set_plugin_name(const std::string& name) { plugin_name_ = name; }
+
+  // The embedder should call this function when the command line is known.
+  void set_command_line(const std::string& c) { command_line_ = c; }
 
  private:
   // PpapiGlobals overrides.
@@ -82,9 +111,18 @@ class PPAPI_PROXY_EXPORT PluginGlobals : public PpapiGlobals {
   scoped_refptr<CallbackTracker> callback_tracker_;
   base::Lock proxy_lock_;
 
+  scoped_ptr<base::ThreadLocalStorage::Slot> msg_loop_slot_;
+  // Note that loop_for_main_thread's constructor sets msg_loop_slot_, so it
+  // must be initialized after msg_loop_slot_ (hence the order here).
+  scoped_refptr<MessageLoopResource> loop_for_main_thread_;
+
   // Name of the plugin used for error logging. This will be empty until
-  // SetPluginName is called.
+  // set_plugin_name is called.
   std::string plugin_name_;
+
+  // Command line for the plugin. This will be empty until set_command_line is
+  // called.
+  std::string command_line_;
 
   DISALLOW_COPY_AND_ASSIGN(PluginGlobals);
 };

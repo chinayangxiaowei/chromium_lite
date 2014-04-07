@@ -1,12 +1,12 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CONTENT_BROWSER_WORKER_HOST_WORKER_PROCESS_HOST_H_
 #define CONTENT_BROWSER_WORKER_HOST_WORKER_PROCESS_HOST_H_
-#pragma once
 
 #include <list>
+#include <string>
 #include <utility>
 
 #include "base/basictypes.h"
@@ -14,17 +14,28 @@
 #include "base/memory/scoped_ptr.h"
 #include "content/common/content_export.h"
 #include "content/browser/worker_host/worker_document_set.h"
+#include "content/browser/worker_host/worker_storage_partition.h"
 #include "content/public/browser/browser_child_process_host_delegate.h"
 #include "content/public/browser/browser_child_process_host_iterator.h"
 #include "googleurl/src/gurl.h"
-#include "ipc/ipc_message.h"
+#include "ipc/ipc_sender.h"
 
 class BrowserChildProcessHostImpl;
+class ChromeAppCacheService;
+class IndexedDBContextImpl;
 
 namespace content {
 class ResourceContext;
 class WorkerServiceImpl;
 }  // namespace content
+
+namespace fileapi {
+class FileSystemContext;
+}  // namespace fileapi
+
+namespace webkit_database {
+class DatabaseTracker;
+}  // namespace webkit_database
 
 // The WorkerProcessHost is the interface that represents the browser side of
 // the browser <-> worker communication channel. There will be one
@@ -33,7 +44,7 @@ class WorkerServiceImpl;
 // net::URLRequestContext) that a WorkerProcessHost serves a single
 // BrowserContext.
 class WorkerProcessHost : public content::BrowserChildProcessHostDelegate,
-                          public IPC::Message::Sender {
+                          public IPC::Sender {
  public:
   // Contains information about each worker instance, needed to forward messages
   // between the renderer and worker processes.
@@ -44,12 +55,14 @@ class WorkerProcessHost : public content::BrowserChildProcessHostDelegate,
                    int worker_route_id,
                    int parent_process_id,
                    int64 main_resource_appcache_id,
-                   const content::ResourceContext* resource_context);
+                   content::ResourceContext* resource_context,
+                   const WorkerStoragePartition& partition);
     // Used for pending instances. Rest of the parameters are ignored.
     WorkerInstance(const GURL& url,
                    bool shared,
                    const string16& name,
-                   const content::ResourceContext* resource_context);
+                   content::ResourceContext* resource_context,
+                   const WorkerStoragePartition& partition);
     ~WorkerInstance();
 
     // Unique identifier for a worker client.
@@ -74,7 +87,8 @@ class WorkerProcessHost : public content::BrowserChildProcessHostDelegate,
     bool Matches(
         const GURL& url,
         const string16& name,
-        const content::ResourceContext* resource_context) const;
+        const WorkerStoragePartition& partition,
+        content::ResourceContext* resource_context) const;
 
     // Shares the passed instance's WorkerDocumentSet with this instance. This
     // instance's current WorkerDocumentSet is dereferenced (and freed if this
@@ -96,8 +110,11 @@ class WorkerProcessHost : public content::BrowserChildProcessHostDelegate,
     WorkerDocumentSet* worker_document_set() const {
       return worker_document_set_;
     }
-    const content::ResourceContext* resource_context() const {
+    content::ResourceContext* resource_context() const {
       return resource_context_;
+    }
+    const WorkerStoragePartition& partition() const {
+      return partition_;
     }
 
    private:
@@ -110,13 +127,15 @@ class WorkerProcessHost : public content::BrowserChildProcessHostDelegate,
     int64 main_resource_appcache_id_;
     FilterList filters_;
     scoped_refptr<WorkerDocumentSet> worker_document_set_;
-    const content::ResourceContext* const resource_context_;
+    content::ResourceContext* const resource_context_;
+    WorkerStoragePartition partition_;
   };
 
-  explicit WorkerProcessHost(const content::ResourceContext* resource_context);
+  WorkerProcessHost(content::ResourceContext* resource_context,
+                    const WorkerStoragePartition& partition);
   virtual ~WorkerProcessHost();
 
-  // IPC::Message::Sender implementation:
+  // IPC::Sender implementation:
   virtual bool Send(IPC::Message* message) OVERRIDE;
 
   // Starts the process.  Returns true iff it succeeded.
@@ -146,7 +165,7 @@ class WorkerProcessHost : public content::BrowserChildProcessHostDelegate,
   typedef std::list<WorkerInstance> Instances;
   const Instances& instances() const { return instances_; }
 
-  const content::ResourceContext* resource_context() const {
+  content::ResourceContext* resource_context() const {
     return resource_context_;
   }
 
@@ -173,6 +192,10 @@ class WorkerProcessHost : public content::BrowserChildProcessHostDelegate,
   void OnAllowFileSystem(int worker_route_id,
                          const GURL& url,
                          bool* result);
+  void OnAllowIndexedDB(int worker_route_id,
+                        const GURL& url,
+                        const string16& name,
+                        bool* result);
 
   // Relays a message to the given endpoint.  Takes care of parsing the message
   // if it contains a message port and sending it a valid route id.
@@ -185,9 +208,14 @@ class WorkerProcessHost : public content::BrowserChildProcessHostDelegate,
   // Updates the title shown in the task manager.
   void UpdateTitle();
 
+  // Return a vector of all the render process/render view IDs that use the
+  // given worker.
+  std::vector<std::pair<int, int> > GetRenderViewIDsForWorker(int route_id);
+
   Instances instances_;
 
-  const content::ResourceContext* const resource_context_;
+  content::ResourceContext* const resource_context_;
+  WorkerStoragePartition partition_;
 
   // A reference to the filter associated with this worker process.  We need to
   // keep this around since we'll use it when forward messages to the worker

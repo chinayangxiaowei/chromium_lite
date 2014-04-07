@@ -10,6 +10,7 @@
 #else
 #define OS_POSIX 1
 #include <errno.h>
+#include <unistd.h>
 #endif
 
 #include <cstdio>
@@ -211,8 +212,16 @@ void TestBroker::RunTests(const std::string& filter) {
   RUN_TEST(Create, filter);
   RUN_TEST(Create, filter);
   RUN_TEST(GetHandleFailure, filter);
-  RUN_TEST(ConnectFailure, filter);
-  RUN_TEST(ConnectAndPipe, filter);
+  RUN_TEST_FORCEASYNC_AND_NOT(ConnectFailure, filter);
+  RUN_TEST_FORCEASYNC_AND_NOT(ConnectAndPipe, filter);
+
+  // The following tests require special setup, so only run them if they're
+  // explicitly specified by the filter.
+  if (filter.empty())
+    return;
+
+  RUN_TEST(ConnectPermissionDenied, filter);
+  RUN_TEST(ConnectPermissionGranted, filter);
 }
 
 std::string TestBroker::TestCreate() {
@@ -229,20 +238,11 @@ std::string TestBroker::TestCreate() {
 
 // Test connection on invalid resource.
 std::string TestBroker::TestConnectFailure() {
-  // Callback NOT force async. Connect should fail.  The callback will not be
-  // posted so there's no need to wait for the callback to complete.
-  TestCompletionCallback cb_1(instance_->pp_instance(), false);
-  ASSERT_EQ(PP_ERROR_BADRESOURCE,
-            broker_interface_->Connect(
-                0, pp::CompletionCallback(cb_1).pp_completion_callback()));
-
-  // Callback force async. Connect will return PP_OK_COMPLETIONPENDING and the
-  // callback will be posted.  However, the callback should fail.
-  TestCompletionCallback cb_2(instance_->pp_instance(), true);
-  ASSERT_EQ(PP_OK_COMPLETIONPENDING,
-            broker_interface_->Connect(
-                0, pp::CompletionCallback(cb_2).pp_completion_callback()));
-  ASSERT_EQ(PP_ERROR_BADRESOURCE, cb_2.WaitForResult());
+  TestCompletionCallback callback(instance_->pp_instance(), callback_type());
+  callback.WaitForResult(broker_interface_->Connect(0,
+      callback.GetCallback().pp_completion_callback()));
+  CHECK_CALLBACK_BEHAVIOR(callback);
+  ASSERT_EQ(PP_ERROR_BADRESOURCE, callback.result());
 
   PASS();
 }
@@ -267,11 +267,11 @@ std::string TestBroker::TestConnectAndPipe() {
       instance_->pp_instance());
   ASSERT_TRUE(broker);
 
-  TestCompletionCallback cb_3(instance_->pp_instance());
-  ASSERT_EQ(PP_OK_COMPLETIONPENDING,
-            broker_interface_->Connect(
-                broker, pp::CompletionCallback(cb_3).pp_completion_callback()));
-  ASSERT_EQ(PP_OK, cb_3.WaitForResult());
+  TestCompletionCallback callback(instance_->pp_instance(), callback_type());
+  callback.WaitForResult(broker_interface_->Connect(broker,
+      callback.GetCallback().pp_completion_callback()));
+  CHECK_CALLBACK_BEHAVIOR(callback);
+  ASSERT_EQ(PP_OK, callback.result());
 
   int32_t handle = kInvalidHandle;
   ASSERT_EQ(PP_OK, broker_interface_->GetHandle(broker, &handle));
@@ -286,3 +286,34 @@ std::string TestBroker::TestConnectAndPipe() {
 
   PASS();
 }
+
+std::string TestBroker::TestConnectPermissionDenied() {
+  // This assumes that the browser side is set up to deny access to the broker.
+  PP_Resource broker = broker_interface_->CreateTrusted(
+      instance_->pp_instance());
+  ASSERT_TRUE(broker);
+
+  TestCompletionCallback callback(instance_->pp_instance(), callback_type());
+  callback.WaitForResult(broker_interface_->Connect(broker,
+      callback.GetCallback().pp_completion_callback()));
+  CHECK_CALLBACK_BEHAVIOR(callback);
+  ASSERT_EQ(PP_ERROR_NOACCESS, callback.result());
+
+  PASS();
+}
+
+std::string TestBroker::TestConnectPermissionGranted() {
+  // This assumes that the browser side is set up to allow access to the broker.
+  PP_Resource broker = broker_interface_->CreateTrusted(
+      instance_->pp_instance());
+  ASSERT_TRUE(broker);
+
+  TestCompletionCallback callback(instance_->pp_instance(), callback_type());
+  callback.WaitForResult(broker_interface_->Connect(broker,
+      callback.GetCallback().pp_completion_callback()));
+  CHECK_CALLBACK_BEHAVIOR(callback);
+  ASSERT_EQ(PP_OK, callback.result());
+
+  PASS();
+}
+

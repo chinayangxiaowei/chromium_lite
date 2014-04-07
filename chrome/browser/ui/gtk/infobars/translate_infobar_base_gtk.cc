@@ -1,10 +1,11 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/ui/gtk/infobars/translate_infobar_base_gtk.h"
 
 #include "base/utf_string_conversions.h"
+#include "chrome/browser/infobars/infobar_tab_helper.h"
 #include "chrome/browser/translate/options_menu_model.h"
 #include "chrome/browser/translate/translate_infobar_delegate.h"
 #include "chrome/browser/ui/gtk/gtk_util.h"
@@ -63,7 +64,8 @@ void TranslateInfoBarBase::Init() {
 
   // The options button sits outside the translate_box so that it can be end
   // packed in hbox_.
-  GtkWidget* options_menu_button = BuildOptionsMenuButton();
+  GtkWidget* options_menu_button = CreateMenuButton(
+      l10n_util::GetStringUTF8(IDS_TRANSLATE_INFOBAR_OPTIONS));
   Signals()->Connect(options_menu_button, "clicked",
                      G_CALLBACK(&OnOptionsClickedThunk), this);
   gtk_widget_show_all(options_menu_button);
@@ -188,44 +190,24 @@ TranslateInfoBarDelegate* TranslateInfoBarBase::GetDelegate() {
   return static_cast<TranslateInfoBarDelegate*>(delegate());
 }
 
-// static
-GtkWidget* TranslateInfoBarBase::BuildOptionsMenuButton() {
-  GtkWidget* button = gtk_button_new();
-  GtkWidget* former_child = gtk_bin_get_child(GTK_BIN(button));
-  if (former_child)
-    gtk_container_remove(GTK_CONTAINER(button), former_child);
-
-  GtkWidget* hbox = gtk_hbox_new(FALSE, 0);
-
-  GtkWidget* label = gtk_label_new(
-      l10n_util::GetStringUTF8(IDS_TRANSLATE_INFOBAR_OPTIONS).c_str());
-  gtk_box_pack_start(GTK_BOX(hbox), label, FALSE, FALSE, 0);
-
-  GtkWidget* arrow = gtk_arrow_new(GTK_ARROW_DOWN, GTK_SHADOW_NONE);
-  gtk_box_pack_start(GTK_BOX(hbox), arrow, FALSE, FALSE, 0);
-
-  gtk_container_add(GTK_CONTAINER(button), hbox);
-
-  return button;
-}
-
 void TranslateInfoBarBase::OnOptionsClicked(GtkWidget* sender) {
   ShowMenuWithModel(sender, NULL, new OptionsMenuModel(GetDelegate()));
 }
 
 // TranslateInfoBarDelegate specific method:
-InfoBar* TranslateInfoBarDelegate::CreateInfoBar(InfoBarTabHelper* owner) {
+InfoBar* TranslateInfoBarDelegate::CreateInfoBar(InfoBarService* owner) {
+  InfoBarTabHelper* helper = static_cast<InfoBarTabHelper*>(owner);
   TranslateInfoBarBase* infobar = NULL;
   switch (type_) {
     case BEFORE_TRANSLATE:
-      infobar = new BeforeTranslateInfoBar(owner, this);
+      infobar = new BeforeTranslateInfoBar(helper, this);
       break;
     case AFTER_TRANSLATE:
-      infobar = new AfterTranslateInfoBar(owner, this);
+      infobar = new AfterTranslateInfoBar(helper, this);
       break;
     case TRANSLATING:
     case TRANSLATION_ERROR:
-      infobar = new TranslateMessageInfoBar(owner, this);
+      infobar = new TranslateMessageInfoBar(helper, this);
       break;
     default:
       NOTREACHED();

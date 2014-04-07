@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -16,11 +16,17 @@ static const int kMaxCursorDimension = 1024;
 
 WebCursor::WebCursor()
     : type_(WebCursorInfo::TypePointer) {
+#if defined(OS_WIN)
+  external_cursor_ = NULL;
+#endif
   InitPlatformData();
 }
 
 WebCursor::WebCursor(const WebCursorInfo& cursor_info)
     : type_(WebCursorInfo::TypePointer) {
+#if defined(OS_WIN)
+  external_cursor_ = NULL;
+#endif
   InitPlatformData();
   InitFromCursorInfo(cursor_info);
 }
@@ -46,7 +52,7 @@ const WebCursor& WebCursor::operator=(const WebCursor& other) {
 void WebCursor::InitFromCursorInfo(const WebCursorInfo& cursor_info) {
   Clear();
 
-#if defined(OS_WIN) && !defined(USE_AURA)
+#if defined(OS_WIN)
   if (cursor_info.externalHandle) {
     InitFromExternalCursor(cursor_info.externalHandle);
     return;
@@ -65,23 +71,23 @@ void WebCursor::GetCursorInfo(WebCursorInfo* cursor_info) const {
   cursor_info->hotSpot = hotspot_;
   ImageFromCustomData(&cursor_info->customImage);
 
-#if defined(OS_WIN) && !defined(USE_AURA)
+#if defined(OS_WIN)
   cursor_info->externalHandle = external_cursor_;
 #endif
 }
 
-bool WebCursor::Deserialize(const Pickle* pickle, void** iter) {
+bool WebCursor::Deserialize(PickleIterator* iter) {
   int type, hotspot_x, hotspot_y, size_x, size_y, data_len;
 
   const char* data;
 
   // Leave |this| unmodified unless we are going to return success.
-  if (!pickle->ReadInt(iter, &type) ||
-      !pickle->ReadInt(iter, &hotspot_x) ||
-      !pickle->ReadInt(iter, &hotspot_y) ||
-      !pickle->ReadLength(iter, &size_x) ||
-      !pickle->ReadLength(iter, &size_y) ||
-      !pickle->ReadData(iter, &data, &data_len))
+  if (!iter->ReadInt(&type) ||
+      !iter->ReadInt(&hotspot_x) ||
+      !iter->ReadInt(&hotspot_y) ||
+      !iter->ReadLength(&size_x) ||
+      !iter->ReadLength(&size_y) ||
+      !iter->ReadData(&data, &data_len))
     return false;
 
   // Ensure the size is sane, and there is enough data.
@@ -111,7 +117,7 @@ bool WebCursor::Deserialize(const Pickle* pickle, void** iter) {
       }
     }
   }
-  return DeserializePlatformData(pickle, iter);
+  return DeserializePlatformData(iter);
 }
 
 bool WebCursor::Serialize(Pickle* pickle) const {
@@ -147,6 +153,45 @@ bool WebCursor::IsEqual(const WebCursor& other) const {
          custom_data_ == other.custom_data_;
 }
 
+#if defined(OS_WIN)
+
+static WebCursorInfo::Type ToCursorType(HCURSOR cursor) {
+  static struct {
+    HCURSOR cursor;
+    WebCursorInfo::Type type;
+  } kStandardCursors[] = {
+    { LoadCursor(NULL, IDC_ARROW),       WebCursorInfo::TypePointer },
+    { LoadCursor(NULL, IDC_CROSS),       WebCursorInfo::TypeCross },
+    { LoadCursor(NULL, IDC_HAND),        WebCursorInfo::TypeHand },
+    { LoadCursor(NULL, IDC_IBEAM),       WebCursorInfo::TypeIBeam },
+    { LoadCursor(NULL, IDC_WAIT),        WebCursorInfo::TypeWait },
+    { LoadCursor(NULL, IDC_HELP),        WebCursorInfo::TypeHelp },
+    { LoadCursor(NULL, IDC_SIZENESW),    WebCursorInfo::TypeNorthEastResize },
+    { LoadCursor(NULL, IDC_SIZENWSE),    WebCursorInfo::TypeNorthWestResize },
+    { LoadCursor(NULL, IDC_SIZENS),      WebCursorInfo::TypeNorthSouthResize },
+    { LoadCursor(NULL, IDC_SIZEWE),      WebCursorInfo::TypeEastWestResize },
+    { LoadCursor(NULL, IDC_SIZEALL),     WebCursorInfo::TypeMove },
+    { LoadCursor(NULL, IDC_APPSTARTING), WebCursorInfo::TypeProgress },
+    { LoadCursor(NULL, IDC_NO),          WebCursorInfo::TypeNotAllowed },
+  };
+  for (int i = 0; i < arraysize(kStandardCursors); ++i) {
+    if (cursor == kStandardCursors[i].cursor)
+      return kStandardCursors[i].type;
+  }
+  return WebCursorInfo::TypeCustom;
+}
+
+void WebCursor::InitFromExternalCursor(HCURSOR cursor) {
+  WebCursorInfo::Type cursor_type = ToCursorType(cursor);
+
+  InitFromCursorInfo(WebCursorInfo(cursor_type));
+
+  if (cursor_type == WebCursorInfo::TypeCustom)
+    external_cursor_ = cursor;
+}
+
+#endif  // defined(OS_WIN)
+
 void WebCursor::Clear() {
   type_ = WebCursorInfo::TypePointer;
   hotspot_.set_x(0);
@@ -165,8 +210,6 @@ void WebCursor::Copy(const WebCursor& other) {
   CopyPlatformData(other);
 }
 
-#if WEBKIT_USING_SKIA
-// The WEBKIT_USING_CG implementation is in webcursor_mac.mm.
 void WebCursor::SetCustomData(const WebImage& image) {
   if (image.isNull())
     return;
@@ -195,7 +238,6 @@ void WebCursor::ImageFromCustomData(WebImage* image) const {
 
   image->assign(bitmap);
 }
-#endif
 
 void WebCursor::ClampHotspot() {
   if (!IsCustom())

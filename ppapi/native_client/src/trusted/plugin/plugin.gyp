@@ -60,6 +60,7 @@
             'target_base': 'ppNaClPlugin',
           },
           'dependencies': [
+            '<(DEPTH)/media/media.gyp:shared_memory_support',
             '<(DEPTH)/native_client/src/shared/gio/gio.gyp:gio',
             '<(DEPTH)/native_client/src/shared/imc/imc.gyp:imc',
             '<(DEPTH)/native_client/src/shared/platform/platform.gyp:platform',
@@ -85,7 +86,6 @@
           'type': 'loadable_module',
           'sources': [
             '<@(common_sources)',
-            'browser_utils.cc',
           ],
           'xcode_settings': {
             'OTHER_LDFLAGS': [
@@ -93,6 +93,7 @@
             ],
           },
           'dependencies': [
+            '<(DEPTH)/media/media.gyp:shared_memory_support',
             '<(DEPTH)/native_client/src/shared/gio/gio.gyp:gio',
             '<(DEPTH)/native_client/src/shared/imc/imc.gyp:imc',
             '<(DEPTH)/native_client/src/shared/platform/platform.gyp:platform',
@@ -119,13 +120,6 @@
                 # A real .dSYM is needed for dump_syms to operate on.
                 'mac_real_dsym': 1,
               },
-            }],
-            ['OS=="win"', {
-              'dependencies': [
-                '<(DEPTH)/native_client/src/trusted/handle_pass/handle_pass.gyp:browserhandle',
-                '<(DEPTH)/native_client/src/trusted/handle_pass/handle_pass.gyp:handle_lookup',
-                '<(DEPTH)/native_client/src/trusted/handle_pass/handle_pass.gyp:ldrhandle',
-              ],
             }],
           ],
         },

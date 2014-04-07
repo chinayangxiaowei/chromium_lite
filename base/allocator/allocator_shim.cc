@@ -5,7 +5,10 @@
 #include "base/allocator/allocator_shim.h"
 
 #include <config.h>
+#include "base/allocator/allocator_extension_thunks.h"
+#include "base/profiler/alternate_timer.h"
 #include "base/sysinfo.h"
+#include "jemalloc.h"
 
 // When defined, different heap allocators can be used via an environment
 // variable set before running the program.  This may reduce the amount
@@ -48,8 +51,8 @@ static Allocator allocator = TCMALLOC;
 // selection of the allocator.  The primary may be used to control overall
 // allocator selection, and the secondary can be used to specify an allocator
 // to use in sub-processes.
-static const char* primary_name = "CHROME_ALLOCATOR";
-static const char* secondary_name = "CHROME_ALLOCATOR_2";
+static const char primary_name[] = "CHROME_ALLOCATOR";
+static const char secondary_name[] = "CHROME_ALLOCATOR_2";
 
 // We include tcmalloc and the win_allocator to get as much inlining as
 // possible.
@@ -63,6 +66,7 @@ void* je_realloc(void* p, size_t s);
 void je_free(void* s);
 size_t je_msize(void* p);
 bool je_malloc_init_hard();
+void* je_memalign(size_t a, size_t s);
 }
 
 extern "C" {
@@ -228,6 +232,52 @@ extern "C" intptr_t _get_heap_handle() {
   return 0;
 }
 
+static bool get_jemalloc_property_thunk(const char* name, size_t* value) {
+  jemalloc_stats_t stats;
+  jemalloc_stats(&stats);
+#define EXTRACT_JEMALLOC_PROPERTY(property) \
+  if (strcmp(name, "jemalloc." #property) == 0) \
+    return *value = stats.property, true;
+  EXTRACT_JEMALLOC_PROPERTY(narenas);
+  EXTRACT_JEMALLOC_PROPERTY(balance_threshold);
+  EXTRACT_JEMALLOC_PROPERTY(quantum);
+  EXTRACT_JEMALLOC_PROPERTY(small_max);
+  EXTRACT_JEMALLOC_PROPERTY(large_max);
+  EXTRACT_JEMALLOC_PROPERTY(chunksize);
+  EXTRACT_JEMALLOC_PROPERTY(dirty_max);
+  EXTRACT_JEMALLOC_PROPERTY(reserve_min);
+  EXTRACT_JEMALLOC_PROPERTY(reserve_max);
+  EXTRACT_JEMALLOC_PROPERTY(mapped);
+  EXTRACT_JEMALLOC_PROPERTY(committed);
+  EXTRACT_JEMALLOC_PROPERTY(allocated);
+  EXTRACT_JEMALLOC_PROPERTY(dirty);
+  EXTRACT_JEMALLOC_PROPERTY(reserve_cur);
+#undef EXTRACT_JEMALLOC_PROPERTY
+  return false;
+}
+
+static bool get_property_thunk(const char* name, size_t* value) {
+#ifdef ENABLE_DYNAMIC_ALLOCATOR_SWITCHING
+  switch (allocator) {
+    case JEMALLOC:
+      return get_jemalloc_property_thunk(name, value);
+    case WINHEAP:
+    case WINLFH:
+      // TODO(alexeif): Implement for other allocators.
+      return false;
+  }
+#endif
+  return MallocExtension::instance()->GetNumericProperty(name, value);
+}
+
+static void get_stats_thunk(char* buffer, int buffer_length) {
+  MallocExtension::instance()->GetStats(buffer, buffer_length);
+}
+
+static void release_free_memory_thunk() {
+  MallocExtension::instance()->ReleaseFreeMemory();
+}
+
 // The CRT heap initialization stub.
 extern "C" int _heap_init() {
 #ifdef ENABLE_DYNAMIC_ALLOCATOR_SWITCHING
@@ -261,6 +311,23 @@ extern "C" int _heap_init() {
   // lifetime.  Trying to teardown at _heap_term() is so late that
   // you can't do anything useful anyway.
   new TCMallocGuard();
+
+  // Provide optional hook for monitoring allocation quantities on a per-thread
+  // basis.  Only set the hook if the environment indicates this needs to be
+  // enabled.
+  const char* profiling =
+      GetenvBeforeMain(tracked_objects::kAlternateProfilerTime);
+  if (profiling && *profiling == '1') {
+    tracked_objects::SetAlternateTimeSource(
+        tcmalloc::ThreadCache::GetBytesAllocatedOnCurrentThread,
+        tracked_objects::TIME_SOURCE_TYPE_TCMALLOC);
+  }
+
+  base::allocator::thunks::SetGetPropertyFunction(get_property_thunk);
+  base::allocator::thunks::SetGetStatsFunction(get_stats_thunk);
+  base::allocator::thunks::SetReleaseFreeMemoryFunction(
+      release_free_memory_thunk);
+
   return 1;
 }
 
@@ -272,6 +339,66 @@ extern "C" void _heap_term() {}
 // the allocators from libcmt, we need to provide this definition so that
 // the rest of the CRT is still usable.
 extern "C" void* _crtheap = reinterpret_cast<void*>(1);
+
+// Provide support for aligned memory through Windows only _aligned_malloc().
+void* _aligned_malloc(size_t size, size_t alignment) {
+  // _aligned_malloc guarantees parameter validation, so do so here.  These
+  // checks are somewhat stricter than _aligned_malloc() since we're effectively
+  // using memalign() under the hood.
+  DCHECK_GT(size, 0U);
+  DCHECK_EQ(alignment & (alignment - 1), 0U);
+  DCHECK_EQ(alignment % sizeof(void*), 0U);
+
+  void* ptr;
+  for (;;) {
+#ifdef ENABLE_DYNAMIC_ALLOCATOR_SWITCHING
+    switch (allocator) {
+      case JEMALLOC:
+        ptr = je_memalign(alignment, size);
+        break;
+      case WINHEAP:
+      case WINLFH:
+        ptr = win_heap_memalign(alignment, size);
+        break;
+      case TCMALLOC:
+      default:
+        ptr = tc_memalign(alignment, size);
+        break;
+    }
+#else
+    // TCMalloc case.
+    ptr = tc_memalign(alignment, size);
+#endif
+    if (ptr) {
+      // Sanity check alignment.
+      DCHECK_EQ(reinterpret_cast<uintptr_t>(ptr) & (alignment - 1), 0U);
+      return ptr;
+    }
+
+    if (!new_mode || !call_new_handler(true))
+      break;
+  }
+  return ptr;
+}
+
+void _aligned_free(void* p) {
+  // Both JEMalloc and TCMalloc return pointers from memalign() that are safe to
+  // use with free().  Pointers allocated with win_heap_memalign() MUST be freed
+  // via win_heap_memalign_free() since the aligned pointer is not the real one.
+#ifdef ENABLE_DYNAMIC_ALLOCATOR_SWITCHING
+  switch (allocator) {
+    case JEMALLOC:
+      je_free(p);
+      return;
+    case WINHEAP:
+    case WINLFH:
+      win_heap_memalign_free(p);
+      return;
+  }
+#endif
+  // TCMalloc case.
+  do_free(p);
+}
 
 #endif  // WIN32
 
@@ -302,5 +429,17 @@ void SetupSubprocessAllocator() {
 #endif  // ENABLE_DYNAMIC_ALLOCATOR_SWITCHING
 }
 
-}  // namespace base.
+void* TCMallocDoMallocForTest(size_t size) {
+  return do_malloc(size);
+}
+
+void TCMallocDoFreeForTest(void* ptr) {
+  do_free(ptr);
+}
+
+size_t ExcludeSpaceForMarkForTest(size_t size) {
+  return ExcludeSpaceForMark(size);
+}
+
 }  // namespace allocator.
+}  // namespace base.

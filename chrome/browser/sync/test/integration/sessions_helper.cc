@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,12 +10,15 @@
 #include "base/test/test_timeouts.h"
 #include "base/time.h"
 #include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/sessions/session_types_test_helper.h"
 #include "chrome/browser/sync/glue/session_model_associator.h"
 #include "chrome/browser/sync/profile_sync_service.h"
+#include "chrome/browser/sync/profile_sync_service_factory.h"
 #include "chrome/browser/sync/profile_sync_service_harness.h"
 #include "chrome/browser/sync/test/integration/sync_datatype_helper.h"
 #include "chrome/browser/sync/test/integration/sync_test.h"
-#include "chrome/browser/ui/tab_contents/tab_contents_wrapper.h"
+#include "chrome/browser/ui/singleton_tabs.h"
+#include "chrome/browser/ui/tab_contents/tab_contents.h"
 #include "chrome/test/base/ui_test_utils.h"
 #include "content/public/browser/browser_thread.h"
 #include "googleurl/src/gurl.h"
@@ -50,12 +53,13 @@ void ScopedWindowMap::Reset(SessionWindowMap* windows) {
 }
 
 bool GetLocalSession(int index, const browser_sync::SyncedSession** session) {
-  return test()->GetProfile(index)->GetProfileSyncService()->
-      GetSessionModelAssociator()->GetLocalSession(session);
+  return ProfileSyncServiceFactory::GetInstance()->GetForProfile(
+      test()->GetProfile(index))->GetSessionModelAssociator()->GetLocalSession(
+          session);
 }
 
 bool ModelAssociatorHasTabWithUrl(int index, const GURL& url) {
-  ui_test_utils::RunAllPendingInMessageLoop();
+  content::RunAllPendingInMessageLoop();
   const browser_sync::SyncedSession* local_session;
   if (!GetLocalSession(index, &local_session)) {
     return false;
@@ -101,7 +105,7 @@ bool ModelAssociatorHasTabWithUrl(int index, const GURL& url) {
 bool OpenTab(int index, const GURL& url) {
   DVLOG(1) << "Opening tab: " << url.spec() << " using profile "
            << index << ".";
-  test()->GetBrowser(index)->ShowSingletonTab(url);
+  chrome::ShowSingletonTab(test()->GetBrowser(index), url);
   return WaitForTabsToLoad(index, std::vector<GURL>(1, url));
 }
 
@@ -111,17 +115,15 @@ bool OpenMultipleTabs(int index, const std::vector<GURL>& urls) {
        it != urls.end(); ++it) {
     DVLOG(1) << "Opening tab: " << it->spec() << " using profile " << index
              << ".";
-    browser->ShowSingletonTab(*it);
+    chrome::ShowSingletonTab(browser, *it);
   }
   return WaitForTabsToLoad(index, urls);
 }
 
 bool WaitForTabsToLoad(int index, const std::vector<GURL>& urls) {
   DVLOG(1) << "Waiting for session to propagate to associator.";
-  static const int timeout_milli = TestTimeouts::action_max_timeout_ms();
   base::TimeTicks start_time = base::TimeTicks::Now();
-  base::TimeTicks end_time = start_time +
-                             base::TimeDelta::FromMilliseconds(timeout_milli);
+  base::TimeTicks end_time = start_time + TestTimeouts::action_max_timeout();
   bool found;
   for (std::vector<GURL>::const_iterator it = urls.begin();
        it != urls.end(); ++it) {
@@ -129,15 +131,16 @@ bool WaitForTabsToLoad(int index, const std::vector<GURL>& urls) {
     while (!found) {
       found = ModelAssociatorHasTabWithUrl(index, *it);
       if (base::TimeTicks::Now() >= end_time) {
-        LOG(ERROR) << "Failed to find all tabs after " << timeout_milli/1000.0
+        LOG(ERROR) << "Failed to find all tabs after "
+                   << TestTimeouts::action_max_timeout().InSecondsF()
                    << " seconds.";
         return false;
       }
       if (!found) {
-        test()->GetProfile(index)->GetProfileSyncService()->
-            GetSessionModelAssociator()->
-            BlockUntilLocalChangeForTest(timeout_milli);
-        ui_test_utils::RunMessageLoop();
+        ProfileSyncServiceFactory::GetInstance()->GetForProfile(
+            test()->GetProfile(index))->GetSessionModelAssociator()->
+            BlockUntilLocalChangeForTest(TestTimeouts::action_max_timeout());
+        content::RunMessageLoop();
       }
     }
   }
@@ -197,14 +200,16 @@ int GetNumWindows(int index) {
 
 int GetNumForeignSessions(int index) {
   SyncedSessionVector sessions;
-  if (!test()->GetProfile(index)->GetProfileSyncService()->
+  if (!ProfileSyncServiceFactory::GetInstance()->GetForProfile(
+          test()->GetProfile(index))->
           GetSessionModelAssociator()->GetAllForeignSessions(&sessions))
     return 0;
   return sessions.size();
 }
 
 bool GetSessionData(int index, SyncedSessionVector* sessions) {
-  if (!test()->GetProfile(index)->GetProfileSyncService()->
+  if (!ProfileSyncServiceFactory::GetInstance()->GetForProfile(
+          test()->GetProfile(index))->
           GetSessionModelAssociator()->GetAllForeignSessions(sessions))
     return false;
   SortSyncedSessions(sessions);
@@ -236,9 +241,12 @@ bool NavigationEquals(const TabNavigation& expected,
                << ", actual " << actual.virtual_url();
     return false;
   }
-  if (expected.referrer().url != actual.referrer().url) {
-    LOG(ERROR) << "Expected referrer " << expected.referrer().url
-               << ", actual " << actual.referrer().url;
+  if (SessionTypesTestHelper::GetReferrer(expected).url !=
+      SessionTypesTestHelper::GetReferrer(actual).url) {
+    LOG(ERROR) << "Expected referrer "
+               << SessionTypesTestHelper::GetReferrer(expected).url
+               << ", actual "
+               << SessionTypesTestHelper::GetReferrer(actual).url;
     return false;
   }
   if (expected.title() != actual.title()) {
@@ -246,9 +254,12 @@ bool NavigationEquals(const TabNavigation& expected,
                << ", actual " << actual.title();
     return false;
   }
-  if (expected.transition() != actual.transition()) {
-    LOG(ERROR) << "Expected transition " << expected.transition()
-               << ", actual " << actual.transition();
+  if (SessionTypesTestHelper::GetTransitionType(expected) !=
+      SessionTypesTestHelper::GetTransitionType(actual)) {
+    LOG(ERROR) << "Expected transition "
+               << SessionTypesTestHelper::GetTransitionType(expected)
+               << ", actual "
+               << SessionTypesTestHelper::GetTransitionType(actual);
     return false;
   }
   return true;
@@ -304,7 +315,8 @@ bool CheckForeignSessionsAgainst(
 }
 
 void DeleteForeignSession(int index, std::string session_tag) {
-  test()->GetProfile(index)->GetProfileSyncService()->
+  ProfileSyncServiceFactory::GetInstance()->GetForProfile(
+      test()->GetProfile(index))->
       GetSessionModelAssociator()->DeleteForeignSession(session_tag);
 }
 

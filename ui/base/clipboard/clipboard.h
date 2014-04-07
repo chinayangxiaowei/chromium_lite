@@ -4,20 +4,33 @@
 
 #ifndef UI_BASE_CLIPBOARD_CLIPBOARD_H_
 #define UI_BASE_CLIPBOARD_CLIPBOARD_H_
-#pragma once
 
 #include <map>
 #include <string>
 #include <vector>
 
+#include "base/compiler_specific.h"
 #include "base/gtest_prod_util.h"
 #include "base/process.h"
 #include "base/shared_memory.h"
 #include "base/string16.h"
+#include "base/threading/thread_checker.h"
+#include "base/threading/platform_thread.h"
 #include "ui/base/ui_export.h"
 
-#if defined(TOOLKIT_USES_GTK)
+#if defined(TOOLKIT_GTK)
 #include <gdk/gdk.h>
+#endif
+
+#if defined(OS_ANDROID)
+#include <jni.h>
+
+#include "base/android/jni_android.h"
+#include "base/android/scoped_java_ref.h"
+#endif
+
+#if defined(USE_AURA) && defined(USE_X11)
+#include "base/memory/scoped_ptr.h"
 #endif
 
 namespace gfx {
@@ -27,7 +40,7 @@ class Size;
 class FilePath;
 class SkBitmap;
 
-#if defined(TOOLKIT_USES_GTK)
+#if defined(TOOLKIT_GTK)
 typedef struct _GtkClipboard GtkClipboard;
 #endif
 
@@ -38,9 +51,18 @@ class NSString;
 #endif
 
 namespace ui {
+class ClipboardTest;
 
-class UI_EXPORT Clipboard {
+class UI_EXPORT Clipboard : NON_EXPORTED_BASE(public base::ThreadChecker) {
  public:
+  // MIME type constants.
+  static const char kMimeTypeText[];
+  static const char kMimeTypeURIList[];
+  static const char kMimeTypeDownloadURL[];
+  static const char kMimeTypeHTML[];
+  static const char kMimeTypeRTF[];
+  static const char kMimeTypePNG[];
+
   // Platform neutral holder for native data representation of a clipboard type.
   struct UI_EXPORT FormatType {
     FormatType();
@@ -48,6 +70,13 @@ class UI_EXPORT Clipboard {
 
     std::string Serialize() const;
     static FormatType Deserialize(const std::string& serialization);
+
+    // FormatType can be used as the key in a map on some platforms.
+#if defined(OS_WIN) || defined(USE_AURA)
+    bool operator<(const FormatType& other) const {
+      return data_ < other.data_;
+    }
+#endif
 
    private:
     friend class Clipboard;
@@ -68,13 +97,20 @@ class UI_EXPORT Clipboard {
     NSString* data_;
 #elif defined(USE_AURA)
     explicit FormatType(const std::string& native_format);
+   public:
     const std::string& ToString() const { return data_; }
+   private:
     std::string data_;
-#elif defined(TOOLKIT_USES_GTK)
+#elif defined(TOOLKIT_GTK)
     explicit FormatType(const std::string& native_format);
     explicit FormatType(const GdkAtom& native_format);
     const GdkAtom& ToGdkAtom() const { return data_; }
     GdkAtom data_;
+#elif defined(OS_ANDROID)
+    explicit FormatType(const std::string& native_format);
+    const std::string& data() const { return data_; }
+    int compare(const std::string& str) const { return data_.compare(str); }
+    std::string data_;
 #else
 #error No FormatType definition.
 #endif
@@ -89,6 +125,7 @@ class UI_EXPORT Clipboard {
   enum ObjectType {
     CBF_TEXT,
     CBF_HTML,
+    CBF_RTF,
     CBF_BOOKMARK,
     CBF_FILES,
     CBF_WEBKIT,
@@ -107,6 +144,7 @@ class UI_EXPORT Clipboard {
   // CBF_TEXT      text         char array
   // CBF_HTML      html         char array
   //               url*         char array
+  // CBF_RTF       data         byte array
   // CBF_BOOKMARK  html         char array
   //               url          char array
   // CBF_LINK      html         char array
@@ -130,9 +168,7 @@ class UI_EXPORT Clipboard {
 
   // Buffer designates which clipboard the action should be applied to.
   // Only platforms that use the X Window System support the selection
-  // buffer. Furthermore we currently only use a buffer other than the
-  // standard buffer when reading from the clipboard so only those
-  // functions accept a buffer parameter.
+  // buffer.
   enum Buffer {
     BUFFER_STANDARD,
     BUFFER_SELECTION,
@@ -142,7 +178,7 @@ class UI_EXPORT Clipboard {
     switch (buffer) {
       case BUFFER_STANDARD:
         return true;
-#if defined(USE_X11) && !defined(USE_AURA)
+#if defined(USE_X11) && !defined(OS_CHROMEOS)
       case BUFFER_SELECTION:
         return true;
 #endif
@@ -154,20 +190,36 @@ class UI_EXPORT Clipboard {
     return static_cast<Buffer>(buffer);
   }
 
-  Clipboard();
-  ~Clipboard();
+  // Sets the list of threads that are allowed to access the clipboard.
+  static void SetAllowedThreads(
+      const std::vector<base::PlatformThreadId>& allowed_threads);
+
+  // Returns the clipboard object for the current thread.
+  //
+  // Most implementations will have at most one clipboard which will live on
+  // the main UI thread, but Windows has tricky semantics where there have to
+  // be two clipboards: one that lives on the UI thread and one that lives on
+  // the IO thread.
+  static Clipboard* GetForCurrentThread();
+
+  // Destroys the clipboard for the current thread. Usually, this will clean up
+  // all clipboards, except on Windows. (Previous code leaks the IO thread
+  // clipboard, so it shouldn't be a problem.)
+  static void DestroyClipboardForCurrentThread();
 
   // Write a bunch of objects to the system clipboard. Copies are made of the
   // contents of |objects|. On Windows they are copied to the system clipboard.
   // On linux they are copied into a structure owned by the Clipboard object and
   // kept until the system clipboard is set again.
-  void WriteObjects(const ObjectMap& objects);
+  void WriteObjects(Buffer buffer, const ObjectMap& objects);
 
   // On Linux/BSD, we need to know when the clipboard is set to a URL.  Most
   // platforms don't care.
-#if defined(OS_WIN) || defined(OS_MACOSX) || defined(USE_AURA)
+#if defined(OS_WIN) || defined(OS_MACOSX)             \
+    || (defined(USE_AURA) && defined(OS_CHROMEOS))    \
+    || defined(OS_ANDROID)
   void DidWriteURL(const std::string& utf8_text) {}
-#else  // !defined(OS_WIN) && !defined(OS_MACOSX)
+#else
   void DidWriteURL(const std::string& utf8_text);
 #endif
 
@@ -178,6 +230,9 @@ class UI_EXPORT Clipboard {
 
   // Tests whether the clipboard contains a certain format
   bool IsFormatAvailable(const FormatType& format, Buffer buffer) const;
+
+  // Clear the clipboard data.
+  void Clear(Buffer buffer);
 
   void ReadAvailableTypes(Buffer buffer, std::vector<string16>* types,
                           bool* contains_filenames) const;
@@ -195,6 +250,10 @@ class UI_EXPORT Clipboard {
   void ReadHTML(Buffer buffer, string16* markup, std::string* src_url,
                 uint32* fragment_start, uint32* fragment_end) const;
 
+  // Reads RTF from the clipboard, if available. Stores the result as a byte
+  // vector.
+  void ReadRTF(Buffer buffer, std::string* result) const;
+
   // Reads an image from the clipboard, if available.
   SkBitmap ReadImage(Buffer buffer) const;
 
@@ -204,11 +263,6 @@ class UI_EXPORT Clipboard {
 
   // Reads a bookmark from the clipboard, if available.
   void ReadBookmark(string16* title, std::string* url) const;
-
-  // Reads a file or group of files from the clipboard, if available, into the
-  // out parameter.
-  void ReadFile(FilePath* file) const;
-  void ReadFiles(std::vector<FilePath>* files) const;
 
   // Reads raw data from the clipboard with the given format type. Stores result
   // as a byte vector.
@@ -230,6 +284,7 @@ class UI_EXPORT Clipboard {
   static const FormatType& GetWebKitSmartPasteFormatType();
   // Win: MS HTML Format, Other: Generic HTML format
   static const FormatType& GetHtmlFormatType();
+  static const FormatType& GetRtfFormatType();
   static const FormatType& GetBitmapFormatType();
   static const FormatType& GetWebCustomDataFormatType();
 
@@ -252,6 +307,10 @@ class UI_EXPORT Clipboard {
  private:
   FRIEND_TEST_ALL_PREFIXES(ClipboardTest, SharedBitmapTest);
   FRIEND_TEST_ALL_PREFIXES(ClipboardTest, EmptyHTMLTest);
+  friend class ClipboardTest;
+
+  Clipboard();
+  ~Clipboard();
 
   void DispatchObject(ObjectType type, const ObjectMapParams& params);
 
@@ -261,6 +320,8 @@ class UI_EXPORT Clipboard {
                  size_t markup_len,
                  const char* url_data,
                  size_t url_len);
+
+  void WriteRTF(const char* rtf_data, size_t data_len);
 
   void WriteBookmark(const char* title_data,
                      size_t title_len,
@@ -297,7 +358,7 @@ class UI_EXPORT Clipboard {
 
   // True if we can create a window.
   bool create_window_;
-#elif defined(TOOLKIT_USES_GTK)
+#elif defined(TOOLKIT_GTK)
   // The public API is via WriteObjects() which dispatches to multiple
   // Write*() calls, but on GTK we must write all the clipboard types
   // in a single GTK call.  To support this we store the current set
@@ -311,7 +372,7 @@ class UI_EXPORT Clipboard {
 
  private:
   // Write changes to gtk clipboard.
-  void SetGtkClipboard();
+  void SetGtkClipboard(Buffer buffer);
   // Insert a mapping into clipboard_data_.
   void InsertMapping(const char* key, char* data, size_t data_len);
 
@@ -321,12 +382,13 @@ class UI_EXPORT Clipboard {
   TargetMap* clipboard_data_;
   GtkClipboard* clipboard_;
   GtkClipboard* primary_selection_;
+#elif defined(USE_AURA) && defined(USE_X11) && !defined(OS_CHROMEOS)
+ private:
+  // We keep our implementation details private because otherwise we bring in
+  // the X11 headers and break chrome compile.
+  class AuraX11Details;
+  scoped_ptr<AuraX11Details> aurax11_details_;
 #endif
-
-  // MIME type constants.
-  static const char kMimeTypeText[];
-  static const char kMimeTypeHTML[];
-  static const char kMimeTypePNG[];
 
   DISALLOW_COPY_AND_ASSIGN(Clipboard);
 };

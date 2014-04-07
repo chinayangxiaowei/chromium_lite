@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -11,19 +11,19 @@
 
 #include "base/bind.h"
 #include "base/command_line.h"
+#include "base/hi_res_timer_manager.h"
 #include "base/message_loop.h"
 #include "base/string_util.h"
 #include "base/system_monitor/system_monitor.h"
 #include "base/threading/platform_thread.h"
 #include "content/common/child_process.h"
-#include "content/common/hi_res_timer_manager.h"
 #include "content/plugin/plugin_thread.h"
 #include "content/public/common/content_switches.h"
 #include "content/public/common/main_function_params.h"
 
 #if defined(OS_WIN)
-#include "content/common/injection_test_dll.h"
-#include "sandbox/src/sandbox.h"
+#include "content/public/common/injection_test_win.h"
+#include "sandbox/win/src/sandbox.h"
 #elif defined(OS_POSIX) && !defined(OS_MACOSX)
 #include "base/global_descriptors_posix.h"
 #include "ipc/ipc_descriptors.h"
@@ -61,51 +61,32 @@ bool IsPluginBuiltInFlash(const CommandLine& cmd_line) {
   return (path.BaseName() == FilePath(L"gcswf32.dll"));
 }
 
-// Before we lock down the flash sandbox, we need to activate
-// the IME machinery. After lock down it seems it is unable
-// to start. Note that we leak the IME context on purpose.
+// Before we lock down the flash sandbox, we need to activate the IME machinery
+// and attach it to this process. (Windows attaches an IME machinery to this
+// process automatically while it creates its first top-level window.) After
+// lock down it seems it is unable to start. Note that we leak the IME context
+// on purpose.
+HWND g_ime_window = NULL;
+
 int PreloadIMEForFlash() {
   HIMC imc = ::ImmCreateContext();
   if (!imc)
     return 0;
   if (::ImmGetOpenStatus(imc))
     return 1;
+  if (!g_ime_window) {
+    g_ime_window = CreateWindowEx(WS_EX_TOOLWINDOW, L"EDIT", L"", WS_POPUP,
+        0, 0, 0, 0, NULL, NULL, GetModuleHandle(NULL), NULL);
+    SetWindowLongPtr(g_ime_window, GWL_EXSTYLE, WS_EX_NOACTIVATE);
+  }
   return 2;
 }
 
-// VirtualAlloc doesn't randomize well, so we use these calls to poke a
-// random-sized hole in the address space and set an event to later remove it.
-void FreeRandomMemoryHole(void *hole) {
-  ::VirtualFree(hole, 0, MEM_RELEASE);
-}
-
-bool CreateRandomMemoryHole() {
-  const uint32_t kRandomValueMax = 8 * 1024;  // Yields a 512mb max hole.
-  const uint32_t kRandomValueDivisor = 8;
-  const uint32_t kMaxWaitSeconds = 18 * 60;  // 18 Minutes in seconds.
-  COMPILE_ASSERT((kMaxWaitSeconds > (kRandomValueMax / kRandomValueDivisor)),
-                 kMaxWaitSeconds_value_too_small);
-
-  uint32_t rand_val;
-  if (rand_s(&rand_val) != S_OK) {
-    DVLOG(ERROR) << "rand_s() failed";
+void DestroyIMEForFlash() {
+  if (g_ime_window) {
+    DestroyWindow(g_ime_window);
+    g_ime_window = NULL;
   }
-
-  rand_val %= kRandomValueMax;
-  // Reserve a (randomly selected) range of address space.
-  if (void* hole = ::VirtualAlloc(NULL, 65536 * (1 + rand_val),
-                                  MEM_RESERVE, PAGE_NOACCESS)) {
-    // Set up an event to remove the memory hole. Base the wait time on the
-    // inverse of the allocation size, meaning a bigger hole gets a shorter
-    // wait (ranging from 1-18 minutes).
-    const uint32_t wait = kMaxWaitSeconds - (rand_val / kRandomValueDivisor);
-    MessageLoop::current()->PostDelayedTask(FROM_HERE,
-        base::Bind(&FreeRandomMemoryHole, hole),
-        base::TimeDelta::FromSeconds(wait));
-    return true;
-  }
-
-  return false;
 }
 
 #endif
@@ -169,11 +150,6 @@ int PluginMain(const content::MainFunctionParams& parameters) {
       if (IsPluginBuiltInFlash(parsed_command_line)) {
         DVLOG(1) << "Sandboxing flash";
 
-        // Poke hole in the address space to improve randomization.
-        if (!CreateRandomMemoryHole()) {
-          DVLOG(ERROR) << "Failed to create random memory hole";
-        }
-
         if (!PreloadIMEForFlash())
           DVLOG(1) << "IME preload failed";
         DelayedLowerToken(target_services);
@@ -206,6 +182,7 @@ int PluginMain(const content::MainFunctionParams& parameters) {
   }
 
 #if defined(OS_WIN)
+  DestroyIMEForFlash();
   CoUninitialize();
 #endif
 

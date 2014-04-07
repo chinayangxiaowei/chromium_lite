@@ -8,6 +8,7 @@
 #include "base/string_number_conversions.h"
 #include "base/utf_string_conversions.h"
 #include "base/values.h"
+#include "chrome/browser/password_manager/password_store_factory.h"
 #include "chrome/browser/prefs/pref_service.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/common/chrome_notification_types.h"
@@ -21,6 +22,8 @@
 #include "net/base/net_util.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "webkit/forms/password_form.h"
+
+namespace options {
 
 PasswordManagerHandler::PasswordManagerHandler()
     : ALLOW_THIS_IN_INITIALIZER_LIST(populater_(this)),
@@ -48,22 +51,10 @@ void PasswordManagerHandler::GetLocalizedValues(
       IDS_PASSWORDS_PAGE_VIEW_SHOW_BUTTON },
     { "passwordHideButton",
       IDS_PASSWORDS_PAGE_VIEW_HIDE_BUTTON },
-    { "passwordsSiteColumn",
-      IDS_PASSWORDS_PAGE_VIEW_SITE_COLUMN },
-    { "passwordsUsernameColumn",
-      IDS_PASSWORDS_PAGE_VIEW_USERNAME_COLUMN },
-    { "passwordsRemoveButton",
-      IDS_PASSWORDS_PAGE_VIEW_REMOVE_BUTTON },
     { "passwordsNoPasswordsDescription",
-     IDS_PASSWORDS_PAGE_VIEW_NO_PASSWORDS_DESCRIPTION },
+      IDS_PASSWORDS_PAGE_VIEW_NO_PASSWORDS_DESCRIPTION },
     { "passwordsNoExceptionsDescription",
-     IDS_PASSWORDS_PAGE_VIEW_NO_EXCEPTIONS_DESCRIPTION },
-    { "passwordsRemoveAllButton",
-      IDS_PASSWORDS_PAGE_VIEW_REMOVE_ALL_BUTTON },
-    { "passwordsRemoveAllTitle",
-      IDS_PASSWORDS_PAGE_VIEW_CAPTION_DELETE_ALL_PASSWORDS },
-    { "passwordsRemoveAllWarning",
-      IDS_PASSWORDS_PAGE_VIEW_TEXT_DELETE_ALL_PASSWORDS },
+      IDS_PASSWORDS_PAGE_VIEW_NO_EXCEPTIONS_DESCRIPTION },
   };
 
   RegisterStrings(localized_strings, resources, arraysize(resources));
@@ -74,7 +65,7 @@ void PasswordManagerHandler::GetLocalizedValues(
                                chrome::kPasswordManagerLearnMoreURL);
 }
 
-void PasswordManagerHandler::Initialize() {
+void PasswordManagerHandler::InitializeHandler() {
   // Due to the way that handlers are (re)initialized under certain types of
   // navigation, we may already be initialized. (See bugs 88986 and 86448.)
   // If this is the case, return immediately. This is a hack.
@@ -113,8 +104,9 @@ void PasswordManagerHandler::OnLoginsChanged() {
 }
 
 PasswordStore* PasswordManagerHandler::GetPasswordStore() {
-  return Profile::FromWebUI(web_ui())->
-      GetPasswordStore(Profile::EXPLICIT_ACCESS);
+  return PasswordStoreFactory::GetForProfile(
+      Profile::FromWebUI(web_ui()),
+      Profile::EXPLICIT_ACCESS);
 }
 
 void PasswordManagerHandler::Observe(
@@ -133,8 +125,8 @@ void PasswordManagerHandler::Observe(
 
 void PasswordManagerHandler::UpdatePasswordLists(const ListValue* args) {
   // Reset the current lists.
-  password_list_.reset();
-  password_exception_list_.reset();
+  password_list_.clear();
+  password_exception_list_.clear();
 
   languages_ = Profile::FromWebUI(web_ui())->GetPrefs()->
       GetString(prefs::kAcceptLanguages);
@@ -191,7 +183,7 @@ void PasswordManagerHandler::SetPasswordList() {
   // If this is the case, initialize on demand. This is a hack.
   // TODO(mdm): remove this hack once it is no longer necessary.
   if (show_passwords_.GetPrefName().empty())
-    Initialize();
+    InitializeHandler();
 
   ListValue entries;
   bool show_passwords = *show_passwords_;
@@ -252,7 +244,7 @@ void PasswordManagerHandler::PasswordListPopulater::
         const std::vector<webkit::forms::PasswordForm*>& result) {
   DCHECK_EQ(pending_login_query_, handle);
   pending_login_query_ = 0;
-  page_->password_list_.reset();
+  page_->password_list_.clear();
   page_->password_list_.insert(page_->password_list_.end(),
                                result.begin(), result.end());
   page_->SetPasswordList();
@@ -281,8 +273,10 @@ void PasswordManagerHandler::PasswordExceptionListPopulater::
         const std::vector<webkit::forms::PasswordForm*>& result) {
   DCHECK_EQ(pending_login_query_, handle);
   pending_login_query_ = 0;
-  page_->password_exception_list_.reset();
+  page_->password_exception_list_.clear();
   page_->password_exception_list_.insert(page_->password_exception_list_.end(),
                                          result.begin(), result.end());
   page_->SetPasswordExceptionList();
 }
+
+}  // namespace options

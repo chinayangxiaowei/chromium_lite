@@ -1,10 +1,9 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CHROME_BROWSER_PROFILES_PROFILE_IMPL_IO_DATA_H_
 #define CHROME_BROWSER_PROFILES_PROFILE_IMPL_IO_DATA_H_
-#pragma once
 
 #include "base/basictypes.h"
 #include "base/callback.h"
@@ -13,14 +12,17 @@
 #include "chrome/browser/profiles/profile_io_data.h"
 
 namespace chrome_browser_net {
-class HttpServerPropertiesManager;
 class Predictor;
-}
+}  // namespace chrome_browser_net
 
 namespace net {
 class HttpServerProperties;
 class HttpTransactionFactory;
 }  // namespace net
+
+namespace quota {
+class SpecialStoragePolicy;
+}  // namespace quota
 
 class ProfileImplIOData : public ProfileIOData {
  public:
@@ -36,24 +38,26 @@ class ProfileImplIOData : public ProfileIOData {
     // Init() must be called before ~Handle(). It records all the necessary
     // parameters needed to construct a ChromeURLRequestContextGetter.
     void Init(const FilePath& cookie_path,
-              const FilePath& origin_bound_cert_path,
+              const FilePath& server_bound_cert_path,
               const FilePath& cache_path,
               int cache_max_size,
               const FilePath& media_cache_path,
               int media_cache_max_size,
               const FilePath& extensions_cookie_path,
-              const FilePath& app_path,
+              const FilePath& profile_path,
+              const FilePath& infinite_cache_path,
               chrome_browser_net::Predictor* predictor,
               PrefService* local_state,
               IOThread* io_thread,
-              bool restore_old_session_cookies);
+              bool restore_old_session_cookies,
+              quota::SpecialStoragePolicy* special_storage_policy);
 
     base::Callback<ChromeURLDataManagerBackend*(void)>
         GetChromeURLDataManagerBackendGetter() const;
-    const content::ResourceContext& GetResourceContext() const;
+    content::ResourceContext* GetResourceContext() const;
     // GetResourceContextNoInit() does not call LazyInitialize() so it can be
     // safely be used during initialization.
-    const content::ResourceContext& GetResourceContextNoInit() const;
+    content::ResourceContext* GetResourceContextNoInit() const;
     scoped_refptr<ChromeURLRequestContextGetter>
         GetMainRequestContextGetter() const;
     scoped_refptr<ChromeURLRequestContextGetter>
@@ -62,6 +66,9 @@ class ProfileImplIOData : public ProfileIOData {
         GetExtensionsRequestContextGetter() const;
     scoped_refptr<ChromeURLRequestContextGetter>
         GetIsolatedAppRequestContextGetter(
+            const std::string& app_id) const;
+    scoped_refptr<ChromeURLRequestContextGetter>
+        GetIsolatedMediaRequestContextGetter(
             const std::string& app_id) const;
 
     void ClearNetworkingHistorySince(base::Time time);
@@ -91,6 +98,8 @@ class ProfileImplIOData : public ProfileIOData {
     mutable scoped_refptr<ChromeURLRequestContextGetter>
         extensions_request_context_getter_;
     mutable ChromeURLRequestContextGetterMap app_request_context_getter_map_;
+    mutable ChromeURLRequestContextGetterMap
+        isolated_media_request_context_getter_map_;
     ProfileImplIOData* const io_data_;
 
     Profile* const profile_;
@@ -99,8 +108,6 @@ class ProfileImplIOData : public ProfileIOData {
 
     DISALLOW_COPY_AND_ASSIGN(Handle);
   };
-
-  net::HttpServerProperties* http_server_properties() const;
 
  private:
   friend class base::RefCountedThreadSafe<ProfileImplIOData>;
@@ -111,13 +118,15 @@ class ProfileImplIOData : public ProfileIOData {
 
     // All of these parameters are intended to be read on the IO thread.
     FilePath cookie_path;
-    FilePath origin_bound_cert_path;
+    FilePath server_bound_cert_path;
     FilePath cache_path;
     int cache_max_size;
     FilePath media_cache_path;
     int media_cache_max_size;
     FilePath extensions_cookie_path;
+    FilePath infinite_cache_path;
     bool restore_old_session_cookies;
+    scoped_refptr<quota::SpecialStoragePolicy> special_storage_policy;
   };
 
   typedef base::hash_map<std::string, net::HttpTransactionFactory* >
@@ -128,33 +137,57 @@ class ProfileImplIOData : public ProfileIOData {
 
   virtual void LazyInitializeInternal(
       ProfileParams* profile_params) const OVERRIDE;
-  virtual scoped_refptr<ChromeURLRequestContext> InitializeAppRequestContext(
-      scoped_refptr<ChromeURLRequestContext> main_context,
+  virtual ChromeURLRequestContext* InitializeAppRequestContext(
+      ChromeURLRequestContext* main_context,
+      const std::string& app_id,
+      scoped_ptr<net::URLRequestJobFactory::Interceptor>
+          protocol_handler_interceptor) const OVERRIDE;
+  virtual ChromeURLRequestContext* InitializeMediaRequestContext(
+      ChromeURLRequestContext* original_context,
       const std::string& app_id) const OVERRIDE;
-  virtual scoped_refptr<ChromeURLRequestContext>
+  virtual ChromeURLRequestContext*
       AcquireMediaRequestContext() const OVERRIDE;
-  virtual scoped_refptr<ChromeURLRequestContext>
+  virtual ChromeURLRequestContext*
       AcquireIsolatedAppRequestContext(
-          scoped_refptr<ChromeURLRequestContext> main_context,
+          ChromeURLRequestContext* main_context,
+          const std::string& app_id,
+          scoped_ptr<net::URLRequestJobFactory::Interceptor>
+              protocol_handler_interceptor) const OVERRIDE;
+  virtual ChromeURLRequestContext*
+      AcquireIsolatedMediaRequestContext(
+          ChromeURLRequestContext* app_context,
           const std::string& app_id) const OVERRIDE;
+  virtual chrome_browser_net::LoadTimeStats* GetLoadTimeStats(
+      IOThread::Globals* io_thread_globals) const OVERRIDE;
+
+  void SetUpJobFactory(net::URLRequestJobFactory* job_factory,
+                       scoped_ptr<net::URLRequestJobFactory::Interceptor>
+                           protocol_handler_interceptor,
+                       net::NetworkDelegate* network_delegate,
+                       net::FtpTransactionFactory* ftp_transaction_factory,
+                       net::FtpAuthCache* ftp_auth_cache) const;
+
+  // Clears the networking history since |time|.
+  void ClearNetworkingHistorySinceOnIOThread(base::Time time);
 
   // Lazy initialization params.
   mutable scoped_ptr<LazyParams> lazy_params_;
 
-  mutable scoped_ptr<chrome_browser_net::HttpServerPropertiesManager>
-      http_server_properties_manager_;
-
-  mutable scoped_refptr<ChromeURLRequestContext> media_request_context_;
-
   mutable scoped_ptr<net::HttpTransactionFactory> main_http_factory_;
-  mutable scoped_ptr<net::HttpTransactionFactory> media_http_factory_;
   mutable scoped_ptr<net::FtpTransactionFactory> ftp_factory_;
 
   mutable scoped_ptr<chrome_browser_net::Predictor> predictor_;
 
+  mutable scoped_ptr<ChromeURLRequestContext> media_request_context_;
+
+  mutable scoped_ptr<net::URLRequestJobFactory> main_job_factory_;
+  mutable scoped_ptr<net::URLRequestJobFactory> media_request_job_factory_;
+  mutable scoped_ptr<net::URLRequestJobFactory> extensions_job_factory_;
+
   // Parameters needed for isolated apps.
-  FilePath app_path_;
-  mutable bool clear_local_state_on_exit_;
+  FilePath profile_path_;
+  int app_cache_max_size_;
+  int app_media_cache_max_size_;
 
   DISALLOW_COPY_AND_ASSIGN(ProfileImplIOData);
 };

@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -11,8 +11,16 @@ namespace remoting {
 UiStrings::UiStrings() :
     direction(LTR),
     product_name(ASCIIToUTF16("Chromoting")),
+    // Audio is currently only supported for Me2Me, and not on Mac. However,
+    // for IT2Me, these strings are replaced during l10n, so it's fine to
+    // hard-code a mention of audio here.
+#if defined(OS_MACOSX)
     disconnect_message(
-        ASCIIToUTF16("Your desktop is currently being shared with $1.")),
+        ASCIIToUTF16("Your desktop is currently shared with $1.")),
+#else
+    disconnect_message(ASCIIToUTF16(
+        "Your desktop and any audio output are currently shared with $1.")),
+#endif
     disconnect_button_text(ASCIIToUTF16("Disconnect")),
     // This is the wrong shortcut on Mac OS X, but remoting_simple_host
     // doesn't have a bundle (and hence no dialog) on that platform and

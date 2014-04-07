@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-# Copyright (c) 2011 The Chromium Authors. All rights reserved.
+# Copyright (c) 2012 The Chromium Authors. All rights reserved.
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
@@ -104,7 +104,6 @@ import threading
 import time
 import traceback
 
-
 """Global list of child PIDs to kill when we die."""
 gChildPIDs = []
 
@@ -125,10 +124,170 @@ gChildPIDs = []
    Details:
      ProcessUtilTest.SpawnChild: chokes in __gcov_fork on 10.6
      IPCFuzzingTest.MsgBadPayloadArgs: ditto
+     FullscreenControllerTest.*: Fails on coverage bots thereby
+     aborting the test.
+     PageCyclerCachedBrowserTest.*: Fails with timeout exceeded error. Timeout
+     can either mean hang, or can mean test takes 10x longer because we're in
+     coverage. Consider if we should increase a test timeout somewhere.
+     FullscreenControllerBrowserTest.*': ditto.
+     PPAPITest.Fullscreen: ditto.
+     OutOfProcessPPAPITest.Fullscreen: ditto.
+     IndexedDBLayoutTest.RegressionTests: ditto.
+     PanelBrowserNavigatorTest.NavigateFromCrashedPanel: Fails on coverage bot.
+     StartupBrowserCreatorTest.OpenAppShortcutPanel: Fails on coverage bot.
+     FilePathWatcherTest.Callback: Fails with error 'Unable to terminate
+     process group' in process_util_posix.cc.
+     SUIDSandboxUITest.testSUIDSandboxEnabled: crbug.com/143250
+     PPAPINaClNewlibTest.Fullscreen: crbug.com/143251
+     PPAPINaClGLibcTest.Fullscreen: ditto.
+     UnloadTest.BrowserCloseInfiniteBeforeUnload: crbug.com/143253
+     PrerenderBrowserTest.PrerenderDelayLoadPlugin: crbug.com/143257
+     PrerenderBrowserTest.PrerenderIframeDelayLoadPlugin: ditto.
+     WindowOpenPanelTest.WindowOpenPanel: crbug.com/143258
+     WindowOpenPanelTest.CloseNonExtensionPanelsOnUninstall: ditto
+     ExtensionManagementApiTest.LaunchPanelApp: crbug.com/143416
+     ClickToPlayPluginTest.Basic: crbug.com/143417
+     ClickToPlayPluginTest.LoadAllBlockedPlugins: ditto.
+     ClickToPlayPluginTest.NoCallbackAtLoad: ditto.
+     WebGLConformanceTests.conformance_attribs_gl_enable_vertex_attrib: Fails
+     with timeout (45000 ms) exceeded error. crbug.com/143248
+     WebGLConformanceTests.conformance_attribs_gl_disabled_vertex_attrib:
+     ditto.
+     WebGLConformanceTests.conformance_attribs_gl_vertex_attrib_zero_issues:
+     ditto.
+     WebGLConformanceTests.conformance_attribs_gl_vertex_attrib: ditto.
+     WebGLConformanceTests.conformance_attribs_gl_vertexattribpointer_offsets:
+     ditto.
+     WebGLConformanceTests.conformance_attribs_gl_vertexattribpointer: ditto.
+     WebGLConformanceTests.conformance_buffers_buffer_bind_test: After
+     disabling WebGLConformanceTests specified above, this test fails when run
+     on local machine.
+     WebGLConformanceTests.conformance_buffers_buffer_data_array_buffer: ditto.
+     WebGLConformanceTests.conformance_buffers_index_validation_copies_indices:
+     ditto.
+     WebGLConformanceTests.
+     conformance_buffers_index_validation_crash_with_buffer_sub_data: ditto.
+     WebGLConformanceTests.
+     conformance_buffers_index_validation_verifies_too_many_indices: ditto.
+     WebGLConformanceTests.
+     conformance_buffers_index_validation_with_resized_buffer: ditto.
+     WebGLConformanceTests.conformance_canvas_buffer_offscreen_test: ditto.
+     WebGLConformanceTests.conformance_canvas_buffer_preserve_test: ditto.
+     WebGLConformanceTests.conformance_canvas_canvas_test: ditto.
+     WebGLConformanceTests.conformance_canvas_canvas_zero_size: ditto.
+     WebGLConformanceTests.
+     conformance_canvas_drawingbuffer_static_canvas_test: ditto.
+     WebGLConformanceTests.conformance_canvas_drawingbuffer_test: ditto.
+     PageCycler*.*: Fails on coverage bot with "Missing test directory
+     /....../slave/coverage-dbg-linux/build/src/data/page_cycler/moz" error.
+     *FrameRateCompositingTest.*: Fails with
+     "FATAL:chrome_content_browser_client.cc(893)] Check failed:
+     command_line->HasSwitch(switches::kEnableStatsTable)."
+     *FrameRateNoVsyncCanvasInternalTest.*: ditto.
+     *FrameRateGpuCanvasInternalTest.*: ditto.
+     IndexedDBTest.Perf: Fails with 'Timeout reached in WaitUntilCookieValue'
+     error.
+     TwoClientPasswordsSyncTest.DeleteAll: Fails on coverage bot.
+     MigrationTwoClientTest.MigrationHellWithoutNigori: Fails with timeout
+     (45000 ms) exceeded error.
+     TwoClientSessionsSyncTest.DeleteActiveSession: ditto.
+     MultipleClientSessionsSyncTest.EncryptedAndChanged: ditto.
+     MigrationSingleClientTest.AllTypesIndividuallyTriggerNotification: ditto.
+     *OldPanelResizeBrowserTest.*: crbug.com/143247
+     *OldPanelDragBrowserTest.*: ditto.
+     *OldPanelBrowserTest.*: ditto.
+     *OldPanelAndDesktopNotificationTest.*: ditto.
+     *OldDockedPanelBrowserTest.*: ditto.
+     *OldDetachedPanelBrowserTest.*: ditto.
+     PanelDragBrowserTest.AttachWithSqueeze: ditto.
+     *PanelBrowserTest.*: ditto.
+     *DockedPanelBrowserTest.*: ditto.
+     *DetachedPanelBrowserTest.*: ditto.
+     AutomatedUITest.TheOneAndOnlyTest: crbug.com/143419
+     AutomatedUITestBase.DragOut: ditto
+
 """
 gTestExclusions = {
   'darwin2': { 'base_unittests': ('ProcessUtilTest.SpawnChild',),
-               'ipc_tests': ('IPCFuzzingTest.MsgBadPayloadArgs',), }
+               'ipc_tests': ('IPCFuzzingTest.MsgBadPayloadArgs',), },
+  'linux2': {
+    'browser_tests':
+        ('*FullscreenControllerTest.*',
+         '*PageCyclerCachedBrowserTest.*',
+         '*FullscreenControllerBrowserTest.*',
+         'PPAPITest.Fullscreen',
+         'OutOfProcessPPAPITest.Fullscreen',
+         'IndexedDBLayoutTest.RegressionTests',
+         'PanelBrowserNavigatorTest.NavigateFromCrashedPanel',
+         'StartupBrowserCreatorTest.OpenAppShortcutPanel',
+         'FilePathWatcherTest.Callback',
+         'SUIDSandboxUITest.testSUIDSandboxEnabled',
+         'PPAPINaClNewlibTest.Fullscreen',
+         'PPAPINaClGLibcTest.Fullscreen',
+         'UnloadTest.BrowserCloseInfiniteBeforeUnload',
+         'PrerenderBrowserTest.PrerenderDelayLoadPlugin',
+         'PrerenderBrowserTest.PrerenderIframeDelayLoadPlugin',
+         'WindowOpenPanelTest.WindowOpenPanel',
+         'WindowOpenPanelTest.CloseNonExtensionPanelsOnUninstall',
+         'ExtensionManagementApiTest.LaunchPanelApp',
+         'ClickToPlayPluginTest.Basic',
+         'ClickToPlayPluginTest.LoadAllBlockedPlugins',
+         'ClickToPlayPluginTest.NoCallbackAtLoad',),
+    'gpu_tests':
+        ('WebGLConformanceTests.conformance_attribs_gl_enable_vertex_attrib',
+         'WebGLConformanceTests.'
+             'conformance_attribs_gl_disabled_vertex_attrib',
+         'WebGLConformanceTests.'
+             'conformance_attribs_gl_vertex_attrib_zero_issues',
+         'WebGLConformanceTests.conformance_attribs_gl_vertex_attrib',
+         'WebGLConformanceTests.'
+             'conformance_attribs_gl_vertexattribpointer_offsets',
+         'WebGLConformanceTests.conformance_attribs_gl_vertexattribpointer',
+         'WebGLConformanceTests.conformance_buffers_buffer_bind_test',
+         'WebGLConformanceTests.'
+             'conformance_buffers_buffer_data_array_buffer',
+         'WebGLConformanceTests.'
+             'conformance_buffers_index_validation_copies_indices',
+         'WebGLConformanceTests.'
+             'conformance_buffers_index_validation_crash_with_buffer_sub_data',
+         'WebGLConformanceTests.'
+             'conformance_buffers_index_validation_verifies_too_many_indices',
+         'WebGLConformanceTests.'
+             'conformance_buffers_index_validation_with_resized_buffer',
+         'WebGLConformanceTests.conformance_canvas_buffer_offscreen_test',
+         'WebGLConformanceTests.conformance_canvas_buffer_preserve_test',
+         'WebGLConformanceTests.conformance_canvas_canvas_test',
+         'WebGLConformanceTests.conformance_canvas_canvas_zero_size',
+         'WebGLConformanceTests.'
+             'conformance_canvas_drawingbuffer_static_canvas_test',
+         'WebGLConformanceTests.conformance_canvas_drawingbuffer_test',),
+    'performance_ui_tests':
+        ('*PageCycler*.*',
+         '*FrameRateCompositingTest.*',
+         '*FrameRateNoVsyncCanvasInternalTest.*',
+         '*FrameRateGpuCanvasInternalTest.*',
+         'IndexedDBTest.Perf',),
+    'sync_integration_tests':
+        ('TwoClientPasswordsSyncTest.DeleteAll',
+         'MigrationTwoClientTest.MigrationHellWithoutNigori',
+         'TwoClientSessionsSyncTest.DeleteActiveSession',
+         'MultipleClientSessionsSyncTest.EncryptedAndChanged',
+         'MigrationSingleClientTest.'
+         'AllTypesIndividuallyTriggerNotification',),
+    'interactive_ui_tests':
+        ('*OldPanelResizeBrowserTest.*',
+         '*OldPanelDragBrowserTest.*',
+         '*OldPanelBrowserTest.*',
+         '*OldPanelAndDesktopNotificationTest.*',
+         '*OldDockedPanelBrowserTest.*',
+         '*OldDetachedPanelBrowserTest.*',
+         'PanelDragBrowserTest.AttachWithSqueeze',
+         '*PanelBrowserTest.*',
+         '*DockedPanelBrowserTest.*',
+         '*DetachedPanelBrowserTest.*',),
+    'automated_ui_tests':
+        ('AutomatedUITest.TheOneAndOnlyTest',
+         'AutomatedUITestBase.DragOut',), },
 }
 
 
@@ -319,7 +478,7 @@ class Coverage(object):
     self.src_root = options.src_root
     self.FindPrograms()
     self.ConfirmPlatformAndPaths()
-    self.tests = []
+    self.tests = []             # This can be a list of strings, lists or both.
     self.xvfb_pid = 0
     self.test_files = []        # List of files with test specifications.
     self.test_filters = {}      # Mapping from testname->--gtest_filter arg.
@@ -483,12 +642,22 @@ class Coverage(object):
       if mo:
         gtest_filter = mo.group(2)
         testname = mo.group(1)
-
       if ':' in testname:
         testname = testname.split(':')[1]
+      # We need 'pyautolib' to run pyauto tests and 'pyautolib' itself is not an
+      # executable. So skip this test from adding into coverage_bundles.py.
+      if testname == 'pyautolib':
+        continue
       self.tests += [os.path.join(self.directory, testname)]
       if gtest_filter:
         self.test_filters[testname] = gtest_filter
+
+    # Add 'src/test/functional/pyauto_functional.py' to self.tests.
+    # This file with '-v --suite=CODE_COVERAGE' arguments runs all pyauto tests.
+    # Pyauto tests are failing randomly on coverage bots. So excluding them.
+    # self.tests += [['src/chrome/test/functional/pyauto_functional.py',
+    #                '-v',
+    #                '--suite=CODE_COVERAGE']]
 
     # Medium tests?
     # Not sure all of these work yet (e.g. page_cycler_tests)
@@ -630,8 +799,8 @@ class Coverage(object):
     positive_gfilter_list = []
     negative_gfilter_list = []
 
-    # Exclude all flaky and failing tests; they don't count for code coverage.
-    negative_gfilter_list += ('*.FLAKY_*', '*.FAILS_*')
+    # Run all tests including flaky tests to get the overall coverage.
+    negative_gfilter_list += ['*.FAILS_*']
 
     if not self.options.no_exclusions:
       exclusions = excl or gTestExclusions
@@ -673,28 +842,30 @@ class Coverage(object):
     """Run all unit tests and generate appropriate lcov files."""
     self.BeforeRunAllTests()
     for fulltest in self.tests:
-      if not os.path.exists(fulltest):
-        logging.info(fulltest + ' does not exist')
-        if self.options.strict:
-          sys.exit(2)
-      else:
-        logging.info('%s path exists' % fulltest)
-      cmdlist = [fulltest, '--gtest_print_time']
+      if type(fulltest) is str:
+        if not os.path.exists(fulltest):
+          logging.info(fulltest + ' does not exist')
+          if self.options.strict:
+            sys.exit(2)
+        else:
+          logging.info('%s path exists' % fulltest)
+        cmdlist = [fulltest, '--gtest_print_time']
 
-      # If asked, make this REAL fast for testing.
-      if self.options.fast_test:
-        logging.info('Running as a FAST test for testing')
-        # cmdlist.append('--gtest_filter=RenderWidgetHost*')
-        # cmdlist.append('--gtest_filter=CommandLine*')
-        cmdlist.append('--gtest_filter=C*')
+        # If asked, make this REAL fast for testing.
+        if self.options.fast_test:
+          logging.info('Running as a FAST test for testing')
+          # cmdlist.append('--gtest_filter=RenderWidgetHost*')
+          # cmdlist.append('--gtest_filter=CommandLine*')
+          cmdlist.append('--gtest_filter=C*')
 
-      # Possibly add a test-specific --gtest_filter
-      filter = self.GtestFilter(fulltest)
-      if filter:
-        cmdlist.append(filter)
+        # Possibly add a test-specific --gtest_filter
+        filter = self.GtestFilter(fulltest)
+        if filter:
+          cmdlist.append(filter)
+      elif type(fulltest) is list:
+        cmdlist = fulltest
 
       self.BeforeRunOneTest(fulltest)
-
       logging.info('Running test ' + str(cmdlist))
       try:
         retcode = self.Run(cmdlist, ignore_retcode=True)

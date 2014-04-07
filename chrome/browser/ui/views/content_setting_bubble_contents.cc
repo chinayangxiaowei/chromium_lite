@@ -4,10 +4,6 @@
 
 #include "chrome/browser/ui/views/content_setting_bubble_contents.h"
 
-#if defined(TOOLKIT_USES_GTK)
-#include <gdk/gdk.h>
-#endif
-
 #include <algorithm>
 #include <set>
 #include <string>
@@ -15,7 +11,6 @@
 
 #include "base/utf_string_conversions.h"
 #include "chrome/browser/content_settings/host_content_settings_map.h"
-#include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/content_settings/content_setting_bubble_model.h"
 #include "chrome/browser/ui/views/browser_dialogs.h"
 #include "content/public/browser/notification_source.h"
@@ -32,12 +27,8 @@
 #include "ui/views/layout/grid_layout.h"
 #include "ui/views/layout/layout_constants.h"
 
-#if defined(TOOLKIT_USES_GTK)
-#include "ui/gfx/gtk_util.h"
-#endif
-
 #if defined(USE_AURA)
-#include "ui/aura/cursor.h"
+#include "ui/base/cursor/cursor.h"
 #endif
 
 // If we don't clamp the maximum width, then very long URLs and titles can make
@@ -60,9 +51,9 @@ class ContentSettingBubbleContents::Favicon : public views::ImageView {
 
  private:
   // views::View overrides:
-  virtual bool OnMousePressed(const views::MouseEvent& event) OVERRIDE;
-  virtual void OnMouseReleased(const views::MouseEvent& event) OVERRIDE;
-  virtual gfx::NativeCursor GetCursor(const views::MouseEvent& event) OVERRIDE;
+  virtual bool OnMousePressed(const ui::MouseEvent& event) OVERRIDE;
+  virtual void OnMouseReleased(const ui::MouseEvent& event) OVERRIDE;
+  virtual gfx::NativeCursor GetCursor(const ui::MouseEvent& event) OVERRIDE;
 
   ContentSettingBubbleContents* parent_;
   views::Link* link_;
@@ -81,43 +72,42 @@ ContentSettingBubbleContents::Favicon::~Favicon() {
 }
 
 bool ContentSettingBubbleContents::Favicon::OnMousePressed(
-    const views::MouseEvent& event) {
+    const ui::MouseEvent& event) {
   return event.IsLeftMouseButton() || event.IsMiddleMouseButton();
 }
 
 void ContentSettingBubbleContents::Favicon::OnMouseReleased(
-    const views::MouseEvent& event) {
+    const ui::MouseEvent& event) {
   if ((event.IsLeftMouseButton() || event.IsMiddleMouseButton()) &&
-     HitTest(event.location())) {
+     HitTestPoint(event.location())) {
     parent_->LinkClicked(link_, event.flags());
   }
 }
 
 gfx::NativeCursor ContentSettingBubbleContents::Favicon::GetCursor(
-    const views::MouseEvent& event) {
+    const ui::MouseEvent& event) {
 #if defined(USE_AURA)
-  return aura::kCursorHand;
+  return ui::kCursorHand;
 #elif defined(OS_WIN)
   static HCURSOR g_hand_cursor = LoadCursor(NULL, IDC_HAND);
   return g_hand_cursor;
-#elif defined(TOOLKIT_USES_GTK)
-  return gfx::GetCursor(GDK_HAND2);
 #endif
 }
 
 ContentSettingBubbleContents::ContentSettingBubbleContents(
     ContentSettingBubbleModel* content_setting_bubble_model,
-    Profile* profile,
     WebContents* web_contents,
     views::View* anchor_view,
     views::BubbleBorder::ArrowLocation arrow_location)
     : BubbleDelegateView(anchor_view, arrow_location),
       content_setting_bubble_model_(content_setting_bubble_model),
-      profile_(profile),
       web_contents_(web_contents),
       custom_link_(NULL),
       manage_link_(NULL),
       close_button_(NULL) {
+  // Compensate for built-in vertical padding in the anchor view's image.
+  set_anchor_insets(gfx::Insets(5, 0, 5, 0));
+
   registrar_.Add(this, content::NOTIFICATION_WEB_CONTENTS_DESTROYED,
                  content::Source<WebContents>(web_contents));
 }
@@ -133,12 +123,6 @@ gfx::Size ContentSettingBubbleContents::GetPreferredSize() {
       kMinMultiLineContentsWidth : preferred_size.width();
   preferred_size.set_width(std::min(preferred_width, kMaxContentsWidth));
   return preferred_size;
-}
-
-gfx::Rect ContentSettingBubbleContents::GetAnchorRect() {
-  gfx::Rect rect(BubbleDelegateView::GetAnchorRect());
-  rect.Inset(0, anchor_view() ? 5 : 0);
-  return rect;
 }
 
 void ContentSettingBubbleContents::Init() {
@@ -168,12 +152,11 @@ void ContentSettingBubbleContents::Init() {
   if (!plugins.empty()) {
     if (!bubble_content_empty)
       layout->AddPaddingRow(0, views::kRelatedControlVerticalSpacing);
-    for (std::set<std::string>::const_iterator it = plugins.begin();
-        it != plugins.end(); ++it) {
-      string16 name =
-          PluginService::GetInstance()->GetPluginGroupName(*it);
+    for (std::set<std::string>::const_iterator i(plugins.begin());
+         i != plugins.end(); ++i) {
+      string16 name = PluginService::GetInstance()->GetPluginGroupName(*i);
       if (name.empty())
-        name = UTF8ToUTF16(*it);
+        name = UTF8ToUTF16(*i);
       layout->StartRow(0, single_column_set_id);
       layout->AddView(new views::Label(name));
       bubble_content_empty = false;
@@ -201,9 +184,9 @@ void ContentSettingBubbleContents::Init() {
 
       views::Link* link = new views::Link(UTF8ToUTF16(i->title));
       link->set_listener(this);
-      link->SetElideInMiddle(true);
+      link->SetElideBehavior(views::Label::ELIDE_IN_MIDDLE);
       popup_links_[link] = i - bubble_content.popup_items.begin();
-      layout->AddView(new Favicon((*i).bitmap, this, link));
+      layout->AddView(new Favicon(i->bitmap, this, link));
       layout->AddView(link);
       bubble_content_empty = false;
     }
@@ -214,10 +197,11 @@ void ContentSettingBubbleContents::Init() {
   if (!radio_group.radio_items.empty()) {
     if (!bubble_content_empty)
       layout->AddPaddingRow(0, views::kRelatedControlVerticalSpacing);
-    for (ContentSettingBubbleModel::RadioItems::const_iterator i =
-         radio_group.radio_items.begin();
+    for (ContentSettingBubbleModel::RadioItems::const_iterator i(
+         radio_group.radio_items.begin());
          i != radio_group.radio_items.end(); ++i) {
       views::RadioButton* radio = new views::RadioButton(UTF8ToUTF16(*i), 0);
+      radio->SetEnabled(bubble_content.radio_group_enabled);
       radio->set_listener(this);
       radio_group_.push_back(radio);
       layout->StartRow(0, single_column_set_id);
@@ -240,8 +224,8 @@ void ContentSettingBubbleContents::Init() {
       0, views::kPanelHorizIndentation);
   indented_single_column_set->AddColumn(GridLayout::LEADING, GridLayout::FILL,
                                         1, GridLayout::USE_PREF, 0, 0);
-  for (std::vector<ContentSettingBubbleModel::DomainList>::const_iterator i =
-       bubble_content.domain_lists.begin();
+  for (std::vector<ContentSettingBubbleModel::DomainList>::const_iterator i(
+       bubble_content.domain_lists.begin());
        i != bubble_content.domain_lists.end(); ++i) {
     layout->StartRow(0, single_column_set_id);
     views::Label* section_title = new views::Label(UTF8ToUTF16(i->title));
@@ -296,13 +280,14 @@ void ContentSettingBubbleContents::Init() {
 }
 
 void ContentSettingBubbleContents::ButtonPressed(views::Button* sender,
-                                                 const views::Event& event) {
+                                                 const ui::Event& event) {
   if (sender == close_button_) {
+    content_setting_bubble_model_->OnDoneClicked();
     StartFade(false);
     return;
   }
 
-  for (RadioGroup::const_iterator i = radio_group_.begin();
+  for (RadioGroup::const_iterator i(radio_group_.begin());
        i != radio_group_.end(); ++i) {
     if (sender == *i) {
       content_setting_bubble_model_->OnRadioClicked(i - radio_group_.begin());

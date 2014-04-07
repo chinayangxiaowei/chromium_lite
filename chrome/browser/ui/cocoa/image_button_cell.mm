@@ -6,7 +6,6 @@
 
 #include "base/logging.h"
 #import "chrome/browser/themes/theme_service.h"
-#import "chrome/browser/ui/cocoa/image_utils.h"
 #import "chrome/browser/ui/cocoa/themed_window.h"
 #include "ui/gfx/image/image.h"
 
@@ -68,22 +67,23 @@ const CGFloat kImageNoFocusAlpha = 0.65;
   NSRect imageRect;
   imageRect.size = [image size];
   imageRect.origin.x = cellFrame.origin.x +
-    roundf((cellFrame.size.width - imageRect.size.width) / 2.0);
+    roundf((NSWidth(cellFrame) - NSWidth(imageRect)) / 2.0);
   imageRect.origin.y = cellFrame.origin.y +
-    roundf((cellFrame.size.height - imageRect.size.height) / 2.0);
+    roundf((NSHeight(cellFrame) - NSHeight(imageRect)) / 2.0);
 
   [image drawInRect:imageRect
            fromRect:NSZeroRect
           operation:NSCompositeSourceOver
            fraction:alpha
-       neverFlipped:YES];
+     respectFlipped:YES
+              hints:nil];
 
   if (overlayImageID_) {
     NSImage* overlayImage = [self imageForID:overlayImageID_
                                  controlView:controlView];
     NSRect overlayRect;
     overlayRect.size = [overlayImage size];
-    overlayRect.origin.x = NSMaxX(imageRect) - overlayRect.size.width +
+    overlayRect.origin.x = NSMaxX(imageRect) - NSWidth(overlayRect) +
                            kOverlayOffsetX;
     overlayRect.origin.y = NSMinY(imageRect) + kOverlayOffsetY;
 
@@ -91,7 +91,8 @@ const CGFloat kImageNoFocusAlpha = 0.65;
                     fromRect:NSZeroRect
                    operation:NSCompositeSourceOver
                     fraction:1.0
-                neverFlipped:YES];
+              respectFlipped:YES
+                       hints:nil];
   }
 }
 

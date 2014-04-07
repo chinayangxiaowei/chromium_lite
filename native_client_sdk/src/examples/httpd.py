@@ -18,6 +18,22 @@ import SocketServer
 import sys
 import urlparse
 
+
+EXAMPLE_PATH = os.path.dirname(os.path.abspath(__file__))
+NACL_SDK_ROOT = os.getenv('NACL_SDK_ROOT', os.path.dirname(EXAMPLE_PATH))
+
+
+if os.path.exists(NACL_SDK_ROOT):
+  sys.path.append(os.path.join(NACL_SDK_ROOT, 'tools'))
+  # pylint: disable=F0401
+  import decode_dump
+  import getos
+else:
+  NACL_SDK_ROOT = None
+
+last_nexe = None
+last_nmf = None
+
 logging.getLogger().setLevel(logging.INFO)
 
 # Using 'localhost' means that we only accept connections
@@ -48,10 +64,14 @@ def SanityCheckDirectory():
 # faster responses.
 class QuittableHTTPServer(SocketServer.ThreadingMixIn,
                           BaseHTTPServer.HTTPServer):
+  is_running = False
+
   def serve_forever(self, timeout=0.5):
     self.is_running = True
     self.timeout = timeout
     while self.is_running:
+      sys.stderr.flush()
+      sys.stdout.flush()
       self.handle_request()
 
   def shutdown(self):
@@ -60,20 +80,67 @@ class QuittableHTTPServer(SocketServer.ThreadingMixIn,
 
 
 # "Safely" split a string at |sep| into a [key, value] pair.  If |sep| does not
-# exist in |str|, then the entire |str| is the key and the value is set to an
+# exist in |pair|, then the entire |pair| is the key and the value is set to an
 # empty string.
-def KeyValuePair(str, sep='='):
-  if sep in str:
-    return str.split(sep)
+def KeyValuePair(pair, sep='='):
+  if sep in pair:
+    return pair.split(sep)
   else:
-    return [str, '']
+    return [pair, '']
 
 
 # A small handler that looks for '?quit=1' query in the path and shuts itself
 # down if it finds that parameter.
 class QuittableHTTPHandler(SimpleHTTPServer.SimpleHTTPRequestHandler):
+  def send_head(self):
+    """Common code for GET and HEAD commands.
+
+    This sends the response code and MIME headers.
+
+    Return value is either a file object (which has to be copied
+    to the outputfile by the caller unless the command was HEAD,
+    and must be closed by the caller under all circumstances), or
+    None, in which case the caller has nothing further to do.
+
+    """
+    path = self.translate_path(self.path)
+    f = None
+    if os.path.isdir(path):
+      if not self.path.endswith('/'):
+        # redirect browser - doing basically what apache does
+        self.send_response(301)
+        self.send_header("Location", self.path + "/")
+        self.end_headers()
+        return None
+      for index in "index.html", "index.htm":
+        index = os.path.join(path, index)
+        if os.path.exists(index):
+          path = index
+          break
+      else:
+        return self.list_directory(path)
+    ctype = self.guess_type(path)
+    try:
+      # Always read in binary mode. Opening files in text mode may cause
+      # newline translations, making the actual size of the content
+      # transmitted *less* than the content-length!
+      f = open(path, 'rb')
+    except IOError:
+      self.send_error(404, "File not found")
+      return None
+    self.send_response(200)
+    self.send_header("Content-type", ctype)
+    fs = os.fstat(f.fileno())
+    self.send_header("Content-Length", str(fs[6]))
+    self.send_header("Last-Modified", self.date_time_string(fs.st_mtime))
+    self.send_header('Cache-Control','no-cache, must-revalidate')
+    self.send_header('Expires','-1')
+    self.end_headers()
+    return f
+
   def do_GET(self):
-    (_, _, _, query, _) = urlparse.urlsplit(self.path)
+    global last_nexe, last_nmf
+    (_, _, path, query, _) = urlparse.urlsplit(self.path)
     url_params = dict([KeyValuePair(key_value)
                       for key_value in query.split('&')])
     if 'quit' in url_params and '1' in url_params['quit']:
@@ -84,7 +151,29 @@ class QuittableHTTPHandler(SimpleHTTPServer.SimpleHTTPRequestHandler):
       self.server.shutdown()
       return
 
+    if path.endswith('.nexe'):
+      last_nexe = path
+    if path.endswith('.nmf'):
+      last_nmf = path
+
     SimpleHTTPServer.SimpleHTTPRequestHandler.do_GET(self)
+
+  def do_POST(self):
+    if 'Content-Length' in self.headers:
+      if not NACL_SDK_ROOT:
+        self.wfile('Could not find NACL_SDK_ROOT to decode trace.')
+        return
+      data = self.rfile.read(int(self.headers['Content-Length']))
+      nexe = '.' + last_nexe
+      nmf = '.' + last_nmf
+      addr = os.path.join(NACL_SDK_ROOT, 'toolchain', 
+                          getos.GetPlatform() + '_x86_newlib', 
+                          'bin', 'x86_64-nacl-addr2line')
+      decoder = decode_dump.CoreDecoder(nexe, nmf, addr, None, None)
+      info = decoder.Decode(data)
+      trace = decoder.StackTrace(info)
+      decoder.PrintTrace(trace, sys.stdout)
+      decoder.PrintTrace(trace, self.wfile)
 
 
 def Run(server_address,

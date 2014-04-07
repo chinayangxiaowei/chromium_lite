@@ -4,11 +4,12 @@
 
 #ifndef UI_VIEWS_BORDER_H_
 #define UI_VIEWS_BORDER_H_
-#pragma once
 
+#include "base/basictypes.h"
 #include "third_party/skia/include/core/SkColor.h"
 #include "ui/gfx/insets.h"
 #include "ui/views/view.h"
+#include "ui/views/views_export.h"
 
 namespace gfx{
 class Canvas;
@@ -47,6 +48,14 @@ class VIEWS_EXPORT Border {
   // Creates a border for reserving space. The returned border does not
   // paint anything.
   static Border* CreateEmptyBorder(int top, int left, int bottom, int right);
+
+  // Creates a border of the specified color, and specified thickness on each
+  // side.
+  static Border* CreateSolidSidedBorder(int top,
+                                        int left,
+                                        int bottom,
+                                        int right,
+                                        SkColor color);
 
   // Creates a Border from the specified Painter. The border owns the painter,
   // thus the painter is deleted when the Border is deleted.

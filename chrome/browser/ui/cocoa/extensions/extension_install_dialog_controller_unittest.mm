@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,13 +7,13 @@
 #include "base/compiler_specific.h"
 #include "base/file_path.h"
 #include "base/file_util.h"
-#include "base/json/json_value_serializer.h"
+#include "base/json/json_file_value_serializer.h"
 #import "base/memory/scoped_nsobject.h"
 #include "base/path_service.h"
 #include "base/sys_string_conversions.h"
 #include "base/utf_string_conversions.h"
 #include "base/values.h"
-#import "chrome/browser/extensions/extension_install_ui.h"
+#import "chrome/browser/extensions/extension_install_prompt.h"
 #include "chrome/browser/ui/cocoa/cocoa_profile_test.h"
 #import "chrome/browser/ui/cocoa/extensions/extension_install_dialog_controller.h"
 #include "chrome/common/chrome_paths.h"
@@ -22,8 +22,10 @@
 #import "testing/gtest_mac.h"
 #include "testing/platform_test.h"
 #include "third_party/skia/include/core/SkBitmap.h"
+#include "ui/gfx/image/image.h"
 #include "webkit/glue/image_decoder.h"
 
+using extensions::Extension;
 
 // Base class for our tests.
 class ExtensionInstallDialogControllerTest : public CocoaProfileTest {
@@ -44,9 +46,10 @@ public:
                                 &file_contents);
 
     webkit_glue::ImageDecoder decoder;
-    icon_ = decoder.Decode(
+    SkBitmap bitmap = decoder.Decode(
         reinterpret_cast<const unsigned char*>(file_contents.c_str()),
         file_contents.length());
+    icon_ = gfx::Image(bitmap);
   }
 
   void LoadExtension() {
@@ -62,7 +65,7 @@ public:
     }
 
     extension_ = Extension::Create(path.DirName(), Extension::INVALID, *value,
-                                   Extension::STRICT_ERROR_CHECKS, &error);
+                                   Extension::NO_FLAGS, &error);
     if (!extension_.get()) {
       LOG(ERROR) << error;
       return;
@@ -70,20 +73,21 @@ public:
   }
 
   FilePath test_data_dir_;
-  SkBitmap icon_;
+  gfx::Image icon_;
   scoped_refptr<Extension> extension_;
 };
 
 
-// Mock out the ExtensionInstallUI::Delegate interface so we can ensure the
+// Mock out the ExtensionInstallPrompt::Delegate interface so we can ensure the
 // dialog is interacting with it correctly.
-class MockExtensionInstallUIDelegate : public ExtensionInstallUI::Delegate {
+class MockExtensionInstallPromptDelegate
+    : public ExtensionInstallPrompt::Delegate {
  public:
-  MockExtensionInstallUIDelegate()
+  MockExtensionInstallPromptDelegate()
       : proceed_count_(0),
         abort_count_(0) {}
 
-  // ExtensionInstallUI::Delegate overrides.
+  // ExtensionInstallPrompt::Delegate overrides.
   virtual void InstallUIProceed() OVERRIDE {
     proceed_count_++;
   }
@@ -103,21 +107,23 @@ class MockExtensionInstallUIDelegate : public ExtensionInstallUI::Delegate {
 // Test that we can load the two kinds of prompts correctly, that the outlets
 // are hooked up, and that the dialog calls cancel when cancel is pressed.
 TEST_F(ExtensionInstallDialogControllerTest, BasicsNormalCancel) {
-  MockExtensionInstallUIDelegate delegate;
+  MockExtensionInstallPromptDelegate delegate;
 
-  ExtensionInstallUI::Prompt prompt(ExtensionInstallUI::INSTALL_PROMPT);
+  ExtensionInstallPrompt::Prompt prompt(
+      NULL, ExtensionInstallPrompt::INSTALL_PROMPT);
+
   std::vector<string16> permissions;
   permissions.push_back(UTF8ToUTF16("warning 1"));
   prompt.SetPermissions(permissions);
+  prompt.set_extension(extension_.get());
+  prompt.set_icon(icon_);
 
   scoped_nsobject<ExtensionInstallDialogController>
     controller([[ExtensionInstallDialogController alloc]
                  initWithParentWindow:test_window()
-                              profile:profile()
-                            extension:extension_.get()
-                            delegate:&delegate
-                                icon:&icon_
-                              prompt:prompt]);
+                            navigator:browser()
+                             delegate:&delegate
+                               prompt:prompt]);
 
   [controller window];  // force nib load
 
@@ -134,12 +140,12 @@ TEST_F(ExtensionInstallDialogControllerTest, BasicsNormalCancel) {
   EXPECT_TRUE([controller titleField] != nil);
   EXPECT_NE(0u, [[[controller titleField] stringValue] length]);
 
-  EXPECT_TRUE([controller subtitleField] != nil);
-  EXPECT_NE(0u, [[[controller subtitleField] stringValue] length]);
-  EXPECT_NE('^', [[[controller subtitleField] stringValue] characterAtIndex:0]);
-
-  EXPECT_TRUE([controller warningsField] != nil);
-  EXPECT_NSEQ([[controller warningsField] stringValue],
+  NSOutlineView* outlineView = [controller outlineView];
+  EXPECT_TRUE(outlineView != nil);
+  EXPECT_EQ(2, [outlineView numberOfRows]);
+  EXPECT_NSEQ([[outlineView dataSource] outlineView:outlineView
+                          objectValueForTableColumn:nil
+                                             byItem:[outlineView itemAtRow:1]],
               base::SysUTF16ToNSString(prompt.GetPermission(0)));
 
   EXPECT_TRUE([controller cancelButton] != nil);
@@ -158,20 +164,21 @@ TEST_F(ExtensionInstallDialogControllerTest, BasicsNormalCancel) {
 
 
 TEST_F(ExtensionInstallDialogControllerTest, BasicsNormalOK) {
-  MockExtensionInstallUIDelegate delegate;
+  MockExtensionInstallPromptDelegate delegate;
 
-  ExtensionInstallUI::Prompt prompt(ExtensionInstallUI::INSTALL_PROMPT);
+  ExtensionInstallPrompt::Prompt prompt(
+      NULL, ExtensionInstallPrompt::INSTALL_PROMPT);
   std::vector<string16> permissions;
   permissions.push_back(UTF8ToUTF16("warning 1"));
   prompt.SetPermissions(permissions);
+  prompt.set_extension(extension_.get());
+  prompt.set_icon(icon_);
 
   scoped_nsobject<ExtensionInstallDialogController>
   controller([[ExtensionInstallDialogController alloc]
                initWithParentWindow:test_window()
-                            profile:profile()
-                          extension:extension_.get()
+                          navigator:browser()
                            delegate:&delegate
-                               icon:&icon_
                              prompt:prompt]);
 
   [controller window];  // force nib load
@@ -184,27 +191,29 @@ TEST_F(ExtensionInstallDialogControllerTest, BasicsNormalOK) {
 // Test that controls get repositioned when there are two warnings vs one
 // warning.
 TEST_F(ExtensionInstallDialogControllerTest, MultipleWarnings) {
-  MockExtensionInstallUIDelegate delegate1;
-  MockExtensionInstallUIDelegate delegate2;
+  MockExtensionInstallPromptDelegate delegate1;
+  MockExtensionInstallPromptDelegate delegate2;
 
-  ExtensionInstallUI::Prompt one_warning_prompt(
-      ExtensionInstallUI::INSTALL_PROMPT);
+  ExtensionInstallPrompt::Prompt one_warning_prompt(
+      NULL, ExtensionInstallPrompt::INSTALL_PROMPT);
   std::vector<string16> permissions;
   permissions.push_back(UTF8ToUTF16("warning 1"));
   one_warning_prompt.SetPermissions(permissions);
+  one_warning_prompt.set_extension(extension_.get());
+  one_warning_prompt.set_icon(icon_);
 
-  ExtensionInstallUI::Prompt two_warnings_prompt(
-      ExtensionInstallUI::INSTALL_PROMPT);
+  ExtensionInstallPrompt::Prompt two_warnings_prompt(
+      NULL, ExtensionInstallPrompt::INSTALL_PROMPT);
   permissions.push_back(UTF8ToUTF16("warning 2"));
   two_warnings_prompt.SetPermissions(permissions);
+  two_warnings_prompt.set_extension(extension_.get());
+  two_warnings_prompt.set_icon(icon_);
 
   scoped_nsobject<ExtensionInstallDialogController>
   controller1([[ExtensionInstallDialogController alloc]
                 initWithParentWindow:test_window()
-                             profile:profile()
-                           extension:extension_.get()
+                           navigator:browser()
                             delegate:&delegate1
-                                icon:&icon_
                               prompt:one_warning_prompt]);
 
   [controller1 window];  // force nib load
@@ -212,10 +221,8 @@ TEST_F(ExtensionInstallDialogControllerTest, MultipleWarnings) {
   scoped_nsobject<ExtensionInstallDialogController>
   controller2([[ExtensionInstallDialogController alloc]
                 initWithParentWindow:test_window()
-                             profile:profile()
-                           extension:extension_.get()
+                           navigator:browser()
                             delegate:&delegate2
-                                icon:&icon_
                               prompt:two_warnings_prompt]);
 
   [controller2 window];  // force nib load
@@ -226,11 +233,8 @@ TEST_F(ExtensionInstallDialogControllerTest, MultipleWarnings) {
   ASSERT_LT([[controller1 window] frame].size.height,
             [[controller2 window] frame].size.height);
 
-  ASSERT_LT([[controller1 warningsField] frame].size.height,
-            [[controller2 warningsField] frame].size.height);
-
-  ASSERT_LT([[controller1 subtitleField] frame].origin.y,
-            [[controller2 subtitleField] frame].origin.y);
+  ASSERT_LT([[controller1 outlineView] frame].size.height,
+            [[controller2 outlineView] frame].size.height);
 
   ASSERT_LT([[controller1 titleField] frame].origin.y,
             [[controller2 titleField] frame].origin.y);
@@ -239,19 +243,19 @@ TEST_F(ExtensionInstallDialogControllerTest, MultipleWarnings) {
 // Test that we can load the skinny prompt correctly, and that the outlets are
 // are hooked up.
 TEST_F(ExtensionInstallDialogControllerTest, BasicsSkinny) {
-  MockExtensionInstallUIDelegate delegate;
+  MockExtensionInstallPromptDelegate delegate;
 
   // No warnings should trigger skinny prompt.
-  ExtensionInstallUI::Prompt no_warnings_prompt(
-      ExtensionInstallUI::INSTALL_PROMPT);
+  ExtensionInstallPrompt::Prompt no_warnings_prompt(
+      NULL, ExtensionInstallPrompt::INSTALL_PROMPT);
+  no_warnings_prompt.set_extension(extension_.get());
+  no_warnings_prompt.set_icon(icon_);
 
   scoped_nsobject<ExtensionInstallDialogController>
   controller([[ExtensionInstallDialogController alloc]
                initWithParentWindow:test_window()
-                            profile:profile()
-                          extension:extension_.get()
+                          navigator:browser()
                            delegate:&delegate
-                               icon:&icon_
                              prompt:no_warnings_prompt]);
 
   [controller window];  // force nib load
@@ -276,28 +280,27 @@ TEST_F(ExtensionInstallDialogControllerTest, BasicsSkinny) {
   EXPECT_NE(0u, [[[controller okButton] stringValue] length]);
   EXPECT_NE('^', [[[controller okButton] stringValue] characterAtIndex:0]);
 
-  EXPECT_TRUE([controller subtitleField] == nil);
-  EXPECT_TRUE([controller warningsField] == nil);
+  EXPECT_TRUE([controller outlineView] == nil);
 }
 
 
 // Test that we can load the inline prompt correctly, and that the outlets are
 // are hooked up.
 TEST_F(ExtensionInstallDialogControllerTest, BasicsInline) {
-  MockExtensionInstallUIDelegate delegate;
+  MockExtensionInstallPromptDelegate delegate;
 
   // No warnings should trigger skinny prompt.
-  ExtensionInstallUI::Prompt inline_prompt(
-      ExtensionInstallUI::INLINE_INSTALL_PROMPT);
+  ExtensionInstallPrompt::Prompt inline_prompt(
+      NULL, ExtensionInstallPrompt::INLINE_INSTALL_PROMPT);
   inline_prompt.SetInlineInstallWebstoreData("1,000", 3.5, 200);
+  inline_prompt.set_extension(extension_.get());
+  inline_prompt.set_icon(icon_);
 
   scoped_nsobject<ExtensionInstallDialogController>
   controller([[ExtensionInstallDialogController alloc]
                initWithParentWindow:test_window()
-                            profile:profile()
-                          extension:extension_.get()
+                          navigator:browser()
                            delegate:&delegate
-                               icon:&icon_
                              prompt:inline_prompt]);
 
   [controller window];  // force nib load
@@ -331,10 +334,42 @@ TEST_F(ExtensionInstallDialogControllerTest, BasicsInline) {
 
   // Though we have no permissions warnings, these should still be hooked up,
   // just invisible.
-  EXPECT_TRUE([controller subtitleField] != nil);
-  EXPECT_TRUE([[controller subtitleField] isHidden]);
-  EXPECT_TRUE([controller warningsField] != nil);
-  EXPECT_TRUE([[controller warningsField] isHidden]);
+  EXPECT_TRUE([controller outlineView] != nil);
+  EXPECT_TRUE([[[controller outlineView] enclosingScrollView] isHidden]);
   EXPECT_TRUE([controller warningsSeparator] != nil);
   EXPECT_TRUE([[controller warningsSeparator] isHidden]);
+}
+
+TEST_F(ExtensionInstallDialogControllerTest, OAuthIssues) {
+  MockExtensionInstallPromptDelegate delegate;
+
+  ExtensionInstallPrompt::Prompt prompt(
+      NULL, ExtensionInstallPrompt::INSTALL_PROMPT);
+  std::vector<string16> permissions;
+  permissions.push_back(UTF8ToUTF16("warning 1"));
+  prompt.SetPermissions(permissions);
+  IssueAdviceInfoEntry issue;
+  issue.description = UTF8ToUTF16("issue description 1");
+  issue.details.push_back(UTF8ToUTF16("issue detail 1"));
+  IssueAdviceInfo issues;
+  issues.push_back(issue);
+  prompt.SetOAuthIssueAdvice(issues);
+  prompt.set_extension(extension_.get());
+  prompt.set_icon(icon_);
+
+  scoped_nsobject<ExtensionInstallDialogController>
+  controller([[ExtensionInstallDialogController alloc]
+               initWithParentWindow:test_window()
+                          navigator:browser()
+                           delegate:&delegate
+                             prompt:prompt]);
+
+  [controller window];  // force nib load
+  NSOutlineView* outlineView = [controller outlineView];
+  EXPECT_TRUE(outlineView != nil);
+  EXPECT_EQ(4, [outlineView numberOfRows]);
+  EXPECT_NSEQ([[outlineView dataSource] outlineView:outlineView
+                          objectValueForTableColumn:nil
+                                             byItem:[outlineView itemAtRow:3]],
+              base::SysUTF16ToNSString(prompt.GetOAuthIssue(0).description));
 }

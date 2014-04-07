@@ -1,10 +1,9 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CHROME_BROWSER_HISTORY_HISTORY_H_
 #define CHROME_BROWSER_HISTORY_HISTORY_H_
-#pragma once
 
 #include <set>
 #include <vector>
@@ -14,19 +13,25 @@
 #include "base/file_path.h"
 #include "base/memory/ref_counted.h"
 #include "base/memory/scoped_ptr.h"
+#include "base/observer_list_threadsafe.h"
 #include "base/string16.h"
 #include "chrome/browser/cancelable_request.h"
 #include "chrome/browser/favicon/favicon_service.h"
 #include "chrome/browser/history/history_types.h"
+#include "chrome/browser/profiles/refcounted_profile_keyed_service.h"
 #include "chrome/browser/search_engines/template_url_id.h"
 #include "chrome/common/ref_counted_util.h"
 #include "content/public/browser/notification_observer.h"
 #include "content/public/browser/notification_registrar.h"
 #include "content/public/common/page_transition_types.h"
 #include "sql/init_status.h"
+#include "ui/base/layout.h"
+
+#if defined(OS_ANDROID)
+#include "chrome/browser/history/android/android_history_provider_service.h"
+#endif
 
 class BookmarkService;
-struct DownloadPersistentStoreInfo;
 class FilePath;
 class GURL;
 class HistoryURLProvider;
@@ -40,15 +45,22 @@ class Thread;
 class Time;
 }
 
+namespace content {
+struct DownloadPersistentStoreInfo;
+}
+
 namespace history {
 class InMemoryHistoryBackend;
 class InMemoryURLIndex;
+class InMemoryURLIndexTest;
 class HistoryAddPageArgs;
 class HistoryBackend;
 class HistoryDatabase;
 struct HistoryDetails;
 class HistoryQueryTest;
+class VisitFilter;
 class URLDatabase;
+class VisitDatabaseObserver;
 }  // namespace history
 
 
@@ -67,7 +79,7 @@ class HistoryDBTask : public base::RefCountedThreadSafe<HistoryDBTask> {
   virtual bool RunOnDBThread(history::HistoryBackend* backend,
                              history::HistoryDatabase* db) = 0;
 
-  // Invoked on the main thread once RunOnDBThread has returned false. This is
+  // Invoked on the main thread once RunOnDBThread has returned true. This is
   // only invoked if the request was not canceled and returned true from
   // RunOnDBThread.
   virtual void DoneRunOnMainThread() = 0;
@@ -85,7 +97,7 @@ class HistoryDBTask : public base::RefCountedThreadSafe<HistoryDBTask> {
 // thread that made the request.
 class HistoryService : public CancelableRequestProvider,
                        public content::NotificationObserver,
-                       public base::RefCountedThreadSafe<HistoryService> {
+                       public RefcountedProfileKeyedService {
  public:
   // Miscellaneous commonly-used types.
   typedef std::vector<PageUsageData*> PageUsageDataList;
@@ -105,7 +117,8 @@ class HistoryService : public CancelableRequestProvider,
 
   // Triggers the backend to load if it hasn't already, and then returns whether
   // it's finished loading.
-  bool BackendLoaded();
+  // Note: Virtual needed for mocking.
+  virtual bool BackendLoaded();
 
   // Returns true if the backend has finished loading.
   bool backend_loaded() const { return backend_loaded_; }
@@ -143,7 +156,12 @@ class HistoryService : public CancelableRequestProvider,
   history::URLDatabase* InMemoryDatabase();
 
   // Return the quick history index.
-  history::InMemoryURLIndex* InMemoryIndex();
+  history::InMemoryURLIndex* InMemoryIndex() const {
+    return in_memory_url_index_.get();
+  }
+
+  // RefcountedProfileKeyedService:
+  virtual void ShutdownOnUIThread() OVERRIDE;
 
   // Navigation ----------------------------------------------------------------
 
@@ -153,9 +171,7 @@ class HistoryService : public CancelableRequestProvider,
   // The supplied render process host is used to scope the given page ID. Page
   // IDs are only unique inside a given render process, so we need that to
   // differentiate them. This pointer should not be dereferenced by the history
-  // system. Since render view host pointers may be reused (if one gets deleted
-  // and a new one created at the same address), TabContents should notify
-  // us when they are being destroyed through NotifyTabContentsDestruction.
+  // system.
   //
   // The scope/ids can be NULL if there is no meaningful tracking information
   // that can be performed on the given URL. The 'page_id' should be the ID of
@@ -204,13 +220,24 @@ class HistoryService : public CancelableRequestProvider,
   // Adds an entry for the specified url without creating a visit. This should
   // only be used when bookmarking a page, otherwise the row leaks in the
   // history db (it never gets cleaned).
-  void AddPageNoVisitForBookmark(const GURL& url);
+  void AddPageNoVisitForBookmark(const GURL& url, const string16& title);
 
   // Sets the title for the given page. The page should be in history. If it
   // is not, this operation is ignored. This call will not update the full
   // text index. The last title set when the page is indexed will be the
   // title in the full text index.
   void SetPageTitle(const GURL& url, const string16& title);
+
+  // Updates the history database with a page's ending time stamp information.
+  // The page can be identified by the combination of the pointer to
+  // a RenderProcessHost, the page id and the url.
+  //
+  // The given pointer will not be dereferenced, it is only used for
+  // identification purposes, hence it is a void*.
+  void UpdateWithPageEndTime(const void* host,
+                             int32 page_id,
+                             const GURL& url,
+                             base::Time end_ts);
 
   // Indexing ------------------------------------------------------------------
 
@@ -226,8 +253,6 @@ class HistoryService : public CancelableRequestProvider,
   // should handle this appropriately.
   class URLEnumerator {
    public:
-    virtual ~URLEnumerator() {}
-
     // Indicates that a URL is available. There will be exactly one call for
     // every URL in history.
     virtual void OnURL(const GURL& url) = 0;
@@ -236,6 +261,9 @@ class HistoryService : public CancelableRequestProvider,
     // more callbacks made. This call is guaranteed to occur, even if there are
     // no URLs. If all URLs were iterated, success will be true.
     virtual void OnComplete(bool success) = 0;
+
+   protected:
+    virtual ~URLEnumerator() {}
   };
 
   // Enumerate all URLs in history. The given iterator will be owned by the
@@ -351,12 +379,28 @@ class HistoryService : public CancelableRequestProvider,
   typedef base::Callback<void(Handle, history::MostVisitedURLList)>
       QueryMostVisitedURLsCallback;
 
+  typedef base::Callback<void(Handle, const history::FilteredURLList&)>
+      QueryFilteredURLsCallback;
+
   // Request the |result_count| most visited URLs and the chain of
   // redirects leading to each of these URLs. |days_back| is the
   // number of days of history to use. Used by TopSites.
   Handle QueryMostVisitedURLs(int result_count, int days_back,
                               CancelableRequestConsumerBase* consumer,
                               const QueryMostVisitedURLsCallback& callback);
+
+  // Request the |result_count| URLs filtered and sorted based on the |filter|.
+  // If |extended_info| is true, additional data will be provided in the
+  // results. Computing this additional data is expensive, likely to become
+  // more expensive as additional data points are added in future changes, and
+  // not useful in most cases. Set |extended_info| to true only if you
+  // explicitly require the additional data.
+  Handle QueryFilteredURLs(
+      int result_count,
+      const history::VisitFilter& filter,
+      bool extended_info,
+      CancelableRequestConsumerBase* consumer,
+      const QueryFilteredURLsCallback& callback);
 
   // Thumbnails ----------------------------------------------------------------
 
@@ -366,7 +410,7 @@ class HistoryService : public CancelableRequestProvider,
   //
   // This function will be called even on error conditions or if there is no
   // thumbnail for that page. In these cases, the data pointer will be NULL.
-  typedef base::Callback<void(Handle, scoped_refptr<RefCountedBytes>)>
+  typedef base::Callback<void(Handle, scoped_refptr<base::RefCountedBytes>)>
       ThumbnailDataCallback;
 
   // Requests a page thumbnail. See ThumbnailDataCallback definition above.
@@ -406,7 +450,7 @@ class HistoryService : public CancelableRequestProvider,
   // 'info' contains all the download's creation state, and 'callback' runs
   // when the history service request is complete.
   Handle CreateDownload(int32 id,
-                        const DownloadPersistentStoreInfo& info,
+                        const content::DownloadPersistentStoreInfo& info,
                         CancelableRequestConsumerBase* consumer,
                         const DownloadCreateCallback& callback);
 
@@ -419,8 +463,9 @@ class HistoryService : public CancelableRequestProvider,
 
   // Implemented by the caller of 'QueryDownloads' below, and is called when the
   // history service has retrieved a list of all download state. The call
-  typedef base::Callback<void(std::vector<DownloadPersistentStoreInfo>*)>
-      DownloadQueryCallback;
+  typedef base::Callback<void(
+      std::vector<content::DownloadPersistentStoreInfo>*)>
+          DownloadQueryCallback;
 
   // Begins a history request to retrieve the state of all downloads in the
   // history db. 'callback' runs when the history service request is complete,
@@ -436,7 +481,7 @@ class HistoryService : public CancelableRequestProvider,
   // Called to update the history service about the current state of a download.
   // This is a 'fire and forget' query, so just pass the relevant state info to
   // the database with no need for a callback.
-  void UpdateDownload(const DownloadPersistentStoreInfo& data);
+  void UpdateDownload(const content::DownloadPersistentStoreInfo& data);
 
   // Called to update the history service about the path of a download.
   // This is a 'fire and forget' query.
@@ -521,6 +566,14 @@ class HistoryService : public CancelableRequestProvider,
   // db.
   bool needs_top_sites_migration() const { return needs_top_sites_migration_; }
 
+  // Adds or removes observers for the VisitDatabase.  Should be run in the
+  // thread in which the observer would like to be notified.
+  void AddVisitDatabaseObserver(history::VisitDatabaseObserver* observer);
+  void RemoveVisitDatabaseObserver(history::VisitDatabaseObserver* observer);
+
+  // This notification method may be called on any thread.
+  void NotifyVisitDBObserversOnAddVisit(const history::BriefVisitInfo& info);
+
   // Testing -------------------------------------------------------------------
 
   // Designed for unit tests, this passes the given task on to the history
@@ -554,7 +607,7 @@ class HistoryService : public CancelableRequestProvider,
                           history::VisitSource visit_source);
 
   // The same as AddPageWithDetails() but takes a vector.
-  void AddPagesWithDetails(const std::vector<history::URLRow>& info,
+  void AddPagesWithDetails(const history::URLRows& info,
                            history::VisitSource visit_source);
 
   // Starts the TopSites migration in the HistoryThread. Called by the
@@ -582,6 +635,9 @@ class HistoryService : public CancelableRequestProvider,
 
  private:
   class BackendDelegate;
+#if defined(OS_ANDROID)
+  friend class AndroidHistoryProviderService;
+#endif
   friend class base::RefCountedThreadSafe<HistoryService>;
   friend class BackendDelegate;
   friend class FaviconService;
@@ -590,6 +646,7 @@ class HistoryService : public CancelableRequestProvider,
   friend class HistoryOperation;
   friend class HistoryURLProvider;
   friend class HistoryURLProviderTest;
+  friend class history::InMemoryURLIndexTest;
   template<typename Info, typename Callback> friend class DownloadRequest;
   friend class PageUsageRequest;
   friend class RedirectRequest;
@@ -633,44 +690,129 @@ class HistoryService : public CancelableRequestProvider,
   // these methods directly you should call the respective method on the
   // FaviconService.
 
-  // Used by the FaviconService to get a favicon from the history backend.
-  void GetFavicon(FaviconService::GetFaviconRequest* request,
-                  const GURL& icon_url,
-                  history::IconType icon_type);
+  // Used by FaviconService to get the favicon bitmaps from the history backend
+  // which most closely match |desired_size_in_dip| x |desired_size_in_dip| and
+  // |desired_scale_factors| for |icon_types|. If |desired_size_in_dip| is 0,
+  // the largest favicon bitmap for |icon_types| is returned. The returned
+  // FaviconBitmapResults will have at most one result for each of
+  // |desired_scale_factors|. If a favicon bitmap is determined to be the best
+  // candidate for multiple scale factors there will be less results.
+  // If |icon_types| has several types, results for only a single type will be
+  // returned in the priority of TOUCH_PRECOMPOSED_ICON, TOUCH_ICON, and
+  // FAVICON.
+  void GetFavicons(FaviconService::GetFaviconRequest* request,
+                   const std::vector<GURL>& icon_urls,
+                   int icon_types,
+                   int desired_size_in_dip,
+                   const std::vector<ui::ScaleFactor>& desired_scale_factors);
 
-  // Used by the FaviconService to update the favicon mappings on the history
+  // Used by the FaviconService to get favicons mapped to |page_url| for
+  // |icon_types| which most closely match |desired_size_in_dip| and
+  // |desired_scale_factors|. If |desired_size_in_dip| is 0, the largest favicon
+  // bitmap for |icon_types| is returned. The returned FaviconBitmapResults will
+  // have at most one result for each of |desired_scale_factors|. If a favicon
+  // bitmap is determined to be the best candidate for multiple scale factors
+  // there will be less results. If |icon_types| has several types, results for
+  // only a single type will be returned in the priority of
+  // TOUCH_PRECOMPOSED_ICON, TOUCH_ICON, and FAVICON.
+  void GetFaviconsForURL(
+      FaviconService::GetFaviconRequest* request,
+      const GURL& page_url,
+      int icon_types,
+      int desired_size_in_dip,
+      const std::vector<ui::ScaleFactor>& desired_scale_factors);
+
+  // Used by the FaviconService to get the favicon bitmap which most closely
+  // matches |desired_size_in_dip| and |desired_scale_factor| from the favicon
+  // with |favicon_id| from the history backend. If |desired_size_in_dip| is 0,
+  // the largest favicon bitmap for |favicon_id| is returned.
+  void GetFaviconForID(FaviconService::GetFaviconRequest* request,
+                       history::FaviconID favicon_id,
+                       int desired_size_in_dip,
+                       ui::ScaleFactor desired_scale_factor);
+
+  // Used by the FaviconService to replace the favicon mappings to |page_url|
+  // for |icon_types| on the history backend.
+  // Sample |icon_urls|:
+  //  { ICON_URL1 -> TOUCH_ICON, known to the database,
+  //    ICON_URL2 -> TOUCH_ICON, not known to the database,
+  //    ICON_URL3 -> TOUCH_PRECOMPOSED_ICON, known to the database }
+  // The new mappings are computed from |icon_urls| with these rules:
+  // 1) Any urls in |icon_urls| which are not already known to the database are
+  //    rejected.
+  //    Sample new mappings to |page_url|: { ICON_URL1, ICON_URL3 }
+  // 2) If |icon_types| has multiple types, the mappings are only set for the
+  //    largest icon type.
+  //    Sample new mappings to |page_url|: { ICON_URL3 }
+  // |icon_types| can only have multiple IconTypes if
+  // |icon_types| == TOUCH_ICON | TOUCH_PRECOMPOSED_ICON.
+  // The favicon bitmaps which most closely match |desired_size_in_dip|
+  // and |desired_scale_factors| from the favicons which were just mapped
+  // to |page_url| are returned. If |desired_size_in_dip| is 0, the
+  // largest favicon bitmap is returned.
+  void UpdateFaviconMappingsAndFetch(
+      FaviconService::GetFaviconRequest* request,
+      const GURL& page_url,
+      const std::vector<GURL>& icon_urls,
+      int icon_types,
+      int desired_size_in_dip,
+      const std::vector<ui::ScaleFactor>& desired_scale_factors);
+
+  // Used by FaviconService to set a favicon for |page_url| at |icon_url|.
+  // If the |icon_url| and |pixel_size| are consistent with the icons mapped
+  // to |page_url| and the pixel sizes of the bitmaps at |icon_url|:
+  //   The favicon bitmap for |icon_url| and |pixel_size| will be updated or
+  //   created if necessary.
+  // If |icon_url| and |pixel_size| are inconsistent:
+  //   A new favicon bitmap (and favicon if necessary) will be created. The
+  //   favicon sizes for |icon_url| will be set to the default favicon sizes to
+  //   indicate that the favicon sizes are no longer known.
+  //   Arbitrary favicons and favicon bitmaps associated to |page_url| and
+  //   |icon_url| may be deleted in order to maintain the restriction for the
+  //   max favicons per page, and max favicon bitmaps per icon URL.
+  // TODO(pkotwicz): Remove once no longer required by sync.
+  void MergeFavicon(const GURL& page_url,
+                    const GURL& icon_url,
+                    history::IconType icon_type,
+                    scoped_refptr<base::RefCountedMemory> bitmap_data,
+                    const gfx::Size& pixel_size);
+
+  // Used by the FaviconService to set the favicons for a page on the history
   // backend.
-  void UpdateFaviconMappingAndFetch(FaviconService::GetFaviconRequest* request,
-                                    const GURL& page_url,
-                                    const GURL& icon_url,
-                                    history::IconType icon_type);
-
-  // Used by the FaviconService to get a favicon from the history backend.
-  void GetFaviconForURL(FaviconService::GetFaviconRequest* request,
-                        const GURL& page_url,
-                        int icon_types);
+  // |favicon_bitmap_data| is a listing of additional favicon bitmaps to store
+  // for |page_url|.
+  // |expired| and |icon_type| fields in FaviconBitmapData are ignored.
+  // |icon_url_sizes| is a mapping of all the icon urls of the favicons
+  // available for |page_url| to the sizes that those favicons are available
+  // from the web.
+  // |favicon_bitmap_data| does not need to have entries for all the icon urls
+  // or sizes listed in |icon_url_sizes|. However, the icon urls and pixel
+  // sizes in |favicon_bitmap_data| must be a subset of |icon_url_sizes|. It is
+  // important that |icon_url_sizes| be complete as mappings to favicons whose
+  // icon url or pixel size is not in |icon_url_sizes| will be deleted.
+  // Use MergeFavicon() if any of the icon URLs for |page_url| or any of the
+  // favicon sizes of the icon URLs are not known.
+  // See HistoryBackend::ValidateSetFaviconsParams() for more details on the
+  // criteria for |favicon_bitmap_data| and |icon_url_sizes| to be valid.
+  void SetFavicons(
+      const GURL& page_url,
+      history::IconType icon_type,
+      const std::vector<history::FaviconBitmapData>& favicon_bitmap_data,
+      const history::IconURLSizesMap& icon_url_sizes);
 
   // Used by the FaviconService to mark the favicon for the page as being out
   // of date.
-  void SetFaviconOutOfDateForPage(const GURL& page_url);
+  void SetFaviconsOutOfDateForPage(const GURL& page_url);
 
   // Used by the FaviconService to clone favicons from one page to another,
   // provided that other page does not already have favicons.
-  void CloneFavicon(const GURL& old_page_url, const GURL& new_page_url);
+  void CloneFavicons(const GURL& old_page_url, const GURL& new_page_url);
 
   // Used by the FaviconService for importing many favicons for many pages at
   // once. The pages must exist, any favicon sets for unknown pages will be
   // discarded. Existing favicons will not be overwritten.
   void SetImportedFavicons(
       const std::vector<history::ImportedFaviconUsage>& favicon_usage);
-
-  // Used by the FaviconService to set the favicon for a page on the history
-  // backend.
-  void SetFavicon(const GURL& page_url,
-                  const GURL& icon_url,
-                  const std::vector<unsigned char>& image_data,
-                  history::IconType icon_type);
-
 
   // Sets the in-memory URL database. This is called by the backend once the
   // database is loaded to make it available.
@@ -763,6 +905,57 @@ class HistoryService : public CancelableRequestProvider,
     return request->handle();
   }
 
+  template<typename BackendFunc,
+           class RequestType,  // Descendant of CancelableRequstBase.
+           typename ArgA,
+           typename ArgB,
+           typename ArgC,
+           typename ArgD>
+  Handle Schedule(SchedulePriority priority,
+                  BackendFunc func,  // Function to call on the HistoryBackend.
+                  CancelableRequestConsumerBase* consumer,
+                  RequestType* request,
+                  const ArgA& a,
+                  const ArgB& b,
+                  const ArgC& c,
+                  const ArgD& d) {
+    DCHECK(thread_) << "History service being called after cleanup";
+    LoadBackendIfNecessary();
+    if (consumer)
+      AddRequest(request, consumer);
+    ScheduleTask(priority,
+                 base::Bind(func, history_backend_.get(),
+                            scoped_refptr<RequestType>(request), a, b, c, d));
+    return request->handle();
+  }
+
+  template<typename BackendFunc,
+           class RequestType,  // Descendant of CancelableRequstBase.
+           typename ArgA,
+           typename ArgB,
+           typename ArgC,
+           typename ArgD,
+           typename ArgE>
+  Handle Schedule(SchedulePriority priority,
+                  BackendFunc func,  // Function to call on the HistoryBackend.
+                  CancelableRequestConsumerBase* consumer,
+                  RequestType* request,
+                  const ArgA& a,
+                  const ArgB& b,
+                  const ArgC& c,
+                  const ArgD& d,
+                  const ArgE& e) {
+    DCHECK(thread_) << "History service being called after cleanup";
+    LoadBackendIfNecessary();
+    if (consumer)
+      AddRequest(request, consumer);
+    ScheduleTask(priority,
+                 base::Bind(func, history_backend_.get(),
+                            scoped_refptr<RequestType>(request),
+                            a, b, c, d, e));
+    return request->handle();
+  }
+
   // ScheduleAndForget ---------------------------------------------------------
   //
   // Functions for scheduling operations on the history thread that do not need
@@ -823,6 +1016,25 @@ class HistoryService : public CancelableRequestProvider,
                                       a, b, c, d));
   }
 
+  template<typename BackendFunc,
+           typename ArgA,
+           typename ArgB,
+           typename ArgC,
+           typename ArgD,
+           typename ArgE>
+  void ScheduleAndForget(SchedulePriority priority,
+                         BackendFunc func,  // Function to call on backend.
+                         const ArgA& a,
+                         const ArgB& b,
+                         const ArgC& c,
+                         const ArgD& d,
+                         const ArgE& e) {
+    DCHECK(thread_) << "History service being called after cleanup";
+    LoadBackendIfNecessary();
+    ScheduleTask(priority, base::Bind(func, history_backend_.get(),
+                                      a, b, c, d, e));
+  }
+
   content::NotificationRegistrar registrar_;
 
   // Some void primitives require some internal processing in the main thread
@@ -864,6 +1076,12 @@ class HistoryService : public CancelableRequestProvider,
 
   // True if needs top site migration.
   bool needs_top_sites_migration_;
+
+  // The index used for quick history lookups.
+  scoped_ptr<history::InMemoryURLIndex> in_memory_url_index_;
+
+  scoped_refptr<ObserverListThreadSafe<history::VisitDatabaseObserver> >
+      visit_database_observers_;
 
   DISALLOW_COPY_AND_ASSIGN(HistoryService);
 };

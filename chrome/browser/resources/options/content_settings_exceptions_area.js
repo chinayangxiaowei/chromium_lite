@@ -3,12 +3,13 @@
 // found in the LICENSE file.
 
 cr.define('options.contentSettings', function() {
-  const InlineEditableItemList = options.InlineEditableItemList;
-  const InlineEditableItem = options.InlineEditableItem;
-  const ArrayDataModel = cr.ui.ArrayDataModel;
+  /** @const */ var InlineEditableItemList = options.InlineEditableItemList;
+  /** @const */ var InlineEditableItem = options.InlineEditableItem;
+  /** @const */ var ArrayDataModel = cr.ui.ArrayDataModel;
 
   /**
    * Creates a new exceptions list item.
+   *
    * @param {string} contentType The type of the list.
    * @param {string} mode The browser mode, 'otr' or 'normal'.
    * @param {boolean} enableAskOption Whether to show an 'ask every time'
@@ -64,29 +65,39 @@ cr.define('options.contentSettings', function() {
       // Setting select element for edit mode.
       var select = cr.doc.createElement('select');
       var optionAllow = cr.doc.createElement('option');
-      optionAllow.textContent = templateData.allowException;
+      optionAllow.textContent = loadTimeData.getString('allowException');
       optionAllow.value = 'allow';
       select.appendChild(optionAllow);
 
       if (this.enableAskOption) {
         var optionAsk = cr.doc.createElement('option');
-        optionAsk.textContent = templateData.askException;
+        optionAsk.textContent = loadTimeData.getString('askException');
         optionAsk.value = 'ask';
         select.appendChild(optionAsk);
       }
 
       if (this.contentType == 'cookies') {
         var optionSession = cr.doc.createElement('option');
-        optionSession.textContent = templateData.sessionException;
+        optionSession.textContent = loadTimeData.getString('sessionException');
         optionSession.value = 'session';
         select.appendChild(optionSession);
       }
 
       if (this.contentType != 'fullscreen') {
         var optionBlock = cr.doc.createElement('option');
-        optionBlock.textContent = templateData.blockException;
+        optionBlock.textContent = loadTimeData.getString('blockException');
         optionBlock.value = 'block';
         select.appendChild(optionBlock);
+      }
+
+      if (this.contentType == 'location') {
+        if (this.dataItem.origin !== this.dataItem.embeddingOrigin) {
+          this.patternLabel.classList.add('sublabel');
+        } else if (this.setting == 'default') {
+          // Items that don't have their own settings (parents of 'embedded on'
+          // items) aren't deletable.
+          this.deletable = false;
+        }
       }
 
       this.contentElement.appendChild(select);
@@ -111,20 +122,35 @@ cr.define('options.contentSettings', function() {
 
       this.updateEditables();
 
-      // Editing notifications and geolocation is disabled for now.
+      // Editing notifications, geolocation and media-stream is disabled for
+      // now.
       if (this.contentType == 'notifications' ||
-          this.contentType == 'location') {
+          this.contentType == 'location' ||
+          this.contentType == 'media-stream') {
         this.editable = false;
       }
 
       // If the source of the content setting exception is not the user
       // preference, then the content settings exception is managed and the user
       // can't edit it.
-      if (this.dataItem.source  &&
+      if (this.dataItem.source &&
           this.dataItem.source != 'preference') {
         this.setAttribute('managedby', this.dataItem.source);
         this.deletable = false;
         this.editable = false;
+      }
+
+      // If the exception comes from a hosted app, display the name and the
+      // icon of the app.
+      if (this.dataItem.source == 'HostedApp') {
+        this.title =
+            loadTimeData.getString('set_by') + ' ' + this.dataItem.appName;
+        var button = this.querySelector('.row-delete-button');
+        // Use the host app's favicon (16px, match bigger size).
+        // See c/b/ui/webui/extensions/extension_icon_source.h
+        // for a description of the chrome://extension-icon URL.
+        button.style.backgroundImage =
+            'url(\'chrome://extension-icon/' + this.dataItem.appId + '/16/1\')';
       }
 
       var listItem = this;
@@ -142,46 +168,67 @@ cr.define('options.contentSettings', function() {
 
     /**
      * The pattern (e.g., a URL) for the exception.
+     *
      * @type {string}
      */
     get pattern() {
-      return this.dataItem['displayPattern'];
+      if (this.contentType == 'location') {
+        if (this.dataItem.embeddingOrigin === this.dataItem.origin) {
+          return this.dataItem.origin;
+        } else {
+          return loadTimeData.getStringF('embeddedOnHost',
+                                         this.dataItem.embeddingOrigin);
+        }
+      }
+
+      return this.dataItem.displayPattern;
     },
     set pattern(pattern) {
-      this.dataItem['displayPattern'] = pattern;
+      if (!this.editable)
+        console.error('Tried to change uneditable pattern');
+
+      this.dataItem.displayPattern = pattern;
     },
 
     /**
      * The setting (allow/block) for the exception.
+     *
      * @type {string}
      */
     get setting() {
-      return this.dataItem['setting'];
+      return this.dataItem.setting;
     },
     set setting(setting) {
-      this.dataItem['setting'] = setting;
+      this.dataItem.setting = setting;
     },
 
     /**
      * Gets a human-readable setting string.
+     *
      * @type {string}
      */
     settingForDisplay: function() {
       var setting = this.setting;
       if (setting == 'allow')
-        return templateData.allowException;
+        return loadTimeData.getString('allowException');
       else if (setting == 'block')
-        return templateData.blockException;
+        return loadTimeData.getString('blockException');
       else if (setting == 'ask')
-        return templateData.askException;
+        return loadTimeData.getString('askException');
       else if (setting == 'session')
-        return templateData.sessionException;
+        return loadTimeData.getString('sessionException');
+      else if (setting == 'default')
+        return '';
+
+      console.error('Unknown setting: [' + setting + ']');
+      return '';
     },
 
     /**
      * Update this list item to reflect whether the input is a valid pattern.
-     * @param {boolean} valid Whether said pattern is valid in the context of
-     *     a content exception setting.
+     *
+     * @param {boolean} valid Whether said pattern is valid in the context of a
+     *     content exception setting.
      */
     setPatternValid: function(valid) {
       if (valid || !this.input.value)
@@ -226,6 +273,7 @@ cr.define('options.contentSettings', function() {
 
     /**
      * Called when committing an edit.
+     *
      * @param {Event} e The end event.
      * @private
      */
@@ -238,6 +286,7 @@ cr.define('options.contentSettings', function() {
 
     /**
      * Called when cancelling an edit; resets the control states.
+     *
      * @param {Event} e The cancel event.
      * @private
      */
@@ -248,6 +297,7 @@ cr.define('options.contentSettings', function() {
 
     /**
      * Editing is complete; update the model.
+     *
      * @param {string} newPattern The pattern that the user entered.
      * @param {string} newSetting The setting the user chose.
      */
@@ -274,10 +324,11 @@ cr.define('options.contentSettings', function() {
    * Creates a new list item for the Add New Item row, which doesn't represent
    * an actual entry in the exceptions list but allows the user to add new
    * exceptions.
+   *
    * @param {string} contentType The type of the list.
    * @param {string} mode The browser mode, 'otr' or 'normal'.
-   * @param {boolean} enableAskOption Whether to show an 'ask every time'
-   *     option in the select.
+   * @param {boolean} enableAskOption Whether to show an 'ask every time' option
+   *     in the select.
    * @constructor
    * @extends {cr.ui.ExceptionsListItem}
    */
@@ -299,7 +350,8 @@ cr.define('options.contentSettings', function() {
     decorate: function() {
       ExceptionsListItem.prototype.decorate.call(this);
 
-      this.input.placeholder = templateData.addNewExceptionInstructions;
+      this.input.placeholder =
+          loadTimeData.getString('addNewExceptionInstructions');
 
       // Do we always want a default of allow?
       this.setting = 'allow';
@@ -320,6 +372,7 @@ cr.define('options.contentSettings', function() {
     /**
      * Editing is complete; update the model. As long as the pattern isn't
      * empty, we'll just add it.
+     *
      * @param {string} newPattern The pattern that the user entered.
      * @param {string} newSetting The setting the user chose.
      */
@@ -332,6 +385,7 @@ cr.define('options.contentSettings', function() {
 
   /**
    * Creates a new exceptions list.
+   *
    * @constructor
    * @extends {cr.ui.List}
    */
@@ -358,10 +412,9 @@ cr.define('options.contentSettings', function() {
 
       this.mode = this.getAttribute('mode');
 
-      var exceptionList = this;
-
       // Whether the exceptions in this list allow an 'Ask every time' option.
-      this.enableAskOption = this.contentType == 'plugins';
+      this.enableAskOption = this.contentType == 'plugins' ||
+                             this.contentType == 'pepper-flash-cameramic';
 
       this.autoExpands = true;
       this.reset();
@@ -369,6 +422,7 @@ cr.define('options.contentSettings', function() {
 
     /**
      * Creates an item to go in the list.
+     *
      * @param {Object} entry The element from the data model for this row.
      */
     createItem: function(entry) {
@@ -388,6 +442,7 @@ cr.define('options.contentSettings', function() {
 
     /**
      * Sets the exceptions in the js model.
+     *
      * @param {Object} entries A list of dictionaries of values, each dictionary
      *     represents an exception.
      */
@@ -405,11 +460,12 @@ cr.define('options.contentSettings', function() {
     },
 
     /**
-     * The browser has finished checking a pattern for validity. Update the
-     * list item to reflect this.
+     * The browser has finished checking a pattern for validity. Update the list
+     * item to reflect this.
+     *
      * @param {string} pattern The pattern.
-     * @param {bool} valid Whether said pattern is valid in the context of
-     *     a content exception setting.
+     * @param {bool} valid Whether said pattern is valid in the context of a
+     *     content exception setting.
      */
     patternValidityCheckComplete: function(pattern, valid) {
       var listItems = this.items;
@@ -427,10 +483,11 @@ cr.define('options.contentSettings', function() {
      * Returns whether the rows are editable in this list.
      */
     isEditable: function() {
-      // Editing notifications and geolocation is disabled for now.
+      // Exceptions of the following lists are not editable for now.
       return !(this.contentType == 'notifications' ||
                this.contentType == 'location' ||
-               this.contentType == 'fullscreen');
+               this.contentType == 'fullscreen' ||
+               this.contentType == 'media-stream');
     },
 
     /**
@@ -454,9 +511,9 @@ cr.define('options.contentSettings', function() {
       var dataItem = listItem.dataItem;
       var args = [listItem.contentType];
       if (listItem.contentType == 'location')
-        args.push(dataItem['origin'], dataItem['embeddingOrigin']);
+        args.push(dataItem.origin, dataItem.embeddingOrigin);
       else if (listItem.contentType == 'notifications')
-        args.push(dataItem['origin'], dataItem['setting']);
+        args.push(dataItem.origin, dataItem.setting);
       else
         args.push(listItem.mode, listItem.pattern);
 
@@ -468,11 +525,12 @@ cr.define('options.contentSettings', function() {
 
   /**
    * Encapsulated handling of content settings list subpage.
+   *
    * @constructor
    */
   function ContentSettingsExceptionsArea() {
     OptionsPage.call(this, 'contentExceptions',
-                     templateData.contentSettingsPageTabTitle,
+                     loadTimeData.getString('contentSettingsPageTabTitle'),
                      'content-settings-exceptions-area');
   }
 
@@ -489,19 +547,23 @@ cr.define('options.contentSettings', function() {
         options.contentSettings.ExceptionsList.decorate(exceptionsLists[i]);
       }
 
-      ContentSettingsExceptionsArea.hideOTRLists();
+      ContentSettingsExceptionsArea.hideOTRLists(false);
 
       // If the user types in the URL without a hash, show just cookies.
       this.showList('cookies');
+
+      $('content-settings-exceptions-overlay-confirm').onclick =
+          OptionsPage.closeOverlay.bind(OptionsPage);
     },
 
     /**
      * Shows one list and hides all others.
+     *
      * @param {string} type The content type.
      */
     showList: function(type) {
       var header = this.pageDiv.querySelector('h1');
-      header.textContent = templateData[type + '_header'];
+      header.textContent = loadTimeData.getString(type + '_header');
 
       var divs = this.pageDiv.querySelectorAll('div[contentType]');
       for (var i = 0; i < divs.length; i++) {
@@ -527,18 +589,20 @@ cr.define('options.contentSettings', function() {
    * Called when the last incognito window is closed.
    */
   ContentSettingsExceptionsArea.OTRProfileDestroyed = function() {
-    this.hideOTRLists();
+    this.hideOTRLists(true);
   };
 
   /**
-   * Clears and hides the incognito exceptions lists.
+   * Hides the incognito exceptions lists and optionally clears them as well.
+   * @param {boolean} clear Whether to clear the lists.
    */
-  ContentSettingsExceptionsArea.hideOTRLists = function() {
+  ContentSettingsExceptionsArea.hideOTRLists = function(clear) {
     var otrLists = document.querySelectorAll('list[mode=otr]');
 
     for (var i = 0; i < otrLists.length; i++) {
-      otrLists[i].reset();
       otrLists[i].parentNode.hidden = true;
+      if (clear)
+        otrLists[i].reset();
     }
   };
 

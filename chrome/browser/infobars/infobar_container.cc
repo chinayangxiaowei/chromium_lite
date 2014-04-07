@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -11,8 +11,9 @@
 
 #include <algorithm>
 
+#include "base/logging.h"
+#include "chrome/browser/api/infobars/infobar_delegate.h"
 #include "chrome/browser/infobars/infobar.h"
-#include "chrome/browser/infobars/infobar_delegate.h"
 #include "chrome/browser/infobars/infobar_tab_helper.h"
 #include "chrome/common/chrome_notification_types.h"
 #include "content/public/browser/notification_details.h"
@@ -53,7 +54,7 @@ void InfoBarContainer::ChangeTabContents(InfoBarTabHelper* tab_helper) {
     registrar_.Add(this, chrome::NOTIFICATION_TAB_CONTENTS_INFOBAR_REPLACED,
                    th_source);
 
-    for (size_t i = 0; i < tab_helper_->infobar_count(); ++i) {
+    for (size_t i = 0; i < tab_helper_->GetInfoBarCount(); ++i) {
       // As when we removed the infobars above, we prevent callbacks to
       // OnInfoBarAnimated() for each infobar.
       AddInfoBar(
@@ -116,7 +117,7 @@ void InfoBarContainer::RemoveAllInfoBarsForDestruction() {
   // and at worst disastrous to call that.
   delegate_ = NULL;
 
-  // TODO(pkasting): Remove this once TabContentsWrapper calls CloseSoon().
+  // TODO(pkasting): Remove this once TabContents calls CloseSoon().
   for (size_t i = infobars_.size(); i > 0; --i)
     infobars_[i - 1]->CloseSoon();
 

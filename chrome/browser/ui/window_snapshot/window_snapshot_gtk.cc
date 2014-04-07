@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -11,10 +11,11 @@
 #include "ui/base/x/x11_util.h"
 #include "ui/gfx/rect.h"
 
-namespace browser {
+namespace {
 
-static cairo_status_t SnapshotCallback(
-    void *closure, const unsigned char *data, unsigned int length) {
+cairo_status_t SnapshotCallback(void* closure,
+                                const unsigned char* data,
+                                unsigned int length) {
   std::vector<unsigned char>* png_representation =
       static_cast<std::vector<unsigned char>*>(closure);
 
@@ -23,6 +24,11 @@ static cairo_status_t SnapshotCallback(
   memcpy(&(*png_representation)[old_size], data, length);
   return CAIRO_STATUS_SUCCESS;
 }
+
+}  // namespace
+
+namespace chrome {
+namespace internal {
 
 bool GrabWindowSnapshot(gfx::NativeWindow window_handle,
                         std::vector<unsigned char>* png_representation,
@@ -40,10 +46,10 @@ bool GrabWindowSnapshot(gfx::NativeWindow window_handle,
   DCHECK_LE(snapshot_bounds.right(), window_bounds.width());
   DCHECK_LE(snapshot_bounds.bottom(), window_bounds.height());
 
-  XImage* image = XGetImage(
+  ui::XScopedImage image(XGetImage(
       display, win, snapshot_bounds.x(), snapshot_bounds.y(),
-      snapshot_bounds.width(), snapshot_bounds.height(), AllPlanes, ZPixmap);
-  if (!image) {
+      snapshot_bounds.width(), snapshot_bounds.height(), AllPlanes, ZPixmap));
+  if (!image.get()) {
     LOG(ERROR) << "Couldn't get image";
     return false;
   }
@@ -70,4 +76,5 @@ bool GrabWindowSnapshot(gfx::NativeWindow window_handle,
   return true;
 }
 
-}  // namespace browser
+}  // namespace internal
+}  // namespace chrome

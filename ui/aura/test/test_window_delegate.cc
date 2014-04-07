@@ -4,11 +4,13 @@
 
 #include "ui/aura/test/test_window_delegate.h"
 
-#include "third_party/skia/include/core/SkCanvas.h"
-#include "ui/aura/event.h"
+#include "base/stringprintf.h"
 #include "ui/aura/window.h"
+#include "ui/base/events/event.h"
 #include "ui/base/hit_test.h"
 #include "ui/gfx/canvas.h"
+#include "ui/gfx/path.h"
+#include "ui/gfx/skia_util.h"
 
 namespace aura {
 namespace test {
@@ -16,10 +18,19 @@ namespace test {
 ////////////////////////////////////////////////////////////////////////////////
 // TestWindowDelegate
 
-TestWindowDelegate::TestWindowDelegate() {
+TestWindowDelegate::TestWindowDelegate()
+    : window_component_(HTCLIENT),
+      delete_on_destroyed_(false) {
 }
 
 TestWindowDelegate::~TestWindowDelegate() {
+}
+
+// static
+TestWindowDelegate* TestWindowDelegate::CreateSelfDestroyingDelegate() {
+  TestWindowDelegate* delegate = new TestWindowDelegate;
+  delegate->delete_on_destroyed_ = true;
+  return delegate;
 }
 
 gfx::Size TestWindowDelegate::GetMinimumSize() const {
@@ -30,14 +41,10 @@ void TestWindowDelegate::OnBoundsChanged(const gfx::Rect& old_bounds,
                                          const gfx::Rect& new_bounds) {
 }
 
-void TestWindowDelegate::OnFocus() {
+void TestWindowDelegate::OnFocus(Window* old_focused_window) {
 }
 
 void TestWindowDelegate::OnBlur() {
-}
-
-bool TestWindowDelegate::OnKeyEvent(KeyEvent* event) {
-  return false;
 }
 
 gfx::NativeCursor TestWindowDelegate::GetCursor(const gfx::Point& point) {
@@ -45,19 +52,13 @@ gfx::NativeCursor TestWindowDelegate::GetCursor(const gfx::Point& point) {
 }
 
 int TestWindowDelegate::GetNonClientComponent(const gfx::Point& point) const {
-  return HTCLIENT;
+  return window_component_;
 }
 
-bool TestWindowDelegate::OnMouseEvent(MouseEvent* event) {
-  return false;
-}
-
-ui::TouchStatus TestWindowDelegate::OnTouchEvent(TouchEvent* event) {
-  return ui::TOUCH_STATUS_UNKNOWN;
-}
-
-ui::GestureStatus TestWindowDelegate::OnGestureEvent(GestureEvent* event) {
-  return ui::GESTURE_STATUS_UNKNOWN;
+bool TestWindowDelegate::ShouldDescendIntoChildForEventHandling(
+      Window* child,
+      const gfx::Point& location) {
+  return true;
 }
 
 bool TestWindowDelegate::CanFocus() {
@@ -70,15 +71,48 @@ void TestWindowDelegate::OnCaptureLost() {
 void TestWindowDelegate::OnPaint(gfx::Canvas* canvas) {
 }
 
+void TestWindowDelegate::OnDeviceScaleFactorChanged(
+    float device_scale_factor) {
+}
+
 void TestWindowDelegate::OnWindowDestroying() {
 }
 
 void TestWindowDelegate::OnWindowDestroyed() {
+  if (delete_on_destroyed_)
+    delete this;
 }
 
-void TestWindowDelegate::OnWindowVisibilityChanged(bool visible) {
+void TestWindowDelegate::OnWindowTargetVisibilityChanged(bool visible) {
 }
 
+bool TestWindowDelegate::HasHitTestMask() const {
+  return false;
+}
+
+void TestWindowDelegate::GetHitTestMask(gfx::Path* mask) const {
+}
+
+scoped_refptr<ui::Texture> TestWindowDelegate::CopyTexture() {
+  return scoped_refptr<ui::Texture>();
+}
+
+ui::EventResult TestWindowDelegate::OnKeyEvent(ui::KeyEvent* event) {
+  return ui::ER_UNHANDLED;
+}
+
+ui::EventResult TestWindowDelegate::OnMouseEvent(ui::MouseEvent* event) {
+  return ui::ER_UNHANDLED;
+}
+
+ui::TouchStatus TestWindowDelegate::OnTouchEvent(ui::TouchEvent* event) {
+  return ui::TOUCH_STATUS_UNKNOWN;
+}
+
+ui::EventResult TestWindowDelegate::OnGestureEvent(
+    ui::GestureEvent* event) {
+  return ui::ER_UNHANDLED;
+}
 
 ////////////////////////////////////////////////////////////////////////////////
 // ColorTestWindowDelegate
@@ -90,15 +124,109 @@ ColorTestWindowDelegate::ColorTestWindowDelegate(SkColor color)
 ColorTestWindowDelegate::~ColorTestWindowDelegate() {
 }
 
-bool ColorTestWindowDelegate::OnKeyEvent(KeyEvent* event) {
+ui::EventResult ColorTestWindowDelegate::OnKeyEvent(ui::KeyEvent* event) {
   last_key_code_ = event->key_code();
-  return true;
+  return ui::ER_HANDLED;
 }
 void ColorTestWindowDelegate::OnWindowDestroyed() {
   delete this;
 }
 void ColorTestWindowDelegate::OnPaint(gfx::Canvas* canvas) {
-  canvas->GetSkCanvas()->drawColor(color_, SkXfermode::kSrc_Mode);
+  canvas->DrawColor(color_, SkXfermode::kSrc_Mode);
+}
+
+////////////////////////////////////////////////////////////////////////////////
+// MaskedWindowDelegate
+
+MaskedWindowDelegate::MaskedWindowDelegate(const gfx::Rect mask_rect)
+    : mask_rect_(mask_rect) {
+}
+
+bool MaskedWindowDelegate::HasHitTestMask() const {
+  return true;
+}
+
+void MaskedWindowDelegate::GetHitTestMask(gfx::Path* mask) const {
+  mask->addRect(RectToSkRect(mask_rect_));
+}
+
+////////////////////////////////////////////////////////////////////////////////
+// EventCountDelegate
+
+EventCountDelegate::EventCountDelegate()
+  : mouse_enter_count_(0),
+    mouse_move_count_(0),
+    mouse_leave_count_(0),
+    mouse_press_count_(0),
+    mouse_release_count_(0),
+    key_press_count_(0),
+    key_release_count_(0) {
+}
+
+ui::EventResult EventCountDelegate::OnKeyEvent(ui::KeyEvent* event) {
+  switch (event->type()) {
+    case ui::ET_KEY_PRESSED:
+      key_press_count_++;
+      break;
+    case ui::ET_KEY_RELEASED:
+      key_release_count_++;
+    default:
+      break;
+  }
+  return ui::ER_UNHANDLED;
+}
+
+ui::EventResult EventCountDelegate::OnMouseEvent(ui::MouseEvent* event) {
+  switch (event->type()) {
+    case ui::ET_MOUSE_MOVED:
+      mouse_move_count_++;
+      break;
+    case ui::ET_MOUSE_ENTERED:
+      mouse_enter_count_++;
+      break;
+    case ui::ET_MOUSE_EXITED:
+      mouse_leave_count_++;
+      break;
+    case ui::ET_MOUSE_PRESSED:
+      mouse_press_count_++;
+      break;
+    case ui::ET_MOUSE_RELEASED:
+      mouse_release_count_++;
+      break;
+    default:
+      break;
+  }
+  return ui::ER_UNHANDLED;
+}
+
+std::string EventCountDelegate::GetMouseMotionCountsAndReset() {
+  std::string result = StringPrintf("%d %d %d",
+                                    mouse_enter_count_,
+                                    mouse_move_count_,
+                                    mouse_leave_count_);
+  mouse_enter_count_ = 0;
+  mouse_move_count_ = 0;
+  mouse_leave_count_ = 0;
+  return result;
+}
+
+std::string EventCountDelegate::GetMouseButtonCountsAndReset() {
+  std::string result = StringPrintf("%d %d",
+                                    mouse_press_count_,
+                                    mouse_release_count_);
+  mouse_press_count_ = 0;
+  mouse_release_count_ = 0;
+  return result;
+}
+
+
+std::string EventCountDelegate::GetKeyCountsAndReset() {
+  std::string result = StringPrintf("%d %d",
+                                    key_press_count_,
+                                    key_release_count_);
+  key_press_count_ = 0;
+  key_release_count_ = 0;
+  return result;
 }
 
 }  // namespace test

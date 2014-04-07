@@ -8,11 +8,13 @@
 #include <pk11pub.h>
 
 #include "base/base64.h"
-#include "base/json/json_value_serializer.h"
+#include "base/json/json_string_value_serializer.h"
 #include "chrome/browser/chromeos/login/user_manager.h"
 #include "base/json/json_writer.h"  // for debug output only.
 #include "base/stringprintf.h"
 #include "base/values.h"
+#include "chrome/browser/chromeos/cros/certificate_pattern.h"
+#include "chrome/browser/chromeos/cros/cros_library.h"
 #include "chrome/browser/chromeos/cros/native_network_constants.h"
 #include "chrome/browser/chromeos/cros/native_network_parser.h"
 #include "chrome/browser/chromeos/cros/network_library.h"
@@ -26,9 +28,10 @@
 #include "crypto/scoped_nss_types.h"
 #include "crypto/symmetric_key.h"
 #include "grit/generated_resources.h"
-#include "net/base/cert_database.h"
 #include "net/base/crypto_module.h"
 #include "net/base/net_errors.h"
+#include "net/base/nss_cert_database.h"
+#include "net/base/pem_tokenizer.h"
 #include "net/base/x509_certificate.h"
 #include "net/proxy/proxy_bypass_rules.h"
 #include "third_party/cros_system_api/dbus/service_constants.h"
@@ -38,6 +41,11 @@ namespace chromeos {
 
 // Local constants.
 namespace {
+
+// The PEM block header used for DER certificates
+const char kCertificateHeader[] = "CERTIFICATE";
+// This is an older PEM marker for DER certificates.
+const char kX509CertificateHeader[] = "X509 CERTIFICATE";
 
 const base::Value::Type TYPE_BOOLEAN = base::Value::TYPE_BOOLEAN;
 const base::Value::Type TYPE_DICTIONARY = base::Value::TYPE_DICTIONARY;
@@ -54,7 +62,6 @@ OncValueSignature network_configuration_signature[] = {
   { onc::kGUID, PROPERTY_INDEX_GUID, TYPE_STRING },
   { onc::kProxySettings, PROPERTY_INDEX_ONC_PROXY_SETTINGS, TYPE_DICTIONARY },
   { onc::kName, PROPERTY_INDEX_NAME, TYPE_STRING },
-  // TODO(crosbug.com/23604): Handle removing networks.
   { onc::kRemove, PROPERTY_INDEX_ONC_REMOVE, TYPE_BOOLEAN },
   { onc::kType, PROPERTY_INDEX_TYPE, TYPE_STRING },
   { onc::kEthernet, PROPERTY_INDEX_ONC_ETHERNET, TYPE_DICTIONARY },
@@ -73,11 +80,34 @@ OncValueSignature ethernet_signature[] = {
 OncValueSignature wifi_signature[] = {
   { onc::wifi::kAutoConnect, PROPERTY_INDEX_AUTO_CONNECT, TYPE_BOOLEAN },
   { onc::wifi::kEAP, PROPERTY_INDEX_EAP, TYPE_DICTIONARY },
-  { onc::wifi::kHiddenSSID, PROPERTY_INDEX_HIDDEN_SSID, TYPE_BOOLEAN },
+  { onc::wifi::kHiddenSSID, PROPERTY_INDEX_WIFI_HIDDEN_SSID, TYPE_BOOLEAN },
   { onc::wifi::kPassphrase, PROPERTY_INDEX_PASSPHRASE, TYPE_STRING },
   { onc::wifi::kSecurity, PROPERTY_INDEX_SECURITY, TYPE_STRING },
   { onc::wifi::kSSID, PROPERTY_INDEX_SSID, TYPE_STRING },
   { NULL }
+};
+
+OncValueSignature issuer_subject_pattern_signature[] = {
+  { onc::certificate::kCommonName,
+    PROPERTY_INDEX_ISSUER_SUBJECT_PATTERN_COMMON_NAME, TYPE_STRING },
+  { onc::certificate::kLocality,
+    PROPERTY_INDEX_ISSUER_SUBJECT_PATTERN_LOCALITY, TYPE_STRING },
+  { onc::certificate::kOrganization,
+    PROPERTY_INDEX_ISSUER_SUBJECT_PATTERN_ORGANIZATION, TYPE_STRING },
+  { onc::certificate::kOrganizationalUnit,
+    PROPERTY_INDEX_ISSUER_SUBJECT_PATTERN_ORGANIZATIONAL_UNIT,
+    TYPE_STRING },
+};
+
+OncValueSignature certificate_pattern_signature[] = {
+  { onc::certificate::kIssuerCARef,
+    PROPERTY_INDEX_ONC_CERTIFICATE_PATTERN_ISSUER_CA_REF, TYPE_LIST },
+  { onc::certificate::kIssuer,
+    PROPERTY_INDEX_ONC_CERTIFICATE_PATTERN_ISSUER, TYPE_DICTIONARY },
+  { onc::certificate::kSubject,
+    PROPERTY_INDEX_ONC_CERTIFICATE_PATTERN_SUBJECT, TYPE_DICTIONARY },
+  { onc::certificate::kEnrollmentURI,
+    PROPERTY_INDEX_ONC_CERTIFICATE_PATTERN_ENROLLMENT_URI, TYPE_LIST },
 };
 
 OncValueSignature eap_signature[] = {
@@ -223,8 +253,24 @@ const bool GetBooleanValue(const base::Value& value) {
 
 std::string ConvertValueToString(const base::Value& value) {
   std::string value_json;
-  base::JSONWriter::Write(&value, false, &value_json);
+  base::JSONWriter::Write(&value, &value_json);
   return value_json;
+}
+
+bool GetAsListOfStrings(const base::Value& value,
+                        std::vector<std::string>* result) {
+  const base::ListValue* list = NULL;
+  if (!value.GetAsList(&list))
+    return false;
+  result->clear();
+  result->reserve(list->GetSize());
+  for (size_t i = 0; i < list->GetSize(); i++) {
+    std::string item;
+    if (!list->GetString(i, &item))
+      return false;
+    result->push_back(item);
+  }
+  return true;
 }
 
 }  // namespace
@@ -236,6 +282,7 @@ OncNetworkParser::OncNetworkParser(const std::string& onc_blob,
                                    NetworkUIData::ONCSource onc_source)
     : NetworkParser(get_onc_mapper()),
       onc_source_(onc_source),
+      allow_web_trust_from_policy_(false),
       network_configs_(NULL),
       certificates_(NULL) {
   VLOG(2) << __func__ << ": OncNetworkParser called on " << onc_blob;
@@ -321,9 +368,16 @@ base::DictionaryValue* OncNetworkParser::Decrypt(
     return NULL;
   }
 
+  // Make sure iterations != 0, since that's not valid.
+  if (iterations == 0) {
+    parse_error_ = l10n_util::GetStringUTF8(
+        IDS_NETWORK_CONFIG_ERROR_ENCRYPTED_ONC_UNABLE_TO_DECRYPT);
+    return NULL;
+  }
+
   // Simply a sanity check to make sure we can't lock up the machine
-  // for too long with a huge number.
-  if (iterations > kMaxIterationCount) {
+  // for too long with a huge number (or a negative number).
+  if (iterations < 0 || iterations > kMaxIterationCount) {
     parse_error_ = l10n_util::GetStringUTF8(
         IDS_NETWORK_CONFIG_ERROR_ENCRYPTED_ONC_TOO_MANY_ITERATIONS);
     return NULL;
@@ -412,17 +466,22 @@ const base::DictionaryValue* OncNetworkParser::GetNetworkConfig(int n) {
   return info;
 }
 
-Network* OncNetworkParser::ParseNetwork(int n) {
+Network* OncNetworkParser::ParseNetwork(int n, bool* marked_for_removal) {
   const base::DictionaryValue* info = GetNetworkConfig(n);
   if (!info)
     return NULL;
 
   if (VLOG_IS_ON(2)) {
     std::string network_json;
-    base::JSONWriter::Write(static_cast<const base::Value*>(info),
-                            true, &network_json);
-    VLOG(2) << "Parsing network at index " << n
-            << ": " << network_json;
+    base::JSONWriter::WriteWithOptions(static_cast<const base::Value*>(info),
+                                       base::JSONWriter::OPTIONS_PRETTY_PRINT,
+                                       &network_json);
+    VLOG(2) << "Parsing network at index " << n << ": " << network_json;
+  }
+
+  if (marked_for_removal) {
+    if (!info->GetBoolean(onc::kRemove, marked_for_removal))
+      *marked_for_removal = false;
   }
 
   return CreateNetworkFromInfo(std::string(), *info);
@@ -446,8 +505,9 @@ scoped_refptr<net::X509Certificate> OncNetworkParser::ParseCertificate(
 
   if (VLOG_IS_ON(2)) {
     std::string certificate_json;
-    base::JSONWriter::Write(static_cast<base::Value*>(certificate),
-                            true, &certificate_json);
+    base::JSONWriter::WriteWithOptions(static_cast<base::Value*>(certificate),
+                                       base::JSONWriter::OPTIONS_PRETTY_PRINT,
+                                       &certificate_json);
     VLOG(2) << "Parsing certificate at index " << cert_index
             << ": " << certificate_json;
   }
@@ -466,7 +526,6 @@ scoped_refptr<net::X509Certificate> OncNetworkParser::ParseCertificate(
   if (!certificate->GetBoolean("Remove", &remove))
     remove = false;
 
-  net::CertDatabase cert_database;
   if (remove) {
     if (!DeleteCertAndKeyByNickname(guid)) {
       parse_error_ = l10n_util::GetStringUTF8(
@@ -503,14 +562,14 @@ Network* OncNetworkParser::CreateNetworkFromInfo(
   }
   scoped_ptr<Network> network(CreateNewNetwork(type, service_path));
 
-  // Initialize UI data.
-  NetworkUIData ui_data;
+  // Initialize ONC source.
+  NetworkUIData ui_data = network->ui_data();
   ui_data.set_onc_source(onc_source_);
-  ui_data.FillDictionary(network->ui_data());
+  network->set_ui_data(ui_data);
 
   // Parse all properties recursively.
   if (!ParseNestedObject(network.get(),
-                         "NetworkConfiguration",
+                         onc::kNetworkConfiguration,
                          static_cast<const base::Value&>(info),
                          network_configuration_signature,
                          ParseNetworkConfigurationValue)) {
@@ -521,11 +580,13 @@ Network* OncNetworkParser::CreateNetworkFromInfo(
     return NULL;
   }
 
-  // Update the UI data property.
+  // Update the UI data property in shill.
   std::string ui_data_json;
-  base::JSONWriter::Write(network->ui_data(), false, &ui_data_json);
+  base::DictionaryValue ui_data_dict;
+  network->ui_data().FillDictionary(&ui_data_dict);
+  base::JSONWriter::Write(&ui_data_dict, &ui_data_json);
   base::StringValue ui_data_string_value(ui_data_json);
-  network->UpdatePropertyMap(PROPERTY_INDEX_UI_DATA, ui_data_string_value);
+  network->UpdatePropertyMap(PROPERTY_INDEX_UI_DATA, &ui_data_string_value);
 
   if (VLOG_IS_ON(2)) {
     VLOG(2) << "Created Network '" << network->name()
@@ -557,10 +618,10 @@ bool OncNetworkParser::ParseNestedObject(Network* network,
 
     // Recommended keys are only of interest to the UI code and the UI reads it
     // directly from the ONC blob.
-    if (key == "Recommended")
+    if (key == onc::kRecommended)
       continue;
 
-    base::Value* inner_value = NULL;
+    const base::Value* inner_value = NULL;
     dict->GetWithoutPathExpansion(key, &inner_value);
     CHECK(inner_value != NULL);
     int field_index;
@@ -583,15 +644,18 @@ bool OncNetworkParser::ParseNestedObject(Network* network,
     PropertyIndex index = signature[field_index].index;
     // We need to UpdatePropertyMap now since parser might want to
     // change the mapped value.
-    network->UpdatePropertyMap(index, *inner_value);
+    network->UpdatePropertyMap(index, inner_value);
     if (!parser(this, index, *inner_value, network)) {
-      LOG(ERROR) << network->name() << ": field not parsed: " << key;
+      LOG(ERROR) << network->name() << ": field in " << onc_type
+                 << " not parsed: " << key;
       any_errors = true;
       continue;
     }
     if (VLOG_IS_ON(2)) {
       std::string value_json;
-      base::JSONWriter::Write(inner_value, true, &value_json);
+      base::JSONWriter::WriteWithOptions(inner_value,
+                                         base::JSONWriter::OPTIONS_PRETTY_PRINT,
+                                         &value_json);
       VLOG(2) << network->name() << ": Successfully parsed [" << key
               << "(" << index << ")] = " << value_json;
     }
@@ -620,13 +684,13 @@ std::string OncNetworkParser::GetUserExpandedValue(
     return string_value;
   }
 
-  if (!UserManager::Get()->user_is_logged_in())
+  if (!UserManager::Get()->IsUserLoggedIn())
     return string_value;
 
-  const User& logged_in_user(UserManager::Get()->logged_in_user());
+  const User& logged_in_user(UserManager::Get()->GetLoggedInUser());
   ReplaceSubstringsAfterOffset(&string_value, 0,
                                onc::substitutes::kLoginIDField,
-                               logged_in_user.GetAccountName());
+                               logged_in_user.GetAccountName(false));
   ReplaceSubstringsAfterOffset(&string_value, 0,
                                onc::substitutes::kEmailField,
                                logged_in_user.email());
@@ -677,19 +741,17 @@ bool OncNetworkParser::ParseNetworkConfigurationValue(
     const base::Value& value,
     Network* network) {
   switch (index) {
-    case PROPERTY_INDEX_ONC_ETHERNET: {
+    case PROPERTY_INDEX_ONC_ETHERNET:
       return parser->ParseNestedObject(network, "Ethernet", value,
           ethernet_signature, OncEthernetNetworkParser::ParseEthernetValue);
-    }
-    case PROPERTY_INDEX_ONC_WIFI: {
+    case PROPERTY_INDEX_ONC_WIFI:
       return parser->ParseNestedObject(network,
-                                       "WiFi",
+                                       onc::kWiFi,
                                        value,
                                        wifi_signature,
                                        OncWifiNetworkParser::ParseWifiValue);
-    }
     case PROPERTY_INDEX_ONC_VPN: {
-      if (!CheckNetworkType(network, TYPE_VPN, "VPN"))
+      if (!CheckNetworkType(network, TYPE_VPN, onc::kVPN))
         return false;
       VirtualNetwork* virtual_network = static_cast<VirtualNetwork*>(network);
       // Got the "VPN" field.  Immediately store the VPN.Type field
@@ -706,28 +768,35 @@ bool OncNetworkParser::ParseNetworkConfigurationValue(
         OncVirtualNetworkParser::ParseProviderType(provider_type_string);
       virtual_network->set_provider_type(provider_type);
       return parser->ParseNestedObject(network,
-                                       "VPN",
+                                       onc::kVPN,
                                        value,
                                        vpn_signature,
                                        OncVirtualNetworkParser::ParseVPNValue);
     }
-    case PROPERTY_INDEX_ONC_PROXY_SETTINGS: {
-       return ProcessProxySettings(parser, value, network);
-    }
+    case PROPERTY_INDEX_ONC_PROXY_SETTINGS:
+      return ProcessProxySettings(parser, value, network);
     case PROPERTY_INDEX_ONC_REMOVE:
-      VLOG(1) << network->name() << ": Remove field not yet implemented";
-      return false;
+      // Removal is handled in ParseNetwork, and so is ignored here.
+      return true;
     case PROPERTY_INDEX_TYPE: {
       // Update property with native value for type.
       std::string str =
-        NativeNetworkParser::network_type_mapper()->GetKey(network->type());
-      scoped_ptr<StringValue> val(Value::CreateStringValue(str));
-      network->UpdatePropertyMap(PROPERTY_INDEX_TYPE, *val.get());
+          NativeNetworkParser::network_type_mapper()->GetKey(network->type());
+      base::StringValue val(str);
+      network->UpdatePropertyMap(PROPERTY_INDEX_TYPE, &val);
       return true;
     }
     case PROPERTY_INDEX_GUID:
+      // Fall back to generic parser.
+      return parser->ParseValue(index, value, network);
     case PROPERTY_INDEX_NAME:
-      // Fall back to generic parser for these.
+      // shill doesn't allow setting name for non-VPN networks.
+      if (network->type() != TYPE_VPN) {
+        network->UpdatePropertyMap(PROPERTY_INDEX_NAME, NULL);
+        return true;
+      }
+
+      // Fall back to generic parser.
       return parser->ParseValue(index, value, network);
     default:
       break;
@@ -753,7 +822,13 @@ OncNetworkParser::ParseServerOrCaCertificate(
     const std::string& cert_type,
     const std::string& guid,
     base::DictionaryValue* certificate) {
-  net::CertDatabase cert_database;
+  // Device policy can't import certificates.
+  if (onc_source_ == NetworkUIData::ONC_SOURCE_DEVICE_POLICY) {
+    LOG(WARNING) << "Refusing to import certificate from device policy";
+    // This isn't a parsing error, so just return NULL here.
+    return NULL;
+  }
+
   bool web_trust = false;
   base::ListValue* trust_list = NULL;
   if (certificate->GetList("Trust", &trust_list)) {
@@ -767,6 +842,8 @@ OncNetworkParser::ParseServerOrCaCertificate(
         return NULL;
       }
       if (trust_type == "Web") {
+        // "Web" implies that the certificate is to be trusted for SSL
+        // identification.
         web_trust = true;
       } else {
         LOG(WARNING) << "ONC File: certificate contains unknown "
@@ -779,6 +856,14 @@ OncNetworkParser::ParseServerOrCaCertificate(
     }
   }
 
+  // Web trust is only granted to certificates imported for a managed user
+  // on a managed device.
+  if (onc_source_ == NetworkUIData::ONC_SOURCE_USER_POLICY &&
+      web_trust && !allow_web_trust_from_policy_) {
+    LOG(WARNING) << "Web trust not granted for certificate: " << guid;
+    web_trust = false;
+  }
+
   std::string x509_data;
   if (!certificate->GetString("X509", &x509_data) || x509_data.empty()) {
     LOG(WARNING) << "ONC File: certificate missing appropriate "
@@ -789,13 +874,28 @@ OncNetworkParser::ParseServerOrCaCertificate(
     return NULL;
   }
 
+  // Parse PEM certificate, and get the decoded data for use in creating
+  // certificate below.
+  std::vector<std::string> pem_headers;
+  pem_headers.push_back(kCertificateHeader);
+  pem_headers.push_back(kX509CertificateHeader);
+
+  net::PEMTokenizer pem_tokenizer(x509_data, pem_headers);
   std::string decoded_x509;
-  if (!base::Base64Decode(x509_data, &decoded_x509)) {
-    LOG(WARNING) << "Unable to base64 decode X509 data: \""
-                 << x509_data << "\".";
-    parse_error_ = l10n_util::GetStringUTF8(
-        IDS_NETWORK_CONFIG_ERROR_CERT_DATA_MALFORMED);
-    return NULL;
+  if (!pem_tokenizer.GetNext()) {
+    // If we failed to read the data as a PEM file, then let's just try plain
+    // base64 decode: some versions of Spigots didn't apply the PEM marker
+    // strings. For this to work, there has to be no white space, and it has to
+    // only contain the base64-encoded data.
+    if (!base::Base64Decode(x509_data, &decoded_x509)) {
+      LOG(WARNING) << "Unable to base64 decode X509 data: \""
+                   << x509_data << "\".";
+      parse_error_ = l10n_util::GetStringUTF8(
+          IDS_NETWORK_CONFIG_ERROR_CERT_DATA_MALFORMED);
+      return NULL;
+    }
+  } else {
+    decoded_x509 = pem_tokenizer.data();
   }
 
   scoped_refptr<net::X509Certificate> x509_cert =
@@ -829,8 +929,9 @@ OncNetworkParser::ParseServerOrCaCertificate(
   // TODO(mnissler, gspencer): We should probably switch to a mode where we
   // keep our own database for mapping GUIDs to certs in order to enable several
   // GUIDs to map to the same cert. See http://crosbug.com/26073.
+  net::NSSCertDatabase* cert_database = net::NSSCertDatabase::GetInstance();
   if (x509_cert->os_cert_handle()->isperm) {
-    if (!cert_database.DeleteCertAndKey(x509_cert.get())) {
+    if (!cert_database->DeleteCertAndKey(x509_cert.get())) {
       parse_error_ = l10n_util::GetStringUTF8(
           IDS_NETWORK_CONFIG_ERROR_CERT_DELETE);
       return NULL;
@@ -859,21 +960,21 @@ OncNetworkParser::ParseServerOrCaCertificate(
   if (!certs.empty()) {
     LOG(WARNING) << "Cert GUID is already in use: " << guid;
     parse_error_ = l10n_util::GetStringUTF8(
-        IDS_NETWORK_CONFIG_ERROR_CERT_IMPORT);
+        IDS_NETWORK_CONFIG_ERROR_CERT_GUID_COLLISION);
     return NULL;
   }
 
   net::CertificateList cert_list;
   cert_list.push_back(x509_cert);
-  net::CertDatabase::ImportCertFailureList failures;
+  net::NSSCertDatabase::ImportCertFailureList failures;
   bool success = false;
+  net::NSSCertDatabase::TrustBits trust = web_trust ?
+                                          net::NSSCertDatabase::TRUSTED_SSL :
+                                          net::NSSCertDatabase::TRUST_DEFAULT;
   if (cert_type == "Server") {
-    success = cert_database.ImportServerCert(cert_list, &failures);
+    success = cert_database->ImportServerCert(cert_list, trust, &failures);
   } else {  // Authority cert
-    net::CertDatabase::TrustBits trust = web_trust ?
-                                         net::CertDatabase::TRUSTED_SSL :
-                                         net::CertDatabase::UNTRUSTED;
-    success = cert_database.ImportCACerts(cert_list, trust, &failures);
+    success = cert_database->ImportCACerts(cert_list, trust, &failures);
   }
   if (!failures.empty()) {
     LOG(WARNING) << "ONC File: Error ("
@@ -901,7 +1002,6 @@ scoped_refptr<net::X509Certificate> OncNetworkParser::ParseClientCertificate(
     int cert_index,
     const std::string& guid,
     base::DictionaryValue* certificate) {
-  net::CertDatabase cert_database;
   std::string pkcs12_data;
   if (!certificate->GetString("PKCS12", &pkcs12_data) ||
       pkcs12_data.empty()) {
@@ -922,10 +1022,11 @@ scoped_refptr<net::X509Certificate> OncNetworkParser::ParseClientCertificate(
   }
 
   // Since this has a private key, always use the private module.
-  scoped_refptr<net::CryptoModule> module(cert_database.GetPrivateModule());
+  net::NSSCertDatabase* cert_database = net::NSSCertDatabase::GetInstance();
+  scoped_refptr<net::CryptoModule> module(cert_database->GetPrivateModule());
   net::CertificateList imported_certs;
 
-  int result = cert_database.ImportFromPKCS12(
+  int result = cert_database->ImportFromPKCS12(
       module.get(), decoded_pkcs12, string16(), false, &imported_certs);
   if (result != net::OK) {
     LOG(WARNING) << "ONC File: Unable to import Client certificate at index "
@@ -970,11 +1071,23 @@ scoped_refptr<net::X509Certificate> OncNetworkParser::ParseClientCertificate(
 }
 
 // static
+ClientCertType OncNetworkParser::ParseClientCertType(
+    const std::string& type) {
+  static EnumMapper<ClientCertType>::Pair table[] = {
+    { onc::certificate::kNone, CLIENT_CERT_TYPE_NONE },
+    { onc::certificate::kRef, CLIENT_CERT_TYPE_REF },
+    { onc::certificate::kPattern, CLIENT_CERT_TYPE_PATTERN },
+  };
+  CR_DEFINE_STATIC_LOCAL(EnumMapper<ClientCertType>, parser,
+      (table, arraysize(table), CLIENT_CERT_TYPE_NONE));
+  return parser.Get(type);
+}
+
+// static
 void OncNetworkParser::ListCertsWithNickname(const std::string& label,
                                              net::CertificateList* result) {
   net::CertificateList all_certs;
-  net::CertDatabase cert_db;
-  cert_db.ListCerts(&all_certs);
+  net::NSSCertDatabase::GetInstance()->ListCerts(&all_certs);
   result->clear();
   for (net::CertificateList::iterator iter = all_certs.begin();
        iter != all_certs.end(); ++iter) {
@@ -1012,7 +1125,6 @@ void OncNetworkParser::ListCertsWithNickname(const std::string& label,
 bool OncNetworkParser::DeleteCertAndKeyByNickname(const std::string& label) {
   net::CertificateList cert_list;
   ListCertsWithNickname(label, &cert_list);
-  net::CertDatabase cert_db;
   bool result = true;
   for (net::CertificateList::iterator iter = cert_list.begin();
        iter != cert_list.end(); ++iter) {
@@ -1023,7 +1135,7 @@ bool OncNetworkParser::DeleteCertAndKeyByNickname(const std::string& label) {
     // label, and the cert not being found is one of the few reasons the
     // delete could fail, but still...  The other choice is to return
     // failure immediately, but that doesn't seem to do what is intended.
-    if (!cert_db.DeleteCertAndKey(iter->get()))
+    if (!net::NSSCertDatabase::GetInstance()->DeleteCertAndKey(iter->get()))
       result = false;
   }
   return result;
@@ -1115,13 +1227,13 @@ bool OncNetworkParser::ProcessProxySettings(OncNetworkParser* parser,
   std::string proxy_dict_str = ConvertValueToString(*proxy_dict.get());
 
   // Add ProxyConfig property to property map so that it will be updated in
-  // flimflam in NetworkLibraryImplCros::CallConfigureService after all parsing
+  // shill in NetworkLibraryImplCros::CallConfigureService after all parsing
   // has completed.
-  scoped_ptr<StringValue> val(Value::CreateStringValue(proxy_dict_str));
-  network->UpdatePropertyMap(PROPERTY_INDEX_PROXY_CONFIG, *val.get());
+  base::StringValue val(proxy_dict_str);
+  network->UpdatePropertyMap(PROPERTY_INDEX_PROXY_CONFIG, &val);
 
   // If |network| is currently being connected to or it exists in memory,
-  // flimflam will fire PropertyChanged notification in ConfigureService,
+  // shill will fire PropertyChanged notification in ConfigureService,
   // chromeos::ProxyConfigServiceImpl will get OnNetworkChanged notification
   // and, if necessary, activate |proxy_dict_str| on network stack and reflect
   // it in UI via "Change proxy settings" button.
@@ -1262,6 +1374,127 @@ net::ProxyServer OncNetworkParser::ParseProxyLocationValue(
   return net::ProxyServer(scheme, host_port);
 }
 
+// static
+bool OncNetworkParser::ParseClientCertPattern(OncNetworkParser* parser,
+                                              PropertyIndex index,
+                                              const base::Value& value,
+                                              Network* network) {
+  // Only WiFi and VPN have this type.
+  if (network->type() != TYPE_WIFI &&
+      network->type() != TYPE_VPN) {
+    LOG(WARNING) << "Tried to parse a ClientCertPattern from something "
+                 << "that wasn't a WiFi or VPN network.";
+    return false;
+  }
+
+  switch (index) {
+    case PROPERTY_INDEX_ONC_CERTIFICATE_PATTERN_ENROLLMENT_URI: {
+      std::vector<std::string> resulting_list;
+      if (!GetAsListOfStrings(value, &resulting_list))
+        return false;
+      CertificatePattern pattern = network->client_cert_pattern();
+      pattern.set_enrollment_uri_list(resulting_list);
+      network->set_client_cert_pattern(pattern);
+      return true;
+    }
+    case PROPERTY_INDEX_ONC_CERTIFICATE_PATTERN_ISSUER_CA_REF: {
+      std::vector<std::string> resulting_list;
+      if (!GetAsListOfStrings(value, &resulting_list))
+        return false;
+      CertificatePattern pattern = network->client_cert_pattern();
+      pattern.set_issuer_ca_ref_list(resulting_list);
+      network->set_client_cert_pattern(pattern);
+      return true;
+    }
+    case PROPERTY_INDEX_ONC_CERTIFICATE_PATTERN_ISSUER:
+      return parser->ParseNestedObject(network,
+                                       onc::certificate::kIssuer,
+                                       value,
+                                       issuer_subject_pattern_signature,
+                                       ParseIssuerPattern);
+    case PROPERTY_INDEX_ONC_CERTIFICATE_PATTERN_SUBJECT:
+      return parser->ParseNestedObject(network,
+                                       onc::certificate::kSubject,
+                                       value,
+                                       issuer_subject_pattern_signature,
+                                       ParseSubjectPattern);
+    default:
+      break;
+  }
+  return false;
+}
+
+// static
+bool OncNetworkParser::ParseIssuerPattern(OncNetworkParser* parser,
+                                          PropertyIndex index,
+                                          const base::Value& value,
+                                          Network* network) {
+  IssuerSubjectPattern pattern;
+  if (ParseIssuerSubjectPattern(&pattern, parser, index, value, network)) {
+    CertificatePattern cert_pattern = network->client_cert_pattern();
+    cert_pattern.set_issuer(pattern);
+    network->set_client_cert_pattern(cert_pattern);
+    return true;
+  }
+  return false;
+}
+
+// static
+bool OncNetworkParser::ParseSubjectPattern(OncNetworkParser* parser,
+                                           PropertyIndex index,
+                                           const base::Value& value,
+                                           Network* network) {
+  IssuerSubjectPattern pattern;
+  if (ParseIssuerSubjectPattern(&pattern, parser, index, value, network)) {
+    CertificatePattern cert_pattern = network->client_cert_pattern();
+    cert_pattern.set_subject(pattern);
+    network->set_client_cert_pattern(cert_pattern);
+    return true;
+  }
+  return false;
+}
+
+// static
+bool OncNetworkParser::ParseIssuerSubjectPattern(IssuerSubjectPattern* pattern,
+                                                 OncNetworkParser* parser,
+                                                 PropertyIndex index,
+                                                 const base::Value& value,
+                                                 Network* network) {
+  // Only WiFi and VPN have this type.
+  if (network->type() != TYPE_WIFI &&
+      network->type() != TYPE_VPN) {
+    LOG(WARNING) << "Tried to parse an IssuerSubjectPattern from something "
+                 << "that wasn't a WiFi or VPN network.";
+    return false;
+  }
+  std::string value_str;
+  if (!value.GetAsString(&value_str))
+    return false;
+
+  bool result = false;
+  switch (index) {
+    case PROPERTY_INDEX_ISSUER_SUBJECT_PATTERN_COMMON_NAME:
+      pattern->set_common_name(value_str);
+      result = true;
+      break;
+    case PROPERTY_INDEX_ISSUER_SUBJECT_PATTERN_LOCALITY:
+      pattern->set_locality(value_str);
+      result = true;
+      break;
+    case PROPERTY_INDEX_ISSUER_SUBJECT_PATTERN_ORGANIZATION:
+      pattern->set_organization(value_str);
+      result = true;
+      break;
+    case PROPERTY_INDEX_ISSUER_SUBJECT_PATTERN_ORGANIZATIONAL_UNIT:
+      pattern->set_organizational_unit(value_str);
+      result = true;
+      break;
+    default:
+      break;
+  }
+  return result;
+}
+
 // -------------------- OncEthernetNetworkParser --------------------
 
 OncEthernetNetworkParser::OncEthernetNetworkParser() {}
@@ -1313,10 +1546,9 @@ bool OncWifiNetworkParser::ParseWifiValue(OncNetworkParser* parser,
       ConnectionSecurity security = ParseSecurity(GetStringValue(value));
       wifi_network->set_encryption(security);
       // Also update property with native value for security.
-      std::string str =
-          NativeNetworkParser::network_security_mapper()->GetKey(security);
-      scoped_ptr<StringValue> val(Value::CreateStringValue(str));
-      wifi_network->UpdatePropertyMap(index, *val.get());
+      base::StringValue val(
+          NativeNetworkParser::network_security_mapper()->GetKey(security));
+      wifi_network->UpdatePropertyMap(index, &val);
       return true;
     }
     case PROPERTY_INDEX_PASSPHRASE:
@@ -1327,7 +1559,7 @@ bool OncWifiNetworkParser::ParseWifiValue(OncNetworkParser* parser,
       return true;
     case PROPERTY_INDEX_EAP:
       parser->ParseNestedObject(wifi_network,
-                                "EAP",
+                                onc::wifi::kEAP,
                                 value,
                                 eap_signature,
                                 ParseEAPValue);
@@ -1335,8 +1567,8 @@ bool OncWifiNetworkParser::ParseWifiValue(OncNetworkParser* parser,
     case PROPERTY_INDEX_AUTO_CONNECT:
       network->set_auto_connect(GetBooleanValue(value));
       return true;
-    case PROPERTY_INDEX_HIDDEN_SSID:
-      // Pass this through to connection manager as is.
+    case PROPERTY_INDEX_WIFI_HIDDEN_SSID:
+      wifi_network->set_hidden_ssid(GetBooleanValue(value));
       return true;
     default:
       break;
@@ -1349,7 +1581,7 @@ bool OncWifiNetworkParser::ParseEAPValue(OncNetworkParser* parser,
                                          PropertyIndex index,
                                          const base::Value& value,
                                          Network* network) {
-  if (!CheckNetworkType(network, TYPE_WIFI, "EAP"))
+  if (!CheckNetworkType(network, TYPE_WIFI, onc::wifi::kEAP))
     return false;
   WifiNetwork* wifi_network = static_cast<WifiNetwork*>(network);
   switch (index) {
@@ -1358,17 +1590,16 @@ bool OncWifiNetworkParser::ParseEAPValue(OncNetworkParser* parser,
           GetUserExpandedValue(value, parser->onc_source()));
       wifi_network->set_eap_identity(expanded_identity);
       const StringValue expanded_identity_value(expanded_identity);
-      wifi_network->UpdatePropertyMap(index, expanded_identity_value);
+      wifi_network->UpdatePropertyMap(index, &expanded_identity_value);
       return true;
     }
     case PROPERTY_INDEX_EAP_METHOD: {
       EAPMethod eap_method = ParseEAPMethod(GetStringValue(value));
       wifi_network->set_eap_method(eap_method);
       // Also update property with native value for EAP method.
-      std::string str =
-          NativeNetworkParser::network_eap_method_mapper()->GetKey(eap_method);
-      scoped_ptr<StringValue> val(Value::CreateStringValue(str));
-      wifi_network->UpdatePropertyMap(index, *val.get());
+      base::StringValue val(
+          NativeNetworkParser::network_eap_method_mapper()->GetKey(eap_method));
+      wifi_network->UpdatePropertyMap(index, &val);
       return true;
     }
     case PROPERTY_INDEX_EAP_PHASE_2_AUTH: {
@@ -1376,10 +1607,10 @@ bool OncWifiNetworkParser::ParseEAPValue(OncNetworkParser* parser,
           GetStringValue(value));
       wifi_network->set_eap_phase_2_auth(eap_phase_2_auth);
       // Also update property with native value for EAP phase 2 auth.
-      std::string str = NativeNetworkParser::network_eap_auth_mapper()->GetKey(
-          eap_phase_2_auth);
-      scoped_ptr<StringValue> val(Value::CreateStringValue(str));
-      wifi_network->UpdatePropertyMap(index, *val.get());
+      base::StringValue val(
+          NativeNetworkParser::network_eap_auth_mapper()->GetKey(
+              eap_phase_2_auth));
+      wifi_network->UpdatePropertyMap(index, &val);
       return true;
     }
     case PROPERTY_INDEX_EAP_ANONYMOUS_IDENTITY: {
@@ -1387,7 +1618,7 @@ bool OncWifiNetworkParser::ParseEAPValue(OncNetworkParser* parser,
           GetUserExpandedValue(value, parser->onc_source()));
       wifi_network->set_eap_anonymous_identity(expanded_identity);
       const StringValue expanded_identity_value(expanded_identity);
-      wifi_network->UpdatePropertyMap(index, expanded_identity_value);
+      wifi_network->UpdatePropertyMap(index, &expanded_identity_value);
       return true;
     }
     case PROPERTY_INDEX_EAP_CERT_ID:
@@ -1410,9 +1641,19 @@ bool OncWifiNetworkParser::ParseEAPValue(OncNetworkParser* parser,
       return true;
     }
     case PROPERTY_INDEX_ONC_CLIENT_CERT_PATTERN:
-    case PROPERTY_INDEX_ONC_CLIENT_CERT_TYPE:
-      // TODO(crosbug.com/19409): Support certificate patterns.
-      // Ignore for now.
+      return parser->ParseNestedObject(
+            wifi_network,
+            onc::eap::kClientCertPattern,
+            value,
+            certificate_pattern_signature,
+            OncNetworkParser::ParseClientCertPattern);
+    case PROPERTY_INDEX_ONC_CLIENT_CERT_TYPE: {
+      ClientCertType type = ParseClientCertType(GetStringValue(value));
+      wifi_network->set_client_cert_type(type);
+      return true;
+    }
+    case PROPERTY_INDEX_SAVE_CREDENTIALS:
+      wifi_network->set_eap_save_credentials(GetBooleanValue(value));
       return true;
     default:
       break;
@@ -1426,7 +1667,7 @@ ConnectionSecurity OncWifiNetworkParser::ParseSecurity(
   static EnumMapper<ConnectionSecurity>::Pair table[] = {
     { "None", SECURITY_NONE },
     { "WEP-PSK", SECURITY_WEP },
-    { "WPA-PSK", SECURITY_WPA },
+    { "WPA-PSK", SECURITY_PSK },
     { "WPA-EAP", SECURITY_8021X },
   };
   CR_DEFINE_STATIC_LOCAL(EnumMapper<ConnectionSecurity>, parser,
@@ -1486,17 +1727,15 @@ bool OncVirtualNetworkParser::ParseVPNValue(OncNetworkParser* parser,
                                             PropertyIndex index,
                                             const base::Value& value,
                                             Network* network) {
-  if (!CheckNetworkType(network, TYPE_VPN, "VPN"))
+  if (!CheckNetworkType(network, TYPE_VPN, onc::kVPN))
     return false;
   VirtualNetwork* virtual_network = static_cast<VirtualNetwork*>(network);
   switch (index) {
     case PROPERTY_INDEX_PROVIDER_HOST: {
-      scoped_ptr<StringValue> empty_value(
-          Value::CreateStringValue(std::string()));
+      base::StringValue empty_value("");
       virtual_network->set_server_hostname(GetStringValue(value));
-      // Flimflam requires a domain property which is unused.
-      network->UpdatePropertyMap(PROPERTY_INDEX_VPN_DOMAIN,
-                                 *empty_value.get());
+      // Shill requires a domain property which is unused.
+      network->UpdatePropertyMap(PROPERTY_INDEX_VPN_DOMAIN, &empty_value);
       return true;
     }
     case PROPERTY_INDEX_ONC_IPSEC:
@@ -1507,7 +1746,7 @@ bool OncVirtualNetworkParser::ParseVPNValue(OncNetworkParser* parser,
         return false;
       }
       return parser->ParseNestedObject(network,
-                                       "IPsec",
+                                       onc::vpn::kIPsec,
                                        value,
                                        ipsec_signature,
                                        ParseIPsecValue);
@@ -1517,7 +1756,7 @@ bool OncVirtualNetworkParser::ParseVPNValue(OncNetworkParser* parser,
         return false;
       }
       return parser->ParseNestedObject(network,
-                                       "L2TP",
+                                       onc::vpn::kL2TP,
                                        value,
                                        l2tp_signature,
                                        ParseL2TPValue);
@@ -1526,17 +1765,16 @@ bool OncVirtualNetworkParser::ParseVPNValue(OncNetworkParser* parser,
         VLOG(1) << "OpenVPN field not allowed with this VPN type";
         return false;
       }
-      // The following are needed by flimflam to set up the OpenVPN
+      // The following are needed by shill to set up the OpenVPN
       // management channel which every ONC OpenVPN configuration will
       // use.
-      scoped_ptr<Value> empty_value(
-          Value::CreateStringValue(std::string()));
+      base::StringValue empty_value("");
       network->UpdatePropertyMap(PROPERTY_INDEX_OPEN_VPN_AUTHUSERPASS,
-                                 *empty_value.get());
+                                 &empty_value);
       network->UpdatePropertyMap(PROPERTY_INDEX_OPEN_VPN_MGMT_ENABLE,
-                                 *empty_value.get());
+                                 &empty_value);
       return parser->ParseNestedObject(network,
-                                       "OpenVPN",
+                                       onc::vpn::kOpenVPN,
                                        value,
                                        openvpn_signature,
                                        ParseOpenVPNValue);
@@ -1546,10 +1784,10 @@ bool OncVirtualNetworkParser::ParseVPNValue(OncNetworkParser* parser,
       ProviderType provider_type = GetCanonicalProviderType(
           virtual_network->provider_type());
       std::string str =
-        NativeVirtualNetworkParser::provider_type_mapper()->GetKey(
-            provider_type);
-      scoped_ptr<StringValue> val(Value::CreateStringValue(str));
-      network->UpdatePropertyMap(PROPERTY_INDEX_PROVIDER_TYPE, *val.get());
+          NativeVirtualNetworkParser::provider_type_mapper()->GetKey(
+              provider_type);
+      base::StringValue val(str);
+      network->UpdatePropertyMap(PROPERTY_INDEX_PROVIDER_TYPE, &val);
       return true;
     }
     default:
@@ -1562,7 +1800,7 @@ bool OncVirtualNetworkParser::ParseIPsecValue(OncNetworkParser* parser,
                                               PropertyIndex index,
                                               const base::Value& value,
                                               Network* network) {
-  if (!CheckNetworkType(network, TYPE_VPN, "IPsec"))
+  if (!CheckNetworkType(network, TYPE_VPN, onc::vpn::kIPsec))
     return false;
   VirtualNetwork* virtual_network = static_cast<VirtualNetwork*>(network);
   switch (index) {
@@ -1594,19 +1832,23 @@ bool OncVirtualNetworkParser::ParseIPsecValue(OncNetworkParser* parser,
       virtual_network->set_client_cert_id(cert_id);
       return true;
     }
-    case PROPERTY_INDEX_ONC_CLIENT_CERT_PATTERN:
-    case PROPERTY_INDEX_ONC_CLIENT_CERT_TYPE:
-      // TODO(crosbug.com/19409): Support certificate patterns.
-      // Ignore for now.
+    case PROPERTY_INDEX_ONC_CLIENT_CERT_PATTERN: {
+      return parser->ParseNestedObject(virtual_network,
+                                       onc::vpn::kClientCertPattern,
+                                       value,
+                                       certificate_pattern_signature,
+                                       ParseClientCertPattern);
+    }
+    case PROPERTY_INDEX_ONC_CLIENT_CERT_TYPE: {
+      ClientCertType type = ParseClientCertType(GetStringValue(value));
+      virtual_network->set_client_cert_type(type);
       return true;
+    }
     case PROPERTY_INDEX_IPSEC_IKEVERSION: {
-      scoped_ptr<Value> string_value(
-          Value::CreateStringValue(ConvertValueToString(value)));
       if (!value.IsType(TYPE_STRING)) {
-        // Flimflam wants all provider properties to be strings.
-        virtual_network->UpdatePropertyMap(
-            index,
-            *string_value.get());
+        // Shill wants all provider properties to be strings.
+        base::StringValue string_value(ConvertValueToString(value));
+        virtual_network->UpdatePropertyMap(index, &string_value);
       }
       return true;
     }
@@ -1665,7 +1907,7 @@ bool OncVirtualNetworkParser::ParseL2TPValue(OncNetworkParser* parser,
           GetUserExpandedValue(value, parser->onc_source()));
       virtual_network->set_username(expanded_user);
       const StringValue expanded_user_value(expanded_user);
-      virtual_network->UpdatePropertyMap(index, expanded_user_value);
+      virtual_network->UpdatePropertyMap(index, &expanded_user_value);
       return true;
     }
     case PROPERTY_INDEX_SAVE_CREDENTIALS:
@@ -1698,7 +1940,7 @@ bool OncVirtualNetworkParser::ParseOpenVPNValue(OncNetworkParser* parser,
           GetUserExpandedValue(value, parser->onc_source()));
       virtual_network->set_username(expanded_user);
       const StringValue expanded_user_value(expanded_user);
-      virtual_network->UpdatePropertyMap(index, expanded_user_value);
+      virtual_network->UpdatePropertyMap(index, &expanded_user_value);
       return true;
     }
     case PROPERTY_INDEX_SAVE_CREDENTIALS:
@@ -1708,17 +1950,17 @@ bool OncVirtualNetworkParser::ParseOpenVPNValue(OncNetworkParser* parser,
       virtual_network->set_ca_cert_nss(GetStringValue(value));
       return true;
     case PROPERTY_INDEX_OPEN_VPN_REMOTECERTKU: {
-      // ONC supports a list of these, but we flimflam supports only one
+      // ONC supports a list of these, but we shill supports only one
       // today.  So extract the first.
       const base::ListValue* value_list = NULL;
       value.GetAsList(&value_list);
-      base::Value* first_item = NULL;
+      const base::Value* first_item = NULL;
       if (!value_list->Get(0, &first_item) ||
           !first_item->IsType(base::Value::TYPE_STRING)) {
         VLOG(1) << "RemoteCertKU must be non-empty list of strings";
         return false;
       }
-      virtual_network->UpdatePropertyMap(index, *first_item);
+      virtual_network->UpdatePropertyMap(index, first_item);
       return true;
     }
     case PROPERTY_INDEX_OPEN_VPN_AUTH:
@@ -1741,13 +1983,10 @@ bool OncVirtualNetworkParser::ParseOpenVPNValue(OncNetworkParser* parser,
     case PROPERTY_INDEX_OPEN_VPN_STATICCHALLENGE:
     case PROPERTY_INDEX_OPEN_VPN_TLSAUTHCONTENTS:
     case PROPERTY_INDEX_OPEN_VPN_TLSREMOTE: {
-      scoped_ptr<Value> string_value(
-          Value::CreateStringValue(ConvertValueToString(value)));
       if (!value.IsType(TYPE_STRING)) {
-        // Flimflam wants all provider properties to be strings.
-        virtual_network->UpdatePropertyMap(
-            index,
-            *string_value.get());
+        // Shill wants all provider properties to be strings.
+        base::StringValue string_value(ConvertValueToString(value));
+        virtual_network->UpdatePropertyMap(index, &string_value);
       }
       return true;
     }
@@ -1759,10 +1998,17 @@ bool OncVirtualNetworkParser::ParseOpenVPNValue(OncNetworkParser* parser,
       return true;
     }
     case PROPERTY_INDEX_ONC_CLIENT_CERT_PATTERN:
-    case PROPERTY_INDEX_ONC_CLIENT_CERT_TYPE:
-      // TODO(crosbug.com/19409): Support certificate patterns.
-      // Ignore for now.
+      return parser->ParseNestedObject(
+          virtual_network,
+          onc::eap::kClientCertPattern,
+          value,
+          certificate_pattern_signature,
+          OncNetworkParser::ParseClientCertPattern);
+    case PROPERTY_INDEX_ONC_CLIENT_CERT_TYPE: {
+      ClientCertType type = ParseClientCertType(GetStringValue(value));
+      virtual_network->set_client_cert_type(type);
       return true;
+    }
 
     default:
       break;

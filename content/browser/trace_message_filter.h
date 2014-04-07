@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -16,7 +16,6 @@
 class TraceMessageFilter : public content::BrowserMessageFilter {
  public:
   TraceMessageFilter();
-  virtual ~TraceMessageFilter();
 
   // content::BrowserMessageFilter override.
   virtual void OnFilterAdded(IPC::Channel* channel) OVERRIDE;
@@ -30,12 +29,18 @@ class TraceMessageFilter : public content::BrowserMessageFilter {
                         const std::vector<std::string>& excluded_categories);
   void SendEndTracing();
   void SendGetTraceBufferPercentFull();
+  void SendSetWatchEvent(const std::string& category_name,
+                         const std::string& event_name);
+  void SendCancelWatchEvent();
+
+ protected:
+  virtual ~TraceMessageFilter();
 
  private:
   // Message handlers.
   void OnChildSupportsTracing();
   void OnEndTracingAck(const std::vector<std::string>& known_categories);
-  void OnTraceBufferFull();
+  void OnTraceNotification(int notification);
   void OnTraceBufferPercentFullReply(float percent_full);
   void OnTraceDataCollected(const std::string& data);
 
@@ -44,7 +49,8 @@ class TraceMessageFilter : public content::BrowserMessageFilter {
 
   // Awaiting ack for previously sent SendEndTracing
   bool is_awaiting_end_ack_;
-  bool is_awaiting_bpf_ack_;
+  // Awaiting ack for previously sent SendGetTraceBufferPercentFull
+  bool is_awaiting_buffer_percent_full_ack_;
 
   DISALLOW_COPY_AND_ASSIGN(TraceMessageFilter);
 };

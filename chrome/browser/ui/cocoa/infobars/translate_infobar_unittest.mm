@@ -8,18 +8,28 @@
 #import "base/string_util.h"
 #include "base/utf_string_conversions.h"
 #import "chrome/app/chrome_command_ids.h"  // For translate menu command ids.
+#include "chrome/browser/infobars/infobar_tab_helper.h"
 #import "chrome/browser/translate/translate_infobar_delegate.h"
 #include "chrome/browser/ui/cocoa/cocoa_profile_test.h"
 #import "chrome/browser/ui/cocoa/infobars/before_translate_infobar_controller.h"
 #import "chrome/browser/ui/cocoa/infobars/infobar.h"
 #import "chrome/browser/ui/cocoa/infobars/translate_infobar_base.h"
-#include "chrome/browser/ui/tab_contents/tab_contents_wrapper.h"
+#include "chrome/browser/ui/tab_contents/tab_contents.h"
 #import "content/public/browser/web_contents.h"
+#include "ipc/ipc_message.h"
 #import "testing/gmock/include/gmock/gmock.h"
 #import "testing/gtest/include/gtest/gtest.h"
 #import "testing/platform_test.h"
 
 using content::WebContents;
+
+// TODO(avi): Kill this when TabContents goes away.
+class TranslationInfoBarTestContentsCreator {
+ public:
+  static TabContents* CreateTabContents(content::WebContents* contents) {
+    return TabContents::Factory::CreateTabContents(contents);
+  }
+};
 
 namespace {
 
@@ -74,8 +84,9 @@ class TranslationInfoBarTest : public CocoaProfileTest {
   // the test.
   virtual void SetUp() {
     CocoaProfileTest::SetUp();
-    tab_contents_.reset(new TabContentsWrapper(WebContents::Create(
-       profile(), NULL, MSG_ROUTING_NONE, NULL, NULL)));
+    tab_contents_.reset(
+        TranslationInfoBarTestContentsCreator::CreateTabContents(
+            WebContents::Create(profile(), NULL, MSG_ROUTING_NONE, NULL)));
     CreateInfoBar();
   }
 
@@ -106,7 +117,7 @@ class TranslationInfoBarTest : public CocoaProfileTest {
     [[test_window() contentView] addSubview:[infobar_controller_ view]];
   }
 
-  scoped_ptr<TabContentsWrapper> tab_contents_;
+  scoped_ptr<TabContents> tab_contents_;
   scoped_ptr<MockTranslateInfoBarDelegate> infobar_delegate_;
   scoped_nsobject<TranslateInfoBarControllerBase> infobar_controller_;
 };

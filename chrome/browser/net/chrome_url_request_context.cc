@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,9 +8,9 @@
 #include "base/compiler_specific.h"
 #include "base/message_loop.h"
 #include "base/message_loop_proxy.h"
-#include "base/synchronization/waitable_event.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/io_thread.h"
+#include "chrome/browser/net/load_time_stats.h"
 #include "chrome/browser/prefs/pref_service.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profile_io_data.h"
@@ -20,7 +20,7 @@
 #include "content/public/browser/notification_details.h"
 #include "content/public/browser/notification_source.h"
 #include "content/public/common/content_client.h"
-#include "net/base/cookie_store.h"
+#include "net/cookies/cookie_store.h"
 #include "net/http/http_util.h"
 
 using content::BrowserThread;
@@ -31,7 +31,7 @@ class ChromeURLRequestContextFactory {
   virtual ~ChromeURLRequestContextFactory() {}
 
   // Called to create a new instance (will only be called once).
-  virtual scoped_refptr<ChromeURLRequestContext> Create() = 0;
+  virtual ChromeURLRequestContext* Create() = 0;
 
  protected:
   DISALLOW_COPY_AND_ASSIGN(ChromeURLRequestContextFactory);
@@ -49,7 +49,7 @@ class FactoryForMain : public ChromeURLRequestContextFactory {
   explicit FactoryForMain(const ProfileIOData* profile_io_data)
       : profile_io_data_(profile_io_data) {}
 
-  virtual scoped_refptr<ChromeURLRequestContext> Create() {
+  virtual ChromeURLRequestContext* Create() OVERRIDE {
     return profile_io_data_->GetMainRequestContext();
   }
 
@@ -63,7 +63,7 @@ class FactoryForExtensions : public ChromeURLRequestContextFactory {
   explicit FactoryForExtensions(const ProfileIOData* profile_io_data)
       : profile_io_data_(profile_io_data) {}
 
-  virtual scoped_refptr<ChromeURLRequestContext> Create() {
+  virtual ChromeURLRequestContext* Create() OVERRIDE {
     return profile_io_data_->GetExtensionsRequestContext();
   }
 
@@ -76,15 +76,23 @@ class FactoryForIsolatedApp : public ChromeURLRequestContextFactory {
  public:
   FactoryForIsolatedApp(const ProfileIOData* profile_io_data,
                         const std::string& app_id,
-                        ChromeURLRequestContextGetter* main_context)
+                        ChromeURLRequestContextGetter* main_context,
+                        scoped_ptr<net::URLRequestJobFactory::Interceptor>
+                            protocol_handler_interceptor)
       : profile_io_data_(profile_io_data),
         app_id_(app_id),
-        main_request_context_getter_(main_context) {}
+        main_request_context_getter_(main_context),
+        protocol_handler_interceptor_(protocol_handler_interceptor.Pass()) {}
 
-  virtual scoped_refptr<ChromeURLRequestContext> Create() {
+  virtual ChromeURLRequestContext* Create() OVERRIDE {
     // We will copy most of the state from the main request context.
+    //
+    // Note that this factory is one-shot.  After Create() is called once, the
+    // factory is actually destroyed. Thus it is safe to destructively pass
+    // state onwards.
     return profile_io_data_->GetIsolatedAppRequestContext(
-        main_request_context_getter_->GetIOContext(), app_id_);
+        main_request_context_getter_->GetIOContext(), app_id_,
+        protocol_handler_interceptor_.Pass());
   }
 
  private:
@@ -92,6 +100,36 @@ class FactoryForIsolatedApp : public ChromeURLRequestContextFactory {
   const std::string app_id_;
   scoped_refptr<ChromeURLRequestContextGetter>
       main_request_context_getter_;
+  scoped_ptr<net::URLRequestJobFactory::Interceptor>
+      protocol_handler_interceptor_;
+};
+
+// Factory that creates the media ChromeURLRequestContext for a given isolated
+// app.  The media context is based on the corresponding isolated app's context.
+class FactoryForIsolatedMedia : public ChromeURLRequestContextFactory {
+ public:
+  FactoryForIsolatedMedia(const ProfileIOData* profile_io_data,
+                          const std::string& app_id,
+                          ChromeURLRequestContextGetter* app_context)
+      : profile_io_data_(profile_io_data),
+        app_id_(app_id),
+        app_context_getter_(app_context) {}
+
+  virtual ChromeURLRequestContext* Create() OVERRIDE {
+    // We will copy most of the state from the corresopnding app's
+    // request context. We expect to have the same lifetime as
+    // the associated |app_context_getter_| so we can just reuse
+    // all its backing objects, including the
+    // |protocol_handler_interceptor|.  This is why the API
+    // looks different from FactoryForIsolatedApp's.
+    return profile_io_data_->GetIsolatedMediaRequestContext(
+        app_context_getter_->GetIOContext(), app_id_);
+  }
+
+ private:
+  const ProfileIOData* const profile_io_data_;
+  const std::string app_id_;
+  scoped_refptr<ChromeURLRequestContextGetter> app_context_getter_;
 };
 
 // Factory that creates the ChromeURLRequestContext for media.
@@ -101,7 +139,7 @@ class FactoryForMedia : public ChromeURLRequestContextFactory {
       : profile_io_data_(profile_io_data) {
   }
 
-  virtual scoped_refptr<ChromeURLRequestContext> Create() {
+  virtual ChromeURLRequestContext* Create() OVERRIDE {
     return profile_io_data_->GetMediaRequestContext();
   }
 
@@ -147,32 +185,8 @@ net::URLRequestContext* ChromeURLRequestContextGetter::GetURLRequestContext() {
   return url_request_context_;
 }
 
-net::CookieStore* ChromeURLRequestContextGetter::DONTUSEME_GetCookieStore() {
-  // If we are running on the IO thread this is real easy.
-  if (BrowserThread::CurrentlyOn(BrowserThread::IO))
-    return GetURLRequestContext()->cookie_store();
-
-  // If we aren't running on the IO thread, we cannot call
-  // GetURLRequestContext(). Instead we will post a task to the IO loop
-  // and wait for it to complete.
-
-  base::WaitableEvent completion(false, false);
-  net::CookieStore* result = NULL;
-
-  BrowserThread::PostTask(
-      BrowserThread::IO, FROM_HERE,
-      base::Bind(&ChromeURLRequestContextGetter::GetCookieStoreAsyncHelper,
-          this,
-          &completion,
-          &result));
-
-  completion.Wait();
-  DCHECK(result);
-  return result;
-}
-
-scoped_refptr<base::MessageLoopProxy>
-ChromeURLRequestContextGetter::GetIOMessageLoopProxy() const {
+scoped_refptr<base::SingleThreadTaskRunner>
+ChromeURLRequestContextGetter::GetNetworkTaskRunner() const {
   return BrowserThread::GetMessageLoopProxyForThread(BrowserThread::IO);
 }
 
@@ -211,13 +225,29 @@ ChromeURLRequestContextGetter*
 ChromeURLRequestContextGetter::CreateOriginalForIsolatedApp(
     Profile* profile,
     const ProfileIOData* profile_io_data,
-    const std::string& app_id) {
+    const std::string& app_id,
+    scoped_ptr<net::URLRequestJobFactory::Interceptor>
+        protocol_handler_interceptor) {
   DCHECK(!profile->IsOffTheRecord());
   ChromeURLRequestContextGetter* main_context =
       static_cast<ChromeURLRequestContextGetter*>(profile->GetRequestContext());
   return new ChromeURLRequestContextGetter(
       profile,
-      new FactoryForIsolatedApp(profile_io_data, app_id, main_context));
+      new FactoryForIsolatedApp(profile_io_data, app_id, main_context,
+                                protocol_handler_interceptor.Pass()));
+}
+
+// static
+ChromeURLRequestContextGetter*
+ChromeURLRequestContextGetter::CreateOriginalForIsolatedMedia(
+    Profile* profile,
+    ChromeURLRequestContextGetter* app_context,
+    const ProfileIOData* profile_io_data,
+    const std::string& app_id) {
+  DCHECK(!profile->IsOffTheRecord());
+  return new ChromeURLRequestContextGetter(
+      profile,
+      new FactoryForIsolatedMedia(profile_io_data, app_id, app_context));
 }
 
 // static
@@ -243,13 +273,16 @@ ChromeURLRequestContextGetter*
 ChromeURLRequestContextGetter::CreateOffTheRecordForIsolatedApp(
     Profile* profile,
     const ProfileIOData* profile_io_data,
-    const std::string& app_id) {
+    const std::string& app_id,
+    scoped_ptr<net::URLRequestJobFactory::Interceptor>
+        protocol_handler_interceptor) {
   DCHECK(profile->IsOffTheRecord());
   ChromeURLRequestContextGetter* main_context =
       static_cast<ChromeURLRequestContextGetter*>(profile->GetRequestContext());
   return new ChromeURLRequestContextGetter(
       profile,
-      new FactoryForIsolatedApp(profile_io_data, app_id, main_context));
+      new FactoryForIsolatedApp(profile_io_data, app_id, main_context,
+                                protocol_handler_interceptor.Pass()));
 }
 
 void ChromeURLRequestContextGetter::CleanupOnUIThread() {
@@ -279,24 +312,14 @@ void ChromeURLRequestContextGetter::Observe(
               &ChromeURLRequestContextGetter::OnAcceptLanguageChange,
               this,
               accept_language));
-    } else if (*pref_name_in == prefs::kGlobalDefaultCharset) {
-      std::string default_charset =
-          prefs->GetString(prefs::kGlobalDefaultCharset);
+    } else if (*pref_name_in == prefs::kDefaultCharset) {
+      std::string default_charset = prefs->GetString(prefs::kDefaultCharset);
       BrowserThread::PostTask(
           BrowserThread::IO, FROM_HERE,
           base::Bind(
               &ChromeURLRequestContextGetter::OnDefaultCharsetChange,
               this,
               default_charset));
-    } else if (*pref_name_in == prefs::kClearSiteDataOnExit) {
-      bool clear_site_data =
-          prefs->GetBoolean(prefs::kClearSiteDataOnExit);
-      BrowserThread::PostTask(
-          BrowserThread::IO, FROM_HERE,
-          base::Bind(
-              &ChromeURLRequestContextGetter::OnClearSiteDataOnExitChange,
-              this,
-              clear_site_data));
     }
   } else {
     NOTREACHED();
@@ -308,8 +331,7 @@ void ChromeURLRequestContextGetter::RegisterPrefsObserver(Profile* profile) {
 
   registrar_.Init(profile->GetPrefs());
   registrar_.Add(prefs::kAcceptLanguages, this);
-  registrar_.Add(prefs::kGlobalDefaultCharset, this);
-  registrar_.Add(prefs::kClearSiteDataOnExit, this);
+  registrar_.Add(prefs::kDefaultCharset, this);
 }
 
 void ChromeURLRequestContextGetter::OnAcceptLanguageChange(
@@ -322,34 +344,25 @@ void ChromeURLRequestContextGetter::OnDefaultCharsetChange(
   GetIOContext()->OnDefaultCharsetChange(default_charset);
 }
 
-void ChromeURLRequestContextGetter::OnClearSiteDataOnExitChange(
-    bool clear_site_data) {
-  net::CookieMonster* cookie_monster =
-      GetURLRequestContext()->cookie_store()->GetCookieMonster();
-
-  // If there is no cookie monster, this function does nothing. If
-  // clear_site_data is true, this is most certainly not the expected behavior.
-  DCHECK(!clear_site_data || cookie_monster);
-
-  if (cookie_monster)
-    cookie_monster->SetClearPersistentStoreOnExit(clear_site_data);
-}
-
-void ChromeURLRequestContextGetter::GetCookieStoreAsyncHelper(
-    base::WaitableEvent* completion,
-    net::CookieStore** result) {
-  // Note that CookieStore is refcounted, yet we do not add a reference.
-  *result = GetURLRequestContext()->cookie_store();
-  completion->Signal();
-}
-
 // ----------------------------------------------------------------------------
 // ChromeURLRequestContext
 // ----------------------------------------------------------------------------
 
-ChromeURLRequestContext::ChromeURLRequestContext()
-    : is_incognito_(false) {
+ChromeURLRequestContext::ChromeURLRequestContext(
+    ContextType type,
+    chrome_browser_net::LoadTimeStats* load_time_stats)
+    : ALLOW_THIS_IN_INITIALIZER_LIST(weak_factory_(this)),
+      is_incognito_(false),
+      load_time_stats_(load_time_stats) {
   DCHECK(BrowserThread::CurrentlyOn(BrowserThread::IO));
+  if (load_time_stats_)
+    load_time_stats_->RegisterURLRequestContext(this, type);
+}
+
+ChromeURLRequestContext::~ChromeURLRequestContext() {
+  DCHECK(BrowserThread::CurrentlyOn(BrowserThread::IO));
+  if (load_time_stats_)
+    load_time_stats_->UnregisterURLRequestContext(this);
 }
 
 void ChromeURLRequestContext::CopyFrom(ChromeURLRequestContext* other) {
@@ -369,10 +382,6 @@ void ChromeURLRequestContext::set_chrome_url_data_manager_backend(
         ChromeURLDataManagerBackend* backend) {
   DCHECK(backend);
   chrome_url_data_manager_backend_ = backend;
-}
-
-ChromeURLRequestContext::~ChromeURLRequestContext() {
-  DCHECK(BrowserThread::CurrentlyOn(BrowserThread::IO));
 }
 
 const std::string& ChromeURLRequestContext::GetUserAgent(

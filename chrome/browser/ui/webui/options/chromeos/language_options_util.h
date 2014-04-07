@@ -1,10 +1,9 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CHROME_BROWSER_UI_WEBUI_OPTIONS_CHROMEOS_LANGUAGE_OPTIONS_UTIL_H_
 #define CHROME_BROWSER_UI_WEBUI_OPTIONS_CHROMEOS_LANGUAGE_OPTIONS_UTIL_H_
-#pragma once
 
 #include <string>
 
@@ -18,6 +17,7 @@ class ListValue;
 }
 
 namespace chromeos {
+namespace options {
 
 // Returns an i18n-content value corresponding to |preference|.
 template <typename T>
@@ -78,6 +78,7 @@ base::ListValue* CreateMultipleChoiceList(
   return list_value;
 }
 
+}  // namespace options
 }  // namespace chromeos
 
 #endif  // CHROME_BROWSER_UI_WEBUI_OPTIONS_CHROMEOS_LANGUAGE_OPTIONS_UTIL_H_

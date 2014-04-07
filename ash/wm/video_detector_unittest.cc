@@ -5,11 +5,13 @@
 #include "ash/wm/video_detector.h"
 
 #include "ash/shell.h"
-#include "ash/test/aura_shell_test_base.h"
+#include "ash/test/ash_test_base.h"
+#include "ash/wm/window_util.h"
 #include "base/compiler_specific.h"
 #include "base/memory/scoped_ptr.h"
 #include "base/time.h"
 #include "third_party/skia/include/core/SkColor.h"
+#include "ui/aura/client/aura_constants.h"
 #include "ui/aura/client/window_types.h"
 #include "ui/aura/root_window.h"
 #include "ui/aura/test/test_windows.h"
@@ -23,34 +25,59 @@ namespace test {
 // video is playing.
 class TestVideoDetectorObserver : public VideoDetectorObserver {
  public:
-  TestVideoDetectorObserver() : num_invocations_(0) {}
+  TestVideoDetectorObserver() : num_invocations_(0),
+                                num_fullscreens_(0),
+                                num_not_fullscreens_(0) {}
 
   int num_invocations() const { return num_invocations_; }
-  void reset_stats() { num_invocations_ = 0; }
+  int num_fullscreens() const { return num_fullscreens_; }
+  int num_not_fullscreens() const { return num_not_fullscreens_; }
+  void reset_stats() {
+    num_invocations_ = 0;
+    num_fullscreens_ = 0;
+    num_not_fullscreens_ = 0;
+  }
 
   // VideoDetectorObserver implementation.
-  virtual void OnVideoDetected() OVERRIDE { num_invocations_++; }
+  virtual void OnVideoDetected(bool is_fullscreen) OVERRIDE {
+    num_invocations_++;
+    if (is_fullscreen)
+      num_fullscreens_++;
+    else
+      num_not_fullscreens_++;
+  }
 
  private:
   // Number of times that OnVideoDetected() has been called.
   int num_invocations_;
+  // Number of times that OnVideoDetected() has been called with is_fullscreen
+  // == true.
+  int num_fullscreens_;
+  // Number of times that OnVideoDetected() has been called with is_fullscreen
+  // == false.
+  int num_not_fullscreens_;
 
   DISALLOW_COPY_AND_ASSIGN(TestVideoDetectorObserver);
 };
 
-class VideoDetectorTest : public AuraShellTestBase {
+class VideoDetectorTest : public AshTestBase {
  public:
   VideoDetectorTest() {}
   virtual ~VideoDetectorTest() {}
 
-  void SetUp() OVERRIDE {
-    AuraShellTestBase::SetUp();
+  virtual void SetUp() OVERRIDE {
+    AshTestBase::SetUp();
     observer_.reset(new TestVideoDetectorObserver);
     detector_ = Shell::GetInstance()->video_detector();
     detector_->AddObserver(observer_.get());
 
     now_ = base::TimeTicks::Now();
     detector_->set_now_for_test(now_);
+  }
+
+  virtual void TearDown() OVERRIDE {
+    detector_->RemoveObserver(observer_.get());
+    AshTestBase::TearDown();
   }
 
  protected:
@@ -98,8 +125,12 @@ TEST_F(VideoDetectorTest, Basic) {
   // additional updates.
   detector_->OnWindowPaintScheduled(window.get(), update_region);
   EXPECT_EQ(1, observer_->num_invocations());
+  EXPECT_EQ(0, observer_->num_fullscreens());
+  EXPECT_EQ(1, observer_->num_not_fullscreens());
   detector_->OnWindowPaintScheduled(window.get(), update_region);
   EXPECT_EQ(1, observer_->num_invocations());
+  EXPECT_EQ(0, observer_->num_fullscreens());
+  EXPECT_EQ(1, observer_->num_not_fullscreens());
 
   // Spread out the frames over two seconds; we shouldn't detect video.
   observer_->reset_stats();
@@ -119,7 +150,7 @@ TEST_F(VideoDetectorTest, WindowNotVisible) {
 
   // Reparent the window to the root to make sure that visibility changes aren't
   // animated.
-  aura::RootWindow::GetInstance()->AddChild(window.get());
+  Shell::GetPrimaryRootWindow()->AddChild(window.get());
 
   // We shouldn't report video that's played in a hidden window.
   window->Hide();
@@ -138,12 +169,14 @@ TEST_F(VideoDetectorTest, WindowNotVisible) {
   for (int i = 0; i < VideoDetector::kMinFramesPerSecond; ++i)
     detector_->OnWindowPaintScheduled(window.get(), update_region);
   EXPECT_EQ(1, observer_->num_invocations());
+  EXPECT_EQ(0, observer_->num_fullscreens());
+  EXPECT_EQ(1, observer_->num_not_fullscreens());
 
   // We also shouldn't report video in a window that's fully offscreen.
   observer_->reset_stats();
   AdvanceTime(base::TimeDelta::FromSeconds(2));
   gfx::Rect offscreen_bounds(
-      gfx::Point(aura::RootWindow::GetInstance()->bounds().width(), 0),
+      gfx::Point(Shell::GetPrimaryRootWindow()->bounds().width(), 0),
       window_bounds.size());
   window->SetBounds(offscreen_bounds);
   ASSERT_EQ(offscreen_bounds, window->bounds());
@@ -171,6 +204,8 @@ TEST_F(VideoDetectorTest, MultipleWindows) {
   for (int i = 0; i < VideoDetector::kMinFramesPerSecond; ++i)
     detector_->OnWindowPaintScheduled(window2.get(), update_region);
   EXPECT_EQ(1, observer_->num_invocations());
+  EXPECT_EQ(0, observer_->num_fullscreens());
+  EXPECT_EQ(1, observer_->num_not_fullscreens());
 }
 
 // Test that the observer receives repeated notifications.
@@ -186,7 +221,8 @@ TEST_F(VideoDetectorTest, RepeatedNotifications) {
   for (int i = 0; i < VideoDetector::kMinFramesPerSecond; ++i)
     detector_->OnWindowPaintScheduled(window.get(), update_region);
   EXPECT_EQ(1, observer_->num_invocations());
-
+  EXPECT_EQ(0, observer_->num_fullscreens());
+  EXPECT_EQ(1, observer_->num_not_fullscreens());
   // Let enough time pass that a second notification should be sent.
   observer_->reset_stats();
   AdvanceTime(base::TimeDelta::FromSeconds(
@@ -194,6 +230,26 @@ TEST_F(VideoDetectorTest, RepeatedNotifications) {
   for (int i = 0; i < VideoDetector::kMinFramesPerSecond; ++i)
     detector_->OnWindowPaintScheduled(window.get(), update_region);
   EXPECT_EQ(1, observer_->num_invocations());
+  EXPECT_EQ(0, observer_->num_fullscreens());
+  EXPECT_EQ(1, observer_->num_not_fullscreens());
+}
+
+// Test that the observer receives a true value when the window is fullscreen.
+TEST_F(VideoDetectorTest, FullscreenWindow) {
+  gfx::Rect window_bounds(gfx::Point(), gfx::Size(1024, 768));
+  scoped_ptr<aura::Window> window(
+      aura::test::CreateTestWindow(SK_ColorRED, 12345, window_bounds, NULL));
+  window->SetProperty(aura::client::kShowStateKey, ui::SHOW_STATE_FULLSCREEN);
+  window->Focus();
+  gfx::Rect update_region(
+      gfx::Point(),
+      gfx::Size(VideoDetector::kMinUpdateWidth,
+                VideoDetector::kMinUpdateHeight));
+  for (int i = 0; i < VideoDetector::kMinFramesPerSecond; ++i)
+    detector_->OnWindowPaintScheduled(window.get(), update_region);
+  EXPECT_EQ(1, observer_->num_invocations());
+  EXPECT_EQ(1, observer_->num_fullscreens());
+  EXPECT_EQ(0, observer_->num_not_fullscreens());
 }
 
 }  // namespace test

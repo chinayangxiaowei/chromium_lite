@@ -1,8 +1,10 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "content/browser/ppapi_plugin_process_host.h"
+
+#include <string>
 
 #include "base/base_switches.h"
 #include "base/command_line.h"
@@ -14,28 +16,31 @@
 #include "content/browser/renderer_host/render_message_filter.h"
 #include "content/common/child_process_host_impl.h"
 #include "content/common/child_process_messages.h"
+#include "content/public/browser/content_browser_client.h"
 #include "content/public/common/content_switches.h"
 #include "content/public/common/pepper_plugin_info.h"
 #include "content/public/common/process_type.h"
 #include "ipc/ipc_switches.h"
 #include "net/base/network_change_notifier.h"
 #include "ppapi/proxy/ppapi_messages.h"
+#include "ui/base/ui_base_switches.h"
+#include "webkit/plugins/plugin_switches.h"
 
 using content::ChildProcessHost;
 using content::ChildProcessHostImpl;
 
 class PpapiPluginProcessHost::PluginNetworkObserver
     : public net::NetworkChangeNotifier::IPAddressObserver,
-      public net::NetworkChangeNotifier::OnlineStateObserver {
+      public net::NetworkChangeNotifier::ConnectionTypeObserver {
  public:
   explicit PluginNetworkObserver(PpapiPluginProcessHost* process_host)
       : process_host_(process_host) {
     net::NetworkChangeNotifier::AddIPAddressObserver(this);
-    net::NetworkChangeNotifier::AddOnlineStateObserver(this);
+    net::NetworkChangeNotifier::AddConnectionTypeObserver(this);
   }
 
   ~PluginNetworkObserver() {
-    net::NetworkChangeNotifier::RemoveOnlineStateObserver(this);
+    net::NetworkChangeNotifier::RemoveConnectionTypeObserver(this);
     net::NetworkChangeNotifier::RemoveIPAddressObserver(this);
   }
 
@@ -46,13 +51,15 @@ class PpapiPluginProcessHost::PluginNetworkObserver
     // when I unplug and replug my network cable. Sending this notification when
     // "something" changes seems to make Flash reasonably happy, but seems
     // wrong. We should really be able to provide the real online state in
-    // OnOnlineStateChanged().
+    // OnConnectionTypeChanged().
     process_host_->Send(new PpapiMsg_SetNetworkState(true));
   }
 
-  // OnlineStateObserver implementation.
-  virtual void OnOnlineStateChanged(bool online) OVERRIDE {
-    process_host_->Send(new PpapiMsg_SetNetworkState(online));
+  // ConnectionTypeObserver implementation.
+  virtual void OnConnectionTypeChanged(
+      net::NetworkChangeNotifier::ConnectionType type) {
+    process_host_->Send(new PpapiMsg_SetNetworkState(
+        type != net::NetworkChangeNotifier::CONNECTION_NONE));
   }
 
  private:
@@ -65,27 +72,72 @@ PpapiPluginProcessHost::~PpapiPluginProcessHost() {
   CancelRequests();
 }
 
+// static
 PpapiPluginProcessHost* PpapiPluginProcessHost::CreatePluginHost(
     const content::PepperPluginInfo& info,
+    const FilePath& profile_data_directory,
     net::HostResolver* host_resolver) {
-  PpapiPluginProcessHost* plugin_host =
-      new PpapiPluginProcessHost(host_resolver);
-  if(plugin_host->Init(info))
+  PpapiPluginProcessHost* plugin_host = new PpapiPluginProcessHost(
+      info, profile_data_directory, host_resolver);
+  if (plugin_host->Init(info))
     return plugin_host;
 
   NOTREACHED();  // Init is not expected to fail.
   return NULL;
 }
 
+// static
 PpapiPluginProcessHost* PpapiPluginProcessHost::CreateBrokerHost(
     const content::PepperPluginInfo& info) {
   PpapiPluginProcessHost* plugin_host =
       new PpapiPluginProcessHost();
-  if(plugin_host->Init(info))
+  if (plugin_host->Init(info))
     return plugin_host;
 
   NOTREACHED();  // Init is not expected to fail.
   return NULL;
+}
+
+// static
+void PpapiPluginProcessHost::DidCreateOutOfProcessInstance(
+    int plugin_process_id,
+    int32 pp_instance,
+    int render_process_id,
+    int render_view_id) {
+  for (PpapiPluginProcessHostIterator iter; !iter.Done(); ++iter) {
+    if (iter->process_.get() &&
+        iter->process_->GetData().id == plugin_process_id) {
+      // Found the plugin.
+      iter->host_impl_->AddInstanceForView(pp_instance,
+                                           render_process_id, render_view_id);
+      return;
+    }
+  }
+  // We'll see this passed with a 0 process ID for the browser tag stuff that
+  // is currently in the process of being removed.
+  //
+  // TODO(brettw) When old browser tag impl is removed
+  // (PepperPluginDelegateImpl::CreateBrowserPluginModule passes a 0 plugin
+  // process ID) this should be converted to a NOTREACHED().
+  DCHECK(plugin_process_id == 0)
+      << "Renderer sent a bad plugin process host ID";
+}
+
+// static
+void PpapiPluginProcessHost::DidDeleteOutOfProcessInstance(
+    int plugin_process_id,
+    int32 pp_instance) {
+  for (PpapiPluginProcessHostIterator iter; !iter.Done(); ++iter) {
+    if (iter->process_.get() &&
+        iter->process_->GetData().id == plugin_process_id) {
+      // Found the plugin.
+      iter->host_impl_->DeleteInstanceForView(pp_instance);
+      return;
+    }
+  }
+  // Note: It's possible that the plugin process has already been deleted by
+  // the time this message is received. For example, it could have crashed.
+  // That's OK, we can just ignore this message.
 }
 
 bool PpapiPluginProcessHost::Send(IPC::Message* message) {
@@ -105,21 +157,39 @@ void PpapiPluginProcessHost::OpenChannelToPlugin(Client* client) {
   RequestPluginChannel(client);
 }
 
-PpapiPluginProcessHost::PpapiPluginProcessHost(net::HostResolver* host_resolver)
-    : filter_(new PepperMessageFilter(host_resolver)),
-      network_observer_(new PluginNetworkObserver(this)),
-      is_broker_(false),
-      process_id_(ChildProcessHostImpl::GenerateChildProcessUniqueId()) {
+PpapiPluginProcessHost::PpapiPluginProcessHost(
+    const content::PepperPluginInfo& info,
+    const FilePath& profile_data_directory,
+    net::HostResolver* host_resolver)
+    : network_observer_(new PluginNetworkObserver(this)),
+      profile_data_directory_(profile_data_directory),
+      is_broker_(false) {
   process_.reset(new BrowserChildProcessHostImpl(
       content::PROCESS_TYPE_PPAPI_PLUGIN, this));
+
+  filter_ = new PepperMessageFilter(PepperMessageFilter::PLUGIN,
+                                    host_resolver);
+
+  ppapi::PpapiPermissions permissions(info.permissions);
+  host_impl_ = new content::BrowserPpapiHostImpl(this, permissions);
+
+  file_filter_ = new PepperTrustedFileMessageFilter(
+      process_->GetData().id, info.name, profile_data_directory);
+
   process_->GetHost()->AddFilter(filter_.get());
+  process_->GetHost()->AddFilter(file_filter_.get());
+  process_->GetHost()->AddFilter(host_impl_.get());
+
+  content::GetContentClient()->browser()->DidCreatePpapiPlugin(host_impl_);
 }
 
 PpapiPluginProcessHost::PpapiPluginProcessHost()
-    : is_broker_(true),
-      process_id_(ChildProcessHostImpl::GenerateChildProcessUniqueId()) {
+    : is_broker_(true) {
   process_.reset(new BrowserChildProcessHostImpl(
       content::PROCESS_TYPE_PPAPI_BROKER, this));
+
+  ppapi::PpapiPermissions permissions;  // No permissions.
+  host_impl_ = new content::BrowserPpapiHostImpl(this, permissions);
 }
 
 bool PpapiPluginProcessHost::Init(const content::PepperPluginInfo& info) {
@@ -166,11 +236,19 @@ bool PpapiPluginProcessHost::Init(const content::PepperPluginInfo& info) {
     // going to explode.
     static const char* kPluginForwardSwitches[] = {
       switches::kNoSandbox,
+      switches::kDisableSeccompFilterSandbox,
       switches::kPpapiFlashArgs,
       switches::kPpapiStartupDialog
     };
     cmd_line->CopySwitchesFrom(browser_command_line, kPluginForwardSwitches,
                                arraysize(kPluginForwardSwitches));
+  }
+
+  std::string locale =
+      content::GetContentClient()->browser()->GetApplicationLocale();
+  if (!locale.empty()) {
+    // Pass on the locale so the plugin will know what language we're using.
+    cmd_line->AppendSwitchASCII(switches::kLang, locale);
   }
 
   if (!plugin_launcher.empty())
@@ -182,13 +260,15 @@ bool PpapiPluginProcessHost::Init(const content::PepperPluginInfo& info) {
   // forking the zygote.
 #if defined(OS_POSIX)
   bool use_zygote = !is_broker_ && plugin_launcher.empty() && info.is_sandboxed;
+  if (!info.is_sandboxed)
+    cmd_line->AppendSwitchASCII(switches::kNoSandbox, "");
 #endif  // OS_POSIX
   process_->Launch(
 #if defined(OS_WIN)
       FilePath(),
 #elif defined(OS_POSIX)
       use_zygote,
-      base::environment_vector(),
+      base::EnvironmentVector(),
 #endif
       cmd_line);
   return true;
@@ -197,20 +277,26 @@ bool PpapiPluginProcessHost::Init(const content::PepperPluginInfo& info) {
 void PpapiPluginProcessHost::RequestPluginChannel(Client* client) {
   base::ProcessHandle process_handle;
   int renderer_id;
-  client->GetChannelInfo(&process_handle, &renderer_id);
+  client->GetPpapiChannelInfo(&process_handle, &renderer_id);
 
   // We can't send any sync messages from the browser because it might lead to
   // a hang. See the similar code in PluginProcessHost for more description.
-  PpapiMsg_CreateChannel* msg = new PpapiMsg_CreateChannel(process_handle,
-                                                           renderer_id);
+  PpapiMsg_CreateChannel* msg = new PpapiMsg_CreateChannel(
+      renderer_id, client->OffTheRecord());
   msg->set_unblock(true);
-  if (Send(msg))
+  if (Send(msg)) {
     sent_requests_.push(client);
-  else
-    client->OnChannelOpened(base::kNullProcessHandle, IPC::ChannelHandle());
+  } else {
+    client->OnPpapiChannelOpened(IPC::ChannelHandle(), 0);
+  }
 }
 
 void PpapiPluginProcessHost::OnProcessLaunched() {
+  host_impl_->set_plugin_process_handle(process_->GetHandle());
+}
+
+void PpapiPluginProcessHost::OnProcessCrashed(int exit_code) {
+  PluginServiceImpl::GetInstance()->RegisterPluginCrash(plugin_path_);
 }
 
 bool PpapiPluginProcessHost::OnMessageReceived(const IPC::Message& msg) {
@@ -253,14 +339,12 @@ void PpapiPluginProcessHost::CancelRequests() {
   DVLOG(1) << "PpapiPluginProcessHost" << (is_broker_ ? "[broker]" : "")
            << "CancelRequests()";
   for (size_t i = 0; i < pending_requests_.size(); i++) {
-    pending_requests_[i]->OnChannelOpened(base::kNullProcessHandle,
-                                          IPC::ChannelHandle());
+    pending_requests_[i]->OnPpapiChannelOpened(IPC::ChannelHandle(), 0);
   }
   pending_requests_.clear();
 
   while (!sent_requests_.empty()) {
-    sent_requests_.front()->OnChannelOpened(base::kNullProcessHandle,
-                                            IPC::ChannelHandle());
+    sent_requests_.front()->OnPpapiChannelOpened(IPC::ChannelHandle(), 0);
     sent_requests_.pop();
   }
 }
@@ -276,21 +360,5 @@ void PpapiPluginProcessHost::OnRendererPluginChannelCreated(
   Client* client = sent_requests_.front();
   sent_requests_.pop();
 
-  // Prepare the handle to send to the renderer.
-  base::ProcessHandle plugin_process = process_->GetHandle();
-#if defined(OS_WIN)
-  base::ProcessHandle renderer_process;
-  int renderer_id;
-  client->GetChannelInfo(&renderer_process, &renderer_id);
-
-  base::ProcessHandle renderers_plugin_handle = NULL;
-  ::DuplicateHandle(::GetCurrentProcess(), plugin_process,
-                    renderer_process, &renderers_plugin_handle,
-                    0, FALSE, DUPLICATE_SAME_ACCESS);
-#elif defined(OS_POSIX)
-  // Don't need to duplicate anything on POSIX since it's just a PID.
-  base::ProcessHandle renderers_plugin_handle = plugin_process;
-#endif
-
-  client->OnChannelOpened(renderers_plugin_handle, channel_handle);
+  client->OnPpapiChannelOpened(channel_handle, process_->GetData().id);
 }

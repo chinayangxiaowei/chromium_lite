@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,16 +6,6 @@
 
 #include "base/string_util.h"
 #include "base/utf_string_conversions.h"
-#include "third_party/WebKit/Source/WebKit/chromium/public/WebInputElement.h"
-#include "third_party/WebKit/Source/WebKit/chromium/public/WebOptionElement.h"
-#include "third_party/WebKit/Source/WebKit/chromium/public/WebSelectElement.h"
-
-using WebKit::WebFormControlElement;
-using WebKit::WebElement;
-using WebKit::WebInputElement;
-using WebKit::WebOptionElement;
-using WebKit::WebSelectElement;
-using WebKit::WebVector;
 
 namespace webkit {
 namespace forms {
@@ -42,6 +32,13 @@ bool FormField::operator==(const FormField& field) const {
 
 bool FormField::operator!=(const FormField& field) const {
   return !operator==(field);
+}
+
+bool FormField::operator<(const FormField& field) const {
+  if (label == field.label)
+    return name < field.name;
+
+  return label < field.label;
 }
 
 std::ostream& operator<<(std::ostream& os, const FormField& field) {

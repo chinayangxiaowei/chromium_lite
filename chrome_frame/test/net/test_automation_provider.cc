@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -45,6 +45,7 @@ TestAutomationProvider::TestAutomationProvider(
 }
 
 TestAutomationProvider::~TestAutomationProvider() {
+  delegate_->OnProviderDestroyed();
   g_provider_instance_ = NULL;
 }
 
@@ -68,8 +69,10 @@ bool TestAutomationProvider::Send(IPC::Message* msg) {
   return AutomationProvider::Send(msg);
 }
 
-net::URLRequestJob* TestAutomationProvider::Factory(net::URLRequest* request,
-                                                    const std::string& scheme) {
+net::URLRequestJob* TestAutomationProvider::Factory(
+    net::URLRequest* request,
+    net::NetworkDelegate* network_delegate,
+    const std::string& scheme) {
   if (CFTestsDisabled())
     return NULL;
 
@@ -88,7 +91,8 @@ net::URLRequestJob* TestAutomationProvider::Factory(net::URLRequest* request,
       // and without userdata, we're OK.  However, just to make debugging
       // a little easier, we have a significantly higher start value.
       static int new_id = 0x00100000;
-      URLRequestAutomationJob* job = new URLRequestAutomationJob(request,
+      URLRequestAutomationJob* job = new URLRequestAutomationJob(
+          request, network_delegate,
           g_provider_instance_->tab_handle_, new_id++,
           g_provider_instance_->automation_resource_message_filter_, false);
       return job;

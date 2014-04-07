@@ -11,24 +11,29 @@
 #include "base/i18n/rtl.h"
 #include "base/message_loop.h"
 #include "base/utf_string_conversions.h"
+#include "chrome/browser/extensions/api/commands/command_service.h"
+#include "chrome/browser/extensions/api/commands/command_service_factory.h"
 #include "chrome/browser/extensions/extension_install_ui.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_window.h"
+#include "chrome/browser/ui/singleton_tabs.h"
+#include "chrome/browser/ui/views/browser_action_view.h"
 #include "chrome/browser/ui/views/browser_actions_container.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
 #include "chrome/browser/ui/views/location_bar/location_bar_view.h"
 #include "chrome/browser/ui/views/tabs/tab_strip.h"
 #include "chrome/browser/ui/views/toolbar_view.h"
-#include "chrome/browser/ui/views/window.h"
+#include "chrome/browser/ui/webui/ntp/new_tab_ui.h"
 #include "chrome/common/chrome_notification_types.h"
 #include "chrome/common/extensions/extension.h"
 #include "chrome/common/extensions/extension_action.h"
+#include "chrome/common/url_constants.h"
 #include "content/public/browser/notification_details.h"
 #include "content/public/browser/notification_source.h"
 #include "grit/chromium_strings.h"
 #include "grit/generated_resources.h"
-#include "grit/ui_resources_standard.h"
+#include "grit/ui_resources.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/resource/resource_bundle.h"
 #include "ui/views/controls/button/image_button.h"
@@ -38,6 +43,8 @@
 #include "ui/views/controls/link_listener.h"
 #include "ui/views/layout/fill_layout.h"
 #include "ui/views/layout/layout_constants.h"
+
+using extensions::Extension;
 
 namespace {
 
@@ -70,17 +77,15 @@ const int kAnimationWaitMaxRetry = 10;
 
 }  // namespace
 
-namespace browser {
+namespace chrome {
 
-void ShowExtensionInstalledBubble(
-    const Extension* extension,
-    Browser* browser,
-    const SkBitmap& icon,
-    Profile* profile) {
+void ShowExtensionInstalledBubble(const Extension* extension,
+                                  Browser* browser,
+                                  const SkBitmap& icon) {
   ExtensionInstalledBubble::Show(extension, browser, icon);
 }
 
-}  // namespace browser
+}  // namespace chrome
 
 // InstalledBubbleContent is the content view which is placed in the
 // ExtensionInstalledBubble. It displays the install icon and explanatory
@@ -98,9 +103,11 @@ class InstalledBubbleContent : public views::View,
         extension_id_(extension->id()),
         bubble_(bubble),
         type_(type),
-        info_(NULL) {
-    ResourceBundle& rb = ResourceBundle::GetSharedInstance();
-    const gfx::Font& font = rb.GetFont(ResourceBundle::BaseFont);
+        info_(NULL),
+        manage_(NULL),
+       manage_shortcut_(NULL) {
+    ui::ResourceBundle& rb = ui::ResourceBundle::GetSharedInstance();
+    const gfx::Font& font = rb.GetFont(ui::ResourceBundle::BaseFont);
 
     // Scale down to 43x43, but allow smaller icons (don't scale up).
     gfx::Size size(icon->width(), icon->height());
@@ -111,19 +118,86 @@ class InstalledBubbleContent : public views::View,
     icon_->SetImage(*icon);
     AddChildView(icon_);
 
+    // The Extension Installed bubble takes on various forms, depending on the
+    // type of extension installed. In general, though, they are all similar:
+    //
+    // -------------------------
+    // |      | Heading    [X] |
+    // | Icon | Info           |
+    // |      | Extra info     |
+    // -------------------------
+    //
+    // Icon and Heading are always shown.
+    // Info is shown for browser actions, page actions and Omnibox keyword
+    // extensions and might list keyboard shorcut for the former two types.
+    // Extra info is...
+    // ... for Apps: a link that opens the App Install UI.
+    // ... for other types, either a description of how to manage the extension
+    //     or a link to configure the keybinding shortcut (if one exists).
+
     string16 extension_name = UTF8ToUTF16(extension->name());
     base::i18n::AdjustStringForLocaleDirection(&extension_name);
     heading_ = new views::Label(l10n_util::GetStringFUTF16(
         IDS_EXTENSION_INSTALLED_HEADING, extension_name));
-    heading_->SetFont(rb.GetFont(ResourceBundle::MediumFont));
+    heading_->SetFont(rb.GetFont(ui::ResourceBundle::MediumFont));
     heading_->SetMultiLine(true);
     heading_->SetHorizontalAlignment(views::Label::ALIGN_LEFT);
     AddChildView(heading_);
 
+    bool has_keybinding = false;
+
     switch (type_) {
+      case ExtensionInstalledBubble::BROWSER_ACTION: {
+        extensions::CommandService* command_service =
+            extensions::CommandServiceFactory::GetForProfile(
+                browser_->profile());
+        extensions::Command browser_action_command;
+        if (!command_service->GetBrowserActionCommand(
+                extension->id(),
+                extensions::CommandService::ACTIVE_ONLY,
+                &browser_action_command,
+                NULL)) {
+          info_ = new views::Label(l10n_util::GetStringUTF16(
+              IDS_EXTENSION_INSTALLED_BROWSER_ACTION_INFO));
+        } else {
+          has_keybinding = true;
+          info_ = new views::Label(l10n_util::GetStringFUTF16(
+              IDS_EXTENSION_INSTALLED_BROWSER_ACTION_INFO_WITH_SHORTCUT,
+              browser_action_command.accelerator().GetShortcutText()));
+        }
+
+        info_->SetFont(font);
+        info_->SetMultiLine(true);
+        info_->SetHorizontalAlignment(views::Label::ALIGN_LEFT);
+        AddChildView(info_);
+
+        manage_shortcut_ = new views::Link(
+            l10n_util::GetStringUTF16(
+            IDS_EXTENSION_INSTALLED_MANAGE_SHORTCUTS));
+        break;
+      }
       case ExtensionInstalledBubble::PAGE_ACTION: {
-        info_ = new views::Label(l10n_util::GetStringUTF16(
-            IDS_EXTENSION_INSTALLED_PAGE_ACTION_INFO));
+        extensions::CommandService* command_service =
+            extensions::CommandServiceFactory::GetForProfile(
+                browser_->profile());
+        extensions::Command page_action_command;
+        if (!command_service->GetPageActionCommand(
+                extension->id(),
+                extensions::CommandService::ACTIVE_ONLY,
+                &page_action_command,
+                NULL)) {
+          info_ = new views::Label(l10n_util::GetStringUTF16(
+              IDS_EXTENSION_INSTALLED_PAGE_ACTION_INFO));
+        } else {
+          has_keybinding = true;
+          info_ = new views::Label(l10n_util::GetStringFUTF16(
+              IDS_EXTENSION_INSTALLED_PAGE_ACTION_INFO_WITH_SHORTCUT,
+              page_action_command.accelerator().GetShortcutText()));
+          manage_shortcut_ = new views::Link(
+              l10n_util::GetStringUTF16(
+                  IDS_EXTENSION_INSTALLED_MANAGE_SHORTCUTS));
+        }
+
         info_->SetFont(font);
         info_->SetMultiLine(true);
         info_->SetHorizontalAlignment(views::Label::ALIGN_LEFT);
@@ -155,7 +229,10 @@ class InstalledBubbleContent : public views::View,
         break;
     }
 
-    if (type_ != ExtensionInstalledBubble::APP) {
+    if (has_keybinding) {
+      manage_shortcut_->set_listener(this);
+      AddChildView(manage_shortcut_);
+    } else if (type_ != ExtensionInstalledBubble::APP) {
       manage_ = new views::Label(
           l10n_util::GetStringUTF16(IDS_EXTENSION_INSTALLED_MANAGE_INFO));
       manage_->SetFont(font);
@@ -166,15 +243,15 @@ class InstalledBubbleContent : public views::View,
 
     close_button_ = new views::ImageButton(this);
     close_button_->SetImage(views::CustomButton::BS_NORMAL,
-        rb.GetBitmapNamed(IDR_CLOSE_BAR));
+        rb.GetImageSkiaNamed(IDR_CLOSE_BAR));
     close_button_->SetImage(views::CustomButton::BS_HOT,
-        rb.GetBitmapNamed(IDR_CLOSE_BAR_H));
+        rb.GetImageSkiaNamed(IDR_CLOSE_BAR_H));
     close_button_->SetImage(views::CustomButton::BS_PUSHED,
-        rb.GetBitmapNamed(IDR_CLOSE_BAR_P));
+        rb.GetImageSkiaNamed(IDR_CLOSE_BAR_P));
     AddChildView(close_button_);
   }
 
-  virtual void ButtonPressed(views::Button* sender, const views::Event& event) {
+  virtual void ButtonPressed(views::Button* sender, const ui::Event& event) {
     if (sender == close_button_)
       bubble_->StartFade(false);
     else
@@ -184,7 +261,16 @@ class InstalledBubbleContent : public views::View,
   // Implements the views::LinkListener interface.
   virtual void LinkClicked(views::Link* source, int event_flags) OVERRIDE {
     GetWidget()->Close();
-    ExtensionInstallUI::OpenAppInstalledNTP(browser_, extension_id_);
+    if (source == manage_shortcut_) {
+      std::string configure_url = chrome::kChromeUIExtensionsURL;
+      configure_url += chrome::kExtensionConfigureCommandsSubPage;
+      chrome::NavigateParams params(
+          chrome::GetSingletonTabNavigateParams(
+              browser_, GURL(configure_url.c_str())));
+      chrome::Navigate(&params);
+    } else {
+      ExtensionInstallUI::OpenAppInstalledUI(browser_, extension_id_);
+    }
   }
 
  private:
@@ -203,8 +289,16 @@ class InstalledBubbleContent : public views::View,
       height += info_->GetHeightForWidth(kRightColumnWidth);
       height += kVertInnerMargin;
     }
-    height += manage_->GetHeightForWidth(kRightColumnWidth);
-    height += kVertOuterMargin;
+
+    if (manage_) {
+      height += manage_->GetHeightForWidth(kRightColumnWidth);
+      height += kVertOuterMargin;
+    }
+
+    if (manage_shortcut_) {
+      height += manage_shortcut_->GetHeightForWidth(kRightColumnWidth);
+      height += kVertOuterMargin;
+    }
 
     return gfx::Size(width, std::max(height, kIconSize + 2 * kVertOuterMargin));
   }
@@ -232,11 +326,23 @@ class InstalledBubbleContent : public views::View,
       y += kVertInnerMargin;
     }
 
-    manage_->SizeToFit(kRightColumnWidth);
-    manage_->SetX(x);
-    manage_->SetY(y);
-    y += manage_->height();
-    y += kVertInnerMargin;
+    if (manage_) {
+      manage_->SizeToFit(kRightColumnWidth);
+      manage_->SetX(x);
+      manage_->SetY(y);
+      y += manage_->height();
+      y += kVertInnerMargin;
+    }
+
+    if (manage_shortcut_) {
+      gfx::Size sz = manage_shortcut_->GetPreferredSize();
+      manage_shortcut_->SetBounds(width() - 2 * kHorizOuterMargin - sz.width(),
+                                  y,
+                                  sz.width(),
+                                  sz.height());
+      y += manage_shortcut_->height();
+      y += kVertInnerMargin;
+    }
 
     gfx::Size sz;
     x += kRightColumnWidth + 2 * views::kPanelHorizMargin + kHorizOuterMargin -
@@ -262,6 +368,7 @@ class InstalledBubbleContent : public views::View,
   views::Label* heading_;
   views::Label* info_;
   views::Label* manage_;
+  views::Link* manage_shortcut_;
   views::ImageButton* close_button_;
 
   DISALLOW_COPY_AND_ASSIGN(InstalledBubbleContent);
@@ -280,18 +387,16 @@ ExtensionInstalledBubble::ExtensionInstalledBubble(const Extension* extension,
       browser_(browser),
       icon_(icon),
       animation_wait_retries_(0) {
-  if (extension->is_app()) {
+  if (extension->is_app())
     type_ = APP;
-  } else if (!extension_->omnibox_keyword().empty()) {
+  else if (!extension_->omnibox_keyword().empty())
     type_ = OMNIBOX_KEYWORD;
-  } else if (extension_->browser_action()) {
+  else if (extension_->browser_action())
     type_ = BROWSER_ACTION;
-  } else if (extension->page_action() &&
-             !extension->page_action()->default_icon_path().empty()) {
+  else if (extension->page_action() && extension->is_verbose_install_message())
     type_ = PAGE_ACTION;
-  } else {
+  else
     type_ = GENERIC;
-  }
 
   // |extension| has been initialized but not loaded at this point. We need
   // to wait on showing the Bubble until not only the EXTENSION_LOADED gets
@@ -323,7 +428,7 @@ void ExtensionInstalledBubble::Observe(
     }
   } else if (type == chrome::NOTIFICATION_EXTENSION_UNLOADED) {
     const Extension* extension =
-        content::Details<UnloadedExtensionInfo>(details)->extension;
+        content::Details<extensions::UnloadedExtensionInfo>(details)->extension;
     if (extension == extension_)
       extension_ = NULL;
   } else {
@@ -337,8 +442,8 @@ void ExtensionInstalledBubble::ShowInternal() {
   views::View* reference_view = NULL;
   if (type_ == APP) {
     if (browser_view->IsTabStripVisible()) {
-      AbstractTabStripView* tabstrip = browser_view->tabstrip();
-      views::View* ntp_button = tabstrip->GetNewTabButton();
+      TabStrip* tabstrip = browser_view->tabstrip();
+      views::View* ntp_button = tabstrip->newtab_button();
       if (ntp_button && ntp_button->IsDrawn()) {
         reference_view = ntp_button;
       } else {
@@ -357,7 +462,7 @@ void ExtensionInstalledBubble::ShowInternal() {
           FROM_HERE,
           base::Bind(&ExtensionInstalledBubble::ShowInternal,
                      base::Unretained(this)),
-          kAnimationWaitTime);
+          base::TimeDelta::FromMilliseconds(kAnimationWaitTime));
       return;
     }
     reference_view = container->GetBrowserActionView(
@@ -393,7 +498,7 @@ void ExtensionInstalledBubble::ShowInternal() {
   SetLayoutManager(new views::FillLayout());
   AddChildView(
       new InstalledBubbleContent(browser_, extension_, type_, &icon_, this));
-  browser::CreateViewsBubble(this);
+  views::BubbleDelegateView::CreateBubble(this);
   StartFade(true);
 }
 

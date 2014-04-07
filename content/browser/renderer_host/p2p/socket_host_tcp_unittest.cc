@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -26,7 +26,7 @@ class P2PSocketHostTcpTest : public testing::Test {
         MatchMessage(static_cast<uint32>(P2PMsg_OnSocketCreated::ID))))
         .WillOnce(DoAll(DeleteArg<0>(), Return(true)));
 
-    socket_host_.reset(new P2PSocketHostTcp(&sender_, 0, 0));
+    socket_host_.reset(new P2PSocketHostTcp(&sender_, 0));
     socket_ = new FakeSocket(&sent_data_);
     socket_->SetLocalAddress(ParseAddress(kTestLocalIpAddress, kTestPort1));
     socket_host_->socket_.reset(socket_);
@@ -42,7 +42,7 @@ class P2PSocketHostTcpTest : public testing::Test {
 
   std::string IntToSize(int size) {
     std::string result;
-    uint16 size16 = htons(size);
+    uint16 size16 = base::HostToNet16(size);
     result.resize(sizeof(size16));
     memcpy(&result[0], &size16, sizeof(size16));
     return result;

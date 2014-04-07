@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,6 +7,7 @@
 #include <deque>
 #include <vector>
 
+#include "base/logging.h"
 #include "base/sys_byteorder.h"
 #include "content/browser/renderer_host/p2p/socket_host_test_utils.h"
 #include "net/base/io_buffer.h"
@@ -107,6 +108,14 @@ class FakeDatagramServerSocket : public net::DatagramServerSocket {
     return net_log_;
   }
 
+  virtual void AllowAddressReuse() OVERRIDE {
+    NOTIMPLEMENTED();
+  }
+
+  virtual void AllowBroadcast() OVERRIDE {
+    NOTIMPLEMENTED();
+  }
+
  private:
   net::IPEndPoint address_;
   std::deque<UDPPacket>* sent_packets_;
@@ -130,7 +139,7 @@ class P2PSocketHostUdpTest : public testing::Test {
         MatchMessage(static_cast<uint32>(P2PMsg_OnSocketCreated::ID))))
         .WillOnce(DoAll(DeleteArg<0>(), Return(true)));
 
-    socket_host_.reset(new P2PSocketHostUdp(&sender_, 0, 0));
+    socket_host_.reset(new P2PSocketHostUdp(&sender_, 0));
     socket_ = new FakeDatagramServerSocket(&sent_packets_);
     socket_host_->socket_.reset(socket_);
 

@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -30,8 +30,8 @@ TEST(SpellcheckWordIteratorTest, SplitWord) {
   // should extract only the words used by the specified language from this text
   // and normalize them so our spell-checker can check their spellings.
   const wchar_t kTestText[] =
-      // Numbers
-      L"0123456789"
+      // Graphic characters
+      L"!@#$%^&*()"
       // Latin (including a contraction character and a ligature).
       L"hello:hello a\xFB03x"
       // Greek
@@ -163,4 +163,68 @@ TEST(SpellcheckWordIteratorTest, RuleSetConsistency) {
   EXPECT_FALSE(iterator.GetNextWord(&actual_word, &actual_start, &actual_end));
   EXPECT_EQ(0, actual_start);
   EXPECT_EQ(0, actual_end);
+}
+
+// Vertify our SpellcheckWordIterator can treat ASCII numbers as word characters
+// on LTR languages. On the other hand, it should not treat ASCII numbers as
+// word characters on RTL languages because they change the text direction from
+// RTL to LTR.
+TEST(SpellcheckWordIteratorTest, TreatNumbersAsWordCharacters) {
+  // A set of a language, a dummy word, and a text direction used in this test.
+  // For each language, this test splits a dummy word, which consists of ASCII
+  // numbers and an alphabet of the language, into words. When ASCII numbers are
+  // treated as word characters, the split word becomes equal to the dummy word.
+  // Otherwise, the split word does not include ASCII numbers.
+  static const struct {
+    const char* language;
+    const wchar_t* text;
+    bool left_to_right;
+  } kTestCases[] = {
+    {
+      // English
+      "en-US", L"0123456789" L"a", true,
+    }, {
+      // Greek
+      "el-GR", L"0123456789" L"\x03B1", true,
+    }, {
+      // Russian
+      "ru-RU", L"0123456789" L"\x0430", true,
+    }, {
+      // Hebrew
+      "he-IL", L"0123456789" L"\x05D0", false,
+    }, {
+      // Arabic
+      "ar",  L"0123456789" L"\x0627", false,
+    }, {
+      // Hindi
+      "hi-IN", L"0123456789" L"\x0905", true,
+    }, {
+      // Thai
+      "th-TH", L"0123456789" L"\x0e01", true,
+    }, {
+      // Korean
+      "ko-KR", L"0123456789" L"\x1100\x1161", true,
+    },
+  };
+
+  for (size_t i = 0; i < ARRAYSIZE_UNSAFE(kTestCases); ++i) {
+    SCOPED_TRACE(base::StringPrintf("kTestCases[%" PRIuS "]: language=%s", i,
+                                    kTestCases[i].language));
+
+    SpellcheckCharAttribute attributes;
+    attributes.SetDefaultLanguage(kTestCases[i].language);
+
+    string16 input_word(WideToUTF16(kTestCases[i].text));
+    SpellcheckWordIterator iterator;
+    EXPECT_TRUE(iterator.Initialize(&attributes, true));
+    EXPECT_TRUE(iterator.SetText(input_word.c_str(), input_word.length()));
+
+    string16 actual_word;
+    int actual_start, actual_end;
+    EXPECT_TRUE(iterator.GetNextWord(&actual_word, &actual_start, &actual_end));
+    if (kTestCases[i].left_to_right)
+      EXPECT_EQ(input_word, actual_word);
+    else
+      EXPECT_NE(input_word, actual_word);
+  }
 }

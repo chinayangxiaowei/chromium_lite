@@ -43,8 +43,19 @@ cr.define('cr.ui', function() {
       select.appendChild(option);
     }
     if (callback) {
-      select.addEventListener('change', function(event) {
+      var send_callback = function() {
         chrome.send(callback, [select.options[select.selectedIndex].value]);
+      };
+      select.addEventListener('blur', function(event) { send_callback(); });
+      select.addEventListener('click', function(event) { send_callback(); });
+      select.addEventListener('keyup', function(event) {
+        var keycode_interested = [
+          9,  // Tab
+          13,  // Enter
+          27,  // Escape
+        ];
+        if (keycode_interested.indexOf(event.keyCode) >= 0)
+          send_callback();
       });
     }
   }
@@ -58,16 +69,23 @@ cr.define('cr.ui', function() {
     oobe.EulaScreen.register();
     oobe.UpdateScreen.register();
     oobe.OAuthEnrollmentScreen.register();
+    oobe.ResetScreen.register();
     login.AccountPickerScreen.register();
     login.GaiaSigninScreen.register();
-    oobe.UserImageScreen.register();
+    oobe.UserImageScreen.register(/* lazyInit= */ false);
     login.ErrorMessageScreen.register();
 
     cr.ui.Bubble.decorate($('bubble'));
     login.HeaderBar.decorate($('login-header-bar'));
 
+    // TODO: Cleanup with old OOBE style removal.
     $('security-link').addEventListener('click', function(event) {
-      chrome.send('eulaOnTpmPopupOpened', []);
+      chrome.send('eulaOnTpmPopupOpened');
+      $('popup-overlay').hidden = false;
+      $('security-ok-button').focus();
+    });
+    $('security-tpm-link').addEventListener('click', function(event) {
+      chrome.send('eulaOnTpmPopupOpened');
       $('popup-overlay').hidden = false;
       $('security-ok-button').focus();
     });
@@ -81,7 +99,7 @@ cr.define('cr.ui', function() {
       event.preventDefault();
     });
 
-    chrome.send('screenStateInitialize', []);
+    chrome.send('screenStateInitialize');
   };
 
   /**
@@ -140,6 +158,56 @@ cr.define('cr.ui', function() {
   };
 
   /**
+   * Shows or hides downloading ETA message.
+   * @param {boolean} visible Are ETA message visible?
+   */
+  Oobe.showEstimatedTimeLeft = function(visible) {
+    $('progress-message').hidden = visible;
+    $('estimated-time-left').hidden = !visible;
+  };
+
+  /**
+   * Sets estimated time left until download will complete.
+   * @param {number} seconds Time left in seconds.
+   */
+  Oobe.setEstimatedTimeLeft = function(seconds) {
+    var minutes = Math.ceil(seconds / 60);
+    var message = '';
+    if (minutes > 60) {
+      message = localStrings.getString('downloadingTimeLeftLong');
+    } else if (minutes > 55) {
+      message = localStrings.getString('downloadingTimeLeftStatusOneHour');
+    } else if (minutes > 20) {
+      message = localStrings.getStringF('downloadingTimeLeftStatusMinutes',
+                                        Math.ceil(minutes / 5) * 5);
+    } else if (minutes > 1) {
+      message = localStrings.getStringF('downloadingTimeLeftStatusMinutes',
+                                        minutes);
+    } else {
+      message = localStrings.getString('downloadingTimeLeftSmall');
+    }
+    $('estimated-time-left').textContent =
+      localStrings.getStringF('downloading', message);
+  };
+
+  /**
+   * Shows or hides info message below progress bar.
+   * @param {boolean} visible Are message visible?
+   */
+  Oobe.showProgressMessage = function(visible) {
+    $('estimated-time-left').hidden = visible;
+    $('progress-message').hidden = !visible;
+  };
+
+  /**
+   * Sets message below progress bar.
+   * @param {string} message Message that should be shown.
+   */
+  Oobe.setProgressMessage = function(message) {
+    $('progress-message').innerText = message;
+  };
+
+  /**
    * Sets update message, which is shown above the progress bar.
    * @param {text} message Message which is shown by the label.
    */
@@ -149,11 +217,11 @@ cr.define('cr.ui', function() {
 
   /**
    * Shows or hides update curtain.
-   * @param {boolean} enable Are curtains shown?
+   * @param {boolean} visible Are curtains visible?
    */
-  Oobe.showUpdateCurtain = function(enable) {
-    $('update-screen-curtain').hidden = !enable;
-    $('update-screen-main').hidden = enable;
+  Oobe.showUpdateCurtain = function(visible) {
+    $('update-screen-curtain').hidden = !visible;
+    $('update-screen-main').hidden = visible;
   };
 
   /**
@@ -286,6 +354,13 @@ cr.define('cr.ui', function() {
 
 var Oobe = cr.ui.Oobe;
 
-disableTextSelectAndDrag();
+// Allow selection events on components with editable text (password field)
+// bug (http://code.google.com/p/chromium/issues/detail?id=125863)
+disableTextSelectAndDrag(function(e) {
+  var src = e.target;
+  return src instanceof HTMLTextAreaElement ||
+         src instanceof HTMLInputElement &&
+         /text|password|search/.test(src.type);
+});
 
 document.addEventListener('DOMContentLoaded', cr.ui.Oobe.initialize);

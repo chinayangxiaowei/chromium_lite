@@ -1,4 +1,4 @@
-// Copyright (c) 2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 #ifndef CHROME_FRAME_TEST_NET_TEST_AUTOMATION_PROVIDER_H_
@@ -8,6 +8,7 @@
 #include "chrome/browser/automation/automation_provider.h"
 
 namespace net {
+class NetworkDelegate;
 class URLRequest;
 class URLRequestJob;
 }  // namespace net
@@ -18,6 +19,7 @@ class TestAutomationResourceMessageFilter;
 class TestAutomationProviderDelegate {
  public:
   virtual void OnInitialTabLoaded() = 0;
+  virtual void OnProviderDestroyed() = 0;
 };
 
 // A slightly customized version of AutomationProvider.
@@ -41,6 +43,7 @@ class TestAutomationProvider
 
   // Protocol factory for handling http/https requests over automation.
   static net::URLRequestJob* Factory(net::URLRequest* request,
+                                     net::NetworkDelegate* network_delegate,
                                      const std::string& scheme);
 
   // Call to instantiate and initialize a new instance of

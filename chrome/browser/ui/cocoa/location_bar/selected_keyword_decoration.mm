@@ -1,16 +1,14 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #import "chrome/browser/ui/cocoa/location_bar/selected_keyword_decoration.h"
 
 #include "base/utf_string_conversions.h"
-#import "chrome/browser/ui/cocoa/image_utils.h"
 #import "chrome/browser/ui/cocoa/omnibox/omnibox_view_mac.h"
 #include "chrome/browser/ui/omnibox/location_bar_util.h"
 #include "grit/generated_resources.h"
 #include "grit/theme_resources.h"
-#include "grit/theme_resources_standard.h"
 #include "ui/base/l10n/l10n_util_mac.h"
 
 SelectedKeywordDecoration::SelectedKeywordDecoration(NSFont* font)
@@ -51,8 +49,7 @@ CGFloat SelectedKeywordDecoration::GetWidthForSpace(CGFloat width) {
 
 void SelectedKeywordDecoration::SetKeyword(const string16& short_name,
                                            bool is_extension_keyword) {
-  const string16 min_name(WideToUTF16Hack(
-      location_bar_util::CalculateMinString(UTF16ToWideHack(short_name))));
+  const string16 min_name(location_bar_util::CalculateMinString(short_name));
   const int message_id = is_extension_keyword ?
       IDS_OMNIBOX_EXTENSION_KEYWORD_TEXT : IDS_OMNIBOX_KEYWORD_TEXT;
 

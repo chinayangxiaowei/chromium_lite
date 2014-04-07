@@ -11,12 +11,13 @@
 #include "base/values.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/common/cloud_print/cloud_print_proxy_info.h"
-#include "chrome/common/net/gaia/gaia_oauth_client.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/service/cloud_print/cloud_print_consts.h"
 #include "chrome/service/cloud_print/print_system.h"
 #include "chrome/service/service_process.h"
 #include "chrome/service/service_process_prefs.h"
+#include "google_apis/gaia/gaia_oauth_client.h"
+#include "google_apis/google_api_keys.h"
 #include "googleurl/src/gurl.h"
 
 namespace {
@@ -38,7 +39,17 @@ void LaunchBrowserProcessWithSwitch(const std::string& switch_string) {
     cmd_line.AppendSwitchPath(switches::kUserDataDir, user_data_dir);
   cmd_line.AppendSwitch(switch_string);
 
-  base::LaunchProcess(cmd_line, base::LaunchOptions(), NULL);
+#if defined(OS_POSIX) && !defined(OS_MACOSX)
+  base::ProcessHandle pid = 0;
+  base::LaunchProcess(cmd_line, base::LaunchOptions(), &pid);
+  base::EnsureProcessGetsReaped(pid);
+#else
+  base::LaunchOptions launch_options;
+#if defined(OS_WIN)
+  launch_options.force_breakaway_from_job_ = true;
+#endif  // OS_WIN
+  base::LaunchProcess(cmd_line, launch_options, NULL);
+#endif
 }
 
 // This method is invoked on the IO thread to launch the browser process to
@@ -62,7 +73,7 @@ CloudPrintProxy::CloudPrintProxy()
 
 CloudPrintProxy::~CloudPrintProxy() {
   DCHECK(CalledOnValidThread());
-  Shutdown();
+  ShutdownBackend();
 }
 
 void CloudPrintProxy::Initialize(ServiceProcessPrefs* service_prefs,
@@ -166,17 +177,31 @@ bool CloudPrintProxy::CreateBackend() {
 
   // TODO(sanjeevr): Allow overriding OAuthClientInfo in prefs.
   gaia::OAuthClientInfo oauth_client_info;
-  oauth_client_info.client_id = kDefaultCloudPrintOAuthClientId;
-  oauth_client_info.client_secret = kDefaultCloudPrintOAuthClientSecret;
+  oauth_client_info.client_id =
+      google_apis::GetOAuth2ClientID(google_apis::CLIENT_CLOUD_PRINT);
+  oauth_client_info.client_secret =
+      google_apis::GetOAuth2ClientSecret(google_apis::CLIENT_CLOUD_PRINT);
 
-  GURL cloud_print_server_url(cloud_print_server_url_str.c_str());
-  DCHECK(cloud_print_server_url.is_valid());
+  cloud_print_server_url_ = GURL(cloud_print_server_url_str.c_str());
+  DCHECK(cloud_print_server_url_.is_valid());
   backend_.reset(new CloudPrintProxyBackend(this, proxy_id_,
-                                            cloud_print_server_url,
+                                            cloud_print_server_url_,
                                             print_system_settings,
                                             oauth_client_info,
                                             enable_job_poll));
   return true;
+}
+
+void CloudPrintProxy::UnregisterPrintersAndDisableForUser() {
+  DCHECK(CalledOnValidThread());
+  if (backend_.get()) {
+    // Try getting auth and printers info from the backend.
+    // We'll get notified in this case.
+    backend_->UnregisterPrinters();
+  } else {
+    // If no backend avaialble, disable connector immidiately.
+    DisableForUser();
+  }
 }
 
 void CloudPrintProxy::DisableForUser() {
@@ -186,7 +211,7 @@ void CloudPrintProxy::DisableForUser() {
   if (client_) {
     client_->OnCloudPrintProxyDisabled(true);
   }
-  Shutdown();
+  ShutdownBackend();
 }
 
 void CloudPrintProxy::GetProxyInfo(cloud_print::CloudPrintProxyInfo* info) {
@@ -228,6 +253,7 @@ void CloudPrintProxy::OnAuthenticated(
 void CloudPrintProxy::OnAuthenticationFailed() {
   DCHECK(CalledOnValidThread());
   // If authenticated failed, we will disable the cloud print proxy.
+  // We can't delete printers at this point.
   DisableForUser();
   // Also delete the cached robot credentials since they may not be valid any
   // longer.
@@ -245,13 +271,27 @@ void CloudPrintProxy::OnAuthenticationFailed() {
 void CloudPrintProxy::OnPrintSystemUnavailable() {
   // If the print system is unavailable, we want to shutdown the proxy and
   // disable it non-persistently.
-  Shutdown();
+  ShutdownBackend();
   if (client_) {
     client_->OnCloudPrintProxyDisabled(false);
   }
 }
 
-void CloudPrintProxy::Shutdown() {
+void CloudPrintProxy::OnUnregisterPrinters(
+    const std::string& auth_token,
+    const std::list<std::string>& printer_ids) {
+  ShutdownBackend();
+  wipeout_.reset(new CloudPrintWipeout(this, cloud_print_server_url_));
+  wipeout_->UnregisterPrinters(auth_token, printer_ids);
+}
+
+void CloudPrintProxy::OnUnregisterPrintersComplete() {
+  wipeout_.reset();
+  // Finish disabling cloud print for this user.
+  DisableForUser();
+}
+
+void CloudPrintProxy::ShutdownBackend() {
   DCHECK(CalledOnValidThread());
   if (backend_.get())
     backend_->Shutdown();

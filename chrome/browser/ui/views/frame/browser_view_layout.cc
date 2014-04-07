@@ -4,26 +4,24 @@
 
 #include "chrome/browser/ui/views/frame/browser_view_layout.h"
 
+#include "chrome/browser/ui/browser_finder.h"
 #include "chrome/browser/ui/find_bar/find_bar.h"
 #include "chrome/browser/ui/find_bar/find_bar_controller.h"
 #include "chrome/browser/ui/view_ids.h"
 #include "chrome/browser/ui/views/bookmarks/bookmark_bar_view.h"
+#include "chrome/browser/ui/views/download/download_shelf_view.h"
 #include "chrome/browser/ui/views/frame/browser_frame.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
 #include "chrome/browser/ui/views/frame/contents_container.h"
 #include "chrome/browser/ui/views/infobars/infobar_container_view.h"
-#include "chrome/browser/ui/views/tab_contents/tab_contents_container.h"
-#include "chrome/browser/ui/views/tabs/abstract_tab_strip_view.h"
+#include "chrome/browser/ui/views/location_bar/location_bar_container.h"
+#include "chrome/browser/ui/views/tabs/tab_strip.h"
 #include "chrome/browser/ui/views/toolbar_view.h"
 #include "ui/base/hit_test.h"
 #include "ui/gfx/point.h"
 #include "ui/gfx/scrollbar_size.h"
 #include "ui/gfx/size.h"
 #include "ui/views/controls/single_split_view.h"
-
-#if !defined(OS_CHROMEOS) || defined(USE_AURA)
-#include "chrome/browser/ui/views/download/download_shelf_view.h"
-#endif
 
 namespace {
 
@@ -35,16 +33,18 @@ const int kToolbarTabStripVerticalOverlap = 3;
 // The number of pixels the bookmark bar should overlap the spacer by if the
 // spacer is visible.
 const int kSpacerBookmarkBarOverlap = 1;
+// The number of pixels the metro switcher is offset from the right edge.
+const int kWindowSwitcherOffsetX = 7;
 
-// Combines View::ConvertPointToView and View::HitTest for a given |point|.
+// Combines View::ConvertPointToTarget and View::HitTest for a given |point|.
 // Converts |point| from |src| to |dst| and hit tests it against |dst|. The
 // converted |point| can then be retrieved and used for additional tests.
 bool ConvertedHitTest(views::View* src, views::View* dst, gfx::Point* point) {
   DCHECK(src);
   DCHECK(dst);
   DCHECK(point);
-  views::View::ConvertPointToView(src, dst, point);
-  return dst->HitTest(*point);
+  views::View::ConvertPointToTarget(src, dst, point);
+  return dst->HitTestPoint(*point);
 }
 
 }  // namespace
@@ -68,11 +68,11 @@ BrowserViewLayout::~BrowserViewLayout() {
 }
 
 gfx::Size BrowserViewLayout::GetMinimumSize() {
-  // TODO(noname): In theory the tabstrip width should probably be
-  // (OTR + tabstrip + caption buttons) width.
   gfx::Size tabstrip_size(
       browser()->SupportsWindowFeature(Browser::FEATURE_TABSTRIP) ?
       tabstrip_->GetMinimumSize() : gfx::Size());
+  BrowserNonClientFrameView::TabStripInsets tab_strip_insets(
+      browser_view_->frame()->GetTabStripInsets(false));
   gfx::Size toolbar_size(
       (browser()->SupportsWindowFeature(Browser::FEATURE_TOOLBAR) ||
        browser()->SupportsWindowFeature(Browser::FEATURE_LOCATIONBAR)) ?
@@ -91,8 +91,11 @@ gfx::Size BrowserViewLayout::GetMinimumSize() {
 
   int min_height = tabstrip_size.height() + toolbar_size.height() +
       bookmark_bar_size.height() + contents_size.height();
-  int widths[] = { tabstrip_size.width(), toolbar_size.width(),
-                   bookmark_bar_size.width(), contents_size.width() };
+  int widths[] = {
+        tabstrip_size.width() + tab_strip_insets.left + tab_strip_insets.right,
+        toolbar_size.width(),
+        bookmark_bar_size.width(),
+        contents_size.width() };
   int min_width = *std::max_element(&widths[0], &widths[arraysize(widths)]);
   return gfx::Size(min_width, min_height);
 }
@@ -131,7 +134,7 @@ gfx::Rect BrowserViewLayout::GetFindBarBoundingBox() const {
 bool BrowserViewLayout::IsPositionInWindowCaption(
     const gfx::Point& point) {
   gfx::Point tabstrip_point(point);
-  views::View::ConvertPointToView(browser_view_, tabstrip_, &tabstrip_point);
+  views::View::ConvertPointToTarget(browser_view_, tabstrip_, &tabstrip_point);
   return tabstrip_->IsPositionInWindowCaption(tabstrip_point);
 }
 
@@ -145,7 +148,7 @@ int BrowserViewLayout::NonClientHitTest(
   views::View* parent = browser_view_->parent();
 
   gfx::Point point_in_browser_view_coords(point);
-  views::View::ConvertPointToView(
+  views::View::ConvertPointToTarget(
       parent, browser_view_, &point_in_browser_view_coords);
   gfx::Point test_point(point);
 
@@ -230,11 +233,7 @@ void BrowserViewLayout::ViewAdded(views::View* host, views::View* view) {
       infobar_container_ = view;
       break;
     case VIEW_ID_DOWNLOAD_SHELF:
-#if !defined(OS_CHROMEOS) || defined(USE_AURA)
       download_shelf_ = static_cast<DownloadShelfView*>(view);
-#else
-      NOTREACHED();
-#endif
       break;
     case VIEW_ID_BOOKMARK_BAR:
       active_bookmark_bar_ = static_cast<BookmarkBarView*>(view);
@@ -243,7 +242,7 @@ void BrowserViewLayout::ViewAdded(views::View* host, views::View* view) {
       toolbar_ = static_cast<ToolbarView*>(view);
       break;
     case VIEW_ID_TAB_STRIP:
-      tabstrip_ = static_cast<AbstractTabStripView*>(view);
+      tabstrip_ = static_cast<TabStrip*>(view);
       break;
   }
 }
@@ -260,9 +259,10 @@ void BrowserViewLayout::Layout(views::View* host) {
   vertical_layout_rect_ = browser_view_->GetLocalBounds();
   int top = LayoutTabStripRegion();
   if (browser_view_->IsTabStripVisible()) {
-    tabstrip_->SetBackgroundOffset(gfx::Point(
-        tabstrip_->GetMirroredX() + browser_view_->GetMirroredX(),
-        browser_view_->frame()->GetHorizontalTabStripVerticalOffset(false)));
+    int x = tabstrip_->GetMirroredX() + browser_view_->GetMirroredX() +
+        browser_view_->frame()->GetThemeBackgroundXInset();
+    tabstrip_->SetBackgroundOffset(gfx::Point(x,
+        browser_view_->frame()->GetTabStripInsets(false).top));
   }
   top = LayoutToolbar(top);
   top = LayoutBookmarkAndInfoBars(top);
@@ -271,7 +271,7 @@ void BrowserViewLayout::Layout(views::View* host) {
   top -= active_top_margin;
   contents_container_->SetActiveTopMargin(active_top_margin);
   LayoutTabContents(top, bottom);
-  // This must be done _after_ we lay out the TabContents since this
+  // This must be done _after_ we lay out the WebContents since this
   // code calls back into us to find the bounding box the find bar
   // must be laid out within, and that code depends on the
   // TabContentsContainer's bounds being up to date.
@@ -279,6 +279,8 @@ void BrowserViewLayout::Layout(views::View* host) {
     browser()->GetFindBarController()->find_bar()->MoveWindowIfNecessary(
         gfx::Rect(), true);
   }
+  // NTP needs to layout the search box now that we have the contents bounds.
+  toolbar_->LayoutForSearch();
 }
 
 // Return the preferred size which is the size required to give each
@@ -304,19 +306,50 @@ int BrowserViewLayout::LayoutTabStripRegion() {
     tabstrip_->SetBounds(0, 0, 0, 0);
     return 0;
   }
-
   // This retrieves the bounds for the tab strip based on whether or not we show
   // anything to the left of it, like the incognito avatar.
   gfx::Rect tabstrip_bounds(
       browser_view_->frame()->GetBoundsForTabStrip(tabstrip_));
   gfx::Point tabstrip_origin(tabstrip_bounds.origin());
-  views::View::ConvertPointToView(browser_view_->parent(), browser_view_,
+  views::View::ConvertPointToTarget(browser_view_->parent(), browser_view_,
                                   &tabstrip_origin);
   tabstrip_bounds.set_origin(tabstrip_origin);
 
   tabstrip_->SetVisible(true);
   tabstrip_->SetBoundsRect(tabstrip_bounds);
-  return tabstrip_bounds.bottom();
+  int bottom = tabstrip_bounds.bottom();
+
+  // The metro window switcher sits at the far right edge of the tabstrip
+  // a |kWindowSwitcherOffsetX| pixels from the right edge.
+  // Only visible if there is more than one type of window to switch between.
+  // TODO(mad): update this code when more window types than just incognito
+  // and regular are available.
+  views::Button* switcher_button = browser_view_->window_switcher_button_;
+  if (switcher_button) {
+    if (browser()->profile()->HasOffTheRecordProfile() &&
+        browser::FindBrowserWithProfile(
+            browser()->profile()->GetOriginalProfile(),
+            browser()->host_desktop_type()) != NULL) {
+      switcher_button->SetVisible(true);
+      int width = browser_view_->width();
+      gfx::Size ps = switcher_button->GetPreferredSize();
+      if (width > ps.width()) {
+        switcher_button->SetBounds(width - ps.width() - kWindowSwitcherOffsetX,
+                                   0,
+                                   ps.width(),
+                                   ps.height());
+      }
+    } else {
+      // We hide the button if the incognito profile is not alive.
+      // Note that Layout() is not called to all browser windows automatically
+      // when a profile goes away but we rely in the metro_driver.dll to call
+      // ::SetWindowPos( , .. SWP_SHOWWINDOW) which causes this function to
+      // be called again. This works both in showing or hidding the button.
+      switcher_button->SetVisible(false);
+    }
+  }
+
+  return bottom;
 }
 
 int BrowserViewLayout::LayoutToolbar(int top) {
@@ -328,6 +361,7 @@ int BrowserViewLayout::LayoutToolbar(int top) {
         kToolbarTabStripVerticalOverlap : 0;
   int height = toolbar_visible ? toolbar_->GetPreferredSize().height() : 0;
   toolbar_->SetVisible(toolbar_visible);
+  toolbar_->location_bar_container()->SetVisible(toolbar_visible);
   toolbar_->SetBounds(vertical_layout_rect_.x(), y, browser_view_width, height);
 
   return y + height;
@@ -436,10 +470,8 @@ int BrowserViewLayout::GetTopMarginForActiveContent() {
 }
 
 int BrowserViewLayout::LayoutDownloadShelf(int bottom) {
-#if !defined(OS_CHROMEOS) || defined(USE_AURA)
-  // Re-layout the shelf either if it is visible or if it's close animation
-  // is currently running.  ChromiumOS uses ActiveDownloadsUI instead of
-  // DownloadShelf.
+  // Re-layout the shelf either if it is visible or if its close animation
+  // is currently running.
   if (browser_view_->IsDownloadShelfVisible() ||
       (download_shelf_ && download_shelf_->IsClosing())) {
     bool visible = browser()->SupportsWindowFeature(
@@ -452,7 +484,6 @@ int BrowserViewLayout::LayoutDownloadShelf(int bottom) {
     download_shelf_->Layout();
     bottom -= height;
   }
-#endif
   return bottom;
 }
 

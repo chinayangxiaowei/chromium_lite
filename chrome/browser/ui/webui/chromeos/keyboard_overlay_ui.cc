@@ -13,23 +13,26 @@
 #include "chrome/browser/chromeos/input_method/xkeyboard.h"
 #include "chrome/browser/prefs/pref_service.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/browser_list.h"
 #include "chrome/browser/ui/webui/chrome_url_data_manager.h"
 #include "chrome/browser/ui/webui/chrome_web_ui_data_source.h"
 #include "chrome/common/jstemplate_builder.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/common/url_constants.h"
 #include "content/public/browser/browser_thread.h"
+#include "content/public/browser/page_navigator.h"
 #include "content/public/browser/web_contents.h"
+#include "content/public/browser/web_contents_delegate.h"
 #include "content/public/browser/web_ui.h"
 #include "content/public/browser/web_ui_message_handler.h"
 #include "grit/browser_resources.h"
+#include "grit/chromium_strings.h"
 #include "grit/generated_resources.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/resource/resource_bundle.h"
 
 using chromeos::input_method::ModifierKey;
 using content::WebUIMessageHandler;
+using ui::WebDialogUI;
 
 namespace {
 
@@ -46,8 +49,8 @@ struct ModifierToLabel {
   const char* label;
 } kModifierToLabels[] = {
   {chromeos::input_method::kSearchKey, "search"},
-  {chromeos::input_method::kLeftControlKey, "ctrl"},
-  {chromeos::input_method::kLeftAltKey, "alt"},
+  {chromeos::input_method::kControlKey, "ctrl"},
+  {chromeos::input_method::kAltKey, "alt"},
   {chromeos::input_method::kVoidKey, "disabled"},
   {chromeos::input_method::kCapsLockKey, "caps lock"},
 };
@@ -60,9 +63,25 @@ struct I18nContentToMessage {
   { "keyboardOverlayTitle", IDS_KEYBOARD_OVERLAY_TITLE },
   { "keyboardOverlayInstructions", IDS_KEYBOARD_OVERLAY_INSTRUCTIONS },
   { "keyboardOverlayInstructionsHide", IDS_KEYBOARD_OVERLAY_INSTRUCTIONS_HIDE },
+  { "keyboardOverlayActivateLastLauncherItem",
+    IDS_KEYBOARD_OVERLAY_ACTIVATE_LAST_LAUNCHER_ITEM },
   { "keyboardOverlayActivateLastTab", IDS_KEYBOARD_OVERLAY_ACTIVATE_LAST_TAB },
-  { "keyboardOverlayActivateLastWindow",
-    IDS_KEYBOARD_OVERLAY_ACTIVATE_LAST_WINDOW },
+  { "keyboardOverlayActivateLauncherItem1",
+    IDS_KEYBOARD_OVERLAY_ACTIVATE_LAUNCHER_ITEM_1 },
+  { "keyboardOverlayActivateLauncherItem2",
+    IDS_KEYBOARD_OVERLAY_ACTIVATE_LAUNCHER_ITEM_2 },
+  { "keyboardOverlayActivateLauncherItem3",
+    IDS_KEYBOARD_OVERLAY_ACTIVATE_LAUNCHER_ITEM_3 },
+  { "keyboardOverlayActivateLauncherItem4",
+    IDS_KEYBOARD_OVERLAY_ACTIVATE_LAUNCHER_ITEM_4 },
+  { "keyboardOverlayActivateLauncherItem5",
+    IDS_KEYBOARD_OVERLAY_ACTIVATE_LAUNCHER_ITEM_5 },
+  { "keyboardOverlayActivateLauncherItem6",
+    IDS_KEYBOARD_OVERLAY_ACTIVATE_LAUNCHER_ITEM_6 },
+  { "keyboardOverlayActivateLauncherItem7",
+    IDS_KEYBOARD_OVERLAY_ACTIVATE_LAUNCHER_ITEM_7 },
+  { "keyboardOverlayActivateLauncherItem8",
+    IDS_KEYBOARD_OVERLAY_ACTIVATE_LAUNCHER_ITEM_8 },
   { "keyboardOverlayActivateNextTab", IDS_KEYBOARD_OVERLAY_ACTIVATE_NEXT_TAB },
   { "keyboardOverlayActivatePreviousTab",
     IDS_KEYBOARD_OVERLAY_ACTIVATE_PREVIOUS_TAB },
@@ -74,25 +93,17 @@ struct I18nContentToMessage {
   { "keyboardOverlayActivateTab6", IDS_KEYBOARD_OVERLAY_ACTIVATE_TAB_6 },
   { "keyboardOverlayActivateTab7", IDS_KEYBOARD_OVERLAY_ACTIVATE_TAB_7 },
   { "keyboardOverlayActivateTab8", IDS_KEYBOARD_OVERLAY_ACTIVATE_TAB_8 },
-  { "keyboardOverlayActivateWindow1", IDS_KEYBOARD_OVERLAY_ACTIVATE_WINDOW_1 },
-  { "keyboardOverlayActivateWindow2", IDS_KEYBOARD_OVERLAY_ACTIVATE_WINDOW_2 },
-  { "keyboardOverlayActivateWindow3", IDS_KEYBOARD_OVERLAY_ACTIVATE_WINDOW_3 },
-  { "keyboardOverlayActivateWindow4", IDS_KEYBOARD_OVERLAY_ACTIVATE_WINDOW_4 },
-  { "keyboardOverlayActivateWindow5", IDS_KEYBOARD_OVERLAY_ACTIVATE_WINDOW_5 },
-  { "keyboardOverlayActivateWindow6", IDS_KEYBOARD_OVERLAY_ACTIVATE_WINDOW_6 },
-  { "keyboardOverlayActivateWindow7", IDS_KEYBOARD_OVERLAY_ACTIVATE_WINDOW_7 },
-  { "keyboardOverlayActivateWindow8", IDS_KEYBOARD_OVERLAY_ACTIVATE_WINDOW_8 },
   { "keyboardOverlayAddWwwAndComAndOpenAddress",
     IDS_KEYBOARD_OVERLAY_ADD_WWW_AND_COM_AND_OPEN_ADDRESS },
   { "keyboardOverlayBookmarkAllTabs", IDS_KEYBOARD_OVERLAY_BOOKMARK_ALL_TABS },
   { "keyboardOverlayBookmarkCurrentPage",
     IDS_KEYBOARD_OVERLAY_BOOKMARK_CURRENT_PAGE },
   { "keyboardOverlayBookmarkManager", IDS_KEYBOARD_OVERLAY_BOOKMARK_MANAGER },
+  { "keyboardOverlayCenterWindow", IDS_KEYBOARD_OVERLAY_CENTER_WINDOW },
   { "keyboardOverlayClearBrowsingDataDialog",
     IDS_KEYBOARD_OVERLAY_CLEAR_BROWSING_DATA_DIALOG },
   { "keyboardOverlayCloseTab", IDS_KEYBOARD_OVERLAY_CLOSE_TAB },
   { "keyboardOverlayCloseWindow", IDS_KEYBOARD_OVERLAY_CLOSE_WINDOW },
-  { "keyboardOverlayContentBrowser", IDS_KEYBOARD_OVERLAY_CONTENT_BROWSER },
   { "keyboardOverlayCopy", IDS_KEYBOARD_OVERLAY_COPY },
   { "keyboardOverlayCut", IDS_KEYBOARD_OVERLAY_CUT },
   { "keyboardOverlayCycleThroughInputMethods",
@@ -100,6 +111,8 @@ struct I18nContentToMessage {
   { "keyboardOverlayDelete", IDS_KEYBOARD_OVERLAY_DELETE },
   { "keyboardOverlayDeleteWord", IDS_KEYBOARD_OVERLAY_DELETE_WORD },
   { "keyboardOverlayDeveloperTools", IDS_KEYBOARD_OVERLAY_DEVELOPER_TOOLS },
+  { "keyboardOverlayDockWindowLeft", IDS_KEYBOARD_OVERLAY_DOCK_WINDOW_LEFT },
+  { "keyboardOverlayDockWindowRight", IDS_KEYBOARD_OVERLAY_DOCK_WINDOW_RIGHT },
   { "keyboardOverlayDomInspector", IDS_KEYBOARD_OVERLAY_DOM_INSPECTOR },
   { "keyboardOverlayDownloads", IDS_KEYBOARD_OVERLAY_DOWNLOADS },
   { "keyboardOverlayEnd", IDS_KEYBOARD_OVERLAY_END },
@@ -111,12 +124,13 @@ struct I18nContentToMessage {
   { "keyboardOverlayFocusAddressBarInSearchMode",
     IDS_KEYBOARD_OVERLAY_FOCUS_ADDRESS_BAR_IN_SEARCH_MODE },
   { "keyboardOverlayFocusBookmarks", IDS_KEYBOARD_OVERLAY_FOCUS_BOOKMARKS },
+  { "keyboardOverlayFocusLauncher", IDS_KEYBOARD_OVERLAY_FOCUS_LAUNCHER },
   { "keyboardOverlayFocusNextPane", IDS_KEYBOARD_OVERLAY_FOCUS_NEXT_PANE },
   { "keyboardOverlayFocusPreviousPane",
     IDS_KEYBOARD_OVERLAY_FOCUS_PREVIOUS_PANE },
   { "keyboardOverlayFocusStatusIcon", IDS_KEYBOARD_OVERLAY_FOCUS_STATUS_ICON },
   { "keyboardOverlayFocusToolbar", IDS_KEYBOARD_OVERLAY_FOCUS_TOOLBAR },
-  { "keyboardOverlayFocusWrenchMenu", IDS_KEYBOARD_OVERLAY_FOCUS_WRENCH_MENU },
+  { "keyboardOverlayFullscreen", IDS_ACCNAME_FULLSCREEN },
   { "keyboardOverlayGoBack", IDS_KEYBOARD_OVERLAY_GO_BACK },
   { "keyboardOverlayGoForward", IDS_KEYBOARD_OVERLAY_GO_FORWARD },
   { "keyboardOverlayHelp", IDS_KEYBOARD_OVERLAY_HELP },
@@ -126,9 +140,16 @@ struct I18nContentToMessage {
     IDS_KEYBOARD_OVERLAY_INPUT_UNICODE_CHARACTERS },
   { "keyboardOverlayJavascriptConsole",
     IDS_KEYBOARD_OVERLAY_JAVASCRIPT_CONSOLE },
+  { "keyboardOverlayKeyboardBrightDown",
+    IDS_KEYBOARD_OVERLAY_KEYBOARD_BRIGHT_DOWN },
+  { "keyboardOverlayKeyboardBrightUp",
+    IDS_KEYBOARD_OVERLAY_KEYBOARD_BRIGHT_UP },
   { "keyboardOverlayLockScreen", IDS_KEYBOARD_OVERLAY_LOCK_SCREEN },
   { "keyboardOverlayLockScreenOrPowerOff",
     IDS_KEYBOARD_OVERLAY_LOCK_SCREEN_OR_POWER_OFF },
+  { "keyboardOverlayMaximizeWindow", IDS_KEYBOARD_OVERLAY_MAXIMIZE_WINDOW },
+  { "keyboardOverlayMinimizeWindow", IDS_KEYBOARD_OVERLAY_MINIMIZE_WINDOW },
+  { "keyboardOverlayMirrorMonitors", IDS_KEYBOARD_OVERLAY_MIRROR_MONITORS },
   { "keyboardOverlayNewIncognitoWindow",
     IDS_KEYBOARD_OVERLAY_NEW_INCOGNITO_WINDOW },
   { "keyboardOverlayNewTab", IDS_KEYBOARD_OVERLAY_NEW_TAB },
@@ -137,7 +158,8 @@ struct I18nContentToMessage {
   { "keyboardOverlayNextWord", IDS_KEYBOARD_OVERLAY_NEXT_WORD },
   { "keyboardOverlayOpenAddressInNewTab",
     IDS_KEYBOARD_OVERLAY_OPEN_ADDRESS_IN_NEW_TAB },
-  { "keyboardOverlayOpenFileManager", IDS_KEYBOARD_OVERLAY_OPEN_FILE_MANAGER },
+  { "keyboardOverlayOpenDialog", IDS_KEYBOARD_OVERLAY_OPEN_DIALOG },
+  { "keyboardOverlayOpenFilesApp", IDS_KEYBOARD_OVERLAY_OPEN_FILES_APP },
   { "keyboardOverlayPageDown", IDS_KEYBOARD_OVERLAY_PAGE_DOWN },
   { "keyboardOverlayPageUp", IDS_KEYBOARD_OVERLAY_PAGE_UP },
   { "keyboardOverlayPaste", IDS_KEYBOARD_OVERLAY_PASTE },
@@ -152,9 +174,8 @@ struct I18nContentToMessage {
     IDS_KEYBOARD_OVERLAY_RELOAD_IGNORING_CACHE },
   { "keyboardOverlayReopenLastClosedTab",
     IDS_KEYBOARD_OVERLAY_REOPEN_LAST_CLOSED_TAB },
+  { "keyboardOverlayReportIssue", IDS_KEYBOARD_OVERLAY_REPORT_ISSUE },
   { "keyboardOverlayResetZoom", IDS_KEYBOARD_OVERLAY_RESET_ZOOM },
-  { "keyboardOverlayResizeLeft", IDS_KEYBOARD_OVERLAY_RESIZE_LEFT },
-  { "keyboardOverlayResizeRight", IDS_KEYBOARD_OVERLAY_RESIZE_RIGHT },
   { "keyboardOverlaySave", IDS_KEYBOARD_OVERLAY_SAVE },
   { "keyboardOverlayScreenshotRegion",
     IDS_KEYBOARD_OVERLAY_SCREENSHOT_REGION },
@@ -205,6 +226,7 @@ ChromeWebUIDataSource* CreateKeyboardOverlayUIHTMLSource() {
 
   source->AddString("keyboardOverlayLearnMoreURL", UTF8ToUTF16(kLearnMoreURL));
   source->set_json_path("strings.js");
+  source->set_use_json_js_format_v2();
   source->add_resource_path("keyboard_overlay.js", IDR_KEYBOARD_OVERLAY_JS);
   source->set_default_resource(IDR_KEYBOARD_OVERLAY_HTML);
   return source;
@@ -268,7 +290,7 @@ void KeyboardOverlayHandler::GetInputMethodId(const ListValue* args) {
   chromeos::input_method::InputMethodManager* manager =
       chromeos::input_method::InputMethodManager::GetInstance();
   const chromeos::input_method::InputMethodDescriptor& descriptor =
-      manager->current_input_method();
+      manager->GetCurrentInputMethod();
   StringValue param(descriptor.id());
   web_ui()->CallJavascriptFunction("initKeyboardOverlayId", param);
 }
@@ -279,12 +301,13 @@ void KeyboardOverlayHandler::GetLabelMap(const ListValue* args) {
   typedef std::map<ModifierKey, ModifierKey> ModifierMap;
   ModifierMap modifier_map;
   modifier_map[chromeos::input_method::kSearchKey] = static_cast<ModifierKey>(
-      pref_service->GetInteger(prefs::kLanguageXkbRemapSearchKeyTo));
-  modifier_map[chromeos::input_method::kLeftControlKey] =
-      static_cast<ModifierKey>(
-          pref_service->GetInteger(prefs::kLanguageXkbRemapControlKeyTo));
-  modifier_map[chromeos::input_method::kLeftAltKey] = static_cast<ModifierKey>(
-      pref_service->GetInteger(prefs::kLanguageXkbRemapAltKeyTo));
+      pref_service->GetInteger(prefs::kLanguageRemapSearchKeyTo));
+  modifier_map[chromeos::input_method::kControlKey] = static_cast<ModifierKey>(
+      pref_service->GetInteger(prefs::kLanguageRemapControlKeyTo));
+  modifier_map[chromeos::input_method::kAltKey] = static_cast<ModifierKey>(
+      pref_service->GetInteger(prefs::kLanguageRemapAltKeyTo));
+  // TODO(mazda): Support prefs::kLanguageRemapCapsLockKeyTo once Caps Lock is
+  // added to the overlay UI.
 
   DictionaryValue dict;
   for (ModifierMap::const_iterator i = modifier_map.begin();
@@ -296,10 +319,13 @@ void KeyboardOverlayHandler::GetLabelMap(const ListValue* args) {
 }
 
 void KeyboardOverlayHandler::OpenLearnMorePage(const ListValue* args) {
-  Browser* browser = BrowserList::GetLastActive();
-  DCHECK(browser);
-  browser->AddSelectedTabWithURL(GURL(kLearnMoreURL),
-                                 content::PAGE_TRANSITION_LINK);
+  web_ui()->GetWebContents()->GetDelegate()->OpenURLFromTab(
+      web_ui()->GetWebContents(),
+      content::OpenURLParams(GURL(kLearnMoreURL),
+                             content::Referrer(),
+                             NEW_FOREGROUND_TAB,
+                             content::PAGE_TRANSITION_LINK,
+                             false));
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -309,12 +335,12 @@ void KeyboardOverlayHandler::OpenLearnMorePage(const ListValue* args) {
 ////////////////////////////////////////////////////////////////////////////////
 
 KeyboardOverlayUI::KeyboardOverlayUI(content::WebUI* web_ui)
-    : HtmlDialogUI(web_ui) {
+    : WebDialogUI(web_ui) {
   Profile* profile = Profile::FromWebUI(web_ui);
   KeyboardOverlayHandler* handler = new KeyboardOverlayHandler(profile);
   web_ui->AddMessageHandler(handler);
 
   // Set up the chrome://keyboardoverlay/ source.
-  profile->GetChromeURLDataManager()->AddDataSource(
+  ChromeURLDataManager::AddDataSource(profile,
       CreateKeyboardOverlayUIHTMLSource());
 }

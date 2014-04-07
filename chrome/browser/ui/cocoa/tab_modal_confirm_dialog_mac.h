@@ -4,14 +4,14 @@
 
 #ifndef CHROME_BROWSER_UI_COCOA_TAB_MODAL_CONFIRM_DIALOG_MAC_H_
 #define CHROME_BROWSER_UI_COCOA_TAB_MODAL_CONFIRM_DIALOG_MAC_H_
-#pragma once
 
 #import <Cocoa/Cocoa.h>
 
 #include "base/memory/scoped_ptr.h"
 #include "chrome/browser/ui/cocoa/constrained_window_mac.h"
 
-class TabContentsWrapper;
+@class ConstrainedWindowAlert;
+class TabContents;
 class TabModalConfirmDialogDelegate;
 
 // Displays a tab-modal dialog, i.e. a dialog that will block the current page
@@ -23,7 +23,7 @@ class TabModalConfirmDialogMac
     : public ConstrainedWindowMacDelegateSystemSheet {
  public:
   TabModalConfirmDialogMac(TabModalConfirmDialogDelegate* delegate,
-                           TabContentsWrapper* wrapper);
+                           TabContents* tab_contents);
 
   // ConstrainedWindowDelegateMacSystemSheet methods:
   virtual void DeleteDelegate() OVERRIDE;
@@ -34,6 +34,25 @@ class TabModalConfirmDialogMac
   scoped_ptr<TabModalConfirmDialogDelegate> delegate_;
 
   DISALLOW_COPY_AND_ASSIGN(TabModalConfirmDialogMac);
+};
+
+@class TabModalConfirmDialogMacBridge2;
+
+// This class is the same as TabModalConfirmDialogMac except that it uses
+// the new constrained window look and feel.
+class TabModalConfirmDialogMac2 {
+ public:
+  TabModalConfirmDialogMac2(TabModalConfirmDialogDelegate* delegate,
+                            TabContents* tab_contents);
+
+ private:
+  ~TabModalConfirmDialogMac2();
+
+  scoped_ptr<TabModalConfirmDialogDelegate> delegate_;
+  scoped_nsobject<ConstrainedWindowAlert> alert_;
+  scoped_nsobject<TabModalConfirmDialogMacBridge2> bridge_;
+
+  DISALLOW_COPY_AND_ASSIGN(TabModalConfirmDialogMac2);
 };
 
 #endif  // CHROME_BROWSER_UI_COCOA_TAB_MODAL_CONFIRM_DIALOG_MAC_H_

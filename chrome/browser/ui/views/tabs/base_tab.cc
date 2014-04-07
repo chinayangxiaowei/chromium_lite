@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,16 +7,16 @@
 #include <limits>
 
 #include "base/command_line.h"
+#include "base/debug/alias.h"
 #include "base/utf_string_conversions.h"
-#include "chrome/browser/tabs/tab_strip_selection_model.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/tab_contents/core_tab_helper.h"
+#include "chrome/browser/ui/tabs/tab_strip_selection_model.h"
 #include "chrome/browser/ui/view_ids.h"
 #include "chrome/browser/ui/views/tabs/tab_controller.h"
 #include "chrome/common/chrome_switches.h"
 #include "grit/generated_resources.h"
 #include "grit/theme_resources.h"
-#include "grit/theme_resources_standard.h"
 #include "grit/ui_resources.h"
 #include "ui/base/accessibility/accessible_view_state.h"
 #include "ui/base/animation/animation_container.h"
@@ -26,10 +26,14 @@
 #include "ui/base/resource/resource_bundle.h"
 #include "ui/base/text/text_elider.h"
 #include "ui/base/theme_provider.h"
-#include "ui/gfx/canvas_skia.h"
+#include "ui/gfx/canvas.h"
 #include "ui/gfx/favicon_size.h"
 #include "ui/gfx/font.h"
 #include "ui/views/controls/button/image_button.h"
+
+#if defined(USE_ASH)
+#include "ui/aura/env.h"
+#endif
 
 // How long the pulse throb takes.
 static const int kPulseDurationMs = 200;
@@ -37,47 +41,75 @@ static const int kPulseDurationMs = 200;
 // How long the hover state takes.
 static const int kHoverDurationMs = 400;
 
-namespace {
-
 ////////////////////////////////////////////////////////////////////////////////
 // TabCloseButton
 //
 //  This is a Button subclass that causes middle clicks to be forwarded to the
 //  parent View by explicitly not handling them in OnMousePressed.
-class TabCloseButton : public views::ImageButton {
+class BaseTab::TabCloseButton : public views::ImageButton {
  public:
-  explicit TabCloseButton(views::ButtonListener* listener)
-      : views::ImageButton(listener) {
-  }
+  explicit TabCloseButton(BaseTab* tab) : views::ImageButton(tab), tab_(tab) {}
   virtual ~TabCloseButton() {}
 
-  virtual bool OnMousePressed(const views::MouseEvent& event) OVERRIDE {
+  // Overridden from views::View.
+  virtual View* GetEventHandlerForPoint(const gfx::Point& point) OVERRIDE {
+    // Ignore the padding set on the button.
+    gfx::Rect rect = GetContentsBounds();
+    rect.set_x(GetMirroredXForRect(rect));
+
+#if defined(USE_ASH)
+    // Include the padding in hit-test for touch events.
+    if (aura::Env::GetInstance()->is_touch_down())
+      rect = GetLocalBounds();
+#elif defined(OS_WIN)
+    // TODO(sky): Use local-bounds if a touch-point is active.
+    // http://crbug.com/145258
+#endif
+
+    return rect.Contains(point) ? this : parent();
+  }
+
+  virtual bool OnMousePressed(const ui::MouseEvent& event) OVERRIDE {
+    if (tab_->controller())
+      tab_->controller()->OnMouseEventInTab(this, event);
+
     bool handled = ImageButton::OnMousePressed(event);
     // Explicitly mark midle-mouse clicks as non-handled to ensure the tab
     // sees them.
     return event.IsOnlyMiddleMouseButton() ? false : handled;
   }
 
-  // We need to let the parent know about mouse state so that it
-  // can highlight itself appropriately. Note that Exit events
-  // fire before Enter events, so this works.
-  virtual void OnMouseEntered(const views::MouseEvent& event) OVERRIDE {
-    CustomButton::OnMouseEntered(event);
-    parent()->OnMouseEntered(event);
+  virtual void OnMouseMoved(const ui::MouseEvent& event) OVERRIDE {
+    if (tab_->controller())
+      tab_->controller()->OnMouseEventInTab(this, event);
+    CustomButton::OnMouseMoved(event);
   }
 
-  virtual void OnMouseExited(const views::MouseEvent& event) OVERRIDE {
-    CustomButton::OnMouseExited(event);
-    parent()->OnMouseExited(event);
+  virtual void OnMouseReleased(const ui::MouseEvent& event) OVERRIDE {
+    if (tab_->controller())
+      tab_->controller()->OnMouseEventInTab(this, event);
+    CustomButton::OnMouseReleased(event);
+  }
+
+  virtual ui::EventResult OnGestureEvent(
+      const ui::GestureEvent& event) OVERRIDE {
+    // Consume all gesture events here so that the parent (BaseTab) does not
+    // start consuming gestures.
+    ImageButton::OnGestureEvent(event);
+    return ui::ER_CONSUMED;
   }
 
  private:
+  BaseTab* tab_;
+
   DISALLOW_COPY_AND_ASSIGN(TabCloseButton);
 };
 
+namespace {
+
 // Draws the icon image at the center of |bounds|.
 void DrawIconCenter(gfx::Canvas* canvas,
-                    const SkBitmap& image,
+                    const gfx::ImageSkia& image,
                     int image_offset,
                     int icon_width,
                     int icon_height,
@@ -89,10 +121,10 @@ void DrawIconCenter(gfx::Canvas* canvas,
   // NOTE: the clipping is a work around for 69528, it shouldn't be necessary.
   canvas->Save();
   canvas->ClipRect(gfx::Rect(dst_x, dst_y, icon_width, icon_height));
-  canvas->DrawBitmapInt(image,
-                        image_offset, 0, icon_width, icon_height,
-                        dst_x, dst_y, icon_width, icon_height,
-                        filter);
+  canvas->DrawImageInt(image,
+                       image_offset, 0, icon_width, icon_height,
+                       dst_x, dst_y, icon_width, icon_height,
+                       filter);
   canvas->Restore();
 }
 
@@ -154,19 +186,21 @@ BaseTab::BaseTab(TabController* controller)
       ALLOW_THIS_IN_INITIALIZER_LIST(hover_controller_(this)) {
   BaseTab::InitResources();
 
+  // So we get don't get enter/exit on children and don't prematurely stop the
+  // hover.
+  set_notify_enter_exit_on_child(true);
+
   set_id(VIEW_ID_TAB);
 
   // Add the Close Button.
   close_button_ = new TabCloseButton(this);
-  ResourceBundle& rb = ResourceBundle::GetSharedInstance();
+  ui::ResourceBundle& rb = ui::ResourceBundle::GetSharedInstance();
   close_button_->SetImage(views::CustomButton::BS_NORMAL,
-                          rb.GetBitmapNamed(IDR_TAB_CLOSE));
+                          rb.GetImageSkiaNamed(IDR_TAB_CLOSE));
   close_button_->SetImage(views::CustomButton::BS_HOT,
-                          rb.GetBitmapNamed(IDR_TAB_CLOSE_H));
+                          rb.GetImageSkiaNamed(IDR_TAB_CLOSE_H));
   close_button_->SetImage(views::CustomButton::BS_PUSHED,
-                          rb.GetBitmapNamed(IDR_TAB_CLOSE_P));
-  close_button_->SetTooltipText(
-      l10n_util::GetStringUTF16(IDS_TOOLTIP_CLOSE_TAB));
+                          rb.GetImageSkiaNamed(IDR_TAB_CLOSE_P));
   close_button_->SetAccessibleName(
       l10n_util::GetStringUTF16(IDS_ACCNAME_CLOSE));
   // Disable animation so that the red danger sign shows up immediately
@@ -268,10 +302,6 @@ void BaseTab::set_animation_container(ui::AnimationContainer* container) {
   hover_controller_.SetAnimationContainer(container);
 }
 
-bool BaseTab::IsCloseable() const {
-  return controller() ? controller()->IsTabCloseable(this) : true;
-}
-
 bool BaseTab::IsActive() const {
   return controller() ? controller()->IsActiveTab(this) : true;
 }
@@ -285,57 +315,67 @@ ui::ThemeProvider* BaseTab::GetThemeProvider() const {
   return tp ? tp : theme_provider_;
 }
 
-bool BaseTab::OnMousePressed(const views::MouseEvent& event) {
+bool BaseTab::OnMousePressed(const ui::MouseEvent& event) {
   if (!controller())
     return false;
 
-  if (event.IsOnlyLeftMouseButton()) {
+  controller()->OnMouseEventInTab(this, event);
+
+  // Allow a right click from touch to drag, which corresponds to a long click.
+  if (event.IsOnlyLeftMouseButton() ||
+      (event.IsOnlyRightMouseButton() && event.flags() & ui::EF_FROM_TOUCH)) {
     TabStripSelectionModel original_selection;
     original_selection.Copy(controller()->GetSelectionModel());
-    if (event.IsShiftDown() && event.IsControlDown()) {
-      controller()->AddSelectionFromAnchorTo(this);
-    } else if (event.IsShiftDown()) {
-      controller()->ExtendSelectionTo(this);
-    } else if (event.IsControlDown()) {
-      controller()->ToggleSelected(this);
-      if (!IsSelected()) {
-        // Don't allow dragging non-selected tabs.
-        return false;
+    if (controller()->SupportsMultipleSelection()) {
+      if (event.IsShiftDown() && event.IsControlDown()) {
+        controller()->AddSelectionFromAnchorTo(this);
+      } else if (event.IsShiftDown()) {
+        controller()->ExtendSelectionTo(this);
+      } else if (event.IsControlDown()) {
+        controller()->ToggleSelected(this);
+        if (!IsSelected()) {
+          // Don't allow dragging non-selected tabs.
+          return false;
+        }
+      } else if (!IsSelected()) {
+        controller()->SelectTab(this);
+      } else if (IsActive()) {
+        controller()->ClickActiveTab(this);
       }
     } else if (!IsSelected()) {
       controller()->SelectTab(this);
-    } else if (IsActive()) {
-      controller()->ClickActiveTab(this);
     }
     controller()->MaybeStartDrag(this, event, original_selection);
   }
   return true;
 }
 
-bool BaseTab::OnMouseDragged(const views::MouseEvent& event) {
+bool BaseTab::OnMouseDragged(const ui::MouseEvent& event) {
   if (controller())
-    controller()->ContinueDrag(event);
+    controller()->ContinueDrag(this, event.location());
   return true;
 }
 
-void BaseTab::OnMouseReleased(const views::MouseEvent& event) {
+void BaseTab::OnMouseReleased(const ui::MouseEvent& event) {
   if (!controller())
     return;
+
+  controller()->OnMouseEventInTab(this, event);
 
   // Notify the drag helper that we're done with any potential drag operations.
   // Clean up the drag helper, which is re-created on the next mouse press.
   // In some cases, ending the drag will schedule the tab for destruction; if
   // so, bail immediately, since our members are already dead and we shouldn't
   // do anything else except drop the tab where it is.
-  if (controller()->EndDrag(false))
+  if (controller()->EndDrag(END_DRAG_COMPLETE))
     return;
 
   // Close tab on middle click, but only if the button is released over the tab
   // (normal windows behavior is to discard presses of a UI element where the
   // releases happen off the element).
   if (event.IsMiddleMouseButton()) {
-    if (HitTest(event.location())) {
-      controller()->CloseTab(this);
+    if (HitTestPoint(event.location())) {
+      controller()->CloseTab(this, CLOSE_TAB_FROM_MOUSE);
     } else if (closing_) {
       // We're animating closed and a middle mouse button was pushed on us but
       // we don't contain the mouse anymore. We assume the user is clicking
@@ -343,7 +383,7 @@ void BaseTab::OnMouseReleased(const views::MouseEvent& event) {
       // the mouse.
       BaseTab* closest_tab = controller()->GetTabAt(this, event.location());
       if (closest_tab)
-        controller()->CloseTab(closest_tab);
+        controller()->CloseTab(closest_tab, CLOSE_TAB_FROM_MOUSE);
     }
   } else if (event.IsOnlyLeftMouseButton() && !event.IsShiftDown() &&
              !event.IsControlDown()) {
@@ -356,15 +396,53 @@ void BaseTab::OnMouseReleased(const views::MouseEvent& event) {
 
 void BaseTab::OnMouseCaptureLost() {
   if (controller())
-    controller()->EndDrag(true);
+    controller()->EndDrag(END_DRAG_CAPTURE_LOST);
 }
 
-void BaseTab::OnMouseEntered(const views::MouseEvent& event) {
+void BaseTab::OnMouseEntered(const ui::MouseEvent& event) {
   hover_controller_.Show();
 }
 
-void BaseTab::OnMouseExited(const views::MouseEvent& event) {
+void BaseTab::OnMouseMoved(const ui::MouseEvent& event) {
+  if (controller())
+    controller()->OnMouseEventInTab(this, event);
+}
+
+void BaseTab::OnMouseExited(const ui::MouseEvent& event) {
   hover_controller_.Hide();
+}
+
+ui::EventResult BaseTab::OnGestureEvent(const ui::GestureEvent& event) {
+  if (!controller())
+    return ui::ER_CONSUMED;
+
+  switch (event.type()) {
+    case ui::ET_GESTURE_BEGIN: {
+      if (event.details().touch_points() != 1)
+        return ui::ER_UNHANDLED;
+
+      TabStripSelectionModel original_selection;
+      original_selection.Copy(controller()->GetSelectionModel());
+      if (!IsSelected())
+        controller()->SelectTab(this);
+      gfx::Point loc(event.location());
+      views::View::ConvertPointToScreen(this, &loc);
+      controller()->MaybeStartDrag(this, event, original_selection);
+      break;
+    }
+
+    case ui::ET_GESTURE_END:
+      controller()->EndDrag(END_DRAG_COMPLETE);
+      break;
+
+    case ui::ET_GESTURE_SCROLL_UPDATE:
+      controller()->ContinueDrag(this, event.location());
+      break;
+
+    default:
+      break;
+  }
+  return ui::ER_CONSUMED;
 }
 
 bool BaseTab::GetTooltipText(const gfx::Point& p, string16* tooltip) const {
@@ -392,15 +470,24 @@ void BaseTab::AdvanceLoadingAnimation(TabRendererData::NetworkState old_state,
   static int waiting_to_loading_frame_count_ratio = 0;
   if (!initialized) {
     initialized = true;
-    ResourceBundle& rb = ResourceBundle::GetSharedInstance();
-    SkBitmap loading_animation(*rb.GetBitmapNamed(IDR_THROBBER));
+    ui::ResourceBundle& rb = ui::ResourceBundle::GetSharedInstance();
+    gfx::ImageSkia loading_animation(*rb.GetImageSkiaNamed(IDR_THROBBER));
     loading_animation_frame_count =
         loading_animation.width() / loading_animation.height();
-    SkBitmap waiting_animation(*rb.GetBitmapNamed(IDR_THROBBER_WAITING));
+    gfx::ImageSkia waiting_animation(*rb.GetImageSkiaNamed(
+        IDR_THROBBER_WAITING));
     waiting_animation_frame_count =
         waiting_animation.width() / waiting_animation.height();
     waiting_to_loading_frame_count_ratio =
         waiting_animation_frame_count / loading_animation_frame_count;
+
+    base::debug::Alias(&loading_animation_frame_count);
+    base::debug::Alias(&waiting_animation_frame_count);
+    CHECK_NE(0, waiting_to_loading_frame_count_ratio) <<
+        "Number of frames in IDR_THROBBER must be equal to or greater " <<
+        "than the number of frames in IDR_THROBBER_WAITING. Please " <<
+        "investigate how this happened and update http://crbug.com/132590, " <<
+        "this is causing crashes in the wild.";
   }
 
   // The waiting animation is the reverse of the loading animation, but at a
@@ -431,7 +518,7 @@ void BaseTab::PaintIcon(gfx::Canvas* canvas) {
 
   if (data().network_state != TabRendererData::NETWORK_STATE_NONE) {
     ui::ThemeProvider* tp = GetThemeProvider();
-    SkBitmap frames(*tp->GetBitmapNamed(
+    gfx::ImageSkia frames(*tp->GetImageSkiaNamed(
         (data().network_state == TabRendererData::NETWORK_STATE_WAITING) ?
         IDR_THROBBER_WAITING : IDR_THROBBER));
 
@@ -443,8 +530,8 @@ void BaseTab::PaintIcon(gfx::Canvas* canvas) {
     canvas->Save();
     canvas->ClipRect(GetLocalBounds());
     if (should_display_crashed_favicon_) {
-      ResourceBundle& rb = ResourceBundle::GetSharedInstance();
-      SkBitmap crashed_favicon(*rb.GetBitmapNamed(IDR_SAD_FAVICON));
+      ui::ResourceBundle& rb = ui::ResourceBundle::GetSharedInstance();
+      gfx::ImageSkia crashed_favicon(*rb.GetImageSkiaNamed(IDR_SAD_FAVICON));
       bounds.set_y(bounds.y() + favicon_hiding_offset_);
       DrawIconCenter(canvas, crashed_favicon, 0,
                      crashed_favicon.width(),
@@ -476,17 +563,15 @@ void BaseTab::PaintTitle(gfx::Canvas* canvas, SkColor title_color) {
     Browser::FormatTitleForDisplay(&title);
   }
 
-#if defined(OS_WIN)
-  canvas->AsCanvasSkia()->DrawFadeTruncatingString(title,
-      gfx::CanvasSkia::TruncateFadeTail, 0, *font_, title_color, title_bounds);
-#else
-  canvas->DrawStringInt(title, *font_, title_color,
-                        title_bounds.x(), title_bounds.y(),
-                        title_bounds.width(), title_bounds.height());
-#endif
+  canvas->DrawFadeTruncatingString(title, gfx::Canvas::TruncateFadeTail, 0,
+                                   *font_, title_color, title_bounds);
 }
 
 void BaseTab::AnimationProgressed(const ui::Animation* animation) {
+  // Ignore if the pulse animation is being performed on active tab because
+  // it repaints the same image. See |Tab::PaintTabBackground()|.
+  if (animation == pulse_animation_.get() && IsActive())
+    return;
   SchedulePaint();
 }
 
@@ -498,16 +583,19 @@ void BaseTab::AnimationEnded(const ui::Animation* animation) {
   SchedulePaint();
 }
 
-void BaseTab::ButtonPressed(views::Button* sender, const views::Event& event) {
+void BaseTab::ButtonPressed(views::Button* sender, const ui::Event& event) {
+  const CloseTabSource source =
+      (event.type() == ui::ET_MOUSE_RELEASED &&
+       (event.flags() & ui::EF_FROM_TOUCH) == 0) ? CLOSE_TAB_FROM_MOUSE :
+      CLOSE_TAB_FROM_TOUCH;
   DCHECK(sender == close_button_);
-  controller()->CloseTab(this);
+  controller()->CloseTab(this, source);
 }
 
 void BaseTab::ShowContextMenuForView(views::View* source,
-                                     const gfx::Point& p,
-                                     bool is_mouse_gesture) {
+                                     const gfx::Point& point) {
   if (controller() && !closing())
-    controller()->ShowContextMenuForTab(this, p);
+    controller()->ShowContextMenuForTab(this, point);
 }
 
 int BaseTab::loading_animation_frame() const {
@@ -570,8 +658,8 @@ void BaseTab::InitResources() {
   static bool initialized = false;
   if (!initialized) {
     initialized = true;
-    font_ = new gfx::Font(
-        ResourceBundle::GetSharedInstance().GetFont(ResourceBundle::BaseFont));
+    ui::ResourceBundle& rb = ui::ResourceBundle::GetSharedInstance();
+    font_ = new gfx::Font(rb.GetFont(ui::ResourceBundle::BaseFont));
     font_height_ = font_->GetHeight();
   }
 }

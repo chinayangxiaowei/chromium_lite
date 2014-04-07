@@ -50,7 +50,7 @@
           'conditions': [
             ['use_aura==1', {
               'dependencies': [
-                '../ui/gfx/compositor/compositor.gyp:compositor',
+                '../ui/compositor/compositor.gyp:compositor',
               ],
             }],
             ['OS=="win"', {
@@ -60,7 +60,6 @@
                 # up actual Chromium functionality into this .dll.
                 'chrome_resources.gyp:chrome_resources',
                 'chrome_version_resources',
-                'installer_util_strings',
                 '../content/content.gyp:content_worker',
                 '../crypto/crypto.gyp:crypto',
                 '../printing/printing.gyp:printing',
@@ -97,13 +96,10 @@
                 # resulting .res files get referenced multiple times.
                 '<(SHARED_INTERMEDIATE_DIR)/chrome/browser_resources.rc',
                 '<(SHARED_INTERMEDIATE_DIR)/chrome/common_resources.rc',
+                '<(SHARED_INTERMEDIATE_DIR)/chrome/extensions_api_resources.rc',
                 '<(SHARED_INTERMEDIATE_DIR)/chrome/renderer_resources.rc',
-                '<(SHARED_INTERMEDIATE_DIR)/chrome/theme_resources.rc',
-                '<(SHARED_INTERMEDIATE_DIR)/chrome/theme_resources_standard.rc',
+                '<(SHARED_INTERMEDIATE_DIR)/content/content_resources.rc',
                 '<(SHARED_INTERMEDIATE_DIR)/net/net_resources.rc',
-                '<(SHARED_INTERMEDIATE_DIR)/ui/gfx/gfx_resources.rc',
-                '<(SHARED_INTERMEDIATE_DIR)/ui/ui_resources/ui_resources.rc',
-                '<(SHARED_INTERMEDIATE_DIR)/ui/ui_resources_standard/ui_resources_standard.rc',
                 '<(SHARED_INTERMEDIATE_DIR)/webkit/webkit_chromium_resources.rc',
                 '<(SHARED_INTERMEDIATE_DIR)/webkit/webkit_resources.rc',
 
@@ -132,6 +128,7 @@
               },
               'msvs_settings': {
                 'VCLinkerTool': {
+                  'AdditionalLibraryDirectories': ['$(DXSDK_DIR)/lib/x86'],
                   'BaseAddress': '0x01c30000',
                   'ImportLibrary': '$(OutDir)\\lib\\chrome_dll.lib',
                   'ProgramDatabaseFile': '$(OutDir)\\chrome_dll.pdb',
@@ -193,7 +190,7 @@
                 # LD_DYLIB_INSTALL_NAME affect -install_name.
                 'DYLIB_INSTALL_NAME_BASE':
                     '@executable_path/../Versions/<(version_full)',
-                # See tools/build/mac/copy_framework_unversioned for
+                # See /build/mac/copy_framework_unversioned.sh for
                 # information on LD_DYLIB_INSTALL_NAME.
                 'LD_DYLIB_INSTALL_NAME':
                     '$(DYLIB_INSTALL_NAME_BASE:standardizepath)/$(WRAPPER_NAME)/$(PRODUCT_NAME)',
@@ -217,6 +214,9 @@
               'include_dirs': [
                 '<(grit_out_dir)',
               ],
+              'includes': [
+                'chrome_nibs.gypi',
+              ],
               # TODO(mark): Come up with a fancier way to do this.  It should
               # only be necessary to list framework-Info.plist once, not the
               # three times it is listed here.
@@ -228,56 +228,10 @@
                 # resource bundle because that's the interface that
                 # Authorization Services uses.  Also, Authorization Services
                 # can't deal with .icns files.
-                'app/theme/<(theme_dir_name)/product_logo_32.png',
+                'app/theme/default_100_percent/<(theme_dir_name)/product_logo_32.png',
 
                 'app/framework-Info.plist',
-                'app/nibs/About.xib',
-                'app/nibs/AboutIPC.xib',
-                'app/nibs/AvatarMenuItem.xib',
-                'app/nibs/BookmarkAllTabs.xib',
-                'app/nibs/BookmarkBar.xib',
-                'app/nibs/BookmarkBarFolderWindow.xib',
-                'app/nibs/BookmarkBubble.xib',
-                'app/nibs/BookmarkEditor.xib',
-                'app/nibs/BookmarkNameFolder.xib',
-                'app/nibs/BrowserWindow.xib',
-                'app/nibs/CollectedCookies.xib',
-                'app/nibs/CookieDetailsView.xib',
-                'app/nibs/ContentBlockedCookies.xib',
-                'app/nibs/ContentBlockedImages.xib',
-                'app/nibs/ContentBlockedJavaScript.xib',
-                'app/nibs/ContentBlockedPlugins.xib',
-                'app/nibs/ContentBlockedPopups.xib',
-                'app/nibs/ContentBlockedGeolocation.xib',
-                'app/nibs/DownloadItem.xib',
-                'app/nibs/DownloadShelf.xib',
-                'app/nibs/EditSearchEngine.xib',
-                'app/nibs/ExtensionInstalledBubble.xib',
-                'app/nibs/ExtensionInstallPrompt.xib',
-                'app/nibs/ExtensionInstallPromptInline.xib',
-                'app/nibs/ExtensionInstallPromptNoWarnings.xib',
-                'app/nibs/FindBar.xib',
-                'app/nibs/FirstRunBubble.xib',
-                'app/nibs/FirstRunDialog.xib',
-                'app/nibs/FullscreenExitBubble.xib',
-                'app/nibs/GlobalErrorBubble.xib',
-                'app/nibs/HungRendererDialog.xib',
-                'app/nibs/HttpAuthLoginSheet.xib',
-                'app/nibs/ImportProgressDialog.xib',
-                'app/nibs/InfoBar.xib',
-                'app/nibs/InfoBarContainer.xib',
-                'app/nibs/InstantOptIn.xib',
-                'app/nibs/MainMenu.xib',
-                'app/nibs/Notification.xib',
-                'app/nibs/Panel.xib',
-                'app/nibs/PreviewableContents.xib',
-                'app/nibs/SaveAccessoryView.xib',
-                'app/nibs/SadTab.xib',
-                'app/nibs/SpeechInputBubble.xib',
-                'app/nibs/TabView.xib',
-                'app/nibs/TaskManager.xib',
-                'app/nibs/Toolbar.xib',
-                'app/nibs/WrenchMenu.xib',
+                '<@(mac_all_xibs)',
                 'app/theme/balloon_wrench.pdf',
                 'app/theme/chevron.pdf',
                 'app/theme/find_next_Template.pdf',
@@ -285,22 +239,11 @@
                 'app/theme/menu_hierarchy_arrow.pdf',
                 'app/theme/menu_overflow_down.pdf',
                 'app/theme/menu_overflow_up.pdf',
-                'app/theme/nav.pdf',
-                'app/theme/omnibox_extension_app.pdf',
-                'app/theme/omnibox_history.pdf',
-                'app/theme/omnibox_http.pdf',
-                'app/theme/omnibox_https_invalid.pdf',
-                'app/theme/omnibox_https_valid.pdf',
-                'app/theme/omnibox_https_warning.pdf',
-                'app/theme/omnibox_search.pdf',
-                'app/theme/omnibox_tts.pdf',
-                'app/theme/otr_icon.pdf',
-                'app/theme/star.pdf',
-                'app/theme/star_lit.pdf',
                 'browser/mac/install.sh',
-                 '<(SHARED_INTERMEDIATE_DIR)/repack/chrome.pak',
-                 '<(SHARED_INTERMEDIATE_DIR)/repack/resources.pak',
-                '<!@pymod_do_main(repack_locales -o -g <(grit_out_dir) -s <(SHARED_INTERMEDIATE_DIR) -x <(SHARED_INTERMEDIATE_DIR) <(locales))',
+                '<(SHARED_INTERMEDIATE_DIR)/repack/chrome.pak',
+                '<(SHARED_INTERMEDIATE_DIR)/repack/chrome_100_percent.pak',
+                '<(SHARED_INTERMEDIATE_DIR)/repack/resources.pak',
+                '<!@pymod_do_main(repack_locales -o -p <(OS) -g <(grit_out_dir) -s <(SHARED_INTERMEDIATE_DIR) -x <(SHARED_INTERMEDIATE_DIR) <(locales))',
                 # Note: pseudo_locales are generated via the packed_resources
                 # dependency but not copied to the final target.  See
                 # common.gypi for more info.
@@ -309,13 +252,17 @@
                 'app/framework-Info.plist',
               ],
               'dependencies': [
+                'app_mode_app',
                 # Bring in pdfsqueeze and run it on all pdfs
                 '../build/temp_gyp/pdfsqueeze.gyp:pdfsqueeze',
                 '../crypto/crypto.gyp:crypto',
                 # On Mac, Flash gets put into the framework, so we need this
                 # dependency here. flash_player.gyp will copy the Flash bundle
                 # into PRODUCT_DIR.
+                # TODO(viettrungluu): Once enabled for Mac, Flapper binaries
+                # will also need to be put into the bundle.
                 '../third_party/adobe/flash/flash_player.gyp:flash_player',
+                '../third_party/adobe/flash/flash_player.gyp:flapper_binaries',
                 'chrome_resources.gyp:packed_extra_resources',
                 'chrome_resources.gyp:packed_resources',
               ],
@@ -344,11 +291,6 @@
                 ],
                 'repack_path': '../tools/grit/grit/format/repack.py',
               },
-              'actions': [
-                {
-                  'includes': ['chrome_repack_theme_resources_large.gypi']
-                },
-              ],
               'postbuilds': [
                 {
                   # This step causes an error to be raised if the .order file
@@ -370,22 +312,21 @@
                   # The framework needs the Breakpad keys if this feature is
                   # enabled.  It does not need the Keystone keys; these always
                   # come from the outer application bundle.  The framework
-                  # doesn't currently use the Subversion keys for anything,
+                  # doesn't currently use the SCM keys for anything,
                   # but this seems like a really good place to store them.
                   'postbuild_name': 'Tweak Info.plist',
                   'action': ['<(tweak_info_plist_path)',
                              '--breakpad=<(mac_breakpad_compiled_in)',
                              '--breakpad_uploads=<(mac_breakpad_uploads)',
-                             '-k0',
-                             '-s1',
-                             '<(branding)',
-                             '<(mac_bundle_id)'],
+                             '--keystone=0',
+                             '--scm=1',
+                             '--branding=<(branding)'],
                 },
                 {
                   'postbuild_name': 'Symlink Libraries',
                   'action': [
                     'ln',
-                    '-fhs',
+                    '-fns',
                     'Versions/Current/Libraries',
                     '${BUILT_PRODUCTS_DIR}/${WRAPPER_NAME}/Libraries'
                   ],
@@ -406,7 +347,6 @@
                     ['branding == "Chrome"', {
                       'files': [
                         '<(PRODUCT_DIR)/Flash Player Plugin for Chrome.plugin',
-                        '<(PRODUCT_DIR)/plugin.vch',
                       ],
                     }],
                     ['internal_pdf', {
@@ -420,6 +360,17 @@
                         # We leave out nacl_irt_x86_64.nexe because we only
                         # support x86-32 NaCl on Mac OS X.
                         '<(PRODUCT_DIR)/nacl_irt_x86_32.nexe',
+                      ],
+                    }],
+                  ],
+                },
+                {
+                  'destination': '<(PRODUCT_DIR)/$(CONTENTS_FOLDER_PATH)/Internet Plug-Ins/PepperFlash',
+                  'files': [],
+                  'conditions': [
+                    ['branding == "Chrome"', {
+                      'files': [
+                        '<(PRODUCT_DIR)/PepperFlash/PepperFlashPlayer.plugin',
                       ],
                     }],
                   ],
@@ -440,7 +391,10 @@
                 },
                 {
                   'destination': '<(PRODUCT_DIR)/$(CONTENTS_FOLDER_PATH)/resources',
-                  'files': [],
+                  'files': [
+                    # Loader bundle for platform apps.
+                    '<(PRODUCT_DIR)/app_mode_loader.app',
+                  ],
                   'conditions': [
                     ['debug_devtools!=0', {
                       'files': [
@@ -504,7 +458,8 @@
                     {
                       'postbuild_name': 'Copy KeystoneRegistration.framework',
                       'action': [
-                        'tools/build/mac/copy_framework_unversioned',
+                        '../build/mac/copy_framework_unversioned.sh',
+                        '-I',
                         '../third_party/googlemac/Releases/Keystone/KeystoneRegistration.framework',
                         '${BUILT_PRODUCTS_DIR}/${CONTENTS_FOLDER_PATH}/Frameworks',
                       ],
@@ -513,7 +468,7 @@
                       'postbuild_name': 'Symlink Frameworks',
                       'action': [
                         'ln',
-                        '-fhs',
+                        '-fns',
                         'Versions/Current/Frameworks',
                         '${BUILT_PRODUCTS_DIR}/${WRAPPER_NAME}/Frameworks'
                       ],
@@ -523,6 +478,11 @@
                 ['internal_pdf', {
                   'dependencies': [
                     '../pdf/pdf.gyp:pdf',
+                  ],
+                }],
+                ['enable_hidpi==1', {
+                  'mac_bundle_resources': [
+                    '<(SHARED_INTERMEDIATE_DIR)/repack/chrome_200_percent.pak',
                   ],
                 }],
               ],  # conditions

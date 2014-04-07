@@ -4,7 +4,6 @@
 
 #ifndef CHROME_TEST_BASE_TEST_LOCATION_BAR_H_
 #define CHROME_TEST_BASE_TEST_LOCATION_BAR_H_
-#pragma once
 
 #include "base/compiler_specific.h"
 #include "base/string16.h"
@@ -40,10 +39,12 @@ class TestLocationBar : public LocationBar {
   virtual void UpdateContentSettingsIcons() OVERRIDE {}
   virtual void UpdatePageActions() OVERRIDE {}
   virtual void InvalidatePageActions() OVERRIDE {}
+  virtual void UpdateWebIntentsButton() OVERRIDE {}
+  virtual void UpdateOpenPDFInReaderPrompt() OVERRIDE {}
   virtual void SaveStateToContents(content::WebContents* contents) OVERRIDE {}
   virtual void Revert() OVERRIDE {}
-  virtual const OmniboxView* location_entry() const OVERRIDE;
-  virtual OmniboxView* location_entry() OVERRIDE;
+  virtual const OmniboxView* GetLocationEntry() const OVERRIDE;
+  virtual OmniboxView* GetLocationEntry() OVERRIDE;
   virtual LocationBarTesting* GetLocationBarForTesting() OVERRIDE;
 
  private:

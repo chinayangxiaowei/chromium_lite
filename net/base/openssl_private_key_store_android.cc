@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -46,26 +46,28 @@ class OpenSSLKeyStoreAndroid : public OpenSSLPrivateKeyStore {
     return NULL;
   }
 
-  static OpenSSLKeyStoreAndroid* GetInstance();
+  static OpenSSLKeyStoreAndroid* GetInstance() {
+    // Leak the OpenSSL key store as it is used from a non-joinable worker
+    // thread that may still be running at shutdown.
+    return Singleton<
+        OpenSSLKeyStoreAndroid,
+        OpenSSLKeyStoreAndroidLeakyTraits>::get();
+  }
 
  private:
-  OpenSSLKeyStoreAndroid() {}
   friend struct DefaultSingletonTraits<OpenSSLKeyStoreAndroid>;
+  typedef LeakySingletonTraits<OpenSSLKeyStoreAndroid>
+      OpenSSLKeyStoreAndroidLeakyTraits;
+
+  OpenSSLKeyStoreAndroid() {}
 
   DISALLOW_COPY_AND_ASSIGN(OpenSSLKeyStoreAndroid);
 };
 
 }  // namespace
 
-// static
-OpenSSLKeyStoreAndroid* OpenSSLKeyStoreAndroid::GetInstance() {
-  return Singleton<OpenSSLKeyStoreAndroid>::get();
-}
-
-#if 0
-// TODO(MERGE): Conflict with openssl_memory_private_key_store.cc
 OpenSSLPrivateKeyStore* OpenSSLPrivateKeyStore::GetInstance() {
   return OpenSSLKeyStoreAndroid::GetInstance();
 }
-#endif
+
 }  // namespace net

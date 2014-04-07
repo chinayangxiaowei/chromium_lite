@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-# Copyright (c) 2011 The Chromium Authors. All rights reserved.
+# Copyright (c) 2012 The Chromium Authors. All rights reserved.
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
@@ -78,7 +78,8 @@ class ChromeosFileBrowserTest(pyauto.PyUITest):
     #       .mov and .3gp only work in the Media Player. Once these format are
     #        supported on ChromeOS, include them in the test.
     for fname in media_files:
-      test_utils.CopyFileFromDataDirToDownloadDir(self, 'media/' + fname)
+      test_utils.CopyFileFromContentDataDirToDownloadDir(self,
+                                                         'media/' + fname)
     for fname in private_media_files:
       test_utils.CopyFileFromDataDirToDownloadDir(self, 'pyauto_private/media/' +\
                                                   fname)
@@ -103,7 +104,7 @@ class ChromeosFileBrowserTest(pyauto.PyUITest):
     file_browser = self._GetSaveAsDialogFileBrowser()
     self.assertTrue(file_browser, msg='File browser failed to initialize.')
     dialog = self.WaitUntilExtensionViewLoaded(view_type='EXTENSION_DIALOG')
-    file_browser.Save('apple')
+    file_browser.Save('apple.html')
     self.assertTrue(self.WaitUntilExtensionViewClosed(dialog))
     file_browser = self._GetOpenDialogFileBrowser()
     self.assertTrue(file_browser.Select('apple.html'))
@@ -196,20 +197,14 @@ class ChromeosFileBrowserTest(pyauto.PyUITest):
     file_browser.CreateDirectory('apples')
     file_browser.Select('apples')
     file_browser.Copy()
-    file_browser.ChangeDirectory('apples')
+    file_browser.CreateDirectory('oranges')
+    file_browser.ChangeDirectory('oranges')
     file_browser.Paste()
     self.assertTrue(file_browser.Select('apples'))
 
   def testCopyFolderInFullPage(self):
     """Test we can copy and paste a folder in the full page file browser."""
     file_browser = self._GetFullPageFileBrowser()
-    self.assertTrue(file_browser, msg='File browser failed to initialize.')
-    self._CopyFolder(file_browser)
-
-  def testCopyFolderInDialog(self):
-    """Test we can copy and paste a folder in a save-as file browser dialog."""
-    self.NavigateToURL('chrome://version')
-    file_browser = self._GetSaveAsDialogFileBrowser()
     self.assertTrue(file_browser, msg='File browser failed to initialize.')
     self._CopyFolder(file_browser)
 
@@ -229,13 +224,6 @@ class ChromeosFileBrowserTest(pyauto.PyUITest):
   def testCutFolderInFullPage(self):
     """Test we can cut and paste a folder in the full page file browser."""
     file_browser = self._GetFullPageFileBrowser()
-    self.assertTrue(file_browser, msg='File browser failed to initialize.')
-    self._CutFolder(file_browser)
-
-  def testCutFolderInDialog(self):
-    """Test we can cut and paste a folder in a save-as file browser dialog."""
-    self.NavigateToURL('chrome://version')
-    file_browser = self._GetSaveAsDialogFileBrowser()
     self.assertTrue(file_browser, msg='File browser failed to initialize.')
     self._CutFolder(file_browser)
 

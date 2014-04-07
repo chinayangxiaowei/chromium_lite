@@ -1,10 +1,9 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CHROME_BROWSER_UI_COCOA_DOWNLOAD_DOWNLOAD_ITEM_MAC_H_
 #define CHROME_BROWSER_UI_COCOA_DOWNLOAD_DOWNLOAD_ITEM_MAC_H_
-#pragma once
 
 #import <Cocoa/Cocoa.h>
 
@@ -35,9 +34,10 @@ class DownloadItemMac : content::DownloadItem::Observer {
   // Destructor.
   virtual ~DownloadItemMac();
 
-  // DownloadItem::Observer implementation
+  // content::DownloadItem::Observer implementation
   virtual void OnDownloadUpdated(content::DownloadItem* download) OVERRIDE;
   virtual void OnDownloadOpened(content::DownloadItem* download) OVERRIDE;
+  virtual void OnDownloadDestroyed(content::DownloadItem* download) OVERRIDE;
 
   BaseDownloadItemModel* download_model() { return download_model_.get(); }
 

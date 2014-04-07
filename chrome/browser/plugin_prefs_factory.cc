@@ -13,53 +13,38 @@
 #include "chrome/common/chrome_paths.h"
 #include "chrome/common/pref_names.h"
 
-namespace {
-
-}  // namespace
-
-PluginPrefsWrapper::PluginPrefsWrapper(scoped_refptr<PluginPrefs> plugin_prefs)
-    : plugin_prefs_(plugin_prefs) {
-}
-
-PluginPrefsWrapper::~PluginPrefsWrapper() {}
-
-void PluginPrefsWrapper::Shutdown() {
-  plugin_prefs_->ShutdownOnUIThread();
-}
-
 // static
 PluginPrefsFactory* PluginPrefsFactory::GetInstance() {
   return Singleton<PluginPrefsFactory>::get();
 }
 
-PluginPrefsWrapper* PluginPrefsFactory::GetWrapperForProfile(
+// static
+scoped_refptr<PluginPrefs> PluginPrefsFactory::GetPrefsForProfile(
     Profile* profile) {
-  return static_cast<PluginPrefsWrapper*>(GetServiceForProfile(profile, true));
+  return static_cast<PluginPrefs*>(
+      GetInstance()->GetServiceForProfile(profile, true).get());
 }
 
 // static
-ProfileKeyedService* PluginPrefsFactory::CreateWrapperForProfile(
-    Profile* profile) {
-  return GetInstance()->BuildServiceInstanceFor(profile);
-}
-
-void PluginPrefsFactory::ForceRegisterPrefsForTest(PrefService* prefs) {
-  RegisterUserPrefs(prefs);
+scoped_refptr<RefcountedProfileKeyedService>
+PluginPrefsFactory::CreateForTestingProfile(Profile* profile) {
+  return static_cast<PluginPrefs*>(
+      GetInstance()->BuildServiceInstanceFor(profile).get());
 }
 
 PluginPrefsFactory::PluginPrefsFactory()
-    : ProfileKeyedServiceFactory("PluginPrefs",
-                                 ProfileDependencyManager::GetInstance()) {
+    : RefcountedProfileKeyedServiceFactory(
+          "PluginPrefs", ProfileDependencyManager::GetInstance()) {
 }
 
 PluginPrefsFactory::~PluginPrefsFactory() {}
 
-ProfileKeyedService* PluginPrefsFactory::BuildServiceInstanceFor(
-    Profile* profile) const {
+scoped_refptr<RefcountedProfileKeyedService>
+PluginPrefsFactory::BuildServiceInstanceFor(Profile* profile) const {
   scoped_refptr<PluginPrefs> plugin_prefs(new PluginPrefs());
   plugin_prefs->set_profile(profile->GetOriginalProfile());
   plugin_prefs->SetPrefs(profile->GetPrefs());
-  return new PluginPrefsWrapper(plugin_prefs);
+  return plugin_prefs;
 }
 
 void PluginPrefsFactory::RegisterUserPrefs(PrefService* prefs) {
@@ -74,6 +59,9 @@ void PluginPrefsFactory::RegisterUserPrefs(PrefService* prefs) {
   prefs->RegisterBooleanPref(prefs::kPluginsEnabledNaCl,
                              false,
                              PrefService::UNSYNCABLE_PREF);
+  prefs->RegisterBooleanPref(prefs::kPluginsMigratedToPepperFlash,
+                             false,
+                             PrefService::UNSYNCABLE_PREF);
   prefs->RegisterListPref(prefs::kPluginsPluginsList,
                           PrefService::UNSYNCABLE_PREF);
   prefs->RegisterListPref(prefs::kPluginsDisabledPlugins,
@@ -84,14 +72,14 @@ void PluginPrefsFactory::RegisterUserPrefs(PrefService* prefs) {
                           PrefService::UNSYNCABLE_PREF);
 }
 
-bool PluginPrefsFactory::ServiceRedirectedInIncognito() {
+bool PluginPrefsFactory::ServiceRedirectedInIncognito() const {
   return true;
 }
 
-bool PluginPrefsFactory::ServiceIsNULLWhileTesting() {
+bool PluginPrefsFactory::ServiceIsNULLWhileTesting() const {
   return true;
 }
 
-bool PluginPrefsFactory::ServiceIsCreatedWithProfile() {
+bool PluginPrefsFactory::ServiceIsCreatedWithProfile() const {
   return true;
 }

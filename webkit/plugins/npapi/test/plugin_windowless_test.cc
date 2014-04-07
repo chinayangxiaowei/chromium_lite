@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,9 +8,8 @@
 #include "webkit/plugins/npapi/test/plugin_windowless_test.h"
 #include "webkit/plugins/npapi/test/plugin_client.h"
 
-#if defined(OS_MACOSX)
-#include <ApplicationServices/ApplicationServices.h>
-#include <Carbon/Carbon.h>
+#if defined(TOOLKIT_GTK)
+#include <gdk/gdkx.h>
 #endif
 
 namespace NPAPIClient {
@@ -18,9 +17,14 @@ namespace NPAPIClient {
 // Remember the first plugin instance for tests involving multiple instances
 WindowlessPluginTest* g_other_instance = NULL;
 
+void OnFinishTest(void* data) {
+  static_cast<WindowlessPluginTest*>(data)->SignalTestCompleted();
+}
+
 WindowlessPluginTest::WindowlessPluginTest(NPP id,
                                            NPNetscapeFuncs *host_functions)
-    : PluginTest(id, host_functions) {
+    : PluginTest(id, host_functions),
+      paint_counter_(0) {
   if (!g_other_instance)
     g_other_instance = this;
 }
@@ -29,15 +33,13 @@ static bool IsPaintEvent(NPEvent* np_event) {
 #if defined(OS_WIN)
   return WM_PAINT == np_event->event;
 #elif defined(OS_MACOSX)
-  return np_event->what == updateEvt;
-#endif
-}
-
-static bool IsMouseMoveEvent(NPEvent* np_event) {
-#if defined(OS_WIN)
-  return WM_MOUSEMOVE == np_event->event;
-#elif defined(OS_MACOSX)
-  return np_event->what == nullEvent;
+  NPCocoaEvent* cocoa_event = reinterpret_cast<NPCocoaEvent*>(np_event);
+  return cocoa_event->type == NPCocoaEventDrawRect;
+#elif defined(TOOLKIT_GTK)
+  return np_event->type == GraphicsExpose;
+#else
+  NOTIMPLEMENTED();
+  return false;
 #endif
 }
 
@@ -45,13 +47,19 @@ static bool IsMouseUpEvent(NPEvent* np_event) {
 #if defined(OS_WIN)
   return WM_LBUTTONUP == np_event->event;
 #elif defined(OS_MACOSX)
-  return np_event->what == mouseUp;
+  NPCocoaEvent* cocoa_event = reinterpret_cast<NPCocoaEvent*>(np_event);
+  return cocoa_event->type == NPCocoaEventMouseUp;
+#else
+  NOTIMPLEMENTED();
+  return false;
 #endif
 }
 
 #if defined(OS_MACOSX)
 static bool IsWindowActivationEvent(NPEvent* np_event) {
-  return np_event->what == activateEvt;
+  NPCocoaEvent* cocoa_event = reinterpret_cast<NPCocoaEvent*>(np_event);
+  return cocoa_event->type == NPCocoaEventWindowFocusChanged &&
+         cocoa_event->data.focus.hasFocus;
 }
 #endif
 
@@ -59,14 +67,27 @@ bool WindowlessPluginTest::IsWindowless() const {
   return true;
 }
 
-int16 WindowlessPluginTest::HandleEvent(void* event) {
+NPError WindowlessPluginTest::New(uint16 mode, int16 argc,
+                                 const char* argn[], const char* argv[],
+                                 NPSavedData* saved) {
+  NPError error = PluginTest::New(mode, argc, argn, argv, saved);
 
+  if (test_name() == "invoke_js_function_on_create") {
+    ExecuteScript(
+        NPAPIClient::PluginClient::HostFunctions(), g_other_instance->id(),
+        "PluginCreated();", NULL);
+  }
+
+  return error;
+}
+
+int16 WindowlessPluginTest::HandleEvent(void* event) {
   NPNetscapeFuncs* browser = NPAPIClient::PluginClient::HostFunctions();
 
   NPBool supports_windowless = 0;
   NPError result = browser->getvalue(id(), NPNVSupportsWindowless,
                                      &supports_windowless);
-  if ((result != NPERR_NO_ERROR) || (supports_windowless != TRUE)) {
+  if ((result != NPERR_NO_ERROR) || (!supports_windowless)) {
     SetError("Failed to read NPNVSupportsWindowless value");
     SignalTestCompleted();
     return PluginTest::HandleEvent(event);
@@ -74,6 +95,7 @@ int16 WindowlessPluginTest::HandleEvent(void* event) {
 
   NPEvent* np_event = reinterpret_cast<NPEvent*>(event);
   if (IsPaintEvent(np_event)) {
+    paint_counter_++;
 #if defined(OS_WIN)
     HDC paint_dc = reinterpret_cast<HDC>(np_event->wParam);
     if (paint_dc == NULL) {
@@ -97,14 +119,29 @@ int16 WindowlessPluginTest::HandleEvent(void* event) {
       ExecuteScriptDeleteInPaint(browser);
     } else if (test_name() == "multiple_instances_sync_calls") {
       MultipleInstanceSyncCalls(browser);
+    } else if (test_name() == "resize_during_paint") {
+      if (paint_counter_ == 1) {
+        // So that we get another paint later.
+        browser->invalidaterect(id(), NULL);
+      } else if (paint_counter_ == 2) {
+        // Do this in the second paint since that's asynchronous. The first
+        // paint will always be synchronous (since the renderer process doesn't
+        // have a cache of the plugin yet). If we try calling NPN_Evaluate while
+        // WebKit is painting, it will assert since style recalc is happening
+        // during painting.
+        ExecuteScriptResizeInPaint(browser);
+
+        // So that we can exit the test after the message loop is unrolled.
+        browser->pluginthreadasynccall(id(), OnFinishTest, this);
+      }
     }
 #if defined(OS_MACOSX)
   } else if (IsWindowActivationEvent(np_event) &&
              test_name() == "convert_point") {
       ConvertPoint(browser);
 #endif
-  } else if (IsMouseMoveEvent(np_event) &&
-             test_name() == "execute_script_delete_in_mouse_move") {
+  } else if (IsMouseUpEvent(np_event) &&
+             test_name() == "execute_script_delete_in_mouse_up") {
     ExecuteScript(browser, id(), "DeletePluginWithinScript();", NULL);
     SignalTestCompleted();
   } else if (IsMouseUpEvent(np_event) &&
@@ -122,7 +159,13 @@ NPError WindowlessPluginTest::ExecuteScript(NPNetscapeFuncs* browser, NPP id,
   std::string script_url = "javascript:";
   script_url += script;
 
-  NPString script_string = { script_url.c_str(), script_url.length() };
+  size_t script_length = script_url.length();
+  if (script_length != static_cast<uint32_t>(script_length)) {
+    return NPERR_GENERIC_ERROR;
+  }
+
+  NPString script_string = { script_url.c_str(),
+                             static_cast<uint32_t>(script_length) };
   NPObject *window_obj = NULL;
   browser->getvalue(id, NPNVWindowNPObject, &window_obj);
 
@@ -139,6 +182,11 @@ void WindowlessPluginTest::ExecuteScriptDeleteInPaint(
   const NPUTF8* targetString = NULL;
   browser->geturl(id(), urlString, targetString);
   SignalTestCompleted();
+}
+
+void WindowlessPluginTest::ExecuteScriptResizeInPaint(
+    NPNetscapeFuncs* browser) {
+  ExecuteScript(browser, id(), "ResizePluginWithinScript();", NULL);
 }
 
 void WindowlessPluginTest::MultipleInstanceSyncCalls(NPNetscapeFuncs* browser) {

@@ -5,43 +5,43 @@
 #include "ash/wm/system_modal_container_event_filter.h"
 
 #include "ash/wm/system_modal_container_event_filter_delegate.h"
-#include "ui/aura/event.h"
+#include "ui/base/events/event.h"
 
 namespace ash {
 namespace internal {
 
 SystemModalContainerEventFilter::SystemModalContainerEventFilter(
-    aura::Window* container,
     SystemModalContainerEventFilterDelegate* delegate)
-    : EventFilter(container),
-      delegate_(delegate) {
+    : delegate_(delegate) {
 }
 
 SystemModalContainerEventFilter::~SystemModalContainerEventFilter() {
 }
 
-bool SystemModalContainerEventFilter::PreHandleKeyEvent(aura::Window* target,
-                                            aura::KeyEvent* event) {
+bool SystemModalContainerEventFilter::PreHandleKeyEvent(
+    aura::Window* target,
+    ui::KeyEvent* event) {
   return !delegate_->CanWindowReceiveEvents(target);
 }
 
-bool SystemModalContainerEventFilter::PreHandleMouseEvent(aura::Window* target,
-                                              aura::MouseEvent* event) {
+bool SystemModalContainerEventFilter::PreHandleMouseEvent(
+    aura::Window* target,
+    ui::MouseEvent* event) {
   return !delegate_->CanWindowReceiveEvents(target);
 }
 
 ui::TouchStatus SystemModalContainerEventFilter::PreHandleTouchEvent(
     aura::Window* target,
-    aura::TouchEvent* event) {
+    ui::TouchEvent* event) {
   // TODO(sadrul): !
   return ui::TOUCH_STATUS_UNKNOWN;
 }
 
-ui::GestureStatus SystemModalContainerEventFilter::PreHandleGestureEvent(
+ui::EventResult SystemModalContainerEventFilter::PreHandleGestureEvent(
     aura::Window* target,
-    aura::GestureEvent* event) {
+    ui::GestureEvent* event) {
   // TODO(sad):
-  return ui::GESTURE_STATUS_UNKNOWN;
+  return ui::ER_UNHANDLED;
 }
 
 }  // namespace internal

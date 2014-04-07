@@ -4,7 +4,6 @@
 
 #ifndef NET_URL_REQUEST_URL_REQUEST_HTTP_JOB_H_
 #define NET_URL_REQUEST_URL_REQUEST_HTTP_JOB_H_
-#pragma once
 
 #include <string>
 #include <vector>
@@ -15,7 +14,7 @@
 #include "base/time.h"
 #include "net/base/auth.h"
 #include "net/base/completion_callback.h"
-#include "net/base/cookie_store.h"
+#include "net/cookies/cookie_store.h"
 #include "net/http/http_request_info.h"
 #include "net/url_request/url_request_job.h"
 #include "net/url_request/url_request_throttler_entry_interface.h"
@@ -32,10 +31,11 @@ class URLRequestContext;
 class URLRequestHttpJob : public URLRequestJob {
  public:
   static URLRequestJob* Factory(URLRequest* request,
+                                NetworkDelegate* network_delegate,
                                 const std::string& scheme);
 
  protected:
-  explicit URLRequestHttpJob(URLRequest* request);
+  URLRequestHttpJob(URLRequest* request, NetworkDelegate* network_delegate);
 
   // Shadows URLRequestJob's version of this method so we can grab cookies.
   void NotifyHeadersComplete();
@@ -72,7 +72,7 @@ class URLRequestHttpJob : public URLRequestJob {
   virtual void Start() OVERRIDE;
   virtual void Kill() OVERRIDE;
   virtual LoadState GetLoadState() const OVERRIDE;
-  virtual uint64 GetUploadProgress() const OVERRIDE;
+  virtual UploadProgress GetUploadProgress() const OVERRIDE;
   virtual bool GetMimeType(std::string* mime_type) const OVERRIDE;
   virtual bool GetCharset(std::string* charset) OVERRIDE;
   virtual void GetResponseInfo(HttpResponseInfo* info) OVERRIDE;
@@ -92,10 +92,6 @@ class URLRequestHttpJob : public URLRequestJob {
   virtual void DoneReading() OVERRIDE;
   virtual HostPortPair GetSocketAddress() const OVERRIDE;
   virtual void NotifyURLRequestDestroyed() OVERRIDE;
-
-  // Keep a reference to the url request context to be sure it's not deleted
-  // before us.
-  scoped_refptr<const URLRequestContext> context_;
 
   HttpRequestInfo request_info_;
   const HttpResponseInfo* response_info_;
@@ -118,7 +114,8 @@ class URLRequestHttpJob : public URLRequestJob {
 
   scoped_ptr<HttpTransaction> transaction_;
 
-  // This is used to supervise traffic and enforce exponential back-off.
+  // This is used to supervise traffic and enforce exponential
+  // back-off.  May be NULL.
   scoped_refptr<URLRequestThrottlerEntryInterface> throttling_entry_;
 
   // Indicated if an SDCH dictionary was advertised, and hence an SDCH
@@ -142,7 +139,10 @@ class URLRequestHttpJob : public URLRequestJob {
     FINISHED
   };
 
+  typedef base::RefCountedData<bool> SharedBoolean;
+
   class HttpFilterContext;
+  class HttpTransactionDelegateImpl;
 
   virtual ~URLRequestHttpJob();
 
@@ -170,8 +170,12 @@ class URLRequestHttpJob : public URLRequestJob {
       const std::string& cookie_line,
       const std::vector<CookieStore::CookieInfo>& cookie_infos);
   void DoStartTransaction();
-  void OnCookieSaved(bool cookie_status);
-  void CookieHandled();
+
+  // See the implementation for a description of save_next_cookie_running and
+  // callback_pending.
+  void OnCookieSaved(scoped_refptr<SharedBoolean> save_next_cookie_running,
+                     scoped_refptr<SharedBoolean> callback_pending,
+                     bool cookie_status);
 
   // Some servers send the body compressed, but specify the content length as
   // the uncompressed size. If this is the case, we return true in order
@@ -183,6 +187,9 @@ class URLRequestHttpJob : public URLRequestJob {
   // Returns the effective response headers, considering that they may be
   // overridden by |override_response_headers_|.
   HttpResponseHeaders* GetResponseHeaders() const;
+
+  // Override of the private interface of URLRequestJob.
+  virtual void OnDetachRequest() OVERRIDE;
 
   base::Time request_creation_time_;
 
@@ -230,6 +237,8 @@ class URLRequestHttpJob : public URLRequestJob {
   // NetworkDelegate::NotifyURLRequestDestroyed has not been called, yet,
   // to inform the NetworkDelegate that it may not call back.
   bool awaiting_callback_;
+
+  scoped_ptr<HttpTransactionDelegateImpl> http_transaction_delegate_;
 
   DISALLOW_COPY_AND_ASSIGN(URLRequestHttpJob);
 };

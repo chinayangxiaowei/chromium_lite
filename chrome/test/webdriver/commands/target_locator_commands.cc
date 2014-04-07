@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -52,7 +52,8 @@ void WindowHandlesCommand::ExecuteGet(Response* const response) {
   }
   base::ListValue* id_list = new base::ListValue();
   for (size_t i = 0; i < views.size(); ++i) {
-    if (!views[i].view_id.IsTab())
+    if (!views[i].view_id.IsTab() &&
+        views[i].view_id.GetId().type() != AutomationId::kTypeAppShell)
       continue;
     id_list->Append(Value::CreateStringValue(
         WebViewIdToString(views[i].view_id)));
@@ -133,7 +134,7 @@ void SwitchFrameCommand::ExecutePost(Response* const response) {
 
 bool SwitchFrameCommand::GetWebElementParameter(const std::string& key,
                                                 ElementId* out) const {
-  DictionaryValue* value;
+  const DictionaryValue* value;
   if (!GetDictionaryParameter(key, &value))
     return false;
 

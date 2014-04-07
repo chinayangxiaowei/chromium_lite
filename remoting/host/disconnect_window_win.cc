@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -14,9 +14,7 @@
 #include "base/win/scoped_hdc.h"
 #include "base/win/scoped_select_object.h"
 #include "remoting/host/chromoting_host.h"
-// TODO(wez): The DisconnectWindow isn't plugin-specific, so shouldn't have
-// a dependency on the plugin's resource header.
-#include "remoting/host/plugin/host_plugin_resource.h"
+#include "remoting/host/host_ui_resource.h"
 #include "remoting/host/ui_strings.h"
 
 // TODO(garykac): Lots of duplicated code in this file and
@@ -29,8 +27,13 @@
 //   SimpleHost: simple_host_process.cc
 extern HMODULE g_hModule;
 
+namespace {
+
 const int DISCONNECT_HOTKEY_ID = 1000;
 const int kWindowBorderRadius = 14;
+const wchar_t kShellTrayWindowName[] = L"Shell_TrayWnd";
+
+} // namespace anonymous
 
 namespace remoting {
 
@@ -39,7 +42,8 @@ class DisconnectWindowWin : public DisconnectWindow {
   DisconnectWindowWin();
   virtual ~DisconnectWindowWin();
 
-  virtual void Show(remoting::ChromotingHost* host,
+  virtual void Show(ChromotingHost* host,
+                    const DisconnectCallback& disconnect_callback,
                     const std::string& username) OVERRIDE;
   virtual void Hide() OVERRIDE;
 
@@ -50,10 +54,11 @@ private:
   BOOL OnDialogMessage(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
 
   void ShutdownHost();
-  void EndDialog(int result);
+  void EndDialog();
   void SetStrings(const UiStrings& strings, const std::string& username);
+  void SetDialogPosition();
 
-  remoting::ChromotingHost* host_;
+  DisconnectCallback disconnect_callback_;
   HWND hwnd_;
   bool has_hotkey_;
   base::win::ScopedGDIObject<HPEN> border_pen_;
@@ -62,15 +67,14 @@ private:
 };
 
 DisconnectWindowWin::DisconnectWindowWin()
-    : host_(NULL),
-      hwnd_(NULL),
+    : hwnd_(NULL),
       has_hotkey_(false),
       border_pen_(CreatePen(PS_SOLID, 5,
                             RGB(0.13 * 255, 0.69 * 255, 0.11 * 255))) {
 }
 
 DisconnectWindowWin::~DisconnectWindowWin() {
-  EndDialog(0);
+  EndDialog();
 }
 
 BOOL CALLBACK DisconnectWindowWin::DialogProc(HWND hwnd, UINT msg,
@@ -100,8 +104,8 @@ BOOL DisconnectWindowWin::OnDialogMessage(HWND hwnd, UINT msg,
     case WM_COMMAND:
       switch (LOWORD(wParam)) {
         case IDC_DISCONNECT:
+          EndDialog();
           ShutdownHost();
-          EndDialog(LOWORD(wParam));
           return TRUE;
       }
       return FALSE;
@@ -111,10 +115,21 @@ BOOL DisconnectWindowWin::OnDialogMessage(HWND hwnd, UINT msg,
       hwnd_ = NULL;
       return TRUE;
 
+    // Ensure the dialog stays visible if the work area dimensions change.
+    case WM_SETTINGCHANGE:
+      if (wParam == SPI_SETWORKAREA)
+        SetDialogPosition();
+      return TRUE;
+
+    // Ensure the dialog stays visible if the display dimensions change.
+    case WM_DISPLAYCHANGE:
+      SetDialogPosition();
+      return TRUE;
+
     // Handle the disconnect hot-key.
     case WM_HOTKEY:
+      EndDialog();
       ShutdownHost();
-      EndDialog(0);
       return TRUE;
 
     // Let the window be draggable by its client area by responding
@@ -123,29 +138,29 @@ BOOL DisconnectWindowWin::OnDialogMessage(HWND hwnd, UINT msg,
       SetWindowLong(hwnd, DWL_MSGRESULT, HTCAPTION);
       return TRUE;
 
-    case WM_PAINT:
+    case WM_PAINT: {
+      PAINTSTRUCT ps;
+      HDC hdc = BeginPaint(hwnd_, &ps);
+      RECT rect;
+      GetClientRect(hwnd_, &rect);
       {
-        PAINTSTRUCT ps;
-        HDC hdc = BeginPaint(hwnd_, &ps);
-        RECT rect;
-        GetClientRect(hwnd_, &rect);
-        {
-          base::win::ScopedSelectObject border(hdc, border_pen_);
-          base::win::ScopedSelectObject brush(hdc, GetStockObject(NULL_BRUSH));
-          RoundRect(hdc, rect.left, rect.top, rect.right - 1, rect.bottom - 1,
-                    kWindowBorderRadius, kWindowBorderRadius);
-        }
-        EndPaint(hwnd_, &ps);
-        return TRUE;
+        base::win::ScopedSelectObject border(hdc, border_pen_);
+        base::win::ScopedSelectObject brush(hdc, GetStockObject(NULL_BRUSH));
+        RoundRect(hdc, rect.left, rect.top, rect.right - 1, rect.bottom - 1,
+                  kWindowBorderRadius, kWindowBorderRadius);
       }
+      EndPaint(hwnd_, &ps);
+      return TRUE;
+    }
   }
   return FALSE;
 }
 
 void DisconnectWindowWin::Show(ChromotingHost* host,
+                               const DisconnectCallback& disconnect_callback,
                                const std::string& username) {
   CHECK(!hwnd_);
-  host_ = host;
+  disconnect_callback_ = disconnect_callback;
 
   // Load the dialog resource so that we can modify the RTL flags if necessary.
   // This is taken from chrome/default_plugin/install_dialog.cc
@@ -183,28 +198,13 @@ void DisconnectWindowWin::Show(ChromotingHost* host,
   }
 
   SetStrings(host->ui_strings(), username);
-
-  // Try to center the window above the task-bar. If that fails, use the
-  // primary monitor. If that fails (very unlikely), use the default position.
-  HWND taskbar = FindWindow(L"Shell_TrayWnd", NULL);
-  HMONITOR monitor = MonitorFromWindow(taskbar, MONITOR_DEFAULTTOPRIMARY);
-  MONITORINFO monitor_info = {sizeof(monitor_info)};
-  RECT window_rect;
-  if (GetMonitorInfo(monitor, &monitor_info) &&
-      GetWindowRect(hwnd_, &window_rect)) {
-    int window_width = window_rect.right - window_rect.left;
-    int window_height = window_rect.bottom - window_rect.top;
-    int top = monitor_info.rcWork.bottom - window_height;
-    int left = (monitor_info.rcWork.right + monitor_info.rcWork.left -
-        window_width) / 2;
-    SetWindowPos(hwnd_, NULL, left, top, 0, 0, SWP_NOSIZE | SWP_NOZORDER);
-  }
+  SetDialogPosition();
   ShowWindow(hwnd_, SW_SHOW);
 }
 
 void DisconnectWindowWin::ShutdownHost() {
-  CHECK(host_);
-  host_->Shutdown(base::Closure());
+  CHECK(!disconnect_callback_.is_null());
+  disconnect_callback_.Run();
 }
 
 static int GetControlTextWidth(HWND control) {
@@ -274,24 +274,42 @@ void DisconnectWindowWin::SetStrings(const UiStrings& strings,
   SetWindowRgn(hwnd_, rgn, TRUE);
 }
 
-void DisconnectWindowWin::Hide() {
-  EndDialog(0);
+void DisconnectWindowWin::SetDialogPosition() {
+  // Try to center the window above the task-bar. If that fails, use the
+  // primary monitor. If that fails (very unlikely), use the default position.
+  HWND taskbar = FindWindow(kShellTrayWindowName, NULL);
+  HMONITOR monitor = MonitorFromWindow(taskbar, MONITOR_DEFAULTTOPRIMARY);
+  MONITORINFO monitor_info = {sizeof(monitor_info)};
+  RECT window_rect;
+  if (GetMonitorInfo(monitor, &monitor_info) &&
+      GetWindowRect(hwnd_, &window_rect)) {
+    int window_width = window_rect.right - window_rect.left;
+    int window_height = window_rect.bottom - window_rect.top;
+    int top = monitor_info.rcWork.bottom - window_height;
+    int left = (monitor_info.rcWork.right + monitor_info.rcWork.left -
+        window_width) / 2;
+    SetWindowPos(hwnd_, NULL, left, top, 0, 0, SWP_NOSIZE | SWP_NOZORDER);
+  }
 }
 
-void DisconnectWindowWin::EndDialog(int result) {
+void DisconnectWindowWin::Hide() {
+  EndDialog();
+}
+
+void DisconnectWindowWin::EndDialog() {
   if (has_hotkey_) {
     UnregisterHotKey(hwnd_, DISCONNECT_HOTKEY_ID);
     has_hotkey_ = false;
   }
 
   if (hwnd_) {
-    ::EndDialog(hwnd_, result);
+    ::DestroyWindow(hwnd_);
     hwnd_ = NULL;
   }
 }
 
-DisconnectWindow* DisconnectWindow::Create() {
-  return new DisconnectWindowWin;
+scoped_ptr<DisconnectWindow> DisconnectWindow::Create() {
+  return scoped_ptr<DisconnectWindow>(new DisconnectWindowWin());
 }
 
 }  // namespace remoting

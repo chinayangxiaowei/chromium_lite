@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,10 +8,11 @@
 #include "base/basictypes.h"
 #include "base/bind.h"
 #include "base/path_service.h"
+#include "base/stringprintf.h"
 #include "base/win/scoped_handle.h"
 #include "chrome_frame/test/test_server.h"
-#include "net/base/cookie_monster.h"
 #include "net/base/host_resolver_proc.h"
+#include "net/cookies/cookie_monster.h"
 #include "net/disk_cache/disk_cache.h"
 #include "net/http/http_auth_handler_factory.h"
 #include "net/http/http_cache.h"
@@ -62,15 +63,16 @@ class ScopedInternet {
 
 class TestURLRequest : public net::URLRequest {
  public:
-  TestURLRequest(const GURL& url, Delegate* delegate)
-      : net::URLRequest(url, delegate) {
-    set_context(new TestURLRequestContext());
+  TestURLRequest(const GURL& url,
+                 Delegate* delegate,
+                 TestURLRequestContext* context)
+      : net::URLRequest(url, delegate, context) {
   }
 };
 
 class UrlTaskChain {
  public:
-  UrlTaskChain(const char* url, UrlTaskChain* next)
+  UrlTaskChain(const std::string& url, UrlTaskChain* next)
       : url_(url), next_(next) {
   }
 
@@ -79,7 +81,8 @@ class UrlTaskChain {
 
     MessageLoopForIO loop;
 
-    TestURLRequest r(GURL(url_), &delegate_);
+    TestURLRequestContext context;
+    TestURLRequest r(GURL(url_), &delegate_, &context);
     r.Start();
     EXPECT_TRUE(r.is_pending());
 
@@ -135,29 +138,45 @@ TEST_F(TestServerTest, TestServer) {
   MessageLoopForUI loop;
 
   test_server::SimpleWebServer server(1337);
+  test_server::SimpleWebServer redirected_server(server.host(), 1338);
   test_server::SimpleResponse person("/person", "Guthrie Govan!");
   server.AddResponse(&person);
   test_server::FileResponse file("/file", source_path().Append(
       FILE_PATH_LITERAL("CFInstance.js")));
   server.AddResponse(&file);
-  test_server::RedirectResponse redir("/goog", "http://www.google.com/");
+  test_server::RedirectResponse redir(
+      "/redir",
+      base::StringPrintf("http://%s:1338/dest",
+                         redirected_server.host().c_str()));
   server.AddResponse(&redir);
+
+  test_server::SimpleResponse dest("/dest", "Destination");
+  redirected_server.AddResponse(&dest);
 
   // We should never hit this, but it's our way to break out of the test if
   // things start hanging.
   QuitMessageHit quit_msg(&loop);
   loop.PostDelayedTask(FROM_HERE, base::Bind(QuitMessageLoop, &quit_msg),
-                       10 * 1000);
+                       base::TimeDelta::FromSeconds(10));
 
-  UrlTaskChain quit_task("http://localhost:1337/quit", NULL);
-  UrlTaskChain fnf_task("http://localhost:1337/404", &quit_task);
-  UrlTaskChain person_task("http://localhost:1337/person", &fnf_task);
-  UrlTaskChain file_task("http://localhost:1337/file", &person_task);
-  UrlTaskChain goog_task("http://localhost:1337/goog", &file_task);
+  UrlTaskChain quit_task(
+      base::StringPrintf("http://%s:1337/quit", server.host().c_str()), NULL);
+  UrlTaskChain fnf_task(
+      base::StringPrintf("http://%s:1337/404", server.host().c_str()),
+      &quit_task);
+  UrlTaskChain person_task(
+      base::StringPrintf("http://%s:1337/person", server.host().c_str()),
+      &fnf_task);
+  UrlTaskChain file_task(
+      base::StringPrintf("http://%s:1337/file", server.host().c_str()),
+      &person_task);
+  UrlTaskChain redir_task(
+      base::StringPrintf("http://%s:1337/redir", server.host().c_str()),
+      &file_task);
 
   DWORD tid = 0;
   base::win::ScopedHandle worker(::CreateThread(
-      NULL, 0, FetchUrl, &goog_task, 0, &tid));
+      NULL, 0, FetchUrl, &redir_task, 0, &tid));
   loop.MessageLoop::Run();
 
   EXPECT_FALSE(quit_msg.hit_);
@@ -170,7 +189,7 @@ TEST_F(TestServerTest, TestServer) {
 
     EXPECT_TRUE(person_task.response().find("Guthrie") != std::string::npos);
     EXPECT_TRUE(file_task.response().find("function") != std::string::npos);
-    EXPECT_TRUE(goog_task.response().find("<title>") != std::string::npos);
+    EXPECT_TRUE(redir_task.response().find("Destination") != std::string::npos);
   } else {
     ::TerminateThread(worker, ~0);
   }

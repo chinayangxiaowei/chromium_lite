@@ -76,11 +76,15 @@ bool GAIAInfoUpdateService::ShouldUseGAIAProfileInfo(Profile* profile) {
 }
 
 // static
-void GAIAInfoUpdateService::RegisterUserPrefs(PrefService* prefs) {
+void GAIAInfoUpdateService::RegisterUserPrefs(PrefServiceBase* prefs) {
   prefs->RegisterInt64Pref(
-      prefs::kProfileGAIAInfoUpdateTime, 0, PrefService::UNSYNCABLE_PREF);
+      prefs::kProfileGAIAInfoUpdateTime, 0, PrefServiceBase::UNSYNCABLE_PREF);
   prefs->RegisterStringPref(
-      prefs::kProfileGAIAInfoPictureURL, "", PrefService::UNSYNCABLE_PREF);
+      prefs::kProfileGAIAInfoPictureURL, "", PrefServiceBase::UNSYNCABLE_PREF);
+}
+
+bool GAIAInfoUpdateService::NeedsProfilePicture() const {
+  return true;
 }
 
 int GAIAInfoUpdateService::GetDesiredImageSideLength() const {
@@ -95,25 +99,23 @@ std::string GAIAInfoUpdateService::GetCachedPictureURL() const {
   return profile_->GetPrefs()->GetString(prefs::kProfileGAIAInfoPictureURL);
 }
 
-void GAIAInfoUpdateService::OnDownloadComplete(ProfileDownloader* downloader,
-                                               bool success) {
+void GAIAInfoUpdateService::OnProfileDownloadSuccess(
+    ProfileDownloader* downloader) {
+  // Make sure that |ProfileDownloader| gets deleted after return.
+  scoped_ptr<ProfileDownloader> profile_image_downloader(
+      profile_image_downloader_.release());
+
   // Save the last updated time.
   last_updated_ = base::Time::Now();
   profile_->GetPrefs()->SetInt64(prefs::kProfileGAIAInfoUpdateTime,
                                  last_updated_.ToInternalValue());
   ScheduleNextUpdate();
 
-  if (!success) {
-    profile_image_downloader_.reset();
-    return;
-  }
-
   string16 full_name = downloader->GetProfileFullName();
   SkBitmap bitmap = downloader->GetProfilePicture();
   ProfileDownloader::PictureStatus picture_status =
       downloader->GetProfilePictureStatus();
   std::string picture_url = downloader->GetProfilePictureURL();
-  profile_image_downloader_.reset();
 
   ProfileInfoCache& cache =
       g_browser_process->profile_manager()->GetProfileInfoCache();
@@ -129,7 +131,7 @@ void GAIAInfoUpdateService::OnDownloadComplete(ProfileDownloader* downloader,
   if (picture_status == ProfileDownloader::PICTURE_SUCCESS) {
     profile_->GetPrefs()->SetString(prefs::kProfileGAIAInfoPictureURL,
                                     picture_url);
-    gfx::Image gfx_image(new SkBitmap(bitmap));
+    gfx::Image gfx_image(bitmap);
     cache.SetGAIAPictureOfProfileAtIndex(profile_index, &gfx_image);
   } else if (picture_status == ProfileDownloader::PICTURE_DEFAULT) {
     cache.SetGAIAPictureOfProfileAtIndex(profile_index, NULL);
@@ -149,6 +151,17 @@ void GAIAInfoUpdateService::OnDownloadComplete(ProfileDownloader* downloader,
     profile_index = cache.GetIndexOfProfileWithPath(profile_->GetPath());
     cache.SetIsUsingGAIAPictureOfProfileAtIndex(profile_index, true);
   }
+}
+
+void GAIAInfoUpdateService::OnProfileDownloadFailure(
+    ProfileDownloader* downloader) {
+  profile_image_downloader_.reset();
+
+  // Save the last updated time.
+  last_updated_ = base::Time::Now();
+  profile_->GetPrefs()->SetInt64(prefs::kProfileGAIAInfoUpdateTime,
+                                 last_updated_.ToInternalValue());
+  ScheduleNextUpdate();
 }
 
 void GAIAInfoUpdateService::Observe(

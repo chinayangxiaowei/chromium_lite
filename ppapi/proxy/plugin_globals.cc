@@ -5,6 +5,8 @@
 #include "ppapi/proxy/plugin_globals.h"
 
 #include "ppapi/proxy/plugin_dispatcher.h"
+#include "ppapi/proxy/plugin_proxy_delegate.h"
+#include "ppapi/proxy/ppb_message_loop_proxy.h"
 #include "ppapi/thunk/enter.h"
 
 namespace ppapi {
@@ -15,7 +17,9 @@ PluginGlobals* PluginGlobals::plugin_globals_ = NULL;
 PluginGlobals::PluginGlobals()
     : ppapi::PpapiGlobals(),
       plugin_proxy_delegate_(NULL),
-      callback_tracker_(new CallbackTracker) {
+      callback_tracker_(new CallbackTracker),
+      loop_for_main_thread_(
+          new MessageLoopResource(MessageLoopResource::ForMainThread())) {
   DCHECK(!plugin_globals_);
   plugin_globals_ = this;
 }
@@ -47,16 +51,32 @@ CallbackTracker* PluginGlobals::GetCallbackTrackerForInstance(
   return callback_tracker_.get();
 }
 
-FunctionGroupBase* PluginGlobals::GetFunctionAPI(PP_Instance inst, ApiID id) {
-  PluginDispatcher* dispatcher = PluginDispatcher::GetForInstance(inst);
+thunk::PPB_Instance_API* PluginGlobals::GetInstanceAPI(PP_Instance instance) {
+  PluginDispatcher* dispatcher = PluginDispatcher::GetForInstance(instance);
   if (dispatcher)
-    return dispatcher->GetFunctionAPI(id);
+    return dispatcher->GetInstanceAPI();
+  return NULL;
+}
+
+thunk::ResourceCreationAPI* PluginGlobals::GetResourceCreationAPI(
+    PP_Instance instance) {
+  PluginDispatcher* dispatcher = PluginDispatcher::GetForInstance(instance);
+  if (dispatcher)
+    return dispatcher->GetResourceCreationAPI();
   return NULL;
 }
 
 PP_Module PluginGlobals::GetModuleForInstance(PP_Instance instance) {
   // Currently proxied plugins don't use the PP_Module for anything useful.
   return 0;
+}
+
+std::string PluginGlobals::GetCmdLine() {
+  return command_line_;
+}
+
+void PluginGlobals::PreCacheFontForFlash(const void* logfontw) {
+  plugin_proxy_delegate_->PreCacheFont(logfontw);
 }
 
 base::Lock* PluginGlobals::GetProxyLock() {
@@ -83,6 +103,10 @@ void PluginGlobals::BroadcastLogWithSource(PP_Module /* module */,
   // the same as "send to everybody" which is what the dispatcher implements
   // for the "instance = 0" case.
   LogWithSource(0, level, source, value);
+}
+
+MessageLoopResource* PluginGlobals::loop_for_main_thread() {
+  return loop_for_main_thread_.get();
 }
 
 bool PluginGlobals::IsPluginGlobals() const {

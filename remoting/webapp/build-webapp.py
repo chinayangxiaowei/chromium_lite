@@ -23,6 +23,14 @@ import sys
 import time
 import zipfile
 
+# Update the module path, assuming that this script is in src/remoting/webapp,
+# and that the google_api_keys module is in src/google_apis. Note that
+# sys.path[0] refers to the directory containing this script.
+if __name__ == '__main__':
+  sys.path.append(
+      os.path.abspath(os.path.join(sys.path[0], '../../google_apis')))
+import google_api_keys
+
 def findAndReplace(filepath, findString, replaceString):
   """Does a search and replace on the contents of a file."""
   oldFilename = os.path.basename(filepath) + '.old'
@@ -47,8 +55,8 @@ def createZip(zip_path, directory):
   zip.close()
 
 
-def buildWebApp(buildtype, mimetype, destination, zip_path, plugin, files,
-                locales):
+def buildWebApp(buildtype, version, mimetype, destination, zip_path, plugin,
+                files, locales):
   """Does the main work of building the webapp directory and zipfile.
 
   Args:
@@ -155,19 +163,10 @@ def buildWebApp(buildtype, mimetype, destination, zip_path, plugin, files,
   if ((platform.system() == 'Linux') and (buildtype == 'Official')):
     subprocess.call(["strip", newPluginPath])
 
-  # Add unique build numbers to manifest version.
-  # For now, this is based on the system clock (seconds since 1/1/1970), since
-  # a previous attempt (based on build/utils/lastchange.py) was failing on Mac.
-  # TODO(lambroslambrou): Use the SVN revision number or an incrementing build
-  # number (http://crbug.com/90110).
-  timestamp = int(time.time())
-  # Version string must be 1-4 numbers separated by dots, with each number
-  # between 0 and 0xffff.
-  version1 = timestamp / 0x10000
-  version2 = timestamp % 0x10000
+  # Set the version number in the manifest version.
   findAndReplace(os.path.join(destination, 'manifest.json'),
-                 'UNIQUE_VERSION',
-                 '%d.%d' % (version1, version2))
+                 'FULL_APP_VERSION',
+                 version)
 
   # Set the correct mimetype.
   findAndReplace(os.path.join(destination, 'plugin_settings.js'),
@@ -176,7 +175,8 @@ def buildWebApp(buildtype, mimetype, destination, zip_path, plugin, files,
 
   # Set the correct OAuth2 redirect URL.
   baseUrl = (
-      'https://talkgadget.google.com/talkgadget/oauth/chrome-remote-desktop')
+      'https://chromoting-oauth.talkgadget.google.com/'
+      'talkgadget/oauth/chrome-remote-desktop')
   if (buildtype == 'Official'):
     oauth2RedirectUrlJs = (
         "'" + baseUrl + "/rel/' + chrome.i18n.getMessage('@@extension_id')")
@@ -191,21 +191,37 @@ def buildWebApp(buildtype, mimetype, destination, zip_path, plugin, files,
                  "OAUTH2_REDIRECT_URL",
                  oauth2RedirectUrlJson)
 
+  # Set the correct API keys.
+  apiClientId = google_api_keys.GetClientID('REMOTING')
+  apiClientSecret = google_api_keys.GetClientSecret('REMOTING')
+  # TODO(jamiewalch): Get rid of the useOfficialClientId hack (crbug.com/150042)
+  oauth2UseOfficialClientId = 'true';
+
+  findAndReplace(os.path.join(destination, 'plugin_settings.js'),
+                 "'API_CLIENT_ID'",
+                 "'" + apiClientId + "'")
+  findAndReplace(os.path.join(destination, 'plugin_settings.js'),
+                 "'API_CLIENT_SECRET'",
+                 "'" + apiClientSecret + "'")
+  findAndReplace(os.path.join(destination, 'plugin_settings.js'),
+                 "OAUTH2_USE_OFFICIAL_CLIENT_ID",
+                 oauth2UseOfficialClientId)
+
   # Make the zipfile.
   createZip(zip_path, destination)
 
 
 def main():
-  if len(sys.argv) < 6:
+  if len(sys.argv) < 7:
     print ('Usage: build-webapp.py '
-           '<build-type> <mime-type> <dst> <zip-path> <plugin> '
+           '<build-type> <version> <mime-type> <dst> <zip-path> <plugin> '
            '<other files...> --locales <locales...>')
     return 1
 
   reading_locales = False
   files = []
   locales = []
-  for arg in sys.argv[6:]:
+  for arg in sys.argv[7:]:
     if arg == "--locales":
       reading_locales = True;
     elif reading_locales:
@@ -214,7 +230,7 @@ def main():
       files.append(arg)
 
   buildWebApp(sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4], sys.argv[5],
-              files, locales)
+              sys.argv[6], files, locales)
   return 0
 
 

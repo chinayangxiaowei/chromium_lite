@@ -1,5 +1,5 @@
 # -*- python -*-
-# Copyright (c) 2011 The Native Client Authors. All rights reserved.
+# Copyright (c) 2012 The Native Client Authors. All rights reserved.
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
@@ -56,25 +56,23 @@ if env.Bit('windows'):
     )
 
 common_inputs = [
-    'array_ppapi.cc',
-    'browser_interface.cc',
-    'desc_based_handle.cc',
     'file_downloader.cc',
     'json_manifest.cc',
-    'method_map.cc',
+    'local_temp_file.cc',
     'module_ppapi.cc',
     'nacl_subprocess.cc',
     'nexe_arch.cc',
     'plugin.cc',
     'pnacl_coordinator.cc',
     'pnacl_resources.cc',
-    'pnacl_srpc_lib.cc',
-    'scriptable_handle.cc',
+    'pnacl_translate_thread.cc',
+    'scriptable_plugin.cc',
+    'sel_ldr_launcher_chrome.cc',
     'service_runtime.cc',
     'srpc_client.cc',
-    'string_encoding.cc',
+    'srpc_params.cc',
+    'temporary_file.cc',
     'utility.cc',
-    'var_utils.cc',
 ]
 
 if env.Bit('target_x86'):
@@ -88,8 +86,8 @@ else:
 
 # The libraries used by both the PPAPI plugin.  They and the PPAPI specific
 # libraries must come before OS libraries, because they may generate references
-# that are resolved by the OS libraries.  E.g., libplatform.a contains
-# references to symbols from libcrypto.so.
+# that are resolved by the OS libraries.  E.g., libimc.a contains
+# references to symbols from librt.so.
 common_libs = [
     'nonnacl_util',
     'nonnacl_srpc',
@@ -113,7 +111,7 @@ common_libs = [
 
 os_libs = [ ]
 if plugin_env.Bit('linux'):
-  os_libs += ['dl', 'Xt', 'X11', 'crypto']
+  os_libs += ['dl', 'rt']
 
 if plugin_env.Bit('windows'):
   os_libs += ['gdi32', 'user32', ]
@@ -173,6 +171,7 @@ else:  # mac
                     BUNDLE_INFO_PLIST = 'osx_ppapi/Info.plist')
 
 plugin_env.Alias('plugin', plugin_env.GetPPAPIPluginPath(False))
+
 
 ###############################################################################
 # PPAPI Plugin Test

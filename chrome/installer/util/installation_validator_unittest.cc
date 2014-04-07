@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -78,11 +78,18 @@ class FakeProductState : public ProductState {
                            const char* version,
                            int channel_modifiers,
                            Vehicle vehicle);
+  void AddQuickEnableApplicationHostCommand(BrowserDistribution::Type dist_type,
+                                            Level install_level,
+                                            const char* version,
+                                            int channel_modifiers);
   void AddQuickEnableCfCommand(BrowserDistribution::Type dist_type,
                                Level install_level,
                                const char* version,
                                int channel_modifiers);
-  void RemoveQuickEnableCfCommand(BrowserDistribution::Type dist_type);
+  void AddOsUpgradeCommand(BrowserDistribution::Type dist_type,
+                           Level install_level,
+                           const char* version,
+                           int channel_modifiers);
   void set_multi_install(bool is_multi_install) {
     multi_install_ = is_multi_install;
   }
@@ -154,8 +161,7 @@ void FakeProductState::SetChannel(const wchar_t* base, int channel_modifiers) {
 }
 
 void FakeProductState::SetVersion(const char* version) {
-  version_.reset(
-      version == NULL ? NULL : Version::GetVersionFromString(version));
+  version_.reset(version == NULL ? NULL : new Version(version));
 }
 
 // Sets the uninstall command for this object.
@@ -195,6 +201,25 @@ void FakeProductState::SetUninstallCommand(BrowserDistribution::Type dist_type,
     uninstall_command_.AppendSwitch(installer::switches::kMsi);
 }
 
+// Adds the "quick-enable-application-host" Google Update product command.
+void FakeProductState::AddQuickEnableApplicationHostCommand(
+    BrowserDistribution::Type dist_type,
+    Level install_level,
+    const char* version,
+    int channel_modifiers) {
+  DCHECK_EQ(dist_type, BrowserDistribution::CHROME_BINARIES);
+  DCHECK_NE(channel_modifiers & CM_MULTI, 0);
+
+  CommandLine cmd_line(GetSetupExePath(dist_type, install_level, version,
+                                       channel_modifiers));
+  cmd_line.AppendSwitch(installer::switches::kMultiInstall);
+  cmd_line.AppendSwitch(installer::switches::kChromeAppHost);
+  AppCommand app_cmd(cmd_line.GetCommandLineString());
+  app_cmd.set_sends_pings(true);
+  app_cmd.set_is_web_accessible(true);
+  commands_.Set(installer::kCmdQuickEnableApplicationHost, app_cmd);
+}
+
 // Adds the "quick-enable-cf" Google Update product command.
 void FakeProductState::AddQuickEnableCfCommand(
     BrowserDistribution::Type dist_type,
@@ -210,16 +235,34 @@ void FakeProductState::AddQuickEnableCfCommand(
   if (install_level == SYSTEM_LEVEL)
     cmd_line.AppendSwitch(installer::switches::kSystemLevel);
   cmd_line.AppendSwitch(installer::switches::kChromeFrameQuickEnable);
-  commands_.Set(installer::kCmdQuickEnableCf,
-                AppCommand(cmd_line.GetCommandLineString(), true, true));
+  AppCommand app_cmd(cmd_line.GetCommandLineString());
+  app_cmd.set_sends_pings(true);
+  app_cmd.set_is_web_accessible(true);
+  commands_.Set(installer::kCmdQuickEnableCf, app_cmd);
 }
 
-// Removes the "quick-enable-cf" Google Update product command.
-void FakeProductState::RemoveQuickEnableCfCommand(
-    BrowserDistribution::Type dist_type) {
-  DCHECK_EQ(dist_type, BrowserDistribution::CHROME_BINARIES);
+// Adds the "on-os-upgrade" Google Update product command.
+void FakeProductState::AddOsUpgradeCommand(BrowserDistribution::Type dist_type,
+                                           Level install_level,
+                                           const char* version,
+                                           int channel_modifiers) {
+  // Right now only Chrome browser uses this.
+  DCHECK_EQ(dist_type, BrowserDistribution::CHROME_BROWSER);
 
-  commands_.Remove(installer::kCmdQuickEnableCf);
+  CommandLine cmd_line(GetSetupExePath(dist_type, install_level, version,
+                                       channel_modifiers));
+  cmd_line.AppendSwitch(installer::switches::kOnOsUpgrade);
+  // Imitating ChromeBrowserOperations::AppendProductFlags().
+  if ((channel_modifiers & CM_MULTI) != 0) {
+    cmd_line.AppendSwitch(installer::switches::kMultiInstall);
+    cmd_line.AppendSwitch(installer::switches::kChrome);
+  }
+  if (install_level == SYSTEM_LEVEL)
+    cmd_line.AppendSwitch(installer::switches::kSystemLevel);
+  cmd_line.AppendSwitch(installer::switches::kVerboseLogging);
+  AppCommand app_cmd(cmd_line.GetCommandLineString());
+  app_cmd.set_is_auto_run_on_os_upgrade(true);
+  commands_.Set(installer::kCmdOnOsUpgrade, app_cmd);
 }
 
 }  // namespace
@@ -412,6 +455,18 @@ void InstallationValidatorTest::MakeProductState(
            InstallationValidator::CHROME_FRAME_READY_MODE_CHROME_MULTI)) {
     state->AddQuickEnableCfCommand(prod_type, install_level,
                                    chrome::kChromeVersion, channel_modifiers);
+  }
+  if (prod_type == BrowserDistribution::CHROME_BINARIES) {
+    state->AddQuickEnableApplicationHostCommand(prod_type,
+                                                install_level,
+                                                chrome::kChromeVersion,
+                                                channel_modifiers);
+  }
+  if (prod_type == BrowserDistribution::CHROME_BROWSER) {
+    state->AddOsUpgradeCommand(prod_type,
+                               install_level,
+                               chrome::kChromeVersion,
+                               channel_modifiers);
   }
 }
 

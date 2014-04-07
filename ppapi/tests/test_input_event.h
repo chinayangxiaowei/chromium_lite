@@ -35,16 +35,23 @@ class TestInputEvent : public TestCase {
   pp::InputEvent CreateKeyEvent(PP_InputEvent_Type type,
                                 uint32_t key_code);
   pp::InputEvent CreateCharEvent(const std::string& text);
+  pp::InputEvent CreateTouchEvent(PP_InputEvent_Type type,
+                                  const pp::FloatPoint& location);
 
   bool SimulateInputEvent(const pp::InputEvent& input_event);
   bool AreEquivalentEvents(PP_Resource first, PP_Resource second);
 
   std::string TestEvents();
+  std::string TestAcceptTouchEvent_1();
+  std::string TestAcceptTouchEvent_2();
+  std::string TestAcceptTouchEvent_3();
+  std::string TestAcceptTouchEvent_4();
 
   const PPB_InputEvent* input_event_interface_;
   const PPB_MouseInputEvent* mouse_input_event_interface_;
   const PPB_WheelInputEvent* wheel_input_event_interface_;
   const PPB_KeyboardInputEvent* keyboard_input_event_interface_;
+  const PPB_TouchInputEvent* touch_input_event_interface_;
 
   pp::Rect view_rect_;
   pp::InputEvent expected_input_event_;

@@ -1,19 +1,26 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CHROME_BROWSER_UI_COCOA_INFO_BUBBLE_VIEW_H_
 #define CHROME_BROWSER_UI_COCOA_INFO_BUBBLE_VIEW_H_
-#pragma once
 
 #import <Cocoa/Cocoa.h>
 
 namespace info_bubble {
 
+// These values are in view coordinates.
 const CGFloat kBubbleArrowHeight = 8.0;
 const CGFloat kBubbleArrowWidth = 15.0;
-const CGFloat kBubbleCornerRadius = 8.0;
+const CGFloat kBubbleCornerRadius = 2.0;
 const CGFloat kBubbleArrowXOffset = kBubbleArrowWidth + kBubbleCornerRadius;
+
+// Constants that define where the bubble will have rounded corners.
+enum CornerFlags {
+  kRoundedTopCorners = 1,
+  kRoundedBottomCorners = 1 << 1,
+  kRoundedAllCorners = kRoundedTopCorners | kRoundedBottomCorners,
+};
 
 enum BubbleArrowLocation {
   kTopLeft,
@@ -36,10 +43,12 @@ enum BubbleAlignment {
  @private
   info_bubble::BubbleArrowLocation arrowLocation_;
   info_bubble::BubbleAlignment alignment_;
+  info_bubble::CornerFlags cornerFlags_;
 }
 
 @property(assign, nonatomic) info_bubble::BubbleArrowLocation arrowLocation;
 @property(assign, nonatomic) info_bubble::BubbleAlignment alignment;
+@property(assign, nonatomic) info_bubble::CornerFlags cornerFlags;
 
 // Returns the point location in view coordinates of the tip of the arrow.
 - (NSPoint)arrowTip;

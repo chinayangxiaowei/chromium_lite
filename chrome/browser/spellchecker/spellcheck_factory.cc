@@ -64,6 +64,9 @@ void SpellCheckFactory::RegisterUserPrefs(PrefService* user_prefs) {
   user_prefs->RegisterLocalizedStringPref(prefs::kSpellCheckDictionary,
                                           IDS_SPELLCHECK_DICTIONARY,
                                           PrefService::UNSYNCABLE_PREF);
+  user_prefs->RegisterBooleanPref(prefs::kSpellCheckConfirmDialogShown,
+                                  false,
+                                  PrefService::UNSYNCABLE_PREF);
   user_prefs->RegisterBooleanPref(prefs::kSpellCheckUseSpellingService,
                                   false,
                                   PrefService::UNSYNCABLE_PREF);
@@ -75,10 +78,10 @@ void SpellCheckFactory::RegisterUserPrefs(PrefService* user_prefs) {
                                   PrefService::UNSYNCABLE_PREF);
 }
 
-bool SpellCheckFactory::ServiceRedirectedInIncognito() {
+bool SpellCheckFactory::ServiceRedirectedInIncognito() const {
   return true;
 }
 
-bool SpellCheckFactory::ServiceIsNULLWhileTesting() {
+bool SpellCheckFactory::ServiceIsNULLWhileTesting() const {
   return true;
 }

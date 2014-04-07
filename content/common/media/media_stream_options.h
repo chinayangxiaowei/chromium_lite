@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,37 +9,26 @@
 #include <vector>
 
 #include "content/common/content_export.h"
+#include "content/public/common/media_stream_request.h"
 
 namespace media_stream {
 
+typedef content::MediaStreamDeviceType MediaStreamType;
+
 // StreamOptions is a Chromium representation of WebKit's
-// WebGenerateStreamOptionFlags. It describes the components in a request for a
-// new media stream.
+// WebUserMediaRequest Options. It describes the components
+// in a request for a new media stream.
 struct CONTENT_EXPORT StreamOptions {
-  enum VideoOption {
-    kNoCamera = 0,
-    kFacingUser,
-    kFacingEnvironment,
-    kFacingBoth
-  };
+  StreamOptions();
+  // TODO(miu): Remove the 2-bools ctor in later clean-up CL.
+  StreamOptions(bool user_audio, bool user_video);
+  StreamOptions(MediaStreamType audio_type, MediaStreamType video_type);
 
-  StreamOptions() : audio(false), video_option(kNoCamera) {}
-  StreamOptions(bool audio, VideoOption option)
-      : audio(audio), video_option(option) {}
+  // If not NO_SERVICE, the stream shall contain an audio input stream.
+  MediaStreamType audio_type;
 
-  // True if the stream shall contain an audio input stream.
-  bool audio;
-
-  // Describes if a / which type of video capture device is requested.
-  VideoOption video_option;
-};
-
-// Type of media stream.
-enum MediaStreamType {
-  kNoService = 0,
-  kAudioCapture,
-  kVideoCapture,
-  kNumMediaStreamTypes
+  // If not NO_SERVICE, the stream shall contain a video input stream.
+  MediaStreamType video_type;
 };
 
 // StreamDeviceInfo describes information about a device.
@@ -51,6 +40,8 @@ struct CONTENT_EXPORT StreamDeviceInfo {
                    const std::string& name_param,
                    const std::string& device_param,
                    bool opened);
+  static bool IsEqual(const StreamDeviceInfo& first,
+                      const StreamDeviceInfo& second);
 
   // Describes the capture type.
   MediaStreamType stream_type;

@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,6 +10,10 @@
 
 using content::BrowserThread;
 
+// TODO(asanka): SaveFile should use the target directory of the save package as
+//               the default download directory when initializing |file_|.
+//               Unfortunately, as it is, constructors of SaveFile don't always
+//               have access to the SavePackage at this point.
 SaveFile::SaveFile(const SaveFileCreateInfo* info, bool calculate_hash)
     : file_(FilePath(),
             info->url,
@@ -17,7 +21,8 @@ SaveFile::SaveFile(const SaveFileCreateInfo* info, bool calculate_hash)
             0,
             calculate_hash,
             "",
-            linked_ptr<net::FileStream>()),
+            linked_ptr<net::FileStream>(),
+            net::BoundNetLog()),
       info_(info) {
   DCHECK(BrowserThread::CurrentlyOn(BrowserThread::FILE));
 
@@ -30,7 +35,7 @@ SaveFile::~SaveFile() {
 }
 
 net::Error SaveFile::Initialize() {
-  return file_.Initialize();
+  return file_.Initialize(FilePath());
 }
 
 net::Error SaveFile::AppendDataToFile(const char* data, size_t data_len) {

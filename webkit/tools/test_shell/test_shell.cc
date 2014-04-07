@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -22,6 +22,7 @@
 #include "grit/webkit_strings.h"
 #include "net/base/mime_util.h"
 #include "net/base/net_util.h"
+#include "net/url_request/url_request.h"
 #include "net/url_request/url_request_file_job.h"
 #include "net/url_request/url_request_filter.h"
 #include "skia/ext/bitmap_platform_device.h"
@@ -30,7 +31,6 @@
 #include "third_party/WebKit/Source/WebKit/chromium/public/WebAccessibilityObject.h"
 #include "third_party/WebKit/Source/WebKit/chromium/public/WebDeviceOrientationClientMock.h"
 #include "third_party/WebKit/Source/WebKit/chromium/public/WebGeolocationClientMock.h"
-#include "third_party/WebKit/Source/WebKit/chromium/public/WebSpeechInputControllerMock.h"
 #include "third_party/WebKit/Source/WebKit/chromium/public/WebFrame.h"
 #include "third_party/WebKit/Source/WebKit/chromium/public/WebKit.h"
 #include "third_party/WebKit/Source/WebKit/chromium/public/WebScriptController.h"
@@ -44,7 +44,6 @@
 #include "ui/gfx/codec/png_codec.h"
 #include "ui/gfx/size.h"
 #include "webkit/glue/glue_serialize.h"
-#include "webkit/glue/user_agent.h"
 #include "webkit/glue/webkit_glue.h"
 #include "webkit/glue/webpreferences.h"
 #include "webkit/tools/test_shell/notification_presenter.h"
@@ -55,6 +54,8 @@
 #include "webkit/tools/test_shell/test_shell_request_context.h"
 #include "webkit/tools/test_shell/test_shell_switches.h"
 #include "webkit/tools/test_shell/test_webview_delegate.h"
+#include "webkit/user_agent/user_agent.h"
+#include "webkit/user_agent/user_agent_util.h"
 
 using WebKit::WebCanvas;
 using WebKit::WebFrame;
@@ -64,6 +65,7 @@ using WebKit::WebScriptController;
 using WebKit::WebSize;
 using WebKit::WebURLRequest;
 using WebKit::WebView;
+using webkit_glue::WebPreferences;
 
 namespace {
 
@@ -82,19 +84,23 @@ const int kSVGTestWindowHeight = 360;
 // URLRequestTestShellFileJob is used to serve the inspector
 class URLRequestTestShellFileJob : public net::URLRequestFileJob {
  public:
-  static net::URLRequestJob* InspectorFactory(net::URLRequest* request,
-                                              const std::string& scheme) {
+  static net::URLRequestJob* InspectorFactory(
+      net::URLRequest* request,
+      net::NetworkDelegate* network_delegate,
+      const std::string& scheme) {
     FilePath path;
     PathService::Get(base::DIR_EXE, &path);
     path = path.AppendASCII("resources");
     path = path.AppendASCII("inspector");
     path = path.AppendASCII(request->url().path().substr(1));
-    return new URLRequestTestShellFileJob(request, path);
+    return new URLRequestTestShellFileJob(request, network_delegate, path);
   }
 
  private:
-  URLRequestTestShellFileJob(net::URLRequest* request, const FilePath& path)
-      : net::URLRequestFileJob(request, path) {
+  URLRequestTestShellFileJob(net::URLRequest* request,
+                             net::NetworkDelegate* network_delegate,
+                             const FilePath& path)
+      : net::URLRequestFileJob(request, network_delegate, path) {
   }
   virtual ~URLRequestTestShellFileJob() { }
 
@@ -118,6 +124,11 @@ std::vector<std::string> TestShell::js_flags_;
 bool TestShell::accelerated_2d_canvas_enabled_ = false;
 bool TestShell::accelerated_compositing_enabled_ = false;
 
+TestShell::TestParams::TestParams()
+    : dump_tree(true),
+      dump_pixels(false) {
+}
+
 TestShell::TestShell()
     : m_mainWnd(NULL),
       m_editWnd(NULL),
@@ -136,7 +147,6 @@ TestShell::TestShell()
       dump_stats_table_on_exit_(false) {
     delegate_.reset(new TestWebViewDelegate(this));
     popup_delegate_.reset(new TestWebViewDelegate(this));
-    layout_test_controller_.reset(new LayoutTestController(this));
     navigation_controller_.reset(new TestNavigationController(this));
     notification_presenter_.reset(new TestNotificationPresenter(this));
 
@@ -301,13 +311,17 @@ void TestShell::ResetWebPreferences() {
         *web_prefs_ = WebPreferences();
 
 #if defined(OS_MACOSX)
-        web_prefs_->serif_font_family = ASCIIToUTF16("Times");
-        web_prefs_->cursive_font_family = ASCIIToUTF16("Apple Chancery");
-        web_prefs_->fantasy_font_family = ASCIIToUTF16("Papyrus");
+        web_prefs_->serif_font_family_map[WebPreferences::kCommonScript] =
+            ASCIIToUTF16("Times");
+        web_prefs_->cursive_font_family_map[WebPreferences::kCommonScript] =
+            ASCIIToUTF16("Apple Chancery");
+        web_prefs_->fantasy_font_family_map[WebPreferences::kCommonScript] =
+            ASCIIToUTF16("Papyrus");
 #else
         // NOTE: case matters here, this must be 'times new roman', else
         // some layout tests fail.
-        web_prefs_->serif_font_family = ASCIIToUTF16("times new roman");
+        web_prefs_->serif_font_family_map[WebPreferences::kCommonScript] =
+            ASCIIToUTF16("times new roman");
 
         // These two fonts are picked from the intersection of
         // Win XP font list and Vista font list :
@@ -319,12 +333,17 @@ void TestShell::ResetWebPreferences() {
         // They (especially Impact for fantasy) are not typical cursive
         // and fantasy fonts, but it should not matter for layout tests
         // as long as they're available.
-        web_prefs_->cursive_font_family = ASCIIToUTF16("Comic Sans MS");
-        web_prefs_->fantasy_font_family = ASCIIToUTF16("Impact");
+        web_prefs_->cursive_font_family_map[WebPreferences::kCommonScript] =
+            ASCIIToUTF16("Comic Sans MS");
+        web_prefs_->fantasy_font_family_map[WebPreferences::kCommonScript] =
+            ASCIIToUTF16("Impact");
 #endif
-        web_prefs_->standard_font_family = web_prefs_->serif_font_family;
-        web_prefs_->fixed_font_family = ASCIIToUTF16("Courier");
-        web_prefs_->sans_serif_font_family = ASCIIToUTF16("Helvetica");
+        web_prefs_->standard_font_family_map[WebPreferences::kCommonScript] =
+            web_prefs_->serif_font_family_map[WebPreferences::kCommonScript];
+        web_prefs_->fixed_font_family_map[WebPreferences::kCommonScript] =
+            ASCIIToUTF16("Courier");
+        web_prefs_->sans_serif_font_family_map[WebPreferences::kCommonScript] =
+            ASCIIToUTF16("Helvetica");
 
         web_prefs_->default_encoding = "ISO-8859-1";
         web_prefs_->default_font_size = 16;
@@ -366,6 +385,12 @@ void TestShell::ResetWebPreferences() {
 }
 
 // static
+WebPreferences* TestShell::GetWebPreferences() {
+  DCHECK(web_prefs_);
+  return web_prefs_;
+}
+
+// static
 bool TestShell::RemoveWindowFromList(gfx::NativeWindow window) {
   WindowList::iterator entry =
       std::find(TestShell::windowList()->begin(),
@@ -386,13 +411,6 @@ void TestShell::TestTimedOut() {
 
 void TestShell::Show(WebNavigationPolicy policy) {
   delegate_->show(policy);
-}
-
-void TestShell::BindJSObjectsToWindow(WebFrame* frame) {
-  // Only bind the test classes if we're running tests.
-  if (layout_test_mode_) {
-    layout_test_controller_->BindToJavascript(frame, "layoutTestController");
-  }
 }
 
 void TestShell::DumpBackForwardEntry(int index, string16* result) {
@@ -426,8 +444,8 @@ void TestShell::CallJSGC() {
 
 WebView* TestShell::CreateWebView() {
   // If we're running layout tests, only open a new window if the test has
-  // called layoutTestController.setCanOpenWindows()
-  if (layout_test_mode_ && !layout_test_controller_->CanOpenWindows())
+  // called testRunner.setCanOpenWindows()
+  if (layout_test_mode_)
     return NULL;
 
   TestShell* new_win;
@@ -476,7 +494,6 @@ void TestShell::SizeToDefault() {
 }
 
 void TestShell::ResetTestController() {
-  layout_test_controller_->Reset();
   notification_presenter_->Reset();
   delegate_->Reset();
   if (geolocation_client_mock_.get())
@@ -598,22 +615,6 @@ TestShell::device_orientation_client_mock() {
         WebKit::WebDeviceOrientationClientMock::create());
   }
   return device_orientation_client_mock_.get();
-}
-
-WebKit::WebSpeechInputControllerMock*
-TestShell::CreateSpeechInputControllerMock(
-    WebKit::WebSpeechInputListener* listener) {
-  DCHECK(!speech_input_controller_mock_.get());
-#if defined(ENABLE_INPUT_SPEECH)
-  speech_input_controller_mock_.reset(
-      WebKit::WebSpeechInputControllerMock::create(listener));
-#endif
-  return speech_input_controller_mock_.get();
-}
-
-WebKit::WebSpeechInputControllerMock*
-TestShell::speech_input_controller_mock() {
-  return speech_input_controller_mock_.get();
 }
 
 WebKit::WebGeolocationClientMock* TestShell::geolocation_client_mock() {

@@ -10,11 +10,12 @@
 #include "base/message_loop.h"
 #include "grit/ui_resources.h"
 #include "ui/base/accessibility/accessible_view_state.h"
+#include "ui/base/events/event.h"
 #include "ui/base/keycodes/keyboard_codes.h"
+#include "ui/base/native_theme/native_theme.h"
 #include "ui/base/resource/resource_bundle.h"
 #include "ui/gfx/canvas.h"
-#include "ui/gfx/canvas_skia.h"
-#include "ui/gfx/native_theme.h"
+#include "ui/gfx/image/image.h"
 #include "ui/gfx/skia_util.h"
 #include "ui/views/background.h"
 #include "ui/views/border.h"
@@ -58,10 +59,12 @@ TreeView::TreeView()
       row_height_(font_.GetHeight() + kTextVerticalPadding * 2) {
   set_focusable(true);
   set_background(Background::CreateSolidBackground(SK_ColorWHITE));
-  closed_icon_ = *ResourceBundle::GetSharedInstance().GetBitmapNamed(
-      (base::i18n::IsRTL() ? IDR_FOLDER_CLOSED_RTL : IDR_FOLDER_CLOSED));
-  open_icon_ = *ResourceBundle::GetSharedInstance().GetBitmapNamed(
-      (base::i18n::IsRTL() ? IDR_FOLDER_OPEN_RTL : IDR_FOLDER_OPEN));
+  closed_icon_ = *ui::ResourceBundle::GetSharedInstance().GetImageNamed(
+      (base::i18n::IsRTL() ? IDR_FOLDER_CLOSED_RTL
+                           : IDR_FOLDER_CLOSED)).ToImageSkia();
+  open_icon_ = *ui::ResourceBundle::GetSharedInstance().GetImageNamed(
+      (base::i18n::IsRTL() ? IDR_FOLDER_OPEN_RTL
+                           : IDR_FOLDER_OPEN)).ToImageSkia();
   text_offset_ = closed_icon_.width() + kImagePadding + kImagePadding +
       kArrowRegionSize;
 }
@@ -79,8 +82,8 @@ View* TreeView::CreateParentIfNecessary() {
   ScrollView* scroll_view = new ScrollView;
   scroll_view->SetContents(this);
   scroll_view->set_border(Border::CreateSolidBorder(
-      1, gfx::NativeTheme::instance()->GetSystemColor(
-          gfx::NativeTheme::kColorId_UnfocusedBorderColor)));
+      1, ui::NativeTheme::instance()->GetSystemColor(
+          ui::NativeTheme::kColorId_UnfocusedBorderColor)));
   return scroll_view;
 }
 
@@ -141,7 +144,7 @@ void TreeView::StartEditing(TreeModelNode* node) {
   LayoutEditor();
   SchedulePaintForNode(selected_node_);
   editor_->RequestFocus();
-  editor_->SelectAll();
+  editor_->SelectAll(false);
 
   // Listen for focus changes so that we can cancel editing.
   focus_manager_ = GetFocusManager();
@@ -299,7 +302,7 @@ gfx::Size TreeView::GetPreferredSize() {
   return preferred_size_;
 }
 
-bool TreeView::OnMousePressed(const MouseEvent& event) {
+bool TreeView::OnMousePressed(const ui::MouseEvent& event) {
   int row = (event.y() - kVerticalInset) / row_height_;
   int depth;
   InternalNode* node = GetNodeByRow(row, &depth);
@@ -337,7 +340,7 @@ void TreeView::ShowContextMenu(const gfx::Point& p, bool is_mouse_gesture) {
     // Only invoke View's implementation (which notifies the
     // ContextMenuController) if over a node.
     gfx::Point local_point(p);
-    ConvertPointToView(NULL, this, &local_point);
+    ConvertPointToTarget(NULL, this, &local_point);
     int row = (local_point.y() - kVerticalInset) / row_height_;
     int depth;
     InternalNode* node = GetNodeByRow(row, &depth);
@@ -389,7 +392,7 @@ void TreeView::TreeNodesRemoved(TreeModel* model,
   }
   if (reset_selection) {
     // selected_node_ is no longer valid (at the time we enter this function
-    // it's model_node() is likely deleted). Explicitly NULL out the field
+    // its model_node() is likely deleted). Explicitly NULL out the field
     // rather than invoking SetSelectedNode() otherwise, we'll try and use a
     // deleted value.
     selected_node_ = NULL;
@@ -423,7 +426,7 @@ void TreeView::ContentsChanged(Textfield* sender,
 }
 
 bool TreeView::HandleKeyEvent(Textfield* sender,
-                              const KeyEvent& key_event) {
+                              const ui::KeyEvent& key_event) {
   switch (key_event.key_code()) {
     case ui::VKEY_RETURN:
       CommitEdit();
@@ -465,7 +468,7 @@ gfx::Point TreeView::GetKeyboardContextMenuLocation() {
   return screen_loc;
 }
 
-bool TreeView::OnKeyPressed(const KeyEvent& event) {
+bool TreeView::OnKeyPressed(const ui::KeyEvent& event) {
   if (!HasFocus())
     return false;
 
@@ -513,7 +516,7 @@ void TreeView::OnPaint(gfx::Canvas* canvas) {
   int min_y, max_y;
   {
     SkRect sk_clip_rect;
-    if (canvas->GetSkCanvas()->getClipBounds(&sk_clip_rect)) {
+    if (canvas->sk_canvas()->getClipBounds(&sk_clip_rect)) {
       gfx::Rect clip_rect = gfx::SkRectToRect(sk_clip_rect);
       min_y = clip_rect.y();
       max_y = clip_rect.bottom();
@@ -560,7 +563,7 @@ void TreeView::ConfigureInternalNode(TreeModelNode* model_node,
 
 void TreeView::UpdateNodeTextWidth(InternalNode* node) {
   int width = 0, height = 0;
-  gfx::CanvasSkia::SizeStringInt(node->model_node()->GetTitle(),
+  gfx::Canvas::SizeStringInt(node->model_node()->GetTitle(),
       font_, &width, &height, gfx::Canvas::NO_ELLIPSIS);
   node->set_text_width(width);
 }
@@ -637,7 +640,7 @@ void TreeView::PaintRow(gfx::Canvas* canvas,
     PaintExpandControl(canvas, bounds, node->is_expanded());
 
   // Paint the icon.
-  SkBitmap icon;
+  gfx::ImageSkia icon;
   int icon_index = model_->GetIconIndex(node->model_node());
   if (icon_index != -1)
     icon = icons_[icon_index];
@@ -651,7 +654,7 @@ void TreeView::PaintRow(gfx::Canvas* canvas,
     icon_x = bounds.right() - icon_x - open_icon_.width();
   else
     icon_x += bounds.x();
-  canvas->DrawBitmapInt(
+  canvas->DrawImageInt(
       icon, icon_x,
       bounds.y() + (bounds.height() - icon.height()) / 2);
 
@@ -661,7 +664,7 @@ void TreeView::PaintRow(gfx::Canvas* canvas,
     if (base::i18n::IsRTL())
       text_bounds.set_x(bounds.x());
     if (node == selected_node_) {
-      canvas->FillRect(kSelectedBackgroundColor, text_bounds);
+      canvas->FillRect(text_bounds, kSelectedBackgroundColor);
       if (HasFocus())
         canvas->DrawFocusRect(text_bounds);
     }
@@ -688,16 +691,15 @@ void TreeView::PaintExpandControl(gfx::Canvas* canvas,
   if (!expanded) {
     int delta = base::i18n::IsRTL() ? 1 : -1;
     for (int i = 0; i < 4; ++i) {
-      canvas->FillRect(kArrowColor,
-                       gfx::Rect(center_x + delta * (2 - i),
-                                 center_y - (3 - i), 1, (3 - i) * 2 + 1));
+      canvas->FillRect(gfx::Rect(center_x + delta * (2 - i),
+                                 center_y - (3 - i), 1, (3 - i) * 2 + 1),
+                       kArrowColor);
     }
   } else {
     center_y -= 2;
     for (int i = 0; i < 4; ++i) {
-      canvas->FillRect(kArrowColor,
-                       gfx::Rect(center_x - (3 - i), center_y + i,
-                                 (3 - i) * 2 + 1, 1));
+      canvas->FillRect(gfx::Rect(center_x - (3 - i), center_y + i,
+                                 (3 - i) * 2 + 1, 1), kArrowColor);
     }
   }
 }

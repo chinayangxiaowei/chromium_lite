@@ -31,17 +31,21 @@
 
 using content::UserMetricsAction;
 
+namespace options {
+
 CoreOptionsHandler::CoreOptionsHandler()
     : handlers_host_(NULL) {
 }
 
 CoreOptionsHandler::~CoreOptionsHandler() {}
 
-void CoreOptionsHandler::Initialize() {
-  clear_plugin_lso_data_enabled_.Init(prefs::kClearPluginLSODataEnabled,
-                                      Profile::FromWebUI(web_ui()),
-                                      this);
+void CoreOptionsHandler::InitializeHandler() {
+  plugin_status_pref_setter_.Init(Profile::FromWebUI(web_ui()), this);
+}
+
+void CoreOptionsHandler::InitializePage() {
   UpdateClearPluginLSOData();
+  UpdatePepperFlashSettingsEnabled();
 }
 
 void CoreOptionsHandler::GetLocalizedValues(
@@ -53,7 +57,7 @@ void CoreOptionsHandler::GetStaticLocalizedValues(
     base::DictionaryValue* localized_strings) {
   DCHECK(localized_strings);
   // Main
-  localized_strings->SetString("title",
+  localized_strings->SetString("optionsPageTitle",
       l10n_util::GetStringUTF16(IDS_SETTINGS_TITLE));
 
   // Managed prefs
@@ -120,6 +124,10 @@ void CoreOptionsHandler::Observe(int type,
     if (*pref_name == prefs::kClearPluginLSODataEnabled) {
       // This preference is stored in Local State, not in the user preferences.
       UpdateClearPluginLSOData();
+      return;
+    }
+    if (*pref_name == prefs::kPepperFlashSettingsEnabled) {
+      UpdatePepperFlashSettingsEnabled();
       return;
     }
     NotifyPrefChanged(*pref_name, std::string());
@@ -240,15 +248,23 @@ void CoreOptionsHandler::NotifyPrefChanged(
   const PrefService::Preference* controlling_pref =
       !controlling_pref_name.empty() ?
           pref_service->FindPreference(controlling_pref_name.c_str()) : NULL;
+
+  scoped_ptr<base::Value> value(CreateValueForPref(pref, controlling_pref));
+  DispatchPrefChangeNotification(pref_name, value.Pass());
+}
+
+void CoreOptionsHandler::DispatchPrefChangeNotification(
+    const std::string& name,
+    scoped_ptr<base::Value> value) {
   std::pair<PreferenceCallbackMap::const_iterator,
-            PreferenceCallbackMap::const_iterator> range;
-  range = pref_callback_map_.equal_range(pref_name);
+            PreferenceCallbackMap::const_iterator> range =
+      pref_callback_map_.equal_range(name);
+  ListValue result_value;
+  result_value.Append(base::Value::CreateStringValue(name.c_str()));
+  result_value.Append(value.release());
   for (PreferenceCallbackMap::const_iterator iter = range.first;
        iter != range.second; ++iter) {
     const std::wstring& callback_function = iter->second;
-    ListValue result_value;
-    result_value.Append(base::Value::CreateStringValue(pref_name.c_str()));
-    result_value.Append(CreateValueForPref(pref, controlling_pref));
     web_ui()->CallJavascriptFunction(WideToASCII(callback_function),
                                      result_value);
   }
@@ -268,6 +284,10 @@ DictionaryValue* CoreOptionsHandler::CreateValueForPref(
   } else if (controlling_pref->IsRecommended()) {
     dict->SetString("controlledBy", "recommended");
   }
+  const base::Value* recommended_value =
+      controlling_pref->GetRecommendedValue();
+  if (recommended_value)
+    dict->Set("recommendedValue", recommended_value->DeepCopy());
   dict->SetBoolean("disabled", !controlling_pref->IsUserModifiable());
   return dict;
 }
@@ -282,7 +302,7 @@ void CoreOptionsHandler::HandleFetchPrefs(const ListValue* args) {
   DCHECK_GE(static_cast<int>(args->GetSize()), 2);
 
   // Get callback JS function name.
-  base::Value* callback;
+  const base::Value* callback;
   if (!args->Get(0, &callback) || !callback->IsType(base::Value::TYPE_STRING))
     return;
 
@@ -292,7 +312,7 @@ void CoreOptionsHandler::HandleFetchPrefs(const ListValue* args) {
 
   // Get the list of name for prefs to build the response dictionary.
   DictionaryValue result_value;
-  base::Value* list_member;
+  const base::Value* list_member;
 
   for (size_t i = 1; i < args->GetSize(); i++) {
     if (!args->Get(i, &list_member))
@@ -323,7 +343,7 @@ void CoreOptionsHandler::HandleObservePrefs(const ListValue* args) {
 
   // Get all other parameters - pref identifiers.
   for (size_t i = 1; i < args->GetSize(); i++) {
-    base::Value* list_member;
+    const base::Value* list_member;
     if (!args->Get(i, &list_member))
       break;
 
@@ -373,7 +393,7 @@ void CoreOptionsHandler::HandleSetPref(const ListValue* args, PrefType type) {
   if (!args->GetString(0, &pref_name))
     return;
 
-  base::Value* value;
+  const base::Value* value;
   if (!args->Get(1, &value))
     return;
 
@@ -411,9 +431,7 @@ void CoreOptionsHandler::HandleSetPref(const ListValue* args, PrefType type) {
       std::string json_string;
       CHECK(value->GetAsString(&json_string));
       temp_value.reset(
-          base::JSONReader().JsonToValue(json_string,
-                                         false,  // no check_root
-                                         false));  // no trailing comma
+          base::JSONReader::Read(json_string));
       value = temp_value.get();
       CHECK_EQ(base::Value::TYPE_LIST, value->GetType());
       break;
@@ -436,8 +454,10 @@ void CoreOptionsHandler::HandleClearPref(const ListValue* args) {
     return;
 
   std::string metric;
-  if (args->GetSize() > 1)
-    args->GetString(1, &metric);
+  if (args->GetSize() > 1) {
+    if (!args->GetString(1, &metric))
+      NOTREACHED();
+  }
 
   ClearPref(pref_name, metric);
 }
@@ -451,7 +471,17 @@ void CoreOptionsHandler::HandleUserMetricsAction(const ListValue* args) {
 void CoreOptionsHandler::UpdateClearPluginLSOData() {
   scoped_ptr<base::Value> enabled(
       base::Value::CreateBooleanValue(
-          clear_plugin_lso_data_enabled_.GetValue()));
+          plugin_status_pref_setter_.IsClearPluginLSODataEnabled()));
   web_ui()->CallJavascriptFunction(
       "OptionsPage.setClearPluginLSODataEnabled", *enabled);
 }
+
+void CoreOptionsHandler::UpdatePepperFlashSettingsEnabled() {
+  scoped_ptr<base::Value> enabled(
+      base::Value::CreateBooleanValue(
+          plugin_status_pref_setter_.IsPepperFlashSettingsEnabled()));
+  web_ui()->CallJavascriptFunction(
+      "OptionsPage.setPepperFlashSettingsEnabled", *enabled);
+}
+
+}  // namespace options

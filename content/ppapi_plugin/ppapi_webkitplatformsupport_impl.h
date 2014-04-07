@@ -1,10 +1,9 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CONTENT_PPAPI_PLUGIN_PPAPI_WEBKITPLATFORMSUPPORT_IMPL_H_
 #define CONTENT_PPAPI_PLUGIN_PPAPI_WEBKITPLATFORMSUPPORT_IMPL_H_
-#pragma once
 
 #include "base/basictypes.h"
 #include "base/memory/scoped_ptr.h"
@@ -48,14 +47,6 @@ class PpapiWebKitPlatformSupportImpl :
   virtual WebKit::WebSharedWorkerRepository* sharedWorkerRepository();
   virtual int databaseDeleteFile(const WebKit::WebString& vfs_file_name,
                                  bool sync_dir);
-  virtual void createIDBKeysFromSerializedValuesAndKeyPath(
-      const WebKit::WebVector<WebKit::WebSerializedScriptValue>& values,
-      const WebKit::WebString& keyPath,
-      WebKit::WebVector<WebKit::WebIDBKey>& keys);
-  virtual WebKit::WebSerializedScriptValue injectIDBKeyIntoSerializedValue(
-      const WebKit::WebIDBKey& key,
-      const WebKit::WebSerializedScriptValue& value,
-      const WebKit::WebString& keyPath);
 
  private:
   class SandboxSupport;

@@ -1,10 +1,9 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef NET_URL_REQUEST_URL_REQUEST_FILE_JOB_H_
 #define NET_URL_REQUEST_URL_REQUEST_FILE_JOB_H_
-#pragma once
 
 #include <string>
 #include <vector>
@@ -25,13 +24,11 @@ namespace net {
 // A request job that handles reading file URLs
 class NET_EXPORT URLRequestFileJob : public URLRequestJob {
  public:
-  URLRequestFileJob(URLRequest* request, const FilePath& file_path);
+  URLRequestFileJob(URLRequest* request,
+                    NetworkDelegate* network_delegate,
+                    const FilePath& file_path);
 
   static URLRequest::ProtocolFactory Factory;
-
-#if defined(OS_CHROMEOS)
-  static bool AccessDisabled(const FilePath& file_path);
-#endif
 
   // URLRequestJob:
   virtual void Start() OVERRIDE;

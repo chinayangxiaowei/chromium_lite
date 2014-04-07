@@ -10,26 +10,53 @@
 #include "base/logging.h"
 #include "base/message_loop_proxy.h"
 #include "base/platform_file.h"
-#include "content/browser/renderer_host/resource_dispatcher_host.h"
+#include "base/threading/thread_restrictions.h"
+#include "content/browser/renderer_host/resource_dispatcher_host_impl.h"
 #include "content/public/common/resource_response.h"
 #include "net/base/file_stream.h"
 #include "net/base/io_buffer.h"
 #include "net/base/mime_sniffer.h"
 #include "net/base/net_errors.h"
-#include "webkit/blob/deletable_file_reference.h"
+#include "webkit/blob/shareable_file_reference.h"
 
-using webkit_blob::DeletableFileReference;
+using webkit_blob::ShareableFileReference;
+
+namespace {
+
+// This class is similar to identically named classes in AsyncResourceHandler
+// and BufferedResourceHandler, but not quite.
+// TODO(ncbray) generalize and unify these cases?
+// In general, it's a bad idea to point to a subbuffer (particularly with
+// GrowableIOBuffer) because the backing IOBuffer may realloc its data.  In this
+// particular case we know RedirectToFileResourceHandler will not realloc its
+// buffer while a write is occurring, so we should be safe.  This property is
+// somewhat fragile, however, and depending on it is dangerous.  A more
+// principled approach would require significant refactoring, however, so for
+// the moment we're relying on fragile properties.
+class DependentIOBuffer : public net::WrappedIOBuffer {
+ public:
+  DependentIOBuffer(net::IOBuffer* backing, char* memory)
+      : net::WrappedIOBuffer(memory),
+        backing_(backing) {
+  }
+ private:
+  virtual ~DependentIOBuffer() {}
+
+  scoped_refptr<net::IOBuffer> backing_;
+};
+
+}
 
 namespace content {
 
-// TODO(darin): Use the buffer sizing algorithm from AsyncResourceHandler.
-static const int kReadBufSize = 32768;
+static const int kInitialReadBufSize = 32768;
+static const int kMaxReadBufSize = 524288;
 
 RedirectToFileResourceHandler::RedirectToFileResourceHandler(
-    ResourceHandler* next_handler,
+    scoped_ptr<ResourceHandler> next_handler,
     int process_id,
-    ResourceDispatcherHost* host)
-    : LayeredResourceHandler(next_handler),
+    ResourceDispatcherHostImpl* host)
+    : LayeredResourceHandler(next_handler.Pass()),
       ALLOW_THIS_IN_INITIALIZER_LIST(weak_factory_(this)),
       host_(host),
       process_id_(process_id),
@@ -38,18 +65,34 @@ RedirectToFileResourceHandler::RedirectToFileResourceHandler(
       buf_write_pending_(false),
       write_cursor_(0),
       write_callback_pending_(false),
-      request_was_closed_(false),
+      next_buffer_size_(kInitialReadBufSize),
+      did_defer_(false),
       completed_during_write_(false) {
+}
+
+RedirectToFileResourceHandler::~RedirectToFileResourceHandler() {
+  // It is possible for |file_stream_| to be NULL if the URLRequest was closed
+  // before the temporary file creation finished.
+  if (file_stream_.get()) {
+    // We require this explicit call to Close since file_stream_ was constructed
+    // directly from a PlatformFile.
+    // Close() performs file IO. crbug.com/112474.
+    base::ThreadRestrictions::ScopedAllowIO allow_io;
+    file_stream_->CloseSync();
+    file_stream_.reset();
+  }
 }
 
 bool RedirectToFileResourceHandler::OnResponseStarted(
     int request_id,
-    content::ResourceResponse* response) {
-  if (response->status.is_success()) {
+    ResourceResponse* response,
+    bool* defer) {
+  if (response->head.error_code == net::OK ||
+      response->head.error_code == net::ERR_IO_PENDING) {
     DCHECK(deletable_file_ && !deletable_file_->path().empty());
-    response->download_file_path = deletable_file_->path();
+    response->head.download_file_path = deletable_file_->path();
   }
-  return next_handler_->OnResponseStarted(request_id, response);
+  return next_handler_->OnResponseStarted(request_id, response, defer);
 }
 
 bool RedirectToFileResourceHandler::OnWillStart(int request_id,
@@ -60,7 +103,7 @@ bool RedirectToFileResourceHandler::OnWillStart(int request_id,
     // Defer starting the request until we have created the temporary file.
     // TODO(darin): This is sub-optimal.  We should not delay starting the
     // network request like this.
-    *defer = true;
+    did_defer_ = *defer = true;
     base::FileUtilProxy::CreateTemporary(
         BrowserThread::GetMessageLoopProxyForThread(BrowserThread::FILE),
         base::PLATFORM_FILE_ASYNC,
@@ -75,10 +118,10 @@ bool RedirectToFileResourceHandler::OnWillRead(int request_id,
                                                net::IOBuffer** buf,
                                                int* buf_size,
                                                int min_size) {
-  DCHECK(min_size == -1);
+  DCHECK_EQ(-1, min_size);
 
-  if (!buf_->capacity())
-    buf_->SetCapacity(kReadBufSize);
+  if (buf_->capacity() < next_buffer_size_)
+    buf_->SetCapacity(next_buffer_size_);
 
   // We should have paused this network request already if the buffer is full.
   DCHECK(!BufIsFull());
@@ -91,28 +134,25 @@ bool RedirectToFileResourceHandler::OnWillRead(int request_id,
 }
 
 bool RedirectToFileResourceHandler::OnReadCompleted(int request_id,
-                                                    int* bytes_read) {
-  if (!buf_write_pending_) {
-    // Ignore spurious OnReadCompleted!  PauseRequest(true) called from within
-    // OnReadCompleted tells the ResourceDispatcherHost that we did not consume
-    // the data.  PauseRequest(false) then repeats the last OnReadCompleted
-    // call.  We pause the request so that we can copy our buffer to disk, so
-    // we need to consume the data now.  The ResourceDispatcherHost pause
-    // mechanism does not fit our use case very well.
-    // TODO(darin): Fix the ResourceDispatcherHost to avoid this hack!
-    return true;
-  }
-
+                                                    int bytes_read,
+                                                    bool* defer) {
+  DCHECK(buf_write_pending_);
   buf_write_pending_ = false;
 
-  // We use the buffer's offset field to record the end of the buffer.
+  if (buf_->capacity() == bytes_read) {
+    // The network layer has saturated our buffer. Next time, we should give it
+    // a bigger buffer for it to fill, to minimize the number of round trips we
+    // do with the renderer process.
+    next_buffer_size_ = std::min(next_buffer_size_ * 2, kMaxReadBufSize);
+  }
 
-  int new_offset = buf_->offset() + *bytes_read;
+  // We use the buffer's offset field to record the end of the buffer.
+  int new_offset = buf_->offset() + bytes_read;
   DCHECK(new_offset <= buf_->capacity());
   buf_->set_offset(new_offset);
 
   if (BufIsFull())
-    host_->PauseRequest(process_id_, request_id, true);
+    did_defer_ = *defer = true;
 
   return WriteMore();
 }
@@ -130,44 +170,20 @@ bool RedirectToFileResourceHandler::OnResponseCompleted(
   return next_handler_->OnResponseCompleted(request_id, status, security_info);
 }
 
-void RedirectToFileResourceHandler::OnRequestClosed() {
-  DCHECK(!request_was_closed_);
-  request_was_closed_ = true;
-
-  // It is possible for |file_stream_| to be NULL if the request was closed
-  // before the temporary file creation finished.
-  if (file_stream_.get()) {
-    // We require this explicit call to Close since file_stream_ was constructed
-    // directly from a PlatformFile.
-    file_stream_->Close();
-    file_stream_.reset();
-  }
-  deletable_file_ = NULL;
-  next_handler_->OnRequestClosed();
-}
-
-RedirectToFileResourceHandler::~RedirectToFileResourceHandler() {
-  DCHECK(!file_stream_.get());
-}
-
 void RedirectToFileResourceHandler::DidCreateTemporaryFile(
     base::PlatformFileError /*error_code*/,
     base::PassPlatformFile file_handle,
     const FilePath& file_path) {
-  if (request_was_closed_) {
-    // If the request was already closed, then don't bother allocating the
-    // file_stream_ (otherwise we will leak it).
-    return;
-  }
-  deletable_file_ = DeletableFileReference::GetOrCreate(
-      file_path,
+  deletable_file_ = ShareableFileReference::GetOrCreate(
+      file_path, ShareableFileReference::DELETE_ON_FINAL_RELEASE,
       BrowserThread::GetMessageLoopProxyForThread(BrowserThread::FILE));
   file_stream_.reset(new net::FileStream(file_handle.ReleaseValue(),
                                          base::PLATFORM_FILE_WRITE |
-                                         base::PLATFORM_FILE_ASYNC));
+                                         base::PLATFORM_FILE_ASYNC,
+                                         NULL));
   host_->RegisterDownloadedTempFile(
       process_id_, request_id_, deletable_file_.get());
-  host_->StartDeferredRequest(process_id_, request_id_);
+  ResumeIfDeferred();
 }
 
 void RedirectToFileResourceHandler::DidWriteToFile(int result) {
@@ -183,11 +199,12 @@ void RedirectToFileResourceHandler::DidWriteToFile(int result) {
   }
 
   if (failed) {
-    host_->CancelRequest(process_id_, request_id_, false);
+    ResumeIfDeferred();
   } else if (completed_during_write_) {
-    next_handler_->OnResponseCompleted(request_id_, completed_status_,
-                                       completed_security_info_);
-    host_->RemovePendingRequest(process_id_, request_id_);
+    if (next_handler_->OnResponseCompleted(request_id_, completed_status_,
+                                           completed_security_info_)) {
+      ResumeIfDeferred();
+    }
   }
 }
 
@@ -199,7 +216,7 @@ bool RedirectToFileResourceHandler::WriteMore() {
       // appending more data to the buffer.
       if (!buf_write_pending_) {
         if (BufIsFull())
-          host_->PauseRequest(process_id_, request_id_, false);
+          ResumeIfDeferred();
         buf_->set_offset(0);
         write_cursor_ = 0;
       }
@@ -208,9 +225,28 @@ bool RedirectToFileResourceHandler::WriteMore() {
     if (write_callback_pending_)
       return true;
     DCHECK(write_cursor_ < buf_->offset());
+
+    // Create a temporary buffer pointing to a subsection of the data buffer so
+    // that it can be passed to Write.  This code makes some crazy scary
+    // assumptions about object lifetimes, thread sharing, and that buf_ will
+    // not realloc durring the write due to how the state machine in this class
+    // works.
+    // Note that buf_ is also shared with the code that writes data into the
+    // cache, so modifying it can cause some pretty subtle race conditions:
+    // https://code.google.com/p/chromium/issues/detail?id=152076
+    // We're using DependentIOBuffer instead of DrainableIOBuffer to dodge some
+    // of these issues, for the moment.
+    // TODO(ncbray) make this code less crazy scary.
+    // Also note that Write may increase the refcount of "wrapped" deep in the
+    // bowels of its implementation, the use of scoped_refptr here is not
+    // spurious.
+    scoped_refptr<DependentIOBuffer> wrapped = new DependentIOBuffer(
+        buf_, buf_->StartOfBuffer() + write_cursor_);
+    int write_len = buf_->offset() - write_cursor_;
+
     int rv = file_stream_->Write(
-        buf_->StartOfBuffer() + write_cursor_,
-        buf_->offset() - write_cursor_,
+        wrapped,
+        write_len,
         base::Bind(&RedirectToFileResourceHandler::DidWriteToFile,
                    base::Unretained(this)));
     if (rv == net::ERR_IO_PENDING) {
@@ -230,6 +266,13 @@ bool RedirectToFileResourceHandler::BufIsFull() const {
   // 2 * net::kMaxBytesToSniff from its OnWillRead method.
   // TODO(darin): Fix this retardation!
   return buf_->RemainingCapacity() <= (2 * net::kMaxBytesToSniff);
+}
+
+void RedirectToFileResourceHandler::ResumeIfDeferred() {
+  if (did_defer_) {
+    did_defer_ = false;
+    controller()->Resume();
+  }
 }
 
 }  // namespace content

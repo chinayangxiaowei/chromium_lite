@@ -4,7 +4,6 @@
 
 #ifndef UI_VIEWS_EXAMPLES_RADIO_BUTTON_EXAMPLE_H_
 #define UI_VIEWS_EXAMPLES_RADIO_BUTTON_EXAMPLE_H_
-#pragma once
 
 #include <string>
 
@@ -30,7 +29,7 @@ class RadioButtonExample : public ExampleBase, public ButtonListener {
 
  private:
   // Overridden from ButtonListener:
-  virtual void ButtonPressed(Button* sender, const Event& event) OVERRIDE;
+  virtual void ButtonPressed(Button* sender, const ui::Event& event) OVERRIDE;
 
   // Group of 3 radio buttons.
   RadioButton* radio_buttons_[3];

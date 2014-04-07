@@ -5,6 +5,7 @@
 #include "ui/views/examples/textfield_example.h"
 
 #include "base/utf_string_conversions.h"
+#include "ui/base/events/event.h"
 #include "ui/base/range/range.h"
 #include "ui/gfx/render_text.h"
 #include "ui/views/controls/label.h"
@@ -24,7 +25,7 @@ TextfieldExample::~TextfieldExample() {
 void TextfieldExample::CreateExampleView(View* container) {
   name_ = new Textfield();
   password_ = new Textfield(Textfield::STYLE_OBSCURED);
-  password_->set_text_to_display_when_empty(ASCIIToUTF16("password"));
+  password_->set_placeholder_text(ASCIIToUTF16("password"));
   show_password_ = new TextButton(this, ASCIIToUTF16("Show password"));
   clear_all_ = new TextButton(this, ASCIIToUTF16("Clear All"));
   append_ = new TextButton(this, ASCIIToUTF16("Append"));
@@ -69,12 +70,11 @@ void TextfieldExample::ContentsChanged(Textfield* sender,
 }
 
 bool TextfieldExample::HandleKeyEvent(Textfield* sender,
-                                      const KeyEvent& key_event) {
+                                      const ui::KeyEvent& key_event) {
   return false;
 }
 
-void TextfieldExample::ButtonPressed(Button* sender,
-                                     const Event& event) {
+void TextfieldExample::ButtonPressed(Button* sender, const ui::Event& event) {
   if (sender == show_password_) {
     PrintStatus("Password [%s]", UTF16ToUTF8(password_->text()).c_str());
   } else if (sender == clear_all_) {
@@ -82,9 +82,9 @@ void TextfieldExample::ButtonPressed(Button* sender,
     name_->SetText(empty);
     password_->SetText(empty);
   } else if (sender == append_) {
-    name_->AppendText(WideToUTF16(L"[append]"));
+    name_->AppendText(ASCIIToUTF16("[append]"));
   } else if (sender == set_) {
-    name_->SetText(WideToUTF16(L"[set]"));
+    name_->SetText(ASCIIToUTF16("[set]"));
   } else if (sender == set_style_) {
     if (!name_->text().empty()) {
       gfx::StyleRange color;

@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -31,6 +31,8 @@ enum EngineInfoIndexes {
 
 };  // namespace
 
+namespace options {
+
 SearchEngineManagerHandler::SearchEngineManagerHandler() {
 }
 
@@ -39,13 +41,15 @@ SearchEngineManagerHandler::~SearchEngineManagerHandler() {
     list_controller_->table_model()->SetObserver(NULL);
 }
 
-void SearchEngineManagerHandler::Initialize() {
+void SearchEngineManagerHandler::InitializeHandler() {
   list_controller_.reset(
       new KeywordEditorController(Profile::FromWebUI(web_ui())));
-  if (list_controller_.get()) {
-    list_controller_->table_model()->SetObserver(this);
-    OnModelChanged();
-  }
+  DCHECK(list_controller_.get());
+  list_controller_->table_model()->SetObserver(this);
+}
+
+void SearchEngineManagerHandler::InitializePage() {
+  OnModelChanged();
 }
 
 void SearchEngineManagerHandler::GetLocalizedValues(
@@ -61,14 +65,6 @@ void SearchEngineManagerHandler::GetLocalizedValues(
   localized_strings->SetString("extensionKeywordsListTitle",
       l10n_util::GetStringUTF16(
           IDS_SEARCH_ENGINES_EDITOR_EXTENSIONS_SEPARATOR));
-  localized_strings->SetString("manageExtensionsLinkText",
-      l10n_util::GetStringUTF16(IDS_MANAGE_EXTENSIONS));
-  localized_strings->SetString("searchEngineTableNameHeader",
-      l10n_util::GetStringUTF16(IDS_SEARCH_ENGINES_EDITOR_DESCRIPTION_COLUMN));
-  localized_strings->SetString("searchEngineTableKeywordHeader",
-      l10n_util::GetStringUTF16(IDS_SEARCH_ENGINES_EDITOR_KEYWORD_COLUMN));
-  localized_strings->SetString("searchEngineTableURLHeader",
-      l10n_util::GetStringUTF16(IDS_SEARCH_ENGINES_EDITOR_EDIT_BUTTON));
   localized_strings->SetString("makeDefaultSearchEngineButton",
       l10n_util::GetStringUTF16(IDS_SEARCH_ENGINES_EDITOR_MAKE_DEFAULT_BUTTON));
   localized_strings->SetString("searchEngineTableNamePlaceholder",
@@ -113,6 +109,7 @@ void SearchEngineManagerHandler::RegisterMessages() {
 }
 
 void SearchEngineManagerHandler::OnModelChanged() {
+  DCHECK(list_controller_.get());
   if (!list_controller_->loaded())
     return;
 
@@ -169,7 +166,7 @@ void SearchEngineManagerHandler::OnItemsRemoved(int start, int length) {
 }
 
 base::DictionaryValue* SearchEngineManagerHandler::CreateDictionaryForExtension(
-    const Extension& extension) {
+    const extensions::Extension& extension) {
   base::DictionaryValue* dict = new base::DictionaryValue();
   dict->SetString("name",  extension.name());
   dict->SetString("displayName", extension.name());
@@ -191,9 +188,9 @@ base::DictionaryValue* SearchEngineManagerHandler::CreateDictionaryForEngine(
     index, IDS_SEARCH_ENGINES_EDITOR_DESCRIPTION_COLUMN));
   dict->SetString("keyword", table_model->GetText(
     index, IDS_SEARCH_ENGINES_EDITOR_KEYWORD_COLUMN));
-  dict->SetString("url", template_url->url()->DisplayURL());
+  dict->SetString("url", template_url->url_ref().DisplayURL());
   dict->SetBoolean("urlLocked", template_url->prepopulate_id() > 0);
-  GURL icon_url = template_url->GetFaviconURL();
+  GURL icon_url = template_url->favicon_url();
   if (icon_url.is_valid())
     dict->SetString("iconURL", icon_url.spec());
   dict->SetString("modelIndex", base::IntToString(index));
@@ -241,27 +238,26 @@ void SearchEngineManagerHandler::EditSearchEngine(const ListValue* args) {
     NOTREACHED();
     return;
   }
+
   // Allow -1, which means we are adding a new engine.
   if (index < -1 || index >= list_controller_->table_model()->RowCount())
     return;
 
-  const TemplateURL* edit_url = NULL;
-  if (index != -1)
-    edit_url = list_controller_->GetTemplateURL(index);
   edit_controller_.reset(new EditSearchEngineController(
-      edit_url, this, Profile::FromWebUI(web_ui())));
+      (index == -1) ? NULL : list_controller_->GetTemplateURL(index), this,
+      Profile::FromWebUI(web_ui())));
 }
 
 void SearchEngineManagerHandler::OnEditedKeyword(
-    const TemplateURL* template_url,
+    TemplateURL* template_url,
     const string16& title,
     const string16& keyword,
     const std::string& url) {
-  if (template_url) {
+  DCHECK(!url.empty());
+  if (template_url)
     list_controller_->ModifyTemplateURL(template_url, title, keyword, url);
-  } else {
+  else
     list_controller_->AddTemplateURL(title, keyword, url);
-  }
   edit_controller_.reset();
 }
 
@@ -310,5 +306,12 @@ void SearchEngineManagerHandler::EditCompleted(const ListValue* args) {
     NOTREACHED();
     return;
   }
-  edit_controller_->AcceptAddOrEdit(name, keyword, url);
+  // Recheck validity.  It's possible to get here with invalid input if e.g. the
+  // user calls the right JS functions directly from the web inspector.
+  if (edit_controller_->IsTitleValid(name) &&
+      edit_controller_->IsKeywordValid(keyword) &&
+      edit_controller_->IsURLValid(url))
+    edit_controller_->AcceptAddOrEdit(name, keyword, url);
 }
+
+}  // namespace options

@@ -6,7 +6,8 @@
 
 #include "base/string_split.h"
 #include "base/synchronization/waitable_event.h"
-#include "chrome/browser/prefs/pref_member.h"
+#include "chrome/browser/api/prefs/pref_member.h"
+#include "chrome/browser/prefs/pref_service.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/spellchecker/spellcheck_host_impl.h"
 #include "chrome/browser/spellchecker/spellcheck_platform_mac.h"
@@ -71,7 +72,7 @@ int SpellCheckHost::GetSpellCheckLanguages(
   for (std::vector<std::string>::const_iterator i = accept_languages.begin();
        i != accept_languages.end(); ++i) {
     std::string language =
-        SpellCheckCommon::GetCorrespondingSpellCheckLanguage(*i);
+        chrome::spellcheck_common::GetCorrespondingSpellCheckLanguage(*i);
     if (!language.empty() &&
         std::find(languages->begin(), languages->end(), language) ==
         languages->end()) {

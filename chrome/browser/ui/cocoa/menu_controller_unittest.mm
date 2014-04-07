@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -14,6 +14,9 @@
 #include "third_party/skia/include/core/SkBitmap.h"
 #include "ui/base/models/simple_menu_model.h"
 #include "ui/base/resource/resource_bundle.h"
+#include "ui/gfx/image/image.h"
+
+namespace {
 
 class MenuControllerTest : public CocoaTest {
 };
@@ -72,23 +75,23 @@ class Delegate : public ui::SimpleMenuModel::Delegate {
 // the label/icon in the model are reflected in the menu.
 class DynamicDelegate : public Delegate {
  public:
-  DynamicDelegate() : icon_(NULL) {}
+  DynamicDelegate() {}
   virtual bool IsItemForCommandIdDynamic(int command_id) const { return true; }
   virtual string16 GetLabelForCommandId(int command_id) const { return label_; }
-  virtual bool GetIconForCommandId(int command_id, SkBitmap* icon) const {
-    if (icon_) {
-      *icon = *icon_;
-      return true;
-    } else {
+  virtual bool GetIconForCommandId(int command_id, gfx::Image* icon) const {
+    if (icon_.IsEmpty()) {
       return false;
+    } else {
+      *icon = icon_;
+      return true;
     }
   }
   void SetDynamicLabel(string16 label) { label_ = label; }
-  void SetDynamicIcon(SkBitmap* icon) { icon_ = icon; }
+  void SetDynamicIcon(const gfx::Image& icon) { icon_ = icon; }
 
  private:
   string16 label_;
-  SkBitmap* icon_;
+  gfx::Image icon_;
 };
 
 TEST_F(MenuControllerTest, EmptyMenu) {
@@ -105,7 +108,7 @@ TEST_F(MenuControllerTest, BasicCreation) {
   model.AddItem(1, ASCIIToUTF16("one"));
   model.AddItem(2, ASCIIToUTF16("two"));
   model.AddItem(3, ASCIIToUTF16("three"));
-  model.AddSeparator();
+  model.AddSeparator(ui::NORMAL_SEPARATOR);
   model.AddItem(4, ASCIIToUTF16("four"));
   model.AddItem(5, ASCIIToUTF16("five"));
 
@@ -277,16 +280,16 @@ TEST_F(MenuControllerTest, Dynamic) {
   // Now update the item to have a label of "second" and an icon.
   string16 second = ASCIIToUTF16("second");
   delegate.SetDynamicLabel(second);
-  SkBitmap* bitmap =
-      ResourceBundle::GetSharedInstance().GetBitmapNamed(IDR_THROBBER);
-  delegate.SetDynamicIcon(bitmap);
+  const gfx::Image& icon =
+      ResourceBundle::GetSharedInstance().GetNativeImageNamed(IDR_THROBBER);
+  delegate.SetDynamicIcon(icon);
   // Simulate opening the menu and validate that the item label + icon changes.
   Validate(menu.get(), [menu menu]);
   EXPECT_EQ(second, base::SysNSStringToUTF16([item title]));
   EXPECT_TRUE([item image] != nil);
 
   // Now get rid of the icon and make sure it goes away.
-  delegate.SetDynamicIcon(NULL);
+  delegate.SetDynamicIcon(gfx::Image());
   Validate(menu.get(), [menu menu]);
   EXPECT_EQ(second, base::SysNSStringToUTF16([item title]));
   EXPECT_EQ(nil, [item image]);
@@ -329,3 +332,5 @@ TEST_F(MenuControllerTest, OpenClose) {
   // Expect that the delegate got notified properly.
   EXPECT_TRUE(delegate.did_close_);
 }
+
+}  // namespace

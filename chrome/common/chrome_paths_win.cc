@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,21 +10,66 @@
 #include <shlobj.h>
 #include <shobjidl.h>
 
+#include "base/command_line.h"
 #include "base/file_path.h"
 #include "base/path_service.h"
+#include "base/win/metro.h"
 #include "base/win/scoped_co_mem.h"
 #include "chrome/common/chrome_constants.h"
+#include "chrome/common/chrome_switches.h"
 #include "chrome/installer/util/browser_distribution.h"
+#include "content/public/common/content_switches.h"
 
 namespace chrome {
 
-bool GetDefaultUserDataDirectory(FilePath* result) {
+namespace {
+
+// Gets the default user data directory for either the current environment
+// (desktop or metro) or for the other one (metro or desktop).
+bool GetUserDataDirectoryForEnvironment(bool current, FilePath* result) {
   if (!PathService::Get(base::DIR_LOCAL_APP_DATA, result))
     return false;
   BrowserDistribution* dist = BrowserDistribution::GetDistribution();
   *result = result->Append(dist->GetInstallSubDir());
+
+  // TODO(rsimha): Continue to return the "Metro" subdirectory to allow testing
+  // of sync credential caching in the presence of strange singleton mode.
+  // Delete this block before shipping. See http://crbug.com/144280.
+  const CommandLine* command_line = CommandLine::ForCurrentProcess();
+  if ((command_line->HasSwitch(switches::kEnableSyncCredentialCaching)) &&
+      (base::win::IsMetroProcess() ? current : !current)) {
+    *result = result->Append(kMetroChromeUserDataSubDir);
+  }
+
   *result = result->Append(chrome::kUserDataDirname);
   return true;
+}
+
+// Generic function to call SHGetFolderPath().
+bool GetUserDirectory(int csidl_folder, FilePath* result) {
+  // We need to go compute the value. It would be nice to support paths
+  // with names longer than MAX_PATH, but the system functions don't seem
+  // to be designed for it either, with the exception of GetTempPath
+  // (but other things will surely break if the temp path is too long,
+  // so we don't bother handling it.
+  wchar_t path_buf[MAX_PATH];
+  path_buf[0] = 0;
+  if (FAILED(SHGetFolderPath(NULL, csidl_folder, NULL,
+                             SHGFP_TYPE_CURRENT, path_buf))) {
+    return false;
+  }
+  *result = FilePath(path_buf);
+  return true;
+}
+
+}  // namespace
+
+bool GetDefaultUserDataDirectory(FilePath* result) {
+  return GetUserDataDirectoryForEnvironment(true, result);
+}
+
+bool GetAlternateUserDataDirectory(FilePath *result) {
+  return GetUserDataDirectoryForEnvironment(false, result);
 }
 
 bool GetChromeFrameUserDataDirectory(FilePath* result) {
@@ -43,12 +88,7 @@ void GetUserCacheDirectory(const FilePath& profile_dir, FilePath* result) {
 }
 
 bool GetUserDocumentsDirectory(FilePath* result) {
-  wchar_t path_buf[MAX_PATH];
-  if (FAILED(SHGetFolderPath(NULL, CSIDL_MYDOCUMENTS, NULL,
-                             SHGFP_TYPE_CURRENT, path_buf)))
-    return false;
-  *result = FilePath(path_buf);
-  return true;
+  return GetUserDirectory(CSIDL_MYDOCUMENTS, result);
 }
 
 // Return a default path for downloads that is safe.
@@ -79,19 +119,35 @@ bool GetUserDownloadsDirectory(FilePath* result) {
   return GetUserDownloadsDirectorySafe(result);
 }
 
+bool GetUserMusicDirectory(FilePath* result) {
+  return GetUserDirectory(CSIDL_MYMUSIC, result);
+}
+
+bool GetUserPicturesDirectory(FilePath* result) {
+  return GetUserDirectory(CSIDL_MYPICTURES, result);
+}
+
+bool GetUserVideosDirectory(FilePath* result) {
+  return GetUserDirectory(CSIDL_MYVIDEO, result);
+}
+
 bool GetUserDesktop(FilePath* result) {
-  // We need to go compute the value. It would be nice to support paths
-  // with names longer than MAX_PATH, but the system functions don't seem
-  // to be designed for it either, with the exception of GetTempPath
-  // (but other things will surely break if the temp path is too long,
-  // so we don't bother handling it.
-  wchar_t system_buffer[MAX_PATH];
-  system_buffer[0] = 0;
-  if (FAILED(SHGetFolderPath(NULL, CSIDL_DESKTOPDIRECTORY, NULL,
-                             SHGFP_TYPE_CURRENT, system_buffer)))
-    return false;
-  *result = FilePath(system_buffer);
-  return true;
+  return GetUserDirectory(CSIDL_DESKTOPDIRECTORY, result);
+}
+
+bool ProcessNeedsProfileDir(const std::string& process_type) {
+  // On windows we don't want subprocesses other than the browser process and
+  // service processes to be able to use the profile directory because if it
+  // lies on a network share the sandbox will prevent us from accessing it.
+  // TODO(pastarmovj): For now gpu and plugin broker processes are whitelisted
+  // too because they do use the profile dir in some way but this must be
+  // investigated and fixed if possible.
+  return process_type.empty() ||
+         process_type == switches::kServiceProcess ||
+         process_type == switches::kGpuProcess ||
+         process_type == switches::kNaClBrokerProcess ||
+         process_type == switches::kNaClLoaderProcess ||
+         process_type == switches::kPpapiBrokerProcess;
 }
 
 }  // namespace chrome

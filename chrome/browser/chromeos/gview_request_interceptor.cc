@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,9 +9,8 @@
 #include "chrome/browser/chrome_plugin_service_filter.h"
 #include "chrome/common/chrome_paths.h"
 #include "chrome/common/url_constants.h"
-#include "content/browser/renderer_host/resource_dispatcher_host.h"
-#include "content/browser/renderer_host/resource_dispatcher_host_request_info.h"
 #include "content/public/browser/plugin_service.h"
+#include "content/public/browser/resource_request_info.h"
 #include "googleurl/src/gurl.h"
 #include "net/base/escape.h"
 #include "net/base/load_flags.h"
@@ -20,6 +19,7 @@
 #include "webkit/plugins/webplugininfo.h"
 
 using content::PluginService;
+using content::ResourceRequestInfo;
 
 namespace chromeos {
 
@@ -51,7 +51,7 @@ GViewRequestInterceptor::~GViewRequestInterceptor() {
 }
 
 net::URLRequestJob* GViewRequestInterceptor::MaybeIntercept(
-    net::URLRequest* request) const {
+    net::URLRequest* request, net::NetworkDelegate* network_delegate) const {
   // Don't attempt to intercept here as we want to wait until the mime
   // type is fully determined.
   return NULL;
@@ -59,7 +59,8 @@ net::URLRequestJob* GViewRequestInterceptor::MaybeIntercept(
 
 net::URLRequestJob* GViewRequestInterceptor::MaybeInterceptRedirect(
     const GURL& location,
-    net::URLRequest* request) const {
+    net::URLRequest* request,
+    net::NetworkDelegate* network_delegate) const {
   return NULL;
 }
 
@@ -67,8 +68,7 @@ bool GViewRequestInterceptor::ShouldUsePdfPlugin(
     net::URLRequest* request) const {
   FilePath pdf_path;
   PathService::Get(chrome::FILE_PDF_PLUGIN, &pdf_path);
-  ResourceDispatcherHostRequestInfo* info =
-      ResourceDispatcherHost::InfoForRequest(request);
+  const ResourceRequestInfo* info = ResourceRequestInfo::ForRequest(request);
   if (!info)
     return false;
 
@@ -78,7 +78,7 @@ bool GViewRequestInterceptor::ShouldUsePdfPlugin(
   }
 
   return ChromePluginServiceFilter::GetInstance()->ShouldUsePlugin(
-      info->child_id(), info->route_id(), info->context(),
+      info->GetChildID(), info->GetRouteID(), info->GetContext(),
       request->url(), GURL(), &plugin);
 }
 
@@ -88,7 +88,7 @@ bool GViewRequestInterceptor::ShouldInterceptScheme(
 }
 
 net::URLRequestJob* GViewRequestInterceptor::MaybeInterceptResponse(
-    net::URLRequest* request) const {
+    net::URLRequest* request, net::NetworkDelegate* network_delegate) const {
   // Do not intercept this request if it is a download.
   if (request->load_flags() & net::LOAD_IS_DOWNLOAD) {
     return NULL;
@@ -113,7 +113,7 @@ net::URLRequestJob* GViewRequestInterceptor::MaybeInterceptResponse(
   if (supported_mime_types_.count(mime_type) > 0) {
     std::string url(kGViewUrlPrefix);
     url += net::EscapePath(request->url().spec());
-    return new net::URLRequestRedirectJob(request, GURL(url));
+    return new net::URLRequestRedirectJob(request, network_delegate, GURL(url));
   }
   return NULL;
 }

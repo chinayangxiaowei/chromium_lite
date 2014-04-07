@@ -13,6 +13,8 @@
 #include "media/audio/audio_util.h"
 #include "media/audio/mac/audio_manager_mac.h"
 
+namespace media {
+
 // A custom data structure to store information an AudioQueue buffer.
 struct AudioQueueUserData {
   AudioQueueUserData() : empty_buffer(false) {}
@@ -36,39 +38,35 @@ struct AudioQueueUserData {
 // 6) The same thread that called stop will call Close() where we cleanup
 // and notifiy the audio manager, which likley will destroy this object.
 
-#if !defined(MAC_OS_X_VERSION_10_6) || \
-    MAC_OS_X_VERSION_MAX_ALLOWED < MAC_OS_X_VERSION_10_6
-enum {
-  kAudioQueueErr_EnqueueDuringReset = -66632
-};
-#endif
-
 PCMQueueOutAudioOutputStream::PCMQueueOutAudioOutputStream(
     AudioManagerMac* manager, const AudioParameters& params)
     : audio_queue_(NULL),
       source_(NULL),
       manager_(manager),
-      packet_size_(params.GetPacketSize()),
+      packet_size_(params.GetBytesPerBuffer()),
       silence_bytes_(0),
       volume_(1),
       pending_bytes_(0),
-      num_source_channels_(params.channels),
-      source_layout_(params.channel_layout),
+      num_source_channels_(params.channels()),
+      source_layout_(params.channel_layout()),
       num_core_channels_(0),
       should_swizzle_(false),
-      should_down_mix_(false) {
+      should_down_mix_(false),
+      stopped_event_(true /* manual reset */, false /* initial state */),
+      num_buffers_left_(kNumBuffers),
+      audio_bus_(AudioBus::Create(params)) {
   // We must have a manager.
   DCHECK(manager_);
   // A frame is one sample across all channels. In interleaved audio the per
   // frame fields identify the set of n |channels|. In uncompressed audio, a
   // packet is always one frame.
-  format_.mSampleRate = params.sample_rate;
+  format_.mSampleRate = params.sample_rate();
   format_.mFormatID = kAudioFormatLinearPCM;
   format_.mFormatFlags = kLinearPCMFormatFlagIsPacked;
-  format_.mBitsPerChannel = params.bits_per_sample;
-  format_.mChannelsPerFrame = params.channels;
+  format_.mBitsPerChannel = params.bits_per_sample();
+  format_.mChannelsPerFrame = params.channels();
   format_.mFramesPerPacket = 1;
-  format_.mBytesPerPacket = (format_.mBitsPerChannel * params.channels) / 8;
+  format_.mBytesPerPacket = (format_.mBitsPerChannel * params.channels()) / 8;
   format_.mBytesPerFrame = format_.mBytesPerPacket;
   format_.mReserved = 0;
 
@@ -76,14 +74,14 @@ PCMQueueOutAudioOutputStream::PCMQueueOutAudioOutputStream(
   memset(core_channel_orderings_, 0, sizeof(core_channel_orderings_));
   memset(channel_remap_, 0, sizeof(channel_remap_));
 
-  if (params.bits_per_sample > 8) {
+  if (params.bits_per_sample() > 8) {
     format_.mFormatFlags |= kLinearPCMFormatFlagIsSignedInteger;
   }
 
   // Silence buffer has a duration of 6ms to simulate the behavior of Windows.
   // This value is choosen by experiments and macs cannot keep up with
   // anything less than 6ms.
-  silence_bytes_ = format_.mBytesPerFrame * params.sample_rate * 6 / 1000;
+  silence_bytes_ = format_.mBytesPerFrame * params.sample_rate() * 6 / 1000;
 }
 
 PCMQueueOutAudioOutputStream::~PCMQueueOutAudioOutputStream() {
@@ -96,8 +94,8 @@ void PCMQueueOutAudioOutputStream::HandleError(OSStatus err) {
   AudioSourceCallback* source = GetSource();
   if (source)
     source->OnError(this, static_cast<int>(err));
-  NOTREACHED() << "error " << GetMacOSStatusErrorString(err)
-               << " (" << err << ")";
+  LOG(ERROR) << "error " << GetMacOSStatusErrorString(err)
+             << " (" << err << ")";
 }
 
 bool PCMQueueOutAudioOutputStream::Open() {
@@ -118,12 +116,10 @@ bool PCMQueueOutAudioOutputStream::Open() {
   }
   // Get the size of the channel layout.
   UInt32 core_layout_size;
-  // TODO(annacc): AudioDeviceGetPropertyInfo() is deprecated, but its
-  // replacement, AudioObjectGetPropertyDataSize(), doesn't work yet with
-  // kAudioDevicePropertyPreferredChannelLayout.
-  err = AudioDeviceGetPropertyInfo(device_id, 0, false,
-                                   kAudioDevicePropertyPreferredChannelLayout,
-                                   &core_layout_size, NULL);
+  property_address.mSelector = kAudioDevicePropertyPreferredChannelLayout;
+  property_address.mScope = kAudioDevicePropertyScopeOutput;
+  err = AudioObjectGetPropertyDataSize(device_id, &property_address, 0, NULL,
+                                       &core_layout_size);
   if (err != noErr) {
     HandleError(err);
     return false;
@@ -134,12 +130,9 @@ bool PCMQueueOutAudioOutputStream::Open() {
   core_channel_layout.reset(
       reinterpret_cast<AudioChannelLayout*>(malloc(core_layout_size)));
   memset(core_channel_layout.get(), 0, core_layout_size);
-  // TODO(annacc): AudioDeviceGetProperty() is deprecated, but its
-  // replacement, AudioObjectGetPropertyData(), doesn't work yet with
-  // kAudioDevicePropertyPreferredChannelLayout.
-  err = AudioDeviceGetProperty(device_id, 0, false,
-                               kAudioDevicePropertyPreferredChannelLayout,
-                               &core_layout_size, core_channel_layout.get());
+  err = AudioObjectGetPropertyData(device_id, &property_address, 0, NULL,
+                                   &core_layout_size,
+                                   core_channel_layout.get());
   if (err != noErr) {
     HandleError(err);
     return false;
@@ -315,19 +308,12 @@ void PCMQueueOutAudioOutputStream::Close() {
 }
 
 void PCMQueueOutAudioOutputStream::Stop() {
-  // We request a synchronous stop, so the next call can take some time. In
-  // the windows implementation we block here as well.
-  SetSource(NULL);
-
-  // We set the source to null to signal to the data queueing thread it can stop
-  // queueing data, however at most one callback might still be in flight which
-  // could attempt to enqueue right after the next call. Rather that trying to
-  // use a lock we rely on the internal Mac queue lock so the enqueue might
-  // succeed or might fail but it won't crash or leave the queue itself in an
-  // inconsistent state.
-  OSStatus err = AudioQueueStop(audio_queue_, true);
-  if (err != noErr)
-    HandleError(err);
+  if (source_) {
+    // We request a synchronous stop, so the next call can take some time. In
+    // the windows implementation we block here as well.
+    SetSource(NULL);
+    stopped_event_.Wait();
+  }
 }
 
 void PCMQueueOutAudioOutputStream::SetVolume(double volume) {
@@ -393,20 +379,51 @@ void PCMQueueOutAudioOutputStream::RenderCallback(void* p_this,
 
   PCMQueueOutAudioOutputStream* audio_stream =
       static_cast<PCMQueueOutAudioOutputStream*>(p_this);
+
   // Call the audio source to fill the free buffer with data. Not having a
-  // source means that the queue has been closed. This is not an error.
+  // source means that the queue has been stopped.
   AudioSourceCallback* source = audio_stream->GetSource();
-  if (!source)
+  if (!source) {
+    // PCMQueueOutAudioOutputStream::Stop() is waiting for callback to
+    // stop the stream and signal when all callbacks are done.
+    // (we probably can stop the stream there, but it is better to have
+    // all the complex logic in one place; stopping latency is not very
+    // important if you reuse audio stream in the mixer and not close it
+    // immediately).
+    --audio_stream->num_buffers_left_;
+    if (audio_stream->num_buffers_left_ == kNumBuffers - 1) {
+      // First buffer after stop requested, stop the queue.
+      OSStatus err = AudioQueueStop(audio_stream->audio_queue_, true);
+      if (err != noErr)
+        audio_stream->HandleError(err);
+    }
+    if (audio_stream->num_buffers_left_ == 0) {
+      // Now we finally saw all the buffers.
+      // Signal that stopping is complete.
+      // Should never touch audio_stream after signaling as it
+      // can be deleted at any moment.
+      audio_stream->stopped_event_.Signal();
+    }
     return;
+  }
 
   // Adjust the number of pending bytes by subtracting the amount played.
   if (!static_cast<AudioQueueUserData*>(buffer->mUserData)->empty_buffer)
     audio_stream->pending_bytes_ -= buffer->mAudioDataByteSize;
+
   uint32 capacity = buffer->mAudioDataBytesCapacity;
+  AudioBus* audio_bus = audio_stream->audio_bus_.get();
+  DCHECK_EQ(
+      audio_bus->frames() * audio_stream->format_.mBytesPerFrame, capacity);
   // TODO(sergeyu): Specify correct hardware delay for AudioBuffersState.
-  uint32 filled = source->OnMoreData(
-      audio_stream, reinterpret_cast<uint8*>(buffer->mAudioData), capacity,
-      AudioBuffersState(audio_stream->pending_bytes_, 0));
+  int frames_filled = source->OnMoreData(
+      audio_bus, AudioBuffersState(audio_stream->pending_bytes_, 0));
+  uint32 filled = frames_filled * audio_stream->format_.mBytesPerFrame;
+  // Note: If this ever changes to output raw float the data must be clipped and
+  // sanitized since it may come from an untrusted source such as NaCl.
+  audio_bus->ToInterleaved(
+      frames_filled, audio_stream->format_.mBitsPerChannel / 8,
+      buffer->mAudioData);
 
   // In order to keep the callback running, we need to provide a positive amount
   // of data to the audio queue. To simulate the behavior of Windows, we write
@@ -489,6 +506,8 @@ void PCMQueueOutAudioOutputStream::Start(AudioSourceCallback* callback) {
   OSStatus err = noErr;
   SetSource(callback);
   pending_bytes_ = 0;
+  stopped_event_.Reset();
+  num_buffers_left_ = kNumBuffers;
   // Ask the source to pre-fill all our buffers before playing.
   for (uint32 ix = 0; ix != kNumBuffers; ++ix) {
     buffer_[ix]->mAudioDataByteSize = 0;
@@ -527,3 +546,5 @@ PCMQueueOutAudioOutputStream::GetSource() {
   base::AutoLock lock(source_lock_);
   return source_;
 }
+
+}  // namespace media

@@ -1,10 +1,9 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CHROME_BROWSER_UI_VIEWS_TABS_BASE_TAB_H_
 #define CHROME_BROWSER_UI_VIEWS_TABS_BASE_TAB_H_
-#pragma once
 
 #include "base/memory/ref_counted.h"
 #include "base/memory/scoped_ptr.h"
@@ -32,6 +31,7 @@ class ImageButton;
 }
 
 // Base class for tab renderers.
+// TODO(sky): there's no point in this class, merge Tab and BaseTab.
 class BaseTab : public ui::AnimationDelegate,
                 public views::ButtonListener,
                 public views::ContextMenuController,
@@ -74,9 +74,6 @@ class BaseTab : public ui::AnimationDelegate,
     theme_provider_ = provider;
   }
 
-  // Returns true if the tab is closeable.
-  bool IsCloseable() const;
-
   // Returns true if this tab is the active tab.
   bool IsActive() const;
 
@@ -85,12 +82,15 @@ class BaseTab : public ui::AnimationDelegate,
 
   // Overridden from views::View:
   virtual ui::ThemeProvider* GetThemeProvider() const OVERRIDE;
-  virtual bool OnMousePressed(const views::MouseEvent& event) OVERRIDE;
-  virtual bool OnMouseDragged(const views::MouseEvent& event) OVERRIDE;
-  virtual void OnMouseReleased(const views::MouseEvent& event) OVERRIDE;
+  virtual bool OnMousePressed(const ui::MouseEvent& event) OVERRIDE;
+  virtual bool OnMouseDragged(const ui::MouseEvent& event) OVERRIDE;
+  virtual void OnMouseReleased(const ui::MouseEvent& event) OVERRIDE;
   virtual void OnMouseCaptureLost() OVERRIDE;
-  virtual void OnMouseEntered(const views::MouseEvent& event) OVERRIDE;
-  virtual void OnMouseExited(const views::MouseEvent& event) OVERRIDE;
+  virtual void OnMouseEntered(const ui::MouseEvent& event) OVERRIDE;
+  virtual void OnMouseMoved(const ui::MouseEvent& event) OVERRIDE;
+  virtual void OnMouseExited(const ui::MouseEvent& event) OVERRIDE;
+  virtual ui::EventResult OnGestureEvent(
+      const ui::GestureEvent& event) OVERRIDE;
   virtual bool GetTooltipText(const gfx::Point& p,
                               string16* tooltip) const OVERRIDE;
   virtual void GetAccessibleState(ui::AccessibleViewState* state) OVERRIDE;
@@ -127,12 +127,11 @@ class BaseTab : public ui::AnimationDelegate,
 
   // Overridden from views::ButtonListener:
   virtual void ButtonPressed(views::Button* sender,
-                             const views::Event& event) OVERRIDE;
+                             const ui::Event& event) OVERRIDE;
 
   // Overridden from views::ContextMenuController:
   virtual void ShowContextMenuForView(views::View* source,
-                                      const gfx::Point& p,
-                                      bool is_mouse_gesture) OVERRIDE;
+                                      const gfx::Point& point) OVERRIDE;
 
   // Returns the bounds of the title and icon.
   virtual const gfx::Rect& GetTitleBounds() const = 0;
@@ -148,6 +147,7 @@ class BaseTab : public ui::AnimationDelegate,
  private:
   // The animation object used to swap the favicon with the sad tab icon.
   class FaviconCrashAnimation;
+  class TabCloseButton;
 
   // Set the temporary offset for the favicon. This is used during the crash
   // animation.

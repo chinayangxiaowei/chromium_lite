@@ -6,9 +6,10 @@
 
 #include "chrome/app/chrome_command_ids.h"
 #include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/global_error.h"
-#include "chrome/browser/ui/global_error_service.h"
-#include "chrome/browser/ui/global_error_service_factory.h"
+#include "chrome/browser/ui/browser_tabstrip.h"
+#include "chrome/browser/ui/global_error/global_error.h"
+#include "chrome/browser/ui/global_error/global_error_service.h"
+#include "chrome/browser/ui/global_error/global_error_service_factory.h"
 #include "chrome/test/base/browser_with_test_window_test.h"
 #include "chrome/test/base/menu_model_test.h"
 #include "chrome/test/base/testing_profile.h"
@@ -131,8 +132,9 @@ TEST_F(WrenchMenuModelTest, Basics) {
   // Execute a couple of the items and make sure it gets back to our delegate.
   // We can't use CountEnabledExecutable() here because the encoding menu's
   // delegate is internal, it doesn't use the one we pass in.
-  model.ActivatedAt(0);
-  EXPECT_TRUE(model.IsEnabledAt(0));
+  // Note: The new menu has a spacing separator at the first slot.
+  model.ActivatedAt(1);
+  EXPECT_TRUE(model.IsEnabledAt(1));
   // Make sure to use the index that is not separator in all configurations.
   model.ActivatedAt(2);
   EXPECT_TRUE(model.IsEnabledAt(2));
@@ -199,6 +201,6 @@ class EncodingMenuModelTest : public BrowserWithTestWindowTest,
 
 TEST_F(EncodingMenuModelTest, IsCommandIdCheckedWithNoTabs) {
   EncodingMenuModel model(browser());
-  ASSERT_EQ(NULL, browser()->GetSelectedWebContents());
+  ASSERT_EQ(NULL, chrome::GetActiveWebContents(browser()));
   EXPECT_FALSE(model.IsCommandIdChecked(IDC_ENCODING_ISO88591));
 }

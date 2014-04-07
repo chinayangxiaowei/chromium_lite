@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -35,9 +35,12 @@
 #include "net/base/net_errors.h"
 #include "net/base/net_util.h"
 #include "net/http/http_util.h"
-#include "net/url_request/url_request.h"
 #include "net/url_request/url_request_error_job.h"
 #include "net/url_request/url_request_file_dir_job.h"
+
+#if defined(OS_WIN)
+#include "base/win/shortcut.h"
+#endif
 
 namespace net {
 
@@ -83,26 +86,27 @@ class URLRequestFileJob::AsyncResolver
 };
 
 URLRequestFileJob::URLRequestFileJob(URLRequest* request,
+                                     NetworkDelegate* network_delegate,
                                      const FilePath& file_path)
-    : URLRequestJob(request),
+    : URLRequestJob(request, network_delegate),
       file_path_(file_path),
+      stream_(NULL),
       is_directory_(false),
       remaining_bytes_(0) {
 }
 
 // static
 URLRequestJob* URLRequestFileJob::Factory(URLRequest* request,
+                                          NetworkDelegate* network_delegate,
                                           const std::string& scheme) {
-
   FilePath file_path;
   const bool is_file = FileURLToFilePath(request->url(), &file_path);
 
-#if defined(OS_CHROMEOS)
-  // Check file access.
-  if (AccessDisabled(file_path))
-    return new URLRequestErrorJob(request, ERR_ACCESS_DENIED);
-#endif
-
+  // Check file access permissions.
+  if (!network_delegate ||
+      !network_delegate->CanAccessFile(*request, file_path)) {
+    return new URLRequestErrorJob(request, network_delegate, ERR_ACCESS_DENIED);
+  }
   // We need to decide whether to create URLRequestFileJob for file access or
   // URLRequestFileDirJob for directory access. To avoid accessing the
   // filesystem, we only look at the path string here.
@@ -112,40 +116,12 @@ URLRequestJob* URLRequestFileJob::Factory(URLRequest* request,
   if (is_file &&
       file_util::EndsWithSeparator(file_path) &&
       file_path.IsAbsolute())
-    return new URLRequestFileDirJob(request, file_path);
+    return new URLRequestFileDirJob(request, network_delegate, file_path);
 
   // Use a regular file request job for all non-directories (including invalid
   // file names).
-  return new URLRequestFileJob(request, file_path);
+  return new URLRequestFileJob(request, network_delegate, file_path);
 }
-
-#if defined(OS_CHROMEOS)
-static const char* const kLocalAccessWhiteList[] = {
-  "/home/chronos/user/Downloads",
-  "/media",
-  "/opt/oem",
-  "/usr/share/chromeos-assets",
-  "/tmp",
-  "/var/log",
-};
-
-// static
-bool URLRequestFileJob::AccessDisabled(const FilePath& file_path) {
-  if (URLRequest::IsFileAccessAllowed()) {  // for tests.
-    return false;
-  }
-
-  for (size_t i = 0; i < arraysize(kLocalAccessWhiteList); ++i) {
-    const FilePath white_listed_path(kLocalAccessWhiteList[i]);
-    // FilePath::operator== should probably handle trailing seperators.
-    if (white_listed_path == file_path.StripTrailingSeparators() ||
-        white_listed_path.IsParent(file_path)) {
-      return false;
-    }
-  }
-  return true;
-}
-#endif  // OS_CHROMEOS
 
 void URLRequestFileJob::Start() {
   DCHECK(!async_resolver_);
@@ -157,7 +133,10 @@ void URLRequestFileJob::Start() {
 }
 
 void URLRequestFileJob::Kill() {
-  stream_.Close();
+  // URL requests should not block on the disk!
+  //   http://code.google.com/p/chromium/issues/detail?id=59849
+  base::ThreadRestrictions::ScopedAllowIO allow_io;
+  stream_.CloseSync();
 
   if (async_resolver_) {
     async_resolver_->Cancel();
@@ -183,7 +162,7 @@ bool URLRequestFileJob::ReadRawData(IOBuffer* dest, int dest_size,
     return true;
   }
 
-  int rv = stream_.Read(dest->data(), dest_size,
+  int rv = stream_.Read(dest, dest_size,
                         base::Bind(&URLRequestFileJob::DidRead,
                                    base::Unretained(this)));
   if (rv >= 0) {
@@ -226,7 +205,7 @@ bool URLRequestFileJob::IsRedirectResponse(GURL* location,
 
   FilePath new_path = file_path_;
   bool resolved;
-  resolved = file_util::ResolveShortcut(&new_path);
+  resolved = base::win::ResolveShortcut(new_path, &new_path, NULL);
 
   // If shortcut is not resolved succesfully, do not redirect.
   if (!resolved)
@@ -309,7 +288,7 @@ void URLRequestFileJob::DidResolve(
     int flags = base::PLATFORM_FILE_OPEN |
                 base::PLATFORM_FILE_READ |
                 base::PLATFORM_FILE_ASYNC;
-    rv = stream_.Open(file_path_, flags);
+    rv = stream_.OpenSync(file_path_, flags);
   }
 
   if (rv != OK) {
@@ -335,7 +314,7 @@ void URLRequestFileJob::DidResolve(
     if (remaining_bytes_ > 0 &&
         byte_range_.first_byte_position() != 0 &&
         byte_range_.first_byte_position() !=
-        stream_.Seek(FROM_BEGIN, byte_range_.first_byte_position())) {
+        stream_.SeekSync(FROM_BEGIN, byte_range_.first_byte_position())) {
       NotifyDone(URLRequestStatus(URLRequestStatus::FAILED,
                                   ERR_REQUEST_RANGE_NOT_SATISFIABLE));
       return;

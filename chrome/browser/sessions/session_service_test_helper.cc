@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,6 +9,7 @@
 #include "chrome/browser/sessions/session_id.h"
 #include "chrome/browser/sessions/session_service.h"
 #include "chrome/browser/sessions/session_types.h"
+#include "chrome/browser/sessions/session_types_test_helper.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 using base::Time;
@@ -41,6 +42,19 @@ void SessionServiceTestHelper::SetTabExtensionAppID(
     const SessionID& tab_id,
     const std::string& extension_app_id) {
   service()->SetTabExtensionAppID(window_id, tab_id, extension_app_id);
+}
+
+void SessionServiceTestHelper::SetTabUserAgentOverride(
+    const SessionID& window_id,
+    const SessionID& tab_id,
+    const std::string& user_agent_override) {
+  service()->SetTabUserAgentOverride(window_id, tab_id, user_agent_override);
+}
+
+void SessionServiceTestHelper::SetForceBrowserNotAliveWithNoWindows(
+    bool force_browser_not_alive_with_no_windows) {
+  service()->force_browser_not_alive_with_no_windows_ =
+      force_browser_not_alive_with_no_windows;
 }
 
 // Be sure and null out service to force closing the file.
@@ -76,13 +90,7 @@ void SessionServiceTestHelper::AssertTabEquals(
 void SessionServiceTestHelper::AssertNavigationEquals(
     const TabNavigation& expected,
     const TabNavigation& actual) {
-  EXPECT_TRUE(expected.virtual_url() == actual.virtual_url());
-  EXPECT_EQ(expected.referrer().url, actual.referrer().url);
-  EXPECT_EQ(expected.referrer().policy, actual.referrer().policy);
-  EXPECT_EQ(expected.title(), actual.title());
-  EXPECT_EQ(expected.state(), actual.state());
-  EXPECT_EQ(expected.transition(), actual.transition());
-  EXPECT_EQ(expected.type_mask(), actual.type_mask());
+  SessionTypesTestHelper::ExpectNavigationEquals(expected, actual);
 }
 
 void SessionServiceTestHelper::AssertSingleWindowWithSingleTab(

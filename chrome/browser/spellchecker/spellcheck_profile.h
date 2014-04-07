@@ -4,7 +4,6 @@
 
 #ifndef CHROME_BROWSER_SPELLCHECKER_SPELLCHECK_PROFILE_H_
 #define CHROME_BROWSER_SPELLCHECKER_SPELLCHECK_PROFILE_H_
-#pragma once
 
 #include <string>
 #include <vector>
@@ -14,7 +13,7 @@
 #include "base/gtest_prod_util.h"
 #include "base/memory/ref_counted.h"
 #include "base/memory/scoped_ptr.h"
-#include "chrome/browser/prefs/pref_change_registrar.h"
+#include "chrome/browser/api/prefs/pref_change_registrar.h"
 #include "chrome/browser/profiles/profile_keyed_service.h"
 #include "chrome/browser/spellchecker/spellcheck_profile_provider.h"
 #include "content/public/browser/notification_observer.h"

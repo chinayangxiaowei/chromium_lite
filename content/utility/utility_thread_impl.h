@@ -1,26 +1,22 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CONTENT_UTILITY_UTILITY_THREAD_IMPL_H_
 #define CONTENT_UTILITY_UTILITY_THREAD_IMPL_H_
-#pragma once
 
 #include <string>
 #include <vector>
 
 #include "base/basictypes.h"
 #include "base/compiler_specific.h"
-#include "base/string16.h"
 #include "content/common/child_thread.h"
 #include "content/common/content_export.h"
 #include "content/public/utility/utility_thread.h"
 
 class FilePath;
-class IndexedDBKey;
 
 namespace content {
-class SerializedScriptValue;
 class WebKitPlatformSupportImpl;
 }
 
@@ -43,14 +39,6 @@ class UtilityThreadImpl : public content::UtilityThread,
   virtual bool OnControlMessageReceived(const IPC::Message& msg) OVERRIDE;
 
   // IPC message handlers.
-  void OnIDBKeysFromValuesAndKeyPath(
-      int id,
-      const std::vector<content::SerializedScriptValue>&
-          serialized_script_values,
-      const string16& idb_key_path);
-  void OnInjectIDBKey(const IndexedDBKey& key,
-                      const content::SerializedScriptValue& value,
-                      const string16& key_path);
   void OnBatchModeStarted();
   void OnBatchModeFinished();
 

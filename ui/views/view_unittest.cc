@@ -11,12 +11,14 @@
 #include "testing/gmock/include/gmock/gmock.h"
 #include "ui/base/accelerators/accelerator.h"
 #include "ui/base/clipboard/clipboard.h"
+#include "ui/base/events/event.h"
 #include "ui/base/keycodes/keyboard_codes.h"
+#include "ui/base/l10n/l10n_util.h"
 #include "ui/base/models/simple_menu_model.h"
-#include "ui/gfx/canvas_skia.h"
-#include "ui/gfx/compositor/compositor.h"
-#include "ui/gfx/compositor/layer.h"
-#include "ui/gfx/compositor/layer_animator.h"
+#include "ui/compositor/compositor.h"
+#include "ui/compositor/layer.h"
+#include "ui/compositor/layer_animator.h"
+#include "ui/gfx/canvas.h"
 #include "ui/gfx/path.h"
 #include "ui/gfx/transform.h"
 #include "ui/views/background.h"
@@ -25,7 +27,6 @@
 #include "ui/views/controls/native/native_view_host.h"
 #include "ui/views/controls/scroll_view.h"
 #include "ui/views/controls/textfield/textfield.h"
-#include "ui/views/events/event.h"
 #include "ui/views/focus/accelerator_handler.h"
 #include "ui/views/focus/view_storage.h"
 #include "ui/views/test/views_test_base.h"
@@ -39,9 +40,8 @@
 #include "ui/views/test/test_views_delegate.h"
 #endif
 #if defined(USE_AURA)
-#include "ui/aura/event.h"
 #include "ui/aura/root_window.h"
-#include "ui/aura/gestures/gesture_recognizer.h"
+#include "ui/base/gestures/gesture_recognizer.h"
 #endif
 
 using ::testing::_;
@@ -185,6 +185,18 @@ void ScrambleTree(views::View* view) {
     view->SetVisible(!view->visible());
 }
 
+// Convenience to make constructing a GestureEvent simpler.
+class GestureEventForTest : public ui::GestureEvent {
+ public:
+  GestureEventForTest(ui::EventType type, int x, int y, int flags)
+      : GestureEvent(type, x, y, flags, base::TimeDelta(),
+                     ui::GestureEventDetails(type, 0.0f, 0.0f), 0) {
+  }
+
+ private:
+  DISALLOW_COPY_AND_ASSIGN(GestureEventForTest);
+};
+
 }  // namespace
 
 namespace views {
@@ -194,7 +206,7 @@ typedef ViewsTestBase ViewTest;
 // A derived class for testing purpose.
 class TestView : public View {
  public:
-  TestView() : View(), in_touch_sequence_(false) {}
+  TestView() : View(), delete_on_pressed_(false), in_touch_sequence_(false) {}
   virtual ~TestView() {}
 
   // Reset all test state
@@ -202,6 +214,8 @@ class TestView : public View {
     did_change_bounds_ = false;
     last_mouse_event_type_ = 0;
     location_.SetPoint(0, 0);
+    received_mouse_enter_ = false;
+    received_mouse_exit_ = false;
     last_touch_event_type_ = 0;
     last_touch_event_was_handled_ = false;
     last_gesture_event_type_ = 0;
@@ -211,12 +225,15 @@ class TestView : public View {
   }
 
   virtual void OnBoundsChanged(const gfx::Rect& previous_bounds) OVERRIDE;
-  virtual bool OnMousePressed(const MouseEvent& event) OVERRIDE;
-  virtual bool OnMouseDragged(const MouseEvent& event) OVERRIDE;
-  virtual void OnMouseReleased(const MouseEvent& event) OVERRIDE;
-  virtual ui::TouchStatus OnTouchEvent(const TouchEvent& event) OVERRIDE;
+  virtual bool OnMousePressed(const ui::MouseEvent& event) OVERRIDE;
+  virtual bool OnMouseDragged(const ui::MouseEvent& event) OVERRIDE;
+  virtual void OnMouseReleased(const ui::MouseEvent& event) OVERRIDE;
+  virtual void OnMouseEntered(const ui::MouseEvent& event) OVERRIDE;
+  virtual void OnMouseExited(const ui::MouseEvent& event) OVERRIDE;
+  virtual ui::TouchStatus OnTouchEvent(const ui::TouchEvent& event) OVERRIDE;
   // Ignores GestureEvent by default.
-  virtual ui::GestureStatus OnGestureEvent(const GestureEvent& event) OVERRIDE;
+  virtual ui::EventResult OnGestureEvent(
+      const ui::GestureEvent& event) OVERRIDE;
   virtual void Paint(gfx::Canvas* canvas) OVERRIDE;
   virtual void SchedulePaintInRect(const gfx::Rect& rect) OVERRIDE;
   virtual bool AcceleratorPressed(const ui::Accelerator& accelerator) OVERRIDE;
@@ -228,6 +245,9 @@ class TestView : public View {
   // MouseEvent.
   int last_mouse_event_type_;
   gfx::Point location_;
+  bool received_mouse_enter_;
+  bool received_mouse_exit_;
+  bool delete_on_pressed_;
 
   // Painting.
   std::vector<gfx::Rect> scheduled_paint_rects_;
@@ -255,7 +275,7 @@ class TestViewIgnoreTouch : public TestView {
   virtual ~TestViewIgnoreTouch() {}
 
  private:
-  virtual ui::TouchStatus OnTouchEvent(const TouchEvent& event) OVERRIDE;
+  virtual ui::TouchStatus OnTouchEvent(const ui::TouchEvent& event) OVERRIDE;
 };
 
 // A view subclass that consumes all Gesture events for testing purposes.
@@ -264,13 +284,15 @@ class TestViewConsumeGesture : public TestView {
   TestViewConsumeGesture() : TestView() {}
   virtual ~TestViewConsumeGesture() {}
 
- private:
-  virtual ui::GestureStatus OnGestureEvent(const GestureEvent& event) OVERRIDE {
+ protected:
+  virtual ui::EventResult OnGestureEvent(
+      const ui::GestureEvent& event) OVERRIDE {
     last_gesture_event_type_ = event.type();
     location_.SetPoint(event.x(), event.y());
-    return ui::GESTURE_STATUS_CONSUMED;
+    return ui::ER_CONSUMED;
   }
 
+ private:
   DISALLOW_COPY_AND_ASSIGN(TestViewConsumeGesture);
 };
 
@@ -281,11 +303,30 @@ class TestViewIgnoreGesture: public TestView {
   virtual ~TestViewIgnoreGesture() {}
 
  private:
-  virtual ui::GestureStatus OnGestureEvent(const GestureEvent& event) OVERRIDE {
-    return ui::GESTURE_STATUS_UNKNOWN;
+  virtual ui::EventResult OnGestureEvent(
+      const ui::GestureEvent& event) OVERRIDE {
+    return ui::ER_UNHANDLED;
   }
 
   DISALLOW_COPY_AND_ASSIGN(TestViewIgnoreGesture);
+};
+
+// A view subclass that ignores all scroll-gesture events, but consume all other
+// gesture events.
+class TestViewIgnoreScrollGestures : public TestViewConsumeGesture {
+ public:
+  TestViewIgnoreScrollGestures() {}
+  virtual ~TestViewIgnoreScrollGestures() {}
+
+ private:
+  virtual ui::EventResult OnGestureEvent(
+      const ui::GestureEvent& event) OVERRIDE {
+    if (event.IsScrollGestureEvent())
+      return ui::ER_UNHANDLED;
+    return TestViewConsumeGesture::OnGestureEvent(event);
+  }
+
+  DISALLOW_COPY_AND_ASSIGN(TestViewIgnoreScrollGestures);
 };
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -316,29 +357,39 @@ TEST_F(ViewTest, OnBoundsChanged) {
 // MouseEvent
 ////////////////////////////////////////////////////////////////////////////////
 
-bool TestView::OnMousePressed(const MouseEvent& event) {
+bool TestView::OnMousePressed(const ui::MouseEvent& event) {
+  last_mouse_event_type_ = event.type();
+  location_.SetPoint(event.x(), event.y());
+  if (delete_on_pressed_)
+    delete this;
+  return true;
+}
+
+bool TestView::OnMouseDragged(const ui::MouseEvent& event) {
   last_mouse_event_type_ = event.type();
   location_.SetPoint(event.x(), event.y());
   return true;
 }
 
-bool TestView::OnMouseDragged(const MouseEvent& event) {
+void TestView::OnMouseReleased(const ui::MouseEvent& event) {
   last_mouse_event_type_ = event.type();
   location_.SetPoint(event.x(), event.y());
-  return true;
 }
 
-void TestView::OnMouseReleased(const MouseEvent& event) {
-  last_mouse_event_type_ = event.type();
-  location_.SetPoint(event.x(), event.y());
+void TestView::OnMouseEntered(const ui::MouseEvent& event) {
+  received_mouse_enter_ = true;
+}
+
+void TestView::OnMouseExited(const ui::MouseEvent& event) {
+  received_mouse_exit_ = true;
 }
 
 TEST_F(ViewTest, MouseEvent) {
   TestView* v1 = new TestView();
-  v1->SetBounds(0, 0, 300, 300);
+  v1->SetBoundsRect(gfx::Rect(0, 0, 300, 300));
 
   TestView* v2 = new TestView();
-  v2->SetBounds(100, 100, 100, 100);
+  v2->SetBoundsRect(gfx::Rect(100, 100, 100, 100));
 
   scoped_ptr<Widget> widget(new Widget);
   Widget::InitParams params(Widget::InitParams::TYPE_POPUP);
@@ -353,10 +404,9 @@ TEST_F(ViewTest, MouseEvent) {
   v1->Reset();
   v2->Reset();
 
-  MouseEvent pressed(ui::ET_MOUSE_PRESSED,
-                     110,
-                     120,
-                     ui::EF_LEFT_MOUSE_BUTTON);
+  gfx::Point p1(110, 120);
+  ui::MouseEvent pressed(ui::ET_MOUSE_PRESSED, p1, p1,
+                         ui::EF_LEFT_MOUSE_BUTTON);
   root->OnMousePressed(pressed);
   EXPECT_EQ(v2->last_mouse_event_type_, ui::ET_MOUSE_PRESSED);
   EXPECT_EQ(v2->location_.x(), 10);
@@ -367,10 +417,9 @@ TEST_F(ViewTest, MouseEvent) {
   // Drag event out of bounds. Should still go to v2
   v1->Reset();
   v2->Reset();
-  MouseEvent dragged(ui::ET_MOUSE_DRAGGED,
-                     50,
-                     40,
-                     ui::EF_LEFT_MOUSE_BUTTON);
+  gfx::Point p2(50, 40);
+  ui::MouseEvent dragged(ui::ET_MOUSE_DRAGGED, p2, p2,
+                         ui::EF_LEFT_MOUSE_BUTTON);
   root->OnMouseDragged(dragged);
   EXPECT_EQ(v2->last_mouse_event_type_, ui::ET_MOUSE_DRAGGED);
   EXPECT_EQ(v2->location_.x(), -50);
@@ -381,7 +430,7 @@ TEST_F(ViewTest, MouseEvent) {
   // Releasted event out of bounds. Should still go to v2
   v1->Reset();
   v2->Reset();
-  MouseEvent released(ui::ET_MOUSE_RELEASED, 0, 0, 0);
+  ui::MouseEvent released(ui::ET_MOUSE_RELEASED, gfx::Point(), gfx::Point(), 0);
   root->OnMouseDragged(released);
   EXPECT_EQ(v2->last_mouse_event_type_, ui::ET_MOUSE_RELEASED);
   EXPECT_EQ(v2->location_.x(), -100);
@@ -392,10 +441,41 @@ TEST_F(ViewTest, MouseEvent) {
   widget->CloseNow();
 }
 
+// Confirm that a view can be deleted as part of processing a mouse press.
+TEST_F(ViewTest, DeleteOnPressed) {
+  TestView* v1 = new TestView();
+  v1->SetBoundsRect(gfx::Rect(0, 0, 300, 300));
+
+  TestView* v2 = new TestView();
+  v2->SetBoundsRect(gfx::Rect(100, 100, 100, 100));
+
+  v1->Reset();
+  v2->Reset();
+
+  scoped_ptr<Widget> widget(new Widget);
+  Widget::InitParams params(Widget::InitParams::TYPE_POPUP);
+  params.ownership = views::Widget::InitParams::WIDGET_OWNS_NATIVE_WIDGET;
+  params.bounds = gfx::Rect(50, 50, 650, 650);
+  widget->Init(params);
+  View* root = widget->GetRootView();
+
+  root->AddChildView(v1);
+  v1->AddChildView(v2);
+
+  v2->delete_on_pressed_ = true;
+  gfx::Point point(110, 120);
+  ui::MouseEvent pressed(ui::ET_MOUSE_PRESSED, point, point,
+                         ui::EF_LEFT_MOUSE_BUTTON);
+  root->OnMousePressed(pressed);
+  EXPECT_EQ(0, v1->child_count());
+
+  widget->CloseNow();
+}
+
 ////////////////////////////////////////////////////////////////////////////////
 // TouchEvent
 ////////////////////////////////////////////////////////////////////////////////
-ui::TouchStatus TestView::OnTouchEvent(const TouchEvent& event) {
+ui::TouchStatus TestView::OnTouchEvent(const ui::TouchEvent& event) {
   last_touch_event_type_ = event.type();
   location_.SetPoint(event.x(), event.y());
   if (!in_touch_sequence_) {
@@ -414,19 +494,19 @@ ui::TouchStatus TestView::OnTouchEvent(const TouchEvent& event) {
                                          ui::TOUCH_STATUS_UNKNOWN;
 }
 
-ui::TouchStatus TestViewIgnoreTouch::OnTouchEvent(const TouchEvent& event) {
+ui::TouchStatus TestViewIgnoreTouch::OnTouchEvent(const ui::TouchEvent& event) {
   return ui::TOUCH_STATUS_UNKNOWN;
 }
 
 TEST_F(ViewTest, TouchEvent) {
   TestView* v1 = new TestView();
-  v1->SetBounds(0, 0, 300, 300);
+  v1->SetBoundsRect(gfx::Rect(0, 0, 300, 300));
 
   TestView* v2 = new TestView();
-  v2->SetBounds(100, 100, 100, 100);
+  v2->SetBoundsRect(gfx::Rect(100, 100, 100, 100));
 
   TestView* v3 = new TestViewIgnoreTouch();
-  v3->SetBounds(0, 0, 100, 100);
+  v3->SetBoundsRect(gfx::Rect(0, 0, 100, 100));
 
   scoped_ptr<Widget> widget(new Widget());
   Widget::InitParams params(Widget::InitParams::TYPE_POPUP);
@@ -447,12 +527,11 @@ TEST_F(ViewTest, TouchEvent) {
   v1->Reset();
   v2->Reset();
 
-  TouchEvent unhandled(ui::ET_TOUCH_MOVED,
-                       400,
-                       400,
-                       0, /* no flags */
-                       0, /* first finger touch */
-                       1.0, 0.0, 1.0, 0.0);
+  ui::TestTouchEvent unhandled(ui::ET_TOUCH_MOVED,
+                               400, 400,
+                               0, /* no flags */
+                               0, /* first finger touch */
+                               1.0, 0.0, 1.0, 0.0);
   root->OnTouchEvent(unhandled);
 
   EXPECT_EQ(v1->last_touch_event_type_, 0);
@@ -462,12 +541,11 @@ TEST_F(ViewTest, TouchEvent) {
   v1->Reset();
   v2->Reset();
 
-  TouchEvent pressed(ui::ET_TOUCH_PRESSED,
-                     110,
-                     120,
-                     0, /* no flags */
-                     0, /* first finger touch */
-                     1.0, 0.0, 1.0, 0.0);
+  ui::TestTouchEvent pressed(ui::ET_TOUCH_PRESSED,
+                             110, 120,
+                             0, /* no flags */
+                             0, /* first finger touch */
+                             1.0, 0.0, 1.0, 0.0);
   v2->last_touch_event_was_handled_ = true;
   root->OnTouchEvent(pressed);
 
@@ -480,12 +558,11 @@ TEST_F(ViewTest, TouchEvent) {
   // Drag event out of bounds. Should still go to v2
   v1->Reset();
   v2->Reset();
-  TouchEvent dragged(ui::ET_TOUCH_MOVED,
-                     50,
-                     40,
-                     0, /* no flags */
-                     0, /* first finger touch */
-                     1.0, 0.0, 1.0, 0.0);
+  ui::TestTouchEvent dragged(ui::ET_TOUCH_MOVED,
+                             50, 40,
+                             0, /* no flags */
+                             0, /* first finger touch */
+                             1.0, 0.0, 1.0, 0.0);
 
   root->OnTouchEvent(dragged);
   EXPECT_EQ(v2->last_touch_event_type_, ui::ET_TOUCH_MOVED);
@@ -497,8 +574,10 @@ TEST_F(ViewTest, TouchEvent) {
   // Released event out of bounds. Should still go to v2
   v1->Reset();
   v2->Reset();
-  TouchEvent released(ui::ET_TOUCH_RELEASED, 0, 0, 0, 0 /* first finger */,
-                      1.0, 0.0, 1.0, 0.0);
+  ui::TestTouchEvent released(ui::ET_TOUCH_RELEASED, 0, 0,
+                              0, /* no flags */
+                              0, /* first finger */
+                              1.0, 0.0, 1.0, 0.0);
   v2->last_touch_event_was_handled_ = true;
   root->OnTouchEvent(released);
   EXPECT_EQ(v2->last_touch_event_type_, ui::ET_TOUCH_RELEASED);
@@ -510,20 +589,20 @@ TEST_F(ViewTest, TouchEvent) {
   widget->CloseNow();
 }
 
-ui::GestureStatus TestView::OnGestureEvent(const GestureEvent& event) {
-  return ui::GESTURE_STATUS_UNKNOWN;
+ui::EventResult TestView::OnGestureEvent(const ui::GestureEvent& event) {
+  return ui::ER_UNHANDLED;
 }
 
 TEST_F(ViewTest, GestureEvent) {
   // Views hierarchy for non delivery of GestureEvent.
   TestView* v1 = new TestViewConsumeGesture();
-  v1->SetBounds(0, 0, 300, 300);
+  v1->SetBoundsRect(gfx::Rect(0, 0, 300, 300));
 
   TestView* v2 = new TestViewConsumeGesture();
-  v2->SetBounds(100, 100, 100, 100);
+  v2->SetBoundsRect(gfx::Rect(100, 100, 100, 100));
 
   TestView* v3 = new TestViewIgnoreGesture();
-  v3->SetBounds(0, 0, 100, 100);
+  v3->SetBoundsRect(gfx::Rect(0, 0, 100, 100));
 
   scoped_ptr<Widget> widget(new Widget());
   Widget::InitParams params(Widget::InitParams::TYPE_POPUP);
@@ -552,6 +631,10 @@ TEST_F(ViewTest, GestureEvent) {
   EXPECT_EQ(gfx::Point(10, 10), v2->location_);
   EXPECT_EQ(ui::ET_UNKNOWN, v1->last_gesture_event_type_);
 
+  // Simulate an up so that RootView is no longer targetting |v3|.
+  GestureEventForTest g1_up(ui::ET_GESTURE_END, 110, 110, 0);
+  root->OnGestureEvent(g1_up);
+
   v1->Reset();
   v2->Reset();
   v3->Reset();
@@ -563,6 +646,106 @@ TEST_F(ViewTest, GestureEvent) {
   EXPECT_EQ(gfx::Point(80, 80), v1->location_);
   EXPECT_EQ(ui::ET_UNKNOWN, v2->last_gesture_event_type_);
 
+  // Send event |g1| again. Even though the coordinates target |v3| it should go
+  // to |v1| as that is the view the touch was initially down on.
+  v1->last_gesture_event_type_ = ui::ET_UNKNOWN;
+  v3->last_gesture_event_type_ = ui::ET_UNKNOWN;
+  root->OnGestureEvent(g1);
+  EXPECT_EQ(ui::ET_GESTURE_TAP, v1->last_gesture_event_type_);
+  EXPECT_EQ(ui::ET_UNKNOWN, v3->last_gesture_event_type_);
+  EXPECT_EQ("110,110", v1->location_.ToString());
+
+  widget->CloseNow();
+}
+
+TEST_F(ViewTest, ScrollGestureEvent) {
+  // Views hierarchy for non delivery of GestureEvent.
+  TestView* v1 = new TestViewConsumeGesture();
+  v1->SetBoundsRect(gfx::Rect(0, 0, 300, 300));
+
+  TestView* v2 = new TestViewIgnoreScrollGestures();
+  v2->SetBoundsRect(gfx::Rect(100, 100, 100, 100));
+
+  TestView* v3 = new TestViewIgnoreGesture();
+  v3->SetBoundsRect(gfx::Rect(0, 0, 100, 100));
+
+  scoped_ptr<Widget> widget(new Widget());
+  Widget::InitParams params(Widget::InitParams::TYPE_POPUP);
+  params.ownership = views::Widget::InitParams::WIDGET_OWNS_NATIVE_WIDGET;
+  params.bounds = gfx::Rect(50, 50, 650, 650);
+  widget->Init(params);
+  View* root = widget->GetRootView();
+
+  root->AddChildView(v1);
+  v1->AddChildView(v2);
+  v2->AddChildView(v3);
+
+  // |v3| completely obscures |v2|, but all the gesture events on |v3| should
+  // reach |v2| because |v3| doesn't process any gesture events. However, since
+  // |v2| does process gesture events, gesture events on |v3| or |v2| should not
+  // reach |v1|.
+
+  v1->Reset();
+  v2->Reset();
+  v3->Reset();
+
+  // Gesture on |v3|
+  GestureEventForTest g1(ui::ET_GESTURE_TAP, 110, 110, 0);
+  root->OnGestureEvent(g1);
+  EXPECT_EQ(ui::ET_GESTURE_TAP, v2->last_gesture_event_type_);
+  EXPECT_EQ(gfx::Point(10, 10), v2->location_);
+  EXPECT_EQ(ui::ET_UNKNOWN, v1->last_gesture_event_type_);
+
+  v2->Reset();
+
+  // Send scroll gestures on |v3|. The gesture should reach |v2|, however,
+  // since it does not process scroll-gesture events, these events should reach
+  // |v1|.
+  GestureEventForTest gscroll_begin(ui::ET_GESTURE_SCROLL_BEGIN, 115, 115, 0);
+  root->OnGestureEvent(gscroll_begin);
+  EXPECT_EQ(ui::ET_UNKNOWN, v2->last_gesture_event_type_);
+  EXPECT_EQ(ui::ET_GESTURE_SCROLL_BEGIN, v1->last_gesture_event_type_);
+  v1->Reset();
+
+  // Send a second tap on |v1|. The event should reach |v2| since it is the
+  // default gesture handler, and not |v1| (even though it is the view under the
+  // point, and is the scroll event handler).
+  GestureEventForTest second_tap(ui::ET_GESTURE_TAP, 70, 70, 0);
+  root->OnGestureEvent(second_tap);
+  EXPECT_EQ(ui::ET_GESTURE_TAP, v2->last_gesture_event_type_);
+  EXPECT_EQ(ui::ET_UNKNOWN, v1->last_gesture_event_type_);
+  v2->Reset();
+
+  GestureEventForTest gscroll_end(ui::ET_GESTURE_SCROLL_END, 50, 50, 0);
+  root->OnGestureEvent(gscroll_end);
+  EXPECT_EQ(ui::ET_GESTURE_SCROLL_END, v1->last_gesture_event_type_);
+  v1->Reset();
+
+  // Simulate an up so that RootView is no longer targetting |v3|.
+  GestureEventForTest g1_up(ui::ET_GESTURE_END, 110, 110, 0);
+  root->OnGestureEvent(g1_up);
+  EXPECT_EQ(ui::ET_GESTURE_END, v2->last_gesture_event_type_);
+
+  v1->Reset();
+  v2->Reset();
+  v3->Reset();
+
+  // Gesture on |v1|
+  GestureEventForTest g2(ui::ET_GESTURE_TAP, 80, 80, 0);
+  root->OnGestureEvent(g2);
+  EXPECT_EQ(ui::ET_GESTURE_TAP, v1->last_gesture_event_type_);
+  EXPECT_EQ(gfx::Point(80, 80), v1->location_);
+  EXPECT_EQ(ui::ET_UNKNOWN, v2->last_gesture_event_type_);
+
+  // Send event |g1| again. Even though the coordinates target |v3| it should go
+  // to |v1| as that is the view the touch was initially down on.
+  v1->last_gesture_event_type_ = ui::ET_UNKNOWN;
+  v3->last_gesture_event_type_ = ui::ET_UNKNOWN;
+  root->OnGestureEvent(g1);
+  EXPECT_EQ(ui::ET_GESTURE_TAP, v1->last_gesture_event_type_);
+  EXPECT_EQ(ui::ET_UNKNOWN, v3->last_gesture_event_type_);
+  EXPECT_EQ("110,110", v1->location_.ToString());
+
   widget->CloseNow();
 }
 
@@ -571,7 +754,7 @@ TEST_F(ViewTest, GestureEvent) {
 ////////////////////////////////////////////////////////////////////////////////
 
 void TestView::Paint(gfx::Canvas* canvas) {
-  canvas->GetSkCanvas()->getClipBounds(&last_clip_);
+  canvas->sk_canvas()->getClipBounds(&last_clip_);
 }
 
 void TestView::SchedulePaintInRect(const gfx::Rect& rect) {
@@ -601,19 +784,19 @@ TEST_F(ViewTest, DISABLED_Painting) {
   View* root = window.GetRootView();
 
   TestView* v1 = new TestView();
-  v1->SetBounds(0, 0, 650, 650);
+  v1->SetBoundsRect(gfx::Rect(0, 0, 650, 650));
   root->AddChildView(v1);
 
   TestView* v2 = new TestView();
-  v2->SetBounds(10, 10, 80, 80);
+  v2->SetBoundsRect(gfx::Rect(10, 10, 80, 80));
   v1->AddChildView(v2);
 
   TestView* v3 = new TestView();
-  v3->SetBounds(10, 10, 60, 60);
+  v3->SetBoundsRect(gfx::Rect(10, 10, 60, 60));
   v2->AddChildView(v3);
 
   TestView* v4 = new TestView();
-  v4->SetBounds(10, 200, 100, 100);
+  v4->SetBoundsRect(gfx::Rect(10, 200, 100, 100));
   v1->AddChildView(v4);
 
   // Make sure to paint current rects
@@ -629,22 +812,13 @@ TEST_F(ViewTest, DISABLED_Painting) {
 
   SkRect tmp_rect;
 
-  tmp_rect.set(SkIntToScalar(10),
-               SkIntToScalar(10),
-               SkIntToScalar(20),
-               SkIntToScalar(20));
+  tmp_rect.iset(10, 10, 20, 20);
   CheckRect(v3->last_clip_, tmp_rect);
 
-  tmp_rect.set(SkIntToScalar(20),
-               SkIntToScalar(20),
-               SkIntToScalar(30),
-               SkIntToScalar(30));
+  tmp_rect.iset(20, 20, 30, 30);
   CheckRect(v2->last_clip_, tmp_rect);
 
-  tmp_rect.set(SkIntToScalar(30),
-               SkIntToScalar(30),
-               SkIntToScalar(40),
-               SkIntToScalar(40));
+  tmp_rect.iset(30, 30, 40, 40);
   CheckRect(v1->last_clip_, tmp_rect);
 
   // Make sure v4 was not painted
@@ -655,13 +829,7 @@ TEST_F(ViewTest, DISABLED_Painting) {
 }
 */
 
-#if defined(OS_WIN)
 TEST_F(ViewTest, RemoveNotification) {
-#else
-// TODO(beng): stopped working with widget hierarchy split,
-//             http://crbug.com/82364
-TEST_F(ViewTest, DISABLED_RemoveNotification) {
-#endif
   ViewStorage* vs = ViewStorage::GetInstance();
   Widget* widget = new Widget;
   widget->Init(Widget::InitParams(Widget::InitParams::TYPE_POPUP));
@@ -784,20 +952,26 @@ class HitTestView : public View {
 
 gfx::Point ConvertPointToView(View* view, const gfx::Point& p) {
   gfx::Point tmp(p);
-  View::ConvertPointToView(view->GetWidget()->GetRootView(), view, &tmp);
+  View::ConvertPointToTarget(view->GetWidget()->GetRootView(), view, &tmp);
   return tmp;
 }
 
-void RotateCounterclockwise(ui::Transform& transform) {
-  transform.matrix().set3x3(0, -1, 0,
-                            1,  0, 0,
-                            0,  0, 1);
+gfx::Rect ConvertRectToView(View* view, const gfx::Rect& r) {
+  gfx::Rect tmp(r);
+  tmp.set_origin(ConvertPointToView(view, r.origin()));
+  return tmp;
 }
 
-void RotateClockwise(ui::Transform& transform) {
-  transform.matrix().set3x3( 0, 1, 0,
-                            -1, 0, 0,
-                             0, 0, 1);
+void RotateCounterclockwise(ui::Transform* transform) {
+  transform->matrix().set3x3(0, -1, 0,
+                             1,  0, 0,
+                             0,  0, 1);
+}
+
+void RotateClockwise(ui::Transform* transform) {
+  transform->matrix().set3x3( 0, 1, 0,
+                             -1, 0, 0,
+                              0, 0, 1);
 }
 
 }  // namespace
@@ -806,7 +980,7 @@ TEST_F(ViewTest, HitTestMasks) {
   Widget* widget = new Widget;
   widget->Init(Widget::InitParams(Widget::InitParams::TYPE_POPUP));
   View* root_view = widget->GetRootView();
-  root_view->SetBounds(0, 0, 500, 500);
+  root_view->SetBoundsRect(gfx::Rect(0, 0, 500, 500));
 
   gfx::Rect v1_bounds = gfx::Rect(0, 0, 100, 100);
   HitTestView* v1 = new HitTestView(false);
@@ -823,18 +997,167 @@ TEST_F(ViewTest, HitTestMasks) {
   gfx::Point v1_origin = v1_bounds.origin();
   gfx::Point v2_origin = v2_bounds.origin();
 
-  // Test HitTest
-  EXPECT_TRUE(v1->HitTest(ConvertPointToView(v1, v1_centerpoint)));
-  EXPECT_TRUE(v2->HitTest(ConvertPointToView(v2, v2_centerpoint)));
+  gfx::Rect r1(10, 10, 110, 15);
+  gfx::Rect r2(106, 1, 98, 98);
+  gfx::Rect r3(0, 0, 300, 300);
+  gfx::Rect r4(115, 342, 200, 10);
 
-  EXPECT_TRUE(v1->HitTest(ConvertPointToView(v1, v1_origin)));
-  EXPECT_FALSE(v2->HitTest(ConvertPointToView(v2, v2_origin)));
+  // Test HitTestPoint
+  EXPECT_TRUE(v1->HitTestPoint(ConvertPointToView(v1, v1_centerpoint)));
+  EXPECT_TRUE(v2->HitTestPoint(ConvertPointToView(v2, v2_centerpoint)));
+
+  EXPECT_TRUE(v1->HitTestPoint(ConvertPointToView(v1, v1_origin)));
+  EXPECT_FALSE(v2->HitTestPoint(ConvertPointToView(v2, v2_origin)));
+
+  // Test HitTestRect
+  EXPECT_TRUE(v1->HitTestRect(ConvertRectToView(v1, r1)));
+  EXPECT_FALSE(v2->HitTestRect(ConvertRectToView(v2, r1)));
+
+  EXPECT_FALSE(v1->HitTestRect(ConvertRectToView(v1, r2)));
+  EXPECT_TRUE(v2->HitTestRect(ConvertRectToView(v2, r2)));
+
+  EXPECT_TRUE(v1->HitTestRect(ConvertRectToView(v1, r3)));
+  EXPECT_TRUE(v2->HitTestRect(ConvertRectToView(v2, r3)));
+
+  EXPECT_FALSE(v1->HitTestRect(ConvertRectToView(v1, r4)));
+  EXPECT_FALSE(v2->HitTestRect(ConvertRectToView(v2, r4)));
 
   // Test GetEventHandlerForPoint
   EXPECT_EQ(v1, root_view->GetEventHandlerForPoint(v1_centerpoint));
   EXPECT_EQ(v2, root_view->GetEventHandlerForPoint(v2_centerpoint));
+
   EXPECT_EQ(v1, root_view->GetEventHandlerForPoint(v1_origin));
   EXPECT_EQ(root_view, root_view->GetEventHandlerForPoint(v2_origin));
+
+  widget->CloseNow();
+}
+
+TEST_F(ViewTest, NotifyEnterExitOnChild) {
+  Widget* widget = new Widget;
+  widget->Init(Widget::InitParams(Widget::InitParams::TYPE_POPUP));
+  View* root_view = widget->GetRootView();
+  root_view->SetBoundsRect(gfx::Rect(0, 0, 500, 500));
+
+  // Have this hierarchy of views (the coords here are in root coord):
+  // v1 (0, 0, 100, 100)
+  //  - v11 (0, 0, 20, 30)
+  //    - v111 (5, 5, 5, 15)
+  //  - v12 (50, 10, 30, 90)
+  //    - v121 (60, 20, 10, 10)
+  // v2 (105, 0, 100, 100)
+  //  - v21 (120, 10, 50, 20)
+
+  TestView* v1 = new TestView;
+  v1->SetBounds(0, 0, 100, 100);
+  root_view->AddChildView(v1);
+  v1->set_notify_enter_exit_on_child(true);
+
+  TestView* v11 = new TestView;
+  v11->SetBounds(0, 0, 20, 30);
+  v1->AddChildView(v11);
+
+  TestView* v111 = new TestView;
+  v111->SetBounds(5, 5, 5, 15);
+  v11->AddChildView(v111);
+
+  TestView* v12 = new TestView;
+  v12->SetBounds(50, 10, 30, 90);
+  v1->AddChildView(v12);
+
+  TestView* v121 = new TestView;
+  v121->SetBounds(10, 10, 10, 10);
+  v12->AddChildView(v121);
+
+  TestView* v2 = new TestView;
+  v2->SetBounds(105, 0, 100, 100);
+  root_view->AddChildView(v2);
+
+  TestView* v21 = new TestView;
+  v21->SetBounds(15, 10, 50, 20);
+  v2->AddChildView(v21);
+
+  v1->Reset();
+  v11->Reset();
+  v111->Reset();
+  v12->Reset();
+  v121->Reset();
+  v2->Reset();
+  v21->Reset();
+
+  // Move the mouse in v111.
+  gfx::Point p1(6, 6);
+  ui::MouseEvent move1(ui::ET_MOUSE_MOVED, p1, p1, 0);
+  root_view->OnMouseMoved(move1);
+  EXPECT_TRUE(v111->received_mouse_enter_);
+  EXPECT_FALSE(v11->last_mouse_event_type_);
+  EXPECT_TRUE(v1->received_mouse_enter_);
+
+  v111->Reset();
+  v1->Reset();
+
+  // Now, move into v121.
+  gfx::Point p2(65, 21);
+  ui::MouseEvent move2(ui::ET_MOUSE_MOVED, p2, p2, 0);
+  root_view->OnMouseMoved(move2);
+  EXPECT_TRUE(v111->received_mouse_exit_);
+  EXPECT_TRUE(v121->received_mouse_enter_);
+  EXPECT_FALSE(v1->last_mouse_event_type_);
+
+  v111->Reset();
+  v121->Reset();
+
+  // Now, move into v11.
+  gfx::Point p3(1, 1);
+  ui::MouseEvent move3(ui::ET_MOUSE_MOVED, p3, p3, 0);
+  root_view->OnMouseMoved(move3);
+  EXPECT_TRUE(v121->received_mouse_exit_);
+  EXPECT_TRUE(v11->received_mouse_enter_);
+  EXPECT_FALSE(v1->last_mouse_event_type_);
+
+  v121->Reset();
+  v11->Reset();
+
+  // Move to v21.
+  gfx::Point p4(121, 15);
+  ui::MouseEvent move4(ui::ET_MOUSE_MOVED, p4, p4, 0);
+  root_view->OnMouseMoved(move4);
+  EXPECT_TRUE(v21->received_mouse_enter_);
+  EXPECT_FALSE(v2->last_mouse_event_type_);
+  EXPECT_TRUE(v11->received_mouse_exit_);
+  EXPECT_TRUE(v1->received_mouse_exit_);
+
+  v21->Reset();
+  v11->Reset();
+  v1->Reset();
+
+  // Move to v1.
+  gfx::Point p5(21, 0);
+  ui::MouseEvent move5(ui::ET_MOUSE_MOVED, p5, p5, 0);
+  root_view->OnMouseMoved(move5);
+  EXPECT_TRUE(v21->received_mouse_exit_);
+  EXPECT_TRUE(v1->received_mouse_enter_);
+
+  v21->Reset();
+  v1->Reset();
+
+  // Now, move into v11.
+  gfx::Point p6(15, 15);
+  ui::MouseEvent mouse6(ui::ET_MOUSE_MOVED, p6, p6, 0);
+  root_view->OnMouseMoved(mouse6);
+  EXPECT_TRUE(v11->received_mouse_enter_);
+  EXPECT_FALSE(v1->last_mouse_event_type_);
+
+  v11->Reset();
+  v1->Reset();
+
+  // Move back into v1. Although |v1| had already received an ENTER for mouse6,
+  // and the mouse remains inside |v1| the whole time, it receives another ENTER
+  // when the mouse leaves v11.
+  gfx::Point p7(21, 0);
+  ui::MouseEvent mouse7(ui::ET_MOUSE_MOVED, p7, p7, 0);
+  root_view->OnMouseMoved(mouse7);
+  EXPECT_TRUE(v11->received_mouse_exit_);
+  EXPECT_FALSE(v1->received_mouse_enter_);
 
   widget->CloseNow();
 }
@@ -844,8 +1167,6 @@ TEST_F(ViewTest, Textfield) {
                                       "believing it, doesn't go away.");
   const string16 kExtraText = ASCIIToUTF16("Pretty deep, Philip!");
   const string16 kEmptyString;
-
-  ui::Clipboard clipboard;
 
   Widget* widget = new Widget;
   Widget::InitParams params(Widget::InitParams::TYPE_POPUP);
@@ -867,7 +1188,7 @@ TEST_F(ViewTest, Textfield) {
   // Test selection related methods.
   textfield->SetText(kText);
   EXPECT_EQ(kEmptyString, textfield->GetSelectedText());
-  textfield->SelectAll();
+  textfield->SelectAll(false);
   EXPECT_EQ(kText, textfield->text());
   textfield->ClearSelection();
   EXPECT_EQ(kEmptyString, textfield->GetSelectedText());
@@ -883,7 +1204,7 @@ TEST_F(ViewTest, TextfieldCutCopyPaste) {
   const string16 kReadOnlyText = ASCIIToUTF16("Read only");
   const string16 kPasswordText = ASCIIToUTF16("Password! ** Secret stuff **");
 
-  ui::Clipboard clipboard;
+  ui::Clipboard* clipboard = ui::Clipboard::GetForCurrentThread();
 
   Widget* widget = new Widget;
   Widget::InitParams params(Widget::InitParams::TYPE_POPUP);
@@ -908,27 +1229,27 @@ TEST_F(ViewTest, TextfieldCutCopyPaste) {
   // Test cut.
   //
   ASSERT_TRUE(normal->GetTestingHandle());
-  normal->SelectAll();
+  normal->SelectAll(false);
   ::SendMessage(normal->GetTestingHandle(), WM_CUT, 0, 0);
 
   string16 result;
-  clipboard.ReadText(ui::Clipboard::BUFFER_STANDARD, &result);
+  clipboard->ReadText(ui::Clipboard::BUFFER_STANDARD, &result);
   EXPECT_EQ(kNormalText, result);
   normal->SetText(kNormalText);  // Let's revert to the original content.
 
   ASSERT_TRUE(read_only->GetTestingHandle());
-  read_only->SelectAll();
+  read_only->SelectAll(false);
   ::SendMessage(read_only->GetTestingHandle(), WM_CUT, 0, 0);
   result.clear();
-  clipboard.ReadText(ui::Clipboard::BUFFER_STANDARD, &result);
+  clipboard->ReadText(ui::Clipboard::BUFFER_STANDARD, &result);
   // Cut should have failed, so the clipboard content should not have changed.
   EXPECT_EQ(kNormalText, result);
 
   ASSERT_TRUE(password->GetTestingHandle());
-  password->SelectAll();
+  password->SelectAll(false);
   ::SendMessage(password->GetTestingHandle(), WM_CUT, 0, 0);
   result.clear();
-  clipboard.ReadText(ui::Clipboard::BUFFER_STANDARD, &result);
+  clipboard->ReadText(ui::Clipboard::BUFFER_STANDARD, &result);
   // Cut should have failed, so the clipboard content should not have changed.
   EXPECT_EQ(kNormalText, result);
 
@@ -938,22 +1259,22 @@ TEST_F(ViewTest, TextfieldCutCopyPaste) {
 
   // Let's start with read_only as the clipboard already contains the content
   // of normal.
-  read_only->SelectAll();
+  read_only->SelectAll(false);
   ::SendMessage(read_only->GetTestingHandle(), WM_COPY, 0, 0);
   result.clear();
-  clipboard.ReadText(ui::Clipboard::BUFFER_STANDARD, &result);
+  clipboard->ReadText(ui::Clipboard::BUFFER_STANDARD, &result);
   EXPECT_EQ(kReadOnlyText, result);
 
-  normal->SelectAll();
+  normal->SelectAll(false);
   ::SendMessage(normal->GetTestingHandle(), WM_COPY, 0, 0);
   result.clear();
-  clipboard.ReadText(ui::Clipboard::BUFFER_STANDARD, &result);
+  clipboard->ReadText(ui::Clipboard::BUFFER_STANDARD, &result);
   EXPECT_EQ(kNormalText, result);
 
-  password->SelectAll();
+  password->SelectAll(false);
   ::SendMessage(password->GetTestingHandle(), WM_COPY, 0, 0);
   result.clear();
-  clipboard.ReadText(ui::Clipboard::BUFFER_STANDARD, &result);
+  clipboard->ReadText(ui::Clipboard::BUFFER_STANDARD, &result);
   // We don't let you copy from an obscured field, clipboard should not have
   // changed.
   EXPECT_EQ(kNormalText, result);
@@ -966,22 +1287,22 @@ TEST_F(ViewTest, TextfieldCutCopyPaste) {
   // WM_KEYDOWN messages that we are not simulating here.
 
   // Attempting to copy kNormalText in a read-only text-field should fail.
-  read_only->SelectAll();
+  read_only->SelectAll(false);
   ::SendMessage(read_only->GetTestingHandle(), WM_KEYDOWN, 0, 0);
   wchar_t buffer[1024] = { 0 };
   ::GetWindowText(read_only->GetTestingHandle(), buffer, 1024);
   EXPECT_EQ(kReadOnlyText, string16(buffer));
 
-  password->SelectAll();
+  password->SelectAll(false);
   ::SendMessage(password->GetTestingHandle(), WM_PASTE, 0, 0);
   ::GetWindowText(password->GetTestingHandle(), buffer, 1024);
   EXPECT_EQ(kNormalText, string16(buffer));
 
   // Copy from read_only so the string we are pasting is not the same as the
   // current one.
-  read_only->SelectAll();
+  read_only->SelectAll(false);
   ::SendMessage(read_only->GetTestingHandle(), WM_COPY, 0, 0);
-  normal->SelectAll();
+  normal->SelectAll(false);
   ::SendMessage(normal->GetTestingHandle(), WM_PASTE, 0, 0);
   ::GetWindowText(normal->GetTestingHandle(), buffer, 1024);
   EXPECT_EQ(kReadOnlyText, string16(buffer));
@@ -1000,7 +1321,7 @@ bool TestView::AcceleratorPressed(const ui::Accelerator& accelerator) {
 #if defined(OS_WIN) && !defined(USE_AURA)
 TEST_F(ViewTest, ActivateAccelerator) {
   // Register a keyboard accelerator before the view is added to a window.
-  ui::Accelerator return_accelerator(ui::VKEY_RETURN, false, false, false);
+  ui::Accelerator return_accelerator(ui::VKEY_RETURN, ui::EF_NONE);
   TestView* view = new TestView();
   view->Reset();
   view->AddAccelerator(return_accelerator);
@@ -1025,7 +1346,7 @@ TEST_F(ViewTest, ActivateAccelerator) {
   EXPECT_EQ(view->accelerator_count_map_[return_accelerator], 1);
 
   // Hit the escape key. Nothing should happen.
-  ui::Accelerator escape_accelerator(ui::VKEY_ESCAPE, false, false, false);
+  ui::Accelerator escape_accelerator(ui::VKEY_ESCAPE, ui::EF_NONE);
   EXPECT_FALSE(focus_manager->ProcessAccelerator(escape_accelerator));
   EXPECT_EQ(view->accelerator_count_map_[return_accelerator], 1);
   EXPECT_EQ(view->accelerator_count_map_[escape_accelerator], 0);
@@ -1066,7 +1387,7 @@ TEST_F(ViewTest, ActivateAccelerator) {
 
 #if defined(OS_WIN) && !defined(USE_AURA)
 TEST_F(ViewTest, HiddenViewWithAccelerator) {
-  ui::Accelerator return_accelerator(ui::VKEY_RETURN, false, false, false);
+  ui::Accelerator return_accelerator(ui::VKEY_RETURN, ui::EF_NONE);
   TestView* view = new TestView();
   view->Reset();
   view->AddAccelerator(return_accelerator);
@@ -1096,7 +1417,7 @@ TEST_F(ViewTest, HiddenViewWithAccelerator) {
 
 #if defined(OS_WIN) && !defined(USE_AURA)
 TEST_F(ViewTest, ViewInHiddenWidgetWithAccelerator) {
-  ui::Accelerator return_accelerator(ui::VKEY_RETURN, false, false, false);
+  ui::Accelerator return_accelerator(ui::VKEY_RETURN, ui::EF_NONE);
   TestView* view = new TestView();
   view->Reset();
   view->AddAccelerator(return_accelerator);
@@ -1230,6 +1551,7 @@ class MockMenuModel : public ui::MenuModel {
   MOCK_CONST_METHOD1(GetFirstItemIndex, int(gfx::NativeMenu native_menu));
   MOCK_CONST_METHOD0(GetItemCount, int());
   MOCK_CONST_METHOD1(GetTypeAt, ItemType(int index));
+  MOCK_CONST_METHOD1(GetSeparatorTypeAt, ui::MenuSeparatorType(int index));
   MOCK_CONST_METHOD1(GetCommandIdAt, int(int index));
   MOCK_CONST_METHOD1(GetLabelAt, string16(int index));
   MOCK_CONST_METHOD1(IsItemDynamicAt, bool(int index));
@@ -1238,7 +1560,7 @@ class MockMenuModel : public ui::MenuModel {
       ui::Accelerator* accelerator));
   MOCK_CONST_METHOD1(IsItemCheckedAt, bool(int index));
   MOCK_CONST_METHOD1(GetGroupIdAt, int(int index));
-  MOCK_METHOD2(GetIconAt, bool(int index, SkBitmap* icon));
+  MOCK_METHOD2(GetIconAt, bool(int index, gfx::Image* icon));
   MOCK_CONST_METHOD1(GetButtonMenuItemAt, ui::ButtonMenuItemModel*(int index));
   MOCK_CONST_METHOD1(IsEnabledAt, bool(int index));
   MOCK_CONST_METHOD1(IsVisibleAt, bool(int index));
@@ -1317,7 +1639,7 @@ class TestDialog : public DialogDelegate, public ButtonListener {
   }
 
   // ButtonListener implementation.
-  virtual void ButtonPressed(Button* sender, const Event& event) OVERRIDE {
+  virtual void ButtonPressed(Button* sender, const ui::Event& event) OVERRIDE {
     last_pressed_button_ = sender;
   }
 
@@ -1390,7 +1712,7 @@ class DefaultButtonTest : public ViewTest {
   }
 
   void SimulatePressingEnterAndCheckDefaultButton(ButtonID button_id) {
-    KeyEvent event(ui::ET_KEY_PRESSED, ui::VKEY_RETURN, 0);
+    ui::KeyEvent event(ui::ET_KEY_PRESSED, ui::VKEY_RETURN, 0);
     focus_manager_->OnKeyEvent(event);
     switch (button_id) {
       case OK:
@@ -1482,12 +1804,12 @@ class ButtonDropDownTest : public ViewTest {
 
   virtual void SetUp() OVERRIDE {
     ViewTest::SetUp();
-    test_dialog_ = new TestDialog(&mock_menu_model_);
+    test_dialog_ = new TestDialog(new MockMenuModel());
     Widget* window =
         Widget::CreateWindowWithBounds(test_dialog_, gfx::Rect(0, 0, 100, 100));
     test_dialog_->widget_ = window;
     window->Show();
-    test_dialog_->button_drop_->SetBounds(0, 0, 100, 100);
+    test_dialog_->button_drop_->SetBoundsRect(gfx::Rect(0, 0, 100, 100));
     // We have to cast the button back into a View in order to invoke it's
     // OnMouseReleased method.
     button_as_view_ = static_cast<View*>(test_dialog_->button_drop_);
@@ -1499,7 +1821,6 @@ class ButtonDropDownTest : public ViewTest {
   }
 
   TestDialog* test_dialog_;
-  MockMenuModel mock_menu_model_;
   // This is owned by test_dialog_.
   View* button_as_view_;
 
@@ -1510,9 +1831,11 @@ class ButtonDropDownTest : public ViewTest {
 // Ensure that regular clicks on the drop down button still work. (i.e. - the
 // click events are processed and the listener gets the click)
 TEST_F(ButtonDropDownTest, RegularClickTest) {
-  MouseEvent press_event(ui::ET_MOUSE_PRESSED, 1, 1, ui::EF_LEFT_MOUSE_BUTTON);
-  MouseEvent release_event(ui::ET_MOUSE_RELEASED, 1, 1,
-                           ui::EF_LEFT_MOUSE_BUTTON);
+  gfx::Point point(1, 1);
+  ui::MouseEvent press_event(ui::ET_MOUSE_PRESSED, point, point,
+                             ui::EF_LEFT_MOUSE_BUTTON);
+  ui::MouseEvent release_event(ui::ET_MOUSE_RELEASED, point, point,
+                               ui::EF_LEFT_MOUSE_BUTTON);
   button_as_view_->OnMousePressed(press_event);
   button_as_view_->OnMouseReleased(release_event);
   EXPECT_EQ(test_dialog_->last_pressed_button_, test_dialog_->button_drop_);
@@ -1703,10 +2026,10 @@ class TransformPaintView : public TestView {
 
 TEST_F(ViewTest, TransformPaint) {
   TransformPaintView* v1 = new TransformPaintView();
-  v1->SetBounds(0, 0, 500, 300);
+  v1->SetBoundsRect(gfx::Rect(0, 0, 500, 300));
 
   TestView* v2 = new TestView();
-  v2->SetBounds(100, 100, 200, 100);
+  v2->SetBoundsRect(gfx::Rect(100, 100, 200, 100));
 
   Widget* widget = new Widget;
   Widget::InitParams params(Widget::InitParams::TYPE_POPUP);
@@ -1726,7 +2049,7 @@ TEST_F(ViewTest, TransformPaint) {
 
   // Rotate |v1| counter-clockwise.
   ui::Transform transform;
-  RotateCounterclockwise(transform);
+  RotateCounterclockwise(&transform);
   transform.SetTranslateY(500.0f);
   v1->SetTransform(transform);
 
@@ -1742,10 +2065,10 @@ TEST_F(ViewTest, TransformPaint) {
 
 TEST_F(ViewTest, TransformEvent) {
   TestView* v1 = new TestView();
-  v1->SetBounds(0, 0, 500, 300);
+  v1->SetBoundsRect(gfx::Rect(0, 0, 500, 300));
 
   TestView* v2 = new TestView();
-  v2->SetBounds(100, 100, 200, 100);
+  v2->SetBoundsRect(gfx::Rect(100, 100, 200, 100));
 
   Widget* widget = new Widget;
   Widget::InitParams params(Widget::InitParams::TYPE_POPUP);
@@ -1760,7 +2083,7 @@ TEST_F(ViewTest, TransformEvent) {
 
   // Rotate |v1| counter-clockwise.
   ui::Transform transform(v1->GetTransform());
-  RotateCounterclockwise(transform);
+  RotateCounterclockwise(&transform);
   transform.SetTranslateY(500.0f);
   v1->SetTransform(transform);
 
@@ -1768,21 +2091,21 @@ TEST_F(ViewTest, TransformEvent) {
   v1->Reset();
   v2->Reset();
 
-  MouseEvent pressed(ui::ET_MOUSE_PRESSED,
-                     110, 210,
-                     ui::EF_LEFT_MOUSE_BUTTON);
+  gfx::Point p1(110, 210);
+  ui::MouseEvent pressed(ui::ET_MOUSE_PRESSED, p1, p1,
+                         ui::EF_LEFT_MOUSE_BUTTON);
   root->OnMousePressed(pressed);
   EXPECT_EQ(0, v1->last_mouse_event_type_);
   EXPECT_EQ(ui::ET_MOUSE_PRESSED, v2->last_mouse_event_type_);
   EXPECT_EQ(190, v2->location_.x());
   EXPECT_EQ(10, v2->location_.y());
 
-  MouseEvent released(ui::ET_MOUSE_RELEASED, 0, 0, 0);
+  ui::MouseEvent released(ui::ET_MOUSE_RELEASED, gfx::Point(), gfx::Point(), 0);
   root->OnMouseReleased(released);
 
   // Now rotate |v2| inside |v1| clockwise.
   transform = v2->GetTransform();
-  RotateClockwise(transform);
+  RotateClockwise(&transform);
   transform.SetTranslateX(100.0f);
   v2->SetTransform(transform);
 
@@ -1792,9 +2115,9 @@ TEST_F(ViewTest, TransformEvent) {
   v1->Reset();
   v2->Reset();
 
-  MouseEvent p2(ui::ET_MOUSE_PRESSED,
-                110, 320,
-                ui::EF_LEFT_MOUSE_BUTTON);
+  gfx::Point point2(110, 320);
+  ui::MouseEvent p2(ui::ET_MOUSE_PRESSED, point2, point2,
+                    ui::EF_LEFT_MOUSE_BUTTON);
   root->OnMousePressed(p2);
   EXPECT_EQ(0, v1->last_mouse_event_type_);
   EXPECT_EQ(ui::ET_MOUSE_PRESSED, v2->last_mouse_event_type_);
@@ -1807,12 +2130,12 @@ TEST_F(ViewTest, TransformEvent) {
   v2->SetTransform(ui::Transform());
 
   TestView* v3 = new TestView();
-  v3->SetBounds(10, 10, 20, 30);
+  v3->SetBoundsRect(gfx::Rect(10, 10, 20, 30));
   v2->AddChildView(v3);
 
   // Rotate |v3| clockwise with respect to |v2|.
   transform = v1->GetTransform();
-  RotateClockwise(transform);
+  RotateClockwise(&transform);
   transform.SetTranslateX(30.0f);
   v3->SetTransform(transform);
 
@@ -1827,9 +2150,9 @@ TEST_F(ViewTest, TransformEvent) {
   v2->Reset();
   v3->Reset();
 
-  MouseEvent p3(ui::ET_MOUSE_PRESSED,
-                112, 110,
-                ui::EF_LEFT_MOUSE_BUTTON);
+  gfx::Point point(112, 110);
+  ui::MouseEvent p3(ui::ET_MOUSE_PRESSED, point, point,
+                    ui::EF_LEFT_MOUSE_BUTTON);
   root->OnMousePressed(p3);
 
   EXPECT_EQ(ui::ET_MOUSE_PRESSED, v3->last_mouse_event_type_);
@@ -1848,7 +2171,7 @@ TEST_F(ViewTest, TransformEvent) {
 
   // Rotate |v3| clockwise with respect to |v2|, and scale it along both axis.
   transform = v3->GetTransform();
-  RotateClockwise(transform);
+  RotateClockwise(&transform);
   transform.SetTranslateX(30.0f);
   // Rotation sets some scaling transformation. Using SetScale would overwrite
   // that and pollute the rotation. So combine the scaling with the existing
@@ -1863,9 +2186,9 @@ TEST_F(ViewTest, TransformEvent) {
 
   // |v3| now occupies (120, 120) to (144, 130) in |root|.
 
-  MouseEvent p4(ui::ET_MOUSE_PRESSED,
-                124, 125,
-                ui::EF_LEFT_MOUSE_BUTTON);
+  gfx::Point point3(124, 125);
+  ui::MouseEvent p4(ui::ET_MOUSE_PRESSED, point3, point3,
+                    ui::EF_LEFT_MOUSE_BUTTON);
   root->OnMousePressed(p4);
 
   EXPECT_EQ(ui::ET_MOUSE_PRESSED, v3->last_mouse_event_type_);
@@ -1892,16 +2215,16 @@ TEST_F(ViewTest, TransformVisibleBound) {
   View* contents = new View;
   viewport->AddChildView(contents);
   viewport->SetBoundsRect(viewport_bounds);
-  contents->SetBounds(0, 0, 100, 200);
+  contents->SetBoundsRect(gfx::Rect(0, 0, 100, 200));
 
   View* child = new View;
   contents->AddChildView(child);
-  child->SetBounds(10, 90, 50, 50);
+  child->SetBoundsRect(gfx::Rect(10, 90, 50, 50));
   EXPECT_EQ(gfx::Rect(0, 0, 50, 10), child->GetVisibleBounds());
 
   // Rotate |child| counter-clockwise
   ui::Transform transform;
-  RotateCounterclockwise(transform);
+  RotateCounterclockwise(&transform);
   transform.SetTranslateY(50.0f);
   child->SetTransform(transform);
   EXPECT_EQ(gfx::Rect(40, 0, 10, 50), child->GetVisibleBounds());
@@ -1951,13 +2274,13 @@ TEST_F(ViewTest, OnVisibleBoundsChanged) {
   View* contents = new View;
   viewport->AddChildView(contents);
   viewport->SetBoundsRect(viewport_bounds);
-  contents->SetBounds(0, 0, 100, 200);
+  contents->SetBoundsRect(gfx::Rect(0, 0, 100, 200));
 
   // Create a view that cares about visible bounds notifications, and position
   // it just outside the visible bounds of the viewport.
   VisibleBoundsView* child = new VisibleBoundsView;
   contents->AddChildView(child);
-  child->SetBounds(10, 110, 50, 50);
+  child->SetBoundsRect(gfx::Rect(10, 110, 50, 50));
 
   // The child bound should be fully clipped.
   EXPECT_TRUE(child->GetVisibleBounds().IsEmpty());
@@ -1988,13 +2311,13 @@ TEST_F(ViewTest, SetBoundsPaint) {
   TestView top_view;
   TestView* child_view = new TestView;
 
-  top_view.SetBounds(0, 0, 100, 100);
+  top_view.SetBoundsRect(gfx::Rect(0, 0, 100, 100));
   top_view.scheduled_paint_rects_.clear();
-  child_view->SetBounds(10, 10, 20, 20);
+  child_view->SetBoundsRect(gfx::Rect(10, 10, 20, 20));
   top_view.AddChildView(child_view);
 
   top_view.scheduled_paint_rects_.clear();
-  child_view->SetBounds(30, 30, 20, 20);
+  child_view->SetBoundsRect(gfx::Rect(30, 30, 20, 20));
   EXPECT_EQ(2U, top_view.scheduled_paint_rects_.size());
 
   // There should be 2 rects, spanning from (10, 10) to (50, 50).
@@ -2013,14 +2336,14 @@ TEST_F(ViewTest, ConvertPointToViewWithTransform) {
   top_view.AddChildView(child);
   child->AddChildView(child_child);
 
-  top_view.SetBounds(0, 0, 1000, 1000);
+  top_view.SetBoundsRect(gfx::Rect(0, 0, 1000, 1000));
 
-  child->SetBounds(7, 19, 500, 500);
+  child->SetBoundsRect(gfx::Rect(7, 19, 500, 500));
   ui::Transform transform;
   transform.SetScale(3.0f, 4.0f);
   child->SetTransform(transform);
 
-  child_child->SetBounds(17, 13, 100, 100);
+  child_child->SetBoundsRect(gfx::Rect(17, 13, 100, 100));
   transform = ui::Transform();
   transform.SetScale(5.0f, 7.0f);
   child_child->SetTransform(transform);
@@ -2067,12 +2390,12 @@ TEST_F(ViewTest, ConvertPointToViewWithTransform) {
   // Conversions from child->top and top->child.
   {
     gfx::Point point(5, 5);
-    View::ConvertPointToView(child, &top_view, &point);
+    View::ConvertPointToTarget(child, &top_view, &point);
     EXPECT_EQ(22, point.x());
     EXPECT_EQ(39, point.y());
 
     point.SetPoint(22, 39);
-    View::ConvertPointToView(&top_view, child, &point);
+    View::ConvertPointToTarget(&top_view, child, &point);
     EXPECT_EQ(5, point.x());
     EXPECT_EQ(5, point.y());
   }
@@ -2080,12 +2403,12 @@ TEST_F(ViewTest, ConvertPointToViewWithTransform) {
   // Conversions from child_child->top and top->child_child.
   {
     gfx::Point point(5, 5);
-    View::ConvertPointToView(child_child, &top_view, &point);
+    View::ConvertPointToTarget(child_child, &top_view, &point);
     EXPECT_EQ(133, point.x());
     EXPECT_EQ(211, point.y());
 
     point.SetPoint(133, 211);
-    View::ConvertPointToView(&top_view, child_child, &point);
+    View::ConvertPointToTarget(&top_view, child_child, &point);
     EXPECT_EQ(5, point.x());
     EXPECT_EQ(5, point.y());
   }
@@ -2093,12 +2416,12 @@ TEST_F(ViewTest, ConvertPointToViewWithTransform) {
   // Conversions from child_child->child and child->child_child
   {
     gfx::Point point(5, 5);
-    View::ConvertPointToView(child_child, child, &point);
+    View::ConvertPointToTarget(child_child, child, &point);
     EXPECT_EQ(42, point.x());
     EXPECT_EQ(48, point.y());
 
     point.SetPoint(42, 48);
-    View::ConvertPointToView(child, child_child, &point);
+    View::ConvertPointToTarget(child, child_child, &point);
     EXPECT_EQ(5, point.x());
     EXPECT_EQ(5, point.y());
   }
@@ -2107,7 +2430,7 @@ TEST_F(ViewTest, ConvertPointToViewWithTransform) {
   // This ensures we don't round up with negative numbers.
   {
     gfx::Point point(6, 18);
-    View::ConvertPointToView(&top_view, child, &point);
+    View::ConvertPointToTarget(&top_view, child, &point);
     EXPECT_EQ(-1, point.x());
     EXPECT_EQ(-1, point.y());
   }
@@ -2127,8 +2450,8 @@ TEST_F(ViewTest, ConvertRectWithTransform) {
   root->AddChildView(v1);
   v1->AddChildView(v2);
 
-  v1->SetBounds(10, 10, 500, 500);
-  v2->SetBounds(20, 20, 100, 200);
+  v1->SetBoundsRect(gfx::Rect(10, 10, 500, 500));
+  v2->SetBoundsRect(gfx::Rect(20, 20, 100, 200));
 
   // |v2| now occupies (30, 30) to (130, 230) in |widget|
   gfx::Rect rect(5, 5, 15, 40);
@@ -2137,7 +2460,7 @@ TEST_F(ViewTest, ConvertRectWithTransform) {
 
   // Rotate |v2|
   ui::Transform t2;
-  RotateCounterclockwise(t2);
+  RotateCounterclockwise(&t2);
   t2.SetTranslateY(100.0f);
   v2->SetTransform(t2);
 
@@ -2550,6 +2873,9 @@ class TestLayerAnimator : public ui::LayerAnimator {
   // LayerAnimator.
   virtual void SetBounds(const gfx::Rect& bounds) OVERRIDE;
 
+ protected:
+  ~TestLayerAnimator() { }
+
  private:
   gfx::Rect last_bounds_;
 
@@ -2597,7 +2923,6 @@ class ViewLayerTest : public ViewsTestBase {
   virtual void TearDown() OVERRIDE {
     View::set_use_acceleration_when_possible(old_use_acceleration_);
     widget_->CloseNow();
-    Widget::SetPureViews(false);
     ViewsTestBase::TearDown();
   }
 
@@ -2622,7 +2947,7 @@ TEST_F(ViewLayerTest, LayerToggling) {
   View* v1 = new View;
   v1->SetPaintToLayer(true);
   EXPECT_TRUE(v1->layer() != NULL);
-  v1->SetBounds(20, 30, 140, 150);
+  v1->SetBoundsRect(gfx::Rect(20, 30, 140, 150));
   content_view->AddChildView(v1);
   ASSERT_TRUE(v1->layer() != NULL);
   EXPECT_EQ(root_layer, v1->layer()->parent());
@@ -2632,7 +2957,7 @@ TEST_F(ViewLayerTest, LayerToggling) {
   View* v2 = new View;
   v1->AddChildView(v2);
   EXPECT_TRUE(v2->layer() == NULL);
-  v2->SetBounds(10, 20, 30, 40);
+  v2->SetBoundsRect(gfx::Rect(10, 20, 30, 40));
   v2->SetPaintToLayer(true);
   ASSERT_TRUE(v2->layer() != NULL);
   EXPECT_EQ(v1->layer(), v2->layer()->parent());
@@ -2673,7 +2998,7 @@ TEST_F(ViewLayerTest, NestedLayerToggling) {
   // Create v1, give it a bounds and verify everything is set up correctly.
   View* v1 = new View;
   content_view->AddChildView(v1);
-  v1->SetBounds(20, 30, 140, 150);
+  v1->SetBoundsRect(gfx::Rect(20, 30, 140, 150));
 
   View* v2 = new View;
   v1->AddChildView(v2);
@@ -2716,10 +3041,10 @@ TEST_F(ViewLayerTest, BoundsChangeWithLayer) {
 
   View* v1 = new View;
   content_view->AddChildView(v1);
-  v1->SetBounds(20, 30, 140, 150);
+  v1->SetBoundsRect(gfx::Rect(20, 30, 140, 150));
 
   View* v2 = new View;
-  v2->SetBounds(10, 11, 40, 50);
+  v2->SetBoundsRect(gfx::Rect(10, 11, 40, 50));
   v1->AddChildView(v2);
   v2->SetPaintToLayer(true);
   ASSERT_TRUE(v2->layer() != NULL);
@@ -2737,8 +3062,67 @@ TEST_F(ViewLayerTest, BoundsChangeWithLayer) {
   EXPECT_EQ(gfx::Rect(31, 42, 40, 50), v2->layer()->bounds());
 
   v2->SetVisible(false);
-  v2->SetBounds(10, 11, 20, 30);
+  v2->SetBoundsRect(gfx::Rect(10, 11, 20, 30));
   EXPECT_EQ(gfx::Rect(30, 41, 20, 30), v2->layer()->bounds());
+}
+
+// Make sure layers are positioned correctly in RTL.
+TEST_F(ViewLayerTest, BoundInRTL) {
+  std::string locale = l10n_util::GetApplicationLocale(std::string());
+  base::i18n::SetICUDefaultLocale("he");
+
+  View* view = new View;
+  widget()->SetContentsView(view);
+
+  int content_width = view->width();
+
+  // |v1| is initially not attached to anything. So its layer will have the same
+  // bounds as the view.
+  View* v1 = new View;
+  v1->SetPaintToLayer(true);
+  v1->SetBounds(10, 10, 20, 10);
+  EXPECT_EQ(gfx::Rect(10, 10, 20, 10),
+            v1->layer()->bounds());
+
+  // Once |v1| is attached to the widget, its layer will get RTL-appropriate
+  // bounds.
+  view->AddChildView(v1);
+  EXPECT_EQ(gfx::Rect(content_width - 30, 10, 20, 10),
+            v1->layer()->bounds());
+  gfx::Rect l1bounds = v1->layer()->bounds();
+
+  // Now attach a View to the widget first, then create a layer for it. Make
+  // sure the bounds are correct.
+  View* v2 = new View;
+  v2->SetBounds(50, 10, 30, 10);
+  EXPECT_FALSE(v2->layer());
+  view->AddChildView(v2);
+  v2->SetPaintToLayer(true);
+  EXPECT_EQ(gfx::Rect(content_width - 80, 10, 30, 10),
+            v2->layer()->bounds());
+  gfx::Rect l2bounds = v2->layer()->bounds();
+
+  view->SetPaintToLayer(true);
+  EXPECT_EQ(l1bounds, v1->layer()->bounds());
+  EXPECT_EQ(l2bounds, v2->layer()->bounds());
+
+  // Move one of the views. Make sure the layer is positioned correctly
+  // afterwards.
+  v1->SetBounds(v1->x() - 5, v1->y(), v1->width(), v1->height());
+  l1bounds.set_x(l1bounds.x() + 5);
+  EXPECT_EQ(l1bounds, v1->layer()->bounds());
+
+  view->SetPaintToLayer(false);
+  EXPECT_EQ(l1bounds, v1->layer()->bounds());
+  EXPECT_EQ(l2bounds, v2->layer()->bounds());
+
+  // Move a view again.
+  v2->SetBounds(v2->x() + 5, v2->y(), v2->width(), v2->height());
+  l2bounds.set_x(l2bounds.x() - 5);
+  EXPECT_EQ(l2bounds, v2->layer()->bounds());
+
+  // Reset locale.
+  base::i18n::SetICUDefaultLocale(locale);
 }
 
 // Makes sure a transform persists after toggling the visibility.
@@ -2828,11 +3212,14 @@ TEST_F(ViewLayerTest, OrphanLayerAfterViewRemove) {
   EXPECT_TRUE(v2->layer()->IsDrawn());
 
   content_view->RemoveChildView(v1);
+
   EXPECT_FALSE(LayerIsAncestor(widget()->GetCompositor()->root_layer(),
                                v2->layer()));
 
   // Reparent |v2|.
   content_view->AddChildView(v2);
+  delete v1;
+  v1 = NULL;
   EXPECT_TRUE(LayerIsAncestor(widget()->GetCompositor()->root_layer(),
                               v2->layer()));
   EXPECT_TRUE(v2->layer()->IsDrawn());
@@ -2927,7 +3314,7 @@ TEST_F(ViewLayerTest, VisibilityChildLayers) {
 // This test creates a random View tree, and then randomly reorders child views,
 // reparents views etc. Unrelated changes can appear to break this test. So
 // marking this as FLAKY.
-TEST_F(ViewLayerTest, FLAKY_ViewLayerTreesInSync) {
+TEST_F(ViewLayerTest, DISABLED_ViewLayerTreesInSync) {
   View* content = new View;
   content->SetPaintToLayer(true);
   widget()->SetContentsView(content);
@@ -2968,6 +3355,36 @@ TEST_F(ViewLayerTest, ReorderUnderWidget) {
   content->ReorderChildView(c1, -1);
   EXPECT_EQ(c1->layer(), parent_layer->children()[1]);
   EXPECT_EQ(c2->layer(), parent_layer->children()[0]);
+}
+
+// Verifies that the layer of a view can be acquired properly.
+TEST_F(ViewLayerTest, AcquireLayer) {
+  View* content = new View;
+  widget()->SetContentsView(content);
+  scoped_ptr<View> c1(new View);
+  c1->SetPaintToLayer(true);
+  EXPECT_TRUE(c1->layer());
+  content->AddChildView(c1.get());
+
+  scoped_ptr<ui::Layer> layer(c1->AcquireLayer());
+  EXPECT_EQ(layer.get(), c1->layer());
+
+  scoped_ptr<ui::Layer> layer2(c1->RecreateLayer());
+  EXPECT_NE(c1->layer(), layer2.get());
+
+  // Destroy view before destroying layer.
+  c1.reset();
+}
+
+// Verify that new layer scales content only if the old layer does.
+TEST_F(ViewLayerTest, RecreateLayer) {
+  scoped_ptr<View> v(new View());
+  v->SetPaintToLayer(true);
+  // Set to non default value.
+  v->layer()->set_scale_content(false);
+  scoped_ptr<ui::Layer> old_layer(v->RecreateLayer());
+  ui::Layer* new_layer = v->layer();
+  EXPECT_FALSE(new_layer->scale_content());
 }
 
 #endif  // USE_AURA

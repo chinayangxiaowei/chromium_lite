@@ -1,6 +1,7 @@
 <div id="content-settings-page" class="page" hidden>
+  <div class="close-button"></div>
   <h1 i18n-content="contentSettingsPage"></h1>
-  <div class="displaytable">
+  <div class="content-area">
     <!-- Cookie filter tab contents -->
     <section>
       <h3 i18n-content="cookies_tab_label"></h3>
@@ -29,7 +30,9 @@
             <span i18n-content="cookies_block_3rd_party"></span>
           </label>
         </div>
-        <div class="checkbox">
+        <!-- TODO(jochen): remove the div with the clear cookies on exit option
+                           once this has shipped. -->
+        <div class="checkbox" guest-visibility="disabled" hidden>
           <label>
             <input id="clear-cookies-on-exit"
                 pref="profile.clear_site_data_on_exit" type="checkbox">
@@ -39,10 +42,12 @@
                 class="clear-plugin-lso-data-disabled"></span>
           </label>
         </div>
-        <button class="exceptions-list-button" contentType="cookies"
-            i18n-content="manage_exceptions"></button>
-        <button id="show-cookies-button"
-            i18n-content="cookies_show_cookies"></button>
+        <div class="settings-row">
+          <button class="exceptions-list-button" contentType="cookies"
+              i18n-content="manageExceptions"></button>
+          <button id="show-cookies-button"
+              i18n-content="cookies_show_cookies"></button>
+        </div>
      </div>
     </section>
     <!-- Image filter -->
@@ -61,8 +66,10 @@
             <span i18n-content="images_block"></span>
           </label>
         </div>
-        <button class="exceptions-list-button" contentType="images"
-            i18n-content="manage_exceptions"></button>
+        <div class="settings-row">
+          <button class="exceptions-list-button" contentType="images"
+              i18n-content="manageExceptions"></button>
+        </div>
       </div>
     </section>
     <!-- JavaScript filter -->
@@ -81,34 +88,36 @@
             <span i18n-content="javascript_block"></span>
           </label>
         </div>
-        <button class="exceptions-list-button" contentType="javascript"
-            i18n-content="manage_exceptions"></button>
+        <div class="settings-row">
+          <button class="exceptions-list-button" contentType="javascript"
+              i18n-content="manageExceptions"></button>
+        </div>
       </div>
     </section>
     <!-- Handlers settings -->
-    <if expr="pp_ifdef('enable_register_protocol_handler')">
-      <section id="handlers-section">
-        <h3 i18n-content="handlers_tab_label"></h3>
-        <div>
-          <div class="radio">
-            <label>
-              <input type="radio" name="handlers" value="allow"
-                  class="handler-radio">
-              <span i18n-content="handlers_allow"></span>
-            </label>
-          </div>
-          <div class="radio">
-            <label>
-              <input type="radio" name="handlers" value="block"
-                  class="handler-radio">
-              <span i18n-content="handlers_block"></span>
-            </label>
-          </div>
+    <section id="handlers-section">
+      <h3 i18n-content="handlers_tab_label"></h3>
+      <div>
+        <div class="radio">
+          <label>
+            <input type="radio" name="handlers" value="allow"
+                class="handler-radio">
+            <span i18n-content="handlers_allow"></span>
+          </label>
+        </div>
+        <div class="radio">
+          <label>
+            <input type="radio" name="handlers" value="block"
+                class="handler-radio">
+            <span i18n-content="handlers_block"></span>
+          </label>
+        </div>
+        <div class="settings-row">
           <button id="manage-handlers-button" contentType="handlers"
               i18n-content="manage_handlers"></button>
         </div>
-      </section>
-    </if>
+      </div>
+    </section>
     <!-- Plug-ins filter -->
     <section>
       <h3 i18n-content="plugins_tab_label"></h3>
@@ -131,10 +140,12 @@
             <span i18n-content="plugins_block"></span>
           </label>
         </div>
-        <button class="exceptions-list-button" contentType="plugins"
-            i18n-content="manage_exceptions"></button>
+        <div class="settings-row">
+          <button class="exceptions-list-button" contentType="plugins"
+              i18n-content="manageExceptions"></button>
+        </div>
         <div id="disable-plugins-container">
-          <a href="about:plugins" i18n-content="disableIndividualPlugins"
+          <a href="chrome://plugins" i18n-content="disableIndividualPlugins"
               target="_blank"></a>
         </div>
       </div>
@@ -155,8 +166,10 @@
             <span i18n-content="popups_block"></span>
           </label>
         </div>
-        <button class="exceptions-list-button" contentType="popups"
-            i18n-content="manage_exceptions"></button>
+        <div class="settings-row">
+          <button class="exceptions-list-button" contentType="popups"
+              i18n-content="manageExceptions"></button>
+        </div>
       </div>
     </section>
     <!-- Location filter -->
@@ -181,8 +194,10 @@
             <span i18n-content="location_block"></span>
           </label>
         </div>
-        <button class="exceptions-list-button" contentType="location"
-            i18n-content="manage_exceptions"></button>
+        <div class="settings-row">
+          <button class="exceptions-list-button" contentType="location"
+              i18n-content="manageExceptions"></button>
+        </div>
       </div>
     </section>
     <!-- Notifications filter tab contents -->
@@ -207,16 +222,18 @@
             <span i18n-content="notifications_block"></span>
           </label>
         </div>
-        <button class="exceptions-list-button" contentType="notifications"
-            i18n-content="manage_exceptions"></button>
+        <div class="settings-row">
+          <button class="exceptions-list-button" contentType="notifications"
+              i18n-content="manageExceptions"></button>
+        </div>
       </div>
     </section>
     <!-- Fullscreen filter -->
     <section>
       <h3 i18n-content="fullscreen_tab_label"></h3>
-      <div>
+      <div class="settings-row">
         <button class="exceptions-list-button" contentType="fullscreen"
-            i18n-content="manage_exceptions"></button>
+            i18n-content="manageExceptions"></button>
       </div>
     </section>
     <!-- Mouse Lock filter -->
@@ -241,39 +258,123 @@
             <span i18n-content="mouselock_block"></span>
           </label>
         </div>
-        <button class="exceptions-list-button" contentType="mouselock"
-            i18n-content="manage_exceptions"></button>
+        <div class="settings-row">
+          <button class="exceptions-list-button" contentType="mouselock"
+              i18n-content="manageExceptions"></button>
+        </div>
       </div>
     </section>
-    <!-- Intent registration filter tab contents -->
-    <if expr="pp_ifdef('enable_web_intents')">
-      <section id="intents-section">
-      <h3 i18n-content="intentsTabLabel" class="content-settings-header"></h3>
-        <div>
-          <div class="radio">
-            <label>
-              <input type="radio" name="intents" value="allow">
-              <span i18n-content="intentsAllow"></span>
-            </label>
-          </div>
-          <div class="radio">
-            <label>
-              <input type="radio" name="intents" value="ask">
-              <span i18n-content="intentsAsk"></span>
-            </label>
-          </div>
-          <div class="radio">
-            <label>
-              <input type="radio" name="intents" value="block">
-              <span i18n-content="intentsBlock"></span>
-            </label>
-          </div>
-          <button class="exceptions-list-button" contentType="intents"
-              i18n-content="manage_exceptions"></button>
-          <button id="manage-intents-button" contentType="intents"
-              i18n-content="manageIntents"></button>
+    <!-- Intent registration filter -->
+    <section>
+      <h3 i18n-content="webIntentsTabLabel" class="content-settings-header">
+      </h3>
+      <div class="checkbox">
+        <label>
+          <input pref="webintents.enabled" type="checkbox">
+          <span i18n-content="allowWebIntents"></span>
+        </label>
+      </div>
+    </section>
+    <!-- Pepper Flash camera and microphone filter -->
+    <section id="pepper-flash-cameramic-section" class="pepper-flash-settings">
+      <h3 i18n-content="pepperFlashCameramicTabLabel"></h3>
+      <div>
+        <div class="radio">
+          <label>
+            <input type="radio" name="pepper-flash-cameramic" value="ask">
+            <span i18n-content="pepperFlashCameramicAsk"></span>
+          </label>
         </div>
-      </section>
-    </if>
+        <div class="radio">
+          <label>
+            <input type="radio" name="pepper-flash-cameramic" value="block">
+            <span i18n-content="pepperFlashCameramicBlock"></span>
+          </label>
+        </div>
+        <div class="settings-row">
+          <button class="exceptions-list-button"
+              contentType="pepper-flash-cameramic"
+              i18n-content="manageExceptions"></button>
+        </div>
+      </div>
+    </section>
+<if expr="pp_ifdef('chromeos')">
+    <!-- Protected Content filter -->
+    <section guest-visibility="disabled">
+      <h3 i18n-content="protectedContentTabLabel"
+          class="content-settings-header"></h3>
+      <div>
+        <div class="settings-row">
+          <span i18n-content="protectedContentInfo"></span>
+        </div>
+        <div class="checkbox">
+          <label>
+            <input pref="settings.privacy.drm_enabled" type="checkbox">
+            <span i18n-content="protectedContentEnable"></span>
+          </label>
+        </div>
+      </div>
+    </section>
+</if>
+    <!-- Media Stream capture device filter -->
+    <section>
+      <h3 i18n-content="mediaStreamTabLabel"></h3>
+      <div>
+        <div class="radio">
+          <label>
+            <input type="radio" name="media-stream" value="ask">
+            <span i18n-content="mediaStreamAsk"></span>
+          </label>
+        </div>
+        <div class="radio">
+          <label>
+            <input type="radio" name="media-stream" value="block">
+            <span i18n-content="mediaStreamBlock"></span>
+          </label>
+        </div>
+        <div class="settings-row">
+          <button class="exceptions-list-button" contentType="media-stream"
+              i18n-content="manageExceptions"></button>
+        </div>
+      </div>
+    </section>
+    <!-- PPAPI broker -->
+    <section hidden>
+      <h3 i18n-content="ppapiBrokerTabLabel"></h3>
+      <div>
+        <div class="radio">
+          <label>
+            <input type="radio" name="ppapi-broker" value="allow">
+            <span i18n-content="ppapi_broker_allow"></span>
+          </label>
+        </div>
+        <div class="radio">
+          <label>
+            <input type="radio" name="ppapi-broker" value="ask">
+            <span i18n-content="ppapi_broker_ask"></span>
+          </label>
+        </div>
+        <div class="radio">
+          <label>
+            <input type="radio" name="ppapi-broker" value="block">
+            <span i18n-content="ppapi_broker_block"></span>
+          </label>
+        </div>
+        <button class="exceptions-list-button" contentType="ppapi-broker"
+            i18n-content="manageExceptions"></button>
+      </div>
+    </section>
+    <section id="media-galleries-section" hidden>
+      <h3 i18n-content="mediaGalleriesSectionLabel"></h3>
+      <div class="settings-row">
+        <button id="manage-galleries-button"
+            i18n-content="manageGalleriesButton"></button>
+      </div>
+    </section>
+  </div>
+  <div class="action-area">
+    <div class="button-strip">
+      <button id="content-settings-overlay-confirm" i18n-content="ok"></button>
+    </div>
   </div>
 </div>

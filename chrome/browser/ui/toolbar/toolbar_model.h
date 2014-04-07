@@ -1,17 +1,18 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CHROME_BROWSER_UI_TOOLBAR_TOOLBAR_MODEL_H_
 #define CHROME_BROWSER_UI_TOOLBAR_TOOLBAR_MODEL_H_
-#pragma once
 
 #include <string>
 
 #include "base/basictypes.h"
 #include "base/string16.h"
+#include "googleurl/src/gurl.h"
 
-class Browser;
+class Profile;
+class ToolbarModelDelegate;
 
 namespace content {
 class NavigationController;
@@ -39,11 +40,24 @@ class ToolbarModel {
     NUM_SECURITY_LEVELS,
   };
 
-  explicit ToolbarModel(Browser* browser);
+  explicit ToolbarModel(ToolbarModelDelegate* delegate);
   ~ToolbarModel();
 
-  // Returns the text that should be displayed in the location bar.
-  string16 GetText() const;
+  // Returns the text for the current page's URL. This will have been formatted
+  // for display to the user:
+  //   - Some characters may be unescaped.
+  //   - The scheme and/or trailing slash may be dropped.
+  //   - if |display_search_urls_as_search_terms| is true, the query will be
+  //   extracted from search URLs for the user's default search engine and those
+  //   will be displayed in place of the URL.
+  string16 GetText(bool display_search_urls_as_search_terms) const;
+
+  // Returns the URL of the current navigation entry.
+  GURL GetURL() const;
+
+  // Returns true if a call to GetText(true) would successfully replace the URL
+  // with search terms.
+  bool WouldReplaceSearchURLWithSearchTerms() const;
 
   // Returns the security level that the toolbar should display.
   SecurityLevel GetSecurityLevel() const;
@@ -75,7 +89,15 @@ class ToolbarModel {
   // If this returns NULL, default values are used.
   content::NavigationController* GetNavigationController() const;
 
-  Browser* browser_;
+  // Attempt to extract search terms from |url|. Called by GetText if
+  // |display_search_urls_as_search_terms| is true and by
+  // WouldReplaceSearchURLWithSearchTerms.
+  string16 TryToExtractSearchTermsFromURL(const GURL& url) const;
+
+  // Helper method to extract the profile from the navigation controller.
+  Profile* GetProfile() const;
+
+  ToolbarModelDelegate* delegate_;
 
   // Whether the text in the location bar is currently being edited.
   bool input_in_progress_;

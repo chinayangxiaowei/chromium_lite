@@ -2,8 +2,7 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-function runTests() {
-  var getURL = chrome.extension.getURL;
+onload = function() {
   var URL_LOAD =
       "http://127.0.0.1:PORT/files/extensions/api_test/webnavigation/targetBlank/a.html";
   var URL_TARGET =
@@ -25,12 +24,14 @@ function runTests() {
             { label: "a-onBeforeNavigate",
               event: "onBeforeNavigate",
               details: { frameId: 0,
+                         processId: 0,
                          tabId: 0,
                          timeStamp: 0,
                          url: URL_LOAD }},
             { label: "a-onCommitted",
               event: "onCommitted",
               details: { frameId: 0,
+                         processId: 0,
                          tabId: 0,
                          timeStamp: 0,
                          transitionQualifiers: [],
@@ -39,18 +40,21 @@ function runTests() {
             { label: "a-onDOMContentLoaded",
               event: "onDOMContentLoaded",
               details: { frameId: 0,
+                         processId: 0,
                          tabId: 0,
                          timeStamp: 0,
                          url: URL_LOAD }},
             { label: "a-onCompleted",
               event: "onCompleted",
               details: { frameId: 0,
+                         processId: 0,
                          tabId: 0,
                          timeStamp: 0,
                          url: URL_LOAD }},
             { label: "b-onCreatedNavigationTarget",
               event: "onCreatedNavigationTarget",
               details: { sourceFrameId: 0,
+                         sourceProcessId: 0,
                          sourceTabId: 0,
                          tabId: 1,
                          timeStamp: 0,
@@ -58,12 +62,14 @@ function runTests() {
             { label: "b-onBeforeNavigate",
               event: "onBeforeNavigate",
               details: { frameId: 0,
+                         processId: 0,
                          tabId: 1,
                          timeStamp: 0,
                          url: URL_TARGET }},
             { label: "b-onCommitted",
               event: "onCommitted",
               details: { frameId: 0,
+                         processId: 0,
                          tabId: 1,
                          timeStamp: 0,
                          transitionQualifiers: [],
@@ -72,12 +78,14 @@ function runTests() {
             { label: "b-onDOMContentLoaded",
               event: "onDOMContentLoaded",
               details: { frameId: 0,
+                         processId: 0,
                          tabId: 1,
                          timeStamp: 0,
                          url: URL_TARGET }},
             { label: "b-onCompleted",
               event: "onCompleted",
               details: { frameId: 0,
+                         processId: 0,
                          tabId: 1,
                          timeStamp: 0,
                          url: URL_TARGET }}],
@@ -93,4 +101,4 @@ function runTests() {
       ]);
     });
   });
-}
+};

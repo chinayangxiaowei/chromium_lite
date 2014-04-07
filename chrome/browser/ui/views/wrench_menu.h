@@ -1,10 +1,9 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CHROME_BROWSER_UI_VIEWS_WRENCH_MENU_H_
 #define CHROME_BROWSER_UI_VIEWS_WRENCH_MENU_H_
-#pragma once
 
 #include <map>
 #include <utility>
@@ -39,10 +38,13 @@ class WrenchMenu : public views::MenuDelegate,
   // Shows the menu relative to the specified view.
   void RunMenu(views::MenuButton* host);
 
+  // Whether the menu is currently visible to the user.
+  bool IsShowing();
+
   // MenuDelegate overrides:
   virtual string16 GetTooltipText(int id, const gfx::Point& p) const OVERRIDE;
   virtual bool IsTriggerableEvent(views::MenuItemView* menu,
-                                  const views::MouseEvent& e) OVERRIDE;
+                                  const ui::Event& e) OVERRIDE;
   virtual bool GetDropFormats(
       views::MenuItemView* menu,
       int* formats,
@@ -51,11 +53,11 @@ class WrenchMenu : public views::MenuDelegate,
   virtual bool CanDrop(views::MenuItemView* menu,
                        const ui::OSExchangeData& data) OVERRIDE;
   virtual int GetDropOperation(views::MenuItemView* item,
-                               const views::DropTargetEvent& event,
+                               const ui::DropTargetEvent& event,
                                DropPosition* position) OVERRIDE;
   virtual int OnPerformDrop(views::MenuItemView* menu,
                             DropPosition position,
-                            const views::DropTargetEvent& event) OVERRIDE;
+                            const ui::DropTargetEvent& event) OVERRIDE;
   virtual bool ShowContextMenu(views::MenuItemView* source,
                                int id,
                                const gfx::Point& p,
@@ -70,6 +72,7 @@ class WrenchMenu : public views::MenuDelegate,
   virtual void ExecuteCommand(int id, int mouse_event_flags) OVERRIDE;
   virtual bool GetAccelerator(int id, ui::Accelerator* accelerator) OVERRIDE;
   virtual void WillShowMenu(views::MenuItemView* menu) OVERRIDE;
+  virtual void WillHideMenu(views::MenuItemView* menu) OVERRIDE;
 
   // BaseBookmarkModelObserver overrides:
   virtual void BookmarkModelChanged() OVERRIDE;
@@ -95,11 +98,14 @@ class WrenchMenu : public views::MenuDelegate,
 
   // Adds a new menu to |parent| to represent the MenuModel/index pair passed
   // in.
+  // Fur button containing menu items a |height| override can be specified with
+  // a number bigger then 0.
   views::MenuItemView* AppendMenuItem(views::MenuItemView* parent,
                                       ui::MenuModel* model,
                                       int index,
                                       ui::MenuModel::ItemType menu_type,
-                                      int* next_id);
+                                      int* next_id,
+                                      int height);
 
   // Invoked from the cut/copy/paste menus. Cancels the current active menu and
   // activates the menu item in |model| at |index|.
@@ -138,6 +144,9 @@ class WrenchMenu : public views::MenuDelegate,
 
   // Menu corresponding to IDC_BOOKMARKS_MENU.
   views::MenuItemView* bookmark_menu_;
+
+  // Menu corresponding to IDC_FEEDBACK.
+  views::MenuItemView* feedback_menu_item_;
 
   // ID to use for the items representing bookmarks in the bookmark menu.
   int first_bookmark_command_id_;

@@ -9,8 +9,8 @@
 #include "base/json/json_writer.h"
 #include "base/values.h"
 #include "chrome/browser/chromeos/web_socket_proxy_controller.h"
-#include "chrome/browser/extensions/extension_event_names.h"
-#include "chrome/browser/extensions/extension_event_router.h"
+#include "chrome/browser/extensions/event_names.h"
+#include "chrome/browser/extensions/event_router.h"
 #include "chrome/browser/profiles/profile_manager.h"
 #include "chrome/browser/profiles/profile.h"
 
@@ -33,36 +33,22 @@ ExtensionInputMethodEventRouter::~ExtensionInputMethodEventRouter() {
 
 void ExtensionInputMethodEventRouter::InputMethodChanged(
     input_method::InputMethodManager *manager,
-    const input_method::InputMethodDescriptor &current_input_method,
-    size_t num_active_input_methods) {
+    bool show_message) {
   Profile *profile = ProfileManager::GetDefaultProfile();
-  ExtensionEventRouter *router = profile->GetExtensionEventRouter();
+  extensions::EventRouter *router = profile->GetExtensionEventRouter();
 
-  if (!router->HasEventListener(extension_event_names::kOnInputMethodChanged))
+  if (!router->HasEventListener(extensions::event_names::kOnInputMethodChanged))
     return;
 
-  ListValue args;
-  StringValue *input_method_name =
-      new StringValue(GetInputMethodForXkb(current_input_method.id()));
-  args.Append(input_method_name);
-  std::string args_json;
-  base::JSONWriter::Write(&args, false, &args_json);
+  scoped_ptr<ListValue> args(new ListValue());
+  StringValue *input_method_name = new StringValue(
+      GetInputMethodForXkb(manager->GetCurrentInputMethod().id()));
+  args->Append(input_method_name);
 
   // The router will only send the event to extensions that are listening.
   router->DispatchEventToRenderers(
-      extension_event_names::kOnInputMethodChanged,
-      args_json, profile, GURL());
-}
-
-void ExtensionInputMethodEventRouter::ActiveInputMethodsChanged(
-    input_method::InputMethodManager *manager,
-    const input_method::InputMethodDescriptor & current_input_method,
-    size_t num_active_input_methods) {
-}
-
-void ExtensionInputMethodEventRouter::PropertyListChanged(
-    input_method::InputMethodManager *manager,
-    const input_method::ImePropertyList & current_ime_properties) {
+      extensions::event_names::kOnInputMethodChanged, args.Pass(), profile,
+      GURL());
 }
 
 std::string ExtensionInputMethodEventRouter::GetInputMethodForXkb(

@@ -6,10 +6,11 @@
 
 #include <string>
 
-#include "googleurl/src/gurl.h"
+#include "base/message_loop.h"
+#include "base/time.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/skia/include/core/SkBitmap.h"
-#include "webkit/tools/test_shell/test_shell_test.h"
+#include "webkit/glue/webkitplatformsupport_impl.h"
 
 namespace {
 
@@ -39,57 +40,80 @@ TEST(WebkitGlueTest, DecodeImage) {
   image.unlockPixels();
 }
 
-class WebkitGlueUserAgentTest : public TestShellTest {
+// Derives WebKitPlatformSupportImpl for testing shared timers.
+class TestWebKitPlatformSupport
+    : public webkit_glue::WebKitPlatformSupportImpl {
+ public:
+  TestWebKitPlatformSupport() : mock_monotonically_increasing_time_(0) {
+  }
+
+  // WebKitPlatformSupportImpl implementation
+  virtual string16 GetLocalizedString(int) OVERRIDE {
+    return string16();
+  }
+
+  virtual base::StringPiece GetDataResource(int, ui::ScaleFactor) OVERRIDE {
+    return base::StringPiece();
+  }
+
+  virtual void GetPlugins(bool,
+                          std::vector<webkit::WebPluginInfo,
+                          std::allocator<webkit::WebPluginInfo> >*) OVERRIDE {
+  }
+
+  virtual webkit_glue::ResourceLoaderBridge* CreateResourceLoader(
+      const webkit_glue::ResourceLoaderBridge::RequestInfo&) OVERRIDE {
+    return NULL;
+  }
+
+  virtual webkit_glue::WebSocketStreamHandleBridge* CreateWebSocketBridge(
+      WebKit::WebSocketStreamHandle*,
+      webkit_glue::WebSocketStreamHandleDelegate*) OVERRIDE {
+    return NULL;
+  }
+
+  // Returns mock time when enabled.
+  virtual double monotonicallyIncreasingTime() OVERRIDE {
+    if (mock_monotonically_increasing_time_ > 0.0)
+      return mock_monotonically_increasing_time_;
+    return webkit_glue::WebKitPlatformSupportImpl::
+        monotonicallyIncreasingTime();
+  }
+
+  virtual void OnStartSharedTimer(base::TimeDelta delay) OVERRIDE {
+    shared_timer_delay_ = delay;
+  }
+
+  base::TimeDelta shared_timer_delay() {
+    return shared_timer_delay_;
+  }
+
+  void set_mock_monotonically_increasing_time(double mock_time) {
+    mock_monotonically_increasing_time_ = mock_time;
+  }
+
+ private:
+  base::TimeDelta shared_timer_delay_;
+  double mock_monotonically_increasing_time_;
 };
 
-bool IsSpoofedUserAgent(const std::string& user_agent) {
-  return user_agent.find("TestShell") == std::string::npos;
-}
+TEST(WebkitGlueTest, SuspendResumeSharedTimer) {
+  TestWebKitPlatformSupport platform_support;
 
-TEST_F(WebkitGlueUserAgentTest, UserAgentSpoofingHack) {
-  const char* urls[] = {
-      "http://wwww.google.com",
-      "http://www.microsoft.com/getsilverlight",
-      "http://headlines.yahoo.co.jp/videonews/",
-      "http://downloads.yahoo.co.jp/docs/silverlight/",
-      "http://gyao.yahoo.co.jp/",
-      "http://weather.yahoo.co.jp/weather/zoomradar/",
-      "http://promotion.shopping.yahoo.co.jp/"};
-#if defined(OS_MACOSX)
-  bool spoofed[] = {
-      false,
-      true,
-      true,
-      true,
-      true,
-      false,
-      false};
-#elif defined(OS_WIN)
-  bool spoofed[] = {
-      false,
-      false,
-      true,
-      false,
-      false,
-      true,
-      true};
-#else
-  bool spoofed[] = {
-      false,
-      false,
-      false,
-      false,
-      false,
-      false,
-      false};
-#endif
-
-  ASSERT_EQ(arraysize(urls), arraysize(spoofed));
-
-  for (size_t i = 0; i < arraysize(urls); i++) {
-    EXPECT_EQ(spoofed[i],
-              IsSpoofedUserAgent(webkit_glue::GetUserAgent(GURL(urls[i]))));
-  }
+  // Set a timer to fire as soon as possible.
+  platform_support.setSharedTimerFireInterval(0);
+  // Suspend timers immediately so the above timer wouldn't be fired.
+  platform_support.SuspendSharedTimer();
+  // The above timer would have posted a task which can be processed out of the
+  // message loop.
+  MessageLoop::current()->RunAllPending();
+  // Set a mock time after 1 second to simulate timers suspended for 1 second.
+  double new_time = base::Time::Now().ToDoubleT() + 1;
+  platform_support.set_mock_monotonically_increasing_time(new_time);
+  // Resume timers so that the timer set above will be set again to fire
+  // immediately.
+  platform_support.ResumeSharedTimer();
+  EXPECT_TRUE(base::TimeDelta() == platform_support.shared_timer_delay());
 }
 
 }  // namespace

@@ -10,10 +10,13 @@
 
 #import <Foundation/Foundation.h>
 
+#include <vector>
+
 namespace media {
   class VideoCaptureDeviceMac;
 }
 
+@class QTCaptureDecompressedVideoOutput;
 @class QTCaptureDeviceInput;
 @class QTCaptureSession;
 
@@ -29,11 +32,16 @@ namespace media {
   // QTKit variables.
   QTCaptureSession *captureSession_;
   QTCaptureDeviceInput *captureDeviceInput_;
+  QTCaptureDecompressedVideoOutput *captureDecompressedOutput_;
+
+  // Buffer for adjusting frames which do not fit receiver
+  // assumptions.  scoped_array<> might make more sense, if the size
+  // can be proven invariant.
+  std::vector<UInt8> adjustedFrame_;
 }
 
-// Returns an array of QTCaptureDevices.
-// TODO(mflodman) Return arrays of friendly name and unique id instead.
-+ (NSArray *)deviceNames;
+// Returns a dictionary of capture devices with friendly name and unique id.
++ (NSDictionary *)deviceNames;
 
 // Initializes the instance and registers the frame receiver.
 - (id)initWithFrameReceiver:(media::VideoCaptureDeviceMac *)frameReceiver;

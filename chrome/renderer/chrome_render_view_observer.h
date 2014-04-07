@@ -1,10 +1,9 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CHROME_RENDERER_CHROME_RENDER_VIEW_OBSERVER_H_
 #define CHROME_RENDERER_CHROME_RENDER_VIEW_OBSERVER_H_
-#pragma once
 
 #include <set>
 #include <string>
@@ -12,20 +11,25 @@
 
 #include "base/memory/linked_ptr.h"
 #include "base/memory/scoped_ptr.h"
-#include "base/memory/weak_ptr.h"
+#include "base/timer.h"
+#include "chrome/common/extensions/permissions/api_permission.h"
 #include "content/public/renderer/render_view_observer.h"
 #include "googleurl/src/gurl.h"
 #include "third_party/WebKit/Source/WebKit/chromium/public/WebPermissionClient.h"
 
 class ChromeRenderProcessObserver;
 class ContentSettingsObserver;
-class DomAutomationController;
-class ExtensionDispatcher;
 class ExternalHostBindings;
 class SkBitmap;
 class TranslateHelper;
 struct ThumbnailScore;
 class WebViewColorOverlay;
+class WebViewAnimatingOverlay;
+
+namespace extensions {
+class Dispatcher;
+class Extension;
+}
 
 namespace WebKit {
 class WebView;
@@ -36,7 +40,7 @@ class PhishingClassifierDelegate;
 }
 
 namespace webkit_glue {
-class ImageResourceFetcher;
+class MultiResolutionImageResourceFetcher;
 }
 
 // This class holds the Chrome specific parts of RenderView, and has the same
@@ -49,7 +53,7 @@ class ChromeRenderViewObserver : public content::RenderViewObserver,
       content::RenderView* render_view,
       ContentSettingsObserver* content_settings,
       ChromeRenderProcessObserver* chrome_render_process_observer,
-      ExtensionDispatcher* extension_dispatcher,
+      extensions::Dispatcher* extension_dispatcher,
       TranslateHelper* translate_helper);
   virtual ~ChromeRenderViewObserver();
 
@@ -105,6 +109,11 @@ class ChromeRenderViewObserver : public content::RenderViewObserver,
                                       bool default_value) OVERRIDE;
   virtual bool allowWriteToClipboard(WebKit::WebFrame* frame,
                                      bool default_value) OVERRIDE;
+  virtual bool allowWebComponents(const WebKit::WebDocument&, bool) OVERRIDE;
+  virtual bool allowHTMLNotifications(
+      const WebKit::WebDocument& document) OVERRIDE;
+  virtual bool allowMutationEvents(const WebKit::WebDocument&,
+                                   bool default_value) OVERRIDE;
   virtual void didNotAllowPlugins(WebKit::WebFrame* frame) OVERRIDE;
   virtual void didNotAllowScript(WebKit::WebFrame* frame) OVERRIDE;
   virtual bool allowDisplayingInsecureContent(
@@ -137,13 +146,12 @@ class ChromeRenderViewObserver : public content::RenderViewObserver,
   void OnStartFrameSniffer(const string16& frame_name);
   void OnGetFPS();
   void OnAddStrictSecurityHost(const std::string& host);
-  void OnSetAsInterstitial();
+
+  void CapturePageInfoLater(bool preliminary_capture, base::TimeDelta delay);
 
   // Captures the thumbnail and text contents for indexing for the given load
-  // ID. If the view's load ID is different than the parameter, this call is
-  // a NOP. Typically called on a timer, so the load ID may have changed in the
-  // meantime.
-  void CapturePageInfo(int load_id, bool preliminary_capture);
+  // ID.  Kicks off analysis of the captured text.
+  void CapturePageInfo(bool preliminary_capture);
 
   // Retrieves the text from the given frame contents, the page text up to the
   // maximum amount kMaxIndexChars will be placed into the given buffer.
@@ -161,17 +169,15 @@ class ChromeRenderViewObserver : public content::RenderViewObserver,
   // to get a snapshot of a tab using chrome.tabs.captureVisibleTab().
   bool CaptureSnapshot(WebKit::WebView* view, SkBitmap* snapshot);
 
-  // Exposes the DOMAutomationController object that allows JS to send
-  // information to the browser process.
-  void BindDOMAutomationController(WebKit::WebFrame* webframe);
-
   ExternalHostBindings* GetExternalHostBindings();
 
   // This callback is triggered when DownloadFavicon completes, either
   // succesfully or with a failure. See DownloadFavicon for more
   // details.
-  void DidDownloadFavicon(webkit_glue::ImageResourceFetcher* fetcher,
-                          const SkBitmap& image);
+  void DidDownloadFavicon(
+      int requested_size,
+      webkit_glue::MultiResolutionImageResourceFetcher* fetcher,
+      const std::vector<SkBitmap>& images);
 
   // Requests to download a favicon image. When done, the RenderView
   // is notified by way of DidDownloadFavicon. Returns true if the
@@ -188,12 +194,17 @@ class ChromeRenderViewObserver : public content::RenderViewObserver,
   // Determines if a host is in the strict security host set.
   bool IsStrictSecurityHost(const std::string& host);
 
+  // If |origin| corresponds to an installed extension, returns that extension.
+  // Otherwise returns NULL.
+  const extensions::Extension* GetExtension(
+      const WebKit::WebSecurityOrigin& origin) const;
+
   // Save the JavaScript to preload if a ViewMsg_WebUIJavaScript is received.
   scoped_ptr<WebUIJavaScript> webui_javascript_;
 
   // Owned by ChromeContentRendererClient and outlive us.
   ChromeRenderProcessObserver* chrome_render_process_observer_;
-  ExtensionDispatcher* extension_dispatcher_;
+  extensions::Dispatcher* extension_dispatcher_;
 
   // Have the same lifetime as us.
   ContentSettingsObserver* content_settings_;
@@ -213,23 +224,24 @@ class ChromeRenderViewObserver : public content::RenderViewObserver,
   bool allow_running_insecure_content_;
   std::set<std::string> strict_security_hosts_;
 
-  // Allows JS to access DOM automation. The JS object is only exposed when the
-  // DOM automation bindings are enabled.
-  scoped_ptr<DomAutomationController> dom_automation_controller_;
-
   // External host exposed through automation controller.
   scoped_ptr<ExternalHostBindings> external_host_bindings_;
 
-  base::WeakPtrFactory<ChromeRenderViewObserver> weak_factory_;
-
-  typedef std::vector<linked_ptr<webkit_glue::ImageResourceFetcher> >
-      ImageResourceFetcherList;
+  typedef std::vector<
+      linked_ptr<webkit_glue::MultiResolutionImageResourceFetcher> >
+    ImageResourceFetcherList;
 
   // ImageResourceFetchers schedule via DownloadImage.
   ImageResourceFetcherList image_fetchers_;
 
   // A color page overlay when visually de-emaphasized.
   scoped_ptr<WebViewColorOverlay> dimmed_color_overlay_;
+
+  // A animating page overlay when visually de-emaphasized.
+  scoped_ptr<WebViewAnimatingOverlay> dimmed_animating_overlay_;
+
+  // Used to delay calling CapturePageInfo.
+  base::Timer capture_timer_;
 
   DISALLOW_COPY_AND_ASSIGN(ChromeRenderViewObserver);
 };

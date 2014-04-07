@@ -5,8 +5,8 @@
 #include "chrome/browser/ui/views/frame/browser_root_view.h"
 
 #include "base/utf_string_conversions.h"
-#include "chrome/browser/autocomplete/autocomplete.h"
 #include "chrome/browser/autocomplete/autocomplete_classifier.h"
+#include "chrome/browser/autocomplete/autocomplete_classifier_factory.h"
 #include "chrome/browser/autocomplete/autocomplete_match.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/omnibox/location_bar.h"
@@ -56,18 +56,18 @@ bool BrowserRootView::CanDrop(const ui::OSExchangeData& data) {
   return GetPasteAndGoURL(data, NULL);
 }
 
-void BrowserRootView::OnDragEntered(const views::DropTargetEvent& event) {
+void BrowserRootView::OnDragEntered(const ui::DropTargetEvent& event) {
   if (ShouldForwardToTabStrip(event)) {
     forwarding_to_tab_strip_ = true;
-    scoped_ptr<views::DropTargetEvent> mapped_event(
+    scoped_ptr<ui::DropTargetEvent> mapped_event(
         MapEventToTabStrip(event, event.data()));
     tabstrip()->OnDragEntered(*mapped_event.get());
   }
 }
 
-int BrowserRootView::OnDragUpdated(const views::DropTargetEvent& event) {
+int BrowserRootView::OnDragUpdated(const ui::DropTargetEvent& event) {
   if (ShouldForwardToTabStrip(event)) {
-    scoped_ptr<views::DropTargetEvent> mapped_event(
+    scoped_ptr<ui::DropTargetEvent> mapped_event(
         MapEventToTabStrip(event, event.data()));
     if (!forwarding_to_tab_strip_) {
       tabstrip()->OnDragEntered(*mapped_event.get());
@@ -88,7 +88,7 @@ void BrowserRootView::OnDragExited() {
   }
 }
 
-int BrowserRootView::OnPerformDrop(const views::DropTargetEvent& event) {
+int BrowserRootView::OnPerformDrop(const ui::DropTargetEvent& event) {
   if (!forwarding_to_tab_strip_)
     return ui::DragDropTypes::DRAG_NONE;
 
@@ -109,7 +109,7 @@ int BrowserRootView::OnPerformDrop(const views::DropTargetEvent& event) {
     mapped_data.SetURL(url, string16());
   }
   forwarding_to_tab_strip_ = false;
-  scoped_ptr<views::DropTargetEvent> mapped_event(
+  scoped_ptr<ui::DropTargetEvent> mapped_event(
       MapEventToTabStrip(event, mapped_data));
   return tabstrip()->OnPerformDrop(*mapped_event);
 }
@@ -124,28 +124,27 @@ std::string BrowserRootView::GetClassName() const {
 }
 
 bool BrowserRootView::ShouldForwardToTabStrip(
-    const views::DropTargetEvent& event) {
+    const ui::DropTargetEvent& event) {
   if (!tabstrip()->visible())
     return false;
 
   // Allow the drop as long as the mouse is over the tabstrip or vertically
   // before it.
   gfx::Point tab_loc_in_host;
-  ConvertPointToView(tabstrip(), this, &tab_loc_in_host);
+  ConvertPointToTarget(tabstrip(), this, &tab_loc_in_host);
   return event.y() < tab_loc_in_host.y() + tabstrip()->height();
 }
 
-views::DropTargetEvent* BrowserRootView::MapEventToTabStrip(
-    const views::DropTargetEvent& event,
+ui::DropTargetEvent* BrowserRootView::MapEventToTabStrip(
+    const ui::DropTargetEvent& event,
     const ui::OSExchangeData& data) {
   gfx::Point tab_strip_loc(event.location());
-  ConvertPointToView(this, tabstrip(), &tab_strip_loc);
-  return new views::DropTargetEvent(data, tab_strip_loc.x(),
-                                    tab_strip_loc.y(),
-                                    event.source_operations());
+  ConvertPointToTarget(this, tabstrip(), &tab_strip_loc);
+  return new ui::DropTargetEvent(data, tab_strip_loc, tab_strip_loc,
+                                 event.source_operations());
 }
 
-AbstractTabStripView* BrowserRootView::tabstrip() const {
+TabStrip* BrowserRootView::tabstrip() const {
   return browser_view_->tabstrip();
 }
 
@@ -160,8 +159,9 @@ bool BrowserRootView::GetPasteAndGoURL(const ui::OSExchangeData& data,
   text = AutocompleteMatch::SanitizeString(text);
 
   AutocompleteMatch match;
-  browser_view_->browser()->profile()->GetAutocompleteClassifier()->Classify(
-      text, string16(), false, false, &match, NULL);
+  AutocompleteClassifierFactory::GetForProfile(
+      browser_view_->browser()->profile())->Classify(text, string16(), false,
+                                                     false, &match, NULL);
   if (!match.destination_url.is_valid())
     return false;
 

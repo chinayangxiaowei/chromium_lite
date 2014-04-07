@@ -1,20 +1,22 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/extensions/extension_devtools_bridge.h"
 
+#include "base/json/json_reader.h"
 #include "base/json/json_writer.h"
 #include "base/message_loop.h"
-#include "base/string_util.h"
 #include "base/stringprintf.h"
+#include "base/string_util.h"
 #include "base/values.h"
+#include "chrome/browser/extensions/event_router.h"
 #include "chrome/browser/extensions/extension_devtools_events.h"
 #include "chrome/browser/extensions/extension_devtools_manager.h"
-#include "chrome/browser/extensions/extension_event_router.h"
+#include "chrome/browser/extensions/extension_system.h"
 #include "chrome/browser/extensions/extension_tab_util.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/tab_contents/tab_contents_wrapper.h"
+#include "chrome/browser/ui/tab_contents/tab_contents.h"
 #include "content/public/browser/devtools_agent_host_registry.h"
 #include "content/public/browser/devtools_manager.h"
 #include "content/public/browser/web_contents.h"
@@ -32,7 +34,8 @@ ExtensionDevToolsBridge::ExtensionDevToolsBridge(int tab_id,
           ExtensionDevToolsEvents::OnPageEventNameForTab(tab_id)),
       on_tab_close_event_name_(
           ExtensionDevToolsEvents::OnTabCloseEventNameForTab(tab_id)) {
-  extension_devtools_manager_ = profile_->GetExtensionDevToolsManager();
+  extension_devtools_manager_ =
+      extensions::ExtensionSystem::Get(profile)->devtools_manager();
   DCHECK(extension_devtools_manager_.get());
 }
 
@@ -46,7 +49,7 @@ static std::string FormatDevToolsMessage(int id, const std::string& method) {
   message.Set("params", new DictionaryValue);
 
   std::string json;
-  base::JSONWriter::Write(&message, false, &json);
+  base::JSONWriter::Write(&message, &json);
   return json;
 }
 
@@ -55,7 +58,7 @@ bool ExtensionDevToolsBridge::RegisterAsDevToolsClientHost() {
 
   Browser* browser;
   TabStripModel* tab_strip;
-  TabContentsWrapper* contents;
+  TabContents* contents;
   int tab_index;
   if (ExtensionTabUtil::GetTabById(tab_id_, profile_, true,
                                    &browser, &tab_strip,
@@ -98,14 +101,16 @@ void ExtensionDevToolsBridge::UnregisterAsDevToolsClientHost() {
 
 // If the tab we are looking at is going away then we fire a closing event at
 // the extension.
-void ExtensionDevToolsBridge::InspectedTabClosing() {
+void ExtensionDevToolsBridge::InspectedContentsClosing() {
   DCHECK_EQ(MessageLoop::current()->type(), MessageLoop::TYPE_UI);
 
   // TODO(knorton): Remove this event in favor of the standard tabs.onRemoved
   // event in extensions.
-  std::string json("[{}]");
+  scoped_ptr<base::ListValue> arguments(new base::ListValue());
+  arguments->Set(0, new base::DictionaryValue());
   profile_->GetExtensionEventRouter()->DispatchEventToRenderers(
-      on_tab_close_event_name_, json, profile_, GURL());
+      on_tab_close_event_name_, arguments.Pass(), profile_, GURL(),
+      extensions::EventFilteringInfo());
 
   // This may result in this object being destroyed.
   extension_devtools_manager_->BridgeClosingForTab(tab_id_);
@@ -115,12 +120,17 @@ void ExtensionDevToolsBridge::DispatchOnInspectorFrontend(
     const std::string& data) {
   DCHECK_EQ(MessageLoop::current()->type(), MessageLoop::TYPE_UI);
 
-  std::string json = base::StringPrintf("[%s]", data.c_str());
+  scoped_ptr<base::ListValue> arguments(new base::ListValue());
+  if (!data.empty()) {
+    arguments->Append(base::JSONReader::Read(data));
+  }
+
   profile_->GetExtensionEventRouter()->DispatchEventToRenderers(
-      on_page_event_name_, json, profile_, GURL());
+      on_page_event_name_, arguments.Pass(), profile_, GURL(),
+      extensions::EventFilteringInfo());
 }
 
-void ExtensionDevToolsBridge::TabReplaced(WebContents* new_tab) {
+void ExtensionDevToolsBridge::ContentsReplaced(WebContents* new_contents) {
   // We don't update the tab id as it needs to remain the same so that we can
   // properly unregister.
 }

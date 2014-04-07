@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 //
@@ -12,13 +12,14 @@
 
 #ifndef NET_HTTP_HTTP_STREAM_H_
 #define NET_HTTP_HTTP_STREAM_H_
-#pragma once
 
 #include <string>
 
 #include "base/basictypes.h"
+#include "base/memory/scoped_ptr.h"
 #include "net/base/completion_callback.h"
 #include "net/base/net_export.h"
+#include "net/base/upload_progress.h"
 
 namespace net {
 
@@ -46,15 +47,14 @@ class NET_EXPORT_PRIVATE HttpStream {
   // Writes the headers and uploads body data to the underlying socket.
   // ERR_IO_PENDING is returned if the operation could not be completed
   // synchronously, in which case the result will be passed to the callback
-  // when available. Returns OK on success. The HttpStream takes ownership
-  // of the request_body.
+  // when available. Returns OK on success.
   virtual int SendRequest(const HttpRequestHeaders& request_headers,
-                          UploadDataStream* request_body,
+                          scoped_ptr<UploadDataStream> request_body,
                           HttpResponseInfo* response,
                           const CompletionCallback& callback) = 0;
 
   // Queries the UploadDataStream for its progress (bytes sent).
-  virtual uint64 GetUploadProgress() const = 0;
+  virtual UploadProgress GetUploadProgress() const = 0;
 
   // Reads from the underlying socket until the response headers have been
   // completely received. ERR_IO_PENDING is returned if the operation could

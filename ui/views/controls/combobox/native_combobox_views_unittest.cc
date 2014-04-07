@@ -3,6 +3,7 @@
 // found in the LICENSE file.
 
 #include "base/utf_string_conversions.h"
+#include "ui/base/events/event.h"
 #include "ui/base/keycodes/keyboard_codes.h"
 #include "ui/base/models/combobox_model.h"
 #include "ui/views/controls/combobox/combobox.h"
@@ -18,19 +19,19 @@ namespace {
 // OnKeyReleased() methods.
 class TestCombobox : public views::Combobox {
  public:
-  TestCombobox(ui::ComboboxModel* model)
+  explicit TestCombobox(ui::ComboboxModel* model)
       : Combobox(model),
         key_handled_(false),
         key_received_(false) {
   }
 
-  virtual bool OnKeyPressed(const views::KeyEvent& e) OVERRIDE {
+  virtual bool OnKeyPressed(const ui::KeyEvent& e) OVERRIDE {
     key_received_ = true;
     key_handled_ = views::Combobox::OnKeyPressed(e);
     return key_handled_;
   }
 
-  virtual bool OnKeyReleased(const views::KeyEvent& e) OVERRIDE {
+  virtual bool OnKeyReleased(const ui::KeyEvent& e) OVERRIDE {
     key_received_ = true;
     key_handled_ = views::Combobox::OnKeyReleased(e);
     return key_handled_;
@@ -50,19 +51,20 @@ class TestCombobox : public views::Combobox {
   DISALLOW_COPY_AND_ASSIGN(TestCombobox);
 };
 
-// A concrete class is needed to test the combobox
+// A concrete class is needed to test the combobox.
 class TestComboboxModel : public ui::ComboboxModel {
  public:
   TestComboboxModel() {}
   virtual ~TestComboboxModel() {}
-  virtual int GetItemCount() {
+
+  // Overridden from ui::ComboboxModel:
+  virtual int GetItemCount() const OVERRIDE {
     return 4;
   }
-  virtual string16 GetItemAt(int index) {
-    EXPECT_GE(index, 0);
-    EXPECT_LT(index, GetItemCount());
+  virtual string16 GetItemAt(int index) OVERRIDE {
     return string16();
   }
+
  private:
   DISALLOW_COPY_AND_ASSIGN(TestComboboxModel);
 };
@@ -84,11 +86,9 @@ class NativeComboboxViewsTest : public ViewsTestBase {
   // ::testing::Test:
   virtual void SetUp() {
     ViewsTestBase::SetUp();
-    Widget::SetPureViews(true);
   }
 
   virtual void TearDown() {
-    Widget::SetPureViews(false);
     if (widget_)
       widget_->Close();
     ViewsTestBase::TearDown();
@@ -124,7 +124,7 @@ class NativeComboboxViewsTest : public ViewsTestBase {
 
  protected:
   void SendKeyEvent(ui::KeyboardCode key_code) {
-    KeyEvent event(ui::ET_KEY_PRESSED, key_code, 0);
+    ui::KeyEvent event(ui::ET_KEY_PRESSED, key_code, 0);
     input_method_->DispatchKeyEvent(event);
   }
 
@@ -135,14 +135,14 @@ class NativeComboboxViewsTest : public ViewsTestBase {
   // We need widget to populate wrapper class.
   Widget* widget_;
 
-  // combobox_ will be allocated InitCombobox() and then owned by widget_.
+  // |combobox_| will be allocated InitCombobox() and then owned by |widget_|.
   TestCombobox* combobox_;
 
-  // combobox_view_ is the pointer to the pure Views interface of combobox_.
+  // |combobox_view_| is the pointer to the pure Views interface of |combobox_|.
   NativeComboboxViews* combobox_view_;
 
-  // Combobox does not take ownership of model_, which needs to be scoped.
-  scoped_ptr<ui::ComboboxModel> model_;
+  // Combobox does not take ownership of the model, hence it needs to be scoped.
+  scoped_ptr<TestComboboxModel> model_;
 
   // For testing input method related behaviors.
   MockInputMethod* input_method_;
@@ -151,16 +151,22 @@ class NativeComboboxViewsTest : public ViewsTestBase {
 TEST_F(NativeComboboxViewsTest, KeyTest) {
   InitCombobox();
   SendKeyEvent(ui::VKEY_END);
-  EXPECT_EQ(combobox_->selected_item() + 1, model_->GetItemCount());
+  EXPECT_EQ(combobox_->selected_index() + 1, model_->GetItemCount());
   SendKeyEvent(ui::VKEY_HOME);
-  EXPECT_EQ(combobox_->selected_item(), 0);
+  EXPECT_EQ(combobox_->selected_index(), 0);
   SendKeyEvent(ui::VKEY_DOWN);
   SendKeyEvent(ui::VKEY_DOWN);
-  EXPECT_EQ(combobox_->selected_item(), 2);
+  EXPECT_EQ(combobox_->selected_index(), 2);
   SendKeyEvent(ui::VKEY_RIGHT);
-  EXPECT_EQ(combobox_->selected_item(), 2);
+  EXPECT_EQ(combobox_->selected_index(), 2);
   SendKeyEvent(ui::VKEY_LEFT);
-  EXPECT_EQ(combobox_->selected_item(), 2);
+  EXPECT_EQ(combobox_->selected_index(), 2);
+  SendKeyEvent(ui::VKEY_UP);
+  EXPECT_EQ(combobox_->selected_index(), 1);
+  SendKeyEvent(ui::VKEY_PRIOR);
+  EXPECT_EQ(combobox_->selected_index(), 0);
+  SendKeyEvent(ui::VKEY_NEXT);
+  EXPECT_EQ(combobox_->selected_index(), model_->GetItemCount() - 1);
 }
 
 // Check that if a combobox is disabled before it has a native wrapper, then the

@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -24,8 +24,9 @@ const int kFirstItemIndex = 25;
 
 class MenuModelBase : public ui::MenuModel {
  public:
-  MenuModelBase(int command_id_base) : command_id_base_(command_id_base),
-                                       last_activation_(-1) {
+  explicit MenuModelBase(int command_id_base)
+      : command_id_base_(command_id_base),
+        last_activation_(-1) {
   }
 
   virtual ~MenuModelBase() {
@@ -47,6 +48,11 @@ class MenuModelBase : public ui::MenuModel {
 
   virtual ItemType GetTypeAt(int index) const OVERRIDE {
     return items_[index - GetFirstItemIndex(NULL)].type;
+  }
+
+  virtual ui::MenuSeparatorType GetSeparatorTypeAt(
+      int index) const OVERRIDE {
+    return ui::NORMAL_SEPARATOR;
   }
 
   virtual int GetCommandIdAt(int index) const OVERRIDE {
@@ -78,7 +84,7 @@ class MenuModelBase : public ui::MenuModel {
     return 0;
   }
 
-  virtual bool GetIconAt(int index, SkBitmap* icon) OVERRIDE {
+  virtual bool GetIconAt(int index, gfx::Image* icon) OVERRIDE {
     return false;
   }
 

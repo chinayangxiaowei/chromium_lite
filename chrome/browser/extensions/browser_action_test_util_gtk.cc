@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -11,12 +11,13 @@
 #include "chrome/browser/ui/gtk/extensions/extension_popup_gtk.h"
 #include "chrome/browser/ui/gtk/extensions/extension_view_gtk.h"
 #include "chrome/browser/ui/gtk/view_id_util.h"
+#include "ui/gfx/image/image.h"
 
 namespace {
 
 GtkWidget* GetButton(Browser* browser, int index) {
   GtkWidget* toolbar =
-      ViewIDUtil::GetWidget(GTK_WIDGET(browser->window()->GetNativeHandle()),
+      ViewIDUtil::GetWidget(GTK_WIDGET(browser->window()->GetNativeWindow()),
                             VIEW_ID_BROWSER_ACTION_TOOLBAR);
   GtkWidget* button = NULL;
   if (toolbar) {
@@ -34,7 +35,7 @@ GtkWidget* GetButton(Browser* browser, int index) {
 int BrowserActionTestUtil::NumberOfBrowserActions() {
   int count = -1;
   GtkWidget* toolbar =
-      ViewIDUtil::GetWidget(GTK_WIDGET(browser_->window()->GetNativeHandle()),
+      ViewIDUtil::GetWidget(GTK_WIDGET(browser_->window()->GetNativeWindow()),
                             VIEW_ID_BROWSER_ACTION_TOOLBAR);
   if (toolbar) {
     GList* children = gtk_container_get_children(GTK_CONTAINER(toolbar));
@@ -47,6 +48,16 @@ int BrowserActionTestUtil::NumberOfBrowserActions() {
 bool BrowserActionTestUtil::HasIcon(int index) {
   GtkWidget* button = GetButton(browser_, index);
   return gtk_button_get_image(GTK_BUTTON(button)) != NULL;
+}
+
+gfx::Image BrowserActionTestUtil::GetIcon(int index) {
+  GtkWidget* button = GetButton(browser_, index);
+  GtkWidget* image = gtk_button_get_image(GTK_BUTTON(button));
+  GdkPixbuf* pixbuf = gtk_image_get_pixbuf(GTK_IMAGE(image));
+  // gfx::Image takes ownership of the |pixbuf| reference. We have to increase
+  // the ref count so |pixbuf| stays around when the image object is destroyed.
+  g_object_ref(pixbuf);
+  return gfx::Image(pixbuf);
 }
 
 void BrowserActionTestUtil::Press(int index) {

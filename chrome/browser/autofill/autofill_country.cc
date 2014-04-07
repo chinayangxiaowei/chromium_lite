@@ -1,12 +1,12 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/autofill/autofill_country.h"
 
-#include <map>
 #include <stddef.h>
 #include <stdint.h>
+#include <map>
 #include <utility>
 
 #include "base/logging.h"
@@ -15,8 +15,8 @@
 #include "base/stl_util.h"
 #include "base/string_util.h"
 #include "base/utf_string_conversions.h"
-#include "chrome/browser/browser_process.h"
 #include "content/public/browser/browser_thread.h"
+#include "content/public/browser/content_browser_client.h"
 #include "grit/generated_resources.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "unicode/coll.h"
@@ -390,7 +390,7 @@ class CountryNames {
   // effect. |buffer_size| should specify the |buffer|'s size, and is updated if
   // the |buffer| is resized.
   const std::string GetSortKey(const icu::Collator& collator,
-                               const icu::UnicodeString& str,
+                               const string16& str,
                                scoped_array<uint8_t>* buffer,
                                int32_t* buffer_size) const;
 
@@ -424,7 +424,8 @@ CountryNames* CountryNames::GetInstance() {
 const std::string CountryNames::ApplicationLocale() {
   if (application_locale_.empty()) {
     DCHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
-    application_locale_ = g_browser_process->GetApplicationLocale();
+    application_locale_ =
+        content::GetContentClient()->browser()->GetApplicationLocale();
   }
 
   return application_locale_;
@@ -482,10 +483,7 @@ void CountryNames::AddLocalizedNamesForLocale(const std::string& locale) {
     return;
 
   std::map<std::string, std::string> localized_names;
-
-  icu::Locale icu_locale(locale.c_str());
   const icu::Collator* collator = GetCollatorForLocale(locale);
-
   int32_t buffer_size = 1000;
   scoped_array<uint8_t> buffer(new uint8_t[buffer_size]);
 
@@ -493,10 +491,8 @@ void CountryNames::AddLocalizedNamesForLocale(const std::string& locale) {
        it != CountryDataMap::End();
        ++it) {
     const std::string& country_code = it->first;
-
-    icu::Locale country_locale(NULL, country_code.c_str());
-    icu::UnicodeString country_name;
-    country_locale.getDisplayName(icu_locale, country_name);
+    string16 country_name = l10n_util::GetDisplayNameForCountry(country_code,
+                                                                locale);
     std::string sort_key = GetSortKey(*collator,
                                       country_name,
                                       &buffer,
@@ -521,7 +517,7 @@ const std::string CountryNames::GetCountryCodeForLocalizedName(
   int32_t buffer_size = country_name.size() * 4;
   scoped_array<uint8_t> buffer(new uint8_t[buffer_size]);
   std::string sort_key = GetSortKey(*collator,
-                                    country_name.c_str(),
+                                    country_name,
                                     &buffer,
                                     &buffer_size);
 
@@ -555,36 +551,26 @@ icu::Collator* CountryNames::GetCollatorForLocale(const std::string& locale) {
 }
 
 const std::string CountryNames::GetSortKey(const icu::Collator& collator,
-                                           const icu::UnicodeString& str,
+                                           const string16& str,
                                            scoped_array<uint8_t>* buffer,
                                            int32_t* buffer_size) const {
   DCHECK(buffer);
   DCHECK(buffer_size);
 
-  int32_t expected_size = collator.getSortKey(str, buffer->get(), *buffer_size);
+  icu::UnicodeString icu_str(str.c_str(), str.length());
+  int32_t expected_size = collator.getSortKey(icu_str, buffer->get(),
+                                              *buffer_size);
   if (expected_size > *buffer_size) {
     // If there wasn't enough space, grow the buffer and try again.
     *buffer_size = expected_size;
     buffer->reset(new uint8_t[*buffer_size]);
     DCHECK(buffer->get());
 
-    expected_size = collator.getSortKey(str, buffer->get(), *buffer_size);
+    expected_size = collator.getSortKey(icu_str, buffer->get(), *buffer_size);
     DCHECK_EQ(*buffer_size, expected_size);
   }
 
   return std::string(reinterpret_cast<const char*>(buffer->get()));
-}
-
-// Returns the country name corresponding to |country_code|, localized to the
-// |display_locale|.
-string16 GetDisplayName(const std::string& country_code,
-                        const icu::Locale& display_locale) {
-  icu::Locale country_locale(NULL, country_code.c_str());
-  icu::UnicodeString name;
-  country_locale.getDisplayName(display_locale, name);
-
-  DCHECK_GT(name.length(), 0);
-  return string16(name.getBuffer(), name.length());
 }
 
 }  // namespace
@@ -596,7 +582,7 @@ AutofillCountry::AutofillCountry(const std::string& country_code,
   const CountryData& data = result->second;
 
   country_code_ = country_code;
-  name_ = GetDisplayName(country_code, icu::Locale(locale.c_str()));
+  name_ = l10n_util::GetDisplayNameForCountry(country_code, locale);
   postal_code_label_ = l10n_util::GetStringUTF16(data.postal_code_label_id);
   state_label_ = l10n_util::GetStringUTF16(data.state_label_id);
 }

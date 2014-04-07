@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,45 +6,63 @@
 
 #include <string>
 
-#include "base/memory/scoped_ptr.h"
 #include "base/values.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 #if defined(OS_CHROMEOS)
-#include "chrome/browser/chromeos/input_method/ibus_controller.h"
-#include "chrome/browser/chromeos/input_method/input_method_manager.h"
+#include "chrome/browser/chromeos/input_method/input_method_descriptor.h"
+#include "chrome/browser/chromeos/input_method/mock_input_method_manager.h"
 #include "chrome/browser/ui/webui/options/chromeos/cros_language_options_handler.h"
-#endif  // defined(OS_CHROMEOS)
 
-#if defined(OS_CHROMEOS)
-
-using chromeos::input_method::IBusController;
 using chromeos::input_method::InputMethodDescriptor;
 using chromeos::input_method::InputMethodDescriptors;
+using chromeos::input_method::InputMethodManager;
+using chromeos::input_method::MockInputMethodManager;
 
-static InputMethodDescriptor GetDesc(IBusController* controller,
-                                     const std::string& id,
-                                     const std::string& raw_layout,
-                                     const std::string& language_code) {
-  return controller->CreateInputMethodDescriptor(id, "", raw_layout,
-                                                 language_code);
-}
+namespace {
 
-static InputMethodDescriptors CreateInputMethodDescriptors() {
-  scoped_ptr<IBusController> controller(IBusController::Create());
+class LanguageOptionsHandlerTest : public testing::Test {
+ public:
+  LanguageOptionsHandlerTest() {
+    InputMethodManager::InitializeForTesting(new MockInputMethodManager);
+  }
+  virtual ~LanguageOptionsHandlerTest() {
+    InputMethodManager::Shutdown();
+  }
 
-  InputMethodDescriptors descriptors;
-  descriptors.push_back(GetDesc(controller.get(), "xkb:us::eng", "us", "eng"));
-  descriptors.push_back(GetDesc(controller.get(), "xkb:fr::fra", "fr", "fra"));
-  descriptors.push_back(GetDesc(controller.get(), "xkb:be::fra", "be", "fr"));
-  descriptors.push_back(GetDesc(controller.get(), "mozc", "us", "ja"));
-  return descriptors;
-}
+ protected:
+  InputMethodDescriptors CreateInputMethodDescriptors() {
+    InputMethodDescriptors descriptors;
+    descriptors.push_back(GetDesc("xkb:us::eng", "us", "en-US"));
+    descriptors.push_back(GetDesc("xkb:fr::fra", "fr", "fr"));
+    descriptors.push_back(GetDesc("xkb:be::fra", "be", "fr"));
+    descriptors.push_back(GetDesc("mozc", "us", "ja"));
+    return descriptors;
+  }
 
-TEST(LanguageOptionsHandlerTest, GetInputMethodList) {
+ private:
+  InputMethodDescriptor GetDesc(const std::string& id,
+                                const std::string& raw_layout,
+                                const std::string& language_code) {
+    return InputMethodDescriptor(id,
+                                 "",  // name
+                                 raw_layout,
+                                 language_code,
+                                 false);
+  }
+};
+
+}  // namespace
+#else
+typedef testing::Test LanguageOptionsHandlerTest;
+#endif
+
+#if defined(OS_CHROMEOS)
+TEST_F(LanguageOptionsHandlerTest, GetInputMethodList) {
   InputMethodDescriptors descriptors = CreateInputMethodDescriptors();
   scoped_ptr<ListValue> list(
-      chromeos::CrosLanguageOptionsHandler::GetInputMethodList(descriptors));
+      chromeos::options::CrosLanguageOptionsHandler::GetInputMethodList(
+          descriptors));
   ASSERT_EQ(4U, list->GetSize());
 
   DictionaryValue* entry = NULL;
@@ -95,11 +113,12 @@ TEST(LanguageOptionsHandlerTest, GetInputMethodList) {
   ASSERT_TRUE(language_code_set->HasKey("ja"));
 }
 
-TEST(LanguageOptionsHandlerTest, GetLanguageList) {
+TEST_F(LanguageOptionsHandlerTest, GetLanguageList) {
   InputMethodDescriptors descriptors = CreateInputMethodDescriptors();
   scoped_ptr<ListValue> list(
-      chromeos::CrosLanguageOptionsHandler::GetLanguageList(descriptors));
-  ASSERT_EQ(8U, list->GetSize());
+      chromeos::options::CrosLanguageOptionsHandler::GetLanguageList(
+          descriptors));
+  ASSERT_EQ(9U, list->GetSize());
 
   DictionaryValue* entry = NULL;
   std::string language_code;
@@ -174,6 +193,15 @@ TEST(LanguageOptionsHandlerTest, GetLanguageList) {
   ASSERT_TRUE(entry->GetString("code", &language_code));
   ASSERT_TRUE(entry->GetString("displayName", &display_name));
   ASSERT_TRUE(entry->GetString("nativeDisplayName", &native_display_name));
+  EXPECT_EQ("ms", language_code);
+  EXPECT_EQ("Malay", display_name);
+  EXPECT_EQ("Bahasa Melayu", native_display_name);
+
+  // This comes from kExtraLanguages.
+  ASSERT_TRUE(list->GetDictionary(8, &entry));
+  ASSERT_TRUE(entry->GetString("code", &language_code));
+  ASSERT_TRUE(entry->GetString("displayName", &display_name));
+  ASSERT_TRUE(entry->GetString("nativeDisplayName", &native_display_name));
   EXPECT_EQ("es-419", language_code);
   EXPECT_EQ("Spanish (Latin America)", display_name);
   EXPECT_EQ("espa\u00F1ol (Latinoam\u00E9rica)", native_display_name);
@@ -181,9 +209,9 @@ TEST(LanguageOptionsHandlerTest, GetLanguageList) {
 #endif  // defined(OS_CHROMEOS)
 
 #if !defined(OS_MACOSX)
-TEST(LanguageOptionsHandlerTest, GetUILanguageCodeSet) {
+TEST_F(LanguageOptionsHandlerTest, GetUILanguageCodeSet) {
   scoped_ptr<DictionaryValue> dictionary(
-      LanguageOptionsHandler::GetUILanguageCodeSet());
+      options::LanguageOptionsHandler::GetUILanguageCodeSet());
   EXPECT_TRUE(dictionary->HasKey("en-US"));
   // Note that we don't test a false case, as such an expectation will
   // fail when we add support for the language.
@@ -191,8 +219,8 @@ TEST(LanguageOptionsHandlerTest, GetUILanguageCodeSet) {
 }
 #endif  // !defined(OS_MACOSX)
 
-TEST(LanguageOptionsHandlerTest, GetSpellCheckLanguageCodeSet) {
+TEST_F(LanguageOptionsHandlerTest, GetSpellCheckLanguageCodeSet) {
   scoped_ptr<DictionaryValue> dictionary(
-      LanguageOptionsHandler::GetSpellCheckLanguageCodeSet());
+      options::LanguageOptionsHandler::GetSpellCheckLanguageCodeSet());
   EXPECT_TRUE(dictionary->HasKey("en-US"));
 }

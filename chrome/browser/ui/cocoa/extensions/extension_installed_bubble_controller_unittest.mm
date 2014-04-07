@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -16,10 +16,12 @@
 #import "chrome/browser/ui/cocoa/info_bubble_window.h"
 #include "chrome/common/chrome_paths.h"
 #include "chrome/common/extensions/extension.h"
-#include "chrome/common/extensions/extension_constants.h"
+#include "chrome/common/extensions/extension_manifest_constants.h"
 #include "third_party/ocmock/gtest_support.h"
 #import "third_party/ocmock/OCMock/OCMock.h"
 #include "webkit/glue/image_decoder.h"
+
+using extensions::Extension;
 
 // ExtensionInstalledBubbleController with removePageActionPreview overridden
 // to a no-op, because pageActions are not yet hooked up in the test browser.
@@ -47,7 +49,7 @@ class ExtensionInstalledBubbleControllerTest : public CocoaProfileTest {
   virtual void SetUp() {
     CocoaProfileTest::SetUp();
     ASSERT_TRUE(browser());
-    window_ = CreateBrowserWindow()->GetNativeHandle();
+    window_ = browser()->window()->GetNativeWindow();
     icon_ = LoadTestIcon();
   }
 
@@ -98,7 +100,7 @@ class ExtensionInstalledBubbleControllerTest : public CocoaProfileTest {
 
     std::string error;
     return Extension::Create(path, Extension::INVALID, extension_input_value,
-                             Extension::STRICT_ERROR_CHECKS, &error);
+                             Extension::NO_FLAGS, &error);
   }
 
   // Required to initialize the extension installed bubble.
@@ -118,6 +120,7 @@ TEST_F(ExtensionInstalledBubbleControllerTest, PageActionTest) {
       [[ExtensionInstalledBubbleControllerForTest alloc]
           initWithParentWindow:window_
                      extension:extension_.get()
+                        bundle:NULL
                        browser:browser()
                           icon:icon_];
   EXPECT_TRUE(controller);
@@ -161,6 +164,7 @@ TEST_F(ExtensionInstalledBubbleControllerTest, BrowserActionTest) {
       [[ExtensionInstalledBubbleControllerForTest alloc]
           initWithParentWindow:window_
                      extension:extension_.get()
+                        bundle:NULL
                        browser:browser()
                           icon:icon_];
   EXPECT_TRUE(controller);
@@ -172,9 +176,10 @@ TEST_F(ExtensionInstalledBubbleControllerTest, BrowserActionTest) {
   int height = [controller calculateWindowHeight];
   // Height should equal the vertical padding + height of all messages.
   int correctHeight = 2 * extension_installed_bubble::kOuterVerticalMargin +
-      extension_installed_bubble::kInnerVerticalMargin +
+      2 * extension_installed_bubble::kInnerVerticalMargin +
       [controller getExtensionInstalledMsgFrame].size.height +
-      [controller getExtensionInstalledInfoMsgFrame].size.height;
+      [controller getExtensionInstalledInfoMsgFrame].size.height +
+      [controller getExtraInfoMsgFrame].size.height;
   EXPECT_EQ(height, correctHeight);
 
   [controller setMessageFrames:height];
@@ -182,11 +187,15 @@ TEST_F(ExtensionInstalledBubbleControllerTest, BrowserActionTest) {
   // Bottom message should start kOuterVerticalMargin pixels above window edge.
   EXPECT_EQ(msg3Frame.origin.y,
       extension_installed_bubble::kOuterVerticalMargin);
+  NSRect msg2Frame = [controller getExtraInfoMsgFrame];
+  // Pageaction message should be kInnerVerticalMargin pixels above bottom msg.
+  EXPECT_EQ(NSMinY(msg2Frame),
+            NSMaxY(msg3Frame) +
+                extension_installed_bubble::kInnerVerticalMargin);
   NSRect msg1Frame = [controller getExtensionInstalledMsgFrame];
-  // Top message should start kInnerVerticalMargin pixels above top of
-  //  extensionInstalled message, because page action message is hidden.
-  EXPECT_EQ(msg1Frame.origin.y,
-            msg3Frame.origin.y + msg3Frame.size.height +
+  // Top message should be kInnerVerticalMargin pixels above BrowserAction msg.
+  EXPECT_EQ(NSMinY(msg1Frame),
+            NSMaxY(msg2Frame) +
                 extension_installed_bubble::kInnerVerticalMargin);
 
   [controller close];
@@ -198,6 +207,7 @@ TEST_F(ExtensionInstalledBubbleControllerTest, ParentClose) {
       [[ExtensionInstalledBubbleControllerForTest alloc]
           initWithParentWindow:window_
                      extension:extension_.get()
+                        bundle:NULL
                        browser:browser()
                           icon:icon_];
   EXPECT_TRUE(controller);

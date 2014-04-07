@@ -15,6 +15,8 @@
 #include "media/audio/audio_util.h"
 #include "media/audio/win/audio_manager_win.h"
 
+namespace media {
+
 // Some general thoughts about the waveOut API which is badly documented :
 // - We use CALLBACK_EVENT mode in which XP signals events such as buffer
 //   releases.
@@ -84,27 +86,29 @@ PCMWaveOutAudioOutputStream::PCMWaveOutAudioOutputStream(
       waveout_(NULL),
       callback_(NULL),
       num_buffers_(num_buffers),
-      buffer_size_(params.GetPacketSize()),
+      buffer_size_(params.GetBytesPerBuffer()),
       volume_(1),
-      channels_(params.channels),
-      pending_bytes_(0) {
+      channels_(params.channels()),
+      pending_bytes_(0),
+      waiting_handle_(NULL),
+      audio_bus_(AudioBus::Create(params)) {
   format_.Format.wFormatTag = WAVE_FORMAT_EXTENSIBLE;
-  format_.Format.nChannels = params.channels;
-  format_.Format.nSamplesPerSec = params.sample_rate;
-  format_.Format.wBitsPerSample = params.bits_per_sample;
+  format_.Format.nChannels = params.channels();
+  format_.Format.nSamplesPerSec = params.sample_rate();
+  format_.Format.wBitsPerSample = params.bits_per_sample();
   format_.Format.cbSize = sizeof(format_) - sizeof(WAVEFORMATEX);
   // The next are computed from above.
   format_.Format.nBlockAlign = (format_.Format.nChannels *
                                 format_.Format.wBitsPerSample) / 8;
   format_.Format.nAvgBytesPerSec = format_.Format.nBlockAlign *
                                    format_.Format.nSamplesPerSec;
-  if (params.channels > kMaxChannelsToMask) {
+  if (params.channels() > kMaxChannelsToMask) {
     format_.dwChannelMask = kChannelsToMask[kMaxChannelsToMask];
   } else {
-    format_.dwChannelMask = kChannelsToMask[params.channels];
+    format_.dwChannelMask = kChannelsToMask[params.channels()];
   }
   format_.SubFormat = KSDATAFORMAT_SUBTYPE_PCM;
-  format_.Samples.wValidBitsPerSample = params.bits_per_sample;
+  format_.Samples.wValidBitsPerSample = params.bits_per_sample();
 }
 
 PCMWaveOutAudioOutputStream::~PCMWaveOutAudioOutputStream() {
@@ -184,19 +188,15 @@ void PCMWaveOutAudioOutputStream::Start(AudioSourceCallback* callback) {
   }
 
   // Start watching for buffer events.
-  {
-    HANDLE waiting_handle = NULL;
-    ::RegisterWaitForSingleObject(&waiting_handle,
-                                  buffer_event_.Get(),
-                                  &BufferCallback,
-                                  this,
-                                  INFINITE,
-                                  WT_EXECUTEDEFAULT);
-    if (!waiting_handle) {
-      HandleError(MMSYSERR_ERROR);
-      return;
-    }
-    waiting_handle_.Set(waiting_handle);
+  if (!::RegisterWaitForSingleObject(&waiting_handle_,
+                                     buffer_event_.Get(),
+                                     &BufferCallback,
+                                     this,
+                                     INFINITE,
+                                     WT_EXECUTEDEFAULT)) {
+    HandleError(MMSYSERR_ERROR);
+    waiting_handle_ = NULL;
+    return;
   }
 
   state_ = PCMA_PLAYING;
@@ -261,14 +261,13 @@ void PCMWaveOutAudioOutputStream::Stop() {
   // TODO(enal): that delays actual stopping of playback. Alternative can be
   //             to call ::waveOutReset() twice, once before
   //             ::UnregisterWaitEx() and once after.
-  HANDLE waiting_handle = waiting_handle_.Take();
-  if (waiting_handle) {
-    BOOL unregister  = ::UnregisterWaitEx(waiting_handle, INVALID_HANDLE_VALUE);
-    if (!unregister) {
+  if (waiting_handle_) {
+    if (!::UnregisterWaitEx(waiting_handle_, INVALID_HANDLE_VALUE)) {
       state_ = PCMA_PLAYING;
       HandleError(MMSYSERR_ERROR);
       return;
     }
+    waiting_handle_ = NULL;
   }
 
   // Stop playback.
@@ -343,10 +342,17 @@ void PCMWaveOutAudioOutputStream::QueueNextPacket(WAVEHDR *buffer) {
   uint32 scaled_pending_bytes = pending_bytes_ * channels_ /
                                 format_.Format.nChannels;
   // TODO(sergeyu): Specify correct hardware delay for AudioBuffersState.
-  uint32 used = callback_->OnMoreData(
-      this, reinterpret_cast<uint8*>(buffer->lpData), buffer_size_,
-      AudioBuffersState(scaled_pending_bytes, 0));
+  int frames_filled = callback_->OnMoreData(
+      audio_bus_.get(), AudioBuffersState(scaled_pending_bytes, 0));
+  uint32 used = frames_filled * audio_bus_->channels() *
+      format_.Format.wBitsPerSample / 8;
+
   if (used <= buffer_size_) {
+    // Note: If this ever changes to output raw float the data must be clipped
+    // and sanitized since it may come from an untrusted source such as NaCl.
+    audio_bus_->ToInterleaved(
+        frames_filled, format_.Format.wBitsPerSample / 8, buffer->lpData);
+
     buffer->dwBufferLength = used * format_.Format.nChannels / channels_;
     if (channels_ > 2 && format_.Format.nChannels == 2) {
       media::FoldChannels(buffer->lpData, used,
@@ -411,3 +417,5 @@ void NTAPI PCMWaveOutAudioOutputStream::BufferCallback(PVOID lpParameter,
     }
   }
 }
+
+}  // namespace media

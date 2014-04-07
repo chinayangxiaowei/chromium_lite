@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -83,6 +83,9 @@ const char* GetNameFromID(ViewID id) {
     case VIEW_ID_LOCATION_BAR:
       return "chrome-location-bar";
 
+    case VIEW_ID_ACTION_BOX_BUTTON:
+      return "chrome-action-box-button";
+
     case VIEW_ID_BROWSER_ACTION_TOOLBAR:
       return "chrome-toolbar-browser-actions-container";
 
@@ -110,7 +113,6 @@ const char* GetNameFromID(ViewID id) {
     // These are never hit because the tab container uses the delegate to
     // set its ID.
     case VIEW_ID_TAB_CONTAINER:
-    case VIEW_ID_TAB_CONTAINER_FOCUS_VIEW:
     default:
       NOTREACHED() << "If you added a new VIEW_ID, please provide "
                       "a name for the widget.";

@@ -4,33 +4,27 @@
 
 #ifndef CHROME_BROWSER_UI_INTENTS_WEB_INTENT_PICKER_MODEL_H_
 #define CHROME_BROWSER_UI_INTENTS_WEB_INTENT_PICKER_MODEL_H_
-#pragma once
 
 #include <vector>
 
+#include "base/basictypes.h"
 #include "base/string16.h"
 #include "googleurl/src/gurl.h"
 #include "ui/gfx/image/image.h"
+#include "webkit/glue/web_intent_service_data.h"
 
 class WebIntentPickerModelObserver;
-
-namespace gfx {
-class Image;
-}
 
 // Model for the WebIntentPicker.
 class WebIntentPickerModel {
  public:
-  // The intent service disposition.
-  enum Disposition {
-    DISPOSITION_WINDOW,  // Display the intent service in a new window.
-    DISPOSITION_INLINE,  // Display the intent service in the picker.
-  };
-
   // An intent service to display in the picker.
-  struct Item {
-    Item(const string16& title, const GURL& url, Disposition disposition);
-    ~Item();
+  struct InstalledService {
+    InstalledService(
+        const string16& title,
+        const GURL& url,
+        webkit_glue::WebIntentServiceData::Disposition disposition);
+    ~InstalledService();
 
     // The title of this service.
     string16 title;
@@ -42,10 +36,27 @@ class WebIntentPickerModel {
     gfx::Image favicon;
 
     // The disposition to use when displaying this service.
-    Disposition disposition;
+    webkit_glue::WebIntentServiceData::Disposition disposition;
+  };
 
-   private:
-    DISALLOW_COPY_AND_ASSIGN(Item);
+  // A suggested extension to display in the picker.
+  struct SuggestedExtension {
+    SuggestedExtension(const string16& title,
+                       const string16& id,
+                       double average_rating);
+    ~SuggestedExtension();
+
+    // The title of the intent service.
+    string16 title;
+
+    // The id of the extension that provides the intent service.
+    string16 id;
+
+    // The average rating of the extension.
+    double average_rating;
+
+    // The extension's icon.
+    gfx::Image icon;
   };
 
   WebIntentPickerModel();
@@ -55,48 +66,117 @@ class WebIntentPickerModel {
     observer_ = observer;
   }
 
-  // Add a new item with |title|, |url| and |disposition| to the picker.
-  void AddItem(const string16& title, const GURL& url, Disposition disposition);
+  const string16& action() const { return action_; }
+  void set_action(const string16& action) { action_ = action; }
 
-  // Remove an item from the picker at |index|.
-  void RemoveItemAt(size_t index);
+  const string16& type() const { return type_; }
+  void set_type(const string16& type) { type_ = type; }
 
-  // Remove all items from the picker, and resets to not displaying inline
-  // disposition.  Note that this does not clear the observer.
+  GURL default_service_url() const { return default_service_url_; }
+  void set_default_service_url(const GURL& default_url) {
+    default_service_url_ = default_url;
+  }
+
+  int64 default_service_hash() const { return default_service_hash_; }
+  void set_default_service_hash(int64 default_service_hash) {
+    default_service_hash_ = default_service_hash;
+  }
+
+  // Add a new installed service with |title|, |url| and |disposition| to the
+  // picker.
+  void AddInstalledService(
+      const string16& title,
+      const GURL& url,
+      webkit_glue::WebIntentServiceData::Disposition disposition);
+
+  // Remove an installed service from the picker at |index|.
+  void RemoveInstalledServiceAt(size_t index);
+
+  // Remove all installed services from the picker, and resets to not
+  // displaying inline disposition.  Note that this does not clear the
+  // observer.
   void Clear();
 
-  // Return the intent service item at |index|.
-  const Item& GetItemAt(size_t index) const;
+  // Return the intent service installed at |index|.
+  const InstalledService& GetInstalledServiceAt(size_t index) const;
+
+  // Return the intent service that uses |url| as its service url, or NULL.
+  const InstalledService* GetInstalledServiceWithURL(const GURL& url) const;
 
   // Return the number of intent services in the picker.
-  size_t GetItemCount() const;
+  size_t GetInstalledServiceCount() const;
 
   // Update the favicon for the intent service at |index| to |image|.
   void UpdateFaviconAt(size_t index, const gfx::Image& image);
 
-  // Set the picker to display the intent service at |index| inline.
-  void SetInlineDisposition(size_t index);
+  // Add a list of suggested extensions to the model.
+  void AddSuggestedExtensions(
+      const std::vector<SuggestedExtension>& suggestions);
+
+  // Return the suggested extension at |index|.
+  const SuggestedExtension& GetSuggestedExtensionAt(size_t index) const;
+
+  // Return the number of suggested extensions to be displayed.
+  size_t GetSuggestedExtensionCount() const;
+
+  // Return the text to use in the "Get more suggestions" link. Returns UTF8.
+  // Will return an empty string if the link should not be shown.
+  string16 GetSuggestionsLinkText() const;
+
+  // Set the icon image for the suggested extension with |id|.
+  void SetSuggestedExtensionIconWithId(const string16& id,
+                                       const gfx::Image& image);
+
+  // Set the picker to display the intent service with |url| inline.
+  void SetInlineDisposition(const GURL& url);
 
   // Returns true if the picker is currently displaying an inline service.
   bool IsInlineDisposition() const;
 
-  // Returns the index of the intent service that is being displayed inline, or
-  // std::string::npos if none.
-  size_t inline_disposition_index() const { return inline_disposition_index_; }
+  // Returns true if there is still a pending request for suggestions from CWS.
+  bool IsWaitingForSuggestions() const;
+
+  // Set the "waiting for suggestions" status to |waiting|
+  void SetWaitingForSuggestions(bool waiting);
+
+  // Returns the url of the intent service that is being displayed inline, or
+  // GURL::EmptyGURL() if none.
+  const GURL& inline_disposition_url() const { return inline_disposition_url_; }
 
  private:
-  // Delete all of |items_| and clear it.
-  void DestroyItems();
+  // Delete all elements in |installed_services_| and |suggested_extensions_|.
+  // Note that this method does not reset the observer.
+  void DestroyAll();
 
-  // A vector of all items in the picker. Each item is owned by this model.
-  std::vector<Item*> items_;
+  // A vector of all installed services in the picker. Each installed service
+  // is owned by this model.
+  std::vector<InstalledService*> installed_services_;
 
-  // The observer to send notifications to, or NULL if none.
+  // A vector of all suggested extensions in the picker.
+  std::vector<SuggestedExtension> suggested_extensions_;
+
+  // The observer to send notifications to, or NULL if none. Not owned.
   WebIntentPickerModelObserver* observer_;
 
-  // The index of the intent service that is being displayed inline, or
-  // std::string::npos if none.
-  size_t inline_disposition_index_;
+  // The url of the intent service that is being displayed inline, or
+  // GURL::EmptyGURL() if none.
+  GURL inline_disposition_url_;
+
+  // A cached copy of the action that instantiated the picker.
+  string16 action_;
+
+  // A cached copy of the type that instantiated the picker.
+  string16 type_;
+
+  // The non-empty url of the default service if the WebIntentsRegistry
+  // finds a default service matching the intent being dispatched.
+  GURL default_service_url_;
+
+  // Indicates that there are still open requests to CWS.
+  bool waiting_for_suggestions_;
+
+  // The hash context for the default service, if there is one.
+  int64 default_service_hash_;
 
   DISALLOW_COPY_AND_ASSIGN(WebIntentPickerModel);
 };

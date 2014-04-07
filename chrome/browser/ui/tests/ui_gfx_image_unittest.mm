@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -18,9 +18,10 @@ class UiGfxImageTest : public CocoaTest {
 
 TEST_F(UiGfxImageTest, CheckColor) {
   gfx::Image image(gfx::test::CreateBitmap(25, 25));
-  [image lockFocus];
+  NSImage* ns_image = image.ToNSImage();
+  [ns_image lockFocus];
   NSColor* color = NSReadPixel(NSMakePoint(10, 10));
-  [image unlockFocus];
+  [ns_image unlockFocus];
 
   // SkBitmapToNSImage returns a bitmap in the calibrated color space (sRGB),
   // while NSReadPixel returns a color in the device color space. Convert back
@@ -30,8 +31,8 @@ TEST_F(UiGfxImageTest, CheckColor) {
   CGFloat components[4] = { 0 };
   [color getComponents:components];
 
-  EXPECT_GT(components[0], 0.95);
-  EXPECT_LT(components[1], 0.05);
+  EXPECT_LT(components[0], 0.05);
+  EXPECT_GT(components[1], 0.95);
   EXPECT_LT(components[2], 0.05);
   EXPECT_GT(components[3], 0.95);
 }

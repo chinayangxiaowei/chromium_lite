@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,6 +8,8 @@
 #include <CoreServices/CoreServices.h>
 #include <mach/mach_host.h>
 #include <mach/mach_init.h>
+#include <sys/sysctl.h>
+#include <sys/types.h>
 
 #include "base/logging.h"
 #include "base/stringprintf.h"
@@ -46,13 +48,21 @@ int64 SysInfo::AmountOfPhysicalMemory() {
                          HOST_BASIC_INFO,
                          reinterpret_cast<host_info_t>(&hostinfo),
                          &count);
-  DCHECK_EQ(HOST_BASIC_INFO_COUNT, count);
   if (result != KERN_SUCCESS) {
     NOTREACHED();
     return 0;
   }
-
+  DCHECK_EQ(HOST_BASIC_INFO_COUNT, count);
   return static_cast<int64>(hostinfo.max_mem);
+}
+
+// static
+std::string SysInfo::CPUModelName() {
+  char name[256];
+  size_t len = arraysize(name);
+  if (sysctlbyname("machdep.cpu.brand_string", &name, &len, NULL, 0) == 0)
+    return name;
+  return std::string();
 }
 
 }  // namespace base

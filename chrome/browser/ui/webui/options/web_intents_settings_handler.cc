@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,11 +7,11 @@
 #include "base/bind.h"
 #include "base/utf_string_conversions.h"
 #include "base/values.h"
-#include "chrome/browser/browsing_data_appcache_helper.h"
-#include "chrome/browser/browsing_data_database_helper.h"
-#include "chrome/browser/browsing_data_file_system_helper.h"
-#include "chrome/browser/browsing_data_indexed_db_helper.h"
-#include "chrome/browser/browsing_data_local_storage_helper.h"
+#include "chrome/browser/browsing_data/browsing_data_appcache_helper.h"
+#include "chrome/browser/browsing_data/browsing_data_database_helper.h"
+#include "chrome/browser/browsing_data/browsing_data_file_system_helper.h"
+#include "chrome/browser/browsing_data/browsing_data_indexed_db_helper.h"
+#include "chrome/browser/browsing_data/browsing_data_local_storage_helper.h"
 #include "chrome/browser/intents/web_intents_registry.h"
 #include "chrome/browser/intents/web_intents_registry_factory.h"
 #include "chrome/browser/profiles/profile.h"
@@ -20,6 +20,8 @@
 #include "grit/generated_resources.h"
 #include "net/url_request/url_request_context_getter.h"
 #include "ui/base/l10n/l10n_util.h"
+
+namespace options {
 
 WebIntentsSettingsHandler::WebIntentsSettingsHandler()
     : web_intents_registry_(NULL),
@@ -124,7 +126,7 @@ void WebIntentsSettingsHandler::RemoveService(ServiceTreeNode* snode) {
     service.type = stype;  // Really need to iterate here.
   }
   service.title = snode->ServiceName();
-  web_intents_registry_->UnregisterIntentProvider(service);
+  web_intents_registry_->UnregisterIntentService(service);
   delete intents_tree_model_->Remove(snode->parent(), snode);
 }
 
@@ -158,3 +160,5 @@ void WebIntentsSettingsHandler::SendChildren(WebIntentsTreeNode* parent) {
 
   web_ui()->CallJavascriptFunction("IntentsView.loadChildren", args);
 }
+
+}  // namespace options

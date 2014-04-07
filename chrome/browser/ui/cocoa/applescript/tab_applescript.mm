@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -13,14 +13,14 @@
 #include "base/sys_string_conversions.h"
 #include "base/utf_string_conversions.h"
 #include "chrome/browser/printing/print_view_manager.h"
-#include "chrome/browser/sessions/restore_tab_helper.h"
 #include "chrome/browser/sessions/session_id.h"
+#include "chrome/browser/sessions/session_tab_helper.h"
 #include "chrome/browser/ui/cocoa/applescript/error_applescript.h"
-#include "chrome/browser/ui/tab_contents/tab_contents_wrapper.h"
+#include "chrome/browser/ui/tab_contents/tab_contents.h"
 #include "chrome/common/url_constants.h"
-#include "content/browser/renderer_host/render_view_host.h"
 #include "content/public/browser/navigation_controller.h"
 #include "content/public/browser/navigation_entry.h"
+#include "content/public/browser/render_view_host.h"
 #include "content/public/browser/save_page_type.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/browser/web_contents_delegate.h"
@@ -29,6 +29,7 @@
 using content::NavigationController;
 using content::NavigationEntry;
 using content::OpenURLParams;
+using content::RenderViewHost;
 using content::Referrer;
 using content::WebContents;
 
@@ -153,7 +154,7 @@ static NSAppleEventDescriptor* valueToDescriptor(Value* value) {
   [super dealloc];
 }
 
-- (id)initWithTabContent:(TabContentsWrapper*)aTabContent {
+- (id)initWithTabContent:(TabContents*)aTabContent {
   if (!aTabContent) {
     [self release];
     return nil;
@@ -164,23 +165,25 @@ static NSAppleEventDescriptor* valueToDescriptor(Value* value) {
     // the applescript runtime calls tabs in AppleScriptWindow and this
     // particular tab is never returned.
     tabContents_ = aTabContent;
+    SessionTabHelper* session_tab_helper =
+        SessionTabHelper::FromWebContents(tabContents_->web_contents());
     scoped_nsobject<NSNumber> numID(
-        [[NSNumber alloc]
-            initWithInt:tabContents_->restore_tab_helper()->session_id().id()]);
+        [[NSNumber alloc] initWithInt:session_tab_helper->session_id().id()]);
     [self setUniqueID:numID];
   }
   return self;
 }
 
-- (void)setTabContent:(TabContentsWrapper*)aTabContent {
+- (void)setTabContent:(TabContents*)aTabContent {
   DCHECK(aTabContent);
   // It is safe to be weak, if a tab goes away (eg user closing a tab)
   // the applescript runtime calls tabs in AppleScriptWindow and this
   // particular tab is never returned.
   tabContents_ = aTabContent;
+  SessionTabHelper* session_tab_helper =
+      SessionTabHelper::FromWebContents(tabContents_->web_contents());
   scoped_nsobject<NSNumber> numID(
-      [[NSNumber alloc]
-          initWithInt:tabContents_->restore_tab_helper()->session_id().id()]);
+      [[NSNumber alloc] initWithInt:session_tab_helper->session_id().id()]);
   [self setUniqueID:numID];
 
   if ([self tempURL])
@@ -236,12 +239,8 @@ static NSAppleEventDescriptor* valueToDescriptor(Value* value) {
   if (!entry)
     return nil;
 
-  std::wstring title;
-  if (entry != NULL) {
-    title = UTF16ToWideHack(entry->GetTitle());
-  }
-
-  return base::SysWideToNSString(title);
+  string16 title = entry ? entry->GetTitle() : string16();
+  return base::SysUTF16ToNSString(title);
 }
 
 - (NSNumber*)loading {
@@ -343,7 +342,8 @@ static NSAppleEventDescriptor* valueToDescriptor(Value* value) {
 }
 
 - (void)handlesPrintScriptCommand:(NSScriptCommand*)command {
-  bool initiateStatus = tabContents_->print_view_manager()->PrintNow();
+  bool initiateStatus = printing::PrintViewManager::FromWebContents(
+      tabContents_->web_contents())->PrintNow();
   if (initiateStatus == false) {
     AppleScript::SetError(AppleScript::errInitiatePrinting);
   }

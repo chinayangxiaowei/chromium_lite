@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,7 +8,6 @@
 #include <vector>
 
 #include "base/string16.h"
-#include "third_party/WebKit/Source/WebKit/chromium/public/WebFormControlElement.h"
 #include "webkit/forms/webkit_forms_export.h"
 
 namespace webkit {
@@ -25,6 +24,8 @@ struct WEBKIT_FORMS_EXPORT FormField {
   // ids.
   bool operator==(const FormField& field) const;
   bool operator!=(const FormField& field) const;
+  // Comparsion operator exposed for STL map. Uses label, then name to sort.
+  bool operator<(const FormField& field) const;
 
   string16 label;
   string16 name;

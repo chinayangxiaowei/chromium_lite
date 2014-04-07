@@ -1,10 +1,10 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 cr.define('cr.ui', function() {
-  const Event = cr.Event;
-  const EventTarget = cr.EventTarget;
+  /** @const */ var Event = cr.Event;
+  /** @const */ var EventTarget = cr.EventTarget;
 
   /**
    * Creates a new selection model that is to be used with lists. This only
@@ -18,6 +18,9 @@ cr.define('cr.ui', function() {
   function ListSingleSelectionModel(opt_length) {
     this.length_ = opt_length || 0;
     this.selectedIndex = -1;
+
+    // True if any item could be lead or anchor. False if only selected ones.
+    this.independentLeadItem_ = !cr.isMac && !cr.isChromeOS;
   }
 
   ListSingleSelectionModel.prototype = {
@@ -38,9 +41,13 @@ cr.define('cr.ui', function() {
       var i = this.selectedIndex;
       return i != -1 ? [this.selectedIndex] : [];
     },
+    set selectedIndexes(indexes) {
+      this.selectedIndex = indexes.length ? indexes[0] : -1;
+    },
 
     /**
      * Convenience getter which returns the first selected index.
+     * Setter also changes lead and anchor indexes if value is nonegative.
      * @type {number}
      */
     get selectedIndex() {
@@ -52,7 +59,8 @@ cr.define('cr.ui', function() {
 
       if (i != oldSelectedIndex) {
         this.beginChange();
-        this.selectedIndex_ = i
+        this.selectedIndex_ = i;
+        this.leadIndex = i >= 0 ? i : this.leadIndex;
         this.endChange();
       }
     },
@@ -138,19 +146,32 @@ cr.define('cr.ui', function() {
       this.changeCount_--;
       if (!this.changeCount_) {
         if (this.selectedIndexBefore_ != this.selectedIndex_) {
-          var e = new Event('change');
-          var indexes = [this.selectedIndexBefore_, this.selectedIndex_];
-          e.changes = indexes.filter(function(index) {
-            return index != -1;
-          }).map(function(index) {
-            return {
-              index: index,
-              selected: index == this.selectedIndex_
-            };
-          }, this);
-          this.dispatchEvent(e);
+          var beforeChange = this.createChangeEvent('beforeChange');
+          if (this.dispatchEvent(beforeChange))
+            this.dispatchEvent(this.createChangeEvent('change'));
+          else
+            this.selectedIndex_ = this.selectedIndexBefore_;
         }
       }
+    },
+
+    /**
+     * Creates event with specified name and fills its {changes} property.
+     * @param {String} name Event name.
+     */
+    createChangeEvent: function(eventName) {
+      var e = new Event(eventName);
+      var indexes = [this.selectedIndexBefore_, this.selectedIndex_];
+      e.changes = indexes.filter(function(index) {
+        return index != -1;
+      }).map(function(index) {
+        return {
+          index: index,
+          selected: index == this.selectedIndex_
+        };
+      }, this);
+
+      return e;
     },
 
     leadIndex_: -1,
@@ -164,13 +185,20 @@ cr.define('cr.ui', function() {
       return this.leadIndex_;
     },
     set leadIndex(leadIndex) {
-      var li = Math.max(-1, Math.min(this.length_ - 1, leadIndex));
+      var li = this.adjustIndex_(leadIndex);
       if (li != this.leadIndex_) {
         var oldLeadIndex = this.leadIndex_;
         this.leadIndex_ = li;
         cr.dispatchPropertyChange(this, 'leadIndex', li, oldLeadIndex);
         cr.dispatchPropertyChange(this, 'anchorIndex', li, oldLeadIndex);
       }
+    },
+
+    adjustIndex_: function(index) {
+      index = Math.max(-1, Math.min(this.length_ - 1, index));
+      if (!this.independentLeadItem_)
+        index = this.selectedIndex;
+      return index;
     },
 
     /**

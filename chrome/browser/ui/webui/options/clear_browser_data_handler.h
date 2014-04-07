@@ -1,14 +1,15 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CHROME_BROWSER_UI_WEBUI_OPTIONS_CLEAR_BROWSER_DATA_HANDLER_H_
 #define CHROME_BROWSER_UI_WEBUI_OPTIONS_CLEAR_BROWSER_DATA_HANDLER_H_
-#pragma once
 
-#include "chrome/browser/browsing_data_remover.h"
-#include "chrome/browser/prefs/pref_member.h"
+#include "chrome/browser/api/prefs/pref_member.h"
+#include "chrome/browser/browsing_data/browsing_data_remover.h"
 #include "chrome/browser/ui/webui/options/options_ui.h"
+
+namespace options {
 
 // Clear browser data handler page UI handler.
 class ClearBrowserDataHandler : public OptionsPageUIHandler,
@@ -18,9 +19,8 @@ class ClearBrowserDataHandler : public OptionsPageUIHandler,
   virtual ~ClearBrowserDataHandler();
 
   // OptionsPageUIHandler implementation.
-  virtual void Initialize() OVERRIDE;
-
   virtual void GetLocalizedValues(DictionaryValue* localized_strings) OVERRIDE;
+  virtual void InitializeHandler() OVERRIDE;
 
   // WebUIMessageHandler implementation.
   virtual void RegisterMessages() OVERRIDE;
@@ -29,7 +29,8 @@ class ClearBrowserDataHandler : public OptionsPageUIHandler,
   // Javascript callback to start clearing data.
   void HandleClearBrowserData(const ListValue* value);
 
-  // Callback from BrowsingDataRemover. Closes the dialog.
+  // BrowsingDataRemover::Observer implementation.
+  // Closes the dialog once all requested data has been removed.
   virtual void OnBrowsingDataRemoverDone() OVERRIDE;
 
   // If non-null it means removal is in progress. BrowsingDataRemover takes care
@@ -41,5 +42,7 @@ class ClearBrowserDataHandler : public OptionsPageUIHandler,
 
   DISALLOW_COPY_AND_ASSIGN(ClearBrowserDataHandler);
 };
+
+}  // namespace options
 
 #endif  // CHROME_BROWSER_UI_WEBUI_OPTIONS_CLEAR_BROWSER_DATA_HANDLER_H_

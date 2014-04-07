@@ -82,8 +82,10 @@ NPError PluginGetURLTest::New(uint16 mode, int16 argc, const char* argn[],
 }
 
 NPError PluginGetURLTest::SetWindow(NPWindow* pNPWindow) {
+#if !defined(OS_MACOSX)
   if (pNPWindow->window == NULL)
     return NPERR_NO_ERROR;
+#endif
 
   if (!tests_started_) {
     tests_started_ = true;
@@ -147,7 +149,7 @@ NPError PluginGetURLTest::NewStream(NPMIMEType type, NPStream* stream,
       return NPERR_NO_ERROR;
     }
 
-    std::string script = "javascript:alert('Hi there from plugin');";
+    std::string script = "javascript:document.title=\"OK\"";
     NPString script_string;
     script_string.UTF8Characters = script.c_str();
     script_string.UTF8Length = static_cast<unsigned int>(script.length());

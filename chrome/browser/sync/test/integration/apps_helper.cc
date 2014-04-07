@@ -40,9 +40,17 @@ bool AllProfilesHaveSameAppsAsVerifier() {
   return true;
 }
 
-void InstallApp(Profile* profile, int index) {
+std::string InstallApp(Profile* profile, int index) {
   return SyncExtensionHelper::GetInstance()->InstallExtension(
-      profile, CreateFakeAppName(index), Extension::TYPE_HOSTED_APP);
+      profile,
+      CreateFakeAppName(index),
+      extensions::Extension::TYPE_HOSTED_APP);
+}
+
+std::string InstallAppForAllProfiles(int index) {
+  for (int i = 0; i < test()->num_clients(); ++i)
+    InstallApp(test()->GetProfile(i), index);
+  return InstallApp(test()->verifier(), index);
 }
 
 void UninstallApp(Profile* profile, int index) {
@@ -72,31 +80,32 @@ void IncognitoDisableApp(Profile* profile, int index) {
 
 void InstallAppsPendingForSync(Profile* profile) {
   SyncExtensionHelper::GetInstance()->InstallExtensionsPendingForSync(
-      profile, Extension::TYPE_HOSTED_APP);
+      profile, extensions::Extension::TYPE_HOSTED_APP);
 }
 
-StringOrdinal GetPageOrdinalForApp(Profile* profile,
-                                   int app_index) {
+syncer::StringOrdinal GetPageOrdinalForApp(Profile* profile,
+                                           int app_index) {
   return SyncAppHelper::GetInstance()->GetPageOrdinalForApp(
       profile, CreateFakeAppName(app_index));
 }
 
 void SetPageOrdinalForApp(Profile* profile,
                           int app_index,
-                          const StringOrdinal& page_ordinal) {
+                          const syncer::StringOrdinal& page_ordinal) {
   SyncAppHelper::GetInstance()->SetPageOrdinalForApp(
       profile, CreateFakeAppName(app_index), page_ordinal);
 }
 
-StringOrdinal GetAppLaunchOrdinalForApp(Profile* profile,
-                                        int app_index) {
+syncer::StringOrdinal GetAppLaunchOrdinalForApp(Profile* profile,
+                                                int app_index) {
   return SyncAppHelper::GetInstance()->GetAppLaunchOrdinalForApp(
       profile, CreateFakeAppName(app_index));
 }
 
-void SetAppLaunchOrdinalForApp(Profile* profile,
-                               int app_index,
-                               const StringOrdinal& app_launch_ordinal) {
+void SetAppLaunchOrdinalForApp(
+    Profile* profile,
+    int app_index,
+    const syncer::StringOrdinal& app_launch_ordinal) {
   SyncAppHelper::GetInstance()->SetAppLaunchOrdinalForApp(
       profile, CreateFakeAppName(app_index), app_launch_ordinal);
 }

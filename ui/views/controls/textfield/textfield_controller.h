@@ -4,19 +4,18 @@
 
 #ifndef UI_VIEWS_CONTROLS_TEXTFIELD_TEXTFIELD_CONTROLLER_H_
 #define UI_VIEWS_CONTROLS_TEXTFIELD_TEXTFIELD_CONTROLLER_H_
-#pragma once
 
 #include "base/string16.h"
 #include "ui/views/views_export.h"
 
 namespace ui {
+class KeyEvent;
 class OSExchangeData;
 class SimpleMenuModel;
 }  // namespace ui
 
 namespace views {
 
-class KeyEvent;
 class Textfield;
 
 // This defines the callback interface for other code to be notified of changes
@@ -33,7 +32,7 @@ class VIEWS_EXPORT TextfieldController {
   // Returns true if the message was handled and should not be processed
   // further. If it returns false the processing continues.
   virtual bool HandleKeyEvent(Textfield* sender,
-                              const KeyEvent& key_event) = 0;
+                              const ui::KeyEvent& key_event) = 0;
 
   // Called before performing a user action that may change the textfield.
   // It's currently only supported by Views implementation.
@@ -55,6 +54,13 @@ class VIEWS_EXPORT TextfieldController {
 
   // Returns true if the |command_id| should be enabled in the context menu.
   virtual bool IsCommandIdEnabled(int command_id) const;
+
+  // Returns true if the item label for the |command_id| is dynamic in the
+  // context menu.
+  virtual bool IsItemForCommandIdDynamic(int command_id) const;
+
+  // Returns the label string for the |coomand_id|.
+  virtual string16 GetLabelForCommandId(int command_id) const;
 
   // Execute context menu command specified by |command_id|.
   virtual void ExecuteCommand(int command_id) {}

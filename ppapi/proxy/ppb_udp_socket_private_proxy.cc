@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,6 +7,7 @@
 #include <map>
 
 #include "base/logging.h"
+#include "ppapi/c/private/ppb_udp_socket_private.h"
 #include "ppapi/proxy/plugin_dispatcher.h"
 #include "ppapi/proxy/plugin_globals.h"
 #include "ppapi/proxy/plugin_proxy_delegate.h"
@@ -29,6 +30,7 @@ class UDPSocket : public UDPSocketPrivateImpl {
   UDPSocket(const HostResource& resource, uint32 socket_id);
   virtual ~UDPSocket();
 
+  virtual void SendBoolSocketFeature(int32_t name, bool value) OVERRIDE;
   virtual void SendBind(const PP_NetAddress_Private& addr) OVERRIDE;
   virtual void SendRecvFrom(int32_t num_bytes) OVERRIDE;
   virtual void SendSendTo(const std::string& data,
@@ -51,6 +53,11 @@ UDPSocket::UDPSocket(const HostResource& resource, uint32 socket_id)
 
 UDPSocket::~UDPSocket() {
   Close();
+}
+
+void UDPSocket::SendBoolSocketFeature(int32_t name, bool value) {
+  SendToBrowser(new PpapiHostMsg_PPBUDPSocket_SetBoolSocketFeature(
+      API_ID_PPB_UDPSOCKET_PRIVATE, socket_id_, name, value));
 }
 
 void UDPSocket::SendBind(const PP_NetAddress_Private& addr) {
@@ -126,7 +133,8 @@ bool PPB_UDPSocket_Private_Proxy::OnMessageReceived(const IPC::Message& msg) {
 void PPB_UDPSocket_Private_Proxy::OnMsgBindACK(
     uint32 /* plugin_dispatcher_id */,
     uint32 socket_id,
-    bool succeeded) {
+    bool succeeded,
+    const PP_NetAddress_Private& bound_addr) {
   if (!g_id_to_socket) {
     NOTREACHED();
     return;
@@ -134,7 +142,7 @@ void PPB_UDPSocket_Private_Proxy::OnMsgBindACK(
   IDToSocketMap::iterator iter = g_id_to_socket->find(socket_id);
   if (iter == g_id_to_socket->end())
     return;
-  iter->second->OnBindCompleted(succeeded);
+  iter->second->OnBindCompleted(succeeded, bound_addr);
 }
 
 void PPB_UDPSocket_Private_Proxy::OnMsgRecvFromACK(

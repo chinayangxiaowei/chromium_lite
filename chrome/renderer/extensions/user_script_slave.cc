@@ -8,18 +8,19 @@
 
 #include "base/command_line.h"
 #include "base/logging.h"
+#include "base/metrics/histogram.h"
 #include "base/perftimer.h"
 #include "base/pickle.h"
 #include "base/shared_memory.h"
-#include "base/metrics/histogram.h"
 #include "base/stringprintf.h"
 #include "chrome/common/extensions/extension.h"
+#include "chrome/common/extensions/extension_messages.h"
 #include "chrome/common/extensions/extension_set.h"
 #include "chrome/common/url_constants.h"
 #include "chrome/renderer/chrome_render_process_observer.h"
-#include "chrome/renderer/extensions/extension_dispatcher.h"
 #include "chrome/renderer/extensions/extension_groups.h"
 #include "content/public/renderer/render_thread.h"
+#include "content/public/renderer/render_view.h"
 #include "googleurl/src/gurl.h"
 #include "grit/renderer_resources.h"
 #include "third_party/WebKit/Source/WebKit/chromium/public/WebDataSource.h"
@@ -27,9 +28,10 @@
 #include "third_party/WebKit/Source/WebKit/chromium/public/WebFrame.h"
 #include "third_party/WebKit/Source/WebKit/chromium/public/WebSecurityOrigin.h"
 #include "third_party/WebKit/Source/WebKit/chromium/public/WebSecurityPolicy.h"
+#include "third_party/WebKit/Source/WebKit/chromium/public/WebView.h"
 #include "third_party/WebKit/Source/WebKit/chromium/public/platform/WebURLRequest.h"
 #include "third_party/WebKit/Source/WebKit/chromium/public/platform/WebVector.h"
-#include "third_party/WebKit/Source/WebKit/chromium/public/WebView.h"
+#include "ui/base/layout.h"
 #include "ui/base/resource/resource_bundle.h"
 
 using WebKit::WebFrame;
@@ -40,13 +42,15 @@ using WebKit::WebVector;
 using WebKit::WebView;
 using content::RenderThread;
 
+namespace extensions {
+
 // These two strings are injected before and after the Greasemonkey API and
 // user script to wrap it in an anonymous scope.
 static const char kUserScriptHead[] = "(function (unsafeWindow) {\n";
 static const char kUserScriptTail[] = "\n})(window);";
 
-int UserScriptSlave::GetIsolatedWorldIdForExtension(
-    const Extension* extension, WebFrame* frame) {
+int UserScriptSlave::GetIsolatedWorldIdForExtension(const Extension* extension,
+                                                    WebFrame* frame) {
   static int g_next_isolated_world_id = 1;
 
   IsolatedWorldMap::iterator iter = isolated_world_ids_.find(extension->id());
@@ -84,9 +88,8 @@ std::string UserScriptSlave::GetExtensionIdForIsolatedWorld(
 }
 
 // static
-void UserScriptSlave::InitializeIsolatedWorld(
-    int isolated_world_id,
-    const Extension* extension) {
+void UserScriptSlave::InitializeIsolatedWorld(int isolated_world_id,
+                                              const Extension* extension) {
   const URLPatternSet& permissions =
       extension->GetEffectiveHostPermissions();
   for (URLPatternSet::const_iterator i = permissions.begin();
@@ -118,7 +121,7 @@ UserScriptSlave::UserScriptSlave(const ExtensionSet* extensions)
       script_deleter_(&scripts_),
       extensions_(extensions) {
   api_js_ = ResourceBundle::GetSharedInstance().GetRawDataResource(
-                IDR_GREASEMONKEY_API_JS);
+                IDR_GREASEMONKEY_API_JS, ui::SCALE_FACTOR_NONE);
 }
 
 UserScriptSlave::~UserScriptSlave() {}
@@ -155,14 +158,14 @@ bool UserScriptSlave::UpdateScripts(base::SharedMemoryHandle shared_memory) {
     return false;
 
   // Unpickle scripts.
-  void* iter = NULL;
-  size_t num_scripts = 0;
+  uint64 num_scripts = 0;
   Pickle pickle(reinterpret_cast<char*>(shared_memory_->memory()),
                 pickle_size);
-  pickle.ReadSize(&iter, &num_scripts);
+  PickleIterator iter(pickle);
+  CHECK(pickle.ReadUInt64(&iter, &num_scripts));
 
   scripts_.reserve(num_scripts);
-  for (size_t i = 0; i < num_scripts; ++i) {
+  for (uint64 i = 0; i < num_scripts; ++i) {
     scripts_.push_back(new UserScript());
     UserScript* script = scripts_.back();
     script->Unpickle(pickle, &iter);
@@ -230,7 +233,7 @@ bool UserScriptSlave::UpdateScripts(base::SharedMemoryHandle shared_memory) {
   return true;
 }
 
-GURL UserScriptSlave::GetDataSourceURLForFrame(WebFrame* frame) {
+GURL UserScriptSlave::GetDataSourceURLForFrame(const WebFrame* frame) {
   // Normally we would use frame->document().url() to determine the document's
   // URL, but to decide whether to inject a content script, we use the URL from
   // the data source. This "quirk" helps prevents content scripts from
@@ -259,6 +262,8 @@ void UserScriptSlave::InjectScripts(WebFrame* frame,
   int num_css = 0;
   int num_scripts = 0;
 
+  std::set<std::string> extensions_executing_scripts;
+
   for (size_t i = 0; i < scripts_.size(); ++i) {
     std::vector<WebScriptSource> sources;
     UserScript* script = scripts_[i];
@@ -273,8 +278,15 @@ void UserScriptSlave::InjectScripts(WebFrame* frame,
     if (!extension)
       continue;
 
-    if (!extension->CanExecuteScriptOnPage(data_source_url, script, NULL))
+    // Content scripts are not tab-specific.
+    int kNoTabId = -1;
+    if (!extension->CanExecuteScriptOnPage(data_source_url,
+                                           frame->top()->document().url(),
+                                           kNoTabId,
+                                           script,
+                                           NULL)) {
       continue;
+    }
 
     // We rely on WebCore for CSS injection, but it's still useful to know how
     // many css files there are.
@@ -319,7 +331,21 @@ void UserScriptSlave::InjectScripts(WebFrame* frame,
           isolated_world_id, &sources.front(), sources.size(),
           EXTENSION_GROUP_CONTENT_SCRIPTS);
       UMA_HISTOGRAM_TIMES("Extensions.InjectScriptTime", exec_timer.Elapsed());
+
+      extensions_executing_scripts.insert(extension->id());
     }
+  }
+
+  // Notify the browser if any extensions are now executing scripts.
+  if (!extensions_executing_scripts.empty()) {
+    WebKit::WebFrame* top_frame = frame->top();
+    content::RenderView* render_view =
+        content::RenderView::FromWebView(top_frame->view());
+    render_view->Send(new ExtensionHostMsg_ContentScriptsExecuting(
+        render_view->GetRoutingID(),
+        extensions_executing_scripts,
+        render_view->GetPageId(),
+        GetDataSourceURLForFrame(top_frame)));
   }
 
   // Log debug info.
@@ -340,3 +366,5 @@ void UserScriptSlave::InjectScripts(WebFrame* frame,
     NOTREACHED();
   }
 }
+
+}  // namespace extensions

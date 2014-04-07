@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,11 +6,13 @@
 #include "base/command_line.h"
 #include "base/debug/debugger.h"
 #include "base/debug/trace_event.h"
+#include "base/hi_res_timer_manager.h"
 #include "base/i18n/rtl.h"
 #include "base/memory/ref_counted.h"
 #include "base/metrics/field_trial.h"
 #include "base/message_loop.h"
 #include "base/metrics/histogram.h"
+#include "base/metrics/statistics_recorder.h"
 #include "base/metrics/stats_counters.h"
 #include "base/path_service.h"
 #include "base/process_util.h"
@@ -18,8 +20,6 @@
 #include "base/system_monitor/system_monitor.h"
 #include "base/threading/platform_thread.h"
 #include "base/time.h"
-#include "content/common/content_counters.h"
-#include "content/common/hi_res_timer_manager.h"
 #include "content/common/pepper_plugin_registry.h"
 #include "content/public/common/content_switches.h"
 #include "content/public/common/main_function_params.h"
@@ -41,12 +41,9 @@
 #include "third_party/WebKit/Source/WebKit/chromium/public/WebView.h"
 #endif  // OS_MACOSX
 
-#if defined(OS_WIN)
-#include <signal.h>
-#endif  // OS_WIN
+namespace {
 
 #if defined(OS_MACOSX)
-namespace {
 
 CFArrayRef ChromeTISCreateInputSourceList(
    CFDictionaryRef properties,
@@ -60,49 +57,42 @@ void InstallFrameworkHacks() {
   // See http://crbug.com/31225
   // TODO: Don't do this on newer OS X revisions that have a fix for
   // http://openradar.appspot.com/radar?id=1156410
-  if (base::mac::IsOSSnowLeopardOrLater()) {
-    // Chinese Handwriting was introduced in 10.6. Since doing this override
-    // regresses page cycler memory usage on 10.5, don't do the unnecessary
-    // override there.
-    mach_error_t err = mach_override_ptr(
-        (void*)&TISCreateInputSourceList,
-        (void*)&ChromeTISCreateInputSourceList,
-        NULL);
-    CHECK_EQ(err_none, err);
-  }
+  // To check if this is broken:
+  // 1. Enable Multi language input (simplified chinese)
+  // 2. Ensure "Show/Hide Trackpad Handwriting" shortcut works.
+  //    (ctrl+shift+space).
+  // 3. Now open a new tab in Google Chrome or start Google Chrome
+  // 4. Try ctrl+shift+space shortcut again. Shortcut will not work, IME will
+  //    either not appear or (worse) not disappear on ctrl-shift-space.
+  //    (Run `ps aux | grep Chinese` (10.6/10.7) or `ps aux | grep Trackpad`
+  //    and then kill that pid to make it go away.)
+
+  // Chinese Handwriting was introduced in 10.6 and is confirmed broken on
+  // 10.6, 10.7, and 10.8.
+  mach_error_t err = mach_override_ptr(
+      (void*)&TISCreateInputSourceList,
+      (void*)&ChromeTISCreateInputSourceList,
+      NULL);
+  CHECK_EQ(err_none, err);
 }
 
-}  // namespace
 #endif  // OS_MACOSX
+
+}  // namespace
 
 // This function provides some ways to test crash and assertion handling
 // behavior of the renderer.
 static void HandleRendererErrorTestParameters(const CommandLine& command_line) {
-  // This parameter causes an assertion.
-  if (command_line.HasSwitch(switches::kRendererAssertTest)) {
-    DCHECK(false);
-  }
-
-
-#if !defined(OFFICIAL_BUILD)
-  // This parameter causes an assertion too.
-  if (command_line.HasSwitch(switches::kRendererCheckFalseTest)) {
-    CHECK(false);
-  }
-#endif  // !defined(OFFICIAL_BUILD)
-
-
-  // This parameter causes a null pointer crash (crash reporter trigger).
-  if (command_line.HasSwitch(switches::kRendererCrashTest)) {
-    int* bad_pointer = NULL;
-    *bad_pointer = 0;
-  }
-
   if (command_line.HasSwitch(switches::kWaitForDebugger))
     base::debug::WaitForDebugger(60, true);
 
   if (command_line.HasSwitch(switches::kRendererStartupDialog))
     ChildProcess::WaitForDebugger("Renderer");
+
+  // This parameter causes an assertion.
+  if (command_line.HasSwitch(switches::kRendererAssertTest)) {
+    DCHECK(false);
+  }
 }
 
 // This is a simplified version of the browser Jankometer, which measures
@@ -130,20 +120,9 @@ class RendererMessageLoopObserver : public MessageLoop::TaskObserver {
   DISALLOW_COPY_AND_ASSIGN(RendererMessageLoopObserver);
 };
 
-#if defined(OS_WIN)
-void __cdecl ForceCrashForAbort(int) {
-  *((int*)0) = 0xDEAD;  // Crash.
-}
-#endif
-
 // mainline routine for running as the Renderer process
 int RendererMain(const content::MainFunctionParams& parameters) {
   TRACE_EVENT_BEGIN_ETW("RendererMain", 0, "");
-
-#if defined(OS_WIN)
-  // Force a crash whenever abort() is called.
-  signal(SIGABRT, ForceCrashForAbort);
-#endif
 
   const CommandLine& parsed_command_line = parameters.command_line;
 
@@ -177,8 +156,8 @@ int RendererMain(const content::MainFunctionParams& parameters) {
   content::GetContentClient()->renderer()->RegisterPPAPIInterfaceFactories(
       factory_manager);
 
-  base::StatsScope<base::StatsCounterTimer>
-      startup_timer(content::Counters::renderer_main());
+  base::StatsCounterTimer stats_counter_timer("Content.RendererInit");
+  base::StatsScope<base::StatsCounterTimer> startup_timer(stats_counter_timer);
 
   RendererMessageLoopObserver task_observer;
 #if defined(OS_MACOSX)
@@ -204,21 +183,17 @@ int RendererMain(const content::MainFunctionParams& parameters) {
   platform.InitSandboxTests(no_sandbox);
 
   // Initialize histogram statistics gathering system.
-  // Don't create StatisticsRecorder in the single process mode.
-  scoped_ptr<base::StatisticsRecorder> statistics;
-  if (!base::StatisticsRecorder::IsActive()) {
-    statistics.reset(new base::StatisticsRecorder());
-  }
+  base::StatisticsRecorder::Initialize();
 
-  // Initialize statistical testing infrastructure.  We set client_id to the
-  // empty string to disallow the renderer process from creating its own
-  // one-time randomized trials; they should be created in the browser process.
-  base::FieldTrialList field_trial(EmptyString());
+  // Initialize statistical testing infrastructure.  We set the entropy provider
+  // to NULL to disallow the renderer process from creating its own one-time
+  // randomized trials; they should be created in the browser process.
+  base::FieldTrialList field_trial_list(NULL);
   // Ensure any field trials in browser are reflected into renderer.
-  if (parsed_command_line.HasSwitch(switches::kForceFieldTestNameAndValue)) {
+  if (parsed_command_line.HasSwitch(switches::kForceFieldTrials)) {
     std::string persistent = parsed_command_line.GetSwitchValueASCII(
-        switches::kForceFieldTestNameAndValue);
-    bool ret = field_trial.CreateTrialsInChildProcess(persistent);
+        switches::kForceFieldTrials);
+    bool ret = base::FieldTrialList::CreateTrialsFromString(persistent);
     DCHECK(ret);
   }
 
@@ -230,17 +205,23 @@ int RendererMain(const content::MainFunctionParams& parameters) {
     // TODO(markus): Check if it is OK to unconditionally move this
     // instruction down.
     RenderProcessImpl render_process;
-    render_process.set_main_thread(new RenderThreadImpl());
+    new RenderThreadImpl();
 #endif
     bool run_loop = true;
     if (!no_sandbox) {
       run_loop = platform.EnableSandbox();
     } else {
       LOG(ERROR) << "Running without renderer sandbox";
+#ifndef NDEBUG
+      // For convenience, we print the stack trace for crashes. We can't get
+      // symbols when the sandbox is enabled, so only try when the sandbox is
+      // disabled.
+      base::EnableInProcessStackDumping();
+#endif
     }
 #if defined(OS_POSIX) && !defined(OS_MACOSX)
     RenderProcessImpl render_process;
-    render_process.set_main_thread(new RenderThreadImpl());
+    new RenderThreadImpl();
 #endif
 
     platform.RunSandboxTests();

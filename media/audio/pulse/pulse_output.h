@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 //
@@ -27,8 +27,6 @@
 #include "media/base/channel_layout.h"
 
 namespace media {
-class SeekableBuffer;
-}
 
 #if defined(OS_LINUX)
 class AudioManagerLinux;
@@ -40,7 +38,8 @@ typedef AudioManagerOpenBSD AudioManagerPulse;
 #error Unsupported platform
 #endif
 
-struct AudioParameters;
+class AudioParameters;
+class SeekableBuffer;
 
 class PulseAudioOutputStream : public AudioOutputStream {
  public:
@@ -50,12 +49,12 @@ class PulseAudioOutputStream : public AudioOutputStream {
   virtual ~PulseAudioOutputStream();
 
   // Implementation of AudioOutputStream.
-  virtual bool Open();
-  virtual void Close();
-  virtual void Start(AudioSourceCallback* callback);
-  virtual void Stop();
-  virtual void SetVolume(double volume);
-  virtual void GetVolume(double* volume);
+  virtual bool Open() OVERRIDE;
+  virtual void Close() OVERRIDE;
+  virtual void Start(AudioSourceCallback* callback) OVERRIDE;
+  virtual void Stop() OVERRIDE;
+  virtual void SetVolume(double volume) OVERRIDE;
+  virtual void GetVolume(double* volume) OVERRIDE;
 
  private:
   // PulseAudio Callbacks.
@@ -77,8 +76,7 @@ class PulseAudioOutputStream : public AudioOutputStream {
   void WriteToStream(size_t bytes_to_write, size_t* bytes_written);
 
   // API for Proxying calls to the AudioSourceCallback provided during Start().
-  uint32 RunDataCallback(uint8* dest, uint32 max_size,
-                         AudioBuffersState buffers_state);
+  int RunDataCallback(AudioBus* audio_bus, AudioBuffersState buffers_state);
 
   // Close() helper function to free internal structs.
   void Reset();
@@ -127,7 +125,12 @@ class PulseAudioOutputStream : public AudioOutputStream {
   // Callback to audio data source.
   AudioSourceCallback* source_callback_;
 
+  // Container for retrieving data from AudioSourceCallback::OnMoreData().
+  scoped_ptr<AudioBus> audio_bus_;
+
   DISALLOW_COPY_AND_ASSIGN(PulseAudioOutputStream);
 };
+
+}  // namespace media
 
 #endif  // MEDIA_AUDIO_PULSE_PULSE_OUTPUT_H_

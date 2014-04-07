@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -14,8 +14,8 @@
 #include "base/string_util.h"
 #include "googleurl/src/gurl.h"
 #include "net/base/net_util.h"
-#include "webkit/glue/user_agent.h"
-#include "webkit/glue/webkit_glue.h"
+#include "webkit/user_agent/user_agent.h"
+#include "webkit/user_agent/user_agent_util.h"
 
 GURL TestShellTest::GetTestURL(const FilePath& test_case_path,
                                const std::string& test_case) {
@@ -40,7 +40,6 @@ void TestShellTest::TearDown() {
   // Loading a blank url clears the memory in the current page.
   test_shell_->LoadURL(GURL("about:blank"));
   test_shell_->DestroyWindow(test_shell_->mainWnd());
-  LayoutTestController::ClearShell();
 
   // Flush the MessageLoop of any residual tasks.
   MessageLoop::current()->RunAllPending();

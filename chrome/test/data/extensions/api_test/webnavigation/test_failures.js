@@ -1,45 +1,27 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-function runTests() {
+onload = function() {
   var getURL = chrome.extension.getURL;
   chrome.tabs.create({"url": "about:blank"}, function(tab) {
     var tabId = tab.id;
 
     chrome.test.runTests([
-      // Navigates to a non-existant page.
-      function nonExistant() {
-        expect([
-          { label: "onBeforeNavigate",
-            event: "onBeforeNavigate",
-            details: { frameId: 0,
-                       tabId: 0,
-                       timeStamp: 0,
-                       url: getURL('failures/nonexistant.html') }},
-          { label: "onErrorOccurred",
-            event: "onErrorOccurred",
-            details: { error: "net::ERR_FILE_NOT_FOUND",
-                       frameId: 0,
-                       tabId: 0,
-                       timeStamp: 0,
-                       url: getURL('failures/nonexistant.html') }}],
-          [["onBeforeNavigate", "onErrorOccurred"]]);
-        chrome.tabs.update(tabId, { url: getURL('failures/nonexistant.html') });
-      },
-
-      // An page that tries to load an non-existant iframe.
-      function nonExistantIframe() {
+      // An page that tries to load an non-existent iframe.
+      function nonExistentIframe() {
         expect([
           { label: "a-onBeforeNavigate",
             event: "onBeforeNavigate",
             details: { frameId: 0,
+                       processId: 0,
                        tabId: 0,
                        timeStamp: 0,
                        url: getURL('failures/d.html') }},
           { label: "a-onCommitted",
             event: "onCommitted",
             details: { frameId: 0,
+                       processId: 0,
                        tabId: 0,
                        timeStamp: 0,
                        transitionQualifiers: [],
@@ -48,18 +30,21 @@ function runTests() {
           { label: "a-onDOMContentLoaded",
             event: "onDOMContentLoaded",
             details: { frameId: 0,
+                       processId: 0,
                        tabId: 0,
                        timeStamp: 0,
                        url: getURL('failures/d.html') }},
           { label: "a-onCompleted",
             event: "onCompleted",
             details: { frameId: 0,
+                       processId: 0,
                        tabId: 0,
                        timeStamp: 0,
                        url: getURL('failures/d.html') }},
           { label: "b-onBeforeNavigate",
             event: "onBeforeNavigate",
             details: { frameId: 1,
+                       processId: 0,
                        tabId: 0,
                        timeStamp: 0,
                        url: getURL('failures/c.html') }},
@@ -67,6 +52,7 @@ function runTests() {
             event: "onErrorOccurred",
             details: { error: "net::ERR_FILE_NOT_FOUND",
                        frameId: 1,
+                       processId: 0,
                        tabId: 0,
                        timeStamp: 0,
                        url: getURL('failures/c.html') }}],
@@ -76,18 +62,20 @@ function runTests() {
         chrome.tabs.update(tabId, { url: getURL('failures/d.html') });
       },
 
-      // An iframe navigates to a non-existant page.
-      function nonExistantIframeNavigation() {
+      // An iframe navigates to a non-existent page.
+      function nonExistentIframeNavigation() {
         expect([
           { label: "a-onBeforeNavigate",
             event: "onBeforeNavigate",
             details: { frameId: 0,
+                       processId: 0,
                        tabId: 0,
                        timeStamp: 0,
                        url: getURL('failures/a.html') }},
           { label: "a-onCommitted",
             event: "onCommitted",
             details: { frameId: 0,
+                       processId: 0,
                        tabId: 0,
                        timeStamp: 0,
                        transitionQualifiers: [],
@@ -96,24 +84,28 @@ function runTests() {
           { label: "a-onDOMContentLoaded",
             event: "onDOMContentLoaded",
             details: { frameId: 0,
+                       processId: 0,
                        tabId: 0,
                        timeStamp: 0,
                        url: getURL('failures/a.html') }},
           { label: "a-onCompleted",
             event: "onCompleted",
             details: { frameId: 0,
+                       processId: 0,
                        tabId: 0,
                        timeStamp: 0,
                        url: getURL('failures/a.html') }},
           { label: "b-onBeforeNavigate",
             event: "onBeforeNavigate",
             details: { frameId: 1,
+                       processId: 0,
                        tabId: 0,
                        timeStamp: 0,
                        url: getURL('failures/b.html') }},
           { label: "b-onCommitted",
             event: "onCommitted",
             details: { frameId: 1,
+                       processId: 0,
                        tabId: 0,
                        timeStamp: 0,
                        transitionQualifiers: [],
@@ -122,18 +114,21 @@ function runTests() {
           { label: "b-onDOMContentLoaded",
             event: "onDOMContentLoaded",
             details: { frameId: 1,
+                       processId: 0,
                        tabId: 0,
                        timeStamp: 0,
                        url: getURL('failures/b.html') }},
           { label: "b-onCompleted",
             event: "onCompleted",
             details: { frameId: 1,
+                       processId: 0,
                        tabId: 0,
                        timeStamp: 0,
                        url: getURL('failures/b.html') }},
           { label: "c-onBeforeNavigate",
             event: "onBeforeNavigate",
             details: { frameId: 1,
+                       processId: 0,
                        tabId: 0,
                        timeStamp: 0,
                        url: getURL('failures/c.html') }},
@@ -141,6 +136,7 @@ function runTests() {
             event: "onErrorOccurred",
             details: { error: "net::ERR_FILE_NOT_FOUND",
                        frameId: 1,
+                       processId: 0,
                        tabId: 0,
                        timeStamp: 0,
                        url: getURL('failures/c.html') }}],
@@ -151,6 +147,71 @@ function runTests() {
             ["c-onBeforeNavigate", "c-onErrorOccurred"]]);
         chrome.tabs.update(tabId, { url: getURL('failures/a.html') });
       },
+
+      // Cancel a navigation after it is already committed.
+      function cancel() {
+        expect([
+          { label: "onBeforeNavigate",
+            event: "onBeforeNavigate",
+            details: { frameId: 0,
+                       processId: 0,
+                       tabId: 0,
+                       timeStamp: 0,
+                       url: getURL('failures/e.html') }},
+          { label: "onCommitted",
+            event: "onCommitted",
+            details: { frameId: 0,
+                       processId: 0,
+                       tabId: 0,
+                       timeStamp: 0,
+                       transitionQualifiers: [],
+                       transitionType: "link",
+                       url: getURL('failures/e.html') }},
+          { label: "onDOMContentLoaded",
+            event: "onDOMContentLoaded",
+            details: { frameId: 0,
+                       processId: 0,
+                       tabId: 0,
+                       timeStamp: 0,
+                       url: getURL('failures/e.html') }},
+          { label: "onErrorOccurred",
+            event: "onErrorOccurred",
+            details: { error: "net::ERR_ABORTED",
+                       frameId: 0,
+                       processId: 0,
+                       tabId: 0,
+                       timeStamp: 0,
+                       url: getURL('failures/e.html') }}],
+          [["onBeforeNavigate", "onCommitted", "onDOMContentLoaded",
+            "onErrorOccurred"]]);
+        chrome.tabs.update(tabId, { url: getURL('failures/e.html') });
+      },
+
+      // Navigates to a non-existent page (this test case must be last,
+      // otherwise the non-existant URL breaks tests that follow, since loading
+      // those test pages is seen as a non-extension -> extension URL
+      // transition, which is forbidden by web_accessible_resources enforcement
+      // in manifest version 2.)
+      function nonExistent() {
+        expect([
+          { label: "onBeforeNavigate",
+            event: "onBeforeNavigate",
+            details: { frameId: 0,
+                       processId: 0,
+                       tabId: 0,
+                       timeStamp: 0,
+                       url: getURL('failures/nonexistent.html') }},
+          { label: "onErrorOccurred",
+            event: "onErrorOccurred",
+            details: { error: "net::ERR_FILE_NOT_FOUND",
+                       frameId: 0,
+                       processId: 0,
+                       tabId: 0,
+                       timeStamp: 0,
+                       url: getURL('failures/nonexistent.html') }}],
+          [["onBeforeNavigate", "onErrorOccurred"]]);
+        chrome.tabs.update(tabId, { url: getURL('failures/nonexistent.html') });
+      },
     ]);
   });
-}
+};

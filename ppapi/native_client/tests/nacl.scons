@@ -1,5 +1,5 @@
 # -*- python -*-
-# Copyright 2011 The Native Client Authors.  All rights reserved.
+# Copyright 2011 The Chromium Authors.  All rights reserved.
 # Use of this source code is governed by a BSD-style license that can
 # be found in the LICENSE file.
 
@@ -28,6 +28,14 @@ env.Alias('download_chrome', node)
 html_examples = env.Replicate('${STAGING_DIR}', 'examples.html')
 env.Default(html_examples)
 example_nexes = [
+    # SRPC Nexe Tests
+    'srpc_hw',          # srpc_hw.html
+    'srpc_test',        # srpc_basic.html, srpc_perf.html
+    'srpc_nrd_server',  # srpc_nrd_xfer.html
+    'srpc_nrd_client',  # srpc_nrd_xfer.html
+    # SRPC Nexe Performance
+    'mandel_tiled',         # mandel_tiled.html
+    'autoloader_default',   # autoloader.html',
     # PPAPI Nexe Examples
     'ppapi_basic_object',       # basic_object.html
     'ppapi_example_events',     # ppapi_example_events.html

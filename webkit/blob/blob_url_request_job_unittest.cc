@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -22,6 +22,7 @@
 #include "net/http/http_request_headers.h"
 #include "net/http/http_response_headers.h"
 #include "net/url_request/url_request.h"
+#include "net/url_request/url_request_context.h"
 #include "net/url_request/url_request_error_job.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "webkit/blob/blob_data.h"
@@ -143,6 +144,7 @@ class BlobURLRequestJobTest : public testing::Test {
 
   static net::URLRequestJob* BlobURLRequestJobFactory(
       net::URLRequest* request,
+      net::NetworkDelegate* network_delegate,
       const std::string& scheme) {
     BlobURLRequestJob* temp = blob_url_request_job_;
     blob_url_request_job_ = NULL;
@@ -241,11 +243,12 @@ class BlobURLRequestJobTest : public testing::Test {
                    const net::HttpRequestHeaders& extra_headers,
                    BlobData* blob_data) {
     // This test has async steps.
-    request_.reset(new net::URLRequest(GURL("blob:blah"),
-                                       url_request_delegate_.get()));
+    request_.reset(empty_context_.CreateRequest(
+        GURL("blob:blah"), url_request_delegate_.get()));
     request_->set_method(method);
     blob_url_request_job_ = new BlobURLRequestJob(
         request_.get(),
+        empty_context_.network_delegate(),
         blob_data,
         base::MessageLoopProxy::current());
 
@@ -259,10 +262,10 @@ class BlobURLRequestJobTest : public testing::Test {
 
   void VerifyResponse() {
     EXPECT_TRUE(request_->status().is_success());
-    EXPECT_EQ(request_->response_headers()->response_code(),
-              expected_status_code_);
-    EXPECT_STREQ(url_request_delegate_->response_data().c_str(),
-                 expected_response_.c_str());
+    EXPECT_EQ(expected_status_code_,
+              request_->response_headers()->response_code());
+    EXPECT_STREQ(expected_response_.c_str(),
+                 url_request_delegate_->response_data().c_str());
     TestFinished();
   }
 
@@ -397,6 +400,7 @@ class BlobURLRequestJobTest : public testing::Test {
 
   scoped_ptr<base::WaitableEvent> test_finished_event_;
   std::stack<std::pair<base::Closure, bool> > task_stack_;
+  net::URLRequestContext empty_context_;
   scoped_ptr<net::URLRequest> request_;
   scoped_ptr<MockURLRequestDelegate> url_request_delegate_;
   int expected_status_code_;

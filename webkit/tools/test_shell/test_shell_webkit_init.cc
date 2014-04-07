@@ -13,7 +13,7 @@
 #include "third_party/WebKit/Source/WebKit/chromium/public/WebRuntimeFeatures.h"
 #include "third_party/WebKit/Source/WebKit/chromium/public/WebScriptController.h"
 #include "third_party/WebKit/Source/WebKit/chromium/public/WebSecurityPolicy.h"
-#include "ui/gfx/gl/gl_bindings_skia_in_process.h"
+#include "ui/gl/gl_bindings_skia_in_process.h"
 #include "v8/include/v8.h"
 #include "webkit/plugins/npapi/plugin_list.h"
 #include "webkit/plugins/webplugininfo.h"
@@ -38,7 +38,6 @@ TestShellWebKitInit::TestShellWebKitInit(bool layout_test_mode)
   WebKit::WebRuntimeFeatures::enableSockets(true);
   WebKit::WebRuntimeFeatures::enableApplicationCache(true);
   WebKit::WebRuntimeFeatures::enableDatabase(true);
-  WebKit::WebRuntimeFeatures::enablePushState(true);
   WebKit::WebRuntimeFeatures::enableNotifications(true);
   WebKit::WebRuntimeFeatures::enableTouch(true);
   WebKit::WebRuntimeFeatures::enableIndexedDatabase(true);
@@ -257,42 +256,11 @@ WebKit::WebString TestShellWebKitInit::defaultLocale() {
 
 WebKit::WebStorageNamespace* TestShellWebKitInit::createLocalStorageNamespace(
     const WebKit::WebString& path, unsigned quota) {
-  // Enforce quota here, ignoring the value from the renderer as in Chrome.
-  return WebKit::WebStorageNamespace::createLocalStorageNamespace(
-      path,
-      WebKit::WebStorageNamespace::m_localStorageQuota);
-}
-
-void TestShellWebKitInit::dispatchStorageEvent(
-    const WebKit::WebString& key,
-    const WebKit::WebString& old_value, const WebKit::WebString& new_value,
-    const WebKit::WebString& origin, const WebKit::WebURL& url,
-    bool is_local_storage) {
-  // The event is dispatched by the proxy.
+  return dom_storage_system_.CreateLocalStorageNamespace();
 }
 
 WebKit::WebIDBFactory* TestShellWebKitInit::idbFactory() {
   return WebKit::WebIDBFactory::create();
-}
-
-void TestShellWebKitInit::createIDBKeysFromSerializedValuesAndKeyPath(
-    const WebKit::WebVector<WebKit::WebSerializedScriptValue>& values,
-    const WebKit::WebString& keyPath,
-    WebKit::WebVector<WebKit::WebIDBKey>& keys_out) {
-  WebKit::WebVector<WebKit::WebIDBKey> keys(values.size());
-  for (size_t i = 0; i < values.size(); ++i) {
-    keys[i] = WebKit::WebIDBKey::createFromValueAndKeyPath(
-        values[i], WebKit::WebIDBKeyPath::create(keyPath));
-  }
-  keys_out.swap(keys);
-}
-
-WebKit::WebSerializedScriptValue
-TestShellWebKitInit::injectIDBKeyIntoSerializedValue(
-    const WebKit::WebIDBKey& key, const WebKit::WebSerializedScriptValue& value,
-    const WebKit::WebString& keyPath) {
-  return WebKit::WebIDBKey::injectIDBKeyIntoSerializedValue(
-      key, value, WebKit::WebIDBKeyPath::create(keyPath));
 }
 
 WebKit::WebSharedWorkerRepository*
@@ -300,20 +268,11 @@ TestShellWebKitInit::sharedWorkerRepository() {
   return NULL;
 }
 
-WebKit::WebGraphicsContext3D* TestShellWebKitInit::createGraphicsContext3D() {
-  return new webkit::gpu::WebGraphicsContext3DInProcessImpl(
-      gfx::kNullPluginWindow, NULL);
-}
-
 WebKit::WebGraphicsContext3D*
 TestShellWebKitInit::createOffscreenGraphicsContext3D(
     const WebKit::WebGraphicsContext3D::Attributes& attributes) {
-  scoped_ptr<WebGraphicsContext3D> context(
-      new webkit::gpu::WebGraphicsContext3DInProcessImpl(
-          gfx::kNullPluginWindow, NULL));
-  if (!context->initialize(attributes, NULL, false))
-    return NULL;
-  return context.release();
+  return webkit::gpu::WebGraphicsContext3DInProcessImpl::CreateForWebView(
+          attributes, false);
 }
 
 void TestShellWebKitInit::GetPlugins(

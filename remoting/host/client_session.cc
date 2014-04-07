@@ -7,113 +7,161 @@
 #include <algorithm>
 
 #include "base/message_loop_proxy.h"
-#include "remoting/host/capturer.h"
+#include "remoting/codec/audio_encoder.h"
+#include "remoting/codec/audio_encoder_speex.h"
+#include "remoting/codec/audio_encoder_verbatim.h"
+#include "remoting/codec/video_encoder.h"
+#include "remoting/codec/video_encoder_row_based.h"
+#include "remoting/codec/video_encoder_vp8.h"
+#include "remoting/host/audio_scheduler.h"
+#include "remoting/host/desktop_environment.h"
+#include "remoting/host/event_executor.h"
+#include "remoting/host/screen_recorder.h"
+#include "remoting/host/video_frame_capturer.h"
+#include "remoting/proto/control.pb.h"
 #include "remoting/proto/event.pb.h"
-
-// The number of remote mouse events to record for the purpose of eliminating
-// "echoes" detected by the local input detector. The value should be large
-// enough to cope with the fact that multiple events might be injected before
-// any echoes are detected.
-static const unsigned int kNumRemoteMousePositions = 50;
-
-// The number of milliseconds for which to block remote input when local input
-// is received.
-static const int64 kRemoteBlockTimeoutMillis = 2000;
+#include "remoting/protocol/client_stub.h"
+#include "remoting/protocol/clipboard_thread_proxy.h"
 
 namespace remoting {
 
-using protocol::KeyEvent;
-using protocol::MouseEvent;
-
 ClientSession::ClientSession(
     EventHandler* event_handler,
-    protocol::ConnectionToClient* connection,
-    protocol::InputStub* input_stub,
-    Capturer* capturer)
+    scoped_refptr<base::SingleThreadTaskRunner> audio_task_runner,
+    scoped_refptr<base::SingleThreadTaskRunner> capture_task_runner,
+    scoped_refptr<base::SingleThreadTaskRunner> encode_task_runner,
+    scoped_refptr<base::SingleThreadTaskRunner> network_task_runner,
+    scoped_ptr<protocol::ConnectionToClient> connection,
+    scoped_ptr<DesktopEnvironment> desktop_environment,
+    const base::TimeDelta& max_duration)
     : event_handler_(event_handler),
-      connection_(connection),
-      client_jid_(connection->session()->jid()),
-      input_stub_(input_stub),
-      capturer_(capturer),
-      authenticated_(false),
-      awaiting_continue_approval_(false),
-      remote_mouse_button_state_(0) {
+      connection_(connection.Pass()),
+      desktop_environment_(desktop_environment.Pass()),
+      client_jid_(connection_->session()->jid()),
+      host_clipboard_stub_(desktop_environment_->event_executor()),
+      host_input_stub_(desktop_environment_->event_executor()),
+      input_tracker_(host_input_stub_),
+      remote_input_filter_(&input_tracker_),
+      mouse_clamping_filter_(desktop_environment_->video_capturer(),
+                             &remote_input_filter_),
+      disable_input_filter_(&mouse_clamping_filter_),
+      disable_clipboard_filter_(clipboard_echo_filter_.host_filter()),
+      auth_input_filter_(&disable_input_filter_),
+      auth_clipboard_filter_(&disable_clipboard_filter_),
+      client_clipboard_factory_(clipboard_echo_filter_.client_filter()),
+      max_duration_(max_duration),
+      audio_task_runner_(audio_task_runner),
+      capture_task_runner_(capture_task_runner),
+      encode_task_runner_(encode_task_runner),
+      network_task_runner_(network_task_runner),
+      active_recorders_(0) {
   connection_->SetEventHandler(this);
 
   // TODO(sergeyu): Currently ConnectionToClient expects stubs to be
   // set before channels are connected. Make it possible to set stubs
   // later and set them only when connection is authenticated.
+  connection_->set_clipboard_stub(&auth_clipboard_filter_);
   connection_->set_host_stub(this);
-  connection_->set_input_stub(this);
+  connection_->set_input_stub(&auth_input_filter_);
+  clipboard_echo_filter_.set_host_stub(host_clipboard_stub_);
+
+  // |auth_*_filter_|'s states reflect whether the session is authenticated.
+  auth_input_filter_.set_enabled(false);
+  auth_clipboard_filter_.set_enabled(false);
 }
 
-ClientSession::~ClientSession() {
-}
-
-void ClientSession::InjectKeyEvent(const KeyEvent& event) {
-  DCHECK(CalledOnValidThread());
-
-  if (authenticated_ && !ShouldIgnoreRemoteKeyboardInput(event)) {
-    RecordKeyEvent(event);
-    input_stub_->InjectKeyEvent(event);
+void ClientSession::NotifyClientDimensions(
+    const protocol::ClientDimensions& dimensions) {
+  // TODO(wez): Use the dimensions, e.g. to resize the host desktop to match.
+  if (dimensions.has_width() && dimensions.has_height()) {
+    VLOG(1) << "Received ClientDimensions (width="
+            << dimensions.width() << ", height=" << dimensions.height() << ")";
   }
 }
 
-void ClientSession::InjectMouseEvent(const MouseEvent& event) {
-  DCHECK(CalledOnValidThread());
-
-  if (authenticated_ && !ShouldIgnoreRemoteMouseInput(event)) {
-    RecordMouseButtonState(event);
-    MouseEvent event_to_inject = event;
-    if (event.has_x() && event.has_y()) {
-      // In case the client sends events with off-screen coordinates, modify
-      // the event to lie within the current screen area.  This is better than
-      // simply discarding the event, which might lose a button-up event at the
-      // end of a drag'n'drop (or cause other related problems).
-      SkIPoint pos(SkIPoint::Make(event.x(), event.y()));
-      const SkISize& screen = capturer_->size_most_recent();
-      pos.setX(std::max(0, std::min(screen.width() - 1, pos.x())));
-      pos.setY(std::max(0, std::min(screen.height() - 1, pos.y())));
-      event_to_inject.set_x(pos.x());
-      event_to_inject.set_y(pos.y());
-
-      // Record the mouse position so we can use it if we need to inject
-      // fake mouse button events. Note that we need to do this after we
-      // clamp the values to the screen area.
-      remote_mouse_pos_ = pos;
-
-      injected_mouse_positions_.push_back(pos);
-      if (injected_mouse_positions_.size() > kNumRemoteMousePositions) {
-        VLOG(1) << "Injected mouse positions queue full.";
-        injected_mouse_positions_.pop_front();
-      }
-    }
-    input_stub_->InjectMouseEvent(event_to_inject);
+void ClientSession::ControlVideo(const protocol::VideoControl& video_control) {
+  // TODO(wez): Pause/resume video updates, being careful not to let clients
+  // override any host-initiated pause of the video channel.
+  if (video_control.has_enable()) {
+    VLOG(1) << "Received VideoControl (enable="
+            << video_control.enable() << ")";
   }
 }
 
-void ClientSession::OnConnectionOpened(
+void ClientSession::OnConnectionAuthenticated(
     protocol::ConnectionToClient* connection) {
   DCHECK(CalledOnValidThread());
   DCHECK_EQ(connection_.get(), connection);
-  authenticated_ = true;
+
+  auth_input_filter_.set_enabled(true);
+  auth_clipboard_filter_.set_enabled(true);
+
+  clipboard_echo_filter_.set_client_stub(connection_->client_stub());
+
+  if (max_duration_ > base::TimeDelta()) {
+    // TODO(simonmorris): Let Disconnect() tell the client that the
+    // disconnection was caused by the session exceeding its maximum duration.
+    max_duration_timer_.Start(FROM_HERE, max_duration_,
+                              this, &ClientSession::Disconnect);
+  }
+
   event_handler_->OnSessionAuthenticated(this);
 }
 
-void ClientSession::OnConnectionClosed(
+void ClientSession::OnConnectionChannelsConnected(
     protocol::ConnectionToClient* connection) {
   DCHECK(CalledOnValidThread());
   DCHECK_EQ(connection_.get(), connection);
-  event_handler_->OnSessionClosed(this);
+  SetDisableInputs(false);
+
+  // Create a ScreenRecorder, passing the message loops that it should run on.
+  VideoEncoder* video_encoder =
+      CreateVideoEncoder(connection_->session()->config());
+  video_recorder_ = new ScreenRecorder(capture_task_runner_,
+                                       encode_task_runner_,
+                                       network_task_runner_,
+                                       desktop_environment_->video_capturer(),
+                                       video_encoder);
+  ++active_recorders_;
+
+  if (connection_->session()->config().is_audio_enabled()) {
+    scoped_ptr<AudioEncoder> audio_encoder =
+        CreateAudioEncoder(connection_->session()->config());
+    audio_scheduler_ = new AudioScheduler(
+        audio_task_runner_,
+        network_task_runner_,
+        desktop_environment_->audio_capturer(),
+        audio_encoder.Pass(),
+        connection_->audio_stub());
+    ++active_recorders_;
+  }
+
+  // Start the session.
+  video_recorder_->AddConnection(connection_.get());
+  video_recorder_->Start();
+  desktop_environment_->Start(CreateClipboardProxy());
+
+  event_handler_->OnSessionChannelsConnected(this);
 }
 
-void ClientSession::OnConnectionFailed(
+void ClientSession::OnConnectionClosed(
     protocol::ConnectionToClient* connection,
-    protocol::Session::Error error) {
+    protocol::ErrorCode error) {
   DCHECK(CalledOnValidThread());
   DCHECK_EQ(connection_.get(), connection);
-  if (error == protocol::Session::AUTHENTICATION_FAILED)
+
+  if (!auth_input_filter_.enabled())
     event_handler_->OnSessionAuthenticationFailed(this);
+
+  // Block any further input events from the client.
+  // TODO(wez): Fix ChromotingHost::OnSessionClosed not to check our
+  // is_authenticated(), so that we can disable |auth_*_filter_| here.
+  disable_input_filter_.set_enabled(false);
+  disable_clipboard_filter_.set_enabled(false);
+
+  // Ensure that any pressed keys or buttons are released.
+  input_tracker_.ReleaseAll();
+
   // TODO(sergeyu): Log failure reason?
   event_handler_->OnSessionClosed(this);
 }
@@ -122,140 +170,139 @@ void ClientSession::OnSequenceNumberUpdated(
     protocol::ConnectionToClient* connection, int64 sequence_number) {
   DCHECK(CalledOnValidThread());
   DCHECK_EQ(connection_.get(), connection);
+
+  if (video_recorder_.get())
+    video_recorder_->UpdateSequenceNumber(sequence_number);
+
   event_handler_->OnSessionSequenceNumber(this, sequence_number);
 }
 
-void ClientSession::OnClientIpAddress(protocol::ConnectionToClient* connection,
-                                      const std::string& channel_name,
-                                      const net::IPEndPoint& end_point) {
+void ClientSession::OnRouteChange(
+    protocol::ConnectionToClient* connection,
+    const std::string& channel_name,
+    const protocol::TransportRoute& route) {
   DCHECK(CalledOnValidThread());
   DCHECK_EQ(connection_.get(), connection);
-  event_handler_->OnSessionIpAddress(this, channel_name, end_point);
+  event_handler_->OnSessionRouteChange(this, channel_name, route);
 }
 
 void ClientSession::Disconnect() {
   DCHECK(CalledOnValidThread());
   DCHECK(connection_.get());
-  authenticated_ = false;
-  RestoreEventState();
 
-  // This triggers OnSessionClosed() and the session may be destroyed
+  max_duration_timer_.Stop();
+  // This triggers OnConnectionClosed(), and the session may be destroyed
   // as the result, so this call must be the last in this method.
   connection_->Disconnect();
 }
 
+void ClientSession::Stop(const base::Closure& done_task) {
+  DCHECK(CalledOnValidThread());
+  DCHECK(done_task_.is_null());
+
+  done_task_ = done_task;
+  if (audio_scheduler_.get()) {
+    audio_scheduler_->OnClientDisconnected();
+    audio_scheduler_->Stop(base::Bind(&ClientSession::OnRecorderStopped, this));
+    audio_scheduler_ = NULL;
+  }
+
+  if (video_recorder_.get()) {
+    video_recorder_->RemoveConnection(connection_.get());
+    video_recorder_->Stop(base::Bind(&ClientSession::OnRecorderStopped, this));
+    video_recorder_ = NULL;
+  }
+
+  if (!active_recorders_) {
+    connection_.reset();
+    done_task_.Run();
+  }
+}
+
 void ClientSession::LocalMouseMoved(const SkIPoint& mouse_pos) {
   DCHECK(CalledOnValidThread());
+  remote_input_filter_.LocalMouseMoved(mouse_pos);
+}
 
-  // If this is a genuine local input event (rather than an echo of a remote
-  // input event that we've just injected), then ignore remote inputs for a
-  // short time.
-  std::list<SkIPoint>::iterator found_position =
-      std::find(injected_mouse_positions_.begin(),
-                injected_mouse_positions_.end(), mouse_pos);
-  if (found_position != injected_mouse_positions_.end()) {
-    // Remove it from the list, and any positions that were added before it,
-    // if any.  This is because the local input monitor is assumed to receive
-    // injected mouse position events in the order in which they were injected
-    // (if at all).  If the position is found somewhere other than the front of
-    // the queue, this would be because the earlier positions weren't
-    // successfully injected (or the local input monitor might have skipped over
-    // some positions), and not because the events were out-of-sequence.  These
-    // spurious positions should therefore be discarded.
-    injected_mouse_positions_.erase(injected_mouse_positions_.begin(),
-                                    ++found_position);
-  } else {
-    latest_local_input_time_ = base::Time::Now();
+void ClientSession::SetDisableInputs(bool disable_inputs) {
+  DCHECK(CalledOnValidThread());
+
+  if (disable_inputs)
+    input_tracker_.ReleaseAll();
+
+  disable_input_filter_.set_enabled(!disable_inputs);
+  disable_clipboard_filter_.set_enabled(!disable_inputs);
+}
+
+ClientSession::~ClientSession() {
+  DCHECK(!active_recorders_);
+  DCHECK(audio_scheduler_.get() == NULL);
+  DCHECK(video_recorder_.get() == NULL);
+}
+
+scoped_ptr<protocol::ClipboardStub> ClientSession::CreateClipboardProxy() {
+  DCHECK(CalledOnValidThread());
+
+  return scoped_ptr<protocol::ClipboardStub>(
+      new protocol::ClipboardThreadProxy(
+          client_clipboard_factory_.GetWeakPtr(),
+          base::MessageLoopProxy::current()));
+}
+
+void ClientSession::OnRecorderStopped() {
+  if (!network_task_runner_->BelongsToCurrentThread()) {
+    network_task_runner_->PostTask(
+        FROM_HERE, base::Bind(&ClientSession::OnRecorderStopped, this));
+    return;
+  }
+
+  DCHECK(!done_task_.is_null());
+
+  --active_recorders_;
+  DCHECK_GE(active_recorders_, 0);
+
+  if (!active_recorders_) {
+    connection_.reset();
+    done_task_.Run();
   }
 }
 
-bool ClientSession::ShouldIgnoreRemoteMouseInput(
-    const protocol::MouseEvent& event) const {
-  DCHECK(CalledOnValidThread());
+// TODO(sergeyu): Move this to SessionManager?
+// static
+VideoEncoder* ClientSession::CreateVideoEncoder(
+    const protocol::SessionConfig& config) {
+  const protocol::ChannelConfig& video_config = config.video_config();
 
-  // If the last remote input event was a click or a drag, then it's not safe
-  // to block remote mouse events. For example, it might result in the host
-  // missing the mouse-up event and being stuck with the button pressed.
-  if (remote_mouse_button_state_ != 0)
-    return false;
-  // Otherwise, if the host user has not yet approved the continuation of the
-  // connection, then ignore remote mouse events.
-  if (awaiting_continue_approval_)
-    return true;
-  // Otherwise, ignore remote mouse events if the local mouse moved recently.
-  int64 millis = (base::Time::Now() - latest_local_input_time_)
-                 .InMilliseconds();
-  if (millis < kRemoteBlockTimeoutMillis)
-    return true;
-  return false;
+  if (video_config.codec == protocol::ChannelConfig::CODEC_VERBATIM) {
+    return VideoEncoderRowBased::CreateVerbatimEncoder();
+  } else if (video_config.codec == protocol::ChannelConfig::CODEC_ZIP) {
+    return VideoEncoderRowBased::CreateZlibEncoder();
+  } else if (video_config.codec == protocol::ChannelConfig::CODEC_VP8) {
+    return new remoting::VideoEncoderVp8();
+  }
+
+  NOTIMPLEMENTED();
+  return NULL;
 }
 
-bool ClientSession::ShouldIgnoreRemoteKeyboardInput(
-    const KeyEvent& event) const {
-  DCHECK(CalledOnValidThread());
+// static
+scoped_ptr<AudioEncoder> ClientSession::CreateAudioEncoder(
+    const protocol::SessionConfig& config) {
+  const protocol::ChannelConfig& audio_config = config.audio_config();
 
-  // If the host user has not yet approved the continuation of the connection,
-  // then all remote keyboard input is ignored, except to release keys that
-  // were already pressed.
-  if (awaiting_continue_approval_) {
-    return event.pressed() ||
-        (pressed_keys_.find(event.keycode()) == pressed_keys_.end());
+  if (audio_config.codec == protocol::ChannelConfig::CODEC_VERBATIM) {
+    return scoped_ptr<AudioEncoder>(new AudioEncoderVerbatim());
+  } else if (audio_config.codec == protocol::ChannelConfig::CODEC_SPEEX) {
+    return scoped_ptr<AudioEncoder>(new AudioEncoderSpeex());
   }
-  return false;
+
+  NOTIMPLEMENTED();
+  return scoped_ptr<AudioEncoder>(NULL);
 }
 
-void ClientSession::RecordKeyEvent(const KeyEvent& event) {
-  DCHECK(CalledOnValidThread());
-
-  if (event.pressed()) {
-    pressed_keys_.insert(event.keycode());
-  } else {
-    pressed_keys_.erase(event.keycode());
-  }
-}
-
-void ClientSession::RecordMouseButtonState(const MouseEvent& event) {
-  DCHECK(CalledOnValidThread());
-
-  if (event.has_button() && event.has_button_down()) {
-    // Button values are defined in remoting/proto/event.proto.
-    if (event.button() >= 1 && event.button() < MouseEvent::BUTTON_MAX) {
-      uint32 button_change = 1 << (event.button() - 1);
-      if (event.button_down()) {
-        remote_mouse_button_state_ |= button_change;
-      } else {
-        remote_mouse_button_state_ &= ~button_change;
-      }
-    }
-  }
-}
-
-void ClientSession::RestoreEventState() {
-  DCHECK(CalledOnValidThread());
-
-  // Undo any currently pressed keys.
-  std::set<int>::iterator i;
-  for (i = pressed_keys_.begin(); i != pressed_keys_.end(); ++i) {
-    KeyEvent key;
-    key.set_keycode(*i);
-    key.set_pressed(false);
-    input_stub_->InjectKeyEvent(key);
-  }
-  pressed_keys_.clear();
-
-  // Undo any currently pressed mouse buttons.
-  for (int i = 1; i < MouseEvent::BUTTON_MAX; i++) {
-    if (remote_mouse_button_state_ & (1 << (i - 1))) {
-      MouseEvent mouse;
-      // TODO(wez): Shouldn't [need to] set position here.
-      mouse.set_x(remote_mouse_pos_.x());
-      mouse.set_y(remote_mouse_pos_.y());
-      mouse.set_button((MouseEvent::MouseButton)i);
-      mouse.set_button_down(false);
-      input_stub_->InjectMouseEvent(mouse);
-    }
-  }
-  remote_mouse_button_state_ = 0;
+// static
+void ClientSessionTraits::Destruct(const ClientSession* client) {
+  client->network_task_runner_->DeleteSoon(FROM_HERE, client);
 }
 
 }  // namespace remoting

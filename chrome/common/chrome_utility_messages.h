@@ -85,6 +85,11 @@ IPC_MESSAGE_CONTROL4(ChromeUtilityMsg_RenderPDFPagesToMetafile,
                      printing::PdfRenderSettings,  // PDF render settitngs
                      std::vector<printing::PageRange>)
 
+// Tell the utility process to decode the given JPEG image data with a robust
+// libjpeg codec.
+IPC_MESSAGE_CONTROL1(ChromeUtilityMsg_RobustJPEGDecodeImage,
+                     std::vector<unsigned char>)  // encoded image contents
+
 // Tell the utility process to parse a JSON string into a Value object.
 IPC_MESSAGE_CONTROL1(ChromeUtilityMsg_ParseJSON,
                      std::string /* JSON to parse */)
@@ -102,7 +107,7 @@ IPC_MESSAGE_CONTROL1(ChromeUtilityMsg_GetPrinterCapsAndDefaults,
 // Reply when the utility process is done unpacking an extension.  |manifest|
 // is the parsed manifest.json file.
 // The unpacker should also have written out files containing the decoded
-// images and message catalogs from the extension. See ExtensionUnpacker for
+// images and message catalogs from the extension. See extensions::Unpacker for
 // details.
 IPC_MESSAGE_CONTROL1(ChromeUtilityHostMsg_UnpackExtension_Succeeded,
                      DictionaryValue /* manifest */)
@@ -161,11 +166,13 @@ IPC_MESSAGE_CONTROL1(ChromeUtilityHostMsg_ParseJSON_Succeeded,
 IPC_MESSAGE_CONTROL1(ChromeUtilityHostMsg_ParseJSON_Failed,
                      std::string /* error message, if any*/)
 
+#if defined(ENABLE_PRINTING)
 // Reply when the utility process has succeeded in obtaining the printer
 // capabilities and defaults.
 IPC_MESSAGE_CONTROL2(ChromeUtilityHostMsg_GetPrinterCapsAndDefaults_Succeeded,
                      std::string /* printer name */,
                      printing::PrinterCapsAndDefaults)
+#endif
 
 // Reply when the utility process has failed to obtain the printer
 // capabilities and defaults.

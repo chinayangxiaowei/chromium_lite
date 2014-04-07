@@ -4,7 +4,6 @@
 
 #ifndef ASH_ACCELERATORS_ACCELERATOR_FILTER_H_
 #define ASH_ACCELERATORS_ACCELERATOR_FILTER_H_
-#pragma once
 
 #include "base/basictypes.h"
 #include "base/compiler_specific.h"
@@ -23,14 +22,15 @@ class ASH_EXPORT AcceleratorFilter : public aura::EventFilter {
 
   // Overridden from aura::EventFilter:
   virtual bool PreHandleKeyEvent(aura::Window* target,
-                                 aura::KeyEvent* event) OVERRIDE;
+                                 ui::KeyEvent* event) OVERRIDE;
   virtual bool PreHandleMouseEvent(aura::Window* target,
-                                   aura::MouseEvent* event) OVERRIDE;
-  virtual ui::TouchStatus PreHandleTouchEvent(aura::Window* target,
-                                              aura::TouchEvent* event) OVERRIDE;
-  virtual ui::GestureStatus PreHandleGestureEvent(
+                                   ui::MouseEvent* event) OVERRIDE;
+  virtual ui::TouchStatus PreHandleTouchEvent(
       aura::Window* target,
-      aura::GestureEvent* event) OVERRIDE;
+      ui::TouchEvent* event) OVERRIDE;
+  virtual ui::EventResult PreHandleGestureEvent(
+      aura::Window* target,
+      ui::GestureEvent* event) OVERRIDE;
 
  private:
   DISALLOW_COPY_AND_ASSIGN(AcceleratorFilter);

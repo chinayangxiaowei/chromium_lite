@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -15,6 +15,7 @@ const char kI18nPrefix[] = "Pinyin";
 }  // namespace
 
 namespace chromeos {
+namespace options {
 
 LanguagePinyinHandler::LanguagePinyinHandler() {
 }
@@ -64,4 +65,5 @@ void LanguagePinyinHandler::GetLocalizedValues(
       list_value);
 }
 
+}  // namespace options
 }  // namespace chromeos

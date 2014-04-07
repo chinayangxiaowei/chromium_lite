@@ -4,615 +4,795 @@
 
 #include "chrome/browser/sync/glue/data_type_manager_impl.h"
 
-#include <set>
-
-#include "base/memory/scoped_ptr.h"
+#include "base/compiler_specific.h"
 #include "base/message_loop.h"
-#include "base/stl_util.h"
+#include "chrome/browser/sync/glue/backend_data_type_configurer.h"
 #include "chrome/browser/sync/glue/data_type_controller.h"
-#include "chrome/browser/sync/glue/data_type_controller_mock.h"
-#include "chrome/browser/sync/glue/data_type_manager_mock.h"
-#include "chrome/browser/sync/glue/sync_backend_host_mock.h"
-#include "chrome/browser/sync/internal_api/configure_reason.h"
-#include "chrome/browser/sync/profile_sync_test_util.h"
-#include "chrome/browser/sync/syncable/model_type.h"
+#include "chrome/browser/sync/glue/data_type_manager_observer.h"
+#include "chrome/browser/sync/glue/fake_data_type_controller.h"
 #include "chrome/common/chrome_notification_types.h"
-#include "content/public/browser/notification_details.h"
-#include "content/public/browser/notification_registrar.h"
-#include "content/public/browser/notification_service.h"
-#include "content/test/notification_observer_mock.h"
-#include "content/test/test_browser_thread.h"
+#include "content/public/test/test_browser_thread.h"
+#include "sync/internal_api/public/base/model_type.h"
+#include "sync/internal_api/public/configure_reason.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
-using browser_sync::DataTypeManager;
-using browser_sync::DataTypeManagerImpl;
-using browser_sync::DataTypeController;
-using browser_sync::DataTypeControllerMock;
-using browser_sync::SyncBackendHostMock;
-using content::BrowserThread;
+namespace browser_sync {
+
+using syncer::ModelType;
+using syncer::ModelTypeSet;
+using syncer::ModelTypeToString;
+using syncer::BOOKMARKS;
+using syncer::APPS;
+using syncer::PASSWORDS;
+using syncer::PREFERENCES;
+using syncer::NIGORI;
 using testing::_;
-using testing::AtLeast;
-using testing::DoAll;
-using testing::DoDefault;
-using testing::InSequence;
-using testing::Invoke;
-using testing::InvokeWithoutArgs;
-using testing::InvokeWithoutArgs;
 using testing::Mock;
-using testing::NiceMock;
-using testing::Property;
-using testing::Pointee;
-using testing::Return;
-using testing::SaveArg;
+using testing::ResultOf;
 
-DataTypeManager::ConfigureStatus GetStatus(
-    const content::NotificationDetails& details) {
-  const DataTypeManager::ConfigureResult* result =
-      content::Details<const DataTypeManager::ConfigureResult>(
-      details).ptr();
-  return result->status;
-}
-
-void DoConfigureDataTypes(
-    syncable::ModelTypeSet types_to_add,
-    syncable::ModelTypeSet types_to_remove,
-    sync_api::ConfigureReason reason,
-    base::Callback<void(syncable::ModelTypeSet)> ready_task,
-    base::Callback<void()> retry_task,
-    bool enable_nigori) {
-  ready_task.Run(syncable::ModelTypeSet());
-}
-
-void QuitMessageLoop() {
-  MessageLoop::current()->Quit();
-}
-
-class DataTypeManagerImplTest : public testing::Test {
+// Fake BackendDataTypeConfigurer implementation that simply stores away the
+// callback passed into ConfigureDataTypes.
+class FakeBackendDataTypeConfigurer : public BackendDataTypeConfigurer {
  public:
-  DataTypeManagerImplTest()
-      : ui_thread_(BrowserThread::UI, &message_loop_) {}
+  FakeBackendDataTypeConfigurer() {}
+  virtual ~FakeBackendDataTypeConfigurer() {}
 
-  virtual ~DataTypeManagerImplTest() {
+  virtual void ConfigureDataTypes(
+      syncer::ConfigureReason reason,
+      ModelTypeSet types_to_add,
+      ModelTypeSet types_to_remove,
+      const base::Callback<void(ModelTypeSet)>& ready_task,
+      const base::Callback<void()>& retry_callback) OVERRIDE {
+    last_ready_task_ = ready_task;
+  }
+
+  base::Callback<void(ModelTypeSet)> last_ready_task() const {
+    return last_ready_task_;
+  }
+
+ private:
+  base::Callback<void(ModelTypeSet)> last_ready_task_;
+};
+
+// Mock DataTypeManagerObserver implementation.
+class DataTypeManagerObserverMock : public DataTypeManagerObserver {
+ public:
+  DataTypeManagerObserverMock() {}
+  virtual ~DataTypeManagerObserverMock() {}
+
+  MOCK_METHOD0(OnConfigureBlocked, void());
+  MOCK_METHOD1(OnConfigureDone,
+               void(const browser_sync::DataTypeManager::ConfigureResult&));
+  MOCK_METHOD0(OnConfigureRetry, void());
+  MOCK_METHOD0(OnConfigureStart, void());
+};
+
+// Used by SetConfigureDoneExpectation.
+DataTypeManager::ConfigureStatus GetStatus(
+    const DataTypeManager::ConfigureResult& result) {
+  return result.status;
+}
+
+// The actual test harness class, parametrized on nigori state (i.e., tests are
+// run both configuring with nigori, and configuring without).
+class SyncDataTypeManagerImplTest : public testing::Test {
+ public:
+  SyncDataTypeManagerImplTest()
+      : ui_thread_(content::BrowserThread::UI, &ui_loop_) {}
+
+  virtual ~SyncDataTypeManagerImplTest() {
   }
 
  protected:
   virtual void SetUp() {
-    registrar_.Add(&observer_,
-                   chrome::NOTIFICATION_SYNC_CONFIGURE_START,
-                   content::NotificationService::AllSources());
-    registrar_.Add(&observer_,
-                   chrome::NOTIFICATION_SYNC_CONFIGURE_DONE,
-                   content::NotificationService::AllSources());
-  }
-
-  DataTypeControllerMock* MakeBookmarkDTC() {
-    DataTypeControllerMock* dtc = new DataTypeControllerMock();
-    EXPECT_CALL(*dtc, enabled()).WillRepeatedly(Return(true));
-    EXPECT_CALL(*dtc, type()).WillRepeatedly(Return(syncable::BOOKMARKS));
-    EXPECT_CALL(*dtc, name()).WillRepeatedly(Return("bookmark"));
-    return dtc;
-  }
-
-  DataTypeControllerMock* MakePreferenceDTC() {
-    DataTypeControllerMock* dtc = new DataTypeControllerMock();
-    EXPECT_CALL(*dtc, enabled()).WillRepeatedly(Return(true));
-    EXPECT_CALL(*dtc, type()).WillRepeatedly(Return(syncable::PREFERENCES));
-    EXPECT_CALL(*dtc, name()).WillRepeatedly(Return("preference"));
-    return dtc;
-  }
-
-  DataTypeControllerMock* MakePasswordDTC() {
-    DataTypeControllerMock* dtc = new DataTypeControllerMock();
-    SetPasswordDTCExpectations(dtc);
-    return dtc;
-  }
-
-  void SetPasswordDTCExpectations(DataTypeControllerMock* dtc) {
-    EXPECT_CALL(*dtc, enabled()).WillRepeatedly(Return(true));
-    EXPECT_CALL(*dtc, type()).WillRepeatedly(Return(syncable::PASSWORDS));
-    EXPECT_CALL(*dtc, name()).WillRepeatedly(Return("passwords"));
-  }
-
-  void SetStartStopExpectations(DataTypeControllerMock* mock_dtc) {
-    InSequence seq;
-    EXPECT_CALL(*mock_dtc, state()).
-        WillRepeatedly(Return(DataTypeController::NOT_RUNNING));
-    EXPECT_CALL(*mock_dtc, Start(_)).
-        WillOnce(InvokeCallback(syncable::BOOKMARKS, DataTypeController::OK));
-    EXPECT_CALL(*mock_dtc, state()).
-        WillRepeatedly(Return(DataTypeController::RUNNING));
-    EXPECT_CALL(*mock_dtc, Stop()).Times(1);
-    EXPECT_CALL(*mock_dtc, state()).
-        WillRepeatedly(Return(DataTypeController::NOT_RUNNING));
-  }
-
-  void SetBusyStartStopExpectations(DataTypeControllerMock* mock_dtc,
-                                    DataTypeController::State busy_state) {
-    InSequence seq;
-    EXPECT_CALL(*mock_dtc, state()).
-        WillRepeatedly(Return(DataTypeController::NOT_RUNNING));
-    EXPECT_CALL(*mock_dtc, Start(_)).
-        WillOnce(InvokeCallback(syncable::BOOKMARKS, DataTypeController::OK));
-    EXPECT_CALL(*mock_dtc, state()).
-        WillRepeatedly(Return(busy_state));
-    EXPECT_CALL(*mock_dtc, Stop()).Times(1);
-    EXPECT_CALL(*mock_dtc, state()).
-        WillRepeatedly(Return(DataTypeController::NOT_RUNNING));
-  }
-
-  void SetNotUsedExpectations(DataTypeControllerMock* mock_dtc) {
-    EXPECT_CALL(*mock_dtc, Start(_)).Times(0);
-    EXPECT_CALL(*mock_dtc, Stop()).Times(0);
-    EXPECT_CALL(*mock_dtc, state()).
-        WillRepeatedly(Return(DataTypeController::NOT_RUNNING));
   }
 
   void SetConfigureStartExpectation() {
-    EXPECT_CALL(
-        observer_,
-        Observe(int(chrome::NOTIFICATION_SYNC_CONFIGURE_START),
-                _, _));
+    EXPECT_CALL(observer_, OnConfigureStart());
   }
 
+  void SetConfigureBlockedExpectation() {
+    EXPECT_CALL(observer_, OnConfigureBlocked());
+  }
 
   void SetConfigureDoneExpectation(DataTypeManager::ConfigureStatus status) {
-    EXPECT_CALL(
-        observer_,
-        Observe(int(chrome::NOTIFICATION_SYNC_CONFIGURE_DONE), _,
-        ::testing::ResultOf(&GetStatus, status)));
+    EXPECT_CALL(observer_, OnConfigureDone(ResultOf(&GetStatus, status)));
   }
 
+  // Configure the given DTM with the given desired types.
   void Configure(DataTypeManagerImpl* dtm,
-                 const DataTypeManager::TypeSet& desired_types,
-                 sync_api::ConfigureReason reason,
-                 bool enable_nigori) {
-    if (enable_nigori) {
-      dtm->Configure(desired_types, reason);
-    } else {
-      dtm->ConfigureWithoutNigori(desired_types, reason);
-    }
+                 const DataTypeManager::TypeSet& desired_types) {
+    dtm->Configure(desired_types, syncer::CONFIGURE_REASON_RECONFIGURATION);
   }
 
-  void RunConfigureOneTest(bool enable_nigori) {
-    DataTypeControllerMock* bookmark_dtc = MakeBookmarkDTC();
-    SetStartStopExpectations(bookmark_dtc);
-    controllers_[syncable::BOOKMARKS] = bookmark_dtc;
-    EXPECT_CALL(backend_,
-                ConfigureDataTypes(_, _, _, _, _, enable_nigori)).Times(1);
-    DataTypeManagerImpl dtm(&backend_, &controllers_);
-    types_.Put(syncable::BOOKMARKS);
-    SetConfigureStartExpectation();
-    SetConfigureDoneExpectation(DataTypeManager::OK);
-    Configure(&dtm, types_, sync_api::CONFIGURE_REASON_RECONFIGURATION,
-              enable_nigori);
-    EXPECT_EQ(DataTypeManager::CONFIGURED, dtm.state());
-    dtm.Stop();
-    EXPECT_EQ(DataTypeManager::STOPPED, dtm.state());
-  }
-
-  void RunConfigureWhileOneInFlightTest(bool enable_nigori) {
-    DataTypeControllerMock* bookmark_dtc = MakeBookmarkDTC();
-    // Save the callback here so we can interrupt startup.
-    DataTypeController::StartCallback callback;
-    {
-      InSequence seq;
-      EXPECT_CALL(*bookmark_dtc, state()).
-          WillRepeatedly(Return(DataTypeController::NOT_RUNNING));
-      EXPECT_CALL(*bookmark_dtc, Start(_)).
-          WillOnce(SaveArg<0>(&callback));
-      EXPECT_CALL(*bookmark_dtc, state()).
-          WillRepeatedly(Return(DataTypeController::RUNNING));
-      EXPECT_CALL(*bookmark_dtc, Stop()).Times(1);
-      EXPECT_CALL(*bookmark_dtc, state()).
-          WillRepeatedly(Return(DataTypeController::NOT_RUNNING));
-    }
-    controllers_[syncable::BOOKMARKS] = bookmark_dtc;
-
-    DataTypeControllerMock* preference_dtc = MakePreferenceDTC();
-    SetStartStopExpectations(preference_dtc);
-    controllers_[syncable::PREFERENCES] = preference_dtc;
-
-    DataTypeManagerImpl dtm(&backend_, &controllers_);
-    EXPECT_CALL(backend_, ConfigureDataTypes(_, _, _, _, _, enable_nigori))
-        .WillOnce(Invoke(DoConfigureDataTypes))
-        .WillOnce(DoAll(Invoke(DoConfigureDataTypes),
-                        InvokeWithoutArgs(QuitMessageLoop)));
-
-    types_.Put(syncable::BOOKMARKS);
-
-    SetConfigureStartExpectation();
-    SetConfigureDoneExpectation(DataTypeManager::OK);
-    Configure(&dtm, types_, sync_api::CONFIGURE_REASON_RECONFIGURATION,
-              enable_nigori);
-
-    // At this point, the bookmarks dtc should be in flight.  Add
-    // preferences and continue starting bookmarks.
-    types_.Put(syncable::PREFERENCES);
-    Configure(&dtm, types_, sync_api::CONFIGURE_REASON_RECONFIGURATION,
-              enable_nigori);
-    callback.Run(DataTypeController::OK, SyncError());
-
-    MessageLoop::current()->Run();
-
-    EXPECT_EQ(DataTypeManager::CONFIGURED, dtm.state());
-
-    dtm.Stop();
-    EXPECT_EQ(DataTypeManager::STOPPED, dtm.state());
-  }
-
-  void RunConfigureWhileDownloadPendingTest(
-      bool enable_nigori,
-      syncable::ModelTypeSet first_configure_result) {
-    DataTypeControllerMock* bookmark_dtc = MakeBookmarkDTC();
-    SetStartStopExpectations(bookmark_dtc);
-    controllers_[syncable::BOOKMARKS] = bookmark_dtc;
-
-    DataTypeControllerMock* preference_dtc = MakePreferenceDTC();
-    SetStartStopExpectations(preference_dtc);
-    controllers_[syncable::PREFERENCES] = preference_dtc;
-
-    DataTypeManagerImpl dtm(&backend_, &controllers_);
-    SetConfigureStartExpectation();
-    SetConfigureDoneExpectation(DataTypeManager::OK);
-    base::Callback<void(syncable::ModelTypeSet)> task;
-    // Grab the task the first time this is called so we can configure
-    // before it is finished.
-    EXPECT_CALL(backend_, ConfigureDataTypes(_, _, _, _, _, enable_nigori)).
-        WillOnce(SaveArg<3>(&task)).
-        WillOnce(DoDefault());
-
-    types_.Put(syncable::BOOKMARKS);
-    Configure(&dtm, types_, sync_api::CONFIGURE_REASON_RECONFIGURATION,
-              enable_nigori);
-    // Configure should stop in the DOWNLOAD_PENDING state because we
-    // are waiting for the download ready task to be run.
+  // Finish downloading for the given DTM.  Should be done only after
+  // a call to Configure().
+  void FinishDownload(const DataTypeManager& dtm,
+                      ModelTypeSet failed_download_types) {
     EXPECT_EQ(DataTypeManager::DOWNLOAD_PENDING, dtm.state());
-
-    types_.Put(syncable::PREFERENCES);
-    Configure(&dtm, types_, sync_api::CONFIGURE_REASON_RECONFIGURATION,
-              enable_nigori);
-
-    // Running the task will queue a restart task to the message loop, and
-    // eventually get us configured.
-    task.Run(first_configure_result);
-    MessageLoop::current()->RunAllPending();
-    EXPECT_EQ(DataTypeManager::CONFIGURED, dtm.state());
-
-    dtm.Stop();
-    EXPECT_EQ(DataTypeManager::STOPPED, dtm.state());
+    ASSERT_FALSE(configurer_.last_ready_task().is_null());
+    configurer_.last_ready_task().Run(failed_download_types);
   }
 
-  MessageLoopForUI message_loop_;
+  // Adds a fake controller for the given type to |controllers_|.
+  // Should be called only before setting up the DTM.
+  void AddController(ModelType model_type) {
+    controllers_[model_type] = new FakeDataTypeController(model_type);
+  }
+
+  // Gets the fake controller for the given type, which should have
+  // been previously added via AddController().
+  scoped_refptr<FakeDataTypeController> GetController(
+      ModelType model_type) const {
+    DataTypeController::TypeMap::const_iterator it =
+        controllers_.find(model_type);
+    if (it == controllers_.end()) {
+      return NULL;
+    }
+    return make_scoped_refptr(
+        static_cast<FakeDataTypeController*>(it->second.get()));
+  }
+
+  MessageLoopForUI ui_loop_;
   content::TestBrowserThread ui_thread_;
   DataTypeController::TypeMap controllers_;
-  NiceMock<SyncBackendHostMock> backend_;
-  content::NotificationObserverMock observer_;
-  content::NotificationRegistrar registrar_;
-  syncable::ModelTypeSet types_;
+  FakeBackendDataTypeConfigurer configurer_;
+  DataTypeManagerObserverMock observer_;
 };
 
-TEST_F(DataTypeManagerImplTest, NoControllers) {
-  DataTypeManagerImpl dtm(&backend_, &controllers_);
+// Set up a DTM with no controllers, configure it, finish downloading,
+// and then stop it.
+TEST_F(SyncDataTypeManagerImplTest, NoControllers) {
+  DataTypeManagerImpl dtm(&configurer_, &controllers_, &observer_);
   SetConfigureStartExpectation();
   SetConfigureDoneExpectation(DataTypeManager::OK);
-  dtm.Configure(types_, sync_api::CONFIGURE_REASON_RECONFIGURATION);
-  EXPECT_EQ(DataTypeManager::CONFIGURED, dtm.state());
-  dtm.Stop();
-  EXPECT_EQ(DataTypeManager::STOPPED, dtm.state());
-}
 
-TEST_F(DataTypeManagerImplTest, ConfigureOne) {
-  RunConfigureOneTest(true /* enable_nigori */);
-}
-
-TEST_F(DataTypeManagerImplTest, ConfigureOneWithoutNigori) {
-  RunConfigureOneTest(false /* enable_nigori */);
-}
-
-TEST_F(DataTypeManagerImplTest, ConfigureOneStopWhileStarting) {
-  DataTypeControllerMock* bookmark_dtc = MakeBookmarkDTC();
-  SetBusyStartStopExpectations(bookmark_dtc,
-                               DataTypeController::MODEL_STARTING);
-  controllers_[syncable::BOOKMARKS] = bookmark_dtc;
-  EXPECT_CALL(backend_, ConfigureDataTypes(_, _, _, _, _, true)).Times(1);
-  DataTypeManagerImpl dtm(&backend_, &controllers_);
-  types_.Put(syncable::BOOKMARKS);
-  SetConfigureStartExpectation();
-  SetConfigureDoneExpectation(DataTypeManager::OK);
-  dtm.Configure(types_, sync_api::CONFIGURE_REASON_RECONFIGURATION);
-  EXPECT_EQ(DataTypeManager::CONFIGURED, dtm.state());
-  dtm.Stop();
-  EXPECT_EQ(DataTypeManager::STOPPED, dtm.state());
-}
-
-TEST_F(DataTypeManagerImplTest, ConfigureOneStopWhileAssociating) {
-  DataTypeControllerMock* bookmark_dtc = MakeBookmarkDTC();
-  SetBusyStartStopExpectations(bookmark_dtc, DataTypeController::ASSOCIATING);
-  controllers_[syncable::BOOKMARKS] = bookmark_dtc;
-  EXPECT_CALL(backend_, ConfigureDataTypes(_, _, _, _, _, true)).Times(1);
-  DataTypeManagerImpl dtm(&backend_, &controllers_);
-  types_.Put(syncable::BOOKMARKS);
-  SetConfigureStartExpectation();
-  SetConfigureDoneExpectation(DataTypeManager::OK);
-  dtm.Configure(types_, sync_api::CONFIGURE_REASON_RECONFIGURATION);
-  EXPECT_EQ(DataTypeManager::CONFIGURED, dtm.state());
-  dtm.Stop();
-  EXPECT_EQ(DataTypeManager::STOPPED, dtm.state());
-}
-
-TEST_F(DataTypeManagerImplTest, OneWaitingForCrypto) {
-  DataTypeControllerMock* password_dtc = MakePasswordDTC();
-  EXPECT_CALL(*password_dtc, state()).Times(AtLeast(2)).
-      WillRepeatedly(Return(DataTypeController::NOT_RUNNING));
-  EXPECT_CALL(*password_dtc, Start(_)).
-      WillOnce(InvokeCallback(syncable::PASSWORDS,
-                              DataTypeController::NEEDS_CRYPTO));
-
-  controllers_[syncable::PASSWORDS] = password_dtc;
-  EXPECT_CALL(backend_, ConfigureDataTypes(_, _, _, _, _, true)).Times(1);
-
-  DataTypeManagerImpl dtm(&backend_, &controllers_);
-  types_.Put(syncable::PASSWORDS);
-  SetConfigureStartExpectation();
-
-  dtm.Configure(types_, sync_api::CONFIGURE_REASON_RECONFIGURATION);
-  EXPECT_EQ(DataTypeManager::BLOCKED, dtm.state());
-
-  Mock::VerifyAndClearExpectations(&backend_);
-  Mock::VerifyAndClearExpectations(&observer_);
-  Mock::VerifyAndClearExpectations(password_dtc);
-
-  SetConfigureDoneExpectation(DataTypeManager::OK);
-  SetPasswordDTCExpectations(password_dtc);
-  EXPECT_CALL(*password_dtc, state()).
-      WillOnce(Return(DataTypeController::NOT_RUNNING)).
-      WillRepeatedly(Return(DataTypeController::RUNNING));
-  EXPECT_CALL(*password_dtc, Start(_)).
-      WillOnce(InvokeCallback(syncable::PASSWORDS,
-                              DataTypeController::OK));
-  EXPECT_CALL(backend_, ConfigureDataTypes(_, _, _, _, _, true)).Times(1);
-  dtm.Configure(types_, sync_api::CONFIGURE_REASON_RECONFIGURATION);
-
-  EXPECT_EQ(DataTypeManager::CONFIGURED, dtm.state());
-  EXPECT_CALL(*password_dtc, Stop()).Times(1);
-  dtm.Stop();
-  EXPECT_EQ(DataTypeManager::STOPPED, dtm.state());
-}
-
-TEST_F(DataTypeManagerImplTest, ConfigureOneThenAnother) {
-  DataTypeControllerMock* bookmark_dtc = MakeBookmarkDTC();
-  SetStartStopExpectations(bookmark_dtc);
-  controllers_[syncable::BOOKMARKS] = bookmark_dtc;
-  DataTypeControllerMock* preference_dtc = MakePreferenceDTC();
-  SetStartStopExpectations(preference_dtc);
-  controllers_[syncable::PREFERENCES] = preference_dtc;
-
-  EXPECT_CALL(backend_, ConfigureDataTypes(_, _, _, _, _, true)).Times(2);
-  DataTypeManagerImpl dtm(&backend_, &controllers_);
-  types_.Put(syncable::BOOKMARKS);
-
-  SetConfigureStartExpectation();
-  SetConfigureDoneExpectation(DataTypeManager::OK);
-  dtm.Configure(types_, sync_api::CONFIGURE_REASON_RECONFIGURATION);
-  EXPECT_EQ(DataTypeManager::CONFIGURED, dtm.state());
-
-  types_.Put(syncable::PREFERENCES);
-  SetConfigureStartExpectation();
-  SetConfigureDoneExpectation(DataTypeManager::OK);
-  dtm.Configure(types_, sync_api::CONFIGURE_REASON_RECONFIGURATION);
-  EXPECT_EQ(DataTypeManager::CONFIGURED, dtm.state());
-
-  dtm.Stop();
-  EXPECT_EQ(DataTypeManager::STOPPED, dtm.state());
-}
-
-TEST_F(DataTypeManagerImplTest, ConfigureOneThenSwitch) {
-  DataTypeControllerMock* bookmark_dtc = MakeBookmarkDTC();
-  SetStartStopExpectations(bookmark_dtc);
-  controllers_[syncable::BOOKMARKS] = bookmark_dtc;
-  DataTypeControllerMock* preference_dtc = MakePreferenceDTC();
-  SetStartStopExpectations(preference_dtc);
-  controllers_[syncable::PREFERENCES] = preference_dtc;
-
-  EXPECT_CALL(backend_, ConfigureDataTypes(_, _, _, _, _, true)).Times(2);
-  DataTypeManagerImpl dtm(&backend_, &controllers_);
-  types_.Put(syncable::BOOKMARKS);
-
-  SetConfigureStartExpectation();
-  SetConfigureDoneExpectation(DataTypeManager::OK);
-  dtm.Configure(types_, sync_api::CONFIGURE_REASON_RECONFIGURATION);
-  EXPECT_EQ(DataTypeManager::CONFIGURED, dtm.state());
-
-  types_.Clear();
-  types_.Put(syncable::PREFERENCES);
-  SetConfigureStartExpectation();
-  SetConfigureDoneExpectation(DataTypeManager::OK);
-  dtm.Configure(types_, sync_api::CONFIGURE_REASON_RECONFIGURATION);
-  EXPECT_EQ(DataTypeManager::CONFIGURED, dtm.state());
-
-  dtm.Stop();
-  EXPECT_EQ(DataTypeManager::STOPPED, dtm.state());
-}
-
-TEST_F(DataTypeManagerImplTest, ConfigureWhileOneInFlight) {
-  RunConfigureWhileOneInFlightTest(true /* enable_nigori */);
-}
-
-TEST_F(DataTypeManagerImplTest, ConfigureWithoutNigoriWhileOneInFlight) {
-  RunConfigureWhileOneInFlightTest(false /* enable_nigori */);
-}
-
-TEST_F(DataTypeManagerImplTest, OneFailingController) {
-  DataTypeControllerMock* bookmark_dtc = MakeBookmarkDTC();
-  EXPECT_CALL(*bookmark_dtc, Start(_)).
-      WillOnce(InvokeCallback(syncable::BOOKMARKS,
-                              DataTypeController::UNRECOVERABLE_ERROR));
-  EXPECT_CALL(*bookmark_dtc, Stop()).Times(0);
-  EXPECT_CALL(*bookmark_dtc, state()).
-      WillRepeatedly(Return(DataTypeController::NOT_RUNNING));
-  controllers_[syncable::BOOKMARKS] = bookmark_dtc;
-
-  DataTypeManagerImpl dtm(&backend_, &controllers_);
-  SetConfigureStartExpectation();
-  SetConfigureDoneExpectation(DataTypeManager::UNRECOVERABLE_ERROR);
-  EXPECT_CALL(backend_, ConfigureDataTypes(_, _, _, _, _, true)).Times(1);
-
-  types_.Put(syncable::BOOKMARKS);
-  dtm.Configure(types_, sync_api::CONFIGURE_REASON_RECONFIGURATION);
-  EXPECT_EQ(DataTypeManager::STOPPED, dtm.state());
-}
-
-TEST_F(DataTypeManagerImplTest, StopWhileInFlight) {
-  DataTypeControllerMock* bookmark_dtc = MakeBookmarkDTC();
-  SetStartStopExpectations(bookmark_dtc);
-  controllers_[syncable::BOOKMARKS] = bookmark_dtc;
-
-  DataTypeControllerMock* preference_dtc = MakePreferenceDTC();
-  // Save the callback here so we can interrupt startup.
-  DataTypeController::StartCallback callback;
-  EXPECT_CALL(*preference_dtc, Start(_)).
-      WillOnce(SaveArg<0>(&callback));
-  EXPECT_CALL(*preference_dtc, state()).
-      WillRepeatedly(Return(DataTypeController::NOT_RUNNING));
-  controllers_[syncable::PREFERENCES] = preference_dtc;
-
-  DataTypeManagerImpl dtm(&backend_, &controllers_);
-  SetConfigureStartExpectation();
-  SetConfigureDoneExpectation(DataTypeManager::ABORTED);
-  EXPECT_CALL(backend_, ConfigureDataTypes(_, _, _, _, _, true)).Times(1);
-
-  types_.Put(syncable::BOOKMARKS);
-  types_.Put(syncable::PREFERENCES);
-  dtm.Configure(types_, sync_api::CONFIGURE_REASON_RECONFIGURATION);
-  // Configure should stop in the CONFIGURING state because we are
-  // waiting for the preferences callback to be invoked.
-  EXPECT_EQ(DataTypeManager::CONFIGURING, dtm.state());
-
-  // Call stop before the preference callback is invoked.
-  EXPECT_CALL(*preference_dtc, Stop()).
-      WillOnce(InvokeCallbackPointer(callback, syncable::PREFERENCES,
-                                     DataTypeController::ABORTED));
-  dtm.Stop();
-  EXPECT_EQ(DataTypeManager::STOPPED, dtm.state());
-}
-
-TEST_F(DataTypeManagerImplTest, SecondControllerFails) {
-  DataTypeControllerMock* bookmark_dtc = MakeBookmarkDTC();
-  SetStartStopExpectations(bookmark_dtc);
-  controllers_[syncable::BOOKMARKS] = bookmark_dtc;
-
-  DataTypeControllerMock* preference_dtc = MakePreferenceDTC();
-  EXPECT_CALL(*preference_dtc, Start(_)).
-      WillOnce(InvokeCallback(syncable::PREFERENCES,
-                              DataTypeController::UNRECOVERABLE_ERROR));
-  EXPECT_CALL(*preference_dtc, Stop()).Times(0);
-  EXPECT_CALL(*preference_dtc, state()).
-      WillRepeatedly(Return(DataTypeController::NOT_RUNNING));
-  controllers_[syncable::PREFERENCES] = preference_dtc;
-
-  DataTypeManagerImpl dtm(&backend_, &controllers_);
-  SetConfigureStartExpectation();
-  SetConfigureDoneExpectation(DataTypeManager::UNRECOVERABLE_ERROR);
-  EXPECT_CALL(backend_, ConfigureDataTypes(_, _, _, _, _, true)).Times(1);
-
-  types_.Put(syncable::BOOKMARKS);
-  types_.Put(syncable::PREFERENCES);
-  dtm.Configure(types_, sync_api::CONFIGURE_REASON_RECONFIGURATION);
-  EXPECT_EQ(DataTypeManager::STOPPED, dtm.state());
-}
-
-ACTION_P(SetDisabledState, state) {
-  *state = DataTypeController::DISABLED;
-}
-
-ACTION_P(ReturnState, state) {
-  return *state;
-}
-
-TEST_F(DataTypeManagerImplTest, OneControllerFailsAssociation) {
-  DataTypeControllerMock* bookmark_dtc = MakeBookmarkDTC();
-  SetStartStopExpectations(bookmark_dtc);
-  controllers_[syncable::BOOKMARKS] = bookmark_dtc;
-
-  DataTypeController::State state = DataTypeController::NOT_RUNNING;
-
-  DataTypeControllerMock* preference_dtc = MakePreferenceDTC();
-  EXPECT_CALL(*preference_dtc, Start(_)).
-      WillOnce(DoAll(SetDisabledState(&state),
-                     InvokeCallback(syncable::PREFERENCES,
-                         DataTypeController::ASSOCIATION_FAILED)));
-  EXPECT_CALL(*preference_dtc, Stop()).Times(1);
-  EXPECT_CALL(*preference_dtc, state()).
-      WillRepeatedly(ReturnState(&state));
-  controllers_[syncable::PREFERENCES] = preference_dtc;
-
-  DataTypeManagerImpl dtm(&backend_, &controllers_);
-  SetConfigureStartExpectation();
-  SetConfigureDoneExpectation(DataTypeManager::PARTIAL_SUCCESS);
-  EXPECT_CALL(backend_, ConfigureDataTypes(_, _, _, _, _, true)).Times(1);
-
-  types_.Put(syncable::BOOKMARKS);
-  types_.Put(syncable::PREFERENCES);
-  dtm.Configure(types_, sync_api::CONFIGURE_REASON_RECONFIGURATION);
-  EXPECT_EQ(DataTypeManager::CONFIGURED, dtm.state());
-
-  dtm.Stop();
-  EXPECT_EQ(DataTypeManager::STOPPED, dtm.state());
-}
-
-
-TEST_F(DataTypeManagerImplTest, ConfigureWhileDownloadPending) {
-  RunConfigureWhileDownloadPendingTest(
-      true /* enable_nigori */,
-      syncable::ModelTypeSet() /* first_configure_result */);
-}
-
-TEST_F(DataTypeManagerImplTest, ConfigureWhileDownloadPendingWithoutNigori) {
-  RunConfigureWhileDownloadPendingTest(
-      false /* enable_nigori */,
-      syncable::ModelTypeSet() /* first_configure_result */);
-}
-
-TEST_F(DataTypeManagerImplTest, ConfigureWhileDownloadPendingFail) {
-  RunConfigureWhileDownloadPendingTest(
-      true /* enable_nigori */,
-      /* first_configure_result */
-      syncable::ModelTypeSet(syncable::BOOKMARKS));
-}
-
-TEST_F(DataTypeManagerImplTest,
-       ConfigureWhileDownloadPendingFailWithoutNigori) {
-  RunConfigureWhileDownloadPendingTest(
-      false /* enable_nigori */,
-      /* first_configure_result */
-      syncable::ModelTypeSet(syncable::BOOKMARKS));
-}
-
-TEST_F(DataTypeManagerImplTest, StopWhileDownloadPending) {
-  DataTypeControllerMock* bookmark_dtc = MakeBookmarkDTC();
-  SetNotUsedExpectations(bookmark_dtc);
-  controllers_[syncable::BOOKMARKS] = bookmark_dtc;
-
-  DataTypeManagerImpl dtm(&backend_, &controllers_);
-  SetConfigureStartExpectation();
-  SetConfigureDoneExpectation(DataTypeManager::ABORTED);
-  base::Callback<void(syncable::ModelTypeSet)> task;
-  // Grab the task the first time this is called so we can stop
-  // before it is finished.
-  EXPECT_CALL(backend_, ConfigureDataTypes(_, _, _, _, _, true)).
-      WillOnce(SaveArg<3>(&task));
-
-  types_.Put(syncable::BOOKMARKS);
-  dtm.Configure(types_, sync_api::CONFIGURE_REASON_RECONFIGURATION);
-  // Configure should stop in the DOWNLOAD_PENDING state because we
-  // are waiting for the download ready task to be run.
+  Configure(&dtm, ModelTypeSet());
   EXPECT_EQ(DataTypeManager::DOWNLOAD_PENDING, dtm.state());
 
+  FinishDownload(dtm, ModelTypeSet());
+  EXPECT_EQ(DataTypeManager::CONFIGURED, dtm.state());
+
   dtm.Stop();
   EXPECT_EQ(DataTypeManager::STOPPED, dtm.state());
-
-  // It should be perfectly safe to run this task even though the DTM
-  // has been stopped.
-  task.Run(syncable::ModelTypeSet());
 }
+
+// Set up a DTM with a single controller, configure it, finish
+// downloading, finish starting the controller, and then stop the DTM.
+TEST_F(SyncDataTypeManagerImplTest, ConfigureOne) {
+  AddController(BOOKMARKS);
+
+  DataTypeManagerImpl dtm(&configurer_, &controllers_, &observer_);
+  SetConfigureStartExpectation();
+  SetConfigureDoneExpectation(DataTypeManager::OK);
+
+  Configure(&dtm, ModelTypeSet(BOOKMARKS));
+  EXPECT_EQ(DataTypeManager::DOWNLOAD_PENDING, dtm.state());
+
+  FinishDownload(dtm, ModelTypeSet());
+  EXPECT_EQ(DataTypeManager::CONFIGURING, dtm.state());
+
+  GetController(BOOKMARKS)->FinishStart(DataTypeController::OK);
+  EXPECT_EQ(DataTypeManager::CONFIGURED, dtm.state());
+
+  dtm.Stop();
+  EXPECT_EQ(DataTypeManager::STOPPED, dtm.state());
+}
+
+// Set up a DTM with 2 controllers. configure it. One of them finishes loading
+// after the  timeout. Make sure eventually all are configured.
+TEST_F(SyncDataTypeManagerImplTest, ConfigureSlowLoadingType) {
+  AddController(BOOKMARKS);
+  AddController(APPS);
+
+  GetController(BOOKMARKS)->SetDelayModelLoad();
+
+  DataTypeManagerImpl dtm(&configurer_, &controllers_, &observer_);
+  SetConfigureStartExpectation();
+  SetConfigureDoneExpectation(DataTypeManager::PARTIAL_SUCCESS);
+
+  syncer::ModelTypeSet types;
+  types.Put(BOOKMARKS);
+  types.Put(APPS);
+
+  Configure(&dtm, types);
+  EXPECT_EQ(DataTypeManager::DOWNLOAD_PENDING, dtm.state());
+
+  FinishDownload(dtm, ModelTypeSet());
+  EXPECT_EQ(DataTypeManager::CONFIGURING, dtm.state());
+
+  base::OneShotTimer<ModelAssociationManager>* timer =
+    dtm.GetModelAssociationManagerForTesting()->GetTimerForTesting();
+
+  base::Closure task = timer->user_task();
+  timer->Stop();
+  task.Run();
+
+  SetConfigureDoneExpectation(DataTypeManager::OK);
+  GetController(APPS)->FinishStart(DataTypeController::OK);
+
+  SetConfigureStartExpectation();
+  GetController(BOOKMARKS)->SimulateModelLoadFinishing();
+
+  FinishDownload(dtm, ModelTypeSet());
+  GetController(BOOKMARKS)->SimulateModelLoadFinishing();
+
+  GetController(BOOKMARKS)->FinishStart(DataTypeController::OK);
+  EXPECT_EQ(DataTypeManager::CONFIGURED, dtm.state());
+
+  dtm.Stop();
+  EXPECT_EQ(DataTypeManager::STOPPED, dtm.state());
+}
+
+
+// Set up a DTM with a single controller, configure it, but stop it
+// before finishing the download.  It should still be safe to run the
+// download callback even after the DTM is stopped and destroyed.
+TEST_F(SyncDataTypeManagerImplTest, ConfigureOneStopWhileDownloadPending) {
+  AddController(BOOKMARKS);
+
+  {
+    DataTypeManagerImpl dtm(&configurer_, &controllers_, &observer_);
+    SetConfigureStartExpectation();
+    SetConfigureDoneExpectation(DataTypeManager::ABORTED);
+
+    Configure(&dtm, ModelTypeSet(BOOKMARKS));
+    EXPECT_EQ(DataTypeManager::DOWNLOAD_PENDING, dtm.state());
+
+    dtm.Stop();
+    EXPECT_EQ(DataTypeManager::STOPPED, dtm.state());
+  }
+
+  configurer_.last_ready_task().Run(ModelTypeSet());
+}
+
+// Set up a DTM with a single controller, configure it, finish
+// downloading, but stop the DTM before the controller finishes
+// starting up.  It should still be safe to finish starting up the
+// controller even after the DTM is stopped and destroyed.
+TEST_F(SyncDataTypeManagerImplTest, ConfigureOneStopWhileStartingModel) {
+  AddController(BOOKMARKS);
+
+  {
+    DataTypeManagerImpl dtm(&configurer_, &controllers_, &observer_);
+    SetConfigureStartExpectation();
+    SetConfigureDoneExpectation(DataTypeManager::ABORTED);
+
+    Configure(&dtm, ModelTypeSet(BOOKMARKS));
+    EXPECT_EQ(DataTypeManager::DOWNLOAD_PENDING, dtm.state());
+
+    FinishDownload(dtm, ModelTypeSet());
+    EXPECT_EQ(DataTypeManager::CONFIGURING, dtm.state());
+
+    dtm.Stop();
+    EXPECT_EQ(DataTypeManager::STOPPED, dtm.state());
+  }
+
+  GetController(BOOKMARKS)->FinishStart(DataTypeController::OK);
+}
+
+// Set up a DTM with a single controller, configure it, finish
+// downloading, start the controller's model, but stop the DTM before
+// the controller finishes starting up.  It should still be safe to
+// finish starting up the controller even after the DTM is stopped and
+// destroyed.
+TEST_F(SyncDataTypeManagerImplTest, ConfigureOneStopWhileAssociating) {
+  AddController(BOOKMARKS);
+  {
+    DataTypeManagerImpl dtm(&configurer_, &controllers_, &observer_);
+    SetConfigureStartExpectation();
+    SetConfigureDoneExpectation(DataTypeManager::ABORTED);
+
+    Configure(&dtm, ModelTypeSet(BOOKMARKS));
+    EXPECT_EQ(DataTypeManager::DOWNLOAD_PENDING, dtm.state());
+
+    FinishDownload(dtm, ModelTypeSet());
+    EXPECT_EQ(DataTypeManager::CONFIGURING, dtm.state());
+
+    dtm.Stop();
+    EXPECT_EQ(DataTypeManager::STOPPED, dtm.state());
+  }
+
+  GetController(BOOKMARKS)->FinishStart(DataTypeController::OK);
+}
+
+// Set up a DTM with a single controller.  Then:
+//
+//   1) Configure.
+//   2) Finish the download for step 1.
+//   3) Finish starting the controller with the NEEDS_CRYPTO status.
+//   4) Configure again.
+//   5) Finish the download for step 4.
+//   6) Finish starting the controller successfully.
+//   7) Stop the DTM.
+TEST_F(SyncDataTypeManagerImplTest, OneWaitingForCrypto) {
+  AddController(PASSWORDS);
+
+  DataTypeManagerImpl dtm(&configurer_, &controllers_, &observer_);
+  SetConfigureStartExpectation();
+  SetConfigureBlockedExpectation();
+
+  const ModelTypeSet types(PASSWORDS);
+
+  // Step 1.
+  Configure(&dtm, types);
+  EXPECT_EQ(DataTypeManager::DOWNLOAD_PENDING, dtm.state());
+
+  // Step 2.
+  FinishDownload(dtm, ModelTypeSet());
+  EXPECT_EQ(DataTypeManager::CONFIGURING, dtm.state());
+
+  // Step 3.
+  GetController(PASSWORDS)->FinishStart(DataTypeController::NEEDS_CRYPTO);
+  EXPECT_EQ(DataTypeManager::BLOCKED, dtm.state());
+
+  Mock::VerifyAndClearExpectations(&observer_);
+  SetConfigureDoneExpectation(DataTypeManager::OK);
+
+  // Step 4.
+  Configure(&dtm, types);
+  EXPECT_EQ(DataTypeManager::DOWNLOAD_PENDING, dtm.state());
+
+  // Step 5.
+  FinishDownload(dtm, ModelTypeSet());
+  EXPECT_EQ(DataTypeManager::CONFIGURING, dtm.state());
+
+  // Step 6.
+  GetController(PASSWORDS)->FinishStart(DataTypeController::OK);
+  EXPECT_EQ(DataTypeManager::CONFIGURED, dtm.state());
+
+  // Step 7.
+  dtm.Stop();
+  EXPECT_EQ(DataTypeManager::STOPPED, dtm.state());
+}
+
+// Set up a DTM with two controllers.  Then:
+//
+//   1) Configure with first controller.
+//   2) Finish the download for step 1.
+//   3) Finish starting the first controller.
+//   4) Configure with both controllers.
+//   5) Finish the download for step 4.
+//   6) Finish starting the second controller.
+//   7) Stop the DTM.
+TEST_F(SyncDataTypeManagerImplTest, ConfigureOneThenBoth) {
+  AddController(BOOKMARKS);
+  AddController(PREFERENCES);
+
+  DataTypeManagerImpl dtm(&configurer_, &controllers_, &observer_);
+  SetConfigureStartExpectation();
+  SetConfigureDoneExpectation(DataTypeManager::OK);
+
+  // Step 1.
+  Configure(&dtm, ModelTypeSet(BOOKMARKS));
+  EXPECT_EQ(DataTypeManager::DOWNLOAD_PENDING, dtm.state());
+
+  // Step 2.
+  FinishDownload(dtm, ModelTypeSet());
+  EXPECT_EQ(DataTypeManager::CONFIGURING, dtm.state());
+
+  // Step 3.
+  GetController(BOOKMARKS)->FinishStart(DataTypeController::OK);
+  EXPECT_EQ(DataTypeManager::CONFIGURED, dtm.state());
+
+  Mock::VerifyAndClearExpectations(&observer_);
+  SetConfigureStartExpectation();
+  SetConfigureDoneExpectation(DataTypeManager::OK);
+
+  // Step 4.
+  Configure(&dtm, ModelTypeSet(BOOKMARKS, PREFERENCES));
+  EXPECT_EQ(DataTypeManager::DOWNLOAD_PENDING, dtm.state());
+
+  // Step 5.
+  FinishDownload(dtm, ModelTypeSet());
+  EXPECT_EQ(DataTypeManager::CONFIGURING, dtm.state());
+
+  // Step 6.
+  GetController(PREFERENCES)->FinishStart(DataTypeController::OK);
+  EXPECT_EQ(DataTypeManager::CONFIGURED, dtm.state());
+
+  // Step 7.
+  dtm.Stop();
+  EXPECT_EQ(DataTypeManager::STOPPED, dtm.state());
+}
+
+// Set up a DTM with two controllers.  Then:
+//
+//   1) Configure with first controller.
+//   2) Finish the download for step 1.
+//   3) Finish starting the first controller.
+//   4) Configure with second controller.
+//   5) Finish the download for step 4.
+//   6) Finish starting the second controller.
+//   7) Stop the DTM.
+TEST_F(SyncDataTypeManagerImplTest, ConfigureOneThenSwitch) {
+  AddController(BOOKMARKS);
+  AddController(PREFERENCES);
+
+  DataTypeManagerImpl dtm(&configurer_, &controllers_, &observer_);
+  SetConfigureStartExpectation();
+  SetConfigureDoneExpectation(DataTypeManager::OK);
+
+  // Step 1.
+  Configure(&dtm, ModelTypeSet(BOOKMARKS));
+  EXPECT_EQ(DataTypeManager::DOWNLOAD_PENDING, dtm.state());
+
+  // Step 2.
+  FinishDownload(dtm, ModelTypeSet());
+  EXPECT_EQ(DataTypeManager::CONFIGURING, dtm.state());
+
+  // Step 3.
+  GetController(BOOKMARKS)->FinishStart(DataTypeController::OK);
+  EXPECT_EQ(DataTypeManager::CONFIGURED, dtm.state());
+
+  Mock::VerifyAndClearExpectations(&observer_);
+  SetConfigureStartExpectation();
+  SetConfigureDoneExpectation(DataTypeManager::OK);
+
+  // Step 4.
+  Configure(&dtm, ModelTypeSet(PREFERENCES));
+  EXPECT_EQ(DataTypeManager::DOWNLOAD_PENDING, dtm.state());
+
+  // Step 5.
+  FinishDownload(dtm, ModelTypeSet());
+  EXPECT_EQ(DataTypeManager::CONFIGURING, dtm.state());
+
+  // Step 6.
+  GetController(PREFERENCES)->FinishStart(DataTypeController::OK);
+  EXPECT_EQ(DataTypeManager::CONFIGURED, dtm.state());
+
+  // Step 7.
+  dtm.Stop();
+  EXPECT_EQ(DataTypeManager::STOPPED, dtm.state());
+}
+
+// Set up a DTM with two controllers.  Then:
+//
+//   1) Configure with first controller.
+//   2) Finish the download for step 1.
+//   3) Configure with both controllers.
+//   4) Finish starting the first controller.
+//   5) Finish the download for step 3.
+//   6) Finish starting the second controller.
+//   7) Stop the DTM.
+TEST_F(SyncDataTypeManagerImplTest, ConfigureWhileOneInFlight) {
+  AddController(BOOKMARKS);
+  AddController(PREFERENCES);
+
+  DataTypeManagerImpl dtm(&configurer_, &controllers_, &observer_);
+  SetConfigureStartExpectation();
+  SetConfigureBlockedExpectation();
+  SetConfigureDoneExpectation(DataTypeManager::OK);
+
+  // Step 1.
+  Configure(&dtm, ModelTypeSet(BOOKMARKS));
+  EXPECT_EQ(DataTypeManager::DOWNLOAD_PENDING, dtm.state());
+
+  // Step 2.
+  FinishDownload(dtm, ModelTypeSet());
+  EXPECT_EQ(DataTypeManager::CONFIGURING, dtm.state());
+
+  // Step 3.
+  Configure(&dtm, ModelTypeSet(BOOKMARKS, PREFERENCES));
+  EXPECT_EQ(DataTypeManager::CONFIGURING, dtm.state());
+
+  // Step 4.
+  GetController(BOOKMARKS)->FinishStart(DataTypeController::OK);
+  EXPECT_EQ(DataTypeManager::BLOCKED, dtm.state());
+
+  // Pump the loop to run the posted DTMI::ConfigureImpl() task from
+  // DTMI::ProcessReconfigure() (triggered by FinishStart()).
+  ui_loop_.RunAllPending();
+  EXPECT_EQ(DataTypeManager::DOWNLOAD_PENDING, dtm.state());
+
+  // Step 5.
+  FinishDownload(dtm, ModelTypeSet());
+  EXPECT_EQ(DataTypeManager::CONFIGURING, dtm.state());
+
+  // Step 6.
+  GetController(PREFERENCES)->FinishStart(DataTypeController::OK);
+  EXPECT_EQ(DataTypeManager::CONFIGURED, dtm.state());
+
+  // Step 7.
+  dtm.Stop();
+  EXPECT_EQ(DataTypeManager::STOPPED, dtm.state());
+}
+
+// Set up a DTM with one controller.  Then configure, finish
+// downloading, and start the controller with an unrecoverable error.
+// The unrecoverable error should cause the DTM to stop.
+TEST_F(SyncDataTypeManagerImplTest, OneFailingController) {
+  AddController(BOOKMARKS);
+
+  DataTypeManagerImpl dtm(&configurer_, &controllers_, &observer_);
+  SetConfigureStartExpectation();
+  SetConfigureDoneExpectation(DataTypeManager::UNRECOVERABLE_ERROR);
+
+  Configure(&dtm, ModelTypeSet(BOOKMARKS));
+  EXPECT_EQ(DataTypeManager::DOWNLOAD_PENDING, dtm.state());
+
+  FinishDownload(dtm, ModelTypeSet());
+  EXPECT_EQ(DataTypeManager::CONFIGURING, dtm.state());
+
+  GetController(BOOKMARKS)->FinishStart(
+      DataTypeController::UNRECOVERABLE_ERROR);
+  EXPECT_EQ(DataTypeManager::STOPPED, dtm.state());
+}
+
+// Set up a DTM with two controllers.  Then:
+//
+//   1) Configure with both controllers.
+//   2) Finish the download for step 1.
+//   3) Finish starting the first controller successfully.
+//   4) Finish starting the second controller with an unrecoverable error.
+//
+// The failure from step 4 should cause the DTM to stop.
+TEST_F(SyncDataTypeManagerImplTest, SecondControllerFails) {
+  AddController(BOOKMARKS);
+  AddController(PREFERENCES);
+
+  DataTypeManagerImpl dtm(&configurer_, &controllers_, &observer_);
+  SetConfigureStartExpectation();
+  SetConfigureDoneExpectation(DataTypeManager::UNRECOVERABLE_ERROR);
+
+  // Step 1.
+  Configure(&dtm, ModelTypeSet(BOOKMARKS, PREFERENCES));
+  EXPECT_EQ(DataTypeManager::DOWNLOAD_PENDING, dtm.state());
+
+  // Step 2.
+  FinishDownload(dtm, ModelTypeSet());
+  EXPECT_EQ(DataTypeManager::CONFIGURING, dtm.state());
+
+  // Step 3.
+  GetController(BOOKMARKS)->FinishStart(DataTypeController::OK);
+  EXPECT_EQ(DataTypeManager::CONFIGURING, dtm.state());
+
+  // Step 4.
+  GetController(PREFERENCES)->FinishStart(
+      DataTypeController::UNRECOVERABLE_ERROR);
+  EXPECT_EQ(DataTypeManager::STOPPED, dtm.state());
+}
+
+// Set up a DTM with two controllers.  Then:
+//
+//   1) Configure with both controllers.
+//   2) Finish the download for step 1.
+//   3) Finish starting the first controller with an association failure.
+//   4) Finish starting the second controller successfully.
+//   5) Stop the DTM.
+//
+// The association failure from step 3 should be ignored.
+//
+// TODO(akalin): Check that the data type that failed association is
+// recorded in the CONFIGURE_DONE notification.
+TEST_F(SyncDataTypeManagerImplTest, OneControllerFailsAssociation) {
+  AddController(BOOKMARKS);
+  AddController(PREFERENCES);
+
+  DataTypeManagerImpl dtm(&configurer_, &controllers_, &observer_);
+  SetConfigureStartExpectation();
+  SetConfigureDoneExpectation(DataTypeManager::PARTIAL_SUCCESS);
+
+  // Step 1.
+  Configure(&dtm, ModelTypeSet(BOOKMARKS, PREFERENCES));
+  EXPECT_EQ(DataTypeManager::DOWNLOAD_PENDING, dtm.state());
+
+  // Step 2.
+  FinishDownload(dtm, ModelTypeSet());
+  EXPECT_EQ(DataTypeManager::CONFIGURING, dtm.state());
+
+  // Step 3.
+  GetController(BOOKMARKS)->FinishStart(DataTypeController::OK);
+  EXPECT_EQ(DataTypeManager::CONFIGURING, dtm.state());
+
+  // Step 4.
+  GetController(PREFERENCES)->FinishStart(
+      DataTypeController::ASSOCIATION_FAILED);
+  EXPECT_EQ(DataTypeManager::CONFIGURED, dtm.state());
+
+  // Step 5.
+  dtm.Stop();
+  EXPECT_EQ(DataTypeManager::STOPPED, dtm.state());
+}
+
+// Set up a DTM with two controllers.  Then:
+//
+//   1) Configure with first controller.
+//   2) Configure with both controllers.
+//   3) Finish the download for step 1.
+//   4) Finish the download for step 2.
+//   5) Finish starting both controllers.
+//   6) Stop the DTM.
+TEST_F(SyncDataTypeManagerImplTest, ConfigureWhileDownloadPending) {
+  AddController(BOOKMARKS);
+  AddController(PREFERENCES);
+
+  DataTypeManagerImpl dtm(&configurer_, &controllers_, &observer_);
+  SetConfigureStartExpectation();
+  SetConfigureBlockedExpectation();
+  SetConfigureDoneExpectation(DataTypeManager::OK);
+
+  // Step 1.
+  Configure(&dtm, ModelTypeSet(BOOKMARKS));
+  EXPECT_EQ(DataTypeManager::DOWNLOAD_PENDING, dtm.state());
+
+  // Step 2.
+  Configure(&dtm, ModelTypeSet(BOOKMARKS, PREFERENCES));
+  EXPECT_EQ(DataTypeManager::DOWNLOAD_PENDING, dtm.state());
+
+  // Step 3.
+  FinishDownload(dtm, ModelTypeSet());
+  EXPECT_EQ(DataTypeManager::BLOCKED, dtm.state());
+
+  // Pump the loop to run the posted DTMI::ConfigureImpl() task from
+  // DTMI::ProcessReconfigure() (triggered by step 3).
+  ui_loop_.RunAllPending();
+  EXPECT_EQ(DataTypeManager::DOWNLOAD_PENDING, dtm.state());
+
+  // Step 4.
+  FinishDownload(dtm, ModelTypeSet());
+  EXPECT_EQ(DataTypeManager::CONFIGURING, dtm.state());
+
+  // Step 5.
+  GetController(BOOKMARKS)->FinishStart(DataTypeController::OK);
+  EXPECT_EQ(DataTypeManager::CONFIGURING, dtm.state());
+  GetController(PREFERENCES)->FinishStart(DataTypeController::OK);
+  EXPECT_EQ(DataTypeManager::CONFIGURED, dtm.state());
+
+  // Step 6.
+  dtm.Stop();
+  EXPECT_EQ(DataTypeManager::STOPPED, dtm.state());
+}
+
+// Set up a DTM with two controllers.  Then:
+//
+//   1) Configure with first controller.
+//   2) Configure with both controllers.
+//   3) Finish the download for step 1 with a failed data type.
+//   4) Finish the download for step 2 successfully.
+//   5) Finish starting both controllers.
+//   6) Stop the DTM.
+//
+// The failure from step 3 should be ignored since there's a
+// reconfigure pending from step 2.
+TEST_F(SyncDataTypeManagerImplTest, ConfigureWhileDownloadPendingWithFailure) {
+  AddController(BOOKMARKS);
+  AddController(PREFERENCES);
+
+  DataTypeManagerImpl dtm(&configurer_, &controllers_, &observer_);
+  SetConfigureStartExpectation();
+  SetConfigureBlockedExpectation();
+  SetConfigureDoneExpectation(DataTypeManager::OK);
+
+  // Step 1.
+  Configure(&dtm, ModelTypeSet(BOOKMARKS));
+  EXPECT_EQ(DataTypeManager::DOWNLOAD_PENDING, dtm.state());
+
+  // Step 2.
+  Configure(&dtm, ModelTypeSet(BOOKMARKS, PREFERENCES));
+  EXPECT_EQ(DataTypeManager::DOWNLOAD_PENDING, dtm.state());
+
+  // Step 3.
+  FinishDownload(dtm, ModelTypeSet(BOOKMARKS));
+  EXPECT_EQ(DataTypeManager::BLOCKED, dtm.state());
+
+  // Pump the loop to run the posted DTMI::ConfigureImpl() task from
+  // DTMI::ProcessReconfigure() (triggered by step 3).
+  ui_loop_.RunAllPending();
+  EXPECT_EQ(DataTypeManager::DOWNLOAD_PENDING, dtm.state());
+
+  // Step 4.
+  FinishDownload(dtm, ModelTypeSet());
+  EXPECT_EQ(DataTypeManager::CONFIGURING, dtm.state());
+
+  // Step 5.
+  GetController(BOOKMARKS)->FinishStart(DataTypeController::OK);
+  EXPECT_EQ(DataTypeManager::CONFIGURING, dtm.state());
+  GetController(PREFERENCES)->FinishStart(DataTypeController::OK);
+  EXPECT_EQ(DataTypeManager::CONFIGURED, dtm.state());
+
+  // Step 6.
+  dtm.Stop();
+  EXPECT_EQ(DataTypeManager::STOPPED, dtm.state());
+}
+
+// Tests a Purge then Configure.  This is similar to the sequence of
+// operations that would be invoked by the BackendMigrator.
+TEST_F(SyncDataTypeManagerImplTest, MigrateAll) {
+  AddController(BOOKMARKS);
+
+  DataTypeManagerImpl dtm(&configurer_, &controllers_, &observer_);
+  SetConfigureStartExpectation();
+  SetConfigureDoneExpectation(DataTypeManager::OK);
+
+  // Initial setup.
+  Configure(&dtm, ModelTypeSet(BOOKMARKS));
+  FinishDownload(dtm, ModelTypeSet());
+  GetController(BOOKMARKS)->FinishStart(DataTypeController::OK);
+
+  // We've now configured bookmarks and (implicitly) the control types.
+  EXPECT_EQ(DataTypeManager::CONFIGURED, dtm.state());
+  Mock::VerifyAndClearExpectations(&observer_);
+
+  // Pretend we were told to migrate all types.
+  ModelTypeSet to_migrate;
+  to_migrate.Put(BOOKMARKS);
+  to_migrate.PutAll(syncer::ControlTypes());
+
+  SetConfigureStartExpectation();
+  SetConfigureDoneExpectation(DataTypeManager::OK);
+  dtm.PurgeForMigration(to_migrate,
+                        syncer::CONFIGURE_REASON_MIGRATION);
+  EXPECT_EQ(DataTypeManager::DOWNLOAD_PENDING, dtm.state());
+
+  // The DTM will call ConfigureDataTypes(), even though it is unnecessary.
+  FinishDownload(dtm, ModelTypeSet());
+  EXPECT_EQ(DataTypeManager::CONFIGURED, dtm.state());
+  Mock::VerifyAndClearExpectations(&observer_);
+
+  // Re-enable the migrated types.
+  SetConfigureStartExpectation();
+  SetConfigureDoneExpectation(DataTypeManager::OK);
+  Configure(&dtm, to_migrate);
+  FinishDownload(dtm, ModelTypeSet());
+  GetController(BOOKMARKS)->FinishStart(DataTypeController::OK);
+  EXPECT_EQ(DataTypeManager::CONFIGURED, dtm.state());
+}
+
+// Test receipt of a Configure request while a purge is in flight.
+TEST_F(SyncDataTypeManagerImplTest, ConfigureDuringPurge) {
+  AddController(BOOKMARKS);
+  AddController(PREFERENCES);
+
+  DataTypeManagerImpl dtm(&configurer_, &controllers_, &observer_);
+
+  // Initial configure.
+  SetConfigureStartExpectation();
+  SetConfigureDoneExpectation(DataTypeManager::OK);
+  Configure(&dtm, ModelTypeSet(BOOKMARKS));
+  FinishDownload(dtm, ModelTypeSet());
+  GetController(BOOKMARKS)->FinishStart(DataTypeController::OK);
+  EXPECT_EQ(DataTypeManager::CONFIGURED, dtm.state());
+  Mock::VerifyAndClearExpectations(&observer_);
+
+  // Purge the Nigori type.
+  SetConfigureStartExpectation();
+  dtm.PurgeForMigration(ModelTypeSet(NIGORI),
+                        syncer::CONFIGURE_REASON_MIGRATION);
+  EXPECT_EQ(DataTypeManager::DOWNLOAD_PENDING, dtm.state());
+  Mock::VerifyAndClearExpectations(&observer_);
+
+  // Before the backend configuration completes, ask for a different
+  // set of types.  This request asks for
+  // - BOOKMARKS: which is redundant because it was already enabled,
+  // - PREFERENCES: which is new and will need to be downloaded, and
+  // - NIGORI: (added implicitly because it is a control type) which
+  //   the DTM is part-way through purging.
+  SetConfigureBlockedExpectation();
+  Configure(&dtm, ModelTypeSet(BOOKMARKS, PREFERENCES));
+  EXPECT_EQ(DataTypeManager::DOWNLOAD_PENDING, dtm.state());
+
+  // Invoke the callback we've been waiting for since we asked to purge NIGORI.
+  FinishDownload(dtm, ModelTypeSet());
+  EXPECT_EQ(DataTypeManager::BLOCKED, dtm.state());
+  Mock::VerifyAndClearExpectations(&observer_);
+
+  SetConfigureDoneExpectation(DataTypeManager::OK);
+  // Pump the loop to run the posted DTMI::ConfigureImpl() task from
+  // DTMI::ProcessReconfigure().
+  ui_loop_.RunAllPending();
+  EXPECT_EQ(DataTypeManager::DOWNLOAD_PENDING, dtm.state());
+
+  // Now invoke the callback for the second configure request.
+  FinishDownload(dtm, ModelTypeSet());
+  EXPECT_EQ(DataTypeManager::CONFIGURING, dtm.state());
+
+  // Start the preferences controller.  We don't need to start controller for
+  // the NIGORI because it has none.  We don't need to start the controller for
+  // the BOOKMARKS because it was never stopped.
+  GetController(PREFERENCES)->FinishStart(DataTypeController::OK);
+  EXPECT_EQ(DataTypeManager::CONFIGURED, dtm.state());
+}
+
+}  // namespace browser_sync

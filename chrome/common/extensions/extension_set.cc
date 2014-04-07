@@ -5,9 +5,11 @@
 #include "chrome/common/extensions/extension_set.h"
 
 #include "base/logging.h"
+#include "chrome/common/extensions/extension.h"
 #include "chrome/common/url_constants.h"
 
 using WebKit::WebSecurityOrigin;
+using extensions::Extension;
 
 ExtensionURLInfo::ExtensionURLInfo(WebSecurityOrigin origin, const GURL& url)
   : origin_(origin),
@@ -17,6 +19,16 @@ ExtensionURLInfo::ExtensionURLInfo(WebSecurityOrigin origin, const GURL& url)
 
 ExtensionURLInfo::ExtensionURLInfo(const GURL& url)
   : url_(url) {
+}
+
+ExtensionSet::const_iterator::const_iterator() {}
+
+ExtensionSet::const_iterator::const_iterator(const const_iterator& other)
+    : it_(other.it_) {
+}
+
+ExtensionSet::const_iterator::const_iterator(ExtensionMap::const_iterator it)
+    : it_(it) {
 }
 
 ExtensionSet::ExtensionSet() {
@@ -126,7 +138,7 @@ const Extension* ExtensionSet::GetByID(const std::string& id) const {
 
 bool ExtensionSet::ExtensionBindingsAllowed(
     const ExtensionURLInfo& info) const {
-  if (info.origin().isUnique())
+  if (info.origin().isUnique() || IsSandboxedPage(info))
     return false;
 
   if (info.url().SchemeIs(chrome::kExtensionScheme))
@@ -139,5 +151,18 @@ bool ExtensionSet::ExtensionBindingsAllowed(
       return true;
   }
 
+  return false;
+}
+
+bool ExtensionSet::IsSandboxedPage(const ExtensionURLInfo& info) const {
+  if (info.origin().isUnique())
+    return true;
+
+  if (info.url().SchemeIs(chrome::kExtensionScheme)) {
+    const Extension* extension = GetByID(info.url().host());
+    if (extension) {
+      return extension->IsSandboxedPage(info.url().path());
+    }
+  }
   return false;
 }

@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,10 +9,18 @@
 #include <vector>
 
 #include "base/memory/scoped_vector.h"
+#include "chrome/browser/api/prefs/pref_member.h"
 #include "chrome/browser/password_manager/password_store.h"
 #include "chrome/browser/password_manager/password_store_consumer.h"
-#include "chrome/browser/prefs/pref_member.h"
 #include "chrome/browser/ui/webui/options/options_ui.h"
+
+namespace webkit {
+namespace forms {
+struct PasswordForm;
+}
+}
+
+namespace options {
 
 class PasswordManagerHandler : public OptionsPageUIHandler,
                                public PasswordStore::Observer {
@@ -22,7 +30,7 @@ class PasswordManagerHandler : public OptionsPageUIHandler,
 
   // OptionsPageUIHandler implementation.
   virtual void GetLocalizedValues(DictionaryValue* localized_strings) OVERRIDE;
-  virtual void Initialize() OVERRIDE;
+  virtual void InitializeHandler() OVERRIDE;
   virtual void RegisterMessages() OVERRIDE;
 
   // PasswordStore::Observer implementation.
@@ -125,5 +133,7 @@ class PasswordManagerHandler : public OptionsPageUIHandler,
 
   DISALLOW_COPY_AND_ASSIGN(PasswordManagerHandler);
 };
+
+}  // namespace options
 
 #endif  // CHROME_BROWSER_UI_WEBUI_OPTIONS_PASSWORD_MANAGER_HANDLER_H_

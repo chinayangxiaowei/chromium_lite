@@ -10,6 +10,7 @@
 #include "base/sys_string_conversions.h"
 #include "chrome/browser/bookmarks/bookmark_editor.h"
 #include "chrome/browser/bookmarks/bookmark_model.h"
+#include "chrome/browser/bookmarks/bookmark_model_factory.h"
 #include "chrome/browser/bookmarks/bookmark_utils.h"
 #include "chrome/browser/extensions/extension_service.h"
 #include "chrome/browser/prefs/incognito_mode_prefs.h"
@@ -19,6 +20,8 @@
 #import "chrome/browser/themes/theme_service_factory.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_list.h"
+#include "chrome/browser/ui/browser_tabstrip.h"
+#include "chrome/browser/ui/chrome_pages.h"
 #import "chrome/browser/ui/cocoa/background_gradient_view.h"
 #import "chrome/browser/ui/cocoa/bookmarks/bookmark_bar_bridge.h"
 #import "chrome/browser/ui/cocoa/bookmarks/bookmark_bar_folder_controller.h"
@@ -40,6 +43,7 @@
 #import "chrome/browser/ui/cocoa/toolbar/toolbar_controller.h"
 #import "chrome/browser/ui/cocoa/view_id_util.h"
 #import "chrome/browser/ui/cocoa/view_resizer.h"
+#include "chrome/browser/ui/webui/ntp/app_launcher_handler.h"
 #include "chrome/common/extensions/extension_constants.h"
 #include "chrome/common/pref_names.h"
 #include "content/public/browser/user_metrics.h"
@@ -48,7 +52,6 @@
 #include "grit/generated_resources.h"
 #include "grit/theme_resources.h"
 #include "grit/ui_resources.h"
-#include "skia/ext/skia_utils_mac.h"
 #include "ui/base/l10n/l10n_util_mac.h"
 #include "ui/base/resource/resource_bundle.h"
 #include "ui/gfx/image/image.h"
@@ -133,9 +136,8 @@ void RecordAppLaunch(Profile* profile, GURL url) {
   if (!profile->GetExtensionService()->IsInstalledApp(url))
     return;
 
-  UMA_HISTOGRAM_ENUMERATION(extension_misc::kAppLaunchHistogram,
-                            extension_misc::APP_LAUNCH_BOOKMARK_BAR,
-                            extension_misc::APP_LAUNCH_BUCKET_BOUNDARY);
+  AppLauncherHandler::RecordAppLaunchType(
+      extension_misc::APP_LAUNCH_BOOKMARK_BAR);
 }
 
 }  // namespace
@@ -230,7 +232,7 @@ void RecordAppLaunch(Profile* profile, GURL url) {
 @synthesize delegate = delegate_;
 
 - (id)initWithBrowser:(Browser*)browser
-         initialWidth:(float)initialWidth
+         initialWidth:(CGFloat)initialWidth
              delegate:(id<BookmarkBarControllerDelegate>)delegate
        resizeDelegate:(id<ViewResizer>)resizeDelegate {
   if ((self = [super initWithNibName:@"BookmarkBar"
@@ -241,7 +243,7 @@ void RecordAppLaunch(Profile* profile, GURL url) {
 
     browser_ = browser;
     initialWidth_ = initialWidth;
-    bookmarkModel_ = browser_->profile()->GetBookmarkModel();
+    bookmarkModel_ = BookmarkModelFactory::GetForProfile(browser_->profile());
     buttons_.reset([[NSMutableArray alloc] init]);
     delegate_ = delegate;
     resizeDelegate_ = resizeDelegate;
@@ -249,8 +251,9 @@ void RecordAppLaunch(Profile* profile, GURL url) {
 
     ResourceBundle& rb = ResourceBundle::GetSharedInstance();
     folderImage_.reset(
-        [rb.GetNativeImageNamed(IDR_BOOKMARK_BAR_FOLDER) retain]);
-    defaultImage_.reset([gfx::GetCachedImageWithName(@"nav.pdf") retain]);
+        rb.GetNativeImageNamed(IDR_BOOKMARK_BAR_FOLDER).CopyNSImage());
+    defaultImage_.reset(
+        rb.GetNativeImageNamed(IDR_DEFAULT_FAVICON).CopyNSImage());
 
     // Register for theme changes, bookmark button pulsing, ...
     NSNotificationCenter* defaultCenter = [NSNotificationCenter defaultCenter];
@@ -312,6 +315,9 @@ void RecordAppLaunch(Profile* profile, GURL url) {
 }
 
 - (void)dealloc {
+  // Clear delegate so it doesn't get called during stopAnimation.
+  [[self animatableView] setResizeDelegate:nil];
+
   // We better stop any in-flight animation if we're being killed.
   [[self animatableView] stopAnimation];
 
@@ -525,9 +531,9 @@ void RecordAppLaunch(Profile* profile, GURL url) {
   if (node->is_folder())
     return folderImage_;
 
-  const SkBitmap& favicon = bookmarkModel_->GetFavicon(node);
-  if (!favicon.isNull())
-    return gfx::SkBitmapToNSImage(favicon);
+  const gfx::Image& favicon = bookmarkModel_->GetFavicon(node);
+  if (!favicon.IsEmpty())
+    return favicon.ToNSImage();
 
   return defaultImage_;
 }
@@ -670,14 +676,18 @@ void RecordAppLaunch(Profile* profile, GURL url) {
 
 - (IBAction)openBookmarkInNewWindow:(id)sender {
   const BookmarkNode* node = [self nodeFromMenuItem:sender];
-  if (node)
+  if (node) {
     [self openURL:node->url() disposition:NEW_WINDOW];
+    [self unhighlightBookmark:node];
+  }
 }
 
 - (IBAction)openBookmarkInIncognitoWindow:(id)sender {
   const BookmarkNode* node = [self nodeFromMenuItem:sender];
-  if (node)
+  if (node) {
     [self openURL:node->url() disposition:OFF_THE_RECORD];
+    [self unhighlightBookmark:node];
+  }
 }
 
 - (IBAction)editBookmark:(id)sender {
@@ -685,6 +695,8 @@ void RecordAppLaunch(Profile* profile, GURL url) {
   const BookmarkNode* node = [self nodeFromMenuItem:sender];
   if (!node)
     return;
+
+  [self unhighlightBookmark:node];
 
   if (node->is_folder()) {
     BookmarkNameFolderController* controller =
@@ -765,6 +777,7 @@ void RecordAppLaunch(Profile* profile, GURL url) {
   if (node) {
     [self openAll:node disposition:NEW_WINDOW];
     content::RecordAction(UserMetricsAction("OpenAllBookmarksNewWindow"));
+    [self unhighlightBookmark:node];
   }
 }
 
@@ -774,6 +787,8 @@ void RecordAppLaunch(Profile* profile, GURL url) {
     [self openAll:node disposition:OFF_THE_RECORD];
     content::RecordAction(
         UserMetricsAction("OpenAllBookmarksIncognitoWindow"));
+
+    [self unhighlightBookmark:node];
   }
 }
 
@@ -783,10 +798,17 @@ void RecordAppLaunch(Profile* profile, GURL url) {
   const BookmarkNode* parent = [self nodeFromMenuItem:sender];
   if (!parent)
     parent = bookmarkModel_->bookmark_bar_node();
+  GURL url;
+  string16 title;
+  bookmark_utils::GetURLAndTitleToBookmark(
+      chrome::GetActiveWebContents(browser_), &url, &title);
   BookmarkEditor::Show([[self view] window],
                        browser_->profile(),
-                       BookmarkEditor::EditDetails::AddNodeInFolder(parent, -1),
+                       BookmarkEditor::EditDetails::AddNodeInFolder(
+                           parent, -1, url, title),
                        BookmarkEditor::SHOW_TREE);
+
+  [self unhighlightBookmark:parent];
 }
 
 // Might be called from the context menu over the bar OR over a
@@ -817,19 +839,19 @@ void RecordAppLaunch(Profile* profile, GURL url) {
                       parent:parent
                     newIndex:newIndex];
   [controller runAsModalSheet];
+
+  [self unhighlightBookmark:senderNode];
 }
 
 - (IBAction)importBookmarks:(id)sender {
-  browser_->OpenImportSettingsDialog();
+  chrome::ShowImportDialog(browser_);
 }
 
 #pragma mark Private Methods
 
-// Called after the current theme has changed.
-- (void)themeDidChangeNotification:(NSNotification*)aNotification {
-  ui::ThemeProvider* themeProvider =
-      static_cast<ThemeService*>([[aNotification object] pointerValue]);
-  [self updateTheme:themeProvider];
+// Called after a theme change took place, possibly for a different profile.
+- (void)themeDidChangeNotification:(NSNotification*)notification {
+  [self updateTheme:[[[self view] window] themeProvider]];
 }
 
 // (Private) Method is the same as [self view], but is provided to be explicit.
@@ -1240,8 +1262,10 @@ void RecordAppLaunch(Profile* profile, GURL url) {
   for (int i = 0; i < node->child_count(); i++) {
     const BookmarkNode* child = node->GetChild(i);
     BookmarkButton* button = [self buttonForNode:child xOffset:&xOffset];
-    if (NSMinX([button frame]) >= maxViewX)
+    if (NSMinX([button frame]) >= maxViewX) {
+      [button setDelegate:nil];
       break;
+    }
     [buttons_ addObject:button];
   }
 }
@@ -1531,6 +1555,32 @@ void RecordAppLaunch(Profile* profile, GURL url) {
   return wasHidden;
 }
 
+// Bookmark button menu items that open a new window (e.g., open in new window,
+// open in incognito, edit, etc.) cause us to lose a mouse-exited event
+// on the button, which leaves it in a hover state.
+// Since the showsBorderOnlyWhileMouseInside uses a tracking area, simple
+// tricks (e.g. sending an extra mouseExited: to the button) don't
+// fix the problem.
+// http://crbug.com/129338
+-(void)unhighlightBookmark:(const BookmarkNode*)node {
+  // Only relevant if context menu was opened from a button on the
+  // bookmark bar.
+  const BookmarkNode* parent = node->parent();
+  BookmarkNode::Type parentType = parent->type();
+  if (parentType == BookmarkNode::BOOKMARK_BAR) {
+    int index = parent->GetIndexOf(node);
+    if ((index >= 0) && (static_cast<NSUInteger>(index) < [buttons_ count])) {
+      NSButton* button =
+          [buttons_ objectAtIndex:static_cast<NSUInteger>(index)];
+      if ([button showsBorderOnlyWhileMouseInside]) {
+        [button setShowsBorderOnlyWhileMouseInside:NO];
+        [button setShowsBorderOnlyWhileMouseInside:YES];
+      }
+    }
+  }
+}
+
+
 // Adjust the horizontal width and the visibility of the "For quick access"
 // text field and "Import bookmarks..." button based on the current width
 // of the containing |buttonView_| (which is affected by window width).
@@ -1622,8 +1672,10 @@ void RecordAppLaunch(Profile* profile, GURL url) {
     if (i == barCount + 1)
       maxViewX += NSWidth([offTheSideButton_ frame]) +
           bookmarks::kBookmarkHorizontalPadding;
-    if (NSMaxX([button frame]) >= maxViewX)
+    if (NSMaxX([button frame]) >= maxViewX) {
+      [button setDelegate:nil];
       break;
+    }
     ++displayedButtonCount_;
     [buttons_ addObject:button];
     [buttonView_ addSubview:button];
@@ -2285,7 +2337,7 @@ static BOOL ValueInRangeInclusive(CGFloat low, CGFloat value, CGFloat high) {
 #pragma mark BookmarkBarToolbarViewController Protocol
 
 - (int)currentTabContentsHeight {
-  WebContents* wc = browser_->GetSelectedWebContents();
+  WebContents* wc = chrome::GetActiveWebContents(browser_);
   return wc ? wc->GetView()->GetContainerSize().height() : 0;
 }
 
@@ -2612,7 +2664,6 @@ static BOOL ValueInRangeInclusive(CGFloat low, CGFloat value, CGFloat high) {
     disposition:(WindowOpenDisposition)disposition {
   [self closeFolderAndStopTrackingMenus];
   bookmark_utils::OpenAll([[self view] window],
-                          browser_->profile(),
                           browser_,
                           node,
                           disposition);

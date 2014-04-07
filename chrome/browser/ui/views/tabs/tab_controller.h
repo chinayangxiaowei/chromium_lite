@@ -1,10 +1,11 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CHROME_BROWSER_UI_VIEWS_TABS_TAB_CONTROLLER_H_
 #define CHROME_BROWSER_UI_VIEWS_TABS_TAB_CONTROLLER_H_
-#pragma once
+
+#include "chrome/browser/ui/views/tabs/tab_strip_types.h"
 
 class BaseTab;
 class TabStripSelectionModel;
@@ -21,6 +22,9 @@ class TabController {
  public:
   virtual const TabStripSelectionModel& GetSelectionModel() = 0;
 
+  // Returns true if multiple selection is supported.
+  virtual bool SupportsMultipleSelection() = 0;
+
   // Selects the tab.
   virtual void SelectTab(BaseTab* tab) = 0;
 
@@ -34,7 +38,7 @@ class TabController {
   virtual void AddSelectionFromAnchorTo(BaseTab* tab) = 0;
 
   // Closes the tab.
-  virtual void CloseTab(BaseTab* tab) = 0;
+  virtual void CloseTab(BaseTab* tab, CloseTabSource source) = 0;
 
   // Shows a context menu for the tab at the specified point in screen coords.
   virtual void ShowContextMenuForTab(BaseTab* tab, const gfx::Point& p) = 0;
@@ -49,22 +53,17 @@ class TabController {
   // Returns true if the specified Tab is pinned.
   virtual bool IsTabPinned(const BaseTab* tab) const = 0;
 
-  // Returns true if the specified Tab is closeable.
-  virtual bool IsTabCloseable(const BaseTab* tab) const = 0;
-
   // Potentially starts a drag for the specified Tab.
   virtual void MaybeStartDrag(
       BaseTab* tab,
-      const views::MouseEvent& event,
+      const ui::LocatedEvent& event,
       const TabStripSelectionModel& original_selection) = 0;
 
   // Continues dragging a Tab.
-  virtual void ContinueDrag(const views::MouseEvent& event) = 0;
+  virtual void ContinueDrag(views::View* view, const gfx::Point& location) = 0;
 
-  // Ends dragging a Tab. |canceled| is true if the drag was aborted in a way
-  // other than the user releasing the mouse. Returns whether the tab has been
-  // destroyed.
-  virtual bool EndDrag(bool canceled) = 0;
+  // Ends dragging a Tab. Returns whether the tab has been destroyed.
+  virtual bool EndDrag(EndDragReason reason) = 0;
 
   // Returns the tab that contains the specified coordinates, in terms of |tab|,
   // or NULL if there is no tab that contains the specified point.
@@ -74,6 +73,18 @@ class TabController {
   // Informs that an active tab is selected when already active (ie - clicked
   // when already active/foreground).
   virtual void ClickActiveTab(const BaseTab* tab) const = 0;
+
+  // Invoked when a mouse event occurs on |source|.
+  virtual void OnMouseEventInTab(views::View* source,
+                                 const ui::MouseEvent& event) = 0;
+
+  // Returns true if |tab| needs to be painted. If false is returned the tab is
+  // not painted. If true is returned the tab should be painted and |clip| is
+  // set to the clip (if |clip| is empty means no clip).
+  virtual bool ShouldPaintTab(const BaseTab* tab, gfx::Rect* clip) = 0;
+
+  // Returns true if Instant Extended API is enabled.
+  virtual bool IsInstantExtendedAPIEnabled() = 0;
 
  protected:
   virtual ~TabController() {}

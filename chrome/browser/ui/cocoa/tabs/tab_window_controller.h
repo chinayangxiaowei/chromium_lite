@@ -4,7 +4,6 @@
 
 #ifndef CHROME_BROWSER_UI_COCOA_TABS_TAB_WINDOW_CONTROLLER_H_
 #define CHROME_BROWSER_UI_COCOA_TABS_TAB_WINDOW_CONTROLLER_H_
-#pragma once
 
 // A class acting as the Objective-C window controller for a window that has
 // tabs which can be dragged around. Tabs can be re-arranged within the same
@@ -21,7 +20,6 @@
 
 #import <Cocoa/Cocoa.h>
 
-#import "base/mac/cocoa_protocols.h"
 #include "base/memory/scoped_nsobject.h"
 
 @class FastResizeView;
@@ -38,7 +36,6 @@
                                // view is the proper content area in the overlay
                                // (weak)
   scoped_nsobject<FocusTracker> focusBeforeOverlay_;
-  scoped_nsobject<NSMutableSet> lockedTabs_;
   BOOL closeDeferred_;  // If YES, call performClose: in removeOverlay:.
   // Difference between height of window content area and height of the
   // |tabContentArea_|. Calculated when the window is loaded from the nib and
@@ -135,9 +132,8 @@
 // if it does, NO otherwise). The default implementation returns YES.
 - (BOOL)hasTabStrip;
 
-// Get/set whether a particular tab is draggable between windows.
+// Gets whether a particular tab is draggable between windows.
 - (BOOL)isTabDraggable:(NSView*)tabView;
-- (void)setTab:(NSView*)tabView isDraggable:(BOOL)draggable;
 
 // Tell the window that it needs to call performClose: as soon as the current
 // drag is complete. This prevents a window (and its overlay) from going away

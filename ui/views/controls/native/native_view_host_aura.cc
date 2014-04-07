@@ -35,6 +35,8 @@ void NativeViewHostAura::NativeViewDetaching(bool destroyed) {
   if (!destroyed) {
     host_->native_view()->RemoveObserver(this);
     host_->native_view()->Hide();
+    if (host_->native_view()->parent())
+      host_->native_view()->parent()->RemoveChild(host_->native_view());
   }
 }
 
@@ -85,7 +87,7 @@ void NativeViewHostAura::HideWidget() {
 void NativeViewHostAura::SetFocus() {
   aura::Window* window = host_->native_view();
   if (window->GetFocusManager())
-    window->GetFocusManager()->SetFocusedWindow(window);
+    window->GetFocusManager()->SetFocusedWindow(window, NULL);
 }
 
 gfx::NativeViewAccessible NativeViewHostAura::GetNativeViewAccessible() {

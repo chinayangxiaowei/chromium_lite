@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -12,14 +12,16 @@
 #include "media/audio/audio_io.h"
 #include "media/audio/audio_parameters.h"
 
-class AudioManagerMac;
+namespace media {
+
+class AudioManagerBase;
 
 // Implementation of AudioInputStream for Mac OS X using the audio queue service
 // present in OS 10.5 and later. Design reflects PCMQueueOutAudioOutputStream.
 class PCMQueueInAudioInputStream : public AudioInputStream {
  public:
   // Parameters as per AudioManager::MakeAudioInputStream.
-  PCMQueueInAudioInputStream(AudioManagerMac* manager,
+  PCMQueueInAudioInputStream(AudioManagerBase* manager,
                              const AudioParameters& params);
   virtual ~PCMQueueInAudioInputStream();
 
@@ -28,6 +30,11 @@ class PCMQueueInAudioInputStream : public AudioInputStream {
   virtual void Start(AudioInputCallback* callback) OVERRIDE;
   virtual void Stop() OVERRIDE;
   virtual void Close() OVERRIDE;
+  virtual double GetMaxVolume() OVERRIDE;
+  virtual void SetVolume(double volume) OVERRIDE;
+  virtual double GetVolume() OVERRIDE;
+  virtual void SetAutomaticGainControl(bool enabled) OVERRIDE;
+  virtual bool GetAutomaticGainControl() OVERRIDE;
 
  private:
   // Issue the OnError to |callback_|;
@@ -55,10 +62,10 @@ class PCMQueueInAudioInputStream : public AudioInputStream {
                          UInt32 num_packets,
                          const AudioStreamPacketDescription* packet_desc);
 
-  static const int kNumberBuffers = 3;
+  static const int kNumberBuffers = 1;
 
   // Manager that owns this stream, used for closing down.
-  AudioManagerMac* manager_;
+  AudioManagerBase* manager_;
   // We use the callback mostly to periodically supply the recorded audio data.
   AudioInputCallback* callback_;
   // Structure that holds the stream format details such as bitrate.
@@ -72,5 +79,7 @@ class PCMQueueInAudioInputStream : public AudioInputStream {
 
   DISALLOW_COPY_AND_ASSIGN(PCMQueueInAudioInputStream);
 };
+
+}  // namespace media
 
 #endif  // MEDIA_AUDIO_MAC_AUDIO_INPUT_MAC_H_

@@ -4,9 +4,9 @@
 
 #ifndef CONTENT_RENDERER_RENDER_WIDGET_H_
 #define CONTENT_RENDERER_RENDER_WIDGET_H_
-#pragma once
 
 #include <deque>
+#include <map>
 #include <vector>
 
 #include "base/basictypes.h"
@@ -14,20 +14,24 @@
 #include "base/memory/ref_counted.h"
 #include "base/memory/scoped_ptr.h"
 #include "base/time.h"
+#include "base/timer.h"
 #include "content/common/content_export.h"
 #include "content/renderer/paint_aggregator.h"
 #include "ipc/ipc_channel.h"
+#include "third_party/WebKit/Source/Platform/chromium/public/WebRenderingStats.h"
 #include "third_party/WebKit/Source/WebKit/chromium/public/WebCompositionUnderline.h"
 #include "third_party/WebKit/Source/WebKit/chromium/public/WebPopupType.h"
-#include "third_party/WebKit/Source/WebKit/chromium/public/platform/WebRect.h"
 #include "third_party/WebKit/Source/WebKit/chromium/public/WebTextDirection.h"
+#include "third_party/WebKit/Source/WebKit/chromium/public/WebTextInputInfo.h"
 #include "third_party/WebKit/Source/WebKit/chromium/public/WebWidgetClient.h"
+#include "third_party/WebKit/Source/WebKit/chromium/public/platform/WebRect.h"
 #include "third_party/skia/include/core/SkBitmap.h"
 #include "ui/base/ime/text_input_type.h"
+#include "ui/base/range/range.h"
 #include "ui/gfx/native_widget_types.h"
 #include "ui/gfx/rect.h"
 #include "ui/gfx/size.h"
-#include "ui/gfx/surface/transport_dib.h"
+#include "ui/surface/transport_dib.h"
 #include "webkit/glue/webcursor.h"
 
 struct ViewHostMsg_UpdateRect_Params;
@@ -41,6 +45,11 @@ namespace WebKit {
 class WebMouseEvent;
 class WebTouchEvent;
 class WebWidget;
+}
+
+namespace content {
+struct GpuRenderingStats;
+class RenderWidgetTest;
 }
 
 namespace gfx {
@@ -68,15 +77,16 @@ class PluginInstance;
 // RenderWidget provides a communication bridge between a WebWidget and
 // a RenderWidgetHost, the latter of which lives in a different process.
 class CONTENT_EXPORT RenderWidget
-    : public IPC::Channel::Listener,
-      public IPC::Message::Sender,
+    : public IPC::Listener,
+      public IPC::Sender,
       NON_EXPORTED_BASE(virtual public WebKit::WebWidgetClient),
       public base::RefCounted<RenderWidget> {
  public:
   // Creates a new RenderWidget.  The opener_id is the routing ID of the
   // RenderView that this widget lives inside.
   static RenderWidget* Create(int32 opener_id,
-                              WebKit::WebPopupType popup_type);
+                              WebKit::WebPopupType popup_type,
+                              const WebKit::WebScreenInfo& screen_info);
 
   // Creates a WebWidget based on the popup type.
   static WebKit::WebWidget* CreateWebWidget(RenderWidget* render_widget);
@@ -104,18 +114,20 @@ class CONTENT_EXPORT RenderWidget
   bool is_fullscreen() const { return is_fullscreen_; }
   bool is_hidden() const { return is_hidden_; }
 
-  // IPC::Channel::Listener
+  // IPC::Listener
   virtual bool OnMessageReceived(const IPC::Message& msg) OVERRIDE;
 
-  // IPC::Message::Sender
+  // IPC::Sender
   virtual bool Send(IPC::Message* msg) OVERRIDE;
 
   // WebKit::WebWidgetClient
+  virtual void willBeginCompositorFrame();
   virtual void didInvalidateRect(const WebKit::WebRect&);
   virtual void didScrollRect(int dx, int dy, const WebKit::WebRect& clipRect);
   virtual void didAutoResize(const WebKit::WebSize& new_size);
-  virtual void didActivateCompositor(int compositorIdentifier);
+  virtual void didActivateCompositor(int input_handler_identifier);
   virtual void didDeactivateCompositor();
+  virtual void didBecomeReadyForAdditionalInput();
   virtual void didCommitAndDrawCompositorFrame();
   virtual void didCompleteSwapBuffers();
   virtual void scheduleComposite();
@@ -133,6 +145,7 @@ class CONTENT_EXPORT RenderWidget
   virtual WebKit::WebRect windowResizerRect();
   virtual WebKit::WebRect rootWindowRect();
   virtual WebKit::WebScreenInfo screenInfo();
+  virtual float deviceScaleFactor();
   virtual void resetInputMethod();
 
   // Called when a plugin is moved.  These events are queued up and sent with
@@ -142,6 +155,28 @@ class CONTENT_EXPORT RenderWidget
   // Called when a plugin window has been destroyed, to make sure the currently
   // pending moves don't try to reference it.
   void CleanupWindowInPluginMoves(gfx::PluginWindowHandle window);
+
+  // Fills in a WebRenderingStats struct containing information about
+  // rendering, e.g. count of frames rendered, time spent painting.
+  // This call is relatively expensive in threaded compositing mode,
+  // as it blocks on the compositor thread.
+  void GetRenderingStats(WebKit::WebRenderingStats&) const;
+
+  // Fills in a GpuRenderingStats struct containing information about
+  // GPU rendering, e.g. count of texture uploads performed, time spent
+  // uploading.
+  // This call is relatively expensive as it blocks on the GPU process
+  bool GetGpuRenderingStats(content::GpuRenderingStats*) const;
+
+  // Callback for use with BeginSmoothScroll.
+  typedef base::Callback<void()> SmoothScrollCompletionCallback;
+
+  // Directs the host to begin a smooth scroll. This scroll should have the same
+  // performance characteristics as a user-initiated scroll. Returns an ID of
+  // the scroll gesture.
+  void BeginSmoothScroll(bool scroll_down,
+                         bool scroll_far,
+                         const SmoothScrollCompletionCallback& callback);
 
   // Close the underlying WebWidget.
   virtual void Close();
@@ -155,9 +190,17 @@ class CONTENT_EXPORT RenderWidget
   // without ref-counting is an error.
   friend class base::RefCounted<RenderWidget>;
   // For unit tests.
-  friend class RenderWidgetTest;
+  friend class content::RenderWidgetTest;
 
-  explicit RenderWidget(WebKit::WebPopupType popup_type);
+  enum ResizeAck {
+    SEND_RESIZE_ACK,
+    NO_RESIZE_ACK,
+  };
+
+  RenderWidget(WebKit::WebPopupType popup_type,
+               const WebKit::WebScreenInfo& screen_info,
+               bool swapped_out);
+
   virtual ~RenderWidget();
 
   // Initializes this view with the given opener.  CompleteInit must be called
@@ -201,6 +244,12 @@ class CONTENT_EXPORT RenderWidget
   // mainly intended to be used in conjuction with WebView::SetIsTransparent().
   virtual void SetBackground(const SkBitmap& bitmap);
 
+  // Resizes the render widget.
+  void Resize(const gfx::Size& new_size,
+              const gfx::Rect& resizer_rect,
+              bool is_fullscreen,
+              ResizeAck resize_ack);
+
   // RenderWidget IPC message handlers
   void OnClose();
   void OnCreatingNewAck(gfx::NativeViewId parent);
@@ -209,7 +258,7 @@ class CONTENT_EXPORT RenderWidget
                         bool is_fullscreen);
   void OnChangeResizeRect(const gfx::Rect& resizer_rect);
   virtual void OnWasHidden();
-  virtual void OnWasRestored(bool needs_repainting);
+  virtual void OnWasShown(bool needs_repainting);
   virtual void OnWasSwappedOut();
   void OnUpdateRectAck();
   void OnCreateVideoAck(int32 video_id);
@@ -231,8 +280,11 @@ class CONTENT_EXPORT RenderWidget
                         const gfx::Size& page_size,
                         const gfx::Size& desired_size);
   void OnMsgRepaint(const gfx::Size& size_to_paint);
+  void OnMsgSmoothScrollCompleted(int gesture_id);
+  virtual void OnSetDeviceScaleFactor(float device_scale_factor);
   void OnSetTextDirection(WebKit::WebTextDirection direction);
   void OnGetFPS();
+  void OnScreenInfoChanged(const WebKit::WebScreenInfo& screen_info);
 
   // Override points to notify derived classes that a paint has happened.
   // WillInitiatePaint happens when we're about to generate a new bitmap and
@@ -272,7 +324,8 @@ class CONTENT_EXPORT RenderWidget
       const gfx::Rect& paint_bounds,
       TransportDIB** dib,
       gfx::Rect* location,
-      gfx::Rect* clip);
+      gfx::Rect* clip,
+      float* scale_factor);
 
   // Gets the scroll offset of this widget, if this widget has a notion of
   // scroll offset.
@@ -292,18 +345,45 @@ class CONTENT_EXPORT RenderWidget
   void set_next_paint_is_restore_ack();
   void set_next_paint_is_repaint_ack();
 
+  void set_throttle_input_events(bool throttle_input_events) {
+    throttle_input_events_ = throttle_input_events;
+  }
+
   // Checks if the text input state and compose inline mode have been changed.
   // If they are changed, the new value will be sent to the browser process.
   void UpdateTextInputState();
 
   // Checks if the selection bounds have been changed. If they are changed,
   // the new value will be sent to the browser process.
-  void UpdateSelectionBounds();
+  virtual void UpdateSelectionBounds();
+
+  // Checks if the composition range or composition character bounds have been
+  // changed. If they are changed, the new value will be sent to the browser
+  // process.
+  virtual void UpdateCompositionInfo(
+      const ui::Range& range,
+      const std::vector<gfx::Rect>& character_bounds);
+
 
   // Override point to obtain that the current input method state and caret
   // position.
   virtual ui::TextInputType GetTextInputType();
   virtual void GetSelectionBounds(gfx::Rect* start, gfx::Rect* end);
+  virtual ui::TextInputType WebKitToUiTextInputType(
+      WebKit::WebTextInputType type);
+
+  // Override point to obtain that the current composition character bounds.
+  // In the case of surrogate pairs, the character is treated as two characters:
+  // the bounds for first character is actual one, and the bounds for second
+  // character is zero width rectangle.
+  virtual void GetCompositionCharacterBounds(
+      std::vector<gfx::Rect>* character_bounds);
+
+  // Returns true if the composition range or composition character bounds
+  // should be sent to the browser process.
+  bool ShouldUpdateCompositionInfo(
+      const ui::Range& range,
+      const std::vector<gfx::Rect>& bounds);
 
   // Override point to obtain that the current input method state about
   // composition text.
@@ -366,6 +446,7 @@ class CONTENT_EXPORT RenderWidget
 
   // The window we are embedded within.  TODO(darin): kill this.
   gfx::NativeViewId host_window_;
+  bool host_window_set_;
 
   // We store the current cursor object so we can avoid spamming SetCursor
   // messages.
@@ -391,6 +472,10 @@ class CONTENT_EXPORT RenderWidget
   // True if we are expecting an UpdateRect_ACK message (i.e., that a
   // UpdateRect message has been sent).
   bool update_reply_pending_;
+
+  // True if we need to send an UpdateRect message to notify the browser about
+  // an already-completed auto-resize.
+  bool need_update_rect_for_auto_resize_;
 
   // True if the underlying graphics context supports asynchronous swap.
   // Cached on the RenderWidget because determining support is costly.
@@ -441,6 +526,9 @@ class CONTENT_EXPORT RenderWidget
   // Indicates if an input method is active in the browser process.
   bool input_method_is_active_;
 
+  // Stores information about the current text input.
+  WebKit::WebTextInputInfo text_input_info_;
+
   // Stores the current text input type of |webwidget_|.
   ui::TextInputType text_input_type_;
 
@@ -450,6 +538,12 @@ class CONTENT_EXPORT RenderWidget
   // Stores the current selection bounds.
   gfx::Rect selection_start_rect_;
   gfx::Rect selection_end_rect_;
+
+  // Stores the current composition character bounds.
+  std::vector<gfx::Rect> composition_character_bounds_;
+
+  // Stores the current composition range.
+  ui::Range composition_range_;
 
   // The kind of popup this widget represents, NONE if not a popup.
   WebKit::WebPopupType popup_type_;
@@ -475,13 +569,15 @@ class CONTENT_EXPORT RenderWidget
   // compositor.
   bool is_accelerated_compositing_active_;
 
+  base::OneShotTimer<RenderWidget> animation_timer_;
   base::Time animation_floor_time_;
   bool animation_update_pending_;
-  bool animation_task_posted_;
   bool invalidation_task_posted_;
 
   bool has_disable_gpu_vsync_switch_;
   base::TimeTicks last_do_deferred_update_time_;
+
+  WebKit::WebRenderingStats software_stats_;
 
   // UpdateRect parameters for the current compositing pass. This is used to
   // pass state between DoDeferredUpdate and OnSwapBuffersPosted.
@@ -493,6 +589,22 @@ class CONTENT_EXPORT RenderWidget
   // queue. Note: some SwapBuffers may not correspond to an update, in which
   // case NULL is added to the queue.
   std::deque<ViewHostMsg_UpdateRect*> updates_pending_swap_;
+
+  // Properties of the screen hosting this RenderWidget instance.
+  WebKit::WebScreenInfo screen_info_;
+
+  // The device scale factor. This value is computed from the DPI entries in
+  // |screen_info_| on some platforms, and defaults to 1 on other platforms.
+  float device_scale_factor_;
+
+  // Specifies whether input event throttling is enabled for this widget.
+  bool throttle_input_events_;
+
+  // State associated with the BeginSmoothScroll synthetic scrolling function.
+  int next_smooth_scroll_gesture_id_;
+  typedef std::map<int, SmoothScrollCompletionCallback>
+      PendingSmoothScrollGestureMap;
+  PendingSmoothScrollGestureMap pending_smooth_scroll_gestures_;
 
   DISALLOW_COPY_AND_ASSIGN(RenderWidget);
 };

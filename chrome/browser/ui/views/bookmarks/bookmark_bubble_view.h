@@ -1,10 +1,9 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CHROME_BROWSER_UI_VIEWS_BOOKMARKS_BOOKMARK_BUBBLE_VIEW_H_
 #define CHROME_BROWSER_UI_VIEWS_BOOKMARKS_BOOKMARK_BUBBLE_VIEW_H_
-#pragma once
 
 #include "base/basictypes.h"
 #include "base/compiler_specific.h"
@@ -43,9 +42,8 @@ class BookmarkBubbleView : public views::BubbleDelegateView,
 
   virtual ~BookmarkBubbleView();
 
-  // views::BubbleDelegateView methods.
+  // views::BubbleDelegateView method.
   virtual views::View* GetInitiallyFocusedView() OVERRIDE;
-  virtual gfx::Rect GetAnchorRect() OVERRIDE;
 
   // views::WidgetDelegate method.
   virtual void WindowClosing() OVERRIDE;
@@ -75,13 +73,10 @@ class BookmarkBubbleView : public views::BubbleDelegateView,
   // Overridden from views::ButtonListener:
   // Closes the bubble or opens the edit dialog.
   virtual void ButtonPressed(views::Button* sender,
-                             const views::Event& event) OVERRIDE;
+                             const ui::Event& event) OVERRIDE;
 
   // Overridden from views::ComboboxListener:
-  // Changes the parent of the bookmark.
-  virtual void ItemChanged(views::Combobox* combo_box,
-                           int prev_index,
-                           int new_index) OVERRIDE;
+  virtual void OnSelectedIndexChanged(views::Combobox* combobox) OVERRIDE;
 
   // Handle the message when the user presses a button.
   void HandleButtonPressed(views::Button* sender);
@@ -100,10 +95,6 @@ class BookmarkBubbleView : public views::BubbleDelegateView,
 
   // The bookmark URL.
   const GURL url_;
-
-  // Title of the bookmark. This is initially the title supplied to the
-  // constructor, which is typically the title of the page.
-  std::wstring title_;
 
   // If true, the page was just bookmarked.
   const bool newly_bookmarked_;

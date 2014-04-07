@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -12,11 +12,13 @@
 #include "base/utf_string_conversions.h"
 #include "chrome/browser/bookmarks/bookmark_index.h"
 #include "chrome/browser/bookmarks/bookmark_model.h"
+#include "chrome/browser/bookmarks/bookmark_model_factory.h"
 #include "chrome/browser/bookmarks/bookmark_utils.h"
 #include "chrome/browser/history/history_database.h"
+#include "chrome/browser/history/history_service_factory.h"
 #include "chrome/browser/history/in_memory_database.h"
 #include "chrome/test/base/testing_profile.h"
-#include "content/test/test_browser_thread.h"
+#include "content/public/test/test_browser_thread.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 using content::BrowserThread;
@@ -49,7 +51,7 @@ class BookmarkIndexTest : public testing::Test {
   }
 
   void ExpectMatches(const std::string& query,
-                     const std::vector<std::string> expected_titles) {
+                     const std::vector<std::string>& expected_titles) {
     std::vector<bookmark_utils::TitleMatch> matches;
     model_->GetBookmarksWithTitlesMatching(ASCIIToUTF16(query), 1000, &matches);
     ASSERT_EQ(expected_titles.size(), matches.size());
@@ -232,10 +234,10 @@ TEST_F(BookmarkIndexTest, GetResultsSortedByTypedCount) {
   profile.CreateBookmarkModel(true);
   profile.BlockUntilBookmarkModelLoaded();
 
-  BookmarkModel* model = profile.GetBookmarkModel();
+  BookmarkModel* model = BookmarkModelFactory::GetForProfile(&profile);
 
   HistoryService* const history_service =
-      profile.GetHistoryService(Profile::EXPLICIT_ACCESS);
+      HistoryServiceFactory::GetForProfile(&profile, Profile::EXPLICIT_ACCESS);
 
   history::URLDatabase* url_db = history_service->InMemoryDatabase();
 

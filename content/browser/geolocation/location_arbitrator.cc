@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,12 +10,15 @@
 #include "base/bind_helpers.h"
 #include "content/browser/geolocation/arbitrator_dependency_factory.h"
 #include "content/public/browser/access_token_store.h"
+#include "googleurl/src/gurl.h"
 
 using content::AccessTokenStore;
+using content::Geoposition;
 
 namespace {
 
-const char* kDefaultNetworkProviderUrl = "https://maps.googleapis.com/maps/api/browserlocation/json";
+const char* kDefaultNetworkProviderUrl =
+    "https://www.googleapis.com/geolocation/v1/geolocate";
 GeolocationArbitratorDependencyFactory* g_dependency_factory_for_test = NULL;
 
 }  // namespace
@@ -32,7 +35,8 @@ GeolocationArbitrator::GeolocationArbitrator(
       access_token_store_(dependency_factory->NewAccessTokenStore()),
       get_time_now_(dependency_factory->GetTimeFunction()),
       observer_(observer),
-      position_provider_(NULL) {
+      position_provider_(NULL),
+      is_permission_granted_(false) {
 
 }
 
@@ -51,12 +55,15 @@ GeolocationArbitrator* GeolocationArbitrator::Create(
   return arbitrator;
 }
 
-void GeolocationArbitrator::OnPermissionGranted(
-    const GURL& requesting_frame) {
-  most_recent_authorized_frame_ = requesting_frame;
+GURL GeolocationArbitrator::DefaultNetworkProviderURL() {
+  return GURL(kDefaultNetworkProviderUrl);
+}
+
+void GeolocationArbitrator::OnPermissionGranted() {
+  is_permission_granted_ = true;
   for (ScopedVector<LocationProviderBase>::iterator i = providers_.begin();
       i != providers_.end(); ++i) {
-    (*i)->OnPermissionGranted(requesting_frame);
+    (*i)->OnPermissionGranted();
   }
 }
 
@@ -65,7 +72,7 @@ void GeolocationArbitrator::StartProviders(
   // Stash options as OnAccessTokenStoresLoaded has not yet been called.
   current_provider_options_ = options;
   if (providers_.empty()) {
-    DCHECK(GURL(kDefaultNetworkProviderUrl).is_valid());
+    DCHECK(DefaultNetworkProviderURL().is_valid());
     access_token_store_->LoadAccessTokens(
         base::Bind(&GeolocationArbitrator::OnAccessTokenStoresLoaded,
                    base::Unretained(this)));
@@ -82,7 +89,7 @@ void GeolocationArbitrator::DoStartProviders() {
 }
 
 void GeolocationArbitrator::StopProviders() {
-  providers_.reset();
+  providers_.clear();
 }
 
 void GeolocationArbitrator::OnAccessTokenStoresLoaded(
@@ -95,7 +102,7 @@ void GeolocationArbitrator::OnAccessTokenStoresLoaded(
   }
   // If there are no access tokens, boot strap it with the default server URL.
   if (access_token_set.empty())
-    access_token_set[GURL(kDefaultNetworkProviderUrl)];
+    access_token_set[DefaultNetworkProviderURL()];
   for (AccessTokenStore::AccessTokenSet::iterator i =
            access_token_set.begin();
       i != access_token_set.end(); ++i) {
@@ -113,9 +120,9 @@ void GeolocationArbitrator::RegisterProvider(
   if (!provider)
     return;
   provider->RegisterListener(this);
-  if (most_recent_authorized_frame_.is_valid())
-    provider->OnPermissionGranted(most_recent_authorized_frame_);
-  providers_->push_back(provider);
+  if (is_permission_granted_)
+    provider->OnPermissionGranted();
+  providers_.push_back(provider);
 }
 
 void GeolocationArbitrator::LocationUpdateAvailable(
@@ -123,7 +130,8 @@ void GeolocationArbitrator::LocationUpdateAvailable(
   DCHECK(provider);
   Geoposition new_position;
   provider->GetPosition(&new_position);
-  DCHECK(new_position.IsInitialized());
+  DCHECK(new_position.Validate() ||
+         new_position.error_code != content::Geoposition::ERROR_CODE_NONE);
   if (!IsNewPositionBetter(position_, new_position,
                            provider == position_provider_))
     return;
@@ -137,11 +145,11 @@ bool GeolocationArbitrator::IsNewPositionBetter(
     bool from_same_provider) const {
   // Updates location_info if it's better than what we currently have,
   // or if it's a newer update from the same provider.
-  if (!old_position.IsValidFix()) {
+  if (!old_position.Validate()) {
     // Older location wasn't locked.
     return true;
   }
-  if (new_position.IsValidFix()) {
+  if (new_position.Validate()) {
     // New location is locked, let's check if it's any better.
     if (old_position.accuracy >= new_position.accuracy) {
       // Accuracy is better.
@@ -159,7 +167,7 @@ bool GeolocationArbitrator::IsNewPositionBetter(
 }
 
 bool GeolocationArbitrator::HasPermissionBeenGranted() const {
-  return most_recent_authorized_frame_.is_valid();
+  return is_permission_granted_;
 }
 
 void GeolocationArbitrator::SetDependencyFactoryForTest(

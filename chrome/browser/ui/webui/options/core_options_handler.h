@@ -1,19 +1,20 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CHROME_BROWSER_UI_WEBUI_OPTIONS_CORE_OPTIONS_HANDLER_H_
 #define CHROME_BROWSER_UI_WEBUI_OPTIONS_CORE_OPTIONS_HANDLER_H_
-#pragma once
 
 #include <map>
 #include <string>
 
 #include "base/values.h"
-#include "chrome/browser/plugin_data_remover_helper.h"
-#include "chrome/browser/prefs/pref_change_registrar.h"
+#include "chrome/browser/api/prefs/pref_change_registrar.h"
+#include "chrome/browser/plugin_status_pref_setter.h"
 #include "chrome/browser/prefs/pref_service.h"
 #include "chrome/browser/ui/webui/options/options_ui.h"
+
+namespace options {
 
 // Core options UI handler.
 // Handles resource and JS calls common to all options sub-pages.
@@ -23,8 +24,9 @@ class CoreOptionsHandler : public OptionsPageUIHandler {
   virtual ~CoreOptionsHandler();
 
   // OptionsPageUIHandler implementation.
-  virtual void Initialize() OVERRIDE;
   virtual void GetLocalizedValues(DictionaryValue* localized_strings) OVERRIDE;
+  virtual void InitializeHandler() OVERRIDE;
+  virtual void InitializePage() OVERRIDE;
   virtual void Uninitialize() OVERRIDE;
 
   // content::NotificationObserver implementation.
@@ -72,6 +74,12 @@ class CoreOptionsHandler : public OptionsPageUIHandler {
   // controlling |pref_name|.
   void NotifyPrefChanged(const std::string& pref_name,
                          const std::string& controlling_pref_name);
+
+  // Calls JS callbacks to report a change in the value of the |name|
+  // preference. |value| is the new value for |name|.  Called from
+  // Notify*Changed methods to fire off the notifications.
+  void DispatchPrefChangeNotification(const std::string& name,
+                                      scoped_ptr<base::Value> value);
 
   // Creates dictionary value for |pref|, |controlling_pref| controls if |pref|
   // is managed by policy/extension; NULL indicates no other pref is controlling
@@ -136,15 +144,16 @@ class CoreOptionsHandler : public OptionsPageUIHandler {
   void HandleUserMetricsAction(const ListValue* args);
 
   void UpdateClearPluginLSOData();
+  void UpdatePepperFlashSettingsEnabled();
 
   OptionsPageUIHandlerHost* handlers_host_;
   PrefChangeRegistrar registrar_;
 
-  // Used for asynchronously updating the preference stating whether clearing
-  // LSO data is supported.
-  PluginDataRemoverHelper clear_plugin_lso_data_enabled_;
+  PluginStatusPrefSetter plugin_status_pref_setter_;
 
   DISALLOW_COPY_AND_ASSIGN(CoreOptionsHandler);
 };
+
+}  // namespace options
 
 #endif  // CHROME_BROWSER_UI_WEBUI_OPTIONS_CORE_OPTIONS_HANDLER_H_

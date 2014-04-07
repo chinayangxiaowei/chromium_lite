@@ -9,14 +9,16 @@
 #include "base/bind.h"
 #include "base/string_number_conversions.h"
 #include "base/string_util.h"
+#include "base/utf_string_conversions.h"
 #include "chrome/browser/browser_process.h"
-#include "chrome/browser/chromeos/cros_settings.h"
 #include "chrome/browser/chromeos/login/user_manager.h"
 #include "chrome/browser/chromeos/proxy_config_service_impl.h"
 #include "chrome/browser/chromeos/proxy_cros_settings_parser.h"
+#include "chrome/browser/chromeos/settings/cros_settings.h"
 #include "chrome/browser/policy/browser_policy_connector.h"
 #include "chrome/browser/prefs/pref_set_observer.h"
 #include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/ui/webui/chromeos/ui_account_tweaks.h"
 #include "chrome/browser/ui/webui/options/chromeos/accounts_options_handler.h"
 #include "chrome/common/chrome_notification_types.h"
 #include "chrome/common/pref_names.h"
@@ -26,9 +28,8 @@
 #include "content/public/browser/user_metrics.h"
 #include "content/public/browser/web_ui.h"
 
-using content::UserMetricsAction;
-
 namespace chromeos {
+namespace options {
 
 namespace {
 
@@ -43,24 +44,11 @@ bool IsSettingOwnerOnly(const std::string& pref) {
   return std::find(kNonOwnerSettings, end, pref) == end;
 }
 
-// Create a settings value with "managed" and "disabled" property.
-// "managed" property is true if the setting is managed by administrator.
-// "disabled" property is true if the UI for the setting should be disabled.
-base::Value* CreateSettingsValue(base::Value *value,
-                                 bool managed,
-                                 bool disabled) {
-  DictionaryValue* dict = new DictionaryValue;
-  dict->Set("value", value);
-  dict->Set("managed", base::Value::CreateBooleanValue(managed));
-  dict->Set("disabled", base::Value::CreateBooleanValue(disabled));
-  return dict;
-}
-
 // Returns true if |username| is the logged-in owner.
 bool IsLoggedInOwner(const std::string& username) {
   UserManager* user_manager = UserManager::Get();
-  return user_manager->current_user_is_owner() &&
-      user_manager->logged_in_user().email() == username;
+  return user_manager->IsCurrentUserOwner() &&
+      user_manager->GetLoggedInUser().email() == username;
 }
 
 // Creates a user info dictionary to be stored in the |ListValue| that is
@@ -100,8 +88,7 @@ base::Value* CreateUsersWhitelist(const base::Value *pref_value) {
 }  // namespace
 
 CoreChromeOSOptionsHandler::CoreChromeOSOptionsHandler()
-    : handling_change_(false),
-      pointer_factory_(this) {
+    : pointer_factory_(this) {
 }
 
 CoreChromeOSOptionsHandler::~CoreChromeOSOptionsHandler() {
@@ -112,7 +99,9 @@ CoreChromeOSOptionsHandler::~CoreChromeOSOptionsHandler() {
                  pointer_factory_.GetWeakPtr()));
 }
 
-void CoreChromeOSOptionsHandler::Initialize() {
+void CoreChromeOSOptionsHandler::InitializeHandler() {
+  CoreOptionsHandler::InitializeHandler();
+
   proxy_prefs_.reset(PrefSetObserver::CreateProxyPrefSetObserver(
     Profile::FromWebUI(web_ui())->GetPrefs(), this));
   // Observe the chromeos::ProxyConfigServiceImpl for changes from the UI.
@@ -147,27 +136,25 @@ base::Value* CoreChromeOSOptionsHandler::FetchPref(
           pref_service->FindPreference(prefs::kProxy);
       return CreateValueForPref(pref, controlling_pref);
     }
-    return ::CoreOptionsHandler::FetchPref(pref_name);
+    return ::options::CoreOptionsHandler::FetchPref(pref_name);
   }
 
   const base::Value* pref_value = CrosSettings::Get()->GetPref(pref_name);
   if (!pref_value)
     return base::Value::CreateNullValue();
 
-  // Lists don't get the standard pref decoration.
-  if (pref_value->GetType() == base::Value::TYPE_LIST) {
-    if (pref_name == kAccountsPrefUsers)
-      return CreateUsersWhitelist(pref_value);
-    // Return a copy because the UI will take ownership of this object.
-    return pref_value->DeepCopy();
-  }
-  // All other prefs are decorated the same way.
-  bool enabled = (UserManager::Get()->current_user_is_owner() ||
-                  !IsSettingOwnerOnly(pref_name));
-  return CreateSettingsValue(
-      pref_value->DeepCopy(),  // The copy will be owned by the dictionary.
-      g_browser_process->browser_policy_connector()->IsEnterpriseManaged(),
-      !enabled);
+  // Decorate pref value as CoreOptionsHandler::CreateValueForPref() does.
+  DictionaryValue* dict = new DictionaryValue;
+  if (pref_name == kAccountsPrefUsers)
+    dict->Set("value", CreateUsersWhitelist(pref_value));
+  else
+    dict->Set("value", pref_value->DeepCopy());
+  if (g_browser_process->browser_policy_connector()->IsEnterpriseManaged())
+    dict->SetString("controlledBy", "policy");
+  dict->SetBoolean("disabled",
+                   IsSettingOwnerOnly(pref_name) &&
+                       !UserManager::Get()->IsCurrentUserOwner());
+  return dict;
 }
 
 void CoreChromeOSOptionsHandler::ObservePref(const std::string& pref_name) {
@@ -176,7 +163,7 @@ void CoreChromeOSOptionsHandler::ObservePref(const std::string& pref_name) {
     return;
   }
   if (!CrosSettings::IsCrosSettings(pref_name))
-    return ::CoreOptionsHandler::ObservePref(pref_name);
+    return ::options::CoreOptionsHandler::ObservePref(pref_name);
   CrosSettings::Get()->AddSettingsObserver(pref_name.c_str(), this);
 }
 
@@ -190,10 +177,8 @@ void CoreChromeOSOptionsHandler::SetPref(const std::string& pref_name,
     return;
   }
   if (!CrosSettings::IsCrosSettings(pref_name))
-    return ::CoreOptionsHandler::SetPref(pref_name, value, metric);
-  handling_change_ = true;
+    return ::options::CoreOptionsHandler::SetPref(pref_name, value, metric);
   CrosSettings::Get()->Set(pref_name, *value);
-  handling_change_ = false;
 
   ProcessUserMetric(value, metric);
 }
@@ -205,16 +190,21 @@ void CoreChromeOSOptionsHandler::StopObservingPref(const std::string& path) {
   if (CrosSettings::IsCrosSettings(path))
     CrosSettings::Get()->RemoveSettingsObserver(path.c_str(), this);
   else  // Call base class to handle regular preferences.
-    ::CoreOptionsHandler::StopObservingPref(path);
+    ::options::CoreOptionsHandler::StopObservingPref(path);
+}
+
+void CoreChromeOSOptionsHandler::GetLocalizedValues(
+    DictionaryValue* localized_strings) {
+  DCHECK(localized_strings);
+  CoreOptionsHandler::GetLocalizedValues(localized_strings);
+
+  AddAccountUITweaksLocalizedValues(localized_strings);
 }
 
 void CoreChromeOSOptionsHandler::Observe(
     int type,
     const content::NotificationSource& source,
     const content::NotificationDetails& details) {
-  // Ignore the notification if this instance had caused it.
-  if (handling_change_)
-    return;
   if (type == chrome::NOTIFICATION_SYSTEM_SETTING_CHANGED) {
     NotifySettingsChanged(content::Details<std::string>(details).ptr());
     return;
@@ -231,31 +221,16 @@ void CoreChromeOSOptionsHandler::Observe(
       return;
     }
   }
-  ::CoreOptionsHandler::Observe(type, source, details);
+  ::options::CoreOptionsHandler::Observe(type, source, details);
 }
 
 void CoreChromeOSOptionsHandler::NotifySettingsChanged(
     const std::string* setting_name) {
   DCHECK(CrosSettings::Get()->IsCrosSettings(*setting_name));
-  const base::Value* value = FetchPref(*setting_name);
-  if (!value) {
+  scoped_ptr<base::Value> value(FetchPref(*setting_name));
+  if (!value.get())
     NOTREACHED();
-    return;
-  }
-  std::pair<PreferenceCallbackMap::const_iterator,
-            PreferenceCallbackMap::const_iterator> range =
-      pref_callback_map_.equal_range(*setting_name);
-  for (PreferenceCallbackMap::const_iterator iter = range.first;
-      iter != range.second; ++iter) {
-    const std::wstring& callback_function = iter->second;
-    ListValue result_value;
-    result_value.Append(base::Value::CreateStringValue(setting_name->c_str()));
-    result_value.Append(value->DeepCopy());
-    web_ui()->CallJavascriptFunction(WideToASCII(callback_function),
-                                     result_value);
-  }
-  if (value)
-    delete value;
+  DispatchPrefChangeNotification(*setting_name, value.Pass());
 }
 
 void CoreChromeOSOptionsHandler::NotifyProxyPrefsChanged() {
@@ -264,19 +239,10 @@ void CoreChromeOSOptionsHandler::NotifyProxyPrefsChanged() {
     proxy_cros_settings_parser::GetProxyPrefValue(
         Profile::FromWebUI(web_ui()), kProxySettings[i], &value);
     DCHECK(value);
-    PreferenceCallbackMap::const_iterator iter =
-        pref_callback_map_.find(kProxySettings[i]);
-    for (; iter != pref_callback_map_.end(); ++iter) {
-      const std::wstring& callback_function = iter->second;
-      ListValue result_value;
-      result_value.Append(base::Value::CreateStringValue(kProxySettings[i]));
-      result_value.Append(value->DeepCopy());
-      web_ui()->CallJavascriptFunction(WideToASCII(callback_function),
-                                       result_value);
-    }
-    if (value)
-      delete value;
+    scoped_ptr<base::Value> ptr(value);
+    DispatchPrefChangeNotification(kProxySettings[i], ptr.Pass());
   }
 }
 
+}  // namespace options
 }  // namespace chromeos

@@ -87,8 +87,7 @@ void BitmapPlatformDevice::BitmapPlatformDeviceData::LoadConfig() {
 // that we can create the pixel data before calling the constructor. This is
 // required so that we can call the base class' constructor with the pixel
 // data.
-BitmapPlatformDevice* BitmapPlatformDevice::create(
-    HDC screen_dc,
+BitmapPlatformDevice* BitmapPlatformDevice::Create(
     int width,
     int height,
     bool is_opaque,
@@ -116,30 +115,24 @@ BitmapPlatformDevice* BitmapPlatformDevice::create(
   hdr.biClrImportant = 0;
 
   void* data = NULL;
-  HBITMAP hbitmap = CreateDIBSection(screen_dc,
+  HBITMAP hbitmap = CreateDIBSection(NULL,
                                      reinterpret_cast<BITMAPINFO*>(&hdr), 0,
                                      &data,
                                      shared_section, 0);
-  if (!hbitmap) {
+  if (!hbitmap)
     return NULL;
-  }
 
   bitmap.setConfig(SkBitmap::kARGB_8888_Config, width, height);
   bitmap.setPixels(data);
   bitmap.setIsOpaque(is_opaque);
 
-  // If we were given data, then don't clobber it!
-  if (!shared_section) {
-    if (is_opaque) {
 #ifndef NDEBUG
-      // To aid in finding bugs, we set the background color to something
-      // obviously wrong so it will be noticable when it is not cleared
-      bitmap.eraseARGB(255, 0, 255, 128);  // bright bluish green
+  // If we were given data, then don't clobber it!
+  if (!shared_section && is_opaque)
+    // To aid in finding bugs, we set the background color to something
+    // obviously wrong so it will be noticable when it is not cleared
+    bitmap.eraseARGB(255, 0, 255, 128);  // bright bluish green
 #endif
-    } else {
-      bitmap.eraseARGB(0, 0, 0, 0);
-    }
-  }
 
   // The device object will take ownership of the HBITMAP. The initial refcount
   // of the data object will be 1, which is what the constructor expects.
@@ -148,14 +141,19 @@ BitmapPlatformDevice* BitmapPlatformDevice::create(
 }
 
 // static
-BitmapPlatformDevice* BitmapPlatformDevice::create(int width,
-                                                   int height,
-                                                   bool is_opaque,
-                                                   HANDLE shared_section) {
-  HDC screen_dc = GetDC(NULL);
-  BitmapPlatformDevice* device = BitmapPlatformDevice::create(
-      screen_dc, width, height, is_opaque, shared_section);
-  ReleaseDC(NULL, screen_dc);
+BitmapPlatformDevice* BitmapPlatformDevice::Create(int width, int height,
+                                                   bool is_opaque) {
+  return Create(width, height, is_opaque, NULL);
+}
+
+// static
+BitmapPlatformDevice* BitmapPlatformDevice::CreateAndClear(int width,
+                                                           int height,
+                                                           bool is_opaque) {
+  BitmapPlatformDevice* device = BitmapPlatformDevice::Create(width, height,
+                                                              is_opaque);
+  if (device && !is_opaque)
+    device->accessBitmap(true).eraseARGB(0, 0, 0, 0);
   return device;
 }
 
@@ -247,18 +245,21 @@ void BitmapPlatformDevice::DrawToNativeContext(HDC dc, int x, int y,
     data_->ReleaseBitmapDC();
 }
 
-void BitmapPlatformDevice::onAccessBitmap(SkBitmap* bitmap) {
+const SkBitmap& BitmapPlatformDevice::onAccessBitmap(SkBitmap* bitmap) {
   // FIXME(brettw) OPTIMIZATION: We should only flush if we know a GDI
   // operation has occurred on our DC.
   if (data_->IsBitmapDCCreated())
     GdiFlush();
+  return *bitmap;
 }
 
 SkDevice* BitmapPlatformDevice::onCreateCompatibleDevice(
     SkBitmap::Config config, int width, int height, bool isOpaque,
     Usage /*usage*/) {
   SkASSERT(config == SkBitmap::kARGB_8888_Config);
-  return BitmapPlatformDevice::create(width, height, isOpaque, NULL);
+  SkDevice* bitmap_device = BitmapPlatformDevice::CreateAndClear(width, height,
+                                                                 isOpaque);
+  return bitmap_device;
 }
 
 }  // namespace skia

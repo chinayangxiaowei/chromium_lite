@@ -252,8 +252,7 @@ class ChromiumEnv : public Env {
  public:
   ChromiumEnv();
   virtual ~ChromiumEnv() {
-    fprintf(stderr, "Destroying Env::Default()\n");
-    exit(1);
+    NOTREACHED();
   }
 
   virtual Status NewSequentialFile(const std::string& fname,
@@ -430,7 +429,7 @@ class ChromiumEnv : public Env {
     }
 
     virtual void Logv(const char* format, va_list ap) {
-      VLOG(5) << "LevelDB: " << filename_ << " " << StringPrintf(format, ap);
+      VLOG(5) << "LevelDB: " << filename_ << " " << base::StringPrintV(format, ap);
     }
 
    private:

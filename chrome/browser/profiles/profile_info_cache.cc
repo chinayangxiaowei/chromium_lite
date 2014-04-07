@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -37,6 +37,7 @@ using content::BrowserThread;
 namespace {
 
 const char kNameKey[] = "name";
+const char kShortcutNameKey[] = "shortcut_name";
 const char kGAIANameKey[] = "gaia_name";
 const char kUseGAIANameKey[] = "use_gaia_name";
 const char kUserNameKey[] = "user_name";
@@ -175,7 +176,7 @@ ProfileInfoCache::ProfileInfoCache(PrefService* prefs,
   for (DictionaryValue::key_iterator it = cache->begin_keys();
        it != cache->end_keys(); ++it) {
     std::string key = *it;
-    DictionaryValue* info = NULL;
+    const DictionaryValue* info = NULL;
     cache->GetDictionary(key, &info);
     string16 name;
     info->GetString(kNameKey, &name);
@@ -225,8 +226,12 @@ void ProfileInfoCache::RemoveObserver(ProfileInfoCacheObserver* obs) {
 }
 
 void ProfileInfoCache::DeleteProfileFromCache(const FilePath& profile_path) {
-  string16 name = GetNameOfProfileAtIndex(
-      GetIndexOfProfileWithPath(profile_path));
+  size_t profile_index = GetIndexOfProfileWithPath(profile_path);
+  if (profile_index == std::string::npos) {
+    NOTREACHED();
+    return;
+  }
+  string16 name = GetNameOfProfileAtIndex(profile_index);
 
   FOR_EACH_OBSERVER(ProfileInfoCacheObserver,
                     observer_list_,
@@ -273,6 +278,14 @@ string16 ProfileInfoCache::GetNameOfProfileAtIndex(size_t index) const {
   return name;
 }
 
+string16 ProfileInfoCache::GetShortcutNameOfProfileAtIndex(size_t index)
+    const {
+  string16 shortcut_name;
+  GetInfoForProfileAtIndex(index)->GetString(
+      kShortcutNameKey, &shortcut_name);
+  return shortcut_name;
+}
+
 FilePath ProfileInfoCache::GetPathOfProfileAtIndex(size_t index) const {
   return user_data_dir_.AppendASCII(sorted_keys_[index]);
 }
@@ -299,8 +312,10 @@ const gfx::Image& ProfileInfoCache::GetAvatarIconOfProfileAtIndex(
 bool ProfileInfoCache::GetBackgroundStatusOfProfileAtIndex(
     size_t index) const {
   bool background_app_status;
-  GetInfoForProfileAtIndex(index)->GetBoolean(kBackgroundAppsKey,
-                                              &background_app_status);
+  if (!GetInfoForProfileAtIndex(index)->GetBoolean(kBackgroundAppsKey,
+                                                   &background_app_status)) {
+    return false;
+  }
   return background_app_status;
 }
 
@@ -322,8 +337,11 @@ const gfx::Image* ProfileInfoCache::GetGAIAPictureOfProfileAtIndex(
   std::string key = CacheKeyFromProfilePath(path);
 
   // If the picture is already loaded then use it.
-  if (gaia_pictures_.count(key))
+  if (gaia_pictures_.count(key)) {
+    if (gaia_pictures_[key]->IsEmpty())
+      return NULL;
     return gaia_pictures_[key];
+  }
 
   std::string file_name;
   GetInfoForProfileAtIndex(index)->GetString(
@@ -355,6 +373,9 @@ void ProfileInfoCache::OnGAIAPictureLoaded(const FilePath& path,
   if (*image) {
     delete gaia_pictures_[key];
     gaia_pictures_[key] = *image;
+  } else {
+    // Place an empty image in the cache to avoid reloading it again.
+    gaia_pictures_[key] = new gfx::Image();
   }
   delete image;
 
@@ -417,6 +438,17 @@ void ProfileInfoCache::SetNameOfProfileAtIndex(size_t index,
                       observer_list_,
                       OnProfileNameChanged(profile_path, old_display_name));
   }
+}
+
+void ProfileInfoCache::SetShortcutNameOfProfileAtIndex(
+    size_t index,
+    const string16& shortcut_name) {
+  if (shortcut_name == GetShortcutNameOfProfileAtIndex(index))
+    return;
+  scoped_ptr<DictionaryValue> info(GetInfoForProfileAtIndex(index)->DeepCopy());
+  info->SetString(kShortcutNameKey, shortcut_name);
+  // This takes ownership of |info|.
+  SetInfoForProfileAtIndex(index, info.release());
 }
 
 void ProfileInfoCache::SetUserNameOfProfileAtIndex(size_t index,
@@ -701,7 +733,7 @@ const DictionaryValue* ProfileInfoCache::GetInfoForProfileAtIndex(
   DCHECK_LT(index, GetNumberOfProfiles());
   const DictionaryValue* cache =
       prefs_->GetDictionary(prefs::kProfileInfoCache);
-  DictionaryValue* info = NULL;
+  const DictionaryValue* info = NULL;
   cache->GetDictionary(sorted_keys_[index], &info);
   return info;
 }
@@ -726,7 +758,7 @@ std::string ProfileInfoCache::CacheKeyFromProfilePath(
 }
 
 std::vector<std::string>::iterator ProfileInfoCache::FindPositionForProfile(
-    std::string search_key,
+    const std::string& search_key,
     const string16& search_name) {
   string16 search_name_l = base::i18n::ToLower(search_name);
   for (size_t i = 0; i < GetNumberOfProfiles(); ++i) {
@@ -770,7 +802,7 @@ std::vector<string16> ProfileInfoCache::GetProfileNames() {
   for (base::DictionaryValue::key_iterator it = cache->begin_keys();
        it != cache->end_keys();
        ++it) {
-    base::DictionaryValue* info = NULL;
+    const base::DictionaryValue* info = NULL;
     cache->GetDictionary(*it, &info);
     info->GetString(kNameKey, &name);
     names.push_back(name);

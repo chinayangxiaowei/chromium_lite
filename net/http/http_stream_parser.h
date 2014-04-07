@@ -4,16 +4,17 @@
 
 #ifndef NET_HTTP_HTTP_STREAM_PARSER_H_
 #define NET_HTTP_HTTP_STREAM_PARSER_H_
-#pragma once
 
 #include <string>
 
 #include "base/basictypes.h"
+#include "base/memory/scoped_ptr.h"
 #include "base/string_piece.h"
 #include "net/base/completion_callback.h"
 #include "net/base/net_export.h"
 #include "net/base/net_log.h"
 #include "net/base/upload_data_stream.h"
+#include "net/base/upload_progress.h"
 #include "net/http/http_chunked_decoder.h"
 
 namespace net {
@@ -25,6 +26,7 @@ struct HttpRequestInfo;
 class HttpRequestHeaders;
 class HttpResponseInfo;
 class IOBuffer;
+class IOBufferWithSize;
 class SSLCertRequestInfo;
 class SSLInfo;
 
@@ -45,7 +47,7 @@ class NET_EXPORT_PRIVATE HttpStreamParser  : public ChunkCallback {
   // some additional functionality
   int SendRequest(const std::string& request_line,
                   const HttpRequestHeaders& headers,
-                  UploadDataStream* request_body,
+                  scoped_ptr<UploadDataStream> request_body,
                   HttpResponseInfo* response,
                   const CompletionCallback& callback);
 
@@ -56,7 +58,7 @@ class NET_EXPORT_PRIVATE HttpStreamParser  : public ChunkCallback {
 
   void Close(bool not_reusable);
 
-  uint64 GetUploadProgress() const;
+  UploadProgress GetUploadProgress() const;
 
   HttpResponseInfo* GetResponseInfo();
 
@@ -101,6 +103,8 @@ class NET_EXPORT_PRIVATE HttpStreamParser  : public ChunkCallback {
   static const size_t kChunkHeaderFooterSize;
 
  private:
+  class SeekableIOBuffer;
+
   // FOO_COMPLETE states implement the second half of potentially asynchronous
   // operations and don't necessarily mean that FOO is complete.
   enum State {
@@ -111,6 +115,7 @@ class NET_EXPORT_PRIVATE HttpStreamParser  : public ChunkCallback {
     // or not.
     STATE_SENDING_CHUNKED_BODY,
     STATE_SENDING_NON_CHUNKED_BODY,
+    STATE_SEND_REQUEST_WAIT_FOR_BODY_CHUNK_COMPLETE,
     STATE_REQUEST_SENT,
     STATE_READ_HEADERS,
     STATE_READ_HEADERS_COMPLETE,
@@ -143,6 +148,7 @@ class NET_EXPORT_PRIVATE HttpStreamParser  : public ChunkCallback {
   int DoSendHeaders(int result);
   int DoSendChunkedBody(int result);
   int DoSendNonChunkedBody(int result);
+  int DoSendRequestWaitForBodyChunkComplete(int result);
   int DoReadHeaders();
   int DoReadHeadersComplete(int result);
   int DoReadBody();
@@ -222,11 +228,9 @@ class NET_EXPORT_PRIVATE HttpStreamParser  : public ChunkCallback {
 
   // Stores an encoded chunk for chunked uploads.
   // Note: This should perhaps be improved to not create copies of the data.
-  scoped_refptr<IOBuffer> chunk_buf_;
-  // The size of the chunk buffer (chunk_buf_). The chunk buffer is
-  // guaranteed to be large enough to hold the encoded chunk.
-  const size_t chunk_buffer_size_;
-  size_t chunk_length_;
+  scoped_refptr<IOBufferWithSize> chunk_buf_;
+  // Temporary buffer to read the request body from UploadDataStream.
+  scoped_refptr<SeekableIOBuffer> request_body_buf_;
   size_t chunk_length_without_encoding_;
   bool sent_last_chunk_;
 

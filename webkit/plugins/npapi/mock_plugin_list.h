@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -22,15 +22,20 @@ class MockPluginList : public PluginList {
   void ClearPluginsToLoad();
 
   // PluginList:
-  virtual bool GetPluginsIfNoRefreshNeeded(
+  virtual bool GetPluginsNoRefresh(
       std::vector<webkit::WebPluginInfo>* plugins) OVERRIDE;
 
  private:
   std::vector<WebPluginInfo> plugins_to_load_;
 
   // PluginList methods:
+
+  // TODO(ibraaaa): DELETE. http://crbug.com/124396
   virtual void LoadPluginsInternal(
       ScopedVector<PluginGroup>* plugin_groups) OVERRIDE;
+
+  virtual void LoadPluginsIntoPluginListInternal(
+        std::vector<webkit::WebPluginInfo>* plugins) OVERRIDE;
 };
 
 }  // npapi

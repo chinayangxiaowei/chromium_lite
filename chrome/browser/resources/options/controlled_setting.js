@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -35,6 +35,7 @@ cr.define('options', function() {
       detailsContainer.appendChild(bubbleContainer);
 
       self.appendChild(detailsContainer);
+      self.addEventListener('click', self.show_);
 
       // If there is a pref, track its controlledBy property in order to be able
       // to bring up the correct bubble.
@@ -43,13 +44,13 @@ cr.define('options', function() {
             this.getAttribute('pref'),
             function(event) {
               if (event.value) {
-                var controlledBy = event.value['controlledBy'];
+                var controlledBy = event.value.controlledBy;
                 self.controlledBy = controlledBy ? controlledBy : null;
               }
             });
-      }
 
-      self.addEventListener('click', self.show_);
+        self.resetHandler(self.clearAssociatedPref_);
+      }
     },
 
 
@@ -59,6 +60,23 @@ cr.define('options', function() {
     close: function() {
       this.querySelector('details').removeAttribute('open');
       this.ownerDocument.removeEventListener('click', this.closeHandler_, true);
+    },
+
+    /**
+     * The given handler will be called when the user clicks on the 'reset to
+     * recommended value' link shown in the indicator bubble.
+     * @param {function()} handler The handler to be called.
+     */
+    set resetHandler(handler) {
+      this.resetHandler_ = handler;
+    },
+
+    /**
+     * Clears the preference associated with this indicator.
+     * @private
+     */
+    clearAssociatedPref_: function() {
+      Preferences.clearPref(this.getAttribute('pref'), this.dialogPref);
     },
 
     /**
@@ -78,9 +96,9 @@ cr.define('options', function() {
 
       // Work out the bubble text.
       defaultStrings = {
-        'policy' : localStrings.getString('controlledSettingPolicy'),
-        'extension' : localStrings.getString('controlledSettingExtension'),
-        'recommended' : localStrings.getString('controlledSettingRecommended'),
+        policy: loadTimeData.getString('controlledSettingPolicy'),
+        extension: loadTimeData.getString('controlledSettingExtension'),
+        recommended: loadTimeData.getString('controlledSettingRecommended'),
       };
 
       // No controller, no bubble.
@@ -98,24 +116,16 @@ cr.define('options', function() {
       bubbleText.className = 'controlled-setting-bubble-text';
       bubbleText.textContent = text;
 
-      var allowReset = self.getAttribute('allow-reset');
-      if (self.controlledBy == 'recommended' && allowReset) {
+      if (self.controlledBy == 'recommended' && self.resetHandler_) {
         var container = doc.createElement('div');
         var action = doc.createElement('button');
         action.classList.add('link-button');
         action.classList.add('controlled-setting-bubble-action');
         action.textContent =
-            localStrings.getString('controlledSettingApplyRecommendation');
+            loadTimeData.getString('controlledSettingApplyRecommendation');
         action.addEventListener(
             'click',
-            function(e) {
-              // Fire the reset event, falling back to just resetting the pref.
-              if (!cr.dispatchSimpleEvent(self, 'reset', true, true)) {
-                var pref = self.getAttribute('pref');
-                if (pref)
-                  Preferences.clearPref(pref);
-              }
-            });
+            function(event) { self.resetHandler_(); });
         container.appendChild(action);
         bubbleText.appendChild(container);
       }
@@ -136,8 +146,18 @@ cr.define('options', function() {
                     cr.PropertyKind.ATTR,
                     ControlledSettingIndicator.prototype.close);
 
+  /**
+   * A special preference type specific to dialogs. Changes take effect in the
+   * settings UI immediately but are only actually committed when the user
+   * confirms the dialog. If the user cancels the dialog instead, the changes
+   * are rolled back in the settings UI and never committed.
+   * @type {boolean}
+   */
+  cr.defineProperty(ControlledSettingIndicator, 'dialogPref',
+                    cr.PropertyKind.BOOL_ATTR);
+
   // Export.
   return {
-    ControlledSettingIndicator : ControlledSettingIndicator
+    ControlledSettingIndicator: ControlledSettingIndicator
   };
 });

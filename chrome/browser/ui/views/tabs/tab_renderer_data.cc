@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -12,16 +12,16 @@ TabRendererData::TabRendererData()
       show_icon(true),
       mini(false),
       blocked(false),
-      app(false) {
+      app(false),
+      mode(chrome::search::Mode::MODE_DEFAULT),
+      gradient_background_opacity(1.0f) {
 }
 
 TabRendererData::~TabRendererData() {}
 
 bool TabRendererData::Equals(const TabRendererData& data) {
   return
-      favicon.pixelRef() &&
-      favicon.pixelRef() == data.favicon.pixelRef() &&
-      favicon.pixelRefOffset() == data.favicon.pixelRefOffset() &&
+      favicon.BackedBySameObjectAs(data.favicon) &&
       network_state == data.network_state &&
       title == data.title &&
       url == data.url &&
@@ -31,5 +31,7 @@ bool TabRendererData::Equals(const TabRendererData& data) {
       show_icon == data.show_icon &&
       mini == data.mini &&
       blocked == data.blocked &&
-      app == data.app;
+      app == data.app &&
+      mode == data.mode &&
+      gradient_background_opacity == data.gradient_background_opacity;
 }

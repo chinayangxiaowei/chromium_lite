@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,22 +10,23 @@
 #include "base/time.h"
 #include "chrome/browser/automation/automation_resource_message_filter.h"
 #include "chrome/common/automation_messages.h"
-#include "content/browser/renderer_host/render_view_host.h"
-#include "content/browser/renderer_host/resource_dispatcher_host.h"
-#include "content/browser/renderer_host/resource_dispatcher_host_request_info.h"
 #include "content/public/browser/browser_thread.h"
-#include "net/base/cookie_monster.h"
+#include "content/public/browser/render_view_host.h"
+#include "content/public/browser/resource_request_info.h"
 #include "net/base/host_port_pair.h"
 #include "net/base/io_buffer.h"
 #include "net/base/net_errors.h"
+#include "net/cookies/cookie_monster.h"
 #include "net/http/http_request_headers.h"
 #include "net/http/http_response_headers.h"
 #include "net/http/http_util.h"
+#include "net/url_request/url_request.h"
 #include "net/url_request/url_request_context.h"
 
 using base::Time;
 using base::TimeDelta;
 using content::BrowserThread;
+using content::ResourceRequestInfo;
 
 // The list of filtered headers that are removed from requests sent via
 // StartAsync(). These must be lower case.
@@ -51,11 +52,12 @@ net::URLRequest::ProtocolFactory* URLRequestAutomationJob::old_https_factory_
 
 URLRequestAutomationJob::URLRequestAutomationJob(
     net::URLRequest* request,
+    net::NetworkDelegate* network_delegate,
     int tab,
     int request_id,
     AutomationResourceMessageFilter* filter,
     bool is_pending)
-    : net::URLRequestJob(request),
+    : net::URLRequestJob(request, network_delegate),
       id_(0),
       tab_(tab),
       message_filter_(filter),
@@ -63,6 +65,7 @@ URLRequestAutomationJob::URLRequestAutomationJob(
       redirect_status_(0),
       request_id_(request_id),
       is_pending_(is_pending),
+      upload_size_(0),
       ALLOW_THIS_IN_INITIALIZER_LIST(weak_factory_(this)) {
   DVLOG(1) << "URLRequestAutomationJob create. Count: " << ++instance_count_;
   DCHECK(message_filter_ != NULL);
@@ -94,31 +97,32 @@ void URLRequestAutomationJob::EnsureProtocolFactoryRegistered() {
 
 net::URLRequestJob* URLRequestAutomationJob::Factory(
     net::URLRequest* request,
+    net::NetworkDelegate* network_delegate,
     const std::string& scheme) {
   bool scheme_is_http = request->url().SchemeIs("http");
   bool scheme_is_https = request->url().SchemeIs("https");
 
   // Returning null here just means that the built-in handler will be used.
   if (scheme_is_http || scheme_is_https) {
-    ResourceDispatcherHostRequestInfo* request_info =
-        ResourceDispatcherHost::InfoForRequest(request);
-    if (request_info) {
-      int child_id = request_info->child_id();
-      int route_id = request_info->route_id();
+    const ResourceRequestInfo* info = ResourceRequestInfo::ForRequest(request);
+    if (info) {
+      int child_id = info->GetChildID();
+      int route_id = info->GetRouteID();
       AutomationResourceMessageFilter::AutomationDetails details;
       if (AutomationResourceMessageFilter::LookupRegisteredRenderView(
               child_id, route_id, &details)) {
-        URLRequestAutomationJob* job = new URLRequestAutomationJob(request,
-            details.tab_handle, request_info->request_id(), details.filter,
+        URLRequestAutomationJob* job = new URLRequestAutomationJob(
+            request, network_delegate,
+            details.tab_handle, info->GetRequestID(), details.filter,
             details.is_pending_render_view);
         return job;
       }
     }
 
     if (scheme_is_http && old_http_factory_)
-      return old_http_factory_(request, scheme);
+      return old_http_factory_(request, network_delegate, scheme);
     else if (scheme_is_https && old_https_factory_)
-      return old_https_factory_(request, scheme);
+      return old_https_factory_(request, network_delegate, scheme);
   }
   return NULL;
 }
@@ -229,18 +233,15 @@ bool URLRequestAutomationJob::IsRedirectResponse(
   return true;
 }
 
-uint64 URLRequestAutomationJob::GetUploadProgress() const {
+net::UploadProgress URLRequestAutomationJob::GetUploadProgress() const {
+  uint64 progress = 0;
   if (request_ && request_->status().is_success()) {
     // We don't support incremental progress notifications in ChromeFrame. When
     // we receive a response for the POST request from Chromeframe, it means
     // that the upload is fully complete.
-    ResourceDispatcherHostRequestInfo* request_info =
-        ResourceDispatcherHost::InfoForRequest(request_);
-    if (request_info) {
-      return request_info->upload_size();
-    }
+    progress = upload_size_;
   }
-  return 0;
+  return net::UploadProgress(progress, upload_size_);
 }
 
 net::HostPortPair URLRequestAutomationJob::GetSocketAddress() const {
@@ -253,7 +254,7 @@ bool URLRequestAutomationJob::MayFilterMessage(const IPC::Message& message,
     case AutomationMsg_RequestStarted::ID:
     case AutomationMsg_RequestData::ID:
     case AutomationMsg_RequestEnd::ID: {
-      void* iter = NULL;
+      PickleIterator iter(message);
       if (message.ReadInt(&iter, request_id))
         return true;
       break;
@@ -303,6 +304,7 @@ void URLRequestAutomationJob::OnRequestStarted(
                                           response.headers.size()));
   }
   socket_address_ = response.socket_address;
+  upload_size_ = response.upload_size;
   NotifyHeadersComplete();
 }
 
@@ -417,21 +419,19 @@ void URLRequestAutomationJob::StartAsync() {
   for (size_t i = 0; i < arraysize(kFilteredHeaderStrings); ++i)
     new_request_headers.RemoveHeader(kFilteredHeaderStrings[i]);
 
-  if (request_->context()) {
-    // Only add default Accept-Language and Accept-Charset if the request
-    // didn't have them specified.
-    if (!new_request_headers.HasHeader(
-        net::HttpRequestHeaders::kAcceptLanguage) &&
-        !request_->context()->accept_language().empty()) {
-      new_request_headers.SetHeader(net::HttpRequestHeaders::kAcceptLanguage,
-                                    request_->context()->accept_language());
-    }
-    if (!new_request_headers.HasHeader(
-        net::HttpRequestHeaders::kAcceptCharset) &&
-        !request_->context()->accept_charset().empty()) {
-      new_request_headers.SetHeader(net::HttpRequestHeaders::kAcceptCharset,
-                                    request_->context()->accept_charset());
-    }
+  // Only add default Accept-Language and Accept-Charset if the request
+  // didn't have them specified.
+  if (!new_request_headers.HasHeader(
+      net::HttpRequestHeaders::kAcceptLanguage) &&
+      !request_->context()->accept_language().empty()) {
+    new_request_headers.SetHeader(net::HttpRequestHeaders::kAcceptLanguage,
+                                  request_->context()->accept_language());
+  }
+  if (!new_request_headers.HasHeader(
+      net::HttpRequestHeaders::kAcceptCharset) &&
+      !request_->context()->accept_charset().empty()) {
+    new_request_headers.SetHeader(net::HttpRequestHeaders::kAcceptCharset,
+                                  request_->context()->accept_charset());
   }
 
   // Ensure that we do not send username and password fields in the referrer.
@@ -446,11 +446,10 @@ void URLRequestAutomationJob::StartAsync() {
   }
 
   // Get the resource type (main_frame/script/image/stylesheet etc.
-  ResourceDispatcherHostRequestInfo* request_info =
-      ResourceDispatcherHost::InfoForRequest(request_);
+  const ResourceRequestInfo* info = ResourceRequestInfo::ForRequest(request_);
   ResourceType::Type resource_type = ResourceType::MAIN_FRAME;
-  if (request_info) {
-    resource_type = request_info->resource_type();
+  if (info) {
+    resource_type = info->GetResourceType();
   }
 
   // Ask automation to start this request.
@@ -459,7 +458,7 @@ void URLRequestAutomationJob::StartAsync() {
   automation_request.method = request_->method();
   automation_request.referrer = referrer.spec();
   automation_request.extra_request_headers = new_request_headers.ToString();
-  automation_request.upload_data =request_->get_upload();
+  automation_request.upload_data = request_->get_upload_mutable();
   automation_request.resource_type = resource_type;
   automation_request.load_flags = request_->load_flags();
 

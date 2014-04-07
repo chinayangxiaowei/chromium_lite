@@ -1,22 +1,26 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CHROME_BROWSER_UI_BOOKMARKS_BOOKMARK_TAB_HELPER_H_
 #define CHROME_BROWSER_UI_BOOKMARKS_BOOKMARK_TAB_HELPER_H_
-#pragma once
 
+#include "chrome/browser/tab_contents/web_contents_user_data.h"
 #include "content/public/browser/notification_observer.h"
 #include "content/public/browser/notification_registrar.h"
 #include "content/public/browser/web_contents_observer.h"
 
-class BookmarkTabHelperDelegate;
-class TabContentsWrapper;
 struct BookmarkNodeData;
+class BookmarkTabHelperDelegate;
+
+namespace content {
+class WebContents;
+}
 
 // Per-tab class to manage bookmarks.
 class BookmarkTabHelper : public content::NotificationObserver,
-                          public content::WebContentsObserver {
+                          public content::WebContentsObserver,
+                          public WebContentsUserData<BookmarkTabHelper> {
  public:
   // BookmarkDrag --------------------------------------------------------------
   // Interface for forwarding bookmark drag and drop to extenstions.
@@ -31,7 +35,6 @@ class BookmarkTabHelper : public content::NotificationObserver,
     virtual ~BookmarkDrag() {}
   };
 
-  explicit BookmarkTabHelper(TabContentsWrapper* tab_contents);
   virtual ~BookmarkTabHelper();
 
   bool is_starred() const { return is_starred_; }
@@ -62,6 +65,10 @@ class BookmarkTabHelper : public content::NotificationObserver,
   BookmarkTabHelper::BookmarkDrag* GetBookmarkDragDelegate();
 
  private:
+  explicit BookmarkTabHelper(content::WebContents* web_contents);
+  static int kUserDataKey;
+  friend class WebContentsUserData<BookmarkTabHelper>;
+
   // Updates the starred state from the bookmark bar model. If the state has
   // changed, the delegate is notified.
   void UpdateStarredStateForCurrentURL();
@@ -71,9 +78,6 @@ class BookmarkTabHelper : public content::NotificationObserver,
 
   // Registers and unregisters us for notifications.
   content::NotificationRegistrar registrar_;
-
-  // Owning TabContentsWrapper.
-  TabContentsWrapper* tab_contents_wrapper_;
 
   // Delegate for notifying our owner (usually Browser) about stuff. Not owned
   // by us.

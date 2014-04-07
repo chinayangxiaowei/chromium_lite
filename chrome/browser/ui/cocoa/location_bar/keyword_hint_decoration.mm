@@ -1,4 +1,4 @@
-// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,7 +9,6 @@
 #include "base/logging.h"
 #include "base/string_util.h"
 #include "base/sys_string_conversions.h"
-#import "chrome/browser/ui/cocoa/image_utils.h"
 #include "grit/theme_resources.h"
 #include "grit/generated_resources.h"
 #include "skia/ext/skia_utils_mac.h"
@@ -57,10 +56,8 @@ KeywordHintDecoration::~KeywordHintDecoration() {
 
 NSImage* KeywordHintDecoration::GetHintImage() {
   if (!hint_image_) {
-    SkBitmap* skiaBitmap = ResourceBundle::GetSharedInstance().
-        GetBitmapNamed(IDR_LOCATION_BAR_KEYWORD_HINT_TAB);
-    if (skiaBitmap)
-      hint_image_.reset([gfx::SkBitmapToNSImage(*skiaBitmap) retain]);
+    hint_image_.reset(ResourceBundle::GetSharedInstance().
+        GetNativeImageNamed(IDR_LOCATION_BAR_KEYWORD_HINT_TAB).CopyNSImage());
   }
   return hint_image_;
 }
@@ -141,7 +138,8 @@ void KeywordHintDecoration::DrawInFrame(NSRect frame, NSView* control_view) {
             fromRect:NSZeroRect  // Entire image
            operation:NSCompositeSourceOver
             fraction:1.0
-        neverFlipped:YES];
+      respectFlipped:YES
+               hints:nil];
   frame.origin.x += NSWidth(image_rect);
   frame.size.width -= NSWidth(image_rect);
 

@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright (c) 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -13,16 +13,16 @@
 #include "chrome/browser/plugin_prefs_factory.h"
 #include "chrome/common/chrome_paths.h"
 #include "chrome/test/base/testing_pref_service.h"
-#include "content/browser/mock_resource_context.h"
-#include "content/browser/renderer_host/dummy_resource_handler.h"
-#include "content/browser/renderer_host/resource_dispatcher_host_request_info.h"
+#include "chrome/test/base/testing_profile.h"
 #include "content/public/browser/plugin_service.h"
-#include "content/test/test_browser_thread.h"
-#include "ipc/ipc_message.h"
+#include "content/public/browser/resource_request_info.h"
+#include "content/public/test/mock_resource_context.h"
+#include "content/public/test/test_browser_thread.h"
 #include "net/base/load_flags.h"
 #include "net/url_request/url_request.h"
 #include "net/url_request/url_request_job.h"
 #include "net/url_request/url_request_job_factory.h"
+#include "net/url_request/url_request_job_factory_impl.h"
 #include "net/url_request/url_request_test_job.h"
 #include "net/url_request/url_request_test_util.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -45,10 +45,16 @@ const char kPdfUrlIntercepted[] =
 const char kPptUrlIntercepted[] =
     "http://docs.google.com/gview?url=http%3A//foo.com/file.ppt";
 
+void AssertPluginEnabled(bool did_enable) {
+  ASSERT_TRUE(did_enable);
+  MessageLoop::current()->QuitWhenIdle();
+}
+
 class GViewURLRequestTestJob : public net::URLRequestTestJob {
  public:
-  explicit GViewURLRequestTestJob(net::URLRequest* request)
-      : net::URLRequestTestJob(request, true) {
+  GViewURLRequestTestJob(net::URLRequest* request,
+                         net::NetworkDelegate* network_delegate)
+      : net::URLRequestTestJob(request, network_delegate, true) {
   }
 
   virtual bool GetMimeType(std::string* mime_type) const {
@@ -81,8 +87,9 @@ class GViewRequestProtocolFactory
   GViewRequestProtocolFactory() {}
   virtual ~GViewRequestProtocolFactory() {}
 
-  virtual net::URLRequestJob* MaybeCreateJob(net::URLRequest* request) const {
-    return new GViewURLRequestTestJob(request);
+  virtual net::URLRequestJob* MaybeCreateJob(
+      net::URLRequest* request, net::NetworkDelegate* network_delegate) const {
+    return new GViewURLRequestTestJob(request, network_delegate);
   }
 };
 
@@ -95,25 +102,20 @@ class GViewRequestInterceptorTest : public testing::Test {
         plugin_list_(NULL, 0) {}
 
   virtual void SetUp() {
-    content::ResourceContext* resource_context =
-        content::MockResourceContext::GetInstance();
     net::URLRequestContext* request_context =
-        resource_context->request_context();
+        resource_context_.GetRequestContext();
     old_factory_ = request_context->job_factory();
     job_factory_.SetProtocolHandler("http", new GViewRequestProtocolFactory);
     job_factory_.AddInterceptor(new GViewRequestInterceptor);
     request_context->set_job_factory(&job_factory_);
-    PluginPrefsFactory::GetInstance()->ForceRegisterPrefsForTest(&prefs_);
-    plugin_prefs_ = new PluginPrefs();
-    plugin_prefs_->SetPrefs(&prefs_);
+    plugin_prefs_ = PluginPrefs::GetForTestingProfile(&profile_);
+    PluginPrefsFactory::GetInstance()->RegisterUserPrefsOnProfile(&profile_);
     ChromePluginServiceFilter* filter =
         ChromePluginServiceFilter::GetInstance();
-    filter->RegisterResourceContext(plugin_prefs_, resource_context);
+    filter->RegisterResourceContext(plugin_prefs_, &resource_context_);
     PluginService::GetInstance()->SetFilter(filter);
 
     ASSERT_TRUE(PathService::Get(chrome::FILE_PDF_PLUGIN, &pdf_path_));
-
-    handler_ = new content::DummyResourceHandler();
 
     PluginService::GetInstance()->SetPluginListForTesting(&plugin_list_);
     PluginService::GetInstance()->Init();
@@ -121,14 +123,12 @@ class GViewRequestInterceptorTest : public testing::Test {
 
   virtual void TearDown() {
     plugin_prefs_->ShutdownOnUIThread();
-    content::ResourceContext* resource_context =
-        content::MockResourceContext::GetInstance();
     net::URLRequestContext* request_context =
-        resource_context->request_context();
+        resource_context_.GetRequestContext();
     request_context->set_job_factory(old_factory_);
     ChromePluginServiceFilter* filter =
         ChromePluginServiceFilter::GetInstance();
-    filter->UnregisterResourceContext(resource_context);
+    filter->UnregisterResourceContext(&resource_context_);
     PluginService::GetInstance()->SetFilter(NULL);
   }
 
@@ -136,56 +136,40 @@ class GViewRequestInterceptorTest : public testing::Test {
     webkit::WebPluginInfo info;
     info.path = pdf_path_;
     plugin_list_.AddPluginToLoad(info);
+    plugin_list_.RefreshPlugins();
   }
 
   void UnregisterPDFPlugin() {
     plugin_list_.ClearPluginsToLoad();
+    plugin_list_.RefreshPlugins();
   }
 
   void SetPDFPluginLoadedState(bool want_loaded) {
     webkit::WebPluginInfo info;
     bool is_loaded = PluginService::GetInstance()->GetPluginInfoByPath(
         pdf_path_, &info);
-    if (is_loaded && !want_loaded) {
-      UnregisterPDFPlugin();
-      is_loaded = PluginService::GetInstance()->GetPluginInfoByPath(
-          pdf_path_, &info);
-    } else if (!is_loaded && want_loaded) {
+    if (is_loaded == want_loaded)
+      return;
+
+    if (want_loaded) {
       // This "loads" the plug-in even if it's not present on the
       // system - which is OK since we don't actually use it, just
       // need it to be "enabled" for the test.
       RegisterPDFPlugin();
-      is_loaded = PluginService::GetInstance()->GetPluginInfoByPath(
-          pdf_path_, &info);
+    } else {
+      UnregisterPDFPlugin();
     }
-    EXPECT_EQ(want_loaded, is_loaded);
+    is_loaded = PluginService::GetInstance()->GetPluginInfoByPath(
+        pdf_path_, &info);
+    ASSERT_EQ(want_loaded, is_loaded);
   }
 
   void SetupRequest(net::URLRequest* request) {
-    content::ResourceContext* context =
-        content::MockResourceContext::GetInstance();
-    ResourceDispatcherHostRequestInfo* info =
-        new ResourceDispatcherHostRequestInfo(
-            handler_,
-            content::PROCESS_TYPE_RENDERER,
-            -1,          // child_id
-            MSG_ROUTING_NONE,
-            0,           // origin_pid
-            request->identifier(),
-            false,       // is_main_frame
-            -1,          // frame_id
-            false,       // parent_is_main_frame
-            -1,          // parent_frame_id
-            ResourceType::MAIN_FRAME,
-            content::PAGE_TRANSITION_LINK,
-            0,           // upload_size
-            false,       // is_download
-            true,        // allow_download
-            false,       // has_user_gesture
-            WebKit::WebReferrerPolicyDefault,
-            context);
-    request->SetUserData(NULL, info);
-    request->set_context(context->request_context());
+    content::ResourceRequestInfo::AllocateForTesting(request,
+                                                     ResourceType::MAIN_FRAME,
+                                                     &resource_context_,
+                                                     -1,
+                                                     -1);
   }
 
  protected:
@@ -195,17 +179,18 @@ class GViewRequestInterceptorTest : public testing::Test {
   content::TestBrowserThread file_thread_;
   content::TestBrowserThread io_thread_;
   webkit::npapi::MockPluginList plugin_list_;
-  TestingPrefService prefs_;
+  TestingProfile profile_;
   scoped_refptr<PluginPrefs> plugin_prefs_;
-  net::URLRequestJobFactory job_factory_;
+  net::URLRequestJobFactoryImpl job_factory_;
   const net::URLRequestJobFactory* old_factory_;
-  scoped_refptr<ResourceHandler> handler_;
   TestDelegate test_delegate_;
   FilePath pdf_path_;
+  content::MockResourceContext resource_context_;
 };
 
 TEST_F(GViewRequestInterceptorTest, DoNotInterceptHtml) {
-  net::URLRequest request(GURL(kHtmlUrl), &test_delegate_);
+  net::URLRequest request(
+      GURL(kHtmlUrl), &test_delegate_, resource_context_.GetRequestContext());
   SetupRequest(&request);
   request.Start();
   MessageLoop::current()->Run();
@@ -214,7 +199,8 @@ TEST_F(GViewRequestInterceptorTest, DoNotInterceptHtml) {
 }
 
 TEST_F(GViewRequestInterceptorTest, DoNotInterceptDownload) {
-  net::URLRequest request(GURL(kPdfUrl), &test_delegate_);
+  net::URLRequest request(
+      GURL(kPdfUrl), &test_delegate_, resource_context_.GetRequestContext());
   SetupRequest(&request);
   request.set_load_flags(net::LOAD_IS_DOWNLOAD);
   request.Start();
@@ -224,10 +210,13 @@ TEST_F(GViewRequestInterceptorTest, DoNotInterceptDownload) {
 }
 
 TEST_F(GViewRequestInterceptorTest, DoNotInterceptPdfWhenEnabled) {
-  SetPDFPluginLoadedState(true);
-  plugin_prefs_->EnablePlugin(true, pdf_path_);
+  ASSERT_NO_FATAL_FAILURE(SetPDFPluginLoadedState(true));
+  plugin_prefs_->EnablePlugin(true, pdf_path_,
+                              base::Bind(&AssertPluginEnabled));
+  MessageLoop::current()->Run();
 
-  net::URLRequest request(GURL(kPdfUrl), &test_delegate_);
+  net::URLRequest request(
+      GURL(kPdfUrl), &test_delegate_, resource_context_.GetRequestContext());
   SetupRequest(&request);
   request.Start();
   MessageLoop::current()->Run();
@@ -236,10 +225,13 @@ TEST_F(GViewRequestInterceptorTest, DoNotInterceptPdfWhenEnabled) {
 }
 
 TEST_F(GViewRequestInterceptorTest, InterceptPdfWhenDisabled) {
-  SetPDFPluginLoadedState(true);
-  plugin_prefs_->EnablePlugin(false, pdf_path_);
+  ASSERT_NO_FATAL_FAILURE(SetPDFPluginLoadedState(true));
+  plugin_prefs_->EnablePlugin(false, pdf_path_,
+                              base::Bind(&AssertPluginEnabled));
+  MessageLoop::current()->Run();
 
-  net::URLRequest request(GURL(kPdfUrl), &test_delegate_);
+  net::URLRequest request(
+      GURL(kPdfUrl), &test_delegate_, resource_context_.GetRequestContext());
   SetupRequest(&request);
   request.Start();
   MessageLoop::current()->Run();
@@ -252,9 +244,10 @@ TEST_F(GViewRequestInterceptorTest, InterceptPdfWhenDisabled) {
 // test fails. Since pdf plugin is always present, we don't need to run this
 // test.
 TEST_F(GViewRequestInterceptorTest, InterceptPdfWithNoPlugin) {
-  SetPDFPluginLoadedState(false);
+  ASSERT_NO_FATAL_FAILURE(SetPDFPluginLoadedState(false));
 
-  net::URLRequest request(GURL(kPdfUrl), &test_delegate_);
+  net::URLRequest request(
+      GURL(kPdfUrl), &test_delegate_, resource_context_.GetRequestContext());
   SetupRequest(&request);
   request.Start();
   MessageLoop::current()->Run();
@@ -264,7 +257,8 @@ TEST_F(GViewRequestInterceptorTest, InterceptPdfWithNoPlugin) {
 #endif
 
 TEST_F(GViewRequestInterceptorTest, InterceptPowerpoint) {
-  net::URLRequest request(GURL(kPptUrl), &test_delegate_);
+  net::URLRequest request(
+      GURL(kPptUrl), &test_delegate_, resource_context_.GetRequestContext());
   SetupRequest(&request);
   request.Start();
   MessageLoop::current()->Run();
@@ -273,9 +267,10 @@ TEST_F(GViewRequestInterceptorTest, InterceptPowerpoint) {
 }
 
 TEST_F(GViewRequestInterceptorTest, DoNotInterceptPost) {
-  SetPDFPluginLoadedState(false);
+  ASSERT_NO_FATAL_FAILURE(SetPDFPluginLoadedState(false));
 
-  net::URLRequest request(GURL(kPdfUrl), &test_delegate_);
+  net::URLRequest request(
+      GURL(kPdfUrl), &test_delegate_, resource_context_.GetRequestContext());
   SetupRequest(&request);
   request.set_method("POST");
   request.Start();
@@ -285,9 +280,10 @@ TEST_F(GViewRequestInterceptorTest, DoNotInterceptPost) {
 }
 
 TEST_F(GViewRequestInterceptorTest, DoNotInterceptBlob) {
-  SetPDFPluginLoadedState(false);
+  ASSERT_NO_FATAL_FAILURE(SetPDFPluginLoadedState(false));
 
-  net::URLRequest request(GURL(kPdfBlob), &test_delegate_);
+  net::URLRequest request(
+      GURL(kPdfBlob), &test_delegate_, resource_context_.GetRequestContext());
   SetupRequest(&request);
   request.Start();
   MessageLoop::current()->Run();

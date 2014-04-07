@@ -12,8 +12,8 @@
 #import "chrome/browser/ui/cocoa/location_bar/autocomplete_text_field.h"
 #import "chrome/browser/ui/cocoa/location_bar/autocomplete_text_field_cell.h"
 #import "chrome/browser/ui/cocoa/toolbar/toolbar_controller.h"
-#import "content/browser/find_pasteboard.h"
 #include "grit/generated_resources.h"
+#import "ui/base/cocoa/find_pasteboard.h"
 #include "ui/base/l10n/l10n_util_mac.h"
 
 namespace {
@@ -94,6 +94,13 @@ BOOL ThePasteboardIsTooDamnBig() {
 - (void)cut:(id)sender {
   [self copy:sender];
   [self delete:nil];
+}
+
+- (void)copyURL:(id)sender {
+  AutocompleteTextFieldObserver* observer = [self observer];
+  DCHECK(observer);
+  if (observer->CanCopy())
+    observer->CopyURLToPasteboard([NSPasteboard generalPasteboard]);
 }
 
 // This class assumes that the delegate is an AutocompleteTextField.
@@ -208,6 +215,16 @@ BOOL ThePasteboardIsTooDamnBig() {
   [menu addItemWithTitle:l10n_util::GetNSStringWithFixup(IDS_COPY)
                   action:@selector(copy:)
            keyEquivalent:@""];
+
+  if ([self isEditable]) {
+    // Copy URL if the URL has been replaced by the Extended Instant API.
+    DCHECK([self observer]);
+    NSString* label = l10n_util::GetNSStringWithFixup(IDS_COPY_URL_MAC);
+    [menu addItemWithTitle:label
+                    action:@selector(copyURL:)
+             keyEquivalent:@""];
+  }
+
   [menu addItemWithTitle:l10n_util::GetNSStringWithFixup(IDS_PASTE)
                   action:@selector(paste:)
            keyEquivalent:@""];
@@ -218,28 +235,21 @@ BOOL ThePasteboardIsTooDamnBig() {
     // Paste and go/search.
     AutocompleteTextFieldObserver* observer = [self observer];
     DCHECK(observer);
-    if (observer && observer->CanPasteAndGo()) {
-      const int string_id = observer->GetPasteActionStringId();
-      NSString* label = l10n_util::GetNSStringWithFixup(string_id);
-
-      // TODO(rohitrao): If the clipboard is empty, should we show a
-      // greyed-out "Paste and Go" or nothing at all?
-      if ([label length]) {
-        [menu addItemWithTitle:label
-                        action:@selector(pasteAndGo:)
-                 keyEquivalent:@""];
-      }
-    }
-
-    NSString* label = l10n_util::GetNSStringWithFixup(IDS_EDIT_SEARCH_ENGINES);
+    const int string_id = observer->GetPasteActionStringId();
+    NSString* label = l10n_util::GetNSStringWithFixup(string_id);
     DCHECK([label length]);
-    if ([label length]) {
-      [menu addItem:[NSMenuItem separatorItem]];
-      NSMenuItem* item = [menu addItemWithTitle:label
-                                         action:@selector(commandDispatch:)
-                                  keyEquivalent:@""];
-      [item setTag:IDC_EDIT_SEARCH_ENGINES];
-    }
+    [menu addItemWithTitle:label
+                    action:@selector(pasteAndGo:)
+             keyEquivalent:@""];
+
+    NSString* search_engine_label =
+        l10n_util::GetNSStringWithFixup(IDS_EDIT_SEARCH_ENGINES);
+    DCHECK([search_engine_label length]);
+    [menu addItem:[NSMenuItem separatorItem]];
+    NSMenuItem* item = [menu addItemWithTitle:search_engine_label
+                                       action:@selector(commandDispatch:)
+                                keyEquivalent:@""];
+    [item setTag:IDC_EDIT_SEARCH_ENGINES];
   }
 
   return menu;
@@ -468,18 +478,21 @@ BOOL ThePasteboardIsTooDamnBig() {
   textChangedByKeyEvents_ = NO;
 }
 
-- (void)mouseDown:(NSEvent*)theEvent {
-  // Close the popup before processing the event.
-  AutocompleteTextFieldObserver* observer = [self observer];
-  if (observer)
-    observer->ClosePopup();
-
-  [super mouseDown:theEvent];
-}
-
 - (BOOL)validateMenuItem:(NSMenuItem*)item {
   if ([item action] == @selector(copyToFindPboard:))
     return [self selectedRange].length > 0;
+  if ([item action] == @selector(pasteAndGo:)) {
+    // TODO(rohitrao): If the clipboard is empty, should we show a
+    // greyed-out "Paste and Go" or nothing at all?
+    AutocompleteTextFieldObserver* observer = [self observer];
+    DCHECK(observer);
+    return observer->CanPasteAndGo();
+  }
+  if ([item action] == @selector(copyURL:)) {
+    AutocompleteTextFieldObserver* observer = [self observer];
+    DCHECK(observer);
+    return observer->ShouldEnableCopyURL();
+  }
   return [super validateMenuItem:item];
 }
 
