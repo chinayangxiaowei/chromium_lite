@@ -1,0 +1,95 @@
+<html>
+<head>
+  <title>Subscribe to feed</title>
+  <link rel="stylesheet" href="style.css" type="text/css" />
+  <link rel="stylesheet" href="subscribe.css" type="text/css" />
+  <script type="text/javascript" src="subscribe.js"></script>
+</head>
+
+<body onload="main();">
+  <table border="0" cellpadding="0" cellspacing="0">
+  <tr>
+    <td width="75" rowspan="2">
+      <img src="feed-icon-64x64.png" alt="feed-icon" align="absmiddle" />
+    </td>
+    <td height="60" valign="bottom">
+      <b><span id="title"></span></b><br>
+      <span>Subscribe to this feed using:</span>
+      <select id="readerDropdown" onChange="onSelectChanged()"></select>
+    </td>
+    <td valign="bottom">
+      <button onclick="navigate();">Subscribe Now</button>
+    </td>
+  </tr>
+  <tr>
+    <td align="right" valign="top">
+      <a id="editLink" class="editLinks" href="javascript:void()"
+         onclick="showDialog()">Edit</a>&nbsp;
+      <a id="removeLink" class="editLinks" href="javascript:void()"
+         onclick="removeEntry()">Remove</a>&nbsp;
+    </td>
+    <td>
+    </td>
+  </tr>
+  </table>
+
+  <div id="dialogBackground">
+    <div id="dialogHBackground">
+      <div id="dialog">
+
+        <div id="dialogHeader">
+          Edit feed reader
+        </div>
+
+        <div id="dialogBody">
+
+          <div class="dialogRow">
+            &nbsp;<div class="status" id="statusMsg"></div>
+          </div>
+
+          <div class="dialogRow">
+            <div>
+              Description:
+            </div>
+            <div>
+              <input type="text" id="descriptionText" onkeyup="validateInput()">
+            </div>
+          </div>
+
+          <div class="dialogRow">
+            <div>
+              URL:
+            </div>
+            <div>
+              <input type="text" id="urlText" onkeyup="validateInput()">
+            </div>
+          </div>
+
+          <div class="dialogRow">
+            <div id="urlAssist"></div>
+          </div>
+
+          <div class="dialogRow" id="dialogContentFooter">
+            <div>
+              <input type="button" id="setDefault" value="Set as default"
+                     style="display:none" onclick="setAsDefault()">
+            </div>
+            <div>
+              <input type="button" id="save" value="Save" onclick="save()">
+            </div>
+            <div>
+              <input type="button" value="Close" onclick="hideDialog()">
+            </div>
+          </div>
+
+        </div> <!-- /dialogBody -->
+
+      </div>
+    </div>
+  </div>
+
+  <div>&nbsp;</div>
+  <div class="splitter"><b>Feed preview</b></div><br>
+  <div id="items"></div>
+</body>
+</html>

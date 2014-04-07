@@ -1,0 +1,17 @@
+{
+  "id": "bjafgdebaacbbbecmhlhpofkepfkgcpa",
+  "version": "1.0",
+  "name": "My extension 3",
+  "enabled": true,
+  "description": "",
+  "permissions": [],
+  "allow_reload": false,
+  "order": 2,
+  "content_scripts": [
+    {
+      "matches": ["http://localhost/*"],
+      "js": ["page.js"]
+    }
+  ],
+  "views": []
+}

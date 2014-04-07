@@ -1,0 +1,24 @@
+# Takes too long to valgrind, causes timeouts
+BrowserTest.ThirtyFourTabs
+# FIXME: these tests hang frequently in valgrind
+SessionRestoreUITest.*
+# Buggy test; see http://crbug.com/6522
+DownloadTest.UnknownSize
+# Flakily hangs on Linux
+ErrorPageTest.DNSError_GoBack2AndForward
+# Flaky timeout on Linux; see http://crbug.com/22927
+UnloadTest.BrowserCloseInfiniteBeforeUnload
+UnloadTest.BrowserCloseInfiniteBeforeUnloadAlert
+
+# This test hangs under Valgrind;
+# See http://crbug.com/25917 and http://crbug.com/22608
+WorkerTest.LimitTotal
+
+# Don't run reference tests under Valgrind
+# On the Mac, they don't have symbols, even, so suppressions don't work
+# They probably don't have ThreadSanitizer annotations TODO(timurrrr): check
+*ReferenceTest.Perf
+
+# This test hangs under valgrind
+# See http://crbug.com/27764
+NewTabUITest.HomePageLink
