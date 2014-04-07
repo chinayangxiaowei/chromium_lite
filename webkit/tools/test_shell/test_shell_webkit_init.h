@@ -13,6 +13,7 @@
 #include "media/base/media.h"
 #include "third_party/WebKit/WebKit/chromium/public/WebData.h"
 #include "third_party/WebKit/WebKit/chromium/public/WebDatabase.h"
+#include "third_party/WebKit/WebKit/chromium/public/WebGraphicsContext3D.h"
 #include "third_party/WebKit/WebKit/chromium/public/WebRuntimeFeatures.h"
 #include "third_party/WebKit/WebKit/chromium/public/WebKit.h"
 #include "third_party/WebKit/WebKit/chromium/public/WebScriptController.h"
@@ -22,11 +23,9 @@
 #include "third_party/WebKit/WebKit/chromium/public/WebStorageNamespace.h"
 #include "third_party/WebKit/WebKit/chromium/public/WebString.h"
 #include "third_party/WebKit/WebKit/chromium/public/WebURL.h"
-#include "webkit/appcache/web_application_cache_host_impl.h"
 #include "webkit/database/vfs_backend.h"
 #include "webkit/extensions/v8/gears_extension.h"
 #include "webkit/extensions/v8/interval_extension.h"
-#include "webkit/glue/simple_webmimeregistry_impl.h"
 #include "webkit/glue/webclipboard_impl.h"
 #include "webkit/glue/webkit_glue.h"
 #include "webkit/glue/webkitclient_impl.h"
@@ -35,6 +34,7 @@
 #include "webkit/tools/test_shell/simple_database_system.h"
 #include "webkit/tools/test_shell/simple_resource_loader_bridge.h"
 #include "webkit/tools/test_shell/simple_webcookiejar_impl.h"
+#include "webkit/tools/test_shell/test_shell_webmimeregistry_impl.h"
 #include "v8/include/v8.h"
 
 #if defined(OS_WIN)
@@ -61,18 +61,28 @@ class TestShellWebKitInit : public webkit_glue::WebKitClientImpl {
     WebKit::WebRuntimeFeatures::enableSockets(true);
     WebKit::WebRuntimeFeatures::enableApplicationCache(true);
     WebKit::WebRuntimeFeatures::enableDatabase(true);
+    WebKit::WebRuntimeFeatures::enableWebGL(true);
+    WebKit::WebRuntimeFeatures::enablePushState(true);
 
     // Load libraries for media and enable the media player.
     FilePath module_path;
     WebKit::WebRuntimeFeatures::enableMediaPlayer(
         PathService::Get(base::DIR_MODULE, &module_path) &&
         media::InitializeMediaLibrary(module_path));
+    // TODO(joth): Make a dummy geolocation service implemenation for
+    // test_shell, and set this to true. http://crbug.com/36451
+    WebKit::WebRuntimeFeatures::enableGeolocation(false);
 
     // Construct and initialize an appcache system for this scope.
     // A new empty temp directory is created to house any cached
     // content during the run. Upon exit that directory is deleted.
-    if (appcache_dir_.CreateUniqueTempDir())
-      SimpleAppCacheSystem::InitializeOnUIThread(appcache_dir_.path());
+    // If we can't create a tempdir, we'll use in-memory storage.
+    if (!appcache_dir_.CreateUniqueTempDir()) {
+      LOG(WARNING) << "Failed to create a temp dir for the appcache, "
+                      "using in-memory storage.";
+      DCHECK(appcache_dir_.path().empty());
+    }
+    SimpleAppCacheSystem::InitializeOnUIThread(appcache_dir_.path());
 
     WebKit::WebDatabase::setObserver(&database_system_);
 
@@ -142,6 +152,15 @@ class TestShellWebKitInit : public webkit_glue::WebKitClientImpl {
         reinterpret_cast<int64*>(&result));
   }
 
+  virtual bool getFileModificationTime(const WebKit::WebString& path,
+                                       double& result) {
+    file_util::FileInfo info;
+    if (!file_util::GetFileInfo(webkit_glue::WebStringToFilePath(path), &info))
+      return false;
+    result = info.last_modified.ToDoubleT();
+    return true;
+  }
+
   virtual unsigned long long visitedLinkHash(const char* canonicalURL,
                                              size_t length) {
     return 0;
@@ -188,29 +207,11 @@ class TestShellWebKitInit : public webkit_glue::WebKitClientImpl {
                                                                     quota);
   }
 
-  virtual WebKit::WebStorageNamespace* createSessionStorageNamespace() {
-    return WebKit::WebStorageNamespace::createSessionStorageNamespace();
-  }
-
   void dispatchStorageEvent(const WebKit::WebString& key,
       const WebKit::WebString& old_value, const WebKit::WebString& new_value,
       const WebKit::WebString& origin, const WebKit::WebURL& url,
       bool is_local_storage) {
-    // TODO(jorlow): Implement
-    if (!is_local_storage)
-      return;
-
-    if (!dom_storage_event_dispatcher_.get()) {
-      dom_storage_event_dispatcher_.reset(
-          WebKit::WebStorageEventDispatcher::create());
-    }
-    dom_storage_event_dispatcher_->dispatchStorageEvent(
-        key, old_value, new_value, origin, url, is_local_storage);
-  }
-
-  virtual WebKit::WebApplicationCacheHost* createApplicationCacheHost(
-        WebKit::WebApplicationCacheHostClient* client) {
-    return SimpleAppCacheSystem::CreateApplicationCacheHost(client);
+    // The event is dispatched by the proxy.
   }
 
 #if defined(OS_WIN)
@@ -227,14 +228,17 @@ class TestShellWebKitInit : public webkit_glue::WebKitClientImpl {
       return NULL;
   }
 
+  virtual WebKit::WebGraphicsContext3D* createGraphicsContext3D() {
+    return WebKit::WebGraphicsContext3D::createDefault();
+  }
+
  private:
-  webkit_glue::SimpleWebMimeRegistryImpl mime_registry_;
+  TestShellWebMimeRegistryImpl mime_registry_;
   MockWebClipboardImpl mock_clipboard_;
   webkit_glue::WebClipboardImpl real_clipboard_;
   ScopedTempDir appcache_dir_;
   SimpleAppCacheSystem appcache_system_;
   SimpleDatabaseSystem database_system_;
-  scoped_ptr<WebKit::WebStorageEventDispatcher> dom_storage_event_dispatcher_;
   SimpleWebCookieJarImpl cookie_jar_;
 
 #if defined(OS_WIN)

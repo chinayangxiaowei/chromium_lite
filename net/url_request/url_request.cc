@@ -9,8 +9,8 @@
 #include "base/singleton.h"
 #include "base/stats_counters.h"
 #include "net/base/load_flags.h"
-#include "net/base/load_log.h"
 #include "net/base/net_errors.h"
+#include "net/base/net_log.h"
 #include "net/base/ssl_cert_request_info.h"
 #include "net/base/upload_data.h"
 #include "net/http/http_response_headers.h"
@@ -27,9 +27,6 @@ using std::wstring;
 // Max number of http redirects to follow.  Same number as gecko.
 static const int kMaxRedirects = 20;
 
-// The maximum size of the passive LoadLog associated with each request.
-static const int kMaxNumLoadLogEntries = 50;
-
 static URLRequestJobManager* GetJobManager() {
   return Singleton<URLRequestJobManager>::get();
 }
@@ -38,8 +35,7 @@ static URLRequestJobManager* GetJobManager() {
 // URLRequest
 
 URLRequest::URLRequest(const GURL& url, Delegate* delegate)
-    : load_log_(new net::LoadLog(kMaxNumLoadLogEntries)),
-      url_(url),
+    : url_(url),
       original_url_(url),
       method_("GET"),
       load_flags_(net::LOAD_NORMAL),
@@ -48,8 +44,7 @@ URLRequest::URLRequest(const GURL& url, Delegate* delegate)
       enable_profiling_(false),
       redirect_limit_(kMaxRedirects),
       final_upload_progress_(0),
-      priority_(0),
-      ALLOW_THIS_IN_INITIALIZER_LIST(request_tracker_node_(this)) {
+      priority_(net::LOWEST) {
   SIMPLE_STATS_COUNTER("URLRequestCount");
 
   // Sanity check out environment.
@@ -91,12 +86,16 @@ void URLRequest::AppendBytesToUpload(const char* bytes, int bytes_len) {
   upload_->AppendBytes(bytes, bytes_len);
 }
 
-void URLRequest::AppendFileRangeToUpload(const FilePath& file_path,
-                                         uint64 offset, uint64 length) {
+void URLRequest::AppendFileRangeToUpload(
+    const FilePath& file_path,
+    uint64 offset,
+    uint64 length,
+    const base::Time& expected_modification_time) {
   DCHECK(file_path.value().length() > 0 && length > 0);
   if (!upload_)
     upload_ = new UploadData();
-  upload_->AppendFileRange(file_path, offset, length);
+  upload_->AppendFileRange(file_path, offset, length,
+                           expected_modification_time);
 }
 
 void URLRequest::set_upload(net::UploadData* upload) {
@@ -260,7 +259,8 @@ void URLRequest::StartJob(URLRequestJob* job) {
   DCHECK(!is_pending_);
   DCHECK(!job_);
 
-  net::LoadLog::BeginEvent(load_log_, net::LoadLog::TYPE_URL_REQUEST_START);
+  net_log_.BeginEventWithString(net::NetLog::TYPE_URL_REQUEST_START,
+                                original_url().possibly_invalid_spec());
 
   job_ = job;
   job_->SetExtraRequestHeaders(extra_request_headers_);
@@ -351,6 +351,11 @@ bool URLRequest::Read(net::IOBuffer* dest, int dest_size, int *bytes_read) {
   return job_->Read(dest, dest_size, bytes_read);
 }
 
+void URLRequest::StopCaching() {
+  DCHECK(job_);
+  job_->StopCaching();
+}
+
 void URLRequest::ReceivedRedirect(const GURL& location, bool* defer_redirect) {
   URLRequestJob* job = GetJobManager()->MaybeInterceptRedirect(this, location);
   if (job) {
@@ -361,7 +366,12 @@ void URLRequest::ReceivedRedirect(const GURL& location, bool* defer_redirect) {
 }
 
 void URLRequest::ResponseStarted() {
-  net::LoadLog::EndEvent(load_log_, net::LoadLog::TYPE_URL_REQUEST_START);
+  if (!status_.is_success()) {
+    net_log_.EndEventWithInteger(net::NetLog::TYPE_URL_REQUEST_START,
+                                 status_.os_error());
+  } else {
+    net_log_.EndEvent(net::NetLog::TYPE_URL_REQUEST_START);
+  }
 
   URLRequestJob* job = GetJobManager()->MaybeInterceptResponse(this);
   if (job) {
@@ -434,6 +444,10 @@ std::string URLRequest::StripPostSpecificHeaders(const std::string& headers) {
 }
 
 int URLRequest::Redirect(const GURL& location, int http_status_code) {
+  if (net_log_.HasListener()) {
+    net_log_.AddString(StringPrintf("Redirected (%d) to %s",
+        http_status_code, location.spec().c_str()));
+  }
   if (redirect_limit_ <= 0) {
     DLOG(INFO) << "disallowing redirect: exceeds limit";
     return net::ERR_TOO_MANY_REDIRECTS;
@@ -496,12 +510,16 @@ void URLRequest::set_context(URLRequestContext* context) {
 
   context_ = context;
 
-  // If the context this request belongs to has changed, update the tracker(s).
+  // If the context this request belongs to has changed, update the tracker.
   if (prev_context != context) {
-    if (prev_context)
-      prev_context->url_request_tracker()->Remove(this);
-    if (context)
-      context->url_request_tracker()->Add(this);
+    net_log_.EndEvent(net::NetLog::TYPE_REQUEST_ALIVE);
+    net_log_ = net::BoundNetLog();
+
+    if (context) {
+      net_log_ = net::BoundNetLog::Make(context->net_log(),
+                                        net::NetLog::SOURCE_URL_REQUEST);
+      net_log_.BeginEvent(net::NetLog::TYPE_REQUEST_ALIVE);
+    }
   }
 }
 
@@ -522,11 +540,4 @@ URLRequest::UserData* URLRequest::GetUserData(const void* key) const {
 
 void URLRequest::SetUserData(const void* key, UserData* data) {
   user_data_[key] = linked_ptr<UserData>(data);
-}
-
-void URLRequest::GetInfoForTracker(
-    RequestTracker<URLRequest>::RecentRequestInfo* info) const {
-  DCHECK(info);
-  info->original_url = original_url_;
-  info->load_log = load_log_;
 }

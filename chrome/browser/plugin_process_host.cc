@@ -1,4 +1,4 @@
-// Copyright (c) 2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -13,7 +13,6 @@
 #include <vector>
 
 #include "app/app_switches.h"
-#include "app/gfx/native_widget_types.h"
 #include "base/command_line.h"
 #include "base/file_path.h"
 #include "base/file_util.h"
@@ -34,6 +33,7 @@
 #include "chrome/common/logging_chrome.h"
 #include "chrome/common/plugin_messages.h"
 #include "chrome/common/render_messages.h"
+#include "gfx/native_widget_types.h"
 #include "ipc/ipc_switches.h"
 #include "net/base/file_stream.h"
 #include "net/base/io_buffer.h"
@@ -45,8 +45,8 @@
 #include "webkit/glue/plugins/plugin_constants_win.h"
 #endif
 
-#if defined(OS_LINUX)
-#include "app/gfx/gtk_native_view_id_manager.h"
+#if defined(USE_X11)
+#include "gfx/gtk_native_view_id_manager.h"
 #endif
 
 #if defined(OS_MACOSX)
@@ -281,13 +281,13 @@ void PluginProcessHost::AddWindow(HWND window) {
 
 #endif  // defined(OS_WIN)
 
-#if defined(OS_LINUX)
+#if defined(TOOLKIT_USES_GTK)
 void PluginProcessHost::OnMapNativeViewId(gfx::NativeViewId id,
                                           gfx::PluginWindowHandle* output) {
   *output = 0;
   Singleton<GtkNativeViewManager>()->GetXIDForId(output, id);
 }
-#endif  // defined(OS_LINUX)
+#endif  // defined(TOOLKIT_USES_GTK)
 
 PluginProcessHost::PluginProcessHost()
     : ChildProcessHost(
@@ -318,11 +318,23 @@ PluginProcessHost::~PluginProcessHost() {
        window_index != plugin_fullscreen_windows_set_.end();
        window_index++) {
     if (ChromeThread::CurrentlyOn(ChromeThread::UI)) {
-      mac_util::ReleaseFullScreen();
+      mac_util::ReleaseFullScreen(mac_util::kFullScreenModeHideAll);
     } else {
       ChromeThread::PostTask(
           ChromeThread::UI, FROM_HERE,
-          NewRunnableFunction(mac_util::ReleaseFullScreen));
+          NewRunnableFunction(mac_util::ReleaseFullScreen,
+                              mac_util::kFullScreenModeHideAll));
+    }
+  }
+  // If the plugin hid the cursor, reset that.
+  if (!plugin_cursor_visible_) {
+    if (ChromeThread::CurrentlyOn(ChromeThread::UI)) {
+      mac_util::SetCursorVisibility(true);
+    } else {
+      ChromeThread::PostTask(
+        ChromeThread::UI, FROM_HERE,
+        NewRunnableFunction(mac_util::SetCursorVisibility,
+                            true));
     }
   }
 #endif
@@ -336,9 +348,12 @@ bool PluginProcessHost::Init(const WebPluginInfo& info,
   if (!CreateChannel())
     return false;
 
-  // Build command line for plugin, we have to quote the plugin's path to deal
-  // with spaces.
-  FilePath exe_path = GetChildPath();
+  // Build command line for plugin. When we have a plugin launcher, we can't
+  // allow "self" on linux and we need the real file path.
+  const CommandLine& browser_command_line = *CommandLine::ForCurrentProcess();
+  std::wstring plugin_launcher =
+      browser_command_line.GetSwitchValue(switches::kPluginLauncher);
+  FilePath exe_path = GetChildPath(plugin_launcher.empty());
   if (exe_path.empty())
     return false;
 
@@ -373,9 +388,11 @@ bool PluginProcessHost::Init(const WebPluginInfo& info,
     switches::kMemoryProfiling,
     switches::kUseLowFragHeapCrt,
     switches::kEnableStatsTable,
+    switches::kEnableGPUPlugin,
+#if defined(OS_CHROMEOS)
+    switches::kProfile,
+#endif
   };
-
-  const CommandLine& browser_command_line = *CommandLine::ForCurrentProcess();
 
   for (size_t i = 0; i < arraysize(switch_names); ++i) {
     if (browser_command_line.HasSwitch(switch_names[i])) {
@@ -386,8 +403,6 @@ bool PluginProcessHost::Init(const WebPluginInfo& info,
   }
 
   // If specified, prepend a launcher program to the command line.
-  std::wstring plugin_launcher =
-      browser_command_line.GetSwitchValue(switches::kPluginLauncher);
   if (!plugin_launcher.empty())
     cmd_line->PrependWrapper(plugin_launcher);
 
@@ -410,7 +425,7 @@ bool PluginProcessHost::Init(const WebPluginInfo& info,
 
 #if defined(OS_POSIX)
   base::environment_vector env;
-#if defined(OS_MACOSX)
+#if defined(OS_MACOSX) && !defined(__LP64__)
   // Add our interposing library for Carbon. This is stripped back out in
   // plugin_main.cc, so changes here should be reflected there.
   std::string interpose_list(plugin_interpose_strings::kInterposeLibraryPath);
@@ -430,11 +445,18 @@ bool PluginProcessHost::Init(const WebPluginInfo& info,
 #if defined(OS_WIN)
       FilePath(),
 #elif defined(OS_POSIX)
+      false,
       env,
 #endif
       cmd_line);
 
   return true;
+}
+
+void PluginProcessHost::ForceShutdown() {
+  DCHECK(ChromeThread::CurrentlyOn(ChromeThread::IO));
+  Send(new PluginProcessMsg_NotifyRenderersOfPendingShutdown());
+  ChildProcessHost::ForceShutdown();
 }
 
 void PluginProcessHost::OnProcessLaunched() {
@@ -465,7 +487,7 @@ void PluginProcessHost::OnMessageReceived(const IPC::Message& msg) {
                         OnPluginWindowDestroyed)
     IPC_MESSAGE_HANDLER(PluginProcessHostMsg_DownloadUrl, OnDownloadUrl)
 #endif
-#if defined(OS_LINUX)
+#if defined(TOOLKIT_USES_GTK)
     IPC_MESSAGE_HANDLER(PluginProcessHostMsg_MapNativeViewId,
                         OnMapNativeViewId)
 #endif
@@ -476,10 +498,10 @@ void PluginProcessHost::OnMessageReceived(const IPC::Message& msg) {
                         OnPluginShowWindow)
     IPC_MESSAGE_HANDLER(PluginProcessHostMsg_PluginHideWindow,
                         OnPluginHideWindow)
-    IPC_MESSAGE_HANDLER(PluginProcessHostMsg_PluginDisposeWindow,
-                        OnPluginDisposeWindow)
     IPC_MESSAGE_HANDLER(PluginProcessHostMsg_PluginReceivedFocus,
                         OnPluginReceivedFocus)
+    IPC_MESSAGE_HANDLER(PluginProcessHostMsg_PluginSetCursorVisibility,
+                        OnPluginSetCursorVisibility)
 #endif
     IPC_MESSAGE_UNHANDLED_ERROR()
   IPC_END_MESSAGE_MAP()
@@ -547,7 +569,7 @@ void PluginProcessHost::OnGetCookies(uint32 request_context,
     *cookies = context->cookie_store()->GetCookies(url);
   } else {
     DLOG(ERROR) << "Could not serve plugin cookies request.";
-    *cookies = EmptyString();
+    cookies->clear();
   }
 }
 

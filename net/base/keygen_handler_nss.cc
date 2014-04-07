@@ -1,22 +1,18 @@
-// Copyright (c) 2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "net/base/keygen_handler.h"
 
-// Work around https://bugzilla.mozilla.org/show_bug.cgi?id=455424
-// until NSS 3.12.2 comes out and we update to it.
-#define Lock FOO_NSS_Lock
 #include <pk11pub.h>
 #include <secmod.h>
 #include <ssl.h>
-#include <nssb64.h>    // NSSBase64_EncodeItem()
 #include <secder.h>    // DER_Encode()
 #include <cryptohi.h>  // SEC_DerSignData()
 #include <keyhi.h>     // SECKEY_CreateSubjectPublicKeyInfo()
-#undef Lock
 
-#include "base/nss_init.h"
+#include "base/base64.h"
+#include "base/nss_util.h"
 #include "base/logging.h"
 
 namespace net {
@@ -55,15 +51,19 @@ DERTemplate CERTPublicKeyAndChallengeTemplate[] = {
   { 0, }
 };
 
-// This maps displayed strings indicating level of keysecurity in the <keygen>
-// menu to the key size in bits.
-// TODO(gauravsh): Should this mapping be moved else where?
-int RSAkeySizeMap[] = {2048, 1024};
+void StoreKeyLocationInCache(const SECItem& public_key_info,
+                             PK11SlotInfo *slot) {
+  KeygenHandler::Cache* cache = KeygenHandler::Cache::GetInstance();
+  KeygenHandler::KeyLocation key_location;
+  const char* slot_name = PK11_GetSlotName(slot);
+  key_location.slot_name.assign(slot_name);
+  cache->Insert(std::string(reinterpret_cast<char*>(public_key_info.data),
+                public_key_info.len), key_location);
+}
 
-KeygenHandler::KeygenHandler(int key_size_index,
-                             const std::string& challenge)
-    : key_size_index_(key_size_index),
-      challenge_(challenge) {
+bool KeygenHandler::KeyLocation::Equals(
+    const net::KeygenHandler::KeyLocation& location) const {
+  return slot_name == location.slot_name;
 }
 
 // This function is largely copied from the Firefox's
@@ -73,7 +73,6 @@ KeygenHandler::KeygenHandler(int key_size_index,
 std::string KeygenHandler::GenKeyAndSignChallenge() {
   // Key pair generation mechanism - only RSA is supported at present.
   PRUint32 keyGenMechanism = CKM_RSA_PKCS_KEY_PAIR_GEN;  // from nss/pkcs11t.h
-  char *keystring = NULL;  // Temporary store for result/
 
   // Temporary structures used for generating the result
   // in the right format.
@@ -107,7 +106,7 @@ std::string KeygenHandler::GenKeyAndSignChallenge() {
 
   switch (keyGenMechanism) {
     case CKM_RSA_PKCS_KEY_PAIR_GEN:
-      rsaKeyGenParams.keySizeInBits = RSAkeySizeMap[key_size_index_];
+      rsaKeyGenParams.keySizeInBits = key_size_in_bits_;
       rsaKeyGenParams.pe = DEFAULT_RSA_PUBLIC_EXPONENT;
       keyGenParams = &rsaKeyGenParams;
 
@@ -202,42 +201,41 @@ std::string KeygenHandler::GenKeyAndSignChallenge() {
   }
 
   // Convert the signed public key and challenge into base64/ascii.
-  keystring = NSSBase64_EncodeItem(arena,
-                                   NULL,  // NSS will allocate a buffer for us.
-                                   0,
-                                   &signedItem);
-  if (!keystring) {
+  if (!base::Base64Encode(std::string(reinterpret_cast<char*>(signedItem.data),
+                                      signedItem.len),
+                          &result_blob)) {
     LOG(ERROR) << "Couldn't convert signed public key into base64";
     isSuccess = false;
     goto failure;
   }
 
-  result_blob = keystring;
+  StoreKeyLocationInCache(spkiItem, slot);
 
  failure:
   if (!isSuccess) {
     LOG(ERROR) << "SSL Keygen failed!";
   } else {
-    LOG(INFO) << "SSl Keygen succeeded!";
+    LOG(INFO) << "SSL Keygen succeeded!";
   }
 
   // Do cleanups
   if (privateKey) {
-    // TODO(gauravsh): We still need to maintain the private key because it's
-    // used for certificate enrollment checks.
-
-    // PK11_DestroyTokenObject(privateKey->pkcs11Slot,privateKey->pkcs11ID);
-    // SECKEY_DestroyPrivateKey(privateKey);
+    // On successful keygen we need to keep the private key, of course,
+    // or we won't be able to use the client certificate.
+    if (!isSuccess || !stores_key_) {
+      PK11_DestroyTokenObject(privateKey->pkcs11Slot, privateKey->pkcs11ID);
+    }
+    SECKEY_DestroyPrivateKey(privateKey);
   }
 
   if (publicKey) {
-    PK11_DestroyTokenObject(publicKey->pkcs11Slot, publicKey->pkcs11ID);
+    if (!isSuccess || !stores_key_) {
+      PK11_DestroyTokenObject(publicKey->pkcs11Slot, publicKey->pkcs11ID);
+    }
+    SECKEY_DestroyPublicKey(publicKey);
   }
   if (spkInfo) {
     SECKEY_DestroySubjectPublicKeyInfo(spkInfo);
-  }
-  if (publicKey) {
-    SECKEY_DestroyPublicKey(publicKey);
   }
   if (arena) {
     PORT_FreeArena(arena, PR_TRUE);

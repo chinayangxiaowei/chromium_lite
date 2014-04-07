@@ -15,12 +15,16 @@
 #include "chrome/common/result_codes.h"
 
 #if defined(OS_WIN)
-#include "chrome/browser/sandbox_policy.h"
+#include "chrome/common/sandbox_policy.h"
 #elif defined(OS_LINUX)
 #include "base/singleton.h"
 #include "chrome/browser/crash_handler_host_linux.h"
 #include "chrome/browser/zygote_host_linux.h"
 #include "chrome/browser/renderer_host/render_sandbox_host_linux.h"
+#endif
+
+#if defined(OS_MACOSX)
+#include "chrome/browser/mach_broker_mac.h"
 #endif
 
 #if defined(OS_POSIX)
@@ -45,6 +49,7 @@ class ChildProcessLauncher::Context
 #if defined(OS_WIN)
       const FilePath& exposed_dir,
 #elif defined(OS_POSIX)
+      bool use_zygote,
       const base::environment_vector& environ,
       int ipcfd,
 #endif
@@ -62,6 +67,7 @@ class ChildProcessLauncher::Context
 #if defined(OS_WIN)
             exposed_dir,
 #elif defined(POSIX)
+            use_zygote,
             environ,
             ipcfd,
 #endif
@@ -87,6 +93,7 @@ class ChildProcessLauncher::Context
 #if defined(OS_WIN)
       const FilePath& exposed_dir,
 #elif defined(OS_POSIX)
+      bool use_zygote,
       const base::environment_vector& env,
       int ipcfd,
 #endif
@@ -98,20 +105,7 @@ class ChildProcessLauncher::Context
 #elif defined(OS_POSIX)
 
 #if defined(OS_LINUX)
-    bool zygote = false;
-    // On Linux, normally spawn renderer processes with zygotes. We can't do
-    // this when we're spawning child processes through an external program
-    // (i.e. there is a command prefix) like GDB so fall through to the POSIX
-    // case then.
-    bool is_renderer = cmd_line->GetSwitchValueASCII(switches::kProcessType) ==
-        switches::kRendererProcess;
-    bool is_plugin = cmd_line->GetSwitchValueASCII(switches::kProcessType) ==
-        switches::kPluginProcess;
-    if (is_renderer &&
-        !CommandLine::ForCurrentProcess()->HasSwitch(
-            switches::kRendererCmdPrefix)) {
-      zygote = true;
-
+    if (use_zygote) {
       base::GlobalDescriptors::Mapping mapping;
       mapping.push_back(std::pair<uint32_t, int>(kPrimaryIPCChannel, ipcfd));
       const int crash_signal_fd =
@@ -121,9 +115,8 @@ class ChildProcessLauncher::Context
                                                    crash_signal_fd));
       }
       handle = Singleton<ZygoteHost>()->ForkRenderer(cmd_line->argv(), mapping);
-    }
-
-    if (!zygote)
+    } else
+    // Fall through to the normal posix case below when we're not zygoting.
 #endif
     {
       base::file_handle_mapping_vector fds_to_map;
@@ -134,6 +127,13 @@ class ChildProcessLauncher::Context
 #if defined(OS_LINUX)
       // On Linux, we need to add some extra file descriptors for crash handling
       // and the sandbox.
+      bool is_renderer =
+          cmd_line->GetSwitchValueASCII(switches::kProcessType) ==
+          switches::kRendererProcess;
+      bool is_plugin =
+          cmd_line->GetSwitchValueASCII(switches::kProcessType) ==
+          switches::kPluginProcess;
+
       if (is_renderer || is_plugin) {
         int crash_signal_fd;
         if (is_renderer) {
@@ -159,10 +159,24 @@ class ChildProcessLauncher::Context
 #endif  // defined(OS_LINUX)
 
       // Actually launch the app.
-      if (!base::LaunchApp(cmd_line->argv(), env, fds_to_map, false, &handle))
+      bool launched;
+#if defined(OS_MACOSX)
+      task_t child_task;
+      launched = base::LaunchAppAndGetTask(
+          cmd_line->argv(), env, fds_to_map, false, &child_task, &handle);
+      if (launched && child_task != MACH_PORT_NULL) {
+          MachBroker::instance()->RegisterPid(
+              handle,
+              MachBroker::MachInfo().SetTask(child_task));
+      }
+#else
+      launched = base::LaunchApp(cmd_line->argv(), env, fds_to_map,
+                                 /* wait= */false, &handle);
+#endif
+      if (!launched)
         handle = base::kNullProcessHandle;
     }
-#endif
+#endif  // else defined(OS_POSIX)
 
     ChromeThread::PostTask(
         client_thread_id_, FROM_HERE,
@@ -170,7 +184,7 @@ class ChildProcessLauncher::Context
             this,
             &ChildProcessLauncher::Context::Notify,
 #if defined(OS_LINUX)
-            zygote,
+            use_zygote,
 #endif
             handle));
   }
@@ -226,11 +240,11 @@ class ChildProcessLauncher::Context
       // through the zygote process.
       Singleton<ZygoteHost>()->EnsureProcessTerminated(handle);
     } else
-#endif  // defined(OS_LINUX)
+#endif  // OS_LINUX
     {
       ProcessWatcher::EnsureProcessTerminated(handle);
     }
-#endif
+#endif  // OS_POSIX
     process.Close();
   }
 
@@ -249,6 +263,7 @@ ChildProcessLauncher::ChildProcessLauncher(
 #if defined(OS_WIN)
     const FilePath& exposed_dir,
 #elif defined(OS_POSIX)
+    bool use_zygote,
     const base::environment_vector& environ,
     int ipcfd,
 #endif
@@ -259,6 +274,7 @@ ChildProcessLauncher::ChildProcessLauncher(
 #if defined(OS_WIN)
       exposed_dir,
 #elif defined(OS_POSIX)
+      use_zygote,
       environ,
       ipcfd,
 #endif
@@ -296,8 +312,6 @@ bool ChildProcessLauncher::DidProcessCrash() {
   // DidProcessCrash called waitpid with WNOHANG, it'll reap the process.
   // However, if DidProcessCrash didn't reap the child, we'll need to in
   // Terminate via ProcessWatcher. So we can't close the handle here.
-  //
-  // This is moot on Windows where |child_exited| will always be true.
   if (child_exited)
     context_->process_.Close();
 

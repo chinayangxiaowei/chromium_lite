@@ -9,10 +9,10 @@
 #include "sandbox/src/broker_services.h"
 #include "sandbox/src/target_services.h"
 
-#ifdef _WIN64
+#if defined(_WIN64) && !defined(NACL_WIN64)
+// We allow building this code for Win64 as part of NaCl to enable development
 #error Sandbox code was not tested on 64-bit Windows. See \
- http://code.google.com/p/chromium/issues/detail?id=27218 for details \
- and progress log.
+ http://crbug.com/27218 for details and progress log.
 #endif
 
 

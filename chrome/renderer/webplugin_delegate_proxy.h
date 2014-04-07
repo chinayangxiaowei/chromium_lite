@@ -1,4 +1,4 @@
-// Copyright (c) 2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,25 +8,27 @@
 #include <string>
 #include <vector>
 
-#include "app/gfx/native_widget_types.h"
+#include "app/surface/transport_dib.h"
 #include "base/file_path.h"
-#include "base/gfx/rect.h"
 #include "base/ref_counted.h"
 #include "base/weak_ptr.h"
-#include "chrome/common/transport_dib.h"
 #include "chrome/renderer/plugin_channel_host.h"
+#include "gfx/native_widget_types.h"
+#include "gfx/rect.h"
 #include "googleurl/src/gurl.h"
+#include "gpu/command_buffer/common/command_buffer.h"
 #include "ipc/ipc_message.h"
 #include "skia/ext/platform_canvas.h"
-#include "webkit/glue/webplugin.h"
-#include "webkit/glue/webplugininfo.h"
-#include "webkit/glue/webplugin_delegate.h"
+#include "webkit/glue/plugins/webplugin.h"
+#include "webkit/glue/plugins/webplugininfo.h"
+#include "webkit/glue/plugins/webplugin_delegate.h"
 
 #if defined(OS_MACOSX)
 #include "base/hash_tables.h"
 #include "base/linked_ptr.h"
 #endif
 
+class CommandBufferProxy;
 struct NPObject;
 class NPObjectStub;
 struct NPVariant_Param;
@@ -69,6 +71,14 @@ class WebPluginDelegateProxy
                                 WebKit::WebCursorInfo* cursor);
   virtual int GetProcessId();
 
+#if defined(OS_MACOSX)
+  virtual void SetWindowFocus(bool window_has_focus);
+  // Inform the plugin that its container (window/tab) has changed visibility.
+  virtual void SetContainerVisibility(bool is_visible);
+  // Inform the plugin that its enclosing window's frame has changed.
+  virtual void WindowFrameChanged(gfx::Rect window_frame, gfx::Rect view_frame);
+#endif
+
   // IPC::Channel::Listener implementation:
   virtual void OnMessageReceived(const IPC::Message& msg);
   void OnChannelError();
@@ -91,9 +101,14 @@ class WebPluginDelegateProxy
   virtual void DidManualLoadFail();
   virtual void InstallMissingPlugin();
   virtual webkit_glue::WebPluginResourceClient* CreateResourceClient(
-      int resource_id, const GURL& url, int notify_id);
+      unsigned long resource_id, const GURL& url, int notify_id);
   virtual webkit_glue::WebPluginResourceClient* CreateSeekableResourceClient(
-      int resource_id, int range_request_id);
+      unsigned long resource_id, int range_request_id);
+
+  CommandBufferProxy* CreateCommandBuffer();
+  void DestroyCommandBuffer(CommandBufferProxy* command_buffer);
+
+  gfx::PluginWindowHandle GetPluginWindowHandle();
 
  protected:
   template<class WebPluginDelegateProxy> friend class DeleteTask;
@@ -131,10 +146,23 @@ class WebPluginDelegateProxy
   void OnInitiateHTTPRangeRequest(const std::string& url,
                                   const std::string& range_info,
                                   int range_request_id);
-  void OnDeferResourceLoading(int resource_id, bool defer);
+  void OnDeferResourceLoading(unsigned long resource_id, bool defer);
 
 #if defined(OS_MACOSX)
+  void OnBindFakePluginWindowHandle();
   void OnUpdateGeometry_ACK(int ack_key);
+  void OnAcceleratedSurfaceSetIOSurface(gfx::PluginWindowHandle window,
+                                        int32 width,
+                                        int32 height,
+                                        uint64 io_surface_identifier);
+  void OnAcceleratedSurfaceSetTransportDIB(gfx::PluginWindowHandle window,
+                                           int32 width,
+                                           int32 height,
+                                           TransportDIB::Handle transport_dib);
+  void OnAcceleratedSurfaceAllocTransportDIB(size_t size,
+                                             TransportDIB::Handle* dib_handle);
+  void OnAcceleratedSurfaceFreeTransportDIB(TransportDIB::Id dib_id);
+  void OnAcceleratedSurfaceBuffersSwapped(gfx::PluginWindowHandle window);
 #endif
 
   // Draw a graphic indicating a crashed plugin.
@@ -161,6 +189,13 @@ class WebPluginDelegateProxy
   void WillDestroyWindow();
 
 #if defined(OS_MACOSX)
+  // Synthesize a fake window handle for the plug-in to identify the instance
+  // to the browser, allowing mapping to a surface for hardware acceleration
+  // of plug-in content. The browser generates the handle which is then set on
+  // the plug-in. Returns true if it successfully sets the window handle on the
+  // plug-in.
+  bool BindFakePluginWindowHandle();
+
   // The Mac TransportDIB implementation uses base::SharedMemory, which
   // cannot be disposed of if an in-flight UpdateGeometry message refers to
   // the shared memory file descriptor.  The old_transport_dibs_ map holds
@@ -178,9 +213,14 @@ class WebPluginDelegateProxy
   OldTransportDIBMap old_transport_dibs_;
 #endif  // OS_MACOSX
 
+#if defined(OS_WIN)
+  // Returns true if we should update the plugin geometry synchronously.
+  bool UseSynchronousGeometryUpdates();
+#endif
+
   base::WeakPtr<RenderView> render_view_;
   webkit_glue::WebPlugin* plugin_;
-  bool windowless_;
+  bool uses_shared_bitmaps_;
   gfx::PluginWindowHandle window_;
   scoped_refptr<PluginChannelHost> channel_host_;
   std::string mime_type_;

@@ -7,6 +7,7 @@
 #include <iostream>
 #include <sstream>
 
+#include "base/logging.h"
 #include "base/string_util.h"
 #include "base/thread.h"
 
@@ -21,14 +22,26 @@ ProcessInfoSnapshot::~ProcessInfoSnapshot() {
   Reset();
 }
 
+const size_t ProcessInfoSnapshot::kMaxPidListSize = 1000;
+
 // Capture the information by calling '/bin/ps'.
 // Note: we ignore the "tsiz" (text size) display option of ps because it's
 // always zero (tested on 10.5 and 10.6).
 bool ProcessInfoSnapshot::Sample(std::vector<base::ProcessId> pid_list) {
+  const char* kPsPathName = "/bin/ps";
   Reset();
 
+  // Nothing to do if no PIDs given.
+  if (pid_list.size() == 0)
+    return true;
+  if (pid_list.size() > kMaxPidListSize) {
+    // The spec says |pid_list| *must* not have more than this many entries.
+    NOTREACHED();
+    return false;
+  }
+
   std::vector<std::string> argv;
-  argv.push_back("/bin/ps");
+  argv.push_back(kPsPathName);
   // Get PID, PPID, (real) UID, effective UID, resident set size, virtual memory
   // size, and command.
   argv.push_back("-o");
@@ -42,9 +55,9 @@ bool ProcessInfoSnapshot::Sample(std::vector<base::ProcessId> pid_list) {
 
   std::string output;
   CommandLine command_line(argv);
-  if (!base::GetAppOutputRestricted(command_line,
-                                    &output, (pid_list.size() + 10) * 100)) {
-    LOG(ERROR) << "Failure running /bin/ps to acquire data.";
+  // Limit output read to a megabyte for safety.
+  if (!base::GetAppOutputRestricted(command_line, &output, 1024 * 1024)) {
+    LOG(ERROR) << "Failure running " << kPsPathName << " to acquire data.";
     return false;
   }
 
@@ -70,18 +83,18 @@ bool ProcessInfoSnapshot::Sample(std::vector<base::ProcessId> pid_list) {
     in.ignore(1, ' ');                    // Eat the space.
     std::getline(in, proc_info.command);  // Get the rest of the line.
     if (!in.good()) {
-      LOG(ERROR) << "Error parsing output from /usr/bin/top.";
+      LOG(ERROR) << "Error parsing output from " << kPsPathName << ".";
       return false;
     }
 
     // Make sure the new PID isn't already in our list.
     if (proc_info_entries_.find(proc_info.pid) != proc_info_entries_.end()) {
-      LOG(ERROR) << "Duplicate PID in output from /bin/ps.";
+      LOG(ERROR) << "Duplicate PID in output from " << kPsPathName << ".";
       return false;
     }
 
     if (!proc_info.pid || ! proc_info.vsize) {
-      LOG(WARNING) << "Invalid data from /bin/ps.";
+      LOG(WARNING) << "Invalid data from " << kPsPathName << ".";
       return false;
     }
 

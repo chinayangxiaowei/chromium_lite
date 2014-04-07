@@ -7,7 +7,7 @@
 
 #include <string>
 
-#include "chrome/browser/views/options/content_exceptions_table_model.h"
+#include "chrome/browser/content_exceptions_table_model.h"
 #include "chrome/browser/views/options/exception_editor_view.h"
 #include "chrome/common/content_settings.h"
 #include "chrome/common/content_settings_types.h"
@@ -66,10 +66,11 @@ class ExceptionsView : public ExceptionEditorView::Delegate,
   virtual views::View* GetContentsView() { return this; }
 
   // ExceptionEditorView::Delegate implementation.
-  virtual void AcceptExceptionEdit(const std::string& host,
-                                   ContentSetting setting,
-                                   int index,
-                                   bool is_new);
+  virtual void AcceptExceptionEdit(
+      const HostContentSettingsMap::Pattern& pattern,
+      ContentSetting setting,
+      int index,
+      bool is_new);
 
  private:
   ExceptionsView(HostContentSettingsMap* map, ContentSettingsType type);

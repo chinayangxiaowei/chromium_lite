@@ -1,4 +1,4 @@
-// Copyright (c) 2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -12,6 +12,7 @@
 #include "base/command_line.h"
 #include "base/json/json_reader.h"
 #include "base/singleton.h"
+#include "base/string_util.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/common/extensions/extension.h"
 #include "chrome/common/extensions/url_pattern.h"
@@ -55,6 +56,9 @@ typedef std::map<std::string, bool> PermissionsMap;
 // A map of extension ID to permissions map.
 typedef std::map<std::string, PermissionsMap> ExtensionPermissionsMap;
 
+// A map of extension ID to whether this extension was enabled in incognito.
+typedef std::map<std::string, bool> IncognitoEnabledMap;
+
 const char kExtensionName[] = "chrome/ExtensionProcessBindings";
 const char* kExtensionDeps[] = {
   BaseJsV8Extension::kName,
@@ -68,6 +72,7 @@ struct SingletonData {
   std::set<std::string> function_names_;
   PageActionIdMap page_action_ids_;
   ExtensionPermissionsMap permissions_;
+  IncognitoEnabledMap incognito_enabled_map_;
 };
 
 static std::set<std::string>* GetFunctionNameSet() {
@@ -80,6 +85,10 @@ static PageActionIdMap* GetPageActionMap() {
 
 static PermissionsMap* GetPermissionsMap(const std::string& extension_id) {
   return &Singleton<SingletonData>()->permissions_[extension_id];
+}
+
+static std::map<std::string, bool>* GetIncognitoEnabledMap() {
+  return &Singleton<SingletonData>()->incognito_enabled_map_;
 }
 
 static void GetActiveExtensionIDs(std::set<std::string>* extension_ids) {
@@ -121,9 +130,20 @@ class ExtensionViewAccumulator : public RenderViewVisitor {
     if (extension_id != extension_id_)
       return true;
 
-    if (browser_window_id_ != -1 &&
-        render_view->browser_window_id() != browser_window_id_)
-      return true;
+    // If we are searching for a pop-up, it may be the case that the pop-up
+    // is not attached to a browser window instance.  (It is hosted in a
+    // ExternalTabContainer.)  If so, then bypass validation of
+    // same-browser-window origin.
+    // TODO(twiz):  The browser window id of the views visited should always
+    // match that of the arguments to the accumulator.
+    // See bug:  http://crbug.com/29646
+    if (!(view_type_ == ViewType::EXTENSION_POPUP &&
+          render_view->browser_window_id() == -1)) {
+      if (browser_window_id_ != -1 &&
+          render_view->browser_window_id() != browser_window_id_) {
+        return true;
+      }
+    }
 
     v8::Local<v8::Context> context =
         render_view->webview()->mainFrame()->mainWorldScriptContext();
@@ -300,6 +320,7 @@ class ExtensionImpl : public ExtensionBase {
     int browser_window_id = args[0]->Int32Value();
 
     std::string view_type_string = *v8::String::Utf8Value(args[1]->ToString());
+    StringToUpperASCII(&view_type_string);
     // |view_type| == ViewType::INVALID means getting any type of views.
     ViewType::Type view_type = ViewType::INVALID;
     if (view_type_string == ViewType::kToolstrip) {
@@ -308,6 +329,10 @@ class ExtensionImpl : public ExtensionBase {
       view_type = ViewType::EXTENSION_MOLE;
     } else if (view_type_string == ViewType::kBackgroundPage) {
       view_type = ViewType::EXTENSION_BACKGROUND_PAGE;
+    } else if (view_type_string == ViewType::kInfobar) {
+      view_type = ViewType::EXTENSION_INFOBAR;
+    } else if (view_type_string == ViewType::kNotification) {
+      view_type = ViewType::NOTIFICATION;
     } else if (view_type_string == ViewType::kTabContents) {
       view_type = ViewType::TAB_CONTENTS;
     } else if (view_type_string == ViewType::kPopup) {
@@ -396,6 +421,11 @@ class ExtensionImpl : public ExtensionBase {
       return ExtensionProcessBindings::ThrowPermissionDeniedException(name);
     }
 
+    GURL source_url;
+    WebFrame* webframe = WebFrame::frameForCurrentContext();
+    if (webframe)
+      source_url = webframe->url();
+
     int request_id = args[2]->Int32Value();
     bool has_callback = args[3]->BooleanValue();
 
@@ -410,7 +440,7 @@ class ExtensionImpl : public ExtensionBase {
     GetPendingRequestMap()[request_id].reset(new PendingRequest(
         current_context, name));
 
-    renderview->SendExtensionRequest(name, args_holder,
+    renderview->SendExtensionRequest(name, args_holder, source_url,
                                      request_id, has_callback);
 
     return v8::Undefined();
@@ -507,6 +537,17 @@ void ExtensionProcessBindings::GetActiveExtensions(
 void ExtensionProcessBindings::SetFunctionNames(
     const std::vector<std::string>& names) {
   ExtensionImpl::SetFunctionNames(names);
+}
+
+void ExtensionProcessBindings::SetIncognitoEnabled(
+    const std::string& extension_id, bool enabled) {
+  (*GetIncognitoEnabledMap())[extension_id] = enabled;
+}
+
+// static
+bool ExtensionProcessBindings::HasIncognitoEnabled(
+    const std::string& extension_id) {
+  return (!extension_id.empty() && (*GetIncognitoEnabledMap())[extension_id]);
 }
 
 // static

@@ -10,9 +10,9 @@
 #include <set>
 #include <string>
 
-#include "app/gfx/native_widget_types.h"
 #include "base/basictypes.h"
 #include "base/task.h"
+#include "gfx/native_widget_types.h"
 
 #if defined(TOOLKIT_VIEWS)
 #include "views/view.h"
@@ -23,7 +23,9 @@ class Canvas;
 }
 
 class BaseDownloadItemModel;
+class DictionaryValue;
 class DownloadItem;
+class FilePath;
 class SkBitmap;
 
 namespace download_util {
@@ -53,6 +55,18 @@ bool CanOpenDownload(DownloadItem* download);
 // Open the file associated with this download (wait for the download to
 // complete if it is in progress).
 void OpenDownload(DownloadItem* download);
+
+// Download temporary file creation --------------------------------------------
+
+// Return the default download directory.
+const FilePath& GetDefaultDownloadDirectory();
+
+// Create a temporary file for a download in the user's default download
+// directory and return true if was successful in creating the file.
+bool CreateTemporaryFileForDownload(FilePath* path);
+
+// Return true if the |download_path| is dangerous path.
+bool DownloadPathIsDangerous(const FilePath& download_path);
 
 // Download progress animations ------------------------------------------------
 
@@ -131,8 +145,35 @@ void DragDownload(const DownloadItem* download,
 
 // Executable file support -----------------------------------------------------
 
-// Copy all executable file extensions.
-void InitializeExeTypes(std::set<std::string>* exe_extensions);
+// Determine if the specified extension is an executable extension.
+bool IsExecutableExtension(const std::string& extension);
+
+// Helpers ---------------------------------------------------------------------
+
+// Creates a representation of a download in a format that the downloads
+// HTML page can understand.
+DictionaryValue* CreateDownloadItemValue(DownloadItem* download, int id);
+
+// Get the localized status text for an in-progress download.
+std::wstring GetProgressStatusText(DownloadItem* download);
+
+// Update the application icon to indicate overall download progress.
+// |download_count| is the number of downloads currently in progress. If
+// |progress_known| is false, then at least one download is of indeterminate
+// size and |progress| is invalid, otherwise |progress| indicates the overall
+// download progress (float value from 0..1).
+void UpdateAppIconDownloadProgress(int download_count,
+                                   bool progress_known,
+                                   float progress);
+
+// Appends the passed the number between parenthesis the path before the
+// extension.
+void AppendNumberToPath(FilePath* path, int number);
+
+// Attempts to find a number that can be appended to that path to make it
+// unique. If |path| does not exist, 0 is returned.  If it fails to find such
+// a number, -1 is returned.
+int GetUniquePathNumber(const FilePath& path);
 
 }  // namespace download_util
 

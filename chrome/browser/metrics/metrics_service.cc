@@ -174,15 +174,15 @@
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/load_notification_details.h"
 #include "chrome/browser/memory_details.h"
+#include "chrome/browser/metrics/histogram_synchronizer.h"
+#include "chrome/browser/pref_service.h"
 #include "chrome/browser/profile.h"
 #include "chrome/browser/renderer_host/render_process_host.h"
 #include "chrome/browser/search_engines/template_url_model.h"
 #include "chrome/common/child_process_logging.h"
 #include "chrome/common/chrome_switches.h"
-#include "chrome/common/histogram_synchronizer.h"
 #include "chrome/common/notification_service.h"
 #include "chrome/common/pref_names.h"
-#include "chrome/common/pref_service.h"
 #include "chrome/common/render_messages.h"
 #include "webkit/glue/plugins/plugin_list.h"
 
@@ -190,10 +190,8 @@
 #include "base/rand_util.h"
 #endif
 
-#if defined(OS_POSIX)
-// TODO(port): Move these headers above as they are ported.
-#include "chrome/common/temp_scaffolding_stubs.h"
-#else
+// TODO(port): port browser_distribution.h.
+#if !defined(OS_POSIX)
 #include "chrome/installer/util/browser_distribution.h"
 #endif
 
@@ -321,6 +319,7 @@ void MetricsService::RegisterPrefs(PrefService* local_state) {
   local_state->RegisterInt64Pref(prefs::kStabilityLaunchTimeSec, 0);
   local_state->RegisterInt64Pref(prefs::kStabilityLastTimestampSec, 0);
   local_state->RegisterStringPref(prefs::kStabilityStatsVersion, L"");
+  local_state->RegisterInt64Pref(prefs::kStabilityStatsBuildTime, 0);
   local_state->RegisterBooleanPref(prefs::kStabilityExitedCleanly, true);
   local_state->RegisterBooleanPref(prefs::kStabilitySessionEndCompleted, true);
   local_state->RegisterIntegerPref(prefs::kMetricsSessionID, -1);
@@ -537,7 +536,7 @@ void MetricsService::Observe(NotificationType type,
 
   switch (type.value) {
     case NotificationType::USER_ACTION:
-        current_log_->RecordUserAction(*Details<const wchar_t*>(details).ptr());
+        current_log_->RecordUserAction(*Details<const char*>(details).ptr());
       break;
 
     case NotificationType::BROWSER_OPENED:
@@ -662,13 +661,17 @@ void MetricsService::InitializeMetricsState() {
   PrefService* pref = g_browser_process->local_state();
   DCHECK(pref);
 
-  if (WideToUTF8(pref->GetString(prefs::kStabilityStatsVersion)) !=
-      MetricsLog::GetVersionString()) {
+  if ((pref->GetInt64(prefs::kStabilityStatsBuildTime)
+       != MetricsLog::GetBuildTime()) ||
+      (WideToUTF8(pref->GetString(prefs::kStabilityStatsVersion))
+       != MetricsLog::GetVersionString())) {
     // This is a new version, so we don't want to confuse the stats about the
     // old version with info that we upload.
     DiscardOldStabilityStats(pref);
     pref->SetString(prefs::kStabilityStatsVersion,
                     UTF8ToWide(MetricsLog::GetVersionString()));
+    pref->SetInt64(prefs::kStabilityStatsBuildTime,
+                   MetricsLog::GetBuildTime());
   }
 
   // Update session ID
@@ -774,11 +777,11 @@ std::string MetricsService::GenerateClientID() {
 // TODO(cmasone): Once we're comfortable this works, migrate Windows code to
 // use this as well.
 std::string MetricsService::RandomBytesToGUIDString(const uint64 bytes[2]) {
-  return StringPrintf("%08llX-%04llX-%04llX-%04llX-%012llX",
-                      bytes[0] >> 32,
-                      (bytes[0] >> 16) & 0x0000ffff,
-                      bytes[0] & 0x0000ffff,
-                      bytes[1] >> 48,
+  return StringPrintf("%08X-%04X-%04X-%04X-%012llX",
+                      static_cast<unsigned int>(bytes[0] >> 32),
+                      static_cast<unsigned int>((bytes[0] >> 16) & 0x0000ffff),
+                      static_cast<unsigned int>(bytes[0] & 0x0000ffff),
+                      static_cast<unsigned int>(bytes[1] >> 48),
                       bytes[1] & 0x0000ffffffffffffULL);
 }
 #endif
@@ -937,7 +940,7 @@ void MetricsService::LogTransmissionTimerDone() {
   Task* task = log_sender_factory_.
       NewRunnableMethod(&MetricsService::OnMemoryDetailCollectionDone);
 
-  MetricsMemoryDetails* details = new MetricsMemoryDetails(task);
+  scoped_refptr<MetricsMemoryDetails> details = new MetricsMemoryDetails(task);
   details->StartFetch();
 
   // Collect WebCore cache information to put into a histogram.
@@ -1862,7 +1865,7 @@ void MetricsService::RecordCurrentHistograms() {
   for (StatisticsRecorder::Histograms::iterator it = histograms.begin();
        histograms.end() != it;
        ++it) {
-    if ((*it)->flags() & kUmaTargetedHistogramFlag)
+         if ((*it)->flags() & Histogram::kUmaTargetedHistogramFlag)
       // TODO(petersont): Only record historgrams if they are not precluded by
       // the UMA response data.
       // Bug http://code.google.com/p/chromium/issues/detail?id=2739.
@@ -1897,31 +1900,6 @@ void MetricsService::RecordHistogram(const Histogram& histogram) {
     // Add new data into our running total.
     already_logged->Add(snapshot);
   }
-}
-
-void MetricsService::AddProfileMetric(Profile* profile,
-                                      const std::wstring& key,
-                                      int value) {
-  // Restriction of types is needed for writing values. See
-  // MetricsLog::WriteProfileMetrics.
-  DCHECK(profile && !key.empty());
-  PrefService* prefs = g_browser_process->local_state();
-  DCHECK(prefs);
-
-  // Key is stored in prefs, which interpret '.'s as paths. As such, key
-  // shouldn't have any '.'s in it.
-  DCHECK(key.find(L'.') == std::wstring::npos);
-  // The id is most likely an email address. We shouldn't send it to the server.
-  const std::wstring id_hash =
-      UTF8ToWide(MetricsLog::CreateBase64Hash(WideToUTF8(profile->GetID())));
-  DCHECK(id_hash.find('.') == std::string::npos);
-
-  DictionaryValue* prof_prefs = prefs->GetMutableDictionary(
-      prefs::kProfileMetrics);
-  DCHECK(prof_prefs);
-  const std::wstring pref_key = std::wstring(prefs::kProfilePrefix) + id_hash +
-      L"." + key;
-  prof_prefs->SetInteger(pref_key.c_str(), value);
 }
 
 static bool IsSingleThreaded() {

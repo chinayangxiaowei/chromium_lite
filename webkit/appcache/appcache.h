@@ -14,6 +14,7 @@
 #include "base/time.h"
 #include "googleurl/src/gurl.h"
 #include "testing/gtest/include/gtest/gtest_prod.h"
+#include "webkit/appcache/appcache_database.h"
 #include "webkit/appcache/appcache_entry.h"
 #include "webkit/appcache/manifest_parser.h"
 
@@ -46,8 +47,9 @@ class AppCache : public base::RefCounted<AppCache> {
   void AddEntry(const GURL& url, const AppCacheEntry& entry);
 
   // Adds a new entry or modifies an existing entry by merging the types
-  // of the new entry with the existing entry.
-  void AddOrModifyEntry(const GURL& url, const AppCacheEntry& entry);
+  // of the new entry with the existing entry. Returns true if a new entry
+  // is added, false if the flags are merged into an existing entry.
+  bool AddOrModifyEntry(const GURL& url, const AppCacheEntry& entry);
 
   // Do not store the returned object as it could be deleted anytime.
   AppCacheEntry* GetEntry(const GURL& url);
@@ -57,6 +59,8 @@ class AppCache : public base::RefCounted<AppCache> {
   AppCacheHosts& associated_hosts() { return associated_hosts_; }
 
   bool IsNewerThan(AppCache* cache) const {
+    // TODO(michaeln): revisit, the system clock can be set
+    // back in time which would confuse this logic.
     if (update_time_ > cache->update_time_)
       return true;
 
@@ -67,13 +71,28 @@ class AppCache : public base::RefCounted<AppCache> {
     return false;
   }
 
-  void set_update_time(base::TimeTicks ticks) {
-    update_time_ = ticks;
-  }
+  base::Time update_time() const { return update_time_; }
+  void set_update_time(base::Time ticks) { update_time_ = ticks; }
 
   // Initializes the cache with information in the manifest.
   // Do not use the manifest after this call.
   void InitializeWithManifest(Manifest* manifest);
+
+  // Initializes the cache with the information in the database records.
+  void InitializeWithDatabaseRecords(
+      const AppCacheDatabase::CacheRecord& cache_record,
+      const std::vector<AppCacheDatabase::EntryRecord>& entries,
+      const std::vector<AppCacheDatabase::FallbackNameSpaceRecord>& fallbacks,
+      const std::vector<AppCacheDatabase::OnlineWhiteListRecord>& whitelists);
+
+  // Returns the database records to be stored in the AppCacheDatabase
+  // to represent this cache.
+  void ToDatabaseRecords(
+      const AppCacheGroup* group,
+      AppCacheDatabase::CacheRecord* cache_record,
+      std::vector<AppCacheDatabase::EntryRecord>* entries,
+      std::vector<AppCacheDatabase::FallbackNameSpaceRecord>* fallbacks,
+      std::vector<AppCacheDatabase::OnlineWhiteListRecord>* whitelists);
 
   bool FindResponseForRequest(const GURL& url,
       AppCacheEntry* found_entry, AppCacheEntry* found_fallback_entry,
@@ -82,6 +101,7 @@ class AppCache : public base::RefCounted<AppCache> {
  private:
   friend class AppCacheGroup;
   friend class AppCacheHost;
+  friend class AppCacheStorageImplTest;
   friend class AppCacheUpdateJobTest;
   friend class base::RefCounted<AppCache>;
 
@@ -113,7 +133,7 @@ class AppCache : public base::RefCounted<AppCache> {
   bool is_complete_;
 
   // when this cache was last updated
-  base::TimeTicks update_time_;
+  base::Time update_time_;
 
   // to notify service when cache is deleted
   AppCacheService* service_;

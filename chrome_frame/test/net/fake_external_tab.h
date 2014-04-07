@@ -24,11 +24,8 @@ class ProcessSingleton;
 class FakeExternalTab {
  public:
   FakeExternalTab();
-  ~FakeExternalTab();
+  virtual ~FakeExternalTab();
 
-  virtual std::wstring GetProfileName();
-
-  virtual bool GetProfilePath(FilePath* path);
   virtual void Initialize();
   virtual void Shutdown();
 
@@ -92,7 +89,6 @@ class CFUrlRequestUnittestRunner
  protected:
   ScopedHandle test_thread_;
   DWORD test_thread_id_;
-  scoped_ptr<MessageLoop> test_thread_message_loop_;
 
   scoped_ptr<test_server::SimpleWebServer> test_http_server_;
   test_server::SimpleResponse chrome_frame_html_;

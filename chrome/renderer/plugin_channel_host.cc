@@ -7,6 +7,10 @@
 #include "chrome/common/plugin_messages.h"
 #include "chrome/plugin/npobject_base.h"
 
+#if defined(OS_POSIX)
+#include "ipc/ipc_channel_posix.h"
+#endif
+
 #include "third_party/WebKit/WebKit/chromium/public/WebBindings.h"
 
 // A simple MessageFilter that will ignore all messages and respond to sync
@@ -75,7 +79,7 @@ PluginChannelHost* PluginChannelHost::GetPluginChannelHost(
   return result;
 }
 
-PluginChannelHost::PluginChannelHost() {
+PluginChannelHost::PluginChannelHost() : expecting_shutdown_(false) {
 }
 
 PluginChannelHost::~PluginChannelHost() {
@@ -83,6 +87,19 @@ PluginChannelHost::~PluginChannelHost() {
 
 bool PluginChannelHost::Init(MessageLoop* ipc_message_loop,
                              bool create_pipe_now) {
+#if defined(OS_POSIX)
+  if (!IPC::ChannelSocketExists(channel_name())) {
+    // Attempting to use this IPC channel would result in a crash
+    // inside IPC code within the PluginChannelBase::Init call.  The plugin
+    // channel in the plugin process is supposed to have created this channel
+    // and sent it to this process, the renderer process.  If this channel
+    // closes and is removed, it cannot be reused until the plugin process
+    // recreates it.
+    LOG(ERROR) << "Refusing use of missing IPC channel " << channel_name();
+    return false;
+  }
+#endif
+
   bool ret = PluginChannelBase::Init(ipc_message_loop, create_pipe_now);
   is_listening_filter_ = new IsListeningFilter;
   channel_->AddFilter(is_listening_filter_);
@@ -113,12 +130,17 @@ void PluginChannelHost::RemoveRoute(int route_id) {
 void PluginChannelHost::OnControlMessageReceived(const IPC::Message& message) {
   IPC_BEGIN_MESSAGE_MAP(PluginChannelHost, message)
     IPC_MESSAGE_HANDLER(PluginHostMsg_SetException, OnSetException)
+    IPC_MESSAGE_HANDLER(PluginHostMsg_PluginShuttingDown, OnPluginShuttingDown)
     IPC_MESSAGE_UNHANDLED_ERROR()
   IPC_END_MESSAGE_MAP()
 }
 
 void PluginChannelHost::OnSetException(const std::string& message) {
   WebKit::WebBindings::setException(NULL, message.c_str());
+}
+
+void PluginChannelHost::OnPluginShuttingDown(const IPC::Message& message) {
+  expecting_shutdown_ = true;
 }
 
 void PluginChannelHost::OnChannelError() {

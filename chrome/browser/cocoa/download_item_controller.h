@@ -11,6 +11,7 @@ class BaseDownloadItemModel;
 @class ChromeUILocalizer;
 @class DownloadItemCell;
 class DownloadItem;
+@class DownloadItemButton;
 class DownloadItemMac;
 class DownloadShelfContextMenuMac;
 @class DownloadShelfController;
@@ -20,13 +21,11 @@ class DownloadShelfContextMenuMac;
 
 @interface DownloadItemController : NSViewController {
  @private
-  IBOutlet NSButton* progressView_;
+  IBOutlet DownloadItemButton* progressView_;
   IBOutlet DownloadItemCell* cell_;
 
   IBOutlet NSMenu* activeDownloadMenu_;
   IBOutlet NSMenu* completeDownloadMenu_;
-
-  NSMenu* currentMenu_;  // points to one of the two menus above
 
   // This is shown instead of progressView_ for dangerous downloads.
   IBOutlet NSView* dangerousDownloadView_;
@@ -98,6 +97,7 @@ class DownloadShelfContextMenuMac;
 - (IBAction)handleAlwaysOpen:(id)sender;
 - (IBAction)handleReveal:(id)sender;
 - (IBAction)handleCancel:(id)sender;
+- (IBAction)handleTogglePause:(id)sender;
 
 @end
 

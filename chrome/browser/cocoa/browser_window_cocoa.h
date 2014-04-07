@@ -12,8 +12,9 @@
 class Browser;
 @class BrowserWindowController;
 @class FindBarCocoaController;
-@class NSWindow;
+@class NSEvent;
 @class NSMenu;
+@class NSWindow;
 
 // An implementation of BrowserWindow for Cocoa. Bridges between C++ and
 // the Cocoa NSWindow. Cross-platform code will interact with this object when
@@ -51,12 +52,14 @@ class BrowserWindowCocoa : public BrowserWindow,
   virtual bool IsFullscreen() const;
   virtual bool IsFullscreenBubbleVisible() const;
   virtual LocationBar* GetLocationBar() const;
-  virtual void SetFocusToLocationBar();
+  virtual void SetFocusToLocationBar(bool select_all);
   virtual void UpdateStopGoState(bool is_loading, bool force);
   virtual void UpdateToolbar(TabContents* contents,
                              bool should_restore_state);
   virtual void FocusToolbar();
+  virtual void FocusPageAndAppMenus();
   virtual bool IsBookmarkBarVisible() const;
+  virtual bool IsBookmarkBarAnimating() const;
   virtual bool IsToolbarVisible() const;
   virtual gfx::Rect GetRootWindowResizerRect() const;
   virtual void ConfirmAddSearchProvider(const TemplateURL* template_url,
@@ -93,7 +96,13 @@ class BrowserWindowCocoa : public BrowserWindow,
                             bool show_history);
   virtual void ShowPageMenu();
   virtual void ShowAppMenu();
-  virtual int GetCommandId(const NativeWebKeyboardEvent& event);
+  virtual bool PreHandleKeyboardEvent(const NativeWebKeyboardEvent& event,
+                                      bool* is_keyboard_shortcut);
+  virtual void HandleKeyboardEvent(const NativeWebKeyboardEvent& event);
+  virtual void ShowCreateShortcutsDialog(TabContents* tab_contents);
+  virtual void Cut();
+  virtual void Copy();
+  virtual void Paste();
 
   // Overridden from NotificationObserver
   virtual void Observe(NotificationType type,
@@ -110,8 +119,11 @@ class BrowserWindowCocoa : public BrowserWindow,
   virtual void DestroyBrowser();
 
  private:
+  int GetCommandId(const NativeWebKeyboardEvent& event);
+  bool HandleKeyboardEventInternal(NSEvent* event);
+  NSWindow* window() const;  // Accessor for the (current) |NSWindow|.
+
   NotificationRegistrar registrar_;
-  NSWindow* window_;  // weak, owned by controller
   Browser* browser_;  // weak, owned by controller
   BrowserWindowController* controller_;  // weak, owns us
 };

@@ -1,4 +1,4 @@
-// Copyright (c) 2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -11,11 +11,14 @@
 #include "base/scoped_nsobject.h"
 #import "chrome/browser/cocoa/command_observer_bridge.h"
 #import "chrome/browser/cocoa/delayedmenu_button.h"
+#import "chrome/browser/cocoa/url_drop_target.h"
 #import "chrome/browser/cocoa/view_resizer.h"
-#include "chrome/common/pref_member.h"
+#include "chrome/browser/pref_member.h"
 
+class AppMenuModel;
 @class AutocompleteTextField;
 @class AutocompleteTextFieldEditor;
+@class BrowserActionsContainerView;
 @class BackForwardMenuController;
 class Browser;
 @class BrowserActionsController;
@@ -25,7 +28,10 @@ class CommandUpdater;
 class LocationBar;
 class LocationBarViewMac;
 @class MenuButton;
+@class MenuController;
+class PageMenuModel;
 namespace ToolbarControllerInternal {
+class MenuDelegate;
 class PrefObserverBridge;
 }
 class Profile;
@@ -37,8 +43,8 @@ class ToolbarModel;
 // Manages the bookmark bar and its position in the window relative to
 // the web content view.
 
-@interface ToolbarController :
-    NSViewController<CommandObserverProtocol> {
+@interface ToolbarController : NSViewController<CommandObserverProtocol,
+                                                URLDropTargetController> {
  @private
   ToolbarModel* toolbarModel_;  // weak, one per window
   CommandUpdater* commands_;  // weak, one per window
@@ -52,13 +58,25 @@ class ToolbarModel;
   scoped_nsobject<BackForwardMenuController> forwardMenuController_;
   scoped_nsobject<BrowserActionsController> browserActionsController_;
 
+  // Lazily-instantiated model, controller, and delegate for the menu on the
+  // page and wrench buttons. The wrench menu is also called the "app menu". If
+  // it's visible, these will be non-null, but they are not reaped when the
+  // button is hidden once it is initially shown.
+  scoped_ptr<PageMenuModel> pageMenuModel_;
+  scoped_nsobject<MenuController> pageMenuController_;
+  scoped_ptr<ToolbarControllerInternal::MenuDelegate> menuDelegate_;
+  scoped_ptr<AppMenuModel> appMenuModel_;
+  scoped_nsobject<MenuController> appMenuController_;
+
   // Used for monitoring the optional toolbar button prefs.
   scoped_ptr<ToolbarControllerInternal::PrefObserverBridge> prefObserver_;
   // Used to position the omnibox bubble.
   scoped_ptr<BubblePositioner> bubblePositioner_;
   BooleanPrefMember showHomeButton_;
   BooleanPrefMember showPageOptionButtons_;
-  BOOL hasToolbar_;  // if NO, we only have the location bar.
+  BOOL hasToolbar_;  // If NO, we may have only the location bar.
+  BOOL hasLocationBar_;  // If |hasToolbar_| is YES, this must also be YES.
+  BOOL locationBarAtMinSize_; // If the location bar is at the minimum size.
 
   // We have an extra retain in the locationBar_.
   // See comments in awakeFromNib for more info.
@@ -86,8 +104,7 @@ class ToolbarModel;
   IBOutlet MenuButton* pageButton_;
   IBOutlet MenuButton* wrenchButton_;
   IBOutlet AutocompleteTextField* locationBar_;
-  IBOutlet NSMenu* encodingMenu_;
-  IBOutlet NSView* browserActionContainerView_;
+  IBOutlet BrowserActionsContainerView* browserActionsContainerView_;
 }
 
 // Initialize the toolbar and register for command updates. The profile is
@@ -100,7 +117,7 @@ class ToolbarModel;
      resizeDelegate:(id<ViewResizer>)resizeDelegate;
 
 // Get the C++ bridge object representing the location bar for this tab.
-- (LocationBar*)locationBar;
+- (LocationBar*)locationBarBridge;
 
 // Called by the Window delegate so we can provide a custom field editor if
 // needed.
@@ -109,7 +126,7 @@ class ToolbarModel;
 - (id)customFieldEditorForObject:(id)obj;
 
 // Make the location bar the first responder, if possible.
-- (void)focusLocationBar;
+- (void)focusLocationBar:(BOOL)selectAll;
 
 // Updates the toolbar (and transitively the location bar) with the states of
 // the specified |tab|.  If |shouldRestore| is true, we're switching
@@ -125,10 +142,10 @@ class ToolbarModel;
 // state.
 - (void)setIsLoading:(BOOL)isLoading;
 
-// Allow turning off the toolbar (but we keep the location bar
-// around).  This changes the behavior of other methods, like
-// [self view].
-- (void)setHasToolbar:(BOOL)toolbar;
+// Allow turning off the toolbar (but we may keep the location bar without a
+// surrounding toolbar). If |toolbar| is YES, the value of |hasLocationBar| is
+// ignored. This changes the behavior of other methods, like |-view|.
+- (void)setHasToolbar:(BOOL)toolbar hasLocationBar:(BOOL)locBar;
 
 // The bookmark bubble (when you click the star) needs to know where to go.
 // Somewhere near the star button seems like a good start.
@@ -141,6 +158,11 @@ class ToolbarModel;
 // |ToolbarView| (0 means don't show it); no-op otherwise.
 - (void)setDividerOpacity:(CGFloat)opacity;
 
+// Create and add the Browser Action buttons to the toolbar view.
+- (void)createBrowserActionButtons;
+
+// Return the BrowserActionsController for this toolbar.
+- (BrowserActionsController*)browserActionsController;
 @end
 
 // A set of private methods used by tests, in the absence of "friends" in ObjC.

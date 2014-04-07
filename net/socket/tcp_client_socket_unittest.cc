@@ -9,8 +9,8 @@
 #include "net/base/host_resolver.h"
 #include "net/base/io_buffer.h"
 #include "net/base/listen_socket.h"
-#include "net/base/load_log.h"
-#include "net/base/load_log_unittest.h"
+#include "net/base/net_log.h"
+#include "net/base/net_log_unittest.h"
 #include "net/base/net_errors.h"
 #include "net/base/test_completion_callback.h"
 #include "net/base/winsock_init.h"
@@ -88,10 +88,10 @@ void TCPClientSocketTest::SetUp() {
   listen_port_ = port;
 
   AddressList addr;
-  scoped_refptr<HostResolver> resolver(CreateSystemHostResolver());
+  scoped_refptr<HostResolver> resolver(CreateSystemHostResolver(NULL));
   HostResolver::RequestInfo info("localhost", listen_port_);
   int rv = resolver->Resolve(info, &addr, NULL, NULL, NULL);
-  CHECK(rv == OK);
+  CHECK_EQ(rv, OK);
   sock_.reset(new TCPClientSocket(addr));
 }
 
@@ -99,22 +99,22 @@ TEST_F(TCPClientSocketTest, Connect) {
   TestCompletionCallback callback;
   EXPECT_FALSE(sock_->IsConnected());
 
-  scoped_refptr<LoadLog> log(new LoadLog(LoadLog::kUnbounded));
-  int rv = sock_->Connect(&callback, log);
-  EXPECT_TRUE(net::LogContains(
-      *log, 0, net::LoadLog::TYPE_TCP_CONNECT, net::LoadLog::PHASE_BEGIN));
+  CapturingBoundNetLog log(CapturingNetLog::kUnbounded);
+  int rv = sock_->Connect(&callback, log.bound());
+  EXPECT_TRUE(net::LogContainsBeginEvent(
+      log.entries(), 0, net::NetLog::TYPE_TCP_CONNECT));
   if (rv != OK) {
     ASSERT_EQ(rv, ERR_IO_PENDING);
-    EXPECT_FALSE(net::LogContains(
-        *log, -1, net::LoadLog::TYPE_TCP_CONNECT, net::LoadLog::PHASE_END));
+    EXPECT_FALSE(net::LogContainsEndEvent(
+        log.entries(), -1, net::NetLog::TYPE_TCP_CONNECT));
 
     rv = callback.WaitForResult();
     EXPECT_EQ(rv, OK);
   }
 
   EXPECT_TRUE(sock_->IsConnected());
-  EXPECT_TRUE(net::LogContains(
-      *log, -1, net::LoadLog::TYPE_TCP_CONNECT, net::LoadLog::PHASE_END));
+  EXPECT_TRUE(net::LogContainsEndEvent(
+      log.entries(), -1, net::NetLog::TYPE_TCP_CONNECT));
 
   sock_->Disconnect();
   EXPECT_FALSE(sock_->IsConnected());

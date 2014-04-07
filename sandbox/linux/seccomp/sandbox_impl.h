@@ -1,3 +1,7 @@
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Use of this source code is governed by a BSD-style license that can be
+// found in the LICENSE file.
+
 #ifndef SANDBOX_IMPL_H__
 #define SANDBOX_IMPL_H__
 
@@ -111,6 +115,12 @@ class Sandbox {
   #if defined(__NR_ipc)
   STATIC int sandbox_ipc(unsigned, int, int, int, void*, long)
                                           asm("playground$sandbox_ipc");
+  #endif
+  STATIC int sandbox_lstat(const char* path, void* buf)
+                                          asm("playground$sandbox_lstat");
+  #if defined(__NR_lstat64)
+  STATIC int sandbox_lstat64(const char *path, void* b)
+                                          asm("playground$sandbox_lstat64");
   #endif
   STATIC int sandbox_madvise(void*, size_t, int)
                                           asm("playground$sandbox_madvise");
@@ -258,7 +268,7 @@ class Sandbox {
   // Wrapper around "read()" that can deal with partial and interrupted reads
   // and that does not modify the global errno variable.
   static ssize_t read(SysCalls& sys, int fd, void* buf, size_t len) {
-    if (len < 0) {
+    if (static_cast<ssize_t>(len) < 0) {
       sys.my_errno = EINVAL;
       return -1;
     }
@@ -354,7 +364,6 @@ class Sandbox {
         void* edx;
         void* ecx;
         void* ebx;
-        void* ret2;
       } regs32 __attribute__((packed));
     #else
     #error Unsupported target platform

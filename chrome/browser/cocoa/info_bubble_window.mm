@@ -1,22 +1,64 @@
-// Copyright (c) 2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #import "chrome/browser/cocoa/info_bubble_window.h"
 
+#include "base/basictypes.h"
 #include "base/logging.h"
 #include "base/scoped_nsobject.h"
+#include "chrome/common/notification_observer.h"
+#include "chrome/common/notification_registrar.h"
+#include "chrome/common/notification_service.h"
+#include "chrome/common/notification_type.h"
 #import "third_party/GTM/AppKit/GTMNSAnimation+Duration.h"
 
 namespace {
 const CGFloat kOrderInSlideOffset = 10;
 const NSTimeInterval kOrderInAnimationDuration = 0.2;
 const NSTimeInterval kOrderOutAnimationDuration = 0.15;
+// The minimum representable time interval.  This can be used as the value
+// passed to +[NSAnimationContext setDuration:] to stop an in-progress
+// animation as quickly as possible.
+const NSTimeInterval kMinimumTimeInterval =
+    std::numeric_limits<NSTimeInterval>::min();
 }
 
-@interface InfoBubbleWindow (Private)
+@interface InfoBubbleWindow(Private)
+- (void)appIsTerminating;
 - (void)finishCloseAfterAnimation;
 @end
+
+// A helper class to proxy app notifications to the window.
+class AppNotificationBridge : public NotificationObserver {
+ public:
+  explicit AppNotificationBridge(InfoBubbleWindow* owner) : owner_(owner) {
+    registrar_.Add(this, NotificationType::APP_TERMINATING,
+                   NotificationService::AllSources());
+  }
+
+  // Overridden from NotificationObserver.
+  void Observe(NotificationType type,
+               const NotificationSource& source,
+               const NotificationDetails& details) {
+    switch (type.value) {
+      case NotificationType::APP_TERMINATING:
+        [owner_ appIsTerminating];
+        break;
+      default:
+        NOTREACHED() << L"Unexpected notification";
+    }
+  }
+
+ private:
+  // The object we need to inform when we get a notification. Weak. Owns us.
+  InfoBubbleWindow* owner_;
+
+  // Used for registering to receive notifications and automatic clean up.
+  NotificationRegistrar registrar_;
+
+  DISALLOW_COPY_AND_ASSIGN(AppNotificationBridge);
+};
 
 // A delegate object for watching the alphaValue animation on InfoBubbleWindows.
 // An InfoBubbleWindow instance cannot be the delegate for its own animation
@@ -51,6 +93,8 @@ const NSTimeInterval kOrderOutAnimationDuration = 0.15;
 
 @implementation InfoBubbleWindow
 
+@synthesize delayOnClose = delayOnClose_;
+
 - (id)initWithContentRect:(NSRect)contentRect
                 styleMask:(NSUInteger)aStyle
                   backing:(NSBackingStoreType)bufferingType
@@ -63,6 +107,8 @@ const NSTimeInterval kOrderOutAnimationDuration = 0.15;
     [self setExcludedFromWindowsMenu:YES];
     [self setOpaque:NO];
     [self setHasShadow:YES];
+    delayOnClose_ = YES;
+    notificationBridge_.reset(new AppNotificationBridge(self));
 
     // Start invisible. Will be made visible when ordered front.
     [self setAlphaValue:0.0];
@@ -96,10 +142,31 @@ const NSTimeInterval kOrderOutAnimationDuration = 0.15;
 - (void)close {
   // Block the window from receiving events while it fades out.
   closing_ = YES;
-  // Apply animations to hide self.
+
+  if (!delayOnClose_) {
+    [self finishCloseAfterAnimation];
+  } else {
+    // Apply animations to hide self.
+    [NSAnimationContext beginGrouping];
+    [[NSAnimationContext currentContext]
+        gtm_setDuration:kOrderOutAnimationDuration
+              eventMask:NSLeftMouseUpMask];
+    [[self animator] setAlphaValue:0.0];
+    [NSAnimationContext endGrouping];
+  }
+}
+
+// If the app is terminating but the window is still fading out, cancel the
+// animation and close the window to prevent it from leaking.
+// See http://crbug.com/37717
+- (void)appIsTerminating {
+  if (!delayOnClose_)
+    return;  // The close has already happened with no Core Animation.
+
+  // Cancel the current animation so that it closes immediately, triggering
+  // |finishCloseAfterAnimation|.
   [NSAnimationContext beginGrouping];
-  [[NSAnimationContext currentContext]
-      gtm_setDuration:kOrderOutAnimationDuration];
+  [[NSAnimationContext currentContext] setDuration:kMinimumTimeInterval];
   [[self animator] setAlphaValue:0.0];
   [NSAnimationContext endGrouping];
 }
@@ -107,9 +174,8 @@ const NSTimeInterval kOrderOutAnimationDuration = 0.15;
 // Called by InfoBubbleWindowCloser when the window is to be really closed
 // after the fading animation is complete.
 - (void)finishCloseAfterAnimation {
-  if (closing_) {
+  if (closing_)
     [super close];
-  }
 }
 
 // Adds animation for info bubbles being ordered to the front.
@@ -130,8 +196,10 @@ const NSTimeInterval kOrderOutAnimationDuration = 0.15;
 
     // Apply animations to show and move self.
     [NSAnimationContext beginGrouping];
+    // The star currently triggers on mouse down, not mouse up.
     [[NSAnimationContext currentContext]
-        gtm_setDuration:kOrderInAnimationDuration];
+        gtm_setDuration:kOrderInAnimationDuration
+              eventMask:NSLeftMouseUpMask|NSLeftMouseDownMask];
     [[self animator] setAlphaValue:1.0];
     [[self animator] setFrame:frame display:YES];
     [NSAnimationContext endGrouping];
@@ -143,12 +211,12 @@ const NSTimeInterval kOrderOutAnimationDuration = 0.15;
 // If the window is currently animating a close, block all UI events to the
 // window.
 - (void)sendEvent:(NSEvent*)theEvent {
-  if (!closing_) {
+  if (!closing_)
     [super sendEvent:theEvent];
-  }
 }
 
 - (BOOL)isClosing {
   return closing_;
 }
+
 @end

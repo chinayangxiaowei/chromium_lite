@@ -7,10 +7,12 @@
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/profile.h"
 #include "chrome/browser/download/download_manager.h"
+#include "chrome/browser/geolocation/geolocation_content_settings_map.h"
 #include "chrome/browser/host_content_settings_map.h"
+#include "chrome/browser/host_zoom_map.h"
 #include "chrome/browser/metrics/metrics_service.h"
+#include "chrome/browser/pref_service.h"
 #include "chrome/common/pref_names.h"
-#include "chrome/common/pref_service.h"
 #include "chrome/installer/util/google_update_settings.h"
 
 // static
@@ -26,7 +28,7 @@ void OptionsUtil::ResetToDefaults(Profile* profile) {
     prefs::kCookieBehavior,
     prefs::kDefaultCharset,
     prefs::kDnsPrefetchingEnabled,
-#if defined(OS_LINUX)
+#if defined(OS_LINUX) || defined(OS_FREEBSD) || defined(OS_OPENBSD)
     prefs::kCertRevocationCheckingEnabled,
     prefs::kSSL2Enabled,
     prefs::kSSL3Enabled,
@@ -42,10 +44,12 @@ void OptionsUtil::ResetToDefaults(Profile* profile) {
     prefs::kDownloadDefaultDirectory,
     prefs::kDownloadExtensionsToOpen,
     prefs::kEnableSpellCheck,
-    prefs::kFormAutofillEnabled,
+    prefs::kEnableTranslate,
+    prefs::kAutoFillEnabled,
     prefs::kHomePage,
     prefs::kHomePageIsNewTabPage,
     prefs::kMixedContentFiltering,
+    prefs::kPrivacyFilterRules,
     prefs::kPromptForDownload,
     prefs::kPasswordManagerEnabled,
     prefs::kRestoreOnStartup,
@@ -66,6 +70,8 @@ void OptionsUtil::ResetToDefaults(Profile* profile) {
   };
   profile->GetDownloadManager()->ResetAutoOpenFiles();
   profile->GetHostContentSettingsMap()->ResetToDefaults();
+  profile->GetGeolocationContentSettingsMap()->ResetToDefault();
+  profile->GetHostZoomMap()->ResetToDefaults();
   for (size_t i = 0; i < arraysize(kUserPrefs); ++i)
     prefs->ClearPref(kUserPrefs[i]);
 

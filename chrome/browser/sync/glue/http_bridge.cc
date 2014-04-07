@@ -13,6 +13,7 @@
 #include "net/base/load_flags.h"
 #include "net/http/http_cache.h"
 #include "net/http/http_network_layer.h"
+#include "net/http/http_response_headers.h"
 #include "net/proxy/proxy_service.h"
 #include "net/url_request/url_request_context.h"
 #include "net/url_request/url_request_status.h"
@@ -46,17 +47,9 @@ HttpBridgeFactory::HttpBridgeFactory(
   DCHECK(baseline_context_getter != NULL);
   request_context_getter_ =
       new HttpBridge::RequestContextGetter(baseline_context_getter);
-  request_context_getter_->AddRef();
 }
 
 HttpBridgeFactory::~HttpBridgeFactory() {
-  if (request_context_getter_) {
-    // Clean up request context getter on IO thread.
-    bool posted = ChromeThread::ReleaseSoon(
-        ChromeThread::IO, FROM_HERE, request_context_getter_);
-    DCHECK(posted);
-    request_context_getter_ = NULL;
-  }
 }
 
 sync_api::HttpPostProviderInterface* HttpBridgeFactory::Create() {
@@ -73,7 +66,7 @@ HttpBridge::RequestContext::RequestContext(URLRequestContext* baseline_context)
     : baseline_context_(baseline_context) {
 
   // Create empty, in-memory cookie store.
-  cookie_store_ = new net::CookieMonster();
+  cookie_store_ = new net::CookieMonster(NULL, NULL);
 
   // We don't use a cache for bridged loads, but we do want to share proxy info.
   host_resolver_ = baseline_context->host_resolver();
@@ -116,13 +109,9 @@ HttpBridge::HttpBridge(HttpBridge::RequestContextGetter* context_getter)
       request_succeeded_(false),
       http_response_code_(-1),
       http_post_completed_(false, false) {
-  context_getter_for_request_->AddRef();
 }
 
 HttpBridge::~HttpBridge() {
-  bool posted = ChromeThread::ReleaseSoon(
-      ChromeThread::IO, FROM_HERE, context_getter_for_request_);
-  DCHECK(posted);
 }
 
 void HttpBridge::SetUserAgent(const char* user_agent) {
@@ -210,6 +199,16 @@ const char* HttpBridge::GetResponseContent() const {
   return response_content_.data();
 }
 
+const std::string HttpBridge::GetResponseHeaderValue(
+    const std::string& name) const {
+
+  DCHECK_EQ(MessageLoop::current(), created_on_loop_);
+  DCHECK(request_completed_);
+  std::string value;
+  response_headers_->EnumerateHeader(NULL, name, &value);
+  return value;
+}
+
 void HttpBridge::OnURLFetchComplete(const URLFetcher *source, const GURL &url,
                                     const URLRequestStatus &status,
                                     int response_code,
@@ -223,6 +222,7 @@ void HttpBridge::OnURLFetchComplete(const URLFetcher *source, const GURL &url,
   os_error_code_ = status.os_error();
 
   response_content_ = data;
+  response_headers_ = source->response_headers();
 
   // End of the line for url_poster_. It lives only on the IO loop.
   // We defer deletion because we're inside a callback from a component of the

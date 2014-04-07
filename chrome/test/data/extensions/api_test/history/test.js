@@ -34,12 +34,12 @@ function itemVisitedListener(visited) {
 };
 
 function removeItemVisitedListener() {
-  chrome.experimental.history.onVisited.removeListener(itemVisitedListener);
+  chrome.history.onVisited.removeListener(itemVisitedListener);
   itemVisitedCallback = null;
 }
 
 function setItemVisitedListener(callback) {
-  chrome.experimental.history.onVisited.addListener(itemVisitedListener);
+  chrome.history.onVisited.addListener(itemVisitedListener);
   itemVisitedCallback = callback;
 }
 
@@ -59,12 +59,12 @@ function itemRemovedListener(removed) {
 };
 
 function removeItemRemovedListener() {
-  chrome.experimental.history.onVisited.removeListener(itemRemovedListener);
+  chrome.history.onVisited.removeListener(itemRemovedListener);
   itemRemovedCallback = null;
 }
 
 function setItemRemovedListener(callback) {
-  chrome.experimental.history.onVisitRemoved.addListener(itemRemovedListener);
+  chrome.history.onVisitRemoved.addListener(itemRemovedListener);
   itemRemovedCallback = callback;
 }
 
@@ -95,8 +95,8 @@ function tabsCompleteListener(tabId, changeInfo) {
 * @param {function(number)} callback The closure.
 */
 function countItemsInHistory(callback) {
-  var query = {'search': ''};
-  chrome.experimental.history.search(query, function(results) {
+  var query = {'text': ''};
+  chrome.history.search(query, function(results) {
     callback(results.length);
   });
 };
@@ -108,7 +108,7 @@ function countItemsInHistory(callback) {
 */
 function populateHistory(urls, callback) {
   urls.forEach(function(url) {
-    chrome.experimental.history.addUrl({ 'url': url });
+    chrome.history.addUrl({ 'url': url });
   });
   callback();
 };
@@ -117,7 +117,7 @@ chrome.test.runTests([
   // All the tests require a blank state to start from.  This test is run
   // first to insure that state can be acheived.
   function clearHistory() {
-    chrome.experimental.history.deleteAll(pass(function() {
+    chrome.history.deleteAll(pass(function() {
       countItemsInHistory(pass(function(count) {
         assertEq(0, count);
       }));
@@ -128,8 +128,8 @@ chrome.test.runTests([
     // basicSearch callback.
     function basicSearchTestVerification() {
       removeItemVisitedListener();
-      var query = { 'search': '' };
-      chrome.experimental.history.search(query, function(results) {
+      var query = { 'text': '' };
+      chrome.history.search(query, function(results) {
         assertEq(1, results.length);
         assertEq(GOOGLE_URL, results[0].url);
 
@@ -139,7 +139,7 @@ chrome.test.runTests([
     };
 
     // basicSearch entry point.
-    chrome.experimental.history.deleteAll(function() {
+    chrome.history.deleteAll(function() {
       setItemVisitedListener(basicSearchTestVerification);
       populateHistory([GOOGLE_URL], function() { });
     });
@@ -152,10 +152,10 @@ chrome.test.runTests([
     function timeScopedSearchTestVerification() {
       removeItemVisitedListener();
 
-      var query = { 'search': '',
+      var query = { 'text': '',
                     'startTime': startDate.getTime(),
                     'endTime': endDate.getTime() };
-       chrome.experimental.history.search(query, function(results) {
+       chrome.history.search(query, function(results) {
          assertEq(1, results.length);
          assertEq(GOOGLE_URL, results[0].url);
 
@@ -178,13 +178,26 @@ chrome.test.runTests([
     };
 
     // timeScopedSearch entry point.
-    chrome.experimental.history.deleteAll(function() {
+    chrome.history.deleteAll(function() {
       // Set the test callback.
       setItemVisitedListener(onAddedItem);
       // Set the start time a few seconds in the past.
       startDate = new Date();
       startDate.setTime(startDate.getTime() - 1000);
       populateHistory([GOOGLE_URL], function() { });
+    });
+  },
+
+  function searchWithIntegerTimes() {
+    chrome.history.deleteAll(function() {
+      // Search with an integer time range.
+      var query = { 'text': '',
+                    'startTime': 0,
+                    'endTime': 12345678 };
+      chrome.history.search(query, function(results) {
+        assertEq(0, results.length);
+        chrome.test.succeed();
+      });
     });
   },
 
@@ -200,10 +213,10 @@ chrome.test.runTests([
 
       endDate = new Date();
       endDate.setTime(endDate.getTime() + 1000);
-      var query = { 'search': '',
+      var query = { 'text': '',
                     'startTime': startDate.getTime(),
                     'endTime': endDate.getTime() };
-       chrome.experimental.history.search(query, function(results) {
+       chrome.history.search(query, function(results) {
          assertEq(1, results.length);
          assertEq(PICASA_URL, results[0].url);
 
@@ -226,7 +239,7 @@ chrome.test.runTests([
     };
 
     // timeScopedSearch entry point.
-    chrome.experimental.history.deleteAll(function() {
+    chrome.history.deleteAll(function() {
       // Set the test callback.
       setItemVisitedListener(onAddedItem);
       populateHistory([GOOGLE_URL], function() { });
@@ -245,8 +258,8 @@ chrome.test.runTests([
 
       removeItemVisitedListener();
 
-      var query = { 'search': '', 'maxResults': 1 };
-      chrome.experimental.history.search(query, function(results) {
+      var query = { 'text': '', 'maxResults': 1 };
+      chrome.history.search(query, function(results) {
         assertEq(1, results.length);
         assertEq(PICASA_URL, results[0].url);
 
@@ -256,26 +269,26 @@ chrome.test.runTests([
     };
 
     // lengthScopedSearch entry point.
-    chrome.experimental.history.deleteAll(function() {
+    chrome.history.deleteAll(function() {
       setItemVisitedListener(lengthScopedSearchTestVerification);
       populateHistory(urls, function() { });
     });
   },
 
   function fullTextSearch() {
-    chrome.experimental.history.deleteAll(function() {
+    chrome.history.deleteAll(function() {
       // The continuation of the test after the windows have been opened.
       var validateTest = function() {
         // Continue with the test.
         // A title search for www.a.com should find a.
-        var query = { 'search': 'www.a.com' };
-        chrome.experimental.history.search(query, function(results) {
+        var query = { 'text': 'www.a.com' };
+        chrome.history.search(query, function(results) {
           assertEq(1, results.length);
           assertEq(A_RELATIVE_URL, results[0].url);
 
           // Text in the body of b.html.
-          query = { 'search': 'ABCDEFGHIJKLMNOPQRSTUVWXYZ' };
-          chrome.experimental.history.search(query, function(results) {
+          query = { 'text': 'ABCDEFGHIJKLMNOPQRSTUVWXYZ' };
+          chrome.history.search(query, function(results) {
             assertEq(1, results.length);
             assertEq(B_RELATIVE_URL, results[0].url);
 
@@ -330,13 +343,13 @@ chrome.test.runTests([
       removeItemVisitedListener();
 
       // Verify that we received the url.
-      var query = { 'search': '' };
-      chrome.experimental.history.search(query, function(results) {
+      var query = { 'text': '' };
+      chrome.history.search(query, function(results) {
         assertEq(1, results.length);
         assertEq(GOOGLE_URL, results[0].url);
 
         var id = results[0].id;
-        chrome.experimental.history.getVisits({ 'url': GOOGLE_URL }, function(results) {
+        chrome.history.getVisits({ 'url': GOOGLE_URL }, function(results) {
           assertEq(1, results.length);
           assertEq(id, results[0].id);
 
@@ -347,7 +360,7 @@ chrome.test.runTests([
     };
 
     // getVisits entry point.
-    chrome.experimental.history.deleteAll(function() {
+    chrome.history.deleteAll(function() {
       setItemVisitedListener(getVisitsTestVerification);
       populateHistory([GOOGLE_URL], function() { });
     });
@@ -357,8 +370,8 @@ chrome.test.runTests([
     function deleteUrlTestVerification() {
       removeItemRemovedListener();
 
-      var query = { 'search': '' };
-      chrome.experimental.history.search(query, function(results) {
+      var query = { 'text': '' };
+      chrome.history.search(query, function(results) {
         assertEq(0, results.length);
 
         // The test has succeeded.
@@ -369,17 +382,17 @@ chrome.test.runTests([
     function onAddedItem() {
       removeItemVisitedListener();
 
-      var query = { 'search': '' };
-      chrome.experimental.history.search(query, function(results) {
+      var query = { 'text': '' };
+      chrome.history.search(query, function(results) {
         assertEq(1, results.length);
         assertEq(GOOGLE_URL, results[0].url);
 
-        chrome.experimental.history.deleteUrl({ 'url': GOOGLE_URL });
+        chrome.history.deleteUrl({ 'url': GOOGLE_URL });
       });
     };
 
     // deleteUrl entry point.
-    chrome.experimental.history.deleteAll(function() {
+    chrome.history.deleteAll(function() {
       setItemVisitedListener(onAddedItem);
       setItemRemovedListener(deleteUrlTestVerification);
       populateHistory([GOOGLE_URL], function() { });
@@ -395,8 +408,8 @@ chrome.test.runTests([
     function deleteRangeTestVerification() {
       removeItemRemovedListener();
 
-      var query = { 'search': '' };
-      chrome.experimental.history.search(query, function(results) {
+      var query = { 'text': '' };
+      chrome.history.search(query, function(results) {
         assertEq(1, results.length);
         assertEq(PICASA_URL, results[0].url);
 
@@ -419,13 +432,13 @@ chrome.test.runTests([
       };
 
       removeItemVisitedListener();
-      chrome.experimental.history.deleteRange({ 'startTime': startDate.getTime(),
+      chrome.history.deleteRange({ 'startTime': startDate.getTime(),
                                    'endTime': endDate.getTime() },
                                   function() { });
     };
 
     // deletRange entry point.
-    chrome.experimental.history.deleteAll(function() {
+    chrome.history.deleteAll(function() {
       setItemVisitedListener(onAddedItem);
       setItemRemovedListener(deleteRangeTestVerification);
 
@@ -448,8 +461,8 @@ chrome.test.runTests([
     function deleteRange2TestVerification() {
       removeItemRemovedListener();
 
-      var query = { 'search': '' };
-      chrome.experimental.history.search(query, function(results) {
+      var query = { 'text': '' };
+      chrome.history.search(query, function(results) {
         assertEq(1, results.length);
         assertEq(GOOGLE_URL, results[0].url);
 
@@ -475,13 +488,13 @@ chrome.test.runTests([
 
       endDate = new Date();
       endDate.setTime(endDate.getTime() + 1000);
-      chrome.experimental.history.deleteRange({ 'startTime': startDate.getTime(),
+      chrome.history.deleteRange({ 'startTime': startDate.getTime(),
                                    'endTime': endDate.getTime() },
                                   function() { });
     };
 
     // deletRange entry point.
-    chrome.experimental.history.deleteAll(function() {
+    chrome.history.deleteAll(function() {
       setItemVisitedListener(onAddedItem);
       setItemRemovedListener(deleteRange2TestVerification);
       populateHistory([urls[itemsAdded]], function() { });

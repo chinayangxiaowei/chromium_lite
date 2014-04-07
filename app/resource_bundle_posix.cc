@@ -4,12 +4,12 @@
 
 #include "app/resource_bundle.h"
 
-#include "app/gfx/font.h"
 #include "app/l10n_util.h"
 #include "base/data_pack.h"
 #include "base/logging.h"
 #include "base/string16.h"
 #include "base/string_piece.h"
+#include "gfx/font.h"
 
 namespace {
 
@@ -27,7 +27,7 @@ base::DataPack* LoadResourcesDataPak(FilePath resources_pak_path) {
 
 ResourceBundle::~ResourceBundle() {
   FreeImages();
-#if defined(OS_LINUX)
+#if defined(OS_POSIX) && !defined(OS_MACOSX)
   FreeGdkPixBufs();
 #endif
   delete locale_resources_data_;
@@ -83,9 +83,9 @@ string16 ResourceBundle::GetLocalizedString(int message_id) {
 std::string ResourceBundle::LoadResources(const std::wstring& pref_locale) {
   DCHECK(!resources_data_) << "chrome.pak already loaded";
   FilePath resources_file_path = GetResourcesFilePath();
-  DCHECK(!resources_file_path.empty()) << "chrome.pak not found";
+  CHECK(!resources_file_path.empty()) << "chrome.pak not found";
   resources_data_ = LoadResourcesDataPak(resources_file_path);
-  DCHECK(resources_data_) << "failed to load chrome.pak";
+  CHECK(resources_data_) << "failed to load chrome.pak";
 
   DCHECK(!locale_resources_data_) << "locale.pak already loaded";
   std::string app_locale = l10n_util::GetApplicationLocale(pref_locale);
@@ -96,6 +96,6 @@ std::string ResourceBundle::LoadResources(const std::wstring& pref_locale) {
     return std::string();
   }
   locale_resources_data_ = LoadResourcesDataPak(locale_file_path);
-  DCHECK(locale_resources_data_) << "failed to load locale.pak";
+  CHECK(locale_resources_data_) << "failed to load locale.pak";
   return app_locale;
 }

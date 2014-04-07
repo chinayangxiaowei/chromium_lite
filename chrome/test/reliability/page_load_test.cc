@@ -1,4 +1,4 @@
-// Copyright (c) 2006-2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 //
@@ -48,12 +48,13 @@
 #include "base/test/test_file_util.h"
 #include "base/time.h"
 #include "chrome/browser/net/url_fixer_upper.h"
+#include "chrome/browser/pref_service.h"
 #include "chrome/common/chrome_constants.h"
 #include "chrome/common/chrome_paths.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/common/logging_chrome.h"
 #include "chrome/common/pref_names.h"
-#include "chrome/common/pref_service.h"
+#include "chrome/common/url_constants.h"
 #include "chrome/test/automation/automation_messages.h"
 #include "chrome/test/automation/automation_proxy.h"
 #include "chrome/test/automation/browser_proxy.h"
@@ -86,7 +87,6 @@ const char kDefaultServerUrl[] = "http://urllist.com";
 std::string g_server_url;
 const char kTestPage1[] = "page1.html";
 const char kTestPage2[] = "page2.html";
-const char crash_url[] = "about:crash";
 
 // These are copied from v8 definitions as we cannot include them.
 const char kV8LogFileSwitch[] = "logfile";
@@ -185,19 +185,16 @@ class PageLoadTest : public UITest {
     test_log << "browser_launched_seconds=";
     test_log << (time_now.ToDoubleT() - time_start) << std::endl;
 
-    bool is_timeout = false;
     int result = AUTOMATION_MSG_NAVIGATION_ERROR;
     // This is essentially what NavigateToURL does except we don't fire
     // assertion when page loading fails. We log the result instead.
     {
       // TabProxy should be released before Browser is closed.
       scoped_refptr<TabProxy> tab_proxy(GetActiveTab());
-      if (tab_proxy.get()) {
-        result = tab_proxy->NavigateToURLWithTimeout(url, 1, g_timeout_ms,
-                                                     &is_timeout);
-      }
+      if (tab_proxy.get())
+        result = tab_proxy->NavigateToURL(url);
 
-      if (!is_timeout && result == AUTOMATION_MSG_NAVIGATION_SUCCESS) {
+      if (result == AUTOMATION_MSG_NAVIGATION_SUCCESS) {
         if (g_page_down) {
           // Page down twice.
           scoped_refptr<BrowserProxy> browser(
@@ -205,10 +202,7 @@ class PageLoadTest : public UITest {
           if (browser.get()) {
             scoped_refptr<WindowProxy> window(browser->GetWindow());
             if (window.get()) {
-              bool activation_timeout;
-              browser->BringToFrontWithTimeout(action_max_timeout_ms(),
-                                               &activation_timeout);
-              if (!activation_timeout) {
+              if (browser->BringToFront()) {
                 window->SimulateOSKeyPress(base::VKEY_NEXT, 0);
                 PlatformThread::Sleep(sleep_timeout_ms());
                 window->SimulateOSKeyPress(base::VKEY_NEXT, 0);
@@ -240,31 +234,19 @@ class PageLoadTest : public UITest {
     // <url> <navigation_result> <browser_crash_count> <renderer_crash_count>
     // <plugin_crash_count> <crash_dump_count> [chrome_log=<path>
     // v8_log=<path>] crash_dump=<path>
-    if (is_timeout) {
-      metrics.result = NAVIGATION_TIME_OUT;
-      // After timeout, the test automation is in the transition state since
-      // there might be pending IPC messages and the browser (automation
-      // provider) is still working on the request. Here we just skip the url
-      // and send the next request. The pending IPC messages will be properly
-      // discarded by automation message filter. The browser will accept the
-      // new request and visit the next URL.
-      // We will revisit the issue if we encounter the situation where browser
-      // needs to be restarted after timeout.
-    } else {
-      switch (result) {
-        case AUTOMATION_MSG_NAVIGATION_ERROR:
-          metrics.result = NAVIGATION_ERROR;
-          break;
-        case AUTOMATION_MSG_NAVIGATION_SUCCESS:
-          metrics.result = NAVIGATION_SUCCESS;
-          break;
-        case AUTOMATION_MSG_NAVIGATION_AUTH_NEEDED:
-          metrics.result = NAVIGATION_AUTH_NEEDED;
-          break;
-        default:
-          metrics.result = NAVIGATION_ERROR;
-          break;
-      }
+    switch (result) {
+      case AUTOMATION_MSG_NAVIGATION_ERROR:
+        metrics.result = NAVIGATION_ERROR;
+        break;
+      case AUTOMATION_MSG_NAVIGATION_SUCCESS:
+        metrics.result = NAVIGATION_SUCCESS;
+        break;
+      case AUTOMATION_MSG_NAVIGATION_AUTH_NEEDED:
+        metrics.result = NAVIGATION_AUTH_NEEDED;
+        break;
+      default:
+        metrics.result = NAVIGATION_ERROR;
+        break;
     }
 
     if (log_file.is_open()) {
@@ -374,7 +356,7 @@ class PageLoadTest : public UITest {
       EXPECT_EQ(0, metrics.plugin_crash_count);
 
       // Go to "about:crash"
-      NavigateToURLLogResult(crash_url, log_file, &metrics);
+      NavigateToURLLogResult(chrome::kAboutCrashURL, log_file, &metrics);
       // Found a crash dump
       EXPECT_EQ(1, metrics.crash_dump_count) << kFailedNoCrashService;
       // Browser did not crash, and exited cleanly.
@@ -401,8 +383,10 @@ class PageLoadTest : public UITest {
       {
         // TabProxy should be released before Browser is closed.
         scoped_refptr<TabProxy> tab_proxy(GetActiveTab());
+        EXPECT_TRUE(tab_proxy.get());
         if (tab_proxy.get()) {
-          tab_proxy->NavigateToURL(GURL(test_url_1));
+          EXPECT_EQ(AUTOMATION_MSG_NAVIGATION_SUCCESS,
+                    tab_proxy->NavigateToURL(GURL(test_url_1)));
         }
       }
       // Kill browser process.
@@ -445,9 +429,11 @@ class PageLoadTest : public UITest {
  protected:
   // Call the base class's SetUp method and initialize our own class members.
   virtual void SetUp() {
+    // Set UI Test members before setting up browser.
+    clear_profile_ = g_clear_profile;
+
     UITest::SetUp();
     g_browser_existing = true;
-    clear_profile_ = g_clear_profile;
 
     // Initialize crash_dumps_dir_path_.
     PathService::Get(chrome::DIR_CRASH_DUMPS, &crash_dumps_dir_path_);
@@ -667,10 +653,8 @@ void SetPageRange(const CommandLine& parsed_command_line) {
 
   ASSERT_TRUE(g_end_index >= g_start_index);
 
-  if (parsed_command_line.HasSwitch(kListSwitch)) {
-    g_url_file_path = FilePath::FromWStringHack(
-        parsed_command_line.GetSwitchValue(kListSwitch));
-  }
+  if (parsed_command_line.HasSwitch(kListSwitch))
+    g_url_file_path = parsed_command_line.GetSwitchValuePath(kListSwitch);
 
   if (parsed_command_line.HasSwitch(kIterationSwitch)) {
     ASSERT_TRUE(
@@ -690,11 +674,8 @@ void SetPageRange(const CommandLine& parsed_command_line) {
         parsed_command_line.GetSwitchValue(kEndURLSwitch));
   }
 
-  if (parsed_command_line.HasSwitch(kLogFileSwitch)) {
-    g_log_file_path =
-        FilePath::FromWStringHack(
-            parsed_command_line.GetSwitchValue(kLogFileSwitch));
-  }
+  if (parsed_command_line.HasSwitch(kLogFileSwitch))
+    g_log_file_path = parsed_command_line.GetSwitchValuePath(kLogFileSwitch);
 
   if (parsed_command_line.HasSwitch(kTimeoutSwitch)) {
     ASSERT_TRUE(
@@ -721,11 +702,9 @@ void SetPageRange(const CommandLine& parsed_command_line) {
         CommandLine v8_command_line(
             parsed_command_line.GetSwitchValuePath(switches::kJavaScriptFlags));
         if (v8_command_line.HasSwitch(kV8LogFileSwitch)) {
-          g_v8_log_path = FilePath::FromWStringHack(
-              v8_command_line.GetSwitchValue(kV8LogFileSwitch));
-          if (!file_util::AbsolutePath(&g_v8_log_path)) {
+          g_v8_log_path = v8_command_line.GetSwitchValuePath(kV8LogFileSwitch);
+          if (!file_util::AbsolutePath(&g_v8_log_path))
             g_v8_log_path = FilePath();
-          }
         }
       }
     }

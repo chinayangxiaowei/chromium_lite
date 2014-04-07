@@ -1,10 +1,12 @@
-// Copyright (c) 2006-2008 The Chromium Authors. All rights reserved.
+// Copyright (c) 2009 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "webkit/glue/plugins/plugin_list.h"
+
 #include <tchar.h>
 
-#include "webkit/glue/plugins/plugin_list.h"
+#include <set>
 
 #include "base/basictypes.h"
 #include "base/command_line.h"
@@ -34,8 +36,6 @@ const TCHAR kRegistryJava[] =
 const TCHAR kRegistryBrowserJavaVersion[] = _T("BrowserJavaVersion");
 const TCHAR kRegistryCurrentJavaVersion[] = _T("CurrentVersion");
 const TCHAR kRegistryJavaHome[] = _T("JavaHome");
-const TCHAR kJavaDeploy1[] = _T("npdeploytk.dll");
-const TCHAR kJavaDeploy2[] = _T("npdeployjava1.dll");
 
 // The application path where we expect to find plugins.
 void GetAppDirectory(std::set<FilePath>* plugin_dirs) {
@@ -88,7 +88,7 @@ void GetPluginsInRegistryDirectory(
 
     std::wstring path;
     if (key.ReadValue(kRegistryPath, &path))
-      plugin_dirs->insert(FilePath(path).DirName());
+      plugin_dirs->insert(FilePath(path));
   }
 }
 
@@ -117,11 +117,6 @@ void GetFirefoxDirectory(std::set<FilePath>* plugin_dirs) {
   for (unsigned int i = 0; i < paths.size(); ++i) {
     plugin_dirs->insert(paths[i].Append(L"plugins"));
   }
-
-  GetPluginsInRegistryDirectory(
-      HKEY_CURRENT_USER, kRegistryMozillaPlugins, plugin_dirs);
-  GetPluginsInRegistryDirectory(
-      HKEY_LOCAL_MACHINE, kRegistryMozillaPlugins, plugin_dirs);
 
   FilePath firefox_app_data_plugin_path;
   if (PathService::Get(base::DIR_APP_DATA, &firefox_app_data_plugin_path)) {
@@ -195,7 +190,6 @@ void GetJavaDirectory(std::set<FilePath>* plugin_dirs) {
     //    value under the Java version key.
     std::wstring java_plugin_directory;
     if (java_key.ReadValue(kRegistryJavaHome, &java_plugin_directory)) {
-
       // 4. The new plugin resides under the 'bin/new_plugin'
       //    subdirectory.
       DCHECK(!java_plugin_directory.empty());
@@ -208,10 +202,9 @@ void GetJavaDirectory(std::set<FilePath>* plugin_dirs) {
   }
 }
 
-}
+}  // anonymous namespace
 
-namespace NPAPI
-{
+namespace NPAPI {
 
 void PluginList::PlatformInit() {
   const CommandLine& command_line = *CommandLine::ForCurrentProcess();
@@ -246,7 +239,8 @@ void PluginList::GetPluginDirectories(std::vector<FilePath>* plugin_dirs) {
 }
 
 void PluginList::LoadPluginsFromDir(const FilePath &path,
-                                    std::vector<WebPluginInfo>* plugins) {
+                                    std::vector<WebPluginInfo>* plugins,
+                                    std::set<FilePath>* visited_plugins) {
   WIN32_FIND_DATA find_file_data;
   HANDLE find_handle;
 
@@ -262,11 +256,29 @@ void PluginList::LoadPluginsFromDir(const FilePath &path,
     if (!(find_file_data.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)) {
       FilePath filename = path.Append(find_file_data.cFileName);
       LoadPlugin(filename, plugins);
+      visited_plugins->insert(filename);
     }
   } while (FindNextFile(find_handle, &find_file_data) != 0);
 
   DCHECK(GetLastError() == ERROR_NO_MORE_FILES);
   FindClose(find_handle);
+}
+
+void PluginList::LoadPluginsFromRegistry(
+    std::vector<WebPluginInfo>* plugins,
+    std::set<FilePath>* visited_plugins) {
+  std::set<FilePath> plugin_dirs;
+
+  GetPluginsInRegistryDirectory(
+      HKEY_CURRENT_USER, kRegistryMozillaPlugins, &plugin_dirs);
+  GetPluginsInRegistryDirectory(
+      HKEY_LOCAL_MACHINE, kRegistryMozillaPlugins, &plugin_dirs);
+
+  for (std::set<FilePath>::iterator i = plugin_dirs.begin();
+       i != plugin_dirs.end(); ++i) {
+    LoadPlugin(*i, plugins);
+    visited_plugins->insert(*i);
+  }
 }
 
 // Compares Windows style version strings (i.e. 1,2,3,4).  Returns true if b's
@@ -275,12 +287,6 @@ bool IsNewerVersion(const std::wstring& a, const std::wstring& b) {
   std::vector<std::wstring> a_ver, b_ver;
   SplitString(a, ',', &a_ver);
   SplitString(b, ',', &b_ver);
-  if (a_ver.size() == 1 && b_ver.size() == 1) {
-    a_ver.clear();
-    b_ver.clear();
-    SplitString(a, '.', &a_ver);
-    SplitString(b, '.', &b_ver);
-  }
   if (a_ver.size() != b_ver.size())
     return false;
   for (size_t i = 0; i < a_ver.size(); i++) {
@@ -299,18 +305,9 @@ bool PluginList::ShouldLoadPlugin(const WebPluginInfo& info,
   // Version check
 
   for (size_t i = 0; i < plugins->size(); ++i) {
-    std::wstring plugin1 =
-        StringToLowerASCII((*plugins)[i].path.BaseName().ToWStringHack());
-    std::wstring plugin2 =
-        StringToLowerASCII(info.path.BaseName().ToWStringHack());
-    if (plugin1 == plugin2 ||
-        (plugin1 == kJavaDeploy1 && plugin2 == kJavaDeploy2) ||
-        (plugin1 == kJavaDeploy2 && plugin2 == kJavaDeploy1)) {
-      if (!IsNewerVersion((*plugins)[i].version, info.version))
-        return false;  // We have loaded a plugin whose version is newer.
-
-      plugins->erase(plugins->begin() + i);
-      break;
+    if ((*plugins)[i].path.BaseName() == info.path.BaseName() &&
+        !IsNewerVersion((*plugins)[i].version, info.version)) {
+      return false;  // We already have a loaded plugin whose version is newer.
     }
   }
 
@@ -372,4 +369,4 @@ bool PluginList::ShouldLoadPlugin(const WebPluginInfo& info,
   return true;
 }
 
-} // namespace NPAPI
+}  // namespace NPAPI

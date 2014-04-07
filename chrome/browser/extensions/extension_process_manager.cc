@@ -1,15 +1,21 @@
-// Copyright (c) 2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/extensions/extension_process_manager.h"
 
+#include "chrome/browser/browser.h"
+#include "chrome/browser/browser_window.h"
 #include "chrome/browser/browsing_instance.h"
+#if defined(OS_MACOSX)
+#include "chrome/browser/extensions/extension_host_mac.h"
+#endif
 #include "chrome/browser/extensions/extension_host.h"
 #include "chrome/browser/extensions/extensions_service.h"
 #include "chrome/browser/profile.h"
 #include "chrome/browser/renderer_host/site_instance.h"
 #include "chrome/browser/renderer_host/render_view_host.h"
+#include "chrome/browser/tab_contents/tab_contents.h"
 #include "chrome/common/extensions/extension.h"
 #include "chrome/common/notification_service.h"
 #include "chrome/common/notification_type.h"
@@ -44,11 +50,17 @@ ExtensionProcessManager::ExtensionProcessManager(Profile* profile)
                  NotificationService::AllSources());
   registrar_.Add(this, NotificationType::RENDERER_PROCESS_CLOSED,
                  NotificationService::AllSources());
+#if defined(OS_WIN) || defined(OS_LINUX)
   registrar_.Add(this, NotificationType::BROWSER_CLOSED,
                  NotificationService::AllSources());
+#elif defined(OS_MACOSX)
+  registrar_.Add(this, NotificationType::APP_TERMINATING,
+                 NotificationService::AllSources());
+#endif
 }
 
 ExtensionProcessManager::~ExtensionProcessManager() {
+  CloseBackgroundHosts();
   DCHECK(background_hosts_.empty());
 }
 
@@ -57,9 +69,15 @@ ExtensionHost* ExtensionProcessManager::CreateView(Extension* extension,
                                                    Browser* browser,
                                                    ViewType::Type view_type) {
   DCHECK(extension);
-  DCHECK(browser);
+  // A NULL browser may only be given for pop-up views.
+  DCHECK(browser || (!browser && view_type == ViewType::EXTENSION_POPUP));
   ExtensionHost* host =
+#if defined(OS_MACOSX)
+      new ExtensionHostMac(extension, GetSiteInstanceForURL(url), url,
+                           view_type);
+#else
       new ExtensionHost(extension, GetSiteInstanceForURL(url), url, view_type);
+#endif
   host->CreateView(browser);
   OnExtensionHostCreated(host, false);
   return host;
@@ -68,7 +86,8 @@ ExtensionHost* ExtensionProcessManager::CreateView(Extension* extension,
 ExtensionHost* ExtensionProcessManager::CreateView(const GURL& url,
                                                    Browser* browser,
                                                    ViewType::Type view_type) {
-  DCHECK(browser);
+  // A NULL browser may only be given for pop-up views.
+  DCHECK(browser || (!browser && view_type == ViewType::EXTENSION_POPUP));
   ExtensionsService* service =
     browsing_instance_->profile()->GetExtensionsService();
   if (service) {
@@ -101,14 +120,45 @@ ExtensionHost* ExtensionProcessManager::CreatePopup(const GURL& url,
   return CreateView(url, browser, ViewType::EXTENSION_POPUP);
 }
 
+ExtensionHost* ExtensionProcessManager::CreateInfobar(Extension* extension,
+                                                      const GURL& url,
+                                                      Browser* browser) {
+  return CreateView(extension, url, browser, ViewType::EXTENSION_INFOBAR);
+}
+
+ExtensionHost* ExtensionProcessManager::CreateInfobar(const GURL& url,
+                                                      Browser* browser) {
+  return CreateView(url, browser, ViewType::EXTENSION_INFOBAR);
+}
+
 ExtensionHost* ExtensionProcessManager::CreateBackgroundHost(
     Extension* extension, const GURL& url) {
   ExtensionHost* host =
+#if defined(OS_MACOSX)
+      new ExtensionHostMac(extension, GetSiteInstanceForURL(url), url,
+                           ViewType::EXTENSION_BACKGROUND_PAGE);
+#else
       new ExtensionHost(extension, GetSiteInstanceForURL(url), url,
                         ViewType::EXTENSION_BACKGROUND_PAGE);
+#endif
+
   host->CreateRenderViewSoon(NULL);  // create a RenderViewHost with no view
   OnExtensionHostCreated(host, true);
   return host;
+}
+
+void ExtensionProcessManager::OpenOptionsPage(Extension* extension,
+                                              Browser* browser) {
+  DCHECK(!extension->options_url().is_empty());
+
+  // We can't open extensions URLs in incognito windows.
+  if (!browser || browser->profile()->IsOffTheRecord())
+    browser = Browser::GetOrCreateTabbedBrowser(browsing_instance_->profile());
+
+  browser->OpenURL(extension->options_url(), GURL(), SINGLETON_TAB,
+                   PageTransition::LINK);
+  browser->window()->Show();
+  browser->GetSelectedTabContents()->Activate();
 }
 
 ExtensionHost* ExtensionProcessManager::GetBackgroundHostForExtension(
@@ -172,6 +222,10 @@ SiteInstance* ExtensionProcessManager::GetSiteInstanceForURL(const GURL& url) {
   return browsing_instance_->GetSiteInstanceForURL(url);
 }
 
+bool ExtensionProcessManager::HasExtensionHost(ExtensionHost* host) const {
+  return all_hosts_.find(host) != all_hosts_.end();
+}
+
 void ExtensionProcessManager::Observe(NotificationType type,
                                       const NotificationSource& source,
                                       const NotificationDetails& details) {
@@ -219,16 +273,24 @@ void ExtensionProcessManager::Observe(NotificationType type,
       UnregisterExtensionProcess(host->id());
       break;
     }
-
+#if defined(OS_WIN) || defined(OS_LINUX)
     case NotificationType::BROWSER_CLOSED: {
       // Close background hosts when the last browser is closed so that they
       // have time to shutdown various objects on different threads. Our
       // destructor is called too late in the shutdown sequence.
-      bool app_closing = *Details<bool>(details).ptr();
-      if (app_closing)
+      bool app_closing_non_mac = *Details<bool>(details).ptr();
+      if (app_closing_non_mac)
         CloseBackgroundHosts();
       break;
     }
+#elif defined(OS_MACOSX)
+    case NotificationType::APP_TERMINATING: {
+      // Don't follow the behavior of having the last browser window closed
+      // being an indication that the app should close.
+      CloseBackgroundHosts();
+      break;
+    }
+#endif
 
     default:
       NOTREACHED();

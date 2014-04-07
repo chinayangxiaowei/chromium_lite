@@ -9,11 +9,11 @@
 #include <string>
 #include <vector>
 
-#include "base/gfx/point.h"
 #include "base/scoped_ptr.h"
 #include "chrome/browser/gtk/menu_gtk.h"
 #include "chrome/browser/gtk/standard_menus.h"
 #include "chrome/browser/tab_contents/render_view_context_menu.h"
+#include "gfx/point.h"
 
 class ContextMenuParams;
 class RenderWidgetHostView;
@@ -34,7 +34,7 @@ class RenderViewContextMenuGtk : public RenderViewContextMenu,
   // Menu::Delegate implementation ---------------------------------------------
   virtual bool IsCommandEnabled(int id) const;
   virtual bool IsItemChecked(int id) const;
-  virtual void ExecuteCommand(int id);
+  virtual void ExecuteCommandById(int id);
   virtual std::string GetLabel(int id) const;
   virtual void StoppedShowing();
 

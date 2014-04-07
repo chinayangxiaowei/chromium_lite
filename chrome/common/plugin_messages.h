@@ -13,11 +13,11 @@
 #include <string>
 #include <vector>
 
-#include "app/gfx/native_widget_types.h"
-#include "base/gfx/rect.h"
 #include "base/basictypes.h"
 #include "chrome/common/common_param_traits.h"
 #include "chrome/common/webkit_param_traits.h"
+#include "gfx/native_widget_types.h"
+#include "gfx/rect.h"
 #include "googleurl/src/gurl.h"
 #include "ipc/ipc_message_utils.h"
 #include "third_party/npapi/bindings/npapi.h"
@@ -39,6 +39,11 @@ struct PluginMsg_Init_Params {
   std::vector<std::string> arg_values;
   bool load_manually;
   int host_render_view_routing_id;
+#if defined(OS_MACOSX)
+  gfx::Rect containing_window_frame;
+  gfx::Rect containing_content_frame;
+  bool containing_window_has_focus;
+#endif
 };
 
 struct PluginHostMsg_URLRequest_Params {
@@ -51,7 +56,7 @@ struct PluginHostMsg_URLRequest_Params {
 };
 
 struct PluginMsg_DidReceiveResponseParams {
-  int id;
+  unsigned long id;
   std::string mime_type;
   std::string headers;
   uint32 expected_length;
@@ -93,6 +98,7 @@ struct PluginMsg_UpdateGeometry_Param {
   gfx::Rect clip_rect;
   TransportDIB::Handle windowless_buffer;
   TransportDIB::Handle background_buffer;
+  bool transparent;
 
 #if defined(OS_MACOSX)
   // This field contains a key that the plug-in process is expected to return
@@ -119,6 +125,11 @@ struct ParamTraits<PluginMsg_Init_Params> {
     WriteParam(m, p.arg_values);
     WriteParam(m, p.load_manually);
     WriteParam(m, p.host_render_view_routing_id);
+#if defined(OS_MACOSX)
+    WriteParam(m, p.containing_window_frame);
+    WriteParam(m, p.containing_content_frame);
+    WriteParam(m, p.containing_window_has_focus);
+#endif
   }
   static bool Read(const Message* m, void** iter, param_type* p) {
     return ReadParam(m, iter, &p->containing_window) &&
@@ -127,7 +138,14 @@ struct ParamTraits<PluginMsg_Init_Params> {
            ReadParam(m, iter, &p->arg_names) &&
            ReadParam(m, iter, &p->arg_values) &&
            ReadParam(m, iter, &p->load_manually) &&
-           ReadParam(m, iter, &p->host_render_view_routing_id);
+           ReadParam(m, iter, &p->host_render_view_routing_id)
+#if defined(OS_MACOSX)
+           &&
+           ReadParam(m, iter, &p->containing_window_frame) &&
+           ReadParam(m, iter, &p->containing_content_frame) &&
+           ReadParam(m, iter, &p->containing_window_has_focus)
+#endif
+           ;
   }
   static void Log(const param_type& p, std::wstring* l) {
     l->append(L"(");
@@ -144,6 +162,14 @@ struct ParamTraits<PluginMsg_Init_Params> {
     LogParam(p.load_manually, l);
     l->append(L", ");
     LogParam(p.host_render_view_routing_id, l);
+#if defined(OS_MACOSX)
+    l->append(L", ");
+    LogParam(p.containing_window_frame, l);
+    l->append(L", ");
+    LogParam(p.containing_content_frame, l);
+    l->append(L", ");
+    LogParam(p.containing_window_has_focus, l);
+#endif
     l->append(L")");
   }
 };
@@ -361,6 +387,7 @@ struct ParamTraits<PluginMsg_UpdateGeometry_Param> {
     WriteParam(m, p.clip_rect);
     WriteParam(m, p.windowless_buffer);
     WriteParam(m, p.background_buffer);
+    WriteParam(m, p.transparent);
 #if defined(OS_MACOSX)
     WriteParam(m, p.ack_key);
 #endif
@@ -370,7 +397,8 @@ struct ParamTraits<PluginMsg_UpdateGeometry_Param> {
       ReadParam(m, iter, &r->window_rect) &&
       ReadParam(m, iter, &r->clip_rect) &&
       ReadParam(m, iter, &r->windowless_buffer) &&
-      ReadParam(m, iter, &r->background_buffer)
+      ReadParam(m, iter, &r->background_buffer) &&
+      ReadParam(m, iter, &r->transparent)
 #if defined(OS_MACOSX)
       &&
       ReadParam(m, iter, &r->ack_key)
@@ -386,6 +414,8 @@ struct ParamTraits<PluginMsg_UpdateGeometry_Param> {
     LogParam(p.windowless_buffer, l);
     l->append(L", ");
     LogParam(p.background_buffer, l);
+    l->append(L", ");
+    LogParam(p.transparent, l);
 #if defined(OS_MACOSX)
     l->append(L", ");
     LogParam(p.ack_key, l);

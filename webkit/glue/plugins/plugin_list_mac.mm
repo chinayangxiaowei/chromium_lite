@@ -9,6 +9,7 @@
 #include "base/file_util.h"
 #include "base/mac_util.h"
 #include "base/string_util.h"
+#include "base/utf_string_conversions.h"
 #include "webkit/glue/plugins/plugin_lib.h"
 
 namespace {
@@ -37,6 +38,31 @@ void GetPluginPrivateDirectory(std::vector<FilePath>* plugin_dirs) {
   plugin_dirs->push_back(FilePath([plugin_path fileSystemRepresentation]));
 }
 
+// Returns true if the plugin should be prevented from loading.
+bool IsBlacklistedPlugin(const WebPluginInfo& info) {
+  std::string plugin_name = WideToUTF8(info.name);
+  // Non-functional, so it's better to let PDFs be downloaded.
+  if (plugin_name == "PDF Browser Plugin")
+    return true;
+
+  // We blacklist a couple of plugins by included MIME type, since those are
+  // more stable than their names. Be careful about adding any more plugins to
+  // this list though, since it's easy to accidentally blacklist plugins that
+  // support lots of MIME types.
+  for (std::vector<WebPluginMimeType>::const_iterator i =
+           info.mime_types.begin(); i != info.mime_types.end(); ++i) {
+    // The Gears plugin is Safari-specific, so don't load it.
+    if (i->mime_type == "application/x-googlegears")
+      return true;
+    // The current version of O3D doesn't work (and overrealeases our dummy
+    // window). Waiting for a new release with recent fixes.
+    if (i->mime_type == "application/vnd.o3d.auto")
+      return true;
+  }
+
+  return false;
+}
+
 }  // namespace
 
 namespace NPAPI
@@ -57,85 +83,22 @@ void PluginList::GetPluginDirectories(std::vector<FilePath>* plugin_dirs) {
 }
 
 void PluginList::LoadPluginsFromDir(const FilePath &path,
-                                    std::vector<WebPluginInfo>* plugins) {
+                                    std::vector<WebPluginInfo>* plugins,
+                                    std::set<FilePath>* visited_plugins) {
   file_util::FileEnumerator enumerator(path,
                                        false, // not recursive
                                        file_util::FileEnumerator::DIRECTORIES);
   for (FilePath path = enumerator.Next(); !path.value().empty();
        path = enumerator.Next()) {
     LoadPlugin(path, plugins);
+    visited_plugins->insert(path);
   }
 }
 
-// Returns true if |array| contains a string matching |test_string|.
-static bool ArrayContainsString(const char** array, unsigned int array_size,
-                                const std::string& test_string) {
-  // We're dealing with very small lists, so just walk in order; if we someday
-  // end up with very big blacklists or whitelists we can revisit the approach.
-  for (unsigned int i = 0; i < array_size; ++i) {
-    if (test_string == array[i])
-      return true;
-  }
-  return false;
-}
-
-#define OS_MACOSX_BLACKLIST_PLUGINS_BY_DEFAULT 1
 bool PluginList::ShouldLoadPlugin(const WebPluginInfo& info,
                                   std::vector<WebPluginInfo>* plugins) {
-  // Plugins that we know don't work at all.
-  const char* blacklisted_plugin_mimes[] = {
-    "application/x-director",             // Crashes during initialization.
-    "application/x-googlegears",          // Safari-specific.
-    "application/x-id-quakelive",         // Crashes on load.
-    "application/x-vnd.movenetworks.qm",  // Crashes on Snow Leopard.
-    "application/vnd.o3d.auto",           // Doesn't render, and having it
-                                          // detected can prevent fallbacks.
-  };
-  // In the case of plugins that share MIME types, we have to blacklist by name.
-  const char* blacklisted_plugin_names[] = {
-    // Blacklisted for now since having it non-functional but trying to handle
-    // PDFs is worse than not having it (PDF content would otherwise be
-    // downloaded or handled by QuickTime).
-    "PDF Browser Plugin",
-  };
-
-  // Plugins that we know are working reasonably well.
-  const char* whitelisted_plugin_mimes[] = {
-    "application/googletalk",
-    "application/x-picasa-detect",
-    "application/x-shockwave-flash",
-    "application/x-silverlight",
-    "application/x-webkit-test-netscape",
-    "video/quicktime",
-  };
-
-  // Start with names.
-  std::string plugin_name = WideToUTF8(info.name);
-  if (ArrayContainsString(blacklisted_plugin_names,
-                          arraysize(blacklisted_plugin_names), plugin_name)) {
+  if (IsBlacklistedPlugin(info))
     return false;
-  }
-  // Then check mime types.
-  bool whitelisted = false;
-  for (std::vector<WebPluginMimeType>::const_iterator i =
-           info.mime_types.begin(); i != info.mime_types.end(); ++i) {
-    if (ArrayContainsString(blacklisted_plugin_mimes,
-                            arraysize(blacklisted_plugin_mimes),
-                            i->mime_type)) {
-      return false;
-    }
-    if (ArrayContainsString(whitelisted_plugin_mimes,
-                            arraysize(whitelisted_plugin_mimes),
-                            i->mime_type)) {
-      whitelisted = true;
-      break;
-    }
-  }
-
-#if OS_MACOSX_BLACKLIST_PLUGINS_BY_DEFAULT
-  if (!whitelisted)
-    return false;
-#endif
 
   // Hierarchy check
   // (we're loading plugins hierarchically from Library folders, so plugins we

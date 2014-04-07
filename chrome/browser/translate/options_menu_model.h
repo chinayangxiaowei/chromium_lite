@@ -5,15 +5,15 @@
 #ifndef CHROME_BROWSER_TRANSLATE_OPTIONS_MENU_MODEL_H_
 #define CHROME_BROWSER_TRANSLATE_OPTIONS_MENU_MODEL_H_
 
-#include "views/controls/menu/simple_menu_model.h"
+#include "app/menus/simple_menu_model.h"
 
 class TranslateInfoBarDelegate;
 
 // A menu model that builds the contents of the options menu in the translate
 // infobar. This menu has only one level (no submenus).
-class OptionsMenuModel : public views::SimpleMenuModel {
+class OptionsMenuModel : public menus::SimpleMenuModel {
  public:
-  explicit OptionsMenuModel(views::SimpleMenuModel::Delegate* menu_delegate,
+  explicit OptionsMenuModel(menus::SimpleMenuModel::Delegate* menu_delegate,
       TranslateInfoBarDelegate* translate_delegate);
   virtual ~OptionsMenuModel();
 

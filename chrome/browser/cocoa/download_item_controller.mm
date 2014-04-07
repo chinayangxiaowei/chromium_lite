@@ -1,30 +1,40 @@
-// Copyright (c) 2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #import "chrome/browser/cocoa/download_item_controller.h"
 
-#include "app/gfx/text_elider.h"
 #include "app/l10n_util_mac.h"
 #include "app/resource_bundle.h"
+#include "app/text_elider.h"
 #include "base/mac_util.h"
 #include "base/sys_string_conversions.h"
+#include "base/utf_string_conversions.h"
+#import "chrome/browser/browser_theme_provider.h"
+#import "chrome/browser/cocoa/download_item_button.h"
 #import "chrome/browser/cocoa/download_item_cell.h"
 #include "chrome/browser/cocoa/download_item_mac.h"
 #import "chrome/browser/cocoa/download_shelf_controller.h"
-#include "chrome/browser/cocoa/download_util_mac.h"
+#import "chrome/browser/cocoa/themed_window.h"
 #import "chrome/browser/cocoa/ui_localizer.h"
 #include "chrome/browser/download/download_item_model.h"
 #include "chrome/browser/download/download_shelf.h"
 #include "chrome/browser/download/download_util.h"
 #include "grit/generated_resources.h"
 #include "grit/theme_resources.h"
-#import "third_party/GTM/AppKit/GTMTheme.h"
 #include "third_party/GTM/AppKit/GTMUILocalizerAndLayoutTweaker.h"
 
-static const int kTextWidth = 140;            // Pixels
-
 namespace {
+
+// NOTE: Mac currently doesn't use this like Windows does.  Mac uses this to
+// control the min size on the dangerous download text.  TVL sent a query off to
+// UX to fully spec all the the behaviors of download items and truncations
+// rules so all platforms can get inline in the future.
+const int kTextWidth = 140;            // Pixels
+
+// The maximum number of characters we show in a file name when displaying the
+// dangerous download message.
+const int kFileNameMaxLength = 20;
 
 // Helper to widen a view.
 void WidenView(NSView* view, CGFloat widthChange) {
@@ -56,19 +66,20 @@ class DownloadShelfContextMenuMac : public DownloadShelfContextMenu {
   DownloadShelfContextMenuMac(BaseDownloadItemModel* model)
       : DownloadShelfContextMenu(model) { }
 
-  using DownloadShelfContextMenu::ExecuteItemCommand;
-  using DownloadShelfContextMenu::ItemIsChecked;
-  using DownloadShelfContextMenu::IsItemCommandEnabled;
+  using DownloadShelfContextMenu::ExecuteCommand;
+  using DownloadShelfContextMenu::IsCommandIdChecked;
+  using DownloadShelfContextMenu::IsCommandIdEnabled;
 
   using DownloadShelfContextMenu::SHOW_IN_FOLDER;
   using DownloadShelfContextMenu::OPEN_WHEN_COMPLETE;
   using DownloadShelfContextMenu::ALWAYS_OPEN_TYPE;
   using DownloadShelfContextMenu::CANCEL;
+  using DownloadShelfContextMenu::TOGGLE_PAUSE;
 };
 
 @interface DownloadItemController (Private)
 - (void)themeDidChangeNotification:(NSNotification*)aNotification;
-- (void)updateTheme:(GTMTheme*)theme;
+- (void)updateTheme:(ThemeProvider*)themeProvider;
 - (void)setState:(DownoadItemState)state;
 @end
 
@@ -87,7 +98,7 @@ class DownloadShelfContextMenuMac : public DownloadShelfContextMenu {
     NSNotificationCenter* defaultCenter = [NSNotificationCenter defaultCenter];
     [defaultCenter addObserver:self
                       selector:@selector(themeDidChangeNotification:)
-                          name:kGTMThemeDidChangeNotification
+                          name:kBrowserThemeDidChangeNotification
                         object:nil];
 
     shelf_ = shelf;
@@ -99,21 +110,32 @@ class DownloadShelfContextMenuMac : public DownloadShelfContextMenu {
 
 - (void)dealloc {
   [[NSNotificationCenter defaultCenter] removeObserver:self];
+  [progressView_ setController:nil];
   [[self view] removeFromSuperview];
   [super dealloc];
 }
 
 - (void)awakeFromNib {
+  [progressView_ setController:self];
+
   [self setStateFromDownload:bridge_->download_model()];
 
   GTMUILocalizerAndLayoutTweaker* localizerAndLayoutTweaker =
       [[[GTMUILocalizerAndLayoutTweaker alloc] init] autorelease];
   [localizerAndLayoutTweaker applyLocalizer:localizer_ tweakingUI:[self view]];
 
-  // Since the shelf keeps laying out views as more items are added, relying on
-  // the WidthBaseTweaker to resize the dangerous download part does not work.
+  // The strings are based on the download item's name, sizing tweaks have to be
+  // manually done.
   DCHECK(buttonTweaker_ != nil);
   CGFloat widthChange = [buttonTweaker_ changedWidth];
+  // If it's a dangerous download, size the two lines so the text/filename
+  // is always visible.
+  if ([self isDangerousMode]) {
+    widthChange +=
+        [GTMUILocalizerAndLayoutTweaker
+          sizeToFitFixedHeightTextField:dangerousDownloadLabel_
+                               minWidth:kTextWidth];
+  }
   // Grow the parent views
   WidenView([self view], widthChange);
   WidenView(dangerousDownloadView_, widthChange);
@@ -141,19 +163,40 @@ class DownloadShelfContextMenuMac : public DownloadShelfContextMenu {
     NSString* confirmButtonTitle;
     // The dangerous download label and button text are different for an
     // extension file.
-    if (DownloadManager::IsExtensionInstall(downloadModel->download())) {
+    if (downloadModel->download()->is_extension_install()) {
       dangerousWarning = l10n_util::GetNSStringWithFixup(
           IDS_PROMPT_DANGEROUS_DOWNLOAD_EXTENSION);
       confirmButtonTitle = l10n_util::GetNSStringWithFixup(
           IDS_CONTINUE_EXTENSION_DOWNLOAD);
     } else {
-      NSFont* font = [dangerousDownloadLabel_ font];
-      gfx::Font chromeFont = gfx::Font::CreateFont(
-          base::SysNSStringToWide([font fontName]), [font pointSize]);
-      string16 elidedFilename = WideToUTF16(ElideFilename(
-          downloadModel->download()->original_name(), chromeFont, kTextWidth));
+      // This basic fixup copies Windows DownloadItemView::DownloadItemView().
+
+      // Extract the file extension (if any).
+      FilePath filepath(downloadModel->download()->original_name());
+      FilePath::StringType extension = filepath.Extension();
+
+      // Remove leading '.' from the extension
+      if (extension.length() > 0)
+        extension = extension.substr(1);
+
+      // Elide giant extensions.
+      if (extension.length() > kFileNameMaxLength / 2) {
+        std::wstring wide_extension;
+        ElideString(UTF8ToWide(extension), kFileNameMaxLength / 2,
+                    &wide_extension);
+        extension = WideToUTF8(wide_extension);
+      }
+
+      // Rebuild the filename.extension.
+      std::wstring rootname =
+          UTF8ToWide(filepath.BaseName().RemoveExtension().value());
+      ElideString(rootname, kFileNameMaxLength - extension.length(), &rootname);
+      std::string filename = WideToUTF8(rootname);
+      if (extension.length())
+        filename += std::string(".") + extension;
+
       dangerousWarning = l10n_util::GetNSStringFWithFixup(
-          IDS_PROMPT_DANGEROUS_DOWNLOAD, elidedFilename);
+          IDS_PROMPT_DANGEROUS_DOWNLOAD, UTF8ToUTF16(filename));
       confirmButtonTitle = l10n_util::GetNSStringWithFixup(IDS_SAVE_DOWNLOAD);
     }
     [dangerousDownloadLabel_ setStringValue:dangerousWarning];
@@ -161,17 +204,14 @@ class DownloadShelfContextMenuMac : public DownloadShelfContextMenu {
     return;
   }
 
-  // Set the correct popup menu.
+  // Set correct popup menu. Also, set draggable download on completion.
   if (downloadModel->download()->state() == DownloadItem::COMPLETE) {
-    currentMenu_ = completeDownloadMenu_;
-    download_util::NotifySystemOfDownloadComplete(
-        downloadModel->download()->full_path());
-  }
-  else {
-    currentMenu_ = activeDownloadMenu_;
+    [progressView_ setMenu:completeDownloadMenu_];
+    [progressView_ setDownload:downloadModel->download()->full_path()];
+  } else {
+    [progressView_ setMenu:activeDownloadMenu_];
   }
 
-  [progressView_ setMenu:currentMenu_];  // for context menu
   [cell_ setStateFromDownload:downloadModel];
 }
 
@@ -186,7 +226,7 @@ class DownloadShelfContextMenuMac : public DownloadShelfContextMenu {
 
 - (void)updateVisibility:(id)sender {
   if ([[self view] window])
-    [self updateTheme:[[self view] gtm_theme]];
+    [self updateTheme:[[[self view] window] themeProvider]];
 
   // TODO(thakis): Make this prettier, by fading the items out or overlaying
   // the partial visible one with a horizontal alpha gradient -- crbug.com/17830
@@ -196,20 +236,11 @@ class DownloadShelfContextMenuMac : public DownloadShelfContextMenu {
 }
 
 - (IBAction)handleButtonClick:(id)sender {
-  if ([cell_ isButtonPartPressed]) {
-    DownloadItem* download = bridge_->download_model()->download();
-    if (download->state() == DownloadItem::IN_PROGRESS)
-      download->set_open_when_complete(!download->open_when_complete());
-    else if (download->state() == DownloadItem::COMPLETE)
-      download_util::OpenDownload(download);
-  } else {
-    // Hold a reference to ourselves in case the download completes and we
-    // represent a file that's auto-removed (e.g. a theme).
-    scoped_nsobject<DownloadItemController> ref([self retain]);
-    [NSMenu popUpContextMenu:currentMenu_
-                   withEvent:[NSApp currentEvent]
-                     forView:progressView_];
-  }
+  DownloadItem* download = bridge_->download_model()->download();
+  if (download->state() == DownloadItem::IN_PROGRESS)
+    download->set_open_when_complete(!download->open_when_complete());
+  else if (download->state() == DownloadItem::COMPLETE)
+    download_util::OpenDownload(download);
 }
 
 - (NSSize)preferredSize {
@@ -225,6 +256,10 @@ class DownloadShelfContextMenuMac : public DownloadShelfContextMenu {
 
 - (void)clearDangerousMode {
   [self setState:kNormal];
+  // The state change hide the dangerouse download view and is now showing the
+  // download progress view.  This means the view is likely to be a different
+  // size, so trigger a shelf layout to fix up spacing.
+  [shelf_ layoutItems];
 }
 
 - (BOOL)isDangerousMode {
@@ -243,20 +278,23 @@ class DownloadShelfContextMenuMac : public DownloadShelfContextMenu {
     [progressView_ setHidden:YES];
     [dangerousDownloadView_ setHidden:NO];
   }
-  [shelf_ layoutItems];
+  // NOTE: Do not relayout the shelf, as this could get called during initial
+  // setup of the the item, so the localized text and sizing might not have
+  // happened yet.
 }
 
 // Called after the current theme has changed.
 - (void)themeDidChangeNotification:(NSNotification*)aNotification {
-  GTMTheme* theme = [aNotification object];
-  [self updateTheme:theme];
+  ThemeProvider* themeProvider =
+      static_cast<ThemeProvider*>([[aNotification object] pointerValue]);
+  [self updateTheme:themeProvider];
 }
 
 // Adapt appearance to the current theme. Called after theme changes and before
 // this is shown for the first time.
-- (void)updateTheme:(GTMTheme*)theme {
-  NSColor* color = [theme textColorForStyle:GTMThemeStyleTabBarSelected
-                                      state:GTMThemeStateActiveWindow];
+- (void)updateTheme:(ThemeProvider*)themeProvider {
+  NSColor* color =
+      themeProvider->GetNSColor(BrowserThemeProvider::COLOR_TAB_TEXT, true);
   [dangerousDownloadLabel_ setTextColor:color];
 }
 
@@ -296,35 +334,48 @@ class DownloadShelfContextMenuMac : public DownloadShelfContextMenu {
     actionId = DownloadShelfContextMenuMac::SHOW_IN_FOLDER;
   } else if (action == @selector(handleCancel:)) {
     actionId = DownloadShelfContextMenuMac::CANCEL;
+  } else if (action == @selector(handleTogglePause:)) {
+    actionId = DownloadShelfContextMenuMac::TOGGLE_PAUSE;
   } else {
     NOTREACHED();
     return YES;
   }
 
-  if (menuBridge_->ItemIsChecked(actionId))
+  if (menuBridge_->IsCommandIdChecked(actionId))
     [item setState:NSOnState];
   else
     [item setState:NSOffState];
 
-  return menuBridge_->IsItemCommandEnabled(actionId) ? YES : NO;
+  return menuBridge_->IsCommandIdEnabled(actionId) ? YES : NO;
 }
 
 - (IBAction)handleOpen:(id)sender {
-  menuBridge_->ExecuteItemCommand(
+  menuBridge_->ExecuteCommand(
       DownloadShelfContextMenuMac::OPEN_WHEN_COMPLETE);
 }
 
 - (IBAction)handleAlwaysOpen:(id)sender {
-  menuBridge_->ExecuteItemCommand(
+  menuBridge_->ExecuteCommand(
       DownloadShelfContextMenuMac::ALWAYS_OPEN_TYPE);
 }
 
 - (IBAction)handleReveal:(id)sender {
-  menuBridge_->ExecuteItemCommand(DownloadShelfContextMenuMac::SHOW_IN_FOLDER);
+  menuBridge_->ExecuteCommand(DownloadShelfContextMenuMac::SHOW_IN_FOLDER);
 }
 
 - (IBAction)handleCancel:(id)sender {
-  menuBridge_->ExecuteItemCommand(DownloadShelfContextMenuMac::CANCEL);
+  menuBridge_->ExecuteCommand(DownloadShelfContextMenuMac::CANCEL);
+}
+
+- (IBAction)handleTogglePause:(id)sender {
+  if([sender state] == NSOnState) {
+    [sender setTitle:l10n_util::GetNSStringWithFixup(
+        IDS_DOWNLOAD_MENU_PAUSE_ITEM)];
+  } else {
+    [sender setTitle:l10n_util::GetNSStringWithFixup(
+        IDS_DOWNLOAD_MENU_RESUME_ITEM)];
+  }
+  menuBridge_->ExecuteCommand(DownloadShelfContextMenuMac::TOGGLE_PAUSE);
 }
 
 @end

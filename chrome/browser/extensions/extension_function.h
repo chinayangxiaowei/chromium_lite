@@ -1,4 +1,4 @@
-// Copyright (c) 2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -12,6 +12,8 @@
 #include "base/scoped_ptr.h"
 #include "base/ref_counted.h"
 #include "chrome/browser/extensions/extension_function_dispatcher.h"
+#include "chrome/browser/extensions/extensions_service.h"
+#include "chrome/browser/profile.h"
 
 class ExtensionFunctionDispatcher;
 class Profile;
@@ -22,6 +24,12 @@ class QuotaLimitHeuristic;
       bad_message_ = true; \
       return false; \
     } \
+  } while (0)
+
+#define EXTENSION_FUNCTION_ERROR(error) do { \
+    error_ = error; \
+    bad_message_ = true; \
+    return false; \
   } while (0)
 
 #define DECLARE_EXTENSION_FUNCTION_NAME(name) \
@@ -39,6 +47,17 @@ class ExtensionFunction : public base::RefCounted<ExtensionFunction> {
   // Specifies the name of the function.
   void set_name(const std::string& name) { name_ = name; }
   const std::string name() const { return name_; }
+
+  // Set the profile which contains the extension that has originated this
+  // function call.
+  void set_profile(Profile* profile) { profile_ = profile; }
+  Profile* profile() const { return profile_; }
+
+  // Set the id of this function call's extension.
+  void set_extension_id(std::string extension_id) {
+    extension_id_ = extension_id;
+  }
+  std::string extension_id() const { return extension_id_; }
 
   // Specifies the raw arguments to the function, as a JSON value.
   virtual void SetArgs(const Value* args) = 0;
@@ -65,8 +84,14 @@ class ExtensionFunction : public base::RefCounted<ExtensionFunction> {
   void set_request_id(int request_id) { request_id_ = request_id; }
   int request_id() { return request_id_; }
 
+  void set_source_url(const GURL& source_url) { source_url_ = source_url; }
+  const GURL& source_url() { return source_url_; }
+
   void set_has_callback(bool has_callback) { has_callback_ = has_callback; }
   bool has_callback() { return has_callback_; }
+
+  void set_include_incognito(bool include) { include_incognito_ = include; }
+  bool include_incognito() { return include_incognito_; }
 
   // Execute the API. Clients should call set_raw_args() and
   // set_request_id() before calling this method. Derived classes should be
@@ -80,12 +105,32 @@ class ExtensionFunction : public base::RefCounted<ExtensionFunction> {
   virtual ~ExtensionFunction() {}
 
   // Gets the extension that called this function. This can return NULL for
-  // async functions.
+  // async functions, for example if the extension is unloaded while the
+  // function is running.
   Extension* GetExtension() {
-    if (dispatcher())
-      return dispatcher()->GetExtension();
-    else
-      return NULL;
+    ExtensionsService* service = profile_->GetExtensionsService();
+    DCHECK(service);
+    return service->GetExtensionById(extension_id_, false);
+  }
+
+  // Gets the "current" browser, if any.
+  //
+  // Many extension APIs operate relative to the current browser, which is the
+  // browser the calling code is running inside of. For example, popups, tabs,
+  // and infobars all have a containing browser, but background pages and
+  // notification bubbles do not.
+  //
+  // If there is no containing window, the current browser defaults to the
+  // foremost one.
+  //
+  // Incognito browsers are not considered unless the calling extension has
+  // incognito access enabled.
+  //
+  // This method can return NULL if there is no matching browser, which can
+  // happen if only incognito windows are open, or early in startup or shutdown
+  // shutdown when there are no active windows.
+  Browser* GetCurrentBrowser() {
+    return dispatcher()->GetCurrentBrowser(include_incognito_);
   }
 
   // The peer to the dispatcher that will service this extension function call.
@@ -94,12 +139,24 @@ class ExtensionFunction : public base::RefCounted<ExtensionFunction> {
   // Id of this request, used to map the response back to the caller.
   int request_id_;
 
+  // The Profile of this function's extension.
+  Profile* profile_;
+
+  // The id of this function's extension.
+  std::string extension_id_;
+
   // The name of this function.
   std::string name_;
+
+  // The URL of the frame which is making this request
+  GURL source_url_;
 
   // True if the js caller provides a callback function to receive the response
   // of this call.
   bool has_callback_;
+
+  // True if this callback should include information from incognito contexts.
+  bool include_incognito_;
 
   DISALLOW_COPY_AND_ASSIGN(ExtensionFunction);
 };
@@ -138,10 +195,9 @@ class AsyncExtensionFunction : public ExtensionFunction {
     return static_cast<DictionaryValue*>(args_.get());
   }
 
-  // Note: After Run() returns, dispatcher() can be NULL.  Since these getters
-  // rely on dispatcher(), make sure it is valid before using them.
-  std::string extension_id();
-  Profile* profile() const;
+  // Return true if the argument to this function at |index| was provided and
+  // is non-null.
+  bool HasOptionalArgument(size_t index);
 
   // The arguments to the API. Only non-null if argument were specified.
   scoped_ptr<Value> args_;

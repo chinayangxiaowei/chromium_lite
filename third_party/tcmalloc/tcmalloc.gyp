@@ -14,9 +14,12 @@
         'tcmalloc/src',
         '../..',
       ],
+      'defines': [
+        'NO_TCMALLOC_SAMPLES',
+      ],
       'direct_dependent_settings': {
         'configurations': {
-          'Common': {
+          'Common_Base': {
             'msvs_settings': {
               'VCLinkerTool': {
                 'IgnoreDefaultLibraryNames': ['libcmtd.lib', 'libcmt.lib'],
@@ -116,8 +119,10 @@
         'page_heap.cc',
         'page_heap.h',
         'port.cc',
+        'symbolize_linux.cc',
         'system-alloc.h',
         'tcmalloc.cc',
+        'tcmalloc_linux.cc',
         'win_allocator.cc',        
 
         # jemalloc files
@@ -136,16 +141,16 @@
       'msvs_settings': {
         # TODO(sgk):  merge this with build/common.gypi settings
         'VCLibrarianTool=': {
-          'AdditionalOptions': '/ignore:4006,4221',
+          'AdditionalOptions': ['/ignore:4006,4221'],
           'AdditionalLibraryDirectories':
-            ['<(DEPTH)/third_party/platformsdk_win2008_6_1/files/Lib'],
+            ['<(DEPTH)/third_party/platformsdk_win7/files/Lib'],
         },
         'VCLinkerTool': {
-          'AdditionalOptions': '/ignore:4006',
+          'AdditionalOptions': ['/ignore:4006'],
         },
       },
       'configurations': {
-        'Debug': {
+        'Debug_Base': {
           'msvs_settings': {
             'VCCLCompilerTool': {
               'RuntimeLibrary': '0',
@@ -181,6 +186,10 @@
             'tcmalloc/src/page_heap.cc',
             'tcmalloc/src/page_heap.h',
 
+            # don't use linux forked version
+            'symbolize_linux.cc',
+            'tcmalloc_linux.cc',
+
             # heap-profiler/checker/cpuprofiler
             'tcmalloc/src/base/thread_lister.c',
             'tcmalloc/src/base/thread_lister.h',
@@ -202,6 +211,10 @@
             'port.cc',
             'system-alloc.h',
             'win_allocator.cc',        
+
+            # TODO(willchan): unfork this
+            'tcmalloc/src/tcmalloc.cc',
+            'tcmalloc/src/symbolize.cc',
 
             # TODO(willchan): Support allocator shim later on.
             'allocator_shim.cc',

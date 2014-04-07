@@ -19,17 +19,16 @@ using WebKit::WebString;
 /* static */
 DOMStorageNamespace* DOMStorageNamespace::CreateLocalStorageNamespace(
     DOMStorageContext* dom_storage_context, const FilePath& data_dir_path) {
-  int64 id = dom_storage_context->kLocalStorageNamespaceId;
-  DCHECK(!dom_storage_context->GetStorageNamespace(id));
+  int64 id = kLocalStorageNamespaceId;
+  DCHECK(!dom_storage_context->GetStorageNamespace(id, false));
   return new DOMStorageNamespace(dom_storage_context, id,
       webkit_glue::FilePathToWebString(data_dir_path), DOM_STORAGE_LOCAL);
 }
 
 /* static */
 DOMStorageNamespace* DOMStorageNamespace::CreateSessionStorageNamespace(
-    DOMStorageContext* dom_storage_context) {
-  int64 id = dom_storage_context->AllocateStorageNamespaceId();
-  DCHECK(!dom_storage_context->GetStorageNamespace(id));
+    DOMStorageContext* dom_storage_context, int64 id) {
+  DCHECK(!dom_storage_context->GetStorageNamespace(id, false));
   return new DOMStorageNamespace(dom_storage_context, id, WebString(),
                                  DOM_STORAGE_SESSION);
 }
@@ -43,12 +42,11 @@ DOMStorageNamespace::DOMStorageNamespace(DOMStorageContext* dom_storage_context,
       data_dir_path_(data_dir_path),
       dom_storage_type_(dom_storage_type) {
   DCHECK(dom_storage_context_);
-  dom_storage_context_->RegisterStorageNamespace(this);
 }
 
 DOMStorageNamespace::~DOMStorageNamespace() {
-  dom_storage_context_->UnregisterStorageNamespace(this);
-
+  // TODO(jorlow): If the DOMStorageContext is being destructed, there's no need
+  //               to do these calls.  Maybe we should add a fast path?
   for (OriginToStorageAreaMap::iterator iter(origin_to_storage_area_.begin());
        iter != origin_to_storage_area_.end(); ++iter) {
     dom_storage_context_->UnregisterStorageArea(iter->second);
@@ -74,18 +72,19 @@ DOMStorageArea* DOMStorageNamespace::GetStorageArea(
   return storage_area;
 }
 
-DOMStorageNamespace* DOMStorageNamespace::Copy() {
+DOMStorageNamespace* DOMStorageNamespace::Copy(int64 id) {
   DCHECK(dom_storage_type_ == DOM_STORAGE_SESSION);
-  int64 id = dom_storage_context_->AllocateStorageNamespaceId();
-  DCHECK(!dom_storage_context_->GetStorageNamespace(id));
+  DCHECK(!dom_storage_context_->GetStorageNamespace(id, false));
   DOMStorageNamespace* new_storage_namespace = new DOMStorageNamespace(
       dom_storage_context_, id, data_dir_path_, dom_storage_type_);
-  CreateWebStorageNamespaceIfNecessary();
-  new_storage_namespace->storage_namespace_.reset(storage_namespace_->copy());
+  // If we haven't used the namespace yet, there's nothing to copy.
+  if (storage_namespace_.get())
+    new_storage_namespace->storage_namespace_.reset(storage_namespace_->copy());
   return new_storage_namespace;
 }
 
 void DOMStorageNamespace::PurgeMemory() {
+  DCHECK(dom_storage_type_ == DOM_STORAGE_LOCAL);
   for (OriginToStorageAreaMap::iterator iter(origin_to_storage_area_.begin());
        iter != origin_to_storage_area_.end(); ++iter)
     iter->second->PurgeMemory();

@@ -5,6 +5,7 @@
 #include "chrome/browser/in_process_webkit/dom_storage_permission_request.h"
 
 #include "chrome/browser/browser_list.h"
+#include "chrome/browser/chrome_thread.h"
 #include "chrome/browser/message_box_handler.h"
 
 DOMStoragePermissionRequest::DOMStoragePermissionRequest(
@@ -44,14 +45,9 @@ void DOMStoragePermissionRequest::PromptUser(
     return;
   }
 
-#if defined(OS_WIN)
   RunLocalStoragePrompt(browser->GetSelectedTabContents(),
                         request->host_content_settings_map_, request->url_,
                         request->key_, request->value_, request);
-#else
-  // TODO(darin): Enable prompting for other ports.
-  request->SendResponse(CONTENT_SETTING_BLOCK);
-#endif
 }
 
 void DOMStoragePermissionRequest::AllowSiteData(bool session_expire) {

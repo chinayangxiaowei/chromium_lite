@@ -9,15 +9,21 @@
 #include <string>
 #include <vector>
 
-#include "app/gfx/native_widget_types.h"
 #include "base/shared_memory.h"
+#include "base/string16.h"
 #include "base/task.h"
+#include "base/time.h"
+#include "base/timer.h"
 #include "build/build_config.h"
 #include "chrome/common/child_thread.h"
 #include "chrome/common/css_colors.h"
-#include "chrome/common/dom_storage_type.h"
+#include "chrome/common/dom_storage_common.h"
+#include "chrome/renderer/gpu_channel_host.h"
 #include "chrome/renderer/renderer_histogram_snapshots.h"
 #include "chrome/renderer/visitedlink_slave.h"
+#include "gfx/native_widget_types.h"
+#include "ipc/ipc_channel_handle.h"
+#include "ipc/ipc_platform_file.h"
 
 class AppCacheDispatcher;
 class CookieMessageFilter;
@@ -28,16 +34,17 @@ class ListValue;
 class NullableString16;
 class RenderDnsMaster;
 class RendererHistogram;
-class RendererWebDatabaseObserver;
 class RendererWebKitClientImpl;
+class SpellCheck;
 class SkBitmap;
-class SocketStreamDispatcher;
 class UserScriptSlave;
 class URLPattern;
+class WebDatabaseObserverImpl;
 
 struct ContentSettings;
 struct RendererPreferences;
 struct ViewMsg_DOMStorageEvent_Params;
+struct ViewMsg_New_Params;
 struct WebPreferences;
 
 namespace WebKit {
@@ -47,6 +54,12 @@ class WebStorageEventDispatcher;
 // The RenderThreadBase is the minimal interface that a RenderView/Widget
 // expects from a render thread. The interface basically abstracts a way to send
 // and receive messages.
+//
+// TODO(brettw) this should be refactored like RenderProcess/RenderProcessImpl:
+// This class should be named RenderThread and the implementation below should
+// be RenderThreadImpl. The ::current() getter on the impl should then be moved
+// here so we can provide another implementation of RenderThread for tests
+// without having to check for NULL all the time.
 class RenderThreadBase {
  public:
   virtual ~RenderThreadBase() {}
@@ -86,6 +99,10 @@ class RenderThread : public RenderThreadBase,
 
   // Returns the one render thread for this process.  Note that this should only
   // be accessed when running on the render thread itself
+  //
+  // TODO(brettw) this should be on the abstract base class instead of here,
+  // and return the base class' interface instead. Currently this causes
+  // problems with testing. See the comment above RenderThreadBase above.
   static RenderThread* current();
 
   // Returns the routing ID of the RenderWidget containing the current script
@@ -121,11 +138,15 @@ class RenderThread : public RenderThreadBase,
     return appcache_dispatcher_.get();
   }
 
-  SocketStreamDispatcher* socket_stream_dispatcher() const {
-    return socket_stream_dispatcher_.get();
+  SpellCheck* spellchecker() const {
+    return spellchecker_.get();
   }
 
   bool plugin_refresh_allowed() const { return plugin_refresh_allowed_; }
+
+  bool is_extension_process() const { return is_extension_process_; }
+
+  bool is_incognito_process() const { return is_incognito_process_; }
 
   // Do DNS prefetch resolution of a hostname.
   void Resolve(const char* name, size_t length);
@@ -137,14 +158,29 @@ class RenderThread : public RenderThreadBase,
   // bookkeeping operation off the critical latency path.
   void InformHostOfCacheStatsLater();
 
-  // Sends a message to the browser to close all idle connections.
-  void CloseIdleConnections();
+  // Sends a message to the browser to close all connections.
+  void CloseCurrentConnections();
 
   // Sends a message to the browser to enable or disable the disk cache.
   void SetCacheMode(bool enabled);
 
   // Update the list of active extensions that will be reported when we crash.
   void UpdateActiveExtensions();
+
+  // Asynchronously establish a channel to the GPU plugin if not previously
+  // established or if it has been lost (for example if the GPU plugin crashed).
+  // Use GetGpuChannel() to determine when the channel is ready for use.
+  void EstablishGpuChannel();
+
+  // Synchronously establish a channel to the GPU plugin if not previously
+  // established or if it has been lost (for example if the GPU plugin crashed).
+  // If there is a pending asynchronous request, it will be completed by the
+  // time this routine returns.
+  GpuChannelHost* EstablishGpuChannelSync();
+
+  // Get the GPU channel. Returns NULL if the channel is not established or
+  // has been lost.
+  GpuChannelHost* GetGpuChannel();
 
  private:
   virtual void OnControlMessageReceived(const IPC::Message& msg);
@@ -154,9 +190,9 @@ class RenderThread : public RenderThreadBase,
   void OnUpdateVisitedLinks(base::SharedMemoryHandle table);
   void OnAddVisitedLinks(const VisitedLinkSlave::Fingerprints& fingerprints);
   void OnResetVisitedLinks();
-
-  void OnSetContentSettingsForCurrentHost(
-      const std::string& host, const ContentSettings& content_settings);
+  void OnSetZoomLevelForCurrentHost(const std::string& host, int zoom_level);
+  void OnSetContentSettingsForCurrentURL(
+      const GURL& url, const ContentSettings& content_settings);
   void OnUpdateUserScripts(base::SharedMemoryHandle table);
   void OnSetExtensionFunctionNames(const std::vector<std::string>& names);
   void OnPageActionsUpdated(const std::string& extension_id,
@@ -168,12 +204,13 @@ class RenderThread : public RenderThreadBase,
   void OnExtensionSetHostPermissions(
       const GURL& extension_url,
       const std::vector<URLPattern>& permissions);
+  void OnExtensionSetIncognitoEnabled(
+      const std::string& extension_id,
+      bool enabled);
   void OnSetNextPageID(int32 next_page_id);
+  void OnSetIsIncognitoProcess(bool is_incognito_process);
   void OnSetCSSColors(const std::vector<CSSColors::CSSColorMapping>& colors);
-  void OnCreateNewView(gfx::NativeViewId parent_hwnd,
-                       const RendererPreferences& renderer_prefs,
-                       const WebPreferences& webkit_prefs,
-                       int32 view_id);
+  void OnCreateNewView(const ViewMsg_New_Params& params);
   void OnTransferBitmap(const SkBitmap& bitmap, int resource_id);
   void OnSetCacheCapacities(size_t min_dead_capacity,
                             size_t max_dead_capacity,
@@ -188,9 +225,19 @@ class RenderThread : public RenderThreadBase,
   void OnGetV8HeapStats();
 
   void OnExtensionMessageInvoke(const std::string& function_name,
-                                const ListValue& args);
+                                const ListValue& args,
+                                bool requires_incognito_access);
   void OnPurgeMemory();
   void OnPurgePluginListCache(bool reload_pages);
+
+  void OnInitSpellChecker(IPC::PlatformFileForTransit bdict_file,
+                          const std::vector<std::string>& custom_words,
+                          const std::string& language,
+                          bool auto_spell_correct);
+  void OnSpellCheckWordAdded(const std::string& word);
+  void OnSpellCheckEnableAutoSpellCorrect(bool enable);
+
+  void OnGpuChannelEstablished(const IPC::ChannelHandle& channel_handle);
 
   // Gather usage statistics from the in-memory cache and inform our host.
   // These functions should be call periodically so that the host can make
@@ -203,6 +250,9 @@ class RenderThread : public RenderThreadBase,
   // A task we invoke periodically to assist with idle cleanup.
   void IdleHandler();
 
+  // Schedule a call to IdleHandler with the given initial delay.
+  void ScheduleIdleHandler(double initial_delay_s);
+
   // These objects live solely on the render thread.
   scoped_ptr<ScopedRunnableMethodFactory<RenderThread> > task_factory_;
   scoped_ptr<VisitedLinkSlave> visited_link_slave_;
@@ -213,8 +263,8 @@ class RenderThread : public RenderThreadBase,
   scoped_ptr<RendererHistogramSnapshots> histogram_snapshots_;
   scoped_ptr<RendererWebKitClientImpl> webkit_client_;
   scoped_ptr<WebKit::WebStorageEventDispatcher> dom_storage_event_dispatcher_;
-  scoped_ptr<SocketStreamDispatcher> socket_stream_dispatcher_;
-  scoped_ptr<RendererWebDatabaseObserver> renderer_web_database_observer_;
+  scoped_ptr<WebDatabaseObserverImpl> web_database_observer_impl_;
+  scoped_ptr<SpellCheck> spellchecker_;
 
   // Used on the renderer and IPC threads.
   scoped_refptr<DBMessageFilter> db_message_filter_;
@@ -240,9 +290,25 @@ class RenderThread : public RenderThreadBase,
   // The current value of the idle notification timer delay.
   double idle_notification_delay_in_s_;
 
+  // True if this renderer is running extensions.
+  bool is_extension_process_;
+
+  // True if this renderer is incognito.
+  bool is_incognito_process_;
+
   bool suspend_webkit_shared_timer_;
   bool notify_webkit_of_modal_loop_;
   bool did_notify_webkit_of_modal_loop_;
+
+  // Timer that periodically calls IdleHandler.
+  base::RepeatingTimer<RenderThread> idle_timer_;
+
+  // Same as above, but on a longer timer and will run even if the process is
+  // not idle, to ensure that IdleHandle gets called eventually.
+  base::RepeatingTimer<RenderThread> forced_idle_timer_;
+
+  // The channel from the renderer process to the GPU process.
+  scoped_refptr<GpuChannelHost> gpu_channel_;
 
   DISALLOW_COPY_AND_ASSIGN(RenderThread);
 };

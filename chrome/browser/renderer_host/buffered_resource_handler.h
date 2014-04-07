@@ -25,6 +25,7 @@ class BufferedResourceHandler : public ResourceHandler {
   bool OnRequestRedirected(int request_id, const GURL& new_url,
                            ResourceResponse* response, bool* defer);
   bool OnResponseStarted(int request_id, ResourceResponse* response);
+  bool OnWillStart(int request_id, const GURL& url, bool* defer);
   bool OnWillRead(int request_id, net::IOBuffer** buf, int* buf_size,
                   int min_size);
   bool OnReadCompleted(int request_id, int* bytes_read);
@@ -62,6 +63,11 @@ class BufferedResourceHandler : public ResourceHandler {
   // loaded.  The function should be called again after the plugin list is
   // loaded.
   bool ShouldDownload(bool* need_plugin_list);
+
+  // Informs the original ResourceHandler |real_handler_| that the response will
+  // be handled entirely by the new ResourceHandler |handler|.
+  // A reference to |handler| is acquired.
+  void UseAlternateResourceHandler(int request_id, ResourceHandler* handler);
 
   // Called on the file thread to load the list of plugins.
   void LoadPlugins();

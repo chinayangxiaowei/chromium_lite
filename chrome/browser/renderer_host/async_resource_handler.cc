@@ -8,6 +8,7 @@
 #include "base/process.h"
 #include "base/shared_memory.h"
 #include "chrome/browser/net/chrome_url_request_context.h"
+#include "chrome/browser/renderer_host/global_request_id.h"
 #include "chrome/browser/renderer_host/resource_dispatcher_host_request_info.h"
 #include "chrome/common/render_messages.h"
 #include "net/base/io_buffer.h"
@@ -105,7 +106,7 @@ bool AsyncResourceHandler::OnResponseStarted(int request_id,
   // request commits, avoiding the possibility of e.g. zooming the old content
   // or of having to layout the new content twice.
   URLRequest* request = rdh_->GetURLRequest(
-      ResourceDispatcherHost::GlobalRequestID(process_id_, request_id));
+      GlobalRequestID(process_id_, request_id));
   ResourceDispatcherHostRequestInfo* info = rdh_->InfoForRequest(request);
   if (info->resource_type() == ResourceType::MAIN_FRAME) {
     GURL request_url(request->url());
@@ -117,11 +118,19 @@ bool AsyncResourceHandler::OnResponseStarted(int request_id,
           info->route_id(), host,
           context->host_content_settings_map()->GetContentSettings(
               request_url)));
+      receiver_->Send(new ViewMsg_SetZoomLevelForLoadingHost(info->route_id(),
+          host, context->host_zoom_map()->GetZoomLevel(host)));
     }
   }
 
   receiver_->Send(new ViewMsg_Resource_ReceivedResponse(
       routing_id_, request_id, response->response_head));
+  return true;
+}
+
+bool AsyncResourceHandler::OnWillStart(int request_id,
+                                       const GURL& url,
+                                       bool* defer) {
   return true;
 }
 
@@ -208,6 +217,9 @@ bool AsyncResourceHandler::OnResponseCompleted(
     read_buffer_.swap(&g_spare_read_buffer);
   }
   return true;
+}
+
+void AsyncResourceHandler::OnRequestClosed() {
 }
 
 // static

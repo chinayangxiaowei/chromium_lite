@@ -60,6 +60,14 @@
   [super awakeFromNib];
 }
 
+- (void)nodeRemoved:(const BookmarkNode*)node
+         fromParent:(const BookmarkNode*)parent
+{
+  // Be conservative; it is needed (e.g. "Add Page...")
+  node_ = NULL;
+  [self cancel:self];
+}
+
 #pragma mark Bookmark Editing
 
 // If possible, return a valid GURL from the URL text field.
@@ -80,6 +88,13 @@
     GURL newURL = [self GURLFromUrlField];
     okEnabled = (newURL.is_valid()) ? YES : NO;
   }
+  if (okEnabled)
+    [urlField_ setBackgroundColor:[NSColor whiteColor]];
+  else
+    [urlField_ setBackgroundColor:[NSColor colorWithCalibratedRed:1.0
+                                                            green:0.67
+                                                             blue:0.67
+                                                            alpha:1.0]];
   return okEnabled;
 }
 
@@ -119,6 +134,10 @@
   // Honor handler semantics: callback on node creation.
   [self notifyHandlerCreatedNode:node];
   return [NSNumber numberWithBool:YES];
+}
+
+- (NSColor *)urlFieldColor {
+  return [urlField_ backgroundColor];
 }
 
 @end  // BookmarkEditorController

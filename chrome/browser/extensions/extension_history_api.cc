@@ -1,9 +1,10 @@
-// Copyright (c) 2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/extensions/extension_history_api.h"
 
+#include "base/callback.h"
 #include "base/json/json_writer.h"
 #include "base/message_loop.h"
 #include "base/string_util.h"
@@ -48,8 +49,10 @@ void GetVisitInfoDictionary(const history::VisitRow& row,
   value->SetReal(keys::kVisitTime, MilliSecondsFromTime(row.visit_time));
   value->SetString(keys::kReferringVisitId,
                    Int64ToString(row.referring_visit));
-  value->SetInteger(keys::kTransition,
-                    row.transition && PageTransition::CORE_MASK);
+
+  const char* trans = PageTransition::CoreTransitionString(row.transition);
+  DCHECK(trans) << "Invalid transition.";
+  value->SetString(keys::kTransition, trans);
 }
 
 void AddVisitNode(const history::VisitRow& row, ListValue* list) {
@@ -139,8 +142,8 @@ void ExtensionHistoryEventRouter::DispatchEvent(Profile* profile,
                                                 const char* event_name,
                                                 const std::string& json_args) {
   if (profile && profile->GetExtensionMessageService()) {
-    profile->GetExtensionMessageService()->
-        DispatchEventToRenderers(event_name, json_args);
+    profile->GetExtensionMessageService()->DispatchEventToRenderers(
+        event_name, json_args, profile->IsOffTheRecord());
   }
 }
 
@@ -167,13 +170,16 @@ bool HistoryFunction::GetUrlFromValue(Value* value, GURL* url) {
 }
 
 bool HistoryFunction::GetTimeFromValue(Value* value, base::Time* time) {
-  double ms_from_epoch = 0;
+  double ms_from_epoch = 0.0;
   if (!value->GetAsReal(&ms_from_epoch)) {
-    return false;
+    int ms_from_epoch_as_int = 0;
+    if (!value->GetAsInteger(&ms_from_epoch_as_int))
+      return false;
+    ms_from_epoch = static_cast<double>(ms_from_epoch_as_int);
   }
   // The history service has seconds resolution, while javascript Date() has
   // milliseconds resolution.
-  double seconds_from_epoch = ms_from_epoch / 1000;
+  double seconds_from_epoch = ms_from_epoch / 1000.0;
   *time = base::Time::FromDoubleT(seconds_from_epoch);
   return true;
 }
@@ -242,7 +248,7 @@ bool SearchHistoryFunction::RunAsyncImpl() {
 
   // Initialize the HistoryQuery
   std::wstring search_text;
-  EXTENSION_FUNCTION_VALIDATE(json->GetString(keys::kSearchKey, &search_text));
+  EXTENSION_FUNCTION_VALIDATE(json->GetString(keys::kTextKey, &search_text));
 
   history::QueryOptions options;
   options.SetRecentDayRange(1);
@@ -335,8 +341,10 @@ bool DeleteRangeHistoryFunction::RunAsyncImpl() {
   base::Time end_time;
   EXTENSION_FUNCTION_VALIDATE(GetTimeFromValue(value, &end_time));
 
+  std::set<GURL> restrict_urls;
   HistoryService* hs = profile()->GetHistoryService(Profile::EXPLICIT_ACCESS);
   hs->ExpireHistoryBetween(
+      restrict_urls,
       begin_time,
       end_time,
       &cancelable_consumer_,
@@ -350,8 +358,10 @@ void DeleteRangeHistoryFunction::DeleteComplete() {
 }
 
 bool DeleteAllHistoryFunction::RunAsyncImpl() {
+  std::set<GURL> restrict_urls;
   HistoryService* hs = profile()->GetHistoryService(Profile::EXPLICIT_ACCESS);
   hs->ExpireHistoryBetween(
+      restrict_urls,
       base::Time::FromDoubleT(0),  // From the beginning of the epoch.
       base::Time::Now(),           // To the current time.
       &cancelable_consumer_,

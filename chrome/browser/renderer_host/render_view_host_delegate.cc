@@ -4,10 +4,15 @@
 
 #include "chrome/browser/renderer_host/render_view_host_delegate.h"
 
-#include "base/gfx/rect.h"
+#include "base/singleton.h"
 #include "chrome/common/renderer_preferences.h"
+#include "gfx/rect.h"
 #include "googleurl/src/gurl.h"
 #include "webkit/glue/webpreferences.h"
+
+#if defined(OS_LINUX)
+#include "chrome/browser/gtk/gtk_util.h"
+#endif
 
 RenderViewHostDelegate::View* RenderViewHostDelegate::GetViewDelegate() {
   return NULL;
@@ -42,13 +47,23 @@ RenderViewHostDelegate::GetFavIconDelegate() {
   return NULL;
 }
 
-RenderViewHostDelegate::FormFieldHistory*
-RenderViewHostDelegate::GetFormFieldHistoryDelegate() {
+RenderViewHostDelegate::Autocomplete*
+RenderViewHostDelegate::GetAutocompleteDelegate() {
   return NULL;
 }
 
 RenderViewHostDelegate::AutoFill*
 RenderViewHostDelegate::GetAutoFillDelegate() {
+  return NULL;
+}
+
+RenderViewHostDelegate::BookmarkDrag*
+RenderViewHostDelegate::GetBookmarkDragDelegate() {
+  return NULL;
+}
+
+AutomationResourceRoutingDelegate*
+RenderViewHostDelegate::GetAutomationResourceRoutingDelegate() {
   return NULL;
 }
 
@@ -62,10 +77,6 @@ TabContents* RenderViewHostDelegate::GetAsTabContents() {
 
 GURL RenderViewHostDelegate::GetAlternateErrorPageURL() const {
   return GURL();
-}
-
-RendererPreferences RenderViewHostDelegate::GetRendererPrefs() const {
-  return RendererPreferences();
 }
 
 WebPreferences RenderViewHostDelegate::GetWebkitPrefs() {

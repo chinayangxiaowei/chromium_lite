@@ -5,7 +5,7 @@
 #include <string>
 #include <vector>
 
-#include "base/task.h"
+#include "base/callback.h"
 #include "net/base/completion_callback.h"
 #include "net/base/io_buffer.h"
 #include "net/base/mock_host_resolver.h"
@@ -14,20 +14,23 @@
 #include "net/url_request/url_request_unittest.h"
 #include "net/websockets/websocket.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "testing/gmock/include/gmock/gmock.h"
 #include "testing/platform_test.h"
 
 struct WebSocketEvent {
   enum EventType {
-    EVENT_OPEN, EVENT_MESSAGE, EVENT_CLOSE,
+    EVENT_OPEN, EVENT_MESSAGE, EVENT_ERROR, EVENT_CLOSE,
   };
 
   WebSocketEvent(EventType type, net::WebSocket* websocket,
-                 const std::string& websocket_msg)
-      : event_type(type), socket(websocket), msg(websocket_msg) {}
+                 const std::string& websocket_msg, bool websocket_flag)
+      : event_type(type), socket(websocket), msg(websocket_msg),
+        flag(websocket_flag) {}
 
   EventType event_type;
   net::WebSocket* socket;
   std::string msg;
+  bool flag;
 };
 
 class WebSocketEventRecorder : public net::WebSocketDelegate {
@@ -35,11 +38,13 @@ class WebSocketEventRecorder : public net::WebSocketDelegate {
   explicit WebSocketEventRecorder(net::CompletionCallback* callback)
       : onopen_(NULL),
         onmessage_(NULL),
+        onerror_(NULL),
         onclose_(NULL),
         callback_(callback) {}
   virtual ~WebSocketEventRecorder() {
     delete onopen_;
     delete onmessage_;
+    delete onerror_;
     delete onclose_;
   }
 
@@ -55,20 +60,29 @@ class WebSocketEventRecorder : public net::WebSocketDelegate {
 
   virtual void OnOpen(net::WebSocket* socket) {
     events_.push_back(
-        WebSocketEvent(WebSocketEvent::EVENT_OPEN, socket, std::string()));
+        WebSocketEvent(WebSocketEvent::EVENT_OPEN, socket,
+                       std::string(), false));
     if (onopen_)
       onopen_->Run(&events_.back());
   }
 
   virtual void OnMessage(net::WebSocket* socket, const std::string& msg) {
     events_.push_back(
-        WebSocketEvent(WebSocketEvent::EVENT_MESSAGE, socket, msg));
+        WebSocketEvent(WebSocketEvent::EVENT_MESSAGE, socket, msg, false));
     if (onmessage_)
       onmessage_->Run(&events_.back());
   }
-  virtual void OnClose(net::WebSocket* socket) {
+  virtual void OnError(net::WebSocket* socket) {
     events_.push_back(
-        WebSocketEvent(WebSocketEvent::EVENT_CLOSE, socket, std::string()));
+        WebSocketEvent(WebSocketEvent::EVENT_ERROR, socket,
+                       std::string(), false));
+    if (onerror_)
+      onerror_->Run(&events_.back());
+  }
+  virtual void OnClose(net::WebSocket* socket, bool was_clean) {
+    events_.push_back(
+        WebSocketEvent(WebSocketEvent::EVENT_CLOSE, socket,
+                       std::string(), was_clean));
     if (onclose_)
       onclose_->Run(&events_.back());
     if (callback_)
@@ -87,6 +101,7 @@ class WebSocketEventRecorder : public net::WebSocketDelegate {
   std::vector<WebSocketEvent> events_;
   Callback1<WebSocketEvent*>::Type* onopen_;
   Callback1<WebSocketEvent*>::Type* onmessage_;
+  Callback1<WebSocketEvent*>::Type* onerror_;
   Callback1<WebSocketEvent*>::Type* onclose_;
   net::CompletionCallback* callback_;
 
@@ -147,7 +162,8 @@ TEST_F(WebSocketTest, Connect) {
               "WebSocket-Protocol: sample\r\n"
               "\r\n"),
   };
-  StaticSocketDataProvider data(data_reads, data_writes);
+  StaticSocketDataProvider data(data_reads, arraysize(data_reads),
+                                data_writes, arraysize(data_writes));
   mock_socket_factory.AddSocketDataProvider(&data);
 
   WebSocket::Request* request(
@@ -155,6 +171,7 @@ TEST_F(WebSocketTest, Connect) {
                              "sample",
                              "http://example.com",
                              "ws://example.com/demo",
+                             WebSocket::DRAFT75,
                              new TestURLRequestContext()));
   request->SetHostResolver(new MockHostResolver());
   request->SetClientSocketFactory(&mock_socket_factory);
@@ -207,7 +224,8 @@ TEST_F(WebSocketTest, ServerSentData) {
               "WebSocket-Protocol: sample\r\n"
               "\r\n"),
   };
-  StaticSocketDataProvider data(data_reads, data_writes);
+  StaticSocketDataProvider data(data_reads, arraysize(data_reads),
+                                data_writes, arraysize(data_writes));
   mock_socket_factory.AddSocketDataProvider(&data);
 
   WebSocket::Request* request(
@@ -215,6 +233,7 @@ TEST_F(WebSocketTest, ServerSentData) {
                              "sample",
                              "http://example.com",
                              "ws://example.com/demo",
+                             WebSocket::DRAFT75,
                              new TestURLRequestContext()));
   request->SetHostResolver(new MockHostResolver());
   request->SetClientSocketFactory(&mock_socket_factory);
@@ -249,6 +268,7 @@ TEST_F(WebSocketTest, ProcessFrameDataForLengthCalculation) {
                              "sample",
                              "http://example.com",
                              "ws://example.com/demo",
+                             WebSocket::DRAFT75,
                              new TestURLRequestContext()));
   TestCompletionCallback callback;
   scoped_ptr<WebSocketEventRecorder> delegate(
@@ -258,22 +278,24 @@ TEST_F(WebSocketTest, ProcessFrameDataForLengthCalculation) {
       new WebSocket(request, delegate.get()));
 
   // Frame data: skip length 1 ('x'), and try to skip length 129
-  // (1 * 128 + 1) bytes after second \x81, but buffer is too short to skip.
+  // (1 * 128 + 1) bytes after \x81\x01, but buffer is too short to skip.
   static const char kTestLengthFrame[] =
-      "\x80\x81x\x80\x81\x81\x01\x00unexpected data\xFF";
+      "\x80\x01x\x80\x81\x01\x01\x00unexpected data\xFF";
   const int kTestLengthFrameLength = sizeof(kTestLengthFrame) - 1;
   InitReadBuf(websocket.get());
   AddToReadBuf(websocket.get(), kTestLengthFrame, kTestLengthFrameLength);
   SetReadConsumed(websocket.get(), 0);
 
   static const char kExpectedRemainingFrame[] =
-      "\x80\x81\x81\x01\x00unexpected data\xFF";
+      "\x80\x81\x01\x01\x00unexpected data\xFF";
   const int kExpectedRemainingLength = sizeof(kExpectedRemainingFrame) - 1;
   TestProcessFrameData(websocket.get(),
                        kExpectedRemainingFrame, kExpectedRemainingLength);
   // No onmessage event expected.
   const std::vector<WebSocketEvent>& events = delegate->GetSeenEvents();
-  EXPECT_EQ(0U, events.size());
+  EXPECT_EQ(1U, events.size());
+
+  EXPECT_EQ(WebSocketEvent::EVENT_ERROR, events[0].event_type);
 
   websocket->DetachDelegate();
 }
@@ -284,6 +306,7 @@ TEST_F(WebSocketTest, ProcessFrameDataForUnterminatedString) {
                              "sample",
                              "http://example.com",
                              "ws://example.com/demo",
+                             WebSocket::DRAFT75,
                              new TestURLRequestContext()));
   TestCompletionCallback callback;
   scoped_ptr<WebSocketEventRecorder> delegate(

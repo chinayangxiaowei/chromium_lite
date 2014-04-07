@@ -10,11 +10,12 @@
 #include "chrome/browser/browser.h"
 #include "chrome/browser/browser_list.h"
 #include "chrome/browser/google_service_auth_error.h"
+#include "chrome/browser/pref_service.h"
+#include "chrome/browser/sync/profile_sync_factory_mock.h"
 #include "chrome/browser/sync/profile_sync_service.h"
 #include "chrome/browser/sync/sync_setup_flow.h"
 #include "chrome/browser/sync/sync_setup_wizard.h"
 #include "chrome/common/pref_names.h"
-#include "chrome/common/pref_service.h"
 #include "chrome/test/browser_with_test_window_test.h"
 #include "chrome/test/testing_profile.h"
 #include "chrome/test/test_browser_window.h"
@@ -29,9 +30,10 @@ typedef GoogleServiceAuthError AuthError;
 // A PSS subtype to inject.
 class ProfileSyncServiceForWizardTest : public ProfileSyncService {
  public:
-  explicit ProfileSyncServiceForWizardTest(Profile* profile)
-    : ProfileSyncService(profile), user_accepted_merge_and_sync_(false),
-      user_cancelled_dialog_(false) {
+  ProfileSyncServiceForWizardTest(ProfileSyncFactory* factory, Profile* profile)
+      : ProfileSyncService(factory, profile, false),
+        user_accepted_merge_and_sync_(false),
+        user_cancelled_dialog_(false) {
     RegisterPreferences();
   }
 
@@ -82,13 +84,14 @@ class ProfileSyncServiceForWizardTest : public ProfileSyncService {
 class TestingProfileWithSyncService : public TestingProfile {
  public:
   TestingProfileWithSyncService() {
-    sync_service_.reset(new ProfileSyncServiceForWizardTest(this));
+    sync_service_.reset(new ProfileSyncServiceForWizardTest(&factory_, this));
   }
 
   virtual ProfileSyncService* GetProfileSyncService() {
     return sync_service_.get();
   }
  private:
+  ProfileSyncFactoryMock factory_;
   scoped_ptr<ProfileSyncService> sync_service_;
 };
 
@@ -186,7 +189,19 @@ class SyncSetupWizardTest : public BrowserWithTestWindowTest {
   ProfileSyncServiceForWizardTest* service_;
 };
 
+// See http://code.google.com/p/chromium/issues/detail?id=40715 for
+// why we skip the below tests on OS X.  We don't use DISABLED_ as we
+// would have to change the corresponding FRIEND_TEST() declarations.
+
+#if defined(OS_MACOSX)
+#define SKIP_TEST_ON_MACOSX() \
+  do { LOG(WARNING) << "Test skipped on OS X"; return; } while (0)
+#else
+#define SKIP_TEST_ON_MACOSX() do {} while (0)
+#endif
+
 TEST_F(SyncSetupWizardTest, InitialStepLogin) {
+  SKIP_TEST_ON_MACOSX();
   DictionaryValue dialog_args;
   SyncSetupFlow::GetArgsForGaiaLogin(service_, &dialog_args);
   std::string json_start_args;
@@ -228,7 +243,7 @@ TEST_F(SyncSetupWizardTest, InitialStepLogin) {
   EXPECT_EQ(SyncSetupWizard::GAIA_LOGIN, test_window_->flow()->current_state_);
   dialog_args.Clear();
   SyncSetupFlow::GetArgsForGaiaLogin(service_, &dialog_args);
-  EXPECT_EQ(3U, dialog_args.size());
+  EXPECT_EQ(4U, dialog_args.size());
   std::string actual_user;
   dialog_args.GetString(L"user", &actual_user);
   EXPECT_EQ(kTestUser, actual_user);
@@ -243,7 +258,7 @@ TEST_F(SyncSetupWizardTest, InitialStepLogin) {
   service_->set_auth_state(kTestUser, captcha_error);
   wizard_->Step(SyncSetupWizard::GAIA_LOGIN);
   SyncSetupFlow::GetArgsForGaiaLogin(service_, &dialog_args);
-  EXPECT_EQ(3U, dialog_args.size());
+  EXPECT_EQ(4U, dialog_args.size());
   std::string captcha_url;
   dialog_args.GetString(L"captchaUrl", &captcha_url);
   EXPECT_EQ(kTestCaptchaUrl, GURL(captcha_url).spec());
@@ -265,36 +280,8 @@ TEST_F(SyncSetupWizardTest, InitialStepLogin) {
   EXPECT_EQ(SyncSetupWizard::DONE, test_window_->flow()->current_state_);
 }
 
-TEST_F(SyncSetupWizardTest, InitialStepMergeAndSync) {
-  wizard_->Step(SyncSetupWizard::GAIA_LOGIN);
-  EXPECT_TRUE(wizard_->IsVisible());
-  EXPECT_TRUE(test_window_->TestAndResetWasShowHTMLDialogCalled());
-  EXPECT_EQ(SyncSetupWizard::DONE, test_window_->flow()->end_state_);
-
-  wizard_->Step(SyncSetupWizard::GAIA_SUCCESS);
-  wizard_->Step(SyncSetupWizard::MERGE_AND_SYNC);
-  EXPECT_TRUE(wizard_->IsVisible());
-  EXPECT_FALSE(test_window_->TestAndResetWasShowHTMLDialogCalled());
-  EXPECT_EQ(SyncSetupWizard::MERGE_AND_SYNC,
-            test_window_->flow()->current_state_);
-
-  test_window_->flow()->flow_handler_->HandleSubmitMergeAndSync(NULL);
-  EXPECT_TRUE(wizard_->IsVisible());
-  EXPECT_EQ(SyncSetupWizard::MERGE_AND_SYNC,
-            test_window_->flow()->current_state_);
-  EXPECT_EQ(std::string(), service_->username_);
-  EXPECT_EQ(std::string(), service_->password_);
-  EXPECT_TRUE(service_->user_accepted_merge_and_sync_);
-  EXPECT_FALSE(service_->user_cancelled_dialog_);
-  service_->ResetTestStats();
-  wizard_->Step(SyncSetupWizard::DONE_FIRST_TIME);  // No merge and sync.
-  EXPECT_TRUE(wizard_->IsVisible());
-  EXPECT_FALSE(test_window_->TestAndResetWasShowHTMLDialogCalled());
-  EXPECT_EQ(SyncSetupWizard::DONE_FIRST_TIME,
-            test_window_->flow()->current_state_);
-}
-
 TEST_F(SyncSetupWizardTest, DialogCancelled) {
+  SKIP_TEST_ON_MACOSX();
   wizard_->Step(SyncSetupWizard::GAIA_LOGIN);
   // Simulate the user closing the dialog.
   test_window_->CloseDialog();
@@ -310,7 +297,6 @@ TEST_F(SyncSetupWizardTest, DialogCancelled) {
   wizard_->Step(SyncSetupWizard::GAIA_LOGIN);
   EXPECT_FALSE(test_window_->TestAndResetWasShowHTMLDialogCalled());
 
-  wizard_->Step(SyncSetupWizard::MERGE_AND_SYNC);
   test_window_->CloseDialog();
   EXPECT_FALSE(wizard_->IsVisible());
   EXPECT_TRUE(service_->user_cancelled_dialog_);
@@ -320,6 +306,7 @@ TEST_F(SyncSetupWizardTest, DialogCancelled) {
 }
 
 TEST_F(SyncSetupWizardTest, InvalidTransitions) {
+  SKIP_TEST_ON_MACOSX();
   wizard_->Step(SyncSetupWizard::GAIA_SUCCESS);
   EXPECT_FALSE(wizard_->IsVisible());
   EXPECT_FALSE(test_window_->TestAndResetWasShowHTMLDialogCalled());
@@ -333,8 +320,6 @@ TEST_F(SyncSetupWizardTest, InvalidTransitions) {
   EXPECT_FALSE(test_window_->TestAndResetWasShowHTMLDialogCalled());
 
   wizard_->Step(SyncSetupWizard::GAIA_LOGIN);
-  wizard_->Step(SyncSetupWizard::MERGE_AND_SYNC);
-  EXPECT_EQ(SyncSetupWizard::GAIA_LOGIN, test_window_->flow()->current_state_);
 
   wizard_->Step(SyncSetupWizard::DONE);
   EXPECT_EQ(SyncSetupWizard::GAIA_LOGIN, test_window_->flow()->current_state_);
@@ -342,22 +327,15 @@ TEST_F(SyncSetupWizardTest, InvalidTransitions) {
   EXPECT_EQ(SyncSetupWizard::GAIA_LOGIN, test_window_->flow()->current_state_);
 
   wizard_->Step(SyncSetupWizard::GAIA_SUCCESS);
-  wizard_->Step(SyncSetupWizard::MERGE_AND_SYNC);
-  EXPECT_EQ(SyncSetupWizard::MERGE_AND_SYNC,
-            test_window_->flow()->current_state_);
-
-  wizard_->Step(SyncSetupWizard::GAIA_SUCCESS);
-  EXPECT_EQ(SyncSetupWizard::MERGE_AND_SYNC,
-            test_window_->flow()->current_state_);
 
   wizard_->Step(SyncSetupWizard::FATAL_ERROR);
   EXPECT_EQ(SyncSetupWizard::FATAL_ERROR, test_window_->flow()->current_state_);
 }
 
 TEST_F(SyncSetupWizardTest, FullSuccessfulRunSetsPref) {
+  SKIP_TEST_ON_MACOSX();
   wizard_->Step(SyncSetupWizard::GAIA_LOGIN);
   wizard_->Step(SyncSetupWizard::GAIA_SUCCESS);
-  wizard_->Step(SyncSetupWizard::MERGE_AND_SYNC);
   wizard_->Step(SyncSetupWizard::DONE);
   test_window_->CloseDialog();
   EXPECT_FALSE(wizard_->IsVisible());
@@ -366,9 +344,9 @@ TEST_F(SyncSetupWizardTest, FullSuccessfulRunSetsPref) {
 }
 
 TEST_F(SyncSetupWizardTest, FirstFullSuccessfulRunSetsPref) {
+  SKIP_TEST_ON_MACOSX();
   wizard_->Step(SyncSetupWizard::GAIA_LOGIN);
   wizard_->Step(SyncSetupWizard::GAIA_SUCCESS);
-  wizard_->Step(SyncSetupWizard::MERGE_AND_SYNC);
   wizard_->Step(SyncSetupWizard::DONE_FIRST_TIME);
   test_window_->CloseDialog();
   EXPECT_FALSE(wizard_->IsVisible());
@@ -377,11 +355,11 @@ TEST_F(SyncSetupWizardTest, FirstFullSuccessfulRunSetsPref) {
 }
 
 TEST_F(SyncSetupWizardTest, DiscreteRun) {
+  SKIP_TEST_ON_MACOSX();
   DictionaryValue dialog_args;
   // For a discrete run, we need to have ran through setup once.
   wizard_->Step(SyncSetupWizard::GAIA_LOGIN);
   wizard_->Step(SyncSetupWizard::GAIA_SUCCESS);
-  wizard_->Step(SyncSetupWizard::MERGE_AND_SYNC);
   wizard_->Step(SyncSetupWizard::DONE);
   test_window_->CloseDialog();
   EXPECT_TRUE(test_window_->TestAndResetWasShowHTMLDialogCalled());
@@ -394,7 +372,7 @@ TEST_F(SyncSetupWizardTest, DiscreteRun) {
   wizard_->Step(SyncSetupWizard::GAIA_LOGIN);
   EXPECT_TRUE(wizard_->IsVisible());
   SyncSetupFlow::GetArgsForGaiaLogin(service_, &dialog_args);
-  EXPECT_EQ(3U, dialog_args.size());
+  EXPECT_EQ(4U, dialog_args.size());
   std::string actual_user;
   dialog_args.GetString(L"user", &actual_user);
   EXPECT_EQ(kTestUser, actual_user);
@@ -406,3 +384,5 @@ TEST_F(SyncSetupWizardTest, DiscreteRun) {
   wizard_->Step(SyncSetupWizard::GAIA_SUCCESS);
   EXPECT_TRUE(test_window_->TestAndResetWasShowHTMLDialogCalled());
 }
+
+#undef SKIP_TEST_ON_MACOSX

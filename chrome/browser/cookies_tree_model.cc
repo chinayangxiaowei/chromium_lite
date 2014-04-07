@@ -12,8 +12,11 @@
 #include "app/resource_bundle.h"
 #include "app/table_model_observer.h"
 #include "app/tree_node_model.h"
+#include "base/callback.h"
+#include "base/i18n/rtl.h"
 #include "base/linked_ptr.h"
 #include "base/string_util.h"
+#include "chrome/browser/extensions/extensions_service.h"
 #include "chrome/browser/in_process_webkit/webkit_context.h"
 #include "chrome/browser/net/chrome_url_request_context.h"
 #include "chrome/browser/profile.h"
@@ -25,6 +28,7 @@
 #include "net/url_request/url_request_context.h"
 #include "third_party/skia/include/core/SkBitmap.h"
 
+static const char kFileOriginNodeName[] = "file://";
 
 ///////////////////////////////////////////////////////////////////////////////
 // CookieTreeNode, public:
@@ -75,12 +79,12 @@ class OriginNodeComparator {
     // google.com, ad.google.com, www.google.com,
     // microsoft.com, ad.microsoft.com. CanonicalizeHost transforms the origins
     // into a form like google.com.www so that string comparisons work.
-    return (CanonicalizeHost(lhs->GetTitle()) <
-            CanonicalizeHost(rhs->GetTitle()));
+    return (CanonicalizeHost(lhs->GetTitleAsString16()) <
+            CanonicalizeHost(rhs->GetTitleAsString16()));
   }
 
  private:
-  static std::string CanonicalizeHost(const std::wstring& host_w) {
+  static std::string CanonicalizeHost(const string16& host16) {
     // The canonicalized representation makes the registry controlled domain
     // come first, and then adds subdomains in reverse order, e.g.
     // 1.mail.google.com would become google.com.mail.1, and then a standard
@@ -88,7 +92,7 @@ class OriginNodeComparator {
     // first. Leading dots are ignored, ".google.com" is the same as
     // "google.com".
 
-    std::string host = WideToUTF8(host_w);
+    std::string host = UTF16ToUTF8(host16);
     std::string retval = net::RegistryControlledDomainService::
         GetDomainAndRegistry(host);
     if (!retval.length())  // Is an IP address or other special origin.
@@ -125,13 +129,28 @@ class OriginNodeComparator {
 }  // namespace
 
 ///////////////////////////////////////////////////////////////////////////////
+// CookieTreeAppCacheNode, public:
+
+CookieTreeAppCacheNode::CookieTreeAppCacheNode(
+    const appcache::AppCacheInfo* appcache_info)
+    : CookieTreeNode(UTF8ToWide(appcache_info->manifest_url.spec())),
+      appcache_info_(appcache_info) {
+}
+
+void CookieTreeAppCacheNode::DeleteStoredObjects() {
+  DCHECK(GetModel()->appcache_helper_);
+  GetModel()->appcache_helper_->DeleteAppCacheGroup(
+      appcache_info_->manifest_url);
+}
+
+///////////////////////////////////////////////////////////////////////////////
 // CookieTreeDatabaseNode, public:
 
 CookieTreeDatabaseNode::CookieTreeDatabaseNode(
     BrowsingDataDatabaseHelper::DatabaseInfo* database_info)
-    : CookieTreeNode(UTF8ToWide(database_info->database_name.empty() ?
-          database_info->origin_identifier :
-          database_info->database_name)),
+    : CookieTreeNode(database_info->database_name.empty() ?
+          l10n_util::GetString(IDS_COOKIES_WEB_DATABASE_UNNAMED_NAME) :
+          UTF8ToWide(database_info->database_name)),
       database_info_(database_info) {
 }
 
@@ -161,7 +180,7 @@ void CookieTreeLocalStorageNode::DeleteStoredObjects() {
 // CookieTreeRootNode, public:
 CookieTreeOriginNode* CookieTreeRootNode::GetOrCreateOriginNode(
     const std::wstring& origin) {
-  // Strip the trailing dot if it exists.
+  // Strip the leading dot if it exists.
   std::wstring rewritten_origin = origin;
   if (origin.length() >= 1 && origin[0] == '.')
     rewritten_origin = origin.substr(1);
@@ -192,55 +211,48 @@ CookieTreeOriginNode* CookieTreeRootNode::GetOrCreateOriginNode(
 CookieTreeCookiesNode* CookieTreeOriginNode::GetOrCreateCookiesNode() {
   if (cookies_child_)
     return cookies_child_;
-  // need to make a Cookies node, add it to the tree, and return it
-  CookieTreeCookiesNode* retval = new CookieTreeCookiesNode;
-  GetModel()->Add(this, 0, retval);
-  cookies_child_ = retval;
-  return retval;
+  cookies_child_ = new CookieTreeCookiesNode;
+  AddChildSortedByTitle(cookies_child_);
+  return cookies_child_;
 }
 
-CookieTreeDatabasesNode*
-    CookieTreeOriginNode::GetOrCreateDatabasesNode() {
+CookieTreeDatabasesNode* CookieTreeOriginNode::GetOrCreateDatabasesNode() {
   if (databases_child_)
     return databases_child_;
-  // Need to make a Database node, add it to the tree, and return it.
-  CookieTreeDatabasesNode* retval = new CookieTreeDatabasesNode;
-  GetModel()->Add(this, cookies_child_ ? 1 : 0, retval);
-  databases_child_ = retval;
-  return retval;
+  databases_child_ = new CookieTreeDatabasesNode;
+  AddChildSortedByTitle(databases_child_);
+  return databases_child_;
 }
 
 CookieTreeLocalStoragesNode*
     CookieTreeOriginNode::GetOrCreateLocalStoragesNode() {
   if (local_storages_child_)
     return local_storages_child_;
-  // Need to make a LocalStorages node, add it to the tree, and return it.
-  CookieTreeLocalStoragesNode* retval = new CookieTreeLocalStoragesNode;
-  int index = 0;
-  if (cookies_child_)
-    ++index;
-  if (databases_child_)
-    ++index;
-  GetModel()->Add(this, index, retval);
-  local_storages_child_ = retval;
-  return retval;
+  local_storages_child_ = new CookieTreeLocalStoragesNode;
+  AddChildSortedByTitle(local_storages_child_);
+  return local_storages_child_;
+}
+
+CookieTreeAppCachesNode* CookieTreeOriginNode::GetOrCreateAppCachesNode() {
+  if (appcaches_child_)
+    return appcaches_child_;
+  appcaches_child_ = new CookieTreeAppCachesNode;
+  AddChildSortedByTitle(appcaches_child_);
+  return appcaches_child_;
 }
 
 ///////////////////////////////////////////////////////////////////////////////
 // CookieTreeCookiesNode, public:
 
 CookieTreeCookiesNode::CookieTreeCookiesNode()
-    : CookieTreeNode(l10n_util::GetString(IDS_COOKIES_COOKIES)) {}
+    : CookieTreeNode(l10n_util::GetString(IDS_COOKIES_COOKIES)) {
+}
 
+///////////////////////////////////////////////////////////////////////////////
+// CookieTreeAppCachesNode, public:
 
-void CookieTreeCookiesNode::AddCookieNode(
-    CookieTreeCookieNode* new_child) {
-  std::vector<CookieTreeNode*>::iterator cookie_iterator =
-      lower_bound(children().begin(),
-                  children().end(),
-                  new_child,
-                  CookieTreeCookieNode::CookieNodeComparator());
-  GetModel()->Add(this, (cookie_iterator - children().begin()), new_child);
+CookieTreeAppCachesNode::CookieTreeAppCachesNode()
+    : CookieTreeNode(l10n_util::GetString(IDS_COOKIES_APPLICATION_CACHES)) {
 }
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -250,18 +262,6 @@ CookieTreeDatabasesNode::CookieTreeDatabasesNode()
     : CookieTreeNode(l10n_util::GetString(IDS_COOKIES_WEB_DATABASES)) {
 }
 
-void CookieTreeDatabasesNode::AddDatabaseNode(
-    CookieTreeDatabaseNode* new_child) {
-  std::vector<CookieTreeNode*>::iterator database_iterator =
-      lower_bound(children().begin(),
-                  children().end(),
-                  new_child,
-                  CookieTreeDatabaseNode::CookieNodeComparator());
-  GetModel()->Add(this,
-                  (database_iterator - children().begin()),
-                  new_child);
-}
-
 ///////////////////////////////////////////////////////////////////////////////
 // CookieTreeLocalStoragesNode, public:
 
@@ -269,54 +269,25 @@ CookieTreeLocalStoragesNode::CookieTreeLocalStoragesNode()
     : CookieTreeNode(l10n_util::GetString(IDS_COOKIES_LOCAL_STORAGE)) {
 }
 
-void CookieTreeLocalStoragesNode::AddLocalStorageNode(
-    CookieTreeLocalStorageNode* new_child) {
-  std::vector<CookieTreeNode*>::iterator local_storage_iterator =
+///////////////////////////////////////////////////////////////////////////////
+// CookieTreeNode, protected
+
+bool CookieTreeNode::NodeTitleComparator::operator() (
+    const CookieTreeNode* lhs, const CookieTreeNode* rhs) {
+  const CookieTreeNode* left =
+      static_cast<const CookieTreeNode*>(lhs);
+  const CookieTreeNode* right =
+      static_cast<const CookieTreeNode*>(rhs);
+  return (left->GetTitleAsString16() < right->GetTitleAsString16());
+}
+
+void CookieTreeNode::AddChildSortedByTitle(CookieTreeNode* new_child) {
+  std::vector<CookieTreeNode*>::iterator iter =
       lower_bound(children().begin(),
                   children().end(),
                   new_child,
-                  CookieTreeLocalStorageNode::CookieNodeComparator());
-  GetModel()->Add(this,
-                  (local_storage_iterator - children().begin()),
-                  new_child);
-}
-
-///////////////////////////////////////////////////////////////////////////////
-// CookieTreeCookieNode, private
-
-bool CookieTreeCookieNode::CookieNodeComparator::operator() (
-    const CookieTreeNode* lhs, const CookieTreeNode* rhs) {
-  const CookieTreeCookieNode* left =
-      static_cast<const CookieTreeCookieNode*>(lhs);
-  const CookieTreeCookieNode* right =
-      static_cast<const CookieTreeCookieNode*>(rhs);
-  return (left->cookie_->second.Name() < right->cookie_->second.Name());
-}
-
-///////////////////////////////////////////////////////////////////////////////
-// CookieTreeDatabaseNode, private
-
-bool CookieTreeDatabaseNode::CookieNodeComparator::operator() (
-    const CookieTreeNode* lhs, const CookieTreeNode* rhs) {
-  const CookieTreeDatabaseNode* left  =
-      static_cast<const CookieTreeDatabaseNode*>(lhs);
-  const CookieTreeDatabaseNode* right =
-      static_cast<const CookieTreeDatabaseNode*>(rhs);
-  return (left->database_info_->database_name <
-          right->database_info_->database_name);
-}
-
-///////////////////////////////////////////////////////////////////////////////
-// CookieTreeLocalStorageNode, private
-
-bool CookieTreeLocalStorageNode::CookieNodeComparator::operator() (
-    const CookieTreeNode* lhs, const CookieTreeNode* rhs) {
-  const CookieTreeLocalStorageNode* left  =
-      static_cast<const CookieTreeLocalStorageNode*>(lhs);
-  const CookieTreeLocalStorageNode* right =
-      static_cast<const CookieTreeLocalStorageNode*>(rhs);
-  return (left->local_storage_info_->origin <
-          right->local_storage_info_->origin);
+                  NodeTitleComparator());
+  GetModel()->Add(this, iter - children().begin(), new_child);
 }
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -325,12 +296,15 @@ bool CookieTreeLocalStorageNode::CookieNodeComparator::operator() (
 CookiesTreeModel::CookiesTreeModel(
     Profile* profile,
     BrowsingDataDatabaseHelper* database_helper,
-    BrowsingDataLocalStorageHelper* local_storage_helper)
+    BrowsingDataLocalStorageHelper* local_storage_helper,
+    BrowsingDataAppCacheHelper* appcache_helper)
     : ALLOW_THIS_IN_INITIALIZER_LIST(TreeNodeModel<CookieTreeNode>(
           new CookieTreeRootNode(this))),
       profile_(profile),
+      appcache_helper_(appcache_helper),
       database_helper_(database_helper),
-      local_storage_helper_(local_storage_helper) {
+      local_storage_helper_(local_storage_helper),
+      batch_update_(0) {
   LoadCookies();
   DCHECK(database_helper_);
   database_helper_->StartFetching(NewCallback(
@@ -338,11 +312,20 @@ CookiesTreeModel::CookiesTreeModel(
   DCHECK(local_storage_helper_);
   local_storage_helper_->StartFetching(NewCallback(
       this, &CookiesTreeModel::OnStorageModelInfoLoaded));
+
+  // TODO(michaeln): when all of the ui impls have been updated,
+  // make this a required parameter.
+  if (appcache_helper_) {
+    appcache_helper_->StartFetching(NewCallback(
+        this, &CookiesTreeModel::OnAppCacheModelInfoLoaded));
+  }
 }
 
 CookiesTreeModel::~CookiesTreeModel() {
   database_helper_->CancelNotification();
   local_storage_helper_->CancelNotification();
+  if (appcache_helper_)
+    appcache_helper_->CancelNotification();
 }
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -356,6 +339,8 @@ void CookiesTreeModel::GetIcons(std::vector<SkBitmap>* icons) {
       IDR_DEFAULT_FAVICON));
   icons->push_back(*ResourceBundle::GetSharedInstance().GetBitmapNamed(
       IDR_COOKIE_ICON));
+  icons->push_back(*ResourceBundle::GetSharedInstance().GetBitmapNamed(
+      IDR_COOKIE_STORAGE_ICON));
 }
 
 // Returns the index of the icon to use for |node|. Return -1 to use the
@@ -371,9 +356,14 @@ int CookiesTreeModel::GetIconIndex(TreeModelNode* node) {
       return COOKIE;
       break;
     case CookieTreeNode::DetailedInfo::TYPE_DATABASE:
-      // TODO(jochen): add an icon for databases.
+      return DATABASE;
+      break;
     case CookieTreeNode::DetailedInfo::TYPE_LOCAL_STORAGE:
-      // TODO(bulach): add an icon for local storage.
+      return DATABASE;  // close enough
+      break;
+    case CookieTreeNode::DetailedInfo::TYPE_APPCACHE:
+      return DATABASE;  // ditto
+      break;
     default:
       return -1;
   }
@@ -393,14 +383,14 @@ void CookiesTreeModel::LoadCookiesWithFilter(const std::wstring& filter) {
   all_cookies_ = cookie_monster->GetAllCookies();
   CookieTreeRootNode* root = static_cast<CookieTreeRootNode*>(GetRoot());
   for (CookieList::iterator it = all_cookies_.begin();
-       it != all_cookies_.end();
-       ++it) {
-    // Get the origin cookie
+       it != all_cookies_.end(); ++it) {
+    std::wstring origin_node_name = UTF8ToWide(it->first);
     if (!filter.size() ||
-        (UTF8ToWide(it->first).find(filter) != std::wstring::npos)) {
-      CookieTreeOriginNode* origin =
-          root->GetOrCreateOriginNode(UTF8ToWide(it->first));
-      CookieTreeCookiesNode* cookies_node = origin->GetOrCreateCookiesNode();
+        (origin_node_name.find(filter) != std::wstring::npos)) {
+      CookieTreeOriginNode* origin_node =
+          root->GetOrCreateOriginNode(origin_node_name);
+      CookieTreeCookiesNode* cookies_node =
+          origin_node->GetOrCreateCookiesNode();
       CookieTreeCookieNode* new_cookie = new CookieTreeCookieNode(&*it);
       cookies_node->AddCookieNode(new_cookie);
     }
@@ -408,13 +398,14 @@ void CookiesTreeModel::LoadCookiesWithFilter(const std::wstring& filter) {
 }
 
 void CookiesTreeModel::DeleteAllStoredObjects() {
+  NotifyObserverBeginBatch();
   CookieTreeNode* root = GetRoot();
   root->DeleteStoredObjects();
   int num_children = root->GetChildCount();
   for (int i = num_children - 1; i >= 0; --i)
     delete Remove(root, i);
-  LoadCookies();
   NotifyObserverTreeNodeChanged(root);
+  NotifyObserverEndBatch();
 }
 
 void CookiesTreeModel::DeleteCookieNode(CookieTreeNode* cookie_node) {
@@ -428,12 +419,65 @@ void CookiesTreeModel::DeleteCookieNode(CookieTreeNode* cookie_node) {
 void CookiesTreeModel::UpdateSearchResults(const std::wstring& filter) {
   CookieTreeNode* root = GetRoot();
   int num_children = root->GetChildCount();
+  NotifyObserverBeginBatch();
   for (int i = num_children - 1; i >= 0; --i)
     delete Remove(root, i);
   LoadCookiesWithFilter(filter);
   PopulateDatabaseInfoWithFilter(filter);
   PopulateLocalStorageInfoWithFilter(filter);
+  PopulateAppCacheInfoWithFilter(filter);
   NotifyObserverTreeNodeChanged(root);
+  NotifyObserverEndBatch();
+}
+
+void CookiesTreeModel::AddObserver(Observer* observer) {
+  cookies_observer_list_.AddObserver(observer);
+  // Call super so that TreeNodeModel can notify, too.
+  TreeNodeModel<CookieTreeNode>::AddObserver(observer);
+}
+
+void CookiesTreeModel::RemoveObserver(Observer* observer) {
+  cookies_observer_list_.RemoveObserver(observer);
+  // Call super so that TreeNodeModel doesn't have dead pointers.
+  TreeNodeModel<CookieTreeNode>::RemoveObserver(observer);
+}
+
+void CookiesTreeModel::OnAppCacheModelInfoLoaded() {
+  appcache_info_ = appcache_helper_->info_collection();
+  PopulateAppCacheInfoWithFilter(std::wstring());
+}
+
+void CookiesTreeModel::PopulateAppCacheInfoWithFilter(
+    const std::wstring& filter) {
+  using appcache::AppCacheInfo;
+  using appcache::AppCacheInfoVector;
+  typedef std::map<GURL, AppCacheInfoVector> InfoByOrigin;
+
+  if (!appcache_info_ || appcache_info_->infos_by_origin.empty())
+    return;
+
+  CookieTreeRootNode* root = static_cast<CookieTreeRootNode*>(GetRoot());
+  NotifyObserverBeginBatch();
+  for (InfoByOrigin::const_iterator origin =
+           appcache_info_->infos_by_origin.begin();
+       origin != appcache_info_->infos_by_origin.end(); ++origin) {
+    std::wstring origin_node_name = UTF8ToWide(origin->first.host());
+    if (filter.empty() ||
+        (origin_node_name.find(filter) != std::wstring::npos)) {
+      CookieTreeOriginNode* origin_node =
+          root->GetOrCreateOriginNode(origin_node_name);
+      CookieTreeAppCachesNode* appcaches_node =
+          origin_node->GetOrCreateAppCachesNode();
+
+      for (AppCacheInfoVector::const_iterator info = origin->second.begin();
+           info != origin->second.end(); ++info) {
+        appcaches_node->AddAppCacheNode(
+            new CookieTreeAppCacheNode(&(*info)));
+      }
+    }
+  }
+  NotifyObserverTreeNodeChanged(root);
+  NotifyObserverEndBatch();
 }
 
 void CookiesTreeModel::OnDatabaseModelInfoLoaded(
@@ -444,16 +488,24 @@ void CookiesTreeModel::OnDatabaseModelInfoLoaded(
 
 void CookiesTreeModel::PopulateDatabaseInfoWithFilter(
     const std::wstring& filter) {
+  if (database_info_list_.empty())
+    return;
   CookieTreeRootNode* root = static_cast<CookieTreeRootNode*>(GetRoot());
+  NotifyObserverBeginBatch();
   for (DatabaseInfoList::iterator database_info = database_info_list_.begin();
        database_info != database_info_list_.end();
        ++database_info) {
-    std::string origin = database_info->host.empty() ?
-        database_info->origin_identifier : database_info->host;
+    // Determine which 'origin' node to place each 'info' in.
+    std::wstring origin_node_name;
+    if (database_info->IsFileSchemeData())
+      origin_node_name = UTF8ToWide(kFileOriginNodeName);
+    else
+      origin_node_name = UTF8ToWide(database_info->host);
+
     if (!filter.size() ||
-        (UTF8ToWide(origin).find(filter) != std::wstring::npos)) {
-      CookieTreeOriginNode* origin_node = root->GetOrCreateOriginNode(
-          UTF8ToWide(database_info->host));
+        (origin_node_name.find(filter) != std::wstring::npos)) {
+      CookieTreeOriginNode* origin_node =
+          root->GetOrCreateOriginNode(origin_node_name);
       CookieTreeDatabasesNode* databases_node =
           origin_node->GetOrCreateDatabasesNode();
       databases_node->AddDatabaseNode(
@@ -461,6 +513,7 @@ void CookiesTreeModel::PopulateDatabaseInfoWithFilter(
     }
   }
   NotifyObserverTreeNodeChanged(root);
+  NotifyObserverEndBatch();
 }
 
 void CookiesTreeModel::OnStorageModelInfoLoaded(
@@ -471,17 +524,25 @@ void CookiesTreeModel::OnStorageModelInfoLoaded(
 
 void CookiesTreeModel::PopulateLocalStorageInfoWithFilter(
     const std::wstring& filter) {
+  if (local_storage_info_list_.empty())
+    return;
   CookieTreeRootNode* root = static_cast<CookieTreeRootNode*>(GetRoot());
+  NotifyObserverBeginBatch();
   for (LocalStorageInfoList::iterator local_storage_info =
        local_storage_info_list_.begin();
        local_storage_info != local_storage_info_list_.end();
        ++local_storage_info) {
-    std::string origin = local_storage_info->host.empty() ?
-        local_storage_info->database_identifier : local_storage_info->host;
+    // Determine which 'origin' node to place each 'info' in.
+    std::wstring origin_node_name;
+    if (local_storage_info->IsFileSchemeData())
+      origin_node_name = UTF8ToWide(kFileOriginNodeName);
+    else
+      origin_node_name = UTF8ToWide(local_storage_info->host);
+
     if (!filter.size() ||
-        (UTF8ToWide(origin).find(filter) != std::wstring::npos)) {
-      CookieTreeOriginNode* origin_node = root->GetOrCreateOriginNode(
-          UTF8ToWide(local_storage_info->host));
+        (origin_node_name.find(filter) != std::wstring::npos)) {
+      CookieTreeOriginNode* origin_node =
+          root->GetOrCreateOriginNode(origin_node_name);
       CookieTreeLocalStoragesNode* local_storages_node =
           origin_node->GetOrCreateLocalStoragesNode();
       local_storages_node->AddLocalStorageNode(
@@ -489,4 +550,24 @@ void CookiesTreeModel::PopulateLocalStorageInfoWithFilter(
     }
   }
   NotifyObserverTreeNodeChanged(root);
+  NotifyObserverEndBatch();
+}
+
+void CookiesTreeModel::NotifyObserverBeginBatch() {
+  // Only notify the model once if we're batching in a nested manner.
+  if (batch_update_++ == 0) {
+    FOR_EACH_OBSERVER(Observer,
+                      cookies_observer_list_,
+                      TreeModelBeginBatch(this));
+  }
+}
+
+void CookiesTreeModel::NotifyObserverEndBatch() {
+  // Only notify the observers if this is the outermost call to EndBatch() if
+  // called in a nested manner.
+  if (--batch_update_ == 0) {
+    FOR_EACH_OBSERVER(Observer,
+                      cookies_observer_list_,
+                      TreeModelEndBatch(this));
+  }
 }

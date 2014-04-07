@@ -7,7 +7,7 @@
 
 #include "views/window/non_client_view.h"
 
-class TabStripWrapper;
+class BaseTabStrip;
 
 // A specialization of the NonClientFrameView object that provides additional
 // Browser-specific methods.
@@ -17,10 +17,15 @@ class BrowserNonClientFrameView : public views::NonClientFrameView {
   virtual ~BrowserNonClientFrameView() {}
 
   // Returns the bounds within which the TabStrip should be laid out.
-  virtual gfx::Rect GetBoundsForTabStrip(TabStripWrapper* tabstrip) const = 0;
+  virtual gfx::Rect GetBoundsForTabStrip(BaseTabStrip* tabstrip) const = 0;
 
   // Updates the throbber.
   virtual void UpdateThrobber(bool running) = 0;
+
+  // Paints the shadow edge along the side of the side tabstrip. The BrowserView
+  // calls this method _after_ the TabStrip has painted itself so the shadow is
+  // rendered above the tabs.
+  virtual void PaintTabStripShadow(gfx::Canvas* canvas) = 0;
 };
 
 #endif  // CHROME_BROWSER_VIEWS_FRAME_BROWSER_NON_CLIENT_FRAME_VIEW_H_

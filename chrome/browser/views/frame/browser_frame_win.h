@@ -12,7 +12,6 @@
 class AeroGlassNonClientView;
 class BrowserNonClientFrameView;
 class BrowserRootView;
-class BrowserTabStrip;
 class BrowserView;
 class NonClientFrameView;
 class Profile;
@@ -38,18 +37,20 @@ class BrowserFrameWin : public BrowserFrame, public views::WindowWin {
 
   // BrowserFrame implementation.
   virtual views::Window* GetWindow();
-  virtual void TabStripCreated(TabStripWrapper* tabstrip);
+  virtual void TabStripCreated(BaseTabStrip* tabstrip);
   virtual int GetMinimizeButtonOffset() const;
-  virtual gfx::Rect GetBoundsForTabStrip(TabStripWrapper* tabstrip) const;
+  virtual gfx::Rect GetBoundsForTabStrip(BaseTabStrip* tabstrip) const;
   virtual void UpdateThrobber(bool running);
   virtual void ContinueDraggingDetachedTab();
   virtual ThemeProvider* GetThemeProviderForFrame() const;
   virtual bool AlwaysUseNativeFrame() const;
+  virtual views::View* GetFrameView() const;
+  virtual void PaintTabStripShadow(gfx::Canvas* canvas);
 
  protected:
   // Overridden from views::WindowWin:
   virtual gfx::Insets GetClientAreaInsets() const;
-  virtual bool GetAccelerator(int cmd_id, views::Accelerator* accelerator);
+  virtual bool GetAccelerator(int cmd_id, menus::Accelerator* accelerator);
   virtual void OnEndSession(BOOL ending, UINT logoff);
   virtual void OnEnterSizeMove();
   virtual void OnExitSizeMove();
@@ -67,6 +68,7 @@ class BrowserFrameWin : public BrowserFrame, public views::WindowWin {
 
   // Overridden from views::Window:
   virtual int GetShowState() const;
+  virtual void Activate();
   virtual bool IsAppWindow() const { return true; }
   virtual views::NonClientFrameView* CreateFrameViewForWindow();
   virtual void UpdateFrameAfterFrameChange();

@@ -8,6 +8,7 @@
 #include "base/pickle.h"
 #include "base/string_tokenizer.h"
 #include "base/string_util.h"
+#include "base/utf_string_conversions.h"
 #include "net/base/cert_status_flags.h"
 #include "net/base/cert_verify_result.h"
 #include "net/base/ev_root_ca_metadata.h"
@@ -49,6 +50,9 @@ int MapSecurityError(SECURITY_STATUS err) {
       return ERR_CERT_REVOKED;
     case SEC_E_CERT_UNKNOWN:
     case CERT_E_ROLE:
+      return ERR_CERT_INVALID;
+    case CERT_E_WRONG_USAGE:
+      // TODO(wtc): Should we add ERR_CERT_WRONG_USAGE?
       return ERR_CERT_INVALID;
     // We received an unexpected_message or illegal_parameter alert message
     // from the server.
@@ -98,8 +102,8 @@ int MapCertChainErrorStatusToCertStatus(DWORD error_status) {
   const DWORD kWrongUsageErrors = CERT_TRUST_IS_NOT_VALID_FOR_USAGE |
                                   CERT_TRUST_CTL_IS_NOT_VALID_FOR_USAGE;
   if (error_status & kWrongUsageErrors) {
-    // TODO(wtc): Handle these errors.
-    // cert_status = |= CERT_STATUS_WRONG_USAGE;
+    // TODO(wtc): Should we add CERT_STATUS_WRONG_USAGE?
+    cert_status |= CERT_STATUS_INVALID;
   }
 
   // The rest of the errors.
@@ -460,9 +464,6 @@ void X509Certificate::Initialize() {
   valid_expiry_ = Time::FromFileTime(cert_handle_->pCertInfo->NotAfter);
 
   fingerprint_ = CalculateFingerprint(cert_handle_);
-
-  // Store the certificate in the cache in case we need it later.
-  X509Certificate::Cache::GetInstance()->Insert(this);
 }
 
 // static
@@ -481,7 +482,8 @@ X509Certificate* X509Certificate::CreateFromPickle(const Pickle& pickle,
       NULL, reinterpret_cast<const void **>(&cert_handle)))
     return NULL;
 
-  return CreateFromHandle(cert_handle, SOURCE_LONE_CERT_IMPORT);
+  return CreateFromHandle(cert_handle, SOURCE_LONE_CERT_IMPORT,
+                          OSCertHandles());
 }
 
 void X509Certificate::Persist(Pickle* pickle) {
@@ -534,11 +536,17 @@ int X509Certificate::Verify(const std::string& hostname,
   CERT_CHAIN_PARA chain_para;
   memset(&chain_para, 0, sizeof(chain_para));
   chain_para.cbSize = sizeof(chain_para);
-  // TODO(wtc): consider requesting the usage szOID_PKIX_KP_SERVER_AUTH
-  // or szOID_SERVER_GATED_CRYPTO or szOID_SGC_NETSCAPE
-  chain_para.RequestedUsage.dwType = USAGE_MATCH_TYPE_AND;
-  chain_para.RequestedUsage.Usage.cUsageIdentifier = 0;
-  chain_para.RequestedUsage.Usage.rgpszUsageIdentifier = NULL;  // LPSTR*
+  // TODO(wtc): Do we still need to request szOID_SERVER_GATED_CRYPTO or
+  // szOID_SGC_NETSCAPE today?
+  static const LPSTR usage[] = {
+    szOID_PKIX_KP_SERVER_AUTH,
+    szOID_SERVER_GATED_CRYPTO,
+    szOID_SGC_NETSCAPE
+  };
+  chain_para.RequestedUsage.dwType = USAGE_MATCH_TYPE_OR;
+  chain_para.RequestedUsage.Usage.cUsageIdentifier = arraysize(usage);
+  chain_para.RequestedUsage.Usage.rgpszUsageIdentifier =
+      const_cast<LPSTR*>(usage);
   // We can set CERT_CHAIN_RETURN_LOWER_QUALITY_CONTEXTS to get more chains.
   DWORD chain_flags = CERT_CHAIN_CACHE_END_CERT;
   if (flags & VERIFY_REV_CHECKING_ENABLED) {
@@ -735,6 +743,13 @@ X509Certificate::OSCertHandle X509Certificate::CreateOSCertHandleFromBytes(
     return NULL;
 
   return cert_handle;
+}
+
+
+// static
+X509Certificate::OSCertHandle X509Certificate::DupOSCertHandle(
+    OSCertHandle cert_handle) {
+  return CertDuplicateCertificateContext(cert_handle);
 }
 
 // static

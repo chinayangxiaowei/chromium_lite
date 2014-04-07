@@ -7,6 +7,7 @@
 #include <string>
 
 #include "app/l10n_util.h"
+#include "chrome/browser/mock_browsing_data_appcache_helper.h"
 #include "chrome/browser/mock_browsing_data_database_helper.h"
 #include "chrome/browser/mock_browsing_data_local_storage_helper.h"
 #include "chrome/browser/net/url_request_context_getter.h"
@@ -17,51 +18,23 @@
 
 namespace {
 
-class TestURLRequestContext : public URLRequestContext {
- public:
-  TestURLRequestContext() {
-    cookie_store_ = new net::CookieMonster();
-  }
-};
-
-class TestURLRequestContextGetter : public URLRequestContextGetter {
- public:
-  virtual URLRequestContext* GetURLRequestContext() {
-    if (!context_)
-      context_ = new TestURLRequestContext();
-    return context_.get();
-  }
- private:
-  scoped_refptr<URLRequestContext> context_;
-};
-
-class CookieTestingProfile : public TestingProfile {
- public:
-  virtual URLRequestContextGetter* GetRequestContext() {
-    if (!url_request_context_getter_.get())
-      url_request_context_getter_ = new TestURLRequestContextGetter;
-    return url_request_context_getter_.get();
-  }
-  virtual ~CookieTestingProfile() {}
-
-  net::CookieMonster* GetCookieMonster() {
-    return GetRequestContext()->GetCookieStore()->GetCookieMonster();
-  }
-
- private:
-  scoped_refptr<URLRequestContextGetter> url_request_context_getter_;
-};
-
-
-
 class CookiesTreeModelTest : public testing::Test {
  public:
+  CookiesTreeModelTest() : io_thread_(ChromeThread::IO, &message_loop_) {
+  }
+
+  virtual ~CookiesTreeModelTest() {
+  }
+
   virtual void SetUp() {
-    profile_.reset(new CookieTestingProfile());
+    profile_.reset(new TestingProfile());
+    profile_->CreateRequestContext();
     mock_browsing_data_database_helper_ =
       new MockBrowsingDataDatabaseHelper(profile_.get());
     mock_browsing_data_local_storage_helper_ =
       new MockBrowsingDataLocalStorageHelper(profile_.get());
+    mock_browsing_data_appcache_helper_ =
+      new MockBrowsingDataAppCacheHelper(profile_.get());
   }
 
   CookiesTreeModel* CreateCookiesTreeModelWithInitialSample() {
@@ -71,7 +44,8 @@ class CookiesTreeModelTest : public testing::Test {
     monster->SetCookie(GURL("http://foo3"), "C=1");
     CookiesTreeModel* cookies_model = new CookiesTreeModel(
         profile_.get(), mock_browsing_data_database_helper_,
-        mock_browsing_data_local_storage_helper_);
+        mock_browsing_data_local_storage_helper_,
+        mock_browsing_data_appcache_helper_);
     mock_browsing_data_database_helper_->AddDatabaseSamples();
     mock_browsing_data_database_helper_->Notify();
     mock_browsing_data_local_storage_helper_->AddLocalStorageSamples();
@@ -121,6 +95,9 @@ class CookiesTreeModelTest : public testing::Test {
             return node->GetDetailedInfo().database_info->database_name + ",";
           case CookieTreeNode::DetailedInfo::TYPE_COOKIE:
             return node->GetDetailedInfo().cookie->second.Name() + ",";
+          case CookieTreeNode::DetailedInfo::TYPE_APPCACHE:
+            return node->GetDetailedInfo().appcache_info->manifest_url.spec() +
+                   ",";
           default:
             return "";
         }
@@ -172,6 +149,11 @@ class CookiesTreeModelTest : public testing::Test {
                              CookieTreeNode::DetailedInfo::TYPE_LOCAL_STORAGE);
   }
 
+  std::string GetDisplayedAppCaches(CookiesTreeModel* cookies_model) {
+    return GetDisplayedNodes(cookies_model,
+                             CookieTreeNode::DetailedInfo::TYPE_APPCACHE);
+  }
+
   // do not call on the root
   void DeleteStoredObjects(CookieTreeNode* node) {
     node->DeleteStoredObjects();
@@ -182,14 +164,17 @@ class CookiesTreeModelTest : public testing::Test {
     delete parent_node->GetModel()->Remove(parent_node, ct_node_index);
   }
  protected:
-  MessageLoopForUI message_loop_;
-  scoped_ptr<CookieTestingProfile> profile_;
+  MessageLoop message_loop_;
+  ChromeThread io_thread_;
+
+  scoped_ptr<TestingProfile> profile_;
   scoped_refptr<MockBrowsingDataDatabaseHelper>
       mock_browsing_data_database_helper_;
   scoped_refptr<MockBrowsingDataLocalStorageHelper>
       mock_browsing_data_local_storage_helper_;
+  scoped_refptr<MockBrowsingDataAppCacheHelper>
+      mock_browsing_data_appcache_helper_;
 };
-
 
 TEST_F(CookiesTreeModelTest, RemoveAll) {
   scoped_ptr<CookiesTreeModel> cookies_model(
@@ -356,7 +341,8 @@ TEST_F(CookiesTreeModelTest, RemoveSingleCookieNode) {
   monster->SetCookie(GURL("http://foo3"), "D=1");
   CookiesTreeModel cookies_model(profile_.get(),
                                  mock_browsing_data_database_helper_,
-                                 mock_browsing_data_local_storage_helper_);
+                                 mock_browsing_data_local_storage_helper_,
+                                 mock_browsing_data_appcache_helper_);
   mock_browsing_data_database_helper_->AddDatabaseSamples();
   mock_browsing_data_database_helper_->Notify();
   mock_browsing_data_local_storage_helper_->AddLocalStorageSamples();
@@ -394,7 +380,8 @@ TEST_F(CookiesTreeModelTest, RemoveSingleCookieNodeOf3) {
   monster->SetCookie(GURL("http://foo3"), "E=1");
   CookiesTreeModel cookies_model(profile_.get(),
                                  mock_browsing_data_database_helper_,
-                                 mock_browsing_data_local_storage_helper_);
+                                 mock_browsing_data_local_storage_helper_,
+                                 mock_browsing_data_appcache_helper_);
   mock_browsing_data_database_helper_->AddDatabaseSamples();
   mock_browsing_data_database_helper_->Notify();
   mock_browsing_data_local_storage_helper_->AddLocalStorageSamples();
@@ -432,8 +419,9 @@ TEST_F(CookiesTreeModelTest, RemoveSecondOrigin) {
   monster->SetCookie(GURL("http://foo3"), "D=1");
   monster->SetCookie(GURL("http://foo3"), "E=1");
   CookiesTreeModel cookies_model(profile_.get(),
-      mock_browsing_data_database_helper_,
-      mock_browsing_data_local_storage_helper_);
+                                 mock_browsing_data_database_helper_,
+                                 mock_browsing_data_local_storage_helper_,
+                                 mock_browsing_data_appcache_helper_);
   {
     SCOPED_TRACE("Initial State 5 cookies");
     // 11 because there's the root, then foo1 -> cookies -> a,
@@ -466,7 +454,8 @@ TEST_F(CookiesTreeModelTest, OriginOrdering) {
 
   CookiesTreeModel cookies_model(profile_.get(),
       new MockBrowsingDataDatabaseHelper(profile_.get()),
-      new MockBrowsingDataLocalStorageHelper(profile_.get()));
+      new MockBrowsingDataLocalStorageHelper(profile_.get()),
+      new MockBrowsingDataAppCacheHelper(profile_.get()));
 
   {
     SCOPED_TRACE("Initial State 8 cookies");
@@ -482,7 +471,5 @@ TEST_F(CookiesTreeModelTest, OriginOrdering) {
     EXPECT_STREQ("F,C,B,A,G,D,H", GetDisplayedCookies(&cookies_model).c_str());
   }
 }
-
-
 
 }  // namespace

@@ -121,6 +121,12 @@ void WebPluginDelegateStub::OnMessageReceived(const IPC::Message& msg) {
     IPC_MESSAGE_HANDLER(PluginMsg_UpdateGeometrySync, OnUpdateGeometry)
     IPC_MESSAGE_HANDLER(PluginMsg_SendJavaScriptStream,
                         OnSendJavaScriptStream)
+#if defined(OS_MACOSX)
+    IPC_MESSAGE_HANDLER(PluginMsg_SetWindowFocus, OnSetWindowFocus)
+    IPC_MESSAGE_HANDLER(PluginMsg_ContainerHidden, OnContainerHidden)
+    IPC_MESSAGE_HANDLER(PluginMsg_ContainerShown, OnContainerShown)
+    IPC_MESSAGE_HANDLER(PluginMsg_WindowFrameChanged, OnWindowFrameChanged)
+#endif
     IPC_MESSAGE_HANDLER(PluginMsg_DidReceiveManualResponse,
                         OnDidReceiveManualResponse)
     IPC_MESSAGE_HANDLER(PluginMsg_DidReceiveManualData, OnDidReceiveManualData)
@@ -132,6 +138,14 @@ void WebPluginDelegateStub::OnMessageReceived(const IPC::Message& msg) {
                         OnHandleURLRequestReply)
     IPC_MESSAGE_HANDLER(PluginMsg_HTTPRangeRequestReply,
                         OnHTTPRangeRequestReply)
+    IPC_MESSAGE_HANDLER(PluginMsg_CreateCommandBuffer,
+                        OnCreateCommandBuffer)
+    IPC_MESSAGE_HANDLER(PluginMsg_DestroyCommandBuffer,
+                        OnDestroyCommandBuffer)
+#if defined(OS_MACOSX)
+    IPC_MESSAGE_HANDLER(PluginMsg_SetFakeAcceleratedSurfaceWindowHandle,
+                        OnSetFakeAcceleratedSurfaceWindowHandle)
+#endif
     IPC_MESSAGE_UNHANDLED_ERROR()
   IPC_END_MESSAGE_MAP()
 
@@ -184,6 +198,9 @@ void WebPluginDelegateStub::OnInit(const PluginMsg_Init_Params& params,
                                     params.load_manually);
 #if defined(OS_MACOSX)
     delegate_->SetFocusNotifier(FocusNotifier);
+    delegate_->WindowFrameChanged(params.containing_window_frame,
+                                  params.containing_content_frame);
+    delegate_->SetWindowHasFocus(params.containing_window_has_focus);
 #endif
   }
 }
@@ -263,7 +280,7 @@ void WebPluginDelegateStub::OnDidPaint() {
 }
 
 void WebPluginDelegateStub::OnPrint(base::SharedMemoryHandle* shared_memory,
-                                    size_t* size) {
+                                    uint32* size) {
 #if defined(OS_WIN)
   printing::NativeMetafile metafile;
   if (!metafile.CreateDc(NULL, NULL)) {
@@ -296,7 +313,8 @@ void WebPluginDelegateStub::OnUpdateGeometry(
     const PluginMsg_UpdateGeometry_Param& param) {
   webplugin_->UpdateGeometry(
       param.window_rect, param.clip_rect,
-      param.windowless_buffer, param.background_buffer
+      param.windowless_buffer, param.background_buffer,
+      param.transparent
 #if defined(OS_MACOSX)
       ,
       param.ack_key
@@ -329,6 +347,29 @@ void WebPluginDelegateStub::OnSendJavaScriptStream(const GURL& url,
   delegate_->SendJavaScriptStream(url, result, success, notify_id);
 }
 
+#if defined(OS_MACOSX)
+void WebPluginDelegateStub::OnSetWindowFocus(bool has_focus) {
+  delegate_->SetWindowHasFocus(has_focus);
+}
+
+void WebPluginDelegateStub::OnContainerHidden() {
+  delegate_->SetContainerVisibility(false);
+}
+
+void WebPluginDelegateStub::OnContainerShown(gfx::Rect window_frame,
+                                             gfx::Rect view_frame,
+                                             bool has_focus) {
+  delegate_->WindowFrameChanged(window_frame, view_frame);
+  delegate_->SetContainerVisibility(true);
+  delegate_->SetWindowHasFocus(has_focus);
+}
+
+void WebPluginDelegateStub::OnWindowFrameChanged(gfx::Rect window_frame,
+                                                 gfx::Rect view_frame) {
+  delegate_->WindowFrameChanged(window_frame, view_frame);
+}
+#endif  // OS_MACOSX
+
 void WebPluginDelegateStub::OnDidReceiveManualResponse(
     const GURL& url,
     const PluginMsg_DidReceiveResponseParams& params) {
@@ -355,8 +396,27 @@ void WebPluginDelegateStub::OnInstallMissingPlugin() {
   delegate_->InstallMissingPlugin();
 }
 
+void WebPluginDelegateStub::OnCreateCommandBuffer(int* route_id) {
+#if defined(ENABLE_GPU)
+  command_buffer_stub_.reset(new CommandBufferStub(
+      channel_,
+      instance_id_,
+      delegate_->windowed_handle()));
+
+  *route_id = command_buffer_stub_->route_id();
+#else
+  *route_id = 0;
+#endif  // ENABLE_GPU
+}
+
+void WebPluginDelegateStub::OnDestroyCommandBuffer() {
+#if defined(ENABLE_GPU)
+  command_buffer_stub_.reset();
+#endif
+}
+
 void WebPluginDelegateStub::CreateSharedBuffer(
-    size_t size,
+    uint32 size,
     base::SharedMemory* shared_buf,
     base::SharedMemoryHandle* remote_handle) {
   if (!shared_buf->Create(std::wstring(), false, false, size)) {
@@ -387,15 +447,23 @@ void WebPluginDelegateStub::CreateSharedBuffer(
 }
 
 void WebPluginDelegateStub::OnHandleURLRequestReply(
-    int resource_id, const GURL& url, int notify_id) {
+    unsigned long resource_id, const GURL& url, int notify_id) {
   WebPluginResourceClient* resource_client =
       delegate_->CreateResourceClient(resource_id, url, notify_id);
   webplugin_->OnResourceCreated(resource_id, resource_client);
 }
 
 void WebPluginDelegateStub::OnHTTPRangeRequestReply(
-    int resource_id, int range_request_id) {
+    unsigned long resource_id, int range_request_id) {
   WebPluginResourceClient* resource_client =
       delegate_->CreateSeekableResourceClient(resource_id, range_request_id);
   webplugin_->OnResourceCreated(resource_id, resource_client);
 }
+
+#if defined(OS_MACOSX)
+void WebPluginDelegateStub::OnSetFakeAcceleratedSurfaceWindowHandle(
+    gfx::PluginWindowHandle window) {
+  delegate_->set_windowed_handle(window);
+}
+#endif
+

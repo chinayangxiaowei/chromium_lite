@@ -1,7 +1,12 @@
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Use of this source code is governed by a BSD-style license that can be
+// found in the LICENSE file.
+
 #import "chrome/browser/cocoa/nsmenuitem_additions.h"
 
-#include <iostream>
 #include <Carbon/Carbon.h>
+
+#include <iostream>
 
 #include "base/scoped_nsobject.h"
 #include "base/sys_string_conversions.h"
@@ -20,7 +25,7 @@ NSEvent* KeyEvent(const NSUInteger modifierFlags,
                         characters:chars
        charactersIgnoringModifiers:charsNoMods
                          isARepeat:NO
-                          keyCode:keyCode];
+                           keyCode:keyCode];
 }
 
 NSMenuItem* MenuItem(NSString* equiv, NSUInteger mask) {
@@ -41,7 +46,7 @@ std::ostream& operator<<(std::ostream& out, NSMenuItem* item) {
 }
 
 void ExpectKeyFiresItemEq(bool result, NSEvent* key, NSMenuItem* item,
-    bool compareCocoa ) {
+    bool compareCocoa) {
   EXPECT_EQ(result, [item cr_firesForKeyEvent:key]) << key << '\n' << item;
 
   // Make sure that Cocoa does in fact agree with our expectations. However,
@@ -267,7 +272,7 @@ TEST(NSMenuItemAdditionsTest, TestFiresForKeyEvent) {
 
   // cmd-s with a serbian layout (just "s" produces something that looks a lot
   // like "c" in some fonts, but is actually \u0441. cmd-s activates a menu item
-  // with key equivalent "s", not "c")  
+  // with key equivalent "s", not "c")
   key = KeyEvent(0x100108, @"s", @"\u0441", 1);
   ExpectKeyFiresItem(key, MenuItem(@"s", 0x100000), false);
   ExpectKeyDoesntFireItem(key, MenuItem(@"c", 0x100000));
@@ -295,7 +300,7 @@ NSString* keyCodeToCharacter(NSUInteger keyCode,
       &actualStringLength,
       unicodeString);
   assert(err == noErr);
- 
+
   CFStringRef temp = CFStringCreateWithCharacters(
       kCFAllocatorDefault, unicodeString, 1);
   return [(NSString*)temp autorelease];
@@ -303,7 +308,7 @@ NSString* keyCodeToCharacter(NSUInteger keyCode,
 
 TEST(NSMenuItemAdditionsTest, TestMOnDifferentLayouts) {
   // There's one key -- "m" -- that has the same keycode on most keyboard
-  //layouts. This function tests a menu item with cmd-m as key equivalent
+  // layouts. This function tests a menu item with cmd-m as key equivalent
   // can be fired on all layouts.
   NSMenuItem* item = MenuItem(@"m", 0x100000);
 
@@ -318,7 +323,7 @@ TEST(NSMenuItemAdditionsTest, TestMOnDifferentLayouts) {
   for (id layout in list) {
     TISInputSourceRef ref = (TISInputSourceRef)layout;
 
-    NSUInteger keyCode = 0x2e;  // "m" on a us layout and most other layouts.
+    NSUInteger keyCode = 0x2e;  // "m" on a US layout and most other layouts.
 
     // On a few layouts, "m" has a different key code.
     NSString* layoutId = (NSString*)TISGetInputSourceProperty(
@@ -326,10 +331,15 @@ TEST(NSMenuItemAdditionsTest, TestMOnDifferentLayouts) {
     if ([layoutId isEqualToString:@"com.apple.keylayout.Belgian"] ||
         [layoutId isEqualToString:@"com.apple.keylayout.French"] ||
         [layoutId isEqualToString:@"com.apple.keylayout.French-numerical"] ||
-        [layoutId isEqualToString:@"com.apple.keylayout.Italian"])
+        [layoutId isEqualToString:@"com.apple.keylayout.Italian"]) {
       keyCode = 0x29;
-    else if ([layoutId isEqualToString:@"com.apple.keylayout.Turkish"])
+    } else if ([layoutId isEqualToString:@"com.apple.keylayout.Turkish"]) {
       keyCode = 0x28;
+    } else if ([layoutId isEqualToString:@"com.apple.keylayout.Dvorak-Left"]) {
+      keyCode = 0x16;
+    } else if ([layoutId isEqualToString:@"com.apple.keylayout.Dvorak-Right"]) {
+      keyCode = 0x1a;
+    }
 
     EventModifiers modifiers = cmdKey >> 8;
     NSString* chars = keyCodeToCharacter(keyCode, modifiers, ref);

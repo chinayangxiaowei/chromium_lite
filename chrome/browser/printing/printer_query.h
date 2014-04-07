@@ -5,9 +5,9 @@
 #ifndef CHROME_BROWSER_PRINTING_PRINTER_QUERY_H_
 #define CHROME_BROWSER_PRINTING_PRINTER_QUERY_H_
 
-#include "app/gfx/native_widget_types.h"
 #include "base/scoped_ptr.h"
 #include "chrome/browser/printing/print_job_worker_owner.h"
+#include "gfx/native_widget_types.h"
 
 class CancelableTask;
 class MessageLoop;
@@ -50,6 +50,7 @@ class PrinterQuery : public PrintJobWorkerOwner {
                    gfx::NativeWindow parent_window,
                    int expected_page_count,
                    bool has_selection,
+                   bool use_overlays,
                    CancelableTask* callback);
 
   // Stops the worker thread since the client is done with this object.

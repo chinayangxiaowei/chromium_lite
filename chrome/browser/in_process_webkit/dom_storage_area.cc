@@ -22,6 +22,7 @@
 
 using WebKit::WebSecurityOrigin;
 using WebKit::WebStorageArea;
+using WebKit::WebString;
 using WebKit::WebURL;
 
 DOMStorageArea::DOMStorageArea(
@@ -56,26 +57,32 @@ NullableString16 DOMStorageArea::GetItem(const string16& key) {
   return storage_area_->getItem(key);
 }
 
-void DOMStorageArea::SetItem(
+NullableString16 DOMStorageArea::SetItem(
     const string16& key, const string16& value,
     WebStorageArea::Result* result, DOMStorageDispatcherHost* sender) {
   if (!CheckContentSetting(key, value, sender)) {
     *result = WebStorageArea::ResultBlockedByPolicy;
-    return;
+    return NullableString16(true);  // Ignored if the content was blocked.
   }
 
   CreateWebStorageAreaIfNecessary();
-  storage_area_->setItem(key, value, WebURL(), *result);
+  WebString old_value;
+  storage_area_->setItem(key, value, WebURL(), *result, old_value);
+  return old_value;
 }
 
-void DOMStorageArea::RemoveItem(const string16& key) {
+NullableString16 DOMStorageArea::RemoveItem(const string16& key) {
   CreateWebStorageAreaIfNecessary();
-  storage_area_->removeItem(key, WebURL());
+  WebString old_value;
+  storage_area_->removeItem(key, WebURL(), old_value);
+  return old_value;
 }
 
-void DOMStorageArea::Clear() {
+bool DOMStorageArea::Clear() {
   CreateWebStorageAreaIfNecessary();
-  storage_area_->clear(WebURL());
+  bool somethingCleared;
+  storage_area_->clear(WebURL(), somethingCleared);
+  return somethingCleared;
 }
 
 void DOMStorageArea::PurgeMemory() {

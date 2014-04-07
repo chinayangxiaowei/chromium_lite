@@ -1,4 +1,4 @@
-// Copyright (c) 2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -11,9 +11,9 @@
 #include "base/compiler_specific.h"
 #include "base/basictypes.h"
 #include "base/ref_counted.h"
-#include "net/base/net_errors.h"
+#include "base/scoped_ptr.h"
+#include "net/base/completion_callback.h"
 #include "testing/gtest/include/gtest/gtest_prod.h"
-#include "webkit/appcache/appcache_response.h"
 #include "webkit/appcache/appcache_working_set.h"
 
 class GURL;
@@ -23,7 +23,11 @@ namespace appcache {
 class AppCache;
 class AppCacheEntry;
 class AppCacheGroup;
+class AppCacheResponseReader;
+class AppCacheResponseWriter;
 class AppCacheService;
+struct AppCacheInfoCollection;
+struct HttpResponseInfoIOBuffer;
 
 class AppCacheStorage {
  public:
@@ -31,6 +35,9 @@ class AppCacheStorage {
   class Delegate {
    public:
     virtual ~Delegate() {}
+
+    // If retrieval fails, 'collection' will be NULL.
+    virtual void OnAllInfo(AppCacheInfoCollection* collection) {}
 
     // If a load fails the 'cache' will be NULL.
     virtual void OnCacheLoaded(AppCache* cache, int64 cache_id) {}
@@ -41,7 +48,7 @@ class AppCacheStorage {
 
     // If successfully stored 'success' will be true.
     virtual void OnGroupAndNewestCacheStored(
-        AppCacheGroup* group, bool success) {}
+        AppCacheGroup* group, AppCache* newest_cache, bool success) {}
 
     // If the operation fails, success will be false.
     virtual void OnGroupMadeObsolete(AppCacheGroup* group, bool success) {}
@@ -56,11 +63,17 @@ class AppCacheStorage {
     virtual void OnMainResponseFound(
         const GURL& url, const AppCacheEntry& entry,
         const AppCacheEntry& fallback_entry,
-        int64 cache_id, const GURL& mainfest_url) {}
+        int64 cache_id, const GURL& mainfest_url,
+        bool was_blocked_by_policy) {}
   };
 
   explicit AppCacheStorage(AppCacheService* service);
   virtual ~AppCacheStorage();
+
+  // Schedules a task to retrieve basic info about all groups and caches
+  // stored in the system. Upon completion the delegate will be called
+  // with the results.
+  virtual void GetAllInfo(Delegate* delegate) = 0;
 
   // Schedules a cache to be loaded from storage. Upon load completion
   // the delegate will be called back. If the cache already resides in
@@ -140,9 +153,18 @@ class AppCacheStorage {
   virtual AppCacheResponseWriter* CreateResponseWriter(
       const GURL& manifest_url) = 0;
 
-  // Schedules the deletion of many responses.
+  // Schedules the lazy deletion of responses and saves the ids
+  // persistently such that the responses will be deleted upon restart
+  // if they aren't deleted prior to shutdown.
   virtual void DoomResponses(
       const GURL& manifest_url, const std::vector<int64>& response_ids) = 0;
+
+  // Schedules the lazy deletion of responses without persistently saving
+  // the response ids.
+  virtual void DeleteResponses(
+      const GURL& manifest_url, const std::vector<int64>& response_ids) = 0;
+
+  virtual void PurgeMemory() = 0;
 
   // Generates unique storage ids for different object types.
   int64 NewCacheId() {
@@ -150,9 +172,6 @@ class AppCacheStorage {
   }
   int64 NewGroupId() {
     return ++last_group_id_;
-  }
-  int64 NewEntryId() {
-    return ++last_entry_id_;
   }
 
   // The working set of object instances currently in memory.
@@ -207,20 +226,10 @@ class AppCacheStorage {
 
   // Helper used to manage an async LoadResponseInfo calls on behalf of
   // multiple callers.
-  // TODO(michaeln): this may be generalizable for other load/store 'tasks'
   class ResponseInfoLoadTask {
    public:
     ResponseInfoLoadTask(const GURL& manifest_url, int64 response_id,
-                         AppCacheStorage* storage)
-        : storage_(storage),
-          manifest_url_(manifest_url),
-          response_id_(response_id),
-          info_buffer_(new HttpResponseInfoIOBuffer),
-          ALLOW_THIS_IN_INITIALIZER_LIST(read_callback_(
-              this, &ResponseInfoLoadTask::OnReadComplete)) {
-      storage_->pending_info_loads_.insert(
-          PendingResponseInfoLoads::value_type(response_id, this));
-    }
+                         AppCacheStorage* storage);
 
     int64 response_id() const { return response_id_; }
     const GURL& manifest_url() const { return manifest_url_; }
@@ -229,27 +238,10 @@ class AppCacheStorage {
       delegates_.push_back(delegate_reference);
     }
 
-    void StartIfNeeded() {
-      if (reader_.get())
-        return;
-      reader_.reset(
-          storage_->CreateResponseReader(manifest_url_, response_id_));
-      reader_->ReadInfo(info_buffer_, &read_callback_);
-    }
+    void StartIfNeeded();
 
    private:
-    void OnReadComplete(int result) {
-      storage_->pending_info_loads_.erase(response_id_);
-      scoped_refptr<AppCacheResponseInfo> info;
-      if (result >= 0) {
-        info = new AppCacheResponseInfo(
-            storage_->service(), manifest_url_, response_id_,
-            info_buffer_->http_info.release());
-      }
-      FOR_EACH_DELEGATE(
-          delegates_, OnResponseInfoLoaded(info.get(), response_id_));
-      delete this;
-    }
+    void OnReadComplete(int result);
 
     AppCacheStorage* storage_;
     GURL manifest_url_;
@@ -294,7 +286,6 @@ class AppCacheStorage {
   // The last storage id used for different object types.
   int64 last_cache_id_;
   int64 last_group_id_;
-  int64 last_entry_id_;
   int64 last_response_id_;
 
   AppCacheWorkingSet working_set_;
@@ -303,7 +294,7 @@ class AppCacheStorage {
   PendingResponseInfoLoads pending_info_loads_;
 
   // The set of last ids must be retrieved from storage prior to being used.
-  static const int64 kUnitializedId = -1;
+  static const int64 kUnitializedId;
 
   FRIEND_TEST(AppCacheStorageTest, DelegateReferences);
   DISALLOW_COPY_AND_ASSIGN(AppCacheStorage);

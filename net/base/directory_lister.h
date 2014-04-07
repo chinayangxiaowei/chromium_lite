@@ -7,6 +7,7 @@
 
 #include <string>
 
+#include "base/cancellation_flag.h"
 #include "base/file_path.h"
 #include "base/file_util.h"
 #include "base/platform_thread.h"
@@ -32,6 +33,9 @@ class DirectoryLister : public base::RefCountedThreadSafe<DirectoryLister>,
     virtual void OnListFile(
         const file_util::FileEnumerator::FindInfo& data) = 0;
     virtual void OnListDone(int error) = 0;
+
+   protected:
+    virtual ~DirectoryListerDelegate() {}
   };
 
   DirectoryLister(const FilePath& dir, DirectoryListerDelegate* delegate);
@@ -65,7 +69,7 @@ class DirectoryLister : public base::RefCountedThreadSafe<DirectoryLister>,
   DirectoryListerDelegate* delegate_;
   MessageLoop* message_loop_;
   PlatformThreadHandle thread_;
-  bool canceled_;
+  base::CancellationFlag canceled_;
 };
 
 }  // namespace net

@@ -2,10 +2,12 @@
 // This script provides some mechanics for testing ChromeFrame
 //
 function onSuccess(name, id) {
+  appendStatus("Success reported!");
   onFinished(name, id, "OK");
 }
 
 function onFailure(name, id, status) {
+  appendStatus("Failure reported: " + status);
   onFinished(name, id, status);
 }
 
@@ -84,8 +86,6 @@ function postResult(name, result) {
 // Finish running a test by setting the status
 // and the cookie.
 function onFinished(name, id, result) {
-  appendStatus(result);
-
   // set a cookie to report the results...
   var cookie = name + "." + id + ".status=" + result + "; path=/";
   document.cookie = cookie;
@@ -139,12 +139,15 @@ function isRunningInMSIE() {
 }
 
 function reloadUsingCFProtocol() {
-  var redirect_location = "cf:";
+  var redirect_location = "gcf:";
   redirect_location += window.location;
   window.location = redirect_location;
 }
 
 function isRunningInChrome() {
+  var is_chrome_frame = /chromeframe/.test(navigator.userAgent.toLowerCase());
+  if (is_chrome_frame)
+    return 0;
   var is_chrome = /chrome/.test(navigator.userAgent.toLowerCase());
   return is_chrome;
 }

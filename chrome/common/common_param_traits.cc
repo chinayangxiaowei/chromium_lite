@@ -4,7 +4,8 @@
 
 #include "chrome/common/common_param_traits.h"
 
-#include "base/gfx/rect.h"
+#include "chrome/common/chrome_constants.h"
+#include "gfx/rect.h"
 #include "googleurl/src/gurl.h"
 #ifndef EXCLUDE_SKIA_DEPENDENCIES
 #include "third_party/skia/include/core/SkBitmap.h"
@@ -99,7 +100,7 @@ void ParamTraits<GURL>::Write(Message* m, const GURL& p) {
 
 bool ParamTraits<GURL>::Read(const Message* m, void** iter, GURL* p) {
   std::string s;
-  if (!m->ReadString(iter, &s)) {
+  if (!m->ReadString(iter, &s) || s.length() > chrome::kMaxURLChars) {
     *p = GURL();
     return false;
   }
@@ -180,20 +181,15 @@ void ParamTraits<gfx::Size>::Log(const gfx::Size& p, std::wstring* l) {
 
 void ParamTraits<ContentSettings>::Write(
     Message* m, const ContentSettings& settings) {
-  for (int i = 0; i < CONTENT_SETTINGS_NUM_TYPES; ++i)
-    WriteParam(m, static_cast<int>(settings.settings[i]));
+  for (size_t i = 0; i < arraysize(settings.settings); ++i)
+    WriteParam(m, settings.settings[i]);
 }
 
 bool ParamTraits<ContentSettings>::Read(
     const Message* m, void** iter, ContentSettings* r) {
-  for (int i = 0; i < CONTENT_SETTINGS_NUM_TYPES; ++i) {
-    int local_setting;
-    if (!m->ReadInt(iter, &local_setting))
+  for (size_t i = 0; i < arraysize(r->settings); ++i) {
+    if (!ReadParam(m, iter, &r->settings[i]))
       return false;
-    if (local_setting < 0 ||
-        local_setting >= static_cast<int>(CONTENT_SETTING_NUM_SETTINGS))
-      return false;
-    r->settings[i] = static_cast<ContentSetting>(local_setting);
   }
   return true;
 }
@@ -244,5 +240,66 @@ void ParamTraits<webkit_glue::WebApplicationInfo>::Log(
   l->append(L"<WebApplicationInfo>");
 }
 
-}  // namespace IPC
+void ParamTraits<Geoposition::ErrorCode>::Write(
+    Message* m, const Geoposition::ErrorCode& p) {
+  int error_code = p;
+  WriteParam(m, error_code);
+}
 
+bool ParamTraits<Geoposition::ErrorCode>::Read(
+      const Message* m, void** iter, Geoposition::ErrorCode* p) {
+  int error_code_param = 0;
+  bool ret = ReadParam(m, iter, &error_code_param);
+  *p = static_cast<Geoposition::ErrorCode>(error_code_param);
+  return ret;
+}
+
+void ParamTraits<Geoposition::ErrorCode>::Log(
+    const Geoposition::ErrorCode& p, std::wstring* l) {
+  int error_code = p;
+  l->append(StringPrintf(L"<Geoposition::ErrorCode>%d", error_code));
+}
+
+void ParamTraits<Geoposition>::Write(Message* m, const Geoposition& p) {
+  WriteParam(m, p.latitude);
+  WriteParam(m, p.longitude);
+  WriteParam(m, p.accuracy);
+  WriteParam(m, p.altitude);
+  WriteParam(m, p.altitude_accuracy);
+  WriteParam(m, p.speed);
+  WriteParam(m, p.heading);
+  WriteParam(m, p.timestamp);
+  WriteParam(m, p.error_code);
+  WriteParam(m, p.error_message);
+}
+
+bool ParamTraits<Geoposition>::Read(
+      const Message* m, void** iter, Geoposition* p) {
+  bool ret = ReadParam(m, iter, &p->latitude);
+  ret = ret && ReadParam(m, iter, &p->longitude);
+  ret = ret && ReadParam(m, iter, &p->accuracy);
+  ret = ret && ReadParam(m, iter, &p->altitude);
+  ret = ret && ReadParam(m, iter, &p->altitude_accuracy);
+  ret = ret && ReadParam(m, iter, &p->speed);
+  ret = ret && ReadParam(m, iter, &p->heading);
+  ret = ret && ReadParam(m, iter, &p->timestamp);
+  ret = ret && ReadParam(m, iter, &p->error_code);
+  ret = ret && ReadParam(m, iter, &p->error_message);
+  return ret;
+}
+
+void ParamTraits<Geoposition>::Log(const Geoposition& p, std::wstring* l) {
+  l->append(
+      StringPrintf(
+          L"<Geoposition>"
+          L"%.6f %.6f %.6f %.6f "
+          L"%.6f %.6f %.6f ",
+          p.latitude, p.longitude, p.accuracy, p.altitude,
+          p.altitude_accuracy, p.speed, p.heading));
+  LogParam(p.timestamp, l);
+  l->append(L" ");
+  l->append(p.error_message);
+  LogParam(p.error_code, l);
+}
+
+}  // namespace IPC

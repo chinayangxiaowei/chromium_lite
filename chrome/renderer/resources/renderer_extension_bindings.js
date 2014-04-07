@@ -75,7 +75,7 @@ var chrome = chrome || {};
     var isExternal = sourceExtensionId != chromeHidden.extensionId;
 
     if (tab)
-      tab = JSON.parse(tab);
+      tab = chromeHidden.JSON.parse(tab);
     var sender = {tab: tab, id: sourceExtensionId};
 
     // Special case for sendRequest/onRequest.
@@ -119,7 +119,7 @@ var chrome = chrome || {};
     var port = ports[portId];
     if (port) {
       if (msg) {
-        msg = JSON.parse(msg);
+        msg = chromeHidden.JSON.parse(msg);
       }
       port.onMessage.dispatch(msg, port);
     }
@@ -131,7 +131,7 @@ var chrome = chrome || {};
     // JSON.stringify doesn't support a root object which is undefined.
     if (msg === undefined)
       msg = null;
-    PostMessage(this.portId_, JSON.stringify(msg));
+    PostMessage(this.portId_, chromeHidden.JSON.stringify(msg));
   };
 
   // Disconnects the port from the other end.
@@ -142,15 +142,15 @@ var chrome = chrome || {};
 
   // This function is called on context initialization for both content scripts
   // and extension contexts.
-  chrome.initExtension = function(extensionId, warnOnPrivilegedApiAccess) {
+  chrome.initExtension = function(extensionId, warnOnPrivilegedApiAccess,
+                                  inIncognitoTab) {
     delete chrome.initExtension;
     chromeHidden.extensionId = extensionId;
 
     chrome.extension = chrome.extension || {};
-
-    // TODO(EXTENSIONS_DEPRECATED): chrome.self is obsolete.
-    // http://code.google.com/p/chromium/issues/detail?id=16356
     chrome.self = chrome.extension;
+
+    chrome.extension.inIncognitoTab = inIncognitoTab;
 
     // Events for when a message channel is opened to our extension.
     chrome.extension.onConnect = new chrome.Event();
@@ -241,14 +241,35 @@ var chrome = chrome || {};
     // that should prevent it from getting stale).
     var privileged = [
       // Entire namespaces.
-      "bookmarks", "browserAction", "devtools", "experimental.extension",
-      "experimental.history", "experimental.popup", "pageAction", "pageActions",
-      "tabs", "test", "toolstrip", "windows",
+      "bookmarks",
+      "browserAction",
+      "devtools",
+      "experimental.accessibility",
+      "experimental.bookmarkManager",
+      "experimental.clipboard",
+      "experimental.contextMenu",
+      "experimental.extension",
+      "experimental.idle",
+      "experimental.infobars",
+      "experimental.metrics",
+      "experimental.popup",
+      "experimental.processes",
+      "history",
+      "pageAction",
+      "pageActions",
+      "tabs",
+      "test",
+      "toolstrip",
+      "windows",
 
       // Functions/events/properties within the extension namespace.
-      "extension.getBackgroundPage", "extension.getExtensionTabs",
-      "extension.getToolstrips", "extension.getViews", "extension.lastError",
-      "extension.onConnectExternal", "extension.onRequestExternal",
+      "extension.getBackgroundPage",
+      "extension.getExtensionTabs",
+      "extension.getToolstrips",
+      "extension.getViews",
+      "extension.lastError",
+      "extension.onConnectExternal",
+      "extension.onRequestExternal",
       "i18n.getAcceptLanguages"
     ];
     for (var i = 0; i < privileged.length; i++) {

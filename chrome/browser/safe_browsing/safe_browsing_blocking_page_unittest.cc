@@ -1,4 +1,4 @@
-// Copyright (c) 2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -22,11 +22,11 @@ static void InitNavigateParams(ViewHostMsg_FrameNavigate_Params* params,
                                const GURL& url) {
   params->page_id = page_id;
   params->url = url;
-  params->referrer = GURL::EmptyGURL();
+  params->referrer = GURL();
   params->transition = PageTransition::TYPED;
   params->redirects = std::vector<GURL>();
   params->should_update_history = false;
-  params->searchable_form_url = GURL::EmptyGURL();
+  params->searchable_form_url = GURL();
   params->searchable_form_encoding = std::string();
   params->password_form = PasswordForm();
   params->security_info = std::string();
@@ -153,7 +153,7 @@ class SafeBrowsingBlockingPageTest : public RenderViewHostTestHarness,
     resource->url = url;
     resource->resource_type = resource_type;
     resource->threat_type = SafeBrowsingService::URL_MALWARE;
-    resource->render_process_host_id = contents_->process()->id();
+    resource->render_process_host_id = contents_->GetRenderProcessHost()->id();
     resource->render_view_id = contents_->render_view_host()->routing_id();
   }
 
@@ -405,4 +405,30 @@ TEST_F(SafeBrowsingBlockingPageTest, NavigatingBackAndForth) {
   ASSERT_FALSE(sb_interstitial);
   ASSERT_EQ(2, controller().entry_count());
   EXPECT_EQ(kBadURL, controller().GetActiveEntry()->url().spec());
+}
+
+// Tests that calling "don't proceed" after "proceed" has been called doesn't
+// cause problems. http://crbug.com/30079
+TEST_F(SafeBrowsingBlockingPageTest, ProceedThenDontProceed) {
+  // Start a load.
+  controller().LoadURL(GURL(kBadURL), GURL(), PageTransition::TYPED);
+
+  // Simulate the load causing a safe browsing interstitial to be shown.
+  ShowInterstitial(ResourceType::MAIN_FRAME, kBadURL);
+  SafeBrowsingBlockingPage* sb_interstitial = GetSafeBrowsingBlockingPage();
+  ASSERT_TRUE(sb_interstitial);
+
+  MessageLoop::current()->RunAllPending();
+
+  // Simulate the user clicking "proceed" then "don't proceed" (before the
+  // interstitial is shown).
+  sb_interstitial->Proceed();
+  sb_interstitial->DontProceed();
+  // Proceed() and DontProceed() post a task to update the
+  // SafeBrowsingService::Client.
+  MessageLoop::current()->RunAllPending();
+
+  // The interstitial should be gone.
+  EXPECT_EQ(OK, user_response());
+  EXPECT_FALSE(GetSafeBrowsingBlockingPage());
 }

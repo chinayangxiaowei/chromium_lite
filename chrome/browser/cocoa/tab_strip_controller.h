@@ -1,4 +1,4 @@
-// Copyright (c) 2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,14 +7,13 @@
 
 #import <Cocoa/Cocoa.h>
 
-#include <deque>
-#include <map>
-
 #include "base/scoped_nsobject.h"
 #include "base/scoped_ptr.h"
 #import "chrome/browser/cocoa/tab_controller_target.h"
+#import "chrome/browser/cocoa/url_drop_target.h"
 #import "third_party/GTM/AppKit/GTMWindowSheetController.h"
 
+@class TabContentsController;
 @class TabView;
 @class TabStripView;
 
@@ -30,18 +29,15 @@ class ToolbarModel;
 // TabStripModel. The Obj-C part of this class handles drag and drop and all
 // the other Cocoa-y aspects.
 //
-// When a new tab is created, we create a TabController which manages loading
-// the contents, including toolbar, from a separate nib file. This controller
-// then handles replacing the contentView of the window. As tabs are switched,
-// the single child of the contentView is swapped around to hold the contents
-// (toolbar and all) representing that tab.
-
+// For a full description of the design, see
+// http://www.chromium.org/developers/design-documents/tab-strip-mac
 @interface TabStripController :
   NSObject<TabControllerTarget,
+           URLDropTargetController,
            GTMWindowSheetControllerDelegate> {
  @private
   TabContents* currentTab_;   // weak, tab for which we're showing state
-  scoped_nsobject<TabStripView> tabView_;  // strong
+  scoped_nsobject<TabStripView> tabStripView_;
   NSView* switchView_;  // weak
   scoped_nsobject<NSView> dragBlockingView_;  // avoid bad window server drags
   NSButton* newTabButton_;  // weak, obtained from the nib.
@@ -50,14 +46,20 @@ class ToolbarModel;
   scoped_nsobject<NSTrackingArea> newTabTrackingArea_;
   scoped_ptr<TabStripModelObserverBridge> bridge_;
   Browser* browser_;  // weak
-  TabStripModel* tabModel_;  // weak
+  TabStripModel* tabStripModel_;  // weak
+
   // Access to the TabContentsControllers (which own the parent view
-  // for the toolbar and associated tab contents) given an index. This needs
-  // to be kept in the same order as the tab strip's model as we will be
-  // using its index from the TabStripModelObserver calls.
+  // for the toolbar and associated tab contents) given an index. Call
+  // |indexFromModelIndex:| to convert a |tabStripModel_| index to a
+  // |tabContentsArray_| index. Do NOT assume that the indices of
+  // |tabStripModel_| and this array are identical, this is e.g. not true while
+  // tabs are animating closed (closed tabs are removed from |tabStripModel_|
+  // immediately, but from |tabContentsArray_| only after their close animation
+  // has completed).
   scoped_nsobject<NSMutableArray> tabContentsArray_;
-  // An array of TabControllers which manage the actual tab views. As above,
-  // this is kept in the same order as the tab strip model.
+  // An array of TabControllers which manage the actual tab views. See note
+  // above |tabContentsArray_|. |tabContentsArray_| and |tabArray_| always
+  // contain objects belonging to the same tabs at the same indices.
   scoped_nsobject<NSMutableArray> tabArray_;
 
   // Set of TabControllers that are currently animating closed.
@@ -97,18 +99,18 @@ class ToolbarModel;
   // The default favicon, so we can use one copy for all buttons.
   scoped_nsobject<NSImage> defaultFavIcon_;
 
+  // The amount by which to indent the tabs on the left (to make room for the
+  // red/yellow/green buttons).
+  CGFloat indentForControls_;
+
   // Manages per-tab sheets.
   scoped_nsobject<GTMWindowSheetController> sheetController_;
 
   // Is the mouse currently inside the strip;
   BOOL mouseInside_;
-
-  // GTMWindowSheetController supports only one per-tab sheet at a time.
-  // Thus, keep a queue of sheets for every tab. The first element in the queue
-  // is the currently visible sheet, and when this sheet is closed, the next
-  // sheet in the queue will be shown.
-  std::map<NSView*, std::deque<ConstrainedWindowMac*> > constrainedWindows_;
 }
+
+@property(nonatomic) CGFloat indentForControls;
 
 // Initialize the controller with a view and browser that contains
 // everything else we'll need. |switchView| is the view whose contents get
@@ -134,8 +136,13 @@ class ToolbarModel;
 // window when we don't have access to the TabContents as part of our strip.
 // |frame| is in the coordinate system of the tab strip view and represents
 // where the user dropped the new tab so it can be animated into its correct
-// location when the tab is added to the model.
-- (void)dropTabContents:(TabContents*)contents withFrame:(NSRect)frame;
+// location when the tab is added to the model. If the tab was pinned in its
+// previous window, setting |pinned| to YES will propagate that state to the
+// new window. Mini-tabs are either app or pinned tabs; the app state is stored
+// by the |contents|, but the |pinned| state is the caller's responsibility.
+- (void)dropTabContents:(TabContents*)contents
+              withFrame:(NSRect)frame
+            asPinnedTab:(BOOL)pinned;
 
 // Returns the index of the subview |view|. Returns -1 if not present. Takes
 // closing tabs into account such that this index will correctly match the tab
@@ -177,14 +184,30 @@ class ToolbarModel;
 // Default height for tabs.
 + (CGFloat)defaultTabHeight;
 
+// Default indentation for tabs (see |indentForControls_|).
++ (CGFloat)defaultIndentForControls;
+
 // Returns the (lazily created) window sheet controller of this window. Used
 // for the per-tab sheets.
 - (GTMWindowSheetController*)sheetController;
 
-// See comments in browser_window_controller.h for documentation about these
-// functions.
-- (BOOL)attachConstrainedWindow:(ConstrainedWindowMac*)window;
+// Destroys the window sheet controller of this window, if it exists.  The sheet
+// controller can be recreated by a subsequent call to |-sheetController|.  Must
+// not be called if any sheets are currently open.
+// TODO(viettrungluu): This is temporary code needed to allow sheets to work
+// (read: not crash) in fullscreen mode.  Once GTMWindowSheetController is
+// modified to support moving sheets between windows, this code can go away.
+// http://crbug.com/19093.
+- (void)destroySheetController;
+
+// Returns the currently active TabContentsController.
+- (TabContentsController*)activeTabContentsController;
+
+  // See comments in browser_window_controller.h for documentation about these
+  // functions.
+- (void)attachConstrainedWindow:(ConstrainedWindowMac*)window;
 - (void)removeConstrainedWindow:(ConstrainedWindowMac*)window;
+- (void)updateDevToolsForContents:(TabContents*)contents;
 
 @end
 

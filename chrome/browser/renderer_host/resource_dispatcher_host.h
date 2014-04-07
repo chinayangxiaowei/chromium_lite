@@ -22,7 +22,8 @@
 #include "base/process.h"
 #include "base/timer.h"
 #include "chrome/common/child_process_info.h"
-#include "chrome/browser/privacy_blacklist/blocked_response.h"
+#include "chrome/browser/privacy_blacklist/blacklist_interceptor.h"
+#include "chrome/browser/renderer_host/resource_queue.h"
 #include "ipc/ipc_message.h"
 #include "net/url_request/url_request.h"
 #include "webkit/glue/resource_type.h"
@@ -36,10 +37,13 @@ class ResourceDispatcherHostRequestInfo;
 class ResourceHandler;
 class SafeBrowsingService;
 class SaveFileManager;
+class SocketStreamDispatcherHost;
 class SSLClientAuthHandler;
 class UserScriptListener;
 class URLRequestContext;
 class WebKitThread;
+struct DownloadSaveInfo;
+struct GlobalRequestID;
 struct ViewHostMsg_Resource_Request;
 struct ViewMsg_ClosePage_Params;
 
@@ -85,25 +89,6 @@ class ResourceDispatcherHost : public URLRequest::Delegate {
                                     const GURL& new_url) = 0;
   };
 
-  // Uniquely identifies a URLRequest.
-  struct GlobalRequestID {
-    GlobalRequestID() : child_id(-1), request_id(-1) {
-    }
-    GlobalRequestID(int child_id, int request_id)
-        : child_id(child_id),
-          request_id(request_id) {
-    }
-
-    int child_id;
-    int request_id;
-
-    bool operator<(const GlobalRequestID& other) const {
-      if (child_id == other.child_id)
-        return request_id < other.request_id;
-      return child_id < other.child_id;
-    }
-  };
-
   ResourceDispatcherHost();
   ~ResourceDispatcherHost();
 
@@ -123,6 +108,7 @@ class ResourceDispatcherHost : public URLRequest::Delegate {
   // request from the renderer or another child process).
   void BeginDownload(const GURL& url,
                      const GURL& referrer,
+                     const DownloadSaveInfo& save_info,
                      int process_unique_id,
                      int route_id,
                      URLRequestContext* request_context);
@@ -152,6 +138,9 @@ class ResourceDispatcherHost : public URLRequest::Delegate {
                               int request_id,
                               bool has_new_first_party_for_cookies,
                               const GURL& new_first_party_for_cookies);
+
+  // Starts a request that was deferred during ResourceHandler::OnWillStart().
+  void StartDeferredRequest(int process_unique_id, int request_id);
 
   // Returns true if it's ok to send the data. If there are already too many
   // data messages pending, it pauses the request and returns false. In this
@@ -249,7 +238,7 @@ class ResourceDispatcherHost : public URLRequest::Delegate {
   void RemoveObserver(Observer* obs);
 
   // Retrieves a URLRequest.  Must be called from the IO thread.
-  URLRequest* GetURLRequest(GlobalRequestID request_id) const;
+  URLRequest* GetURLRequest(const GlobalRequestID& request_id) const;
 
   // Notifies our observers that a request has been cancelled.
   void NotifyResponseCompleted(URLRequest* request, int process_unique_id);
@@ -279,20 +268,20 @@ class ResourceDispatcherHost : public URLRequest::Delegate {
     return false;
   }
 
-  static void DisableHttpPrioritization() {
-    g_is_http_prioritization_enabled = false;
-  }
-
-  static bool IsHttpPrioritizationEnabled() {
-    return g_is_http_prioritization_enabled;
-  }
-
  private:
   FRIEND_TEST(ResourceDispatcherHostTest, TestBlockedRequestsProcessDies);
   FRIEND_TEST(ResourceDispatcherHostTest,
               IncrementOutstandingRequestsMemoryCost);
   FRIEND_TEST(ResourceDispatcherHostTest,
               CalculateApproximateMemoryCost);
+  FRIEND_TEST(ApplyExtensionMessageFilterPolicyTest, WrongScheme);
+  FRIEND_TEST(ApplyExtensionMessageFilterPolicyTest, GoodScheme);
+  FRIEND_TEST(ApplyExtensionMessageFilterPolicyTest,
+              GoodSchemeWithSecurityFilter);
+  FRIEND_TEST(ApplyExtensionMessageFilterPolicyTest,
+              GoodSchemeWrongResourceType);
+  FRIEND_TEST(ApplyExtensionMessageFilterPolicyTest,
+              WrongSchemeResourceAndFilter);
 
   class ShutdownTask;
 
@@ -329,16 +318,13 @@ class ResourceDispatcherHost : public URLRequest::Delegate {
   // true on success.
   bool CompleteResponseStarted(URLRequest* request);
 
-  // Cancels the given request if it still exists. We ignore cancels from the
-  // renderer in the event of a download. If |allow_delete| is true and no IO
-  // is pending, the request is removed and deleted.
-  void CancelRequest(int process_unique_id,
-                     int request_id,
-                     bool from_renderer,
-                     bool allow_delete);
-
   // Helper function for regular and download requests.
   void BeginRequestInternal(URLRequest* request);
+
+  // Helper function that inserts |request| into the resource queue.
+  void InsertIntoResourceQueue(
+      URLRequest* request,
+      const ResourceDispatcherHostRequestInfo& request_info);
 
   // Updates the "cost" of outstanding requests for |process_unique_id|.
   // The "cost" approximates how many bytes are consumed by all the in-memory
@@ -416,11 +402,25 @@ class ResourceDispatcherHost : public URLRequest::Delegate {
   // Returns true if the message passed in is a resource related message.
   static bool IsResourceDispatcherHostMessage(const IPC::Message&);
 
+  // Applies FilterPolicy::FILTER_EXTENSION_MESSAGES to all text/css requests
+  // that have "chrome-extension://" scheme.
+  static void ApplyExtensionMessageFilterPolicy(
+      const GURL& url,
+      const ResourceType::Type& resource_type,
+      ResourceDispatcherHostRequestInfo* request_info);
+
+  // Determine request priority based on how critical this resource typically
+  // is to user-perceived page load performance.
+  static net::RequestPriority DetermineRequestPriority(ResourceType::Type type);
+
   PendingRequestList pending_requests_;
 
   // A timer that periodically calls UpdateLoadStates while pending_requests_
   // is not empty.
   base::RepeatingTimer<ResourceDispatcherHost> update_load_states_timer_;
+
+  // Handles the resource requests from the moment we want to start them.
+  ResourceQueue resource_queue_;
 
   // We own the download file writing thread and manager
   scoped_refptr<DownloadFileManager> download_file_manager_;
@@ -431,9 +431,14 @@ class ResourceDispatcherHost : public URLRequest::Delegate {
   // We own the save file manager.
   scoped_refptr<SaveFileManager> save_file_manager_;
 
+  // Handles requests blocked by privacy blacklists.
+  BlacklistInterceptor blacklist_interceptor_;
+
   scoped_refptr<UserScriptListener> user_script_listener_;
 
   scoped_refptr<SafeBrowsingService> safe_browsing_;
+
+  scoped_ptr<SocketStreamDispatcherHost> socket_stream_dispatcher_host_;
 
   // We own the WebKit thread and see to its destruction.
   scoped_ptr<WebKitThread> webkit_thread_;
@@ -478,11 +483,6 @@ class ResourceDispatcherHost : public URLRequest::Delegate {
   // Used during IPC message dispatching so that the handlers can get a pointer
   // to the source of the message.
   Receiver* receiver_;
-
-  // Keeps track of elements blocked by the Privacy Blacklist.
-  chrome::BlockedResponse blocked_;
-
-  static bool g_is_http_prioritization_enabled;
 
   DISALLOW_COPY_AND_ASSIGN(ResourceDispatcherHost);
 };

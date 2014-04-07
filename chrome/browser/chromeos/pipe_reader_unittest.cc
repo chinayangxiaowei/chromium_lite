@@ -6,6 +6,7 @@
 
 #include <errno.h>
 
+#include "base/file_path.h"
 #include "base/safe_strerror_posix.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
@@ -14,17 +15,18 @@ namespace chromeos {
 typedef testing::Test PipeReaderTest;
 
 TEST_F(PipeReaderTest, SuccessfulReadTest) {
-  std::string pipe_name("/tmp/MYFIFO");
+  FilePath pipe_name("/tmp/MYFIFO");
   /* Create the FIFO if it does not exist */
   umask(0);
-  mknod(pipe_name.c_str(), S_IFIFO|0666, 0);
+  mknod(pipe_name.value().c_str(), S_IFIFO|0666, 0);
   const char line[] = "foo";
 
   pid_t pID = fork();
   if (pID == 0) {
-    int pipe = open(pipe_name.c_str(), O_WRONLY);
+    int pipe = open(pipe_name.value().c_str(), O_WRONLY);
     EXPECT_NE(pipe, -1) << safe_strerror(errno);
-    write(pipe, line, strlen(line));
+    int num_bytes = write(pipe, line, strlen(line));
+    EXPECT_NE(num_bytes, -1) << safe_strerror(errno);
     close(pipe);
     exit(1);
   } else {
@@ -35,10 +37,10 @@ TEST_F(PipeReaderTest, SuccessfulReadTest) {
 }
 
 TEST_F(PipeReaderTest, SuccessfulMultiLineReadTest) {
-  std::string pipe_name("/tmp/TESTFIFO");
+  FilePath pipe_name("/tmp/TESTFIFO");
   /* Create the FIFO if it does not exist */
   umask(0);
-  mknod(pipe_name.c_str(), S_IFIFO|0666, 0);
+  mknod(pipe_name.value().c_str(), S_IFIFO|0666, 0);
   const char foo[] = "foo";
   const char boo[] = "boo";
   std::string line(foo);
@@ -48,9 +50,10 @@ TEST_F(PipeReaderTest, SuccessfulMultiLineReadTest) {
 
   pid_t pID = fork();
   if (pID == 0) {
-    int pipe = open(pipe_name.c_str(), O_WRONLY);
+    int pipe = open(pipe_name.value().c_str(), O_WRONLY);
     EXPECT_NE(pipe, -1) << safe_strerror(errno);
-    write(pipe, line.c_str(), line.length());
+    int num_bytes = write(pipe, line.c_str(), line.length());
+    EXPECT_NE(num_bytes, -1) << safe_strerror(errno);
     close(pipe);
     exit(1);
   } else {
@@ -69,10 +72,10 @@ TEST_F(PipeReaderTest, SuccessfulMultiLineReadTest) {
 }
 
 TEST_F(PipeReaderTest, SuccessfulMultiLineReadNoEndingNewlineTest) {
-  std::string pipe_name("/tmp/TESTFIFO");
+  FilePath pipe_name("/tmp/TESTFIFO");
   /* Create the FIFO if it does not exist */
   umask(0);
-  mknod(pipe_name.c_str(), S_IFIFO|0666, 0);
+  mknod(pipe_name.value().c_str(), S_IFIFO|0666, 0);
   const char foo[] = "foo";
   const char boo[] = "boo";
   std::string line(foo);
@@ -81,9 +84,10 @@ TEST_F(PipeReaderTest, SuccessfulMultiLineReadNoEndingNewlineTest) {
 
   pid_t pID = fork();
   if (pID == 0) {
-    int pipe = open(pipe_name.c_str(), O_WRONLY);
+    int pipe = open(pipe_name.value().c_str(), O_WRONLY);
     EXPECT_NE(pipe, -1) << safe_strerror(errno);
-    write(pipe, line.c_str(), line.length());
+    int num_bytes = write(pipe, line.c_str(), line.length());
+    EXPECT_NE(num_bytes, -1) << safe_strerror(errno);
     close(pipe);
     exit(1);
   } else {

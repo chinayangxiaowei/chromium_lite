@@ -1,4 +1,4 @@
-// Copyright (c) 2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -112,8 +112,7 @@ class HistoryBackend : public base::RefCountedThreadSafe<HistoryBackend>,
   // Navigation ----------------------------------------------------------------
 
   void AddPage(scoped_refptr<HistoryAddPageArgs> request);
-  void SetPageTitle(const GURL& url, const std::wstring& title);
-  void AddPageWithDetails(const URLRow& info);
+  virtual void SetPageTitle(const GURL& url, const std::wstring& title);
 
   // Indexing ------------------------------------------------------------------
 
@@ -191,7 +190,7 @@ class HistoryBackend : public base::RefCountedThreadSafe<HistoryBackend>,
                         const GURL& page_url);
   void SetFavIcon(const GURL& page_url,
                   const GURL& icon_url,
-                  scoped_refptr<RefCountedBytes> data);
+                  scoped_refptr<RefCountedMemory> data);
   void UpdateFavIconMappingAndFetch(scoped_refptr<GetFavIconRequest> request,
                                     const GURL& page_url,
                                     const GURL& icon_url);
@@ -239,12 +238,21 @@ class HistoryBackend : public base::RefCountedThreadSafe<HistoryBackend>,
 
   void ProcessDBTask(scoped_refptr<HistoryDBTaskRequest> request);
 
+  virtual bool GetAllTypedURLs(std::vector<history::URLRow>* urls);
+
+  virtual bool UpdateURL(const URLID id, const history::URLRow& url);
+
+  virtual bool GetURL(const GURL& url, history::URLRow* url_row);
+
   // Deleting ------------------------------------------------------------------
 
-  void DeleteURL(const GURL& url);
+  virtual void DeleteURLs(const std::vector<GURL>& urls);
+
+  virtual void DeleteURL(const GURL& url);
 
   // Calls ExpireHistoryBackend::ExpireHistoryBetween and commits the change.
   void ExpireHistoryBetween(scoped_refptr<ExpireHistoryRequest> request,
+                            const std::set<GURL>& restrict_urls,
                             base::Time begin_time,
                             base::Time end_time);
 
@@ -271,6 +279,9 @@ class HistoryBackend : public base::RefCountedThreadSafe<HistoryBackend>,
   ExpireHistoryBackend* expire_backend() { return &expirer_; }
 #endif
 
+ protected:
+  virtual ~HistoryBackend();
+
  private:
   friend class base::RefCountedThreadSafe<HistoryBackend>;
   friend class CommitLaterTask;  // The commit task needs to call Commit().
@@ -278,9 +289,8 @@ class HistoryBackend : public base::RefCountedThreadSafe<HistoryBackend>,
   FRIEND_TEST(HistoryBackendTest, DeleteAll);
   FRIEND_TEST(HistoryBackendTest, ImportedFaviconsTest);
   FRIEND_TEST(HistoryBackendTest, URLsNoLongerBookmarked);
+  FRIEND_TEST(HistoryBackendTest, StripUsernamePasswordTest);
   friend class ::TestingProfile;
-
-  ~HistoryBackend();
 
   // Computes the name of the specified database on disk.
   FilePath GetThumbnailFileName() const;

@@ -12,14 +12,6 @@
 
 // TODO(zelidrag): Make this work on Linux (views).
 
-int CookiePromptModalDialog::GetDialogButtons() {
-#if defined(OS_WIN)
-  return dialog_->GetDialogButtons();
-#else
-  return 0;
-#endif
-}
-
 void CookiePromptModalDialog::AcceptWindow() {
 #if defined(OS_WIN)
   views::DialogClientView* client_view =
@@ -43,6 +35,7 @@ NativeDialog CookiePromptModalDialog::CreateNativeDialog() {
                               tab_contents_->GetMessageBoxRootWindow(),
                               tab_contents_->profile());
 #else
+  NOTIMPLEMENTED();
   return NULL;
 #endif
 }

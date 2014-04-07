@@ -8,6 +8,9 @@
   "click_here": {
     "message": "Left click to list acceptLanguages."
   },
+  "browser_action_title": {
+    "message": "Click Me"
+  },
   "chrome_accept_languages": {
     "message": "$CHROME$ accepts $languages$ languages",
     "placeholders": {

@@ -1,4 +1,4 @@
-// Copyright (c) 2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -12,10 +12,10 @@
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/browser_window.h"
 #include "chrome/browser/memory_purger.h"
+#include "chrome/browser/pref_service.h"
 #include "chrome/browser/views/browser_dialogs.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/common/pref_names.h"
-#include "chrome/common/pref_service.h"
 #include "grit/chromium_strings.h"
 #include "grit/generated_resources.h"
 #include "grit/theme_resources.h"
@@ -231,8 +231,7 @@ class TaskManagerView : public views::View,
 
   // Menu::Delegate
   virtual void ShowContextMenu(views::View* source,
-                               int x,
-                               int y,
+                               const gfx::Point& p,
                                bool is_mouse_gesture);
   virtual bool IsItemChecked(int id) const;
   virtual void ExecuteCommand(int id);
@@ -254,7 +253,6 @@ class TaskManagerView : public views::View,
   bool GetSavedAlwaysOnTopState(bool* always_on_top) const;
 
   views::NativeButton* purge_memory_button_;
-  bool purge_memory_button_in_purge_mode_;
   views::NativeButton* kill_button_;
   views::Link* about_memory_link_;
   views::GroupTableView* tab_table_;
@@ -287,7 +285,6 @@ TaskManagerView* TaskManagerView::instance_ = NULL;
 
 TaskManagerView::TaskManagerView()
     : purge_memory_button_(NULL),
-      purge_memory_button_in_purge_mode_(true),
       task_manager_(TaskManager::GetInstance()),
       model_(TaskManager::GetInstance()->model()),
       is_always_on_top_(false) {
@@ -367,8 +364,10 @@ void TaskManagerView::Init() {
   SetContextMenuController(this);
   // If we're running with --purge-memory-button, add a "Purge memory" button.
   if (CommandLine::ForCurrentProcess()->HasSwitch(
-      switches::kPurgeMemoryButton))
-    purge_memory_button_ = new views::NativeButton(this, L"Purge memory");
+      switches::kPurgeMemoryButton)) {
+    purge_memory_button_ = new views::NativeButton(this,
+        l10n_util::GetString(IDS_TASK_MANAGER_PURGE_MEMORY));
+  }
   kill_button_ = new views::NativeButton(
       this, l10n_util::GetString(IDS_TASK_MANAGER_KILL));
   kill_button_->AddAccelerator(views::Accelerator(base::VKEY_E,
@@ -492,14 +491,7 @@ void TaskManagerView::Show() {
 void TaskManagerView::ButtonPressed(
     views::Button* sender, const views::Event& event) {
   if (purge_memory_button_ && (sender == purge_memory_button_)) {
-    if (purge_memory_button_in_purge_mode_) {
-      MemoryPurger::GetSingleton()->OnSuspend();
-      purge_memory_button_->SetLabel(L"Reset purger");
-    } else {
-      MemoryPurger::GetSingleton()->OnResume();
-      purge_memory_button_->SetLabel(L"Purge Memory");
-    }
-    purge_memory_button_in_purge_mode_ = !purge_memory_button_in_purge_mode_;
+    MemoryPurger::PurgeAll();
   } else {
     DCHECK_EQ(sender, kill_button_);
     for (views::TableSelectionIterator iter  = tab_table_->SelectionBegin();
@@ -604,7 +596,8 @@ void TaskManagerView::LinkActivated(views::Link* source, int event_flags) {
   task_manager_->OpenAboutMemory();
 }
 
-void TaskManagerView::ShowContextMenu(views::View* source, int x, int y,
+void TaskManagerView::ShowContextMenu(views::View* source,
+                                      const gfx::Point& p,
                                       bool is_mouse_gesture) {
   UpdateStatsCounters();
   scoped_ptr<views::Menu> menu(views::Menu::Create(
@@ -613,7 +606,7 @@ void TaskManagerView::ShowContextMenu(views::View* source, int x, int y,
        columns_.begin(); i != columns_.end(); ++i) {
     menu->AppendMenuItem(i->id, i->title, views::Menu::CHECKBOX);
   }
-  menu->RunMenuAt(x, y);
+  menu->RunMenuAt(p.x(), p.y());
 }
 
 bool TaskManagerView::IsItemChecked(int id) const {
@@ -692,4 +685,3 @@ void ShowTaskManager() {
 }
 
 }  // namespace browser
-

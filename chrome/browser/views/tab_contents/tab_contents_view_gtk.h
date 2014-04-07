@@ -1,23 +1,27 @@
-// Copyright (c) 2009 The Chromium Authors. All rights reserved. Use of this
-// source code is governed by a BSD-style license that can be found in the
-// LICENSE file.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Use of this source code is governed by a BSD-style license that can be
+// found in the LICENSE file.
 
 #ifndef CHROME_BROWSER_VIEWS_TAB_CONTENTS_TAB_CONTENTS_VIEW_GTK_H_
 #define CHROME_BROWSER_VIEWS_TAB_CONTENTS_TAB_CONTENTS_VIEW_GTK_H_
 
 #include <vector>
 
-#include "base/gfx/size.h"
 #include "base/scoped_ptr.h"
 #include "chrome/browser/tab_contents/tab_contents_view.h"
+#include "gfx/size.h"
 #include "views/widget/widget_gtk.h"
 
 class ConstrainedWindowGtk;
 typedef struct _GtkFloatingContainer GtkFloatingContainer;
-class RenderViewContextMenuWin;
+class RenderViewContextMenuGtk;
 class SadTabView;
+class SkBitmap;
 class TabContentsDragSource;
 class WebDragDestGtk;
+namespace gfx {
+class Point;
+}
 namespace views {
 class NativeViewHost;
 }
@@ -39,6 +43,8 @@ class TabContentsViewGtk : public TabContentsView,
   void AttachConstrainedWindow(ConstrainedWindowGtk* constrained_window);
   void RemoveConstrainedWindow(ConstrainedWindowGtk* constrained_window);
 
+  gboolean OnMouseMove(GtkWidget* widget, GdkEventMotion* event);
+
   // TabContentsView implementation --------------------------------------------
 
   virtual void CreateView(const gfx::Size& initial_size);
@@ -59,11 +65,12 @@ class TabContentsViewGtk : public TabContentsView,
   // Backend implementation of RenderViewHostDelegate::View.
   virtual void ShowContextMenu(const ContextMenuParams& params);
   virtual void StartDragging(const WebDropData& drop_data,
-                             WebKit::WebDragOperationsMask ops_allowed);
+                             WebKit::WebDragOperationsMask ops_allowed,
+                             const SkBitmap& image,
+                             const gfx::Point& image_offset);
   virtual void UpdateDragCursor(WebKit::WebDragOperation operation);
   virtual void GotFocus();
   virtual void TakeFocus(bool reverse);
-  virtual bool HandleKeyboardEvent(const NativeWebKeyboardEvent& event);
 
  private:
   // Signal handlers -----------------------------------------------------------
@@ -71,7 +78,9 @@ class TabContentsViewGtk : public TabContentsView,
   // Overridden from views::WidgetGtk:
   virtual gboolean OnButtonPress(GtkWidget* widget, GdkEventButton* event);
   virtual void OnSizeAllocate(GtkWidget* widget, GtkAllocation* allocation);
-  virtual void OnPaint(GtkWidget* widget, GdkEventExpose* event);
+  virtual gboolean OnPaint(GtkWidget* widget, GdkEventExpose* event);
+  virtual void OnShow(GtkWidget* widget);
+  virtual void OnHide(GtkWidget* widget);
 
   // Handles notifying the TabContents and other operations when the window was
   // shown or hidden.
@@ -91,7 +100,7 @@ class TabContentsViewGtk : public TabContentsView,
 
   // Used to render the sad tab. This will be non-NULL only when the sad tab is
   // visible.
-  scoped_ptr<SadTabView> sad_tab_;
+  SadTabView* sad_tab_;
 
   // Whether to ignore the next CHAR keyboard event.
   bool ignore_next_char_event_;
@@ -100,7 +109,7 @@ class TabContentsViewGtk : public TabContentsView,
   int last_focused_view_storage_id_;
 
   // The context menu. Callbacks are asynchronous so we need to keep it around.
-  scoped_ptr<RenderViewContextMenuWin> context_menu_;
+  scoped_ptr<RenderViewContextMenuGtk> context_menu_;
 
   // Handles drags from this TabContentsView.
   scoped_ptr<TabContentsDragSource> drag_source_;

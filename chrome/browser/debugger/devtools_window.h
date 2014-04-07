@@ -29,6 +29,7 @@ class DevToolsWindow
       public NotificationObserver,
       public TabContentsDelegate {
  public:
+  static const std::wstring kDevToolsApp;
   static TabContents* GetDevToolsContents(TabContents* inspected_tab);
 
   DevToolsWindow(Profile* profile, RenderViewHost* inspected_rvh, bool docked);
@@ -51,13 +52,15 @@ class DevToolsWindow
  private:
   void CreateDevToolsBrowser();
   BrowserWindow* GetInspectedBrowserWindow();
+  void SetAttachedWindow();
 
   // Overridden from NotificationObserver.
   virtual void Observe(NotificationType type,
                        const NotificationSource& source,
                        const NotificationDetails& details);
 
-  void OpenConsole();
+  void ScheduleOpenConsole();
+  void DoOpenConsole();
 
   // Overridden from TabContentsDelegate.
   virtual void OpenURLFromTab(TabContents* source,
@@ -77,15 +80,18 @@ class DevToolsWindow
   virtual void CloseContents(TabContents* source) {}
   virtual void MoveContents(TabContents* source, const gfx::Rect& pos) {}
   virtual bool IsPopup(TabContents* source) { return false; }
+  virtual bool CanReloadContents(TabContents* source) const { return false; }
   virtual void URLStarredChanged(TabContents* source, bool starred) {}
   virtual void UpdateTargetURL(TabContents* source, const GURL& url) {}
   virtual void ToolbarSizeChanged(TabContents* source, bool is_animating) {}
+  virtual bool PreHandleKeyboardEvent(const NativeWebKeyboardEvent& event,
+                                      bool* is_keyboard_shortcut);
+  virtual void HandleKeyboardEvent(const NativeWebKeyboardEvent& event);
 
   Profile* profile_;
   TabContents* inspected_tab_;
   TabContents* tab_contents_;
   Browser* browser_;
-  BrowserWindow* inspected_window_;
   bool docked_;
   bool is_loaded_;
   bool open_console_on_load_;

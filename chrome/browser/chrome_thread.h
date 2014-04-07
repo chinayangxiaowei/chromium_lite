@@ -54,7 +54,7 @@ class ChromeThread : public base::Thread {
     // This is the thread that processes IPC and network messages.
     IO,
 
-#if defined(OS_LINUX)
+#if defined(USE_X11)
     // This thread has a second connection to the X server and is used to
     // process UI requests when routing the request to the UI thread would risk
     // deadlock.
@@ -113,6 +113,10 @@ class ChromeThread : public base::Thread {
     return PostNonNestableTask(
         identifier, from_here, new ReleaseTask<T>(object));
   }
+
+  // Callable on any thread.  Returns whether the given ID corresponds to a well
+  // known thread.
+  static bool IsWellKnownThread(ID identifier);
 
   // Callable on any thread.  Returns whether you're currently on a particular
   // thread.

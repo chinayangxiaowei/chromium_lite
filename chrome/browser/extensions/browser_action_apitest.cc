@@ -2,146 +2,68 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "build/build_config.h"
+
+#if defined(TOOLKIT_GTK)
+#include <gtk/gtk.h>
+#endif
+
 #include "chrome/browser/browser.h"
 #include "chrome/browser/browser_window.h"
+#include "chrome/browser/extensions/browser_action_test_util.h"
 #include "chrome/browser/extensions/extension_apitest.h"
 #include "chrome/browser/extensions/extension_browser_event_router.h"
 #include "chrome/browser/extensions/extension_tabs_module.h"
 #include "chrome/browser/extensions/extensions_service.h"
 #include "chrome/browser/profile.h"
 #include "chrome/browser/tab_contents/tab_contents.h"
+#include "chrome/common/chrome_switches.h"
 #include "chrome/common/extensions/extension_action.h"
+#include "chrome/common/url_constants.h"
 #include "chrome/test/ui_test_utils.h"
+#include "gfx/rect.h"
+#include "gfx/size.h"
 
-#if defined(OS_WIN)
-#include "chrome/browser/views/browser_actions_container.h"
-#include "chrome/browser/views/extensions/extension_popup.h"
-#include "chrome/browser/views/toolbar_view.h"
-#elif defined(OS_LINUX)
-#include "chrome/browser/gtk/view_id_util.h"
+#if defined(OS_MACOSX)
+// http://crbug.com/40002
+#define MAYBE_IncognitoBasic DISABLED_IncognitoBasic
+// http://crbug.com/40133
+#define MAYBE_BrowserActionAddPopup DISABLED_BrowserActionAddPopup
+#else
+#define MAYBE_IncognitoBasic IncognitoBasic
+#define MAYBE_BrowserActionAddPopup BrowserActionAddPopup
 #endif
 
-class BrowserActionTest : public ExtensionApiTest {
+class BrowserActionApiTest : public ExtensionApiTest {
  public:
-  BrowserActionTest() { }
-  virtual ~BrowserActionTest() { }
+  BrowserActionApiTest() {}
+  virtual ~BrowserActionApiTest() {}
 
-  int NumberOfBrowserActions() {
-    int rv = -1;
-
-#if defined(OS_WIN)
-    BrowserActionsContainer* browser_actions =
-        browser()->window()->GetBrowserWindowTesting()->GetToolbarView()->
-        browser_actions();
-    if (browser_actions)
-      rv = browser_actions->num_browser_actions();
-#elif defined(OS_LINUX)
-    GtkWidget* toolbar = ViewIDUtil::GetWidget(
-        GTK_WIDGET(browser()->window()->GetNativeHandle()),
-        VIEW_ID_BROWSER_ACTION_TOOLBAR);
-
-    if (toolbar) {
-      GList* children = gtk_container_get_children(GTK_CONTAINER(toolbar));
-      rv = g_list_length(children);
-      g_list_free(children);
-    }
-#endif
-
-    EXPECT_NE(-1, rv);
-    return rv;
+ protected:
+  BrowserActionTestUtil GetBrowserActionsBar() {
+    return BrowserActionTestUtil(browser());
   }
 
-  bool IsIconNull(int index) {
-#if defined(OS_WIN)
-    BrowserActionsContainer* browser_actions =
-        browser()->window()->GetBrowserWindowTesting()->GetToolbarView()->
-        browser_actions();
-    // We can't ASSERT_TRUE in non-void functions.
-    if (browser_actions) {
-      return browser_actions->GetBrowserActionViewAt(index)->button()->icon().
-          empty();
-    } else {
-      EXPECT_TRUE(false);
-    }
-#elif defined(OS_LINUX)
-    GtkWidget* button = GetButton(index);
-    if (button)
-      return gtk_button_get_image(GTK_BUTTON(button)) == NULL;
-    else
-      EXPECT_TRUE(false);
-#endif
-
-    return false;
+  gfx::Rect OpenPopup(int index) {
+    ResultCatcher catcher;
+    GetBrowserActionsBar().Press(index);
+    EXPECT_TRUE(catcher.GetNextResult()) << catcher.message();
+    EXPECT_TRUE(GetBrowserActionsBar().HasPopup());
+    return GetBrowserActionsBar().GetPopupBounds();
   }
-
-  void ExecuteBrowserAction(int index) {
-#if defined(OS_WIN)
-    BrowserActionsContainer* browser_actions =
-        browser()->window()->GetBrowserWindowTesting()->GetToolbarView()->
-        browser_actions();
-    ASSERT_TRUE(browser_actions);
-    browser_actions->TestExecuteBrowserAction(index);
-#elif defined(OS_LINUX)
-    GtkWidget* button = GetButton(index);
-    ASSERT_TRUE(button);
-    gtk_button_clicked(GTK_BUTTON(button));
-#endif
-  }
-
-  std::string GetTooltip(int index) {
-#if defined(OS_WIN)
-    BrowserActionsContainer* browser_actions =
-        browser()->window()->GetBrowserWindowTesting()->GetToolbarView()->
-        browser_actions();
-    if (browser_actions) {
-      std::wstring text;
-      EXPECT_TRUE(browser_actions->GetBrowserActionViewAt(0)->button()->
-            GetTooltipText(0, 0, &text));
-      return WideToUTF8(text);
-    }
-#elif defined(OS_LINUX)
-    GtkWidget* button = GetButton(index);
-    if (button) {
-      gchar* text = gtk_widget_get_tooltip_text(button);
-      std::string rv = std::string(text);
-      g_free(text);
-      return rv;
-    }
-#endif
-    EXPECT_TRUE(false);
-    return std::string();
-  }
-
- private:
-#if defined(OS_LINUX)
-  GtkWidget* GetButton(int index) {
-    GtkWidget* rv = NULL;
-    GtkWidget* toolbar = ViewIDUtil::GetWidget(
-        GTK_WIDGET(browser()->window()->GetNativeHandle()),
-        VIEW_ID_BROWSER_ACTION_TOOLBAR);
-
-    if (toolbar) {
-      GList* children = gtk_container_get_children(GTK_CONTAINER(toolbar));
-      rv = static_cast<GtkWidget*>(g_list_nth(children, index)->data);
-      g_list_free(children);
-    }
-
-    return rv;
-  }
-#endif
 };
 
-IN_PROC_BROWSER_TEST_F(BrowserActionTest, Basic) {
+IN_PROC_BROWSER_TEST_F(BrowserActionApiTest, Basic) {
   StartHTTPServer();
-  ASSERT_TRUE(RunExtensionTest("browser_action")) << message_;
+  ASSERT_TRUE(RunExtensionTest("browser_action/basics")) << message_;
+  Extension* extension = GetSingleLoadedExtension();
+  ASSERT_TRUE(extension) << message_;
 
   // Test that there is a browser action in the toolbar.
-  ASSERT_EQ(1, NumberOfBrowserActions());
+  ASSERT_EQ(1, GetBrowserActionsBar().NumberOfBrowserActions());
 
   // Tell the extension to update the browser action state.
   ResultCatcher catcher;
-  ExtensionsService* service = browser()->profile()->GetExtensionsService();
-  Extension* extension = service->extensions()->at(0);
   ui_test_utils::NavigateToURL(browser(),
       GURL(extension->GetResourceURL("update.html")));
   ASSERT_TRUE(catcher.GetNextResult());
@@ -172,23 +94,23 @@ IN_PROC_BROWSER_TEST_F(BrowserActionTest, Basic) {
   ASSERT_TRUE(result);
 }
 
-IN_PROC_BROWSER_TEST_F(BrowserActionTest, DynamicBrowserAction) {
-  ASSERT_TRUE(RunExtensionTest("browser_action_no_icon")) << message_;
+IN_PROC_BROWSER_TEST_F(BrowserActionApiTest, DynamicBrowserAction) {
+  ASSERT_TRUE(RunExtensionTest("browser_action/no_icon")) << message_;
+  Extension* extension = GetSingleLoadedExtension();
+  ASSERT_TRUE(extension) << message_;
 
   // Test that there is a browser action in the toolbar and that it has no icon.
-  ASSERT_EQ(1, NumberOfBrowserActions());
-  EXPECT_TRUE(IsIconNull(0));
+  ASSERT_EQ(1, GetBrowserActionsBar().NumberOfBrowserActions());
+  EXPECT_FALSE(GetBrowserActionsBar().HasIcon(0));
 
   // Tell the extension to update the icon using setIcon({imageData:...}).
   ResultCatcher catcher;
-  ExtensionsService* service = browser()->profile()->GetExtensionsService();
-  Extension* extension = service->extensions()->at(0);
   ui_test_utils::NavigateToURL(browser(),
       GURL(extension->GetResourceURL("update.html")));
   ASSERT_TRUE(catcher.GetNextResult());
 
   // Test that we received the changes.
-  EXPECT_FALSE(IsIconNull(0));
+  EXPECT_TRUE(GetBrowserActionsBar().HasIcon(0));
 
   // Tell the extension to update using setIcon({path:...});
   ui_test_utils::NavigateToURL(browser(),
@@ -196,94 +118,267 @@ IN_PROC_BROWSER_TEST_F(BrowserActionTest, DynamicBrowserAction) {
   ASSERT_TRUE(catcher.GetNextResult());
 
   // Test that we received the changes.
-  EXPECT_FALSE(IsIconNull(0));
+  EXPECT_TRUE(GetBrowserActionsBar().HasIcon(0));
 
   // TODO(aa): Would be nice here to actually compare that the pixels change.
 }
 
-IN_PROC_BROWSER_TEST_F(BrowserActionTest, TabSpecificBrowserActionState) {
-  ASSERT_TRUE(RunExtensionTest("browser_action_tab_specific_state")) <<
+IN_PROC_BROWSER_TEST_F(BrowserActionApiTest, TabSpecificBrowserActionState) {
+  ASSERT_TRUE(RunExtensionTest("browser_action/tab_specific_state")) <<
       message_;
+  Extension* extension = GetSingleLoadedExtension();
+  ASSERT_TRUE(extension) << message_;
 
   // Test that there is a browser action in the toolbar and that it has an icon.
-  ASSERT_EQ(1, NumberOfBrowserActions());
-  EXPECT_FALSE(IsIconNull(0));
+  ASSERT_EQ(1, GetBrowserActionsBar().NumberOfBrowserActions());
+  EXPECT_TRUE(GetBrowserActionsBar().HasIcon(0));
 
   // Execute the action, its title should change.
   ResultCatcher catcher;
-  ExecuteBrowserAction(0);
+  GetBrowserActionsBar().Press(0);
   ASSERT_TRUE(catcher.GetNextResult());
-  EXPECT_EQ("Showing icon 2", GetTooltip(0));
+  EXPECT_EQ("Showing icon 2", GetBrowserActionsBar().GetTooltip(0));
 
   // Open a new tab, the title should go back.
   browser()->NewTab();
-  EXPECT_EQ("hi!", GetTooltip(0));
+  EXPECT_EQ("hi!", GetBrowserActionsBar().GetTooltip(0));
 
   // Go back to first tab, changed title should reappear.
   browser()->SelectTabContentsAt(0, true);
-  EXPECT_EQ("Showing icon 2", GetTooltip(0));
+  EXPECT_EQ("Showing icon 2", GetBrowserActionsBar().GetTooltip(0));
 
   // Reload that tab, default title should come back.
   ui_test_utils::NavigateToURL(browser(), GURL("about:blank"));
-  EXPECT_EQ("hi!", GetTooltip(0));
+  EXPECT_EQ("hi!", GetBrowserActionsBar().GetTooltip(0));
 }
 
-// TODO(estade): port to Linux.
-#if defined(OS_WIN)
-IN_PROC_BROWSER_TEST_F(BrowserActionTest, BrowserActionPopup) {
-  ASSERT_TRUE(LoadExtension(test_data_dir_.AppendASCII("popup")));
+// Crashy, http://crbug.com/39158.
+IN_PROC_BROWSER_TEST_F(BrowserActionApiTest, DISABLED_BrowserActionPopup) {
+  ASSERT_TRUE(LoadExtension(test_data_dir_.AppendASCII(
+      "browser_action/popup")));
+  Extension* extension = GetSingleLoadedExtension();
+  ASSERT_TRUE(extension) << message_;
 
-  ResultCatcher catcher;
-
-  // This value is in api_test/popup/popup.html.
+  // The extension's popup's size grows by |growFactor| each click.
   const int growFactor = 500;
-  ASSERT_GT(ExtensionPopup::kMinHeight + growFactor * 2,
-            ExtensionPopup::kMaxHeight);
-  ASSERT_GT(ExtensionPopup::kMinWidth + growFactor * 2,
-            ExtensionPopup::kMaxWidth);
+  gfx::Size minSize = BrowserActionTestUtil::GetMinPopupSize();
+  gfx::Size maxSize = BrowserActionTestUtil::GetMaxPopupSize();
 
-  // Our initial expected size.
-  int width = ExtensionPopup::kMinWidth;
-  int height = ExtensionPopup::kMinHeight;
+  // Ensure that two clicks will exceed the maximum allowed size.
+  ASSERT_GT(minSize.height() + growFactor * 2, maxSize.height());
+  ASSERT_GT(minSize.width() + growFactor * 2, maxSize.width());
 
-  BrowserActionsContainer* browser_actions =
-      browser()->window()->GetBrowserWindowTesting()->GetToolbarView()->
-      browser_actions();
-  ASSERT_TRUE(browser_actions);
   // Simulate a click on the browser action and verify the size of the resulting
   // popup.  The first one tries to be 0x0, so it should be the min values.
-  ExecuteBrowserAction(0);
-  EXPECT_TRUE(browser_actions->TestGetPopup() != NULL);
-  ASSERT_TRUE(catcher.GetNextResult()) << catcher.message();
-  gfx::Rect bounds = browser_actions->TestGetPopup()->view()->bounds();
-  EXPECT_EQ(width, bounds.width());
-  EXPECT_EQ(height, bounds.height());
-  browser_actions->HidePopup();
-  EXPECT_TRUE(browser_actions->TestGetPopup() == NULL);
+  gfx::Rect bounds = OpenPopup(0);
+  EXPECT_EQ(minSize, bounds.size());
+  EXPECT_TRUE(GetBrowserActionsBar().HidePopup());
 
-  // Do it again, and verify the new bigger size (the popup grows each time it's
-  // opened).
-  width = growFactor;
-  height = growFactor;
-  browser_actions->TestExecuteBrowserAction(0);
-  EXPECT_TRUE(browser_actions->TestGetPopup() != NULL);
-  ASSERT_TRUE(catcher.GetNextResult()) << catcher.message();
-  bounds = browser_actions->TestGetPopup()->view()->bounds();
-  EXPECT_EQ(width, bounds.width());
-  EXPECT_EQ(height, bounds.height());
-  browser_actions->HidePopup();
-  EXPECT_TRUE(browser_actions->TestGetPopup() == NULL);
+  bounds = OpenPopup(0);
+  EXPECT_EQ(gfx::Size(growFactor, growFactor), bounds.size());
+  EXPECT_TRUE(GetBrowserActionsBar().HidePopup());
 
   // One more time, but this time it should be constrained by the max values.
-  width = ExtensionPopup::kMaxWidth;
-  height = ExtensionPopup::kMaxHeight;
-  browser_actions->TestExecuteBrowserAction(0);
-  EXPECT_TRUE(browser_actions->TestGetPopup() != NULL);
-  ASSERT_TRUE(catcher.GetNextResult()) << catcher.message();
-  bounds = browser_actions->TestGetPopup()->view()->bounds();
-  EXPECT_EQ(width, bounds.width());
-  EXPECT_EQ(height, bounds.height());
-  browser_actions->HidePopup();
-  EXPECT_TRUE(browser_actions->TestGetPopup() == NULL);
+  bounds = OpenPopup(0);
+  EXPECT_EQ(maxSize, bounds.size());
+  EXPECT_TRUE(GetBrowserActionsBar().HidePopup());
 }
+
+// Test that calling chrome.browserAction.setPopup() can enable and change
+// a popup.
+IN_PROC_BROWSER_TEST_F(BrowserActionApiTest, MAYBE_BrowserActionAddPopup) {
+  ASSERT_TRUE(RunExtensionTest("browser_action/add_popup")) << message_;
+  Extension* extension = GetSingleLoadedExtension();
+  ASSERT_TRUE(extension) << message_;
+
+  int tab_id = ExtensionTabUtil::GetTabId(browser()->GetSelectedTabContents());
+
+  ExtensionAction* browser_action = extension->browser_action();
+  ASSERT_TRUE(browser_action)
+      << "Browser action test extension should have a browser action.";
+
+  ASSERT_FALSE(browser_action->HasPopup(tab_id));
+  ASSERT_FALSE(browser_action->HasPopup(ExtensionAction::kDefaultTabId));
+
+  // Simulate a click on the browser action icon.  The onClicked handler
+  // will add a popup.
+  {
+    ResultCatcher catcher;
+    GetBrowserActionsBar().Press(0);
+    ASSERT_TRUE(catcher.GetNextResult());
+  }
+
+  // The call to setPopup in background.html set a tab id, so the
+  // current tab's setting should have changed, but the default setting
+  // should not have changed.
+  ASSERT_TRUE(browser_action->HasPopup(tab_id))
+      << "Clicking on the browser action should have caused a popup to "
+      << "be added.";
+  ASSERT_FALSE(browser_action->HasPopup(ExtensionAction::kDefaultTabId))
+      << "Clicking on the browser action should not have set a default "
+      << "popup.";
+
+  ASSERT_STREQ("/a_popup.html",
+               browser_action->GetPopupUrl(tab_id).path().c_str());
+
+  // Now change the popup from a_popup.html to another_popup.html by loading
+  // a page which removes the popup using chrome.browserAction.setPopup().
+  {
+    ResultCatcher catcher;
+    ui_test_utils::NavigateToURL(
+        browser(),
+        GURL(extension->GetResourceURL("change_popup.html")));
+    ASSERT_TRUE(catcher.GetNextResult());
+  }
+
+  // The call to setPopup in change_popup.html did not use a tab id,
+  // so the default setting should have changed as well as the current tab.
+  ASSERT_TRUE(browser_action->HasPopup(tab_id));
+  ASSERT_TRUE(browser_action->HasPopup(ExtensionAction::kDefaultTabId));
+  ASSERT_STREQ("/another_popup.html",
+               browser_action->GetPopupUrl(tab_id).path().c_str());
+}
+
+// Test that calling chrome.browserAction.setPopup() can remove a popup.
+IN_PROC_BROWSER_TEST_F(BrowserActionApiTest, BrowserActionRemovePopup) {
+  // Load the extension, which has a browser action with a default popup.
+  ASSERT_TRUE(RunExtensionTest("browser_action/remove_popup")) << message_;
+  Extension* extension = GetSingleLoadedExtension();
+  ASSERT_TRUE(extension) << message_;
+
+  int tab_id = ExtensionTabUtil::GetTabId(browser()->GetSelectedTabContents());
+
+  ExtensionAction* browser_action = extension->browser_action();
+  ASSERT_TRUE(browser_action)
+      << "Browser action test extension should have a browser action.";
+
+  ASSERT_TRUE(browser_action->HasPopup(tab_id))
+      << "Expect a browser action popup before the test removes it.";
+  ASSERT_TRUE(browser_action->HasPopup(ExtensionAction::kDefaultTabId))
+      << "Expect a browser action popup is the default for all tabs.";
+
+  // Load a page which removes the popup using chrome.browserAction.setPopup().
+  {
+    ResultCatcher catcher;
+    ui_test_utils::NavigateToURL(
+        browser(),
+        GURL(extension->GetResourceURL("remove_popup.html")));
+    ASSERT_TRUE(catcher.GetNextResult());
+  }
+
+  ASSERT_FALSE(browser_action->HasPopup(tab_id))
+      << "Browser action popup should have been removed.";
+  ASSERT_TRUE(browser_action->HasPopup(ExtensionAction::kDefaultTabId))
+      << "Browser action popup default should not be changed by setting "
+      << "a specific tab id.";
+}
+
+IN_PROC_BROWSER_TEST_F(BrowserActionApiTest, MAYBE_IncognitoBasic) {
+  StartHTTPServer();
+
+  ASSERT_TRUE(RunExtensionTest("browser_action/basics")) << message_;
+  Extension* extension = GetSingleLoadedExtension();
+  ASSERT_TRUE(extension) << message_;
+
+  // Test that there is a browser action in the toolbar.
+  ASSERT_EQ(1, GetBrowserActionsBar().NumberOfBrowserActions());
+
+  // Open an incognito window and test that the browser action isn't there by
+  // default.
+  Profile* incognito_profile = browser()->profile()->GetOffTheRecordProfile();
+  Browser* incognito_browser = Browser::Create(incognito_profile);
+
+  ASSERT_EQ(0,
+            BrowserActionTestUtil(incognito_browser).NumberOfBrowserActions());
+
+  // Now enable the extension in incognito mode, and test that the browser
+  // action shows up. Note that we don't update the existing window at the
+  // moment, so we just create a new one.
+  browser()->profile()->GetExtensionsService()->extension_prefs()->
+      SetIsIncognitoEnabled(extension->id(), true);
+
+  incognito_browser->CloseWindow();
+  incognito_browser = Browser::Create(incognito_profile);
+  ASSERT_EQ(1,
+            BrowserActionTestUtil(incognito_browser).NumberOfBrowserActions());
+
+  // TODO(mpcomplete): simulate a click and have it do the right thing in
+  // incognito.
+}
+
+// TODO(mpcomplete): enable this when Mac gets dragging support.
+#if defined(OS_MACOSX)
+IN_PROC_BROWSER_TEST_F(BrowserActionApiTest, DISABLED_IncognitoDragging) {
+#else
+IN_PROC_BROWSER_TEST_F(BrowserActionApiTest, IncognitoDragging) {
 #endif
+  ExtensionsService* service = browser()->profile()->GetExtensionsService();
+
+  // The tooltips for each respective browser action.
+  const char kTooltipA[] = "Make this page red";
+  const char kTooltipB[] = "grow";
+  const char kTooltipC[] = "Test setPopup()";
+
+  const size_t size_before = service->extensions()->size();
+
+  ASSERT_TRUE(LoadExtension(test_data_dir_.AppendASCII(
+      "browser_action/basics")));
+  ASSERT_TRUE(LoadExtension(test_data_dir_.AppendASCII(
+      "browser_action/popup")));
+  ASSERT_TRUE(LoadExtension(test_data_dir_.AppendASCII(
+      "browser_action/add_popup")));
+
+  // Test that there are 3 browser actions in the toolbar.
+  ASSERT_EQ(size_before + 3, service->extensions()->size());
+  ASSERT_EQ(3, GetBrowserActionsBar().NumberOfBrowserActions());
+
+  // Now enable 2 of the extensions in incognito mode, and test that the browser
+  // actions show up.
+  service->extension_prefs()->SetIsIncognitoEnabled(
+      service->extensions()->at(size_before)->id(), true);
+  service->extension_prefs()->SetIsIncognitoEnabled(
+      service->extensions()->at(size_before + 2)->id(), true);
+
+  Profile* incognito_profile = browser()->profile()->GetOffTheRecordProfile();
+  Browser* incognito_browser = Browser::Create(incognito_profile);
+  BrowserActionTestUtil incognito_bar(incognito_browser);
+
+  // Navigate just to have a tab in this window, otherwise wonky things happen.
+  ui_test_utils::OpenURLOffTheRecord(browser()->profile(),
+                                     GURL(chrome::kChromeUIExtensionsURL));
+
+  ASSERT_EQ(2, incognito_bar.NumberOfBrowserActions());
+
+  // Ensure that the browser actions are in the right order (ABC).
+  EXPECT_EQ(kTooltipA, GetBrowserActionsBar().GetTooltip(0));
+  EXPECT_EQ(kTooltipB, GetBrowserActionsBar().GetTooltip(1));
+  EXPECT_EQ(kTooltipC, GetBrowserActionsBar().GetTooltip(2));
+
+  EXPECT_EQ(kTooltipA, incognito_bar.GetTooltip(0));
+  EXPECT_EQ(kTooltipC, incognito_bar.GetTooltip(1));
+
+  // Now rearrange them and ensure that they are rearranged correctly in both
+  // regular and incognito mode.
+
+  // ABC -> CAB
+  service->toolbar_model()->MoveBrowserAction(
+      service->extensions()->at(size_before + 2), 0);
+
+  EXPECT_EQ(kTooltipC, GetBrowserActionsBar().GetTooltip(0));
+  EXPECT_EQ(kTooltipA, GetBrowserActionsBar().GetTooltip(1));
+  EXPECT_EQ(kTooltipB, GetBrowserActionsBar().GetTooltip(2));
+
+  EXPECT_EQ(kTooltipC, incognito_bar.GetTooltip(0));
+  EXPECT_EQ(kTooltipA, incognito_bar.GetTooltip(1));
+
+  // CAB -> CBA
+  service->toolbar_model()->MoveBrowserAction(
+      service->extensions()->at(size_before + 1), 1);
+
+  EXPECT_EQ(kTooltipC, GetBrowserActionsBar().GetTooltip(0));
+  EXPECT_EQ(kTooltipB, GetBrowserActionsBar().GetTooltip(1));
+  EXPECT_EQ(kTooltipA, GetBrowserActionsBar().GetTooltip(2));
+
+  EXPECT_EQ(kTooltipC, incognito_bar.GetTooltip(0));
+  EXPECT_EQ(kTooltipA, incognito_bar.GetTooltip(1));
+}

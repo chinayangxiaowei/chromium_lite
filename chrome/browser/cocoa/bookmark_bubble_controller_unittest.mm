@@ -8,6 +8,7 @@
 #include "base/scoped_nsobject.h"
 #import "chrome/browser/cocoa/bookmark_bubble_controller.h"
 #include "chrome/browser/cocoa/browser_test_helper.h"
+#include "chrome/browser/cocoa/browser_window_controller.h"
 #import "chrome/browser/cocoa/cocoa_test_helper.h"
 #import "chrome/browser/cocoa/info_bubble_window.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -26,6 +27,8 @@ class BookmarkBubbleControllerTest : public CocoaTest {
   }
 
   virtual void TearDown() {
+    // TODO(shess): Figure out why CocoaTest::TearDown() needs 3
+    // passes through the event loop to fully close out these windows.
     [controller_ close];
     CocoaTest::TearDown();
   }
@@ -33,15 +36,18 @@ class BookmarkBubbleControllerTest : public CocoaTest {
   // Returns a controller but ownership not transferred.
   // Only one of these will be valid at a time.
   BookmarkBubbleController* ControllerForNode(const BookmarkNode* node) {
-    if (controller_)
+    if (controller_ && !IsWindowClosing()) {
       [controller_ close];
+      controller_ = nil;
+    }
     controller_ = [[BookmarkBubbleController alloc]
                       initWithParentWindow:test_window()
-                          topLeftForBubble:TopLeftForBubble()
                                      model:helper_.profile()->GetBookmarkModel()
                                       node:node
                          alreadyBookmarked:YES];
     EXPECT_TRUE([controller_ window]);
+    // The window must be gone or we'll fail a unit test with windows left open.
+    [static_cast<InfoBubbleWindow*>([controller_ window]) setDelayOnClose:NO];
     [controller_ showWindow:nil];
     return controller_;
   }
@@ -52,10 +58,6 @@ class BookmarkBubbleControllerTest : public CocoaTest {
 
   bool IsWindowClosing() {
     return [static_cast<InfoBubbleWindow*>([controller_ window]) isClosing];
-  }
-
-  NSPoint TopLeftForBubble() {
-    return NSMakePoint(10, 300);
   }
 };
 
@@ -151,7 +153,7 @@ TEST_F(BookmarkBubbleControllerTest, TestFolderWithBlankName) {
 
   // One of the items should be blank and its node should be node2.
   NSArray* items = [[controller folderPopUpButton] itemArray];
-  EXPECT_EQ(6U, [items count]);
+  EXPECT_GT([items count], 4U);
   BOOL blankFolderFound = NO;
   for (NSMenuItem* item in [[controller folderPopUpButton] itemArray]) {
     if ([[item title] length] == 0 &&
@@ -327,7 +329,6 @@ TEST_F(BookmarkBubbleControllerTest, EscapeRemovesNewBookmark) {
   BookmarkBubbleController* controller =
       [[BookmarkBubbleController alloc]
           initWithParentWindow:test_window()
-              topLeftForBubble:TopLeftForBubble()
                          model:helper_.profile()->GetBookmarkModel()
                           node:node
              alreadyBookmarked:NO];  // The last param is the key difference.
@@ -352,6 +353,36 @@ TEST_F(BookmarkBubbleControllerTest, EscapeDoesntTouchExistingBookmark) {
 
   [(id)controller cancel:nil];
   EXPECT_TRUE(model->IsBookmarked(gurl));
+}
+
+// Confirm indentation of items in pop-up menu
+TEST_F(BookmarkBubbleControllerTest, TestMenuIndentation) {
+  // Create some folders, including a nested folder
+  BookmarkModel* model = GetBookmarkModel();
+  EXPECT_TRUE(model);
+  const BookmarkNode* bookmarkBarNode = model->GetBookmarkBarNode();
+  EXPECT_TRUE(bookmarkBarNode);
+  const BookmarkNode* node1 = model->AddGroup(bookmarkBarNode, 0, L"one");
+  EXPECT_TRUE(node1);
+  const BookmarkNode* node2 = model->AddGroup(bookmarkBarNode, 1, L"two");
+  EXPECT_TRUE(node2);
+  const BookmarkNode* node2_1 = model->AddGroup(node2, 0, L"two dot one");
+  EXPECT_TRUE(node2_1);
+  const BookmarkNode* node3 = model->AddGroup(bookmarkBarNode, 2, L"three");
+  EXPECT_TRUE(node3);
+
+  BookmarkBubbleController* controller = ControllerForNode(node1);
+  EXPECT_TRUE(controller);
+
+  // Compare the menu item indents against expectations.
+  static const int kExpectedIndent[] = {0, 1, 1, 2, 1, 0};
+  NSArray* items = [[controller folderPopUpButton] itemArray];
+  ASSERT_GE([items count], 6U);
+  for(int itemNo = 0; itemNo < 6; itemNo++) {
+    NSMenuItem* item = [items objectAtIndex:itemNo];
+    EXPECT_EQ(kExpectedIndent[itemNo], [item indentationLevel])
+        << "Unexpected indent for menu item #" << itemNo;
+  }
 }
 
 }  // namespace

@@ -10,8 +10,10 @@
 #include "chrome/common/chrome_switches.h"
 #include "chrome/common/notification_service.h"
 #include "chrome/common/plugin_messages.h"
+#include "chrome/common/socket_stream_dispatcher.h"
 #include "ipc/ipc_logging.h"
 #include "ipc/ipc_message.h"
+#include "ipc/ipc_sync_message_filter.h"
 #include "ipc/ipc_switches.h"
 #include "webkit/glue/webkit_glue.h"
 
@@ -29,6 +31,7 @@ ChildThread::ChildThread(const std::string& channel_name)
 
 void ChildThread::Init() {
   check_with_browser_before_shutdown_ = false;
+  on_channel_error_called_ = false;
   message_loop_ = MessageLoop::current();
   if (CommandLine::ForCurrentProcess()->HasSwitch(switches::kUserAgent)) {
     webkit_glue::SetUserAgent(
@@ -45,6 +48,11 @@ void ChildThread::Init() {
 #endif
 
   resource_dispatcher_.reset(new ResourceDispatcher(this));
+  socket_stream_dispatcher_.reset(new SocketStreamDispatcher());
+
+  sync_message_filter_ =
+      new IPC::SyncMessageFilter(ChildProcess::current()->GetShutDownEvent());
+  channel_->AddFilter(sync_message_filter_.get());
 
   // When running in unit tests, there is already a NotificationService object.
   // Since only one can exist at a time per thread, check first.
@@ -56,6 +64,8 @@ ChildThread::~ChildThread() {
 #ifdef IPC_MESSAGE_LOG_ENABLED
   IPC::Logging::current()->SetIPCSender(NULL);
 #endif
+
+  channel_->RemoveFilter(sync_message_filter_.get());
 
   // The ChannelProxy object caches a pointer to the IPC thread, so need to
   // reset it as it's not guaranteed to outlive this object.
@@ -69,6 +79,7 @@ ChildThread::~ChildThread() {
 }
 
 void ChildThread::OnChannelError() {
+  set_on_channel_error_called(true);
   MessageLoop::current()->Quit();
 }
 
@@ -99,9 +110,20 @@ IPC::Channel::Listener* ChildThread::ResolveRoute(int32 routing_id) {
   return router_.ResolveRoute(routing_id);
 }
 
+webkit_glue::ResourceLoaderBridge* ChildThread::CreateBridge(
+    const webkit_glue::ResourceLoaderBridge::RequestInfo& request_info,
+    int host_renderer_id,
+    int host_render_view_id) {
+  return resource_dispatcher()->
+      CreateBridge(request_info, host_renderer_id, host_render_view_id);
+}
+
+
 void ChildThread::OnMessageReceived(const IPC::Message& msg) {
   // Resource responses are sent to the resource dispatcher.
   if (resource_dispatcher_->OnMessageReceived(msg))
+    return;
+  if (socket_stream_dispatcher_->OnMessageReceived(msg))
     return;
 
   bool handled = true;
@@ -111,7 +133,7 @@ void ChildThread::OnMessageReceived(const IPC::Message& msg) {
 #if defined(IPC_MESSAGE_LOG_ENABLED)
     IPC_MESSAGE_HANDLER(PluginProcessMsg_SetIPCLoggingEnabled,
                         OnSetIPCLoggingEnabled)
-#endif  // IPC_MESSAGE_HANDLER
+#endif
     IPC_MESSAGE_UNHANDLED(handled = false)
   IPC_END_MESSAGE_MAP()
 
@@ -147,7 +169,7 @@ ChildThread* ChildThread::current() {
 }
 
 void ChildThread::OnProcessFinalRelease() {
-  if (!check_with_browser_before_shutdown_) {
+  if (on_channel_error_called_ || !check_with_browser_before_shutdown_) {
     MessageLoop::current()->Quit();
     return;
   }

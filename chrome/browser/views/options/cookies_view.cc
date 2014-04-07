@@ -1,4 +1,4 @@
-// Copyright (c) 2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,17 +6,17 @@
 
 #include <algorithm>
 
-#include "app/gfx/canvas.h"
-#include "app/gfx/color_utils.h"
 #include "app/l10n_util.h"
 #include "base/i18n/time_formatting.h"
 #include "base/message_loop.h"
 #include "base/string_util.h"
-#include "chrome/browser/cookies_tree_model.h"
 #include "chrome/browser/profile.h"
+#include "chrome/browser/views/appcache_info_view.h"
 #include "chrome/browser/views/cookie_info_view.h"
 #include "chrome/browser/views/database_info_view.h"
 #include "chrome/browser/views/local_storage_info_view.h"
+#include "gfx/canvas.h"
+#include "gfx/color_utils.h"
 #include "grit/generated_resources.h"
 #include "grit/locale_settings.h"
 #include "net/base/cookie_monster.h"
@@ -63,6 +63,28 @@ void CookiesTreeView::RemoveSelectedItems() {
 }
 
 ///////////////////////////////////////////////////////////////////////////////
+// CookiesView::InfoPanelView
+//  Overridden to handle layout of the various info views.
+//
+// This view is a child of the CookiesView and participates
+// in its GridLayout. The various info views are all children
+// of this view. Only one child is expected to be visible at a time.
+
+class CookiesView::InfoPanelView : public views::View {
+ public:
+  virtual void Layout() {
+    int child_count = GetChildViewCount();
+    for (int i = 0; i < child_count; ++i)
+      GetChildViewAt(i)->SetBounds(0, 0, width(), height());
+  }
+
+  virtual gfx::Size GetPreferredSize() {
+    DCHECK(GetChildViewCount() > 0);
+    return GetChildViewAt(0)->GetPreferredSize();
+  }
+};
+
+///////////////////////////////////////////////////////////////////////////////
 // CookiesView, public:
 
 // static
@@ -100,6 +122,8 @@ void CookiesView::ButtonPressed(
     views::Button* sender, const views::Event& event) {
   if (sender == remove_button_) {
     cookies_tree_->RemoveSelectedItems();
+    if (cookies_tree_model_->GetRoot()->GetChildCount() == 0)
+      UpdateForEmptyState();
   } else if (sender == remove_all_button_) {
     cookies_tree_model_->DeleteAllStoredObjects();
     UpdateForEmptyState();
@@ -202,6 +226,10 @@ void CookiesView::OnTreeViewSelectionChanged(views::TreeView* tree_view) {
     UpdateVisibleDetailedInfo(local_storage_info_view_);
     local_storage_info_view_->SetLocalStorageInfo(
         *detailed_info.local_storage_info);
+  } else if (detailed_info.node_type ==
+             CookieTreeNode::DetailedInfo::TYPE_APPCACHE) {
+    UpdateVisibleDetailedInfo(appcache_info_view_);
+    appcache_info_view_->SetAppCacheInfo(detailed_info.appcache_info);
   } else {
     UpdateVisibleDetailedInfo(cookie_info_view_);
     cookie_info_view_->ClearCookieDisplay();
@@ -231,9 +259,11 @@ CookiesView::CookiesView(Profile* profile)
       clear_search_button_(NULL),
       description_label_(NULL),
       cookies_tree_(NULL),
+      info_panel_(NULL),
       cookie_info_view_(NULL),
       database_info_view_(NULL),
       local_storage_info_view_(NULL),
+      appcache_info_view_(NULL),
       remove_button_(NULL),
       remove_all_button_(NULL),
       profile_(profile),
@@ -253,11 +283,20 @@ void CookiesView::Init() {
   description_label_->SetHorizontalAlignment(views::Label::ALIGN_LEFT);
   cookies_tree_model_.reset(new CookiesTreeModel(profile_,
       new BrowsingDataDatabaseHelper(profile_),
-      new BrowsingDataLocalStorageHelper(profile_)));
+      new BrowsingDataLocalStorageHelper(profile_),
+      new BrowsingDataAppCacheHelper(profile_)));
   cookies_tree_model_->AddObserver(this);
+
+  info_panel_ = new InfoPanelView;
   cookie_info_view_ = new CookieInfoView(false);
   database_info_view_ = new DatabaseInfoView;
   local_storage_info_view_ = new LocalStorageInfoView;
+  appcache_info_view_ = new AppCacheInfoView;
+  info_panel_->AddChildView(cookie_info_view_);
+  info_panel_->AddChildView(database_info_view_);
+  info_panel_->AddChildView(local_storage_info_view_);
+  info_panel_->AddChildView(appcache_info_view_);
+
   cookies_tree_ = new CookiesTreeView(cookies_tree_model_.get());
   remove_button_ = new views::NativeButton(
       this, l10n_util::GetString(IDS_COOKIES_REMOVE_LABEL));
@@ -305,26 +344,22 @@ void CookiesView::Init() {
 
   layout->AddPaddingRow(0, kRelatedControlVerticalSpacing);
   layout->StartRow(0, single_column_layout_id);
-  layout->AddView(cookie_info_view_, 1, 2);
-
-  layout->StartRow(0, single_column_layout_id);
-  layout->AddView(database_info_view_);
-
-  layout->StartRow(0, single_column_layout_id);
-  layout->AddView(local_storage_info_view_);
+  layout->AddView(info_panel_);
 
   // Add the Remove/Remove All buttons to the ClientView
   View* parent = GetParent();
   parent->AddChildView(remove_button_);
   parent->AddChildView(remove_all_button_);
-  if (!cookies_tree_model_.get()->GetRoot()->GetChildCount())
+  if (!cookies_tree_model_.get()->GetRoot()->GetChildCount()) {
     UpdateForEmptyState();
-  else
+  } else {
     UpdateVisibleDetailedInfo(cookie_info_view_);
+    UpdateRemoveButtonsState();
+  }
 }
 
 void CookiesView::ResetSearchQuery() {
-  search_field_->SetText(EmptyWString());
+  search_field_->SetText(std::wstring());
   clear_search_button_->SetEnabled(false);
   UpdateSearchResults();
 }
@@ -347,4 +382,5 @@ void CookiesView::UpdateVisibleDetailedInfo(views::View* view) {
   cookie_info_view_->SetVisible(view == cookie_info_view_);
   database_info_view_->SetVisible(view == database_info_view_);
   local_storage_info_view_->SetVisible(view == local_storage_info_view_);
+  appcache_info_view_->SetVisible(view == appcache_info_view_);
 }

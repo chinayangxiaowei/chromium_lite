@@ -14,7 +14,6 @@
 #include "base/stats_counters.h"
 #include "base/string_util.h"
 #include "third_party/WebKit/WebKit/chromium/public/WebInputEvent.h"
-#include "webkit/glue/glue_util.h"
 #include "webkit/glue/plugins/plugin_constants_win.h"
 #include "webkit/glue/plugins/plugin_instance.h"
 #include "webkit/glue/plugins/plugin_lib.h"
@@ -46,6 +45,14 @@ WebPluginDelegateImpl* WebPluginDelegateImpl::Create(
   scoped_refptr<NPAPI::PluginInstance> instance =
       plugin_lib->CreateInstance(mime_type);
   return new WebPluginDelegateImpl(containing_view, instance.get());
+}
+
+void WebPluginDelegateImpl::PluginDestroyed() {
+  if (handle_event_depth_) {
+    MessageLoop::current()->DeleteSoon(FROM_HERE, this);
+  } else {
+    delete this;
+  }
 }
 
 bool WebPluginDelegateImpl::Initialize(
@@ -92,17 +99,17 @@ bool WebPluginDelegateImpl::Initialize(
   } else {
     // For windowless plugins we should set the containing window handle
     // as the instance window handle. This is what Safari does. Not having
-    // a valid window handle causes subtle bugs with plugins which retreive
+    // a valid window handle causes subtle bugs with plugins which retrieve
     // the window handle and validate the same. The window handle can be
-    // retreived via NPN_GetValue of NPNVnetscapeWindow.
+    // retrieved via NPN_GetValue of NPNVnetscapeWindow.
     instance_->set_window_handle(parent_);
   }
 
-  PlatformInitialize();
+  bool should_load = PlatformInitialize();
 
   plugin_url_ = url.spec();
 
-  return true;
+  return should_load;
 }
 
 void WebPluginDelegateImpl::DestroyInstance() {
@@ -206,13 +213,45 @@ void WebPluginDelegateImpl::WindowedUpdateGeometry(
   }
 }
 
+bool WebPluginDelegateImpl::HandleInputEvent(const WebInputEvent& event,
+                                             WebCursorInfo* cursor_info) {
+  DCHECK(windowless_) << "events should only be received in windowless mode";
+
+  bool pop_user_gesture = false;
+  if (IsUserGesture(event)) {
+    pop_user_gesture = true;
+    instance()->PushPopupsEnabledState(true);
+  }
+
+  bool handled = PlatformHandleInputEvent(event, cursor_info);
+
+  if (pop_user_gesture) {
+    instance()->PopPopupsEnabledState();
+  }
+
+  return handled;
+}
+
+bool WebPluginDelegateImpl::IsUserGesture(const WebInputEvent& event) {
+  switch (event.type) {
+    case WebInputEvent::MouseDown:
+    case WebInputEvent::MouseUp:
+    case WebInputEvent::KeyDown:
+    case WebInputEvent::KeyUp:
+      return true;
+    default:
+      return false;
+  }
+  return false;
+}
+
 WebPluginResourceClient* WebPluginDelegateImpl::CreateResourceClient(
-    int resource_id, const GURL& url, int notify_id) {
+    unsigned long resource_id, const GURL& url, int notify_id) {
   return instance()->CreateStream(
       resource_id, url, std::string(), notify_id);
 }
 
 WebPluginResourceClient* WebPluginDelegateImpl::CreateSeekableResourceClient(
-    int resource_id, int range_request_id) {
+    unsigned long resource_id, int range_request_id) {
   return instance()->GetRangeRequest(range_request_id);
 }

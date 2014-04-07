@@ -92,6 +92,49 @@ void AuthWatcher::PersistCredentials() {
   }
 }
 
+// TODO(chron): Full integration test suite needed. http://crbug.com/35429
+void AuthWatcher::RenewAuthToken(const std::string& updated_token) {
+  message_loop()->PostTask(FROM_HERE, NewRunnableMethod(this,
+      &AuthWatcher::DoRenewAuthToken, updated_token));
+}
+
+void AuthWatcher::DoRenewAuthToken(const std::string& updated_token) {
+  DCHECK_EQ(MessageLoop::current(), message_loop());
+  // TODO(chron): We should probably only store auth token in one place.
+  if (scm_->auth_token() == updated_token) {
+    return;  // This thread is the only one writing to the SCM's auth token.
+  }
+  LOG(INFO) << "Updating auth token:" << updated_token;
+  scm_->set_auth_token(updated_token);
+  gaia_->RenewAuthToken(updated_token);  // Must be on AuthWatcher thread
+  talk_mediator_->SetAuthToken(user_settings_->email(), updated_token);
+  user_settings_->SetAuthTokenForService(user_settings_->email(),
+                                         SYNC_SERVICE_NAME,
+                                         updated_token);
+
+  AuthWatcherEvent event = { AuthWatcherEvent::AUTH_RENEWED };
+  NotifyListeners(&event);
+}
+
+void AuthWatcher::AuthenticateWithLsid(const std::string& lsid) {
+  message_loop()->PostTask(FROM_HERE, NewRunnableMethod(this,
+      &AuthWatcher::DoAuthenticateWithLsid, lsid));
+}
+
+void AuthWatcher::DoAuthenticateWithLsid(const std::string& lsid) {
+  DCHECK_EQ(MessageLoop::current(), message_loop());
+
+  AuthWatcherEvent event = { AuthWatcherEvent::AUTHENTICATION_ATTEMPT_START };
+  NotifyListeners(&event);
+
+  if (gaia_->AuthenticateWithLsid(lsid, true)) {
+    PersistCredentials();
+    DoAuthenticateWithToken(gaia_->email(), gaia_->auth_token());
+  } else {
+    ProcessGaiaAuthFailure();
+  }
+}
+
 const char kAuthWatcher[] = "AuthWatcher";
 
 void AuthWatcher::AuthenticateWithToken(const std::string& gaia_email,
@@ -128,8 +171,11 @@ void AuthWatcher::DoAuthenticateWithToken(const std::string& gaia_email,
         talk_mediator_->SetAuthToken(email, auth_token);
         scm_->set_auth_token(auth_token);
 
-        if (!was_authenticated)
-          LoadDirectoryListAndOpen(share_name);
+        if (!was_authenticated) {
+          LOG(INFO) << "Opening DB for AuthenticateWithToken ("
+                    << share_name << ")";
+          dirman_->Open(share_name);
+        }
         NotifyAuthSucceeded(email);
         return;
       }
@@ -163,8 +209,8 @@ bool AuthWatcher::AuthenticateLocally(string email) {
     gaia_->SetUsername(email);
     status_ = LOCALLY_AUTHENTICATED;
     user_settings_->SwitchUser(email);
-    const std::string& share_name = email;
-    LoadDirectoryListAndOpen(share_name);
+    LOG(INFO) << "Opening DB for AuthenticateLocally (" << email << ")";
+    dirman_->Open(email);
     NotifyAuthSucceeded(email);
     return true;
   } else {
@@ -242,7 +288,7 @@ void AuthWatcher::DoAuthenticate(const AuthRequest& request) {
       ProcessGaiaAuthFailure();
     }
   } else if (!request.auth_token.empty()) {
-      DoAuthenticateWithToken(request.email, request.auth_token);
+    DoAuthenticateWithToken(request.email, request.auth_token);
   } else {
       LOG(ERROR) << "Attempt to authenticate with no credentials.";
   }
@@ -287,20 +333,6 @@ void AuthWatcher::DoHandleServerConnectionEvent(
                             AuthWatcherEvent::EXPIRED_CREDENTIALS };
     DoAuthenticate(request);
   }
-}
-
-bool AuthWatcher::LoadDirectoryListAndOpen(const std::string& login) {
-  DCHECK_EQ(MessageLoop::current(), message_loop());
-  LOG(INFO) << "LoadDirectoryListAndOpen(" << login << ")";
-  bool initial_sync_ended = false;
-
-  dirman_->Open(login);
-  syncable::ScopedDirLookup dir(dirman_, login);
-  if (dir.good() && dir->initial_sync_ended())
-    initial_sync_ended = true;
-
-  LOG(INFO) << "LoadDirectoryListAndOpen returning " << initial_sync_ended;
-  return initial_sync_ended;
 }
 
 AuthWatcher::~AuthWatcher() {

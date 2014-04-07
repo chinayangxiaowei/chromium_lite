@@ -4,15 +4,15 @@
 
 #import "chrome/browser/cocoa/bookmark_bar_toolbar_view.h"
 
-#include "app/gfx/canvas_paint.h"
 #include "app/theme_provider.h"
-#include "base/gfx/rect.h"
+#include "gfx/rect.h"
 #include "chrome/browser/browser_theme_provider.h"
-#import "chrome/browser/cocoa/browser_window_controller.h"
 #import "chrome/browser/cocoa/bookmark_bar_constants.h"
 #import "chrome/browser/cocoa/bookmark_bar_controller.h"
+#import "chrome/browser/cocoa/browser_window_controller.h"
+#import "chrome/browser/cocoa/themed_window.h"
 #include "chrome/browser/ntp_background_util.h"
-#import "third_party/GTM/AppKit/GTMTheme.h"
+#include "gfx/canvas_paint.h"
 
 const CGFloat kBorderRadius = 3.0;
 
@@ -32,7 +32,7 @@ const CGFloat kBorderRadius = 3.0;
       [controller_ isAnimatingFromState:bookmarks::kDetachedState]) {
     [self drawRectAsBubble:rect];
   } else {
-    NSPoint phase = [self gtm_themePatternPhase];
+    NSPoint phase = [[self window] themePatternPhase];
     [[NSGraphicsContext currentContext] setPatternPhase:phase];
     [self drawBackground];
   }
@@ -89,15 +89,7 @@ const CGFloat kBorderRadius = 3.0;
 
   // Draw the rounded rectangle.
   NSColor* toolbarColor =
-      [[self gtm_theme] backgroundColorForStyle:GTMThemeStyleToolBar
-                                          state:GTMThemeStateActiveWindow];
-  // workaround for default theme
-  // TODO(alcor) next GTM update return nil for background color if not set;
-  // http://crbug.com/25196
-  if ([toolbarColor isEqual:[NSColor colorWithCalibratedWhite:0.5 alpha:1.0]])
-    toolbarColor = nil;
-  if (!toolbarColor)
-    toolbarColor = [NSColor colorWithCalibratedWhite:0.9 alpha:1.0];
+      themeProvider->GetNSColor(BrowserThemeProvider::COLOR_TOOLBAR, true);
   CGFloat alpha = morph * [toolbarColor alphaComponent];
   [[toolbarColor colorWithAlphaComponent:alpha] set];  // Set with opacity.
   [border fill];
@@ -108,15 +100,14 @@ const CGFloat kBorderRadius = 3.0;
   CGContextRef cgContext = (CGContextRef)[context graphicsPort];
   CGContextBeginTransparencyLayer(cgContext, NULL);
   CGContextSetAlpha(cgContext, 1 - morph);
-  [context setPatternPhase:[self gtm_themePatternPhase]];
+  [context setPatternPhase:[[self window] themePatternPhase]];
   [self drawBackground];
   CGContextEndTransparencyLayer(cgContext);
   [context restoreGraphicsState];
 
   // Draw the border of the rounded rectangle.
-  NSColor* borderColor =
-      [[self gtm_theme] strokeColorForStyle:GTMThemeStyleToolBarButton
-                                      state:GTMThemeStateActiveWindow];
+  NSColor* borderColor = themeProvider->GetNSColor(
+      BrowserThemeProvider::COLOR_TOOLBAR_BUTTON_STROKE, true);
   alpha = morph * [borderColor alphaComponent];
   [[borderColor colorWithAlphaComponent:alpha] set];  // Set with opacity.
   [border stroke];

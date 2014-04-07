@@ -70,32 +70,28 @@ void SocketStreamMetrics::OnWrite(int len) {
 
 void SocketStreamMetrics::OnClose() {
   base::TimeTicks closed_time = base::TimeTicks::Now();
-  UMA_HISTOGRAM_LONG_TIMES("Net.SocketStream.Duration",
-                           closed_time - connect_establish_time_);
-  UMA_HISTOGRAM_COUNTS("Net.SocketStream.ReceivedBytes",
-                       received_bytes_);
-  UMA_HISTOGRAM_COUNTS("Net.SocketStream.ReceivedCounts",
-                       received_counts_);
-  UMA_HISTOGRAM_COUNTS("Net.SocketStream.SentBytes",
-                       sent_bytes_);
-  UMA_HISTOGRAM_COUNTS("Net.SocketStream.SentCounts",
-                       sent_counts_);
+  if (!connect_establish_time_.is_null()) {
+    UMA_HISTOGRAM_LONG_TIMES("Net.SocketStream.Duration",
+                             closed_time - connect_establish_time_);
+    UMA_HISTOGRAM_COUNTS("Net.SocketStream.ReceivedBytes",
+                         received_bytes_);
+    UMA_HISTOGRAM_COUNTS("Net.SocketStream.ReceivedCounts",
+                         received_counts_);
+    UMA_HISTOGRAM_COUNTS("Net.SocketStream.SentBytes",
+                         sent_bytes_);
+    UMA_HISTOGRAM_COUNTS("Net.SocketStream.SentCounts",
+                         sent_counts_);
+  }
 }
 
 void SocketStreamMetrics::CountProtocolType(ProtocolType protocol_type) {
-  static LinearHistogram counter("Net.SocketStream.ProtocolType",
-                                 0, NUM_PROTOCOL_TYPES,
-                                 NUM_PROTOCOL_TYPES + 1);
-  counter.SetFlags(kUmaTargetedHistogramFlag);
-  counter.Add(protocol_type);
+  UMA_HISTOGRAM_ENUMERATION("Net.SocketStream.ProtocolType",
+       protocol_type, NUM_PROTOCOL_TYPES);
 }
 
 void SocketStreamMetrics::CountConnectionType(ConnectionType connection_type) {
-  static LinearHistogram counter("Net.SocketStream.ConnectionType",
-                                 1, NUM_CONNECTION_TYPES,
-                                 NUM_CONNECTION_TYPES + 1);
-  counter.SetFlags(kUmaTargetedHistogramFlag);
-  counter.Add(connection_type);
+  UMA_HISTOGRAM_ENUMERATION("Net.SocketStream.ConnectionType",
+       connection_type, NUM_CONNECTION_TYPES);
 }
 
 

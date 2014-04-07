@@ -5,9 +5,10 @@
 #include <string>
 #include <vector>
 
-#include "net/base/load_log.h"
-#include "net/base/load_log_unittest.h"
+#include "base/callback.h"
 #include "net/base/mock_host_resolver.h"
+#include "net/base/net_log.h"
+#include "net/base/net_log_unittest.h"
 #include "net/base/test_completion_callback.h"
 #include "net/socket/socket_test_util.h"
 #include "net/socket_stream/socket_stream.h"
@@ -160,7 +161,8 @@ TEST_F(SocketStreamTest, BasicAuthProxy) {
     MockRead("Proxy-Authenticate: Basic realm=\"MyRealm1\"\r\n"),
     MockRead("\r\n"),
   };
-  StaticSocketDataProvider data1(data_reads1, data_writes1);
+  StaticSocketDataProvider data1(data_reads1, arraysize(data_reads1),
+                                 data_writes1, arraysize(data_writes1));
   mock_socket_factory.AddSocketDataProvider(&data1);
 
   MockWrite data_writes2[] = {
@@ -174,7 +176,8 @@ TEST_F(SocketStreamTest, BasicAuthProxy) {
     MockRead("Proxy-agent: Apache/2.2.8\r\n"),
     MockRead("\r\n"),
   };
-  StaticSocketDataProvider data2(data_reads2, data_writes2);
+  StaticSocketDataProvider data2(data_reads2, arraysize(data_reads2),
+                                 data_writes2, arraysize(data_writes2));
   mock_socket_factory.AddSocketDataProvider(&data2);
 
   TestCompletionCallback callback;
@@ -208,15 +211,7 @@ TEST_F(SocketStreamTest, BasicAuthProxy) {
   EXPECT_EQ(SocketStreamEvent::EVENT_CONNECTED, events[1].event_type);
   EXPECT_EQ(SocketStreamEvent::EVENT_CLOSE, events[2].event_type);
 
-  // The first and last entries of the LoadLog should be for
-  // SOCKET_STREAM_CONNECT.
-  ExpectLogContains(socket_stream->load_log(), 0,
-                    LoadLog::TYPE_SOCKET_STREAM_CONNECT,
-                    LoadLog::PHASE_BEGIN);
-  ExpectLogContains(socket_stream->load_log(),
-                    socket_stream->load_log()->events().size() - 1,
-                    LoadLog::TYPE_SOCKET_STREAM_CONNECT,
-                    LoadLog::PHASE_END);
+  // TODO(eroman): Add back NetLogTest here...
 }
 
 }  // namespace net

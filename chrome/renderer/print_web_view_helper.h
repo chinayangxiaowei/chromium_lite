@@ -7,9 +7,9 @@
 
 #include <vector>
 
-#include "base/gfx/size.h"
 #include "base/scoped_ptr.h"
 #include "base/time.h"
+#include "gfx/size.h"
 #include "third_party/WebKit/WebKit/chromium/public/WebViewClient.h"
 
 namespace gfx {
@@ -20,7 +20,7 @@ namespace IPC {
 class Message;
 }
 
-#if defined(OS_LINUX)
+#if defined(USE_X11)
 namespace printing {
 class PdfPsMetafile;
 typedef PdfPsMetafile NativeMetafile;
@@ -47,6 +47,10 @@ class PrepareFrameAndViewForPrint {
     return expected_pages_count_;
   }
 
+  bool ShouldUseBrowserOverlays() const {
+    return use_browser_overlays_;
+  }
+
   const gfx::Size& GetPrintCanvasSize() const {
     return print_canvas_size_;
   }
@@ -57,6 +61,7 @@ class PrepareFrameAndViewForPrint {
   gfx::Size print_canvas_size_;
   gfx::Size prev_view_size_;
   int expected_pages_count_;
+  bool use_browser_overlays_;
 
   DISALLOW_COPY_AND_ASSIGN(PrepareFrameAndViewForPrint);
 };
@@ -93,7 +98,7 @@ class PrintWebViewHelper : public WebKit::WebViewClient {
                     WebKit::WebFrame* web_frame);
 
   // Prints the page listed in |params|.
-#if defined(OS_LINUX)
+#if defined(USE_X11)
   void PrintPage(const ViewMsg_PrintPage_Params& params,
                  const gfx::Size& canvas_size,
                  WebKit::WebFrame* frame,

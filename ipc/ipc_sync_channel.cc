@@ -350,7 +350,7 @@ void SyncChannel::SyncContext::OnWaitableEventSignaled(WaitableEvent* event) {
   } else {
     // We got the reply, timed out or the process shutdown.
     DCHECK(event == GetSendDoneEvent());
-    MessageLoop::current()->Quit();
+    MessageLoop::current()->QuitNow();
   }
 }
 
@@ -429,7 +429,7 @@ void SyncChannel::WaitForReply(
     };
 
     unsigned count = pump_messages_event ? 3: 2;
-    unsigned result = WaitableEvent::WaitMany(objects, count);
+    size_t result = WaitableEvent::WaitMany(objects, count);
     if (result == 0 /* dispatch event */) {
       // We're waiting for a reply, but we received a blocking synchronous
       // call.  We must process it or otherwise a deadlock might occur.

@@ -1,10 +1,11 @@
-// Copyright (c) 2009 The Chromium Authos. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "base/message_loop.h"
 #include "base/thread.h"
 #include "base/waitable_event.h"
+#include "net/base/net_errors.h"
 #include "net/url_request/url_request.h"
 #include "net/url_request/url_request_error_job.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -27,6 +28,8 @@ class AppCacheRequestHandlerTest : public testing::Test {
 
     virtual void OnEventRaised(const std::vector<int>& host_ids,
                                appcache::EventID event_id) {}
+
+    virtual void OnContentBlocked(int host_id) {}
   };
 
   // Helper class run a test on our io_thread. The io_thread
@@ -558,7 +561,8 @@ class AppCacheRequestHandlerTest : public testing::Test {
         mock_service_.get(), mock_storage()->NewCacheId());
     cache->set_complete(true);
     AppCacheGroup* group = new AppCacheGroup(
-        mock_service_.get(), GURL("http://blah/manifest"));
+        mock_service_.get(), GURL("http://blah/manifest"),
+        mock_storage()->NewGroupId());
     group->AddCache(cache);
     return cache;
   }

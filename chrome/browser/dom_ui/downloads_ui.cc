@@ -1,4 +1,4 @@
-// Copyright (c) 2006-2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -11,6 +11,7 @@
 #include "base/thread.h"
 #include "base/values.h"
 #include "chrome/browser/chrome_thread.h"
+#include "chrome/browser/defaults.h"
 #include "chrome/browser/dom_ui/chrome_url_data_manager.h"
 #include "chrome/browser/dom_ui/downloads_dom_handler.h"
 #include "chrome/browser/download/download_manager.h"
@@ -35,7 +36,9 @@ class DownloadsUIHTMLSource : public ChromeURLDataManager::DataSource {
 
   // Called when the network layer has requested a resource underneath
   // the path we registered.
-  virtual void StartDataRequest(const std::string& path, int request_id);
+  virtual void StartDataRequest(const std::string& path,
+                                bool is_off_the_record,
+                                int request_id);
   virtual std::string GetMimeType(const std::string&) const {
     return "text/html";
   }
@@ -51,6 +54,7 @@ DownloadsUIHTMLSource::DownloadsUIHTMLSource()
 }
 
 void DownloadsUIHTMLSource::StartDataRequest(const std::string& path,
+                                             bool is_off_the_record,
                                              int request_id) {
   DictionaryValue localized_strings;
   localized_strings.SetString(L"title",
@@ -74,7 +78,7 @@ void DownloadsUIHTMLSource::StartDataRequest(const std::string& path,
 
   // Dangerous file.
   localized_strings.SetString(L"danger_desc",
-      l10n_util::GetStringF(IDS_PROMPT_DANGEROUS_DOWNLOAD, L"%s"));
+      l10n_util::GetString(IDS_PROMPT_DANGEROUS_DOWNLOAD));
   localized_strings.SetString(L"danger_save",
       l10n_util::GetString(IDS_SAVE_DOWNLOAD));
   localized_strings.SetString(L"danger_discard",
@@ -83,8 +87,10 @@ void DownloadsUIHTMLSource::StartDataRequest(const std::string& path,
   // Controls.
   localized_strings.SetString(L"control_pause",
       l10n_util::GetString(IDS_DOWNLOAD_LINK_PAUSE));
-  localized_strings.SetString(L"control_showinfolder",
-      l10n_util::GetString(IDS_DOWNLOAD_LINK_SHOW));
+  if (browser_defaults::kDownloadPageHasShowInFolder) {
+    localized_strings.SetString(L"control_showinfolder",
+        l10n_util::GetString(IDS_DOWNLOAD_LINK_SHOW));
+  }
   localized_strings.SetString(L"control_cancel",
       l10n_util::GetString(IDS_DOWNLOAD_LINK_CANCEL));
   localized_strings.SetString(L"control_resume",
@@ -116,8 +122,7 @@ void DownloadsUIHTMLSource::StartDataRequest(const std::string& path,
 ///////////////////////////////////////////////////////////////////////////////
 
 DownloadsUI::DownloadsUI(TabContents* contents) : DOMUI(contents) {
-  DownloadManager* dlm = GetProfile()->GetOriginalProfile()->
-      GetDownloadManager();
+  DownloadManager* dlm = GetProfile()->GetDownloadManager();
 
   DownloadsDOMHandler* handler = new DownloadsDOMHandler(dlm);
   AddMessageHandler(handler);
@@ -131,7 +136,7 @@ DownloadsUI::DownloadsUI(TabContents* contents) : DOMUI(contents) {
       ChromeThread::IO, FROM_HERE,
       NewRunnableMethod(Singleton<ChromeURLDataManager>::get(),
           &ChromeURLDataManager::AddDataSource,
-          html_source));
+          make_scoped_refptr(html_source)));
 }
 
 // static

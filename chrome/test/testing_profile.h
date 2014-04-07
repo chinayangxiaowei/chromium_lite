@@ -12,13 +12,19 @@
 #include "chrome/browser/browser_prefs.h"
 #include "chrome/browser/browser_theme_provider.h"
 #include "chrome/browser/favicon_service.h"
+#include "chrome/browser/find_bar_state.h"
+#include "chrome/browser/geolocation/geolocation_content_settings_map.h"
 #include "chrome/browser/host_content_settings_map.h"
 #include "chrome/browser/history/history.h"
 #include "chrome/browser/in_process_webkit/webkit_context.h"
+#include "chrome/browser/net/url_request_context_getter.h"
+#include "chrome/browser/pref_service.h"
 #include "chrome/browser/profile.h"
 #include "chrome/browser/search_engines/template_url_model.h"
-#include "chrome/browser/sessions/session_service.h"
-#include "chrome/common/pref_service.h"
+#include "net/base/cookie_monster.h"
+
+class ProfileSyncService;
+class SessionService;
 
 class TestingProfile : public Profile {
  public:
@@ -30,6 +36,9 @@ class TestingProfile : public Profile {
   explicit TestingProfile(int count);
 
   virtual ~TestingProfile();
+
+  // Creates the favicon service. Consequent calls would recreate the service.
+  void CreateFaviconService();
 
   // Creates the history service. If |delete_file| is true, the history file is
   // deleted first, then the HistoryService is created. As TestingProfile
@@ -48,6 +57,14 @@ class TestingProfile : public Profile {
   // NOTE: this does not block until the bookmarks are loaded. For that use
   // BlockUntilBookmarkModelLoaded.
   void CreateBookmarkModel(bool delete_file);
+
+  // Creates the webdata service.  If |delete_file| is true, the webdata file is
+  // deleted first, then the WebDataService is created.  As TestingProfile
+  // deletes the directory containing the files used by WebDataService, this
+  // only matters if you're recreating the WebDataService.
+  void CreateWebDataService(bool delete_file);
+
+  // Destroys
 
   // Blocks until the BookmarkModel finishes loaded. This is NOT invoked from
   // CreateBookmarkModel.
@@ -87,11 +104,11 @@ class TestingProfile : public Profile {
   virtual ExtensionProcessManager* GetExtensionProcessManager() { return NULL; }
   virtual ExtensionMessageService* GetExtensionMessageService() { return NULL; }
   virtual SSLHostState* GetSSLHostState() { return NULL; }
-  virtual net::StrictTransportSecurityState* GetStrictTransportSecurityState() {
+  virtual net::TransportSecurityState* GetTransportSecurityState() {
     return NULL;
   }
   virtual FaviconService* GetFaviconService(ServiceAccessType access) {
-    return NULL;
+    return favicon_service_.get();
   }
   virtual HistoryService* GetHistoryService(ServiceAccessType access) {
     return history_service_.get();
@@ -102,14 +119,22 @@ class TestingProfile : public Profile {
   void set_has_history_service(bool has_history_service) {
     has_history_service_ = has_history_service;
   }
+  // The CookieMonster will only be returned if a Context has been created. Do
+  // this by calling CreateRequestContext(). See the note at GetRequestContext
+  // for more information.
+  net::CookieMonster* GetCookieMonster() {
+    if (!GetRequestContext())
+      return NULL;
+    return GetRequestContext()->GetCookieStore()->GetCookieMonster();
+  }
   virtual SearchVersusNavigateClassifier* GetSearchVersusNavigateClassifier() {
     return NULL;
   }
   virtual WebDataService* GetWebDataService(ServiceAccessType access) {
-    return NULL;
+    return web_data_service_.get();
   }
   virtual WebDataService* GetWebDataServiceWithoutCreating() {
-    return NULL;
+    return web_data_service_.get();
   }
   virtual PasswordStore* GetPasswordStore(ServiceAccessType access) {
     return NULL;
@@ -130,32 +155,54 @@ class TestingProfile : public Profile {
   virtual TemplateURLFetcher* GetTemplateURLFetcher() { return NULL; }
   virtual ThumbnailStore* GetThumbnailStore() { return NULL; }
   virtual DownloadManager* GetDownloadManager() { return NULL; }
-  virtual bool HasCreatedDownloadManager() const { return false; }
   virtual PersonalDataManager* GetPersonalDataManager() { return NULL; }
+  virtual bool HasCreatedDownloadManager() const { return false; }
   virtual void InitThemes();
   virtual void SetTheme(Extension* extension) {}
   virtual void SetNativeTheme() {}
   virtual void ClearTheme() {}
   virtual Extension* GetTheme() { return NULL; }
-  virtual ThemeProvider* GetThemeProvider() {
+  virtual BrowserThemeProvider* GetThemeProvider() {
     InitThemes();
     return theme_provider_.get();
   }
-  virtual URLRequestContextGetter* GetRequestContext() { return NULL; }
+
+  // Returns a testing ContextGetter (if one has been created via
+  // CreateRequestContext) or NULL. This is not done on-demand for two reasons:
+  // (1) Some tests depend on GetRequestContext() returning NULL. (2) Because
+  // of the special memory management considerations for the
+  // TestURLRequestContextGetter class, many tests would find themseleves
+  // leaking if they called this method without the necessary IO thread. This
+  // getter is currently only capable of returning a Context that helps test
+  // the CookieMonster. See implementation comments for more details.
+  virtual URLRequestContextGetter* GetRequestContext();
+  void CreateRequestContext();
+
   virtual URLRequestContextGetter* GetRequestContextForMedia() { return NULL; }
-  virtual URLRequestContextGetter* GetRequestContextForExtensions() {
-      return NULL;
-  }
+  virtual URLRequestContextGetter* GetRequestContextForExtensions();
+
   virtual net::SSLConfigService* GetSSLConfigService() { return NULL; }
-  virtual Blacklist* GetBlacklist() { return NULL; }
+  virtual Blacklist* GetPrivacyBlacklist() { return NULL; }
+  virtual UserStyleSheetWatcher* GetUserStyleSheetWatcher() { return NULL; }
+  virtual FindBarState* GetFindBarState() {
+    if (!find_bar_state_.get())
+      find_bar_state_.reset(new FindBarState());
+    return find_bar_state_.get();
+  }
   virtual HostContentSettingsMap* GetHostContentSettingsMap() {
     if (!host_content_settings_map_.get())
       host_content_settings_map_ = new HostContentSettingsMap(this);
     return host_content_settings_map_.get();
   }
-  void set_session_service(SessionService* session_service) {
-    session_service_ = session_service;
+  virtual GeolocationContentSettingsMap* GetGeolocationContentSettingsMap() {
+    if (!geolocation_content_settings_map_.get()) {
+      geolocation_content_settings_map_ =
+          new GeolocationContentSettingsMap(this);
+    }
+    return geolocation_content_settings_map_.get();
   }
+  virtual HostZoomMap* GetHostZoomMap() { return NULL; }
+  void set_session_service(SessionService* session_service);
   virtual SessionService* GetSessionService() { return session_service_.get(); }
   virtual void ShutdownSessionService() {}
   virtual bool HasSessionService() const {
@@ -182,9 +229,8 @@ class TestingProfile : public Profile {
   virtual base::Time GetStartTime() const { return start_time_; }
   virtual TabRestoreService* GetTabRestoreService() { return NULL; }
   virtual void ResetTabRestoreService() {}
-  virtual void ReinitializeSpellChecker() {}
-  virtual SpellChecker* GetSpellChecker() { return NULL; }
-  virtual void DeleteSpellChecker() {}
+  virtual SpellCheckHost* GetSpellCheckHost() { return NULL; }
+  virtual void ReinitializeSpellCheckHost(bool force) { }
   virtual WebKitContext* GetWebKitContext() {
     if (webkit_context_ == NULL)
       webkit_context_ = new WebKitContext(GetPath(), false);
@@ -194,6 +240,7 @@ class TestingProfile : public Profile {
   virtual void MarkAsCleanShutdown() {}
   virtual void InitExtensions() {}
   virtual void InitWebResources() {}
+  virtual NTPResourceCache* GetNTPResourceCache();
   virtual DesktopNotificationService* GetDesktopNotificationService() {
     return NULL;
   }
@@ -204,7 +251,6 @@ class TestingProfile : public Profile {
   void BlockUntilHistoryProcessesPendingRequests();
 
   // Creates and initializes a profile sync service if the tests require one.
-  void CreateProfileSyncService();
   virtual ProfileSyncService* GetProfileSyncService();
 
  protected:
@@ -215,9 +261,19 @@ class TestingProfile : public Profile {
   scoped_ptr<PrefService> prefs_;
 
  private:
+  // Destroys favicon service if it has been created.
+  void DestroyFaviconService();
+
   // If the history service has been created, it is destroyed. This is invoked
   // from the destructor.
   void DestroyHistoryService();
+
+  // If the webdata service has been created, it is destroyed.  This is invoked
+  // from the destructor.
+  void DestroyWebDataService();
+
+  // The favicon service. Only created if CreateFaviconService is invoked.
+  scoped_refptr<FaviconService> favicon_service_;
 
   // The history service. Only created if CreateHistoryService is invoked.
   scoped_refptr<HistoryService> history_service_;
@@ -228,8 +284,13 @@ class TestingProfile : public Profile {
   // The ProfileSyncService.  Created by CreateProfileSyncService.
   scoped_ptr<ProfileSyncService> profile_sync_service_;
 
+  // The WebDataService.  Only created if CreateWebDataService is invoked.
+  scoped_refptr<WebDataService> web_data_service_;
+
   // The TemplateURLFetcher. Only created if CreateTemplateURLModel is invoked.
   scoped_ptr<TemplateURLModel> template_url_model_;
+
+  scoped_ptr<NTPResourceCache> ntp_resource_cache_;
 
   // The SessionService. Defaults to NULL, but can be set using the setter.
   scoped_refptr<SessionService> session_service_;
@@ -237,6 +298,11 @@ class TestingProfile : public Profile {
   // The theme provider. Created lazily by GetThemeProvider()/InitThemes().
   scoped_ptr<BrowserThemeProvider> theme_provider_;
   bool created_theme_provider_;
+
+  // Internally, this is a TestURLRequestContextGetter that creates a dummy
+  // request context. Currently, only the CookieMonster is hooked up.
+  scoped_refptr<URLRequestContextGetter> request_context_;
+  scoped_refptr<URLRequestContextGetter> extensions_request_context_;
 
   // Do we have a history service? This defaults to the value of
   // history_service, but can be explicitly set.
@@ -253,10 +319,15 @@ class TestingProfile : public Profile {
   // Should be used only on the file thread.
   scoped_refptr<webkit_database::DatabaseTracker> db_tracker_;
 
-  // WebKitContext, lazily intialized by GetWebKitContext().
+  // WebKitContext, lazily initialized by GetWebKitContext().
   scoped_refptr<WebKitContext> webkit_context_;
 
   scoped_refptr<HostContentSettingsMap> host_content_settings_map_;
+  scoped_refptr<GeolocationContentSettingsMap>
+      geolocation_content_settings_map_;
+
+  // Find bar state.  Created lazily by GetFindBarState().
+  scoped_ptr<FindBarState> find_bar_state_;
 };
 
 // A profile that derives from another profile.  This does not actually

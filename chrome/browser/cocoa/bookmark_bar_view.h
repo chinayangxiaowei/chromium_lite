@@ -15,15 +15,21 @@
 @interface BookmarkBarView : NSView {
  @private
   BOOL dropIndicatorShown_;
-  CGFloat dropIndicatorPosition_;
+  CGFloat dropIndicatorPosition_;  // x position
 
   IBOutlet BookmarkBarController* controller_;
   IBOutlet NSTextField* noItemTextfield_;
+  NSView* noItemContainer_;
 }
 - (NSTextField*)noItemTextfield;
+- (BookmarkBarController*)controller;
+
+@property (assign, nonatomic) IBOutlet NSView* noItemContainer;
 @end
 
-@interface BookmarkBarView(TestingAPI)
+@interface BookmarkBarView()  // TestingOrInternalAPI
+@property (readonly) BOOL dropIndicatorShown;
+@property (readonly) CGFloat dropIndicatorPosition;
 - (void)setController:(id)controller;
 @end
 

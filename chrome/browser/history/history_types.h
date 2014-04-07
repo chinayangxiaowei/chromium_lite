@@ -2,8 +2,8 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#ifndef CHROME_BROWSER_HISTORY_HISTORY_TYPES_H__
-#define CHROME_BROWSER_HISTORY_HISTORY_TYPES_H__
+#ifndef CHROME_BROWSER_HISTORY_HISTORY_TYPES_H_
+#define CHROME_BROWSER_HISTORY_HISTORY_TYPES_H_
 
 #include <map>
 #include <set>
@@ -37,17 +37,6 @@ typedef int64 DownloadID;   // Identifier for a download.
 typedef int64 FavIconID;  // For FavIcons.
 typedef int64 SegmentID;  // URL segments for the most visited view.
 
-// Used as the return value for some databases' init function.
-enum InitStatus {
-  INIT_OK,
-
-  // Some error, usually I/O related opening the file.
-  INIT_FAILURE,
-
-  // The database is from a future version of the app and can not be read.
-  INIT_TOO_NEW,
-};
-
 // URLRow ---------------------------------------------------------------------
 
 typedef int64 URLID;
@@ -73,6 +62,7 @@ class URLRow {
     // Initialize will not set the URL, so our initialization above will stay.
     Initialize();
   }
+  virtual ~URLRow() {}
 
   URLID id() const { return id_; }
   const GURL& url() const { return url_; }
@@ -521,4 +511,4 @@ struct MostVisitedURL {
 
 }  // history
 
-#endif  // CHROME_BROWSER_HISTORY_HISTORY_TYPES_H__
+#endif  // CHROME_BROWSER_HISTORY_HISTORY_TYPES_H_

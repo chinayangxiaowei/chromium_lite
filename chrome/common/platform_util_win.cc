@@ -1,4 +1,4 @@
-// Copyright (c) 2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,15 +9,18 @@
 #include <shellapi.h>
 #include <shlobj.h>
 
-#include "app/gfx/native_widget_types.h"
 #include "app/win_util.h"
 #include "base/file_path.h"
 #include "base/file_util.h"
+#include "base/path_service.h"
 #include "base/logging.h"
 #include "base/registry.h"
 #include "base/scoped_comptr_win.h"
 #include "base/string_util.h"
+#include "chrome/installer/util/google_update_settings.h"
 #include "chrome/installer/util/google_update_constants.h"
+#include "chrome/installer/util/install_util.h"
+#include "gfx/native_widget_types.h"
 #include "googleurl/src/gurl.h"
 
 namespace platform_util {
@@ -136,13 +139,6 @@ gfx::NativeWindow GetTopLevel(gfx::NativeView view) {
   return GetAncestor(view, GA_ROOT);
 }
 
-string16 GetWindowTitle(gfx::NativeWindow window_handle) {
-  std::wstring result;
-  int length = ::GetWindowTextLength(window_handle) + 1;
-  ::GetWindowText(window_handle, WriteInto(&result, length), length);
-  return WideToUTF16(result);
-}
-
 bool IsWindowActive(gfx::NativeWindow window) {
   return ::GetForegroundWindow() == window;
 }
@@ -152,63 +148,25 @@ bool IsVisible(gfx::NativeView view) {
   return ::IsWindowVisible(view) != 0;
 }
 
-
-namespace {
-
-std::wstring CurrentChromeChannel() {
-  // See if we can find the Clients key on the HKLM branch.
-  HKEY registry_hive = HKEY_LOCAL_MACHINE;
-  std::wstring key = google_update::kRegPathClients + std::wstring(L"\\") +
-                     google_update::kChromeUpgradeCode;
-  RegKey google_update_hklm(registry_hive, key.c_str(), KEY_READ);
-  if (!google_update_hklm.Valid()) {
-    // HKLM failed us, try the same for the HKCU branch.
-    registry_hive = HKEY_CURRENT_USER;
-    RegKey google_update_hkcu(registry_hive, key.c_str(), KEY_READ);
-    if (!google_update_hkcu.Valid()) {
-      // Unknown.
-      registry_hive = 0;
-    }
-  }
-
-  std::wstring update_branch(L"unknown"); // the default.
-  if (registry_hive != 0) {
-    // Now that we know which hive to use, read the 'ap' key from it.
-    std::wstring key = google_update::kRegPathClientState +
-                       std::wstring(L"\\") + google_update::kChromeUpgradeCode;
-    RegKey client_state(registry_hive, key.c_str(), KEY_READ);
-    client_state.ReadValue(google_update::kRegApField, &update_branch);
-    // If the parent folder exists (we have a valid install) but the
-    // 'ap' key is empty, we necessarily are the stable channel.
-    // So we print nothing.
-    if (update_branch.empty() && client_state.Valid()) {
-      update_branch = L"";
-    }
-  }
-
-  // Map to something pithy for human consumption. There are no rules as to
-  // what the ap string can contain, but generally it will contain a number
-  // followed by a dash followed by the branch name (and then some random
-  // suffix). We fall back on empty string, in case we fail to parse (or the
-  // branch is stable).
-  // Only ever return "", "unknown", "dev" or "beta".
-  if (update_branch.find(L"-beta") != std::wstring::npos)
-    update_branch = L"beta";
-  else if (update_branch.find(L"-dev") != std::wstring::npos)
-    update_branch = L"dev";
-  else if (!update_branch.empty())
-    update_branch = L"unknown";
-
-  return update_branch;
+void SimpleErrorBox(gfx::NativeWindow parent,
+                    const string16& title,
+                    const string16& message) {
+  win_util::MessageBox(parent, message, title, MB_OK | MB_SETFOREGROUND);
 }
-
-}  // namespace
 
 string16 GetVersionStringModifier() {
 #if defined(GOOGLE_CHROME_BUILD)
-  return CurrentChromeChannel();
+  FilePath module;
+  string16 channel;
+  if (PathService::Get(base::FILE_MODULE, &module)) {
+    bool is_system_install =
+        !InstallUtil::IsPerUserInstall(module.value().c_str());
+
+    GoogleUpdateSettings::GetChromeChannel(is_system_install, &channel);
+  }
+  return channel;
 #else
-  return EmptyString16();
+  return string16();
 #endif
 }
 

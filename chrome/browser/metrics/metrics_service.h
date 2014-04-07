@@ -1,4 +1,4 @@
-// Copyright (c) 2006-2008 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -22,8 +22,8 @@
 #include "chrome/browser/net/url_fetcher.h"
 #include "chrome/common/child_process_info.h"
 #include "chrome/common/notification_registrar.h"
-#include "webkit/glue/webplugininfo.h"
 #include "testing/gtest/include/gtest/gtest_prod.h"
+#include "webkit/glue/plugins/webplugininfo.h"
 
 #if defined(OS_CHROMEOS)
 #include "chrome/browser/chromeos/external_metrics.h"
@@ -130,6 +130,9 @@ class MetricsService : public NotificationObserver,
   void StartExternalMetrics(Profile* profile);
 #endif
 
+  bool recording_active() const;
+  bool reporting_active() const;
+
  private:
   // The MetricsService has a lifecycle that is stored as a state.
   // See metrics_service.cc for description of this lifecycle.
@@ -161,7 +164,6 @@ class MetricsService : public NotificationObserver,
   // SetRecording(false) also forces a persistent save of logging state (if
   // anything has been recorded, or transmitted).
   void SetRecording(bool enabled);
-  bool recording_active() const;
 
   // Enable/disable transmission of accumulated logs and crash reports (dumps).
   // Return value "true" indicates setting was definitively set as requested).
@@ -172,7 +174,6 @@ class MetricsService : public NotificationObserver,
   // It is always possible to set this to at least one value, which matches the
   // current value reported by querying Google Update.
   void SetReporting(bool enabled);
-  bool reporting_active() const;
 
   // If in_idle is true, sets idle_since_last_transmission to true.
   // If in_idle is false and idle_since_last_transmission_ is true, sets
@@ -391,10 +392,6 @@ class MetricsService : public NotificationObserver,
   void LogLoadComplete(NotificationType type,
                        const NotificationSource& source,
                        const NotificationDetails& details);
-
-  // Adds a profile metric with the specified key/value pair.
-  void AddProfileMetric(Profile* profile, const std::wstring& key,
-                        int value);
 
   // Checks whether a notification can be logged.
   bool CanLogNotification(NotificationType type,

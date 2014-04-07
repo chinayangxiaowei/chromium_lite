@@ -2,21 +2,17 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "base/basictypes.h"
+#include "net/base/net_util.h"
+
 #include "base/file_path.h"
+#include "base/format_macros.h"
 #include "base/string_util.h"
 #include "base/sys_string_conversions.h"
+#include "base/utf_string_conversions.h"
 #include "base/time.h"
 #include "googleurl/src/gurl.h"
-#include "net/base/escape.h"
-#include "net/base/net_util.h"
+#include "net/base/sys_addrinfo.h"
 #include "testing/gtest/include/gtest/gtest.h"
-
-#if defined(OS_WIN)
-#include <ws2tcpip.h>
-#else
-#include <netdb.h>
-#endif
 
 namespace {
 
@@ -352,6 +348,7 @@ struct AdjustOffsetCase {
 
 struct CompliantHostCase {
   const char* host;
+  const char* desired_tld;
   bool expected_output;
 };
 
@@ -557,6 +554,11 @@ TEST(NetUtilTest, GetIdentityFromURL) {
       L"username",
       L"p@ssword",
     },
+    { // Special URL characters should be unescaped.
+      "http://username:p%3fa%26s%2fs%23@google.com",
+      L"username",
+      L"p?a&s/s#",
+    },
     { // Username contains %20.
       "http://use rname:password@google.com",
       L"use rname",
@@ -579,7 +581,7 @@ TEST(NetUtilTest, GetIdentityFromURL) {
     },
   };
   for (size_t i = 0; i < ARRAYSIZE_UNSAFE(tests); ++i) {
-    SCOPED_TRACE(StringPrintf("Test[%d]: %s", i, tests[i].input_url));
+    SCOPED_TRACE(StringPrintf("Test[%" PRIuS "]: %s", i, tests[i].input_url));
     GURL url(tests[i].input_url);
 
     std::wstring username, password;
@@ -842,30 +844,35 @@ TEST(NetUtilTest, IDNToUnicodeAdjustOffset) {
 
 TEST(NetUtilTest, CompliantHost) {
   const CompliantHostCase compliant_host_cases[] = {
-    {"", false},
-    {"a", true},
-    {"-", false},
-    {".", false},
-    {"a.", true},
-    {"a.a", true},
-    {"9.a", true},
-    {"a.9", false},
-    {"_9a", false},
-    {"a.a9", true},
-    {"a.9a", false},
-    {"a+9a", false},
-    {"1-.a-b", false},
-    {"1-2.a_b", true},
-    {"a.b.c.d.e", true},
-    {"1.2.3.4.e", true},
-    {"a.b.c.d.5", false},
-    {"1.2.3.4.e.", true},
-    {"a.b.c.d.5.", false},
+    {"", "", false},
+    {"a", "", true},
+    {"-", "", false},
+    {".", "", false},
+    {"9", "", false},
+    {"9", "a", true},
+    {"9a", "", false},
+    {"9a", "a", true},
+    {"a.", "", true},
+    {"a.a", "", true},
+    {"9.a", "", true},
+    {"a.9", "", false},
+    {"_9a", "", false},
+    {"a.a9", "", true},
+    {"a.9a", "", false},
+    {"a+9a", "", false},
+    {"1-.a-b", "", false},
+    {"1-2.a_b", "", true},
+    {"a.b.c.d.e", "", true},
+    {"1.2.3.4.e", "", true},
+    {"a.b.c.d.5", "", false},
+    {"1.2.3.4.e.", "", true},
+    {"a.b.c.d.5.", "", false},
   };
 
   for (size_t i = 0; i < ARRAYSIZE_UNSAFE(compliant_host_cases); ++i) {
     EXPECT_EQ(compliant_host_cases[i].expected_output,
-              net::IsCanonicalizedHostCompliant(compliant_host_cases[i].host));
+        net::IsCanonicalizedHostCompliant(compliant_host_cases[i].host,
+                                          compliant_host_cases[i].desired_tld));
   }
 }
 
@@ -1026,6 +1033,22 @@ TEST(NetUtilTest, GetSuggestedFilename) {
      "",
      L"\u65e5\u672c\u8a9e",  // Japanese Kanji.
      L"\u65e5\u672c\u8a9e"},
+    // Dotfiles. Ensures preceeding period(s) stripped.
+    {"http://www.google.com/.test.html",
+    "",
+    "",
+    L"",
+    L"test.html"},
+    {"http://www.google.com/.test",
+    "",
+    "",
+    L"",
+    L"test"},
+    {"http://www.google.com/..test",
+    "",
+    "",
+    L"",
+    L"test"},
   };
   for (size_t i = 0; i < ARRAYSIZE_UNSAFE(test_cases); ++i) {
 #if defined(OS_WIN)
@@ -1581,13 +1604,13 @@ TEST(NetUtilTest, SimplifyUrlForRequest) {
       "ftp://user:pass@google.com:80/sup?yo#X#X",
       "ftp://google.com:80/sup?yo",
     },
-    { // Try an standard URL with unknow scheme.
+    { // Try an nonstandard URL
       "foobar://user:pass@google.com:80/sup?yo#X#X",
-      "foobar://google.com:80/sup?yo",
+      "foobar://user:pass@google.com:80/sup?yo#X#X",
     },
   };
   for (size_t i = 0; i < ARRAYSIZE_UNSAFE(tests); ++i) {
-    SCOPED_TRACE(StringPrintf("Test[%d]: %s", i, tests[i].input_url));
+    SCOPED_TRACE(StringPrintf("Test[%" PRIuS "]: %s", i, tests[i].input_url));
     GURL input_url(GURL(tests[i].input_url));
     GURL expected_url(GURL(tests[i].expected_simplified_url));
     EXPECT_EQ(expected_url, net::SimplifyUrlForRequest(input_url));

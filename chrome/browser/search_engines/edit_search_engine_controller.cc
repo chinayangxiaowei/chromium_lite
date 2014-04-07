@@ -5,6 +5,7 @@
 #include "chrome/browser/search_engines/edit_search_engine_controller.h"
 
 #include "base/string_util.h"
+#include "base/utf_string_conversions.h"
 #include "chrome/browser/metrics/user_metrics.h"
 #include "chrome/browser/net/url_fixer_upper.h"
 #include "chrome/browser/profile.h"
@@ -38,8 +39,14 @@ bool EditSearchEngineController::IsURLValid(
   if (!template_ref.IsValid())
     return false;
 
-  if (!template_ref.SupportsReplacement())
+  if (!template_ref.SupportsReplacement()) {
+    // If this is the default search engine, there must be a search term
+    // placeholder.
+    if (template_url_ ==
+        profile_->GetTemplateURLModel()->GetDefaultSearchProvider())
+      return false;
     return GURL(WideToUTF16Hack(url)).is_valid();
+  }
 
   // If the url has a search term, replace it with a random string and make
   // sure the resulting URL is valid. We don't check the validity of the url
@@ -93,7 +100,8 @@ void EditSearchEngineController::AcceptAddOrEdit(
     modifiable_url->SetURL(url_string, 0, 0);
     // TemplateURLModel takes ownership of template_url_.
     profile_->GetTemplateURLModel()->Add(modifiable_url);
-    UserMetrics::RecordAction(L"KeywordEditor_AddKeywordJS", profile_);
+    UserMetrics::RecordAction(UserMetricsAction("KeywordEditor_AddKeywordJS"),
+                              profile_);
   } else {
     // Adding or modifying an entry via the Delegate.
     edit_keyword_delegate_->OnEditedKeyword(template_url_,

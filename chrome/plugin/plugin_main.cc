@@ -4,16 +4,18 @@
 
 #include "build/build_config.h"
 
+#include "app/hi_res_timer_manager.h"
+#include "app/system_monitor.h"
 #if defined(OS_WIN)
 #include "app/win_util.h"
 #endif
 #include "base/command_line.h"
 #include "base/message_loop.h"
 #include "base/string_util.h"
-#include "base/system_monitor.h"
 #include "chrome/common/child_process.h"
 #include "chrome/common/chrome_constants.h"
 #include "chrome/common/chrome_switches.h"
+#include "chrome/common/gpu_plugin.h"
 #include "chrome/common/logging_chrome.h"
 #include "chrome/common/main_function_params.h"
 #include "chrome/plugin/plugin_thread.h"
@@ -21,11 +23,9 @@
 #if defined(OS_WIN)
 #include "chrome/test/injection_test_dll.h"
 #include "sandbox/src/sandbox.h"
-#elif defined(OS_LINUX)
+#elif defined(OS_POSIX) && !defined(OS_MACOSX)
 #include "base/global_descriptors_posix.h"
 #include "ipc/ipc_descriptors.h"
-#elif defined(OS_MACOSX)
-#include "chrome/common/plugin_carbon_interpose_constants_mac.h"
 #endif
 
 #if defined(USE_LINUX_BREAKPAD)
@@ -35,37 +35,14 @@
 #if defined(OS_MACOSX)
 // Removes our Carbon library interposing from the environment so that it
 // doesn't carry into any processes that plugins might start.
-static void TrimInterposeEnvironment() {
-  const char* interpose_list =
-      getenv(plugin_interpose_strings::kDYLDInsertLibrariesKey);
-  if (!interpose_list) {
-    NOTREACHED() << "No interposing libraries set";
-    return;
-  }
+void TrimInterposeEnvironment();
 
-  // The list is a :-separated list of paths. Because we append our interpose
-  // library just before forking in plugin_process_host.cc, the only cases we
-  // need to handle are:
-  // 1) The whole string is "<kInterposeLibraryPath>", so just clear it, or
-  // 2) ":<kInterposeLibraryPath>" is the end of the string, so trim and re-set.
-  int suffix_offset = strlen(interpose_list) -
-      strlen(plugin_interpose_strings::kInterposeLibraryPath);
-  if (suffix_offset == 0 &&
-      strcmp(interpose_list,
-             plugin_interpose_strings::kInterposeLibraryPath) == 0) {
-    unsetenv(plugin_interpose_strings::kDYLDInsertLibrariesKey);
-  } else if (suffix_offset > 0 && interpose_list[suffix_offset - 1] == ':' &&
-             strcmp(interpose_list + suffix_offset,
-                    plugin_interpose_strings::kInterposeLibraryPath) == 0) {
-    std::string trimmed_list =
-        std::string(interpose_list).substr(0, suffix_offset - 1);
-    setenv(plugin_interpose_strings::kDYLDInsertLibrariesKey,
-           trimmed_list.c_str(), 1);
-  } else {
-    NOTREACHED() << "Missing Carbon interposing library";
-  }
-}
-#endif  // OS_MACOSX
+// Initializes the global Cocoa application object.
+void InitializeChromeApplication();
+#elif defined(OS_LINUX)
+// Work around an unimplemented instruction in 64-bit Flash.
+void WorkaroundFlashLAHF();
+#endif
 
 // main() routine for running as the plugin process.
 int PluginMain(const MainFunctionParams& parameters) {
@@ -76,25 +53,17 @@ int PluginMain(const MainFunctionParams& parameters) {
 
   // The main thread of the plugin services UI.
 #if defined(OS_MACOSX)
-  // For Mac NPAPI plugins, we don't want a MessageLoop::TYPE_UI because
-  // that will cause events to be dispatched via the Cocoa responder chain.
-  // If the plugin creates its own windows with Carbon APIs (for example,
-  // full screen mode in Flash), those windows would not receive events.
-  // Instead, WebPluginDelegateImpl::OnNullEvent will dispatch any pending
-  // system events directly to the plugin.
-  MessageLoop main_message_loop(MessageLoop::TYPE_DEFAULT);
-#else
-  MessageLoop main_message_loop(MessageLoop::TYPE_UI);
+#if !defined(__LP64__)
+  TrimInterposeEnvironment();
 #endif
+  InitializeChromeApplication();
+#endif
+  MessageLoop main_message_loop(MessageLoop::TYPE_UI);
   std::wstring app_name = chrome::kBrowserAppName;
   PlatformThread::SetName(WideToASCII(app_name + L"_PluginMain").c_str());
 
-  // Initialize the SystemMonitor
-  base::SystemMonitor::Start();
-
-#if defined(OS_MACOSX)
-  TrimInterposeEnvironment();
-#endif
+  SystemMonitor system_monitor;
+  HighResolutionTimerManager high_resolution_timer_manager;
 
   const CommandLine& parsed_command_line = parameters.command_line_;
 
@@ -103,6 +72,11 @@ int PluginMain(const MainFunctionParams& parameters) {
   // process name that shows up in "ps" etc. for plugins show as "exe"
   // instead of "chrome" or something reasonable. Try to fix it.
   CommandLine::SetProcTitle();
+
+#if defined(ARCH_CPU_64_BITS)
+  WorkaroundFlashLAHF();
+#endif
+
 #elif defined(OS_WIN)
   sandbox::TargetServices* target_services =
       parameters.sandbox_info_.TargetServices();
@@ -153,6 +127,8 @@ int PluginMain(const MainFunctionParams& parameters) {
       FreeLibrary(sandbox_test_module);
     }
 #endif
+
+    chrome::RegisterInternalGPUPlugin();
 
     MessageLoop::current()->Run();
   }

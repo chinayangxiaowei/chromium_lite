@@ -4,16 +4,16 @@
 
 #include <gtk/gtk.h>
 
-#include "app/gfx/gtk_util.h"
 #include "app/l10n_util.h"
 #include "base/rand_util.h"
 #include "base/string_util.h"
 #include "chrome/browser/browser_list.h"
 #include "chrome/browser/browser_window.h"
-#include "chrome/browser/gtk/browser_window_gtk.h"
 #include "chrome/browser/extensions/extension_install_ui.h"
-#include "chrome/common/gtk_util.h"
+#include "chrome/browser/gtk/browser_window_gtk.h"
+#include "chrome/browser/gtk/gtk_util.h"
 #include "chrome/common/extensions/extension.h"
+#include "gfx/gtk_util.h"
 #include "grit/generated_resources.h"
 
 class Profile;
@@ -40,7 +40,7 @@ GtkWidget* MakeMarkupLabel(const char* format, const std::string& str) {
 void OnDialogResponse(GtkDialog* dialog, int response_id,
                       ExtensionInstallUI::Delegate* delegate) {
   if (response_id == GTK_RESPONSE_ACCEPT) {
-    delegate->InstallUIProceed();
+    delegate->InstallUIProceed(false);
   } else {
     delegate->InstallUIAbort();
   }
@@ -52,12 +52,10 @@ void ShowInstallPromptDialog(GtkWindow* parent, SkBitmap* skia_icon,
                              Extension *extension,
                              ExtensionInstallUI::Delegate *delegate,
                              const string16& warning_text,
-                             bool is_uninstall) {
+                             ExtensionInstallUI::PromptType type) {
   // Build the dialog.
-  int title_id = is_uninstall ? IDS_EXTENSION_UNINSTALL_PROMPT_TITLE :
-                                IDS_EXTENSION_INSTALL_PROMPT_TITLE;
-  int button_id = is_uninstall ? IDS_EXTENSION_PROMPT_UNINSTALL_BUTTON :
-                                 IDS_EXTENSION_PROMPT_INSTALL_BUTTON;
+  int title_id = ExtensionInstallUI::kTitleIds[type];
+  int button_id = ExtensionInstallUI::kButtonIds[type];
   GtkWidget* dialog = gtk_dialog_new_with_buttons(
       l10n_util::GetStringUTF8(title_id).c_str(),
       parent,
@@ -79,14 +77,14 @@ void ShowInstallPromptDialog(GtkWindow* parent, SkBitmap* skia_icon,
   // Put Icon in the left column.
   GdkPixbuf* pixbuf = gfx::GdkPixbufFromSkBitmap(skia_icon);
   GtkWidget* icon = gtk_image_new_from_pixbuf(pixbuf);
+  g_object_unref(pixbuf);
   gtk_box_pack_start(GTK_BOX(icon_hbox), icon, TRUE, TRUE, 0);
 
   // Create a new vbox for the right column.
   GtkWidget* right_column_area = gtk_vbox_new(FALSE, 0);
   gtk_box_pack_start(GTK_BOX(icon_hbox), right_column_area, TRUE, TRUE, 0);
 
-  int heading_id = is_uninstall ? IDS_EXTENSION_UNINSTALL_PROMPT_HEADING :
-                                  IDS_EXTENSION_INSTALL_PROMPT_HEADING;
+  int heading_id = ExtensionInstallUI::kHeadingIds[type];
   std::string heading_text = WideToUTF8(l10n_util::GetStringF(
       heading_id, UTF8ToWide(extension->name())));
   GtkWidget* heading_label = MakeMarkupLabel("<span weight=\"bold\">%s</span>",
@@ -111,10 +109,10 @@ void ShowInstallPromptDialog(GtkWindow* parent, SkBitmap* skia_icon,
 
 void ExtensionInstallUI::ShowExtensionInstallUIPromptImpl(
     Profile* profile, Delegate* delegate, Extension* extension, SkBitmap* icon,
-    const string16& warning_text, bool is_uninstall) {
+    const string16& warning_text, ExtensionInstallUI::PromptType type) {
   Browser* browser = BrowserList::GetLastActiveWithProfile(profile);
   if (!browser) {
-    delegate->InstallUIProceed();
+    delegate->InstallUIAbort();
     return;
   }
 
@@ -126,14 +124,5 @@ void ExtensionInstallUI::ShowExtensionInstallUIPromptImpl(
   }
 
   ShowInstallPromptDialog(browser_window->window(), icon, extension,
-      delegate, warning_text, is_uninstall);
-}
-
-void ExtensionInstallUI::ShowExtensionInstallError(const std::string& error) {
-  GtkWidget* dialog = gtk_message_dialog_new(NULL, GTK_DIALOG_MODAL,
-      GTK_MESSAGE_ERROR, GTK_BUTTONS_OK, "%s", error.c_str());
-  gtk_window_set_title(GTK_WINDOW(dialog),
-      l10n_util::GetStringUTF8(IDS_EXTENSION_INSTALL_FAILURE_TITLE).c_str());
-  g_signal_connect(dialog, "response", G_CALLBACK(gtk_widget_destroy), NULL);
-  gtk_widget_show_all(dialog);
+      delegate, warning_text, type);
 }

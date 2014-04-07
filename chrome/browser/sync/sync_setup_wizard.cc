@@ -7,18 +7,20 @@
 #include "app/resource_bundle.h"
 #include "base/message_loop.h"
 #include "base/singleton.h"
-#include "chrome/common/pref_names.h"
-#include "chrome/common/pref_service.h"
 #include "chrome/browser/chrome_thread.h"
 #include "chrome/browser/dom_ui/chrome_url_data_manager.h"
 #include "chrome/browser/google_util.h"
+#include "chrome/browser/pref_service.h"
+#include "chrome/browser/profile.h"
 #include "chrome/browser/sync/profile_sync_service.h"
 #include "chrome/browser/sync/sync_setup_flow.h"
 #include "chrome/common/jstemplate_builder.h"
+#include "chrome/common/pref_names.h"
 #include "chrome/common/url_constants.h"
 #include "googleurl/src/gurl.h"
 #include "grit/app_resources.h"
 #include "grit/browser_resources.h"
+#include "grit/chromium_strings.h"
 
 class SyncResourcesSource : public ChromeURLDataManager::DataSource {
  public:
@@ -26,7 +28,9 @@ class SyncResourcesSource : public ChromeURLDataManager::DataSource {
       : DataSource(chrome::kSyncResourcesHost, MessageLoop::current()) {
   }
 
-  virtual void StartDataRequest(const std::string& path, int request_id);
+  virtual void StartDataRequest(const std::string& path,
+                                bool is_off_the_record,
+                                int request_id);
 
   virtual std::string GetMimeType(const std::string& path) const {
     if (path == chrome::kSyncThrobberPath)
@@ -58,7 +62,7 @@ const char* SyncResourcesSource::kCreateNewAccountUrl =
   "https://www.google.com/accounts/NewAccount?service=chromiumsync";
 
 void SyncResourcesSource::StartDataRequest(const std::string& path_raw,
-                                           int request_id) {
+    bool is_off_the_record, int request_id) {
   scoped_refptr<RefCountedBytes> html_bytes(new RefCountedBytes);
   if (path_raw == chrome::kSyncThrobberPath) {
     scoped_refptr<RefCountedMemory> throbber(
@@ -83,7 +87,8 @@ void SyncResourcesSource::StartDataRequest(const std::string& path_raw,
     localized_strings.SetString(L"settingupsync",
         l10n_util::GetString(IDS_SYNC_LOGIN_SETTING_UP_SYNC));
     localized_strings.SetString(L"introduction",
-        l10n_util::GetString(IDS_SYNC_LOGIN_INTRODUCTION));
+        l10n_util::GetStringF(IDS_SYNC_LOGIN_INTRODUCTION,
+        l10n_util::GetString(IDS_PRODUCT_NAME)));
     localized_strings.SetString(L"signinprefix",
         l10n_util::GetString(IDS_SYNC_LOGIN_SIGNIN_PREFIX));
     localized_strings.SetString(L"signinsuffix",
@@ -106,6 +111,8 @@ void SyncResourcesSource::StartDataRequest(const std::string& path_raw,
         l10n_util::GetString(IDS_SYNC_CREATE_ACCOUNT));
     localized_strings.SetString(L"cancel",
         l10n_util::GetString(IDS_CANCEL));
+    localized_strings.SetString(L"customize",
+        l10n_util::GetString(IDS_SYNC_LOGIN_CUSTOMIZE));
     localized_strings.SetString(L"settingup",
         l10n_util::GetString(IDS_SYNC_LOGIN_SETTING_UP));
     localized_strings.SetString(L"success",
@@ -119,32 +126,13 @@ void SyncResourcesSource::StartDataRequest(const std::string& path_raw,
     SetFontAndTextDirection(&localized_strings);
     response = jstemplate_builder::GetI18nTemplateHtml(
         html, &localized_strings);
-  } else if (path_raw == chrome::kSyncMergeAndSyncPath) {
-    DictionaryValue localized_strings;
-    localized_strings.SetString(L"introduction",
-        l10n_util::GetString(IDS_SYNC_MERGE_INTRODUCTION));
-    localized_strings.SetString(L"mergeandsynclabel",
-        l10n_util::GetString(IDS_SYNC_MERGE_AND_SYNC_LABEL));
-    localized_strings.SetString(L"abortlabel",
-        l10n_util::GetString(IDS_ABORT));
-    localized_strings.SetString(L"closelabel",
-        l10n_util::GetString(IDS_CLOSE));
-    localized_strings.SetString(L"mergeandsyncwarning",
-        l10n_util::GetString(IDS_SYNC_MERGE_WARNING));
-    localized_strings.SetString(L"setuperror",
-                                l10n_util::GetString(IDS_SYNC_SETUP_ERROR));
-
-    static const base::StringPiece html(ResourceBundle::GetSharedInstance()
-        .GetRawDataResource(IDR_MERGE_AND_SYNC_HTML));
-    SetFontAndTextDirection(&localized_strings);
-    response = jstemplate_builder::GetI18nTemplateHtml(
-        html, &localized_strings);
   } else if (path_raw == chrome::kSyncSetupDonePath) {
     DictionaryValue localized_strings;
     localized_strings.SetString(L"success",
         l10n_util::GetString(IDS_SYNC_SUCCESS));
     localized_strings.SetString(L"setupsummary",
-        l10n_util::GetString(IDS_SYNC_SETUP_ALL_DONE));
+        l10n_util::GetStringF(IDS_SYNC_SETUP_ALL_DONE,
+        l10n_util::GetString(IDS_PRODUCT_NAME)));
     localized_strings.SetString(L"firsttimesetupsummary",
         l10n_util::GetString(IDS_SYNC_SETUP_FIRST_TIME_ALL_DONE));
     localized_strings.SetString(L"okay",
@@ -178,15 +166,11 @@ SyncSetupWizard::SyncSetupWizard(ProfileSyncService* service)
       flow_container_(new SyncSetupFlowContainer()) {
   // Add our network layer data source for 'cloudy' URLs.
   SyncResourcesSource* sync_source = new SyncResourcesSource();
-  bool posted = ChromeThread::PostTask(
+  ChromeThread::PostTask(
       ChromeThread::IO, FROM_HERE,
       NewRunnableMethod(Singleton<ChromeURLDataManager>::get(),
                         &ChromeURLDataManager::AddDataSource,
-                        sync_source));
-  if (!posted) {
-    sync_source->AddRef();
-    sync_source->Release();  // Keep Valgrind happy in unit tests.
-  }
+                        make_scoped_refptr(sync_source)));
 }
 
 SyncSetupWizard::~SyncSetupWizard() {

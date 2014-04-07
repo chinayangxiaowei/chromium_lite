@@ -5,15 +5,16 @@
 #include "chrome/browser/dom_ui/new_tab_page_sync_handler.h"
 
 #include "app/l10n_util.h"
+#include "base/callback.h"
 #include "base/string_util.h"
 #include "base/utf_string_conversions.h"
 #include "base/values.h"
 #include "chrome/browser/net/chrome_url_request_context.h"
+#include "chrome/browser/pref_service.h"
 #include "chrome/browser/profile.h"
 #include "chrome/browser/renderer_host/render_view_host.h"
 #include "chrome/browser/tab_contents/tab_contents.h"
 #include "chrome/common/pref_names.h"
-#include "chrome/common/pref_service.h"
 #include "grit/browser_resources.h"
 #include "grit/generated_resources.h"
 #include "net/base/cookie_monster.h"
@@ -83,12 +84,12 @@ NewTabPageSyncHandler::~NewTabPageSyncHandler() {
 // static
 NewTabPageSyncHandler::MessageType
     NewTabPageSyncHandler::FromSyncStatusMessageType(
-        SyncStatusUIHelper::MessageType type) {
+        sync_ui_util::MessageType type) {
   switch (type) {
-    case SyncStatusUIHelper::SYNC_ERROR:
+    case sync_ui_util::SYNC_ERROR:
       return SYNC_ERROR;
-    case SyncStatusUIHelper::PRE_SYNCED:
-    case SyncStatusUIHelper::SYNCED:
+    case sync_ui_util::PRE_SYNCED:
+    case sync_ui_util::SYNCED:
     default:
       return HIDE;
   }
@@ -139,8 +140,8 @@ void NewTabPageSyncHandler::BuildAndSendSyncStatus() {
   //               message).
   string16 status_msg;
   string16 link_text;
-  SyncStatusUIHelper::MessageType type =
-      SyncStatusUIHelper::GetLabels(sync_service_, &status_msg, &link_text);
+  sync_ui_util::MessageType type =
+      sync_ui_util::GetStatusLabels(sync_service_, &status_msg, &link_text);
   SendSyncMessageToPage(FromSyncStatusMessageType(type),
                         UTF16ToUTF8(status_msg), UTF16ToUTF8(link_text));
 }
@@ -179,35 +180,21 @@ void NewTabPageSyncHandler::SendSyncMessageToPage(
     MessageType type, std::string msg,
     std::string linktext) {
   DictionaryValue value;
-  std::string msgtype;
   std::wstring user;
-  std::string title =
-      WideToUTF8(l10n_util::GetString(IDS_SYNC_NTP_SYNC_SECTION_TITLE));
+  std::string title;
   std::string linkurl;
-  switch (type) {
-    case HIDE:
-      msgtype = "presynced";
-      break;
-    case SYNC_ERROR:
-      title =
-          WideToUTF8(
-              l10n_util::GetString(IDS_SYNC_NTP_SYNC_SECTION_ERROR_TITLE));
-      msgtype = "error";
-      break;
-    default:
-      NOTREACHED();
-      break;
-  }
 
   // If there is no message to show, we should hide the sync section
   // altogether.
   if (type == HIDE || msg.empty()) {
     value.SetBoolean(L"syncsectionisvisible", false);
-  } else {
+  } else {  // type == SYNC_ERROR
+    title = WideToUTF8(
+        l10n_util::GetString(IDS_SYNC_NTP_SYNC_SECTION_ERROR_TITLE));
+
     value.SetBoolean(L"syncsectionisvisible", true);
     value.SetString(L"msg", msg);
     value.SetString(L"title", title);
-    value.SetString(L"msgtype", msgtype);
     if (linktext.empty()) {
       value.SetBoolean(L"linkisvisible", false);
     } else {

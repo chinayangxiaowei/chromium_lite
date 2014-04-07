@@ -12,6 +12,7 @@
 #include "chrome/browser/renderer_host/resource_dispatcher_host.h"
 #include "chrome/browser/renderer_host/resource_dispatcher_host_request_info.h"
 #include "chrome/test/automation/automation_messages.h"
+#include "net/base/cookie_monster.h"
 #include "net/base/io_buffer.h"
 #include "net/base/net_errors.h"
 #include "net/http/http_util.h"
@@ -24,7 +25,6 @@ using base::TimeDelta;
 // StartAsync(). These must be lower case.
 static const char* kFilteredHeaderStrings[] = {
   "accept",
-  "authorization",
   "cache-control",
   "connection",
   "cookie",
@@ -50,13 +50,14 @@ URLRequest::ProtocolFactory* URLRequestAutomationJob::old_https_factory_
     = NULL;
 
 URLRequestAutomationJob::URLRequestAutomationJob(URLRequest* request, int tab,
-    int request_id, AutomationResourceMessageFilter* filter)
+    int request_id, AutomationResourceMessageFilter* filter, bool is_pending)
     : URLRequestJob(request),
       tab_(tab),
       message_filter_(filter),
       pending_buf_size_(0),
       redirect_status_(0),
-      request_id_(request_id) {
+      request_id_(request_id),
+      is_pending_(is_pending) {
   DLOG(INFO) << "URLRequestAutomationJob create. Count: " << ++instance_count_;
   DCHECK(message_filter_ != NULL);
 
@@ -109,7 +110,8 @@ URLRequestJob* URLRequestAutomationJob::Factory(URLRequest* request,
       if (AutomationResourceMessageFilter::LookupRegisteredRenderView(
               child_id, route_id, &details)) {
         URLRequestAutomationJob* job = new URLRequestAutomationJob(request,
-            details.tab_handle, request_info->request_id(), details.filter);
+            details.tab_handle, request_info->request_id(), details.filter,
+            details.is_pending_render_view);
         return job;
       }
     }
@@ -124,16 +126,25 @@ URLRequestJob* URLRequestAutomationJob::Factory(URLRequest* request,
 
 // URLRequestJob Implementation.
 void URLRequestAutomationJob::Start() {
-  // Start reading asynchronously so that all error reporting and data
-  // callbacks happen as they would for network requests.
-  MessageLoop::current()->PostTask(FROM_HERE, NewRunnableMethod(
-      this, &URLRequestAutomationJob::StartAsync));
+  if (!is_pending()) {
+    // Start reading asynchronously so that all error reporting and data
+    // callbacks happen as they would for network requests.
+    MessageLoop::current()->PostTask(FROM_HERE, NewRunnableMethod(
+        this, &URLRequestAutomationJob::StartAsync));
+  } else {
+    // If this is a pending job, then register it immediately with the message
+    // filter so it can be serviced later when we receive a request from the
+    // external host to connect to the corresponding external tab.
+    message_filter_->RegisterRequest(this);
+  }
 }
 
 void URLRequestAutomationJob::Kill() {
   if (message_filter_.get()) {
-    message_filter_->Send(new AutomationMsg_RequestEnd(0, tab_, id_,
-        URLRequestStatus(URLRequestStatus::CANCELED, net::ERR_ABORTED)));
+    if (!is_pending()) {
+      message_filter_->Send(new AutomationMsg_RequestEnd(0, tab_, id_,
+          URLRequestStatus(URLRequestStatus::CANCELED, net::ERR_ABORTED)));
+    }
   }
   DisconnectFromMessageFilter();
   URLRequestJob::Kill();
@@ -143,12 +154,22 @@ bool URLRequestAutomationJob::ReadRawData(
     net::IOBuffer* buf, int buf_size, int* bytes_read) {
   DLOG(INFO) << "URLRequestAutomationJob: " <<
       request_->url().spec() << " - read pending: " << buf_size;
+
+  // We should not receive a read request for a pending job.
+  DCHECK(!is_pending());
+
   pending_buf_ = buf;
   pending_buf_size_ = buf_size;
 
-  message_filter_->Send(new AutomationMsg_RequestRead(0, tab_, id_,
-      buf_size));
-  SetStatus(URLRequestStatus(URLRequestStatus::IO_PENDING, 0));
+  if (message_filter_) {
+    message_filter_->Send(new AutomationMsg_RequestRead(0, tab_, id_,
+        buf_size));
+    SetStatus(URLRequestStatus(URLRequestStatus::IO_PENDING, 0));
+  } else {
+    ChromeThread::PostTask(ChromeThread::IO, FROM_HERE,
+        NewRunnableMethod(this,
+                          &URLRequestAutomationJob::NotifyJobCompletionTask));
+  }
   return false;
 }
 
@@ -198,20 +219,12 @@ int URLRequestAutomationJob::GetResponseCode() const {
 
 bool URLRequestAutomationJob::IsRedirectResponse(
     GURL* location, int* http_status_code) {
-  static const int kDefaultHttpRedirectResponseCode = 301;
+  if (!net::HttpResponseHeaders::IsRedirectResponseCode(redirect_status_))
+    return false;
 
-  if (!redirect_url_.empty()) {
-    DLOG_IF(ERROR, redirect_status_ == 0) << "Missing redirect status?";
-    *http_status_code = redirect_status_ ? redirect_status_ :
-                                           kDefaultHttpRedirectResponseCode;
-    *location = GURL(redirect_url_);
-    return true;
-  } else {
-    DCHECK(redirect_status_ == 0)
-        << "Unexpectedly have redirect status but no URL";
-  }
-
-  return false;
+  *http_status_code = redirect_status_;
+  *location = GURL(redirect_url_);
+  return true;
 }
 
 bool URLRequestAutomationJob::MayFilterMessage(const IPC::Message& message,
@@ -234,6 +247,13 @@ bool URLRequestAutomationJob::MayFilterMessage(const IPC::Message& message,
 }
 
 void URLRequestAutomationJob::OnMessage(const IPC::Message& message) {
+  if (!request_) {
+    NOTREACHED() << __FUNCTION__
+                 << ": Unexpected request received for job:"
+                 << id();
+    return;
+  }
+
   IPC_BEGIN_MESSAGE_MAP(URLRequestAutomationJob, message)
     IPC_MESSAGE_HANDLER(AutomationMsg_RequestStarted, OnRequestStarted)
     IPC_MESSAGE_HANDLER(AutomationMsg_RequestData, OnDataAvailable)
@@ -253,50 +273,11 @@ void URLRequestAutomationJob::OnRequestStarted(int tab, int id,
   DCHECK(redirect_status_ == 0 || redirect_status_ == 200 ||
          (redirect_status_ >= 300 && redirect_status_ < 400));
 
-  GURL url_for_cookies =
-      GURL(redirect_url_.empty() ? request_->url().spec().c_str() :
-          redirect_url_.c_str());
-
-  URLRequestContext* ctx = request_->context();
-
-  // NOTE: We ignore Chrome's cookie policy to allow the automation to
-  // decide what cookies should be set.
-
   if (!response.headers.empty()) {
     headers_ = new net::HttpResponseHeaders(
         net::HttpUtil::AssembleRawHeaders(response.headers.data(),
                                           response.headers.size()));
-    // Parse and set HTTP cookies.
-    const std::string name = "Set-Cookie";
-    std::string value;
-    std::vector<std::string> response_cookies;
-
-    void* iter = NULL;
-    while (headers_->EnumerateHeader(&iter, name, &value)) {
-      if (request_->context()->InterceptCookie(request_, &value))
-        response_cookies.push_back(value);
-    }
-
-    if (response_cookies.size() && ctx && ctx->cookie_store()) {
-      net::CookieOptions options;
-      options.set_include_httponly();
-      ctx->cookie_store()->SetCookiesWithOptions(url_for_cookies,
-                                                 response_cookies,
-                                                 options);
-    }
   }
-
-  if (!response.persistent_cookies.empty() && ctx && ctx->cookie_store()) {
-    StringTokenizer cookie_parser(response.persistent_cookies, ";");
-
-    while (cookie_parser.GetNext()) {
-      net::CookieOptions options;
-      ctx->cookie_store()->SetCookieWithOptions(url_for_cookies,
-                                                cookie_parser.token(),
-                                                options);
-    }
-  }
-
   NotifyHeadersComplete();
 }
 
@@ -319,6 +300,8 @@ void URLRequestAutomationJob::OnDataAvailable(
     pending_buf_size_ = 0;
 
     NotifyReadComplete(bytes_to_copy);
+  } else {
+    NOTREACHED() << "Received unexpected data of length:" << bytes.size();
   }
 }
 
@@ -344,8 +327,21 @@ void URLRequestAutomationJob::OnRequestEnd(
   DisconnectFromMessageFilter();
   // NotifyDone may have been called on the job if the original request was
   // redirected.
-  if (!is_done())
-    NotifyDone(status);
+  if (!is_done()) {
+    // We can complete the job if we have a valid response or a pending read.
+    // An end request can be received in the following cases
+    // 1. We failed to connect to the server, in which case we did not receive
+    //    a valid response.
+    // 2. In response to a read request.
+    if (!has_response_started() || pending_buf_) {
+      NotifyDone(status);
+    } else {
+      // Wait for the http stack to issue a Read request where we will notify
+      // that the job has completed.
+      request_status_ = status;
+      return;
+    }
+  }
 
   // Reset any pending reads.
   if (pending_buf_) {
@@ -377,6 +373,9 @@ void URLRequestAutomationJob::StartAsync() {
   // we have nothing much to do here.
   if (is_done())
     return;
+
+  // We should not receive a Start request for a pending job.
+  DCHECK(!is_pending());
 
   if (!request_) {
     NotifyStartError(URLRequestStatus(URLRequestStatus::FAILED,
@@ -433,5 +432,27 @@ void URLRequestAutomationJob::DisconnectFromMessageFilter() {
   if (message_filter_) {
     message_filter_->UnRegisterRequest(this);
     message_filter_ = NULL;
+  }
+}
+
+void URLRequestAutomationJob::StartPendingJob(
+    int new_tab_handle,
+    AutomationResourceMessageFilter* new_filter) {
+  DCHECK(new_filter != NULL);
+  tab_ = new_tab_handle;
+  message_filter_ = new_filter;
+  is_pending_ = false;
+  Start();
+}
+
+void URLRequestAutomationJob::NotifyJobCompletionTask() {
+  if (!is_done()) {
+    NotifyDone(request_status_);
+  }
+  // Reset any pending reads.
+  if (pending_buf_) {
+    pending_buf_ = NULL;
+    pending_buf_size_ = 0;
+    NotifyReadComplete(0);
   }
 }

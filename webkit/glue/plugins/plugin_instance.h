@@ -1,4 +1,4 @@
-// Copyright (c) 2006-2008 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -14,14 +14,16 @@
 #include <string>
 #include <vector>
 
-#include "app/gfx/native_widget_types.h"
 #include "base/basictypes.h"
 #include "base/file_path.h"
 #include "base/ref_counted.h"
 #include "base/scoped_ptr.h"
-#include "webkit/glue/plugins/nphostapi.h"
+#include "gfx/native_widget_types.h"
+#include "gfx/point.h"
+#include "gfx/rect.h"
 #include "googleurl/src/gurl.h"
 #include "third_party/npapi/bindings/npapi.h"
+#include "third_party/npapi/bindings/nphostapi.h"
 
 class MessageLoop;
 
@@ -37,6 +39,9 @@ class PluginHost;
 class PluginStream;
 class PluginStreamUrl;
 class PluginDataStream;
+#if defined(OS_MACOSX)
+class ScopedCurrentPluginEvent;
+#endif
 
 // A PluginInstance is an active, running instance of a Plugin.
 // A single plugin may have many PluginInstances.
@@ -104,10 +109,18 @@ class PluginInstance : public base::RefCountedThreadSafe<PluginInstance> {
 
 #if defined(OS_MACOSX)
   // Get/Set the Mac NPAPI drawing and event models
-  int drawing_model() { return drawing_model_; }
-  void set_drawing_model(int value) { drawing_model_ = value; }
-  int event_model() { return event_model_; }
-  void set_event_model(int value) { event_model_ = value; }
+  NPDrawingModel drawing_model() { return drawing_model_; }
+  void set_drawing_model(NPDrawingModel value) { drawing_model_ = value; }
+  NPEventModel event_model() { return event_model_; }
+  void set_event_model(NPEventModel value) { event_model_ = value; }
+  // Updates the instance's tracking of the location of the plugin location
+  // relative to the upper left of the screen.
+  void set_plugin_origin(const gfx::Point& origin) { plugin_origin_ = origin; }
+  // Updates the instance's tracking of the frame of the containing window
+  // relative to the upper left of the screen.
+  void set_window_frame(const gfx::Rect& frame) {
+    containing_window_frame_ = frame;
+  }
 #endif
 
   // Creates a stream for sending an URL.  If notify_id is non-zero, it will
@@ -115,7 +128,7 @@ class PluginInstance : public base::RefCountedThreadSafe<PluginInstance> {
   // will not.  Set object_url to true if the load is for the object tag's url,
   // or false if it's for a url that the plugin fetched through
   // NPN_GetUrl[Notify].
-  PluginStreamUrl* CreateStream(int resource_id,
+  PluginStreamUrl* CreateStream(unsigned long resource_id,
                                 const GURL& url,
                                 const std::string& mime_type,
                                 int notify_id);
@@ -158,6 +171,13 @@ class PluginInstance : public base::RefCountedThreadSafe<PluginInstance> {
                        void (*func)(NPP id, uint32 timer_id));
 
   void UnscheduleTimer(uint32 timer_id);
+
+  bool ConvertPoint(double source_x, double source_y,
+                    NPCoordinateSpace source_space,
+                    double* dest_x, double* dest_y,
+                    NPCoordinateSpace dest_space);
+
+  NPError PopUpContextMenu(NPMenu* menu);
 
   //
   // NPAPI methods for calling the Plugin Instance
@@ -213,6 +233,17 @@ class PluginInstance : public base::RefCountedThreadSafe<PluginInstance> {
  private:
   friend class base::RefCountedThreadSafe<PluginInstance>;
 
+#if defined(OS_MACOSX)
+  friend class ScopedCurrentPluginEvent;
+  // Sets the event that the plugin is currently handling. The object is not
+  // owned or copied, so the caller must call this again with NULL before the
+  // event pointer becomes invalid. Clients use ScopedCurrentPluginEvent rather
+  // than calling this directly.
+  void set_currently_handled_event(NPCocoaEvent* event) {
+    currently_handled_event_ = event;
+  }
+#endif
+
   ~PluginInstance();
   void OnPluginThreadAsyncCall(void (*func)(void *), void *userData);
   void OnTimerCall(void (*func)(NPP id, uint32 timer_id),
@@ -255,8 +286,11 @@ class PluginInstance : public base::RefCountedThreadSafe<PluginInstance> {
   intptr_t                                 get_notify_data_;
   bool                                     use_mozilla_user_agent_;
 #if defined(OS_MACOSX)
-  int                                      drawing_model_;
-  int                                      event_model_;
+  NPDrawingModel                           drawing_model_;
+  NPEventModel                             event_model_;
+  gfx::Point                               plugin_origin_;
+  gfx::Rect                                containing_window_frame_;
+  NPCocoaEvent*                            currently_handled_event_;  // weak
 #endif
   MessageLoop*                             message_loop_;
   scoped_refptr<PluginStreamUrl>           plugin_data_stream_;
@@ -301,6 +335,25 @@ class PluginInstance : public base::RefCountedThreadSafe<PluginInstance> {
 
   DISALLOW_EVIL_CONSTRUCTORS(PluginInstance);
 };
+
+#if defined(OS_MACOSX)
+// Helper to simplify correct usage of set_currently_handled_event.
+// Instantiating will set |instance|'s currently handled to |event| for the
+// lifetime of the object, then NULL when it goes out of scope.
+class ScopedCurrentPluginEvent {
+ public:
+  ScopedCurrentPluginEvent(PluginInstance* instance, NPCocoaEvent* event)
+      : instance_(instance) {
+    instance_->set_currently_handled_event(event);
+  }
+  ~ScopedCurrentPluginEvent() {
+    instance_->set_currently_handled_event(NULL);
+  }
+ private:
+  scoped_refptr<PluginInstance> instance_;
+  DISALLOW_COPY_AND_ASSIGN(ScopedCurrentPluginEvent);
+};
+#endif
 
 } // namespace NPAPI
 

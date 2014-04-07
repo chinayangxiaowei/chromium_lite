@@ -4,11 +4,13 @@
 
 #import <Cocoa/Cocoa.h>
 #import "base/cocoa_protocols_mac.h"
-#include "base/scoped_nsobject.h"
+#include "base/scoped_ptr.h"
+#import "chrome/browser/cocoa/bookmark_model_observer_for_cocoa.h"
 
 class BookmarkModel;
 class BookmarkNode;
 @class BookmarkBubbleController;
+@class InfoBubbleView;
 
 // Controller for the bookmark bubble.  The bookmark bubble is a
 // bubble that pops up when clicking on the STAR next to the URL to
@@ -17,7 +19,6 @@ class BookmarkNode;
 @interface BookmarkBubbleController : NSWindowController<NSWindowDelegate> {
  @private
   NSWindow* parentWindow_;  // weak
-  NSPoint topLeftForBubble_;
 
   // Both weak; owned by the current browser's profile
   BookmarkModel* model_;  // weak
@@ -25,9 +26,13 @@ class BookmarkNode;
 
   BOOL alreadyBookmarked_;
 
+  // Ping me when things change out from under us.
+  scoped_ptr<BookmarkModelObserverForCocoa> observer_;
+
   IBOutlet NSTextField* bigTitle_;   // "Bookmark" or "Bookmark Added!"
   IBOutlet NSTextField* nameTextField_;
   IBOutlet NSPopUpButton* folderPopUpButton_;
+  IBOutlet InfoBubbleView* bubble_;  // to set arrow position
 }
 
 @property (readonly, nonatomic) const BookmarkNode* node;
@@ -39,10 +44,9 @@ class BookmarkNode;
 // it desires it to be visible on the screen.  It is not shown by the
 // init routine.  Closing of the window happens implicitly on dealloc.
 - (id)initWithParentWindow:(NSWindow*)parentWindow
-          topLeftForBubble:(NSPoint)topLeftForBubble
                      model:(BookmarkModel*)model
                       node:(const BookmarkNode*)node
-     alreadyBookmarked:(BOOL)alreadyBookmarked;
+         alreadyBookmarked:(BOOL)alreadyBookmarked;
 
 // Actions for buttons in the dialog.
 - (IBAction)ok:(id)sender;
@@ -59,14 +63,10 @@ class BookmarkNode;
 // Exposed only for unit testing.
 @interface BookmarkBubbleController(ExposedForUnitTesting)
 - (void)addFolderNodes:(const BookmarkNode*)parent
-         toPopUpButton:(NSPopUpButton*)button;
+         toPopUpButton:(NSPopUpButton*)button
+           indentation:(int)indentation;
 - (void)setTitle:(NSString*)title parentFolder:(const BookmarkNode*)parent;
 - (void)setParentFolderSelection:(const BookmarkNode*)parent;
 + (NSString*)chooseAnotherFolderString;
 - (NSPopUpButton*)folderPopUpButton;
 @end
-
-
-
-
-

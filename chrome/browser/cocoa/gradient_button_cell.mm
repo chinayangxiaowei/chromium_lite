@@ -2,10 +2,13 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "chrome/browser/cocoa/gradient_button_cell.h"
+
 #include "base/logging.h"
 #import "base/scoped_nsobject.h"
-#include "chrome/browser/cocoa/gradient_button_cell.h"
-#import "third_party/GTM/AppKit/GTMTheme.h"
+#import "chrome/browser/browser_theme_provider.h"
+#import "chrome/browser/cocoa/themed_window.h"
+#include "grit/theme_resources.h"
 #import "third_party/GTM/AppKit/GTMNSColor+Luminance.h"
 
 @interface GradientButtonCell (Private)
@@ -24,7 +27,6 @@
                        inView:(NSView*)controlView
                    innerFrame:(NSRect*)returnInnerFrame
                     innerPath:(NSBezierPath**)returnInnerPath
-                    outerPath:(NSBezierPath**)returnOuterPath
                      clipPath:(NSBezierPath**)returnClipPath;
 @end
 
@@ -174,9 +176,8 @@ static const NSTimeInterval kAnimationHideDuration = 0.4;
 }
 
 // TODO(viettrungluu): clean up/reorganize.
-- (void)drawBorderAndFillForTheme:(GTMTheme*)theme
+- (void)drawBorderAndFillForTheme:(ThemeProvider*)themeProvider
                       controlView:(NSView*)controlView
-                        outerPath:(NSBezierPath*)outerPath
                         innerPath:(NSBezierPath*)innerPath
               showClickedGradient:(BOOL)showClickedGradient
             showHighlightGradient:(BOOL)showHighlightGradient
@@ -190,17 +191,20 @@ static const NSTimeInterval kAnimationHideDuration = 0.4;
   // button background image, but the modest gradient used for themed buttons.
   // To make things even more modest, scale the hover alpha down by 40 percent
   // unless clicked.
-  NSImage* backgroundImage;
+  NSColor* backgroundImageColor;
   BOOL useThemeGradient;
   if (isFlatButton) {
-    backgroundImage = nil;
+    backgroundImageColor = nil;
     useThemeGradient = YES;
     if (!showClickedGradient)
       hoverAlpha *= 0.6;
   } else {
-    backgroundImage = [theme backgroundImageForStyle:GTMThemeStyleToolBarButton
-                                               state:YES];
-    useThemeGradient = backgroundImage ? YES : NO;
+    backgroundImageColor =
+        themeProvider ?
+          themeProvider->GetNSImageColorNamed(IDR_THEME_BUTTON_BACKGROUND,
+                                              false) :
+          nil;
+    useThemeGradient = backgroundImageColor ? YES : NO;
   }
 
   // The basic gradient shown inside; see above.
@@ -215,11 +219,10 @@ static const NSTimeInterval kAnimationHideDuration = 0.4;
 
   // If we're drawing a background image, show that; else possibly show the
   // clicked gradient.
-  if (backgroundImage) {
-    NSColor* patternColor = [NSColor colorWithPatternImage:backgroundImage];
-    [patternColor set];
+  if (backgroundImageColor) {
+    [backgroundImageColor set];
     // Set the phase to match window.
-    NSRect trueRect = [controlView convertRectToBase:cellFrame];
+    NSRect trueRect = [controlView convertRect:cellFrame toView:nil];
     [[NSGraphicsContext currentContext]
         setPatternPhase:NSMakePoint(NSMinX(trueRect), NSMaxY(trueRect))];
     [innerPath fill];
@@ -229,9 +232,11 @@ static const NSTimeInterval kAnimationHideDuration = 0.4;
       if (isFlatButton) {
         clickedGradient = gradient;
       } else {
-        clickedGradient =
-            [theme gradientForStyle:GTMThemeStyleToolBarButtonPressed
-                              state:active];
+        clickedGradient = themeProvider ? themeProvider->GetNSGradient(
+            active ?
+              BrowserThemeProvider::GRADIENT_TOOLBAR_BUTTON_PRESSED :
+              BrowserThemeProvider::GRADIENT_TOOLBAR_BUTTON_PRESSED_INACTIVE) :
+            nil;
       }
       [clickedGradient drawInBezierPath:innerPath angle:90.0];
     }
@@ -264,9 +269,15 @@ static const NSTimeInterval kAnimationHideDuration = 0.4;
   }
 
   // Draw the outer stroke.
-  NSColor* strokeColor = showClickedGradient ?
-      [NSColor colorWithCalibratedWhite:0.0 alpha:0.3] :
-      [theme strokeColorForStyle:GTMThemeStyleToolBarButton state:active];
+  NSColor* strokeColor = nil;
+  if (showClickedGradient) {
+    strokeColor = [NSColor colorWithCalibratedWhite:0.0 alpha:0.3];
+  } else {
+    strokeColor = themeProvider ? themeProvider->GetNSColor(
+        active ? BrowserThemeProvider::COLOR_TOOLBAR_BUTTON_STROKE :
+                 BrowserThemeProvider::COLOR_TOOLBAR_BUTTON_STROKE_INACTIVE,
+        true) : [NSColor colorWithCalibratedWhite:0.0 alpha:0.6];
+  }
   [strokeColor setStroke];
 
   [innerPath setLineWidth:1];
@@ -279,7 +290,6 @@ static const NSTimeInterval kAnimationHideDuration = 0.4;
                        inView:(NSView*)controlView
                    innerFrame:(NSRect*)returnInnerFrame
                     innerPath:(NSBezierPath**)returnInnerPath
-                    outerPath:(NSBezierPath**)returnOuterPath
                      clipPath:(NSBezierPath**)returnClipPath {
   // Constants from Cole.  Will kConstant them once the feedback loop
   // is complete.
@@ -316,13 +326,6 @@ static const NSTimeInterval kAnimationHideDuration = 0.4;
                                                        xRadius:radius
                                                        yRadius:radius];
   }
-  if (returnOuterPath) {
-    DCHECK(*returnOuterPath == nil);
-    NSRect outerPathRect = NSInsetRect(drawFrame, -1, -1);
-    *returnOuterPath = [NSBezierPath bezierPathWithRoundedRect:outerPathRect
-                                                       xRadius:radius + 1
-                                                       yRadius:radius + 1];
-  }
   if (returnClipPath) {
     DCHECK(*returnClipPath == nil);
     NSRect clipPathRect = NSInsetRect(drawFrame, -0.5, -0.5);
@@ -336,19 +339,16 @@ static const NSTimeInterval kAnimationHideDuration = 0.4;
 - (void)drawWithFrame:(NSRect)cellFrame inView:(NSView*)controlView {
   NSRect innerFrame;
   NSBezierPath* innerPath = nil;
-  NSBezierPath* outerPath = nil;
   [self getDrawParamsForFrame:cellFrame
                        inView:controlView
                    innerFrame:&innerFrame
                     innerPath:&innerPath
-                    outerPath:&outerPath
                      clipPath:NULL];
 
   BOOL pressed = [self isHighlighted];
   NSWindow* window = [controlView window];
+  ThemeProvider* themeProvider = [window themeProvider];
   BOOL active = [window isKeyWindow] || [window isMainWindow];
-
-  GTMTheme* theme = [controlView gtm_theme];
 
   // Stroke the borders and appropriate fill gradient. If we're borderless,
   // the only time we want to draw the inner gradient is if we're highlighted.
@@ -356,9 +356,8 @@ static const NSTimeInterval kAnimationHideDuration = 0.4;
       pressed ||
       [self isMouseInside]) {
 
-    [self drawBorderAndFillForTheme:theme
+    [self drawBorderAndFillForTheme:themeProvider
                         controlView:controlView
-                          outerPath:outerPath
                           innerPath:innerPath
                 showClickedGradient:pressed
               showHighlightGradient:[self isHighlighted]
@@ -373,8 +372,11 @@ static const NSTimeInterval kAnimationHideDuration = 0.4;
   if (type == kLeftButtonWithShadowType) {
     NSRect borderRect, contentRect;
     NSDivideRect(cellFrame, &borderRect, &contentRect, 1.0, NSMaxXEdge);
-    NSColor* stroke = [theme strokeColorForStyle:GTMThemeStyleToolBarButton
-                                           state:active];
+    NSColor* stroke = themeProvider ? themeProvider->GetNSColor(
+        active ? BrowserThemeProvider::COLOR_TOOLBAR_BUTTON_STROKE :
+                 BrowserThemeProvider::COLOR_TOOLBAR_BUTTON_STROKE_INACTIVE,
+        true) : [NSColor blackColor];
+
     [[stroke colorWithAlphaComponent:0.2] set];
     NSRectFillUsingOperation(NSInsetRect(borderRect, 0, 2),
                              NSCompositeSourceOver);
@@ -383,8 +385,6 @@ static const NSTimeInterval kAnimationHideDuration = 0.4;
 }
 
 - (void)drawInteriorWithFrame:(NSRect)cellFrame inView:(NSView*)controlView {
-  GTMTheme* theme = [controlView gtm_theme];
-
   if (shouldTheme_) {
     BOOL isTemplate = [[self image] isTemplate];
 
@@ -393,8 +393,11 @@ static const NSTimeInterval kAnimationHideDuration = 0.4;
     CGContextRef context =
         (CGContextRef)([[NSGraphicsContext currentContext] graphicsPort]);
 
-    NSColor* color = [theme iconColorForStyle:GTMThemeStyleToolBarButton
-                                        state:YES];
+    ThemeProvider* themeProvider = [[controlView window] themeProvider];
+    NSColor* color = themeProvider ?
+        themeProvider->GetNSColorTint(BrowserThemeProvider::TINT_BUTTONS,
+                                      true) :
+        [NSColor blackColor];
 
     if (isTemplate) {
       scoped_nsobject<NSShadow> shadow([[NSShadow alloc] init]);
@@ -456,7 +459,6 @@ static const NSTimeInterval kAnimationHideDuration = 0.4;
                        inView:controlView
                    innerFrame:NULL
                     innerPath:NULL
-                    outerPath:NULL
                      clipPath:&boundingPath];
   return boundingPath;
 }

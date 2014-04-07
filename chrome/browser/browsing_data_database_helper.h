@@ -8,8 +8,9 @@
 #include <string>
 #include <vector>
 
+#include "base/callback.h"
 #include "base/scoped_ptr.h"
-#include "base/task.h"
+#include "chrome/common/url_constants.h"
 #include "webkit/database/database_tracker.h"
 
 class Profile;
@@ -39,6 +40,12 @@ class BrowsingDataDatabaseHelper
           description(description),
           size(size),
           last_modified(last_modified) {
+    }
+
+    bool IsFileSchemeData() {
+      return StartsWithASCII(origin_identifier,
+                             std::string(chrome::kFileScheme),
+                             true);
     }
 
     std::string host;

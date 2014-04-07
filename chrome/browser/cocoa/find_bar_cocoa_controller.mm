@@ -15,12 +15,13 @@
 #import "chrome/browser/cocoa/find_pasteboard.h"
 #import "chrome/browser/cocoa/focus_tracker.h"
 #import "chrome/browser/cocoa/tab_strip_controller.h"
+#include "chrome/browser/renderer_host/render_view_host.h"
 #include "chrome/browser/tab_contents/tab_contents.h"
 #import "third_party/GTM/AppKit/GTMNSAnimation+Duration.h"
 
 namespace {
-static float kFindBarOpenDuration = 0.2;
-static float kFindBarCloseDuration = 0.15;
+const float kFindBarOpenDuration = 0.2;
+const float kFindBarCloseDuration = 0.15;
 }
 
 @interface FindBarCocoaController (PrivateMethods)
@@ -75,7 +76,8 @@ static float kFindBarCloseDuration = 0.15;
 
 - (IBAction)close:(id)sender {
   if (findBarBridge_)
-    findBarBridge_->GetFindBarController()->EndFindSession();
+    findBarBridge_->GetFindBarController()->EndFindSession(
+        FindBarController::kKeepSelection);
 }
 
 - (IBAction)previousResult:(id)sender {
@@ -99,27 +101,18 @@ static float kFindBarCloseDuration = 0.15;
              stopSearch:YES];
 }
 
-// Positions the find bar container view in the correct location based on the
-// current state of the window.  The find bar container is always positioned one
-// pixel above the infobar container.  Note that we are using the infobar
-// container location as a proxy for the toolbar location, but we cannot
-// position based on the toolbar because the toolbar is not always present (for
-// example in fullscreen windows).
-- (void)positionFindBarView:(NSView*)infoBarContainerView {
-  static const int kRightEdgeOffset = 25;
+- (void)positionFindBarViewAtMaxY:(CGFloat)maxY maxWidth:(CGFloat)maxWidth {
+  static const CGFloat kRightEdgeOffset = 25;
   NSView* containerView = [self view];
-  int containerHeight = NSHeight([containerView frame]);
-  int containerWidth = NSWidth([containerView frame]);
+  CGFloat containerHeight = NSHeight([containerView frame]);
+  CGFloat containerWidth = NSWidth([containerView frame]);
 
-  // Start by computing the upper right corner of the infobar container, then
-  // move left by a constant offset and up one pixel.  This gives us the upper
-  // right corner of our bounding box.  We move up one pixel to overlap with the
-  // toolbar area, which allows us to cover up the toolbar's border, if present.
-  NSRect windowRect = [infoBarContainerView frame];
-  int max_x = NSMaxX(windowRect) - kRightEdgeOffset;
-  int max_y = NSMaxY(windowRect) + 1;
+  // Adjust where we'll actually place the find bar.
+  CGFloat maxX = maxWidth - kRightEdgeOffset;
+  DLOG_IF(WARNING, maxX < 0) << "Window too narrow for find bar";
+  maxY += 1;
 
-  NSRect newFrame = NSMakeRect(max_x - containerWidth, max_y - containerHeight,
+  NSRect newFrame = NSMakeRect(maxX - containerWidth, maxY - containerHeight,
                                containerWidth, containerHeight);
   [containerView setFrame:newFrame];
 }
@@ -143,7 +136,7 @@ static float kFindBarCloseDuration = 0.15;
     tab_contents->StartFinding(base::SysNSStringToUTF16(findText), true, false);
   } else {
     // The textbox is empty so we reset.
-    tab_contents->StopFinding(true);  // true = clear selection on page.
+    tab_contents->StopFinding(FindBarController::kClearSelection);
     [self updateUIForFindResult:tab_contents->find_result()
                        withText:string16()];
   }
@@ -154,6 +147,7 @@ static float kFindBarCloseDuration = 0.15;
     textView:(NSTextView*)textView
     doCommandBySelector:(SEL)command {
   if (command == @selector(insertNewline:)) {
+    // Pressing Return
     NSEvent* event = [NSApp currentEvent];
 
     if ([event modifierFlags] & NSShiftKeyMask)
@@ -161,6 +155,13 @@ static float kFindBarCloseDuration = 0.15;
     else
       [nextButton_ performClick:nil];
 
+    return YES;
+  } else if (command == @selector(insertLineBreak:)) {
+    // Pressing Ctrl-Return
+    if (findBarBridge_) {
+      findBarBridge_->GetFindBarController()->EndFindSession(
+          FindBarController::kActivateSelection);
+    }
     return YES;
   } else if (command == @selector(pageUp:) ||
              command == @selector(pageUpAndModifySelection:) ||
@@ -298,12 +299,20 @@ static float kFindBarCloseDuration = 0.15;
   return NSIntersectsRect([[self view] bounds], [findBarView_ frame]);
 }
 
+- (BOOL)isFindBarAnimating {
+  return (currentAnimation_.get() != nil);
+}
+
 // NSAnimation delegate methods.
 - (void)animationDidEnd:(NSAnimation*)animation {
   // Autorelease the animation (cannot use release because the animation object
   // is still on the stack.
   DCHECK(animation == currentAnimation_.get());
   [currentAnimation_.release() autorelease];
+
+  // If the find bar is not visible, make it actually hidden, so it'll no longer
+  // respond to key events.
+  [findBarView_ setHidden:![self isFindBarVisible]];
 }
 
 @end
@@ -328,9 +337,14 @@ static float kFindBarCloseDuration = 0.15;
 
   if (!animate) {
     [findBarView_ setFrame:endFrame];
+    [findBarView_ setHidden:![self isFindBarVisible]];
     currentAnimation_.reset(nil);
     return;
   }
+
+  // If animating, ensure that the find bar is not hidden. Hidden status will be
+  // updated at the end of the animation.
+  [findBarView_ setHidden:NO];
 
   // Reset the frame to what was saved above.
   [findBarView_ setFrame:startFrame];
@@ -341,7 +355,8 @@ static float kFindBarCloseDuration = 0.15;
   currentAnimation_.reset(
       [[NSViewAnimation alloc]
         initWithViewAnimations:[NSArray arrayWithObjects:dict, nil]]);
-  [currentAnimation_ gtm_setDuration:duration];
+  [currentAnimation_ gtm_setDuration:duration
+                           eventMask:NSLeftMouseUpMask];
   [currentAnimation_ setDelegate:self];
   [currentAnimation_ startAnimation];
 }
@@ -355,7 +370,7 @@ static float kFindBarCloseDuration = 0.15;
     TabContents* contents =
         findBarBridge_->GetFindBarController()->tab_contents();
     if (contents) {
-      contents->StopFinding(true);
+      contents->StopFinding(FindBarController::kClearSelection);
       findBarBridge_->ClearResults(contents->find_result());
     }
   }

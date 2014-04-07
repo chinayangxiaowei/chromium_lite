@@ -5,9 +5,9 @@
 #ifndef CHROME_BROWSER_GTK_EXTENSION_VIEW_GTK_H_
 #define CHROME_BROWSER_GTK_EXTENSION_VIEW_GTK_H_
 
-#include "app/gfx/native_widget_types.h"
 #include "base/basictypes.h"
-#include "base/gfx/size.h"
+#include "gfx/native_widget_types.h"
+#include "gfx/size.h"
 #include "third_party/skia/include/core/SkBitmap.h"
 
 class Browser;
@@ -36,6 +36,12 @@ class ExtensionViewGtk {
   void RenderViewCreated();
 
   RenderViewHost* render_view_host() const;
+
+  // Declared here for testing.
+  static const int kMinWidth;
+  static const int kMinHeight;
+  static const int kMaxWidth;
+  static const int kMaxHeight;
 
  private:
   void CreateWidgetHostView();

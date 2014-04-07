@@ -35,12 +35,6 @@ using bindings_utils::ExtensionBase;
 
 namespace {
 
-// A map of message name to message.
-typedef std::map<std::string, std::string> L10nMessagesMap;
-
-// A map of extension ID to l10n message map.
-typedef std::map<std::string, L10nMessagesMap > ExtensionToL10nMessagesMap;
-
 struct ExtensionData {
   struct PortData {
     int ref_count;  // how many contexts have a handle to this port
@@ -48,8 +42,6 @@ struct ExtensionData {
     PortData() : ref_count(0), disconnected(false) {}
   };
   std::map<int, PortData> ports;  // port ID -> data
-  // Maps extension ID to message map.
-  ExtensionToL10nMessagesMap extension_l10n_messages_map_;
 };
 
 static bool HasPortData(int port_id) {
@@ -63,21 +55,6 @@ static ExtensionData::PortData& GetPortData(int port_id) {
 
 static void ClearPortData(int port_id) {
   Singleton<ExtensionData>::get()->ports.erase(port_id);
-}
-
-static ExtensionToL10nMessagesMap* GetExtensionToL10nMessagesMap() {
-  return &Singleton<ExtensionData>()->extension_l10n_messages_map_;
-}
-
-static L10nMessagesMap* GetL10nMessagesMap(const std::string extension_id) {
-  ExtensionToL10nMessagesMap::iterator it =
-      Singleton<ExtensionData>()->extension_l10n_messages_map_.find(
-          extension_id);
-  if (it != Singleton<ExtensionData>()->extension_l10n_messages_map_.end()) {
-    return &(it->second);
-  } else {
-    return NULL;
-  }
 }
 
 const char kPortClosedError[] = "Attempting to use a disconnected port object";
@@ -221,17 +198,12 @@ class ExtensionImpl : public ExtensionBase {
       renderview->Send(new ViewHostMsg_GetExtensionMessageBundle(
           extension_id, &messages));
 
-      if (messages.empty())
-        return v8::Undefined();
-
       // Save messages we got.
       ExtensionToL10nMessagesMap& l10n_messages_map =
           *GetExtensionToL10nMessagesMap();
       l10n_messages_map[extension_id] = messages;
 
       l10n_messages = GetL10nMessagesMap(extension_id);
-      if (!l10n_messages)
-        return v8::Undefined();
     }
 
     std::string message_name = *v8::String::AsciiValue(args[0]);
@@ -326,8 +298,13 @@ v8::Extension* RendererExtensionBindings::Get() {
 
 void RendererExtensionBindings::Invoke(const std::string& function_name,
                                        const ListValue& args,
-                                       RenderView* renderview) {
+                                       RenderView* renderview,
+                                       bool requires_incognito_access) {
   v8::HandleScope handle_scope;
   std::vector< v8::Handle<v8::Value> > argv = ListValueToV8(args);
-  EventBindings::CallFunction(function_name, argv.size(), &argv[0], renderview);
+  EventBindings::CallFunction(function_name,
+                              argv.size(),
+                              &argv[0],
+                              renderview,
+                              requires_incognito_access);
 }

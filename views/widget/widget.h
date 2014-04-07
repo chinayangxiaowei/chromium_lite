@@ -5,7 +5,9 @@
 #ifndef VIEWS_WIDGET_WIDGET_H_
 #define VIEWS_WIDGET_WIDGET_H_
 
-#include "app/gfx/native_widget_types.h"
+#include <vector>
+
+#include "gfx/native_widget_types.h"
 
 class ThemeProvider;
 
@@ -15,13 +17,17 @@ class Point;
 class Rect;
 }
 
+namespace menus {
+class Accelerator;
+}
+
 namespace views {
 
-class Accelerator;
 class FocusManager;
 class RootView;
 class TooltipManager;
 class View;
+class WidgetDelegate;
 class Window;
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -58,15 +64,30 @@ class Widget {
     NotDeleteOnDestroy
   };
 
+  enum MirroringParam {
+    MirrorOriginInRTL,
+    DontMirrorOriginInRTL
+  };
+
   // Creates a transient popup widget specific to the current platform.
+  // If |mirror_in_rtl| is set to MirrorOriginInRTL, the contents of the
+  // popup will be mirrored if the current locale is RTL.  You should use
+  // DontMirrorOriginInRTL if you are aleady handling the RTL layout within
+  // the widget.
   static Widget* CreatePopupWidget(TransparencyParam transparent,
                                    EventsParam accept_events,
-                                   DeleteParam delete_on_destroy);
+                                   DeleteParam delete_on_destroy,
+                                   MirroringParam mirror_in_rtl);
 
   // Returns the root view for |native_window|. If |native_window| does not have
   // a rootview, this recurses through all of |native_window|'s children until
   // one is found. If a root view isn't found, null is returned.
   static RootView* FindRootView(gfx::NativeWindow native_window);
+
+  // Returns list of all root views for the native window and its
+  // children.
+  static void FindAllRootViews(gfx::NativeWindow native_window,
+                               std::vector<RootView*>* root_views);
 
   // Retrieve the Widget corresponding to the specified native_view, or NULL
   // if there is no such Widget.
@@ -81,6 +102,12 @@ class Widget {
   // the caller is responsible for populating the RootView, and sizing its
   // contents as the window is sized.
   virtual void Init(gfx::NativeView parent, const gfx::Rect& bounds) = 0;
+
+  // Returns the WidgetDelegate for delegating certain events.
+  virtual WidgetDelegate* GetWidgetDelegate() = 0;
+
+  // Sets the WidgetDelegate.
+  virtual void SetWidgetDelegate(WidgetDelegate* delegate) = 0;
 
   // Sets the specified view as the contents of this Widget. There can only
   // be one contents view child of this Widget's RootView. This view is sized to
@@ -155,7 +182,7 @@ class Widget {
   // Returns the accelerator given a command id. Returns false if there is
   // no accelerator associated with a given id, which is a common condition.
   virtual bool GetAccelerator(int cmd_id,
-                              Accelerator* accelerator) = 0;
+                              menus::Accelerator* accelerator) = 0;
 
   // Returns the Window containing this Widget, or NULL if not contained in a
   // window.
@@ -184,6 +211,10 @@ class Widget {
   // Forwarded from the RootView so that the widget can do any cleanup.
   virtual void ViewHierarchyChanged(bool is_add, View *parent,
                                     View *child) = 0;
+
+  // Returns true if the native view |native_view| is contained in the
+  // views::View hierarchy rooted at this widget.
+  virtual bool ContainsNativeView(gfx::NativeView native_view) = 0;
 };
 
 }  // namespace views

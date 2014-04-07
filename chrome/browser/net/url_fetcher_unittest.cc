@@ -18,6 +18,8 @@
 using base::Time;
 using base::TimeDelta;
 
+// TODO(eroman): Add a regression test for http://crbug.com/40505.
+
 namespace {
 
 const wchar_t kDocRoot[] = L"chrome/test/data";
@@ -96,8 +98,24 @@ class URLFetcherHeadersTest : public URLFetcherTest {
                                   const std::string& data);
 };
 
-// Version of URLFetcherTest that tests overload proctection.
+// Version of URLFetcherTest that tests overload protection.
 class URLFetcherProtectTest : public URLFetcherTest {
+ public:
+  virtual void CreateFetcher(const GURL& url);
+  // URLFetcher::Delegate
+  virtual void OnURLFetchComplete(const URLFetcher* source,
+                                  const GURL& url,
+                                  const URLRequestStatus& status,
+                                  int response_code,
+                                  const ResponseCookies& cookies,
+                                  const std::string& data);
+ private:
+  Time start_time_;
+};
+
+// Version of URLFetcherTest that tests overload protection, when responses
+// passed through.
+class URLFetcherProtectTestPassedThrough : public URLFetcherTest {
  public:
   virtual void CreateFetcher(const GURL& url);
   // URLFetcher::Delegate
@@ -141,39 +159,25 @@ class URLFetcherCancelTest : public URLFetcherTest {
                                   const std::string& data);
 
   void CancelRequest();
-  void TestContextReleased();
 
  private:
   base::OneShotTimer<URLFetcherCancelTest> timer_;
-  bool context_released_;
 };
 
-// Version of TestURLRequestContext that let us know if the request context
-// is properly released.
+// Version of TestURLRequestContext that posts a Quit task to the IO
+// thread once it is deleted.
 class CancelTestURLRequestContext : public TestURLRequestContext {
- public:
-  explicit CancelTestURLRequestContext(bool* destructor_called)
-      : destructor_called_(destructor_called) {
-    *destructor_called_ = false;
-  }
-
- private:
   virtual ~CancelTestURLRequestContext() {
-    *destructor_called_ = true;
+    ChromeThread::PostTask(
+        ChromeThread::IO, FROM_HERE, new MessageLoop::QuitTask());
   }
-
-  bool* destructor_called_;
 };
 
 class CancelTestURLRequestContextGetter : public URLRequestContextGetter {
  public:
-  explicit CancelTestURLRequestContextGetter(bool* destructor_called)
-      : destructor_called_(destructor_called) {
-  }
-
   virtual URLRequestContext* GetURLRequestContext() {
     if (!context_)
-      context_ = new CancelTestURLRequestContext(destructor_called_);
+      context_ = new CancelTestURLRequestContext();
     return context_;
   }
 
@@ -181,7 +185,6 @@ class CancelTestURLRequestContextGetter : public URLRequestContextGetter {
   ~CancelTestURLRequestContextGetter() {}
 
   scoped_refptr<URLRequestContext> context_;
-  bool* destructor_called_;
 };
 
 // Wrapper that lets us call CreateFetcher() on a thread of our choice.  We
@@ -195,7 +198,7 @@ class FetcherWrapperTask : public Task {
       : test_(test), url_(url) { }
   virtual void Run() {
     test_->CreateFetcher(url_);
-  };
+  }
 
  private:
   URLFetcherTest* test_;
@@ -301,6 +304,41 @@ void URLFetcherProtectTest::OnURLFetchComplete(const URLFetcher* source,
   }
 }
 
+void URLFetcherProtectTestPassedThrough::CreateFetcher(const GURL& url) {
+  fetcher_ = new URLFetcher(url, URLFetcher::GET, this);
+  fetcher_->set_request_context(new TestURLRequestContextGetter());
+  fetcher_->set_automatcally_retry_on_5xx(false);
+  start_time_ = Time::Now();
+  fetcher_->Start();
+}
+
+void URLFetcherProtectTestPassedThrough::OnURLFetchComplete(
+    const URLFetcher* source,
+    const GURL& url,
+    const URLRequestStatus& status,
+    int response_code,
+    const ResponseCookies& cookies,
+    const std::string& data) {
+  const TimeDelta one_minute = TimeDelta::FromMilliseconds(60000);
+  if (response_code >= 500) {
+    // Now running ServerUnavailable test.
+    // It should get here on the first attempt, so almost immediately and
+    // *not* to attempt to execute all 11 requests (2.5 minutes).
+    EXPECT_TRUE(Time::Now() - start_time_ < one_minute);
+    EXPECT_TRUE(status.is_success());
+    // Check that suggested back off time is bigger than 0.
+    EXPECT_GT(fetcher_->backoff_delay().InMicroseconds(), 0);
+    EXPECT_FALSE(data.empty());
+    delete fetcher_;
+    ChromeThread::PostTask(
+        ChromeThread::IO, FROM_HERE, new MessageLoop::QuitTask());
+  } else {
+    // We should not get here!
+    FAIL();
+  }
+}
+
+
 URLFetcherBadHTTPSTest::URLFetcherBadHTTPSTest() {
   PathService::Get(base::DIR_SOURCE_ROOT, &cert_dir_);
   cert_dir_ = cert_dir_.AppendASCII("chrome");
@@ -336,8 +374,12 @@ void URLFetcherBadHTTPSTest::OnURLFetchComplete(
 
 void URLFetcherCancelTest::CreateFetcher(const GURL& url) {
   fetcher_ = new URLFetcher(url, URLFetcher::GET, this);
-  fetcher_->set_request_context(
-      new CancelTestURLRequestContextGetter(&context_released_));
+  // We need to force the creation of the URLRequestContext, since we
+  // rely on it being destroyed as a signal to end the test.
+  URLRequestContextGetter* context_getter =
+      new CancelTestURLRequestContextGetter();
+  context_getter->GetURLRequestContext();
+  fetcher_->set_request_context(context_getter);
   fetcher_->Start();
   // Make sure we give the IO thread a chance to run.
   timer_.Start(TimeDelta::FromMilliseconds(300), this,
@@ -360,16 +402,9 @@ void URLFetcherCancelTest::OnURLFetchComplete(const URLFetcher* source,
 void URLFetcherCancelTest::CancelRequest() {
   delete fetcher_;
   timer_.Stop();
-  // Make sure we give the IO thread a chance to run.
-  timer_.Start(TimeDelta::FromMilliseconds(300), this,
-               &URLFetcherCancelTest::TestContextReleased);
-}
-
-void URLFetcherCancelTest::TestContextReleased() {
-  EXPECT_TRUE(context_released_);
-  timer_.Stop();
-  ChromeThread::PostTask(
-      ChromeThread::IO, FROM_HERE, new MessageLoop::QuitTask());
+  // The URLFetcher's test context will post a Quit task once it is
+  // deleted. So if this test simply hangs, it means cancellation
+  // did not work.
 }
 
 TEST_F(URLFetcherTest, SameThreadsTest) {
@@ -457,13 +492,30 @@ TEST_F(URLFetcherProtectTest, ServerUnavailable) {
   MessageLoop::current()->Run();
 }
 
-#if defined(OS_WIN)
+TEST_F(URLFetcherProtectTestPassedThrough, ServerUnavailablePropagateResponse) {
+  scoped_refptr<HTTPTestServer> server =
+    HTTPTestServer::CreateServer(L"chrome/test/data", NULL);
+  ASSERT_TRUE(NULL != server.get());
+  GURL url = GURL(server->TestServerPage("files/server-unavailable.html"));
+
+  // Registers an entry for test url. The backoff time is calculated by:
+  //     new_backoff = 2.0 * old_backoff + 0
+  // and maximum backoff time is 256 milliseconds.
+  // Maximum retries allowed is set to 11.
+  URLFetcherProtectManager* manager = URLFetcherProtectManager::GetInstance();
+  // Total time if *not* for not doing automatic backoff would be 150s.
+  // In reality it should be "as soon as server responds".
+  URLFetcherProtectEntry* entry =
+      new URLFetcherProtectEntry(200, 3, 11, 100, 2.0, 0, 150000);
+  manager->Register(url.host(), entry);
+
+  CreateFetcher(url);
+
+  MessageLoop::current()->Run();
+}
+
+
 TEST_F(URLFetcherBadHTTPSTest, BadHTTPSTest) {
-#else
-// TODO(port): Enable BadHTTPSTest. Currently asserts in
-// URLFetcherBadHTTPSTest::OnURLFetchComplete don't pass.
-TEST_F(URLFetcherBadHTTPSTest, DISABLED_BadHTTPSTest) {
-#endif
   scoped_refptr<HTTPSTestServer> server =
       HTTPSTestServer::CreateExpiredServer(kDocRoot);
   ASSERT_TRUE(NULL != server.get());
@@ -493,6 +545,41 @@ TEST_F(URLFetcherCancelTest, ReleasesContext) {
   // terminate the main thread's message loop; then the other thread's
   // message loop will be shut down automatically as the thread goes out of
   // scope.
+  base::Thread t("URLFetcher test thread");
+  ASSERT_TRUE(t.Start());
+  t.message_loop()->PostTask(FROM_HERE, new FetcherWrapperTask(this, url));
+
+  MessageLoop::current()->Run();
+}
+
+TEST_F(URLFetcherCancelTest, CancelWhileDelayedStartTaskPending) {
+  scoped_refptr<HTTPTestServer> server =
+      HTTPTestServer::CreateServer(L"chrome/test/data", NULL);
+  ASSERT_TRUE(NULL != server.get());
+  GURL url = GURL(server->TestServerPage("files/server-unavailable.html"));
+
+  // Register an entry for test url.
+  //
+  // Ideally we would mock URLFetcherProtectEntry to return XXX seconds
+  // in response to entry->UpdateBackoff(SEND).
+  //
+  // Unfortunately this function is time sensitive, so we fudge some numbers
+  // to make it at least somewhat likely to have a non-zero deferred
+  // delay when running.
+  //
+  // Using a sliding window of 2 seconds, and max of 1 request, under a fast
+  // run we expect to have a 4 second delay when posting the Start task.
+  URLFetcherProtectManager* manager = URLFetcherProtectManager::GetInstance();
+  URLFetcherProtectEntry* entry =
+      new URLFetcherProtectEntry(2000, 1, 2, 2000, 2.0, 0, 4000);
+  EXPECT_EQ(0, entry->UpdateBackoff(URLFetcherProtectEntry::SEND));
+  entry->UpdateBackoff(URLFetcherProtectEntry::SEND);  // Returns about 2000.
+  manager->Register(url.host(), entry);
+
+  // The next request we try to send will be delayed by ~4 seconds.
+  // The slower the test runs, the less the delay will be (since it takes the
+  // time difference from now).
+
   base::Thread t("URLFetcher test thread");
   ASSERT_TRUE(t.Start());
   t.message_loop()->PostTask(FROM_HERE, new FetcherWrapperTask(this, url));

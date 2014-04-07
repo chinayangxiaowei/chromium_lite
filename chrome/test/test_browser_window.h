@@ -43,19 +43,26 @@ class TestBrowserWindow : public BrowserWindow {
   virtual LocationBar* GetLocationBar() const {
     return const_cast<TestLocationBar*>(&location_bar_);
   }
-  virtual void SetFocusToLocationBar() {}
+  virtual void SetFocusToLocationBar(bool select_all) {}
   virtual void UpdateStopGoState(bool is_loading, bool force) {}
   virtual void UpdateToolbar(TabContents* contents,
                              bool should_restore_state) {}
   virtual void FocusToolbar() {}
+  virtual void FocusPageAndAppMenus() {}
   virtual void ShowPageMenu() {}
   virtual void ShowAppMenu() {}
-  virtual int GetCommandId(const NativeWebKeyboardEvent& event) { return -1; }
+  virtual bool PreHandleKeyboardEvent(const NativeWebKeyboardEvent& event,
+                                      bool* is_keyboard_shortcut) {
+    return false;
+  }
+  virtual void HandleKeyboardEvent(const NativeWebKeyboardEvent& event) {}
+  virtual void ShowCreateShortcutsDialog(TabContents* tab_contents) {}
 #if defined(TOOLKIT_VIEWS)
   virtual void ToggleCompactNavigationBar() {}
-#endif
+#endif  // defined(TOOLKIT_VIEWS)
 
   virtual bool IsBookmarkBarVisible() const { return false; }
+  virtual bool IsBookmarkBarAnimating() const { return false; }
   virtual bool IsToolbarVisible() const { return false; }
   virtual gfx::Rect GetRootWindowResizerRect() const { return gfx::Rect(); }
   virtual void ConfirmAddSearchProvider(const TemplateURL* template_url,
@@ -90,6 +97,9 @@ class TestBrowserWindow : public BrowserWindow {
                             const GURL& url,
                             const NavigationEntry::SSLStatus& ssl,
                             bool show_history) { }
+  virtual void Cut() { }
+  virtual void Copy() { }
+  virtual void Paste() { }
 
  protected:
   virtual void DestroyBrowser() {}

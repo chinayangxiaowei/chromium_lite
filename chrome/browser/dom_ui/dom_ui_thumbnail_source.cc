@@ -4,14 +4,15 @@
 
 #include "chrome/browser/dom_ui/dom_ui_thumbnail_source.h"
 
-#include "app/gfx/codec/jpeg_codec.h"
 #include "app/resource_bundle.h"
+#include "base/callback.h"
 #include "base/command_line.h"
 #include "chrome/browser/profile.h"
 #include "chrome/browser/thumbnail_store.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/common/notification_service.h"
 #include "chrome/common/url_constants.h"
+#include "gfx/codec/jpeg_codec.h"
 #include "googleurl/src/gurl.h"
 #include "grit/theme_resources.h"
 #include "third_party/skia/include/core/SkBitmap.h"
@@ -22,6 +23,7 @@ DOMUIThumbnailSource::DOMUIThumbnailSource(Profile* profile)
 }
 
 void DOMUIThumbnailSource::StartDataRequest(const std::string& path,
+                                            bool is_off_the_record,
                                             int request_id) {
   if (CommandLine::ForCurrentProcess()->HasSwitch(switches::kThumbnailStore)) {
     scoped_refptr<ThumbnailStore> store_ = profile_->GetThumbnailStore();

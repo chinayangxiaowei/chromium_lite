@@ -20,35 +20,49 @@ class BrowserFrameGtk : public BrowserFrame,
   BrowserFrameGtk(BrowserView* browser_view, Profile* profile);
   virtual ~BrowserFrameGtk();
 
-  // This initialization function must be called after construction, it is
-  // separate to avoid recursive calling of the frame from its constructor.
-  void Init();
+  // Creates a frame view and initializes the window.  This
+  // initialization function must be called after construction, it is
+  // separate to avoid recursive calling of the frame from its
+  // constructor.
+  virtual void Init();
 
   // Overridden from BrowserFrame:
   virtual views::Window* GetWindow();
-  virtual void TabStripCreated(TabStripWrapper* tabstrip);
+  virtual void TabStripCreated(BaseTabStrip* tabstrip);
   virtual int GetMinimizeButtonOffset() const;
-  virtual gfx::Rect GetBoundsForTabStrip(TabStripWrapper* tabstrip) const;
+  virtual gfx::Rect GetBoundsForTabStrip(BaseTabStrip* tabstrip) const;
   virtual void UpdateThrobber(bool running);
   virtual void ContinueDraggingDetachedTab();
   virtual ThemeProvider* GetThemeProviderForFrame() const;
   virtual bool AlwaysUseNativeFrame() const;
+  virtual views::View* GetFrameView() const;
+  virtual void PaintTabStripShadow(gfx::Canvas* canvas);
 
   // Overridden from views::Widget:
   virtual ThemeProvider* GetThemeProvider() const;
   virtual ThemeProvider* GetDefaultThemeProvider() const;
   virtual void IsActiveChanged();
+  virtual void SetInitialFocus();
 
  protected:
+  void set_browser_frame_view(BrowserNonClientFrameView* browser_frame_view) {
+    browser_frame_view_ = browser_frame_view;
+  }
+
   // Overridden from views::WidgetGtk:
   virtual views::RootView* CreateRootView();
-  virtual bool GetAccelerator(int cmd_id, views::Accelerator* accelerator);
+  virtual bool GetAccelerator(int cmd_id, menus::Accelerator* accelerator);
 
   // Overriden from views::WindowGtk:
   virtual gboolean OnWindowStateEvent(GtkWidget* widget,
                                       GdkEventWindowState* event);
   virtual gboolean OnConfigureEvent(GtkWidget* widget,
                                     GdkEventConfigure* event);
+
+ protected:
+  BrowserView* browser_view() const {
+    return browser_view_;
+  }
 
  private:
   // The BrowserView is our ClientView. This is a pointer to it.

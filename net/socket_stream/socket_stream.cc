@@ -1,4 +1,4 @@
-// Copyright (c) 2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 //
@@ -26,10 +26,8 @@
 #include "net/socket/socks_client_socket.h"
 #include "net/socket/tcp_client_socket.h"
 #include "net/socket_stream/socket_stream_metrics.h"
-#include "net/socket_stream/socket_stream_throttle.h"
 #include "net/url_request/url_request.h"
 
-static const int kMaxNumLoadLogEntries = 50;
 static const int kMaxPendingSendAllowed = 32768;  // 32 kilobytes.
 static const int kReadBufferSize = 4096;
 
@@ -40,13 +38,14 @@ void SocketStream::ResponseHeaders::Realloc(size_t new_size) {
 }
 
 SocketStream::SocketStream(const GURL& url, Delegate* delegate)
-    : load_log_(new net::LoadLog(kMaxNumLoadLogEntries)),
+    : delegate_(delegate),
       url_(url),
-      delegate_(delegate),
       max_pending_send_allowed_(kMaxPendingSendAllowed),
       next_state_(STATE_NONE),
+      http_auth_handler_factory_(NULL),
       factory_(ClientSocketFactory::GetDefaultFactory()),
       proxy_mode_(kDirectConnection),
+      proxy_url_(url),
       pac_request_(NULL),
       ALLOW_THIS_IN_INITIALIZER_LIST(
           io_callback_(this, &SocketStream::OnIOCompleted)),
@@ -59,23 +58,18 @@ SocketStream::SocketStream(const GURL& url, Delegate* delegate)
       current_write_buf_(NULL),
       write_buf_offset_(0),
       write_buf_size_(0),
-      throttle_(
-          SocketStreamThrottle::GetSocketStreamThrottleForScheme(
-              url.scheme())),
-      metrics_(new SocketStreamMetrics(url)),
-      ALLOW_THIS_IN_INITIALIZER_LIST(
-          request_tracker_node_(this)) {
+      metrics_(new SocketStreamMetrics(url)) {
   DCHECK(MessageLoop::current()) <<
       "The current MessageLoop must exist";
   DCHECK_EQ(MessageLoop::TYPE_IO, MessageLoop::current()->type()) <<
       "The current MessageLoop must be TYPE_IO";
   DCHECK(delegate_);
-  DCHECK(throttle_);
 }
 
 SocketStream::~SocketStream() {
   set_context(NULL);
   DCHECK(!delegate_);
+  DCHECK(!pac_request_);
 }
 
 SocketStream::UserData* SocketStream::GetUserData(
@@ -96,15 +90,27 @@ void SocketStream::set_context(URLRequestContext* context) {
   context_ = context;
 
   if (prev_context != context) {
-    if (prev_context)
-      prev_context->socket_stream_tracker()->Remove(this);
-    if (context)
-      context->socket_stream_tracker()->Add(this);
+    if (prev_context && pac_request_) {
+      prev_context->proxy_service()->CancelPacRequest(pac_request_);
+      pac_request_ = NULL;
+    }
+
+    net_log_.EndEvent(NetLog::TYPE_REQUEST_ALIVE);
+    net_log_ = BoundNetLog();
+
+    if (context) {
+      net_log_ = BoundNetLog::Make(
+          context->net_log(),
+          NetLog::SOURCE_SOCKET_STREAM);
+
+      net_log_.BeginEvent(NetLog::TYPE_REQUEST_ALIVE);
+    }
   }
 
-  if (context_)
+  if (context_) {
     host_resolver_ = context_->host_resolver();
-
+    http_auth_handler_factory_ = context_->http_auth_handler_factory();
+  }
 }
 
 void SocketStream::Connect() {
@@ -120,7 +126,8 @@ void SocketStream::Connect() {
   // Open a connection asynchronously, so that delegate won't be called
   // back before returning Connect().
   next_state_ = STATE_RESOLVE_PROXY;
-  LoadLog::BeginEvent(load_log_, LoadLog::TYPE_SOCKET_STREAM_CONNECT);
+  net_log_.BeginEventWithString(NetLog::TYPE_SOCKET_STREAM_CONNECT,
+                                url_.possibly_invalid_spec());
   MessageLoop::current()->PostTask(
       FROM_HERE,
       NewRunnableMethod(this, &SocketStream::DoLoop, OK));
@@ -166,9 +173,14 @@ void SocketStream::Close() {
       "The current MessageLoop must exist";
   DCHECK_EQ(MessageLoop::TYPE_IO, MessageLoop::current()->type()) <<
       "The current MessageLoop must be TYPE_IO";
-  if (!socket_.get() || !socket_->IsConnected() || next_state_ == STATE_NONE)
+  // If next_state_ is STATE_NONE, the socket was not opened, or already
+  // closed.  So, return immediately.
+  // Otherwise, it might call Finish() more than once, so breaks balance
+  // of AddRef() and Release() in Connect() and Finish(), respectively.
+  if (next_state_ == STATE_NONE)
     return;
-  socket_->Disconnect();
+  if (socket_.get() && socket_->IsConnected())
+    socket_->Disconnect();
   next_state_ = STATE_CLOSE;
   // Close asynchronously, so that delegate won't be called
   // back before returning Close().
@@ -206,7 +218,7 @@ void SocketStream::DetachDelegate() {
   if (!delegate_)
     return;
   delegate_ = NULL;
-  LoadLog::AddEvent(load_log_, LoadLog::TYPE_CANCELLED);
+  net_log_.AddEvent(NetLog::TYPE_CANCELLED);
   Close();
 }
 
@@ -229,7 +241,6 @@ void SocketStream::Finish(int result) {
   if (delegate) {
     delegate->OnClose(this);
   }
-  throttle_->OnClose(this);
   Release();
 }
 
@@ -245,7 +256,7 @@ void SocketStream::SetClientSocketFactory(
 }
 
 void SocketStream::CopyAddrInfo(struct addrinfo* head) {
-  addresses_.Copy(head);
+  addresses_.Copy(head, true);
 }
 
 int SocketStream::DidEstablishConnection() {
@@ -256,7 +267,7 @@ int SocketStream::DidEstablishConnection() {
   next_state_ = STATE_READ_WRITE;
   metrics_->OnConnected();
 
-  LoadLog::EndEvent(load_log_, LoadLog::TYPE_SOCKET_STREAM_CONNECT);
+  net_log_.EndEvent(NetLog::TYPE_SOCKET_STREAM_CONNECT);
   if (delegate_)
     delegate_->OnConnected(this, max_pending_send_allowed_);
 
@@ -266,25 +277,22 @@ int SocketStream::DidEstablishConnection() {
 int SocketStream::DidReceiveData(int result) {
   DCHECK(read_buf_);
   DCHECK_GT(result, 0);
-  LoadLog::AddEvent(load_log_, LoadLog::TYPE_SOCKET_STREAM_RECEIVED);
+  net_log_.AddEvent(NetLog::TYPE_SOCKET_STREAM_RECEIVED);
   int len = result;
   metrics_->OnRead(len);
-  result = throttle_->OnRead(this, read_buf_->data(), len, &io_callback_);
   if (delegate_) {
     // Notify recevied data to delegate.
     delegate_->OnReceivedData(this, read_buf_->data(), len);
   }
   read_buf_ = NULL;
-  return result;
+  return OK;
 }
 
 int SocketStream::DidSendData(int result) {
   DCHECK_GT(result, 0);
-  LoadLog::AddEvent(load_log_, LoadLog::TYPE_SOCKET_STREAM_SENT);
+  net_log_.AddEvent(NetLog::TYPE_SOCKET_STREAM_SENT);
   int len = result;
   metrics_->OnWrite(len);
-  result = throttle_->OnWrite(this, current_write_buf_->data(), len,
-                              &io_callback_);
   current_write_buf_ = NULL;
   if (delegate_)
     delegate_->OnSentData(this, len);
@@ -303,7 +311,7 @@ int SocketStream::DidSendData(int result) {
   } else {
     write_buf_offset_ += len;
   }
-  return result;
+  return OK;
 }
 
 void SocketStream::OnIOCompleted(int result) {
@@ -404,7 +412,7 @@ void SocketStream::DoLoop(int result) {
     // close the connection.
     if (state != STATE_READ_WRITE && result < ERR_IO_PENDING) {
       DCHECK_EQ(next_state_, STATE_CLOSE);
-      LoadLog::EndEvent(load_log_, LoadLog::TYPE_SOCKET_STREAM_CONNECT);
+      net_log_.EndEventWithInteger(NetLog::TYPE_SOCKET_STREAM_CONNECT, result);
     }
   } while (result != ERR_IO_PENDING);
 }
@@ -413,18 +421,16 @@ int SocketStream::DoResolveProxy() {
   DCHECK(!pac_request_);
   next_state_ = STATE_RESOLVE_PROXY_COMPLETE;
 
-  if (!url_.is_valid()) {
+  if (!proxy_url_.is_valid()) {
     next_state_ = STATE_CLOSE;
     return ERR_INVALID_ARGUMENT;
   }
 
   return proxy_service()->ResolveProxy(
-      url_, &proxy_info_, &io_callback_, &pac_request_, load_log_);
+      proxy_url_, &proxy_info_, &io_callback_, &pac_request_, net_log_);
 }
 
 int SocketStream::DoResolveProxyComplete(int result) {
-  next_state_ = STATE_RESOLVE_HOST;
-
   pac_request_ = NULL;
   if (result != OK) {
     LOG(ERROR) << "Failed to resolve proxy: " << result;
@@ -432,13 +438,36 @@ int SocketStream::DoResolveProxyComplete(int result) {
       delegate_->OnError(this, result);
     proxy_info_.UseDirect();
   }
+  if (proxy_info_.is_direct()) {
+    // If proxy was not found for original URL (i.e. websocket URL),
+    // try again with https URL, like Safari implementation.
+    // Note that we don't want to use http proxy, because we'll use tunnel
+    // proxy using CONNECT method, which is used by https proxy.
+    if (!proxy_url_.SchemeIs("https")) {
+      const std::string scheme = "https";
+      GURL::Replacements repl;
+      repl.SetSchemeStr(scheme);
+      proxy_url_ = url_.ReplaceComponents(repl);
+      DLOG(INFO) << "Try https proxy: " << proxy_url_;
+      next_state_ = STATE_RESOLVE_PROXY;
+      return OK;
+    }
+  }
 
+  if (proxy_info_.is_empty()) {
+    // No proxies/direct to choose from. This happens when we don't support any
+    // of the proxies in the returned list.
+    return ERR_NO_SUPPORTED_PROXIES;
+  }
+
+  next_state_ = STATE_RESOLVE_HOST;
   return OK;
 }
 
 int SocketStream::DoResolveHost() {
   next_state_ = STATE_RESOLVE_HOST_COMPLETE;
 
+  DCHECK(!proxy_info_.is_empty());
   if (proxy_info_.is_direct())
     proxy_mode_ = kDirectConnection;
   else if (proxy_info_.proxy_server().is_socks())
@@ -463,13 +492,13 @@ int SocketStream::DoResolveHost() {
   DCHECK(host_resolver_.get());
   resolver_.reset(new SingleRequestHostResolver(host_resolver_.get()));
   return resolver_->Resolve(resolve_info, &addresses_, &io_callback_,
-                            load_log_);
+                            net_log_);
 }
 
 int SocketStream::DoResolveHostComplete(int result) {
   if (result == OK) {
     next_state_ = STATE_TCP_CONNECT;
-    result = throttle_->OnStartOpenConnection(this, &io_callback_);
+    result = delegate_->OnStartOpenConnection(this, &io_callback_);
     if (result == net::ERR_IO_PENDING)
       metrics_->OnWaitConnection();
   } else {
@@ -484,7 +513,7 @@ int SocketStream::DoTcpConnect() {
   DCHECK(factory_);
   socket_.reset(factory_->CreateTCPClientSocket(addresses_));
   metrics_->OnStartConnection();
-  return socket_->Connect(&io_callback_, load_log_);
+  return socket_->Connect(&io_callback_, net_log_);
 }
 
 int SocketStream::DoTcpConnectComplete(int result) {
@@ -536,14 +565,21 @@ int SocketStream::DoWriteTunnelHeaders() {
     // HttpRequestInfo.
     // TODO(ukai): Add support other authentication scheme.
     if (auth_handler_.get() && auth_handler_->scheme() == "basic") {
-      std::string credentials = auth_handler_->GenerateCredentials(
+      std::string auth_token;
+      int rv = auth_handler_->GenerateAuthToken(
           auth_identity_.username,
           auth_identity_.password,
           NULL,
-          &proxy_info_);
+          &proxy_info_,
+          &auth_token);
+      // TODO(cbentzel): Should do something different if credentials
+      // can't be generated. In this case, only Basic is allowed which
+      // should only fail if Base64 encoding fails.
+      if (rv != OK)
+        auth_token = std::string();
       authorization_headers.append(
           HttpAuth::GetAuthorizationHeaderName(HttpAuth::AUTH_PROXY) +
-          ": " + credentials + "\r\n");
+          ": " + auth_token + "\r\n");
     }
 
     tunnel_request_headers_->headers_ = StringPrintf(
@@ -658,6 +694,7 @@ int SocketStream::DoReadTunnelHeadersComplete(int result) {
       result = HandleAuthChallenge(headers.get());
       if (result == ERR_PROXY_AUTH_REQUESTED &&
           auth_handler_.get() && delegate_) {
+        DCHECK(!proxy_info_.is_empty());
         auth_info_ = new AuthChallengeInfo;
         auth_info_->is_proxy = true;
         auth_info_->host_and_port =
@@ -687,13 +724,14 @@ int SocketStream::DoSOCKSConnect() {
   HostResolver::RequestInfo req_info(url_.HostNoBrackets(),
                                      url_.EffectiveIntPort());
 
+  DCHECK(!proxy_info_.is_empty());
   if (proxy_info_.proxy_server().scheme() == ProxyServer::SCHEME_SOCKS5)
     s = new SOCKS5ClientSocket(s, req_info);
   else
     s = new SOCKSClientSocket(s, req_info, host_resolver_.get());
   socket_.reset(s);
   metrics_->OnSOCKSProxy();
-  return socket_->Connect(&io_callback_, load_log_);
+  return socket_->Connect(&io_callback_, net_log_);
 }
 
 int SocketStream::DoSOCKSConnectComplete(int result) {
@@ -716,12 +754,45 @@ int SocketStream::DoSSLConnect() {
       socket_.release(), url_.HostNoBrackets(), ssl_config_));
   next_state_ = STATE_SSL_CONNECT_COMPLETE;
   metrics_->OnSSLConnection();
-  return socket_->Connect(&io_callback_, load_log_);
+  return socket_->Connect(&io_callback_, net_log_);
 }
 
 int SocketStream::DoSSLConnectComplete(int result) {
-  if (IsCertificateError(result))
-    result = HandleCertificateError(result);
+  if (IsCertificateError(result)) {
+    if (socket_->IsConnectedAndIdle()) {
+      result = HandleCertificateError(result);
+    } else {
+      // SSLClientSocket for Mac will report socket is not connected,
+      // if it returns cert verification error.  It didn't perform
+      // SSLHandshake yet.
+      // So, we should restart establishing connection with the
+      // certificate in allowed bad certificates in |ssl_config_|.
+      // See also net/http/http_network_transaction.cc
+      //  HandleCertificateError() and RestartIgnoringLastError().
+      SSLClientSocket* ssl_socket =
+        reinterpret_cast<SSLClientSocket*>(socket_.get());
+      SSLInfo ssl_info;
+      ssl_socket->GetSSLInfo(&ssl_info);
+      SSLConfig::CertAndStatus bad_cert;
+      bad_cert.cert = ssl_info.cert;
+      bad_cert.cert_status = ssl_info.cert_status;
+      if (ssl_config_.IsAllowedBadCert(ssl_info.cert)) {
+        // If we already have the certificate in the set of allowed bad
+        // certificates, we did try it and failed again, so we should not
+        // retry again: the connection should fail at last.
+        next_state_ = STATE_CLOSE;
+        return result;
+      }
+      // Add the bad certificate to the set of allowed certificates in the
+      // SSL info object.
+      ssl_config_.allowed_bad_certs.push_back(bad_cert);
+      // Restart connection ignoring the bad certificate.
+      socket_->Disconnect();
+      socket_.reset();
+      next_state_ = STATE_TCP_CONNECT;
+      return OK;
+    }
+  }
 
   if (result == OK)
     result = DidEstablishConnection();
@@ -787,6 +858,7 @@ int SocketStream::DoReadWrite(int result) {
 }
 
 GURL SocketStream::ProxyAuthOrigin() const {
+  DCHECK(!proxy_info_.is_empty());
   return GURL("http://" + proxy_info_.proxy_server().host_and_port());
 }
 
@@ -809,8 +881,9 @@ int SocketStream::HandleAuthChallenge(const HttpResponseHeaders* headers) {
   }
 
   auth_identity_.invalid = true;
-  HttpAuth::ChooseBestChallenge(headers, HttpAuth::AUTH_PROXY, auth_origin,
-                                &auth_handler_);
+  HttpAuth::ChooseBestChallenge(http_auth_handler_factory_, headers,
+                                HttpAuth::AUTH_PROXY,
+                                auth_origin, &auth_handler_);
   if (!auth_handler_) {
     LOG(ERROR) << "Can't perform auth to the proxy " << auth_origin;
     return ERR_TUNNEL_CONNECTION_FAILED;
@@ -884,12 +957,6 @@ SSLConfigService* SocketStream::ssl_config_service() const {
 
 ProxyService* SocketStream::proxy_service() const {
   return context_->proxy_service();
-}
-
-void SocketStream::GetInfoForTracker(
-    RequestTracker<SocketStream>::RecentRequestInfo* info) const {
-  info->original_url = url_;
-  info->load_log = load_log_;
 }
 
 }  // namespace net

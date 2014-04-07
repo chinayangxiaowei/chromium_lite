@@ -4,8 +4,7 @@
   bookmarkbarattached:bookmarkbarattached;
   hasattribution:hasattribution;
   anim:anim;
-  syncispresent:syncispresent;
-  showsetashomepage:showsetashomepage">
+  syncispresent:syncispresent">
 
 <meta charset="utf-8">
 <title i18n-content="title"></title>
@@ -90,8 +89,13 @@ function isRtl() {
   return templateData['textdirection'] == 'rtl';
 }
 
+// Keep track of the last small state so we can ensure that we are using the
+// right mode. This is a workaround for http://crbug.com/25329
+var wasSmallGrid;
+
 function getMostVisitedLayoutRects() {
   var small = useSmallGrid();
+  wasSmallGrid = small;
 
   var cols = 4;
   var rows = 2;
@@ -186,8 +190,6 @@ function updateSimpleSection(id, section) {
     <div command="hide" section="THUMB" i18n-content="mostvisited"></div>
     <div command="hide" section="RECENT" i18n-content="recentlyclosed"></div>
     <div command="hide" section="TIPS" i18n-content="tips"></div>
-    <div command="hide" section="SYNC" i18n-content="sync"
-         id="sync-menu-item"></div>
     <hr>
     <div command="clear-all-blacklisted"
          i18n-content="restorethumbnails"></div>
@@ -196,8 +198,6 @@ function updateSimpleSection(id, section) {
   <script>
     $('thumb-checkbox').checked = shownSections & Section.THUMB;
     $('list-checkbox').checked = shownSections & Section.LIST;
-    $('sync-menu-item').style.display =
-        templateData['syncispresent'] == 'true' ? '' : 'none';
   </script>
 
   <div id="notification">
@@ -252,13 +252,6 @@ function updateSimpleSection(id, section) {
   <div id="sync-status">
     <h2></h2>
     <span></span>
-  </div>
-  <script>updateSimpleSection('sync-status', Section.SYNC);</script>
-
-  <div id="set-as-home-page">
-    <button class="link">
-      <span class="link-color" i18n-content="makethishomepage"></span>
-    </button>
   </div>
 
   <div id="tip-line"></div>

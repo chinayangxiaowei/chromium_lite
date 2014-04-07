@@ -241,7 +241,9 @@ bool ExtensionPortsRemoteService::Send(IPC::Message *message) {
 }
 
 void ExtensionPortsRemoteService::OnExtensionMessageInvoke(
-    const std::string& function_name, const ListValue& args) {
+    const std::string& function_name,
+    const ListValue& args,
+    bool requires_incognito_access) {
   if (function_name == ExtensionMessageService::kDispatchOnMessage) {
     DCHECK_EQ(args.GetSize(), 2u);
     std::string message;
@@ -333,7 +335,7 @@ void ExtensionPortsRemoteService::ConnectCommand(
               << ">, channel_name <" << channel_name << ">";
     DCHECK(service_);
     port_id = service_->OpenSpecialChannelToExtension(
-        extension_id, channel_name, this);
+        extension_id, channel_name, "null", this);
   }
   if (port_id == -1) {
     // Failure: probably the extension ID doesn't exist.

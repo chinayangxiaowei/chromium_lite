@@ -35,6 +35,8 @@ class RendererWebKitClientImpl : public webkit_glue::WebKitClientImpl {
   virtual WebKit::WebCookieJar* cookieJar();
   virtual bool sandboxEnabled();
   virtual bool getFileSize(const WebKit::WebString& path, long long& result);
+  virtual bool getFileModificationTime(const WebKit::WebString& path,
+                                       double& result);
   virtual unsigned long long visitedLinkHash(
       const char* canonicalURL, size_t length);
   virtual bool isLinkVisited(unsigned long long linkHash);
@@ -44,7 +46,6 @@ class RendererWebKitClientImpl : public webkit_glue::WebKitClientImpl {
   virtual void suddenTerminationChanged(bool enabled);
   virtual WebKit::WebStorageNamespace* createLocalStorageNamespace(
       const WebKit::WebString& path, unsigned quota);
-  virtual WebKit::WebStorageNamespace* createSessionStorageNamespace();
   virtual void dispatchStorageEvent(
       const WebKit::WebString& key, const WebKit::WebString& old_value,
       const WebKit::WebString& new_value, const WebKit::WebString& origin,
@@ -63,10 +64,8 @@ class RendererWebKitClientImpl : public webkit_glue::WebKitClientImpl {
       unsigned key_size_index,
       const WebKit::WebString& challenge,
       const WebKit::WebURL& url);
-  virtual WebKit::WebApplicationCacheHost* createApplicationCacheHost(
-      WebKit::WebApplicationCacheHostClient*);
-
   virtual WebKit::WebSharedWorkerRepository* sharedWorkerRepository();
+  virtual WebKit::WebGraphicsContext3D* createGraphicsContext3D();
 
  private:
   class MimeRegistry : public webkit_glue::SimpleWebMimeRegistryImpl {
@@ -87,6 +86,8 @@ class RendererWebKitClientImpl : public webkit_glue::WebKitClientImpl {
    public:
     virtual WebKit::WebString getFontFamilyForCharacters(
         const WebKit::WebUChar* characters, size_t numCharacters);
+    virtual void getRenderStyleForStrike(
+        const char* family, int sizeAndStyle, WebKit::WebFontRenderStyle* out);
 
    private:
     // WebKit likes to ask us for the correct font family to use for a set of

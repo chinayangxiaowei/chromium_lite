@@ -17,15 +17,15 @@ using syncable::ScopedDirLookup;
 
 namespace browser_sync {
 
-TestDirectorySetterUpper::TestDirectorySetterUpper() : name_(PSTR("Test")) {}
+TestDirectorySetterUpper::TestDirectorySetterUpper() : name_("Test") {}
 TestDirectorySetterUpper::TestDirectorySetterUpper(const std::string& name)
     : name_(name) {}
 
 TestDirectorySetterUpper::~TestDirectorySetterUpper() {}
 
 void TestDirectorySetterUpper::Init() {
-  FilePath test_data_dir_(FILE_PATH_LITERAL("."));
-  manager_.reset(new DirectoryManager(test_data_dir_));
+  ASSERT_TRUE(temp_dir_.CreateUniqueTempDir());
+  manager_.reset(new DirectoryManager(temp_dir_.path()));
   file_path_ = manager_->GetSyncDataDatabasePath();
   file_util::Delete(file_path_, false);
 }

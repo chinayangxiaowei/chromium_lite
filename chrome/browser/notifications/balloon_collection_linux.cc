@@ -2,17 +2,35 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "chrome/browser/notifications/balloon_collection.h"
+#include "chrome/browser/notifications/balloon_collection_impl.h"
 
-#include "base/logging.h"
+#include "chrome/browser/notifications/balloon.h"
+#include "chrome/browser/views/notifications/balloon_view.h"
+#include "gfx/size.h"
 
 Balloon* BalloonCollectionImpl::MakeBalloon(const Notification& notification,
                                             Profile* profile) {
-  // TODO(johnnyg): http://crbug.com/23954.  Hook up to views.
-  return new Balloon(notification, profile, this);
+  Balloon* balloon = new Balloon(notification, profile, this);
+
+  balloon->set_view(new BalloonViewImpl(this));
+  gfx::Size size(layout_.min_balloon_width(), layout_.min_balloon_height());
+  balloon->set_content_size(size);
+  return balloon;
 }
 
-bool BalloonCollectionImpl::Layout::RefreshSystemMetrics() {
-  // TODO(johnnyg): http://crbug.com/23954.  Part of future Linux support.
-  return false;
+int BalloonCollectionImpl::Layout::InterBalloonMargin() const {
+  return 5;
+}
+
+int BalloonCollectionImpl::Layout::HorizontalEdgeMargin() const {
+  return 5;
+}
+
+int BalloonCollectionImpl::Layout::VerticalEdgeMargin() const {
+  return 5;
+}
+
+// static
+BalloonCollection* BalloonCollection::Create() {
+  return new BalloonCollectionImpl();
 }

@@ -1,15 +1,17 @@
-// Copyright (c) 2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/common/extensions/extension_action.h"
 
-#include "app/gfx/canvas.h"
-#include "app/gfx/font.h"
+#include <algorithm>
+
 #include "app/resource_bundle.h"
-#include "base/gfx/rect.h"
-#include "base/string_util.h"
+#include "base/utf_string_conversions.h"
 #include "chrome/app/chrome_dll_resource.h"
+#include "gfx/canvas.h"
+#include "gfx/font.h"
+#include "gfx/rect.h"
 #include "grit/app_resources.h"
 #include "third_party/skia/include/core/SkBitmap.h"
 #include "third_party/skia/include/core/SkTypeface.h"
@@ -18,18 +20,23 @@
 namespace {
 
 // Different platforms need slightly different constants to look good.
-#if defined(OS_LINUX)
-const int kTextSize = 9;
+#if defined(OS_LINUX) && !defined(TOOLKIT_VIEWS)
+const float kTextSize = 9.0;
 const int kBottomMargin = 0;
 const int kPadding = 2;
 const int kTopTextPadding = 0;
+#elif defined(OS_LINUX) && defined(TOOLKIT_VIEWS)
+const float kTextSize = 8.0;
+const int kBottomMargin = 5;
+const int kPadding = 2;
+const int kTopTextPadding = 1;
 #elif defined(OS_MACOSX)
-const int kTextSize = 9;
+const float kTextSize = 9.0;
 const int kBottomMargin = 5;
 const int kPadding = 2;
 const int kTopTextPadding = 0;
 #else
-const int kTextSize = 8;
+const float kTextSize = 7.5;
 const int kBottomMargin = 5;
 const int kPadding = 2;
 // The padding between the top of the badge and the top of the text.
@@ -54,7 +61,7 @@ SkPaint* GetTextPaint() {
     text_paint->setAntiAlias(true);
 
     text_paint->setTextAlign(SkPaint::kLeft_Align);
-    text_paint->setTextSize(SkIntToScalar(kTextSize));
+    text_paint->setTextSize(SkFloatToScalar(kTextSize));
 
     SkTypeface* typeface = SkTypeface::CreateFromName(
         kPreferredTypeface, SkTypeface::kBold);
@@ -92,6 +99,7 @@ void ExtensionAction::ClearAllValuesForTab(int tab_id) {
   badge_text_color_.erase(tab_id);
   badge_background_color_.erase(tab_id);
   visible_.erase(tab_id);
+  popup_url_.erase(tab_id);
 }
 
 void ExtensionAction::PaintBadge(gfx::Canvas* canvas,

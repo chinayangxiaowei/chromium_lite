@@ -1,42 +1,53 @@
-// Copyright (c) 2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #import "chrome/browser/cocoa/preferences_window_controller.h"
 
 #include <algorithm>
+
 #include "app/l10n_util.h"
 #include "app/l10n_util_mac.h"
+#include "base/command_line.h"
 #include "base/logging.h"
 #include "base/mac_util.h"
 #include "base/string16.h"
 #include "base/string_util.h"
 #include "base/sys_string_conversions.h"
+#include "chrome/browser/autofill/autofill_dialog.h"
+#include "chrome/browser/autofill/autofill_type.h"
+#include "chrome/browser/autofill/personal_data_manager.h"
 #include "chrome/browser/browser.h"
 #include "chrome/browser/browser_list.h"
 #include "chrome/browser/browser_process.h"
 #import "chrome/browser/cocoa/clear_browsing_data_controller.h"
+#import "chrome/browser/cocoa/content_settings_dialog_controller.h"
 #import "chrome/browser/cocoa/custom_home_pages_model.h"
+#import "chrome/browser/cocoa/font_language_settings_controller.h"
+#import "chrome/browser/cocoa/import_settings_dialog.h"
 #import "chrome/browser/cocoa/keyword_editor_cocoa_controller.h"
+#import "chrome/browser/cocoa/l10n_util.h"
 #import "chrome/browser/cocoa/search_engine_list_model.h"
+#import "chrome/browser/cocoa/sync_customize_controller_cppsafe.h"
 #include "chrome/browser/extensions/extensions_service.h"
 #include "chrome/browser/metrics/metrics_service.h"
 #include "chrome/browser/metrics/user_metrics.h"
 #include "chrome/browser/net/dns_global.h"
 #include "chrome/browser/net/url_fixer_upper.h"
 #include "chrome/browser/options_window.h"
+#include "chrome/browser/pref_service.h"
 #include "chrome/browser/profile.h"
 #include "chrome/browser/safe_browsing/safe_browsing_service.h"
 #include "chrome/browser/session_startup_pref.h"
 #include "chrome/browser/shell_integration.h"
 #include "chrome/browser/sync/profile_sync_service.h"
-#include "chrome/browser/sync/sync_status_ui_helper.h"
+#include "chrome/browser/sync/sync_ui_util.h"
 #include "chrome/browser/tab_contents/tab_contents.h"
+#include "chrome/common/chrome_switches.h"
 #include "chrome/common/notification_details.h"
 #include "chrome/common/notification_observer.h"
 #include "chrome/common/notification_type.h"
 #include "chrome/common/pref_names.h"
-#include "chrome/common/pref_service.h"
 #include "chrome/common/url_constants.h"
 #include "chrome/installer/util/google_update_settings.h"
 #include "grit/chromium_strings.h"
@@ -45,17 +56,13 @@
 #import "third_party/GTM/AppKit/GTMUILocalizerAndLayoutTweaker.h"
 #import "third_party/GTM/AppKit/GTMNSAnimation+Duration.h"
 
-NSString* const kUserDoneEditingPrefsNotification =
-    @"kUserDoneEditingPrefsNotification";
-
 namespace {
 
-std::wstring GetNewTabUIURLString() {
-  std::wstring temp = UTF8ToWide(chrome::kChromeUINewTabURL);
-  return URLFixerUpper::FixupURL(temp, std::wstring());
+std::string GetNewTabUIURLString() {
+  return URLFixerUpper::FixupURL(chrome::kChromeUINewTabURL, std::string());
 }
 
-// Helper to remove all but the last view from the view heirarchy.
+// Helper to remove all but the last view from the view hierarchy.
 void RemoveAllButLastView(NSArray* views) {
   NSArray* toRemove = [views subarrayWithRange:NSMakeRange(0, [views count]-1)];
   for (NSView* view in toRemove) {
@@ -82,37 +89,6 @@ CGFloat SizeToFitButtonPair(NSButton* leftButton, NSButton* rightButton) {
   widthShift += delta.width;
 
   return widthShift;
-}
-
-// Helper for tweaking the prefs window, if view is a:
-//   checkbox, radio group or label: it gets a forced wrap at current size
-//   editable field: left as is
-//   anything else: do  +[GTMUILocalizerAndLayoutTweaker sizeToFitView:]
-NSSize WrapOrSizeToFit(NSView* view) {
-  if ([view isKindOfClass:[NSTextField class]]) {
-    NSTextField* textField = static_cast<NSTextField*>(view);
-    if ([textField isEditable])
-      return NSZeroSize;
-    CGFloat heightChange =
-        [GTMUILocalizerAndLayoutTweaker sizeToFitFixedWidthTextField:textField];
-    return NSMakeSize(0.0, heightChange);
-  }
-  if ([view isKindOfClass:[NSMatrix class]]) {
-    NSMatrix* radioGroup = static_cast<NSMatrix*>(view);
-    [GTMUILocalizerAndLayoutTweaker wrapRadioGroupForWidth:radioGroup];
-    return [GTMUILocalizerAndLayoutTweaker sizeToFitView:view];
-  }
-  if ([view isKindOfClass:[NSButton class]]) {
-    NSButton* button = static_cast<NSButton*>(view);
-    NSButtonCell* buttonCell = [button cell];
-    // Decide it's a checkbox via showsStateBy and highlightsBy.
-    if (([buttonCell showsStateBy] == NSCellState) &&
-        ([buttonCell highlightsBy] == NSCellState)) {
-      [GTMUILocalizerAndLayoutTweaker wrapButtonTitleForWidth:button];
-      return [GTMUILocalizerAndLayoutTweaker sizeToFitView:view];
-    }
-  }
-  return [GTMUILocalizerAndLayoutTweaker sizeToFitView:view];
 }
 
 // The different behaviors for the "pref group" auto sizing.
@@ -147,7 +123,7 @@ CGFloat AutoSizeGroup(NSArray* views, AutoSizeGroupBehavior behavior,
       // Walk bottom up doing the sizing and moves.
       for (NSUInteger index = [views count] - 1; index > 0; --index) {
         NSView* view = [views objectAtIndex:index];
-        NSSize delta = WrapOrSizeToFit(view);
+        NSSize delta = cocoa_l10n_util::WrapOrSizeToFit(view);
         DCHECK_GE(delta.height, 0.0) << "Should NOT shrink in height";
         if (localVerticalShift) {
           NSPoint origin = [view frame].origin;
@@ -161,7 +137,7 @@ CGFloat AutoSizeGroup(NSArray* views, AutoSizeGroupBehavior behavior,
     case kAutoSizeGroupBehaviorVerticalFirstToFit: {
       // Just size the top one.
       NSView* view = [views objectAtIndex:1];
-      NSSize delta = WrapOrSizeToFit(view);
+      NSSize delta = cocoa_l10n_util::WrapOrSizeToFit(view);
       DCHECK_GE(delta.height, 0.0) << "Should NOT shrink in height";
       localVerticalShift += delta.height;
       break;
@@ -173,7 +149,7 @@ CGFloat AutoSizeGroup(NSArray* views, AutoSizeGroupBehavior behavior,
       NSUInteger count = [views count];
       for (NSUInteger index = 1; index < count; ++index) {
         NSView* view = [views objectAtIndex:index];
-        NSSize delta = WrapOrSizeToFit(view);
+        NSSize delta = cocoa_l10n_util::WrapOrSizeToFit(view);
         DCHECK_GE(delta.height, 0.0) << "Should NOT shrink in height";
         if (horizontalShift) {
           NSPoint origin = [view frame].origin;
@@ -191,7 +167,7 @@ CGFloat AutoSizeGroup(NSArray* views, AutoSizeGroupBehavior behavior,
       CGFloat horizontalShift = 0.0;
       for (NSUInteger index = [views count] - 1; index > 1; --index) {
         NSView* view = [views objectAtIndex:index];
-        NSSize delta = WrapOrSizeToFit(view);
+        NSSize delta = cocoa_l10n_util::WrapOrSizeToFit(view);
         DCHECK_GE(delta.height, 0.0) << "Should NOT shrink in height";
         horizontalShift -= delta.width;
         NSPoint origin = [view frame].origin;
@@ -240,25 +216,13 @@ CGFloat AutoSizeGroup(NSArray* views, AutoSizeGroupBehavior behavior,
   return localVerticalShift + nonLabelShift;
 }
 
-// Compare function for -[NSArray sortedArrayUsingFunction:context:] that
-// sorts the views in Y order bottom up.
-NSInteger CompareFrameY(id view1, id view2, void* context) {
-  CGFloat y1 = NSMinY([view1 frame]);
-  CGFloat y2 = NSMinY([view2 frame]);
-  if (y1 < y2)
-    return NSOrderedAscending;
-  else if (y1 > y2)
-    return NSOrderedDescending;
-  else
-    return NSOrderedSame;
-}
-
 // Helper to remove a view and move everything above it down to take over the
 // space.
 void RemoveViewFromView(NSView* view, NSView* toRemove) {
   // Sort bottom up so we can spin over what is above it.
   NSArray* views =
-      [[view subviews] sortedArrayUsingFunction:CompareFrameY context:NULL];
+      [[view subviews] sortedArrayUsingFunction:cocoa_l10n_util::CompareFrameY
+                                        context:NULL];
 
   // Find where |toRemove| was.
   NSUInteger index = [views indexOfObject:toRemove];
@@ -309,7 +273,9 @@ void RemoveGroupFromView(NSView* view, NSArray* toRemove) {
 
 // Helper to tweak the layout of the "Under the Hood" content by autosizing all
 // the views and moving things up vertically.  Special case the two controls for
-// download location as they are horizontal, and should fill the row.
+// download location as they are horizontal, and should fill the row. Special
+// case "Content Settings" and "Clear browsing data" as they are horizontal as
+// well.
 CGFloat AutoSizeUnderTheHoodContent(NSView* view,
                                     NSPathControl* downloadLocationControl,
                                     NSButton* downloadLocationButton) {
@@ -317,9 +283,10 @@ CGFloat AutoSizeUnderTheHoodContent(NSView* view,
 
   // Loop bottom up through the views sizing and shifting.
   NSArray* views =
-      [[view subviews] sortedArrayUsingFunction:CompareFrameY context:NULL];
+      [[view subviews] sortedArrayUsingFunction:cocoa_l10n_util::CompareFrameY
+                                        context:NULL];
   for (NSView* view in views) {
-    NSSize delta = WrapOrSizeToFit(view);
+    NSSize delta = cocoa_l10n_util::WrapOrSizeToFit(view);
     DCHECK_GE(delta.height, 0.0) << "Should NOT shrink in height";
     if (verticalShift) {
       NSPoint origin = [view frame].origin;
@@ -355,7 +322,7 @@ CGFloat AutoSizeUnderTheHoodContent(NSView* view,
 // queried to find out what happened.
 - (void)syncStateChanged;
 // Record the user performed a certain action and save the preferences.
-- (void)recordUserAction:(const wchar_t*)action;
+- (void)recordUserAction:(const UserMetricsAction&) action;
 - (void)registerPrefObservers;
 - (void)unregisterPrefObservers;
 
@@ -375,11 +342,13 @@ CGFloat AutoSizeUnderTheHoodContent(NSView* view,
 - (void)setDnsPrefetch:(BOOL)value;
 - (void)setSafeBrowsing:(BOOL)value;
 - (void)setMetricsRecording:(BOOL)value;
-- (void)setCookieBehavior:(NSInteger)value;
 - (void)setAskForSaveLocation:(BOOL)value;
+- (void)setTranslateEnabled:(BOOL)value;
 - (void)displayPreferenceViewForPage:(OptionsPage)page
                              animate:(BOOL)animate;
 @end
+
+namespace PreferencesWindowControllerInternal {
 
 // A C++ class registered for changes in preferences. Bridges the
 // notification back to the PWC.
@@ -408,6 +377,102 @@ class PrefObserverBridge : public NotificationObserver,
   PreferencesWindowController* controller_;  // weak, owns us
 };
 
+// PersonalDataManagerObserver facilitates asynchronous loading of
+// PersonalDataManager data before showing the auto fill settings dialog to the
+// user.  It acts as a C++-based delegate for the |PreferencesWindowController|.
+class PersonalDataManagerObserver : public PersonalDataManager::Observer {
+ public:
+  explicit PersonalDataManagerObserver(
+      PersonalDataManager* personal_data_manager,
+      Profile* profile)
+      : personal_data_manager_(personal_data_manager),
+        profile_(profile) {
+  }
+
+  virtual ~PersonalDataManagerObserver();
+
+  // Notifies the observer that the PersonalDataManager has finished loading.
+  virtual void OnPersonalDataLoaded();
+
+  // Static method to dispatch to |ShowAutoFillDialog| method in autofill
+  // module.  This is public to facilitate direct external call when the
+  // data manager has already loaded its data.
+  static void ShowAutoFillDialog(PersonalDataManager* personal_data_manager,
+                                 Profile* profile);
+
+ private:
+  // Utility method to remove |this| from |personal_data_manager_| as an
+  // observer.
+  void RemoveObserver();
+
+  // The object in which we are registered as an observer.  We hold on to
+  // it to facilitate un-registering ourself in the destructor and in the
+  // |OnPersonalDataLoaded| method.  This may be NULL.
+  // Weak reference.
+  PersonalDataManager* personal_data_manager_;
+
+  // Profile of caller.  Held as weak reference.  May not be NULL.
+  Profile* profile_;
+
+ private:
+  DISALLOW_COPY_AND_ASSIGN(PersonalDataManagerObserver);
+};
+
+// During destruction ensure that we are removed from the
+// |personal_data_manager_| as an observer.
+PersonalDataManagerObserver::~PersonalDataManagerObserver() {
+  RemoveObserver();
+}
+
+void PersonalDataManagerObserver::RemoveObserver() {
+  if (personal_data_manager_) {
+    personal_data_manager_->RemoveObserver(this);
+  }
+}
+
+// The data is ready so display our dialog.  Recursively call
+// |showAutoFillSettings:| to try again now knowing that the
+// |PersonalDataManager| is ready.  Once done we clear the observer
+// (deleting |this| in the process).
+void PersonalDataManagerObserver::OnPersonalDataLoaded() {
+  RemoveObserver();
+  PersonalDataManagerObserver::ShowAutoFillDialog(personal_data_manager_,
+                                                  profile_);
+}
+
+// Dispatches request to show the autofill dialog.  If there are no profiles
+// in the |personal_data_manager| the we create a new one here.  Similary with
+// credit card info.
+void PersonalDataManagerObserver::ShowAutoFillDialog(
+    PersonalDataManager* personal_data_manager, Profile* profile) {
+  DCHECK(profile);
+  if (!personal_data_manager)
+    return;
+
+  std::vector<AutoFillProfile*> profiles =
+      personal_data_manager->web_profiles();
+  AutoFillProfile autofill_profile(ASCIIToUTF16(""), 0);
+  if (profiles.size() == 0) {
+    string16 new_profile_name =
+        l10n_util::GetStringUTF16(IDS_AUTOFILL_NEW_ADDRESS);
+    autofill_profile.set_label(new_profile_name);
+    profiles.push_back(&autofill_profile);
+  }
+
+  std::vector<CreditCard*> credit_cards = personal_data_manager->credit_cards();
+  CreditCard credit_card(ASCIIToUTF16(""), 0);
+  if (credit_cards.size() == 0) {
+    string16 new_credit_card_name =
+        l10n_util::GetStringUTF16(IDS_AUTOFILL_NEW_CREDITCARD);
+    credit_card.set_label(new_credit_card_name);
+    credit_cards.push_back(&credit_card);
+  }
+
+  ::ShowAutoFillDialog(personal_data_manager, profiles, credit_cards, profile);
+}
+
+}  // namespace PreferencesWindowControllerInternal
+
 @implementation PreferencesWindowController
 
 - (id)initWithProfile:(Profile*)profile initialPage:(OptionsPage)initialPage {
@@ -418,11 +483,12 @@ class PrefObserverBridge : public NotificationObserver,
                         pathForResource:@"Preferences"
                                  ofType:@"nib"];
   if ((self = [super initWithWindowNibPath:nibPath owner:self])) {
-    profile_ = profile;
+    profile_ = profile->GetOriginalProfile();
     initialPage_ = initialPage;
     prefs_ = profile->GetPrefs();
     DCHECK(prefs_);
-    observer_.reset(new PrefObserverBridge(self));
+    observer_.reset(
+        new PreferencesWindowControllerInternal::PrefObserverBridge(self));
 
     // Set up the model for the custom home page table. The KVO observation
     // tells us when the number of items in the array changes. The normal
@@ -463,15 +529,22 @@ class PrefObserverBridge : public NotificationObserver,
     // Make this the delegate so it can remove the old view at the end of the
     // animation (once it is faded out).
     [animation_ setDelegate:self];
-    // The default duration is 0.5s, which actually feels slow in here, so speed
-    // it up a bit.
-    [animation_ gtm_setDuration:0.2];
     [animation_ setAnimationBlockingMode:NSAnimationNonblocking];
 
     // TODO(akalin): handle incognito profiles?  The windows version of this
     // (in chrome/browser/views/options/content_page_view.cc) just does what
     // we do below.
     syncService_ = profile_->GetProfileSyncService();
+
+    // TODO(akalin): This color is taken from kSyncLabelErrorBgColor in
+    // content_page_view.cc.  Either decomp that color out into a
+    // function/variable that is referenced by both this file and
+    // content_page_view.cc, or maybe pick a more suitable color.
+    syncErrorBackgroundColor_.reset(
+        [[NSColor colorWithDeviceRed:0xff/255.0
+                               green:0x9a/255.0
+                                blue:0x9a/255.0
+                               alpha:1.0] retain]);
   }
   return self;
 }
@@ -501,12 +574,13 @@ class PrefObserverBridge : public NotificationObserver,
   RemoveViewFromView(underTheHoodContentView_, enableLoggingCheckbox_);
 #endif  // !defined(GOOGLE_CHROME_BUILD)
 
-  // There are three problem children within the groups:
+  // There are four problem children within the groups:
   //   Basics - Default Browser
+  //   Personal Stuff - Sync
   //   Personal Stuff - Themes
   //   Personal Stuff - Browser Data
-  // These three have buttons that with some localizations are wider then the
-  // view.  So the three get manually laid out before doing the general work so
+  // These four have buttons that with some localizations are wider then the
+  // view.  So the four get manually laid out before doing the general work so
   // the views/window can be made wide enough to fit them.  The layout in the
   // general pass is a noop for these buttons (since they are already sized).
 
@@ -522,6 +596,10 @@ class PrefObserverBridge : public NotificationObserver,
   DCHECK_EQ(defaultBrowserChange.height, 0.0)
       << "Button should have been right height in nib";
 
+  // Size the sync row.
+  CGFloat syncRowChange = SizeToFitButtonPair(syncButton_,
+                                              syncCustomizeButton_);
+
   // Size the themes row.
   const NSUInteger kThemeGroupCount = 3;
   const NSUInteger kThemeResetButtonIndex = 1;
@@ -532,21 +610,20 @@ class PrefObserverBridge : public NotificationObserver,
       [personalStuffGroupThemes_ objectAtIndex:kThemeResetButtonIndex],
       [personalStuffGroupThemes_ objectAtIndex:kThemeThemesButtonIndex]);
 
-  // Size the import buttons row.
-  const NSUInteger kBrowserDataGroupCount = 4;
-  const NSUInteger kBrowserDataImportButtonIndex = 1;
-  const NSUInteger kBrowserDataClearButtonIndex = 2;
-  DCHECK_EQ([personalStuffGroupBrowserData_ count], kBrowserDataGroupCount)
-      << "Expected only two items in Browser Data group";
-  CGFloat browserDataRowChange = SizeToFitButtonPair(
-      [personalStuffGroupBrowserData_
-          objectAtIndex:kBrowserDataImportButtonIndex],
-      [personalStuffGroupBrowserData_
-          objectAtIndex:kBrowserDataClearButtonIndex]);
+  // Size the Privacy and Clear buttons that make a row in Under the Hood.
+  CGFloat privacyRowChange = SizeToFitButtonPair(contentSettingsButton_,
+                                                 clearDataButton_);
+  // Under the Hood view is narrower (then the other panes) in the nib, subtract
+  // out the amount it was already going to grow to match the other panes when
+  // calculating how much the row needs things to grow.
+  privacyRowChange -=
+    ([underTheHoodScroller_ contentSize].width -
+     NSWidth([underTheHoodContentView_ frame]));
 
   // Find the most any row changed in size.
-  CGFloat maxWidthChange = std::max(defaultBrowserChange.width, themeRowChange);
-  maxWidthChange = std::max(maxWidthChange, browserDataRowChange);
+  CGFloat maxWidthChange = std::max(defaultBrowserChange.width, syncRowChange);
+  maxWidthChange = std::max(maxWidthChange, themeRowChange);
+  maxWidthChange = std::max(maxWidthChange, privacyRowChange);
 
   // If any grew wider, make the views wider. If they all shrank, they fit the
   // existing view widths, so no change is needed//.
@@ -597,10 +674,15 @@ class PrefObserverBridge : public NotificationObserver,
   verticalShift += AutoSizeGroup(personalStuffGroupPasswords_,
                                  kAutoSizeGroupBehaviorVerticalToFit,
                                  verticalShift);
-  // We want to autosize the sync button but not the text field, so we use
-  // VerticalFirstToFit.
+  // TODO(akalin): Here we rely on the initial contents of the sync
+  // group's text field/link field to be large enough to hold all
+  // possible messages so that we don't have to re-layout when sync
+  // state changes.  This isn't perfect, since e.g. some sync messages
+  // use the user's e-mail address (which may be really long), and the
+  // link field is usually not shown (leaving a big empty space).
+  // Rethink sync preferences UI for Mac.
   verticalShift += AutoSizeGroup(personalStuffGroupSync_,
-                                 kAutoSizeGroupBehaviorVerticalFirstToFit,
+                                 kAutoSizeGroupBehaviorVerticalToFit,
                                  verticalShift);
   [GTMUILocalizerAndLayoutTweaker
       resizeViewWithoutAutoResizingSubViews:personalStuffView_
@@ -617,12 +699,15 @@ class PrefObserverBridge : public NotificationObserver,
 
   // Make the window as wide as the views.
   NSWindow* prefsWindow = [self window];
-  NSRect frame = [prefsWindow frame];
+  NSView* prefsContentView = [prefsWindow contentView];
+  NSRect frame = [prefsContentView convertRect:[prefsWindow frame]
+                                      fromView:nil];
   frame.size.width = newWidth;
+  frame = [prefsContentView convertRect:frame toView:nil];
   [prefsWindow setFrame:frame display:NO];
 
   // The Under the Hood prefs is a scroller, it shouldn't get any border, so it
-  // gets resized to the as wide as the window ended up.
+  // gets resized to be as wide as the window ended up.
   NSSize underTheHoodSize = [underTheHoodView_ frame].size;
   underTheHoodSize.width = newWidth;
   [underTheHoodView_ setFrameSize:underTheHoodSize];
@@ -648,9 +733,19 @@ class PrefObserverBridge : public NotificationObserver,
   [underTheHoodContentView_ scrollPoint:
       NSMakePoint(0, underTheHoodContentSize.height)];
 
+  // Disable the |autoFillSettingsButton_| if we have no
+  // |personalDataManager|.
+  bool autofillEnabled = CommandLine::ForCurrentProcess()->HasSwitch(
+      switches::kEnableAutoFill);
+  PersonalDataManager* personalDataManager =
+      profile_->GetPersonalDataManager();
+  [autoFillSettingsButton_ setHidden:
+      (personalDataManager == NULL || !autofillEnabled)];
+
   [self switchToPage:initialPage_ animate:NO];
 
   // TODO(pinkerton): save/restore position based on prefs.
+  // http://crbug.com/34644
   [[self window] center];
 }
 
@@ -661,6 +756,7 @@ class PrefObserverBridge : public NotificationObserver,
   [customPagesSource_ removeObserver:self forKeyPath:@"customHomePages"];
   [[NSNotificationCenter defaultCenter] removeObserver:self];
   [self unregisterPrefObservers];
+  personalDataManagerObserver_.reset();
   [super dealloc];
 }
 
@@ -686,12 +782,18 @@ class PrefObserverBridge : public NotificationObserver,
   showHomeButton_.Init(prefs::kShowHomeButton, prefs_, observer_.get());
   showPageOptionButtons_.Init(prefs::kShowPageOptionsButtons, prefs_,
                               observer_.get());
-  // TODO(pinkerton): Register Default search.
 
   // Personal Stuff panel
   askSavePasswords_.Init(prefs::kPasswordManagerEnabled,
                          prefs_, observer_.get());
-  formAutofill_.Init(prefs::kFormAutofillEnabled, prefs_, observer_.get());
+
+  if (CommandLine::ForCurrentProcess()->HasSwitch(
+      switches::kEnableAutoFill)) {
+    formAutofill_.Init(prefs::kAutoFillEnabled, prefs_, observer_.get());
+  } else {
+    formAutofill_.Init(prefs::kFormAutofillEnabled, prefs_, observer_.get());
+  }
+
   currentTheme_.Init(prefs::kCurrentThemeID, prefs_, observer_.get());
 
   // Under the hood panel
@@ -700,6 +802,7 @@ class PrefObserverBridge : public NotificationObserver,
   useSuggest_.Init(prefs::kSearchSuggestEnabled, prefs_, observer_.get());
   dnsPrefetch_.Init(prefs::kDnsPrefetchingEnabled, prefs_, observer_.get());
   safeBrowsing_.Init(prefs::kSafeBrowsingEnabled, prefs_, observer_.get());
+  translateEnabled_.Init(prefs::kEnableTranslate, prefs_, observer_.get());
 
   // During unit tests, there is no local state object, so we fall back to
   // the prefs object (where we've explicitly registered this pref so we
@@ -709,7 +812,6 @@ class PrefObserverBridge : public NotificationObserver,
     local = prefs_;
   metricsRecording_.Init(prefs::kMetricsReportingEnabled,
                          local, observer_.get());
-  cookieBehavior_.Init(prefs::kCookieBehavior, prefs_, observer_.get());
   defaultDownloadLocation_.Init(prefs::kDownloadDefaultDirectory, prefs_,
                                 observer_.get());
   askForSaveLocation_.Init(prefs::kPromptForDownload, prefs_, observer_.get());
@@ -726,10 +828,7 @@ class PrefObserverBridge : public NotificationObserver,
   // Basics
   prefs_->RemovePrefObserver(prefs::kURLsToRestoreOnStartup, observer_.get());
 
-  // User Data panel
-  // Nothing to do here.
-
-  // TODO(pinkerton): do other panels...
+  // Nothing to do for other panels...
 }
 
 // Called when a key we're observing via KVO changes.
@@ -753,8 +852,8 @@ class PrefObserverBridge : public NotificationObserver,
 }
 
 // Record the user performed a certain action and save the preferences.
-- (void)recordUserAction:(const wchar_t*)action {
-  UserMetrics::RecordComputedAction(action, profile_);
+- (void)recordUserAction:(const UserMetricsAction &)action {
+  UserMetrics::RecordAction(action, profile_);
   if (prefs_)
     prefs_->ScheduleSavePersistentPrefs();
 }
@@ -777,6 +876,16 @@ class PrefObserverBridge : public NotificationObserver,
   return paths;
 }
 
+// Launch the Keychain Access app.
+- (void)launchKeychainAccess {
+  NSString* const kKeychainBundleId = @"com.apple.keychainaccess";
+  [[NSWorkspace sharedWorkspace]
+      launchAppWithBundleIdentifier:kKeychainBundleId
+                            options:0L
+     additionalEventParamDescriptor:nil
+                   launchIdentifier:nil];
+}
+
 //-------------------------------------------------------------------------
 // Basics panel
 
@@ -787,12 +896,12 @@ class PrefObserverBridge : public NotificationObserver,
 // observers not to fire, which is actually a good thing as we could end up in a
 // state where setting the homepage to an empty url would automatically reset
 // the prefs back to using the NTP, so we'd be never be able to change it.
-- (void)setHomepage:(const std::wstring&)homepage {
+- (void)setHomepage:(const std::string&)homepage {
   if (homepage.empty() || homepage == GetNewTabUIURLString()) {
     newTabPageIsHomePage_.SetValue(true);
   } else {
     newTabPageIsHomePage_.SetValue(false);
-    homepage_.SetValue(homepage);
+    homepage_.SetValue(UTF8ToWide(homepage));
   }
 }
 
@@ -814,11 +923,14 @@ class PrefObserverBridge : public NotificationObserver,
   //             never match. Once support for broadcasting such updates is
   //             added, this will automagically start to work, and this comment
   //             can be removed.
-  if (*prefName == prefs::kURLsToRestoreOnStartup) {
-    const SessionStartupPref startupPref =
-        SessionStartupPref::GetStartupPref(prefs_);
-    [customPagesSource_ setURLs:startupPref.urls];
-  }
+  // TODO(chron): We comment out this block right now because we have put in
+  //              broadcast for notifications, but there's some workaround
+  //              currently present that causes an infinite loop.
+  // if (*prefName == prefs::kURLsToRestoreOnStartup) {
+  //  const SessionStartupPref startupPref =
+  //      SessionStartupPref::GetStartupPref(prefs_);
+  //  [customPagesSource_ setURLs:startupPref.urls];
+  // }
 
   if (*prefName == prefs::kHomePageIsNewTabPage) {
     NSInteger useNewTabPage = newTabPageIsHomePage_.GetValue() ? 0 : 1;
@@ -876,13 +988,13 @@ class PrefObserverBridge : public NotificationObserver,
       static_cast<SessionStartupPref::Type>(type);
   switch (startupType) {
     case SessionStartupPref::DEFAULT:
-      [self recordUserAction:L"Options_Startup_Homepage"];
+      [self recordUserAction:UserMetricsAction("Options_Startup_Homepage")];
       break;
     case SessionStartupPref::LAST:
-      [self recordUserAction:L"Options_Startup_LastSession"];
+      [self recordUserAction:UserMetricsAction("Options_Startup_LastSession")];
       break;
     case SessionStartupPref::URLS:
-      [self recordUserAction:L"Options_Startup_Custom"];
+      [self recordUserAction:UserMetricsAction("Options_Startup_Custom")];
       break;
     default:
       NOTREACHED();
@@ -970,9 +1082,9 @@ enum { kHomepageNewTabPage, kHomepageURL };
 - (void)setNewTabPageIsHomePageIndex:(NSInteger)index {
   bool useNewTabPage = index == kHomepageNewTabPage ? true : false;
   if (useNewTabPage)
-    [self recordUserAction:L"Options_Homepage_UseNewTab"];
+    [self recordUserAction:UserMetricsAction("Options_Homepage_UseNewTab")];
   else
-    [self recordUserAction:L"Options_Homepage_UseURL"];
+    [self recordUserAction:UserMetricsAction("Options_Homepage_UseURL")];
   newTabPageIsHomePage_.SetValue(useNewTabPage);
 }
 
@@ -993,12 +1105,11 @@ enum { kHomepageNewTabPage, kHomepageURL };
   // If the text field contains a valid URL, sync it to prefs. We run it
   // through the fixer upper to allow input like "google.com" to be converted
   // to something valid ("http://google.com").
-  if (!urlString)
-    urlString = [NSString stringWithFormat:@"%s", chrome::kChromeUINewTabURL];
-  std::wstring temp = base::SysNSStringToWide(urlString);
-  std::wstring fixedString = URLFixerUpper::FixupURL(temp, std::wstring());
-  if (GURL(WideToUTF8(fixedString)).is_valid())
-    [self setHomepage:fixedString];
+  std::string unfixedURL = urlString ? base::SysNSStringToUTF8(urlString) :
+                                       chrome::kChromeUINewTabURL;
+  std::string fixedURL = URLFixerUpper::FixupURL(unfixedURL, std::string());
+  if (GURL(fixedURL).is_valid())
+    [self setHomepage:fixedURL];
 }
 
 // Returns whether the home button should be checked based on the preference.
@@ -1010,9 +1121,11 @@ enum { kHomepageNewTabPage, kHomepageURL };
 // based on |value|.
 - (void)setShowHomeButton:(BOOL)value {
   if (value)
-    [self recordUserAction:L"Options_Homepage_ShowHomeButton"];
+    [self recordUserAction:UserMetricsAction(
+                           "Options_Homepage_ShowHomeButton")];
   else
-    [self recordUserAction:L"Options_Homepage_HideHomeButton"];
+    [self recordUserAction:UserMetricsAction(
+                           "Options_Homepage_HideHomeButton")];
   showHomeButton_.SetValue(value ? true : false);
 }
 
@@ -1026,9 +1139,11 @@ enum { kHomepageNewTabPage, kHomepageURL };
 // be displayed based on |value|.
 - (void)setShowPageOptionsButtons:(BOOL)value {
   if (value)
-    [self recordUserAction:L"Options_Homepage_ShowPageOptionsButtons"];
+    [self recordUserAction:UserMetricsAction(
+                           "Options_Homepage_ShowPageOptionsButtons")];
   else
-    [self recordUserAction:L"Options_Homepage_HidePageOptionsButtons"];
+    [self recordUserAction:UserMetricsAction(
+                           "Options_Homepage_HidePageOptionsButtons")];
   showPageOptionButtons_.SetValue(value ? true : false);
 }
 
@@ -1045,7 +1160,7 @@ enum { kHomepageNewTabPage, kHomepageURL };
 }
 
 - (void)setSearchEngineSelectedIndex:(NSUInteger)index {
-  [self recordUserAction:L"Options_SearchEngineChanged"];
+  [self recordUserAction:UserMetricsAction("Options_SearchEngineChanged")];
   [searchEngineModel_ setDefaultIndex:index];
 }
 
@@ -1065,7 +1180,7 @@ enum { kHomepageNewTabPage, kHomepageURL };
   [self willChangeValueForKey:@"defaultBrowser"];
 
   ShellIntegration::SetAsDefaultBrowser();
-  [self recordUserAction:L"Options_SetAsDefaultBrowser"];
+  [self recordUserAction:UserMetricsAction("Options_SetAsDefaultBrowser")];
   // If the user made Chrome the default browser, then he/she arguably wants
   // to be notified when that changes.
   prefs_->SetBoolean(prefs::kCheckDefaultBrowser, true);
@@ -1121,7 +1236,14 @@ const int kDisabledIndex = 1;
     [self setPasswordManagerEnabledIndex:askSavePasswords_.GetValue() ?
         kEnabledIndex : kDisabledIndex];
   }
-  if (*prefName == prefs::kFormAutofillEnabled) {
+  std::wstring autofill_pref;
+  if (CommandLine::ForCurrentProcess()->HasSwitch(
+      switches::kEnableAutoFill)) {
+    autofill_pref = prefs::kAutoFillEnabled;
+  } else {
+    autofill_pref = prefs::kFormAutofillEnabled;
+  }
+  if (*prefName == prefs::kAutoFillEnabled) {
     [self setFormAutofillEnabledIndex:formAutofill_.GetValue() ?
         kEnabledIndex : kDisabledIndex];
   }
@@ -1133,68 +1255,122 @@ const int kDisabledIndex = 1;
 // Called to launch the Keychain Access app to show the user's stored
 // passwords.
 - (IBAction)showSavedPasswords:(id)sender {
-  NSString* const kKeychainBundleId = @"com.apple.keychainaccess";
-  [self recordUserAction:L"Options_ShowPasswordsExceptions"];
-  [[NSWorkspace sharedWorkspace]
-      launchAppWithBundleIdentifier:kKeychainBundleId
-                            options:0L
-     additionalEventParamDescriptor:nil
-                   launchIdentifier:nil];
+  [self recordUserAction:UserMetricsAction("Options_ShowPasswordsExceptions")];
+  [self launchKeychainAccess];
+}
+
+// Called to show the Auto Fill Settings dialog.
+- (IBAction)showAutoFillSettings:(id)sender {
+  [self recordUserAction:UserMetricsAction("Options_ShowAutoFillSettings")];
+
+  PersonalDataManager* personalDataManager = profile_->GetPersonalDataManager();
+  if (!personalDataManager) {
+    // Should not reach here because button is disabled when
+    // |personalDataManager| is NULL.
+    NOTREACHED();
+    return;
+  }
+
+  if (personalDataManager->IsDataLoaded()) {
+    // |personalDataManager| data is loaded, we can proceed with the dialog.
+    PreferencesWindowControllerInternal::
+        PersonalDataManagerObserver::ShowAutoFillDialog(personalDataManager,
+                                                        profile_);
+  } else {
+    // |personalDataManager| data is NOT loaded, so we load it here, installing
+    // our observer.
+    personalDataManagerObserver_.reset(
+        new PreferencesWindowControllerInternal::PersonalDataManagerObserver(
+          personalDataManager, profile_));
+    personalDataManager->SetObserver(personalDataManagerObserver_.get());
+  }
 }
 
 // Called to import data from other browsers (Safari, Firefox, etc).
 - (IBAction)importData:(id)sender {
-  NOTIMPLEMENTED();
-}
-
-// Called to clear user's browsing data. This puts up an application-modal
-// dialog to guide the user through clearing the data.
-- (IBAction)clearData:(id)sender {
-  scoped_nsobject<ClearBrowsingDataController> controller(
-      [[ClearBrowsingDataController alloc]
-          initWithProfile:profile_]);
-  [controller runModalDialog];
+  UserMetrics::RecordAction(UserMetricsAction("Import_ShowDlg"), profile_);
+  [ImportSettingsDialogController showImportSettingsDialogForProfile:profile_];
 }
 
 - (IBAction)resetThemeToDefault:(id)sender {
-  [self recordUserAction:L"Options_ThemesReset"];
+  [self recordUserAction:UserMetricsAction("Options_ThemesReset")];
   profile_->ClearTheme();
 }
 
 - (IBAction)themesGallery:(id)sender {
-  [self recordUserAction:L"Options_ThemesGallery"];
-  Browser* browser =
-      BrowserList::FindBrowserWithType(profile_, Browser::TYPE_NORMAL);
+  [self recordUserAction:UserMetricsAction("Options_ThemesGallery")];
+  Browser* browser = BrowserList::GetLastActive();
 
-  if (!browser || !browser->GetSelectedTabContents()) {
+  if (!browser || !browser->GetSelectedTabContents())
     browser = Browser::Create(profile_);
-    browser->OpenURL(
-        GURL(l10n_util::GetStringUTF8(IDS_THEMES_GALLERY_URL)),
-        GURL(), NEW_WINDOW, PageTransition::LINK);
-  } else {
-    browser->OpenURL(
-        GURL(l10n_util::GetStringUTF8(IDS_THEMES_GALLERY_URL)),
-        GURL(), NEW_FOREGROUND_TAB, PageTransition::LINK);
+  browser->OpenThemeGalleryTabAndActivate();
+}
+
+// Called when the "stop syncing" confirmation dialog started by
+// doSyncAction is finished.  Stop syncing only If the user clicked
+// OK.
+- (void)stopSyncAlertDidEnd:(NSAlert*)alert
+                 returnCode:(int)returnCode
+                contextInfo:(void*)contextInfo {
+  DCHECK(syncService_);
+  if (returnCode == NSAlertFirstButtonReturn) {
+    syncService_->DisableForUser();
+    ProfileSyncService::SyncEvent(ProfileSyncService::STOP_FROM_OPTIONS);
   }
 }
 
+// Called when the user clicks the multi-purpose sync button in the
+// "Personal Stuff" pane.
 - (IBAction)doSyncAction:(id)sender {
   DCHECK(syncService_);
   if (syncService_->HasSyncSetupCompleted()) {
-    syncService_->DisableForUser();
-    ProfileSyncService::SyncEvent(ProfileSyncService::STOP_FROM_OPTIONS);
-    // TODO(akalin): Pop up a confirmation dialog before disabling syncing.
+    // If sync setup has completed that means the sync button was a
+    // "stop syncing" button.  Bring up a confirmation dialog before
+    // actually stopping syncing (see stopSyncAlertDidEnd).
+    scoped_nsobject<NSAlert> alert([[NSAlert alloc] init]);
+    [alert addButtonWithTitle:l10n_util::GetNSStringWithFixup(
+        IDS_SYNC_STOP_SYNCING_CONFIRM_BUTTON_LABEL)];
+    [alert addButtonWithTitle:l10n_util::GetNSStringWithFixup(
+        IDS_CANCEL)];
+    [alert setMessageText:l10n_util::GetNSStringWithFixup(
+        IDS_SYNC_STOP_SYNCING_DIALOG_TITLE)];
+    [alert setInformativeText:l10n_util::GetNSStringFWithFixup(
+        IDS_SYNC_STOP_SYNCING_EXPLANATION_LABEL,
+        l10n_util::GetStringUTF16(IDS_PRODUCT_NAME))];
+    [alert setAlertStyle:NSWarningAlertStyle];
+    const SEL kEndSelector =
+        @selector(stopSyncAlertDidEnd:returnCode:contextInfo:);
+    [alert beginSheetModalForWindow:[self window]
+                      modalDelegate:self
+                     didEndSelector:kEndSelector
+                        contextInfo:NULL];
   } else {
+    // Otherwise, the sync button was a "sync my bookmarks" button.
+    // Kick off the sync setup process.
     syncService_->EnableForUser();
     ProfileSyncService::SyncEvent(ProfileSyncService::START_FROM_OPTIONS);
   }
 }
 
+// Called when the user clicks the "Customize Sync" button in the
+// "Personal Stuff" pane.  Spawns a dialog-modal sheet that cleans
+// itself up on close.
+- (IBAction)doSyncCustomize:(id)sender {
+  ShowSyncCustomizeDialog([self window], profile_->GetProfileSyncService());
+}
+
+- (IBAction)doSyncReauthentication:(id)sender {
+  DCHECK(syncService_);
+  syncService_->ShowLoginDialog();
+}
+
 - (void)setPasswordManagerEnabledIndex:(NSInteger)value {
   if (value == kEnabledIndex)
-    [self recordUserAction:L"Options_PasswordManager_Enable"];
+    [self recordUserAction:UserMetricsAction(
+                           "Options_PasswordManager_Enable")];
   else
-    [self recordUserAction:L"Options_PasswordManager_Disable"];
+    [self recordUserAction:UserMetricsAction(
+                           "Options_PasswordManager_Disable")];
   askSavePasswords_.SetValue(value == kEnabledIndex ? true : false);
 }
 
@@ -1204,9 +1380,9 @@ const int kDisabledIndex = 1;
 
 - (void)setFormAutofillEnabledIndex:(NSInteger)value {
   if (value == kEnabledIndex)
-    [self recordUserAction:L"Options_FormAutofill_Enable"];
+    [self recordUserAction:UserMetricsAction("Options_FormAutofill_Enable")];
   else
-    [self recordUserAction:L"Options_FormAutofill_Disable"];
+    [self recordUserAction:UserMetricsAction("Options_FormAutofill_Disable")];
   formAutofill_.SetValue(value == kEnabledIndex ? true : false);
 }
 
@@ -1216,9 +1392,11 @@ const int kDisabledIndex = 1;
 
 - (void)setIsUsingDefaultTheme:(BOOL)value {
   if (value)
-    [self recordUserAction:L"Options_IsUsingDefaultTheme_Enable"];
+    [self recordUserAction:UserMetricsAction(
+                           "Options_IsUsingDefaultTheme_Enable")];
   else
-    [self recordUserAction:L"Options_IsUsingDefaultTheme_Disable"];
+    [self recordUserAction:UserMetricsAction(
+                           "Options_IsUsingDefaultTheme_Disable")];
 }
 
 - (BOOL)isUsingDefaultTheme {
@@ -1249,11 +1427,11 @@ const int kDisabledIndex = 1;
   else if (*prefName == prefs::kMetricsReportingEnabled) {
     [self setMetricsRecording:metricsRecording_.GetValue() ? YES : NO];
   }
-  else if (*prefName == prefs::kCookieBehavior) {
-    [self setCookieBehavior:cookieBehavior_.GetValue()];
-  }
   else if (*prefName == prefs::kPromptForDownload) {
     [self setAskForSaveLocation:askForSaveLocation_.GetValue() ? YES : NO];
+  }
+  else if (*prefName == prefs::kEnableTranslate) {
+    [self setTranslateEnabled:translateEnabled_.GetValue() ? YES : NO];
   }
 }
 
@@ -1262,7 +1440,7 @@ const int kDisabledIndex = 1;
                            code:(NSInteger)returnCode
                         context:(void*)context {
   if (returnCode == NSOKButton) {
-    [self recordUserAction:L"Options_SetDownloadDirectory"];
+    [self recordUserAction:UserMetricsAction("Options_SetDownloadDirectory")];
     NSURL* path = [[panel URLs] lastObject];  // We only allow 1 item.
     [self willChangeValueForKey:@"defaultDownloadLocation"];
     defaultDownloadLocation_.SetValue(base::SysNSStringToWide([path path]));
@@ -1286,12 +1464,277 @@ const int kDisabledIndex = 1;
                     contextInfo:NULL];
 }
 
+// Called to clear user's browsing data. This puts up an application-modal
+// dialog to guide the user through clearing the data.
+- (IBAction)clearData:(id)sender {
+  [ClearBrowsingDataController
+      showClearBrowsingDialogForProfile:profile_];
+}
+
+// Opens the "Content Settings" dialog.
+- (IBAction)showContentSettings:(id)sender {
+  [ContentSettingsDialogController
+      showContentSettingsForType:CONTENT_SETTINGS_TYPE_DEFAULT
+                         profile:profile_];
+}
+
 - (IBAction)privacyLearnMore:(id)sender {
   // We open a new browser window so the Options dialog doesn't get lost
   // behind other windows.
   Browser* browser = Browser::Create(profile_);
   browser->OpenURL(GURL(l10n_util::GetStringUTF16(IDS_LEARN_MORE_PRIVACY_URL)),
                    GURL(), NEW_WINDOW, PageTransition::LINK);
+}
+
+// Returns whether the alternate error page checkbox should be checked based
+// on the preference.
+- (BOOL)showAlternateErrorPages {
+  return alternateErrorPages_.GetValue() ? YES : NO;
+}
+
+// Sets the backend pref for whether or not the alternate error page checkbox
+// should be displayed based on |value|.
+- (void)setShowAlternateErrorPages:(BOOL)value {
+  if (value)
+    [self recordUserAction:UserMetricsAction(
+                           "Options_LinkDoctorCheckbox_Enable")];
+  else
+    [self recordUserAction:UserMetricsAction(
+                           "Options_LinkDoctorCheckbox_Disable")];
+  alternateErrorPages_.SetValue(value ? true : false);
+}
+
+// Returns whether the suggest checkbox should be checked based on the
+// preference.
+- (BOOL)useSuggest {
+  return useSuggest_.GetValue() ? YES : NO;
+}
+
+// Sets the backend pref for whether or not the suggest checkbox should be
+// displayed based on |value|.
+- (void)setUseSuggest:(BOOL)value {
+  if (value)
+    [self recordUserAction:UserMetricsAction(
+                           "Options_UseSuggestCheckbox_Enable")];
+  else
+    [self recordUserAction:UserMetricsAction(
+                           "Options_UseSuggestCheckbox_Disable")];
+  useSuggest_.SetValue(value ? true : false);
+}
+
+// Returns whether the DNS prefetch checkbox should be checked based on the
+// preference.
+- (BOOL)dnsPrefetch {
+  return dnsPrefetch_.GetValue() ? YES : NO;
+}
+
+// Sets the backend pref for whether or not the DNS prefetch checkbox should be
+// displayed based on |value|.
+- (void)setDnsPrefetch:(BOOL)value {
+  if (value)
+    [self recordUserAction:UserMetricsAction(
+                           "Options_DnsPrefetchCheckbox_Enable")];
+  else
+    [self recordUserAction:UserMetricsAction(
+                           "Options_DnsPrefetchCheckbox_Disable")];
+  dnsPrefetch_.SetValue(value ? true : false);
+  chrome_browser_net::EnableDnsPrefetch(value ? true : false);
+}
+
+// Returns whether the safe browsing checkbox should be checked based on the
+// preference.
+- (BOOL)safeBrowsing {
+  return safeBrowsing_.GetValue() ? YES : NO;
+}
+
+// Sets the backend pref for whether or not the safe browsing checkbox should be
+// displayed based on |value|.
+- (void)setSafeBrowsing:(BOOL)value {
+  if (value)
+    [self recordUserAction:UserMetricsAction(
+                           "Options_SafeBrowsingCheckbox_Enable")];
+  else
+    [self recordUserAction:UserMetricsAction(
+                           "Options_SafeBrowsingCheckbox_Disable")];
+  bool enabled = value ? true : false;
+  safeBrowsing_.SetValue(enabled);
+  SafeBrowsingService* safeBrowsingService =
+      g_browser_process->resource_dispatcher_host()->safe_browsing_service();
+  MessageLoop::current()->PostTask(FROM_HERE, NewRunnableMethod(
+      safeBrowsingService, &SafeBrowsingService::OnEnable, enabled));
+}
+
+// Returns whether the suggest checkbox should be checked based on the
+// preference.
+- (BOOL)metricsRecording {
+  return metricsRecording_.GetValue() ? YES : NO;
+}
+
+// Sets the backend pref for whether or not the suggest checkbox should be
+// displayed based on |value|.
+- (void)setMetricsRecording:(BOOL)value {
+  if (value)
+    [self recordUserAction:UserMetricsAction(
+                           "Options_MetricsReportingCheckbox_Enable")];
+  else
+    [self recordUserAction:UserMetricsAction(
+                           "Options_MetricsReportingCheckbox_Disable")];
+  bool enabled = value ? true : false;
+
+  GoogleUpdateSettings::SetCollectStatsConsent(enabled);
+  bool update_pref = GoogleUpdateSettings::GetCollectStatsConsent();
+  if (enabled != update_pref) {
+    DLOG(INFO) <<
+        "GENERAL SECTION: Unable to set crash report status to " <<
+        enabled;
+  }
+  // Only change the pref if GoogleUpdateSettings::GetCollectStatsConsent
+  // succeeds.
+  enabled = update_pref;
+
+  MetricsService* metrics = g_browser_process->metrics_service();
+  DCHECK(metrics);
+  if (metrics) {
+    metrics->SetUserPermitsUpload(enabled);
+    if (enabled)
+      metrics->Start();
+    else
+      metrics->Stop();
+  }
+
+  // TODO(pinkerton): windows shows a dialog here telling the user they need to
+  // restart for this to take effect. http://crbug.com/34653
+  metricsRecording_.SetValue(enabled);
+}
+
+- (NSURL*)defaultDownloadLocation {
+  NSString* pathString =
+      base::SysWideToNSString(defaultDownloadLocation_.GetValue());
+  return [NSURL fileURLWithPath:pathString];
+}
+
+- (BOOL)askForSaveLocation {
+  return askForSaveLocation_.GetValue();
+}
+
+- (void)setAskForSaveLocation:(BOOL)value {
+  if (value) {
+    [self recordUserAction:UserMetricsAction(
+                           "Options_AskForSaveLocation_Enable")];
+  } else {
+    [self recordUserAction:UserMetricsAction(
+                           "Options_AskForSaveLocation_Disable")];
+  }
+  askForSaveLocation_.SetValue(value);
+}
+
+- (BOOL)translateEnabled {
+  return translateEnabled_.GetValue();
+}
+
+- (void)setTranslateEnabled:(BOOL)value {
+  if (value) {
+    [self recordUserAction:UserMetricsAction("Options_Translate_Enable")];
+  } else {
+    [self recordUserAction:UserMetricsAction("Options_Translate_Disable")];
+  }
+  translateEnabled_.SetValue(value);
+}
+
+- (void)fontAndLanguageEndSheet:(NSWindow*)sheet
+                     returnCode:(NSInteger)returnCode
+                    contextInfo:(void*)context {
+  [sheet close];
+  [sheet orderOut:self];
+  fontLanguageSettings_ = nil;
+}
+
+- (IBAction)changeFontAndLanguageSettings:(id)sender {
+  // Intentionally leak the controller as it will clean itself up when the
+  // sheet closes.
+  fontLanguageSettings_ =
+      [[FontLanguageSettingsController alloc] initWithProfile:profile_];
+  [NSApp beginSheet:[fontLanguageSettings_ window]
+     modalForWindow:[self window]
+      modalDelegate:self
+     didEndSelector:@selector(fontAndLanguageEndSheet:returnCode:contextInfo:)
+        contextInfo:nil];
+}
+
+// Called to launch the Keychain Access app to show the user's stored
+// certificates. Note there's no way to script the app to auto-select the
+// certificates.
+- (IBAction)showCertificates:(id)sender {
+  [self recordUserAction:UserMetricsAction("Options_ManagerCerts")];
+  [self launchKeychainAccess];
+}
+
+//-------------------------------------------------------------------------
+
+// Callback when preferences are changed. |prefName| is the name of the
+// pref that has changed and should not be NULL.
+- (void)prefChanged:(std::wstring*)prefName {
+  DCHECK(prefName);
+  if (!prefName) return;
+  [self basicsPrefChanged:prefName];
+  [self userDataPrefChanged:prefName];
+  [self underHoodPrefChanged:prefName];
+}
+
+// Callback when sync service state has changed.
+//
+// TODO(akalin): Decomp this out since a lot of it is copied from the
+// Windows version.
+// TODO(akalin): Change the background of the status label/link on error.
+- (void)syncStateChanged {
+  DCHECK(syncService_);
+
+  [syncButton_ setEnabled:!syncService_->WizardIsVisible()];
+  NSString* buttonLabel;
+  if (syncService_->HasSyncSetupCompleted()) {
+    buttonLabel = l10n_util::GetNSStringWithFixup(
+        IDS_SYNC_STOP_SYNCING_BUTTON_LABEL);
+    [syncCustomizeButton_ setHidden:false];
+  } else if (syncService_->SetupInProgress()) {
+    buttonLabel = l10n_util::GetNSStringWithFixup(
+        IDS_SYNC_NTP_SETUP_IN_PROGRESS);
+    [syncCustomizeButton_ setHidden:true];
+  } else {
+    buttonLabel = l10n_util::GetNSStringWithFixup(
+        IDS_SYNC_START_SYNC_BUTTON_LABEL);
+    [syncCustomizeButton_ setHidden:true];
+  }
+  [syncButton_ setTitle:buttonLabel];
+
+  string16 statusLabel, linkLabel;
+  sync_ui_util::MessageType status =
+      sync_ui_util::GetStatusLabels(syncService_, &statusLabel, &linkLabel);
+  [syncStatus_ setStringValue:base::SysUTF16ToNSString(statusLabel)];
+  [syncLink_ setHidden:linkLabel.empty()];
+  [syncLink_ setTitle:base::SysUTF16ToNSString(linkLabel)];
+
+  NSButtonCell* syncLinkCell = static_cast<NSButtonCell*>([syncLink_ cell]);
+  if (!syncStatusNoErrorBackgroundColor_) {
+    DCHECK(!syncLinkNoErrorBackgroundColor_);
+    // We assume that the sync controls start off in a non-error
+    // state.
+    syncStatusNoErrorBackgroundColor_.reset(
+        [[syncStatus_ backgroundColor] retain]);
+    syncLinkNoErrorBackgroundColor_.reset(
+        [[syncLinkCell backgroundColor] retain]);
+  }
+  if (status == sync_ui_util::SYNC_ERROR) {
+    [syncStatus_ setBackgroundColor:syncErrorBackgroundColor_];
+    [syncLinkCell setBackgroundColor:syncErrorBackgroundColor_];
+  } else {
+    [syncStatus_ setBackgroundColor:syncStatusNoErrorBackgroundColor_];
+    [syncLinkCell setBackgroundColor:syncLinkNoErrorBackgroundColor_];
+  }
+}
+
+// Show the preferences window.
+- (IBAction)showPreferences:(id)sender {
+  [self showWindow:sender];
 }
 
 - (IBAction)toolbarButtonSelected:(id)sender {
@@ -1361,13 +1804,15 @@ const int kDisabledIndex = 1;
   [prefsWindow setTitle:[toolbarItem label]];
 
   // Figure out the size of the window.
-  NSRect windowFrame = [prefsWindow frame];
+  NSRect windowFrame = [contentView convertRect:[prefsWindow frame]
+                                       fromView:nil];
   CGFloat titleToolbarHeight =
       NSHeight(windowFrame) - NSHeight(contentViewFrame);
   windowFrame.size.height =
       NSHeight(prefsViewFrame) + titleToolbarHeight;
   DCHECK_GE(NSWidth(windowFrame), NSWidth(prefsViewFrame))
       << "Initial width set wasn't wide enough.";
+  windowFrame = [contentView convertRect:windowFrame toView:nil];
   windowFrame.origin.y = NSMaxY([prefsWindow frame]) - NSHeight(windowFrame);
 
   // Now change the size.
@@ -1389,6 +1834,10 @@ const int kDisabledIndex = 1;
          nil];
     [animation_ setViewAnimations:
         [NSArray arrayWithObjects:oldViewOut, newViewIn, windowResize, nil]];
+    // The default duration is 0.5s, which actually feels slow in here, so speed
+    // it up a bit.
+    [animation_ gtm_setDuration:0.2
+                      eventMask:NSLeftMouseUpMask];
     [animation_ startAnimation];
   } else {
     [currentPrefsView removeFromSuperviewWithoutNeedingDisplay];
@@ -1404,193 +1853,6 @@ const int kDisabledIndex = 1;
   // be last in the list).
   NSArray* subviews = [[[self window] contentView] subviews];
   RemoveAllButLastView(subviews);
-}
-
-// Returns whether the alternate error page checkbox should be checked based
-// on the preference.
-- (BOOL)showAlternateErrorPages {
-  return alternateErrorPages_.GetValue() ? YES : NO;
-}
-
-// Sets the backend pref for whether or not the alternate error page checkbox
-// should be displayed based on |value|.
-- (void)setShowAlternateErrorPages:(BOOL)value {
-  if (value)
-    [self recordUserAction:L"Options_LinkDoctorCheckbox_Enable"];
-  else
-    [self recordUserAction:L"Options_LinkDoctorCheckbox_Disable"];
-  alternateErrorPages_.SetValue(value ? true : false);
-}
-
-// Returns whether the suggest checkbox should be checked based on the
-// preference.
-- (BOOL)useSuggest {
-  return useSuggest_.GetValue() ? YES : NO;
-}
-
-// Sets the backend pref for whether or not the suggest checkbox should be
-// displayed based on |value|.
-- (void)setUseSuggest:(BOOL)value {
-  if (value)
-    [self recordUserAction:L"Options_UseSuggestCheckbox_Enable"];
-  else
-    [self recordUserAction:L"Options_UseSuggestCheckbox_Disable"];
-  useSuggest_.SetValue(value ? true : false);
-}
-
-// Returns whether the DNS prefetch checkbox should be checked based on the
-// preference.
-- (BOOL)dnsPrefetch {
-  return dnsPrefetch_.GetValue() ? YES : NO;
-}
-
-// Sets the backend pref for whether or not the DNS prefetch checkbox should be
-// displayed based on |value|.
-- (void)setDnsPrefetch:(BOOL)value {
-  if (value)
-    [self recordUserAction:L"Options_DnsPrefetchCheckbox_Enable"];
-  else
-    [self recordUserAction:L"Options_DnsPrefetchCheckbox_Disable"];
-  dnsPrefetch_.SetValue(value ? true : false);
-  chrome_browser_net::EnableDnsPrefetch(value ? true : false);
-}
-
-// Returns whether the safe browsing checkbox should be checked based on the
-// preference.
-- (BOOL)safeBrowsing {
-  return safeBrowsing_.GetValue() ? YES : NO;
-}
-
-// Sets the backend pref for whether or not the safe browsing checkbox should be
-// displayed based on |value|.
-- (void)setSafeBrowsing:(BOOL)value {
-  if (value)
-    [self recordUserAction:L"Options_SafeBrowsingCheckbox_Enable"];
-  else
-    [self recordUserAction:L"Options_SafeBrowsingCheckbox_Disable"];
-  bool enabled = value ? true : false;
-  safeBrowsing_.SetValue(enabled);
-  SafeBrowsingService* safeBrowsingService =
-      g_browser_process->resource_dispatcher_host()->safe_browsing_service();
-  MessageLoop::current()->PostTask(FROM_HERE, NewRunnableMethod(
-      safeBrowsingService, &SafeBrowsingService::OnEnable, enabled));
-}
-
-// Returns whether the suggest checkbox should be checked based on the
-// preference.
-- (BOOL)metricsRecording {
-  return metricsRecording_.GetValue() ? YES : NO;
-}
-
-// Sets the backend pref for whether or not the suggest checkbox should be
-// displayed based on |value|.
-- (void)setMetricsRecording:(BOOL)value {
-  if (value)
-    [self recordUserAction:L"Options_MetricsReportingCheckbox_Enable"];
-  else
-    [self recordUserAction:L"Options_MetricsReportingCheckbox_Disable"];
-  bool enabled = value ? true : false;
-
-  GoogleUpdateSettings::SetCollectStatsConsent(enabled);
-  bool update_pref = GoogleUpdateSettings::GetCollectStatsConsent();
-  if (enabled != update_pref) {
-    DLOG(INFO) <<
-        "GENERAL SECTION: Unable to set crash report status to " <<
-        enabled;
-  }
-  // Only change the pref if GoogleUpdateSettings::GetCollectStatsConsent
-  // succeeds.
-  enabled = update_pref;
-
-  MetricsService* metrics = g_browser_process->metrics_service();
-  DCHECK(metrics);
-  if (metrics) {
-    metrics->SetUserPermitsUpload(enabled);
-    if (enabled)
-      metrics->Start();
-    else
-      metrics->Stop();
-  }
-
-  // TODO(pinkerton): windows shows a dialog here telling the user they need to
-  // restart for this to take effect. Is that really necessary?
-  metricsRecording_.SetValue(enabled);
-}
-
-// Returns the index of the cookie popup based on the preference.
-- (NSInteger)cookieBehavior {
-  return cookieBehavior_.GetValue();
-}
-
-// Sets the backend pref for whether or not to accept cookies based on |index|.
-- (void)setCookieBehavior:(NSInteger)index {
-  // TODO(darin): Remove everything else related to this setter.
-}
-
-- (NSURL*)defaultDownloadLocation {
-  NSString* pathString =
-      base::SysWideToNSString(defaultDownloadLocation_.GetValue());
-  return [NSURL fileURLWithPath:pathString];
-}
-
-- (BOOL)askForSaveLocation {
-  return askForSaveLocation_.GetValue();
-}
-
-- (void)setAskForSaveLocation:(BOOL)value {
-  if (value) {
-    [self recordUserAction:L"Options_AskForSaveLocation_Enable"];
-  } else {
-    [self recordUserAction:L"Options_AskForSaveLocation_Disable"];
-  }
-  askForSaveLocation_.SetValue(value);
-}
-
-//-------------------------------------------------------------------------
-
-// Callback when preferences are changed. |prefName| is the name of the
-// pref that has changed and should not be NULL.
-- (void)prefChanged:(std::wstring*)prefName {
-  DCHECK(prefName);
-  if (!prefName) return;
-  [self basicsPrefChanged:prefName];
-  [self userDataPrefChanged:prefName];
-  [self underHoodPrefChanged:prefName];
-}
-
-// Callback when sync service state has changed.
-//
-// TODO(akalin): Decomp this out since a lot of it is copied from the
-// Windows version.
-// TODO(akalin): Actually have a control for the link.
-// TODO(akalin): Change the background of the status label/link on error.
-// TODO(akalin): Make sure selecting the "Sync my bookmarks..." menu item
-// pops up this preference pane if syncing has already been set up.
-- (void)syncStateChanged {
-  DCHECK(syncService_);
-
-  [syncButton_ setEnabled:!syncService_->WizardIsVisible()];
-  NSString* buttonLabel;
-  if (syncService_->HasSyncSetupCompleted()) {
-    buttonLabel = l10n_util::GetNSStringWithFixup(
-        IDS_SYNC_STOP_SYNCING_BUTTON_LABEL);
-  } else if (syncService_->SetupInProgress()) {
-    buttonLabel = l10n_util::GetNSStringWithFixup(
-        IDS_SYNC_NTP_SETUP_IN_PROGRESS);
-  } else {
-    buttonLabel = l10n_util::GetNSStringWithFixup(
-        IDS_SYNC_START_SYNC_BUTTON_LABEL);
-  }
-  [syncButton_ setTitle:buttonLabel];
-
-  string16 statusLabel, linkLabel;
-  SyncStatusUIHelper::GetLabels(syncService_, &statusLabel, &linkLabel);
-  [syncStatus_ setStringValue:base::SysUTF16ToNSString(statusLabel)];
-}
-
-// Show the preferences window.
-- (IBAction)showPreferences:(id)sender {
-  [self showWindow:sender];
 }
 
 - (void)switchToPage:(OptionsPage)page animate:(BOOL)animate {
@@ -1610,10 +1872,7 @@ const int kDisabledIndex = 1;
     // We've hit a recalcitrant field editor, force it to go away.
     [[self window] endEditingFor:nil];
   }
-
-  [[NSNotificationCenter defaultCenter]
-      postNotificationName:kUserDoneEditingPrefsNotification
-                    object:self];
+  [self autorelease];
 }
 
 - (void)controlTextDidEndEditing:(NSNotification*)notification {

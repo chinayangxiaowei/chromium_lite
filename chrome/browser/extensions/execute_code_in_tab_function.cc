@@ -4,6 +4,7 @@
 
 #include "chrome/browser/extensions/execute_code_in_tab_function.h"
 
+#include "base/callback.h"
 #include "base/string_util.h"
 #include "chrome/browser/browser.h"
 #include "chrome/browser/extensions/extension_tabs_module.h"
@@ -16,10 +17,6 @@
 
 namespace keys = extension_tabs_module_constants;
 
-const wchar_t* kCodeKey = L"code";
-const wchar_t* kFileKey = L"file";
-const wchar_t* kAllFramesKey = L"allFrames";
-
 bool ExecuteCodeInTabFunction::RunImpl() {
   EXTENSION_FUNCTION_VALIDATE(args_->IsType(Value::TYPE_LIST));
   const ListValue* args = args_as_list();
@@ -31,8 +28,8 @@ bool ExecuteCodeInTabFunction::RunImpl() {
     error_ = keys::kNoCodeOrFileToExecuteError;
     return false;
   } else {
-    bool has_code = script_info->HasKey(kCodeKey);
-    bool has_file = script_info->HasKey(kFileKey);
+    bool has_code = script_info->HasKey(keys::kCodeKey);
+    bool has_file = script_info->HasKey(keys::kFileKey);
     if (has_code && has_file) {
       error_ = keys::kMoreThanOneValuesError;
       return false;
@@ -51,7 +48,7 @@ bool ExecuteCodeInTabFunction::RunImpl() {
   Value* tab_value = NULL;
   EXTENSION_FUNCTION_VALIDATE(args->Get(0, &tab_value));
   if (tab_value->IsType(Value::TYPE_NULL)) {
-    browser = dispatcher()->GetBrowser();
+    browser = GetCurrentBrowser();
     if (!browser) {
       error_ = keys::kNoCurrentWindowError;
       return false;
@@ -60,8 +57,9 @@ bool ExecuteCodeInTabFunction::RunImpl() {
       return false;
   } else {
     EXTENSION_FUNCTION_VALIDATE(tab_value->GetAsInteger(&execute_tab_id_));
-    if (!ExtensionTabUtil::GetTabById(execute_tab_id_, profile(), &browser,
-                                      NULL, &contents, NULL)) {
+    if (!ExtensionTabUtil::GetTabById(execute_tab_id_, profile(),
+                                      include_incognito(),
+                                      &browser, NULL, &contents, NULL)) {
       return false;
     }
   }
@@ -74,25 +72,26 @@ bool ExecuteCodeInTabFunction::RunImpl() {
   if (!GetExtension()->CanExecuteScriptOnHost(contents->GetURL(), &error_))
     return false;
 
-  if (script_info->HasKey(kAllFramesKey)) {
-    if (!script_info->GetBoolean(kAllFramesKey, &all_frames_))
+  if (script_info->HasKey(keys::kAllFramesKey)) {
+    if (!script_info->GetBoolean(keys::kAllFramesKey, &all_frames_))
       return false;
   }
 
   std::string code_string;
-  if (script_info->HasKey(kCodeKey)) {
-    if (!script_info->GetString(kCodeKey, &code_string))
+  if (script_info->HasKey(keys::kCodeKey)) {
+    if (!script_info->GetString(keys::kCodeKey, &code_string))
       return false;
   }
 
   if (!code_string.empty()) {
-    Execute(code_string);
+    if (!Execute(code_string))
+      return false;
     return true;
   }
 
   std::string relative_path;
-  if (script_info->HasKey(kFileKey)) {
-    if (!script_info->GetString(kFileKey, &relative_path))
+  if (script_info->HasKey(keys::kFileKey)) {
+    if (!script_info->GetString(keys::kFileKey, &relative_path))
       return false;
     resource_ = GetExtension()->GetResource(relative_path);
   }
@@ -126,19 +125,23 @@ void ExecuteCodeInTabFunction::DidLoadFile(bool success,
   Release();  // Balance the AddRef taken in RunImpl
 }
 
-void ExecuteCodeInTabFunction::Execute(const std::string& code_string) {
+bool ExecuteCodeInTabFunction::Execute(const std::string& code_string) {
   TabContents* contents = NULL;
   Browser* browser = NULL;
-  if (!ExtensionTabUtil::GetTabById(execute_tab_id_, profile(), &browser, NULL,
-                                    &contents, NULL) && contents && browser) {
+
+  bool success = ExtensionTabUtil::GetTabById(
+      execute_tab_id_, profile(), include_incognito(), &browser, NULL,
+      &contents, NULL) && contents && browser;
+
+  if (!success) {
     SendResponse(false);
-    return;
+    return false;
   }
 
   Extension* extension = GetExtension();
   if (!extension) {
     SendResponse(false);
-    return;
+    return false;
   }
 
   bool is_js_code = true;
@@ -148,12 +151,16 @@ void ExecuteCodeInTabFunction::Execute(const std::string& code_string) {
   } else if (function_name != TabsExecuteScriptFunction::function_name()) {
     DCHECK(false);
   }
+  if (!contents->ExecuteCode(request_id(), extension->id(),
+                             extension->host_permissions(), is_js_code,
+                             code_string, all_frames_)) {
+    SendResponse(false);
+    return false;
+  }
   registrar_.Add(this, NotificationType::TAB_CODE_EXECUTED,
                  NotificationService::AllSources());
   AddRef();  // balanced in Observe()
-  contents->ExecuteCode(request_id(), extension->id(),
-                        extension->host_permissions(), is_js_code, code_string,
-                        all_frames_);
+  return true;
 }
 
 void ExecuteCodeInTabFunction::Observe(NotificationType type,

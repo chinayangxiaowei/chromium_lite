@@ -1,4 +1,4 @@
-// Copyright (c) 2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -37,29 +37,45 @@ class HostCache {
   };
 
   struct Key {
-    Key(const std::string& hostname, AddressFamily address_family)
-        : hostname(hostname), address_family(address_family) {}
+    Key(const std::string& hostname, AddressFamily address_family,
+        HostResolverFlags host_resolver_flags)
+        : hostname(hostname),
+          address_family(address_family),
+          host_resolver_flags(host_resolver_flags) {}
 
     bool operator==(const Key& other) const {
-      return other.hostname == hostname &&
-             other.address_family == address_family;
+      // |address_family| and |host_resolver_flags| are compared before
+      // |hostname| under assumption that integer comparisons are faster than
+      // string comparisons.
+      return (other.address_family == address_family &&
+              other.host_resolver_flags == host_resolver_flags &&
+              other.hostname == hostname);
     }
 
     bool operator<(const Key& other) const {
-      if (address_family == other.address_family)
-        return hostname < other.hostname;
-      return address_family < other.address_family;
+      // |address_family| and |host_resolver_flags| are compared before
+      // |hostname| under assumption that integer comparisons are faster than
+      // string comparisons.
+      if (address_family != other.address_family)
+        return address_family < other.address_family;
+      if (host_resolver_flags != other.host_resolver_flags)
+        return host_resolver_flags < other.host_resolver_flags;
+      return hostname < other.hostname;
     }
 
     std::string hostname;
     AddressFamily address_family;
+    HostResolverFlags host_resolver_flags;
   };
 
   typedef std::map<Key, scoped_refptr<Entry> > EntryMap;
 
-  // Constructs a HostCache whose entries are valid for |cache_duration_ms|
-  // milliseconds. The cache will store up to |max_entries|.
-  HostCache(size_t max_entries, size_t cache_duration_ms);
+  // Constructs a HostCache that caches successful host resolves for
+  // |success_entry_ttl| time, and failed host resolves for
+  // |failure_entry_ttl|. The cache will store up to |max_entries|.
+  HostCache(size_t max_entries,
+            base::TimeDelta success_entry_ttl,
+            base::TimeDelta failure_entry_ttl);
 
   ~HostCache();
 
@@ -76,6 +92,11 @@ class HostCache {
              const AddressList addrlist,
              base::TimeTicks now);
 
+  // Empties the cache.
+  void clear() {
+    entries_.clear();
+  }
+
   // Returns true if this HostCache can contain no entries.
   bool caching_is_disabled() const {
     return max_entries_ == 0;
@@ -90,8 +111,12 @@ class HostCache {
     return max_entries_;
   }
 
-  size_t cache_duration_ms() const {
-    return cache_duration_ms_;
+  base::TimeDelta success_entry_ttl() const {
+    return success_entry_ttl_;
+  }
+
+  base::TimeDelta failure_entry_ttl() const {
+    return failure_entry_ttl_;
   }
 
   // Note that this map may contain expired entries.
@@ -113,8 +138,9 @@ class HostCache {
   // Bound on total size of the cache.
   size_t max_entries_;
 
-  // Time to live for cache entries in milliseconds.
-  size_t cache_duration_ms_;
+  // Time to live for cache entries.
+  base::TimeDelta success_entry_ttl_;
+  base::TimeDelta failure_entry_ttl_;
 
   // Map from hostname (presumably in lowercase canonicalized format) to
   // a resolved result entry.

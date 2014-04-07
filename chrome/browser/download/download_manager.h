@@ -1,4 +1,4 @@
-// Copyright (c) 2006-2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 //
@@ -35,11 +35,9 @@
 #ifndef CHROME_BROWSER_DOWNLOAD_DOWNLOAD_MANAGER_H_
 #define CHROME_BROWSER_DOWNLOAD_DOWNLOAD_MANAGER_H_
 
-#include "build/build_config.h"
-
-#include <string>
 #include <map>
 #include <set>
+#include <string>
 #include <vector>
 
 #include "base/basictypes.h"
@@ -52,8 +50,8 @@
 #include "chrome/browser/cancelable_request.h"
 #include "chrome/browser/history/download_types.h"
 #include "chrome/browser/history/history.h"
+#include "chrome/browser/pref_member.h"
 #include "chrome/browser/shell_dialogs.h"
-#include "chrome/common/pref_member.h"
 
 class DownloadFileManager;
 class DownloadItemView;
@@ -64,6 +62,7 @@ class Profile;
 class ResourceDispatcherHost;
 class URLRequestContextGetter;
 class TabContents;
+struct DownloadSaveInfo;
 
 namespace base {
 class Thread;
@@ -95,8 +94,14 @@ class DownloadItem {
    public:
     virtual void OnDownloadUpdated(DownloadItem* download) = 0;
 
+    // Called when a downloaded file has been completed.
+    virtual void OnDownloadFileCompleted(DownloadItem* download) = 0;
+
     // Called when a downloaded file has been opened.
     virtual void OnDownloadOpened(DownloadItem* download) = 0;
+
+   protected:
+    virtual ~Observer() {}
   };
 
   // Constructing from persistent store:
@@ -115,7 +120,10 @@ class DownloadItem {
                int render_process_id,
                int request_id,
                bool is_dangerous,
-               bool save_as);
+               bool save_as,
+               bool is_otr,
+               bool is_extension_install,
+               bool is_temporary);
 
   ~DownloadItem();
 
@@ -128,6 +136,9 @@ class DownloadItem {
 
   // Notifies our observers periodically.
   void UpdateObservers();
+
+  // Notifies our observers the downloaded file has been completed.
+  void NotifyObserversDownloadFileCompleted();
 
   // Notifies our observers the downloaded file has been opened.
   void NotifyObserversDownloadOpened();
@@ -212,6 +223,14 @@ class DownloadItem {
   FilePath original_name() const { return original_name_; }
   void set_original_name(const FilePath& name) { original_name_ = name; }
   bool save_as() const { return save_as_; }
+  bool is_otr() const { return is_otr_; }
+  bool is_extension_install() const { return is_extension_install_; }
+  bool name_finalized() const { return name_finalized_; }
+  void set_name_finalized(bool name_finalized) {
+    name_finalized_ = name_finalized;
+  }
+  bool is_temporary() const { return is_temporary_; }
+  void set_is_temporary(bool is_temporary) { is_temporary_ = is_temporary; }
 
   // Returns the file-name that should be reported to the user, which is
   // file_name_ for safe downloads and original_name_ for dangerous ones with
@@ -297,6 +316,18 @@ class DownloadItem {
   // True if the item was downloaded as a result of 'save as...'
   bool save_as_;
 
+  // True if the download was initiated in an incognito window.
+  bool is_otr_;
+
+  // True if the item was downloaded for an extension installation.
+  bool is_extension_install_;
+
+  // True if the filename is finalized.
+  bool name_finalized_;
+
+  // True if the item was downloaded temporarily.
+  bool is_temporary_;
+
   DISALLOW_COPY_AND_ASSIGN(DownloadItem);
 };
 
@@ -326,15 +357,37 @@ class DownloadManager : public base::RefCountedThreadSafe<DownloadManager>,
     // downloads. The DownloadManagerObserver must copy the vector, but does not
     // own the individual DownloadItems, when this call is made.
     virtual void SetDownloads(std::vector<DownloadItem*>& downloads) = 0;
+
+    // Called when the DownloadManager is being destroyed to prevent Observers
+    // from calling back to a stale pointer.
+    virtual void ManagerGoingDown() {}
+
+   protected:
+    virtual ~Observer() {}
   };
 
   // Public API
 
+  // If this download manager has an incognito profile, find all incognito
+  // downloads and pass them along to the parent profile's download manager
+  // via DoGetDownloads. Otherwise, just call DoGetDownloads().
+  void GetDownloads(Observer* observer,
+                    const std::wstring& search_text);
+
   // Begin a search for all downloads matching 'search_text'. If 'search_text'
   // is empty, return all known downloads. The results are returned in the
   // 'SetDownloads' observer callback.
-  void GetDownloads(Observer* observer,
-                    const std::wstring& search_text);
+  void DoGetDownloads(Observer* observer,
+                      const std::wstring& search_text,
+                      std::vector<DownloadItem*>& otr_downloads);
+
+  // Return all temporary downloads that reside in the specified directory.
+  void GetTemporaryDownloads(Observer* observer,
+                             const FilePath& dir_path);
+
+  // Return all non-temporary downloads in the specified directory that are
+  // either in-progress or finished but still waiting for user confirmation.
+  void GetCurrentDownloads(Observer* observer, const FilePath& dir_path);
 
   // Returns true if initialized properly.
   bool Init(Profile* profile);
@@ -347,7 +400,7 @@ class DownloadManager : public base::RefCountedThreadSafe<DownloadManager>,
   void UpdateDownload(int32 download_id, int64 size);
   void DownloadFinished(int32 download_id, int64 size);
 
- // Called from a view when a user clicks a UI button or link.
+  // Called from a view when a user clicks a UI button or link.
   void DownloadCancelled(int32 download_id);
   void PauseDownload(int32 download_id, bool pause);
   void RemoveDownload(int64 download_handle);
@@ -375,6 +428,15 @@ class DownloadManager : public base::RefCountedThreadSafe<DownloadManager>,
                    const GURL& referrer,
                    const std::string& referrer_encoding,
                    TabContents* tab_contents);
+
+  // Download the object at the URL and save it to the specified path. The
+  // download is treated as the temporary download and thus will not appear
+  // in the download history. Used in cases such as drag and drop.
+  void DownloadUrlToFile(const GURL& url,
+                         const GURL& referrer,
+                         const std::string& referrer_encoding,
+                         const DownloadSaveInfo& save_info,
+                         TabContents* tab_contents);
 
   // Allow objects to observe the download creation process.
   void AddObserver(Observer* observer);
@@ -429,7 +491,7 @@ class DownloadManager : public base::RefCountedThreadSafe<DownloadManager>,
   bool IsExecutableFile(const FilePath& path) const;
 
   // Tests if a file type is considered executable.
-  bool IsExecutableExtension(const FilePath::StringType& extension) const;
+  static bool IsExecutableExtension(const FilePath::StringType& extension);
 
   // Resets the automatic open preference.
   void ResetAutoOpenFiles();
@@ -451,20 +513,55 @@ class DownloadManager : public base::RefCountedThreadSafe<DownloadManager>,
   // Used to make sure we have a safe file extension and filename for a
   // download.  |file_name| can either be just the file name or it can be a
   // full path to a file.
-  void GenerateSafeFilename(const std::string& mime_type,
-                            FilePath* file_name);
-
-  // Used to determine whether the download item is an extension file or not.
-  static bool IsExtensionInstall(const DownloadItem* item);
-  static bool IsExtensionInstall(const DownloadCreateInfo* info);
+  static void GenerateSafeFileName(const std::string& mime_type,
+                                   FilePath* file_name);
 
   // Runs the network cancel.  Must be called on the IO thread.
   static void OnCancelDownloadRequest(ResourceDispatcherHost* rdh,
                                       int render_process_id,
                                       int request_id);
 
+  // Create a file name based on the response from the server.
+  static void GenerateFileName(const GURL& url,
+                               const std::string& content_disposition,
+                               const std::string& referrer_charset,
+                               const std::string& mime_type,
+                               FilePath* generated_name);
+
  private:
+  class FakeDbHandleGenerator {
+   public:
+    explicit FakeDbHandleGenerator(int64 start_value) : value_(start_value) {}
+
+    int64 GetNext() { return value_--; }
+   private:
+    int64 value_;
+  };
+
+  // This class is used to let an incognito DownloadManager observe changes to
+  // a normal DownloadManager, to propagate ModelChanged() calls from the parent
+  // DownloadManager to the observers of the incognito DownloadManager.
+  class OtherDownloadManagerObserver : public Observer {
+   public:
+    explicit OtherDownloadManagerObserver(
+        DownloadManager* observing_download_manager);
+    virtual ~OtherDownloadManagerObserver();
+
+    // Observer interface.
+    virtual void ModelChanged();
+    virtual void SetDownloads(std::vector<DownloadItem*>& downloads);
+    virtual void ManagerGoingDown();
+
+   private:
+    // The incognito download manager.
+    DownloadManager* observing_download_manager_;
+
+    // The original profile's download manager.
+    DownloadManager* observed_download_manager_;
+  };
+
   friend class base::RefCountedThreadSafe<DownloadManager>;
+  friend class OtherDownloadManagerObserver;
 
   ~DownloadManager();
 
@@ -501,12 +598,13 @@ class DownloadManager : public base::RefCountedThreadSafe<DownloadManager>,
                                          const base::Time remove_before);
 
   // Create an extension based on the file name and mime type.
-  void GenerateExtension(const FilePath& file_name,
-                         const std::string& mime_type,
-                         FilePath::StringType* generated_extension);
+  static void GenerateExtension(const FilePath& file_name,
+                                const std::string& mime_type,
+                                FilePath::StringType* generated_extension);
 
   // Create a file name based on the response from the server.
-  void GenerateFilename(DownloadCreateInfo* info, FilePath* generated_name);
+  static void GenerateFileNameFromInfo(DownloadCreateInfo* info,
+                                       FilePath* generated_name);
 
   // Persist the automatic opening preference.
   void SaveAutoOpens();
@@ -545,9 +643,15 @@ class DownloadManager : public base::RefCountedThreadSafe<DownloadManager>,
   // Checks whether a file represents a risk if downloaded.
   bool IsDangerous(const FilePath& file_name);
 
+  // Updates the app icon about the overall download progress.
+  void UpdateAppIcon();
+
   // Changes the paths and file name of the specified |download|, propagating
   // the change to the history system.
   void RenameDownload(DownloadItem* download, const FilePath& new_path);
+
+  // Inform observers that the model has changed.
+  void NotifyModelChanged();
 
   // 'downloads_' is map of all downloads in this profile. The key is the handle
   // returned by the history system, which is unique across sessions. This map
@@ -612,9 +716,6 @@ class DownloadManager : public base::RefCountedThreadSafe<DownloadManager>,
   typedef std::set<FilePath::StringType, AutoOpenCompareFunctor> AutoOpenSet;
   AutoOpenSet auto_open_;
 
-  // Set of file extensions that are executables and shouldn't be auto opened.
-  std::set<std::string> exe_types_;
-
   // Keep track of downloads that are completed before the user selects the
   // destination, so that observers are appropriately notified of completion
   // after this determination is made.
@@ -626,6 +727,14 @@ class DownloadManager : public base::RefCountedThreadSafe<DownloadManager>,
   // The "Save As" dialog box used to ask the user where a file should be
   // saved.
   scoped_refptr<SelectFileDialog> select_file_dialog_;
+
+  // In case we don't have a valid db_handle, we use |fake_db_handle_| instead.
+  // This is useful for incognito mode or when the history database is offline.
+  // Downloads are expected to have unique handles, so FakeDbHandleGenerator
+  // automatically decrement the handle value on every use.
+  FakeDbHandleGenerator fake_db_handle_;
+
+  scoped_ptr<OtherDownloadManagerObserver> other_download_manager_observer_;
 
   DISALLOW_COPY_AND_ASSIGN(DownloadManager);
 };

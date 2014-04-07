@@ -14,7 +14,6 @@
 #include "base/debug_on_start.h"
 #include "base/debug_util.h"
 #include "base/file_util.h"
-#include "base/gfx/size.h"
 #include "base/logging.h"
 #include "base/mac_util.h"
 #include "base/memory_debug.h"
@@ -23,7 +22,8 @@
 #include "base/stats_table.h"
 #include "base/string16.h"
 #include "base/string_piece.h"
-#include "base/string_util.h"
+#include "base/utf_string_conversions.h"
+#include "gfx/size.h"
 #include "grit/webkit_resources.h"
 #include "net/base/mime_util.h"
 #include "skia/ext/bitmap_platform_device.h"
@@ -37,6 +37,7 @@
 #include "webkit/tools/test_shell/resource.h"
 #include "webkit/tools/test_shell/simple_resource_loader_bridge.h"
 #include "webkit/tools/test_shell/test_navigation_controller.h"
+#include "webkit/tools/test_shell/test_webview_delegate.h"
 
 #include "third_party/skia/include/core/SkBitmap.h"
 
@@ -153,6 +154,10 @@ FilePath GetResourcesFilePath() {
 // Mac-specific stuff to do when the dtor is called. Nothing to do in our
 // case.
 void TestShell::PlatformCleanUp() {
+}
+
+void TestShell::EnableUIControl(UIControl control, bool is_enabled) {
+  // TODO(darin): Implement me.
 }
 
 // static

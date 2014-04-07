@@ -22,16 +22,6 @@
 #include "net/base/net_util.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
-#if defined(OS_LINUX) && __x86_64__
-#define MAYBE_SingleTabTest DISABLED_SingleTabTest
-#define MAYBE_FiveTabTest DISABLED_FiveTabTest
-#define MAYBE_TwelveTabTest DISABLED_TwelveTabTest
-#else
-#define MAYBE_SingleTabTest SingleTabTest
-#define MAYBE_FiveTabTest FiveTabTest
-#define MAYBE_TwelveTabTest TwelveTabTest
-#endif
-
 namespace {
 
 static const FilePath::CharType kTempDirName[] =
@@ -93,9 +83,9 @@ class MemoryTest : public UITest {
       launch_arguments_.AppendSwitch(switches::kNoEvents);
 
       // Get the specified user data dir (optional)
-      FilePath profile_dir = FilePath::FromWStringHack(
-          CommandLine::ForCurrentProcess()->GetSwitchValue(
-          switches::kUserDataDir));
+      FilePath profile_dir =
+          CommandLine::ForCurrentProcess()->GetSwitchValuePath(
+          switches::kUserDataDir);
 
       if (profile_dir.empty()) {
         if (!SetupTempDirectory(GetUserDataDirSource())) {
@@ -153,6 +143,8 @@ class MemoryTest : public UITest {
     int expected_tab_count = 1;
     for (unsigned counter = 0; counter < urls_length; ++counter) {
       std::string url = urls[counter];
+      
+      SCOPED_TRACE(url);
 
       if (url == "<PAUSE>") {  // Special command to delay on this page
         PlatformThread::Sleep(2000);
@@ -169,6 +161,7 @@ class MemoryTest : public UITest {
           expected_tab_count++;
           WaitUntilTabCount(expected_tab_count);
           tab = window->GetActiveTab();
+          EXPECT_NE(tab, static_cast<TabProxy*>(NULL));
           continue;
         }
 
@@ -178,10 +171,11 @@ class MemoryTest : public UITest {
 
       if (url == "<NEXTTAB>") {  // Special command to select the next tab.
         int tab_index, tab_count;
-        window->GetActiveTabIndex(&tab_index);
-        window->GetTabCount(&tab_count);
+        EXPECT_TRUE(window->GetActiveTabIndex(&tab_index));
+        EXPECT_TRUE(window->GetTabCount(&tab_count));
         tab_index = (tab_index + 1) % tab_count;
         tab = window->GetTab(tab_index);
+        EXPECT_NE(tab, static_cast<TabProxy*>(NULL));
         continue;
       }
 
@@ -194,7 +188,8 @@ class MemoryTest : public UITest {
         EXPECT_TRUE(automation()->OpenNewBrowserWindow(Browser::TYPE_NORMAL,
                                                        show_window_));
         int expected_window_count = window_count + 1;
-        automation()->WaitForWindowCountToBecome(expected_window_count, 500);
+        EXPECT_TRUE(automation()->WaitForWindowCountToBecome(
+            expected_window_count));
         EXPECT_TRUE(automation()->GetBrowserWindowCount(&window_count));
         EXPECT_EQ(expected_window_count, window_count);
 
@@ -205,6 +200,7 @@ class MemoryTest : public UITest {
         active_window = window_count - 1;
         window = automation()->GetBrowserWindow(active_window);
         tab = window->GetActiveTab();
+        EXPECT_NE(tab, static_cast<TabProxy*>(NULL));
         continue;
       }
 
@@ -214,15 +210,12 @@ class MemoryTest : public UITest {
         active_window = (active_window + 1) % window_count;
         window = automation()->GetBrowserWindow(active_window);
         tab = window->GetActiveTab();
+        EXPECT_NE(tab, static_cast<TabProxy*>(NULL));
         continue;
       }
 
-      const int kMaxWaitTime = 5000;
-      bool timed_out = false;
-      tab->NavigateToURLWithTimeout(GURL(urls[counter]), 1, kMaxWaitTime,
-                                    &timed_out);
-      if (timed_out)
-        printf("warning: %s timed out!\n", urls[counter].c_str());
+      EXPECT_EQ(AUTOMATION_MSG_NAVIGATION_SUCCESS,
+          tab->NavigateToURL(GURL(urls[counter])));
 
       // TODO(mbelshe): Bug 2953
       // The automation crashes periodically if we cycle too quickly.
@@ -231,132 +224,10 @@ class MemoryTest : public UITest {
     }
 
     size_t stop_size = base::GetSystemCommitCharge();
-    PrintResults(test_name, (stop_size - start_size) * 1024);
-  }
-
-  void PrintResults(const char* test_name, size_t commit_size) {
+    PrintIOPerfInfo(test_name);
     PrintMemoryUsageInfo(test_name);
-    std::string trace_name(test_name);
-    trace_name.append("_cc");
-
-    PrintResult("commit_charge", "", trace_name,
-                commit_size / 1024, "kb", true /* important */);
-  }
-
-  void PrintIOPerfInfo(const char* test_name) {
-    printf("\n");
-
-    int browser_process_pid = ChromeBrowserProcessId(user_data_dir_);
-    ASSERT_NE(browser_process_pid, -1);
-
-    ChromeProcessList chrome_processes(
-                          GetRunningChromeProcesses(user_data_dir_));
-
-    ChromeProcessList::const_iterator it;
-    for (it = chrome_processes.begin(); it != chrome_processes.end(); ++it) {
-      IoCounters io_counters;
-      base::ProcessHandle process_handle;
-      if (!base::OpenPrivilegedProcessHandle(*it, &process_handle)) {
-        NOTREACHED();
-      }
-
-      // TODO(sgk):  if/when base::ProcessMetrics can return real memory
-      // stats on mac, convert to:
-      //
-      // scoped_ptr<base::ProcessMetrics> process_metrics;
-      // process_metrics.reset(
-      //     base::ProcessMetrics::CreateProcessMetrics(process_handle));
-      scoped_ptr<ChromeTestProcessMetrics> process_metrics;
-      process_metrics.reset(
-          ChromeTestProcessMetrics::CreateProcessMetrics(process_handle));
-
-      bzero(&io_counters, sizeof(io_counters));
-      if (process_metrics.get()->GetIOCounters(&io_counters)) {
-        std::string chrome_name = (*it == browser_process_pid) ? "_b" : "_r";
-
-        // Print out IO performance.  We assume that the values can be
-        // converted to size_t (they're reported as ULONGLONG, 64-bit numbers).
-        PrintResult("read_op", chrome_name, test_name + chrome_name,
-                    static_cast<size_t>(io_counters.ReadOperationCount), "",
-                    false /* not important */);
-        PrintResult("write_op", chrome_name, test_name + chrome_name,
-                    static_cast<size_t>(io_counters.WriteOperationCount), "",
-                    false /* not important */);
-        PrintResult("other_op", chrome_name, test_name + chrome_name,
-                    static_cast<size_t>(io_counters.OtherOperationCount), "",
-                    false /* not important */);
-        PrintResult("read_byte", chrome_name, test_name + chrome_name,
-                    static_cast<size_t>(io_counters.ReadTransferCount / 1024),
-                    "kb", false /* not important */);
-        PrintResult("write_byte", chrome_name, test_name + chrome_name,
-                    static_cast<size_t>(io_counters.WriteTransferCount / 1024),
-                    "kb", false /* not important */);
-        PrintResult("other_byte", chrome_name, test_name + chrome_name,
-                    static_cast<size_t>(io_counters.OtherTransferCount / 1024),
-                    "kb", false /* not important */);
-      }
-
-      base::CloseProcessHandle(process_handle);
-    }
-  }
-
-  void PrintMemoryUsageInfo(const char* test_name) {
-    printf("\n");
-
-    int browser_process_pid = ChromeBrowserProcessId(user_data_dir_);
-    ASSERT_NE(browser_process_pid, -1);
-
-    ChromeProcessList chrome_processes(
-                          GetRunningChromeProcesses(user_data_dir_));
-
-    size_t browser_virtual_size = 0;
-    size_t browser_working_set_size = 0;
-    size_t virtual_size = 0;
-    size_t working_set_size = 0;
-    ChromeProcessList::const_iterator it;
-    for (it = chrome_processes.begin(); it != chrome_processes.end(); ++it) {
-      base::ProcessHandle process_handle;
-      if (!base::OpenPrivilegedProcessHandle(*it, &process_handle)) {
-        NOTREACHED();
-      }
-
-      // TODO(sgk):  if/when base::ProcessMetrics can return real memory
-      // stats on mac, convert to:
-      //
-      // scoped_ptr<base::ProcessMetrics> process_metrics;
-      // process_metrics.reset(
-      //     base::ProcessMetrics::CreateProcessMetrics(process_handle));
-      scoped_ptr<ChromeTestProcessMetrics> process_metrics;
-      process_metrics.reset(
-          ChromeTestProcessMetrics::CreateProcessMetrics(process_handle));
-
-      size_t current_virtual_size = process_metrics->GetPagefileUsage();
-      size_t current_working_set_size = process_metrics->GetWorkingSetSize();
-
-      if (*it == browser_process_pid) {
-        browser_virtual_size = current_virtual_size;
-        browser_working_set_size = current_working_set_size;
-      }
-      virtual_size += current_virtual_size;
-      working_set_size += current_working_set_size;
-    }
-
-    std::string trace_name(test_name);
-    PrintResult("vm_final_browser", "", trace_name + "_vm_b",
-                browser_virtual_size / 1024, "kb",
-                false /* not important */);
-    PrintResult("ws_final_browser", "", trace_name + "_ws_b",
-                browser_working_set_size / 1024, "kb",
-                false /* not important */);
-    PrintResult("vm_final_total", "", trace_name + "_vm",
-                virtual_size / 1024, "kb",
-                false /* not important */);
-    PrintResult("ws_final_total", "", trace_name + "_ws",
-                working_set_size / 1024, "kb",
-                true /* important */);
-    PrintResult("processes", "", trace_name + "_proc",
-                chrome_processes.size(), "",
-                false /* not important */);
+    PrintSystemCommitCharge(test_name, stop_size - start_size,
+                            true /* important */);
   }
 
  private:
@@ -643,16 +514,16 @@ std::string MembusterMemoryTest::source_urls_[] = {
 size_t MembusterMemoryTest::urls_length_ =
     arraysize(MembusterMemoryTest::source_urls_);
 
-TEST_F(GeneralMixMemoryTest, MAYBE_SingleTabTest) {
-  RunTest("1t", 1);
+TEST_F(GeneralMixMemoryTest, SingleTabTest) {
+  RunTest("_1t", 1);
 }
 
-TEST_F(GeneralMixMemoryTest, MAYBE_FiveTabTest) {
-  RunTest("5t", 5);
+TEST_F(GeneralMixMemoryTest, FiveTabTest) {
+  RunTest("_5t", 5);
 }
 
-TEST_F(GeneralMixMemoryTest, MAYBE_TwelveTabTest) {
-  RunTest("12t", 12);
+TEST_F(GeneralMixMemoryTest, TwelveTabTest) {
+  RunTest("_12t", 12);
 }
 
 // Commented out until the recorded cache data is added.

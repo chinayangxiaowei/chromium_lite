@@ -48,6 +48,8 @@ BEGIN
     VK_F6,          IDC_FOCUS_LOCATION,         VIRTKEY
     "D",            IDC_FOCUS_LOCATION,         VIRTKEY, ALT
     "L",            IDC_FOCUS_LOCATION,         VIRTKEY, CONTROL
+    VK_F10,         IDC_FOCUS_MENU_BAR,         VIRTKEY
+    VK_MENU,        IDC_FOCUS_MENU_BAR,         VIRTKEY
     "K",            IDC_FOCUS_SEARCH,           VIRTKEY, CONTROL
     "E",            IDC_FOCUS_SEARCH,           VIRTKEY, CONTROL
     "T",            IDC_FOCUS_TOOLBAR,          VIRTKEY, SHIFT, ALT
@@ -85,9 +87,10 @@ BEGIN
     "O",            IDC_OPEN_FILE,              VIRTKEY, CONTROL
     "P",            IDC_PRINT,                  VIRTKEY, CONTROL
     "R",            IDC_RELOAD,                 VIRTKEY, CONTROL
+    "R",            IDC_RELOAD_IGNORING_CACHE,  VIRTKEY, CONTROL, SHIFT
     VK_F5,          IDC_RELOAD,                 VIRTKEY
-    VK_F5,          IDC_RELOAD,                 VIRTKEY, CONTROL
-    VK_F5,          IDC_RELOAD,                 VIRTKEY, SHIFT
+    VK_F5,          IDC_RELOAD_IGNORING_CACHE,  VIRTKEY, CONTROL
+    VK_F5,          IDC_RELOAD_IGNORING_CACHE,  VIRTKEY, SHIFT
     VK_HOME,        IDC_HOME,                   VIRTKEY, ALT
     "T",            IDC_RESTORE_TAB,            VIRTKEY, CONTROL, SHIFT
     "S",            IDC_SAVE_PAGE,              VIRTKEY, CONTROL
@@ -134,8 +137,22 @@ BEGIN
     VK_OEM_PLUS,    IDC_ZOOM_PLUS,              VIRTKEY, CONTROL
     VK_OEM_PLUS,    IDC_ZOOM_PLUS,              VIRTKEY, CONTROL, SHIFT
     VK_ADD,         IDC_ZOOM_PLUS,              VIRTKEY, CONTROL
+    "A",            IDC_AUTOFILL_DEFAULT,       VIRTKEY, CONTROL, SHIFT
 END
 
+IDR_CHROMEFRAME ACCELERATORS
+BEGIN
+    "I",            IDC_DEV_TOOLS,              VIRTKEY, CONTROL, SHIFT
+    "J",            IDC_DEV_TOOLS_CONSOLE,      VIRTKEY, CONTROL, SHIFT
+    VK_OEM_MINUS,   IDC_ZOOM_MINUS,             VIRTKEY, CONTROL
+    VK_OEM_MINUS,   IDC_ZOOM_MINUS,             VIRTKEY, CONTROL, SHIFT
+    VK_SUBTRACT,    IDC_ZOOM_MINUS,             VIRTKEY, CONTROL
+    "0",            IDC_ZOOM_NORMAL,            VIRTKEY, CONTROL
+    VK_NUMPAD0,     IDC_ZOOM_NORMAL,            VIRTKEY, CONTROL
+    VK_OEM_PLUS,    IDC_ZOOM_PLUS,              VIRTKEY, CONTROL
+    VK_OEM_PLUS,    IDC_ZOOM_PLUS,              VIRTKEY, CONTROL, SHIFT
+    VK_ADD,         IDC_ZOOM_PLUS,              VIRTKEY, CONTROL
+END
 
 #ifdef APSTUDIO_INVOKED
 /////////////////////////////////////////////////////////////////////////////

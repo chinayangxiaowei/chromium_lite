@@ -11,7 +11,7 @@
 #include "base/rand_util.h"
 #include "chrome/browser/bookmarks/bookmark_model.h"
 #include "chrome/browser/bookmarks/bookmark_utils.h"
-#include "chrome/test/live_sync/live_bookmarks_sync_test.h"
+#include "chrome/test/live_sync/live_sync_test.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/skia/include/core/SkBitmap.h"
 
@@ -29,13 +29,13 @@ void BookmarkModelVerifier::ExpectBookmarkInfoMatch(
 }
 
 BookmarkModelVerifier::BookmarkModelVerifier() {
-  verifier_profile_.reset(LiveBookmarksSyncTest::MakeProfile(L"verifier"));
+  verifier_profile_.reset(LiveSyncTest::MakeProfile(L"verifier"));
   verifier_ = verifier_profile_->GetBookmarkModel();
 }
 
 BookmarkModelVerifier* BookmarkModelVerifier::Create() {
   BookmarkModelVerifier* v = new BookmarkModelVerifier();
-  LiveBookmarksSyncTest::BlockUntilLoaded(v->verifier_);
+  LiveSyncTest::BlockUntilLoaded(v->verifier_);
   return v;
 }
 
@@ -163,6 +163,7 @@ const BookmarkNode* BookmarkModelVerifier::AddNonEmptyGroup(
       url.append(".com");
       const BookmarkNode* child_nofavicon_bm =
          AddURL(model, bm_folder, child_index, child_bm_title, GURL(url));
+      EXPECT_TRUE(child_nofavicon_bm != NULL);
     } else {
       // Remaining % of time - Add Bookmark folders
       wstring child_bmfolder_title(bm_folder->GetTitle());
@@ -170,6 +171,7 @@ const BookmarkNode* BookmarkModelVerifier::AddNonEmptyGroup(
       child_bmfolder_title.append(IntToWString(index));
       const BookmarkNode* child_bm_folder =
           AddGroup(model, bm_folder, child_index, child_bmfolder_title);
+      EXPECT_TRUE(child_bm_folder != NULL);
     }
   }
   return bm_folder;

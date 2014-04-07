@@ -7,13 +7,14 @@
 #include "app/l10n_util.h"
 #include "base/file_version_info.h"
 #include "base/process_util.h"
-#include "base/string_util.h"
+#include "base/utf_string_conversions.h"
+#include "chrome/browser/child_process_host.h"
 #include "chrome/browser/chrome_thread.h"
 #include "chrome/browser/renderer_host/backing_store_manager.h"
 #include "chrome/browser/renderer_host/render_process_host.h"
+#include "chrome/browser/renderer_host/render_view_host.h"
 #include "chrome/browser/tab_contents/navigation_entry.h"
 #include "chrome/browser/tab_contents/tab_contents.h"
-#include "chrome/common/child_process_host.h"
 #include "chrome/common/url_constants.h"
 #include "grit/chromium_strings.h"
 
@@ -92,7 +93,9 @@ void MemoryDetails::CollectChildInfoOnUIThread() {
          RenderProcessHost::AllHostsIterator()); !renderer_iter.IsAtEnd();
          renderer_iter.Advance()) {
       DCHECK(renderer_iter.GetCurrentValue());
-      if (process.pid !=
+      // Ignore processes that don't have a connection, such as crashed tabs or
+      // phantom tabs.
+      if (!renderer_iter.GetCurrentValue()->HasConnection() || process.pid !=
               base::GetProcId(renderer_iter.GetCurrentValue()->GetHandle())) {
         continue;
       }
@@ -209,8 +212,11 @@ void MemoryDetails::UpdateHistograms() {
       case ChildProcessInfo::SANDBOX_HELPER_PROCESS:
         UMA_HISTOGRAM_MEMORY_KB("Memory.SandboxHelper", sample);
         break;
-      case ChildProcessInfo::NACL_PROCESS:
+      case ChildProcessInfo::NACL_LOADER_PROCESS:
         UMA_HISTOGRAM_MEMORY_KB("Memory.NativeClient", sample);
+        break;
+      case ChildProcessInfo::NACL_BROKER_PROCESS:
+        UMA_HISTOGRAM_MEMORY_KB("Memory.NativeClientBroker", sample);
         break;
       default:
         NOTREACHED();

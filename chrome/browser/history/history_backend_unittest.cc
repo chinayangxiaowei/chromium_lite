@@ -1,19 +1,21 @@
-// Copyright (c) 2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "app/gfx/codec/jpeg_codec.h"
 #include "base/file_path.h"
 #include "base/file_util.h"
 #include "base/path_service.h"
+#include "base/ref_counted.h"
 #include "base/scoped_ptr.h"
 #include "chrome/browser/bookmarks/bookmark_model.h"
 #include "chrome/browser/history/history_backend.h"
+#include "chrome/browser/history/history_notifications.h"
 #include "chrome/browser/history/in_memory_history_backend.h"
 #include "chrome/browser/history/in_memory_database.h"
 #include "chrome/common/notification_service.h"
 #include "chrome/common/thumbnail_score.h"
 #include "chrome/tools/profiles/thumbnail-inl.h"
+#include "gfx/codec/jpeg_codec.h"
 #include "googleurl/src/gurl.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
@@ -182,12 +184,12 @@ TEST_F(HistoryBackendTest, DeleteAll) {
 
   std::vector<unsigned char> data;
   data.push_back('1');
-  EXPECT_TRUE(backend_->thumbnail_db_->SetFavIcon(
-                  favicon1, data, Time::Now()));
+  EXPECT_TRUE(backend_->thumbnail_db_->SetFavIcon(favicon1,
+      new RefCountedBytes(data), Time::Now()));
 
   data[0] = '2';
   EXPECT_TRUE(backend_->thumbnail_db_->SetFavIcon(
-                  favicon2, data, Time::Now()));
+                  favicon2, new RefCountedBytes(data), Time::Now()));
 
   // First visit two URLs.
   URLRow row1(GURL("http://www.google.com/"));
@@ -310,11 +312,11 @@ TEST_F(HistoryBackendTest, URLsNoLongerBookmarked) {
   std::vector<unsigned char> data;
   data.push_back('1');
   EXPECT_TRUE(backend_->thumbnail_db_->SetFavIcon(
-                  favicon1, data, Time::Now()));
+                  favicon1, new RefCountedBytes(data), Time::Now()));
 
   data[0] = '2';
   EXPECT_TRUE(backend_->thumbnail_db_->SetFavIcon(
-                  favicon2, data, Time::Now()));
+                  favicon2, new RefCountedBytes(data), Time::Now()));
 
   // First visit two URLs.
   URLRow row1(GURL("http://www.google.com/"));
@@ -464,7 +466,9 @@ TEST_F(HistoryBackendTest, KeywordGenerated) {
   EXPECT_TRUE(visits.empty());
 
   // Expire the visits.
-  backend_->expire_backend()->ExpireHistoryBetween(visit_time, Time::Now());
+  std::set<GURL> restrict_urls;
+  backend_->expire_backend()->ExpireHistoryBetween(restrict_urls,
+                                                   visit_time, Time::Now());
 
   // The visit should have been nuked.
   visits.clear();
@@ -506,7 +510,8 @@ TEST_F(HistoryBackendTest, ImportedFaviconsTest) {
   FavIconID favicon1 = backend_->thumbnail_db_->AddFavIcon(favicon_url1);
   std::vector<unsigned char> data;
   data.push_back('1');
-  EXPECT_TRUE(backend_->thumbnail_db_->SetFavIcon(favicon1, data, Time::Now()));
+  EXPECT_TRUE(backend_->thumbnail_db_->SetFavIcon(favicon1,
+      RefCountedBytes::TakeVector(&data), Time::Now()));
   URLRow row1(GURL("http://www.google.com/"));
   row1.set_favicon_id(favicon1);
   row1.set_visit_count(1);
@@ -559,6 +564,28 @@ TEST_F(HistoryBackendTest, ImportedFaviconsTest) {
   backend_->SetImportedFavicons(favicons);
   EXPECT_FALSE(backend_->db_->GetRowForURL(url3, &url_row3) == 0);
   EXPECT_TRUE(url_row3.visit_count() == 0);
+}
+
+TEST_F(HistoryBackendTest, StripUsernamePasswordTest) {
+  ASSERT_TRUE(backend_.get());
+
+  GURL url("http://anyuser:anypass@www.google.com");
+  GURL stripped_url("http://www.google.com");
+
+  // Clear all history.
+  backend_->DeleteAllHistory();
+
+  // Visit the url with username, password.
+  backend_->AddPageVisit(url, base::Time::Now(), 0,
+    PageTransition::GetQualifier(PageTransition::TYPED));
+
+  // Fetch the row information about stripped url from history db.
+  VisitVector visits;
+  URLID row_id = backend_->db_->GetRowForURL(stripped_url, NULL);
+  backend_->db_->GetVisitsForURL(row_id, &visits);
+
+  // Check if stripped url is stored in database.
+  ASSERT_EQ(1U, visits.size());
 }
 
 }  // namespace history

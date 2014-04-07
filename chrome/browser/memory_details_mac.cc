@@ -1,4 +1,4 @@
-// Copyright (c) 2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -16,13 +16,13 @@
 #include "base/process_util.h"
 #include "base/thread.h"
 #include "chrome/browser/browser_process.h"
+#include "chrome/browser/child_process_host.h"
 #include "chrome/browser/chrome_thread.h"
 #include "chrome/browser/process_info_snapshot.h"
 #include "chrome/browser/renderer_host/backing_store_manager.h"
 #include "chrome/browser/renderer_host/render_process_host.h"
 #include "chrome/browser/tab_contents/navigation_entry.h"
 #include "chrome/browser/tab_contents/tab_contents.h"
-#include "chrome/common/child_process_host.h"
 #include "chrome/common/chrome_constants.h"
 #include "chrome/common/url_constants.h"
 #include "grit/chromium_strings.h"
@@ -104,9 +104,9 @@ void MemoryDetails::CollectProcessData(
     base::NamedProcessIterator process_it(process_data_[index].process_name,
                                           NULL);
 
-    while (const ProcessEntry* process_entry = process_it.NextProcessEntry()) {
-      pids_by_browser[index].push_back(process_entry->pid);
-      all_pids.push_back(process_entry->pid);
+    while (const base::ProcessEntry* entry = process_it.NextProcessEntry()) {
+      pids_by_browser[index].push_back(entry->pid);
+      all_pids.push_back(entry->pid);
     }
   }
 
@@ -115,9 +115,9 @@ void MemoryDetails::CollectProcessData(
   {
     base::NamedProcessIterator helper_it(chrome::kHelperProcessExecutableName,
                                          NULL);
-    while (const ProcessEntry* process_entry = helper_it.NextProcessEntry()) {
-      helper_pids.push_back(process_entry->pid);
-      all_pids.push_back(process_entry->pid);
+    while (const base::ProcessEntry* entry = helper_it.NextProcessEntry()) {
+      helper_pids.push_back(entry->pid);
+      all_pids.push_back(entry->pid);
     }
   }
 

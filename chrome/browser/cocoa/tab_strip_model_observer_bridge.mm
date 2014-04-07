@@ -1,4 +1,4 @@
-// Copyright (c) 2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -61,10 +61,9 @@ void TabStripModelObserverBridge::TabSelectedAt(TabContents* old_contents,
 
 void TabStripModelObserverBridge::TabMoved(TabContents* contents,
                                            int from_index,
-                                           int to_index,
-                                           bool pinned_state_changed) {
+                                           int to_index) {
   if ([controller_ respondsToSelector:
-          @selector(tabMovedWithContents:fromIndex:toIndex:)]) {
+       @selector(tabMovedWithContents:fromIndex:toIndex:)]) {
     [controller_ tabMovedWithContents:contents
                             fromIndex:from_index
                               toIndex:to_index];
@@ -74,16 +73,25 @@ void TabStripModelObserverBridge::TabMoved(TabContents* contents,
 void TabStripModelObserverBridge::TabChangedAt(TabContents* contents,
                                                int index,
                                                TabChangeType change_type) {
-  if (change_type == TITLE_NOT_LOADING) {
-    // TODO(sky): make this work.
-    // We'll receive another notification of the change asynchronously.
-    return;
-  }
   if ([controller_ respondsToSelector:
-          @selector(tabChangedWithContents:atIndex:loadingOnly:)]) {
+          @selector(tabChangedWithContents:atIndex:changeType:)]) {
     [controller_ tabChangedWithContents:contents
                                 atIndex:index
-                            loadingOnly:change_type == LOADING_ONLY ? YES : NO];
+                             changeType:change_type];
+  }
+}
+
+void TabStripModelObserverBridge::TabReplacedAt(TabContents* old_contents,
+                                                TabContents* new_contents,
+                                                int index) {
+  TabChangedAt(new_contents, index, ALL);
+}
+
+void TabStripModelObserverBridge::TabMiniStateChanged(TabContents* contents,
+                                                      int index) {
+  if ([controller_ respondsToSelector:
+          @selector(tabMiniStateChangedWithContents:atIndex:)]) {
+    [controller_ tabMiniStateChangedWithContents:contents atIndex:index];
   }
 }
 

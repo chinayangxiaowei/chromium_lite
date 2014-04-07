@@ -1,4 +1,4 @@
-// Copyright (c) 2006-2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,6 +8,7 @@
 #include <shellapi.h>
 #include <shlobj.h>
 
+#include <set>
 #include <sstream>
 
 // TODO(port): trim this include list once first run has been refactored fully.
@@ -27,17 +28,23 @@
 #include "base/string_util.h"
 #include "chrome/common/chrome_constants.h"
 #include "chrome/common/chrome_switches.h"
+#include "chrome/common/notification_registrar.h"
+#include "chrome/common/notification_service.h"
+#include "chrome/common/notification_type.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/browser/browser_process.h"
+#include "chrome/browser/extensions/extensions_service.h"
+#include "chrome/browser/extensions/extension_updater.h"
 #include "chrome/browser/hang_monitor/hung_window_detector.h"
 #include "chrome/browser/importer/importer.h"
+#include "chrome/browser/importer/importer_data_types.h"
+#include "chrome/browser/pref_service.h"
 #include "chrome/browser/process_singleton.h"
 #include "chrome/browser/profile.h"
 #include "chrome/browser/profile_manager.h"
 #include "chrome/browser/shell_integration.h"
 #include "chrome/browser/views/first_run_view.h"
 #include "chrome/common/chrome_paths.h"
-#include "chrome/common/pref_service.h"
 #include "chrome/common/result_codes.h"
 #include "chrome/installer/util/browser_distribution.h"
 #include "chrome/installer/util/google_update_constants.h"
@@ -92,7 +99,7 @@ FilePath GetDefaultPrefFilePath(bool create_profile_dir,
         return FilePath();
     }
   }
-  return ProfileManager::GetDefaultProfilePath(default_pref_dir);
+  return ProfileManager::GetProfilePrefsPath(default_pref_dir);
 }
 
 bool InvokeGoogleUpdateForRename() {
@@ -151,6 +158,51 @@ bool WriteEULAtoTempFile(FilePath* eula_path) {
   return (file_util::WriteFile(*eula_path, terms.c_str(), terms.size()) > 0);
 }
 
+// Helper class that performs delayed first-run tasks that need more of the
+// chrome infrastructure to be up an running before they can be attempted.
+class FirsRunDelayedTasks : public NotificationObserver {
+ public:
+  enum Tasks {
+    NO_TASK,
+    INSTALL_EXTENSIONS
+  };
+
+  explicit FirsRunDelayedTasks(Tasks task) {
+    if (task == INSTALL_EXTENSIONS) {
+      registrar_.Add(this, NotificationType::EXTENSIONS_READY,
+                     NotificationService::AllSources());
+    }
+    registrar_.Add(this, NotificationType::BROWSER_CLOSED,
+                   NotificationService::AllSources());
+  }
+
+  virtual void Observe(NotificationType type,
+                       const NotificationSource& source,
+                       const NotificationDetails& details) {
+    // After processing the notification we always delete ourselves.
+    if (type.value == NotificationType::EXTENSIONS_READY)
+      DoExtensionWork(Source<Profile>(source).ptr()->GetExtensionsService());
+    delete this;
+    return;
+  }
+
+ private:
+  // Private ctor forces it to be created only in the heap.
+  ~FirsRunDelayedTasks() {}
+
+  // The extension work is to basically trigger an extension update check.
+  // If the extension specified in the master pref is older than the live
+  // extension it will get updated which is the same as get it installed.
+  void DoExtensionWork(ExtensionsService* service) {
+    if (!service)
+      return;
+    service->updater()->CheckNow();
+    return;
+  }
+
+  NotificationRegistrar registrar_;
+};
+
 }  // namespace
 
 bool FirstRun::CreateChromeDesktopShortcut() {
@@ -177,11 +229,7 @@ bool FirstRun::CreateChromeQuickLaunchShortcut() {
 
 bool FirstRun::ProcessMasterPreferences(const FilePath& user_data_dir,
                                         const FilePath& master_prefs_path,
-                                        std::vector<std::wstring>* new_tabs,
-                                        int* ping_delay,
-                                        bool* homepage_defined,
-                                        int* do_import_items,
-                                        int* dont_import_items) {
+                                        MasterPrefs* out_prefs) {
   DCHECK(!user_data_dir.empty());
   FilePath master_prefs = master_prefs_path;
   if (master_prefs.empty()) {
@@ -189,7 +237,8 @@ bool FirstRun::ProcessMasterPreferences(const FilePath& user_data_dir,
     // TODO(port): port installer_util and use this.
     if (!PathService::Get(base::DIR_EXE, &master_prefs))
       return true;
-    master_prefs = master_prefs.Append(installer_util::kDefaultMasterPrefs);
+    master_prefs =
+        master_prefs.AppendASCII(installer_util::kDefaultMasterPrefs);
   }
 
   scoped_ptr<DictionaryValue> prefs(
@@ -197,18 +246,18 @@ bool FirstRun::ProcessMasterPreferences(const FilePath& user_data_dir,
   if (!prefs.get())
     return true;
 
-  if (new_tabs)
-    *new_tabs = installer_util::GetFirstRunTabs(prefs.get());
-  if (ping_delay) {
-    if (!installer_util::GetDistroIntegerPreference(prefs.get(),
-        installer_util::master_preferences::kDistroPingDelay, ping_delay)) {
-      // 90 seconds is the default that we want to use in case master
-      // preferences is missing, corrupt or ping_delay is missing.
-      *ping_delay = 90;
-    }
+  out_prefs->new_tabs = installer_util::GetFirstRunTabs(prefs.get());
+
+  if (!installer_util::GetDistroIntegerPreference(prefs.get(),
+      installer_util::master_preferences::kDistroPingDelay,
+      &out_prefs->ping_delay)) {
+    // 90 seconds is the default that we want to use in case master
+    // preferences is missing, corrupt or ping_delay is missing.
+    out_prefs->ping_delay = 90;
   }
-  if (homepage_defined)
-    prefs->GetBoolean(prefs::kHomePage, homepage_defined);
+
+  std::string not_used;
+  out_prefs->homepage_defined = prefs->GetString(prefs::kHomePage, &not_used);
 
   bool value = false;
   if (installer_util::GetDistroBooleanPreference(prefs.get(),
@@ -251,6 +300,12 @@ bool FirstRun::ProcessMasterPreferences(const FilePath& user_data_dir,
   if (!file_util::CopyFile(master_prefs, user_prefs))
     return true;
 
+  DictionaryValue* extensions = 0;
+  if (installer_util::HasExtensionsBlock(prefs.get(), &extensions)) {
+    LOG(INFO) << "Extensions block found in master preferences";
+    new FirsRunDelayedTasks(FirsRunDelayedTasks::INSTALL_EXTENSIONS);
+  }
+
   // Add a special exception for import_search_engine preference.
   // Even though we skip all other import_* preferences below, if
   // skip-first-run-ui is not specified, we make exception for this one
@@ -259,12 +314,21 @@ bool FirstRun::ProcessMasterPreferences(const FilePath& user_data_dir,
   if (installer_util::GetDistroBooleanPreference(prefs.get(),
       installer_util::master_preferences::kDistroImportSearchPref, &value)) {
     if (value) {
-      import_items += SEARCH_ENGINES;
-      if (do_import_items)
-        *do_import_items += SEARCH_ENGINES;
-    } else if (dont_import_items) {
-        *dont_import_items += SEARCH_ENGINES;
+      import_items += importer::SEARCH_ENGINES;
+      out_prefs->do_import_items += importer::SEARCH_ENGINES;
+    } else {
+      out_prefs->dont_import_items += importer::SEARCH_ENGINES;
     }
+  }
+
+  if (InSearchExperimentLocale() &&
+      installer_util::GetDistroBooleanPreference(prefs.get(),
+      installer_util::master_preferences::kSearchEngineExperimentPref,
+      &value) && value) {
+    // Set the first run dialog to include the search choice window.
+    out_prefs->run_search_engine_experiment = true;
+    // Set the first run bubble to minimal.
+    FirstRun::SetMinimalFirstRunBubblePref();
   }
 
   // Note we are skipping all other master preferences if skip-first-run-ui
@@ -292,23 +356,28 @@ bool FirstRun::ProcessMasterPreferences(const FilePath& user_data_dir,
   if (installer_util::GetDistroBooleanPreference(prefs.get(),
       installer_util::master_preferences::kDistroImportHistoryPref, &value) &&
       value)
-    import_items += HISTORY;
+    import_items += importer::HISTORY;
   if (installer_util::GetDistroBooleanPreference(prefs.get(),
       installer_util::master_preferences::kDistroImportBookmarksPref, &value) &&
       value)
-    import_items += FAVORITES;
+    import_items += importer::FAVORITES;
   if (installer_util::GetDistroBooleanPreference(prefs.get(),
       installer_util::master_preferences::kDistroImportHomePagePref, &value) &&
       value)
-    import_items += HOME_PAGE;
+    import_items += importer::HOME_PAGE;
 
-  if (import_items) {
+  std::wstring import_bookmarks_path;
+  installer_util::GetDistroStringPreference(prefs.get(),
+      installer_util::master_preferences::kDistroImportBookmarksFromFilePref,
+      &import_bookmarks_path);
+
+  if (import_items || !import_bookmarks_path.empty()) {
     // There is something to import from the default browser. This launches
     // the importer process and blocks until done or until it fails.
     scoped_refptr<ImporterHost> importer_host = new ImporterHost();
     if (!FirstRun::ImportSettings(NULL,
           importer_host->GetSourceProfileInfoAt(0).browser_type,
-          import_items, NULL)) {
+          import_items, import_bookmarks_path, NULL)) {
       LOG(WARNING) << "silent import failed";
     }
   }
@@ -386,20 +455,43 @@ bool Upgrade::SwapNewChromeExeIfPresent() {
   return false;
 }
 
+// static
+bool Upgrade::DoUpgradeTasks(const CommandLine& command_line) {
+  if (!Upgrade::SwapNewChromeExeIfPresent())
+    return false;
+  // At this point the chrome.exe has been swapped with the new one.
+  if (!Upgrade::RelaunchChromeBrowser(command_line)) {
+    // The re-launch fails. Feel free to panic now.
+    NOTREACHED();
+  }
+  return true;
+}
+
+// static
+bool Upgrade::IsUpdatePendingRestart() {
+  std::wstring new_chrome_exe;
+  if (!GetNewerChromeFile(&new_chrome_exe))
+    return false;
+  return file_util::PathExists(FilePath::FromWStringHack(new_chrome_exe));
+}
+
 bool OpenFirstRunDialog(Profile* profile,
                         bool homepage_defined,
                         int import_items,
                         int dont_import_items,
+                        bool search_engine_experiment,
                         ProcessSingleton* process_singleton) {
   DCHECK(profile);
   DCHECK(process_singleton);
 
   // We need the FirstRunView to outlive its parent, as we retrieve the accept
   // state from it after the dialog has been closed.
-  scoped_ptr<FirstRunView> first_run_view(new FirstRunView(profile,
-                                                           homepage_defined,
-                                                           import_items,
-                                                           dont_import_items));
+  scoped_ptr<FirstRunView> first_run_view(
+      new FirstRunView(profile,
+                       homepage_defined,
+                       import_items,
+                       dont_import_items,
+                       search_engine_experiment));
   first_run_view->set_parent_owned(false);
   views::Window* first_run_ui = views::Window::CreateChromeWindow(
       NULL, gfx::Rect(), first_run_view.get());
@@ -511,43 +603,6 @@ class HungImporterMonitor : public WorkerThreadTicker::Callback {
   DISALLOW_COPY_AND_ASSIGN(HungImporterMonitor);
 };
 
-// This class is used by FirstRun::ImportNow to get notified of the outcome of
-// the import operation. It differs from ImportProcessRunner in that this
-// class executes in the context of importing child process.
-// The values that it handles are meant to be used as the process exit code.
-class FirstRunImportObserver : public ImportObserver {
- public:
-  FirstRunImportObserver()
-      : loop_running_(false), import_result_(ResultCodes::NORMAL_EXIT) {
-  }
-  int import_result() const {
-    return import_result_;
-  }
-  virtual void ImportCanceled() {
-    import_result_ = ResultCodes::IMPORTER_CANCEL;
-    Finish();
-  }
-  virtual void ImportComplete() {
-    import_result_ = ResultCodes::NORMAL_EXIT;
-    Finish();
-  }
-
-  void RunLoop() {
-    loop_running_ = true;
-    MessageLoop::current()->Run();
-  }
-
- private:
-  void Finish() {
-    if (loop_running_)
-      MessageLoop::current()->Quit();
-  }
-
-  bool loop_running_;
-  int import_result_;
-  DISALLOW_COPY_AND_ASSIGN(FirstRunImportObserver);
-};
-
 std::wstring EncodeImportParams(int browser_type, int options, HWND window) {
   return StringPrintf(L"%d@%d@%d", browser_type, options, window);
 }
@@ -572,7 +627,9 @@ bool DecodeImportParams(const std::wstring& encoded,
 }  // namespace
 
 bool FirstRun::ImportSettings(Profile* profile, int browser_type,
-                              int items_to_import, HWND parent_window) {
+                              int items_to_import,
+                              const std::wstring& import_bookmarks_path,
+                              HWND parent_window) {
   const CommandLine& cmdline = *CommandLine::ForCurrentProcess();
   CommandLine import_cmd(cmdline.GetProgram());
   // Propagate user data directory switch.
@@ -589,11 +646,23 @@ bool FirstRun::ImportSettings(Profile* profile, int browser_type,
       switches::kLang,
       ASCIIToWide(g_browser_process->GetApplicationLocale()));
 
-  import_cmd.CommandLine::AppendSwitchWithValue(switches::kImport,
-      EncodeImportParams(browser_type, items_to_import, parent_window));
+  if (items_to_import) {
+    import_cmd.CommandLine::AppendSwitchWithValue(switches::kImport,
+        EncodeImportParams(browser_type, items_to_import, parent_window));
+  }
+
+  if (!import_bookmarks_path.empty()) {
+    import_cmd.CommandLine::AppendSwitchWithValue(
+        switches::kImportFromFile, import_bookmarks_path.c_str());
+  }
 
   if (cmdline.HasSwitch(switches::kChromeFrame)) {
     import_cmd.AppendSwitch(switches::kChromeFrame);
+  }
+
+  if (cmdline.HasSwitch(switches::kCountry)) {
+    import_cmd.AppendSwitchWithValue(switches::kCountry,
+      cmdline.GetSwitchValueASCII(switches::kCountry));
   }
 
   // Time to launch the process that is going to do the import.
@@ -619,7 +688,15 @@ bool FirstRun::ImportSettings(Profile* profile, int browser_type,
   return (import_runner.exit_code() == ResultCodes::NORMAL_EXIT);
 }
 
-int FirstRun::ImportNow(Profile* profile, const CommandLine& cmdline) {
+bool FirstRun::ImportSettings(Profile* profile, int browser_type,
+                              int items_to_import,
+                              HWND parent_window) {
+  return ImportSettings(profile, browser_type, items_to_import,
+                        std::wstring(), parent_window);
+}
+
+int FirstRun::ImportFromBrowser(Profile* profile,
+                                const CommandLine& cmdline) {
   std::wstring import_info = cmdline.GetSwitchValue(switches::kImport);
   if (import_info.empty()) {
     NOTREACHED();
@@ -654,16 +731,17 @@ int FirstRun::ImportNow(Profile* profile, const CommandLine& cmdline) {
   return observer.import_result();
 }
 
-bool FirstRun::SetOEMFirstRunBubblePref() {
-  PrefService* local_state = g_browser_process->local_state();
-  if (!local_state)
-    return false;
-  if (!local_state->IsPrefRegistered(prefs::kShouldUseOEMFirstRunBubble)) {
-    local_state->RegisterBooleanPref(prefs::kShouldUseOEMFirstRunBubble,
-                                     false);
-    local_state->SetBoolean(prefs::kShouldUseOEMFirstRunBubble, true);
+// static
+bool FirstRun::InSearchExperimentLocale() {
+  static std::set<std::string> allowed_locales;
+  if (allowed_locales.empty()) {
+    // List of locales in which search experiment can be run.
+    allowed_locales.insert("en-GB");
+    allowed_locales.insert("en-US");
   }
-  return true;
+  const std::string app_locale = g_browser_process->GetApplicationLocale();
+  std::set<std::string>::iterator locale = allowed_locales.find(app_locale);
+  return locale != allowed_locales.end();
 }
 
 //////////////////////////////////////////////////////////////////////////
@@ -934,6 +1012,12 @@ class TryChromeDialog : public views::ButtonListener,
 }  // namespace
 
 Upgrade::TryResult Upgrade::ShowTryChromeDialog(size_t version) {
+  if (version > 10000) {
+    // This is a test value. We want to make sure we exercise
+    // returning this early. See EarlyReturnTest test harness.
+    return Upgrade::TD_NOT_NOW;
+  }
   TryChromeDialog td;
   return td.ShowModal();
 }
+

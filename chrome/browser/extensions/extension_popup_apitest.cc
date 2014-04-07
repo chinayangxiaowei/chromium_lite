@@ -6,9 +6,11 @@
 #include "chrome/browser/extensions/extension_apitest.h"
 #include "chrome/common/chrome_switches.h"
 
-// Flaky, http://crbug.com/27271.
-IN_PROC_BROWSER_TEST_F(ExtensionApiTest, FLAKY_Popup) {
+IN_PROC_BROWSER_TEST_F(ExtensionApiTest, Popup) {
   CommandLine::ForCurrentProcess()->AppendSwitch(
       switches::kEnableExperimentalExtensionApis);
-  ASSERT_TRUE(RunExtensionTest("popup_api")) << message_;
+  CommandLine::ForCurrentProcess()->AppendSwitch(
+      switches::kEnableExtensionToolstrips);
+
+  ASSERT_TRUE(RunExtensionTest("popup")) << message_;
 }

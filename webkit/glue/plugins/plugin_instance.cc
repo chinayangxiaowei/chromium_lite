@@ -9,15 +9,19 @@
 #include "base/file_util.h"
 #include "base/message_loop.h"
 #include "base/string_util.h"
-#include "webkit/glue/glue_util.h"
-#include "webkit/glue/webplugin.h"
-#include "webkit/glue/webplugin_delegate.h"
+#include "base/utf_string_conversions.h"
 #include "webkit/glue/webkit_glue.h"
 #include "webkit/glue/plugins/plugin_host.h"
 #include "webkit/glue/plugins/plugin_lib.h"
 #include "webkit/glue/plugins/plugin_stream_url.h"
 #include "webkit/glue/plugins/plugin_string_stream.h"
+#include "webkit/glue/plugins/webplugin.h"
+#include "webkit/glue/plugins/webplugin_delegate.h"
 #include "net/base/escape.h"
+
+#if defined(OS_MACOSX)
+#include <ApplicationServices/ApplicationServices.h>
+#endif
 
 namespace NPAPI {
 
@@ -33,8 +37,17 @@ PluginInstance::PluginInstance(PluginLib *plugin, const std::string &mime_type)
       mime_type_(mime_type),
       use_mozilla_user_agent_(false),
 #if defined (OS_MACOSX)
-      drawing_model_(0),
-      event_model_(0),
+#ifdef NP_NO_QUICKDRAW
+      drawing_model_(NPDrawingModelCoreGraphics),
+#else
+      drawing_model_(NPDrawingModelQuickDraw),
+#endif
+#ifdef NP_NO_CARBON
+      event_model_(NPEventModelCocoa),
+#else
+      event_model_(NPEventModelCarbon),
+#endif
+      currently_handled_event_(NULL),
 #endif
       message_loop_(MessageLoop::current()),
       load_manually_(false),
@@ -62,7 +75,7 @@ PluginInstance::~PluginInstance() {
     plugin_->CloseInstance();
 }
 
-PluginStreamUrl* PluginInstance::CreateStream(int resource_id,
+PluginStreamUrl* PluginInstance::CreateStream(unsigned long resource_id,
                                               const GURL& url,
                                               const std::string& mime_type,
                                               int notify_id) {
@@ -383,8 +396,9 @@ void PluginInstance::DidManualLoadFail() {
 
 void PluginInstance::PluginThreadAsyncCall(void (*func)(void *),
                                            void *user_data) {
-  message_loop_->PostTask(FROM_HERE, NewRunnableMethod(
-      this, &PluginInstance::OnPluginThreadAsyncCall, func, user_data));
+  message_loop_->PostTask(
+      FROM_HERE, NewRunnableMethod(
+          this, &PluginInstance::OnPluginThreadAsyncCall, func, user_data));
 }
 
 void PluginInstance::OnPluginThreadAsyncCall(void (*func)(void *),
@@ -424,6 +438,13 @@ void PluginInstance::UnscheduleTimer(uint32 timer_id) {
   if (it != timers_.end())
     timers_.erase(it);
 }
+
+#if !defined(OS_MACOSX)
+NPError PluginInstance::PopUpContextMenu(NPMenu* menu) {
+  NOTIMPLEMENTED();
+  return NPERR_GENERIC_ERROR;
+}
+#endif
 
 void PluginInstance::OnTimerCall(void (*func)(NPP id, uint32 timer_id),
                                  NPP id,
@@ -523,6 +544,76 @@ void PluginInstance::RequestURL(const char* url,
 
   webplugin_->HandleURLRequest(
       url, method, target, buf, len, notify_id, popups_allowed());
+}
+
+bool PluginInstance::ConvertPoint(double source_x, double source_y,
+                                  NPCoordinateSpace source_space,
+                                  double* dest_x, double* dest_y,
+                                  NPCoordinateSpace dest_space) {
+#if defined(OS_MACOSX)
+  CGRect main_display_bounds = CGDisplayBounds(CGMainDisplayID());
+
+  double flipped_screen_x = source_x;
+  double flipped_screen_y = source_y;
+  switch(source_space) {
+    case NPCoordinateSpacePlugin:
+      flipped_screen_x += plugin_origin_.x();
+      flipped_screen_y += plugin_origin_.y();
+      break;
+    case NPCoordinateSpaceWindow:
+      flipped_screen_x += containing_window_frame_.x();
+      flipped_screen_y = containing_window_frame_.height() - source_y +
+          containing_window_frame_.y();
+      break;
+    case NPCoordinateSpaceFlippedWindow:
+      flipped_screen_x += containing_window_frame_.x();
+      flipped_screen_y += containing_window_frame_.y();
+      break;
+    case NPCoordinateSpaceScreen:
+      flipped_screen_y = main_display_bounds.size.height - flipped_screen_y;
+      break;
+    case NPCoordinateSpaceFlippedScreen:
+      break;
+    default:
+      NOTREACHED();
+      return false;
+  }
+
+  double target_x = flipped_screen_x;
+  double target_y = flipped_screen_y;
+  switch(dest_space) {
+    case NPCoordinateSpacePlugin:
+      target_x -= plugin_origin_.x();
+      target_y -= plugin_origin_.y();
+      break;
+    case NPCoordinateSpaceWindow:
+      target_x -= containing_window_frame_.x();
+      target_y -= containing_window_frame_.y();
+      target_y = containing_window_frame_.height() - target_y;
+      break;
+    case NPCoordinateSpaceFlippedWindow:
+      target_x -= containing_window_frame_.x();
+      target_y -= containing_window_frame_.y();
+      break;
+    case NPCoordinateSpaceScreen:
+      target_y = main_display_bounds.size.height - flipped_screen_y;
+      break;
+    case NPCoordinateSpaceFlippedScreen:
+      break;
+    default:
+      NOTREACHED();
+      return false;
+  }
+
+  if (dest_x)
+    *dest_x = target_x;
+  if (dest_y)
+    *dest_y = target_y;
+  return true;
+#else
+  NOTIMPLEMENTED();
+  return false;
+#endif
 }
 
 void PluginInstance::GetNotifyData(

@@ -169,7 +169,7 @@ TEST(ValuesTest, StringValue) {
 // properly deleted by modifying the value of external flag on destruction.
 class DeletionTestValue : public Value {
  public:
-  DeletionTestValue(bool* deletion_flag) : Value(TYPE_NULL) {
+  explicit DeletionTestValue(bool* deletion_flag) : Value(TYPE_NULL) {
     Init(deletion_flag);  // Separate function so that we can use ASSERT_*
   }
 
@@ -240,6 +240,16 @@ TEST(ValuesTest, ListRemoval) {
     list.Append(new DeletionTestValue(&deletion_flag));
     EXPECT_FALSE(deletion_flag);
     EXPECT_TRUE(list.Remove(0, NULL));
+    EXPECT_TRUE(deletion_flag);
+    EXPECT_EQ(0U, list.GetSize());
+  }
+
+  {
+    ListValue list;
+    DeletionTestValue* value = new DeletionTestValue(&deletion_flag);
+    list.Append(value);
+    EXPECT_FALSE(deletion_flag);
+    EXPECT_EQ(0, list.Remove(*value));
     EXPECT_TRUE(deletion_flag);
     EXPECT_EQ(0U, list.GetSize());
   }
@@ -506,4 +516,79 @@ TEST(ValuesTest, Equals) {
   list->Append(Value::CreateBooleanValue(true));
   EXPECT_FALSE(dv.Equals(copy));
   delete copy;
+}
+
+TEST(ValuesTest, RemoveEmptyChildren) {
+  scoped_ptr<DictionaryValue> root(new DictionaryValue);
+  // Remove empty lists and dictionaries.
+  root->Set(L"empty_dict", new DictionaryValue);
+  root->Set(L"empty_list", new ListValue);
+  root->SetWithoutPathExpansion(L"a.b.c.d.e", new DictionaryValue);
+  root.reset(root->DeepCopyWithoutEmptyChildren());
+  EXPECT_TRUE(root->empty());
+
+  // Make sure we don't prune too much.
+  root->SetBoolean(L"bool", true);
+  root->Set(L"empty_dict", new DictionaryValue);
+  root->SetString(L"empty_string", "");
+  root.reset(root->DeepCopyWithoutEmptyChildren());
+  EXPECT_EQ(2U, root->size());
+
+  // Should do nothing.
+  root.reset(root->DeepCopyWithoutEmptyChildren());
+  EXPECT_EQ(2U, root->size());
+
+  // Nested test cases.  These should all reduce back to the bool and string
+  // set above.
+  {
+    root->Set(L"a.b.c.d.e", new DictionaryValue);
+    root.reset(root->DeepCopyWithoutEmptyChildren());
+    EXPECT_EQ(2U, root->size());
+  }
+  {
+    DictionaryValue* inner = new DictionaryValue;
+    root->Set(L"dict_with_emtpy_children", inner);
+    inner->Set(L"empty_dict", new DictionaryValue);
+    inner->Set(L"empty_list", new ListValue);
+    root.reset(root->DeepCopyWithoutEmptyChildren());
+    EXPECT_EQ(2U, root->size());
+  }
+  {
+    ListValue* inner = new ListValue;
+    root->Set(L"list_with_empty_children", inner);
+    inner->Append(new DictionaryValue);
+    inner->Append(new ListValue);
+    root.reset(root->DeepCopyWithoutEmptyChildren());
+    EXPECT_EQ(2U, root->size());
+  }
+
+  // Nested with siblings.
+  {
+    ListValue* inner = new ListValue;
+    root->Set(L"list_with_empty_children", inner);
+    inner->Append(new DictionaryValue);
+    inner->Append(new ListValue);
+    DictionaryValue* inner2 = new DictionaryValue;
+    root->Set(L"dict_with_empty_children", inner2);
+    inner2->Set(L"empty_dict", new DictionaryValue);
+    inner2->Set(L"empty_list", new ListValue);
+    root.reset(root->DeepCopyWithoutEmptyChildren());
+    EXPECT_EQ(2U, root->size());
+  }
+
+  // Make sure nested values don't get pruned.
+  {
+    ListValue* inner = new ListValue;
+    root->Set(L"list_with_empty_children", inner);
+    ListValue* inner2 = new ListValue;
+    inner->Append(new DictionaryValue);
+    inner->Append(inner2);
+    inner2->Append(Value::CreateStringValue("hello"));
+    root.reset(root->DeepCopyWithoutEmptyChildren());
+    EXPECT_EQ(3U, root->size());
+    EXPECT_TRUE(root->GetList(L"list_with_empty_children", &inner));
+    EXPECT_EQ(1U, inner->GetSize());  // Dictionary was pruned.
+    EXPECT_TRUE(inner->GetList(0, &inner2));
+    EXPECT_EQ(1U, inner2->GetSize());
+  }
 }

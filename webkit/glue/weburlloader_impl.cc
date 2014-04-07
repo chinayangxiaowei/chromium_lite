@@ -17,13 +17,13 @@
 #include "net/base/net_util.h"
 #include "net/http/http_response_headers.h"
 #include "third_party/WebKit/WebKit/chromium/public/WebHTTPHeaderVisitor.h"
+#include "third_party/WebKit/WebKit/chromium/public/WebSecurityPolicy.h"
 #include "third_party/WebKit/WebKit/chromium/public/WebURL.h"
 #include "third_party/WebKit/WebKit/chromium/public/WebURLError.h"
 #include "third_party/WebKit/WebKit/chromium/public/WebURLLoaderClient.h"
 #include "third_party/WebKit/WebKit/chromium/public/WebURLRequest.h"
 #include "third_party/WebKit/WebKit/chromium/public/WebURLResponse.h"
 #include "webkit/glue/ftp_directory_listing_response_delegate.h"
-#include "webkit/glue/glue_util.h"
 #include "webkit/glue/multipart_response_delegate.h"
 #include "webkit/glue/resource_loader_bridge.h"
 #include "webkit/glue/webkit_glue.h"
@@ -33,7 +33,9 @@ using base::TimeDelta;
 using WebKit::WebData;
 using WebKit::WebHTTPBody;
 using WebKit::WebHTTPHeaderVisitor;
+using WebKit::WebSecurityPolicy;
 using WebKit::WebString;
+using WebKit::WebURL;
 using WebKit::WebURLError;
 using WebKit::WebURLLoader;
 using WebKit::WebURLLoaderClient;
@@ -56,8 +58,8 @@ class HeaderFlattener : public WebHTTPHeaderVisitor {
   virtual void visitHeader(const WebString& name, const WebString& value) {
     // TODO(darin): is UTF-8 really correct here?  It is if the strings are
     // already ASCII (i.e., if they are already escaped properly).
-    const std::string& name_utf8 = WebStringToStdString(name);
-    const std::string& value_utf8 = WebStringToStdString(value);
+    const std::string& name_utf8 = name.utf8();
+    const std::string& value_utf8 = value.utf8();
 
     // Skip over referrer headers found in the header map because we already
     // pulled it out as a separate parameter.  We likewise prune the UA since
@@ -106,10 +108,18 @@ ResourceType::Type FromTargetType(WebURLRequest::TargetType type) {
   switch (type) {
     case WebURLRequest::TargetIsMainFrame:
       return ResourceType::MAIN_FRAME;
-    case WebURLRequest::TargetIsSubFrame:
+    case WebURLRequest::TargetIsSubframe:
       return ResourceType::SUB_FRAME;
-    case WebURLRequest::TargetIsSubResource:
+    case WebURLRequest::TargetIsSubresource:
       return ResourceType::SUB_RESOURCE;
+    case WebURLRequest::TargetIsStyleSheet:
+      return ResourceType::STYLESHEET;
+    case WebURLRequest::TargetIsScript:
+      return ResourceType::SCRIPT;
+    case WebURLRequest::TargetIsFontResource:
+      return ResourceType::FONT_RESOURCE;
+    case WebURLRequest::TargetIsImage:
+      return ResourceType::IMAGE;
     case WebURLRequest::TargetIsObject:
       return ResourceType::OBJECT;
     case WebURLRequest::TargetIsMedia:
@@ -148,19 +158,20 @@ void PopulateURLResponse(
     const ResourceLoaderBridge::ResponseInfo& info,
     WebURLResponse* response) {
   response->setURL(url);
-  response->setMIMEType(StdStringToWebString(info.mime_type));
-  response->setTextEncodingName(StdStringToWebString(info.charset));
+  response->setMIMEType(WebString::fromUTF8(info.mime_type));
+  response->setTextEncodingName(WebString::fromUTF8(info.charset));
   response->setExpectedContentLength(info.content_length);
   response->setSecurityInfo(info.security_info);
   response->setAppCacheID(info.appcache_id);
   response->setAppCacheManifestURL(info.appcache_manifest_url);
+  response->setWasFetchedViaSPDY(info.was_fetched_via_spdy);
 
   const net::HttpResponseHeaders* headers = info.headers;
   if (!headers)
     return;
 
   response->setHTTPStatusCode(headers->response_code());
-  response->setHTTPStatusText(StdStringToWebString(headers->GetStatusText()));
+  response->setHTTPStatusText(WebString::fromUTF8(headers->GetStatusText()));
 
   // TODO(darin): We should leverage HttpResponseHeaders for this, and this
   // should be using the same code as ResourceDispatcherHost.
@@ -180,8 +191,8 @@ void PopulateURLResponse(
   void* iter = NULL;
   std::string name;
   while (headers->EnumerateHeaderLines(&iter, &name, &value)) {
-    response->addHTTPHeaderField(StdStringToWebString(name),
-                                 StdStringToWebString(value));
+    response->addHTTPHeaderField(WebString::fromUTF8(name),
+                                 WebString::fromUTF8(value));
   }
 }
 
@@ -247,7 +258,8 @@ void WebURLLoaderImpl::Context::Cancel() {
 
   // Ensure that we do not notify the multipart delegate anymore as it has
   // its own pointer to the client.
-  multipart_delegate_.reset();
+  if (multipart_delegate_.get())
+    multipart_delegate_->Cancel();
 
   // Do not make any further calls to the client.
   client_ = NULL;
@@ -283,9 +295,9 @@ void WebURLLoaderImpl::Context::Start(
     return;
   }
 
-  GURL referrer_url(WebStringToStdString(
-      request.httpHeaderField(WebString::fromUTF8("Referer"))));
-  const std::string& method = WebStringToStdString(request.httpMethod());
+  GURL referrer_url(
+      request.httpHeaderField(WebString::fromUTF8("Referer")).utf8());
+  const std::string& method = request.httpMethod().utf8();
 
   int load_flags = net::LOAD_NORMAL;
   switch (request.cachePolicy()) {
@@ -331,19 +343,21 @@ void WebURLLoaderImpl::Context::Start(
 
   // TODO(brettw) this should take parameter encoding into account when
   // creating the GURLs.
-  bridge_.reset(ResourceLoaderBridge::Create(
-      method,
-      url,
-      request.firstPartyForCookies(),
-      referrer_url,
-      frame_origin,
-      main_frame_origin,
-      flattener.GetBuffer(),
-      load_flags,
-      requestor_pid,
-      FromTargetType(request.targetType()),
-      request.appCacheHostID(),
-      request.requestorID()));
+
+  webkit_glue::ResourceLoaderBridge::RequestInfo request_info;
+  request_info.method = method;
+  request_info.url = url;
+  request_info.first_party_for_cookies = request.firstPartyForCookies();
+  request_info.referrer = referrer_url;
+  request_info.frame_origin = frame_origin;
+  request_info.main_frame_origin = main_frame_origin;
+  request_info.headers = flattener.GetBuffer();
+  request_info.load_flags = load_flags;
+  request_info.requestor_pid = requestor_pid;
+  request_info.request_type = FromTargetType(request.targetType());
+  request_info.appcache_host_id = request.appCacheHostID();
+  request_info.routing_id = request.requestorID();
+  bridge_.reset(ResourceLoaderBridge::Create(request_info));
 
   if (!request.httpBody().isNull()) {
     // GET and HEAD requests shouldn't have http bodies.
@@ -362,8 +376,16 @@ void WebURLLoaderImpl::Context::Start(
           }
           break;
         case WebHTTPBody::Element::TypeFile:
-          bridge_->AppendFileToUpload(
-              FilePath(WebStringToFilePathString(element.filePath)));
+          if (element.fileLength == -1) {
+            bridge_->AppendFileToUpload(
+                WebStringToFilePath(element.filePath));
+          } else {
+            bridge_->AppendFileRangeToUpload(
+                WebStringToFilePath(element.filePath),
+                static_cast<uint64>(element.fileStart),
+                static_cast<uint64>(element.fileLength),
+                base::Time::FromDoubleT(element.fileInfo.modificationTime));
+          }
           break;
         default:
           NOTREACHED();
@@ -405,6 +427,12 @@ bool WebURLLoaderImpl::Context::OnReceivedRedirect(
   // request that resulted from the redirect.
   WebURLRequest new_request(new_url);
   new_request.setFirstPartyForCookies(request_.firstPartyForCookies());
+
+  WebString referrer_string = WebString::fromUTF8("Referer");
+  WebString referrer = request_.httpHeaderField(referrer_string);
+  if (!WebSecurityPolicy::shouldHideReferrer(new_url, referrer))
+    new_request.setHTTPHeaderField(referrer_string, referrer);
+
   if (response.httpStatusCode() == 307)
     new_request.setHTTPMethod(request_.httpMethod());
 
@@ -434,8 +462,17 @@ void WebURLLoaderImpl::Context::OnReceivedResponse(
   PopulateURLResponse(request_.url(), info, &response);
   response.setIsContentFiltered(content_filtered);
 
-  if (info.mime_type == "text/vnd.chromium.ftp-dir")
-    response.setMIMEType(WebString::fromUTF8("text/html"));
+  bool show_raw_listing = (GURL(request_.url()).query() == "raw");
+
+  if (info.mime_type == "text/vnd.chromium.ftp-dir") {
+    if (show_raw_listing) {
+      // Set the MIME type to plain text to prevent any active content.
+      response.setMIMEType("text/plain");
+    } else {
+      // We're going to produce a parsed listing in HTML.
+      response.setMIMEType("text/html");
+    }
+  }
 
   client_->didReceiveResponse(loader_, response);
 
@@ -459,7 +496,8 @@ void WebURLLoaderImpl::Context::OnReceivedResponse(
       multipart_delegate_.reset(
           new MultipartResponseDelegate(client_, loader_, response, boundary));
     }
-  } else if (info.mime_type == "text/vnd.chromium.ftp-dir") {
+  } else if (info.mime_type == "text/vnd.chromium.ftp-dir" &&
+             !show_raw_listing) {
     ftp_listing_delegate_.reset(
         new FtpDirectoryListingResponseDelegate(client_, loader_, response));
   }

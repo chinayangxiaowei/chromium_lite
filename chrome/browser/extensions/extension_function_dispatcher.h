@@ -10,6 +10,7 @@
 #include <vector>
 
 #include "base/ref_counted.h"
+#include "gfx/native_widget_types.h"
 #include "googleurl/src/gurl.h"
 
 class Browser;
@@ -17,7 +18,6 @@ class Extension;
 class ExtensionDOMUI;
 class ExtensionFunction;
 class ExtensionHost;
-class ExtensionPopupHost;
 class Profile;
 class RenderViewHost;
 class RenderViewHostDelegate;
@@ -33,9 +33,23 @@ class ExtensionFunctionDispatcher {
  public:
   class Delegate {
    public:
-    virtual Browser* GetBrowser() = 0;
-    virtual ExtensionHost* GetExtensionHost() { return NULL; }
-    virtual ExtensionDOMUI* GetExtensionDOMUI() { return NULL; }
+    // Returns the browser that this delegate is associated with, if any.
+    // Returns NULL otherwise.
+    virtual Browser* GetBrowser() const = 0;
+
+    // Returns the native view for this extension view, if any. This may be NULL
+    // if the view is not visible.
+    virtual gfx::NativeView GetNativeViewOfHost() = 0;
+
+    // Typically, the window is assumed to be the window associated with the
+    // result of GetBrowser(). Implementations may override this behavior with
+    // this method.
+    virtual gfx::NativeWindow GetCustomFrameNativeWindow() {
+      return NULL;
+    }
+
+   protected:
+    virtual ~Delegate() {}
   };
 
   // The peer object allows us to notify ExtensionFunctions when we are
@@ -63,40 +77,33 @@ class ExtensionFunctionDispatcher {
   // Resets all functions to their initial implementation.
   static void ResetFunctions();
 
+  // Creates an instance for the specified RenderViewHost and URL. If the URL
+  // does not contain a valid extension, returns NULL.
+  static ExtensionFunctionDispatcher* Create(RenderViewHost* render_view_host,
+                                             Delegate* delegate,
+                                             const GURL& url);
+
   // Retrieves a vector of all EFD instances.
   static std::set<ExtensionFunctionDispatcher*>* all_instances();
 
-  ExtensionFunctionDispatcher(RenderViewHost* render_view_host,
-                              Delegate* delegate,
-                              const GURL& url);
   ~ExtensionFunctionDispatcher();
+
+  Delegate* delegate() { return delegate_; }
 
   // Handle a request to execute an extension function.
   void HandleRequest(const std::string& name, const Value* args,
-                     int request_id, bool has_callback);
+                     const GURL& source_url, int request_id, bool has_callback);
 
   // Send a response to a function.
   void SendResponse(ExtensionFunction* api, bool success);
 
-  // Gets the browser extension functions should operate relative to. For
-  // example, for positioning windows, or alert boxes, or creating tabs.
-  Browser* GetBrowser();
-
-  // Get the extension popup hosting environment for the ExtensionHost
-  // or ExtensionDOMUI associted with this dispatcher.
-  ExtensionPopupHost* GetPopupHost();
-
-  // Gets the ExtensionHost associated with this object.  In the case of
-  // tab hosted extension pages, this will return NULL.
-  ExtensionHost* GetExtensionHost();
-
-  // Gets the ExtensionDOMUI associated with this object.  In the case of
-  // non-tab-hosted extension pages, this will return NULL.
-  ExtensionDOMUI* GetExtensionDOMUI();
-
-  // Gets the extension the function is being invoked by. This should not ever
-  // return NULL.
-  Extension* GetExtension();
+  // Returns the current browser. Callers should generally prefer
+  // ExtensionFunction::GetCurrentBrowser() over this method, as that one
+  // provides the correct value for |include_incognito|.
+  //
+  // See the comments for ExtensionFunction::GetCurrentBrowser() for more
+  // details.
+  Browser* GetCurrentBrowser(bool include_incognito);
 
   // Handle a malformed message.  Possibly the result of an attack, so kill
   // the renderer.
@@ -115,6 +122,16 @@ class ExtensionFunctionDispatcher {
   RenderViewHost* render_view_host() { return render_view_host_; }
 
  private:
+  ExtensionFunctionDispatcher(RenderViewHost* render_view_host,
+                              Delegate* delegate,
+                              Extension* extension,
+                              const GURL& url);
+
+  // We need to keep a pointer to the profile because we use it in the dtor
+  // in sending EXTENSION_FUNCTION_DISPATCHER_DESTROYED, but by that point
+  // the render_view_host_ has been deleted.
+  Profile* profile_;
+
   RenderViewHost* render_view_host_;
 
   Delegate* delegate_;

@@ -11,6 +11,7 @@
 #include "base/logging.h"
 #include "base/singleton.h"
 #include "base/string_util.h"
+#include "base/utf_string_conversions.h"
 
 using std::string;
 
@@ -126,6 +127,11 @@ static const char* FindMimeType(const MimeInfo* mappings,
 
 bool MimeUtil::GetMimeTypeFromExtension(const FilePath::StringType& ext,
                                         string* result) const {
+  // Avoids crash when unable to handle a long file path. See crbug.com/48733.
+  const unsigned kMaxFilePathSize = 65536;
+  if (ext.length() > kMaxFilePathSize)
+    return false;
+
   // We implement the same algorithm as Mozilla for mapping a file extension to
   // a mime type.  That is, we first check a hard-coded list (that cannot be
   // overridden), and then if not found there, we defer to the system registry.
@@ -217,6 +223,7 @@ static const char* const supported_media_codecs[] = {
 
 // Note: does not include javascript types list (see supported_javascript_types)
 static const char* const supported_non_image_types[] = {
+  "text/cache-manifest",
   "text/html",
   "text/xml",
   "text/xsl",
@@ -234,9 +241,14 @@ static const char* const supported_non_image_types[] = {
   "application/xhtml+xml",
   "application/rss+xml",
   "application/atom+xml",
+  "application/json",
   "application/x-x509-user-cert",
   "multipart/x-mixed-replace"
+  // Note: ADDING a new type here will probably render it AS HTML. This can
+  // result in cross site scripting.
 };
+COMPILE_ASSERT(arraysize(supported_non_image_types) == 16,
+               supported_non_images_types_must_equal_16);
 
 //  Mozilla 1.8 and WinIE 7 both accept text/javascript and text/ecmascript.
 //  Mozilla 1.8 accepts application/javascript, application/ecmascript, and

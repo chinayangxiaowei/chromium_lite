@@ -1,4 +1,4 @@
-// Copyright (c) 2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -11,132 +11,56 @@
 #include "base/path_service.h"
 #include "base/thread.h"
 #include "base/waitable_event.h"
+#include "chrome/browser/appcache/chrome_appcache_service.h"
+#include "chrome/browser/browser_list.h"
+#include "chrome/browser/browser_main.h"
+#include "chrome/browser/browser_process_sub_thread.h"
 #include "chrome/browser/browser_trial.h"
+#include "chrome/browser/child_process_host.h"
 #include "chrome/browser/chrome_thread.h"
 #include "chrome/browser/debugger/debugger_wrapper.h"
 #include "chrome/browser/debugger/devtools_manager.h"
 #include "chrome/browser/download/download_file.h"
 #include "chrome/browser/download/save_file_manager.h"
+#include "chrome/browser/first_run.h"
 #include "chrome/browser/google_url_tracker.h"
 #include "chrome/browser/icon_manager.h"
 #include "chrome/browser/in_process_webkit/dom_storage_context.h"
+#include "chrome/browser/intranet_redirect_detector.h"
+#include "chrome/browser/io_thread.h"
 #include "chrome/browser/metrics/metrics_service.h"
 #include "chrome/browser/net/dns_global.h"
 #include "chrome/browser/net/sdch_dictionary_fetcher.h"
 #include "chrome/browser/net/sqlite_persistent_cookie_store.h"
 #include "chrome/browser/notifications/notification_ui_manager.h"
 #include "chrome/browser/plugin_service.h"
+#include "chrome/browser/pref_service.h"
+#include "chrome/browser/printing/print_job_manager.h"
 #include "chrome/browser/profile_manager.h"
 #include "chrome/browser/renderer_host/render_process_host.h"
 #include "chrome/browser/renderer_host/resource_dispatcher_host.h"
 #include "chrome/browser/safe_browsing/safe_browsing_service.h"
+#include "chrome/browser/status_icons/status_tray_manager.h"
 #include "chrome/common/chrome_constants.h"
 #include "chrome/common/chrome_paths.h"
 #include "chrome/common/chrome_switches.h"
+#include "chrome/common/extensions/extension_resource.h"
+#include "chrome/common/extensions/extension_l10n_util.h"
 #include "chrome/common/notification_service.h"
 #include "chrome/common/pref_names.h"
-#include "chrome/common/pref_service.h"
 #include "chrome/common/url_constants.h"
+#include "chrome/installer/util/google_update_constants.h"
 #include "ipc/ipc_logging.h"
 #include "webkit/database/database_tracker.h"
 
 #if defined(OS_WIN)
-#include "chrome/browser/automation/automation_provider_list.h"
-#include "chrome/browser/printing/print_job_manager.h"
 #include "views/focus/view_storage.h"
-#elif defined(OS_MACOSX)
-#include "chrome/browser/printing/print_job_manager.h"
-#elif defined(OS_LINUX)
-// TODO(port): Remove the temporary scaffolding as we port the above headers.
-#include "chrome/common/temp_scaffolding_stubs.h"
 #endif
 
 #if defined(IPC_MESSAGE_LOG_ENABLED)
 #include "chrome/common/plugin_messages.h"
 #include "chrome/common/render_messages.h"
 #endif
-
-namespace {
-
-// ----------------------------------------------------------------------------
-// BrowserProcessSubThread
-//
-// This simple thread object is used for the specialized threads that the
-// BrowserProcess spins up.
-//
-// Applications must initialize the COM library before they can call
-// COM library functions other than CoGetMalloc and memory allocation
-// functions, so this class initializes COM for those users.
-class BrowserProcessSubThread : public ChromeThread {
- public:
-  explicit BrowserProcessSubThread(ChromeThread::ID identifier)
-      : ChromeThread(identifier) {
-  }
-
-  virtual ~BrowserProcessSubThread() {
-    // We cannot rely on our base class to stop the thread since we want our
-    // CleanUp function to run.
-    Stop();
-  }
-
- protected:
-  virtual void Init() {
-#if defined(OS_WIN)
-    // Initializes the COM library on the current thread.
-    CoInitialize(NULL);
-#endif
-
-    notification_service_ = new NotificationService;
-  }
-
-  virtual void CleanUp() {
-    delete notification_service_;
-    notification_service_ = NULL;
-
-#if defined(OS_WIN)
-    // Closes the COM library on the current thread. CoInitialize must
-    // be balanced by a corresponding call to CoUninitialize.
-    CoUninitialize();
-#endif
-  }
-
- private:
-  // Each specialized thread has its own notification service.
-  // Note: We don't use scoped_ptr because the destructor runs on the wrong
-  // thread.
-  NotificationService* notification_service_;
-};
-
-class IOThread : public BrowserProcessSubThread {
- public:
-  IOThread() : BrowserProcessSubThread(ChromeThread::IO) {}
-
-  virtual ~IOThread() {
-    // We cannot rely on our base class to stop the thread since we want our
-    // CleanUp function to run.
-    Stop();
-  }
-
- protected:
-  virtual void CleanUp() {
-    // URLFetcher and URLRequest instances must NOT outlive the IO thread.
-    //
-    // Strictly speaking, URLFetcher's CheckForLeaks() should be done on the
-    // UI thread. However, since there _shouldn't_ be any instances left
-    // at this point, it shouldn't be a race.
-    //
-    // We check URLFetcher first, since if it has leaked then an associated
-    // URLRequest will also have leaked. However it is more useful to
-    // crash showing the callstack of URLFetcher's allocation than its
-    // URLRequest member.
-    base::LeakTracker<URLFetcher>::CheckForLeaks();
-    base::LeakTracker<URLRequest>::CheckForLeaks();
-
-    BrowserProcessSubThread::CleanUp();
-  }
-};
-
-}  // namespace
 
 BrowserProcessImpl::BrowserProcessImpl(const CommandLine& command_line)
     : created_resource_dispatcher_host_(false),
@@ -147,10 +71,6 @@ BrowserProcessImpl::BrowserProcessImpl(const CommandLine& command_line)
       created_process_launcher_thread_(false),
       created_profile_manager_(false),
       created_local_state_(false),
-#if defined(OS_WIN)
-      initialized_broker_services_(false),
-      broker_services_(NULL),
-#endif  // defined(OS_WIN)
       created_icon_manager_(false),
       created_debugger_wrapper_(false),
       created_devtools_manager_(false),
@@ -191,15 +111,21 @@ BrowserProcessImpl::~BrowserProcessImpl() {
   // any pending URLFetchers, and avoid creating any more.
   SdchDictionaryFetcher::Shutdown();
 
-  // We need to destroy the MetricsService and GoogleURLTracker before the
-  // io_thread_ gets destroyed, since both destructors can call the URLFetcher
-  // destructor, which does an PostDelayedTask operation on the IO thread.  (The
-  // IO thread will handle that URLFetcher operation before going away.)
+  // We need to destroy the MetricsService, GoogleURLTracker, and
+  // IntranetRedirectDetector before the io_thread_ gets destroyed, since their
+  // destructors can call the URLFetcher destructor, which does a
+  // PostDelayedTask operation on the IO thread.  (The IO thread will handle
+  // that URLFetcher operation before going away.)
   metrics_service_.reset();
   google_url_tracker_.reset();
+  intranet_redirect_detector_.reset();
 
   // Need to clear profiles (download managers) before the io_thread_.
   profile_manager_.reset();
+
+  // Need to clear the desktop notification balloons before the io_thread_,
+  // since if there are any left showing we will post tasks.
+  notification_ui_manager_.reset();
 
   // Debugger must be cleaned up before IO thread and NotificationService.
   debugger_wrapper_ = NULL;
@@ -214,7 +140,7 @@ BrowserProcessImpl::~BrowserProcessImpl() {
     resource_dispatcher_host()->Shutdown();
   }
 
-#if defined(OS_LINUX)
+#if defined(USE_X11)
   // The IO thread must outlive the BACKGROUND_X11 thread.
   background_x11_thread_.reset();
 #endif
@@ -222,7 +148,7 @@ BrowserProcessImpl::~BrowserProcessImpl() {
   // Need to stop io_thread_ before resource_dispatcher_host_, since
   // io_thread_ may still deref ResourceDispatcherHost and handle resource
   // request before going away.
-  ResetIOThread();
+  io_thread_.reset();
 
   // Stop the process launcher thread after the IO thread, in case the IO thread
   // posted a task to terminate a process on the process launcher thread.
@@ -272,6 +198,24 @@ static void PostQuit(MessageLoop* message_loop) {
   message_loop->PostTask(FROM_HERE, new MessageLoop::QuitTask());
 }
 
+unsigned int BrowserProcessImpl::AddRefModule() {
+  DCHECK(CalledOnValidThread());
+  module_ref_count_++;
+  return module_ref_count_;
+}
+
+unsigned int BrowserProcessImpl::ReleaseModule() {
+  DCHECK(CalledOnValidThread());
+  DCHECK(0 != module_ref_count_);
+  module_ref_count_--;
+  if (0 == module_ref_count_) {
+    MessageLoop::current()->PostTask(
+        FROM_HERE, NewRunnableFunction(DidEndMainMessageLoop));
+    MessageLoop::current()->Quit();
+  }
+  return module_ref_count_;
+}
+
 void BrowserProcessImpl::EndSession() {
 #if defined(OS_WIN)
   // Notify we are going away.
@@ -316,7 +260,7 @@ void BrowserProcessImpl::ClearLocalState(const FilePath& profile_path) {
       chrome::kCookieFilename));
   DOMStorageContext::ClearLocalState(profile_path, chrome::kExtensionScheme);
   webkit_database::DatabaseTracker::ClearLocalState(profile_path);
-  // TODO(jochen): clear app cache local state.
+  ChromeAppCacheService::ClearLocalState(profile_path);
 }
 
 bool BrowserProcessImpl::ShouldClearLocalState(FilePath* profile_path) {
@@ -332,6 +276,8 @@ bool BrowserProcessImpl::ShouldClearLocalState(FilePath* profile_path) {
 
   PathService::Get(chrome::DIR_USER_DATA, &user_data_dir);
   profile = profile_manager_->GetDefaultProfile(user_data_dir);
+  if (!profile)
+    return false;
   *profile_path = profile->GetPath();
   return profile->GetPrefs()->GetBoolean(prefs::kClearSiteDataOnExit);
 }
@@ -362,7 +308,7 @@ void BrowserProcessImpl::CreateIOThread() {
   // invoke the io_thread() accessor.
   PluginService::GetInstance();
 
-#if defined(OS_LINUX)
+#if defined(USE_X11)
   // The lifetime of the BACKGROUND_X11 thread is a subset of the IO thread so
   // we start it now.
   scoped_ptr<base::Thread> background_x11_thread(
@@ -372,28 +318,12 @@ void BrowserProcessImpl::CreateIOThread() {
   background_x11_thread_.swap(background_x11_thread);
 #endif
 
-  scoped_ptr<base::Thread> thread(new IOThread);
+  scoped_ptr<IOThread> thread(new IOThread);
   base::Thread::Options options;
   options.message_loop_type = MessageLoop::TYPE_IO;
   if (!thread->StartWithOptions(options))
     return;
   io_thread_.swap(thread);
-}
-
-void BrowserProcessImpl::ResetIOThread() {
-  if (io_thread_.get()) {
-    io_thread_->message_loop()->PostTask(FROM_HERE,
-        NewRunnableFunction(CleanupOnIOThread));
-  }
-  io_thread_.reset();
-}
-
-// static
-void BrowserProcessImpl::CleanupOnIOThread() {
-  // Shutdown DNS prefetching now to ensure that network stack objects
-  // living on the IO thread get destroyed before the IO thread goes away.
-  chrome_browser_net::EnsureDnsPrefetchShutdown();
-  // TODO(eroman): can this be merged into IOThread::CleanUp() ?
 }
 
 void BrowserProcessImpl::CreateFileThread() {
@@ -413,6 +343,12 @@ void BrowserProcessImpl::CreateFileThread() {
   if (!thread->StartWithOptions(options))
     return;
   file_thread_.swap(thread);
+
+  // ExtensionResource is in chrome/common, so it cannot depend on
+  // chrome/browser, which means it cannot lookup what the File thread is.
+  // We therefore store the thread ID from here so we can validate the proper
+  // thread usage in the ExtensionResource class.
+  ExtensionResource::set_file_thread_id(file_thread_->thread_id());
 }
 
 void BrowserProcessImpl::CreateDBThread() {
@@ -453,16 +389,6 @@ void BrowserProcessImpl::CreateLocalState() {
   local_state_.reset(new PrefService(local_state_path));
 }
 
-#if defined(OS_WIN)
-void BrowserProcessImpl::InitBrokerServices(
-    sandbox::BrokerServices* broker_services) {
-  DCHECK(!initialized_broker_services_ && broker_services_ == NULL);
-  broker_services->Init();
-  initialized_broker_services_ = true;
-  broker_services_ = broker_services;
-}
-#endif  // defined(OS_WIN)
-
 void BrowserProcessImpl::CreateIconManager() {
   DCHECK(!created_icon_manager_ && icon_manager_.get() == NULL);
   created_icon_manager_ = true;
@@ -488,10 +414,27 @@ void BrowserProcessImpl::CreateGoogleURLTracker() {
   google_url_tracker_.swap(google_url_tracker);
 }
 
+void BrowserProcessImpl::CreateIntranetRedirectDetector() {
+  DCHECK(intranet_redirect_detector_.get() == NULL);
+  scoped_ptr<IntranetRedirectDetector> intranet_redirect_detector(
+      new IntranetRedirectDetector);
+  intranet_redirect_detector_.swap(intranet_redirect_detector);
+}
+
 void BrowserProcessImpl::CreateNotificationUIManager() {
   DCHECK(notification_ui_manager_.get() == NULL);
   notification_ui_manager_.reset(NotificationUIManager::Create());
   created_notification_ui_manager_ = true;
+}
+
+void BrowserProcessImpl::SetApplicationLocale(const std::string& locale) {
+  locale_ = locale;
+  extension_l10n_util::SetProcessLocale(locale);
+}
+
+void BrowserProcessImpl::CreateStatusTrayManager() {
+  DCHECK(status_tray_manager_.get() == NULL);
+  status_tray_manager_.reset(new StatusTrayManager());
 }
 
 // The BrowserProcess object must outlive the file thread so we use traits
@@ -507,6 +450,15 @@ void BrowserProcessImpl::CheckForInspectorFiles() {
       (FROM_HERE,
        NewRunnableMethod(this, &BrowserProcessImpl::DoInspectorFilesCheck));
 }
+
+#if defined(OS_WIN)
+void BrowserProcessImpl::StartAutoupdateTimer() {
+  autoupdate_timer_.Start(
+      TimeDelta::FromHours(google_update::kUpdateCheckInvervalHours),
+      this,
+      &BrowserProcessImpl::OnAutoupdateTimer);
+}
+#endif  //  OS_WIN
 
 #if defined(IPC_MESSAGE_LOG_ENABLED)
 
@@ -558,3 +510,68 @@ void BrowserProcessImpl::DoInspectorFilesCheck() {
 
   have_inspector_files_ = result;
 }
+
+#if defined(OS_WIN)  // Linux doesn't do rename on restart, and Mac is currently
+                     // not supported.
+
+bool BrowserProcessImpl::CanAutorestartForUpdate() const {
+  // Check if browser is in the background and if it needs to be restarted to
+  // apply a pending update.
+  return BrowserList::IsInPersistentMode() && Upgrade::IsUpdatePendingRestart();
+}
+
+// Switches enumerated here will be removed when a background instance of
+// Chrome restarts itself. If your key is designed to only be used once,
+// or if it does not make sense when restarting a background instance to
+// pick up an automatic update, be sure to add it to this list.
+const char* const kSwitchesToRemoveOnAutorestart[] = {
+    switches::kApp,
+    switches::kFirstRun,
+    switches::kImport,
+    switches::kImportFromFile,
+    switches::kMakeDefaultBrowser
+};
+
+void BrowserProcessImpl::RestartPersistentInstance() {
+  CommandLine* old_cl = CommandLine::ForCurrentProcess();
+  CommandLine new_cl(old_cl->GetProgram());
+
+  std::map<std::string, CommandLine::StringType> switches =
+      old_cl->GetSwitches();
+
+  // Remove the keys that we shouldn't pass through during restart.
+  for (int i = 0; i < arraysize(kSwitchesToRemoveOnAutorestart); i++) {
+    switches.erase(kSwitchesToRemoveOnAutorestart[i]);
+  }
+
+  // Append the rest of the switches (along with their values, if any)
+  // to the new command line
+  for (std::map<std::string, CommandLine::StringType>::const_iterator i =
+      switches.begin(); i != switches.end(); ++i) {
+      CommandLine::StringType switch_value = i->second;
+      if (switch_value.length() > 0) {
+        new_cl.AppendSwitchWithValue(i->first, i->second);
+      } else {
+        new_cl.AppendSwitch(i->first);
+      }
+  }
+
+  // TODO(atwilson): Uncomment the following two lines to add the "persistence"
+  // switch when the corresponding CL is committed.
+  // if (!new_cl.HasSwitch(switches::kLongLivedExtensions))
+  //  new_cl.AppendSwitch(switches::kLongLivedExtensions);
+
+  if (Upgrade::RelaunchChromeBrowser(new_cl)) {
+    BrowserList::CloseAllBrowsersAndExit();
+  } else {
+    DLOG(ERROR) << "Could not restart browser for autoupdate.";
+  }
+}
+
+void BrowserProcessImpl::OnAutoupdateTimer() {
+  if (CanAutorestartForUpdate()) {
+    RestartPersistentInstance();
+  }
+}
+
+#endif

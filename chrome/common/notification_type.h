@@ -191,12 +191,20 @@ class NotificationType {
     // containing the affected Browser.  No details are expected.
     BROWSER_WINDOW_READY,
 
+    // This message is sent when a browser is closing. The source is a
+    // Source<Browser> containing the affected Browser. Details is a boolean
+    // that if true indicates that the application will be closed as a result of
+    // this browser window closure (i.e. this was the last opened browser
+    // window on win/linux). This is sent prior to BROWSER_CLOSED, and may be
+    // sent more than once for a particular browser.
+    BROWSER_CLOSING,
+
     // This message is sent after a window has been closed.  The source is a
     // Source<Browser> containing the affected Browser.  Details is a boolean
     // that if true indicates that the application will be closed as a result of
     // this browser window closure (i.e. this was the last opened browser
-    // window).  Note that the boolean pointed to by Details is only valid for
-    // the duration of this call.
+    // window on win/linux).  Note that the boolean pointed to by details is
+    // only valid for the duration of this call.
     BROWSER_CLOSED,
 
     // This message is sent when the last window considered to be an
@@ -205,13 +213,29 @@ class NotificationType {
     // details are passed.
     ALL_APPWINDOWS_CLOSED,
 
+#if defined(OS_MACOSX)
     // This message is sent when the application is made active (Mac OS X only
     // at present). No source or details are passed.
     APP_ACTIVATED,
 
+    // This message is sent when the application is terminating (Mac OS X only
+    // at present). No source or details are passed.
+    APP_TERMINATING,
+#endif
+
+    // This is sent when the user has chosen to exit the app, but before any
+    // browsers have closed. This is only sent if the user chooses the exit menu
+    // item, not if Chrome exists by some other means (such as the user closing
+    // the last window). The source and details are unspecified.
+    APP_EXITING,
+
     // Indicates that a top window has been closed.  The source is the HWND
     // that was closed, no details are expected.
     WINDOW_CLOSED,
+
+    // Indicates that a devtools window is closing. The source is the Profile*
+    // and the details is the inspected RenderViewHost*.
+    DEVTOOLS_WINDOW_CLOSING,
 
     // Sent when an info bubble has been created but not yet shown. The source
     // is the InfoBubble.
@@ -222,11 +246,14 @@ class NotificationType {
     // the source is Source<TabContents>.
     TAB_LANGUAGE_DETERMINED,
 
-   // Sent when a page has been translated. The source is the tab for that page
-   // (Source<TabContents>) and the details are the language the page was
-   // originally in and the language it was translated to
-   // (std::pair<std::string, std::string>).
-   PAGE_TRANSLATED,
+    // Sent when a page has been translated. The source is the tab for that page
+    // (Source<TabContents>) and the details are the language the page was
+    // originally in and the language it was translated to
+    // (std::pair<std::string, std::string>).
+    PAGE_TRANSLATED,
+
+    // Sent after the renderer returns a snapshot of tab contents.
+    TAB_SNAPSHOT_TAKEN,
 
     // Send after the code is run in specified tab.
     TAB_CODE_EXECUTED,
@@ -339,6 +366,10 @@ class NotificationType {
     // notification to properly reset the reference. The source is a
     // Source<TabContents>.
     TAB_CONTENTS_DESTROYED,
+
+    // This notification is sent when TabContents::SetAppExtension is invoked.
+    // The source is the TabContents SetAppExtension was invoked on.
+    TAB_CONTENTS_APPLICATION_EXTENSION_CHANGED,
 
     // A RenderViewHost was created for a TabContents. The source is the
     // associated TabContents, and the details is the RenderViewHost
@@ -477,8 +508,17 @@ class NotificationType {
     // by the user or by an automation service), but before we've actually
     // received another response from the server.  The source is the
     // Source<NavigationController> for the tab in which the prompt was shown.
-    // No details are expected.
+    // Details are an AuthSuppliedLoginNotificationDetails which provide the
+    // LoginHandler that should be given authentication as well as the supplied
+    // username and password.
     AUTH_SUPPLIED,
+
+    // This is sent when an authentication request has been dismissed without
+    // supplying credentials (either by the user or by an automation service).
+    // The source is the Source<NavigationController> for the tab in which the
+    // prompt was shown. Details are a LoginNotificationDetails which provide
+    // the LoginHandler that should be cancelled.
+    AUTH_CANCELLED,
 
     // Saved Pages -------------------------------------------------------------
 
@@ -554,11 +594,19 @@ class NotificationType {
     // Profile, and the details aren't used.
     BOOKMARK_MODEL_LOADED,
 
-    // Sent when the spellchecker object changes. Note that this is not sent
-    // the first time the spellchecker gets initialized. The source is the
-    // profile, the details is SpellcheckerReinitializedDetails defined in
-    // profile.
-    SPELLCHECKER_REINITIALIZED,
+    // Sent when SpellCheckHost has been reloaded. The source is the profile,
+    // the details are NoDetails.
+    SPELLCHECK_HOST_REINITIALIZED,
+
+    // Sent when a new word has been added to the custom dictionary. The source
+    // is the SpellCheckHost, the details are NoDetails.
+    SPELLCHECK_WORD_ADDED,
+
+    // Sent by the profile when the automatic spell correction setting has been
+    // toggled. It exists as a notification rather than just letting interested
+    // parties listen for the pref change because some objects may outlive the
+    // profile. Source is profile, details is NoDetails.
+    SPELLCHECK_AUTOSPELL_TOGGLED,
 
     // Sent when the bookmark bubble is shown for a particular URL. The source
     // is the profile, the details the URL.
@@ -641,6 +689,11 @@ class NotificationType {
     // pointer to SharedMemory containing the new scripts.
     USER_SCRIPTS_UPDATED,
 
+    // User Style Sheet --------------------------------------------------------
+
+    // Sent when the user style sheet has changed.
+    USER_STYLE_SHEET_UPDATED,
+
     // Extensions --------------------------------------------------------------
 
     // Sent when the known installed extensions have all been loaded.  In
@@ -682,8 +735,8 @@ class NotificationType {
     EXTENSION_OVERINSTALL_ERROR,
 
     // Sent when an extension is unloaded. This happens when an extension is
-    // uninstalled. When we add a disable feature, it will also happen then.
-    // The details are an Extension, and the source is a Profile.
+    // uninstalled or disabled. The details are an Extension, and the source is
+    // a Profile.
     //
     // Note that when this notification is sent, ExtensionsService has already
     // removed the extension from its internal state.
@@ -691,6 +744,18 @@ class NotificationType {
 
     // Same as above, but for a disabled extension.
     EXTENSION_UNLOADED_DISABLED,
+
+    // Sent after a new ExtensionFunctionDispatcher is created. The details are
+    // an ExtensionFunctionDispatcher* and the source is a Profile*. This is
+    // similar in timing to EXTENSION_HOST_CREATED, but also fires when an
+    // extension view which is hosted in TabContents* is created.
+    EXTENSION_FUNCTION_DISPATCHER_CREATED,
+
+    // Sent before an ExtensionHost is destroyed. The details are
+    // an ExtensionFunctionDispatcher* and the source is a Profile*. This is
+    // similar in timing to EXTENSION_HOST_DESTROYED, but also fires when an
+    // extension view which is hosted in TabContents* is destroyed.
+    EXTENSION_FUNCTION_DISPATCHER_DESTROYED,
 
     // Sent after a new ExtensionHost is created. The details are
     // an ExtensionHost* and the source is an ExtensionProcessManager*.
@@ -729,8 +794,13 @@ class NotificationType {
     EXTENSION_POPUP_VIEW_READY,
 
     // Sent when a browser action's state has changed. The source is the
-    // ExtensionAction* that changed. The details are an ExtensionActionState*.
+    // ExtensionAction* that changed.  There are no details.
     EXTENSION_BROWSER_ACTION_UPDATED,
+
+    // Sent when the count of page actions has changed. Note that some of them
+    // may not apply to the current page. The source is a LocationBar*. There
+    // are no details.
+    EXTENSION_PAGE_ACTION_COUNT_CHANGED,
 
     // Sent when a page action's visibility has changed. The source is the
     // ExtensionAction* that changed. The details are a TabContents*.
@@ -748,16 +818,10 @@ class NotificationType {
 
     // Privacy Blacklist -------------------------------------------------------
 
-    // Sent when the blacklist manager successfully finishes reading
-    // a blacklist. The details are a Blacklist, and the source is a Profile.
-    BLACKLIST_MANAGER_BLACKLIST_READ_FINISHED,
-
-    // Sent when the blacklist manager encounters an error. The details are
-    // a string16 (error message), and the source is a Profile.
-    BLACKLIST_MANAGER_ERROR,
-
-    // Sent by the resource dispatcher host when a resource is blocked.
-    BLACKLIST_BLOCKED_RESOURCE,
+    // Sent on the IO thread when a non-visual resource (like a cookie)
+    // is blocked by a privacy blacklist. The details are a const URLRequest,
+    // and the source is a const ChromeURLRequestContext.
+    BLACKLIST_NONVISUAL_RESOURCE_BLOCKED,
 
     // Debugging ---------------------------------------------------------------
 
@@ -768,21 +832,125 @@ class NotificationType {
     // Desktop Notifications ---------------------------------------------------
 
     // This notification is sent when a balloon is connected to a renderer
-    // process to render the balloon contents.  The source is a Source<Balloon>
-    // with a pointer to the the balloon.  A NOTIFY_BALLOON_DISCONNECTED is
-    // guaranteed before the source pointer becomes junk. No details expected.
+    // process to render the balloon contents.  The source is a
+    // Source<BalloonHost> with a pointer to the the balloon.  A
+    // NOTIFY_BALLOON_DISCONNECTED is guaranteed before the source pointer
+    // becomes junk. No details expected.
     NOTIFY_BALLOON_CONNECTED,
 
     // This message is sent after a balloon is disconnected from the renderer
-    // process. The source is a Source<Balloon> with a pointer to the balloon
-    // (the pointer is usable). No details are expected.
+    // process. The source is a Source<BalloonHost> with a pointer to the
+    // balloon host (the pointer is usable). No details are expected.
     NOTIFY_BALLOON_DISCONNECTED,
+
+    // Web Database Service ----------------------------------------------------
+
+    // This notification is sent whenever autofill entries are
+    // changed.  The detail of this notification is a list of changes
+    // represented by a vector of AutofillChange.  Each change
+    // includes a change type (add, update, or remove) as well as the
+    // key of the entry that was affected.
+    AUTOFILL_ENTRIES_CHANGED,
+
+    // Sent when an AutoFillProfile has been added/removed/updated in the
+    // WebDatabase.  The detail is an AutofillProfileChange.
+    AUTOFILL_PROFILE_CHANGED,
+
+    // Sent when an Autofill CreditCard has been added/removed/updated in the
+    // WebDatabase.  The detail is an AutofillCreditCardChange.
+    AUTOFILL_CREDIT_CARD_CHANGED,
+
+    // This notification is sent whenever the web database service has finished
+    // loading the web database.  No details are expected.
+    WEB_DATABASE_LOADED,
+
+    // Purge Memory ------------------------------------------------------------
+
+    // Sent on the IO thread when the system should try to reduce the amount of
+    // memory in use, no source or details are passed. See memory_purger.h .cc.
+    PURGE_MEMORY,
+
+    // Accessibility Notifications ---------------------------------------------
+
+    // Notification that a window in the browser UI (not the web content)
+    // was opened, for propagating to an accessibility extension.
+    // Details will be an AccessibilityWindowInfo.
+    ACCESSIBILITY_WINDOW_OPENED,
+
+    // Notification that a window in the browser UI was closed.
+    // Details will be an AccessibilityWindowInfo.
+    ACCESSIBILITY_WINDOW_CLOSED,
+
+    // Notification that a control in the browser UI was focused.
+    // Details will be an AccessibilityControlInfo.
+    ACCESSIBILITY_CONTROL_FOCUSED,
+
+    // Notification that a control in the browser UI had its action taken,
+    // like pressing a button or toggling a checkbox.
+    // Details will be an AccessibilityControlInfo.
+    ACCESSIBILITY_CONTROL_ACTION,
+
+    // Notification that text box in the browser UI had text change.
+    // Details will be an AccessibilityControlInfo.
+    ACCESSIBILITY_TEXT_CHANGED,
+
+    // Notification that a pop-down menu was opened, for propagating
+    // to an accessibility extension.
+    // Details will be an AccessibilityMenuInfo.
+    ACCESSIBILITY_MENU_OPENED,
+
+    // Notification that a pop-down menu was closed, for propagating
+    // to an accessibility extension.
+    // Details will be an AccessibilityMenuInfo.
+    ACCESSIBILITY_MENU_CLOSED,
 
     // Content Settings --------------------------------------------------------
 
     // Sent when content settings change. The source is a HostContentSettings
     // object, the details are ContentSettingsNotificationsDetails.
     CONTENT_SETTINGS_CHANGED,
+
+    // Sync --------------------------------------------------------------------
+
+    // Sent when the sync backend has been paused.
+    SYNC_PAUSED,
+
+    // Sent when the sync backend has been resumed.
+    SYNC_RESUMED,
+
+    // The sync service has started the configuration process.
+    SYNC_CONFIGURE_START,
+
+    // The sync service is finished the configuration process.
+    SYNC_CONFIGURE_DONE,
+
+    // Cookies -----------------------------------------------------------------
+
+    // Sent when a cookie changes. The source is a Profile object, the details
+    // are a ChromeCookieDetails object.
+    COOKIE_CHANGED,
+
+#if defined(OS_CHROMEOS)
+    // Sent when a chromium os user logs in.
+    LOGIN_USER_CHANGED,
+
+    // Sent when a chromium os user attempts to log in.  The source is
+    // all and the details are AuthenticationNotificationDetails.
+    LOGIN_AUTHENTICATION,
+
+    // Sent when a panel state changed.
+    PANEL_STATE_CHANGED,
+#endif
+
+    // Sent before the repost form warning is brought up.
+    // The source is a NavigationController.
+    REPOST_WARNING_SHOWN,
+
+#if defined(TOOLKIT_VIEWS)
+    // Sent when a bookmark's context menu is shown. Used to notify
+    // tests that the context menu has been created and shown.
+    BOOKMARK_CONTEXT_MENU_SHOWN,
+#endif
 
     // Count (must be last) ----------------------------------------------------
     // Used to determine the number of notification types.  Not valid as

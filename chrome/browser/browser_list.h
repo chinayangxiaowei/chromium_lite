@@ -2,8 +2,8 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#ifndef CHROME_BROWSER_BROWSER_LIST_H__
-#define CHROME_BROWSER_BROWSER_LIST_H__
+#ifndef CHROME_BROWSER_BROWSER_LIST_H_
+#define CHROME_BROWSER_BROWSER_LIST_H_
 
 #include <vector>
 
@@ -28,7 +28,10 @@ class BrowserList {
     virtual void OnBrowserRemoving(const Browser* browser) = 0;
 
     // Called immediately after a browser is set active (SetLastActive)
-    virtual void OnBrowserSetLastActive(const Browser* browser) { }
+    virtual void OnBrowserSetLastActive(const Browser* browser) {}
+
+   protected:
+    virtual ~Observer() {}
   };
 
   // Adds and removes browsers from the global list. The browser object should
@@ -62,8 +65,11 @@ class BrowserList {
 
   // Find an existing browser window with the provided type. Searches in the
   // order of last activation. Only browsers that have been active can be
-  // returned. Returns NULL if no such browser currently exists.
-  static Browser* FindBrowserWithType(Profile* p, Browser::Type t);
+  // returned. If |match_incognito| is true, will match a browser with either
+  // a regular or incognito profile that matches the given one. Returns NULL if
+  // no such browser currently exists.
+  static Browser* FindBrowserWithType(Profile* p, Browser::Type t,
+                                      bool match_incognito);
 
   // Find an existing browser window with the provided profile. Searches in the
   // order of last activation. Only browsers that have been active can be
@@ -73,6 +79,12 @@ class BrowserList {
   // Find an existing browser with the provided ID. Returns NULL if no such
   // browser currently exists.
   static Browser* FindBrowserWithID(SessionID::id_type desired_id);
+
+  // Checks if the browser can be automatically restarted to install upgrades
+  // The browser can be automatically restarted when:
+  // 1. It's in the background mode (no visible windows).
+  // 2. An update exe is present in the install folder.
+  static bool CanRestartForUpdate();
 
   // Closes all browsers. If use_post is true the windows are closed by way of
   // posting a WM_CLOSE message, otherwise the windows are closed directly. In
@@ -91,6 +103,9 @@ class BrowserList {
 
   // Returns true if there is at least one Browser with the specified profile.
   static bool HasBrowserWithProfile(Profile* profile);
+
+  // Returns true if browser is in persistent mode and false otherwise.
+  static bool IsInPersistentMode();
 
   static const_iterator begin() {
     return browsers_.begin();
@@ -199,4 +214,4 @@ class TabContentsIterator {
   TabContents* cur_;
 };
 
-#endif  // CHROME_BROWSER_BROWSER_LIST_H__
+#endif  // CHROME_BROWSER_BROWSER_LIST_H_

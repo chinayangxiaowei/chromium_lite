@@ -2,8 +2,12 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "base/file_path.h"
+#include "base/file_util.h"
+#include "base/path_service.h"
 #include "base/pickle.h"
 #include "net/base/cert_status_flags.h"
+#include "net/base/cert_test_util.h"
 #include "net/base/cert_verify_result.h"
 #include "net/base/net_errors.h"
 #include "net/base/test_certificate_data.h"
@@ -22,6 +26,8 @@
 #endif
 
 using base::Time;
+
+namespace net {
 
 namespace {
 
@@ -66,13 +72,35 @@ unsigned char paypal_null_fingerprint[] = {
 // A certificate for https://www.unosoft.hu/, whose AIA extension contains
 // an LDAP URL without a host name.
 unsigned char unosoft_hu_fingerprint[] = {
-  0x4c, 0x59, 0xab, 0xeb, 0x9f, 0x6f, 0x92, 0xc3, 0xa8, 0x4c, 0x45, 0x7c,
-  0xe4, 0x91, 0x47, 0x1e, 0x79, 0x3c, 0xc2, 0x8c
+  0x32, 0xff, 0xe3, 0xbe, 0x2c, 0x3b, 0xc7, 0xca, 0xbf, 0x2d, 0x64, 0xbd,
+  0x25, 0x66, 0xf2, 0xec, 0x8b, 0x0f, 0xbf, 0xd8
 };
 
-}  // namespace
+// Returns a FilePath object representing the src/net/data/ssl/certificates
+// directory in the source tree.
+FilePath GetTestCertsDirectory() {
+  FilePath certs_dir;
+  PathService::Get(base::DIR_SOURCE_ROOT, &certs_dir);
+  certs_dir = certs_dir.AppendASCII("net");
+  certs_dir = certs_dir.AppendASCII("data");
+  certs_dir = certs_dir.AppendASCII("ssl");
+  certs_dir = certs_dir.AppendASCII("certificates");
+  return certs_dir;
+}
 
-namespace net {
+// Imports a certificate file in the src/net/data/ssl/certificates directory.
+// certs_dir represents the test certificates directory.  cert_file is the
+// name of the certificate file.
+X509Certificate* ImportCertFromFile(const FilePath& certs_dir,
+                                    const std::string& cert_file) {
+  FilePath cert_path = certs_dir.AppendASCII(cert_file);
+  std::string cert_data;
+  if (!file_util::ReadFileToString(cert_path, &cert_data))
+    return NULL;
+  return X509Certificate::CreateFromBytes(cert_data.data(), cert_data.size());
+}
+
+}  // namespace
 
 TEST(X509CertificateTest, GoogleCertParsing) {
   scoped_refptr<X509Certificate> google_cert = X509Certificate::CreateFromBytes(
@@ -272,11 +300,12 @@ TEST(X509CertificateTest, PaypalNullCertParsing) {
 #endif
 }
 
+// A certificate whose AIA extension contains an LDAP URL without a host name.
+// This certificate will expire on 2011-09-08.
 TEST(X509CertificateTest, UnoSoftCertParsing) {
+  FilePath certs_dir = GetTestCertsDirectory();
   scoped_refptr<X509Certificate> unosoft_hu_cert =
-      X509Certificate::CreateFromBytes(
-          reinterpret_cast<const char*>(unosoft_hu_der),
-          sizeof(unosoft_hu_der));
+      ImportCertFromFile(certs_dir, "unosoft_hu_cert.der");
 
   ASSERT_NE(static_cast<X509Certificate*>(NULL), unosoft_hu_cert);
 
@@ -293,6 +322,39 @@ TEST(X509CertificateTest, UnoSoftCertParsing) {
   EXPECT_NE(0, verify_result.cert_status & CERT_STATUS_AUTHORITY_INVALID);
 }
 
+#if defined(USE_NSS)
+// A regression test for http://crbug.com/31497.
+// This certificate will expire on 2012-04-08.
+// TODO(wtc): we can't run this test on Mac because MacTrustedCertificates
+// can hold only one additional trusted root certificate for unit tests.
+// TODO(wtc): we can't run this test on Windows because LoadTemporaryRootCert
+// isn't implemented (http//crbug.com/8470).
+TEST(X509CertificateTest, IntermediateCARequireExplicitPolicy) {
+  FilePath certs_dir = GetTestCertsDirectory();
+
+  scoped_refptr<X509Certificate> server_cert =
+      ImportCertFromFile(certs_dir, "www_us_army_mil_cert.der");
+  ASSERT_NE(static_cast<X509Certificate*>(NULL), server_cert);
+
+  // The intermediate CA certificate's policyConstraints extension has a
+  // requireExplicitPolicy field with SkipCerts=0.
+  scoped_refptr<X509Certificate> intermediate_cert =
+      ImportCertFromFile(certs_dir, "dod_ca_17_cert.der");
+  ASSERT_NE(static_cast<X509Certificate*>(NULL), intermediate_cert);
+
+  FilePath root_cert_path = certs_dir.AppendASCII("dod_root_ca_2_cert.der");
+  scoped_refptr<X509Certificate> root_cert =
+      LoadTemporaryRootCert(root_cert_path);
+  ASSERT_NE(static_cast<X509Certificate*>(NULL), root_cert);
+
+  int flags = 0;
+  CertVerifyResult verify_result;
+  int error = server_cert->Verify("www.us.army.mil", flags, &verify_result);
+  EXPECT_EQ(OK, error);
+  EXPECT_EQ(0, verify_result.cert_status);
+}
+#endif
+
 // Tests X509Certificate::Cache via X509Certificate::CreateFromHandle.  We
 // call X509Certificate::CreateFromHandle several times and observe whether
 // it returns a cached or new X509Certificate object.
@@ -308,14 +370,16 @@ TEST(X509CertificateTest, Cache) {
   google_cert_handle = X509Certificate::CreateOSCertHandleFromBytes(
       reinterpret_cast<const char*>(google_der), sizeof(google_der));
   scoped_refptr<X509Certificate> cert1 = X509Certificate::CreateFromHandle(
-      google_cert_handle, X509Certificate::SOURCE_LONE_CERT_IMPORT);
+      google_cert_handle, X509Certificate::SOURCE_LONE_CERT_IMPORT,
+      X509Certificate::OSCertHandles());
 
   // Add a certificate from the same source (SOURCE_LONE_CERT_IMPORT).  This
   // should return the cached certificate (cert1).
   google_cert_handle = X509Certificate::CreateOSCertHandleFromBytes(
       reinterpret_cast<const char*>(google_der), sizeof(google_der));
   scoped_refptr<X509Certificate> cert2 = X509Certificate::CreateFromHandle(
-      google_cert_handle, X509Certificate::SOURCE_LONE_CERT_IMPORT);
+      google_cert_handle, X509Certificate::SOURCE_LONE_CERT_IMPORT,
+      X509Certificate::OSCertHandles());
 
   EXPECT_EQ(cert1, cert2);
 
@@ -324,7 +388,8 @@ TEST(X509CertificateTest, Cache) {
   google_cert_handle = X509Certificate::CreateOSCertHandleFromBytes(
       reinterpret_cast<const char*>(google_der), sizeof(google_der));
   scoped_refptr<X509Certificate> cert3 = X509Certificate::CreateFromHandle(
-      google_cert_handle, X509Certificate::SOURCE_FROM_NETWORK);
+      google_cert_handle, X509Certificate::SOURCE_FROM_NETWORK,
+      X509Certificate::OSCertHandles());
 
   EXPECT_NE(cert1, cert3);
 
@@ -333,14 +398,16 @@ TEST(X509CertificateTest, Cache) {
   google_cert_handle = X509Certificate::CreateOSCertHandleFromBytes(
       reinterpret_cast<const char*>(google_der), sizeof(google_der));
   scoped_refptr<X509Certificate> cert4 = X509Certificate::CreateFromHandle(
-      google_cert_handle, X509Certificate::SOURCE_FROM_NETWORK);
+      google_cert_handle, X509Certificate::SOURCE_FROM_NETWORK,
+      X509Certificate::OSCertHandles());
 
   EXPECT_EQ(cert3, cert4);
 
   google_cert_handle = X509Certificate::CreateOSCertHandleFromBytes(
       reinterpret_cast<const char*>(google_der), sizeof(google_der));
   scoped_refptr<X509Certificate> cert5 = X509Certificate::CreateFromHandle(
-      google_cert_handle, X509Certificate::SOURCE_FROM_NETWORK);
+      google_cert_handle, X509Certificate::SOURCE_FROM_NETWORK,
+      X509Certificate::OSCertHandles());
 
   EXPECT_EQ(cert3, cert5);
 }
@@ -394,5 +461,62 @@ TEST(X509CertificateTest, Policy) {
   EXPECT_TRUE(policy.HasAllowedCert());
   EXPECT_TRUE(policy.HasDeniedCert());
 }
+
+#if defined(OS_MACOSX) || defined(OS_WIN)
+TEST(X509CertificateTest, IntermediateCertificates) {
+  X509Certificate::OSCertHandle handle1, handle2, handle3, handle4;
+
+  // Create object with no intermediates:
+  handle1 = X509Certificate::CreateOSCertHandleFromBytes(
+      reinterpret_cast<const char*>(google_der), sizeof(google_der));
+  X509Certificate::OSCertHandles intermediates1;
+  scoped_refptr<X509Certificate> cert1;
+  cert1 = X509Certificate::CreateFromHandle(handle1,
+      X509Certificate::SOURCE_FROM_NETWORK,
+      intermediates1);
+  EXPECT_TRUE(cert1->HasIntermediateCertificates(intermediates1));
+  handle2 = X509Certificate::CreateOSCertHandleFromBytes(
+      reinterpret_cast<const char*>(webkit_der), sizeof(webkit_der));
+  EXPECT_FALSE(cert1->HasIntermediateCertificate(handle2));
+
+  // Create object with 2 intermediates:
+  handle1 = X509Certificate::CreateOSCertHandleFromBytes(
+      reinterpret_cast<const char*>(google_der), sizeof(google_der));
+  X509Certificate::OSCertHandles intermediates2;
+  handle3 = X509Certificate::CreateOSCertHandleFromBytes(
+      reinterpret_cast<const char*>(thawte_der), sizeof(thawte_der));
+  intermediates2.push_back(handle2);
+  intermediates2.push_back(handle3);
+  scoped_refptr<X509Certificate> cert2;
+  cert2 = X509Certificate::CreateFromHandle(
+      X509Certificate::DupOSCertHandle(handle1),
+      X509Certificate::SOURCE_FROM_NETWORK,
+      intermediates2);
+
+  // The cache should have stored cert2 'cause it has more intermediates:
+  EXPECT_NE(cert1, cert2);
+
+  // Verify it has all the intermediates:
+  EXPECT_TRUE(cert2->HasIntermediateCertificate(handle2));
+  EXPECT_TRUE(cert2->HasIntermediateCertificate(handle3));
+  handle4 = X509Certificate::CreateOSCertHandleFromBytes(
+      reinterpret_cast<const char*>(paypal_null_der), sizeof(paypal_null_der));
+  EXPECT_FALSE(cert2->HasIntermediateCertificate(handle4));
+
+  // Create object with 1 intermediate:
+  handle3 = X509Certificate::CreateOSCertHandleFromBytes(
+      reinterpret_cast<const char*>(thawte_der), sizeof(thawte_der));
+  X509Certificate::OSCertHandles intermediates3;
+  intermediates2.push_back(handle3);
+  scoped_refptr<X509Certificate> cert3;
+  cert3 = X509Certificate::CreateFromHandle(
+      X509Certificate::DupOSCertHandle(handle1),
+      X509Certificate::SOURCE_FROM_NETWORK,
+      intermediates3);
+
+  // The cache should have returned cert2 'cause it has more intermediates:
+  EXPECT_EQ(cert3, cert2);
+}
+#endif
 
 }  // namespace net

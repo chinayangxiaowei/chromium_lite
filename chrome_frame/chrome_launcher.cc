@@ -12,6 +12,7 @@
 #include "chrome/common/chrome_constants.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome_frame/chrome_frame_automation.h"
+#include "chrome_frame/chrome_frame_reporting.h"
 
 namespace chrome_launcher {
 
@@ -22,19 +23,20 @@ const wchar_t kLauncherExeBaseName[] = L"chrome_launcher.exe";
 const char* kAllowedSwitches[] = {
   switches::kAutomationClientChannelID,
   switches::kChromeFrame,
-  switches::kDisableMetrics,
   switches::kEnableRendererAccessibility,
   switches::kEnableExperimentalExtensionApis,
   switches::kNoErrorDialogs,
   switches::kNoFirstRun,
   switches::kUserDataDir,
+  switches::kDisablePopupBlocking,
+  switches::kFullMemoryCrashReport,
 };
 
 CommandLine* CreateLaunchCommandLine() {
   // TODO(joi) As optimization, could launch Chrome directly when running at
   // medium integrity.  (Requires bringing in code to read SIDs, etc.)
 
-  // The launcher EXE will be in the same directory as the npchrome_tab DLL,
+  // The launcher EXE will be in the same directory as the Chrome Frame DLL,
   // so create a full path to it based on this assumption.  Since our unit
   // tests also use this function, and live in the directory above, we test
   // existence of the file and try the path that includes the /servers/
@@ -86,6 +88,9 @@ bool SanitizeAndLaunchChrome(const wchar_t* command_line) {
   CommandLine sanitized(GetChromeExecutablePath());
   SanitizeCommandLine(original, &sanitized);
 
+  DLOG(INFO) << sanitized.command_line_string();
+  sanitized.AppendSwitchWithValue("log-level", "0");
+
   return base::LaunchApp(sanitized.command_line_string(), false, false, NULL);
 }
 
@@ -110,11 +115,17 @@ FilePath GetChromeExecutablePath() {
 
 // Entrypoint that implements the logic of chrome_launcher.exe.
 int CALLBACK CfLaunchChrome() {
+  int result = ERROR_OPEN_FAILED;
+
   if (chrome_launcher::SanitizeAndLaunchChrome(::GetCommandLine())) {
-    return ERROR_SUCCESS;
-  } else {
-    return ERROR_OPEN_FAILED;
+    result = ERROR_SUCCESS;
   }
+
+  // Regardless of what just happened, shut down crash reporting now to avoid a
+  // hang when we are unloaded.
+  ShutdownCrashReporting();
+
+  return result;
 }
 
 // Compile-time check to see that the type CfLaunchChromeProc is correct.

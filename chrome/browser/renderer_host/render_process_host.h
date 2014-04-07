@@ -8,11 +8,11 @@
 #include <set>
 #include <string>
 
+#include "app/surface/transport_dib.h"
 #include "base/id_map.h"
 #include "base/process.h"
 #include "base/scoped_ptr.h"
 #include "base/time.h"
-#include "chrome/common/transport_dib.h"
 #include "chrome/common/visitedlink_common.h"
 #include "ipc/ipc_sync_channel.h"
 
@@ -148,7 +148,8 @@ class RenderProcessHost : public IPC::Channel::Sender,
   // be called once before the object can be used, but can be called after
   // that with no effect. Therefore, if the caller isn't sure about whether
   // the process has been created, it should just call Init().
-  virtual bool Init(bool is_extensions_process) = 0;
+  virtual bool Init(bool is_extensions_process,
+                    URLRequestContextGetter* request_context) = 0;
 
   // Gets the next available routing id.
   virtual int GetNextRoutingID() = 0;
@@ -164,15 +165,15 @@ class RenderProcessHost : public IPC::Channel::Sender,
   virtual void CrossSiteClosePageACK(
       const ViewMsg_ClosePage_Params& params) = 0;
 
-  // Called on the UI thread to wait for the next PaintRect message for the
+  // Called on the UI thread to wait for the next UpdateRect message for the
   // specified render widget.  Returns true if successful, and the msg out-
-  // param will contain a copy of the received PaintRect message.
-  virtual bool WaitForPaintMsg(int render_widget_id,
-                               const base::TimeDelta& max_delay,
-                               IPC::Message* msg) = 0;
+  // param will contain a copy of the received UpdateRect message.
+  virtual bool WaitForUpdateMsg(int render_widget_id,
+                                const base::TimeDelta& max_delay,
+                                IPC::Message* msg) = 0;
 
   // Called when a received message cannot be decoded.
-  virtual void ReceivedBadMessage(uint16 msg_type) = 0;
+  virtual void ReceivedBadMessage(uint32 msg_type) = 0;
 
   // Track the count of visible widgets. Called by listeners to register and
   // unregister visibility.
@@ -181,9 +182,6 @@ class RenderProcessHost : public IPC::Channel::Sender,
 
   // Called when RenderView is created by a listener.
   virtual void ViewCreated() = 0;
-
-  // Add a word in the spellchecker.
-  virtual void AddWord(const string16& word) = 0;
 
   // Informs the renderer about a new visited link table.
   virtual void SendVisitedLinkTable(base::SharedMemory* table_memory) = 0;
@@ -210,8 +208,10 @@ class RenderProcessHost : public IPC::Channel::Sender,
   // Returns the process object associated with the child process.  In certain
   // tests or single-process mode, this will actually represent the current
   // process.
-  // NOTE: this is not valid after calling Init, as it starts the process
-  // asynchronously.  It's guaranteed to be valid after the first IPC arrives.
+  //
+  // NOTE: this is not necessarily valid immediately after calling Init, as
+  // Init starts the process asynchronously.  It's guaranteed to be valid after
+  // the first IPC arrives.
   virtual base::ProcessHandle GetHandle() = 0;
 
   // Transport DIB functions ---------------------------------------------------

@@ -16,12 +16,17 @@
 
 #include "base/basictypes.h"
 #include "base/port.h"
+#include "chrome/browser/sync/engine/model_safe_worker.h"
 #include "chrome/browser/sync/syncable/syncable.h"
 
 namespace browser_sync {
 
+namespace sessions {
+class ConflictProgress;
+class UpdateProgress;
+}
+
 class ConflictResolver;
-class SyncerSession;
 
 class UpdateApplicator {
  public:
@@ -30,7 +35,9 @@ class UpdateApplicator {
 
   UpdateApplicator(ConflictResolver* resolver,
                    const UpdateIterator& begin,
-                   const UpdateIterator& end);
+                   const UpdateIterator& end,
+                   const ModelSafeRoutingInfo& routes,
+                   ModelSafeGroup group_filter);
 
   // returns true if there's more we can do.
   bool AttemptOneApplication(syncable::WriteTransaction* trans);
@@ -38,19 +45,30 @@ class UpdateApplicator {
   bool AllUpdatesApplied() const;
 
   // This class does not automatically save its progress into the
-  // SyncerSession -- to get that to happen, call this method after update
+  // SyncSession -- to get that to happen, call this method after update
   // application is finished (i.e., when AttemptOneAllocation stops returning
   // true).
-  void SaveProgressIntoSessionState(SyncerSession* session);
+  void SaveProgressIntoSessionState(
+      sessions::ConflictProgress* conflict_progress,
+      sessions::UpdateProgress* update_progress);
 
  private:
+  // If true, AttemptOneApplication will skip over |entry| and return true.
+  bool SkipUpdate(const syncable::Entry& entry);
+
+  // Adjusts the UpdateIterator members to move ahead by one update.
+  void Advance();
+
   // Used to resolve conflicts when trying to apply updates.
   ConflictResolver* const resolver_;
 
   UpdateIterator const begin_;
   UpdateIterator end_;
   UpdateIterator pointer_;
+  ModelSafeGroup group_filter_;
   bool progress_;
+
+  const ModelSafeRoutingInfo routing_info_;
 
   // Track the result of the various items.
   std::vector<syncable::Id> conflicting_ids_;

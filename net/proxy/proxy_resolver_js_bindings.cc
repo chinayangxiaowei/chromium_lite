@@ -1,107 +1,25 @@
-// Copyright (c) 2009 The Chromium Authors. All rights reserved.  Use of this
-// source code is governed by a BSD-style license that can be found in the
-// LICENSE file.
-
-#include "build/build_config.h"
-
-#if defined(OS_WIN)
-#include <ws2tcpip.h>
-#else
-#include <netdb.h>
-#endif
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Use of this source code is governed by a BSD-style license that can be
+// found in the LICENSE file.
 
 #include "net/proxy/proxy_resolver_js_bindings.h"
 
-#include "base/compiler_specific.h"
 #include "base/logging.h"
-#include "base/message_loop.h"
-#include "base/waitable_event.h"
 #include "net/base/address_list.h"
 #include "net/base/host_resolver.h"
 #include "net/base/net_errors.h"
+#include "net/base/net_log.h"
 #include "net/base/net_util.h"
+#include "net/base/sys_addrinfo.h"
 
 namespace net {
 namespace {
 
-// Wrapper around HostResolver to give a sync API while running the resolve
-// in async mode on |host_resolver_loop|. If |host_resolver_loop| is NULL,
-// runs sync on the current thread (this mode is just used by testing).
-class SyncHostResolverBridge
-    : public base::RefCountedThreadSafe<SyncHostResolverBridge> {
- public:
-  SyncHostResolverBridge(HostResolver* host_resolver,
-                         MessageLoop* host_resolver_loop)
-      : host_resolver_(host_resolver),
-        host_resolver_loop_(host_resolver_loop),
-        event_(false, false),
-        ALLOW_THIS_IN_INITIALIZER_LIST(
-            callback_(this, &SyncHostResolverBridge::OnResolveCompletion)) {
-  }
-
-  // Run the resolve on host_resolver_loop, and wait for result.
-  int Resolve(const std::string& hostname,
-              AddressFamily address_family,
-              net::AddressList* addresses) {
-    // Port number doesn't matter.
-    HostResolver::RequestInfo info(hostname, 80);
-    info.set_address_family(address_family);
-
-    // Hack for tests -- run synchronously on current thread.
-    if (!host_resolver_loop_)
-      return host_resolver_->Resolve(info, addresses, NULL, NULL, NULL);
-
-    // Otherwise start an async resolve on the resolver's thread.
-    host_resolver_loop_->PostTask(FROM_HERE, NewRunnableMethod(this,
-        &SyncHostResolverBridge::StartResolve, info, addresses));
-
-    // Wait for the resolve to complete in the resolver's thread.
-    event_.Wait();
-    return err_;
-  }
-
- private:
-  friend class base::RefCountedThreadSafe<SyncHostResolverBridge>;
-
-  ~SyncHostResolverBridge() {}
-
-  // Called on host_resolver_loop_.
-  void StartResolve(const HostResolver::RequestInfo& info,
-                    net::AddressList* addresses) {
-    DCHECK_EQ(host_resolver_loop_, MessageLoop::current());
-    int error = host_resolver_->Resolve(
-        info, addresses, &callback_, NULL, NULL);
-    if (error != ERR_IO_PENDING)
-      OnResolveCompletion(error);  // Completed synchronously.
-  }
-
-  // Called on host_resolver_loop_.
-  void OnResolveCompletion(int result) {
-    DCHECK_EQ(host_resolver_loop_, MessageLoop::current());
-    err_ = result;
-    event_.Signal();
-  }
-
-  scoped_refptr<HostResolver> host_resolver_;
-  MessageLoop* host_resolver_loop_;
-
-  // Event to notify completion of resolve request.
-  base::WaitableEvent event_;
-
-  // Callback for when the resolve completes on host_resolver_loop_.
-  net::CompletionCallbackImpl<SyncHostResolverBridge> callback_;
-
-  // The result from the result request (set by in host_resolver_loop_).
-  int err_;
-};
-
 // ProxyResolverJSBindings implementation.
 class DefaultJSBindings : public ProxyResolverJSBindings {
  public:
-  DefaultJSBindings(HostResolver* host_resolver,
-                    MessageLoop* host_resolver_loop)
-      : host_resolver_(new SyncHostResolverBridge(
-          host_resolver, host_resolver_loop)) {}
+  explicit DefaultJSBindings(HostResolver* host_resolver)
+      : host_resolver_(host_resolver) {}
 
   // Handler for "alert(message)".
   virtual void Alert(const std::string& message) {
@@ -129,10 +47,11 @@ class DefaultJSBindings : public ProxyResolverJSBindings {
     // Consequently a lot of existing PAC scripts assume they will only get
     // IPv4 results, and will misbehave if they get an IPv6 result.
     // See http://crbug.com/24641 for more details.
+    HostResolver::RequestInfo info(host, 80);  // Port doesn't matter.
+    info.set_address_family(ADDRESS_FAMILY_IPV4);
     net::AddressList address_list;
-    int result = host_resolver_->Resolve(host,
-                                         ADDRESS_FAMILY_IPV4,
-                                         &address_list);
+    int result = host_resolver_->Resolve(info, &address_list, NULL, NULL,
+                                         BoundNetLog());
 
     if (result != OK)
       return std::string();  // Failed.
@@ -148,10 +67,10 @@ class DefaultJSBindings : public ProxyResolverJSBindings {
   // Handler for "dnsResolveEx(host)". Returns empty string on failure.
   virtual std::string DnsResolveEx(const std::string& host) {
     // Do a sync resolve of the hostname.
+    HostResolver::RequestInfo info(host, 80);  // Port doesn't matter.
     net::AddressList address_list;
-    int result = host_resolver_->Resolve(host,
-                                         ADDRESS_FAMILY_UNSPECIFIED,
-                                         &address_list);
+    int result = host_resolver_->Resolve(info, &address_list, NULL, NULL,
+                                         BoundNetLog());
 
     if (result != OK)
       return std::string();  // Failed.
@@ -179,15 +98,15 @@ class DefaultJSBindings : public ProxyResolverJSBindings {
   }
 
  private:
-  scoped_refptr<SyncHostResolverBridge> host_resolver_;
+  scoped_refptr<HostResolver> host_resolver_;
 };
 
 }  // namespace
 
 // static
 ProxyResolverJSBindings* ProxyResolverJSBindings::CreateDefault(
-    HostResolver* host_resolver, MessageLoop* host_resolver_loop) {
-  return new DefaultJSBindings(host_resolver, host_resolver_loop);
+    HostResolver* host_resolver) {
+  return new DefaultJSBindings(host_resolver);
 }
 
 }  // namespace net

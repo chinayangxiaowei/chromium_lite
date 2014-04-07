@@ -16,10 +16,10 @@
 #include "base/ref_counted.h"
 #include "base/scoped_ptr.h"
 #include "googleurl/src/gurl.h"
-#include "net/base/load_log.h"
 #include "net/base/load_states.h"
+#include "net/base/net_log.h"
+#include "net/base/request_priority.h"
 #include "net/http/http_response_info.h"
-#include "net/url_request/request_tracker.h"
 #include "net/url_request/url_request_status.h"
 
 namespace base {
@@ -299,12 +299,16 @@ class URLRequest {
   //
   // When uploading data, bytes_len must be non-zero.
   // When uploading a file range, length must be non-zero. If length
-  // exceeds the end-of-file, the upload is clipped at end-of-file.
+  // exceeds the end-of-file, the upload is clipped at end-of-file. If the
+  // expected modification time is provided (non-zero), it will be used to
+  // check if the underlying file has been changed or not. The granularity of
+  // the time comparison is 1 second since time_t precision is used in WebKit.
   void AppendBytesToUpload(const char* bytes, int bytes_len);
   void AppendFileRangeToUpload(const FilePath& file_path,
-                               uint64 offset, uint64 length);
+                               uint64 offset, uint64 length,
+                               const base::Time& expected_modification_time);
   void AppendFileToUpload(const FilePath& file_path) {
-    AppendFileRangeToUpload(file_path, 0, kuint64max);
+    AppendFileRangeToUpload(file_path, 0, kuint64max, base::Time());
   }
 
   // Set the upload data directly.
@@ -368,6 +372,11 @@ class URLRequest {
 
   // Indicate if this response was fetched from disk cache.
   bool was_cached() const { return response_info_.was_cached; }
+
+  // Returns true if the URLRequest was delivered with SPDY.
+  bool was_fetched_via_spdy() const {
+    return response_info_.was_fetched_via_spdy;
+  }
 
   // Get all response headers, as a HttpResponseHeaders object.  See comments
   // in HttpResponseHeaders class as to the format of the data.
@@ -458,6 +467,13 @@ class URLRequest {
   // will be set to an error.
   bool Read(net::IOBuffer* buf, int max_bytes, int *bytes_read);
 
+  // If this request is being cached by the HTTP cache, stop subsequent caching.
+  // Note that this method has no effect on other (simultaneous or not) requests
+  // for the same resource. The typical example is a request that results in
+  // the data being stored to disk (downloaded instead of rendered) so we don't
+  // want to store it twice.
+  void StopCaching();
+
   // This method may be called to follow a redirect that was deferred in
   // response to an OnReceivedRedirect call.
   void FollowDeferredRedirect();
@@ -497,16 +513,16 @@ class URLRequest {
   URLRequestContext* context();
   void set_context(URLRequestContext* context);
 
-  net::LoadLog* load_log() { return load_log_; }
+  const net::BoundNetLog& net_log() const { return net_log_; }
 
   // Returns the expected content size if available
   int64 GetExpectedContentSize() const;
 
-  // Returns the priority level for this request.  A larger value indicates
-  // higher priority.  Negative values are not used.
-  int priority() const { return priority_; }
-  void set_priority(int priority) {
-    DCHECK_GE(priority, 0);
+  // Returns the priority level for this request.
+  net::RequestPriority priority() const { return priority_; }
+  void set_priority(net::RequestPriority priority) {
+    DCHECK_GE(priority, net::HIGHEST);
+    DCHECK_LE(priority, net::LOWEST);
     priority_ = priority;
   }
 
@@ -538,7 +554,6 @@ class URLRequest {
 
  private:
   friend class URLRequestJob;
-  friend class RequestTracker<URLRequest>;
 
   void StartJob(URLRequestJob* job);
 
@@ -560,18 +575,13 @@ class URLRequest {
   // Origin).
   static std::string StripPostSpecificHeaders(const std::string& headers);
 
-  // Gets the goodies out of this that we want to show the user later on the
-  // chrome://net-internals/ page.
-  void GetInfoForTracker(
-      RequestTracker<URLRequest>::RecentRequestInfo* info) const;
-
   // Contextual information used for this request (can be NULL). This contains
   // most of the dependencies which are shared between requests (disk cache,
   // cookie store, socket poool, etc.)
   scoped_refptr<URLRequestContext> context_;
 
   // Tracks the time spent in various load states throughout this request.
-  scoped_refptr<net::LoadLog> load_log_;
+  net::BoundNetLog net_log_;
 
   scoped_refptr<URLRequestJob> job_;
   scoped_refptr<net::UploadData> upload_;
@@ -616,9 +626,8 @@ class URLRequest {
 
   // The priority level for this request.  Objects like ClientSocketPool use
   // this to determine which URLRequest to allocate sockets to first.
-  int priority_;
+  net::RequestPriority priority_;
 
-  RequestTracker<URLRequest>::Node request_tracker_node_;
   base::LeakTracker<URLRequest> leak_tracker_;
 
   DISALLOW_COPY_AND_ASSIGN(URLRequest);

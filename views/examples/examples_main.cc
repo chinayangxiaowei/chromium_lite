@@ -14,15 +14,22 @@
 #include "views/examples/button_example.h"
 #include "views/examples/combobox_example.h"
 #include "views/examples/message_box_example.h"
+#include "views/examples/menu_example.h"
 #include "views/examples/radio_button_example.h"
 #include "views/examples/scroll_view_example.h"
+#include "views/examples/single_split_view_example.h"
+// Slider is not yet ported to Windows.
+#if defined(OS_LINUX)
+#include "views/examples/slider_example.h"
+#endif
 #include "views/examples/tabbed_pane_example.h"
 #if defined(OS_WIN)
-// TableView and TableView2 are not yet ported to Linux.
+// TableView is not yet ported to Linux.
 #include "views/examples/table_example.h"
-#include "views/examples/table2_example.h"
 #endif
+#include "views/examples/table2_example.h"
 #include "views/examples/textfield_example.h"
+#include "views/examples/widget_example.h"
 #include "views/focus/accelerator_handler.h"
 #include "views/grid_layout.h"
 #include "views/window/window.h"
@@ -51,8 +58,6 @@ void ExamplesMain::Run() {
 
   icu_util::Initialize();
 
-  // This requires chrome to be built first right now.
-  // TODO(oshima): fix build to include resource file.
   ResourceBundle::InitSharedInstance(L"en-US");
 
   MessageLoop main_message_loop(MessageLoop::TYPE_UI);
@@ -77,8 +82,10 @@ void ExamplesMain::Run() {
   layout->StartRow(0 /* no expand */, 0);
   layout->AddView(status_label_);
 
+  // TODO(satorux): The window is getting wide.  Eventually, we would have
+  // the second tabbed pane.
   views::Window* window =
-      views::Window::CreateChromeWindow(NULL, gfx::Rect(0, 0, 600, 300), this);
+      views::Window::CreateChromeWindow(NULL, gfx::Rect(0, 0, 850, 300), this);
 
   examples::TextfieldExample textfield_example(this);
   tabbed_pane->AddTab(textfield_example.GetExampleTitle(),
@@ -108,16 +115,33 @@ void ExamplesMain::Run() {
   tabbed_pane->AddTab(scroll_view_example.GetExampleTitle(),
                       scroll_view_example.GetExampleView());
 
+  examples::SingleSplitViewExample single_split_view_example(this);
+  tabbed_pane->AddTab(single_split_view_example.GetExampleTitle(),
+                      single_split_view_example.GetExampleView());
+
 #if defined(OS_WIN)
-  // TableView and TableView2 are not yet ported to Linux.
   examples::TableExample table_example(this);
   tabbed_pane->AddTab(table_example.GetExampleTitle(),
                       table_example.GetExampleView());
+#endif
 
   examples::Table2Example table2_example(this);
   tabbed_pane->AddTab(table2_example.GetExampleTitle(),
                       table2_example.GetExampleView());
+
+  examples::WidgetExample widget_example(this);
+  tabbed_pane->AddTab(widget_example.GetExampleTitle(),
+                      widget_example.GetExampleView());
+
+#if defined(OS_LINUX)
+  examples::SliderExample slider_example(this);
+  tabbed_pane->AddTab(slider_example.GetExampleTitle(),
+                      slider_example.GetExampleView());
 #endif
+
+  examples::MenuExample menu_example(this);
+  tabbed_pane->AddTab(menu_example.GetExampleTitle(),
+                      menu_example.GetExampleView());
 
   window->Show();
   views::AcceleratorHandler accelerator_handler;

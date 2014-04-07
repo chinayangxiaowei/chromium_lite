@@ -8,16 +8,20 @@
 #include <fcntl.h>
 #include <netdb.h>
 #include <sys/socket.h>
+#include <netinet/tcp.h>
 
 #include "base/eintr_wrapper.h"
 #include "base/message_loop.h"
 #include "base/string_util.h"
 #include "base/trace_event.h"
 #include "net/base/io_buffer.h"
-#include "net/base/load_log.h"
 #include "net/base/net_errors.h"
+#include "net/base/net_log.h"
+#if defined(USE_SYSTEM_LIBEVENT)
+#include <event.h>
+#else
 #include "third_party/libevent/event.h"
-
+#endif
 
 namespace net {
 
@@ -28,10 +32,19 @@ const int kInvalidSocket = -1;
 // Return 0 on success, -1 on failure.
 // Too small a function to bother putting in a library?
 int SetNonBlocking(int fd) {
-    int flags = fcntl(fd, F_GETFL, 0);
-    if (-1 == flags)
-      return flags;
-    return fcntl(fd, F_SETFL, flags | O_NONBLOCK);
+  int flags = fcntl(fd, F_GETFL, 0);
+  if (-1 == flags)
+    return flags;
+  return fcntl(fd, F_SETFL, flags | O_NONBLOCK);
+}
+
+// DisableNagle turns off buffering in the kernel. By default, TCP sockets will
+// wait up to 200ms for more data to complete a packet before transmitting.
+// After calling this function, the kernel will not wait. See TCP_NODELAY in
+// `man 7 tcp`.
+int DisableNagle(int fd) {
+  int on = 1;
+  return setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &on, sizeof(on));
 }
 
 // Convert values from <errno.h> to values from "net/base/net_errors.h"
@@ -125,17 +138,17 @@ TCPClientSocketLibevent::~TCPClientSocketLibevent() {
 }
 
 int TCPClientSocketLibevent::Connect(CompletionCallback* callback,
-                                     LoadLog* load_log) {
+                                     const BoundNetLog& net_log) {
   // If already connected, then just return OK.
   if (socket_ != kInvalidSocket)
     return OK;
 
   DCHECK(!waiting_connect_);
-  DCHECK(!load_log_);
+  DCHECK(!net_log_.net_log());
 
   TRACE_EVENT_BEGIN("socket.connect", this, "");
 
-  LoadLog::BeginEvent(load_log, LoadLog::TYPE_TCP_CONNECT);
+  net_log.BeginEvent(NetLog::TYPE_TCP_CONNECT);
 
   int rv = DoConnect();
 
@@ -143,12 +156,12 @@ int TCPClientSocketLibevent::Connect(CompletionCallback* callback,
     // Synchronous operation not supported.
     DCHECK(callback);
 
-    load_log_ = load_log;
+    net_log_ = net_log;
     waiting_connect_ = true;
     write_callback_ = callback;
   } else {
     TRACE_EVENT_END("socket.connect", this, "");
-    LoadLog::EndEvent(load_log, LoadLog::TYPE_TCP_CONNECT);
+    net_log.EndEvent(NetLog::TYPE_TCP_CONNECT);
   }
 
   return rv;
@@ -339,8 +352,16 @@ int TCPClientSocketLibevent::CreateSocket(const addrinfo* ai) {
   if (socket_ == kInvalidSocket)
     return MapPosixError(errno);
 
-  if (SetNonBlocking(socket_))
-    return MapPosixError(errno);
+  if (SetNonBlocking(socket_)) {
+    const int err = MapPosixError(errno);
+    close(socket_);
+    socket_ = kInvalidSocket;
+    return err;
+  }
+
+  // This mirrors the behaviour on Windows. See the comment in
+  // tcp_client_socket_win.cc after searching for "NODELAY".
+  DisableNagle(socket_);  // If DisableNagle fails, we don't care.
 
   return OK;
 }
@@ -382,19 +403,19 @@ void TCPClientSocketLibevent::DidCompleteConnect() {
     const addrinfo* next = current_ai_->ai_next;
     Disconnect();
     current_ai_ = next;
-    scoped_refptr<LoadLog> load_log;
-    load_log.swap(load_log_);
+    BoundNetLog net_log = net_log_;
+    net_log_ = BoundNetLog();
     TRACE_EVENT_END("socket.connect", this, "");
-    LoadLog::EndEvent(load_log, LoadLog::TYPE_TCP_CONNECT);
-    result = Connect(write_callback_, load_log);
+    net_log.EndEvent(NetLog::TYPE_TCP_CONNECT);
+    result = Connect(write_callback_, net_log);
   } else {
     result = MapConnectError(os_error);
     bool ok = write_socket_watcher_.StopWatchingFileDescriptor();
     DCHECK(ok);
     waiting_connect_ = false;
     TRACE_EVENT_END("socket.connect", this, "");
-    LoadLog::EndEvent(load_log_, LoadLog::TYPE_TCP_CONNECT);
-    load_log_ = NULL;
+    net_log_.EndEvent(NetLog::TYPE_TCP_CONNECT);
+    net_log_ = BoundNetLog();
   }
 
   if (result != ERR_IO_PENDING) {
@@ -447,9 +468,12 @@ void TCPClientSocketLibevent::DidCompleteWrite() {
   }
 }
 
-int TCPClientSocketLibevent::GetPeerName(struct sockaddr *name,
-                                         socklen_t *namelen) {
-  return ::getpeername(socket_, name, namelen);
+int TCPClientSocketLibevent::GetPeerAddress(AddressList* address) const {
+  DCHECK(address);
+  if (!current_ai_)
+    return ERR_UNEXPECTED;
+  address->Copy(current_ai_, false);
+  return OK;
 }
 
 }  // namespace net

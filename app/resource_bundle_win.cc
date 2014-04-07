@@ -7,7 +7,6 @@
 #include <atlbase.h>
 
 #include "app/app_paths.h"
-#include "app/gfx/font.h"
 #include "app/l10n_util.h"
 #include "base/debug_util.h"
 #include "base/file_util.h"
@@ -16,6 +15,7 @@
 #include "base/resource_util.h"
 #include "base/string_piece.h"
 #include "base/win_util.h"
+#include "gfx/font.h"
 
 namespace {
 
@@ -39,8 +39,8 @@ ResourceBundle::~ResourceBundle() {
 }
 
 std::string ResourceBundle::LoadResources(const std::wstring& pref_locale) {
-  // As a convenience, set resources_data_ to the current module.
-  resources_data_ = _AtlBaseModule.GetModuleInstance();
+  // As a convenience, set resources_data_ to the current resource module.
+  resources_data_ = _AtlBaseModule.GetResourceInstance();
 
   DCHECK(NULL == locale_resources_data_) << "locale dll already loaded";
   std::string app_locale = l10n_util::GetApplicationLocale(pref_locale);

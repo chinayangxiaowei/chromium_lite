@@ -8,7 +8,7 @@
 #include "base/string16.h"
 #include "base/hash_tables.h"
 #include "base/scoped_ptr.h"
-#include "chrome/common/dom_storage_type.h"
+#include "chrome/common/dom_storage_common.h"
 #include "third_party/WebKit/WebKit/chromium/public/WebString.h"
 
 class DOMStorageArea;
@@ -27,13 +27,14 @@ class DOMStorageNamespace {
   static DOMStorageNamespace* CreateLocalStorageNamespace(
       DOMStorageContext* dom_storage_context, const FilePath& data_dir_path);
   static DOMStorageNamespace* CreateSessionStorageNamespace(
-      DOMStorageContext* dom_storage_context);
+      DOMStorageContext* dom_storage_context, int64 namespace_id);
 
   ~DOMStorageNamespace();
 
   DOMStorageArea* GetStorageArea(const string16& origin,
                                  HostContentSettingsMap* map);
-  DOMStorageNamespace* Copy();
+  DOMStorageNamespace* Copy(int64 clone_namespace_id);
+
   void PurgeMemory();
 
   const DOMStorageContext* dom_storage_context() const {

@@ -1,23 +1,26 @@
-// Copyright (c) 2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/autocomplete/search_provider.h"
 
+#include <algorithm>
+
 #include "app/l10n_util.h"
+#include "base/callback.h"
 #include "base/i18n/icu_string_conversions.h"
 #include "base/message_loop.h"
-#include "base/string_util.h"
+#include "base/utf_string_conversions.h"
 #include "chrome/browser/autocomplete/keyword_provider.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/google_util.h"
 #include "chrome/browser/history/history.h"
 #include "chrome/browser/net/url_fixer_upper.h"
+#include "chrome/browser/pref_service.h"
 #include "chrome/browser/profile.h"
 #include "chrome/browser/search_engines/template_url_model.h"
 #include "chrome/common/json_value_serializer.h"
 #include "chrome/common/pref_names.h"
-#include "chrome/common/pref_service.h"
 #include "chrome/common/url_constants.h"
 #include "googleurl/src/url_util.h"
 #include "grit/generated_resources.h"
@@ -97,13 +100,13 @@ void SearchProvider::Start(const AutocompleteInput& input,
     if (default_provider) {
       AutocompleteMatch match(this, 0, false,
                               AutocompleteMatch::SEARCH_WHAT_YOU_TYPED);
-      static const std::wstring kNoQueryInput(
-          l10n_util::GetString(IDS_AUTOCOMPLETE_NO_QUERY));
-      match.contents.assign(l10n_util::GetStringF(
-          IDS_AUTOCOMPLETE_SEARCH_CONTENTS,
-          default_provider->AdjustedShortNameForLocaleDirection(),
-          kNoQueryInput));
+      match.contents.assign(l10n_util::GetString(IDS_EMPTY_KEYWORD_VALUE));
       match.contents_class.push_back(
+          ACMatchClassification(0, ACMatchClassification::NONE));
+      match.description.assign(l10n_util::GetStringF(
+          IDS_AUTOCOMPLETE_SEARCH_DESCRIPTION,
+          default_provider->AdjustedShortNameForLocaleDirection()));
+      match.description_class.push_back(
           ACMatchClassification(0, ACMatchClassification::DIM));
       matches_.push_back(match);
     }
@@ -137,7 +140,7 @@ void SearchProvider::Run() {
   }
   // We should only get here if we have a suggest url for the keyword or default
   // providers.
-  DCHECK(suggest_results_pending_ > 0);
+  DCHECK_GT(suggest_results_pending_, 0);
 }
 
 void SearchProvider::Stop() {
@@ -154,7 +157,7 @@ void SearchProvider::OnURLFetchComplete(const URLFetcher* source,
                                         const std::string& data) {
   DCHECK(!done_);
   suggest_results_pending_--;
-  DCHECK(suggest_results_pending_ >= 0);  // Should never go negative.
+  DCHECK_GE(suggest_results_pending_, 0);  // Should never go negative.
   const net::HttpResponseHeaders* const response_headers =
       source->response_headers();
   std::string json_data(data);
@@ -180,7 +183,7 @@ void SearchProvider::OnURLFetchComplete(const URLFetcher* source,
   if (status.is_success() && response_code == 200) {
     JSONStringValueSerializer deserializer(json_data);
     deserializer.set_allow_trailing_comma(true);
-    scoped_ptr<Value> root_val(deserializer.Deserialize(NULL));
+    scoped_ptr<Value> root_val(deserializer.Deserialize(NULL, NULL));
     const std::wstring& input_text =
         is_keyword_results ? keyword_input_text_ : input_.text();
     have_suggest_results_ =
@@ -265,34 +268,44 @@ bool SearchProvider::IsQuerySuitableForSuggest() const {
       !profile_->GetPrefs()->GetBoolean(prefs::kSearchSuggestEnabled))
     return false;
 
-  // If the input type is URL, we take extra care so that private data in URL
+  // If the input type might be a URL, we take extra care so that private data
   // isn't sent to the server.
-  if (input_.type() == AutocompleteInput::URL) {
-    // Don't query the server for URLs that aren't http/https/ftp.  Sending
-    // things like file: and data: is both a waste of time and a disclosure of
-    // potentially private, local data.
-    if ((input_.scheme() != L"http") && (input_.scheme() != L"https") &&
-        (input_.scheme() != L"ftp"))
-      return false;
 
-    // Don't leak private data in URL
-    const url_parse::Parsed& parts = input_.parts();
+  // FORCED_QUERY means the user is explicitly asking us to search for this, so
+  // we assume it isn't a URL and/or there isn't private data.
+  if (input_.type() == AutocompleteInput::FORCED_QUERY)
+    return true;
 
-    // Don't send URLs with usernames, queries or refs.  Some of these are
-    // private, and the Suggest server is unlikely to have any useful results
-    // for any of them.
-    // Password is optional and may be omitted.  Checking username is
-    // sufficient.
-    if (parts.username.is_nonempty() || parts.query.is_nonempty() ||
-        parts.ref.is_nonempty())
-      return false;
-    // Don't send anything for https except hostname and port number.
-    // Hostname and port number are OK because they are visible when TCP
-    // connection is established and the Suggest server may provide some
-    // useful completed URL.
-    if (input_.scheme() == L"https" && parts.path.is_nonempty())
-      return false;
-  }
+  // Next we check the scheme.  If this is UNKNOWN/REQUESTED_URL/URL with a
+  // scheme that isn't http/https/ftp, we shouldn't send it.  Sending things
+  // like file: and data: is both a waste of time and a disclosure of
+  // potentially private, local data.  Other "schemes" may actually be
+  // usernames, and we don't want to send passwords.  If the scheme is OK, we
+  // still need to check other cases below.  If this is QUERY, then the presence
+  // of these schemes means the user explicitly typed one, and thus this is
+  // probably a URL that's being entered and happens to currently be invalid --
+  // in which case we again want to run our checks below.  Other QUERY cases are
+  // less likely to be URLs and thus we assume we're OK.
+  if ((input_.scheme() != L"http") && (input_.scheme() != L"https") &&
+      (input_.scheme() != L"ftp"))
+    return (input_.type() == AutocompleteInput::QUERY);
+
+  // Don't send URLs with usernames, queries or refs.  Some of these are
+  // private, and the Suggest server is unlikely to have any useful results
+  // for any of them.  Also don't send URLs with ports, as we may initially
+  // think that a username + password is a host + port (and we don't want to
+  // send usernames/passwords), and even if the port really is a port, the
+  // server is once again unlikely to have and useful results.
+  const url_parse::Parsed& parts = input_.parts();
+  if (parts.username.is_nonempty() || parts.port.is_nonempty() ||
+      parts.query.is_nonempty() || parts.ref.is_nonempty())
+    return false;
+
+  // Don't send anything for https except the hostname.  Hostnames are OK
+  // because they are visible when the TCP connection is established, but the
+  // specific path may reveal private information.
+  if ((input_.scheme() == L"https") && parts.path.is_nonempty())
+    return false;
 
   return true;
 }
@@ -672,7 +685,7 @@ void SearchProvider::AddMatchToMap(const std::wstring& query_string,
         ACMatchClassification(0, ACMatchClassification::NONE));
     match.description.assign(l10n_util::GetStringF(
         IDS_AUTOCOMPLETE_SEARCH_DESCRIPTION,
-        provider.short_name()));
+        provider.AdjustedShortNameForLocaleDirection()));
     match.description_class.push_back(
         ACMatchClassification(0, ACMatchClassification::DIM));
   }
@@ -690,8 +703,7 @@ void SearchProvider::AddMatchToMap(const std::wstring& query_string,
     match.template_url = &providers_.keyword_provider();
   }
   match.fill_into_edit.append(query_string);
-  // NOTE: All Google suggestions currently start with the original input, but
-  // not all Yahoo! suggestions do.
+  // Not all suggestions start with the original input.
   if (!input_.prevent_inline_autocomplete() &&
       !match.fill_into_edit.compare(search_start, input_text.length(),
                                    input_text))

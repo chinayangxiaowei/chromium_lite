@@ -1,4 +1,4 @@
-// Copyright (c) 2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,8 +6,6 @@
 
 #include <algorithm>
 
-#include "app/gfx/canvas.h"
-#include "app/gfx/color_utils.h"
 #include "app/l10n_util.h"
 #include "app/resource_bundle.h"
 #include "base/keyboard_codes.h"
@@ -21,19 +19,21 @@
 #include "chrome/browser/browser_list.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/importer/importer.h"
+#include "chrome/browser/importer/importer_data_types.h"
 #include "chrome/browser/metrics/user_metrics.h"
-#include "chrome/browser/options_window.h"
+#include "chrome/browser/pref_service.h"
 #include "chrome/browser/profile.h"
-#include "chrome/browser/sync/sync_status_ui_helper.h"
+#include "chrome/browser/sync/sync_ui_util.h"
 #include "chrome/browser/views/bookmark_editor_view.h"
 #include "chrome/browser/views/bookmark_folder_tree_view.h"
 #include "chrome/browser/views/bookmark_table_view.h"
 #include "chrome/common/pref_names.h"
-#include "chrome/common/pref_service.h"
+#include "gfx/canvas.h"
+#include "gfx/color_utils.h"
+#include "gfx/skia_util.h"
 #include "grit/generated_resources.h"
 #include "grit/locale_settings.h"
 #include "grit/theme_resources.h"
-#include "skia/ext/skia_utils.h"
 #include "third_party/skia/include/core/SkShader.h"
 #include "views/controls/button/menu_button.h"
 #include "views/controls/label.h"
@@ -171,8 +171,11 @@ BookmarkManagerView::BookmarkManagerView(Profile* profile)
       sync_service_(NULL),
       sync_relogin_required_(false),
       ALLOW_THIS_IN_INITIALIZER_LIST(search_factory_(this)) {
+  views::Label* search_label = new views::Label(
+      l10n_util::GetString(IDS_BOOKMARK_MANAGER_SEARCH_TITLE));
   search_tf_ = new views::Textfield();
   search_tf_->set_default_width_in_chars(30);
+  search_tf_->SetAccessibleName(search_label->GetText());
 
   table_view_ = new BookmarkTableView(profile_, NULL);
   table_view_->SetObserver(this);
@@ -227,8 +230,7 @@ BookmarkManagerView::BookmarkManagerView(Profile* profile)
   layout->AddView(tools_menu_button);
   sync_status_button_ = new views::TextButton(this, std::wstring());
   layout->AddView(sync_status_button_);
-  layout->AddView(new views::Label(
-      l10n_util::GetString(IDS_BOOKMARK_MANAGER_SEARCH_TITLE)));
+  layout->AddView(search_label);
   layout->AddView(search_tf_);
 
   layout->AddPaddingRow(0, 3);  // 3px padding between rows.
@@ -243,7 +245,7 @@ BookmarkManagerView::BookmarkManagerView(Profile* profile)
   if (!bookmark_model->IsLoaded())
     bookmark_model->AddObserver(this);
 
-  if (profile->GetProfileSyncService()) {
+  if (profile_->GetProfileSyncService()) {
     sync_service_ = profile_->GetProfileSyncService();
     sync_service_->AddObserver(this);
     UpdateSyncStatus();
@@ -351,7 +353,7 @@ void BookmarkManagerView::PaintBackground(gfx::Canvas* canvas) {
   canvas->drawColor(kBackgroundColorBottom, SkXfermode::kSrc_Mode);
 
   SkPaint paint;
-  paint.setShader(skia::CreateGradientShader(0, kBackgroundGradientHeight,
+  paint.setShader(gfx::CreateGradientShader(0, kBackgroundGradientHeight,
       kBackgroundColorTop,
       kBackgroundColorBottom))->safeUnref();
   canvas->FillRectInt(0, 0, width(), kBackgroundGradientHeight, paint);
@@ -519,8 +521,10 @@ void BookmarkManagerView::ButtonPressed(views::Button* sender,
       DCHECK(sync_service_);
       sync_service_->ShowLoginDialog();
     } else {
-      UserMetrics::RecordAction(L"BookmarkManager_Sync", profile_);
-      OpenSyncMyBookmarksDialog();
+      UserMetrics::RecordAction(UserMetricsAction("BookmarkManager_Sync"),
+                                profile_);
+      sync_ui_util::OpenSyncMyBookmarksDialog(
+          profile_, ProfileSyncService::START_FROM_BOOKMARK_MANAGER);
     }
   }
 }
@@ -550,14 +554,13 @@ bool BookmarkManagerView::HandleKeystroke(
 }
 
 void BookmarkManagerView::ShowContextMenu(views::View* source,
-                                          int x,
-                                          int y,
+                                          const gfx::Point& p,
                                           bool is_mouse_gesture) {
   DCHECK(source == table_view_ || source == tree_view_);
   bool is_table = (source == table_view_);
-  ShowMenu(x, y,
-           is_table ? BookmarkContextMenuController::BOOKMARK_MANAGER_TABLE :
-                      BookmarkContextMenuController::BOOKMARK_MANAGER_TREE);
+  ShowMenu(p, is_table ?
+      BookmarkContextMenuControllerViews::BOOKMARK_MANAGER_TABLE :
+      BookmarkContextMenuControllerViews::BOOKMARK_MANAGER_TREE);
 }
 
 void BookmarkManagerView::RunMenu(views::View* source, const gfx::Point& pt) {
@@ -567,14 +570,14 @@ void BookmarkManagerView::RunMenu(views::View* source, const gfx::Point& pt) {
   if (!GetBookmarkModel()->IsLoaded())
     return;
 
-  int menu_x = pt.x();
-  menu_x += UILayoutIsRightToLeft() ? (source->width() - 5) :
-                                      (-source->width() + 5);
+  gfx::Point menu_pt(pt);
+  menu_pt.Offset(UILayoutIsRightToLeft() ?
+      (source->width() - 5) : (-source->width() + 5), 2);
   if (source->GetID() == kOrganizeMenuButtonID) {
-    ShowMenu(menu_x, pt.y() + 2,
-             BookmarkContextMenuController::BOOKMARK_MANAGER_ORGANIZE_MENU);
+    ShowMenu(menu_pt,
+        BookmarkContextMenuControllerViews::BOOKMARK_MANAGER_ORGANIZE_MENU);
   } else if (source->GetID() == kToolsMenuButtonID) {
-    ShowToolsMenu(menu_x, pt.y() + 2);
+    ShowToolsMenu(menu_pt);
   } else {
     NOTREACHED();
   }
@@ -583,12 +586,14 @@ void BookmarkManagerView::RunMenu(views::View* source, const gfx::Point& pt) {
 void BookmarkManagerView::ExecuteCommand(int id) {
   switch (id) {
     case IDS_BOOKMARK_MANAGER_IMPORT_MENU:
-      UserMetrics::RecordAction(L"BookmarkManager_Import", profile_);
+      UserMetrics::RecordAction(UserMetricsAction("BookmarkManager_Import"),
+                                profile_);
       ShowImportBookmarksFileChooser();
       break;
 
     case IDS_BOOKMARK_MANAGER_EXPORT_MENU:
-      UserMetrics::RecordAction(L"BookmarkManager_Export", profile_);
+      UserMetrics::RecordAction(UserMetricsAction("BookmarkManager_Export"),
+                                profile_);
       ShowExportBookmarksFileChooser();
       break;
 
@@ -606,13 +611,13 @@ void BookmarkManagerView::FileSelected(const FilePath& path,
     // ImporterHost is ref counted and will delete itself when done.
     ImporterHost* host = new ImporterHost();
     ProfileInfo profile_info;
-    profile_info.browser_type = BOOKMARKS_HTML;
+    profile_info.browser_type = importer::BOOKMARKS_HTML;
     profile_info.source_path = path.ToWStringHack();
-    StartImportingWithUI(GetWidget()->GetNativeView(), FAVORITES, host,
-                         profile_info, profile_,
+    StartImportingWithUI(GetWidget()->GetNativeView(), importer::FAVORITES,
+                         host, profile_info, profile_,
                          new ImportObserverImpl(profile()), false);
   } else if (id == IDS_BOOKMARK_MANAGER_EXPORT_MENU) {
-    bookmark_html_writer::WriteBookmarks(GetBookmarkModel(), path);
+    bookmark_html_writer::WriteBookmarks(profile(), path, NULL);
   } else {
     NOTREACHED();
   }
@@ -717,36 +722,30 @@ BookmarkModel* BookmarkManagerView::GetBookmarkModel() const {
 }
 
 void BookmarkManagerView::ShowMenu(
-    int x, int y, BookmarkContextMenuController::ConfigurationType config) {
+    const gfx::Point& p,
+    BookmarkContextMenuControllerViews::ConfigurationType config) {
   if (!GetBookmarkModel()->IsLoaded())
     return;
 
-  if (config == BookmarkContextMenuController::BOOKMARK_MANAGER_TABLE ||
-      (config ==
-          BookmarkContextMenuController::BOOKMARK_MANAGER_ORGANIZE_MENU &&
+  const BookmarkNode* parent = GetSelectedFolder();
+  std::vector<const BookmarkNode*> nodes;
+  typedef BookmarkContextMenuControllerViews BCMCV;  // Such a long name!
+  if (config == BCMCV::BOOKMARK_MANAGER_TABLE ||
+      (config == BCMCV::BOOKMARK_MANAGER_ORGANIZE_MENU &&
        table_view_->HasFocus())) {
-    std::vector<const BookmarkNode*> nodes = GetSelectedTableNodes();
-    const BookmarkNode* parent = GetSelectedFolder();
+    nodes = GetSelectedTableNodes();
     if (!parent) {
-      if (config == BookmarkContextMenuController::BOOKMARK_MANAGER_TABLE) {
-        config = BookmarkContextMenuController::BOOKMARK_MANAGER_TABLE_OTHER;
-      } else {
-        config =
-            BookmarkContextMenuController::BOOKMARK_MANAGER_ORGANIZE_MENU_OTHER;
-      }
+      config = (config == BCMCV::BOOKMARK_MANAGER_TABLE) ?
+          BCMCV::BOOKMARK_MANAGER_TABLE_OTHER :
+          BCMCV::BOOKMARK_MANAGER_ORGANIZE_MENU_OTHER;
     }
-    BookmarkContextMenu menu(GetWindow()->GetNativeWindow(), profile_, NULL,
-                             parent, nodes, config);
-    menu.RunMenuAt(gfx::Point(x, y));
   } else {
-    const BookmarkNode* node = GetSelectedFolder();
-    std::vector<const BookmarkNode*> nodes;
-    if (node)
-      nodes.push_back(node);
-    BookmarkContextMenu menu(GetWidget()->GetNativeView(), profile_, NULL,
-                             node, nodes, config);
-    menu.RunMenuAt(gfx::Point(x, y));
+    if (parent)
+      nodes.push_back(parent);
   }
+  BookmarkContextMenu menu(GetWidget()->GetNativeView(), profile_, NULL, parent,
+                           nodes, config);
+  menu.RunMenuAt(p);
 }
 
 void BookmarkManagerView::OnCutCopyPaste(CutCopyPasteType type,
@@ -774,7 +773,7 @@ void BookmarkManagerView::OnCutCopyPaste(CutCopyPasteType type,
   }
 }
 
-void BookmarkManagerView::ShowToolsMenu(int x, int y) {
+void BookmarkManagerView::ShowToolsMenu(const gfx::Point& p) {
   views::MenuItemView menu(this);
   menu.AppendMenuItemWithLabel(
           IDS_BOOKMARK_MANAGER_IMPORT_MENU,
@@ -782,10 +781,9 @@ void BookmarkManagerView::ShowToolsMenu(int x, int y) {
   menu.AppendMenuItemWithLabel(
           IDS_BOOKMARK_MANAGER_EXPORT_MENU,
           l10n_util::GetString(IDS_BOOKMARK_MANAGER_EXPORT_MENU));
-  views::MenuItemView::AnchorPosition anchor =
-      UILayoutIsRightToLeft() ? views::MenuItemView::TOPRIGHT :
-                                views::MenuItemView::TOPLEFT;
-  menu.RunMenuAt(GetWidget()->GetNativeView(), NULL, gfx::Rect(x, y, 0, 0),
+  views::MenuItemView::AnchorPosition anchor = UILayoutIsRightToLeft() ?
+      views::MenuItemView::TOPRIGHT : views::MenuItemView::TOPLEFT;
+  menu.RunMenuAt(GetWidget()->GetNativeView(), NULL, gfx::Rect(p, gfx::Size()),
                  anchor, true);
 }
 
@@ -826,8 +824,8 @@ void BookmarkManagerView::UpdateSyncStatus() {
   DCHECK(sync_service_);
   string16 status_label;
   string16 link_label;
-  sync_relogin_required_ = SyncStatusUIHelper::GetLabels(sync_service_,
-      &status_label, &link_label) == SyncStatusUIHelper::SYNC_ERROR;
+  sync_relogin_required_ = sync_ui_util::GetStatusLabels(sync_service_,
+      &status_label, &link_label) == sync_ui_util::SYNC_ERROR;
 
   if (sync_relogin_required_) {
     sync_status_button_->SetText(
@@ -845,28 +843,17 @@ void BookmarkManagerView::UpdateSyncStatus() {
   }
 
   if (sync_service_->HasSyncSetupCompleted()) {
-    std::wstring username = sync_service_->GetAuthenticatedUsername();
-    status_label = l10n_util::GetStringF(IDS_SYNC_NTP_SYNCED_TO, username);
+      string16 username = sync_service_->GetAuthenticatedUsername();
+      status_label = l10n_util::GetStringFUTF16(IDS_SYNC_NTP_SYNCED_TO,
+                                                username);
   } else if (sync_service_->SetupInProgress()) {
-    status_label = l10n_util::GetString(IDS_SYNC_NTP_SETUP_IN_PROGRESS);
+    status_label = l10n_util::GetStringUTF16(IDS_SYNC_NTP_SETUP_IN_PROGRESS);
   } else {
-    status_label = l10n_util::GetString(IDS_SYNC_START_SYNC_BUTTON_LABEL);
+    status_label = l10n_util::GetStringUTF16(IDS_SYNC_START_SYNC_BUTTON_LABEL);
   }
   sync_status_button_->SetText(status_label);
   sync_status_button_->SetTooltipText(L"");
   sync_status_button_->SetAccessibleName(L"");
   sync_status_button_->SetIcon(SkBitmap());
   sync_status_button_->GetParent()->Layout();
-}
-
-void BookmarkManagerView::OpenSyncMyBookmarksDialog() {
-  if (!sync_service_)
-    return;
-  if (sync_service_->HasSyncSetupCompleted()) {
-    ShowOptionsWindow(OPTIONS_PAGE_CONTENT, OPTIONS_GROUP_NONE, profile_);
-  } else {
-    sync_service_->EnableForUser();
-    ProfileSyncService::SyncEvent(
-        ProfileSyncService::START_FROM_BOOKMARK_MANAGER);
-  }
 }

@@ -10,13 +10,15 @@
 #include <vector>
 
 #include "base/basictypes.h"
-#include "base/gfx/point.h"
-#include "base/gfx/rect.h"
-#include "base/gfx/size.h"
 #include "base/scoped_ptr.h"
-#include "chrome/browser/notifications/notification.h"
+#include "gfx/point.h"
+#include "gfx/rect.h"
+#include "gfx/size.h"
 
 class Balloon;
+class BalloonCollection;
+class BalloonHost;
+class Notification;
 class Profile;
 class SiteInstance;
 
@@ -28,45 +30,61 @@ class BalloonView {
   // Show the view on the screen.
   virtual void Show(Balloon* balloon) = 0;
 
+  // Notify that the content of notification has chagned.
+  virtual void Update() = 0;
+
   // Reposition the view to match the position of its balloon.
   virtual void RepositionToBalloon() = 0;
 
   // Close the view.
   virtual void Close(bool by_user) = 0;
+
+  // The total size of the view.
+  virtual gfx::Size GetSize() const = 0;
+
+  // The host for the view's contents.
+  virtual BalloonHost* GetHost() const = 0;
 };
 
 // Represents a Notification on the screen.
 class Balloon {
  public:
-  class BalloonCloseListener {
-   public:
-    virtual ~BalloonCloseListener() {}
-
-    // Called when a balloon is closed.
-    virtual void OnBalloonClosed(Balloon* source) = 0;
-  };
-
-  // |listener| may be null in unit tests w/o actual UI.
   Balloon(const Notification& notification,
           Profile* profile,
-          BalloonCloseListener* listener);
+          BalloonCollection* collection);
   virtual ~Balloon();
 
-  const Notification& notification() const { return notification_; }
+  const Notification& notification() const { return *notification_.get(); }
   Profile* profile() const { return profile_; }
 
   const gfx::Point& position() const { return position_; }
   void SetPosition(const gfx::Point& upper_left, bool reposition);
 
-  const gfx::Size& size() const { return size_; }
-  void set_size(const gfx::Size& size) { size_ = size; }
+  const gfx::Size& content_size() const { return content_size_; }
+  void set_content_size(const gfx::Size& size) { content_size_ = size; }
+
+  // Request a new content size for this balloon.  This will get passed
+  // to the balloon collection for checking against available space and
+  // min/max restrictions.
+  void SetContentPreferredSize(const gfx::Size& size);
 
   // Provides a view for this balloon.  Ownership transfers
   // to this object.
   void set_view(BalloonView* balloon_view);
 
+  // Returns the balloon view associated with the balloon.
+  BalloonView* view() {
+    return balloon_view_.get();
+  }
+
+  // Returns the viewing size for the balloon (content + frame).
+  gfx::Size GetViewSize() const { return balloon_view_->GetSize(); }
+
   // Shows the balloon.
   virtual void Show();
+
+  // Notify that the content of notification has changed.
+  virtual void Update(const Notification& notification);
 
   // Called when the balloon is closed, either by user (through the UI)
   // or by a script.
@@ -80,17 +98,17 @@ class Balloon {
   Profile* profile_;
 
   // The notification being shown in this balloon.
-  Notification notification_;
+  scoped_ptr<Notification> notification_;
 
-  // A listener to be called when the balloon closes.
-  BalloonCloseListener* close_listener_;
+  // The collection that this balloon belongs to.  Non-owned pointer.
+  BalloonCollection* collection_;
 
   // The actual UI element for the balloon.
   scoped_ptr<BalloonView> balloon_view_;
 
   // Position and size of the balloon on the screen.
   gfx::Point position_;
-  gfx::Size size_;
+  gfx::Size content_size_;
 
   DISALLOW_COPY_AND_ASSIGN(Balloon);
 };

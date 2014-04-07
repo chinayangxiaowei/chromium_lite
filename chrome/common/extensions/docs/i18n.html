@@ -16,6 +16,9 @@
     <script type="text/javascript" src="js/api_page_generator.js"></script>
     <script type="text/javascript" src="js/bootstrap.js"></script>
   <title>Internationalization (i18n) - Google Chrome Extensions - Google Code</title></head><body>  <div id="gc-container" class="labs">
+      <div id="devModeWarning">
+        You are viewing extension docs in chrome via the 'file:' scheme: are you expecting to see local changes when you refresh? You'll need run chrome with --allow-file-access-from-files.
+      </div>
       <!-- SUBTEMPLATES: DO NOT MOVE FROM THIS LOCATION -->
       <!-- In particular, sub-templates that recurse, must be used by allowing
            jstemplate to make a copy of the template in this section which
@@ -132,6 +135,7 @@
               <li>Browser UI
                 <ul>
                   <li><a href="browserAction.html">Browser Actions</a></li>
+                  <li><a href="notifications.html">Desktop Notifications</a></li>
                   <li><a href="options.html">Options Pages</a></li>
                   <li><a href="override.html">Override Pages</a></li>
                   <li><a href="pageAction.html">Page Actions</a></li>
@@ -142,12 +146,14 @@
                 <ul>
                   <li><a href="bookmarks.html">Bookmarks</a></li>
                   <li><a href="events.html">Events</a></li>
+                  <li><a href="history.html">History</a></li>
                   <li><a href="tabs.html">Tabs</a></li>
                   <li><a href="windows.html">Windows</a></li>
                 </ul>
               </li>
               <li>Implementation
                 <ul>
+                  <li><a href="a11y.html">Accessibility</a></li>
                   <li><a href="background_pages.html">Background Pages</a></li>
                   <li><a href="content_scripts.html">Content Scripts</a></li>
                   <li><a href="xhr.html">Cross-Origin XHR</a></li>
@@ -158,8 +164,8 @@
               </li>
               <li>Finishing
                 <ul>
-                  <li><a href="autoupdate.html">Autoupdating</a></li>
-                  <li><a href="packaging.html">Packaging</a></li>
+                  <li><a href="hosting.html">Hosting</a></li>
+                  <li><a href="external_extensions.html">Other Deployment Options</a></li>
                 </ul>
               </li>
             </ul>
@@ -167,6 +173,8 @@
           <li><h2><a href="tutorials.html">Tutorials</a></h2>
             <ul>
               <li><a href="tut_debugging.html">Debugging</a></li>
+              <li><a href="tut_analytics.html">Google Analytics</a></li>
+              <li><a href="tut_oauth.html">OAuth</a></li>
             </ul>
           </li>
           <li><h2>Reference</h2>
@@ -196,6 +204,13 @@
           <ol>
             <li>
               <a href="#l10">How to support multiple languages</a>
+              <ol>
+                <li style="display: none; ">
+                  <a>h3Name</a>
+                </li>
+              </ol>
+            </li><li>
+              <a href="#overview-predefined">Predefined messages</a>
               <ol>
                 <li style="display: none; ">
                   <a>h3Name</a>
@@ -318,7 +333,9 @@ with the files shown in the following figure:
 To internationalize this extension,
 you name each user-visible string
 and put it into a messages file.
-The extension's manifest and JavaScript code
+The extension's manifest,
+CSS files,
+and JavaScript code
 use each string's name to get its localized version.
 </p>
 
@@ -342,11 +359,14 @@ Some notes about internationalizing extensions:
 
 <ul>
   <li><p>
-    Use only <a href="#overview-locales">supported locales</a>!
+    You can use any of the <a href="#overview-locales">supported locales</a>.
+    If you use an unsupported locale,
+    Google Chrome ignores it.
   </p></li>
 
   <li>
-    In <code>manifest.json</code>,
+    In <code>manifest.json</code>
+    and CSS files,
     refer to a string named <em>messagename</em> like this:
     <pre>__MSG_<em>messagename</em>__</pre>
   </li>
@@ -363,6 +383,14 @@ Some notes about internationalizing extensions:
     to be included in the message.
     See <a href="#examples-getMessage">Examples: getMessage</a>
     for details.
+    </p>
+  </li>
+
+  <li><p>
+    Some messages, such as <code>@@bidi_dir</code> and <code>@@ui_locale</code>,
+    are provided by the internationalization system.
+    See the <a href="#overview-predefined">Predefined messages</a> section
+    for a full list of predefined message names.
     </p>
   </li>
 
@@ -408,6 +436,120 @@ with a new Spanish translation.
 </p>
 
 <img src="images/i18n-after-2.gif" alt="This looks the same as the previous figure, but with a new file at _locales/es/messages.json that contains a Spanish translation of the messages." width="782" height="358">
+
+
+<h2 id="overview-predefined">Predefined messages</h2>
+
+<p>
+The internationalization system provides a few predefined
+messages to help you localize your extension.
+These include <code>@@ui_locale</code>,
+so you can detect the current UI locale,
+and a few <code>@@bidi_...</code> messages
+that let you detect the text direction.
+The latter messages have similar names to constants in the
+<a href="http://code.google.com/apis/gadgets/docs/i18n.html#BIDI">
+gadgets BIDI (bi-directional) API</a>.
+</p>
+
+<p>
+The special message <code>@@extension_id</code>
+can be used in the CSS and JavaScript files of any extension,
+whether or not the extension is localized.
+This message doesn't work in manifest files.
+</p>
+
+<p>
+The following table describes each predefined message.
+</p>
+
+<table>
+<tbody><tr>
+  <th>Message name</th> <th>Description</th>
+</tr>
+<tr>
+  <td> <code>@@extension_id</code> </td>
+  <td>The extension ID;
+    you might use this string to construct URLs
+    for resources inside the extension.
+    Even unlocalized extensions can use this message.
+    <br>
+    <b>Note:</b> You can't use this message in a manifest file.
+    </td>
+</tr>
+<tr>
+  <td> <code>@@ui_locale</code> </td>
+  <td>The current locale;
+    you might use this string to construct locale-specific URLs. </td>
+</tr>
+<tr>
+  <td> <code>@@bidi_dir</code> </td>
+  <td> The text direction for the current locale,
+       either "ltr" for left-to-right languages such as English
+       or "rtl" for right-to-left languages such as Japanese. </td>
+</tr>
+<tr>
+  <td> <code>@@bidi_reversed_dir</code> </td>
+  <td> If the <code>@@bidi_dir</code> is "ltr", then this is "rtl";
+       otherwise, it's "ltr". </td>
+</tr>
+<tr>
+  <td> <code>@@bidi_start_edge</code> </td>
+  <td> If the <code>@@bidi_dir</code> is "ltr", then this is "left";
+       otherwise, it's "right". </td>
+</tr>
+<tr>
+  <td> <code>@@bidi_end_edge</code> </td>
+  <td> If the <code>@@bidi_dir</code> is "ltr", then this is "right";
+       otherwise, it's "left". </td>
+</tr>
+</tbody></table>
+
+<p>
+Here's an example of using <code>@@extension_id</code> in a CSS file
+to construct a URL:
+</p>
+
+<pre>body {
+  <b>background-image:url('chrome-extension://__MSG_@@extension_id__/background.png');</b>
+}
+</pre>
+
+<p>
+If the extension ID is abcdefghijklmnopqrstuvwxyzabcdef,
+then the bold line in the previous code snippet becomes:
+</p>
+
+<pre>background-image:url('chrome-extension://abcdefghijklmnopqrstuvwxyzabcdef/background.png');
+</pre>
+
+<p>
+Here's an example of using <code>@@bidi_*</code> messages in a CSS file:
+</p>
+
+<pre>body {
+  <b>dir: __MSG_@@bidi_dir__;</b>
+}
+
+div#header {
+  margin-bottom: 1.05em;
+  overflow: hidden;
+  padding-bottom: 1.5em;
+  <b>padding-__MSG_@@bidi_start_edge__: 0;</b>
+  <b>padding-__MSG_@@bidi_end_edge__: 1.5em;</b>
+  position: relative;
+}
+</pre>
+
+<p>
+For left-to-right languages such as English,
+the bold lines become:
+</p>
+
+<pre>dir: ltr;
+padding-left: 0;
+padding-right: 1.5em;
+</pre>
 
 
 <h2 id="overview-locales">Locales</h2>
@@ -488,9 +630,7 @@ users running Google Chrome in any non-English language
 see the label "Colores" and the extension name "Hola mundo".
 </p>
 
-<img src="images/i18n-strings.gif" alt="Four files: manifest.json, and messages.json files for es, en, and en_GB.
- The es and en files show entries for messages named &quot;extName&quot; and &quot;colores&quot;;
- the en_GB file has just one entry (for &quot;colores&quot;)." width="493" height="488">
+<img src="images/i18n-strings.gif" alt="Four files: manifest.json and three messages.json files (for es, en, and en_GB).  The es and en files show entries for messages named &quot;extName&quot; and &quot;colores&quot;; the en_GB file has just one entry (for &quot;colores&quot;)." width="493" height="488">
 
 <h3 id="locales-testing">How to set your browser's locale</h3>
 
@@ -1125,7 +1265,7 @@ For details on calling <code>getAcceptLanguages()</code>, see the
   <a rel="license" href="http://code.google.com/google_bsd_license.html">BSD License</a>.
   </p>
   <p>
-  ©2009 Google
+  ©2010 Google
   </p>
 
 <!-- begin analytics -->
@@ -1153,4 +1293,3 @@ For details on calling <code>getAcceptLanguages()</code>, see the
     </div> <!-- /gc-footer -->
   </div> <!-- /gc-container -->
 </body></html>
-

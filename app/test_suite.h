@@ -31,7 +31,6 @@ class AppTestSuite : public TestSuite {
     TestSuite::Initialize();
 
     app::RegisterPathProvider();
-
 #if defined(OS_MACOSX)
     // Look in the framework bundle for resources.
     // TODO(port): make a resource bundle for non-app exes.  What's done here

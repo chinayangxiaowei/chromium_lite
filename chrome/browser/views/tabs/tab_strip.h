@@ -1,19 +1,17 @@
-// Copyright (c) 2006-2008 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CHROME_BROWSER_VIEWS_TABS_TAB_STRIP_H_
 #define CHROME_BROWSER_VIEWS_TABS_TAB_STRIP_H_
 
-#include "base/gfx/point.h"
 #include "base/message_loop.h"
 #include "chrome/browser/tabs/tab_strip_model.h"
+#include "chrome/browser/views/tabs/base_tab_strip.h"
 #include "chrome/browser/views/tabs/tab.h"
-#include "chrome/browser/views/tabs/tab_strip_wrapper.h"
+#include "gfx/point.h"
 #include "views/controls/button/image_button.h"
-#include "views/view.h"
 
-class BrowserExtender;
 class DraggedTabController;
 class ScopedMouseCloseWidthCalculator;
 class TabStripModel;
@@ -40,12 +38,11 @@ class WidgetWin;
 //      in response to dragged tabs.
 //
 ///////////////////////////////////////////////////////////////////////////////
-class TabStrip : public views::View,
+class TabStrip : public BaseTabStrip,
                  public TabStripModelObserver,
                  public Tab::TabDelegate,
                  public views::ButtonListener,
-                 public MessageLoopForUI::Observer,
-                 public TabStripWrapper {
+                 public MessageLoopForUI::Observer {
  public:
   explicit TabStrip(TabStripModel* model);
   virtual ~TabStrip();
@@ -64,14 +61,32 @@ class TabStrip : public views::View,
   // Removes the drag source Tab from this TabStrip, and deletes it.
   void DestroyDraggedSourceTab(Tab* tab);
 
-  // Retrieve the ideal bounds for the Tab at the specified index.
+  // Retrieves the ideal bounds for the Tab at the specified index.
   gfx::Rect GetIdealBounds(int index);
 
   // Returns the currently selected tab.
   Tab* GetSelectedTab() const;
 
-  // Create the new tab button.
+  // Creates the new tab button.
   void InitTabStripButtons();
+
+  // Return true if this tab strip is compatible with the provided tab strip.
+  // Compatible tab strips can transfer tabs during drag and drop.
+  bool IsCompatibleWith(TabStrip* other) const;
+
+  // Returns the bounds of the new tab button.
+  gfx::Rect GetNewTabButtonBounds();
+
+  // BaseTabStrip implementation:
+  virtual int GetPreferredHeight();
+  virtual void SetBackgroundOffset(const gfx::Point& offset);
+  virtual bool IsPositionInWindowCaption(const gfx::Point& point);
+  virtual void SetDraggedTabBounds(int tab_index,
+                                   const gfx::Rect& tab_bounds);
+  virtual bool IsDragSessionActive() const;
+  virtual void UpdateLoadingAnimations();
+  virtual bool IsAnimating() const;
+  virtual TabStrip* AsTabStrip();
 
   // views::View overrides:
   virtual void PaintChildren(gfx::Canvas* canvas);
@@ -85,11 +100,14 @@ class TabStrip : public views::View,
   virtual void OnDragExited();
   virtual int OnPerformDrop(const views::DropTargetEvent& event);
   virtual bool GetAccessibleRole(AccessibilityTypes::Role* role);
-  virtual bool GetAccessibleName(std::wstring* name);
-  virtual void SetAccessibleName(const std::wstring& name);
   virtual views::View* GetViewForPoint(const gfx::Point& point);
   virtual void ThemeChanged();
+
  protected:
+  // Creates a new tab.
+  virtual Tab* CreateTab();
+
+  // views::View implementation:
   virtual void ViewHierarchyChanged(bool is_add,
                                     views::View* parent,
                                     views::View* child);
@@ -103,14 +121,18 @@ class TabStrip : public views::View,
                              TabContents* contents,
                              int index,
                              bool user_gesture);
-  virtual void TabMoved(TabContents* contents, int from_index, int to_index,
-                        bool pinned_state_changed);
+  virtual void TabMoved(TabContents* contents, int from_index, int to_index);
   virtual void TabChangedAt(TabContents* contents, int index,
                             TabChangeType change_type);
-  virtual void TabPinnedStateChanged(TabContents* contents, int index);
+  virtual void TabReplacedAt(TabContents* old_contents,
+                             TabContents* new_contents,
+                             int index);
+  virtual void TabMiniStateChanged(TabContents* contents, int index);
+  virtual void TabBlockedStateChanged(TabContents* contents, int index);
 
   // Tab::Delegate implementation:
   virtual bool IsTabSelected(const Tab* tab) const;
+  virtual bool IsTabPinned(const Tab* tab) const;
   virtual void SelectTab(Tab* tab);
   virtual void CloseTab(Tab* tab);
   virtual bool IsCommandEnabledForTab(
@@ -139,37 +161,23 @@ class TabStrip : public views::View,
   virtual void DidProcessEvent(GdkEvent* event);
 #endif
 
-  // TabStripWrapper implementation:
-  virtual int GetPreferredHeight();
-  virtual bool IsAnimating() const;
-  virtual void SetBackgroundOffset(gfx::Point offset);
-  virtual bool IsPositionInWindowCaption(const gfx::Point& point);
-  virtual bool IsDragSessionActive() const;
-  virtual bool IsCompatibleWith(TabStripWrapper* other) const;
-  virtual void SetDraggedTabBounds(int tab_index,
-                                   const gfx::Rect& tab_bounds);
-  virtual void UpdateLoadingAnimations();
-  virtual views::View* GetView();
-  virtual BrowserTabStrip* AsBrowserTabStrip();
-  virtual TabStrip* AsTabStrip();
-
-  // Horizontal gap between pinned and non-pinned tabs.
-  static const int pinned_to_non_pinned_gap_;
+  // Horizontal gap between mini and non-mini-tabs.
+  static const int mini_to_non_mini_gap_;
 
  private:
   class InsertTabAnimation;
+  class MiniMoveAnimation;
+  class MiniTabAnimation;
   class MoveTabAnimation;
-  class PinAndMoveAnimation;
-  class PinnedTabAnimation;
   class RemoveTabAnimation;
   class ResizeLayoutAnimation;
   class TabAnimation;
 
   friend class DraggedTabController;
   friend class InsertTabAnimation;
+  friend class MiniMoveAnimation;
+  friend class MiniTabAnimation;
   friend class MoveTabAnimation;
-  friend class PinAndMoveAnimation;
-  friend class PinnedTabAnimation;
   friend class RemoveTabAnimation;
   friend class ResizeLayoutAnimation;
   friend class TabAnimation;
@@ -196,8 +204,8 @@ class TabStrip : public views::View,
   // Gets the number of Tabs in the collection.
   int GetTabCount() const;
 
-  // Returns the number of pinned tabs.
-  int GetPinnedTabCount() const;
+  // Returns the number of mini-tabs.
+  int GetMiniTabCount() const;
 
   // -- Tab Resize Layout -----------------------------------------------------
 
@@ -209,10 +217,10 @@ class TabStrip : public views::View,
   // desired strip width and number of tabs.  If
   // |width_of_tabs_for_mouse_close_| is nonnegative we use that value in
   // calculating the desired strip width; otherwise we use the current width.
-  // |pinned_tab_count| gives the number of pinned tabs, and |tab_count| the
-  // number of pinned and non-pinned tabs.
+  // |mini_tab_count| gives the number of mini-tabs, and |tab_count| the
+  // number of mini and non-mini-tabs.
   void GetDesiredTabWidths(int tab_count,
-                           int pinned_tab_count,
+                           int mini_tab_count,
                            double* unselected_width,
                            double* selected_width) const;
 
@@ -273,9 +281,10 @@ class TabStrip : public views::View,
   void StartInsertTabAnimation(int index);
   void StartRemoveTabAnimation(int index, TabContents* contents);
   void StartMoveTabAnimation(int from_index, int to_index);
-  void StartPinnedTabAnimation(int index);
-  void StartPinAndMoveTabAnimation(int from_index, int to_index,
-                                   const gfx::Rect& start_bounds);
+  void StartMiniTabAnimation(int index);
+  void StartMiniMoveTabAnimation(int from_index,
+                                 int to_index,
+                                 const gfx::Rect& start_bounds);
 
   // Notifies the TabStrip that the specified TabAnimation has completed.
   // Optionally a full Layout will be performed, specified by |layout|.
@@ -300,6 +309,9 @@ class TabStrip : public views::View,
   // Called from the message loop observer when a mouse movement has occurred
   // anywhere over our containing window.
   void HandleGlobalMouseMoveEvent();
+
+  // Returns true if any of the tabs are phantom.
+  bool HasPhantomTabs() const;
 
   // -- Member Variables ------------------------------------------------------
 

@@ -8,8 +8,10 @@
 #include <vector>
 
 #include "base/basictypes.h"
-#include "base/string_util.h"
+#include "base/utf_string_conversions.h"
 #include "googleurl/src/gurl.h"
+#include "webkit/glue/webmenuitem.h"
+
 #include "third_party/WebKit/WebKit/chromium/public/WebContextMenuData.h"
 
 // Parameters structure for ViewHostMsg_ContextMenu.
@@ -74,6 +76,14 @@ struct ContextMenuParams {
   // Whether context is editable.
   bool is_editable;
 
+#if defined(OS_MACOSX)
+  // Writing direction menu items.
+  // Currently only used on OS X.
+  int writing_direction_default;
+  int writing_direction_left_to_right;
+  int writing_direction_right_to_left;
+#endif  // OS_MACOSX
+
   // These flags indicate to the browser whether the renderer believes it is
   // able to perform the corresponding action.
   int edit_flags;
@@ -83,6 +93,8 @@ struct ContextMenuParams {
 
   // The character encoding of the frame on which the menu is invoked.
   std::string frame_charset;
+
+  std::vector<WebMenuItem> custom_items;
 
   ContextMenuParams() {}
 
@@ -101,9 +113,17 @@ struct ContextMenuParams {
         misspelled_word(data.misspelledWord),
         spellcheck_enabled(data.isSpellCheckingEnabled),
         is_editable(data.isEditable),
+#if defined(OS_MACOSX)
+        writing_direction_default(data.writingDirectionDefault),
+        writing_direction_left_to_right(data.writingDirectionLeftToRight),
+        writing_direction_right_to_left(data.writingDirectionRightToLeft),
+#endif  // OS_MACOSX
         edit_flags(data.editFlags),
         security_info(data.securityInfo),
-        frame_charset(data.frameEncoding.utf8()) {}
+        frame_charset(data.frameEncoding.utf8()) {
+    for (size_t i = 0; i < data.customItems.size(); ++i)
+      custom_items.push_back(WebMenuItem(data.customItems[i]));
+  }
 };
 
 #endif  // WEBKIT_GLUE_CONTEXT_MENU_H_

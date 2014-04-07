@@ -7,6 +7,7 @@
 #include "chrome/browser/debugger/devtools_client_host.h"
 #include "chrome/browser/debugger/devtools_manager.h"
 #include "chrome/browser/debugger/devtools_window.h"
+#include "chrome/browser/extensions/extension_host.h"
 #include "chrome/browser/extensions/extensions_service.h"
 #include "chrome/browser/profile.h"
 #include "chrome/browser/renderer_host/render_view_host.h"
@@ -18,6 +19,12 @@
 #include "chrome/test/in_process_browser_test.h"
 #include "chrome/test/ui_test_utils.h"
 
+#if defined(OS_LINUX) && defined(TOOLKIT_VIEWS)
+// See http://crbug.com/40764 for details.
+#define MAYBE_TestResourceContentLength FLAKY_TestResourceContentLength
+#else
+#define MAYBE_TestResourceContentLength TestResourceContentLength
+#endif
 
 namespace {
 
@@ -53,6 +60,8 @@ const wchar_t kPauseOnExceptionTestPage[] =
     L"files/devtools/pause_on_exception.html";
 const wchar_t kPauseWhenLoadingDevTools[] =
     L"files/devtools/pause_when_loading_devtools.html";
+const wchar_t kPauseWhenScriptIsRunning[] =
+    L"files/devtools/pause_when_script_is_running.html";
 const wchar_t kResourceContentLengthTestPage[] = L"files/devtools/image.html";
 const wchar_t kResourceTestPage[] = L"files/devtools/resource_test_page.html";
 const wchar_t kSimplePage[] = L"files/devtools/simple_page.html";
@@ -135,7 +144,11 @@ class DevToolsSanityTest : public InProcessBrowserTest {
     // first.
     Browser* browser = window_->browser();
     devtools_manager->UnregisterDevToolsClientHostFor(inspected_rvh_);
-    BrowserClosedObserver close_observer(browser);
+
+    // Wait only when DevToolsWindow has a browser. For docked DevTools, this
+    // is NULL and we skip the wait.
+    if (browser)
+      BrowserClosedObserver close_observer(browser);
   }
 
   TabContents* client_contents_;
@@ -275,7 +288,7 @@ IN_PROC_BROWSER_TEST_F(DevToolsSanityTest, TestEnableResourcesTab) {
 }
 
 // Tests resources have correct sizes.
-IN_PROC_BROWSER_TEST_F(DevToolsSanityTest, TestResourceContentLength) {
+IN_PROC_BROWSER_TEST_F(DevToolsSanityTest, MAYBE_TestResourceContentLength) {
   RunTest("testResourceContentLength", kResourceContentLengthTestPage);
 }
 
@@ -284,18 +297,21 @@ IN_PROC_BROWSER_TEST_F(DevToolsSanityTest, TestResourceHeaders) {
   RunTest("testResourceHeaders", kResourceTestPage);
 }
 
+// Tests cached resource mime type.
+// @see http://crbug.com/27364
+IN_PROC_BROWSER_TEST_F(DevToolsSanityTest, TestCachedResourceMimeType) {
+  RunTest("testCachedResourceMimeType", kResourceTestPage);
+}
+
 // Tests profiler panel.
 IN_PROC_BROWSER_TEST_F(DevToolsSanityTest, TestProfilerTab) {
   RunTest("testProfilerTab", kJsPage);
 }
 
 // Tests scripts panel showing.
-// TODO(pfeldman): http://crbug.com/26540 This test fails on Linux.
-#if !defined(OS_LINUX)
 IN_PROC_BROWSER_TEST_F(DevToolsSanityTest, TestShowScriptsTab) {
   RunTest("testShowScriptsTab", kDebuggerTestPage);
 }
-#endif
 
 // Tests that scripts tab is populated with inspected scripts even if it
 // hadn't been shown by the moment inspected paged refreshed.
@@ -312,6 +328,7 @@ IN_PROC_BROWSER_TEST_F(DevToolsSanityTest,
 
 
 // Tests that a content script is in the scripts list.
+// This test is disabled, see bug 28961.
 IN_PROC_BROWSER_TEST_F(DevToolsExtensionDebugTest,
                        TestContentScriptIsPresent) {
   LoadExtension("simple_content_script");
@@ -338,6 +355,12 @@ IN_PROC_BROWSER_TEST_F(DevToolsSanityTest, TestPauseOnException) {
 // frontend is being loaded.
 IN_PROC_BROWSER_TEST_F(DevToolsSanityTest, TestPauseWhenLoadingDevTools) {
   RunTest("testPauseWhenLoadingDevTools", kPauseWhenLoadingDevTools);
+}
+
+// Tests that pressing 'Pause' will pause script execution if the script
+// is already running.
+IN_PROC_BROWSER_TEST_F(DevToolsSanityTest, TestPauseWhenScriptIsRunning) {
+  RunTest("testPauseWhenScriptIsRunning", kPauseWhenScriptIsRunning);
 }
 
 // Tests eval on call frame.
@@ -388,11 +411,11 @@ IN_PROC_BROWSER_TEST_F(DevToolsSanityTest, DISABLED_TestPauseInEval) {
 
 // Tests console eval.
 IN_PROC_BROWSER_TEST_F(DevToolsSanityTest, TestConsoleEval) {
-  RunTest("testConsoleEval", kConsoleTestPage);
+  RunTest("testConsoleEval", kEvalTestPage);
 }
 
 // Tests console log.
-IN_PROC_BROWSER_TEST_F(DevToolsSanityTest, TestConsoleLog) {
+IN_PROC_BROWSER_TEST_F(DevToolsSanityTest, DISABLED_TestConsoleLog) {
   RunTest("testConsoleLog", kConsoleTestPage);
 }
 

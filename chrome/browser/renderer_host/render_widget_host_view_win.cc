@@ -1,17 +1,15 @@
-// Copyright (c) 2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/renderer_host/render_widget_host_view_win.h"
 
-#include "app/gfx/canvas.h"
-#include "app/gfx/gdi_util.h"
 #include "app/l10n_util.h"
 #include "app/l10n_util_win.h"
 #include "app/resource_bundle.h"
 #include "base/command_line.h"
-#include "base/gfx/rect.h"
 #include "base/histogram.h"
+#include "base/i18n/rtl.h"
 #include "base/process_util.h"
 #include "base/thread.h"
 #include "base/win_util.h"
@@ -21,6 +19,8 @@
 #include "chrome/browser/chrome_thread.h"
 #include "chrome/browser/plugin_process_host.h"
 #include "chrome/browser/renderer_host/backing_store.h"
+#include "chrome/browser/renderer_host/backing_store_win.h"
+#include "chrome/browser/renderer_host/gpu_view_host.h"
 #include "chrome/browser/renderer_host/render_process_host.h"
 #include "chrome/browser/renderer_host/render_widget_host.h"
 #include "chrome/common/chrome_constants.h"
@@ -28,11 +28,15 @@
 #include "chrome/common/native_web_keyboard_event.h"
 #include "chrome/common/plugin_messages.h"
 #include "chrome/common/render_messages.h"
+#include "gfx/canvas.h"
+#include "gfx/gdi_util.h"
+#include "gfx/rect.h"
 #include "grit/webkit_resources.h"
 #include "skia/ext/skia_utils_win.h"
 #include "third_party/WebKit/WebKit/chromium/public/WebInputEvent.h"
 #include "third_party/WebKit/WebKit/chromium/public/win/WebInputEventFactory.h"
 #include "views/accessibility/view_accessibility.h"
+#include "views/focus/focus_manager.h"
 #include "views/focus/focus_util_win.h"
 // Included for views::kReflectedMessage - TODO(beng): move this to win_util.h!
 #include "views/widget/widget_win.h"
@@ -55,6 +59,8 @@ const int kTooltipMaxWidthPixels = 300;
 
 // Maximum number of characters we allow in a tooltip.
 const int kMaxTooltipLength = 1024;
+
+const wchar_t* kRenderWidgetHostViewKey = L"__RENDER_WIDGET_HOST_VIEW__";
 
 // A callback function for EnumThreadWindows to enumerate and dismiss
 // any owned popop windows
@@ -222,6 +228,31 @@ BOOL CALLBACK DetachPluginWindowsCallback(HWND window, LPARAM param) {
   return TRUE;
 }
 
+// Draw the contents of |backing_store_dc| onto |paint_rect| with a 70% grey
+// filter.
+void DrawDeemphasized(const gfx::Rect& paint_rect,
+                      HDC backing_store_dc,
+                      HDC paint_dc) {
+  gfx::Canvas canvas(paint_rect.width(), paint_rect.height(), true);
+  HDC dc = canvas.beginPlatformPaint();
+  BitBlt(dc,
+         0,
+         0,
+         paint_rect.width(),
+         paint_rect.height(),
+         backing_store_dc,
+         paint_rect.x(),
+         paint_rect.y(),
+         SRCCOPY);
+  canvas.endPlatformPaint();
+  // 178 is 70% grey.
+  canvas.FillRectInt(SkColorSetARGB(178, 0, 0, 0), 0, 0,
+                     paint_rect.width(), paint_rect.height());
+  canvas.getTopPlatformDevice().drawToHDC(paint_dc, paint_rect.x(),
+                                          paint_rect.y(), NULL);
+
+}
+
 }  // namespace
 
 // RenderWidgetHostView --------------------------------------------------------
@@ -248,7 +279,8 @@ RenderWidgetHostViewWin::RenderWidgetHostViewWin(RenderWidgetHost* widget)
       tooltip_showing_(false),
       shutdown_factory_(this),
       parent_hwnd_(NULL),
-      is_loading_(false) {
+      is_loading_(false),
+      visually_deemphasized_(false) {
   render_widget_host_->set_view(this);
   renderer_accessible_ =
       CommandLine::ForCurrentProcess()->HasSwitch(
@@ -257,6 +289,22 @@ RenderWidgetHostViewWin::RenderWidgetHostViewWin(RenderWidgetHost* widget)
 
 RenderWidgetHostViewWin::~RenderWidgetHostViewWin() {
   ResetTooltip();
+}
+
+void RenderWidgetHostViewWin::CreateWnd(HWND parent) {
+  Create(parent);  // ATL function to create the window.
+
+  // Add a property indicating that a particular renderer is associated with
+  // this window. Used by the GPU process to validate window handles it
+  // receives from renderer processes.
+  int renderer_id = render_widget_host_->process()->id();
+  SetProp(m_hWnd,
+          chrome::kChromiumRendererIdProperty,
+          reinterpret_cast<HANDLE>(renderer_id));
+
+  // Uncommenting this will enable experimental out-of-process painting.
+  // Contact brettw for more,
+  // gpu_view_host_.reset(new GpuViewHost(render_widget_host_, m_hWnd));
 }
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -268,7 +316,8 @@ void RenderWidgetHostViewWin::InitAsPopup(
   close_on_deactivate_ = true;
   Create(parent_hwnd_, NULL, NULL, WS_POPUP, WS_EX_TOOLWINDOW);
   MoveWindow(pos.x(), pos.y(), pos.width(), pos.height(), TRUE);
-  ShowWindow(activatable_ ? SW_SHOW : SW_SHOWNA);
+  // Popups are not activated.
+  ShowWindow(IsActivatable() ? SW_SHOW : SW_SHOWNA);
 }
 
 RenderWidgetHost* RenderWidgetHostViewWin::GetRenderWidgetHost() const {
@@ -431,10 +480,16 @@ HWND RenderWidgetHostViewWin::ReparentWindow(HWND window) {
   }
   DCHECK(window_class);
 
+  // TODO(apatrick): the parent window is disabled if the plugin window is
+  // disabled so that mouse messages from the plugin window are passed on to the
+  // browser window. This does not work for regular plugins because it prevents
+  // them from receiving mouse and keyboard input. WS_DISABLED is not
+  // needed when the GPU process stops using child windows for 3D rendering.
+  DWORD enabled_style = ::GetWindowLong(window, GWL_STYLE) & WS_DISABLED;
   HWND parent = CreateWindowEx(
       WS_EX_LEFT | WS_EX_LTRREADING | WS_EX_RIGHTSCROLLBAR,
       MAKEINTATOM(window_class), 0,
-      WS_CHILD | WS_CLIPCHILDREN | WS_CLIPSIBLINGS,
+      WS_CHILD | WS_CLIPCHILDREN | WS_CLIPSIBLINGS | enabled_style,
       0, 0, 0, 0, ::GetParent(window), 0, GetModuleHandle(NULL), 0);
   DCHECK(parent);
   ::SetParent(window, parent);
@@ -442,6 +497,11 @@ HWND RenderWidgetHostViewWin::ReparentWindow(HWND window) {
       ChromeThread::IO, FROM_HERE,
       new NotifyPluginProcessHostTask(window, parent));
   return parent;
+}
+
+bool RenderWidgetHostViewWin::IsActivatable() const {
+  // Popups should not be activated.
+  return popup_type_ == WebKit::WebPopupTypeNone;
 }
 
 void RenderWidgetHostViewWin::Focus() {
@@ -488,6 +548,10 @@ void RenderWidgetHostViewWin::Hide() {
   WasHidden();
 }
 
+bool RenderWidgetHostViewWin::IsShowing() {
+  return !!IsWindowVisible();
+}
+
 gfx::Rect RenderWidgetHostViewWin::GetViewBounds() const {
   CRect window_rect;
   GetWindowRect(&window_rect);
@@ -514,7 +578,7 @@ void RenderWidgetHostViewWin::UpdateCursorIfOverSelf() {
     BOOL result = ::ScreenToClient(m_hWnd, &pt);
     DCHECK(result);
     if (render_widget_host_->GetRootWindowResizerRect().Contains(pt.x, pt.y)) {
-      if (l10n_util::GetTextDirection() == l10n_util::RIGHT_TO_LEFT)
+      if (base::i18n::IsRTL())
         SetCursor(kCursorResizeLeft);
       else
         SetCursor(kCursorResizeRight);
@@ -568,7 +632,13 @@ BOOL CALLBACK EnumChildProc(HWND hwnd, LPARAM lparam) {
   return TRUE;
 }
 
-void RenderWidgetHostViewWin::Redraw(const gfx::Rect& rect) {
+void RenderWidgetHostViewWin::Redraw() {
+  RECT damage_bounds;
+  GetUpdateRect(&damage_bounds, FALSE);
+
+  ScopedGDIObject<HRGN> damage_region(CreateRectRgn(0, 0, 0, 0));
+  GetUpdateRgn(damage_region, FALSE);
+
   // Paint the invalid region synchronously.  Our caller will not paint again
   // until we return, so by painting to the screen here, we ensure effective
   // rate-limiting of backing store updates.  This helps a lot on pages that
@@ -579,12 +649,11 @@ void RenderWidgetHostViewWin::Redraw(const gfx::Rect& rect) {
   // message dispatching we allow scrolling to be smooth, and also avoid the
   // browser process locking up if the plugin process is hung.
   //
-  RedrawWindow(
-      &rect.ToRECT(), NULL, RDW_INVALIDATE | RDW_UPDATENOW | RDW_NOCHILDREN);
+  RedrawWindow(NULL, damage_region, RDW_UPDATENOW | RDW_NOCHILDREN);
 
   // Send the invalid rect in screen coordinates.
   gfx::Rect screen_rect = GetViewBounds();
-  gfx::Rect invalid_screen_rect = rect;
+  gfx::Rect invalid_screen_rect(damage_bounds);
   invalid_screen_rect.Offset(screen_rect.x(), screen_rect.y());
 
   LPARAM lparam = reinterpret_cast<LPARAM>(&invalid_screen_rect);
@@ -602,8 +671,7 @@ void RenderWidgetHostViewWin::DrawResizeCorner(const gfx::Rect& paint_rect,
     canvas.getDevice()->accessBitmap(true).eraseARGB(0, 0, 0, 0);
     int x = resize_corner_rect.x() + resize_corner_rect.width() -
         bitmap->width();
-    bool rtl_dir = (l10n_util::GetTextDirection() ==
-        l10n_util::RIGHT_TO_LEFT);
+    bool rtl_dir = base::i18n::IsRTL();
     if (rtl_dir) {
       canvas.TranslateInt(bitmap->width(), 0);
       canvas.ScaleInt(-1, 1);
@@ -619,31 +687,29 @@ void RenderWidgetHostViewWin::DrawResizeCorner(const gfx::Rect& paint_rect,
   }
 }
 
-void RenderWidgetHostViewWin::DidPaintRect(const gfx::Rect& rect) {
+void RenderWidgetHostViewWin::DidPaintBackingStoreRects(
+    const std::vector<gfx::Rect>& rects) {
   if (is_hidden_)
     return;
 
-  if (about_to_validate_and_paint_)
-    InvalidateRect(&rect.ToRECT(), false);
-  else
-    Redraw(rect);
+  for (size_t i = 0; i < rects.size(); ++i)
+    InvalidateRect(&rects[i].ToRECT(), false);
+
+  if (!about_to_validate_and_paint_)
+    Redraw();
 }
 
-void RenderWidgetHostViewWin::DidScrollRect(
+void RenderWidgetHostViewWin::DidScrollBackingStoreRect(
     const gfx::Rect& rect, int dx, int dy) {
   if (is_hidden_)
     return;
 
-  // We need to pass in SW_INVALIDATE to ScrollWindowEx.  The MSDN
-  // documentation states that it only applies to the HRGN argument, which is
-  // wrong.  Not passing in this flag does not invalidate the region which was
-  // scrolled from, thus causing painting issues.
+  // We need to pass in SW_INVALIDATE to ScrollWindowEx.  The documentation on
+  // MSDN states that it only applies to the HRGN argument, which is wrong.
+  // Not passing in this flag does not invalidate the region which was scrolled
+  // from, thus causing painting issues.
   RECT clip_rect = rect.ToRECT();
   ScrollWindowEx(dx, dy, NULL, &clip_rect, NULL, NULL, SW_INVALIDATE);
-
-  RECT invalid_rect = {0};
-  GetUpdateRect(&invalid_rect);
-  Redraw(gfx::Rect(invalid_rect));
 }
 
 void RenderWidgetHostViewWin::RenderViewGone() {
@@ -699,13 +765,46 @@ void RenderWidgetHostViewWin::SetTooltipText(const std::wstring& tooltip_text) {
 
 BackingStore* RenderWidgetHostViewWin::AllocBackingStore(
     const gfx::Size& size) {
-  return new BackingStore(render_widget_host_, size);
+  if (gpu_view_host_.get())
+    return gpu_view_host_->CreateBackingStore(size);
+  return new BackingStoreWin(render_widget_host_, size);
+}
+
+VideoLayer* RenderWidgetHostViewWin::AllocVideoLayer(
+    const gfx::Size& size) {
+  NOTIMPLEMENTED();
+  return NULL;
 }
 
 void RenderWidgetHostViewWin::SetBackground(const SkBitmap& background) {
   RenderWidgetHostView::SetBackground(background);
   Send(new ViewMsg_SetBackground(render_widget_host_->routing_id(),
                                  background));
+}
+
+bool RenderWidgetHostViewWin::ContainsNativeView(
+    gfx::NativeView native_view) const {
+  if (m_hWnd == native_view)
+    return true;
+
+  // Traverse the set of parents of the given view to determine if native_view
+  // is a descendant of this window.
+  HWND parent_window = ::GetParent(native_view);
+  while (parent_window) {
+    if (parent_window == m_hWnd)
+      return true;
+    parent_window = ::GetParent(parent_window);
+  }
+
+  return false;
+}
+
+void RenderWidgetHostViewWin::SetVisuallyDeemphasized(bool deemphasized) {
+  if (visually_deemphasized_ == deemphasized)
+    return;
+
+  visually_deemphasized_ = deemphasized;
+  InvalidateRect(NULL, FALSE);
 }
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -720,7 +819,9 @@ LRESULT RenderWidgetHostViewWin::OnCreate(CREATESTRUCT* create_struct) {
   views::SetWindowSupportsRerouteMouseWheel(m_hWnd);
   // Save away our HWND in the parent window as a property so that the
   // accessibility code can find it.
-  SetProp(GetParent(), kViewsNativeHostPropForAccessibility, m_hWnd);
+  ::SetProp(GetParent(), kViewsNativeHostPropForAccessibility, m_hWnd);
+  ::SetProp(m_hWnd, kRenderWidgetHostViewKey,
+            static_cast<RenderWidgetHostView*>(this));
   return 0;
 }
 
@@ -751,20 +852,39 @@ void RenderWidgetHostViewWin::OnDestroy() {
   // sequence as part of the usual cleanup when the plugin instance goes away.
   EnumChildWindows(m_hWnd, DetachPluginWindowsCallback, NULL);
 
+  ::RemoveProp(m_hWnd, kRenderWidgetHostViewKey);
+
   ResetTooltip();
   TrackMouseLeave(false);
 }
 
-void RenderWidgetHostViewWin::OnPaint(HDC dc) {
+void RenderWidgetHostViewWin::OnPaint(HDC unused_dc) {
   DCHECK(render_widget_host_->process()->HasConnection());
 
+  if (gpu_view_host_.get()) {
+    // When we're proxying painting, we don't actually display the web page
+    // ourselves. We clear it white in case the proxy window isn't visible
+    // yet we won't show gibberish.
+    CPaintDC paint_dc(m_hWnd);
+    FillRect(paint_dc.m_hDC, &paint_dc.m_ps.rcPaint,
+             static_cast<HBRUSH>(GetStockObject(WHITE_BRUSH)));
+    return;
+  }
+
   about_to_validate_and_paint_ = true;
-  BackingStore* backing_store = render_widget_host_->GetBackingStore(true);
+  BackingStoreWin* backing_store = static_cast<BackingStoreWin*>(
+      render_widget_host_->GetBackingStore(true));
 
   // We initialize |paint_dc| (and thus call BeginPaint()) after calling
   // GetBackingStore(), so that if it updates the invalid rect we'll catch the
   // changes and repaint them.
   about_to_validate_and_paint_ = false;
+
+  // Grab the region to paint before creation of paint_dc since it clears the
+  // damage region.
+  ScopedGDIObject<HRGN> damage_region(CreateRectRgn(0, 0, 0, 0));
+  GetUpdateRgn(damage_region, FALSE);
+
   CPaintDC paint_dc(m_hWnd);
 
   gfx::Rect damaged_rect(paint_dc.m_ps.rcPaint);
@@ -772,27 +892,41 @@ void RenderWidgetHostViewWin::OnPaint(HDC dc) {
     return;
 
   if (backing_store) {
-    gfx::Rect bitmap_rect(
-        0, 0, backing_store->size().width(), backing_store->size().height());
+    gfx::Rect bitmap_rect(gfx::Point(), backing_store->size());
 
-    gfx::Rect paint_rect = bitmap_rect.Intersect(damaged_rect);
-    if (!paint_rect.IsEmpty()) {
-      DrawResizeCorner(paint_rect, backing_store->hdc());
-      bool manage_colors = BackingStore::ColorManagementEnabled();
-      if (manage_colors)
-        SetICMMode(paint_dc.m_hDC, ICM_ON);
-      BitBlt(paint_dc.m_hDC,
-             paint_rect.x(),
-             paint_rect.y(),
-             paint_rect.width(),
-             paint_rect.height(),
-             backing_store->hdc(),
-             paint_rect.x(),
-             paint_rect.y(),
-             SRCCOPY);
-      if (manage_colors)
-        SetICMMode(paint_dc.m_hDC, ICM_OFF);
+    bool manage_colors = BackingStoreWin::ColorManagementEnabled();
+    if (manage_colors)
+      SetICMMode(paint_dc.m_hDC, ICM_ON);
+
+    // Blit only the damaged regions from the backing store.
+    DWORD data_size = GetRegionData(damage_region, 0, NULL);
+    scoped_array<char> region_data_buf(new char[data_size]);
+    RGNDATA* region_data = reinterpret_cast<RGNDATA*>(region_data_buf.get());
+    GetRegionData(damage_region, data_size, region_data);
+
+    RECT* region_rects = reinterpret_cast<RECT*>(region_data->Buffer);
+    for (DWORD i = 0; i < region_data->rdh.nCount; ++i) {
+      gfx::Rect paint_rect = bitmap_rect.Intersect(gfx::Rect(region_rects[i]));
+      if (!paint_rect.IsEmpty()) {
+        DrawResizeCorner(paint_rect, backing_store->hdc());
+        if (visually_deemphasized_) {
+          DrawDeemphasized(paint_rect, backing_store->hdc(), paint_dc.m_hDC);
+        } else {
+          BitBlt(paint_dc.m_hDC,
+                 paint_rect.x(),
+                 paint_rect.y(),
+                 paint_rect.width(),
+                 paint_rect.height(),
+                 backing_store->hdc(),
+                 paint_rect.x(),
+                 paint_rect.y(),
+                 SRCCOPY);
+        }
+      }
     }
+
+    if (manage_colors)
+      SetICMMode(paint_dc.m_hDC, ICM_OFF);
 
     // Fill the remaining portion of the damaged_rect with the background
     if (damaged_rect.right() > bitmap_rect.right()) {
@@ -872,11 +1006,17 @@ LRESULT RenderWidgetHostViewWin::OnSetCursor(HWND window, UINT hittest_code,
 }
 
 void RenderWidgetHostViewWin::OnSetFocus(HWND window) {
+  views::FocusManager::GetWidgetFocusManager()->OnWidgetFocusEvent(window,
+                                                                   m_hWnd);
+
   if (render_widget_host_)
     render_widget_host_->GotFocus();
 }
 
 void RenderWidgetHostViewWin::OnKillFocus(HWND window) {
+  views::FocusManager::GetWidgetFocusManager()->OnWidgetFocusEvent(m_hWnd,
+                                                                   window);
+
   if (render_widget_host_)
     render_widget_host_->Blur();
 }
@@ -1114,7 +1254,7 @@ LRESULT RenderWidgetHostViewWin::OnMouseEvent(UINT message, WPARAM wparam,
           render_widget_host_->GetRootWindowResizerRect().
               Contains(GET_X_LPARAM(lparam), GET_Y_LPARAM(lparam))) {
         WPARAM wparam = HTBOTTOMRIGHT;
-        if (l10n_util::GetTextDirection() == l10n_util::RIGHT_TO_LEFT)
+        if (base::i18n::IsRTL())
           wparam = HTBOTTOMLEFT;
         HWND root_hwnd = ::GetAncestor(m_hWnd, GA_ROOT);
         if (SendMessage(root_hwnd, WM_NCLBUTTONDOWN, wparam, lparam) == 0)
@@ -1217,7 +1357,7 @@ LRESULT RenderWidgetHostViewWin::OnKeyEvent(UINT message, WPARAM wparam,
   // window. This code filters out these messages.
   bool ignore_keyboard_event = false;
   if (wparam == VK_RETURN) {
-    if (message == WM_KEYDOWN) {
+    if (message == WM_KEYDOWN || message == WM_SYSKEYDOWN) {
       if (KF_REPEAT & HIWORD(lparam)) {
         // this is a repeated key
         if (!capture_enter_key_)
@@ -1225,7 +1365,7 @@ LRESULT RenderWidgetHostViewWin::OnKeyEvent(UINT message, WPARAM wparam,
       } else {
         capture_enter_key_ = true;
       }
-    } else if (message == WM_KEYUP) {
+    } else if (message == WM_KEYUP || message == WM_SYSKEYUP) {
       if (!capture_enter_key_)
         ignore_keyboard_event = true;
       capture_enter_key_ = false;
@@ -1293,7 +1433,7 @@ LRESULT RenderWidgetHostViewWin::OnWheelEvent(UINT message, WPARAM wparam,
 
 LRESULT RenderWidgetHostViewWin::OnMouseActivate(UINT, WPARAM, LPARAM,
                                                  BOOL& handled) {
-  if (!activatable_)
+  if (!IsActivatable())
     return MA_NOACTIVATE;
 
   HWND focus_window = GetFocus();
@@ -1436,6 +1576,11 @@ void RenderWidgetHostViewWin::ForwardMouseEventToRenderer(UINT message,
 
   WebMouseEvent event(
       WebInputEventFactory::mouseEvent(m_hWnd, message, wparam, lparam));
+
+  // Send the event to the renderer before changing mouse capture, so that the
+  // capturelost event arrives after mouseup.
+  render_widget_host_->ForwardMouseEvent(event);
+
   switch (event.type) {
     case WebInputEvent::MouseMove:
       TrackMouseLeave(true);
@@ -1452,9 +1597,7 @@ void RenderWidgetHostViewWin::ForwardMouseEventToRenderer(UINT message,
       break;
   }
 
-  render_widget_host_->ForwardMouseEvent(event);
-
-  if (activatable_ && event.type == WebInputEvent::MouseDown) {
+  if (IsActivatable() && event.type == WebInputEvent::MouseDown) {
     // This is a temporary workaround for bug 765011 to get focus when the
     // mouse is clicked. This happens after the mouse down event is sent to
     // the renderer because normally Windows does a WM_SETFOCUS after
@@ -1468,4 +1611,17 @@ void RenderWidgetHostViewWin::ShutdownHost() {
   if (render_widget_host_)
     render_widget_host_->Shutdown();
   // Do not touch any members at this point, |this| has been deleted.
+}
+
+// static
+RenderWidgetHostView*
+    RenderWidgetHostView::GetRenderWidgetHostViewFromNativeView(
+        gfx::NativeView native_view) {
+  if (::IsWindow(native_view)) {
+    HANDLE raw_render_host_view = ::GetProp(native_view,
+                                            kRenderWidgetHostViewKey);
+    if (raw_render_host_view)
+      return reinterpret_cast<RenderWidgetHostView*>(raw_render_host_view);
+  }
+  return NULL;
 }

@@ -49,21 +49,21 @@
 #define EXPORT
 #endif
 
-#if defined(OS_LINUX)
+#if defined(USE_X11)
 #include <X11/Xlib.h>
 #endif
 
 // Plugin entry points
 extern "C" {
     EXPORT NPError NPAPI NP_Initialize(NPNetscapeFuncs *browserFuncs
-#if defined(OS_LINUX)
+#if defined(OS_POSIX) && !defined(OS_MACOSX)
                                 , NPPluginFuncs *pluginFuncs
 #endif
                                 );
     EXPORT NPError NPAPI NP_GetEntryPoints(NPPluginFuncs *pluginFuncs);
     EXPORT void NPAPI NP_Shutdown(void);
 
-#if defined(OS_LINUX)
+#if defined(OS_POSIX) && !defined(OS_MACOSX)
     EXPORT NPError NPAPI NP_GetValue(NPP instance, NPPVariable variable, void *value);
     EXPORT const char* NPAPI NP_GetMIMEDescription(void);
 #endif
@@ -71,13 +71,13 @@ extern "C" {
 
 // Plugin entry points
 EXPORT NPError NPAPI NP_Initialize(NPNetscapeFuncs *browserFuncs
-#if defined(OS_LINUX)
+#if defined(OS_POSIX) && !defined(OS_MACOSX)
                             , NPPluginFuncs *pluginFuncs
 #endif
 )
 {
     browser = browserFuncs;
-#if defined(OS_LINUX)
+#if defined(OS_POSIX) && !defined(OS_MACOSX)
     return NP_GetEntryPoints(pluginFuncs);
 #else
     return NPERR_NO_ERROR;
@@ -140,7 +140,8 @@ NPError NPP_New(NPMIMEType pluginType, NPP instance, uint16 mode, int16 argc, ch
                 obj->testDocumentOpenInDestroyStream = TRUE;
             } else if (strcasecmp(argn[i], "testwindowopen") == 0) {
                 obj->testWindowOpen = TRUE;
-            }
+            } else if (strcasecmp(argn[i], "src") == 0 && strstr(argv[i], "plugin-document-has-focus.pl"))
+                obj->testKeyboardFocusForPlugins = TRUE;
         }
 
         instance->pdata = obj;
@@ -182,12 +183,17 @@ NPError NPP_SetWindow(NPP instance, NPWindow *window)
         if (obj->logSetWindow) {
             log(instance, "NPP_SetWindow: %d %d", (int)window->width, (int)window->height);
             fflush(stdout);
-            obj->logSetWindow = false;
+            obj->logSetWindow = FALSE;
         }
 
         if (obj->testWindowOpen) {
             testWindowOpen(instance);
             obj->testWindowOpen = FALSE;
+        }
+
+        if (obj->testKeyboardFocusForPlugins) {
+            obj->eventLogging = true;
+            executeScript(obj, "eventSender.keyDown('A');");
         }
     }
 
@@ -292,17 +298,19 @@ int16 NPP_HandleEvent(NPP instance, void *event)
         case WM_RBUTTONDBLCLK:
             break;
         case WM_MOUSEMOVE:
-            log(instance, "adjustCursorEvent");
             break;
         case WM_KEYUP:
-            // TODO(tc): We need to convert evt->wParam from virtual-key code
-            // to key code.
-            log(instance, "NOTIMPLEMENTED: keyUp '%c'", ' ');
+            log(instance, "keyUp '%c'", MapVirtualKey(evt->wParam, MAPVK_VK_TO_CHAR));
+            if (obj->testKeyboardFocusForPlugins) {
+                obj->eventLogging = false;
+                obj->testKeyboardFocusForPlugins = FALSE;
+                executeScript(obj, "layoutTestController.notifyDone();");
+            }
+            break;
+        case WM_CHAR:
             break;
         case WM_KEYDOWN:
-            // TODO(tc): We need to convert evt->wParam from virtual-key code
-            // to key code.
-            log(instance, "NOTIMPLEMENTED: keyDown '%c'", ' ');
+            log(instance, "keyDown '%c'", MapVirtualKey(evt->wParam, MAPVK_VK_TO_CHAR));
             break;
         case WM_SETCURSOR:
             break;
@@ -318,7 +326,7 @@ int16 NPP_HandleEvent(NPP instance, void *event)
 
     fflush(stdout);
 
-#elif defined(OS_LINUX)
+#elif defined(USE_X11)
     XEvent* evt = static_cast<XEvent*>(event);
     XButtonPressedEvent* bpress_evt = reinterpret_cast<XButtonPressedEvent*>(evt);
     XButtonReleasedEvent* brelease_evt = reinterpret_cast<XButtonReleasedEvent*>(evt);
@@ -445,7 +453,7 @@ NPError NPP_GetValue(NPP instance, NPPVariable variable, void *value)
     NPError err = NPERR_NO_ERROR;
 
     switch (variable) {
-#if defined(OS_LINUX)
+#if defined(USE_X11)
         case NPPVpluginNameString:
             *((const char **)value) = "WebKit Test PlugIn";
             break;
@@ -478,7 +486,7 @@ NPError NPP_SetValue(NPP instance, NPNVariable variable, void *value)
     return NPERR_GENERIC_ERROR;
 }
 
-#if defined(OS_LINUX)
+#if defined(OS_POSIX) && !defined(OS_MACOSX)
 EXPORT NPError NPAPI NP_GetValue(NPP instance, NPPVariable variable, void *value)
 {
     return NPP_GetValue(instance, variable, value);

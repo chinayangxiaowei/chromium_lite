@@ -1,6 +1,15 @@
 // Copyright (c) 2009 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
+//
+// Run WebSocket live experiment to collect metrics about WebSocket
+// availability in the real Internet.
+// It tries to open WebSocket connection to websocket-experiment.chromium.org,
+// send/receive some static content over the connection, and see how it works
+// well.
+// It must be started only if the user permits metrics reporting with the
+// checkbox in the prefs.
+// For more detail what the experiment is, see websocket_experiment_task.h.
 
 #ifndef CHROME_BROWSER_NET_WEBSOCKET_EXPERIMENT_WEBSOCKET_EXPERIMENT_RUNNER_H_
 #define CHROME_BROWSER_NET_WEBSOCKET_EXPERIMENT_WEBSOCKET_EXPERIMENT_RUNNER_H_
@@ -26,9 +35,7 @@ class WebSocketExperimentRunner
 
     int64 initial_delay_ms;
     int64 next_delay_ms;
-    WebSocketExperimentTask::Config ws_config;
-    WebSocketExperimentTask::Config wss_config;
-    WebSocketExperimentTask::Config ws_nondefault_config;
+    WebSocketExperimentTask::Config ws_config[6];
   };
   static void Start();
   static void Stop();
@@ -43,6 +50,10 @@ class WebSocketExperimentRunner
     STATE_RUN_WS,
     STATE_RUN_WSS,
     STATE_RUN_WS_NODEFAULT_PORT,
+    STATE_RUN_WS_DRAFT75,
+    STATE_RUN_WSS_DRAFT75,
+    STATE_RUN_WS_NODEFAULT_PORT_DRAFT75,
+    NUM_STATES,
   };
   WebSocketExperimentRunner();
   virtual ~WebSocketExperimentRunner();

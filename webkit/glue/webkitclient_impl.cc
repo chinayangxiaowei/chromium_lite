@@ -2,23 +2,26 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include <math.h>
-#include "config.h"
-
-#include "FrameView.h"
-#include "ScrollView.h"
-#include <wtf/Assertions.h>
-#undef LOG
-
 #include "webkit/glue/webkitclient_impl.h"
+
+#if defined(OS_LINUX)
+#include <malloc.h>
+#endif
+
+#include <math.h>
+
+#include <vector>
 
 #include "base/file_path.h"
 #include "base/file_util.h"
+#include "base/lock.h"
 #include "base/message_loop.h"
 #include "base/process_util.h"
 #include "base/platform_file.h"
+#include "base/singleton.h"
 #include "base/stats_counters.h"
-#include "base/string_util.h"
+#include "base/time.h"
+#include "base/utf_string_conversions.h"
 #include "base/trace_event.h"
 #include "grit/webkit_resources.h"
 #include "grit/webkit_strings.h"
@@ -31,15 +34,16 @@
 #include "third_party/WebKit/WebKit/chromium/public/WebString.h"
 #include "third_party/WebKit/WebKit/chromium/public/WebVector.h"
 #include "third_party/WebKit/WebKit/chromium/public/WebURL.h"
-#include "webkit/glue/glue_util.h"
 #include "webkit/glue/plugins/plugin_instance.h"
+#include "webkit/glue/plugins/webplugininfo.h"
 #include "webkit/glue/webkit_glue.h"
-#include "webkit/glue/webplugininfo.h"
 #include "webkit/glue/websocketstreamhandle_impl.h"
 #include "webkit/glue/weburlloader_impl.h"
 
-using WebKit::WebApplicationCacheHost;
-using WebKit::WebApplicationCacheHostClient;
+#if defined(OS_LINUX)
+#include "v8/include/v8.h"
+#endif
+
 using WebKit::WebCookie;
 using WebKit::WebData;
 using WebKit::WebLocalizedString;
@@ -50,6 +54,58 @@ using WebKit::WebThemeEngine;
 using WebKit::WebURL;
 using WebKit::WebURLLoader;
 using WebKit::WebVector;
+
+namespace {
+
+// A simple class to cache the memory usage for a given amount of time.
+class MemoryUsageCache {
+ public:
+  // Retrieves the Singleton.
+  static MemoryUsageCache* Get() {
+    return Singleton<MemoryUsageCache>::get();
+  }
+
+  MemoryUsageCache() : memory_value_(0) { Init(); }
+  ~MemoryUsageCache() {}
+
+  void Init() {
+    const unsigned int kCacheSeconds = 1;
+    cache_valid_time_ = base::TimeDelta::FromSeconds(kCacheSeconds);
+  }
+
+  // Returns true if the cached value is fresh.
+  // Returns false if the cached value is stale, or if |cached_value| is NULL.
+  bool IsCachedValueValid(size_t* cached_value) {
+    AutoLock scoped_lock(lock_);
+    if (!cached_value)
+      return false;
+    if (base::Time::Now() - last_updated_time_ > cache_valid_time_)
+      return false;
+    *cached_value = memory_value_;
+    return true;
+  };
+
+  // Setter for |memory_value_|, refreshes |last_updated_time_|.
+  void SetMemoryValue(const size_t value) {
+    AutoLock scoped_lock(lock_);
+    memory_value_ = value;
+    last_updated_time_ = base::Time::Now();
+  }
+
+ private:
+  // The cached memory value.
+  size_t memory_value_;
+
+  // How long the cached value should remain valid.
+  base::TimeDelta cache_valid_time_;
+
+  // The last time the cached value was updated.
+  base::Time last_updated_time_;
+
+  Lock lock_;
+};
+
+}  // anonymous namespace
 
 namespace webkit_glue {
 
@@ -108,12 +164,8 @@ static int ToMessageID(WebLocalizedString::Name name) {
 WebKitClientImpl::WebKitClientImpl()
     : main_loop_(MessageLoop::current()),
       shared_timer_func_(NULL),
+      shared_timer_fire_time_(0.0),
       shared_timer_suspended_(0) {
-}
-
-WebApplicationCacheHost* WebKitClientImpl::createApplicationCacheHost(
-    WebApplicationCacheHostClient*) {
-  return NULL;
 }
 
 WebThemeEngine* WebKitClientImpl::themeEngine() {
@@ -122,18 +174,6 @@ WebThemeEngine* WebKitClientImpl::themeEngine() {
 #else
   return NULL;
 #endif
-}
-
-bool WebKitClientImpl::rawCookies(const WebURL& url,
-                                  const WebURL& first_party_for_cookies,
-                                  WebVector<WebCookie>* raw_cookies) {
-  NOTREACHED();
-  return false;
-}
-
-void WebKitClientImpl::deleteCookie(const WebURL& url,
-                                    const WebString& cookie_name) {
-  NOTREACHED();
 }
 
 WebURLLoader* WebKitClientImpl::createURLLoader() {
@@ -161,7 +201,7 @@ void WebKitClientImpl::getPluginList(bool refresh,
         WideToUTF16Hack(plugin.desc),
         FilePathStringToWebString(plugin.path.BaseName().value()));
 
-    for (size_t j = 0; j < plugin.mime_types.size(); ++ j) {
+    for (size_t j = 0; j < plugin.mime_types.size(); ++j) {
       const WebPluginMimeType& mime_type = plugin.mime_types[j];
 
       builder->addMediaTypeToLastPlugin(
@@ -215,7 +255,8 @@ WebData WebKitClientImpl::loadResource(const char* name) {
     { "mediaSoundDisabled", IDR_MEDIA_SOUND_DISABLED },
     { "mediaSliderThumb", IDR_MEDIA_SLIDER_THUMB },
     { "mediaVolumeSliderThumb", IDR_MEDIA_VOLUME_SLIDER_THUMB },
-#if defined(OS_LINUX)
+#if defined(OS_POSIX) && !defined(OS_MACOSX)
+    // TODO(port): rename these to "skia" instead of "Linux".
     { "linuxCheckboxOff", IDR_LINUX_CHECKBOX_OFF },
     { "linuxCheckboxOn", IDR_LINUX_CHECKBOX_ON },
     { "linuxCheckboxDisabledOff", IDR_LINUX_CHECKBOX_DISABLED_OFF },
@@ -263,6 +304,7 @@ void WebKitClientImpl::setSharedTimerFiredFunction(void (*func)()) {
 }
 
 void WebKitClientImpl::setSharedTimerFireTime(double fire_time) {
+  shared_timer_fire_time_ = fire_time;
   if (shared_timer_suspended_)
     return;
 
@@ -325,12 +367,62 @@ WebKit::WebString WebKitClientImpl::signedPublicKeyAndChallengeString(
   return WebKit::WebString();
 }
 
-size_t WebKitClientImpl::memoryUsageMB() {
+#if defined(OS_LINUX)
+static size_t memoryUsageMBLinux() {
+  struct mallinfo minfo = mallinfo();
+  uint64_t mem_usage =
+#if defined(USE_TCMALLOC)
+      minfo.uordblks
+#else
+      (minfo.hblkhd + minfo.arena)
+#endif
+      >> 20;
+
+  v8::HeapStatistics stat;
+  v8::V8::GetHeapStatistics(&stat);
+  return mem_usage + (static_cast<uint64_t>(stat.total_heap_size()) >> 20);
+}
+#endif
+
+#if defined(OS_MACOSX)
+static size_t memoryUsageMBMac() {
+  using base::ProcessMetrics;
+  static ProcessMetrics* process_metrics =
+      // The default port provider is sufficient to get data for the current
+      // process.
+      ProcessMetrics::CreateProcessMetrics(base::GetCurrentProcessHandle(),
+                                           NULL);
+  DCHECK(process_metrics);
+  return process_metrics->GetPagefileUsage() >> 20;
+}
+#endif
+
+#if !defined(OS_LINUX) && !defined(OS_MACOSX)
+static size_t memoryUsageMBGeneric() {
   using base::ProcessMetrics;
   static ProcessMetrics* process_metrics =
       ProcessMetrics::CreateProcessMetrics(base::GetCurrentProcessHandle());
   DCHECK(process_metrics);
   return process_metrics->GetPagefileUsage() >> 20;
+}
+#endif
+
+size_t WebKitClientImpl::memoryUsageMB() {
+  size_t current_mem_usage;
+  MemoryUsageCache* mem_usage_cache_singleton = MemoryUsageCache::Get();
+  if (mem_usage_cache_singleton->IsCachedValueValid(&current_mem_usage))
+    return current_mem_usage;
+
+  current_mem_usage =
+#if defined(OS_LINUX)
+      memoryUsageMBLinux();
+#elif defined(OS_MACOSX)
+      memoryUsageMBMac();
+#else
+      memoryUsageMBGeneric();
+#endif
+  mem_usage_cache_singleton->SetMemoryValue(current_mem_usage);
+  return current_mem_usage;
 }
 
 bool WebKitClientImpl::fileExists(const WebKit::WebString& path) {
@@ -355,7 +447,7 @@ bool WebKitClientImpl::getFileSize(const WebKit::WebString& path,
 }
 
 bool WebKitClientImpl::getFileModificationTime(const WebKit::WebString& path,
-                                               time_t& result) {
+                                               double& result) {
   NOTREACHED();
   return false;
 }
@@ -394,9 +486,7 @@ bool WebKitClientImpl::isDirectory(const WebKit::WebString& path) {
 }
 
 WebKit::WebURL WebKitClientImpl::filePathToURL(const WebKit::WebString& path) {
-  FilePath file_path(webkit_glue::WebStringToFilePathString(path));
-  GURL file_url = net::FilePathToFileURL(file_path);
-  return webkit_glue::KURLToWebURL(webkit_glue::GURLToKURL(file_url));
+  return net::FilePathToFileURL(webkit_glue::WebStringToFilePath(path));
 }
 
 void WebKitClientImpl::SuspendSharedTimer() {
@@ -404,8 +494,9 @@ void WebKitClientImpl::SuspendSharedTimer() {
 }
 
 void WebKitClientImpl::ResumeSharedTimer() {
-  if (--shared_timer_suspended_ == 0)
-    setSharedTimerFireTime(currentTime());
+  // The shared timer may have fired or been adjusted while we were suspended.
+  if (--shared_timer_suspended_ == 0 && !shared_timer_.IsRunning())
+    setSharedTimerFireTime(shared_timer_fire_time_);
 }
 
 }  // namespace webkit_glue

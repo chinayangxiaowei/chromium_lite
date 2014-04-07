@@ -1,9 +1,11 @@
-// Copyright (c) 2006-2008 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef NET_BASE_ADDRESS_LIST_H_
 #define NET_BASE_ADDRESS_LIST_H_
+
+#include <string>
 
 #include "base/ref_counted.h"
 
@@ -23,8 +25,14 @@ class AddressList {
   // object.
   void Adopt(struct addrinfo* head);
 
-  // Copies the given addrinfo rather than adopting it.
-  void Copy(const struct addrinfo* head);
+  // Copies the given addrinfo rather than adopting it. If |recursive| is true,
+  // all linked struct addrinfos will be copied as well. Otherwise only the head
+  // will be copied, and the rest of linked entries will be ignored.
+  void Copy(const struct addrinfo* head, bool recursive);
+
+  // Appends a copy of |head| and all its linked addrinfos to the stored
+  // addrinfo.
+  void Append(const struct addrinfo* head);
 
   // Sets the port of all addresses in the list to |port| (that is the
   // sin[6]_port field for the sockaddrs).
@@ -39,6 +47,13 @@ class AddressList {
   // If |src| already has the desired port this operation is cheap (just adds
   // a reference to |src|'s data.) Otherwise we will make a copy.
   void SetFrom(const AddressList& src, int port);
+
+  // Gets the canonical name for the address.
+  // If the canonical name exists, |*canonical_name| is filled in with the
+  // value and true is returned. If it does not exist, |*canonical_name| is
+  // not altered and false is returned.
+  // |canonical_name| must be a non-null value.
+  bool GetCanonicalName(std::string* canonical_name) const;
 
   // Clears all data from this address list. This leaves the list in the same
   // empty state as when first constructed.

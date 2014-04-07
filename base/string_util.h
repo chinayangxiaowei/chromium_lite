@@ -1,4 +1,4 @@
-// Copyright (c) 2006-2008 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 //
@@ -13,12 +13,9 @@
 #include <vector>
 
 #include "base/basictypes.h"
+#include "base/compiler_specific.h"
 #include "base/string16.h"
 #include "base/string_piece.h"  // For implicit conversions.
-
-// TODO(brettw) this dependency should be removed and callers that need
-// these functions should include this file directly.
-#include "base/utf_string_conversions.h"
 
 // Safe standard library wrappers for all platforms.
 
@@ -45,17 +42,22 @@ int strncmp16(const char16* s1, const char16* s2, size_t count);
 // Wrapper for vsnprintf that always null-terminates and always returns the
 // number of characters that would be in an untruncated formatted
 // string, even when truncation occurs.
-int vsnprintf(char* buffer, size_t size, const char* format, va_list arguments);
+int vsnprintf(char* buffer, size_t size, const char* format, va_list arguments)
+    PRINTF_FORMAT(3, 0);
 
 // vswprintf always null-terminates, but when truncation occurs, it will either
 // return -1 or the number of characters that would be in an untruncated
 // formatted string.  The actual return value depends on the underlying
 // C library's vswprintf implementation.
 int vswprintf(wchar_t* buffer, size_t size,
-              const wchar_t* format, va_list arguments);
+              const wchar_t* format, va_list arguments) WPRINTF_FORMAT(3, 0);
 
 // Some of these implementations need to be inlined.
 
+// We separate the declaration from the implementation of this inline
+// function just so the PRINTF_FORMAT works.
+inline int snprintf(char* buffer, size_t size, const char* format, ...)
+    PRINTF_FORMAT(3, 4);
 inline int snprintf(char* buffer, size_t size, const char* format, ...) {
   va_list arguments;
   va_start(arguments, format);
@@ -64,6 +66,10 @@ inline int snprintf(char* buffer, size_t size, const char* format, ...) {
   return result;
 }
 
+// We separate the declaration from the implementation of this inline
+// function just so the WPRINTF_FORMAT works.
+inline int swprintf(wchar_t* buffer, size_t size, const wchar_t* format, ...)
+    WPRINTF_FORMAT(3, 4);
 inline int swprintf(wchar_t* buffer, size_t size, const wchar_t* format, ...) {
   va_list arguments;
   va_start(arguments, format);
@@ -114,10 +120,15 @@ bool IsWprintfFormatPortable(const wchar_t* format);
 #error Define string operations appropriately for your platform
 #endif
 
-// Returns a reference to a globally unique empty string that functions can
-// return.  Use this to avoid static construction of strings, not to replace
-// any and all uses of "std::string()" as nicer-looking sugar.
-// These functions are threadsafe.
+// These threadsafe functions return references to globally unique empty
+// strings.
+//
+// DO NOT USE THESE AS A GENERAL-PURPOSE SUBSTITUTE FOR DEFAULT CONSTRUCTORS.
+// There is only one case where you should use these: functions which need to
+// return a string by reference (e.g. as a class member accessor), and don't
+// have an empty string to use (e.g. in an error case).  These should not be
+// used as initializers, function arguments, or return values for functions
+// which return by value or outparam.
 const std::string& EmptyString();
 const std::wstring& EmptyWString();
 const string16& EmptyString16();
@@ -127,6 +138,19 @@ extern const char16 kWhitespaceUTF16[];
 extern const char kWhitespaceASCII[];
 
 extern const char kUtf8ByteOrderMark[];
+
+// Removes characters in remove_chars from anywhere in input.  Returns true if
+// any characters were removed.
+// NOTE: Safe to use the same variable for both input and output.
+bool RemoveChars(const std::wstring& input,
+                 const wchar_t remove_chars[],
+                 std::wstring* output);
+bool RemoveChars(const string16& input,
+                 const char16 remove_chars[],
+                 string16* output);
+bool RemoveChars(const std::string& input,
+                 const char remove_chars[],
+                 std::string* output);
 
 // Removes characters in trim_chars from the beginning and end of input.
 // NOTE: Safe to use the same variable for both input and output.
@@ -219,7 +243,6 @@ bool WideToLatin1(const std::wstring& wide, std::string* latin1);
 // add a new function for that.
 bool IsString8Bit(const std::wstring& str);
 bool IsStringUTF8(const std::string& str);
-bool IsStringWideUTF8(const std::wstring& str);
 bool IsStringASCII(const std::wstring& str);
 bool IsStringASCII(const base::StringPiece& str);
 bool IsStringASCII(const string16& str);
@@ -339,13 +362,11 @@ inline bool IsWhitespace(wchar_t c) {
   return wcschr(kWhitespaceWide, c) != NULL;
 }
 
-// TODO(mpcomplete): Decide if we should change these names to KIBI, etc,
-// or if we should actually use metric units, or leave as is.
 enum DataUnits {
   DATA_UNITS_BYTE = 0,
-  DATA_UNITS_KILOBYTE,
-  DATA_UNITS_MEGABYTE,
-  DATA_UNITS_GIGABYTE,
+  DATA_UNITS_KIBIBYTE,
+  DATA_UNITS_MEBIBYTE,
+  DATA_UNITS_GIBIBYTE,
 };
 
 // Return the unit type that is appropriate for displaying the amount of bytes
@@ -354,13 +375,13 @@ DataUnits GetByteDisplayUnits(int64 bytes);
 
 // Return a byte string in human-readable format, displayed in units appropriate
 // specified by 'units', with an optional unit suffix.
-// Ex: FormatBytes(512, DATA_UNITS_KILOBYTE, true) => "0.5 KB"
-// Ex: FormatBytes(10*1024, DATA_UNITS_MEGABYTE, false) => "0.1"
+// Ex: FormatBytes(512, DATA_UNITS_KIBIBYTE, true) => "0.5 KB"
+// Ex: FormatBytes(10*1024, DATA_UNITS_MEBIBYTE, false) => "0.1"
 std::wstring FormatBytes(int64 bytes, DataUnits units, bool show_units);
 
 // As above, but with "/s" units.
-// Ex: FormatSpeed(512, DATA_UNITS_KILOBYTE, true) => "0.5 KB/s"
-// Ex: FormatSpeed(10*1024, DATA_UNITS_MEGABYTE, false) => "0.1"
+// Ex: FormatSpeed(512, DATA_UNITS_KIBIBYTE, true) => "0.5 KB/s"
+// Ex: FormatSpeed(10*1024, DATA_UNITS_MEBIBYTE, false) => "0.1"
 std::wstring FormatSpeed(int64 bytes, DataUnits units, bool show_units);
 
 // Return a number formated with separators in the user's locale way.
@@ -455,22 +476,31 @@ double StringToDouble(const std::string& value);
 double StringToDouble(const string16& value);
 
 // Return a C++ string given printf-like input.
-std::string StringPrintf(const char* format, ...);
-std::wstring StringPrintf(const wchar_t* format, ...);
+std::string StringPrintf(const char* format, ...) PRINTF_FORMAT(1, 2);
+std::wstring StringPrintf(const wchar_t* format, ...) WPRINTF_FORMAT(1, 2);
+
+// Return a C++ string given vprintf-like input.
+std::string StringPrintV(const char* format, va_list ap) PRINTF_FORMAT(1, 0);
 
 // Store result into a supplied string and return it
-const std::string& SStringPrintf(std::string* dst, const char* format, ...);
+const std::string& SStringPrintf(std::string* dst, const char* format, ...)
+    PRINTF_FORMAT(2, 3);
 const std::wstring& SStringPrintf(std::wstring* dst,
-                                  const wchar_t* format, ...);
+                                  const wchar_t* format, ...)
+    WPRINTF_FORMAT(2, 3);
 
 // Append result to a supplied string
-void StringAppendF(std::string* dst, const char* format, ...);
-void StringAppendF(std::wstring* dst, const wchar_t* format, ...);
+void StringAppendF(std::string* dst, const char* format, ...)
+    PRINTF_FORMAT(2, 3);
+void StringAppendF(std::wstring* dst, const wchar_t* format, ...)
+    WPRINTF_FORMAT(2, 3);
 
 // Lower-level routine that takes a va_list and appends to a specified
 // string.  All other routines are just convenience wrappers around it.
-void StringAppendV(std::string* dst, const char* format, va_list ap);
-void StringAppendV(std::wstring* dst, const wchar_t* format, va_list ap);
+void StringAppendV(std::string* dst, const char* format, va_list ap)
+    PRINTF_FORMAT(2, 0);
+void StringAppendV(std::wstring* dst, const wchar_t* format, va_list ap)
+    WPRINTF_FORMAT(2, 0);
 
 // This is mpcomplete's pattern for saving a string copy when dealing with
 // a function that writes results into a wchar_t[] and wanting the result to
@@ -515,6 +545,8 @@ template<typename Char> struct CaseInsensitiveCompareASCII {
   }
 };
 
+// TODO(timsteele): Move these split string functions into their own API on
+// string_split.cc/.h files.
 //-----------------------------------------------------------------------------
 
 // Splits |str| into a vector of strings delimited by |s|. Append the results
@@ -542,6 +574,27 @@ void SplitStringDontTrim(const string16& str,
 void SplitStringDontTrim(const std::string& str,
                          char s,
                          std::vector<std::string>* r);
+
+// The same as SplitString, but use a substring delimiter instead of a char.
+void SplitStringUsingSubstr(const string16& str,
+                            const string16& s,
+                            std::vector<string16>* r);
+void SplitStringUsingSubstr(const std::string& str,
+                            const std::string& s,
+                            std::vector<std::string>* r);
+
+// Splits a string into its fields delimited by any of the characters in
+// |delimiters|.  Each field is added to the |tokens| vector.  Returns the
+// number of tokens found.
+size_t Tokenize(const std::wstring& str,
+                const std::wstring& delimiters,
+                std::vector<std::wstring>* tokens);
+size_t Tokenize(const string16& str,
+                const string16& delimiters,
+                std::vector<string16>* tokens);
+size_t Tokenize(const std::string& str,
+                const std::string& delimiters,
+                std::vector<std::string>* tokens);
 
 // Does the opposite of SplitString().
 std::wstring JoinString(const std::vector<std::wstring>& parts, wchar_t s);
@@ -589,11 +642,10 @@ bool ElideString(const std::wstring& input, int max_len, std::wstring* output);
 
 // Returns true if the string passed in matches the pattern. The pattern
 // string can contain wildcards like * and ?
-// TODO(iyengar) This function may not work correctly for CJK strings as
-// it does individual character matches.
 // The backslash character (\) is an escape character for * and ?
-bool MatchPattern(const std::wstring& string, const std::wstring& pattern);
-bool MatchPattern(const std::string& string, const std::string& pattern);
+// We limit the patterns to having a max of 16 * or ? characters.
+bool MatchPatternWide(const std::wstring& string, const std::wstring& pattern);
+bool MatchPatternASCII(const std::string& string, const std::string& pattern);
 
 // Returns a hex string representation of a binary buffer.
 // The returned hex string will be in upper case.

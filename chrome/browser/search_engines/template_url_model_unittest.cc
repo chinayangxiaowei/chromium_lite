@@ -2,8 +2,12 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "base/callback.h"
 #include "base/path_service.h"
+#include "base/string_util.h"
 #include "base/thread.h"
+#include "chrome/browser/chrome_thread.h"
+#include "chrome/browser/history/history_notifications.h"
 #include "chrome/browser/webdata/web_database.h"
 #include "chrome/test/testing_profile.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -30,9 +34,12 @@ class QuitTask2 : public Task {
 // Subclass the TestingProfile so that it can return a WebDataService.
 class TemplateURLModelTestingProfile : public TestingProfile {
  public:
-  TemplateURLModelTestingProfile() : TestingProfile() { }
+  TemplateURLModelTestingProfile() : TestingProfile() {}
 
   void SetUp() {
+    db_thread_.reset(new ChromeThread(ChromeThread::DB));
+    db_thread_->Start();
+
     // Name a subdirectory of the temp directory.
     ASSERT_TRUE(PathService::Get(base::DIR_TEMP, &test_dir_));
     test_dir_ = test_dir_.AppendASCII("TemplateURLModelTest");
@@ -49,6 +56,12 @@ class TemplateURLModelTestingProfile : public TestingProfile {
   void TearDown() {
     // Clean up the test directory.
     service_->Shutdown();
+    // Note that we must ensure the DB thread is stopped after WDS
+    // shutdown (so it can commit pending transactions) but before
+    // deleting the test profile directory, otherwise we may not be
+    // able to delete it due to an open transaction.
+    db_thread_->Stop();
+
     ASSERT_TRUE(file_util::Delete(test_dir_, true));
     ASSERT_FALSE(file_util::PathExists(test_dir_));
   }
@@ -60,6 +73,7 @@ class TemplateURLModelTestingProfile : public TestingProfile {
  private:
   scoped_refptr<WebDataService> service_;
   FilePath test_dir_;
+  scoped_ptr<ChromeThread> db_thread_;
 };
 
 // Trivial subclass of TemplateURLModel that records the last invocation of
@@ -86,13 +100,14 @@ class TestingTemplateURLModel : public TemplateURLModel {
  private:
   std::wstring search_term_;
 
-  DISALLOW_EVIL_CONSTRUCTORS(TestingTemplateURLModel);
+  DISALLOW_COPY_AND_ASSIGN(TestingTemplateURLModel);
 };
 
 class TemplateURLModelTest : public testing::Test,
                              public TemplateURLModelObserver {
  public:
-  TemplateURLModelTest() : changed_count_(0) {
+  TemplateURLModelTest() : ui_thread_(ChromeThread::UI, &message_loop_),
+                           changed_count_(0) {
   }
 
   virtual void SetUp() {
@@ -141,10 +156,9 @@ class TemplateURLModelTest : public testing::Test,
   // Blocks the caller until the service has finished servicing all pending
   // requests.
   void BlockTillServiceProcessesRequests() {
-    // Schedule a task on the background thread that is processed after all
-    // pending requests on the background thread.
-    profile_->GetWebDataService(Profile::EXPLICIT_ACCESS)->thread()->
-        message_loop()->PostTask(FROM_HERE, new QuitTask2());
+    // Schedule a task on the DB thread that is processed after all
+    // pending requests on the DB thread.
+    ChromeThread::PostTask(ChromeThread::DB, FROM_HERE, new QuitTask2());
     // Run the current message loop. QuitTask2, when run, invokes Quit,
     // which unblocks this.
     MessageLoop::current()->Run();
@@ -190,6 +204,9 @@ class TemplateURLModelTest : public testing::Test,
   }
 
   MessageLoopForUI message_loop_;
+  // Needed to make the DeleteOnUIThread trait of WebDataService work
+  // properly.
+  ChromeThread ui_thread_;
   scoped_ptr<TemplateURLModelTestingProfile> profile_;
   scoped_ptr<TestingTemplateURLModel> model_;
   int changed_count_;
@@ -737,4 +754,21 @@ TEST_F(TemplateURLModelTest, MergeDeletesUnusedProviders) {
   ASSERT_EQ(t_url3, model_->GetDefaultSearchProvider());
   // Don't remove |t_url3|; we'd need to make it non-default first, and why
   // bother when the model shutdown will clean it up for us.
+}
+
+// Simulates failing to load the webdb and makes sure the default search
+// provider is valid.
+TEST_F(TemplateURLModelTest, FailedInit) {
+  VerifyLoad();
+
+  model_.reset(NULL);
+
+  profile_->GetWebDataService(Profile::EXPLICIT_ACCESS)->UnloadDatabase();
+  profile_->GetWebDataService(Profile::EXPLICIT_ACCESS)->set_failed_init(true);
+
+  ResetModel(false);
+  model_->Load();
+  BlockTillServiceProcessesRequests();
+
+  ASSERT_TRUE(model_->GetDefaultSearchProvider());
 }

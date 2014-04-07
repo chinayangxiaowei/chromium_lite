@@ -13,6 +13,11 @@ public:
   }
 };
 
+// All kinds of crashes on Linux http://crbug.com/41027
+#if defined(OS_LINUX)
+#define FavIconPermission DISABLED_FavIconPermission
+#endif
+
 IN_PROC_BROWSER_TEST_F(ExtensionApiTest, PermissionsFail) {
   ASSERT_TRUE(RunExtensionTest("permissions/disabled")) << message_;
 
@@ -29,3 +34,15 @@ IN_PROC_BROWSER_TEST_F(ExperimentalApiTest, PermissionsSucceed) {
   ASSERT_TRUE(RunExtensionTest("permissions/enabled")) << message_;
 }
 
+IN_PROC_BROWSER_TEST_F(ExtensionApiTest, ExperimentalPermissionsFail) {
+  // At the time this test is being created, there is no experimental
+  // function that will not be graduating soon, and does not require a
+  // tab id as an argument.  So, we need the tab permission to get
+  // a tab id.
+  ASSERT_TRUE(RunExtensionTest("permissions/experimental_disabled"))
+      << message_;
+}
+
+IN_PROC_BROWSER_TEST_F(ExtensionApiTest, FavIconPermission) {
+  ASSERT_TRUE(RunExtensionTest("permissions/favicon")) << message_;
+}

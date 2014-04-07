@@ -13,12 +13,13 @@
 #include <vssym32.h>
 
 #include "app/combobox_model.h"
-#include "app/gfx/canvas.h"
-#include "app/gfx/native_theme_win.h"
 #include "app/l10n_util.h"
 #include "app/resource_bundle.h"
 #include "base/file_util.h"
+#include "base/i18n/rtl.h"
+#include "base/message_loop.h"
 #include "base/path_service.h"
+#include "base/thread.h"
 #include "chrome/browser/browser.h"
 #include "chrome/browser/browser_list.h"
 #include "chrome/browser/browser_process.h"
@@ -26,17 +27,21 @@
 #include "chrome/browser/gears_integration.h"
 #include "chrome/browser/net/dns_global.h"
 #include "chrome/browser/options_util.h"
+#include "chrome/browser/pref_member.h"
+#include "chrome/browser/pref_service.h"
+#include "chrome/browser/profile.h"
 #include "chrome/browser/renderer_host/resource_dispatcher_host.h"
 #include "chrome/browser/safe_browsing/safe_browsing_service.h"
 #include "chrome/browser/shell_dialogs.h"
 #include "chrome/browser/views/browser_dialogs.h"
 #include "chrome/browser/views/clear_browsing_data.h"
+#include "chrome/browser/views/list_background.h"
 #include "chrome/browser/views/options/content_settings_window_view.h"
 #include "chrome/browser/views/options/fonts_languages_window_view.h"
 #include "chrome/browser/views/restart_message_box.h"
-#include "chrome/common/pref_member.h"
 #include "chrome/common/pref_names.h"
-#include "chrome/common/pref_service.h"
+#include "gfx/canvas.h"
+#include "gfx/native_theme_win.h"
 #include "grit/app_resources.h"
 #include "grit/chromium_strings.h"
 #include "grit/generated_resources.h"
@@ -67,29 +72,6 @@ const int kFileIconTextFieldSpacing = 3;
 }
 
 namespace {
-
-// A background object that paints the scrollable list background,
-// which may be rendered by the system visual styles system.
-class ListBackground : public views::Background {
- public:
-  explicit ListBackground() {
-    SkColor list_color =
-        gfx::NativeTheme::instance()->GetThemeColorWithDefault(
-            gfx::NativeTheme::LIST, 1, TS_NORMAL, TMT_FILLCOLOR, COLOR_WINDOW);
-    SetNativeControlColor(list_color);
-  }
-  virtual ~ListBackground() {}
-
-  virtual void Paint(gfx::Canvas* canvas, views::View* view) const {
-    HDC dc = canvas->beginPlatformPaint();
-    RECT native_lb = view->GetLocalBounds(true).ToRECT();
-    gfx::NativeTheme::instance()->PaintListBackground(dc, true, &native_lb);
-    canvas->endPlatformPaint();
-  }
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(ListBackground);
-};
 
 ////////////////////////////////////////////////////////////////////////////////
 // FileDisplayArea
@@ -143,9 +125,9 @@ FileDisplayArea::~FileDisplayArea() {
 
 void FileDisplayArea::SetFile(const FilePath& file_path) {
   // Force file path to have LTR directionality.
-  if (l10n_util::GetTextDirection() == l10n_util::RIGHT_TO_LEFT) {
+  if (base::i18n::IsRTL()) {
     string16 localized_file_path;
-    l10n_util::WrapPathWithLTRFormatting(file_path, &localized_file_path);
+    base::i18n::WrapPathWithLTRFormatting(file_path, &localized_file_path);
     text_field_->SetText(UTF16ToWide(localized_file_path));
   } else {
     text_field_->SetText(file_path.ToWStringHack());
@@ -207,7 +189,7 @@ void FileDisplayArea::InitClass() {
     // We'd prefer to use UILayoutIsRightToLeft() to perform the RTL
     // environment check, but it's nonstatic, so, instead, we check whether the
     // locale is RTL.
-    bool ui_is_rtl = l10n_util::GetTextDirection() == l10n_util::RIGHT_TO_LEFT;
+    bool ui_is_rtl = base::i18n::IsRTL();
     ResourceBundle& rb = ResourceBundle::GetSharedInstance();
     default_folder_icon_ = *rb.GetBitmapNamed(ui_is_rtl ?
                                               IDR_FOLDER_CLOSED_RTL :
@@ -502,53 +484,54 @@ void PrivacySection::ButtonPressed(
     views::Button* sender, const views::Event& event) {
   if (sender == enable_link_doctor_checkbox_) {
     bool enabled = enable_link_doctor_checkbox_->checked();
-    UserMetricsRecordAction(enabled ?
-                                L"Options_LinkDoctorCheckbox_Enable" :
-                                L"Options_LinkDoctorCheckbox_Disable",
+    UserMetricsRecordAction(UserMetricsAction(enabled ?
+                                "Options_LinkDoctorCheckbox_Enable" :
+                                "Options_LinkDoctorCheckbox_Disable"),
                             profile()->GetPrefs());
     alternate_error_pages_.SetValue(enabled);
   } else if (sender == enable_suggest_checkbox_) {
     bool enabled = enable_suggest_checkbox_->checked();
-    UserMetricsRecordAction(enabled ?
-                                L"Options_UseSuggestCheckbox_Enable" :
-                                L"Options_UseSuggestCheckbox_Disable",
+    UserMetricsRecordAction(UserMetricsAction(enabled ?
+                                "Options_UseSuggestCheckbox_Enable" :
+                                "Options_UseSuggestCheckbox_Disable"),
                             profile()->GetPrefs());
     use_suggest_.SetValue(enabled);
   } else if (sender == enable_dns_prefetching_checkbox_) {
     bool enabled = enable_dns_prefetching_checkbox_->checked();
-    UserMetricsRecordAction(enabled ?
-                                L"Options_DnsPrefetchCheckbox_Enable" :
-                                L"Options_DnsPrefetchCheckbox_Disable",
+    UserMetricsRecordAction(UserMetricsAction(enabled ?
+                                "Options_DnsPrefetchCheckbox_Enable" :
+                                "Options_DnsPrefetchCheckbox_Disable"),
                             profile()->GetPrefs());
     dns_prefetch_enabled_.SetValue(enabled);
     chrome_browser_net::EnableDnsPrefetch(enabled);
   } else if (sender == enable_safe_browsing_checkbox_) {
     bool enabled = enable_safe_browsing_checkbox_->checked();
-    UserMetricsRecordAction(enabled ?
-                                L"Options_SafeBrowsingCheckbox_Enable" :
-                                L"Options_SafeBrowsingCheckbox_Disable",
+    UserMetricsRecordAction(UserMetricsAction(enabled ?
+                                "Options_SafeBrowsingCheckbox_Enable" :
+                                "Options_SafeBrowsingCheckbox_Disable"),
                             profile()->GetPrefs());
     safe_browsing_.SetValue(enabled);
     SafeBrowsingService* safe_browsing_service =
         g_browser_process->resource_dispatcher_host()->safe_browsing_service();
     MessageLoop::current()->PostTask(FROM_HERE, NewRunnableMethod(
         safe_browsing_service, &SafeBrowsingService::OnEnable, enabled));
-  } else if (sender == reporting_enabled_checkbox_) {
+  } else if (reporting_enabled_checkbox_ &&
+             (sender == reporting_enabled_checkbox_)) {
     bool enabled = reporting_enabled_checkbox_->checked();
-    UserMetricsRecordAction(enabled ?
-                                L"Options_MetricsReportingCheckbox_Enable" :
-                                L"Options_MetricsReportingCheckbox_Disable",
+    UserMetricsRecordAction(UserMetricsAction(enabled ?
+                                "Options_MetricsReportingCheckbox_Enable" :
+                                "Options_MetricsReportingCheckbox_Disable"),
                             profile()->GetPrefs());
     ResolveMetricsReportingEnabled();
     if (enabled == reporting_enabled_checkbox_->checked())
       RestartMessageBox::ShowMessageBox(GetWindow()->GetNativeWindow());
     enable_metrics_recording_.SetValue(enabled);
   } else if (sender == content_settings_button_) {
-    UserMetricsRecordAction(L"Options_ContentSettings", NULL);
+    UserMetricsRecordAction(UserMetricsAction("Options_ContentSettings"), NULL);
     browser::ShowContentSettingsWindow(GetWindow()->GetNativeWindow(),
         CONTENT_SETTINGS_TYPE_DEFAULT, profile());
   } else if (sender == clear_data_button_) {
-    UserMetricsRecordAction(L"Options_ClearData", NULL);
+    UserMetricsRecordAction(UserMetricsAction("Options_ClearData"), NULL);
     views::Window::CreateChromeWindow(
         GetWindow()->GetNativeWindow(),
         gfx::Rect(),
@@ -567,15 +550,17 @@ void PrivacySection::LinkActivated(views::Link* source, int event_flags) {
 }
 
 void PrivacySection::Layout() {
-  // We override this to try and set the width of the enable logging checkbox
-  // to the width of the parent less some fudging since the checkbox's
-  // preferred size calculation code is dependent on its width, and if we don't
-  // do this then it will return 0 as a preferred width when GridLayout (called
-  // from View::Layout) tries to access it.
-  views::View* parent = GetParent();
-  if (parent && parent->width()) {
-    const int parent_width = parent->width();
-    reporting_enabled_checkbox_->SetBounds(0, 0, parent_width - 20, 0);
+  if (reporting_enabled_checkbox_) {
+    // We override this to try and set the width of the enable logging checkbox
+    // to the width of the parent less some fudging since the checkbox's
+    // preferred size calculation code is dependent on its width, and if we
+    // don't do this then it will return 0 as a preferred width when GridLayout
+    // (called from View::Layout) tries to access it.
+    views::View* parent = GetParent();
+    if (parent && parent->width()) {
+      const int parent_width = parent->width();
+      reporting_enabled_checkbox_->SetBounds(0, 0, parent_width - 20, 0);
+    }
   }
   View::Layout();
 }
@@ -601,14 +586,12 @@ void PrivacySection::InitControlLayout() {
   enable_safe_browsing_checkbox_ = new views::Checkbox(
       l10n_util::GetString(IDS_OPTIONS_SAFEBROWSING_ENABLEPROTECTION));
   enable_safe_browsing_checkbox_->set_listener(this);
+#if defined(GOOGLE_CHROME_BUILD)
   reporting_enabled_checkbox_ = new views::Checkbox(
       l10n_util::GetString(IDS_OPTIONS_ENABLE_LOGGING));
   reporting_enabled_checkbox_->SetMultiLine(true);
   reporting_enabled_checkbox_->set_listener(this);
-#if defined(GOOGLE_CHROME_BUILD)
   reporting_enabled_checkbox_->SetVisible(true);
-#else
-  reporting_enabled_checkbox_->SetVisible(false);
 #endif
   learn_more_link_ = new views::Link(l10n_util::GetString(IDS_LEARN_MORE));
   learn_more_link_->SetController(this);
@@ -652,8 +635,10 @@ void PrivacySection::InitControlLayout() {
                          indented_view_set_id,
                          reporting_enabled_checkbox_ != NULL);
   // The "Help make Google Chrome better" checkbox.
-  AddLeadingControl(layout, reporting_enabled_checkbox_, indented_view_set_id,
-                    false);
+  if (reporting_enabled_checkbox_) {
+    AddLeadingControl(layout, reporting_enabled_checkbox_, indented_view_set_id,
+                      false);
+  }
 
   // Init member prefs so we can update the controls if prefs change.
   alternate_error_pages_.Init(prefs::kAlternateErrorPagesEnabled,
@@ -682,7 +667,8 @@ void PrivacySection::NotifyPrefChanged(const std::wstring* pref_name) {
   }
   if (!pref_name || *pref_name == prefs::kSafeBrowsingEnabled)
     enable_safe_browsing_checkbox_->SetChecked(safe_browsing_.GetValue());
-  if (!pref_name || *pref_name == prefs::kMetricsReportingEnabled) {
+  if (reporting_enabled_checkbox_ &&
+      (!pref_name || *pref_name == prefs::kMetricsReportingEnabled)) {
     reporting_enabled_checkbox_->SetChecked(
         enable_metrics_recording_.GetValue());
     ResolveMetricsReportingEnabled();
@@ -690,6 +676,7 @@ void PrivacySection::NotifyPrefChanged(const std::wstring* pref_name) {
 }
 
 void PrivacySection::ResolveMetricsReportingEnabled() {
+  DCHECK(reporting_enabled_checkbox_);
   bool enabled = reporting_enabled_checkbox_->checked();
 
   enabled = OptionsUtil::ResolveMetricsReportingEnabled(enabled);
@@ -735,7 +722,7 @@ WebContentSection::WebContentSection(Profile* profile)
 void WebContentSection::ButtonPressed(
     views::Button* sender, const views::Event& event) {
   if (sender == gears_settings_button_) {
-    UserMetricsRecordAction(L"Options_GearsSettings", NULL);
+    UserMetricsRecordAction(UserMetricsAction("Options_GearsSettings"), NULL);
     GearsSettingsPressed(GetAncestor(GetWidget()->GetNativeView(), GA_ROOT));
   } else if (sender == change_content_fonts_button_) {
     views::Window::CreateChromeWindow(
@@ -748,7 +735,7 @@ void WebContentSection::ButtonPressed(
 void WebContentSection::InitControlLayout() {
   AdvancedSection::InitControlLayout();
 
-  if (l10n_util::GetTextDirection() == l10n_util::LEFT_TO_RIGHT) {
+  if (!base::i18n::IsRTL()) {
     gears_label_ = new views::Label(
         l10n_util::GetString(IDS_OPTIONS_GEARSSETTINGS_GROUP_NAME));
   } else {
@@ -757,7 +744,7 @@ void WebContentSection::InitControlLayout() {
     std::wstring gearssetting_group_name =
         l10n_util::GetString(IDS_OPTIONS_GEARSSETTINGS_GROUP_NAME);
     gearssetting_group_name.push_back(
-        static_cast<wchar_t>(l10n_util::kRightToLeftMark));
+        static_cast<wchar_t>(base::i18n::kRightToLeftMark));
     gears_label_ = new views::Label(gearssetting_group_name);
   }
   gears_settings_button_ = new views::NativeButton(
@@ -836,21 +823,23 @@ void SecuritySection::ButtonPressed(
   if (sender == enable_ssl2_checkbox_) {
     bool enabled = enable_ssl2_checkbox_->checked();
     if (enabled) {
-      UserMetricsRecordAction(L"Options_SSL2_Enable", NULL);
+      UserMetricsRecordAction(UserMetricsAction("Options_SSL2_Enable"), NULL);
     } else {
-      UserMetricsRecordAction(L"Options_SSL2_Disable", NULL);
+      UserMetricsRecordAction(UserMetricsAction("Options_SSL2_Disable"), NULL);
     }
     net::SSLConfigServiceWin::SetSSL2Enabled(enabled);
   } else if (sender == check_for_cert_revocation_checkbox_) {
     bool enabled = check_for_cert_revocation_checkbox_->checked();
     if (enabled) {
-      UserMetricsRecordAction(L"Options_CheckCertRevocation_Enable", NULL);
+      UserMetricsRecordAction(
+          UserMetricsAction("Options_CheckCertRevocation_Enable"), NULL);
     } else {
-      UserMetricsRecordAction(L"Options_CheckCertRevocation_Disable", NULL);
+      UserMetricsRecordAction(
+          UserMetricsAction("Options_CheckCertRevocation_Disable"), NULL);
     }
     net::SSLConfigServiceWin::SetRevCheckingEnabled(enabled);
   } else if (sender == manage_certificates_button_) {
-    UserMetricsRecordAction(L"Options_ManagerCerts", NULL);
+    UserMetricsRecordAction(UserMetricsAction("Options_ManagerCerts"), NULL);
     CRYPTUI_CERT_MGR_STRUCT cert_mgr = { 0 };
     cert_mgr.dwSize = sizeof(CRYPTUI_CERT_MGR_STRUCT);
     cert_mgr.hwndParent = GetWindow()->GetNativeWindow();
@@ -930,23 +919,23 @@ class OpenConnectionDialogTask : public Task {
     // Using rundll32 seems better than LaunchConnectionDialog which causes a
     // new dialog to be made for each call.  rundll32 uses the same global
     // dialog and it seems to share with the shortcut in control panel.
-    std::wstring rundll32;
+    FilePath rundll32;
     PathService::Get(base::DIR_SYSTEM, &rundll32);
-    file_util::AppendToPath(&rundll32, L"rundll32.exe");
+    rundll32 = rundll32.AppendASCII("rundll32.exe");
 
-    std::wstring shell32dll;
+    FilePath shell32dll;
     PathService::Get(base::DIR_SYSTEM, &shell32dll);
-    file_util::AppendToPath(&shell32dll, L"shell32.dll");
+    shell32dll = shell32dll.AppendASCII("shell32.dll");
 
-    std::wstring inetcpl;
+    FilePath inetcpl;
     PathService::Get(base::DIR_SYSTEM, &inetcpl);
-    file_util::AppendToPath(&inetcpl, L"inetcpl.cpl,,4");
+    inetcpl = inetcpl.AppendASCII("inetcpl.cpl,,4");
 
-    std::wstring args(shell32dll);
+    std::wstring args(shell32dll.value());
     args.append(L",Control_RunDLL ");
-    args.append(inetcpl);
+    args.append(inetcpl.value());
 
-    ShellExecute(NULL, L"open", rundll32.c_str(), args.c_str(), NULL,
+    ShellExecute(NULL, L"open", rundll32.value().c_str(), args.c_str(), NULL,
         SW_SHOWNORMAL);
   }
 
@@ -986,7 +975,7 @@ NetworkSection::NetworkSection(Profile* profile)
 void NetworkSection::ButtonPressed(
     views::Button* sender, const views::Event& event) {
   if (sender == change_proxies_button_) {
-    UserMetricsRecordAction(L"Options_ChangeProxies", NULL);
+    UserMetricsRecordAction(UserMetricsAction("Options_ChangeProxies"), NULL);
     base::Thread* thread = g_browser_process->file_thread();
     DCHECK(thread);
     thread->message_loop()->PostTask(FROM_HERE, new OpenConnectionDialogTask);
@@ -1103,23 +1092,25 @@ void DownloadSection::ButtonPressed(
   } else if (sender == download_ask_for_save_location_checkbox_) {
     bool enabled = download_ask_for_save_location_checkbox_->checked();
     if (enabled) {
-      UserMetricsRecordAction(L"Options_AskForSaveLocation_Enable",
-                              profile()->GetPrefs());
+      UserMetricsRecordAction(
+                UserMetricsAction("Options_AskForSaveLocation_Enable"),
+                profile()->GetPrefs());
     } else {
-      UserMetricsRecordAction(L"Options_AskForSaveLocation_Disable",
-                              profile()->GetPrefs());
+      UserMetricsRecordAction(
+                UserMetricsAction("Options_AskForSaveLocation_Disable"),
+                profile()->GetPrefs());
     }
     ask_for_save_location_.SetValue(enabled);
   } else if (sender == reset_file_handlers_button_) {
     profile()->GetDownloadManager()->ResetAutoOpenFiles();
-    UserMetricsRecordAction(L"Options_ResetAutoOpenFiles",
+    UserMetricsRecordAction(UserMetricsAction("Options_ResetAutoOpenFiles"),
                             profile()->GetPrefs());
   }
 }
 
 void DownloadSection::FileSelected(const FilePath& path,
                                    int index, void* params) {
-  UserMetricsRecordAction(L"Options_SetDownloadDirectory",
+  UserMetricsRecordAction(UserMetricsAction("Options_SetDownloadDirectory"),
                           profile()->GetPrefs());
   default_download_location_.SetValue(path.ToWStringHack());
   // We need to call this manually here since because we're setting the value
@@ -1243,7 +1234,7 @@ class TranslateSection : public AdvancedSection,
   // Preferences for this section:
   BooleanPrefMember enable_translate_;
 
-  DISALLOW_COPY_AND_ASSIGN(TranslateSection );
+  DISALLOW_COPY_AND_ASSIGN(TranslateSection);
 };
 
 TranslateSection::TranslateSection(Profile* profile)
@@ -1256,8 +1247,9 @@ void TranslateSection::ButtonPressed(
     views::Button* sender, const views::Event& event) {
   DCHECK(sender == enable_translate_checkbox_);
   bool enabled = enable_translate_checkbox_->checked();
-  UserMetricsRecordAction(enabled ? L"Options_Translate_Enable" :
-                                    L"Options_Translate_Disable",
+  UserMetricsRecordAction(enabled ?
+                          UserMetricsAction("Options_Translate_Enable") :
+                          UserMetricsAction("Options_Translate_Disable"),
                           profile()->GetPrefs());
   enable_translate_.SetValue(enabled);
 }

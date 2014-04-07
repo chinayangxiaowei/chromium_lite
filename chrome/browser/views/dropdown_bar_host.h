@@ -1,4 +1,4 @@
-// Copyright (c) 2006-2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,10 +6,10 @@
 #define CHROME_BROWSER_VIEWS_DROPDOWN_BAR_HOST_H_
 
 #include "app/animation.h"
-#include "app/gfx/native_widget_types.h"
-#include "base/gfx/rect.h"
 #include "base/scoped_ptr.h"
 #include "chrome/common/native_web_keyboard_event.h"
+#include "gfx/native_widget_types.h"
+#include "gfx/rect.h"
 #include "views/controls/textfield/textfield.h"
 #include "views/focus/focus_manager.h"
 
@@ -48,14 +48,15 @@ class DropdownBarHost : public views::AcceleratorTarget,
   bool IsAnimating() const;
   // Returns true if the dropdown bar view is visible, or false otherwise.
   bool IsVisible() const;
-  // Shows the dropdown bar.
-  void Show();
-  // Hides the dropdown bar.
-  void Hide(bool animate);
   // Selects text in the entry field and set focus.
   void SetFocusAndSelection();
   // Stops the animation.
   void StopAnimation();
+
+  // Shows the dropdown bar.
+  virtual void Show(bool animate);
+  // Hides the dropdown bar.
+  virtual void Hide(bool animate);
 
   // Returns the rectangle representing where to position the dropdown widget.
   virtual gfx::Rect GetDialogPosition(gfx::Rect avoid_overlapping_rect) = 0;
@@ -84,12 +85,22 @@ class DropdownBarHost : public views::AcceleratorTarget,
   // having to poll it while it animates to open/closed status.
   static bool disable_animations_during_testing_;
 
+  // Returns the browser view that the dropdown belongs to.
+  BrowserView* browser_view() const { return browser_view_; }
+
+  // Registers this class as the handler for when Escape is pressed. Once we
+  // loose focus we will unregister Escape and (any accelerators the derived
+  // classes registers by using overrides of RegisterAccelerators). See also:
+  // SetFocusChangeListener().
+  virtual void RegisterAccelerators();
+
+  // When we loose focus, we unregister all accelerator handlers. See also:
+  // SetFocusChangeListener().
+  virtual void UnregisterAccelerators();
+
  protected:
   // Returns the dropdown bar view.
   DropdownBarView* view() const { return view_; }
-
-  // Returns the browser view that the dropdown belongs to.
-  BrowserView* browser_view() const { return browser_view_; }
 
   // Returns the focus tracker.
   views::ExternalFocusTracker* focus_tracker() const {
@@ -108,26 +119,21 @@ class DropdownBarHost : public views::AcceleratorTarget,
   // Returns the animation offset.
   int animation_offset() const { return animation_offset_; }
 
-  // Retrieves the boundaries that the dropdown widget has to work with
-  // within the Chrome frame window. The resulting rectangle will be a
-  // rectangle that overlaps the bottom of the Chrome toolbar by one
-  // pixel (so we can create the illusion that the dropdown widget is
-  // part of the toolbar) and covers the page area, except that we
-  // deflate the rect width by subtracting (from both sides) the width
-  // of the toolbar and some extra pixels to account for the width of
-  // the Chrome window borders. |bounds| is relative to the browser
-  // window. If the function fails to determine the browser
-  // window/client area rectangle or the rectangle for the page area
-  // then |bounds| will be an empty rectangle.
-  void GetWidgetBounds(gfx::Rect* bounds);
+  // Retrieves the boundary that the dropdown widget has to work with
+  // within the Chrome frame window. The boundary differs depending on
+  // the dropdown bar implementation. The default implementation
+  // returns the boundary of browser_view and the drop down
+  // can be shown in any client area.
+  virtual void GetWidgetBounds(gfx::Rect* bounds);
 
-  // Registers this class as the handler for when Escape is pressed. We will
-  // unregister once we loose focus. See also: SetFocusChangeListener().
-  void RegisterEscAccelerator();
-
-  // When we loose focus, we unregister the handler for Escape. See
-  // also: SetFocusChangeListener().
-  void UnregisterEscAccelerator();
+  // The find bar widget needs rounded edges, so we create a polygon
+  // that corresponds to the background images for this window (and
+  // make the polygon only contain the pixels that we want to
+  // draw). The polygon is then given to SetWindowRgn which changes
+  // the window from being a rectangle in shape, to being a rect with
+  // curved edges. We also check to see if the region should be
+  // truncated to prevent from drawing onto Chrome's window border.
+  void UpdateWindowEdges(const gfx::Rect& new_pos);
 
   // Creates and returns the native Widget.
   views::Widget* CreateHost();
@@ -142,6 +148,11 @@ class DropdownBarHost : public views::AcceleratorTarget,
   NativeWebKeyboardEvent GetKeyboardEvent(
       const TabContents* contents,
       const views::Textfield::Keystroke& key_stroke);
+
+  // Returns the animation for the dropdown.
+  SlideAnimation* animation() {
+    return animation_.get();
+  }
 
  private:
   // The BrowserView that created us.
@@ -171,6 +182,10 @@ class DropdownBarHost : public views::AcceleratorTarget,
   // Host is the Widget implementation that is created and maintained by the
   // dropdown bar. It contains the DropdownBarView.
   scoped_ptr<views::Widget> host_;
+
+  // A flag to manually manage visibility. GTK/X11 is asynchrnous and
+  // the state of the widget can be out of sync.
+  bool is_visible_;
 
   DISALLOW_COPY_AND_ASSIGN(DropdownBarHost);
 };

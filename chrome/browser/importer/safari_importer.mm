@@ -1,4 +1,4 @@
-// Copyright (c) 2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -16,12 +16,19 @@
 #include "base/string16.h"
 #include "base/sys_string_conversions.h"
 #include "base/time.h"
+#include "chrome/browser/history/history_types.h"
 #include "chrome/browser/importer/importer_bridge.h"
 #include "chrome/common/sqlite_utils.h"
 #include "chrome/common/url_constants.h"
 #include "googleurl/src/gurl.h"
 #include "grit/generated_resources.h"
 #include "net/base/data_url.h"
+
+using importer::FAVORITES;
+using importer::HISTORY;
+using importer::NONE;
+using importer::PASSWORDS;
+using importer::ProfileInfo;
 
 namespace {
 

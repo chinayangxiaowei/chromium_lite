@@ -1,4 +1,4 @@
-// Copyright (c) 2006-2008 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -11,13 +11,10 @@
 #include <queue>
 #include <string>
 
+#include "app/surface/transport_dib.h"
 #include "base/process.h"
-#include "base/ref_counted.h"
 #include "base/scoped_ptr.h"
-#include "base/shared_memory.h"
-#include "base/string16.h"
 #include "base/timer.h"
-#include "chrome/common/transport_dib.h"
 #include "chrome/browser/child_process_launcher.h"
 #include "chrome/browser/renderer_host/render_process_host.h"
 #include "chrome/common/notification_registrar.h"
@@ -30,6 +27,11 @@ class RendererMainThread;
 class RenderWidgetHelper;
 class TabContents;
 class VisitedLinkUpdater;
+class URLRequestContextGetter;
+
+namespace base {
+class SharedMemory;
+}
 
 namespace gfx {
 class Size;
@@ -57,18 +59,18 @@ class BrowserRenderProcessHost : public RenderProcessHost,
   ~BrowserRenderProcessHost();
 
   // RenderProcessHost implementation (public portion).
-  virtual bool Init(bool is_extensions_process);
+  virtual bool Init(bool is_extensions_process,
+                    URLRequestContextGetter* request_context);
   virtual int GetNextRoutingID();
   virtual void CancelResourceRequests(int render_widget_id);
   virtual void CrossSiteClosePageACK(const ViewMsg_ClosePage_Params& params);
-  virtual bool WaitForPaintMsg(int render_widget_id,
-                               const base::TimeDelta& max_delay,
-                               IPC::Message* msg);
-  virtual void ReceivedBadMessage(uint16 msg_type);
+  virtual bool WaitForUpdateMsg(int render_widget_id,
+                                const base::TimeDelta& max_delay,
+                                IPC::Message* msg);
+  virtual void ReceivedBadMessage(uint32 msg_type);
   virtual void WidgetRestored();
   virtual void WidgetHidden();
   virtual void ViewCreated();
-  virtual void AddWord(const string16& word);
   virtual void SendVisitedLinkTable(base::SharedMemory* table_memory);
   virtual void AddVisitedLinks(const VisitedLinkCommon::Fingerprints& links);
   virtual void ResetVisitedLinks();
@@ -88,7 +90,7 @@ class BrowserRenderProcessHost : public RenderProcessHost,
   // If the a process has sent a message that cannot be decoded, it is deemed
   // corrupted and thus needs to be terminated using this call. This function
   // can be safely called from any thread.
-  static void BadMessageTerminateProcess(uint16 msg_type,
+  static void BadMessageTerminateProcess(uint32 msg_type,
                                          base::ProcessHandle renderer);
 
   // NotificationObserver implementation.
@@ -131,12 +133,28 @@ class BrowserRenderProcessHost : public RenderProcessHost,
   // Copies applicable command line switches from the given |browser_cmd| line
   // flags to the output |renderer_cmd| line flags. Not all switches will be
   // copied over.
-  void PropogateBrowserCommandLineToRenderer(const CommandLine& browser_cmd,
+  void PropagateBrowserCommandLineToRenderer(const CommandLine& browser_cmd,
                                              CommandLine* renderer_cmd) const;
 
   // Callers can reduce the RenderProcess' priority.
-  // Returns true if the priority is backgrounded; false otherwise.
-  void SetBackgrounded(bool boost);
+  void SetBackgrounded(bool backgrounded);
+
+  // The renderer has requested that we initialize its spellchecker. This should
+  // generally only be called once per session, as after the first call, all
+  // future renderers will be passed the initialization information on startup
+  // (or when the dictionary changes in some way).
+  void OnSpellCheckerRequestDictionary();
+
+  // Tell the renderer of a new word that has been added to the custom
+  // dictionary.
+  void AddSpellCheckWord(const std::string& word);
+
+  // Pass the renderer some basic intialization information. Note that the
+  // renderer will not load Hunspell until it needs to.
+  void InitSpellChecker();
+
+  // Tell the renderer that auto spell correction has been enabled/disabled.
+  void EnableAutoSpellCorrect(bool enable);
 
   NotificationRegistrar registrar_;
 

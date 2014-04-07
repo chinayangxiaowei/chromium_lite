@@ -16,6 +16,7 @@
 #include "chrome/common/extensions/extension_l10n_util.h"
 #include "chrome/common/extensions/extension_message_bundle.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "webkit/glue/resource_type.h"
 
 namespace errors = extension_manifest_errors;
 namespace keys = extension_manifest_keys;
@@ -26,7 +27,7 @@ TEST(ExtensionL10nUtil, GetValidLocalesEmptyLocaleFolder) {
   ScopedTempDir temp;
   ASSERT_TRUE(temp.CreateUniqueTempDir());
 
-  FilePath src_path = temp.path().AppendASCII(Extension::kLocaleFolder);
+  FilePath src_path = temp.path().Append(Extension::kLocaleFolder);
   ASSERT_TRUE(file_util::CreateDirectory(src_path));
 
   std::string error;
@@ -42,7 +43,7 @@ TEST(ExtensionL10nUtil, GetValidLocalesWithValidLocaleNoMessagesFile) {
   ScopedTempDir temp;
   ASSERT_TRUE(temp.CreateUniqueTempDir());
 
-  FilePath src_path = temp.path().AppendASCII(Extension::kLocaleFolder);
+  FilePath src_path = temp.path().Append(Extension::kLocaleFolder);
   ASSERT_TRUE(file_util::CreateDirectory(src_path));
   ASSERT_TRUE(file_util::CreateDirectory(src_path.AppendASCII("sr")));
 
@@ -55,6 +56,33 @@ TEST(ExtensionL10nUtil, GetValidLocalesWithValidLocaleNoMessagesFile) {
   EXPECT_TRUE(locales.empty());
 }
 
+TEST(ExtensionL10nUtil, GetValidLocalesWithUnsupportedLocale) {
+  ScopedTempDir temp;
+  ASSERT_TRUE(temp.CreateUniqueTempDir());
+
+  FilePath src_path = temp.path().Append(Extension::kLocaleFolder);
+  ASSERT_TRUE(file_util::CreateDirectory(src_path));
+  // Supported locale.
+  FilePath locale_1 = src_path.AppendASCII("sr");
+  ASSERT_TRUE(file_util::CreateDirectory(locale_1));
+  std::string data("whatever");
+  ASSERT_TRUE(file_util::WriteFile(
+      locale_1.Append(Extension::kMessagesFilename),
+      data.c_str(), data.length()));
+  // Unsupported locale.
+  ASSERT_TRUE(file_util::CreateDirectory(src_path.AppendASCII("xxx_yyy")));
+
+  std::string error;
+  std::set<std::string> locales;
+  EXPECT_TRUE(extension_l10n_util::GetValidLocales(src_path,
+                                                   &locales,
+                                                   &error));
+
+  EXPECT_FALSE(locales.empty());
+  EXPECT_TRUE(locales.find("sr") != locales.end());
+  EXPECT_FALSE(locales.find("xxx_yyy") != locales.end());
+}
+
 TEST(ExtensionL10nUtil, GetValidLocalesWithValidLocalesAndMessagesFile) {
   FilePath install_dir;
   ASSERT_TRUE(PathService::Get(chrome::DIR_TEST_DATA, &install_dir));
@@ -63,7 +91,7 @@ TEST(ExtensionL10nUtil, GetValidLocalesWithValidLocalesAndMessagesFile) {
       .AppendASCII("Extensions")
       .AppendASCII("behllobkkfkfnphdnhnkndlbkcpglgmj")
       .AppendASCII("1.0.0.0")
-      .AppendASCII(Extension::kLocaleFolder);
+      .Append(Extension::kLocaleFolder);
 
   std::string error;
   std::set<std::string> locales;
@@ -84,7 +112,7 @@ TEST(ExtensionL10nUtil, LoadMessageCatalogsValidFallback) {
       .AppendASCII("Extensions")
       .AppendASCII("behllobkkfkfnphdnhnkndlbkcpglgmj")
       .AppendASCII("1.0.0.0")
-      .AppendASCII(Extension::kLocaleFolder);
+      .Append(Extension::kLocaleFolder);
 
   std::string error;
   std::set<std::string> locales;
@@ -105,7 +133,7 @@ TEST(ExtensionL10nUtil, LoadMessageCatalogsMissingFiles) {
   ScopedTempDir temp;
   ASSERT_TRUE(temp.CreateUniqueTempDir());
 
-  FilePath src_path = temp.path().AppendASCII(Extension::kLocaleFolder);
+  FilePath src_path = temp.path().Append(Extension::kLocaleFolder);
   ASSERT_TRUE(file_util::CreateDirectory(src_path));
 
   std::set<std::string> valid_locales;
@@ -124,7 +152,7 @@ TEST(ExtensionL10nUtil, LoadMessageCatalogsBadJSONFormat) {
   ScopedTempDir temp;
   ASSERT_TRUE(temp.CreateUniqueTempDir());
 
-  FilePath src_path = temp.path().AppendASCII(Extension::kLocaleFolder);
+  FilePath src_path = temp.path().Append(Extension::kLocaleFolder);
   ASSERT_TRUE(file_util::CreateDirectory(src_path));
 
   FilePath locale = src_path.AppendASCII("sr");
@@ -132,7 +160,7 @@ TEST(ExtensionL10nUtil, LoadMessageCatalogsBadJSONFormat) {
 
   std::string data = "{ \"name\":";
   ASSERT_TRUE(
-      file_util::WriteFile(locale.AppendASCII(Extension::kMessagesFilename),
+      file_util::WriteFile(locale.Append(Extension::kMessagesFilename),
                            data.c_str(), data.length()));
 
   std::set<std::string> valid_locales;
@@ -151,7 +179,7 @@ TEST(ExtensionL10nUtil, LoadMessageCatalogsDuplicateKeys) {
   ScopedTempDir temp;
   ASSERT_TRUE(temp.CreateUniqueTempDir());
 
-  FilePath src_path = temp.path().AppendASCII(Extension::kLocaleFolder);
+  FilePath src_path = temp.path().Append(Extension::kLocaleFolder);
   ASSERT_TRUE(file_util::CreateDirectory(src_path));
 
   FilePath locale_1 = src_path.AppendASCII("en");
@@ -161,14 +189,14 @@ TEST(ExtensionL10nUtil, LoadMessageCatalogsDuplicateKeys) {
     "{ \"name\": { \"message\": \"something\" }, "
     "\"name\": { \"message\": \"something else\" } }";
   ASSERT_TRUE(
-      file_util::WriteFile(locale_1.AppendASCII(Extension::kMessagesFilename),
+      file_util::WriteFile(locale_1.Append(Extension::kMessagesFilename),
                            data.c_str(), data.length()));
 
   FilePath locale_2 = src_path.AppendASCII("sr");
   ASSERT_TRUE(file_util::CreateDirectory(locale_2));
 
   ASSERT_TRUE(
-      file_util::WriteFile(locale_2.AppendASCII(Extension::kMessagesFilename),
+      file_util::WriteFile(locale_2.Append(Extension::kMessagesFilename),
                            data.c_str(), data.length()));
 
   std::set<std::string> valid_locales;

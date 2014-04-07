@@ -1,4 +1,4 @@
-// Copyright (c) 2006-2008 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,10 +10,10 @@
 
 #include "base/command_line.h"
 #include "base/string_util.h"
+#include "chrome/browser/pref_service.h"
 #include "chrome/browser/search_engines/template_url.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/common/pref_names.h"
-#include "chrome/common/pref_service.h"
 
 #if defined(OS_WIN)
 #undef IN  // On Windows, windef.h defines this, which screws up "India" cases.
@@ -58,9 +58,12 @@ struct PrepopulatedEngine {
   // must use two different unique IDs (and different keywords).
   //
   // The following unique IDs are available:
-  //    23, 30, 33, 34, 36, 39, 42, 43, 47, 48, 49, 50, 52, 53, 56, 58, 60, 61,
-  //    64, 65, 66, 70, 74, 78, 79, 80, 81, 84, 86, 88, 91, 92, 93, 94, 95, 96,
-  //    97, 102+
+  //    33, 34, 36, 39, 42, 43, 47, 48, 49, 50, 52, 53, 56, 58, 60, 61, 64, 65,
+  //    66, 70, 74, 78, 79, 80, 81, 84, 86, 88, 91, 92, 93, 94, 95, 96, 97, 98,
+  //    102+
+  //
+  // IDs > 1000 are reserved for distribution custom engines.
+  //
   // NOTE: CHANGE THE ABOVE NUMBERS IF YOU ADD A NEW ENGINE; ID conflicts = bad!
   const int id;
 };
@@ -135,6 +138,16 @@ const PrepopulatedEngine ask = {
   4,
 };
 
+const PrepopulatedEngine ask_de = {
+  L"Ask.com Deutschland",
+  L"de.ask.com",
+  "http://de.ask.com/favicon.ico",
+  L"http://de.ask.com/web?q={searchTerms}",
+  "UTF-8",
+  L"http://ss.de.ask.com/query?q={searchTerms}&li=ff",
+  4,
+};
+
 const PrepopulatedEngine ask_es = {
   L"Ask.com Espa" L"\x00f1" L"a",
   L"es.ask.com",
@@ -152,6 +165,26 @@ const PrepopulatedEngine ask_it = {
   L"http://it.ask.com/web?q={searchTerms}",
   "UTF-8",
   L"http://ss.it.ask.com/query?q={searchTerms}&li=ff",
+  4,
+};
+
+const PrepopulatedEngine ask_nl = {
+  L"Ask.com Nederland",
+  L"nl.ask.com",
+  "http://nl.ask.com/favicon.ico",
+  L"http://nl.ask.com/web?q={searchTerms}",
+  "UTF-8",
+  L"http://ss.nl.ask.com/query?q={searchTerms}&li=ff",
+  4,
+};
+
+const PrepopulatedEngine ask_uk = {
+  L"Ask Jeeves",
+  L"uk.ask.com",
+  "http://uk.ask.com/favicon.ico",
+  L"http://uk.ask.com/web?q={searchTerms}",
+  "UTF-8",
+  L"http://ss.uk.ask.com/query?q={searchTerms}&li=ff",
   4,
 };
 
@@ -867,6 +900,16 @@ const PrepopulatedEngine go = {
   40,
 };
 
+const PrepopulatedEngine goo = {
+  L"goo",
+  L"search.goo.ne.jp",
+  "http://goo.ne.jp/favicon.ico",
+  L"http://search.goo.ne.jp/web.jsp?MT={searchTerms}&IE={inputEncoding}",
+  "UTF-8",
+  NULL,
+  23,
+};
+
 const PrepopulatedEngine google = {
   L"Google",
   NULL,
@@ -1051,6 +1094,16 @@ const PrepopulatedEngine neti = {
   44,
 };
 
+const PrepopulatedEngine netsprint = {
+  L"NetSprint",
+  L"netsprint.pl",
+  "http://netsprint.pl/favicon.ico",
+  L"http://www.netsprint.pl/serwis/search?q={searchTerms}",
+  "UTF-8",
+  NULL,
+  30,
+};
+
 const PrepopulatedEngine nur_kz = {
   L"NUR.KZ",
   L"nur.kz",
@@ -1079,16 +1132,6 @@ const PrepopulatedEngine onet = {
   "ISO-8859-2",
   NULL,
   75,
-};
-
-const PrepopulatedEngine ozu = {
-  L"OZ\x00da",
-  L"ozu.es",
-  "http://www.ozu.es/favicon.ico",
-  L"http://buscar.ozu.es/index.php?q={searchTerms}",
-  "ISO-8859-1",
-  NULL,
-  98,
 };
 
 const PrepopulatedEngine pogodak_ba = {
@@ -1866,11 +1909,11 @@ const PrepopulatedEngine* engines_CR[] =
 
 // Czech Republic
 const PrepopulatedEngine* engines_CZ[] =
-    { &google, &seznam, &centrum_cz, &atlas_cz, &bing_cs_CZ, };
+    { &google, &seznam, &bing_cs_CZ, &centrum_cz, &atlas_cz, };
 
 // Germany
 const PrepopulatedEngine* engines_DE[] =
-    { &google, &yahoo_de, &bing_de_DE, };
+    { &google, &ask_de, &bing_de_DE, &yahoo_de };
 
 // Denmark
 const PrepopulatedEngine* engines_DK[] =
@@ -1898,7 +1941,7 @@ const PrepopulatedEngine* engines_EG[] =
 
 // Spain
 const PrepopulatedEngine* engines_ES[] =
-    { &google, &bing_es_ES, &yahoo_es, &terra_es, &hispavista, &ozu, };
+    { &google, &ask_es, &bing_es_ES, &yahoo_es, &terra_es, &hispavista, };
 
 // Faroe Islands
 const PrepopulatedEngine* engines_FO[] =
@@ -1910,11 +1953,11 @@ const PrepopulatedEngine* engines_FI[] =
 
 // France
 const PrepopulatedEngine* engines_FR[] =
-    { &google, &bing_fr_FR, &yahoo_fr, };
+    { &google, &yahoo_fr, &bing_fr_FR, };
 
 // United Kingdom
 const PrepopulatedEngine* engines_GB[] =
-    { &google, &yahoo_uk, &bing_en_GB, };
+    { &google, &ask_uk, &yahoo_uk, &bing_en_GB, };
 
 // Greece
 const PrepopulatedEngine* engines_GR[] =
@@ -1970,7 +2013,7 @@ const PrepopulatedEngine* engines_IS[] =
 
 // Italy
 const PrepopulatedEngine* engines_IT[] =
-    { &google, &virgilio, &yahoo_it, &libero, &ask_it, &bing_it_IT, };
+    { &google, &ask_it, &virgilio, &bing_it_IT, &yahoo_it, &libero, };
 
 // Jamaica
 const PrepopulatedEngine* engines_JM[] =
@@ -1982,7 +2025,7 @@ const PrepopulatedEngine* engines_JO[] =
 
 // Japan
 const PrepopulatedEngine* engines_JP[] =
-    { &google, &yahoo_jp, &bing_ja_JP, };
+    { &google, &yahoo_jp, &bing_ja_JP, &goo, };
 
 // Kenya
 const PrepopulatedEngine* engines_KE[] =
@@ -2058,7 +2101,7 @@ const PrepopulatedEngine* engines_NI[] =
 
 // Netherlands
 const PrepopulatedEngine* engines_NL[] =
-    { &google, &bing_nl_NL, };
+    { &google, &bing_nl_NL, &yahoo_nl, &ask_nl, };
 
 // Norway
 const PrepopulatedEngine* engines_NO[] =
@@ -2094,7 +2137,7 @@ const PrepopulatedEngine* engines_PR[] =
 
 // Poland
 const PrepopulatedEngine* engines_PL[] =
-    { &google, &onet, &wp, &bing_pl_PL, };
+    { &google, &bing_pl_PL, &netsprint, &yahoo_uk, &onet, &wp,  };
 
 // Portugal
 const PrepopulatedEngine* engines_PT[] =
@@ -2110,7 +2153,7 @@ const PrepopulatedEngine* engines_QA[] =
 
 // Romania
 const PrepopulatedEngine* engines_RO[] =
-    { &google, &yahoo, &bing_ro_RO, };
+    { &google, &yahoo_uk, &bing_ro_RO, };
 
 // Serbia
 const PrepopulatedEngine* engines_RS[] =
@@ -2118,7 +2161,7 @@ const PrepopulatedEngine* engines_RS[] =
 
 // Russia
 const PrepopulatedEngine* engines_RU[] =
-    { &google, &yandex_ru, &rambler, &bing_ru_RU, };
+    { &google, &yandex_ru, &mail_ru, &tut, &rambler, &bing_ru_RU, };
 
 // Rwanda
 const PrepopulatedEngine* engines_RW[] =
@@ -2244,7 +2287,7 @@ int CountryCharsToCountryIDWithUpdate(char c1, char c2) {
 #if defined(OS_WIN)
 
 // For reference, a list of GeoIDs can be found at
-// http://msdn.microsoft.com/en-us/library/ms776390.aspx .
+// http://msdn.microsoft.com/en-us/library/dd374073.aspx .
 int GeoIDToCountryID(GEOID geo_id) {
   const int kISOBufferSize = 3;  // Two plus one for the terminator.
   wchar_t isobuf[kISOBufferSize] = { 0 };
@@ -2321,7 +2364,7 @@ int GetCurrentCountryID() {
                                            static_cast<char>(isobuf[1]));
 }
 
-#elif defined(OS_LINUX)
+#elif defined(OS_POSIX)
 
 int GetCurrentCountryID() {
   const char* locale = setlocale(LC_MESSAGES, NULL);
@@ -2368,21 +2411,18 @@ int GetCountryIDFromPrefs(PrefService* prefs) {
   if (!prefs)
     return GetCurrentCountryID();
 
-  if (!prefs->HasPrefPath(prefs::kCountryIDAtInstall)) {
-    int new_country_id;
+  int new_country_id = GetCurrentCountryID();
 #if defined(OS_WIN)
-    // Upgrade the old platform-specific value if it's present.
-    if (prefs->HasPrefPath(prefs::kGeoIDAtInstall)) {
-      int geo_id = prefs->GetInteger(prefs::kGeoIDAtInstall);
-      new_country_id = GeoIDToCountryID(geo_id);
-    } else {
-      new_country_id = GetCurrentCountryID();
-    }
-#else
-    new_country_id = GetCurrentCountryID();
-#endif
-    prefs->SetInteger(prefs::kCountryIDAtInstall, new_country_id);
+  // Migrate the old platform-specific value if it's present.
+  if (prefs->HasPrefPath(prefs::kGeoIDAtInstall)) {
+    int geo_id = prefs->GetInteger(prefs::kGeoIDAtInstall);
+    prefs->ClearPref(prefs::kGeoIDAtInstall);
+    new_country_id = GeoIDToCountryID(geo_id);
   }
+#endif
+
+  if (!prefs->HasPrefPath(prefs::kCountryIDAtInstall))
+    prefs->SetInteger(prefs::kCountryIDAtInstall, new_country_id);
 
   return prefs->GetInteger(prefs::kCountryIDAtInstall);
 }
@@ -2563,6 +2603,10 @@ void GetPrepopulationSetFromCountryID(PrefService* prefs,
     UNHANDLED_COUNTRY(A, D)  // Andorra
     END_UNHANDLED_COUNTRIES(E, S)
 
+    // Countries using the "Finland" engine set.
+    UNHANDLED_COUNTRY(A, X)  // Aland Islands
+    END_UNHANDLED_COUNTRIES(F, I)
+
     // Countries using the "France" engine set.
     UNHANDLED_COUNTRY(B, F)  // Burkina Faso
     UNHANDLED_COUNTRY(B, J)  // Benin
@@ -2604,6 +2648,10 @@ void GetPrepopulationSetFromCountryID(PrefService* prefs,
     UNHANDLED_COUNTRY(S, M)  // San Marino
     UNHANDLED_COUNTRY(V, A)  // Vatican
     END_UNHANDLED_COUNTRIES(I, T)
+
+    // Countries using the "Morocco" engine set.
+    UNHANDLED_COUNTRY(E, H)  // Western Sahara
+    END_UNHANDLED_COUNTRIES(M, A)
 
     // Countries using the "Netherlands" engine set.
     UNHANDLED_COUNTRY(A, N)  // Netherlands Antilles
@@ -2742,43 +2790,150 @@ void GetPrepopulationSetFromCountryID(PrefService* prefs,
 namespace TemplateURLPrepopulateData {
 
 void RegisterUserPrefs(PrefService* prefs) {
-  prefs->RegisterIntegerPref(prefs::kGeoIDAtInstall, -1);
   prefs->RegisterIntegerPref(prefs::kCountryIDAtInstall, kCountryIDUnknown);
+  prefs->RegisterListPref(prefs::kSearchProviderOverrides);
+  prefs->RegisterIntegerPref(prefs::kSearchProviderOverridesVersion, -1);
+  // Obsolete pref, for migration.
+  prefs->RegisterIntegerPref(prefs::kGeoIDAtInstall, -1);
 }
 
-int GetDataVersion() {
-  return 27;  // Increment this if you change the above data in ways that mean
-              // users with existing data should get a new version.
+int GetDataVersion(PrefService* prefs) {
+  // Increment this if you change the above data in ways that mean users with
+  // existing data should get a new version.
+  const int kCurrentDataVersion = 28;
+  if (!prefs)
+    return kCurrentDataVersion;
+  // If a version number exist in the preferences file, it overrides the
+  // version of the built-in data.
+  int version =
+    prefs->GetInteger(prefs::kSearchProviderOverridesVersion);
+  return (version >= 0) ? version : kCurrentDataVersion;
+}
+
+TemplateURL* MakePrepopulatedTemplateURL(const wchar_t* name,
+                                         const wchar_t* keyword,
+                                         const wchar_t* search_url,
+                                         const char* favicon_url,
+                                         const wchar_t* suggest_url,
+                                         const char* encoding,
+                                         int id) {
+  TemplateURL* new_turl = new TemplateURL();
+  new_turl->SetURL(search_url, 0, 0);
+  if (favicon_url)
+    new_turl->SetFavIconURL(GURL(favicon_url));
+  if (suggest_url)
+    new_turl->SetSuggestionsURL(suggest_url, 0, 0);
+  new_turl->set_short_name(name);
+  if (keyword == NULL)
+    new_turl->set_autogenerate_keyword(true);
+  else
+    new_turl->set_keyword(keyword);
+  new_turl->set_show_in_default_list(true);
+  new_turl->set_safe_for_autoreplace(true);
+  new_turl->set_date_created(Time());
+  std::vector<std::string> turl_encodings;
+  turl_encodings.push_back(encoding);
+  new_turl->set_input_encodings(turl_encodings);
+  new_turl->set_prepopulate_id(id);
+  return new_turl;
+}
+
+void GetPrepopulatedTemplatefromPrefs(PrefService* prefs,
+                                      std::vector<TemplateURL*>* t_urls) {
+  const ListValue* list =
+      prefs->GetList(prefs::kSearchProviderOverrides);
+  if (!list)
+    return;
+
+  std::wstring name;
+  std::wstring keyword;
+  std::wstring search_url;
+  std::wstring suggest_url;
+  std::string favicon_url;
+  std::string encoding;
+  int id;
+
+  size_t num_engines = list->GetSize();
+  for (size_t i = 0; i != num_engines; ++i) {
+    Value* val;
+    DictionaryValue* engine;
+    list->GetDictionary(i, &engine);
+    if (engine->Get(L"name", &val) && val->GetAsString(&name) &&
+        engine->Get(L"keyword", &val) && val->GetAsString(&keyword) &&
+        engine->Get(L"search_url", &val) && val->GetAsString(&search_url) &&
+        engine->Get(L"suggest_url", &val) && val->GetAsString(&suggest_url) &&
+        engine->Get(L"favicon_url", &val) && val->GetAsString(&favicon_url) &&
+        engine->Get(L"encoding", &val) && val->GetAsString(&encoding) &&
+        engine->Get(L"id", &val) && val->GetAsInteger(&id)) {
+      // These next fields are not allowed to be empty.
+      if (search_url.empty() || favicon_url.empty() || encoding.empty())
+        return;
+    } else {
+      // Got a parsing error. No big deal.
+      continue;
+    }
+    t_urls->push_back(MakePrepopulatedTemplateURL(name.c_str(),
+                                                  keyword.c_str(),
+                                                  search_url.c_str(),
+                                                  favicon_url.c_str(),
+                                                  suggest_url.c_str(),
+                                                  encoding.c_str(),
+                                                  id));
+  }
 }
 
 void GetPrepopulatedEngines(PrefService* prefs,
                             std::vector<TemplateURL*>* t_urls,
                             size_t* default_search_provider_index) {
+  // If there if there is a set of search engines in the preferences
+  // file, it overrides the built-in set.
+  *default_search_provider_index = 0;
+  GetPrepopulatedTemplatefromPrefs(prefs, t_urls);
+  if (!t_urls->empty())
+    return;
+
   const PrepopulatedEngine** engines;
   size_t num_engines;
   GetPrepopulationSetFromCountryID(prefs, &engines, &num_engines);
-  *default_search_provider_index = 0;
+  for (size_t i = 0; i != num_engines; ++i) {
+    TemplateURL* turl =
+        MakePrepopulatedTemplateURL(engines[i]->name,
+                                    engines[i]->keyword,
+                                    engines[i]->search_url,
+                                    engines[i]->favicon_url,
+                                    engines[i]->suggest_url,
+                                    engines[i]->encoding,
+                                    engines[i]->id);
+    t_urls->push_back(turl);
+  }
+}
 
-  for (size_t i = 0; i < num_engines; ++i) {
-    TemplateURL* new_turl = new TemplateURL();
-    new_turl->SetURL(engines[i]->search_url, 0, 0);
-    if (engines[i]->favicon_url)
-      new_turl->SetFavIconURL(GURL(engines[i]->favicon_url));
-    if (engines[i]->suggest_url)
-      new_turl->SetSuggestionsURL(engines[i]->suggest_url, 0, 0);
-    new_turl->set_short_name(engines[i]->name);
-    if (engines[i]->keyword == NULL)
-      new_turl->set_autogenerate_keyword(true);
-    else
-      new_turl->set_keyword(engines[i]->keyword);
-    new_turl->set_show_in_default_list(true);
-    new_turl->set_safe_for_autoreplace(true);
-    new_turl->set_date_created(Time());
-    std::vector<std::string> turl_encodings;
-    turl_encodings.push_back(engines[i]->encoding);
-    new_turl->set_input_encodings(turl_encodings);
-    new_turl->set_prepopulate_id(engines[i]->id);
-    t_urls->push_back(new_turl);
+SearchEngineType GetSearchEngineType(const TemplateURL* search_engine) {
+  switch (search_engine->prepopulate_id()) {
+    case 1:
+      return SEARCH_ENGINE_GOOGLE;
+    case 2:
+      // Construction of country id = 'J' << 8 | 'P' = 19024
+      return (GetCountryIDFromPrefs(NULL) == 19024) ? SEARCH_ENGINE_YAHOOJP :
+                                                      SEARCH_ENGINE_YAHOO;
+    case 3:
+      return SEARCH_ENGINE_BING;
+    case 4:
+      return SEARCH_ENGINE_ASK;
+    case 15:
+      return SEARCH_ENGINE_YANDEX;
+    case 25:
+      return SEARCH_ENGINE_SEZNAM;
+    case 26:
+      return SEARCH_ENGINE_CENTRUM;
+    case 30:
+      return SEARCH_ENGINE_NETSPRINT;
+    case 62:
+      return SEARCH_ENGINE_VIRGILIO;
+    case 83:
+      return SEARCH_ENGINE_MAILRU;
+    default:
+      return SEARCH_ENGINE_OTHER;
   }
 }
 

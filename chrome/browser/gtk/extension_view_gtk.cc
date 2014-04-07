@@ -1,4 +1,4 @@
-// Copyright (c) 2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,17 +8,13 @@
 #include "chrome/browser/renderer_host/render_view_host.h"
 #include "chrome/browser/renderer_host/render_widget_host_view_gtk.h"
 
-namespace {
-
 // The minimum/maximum dimensions of the extension view.
 // The minimum is just a little larger than the size of a browser action button.
 // The maximum is an arbitrary number that should be smaller than most screens.
-const int kMinWidth = 25;
-const int kMinHeight = 25;
-const int kMaxWidth = 800;
-const int kMaxHeight = 600;
-
-}  // namespace
+const int ExtensionViewGtk::kMinWidth = 25;
+const int ExtensionViewGtk::kMinHeight = 25;
+const int ExtensionViewGtk::kMaxWidth = 800;
+const int ExtensionViewGtk::kMaxHeight = 600;
 
 ExtensionViewGtk::ExtensionViewGtk(ExtensionHost* extension_host,
                                    Browser* browser)
@@ -68,4 +64,10 @@ void ExtensionViewGtk::RenderViewCreated() {
     render_widget_host_view_->SetBackground(pending_background_);
     pending_background_.reset();
   }
+
+  // Tell the renderer not to draw scrollbars in popups unless the
+  // popups are at the maximum allowed size.
+  gfx::Size largest_popup_size(ExtensionViewGtk::kMaxWidth,
+                               ExtensionViewGtk::kMaxHeight);
+  extension_host_->DisableScrollbarsForSmallWindows(largest_popup_size);
 }

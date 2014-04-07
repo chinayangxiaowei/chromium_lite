@@ -4,8 +4,10 @@
 
 #include "chrome/browser/browsing_data_database_helper.h"
 
+#include "base/callback.h"
 #include "base/file_util.h"
 #include "base/message_loop.h"
+#include "base/utf_string_conversions.h"
 #include "chrome/browser/chrome_thread.h"
 #include "chrome/browser/profile.h"
 #include "net/base/net_errors.h"
@@ -43,7 +45,7 @@ void BrowsingDataDatabaseHelper::CancelNotification() {
 void BrowsingDataDatabaseHelper::DeleteDatabase(const std::string& origin,
                                                 const std::string& name) {
   DCHECK(ChromeThread::CurrentlyOn(ChromeThread::UI));
-  ChromeThread::PostTask(ChromeThread::FILE, FROM_HERE,NewRunnableMethod(
+  ChromeThread::PostTask(ChromeThread::FILE, FROM_HERE, NewRunnableMethod(
       this, &BrowsingDataDatabaseHelper::DeleteDatabaseInFileThread, origin,
       name));
 }
@@ -54,6 +56,13 @@ void BrowsingDataDatabaseHelper::FetchDatabaseInfoInFileThread() {
   if (tracker_.get() && tracker_->GetAllOriginsInfo(&origins_info)) {
     for (std::vector<webkit_database::OriginInfo>::const_iterator ori =
          origins_info.begin(); ori != origins_info.end(); ++ori) {
+      const std::string origin_identifier(UTF16ToUTF8(ori->GetOrigin()));
+      if (StartsWithASCII(origin_identifier,
+                          std::string(chrome::kExtensionScheme),
+                          true)) {
+        // Extension state is not considered browsing data.
+        continue;
+      }
       scoped_ptr<WebKit::WebSecurityOrigin> web_security_origin(
           WebKit::WebSecurityOrigin::createFromDatabaseIdentifier(
               ori->GetOrigin()));
@@ -67,7 +76,7 @@ void BrowsingDataDatabaseHelper::FetchDatabaseInfoInFileThread() {
           database_info_.push_back(DatabaseInfo(
                 web_security_origin->host().utf8(),
                 UTF16ToUTF8(*db),
-                UTF16ToUTF8(ori->GetOrigin()),
+                origin_identifier,
                 UTF16ToUTF8(ori->GetDatabaseDescription(*db)),
                 file_info.size,
                 file_info.last_modified));
@@ -85,8 +94,10 @@ void BrowsingDataDatabaseHelper::NotifyInUIThread() {
   DCHECK(is_fetching_);
   // Note: completion_callback_ mutates only in the UI thread, so it's safe to
   // test it here.
-  if (completion_callback_ != NULL)
+  if (completion_callback_ != NULL) {
     completion_callback_->Run(database_info_);
+    completion_callback_.reset();
+  }
   is_fetching_ = false;
   database_info_.clear();
 }

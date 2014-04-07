@@ -78,8 +78,8 @@ function extend(obj, obj2) {
  * render the template from |pageData|.
  */
 function renderPage() {
-  var pathParts = document.location.href.split(/\/|\./);
-  pageBase = pathParts[pathParts.length - 2];
+  // The page name minus the ".html" extension.
+  pageBase = document.location.href.match(/\/([^\/]*)\.html/)[1];
   if (!pageBase) {
     alert("Empty page name for: " + document.location.href);
     return;
@@ -169,6 +169,10 @@ function fetchContent(url, onSuccess, onError) {
 function renderTemplate() {
   schema.each(function(mod) {
     if (mod.namespace == pageBase) {
+      // Do not render page for modules which are marked as "nodoc": true.
+      if (mod.nodoc) {
+        return;
+      }
       // This page is an api page. Setup types and apiDefinition.
       module = mod;
       apiModuleName = "chrome." + module.namespace;
@@ -263,6 +267,22 @@ function selectCurrentPageOnLeftNav() {
  * Template Callout Functions
  * The jstProcess() will call out to these functions from within the page template
  */
+
+function stableAPIs() {
+  return schema.filter(function(module) {
+    return !module.nodoc && module.namespace.indexOf("experimental") < 0;
+  }).map(function(module) {
+    return module.namespace;
+  }).sort();
+}
+ 
+function experimentalAPIs() {
+  return schema.filter(function(module) {
+    return !module.nodoc && module.namespace.indexOf("experimental") == 0;
+  }).map(function(module) {
+    return module.namespace;
+  }).sort();
+}
 
 function getDataFromPageHTML(id) {
   var node = document.getElementById(id);

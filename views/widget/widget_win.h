@@ -13,7 +13,6 @@
 #include "app/win/window_impl.h"
 #include "base/message_loop.h"
 #include "base/scoped_comptr_win.h"
-#include "base/system_monitor.h"
 #include "views/focus/focus_manager.h"
 #include "views/layout_manager.h"
 #include "views/widget/widget.h"
@@ -77,6 +76,9 @@ class WidgetWin : public app::WindowImpl,
   // Returns the Widget associated with the specified HWND (if any).
   static WidgetWin* GetWidget(HWND hwnd);
 
+  // Returns the root Widget associated with the specified HWND (if any).
+  static WidgetWin* GetRootWidget(HWND hwnd);
+
   void set_delete_on_destroy(bool delete_on_destroy) {
     delete_on_destroy_ = delete_on_destroy;
   }
@@ -120,6 +122,7 @@ class WidgetWin : public app::WindowImpl,
     MSG_WM_COMMAND(OnCommand)
     MSG_WM_CREATE(OnCreate)
     MSG_WM_DESTROY(OnDestroy)
+    MSG_WM_DISPLAYCHANGE(OnDisplayChange)
     MSG_WM_ERASEBKGND(OnEraseBkgnd)
     MSG_WM_ENDSESSION(OnEndSession)
     MSG_WM_ENTERSIZEMOVE(OnEnterSizeMove)
@@ -131,6 +134,7 @@ class WidgetWin : public app::WindowImpl,
     MSG_WM_INITMENUPOPUP(OnInitMenuPopup)
     MSG_WM_KEYDOWN(OnKeyDown)
     MSG_WM_KEYUP(OnKeyUp)
+    MSG_WM_KILLFOCUS(OnKillFocus)
     MSG_WM_SYSKEYDOWN(OnKeyDown)
     MSG_WM_SYSKEYUP(OnKeyUp)
     MSG_WM_LBUTTONDBLCLK(OnLButtonDblClk)
@@ -177,6 +181,8 @@ class WidgetWin : public app::WindowImpl,
 
   // Overridden from Widget:
   virtual void Init(gfx::NativeView parent, const gfx::Rect& bounds);
+  virtual WidgetDelegate* GetWidgetDelegate();
+  virtual void SetWidgetDelegate(WidgetDelegate* delegate);
   virtual void SetContentsView(View* view);
   virtual void GetBounds(gfx::Rect* out, bool including_frame) const;
   virtual void SetBounds(const gfx::Rect& bounds);
@@ -197,7 +203,7 @@ class WidgetWin : public app::WindowImpl,
   virtual TooltipManager* GetTooltipManager();
   virtual void GenerateMousePressedForView(View* view,
                                            const gfx::Point& point);
-  virtual bool GetAccelerator(int cmd_id, Accelerator* accelerator);
+  virtual bool GetAccelerator(int cmd_id, menus::Accelerator* accelerator);
   virtual Window* GetWindow();
   virtual const Window* GetWindow() const;
   virtual void SetNativeWindowProperty(const std::wstring& name,
@@ -208,6 +214,7 @@ class WidgetWin : public app::WindowImpl,
   virtual FocusManager* GetFocusManager();
   virtual void ViewHierarchyChanged(bool is_add, View *parent,
                                     View *child);
+  virtual bool ContainsNativeView(gfx::NativeView native_view);
 
   // Overridden from MessageLoop::Observer:
   void WillProcessMessage(const MSG& msg);
@@ -321,6 +328,7 @@ class WidgetWin : public app::WindowImpl,
   // WARNING: If you override this be sure and invoke super, otherwise we'll
   // leak a few things.
   virtual void OnDestroy();
+  virtual void OnDisplayChange(UINT bits_per_pixel, CSize screen_size);
   virtual LRESULT OnDwmCompositionChanged(UINT msg,
                                           WPARAM w_param,
                                           LPARAM l_param);
@@ -336,6 +344,7 @@ class WidgetWin : public app::WindowImpl,
   virtual void OnInitMenuPopup(HMENU menu, UINT position, BOOL is_system_menu);
   virtual void OnKeyDown(TCHAR c, UINT rep_cnt, UINT flags);
   virtual void OnKeyUp(TCHAR c, UINT rep_cnt, UINT flags);
+  virtual void OnKillFocus(HWND focused_window);
   virtual void OnLButtonDblClk(UINT flags, const CPoint& point);
   virtual void OnLButtonDown(UINT flags, const CPoint& point);
   virtual void OnLButtonUp(UINT flags, const CPoint& point);
@@ -539,6 +548,10 @@ class WidgetWin : public app::WindowImpl,
   ScopedComPtr<IAccessible> accessibility_root_;
 
   scoped_ptr<DefaultThemeProvider> default_theme_provider_;
+
+  // Non owned pointer to optional delegate.  May be NULL if no delegate is
+  // being used.
+  WidgetDelegate* delegate_;
 };
 
 }  // namespace views

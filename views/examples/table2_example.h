@@ -11,6 +11,7 @@
 #include "base/string_util.h"
 #include "third_party/skia/include/core/SkCanvas.h"
 #include "views/controls/button/checkbox.h"
+#include "views/controls/table/table_view_observer.h"
 #include "views/controls/table/table_view2.h"
 #include "views/examples/example_base.h"
 
@@ -53,8 +54,13 @@ class Table2Example
     columns.push_back(TableColumn(1, L"Color", TableColumn::LEFT, 100));
     columns.push_back(TableColumn(2, L"Origin", TableColumn::LEFT, 100));
     columns.push_back(TableColumn(3, L"Price", TableColumn::LEFT, 100));
+    const int options = (views::TableView2::SINGLE_SELECTION |
+                         views::TableView2::RESIZABLE_COLUMNS |
+                         views::TableView2::AUTOSIZE_COLUMNS |
+                         views::TableView2::HORIZONTAL_LINES |
+                         views::TableView2::VERTICAL_LINES);
     table_ = new views::TableView2(this, columns, views::ICON_AND_TEXT,
-                                   true, true, true);
+                                   options);
     table_->SetObserver(this);
     icon1.setConfig(SkBitmap::kARGB_8888_Config, 16, 16);
     icon1.allocPixels();
@@ -115,7 +121,8 @@ class Table2Example
 
   // TableViewObserver implementation:
   virtual void OnSelectionChanged() {
-    PrintStatus(L"Selection changed");
+    PrintStatus(L"Selection changed: %d",
+                table_->GetFirstSelectedRow());
   }
 
   virtual void OnDoubleClick() {}

@@ -1,3 +1,7 @@
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Use of this source code is governed by a BSD-style license that can be
+// found in the LICENSE file.
+
 #include <asm/unistd.h>
 #include "sandbox_impl.h"
 #include "syscall_table.h"
@@ -37,6 +41,8 @@ const struct SyscallTable syscallTable[] __attribute__((
   [ __NR_clock_gettime   ] = { UNRESTRICTED_SYSCALL,     0                   },
   [ __NR_clone           ] = { (void*)&sandbox_clone,    process_clone       },
   [ __NR_close           ] = { UNRESTRICTED_SYSCALL,     0                   },
+  [ __NR_dup             ] = { UNRESTRICTED_SYSCALL,     0                   },
+  [ __NR_dup2            ] = { UNRESTRICTED_SYSCALL,     0                   },
   [ __NR_epoll_create    ] = { UNRESTRICTED_SYSCALL,     0                   },
   [ __NR_epoll_ctl       ] = { UNRESTRICTED_SYSCALL,     0                   },
   [ __NR_epoll_wait      ] = { UNRESTRICTED_SYSCALL,     0                   },
@@ -71,6 +77,10 @@ const struct SyscallTable syscallTable[] __attribute__((
   [ __NR__llseek         ] = { UNRESTRICTED_SYSCALL,     0                   },
   #endif
   [ __NR_lseek           ] = { UNRESTRICTED_SYSCALL,     0                   },
+  [ __NR_lstat           ] = { (void*)&sandbox_lstat,    process_stat        },
+  #if defined(__NR_lstat64)
+  [ __NR_lstat64         ] = { (void*)&sandbox_lstat64,  process_stat        },
+  #endif
   [ __NR_madvise         ] = { (void*)&sandbox_madvise,  process_madvise     },
   #if defined(__NR_mmap2)
   [ __NR_mmap2           ] =

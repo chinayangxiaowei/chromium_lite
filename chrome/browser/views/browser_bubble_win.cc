@@ -13,7 +13,8 @@
 class BubbleWidget : public views::WidgetWin {
  public:
   explicit BubbleWidget(BrowserBubble* bubble)
-      : bubble_(bubble), closed_(false) {
+      : bubble_(bubble),
+        closed_(false) {
     set_window_style(WS_POPUP | WS_CLIPCHILDREN);
     set_window_ex_style(WS_EX_TOOLWINDOW);
   }
@@ -47,6 +48,7 @@ class BubbleWidget : public views::WidgetWin {
   }
 
   void OnActivate(UINT action, BOOL minimized, HWND window) {
+    WidgetWin::OnActivate(action, minimized, window);
     BrowserBubble::Delegate* delegate = bubble_->delegate();
     if (!delegate) {
       if (action == WA_INACTIVE && !closed_) {
@@ -57,26 +59,49 @@ class BubbleWidget : public views::WidgetWin {
     }
 
     if (action == WA_INACTIVE && !closed_) {
-      delegate->BubbleLostFocus(bubble_, window);
+      bool lost_focus_to_child = false;
+
+      // Are we a parent of this window?
+      gfx::NativeView parent = window;
+      while (parent = ::GetParent(parent)) {
+        if (window == GetNativeView()) {
+          lost_focus_to_child = true;
+          break;
+        }
+      }
+
+      // Do we own this window?
+      if (!lost_focus_to_child &&
+          ::GetWindow(window, GW_OWNER) == GetNativeView()) {
+        lost_focus_to_child = true;
+      }
+
+      delegate->BubbleLostFocus(bubble_, lost_focus_to_child);
     }
   }
 
   virtual void OnSetFocus(HWND focused_window) {
+    WidgetWin::OnSetFocus(focused_window);
     BrowserBubble::Delegate* delegate = bubble_->delegate();
     if (delegate)
       delegate->BubbleGotFocus(bubble_);
   }
 
  private:
-  bool closed_;
   BrowserBubble* bubble_;
+  bool closed_;
 };
 
 void BrowserBubble::InitPopup() {
   // popup_ is a Widget, but we need to do some WidgetWin stuff first, then
   // we'll assign it into popup_.
   views::WidgetWin* pop = new BubbleWidget(this);
-  pop->Init(frame_native_view_, bounds_);
+
+  // Enable the drop-shadow through the native windows drop-shadow support.
+  if (drop_shadow_enabled_)
+    pop->set_initial_class_style(CS_DROPSHADOW | pop->initial_class_style());
+
+  pop->Init(frame_->GetNativeView(), bounds_);
   pop->SetContentsView(view_);
 
   popup_ = pop;

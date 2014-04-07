@@ -1,4 +1,4 @@
-// Copyright (c) 2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,6 +8,7 @@
 #include "base/file_util.h"
 #include "base/path_service.h"
 #include "base/string_util.h"
+#include "base/utf_string_conversions.h"
 #include "chrome/browser/net/url_fixer_upper.h"
 #include "chrome/common/chrome_paths.h"
 #include "googleurl/src/url_parse.h"
@@ -282,6 +283,7 @@ TEST(URLFixerUpperTest, FixupURL) {
     {"http://google", "com", "http://www.google.com/"},
     {"..google..", "com", "http://www.google.com/"},
     {"http://www.google", "com", "http://www.google.com/"},
+    {"9999999999999999", "com", "http://www.9999999999999999.com/"},
     {"google/foo", "com", "http://www.google.com/foo"},
     {"google.com/foo", "com", "http://google.com/foo"},
     {"google/?foo=.com", "com", "http://www.google.com/?foo=.com"},
@@ -342,8 +344,16 @@ TEST(URLFixerUpperTest, FixupFile) {
     // should be returned just converted to a file: URL.
     {"\\\\SomeNonexistentHost\\foo\\bar.txt", "",
      "file://somenonexistenthost/foo/bar.txt"},
+    // We do this strictly, like IE8, which only accepts this form using
+    // backslashes and not forward ones. Its a bit weird that the host/path is
+    // "more canonicalized" in the UNC case above, and in the http case it
+    // isn't lowercased, etc. That level of canonicalization will happen when
+    // it's actually turned into a GURL, so we don't care about it here. Turning
+    // "//foo" into "http" matches Firefox and IE, silly though it may seem
+    // (it falls out of adding "http" as the default protocol if you haven't
+    // entered one).
     {"//SomeNonexistentHost\\foo/bar.txt", "",
-     "file://somenonexistenthost/foo/bar.txt"},
+     "http://SomeNonexistentHost\\foo/bar.txt"},
     {"file:///C:/foo/bar", "", "file:///C:/foo/bar"},
 
     // These are fixups we don't do, but could consider:
@@ -401,6 +411,7 @@ TEST(URLFixerUpperTest, FixupRelativeFile) {
   FilePath file_part(FILE_PATH_LITERAL("url_fixer_upper_existing_file.txt"));
   ASSERT_TRUE(PathService::Get(chrome::DIR_APP, &dir));
   ASSERT_TRUE(MakeTempFile(dir, file_part, &full_path));
+  ASSERT_TRUE(file_util::AbsolutePath(&full_path));
 
   // make sure we pass through good URLs
   std::string fixedup;
@@ -437,6 +448,7 @@ TEST(URLFixerUpperTest, FixupRelativeFile) {
   FilePath new_dir = dir.Append(sub_dir);
   file_util::CreateDirectory(new_dir);
   ASSERT_TRUE(MakeTempFile(new_dir, sub_file, &full_path));
+  ASSERT_TRUE(file_util::AbsolutePath(&full_path));
 
   // test file in the subdir
   FilePath relative_file = sub_dir.Append(sub_file);

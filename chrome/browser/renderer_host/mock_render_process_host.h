@@ -10,6 +10,7 @@
 #include "chrome/common/ipc_test_sink.h"
 
 class TransportDIB;
+class URLRequestContextGetter;
 
 // A mock render process host that has no corresponding renderer process.  All
 // IPC messages are sent into the message sink for inspection by tests.
@@ -29,14 +30,15 @@ class MockRenderProcessHost : public RenderProcessHost {
   int bad_msg_count() const { return bad_msg_count_; }
 
   // RenderProcessHost implementation (public portion).
-  virtual bool Init(bool is_extensions_process);
+  virtual bool Init(bool is_extensions_process,
+                    URLRequestContextGetter* request_context);
   virtual int GetNextRoutingID();
   virtual void CancelResourceRequests(int render_widget_id);
   virtual void CrossSiteClosePageACK(const ViewMsg_ClosePage_Params& params);
-  virtual bool WaitForPaintMsg(int render_widget_id,
-                               const base::TimeDelta& max_delay,
-                               IPC::Message* msg);
-  virtual void ReceivedBadMessage(uint16 msg_type);
+  virtual bool WaitForUpdateMsg(int render_widget_id,
+                                const base::TimeDelta& max_delay,
+                                IPC::Message* msg);
+  virtual void ReceivedBadMessage(uint32 msg_type);
   virtual void WidgetRestored();
   virtual void WidgetHidden();
   virtual void ViewCreated();

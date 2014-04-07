@@ -108,7 +108,7 @@ ChildProcessSecurityPolicy::ChildProcessSecurityPolicy() {
   RegisterWebSafeScheme(chrome::kFtpScheme);
   RegisterWebSafeScheme(chrome::kDataScheme);
   RegisterWebSafeScheme("feed");
-  RegisterWebSafeScheme("chrome-extension");
+  RegisterWebSafeScheme(chrome::kExtensionScheme);
 
   // We know about the following psuedo schemes and treat them specially.
   RegisterPseudoScheme(chrome::kAboutScheme);
@@ -227,16 +227,21 @@ void ChildProcessSecurityPolicy::GrantUploadFile(int renderer_id,
   state->second->GrantUploadFile(file);
 }
 
-void ChildProcessSecurityPolicy::GrantInspectElement(int renderer_id) {
+void ChildProcessSecurityPolicy::GrantScheme(int renderer_id,
+                                             const std::string& scheme) {
   AutoLock lock(lock_);
 
   SecurityStateMap::iterator state = security_state_.find(renderer_id);
   if (state == security_state_.end())
     return;
 
+  state->second->GrantScheme(scheme);
+}
+
+void ChildProcessSecurityPolicy::GrantInspectElement(int renderer_id) {
   // The inspector is served from a chrome: URL.  In order to run the
   // inspector, the renderer needs to be able to load chrome: URLs.
-  state->second->GrantScheme(chrome::kChromeUIScheme);
+  GrantScheme(renderer_id, chrome::kChromeUIScheme);
 }
 
 void ChildProcessSecurityPolicy::GrantDOMUIBindings(int renderer_id) {

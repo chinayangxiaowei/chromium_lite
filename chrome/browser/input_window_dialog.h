@@ -7,8 +7,8 @@
 
 #include <string>
 
-#include "app/gfx/native_widget_types.h"
 #include "base/basictypes.h"
+#include "gfx/native_widget_types.h"
 
 // Cross platform access to a modal input window.
 class InputWindowDialog {
@@ -43,6 +43,7 @@ class InputWindowDialog {
 
  protected:
   InputWindowDialog() {}
+  virtual ~InputWindowDialog() {}
 
  private:
   DISALLOW_COPY_AND_ASSIGN(InputWindowDialog);

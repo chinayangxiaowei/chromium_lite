@@ -9,6 +9,7 @@
 #include "base/thread.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/chrome_thread.h"
+#include "chrome/browser/net/url_fetcher_protect.h"
 #include "chrome/browser/net/url_request_context_getter.h"
 #include "googleurl/src/gurl.h"
 #include "net/base/load_flags.h"
@@ -95,9 +96,7 @@ class URLFetcher::Core
   // specified by the protection manager, we'll give up.
   int num_retries_;
 
-  // Temporary member variable to test whether requests are being started
-  // after they have already been cancelled.
-  // TODO(eroman): Remove this after done investigating 27074.
+  // True if the URLFetcher has been cancelled.
   bool was_cancelled_;
 
   friend class URLFetcher;
@@ -111,7 +110,8 @@ URLFetcher::URLFetcher(const GURL& url,
                        RequestType request_type,
                        Delegate* d)
     : ALLOW_THIS_IN_INITIALIZER_LIST(
-      core_(new Core(this, url, request_type, d))) {
+      core_(new Core(this, url, request_type, d))),
+      automatically_retry_on_5xx_(true) {
 }
 
 URLFetcher::~URLFetcher() {
@@ -156,6 +156,7 @@ void URLFetcher::Core::Start() {
 void URLFetcher::Core::Stop() {
   DCHECK_EQ(MessageLoop::current(), delegate_loop_);
   delegate_ = NULL;
+  fetcher_ = NULL;
   ChromeThread::PostTask(
       ChromeThread::IO, FROM_HERE,
       NewRunnableMethod(this, &Core::CancelURLRequest));
@@ -205,9 +206,15 @@ void URLFetcher::Core::OnReadCompleted(URLRequest* request, int bytes_read) {
 
 void URLFetcher::Core::StartURLRequest() {
   DCHECK(ChromeThread::CurrentlyOn(ChromeThread::IO));
-  CHECK(!was_cancelled_);
+
+  if (was_cancelled_) {
+    // Since StartURLRequest() is posted as a *delayed* task, it may
+    // run after the URLFetcher was already stopped.
+    return;
+  }
+
   CHECK(request_context_getter_);
-  CHECK(!request_);
+  DCHECK(!request_);
 
   request_ = new URLRequest(original_url_, this);
   int flags = request_->load_flags() | load_flags_;
@@ -270,15 +277,20 @@ void URLFetcher::Core::OnCompletedURLRequest(const URLRequestStatus& status) {
   if (response_code_ >= 500) {
     // When encountering a server error, we will send the request again
     // after backoff time.
-    const int64 wait =
+    int64 back_off_time =
         protect_entry_->UpdateBackoff(URLFetcherProtectEntry::FAILURE);
+    if (delegate_) {
+      fetcher_->backoff_delay_ =
+          base::TimeDelta::FromMilliseconds(back_off_time);
+    }
     ++num_retries_;
     // Restarts the request if we still need to notify the delegate.
     if (delegate_) {
-      if (num_retries_ <= protect_entry_->max_retries()) {
+      if (fetcher_->automatically_retry_on_5xx_ &&
+          num_retries_ <= protect_entry_->max_retries()) {
         ChromeThread::PostDelayedTask(
             ChromeThread::IO, FROM_HERE,
-            NewRunnableMethod(this, &Core::StartURLRequest), wait);
+            NewRunnableMethod(this, &Core::StartURLRequest), back_off_time);
       } else {
         delegate_->OnURLFetchComplete(fetcher_, url_, status, response_code_,
                                       cookies_, data_);
@@ -286,9 +298,11 @@ void URLFetcher::Core::OnCompletedURLRequest(const URLRequestStatus& status) {
     }
   } else {
     protect_entry_->UpdateBackoff(URLFetcherProtectEntry::SUCCESS);
-    if (delegate_)
+    if (delegate_) {
+      fetcher_->backoff_delay_ = base::TimeDelta();
       delegate_->OnURLFetchComplete(fetcher_, url_, status, response_code_,
                                     cookies_, data_);
+    }
   }
 }
 
@@ -318,6 +332,10 @@ void URLFetcher::set_extra_request_headers(
 void URLFetcher::set_request_context(
     URLRequestContextGetter* request_context_getter) {
   core_->request_context_getter_ = request_context_getter;
+}
+
+void URLFetcher::set_automatcally_retry_on_5xx(bool retry) {
+  automatically_retry_on_5xx_ = retry;
 }
 
 net::HttpResponseHeaders* URLFetcher::response_headers() const {

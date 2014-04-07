@@ -16,6 +16,7 @@
 #include "chrome/common/extensions/extension.h"
 #include "chrome/common/extensions/extension_constants.h"
 #include "chrome/renderer/extension_groups.h"
+#include "chrome/renderer/render_thread.h"
 #include "googleurl/src/gurl.h"
 #include "third_party/WebKit/WebKit/chromium/public/WebFrame.h"
 
@@ -32,7 +33,7 @@ static const char kUserScriptTail[] = "\n})(window);";
 // Sets up the chrome.extension module. This may be run multiple times per
 // context, but the init method deletes itself after the first time.
 static const char kInitExtension[] =
-  "if (chrome.initExtension) chrome.initExtension('%s', true);";
+  "if (chrome.initExtension) chrome.initExtension('%s', true, %s);";
 
 
 int UserScriptSlave::GetIsolatedWorldId(const std::string& extension_id) {
@@ -70,6 +71,8 @@ void UserScriptSlave::GetActiveExtensions(std::set<std::string>* extension_ids) 
 
 bool UserScriptSlave::UpdateScripts(base::SharedMemoryHandle shared_memory) {
   scripts_.clear();
+
+  bool only_inject_incognito = RenderThread::current()->is_incognito_process();
 
   // Create the shared memory object (read only).
   shared_memory_.reset(new base::SharedMemory(shared_memory, true));
@@ -118,6 +121,12 @@ bool UserScriptSlave::UpdateScripts(base::SharedMemoryHandle shared_memory) {
       script->css_scripts()[j].set_external_content(
           base::StringPiece(body, body_length));
     }
+
+    if (only_inject_incognito && !script->is_incognito_enabled()) {
+      // This script shouldn't run in an incognito tab.
+      delete script;
+      scripts_.pop_back();
+    }
   }
 
   return true;
@@ -127,9 +136,10 @@ bool UserScriptSlave::UpdateScripts(base::SharedMemoryHandle shared_memory) {
 void UserScriptSlave::InsertInitExtensionCode(
     std::vector<WebScriptSource>* sources, const std::string& extension_id) {
   DCHECK(sources);
-  sources->insert(sources->begin(),
-                  WebScriptSource(WebString::fromUTF8(
-                  StringPrintf(kInitExtension, extension_id.c_str()))));
+  bool incognito = RenderThread::current()->is_incognito_process();
+  sources->insert(sources->begin(), WebScriptSource(WebString::fromUTF8(
+      StringPrintf(kInitExtension, extension_id.c_str(),
+                   incognito ? "true" : "false"))));
 }
 
 bool UserScriptSlave::InjectScripts(WebFrame* frame,
@@ -177,7 +187,7 @@ bool UserScriptSlave::InjectScripts(WebFrame* frame,
 
         // We add this dumb function wrapper for standalone user script to
         // emulate what Greasemonkey does.
-        if (script->is_standalone()) {
+        if (script->is_standalone() || script->emulate_greasemonkey()) {
           content.insert(0, kUserScriptHead);
           content += kUserScriptTail;
         }
@@ -230,6 +240,6 @@ bool UserScriptSlave::InjectScripts(WebFrame* frame,
   }
 
   LOG(INFO) << "Injected " << num_scripts << " scripts and " << num_css <<
-      "css files into " << frame->url().spec().data();
+      " css files into " << frame->url().spec().data();
   return true;
 }

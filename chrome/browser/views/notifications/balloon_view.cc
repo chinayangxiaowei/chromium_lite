@@ -6,30 +6,38 @@
 
 #include <vector>
 
-#include "app/gfx/canvas.h"
-#include "app/gfx/gdi_util.h"
-#include "app/gfx/insets.h"
-#include "app/gfx/native_widget_types.h"
 #include "app/l10n_util.h"
 #include "app/resource_bundle.h"
 #include "base/message_loop.h"
-#include "base/string_util.h"
+#include "base/utf_string_conversions.h"
 #include "chrome/browser/browser_theme_provider.h"
 #include "chrome/browser/notifications/balloon.h"
+#include "chrome/browser/notifications/balloon_collection.h"
 #include "chrome/browser/notifications/desktop_notification_service.h"
 #include "chrome/browser/profile.h"
+#include "chrome/browser/renderer_host/render_view_host.h"
+#include "chrome/browser/renderer_host/render_widget_host_view.h"
 #include "chrome/browser/views/notifications/balloon_view_host.h"
 #include "chrome/common/notification_details.h"
 #include "chrome/common/notification_source.h"
 #include "chrome/common/notification_type.h"
+#include "gfx/canvas.h"
+#include "gfx/insets.h"
+#include "gfx/native_widget_types.h"
 #include "grit/generated_resources.h"
 #include "grit/theme_resources.h"
 #include "views/controls/button/button.h"
 #include "views/controls/button/text_button.h"
-#include "views/controls/label.h"
+#include "views/controls/menu/menu_2.h"
 #include "views/controls/native/native_view_host.h"
 #include "views/painter.h"
+#include "views/widget/root_view.h"
+#if defined(OS_WIN)
 #include "views/widget/widget_win.h"
+#endif
+#if defined(OS_LINUX)
+#include "views/widget/widget_gtk.h"
+#endif
 
 using views::Widget;
 
@@ -41,14 +49,14 @@ const int kTopMargin = 1;
 const int kBottomMargin = 1;
 const int kLeftMargin = 1;
 const int kRightMargin = 1;
-const int kShelfBorderTopOverlap = 2;
+const int kShelfBorderTopOverlap = 3;
 
 // Properties of the dismiss button.
-const int kDismissButtonWidth = 46;
+const int kDismissButtonWidth = 60;
 const int kDismissButtonHeight = 20;
 
 // Properties of the options menu.
-const int kOptionsMenuWidth = 48;
+const int kOptionsMenuWidth = 60;
 const int kOptionsMenuHeight = 20;
 
 // Properties of the origin label.
@@ -72,36 +80,20 @@ const int kRevokePermissionCommand = 0;
 
 }  // namespace
 
-class BalloonCloseButtonListener : public views::ButtonListener {
- public:
-  explicit BalloonCloseButtonListener(BalloonView* view)
-      : view_(view) {}
-  virtual ~BalloonCloseButtonListener() {}
-
-  // The only button currently is the close button.
-  virtual void ButtonPressed(views::Button* sender, const views::Event&) {
-    view_->Close(true);
-  }
-
- private:
-  // Non-owned pointer to the view which owns this object.
-  BalloonView* view_;
-};
-
-BalloonViewImpl::BalloonViewImpl()
+BalloonViewImpl::BalloonViewImpl(BalloonCollection* collection)
     : balloon_(NULL),
+      collection_(collection),
       frame_container_(NULL),
       html_container_(NULL),
       html_contents_(NULL),
+      method_factory_(this),
       shelf_background_(NULL),
       balloon_background_(NULL),
       close_button_(NULL),
-      close_button_listener_(NULL),
       animation_(NULL),
       options_menu_contents_(NULL),
       options_menu_menu_(NULL),
-      options_menu_button_(NULL),
-      method_factory_(this) {
+      options_menu_button_(NULL) {
   // This object is not to be deleted by the views hierarchy,
   // as it is owned by the balloon.
   set_parent_owned(false);
@@ -128,13 +120,37 @@ void BalloonViewImpl::Close(bool by_user) {
           &BalloonViewImpl::DelayedClose, by_user));
 }
 
+gfx::Size BalloonViewImpl::GetSize() const {
+  // BalloonView has no size if it hasn't been shown yet (which is when
+  // balloon_ is set).
+  if (!balloon_)
+    return gfx::Size(0, 0);
+
+  return gfx::Size(GetTotalWidth(), GetTotalHeight());
+}
+
 void BalloonViewImpl::RunMenu(views::View* source, const gfx::Point& pt) {
   RunOptionsMenu(pt);
+}
+
+void BalloonViewImpl::DisplayChanged() {
+  collection_->DisplayChanged();
+}
+
+void BalloonViewImpl::ButtonPressed(views::Button* sender,
+                                    const views::Event&) {
+  // The only button currently is the close button.
+  DCHECK(sender == close_button_);
+  Close(true);
 }
 
 void BalloonViewImpl::DelayedClose(bool by_user) {
   html_contents_->Shutdown();
   html_container_->CloseNow();
+  // The BalloonViewImpl has to be detached from frame_container_ now
+  // because CloseNow on linux/views destroys the view hierachy
+  // asynchronously.
+  frame_container_->GetRootView()->RemoveAllChildViews(true);
   frame_container_->CloseNow();
   balloon_->OnClose(by_user);
 }
@@ -155,6 +171,10 @@ void BalloonViewImpl::SizeContentsWindow() {
   gfx::Path path;
   GetContentsMask(contents_rect, &path);
   html_container_->SetShape(path.CreateNativeRegion());
+
+  close_button_->SetBounds(GetCloseButtonBounds());
+  options_menu_button_->SetBounds(GetOptionsMenuBounds());
+  source_label_->SetBounds(GetLabelBounds());
 }
 
 void BalloonViewImpl::RepositionToBalloon() {
@@ -164,16 +184,20 @@ void BalloonViewImpl::RepositionToBalloon() {
 
   if (!kAnimateEnabled) {
     frame_container_->SetBounds(
-        gfx::Rect(balloon_->position(), balloon_->size()));
+        gfx::Rect(balloon_->position().x(), balloon_->position().y(),
+                  GetTotalWidth(), GetTotalHeight()));
     gfx::Rect contents_rect = GetContentsRectangle();
     html_container_->SetBounds(contents_rect);
+    html_contents_->SetPreferredSize(contents_rect.size());
+    RenderWidgetHostView* view = html_contents_->render_view_host()->view();
+    if (view)
+      view->SetSize(contents_rect.size());
     return;
   }
 
-  anim_frame_end_ = gfx::Rect(balloon_->position().x(),
-                              balloon_->position().y(),
-                              balloon_->size().width(),
-                              balloon_->size().height());
+  anim_frame_end_ = gfx::Rect(
+      balloon_->position().x(), balloon_->position().y(),
+      GetTotalWidth(), GetTotalHeight());
   frame_container_->GetBounds(&anim_frame_start_, false);
   animation_.reset(new SlideAnimation(this));
   animation_->Show();
@@ -195,17 +219,68 @@ void BalloonViewImpl::AnimationProgressed(const Animation* animation) {
                      e * anim_frame_end_.width()),
     static_cast<int>(s * anim_frame_start_.height() +
                      e * anim_frame_end_.height()));
-
   frame_container_->SetBounds(frame_position);
-  html_container_->SetBounds(GetContentsRectangle());
+
+  gfx::Path path;
+  gfx::Rect contents_rect = GetContentsRectangle();
+  html_container_->SetBounds(contents_rect);
+  GetContentsMask(contents_rect, &path);
+  html_container_->SetShape(path.CreateNativeRegion());
+
+  html_contents_->SetPreferredSize(contents_rect.size());
+  RenderWidgetHostView* view = html_contents_->render_view_host()->view();
+  if (view)
+    view->SetSize(contents_rect.size());
+}
+
+gfx::Rect BalloonViewImpl::GetCloseButtonBounds() const {
+  return gfx::Rect(
+      width() - kDismissButtonWidth - kRightMargin,
+      height() - kDismissButtonHeight - kShelfBorderTopOverlap - kBottomMargin,
+      kDismissButtonWidth,
+      kDismissButtonHeight);
+}
+
+gfx::Rect BalloonViewImpl::GetOptionsMenuBounds() const {
+  return gfx::Rect(
+      width() - kDismissButtonWidth - kOptionsMenuWidth - kRightMargin,
+      height() - kOptionsMenuHeight - kShelfBorderTopOverlap - kBottomMargin,
+      kOptionsMenuWidth,
+      kOptionsMenuHeight);
+}
+
+gfx::Rect BalloonViewImpl::GetLabelBounds() const {
+  return gfx::Rect(
+      kLeftLabelMargin,
+      std::max(0, height() - kDismissButtonHeight - kShelfBorderTopOverlap -
+               kBottomMargin),
+      std::max(0, width() - kDismissButtonWidth - kOptionsMenuWidth -
+               kRightMargin),
+      kDismissButtonHeight);
 }
 
 void BalloonViewImpl::Show(Balloon* balloon) {
+  ResourceBundle& rb = ResourceBundle::GetSharedInstance();
+
+  const std::wstring source_label_text = l10n_util::GetStringF(
+      IDS_NOTIFICATION_BALLOON_SOURCE_LABEL,
+      balloon->notification().display_source());
+  const std::wstring options_text =
+      l10n_util::GetString(IDS_NOTIFICATION_OPTIONS_MENU_LABEL);
+  const std::wstring dismiss_text =
+      l10n_util::GetString(IDS_NOTIFICATION_BALLOON_DISMISS_LABEL);
+
   balloon_ = balloon;
-  close_button_listener_.reset(new BalloonCloseButtonListener(this));
 
   SetBounds(balloon_->position().x(), balloon_->position().y(),
-            balloon_->size().width(), balloon_->size().height());
+            GetTotalWidth(), GetTotalHeight());
+
+  source_label_ = new views::Label(source_label_text);
+  AddChildView(source_label_);
+  options_menu_button_ = new views::MenuButton(NULL, options_text, this, false);
+  AddChildView(options_menu_button_);
+  close_button_ = new views::TextButton(this, dismiss_text);
+  AddChildView(close_button_);
 
   // We have to create two windows: one for the contents and one for the
   // frame.  Why?
@@ -219,77 +294,53 @@ void BalloonViewImpl::Show(Balloon* balloon) {
   //
   // We carefully keep these two windows in sync to present the illusion of
   // one window to the user.
+  //
+  // We don't let the OS manage the RTL layout of these widgets, because
+  // this code is already taking care of correctly reversing the layout.
   gfx::Rect contents_rect = GetContentsRectangle();
-  html_contents_ = new BalloonViewHost(balloon);
+  html_contents_.reset(new BalloonViewHost(balloon));
   html_contents_->SetPreferredSize(gfx::Size(10000, 10000));
-
   html_container_ = Widget::CreatePopupWidget(Widget::NotTransparent,
                                               Widget::AcceptEvents,
-                                              Widget::DeleteOnDestroy);
+                                              Widget::DeleteOnDestroy,
+                                              Widget::DontMirrorOriginInRTL);
   html_container_->SetAlwaysOnTop(true);
   html_container_->Init(NULL, contents_rect);
-  html_container_->SetContentsView(html_contents_);
+  html_container_->SetContentsView(html_contents_->view());
 
   gfx::Rect balloon_rect(x(), y(), width(), height());
   frame_container_ = Widget::CreatePopupWidget(Widget::Transparent,
                                                Widget::AcceptEvents,
-                                               Widget::DeleteOnDestroy);
+                                               Widget::DeleteOnDestroy,
+                                               Widget::DontMirrorOriginInRTL);
+  frame_container_->SetWidgetDelegate(this);
   frame_container_->SetAlwaysOnTop(true);
   frame_container_->Init(NULL, balloon_rect);
   frame_container_->SetContentsView(this);
 
-  const std::wstring dismiss_text =
-      l10n_util::GetString(IDS_NOTIFICATION_BALLOON_DISMISS_LABEL);
-  close_button_ = new views::TextButton(close_button_listener_.get(),
-                                        dismiss_text);
-  close_button_->SetFont(
-      ResourceBundle::GetSharedInstance().GetFont(ResourceBundle::SmallFont));
-  close_button_->SetEnabledColor(BrowserThemeProvider::kDefaultColorTabText);
+  close_button_->SetIcon(*rb.GetBitmapNamed(IDR_BALLOON_CLOSE));
+  close_button_->SetHoverIcon(*rb.GetBitmapNamed(IDR_BALLOON_CLOSE_HOVER));
+  close_button_->SetFont(rb.GetFont(ResourceBundle::SmallFont));
+  close_button_->SetEnabledColor(SK_ColorWHITE);
+  close_button_->SetHoverColor(SK_ColorDKGRAY);
   close_button_->set_alignment(views::TextButton::ALIGN_CENTER);
-  close_button_->SetBounds(width() - kDismissButtonWidth
-                                   - kRightMargin,
-                           height() - kDismissButtonHeight
-                                    - kShelfBorderTopOverlap
-                                    - kBottomMargin,
-                           kDismissButtonWidth,
-                           kDismissButtonHeight);
-  AddChildView(close_button_);
+  close_button_->set_icon_placement(views::TextButton::ICON_ON_RIGHT);
+  close_button_->SetBounds(GetCloseButtonBounds());
 
-  const std::wstring options_text =
-      l10n_util::GetString(IDS_NOTIFICATION_OPTIONS_MENU_LABEL);
-  options_menu_button_ = new views::MenuButton(NULL, options_text, this, false);
-  options_menu_button_->SetFont(
-      ResourceBundle::GetSharedInstance().GetFont(ResourceBundle::SmallFont));
-  options_menu_button_->SetEnabledColor(
-      BrowserThemeProvider::kDefaultColorTabText);
-  options_menu_button_->SetBounds(width() - kDismissButtonWidth
-                                          - kOptionsMenuWidth
-                                          - kRightMargin,
-                                  height() - kOptionsMenuHeight
-                                           - kShelfBorderTopOverlap
-                                           - kBottomMargin,
-                                  kOptionsMenuWidth,
-                                  kOptionsMenuHeight);
-  AddChildView(options_menu_button_);
+  options_menu_button_->SetFont(rb.GetFont(ResourceBundle::SmallFont));
+  options_menu_button_->SetIcon(*rb.GetBitmapNamed(IDR_BALLOON_OPTIONS_ARROW));
+  options_menu_button_->SetHoverIcon(
+      *rb.GetBitmapNamed(IDR_BALLOON_OPTIONS_ARROW_HOVER));
+  options_menu_button_->set_alignment(views::TextButton::ALIGN_CENTER);
+  options_menu_button_->set_icon_placement(views::TextButton::ICON_ON_RIGHT);
+  options_menu_button_->SetEnabledColor(SK_ColorWHITE);
+  options_menu_button_->SetHoverColor(SK_ColorDKGRAY);
+  options_menu_button_->SetBounds(GetOptionsMenuBounds());
 
-  const std::wstring source_label_text = l10n_util::GetStringF(
-      IDS_NOTIFICATION_BALLOON_SOURCE_LABEL,
-      this->balloon_->notification().display_source());
-
-  views::Label* source_label = new views::Label(source_label_text);
-  source_label->SetFont(ResourceBundle::GetSharedInstance().GetFont(
-      ResourceBundle::SmallFont));
-  source_label->SetColor(BrowserThemeProvider::kDefaultColorTabText);
-  source_label->SetHorizontalAlignment(views::Label::ALIGN_LEFT);
-  source_label->SetBounds(kLeftLabelMargin,
-                          height() - kDismissButtonHeight
-                                   - kShelfBorderTopOverlap
-                                   - kBottomMargin,
-                          width() - kDismissButtonWidth
-                                  - kOptionsMenuWidth
-                                  - kRightMargin,
-                          kDismissButtonHeight);
-  AddChildView(source_label);
+  source_label_->SetFont(rb.GetFont(ResourceBundle::SmallFont));
+  source_label_->SetColor(SK_ColorWHITE);
+  source_label_->SetHorizontalAlignment(views::Label::ALIGN_LEFT);
+  source_label_->SetBounds(GetLabelBounds());
 
   SizeContentsWindow();
   html_container_->Show();
@@ -308,11 +359,11 @@ void BalloonViewImpl::CreateOptionsMenu() {
   if (options_menu_contents_.get())
     return;
 
-  const std::wstring label_text = l10n_util::GetStringF(
+  const string16 label_text = WideToUTF16Hack(l10n_util::GetStringF(
       IDS_NOTIFICATION_BALLOON_REVOKE_MESSAGE,
-      this->balloon_->notification().display_source());
+      this->balloon_->notification().display_source()));
 
-  options_menu_contents_.reset(new views::SimpleMenuModel(this));
+  options_menu_contents_.reset(new menus::SimpleMenuModel(this));
   options_menu_contents_->AddItem(kRevokePermissionCommand, label_text);
 
   options_menu_menu_.reset(new views::Menu2(options_menu_contents_.get()));
@@ -324,21 +375,21 @@ void BalloonViewImpl::GetContentsMask(const gfx::Rect& rect,
   //
   //   xx
   //   x
-  path->moveTo(SkScalar(1), SkScalar(0));
+  path->moveTo(SkScalar(0.5), SkScalar(0));
   // Upper right corner
-  path->arcTo(rect.width() - SkScalar(2), SkScalar(0),
-              rect.width() - SkScalar(1), SkScalar(2),
+  path->arcTo(rect.width() - SkScalar(1.5), SkScalar(0),
+              rect.width() - SkScalar(0.5), SkScalar(1.5),
               SkScalar(1));
   // Lower right corner
-  path->arcTo(rect.width() - SkScalar(1), rect.height() - SkScalar(2),
-              rect.width() - SkScalar(2), rect.height() - SkScalar(1),
+  path->arcTo(rect.width() - SkScalar(0.5), rect.height() - SkScalar(1.5),
+              rect.width() - SkScalar(1.5), rect.height() - SkScalar(0.5),
               SkScalar(1));
   // Lower left corner
-  path->arcTo(SkScalar(1), rect.height() - SkScalar(1),
-              0, rect.height() - SkScalar(2),
+  path->arcTo(SkScalar(0.5), rect.height() - SkScalar(0.5),
+              0, rect.height() - SkScalar(1.5),
               SkScalar(1));
   // Upper left corner
-  path->arcTo(0, SkScalar(1), SkScalar(1), 0, SkScalar(1));
+  path->arcTo(0, SkScalar(0.5), SkScalar(0.5), 0, SkScalar(1));
 }
 
 gfx::Point BalloonViewImpl::GetContentsOffset() const {
@@ -363,17 +414,27 @@ int BalloonViewImpl::GetBalloonFrameHeight() const {
   return GetTotalFrameHeight() - GetShelfHeight();
 }
 
+int BalloonViewImpl::GetTotalWidth() const {
+  return balloon_->content_size().width()
+      + kLeftMargin + kRightMargin + kLeftShadowWidth + kRightShadowWidth;
+}
+
+int BalloonViewImpl::GetTotalHeight() const {
+  return balloon_->content_size().height()
+      + kTopMargin + kBottomMargin + kTopShadowWidth + kBottomShadowWidth
+      + GetShelfHeight();
+}
+
 gfx::Rect BalloonViewImpl::GetContentsRectangle() const {
   if (!frame_container_)
     return gfx::Rect();
 
-  int contents_width = GetFrameWidth() - kLeftMargin - kRightMargin;
-  int contents_height = GetBalloonFrameHeight() - kTopMargin - kBottomMargin;
+  gfx::Size content_size = balloon_->content_size();
   gfx::Point offset = GetContentsOffset();
   gfx::Rect frame_rect;
   frame_container_->GetBounds(&frame_rect, true);
   return gfx::Rect(frame_rect.x() + offset.x(), frame_rect.y() + offset.y(),
-                   contents_width, contents_height);
+                   content_size.width(), content_size.height());
 }
 
 void BalloonViewImpl::Paint(gfx::Canvas* canvas) {
@@ -391,7 +452,7 @@ void BalloonViewImpl::Paint(gfx::Canvas* canvas) {
   View::Paint(canvas);
 }
 
-// SimpleMenuModel::Delegate methods
+// menus::SimpleMenuModel::Delegate methods
 bool BalloonViewImpl::IsCommandIdChecked(int /* command_id */) const {
   // Nothing in the menu is checked.
   return false;
@@ -403,7 +464,7 @@ bool BalloonViewImpl::IsCommandIdEnabled(int /* command_id */) const {
 }
 
 bool BalloonViewImpl::GetAcceleratorForCommandId(
-    int /* command_id */, views::Accelerator* /* accelerator */) {
+    int /* command_id */, menus::Accelerator* /* accelerator */) {
   // Currently no accelerators.
   return false;
 }

@@ -15,12 +15,14 @@
 #include "net/base/completion_callback.h"
 #include "net/base/host_resolver.h"
 #include "net/base/net_errors.h"
+#include "net/base/net_log.h"
 #include "net/socket/client_socket.h"
 #include "testing/gtest/include/gtest/gtest_prod.h"
 
 namespace net {
 
-class LoadLog;
+class ClientSocketHandle;
+class BoundNetLog;
 
 // This ClientSocket is used to setup a SOCKSv5 handshake with a socks proxy.
 // Currently no SOCKSv5 authentication is supported.
@@ -35,6 +37,10 @@ class SOCKS5ClientSocket : public ClientSocket {
   // Although SOCKS 5 supports 3 different modes of addressing, we will
   // always pass it a hostname. This means the DNS resolving is done
   // proxy side.
+  SOCKS5ClientSocket(ClientSocketHandle* transport_socket,
+                     const HostResolver::RequestInfo& req_info);
+
+  // Deprecated constructor (http://crbug.com/37810) that takes a ClientSocket.
   SOCKS5ClientSocket(ClientSocket* transport_socket,
                      const HostResolver::RequestInfo& req_info);
 
@@ -44,7 +50,7 @@ class SOCKS5ClientSocket : public ClientSocket {
   // ClientSocket methods:
 
   // Does the SOCKS handshake and completes the protocol.
-  virtual int Connect(CompletionCallback* callback, LoadLog* load_log);
+  virtual int Connect(CompletionCallback* callback, const BoundNetLog& net_log);
   virtual void Disconnect();
   virtual bool IsConnected() const;
   virtual bool IsConnectedAndIdle() const;
@@ -56,9 +62,7 @@ class SOCKS5ClientSocket : public ClientSocket {
   virtual bool SetReceiveBufferSize(int32 size);
   virtual bool SetSendBufferSize(int32 size);
 
-#if defined(OS_LINUX)
-  virtual int GetPeerName(struct sockaddr* name, socklen_t* namelen);
-#endif
+  virtual int GetPeerAddress(AddressList* address) const;
 
  private:
   enum State {
@@ -107,7 +111,7 @@ class SOCKS5ClientSocket : public ClientSocket {
   CompletionCallbackImpl<SOCKS5ClientSocket> io_callback_;
 
   // Stores the underlying socket.
-  scoped_ptr<ClientSocket> transport_;
+  scoped_ptr<ClientSocketHandle> transport_;
 
   State next_state_;
 
@@ -135,7 +139,7 @@ class SOCKS5ClientSocket : public ClientSocket {
 
   HostResolver::RequestInfo host_request_info_;
 
-  scoped_refptr<LoadLog> load_log_;
+  BoundNetLog net_log_;
 
   DISALLOW_COPY_AND_ASSIGN(SOCKS5ClientSocket);
 };

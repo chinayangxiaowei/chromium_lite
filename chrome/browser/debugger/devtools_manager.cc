@@ -13,13 +13,13 @@
 #include "chrome/browser/child_process_security_policy.h"
 #include "chrome/browser/debugger/devtools_window.h"
 #include "chrome/browser/debugger/devtools_client_host.h"
+#include "chrome/browser/pref_service.h"
 #include "chrome/browser/profile.h"
 #include "chrome/browser/renderer_host/render_view_host.h"
 #include "chrome/browser/renderer_host/site_instance.h"
 #include "chrome/browser/tab_contents/tab_contents.h"
 #include "chrome/common/devtools_messages.h"
 #include "chrome/common/pref_names.h"
-#include "chrome/common/pref_service.h"
 #include "googleurl/src/gurl.h"
 
 // static
@@ -29,7 +29,7 @@ DevToolsManager* DevToolsManager::GetInstance() {
 
 // static
 void DevToolsManager::RegisterUserPrefs(PrefService* prefs) {
-  prefs->RegisterBooleanPref(prefs::kDevToolsOpenDocked, false);
+  prefs->RegisterBooleanPref(prefs::kDevToolsOpenDocked, true);
 }
 
 DevToolsManager::DevToolsManager()
@@ -60,11 +60,10 @@ void DevToolsManager::RegisterDevToolsClientHostFor(
     DevToolsClientHost* client_host) {
   DCHECK(!GetDevToolsClientHostFor(inspected_rvh));
 
-  inspected_rvh_to_client_host_[inspected_rvh] = client_host;
-  client_host_to_inspected_rvh_[client_host] = inspected_rvh;
+  RuntimeFeatures initial_features;
+  BindClientHost(inspected_rvh, client_host, initial_features);
   client_host->set_close_listener(this);
-
-  SendAttachToAgent(inspected_rvh, std::set<std::string>());
+  SendAttachToAgent(inspected_rvh);
 }
 
 void DevToolsManager::ForwardToDevToolsAgent(
@@ -116,11 +115,11 @@ void DevToolsManager::CloseWindow(RenderViewHost* client_rvh) {
     CloseWindow(client_host);
 }
 
-void DevToolsManager::DockWindow(RenderViewHost* client_rvh) {
+void DevToolsManager::RequestDockWindow(RenderViewHost* client_rvh) {
   ReopenWindow(client_rvh, true);
 }
 
-void DevToolsManager::UndockWindow(RenderViewHost* client_rvh) {
+void DevToolsManager::RequestUndockWindow(RenderViewHost* client_rvh) {
   ReopenWindow(client_rvh, false);
 }
 
@@ -136,12 +135,12 @@ void DevToolsManager::ToggleDevToolsWindow(RenderViewHost* inspected_rvh,
 void DevToolsManager::RuntimeFeatureStateChanged(RenderViewHost* inspected_rvh,
                                                  const std::string& feature,
                                                  bool enabled) {
-  RuntimeFeaturesMap::iterator it = runtime_features_.find(inspected_rvh);
-  if (it == runtime_features_.end()) {
+  RuntimeFeaturesMap::iterator it = runtime_features_map_.find(inspected_rvh);
+  if (it == runtime_features_map_.end()) {
     std::pair<RenderViewHost*, std::set<std::string> > value(
         inspected_rvh,
         std::set<std::string>());
-    it = runtime_features_.insert(value).first;
+    it = runtime_features_map_.insert(value).first;
   }
   if (enabled)
     it->second.insert(feature);
@@ -171,11 +170,14 @@ void DevToolsManager::ClientHostClosing(DevToolsClientHost* host) {
     }
     return;
   }
-  SendDetachToAgent(inspected_rvh);
 
-  inspected_rvh_to_client_host_.erase(inspected_rvh);
-  runtime_features_.erase(inspected_rvh);
-  client_host_to_inspected_rvh_.erase(host);
+  NotificationService::current()->Notify(
+      NotificationType::DEVTOOLS_WINDOW_CLOSING,
+      Source<Profile>(inspected_rvh->site_instance()->GetProcess()->profile()),
+      Details<RenderViewHost>(inspected_rvh));
+
+  SendDetachToAgent(inspected_rvh);
+  UnbindClientHost(inspected_rvh, host);
 }
 
 RenderViewHost* DevToolsManager::GetInspectedRenderViewHost(
@@ -192,10 +194,8 @@ void DevToolsManager::UnregisterDevToolsClientHostFor(
   DevToolsClientHost* host = GetDevToolsClientHostFor(inspected_rvh);
   if (!host)
     return;
-  inspected_rvh_to_client_host_.erase(inspected_rvh);
-  runtime_features_.erase(inspected_rvh);
+  UnbindClientHost(inspected_rvh, host);
 
-  client_host_to_inspected_rvh_.erase(host);
   if (inspected_rvh_for_reopen_ == inspected_rvh)
     inspected_rvh_for_reopen_ = NULL;
 
@@ -254,10 +254,9 @@ int DevToolsManager::DetachClientHost(RenderViewHost* from_rvh) {
   int cookie = last_orphan_cookie_++;
   orphan_client_hosts_[cookie] =
       std::pair<DevToolsClientHost*, RuntimeFeatures>(
-          client_host, runtime_features_[from_rvh]);
+          client_host, runtime_features_map_[from_rvh]);
 
-  inspected_rvh_to_client_host_.erase(from_rvh);
-  runtime_features_.erase(from_rvh);
+  UnbindClientHost(from_rvh, client_host);
   return cookie;
 }
 
@@ -269,21 +268,24 @@ void DevToolsManager::AttachClientHost(int client_host_cookie,
     return;
 
   DevToolsClientHost* client_host = (*it).second.first;
-  inspected_rvh_to_client_host_[to_rvh] = client_host;
-  client_host_to_inspected_rvh_[client_host] = to_rvh;
-  SendAttachToAgent(to_rvh, (*it).second.second);
+  BindClientHost(to_rvh, client_host, (*it).second.second);
+  SendAttachToAgent(to_rvh);
 
   orphan_client_hosts_.erase(client_host_cookie);
 }
 
-void DevToolsManager::SendAttachToAgent(
-    RenderViewHost* inspected_rvh,
-    const std::set<std::string>& runtime_features) {
+void DevToolsManager::SendAttachToAgent(RenderViewHost* inspected_rvh) {
   if (inspected_rvh) {
     ChildProcessSecurityPolicy::GetInstance()->GrantReadRawCookies(
         inspected_rvh->process()->id());
-    std::vector<std::string> features(runtime_features.begin(),
-                                      runtime_features.end());
+
+    std::vector<std::string> features;
+    RuntimeFeaturesMap::iterator it =
+        runtime_features_map_.find(inspected_rvh);
+    if (it != runtime_features_map_.end()) {
+      features = std::vector<std::string>(it->second.begin(),
+                                          it->second.end());
+    }
     IPC::Message* m = new DevToolsAgentMsg_Attach(features);
     m->set_routing_id(inspected_rvh->routing_id());
     inspected_rvh->Send(m);
@@ -342,13 +344,8 @@ void DevToolsManager::ToggleDevToolsWindow(RenderViewHost* inspected_rvh,
   bool do_open = force_open;
   DevToolsClientHost* host = GetDevToolsClientHostFor(inspected_rvh);
   if (!host) {
-#if defined OS_MACOSX
-    // TODO(pfeldman): Implement dock on Mac OS.
-    bool docked = false;
-#else
     bool docked = inspected_rvh->process()->profile()->GetPrefs()->
         GetBoolean(prefs::kDevToolsOpenDocked);
-#endif
     host = new DevToolsWindow(
         inspected_rvh->site_instance()->browsing_instance()->profile(),
         inspected_rvh,
@@ -376,4 +373,29 @@ void DevToolsManager::CloseWindow(DevToolsClientHost* client_host) {
   SendDetachToAgent(inspected_rvh);
 
   UnregisterDevToolsClientHostFor(inspected_rvh);
+}
+
+void DevToolsManager::BindClientHost(RenderViewHost* inspected_rvh,
+                                     DevToolsClientHost* client_host,
+                                     const RuntimeFeatures& runtime_features) {
+  DCHECK(inspected_rvh_to_client_host_.find(inspected_rvh) ==
+      inspected_rvh_to_client_host_.end());
+  DCHECK(client_host_to_inspected_rvh_.find(client_host) ==
+      client_host_to_inspected_rvh_.end());
+
+  inspected_rvh_to_client_host_[inspected_rvh] = client_host;
+  client_host_to_inspected_rvh_[client_host] = inspected_rvh;
+  runtime_features_map_[inspected_rvh] = runtime_features;
+}
+
+void DevToolsManager::UnbindClientHost(RenderViewHost* inspected_rvh,
+                                       DevToolsClientHost* client_host) {
+  DCHECK(inspected_rvh_to_client_host_.find(inspected_rvh)->second ==
+      client_host);
+  DCHECK(client_host_to_inspected_rvh_.find(client_host)->second ==
+      inspected_rvh);
+
+  inspected_rvh_to_client_host_.erase(inspected_rvh);
+  client_host_to_inspected_rvh_.erase(client_host);
+  runtime_features_map_.erase(inspected_rvh);
 }

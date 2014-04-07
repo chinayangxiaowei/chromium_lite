@@ -1,8 +1,7 @@
-// Copyright (c) 2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "app/gfx/codec/jpeg_codec.h"
 #include "base/file_util.h"
 #include "base/shared_memory.h"
 #include "chrome/common/content_settings.h"
@@ -10,6 +9,7 @@
 #include "chrome/common/render_messages.h"
 #include "chrome/renderer/print_web_view_helper.h"
 #include "chrome/test/render_view_test.h"
+#include "gfx/codec/jpeg_codec.h"
 #include "net/base/net_errors.h"
 #include "printing/image.h"
 #include "printing/native_metafile.h"
@@ -34,25 +34,6 @@ static WebCompositionCommand ToCompositionCommand(int string_type) {
     case 1:
       return WebKit::WebCompositionCommandConfirm;
   }
-}
-
-TEST_F(RenderViewTest, OnLoadAlternateHTMLText) {
-  // Test a new navigation.
-  GURL test_url("http://www.google.com/some_test_url");
-  view_->OnLoadAlternateHTMLText("<html></html>", true, test_url,
-                                 std::string());
-
-  // We should have gotten two different types of start messages in the
-  // following order.
-  ASSERT_EQ((size_t)2, render_thread_.sink().message_count());
-  const IPC::Message* msg = render_thread_.sink().GetMessageAt(0);
-  EXPECT_EQ(ViewHostMsg_DidStartLoading::ID, msg->type());
-
-  msg = render_thread_.sink().GetMessageAt(1);
-  EXPECT_EQ(ViewHostMsg_DidStartProvisionalLoadForFrame::ID, msg->type());
-  ViewHostMsg_DidStartProvisionalLoadForFrame::Param start_params;
-  ViewHostMsg_DidStartProvisionalLoadForFrame::Read(msg, &start_params);
-  EXPECT_EQ(GURL("chrome://chromewebdata/"), start_params.b);
 }
 
 // Test that we get form state change notifications when input fields change.
@@ -946,7 +927,7 @@ TEST_F(RenderViewTest, JSBlockSentAfterPageLoad) {
   render_thread_.sink().ClearMessages();
 
   // 3. Reload page.
-  ViewMsg_Navigate_Params params;
+  ViewMsg_Navigate_Params params = { 0 };
   std::string url_str = "data:text/html;charset=utf-8,";
   url_str.append(html);
   GURL url(url_str);

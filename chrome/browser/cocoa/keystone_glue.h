@@ -43,6 +43,16 @@ extern const NSString* const kAutoupdateStatusNotification;
 extern const NSString* const kAutoupdateStatusStatus;
 extern const NSString* const kAutoupdateStatusVersion;
 
+namespace {
+  enum BrandFileType {
+    kBrandFileTypeNotDetermined = 0,
+    kBrandFileTypeNone,
+    kBrandFileTypeUser,
+    kBrandFileTypeSystem,
+  };
+
+} // namespace
+
 // KeystoneGlue is an adapter around the KSRegistration class, allowing it to
 // be used without linking directly against its containing KeystoneRegistration
 // framework.  This is used in an environment where most builds (such as
@@ -66,6 +76,7 @@ extern const NSString* const kAutoupdateStatusVersion;
   NSString* url_;
   NSString* version_;
   NSString* channel_;  // Logically: Dev, Beta, or Stable.
+  BrandFileType brandFileType_;
 
   // And the Keystone registration itself, with the active timer
   KSRegistration* registration_;  // strong
@@ -77,6 +88,10 @@ extern const NSString* const kAutoupdateStatusVersion;
   // The authorization object, when it needs to persist because it's being
   // carried across threads.
   scoped_AuthorizationRef authorization_;
+
+  // YES if a synchronous promotion operation is in progress (promotion during
+  // installation).
+  BOOL synchronousPromotion_;
 
   // YES if an update was ever successfully installed by -installUpdate.
   BOOL updateSuccessfullyInstalled_;
@@ -135,9 +150,21 @@ extern const NSString* const kAutoupdateStatusVersion;
 - (BOOL)needsPromotion;
 - (BOOL)wantsPromotion;
 
-// Requests authorization and promotes the Keystone ticket into the system
-// store.  System Keystone will be installed if necessary.
+// Promotes the Keystone ticket into the system store.  System Keystone will
+// be installed if necessary.  If synchronous is NO, the promotion may occur
+// in the background.  synchronous should be YES for promotion during
+// installation. The KeystoneGlue object assumes ownership of
+// authorization_arg.
+- (void)promoteTicketWithAuthorization:(AuthorizationRef)authorization_arg
+                           synchronous:(BOOL)synchronous;
+
+// Requests authorization and calls -promoteTicketWithAuthorization: in
+// asynchronous mode.
 - (void)promoteTicket;
+
+// Sets a new value for appPath.  Used during installation to point a ticket
+// at the installed copy.
+- (void)setAppPath:(NSString*)appPath;
 
 @end  // @interface KeystoneGlue
 

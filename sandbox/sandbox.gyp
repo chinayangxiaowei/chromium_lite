@@ -3,95 +3,18 @@
 # found in the LICENSE file.
 
 {
-  'conditions': [
-    [ 'OS=="linux" and selinux==0', {
-      'targets': [
-        {
-          'target_name': 'chrome_sandbox',
-          'type': 'executable',
-          'sources': [
-            'linux/suid/linux_util.c',
-            'linux/suid/linux_util.h',
-            'linux/suid/sandbox.c',
-          ],
-          'cflags': [
-            # For ULLONG_MAX
-            '-std=gnu99',
-          ],
-          'include_dirs': [
-            '..',
-          ],
-        },
-        {
-          'target_name': 'sandbox',
-          'type': '<(library)',
-          'dependencies': [
-            '../base/base.gyp:base',
-          ],
-          'conditions': [
-            ['target_arch!="arm"', {
-              'sources': [
-                'linux/seccomp/access.cc',
-                'linux/seccomp/clone.cc',
-                'linux/seccomp/exit.cc',
-                'linux/seccomp/debug.cc',
-                'linux/seccomp/getpid.cc',
-                'linux/seccomp/gettid.cc',
-                'linux/seccomp/ioctl.cc',
-                'linux/seccomp/ipc.cc',
-                'linux/seccomp/library.cc',
-                'linux/seccomp/library.h',
-                'linux/seccomp/linux_syscall_support.h',
-                'linux/seccomp/madvise.cc',
-                'linux/seccomp/maps.cc',
-                'linux/seccomp/maps.h',
-                'linux/seccomp/mmap.cc',
-                'linux/seccomp/mprotect.cc',
-                'linux/seccomp/munmap.cc',
-                'linux/seccomp/mutex.h',
-                'linux/seccomp/open.cc',
-                'linux/seccomp/sandbox.cc',
-                'linux/seccomp/sandbox.h',
-                'linux/seccomp/sandbox_impl.h',
-                'linux/seccomp/securemem.cc',
-                'linux/seccomp/securemem.h',
-                'linux/seccomp/socketcall.cc',
-                'linux/seccomp/stat.cc',
-                'linux/seccomp/syscall.cc',
-                'linux/seccomp/syscall.h',
-                'linux/seccomp/syscall_table.c',
-                'linux/seccomp/syscall_table.h',
-                'linux/seccomp/tls.h',
-                'linux/seccomp/trusted_process.cc',
-                'linux/seccomp/trusted_thread.cc',
-                'linux/seccomp/x86_decode.cc',
-                'linux/seccomp/x86_decode.h',
-              ],
-            },
-          ],
-        ]},
-      ],
-    }],
-    [ 'OS=="linux" and selinux==1', {
-      # GYP requires that each file have at least one target defined.
-      'targets': [
-        {
-          'target_name': 'sandbox',
-          'type': 'settings',
-        },
-      ],
-    }],
-    [ 'OS=="win"', {
-      'targets': [
-        {
-          'target_name': 'sandbox',
-          'type': '<(library)',
-          'dependencies': [
-            '../testing/gtest.gyp:gtest',
-            '../base/base.gyp:base',
-          ],
-          'msvs_guid': '881F6A97-D539-4C48-B401-DF04385B2343',
-          'sources': [
+  'variables': {
+    'chromium_code': 1,
+  },
+  'target_defaults': {
+    'variables': {
+      'sandbox_windows_target': 0,
+    },
+    'target_conditions': [
+      ['sandbox_windows_target==1', {
+        # Files that are shared between the 32-bit and the 64-bit versions
+        # of the Windows sandbox library.
+        'sources': [
             'src/acl.cc',
             'src/acl.h',
             'src/broker_services.cc',
@@ -110,11 +33,12 @@
             'src/filesystem_interception.h',
             'src/filesystem_policy.cc',
             'src/filesystem_policy.h',
+            'src/interception.cc',
+            'src/interception.h',
             'src/interception_agent.cc',
             'src/interception_agent.h',
             'src/interception_internal.h',
-            'src/interception.cc',
-            'src/interception.h',
+            'src/interceptors.h',
             'src/internal_types.h',
             'src/ipc_tags.h',
             'src/job.cc',
@@ -179,15 +103,6 @@
             'src/sharedmem_ipc_server.h',
             'src/sid.cc',
             'src/sid.h',
-            'src/sidestep_resolver.cc',
-            'src/sidestep_resolver.h',
-            'src/sidestep\ia32_modrm_map.cpp',
-            'src/sidestep\ia32_opcode_map.cpp',
-            'src/sidestep\mini_disassembler_types.h',
-            'src/sidestep\mini_disassembler.cpp',
-            'src/sidestep\mini_disassembler.h',
-            'src/sidestep\preamble_patcher_with_stub.cpp',
-            'src/sidestep\preamble_patcher.h',
             'src/sync_dispatcher.cc',
             'src/sync_dispatcher.h',
             'src/sync_interception.cc',
@@ -206,6 +121,125 @@
             'src/win2k_threadpool.h',
             'src/window.cc',
             'src/window.h',
+        ],
+      }],
+    ],
+  },
+  'conditions': [
+    [ 'OS=="linux" and selinux==0', {
+      'targets': [
+        {
+          'target_name': 'chrome_sandbox',
+          'type': 'executable',
+          'sources': [
+            'linux/suid/linux_util.c',
+            'linux/suid/linux_util.h',
+            'linux/suid/process_util.h',
+            'linux/suid/process_util_linux.c',
+            'linux/suid/sandbox.c',
+          ],
+          'cflags': [
+            # For ULLONG_MAX
+            '-std=gnu99',
+          ],
+          'include_dirs': [
+            '..',
+          ],
+        },
+        {
+          'target_name': 'sandbox',
+          'type': '<(library)',
+          'dependencies': [
+            '../base/base.gyp:base',
+          ],
+          'conditions': [
+            ['target_arch!="arm"', {
+              'sources': [
+                'linux/seccomp/access.cc',
+                'linux/seccomp/allocator.cc',
+                'linux/seccomp/allocator.h',
+                'linux/seccomp/clone.cc',
+                'linux/seccomp/exit.cc',
+                'linux/seccomp/debug.cc',
+                'linux/seccomp/getpid.cc',
+                'linux/seccomp/gettid.cc',
+                'linux/seccomp/ioctl.cc',
+                'linux/seccomp/ipc.cc',
+                'linux/seccomp/library.cc',
+                'linux/seccomp/library.h',
+                'linux/seccomp/linux_syscall_support.h',
+                'linux/seccomp/madvise.cc',
+                'linux/seccomp/maps.cc',
+                'linux/seccomp/maps.h',
+                'linux/seccomp/mmap.cc',
+                'linux/seccomp/mprotect.cc',
+                'linux/seccomp/munmap.cc',
+                'linux/seccomp/mutex.h',
+                'linux/seccomp/open.cc',
+                'linux/seccomp/sandbox.cc',
+                'linux/seccomp/sandbox.h',
+                'linux/seccomp/sandbox_impl.h',
+                'linux/seccomp/securemem.cc',
+                'linux/seccomp/securemem.h',
+                'linux/seccomp/socketcall.cc',
+                'linux/seccomp/stat.cc',
+                'linux/seccomp/syscall.cc',
+                'linux/seccomp/syscall.h',
+                'linux/seccomp/syscall_table.c',
+                'linux/seccomp/syscall_table.h',
+                'linux/seccomp/tls.h',
+                'linux/seccomp/trusted_process.cc',
+                'linux/seccomp/trusted_thread.cc',
+                'linux/seccomp/x86_decode.cc',
+                'linux/seccomp/x86_decode.h',
+              ],
+            },
+          ],
+        ]},
+        {
+          'target_name': 'timestats',
+          'type': 'executable',
+          'sources': [
+            'linux/seccomp/timestats.cc',
+          ],
+        },
+      ],
+    }],
+    [ 'OS=="linux" and selinux==1', {
+      # GYP requires that each file have at least one target defined.
+      'targets': [
+        {
+          'target_name': 'sandbox',
+          'type': 'settings',
+        },
+      ],
+    }],
+    [ 'OS=="win"', {
+      'targets': [
+        {
+          'target_name': 'sandbox',
+          'type': '<(library)',
+          'variables': {
+            'sandbox_windows_target': 1,
+          },
+          'dependencies': [
+            '../testing/gtest.gyp:gtest',
+            '../base/base.gyp:base',
+          ],
+          'msvs_guid': '881F6A97-D539-4C48-B401-DF04385B2343',
+          'sources': [
+            # Files that are used by the 32-bit version of Windows sandbox only.
+            'src/resolver_32.cc',
+            'src/service_resolver_32.cc',
+            'src/sidestep_resolver.cc',
+            'src/sidestep_resolver.h',
+            'src/sidestep\ia32_modrm_map.cpp',
+            'src/sidestep\ia32_opcode_map.cpp',
+            'src/sidestep\mini_disassembler_types.h',
+            'src/sidestep\mini_disassembler.cpp',
+            'src/sidestep\mini_disassembler.h',
+            'src/sidestep\preamble_patcher_with_stub.cpp',
+            'src/sidestep\preamble_patcher.h',
             'src/Wow64.cc',
             'src/Wow64.h',
           ],
@@ -227,6 +261,43 @@
               '..',
             ],
           },
+        },
+        {
+          'target_name': 'sandbox_win64',
+          'type': '<(library)',
+          'variables': {
+            'sandbox_windows_target': 1,
+          },
+          'dependencies': [
+            '../testing/gtest.gyp:gtest',
+            '../base/base.gyp:base_nacl_win64',
+          ],
+          'configurations': {
+            'Common_Base': {
+              'msvs_target_platform': 'x64',
+            },
+          },
+          'msvs_guid': 'BE3468E6-B314-4310-B449-6FC0C52EE155',
+          'sources': [
+            # Files that are used by the 64-bit version of Windows sandbox only.
+            'src/interceptors_64.cc',
+            'src/interceptors_64.h',
+            'src/resolver_64.cc',
+            'src/service_resolver_64.cc',
+            'src/Wow64_64.cc',
+          ],
+          'include_dirs': [
+            '..',
+          ],
+          'direct_dependent_settings': {
+            'include_dirs': [
+              'src',
+              '..',
+            ],
+          },
+          'defines': [
+            '<@(nacl_win64_defines)',
+          ]
         },
         {
           'target_name': 'sbox_integration_tests',

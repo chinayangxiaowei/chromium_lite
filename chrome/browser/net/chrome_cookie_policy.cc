@@ -174,14 +174,9 @@ void ChromeCookiePolicy::PromptForSetCookie(const GURL& url,
     return;
   }
 
-#if defined(OS_WIN)
   RunCookiePrompt(browser->GetSelectedTabContents(),
                   host_content_settings_map_, url, cookie_line,
                   new PromptDelegate(this, host));
-#else
-  // TODO(darin): Enable prompting for other ports.
-  DidPromptForSetCookie(host, net::ERR_ACCESS_DENIED);
-#endif
 }
 
 void ChromeCookiePolicy::DidPromptForSetCookie(const std::string& host,

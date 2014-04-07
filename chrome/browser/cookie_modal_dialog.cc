@@ -4,12 +4,13 @@
 
 #include "chrome/browser/cookie_modal_dialog.h"
 
+#include "app/message_box_flags.h"
+#include "base/utf_string_conversions.h"
 #include "chrome/browser/host_content_settings_map.h"
+#include "chrome/browser/pref_service.h"
 #include "chrome/browser/profile.h"
 #include "chrome/browser/tab_contents/tab_contents.h"
-#include "chrome/browser/views/cookie_prompt_view.h"
 #include "chrome/common/pref_names.h"
-#include "chrome/common/pref_service.h"
 
 // Cookies
 CookiePromptModalDialog::CookiePromptModalDialog(
@@ -49,12 +50,30 @@ CookiePromptModalDialog::CookiePromptModalDialog(
     HostContentSettingsMap* host_content_settings_map,
     const GURL& origin,
     const string16& database_name,
+    const string16& display_name,
+    unsigned long estimated_size,
     CookiePromptModalDialogDelegate* delegate)
     : AppModalDialog(tab_contents, std::wstring()),
       host_content_settings_map_(host_content_settings_map),
       dialog_type_(DIALOG_TYPE_DATABASE),
       origin_(origin),
       database_name_(database_name),
+      display_name_(display_name),
+      estimated_size_(estimated_size),
+      delegate_(delegate) {
+}
+
+// AppCache
+CookiePromptModalDialog::CookiePromptModalDialog(
+    TabContents* tab_contents,
+    HostContentSettingsMap* host_content_settings_map,
+    const GURL& appcache_manifest_url,
+    CookiePromptModalDialogDelegate* delegate)
+    : AppModalDialog(tab_contents, std::wstring()),
+      host_content_settings_map_(host_content_settings_map),
+      dialog_type_(DIALOG_TYPE_APPCACHE),
+      origin_(appcache_manifest_url.GetOrigin()),
+      appcache_manifest_url_(appcache_manifest_url),
       delegate_(delegate) {
 }
 
@@ -80,9 +99,11 @@ bool CookiePromptModalDialog::IsValid() {
 
 void CookiePromptModalDialog::AllowSiteData(bool remember,
                                             bool session_expire) {
-  if (remember) {
+  DCHECK(!remember || DecisionPersistable());
+  if (remember && DecisionPersistable()) {
     host_content_settings_map_->SetContentSetting(
-        origin_.host(), CONTENT_SETTINGS_TYPE_COOKIES, CONTENT_SETTING_ALLOW);
+        HostContentSettingsMap::Pattern::FromURL(origin_),
+        CONTENT_SETTINGS_TYPE_COOKIES, CONTENT_SETTING_ALLOW);
   }
 
   if (delegate_) {
@@ -92,9 +113,11 @@ void CookiePromptModalDialog::AllowSiteData(bool remember,
 }
 
 void CookiePromptModalDialog::BlockSiteData(bool remember) {
-  if (remember) {
+  DCHECK(!remember || DecisionPersistable());
+  if (remember && DecisionPersistable()) {
     host_content_settings_map_->SetContentSetting(
-        origin_.host(), CONTENT_SETTINGS_TYPE_COOKIES, CONTENT_SETTING_BLOCK);
+        HostContentSettingsMap::Pattern::FromURL(origin_),
+        CONTENT_SETTINGS_TYPE_COOKIES, CONTENT_SETTING_BLOCK);
   }
 
   if (delegate_) {
@@ -106,4 +129,14 @@ void CookiePromptModalDialog::BlockSiteData(bool remember) {
 // static
 void CookiePromptModalDialog::RegisterPrefs(PrefService* prefs) {
   prefs->RegisterBooleanPref(prefs::kCookiePromptExpanded, false);
+}
+
+int CookiePromptModalDialog::GetDialogButtons() {
+  // Enable the automation interface to accept/dismiss this dialog.
+  return MessageBoxFlags::DIALOGBUTTON_OK |
+         MessageBoxFlags::DIALOGBUTTON_CANCEL;
+}
+
+bool CookiePromptModalDialog::DecisionPersistable() {
+  return !host_content_settings_map_->IsOffTheRecord();
 }

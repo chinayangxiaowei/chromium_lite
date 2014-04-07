@@ -1,14 +1,18 @@
-// Copyright (c) 2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/autocomplete/autocomplete_edit_view_win.h"
 
+#include <algorithm>
 #include <locale>
+#include <string>
+
+#include <richedit.h>
+#include <textserv.h>
 
 #include "app/clipboard/clipboard.h"
 #include "app/clipboard/scoped_clipboard_writer.h"
-#include "app/gfx/canvas.h"
 #include "app/l10n_util.h"
 #include "app/l10n_util_win.h"
 #include "app/os_exchange_data.h"
@@ -18,11 +22,12 @@
 #include "base/base_drag_source.h"
 #include "base/base_drop_target.h"
 #include "base/basictypes.h"
+#include "base/i18n/rtl.h"
 #include "base/iat_patch.h"
 #include "base/keyboard_codes.h"
 #include "base/lazy_instance.h"
 #include "base/ref_counted.h"
-#include "base/string_util.h"
+#include "base/utf_string_conversions.h"
 #include "chrome/app/chrome_dll_resource.h"
 #include "chrome/browser/autocomplete/autocomplete_accessibility.h"
 #include "chrome/browser/autocomplete/autocomplete_popup_model.h"
@@ -40,6 +45,7 @@
 #include "chrome/common/gfx/utils.h"
 #include "chrome/common/notification_service.h"
 #include "googleurl/src/url_util.h"
+#include "gfx/canvas.h"
 #include "grit/generated_resources.h"
 #include "net/base/escape.h"
 #include "skia/ext/skia_utils_win.h"
@@ -48,6 +54,7 @@
 #include "views/widget/widget.h"
 
 #pragma comment(lib, "oleacc.lib")  // Needed for accessibility support.
+#pragma comment(lib, "riched20.lib")  // Needed for the richedit control.
 
 ///////////////////////////////////////////////////////////////////////////////
 // AutocompleteEditModel
@@ -405,8 +412,11 @@ AutocompleteEditViewWin::AutocompleteEditViewWin(
       drop_highlight_position_(-1),
       background_color_(0),
       scheme_security_level_(ToolbarModel::NORMAL),
-      text_object_model_(NULL),
-      riched20dll_handle_(LoadLibrary(L"riched20.dll")) {
+      text_object_model_(NULL) {
+  // Dummy call to a function exported by riched20.dll to ensure it sets up an
+  // import dependency on the dll.
+  CreateTextServices(NULL, NULL, NULL);
+
   model_->SetPopupModel(popup_view_->GetModel());
 
   saved_selection_for_focus_change_.cpMin = -1;
@@ -474,10 +484,6 @@ AutocompleteEditViewWin::~AutocompleteEditViewWin() {
   // before we free the library. If the library gets unloaded before this
   // released, it becomes garbage.
   text_object_model_->Release();
-
-  // We're now done with this library, so release our reference to it so it can
-  // be unloaded if possible.
-  FreeLibrary(riched20dll_handle_);
 
   // We balance our reference count and unpatch when the last instance has
   // been destroyed.  This prevents us from relying on the AtExit or static
@@ -849,6 +855,10 @@ gfx::NativeView AutocompleteEditViewWin::GetNativeView() const {
   return m_hWnd;
 }
 
+CommandUpdater* AutocompleteEditViewWin::GetCommandUpdater() {
+  return command_updater_;
+}
+
 void AutocompleteEditViewWin::PasteAndGo(const std::wstring& text) {
   if (CanPasteAndGo(text))
     model_->PasteAndGo();
@@ -935,7 +945,7 @@ bool AutocompleteEditViewWin::IsCommandIdEnabled(int command_id) const {
 
 bool AutocompleteEditViewWin::GetAcceleratorForCommandId(
     int command_id,
-    views::Accelerator* accelerator) {
+    menus::Accelerator* accelerator) {
   return parent_view_->GetWidget()->GetAccelerator(command_id, accelerator);
 }
 
@@ -1182,7 +1192,7 @@ void AutocompleteEditViewWin::OnCopy() {
       else
         scw.WriteText(text);
       scw.WriteBookmark(text, url.spec());
-      scw.WriteHyperlink(EscapeForHTML(UTF16ToUTF8(text)), url.spec());
+      scw.WriteHyperlink(EscapeForHTML(text), url.spec());
       return;
     }
   }
@@ -1319,8 +1329,9 @@ void AutocompleteEditViewWin::OnKeyUp(TCHAR key,
   // To work around this, if the user hits ctrl+shift, we pass it to
   // DefWindowProc() while the edit is empty, which toggles the default reading
   // order; then we restore the user's input.
-  if (((key == VK_CONTROL) && (GetKeyState(VK_SHIFT) < 0)) ||
-      ((key == VK_SHIFT) && (GetKeyState(VK_CONTROL) < 0))) {
+  if (!(flags & KF_ALTDOWN) &&
+      (((key == VK_CONTROL) && (GetKeyState(VK_SHIFT) < 0)) ||
+       ((key == VK_SHIFT) && (GetKeyState(VK_CONTROL) < 0)))) {
     ScopedFreeze freeze(this, GetTextObjectModel());
 
     std::wstring saved_text(GetText());
@@ -1986,7 +1997,7 @@ LONG AutocompleteEditViewWin::ClipXCoordToVisibleText(
   // paragraph.
   bool ltr_text_in_ltr_layout = true;
   if ((pf2.wEffects & PFE_RTLPARA) ||
-      l10n_util::StringContainsStrongRTLChars(GetText())) {
+      base::i18n::StringContainsStrongRTLChars(GetText())) {
     ltr_text_in_ltr_layout = false;
   }
   const int length = GetTextLength();
@@ -2317,10 +2328,12 @@ void AutocompleteEditViewWin::StartDragIfNecessary(const CPoint& point) {
     drag_utils::SetURLAndDragImage(url, title, favicon, &data);
     data.SetURL(url, title);
     supported_modes |= DROPEFFECT_LINK;
-    UserMetrics::RecordAction(L"Omnibox_DragURL", model_->profile());
+    UserMetrics::RecordAction(UserMetricsAction("Omnibox_DragURL"),
+                              model_->profile());
   } else {
     supported_modes |= DROPEFFECT_MOVE;
-    UserMetrics::RecordAction(L"Omnibox_DragString", model_->profile());
+    UserMetrics::RecordAction(UserMetricsAction("Omnibox_DragString"),
+                              model_->profile());
   }
 
   data.SetString(GetSelectedText());
@@ -2407,10 +2420,10 @@ void AutocompleteEditViewWin::BuildContextMenu() {
   if (context_menu_contents_.get())
     return;
 
-  context_menu_contents_.reset(new views::SimpleMenuModel(this));
+  context_menu_contents_.reset(new menus::SimpleMenuModel(this));
   // Set up context menu.
   if (popup_window_mode_) {
-    context_menu_contents_->AddItemWithStringId(IDS_COPY, IDS_COPY);
+    context_menu_contents_->AddItemWithStringId(IDC_COPY, IDS_COPY);
   } else {
     context_menu_contents_->AddItemWithStringId(IDS_UNDO, IDS_UNDO);
     context_menu_contents_->AddSeparator();

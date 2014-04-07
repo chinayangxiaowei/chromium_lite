@@ -7,17 +7,18 @@
 #include <gtk/gtk.h>
 
 #include "app/app_paths.h"
-#include "app/gfx/font.h"
-#include "app/gfx/gtk_util.h"
 #include "app/l10n_util.h"
 #include "base/base_paths.h"
 #include "base/data_pack.h"
 #include "base/file_path.h"
 #include "base/file_util.h"
+#include "base/i18n/rtl.h"
 #include "base/logging.h"
 #include "base/path_service.h"
 #include "base/string_piece.h"
 #include "base/string_util.h"
+#include "gfx/font.h"
+#include "gfx/gtk_util.h"
 #include "third_party/skia/include/core/SkBitmap.h"
 
 namespace {
@@ -27,7 +28,7 @@ namespace {
 // memory.
 GdkPixbuf* LoadPixbuf(RefCountedStaticMemory* data, bool rtl_enabled) {
   ScopedGObject<GdkPixbufLoader>::Type loader(gdk_pixbuf_loader_new());
-  bool ok = gdk_pixbuf_loader_write(loader.get(),
+  bool ok = data && gdk_pixbuf_loader_write(loader.get(),
       reinterpret_cast<const guint8*>(data->front()), data->size(), NULL);
   if (!ok)
     return NULL;
@@ -40,8 +41,7 @@ GdkPixbuf* LoadPixbuf(RefCountedStaticMemory* data, bool rtl_enabled) {
   if (!pixbuf)
     return NULL;
 
-  if ((l10n_util::GetTextDirection() == l10n_util::RIGHT_TO_LEFT) &&
-      rtl_enabled) {
+  if (base::i18n::IsRTL() && rtl_enabled) {
     // |pixbuf| will get unreffed and destroyed (see below). The returned value
     // has ref count 1.
     return gdk_pixbuf_flip(pixbuf, TRUE);

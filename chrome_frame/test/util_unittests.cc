@@ -3,8 +3,8 @@
 // found in the LICENSE file.
 
 #include "base/file_version_info.h"
-#include "chrome_frame/test/chrome_frame_unittests.h"
 #include "chrome_frame/utils.h"
+#include "testing/gtest/include/gtest/gtest.h"
 
 const wchar_t kChannelName[] = L"-dev";
 const wchar_t kSuffix[] = L"-fix";
@@ -90,4 +90,22 @@ TEST(UtilTests, IsValidUrlScheme) {
     const Cases& test = test_cases[i];
     EXPECT_EQ(test.expected, IsValidUrlScheme(test.url, test.is_privileged));
   }
+}
+
+TEST(UtilTests, GuidToString) {
+  // {3C5E2125-35BA-48df-A841-5F669B9D69FC}
+  const GUID test_guid = { 0x3c5e2125, 0x35ba, 0x48df,
+      { 0xa8, 0x41, 0x5f, 0x66, 0x9b, 0x9d, 0x69, 0xfc } };
+
+  wchar_t compare[64] = {0};
+  ::StringFromGUID2(test_guid, compare, arraysize(compare));
+
+  std::wstring str_guid(GuidToString(test_guid));
+  EXPECT_EQ(0, str_guid.compare(compare));
+  EXPECT_EQ(static_cast<size_t>(lstrlenW(compare)), str_guid.length());
+}
+
+TEST(UtilTests, GetTempInternetFiles) {
+  FilePath path = GetIETemporaryFilesFolder();
+  EXPECT_FALSE(path.empty());
 }

@@ -32,7 +32,7 @@ PrintUI::PrintUI(TabContents* contents) : DOMUI(contents) {
       NewRunnableMethod(
           Singleton<ChromeURLDataManager>::get(),
           &ChromeURLDataManager::AddDataSource,
-          html_source));
+          make_scoped_refptr(html_source)));
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -46,6 +46,7 @@ PrintUIHTMLSource::PrintUIHTMLSource()
 }
 
 void PrintUIHTMLSource::StartDataRequest(const std::string& path,
+                                         bool is_off_the_record,
                                          int request_id) {
   // Setup a dictionary so that the html page could read the values.
   DictionaryValue localized_strings;

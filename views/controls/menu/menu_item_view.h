@@ -1,4 +1,4 @@
-// Copyright (c) 2006-2008 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -70,6 +70,10 @@ class MenuItemView : public View {
   explicit MenuItemView(MenuDelegate* delegate);
 
   virtual ~MenuItemView();
+
+  // Overridden from View:
+  virtual bool GetTooltipText(const gfx::Point& p, std::wstring* tooltip);
+  virtual bool GetAccessibleRole(AccessibilityTypes::Role* role);
 
   // Returns the preferred height of menu items. This is only valid when the
   // menu is about to be shown.
@@ -178,6 +182,9 @@ class MenuItemView : public View {
   // Returns true if the item is selected.
   bool IsSelected() const { return selected_; }
 
+  // Sets the |tooltip| for a menu item view with |item_id| identifier.
+  void SetTooltip(const std::wstring& tooltip, int item_id);
+
   // Sets the icon for the descendant identified by item_id.
   void SetIcon(const SkBitmap& icon, int item_id);
 
@@ -221,6 +228,10 @@ class MenuItemView : public View {
   // Returns the descendant with the specified command.
   MenuItemView* GetMenuItemByID(int id);
 
+  // Invoke if you remove/add children to the menu while it's showing. This
+  // recalculates the bounds.
+  void ChildrenChanged();
+
  protected:
   // Creates a MenuItemView. This is used by the various AddXXX methods.
   MenuItemView(MenuItemView* parent, int command, Type type);
@@ -255,8 +266,8 @@ class MenuItemView : public View {
   int GetDrawStringFlags();
 
   // If this menu item has no children a child is added showing it has no
-  // children. Otherwise AddEmtpyMenuIfNecessary is recursively invoked on
-  // child menu items that have children.
+  // children. Otherwise AddEmtpyMenus is recursively invoked on child menu
+  // items that have children.
   void AddEmptyMenus();
 
   // Undoes the work of AddEmptyMenus.
@@ -316,6 +327,9 @@ class MenuItemView : public View {
   bool has_mnemonics_;
 
   bool has_icons_;
+
+  // The tooltip to show on hover for this menu item.
+  std::wstring tooltip_;
 
   // X-coordinate of where the label starts.
   static int label_start_;

@@ -7,17 +7,30 @@
 #include <vector>
 
 #include "app/sql/connection.h"
+#include "app/sql/diagnostic_error_delegate.h"
 #include "app/sql/meta_table.h"
 #include "app/sql/statement.h"
 #include "app/sql/transaction.h"
 #include "base/basictypes.h"
 #include "base/file_path.h"
 #include "base/file_util.h"
-#include "base/string_util.h"
+#include "base/utf_string_conversions.h"
 #include "net/base/net_errors.h"
 #include "webkit/database/databases_table.h"
 #include "webkit/database/quota_table.h"
-#include "webkit/glue/webkit_glue.h"
+
+namespace {
+
+class HistogramUniquifier {
+ public:
+  static const char* name() { return "Sqlite.DatabaseTracker.Error"; }
+};
+
+sql::ErrorDelegate* GetErrorHandlerForTrackerDb() {
+  return new sql::DiagnosticErrorDelegate<HistogramUniquifier>();
+}
+
+}  // anon namespace
 
 namespace webkit_database {
 
@@ -25,24 +38,29 @@ const FilePath::CharType kDatabaseDirectoryName[] =
     FILE_PATH_LITERAL("databases");
 const FilePath::CharType kTrackerDatabaseFileName[] =
     FILE_PATH_LITERAL("Databases.db");
-const int kCurrentVersion = 2;
-const int kCompatibleVersion = 1;
-const int64 kDefaultQuota = 5 * 1024 * 1024;
-const int64 kDefaultExtensionQuota = 50 * 1024 * 1024;
-const char* kExtensionOriginIdentifierPrefix = "chrome-extension_";
+static const int kCurrentVersion = 2;
+static const int kCompatibleVersion = 1;
+static const char* kExtensionOriginIdentifierPrefix = "chrome-extension_";
 
 DatabaseTracker::DatabaseTracker(const FilePath& profile_path)
-    : initialized_(false),
-      db_dir_(profile_path.Append(FilePath(kDatabaseDirectoryName))),
+    : is_initialized_(false),
+      is_incognito_(profile_path.empty()),
+      db_dir_(is_incognito_ ?
+          FilePath() : profile_path.Append(kDatabaseDirectoryName)),
       db_(new sql::Connection()),
       databases_table_(NULL),
-      meta_table_(NULL) {
+      meta_table_(NULL),
+      default_quota_(5 * 1024 * 1024) {
 }
 
 DatabaseTracker::~DatabaseTracker() {
-  DCHECK(observers_.size() == 0);
   DCHECK(dbs_to_be_deleted_.empty());
   DCHECK(deletion_callbacks_.empty());
+}
+
+void DatabaseTracker::SetDefaultQuota(int64 quota) {
+  default_quota_ = quota;
+  ClearAllCachedOriginInfo();
 }
 
 void DatabaseTracker::DatabaseOpened(const string16& origin_identifier,
@@ -80,12 +98,20 @@ void DatabaseTracker::DatabaseModified(const string16& origin_identifier,
 
 void DatabaseTracker::DatabaseClosed(const string16& origin_identifier,
                                      const string16& database_name) {
+  if (database_connections_.IsEmpty()) {
+    DCHECK(!is_initialized_);
+    return;
+  }
   database_connections_.RemoveConnection(origin_identifier, database_name);
   if (!database_connections_.IsDatabaseOpened(origin_identifier, database_name))
     DeleteDatabaseIfNeeded(origin_identifier, database_name);
 }
 
 void DatabaseTracker::CloseDatabases(const DatabaseConnections& connections) {
+  if (database_connections_.IsEmpty()) {
+    DCHECK(!is_initialized_ || connections.IsEmpty());
+    return;
+  }
   std::vector<std::pair<string16, string16> > closed_dbs;
   database_connections_.RemoveConnections(connections, &closed_dbs);
   for (std::vector<std::pair<string16, string16> >::iterator it =
@@ -146,14 +172,17 @@ void DatabaseTracker::CloseTrackerDatabaseAndClearCaches() {
   databases_table_.reset(NULL);
   quota_table_.reset(NULL);
   db_->Close();
-  initialized_ = false;
+  is_initialized_ = false;
 }
 
 FilePath DatabaseTracker::GetFullDBFilePath(
     const string16& origin_identifier,
-    const string16& database_name) const {
+    const string16& database_name) {
   DCHECK(!origin_identifier.empty());
   DCHECK(!database_name.empty());
+  if (!LazyInit())
+    return FilePath();
+
   int64 id = databases_table_->GetDatabaseID(
       origin_identifier, database_name);
   if (id < 0)
@@ -190,14 +219,31 @@ bool DatabaseTracker::GetAllOriginsInfo(std::vector<OriginInfo>* origins_info) {
 
 void DatabaseTracker::SetOriginQuota(const string16& origin_identifier,
                                      int64 new_quota) {
+  if (!LazyInit())
+    return;
+
   if (quota_table_->SetOriginQuota(origin_identifier, new_quota) &&
       (origins_info_map_.find(origin_identifier) != origins_info_map_.end())) {
     origins_info_map_[origin_identifier].SetQuota(new_quota);
   }
 }
 
+void DatabaseTracker::SetOriginQuotaInMemory(const string16& origin_identifier,
+                                             int64 new_quota) {
+  DCHECK(new_quota >= 0);
+  in_memory_quotas_[origin_identifier] = new_quota;
+}
+
+void DatabaseTracker::ResetOriginQuotaInMemory(
+    const string16& origin_identifier) {
+  in_memory_quotas_.erase(origin_identifier);
+}
+
 bool DatabaseTracker::DeleteClosedDatabase(const string16& origin_identifier,
                                            const string16& database_name) {
+  if (!LazyInit())
+    return false;
+
   // Check if the database is opened by any renderer.
   if (database_connections_.IsDatabaseOpened(origin_identifier, database_name))
     return false;
@@ -221,6 +267,9 @@ bool DatabaseTracker::DeleteClosedDatabase(const string16& origin_identifier,
 }
 
 bool DatabaseTracker::DeleteOrigin(const string16& origin_identifier) {
+  if (!LazyInit())
+    return false;
+
   // Check if any database in this origin is opened by any renderer.
   if (database_connections_.IsOriginUsed(origin_identifier))
     return false;
@@ -250,7 +299,7 @@ bool DatabaseTracker::IsDatabaseScheduledForDeletion(
 }
 
 bool DatabaseTracker::LazyInit() {
-  if (!initialized_) {
+  if (!is_initialized_ && !is_incognito_) {
     DCHECK(!db_->is_open());
     DCHECK(!databases_table_.get());
     DCHECK(!quota_table_.get());
@@ -269,22 +318,24 @@ bool DatabaseTracker::LazyInit() {
         return false;
     }
 
+    db_->set_error_delegate(GetErrorHandlerForTrackerDb());
+
     databases_table_.reset(new DatabasesTable(db_.get()));
     quota_table_.reset(new QuotaTable(db_.get()));
     meta_table_.reset(new sql::MetaTable());
 
-    initialized_ =
+    is_initialized_ =
         file_util::CreateDirectory(db_dir_) &&
         (db_->is_open() || db_->Open(kTrackerDatabaseFullPath)) &&
         UpgradeToCurrentVersion();
-    if (!initialized_) {
+    if (!is_initialized_) {
       databases_table_.reset(NULL);
       quota_table_.reset(NULL);
       meta_table_.reset(NULL);
       db_->Close();
     }
   }
-  return initialized_;
+  return is_initialized_;
 }
 
 bool DatabaseTracker::UpgradeToCurrentVersion() {
@@ -350,15 +401,14 @@ DatabaseTracker::CachedOriginInfo* DatabaseTracker::GetCachedOriginInfo(
       origin_info.SetDatabaseDescription(it->database_name, it->description);
     }
 
-    int64 origin_quota = quota_table_->GetOriginQuota(origin_identifier);
-    if (origin_quota > 0) {
-      origin_info.SetQuota(origin_quota);
-    } else if (StartsWith(origin_identifier,
-                          ASCIIToUTF16(kExtensionOriginIdentifierPrefix),
-                          true)) {
-      origin_info.SetQuota(kDefaultExtensionQuota);
+    if (in_memory_quotas_.find(origin_identifier) != in_memory_quotas_.end()) {
+      origin_info.SetQuota(in_memory_quotas_[origin_identifier]);
     } else {
-      origin_info.SetQuota(kDefaultQuota);
+      int64 origin_quota = quota_table_->GetOriginQuota(origin_identifier);
+      if (origin_quota > 0)
+        origin_info.SetQuota(origin_quota);
+      else
+        origin_info.SetQuota(default_quota_);
     }
   }
 
@@ -366,7 +416,7 @@ DatabaseTracker::CachedOriginInfo* DatabaseTracker::GetCachedOriginInfo(
 }
 
 int64 DatabaseTracker::GetDBFileSize(const string16& origin_identifier,
-                                     const string16& database_name) const {
+                                     const string16& database_name) {
   FilePath db_file_name = GetFullDBFilePath(origin_identifier, database_name);
   int64 db_file_size = 0;
   if (!file_util::GetFileSize(db_file_name, &db_file_size))
@@ -401,6 +451,22 @@ void DatabaseTracker::ScheduleDatabaseForDeletion(
   dbs_to_be_deleted_[origin_identifier].insert(database_name);
   FOR_EACH_OBSERVER(Observer, observers_, OnDatabaseScheduledForDeletion(
       origin_identifier, database_name));
+}
+
+void DatabaseTracker::ScheduleDatabasesForDeletion(
+    const DatabaseSet& databases,
+    net::CompletionCallback* callback) {
+  DCHECK(!callback ||
+         deletion_callbacks_.find(callback) == deletion_callbacks_.end());
+  DCHECK(!databases.empty());
+  if (callback)
+    deletion_callbacks_[callback] = databases;
+  for (DatabaseSet::const_iterator ori = databases.begin();
+       ori != databases.end(); ++ori) {
+    for (std::set<string16>::const_iterator db = ori->second.begin();
+         db != ori->second.end(); ++db)
+      ScheduleDatabaseForDeletion(ori->first, *db);
+  }
 }
 
 int DatabaseTracker::DeleteDatabase(const string16& origin_identifier,
@@ -460,18 +526,42 @@ int DatabaseTracker::DeleteDataModifiedSince(
     }
   }
 
+  if (rv != net::OK)
+    return rv;
+
   if (!to_be_deleted.empty()) {
-    if (callback)
-      deletion_callbacks_[callback] = to_be_deleted;
-    for (DatabaseSet::iterator ori = to_be_deleted.begin();
-         ori != to_be_deleted.end(); ++ori) {
-      for (std::set<string16>::iterator db = ori->second.begin();
-           db != ori->second.end(); ++db)
-        ScheduleDatabaseForDeletion(ori->first, *db);
-    }
-    rv = net::ERR_IO_PENDING;
+    ScheduleDatabasesForDeletion(to_be_deleted, callback);
+    return net::ERR_IO_PENDING;
   }
-  return rv;
+  return net::OK;
+}
+
+int DatabaseTracker::DeleteDataForOrigin(const string16& origin,
+                                         net::CompletionCallback* callback) {
+  if (!LazyInit())
+    return net::ERR_FAILED;
+
+  DCHECK(!callback ||
+         deletion_callbacks_.find(callback) == deletion_callbacks_.end());
+  DatabaseSet to_be_deleted;
+
+  std::vector<DatabaseDetails> details;
+  if (!databases_table_->GetAllDatabaseDetailsForOrigin(origin, &details))
+    return net::ERR_FAILED;
+  for (std::vector<DatabaseDetails>::const_iterator db = details.begin();
+       db != details.end(); ++db) {
+    // Check if the database is opened by any renderer.
+    if (database_connections_.IsDatabaseOpened(origin, db->database_name))
+      to_be_deleted[origin].insert(db->database_name);
+    else
+      DeleteClosedDatabase(origin, db->database_name);
+  }
+
+  if (!to_be_deleted.empty()) {
+    ScheduleDatabasesForDeletion(to_be_deleted, callback);
+    return net::ERR_IO_PENDING;
+  }
+  return net::OK;
 }
 
 // static

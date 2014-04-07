@@ -10,7 +10,7 @@
 #include "base/tracked.h"
 #include "chrome/browser/in_process_webkit/dom_storage_area.h"
 #include "chrome/browser/in_process_webkit/webkit_context.h"
-#include "chrome/common/dom_storage_type.h"
+#include "chrome/common/dom_storage_common.h"
 #include "ipc/ipc_message.h"
 
 class DOMStorageContext;
@@ -42,6 +42,10 @@ class DOMStorageDispatcherHost
   // Only call from ResourceMessageFilter on the IO thread.
   bool OnMessageReceived(const IPC::Message& message, bool *msg_is_ok);
 
+  // Clones a session storage namespace and returns the cloned namespaces' id.
+  // Only call on the IO thread.
+  int64 CloneSessionStorage(int64 original_id);
+
   // Send a message to the renderer process associated with our
   // message_sender_ via the IO thread.  May be called from any thread.
   void Send(IPC::Message* message);
@@ -56,8 +60,6 @@ class DOMStorageDispatcherHost
   ~DOMStorageDispatcherHost();
 
   // Message Handlers.
-  void OnNamespaceId(DOMStorageType storage_type, IPC::Message* reply_msg);
-  void OnCloneNamespaceId(int64 namespace_id, IPC::Message* reply_msg);
   void OnStorageAreaId(int64 namespace_id, const string16& origin,
                        IPC::Message* reply_msg);
   void OnLength(int64 storage_area_id, IPC::Message* reply_msg);
@@ -68,8 +70,8 @@ class DOMStorageDispatcherHost
                  const string16& value, const GURL& url,
                  IPC::Message* reply_msg);
   void OnRemoveItem(int64 storage_area_id, const string16& key,
-                    const GURL& url);
-  void OnClear(int64 storage_area_id, const GURL& url);
+                    const GURL& url, IPC::Message* reply_msg);
+  void OnClear(int64 storage_area_id, const GURL& url, IPC::Message* reply_msg);
 
   // WebKit thread half of OnStorageAreaId
   void OnStorageAreaIdWebKit(

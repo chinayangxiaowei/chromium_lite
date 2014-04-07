@@ -134,8 +134,8 @@ class BrowserKeyEventsTest : public InProcessBrowserTest {
   void SendKey(base::KeyboardCode key, bool control, bool shift, bool alt) {
     gfx::NativeWindow window = NULL;
     ASSERT_NO_FATAL_FAILURE(GetNativeWindow(&window));
-    ui_controls::SendKeyPressNotifyWhenDone(window, key, control, shift, alt,
-                                            new MessageLoop::QuitTask());
+    EXPECT_TRUE(ui_controls::SendKeyPressNotifyWhenDone(
+        window, key, control, shift, alt, new MessageLoop::QuitTask()));
     ui_test_utils::RunMessageLoop();
   }
 
@@ -447,7 +447,14 @@ IN_PROC_BROWSER_TEST_F(BrowserKeyEventsTest, CtrlKeyEvents) {
   EXPECT_NO_FATAL_FAILURE(TestKeyEvent(tab_index, kTestCtrlEnter));
 }
 
-IN_PROC_BROWSER_TEST_F(BrowserKeyEventsTest, AccessKeys) {
+#if defined(OS_CHROMEOS)
+// See http://crbug.com/40037 for details.
+#define MAYBE_AccessKeys DISABLED_AccessKeys
+#else
+#define MAYBE_AccessKeys AccessKeys
+#endif
+
+IN_PROC_BROWSER_TEST_F(BrowserKeyEventsTest, MAYBE_AccessKeys) {
   static const KeyEventTestData kTestAltA = {
     base::VKEY_A, false, false, true,
     false, false, false, false, 4,
@@ -487,6 +494,7 @@ IN_PROC_BROWSER_TEST_F(BrowserKeyEventsTest, AccessKeys) {
   GURL url = server->TestServerPageW(kTestingPage);
   ui_test_utils::NavigateToURL(browser(), url);
 
+  ui_test_utils::RunAllPendingInMessageLoop();
   ASSERT_NO_FATAL_FAILURE(ClickOnView(VIEW_ID_TAB_CONTAINER));
   ASSERT_TRUE(IsViewFocused(VIEW_ID_TAB_CONTAINER_FOCUS_VIEW));
 
@@ -526,8 +534,8 @@ IN_PROC_BROWSER_TEST_F(BrowserKeyEventsTest, AccessKeys) {
   // Make sure no element is focused.
   EXPECT_NO_FATAL_FAILURE(CheckFocusedElement(tab_index, L""));
   EXPECT_NO_FATAL_FAILURE(TestKeyEvent(tab_index, kTestAlt1));
-#if defined(OS_LINUX)
-  // On Linux, alt-0..9 are assigned as tab selection accelerators, so they can
+#if defined(TOOLKIT_GTK)
+  // On GTK, alt-0..9 are assigned as tab selection accelerators, so they can
   // not be used as accesskeys.
   EXPECT_NO_FATAL_FAILURE(CheckFocusedElement(tab_index, L""));
 #elif defined(OS_WIN)
@@ -536,12 +544,6 @@ IN_PROC_BROWSER_TEST_F(BrowserKeyEventsTest, AccessKeys) {
 }
 
 IN_PROC_BROWSER_TEST_F(BrowserKeyEventsTest, ReservedAccelerators) {
-  static const KeyEventTestData kTestCtrlT = {
-    base::VKEY_T, true, false, false,
-    false, false, false, false, 1,
-    { "D 17 0 true false false" }
-  };
-
   HTTPTestServer* server = StartHTTPServer();
 
   GURL url = server->TestServerPageW(kTestingPage);
@@ -550,21 +552,99 @@ IN_PROC_BROWSER_TEST_F(BrowserKeyEventsTest, ReservedAccelerators) {
   ASSERT_NO_FATAL_FAILURE(ClickOnView(VIEW_ID_TAB_CONTAINER));
   ASSERT_TRUE(IsViewFocused(VIEW_ID_TAB_CONTAINER_FOCUS_VIEW));
 
-  int tab_index = browser()->selected_index();
+#if defined(OS_WIN)
+  static const KeyEventTestData kTestCtrlT = {
+    base::VKEY_T, true, false, false,
+    true, false, false, false, 1,
+    { "D 17 0 true false false" }
+  };
+
   ASSERT_EQ(1, browser()->tab_count());
   // Press Ctrl+T, which will open a new tab.
-  EXPECT_NO_FATAL_FAILURE(TestKeyEvent(tab_index, kTestCtrlT));
+  EXPECT_NO_FATAL_FAILURE(TestKeyEvent(0, kTestCtrlT));
   EXPECT_EQ(2, browser()->tab_count());
-  browser()->SelectNumberedTab(tab_index);
-  ASSERT_EQ(tab_index, browser()->selected_index());
+  browser()->SelectNumberedTab(0);
+  ASSERT_EQ(0, browser()->selected_index());
 
   int result_length;
-  ASSERT_NO_FATAL_FAILURE(GetResultLength(tab_index, &result_length));
+  ASSERT_NO_FATAL_FAILURE(GetResultLength(0, &result_length));
   EXPECT_EQ(1, result_length);
 
   // Reserved accelerators can't be suppressed.
-  ASSERT_NO_FATAL_FAILURE(SuppressAllEvents(tab_index, true));
+  ASSERT_NO_FATAL_FAILURE(SuppressAllEvents(0, true));
   // Press Ctrl+W, which will close the tab.
   ASSERT_NO_FATAL_FAILURE(SendKey(base::VKEY_W, true, false, false));
   EXPECT_EQ(1, browser()->tab_count());
+
+#elif defined(TOOLKIT_GTK)
+  // Ctrl-[a-z] are not treated as reserved accelerators on GTK.
+  static const KeyEventTestData kTestCtrlT = {
+    base::VKEY_T, true, false, false,
+    false, false, false, false, 2,
+    { "D 17 0 true false false",
+      "D 84 0 true false false" }
+  };
+
+  static const KeyEventTestData kTestCtrlPageDown = {
+    base::VKEY_NEXT, true, false, false,
+    true, false, false, false, 1,
+    { "D 17 0 true false false" }
+  };
+
+  static const KeyEventTestData kTestCtrlTab = {
+    base::VKEY_TAB, true, false, false,
+    true, false, false, false, 1,
+    { "D 17 0 true false false" }
+  };
+
+  static const KeyEventTestData kTestCtrlTBlocked = {
+    base::VKEY_T, true, false, false,
+    true, false, false, false, 4,
+    { "D 17 0 true false false",
+      "D 84 0 true false false",
+      "U 84 0 true false false",
+      "U 17 0 true false false" }
+  };
+
+  static const KeyEventTestData kTestCtrlWBlocked = {
+    base::VKEY_W, true, false, false,
+    true, false, false, false, 4,
+    { "D 17 0 true false false",
+      "D 87 0 true false false",
+      "U 87 0 true false false",
+      "U 17 0 true false false" }
+  };
+
+  ASSERT_EQ(1, browser()->tab_count());
+
+  // Ctrl+T should be blockable.
+  EXPECT_NO_FATAL_FAILURE(TestKeyEvent(0, kTestCtrlTBlocked));
+  ASSERT_EQ(1, browser()->tab_count());
+
+  EXPECT_NO_FATAL_FAILURE(TestKeyEvent(0, kTestCtrlT));
+  ASSERT_EQ(2, browser()->tab_count());
+  ASSERT_EQ(1, browser()->selected_index());
+  browser()->SelectNumberedTab(0);
+  ASSERT_EQ(0, browser()->selected_index());
+
+  // Ctrl+PageDown and Ctrl+Tab switches to the next tab.
+  EXPECT_NO_FATAL_FAILURE(TestKeyEvent(0, kTestCtrlPageDown));
+  ASSERT_EQ(1, browser()->selected_index());
+
+  browser()->SelectNumberedTab(0);
+  ASSERT_EQ(0, browser()->selected_index());
+  EXPECT_NO_FATAL_FAILURE(TestKeyEvent(0, kTestCtrlTab));
+  ASSERT_EQ(1, browser()->selected_index());
+
+  // Ctrl+W should be blockable.
+  browser()->SelectNumberedTab(0);
+  ASSERT_EQ(0, browser()->selected_index());
+  EXPECT_NO_FATAL_FAILURE(TestKeyEvent(0, kTestCtrlWBlocked));
+  ASSERT_EQ(2, browser()->tab_count());
+
+  // Ctrl+F4 to close the tab.
+  ASSERT_NO_FATAL_FAILURE(SuppressAllEvents(0, true));
+  ASSERT_NO_FATAL_FAILURE(SendKey(base::VKEY_F4, true, false, false));
+  ASSERT_EQ(1, browser()->tab_count());
+#endif
 }

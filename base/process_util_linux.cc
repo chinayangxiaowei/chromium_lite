@@ -408,7 +408,7 @@ static int GetProcessCPU(pid_t pid) {
   return total_cpu;
 }
 
-int ProcessMetrics::GetCPUUsage() {
+double ProcessMetrics::GetCPUUsage() {
   // This queries the /proc-specific scaling factor which is
   // conceptually the system hertz.  To dump this value on another
   // system, try
@@ -513,63 +513,60 @@ void OnNoMemory() {
 }  // namespace
 
 extern "C" {
+#if !defined(USE_TCMALLOC)
 
-#if defined(LINUX_USE_TCMALLOC)
+extern "C" {
+void* __libc_malloc(size_t size);
+void* __libc_realloc(void* ptr, size_t size);
+void* __libc_calloc(size_t nmemb, size_t size);
+void* __libc_valloc(size_t size);
+void* __libc_pvalloc(size_t size);
+void* __libc_memalign(size_t alignment, size_t size);
+}  // extern "C"
 
-int tc_set_new_mode(int mode);
+// Overriding the system memory allocation functions:
+//
+// For security reasons, we want malloc failures to be fatal. Too much code
+// doesn't check for a NULL return value from malloc and unconditionally uses
+// the resulting pointer. If the first offset that they try to access is
+// attacker controlled, then the attacker can direct the code to access any
+// part of memory.
+//
+// Thus, we define all the standard malloc functions here and mark them as
+// visibility 'default'. This means that they replace the malloc functions for
+// all Chromium code and also for all code in shared libraries. There are tests
+// for this in process_util_unittest.cc.
+//
+// If we are using tcmalloc, then the problem is moot since tcmalloc handles
+// this for us. Thus this code is in a !defined(USE_TCMALLOC) block.
+//
+// We call the real libc functions in this code by using __libc_malloc etc.
+// Previously we tried using dlsym(RTLD_NEXT, ...) but that failed depending on
+// the link order. Since ld.so needs calloc during symbol resolution, it
+// defines its own versions of several of these functions in dl-minimal.c.
+// Depending on the runtime library order, dlsym ended up giving us those
+// functions and bad things happened. See crbug.com/31809
+//
+// This means that any code which calls __libc_* gets the raw libc versions of
+// these functions.
 
-#else  // defined(LINUX_USE_TCMALLOC)
-
-typedef void* (*malloc_type)(size_t size);
-typedef void* (*valloc_type)(size_t size);
-typedef void* (*pvalloc_type)(size_t size);
-
-typedef void* (*calloc_type)(size_t nmemb, size_t size);
-typedef void* (*realloc_type)(void *ptr, size_t size);
-typedef void* (*memalign_type)(size_t boundary, size_t size);
-
-typedef int (*posix_memalign_type)(void **memptr, size_t alignment,
-                                   size_t size);
-
-// Override the __libc_FOO name too.
 #define DIE_ON_OOM_1(function_name) \
-  _DIE_ON_OOM_1(function_name##_type, function_name) \
-  _DIE_ON_OOM_1(function_name##_type, __libc_##function_name)
+  void* function_name(size_t) __attribute__ ((visibility("default"))); \
+  \
+  void* function_name(size_t size) { \
+    void* ret = __libc_##function_name(size); \
+    if (ret == NULL && size != 0) \
+      OnNoMemorySize(size); \
+    return ret; \
+  }
 
 #define DIE_ON_OOM_2(function_name, arg1_type) \
-  _DIE_ON_OOM_2(function_name##_type, function_name, arg1_type) \
-  _DIE_ON_OOM_2(function_name##_type, __libc_##function_name, arg1_type)
-
-// posix_memalign doesn't have a __libc_ variant.
-#define DIE_ON_OOM_3INT(function_name) \
-  _DIE_ON_OOM_3INT(function_name##_type, function_name)
-
-#define _DIE_ON_OOM_1(function_type, function_name) \
-  void* function_name(size_t size) { \
-    static function_type original_function = \
-        reinterpret_cast<function_type>(dlsym(RTLD_NEXT, #function_name)); \
-    void* ret = original_function(size); \
-    if (ret == NULL && size != 0) \
-      OnNoMemorySize(size); \
-    return ret; \
-  }
-
-#define _DIE_ON_OOM_2(function_type, function_name, arg1_type) \
+  void* function_name(arg1_type, size_t) \
+      __attribute__ ((visibility("default"))); \
+  \
   void* function_name(arg1_type arg1, size_t size) { \
-    static function_type original_function = \
-        reinterpret_cast<function_type>(dlsym(RTLD_NEXT, #function_name)); \
-    void* ret = original_function(arg1, size); \
+    void* ret = __libc_##function_name(arg1, size); \
     if (ret == NULL && size != 0) \
-      OnNoMemorySize(size); \
-    return ret; \
-  }
-
-#define _DIE_ON_OOM_3INT(function_type, function_name) \
-  int function_name(void** ptr, size_t alignment, size_t size) { \
-    static function_type original_function = \
-        reinterpret_cast<function_type>(dlsym(RTLD_NEXT, #function_name)); \
-    int ret = original_function(ptr, alignment, size); \
-    if (ret == ENOMEM) \
       OnNoMemorySize(size); \
     return ret; \
   }
@@ -582,10 +579,17 @@ DIE_ON_OOM_2(calloc, size_t)
 DIE_ON_OOM_2(realloc, void*)
 DIE_ON_OOM_2(memalign, size_t)
 
-DIE_ON_OOM_3INT(posix_memalign)
+// posix_memalign has a unique signature and doesn't have a __libc_ variant.
+int posix_memalign(void** ptr, size_t alignment, size_t size)
+    __attribute__ ((visibility("default")));
 
-#endif  // defined(LINUX_USE_TCMALLOC)
+int posix_memalign(void** ptr, size_t alignment, size_t size) {
+  // This will use the safe version of memalign, above.
+  *ptr = memalign(alignment, size);
+  return 0;
+}
 
+#endif  // !defined(USE_TCMALLOC)
 }  // extern C
 
 void EnableTerminationOnOutOfMemory() {
@@ -593,10 +597,22 @@ void EnableTerminationOnOutOfMemory() {
   std::set_new_handler(&OnNoMemory);
   // If we're using glibc's allocator, the above functions will override
   // malloc and friends and make them die on out of memory.
-#if defined(LINUX_USE_TCMALLOC)
-  // For tcmalloc, we just need to tell it to behave like new.
-  tc_set_new_mode(1);
-#endif
+}
+
+bool AdjustOOMScore(ProcessId process, int score) {
+  if (score < 0 || score > 15)
+    return false;
+
+  FilePath oom_adj("/proc");
+  oom_adj = oom_adj.Append(Int64ToString(process));
+  oom_adj = oom_adj.AppendASCII("oom_adj");
+
+  if (!file_util::PathExists(oom_adj))
+    return false;
+
+  std::string score_str = IntToString(score);
+  return (static_cast<int>(score_str.length()) ==
+          file_util::WriteFile(oom_adj, score_str.c_str(), score_str.length()));
 }
 
 }  // namespace base

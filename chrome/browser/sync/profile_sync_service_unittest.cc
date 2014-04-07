@@ -6,111 +6,49 @@
 #include <vector>
 
 #include "testing/gtest/include/gtest/gtest.h"
-
-#include "base/command_line.h"
 #include "base/message_loop.h"
+#include "base/scoped_ptr.h"
 #include "base/string_util.h"
 #include "base/string16.h"
 #include "chrome/browser/bookmarks/bookmark_model.h"
 #include "chrome/browser/chrome_thread.h"
 #include "chrome/browser/profile.h"
 #include "chrome/browser/sync/engine/syncapi.h"
+#include "chrome/browser/sync/glue/change_processor.h"
+#include "chrome/browser/sync/glue/bookmark_change_processor.h"
+#include "chrome/browser/sync/glue/bookmark_data_type_controller.h"
+#include "chrome/browser/sync/glue/bookmark_model_associator.h"
+#include "chrome/browser/sync/glue/data_type_controller.h"
 #include "chrome/browser/sync/glue/model_associator.h"
 #include "chrome/browser/sync/glue/sync_backend_host.h"
-#include "chrome/browser/sync/profile_sync_service.h"
+#include "chrome/browser/sync/glue/sync_backend_host_mock.h"
+#include "chrome/browser/sync/notification_method.h"
+#include "chrome/browser/sync/profile_sync_factory.h"
+#include "chrome/browser/sync/profile_sync_factory_mock.h"
+#include "chrome/browser/sync/test_profile_sync_service.h"
+#include "chrome/browser/sync/profile_sync_test_util.h"
 #include "chrome/common/chrome_switches.h"
+#include "chrome/common/pref_names.h"
 #include "chrome/test/testing_profile.h"
-#include "chrome/test/sync/test_http_bridge_factory.h"
+#include "testing/gmock/include/gmock/gmock.h"
 
 using std::vector;
-using browser_sync::ChangeProcessingInterface;
+using browser_sync::AssociatorInterface;
+using browser_sync::BookmarkChangeProcessor;
+using browser_sync::BookmarkModelAssociator;
+using browser_sync::ChangeProcessor;
+using browser_sync::DataTypeController;
 using browser_sync::ModelAssociator;
 using browser_sync::SyncBackendHost;
-using browser_sync::TestHttpBridgeFactory;
+using browser_sync::SyncBackendHostMock;
+using testing::_;
+using testing::Return;
 
-class TestModelAssociator : public ModelAssociator {
+class TestBookmarkModelAssociator :
+    public TestModelAssociator<BookmarkModelAssociator> {
  public:
-  explicit TestModelAssociator(ProfileSyncService* service)
-      : ModelAssociator(service) {
-  }
-
-  virtual bool GetSyncIdForTaggedNode(const std::string& tag, int64* sync_id) {
-    std::wstring tag_wide;
-    if (!UTF8ToWide(tag.c_str(), tag.length(), &tag_wide)) {
-      NOTREACHED() << "Unable to convert UTF8 to wide for string: " << tag;
-      return false;
-    }
-
-    sync_api::WriteTransaction trans(
-        sync_service()->backend()->GetUserShareHandle());
-    sync_api::ReadNode root(&trans);
-    root.InitByRootLookup();
-
-    // First, try to find a node with the title among the root's children.
-    // This will be the case if we are testing model persistence, and
-    // are reloading a sync repository created earlier in the test.
-    int64 last_child_id = sync_api::kInvalidId;
-    for (int64 id = root.GetFirstChildId(); id != sync_api::kInvalidId; /***/) {
-      sync_api::ReadNode child(&trans);
-      child.InitByIdLookup(id);
-      last_child_id = id;
-      if (tag_wide == child.GetTitle()) {
-        *sync_id = id;
-        return true;
-      }
-      id = child.GetSuccessorId();
-    }
-
-    sync_api::ReadNode predecessor_node(&trans);
-    sync_api::ReadNode* predecessor = NULL;
-    if (last_child_id != sync_api::kInvalidId) {
-      predecessor_node.InitByIdLookup(last_child_id);
-      predecessor = &predecessor_node;
-    }
-    sync_api::WriteNode node(&trans);
-    // Create new fake tagged nodes at the end of the ordering.
-    node.InitByCreation(root, predecessor);
-    node.SetIsFolder(true);
-    node.SetTitle(tag_wide);
-    node.SetExternalId(0);
-    *sync_id = node.GetId();
-    return true;
-  }
-
- private:
-  ~TestModelAssociator() {}
-};
-
-class TestProfileSyncService : public ProfileSyncService {
- public:
-  explicit TestProfileSyncService(Profile* profile)
-      : ProfileSyncService(profile) {
-    RegisterPreferences();
-    SetSyncSetupCompleted();
-  }
-  virtual ~TestProfileSyncService() {
-  }
-
-  virtual void InitializeBackend() {
-    set_model_associator(new TestModelAssociator(this));
-    TestHttpBridgeFactory* factory = new TestHttpBridgeFactory();
-    TestHttpBridgeFactory* factory2 = new TestHttpBridgeFactory();
-    backend()->InitializeForTestMode(L"testuser", factory, factory2);
-    // The SyncBackend posts a task to the current loop when initialization
-    // completes.
-    MessageLoop::current()->Run();
-    // Initialization is synchronous for test mode, so we should be good to go.
-    DCHECK(sync_initialized());
-  }
-
-  virtual void OnBackendInitialized() {
-    ProfileSyncService::OnBackendInitialized();
-    MessageLoop::current()->Quit();
-  }
-
-  virtual bool MergeAndSyncAcceptanceNeeded() {
-    // Never show the dialog.
-    return false;
+  explicit TestBookmarkModelAssociator(ProfileSyncService* service)
+      : TestModelAssociator<BookmarkModelAssociator>(service, service) {
   }
 };
 
@@ -135,12 +73,13 @@ class FakeServerChange {
     EXPECT_TRUE(parent.InitByIdLookup(parent_id));
     sync_api::WriteNode node(trans_);
     if (predecessor_id == 0) {
-      EXPECT_TRUE(node.InitByCreation(parent, NULL));
+      EXPECT_TRUE(node.InitByCreation(syncable::BOOKMARKS, parent, NULL));
     } else {
       sync_api::ReadNode predecessor(trans_);
       EXPECT_TRUE(predecessor.InitByIdLookup(predecessor_id));
       EXPECT_EQ(predecessor.GetParentId(), parent.GetId());
-      EXPECT_TRUE(node.InitByCreation(parent, &predecessor));
+      EXPECT_TRUE(node.InitByCreation(syncable::BOOKMARKS, parent,
+                                      &predecessor));
     }
     EXPECT_EQ(node.GetPredecessorId(), predecessor_id);
     EXPECT_EQ(node.GetParentId(), parent_id);
@@ -228,7 +167,7 @@ class FakeServerChange {
   }
 
   // Pass the fake change list to |service|.
-  void ApplyPendingChanges(browser_sync::ChangeProcessingInterface* processor) {
+  void ApplyPendingChanges(browser_sync::ChangeProcessor* processor) {
     processor->ApplyChangesFromSyncModel(trans_,
         changes_.size() ? &changes_[0] : NULL, changes_.size());
   }
@@ -266,7 +205,9 @@ class ProfileSyncServiceTest : public testing::Test {
   ProfileSyncServiceTest()
       : ui_thread_(ChromeThread::UI, &message_loop_),
         file_thread_(ChromeThread::FILE, &message_loop_),
-        model_(NULL) {
+        model_(NULL),
+        model_associator_(NULL),
+        change_processor_(NULL) {
     profile_.reset(new TestingProfile());
     profile_->set_has_history_service(true);
   }
@@ -279,19 +220,34 @@ class ProfileSyncServiceTest : public testing::Test {
     MessageLoop::current()->RunAllPending();
   }
 
-  ModelAssociator* associator() {
-    DCHECK(service_.get());
-    return service_->model_associator_;
+  BookmarkModelAssociator* associator() {
+    return model_associator_;
   }
 
-  ChangeProcessingInterface* change_processor() {
-    DCHECK(service_.get());
-    return service_->change_processor_.get();
+  BookmarkChangeProcessor* change_processor() {
+    return change_processor_;
   }
 
   void StartSyncService() {
     if (!service_.get()) {
-      service_.reset(new TestProfileSyncService(profile_.get()));
+      service_.reset(new TestProfileSyncService(&factory_,
+                                                profile_.get(),
+                                                false));
+
+      // Register the bookmark data type.
+      model_associator_ = new TestBookmarkModelAssociator(service_.get());
+      change_processor_ = new BookmarkChangeProcessor(model_associator_,
+                                                      service_.get());
+      EXPECT_CALL(factory_, CreateBookmarkSyncComponents(_, _)).
+          WillOnce(Return(ProfileSyncFactory::SyncComponents(
+              model_associator_, change_processor_)));
+      EXPECT_CALL(factory_, CreateDataTypeManager(_, _)).
+          WillOnce(MakeDataTypeManager(&backend_mock_));
+
+      service_->RegisterDataTypeController(
+          new browser_sync::BookmarkDataTypeController(&factory_,
+                                                       profile_.get(),
+                                                       service_.get()));
       service_->Initialize();
     }
     // The service may have already started sync automatically if it's already
@@ -299,6 +255,7 @@ class ProfileSyncServiceTest : public testing::Test {
     if (!service_->HasSyncSetupCompleted())
       service_->EnableForUser();
   }
+
   void StopSyncService(SaveOption save) {
     if (save == DONT_SAVE_TO_STORAGE)
       service_->DisableForUser();
@@ -322,12 +279,12 @@ class ProfileSyncServiceTest : public testing::Test {
   void ExpectSyncerNodeMatching(sync_api::BaseTransaction* trans,
                                 const BookmarkNode* bnode) {
     sync_api::ReadNode gnode(trans);
-    EXPECT_TRUE(associator()->InitSyncNodeFromBookmarkId(bnode->id(), &gnode));
+    EXPECT_TRUE(associator()->InitSyncNodeFromChromeId(bnode->id(), &gnode));
     // Non-root node titles and parents must match.
     if (bnode != model_->GetBookmarkBarNode() &&
         bnode != model_->other_node()) {
       EXPECT_EQ(bnode->GetTitle(), gnode.GetTitle());
-      EXPECT_EQ(associator()->GetBookmarkNodeFromSyncId(gnode.GetParentId()),
+      EXPECT_EQ(associator()->GetChromeNodeFromSyncId(gnode.GetParentId()),
         bnode->GetParent());
     }
     EXPECT_EQ(bnode->is_folder(), gnode.GetIsFolder());
@@ -342,8 +299,8 @@ class ProfileSyncServiceTest : public testing::Test {
       const BookmarkNode* bprev =
           bnode->GetParent()->GetChild(browser_index - 1);
       sync_api::ReadNode gprev(trans);
-      ASSERT_TRUE(associator()->InitSyncNodeFromBookmarkId(bprev->id(),
-                                                           &gprev));
+      ASSERT_TRUE(associator()->InitSyncNodeFromChromeId(bprev->id(),
+                                                         &gprev));
       EXPECT_EQ(gnode.GetPredecessorId(), gprev.GetId());
       EXPECT_EQ(gnode.GetParentId(), gprev.GetParentId());
     }
@@ -353,8 +310,8 @@ class ProfileSyncServiceTest : public testing::Test {
       const BookmarkNode* bnext =
           bnode->GetParent()->GetChild(browser_index + 1);
       sync_api::ReadNode gnext(trans);
-      ASSERT_TRUE(associator()->InitSyncNodeFromBookmarkId(bnext->id(),
-                                                           &gnext));
+      ASSERT_TRUE(associator()->InitSyncNodeFromChromeId(bnext->id(),
+                                                         &gnext));
       EXPECT_EQ(gnode.GetSuccessorId(), gnext.GetId());
       EXPECT_EQ(gnode.GetParentId(), gnext.GetParentId());
     }
@@ -372,50 +329,50 @@ class ProfileSyncServiceTest : public testing::Test {
                                  int64 sync_id) {
     EXPECT_TRUE(sync_id);
     const BookmarkNode* bnode =
-        associator()->GetBookmarkNodeFromSyncId(sync_id);
+        associator()->GetChromeNodeFromSyncId(sync_id);
     ASSERT_TRUE(bnode);
-    int64 id = associator()->GetSyncIdFromBookmarkId(bnode->id());
+    int64 id = associator()->GetSyncIdFromChromeId(bnode->id());
     EXPECT_EQ(id, sync_id);
     ExpectSyncerNodeMatching(trans, bnode);
   }
 
   void ExpectBrowserNodeUnknown(int64 sync_id) {
-    EXPECT_FALSE(associator()->GetBookmarkNodeFromSyncId(sync_id));
+    EXPECT_FALSE(associator()->GetChromeNodeFromSyncId(sync_id));
   }
 
   void ExpectBrowserNodeKnown(int64 sync_id) {
-    EXPECT_TRUE(associator()->GetBookmarkNodeFromSyncId(sync_id));
+    EXPECT_TRUE(associator()->GetChromeNodeFromSyncId(sync_id));
   }
 
   void ExpectSyncerNodeKnown(const BookmarkNode* node) {
-    int64 sync_id = associator()->GetSyncIdFromBookmarkId(node->id());
+    int64 sync_id = associator()->GetSyncIdFromChromeId(node->id());
     EXPECT_NE(sync_id, sync_api::kInvalidId);
   }
 
   void ExpectSyncerNodeUnknown(const BookmarkNode* node) {
-    int64 sync_id = associator()->GetSyncIdFromBookmarkId(node->id());
+    int64 sync_id = associator()->GetSyncIdFromChromeId(node->id());
     EXPECT_EQ(sync_id, sync_api::kInvalidId);
   }
 
   void ExpectBrowserNodeTitle(int64 sync_id, const std::wstring& title) {
     const BookmarkNode* bnode =
-        associator()->GetBookmarkNodeFromSyncId(sync_id);
+        associator()->GetChromeNodeFromSyncId(sync_id);
     ASSERT_TRUE(bnode);
     EXPECT_EQ(bnode->GetTitle(), title);
   }
 
   void ExpectBrowserNodeURL(int64 sync_id, const std::string& url) {
     const BookmarkNode* bnode =
-        associator()->GetBookmarkNodeFromSyncId(sync_id);
+        associator()->GetChromeNodeFromSyncId(sync_id);
     ASSERT_TRUE(bnode);
     EXPECT_EQ(GURL(url), bnode->GetURL());
   }
 
   void ExpectBrowserNodeParent(int64 sync_id, int64 parent_sync_id) {
-    const BookmarkNode* node = associator()->GetBookmarkNodeFromSyncId(sync_id);
+    const BookmarkNode* node = associator()->GetChromeNodeFromSyncId(sync_id);
     ASSERT_TRUE(node);
     const BookmarkNode* parent =
-        associator()->GetBookmarkNodeFromSyncId(parent_sync_id);
+        associator()->GetChromeNodeFromSyncId(parent_sync_id);
     EXPECT_TRUE(parent);
     EXPECT_EQ(node->GetParent(), parent);
   }
@@ -447,11 +404,11 @@ class ProfileSyncServiceTest : public testing::Test {
   }
 
   int64 other_bookmarks_id() {
-    return associator()->GetSyncIdFromBookmarkId(model_->other_node()->id());
+    return associator()->GetSyncIdFromChromeId(model_->other_node()->id());
   }
 
   int64 bookmark_bar_id() {
-    return associator()->GetSyncIdFromBookmarkId(
+    return associator()->GetSyncIdFromChromeId(
         model_->GetBookmarkBarNode()->id());
   }
 
@@ -468,9 +425,13 @@ class ProfileSyncServiceTest : public testing::Test {
   ChromeThread ui_thread_;
   ChromeThread file_thread_;
 
-  scoped_ptr<ProfileSyncService> service_;
+  scoped_ptr<TestProfileSyncService> service_;
   scoped_ptr<TestingProfile> profile_;
+  ProfileSyncFactoryMock factory_;
+  SyncBackendHostMock backend_mock_;
   BookmarkModel* model_;
+  TestBookmarkModelAssociator* model_associator_;
+  BookmarkChangeProcessor* change_processor_;
 };
 
 TEST_F(ProfileSyncServiceTest, InitialState) {
@@ -481,6 +442,19 @@ TEST_F(ProfileSyncServiceTest, InitialState) {
   EXPECT_TRUE(bookmark_bar_id());
 
   ExpectModelMatch();
+}
+
+TEST_F(ProfileSyncServiceTest, AbortedByShutdown) {
+  service_.reset(new TestProfileSyncService(&factory_, profile_.get(), false));
+  EXPECT_CALL(factory_, CreateDataTypeManager(_, _)).
+      WillOnce(MakeDataTypeManager(&backend_mock_));
+  EXPECT_CALL(factory_, CreateBookmarkSyncComponents(_, _)).Times(0);
+  service_->RegisterDataTypeController(
+      new browser_sync::BookmarkDataTypeController(&factory_,
+                                                   profile_.get(),
+                                                   service_.get()));
+  service_->Initialize();
+  service_.reset();
 }
 
 TEST_F(ProfileSyncServiceTest, BookmarkModelOperations) {
@@ -517,6 +491,8 @@ TEST_F(ProfileSyncServiceTest, BookmarkModelOperations) {
   ExpectModelMatch();
   model_->SetTitle(folder, L"who's nested now?");
   ExpectModelMatch();
+  model_->Copy(url2, model_->GetBookmarkBarNode(), 0);
+  ExpectModelMatch();
 
   // Test deletion.
   // Delete a single item.
@@ -528,8 +504,7 @@ TEST_F(ProfileSyncServiceTest, BookmarkModelOperations) {
   ExpectModelMatch();
 }
 
-// TODO(ncarter): fix free memory access error, refer to http://crbug.com/27631
-TEST_F(ProfileSyncServiceTest, DISABLED_ServerChangeProcessing) {
+TEST_F(ProfileSyncServiceTest, ServerChangeProcessing) {
   LoadBookmarkModel(DELETE_EXISTING_STORAGE, DONT_SAVE_TO_STORAGE);
   StartSyncService();
 
@@ -728,6 +703,7 @@ TEST_F(ProfileSyncServiceTest, DISABLED_ServerChangeWithInvalidURL) {
   ExpectModelMatch();
 }
 
+
 // Test strings that might pose a problem if the titles ever became used as
 // file names in the sync backend.
 TEST_F(ProfileSyncServiceTest, CornerCaseNames) {
@@ -819,8 +795,8 @@ TEST_F(ProfileSyncServiceTest, UnrecoverableErrorSuspendsService) {
   {
     sync_api::WriteTransaction trans(service_->backend_->GetUserShareHandle());
     sync_api::WriteNode sync_node(&trans);
-    EXPECT_TRUE(associator()->InitSyncNodeFromBookmarkId(node->id(),
-                                                         &sync_node));
+    EXPECT_TRUE(associator()->InitSyncNodeFromChromeId(node->id(),
+                                                       &sync_node));
     sync_node.Remove();
   }
   // The models don't match at this point, but the ProfileSyncService
@@ -829,21 +805,38 @@ TEST_F(ProfileSyncServiceTest, UnrecoverableErrorSuspendsService) {
   EXPECT_TRUE(service_->ShouldPushChanges());
 
   // Add a child to the inconsistent node.  This should cause detection of the
-  // problem.
-  const BookmarkNode* nested = model_->AddGroup(node, 0, L"nested");
+  // problem and the syncer should stop processing changes.
+  model_->AddGroup(node, 0, L"nested");
   EXPECT_FALSE(service_->ShouldPushChanges());
-  ExpectSyncerNodeUnknown(nested);
 
   // Try to add a node under a totally different parent.  This should also
   // fail -- the ProfileSyncService should stop processing changes after
   // encountering a consistency violation.
-  const BookmarkNode* unrelated = model_->AddGroup(
-      model_->GetBookmarkBarNode(), 0, L"unrelated");
+  model_->AddGroup(model_->GetBookmarkBarNode(), 0, L"unrelated");
   EXPECT_FALSE(service_->ShouldPushChanges());
-  ExpectSyncerNodeUnknown(unrelated);
 
   // TODO(ncarter): We ought to test the ProfileSyncService state machine
   // directly here once that's formalized and exposed.
+}
+
+// See what happens if we run model association when there are two exact URL
+// duplicate bookmarks.  The BookmarkModelAssociator should not fall over when
+// this happens.
+TEST_F(ProfileSyncServiceTest, MergeDuplicates) {
+  LoadBookmarkModel(DELETE_EXISTING_STORAGE, SAVE_TO_STORAGE);
+  StartSyncService();
+
+  model_->AddURL(model_->other_node(), 0, L"Dup", GURL("http://dup.com/"));
+  model_->AddURL(model_->other_node(), 0, L"Dup", GURL("http://dup.com/"));
+
+  EXPECT_EQ(2, model_->other_node()->GetChildCount());
+
+  // Restart the sync service to trigger model association.
+  StopSyncService(SAVE_TO_STORAGE);
+  StartSyncService();
+
+  EXPECT_EQ(2, model_->other_node()->GetChildCount());
+  ExpectModelMatch();
 }
 
 struct TestData {
@@ -923,7 +916,7 @@ static TestData kF2Children[] = {
   { L"f2u1", "http://www.f2u1.com/" },
 };
 
-static TestData kOtherBookmarksChildren[] = {
+static TestData kOtherBookmarkChildren[] = {
   { L"f3", NULL },
   { L"u4", "http://www.u4.com/" },
   { L"u3", "http://www.u3.com/" },
@@ -1003,8 +996,8 @@ void ProfileSyncServiceTestWithData::WriteTestDataToBookmarkModel() {
 
   const BookmarkNode* other_bookmarks_node = model_->other_node();
   PopulateFromTestData(other_bookmarks_node,
-                       kOtherBookmarksChildren,
-                       arraysize(kOtherBookmarksChildren));
+                       kOtherBookmarkChildren,
+                       arraysize(kOtherBookmarkChildren));
 
   ASSERT_GE(other_bookmarks_node->GetChildCount(), 6);
   const BookmarkNode* f3_node = other_bookmarks_node->GetChild(0);
@@ -1033,8 +1026,8 @@ void ProfileSyncServiceTestWithData::ExpectBookmarkModelMatchesTestData() {
 
   const BookmarkNode* other_bookmarks_node = model_->other_node();
   CompareWithTestData(other_bookmarks_node,
-                      kOtherBookmarksChildren,
-                      arraysize(kOtherBookmarksChildren));
+                      kOtherBookmarkChildren,
+                      arraysize(kOtherBookmarkChildren));
 
   ASSERT_GE(other_bookmarks_node->GetChildCount(), 6);
   const BookmarkNode* f3_node = other_bookmarks_node->GetChild(0);
@@ -1304,4 +1297,76 @@ TEST_F(ProfileSyncServiceTestWithData, RecoverAfterDeletingSyncDataDirectory) {
   // is sidestepped.
   ExpectBookmarkModelMatchesTestData();
   ExpectModelMatch();
+}
+
+#if defined(OS_MACOSX)
+// TODO(dantasse) This test fails on the mac. See http://crbug.com/33443
+#define MAYBE_TestStartupWithOldSyncData DISABLED_TestStartupWithOldSyncData
+#else
+#define MAYBE_TestStartupWithOldSyncData TestStartupWithOldSyncData
+#endif
+
+// Make sure that things still work if sync is not enabled, but some old sync
+// databases are lingering in the "Sync Data" folder.
+
+TEST_F(ProfileSyncServiceTestWithData, MAYBE_TestStartupWithOldSyncData) {
+  const char* nonsense1 = "reginald";
+  const char* nonsense2 = "beartato";
+  const char* nonsense3 = "harrison";
+  FilePath temp_directory = profile_->GetPath().AppendASCII("Sync Data");
+  FilePath sync_file1 =
+      temp_directory.AppendASCII("BookmarkSyncSettings.sqlite3");
+  FilePath sync_file2 = temp_directory.AppendASCII("SyncData.sqlite3");
+  FilePath sync_file3 = temp_directory.AppendASCII("nonsense_file");
+  file_util::CreateDirectory(temp_directory);
+  file_util::WriteFile(sync_file1, nonsense1, strlen(nonsense1));
+  file_util::WriteFile(sync_file2, nonsense2, strlen(nonsense2));
+  file_util::WriteFile(sync_file3, nonsense3, strlen(nonsense3));
+
+  LoadBookmarkModel(LOAD_FROM_STORAGE, SAVE_TO_STORAGE);
+  if (!service_.get()) {
+    service_.reset(
+        new TestProfileSyncService(&factory_, profile_.get(), false));
+    profile_->GetPrefs()->SetBoolean(prefs::kSyncHasSetupCompleted, false);
+
+    model_associator_ = new TestBookmarkModelAssociator(service_.get());
+    change_processor_ = new BookmarkChangeProcessor(model_associator_,
+                                                    service_.get());
+    EXPECT_CALL(factory_, CreateBookmarkSyncComponents(_, _)).
+        WillOnce(Return(ProfileSyncFactory::SyncComponents(
+            model_associator_, change_processor_)));
+    EXPECT_CALL(factory_, CreateDataTypeManager(_, _)).
+        WillOnce(MakeDataTypeManager(&backend_mock_));
+
+    service_->RegisterDataTypeController(
+        new browser_sync::BookmarkDataTypeController(&factory_,
+                                                     profile_.get(),
+                                                     service_.get()));
+
+    service_->Initialize(); // will call disableForUser because sync setup
+                            // hasn't been completed.
+  }
+
+  ASSERT_FALSE(service_->backend());
+  ASSERT_FALSE(service_->HasSyncSetupCompleted());
+
+  // This will actually start up the sync service.
+  service_->EnableForUser();
+
+  // Stop the service so we can read the new Sync Data files that were created.
+  service_.reset();
+
+  // This file should have been deleted when the whole directory was nuked.
+  ASSERT_FALSE(file_util::PathExists(sync_file3));
+
+  // These two will still exist, but their texts should have changed.
+  ASSERT_TRUE(file_util::PathExists(sync_file1));
+  std::string file1text;
+  file_util::ReadFileToString(sync_file1, &file1text);
+  ASSERT_FALSE(file1text.compare(nonsense1) == 0);
+
+  ASSERT_TRUE(file_util::PathExists(sync_file2));
+  std::string file2text;
+  file_util::ReadFileToString(sync_file2, &file2text);
+  ASSERT_FALSE(file2text.compare(nonsense2) == 0);
 }

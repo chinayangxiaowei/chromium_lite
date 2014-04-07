@@ -54,8 +54,8 @@ class URLRequestHttpJob : public URLRequestJob {
   virtual void CancelAuth();
   virtual void ContinueWithCertificate(net::X509Certificate* client_cert);
   virtual void ContinueDespiteLastError();
-  virtual bool GetMoreData();
   virtual bool ReadRawData(net::IOBuffer* buf, int buf_size, int *bytes_read);
+  virtual void StopCaching();
 
   // Shadows URLRequestJob's version of this method so we can grab cookies.
   void NotifyHeadersComplete();

@@ -6,7 +6,7 @@
 
 #include "base/logging.h"
 #include "base/scoped_ptr.h"
-#include "base/string_util.h"
+#include "base/utf_string_conversions.h"
 #include "base/values.h"
 #include "chrome/common/json_value_serializer.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -15,7 +15,7 @@ bool JsonDictionaryToMap(const std::string& json,
                          std::map<std::string, std::string>* results) {
   DCHECK(results != NULL);
   JSONStringValueSerializer deserializer(json);
-  scoped_ptr<Value> root(deserializer.Deserialize(NULL));
+  scoped_ptr<Value> root(deserializer.Deserialize(NULL, NULL));
 
   // Note that we don't use ASSERT_TRUE here (and in some other places) as it
   // doesn't work inside a function with a return type other than void.

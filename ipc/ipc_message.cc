@@ -23,17 +23,19 @@ Message::Message()
   header()->routing = header()->type = header()->flags = 0;
 #if defined(OS_POSIX)
   header()->num_fds = 0;
+  header()->pad = 0;
 #endif
   InitLoggingVariables();
 }
 
-Message::Message(int32 routing_id, uint16 type, PriorityValue priority)
+Message::Message(int32 routing_id, uint32 type, PriorityValue priority)
     : Pickle(sizeof(Header)) {
   header()->routing = routing_id;
   header()->type = type;
   header()->flags = priority;
 #if defined(OS_POSIX)
   header()->num_fds = 0;
+  header()->pad = 0;
 #endif
   InitLoggingVariables();
 }

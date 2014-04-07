@@ -102,11 +102,11 @@
             ],
           },
         ],
-        ['renderer == "cb"',
+        ['renderer == "gles2"',
           {
             'dependencies': [
-              '../gpu/gpu.gyp:np_utils',
-            ]
+              '../build/libs.gyp:gles2_libs',
+            ],
           },
         ],
         ['OS == "mac"',
@@ -198,30 +198,29 @@
             'sources': [
               'common/win/dxcapture.cc',
             ],
-            'link_settings': {
-              'libraries': [
-                '"$(DXSDK_DIR)/Lib/x86/d3dx9.lib"',
-                'd3d9.lib',
-              ],
-            },
-          },
-        ],
-        ['OS == "win" and (renderer == "d3d9" or cb_service == "d3d9")',
-          {
-            'include_dirs': [
+            'msvs_system_include_dirs': [
               '"$(DXSDK_DIR)/Include"',
             ],
             'link_settings': {
               'libraries': [
+                '"$(DXSDK_DIR)/Lib/x86/d3dx9.lib"',
+                'd3d9.lib',
                 '"$(DXSDK_DIR)/Lib/x86/DxErr.lib"',
               ],
             },
           },
         ],
-        ['OS == "win" and (renderer == "gl" or cb_service == "gl")',
+        ['OS == "win" and renderer == "gl"',
           {
             'dependencies': [
               '../build/libs.gyp:gl_libs',
+            ],
+          },
+        ],
+        ['OS == "win" and renderer == "gles2"',
+          {
+            'dependencies': [
+              '../build/libs.gyp:gles2_libs',
             ],
           },
         ],

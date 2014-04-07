@@ -19,6 +19,7 @@
 #include "base/pickle.h"
 #include "base/process_util.h"
 #include "base/scoped_ptr.h"
+#include "base/shared_memory.h"
 #include "base/string_util.h"
 #include "base/unix_domain_socket_posix.h"
 #include "chrome/common/sandbox_methods_linux.h"
@@ -134,6 +135,10 @@ class SandboxIPCProcess  {
       HandleLocaltime(fd, pickle, iter, fds);
     } else if (kind == LinuxSandbox::METHOD_GET_CHILD_WITH_INODE) {
       HandleGetChildWithInode(fd, pickle, iter, fds);
+    } else if (kind == LinuxSandbox::METHOD_GET_STYLE_FOR_STRIKE) {
+      HandleGetStyleForStrike(fd, pickle, iter, fds);
+    } else if (kind == LinuxSandbox::METHOD_MAKE_SHARED_MEMORY_SEGMENT) {
+      HandleMakeSharedMemorySegment(fd, pickle, iter, fds);
     }
 
   error:
@@ -242,6 +247,30 @@ class SandboxIPCProcess  {
     SendRendererReply(fds, reply, -1);
   }
 
+  void HandleGetStyleForStrike(int fd, const Pickle& pickle, void* iter,
+                               std::vector<int>& fds) {
+    std::string family;
+    int sizeAndStyle;
+
+    if (!pickle.ReadString(&iter, &family) ||
+        !pickle.ReadInt(&iter, &sizeAndStyle)) {
+      return;
+    }
+
+    WebKit::WebFontRenderStyle style;
+    WebFontInfo::renderStyleForStrike(family.c_str(), sizeAndStyle, &style);
+
+    Pickle reply;
+    reply.WriteInt(style.useBitmaps);
+    reply.WriteInt(style.useAutoHint);
+    reply.WriteInt(style.useHinting);
+    reply.WriteInt(style.hintStyle);
+    reply.WriteInt(style.useAntiAlias);
+    reply.WriteInt(style.useSubpixel);
+
+    SendRendererReply(fds, reply, -1);
+  }
+
   void HandleLocaltime(int fd, const Pickle& pickle, void* iter,
                        std::vector<int>& fds) {
     // The other side of this call is in zygote_main_linux.cc
@@ -301,6 +330,19 @@ class SandboxIPCProcess  {
     Pickle reply;
     reply.WriteInt(pid);
     SendRendererReply(fds, reply, -1);
+  }
+
+  void HandleMakeSharedMemorySegment(int fd, const Pickle& pickle, void* iter,
+                                     std::vector<int>& fds) {
+    uint32_t shm_size;
+    if (!pickle.ReadUInt32(&iter, &shm_size))
+      return;
+    int shm_fd = -1;
+    base::SharedMemory shm;
+    if (shm.Create(L"", false, false, shm_size))
+      shm_fd = shm.handle().fd;
+    Pickle reply;
+    SendRendererReply(fds, reply, shm_fd);
   }
 
   void SendRendererReply(const std::vector<int>& fds, const Pickle& reply,

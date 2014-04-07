@@ -16,13 +16,13 @@
 #if defined(OS_WIN)
 class ModalDialogDelegate;
 typedef ModalDialogDelegate* NativeDialog;
-#elif defined(OS_LINUX)
+#elif defined(OS_MACOSX)
+typedef void* NativeDialog;
+#elif defined(TOOLKIT_USES_GTK)
 typedef struct _GtkDialog GtkDialog;
 typedef struct _GtkWidget GtkWidget;
 typedef int gint;
 typedef GtkWidget* NativeDialog;
-#elif defined(OS_MACOSX)
-typedef void* NativeDialog;
 #endif
 
 class TabContents;
@@ -57,7 +57,7 @@ class AppModalDialog {
   // delete the AppModalDialog associated with it.
   virtual void CreateAndShowDialog();
 
-#if defined(OS_LINUX)
+#if defined(TOOLKIT_USES_GTK)
   virtual void HandleDialogResponse(GtkDialog* dialog, gint response_id) = 0;
   // Callback for dialog response calls, passes results to specialized
   // HandleDialogResponse() implementation.
@@ -66,7 +66,7 @@ class AppModalDialog {
 #endif
 
   // Close the dialog if it is showing.
-  void CloseModalDialog();
+  virtual void CloseModalDialog();
 
   // Called by the app modal window queue to activate the window.
   void ActivateModalDialog();
@@ -92,7 +92,9 @@ class AppModalDialog {
   virtual NativeDialog CreateNativeDialog() = 0;
 
   // A reference to the platform native dialog box.
+#if defined(OS_LINUX) || defined(OS_WIN)
   NativeDialog dialog_;
+#endif
 
   // Parent tab contents.
   TabContents* tab_contents_;

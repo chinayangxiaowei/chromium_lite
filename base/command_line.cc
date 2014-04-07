@@ -204,7 +204,7 @@ void CommandLine::Init(int argc, const char* const* argv) {
 #endif
 }
 
-#if defined(OS_LINUX) || defined(OS_FREEBSD)
+#if defined(OS_POSIX) && !defined(OS_MACOSX)
 // static
 void CommandLine::SetProcTitle() {
   // Build a single string which consists of all the arguments separated
@@ -367,6 +367,7 @@ void CommandLine::AppendLooseValue(const std::wstring& value) {
   // TODO(evan): quoting?
   command_line_string_.append(L" ");
   command_line_string_.append(value);
+  loose_values_.push_back(value);
 }
 
 void CommandLine::AppendArguments(const CommandLine& other,

@@ -6,18 +6,20 @@
 
 #include "base/file_util.h"
 #include "base/rand_util.h"
+#include "base/scoped_ptr.h"
 #include "base/stl_util-inl.h"
 #include "base/string_util.h"
 #include "base/thread.h"
+#include "base/version.h"
 #include "chrome/browser/chrome_thread.h"
 #include "chrome/browser/extensions/extension_updater.h"
 #include "chrome/browser/extensions/extensions_service.h"
 #include "chrome/browser/net/test_url_fetcher_factory.h"
+#include "chrome/browser/pref_service.h"
 #include "chrome/common/extensions/extension.h"
 #include "chrome/common/extensions/extension_constants.h"
 #include "chrome/common/extensions/extension_error_reporter.h"
 #include "chrome/common/pref_names.h"
-#include "chrome/common/pref_service.h"
 #include "net/base/escape.h"
 #include "net/base/load_flags.h"
 #include "net/url_request/url_request_status.h"
@@ -50,8 +52,14 @@ class MockService : public ExtensionUpdateService {
     return NULL;
   }
 
+  virtual const PendingExtensionMap& pending_extensions() const {
+    EXPECT_TRUE(false);
+    return pending_extensions_;
+  }
+
   virtual void UpdateExtension(const std::string& id,
-                               const FilePath& extension_path) {
+                               const FilePath& extension_path,
+                               const GURL& download_url) {
     EXPECT_TRUE(false);
   }
 
@@ -75,8 +83,8 @@ class MockService : public ExtensionUpdateService {
     last_ping_days_[extension_id] = time;
   }
 
-  virtual Time LastPingDay(const std::string& extension_id) {
-    std::map<std::string, Time>::iterator i =
+  virtual Time LastPingDay(const std::string& extension_id) const {
+    std::map<std::string, Time>::const_iterator i =
         last_ping_days_.find(extension_id);
     if (i != last_ping_days_.end())
       return i->second;
@@ -84,8 +92,20 @@ class MockService : public ExtensionUpdateService {
     return Time();
   }
 
+  virtual void SetBlacklistLastPingDay(const Time& time) {
+    blacklist_last_ping_day_ = time;
+  }
+
+  virtual Time BlacklistLastPingDay() const {
+    return blacklist_last_ping_day_;
+  }
+
+ protected:
+  PendingExtensionMap pending_extensions_;
+
  private:
   std::map<std::string, Time> last_ping_days_;
+  Time blacklist_last_ping_day_;
   DISALLOW_COPY_AND_ASSIGN(MockService);
 };
 
@@ -126,6 +146,7 @@ void CreateTestExtensions(int count, ExtensionList *list,
     FilePath path(StringPrintf("/extension%i", i));
 #endif
     Extension* e = new Extension(path);
+    e->set_location(Extension::INTERNAL);
     input.SetString(extension_manifest_keys::kVersion,
                     StringPrintf("%d.0.0.0", i));
     input.SetString(extension_manifest_keys::kName,
@@ -135,6 +156,22 @@ void CreateTestExtensions(int count, ExtensionList *list,
     std::string error;
     EXPECT_TRUE(e->InitFromValue(input, false, &error));
     list->push_back(e);
+  }
+}
+
+// Creates test pending extensions and inserts them into list. The
+// name and version are all based on their index.
+void CreateTestPendingExtensions(int count, const GURL& update_url,
+                                 PendingExtensionMap* pending_extensions) {
+  for (int i = 1; i <= count; i++) {
+    bool is_theme = (i % 2) == 0;
+    const bool kInstallSilently = true;
+    scoped_ptr<Version> version(
+        Version::GetVersionFromString(StringPrintf("%d.0.0.0", i)));
+    ASSERT_TRUE(version.get());
+    (*pending_extensions)[StringPrintf("extension%i", i)] =
+        PendingExtensionInfo(update_url, *version,
+                             is_theme, kInstallSilently);
   }
 }
 
@@ -156,8 +193,17 @@ class ServiceForManifestTests : public MockService {
 
   virtual const ExtensionList* extensions() const { return &extensions_; }
 
+  virtual const PendingExtensionMap& pending_extensions() const {
+    return pending_extensions_;
+  }
+
   void set_extensions(ExtensionList extensions) {
     extensions_ = extensions;
+  }
+
+  void set_pending_extensions(
+      const PendingExtensionMap& pending_extensions) {
+    pending_extensions_ = pending_extensions;
   }
 
   virtual bool HasInstalledExtensions() {
@@ -176,9 +222,15 @@ class ServiceForManifestTests : public MockService {
 class ServiceForDownloadTests : public MockService {
  public:
   virtual void UpdateExtension(const std::string& id,
-                               const FilePath& extension_path) {
+                               const FilePath& extension_path,
+                               const GURL& download_url) {
     extension_id_ = id;
     install_path_ = extension_path;
+    download_url_ = download_url;
+  }
+
+  virtual const PendingExtensionMap& pending_extensions() const {
+    return pending_extensions_;
   }
 
   virtual Extension* GetExtensionById(const std::string& id, bool) {
@@ -186,8 +238,14 @@ class ServiceForDownloadTests : public MockService {
     return NULL;
   }
 
+  void set_pending_extensions(
+      const PendingExtensionMap& pending_extensions) {
+    pending_extensions_ = pending_extensions;
+  }
+
   const std::string& extension_id() { return extension_id_; }
   const FilePath& install_path() { return install_path_; }
+  const GURL& download_url() { return download_url_; }
   const std::string& last_inquired_extension_id() {
     return last_inquired_extension_id_;
   }
@@ -195,6 +253,8 @@ class ServiceForDownloadTests : public MockService {
  private:
   std::string extension_id_;
   FilePath install_path_;
+  GURL download_url_;
+
   // The last extension_id that GetExtensionById was called with.
   std::string last_inquired_extension_id_;
 };
@@ -265,13 +325,19 @@ class ExtensionUpdaterTest : public testing::Test {
     results->list.push_back(result);
   }
 
-  static void TestExtensionUpdateCheckRequests() {
+  static void TestExtensionUpdateCheckRequests(bool pending) {
     // Create an extension with an update_url.
     ServiceForManifestTests service;
-    ExtensionList tmp;
     std::string update_url("http://foo.com/bar");
-    CreateTestExtensions(1, &tmp, &update_url);
-    service.set_extensions(tmp);
+    ExtensionList extensions;
+    PendingExtensionMap pending_extensions;
+    if (pending) {
+      CreateTestPendingExtensions(1, GURL(update_url), &pending_extensions);
+      service.set_pending_extensions(pending_extensions);
+    } else {
+      CreateTestExtensions(1, &extensions, &update_url);
+      service.set_extensions(extensions);
+    }
 
     // Setup and start the updater.
     MessageLoop message_loop;
@@ -309,11 +375,18 @@ class ExtensionUpdaterTest : public testing::Test {
                                                UnescapeRule::URL_SPECIAL_CHARS);
     std::map<std::string, std::string> params;
     ExtractParameters(decoded, &params);
-    EXPECT_EQ(tmp[0]->id(), params["id"]);
-    EXPECT_EQ(tmp[0]->VersionString(), params["v"]);
+    if (pending) {
+      EXPECT_EQ(pending_extensions.begin()->first, params["id"]);
+      EXPECT_EQ("1.0.0.0", params["v"]);
+    } else {
+      EXPECT_EQ(extensions[0]->id(), params["id"]);
+      EXPECT_EQ(extensions[0]->VersionString(), params["v"]);
+    }
     EXPECT_EQ("", params["uc"]);
 
-    STLDeleteElements(&tmp);
+    if (!pending) {
+      STLDeleteElements(&extensions);
+    }
   }
 
   static void TestBlacklistUpdateCheckRequests() {
@@ -368,6 +441,7 @@ class ExtensionUpdaterTest : public testing::Test {
     EXPECT_EQ("com.google.crx.blacklist", params["id"]);
     EXPECT_EQ("0", params["v"]);
     EXPECT_EQ("", params["uc"]);
+    EXPECT_TRUE(ContainsKey(params, "ping"));
   }
 
   static void TestDetermineUpdates() {
@@ -406,6 +480,37 @@ class ExtensionUpdaterTest : public testing::Test {
     EXPECT_EQ(1u, updateable.size());
     EXPECT_EQ(0, updateable[0]);
     STLDeleteElements(&tmp);
+  }
+
+  static void TestDetermineUpdatesPending() {
+    // Create a set of test extensions
+    ServiceForManifestTests service;
+    PendingExtensionMap pending_extensions;
+    CreateTestPendingExtensions(3, GURL(), &pending_extensions);
+    service.set_pending_extensions(pending_extensions);
+
+    MessageLoop message_loop;
+    ScopedTempPrefService prefs;
+    scoped_refptr<ExtensionUpdater> updater =
+        new ExtensionUpdater(&service, prefs.get(), kUpdateFrequencySecs);
+
+    ManifestFetchData fetch_data(GURL("http://localhost/foo"));
+    UpdateManifest::Results updates;
+    for (PendingExtensionMap::const_iterator it = pending_extensions.begin();
+         it != pending_extensions.end(); ++it) {
+      fetch_data.AddExtension(it->first,
+                              it->second.version.GetString(),
+                              ManifestFetchData::kNeverPinged);
+      AddParseResult(it->first,
+                     "1.1", "http://localhost/e1_1.1.crx", &updates);
+    }
+    std::vector<int> updateable =
+        updater->DetermineUpdates(fetch_data, updates);
+    // Only the first one is updateable.
+    EXPECT_EQ(1u, updateable.size());
+    for (std::vector<int>::size_type i = 0; i < updateable.size(); ++i) {
+      EXPECT_EQ(static_cast<int>(i), updateable[i]);
+    }
   }
 
   static void TestMultipleManifestDownloading() {
@@ -472,7 +577,7 @@ class ExtensionUpdaterTest : public testing::Test {
     xmlCleanupGlobals();
   }
 
-  static void TestSingleExtensionDownloading() {
+  static void TestSingleExtensionDownloading(bool pending) {
     MessageLoop ui_loop;
     ChromeThread ui_thread(ChromeThread::UI, &ui_loop);
     ChromeThread file_thread(ChromeThread::FILE);
@@ -492,9 +597,19 @@ class ExtensionUpdaterTest : public testing::Test {
 
     std::string id = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
     std::string hash = "";
-    std::string version = "0.0.1";
+    scoped_ptr<Version> version(Version::GetVersionFromString("0.0.1"));
+    ASSERT_TRUE(version.get());
+    updater->FetchUpdatedExtension(id, test_url, hash, version->GetString());
 
-    updater->FetchUpdatedExtension(id, test_url, hash, version);
+    if (pending) {
+      const bool kIsTheme = false;
+      const bool kInstallSilently = true;
+      PendingExtensionMap pending_extensions;
+      pending_extensions[id] =
+          PendingExtensionInfo(test_url, *version,
+                               kIsTheme, kInstallSilently);
+      service.set_pending_extensions(pending_extensions);
+    }
 
     // Call back the ExtensionUpdater with a 200 response and some test data
     std::string extension_data("whatever");
@@ -513,6 +628,7 @@ class ExtensionUpdaterTest : public testing::Test {
     EXPECT_EQ(id, service.extension_id());
     FilePath tmpfile_path = service.install_path();
     EXPECT_FALSE(tmpfile_path.empty());
+    EXPECT_EQ(test_url, service.download_url());
     std::string file_contents;
     EXPECT_TRUE(file_util::ReadFileToString(tmpfile_path, &file_contents));
     EXPECT_TRUE(extension_data == file_contents);
@@ -612,6 +728,7 @@ class ExtensionUpdaterTest : public testing::Test {
     FilePath tmpfile_path = service.install_path();
     EXPECT_FALSE(tmpfile_path.empty());
     EXPECT_EQ(id1, service.extension_id());
+    EXPECT_EQ(url1, service.download_url());
     message_loop.RunAllPending();
     file_util::Delete(tmpfile_path, false);
 
@@ -626,6 +743,7 @@ class ExtensionUpdaterTest : public testing::Test {
         extension_data2);
     message_loop.RunAllPending();
     EXPECT_EQ(id2, service.extension_id());
+    EXPECT_EQ(url2, service.download_url());
     EXPECT_FALSE(service.install_path().empty());
 
     // Make sure the correct crx contents were passed for the update call.
@@ -746,7 +864,11 @@ class ExtensionUpdaterTest : public testing::Test {
 // subclasses where friendship with ExtenionUpdater is not inherited.
 
 TEST(ExtensionUpdaterTest, TestExtensionUpdateCheckRequests) {
-  ExtensionUpdaterTest::TestExtensionUpdateCheckRequests();
+  ExtensionUpdaterTest::TestExtensionUpdateCheckRequests(false);
+}
+
+TEST(ExtensionUpdaterTest, TestExtensionUpdateCheckRequestsPending) {
+  ExtensionUpdaterTest::TestExtensionUpdateCheckRequests(true);
 }
 
 // This test is disabled on Mac, see http://crbug.com/26035.
@@ -758,12 +880,20 @@ TEST(ExtensionUpdaterTest, TestDetermineUpdates) {
   ExtensionUpdaterTest::TestDetermineUpdates();
 }
 
+TEST(ExtensionUpdaterTest, TestDetermineUpdatesPending) {
+  ExtensionUpdaterTest::TestDetermineUpdatesPending();
+}
+
 TEST(ExtensionUpdaterTest, TestMultipleManifestDownloading) {
   ExtensionUpdaterTest::TestMultipleManifestDownloading();
 }
 
 TEST(ExtensionUpdaterTest, TestSingleExtensionDownloading) {
-  ExtensionUpdaterTest::TestSingleExtensionDownloading();
+  ExtensionUpdaterTest::TestSingleExtensionDownloading(false);
+}
+
+TEST(ExtensionUpdaterTest, TestSingleExtensionDownloadingPending) {
+  ExtensionUpdaterTest::TestSingleExtensionDownloading(true);
 }
 
 // This test is disabled on Mac, see http://crbug.com/26035.
@@ -784,6 +914,50 @@ TEST(ExtensionUpdaterTest, TestGalleryRequests) {
 
 TEST(ExtensionUpdaterTest, TestHandleManifestResults) {
   ExtensionUpdaterTest::TestHandleManifestResults();
+}
+
+TEST(ExtensionUpdaterTest, TestManifestFetchesBuilderAddExtension) {
+  MockService service;
+  ManifestFetchesBuilder builder(&service);
+
+  // Non-internal non-external extensions should be rejected.
+  {
+    ExtensionList extensions;
+    CreateTestExtensions(1, &extensions, NULL);
+    ASSERT_FALSE(extensions.empty());
+    extensions[0]->set_location(Extension::INVALID);
+    builder.AddExtension(*extensions[0]);
+    EXPECT_TRUE(builder.GetFetches().empty());
+    STLDeleteElements(&extensions);
+  }
+
+  scoped_ptr<Version> version(Version::GetVersionFromString("0"));
+  ASSERT_TRUE(version.get());
+
+  // Extensions with invalid update URLs should be rejected.
+  builder.AddPendingExtension(
+      "id", PendingExtensionInfo(GURL("http:google.com:foo"),
+                                 *version, false, false));
+  EXPECT_TRUE(builder.GetFetches().empty());
+
+  // Extensions with empty IDs should be rejected.
+  builder.AddPendingExtension(
+      "", PendingExtensionInfo(GURL(), *version, false, false));
+  EXPECT_TRUE(builder.GetFetches().empty());
+
+  // TODO(akalin): Test that extensions with empty update URLs
+  // converted from user scripts are rejected.
+
+  // Extensions with empty update URLs should have a default one
+  // filled in.
+  builder.AddPendingExtension(
+      "id", PendingExtensionInfo(GURL(), *version, false, false));
+  std::vector<ManifestFetchData*> fetches = builder.GetFetches();
+  ASSERT_EQ(1u, fetches.size());
+  scoped_ptr<ManifestFetchData> fetch(fetches[0]);
+  fetches.clear();
+  EXPECT_FALSE(fetch->base_url().is_empty());
+  EXPECT_FALSE(fetch->full_url().is_empty());
 }
 
 // TODO(asargent) - (http://crbug.com/12780) add tests for:

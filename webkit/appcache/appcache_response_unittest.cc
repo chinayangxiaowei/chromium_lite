@@ -1,4 +1,4 @@
-// Copyright (c) 2009 The Chromium Authos. All rights reserved.
+// Copyright (c) 2009 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,6 +7,7 @@
 #include "base/thread.h"
 #include "base/waitable_event.h"
 #include "net/base/io_buffer.h"
+#include "net/base/net_errors.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "webkit/appcache/appcache_response.h"
 #include "webkit/appcache/mock_appcache_service.h"
@@ -172,6 +173,8 @@ class AppCacheResponseTest : public testing::Test {
     std::string raw_headers(kHttpHeaders, arraysize(kHttpHeaders));
     WriteResponse(MakeHttpResponseInfo(raw_headers), body, strlen(kHttpBody));
   }
+
+  int basic_response_size() { return 5; }  // should match kHttpBody above
 
   void WriteResponse(net::HttpResponseInfo* head,
                      IOBuffer* body, int body_len) {
@@ -368,8 +371,41 @@ class AppCacheResponseTest : public testing::Test {
     EXPECT_TRUE(CompareHttpResponseInfos(
         write_info_buffer_->http_info.get(),
         storage_delegate_->loaded_info_->http_response_info()));
+    EXPECT_EQ(basic_response_size(),
+              storage_delegate_->loaded_info_->response_data_size());
     TestFinished();
   }
+
+  // AmountWritten ----------------------------------------------------
+
+  void AmountWritten() {
+    static const char kHttpHeaders[] =
+        "HTTP/1.0 200 OK\0\0";
+    std::string raw_headers(kHttpHeaders, arraysize(kHttpHeaders));
+    net::HttpResponseInfo* head = MakeHttpResponseInfo(raw_headers);
+    int expected_amount_written =
+        GetHttpResponseInfoSize(head) + kNumBlocks * kBlockSize;
+
+    // Push tasks in reverse order.
+    PushNextTask(method_factory_.NewRunnableMethod(
+        &AppCacheResponseTest::Verify_AmountWritten, expected_amount_written));
+    for (int i = 0; i < kNumBlocks; ++i) {
+      PushNextTask(method_factory_.NewRunnableMethod(
+          &AppCacheResponseTest::WriteOneBlock, kNumBlocks - i));
+    }
+    PushNextTask(method_factory_.NewRunnableMethod(
+        &AppCacheResponseTest::WriteResponseHead, head));
+
+    writer_.reset(service_->storage()->CreateResponseWriter(GURL()));
+    written_response_id_ = writer_->response_id();
+    ScheduleNextTask();
+  }
+
+  void Verify_AmountWritten(int expected_amount_written) {
+    EXPECT_EQ(expected_amount_written, writer_->amount_written());
+    TestFinished();
+  }
+
 
   // WriteThenVariouslyReadResponse -------------------------------------------
 
@@ -656,6 +692,10 @@ TEST_F(AppCacheResponseTest, LoadResponseInfo_Miss) {
 
 TEST_F(AppCacheResponseTest, LoadResponseInfo_Hit) {
   RunTestOnIOThread(&AppCacheResponseTest::LoadResponseInfo_Hit);
+}
+
+TEST_F(AppCacheResponseTest, AmountWritten) {
+  RunTestOnIOThread(&AppCacheResponseTest::AmountWritten);
 }
 
 TEST_F(AppCacheResponseTest, WriteThenVariouslyReadResponse) {

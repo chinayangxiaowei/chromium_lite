@@ -1,3 +1,7 @@
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Use of this source code is governed by a BSD-style license that can be
+// found in the LICENSE file.
+
 // Grab the querystring, removing question mark at the front and splitting on
 // the ampersand.
 var queryString = location.search.substring(1).split("&");
@@ -24,25 +28,30 @@ var styleSheet = "";
 var frameScript = "";
 
 // What to show when we cannot parse the feed name.
-var unknownName = "Unknown feed name";
-
-// Various text messages within the edit dialog.
-var assistText = "Insert %s in the URL where the feed url should appear.";
-var savedMsg = "Your changes have been saved.";
-var setDefaultMsg = "This reader has been set as your default reader.";
+var unknownName = chrome.i18n.getMessage("rss_subscription_unknown_feed_name");
 
 // A list of feed readers, populated by localStorage if available, otherwise
 // hard coded.
 var feedReaderList;
 
-// Whether we can modify the list of readers.
-var storageEnabled = window.localStorage != null;
-
 // Navigates to the reader of the user's choice (for subscribing to the feed).
 function navigate() {
   var select = document.getElementById('readerDropdown');
   var url =
-      feedReaderList[select.selectedIndex].url.replace("%s", escape(feedUrl));
+      feedReaderList[select.selectedIndex].url.replace(
+          "%s", escape(encodeURI(feedUrl)));
+
+  // Before we navigate, see if we want to skip this step in the future...
+  if (storageEnabled) {
+    // See if the user wants to always use this reader.
+    var alwaysUse = document.getElementById('alwaysUse');
+    if (alwaysUse.checked) {
+      window.localStorage.defaultReader =
+          feedReaderList[select.selectedIndex].url;
+      window.localStorage.showPreviewPage = "No";
+    }
+  }
+
   document.location = url;
 }
 
@@ -51,26 +60,10 @@ function navigate() {
 * fetches the data.
 */
 function main() {
-  // This is the default list, unless replaced by what was saved previously.
-  feedReaderList = [
-      { 'url': 'http://www.google.com/reader/view/feed/%s',
-        'description': 'Google Reader' },
-      { 'url': 'http://www.google.com/ig/adde?moduleurl=%s',
-        'description': 'iGoogle' },
-      { 'url': 'http://www.bloglines.com/login?r=/sub/%s',
-        'description': 'Bloglines' },
-      { 'url': 'http://add.my.yahoo.com/rss?url=%s',
-        'description': 'My Yahoo' }];
-
-  if (!storageEnabled) {
-    // No local storage means we can't make changes to the list, so disable
-    // the Edit and the Remove link permanently.
-    document.getElementById('editLink').innerHTML = "";
-    document.getElementById('removeLink').innerHTML = "";
-  } else {
-    if (window.localStorage.readerList)
+  if (storageEnabled && window.localStorage.readerList)
       feedReaderList = JSON.parse(window.localStorage.readerList);
-  }
+  if (!feedReaderList)
+    feedReaderList = defaultReaderList();
 
   // Populate the list of readers.
   var readerDropdown = document.getElementById('readerDropdown');
@@ -80,8 +73,13 @@ function main() {
       readerDropdown.selectedIndex = i;
   }
 
-  if (storageEnabled)
-    readerDropdown.options[i] = new Option("Add new...", "");
+  if (storageEnabled) {
+    // Add the "Manage..." entry to the dropdown and show the checkbox asking
+    // if we always want to use this reader in the future (skip the preview).
+    readerDropdown.options[i] =
+        new Option(chrome.i18n.getMessage("rss_subscription_manage_label"), "");
+    document.getElementById('alwaysUseSpan').style.display = "block";
+  }
 
   // Now fetch the data.
   req = new XMLHttpRequest();
@@ -110,19 +108,27 @@ function main() {
   feedUrl = decodeURIComponent(feedUrl);
   req.onload = handleResponse;
   req.onerror = handleError;
+  // Not everyone sets the mime type correctly, which causes handleResponse
+  // to fail to XML parse the response text from the server. By forcing
+  // it to text/xml we avoid this.
+  req.overrideMimeType('text/xml');
   req.open("GET", feedUrl, !synchronousRequest);
   req.send(null);
+
+  document.getElementById('feedUrl').href = 'view-source:' + feedUrl;
 }
 
 // Sets the title for the feed.
 function setFeedTitle(title) {
   var titleTag = document.getElementById('title');
-  titleTag.textContent = "Feed for '" + title + "'";
+  titleTag.textContent =
+      chrome.i18n.getMessage("rss_subscription_feed_for", title);
 }
 
 // Handles errors during the XMLHttpRequest.
 function handleError() {
-  handleFeedParsingFailed("Error fetching feed");
+  handleFeedParsingFailed(
+      chrome.i18n.getMessage("rss_subscription_error_fetching"));
 }
 
 // Handles feed parsing errors.
@@ -170,7 +176,8 @@ function handleResponse() {
 
   var doc = req.responseXML;
   if (!doc) {
-    handleFeedParsingFailed("Not a valid feed.");
+    handleFeedParsingFailed(
+        chrome.i18n.getMessage("rss_subscription_not_valid_feed"));
     return;
   }
 
@@ -179,7 +186,8 @@ function handleResponse() {
   if (entries.length == 0)
     entries = doc.getElementsByTagName('item');
   if (entries.length == 0) {
-    handleFeedParsingFailed("This feed contains no entries.")
+    handleFeedParsingFailed(
+        chrome.i18n.getMessage("rss_subscription_no_entries"))
     return;
   }
 
@@ -195,182 +203,15 @@ function handleResponse() {
 }
 
 /**
-* Check to see if the current item is set as default reader.
-*/
-function isDefaultReader(url) {
-  defaultReader = window.localStorage.defaultReader ?
-                      window.localStorage.defaultReader : "";
-  return url == defaultReader;
-}
-
-/**
-* Shows the Edit Feed Reader dialog.
-*/
-function showDialog() {
-  // Set the values for this dialog box before showing it.
-  document.getElementById('statusMsg').innerText = "";
-  document.getElementById('urlAssist').innerText = assistText;
-  document.getElementById('setDefault').display = "none";
-
-  var readerDropdown = document.getElementById('readerDropdown');
-
-  if (readerDropdown.value != "") {
-    // We are not adding a new value, so we populate the dialog box.
-    document.getElementById('urlText').value =
-        feedReaderList[readerDropdown.value].url;
-    document.getElementById('descriptionText').value =
-        readerDropdown.options[readerDropdown.selectedIndex].text;
-  }
-
-  validateInput(null);
-
-  var url = document.getElementById('urlText').value;
-  if (url.length > 0 && !isDefaultReader(url)) {
-    var setDefault = document.getElementById('setDefault');
-    setDefault.disabled = false;
-    setDefault.style.display = "inline";
-  }
-
-  // Show the dialog box.
-  document.getElementById('dialogBackground').style.display = "-webkit-box";
-}
-
-/**
-* Hides the Edit Feed Reader dialog.
-*/
-function hideDialog() {
-  var selected = readerDropdown.selectedIndex;
-  var addNew = readerDropdown.value.length == 0;
-
-  var setDefault = document.getElementById('setDefault');
-  setDefault.disabled = true;
-  setDefault.style.display = "none";
-
-  document.getElementById('dialogBackground').style.display = "none";
-
-  if (addNew && readerDropdown[selected].text == "")
-    removeEntry(true);  // User cancelled. Remove the entry without prompting.
-}
-
-function saveFeedReaderList() {
-  window.localStorage.readerList = JSON.stringify(feedReaderList);
-}
-
-/**
-* Handler for saving the values.
-*/
-function save() {
-  var readerDropdown = document.getElementById('readerDropdown');
-  var selected = readerDropdown.selectedIndex;
-  var addNew = readerDropdown.value.length == 0;
-  var oldUrl = addNew ? "" : feedReaderList[selected].url;
-  var url = document.getElementById('urlText').value;
-  var description = document.getElementById('descriptionText').value;
-
-  // Update the UI to reflect the changes.
-  readerDropdown.options[selected].text = description;
-  readerDropdown.options[selected].value = selected;
-  document.getElementById('statusMsg').innerText = savedMsg;
-  document.getElementById('save').disabled = true;
-
-  if (addNew) {
-    feedReaderList.push({ 'url': url, 'description': description });
-  } else {
-    feedReaderList[selected].description = description;
-    feedReaderList[selected].url = url;
-  }
-
-  saveFeedReaderList();
-
-  var wasDefault = isDefaultReader(oldUrl);
-
-  if (wasDefault) {
-    // If this was the default, it should still be the default after we
-    // modify it.
-    window.localStorage.defaultReader = url;
-  } else if (!isDefaultReader(url)) {
-    // Enable the set as default button.
-    var setDefault = document.getElementById('setDefault');
-    setDefault.disabled = false;
-    setDefault.style.display = "inline";
-  }
-}
-
-/**
-* Removes an entry from the list.
-*/
-function removeEntry(force) {
-  var selected = readerDropdown.selectedIndex;
-
-  if (!force) {
-    // Minimum number of entries (1 plus "Add New...").
-    var minEntries = 2;
-    if (readerDropdown.options.length == minEntries) {
-      alert('There must be at least one entry in this list');
-      return;
-    }
-
-    var reply = confirm("Are you sure you want to remove '" +
-                          readerDropdown[selected].text + "'?");
-    if (!reply)
-      return;
-  }
-
-  feedReaderList.splice(selected, 1);
-  readerDropdown.remove(selected);
-  saveFeedReaderList();
-}
-
-/**
-* Validates the input in the form (making sure something is entered in both
-* fields and that %s is not missing from the url field.
-*/
-function validateInput() {
-  document.getElementById('statusMsg').innerText = "";
-  document.getElementById('setDefault').disabled = true;
-
-  var description = document.getElementById('descriptionText');
-  var url = document.getElementById('urlText');
-
-  var valid = description.value.length > 0 &&
-                url.value.length > 0 &&
-                url.value.indexOf("%s") > -1;
-
-  document.getElementById('save').disabled = !valid;
-}
-
-/**
-* Handler for setting the current reader as default.
-*/
-function setAsDefault() {
-  window.localStorage.defaultReader =
-        document.getElementById('urlText').value;
-
-  document.getElementById('statusMsg').innerText = setDefaultMsg;
-
-  document.getElementById('setDefault').disabled = true;
-}
-
-/**
 * Handler for when selection changes.
 */
 function onSelectChanged() {
   if (!storageEnabled)
     return;
-
   var readerDropdown = document.getElementById('readerDropdown');
 
-  // If the last item (Add new...) was selected we need to add an empty item
-  // for it. But adding values to the dropdown resets the selectedIndex, so we
-  // need to save it first.
+  // If the last item (Manage...) was selected we show the options.
   var oldSelection = readerDropdown.selectedIndex;
-  if (readerDropdown.selectedIndex == readerDropdown.length - 1) {
-    readerDropdown[readerDropdown.selectedIndex] = new Option("", "");
-    readerDropdown.options[readerDropdown.length] =
-          new Option("Add new...", "");
-    readerDropdown.selectedIndex = oldSelection;
-    document.getElementById('urlText').value = "";
-    document.getElementById('descriptionText').value = "";
-    showDialog();
-  }
+  if (readerDropdown.selectedIndex == readerDropdown.length - 1)
+    window.location = "options.html";
 }

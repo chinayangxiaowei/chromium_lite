@@ -1,20 +1,14 @@
-// Copyright (c) 2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
-
-#include "build/build_config.h"
-
-#if defined(OS_WIN)
-#include <ws2tcpip.h>
-#else
-#include <netdb.h>
-#endif
 
 #include "base/scoped_ptr.h"
 #include "net/base/address_list.h"
 #include "net/base/mock_host_resolver.h"
 #include "net/base/net_errors.h"
+#include "net/base/net_log.h"
 #include "net/base/net_util.h"
+#include "net/base/sys_addrinfo.h"
 #include "net/proxy/proxy_resolver_js_bindings.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
@@ -33,7 +27,7 @@ class MockHostResolverWithMultipleResults : public HostResolver {
                       AddressList* addresses,
                       CompletionCallback* callback,
                       RequestHandle* out_req,
-                      LoadLog* load_log) {
+                      const BoundNetLog& net_log) {
     // Build up the result list (in reverse).
     AddressList temp_list = ResolveIPLiteral("200.100.1.2");
     temp_list = PrependAddressToList("172.22.34.1", temp_list);
@@ -44,7 +38,6 @@ class MockHostResolverWithMultipleResults : public HostResolver {
   virtual void CancelRequest(RequestHandle req) {}
   virtual void AddObserver(Observer* observer) {}
   virtual void RemoveObserver(Observer* observer) {}
-  virtual HostCache* GetHostCache() { return NULL; }
   virtual void Shutdown() {}
 
  private:
@@ -55,6 +48,7 @@ class MockHostResolverWithMultipleResults : public HostResolver {
     AddressList result;
     int rv = SystemHostResolverProc(ip_literal,
                                     ADDRESS_FAMILY_UNSPECIFIED,
+                                    0,
                                     &result);
     EXPECT_EQ(OK, rv);
     EXPECT_EQ(NULL, result.head()->ai_next);
@@ -75,7 +69,7 @@ class MockHostResolverWithMultipleResults : public HostResolver {
 
     // Make a copy of the concatenated list.
     AddressList concatenated;
-    concatenated.Copy(result.head());
+    concatenated.Copy(result.head(), true);
 
     // Restore |result| (so it is freed properly).
     result_head->ai_next = NULL;
@@ -89,7 +83,7 @@ TEST(ProxyResolverJSBindingsTest, DnsResolve) {
 
   // Get a hold of a DefaultJSBindings* (it is a hidden impl class).
   scoped_ptr<ProxyResolverJSBindings> bindings(
-      ProxyResolverJSBindings::CreateDefault(host_resolver, NULL));
+      ProxyResolverJSBindings::CreateDefault(host_resolver));
 
   // Empty string is not considered a valid host (even though on some systems
   // requesting this will resolve to localhost).
@@ -111,8 +105,7 @@ TEST(ProxyResolverJSBindingsTest, DnsResolve) {
 TEST(ProxyResolverJSBindingsTest, MyIpAddress) {
   // Get a hold of a DefaultJSBindings* (it is a hidden impl class).
   scoped_ptr<ProxyResolverJSBindings> bindings(
-      ProxyResolverJSBindings::CreateDefault(
-          new MockHostResolver, NULL));
+      ProxyResolverJSBindings::CreateDefault(new MockHostResolver));
 
   // Our IP address is always going to be 127.0.0.1, since we are using a
   // mock host resolver.
@@ -138,8 +131,7 @@ TEST(ProxyResolverJSBindingsTest, RestrictAddressFamily) {
 
   // Get a hold of a DefaultJSBindings* (it is a hidden impl class).
   scoped_ptr<ProxyResolverJSBindings> bindings(
-      ProxyResolverJSBindings::CreateDefault(
-          host_resolver, NULL));
+      ProxyResolverJSBindings::CreateDefault(host_resolver));
 
   // Make it so requests resolve to particular address patterns based on family:
   //  IPV4_ONLY --> 192.168.1.*
@@ -157,11 +149,13 @@ TEST(ProxyResolverJSBindingsTest, RestrictAddressFamily) {
   // depending if the address family was IPV4_ONLY or not.
   HostResolver::RequestInfo info("foo", 80);
   AddressList address_list;
-  EXPECT_EQ(OK, host_resolver->Resolve(info, &address_list, NULL, NULL, NULL));
+  EXPECT_EQ(OK, host_resolver->Resolve(info, &address_list, NULL, NULL,
+                                       BoundNetLog()));
   EXPECT_EQ("192.168.2.1", NetAddressToString(address_list.head()));
 
   info.set_address_family(ADDRESS_FAMILY_IPV4);
-  EXPECT_EQ(OK, host_resolver->Resolve(info, &address_list, NULL, NULL, NULL));
+  EXPECT_EQ(OK, host_resolver->Resolve(info, &address_list, NULL, NULL,
+                                       BoundNetLog()));
   EXPECT_EQ("192.168.1.1", NetAddressToString(address_list.head()));
 
   // Now the actual test.
@@ -183,7 +177,7 @@ TEST(ProxyResolverJSBindingsTest, ExFunctionsReturnList) {
 
   // Get a hold of a DefaultJSBindings* (it is a hidden impl class).
   scoped_ptr<ProxyResolverJSBindings> bindings(
-      ProxyResolverJSBindings::CreateDefault(host_resolver, NULL));
+      ProxyResolverJSBindings::CreateDefault(host_resolver));
 
   EXPECT_EQ("192.168.1.1;172.22.34.1;200.100.1.2",
             bindings->MyIpAddressEx());

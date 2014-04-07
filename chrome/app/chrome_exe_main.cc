@@ -1,4 +1,4 @@
-// Copyright (c) 2006-2008 The Chromium Authors. All rights reserved.
+// Copyright (c) 2006-2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -41,7 +41,6 @@ int APIENTRY wWinMain(HINSTANCE instance, HINSTANCE, wchar_t*, int) {
     // Enforces strong DEP support. Vista uses the NXCOMPAT flag in the exe.
     sandbox::SetCurrentProcessDEP(sandbox::DEP_ENABLED);
   }
-
   // Load and launch the chrome dll. *Everything* happens inside.
   MainDllLoader* loader = MakeMainDllLoader();
   int rc = loader->Launch(instance, &sandbox_info);

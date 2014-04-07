@@ -4,8 +4,8 @@
 #include "chrome/browser/web_resource/web_resource_service.h"
 
 #include "base/command_line.h"
-#include "base/string_util.h"
 #include "base/time.h"
+#include "base/utf_string_conversions.h"
 #include "base/values.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/chrome_thread.h"
@@ -110,13 +110,6 @@ class WebResourceService::UnpackerClient
     bool use_utility_process =
         web_resource_service_->resource_dispatcher_host_ != NULL &&
         !CommandLine::ForCurrentProcess()->HasSwitch(switches::kSingleProcess);
-
-#if defined(OS_POSIX)
-    // TODO(port): Don't use a utility process on linux (crbug.com/22703) or
-    // MacOS (crbug.com/8102) until problems related to autoupdate are fixed.
-    use_utility_process = false;
-#endif
-
     if (use_utility_process) {
       ChromeThread::ID thread_id;
       CHECK(ChromeThread::GetCurrentThreadIdentifier(&thread_id));

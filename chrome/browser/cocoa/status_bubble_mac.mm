@@ -6,18 +6,17 @@
 
 #include <limits>
 
-#include "app/gfx/text_elider.h"
+#include "app/text_elider.h"
 #include "base/compiler_specific.h"
-#include "base/gfx/point.h"
 #include "base/message_loop.h"
 #include "base/string_util.h"
 #include "base/sys_string_conversions.h"
 #import "chrome/browser/cocoa/bubble_view.h"
+#include "gfx/point.h"
 #include "googleurl/src/gurl.h"
 #import "third_party/GTM/AppKit/GTMNSAnimation+Duration.h"
 #import "third_party/GTM/AppKit/GTMNSBezierPath+RoundRect.h"
 #import "third_party/GTM/AppKit/GTMNSColor+Luminance.h"
-#import "third_party/GTM/AppKit/GTMTheme.h"
 
 namespace {
 
@@ -298,7 +297,12 @@ void StatusBubbleMac::Create() {
     return;
 
   // TODO(avi):fix this for RTL
-  window_ = [[NSWindow alloc] initWithContentRect:CalculateWindowFrame()
+  NSRect window_rect = CalculateWindowFrame();
+  // initWithContentRect has origin in screen coords and size in scaled window
+  // coordinates.
+  window_rect.size =
+      [[parent_ contentView] convertSize:window_rect.size fromView:nil];
+  window_ = [[NSWindow alloc] initWithContentRect:window_rect
                                         styleMask:NSBorderlessWindowMask
                                           backing:NSBackingStoreBuffered
                                             defer:YES];
@@ -350,8 +354,10 @@ void StatusBubbleMac::Attach() {
 void StatusBubbleMac::Detach() {
   // This method may be called several times in the process of hiding or
   // destroying a status bubble.
-  if (is_attached())
-    [parent_ removeChildWindow:window_];
+  if (is_attached()) {
+    [parent_ removeChildWindow:window_];  // See crbug.com/28107 ...
+    [window_ orderOut:nil];               // ... and crbug.com/29054.
+  }
 }
 
 void StatusBubbleMac::AnimationDidStop(CAAnimation* animation, bool finished) {
@@ -430,7 +436,9 @@ void StatusBubbleMac::Fade(bool show) {
 
   // This will cancel an in-progress transition and replace it with this fade.
   [NSAnimationContext beginGrouping];
-  [[NSAnimationContext currentContext] gtm_setDuration:duration];
+  // Don't use the GTM additon for the "Steve" slowdown because this can happen
+  // async from user actions and the effects could be a surprise.
+  [[NSAnimationContext currentContext] setDuration:duration];
   [[window_ animator] setAlphaValue:opacity];
   [NSAnimationContext endGrouping];
 }
@@ -531,11 +539,32 @@ void StatusBubbleMac::UpdateSizeAndPosition() {
   [window_ setFrame:CalculateWindowFrame() display:YES];
 }
 
+void StatusBubbleMac::SwitchParentWindow(NSWindow* parent) {
+  DCHECK(parent);
+
+  // If not attached, just update our member variable and position.
+  if (!is_attached()) {
+    parent_ = parent;
+    [[window_ contentView] setThemeProvider:parent];
+    UpdateSizeAndPosition();
+    return;
+  }
+
+  Detach();
+  parent_ = parent;
+  [[window_ contentView] setThemeProvider:parent];
+  Attach();
+  UpdateSizeAndPosition();
+}
+
 NSRect StatusBubbleMac::CalculateWindowFrame() {
   DCHECK(parent_);
 
+  NSSize size = NSMakeSize(0, kWindowHeight);
+  size = [[parent_ contentView] convertSize:size toView:nil];
+
   NSRect rect = [parent_ frame];
-  rect.size.height = kWindowHeight;
+  rect.size.height = size.height;
   rect.size.width = static_cast<int>(kWindowWidthPercent * rect.size.width);
   return rect;
 }

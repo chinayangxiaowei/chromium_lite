@@ -7,12 +7,13 @@
 
 #include <deque>
 #include <map>
+#include <vector>
 
 #include "base/hash_tables.h"
 #include "base/scoped_ptr.h"
 #include "base/task.h"
-#include "net/disk_cache/disk_cache.h"
 #include "webkit/appcache/appcache.h"
+#include "webkit/appcache/appcache_disk_cache.h"
 #include "webkit/appcache/appcache_group.h"
 #include "webkit/appcache/appcache_storage.h"
 
@@ -27,6 +28,7 @@ class MockAppCacheStorage : public AppCacheStorage {
   explicit MockAppCacheStorage(AppCacheService* service);
   virtual ~MockAppCacheStorage();
 
+  virtual void GetAllInfo(Delegate* delegate) {}  // not implemented
   virtual void LoadCache(int64 id, Delegate* delegate);
   virtual void LoadOrCreateGroup(const GURL& manifest_url, Delegate* delegate);
   virtual void StoreGroupAndNewestCache(
@@ -43,6 +45,9 @@ class MockAppCacheStorage : public AppCacheStorage {
   virtual AppCacheResponseWriter* CreateResponseWriter(const GURL& origin);
   virtual void DoomResponses(
       const GURL& manifest_url, const std::vector<int64>& response_ids);
+  virtual void DeleteResponses(
+      const GURL& manifest_url, const std::vector<int64>& response_ids);
+  virtual void PurgeMemory() {}
 
  private:
   friend class AppCacheRequestHandlerTest;
@@ -89,10 +94,11 @@ class MockAppCacheStorage : public AppCacheStorage {
   bool ShouldCacheLoadAppearAsync(const AppCache* cache);
 
   // Lazily constructed in-memory disk cache.
-  disk_cache::Backend* disk_cache() {
+  AppCacheDiskCache* disk_cache() {
     if (!disk_cache_.get()) {
       const int kMaxCacheSize = 10 * 1024 * 1024;
-      disk_cache_.reset(disk_cache::CreateInMemoryCacheBackend(kMaxCacheSize));
+      disk_cache_.reset(new AppCacheDiskCache);
+      disk_cache_->InitWithMemBackend(kMaxCacheSize, NULL);
     }
     return disk_cache_.get();
   }
@@ -138,7 +144,7 @@ class MockAppCacheStorage : public AppCacheStorage {
   StoredCacheMap stored_caches_;
   StoredGroupMap stored_groups_;
   DoomedResponseIds doomed_response_ids_;
-  scoped_ptr<disk_cache::Backend> disk_cache_;
+  scoped_ptr<AppCacheDiskCache> disk_cache_;
   std::deque<Task*> pending_tasks_;
   ScopedRunnableMethodFactory<MockAppCacheStorage> method_factory_;
 
@@ -163,6 +169,7 @@ class MockAppCacheStorage : public AppCacheStorage {
   FRIEND_TEST(MockAppCacheStorageTest, MakeGroupObsolete);
   FRIEND_TEST(MockAppCacheStorageTest, StoreNewGroup);
   FRIEND_TEST(MockAppCacheStorageTest, StoreExistingGroup);
+  FRIEND_TEST(MockAppCacheStorageTest, StoreExistingGroupExistingCache);
   DISALLOW_COPY_AND_ASSIGN(MockAppCacheStorage);
 };
 

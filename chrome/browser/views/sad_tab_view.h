@@ -5,12 +5,13 @@
 #ifndef CHROME_BROWSER_VIEWS_SAD_TAB_VIEW_H_
 #define CHROME_BROWSER_VIEWS_SAD_TAB_VIEW_H_
 
-#include "app/gfx/font.h"
 #include "base/basictypes.h"
+#include "gfx/font.h"
 #include "views/controls/link.h"
 #include "views/view.h"
 
 class SkBitmap;
+class TabContents;
 
 ///////////////////////////////////////////////////////////////////////////////
 //
@@ -23,7 +24,7 @@ class SkBitmap;
 class SadTabView : public views::View,
                    public views::LinkController {
  public:
-  SadTabView();
+  explicit SadTabView(TabContents* tab_contents);
   virtual ~SadTabView() {}
 
   // Overridden from views::View:
@@ -44,6 +45,7 @@ class SadTabView : public views::View,
   static std::wstring message_;
   static int title_width_;
 
+  TabContents* tab_contents_;
   views::Link* learn_more_link_;
 
   // Regions within the display for different components, populated by

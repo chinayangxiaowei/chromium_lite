@@ -7,10 +7,15 @@
 #include "base/scoped_ptr.h"
 #include "base/scoped_nsobject.h"
 #include "chrome/browser/options_window.h"
-#include "chrome/common/pref_member.h"
+#include "chrome/browser/pref_member.h"
+
+namespace PreferencesWindowControllerInternal {
+class PersonalDataManagerObserver;
+class PrefObserverBridge;
+}
 
 @class CustomHomePagesModel;
-class PrefObserverBridge;
+@class FontLanguageSettingsController;
 class PrefService;
 class Profile;
 class ProfileSyncService;
@@ -19,7 +24,7 @@ class ProfileSyncService;
 // A window controller that handles the preferences window. The bulk of the
 // work is handled via Cocoa Bindings and getter/setter methods that wrap
 // cross-platform PrefMember objects. When prefs change in the back-end
-// (that is, outside of this UI), our observer recieves a notification and can
+// (that is, outside of this UI), our observer receives a notification and can
 // tickle the KVO to update the UI so we are always in sync. The bindings are
 // specified in the nib file. Preferences are persisted into the back-end
 // as they are changed in the UI, and are thus immediately available even while
@@ -35,7 +40,8 @@ class ProfileSyncService;
   PrefService* prefs_;  // weak ref - Obtained from profile_ for convenience.
   // weak ref - Also obtained from profile_ for convenience.  May be NULL.
   ProfileSyncService* syncService_;
-  scoped_ptr<PrefObserverBridge> observer_;  // Watches for pref changes.
+  scoped_ptr<PreferencesWindowControllerInternal::PrefObserverBridge>
+      observer_;  // Watches for pref changes.
 
   IBOutlet NSToolbar* toolbar_;
 
@@ -79,22 +85,34 @@ class ProfileSyncService;
   // User Data panel
   BooleanPrefMember askSavePasswords_;
   BooleanPrefMember formAutofill_;
+  // Manages PersonalDataManager loading.
+  scoped_ptr<PreferencesWindowControllerInternal::PersonalDataManagerObserver>
+      personalDataManagerObserver_;
+  IBOutlet NSButton* autoFillSettingsButton_;
   IBOutlet NSButton* syncButton_;
+  IBOutlet NSButton* syncCustomizeButton_;
   IBOutlet NSTextField* syncStatus_;
+  IBOutlet NSButton* syncLink_;
+  scoped_nsobject<NSColor> syncStatusNoErrorBackgroundColor_;
+  scoped_nsobject<NSColor> syncLinkNoErrorBackgroundColor_;
+  scoped_nsobject<NSColor> syncErrorBackgroundColor_;
 
   // Under the hood panel
   IBOutlet NSView* underTheHoodContentView_;
   IBOutlet NSScrollView* underTheHoodScroller_;
+  IBOutlet NSButton* contentSettingsButton_;
+  IBOutlet NSButton* clearDataButton_;
   BooleanPrefMember alternateErrorPages_;
   BooleanPrefMember useSuggest_;
   BooleanPrefMember dnsPrefetch_;
   BooleanPrefMember safeBrowsing_;
   BooleanPrefMember metricsRecording_;
-  IntegerPrefMember cookieBehavior_;
   IBOutlet NSPathControl* downloadLocationControl_;
   IBOutlet NSButton* downloadLocationButton_;
   StringPrefMember defaultDownloadLocation_;
   BooleanPrefMember askForSaveLocation_;
+  BooleanPrefMember translateEnabled_;
+  FontLanguageSettingsController* fontLanguageSettings_;
   StringPrefMember currentTheme_;
   IBOutlet NSButton* enableLoggingCheckbox_;
 }
@@ -119,24 +137,27 @@ class ProfileSyncService;
 
 // User Data panel
 - (IBAction)showSavedPasswords:(id)sender;
+- (IBAction)showAutoFillSettings:(id)sender;
 - (IBAction)importData:(id)sender;
-- (IBAction)clearData:(id)sender;
 - (IBAction)resetThemeToDefault:(id)sender;
 - (IBAction)themesGallery:(id)sender;
 - (IBAction)doSyncAction:(id)sender;
+- (IBAction)doSyncCustomize:(id)sender;
+- (IBAction)doSyncReauthentication:(id)sender;
 
 // Under the hood
 - (IBAction)browseDownloadLocation:(id)sender;
+- (IBAction)clearData:(id)sender;
+- (IBAction)showContentSettings:(id)sender;
 - (IBAction)privacyLearnMore:(id)sender;
+- (IBAction)changeFontAndLanguageSettings:(id)sender;
+- (IBAction)showCertificates:(id)sender;
 
 // When a toolbar button is clicked
 - (IBAction)toolbarButtonSelected:(id)sender;
 
 // Usable from cocoa bindings to hook up the custom home pages table.
 @property(readonly) CustomHomePagesModel* customPagesSource;
-
-// NSNotification sent when the prefs window is closed.
-extern NSString* const kUserDoneEditingPrefsNotification;
 
 @end
 

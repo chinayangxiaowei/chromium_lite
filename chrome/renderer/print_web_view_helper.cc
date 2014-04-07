@@ -4,11 +4,11 @@
 
 #include "chrome/renderer/print_web_view_helper.h"
 
-#include "app/gfx/codec/jpeg_codec.h"
 #include "app/l10n_util.h"
 #include "base/logging.h"
 #include "chrome/common/render_messages.h"
 #include "chrome/renderer/render_view.h"
+#include "gfx/codec/jpeg_codec.h"
 #include "grit/generated_resources.h"
 #include "printing/units.h"
 #include "third_party/WebKit/WebKit/chromium/public/WebFrame.h"
@@ -29,7 +29,8 @@ PrepareFrameAndViewForPrint::PrepareFrameAndViewForPrint(
     const ViewMsg_Print_Params& print_params,
     WebFrame* frame,
     WebView* web_view)
-        : frame_(frame), web_view_(web_view), expected_pages_count_(0) {
+        : frame_(frame), web_view_(web_view), expected_pages_count_(0),
+          use_browser_overlays_(true) {
   print_canvas_size_.set_width(
       printing::ConvertUnit(print_params.printable_size.width(),
                             static_cast<int>(print_params.dpi),
@@ -53,7 +54,9 @@ PrepareFrameAndViewForPrint::PrepareFrameAndViewForPrint(
 
   web_view->resize(print_layout_size);
 
-  expected_pages_count_ = frame->printBegin(print_canvas_size_);
+  expected_pages_count_ = frame->printBegin(
+      print_canvas_size_, static_cast<int>(print_params.dpi),
+      &use_browser_overlays_);
 }
 
 PrepareFrameAndViewForPrint::~PrepareFrameAndViewForPrint() {

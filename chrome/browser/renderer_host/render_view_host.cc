@@ -8,10 +8,10 @@
 #include <utility>
 #include <vector>
 
-#include "app/gfx/native_widget_types.h"
-#include "app/l10n_util.h"
 #include "app/resource_bundle.h"
+#include "base/i18n/rtl.h"
 #include "base/json/json_reader.h"
+#include "base/stats_counters.h"
 #include "base/string_util.h"
 #include "base/time.h"
 #include "base/waitable_event.h"
@@ -21,6 +21,7 @@
 #include "chrome/browser/dom_operation_notification_details.h"
 #include "chrome/browser/extensions/extension_message_service.h"
 #include "chrome/browser/metrics/user_metrics.h"
+#include "chrome/browser/net/url_request_context_getter.h"
 #include "chrome/browser/notifications/desktop_notification_service.h"
 #include "chrome/browser/profile.h"
 #include "chrome/browser/renderer_host/render_process_host.h"
@@ -36,11 +37,14 @@
 #include "chrome/common/result_codes.h"
 #include "chrome/common/chrome_constants.h"
 #include "chrome/common/thumbnail_score.h"
+#include "chrome/common/translate_errors.h"
 #include "chrome/common/url_constants.h"
+#include "gfx/native_widget_types.h"
 #include "net/base/net_util.h"
 #include "third_party/skia/include/core/SkBitmap.h"
 #include "third_party/WebKit/WebKit/chromium/public/WebFindOptions.h"
-#include "webkit/glue/form_field_values.h"
+#include "webkit/glue/form_data.h"
+#include "webkit/glue/form_field.h"
 
 #if defined(OS_WIN)
 // TODO(port): accessibility not yet implemented. See http://crbug.com/8288.
@@ -48,7 +52,10 @@
 #endif
 
 using base::TimeDelta;
+using webkit_glue::FormData;
+using webkit_glue::PasswordForm;
 using webkit_glue::PasswordFormDomManager;
+using webkit_glue::WebApplicationInfo;
 using WebKit::WebConsoleMessage;
 using WebKit::WebDragOperation;
 using WebKit::WebDragOperationNone;
@@ -102,7 +109,8 @@ RenderViewHost* RenderViewHost::FromID(int render_process_id,
 
 RenderViewHost::RenderViewHost(SiteInstance* instance,
                                RenderViewHostDelegate* delegate,
-                               int routing_id)
+                               int routing_id,
+                               int64 session_storage_namespace_id)
     : RenderWidgetHost(instance->GetProcess(), routing_id),
       instance_(instance),
       delegate_(delegate),
@@ -116,15 +124,10 @@ RenderViewHost::RenderViewHost(SiteInstance* instance,
       is_waiting_for_unload_ack_(false),
       unload_ack_is_for_cross_site_transition_(false),
       are_javascript_messages_suppressed_(false),
-      sudden_termination_allowed_(false) {
+      sudden_termination_allowed_(false),
+      session_storage_namespace_id_(session_storage_namespace_id) {
   DCHECK(instance_);
   DCHECK(delegate_);
-
-  // TODO(mpcomplete): remove this notification (and registrar) when we figure
-  // out why we're crashing on process()->Init().
-  // http://code.google.com/p/chromium/issues/detail?id=15607
-  registrar_.Add(this, NotificationType::RENDERER_PROCESS_TERMINATED,
-                 NotificationService::AllSources());
 }
 
 RenderViewHost::~RenderViewHost() {
@@ -144,30 +147,9 @@ RenderViewHost::~RenderViewHost() {
       NotificationService::NoDetails());
 }
 
-void RenderViewHost::Observe(NotificationType type,
-                             const NotificationSource& source,
-                             const NotificationDetails& details) {
-  DCHECK(type == NotificationType::RENDERER_PROCESS_TERMINATED);
-  RenderProcessHost* rph = Source<RenderProcessHost>(source).ptr();
-  if (rph == process()) {
-    // Try to get some debugging information on the stack.
-    bool no_listeners = rph->ListenersIterator().IsAtEnd();
-    bool live_instance = site_instance() != NULL;
-    CHECK(live_instance);
-    bool live_process = site_instance()->GetProcess() != NULL;
-    bool same_process = site_instance()->GetProcess() == rph;
-    CHECK(no_listeners);
-    CHECK(live_process);
-    CHECK(same_process);
-    CHECK(false) << "RenderViewHost should outlive its RenderProcessHost.";
-  }
-}
-
-bool RenderViewHost::CreateRenderView() {
+bool RenderViewHost::CreateRenderView(
+    URLRequestContextGetter* request_context) {
   DCHECK(!IsRenderViewLive()) << "Creating view twice";
-  CHECK(process());
-  CHECK(!process()->ListenersIterator().IsAtEnd()) <<
-      "Our process should have us as a listener.";
 
   // The process may (if we're sharing a process with another host that already
   // initialized it) or may not (we have our own process or the old process
@@ -175,7 +157,7 @@ bool RenderViewHost::CreateRenderView() {
   // ignored, so this is safe.
   bool is_extensions_process =
       BindingsPolicy::is_extension_enabled(enabled_bindings_);
-  if (!process()->Init(is_extensions_process))
+  if (!process()->Init(is_extensions_process, request_context))
     return false;
   DCHECK(process()->HasConnection());
   DCHECK(process()->profile());
@@ -188,6 +170,10 @@ bool RenderViewHost::CreateRenderView() {
   if (is_extensions_process) {
     ChildProcessSecurityPolicy::GetInstance()->GrantExtensionBindings(
         process()->id());
+
+    // Extensions may have permission to access chrome:// URLs.
+    ChildProcessSecurityPolicy::GetInstance()->GrantScheme(
+        process()->id(), chrome::kChromeUIScheme);
   }
 
   renderer_initialized_ = true;
@@ -202,10 +188,14 @@ bool RenderViewHost::CreateRenderView() {
     webkit_prefs.databases_enabled = true;
   }
 
-  Send(new ViewMsg_New(GetNativeViewId(),
-                       delegate_->GetRendererPrefs(),
-                       webkit_prefs,
-                       routing_id()));
+  ViewMsg_New_Params params;
+  params.parent_window = GetNativeViewId();
+  params.renderer_preferences =
+      delegate_->GetRendererPrefs(process()->profile());
+  params.web_preferences = webkit_prefs;
+  params.view_id = routing_id();
+  params.session_storage_namespace_id = session_storage_namespace_id_;
+  Send(new ViewMsg_New(params));
 
   // Set the alternate error page, which is profile specific, in the renderer.
   GURL url = delegate_->GetAlternateErrorPageURL();
@@ -230,7 +220,8 @@ bool RenderViewHost::IsRenderViewLive() const {
 
 void RenderViewHost::SyncRendererPrefs() {
   Send(new ViewMsg_SetRendererPrefs(routing_id(),
-                                    delegate_->GetRendererPrefs()));
+                                    delegate_->GetRendererPrefs(
+                                        process()->profile())));
 }
 
 void RenderViewHost::Navigate(const ViewMsg_Navigate_Params& params) {
@@ -274,15 +265,6 @@ void RenderViewHost::NavigateToURL(const GURL& url) {
   params.transition = PageTransition::LINK;
   params.navigation_type = ViewMsg_Navigate_Params::NORMAL;
   Navigate(params);
-}
-
-void RenderViewHost::LoadAlternateHTMLString(const std::string& html_text,
-                                             bool new_navigation,
-                                             const GURL& display_url,
-                                             const std::string& security_info) {
-  Send(new ViewMsg_LoadAlternateHTMLText(routing_id(), html_text,
-                                         new_navigation, display_url,
-                                         security_info));
 }
 
 void RenderViewHost::SetNavigationsSuspended(bool suspend) {
@@ -378,6 +360,10 @@ void RenderViewHost::Stop() {
   Send(new ViewMsg_Stop(routing_id()));
 }
 
+void RenderViewHost::ReloadFrame() {
+  Send(new ViewMsg_ReloadFrame(routing_id()));
+}
+
 bool RenderViewHost::PrintPages() {
   return Send(new ViewMsg_PrintPages(routing_id()));
 }
@@ -404,8 +390,25 @@ void RenderViewHost::StartFinding(int request_id,
   // The result of the search is sent as a notification message by the renderer.
 }
 
-void RenderViewHost::StopFinding(bool clear_selection) {
-  Send(new ViewMsg_StopFinding(routing_id(), clear_selection));
+void RenderViewHost::StopFinding(
+    FindBarController::SelectionAction selection_action) {
+  ViewMsg_StopFinding_Params params;
+
+  switch (selection_action) {
+    case FindBarController::kClearSelection:
+      params.action = ViewMsg_StopFinding_Params::kClearSelection;
+      break;
+    case FindBarController::kKeepSelection:
+      params.action = ViewMsg_StopFinding_Params::kKeepSelection;
+      break;
+    case FindBarController::kActivateSelection:
+      params.action = ViewMsg_StopFinding_Params::kActivateSelection;
+      break;
+    default:
+      NOTREACHED();
+      params.action = ViewMsg_StopFinding_Params::kKeepSelection;
+  }
+  Send(new ViewMsg_StopFinding(routing_id(), params));
 }
 
 void RenderViewHost::Zoom(PageZoom::Function function) {
@@ -422,10 +425,6 @@ void RenderViewHost::ResetPageEncodingToDefault() {
 
 void RenderViewHost::SetAlternateErrorPageURL(const GURL& url) {
   Send(new ViewMsg_SetAltErrorPageURL(routing_id(), url));
-}
-
-void RenderViewHost::FillForm(const FormData& form_data) {
-  Send(new ViewMsg_FormFill(routing_id(), form_data));
 }
 
 void RenderViewHost::FillPasswordForm(
@@ -524,10 +523,6 @@ void RenderViewHost::ToggleSpellCheck() {
   Send(new ViewMsg_ToggleSpellCheck(routing_id()));
 }
 
-void RenderViewHost::AddToDictionary(const string16& word) {
-  process()->AddWord(word);
-}
-
 void RenderViewHost::Delete() {
   Send(new ViewMsg_Delete(routing_id()));
 }
@@ -557,6 +552,10 @@ void RenderViewHost::GetApplicationInfo(int32 page_id) {
 
 void RenderViewHost::CaptureThumbnail() {
   Send(new ViewMsg_CaptureThumbnail(routing_id()));
+}
+
+void RenderViewHost::CaptureSnapshot() {
+  Send(new ViewMsg_CaptureSnapshot(routing_id()));
 }
 
 void RenderViewHost::JavaScriptMessageBoxClosed(IPC::Message* reply_msg,
@@ -656,16 +655,9 @@ void RenderViewHost::InstallMissingPlugin() {
   Send(new ViewMsg_InstallMissingPlugin(routing_id()));
 }
 
-void RenderViewHost::FileSelected(const FilePath& path) {
-  ChildProcessSecurityPolicy::GetInstance()->GrantUploadFile(
-      process()->id(), path);
-  std::vector<FilePath> files;
-  files.push_back(path);
-  Send(new ViewMsg_RunFileChooserResponse(routing_id(), files));
-}
-
-void RenderViewHost::MultiFilesSelected(
-         const std::vector<FilePath>& files) {
+void RenderViewHost::FilesSelectedInChooser(
+    const std::vector<FilePath>& files) {
+  // Grant the security access requested to the given files.
   for (std::vector<FilePath>::const_iterator file = files.begin();
        file != files.end(); ++file) {
     ChildProcessSecurityPolicy::GetInstance()->GrantUploadFile(
@@ -723,6 +715,7 @@ void RenderViewHost::OnMessageReceived(const IPC::Message& msg) {
     IPC_MESSAGE_HANDLER(ViewHostMsg_UpdateEncoding, OnMsgUpdateEncoding)
     IPC_MESSAGE_HANDLER(ViewHostMsg_UpdateTargetURL, OnMsgUpdateTargetURL)
     IPC_MESSAGE_HANDLER(ViewHostMsg_Thumbnail, OnMsgThumbnail)
+    IPC_MESSAGE_HANDLER(ViewHostMsg_Snapshot, OnMsgScreenshot)
     IPC_MESSAGE_HANDLER(ViewHostMsg_UpdateInspectorSettings,
                         OnUpdateInspectorSettings);
     IPC_MESSAGE_HANDLER(ViewHostMsg_Close, OnMsgClose)
@@ -770,9 +763,9 @@ void RenderViewHost::OnMessageReceived(const IPC::Message& msg) {
                                     OnMsgRunBeforeUnloadConfirm)
     IPC_MESSAGE_HANDLER_DELAY_REPLY(ViewHostMsg_ShowModalHTMLDialog,
                                     OnMsgShowModalHTMLDialog)
+    IPC_MESSAGE_HANDLER(ViewHostMsg_FormsSeen, OnMsgFormsSeen)
     IPC_MESSAGE_HANDLER(ViewHostMsg_PasswordFormsSeen, OnMsgPasswordFormsSeen)
-    IPC_MESSAGE_HANDLER(ViewHostMsg_FormFieldValuesSubmitted,
-                        OnMsgFormFieldValuesSubmitted)
+    IPC_MESSAGE_HANDLER(ViewHostMsg_FormSubmitted, OnMsgFormSubmitted)
     IPC_MESSAGE_HANDLER(ViewHostMsg_StartDragging, OnMsgStartDragging)
     IPC_MESSAGE_HANDLER(ViewHostMsg_UpdateDragCursor, OnUpdateDragCursor)
     IPC_MESSAGE_HANDLER(ViewHostMsg_TakeFocus, OnTakeFocus)
@@ -789,10 +782,10 @@ void RenderViewHost::OnMessageReceived(const IPC::Message& msg) {
                         OnActivateDevToolsWindow);
     IPC_MESSAGE_HANDLER(ViewHostMsg_CloseDevToolsWindow,
                         OnCloseDevToolsWindow);
-    IPC_MESSAGE_HANDLER(ViewHostMsg_DockDevToolsWindow,
-                        OnDockDevToolsWindow);
-    IPC_MESSAGE_HANDLER(ViewHostMsg_UndockDevToolsWindow,
-                        OnUndockDevToolsWindow);
+    IPC_MESSAGE_HANDLER(ViewHostMsg_RequestDockDevToolsWindow,
+                        OnRequestDockDevToolsWindow);
+    IPC_MESSAGE_HANDLER(ViewHostMsg_RequestUndockDevToolsWindow,
+                        OnRequestUndockDevToolsWindow);
     IPC_MESSAGE_HANDLER(ViewHostMsg_DevToolsRuntimeFeatureStateChanged,
                         OnDevToolsRuntimeFeatureStateChanged);
     IPC_MESSAGE_HANDLER(ViewHostMsg_UserMetricsRecordAction,
@@ -812,6 +805,8 @@ void RenderViewHost::OnMessageReceived(const IPC::Message& msg) {
                         OnQueryFormFieldAutofill)
     IPC_MESSAGE_HANDLER(ViewHostMsg_RemoveAutofillEntry,
                         OnRemoveAutofillEntry)
+    IPC_MESSAGE_HANDLER(ViewHostMsg_FillAutoFillFormData,
+                        OnFillAutoFillFormData)
     IPC_MESSAGE_HANDLER(ViewHostMsg_ShowDesktopNotification,
                         OnShowDesktopNotification)
     IPC_MESSAGE_HANDLER(ViewHostMsg_ShowDesktopNotificationText,
@@ -826,10 +821,12 @@ void RenderViewHost::OnMessageReceived(const IPC::Message& msg) {
                         OnExtensionPostMessage)
     IPC_MESSAGE_HANDLER(ViewHostMsg_AccessibilityFocusChange,
                         OnAccessibilityFocusChange)
+    IPC_MESSAGE_HANDLER(ViewHostMsg_AccessibilityObjectStateChange,
+                        OnAccessibilityObjectStateChange)
     IPC_MESSAGE_HANDLER(ViewHostMsg_OnCSSInserted, OnCSSInserted)
-    IPC_MESSAGE_HANDLER(ViewHostMsg_ContentBlocked, OnContentBlocked)
     IPC_MESSAGE_HANDLER(ViewHostMsg_PageContents, OnPageContents)
     IPC_MESSAGE_HANDLER(ViewHostMsg_PageTranslated, OnPageTranslated)
+    IPC_MESSAGE_HANDLER(ViewHostMsg_ContentBlocked, OnContentBlocked)
     // Have the super handle all other messages.
     IPC_MESSAGE_UNHANDLED(RenderWidgetHost::OnMessageReceived(msg))
   IPC_END_MESSAGE_MAP_EX()
@@ -858,10 +855,11 @@ void RenderViewHost::CreateNewWindow(int route_id) {
   view->CreateNewWindow(route_id);
 }
 
-void RenderViewHost::CreateNewWidget(int route_id, bool activatable) {
+void RenderViewHost::CreateNewWidget(int route_id,
+                                     WebKit::WebPopupType popup_type) {
   RenderViewHostDelegate::View* view = delegate_->GetViewDelegate();
   if (view)
-    view->CreateNewWidget(route_id, activatable);
+    view->CreateNewWidget(route_id, popup_type);
 }
 
 void RenderViewHost::OnMsgShowView(int route_id,
@@ -969,8 +967,6 @@ void RenderViewHost::OnMsgNavigate(const IPC::Message& msg) {
   FilterURL(policy, renderer_id, &validated_params.password_form.action);
 
   delegate_->DidNavigate(this, validated_params);
-
-  UpdateBackForwardListCount();
 }
 
 void RenderViewHost::OnMsgUpdateState(int32 page_id,
@@ -1004,6 +1000,13 @@ void RenderViewHost::OnMsgThumbnail(const GURL& url,
                                     const ThumbnailScore& score,
                                     const SkBitmap& bitmap) {
   delegate_->UpdateThumbnail(url, bitmap, score);
+}
+
+void RenderViewHost::OnMsgScreenshot(const SkBitmap& bitmap) {
+  NotificationService::current()->Notify(
+      NotificationType::TAB_SNAPSHOT_TAKEN,
+      Source<RenderViewHost>(this),
+      Details<const SkBitmap>(&bitmap));
 }
 
 void RenderViewHost::OnUpdateInspectorSettings(
@@ -1050,6 +1053,9 @@ void RenderViewHost::OnMsgDidLoadResourceFromMemoryCache(
     const std::string& frame_origin,
     const std::string& main_frame_origin,
     const std::string& security_info) {
+  static StatsCounter cache("WebKit.CacheHit");
+  cache.Increment();
+
   RenderViewHostDelegate::Resource* resource_delegate =
       delegate_->GetResourceDelegate();
   if (resource_delegate) {
@@ -1209,7 +1215,8 @@ void RenderViewHost::OnMsgDomOperationResponse(
 }
 
 void RenderViewHost::OnMsgDOMUISend(
-    const std::string& message, const std::string& content) {
+    const GURL& source_url, const std::string& message,
+    const std::string& content) {
   if (!ChildProcessSecurityPolicy::GetInstance()->
           HasDOMUIBindings(process()->id())) {
     NOTREACHED() << "Blocked unauthorized use of DOMUIBindings.";
@@ -1232,7 +1239,7 @@ void RenderViewHost::OnMsgDOMUISend(
     }
   }
 
-  delegate_->ProcessDOMUIMessage(message, value.get(),
+  delegate_->ProcessDOMUIMessage(message, value.get(), source_url,
                                  kRequestId, kHasCallback);
 }
 
@@ -1283,13 +1290,13 @@ void RenderViewHost::OnMsgSetTooltipText(
   std::wstring wrapped_tooltip_text = tooltip_text;
   if (!tooltip_text.empty()) {
     if (text_direction_hint == WebKit::WebTextDirectionLeftToRight &&
-        l10n_util::GetTextDirection() == l10n_util::RIGHT_TO_LEFT) {
+        base::i18n::IsRTL()) {
       // Force the tooltip to have LTR directionality.
-      l10n_util::WrapStringWithLTRFormatting(&wrapped_tooltip_text);
+      base::i18n::WrapStringWithLTRFormatting(&wrapped_tooltip_text);
     } else if (text_direction_hint == WebKit::WebTextDirectionRightToLeft &&
-               l10n_util::GetTextDirection() == l10n_util::LEFT_TO_RIGHT) {
+               !base::i18n::IsRTL()) {
       // Force the tooltip to have RTL directionality.
-      l10n_util::WrapStringWithRTLFormatting(&wrapped_tooltip_text);
+      base::i18n::WrapStringWithRTLFormatting(&wrapped_tooltip_text);
     }
   }
   if (view())
@@ -1301,10 +1308,9 @@ void RenderViewHost::OnMsgSelectionChanged(const std::string& text) {
     view()->SelectionChanged(text);
 }
 
-void RenderViewHost::OnMsgRunFileChooser(bool multiple_files,
-                                         const string16& title,
-                                         const FilePath& default_file) {
-  delegate_->RunFileChooser(multiple_files, title, default_file);
+void RenderViewHost::OnMsgRunFileChooser(
+    const ViewHostMsg_RunFileChooser_Params& params) {
+  delegate_->RunFileChooser(params);
 }
 
 void RenderViewHost::OnMsgRunJavaScriptMessage(
@@ -1345,30 +1351,38 @@ void RenderViewHost::MediaPlayerActionAt(const gfx::Point& location,
   Send(new ViewMsg_MediaPlayerActionAt(routing_id(), location, action));
 }
 
+void RenderViewHost::OnMsgFormsSeen(const std::vector<FormData>& forms) {
+  RenderViewHostDelegate::AutoFill* autofill_delegate =
+      delegate_->GetAutoFillDelegate();
+  if (autofill_delegate)
+    autofill_delegate->FormsSeen(forms);
+}
+
 void RenderViewHost::OnMsgPasswordFormsSeen(
-    const std::vector<webkit_glue::PasswordForm>& forms) {
+    const std::vector<PasswordForm>& forms) {
   delegate_->PasswordFormsSeen(forms);
 }
 
-void RenderViewHost::OnMsgFormFieldValuesSubmitted(
-    const webkit_glue::FormFieldValues& form) {
-  RenderViewHostDelegate::FormFieldHistory* formfield_history_delegate =
-      delegate_->GetFormFieldHistoryDelegate();
-  if (formfield_history_delegate)
-    formfield_history_delegate->FormFieldValuesSubmitted(form);
+void RenderViewHost::OnMsgFormSubmitted(const FormData& form) {
+  RenderViewHostDelegate::Autocomplete* autocomplete_delegate =
+      delegate_->GetAutocompleteDelegate();
+  if (autocomplete_delegate)
+    autocomplete_delegate->FormSubmitted(form);
 
   RenderViewHostDelegate::AutoFill* autofill_delegate =
       delegate_->GetAutoFillDelegate();
   if (autofill_delegate)
-    autofill_delegate->FormFieldValuesSubmitted(form);
+    autofill_delegate->FormSubmitted(form);
 }
 
 void RenderViewHost::OnMsgStartDragging(
     const WebDropData& drop_data,
-    WebDragOperationsMask drag_operations_mask) {
+    WebDragOperationsMask drag_operations_mask,
+    const SkBitmap& image,
+    const gfx::Point& image_offset) {
   RenderViewHostDelegate::View* view = delegate_->GetViewDelegate();
   if (view)
-      view->StartDragging(drop_data, drag_operations_mask);
+      view->StartDragging(drop_data, drag_operations_mask, image, image_offset);
 }
 
 void RenderViewHost::OnUpdateDragCursor(WebDragOperation current_op) {
@@ -1427,12 +1441,12 @@ void RenderViewHost::OnCloseDevToolsWindow() {
   DevToolsManager::GetInstance()->CloseWindow(this);
 }
 
-void RenderViewHost::OnDockDevToolsWindow() {
-  DevToolsManager::GetInstance()->DockWindow(this);
+void RenderViewHost::OnRequestDockDevToolsWindow() {
+  DevToolsManager::GetInstance()->RequestDockWindow(this);
 }
 
-void RenderViewHost::OnUndockDevToolsWindow() {
-  DevToolsManager::GetInstance()->UndockWindow(this);
+void RenderViewHost::OnRequestUndockDevToolsWindow() {
+  DevToolsManager::GetInstance()->RequestUndockWindow(this);
 }
 
 void RenderViewHost::OnDevToolsRuntimeFeatureStateChanged(
@@ -1442,24 +1456,21 @@ void RenderViewHost::OnDevToolsRuntimeFeatureStateChanged(
       RuntimeFeatureStateChanged(this, feature, enabled);
 }
 
-void RenderViewHost::OnUserMetricsRecordAction(const std::wstring& action) {
-  UserMetrics::RecordComputedAction(action.c_str(), process()->profile());
+void RenderViewHost::OnUserMetricsRecordAction(const std::string& action) {
+  UserMetrics::RecordComputedAction(action, process()->profile());
 }
 
-bool RenderViewHost::ShouldSendToRenderer(const NativeWebKeyboardEvent& event) {
+bool RenderViewHost::PreHandleKeyboardEvent(
+    const NativeWebKeyboardEvent& event, bool* is_keyboard_shortcut) {
   RenderViewHostDelegate::View* view = delegate_->GetViewDelegate();
-  if (!view)
-    return true;
-  return !view->IsReservedAccelerator(event);
+  return view && view->PreHandleKeyboardEvent(event, is_keyboard_shortcut);
 }
 
-bool RenderViewHost::UnhandledKeyboardEvent(
+void RenderViewHost::UnhandledKeyboardEvent(
     const NativeWebKeyboardEvent& event) {
   RenderViewHostDelegate::View* view = delegate_->GetViewDelegate();
-  if (view) {
-    return view->HandleKeyboardEvent(event);
-  }
-  return false;
+  if (view)
+    view->HandleKeyboardEvent(event);
 }
 
 void RenderViewHost::OnUserGesture() {
@@ -1483,18 +1494,6 @@ void RenderViewHost::OnCrashedPlugin(const FilePath& plugin_path) {
     integration_delegate->OnCrashedPlugin(plugin_path);
 }
 
-void RenderViewHost::UpdateBackForwardListCount() {
-  int back_list_count = 0, forward_list_count = 0;
-  RenderViewHostDelegate::BrowserIntegration* integration_delegate =
-      delegate_->GetBrowserIntegrationDelegate();
-  if (integration_delegate) {
-    integration_delegate->GetHistoryListCount(&back_list_count,
-                                              &forward_list_count);
-    Send(new ViewMsg_UpdateBackForwardListCount(
-         routing_id(), back_list_count, forward_list_count));
-  }
-}
-
 void RenderViewHost::GetAllSavableResourceLinksForCurrentPage(
     const GURL& page_url) {
   Send(new ViewMsg_GetAllSavableResourceLinksForCurrentPage(routing_id(),
@@ -1513,8 +1512,7 @@ void RenderViewHost::OnReceivedSavableResourceLinksForCurrentPage(
 }
 
 void RenderViewHost::OnDidGetApplicationInfo(
-    int32 page_id,
-    const webkit_glue::WebApplicationInfo& info) {
+    int32 page_id, const WebApplicationInfo& info) {
   RenderViewHostDelegate::BrowserIntegration* integration_delegate =
       delegate_->GetBrowserIntegrationDelegate();
   if (integration_delegate)
@@ -1555,34 +1553,74 @@ void RenderViewHost::OnMsgShouldCloseACK(bool proceed) {
   }
 }
 
-void RenderViewHost::OnQueryFormFieldAutofill(int query_id,
-                                              const string16& field_name,
-                                              const string16& user_text) {
-  RenderViewHostDelegate::FormFieldHistory* formfield_history_delegate =
-      delegate_->GetFormFieldHistoryDelegate();
-  bool ok = false;
-  if (formfield_history_delegate) {
-    ok = formfield_history_delegate->GetFormFieldHistorySuggestions(
-        query_id, field_name, user_text);
+void RenderViewHost::OnQueryFormFieldAutofill(
+    int query_id, const webkit_glue::FormField& field) {
+  RenderViewHostDelegate::AutoFill* autofill_delegate =
+      delegate_->GetAutoFillDelegate();
+  // If the AutoFill delegate has results to return, we don't need any results
+  // from the Autocomplete delegate.
+  if (autofill_delegate &&
+      autofill_delegate->GetAutoFillSuggestions(query_id, field)) {
+      return;
   }
-  if (!ok)
-    FormFieldHistorySuggestionsReturned(query_id, std::vector<string16>(), -1);
+
+  RenderViewHostDelegate::Autocomplete* autocomplete_delegate =
+      delegate_->GetAutocompleteDelegate();
+  if (autocomplete_delegate &&
+      autocomplete_delegate->GetAutocompleteSuggestions(
+          query_id, field.name(), field.value())) {
+      return;
+  }
+
+  // No suggestions provided, so send an empty vector as the results.
+  AutocompleteSuggestionsReturned(query_id, std::vector<string16>(), -1);
 }
 
 void RenderViewHost::OnRemoveAutofillEntry(const string16& field_name,
                                            const string16& value) {
-  RenderViewHostDelegate::FormFieldHistory* formfield_history_delegate =
-      delegate_->GetFormFieldHistoryDelegate();
-  if (formfield_history_delegate)
-    formfield_history_delegate->RemoveFormFieldHistoryEntry(field_name, value);
+  RenderViewHostDelegate::Autocomplete* autocomplete_delegate =
+      delegate_->GetAutocompleteDelegate();
+  if (autocomplete_delegate)
+    autocomplete_delegate->RemoveAutocompleteEntry(field_name, value);
 }
 
-void RenderViewHost::FormFieldHistorySuggestionsReturned(
+void RenderViewHost::OnFillAutoFillFormData(int query_id,
+                                            const FormData& form,
+                                            const string16& name,
+                                            const string16& label) {
+  RenderViewHostDelegate::AutoFill* autofill_delegate =
+      delegate_->GetAutoFillDelegate();
+  if (!autofill_delegate)
+    return;
+
+  autofill_delegate->FillAutoFillFormData(query_id, form, name, label);
+}
+
+void RenderViewHost::AutoFillSuggestionsReturned(
+    int query_id,
+    const std::vector<string16>& names,
+    const std::vector<string16>& labels,
+    int default_suggestion_index) {
+  Send(new ViewMsg_AutoFillSuggestionsReturned(
+      routing_id(), query_id, names, labels, default_suggestion_index));
+}
+
+void RenderViewHost::AutoFillForms(
+    const std::vector<webkit_glue::FormData>& forms) {
+  Send(new ViewMsg_AutoFillForms(routing_id(), forms));
+}
+
+void RenderViewHost::AutocompleteSuggestionsReturned(
     int query_id, const std::vector<string16>& suggestions,
     int default_suggestion_index) {
-  Send(new ViewMsg_QueryFormFieldAutofill_ACK(
+  Send(new ViewMsg_AutocompleteSuggestionsReturned(
       routing_id(), query_id, suggestions, -1));
   // Default index -1 means no default suggestion.
+}
+
+void RenderViewHost::AutoFillFormDataFilled(int query_id,
+                                            const FormData& form) {
+  Send(new ViewMsg_AutoFillFormDataFilled(routing_id(), query_id, form));
 }
 
 void RenderViewHost::WindowMoveOrResizeStarted() {
@@ -1623,11 +1661,26 @@ void RenderViewHost::ForwardMouseEvent(
       case WebInputEvent::MouseLeave:
         view->HandleMouseLeave();
         break;
+      case WebInputEvent::MouseDown:
+      case WebInputEvent::MouseWheel:
+        if (ignore_input_events() && delegate_)
+          delegate_->OnIgnoredUIEvent();
+        break;
       default:
         // For now, we don't care about the rest.
         break;
     }
   }
+}
+
+void RenderViewHost::ForwardKeyboardEvent(
+    const NativeWebKeyboardEvent& key_event) {
+  if (ignore_input_events()) {
+    if (key_event.type == WebInputEvent::RawKeyDown && delegate_)
+      delegate_->OnIgnoredUIEvent();
+    return;
+  }
+  RenderWidgetHost::ForwardKeyboardEvent(key_event);
 }
 
 void RenderViewHost::ForwardEditCommand(const std::string& name,
@@ -1688,6 +1741,7 @@ void RenderViewHost::OnRequestNotificationPermission(
 
 void RenderViewHost::OnExtensionRequest(const std::string& name,
                                         const ListValue& args_holder,
+                                        const GURL& source_url,
                                         int request_id,
                                         bool has_callback) {
   if (!ChildProcessSecurityPolicy::GetInstance()->
@@ -1707,7 +1761,8 @@ void RenderViewHost::OnExtensionRequest(const std::string& name,
     return;
   }
 
-  delegate_->ProcessDOMUIMessage(name, args, request_id, has_callback);
+  delegate_->ProcessDOMUIMessage(name, args, source_url, request_id,
+      has_callback);
 }
 
 void RenderViewHost::SendExtensionResponse(int request_id, bool success,
@@ -1726,16 +1781,29 @@ void RenderViewHost::ViewTypeChanged(ViewType::Type type) {
   Send(new ViewMsg_NotifyRenderViewType(routing_id(), type));
 }
 
-void RenderViewHost::SendContentSettings(const std::string& host,
-                                         const ContentSettings& settings) {
-  Send(new ViewMsg_SetContentSettingsForCurrentHost(host, settings));
+void RenderViewHost::UpdateBrowserWindowId(int window_id) {
+  Send(new ViewMsg_UpdateBrowserWindowId(routing_id(), window_id));
+}
+
+void RenderViewHost::PerformCustomContextMenuAction(unsigned action) {
+  Send(new ViewMsg_CustomContextMenuAction(routing_id(), action));
 }
 
 void RenderViewHost::TranslatePage(int page_id,
+                                   const std::string& translate_script,
                                    const std::string& source_lang,
                                    const std::string& target_lang) {
-  Send(new ViewMsg_TranslatePage(routing_id(), page_id,
+  Send(new ViewMsg_TranslatePage(routing_id(), page_id, translate_script,
                                  source_lang, target_lang));
+}
+
+void RenderViewHost::RevertTranslation(int page_id) {
+  Send(new ViewMsg_RevertTranslation(routing_id(), page_id));
+}
+
+void RenderViewHost::SendContentSettings(const GURL& url,
+                                         const ContentSettings& settings) {
+  Send(new ViewMsg_SetContentSettingsForCurrentURL(url, settings));
 }
 
 void RenderViewHost::OnExtensionPostMessage(
@@ -1755,19 +1823,17 @@ void RenderViewHost::OnAccessibilityFocusChange(int acc_obj_id) {
 #endif
 }
 
+void RenderViewHost::OnAccessibilityObjectStateChange(int acc_obj_id) {
+#if defined(OS_WIN)
+  BrowserAccessibilityManager::GetInstance()->OnAccessibilityObjectStateChange(
+      acc_obj_id, process()->id(), routing_id());
+#else
+  // TODO(port): accessibility not yet implemented. See http://crbug.com/8288.
+#endif
+}
+
 void RenderViewHost::OnCSSInserted() {
   delegate_->DidInsertCSS();
-}
-
-void RenderViewHost::UpdateBrowserWindowId(int window_id) {
-  Send(new ViewMsg_UpdateBrowserWindowId(routing_id(), window_id));
-}
-
-void RenderViewHost::OnContentBlocked(ContentSettingsType type) {
-  RenderViewHostDelegate::Resource* resource_delegate =
-      delegate_->GetResourceDelegate();
-  if (resource_delegate)
-    resource_delegate->OnContentBlocked(type);
 }
 
 void RenderViewHost::OnPageContents(const GURL& url,
@@ -1784,11 +1850,19 @@ void RenderViewHost::OnPageContents(const GURL& url,
 
 void RenderViewHost::OnPageTranslated(int32 page_id,
                                       const std::string& original_lang,
-                                      const std::string& translated_lang) {
+                                      const std::string& translated_lang,
+                                      TranslateErrors::Type error_type) {
   RenderViewHostDelegate::BrowserIntegration* integration_delegate =
       delegate_->GetBrowserIntegrationDelegate();
   if (!integration_delegate)
     return;
-  integration_delegate->OnPageTranslated(page_id,
-                                         original_lang, translated_lang);
+  integration_delegate->OnPageTranslated(page_id, original_lang,
+                                         translated_lang, error_type);
+}
+
+void RenderViewHost::OnContentBlocked(ContentSettingsType type) {
+  RenderViewHostDelegate::Resource* resource_delegate =
+      delegate_->GetResourceDelegate();
+  if (resource_delegate)
+    resource_delegate->OnContentBlocked(type);
 }

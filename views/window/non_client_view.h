@@ -1,4 +1,4 @@
-// Copyright (c) 2006-2008 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -56,7 +56,11 @@ class NonClientFrameView : public View {
 
   virtual gfx::Rect GetWindowBoundsForClientBounds(
       const gfx::Rect& client_bounds) const = 0;
-  virtual gfx::Point GetSystemMenuPoint() const = 0;
+
+  // This function must ask the ClientView to do a hittest.  We don't do this in
+  // the parent NonClientView because that makes it more difficult to calculate
+  // hittests for regions that are partially obscured by the ClientView, e.g.
+  // HTSYSMENU.
   virtual int NonClientHitTest(const gfx::Point& point) = 0;
   virtual void GetWindowMask(const gfx::Size& size,
                              gfx::Path* window_mask) = 0;
@@ -170,10 +174,6 @@ class NonClientView : public View {
   // the specified bounds.
   gfx::Rect GetWindowBoundsForClientBounds(const gfx::Rect client_bounds) const;
 
-  // Returns the point, in screen coordinates, where the system menu should
-  // be shown so it shows up anchored to the system menu icon.
-  gfx::Point GetSystemMenuPoint() const;
-
   // Determines the windows HT* code when the mouse cursor is at the
   // specified point, in window coordinates.
   int NonClientHitTest(const gfx::Point& point);
@@ -209,8 +209,6 @@ class NonClientView : public View {
   virtual gfx::Size GetMinimumSize();
   virtual void Layout();
   virtual bool GetAccessibleRole(AccessibilityTypes::Role* role);
-  virtual bool GetAccessibleName(std::wstring* name);
-  virtual void SetAccessibleName(const std::wstring& name);
 
  protected:
   // NonClientView, View overrides:

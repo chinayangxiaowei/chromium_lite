@@ -40,6 +40,7 @@ struct AuthWatcherEvent {
   enum WhatHappened {
     AUTHENTICATION_ATTEMPT_START,
     AUTHWATCHER_DESTROYED,
+    AUTH_RENEWED,  // Currently only used in testing.
     AUTH_SUCCEEDED,
     GAIA_AUTH_FAILED,
     SERVICE_USER_NOT_SIGNED_UP,
@@ -94,10 +95,6 @@ class AuthWatcher : public base::RefCountedThreadSafe<AuthWatcher> {
               TalkMediator* talk_mediator);
   ~AuthWatcher();
 
-  // Returns true if the open share has gotten zero updates from the sync
-  // server (initial sync complete).
-  bool LoadDirectoryListAndOpen(const std::string& login);
-
   typedef EventChannel<AuthWatcherEvent, Lock> Channel;
 
   inline Channel* channel() const {
@@ -118,6 +115,14 @@ class AuthWatcher : public base::RefCountedThreadSafe<AuthWatcher> {
       bool persist_creds_to_disk) {
     Authenticate(email, password, "", "", persist_creds_to_disk);
   }
+
+  // Use this to update only the token of the current email address.
+  void RenewAuthToken(const std::string& updated_token);
+  void DoRenewAuthToken(const std::string& updated_token);
+
+  // Use this version when you don't need the gaia authentication step because
+  // you already have a valid LSID cookie for |gaia_email|.
+  void AuthenticateWithLsid(const std::string& lsid);
 
   // Use this version when you don't need the gaia authentication step because
   // you already have a valid token for |gaia_email|.
@@ -187,6 +192,7 @@ class AuthWatcher : public base::RefCountedThreadSafe<AuthWatcher> {
   // The public interface Authenticate methods are proxies to these, which
   // can only be called from |auth_backend_thread_|.
   void DoAuthenticate(const AuthRequest& request);
+  void DoAuthenticateWithLsid(const std::string& lsid);
   void DoAuthenticateWithToken(const std::string& email,
                                const std::string& auth_token);
 

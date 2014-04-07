@@ -114,6 +114,8 @@ class HttpBridge : public base::RefCountedThreadSafe<HttpBridge>,
   // string r(b->GetResponseContent(), b->GetResponseContentLength()).
   virtual int GetResponseContentLength() const;
   virtual const char* GetResponseContent() const;
+  virtual const std::string GetResponseHeaderValue(
+      const std::string& name) const;
 
   // URLFetcher::Delegate implementation.
   virtual void OnURLFetchComplete(const URLFetcher* source, const GURL& url,
@@ -146,7 +148,7 @@ class HttpBridge : public base::RefCountedThreadSafe<HttpBridge>,
 
   // Gets a customized URLRequestContext for bridged requests. See
   // RequestContext definition for details.
-  RequestContextGetter* context_getter_for_request_;
+  scoped_refptr<RequestContextGetter> context_getter_for_request_;
 
   // Our hook into the network layer is a URLFetcher. USED ONLY ON THE IO LOOP,
   // so we can block created_on_loop_ while the fetch is in progress.
@@ -169,6 +171,7 @@ class HttpBridge : public base::RefCountedThreadSafe<HttpBridge>,
   std::string content_type_;
   std::string request_content_;
   std::string extra_headers_;
+  scoped_refptr<net::HttpResponseHeaders> response_headers_;
 
   // Cached response data.
   bool request_completed_;
@@ -196,8 +199,7 @@ class HttpBridgeFactory
   // This request context is built on top of the baseline context and shares
   // common components.
   HttpBridge::RequestContextGetter* GetRequestContextGetter();
-  // We must Release() this from the IO thread.
-  HttpBridge::RequestContextGetter* request_context_getter_;
+  scoped_refptr<HttpBridge::RequestContextGetter> request_context_getter_;
   DISALLOW_COPY_AND_ASSIGN(HttpBridgeFactory);
 };
 

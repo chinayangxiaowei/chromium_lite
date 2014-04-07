@@ -6,16 +6,18 @@
 
 #include <gtk/gtk.h>
 
-#include "app/gfx/gtk_util.h"
-#include "app/gfx/text_elider.h"
-#include "app/l10n_util.h"
+#include <algorithm>
+
+#include "app/text_elider.h"
+#include "base/i18n/rtl.h"
 #include "base/message_loop.h"
-#include "base/string_util.h"
+#include "base/utf_string_conversions.h"
 #include "chrome/browser/gtk/gtk_theme_provider.h"
+#include "chrome/browser/gtk/gtk_util.h"
 #include "chrome/browser/gtk/rounded_window.h"
 #include "chrome/browser/gtk/slide_animator_gtk.h"
-#include "chrome/common/gtk_util.h"
 #include "chrome/common/notification_service.h"
+#include "gfx/gtk_util.h"
 #include "googleurl/src/gurl.h"
 
 namespace {
@@ -43,7 +45,9 @@ StatusBubbleGtk::StatusBubbleGtk(Profile* profile)
       timer_factory_(this),
       flip_horizontally_(false),
       y_offset_(0),
-      download_shelf_is_visible_(false) {
+      download_shelf_is_visible_(false),
+      last_mouse_location_(0, 0),
+      last_mouse_left_content_(false) {
   InitWidgets();
 
   theme_provider_->InitThemesFor(this);
@@ -96,7 +100,6 @@ void StatusBubbleGtk::Show() {
   timer_factory_.RevokeAll();
 
   gtk_widget_show_all(container_.get());
-
   if (container_->window)
     gdk_window_raise(container_->window);
 }
@@ -110,6 +113,14 @@ void StatusBubbleGtk::SetStatusTextTo(const std::string& status_utf8) {
     HideInASecond();
   } else {
     gtk_label_set_text(GTK_LABEL(label_), status_utf8.c_str());
+    if (!last_mouse_left_content_) {
+      // Show the padding and label to update our requisition and then
+      // re-process the last mouse event -- if the label was empty before or the
+      // text changed, our size will have changed and we may need to move
+      // ourselves away from the pointer now.
+      gtk_widget_show_all(padding_);
+      MouseMoved(last_mouse_location_, false);
+    }
     Show();
   }
 }
@@ -125,6 +136,9 @@ void StatusBubbleGtk::HideInASecond() {
 
 void StatusBubbleGtk::MouseMoved(
     const gfx::Point& location, bool left_content) {
+  last_mouse_location_ = location;
+  last_mouse_left_content_ = left_content;
+
   if (!GTK_WIDGET_REALIZED(container_.get()))
     return;
 
@@ -143,7 +157,7 @@ void StatusBubbleGtk::MouseMoved(
     if (!toplevel || !GTK_WIDGET_REALIZED(toplevel))
       return;
 
-    bool ltr = (l10n_util::GetTextDirection() == l10n_util::LEFT_TO_RIGHT);
+    bool ltr = !base::i18n::IsRTL();
 
     GtkRequisition requisition;
     gtk_widget_size_request(container_.get(), &requisition);
@@ -205,7 +219,7 @@ void StatusBubbleGtk::Observe(NotificationType type,
 }
 
 void StatusBubbleGtk::InitWidgets() {
-  bool ltr = (l10n_util::GetTextDirection() == l10n_util::LEFT_TO_RIGHT);
+  bool ltr = !base::i18n::IsRTL();
 
   label_ = gtk_label_new(NULL);
 
@@ -261,7 +275,7 @@ void StatusBubbleGtk::SetFlipHorizontally(bool flip_horizontally) {
 
   flip_horizontally_ = flip_horizontally;
 
-  bool ltr = (l10n_util::GetTextDirection() == l10n_util::LEFT_TO_RIGHT);
+  bool ltr = !base::i18n::IsRTL();
   bool on_left = (ltr && !flip_horizontally) || (!ltr && flip_horizontally);
 
   gtk_alignment_set_padding(GTK_ALIGNMENT(padding_),

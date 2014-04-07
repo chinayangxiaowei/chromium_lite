@@ -1,4 +1,4 @@
-# Copyright (c) 2009 The Chromium Authors. All rights reserved.
+# Copyright (c) 2010 The Chromium Authors. All rights reserved.
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
@@ -522,10 +522,6 @@
         'ext/platform_device_win.cc',
         'ext/platform_device_win.h',
         'ext/SkMemory_new_handler.cpp',
-        'ext/skia_utils.cc',
-        'ext/skia_utils.h',
-        'ext/skia_utils_gtk.cc',
-        'ext/skia_utils_gtk.h',
         'ext/skia_utils_mac.mm',
         'ext/skia_utils_mac.h',
         'ext/skia_utils_win.cc',
@@ -543,6 +539,7 @@
       'include_dirs': [
         '..',
         'config',
+        '../third_party/skia/include/config',
         '../third_party/skia/include/core',
         '../third_party/skia/include/effects',
         '../third_party/skia/include/images',
@@ -565,7 +562,7 @@
             ['exclude', '_mac\\.(cc|cpp|mm?)$'],
             ['exclude', '/mac/'] ],
         }],
-        [ 'OS != "linux"', {
+        [ 'OS != "linux" and OS != "freebsd" and OS != "openbsd" and OS != "solaris"', {
           'sources/': [ ['exclude', '_(linux|gtk)\\.(cc|cpp)$'] ],
           'sources!': [
             '../third_party/skia/src/ports/SkFontHost_FreeType.cpp',
@@ -578,21 +575,22 @@
         [ 'OS != "win"', {
           'sources/': [ ['exclude', '_win\\.(cc|cpp)$'] ],
         }],
-        [ 'target_arch == "arm" and armv7 == 1', {
+        [ 'armv7 == 1', {
           'defines': [
-            '__ARM_HAVE_NEON',
             '__ARM_ARCH__=7',
           ],
+        }],
+        [ 'armv7 == 1 and arm_neon == 1', {
+          'defines': [
+            '__ARM_HAVE_NEON',
+          ],
+        }],
+        [ 'target_arch == "arm"', {
           'sources!': [
             '../third_party/skia/src/opts/opts_check_SSE2.cpp'
           ],
-          'sources': [
-            '../third_party/skia/src/opts/SkBitmapProcState_opts_arm.cpp',
-            '../third_party/skia/src/opts/SkBlitRow_opts_arm.cpp',
-            '../third_party/skia/src/opts/SkUtils_opts_none.cpp',
-          ],
         }],
-        [ 'OS == "linux" or OS == "freebsd"', {
+        [ 'OS == "linux" or OS == "freebsd" or OS == "openbsd" or OS == "solaris"', {
           'dependencies': [
             '../build/linux/system.gyp:gdk',
             '../build/linux/system.gyp:fontconfig',
@@ -646,11 +644,12 @@
         },],
       ],
       'dependencies': [
-        'skia_sse2'
+        'skia_opts'
       ],
       'direct_dependent_settings': {
         'include_dirs': [
           'config',
+          '../third_party/skia/include/config',
           '../third_party/skia/include/core',
           '../third_party/skia/include/effects',
           'ext',
@@ -677,12 +676,15 @@
     # else).  However, to keep the .gyp file simple and avoid platform-specific
     # build breakage, we do this on all platforms.
 
+    # For about the same reason, we need to compile the ARM opts files
+    # separately as well.
     {
-      'target_name': 'skia_sse2',
+      'target_name': 'skia_opts',
       'type': '<(library)',
       'include_dirs': [
         '..',
         'config',
+        '../third_party/skia/include/config',
         '../third_party/skia/include/core',
         '../third_party/skia/include/effects',
         '../third_party/skia/include/images',
@@ -700,6 +702,30 @@
             '../third_party/skia/src/opts/SkBitmapProcState_opts_SSE2.cpp',
             '../third_party/skia/src/opts/SkBlitRow_opts_SSE2.cpp',
             '../third_party/skia/src/opts/SkUtils_opts_SSE2.cpp',
+          ],
+        },
+        {  # arm
+          'conditions': [
+            [ 'armv7 == 1', {
+              'defines': [
+                '__ARM_ARCH__=7',
+              ],
+            }],
+            [ 'armv7 == 1 and arm_neon == 1', {
+              'defines': [
+                '__ARM_HAVE_NEON',
+              ],
+            }],
+          ],
+          # The assembly uses the frame pointer register (r7 in Thumb/r11 in
+          # ARM), the compiler doesn't like that.
+          'cflags': [
+            '-fomit-frame-pointer',
+          ],
+          'sources': [
+            '../third_party/skia/src/opts/SkBitmapProcState_opts_arm.cpp',
+            '../third_party/skia/src/opts/SkBlitRow_opts_arm.cpp',
+            '../third_party/skia/src/opts/SkUtils_opts_none.cpp',
           ],
         }],
       ],

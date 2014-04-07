@@ -4,6 +4,7 @@
 
 #include "chrome/browser/metrics/metrics_log.h"
 
+#include "base/base64.h"
 #include "base/time.h"
 #include "base/basictypes.h"
 #include "base/file_util.h"
@@ -12,14 +13,14 @@
 #include "base/scoped_ptr.h"
 #include "base/string_util.h"
 #include "base/sys_info.h"
+#include "base/utf_string_conversions.h"
 #include "base/third_party/nspr/prtime.h"
 #include "chrome/browser/autocomplete/autocomplete.h"
 #include "chrome/browser/browser_process.h"
+#include "chrome/browser/pref_service.h"
 #include "chrome/common/logging_chrome.h"
 #include "chrome/common/pref_names.h"
-#include "chrome/common/pref_service.h"
 #include "googleurl/src/gurl.h"
-#include "net/base/base64.h"
 
 #define OPEN_ELEMENT_FOR_SCOPE(name) ScopedElement scoped_element(this, name)
 
@@ -31,12 +32,13 @@ using base::TimeDelta;
 extern "C" IMAGE_DOS_HEADER __ImageBase;
 #endif
 
+// static
+std::string MetricsLog::version_extension_;
+
 // libxml take xmlChar*, which is unsigned char*
 inline const unsigned char* UnsignedChar(const char* input) {
   return reinterpret_cast<const unsigned char*>(input);
 }
-
-static int64 GetBuildTime();
 
 // static
 void MetricsLog::RegisterPrefs(PrefService* local_state) {
@@ -64,6 +66,7 @@ MetricsLog::MetricsLog(const std::string& client_id, int session_id)
   StartElement("log");
   WriteAttribute("clientid", client_id_);
   WriteInt64Attribute("buildtime", GetBuildTime());
+  WriteAttribute("appversion", GetVersionString());
 
   DCHECK_GE(result, 0);
 }
@@ -81,10 +84,10 @@ void MetricsLog::CloseLog() {
   locked_ = true;
 
   int result = xmlTextWriterEndDocument(writer_);
-  DCHECK(result >= 0);
+  DCHECK_GE(result, 0);
 
   result = xmlTextWriterFlush(writer_);
-  DCHECK(result >= 0);
+  DCHECK_GE(result, 0);
 }
 
 int MetricsLog::GetEncodedLogSize() {
@@ -134,17 +137,17 @@ std::string MetricsLog::CreateHash(const std::string& value) {
 
 std::string MetricsLog::CreateBase64Hash(const std::string& string) {
   std::string encoded_digest;
-  if (net::Base64Encode(CreateHash(string), &encoded_digest)) {
+  if (base::Base64Encode(CreateHash(string), &encoded_digest)) {
     DLOG(INFO) << "Metrics: Hash [" << encoded_digest << "]=[" << string << "]";
     return encoded_digest;
   }
   return std::string();
 }
 
-void MetricsLog::RecordUserAction(const wchar_t* key) {
+void MetricsLog::RecordUserAction(const char* key) {
   DCHECK(!locked_);
 
-  std::string command_hash = CreateBase64Hash(WideToUTF8(key));
+  std::string command_hash = CreateBase64Hash(key);
   if (command_hash.empty()) {
     NOTREACHED() << "Unable generate encoded hash of command: " << key;
     return;
@@ -302,6 +305,8 @@ std::string MetricsLog::GetVersionString() {
       FileVersionInfo::CreateFileVersionInfoForCurrentModule());
   if (version_info.get()) {
     std::string version = WideToUTF8(version_info->product_version());
+    if (!version_extension_.empty())
+      version += version_extension_;
     if (!version_info->is_official_build())
       version.append("-devel");
     return version;
@@ -310,6 +315,19 @@ std::string MetricsLog::GetVersionString() {
   }
 
   return std::string();
+}
+
+// static
+int64 MetricsLog::GetBuildTime() {
+  static int64 integral_build_time = 0;
+  if (!integral_build_time) {
+    Time time;
+    const char* kDateTime = __DATE__ " " __TIME__ " GMT";
+    bool result = Time::FromString(ASCIIToWide(kDateTime).c_str(), &time);
+    DCHECK(result);
+    integral_build_time = static_cast<int64>(time.ToTimeT());
+  }
+  return integral_build_time;
 }
 
 // static
@@ -509,7 +527,6 @@ void MetricsLog::WriteInstallElement() {
   OPEN_ELEMENT_FOR_SCOPE("install");
   WriteAttribute("installdate", GetInstallDate());
   WriteIntAttribute("buildid", 0);  // We're using appversion instead.
-  WriteAttribute("appversion", GetVersionString());
 }
 
 void MetricsLog::RecordEnvironment(
@@ -703,7 +720,7 @@ void MetricsLog::RecordOmniboxOpenedURL(const AutocompleteLog& log) {
 void MetricsLog::RecordHistogramDelta(const Histogram& histogram,
                                       const Histogram::SampleSet& snapshot) {
   DCHECK(!locked_);
-  DCHECK(0 != snapshot.TotalCount());
+  DCHECK_NE(0, snapshot.TotalCount());
   snapshot.CheckSize(histogram);
 
   // We will ignore the MAX_INT/infinite value in the last element of range[].
@@ -723,12 +740,4 @@ void MetricsLog::RecordHistogramDelta(const Histogram& histogram,
       WriteIntAttribute("count", snapshot.counts(i));
     }
   }
-}
-
-static int64 GetBuildTime() {
-  Time parsed_time;
-  const char* kDateTime = __DATE__ " " __TIME__ " GMT";
-  bool result = Time::FromString(ASCIIToWide(kDateTime).c_str(), &parsed_time);
-  DCHECK(result);
-  return static_cast<int64>(parsed_time.ToTimeT());
 }

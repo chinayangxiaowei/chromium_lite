@@ -1,4 +1,4 @@
-// Copyright (c) 2006-2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,11 +6,11 @@
 #define CHROME_BROWSER_VIEWS_FIND_BAR_HOST_H_
 
 #include "app/animation.h"
-#include "app/gfx/native_widget_types.h"
-#include "base/gfx/rect.h"
 #include "chrome/browser/find_bar.h"
 #include "chrome/browser/renderer_host/render_view_host_delegate.h"
 #include "chrome/browser/views/dropdown_bar_host.h"
+#include "gfx/native_widget_types.h"
+#include "gfx/rect.h"
 #include "views/controls/textfield/textfield.h"
 
 class BrowserView;
@@ -54,7 +54,7 @@ class FindBarHost : public DropdownBarHost,
   virtual void SetFindBarController(FindBarController* find_bar_controller) {
     find_bar_controller_ = find_bar_controller;
   }
-  virtual void Show();
+  virtual void Show(bool animate);
   virtual void Hide(bool animate);
   virtual void SetFocusAndSelection();
   virtual void ClearResults(const FindNotificationDetails& results);
@@ -65,8 +65,6 @@ class FindBarHost : public DropdownBarHost,
   virtual void UpdateUIForFindResult(const FindNotificationDetails& result,
                                      const string16& find_text);
   virtual void AudibleAlert();
-  virtual gfx::Rect GetDialogPosition(gfx::Rect avoid_overlapping_rect);
-  virtual void SetDialogPosition(const gfx::Rect& new_pos, bool no_redraw);
   virtual bool IsFindBarVisible();
   virtual void RestoreSavedFocus();
   virtual FindBarTesting* GetFindBarTesting();
@@ -77,17 +75,46 @@ class FindBarHost : public DropdownBarHost,
   // FindBarTesting implementation:
   virtual bool GetFindBarWindowInfo(gfx::Point* position,
                                     bool* fully_visible);
+  virtual string16 GetFindText();
+
+  // Overridden from DropdownBarHost:
+  // Returns the rectangle representing where to position the find bar. It uses
+  // GetDialogBounds and positions itself within that, either to the left (if an
+  // InfoBar is present) or to the right (no InfoBar). If
+  // |avoid_overlapping_rect| is specified, the return value will be a rectangle
+  // located immediately to the left of |avoid_overlapping_rect|, as long as
+  // there is enough room for the dialog to draw within the bounds. If not, the
+  // dialog position returned will overlap |avoid_overlapping_rect|.
+  // Note: |avoid_overlapping_rect| is expected to use coordinates relative to
+  // the top of the page area, (it will be converted to coordinates relative to
+  // the top of the browser window, when comparing against the dialog
+  // coordinates). The returned value is relative to the browser window.
+  virtual gfx::Rect GetDialogPosition(gfx::Rect avoid_overlapping_rect);
+  // Moves the dialog window to the provided location, moves it to top in the
+  // z-order (HWND_TOP, not HWND_TOPMOST) and shows the window (if hidden).
+  // It then calls UpdateWindowEdges to make sure we don't overwrite the Chrome
+  // window border. If |no_redraw| is set, the window is getting moved but not
+  // sized, and should not be redrawn to reduce update flicker.
+  virtual void SetDialogPosition(const gfx::Rect& new_pos, bool no_redraw);
+
+  // Retrieves the boundaries that the find bar widget has to work with
+  // within the Chrome frame window. The resulting rectangle will be a
+  // rectangle that overlaps the bottom of the Chrome toolbar by one
+  // pixel (so we can create the illusion that the dropdown widget is
+  // part of the toolbar) and covers the page area, except that we
+  // deflate the rect width by subtracting (from both sides) the width
+  // of the toolbar and some extra pixels to account for the width of
+  // the Chrome window borders. |bounds| is relative to the browser
+  // window. If the function fails to determine the browser
+  // window/client area rectangle or the rectangle for the page area
+  // then |bounds| will be an empty rectangle.
+  virtual void GetWidgetBounds(gfx::Rect* bounds);
+
+  // Additional accelerator handling (on top of what DropDownBarHost does).
+  virtual void RegisterAccelerators();
+  virtual void UnregisterAccelerators();
 
  private:
-  // The find bar widget needs rounded edges, so we create a polygon
-  // that corresponds to the background images for this window (and
-  // make the polygon only contain the pixels that we want to
-  // draw). The polygon is then given to SetWindowRgn which changes
-  // the window from being a rectangle in shape, to being a rect with
-  // curved edges. We also check to see if the region should be
-  // truncated to prevent from drawing onto Chrome's window border.
-  void UpdateWindowEdges(const gfx::Rect& new_pos);
-
   // Allows implementation to tweak widget position.
   void GetWidgetPositionNative(gfx::Rect* avoid_overlapping_rect);
 

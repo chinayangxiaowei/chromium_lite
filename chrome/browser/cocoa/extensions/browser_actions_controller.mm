@@ -1,290 +1,199 @@
-// Copyright (c) 2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #import "browser_actions_controller.h"
 
+#include <cmath>
 #include <string>
 
-#include "app/gfx/canvas_paint.h"
+#include "app/resource_bundle.h"
 #include "base/sys_string_conversions.h"
 #include "chrome/browser/browser.h"
-#include "chrome/browser/cocoa/toolbar_button_cell.h"
+#include "chrome/browser/pref_service.h"
+#import "chrome/browser/cocoa/extensions/browser_action_button.h"
+#import "chrome/browser/cocoa/extensions/browser_actions_container_view.h"
+#import "chrome/browser/cocoa/extensions/extension_popup_controller.h"
+#import "chrome/browser/cocoa/menu_button.h"
 #include "chrome/browser/extensions/extension_browser_event_router.h"
+#include "chrome/browser/extensions/extension_host.h"
+#include "chrome/browser/extensions/extension_toolbar_model.h"
 #include "chrome/browser/extensions/extensions_service.h"
-#include "chrome/browser/extensions/extension_tabs_module.h"
-#include "chrome/browser/extensions/image_loading_tracker.h"
 #include "chrome/browser/profile.h"
 #include "chrome/browser/tab_contents/tab_contents.h"
 #include "chrome/common/notification_observer.h"
 #include "chrome/common/notification_registrar.h"
-#include "skia/ext/skia_utils_mac.h"
+#include "chrome/common/pref_names.h"
+#include "grit/theme_resources.h"
+#import "third_party/GTM/AppKit/GTMNSAnimation+Duration.h"
 
-static const CGFloat kBrowserActionBadgeOriginYOffset = -4;
-
-// Since the container is the maximum height of the toolbar, we have to move the
-// buttons up by this amount in order to have them look vertically centered
-// within the toolbar.
-static const CGFloat kBrowserActionOriginYOffset = 5;
-
-// The size of each button on the toolbar.
-static const CGFloat kBrowserActionHeight = 27;
-extern const CGFloat kBrowserActionWidth = 29;
-
-// The padding between browser action buttons.
 extern const CGFloat kBrowserActionButtonPadding = 3;
 
-NSString* const kBrowserActionsChangedNotification = @"BrowserActionsChanged";
+extern const NSString* kBrowserActionVisibilityChangedNotification =
+    @"BrowserActionVisibilityChangedNotification";
 
-@interface BrowserActionBadgeView : NSView {
- @private
-  // The current tab ID used when drawing the badge.
-  int tabId_;
-
-  // The action we're drawing the badge for. Weak.
-  ExtensionAction* extensionAction_;
-}
-
-@property(readwrite, nonatomic) int tabId;
-@property(readwrite, nonatomic) ExtensionAction* extensionAction;
-
-@end
-
-@implementation BrowserActionBadgeView
-
-- (void)drawRect:(NSRect)dirtyRect {
-  // CanvasPaint draws its content to the current NSGraphicsContext in its
-  // destructor. If anything needs to be drawn afterwards, then enclose this
-  // in a nested block.
-  NSRect badgeBounds = [self bounds];
-  badgeBounds.origin.y += kBrowserActionBadgeOriginYOffset;
-  gfx::CanvasPaint canvas(badgeBounds, false);
-  canvas.set_composite_alpha(true);
-  gfx::Rect boundingRect(NSRectToCGRect(badgeBounds));
-  extensionAction_->PaintBadge(&canvas, boundingRect, tabId_);
-}
-
-@synthesize tabId = tabId_;
-@synthesize extensionAction = extensionAction_;
-
-@end
-
-class ExtensionImageTrackerBridge;
-
-@interface BrowserActionButton : NSButton {
- @private
-  scoped_ptr<ExtensionImageTrackerBridge> imageLoadingBridge_;
-
-  scoped_nsobject<NSImage> defaultIcon_;
-
-  scoped_nsobject<NSImage> tabSpecificIcon_;
-
-  scoped_nsobject<NSView> badgeView_;
-
-  // The extension for this button. Weak.
-  Extension* extension_;
-
-  // Weak. Owns us.
-  BrowserActionsController* controller_;
-}
-
-- (id)initWithExtension:(Extension*)extension
-             controller:(BrowserActionsController*)controller
-                xOffset:(int)xOffset;
-
-- (void)setDefaultIcon:(NSImage*)image;
-
-- (void)setTabSpecificIcon:(NSImage*)image;
-
-- (void)updateState;
-
-@property(readonly, nonatomic) Extension* extension;
-
-@end
-
-// A helper class to bridge the asynchronous Skia bitmap loading mechanism to
-// the extension's button.
-class ExtensionImageTrackerBridge : public NotificationObserver,
-                                    public ImageLoadingTracker::Observer {
- public:
-  ExtensionImageTrackerBridge(BrowserActionButton* owner, Extension* extension)
-      : owner_(owner),
-        tracker_(NULL) {
-    // The Browser Action API does not allow the default icon path to be
-    // changed at runtime, so we can load this now and cache it.
-    std::string path = extension->browser_action()->default_icon_path();
-    if (!path.empty()) {
-      tracker_ = new ImageLoadingTracker(this, 1);
-      tracker_->PostLoadImageTask(extension->GetResource(path),
-          gfx::Size(Extension::kBrowserActionIconMaxSize,
-                    Extension::kBrowserActionIconMaxSize));
-    }
-    registrar_.Add(this, NotificationType::EXTENSION_BROWSER_ACTION_UPDATED,
-                   Source<ExtensionAction>(extension->browser_action()));
-  }
-
-  ~ExtensionImageTrackerBridge() {
-    if (tracker_)
-      tracker_->StopTrackingImageLoad();
-  }
-
-  // ImageLoadingTracker::Observer implementation.
-  void OnImageLoaded(SkBitmap* image, size_t index) {
-    if (image)
-      [owner_ setDefaultIcon:gfx::SkBitmapToNSImage(*image)];
-    tracker_ = NULL;
-    [owner_ updateState];
-  }
-
-  // Overridden from NotificationObserver.
-  void Observe(NotificationType type,
-               const NotificationSource& source,
-               const NotificationDetails& details) {
-    if (type == NotificationType::EXTENSION_BROWSER_ACTION_UPDATED)
-      [owner_ updateState];
-    else
-      NOTREACHED();
-  }
-
- private:
-  // Weak. Owns us.
-  BrowserActionButton* owner_;
-
-  // Loads the button's icons for us on the file thread. Weak.
-  ImageLoadingTracker* tracker_;
-
-  // Used for registering to receive notifications and automatic clean up.
-  NotificationRegistrar registrar_;
-
-  DISALLOW_COPY_AND_ASSIGN(ExtensionImageTrackerBridge);
-};
-
-@implementation BrowserActionButton
-
-- (id)initWithExtension:(Extension*)extension
-             controller:(BrowserActionsController*)controller
-                xOffset:(int)xOffset {
-  NSRect frame = NSMakeRect(xOffset,
-                            kBrowserActionOriginYOffset,
-                            kBrowserActionWidth,
-                            kBrowserActionHeight);
-  if ((self = [super initWithFrame:frame])) {
-    ToolbarButtonCell* cell = [[[ToolbarButtonCell alloc] init] autorelease];
-    // [NSButton setCell:] warns to NOT use setCell: other than in the
-    // initializer of a control.  However, we are using a basic
-    // NSButton whose initializer does not take an NSCell as an
-    // object.  To honor the assumed semantics, we do nothing with
-    // NSButton between alloc/init and setCell:.
-    [self setCell:cell];
-    [self setTitle:@""];
-    [self setButtonType:NSMomentaryChangeButton];
-    [self setShowsBorderOnlyWhileMouseInside:YES];
-
-    [self setTarget:controller];
-    [self setAction:@selector(browserActionClicked:)];
-
-    extension_ = extension;
-    controller_ = controller;
-    imageLoadingBridge_.reset(new ExtensionImageTrackerBridge(self, extension));
-
-    NSRect badgeFrame = [self bounds];
-    badgeView_.reset([[BrowserActionBadgeView alloc] initWithFrame:badgeFrame]);
-    [badgeView_ setTabId:[controller currentTabId]];
-    [badgeView_ setExtensionAction:extension->browser_action()];
-    [self addSubview:badgeView_];
-
-    [self updateState];
-  }
-
-  return self;
-}
-
-- (void)setDefaultIcon:(NSImage*)image {
-  defaultIcon_.reset([image retain]);
-}
-
-- (void)setTabSpecificIcon:(NSImage*)image {
-  tabSpecificIcon_.reset([image retain]);
-}
-
-- (void)updateState {
-  int tabId = [controller_ currentTabId];
-  if (tabId < 0)
-    return;
-
-  std::string tooltip = extension_->browser_action()->GetTitle(tabId);
-  if (!tooltip.empty())
-    [self setToolTip:base::SysUTF8ToNSString(tooltip)];
-
-  SkBitmap image = extension_->browser_action()->GetIcon(tabId);
-  if (!image.isNull()) {
-    [self setTabSpecificIcon:gfx::SkBitmapToNSImage(image)];
-    [self setImage:tabSpecificIcon_];
-  } else if (defaultIcon_) {
-    [self setImage:defaultIcon_];
-  }
-
-  [badgeView_ setTabId:tabId];
-
-  [self setNeedsDisplay:YES];
-}
-
-@synthesize extension = extension_;
-
-@end
+namespace {
+const CGFloat kAnimationDuration = 0.2;
+// When determining the opacity during a drag, we artificially reduce the
+// distance to the edge in order to make the fade more apparent.
+const CGFloat kButtonOpacityLeadPadding = 5.0;
+const CGFloat kChevronHeight = 28.0;
+const CGFloat kChevronLowerPadding = 5.0;
+const CGFloat kChevronRightPadding = 5.0;
+const CGFloat kChevronWidth = 14.0;
+const CGFloat kContainerPadding = 2.0;
+const CGFloat kGrippyXOffset = 8.0;
+}  // namespace
 
 @interface BrowserActionsController(Private)
+// Used during initialization to create the BrowserActionButton objects from the
+// stored toolbar model.
+- (void)createButtons;
 
-- (void)createActionButtonForExtension:(Extension*)extension;
+// Creates and then adds the given extension's action button to the container
+// at the given index within the container. It does not affect the toolbar model
+// object since it is called when the toolbar model changes.
+- (void)createActionButtonForExtension:(Extension*)extension
+                             withIndex:(NSUInteger)index;
+
+// Removes an action button for the given extension from the container. This
+// method also does not affect the underlying toolbar model since it is called
+// when the toolbar model changes.
 - (void)removeActionButtonForExtension:(Extension*)extension;
-- (void)repositionActionButtons;
 
+// Useful in the case of a Browser Action being added/removed from the middle of
+// the container, this method repositions each button according to the current
+// toolbar model.
+- (void)repositionActionButtonsAndAnimate:(BOOL)animate;
+
+// During container resizing, buttons become more transparent as they are pushed
+// off the screen. This method updates each button's opacity determined by the
+// position of the button.
+- (void)updateButtonOpacity;
+
+// Returns the existing button with the given extension backing it; nil if it
+// cannot be found or the extension's ID is invalid.
+- (BrowserActionButton*)buttonForExtension:(Extension*)extension;
+
+// Returns the preferred width of the container given the number of visible
+// buttons |buttonCount|.
+- (CGFloat)containerWidthWithButtonCount:(NSUInteger)buttonCount;
+
+// Returns the number of buttons that can fit in the container according to its
+// current size.
+- (NSUInteger)containerButtonCapacity;
+
+// Notification handlers for events registered by the class.
+
+// Updates each button's opacity, the cursor rects and chevron position.
+- (void)containerFrameChanged:(NSNotification*)notification;
+
+// Hides the chevron and unhides every hidden button so that dragging the
+// container out smoothly shows the Browser Action buttons.
+- (void)containerDragStart:(NSNotification*)notification;
+
+// Sends a notification for the toolbar to reposition surrounding UI elements.
+- (void)containerDragging:(NSNotification*)notification;
+
+// Determines which buttons need to be hidden based on the new size, hides them
+// and updates the chevron overflow menu. Also fires a notification to let the
+// toolbar know that the drag has finished.
+- (void)containerDragFinished:(NSNotification*)notification;
+
+// Updates the image associated with the button should it be within the chevron
+// menu.
+- (void)actionButtonUpdated:(NSNotification*)notification;
+
+// Adjusts the position of the surrounding action buttons depending on where the
+// button is within the container.
+- (void)actionButtonDragging:(NSNotification*)notification;
+
+// Updates the position of the Browser Actions within the container. This fires
+// when _any_ Browser Action button is done dragging to keep all open windows in
+// sync visually.
+- (void)actionButtonDragFinished:(NSNotification*)notification;
+
+// Moves the given button both visually and within the toolbar model to the
+// specified index.
+- (void)moveButton:(BrowserActionButton*)button
+           toIndex:(NSUInteger)index
+           animate:(BOOL)animate;
+
+// Handles when the given BrowserActionButton object is clicked.
+- (void)browserActionClicked:(BrowserActionButton*)button;
+
+// Returns whether the given extension should be displayed. Only displays
+// incognito-enabled extensions in incognito mode. Otherwise returns YES.
+- (BOOL)shouldDisplayBrowserAction:(Extension*)extension;
+
+// The reason |frame| is specified in these chevron functions is because the
+// container may be animating and the end frame of the animation should be
+// passed instead of the current frame (which may be off and cause the chevron
+// to jump at the end of its animation).
+
+// Shows the overflow chevron button depending on whether there are any hidden
+// extensions within the frame given.
+- (void)showChevronIfNecessaryInFrame:(NSRect)frame animate:(BOOL)animate;
+
+// Moves the chevron to its correct position within |frame|.
+- (void)updateChevronPositionInFrame:(NSRect)frame;
+
+// Shows or hides the chevron, animating as specified by |animate|.
+- (void)setChevronHidden:(BOOL)hidden
+                 inFrame:(NSRect)frame
+                 animate:(BOOL)animate;
+
+// Handles when a menu item within the chevron overflow menu is selected.
+- (void)chevronItemSelected:(id)menuItem;
+
+// Clears and then populates the overflow menu based on the contents of
+// |hiddenButtons_|.
+- (void)updateOverflowMenu;
+
+// Updates the container's grippy cursor based on the number of hidden buttons.
+- (void)updateGrippyCursors;
+
+// Returns the ID of the currently selected tab or -1 if none exists.
+- (int)currentTabId;
 @end
 
 // A helper class to proxy extension notifications to the view controller's
 // appropriate methods.
-class ExtensionsServiceObserverBridge : public NotificationObserver {
+class ExtensionsServiceObserverBridge : public NotificationObserver,
+                                        public ExtensionToolbarModel::Observer {
  public:
   ExtensionsServiceObserverBridge(BrowserActionsController* owner,
                                   Profile* profile) : owner_(owner) {
-    registrar_.Add(this, NotificationType::EXTENSION_LOADED,
-                   Source<Profile>(profile));
-    registrar_.Add(this, NotificationType::EXTENSION_UNLOADED,
-                   Source<Profile>(profile));
-    registrar_.Add(this, NotificationType::EXTENSION_UNLOADED_DISABLED,
-                   Source<Profile>(profile));
     registrar_.Add(this, NotificationType::EXTENSION_HOST_VIEW_SHOULD_CLOSE,
                    Source<Profile>(profile));
   }
 
-  // Runs |owner_|'s method corresponding to the event type received from the
-  // notification system.
   // Overridden from NotificationObserver.
   void Observe(NotificationType type,
                const NotificationSource& source,
                const NotificationDetails& details) {
     switch (type.value) {
-      case NotificationType::EXTENSION_LOADED: {
-        Extension* extension = Details<Extension>(details).ptr();
-        [owner_ createActionButtonForExtension:extension];
-        [owner_ browserActionVisibilityHasChanged];
+      case NotificationType::EXTENSION_HOST_VIEW_SHOULD_CLOSE: {
+        ExtensionPopupController* popup = [ExtensionPopupController popup];
+        if (popup && ![popup isClosing])
+          [popup close];
+
         break;
       }
-      case NotificationType::EXTENSION_UNLOADED:
-      case NotificationType::EXTENSION_UNLOADED_DISABLED: {
-        Extension* extension = Details<Extension>(details).ptr();
-        [owner_ removeActionButtonForExtension:extension];
-        [owner_ browserActionVisibilityHasChanged];
-        break;
-      }
-      case NotificationType::EXTENSION_HOST_VIEW_SHOULD_CLOSE:
-        //if (Details<ExtensionHost>(popup_->host()) != details)
-        //  return;
-        [owner_ hidePopup];
-        break;
       default:
         NOTREACHED() << L"Unexpected notification";
     }
+  }
+
+  // ExtensionToolbarModel::Observer implementation.
+  void BrowserActionAdded(Extension* extension, int index) {
+    [owner_ createActionButtonForExtension:extension withIndex:index];
+    [owner_ resizeContainerAndAnimate:NO];
+  }
+
+  void BrowserActionRemoved(Extension* extension) {
+    [owner_ removeActionButtonForExtension:extension];
+    [owner_ resizeContainerAndAnimate:NO];
   }
 
  private:
@@ -299,69 +208,276 @@ class ExtensionsServiceObserverBridge : public NotificationObserver {
 
 @implementation BrowserActionsController
 
+@synthesize containerView = containerView_;
+
+#pragma mark -
+#pragma mark Public Methods
+
 - (id)initWithBrowser:(Browser*)browser
-        containerView:(NSView*)container {
+        containerView:(BrowserActionsContainerView*)container {
   DCHECK(browser && container);
 
   if ((self = [super init])) {
     browser_ = browser;
     profile_ = browser->profile();
 
-    containerView_ = container;
-    [containerView_ setHidden:YES];
+    if (!profile_->GetPrefs()->FindPreference(
+        prefs::kBrowserActionContainerWidth))
+      [BrowserActionsController registerUserPrefs:profile_->GetPrefs()];
+
     observer_.reset(new ExtensionsServiceObserverBridge(self, profile_));
+    ExtensionsService* extensionsService = profile_->GetExtensionsService();
+    // |extensionsService| can be NULL in Incognito.
+    if (extensionsService) {
+      toolbarModel_ = extensionsService->toolbar_model();
+      toolbarModel_->AddObserver(observer_.get());
+    }
+
+    containerView_ = container;
+    [containerView_ setPostsFrameChangedNotifications:YES];
+    [[NSNotificationCenter defaultCenter]
+        addObserver:self
+           selector:@selector(containerFrameChanged:)
+               name:NSViewFrameDidChangeNotification
+             object:containerView_];
+    [[NSNotificationCenter defaultCenter]
+        addObserver:self
+           selector:@selector(containerDragStart:)
+               name:kBrowserActionGrippyDragStartedNotification
+             object:containerView_];
+    [[NSNotificationCenter defaultCenter]
+        addObserver:self
+           selector:@selector(containerDragging:)
+               name:kBrowserActionGrippyDraggingNotification
+             object:containerView_];
+    [[NSNotificationCenter defaultCenter]
+        addObserver:self
+           selector:@selector(containerDragFinished:)
+               name:kBrowserActionGrippyDragFinishedNotification
+             object:containerView_];
+    // Listen for a finished drag from any button to make sure each open window
+    // stays in sync.
+    [[NSNotificationCenter defaultCenter]
+      addObserver:self
+         selector:@selector(actionButtonDragFinished:)
+             name:kBrowserActionButtonDragEndNotification
+           object:nil];
+
+    chevronAnimation_.reset([[NSViewAnimation alloc] init]);
+    [chevronAnimation_ gtm_setDuration:kAnimationDuration
+                             eventMask:NSLeftMouseUpMask];
+    [chevronAnimation_ setAnimationBlockingMode:NSAnimationNonblocking];
+
+    hiddenButtons_.reset([[NSMutableArray alloc] init]);
     buttons_.reset([[NSMutableDictionary alloc] init]);
-    buttonOrder_.reset([[NSMutableArray alloc] init]);
+    [self createButtons];
+    [self showChevronIfNecessaryInFrame:[containerView_ frame] animate:NO];
+    [self updateGrippyCursors];
+    [container setResizable:!profile_->IsOffTheRecord()];
   }
 
   return self;
 }
 
-- (void)hidePopup {
-  NOTIMPLEMENTED();
+- (void)dealloc {
+  if (toolbarModel_)
+    toolbarModel_->RemoveObserver(observer_.get());
+
+  [[NSNotificationCenter defaultCenter] removeObserver:self];
+  [super dealloc];
 }
 
-- (void)browserActionVisibilityHasChanged {
-  [containerView_ setNeedsDisplay:YES];
-}
-
-- (void)createButtons {
-  ExtensionsService* extensionsService = profile_->GetExtensionsService();
-  if (!extensionsService)  // |extensionsService| can be NULL in Incognito.
-    return;
-
-  for (size_t i = 0; i < extensionsService->extensions()->size(); ++i) {
-    Extension* extension = extensionsService->GetExtensionById(
-        extensionsService->extensions()->at(i)->id(), false);
-    if (extension->browser_action()) {
-      [self createActionButtonForExtension:extension];
-    }
+- (void)update {
+  for (BrowserActionButton* button in [buttons_ allValues]) {
+    [button setTabId:[self currentTabId]];
+    [button updateState];
   }
 }
 
-- (void)createActionButtonForExtension:(Extension*)extension {
+- (NSUInteger)buttonCount {
+  return [buttons_ count];
+}
+
+- (NSUInteger)visibleButtonCount {
+  return [self buttonCount] - [hiddenButtons_ count];
+}
+
+- (MenuButton*)chevronMenuButton {
+  return chevronMenuButton_.get();
+}
+
+- (void)resizeContainerAndAnimate:(BOOL)animate {
+  int iconCount = toolbarModel_->GetVisibleIconCount();
+  if (iconCount < 0)  // If no buttons are hidden.
+    iconCount = [self buttonCount];
+
+  [containerView_ resizeToWidth:[self containerWidthWithButtonCount:iconCount]
+                        animate:animate];
+  NSRect frame = animate ? [containerView_ animationEndFrame] :
+                           [containerView_ frame];
+
+  [self showChevronIfNecessaryInFrame:frame animate:animate];
+
+  if (!animate) {
+    [[NSNotificationCenter defaultCenter]
+        postNotificationName:kBrowserActionVisibilityChangedNotification
+                      object:self];
+  }
+}
+
+- (NSView*)browserActionViewForExtension:(Extension*)extension {
+  for (BrowserActionButton* button in [buttons_ allValues]) {
+    if ([button extension] == extension)
+      return button;
+  }
+  NOTREACHED();
+  return nil;
+}
+
+- (CGFloat)savedWidth {
+  if (!toolbarModel_)
+    return 0;
+  if (!profile_->GetPrefs()->HasPrefPath(prefs::kExtensionToolbarSize)) {
+    // Migration code to the new VisibleIconCount pref.
+    // TODO(mpcomplete): remove this at some point.
+    double predefinedWidth =
+        profile_->GetPrefs()->GetReal(prefs::kBrowserActionContainerWidth);
+    if (predefinedWidth != 0) {
+      int iconWidth = kBrowserActionWidth + kBrowserActionButtonPadding;
+      int extraWidth = kContainerPadding + kChevronWidth;
+      toolbarModel_->SetVisibleIconCount(
+          (predefinedWidth - extraWidth) / iconWidth);
+    }
+  }
+
+  int savedButtonCount = toolbarModel_->GetVisibleIconCount();
+  if (savedButtonCount < 0 ||  // all icons are visible
+      static_cast<NSUInteger>(savedButtonCount) > [self buttonCount])
+    savedButtonCount = [self buttonCount];
+  return [self containerWidthWithButtonCount:savedButtonCount];
+}
+
+- (NSPoint)popupPointForBrowserAction:(Extension*)extension {
+  if (!extension->browser_action())
+    return NSZeroPoint;
+  BrowserActionButton* button = [self buttonForExtension:extension];
+  if (!button)
+    return NSZeroPoint;
+
+  NSView* view = button;
+  BOOL isHidden = [hiddenButtons_ containsObject:button];
+  if (isHidden)
+    view = chevronMenuButton_.get();
+
+  NSPoint arrowPoint = [view frame].origin;
+  // Adjust the anchor point to be at the center of the browser action button
+  // or chevron.
+  arrowPoint.x += NSWidth([view frame]) / 2;
+  // Move the arrow up a bit in the case that it's pointing to the chevron.
+  if (isHidden)
+    arrowPoint.y += NSHeight([view frame]) / 4;
+
+  return [[view superview] convertPoint:arrowPoint toView:nil];
+}
+
+- (BOOL)chevronIsHidden {
+  if (!chevronMenuButton_.get())
+    return YES;
+
+  if (![chevronAnimation_ isAnimating])
+    return [chevronMenuButton_ isHidden];
+
+  DCHECK([[chevronAnimation_ viewAnimations] count] > 0);
+
+  // The chevron is animating in or out. Determine which one and have the return
+  // value reflect where the animation is headed.
+  NSString* effect = [[[chevronAnimation_ viewAnimations] objectAtIndex:0]
+      valueForKey:NSViewAnimationEffectKey];
+  if (effect == NSViewAnimationFadeInEffect) {
+    return NO;
+  } else if (effect == NSViewAnimationFadeOutEffect) {
+    return YES;
+  }
+
+  NOTREACHED();
+  return YES;
+}
+
++ (void)registerUserPrefs:(PrefService*)prefs {
+  prefs->RegisterRealPref(prefs::kBrowserActionContainerWidth, 0);
+}
+
+#pragma mark -
+#pragma mark Private Methods
+
+- (void)createButtons {
+  if (!toolbarModel_)
+    return;
+
+  NSUInteger i = 0;
+  for (ExtensionList::iterator iter = toolbarModel_->begin();
+       iter != toolbarModel_->end(); ++iter) {
+    if (![self shouldDisplayBrowserAction:*iter])
+      continue;
+
+    [self createActionButtonForExtension:*iter withIndex:i++];
+  }
+
+  [[NSNotificationCenter defaultCenter]
+      addObserver:self
+         selector:@selector(actionButtonUpdated:)
+             name:kBrowserActionButtonUpdatedNotification
+           object:nil];
+
+  CGFloat width = [self savedWidth];
+  [containerView_ resizeToWidth:width animate:NO];
+}
+
+- (void)createActionButtonForExtension:(Extension*)extension
+                             withIndex:(NSUInteger)index {
   if (!extension->browser_action())
     return;
 
-  if ([buttons_ count] == 0) {
-    // Only call if we're adding our first button, otherwise it will be shown
-    // already.
+  if (![self shouldDisplayBrowserAction:extension])
+    return;
+
+  if (profile_->IsOffTheRecord())
+    index = toolbarModel_->OriginalIndexToIncognito(index);
+
+  // Show the container if it's the first button. Otherwise it will be shown
+  // already.
+  if ([self buttonCount] == 0)
     [containerView_ setHidden:NO];
+
+  BrowserActionButton* newButton = [[[BrowserActionButton alloc]
+      initWithExtension:extension
+                profile:profile_
+                  tabId:[self currentTabId]] autorelease];
+  [newButton setTarget:self];
+  [newButton setAction:@selector(browserActionClicked:)];
+  NSString* buttonKey = base::SysUTF8ToNSString(extension->id());
+  if (!buttonKey)
+    return;
+
+  [buttons_ setObject:newButton forKey:buttonKey];
+  if (index < [self containerButtonCapacity]) {
+    [containerView_ addSubview:newButton];
+  } else {
+    [hiddenButtons_ addObject:newButton];
+    [newButton setAlphaValue:0.0];
+    [self updateOverflowMenu];
   }
 
-  int xOffset =
-      [buttons_ count] * (kBrowserActionWidth + kBrowserActionButtonPadding);
-  BrowserActionButton* newButton =
-      [[[BrowserActionButton alloc] initWithExtension:extension
-                                           controller:self
-                                              xOffset:xOffset] autorelease];
-  NSString* buttonKey = base::SysUTF8ToNSString(extension->id());
-  [buttons_ setObject:newButton forKey:buttonKey];
-  [buttonOrder_ addObject:newButton];
-  [containerView_ addSubview:newButton];
-
   [[NSNotificationCenter defaultCenter]
-      postNotificationName:kBrowserActionsChangedNotification object:self];
+      addObserver:self
+         selector:@selector(actionButtonDragging:)
+             name:kBrowserActionButtonDraggingNotification
+           object:newButton];
+
+  [self repositionActionButtonsAndAnimate:NO];
+  [containerView_ setMaxWidth:
+      [self containerWidthWithButtonCount:[self buttonCount]]];
+  [containerView_ setNeedsDisplay:YES];
 }
 
 - (void)removeActionButtonForExtension:(Extension*)extension {
@@ -369,52 +485,324 @@ class ExtensionsServiceObserverBridge : public NotificationObserver {
     return;
 
   NSString* buttonKey = base::SysUTF8ToNSString(extension->id());
+  if (!buttonKey)
+    return;
 
   BrowserActionButton* button = [buttons_ objectForKey:buttonKey];
-  if (!button) {
-    NOTREACHED();
+  // This could be the case in incognito, where only a subset of extensions are
+  // shown.
+  if (!button)
     return;
-  }
+
   [button removeFromSuperview];
+  // It may or may not be hidden, but it won't matter to NSMutableArray either
+  // way.
+  [hiddenButtons_ removeObject:button];
+  [self updateOverflowMenu];
+
   [buttons_ removeObjectForKey:buttonKey];
-  [buttonOrder_ removeObject:button];
-  if ([buttons_ count] == 0) {
+  if ([self buttonCount] == 0) {
     // No more buttons? Hide the container.
     [containerView_ setHidden:YES];
   } else {
-    // repositionActionButtons only needs to be called if removing a browser
-    // action button because adding one will always append to the end of the
-    // container, while removing one may require that those to the right of it
-    // be shifted to the left.
-    [self repositionActionButtons];
+    [self repositionActionButtonsAndAnimate:NO];
   }
-  [[NSNotificationCenter defaultCenter]
-      postNotificationName:kBrowserActionsChangedNotification object:self];
+  [containerView_ setMaxWidth:
+      [self containerWidthWithButtonCount:[self buttonCount]]];
+  [containerView_ setNeedsDisplay:YES];
 }
 
-- (void)repositionActionButtons {
-  for (NSUInteger i = 0; i < [buttonOrder_ count]; ++i) {
-    CGFloat xOffset = i * (kBrowserActionWidth + kBrowserActionButtonPadding);
-    BrowserActionButton* button = [buttonOrder_ objectAtIndex:i];
+- (void)repositionActionButtonsAndAnimate:(BOOL)animate {
+  NSUInteger i = 0;
+  for (ExtensionList::iterator iter = toolbarModel_->begin();
+       iter != toolbarModel_->end(); ++iter) {
+    if (![self shouldDisplayBrowserAction:*iter])
+      continue;
+    BrowserActionButton* button = [self buttonForExtension:(*iter)];
+    if (!button)
+      continue;
+    if (![button isBeingDragged])
+      [self moveButton:button toIndex:i animate:animate];
+    ++i;
+  }
+}
+
+- (void)updateButtonOpacity {
+  for (BrowserActionButton* button in [buttons_ allValues]) {
     NSRect buttonFrame = [button frame];
-    buttonFrame.origin.x = xOffset;
-    [button setFrame:buttonFrame];
+    buttonFrame.origin.x += kButtonOpacityLeadPadding;
+    if (NSContainsRect([containerView_ bounds], buttonFrame)) {
+      if ([button alphaValue] != 1.0)
+        [button setAlphaValue:1.0];
+
+      continue;
+    }
+    CGFloat intersectionWidth =
+        NSWidth(NSIntersectionRect([containerView_ bounds], buttonFrame));
+    CGFloat alpha = std::max(0.0f,
+        (intersectionWidth - kButtonOpacityLeadPadding) / NSWidth(buttonFrame));
+    [button setAlphaValue:alpha];
+    [button setNeedsDisplay:YES];
   }
 }
 
-- (int)buttonCount {
-  return [buttons_ count];
+- (BrowserActionButton*)buttonForExtension:(Extension*)extension {
+  NSString* extensionId = base::SysUTF8ToNSString(extension->id());
+  DCHECK(extensionId);
+  if (!extensionId)
+    return nil;
+  return [buttons_ objectForKey:extensionId];
 }
 
-- (void)browserActionClicked:(BrowserActionButton*)sender {
-  ExtensionAction* action = [sender extension]->browser_action();
-  if (action->has_popup()) {
-    // Popups are not implemented for Mac yet.
-    NOTIMPLEMENTED();
+- (CGFloat)containerWidthWithButtonCount:(NSUInteger)buttonCount {
+  CGFloat width = 0.0;
+  if (buttonCount > 0) {
+    width = kGrippyXOffset + kContainerPadding +
+        (buttonCount * (kBrowserActionWidth + kBrowserActionButtonPadding));
+  }
+  // Make room for the chevron if any buttons are hidden.
+  if ([self buttonCount] != [self visibleButtonCount]) {
+    width += kChevronWidth + kBrowserActionButtonPadding;
+    // Add extra padding if all buttons are hidden.
+    if ([self visibleButtonCount] == 0)
+      width += 3 * kBrowserActionButtonPadding;
+  }
+  return width;
+}
+
+- (NSUInteger)containerButtonCapacity {
+  CGFloat containerWidth = [self savedWidth];
+  return (containerWidth - kGrippyXOffset + kContainerPadding) /
+      (kBrowserActionWidth + kBrowserActionButtonPadding);
+}
+
+- (void)containerFrameChanged:(NSNotification*)notification {
+  [self updateButtonOpacity];
+  [[containerView_ window] invalidateCursorRectsForView:containerView_];
+  [self updateChevronPositionInFrame:[containerView_ frame]];
+}
+
+- (void)containerDragStart:(NSNotification*)notification {
+  [self setChevronHidden:YES inFrame:[containerView_ frame] animate:YES];
+  while([hiddenButtons_ count] > 0) {
+    [containerView_ addSubview:[hiddenButtons_ objectAtIndex:0]];
+    [hiddenButtons_ removeObjectAtIndex:0];
+  }
+}
+
+- (void)containerDragging:(NSNotification*)notification {
+  [[NSNotificationCenter defaultCenter]
+      postNotificationName:kBrowserActionGrippyDraggingNotification
+                    object:self];
+}
+
+- (void)containerDragFinished:(NSNotification*)notification {
+  for (ExtensionList::iterator iter = toolbarModel_->begin();
+       iter != toolbarModel_->end(); ++iter) {
+    BrowserActionButton* button = [self buttonForExtension:(*iter)];
+    NSRect buttonFrame = [button frame];
+    if (NSContainsRect([containerView_ bounds], buttonFrame))
+      continue;
+
+    CGFloat intersectionWidth =
+        NSWidth(NSIntersectionRect([containerView_ bounds], buttonFrame));
+    // Pad the threshold by 5 pixels in order to have the buttons hide more
+    // easily.
+    if (([containerView_ grippyPinned] && intersectionWidth > 0) ||
+        (intersectionWidth <= (NSWidth(buttonFrame) / 2) + 5.0)) {
+      [button setAlphaValue:0.0];
+      [button removeFromSuperview];
+      [hiddenButtons_ addObject:button];
+    }
+  }
+  [self updateOverflowMenu];
+  [self updateGrippyCursors];
+
+  if (!profile_->IsOffTheRecord())
+    toolbarModel_->SetVisibleIconCount([self visibleButtonCount]);
+
+  [[NSNotificationCenter defaultCenter]
+      postNotificationName:kBrowserActionGrippyDragFinishedNotification
+                    object:self];
+}
+
+- (void)actionButtonUpdated:(NSNotification*)notification {
+  BrowserActionButton* button = [notification object];
+  if (![hiddenButtons_ containsObject:button])
+    return;
+
+  // +1 item because of the title placeholder. See |updateOverflowMenu|.
+  NSUInteger menuIndex = [hiddenButtons_ indexOfObject:button] + 1;
+  NSMenuItem* item = [[chevronMenuButton_ attachedMenu] itemAtIndex:menuIndex];
+  DCHECK(button == [item representedObject]);
+  [item setImage:[button compositedImage]];
+}
+
+- (void)actionButtonDragging:(NSNotification*)notification {
+  if (![self chevronIsHidden])
+    [self setChevronHidden:YES inFrame:[containerView_ frame] animate:YES];
+
+  // Determine what index the dragged button should lie in, alter the model and
+  // reposition the buttons.
+  CGFloat dragThreshold = std::floor(kBrowserActionWidth / 2);
+  BrowserActionButton* draggedButton = [notification object];
+  NSRect draggedButtonFrame = [draggedButton frame];
+
+  NSUInteger index = 0;
+  for (ExtensionList::iterator iter = toolbarModel_->begin();
+       iter != toolbarModel_->end(); ++iter) {
+    BrowserActionButton* button = [self buttonForExtension:(*iter)];
+    CGFloat intersectionWidth =
+        NSWidth(NSIntersectionRect(draggedButtonFrame, [button frame]));
+
+    if (intersectionWidth > dragThreshold && button != draggedButton &&
+        ![button isAnimating] && index < [self visibleButtonCount]) {
+      toolbarModel_->MoveBrowserAction([draggedButton extension], index);
+      [self repositionActionButtonsAndAnimate:YES];
+      return;
+    }
+    ++index;
+  }
+}
+
+- (void)actionButtonDragFinished:(NSNotification*)notification {
+  [self showChevronIfNecessaryInFrame:[containerView_ frame] animate:YES];
+  [self repositionActionButtonsAndAnimate:YES];
+}
+
+- (void)moveButton:(BrowserActionButton*)button
+           toIndex:(NSUInteger)index
+           animate:(BOOL)animate {
+  CGFloat xOffset = kGrippyXOffset +
+      (index * (kBrowserActionWidth + kBrowserActionButtonPadding));
+  NSRect buttonFrame = [button frame];
+  buttonFrame.origin.x = xOffset;
+  [button setFrame:buttonFrame animate:animate];
+}
+
+- (void)browserActionClicked:(BrowserActionButton*)button {
+  int tabId = [self currentTabId];
+  if (tabId < 0) {
+    NOTREACHED() << "No current tab.";
+    return;
+  }
+
+  ExtensionAction* action = [button extension]->browser_action();
+  if (action->HasPopup(tabId)) {
+    GURL popupUrl = action->GetPopupUrl(tabId);
+    // If a popup is already showing, check if the popup URL is the same. If so,
+    // then close the popup.
+    ExtensionPopupController* popup = [ExtensionPopupController popup];
+    if (popup &&
+        [[popup window] isVisible] &&
+        [popup extensionHost]->GetURL() == popupUrl) {
+      [popup close];
+      return;
+    }
+    NSPoint arrowPoint = [self popupPointForBrowserAction:[button extension]];
+    [ExtensionPopupController showURL:popupUrl
+                            inBrowser:browser_
+                           anchoredAt:arrowPoint
+                        arrowLocation:kTopRight
+                              devMode:NO];
   } else {
     ExtensionBrowserEventRouter::GetInstance()->BrowserActionExecuted(
        profile_, action->extension_id(), browser_);
   }
+}
+
+- (BOOL)shouldDisplayBrowserAction:(Extension*)extension {
+  // Only display incognito-enabled extensions while in incognito mode.
+  return (!profile_->IsOffTheRecord() ||
+          profile_->GetExtensionsService()->IsIncognitoEnabled(extension));
+}
+
+- (void)showChevronIfNecessaryInFrame:(NSRect)frame animate:(BOOL)animate {
+  [self setChevronHidden:([self buttonCount] == [self visibleButtonCount])
+                 inFrame:frame
+                 animate:animate];
+}
+
+- (void)updateChevronPositionInFrame:(NSRect)frame {
+  CGFloat xPos = NSWidth(frame) - kChevronWidth - kChevronRightPadding;
+  NSRect buttonFrame = NSMakeRect(xPos,
+                                  kChevronLowerPadding,
+                                  kChevronWidth,
+                                  kChevronHeight);
+  [chevronMenuButton_ setFrame:buttonFrame];
+}
+
+- (void)setChevronHidden:(BOOL)hidden
+                 inFrame:(NSRect)frame
+                 animate:(BOOL)animate {
+  if (hidden == [self chevronIsHidden])
+    return;
+
+  if (!chevronMenuButton_.get()) {
+    chevronMenuButton_.reset([[MenuButton alloc] init]);
+    [chevronMenuButton_ setBordered:NO];
+    ResourceBundle& rb = ResourceBundle::GetSharedInstance();
+    [chevronMenuButton_ setImage:rb.GetNSImageNamed(IDR_BOOKMARK_BAR_CHEVRONS)];
+    [containerView_ addSubview:chevronMenuButton_];
+  }
+
+  if (!hidden)
+    [self updateOverflowMenu];
+
+  [self updateChevronPositionInFrame:frame];
+
+  // Stop any running animation.
+  [chevronAnimation_ stopAnimation];
+
+  if (!animate) {
+    [chevronMenuButton_ setHidden:hidden];
+    return;
+  }
+
+  NSDictionary* animationDictionary;
+  if (hidden) {
+    animationDictionary = [NSDictionary dictionaryWithObjectsAndKeys:
+        chevronMenuButton_.get(), NSViewAnimationTargetKey,
+        NSViewAnimationFadeOutEffect, NSViewAnimationEffectKey,
+        nil];
+  } else {
+    [chevronMenuButton_ setHidden:NO];
+    animationDictionary = [NSDictionary dictionaryWithObjectsAndKeys:
+        chevronMenuButton_.get(), NSViewAnimationTargetKey,
+        NSViewAnimationFadeInEffect, NSViewAnimationEffectKey,
+        nil];
+  }
+  [chevronAnimation_ setViewAnimations:
+      [NSArray arrayWithObject:animationDictionary]];
+  [chevronAnimation_ startAnimation];
+}
+
+- (void)chevronItemSelected:(id)menuItem {
+  [self browserActionClicked:[menuItem representedObject]];
+}
+
+- (void)updateOverflowMenu {
+  overflowMenu_.reset([[NSMenu alloc] initWithTitle:@""]);
+  // See menu_button.h for documentation on why this is needed.
+  [overflowMenu_ addItemWithTitle:@"" action:nil keyEquivalent:@""];
+
+  for (BrowserActionButton* button in hiddenButtons_.get()) {
+    NSString* name = base::SysUTF8ToNSString([button extension]->name());
+    NSMenuItem* item =
+        [overflowMenu_ addItemWithTitle:name
+                                 action:@selector(chevronItemSelected:)
+                          keyEquivalent:@""];
+    [item setRepresentedObject:button];
+    [item setImage:[button compositedImage]];
+    [item setTarget:self];
+  }
+  [chevronMenuButton_ setAttachedMenu:overflowMenu_];
+}
+
+- (void)updateGrippyCursors {
+  [containerView_ setCanDragLeft:[hiddenButtons_ count] > 0];
+  [containerView_ setCanDragRight:[self visibleButtonCount] > 0];
+  [[containerView_ window] invalidateCursorRectsForView:containerView_];
 }
 
 - (int)currentTabId {
@@ -423,6 +811,21 @@ class ExtensionsServiceObserverBridge : public NotificationObserver {
     return -1;
 
   return selected_tab->controller().session_id().id();
+}
+
+#pragma mark -
+#pragma mark Testing Methods
+
+- (NSButton*)buttonWithIndex:(NSUInteger)index {
+  NSUInteger i = 0;
+  for (ExtensionList::iterator iter = toolbarModel_->begin();
+       iter != toolbarModel_->end(); ++iter) {
+    if (i == index)
+      return [buttons_ objectForKey:base::SysUTF8ToNSString((*iter)->id())];
+
+    ++i;
+  }
+  return nil;
 }
 
 @end

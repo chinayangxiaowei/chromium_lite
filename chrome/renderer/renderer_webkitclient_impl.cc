@@ -13,9 +13,8 @@
 #include "base/command_line.h"
 #include "base/file_path.h"
 #include "base/platform_file.h"
-#include "chrome/common/appcache/appcache_dispatcher.h"
 #include "chrome/common/chrome_switches.h"
-#include "chrome/common/db_message_filter.h"
+#include "chrome/common/database_util.h"
 #include "chrome/common/render_messages.h"
 #include "chrome/common/webmessageportchannel_impl.h"
 #include "chrome/plugin/npobject_util.h"
@@ -24,14 +23,14 @@
 #include "chrome/renderer/render_view.h"
 #include "chrome/renderer/renderer_webstoragenamespace_impl.h"
 #include "chrome/renderer/visitedlink_slave.h"
+#include "chrome/renderer/webgraphicscontext3d_command_buffer_impl.h"
 #include "googleurl/src/gurl.h"
 #include "third_party/WebKit/WebKit/chromium/public/WebFrame.h"
+#include "third_party/WebKit/WebKit/chromium/public/WebGraphicsContext3D.h"
 #include "third_party/WebKit/WebKit/chromium/public/WebStorageEventDispatcher.h"
 #include "third_party/WebKit/WebKit/chromium/public/WebString.h"
 #include "third_party/WebKit/WebKit/chromium/public/WebURL.h"
 #include "third_party/WebKit/WebKit/chromium/public/WebVector.h"
-#include "webkit/appcache/web_application_cache_host_impl.h"
-#include "webkit/glue/glue_util.h"
 #include "webkit/glue/webkit_glue.h"
 
 #if defined(OS_LINUX)
@@ -42,8 +41,6 @@
 #include "base/file_descriptor_posix.h"
 #endif
 
-using WebKit::WebApplicationCacheHost;
-using WebKit::WebApplicationCacheHostClient;
 using WebKit::WebFrame;
 using WebKit::WebKitClient;
 using WebKit::WebStorageArea;
@@ -89,14 +86,29 @@ bool RendererWebKitClientImpl::sandboxEnabled() {
 
 bool RendererWebKitClientImpl::getFileSize(const WebString& path,
                                            long long& result) {
-  if (RenderThread::current()->Send(new ViewHostMsg_GetFileSize(
-      FilePath(webkit_glue::WebStringToFilePathString(path)),
-      reinterpret_cast<int64*>(&result)))) {
+  if (RenderThread::current()->Send(
+          new ViewHostMsg_GetFileSize(webkit_glue::WebStringToFilePath(path),
+                                      reinterpret_cast<int64*>(&result)))) {
     return result >= 0;
-  } else {
-    result = -1;
-    return false;
   }
+
+  result = -1;
+  return false;
+}
+
+bool RendererWebKitClientImpl::getFileModificationTime(
+    const WebKit::WebString& path,
+    double& result) {
+  base::Time time;
+  if (RenderThread::current()->Send(
+          new ViewHostMsg_GetFileModificationTime(
+              webkit_glue::WebStringToFilePath(path), &time))) {
+    result = time.ToDoubleT();
+    return true;
+  }
+
+  result = 0;
+  return false;
 }
 
 unsigned long long RendererWebKitClientImpl::visitedLinkHash(
@@ -154,12 +166,6 @@ WebStorageNamespace* RendererWebKitClientImpl::createLocalStorageNamespace(
   return new RendererWebStorageNamespaceImpl(DOM_STORAGE_LOCAL);
 }
 
-WebStorageNamespace* RendererWebKitClientImpl::createSessionStorageNamespace() {
-  if (CommandLine::ForCurrentProcess()->HasSwitch(switches::kSingleProcess))
-    return WebStorageNamespace::createSessionStorageNamespace();
-  return new RendererWebStorageNamespaceImpl(DOM_STORAGE_SESSION);
-}
-
 void RendererWebKitClientImpl::dispatchStorageEvent(
     const WebString& key, const WebString& old_value,
     const WebString& new_value, const WebString& origin,
@@ -170,12 +176,6 @@ void RendererWebKitClientImpl::dispatchStorageEvent(
       WebStorageEventDispatcher::create());
   event_dispatcher->dispatchStorageEvent(key, old_value, new_value, origin,
                                          url, is_local_storage);
-}
-
-WebApplicationCacheHost* RendererWebKitClientImpl::createApplicationCacheHost(
-      WebApplicationCacheHostClient* client) {
-  return new appcache::WebApplicationCacheHostImpl(client,
-      RenderThread::current()->appcache_dispatcher()->backend_proxy());
 }
 
 //------------------------------------------------------------------------------
@@ -252,84 +252,35 @@ WebString RendererWebKitClientImpl::SandboxSupport::getFontFamilyForCharacters(
   return WebString::fromUTF8(family_name);
 }
 
+void RendererWebKitClientImpl::SandboxSupport::getRenderStyleForStrike(
+    const char* family, int sizeAndStyle, WebKit::WebFontRenderStyle* out) {
+  renderer_sandbox_support::getRenderStyleForStrike(family, sizeAndStyle, out);
+}
+
 #endif
 
 //------------------------------------------------------------------------------
 
 WebKitClient::FileHandle RendererWebKitClientImpl::databaseOpenFile(
-  const WebString& vfs_file_name, int desired_flags,
+    const WebString& vfs_file_name, int desired_flags,
   WebKitClient::FileHandle* dir_handle) {
-  DBMessageFilter* db_message_filter = DBMessageFilter::GetInstance();
-  int message_id = db_message_filter->GetUniqueID();
-
-  ViewMsg_DatabaseOpenFileResponse_Params default_response =
-#if defined(OS_WIN)
-      { base::kInvalidPlatformFileValue };
-#elif defined(OS_POSIX)
-      { base::FileDescriptor(base::kInvalidPlatformFileValue, true),
-        base::FileDescriptor(base::kInvalidPlatformFileValue, true) };
-#endif
-
-  ViewMsg_DatabaseOpenFileResponse_Params result =
-      db_message_filter->SendAndWait(
-          new ViewHostMsg_DatabaseOpenFile(
-              vfs_file_name, desired_flags, message_id),
-          message_id, default_response);
-
-  if (result.blocked) {
-    // RoutingIDForCurrentContext scans the render thread's stack for a
-    // ScriptExecutionContext. However, we are running on the database thread.
-    // The reason why this works is that the render thread blocks in
-    // third_party/WebKit/WebCore/storage/Database.cpp:openAndVerifyVersion,
-    // and therefore, the latest ScriptExecutionContext on the render thread
-    // is the context in which this database open was requested.
-    //
-    // TODO(jochen): either obtain the routing ID in a less fragile way or
-    // figure out a way to pass the content blocked message to the caller.
-    int32 routing_id = RenderThread::RoutingIDForCurrentContext();
-    if (routing_id != MSG_ROUTING_CONTROL)
-      db_message_filter->Send(new ViewHostMsg_ContentBlocked(
-          routing_id, CONTENT_SETTINGS_TYPE_COOKIES));
-  }
-
-#if defined(OS_WIN)
-  if (dir_handle) {
-    *dir_handle = base::kInvalidPlatformFileValue;
-  }
-  return result.file_handle;
-#elif defined(OS_POSIX)
-  if (dir_handle) {
-    *dir_handle = result.dir_handle.fd;
-  }
-  return result.file_handle.fd;
-#endif
+  return DatabaseUtil::databaseOpenFile(vfs_file_name, desired_flags,
+      dir_handle);
 }
 
 int RendererWebKitClientImpl::databaseDeleteFile(
-  const WebString& vfs_file_name, bool sync_dir) {
-  DBMessageFilter* db_message_filter = DBMessageFilter::GetInstance();
-  int message_id = db_message_filter->GetUniqueID();
-  return db_message_filter->SendAndWait(
-      new ViewHostMsg_DatabaseDeleteFile(vfs_file_name, sync_dir, message_id),
-      message_id, SQLITE_IOERR_DELETE);
+    const WebString& vfs_file_name, bool sync_dir) {
+  return DatabaseUtil::databaseDeleteFile(vfs_file_name, sync_dir);
 }
 
 long RendererWebKitClientImpl::databaseGetFileAttributes(
-  const WebString& vfs_file_name) {
-  DBMessageFilter* db_message_filter = DBMessageFilter::GetInstance();
-  int message_id = db_message_filter->GetUniqueID();
-  return db_message_filter->SendAndWait(
-      new ViewHostMsg_DatabaseGetFileAttributes(vfs_file_name, message_id),
-      message_id, -1L);
+    const WebString& vfs_file_name) {
+  return DatabaseUtil::databaseGetFileAttributes(vfs_file_name);
 }
 
 long long RendererWebKitClientImpl::databaseGetFileSize(
-  const WebString& vfs_file_name) {
-  DBMessageFilter* db_message_filter = DBMessageFilter::GetInstance();
-  int message_id = db_message_filter->GetUniqueID();
-  return db_message_filter->SendAndWait(
-      new ViewHostMsg_DatabaseGetFileSize(vfs_file_name, message_id),
-      message_id, 0LL);
+    const WebString& vfs_file_name) {
+  return DatabaseUtil::databaseGetFileSize(vfs_file_name);
 }
 
 WebKit::WebSharedWorkerRepository*
@@ -342,6 +293,23 @@ RendererWebKitClientImpl::sharedWorkerRepository() {
   }
 }
 
+WebKit::WebGraphicsContext3D*
+RendererWebKitClientImpl::createGraphicsContext3D() {
+  // TODO(kbr): remove the WebGraphicsContext3D::createDefault code path
+  // completely, and at least for a period of time, either pop up a warning
+  // dialog, or don't even start the browser, if WebGL is enabled and the
+  // sandbox isn't.
+  if (CommandLine::ForCurrentProcess()->HasSwitch(switches::kNoSandbox)) {
+    return WebKit::WebGraphicsContext3D::createDefault();
+  } else {
+#if defined(ENABLE_GPU)
+    return new WebGraphicsContext3DCommandBufferImpl();
+#else
+    return NULL;
+#endif
+  }
+}
+
 //------------------------------------------------------------------------------
 
 WebKit::WebString RendererWebKitClientImpl::signedPublicKeyAndChallengeString(
@@ -351,8 +319,8 @@ WebKit::WebString RendererWebKitClientImpl::signedPublicKeyAndChallengeString(
   std::string signed_public_key;
   RenderThread::current()->Send(new ViewHostMsg_Keygen(
       static_cast<uint32>(key_size_index),
-      webkit_glue::WebStringToStdString(challenge),
+      challenge.utf8(),
       GURL(url),
       &signed_public_key));
-  return webkit_glue::StdStringToWebString(signed_public_key);
+  return WebString::fromUTF8(signed_public_key);
 }

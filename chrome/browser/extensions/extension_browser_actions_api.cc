@@ -6,6 +6,7 @@
 
 #include "chrome/browser/browser.h"
 #include "chrome/browser/browser_list.h"
+#include "chrome/common/extensions/extension.h"
 #include "chrome/common/notification_service.h"
 #include "chrome/common/render_messages.h"
 
@@ -24,7 +25,7 @@ bool BrowserActionFunction::RunImpl() {
   if (details_->HasKey(L"tabId"))
     EXTENSION_FUNCTION_VALIDATE(details_->GetInteger(L"tabId", &tab_id_));
 
-  Extension* extension = dispatcher()->GetExtension();
+  Extension* extension = GetExtension();
   browser_action_ = extension->browser_action();
   if (!browser_action_) {
     error_ = kNoBrowserActionError;
@@ -57,6 +58,18 @@ bool BrowserActionSetTitleFunction::RunBrowserAction() {
   std::string title;
   EXTENSION_FUNCTION_VALIDATE(details_->GetString(L"title", &title));
   browser_action_->SetTitle(tab_id_, title);
+  return true;
+}
+
+bool BrowserActionSetPopupFunction::RunBrowserAction() {
+  std::string popup_string;
+  EXTENSION_FUNCTION_VALIDATE(details_->GetString(L"popup", &popup_string));
+
+  GURL popup_url;
+  if (!popup_string.empty())
+    popup_url = GetExtension()->GetResourceURL(popup_string);
+
+  browser_action_->SetPopupUrl(tab_id_, popup_url);
   return true;
 }
 

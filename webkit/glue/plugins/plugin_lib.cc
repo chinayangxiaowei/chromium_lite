@@ -13,8 +13,7 @@
 #include "webkit/glue/plugins/plugin_host.h"
 #include "webkit/glue/plugins/plugin_list.h"
 
-namespace NPAPI
-{
+namespace NPAPI {
 
 const char kPluginLibrariesLoadedCounter[] = "PluginLibrariesLoaded";
 const char kPluginInstancesActiveCounter[] = "PluginInstancesActive";
@@ -65,7 +64,8 @@ PluginLib::PluginLib(const WebPluginInfo& info,
       library_(0),
       initialized_(false),
       saved_data_(0),
-      instance_count_(0) {
+      instance_count_(0),
+      skip_unload_(false) {
   StatsCounter(kPluginLibrariesLoadedCounter).Increment();
   memset((void*)&plugin_funcs_, 0, sizeof(plugin_funcs_));
   g_loaded_libs->push_back(this);
@@ -104,7 +104,7 @@ NPError PluginLib::NP_Initialize() {
   if (host == 0)
     return NPERR_GENERIC_ERROR;
 
-#if defined(OS_LINUX) || defined(OS_FREEBSD)
+#if defined(OS_POSIX) && !defined(OS_MACOSX)
   NPError rv = entry_points_.np_initialize(host->host_functions(),
                                            &plugin_funcs_);
 #else
@@ -126,6 +126,10 @@ NPError PluginLib::NP_Initialize() {
 void PluginLib::NP_Shutdown(void) {
   DCHECK(initialized_);
   entry_points_.np_shutdown();
+}
+
+void PluginLib::PreventLibraryUnload() {
+  skip_unload_ = true;
 }
 
 PluginInstance* PluginLib::CreateInstance(const std::string& mime_type) {
@@ -169,6 +173,13 @@ bool PluginLib::Load() {
     if (library == 0)
       return rv;
 
+#if defined(OS_MACOSX)
+    // According to the WebKit source, QuickTime at least requires us to call
+    // UseResFile on the plugin resources before loading.
+    if (library->bundle_resource_ref != -1)
+      UseResFile(library->bundle_resource_ref);
+#endif
+
     rv = true;  // assume success now
 
     entry_points_.np_initialize =
@@ -177,7 +188,7 @@ bool PluginLib::Load() {
     if (entry_points_.np_initialize == 0)
       rv = false;
 
-#if !defined(OS_LINUX) && !defined(OS_FREEBSD)
+#if defined(OS_WIN) || defined(OS_MACOSX)
     entry_points_.np_getentrypoints =
         (NP_GetEntryPointsFunc)base::GetFunctionPointerFromNativeLibrary(
             library, "NP_GetEntryPoints");
@@ -197,7 +208,7 @@ bool PluginLib::Load() {
   if (rv) {
     plugin_funcs_.size = sizeof(plugin_funcs_);
     plugin_funcs_.version = (NP_VERSION_MAJOR << 8) | NP_VERSION_MINOR;
-#if !defined(OS_LINUX) && !defined(OS_FREEBSD) && !defined(OS_MACOSX)
+#if !defined(OS_POSIX)
     if (entry_points_.np_getentrypoints(&plugin_funcs_) != NPERR_NO_ERROR)
       rv = false;
 #else
@@ -260,11 +271,13 @@ void PluginLib::Unload() {
 
     if (defer_unload) {
       FreePluginLibraryTask* free_library_task =
-          new FreePluginLibraryTask(library_, entry_points_.np_shutdown);
+          new FreePluginLibraryTask(skip_unload_ ? NULL : library_,
+                                    entry_points_.np_shutdown);
       MessageLoop::current()->PostTask(FROM_HERE, free_library_task);
     } else {
       Shutdown();
-      base::UnloadNativeLibrary(library_);
+      if (!skip_unload_)
+        base::UnloadNativeLibrary(library_);
     }
 
     library_ = 0;

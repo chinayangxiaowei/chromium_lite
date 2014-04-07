@@ -4,7 +4,10 @@
 
 #include "chrome/browser/extensions/extension_apitest.h"
 
-// TODO(jcampan): http://crbug.com/27216 disabled because failing.
 IN_PROC_BROWSER_TEST_F(ExtensionApiTest, Storage) {
   ASSERT_TRUE(RunExtensionTest("storage")) << message_;
+}
+
+IN_PROC_BROWSER_TEST_F(ExtensionApiTest, Cookies) {
+  ASSERT_TRUE(RunExtensionTest("cookies")) << message_;
 }

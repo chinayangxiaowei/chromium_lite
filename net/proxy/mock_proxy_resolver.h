@@ -97,7 +97,7 @@ class MockAsyncProxyResolverBase : public ProxyResolver {
                              ProxyInfo* results,
                              CompletionCallback* callback,
                              RequestHandle* request_handle,
-                             LoadLog* /*load_log*/) {
+                             const BoundNetLog& /*net_log*/) {
     scoped_refptr<Request> request = new Request(this, url, results, callback);
     pending_requests_.push_back(request);
 
@@ -122,6 +122,10 @@ class MockAsyncProxyResolverBase : public ProxyResolver {
         new SetPacScriptRequest(this, pac_url, pac_bytes, callback));
     // Finished when user calls SetPacScriptRequest::CompleteNow().
     return ERR_IO_PENDING;
+  }
+
+  virtual void CancelSetPacScript() {
+    // Do nothing (caller was responsible for completing the request).
   }
 
   const RequestsList& pending_requests() const {

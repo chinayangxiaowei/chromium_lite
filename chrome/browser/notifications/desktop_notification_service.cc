@@ -1,4 +1,4 @@
-// Copyright (c) 2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,16 +6,17 @@
 
 #include "app/l10n_util.h"
 #include "app/resource_bundle.h"
-#include "base/string_piece.h"
-#include "base/string_util.h"
 #include "base/thread.h"
+#include "base/utf_string_conversions.h"
 #include "chrome/browser/browser_list.h"
+#include "chrome/browser/child_process_host.h"
 #include "chrome/browser/chrome_thread.h"
 #include "chrome/browser/extensions/extensions_service.h"
 #include "chrome/browser/notifications/notification.h"
 #include "chrome/browser/notifications/notification_object_proxy.h"
 #include "chrome/browser/notifications/notification_ui_manager.h"
 #include "chrome/browser/notifications/notifications_prefs_cache.h"
+#include "chrome/browser/pref_service.h"
 #include "chrome/browser/profile.h"
 #include "chrome/browser/renderer_host/render_process_host.h"
 #include "chrome/browser/renderer_host/render_view_host.h"
@@ -23,9 +24,7 @@
 #include "chrome/browser/tab_contents/infobar_delegate.h"
 #include "chrome/browser/tab_contents/tab_contents.h"
 #include "chrome/browser/worker_host/worker_process_host.h"
-#include "chrome/common/child_process_host.h"
 #include "chrome/common/pref_names.h"
-#include "chrome/common/pref_service.h"
 #include "chrome/common/render_messages.h"
 #include "chrome/common/url_constants.h"
 #include "grit/browser_resources.h"
@@ -37,35 +36,39 @@
 
 using WebKit::WebNotificationPresenter;
 
-// Creates a data:xxxx URL which contains the full HTML for a notification
-// using supplied icon, title, and text, run through a template which contains
-// the standard formatting for notifications.
-static string16 CreateDataUrl(const GURL& icon_url, const string16& title,
-    const string16& body) {
-  const base::StringPiece template_html(
-      ResourceBundle::GetSharedInstance().GetRawDataResource(
-          IDR_NOTIFICATION_HTML));
-
-  if (template_html.empty()) {
-    NOTREACHED() << "unable to load template. ID: " << IDR_NOTIFICATION_HTML;
-    return EmptyString16();
+// static
+string16 DesktopNotificationService::CreateDataUrl(
+    const GURL& icon_url, const string16& title, const string16& body) {
+  int resource;
+  string16 line_name;
+  string16 line;
+  std::vector<string16> subst;
+  if (icon_url.is_valid()) {
+    resource = IDR_NOTIFICATION_ICON_HTML;
+    subst.push_back(UTF8ToUTF16(icon_url.spec()));
+    subst.push_back(UTF8ToUTF16(EscapeForHTML(UTF16ToUTF8(title))));
+    subst.push_back(UTF8ToUTF16(EscapeForHTML(UTF16ToUTF8(body))));
+  } else if (title.empty() || body.empty()) {
+    resource = IDR_NOTIFICATION_1LINE_HTML;
+    line = title.empty() ? body : title;
+    // Strings are div names in the template file.
+    line_name = title.empty() ? ASCIIToUTF16("description")
+                              : ASCIIToUTF16("title");
+    subst.push_back(UTF8ToUTF16(EscapeForHTML(UTF16ToUTF8(line_name))));
+    subst.push_back(UTF8ToUTF16(EscapeForHTML(UTF16ToUTF8(line))));
+  } else {
+    resource = IDR_NOTIFICATION_2LINE_HTML;
+    subst.push_back(UTF8ToUTF16(EscapeForHTML(UTF16ToUTF8(title))));
+    subst.push_back(UTF8ToUTF16(EscapeForHTML(UTF16ToUTF8(body))));
   }
 
-  std::vector<string16> subst;
-  if (icon_url.is_valid())
-    subst.push_back(UTF8ToUTF16(icon_url.spec()));
-  else
-    subst.push_back(EmptyString16());
+  const base::StringPiece template_html(
+      ResourceBundle::GetSharedInstance().GetRawDataResource(
+          resource));
 
-  subst.push_back(UTF8ToUTF16(EscapeForHTML(UTF16ToUTF8(title))));
-  subst.push_back(UTF8ToUTF16(EscapeForHTML(UTF16ToUTF8(body))));
-
-  if (icon_url.is_valid()) {
-    subst.push_back(ASCIIToUTF16("block"));
-    subst.push_back(ASCIIToUTF16("60"));
-  } else {
-    subst.push_back(ASCIIToUTF16("none"));
-    subst.push_back(ASCIIToUTF16("5"));
+  if (template_html.empty()) {
+    NOTREACHED() << "unable to load template. ID: " << resource;
+    return string16();
   }
 
   string16 format_string = ASCIIToUTF16("data:text/html;charset=utf-8,"
@@ -200,32 +203,26 @@ DesktopNotificationService::~DesktopNotificationService() {
 // create the preferences if they don't exist yet.
 void DesktopNotificationService::InitPrefs() {
   PrefService* prefs = profile_->GetPrefs();
-  const ListValue* allowed_sites;
-  const ListValue* denied_sites;
+  const ListValue* allowed_sites = NULL;
+  const ListValue* denied_sites = NULL;
 
-  if (!prefs->FindPreference(prefs::kDesktopNotificationAllowedOrigins))
-    prefs->RegisterListPref(prefs::kDesktopNotificationAllowedOrigins);
-  allowed_sites = prefs->GetList(prefs::kDesktopNotificationAllowedOrigins);
+  if (!profile_->IsOffTheRecord()) {
+    if (!prefs->FindPreference(prefs::kDesktopNotificationAllowedOrigins))
+      prefs->RegisterListPref(prefs::kDesktopNotificationAllowedOrigins);
+    allowed_sites = prefs->GetList(prefs::kDesktopNotificationAllowedOrigins);
 
-  if (!prefs->FindPreference(prefs::kDesktopNotificationDeniedOrigins))
-    prefs->RegisterListPref(prefs::kDesktopNotificationDeniedOrigins);
-  denied_sites = prefs->GetList(prefs::kDesktopNotificationDeniedOrigins);
+    if (!prefs->FindPreference(prefs::kDesktopNotificationDeniedOrigins))
+      prefs->RegisterListPref(prefs::kDesktopNotificationDeniedOrigins);
+    denied_sites = prefs->GetList(prefs::kDesktopNotificationDeniedOrigins);
+  }
 
   prefs_cache_ = new NotificationsPrefsCache(allowed_sites, denied_sites);
+  prefs_cache_->set_is_initialized(true);
 }
 
 void DesktopNotificationService::GrantPermission(const GURL& origin) {
   DCHECK(ChromeThread::CurrentlyOn(ChromeThread::UI));
-  PrefService* prefs = profile_->GetPrefs();
-  ListValue* allowed_sites =
-      prefs->GetMutableList(prefs::kDesktopNotificationAllowedOrigins);
-  ListValue* denied_sites =
-      prefs->GetMutableList(prefs::kDesktopNotificationDeniedOrigins);
-  // Remove from the black-list and add to the white-list.
-  StringValue* value = new StringValue(origin.spec());
-  denied_sites->Remove(*value);
-  allowed_sites->Append(value);
-  prefs->ScheduleSavePersistentPrefs();
+  PersistPermissionChange(origin, true);
 
   // Schedule a cache update on the IO thread.
   ChromeThread::PostTask(
@@ -237,16 +234,7 @@ void DesktopNotificationService::GrantPermission(const GURL& origin) {
 
 void DesktopNotificationService::DenyPermission(const GURL& origin) {
   DCHECK(ChromeThread::CurrentlyOn(ChromeThread::UI));
-  PrefService* prefs = profile_->GetPrefs();
-  ListValue* allowed_sites =
-      prefs->GetMutableList(prefs::kDesktopNotificationAllowedOrigins);
-  ListValue* denied_sites =
-      prefs->GetMutableList(prefs::kDesktopNotificationDeniedOrigins);
-  StringValue* value = new StringValue(origin.spec());
-  // Remove from the white-list and add to the black-list.
-  allowed_sites->Remove(*value);
-  denied_sites->Append(value);
-  prefs->ScheduleSavePersistentPrefs();
+  PersistPermissionChange(origin, false);
 
   // Schedule a cache update on the IO thread.
   ChromeThread::PostTask(
@@ -254,6 +242,29 @@ void DesktopNotificationService::DenyPermission(const GURL& origin) {
       NewRunnableMethod(
           prefs_cache_.get(), &NotificationsPrefsCache::CacheDeniedOrigin,
           origin));
+}
+
+void DesktopNotificationService::PersistPermissionChange(
+    const GURL& origin, bool is_allowed) {
+  // Don't persist changes when off the record.
+  if (profile_->IsOffTheRecord())
+    return;
+
+  PrefService* prefs = profile_->GetPrefs();
+  ListValue* allowed_sites =
+      prefs->GetMutableList(prefs::kDesktopNotificationAllowedOrigins);
+  ListValue* denied_sites =
+      prefs->GetMutableList(prefs::kDesktopNotificationDeniedOrigins);
+  StringValue* value = new StringValue(origin.spec());
+  // Remove from one list and add to the other.
+  if (is_allowed) {
+    allowed_sites->Append(value);
+    denied_sites->Remove(*value);
+  } else {
+    allowed_sites->Remove(*value);
+    denied_sites->Append(value);
+  }
+  prefs->ScheduleSavePersistentPrefs();
 }
 
 void DesktopNotificationService::RequestPermission(
@@ -292,7 +303,7 @@ bool DesktopNotificationService::CancelDesktopNotification(
 
 bool DesktopNotificationService::ShowDesktopNotification(
     const GURL& origin, const GURL& url, int process_id, int route_id,
-    NotificationSource source, int notification_id) {
+    DesktopNotificationSource source, int notification_id) {
   DCHECK(ChromeThread::CurrentlyOn(ChromeThread::UI));
   NotificationObjectProxy* proxy =
       new NotificationObjectProxy(process_id, route_id,
@@ -306,7 +317,7 @@ bool DesktopNotificationService::ShowDesktopNotification(
 bool DesktopNotificationService::ShowDesktopNotificationText(
     const GURL& origin, const GURL& icon, const string16& title,
     const string16& text, int process_id, int route_id,
-    NotificationSource source, int notification_id) {
+    DesktopNotificationSource source, int notification_id) {
   DCHECK(ChromeThread::CurrentlyOn(ChromeThread::UI));
   NotificationObjectProxy* proxy =
       new NotificationObjectProxy(process_id, route_id,

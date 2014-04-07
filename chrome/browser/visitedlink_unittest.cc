@@ -676,7 +676,7 @@ TEST_F(VisitedLinkEventsTest, Coalescense) {
 
 TEST_F(VisitedLinkRelayTest, Basics) {
   VisitedLinkMaster* master = profile_->GetVisitedLinkMaster();
-  rvh()->CreateRenderView();
+  rvh()->CreateRenderView(profile_->GetRequestContext());
 
   // Add a few URLs.
   master->AddURL(GURL("http://acidtests.org/"));
@@ -700,7 +700,7 @@ TEST_F(VisitedLinkRelayTest, Basics) {
 
 TEST_F(VisitedLinkRelayTest, TabVisibility) {
   VisitedLinkMaster* master = profile_->GetVisitedLinkMaster();
-  rvh()->CreateRenderView();
+  rvh()->CreateRenderView(profile_->GetRequestContext());
 
   // Simulate tab becoming inactive.
   rvh()->WasHidden();
@@ -763,7 +763,7 @@ TEST_F(VisitedLinkRelayTest, WebViewReadiness) {
   EXPECT_EQ(0, profile()->add_event_count());
   EXPECT_EQ(0, profile()->reset_event_count());
 
-  rvh()->CreateRenderView();
+  rvh()->CreateRenderView(profile_->GetRequestContext());
 
   // We should now have just a reset event: adds are eaten up by a reset
   // that followed.

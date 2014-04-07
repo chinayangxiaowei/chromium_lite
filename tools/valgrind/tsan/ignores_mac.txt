@@ -15,3 +15,12 @@ fun:*base*subtle*NoBarrier_CompareAndSwap*
 # TODO(timurrrr): investigate whether we need to instrument them
 obj:*/Security*
 obj:*/libcrypto*
+# SensitiveAllocator::free is a part of the Security framework.
+# It calls bzero (0xffff0633) which can't be resolved and thus should be
+# ignored recursively.
+fun_r:*SensitiveAllocator*free*
+
+# The CFBag operators should be thread-safe, but they are not annotated
+# properly.
+# TODO(glider): replace all the CoreFoundation suppressions with ignores.
+fun_r:CFBag*

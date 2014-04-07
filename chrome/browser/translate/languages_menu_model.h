@@ -5,15 +5,15 @@
 #ifndef CHROME_BROWSER_TRANSLATE_LANGUAGES_MENU_MODEL_H_
 #define CHROME_BROWSER_TRANSLATE_LANGUAGES_MENU_MODEL_H_
 
-#include "views/controls/menu/simple_menu_model.h"
+#include "app/menus/simple_menu_model.h"
 
 class TranslateInfoBarDelegate;
 
 // A menu model that builds the contents of the language menus in the translate
 // infobar, i.e. the original and target languages.
-class LanguagesMenuModel : public views::SimpleMenuModel {
+class LanguagesMenuModel : public menus::SimpleMenuModel {
  public:
-  explicit LanguagesMenuModel(views::SimpleMenuModel::Delegate* menu_delegate,
+  explicit LanguagesMenuModel(menus::SimpleMenuModel::Delegate* menu_delegate,
       TranslateInfoBarDelegate* translate_delegate, bool original_language);
   virtual ~LanguagesMenuModel();
 

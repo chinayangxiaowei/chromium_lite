@@ -4,26 +4,42 @@
 
 #import <Cocoa/Cocoa.h>
 
+#import "base/cocoa_protocols_mac.h"
+#include "base/scoped_nsobject.h"
+
 @class AnimatableView;
+@class HoverCloseButton;
 @protocol InfoBarContainer;
 class InfoBarDelegate;
+@class InfoBarGradientView;
 
 // A controller for an infobar in the browser window.  There is one
 // controller per infobar view.  The base InfoBarController is able to
 // draw an icon, a text message, and a close button.  Subclasses can
 // override addAdditionalControls to customize the UI.
-@interface InfoBarController : NSViewController {
+@interface InfoBarController : NSViewController<NSTextViewDelegate> {
  @private
   id<InfoBarContainer> containerController_;  // weak, owns us
   BOOL infoBarClosing_;
 
  @protected
-  InfoBarDelegate* delegate_;  // weak
-  IBOutlet NSView* infoBarView_;
+  IBOutlet InfoBarGradientView* infoBarView_;
   IBOutlet NSImageView* image_;
-  IBOutlet NSTextField* label_;
+  IBOutlet NSTextField* labelPlaceholder_;
   IBOutlet NSButton* okButton_;
   IBOutlet NSButton* cancelButton_;
+  IBOutlet HoverCloseButton* closeButton_;
+
+  // In rare instances, it can be possible for |delegate_| to delete itself
+  // while this controller is still alive.  Always check |delegate_| against
+  // NULL before using it.
+  InfoBarDelegate* delegate_;  // weak, can be NULL
+
+  // Text fields don't work as well with embedded links as text views, but
+  // text views cannot conveniently be created in IB. The xib file contains
+  // a text field |labelPlaceholder_| that's replaced by this text view |label_|
+  // in -awakeFromNib.
+  scoped_nsobject<NSTextView> label_;
 };
 
 // Initializes a new InfoBarController.
@@ -54,6 +70,9 @@ class InfoBarDelegate;
 // default implementation does nothing.
 - (void)addAdditionalControls;
 
+// Sets the info bar message to the specified |message|.
+- (void)setLabelToMessage:(NSString*)message;
+
 @property(assign, nonatomic) id<InfoBarContainer> containerController;
 @property(readonly) InfoBarDelegate* delegate;
 
@@ -78,4 +97,6 @@ class InfoBarDelegate;
 // Called when the ok and cancel buttons are clicked.
 - (IBAction)ok:(id)sender;
 - (IBAction)cancel:(id)sender;
+// Called when there is a click on the link in the infobar.
+- (void)linkClicked;
 @end

@@ -1,4 +1,4 @@
-// Copyright (c) 2006-2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -43,7 +43,9 @@ class ExtensionsUIHTMLSource : public ChromeURLDataManager::DataSource {
 
   // Called when the network layer has requested a resource underneath
   // the path we registered.
-  virtual void StartDataRequest(const std::string& path, int request_id);
+  virtual void StartDataRequest(const std::string& path,
+                                bool is_off_the_record,
+                                int request_id);
   virtual std::string GetMimeType(const std::string&) const {
     return "text/html";
   }
@@ -54,7 +56,7 @@ class ExtensionsUIHTMLSource : public ChromeURLDataManager::DataSource {
   DISALLOW_COPY_AND_ASSIGN(ExtensionsUIHTMLSource);
 };
 
-// The handler for Javascript messages related to the "extensions" view.
+// The handler for JavaScript messages related to the "extensions" view.
 class ExtensionsDOMHandler
     : public DOMMessageHandler,
       public NotificationObserver,
@@ -104,9 +106,11 @@ class ExtensionsDOMHandler
   virtual void RegisterMessages();
 
   // Extension Detail JSON Struct for page. (static for ease of testing).
+  // Note: service can be NULL in unit tests.
   static DictionaryValue* CreateExtensionDetailValue(
-      const Extension *extension,
-      const std::vector<ExtensionPage>&,
+      ExtensionsService* service,
+      const Extension* extension,
+      const std::vector<ExtensionPage>& pages,
       bool enabled);
 
   // ContentScript JSON Struct for page. (static for ease of testing).
@@ -122,7 +126,7 @@ class ExtensionsDOMHandler
 
   // ExtensionInstallUI::Delegate implementation, used for receiving
   // notification about uninstall confirmation dialog selections.
-  virtual void InstallUIProceed();
+  virtual void InstallUIProceed(bool create_app_shortcut);
   virtual void InstallUIAbort();
 
  private:
@@ -140,6 +144,9 @@ class ExtensionsDOMHandler
 
   // Callback for "enable" message.
   void HandleEnableMessage(const Value* value);
+
+  // Callback for "enableIncognito" message.
+  void HandleEnableIncognitoMessage(const Value* value);
 
   // Callback for "uninstall" message.
   void HandleUninstallMessage(const Value* value);
@@ -194,6 +201,10 @@ class ExtensionsDOMHandler
   // Called on the UI thread.
   void OnIconsLoaded(DictionaryValue* json_data);
 
+  // Returns the ExtensionInstallUI object for this class, creating it if
+  // needed.
+  ExtensionInstallUI* GetExtensionInstallUI();
+
   // Our model.
   scoped_refptr<ExtensionsService> extensions_service_;
 
@@ -206,12 +217,20 @@ class ExtensionsDOMHandler
   // Used to load icons asynchronously on the file thread.
   scoped_refptr<IconLoader> icon_loader_;
 
+  // Used to show confirmation UI for uninstalling/enabling extensions in
+  // incognito mode.
+  scoped_ptr<ExtensionInstallUI> install_ui_;
+
   // We monitor changes to the extension system so that we can reload when
   // necessary.
   NotificationRegistrar registrar_;
 
-  // The id of the extension we are about to un-install.
-  std::string extension_id_uninstalling_;
+  // The id of the extension we are prompting the user about.
+  std::string extension_id_prompting_;
+
+  // The type of prompt that is open. Only ever uninstall or enable-incognito.
+  // Invalid if no prompt is open.
+  ExtensionInstallUI::PromptType ui_prompt_type_;
 
   DISALLOW_COPY_AND_ASSIGN(ExtensionsDOMHandler);
 };

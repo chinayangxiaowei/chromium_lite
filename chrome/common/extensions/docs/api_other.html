@@ -16,6 +16,9 @@
     <script type="text/javascript" src="js/api_page_generator.js"></script>
     <script type="text/javascript" src="js/bootstrap.js"></script>
   <title>Other APIs - Google Chrome Extensions - Google Code</title></head><body>  <div id="gc-container" class="labs">
+      <div id="devModeWarning">
+        You are viewing extension docs in chrome via the 'file:' scheme: are you expecting to see local changes when you refresh? You'll need run chrome with --allow-file-access-from-files.
+      </div>
       <!-- SUBTEMPLATES: DO NOT MOVE FROM THIS LOCATION -->
       <!-- In particular, sub-templates that recurse, must be used by allowing
            jstemplate to make a copy of the template in this section which
@@ -132,6 +135,7 @@
               <li>Browser UI
                 <ul>
                   <li><a href="browserAction.html">Browser Actions</a></li>
+                  <li><a href="notifications.html">Desktop Notifications</a></li>
                   <li><a href="options.html">Options Pages</a></li>
                   <li><a href="override.html">Override Pages</a></li>
                   <li><a href="pageAction.html">Page Actions</a></li>
@@ -142,12 +146,14 @@
                 <ul>
                   <li><a href="bookmarks.html">Bookmarks</a></li>
                   <li><a href="events.html">Events</a></li>
+                  <li><a href="history.html">History</a></li>
                   <li><a href="tabs.html">Tabs</a></li>
                   <li><a href="windows.html">Windows</a></li>
                 </ul>
               </li>
               <li>Implementation
                 <ul>
+                  <li><a href="a11y.html">Accessibility</a></li>
                   <li><a href="background_pages.html">Background Pages</a></li>
                   <li><a href="content_scripts.html">Content Scripts</a></li>
                   <li><a href="xhr.html">Cross-Origin XHR</a></li>
@@ -158,8 +164,8 @@
               </li>
               <li>Finishing
                 <ul>
-                  <li><a href="autoupdate.html">Autoupdating</a></li>
-                  <li><a href="packaging.html">Packaging</a></li>
+                  <li><a href="hosting.html">Hosting</a></li>
+                  <li><a href="external_extensions.html">Other Deployment Options</a></li>
                 </ul>
               </li>
             </ul>
@@ -167,6 +173,8 @@
           <li><h2><a href="tutorials.html">Tutorials</a></h2>
             <ul>
               <li><a href="tut_debugging.html">Debugging</a></li>
+              <li><a href="tut_analytics.html">Google Analytics</a></li>
+              <li><a href="tut_oauth.html">OAuth</a></li>
             </ul>
           </li>
           <li><h2>Reference</h2>
@@ -275,6 +283,33 @@ E.g. window.open(someUrl). --></dd>
   of the manifest specifies
   which hosts the extension can send requests to.
   </dd>
+<dt> <strong>HTML5 and other emerging APIs</strong></dt>
+<dd> Google Chrome supports HTML5 features,
+     along with other emerging APIs.
+     Here are some of the APIs you can use:
+  <ul>
+  <li> audio
+    (<a href="http://www.html5rocks.com/tutorials/audio/quick/">tutorial</a>) </li>
+  <li> app cache
+    (<a href="http://www.html5rocks.com/tutorials/appcache/beginner/">tutorial</a>) </li>
+  <li> canvas </li>
+  <li> geolocation
+    (<a href="http://www.html5rocks.com/tutorials/geolocation/trip_meter/">tutorial</a>) </li>
+  <li> local storage </li>
+  <li> notifications
+    (<a href="http://www.html5rocks.com/tutorials/notifications/quick/">tutorial</a>) </li>
+  <li> session storage </li>
+  <li> video </li>
+  <li> web database
+    (<a href="http://www.html5rocks.com/tutorials/webdatabase/todo/">tutorial</a>) </li>
+  </ul>
+  <p>
+  See <a href="http://www.html5rocks.com">html5rocks.com</a>
+  for HTML5 information, tutorials, an interactive playground,
+  and links to other resources.
+  </p>
+</dd>
+
 <dt><strong> WebKit APIs </strong></dt>
 <dd>
   Because Google Chrome is built upon WebKit,
@@ -294,18 +329,12 @@ E.g. window.open(someUrl). --></dd>
 </dd>
 <dt><strong> V8 APIs</strong>, such as<strong> JSON </strong></dt>
 <dd> Because JSON is in V8, you don't need to include a JSON library to use JSON functions. <!-- [PENDING: what other APIs are in v8? link to complete list] --></dd>
-<dt> <strong>HTML5</strong> <strong>APIs</strong>, such as <strong>localStorage</strong></dt>
-<dd> HTML5 is still being defined and implemented,
-  but Google Chrome already supports local storage,
-  which extensions can use to store data.
-<!--
-localStorage.setItem(&quot;foo&quot;, &quot;bar&quot;); ... localStorage.getItem(&quot;foo&quot;); --> <!-- [PENDING: Other important API? link to complete list] --></dd>
 <dt><strong>APIs in bundled libraries</strong></dt>
 <dd> If you want to use a library that the browser doesn't provide
 (for example, jQuery),
 you can bundle that library's JavaScript files with your extension.
 Bundled libraries work in extensions
-just as they would in any other web pages.
+just as they do in other web pages.
 </dd>
 </dl>
 
@@ -469,7 +498,7 @@ just as they would in any other web pages.
   <a rel="license" href="http://code.google.com/google_bsd_license.html">BSD License</a>.
   </p>
   <p>
-  ©2009 Google
+  ©2010 Google
   </p>
 
 <!-- begin analytics -->
@@ -497,4 +526,3 @@ just as they would in any other web pages.
     </div> <!-- /gc-footer -->
   </div> <!-- /gc-container -->
 </body></html>
-

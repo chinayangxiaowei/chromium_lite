@@ -10,7 +10,9 @@
 #include <vector>
 
 #include "base/process.h"
+#include "base/shared_memory.h"
 #include "base/string16.h"
+#include "testing/gtest/include/gtest/gtest_prod.h"
 
 namespace gfx {
 class Size;
@@ -61,7 +63,8 @@ class Clipboard {
   // CBF_WEBKIT    none         empty vector
   // CBF_BITMAP    pixels       byte array
   //               size         gfx::Size struct
-  // CBF_SMBITMAP  shared_mem   shared memory handle
+  // CBF_SMBITMAP  shared_mem   A pointer to an unmapped base::SharedMemory
+  //                            object containing the bitmap data.
   //               size         gfx::Size struct
   // CBF_DATA      format       char array
   //               data         byte array
@@ -76,7 +79,7 @@ class Clipboard {
   // functions accept a buffer parameter.
   enum Buffer {
     BUFFER_STANDARD,
-#if defined(OS_LINUX)
+#if defined(USE_X11)
     BUFFER_SELECTION,
 #endif
   };
@@ -85,7 +88,7 @@ class Clipboard {
     switch (buffer) {
       case BUFFER_STANDARD:
         return true;
-#if defined(OS_LINUX)
+#if defined(USE_X11)
       case BUFFER_SELECTION:
         return true;
 #endif
@@ -112,11 +115,11 @@ class Clipboard {
   // can use.
   void WriteObjects(const ObjectMap& objects, base::ProcessHandle process);
 
-  // On Linux, we need to know when the clipboard is set to a URL.  Most
+  // On Linux/BSD, we need to know when the clipboard is set to a URL.  Most
   // platforms don't care.
-#if !defined(OS_LINUX)
+#if defined(OS_WIN) || defined(OS_MACOSX)
   void DidWriteURL(const std::string& utf8_text) {}
-#else  // !defined(OS_LINUX)
+#else  // !defined(OS_WIN) && !defined(OS_MACOSX)
   void DidWriteURL(const std::string& utf8_text);
 #endif
 
@@ -160,21 +163,26 @@ class Clipboard {
   static FormatType GetWebKitSmartPasteFormatType();
   // Win: MS HTML Format, Other: Generic HTML format
   static FormatType GetHtmlFormatType();
-#if defined(OS_WIN)
   static FormatType GetBitmapFormatType();
+
+  // Embeds a pointer to a SharedMemory object pointed to by |bitmap_handle|
+  // belonging to |process| into a shared bitmap [CBF_SMBITMAP] slot in
+  // |objects|.  The pointer is deleted by DispatchObjects().
+  //
+  // On non-Windows platforms, |process| is ignored.
+  static void ReplaceSharedMemHandle(ObjectMap* objects,
+                                     base::SharedMemoryHandle bitmap_handle,
+                                     base::ProcessHandle process);
+#if defined(OS_WIN)
   // Firefox text/html
   static FormatType GetTextHtmlFormatType();
   static FormatType GetCFHDropFormatType();
   static FormatType GetFileDescriptorFormatType();
   static FormatType GetFileContentFormatZeroType();
-
-  // Duplicates any remote shared memory handle embedded inside |objects| that
-  // was created by |process| so that it can be used by this process.
-  static void DuplicateRemoteHandles(base::ProcessHandle process,
-                                     ObjectMap* objects);
 #endif
 
  private:
+  FRIEND_TEST(ClipboardTest, SharedBitmapTest);
   void DispatchObject(ObjectType type, const ObjectMapParams& params);
 
   void WriteText(const char* text_data, size_t text_len);
@@ -193,17 +201,13 @@ class Clipboard {
 
   void WriteBitmap(const char* pixel_data, const char* size_data);
 
-#if defined(OS_WIN) || defined(OS_LINUX) || defined(OS_FREEBSD)
+#if !defined(OS_MACOSX)
   // |format_name| is an ASCII string and should be NULL-terminated.
   // TODO(estade): port to mac.
   void WriteData(const char* format_name, size_t format_len,
                  const char* data_data, size_t data_len);
 #endif
 #if defined(OS_WIN)
-  void WriteBitmapFromSharedMemory(const char* bitmap_data,
-                                   const char* size_data,
-                                   base::ProcessHandle handle);
-
   void WriteBitmapFromHandle(HBITMAP source_hbitmap,
                              const gfx::Size& size);
 
@@ -226,7 +230,7 @@ class Clipboard {
 
   // True if we can create a window.
   bool create_window_;
-#elif defined(USE_X11)
+#elif !defined(OS_MACOSX)
   // The public API is via WriteObjects() which dispatches to multiple
   // Write*() calls, but on GTK we must write all the clipboard types
   // in a single GTK call.  To support this we store the current set

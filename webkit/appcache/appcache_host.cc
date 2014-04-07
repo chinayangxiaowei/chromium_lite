@@ -1,10 +1,11 @@
-// Copyright (c) 2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "webkit/appcache/appcache_host.h"
 
 #include "base/logging.h"
+#include "webkit/appcache/appcache.h"
 #include "webkit/appcache/appcache_request_handler.h"
 
 namespace appcache {
@@ -15,7 +16,8 @@ AppCacheHost::AppCacheHost(int host_id, AppCacheFrontend* frontend,
       pending_selected_cache_id_(kNoCacheId),
       frontend_(frontend), service_(service),
       pending_get_status_callback_(NULL), pending_start_update_callback_(NULL),
-      pending_swap_cache_callback_(NULL), pending_callback_param_(NULL) {
+      pending_swap_cache_callback_(NULL), pending_callback_param_(NULL),
+      main_resource_blocked_(false) {
 }
 
 AppCacheHost::~AppCacheHost() {
@@ -42,6 +44,9 @@ void AppCacheHost::SelectCache(const GURL& document_url,
          !pending_swap_cache_callback_ &&
          !pending_get_status_callback_);
 
+  if (main_resource_blocked_)
+    frontend_->OnContentBlocked(host_id_);
+
   // First we handle an unusual case of SelectCache being called a second
   // time. Generally this shouldn't happen, but with bad content I think
   // this can occur... <html manifest=foo> <html manifest=bar></html></html>
@@ -54,12 +59,12 @@ void AppCacheHost::SelectCache(const GURL& document_url,
   // if the resulting behavior is just too insane).
   if (is_selection_pending()) {
     service_->storage()->CancelDelegateCallbacks(this);
-    pending_selected_manifest_url_ = GURL::EmptyGURL();
+    pending_selected_manifest_url_ = GURL();
     pending_selected_cache_id_ = kNoCacheId;
   } else if (associated_cache()) {
     AssociateCache(NULL);
   }
-  new_master_entry_url_ = GURL::EmptyGURL();
+  new_master_entry_url_ = GURL();
 
   // 6.9.6 The application cache selection algorithm.
   // The algorithm is started here and continues in FinishCacheSelection,
@@ -93,7 +98,7 @@ void AppCacheHost::MarkAsForeignEntry(const GURL& document_url,
                                       int64 cache_document_was_loaded_from) {
   service_->storage()->MarkEntryAsForeign(
       document_url, cache_document_was_loaded_from);
-  SelectCache(document_url, kNoCacheId, GURL::EmptyGURL());
+  SelectCache(document_url, kNoCacheId, GURL());
 }
 
 void AppCacheHost::GetStatusWithCallback(GetStatusCallback* callback,
@@ -139,9 +144,9 @@ void AppCacheHost::DoPendingStartUpdate() {
 
   // 6.9.8 Application cache API
   bool success = false;
-  if (associated_cache_) {
+  if (associated_cache_ && associated_cache_->owning_group()) {
     AppCacheGroup* group = associated_cache_->owning_group();
-    if (!group->is_obsolete()) {
+    if (!group->is_obsolete() && !group->is_being_deleted()) {
       success = true;
       group->StartUpdate();
     }
@@ -173,7 +178,7 @@ void AppCacheHost::DoPendingSwapCache() {
 
   // 6.9.8 Application cache API
   bool success = false;
-  if (associated_cache_) {
+  if (associated_cache_ && associated_cache_->owning_group()) {
     if (associated_cache_->owning_group()->is_obsolete()) {
       success = true;
       AssociateCache(NULL);
@@ -211,7 +216,10 @@ Status AppCacheHost::GetStatus() {
   if (!cache)
     return UNCACHED;
 
-  DCHECK(cache->owning_group());
+  // A cache without an owning group represents the cache being constructed
+  // during the application cache update process.
+  if (!cache->owning_group())
+    return DOWNLOADING;
 
   if (cache->owning_group()->is_obsolete())
     return OBSOLETE;
@@ -231,9 +239,9 @@ void AppCacheHost::LoadOrCreateGroup(const GURL& manifest_url) {
 }
 
 void AppCacheHost::OnGroupLoaded(AppCacheGroup* group,
-                                const GURL& manifest_url) {
+                                 const GURL& manifest_url) {
   DCHECK(manifest_url == pending_selected_manifest_url_);
-  pending_selected_manifest_url_ = GURL::EmptyGURL();
+  pending_selected_manifest_url_ = GURL();
   FinishCacheSelection(NULL, group);
 }
 
@@ -266,20 +274,25 @@ void AppCacheHost::FinishCacheSelection(
     DCHECK(cache->owning_group());
     DCHECK(new_master_entry_url_.is_empty());
     AssociateCache(cache);
-    cache->owning_group()->StartUpdateWithHost(this);
-    ObserveGroupBeingUpdated(cache->owning_group());
-  } else if (group) {
+    AppCacheGroup* owing_group = cache->owning_group();
+    if (!owing_group->is_obsolete() && !owing_group->is_being_deleted()) {
+      owing_group->StartUpdateWithHost(this);
+      ObserveGroupBeingUpdated(owing_group);
+    }
+  } else if (group && !group->is_being_deleted()) {
     // If document was loaded using HTTP GET or equivalent, and, there is a
     // manifest URL, and manifest URL has the same origin as document.
     // Invoke the application cache update process for manifest URL, with
     // the browsing context being navigated, and with document and the
     // resource from which document was loaded as the new master resourse.
+    DCHECK(!group->is_obsolete());
     DCHECK(new_master_entry_url_.is_valid());
     AssociateCache(NULL);  // The UpdateJob may produce one for us later.
     group->StartUpdateWithNewMasterEntry(this, new_master_entry_url_);
     ObserveGroupBeingUpdated(group);
   } else {
     // Otherwise, the Document is not associated with any application cache.
+    new_master_entry_url_ = GURL();
     AssociateCache(NULL);
   }
 
@@ -297,6 +310,7 @@ void AppCacheHost::FinishCacheSelection(
 void AppCacheHost::ObserveGroupBeingUpdated(AppCacheGroup* group) {
   DCHECK(!group_being_updated_);
   group_being_updated_ = group;
+  newest_cache_of_group_being_updated_ = group->newest_complete_cache();
   group->AddUpdateObserver(this);
 }
 
@@ -308,6 +322,11 @@ void AppCacheHost::OnUpdateComplete(AppCacheGroup* group) {
   SetSwappableCache(group);
 
   group_being_updated_ = NULL;
+  newest_cache_of_group_being_updated_ = NULL;
+}
+
+void AppCacheHost::OnContentBlocked(AppCacheGroup* group) {
+  frontend_->OnContentBlocked(host_id_);
 }
 
 void AppCacheHost::SetSwappableCache(AppCacheGroup* group) {
@@ -330,6 +349,10 @@ void AppCacheHost::LoadMainResourceCache(int64 cache_id) {
   }
   pending_main_resource_cache_id_ = cache_id;
   service_->storage()->LoadCache(cache_id, this);
+}
+
+void AppCacheHost::NotifyMainResourceBlocked() {
+  main_resource_blocked_ = true;
 }
 
 void AppCacheHost::AssociateCache(AppCache* cache) {

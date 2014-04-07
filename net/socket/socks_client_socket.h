@@ -15,12 +15,14 @@
 #include "net/base/completion_callback.h"
 #include "net/base/host_resolver.h"
 #include "net/base/net_errors.h"
+#include "net/base/net_log.h"
 #include "net/socket/client_socket.h"
 #include "testing/gtest/include/gtest/gtest_prod.h"
 
 namespace net {
 
-class LoadLog;
+class ClientSocketHandle;
+class BoundNetLog;
 
 // The SOCKS client socket implementation
 class SOCKSClientSocket : public ClientSocket {
@@ -30,6 +32,11 @@ class SOCKSClientSocket : public ClientSocket {
   //
   // |req_info| contains the hostname and port to which the socket above will
   // communicate to via the socks layer. For testing the referrer is optional.
+  SOCKSClientSocket(ClientSocketHandle* transport_socket,
+                    const HostResolver::RequestInfo& req_info,
+                    HostResolver* host_resolver);
+
+  // Deprecated constructor (http://crbug.com/37810) that takes a ClientSocket.
   SOCKSClientSocket(ClientSocket* transport_socket,
                     const HostResolver::RequestInfo& req_info,
                     HostResolver* host_resolver);
@@ -40,7 +47,7 @@ class SOCKSClientSocket : public ClientSocket {
   // ClientSocket methods:
 
   // Does the SOCKS handshake and completes the protocol.
-  virtual int Connect(CompletionCallback* callback, LoadLog* load_log);
+  virtual int Connect(CompletionCallback* callback, const BoundNetLog& net_log);
   virtual void Disconnect();
   virtual bool IsConnected() const;
   virtual bool IsConnectedAndIdle() const;
@@ -52,10 +59,7 @@ class SOCKSClientSocket : public ClientSocket {
   virtual bool SetReceiveBufferSize(int32 size);
   virtual bool SetSendBufferSize(int32 size);
 
-#if defined(OS_LINUX)
-  // Needed by ssl_client_socket_nss.
-  virtual int GetPeerName(struct sockaddr* name, socklen_t* namelen);
-#endif
+  virtual int GetPeerAddress(AddressList* address) const;
 
  private:
   FRIEND_TEST(SOCKSClientSocketTest, CompleteHandshake);
@@ -98,7 +102,7 @@ class SOCKSClientSocket : public ClientSocket {
   CompletionCallbackImpl<SOCKSClientSocket> io_callback_;
 
   // Stores the underlying socket.
-  scoped_ptr<ClientSocket> transport_;
+  scoped_ptr<ClientSocketHandle> transport_;
 
   State next_state_;
   SocksVersion socks_version_;
@@ -128,7 +132,7 @@ class SOCKSClientSocket : public ClientSocket {
   AddressList addresses_;
   HostResolver::RequestInfo host_request_info_;
 
-  scoped_refptr<LoadLog> load_log_;
+  BoundNetLog net_log_;
 
   DISALLOW_COPY_AND_ASSIGN(SOCKSClientSocket);
 };

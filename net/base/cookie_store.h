@@ -36,6 +36,10 @@ class CookieStore : public base::RefCountedThreadSafe<CookieStore> {
   virtual std::string GetCookiesWithOptions(const GURL& url,
                                             const CookieOptions& options) = 0;
 
+  // Deletes the passed in cookie for the specified URL.
+  virtual void DeleteCookie(const GURL& url,
+                            const std::string& cookie_name) = 0;
+
   // Returns the underlying CookieMonster.
   virtual CookieMonster* GetCookieMonster() = 0;
 

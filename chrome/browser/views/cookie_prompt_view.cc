@@ -6,22 +6,23 @@
 
 #include <algorithm>
 
-#include "app/gfx/canvas.h"
-#include "app/gfx/color_utils.h"
 #include "app/l10n_util.h"
 #include "base/i18n/time_formatting.h"
 #include "base/message_loop.h"
-#include "base/string_util.h"
+#include "base/utf_string_conversions.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/cookie_modal_dialog.h"
+#include "chrome/browser/pref_service.h"
 #include "chrome/browser/profile.h"
 #include "chrome/browser/views/browser_dialogs.h"
 #include "chrome/browser/views/cookie_info_view.h"
 #include "chrome/browser/views/database_open_info_view.h"
+#include "chrome/browser/views/generic_info_view.h"
 #include "chrome/browser/views/local_storage_set_item_info_view.h"
 #include "chrome/browser/views/options/content_settings_window_view.h"
 #include "chrome/common/pref_names.h"
-#include "chrome/common/pref_service.h"
+#include "gfx/canvas.h"
+#include "gfx/color_utils.h"
 #include "grit/generated_resources.h"
 #include "grit/locale_settings.h"
 #include "net/base/cookie_monster.h"
@@ -102,6 +103,12 @@ views::View* CookiePromptView::GetContentsView() {
   return this;
 }
 
+bool CookiePromptView::Accept() {
+  parent_->AllowSiteData(remember_radio_->checked(), session_expire_);
+  signaled_ = true;
+  return true;
+}
+
 // CookieInfoViewDelegate overrides:
 void CookiePromptView::ModifyExpireDate(bool session_expire) {
   session_expire_ = session_expire;
@@ -114,8 +121,7 @@ void CookiePromptView::ModifyExpireDate(bool session_expire) {
 void CookiePromptView::ButtonPressed(views::Button* sender,
                                      const views::Event& event) {
   if (sender == allow_button_) {
-    parent_->AllowSiteData(remember_radio_->checked(), session_expire_);
-    signaled_ = true;
+    Accept();
     GetWindow()->Close();
   } else if (sender == block_button_) {
     parent_->BlockSiteData(remember_radio_->checked());
@@ -142,12 +148,15 @@ void CookiePromptView::Init() {
           IDS_COOKIE_ALERT_LABEL : IDS_DATA_ALERT_LABEL,
       display_host));
   int radio_group_id = 0;
+  bool remember_enabled = parent_->DecisionPersistable();
   remember_radio_ = new views::RadioButton(
       l10n_util::GetStringF(IDS_COOKIE_ALERT_REMEMBER_RADIO, display_host),
       radio_group_id);
   remember_radio_->set_listener(this);
+  remember_radio_->SetEnabled(remember_enabled);
   ask_radio_ = new views::RadioButton(
       l10n_util::GetString(IDS_COOKIE_ALERT_ASK_RADIO), radio_group_id);
+  ask_radio_->SetEnabled(remember_enabled);
   ask_radio_->set_listener(this);
   allow_button_ = new views::NativeButton(
       this, l10n_util::GetString(IDS_COOKIE_ALERT_ALLOW_BUTTON));
@@ -187,15 +196,19 @@ void CookiePromptView::Init() {
   const int inner_column_layout_id = 1;
   views::ColumnSet* inner_column_set = button_layout->AddColumnSet(
       inner_column_layout_id);
+  inner_column_set->AddColumn(GridLayout::FILL, GridLayout::CENTER, 1,
+                              GridLayout::USE_PREF, 0, 0);
+  inner_column_set->AddPaddingColumn(0, kRelatedControlHorizontalSpacing);
   inner_column_set->AddColumn(GridLayout::LEADING, GridLayout::CENTER, 0,
                               GridLayout::USE_PREF, 0, 0);
   inner_column_set->AddPaddingColumn(0, kRelatedControlHorizontalSpacing);
   inner_column_set->AddColumn(GridLayout::LEADING, GridLayout::CENTER, 0,
                               GridLayout::USE_PREF, 0, 0);
   button_layout->StartRow(0, inner_column_layout_id);
+  button_layout->AddView(show_cookie_link_, 1, 1,
+                         GridLayout::LEADING, GridLayout::TRAILING);
   button_layout->AddView(allow_button_);
   button_layout->AddView(block_button_);
-  layout->AddPaddingRow(0, kRelatedControlVerticalSpacing);
 
   int button_column_layout_id = 2;
   views::ColumnSet* button_column_set =
@@ -206,21 +219,7 @@ void CookiePromptView::Init() {
   button_column_set->AddPaddingColumn(0, kRelatedControlHorizontalSpacing);
   layout->StartRow(0, one_column_layout_id);
   layout->AddView(button_container, 1, 1,
-                  GridLayout::TRAILING, GridLayout::CENTER);
-  layout->AddPaddingRow(0, kRelatedControlVerticalSpacing);
-
-  int link_column_layout_id = 3;
-  views::ColumnSet* link_column_set =
-      layout->AddColumnSet(link_column_layout_id);
-  link_column_set->AddPaddingColumn(0, kRelatedControlHorizontalSpacing);
-  link_column_set->AddColumn(GridLayout::LEADING, GridLayout::CENTER, 0,
-                             GridLayout::USE_PREF, 0, 0);
-  link_column_set->AddPaddingColumn(0, kRelatedControlHorizontalSpacing);
-  link_column_set->AddColumn(GridLayout::FILL, GridLayout::CENTER, 1,
-                             GridLayout::USE_PREF, 0, 0);
-  link_column_set->AddPaddingColumn(0, kRelatedControlHorizontalSpacing);
-  layout->StartRow(0, link_column_layout_id);
-  layout->AddView(show_cookie_link_);
+                  GridLayout::FILL, GridLayout::CENTER);
   layout->AddPaddingRow(0, kRelatedControlVerticalSpacing);
 
   layout->StartRow(0, one_column_layout_id);
@@ -244,7 +243,18 @@ void CookiePromptView::Init() {
     DatabaseOpenInfoView* view = new DatabaseOpenInfoView();
     layout->AddView(view, 1, 1, GridLayout::FILL, GridLayout::CENTER);
     view->SetFields(parent_->origin().host(),
-                    parent_->database_name());
+                    parent_->database_name(),
+                    parent_->display_name(),
+                    parent_->estimated_size());
+    info_view_ = view;
+  } else if (type == CookiePromptModalDialog::DIALOG_TYPE_APPCACHE) {
+    static const int kAppCacheInfoLabels[] = {
+      IDS_COOKIES_APPLICATION_CACHE_MANIFEST_LABEL
+    };
+    GenericInfoView* view = new GenericInfoView(ARRAYSIZE(kAppCacheInfoLabels),
+                                                kAppCacheInfoLabels);
+    layout->AddView(view, 1, 1, GridLayout::FILL, GridLayout::CENTER);
+    view->SetValue(0, UTF8ToUTF16(parent_->appcache_manifest_url().spec()));
     info_view_ = view;
   } else {
     NOTIMPLEMENTED();
@@ -253,13 +263,16 @@ void CookiePromptView::Init() {
   info_view_->SetVisible(expanded_view_);
 
   // Set default values.
-  remember_radio_->SetChecked(true);
+  if (remember_enabled)
+    remember_radio_->SetChecked(true);
+  else
+    ask_radio_->SetChecked(true);
 }
 
 int CookiePromptView::GetExtendedViewHeight() {
   DCHECK(info_view_);
   return expanded_view_ ?
-      kRelatedControlVerticalSpacing : -info_view_->GetPreferredSize().height();
+      0 : -info_view_->GetPreferredSize().height();
 }
 
 void CookiePromptView::ToggleDetailsViewExpand() {
@@ -287,4 +300,3 @@ void CookiePromptView::InitializeViewResources() {
           IDS_COOKIE_ALERT_TITLE : IDS_DATA_ALERT_TITLE,
       UTF8ToWide(parent_->origin().host()));
 }
-

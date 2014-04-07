@@ -19,17 +19,17 @@ namespace webkit_glue {
 class WebKitClientImpl : public WebKit::WebKitClient {
  public:
   WebKitClientImpl();
+  virtual ~WebKitClientImpl() {}
 
   // WebKitClient methods (partial implementation):
   virtual WebKit::WebThemeEngine* themeEngine();
-  virtual WebKit::WebApplicationCacheHost* createApplicationCacheHost(
-      WebKit::WebApplicationCacheHostClient*);
   virtual bool fileExists(const WebKit::WebString& path);
   virtual bool deleteFile(const WebKit::WebString& path);
   virtual bool deleteEmptyDirectory(const WebKit::WebString& path);
   virtual bool getFileSize(const WebKit::WebString& path, long long& result);
   virtual bool getFileModificationTime(
-      const WebKit::WebString& path, time_t& result);
+      const WebKit::WebString& path,
+      double& result);
   virtual WebKit::WebString directoryName(const WebKit::WebString& path);
   virtual WebKit::WebString pathByAppendingComponent(
       const WebKit::WebString& path, const WebKit::WebString& component);
@@ -50,11 +50,6 @@ class WebKitClientImpl : public WebKit::WebKitClient {
       unsigned key_size_index, const WebKit::WebString& challenge,
       const WebKit::WebURL& url);
   virtual size_t memoryUsageMB();
-  virtual bool rawCookies(const WebKit::WebURL& url,
-                          const WebKit::WebURL& first_party_for_cookies,
-                          WebKit::WebVector<WebKit::WebCookie>*);
-  virtual void deleteCookie(const WebKit::WebURL& url,
-                            const WebKit::WebString& cookie_name);
   virtual WebKit::WebURLLoader* createURLLoader();
   virtual WebKit::WebSocketStreamHandle* createSocketStreamHandle();
   virtual WebKit::WebString userAgent(const WebKit::WebURL& url);
@@ -87,6 +82,7 @@ class WebKitClientImpl : public WebKit::WebKitClient {
   MessageLoop* main_loop_;
   base::OneShotTimer<WebKitClientImpl> shared_timer_;
   void (*shared_timer_func_)();
+  double shared_timer_fire_time_;
   int shared_timer_suspended_;  // counter
 
 #if defined(OS_WIN)

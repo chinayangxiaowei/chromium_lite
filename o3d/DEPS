@@ -1,15 +1,17 @@
 vars = {
   "chromium_trunk": "http://src.chromium.org/svn/trunk",
-  "nixysa_rev": "61",
-  "chromium_rev": "28829",
-  "o3d_code_rev": "166",
-  "skia_rev": "376",
-  "gyp_rev": "749",
-  "gtest_rev": "329",
+  "nixysa_rev": "68",
+  # When updating the chromium rev, you must also update the nss and sqlite
+  # revs to match the version pulled-in by Chromium's own DEPS in the new rev.
+  "chromium_rev": "37758",
+  "o3d_code_rev": "174",
+  "skia_rev": "488",
+  "gyp_rev": "798",
+  "gtest_rev": "359",
   "gflags_rev": "30",
   "breakpad_rev": "391",
-  "v8_rev": "2901",
-  "nacl_rev": "842",
+  "v8_rev": "3608",
+  "nacl_rev": "1434",
 }
 
 deps = {
@@ -51,6 +53,9 @@ deps = {
 
 # Stuff that is O3D specific (from a Chrome point of view).
 
+  "o3d/third_party/glu":
+    "http://o3d.googlecode.com/svn/trunk/googleclient/third_party/glu@" + Var("o3d_code_rev"),
+
   "o3d/third_party/vectormath":
     "http://o3d.googlecode.com/svn/trunk/googleclient/third_party/vectormath@" + Var("o3d_code_rev"),
 
@@ -83,6 +88,9 @@ deps = {
   "third_party/libpng":
     Var("chromium_trunk") + "/src/third_party/libpng@" + Var("chromium_rev"),
 
+  "third_party/modp_b64":
+    Var("chromium_trunk") + "/src/third_party/modp_b64@" + Var("chromium_rev"),
+
   "chrome/third_party/wtl":
     Var("chromium_trunk") + "/src/chrome/third_party/wtl@" + Var("chromium_rev"),
 
@@ -107,8 +115,14 @@ deps = {
   "base":
     Var("chromium_trunk") + "/src/base@" + Var("chromium_rev"),
 
+  "ipc":
+    Var("chromium_trunk") + "/src/ipc@" + Var("chromium_rev"),
+
   "native_client":
     "http://nativeclient.googlecode.com/svn/trunk/src/native_client@" + Var("nacl_rev"),
+
+  "net":
+    Var("chromium_trunk") + "/src/net@" + Var("chromium_rev"),
 
   "breakpad/src":
     "http://google-breakpad.googlecode.com/svn/trunk/src@" + Var("breakpad_rev"),
@@ -137,6 +151,14 @@ deps_os = {
 
     "third_party/python_24":
       Var("chromium_trunk") + "/deps/third_party/python_24@19441",
+
+    # Dependency of chrome base
+    "third_party/nss":
+      Var("chromium_trunk") + "/deps/third_party/nss@36871",
+
+    # Dependency of nss, even though its DEPS fail to mention that.
+    "third_party/sqlite":
+      Var("chromium_trunk") + "/src/third_party/sqlite@31834",
   },
   "unix": {
     # Linux, really.

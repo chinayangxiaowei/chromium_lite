@@ -5,6 +5,7 @@
 #ifndef CHROME_BROWSER_TAB_CONTENTS_TEST_TAB_CONTENTS_H_
 #define CHROME_BROWSER_TAB_CONTENTS_TEST_TAB_CONTENTS_H_
 
+#include "chrome/browser/profile.h"
 #include "chrome/browser/tab_contents/tab_contents.h"
 #include "chrome/common/notification_registrar.h"
 
@@ -48,12 +49,12 @@ class TestTabContents : public TabContents {
   }
 
   // Prevent interaction with views.
-  bool CreateRenderViewForRenderManager(RenderViewHost* render_view_host) {
-    // This will go to a TestRenderViewHost.
-    render_view_host->CreateRenderView();
-    return true;
-  }
+  bool CreateRenderViewForRenderManager(RenderViewHost* render_view_host);
   void UpdateRenderViewSizeForRenderManager() {}
+
+  // Returns a clone of this TestTabContents. The returned object is also a
+  // TestTabContents. The caller owns the returned object.
+  virtual TabContents* Clone();
 
   // Set by individual tests.
   bool transition_cross_site;

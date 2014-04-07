@@ -6,9 +6,9 @@
 
 #include "app/l10n_util.h"
 #include "base/string_util.h"
+#include "chrome/browser/pref_service.h"
 #include "chrome/browser/profile.h"
 #include "chrome/common/pref_names.h"
-#include "chrome/common/pref_service.h"
 #include "grit/generated_resources.h"
 #include "views/background.h"
 #include "views/controls/button/native_button.h"
@@ -78,6 +78,12 @@ ExceptionsPageView::ExceptionsPageView(Profile* profile)
           l10n_util::GetString(IDS_EXCEPTIONS_PAGE_VIEW_REMOVE_ALL_BUTTON))),
       table_model_(profile),
       table_view_(NULL) {
+}
+
+ExceptionsPageView::~ExceptionsPageView() {
+  // The model is going away, prevent the table from accessing it.
+  if (table_view_)
+    table_view_->SetModel(NULL);
 }
 
 void ExceptionsPageView::OnSelectionChanged() {

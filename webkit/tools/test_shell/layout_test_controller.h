@@ -1,4 +1,4 @@
-// Copyright (c) 2006-2008 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -32,13 +32,20 @@ class LayoutTestController : public CppBoundClass {
   // It takes no arguments, and ignores any that may be present.
   void dumpAsText(const CppArgumentList& args, CppVariant* result);
 
+  // This function should set a flag that tells the test_shell to print a line
+  // of descriptive text for each database command.  It should take no
+  // arguments, and ignore any that may be present. However, at the moment, we
+  // don't have any DB function that prints messages, so for now this function
+  // doesn't do anything.
+  void dumpDatabaseCallbacks(const CppArgumentList& args, CppVariant* result);
+
   // This function sets a flag that tells the test_shell to print a line of
-  // descriptive test for each editing command.  It takes no arguments, and
+  // descriptive text for each editing command.  It takes no arguments, and
   // ignores any that may be present.
   void dumpEditingCallbacks(const CppArgumentList& args, CppVariant* result);
 
   // This function sets a flag that tells the test_shell to print a line of
-  // descriptive test for each frame load callback.  It takes no arguments, and
+  // descriptive text for each frame load callback.  It takes no arguments, and
   // ignores any that may be present.
   void dumpFrameLoadCallbacks(const CppArgumentList& args, CppVariant* result);
 
@@ -92,6 +99,9 @@ class LayoutTestController : public CppBoundClass {
   // Changes the cookie policy from the default to allow all cookies.
   void setAlwaysAcceptCookies(const CppArgumentList& args, CppVariant* result);
 
+  // Shows DevTools window.
+  void showWebInspector(const CppArgumentList& args, CppVariant* result);
+
   // Gives focus to the window.
   void setWindowIsKey(const CppArgumentList& args, CppVariant* result);
 
@@ -109,6 +119,8 @@ class LayoutTestController : public CppBoundClass {
   // never be used by Chrome, but some layout tests depend on its presence.
   void setUseDashboardCompatibilityMode(const CppArgumentList& args, CppVariant* result);
 
+  void setScrollbarPolicy(const CppArgumentList& args, CppVariant* result);
+
   // Causes navigation actions just printout the intended navigation instead
   // of taking you to the page. This is used for cases like mailto, where you
   // don't actually want to open the mail program.
@@ -117,9 +129,17 @@ class LayoutTestController : public CppBoundClass {
   // Delays completion of the test until the policy delegate runs.
   void waitForPolicyDelegate(const CppArgumentList& args, CppVariant* result);
 
+  // Causes WillSendRequest to clear certain headers.
+  void setWillSendRequestClearHeader(const CppArgumentList& args,
+                                     CppVariant* result);
+
   // Causes WillSendRequest to block redirects.
   void setWillSendRequestReturnsNullOnRedirect(const CppArgumentList& args,
                                                CppVariant* result);
+
+  // Causes WillSendRequest to return an empty request.
+  void setWillSendRequestReturnsNull(const CppArgumentList& args,
+                                     CppVariant* result);
 
   // Converts a URL starting with file:///tmp/ to the local mapping.
   void pathToLocalResource(const CppArgumentList& args, CppVariant* result);
@@ -165,13 +185,14 @@ class LayoutTestController : public CppBoundClass {
   void setIconDatabaseEnabled(const CppArgumentList& args,
                               CppVariant* result);
 
+  void dumpSelectionRect(const CppArgumentList& args, CppVariant* result);
+
   // The following are only stubs.  TODO(pamg): Implement any of these that
   // are needed to pass the layout tests.
   void dumpAsWebArchive(const CppArgumentList& args, CppVariant* result);
   void dumpTitleChanges(const CppArgumentList& args, CppVariant* result);
   void dumpResourceLoadCallbacks(const CppArgumentList& args, CppVariant* result);
   void setMainFrameIsFirstResponder(const CppArgumentList& args, CppVariant* result);
-  void dumpSelectionRect(const CppArgumentList& args, CppVariant* result);
   void display(const CppArgumentList& args, CppVariant* result);
   void testRepaint(const CppArgumentList& args, CppVariant* result);
   void repaintSweepHorizontally(const CppArgumentList& args, CppVariant* result);
@@ -181,6 +202,7 @@ class LayoutTestController : public CppBoundClass {
   void accessStoredWebScriptObject(const CppArgumentList& args, CppVariant* result);
   void objCClassNameOf(const CppArgumentList& args, CppVariant* result);
   void addDisallowedURL(const CppArgumentList& args, CppVariant* result);
+  void callShouldCloseOnWebView(const CppArgumentList& args, CppVariant* result);
   void setCallCloseOnWebViews(const CppArgumentList& args, CppVariant* result);
   void setPrivateBrowsingEnabled(const CppArgumentList& args, CppVariant* result);
 
@@ -188,6 +210,7 @@ class LayoutTestController : public CppBoundClass {
   void evaluateScriptInIsolatedWorld(const CppArgumentList& args, CppVariant* result);
   void overridePreference(const CppArgumentList& args, CppVariant* result);
   void setAllowUniversalAccessFromFileURLs(const CppArgumentList& args, CppVariant* result);
+  void setAllowFileAccessFromFileURLs(const CppArgumentList& args, CppVariant* result);
 
   // The fallback method is called when a nonexistent method is called on
   // the layout test controller object.
@@ -201,6 +224,8 @@ class LayoutTestController : public CppBoundClass {
 
   // Clears all databases.
   void clearAllDatabases(const CppArgumentList& args, CppVariant* result);
+  // Sets the default quota for all origins
+  void setDatabaseQuota(const CppArgumentList& args, CppVariant* result);
 
   // Calls setlocale(LC_ALL, ...) for a specified locale.
   // Resets between tests.
@@ -209,6 +234,27 @@ class LayoutTestController : public CppBoundClass {
   // Gets the value of the counter in the element specified by its ID.
   void counterValueForElementById(
       const CppArgumentList& args, CppVariant* result);
+
+  // Gets the number of page where the specified element will be put.
+  void pageNumberForElementById(
+      const CppArgumentList& args, CppVariant* result);
+
+  // Gets the number of pages to be printed.
+  void numberOfPages(const CppArgumentList& args, CppVariant* result);
+
+  // Allows layout tests to start Timeline profiling.
+  void setTimelineProfilingEnabled(const CppArgumentList& args,
+                                   CppVariant* result);
+
+  // Allows layout tests to exec scripts at WebInspector side.
+  void evaluateInWebInspector(const CppArgumentList& args, CppVariant* result);
+
+  // Forces the selection colors for testing under Linux.
+  void forceRedSelectionColors(const CppArgumentList& args,
+                               CppVariant* result);
+
+  // Adds a user script to be injected into new documents.
+  void addUserScript(const CppArgumentList& args, CppVariant* result);
 
  public:
   // The following methods are not exposed to JavaScript.
@@ -226,6 +272,9 @@ class LayoutTestController : public CppBoundClass {
   bool ShouldDumpStatusCallbacks() {
     return dump_window_status_changes_;
   }
+  bool ShouldDumpSelectionRect() {
+    return dump_selection_rect_;
+  }
   bool ShouldDumpBackForwardList() { return dump_back_forward_list_; }
   bool ShouldDumpTitleChanges() { return dump_title_changes_; }
   bool ShouldDumpChildFrameScrollPositions() {
@@ -238,6 +287,9 @@ class LayoutTestController : public CppBoundClass {
   bool CanOpenWindows() { return can_open_windows_; }
   bool ShouldAddFileToPasteboard() { return should_add_file_to_pasteboard_; }
   bool StopProvisionalFrameLoads() { return stop_provisional_frame_loads_; }
+
+  bool test_repaint() const { return test_repaint_; }
+  bool sweep_horizontally() const { return sweep_horizontally_; }
 
   // Called by the webview delegate when the toplevel frame load is done.
   void LocationChangeDone();
@@ -313,6 +365,10 @@ class LayoutTestController : public CppBoundClass {
   // command.
   static bool dump_editing_callbacks_;
 
+  // If true, the test_shell will draw the bounds of the current selection rect
+  // taking possible transforms of the selection rect into account.
+  static bool dump_selection_rect_;
+
   // If true, the test_shell will output a descriptive line for each frame
   // load callback.
   static bool dump_frame_load_callbacks_;
@@ -353,6 +409,13 @@ class LayoutTestController : public CppBoundClass {
   // window.  By default, set to true but toggled to false using
   // setCloseRemainingWindowsWhenComplete().
   static bool close_remaining_windows_;
+
+  // If true, pixel dump will be produced as a series of 1px-tall, view-wide
+  // individual paints over the height of the view.
+  static bool test_repaint_;
+  // If true and test_repaint_ is true as well, pixel dump will be produced as
+  // a series of 1px-wide, view-tall paints across the width of the view.
+  static bool sweep_horizontally_;
 
   // If true and a drag starts, adds a file to the drag&drop clipboard.
   static bool should_add_file_to_pasteboard_;

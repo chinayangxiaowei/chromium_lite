@@ -1,15 +1,15 @@
-// Copyright (c) 2009 The Chromium Authors. All rights reserved. Use of this
-// source code is governed by a BSD-style license that can be found in the
-// LICENSE file.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Use of this source code is governed by a BSD-style license that can be
+// found in the LICENSE file.
 
 #ifndef CHROME_BROWSER_VIEWS_AUTOCOMPLETE_AUTOCOMPLETE_POPUP_CONTENTS_VIEW_H_
 #define CHROME_BROWSER_VIEWS_AUTOCOMPLETE_AUTOCOMPLETE_POPUP_CONTENTS_VIEW_H_
 
-#include "app/gfx/font.h"
 #include "app/slide_animation.h"
 #include "chrome/browser/autocomplete/autocomplete.h"
 #include "chrome/browser/autocomplete/autocomplete_popup_model.h"
 #include "chrome/browser/autocomplete/autocomplete_popup_view.h"
+#include "gfx/font.h"
 #include "views/view.h"
 #include "webkit/glue/window_open_disposition.h"
 
@@ -33,16 +33,6 @@ class AutocompleteResultViewModel {
 
   // Returns true if the index is hovered.
   virtual bool IsHoveredIndex(size_t index) const = 0;
-
-  // Called when the line at the specified index should be opened with the
-  // provided disposition.
-  virtual void OpenIndex(size_t index, WindowOpenDisposition disposition) = 0;
-
-  // Called when the line at the specified index should be shown as hovered.
-  virtual void SetHoveredLine(size_t index) = 0;
-
-  // Called when the line at the specified index should be shown as selected.
-  virtual void SetSelectedLine(size_t index, bool revert_to_default) = 0;
 };
 
 // A view representing the contents of the autocomplete popup.
@@ -67,14 +57,12 @@ class AutocompletePopupContentsView : public views::View,
   virtual void InvalidateLine(size_t line);
   virtual void UpdatePopupAppearance();
   virtual void PaintUpdatesNow();
+  virtual void OnDragCanceled();
   virtual AutocompletePopupModel* GetModel();
 
   // Overridden from AutocompleteResultViewModel:
   virtual bool IsSelectedIndex(size_t index) const;
   virtual bool IsHoveredIndex(size_t index) const;
-  virtual void OpenIndex(size_t index, WindowOpenDisposition disposition);
-  virtual void SetHoveredLine(size_t index);
-  virtual void SetSelectedLine(size_t index, bool revert_to_default);
 
   // Overridden from AnimationDelegate:
   virtual void AnimationProgressed(const Animation* animation);
@@ -85,6 +73,13 @@ class AutocompletePopupContentsView : public views::View,
     // We paint our children inside Paint().
   }
   virtual void Layout();
+  virtual void OnMouseEntered(const views::MouseEvent& event);
+  virtual void OnMouseMoved(const views::MouseEvent& event);
+  virtual void OnMouseExited(const views::MouseEvent& event);
+  virtual bool OnMousePressed(const views::MouseEvent& event);
+  virtual void OnMouseReleased(const views::MouseEvent& event, bool canceled);
+  virtual bool OnMouseDragged(const views::MouseEvent& event);
+  virtual views::View* GetViewForPoint(const gfx::Point& point);
 
  private:
 #if defined(OS_WIN)
@@ -109,6 +104,15 @@ class AutocompletePopupContentsView : public views::View,
   // Makes the contents of the canvas slightly transparent.
   void MakeCanvasTransparent(gfx::Canvas* canvas);
 
+  // Called when the line at the specified index should be opened with the
+  // provided disposition.
+  void OpenIndex(size_t index, WindowOpenDisposition disposition);
+
+  // Find the index of the match under the given |point|, specified in window
+  // coordinates. Returns AutocompletePopupModel::kNoMatch if there isn't a
+  // match at the specified point.
+  size_t GetIndexForPoint(const gfx::Point& point);
+
   // The popup that contains this view.  We create this, but it deletes itself
   // when its window is destroyed.  This is a WeakPtr because it's possible for
   // the OS to destroy the window and thus delete this object before we're
@@ -130,6 +134,14 @@ class AutocompletePopupContentsView : public views::View,
   // The font that we should use for result rows. This is based on the font used
   // by the edit that created us.
   gfx::Font result_font_;
+
+  // If the user cancels a dragging action (i.e. by pressing ESC), we don't have
+  // a convenient way to release mouse capture. Instead we use this flag to
+  // simply ignore all remaining drag events, and the eventual mouse release
+  // event. Since OnDragCanceled() can be called when we're not dragging, this
+  // flag is reset to false on a mouse pressed event, to make sure we don't
+  // erroneously ignore the next drag.
+  bool ignore_mouse_drag_;
 
   // The popup sizes vertically using an animation when the popup is getting
   // shorter (not larger, that makes it look "slow").

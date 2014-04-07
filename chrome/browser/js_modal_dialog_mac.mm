@@ -10,6 +10,7 @@
 #include "app/message_box_flags.h"
 #import "base/cocoa_protocols_mac.h"
 #include "base/sys_string_conversions.h"
+#import "chrome/browser/chrome_browser_application_mac.h"
 #include "grit/app_strings.h"
 #include "grit/generated_resources.h"
 
@@ -68,6 +69,11 @@
       break;
     }
     case NSAlertSecondButtonReturn:  {  // Cancel
+      // If the user wants to stay on this page, stop quitting (if a quit is in
+      // progress).
+      if (bridge->is_before_unload_dialog())
+        chrome_browser_application_mac::CancelTerminate();
+
       bridge->OnCancel();
       break;
     }
@@ -151,20 +157,31 @@ void JavaScriptAppModalDialog::CreateAndShowDialog() {
     [[alert window] makeFirstResponder:field];
 }
 
+// The functions below are used by the automation framework.
 int JavaScriptAppModalDialog::GetDialogButtons() {
   NOTIMPLEMENTED();
   return 0;
 }
 
+// On Mac, this is only used in testing.
 void JavaScriptAppModalDialog::AcceptWindow() {
-  NOTIMPLEMENTED();
+  NSButton* first = [[dialog_ buttons] objectAtIndex:0];
+  [first performClick:nil];
 }
 
 void JavaScriptAppModalDialog::CancelWindow() {
   NOTIMPLEMENTED();
 }
 
+// This is only used by the app-modal dialog machinery on windows.
 NativeDialog JavaScriptAppModalDialog::CreateNativeDialog() {
   NOTIMPLEMENTED();
   return nil;
+}
+
+void JavaScriptAppModalDialog::CloseModalDialog() {
+  NSAlert* alert = dialog_;
+  DCHECK([alert isKindOfClass:[NSAlert class]]);
+  [NSApp endSheet:[alert window]];
+  dialog_ = nil;
 }

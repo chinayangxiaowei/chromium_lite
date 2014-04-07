@@ -1,4 +1,4 @@
-// Copyright (c) 2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -25,6 +25,9 @@ class MetaTable;
 }
 
 namespace webkit_database {
+
+extern const FilePath::CharType kDatabaseDirectoryName[];
+extern const FilePath::CharType kTrackerDatabaseFileName[];
 
 class DatabasesTable;
 class QuotaTable;
@@ -110,8 +113,6 @@ class DatabaseTracker
   void DatabaseClosed(const string16& origin_identifier,
                       const string16& database_name);
   void CloseDatabases(const DatabaseConnections& connections);
-  void DeleteDatabaseIfNeeded(const string16& origin_identifier,
-                              const string16& database_name);
 
   void AddObserver(Observer* observer);
   void RemoveObserver(Observer* observer);
@@ -120,10 +121,17 @@ class DatabaseTracker
 
   const FilePath& DatabaseDirectory() const { return db_dir_; }
   FilePath GetFullDBFilePath(const string16& origin_identifier,
-                             const string16& database_name) const;
+                             const string16& database_name);
 
   bool GetAllOriginsInfo(std::vector<OriginInfo>* origins_info);
   void SetOriginQuota(const string16& origin_identifier, int64 new_quota);
+  void SetOriginQuotaInMemory(const string16& origin_identifier,
+                              int64 new_quota);
+  void ResetOriginQuotaInMemory(const string16& origin_identifier);
+
+  int64 GetDefaultQuota() { return default_quota_; }
+  // Sets the default quota for all origins. Should be used in tests only.
+  void SetDefaultQuota(int64 quota);
 
   bool IsDatabaseScheduledForDeletion(const string16& origin_identifier,
                                       const string16& database_name);
@@ -142,6 +150,12 @@ class DatabaseTracker
   int DeleteDataModifiedSince(const base::Time& cutoff,
                               net::CompletionCallback* callback);
 
+  // Delete all databases that belong to the given origin. Returns net::OK on
+  // success, net::FAILED if not all databases could be deleted, and
+  // net::ERR_IO_PENDING and |callback| is invoked upon completion, if non-NULL.
+  int DeleteDataForOrigin(const string16& origin_identifier,
+                          net::CompletionCallback* callback);
+
   static void ClearLocalState(const FilePath& profile_path);
 
  private:
@@ -153,7 +167,7 @@ class DatabaseTracker
 
   class CachedOriginInfo : public OriginInfo {
    public:
-    CachedOriginInfo() : OriginInfo(EmptyString16(), 0, 0) {}
+    CachedOriginInfo() : OriginInfo(string16(), 0, 0) {}
     void SetOrigin(const string16& origin) { origin_ = origin; }
     void SetQuota(int64 new_quota) { quota_ = new_quota; }
     void SetDatabaseSize(const string16& database_name, int64 new_size) {
@@ -175,6 +189,8 @@ class DatabaseTracker
   bool DeleteClosedDatabase(const string16& origin_identifier,
                             const string16& database_name);
   bool DeleteOrigin(const string16& origin_identifier);
+  void DeleteDatabaseIfNeeded(const string16& origin_identifier,
+                              const string16& database_name);
 
   bool LazyInit();
   bool UpgradeToCurrentVersion();
@@ -187,7 +203,7 @@ class DatabaseTracker
   CachedOriginInfo* GetCachedOriginInfo(const string16& origin_identifier);
 
   int64 GetDBFileSize(const string16& origin_identifier,
-                      const string16& database_name) const;
+                      const string16& database_name);
 
   int64 GetOriginSpaceAvailable(const string16& origin_identifier);
 
@@ -195,14 +211,19 @@ class DatabaseTracker
                                      const string16& database_name);
   void ScheduleDatabaseForDeletion(const string16& origin_identifier,
                                    const string16& database_name);
+  // Schedule a set of open databases for deletion. If non-null, callback is
+  // invoked upon completion.
+  void ScheduleDatabasesForDeletion(const DatabaseSet& databases,
+                                    net::CompletionCallback* callback);
 
-  bool initialized_;
+  bool is_initialized_;
+  const bool is_incognito_;
   const FilePath db_dir_;
   scoped_ptr<sql::Connection> db_;
   scoped_ptr<DatabasesTable> databases_table_;
   scoped_ptr<QuotaTable> quota_table_;
   scoped_ptr<sql::MetaTable> meta_table_;
-  ObserverList<Observer> observers_;
+  ObserverList<Observer, true> observers_;
   std::map<string16, CachedOriginInfo> origins_info_map_;
   DatabaseConnections database_connections_;
 
@@ -210,7 +231,15 @@ class DatabaseTracker
   DatabaseSet dbs_to_be_deleted_;
   PendingCompletionMap deletion_callbacks_;
 
-  FRIEND_TEST(DatabaseTrackerTest, TestIt);
+  // Default quota for all origins; changed only by tests
+  int64 default_quota_;
+
+  // Store quotas for extensions in memory, in order to prevent writing a row
+  // to quota_table_ every time an extention is loaded.
+  std::map<string16, int64> in_memory_quotas_;
+
+  FRIEND_TEST(DatabaseTrackerTest, DatabaseTracker);
+  FRIEND_TEST(DatabaseTrackerTest, NoInitIncognito);
 };
 
 }  // namespace webkit_database

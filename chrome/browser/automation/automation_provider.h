@@ -17,6 +17,7 @@
 
 #include "base/basictypes.h"
 #include "base/scoped_ptr.h"
+#include "base/values.h"
 #include "chrome/browser/automation/automation_autocomplete_edit_tracker.h"
 #include "chrome/browser/automation/automation_browser_tracker.h"
 #include "chrome/browser/automation/automation_resource_message_filter.h"
@@ -25,6 +26,7 @@
 #include "chrome/browser/browser_list.h"
 #include "chrome/browser/history/history.h"
 #include "chrome/browser/tab_contents/navigation_entry.h"
+#include "chrome/common/content_settings.h"
 #include "chrome/common/notification_registrar.h"
 #include "chrome/test/automation/automation_constants.h"
 #include "ipc/ipc_message.h"
@@ -34,13 +36,17 @@
 #endif  // defined(OS_WIN)
 
 struct AutomationMsg_Find_Params;
+class PopupMenuWaiter;
 
 namespace IPC {
 struct Reposition_Params;
 struct ExternalTabSettings;
 }
 
+class AutomationExtensionTracker;
+class Extension;
 class ExtensionPortContainer;
+class ExtensionTestResultNotificationObserver;
 class ExternalTabContainer;
 class LoginHandler;
 class MetricEventDurationObserver;
@@ -77,7 +83,7 @@ class AutomationProvider : public base::RefCounted<AutomationProvider>,
   // RemoveNavigationStatusListener method.
   NotificationObserver* AddNavigationStatusListener(
       NavigationController* tab, IPC::Message* reply_message,
-      int number_of_navigations);
+      int number_of_navigations, bool include_current_navigation);
 
   void RemoveNavigationStatusListener(NotificationObserver* obs);
 
@@ -127,11 +133,17 @@ class AutomationProvider : public base::RefCounted<AutomationProvider>,
     return reply_message;
   }
 
+  // Adds the extension passed in to the extension tracker, and returns
+  // the associated handle. If the tracker already contains the extension,
+  // the handle is simply returned.
+  int AddExtension(Extension* extension);
+
   // Adds the external tab passed in to the tab tracker.
   bool AddExternalTab(ExternalTabContainer* external_tab);
 
  protected:
   friend class base::RefCounted<AutomationProvider>;
+  friend class PopupMenuWaiter;
   virtual ~AutomationProvider();
 
  private:
@@ -155,6 +167,7 @@ class AutomationProvider : public base::RefCounted<AutomationProvider>,
   void GetNormalBrowserWindowCount(int* window_count);
   void GetShowingAppModalDialog(bool* showing_dialog, int* dialog_button);
   void ClickAppModalDialogButton(int button, bool* success);
+  void ShutdownSessionService(int handle, bool* result);
   // Be aware that the browser window returned might be of non TYPE_NORMAL
   // or in incognito mode.
   void GetBrowserWindow(int index, int* handle);
@@ -228,6 +241,14 @@ class AutomationProvider : public base::RefCounted<AutomationProvider>,
   void SetProxyConfig(const std::string& new_proxy_config);
   void IsFullscreen(int handle, bool* is_fullscreen);
   void GetFullscreenBubbleVisibility(int handle, bool* is_visible);
+#if defined(OS_WIN)
+  void OnBrowserMoved(int handle);
+#endif
+  void SetContentSetting(int handle,
+                         const std::string& host,
+                         ContentSettingsType content_type,
+                         ContentSetting setting,
+                         bool* success);
 
 #if defined(OS_WIN)
   void ScheduleMouseEvent(views::View* view,
@@ -275,6 +296,48 @@ class AutomationProvider : public base::RefCounted<AutomationProvider>,
   // Get the visibility state of the Bookmark bar.
   void GetBookmarkBarVisibility(int handle, bool* visible, bool* animating);
 
+  // Get the bookmarks as a JSON string.
+  void GetBookmarksAsJSON(int handle, std::string* bookmarks_as_json,
+                          bool *success);
+
+  // Wait for the bookmark model to load.
+  void WaitForBookmarkModelToLoad(int handle, IPC::Message* reply_message);
+
+  // Set |loaded| to true if the bookmark model has loaded, else false.
+  void BookmarkModelHasLoaded(int handle, bool* loaded);
+
+  // Editing, modification, and removal of bookmarks.
+  // Bookmarks are referenced by id.
+  void AddBookmarkGroup(int handle,
+                        int64 parent_id, int index, std::wstring title,
+                        bool* success);
+  void AddBookmarkURL(int handle,
+                      int64 parent_id, int index,
+                      std::wstring title, const GURL& url,
+                      bool* success);
+  void ReparentBookmark(int handle,
+                        int64 id, int64 new_parent_id, int index,
+                        bool* success);
+  void SetBookmarkTitle(int handle,
+                        int64 id, std::wstring title,
+                        bool* success);
+  void SetBookmarkURL(int handle,
+                      int64 id, const GURL& url,
+                      bool* success);
+  void RemoveBookmark(int handle,
+                      int64 id,
+                      bool* success);
+
+  // Wait for all downloads to complete.
+  void WaitForDownloadsToComplete(
+      DictionaryValue* args,
+      IPC::Message* reply_message);
+
+  // Generic pattern for pyautolib
+  void SendJSONRequest(int handle,
+                       std::string json_request,
+                       IPC::Message* reply_message);
+
   // Responds to InspectElement request
   void HandleInspectElementRequest(int handle,
                                    int x,
@@ -307,18 +370,53 @@ class AutomationProvider : public base::RefCounted<AutomationProvider>,
                          gfx::NativeWindow* tab_window,
                          int* tab_handle);
 
-  void ConnectExternalTab(intptr_t cookie,
+  void ConnectExternalTab(uint64 cookie,
+                          bool allow,
                           gfx::NativeWindow* tab_container_window,
                           gfx::NativeWindow* tab_window,
                           int* tab_handle);
 
   void OnSetPageFontSize(int tab_handle, int font_size);
 
+  // See browsing_data_remover.h for explanation of bitmap fields.
+  void RemoveBrowsingData(int remove_mask);
+
   void InstallExtension(const FilePath& crx_path,
                         IPC::Message* reply_message);
 
   void LoadExpandedExtension(const FilePath& extension_dir,
                              IPC::Message* reply_message);
+
+  void GetEnabledExtensions(std::vector<FilePath>* result);
+
+  void WaitForExtensionTestResult(IPC::Message* reply_message);
+
+  void InstallExtensionAndGetHandle(const FilePath& crx_path,
+                                    IPC::Message* reply_message);
+
+  void UninstallExtension(int extension_handle,
+                          bool* success);
+
+  void ReloadExtension(int extension_handle,
+                       IPC::Message* reply_message);
+
+  void EnableExtension(int extension_handle,
+                       IPC::Message* reply_message);
+
+  void DisableExtension(int extension_handle,
+                        bool* success);
+
+  void ExecuteExtensionActionInActiveTabAsync(int extension_handle,
+                                              int browser_handle,
+                                              IPC::Message* reply_message);
+
+  void MoveExtensionBrowserAction(int extension_handle, int index,
+                                  bool* success);
+
+  void GetExtensionProperty(int extension_handle,
+                            AutomationMsg_ExtensionProperty type,
+                            bool* success,
+                            std::string* value);
 
   void NavigateInExternalTab(
       int handle, const GURL& url, const GURL& referrer,
@@ -335,7 +433,8 @@ class AutomationProvider : public base::RefCounted<AutomationProvider>,
                                    const MSG& msg);
 #endif
 
-  void SetInitialFocus(const IPC::Message& message, int handle, bool reverse);
+  void SetInitialFocus(const IPC::Message& message, int handle, bool reverse,
+                       bool restore_focus_to_view);
 
   // See comment in AutomationMsg_WaitForTabToBeRestored.
   void WaitForTabToBeRestored(int tab_handle, IPC::Message* reply_message);
@@ -487,6 +586,7 @@ class AutomationProvider : public base::RefCounted<AutomationProvider>,
 
   void ReloadAsync(int tab_handle);
   void StopAsync(int tab_handle);
+  void SaveAsAsync(int tab_handle);
 
   void WaitForBrowserWindowCountToBecome(int target_count,
                                          IPC::Message* reply_message);
@@ -508,6 +608,14 @@ class AutomationProvider : public base::RefCounted<AutomationProvider>,
 
   ExternalTabContainer* GetExternalTabForHandle(int handle);
 
+#if defined(OS_CHROMEOS)
+  // Logs in through the Chrome OS Login Wizard with given |username| and
+  // password.  Returns true via |reply_message| on success.
+  void LoginWithUserAndPass(const std::string& username,
+                            const std::string& password,
+                            IPC::Message* reply_message);
+#endif
+
   // Callback for history redirect queries.
   virtual void OnRedirectQueryComplete(
       HistoryService::Handle request_handle,
@@ -525,6 +633,34 @@ class AutomationProvider : public base::RefCounted<AutomationProvider>,
   // Returns NULL on failure.
   RenderViewHost* GetViewForTab(int tab_handle);
 
+  // Returns the extension for the given handle. Returns NULL if there is
+  // no extension for the handle.
+  Extension* GetExtension(int extension_handle);
+
+  // Returns the extension for the given handle, if the handle is valid and
+  // the associated extension is enabled. Returns NULL otherwise.
+  Extension* GetEnabledExtension(int extension_handle);
+
+  // Returns the extension for the given handle, if the handle is valid and
+  // the associated extension is disabled. Returns NULL otherwise.
+  Extension* GetDisabledExtension(int extension_handle);
+
+  // Block until the focused view ID changes to something other than
+  // previous_view_id.
+  void WaitForFocusedViewIDToChange(int handle,
+                                    int previous_view_id,
+                                    IPC::Message* reply_message);
+
+  // Start tracking popup menus. Must be called before executing the
+  // command that might open the popup menu; then call WaitForPopupMenuToOpen.
+  void StartTrackingPopupMenus(int browser_handle, bool* success);
+
+  // Wait until a popup menu has opened.
+  void WaitForPopupMenuToOpen(IPC::Message* reply_message);
+
+  // Method called by the popup menu tracker when a popup menu is opened.
+  void NotifyPopupMenuOpened();
+
   typedef ObserverList<NotificationObserver> NotificationObserverList;
   typedef std::map<NavigationController*, LoginHandler*> LoginHandlerMap;
   typedef std::map<int, ExtensionPortContainer*> PortContainerMap;
@@ -535,8 +671,11 @@ class AutomationProvider : public base::RefCounted<AutomationProvider>,
   scoped_ptr<NotificationObserver> find_in_page_observer_;
   scoped_ptr<NotificationObserver> dom_operation_observer_;
   scoped_ptr<NotificationObserver> dom_inspector_observer_;
+  scoped_ptr<ExtensionTestResultNotificationObserver>
+      extension_test_result_observer_;
   scoped_ptr<MetricEventDurationObserver> metric_event_duration_observer_;
   scoped_ptr<AutomationBrowserTracker> browser_tracker_;
+  scoped_ptr<AutomationExtensionTracker> extension_tracker_;
   scoped_ptr<AutomationTabTracker> tab_tracker_;
   scoped_ptr<AutomationWindowTracker> window_tracker_;
   scoped_ptr<AutomationAutocompleteEditTracker> autocomplete_edit_tracker_;
@@ -559,6 +698,13 @@ class AutomationProvider : public base::RefCounted<AutomationProvider>,
   Profile* profile_;
 
   IPC::Message* reply_message_;
+
+  // Keep track of whether a popup menu has been opened since the last time
+  // that StartTrackingPopupMenus has been called.
+  bool popup_menu_opened_;
+
+  // A temporary object that receives a notification when a popup menu opens.
+  PopupMenuWaiter* popup_menu_waiter_;
 
   DISALLOW_COPY_AND_ASSIGN(AutomationProvider);
 };

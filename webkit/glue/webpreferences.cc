@@ -5,6 +5,7 @@
 #include "webkit/glue/webpreferences.h"
 
 #include "base/string_util.h"
+#include "base/utf_string_conversions.h"
 #include "third_party/WebKit/WebKit/chromium/public/WebRuntimeFeatures.h"
 #include "third_party/WebKit/WebKit/chromium/public/WebKit.h"
 #include "third_party/WebKit/WebKit/chromium/public/WebSettings.h"
@@ -53,7 +54,7 @@ void WebPreferences::Apply(WebView* web_view) const {
   settings->setDownloadableBinaryFontsEnabled(remote_fonts_enabled);
   settings->setXSSAuditorEnabled(xss_auditor_enabled);
   settings->setLocalStorageEnabled(local_storage_enabled);
-  settings->setDatabasesEnabled(
+  WebRuntimeFeatures::enableDatabase(
       WebRuntimeFeatures::isDatabaseEnabled() || databases_enabled);
   settings->setOfflineWebApplicationCacheEnabled(application_cache_enabled);
 
@@ -74,6 +75,7 @@ void WebPreferences::Apply(WebView* web_view) const {
   // universal access. Only test shell will enable this.
   settings->setAllowUniversalAccessFromFileURLs(
       allow_universal_access_from_file_urls);
+  settings->setAllowFileAccessFromFileURLs(allow_file_access_from_file_urls);
 
   // We prevent WebKit from checking if it needs to add a "text direction"
   // submenu to a context menu. it is not only because we don't need the result
@@ -83,6 +85,10 @@ void WebPreferences::Apply(WebView* web_view) const {
   // Enable experimental WebGL support if requested on command line
   // and support is compiled in.
   settings->setExperimentalWebGLEnabled(experimental_webgl_enabled);
+
+  // Display colored borders around composited render layers if requested
+  // on command line.
+  settings->setShowDebugBorders(show_composited_layer_borders);
 
   // Web inspector settings need to be passed in differently.
   web_view->setInspectorSettings(WebString::fromUTF8(inspector_settings));

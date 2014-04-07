@@ -1,4 +1,4 @@
-// Copyright (c) 2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,7 +7,12 @@
 #include "app/l10n_util.h"
 #include "app/resource_bundle.h"
 #include "chrome/browser/autofill/autofill_manager.h"
+#include "chrome/browser/browser.h"
+#include "chrome/browser/pref_service.h"
+#include "chrome/browser/profile.h"
 #include "chrome/browser/tab_contents/tab_contents.h"
+#include "chrome/browser/tab_contents/tab_contents_delegate.h"
+#include "chrome/common/pref_names.h"
 #include "grit/chromium_strings.h"
 #include "grit/generated_resources.h"
 #include "grit/theme_resources.h"
@@ -16,9 +21,14 @@
 AutoFillInfoBarDelegate::AutoFillInfoBarDelegate(TabContents* tab_contents,
                                                  AutoFillManager* host)
     : ConfirmInfoBarDelegate(tab_contents),
+      browser_(NULL),
       host_(host) {
-  if (tab_contents)
+  if (tab_contents) {
+    browser_ = tab_contents->delegate()->GetBrowser();
+    PrefService* prefs = tab_contents->profile()->GetPrefs();
+    prefs->SetBoolean(prefs::kAutoFillInfoBarShown, true);
     tab_contents->AddInfoBar(this);
+  }
 }
 
 AutoFillInfoBarDelegate::~AutoFillInfoBarDelegate() {
@@ -33,7 +43,11 @@ bool AutoFillInfoBarDelegate::ShouldExpire(
 }
 
 void AutoFillInfoBarDelegate::InfoBarClosed() {
-  Cancel();
+  if (host_) {
+    host_->OnInfoBarClosed();
+    host_ = NULL;
+  }
+
   // This will delete us.
   ConfirmInfoBarDelegate::InfoBarClosed();
 }
@@ -55,13 +69,17 @@ std::wstring AutoFillInfoBarDelegate::GetButtonLabel(
     ConfirmInfoBarDelegate::InfoBarButton button) const {
   if (button == BUTTON_OK)
     return l10n_util::GetString(IDS_AUTOFILL_INFOBAR_ACCEPT);
+  else if (button == BUTTON_CANCEL)
+    return l10n_util::GetString(IDS_AUTOFILL_INFOBAR_DENY);
+  else
+    NOTREACHED();
 
-  return l10n_util::GetString(IDS_AUTOFILL_INFOBAR_DENY);
+  return std::wstring();
 }
 
 bool AutoFillInfoBarDelegate::Accept() {
   if (host_) {
-    host_->SaveFormData();
+    host_->OnInfoBarAccepted();
     host_ = NULL;
   }
   return true;
@@ -69,8 +87,18 @@ bool AutoFillInfoBarDelegate::Accept() {
 
 bool AutoFillInfoBarDelegate::Cancel() {
   if (host_) {
-    host_->Reset();
+    host_->OnInfoBarCancelled();
     host_ = NULL;
   }
+  return true;
+}
+
+std::wstring AutoFillInfoBarDelegate::GetLinkText() {
+  return l10n_util::GetString(IDS_AUTOFILL_LEARN_MORE);
+}
+
+bool AutoFillInfoBarDelegate::LinkClicked(WindowOpenDisposition disposition) {
+  browser_->OpenURL(GURL(kAutoFillLearnMoreUrl), GURL(), NEW_FOREGROUND_TAB,
+                    PageTransition::TYPED);
   return true;
 }

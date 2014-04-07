@@ -6,9 +6,9 @@
 #define CHROME_BROWSER_VIEWS_TABS_TAB_RENDERER_H__
 
 #include "app/animation.h"
-#include "base/gfx/point.h"
 #include "base/scoped_ptr.h"
 #include "base/string16.h"
+#include "gfx/point.h"
 #include "views/controls/button/image_button.h"
 #include "views/view.h"
 
@@ -45,14 +45,22 @@ class TabRenderer : public views::View,
   // TabContents.
   //
   // See TabStripModel::TabChangedAt documentation for what loading_only means.
-  void UpdateData(TabContents* contents, bool loading_only);
+  void UpdateData(TabContents* contents, bool phantom, bool loading_only);
 
-  // Sets the pinned state of the tab.
-  void set_pinned(bool pinned) { data_.pinned = pinned; }
-  bool pinned() const { return data_.pinned; }
+  // Sets the blocked state of the tab.
+  void SetBlocked(bool blocked);
+  bool blocked() const { return data_.blocked; }
 
-  // Are we in the process of animating a pinned state change on this tab?
-  void set_animating_pinned_change(bool value);
+  // Sets the mini-state of the tab.
+  void set_mini(bool mini) { data_.mini = mini; }
+  bool mini() const { return data_.mini; }
+
+  // Sets the phantom state of the tab.
+  void set_phantom(bool phantom) { data_.phantom = phantom; }
+  bool phantom() const { return data_.phantom; }
+
+  // Are we in the process of animating a mini tab state change on this tab?
+  void set_animating_mini_change(bool value);
 
   // Updates the display to reflect the contents of this TabRenderer's model.
   void UpdateFromModel();
@@ -68,9 +76,9 @@ class TabRenderer : public views::View,
   void StartPulse();
   void StopPulse();
 
-  // Start/stop the pinned tab title animation.
-  void StartPinnedTabTitleAnimation();
-  void StopPinnedTabTitleAnimation();
+  // Start/stop the mini-tab title animation.
+  void StartMiniTabTitleAnimation();
+  void StopMiniTabTitleAnimation();
 
   // Set the background offset used to match the image in the inactive tab
   // to the frame image.
@@ -85,6 +93,10 @@ class TabRenderer : public views::View,
     theme_provider_ = provider;
   }
 
+  // Paints the icon. Most of the time you'll want to invoke Paint directly, but
+  // in certain situations this invoked outside of Paint.
+  void PaintIcon(gfx::Canvas* canvas);
+
   // Returns the minimum possible size of a single unselected Tab.
   static gfx::Size GetMinimumUnselectedSize();
   // Returns the minimum possible size of a selected Tab. Selected tabs must
@@ -95,8 +107,8 @@ class TabRenderer : public views::View,
   // available.
   static gfx::Size GetStandardSize();
 
-  // Returns the width for pinned tabs. Pinned tabs always have this width.
-  static int GetPinnedWidth();
+  // Returns the width for mini-tabs. Mini-tabs always have this width.
+  static int GetMiniWidth();
 
   // Loads the images to be used for the tab background.
   static void LoadTabImages();
@@ -142,12 +154,9 @@ class TabRenderer : public views::View,
 
   // Paint various portions of the Tab
   void PaintTitle(SkColor title_color, gfx::Canvas* canvas);
-  void PaintIcon(gfx::Canvas* canvas);
   void PaintTabBackground(gfx::Canvas* canvas);
   void PaintInactiveTabBackground(gfx::Canvas* canvas);
   void PaintActiveTabBackground(gfx::Canvas* canvas);
-  void PaintHoverTabBackground(gfx::Canvas* canvas, double opacity);
-  void PaintPinnedTabBackground(gfx::Canvas* canvas);
   void PaintLoadingAnimation(gfx::Canvas* canvas);
 
   // Returns the number of favicon-size elements that can fit in the tab's
@@ -162,7 +171,7 @@ class TabRenderer : public views::View,
 
   // Gets the throb value for the tab. When a tab is not selected the
   // active background is drawn at |GetThrobValue()|%. This is used for hover,
-  // pinned tab title change and pulsing.
+  // mini tab title change and pulsing.
   double GetThrobValue();
 
   // The bounds of various sections of the display.
@@ -187,21 +196,34 @@ class TabRenderer : public views::View,
   // Pulse animation.
   scoped_ptr<ThrobAnimation> pulse_animation_;
 
-  // Animation used when the title of an inactive pinned tab changes.
-  scoped_ptr<ThrobAnimation> pinned_title_animation_;
+  // Animation used when the title of an inactive mini tab changes.
+  scoped_ptr<ThrobAnimation> mini_title_animation_;
 
   // Model data. We store this here so that we don't need to ask the underlying
   // model, which is tricky since instances of this object can outlive the
   // corresponding objects in the underlying model.
   struct TabData {
+    TabData()
+        : loading(false),
+          crashed(false),
+          off_the_record(false),
+          show_icon(true),
+          mini(false),
+          blocked(false),
+          animating_mini_change(false),
+          phantom(false) {
+    }
+
     SkBitmap favicon;
     string16 title;
     bool loading;
     bool crashed;
     bool off_the_record;
     bool show_icon;
-    bool pinned;
-    bool animating_pinned_change;
+    bool mini;
+    bool blocked;
+    bool animating_mini_change;
+    bool phantom;
   };
   TabData data_;
 

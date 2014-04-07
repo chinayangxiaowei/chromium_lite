@@ -8,13 +8,29 @@
 #include <list>
 
 #include "base/basictypes.h"
-#include "base/task.h"
-#include "chrome/common/child_process_host.h"
+#include "base/callback.h"
+#include "base/ref_counted.h"
+#include "chrome/browser/child_process_host.h"
+#include "chrome/browser/host_content_settings_map.h"
+#include "chrome/browser/worker_host/worker_document_set.h"
 #include "googleurl/src/gurl.h"
 #include "ipc/ipc_channel.h"
 
+class DatabaseDispatcherHost;
+namespace webkit_database {
+class DatabaseTracker;
+}  // namespace webkit_database
+
+struct ViewHostMsg_CreateWorker_Params;
+
+// The WorkerProcessHost is the interface that represents the browser side of
+// the browser <-> worker communication channel. There will be one
+// WorkerProcessHost per worker process.  Currently each worker runs in its own
+// process, but that may change.  However, we do assume [by storing a
+// HostContentSettingsMap] that a WorkerProcessHost serves a single Profile.
 class WorkerProcessHost : public ChildProcessHost {
  public:
+
   // Contains information about each worker instance, needed to forward messages
   // between the renderer and worker processes.
   class WorkerInstance {
@@ -23,8 +39,6 @@ class WorkerProcessHost : public ChildProcessHost {
                    bool shared,
                    bool off_the_record,
                    const string16& name,
-                   int renderer_id,
-                   int render_view_route_id,
                    int worker_route_id);
 
     // Unique identifier for a worker client.
@@ -35,9 +49,13 @@ class WorkerProcessHost : public ChildProcessHost {
     void RemoveSender(IPC::Message::Sender* sender, int sender_route_id);
     void RemoveSenders(IPC::Message::Sender* sender);
     bool HasSender(IPC::Message::Sender* sender, int sender_route_id) const;
+    bool RendererIsParent(int renderer_id, int render_view_route_id) const;
     int NumSenders() const { return senders_.size(); }
     // Returns the single sender (must only be one).
     SenderInfo GetSender() const;
+
+    typedef std::list<SenderInfo> SenderList;
+    const SenderList& senders() const { return senders_; }
 
     // Checks if this WorkerInstance matches the passed url/name params
     // (per the comparison algorithm in the WebWorkers spec). This API only
@@ -45,30 +63,12 @@ class WorkerProcessHost : public ChildProcessHost {
     bool Matches(
         const GURL& url, const string16& name, bool off_the_record) const;
 
-    // Adds a document to a shared worker's document set.
-    void AddToDocumentSet(IPC::Message::Sender* parent,
-                          unsigned long long document_id);
-
-    // Checks to see if a document is in a shared worker's document set.
-    bool IsInDocumentSet(IPC::Message::Sender* parent,
-                         unsigned long long document_id) const;
-
-    // Removes a specific document from a shared worker's document set when
-    // that document is detached.
-    void RemoveFromDocumentSet(IPC::Message::Sender* parent,
-                               unsigned long long document_id);
-
-    // Copies the document set from one instance to another
-    void CopyDocumentSet(const WorkerInstance& instance) {
-      document_set_ = instance.document_set_;
+    // Shares the passed instance's WorkerDocumentSet with this instance. This
+    // instance's current WorkerDocumentSet is dereferenced (and freed if this
+    // is the only reference) as a result.
+    void ShareDocumentSet(const WorkerInstance& instance) {
+      worker_document_set_ = instance.worker_document_set_;
     };
-
-    // Invoked when a render process exits, to remove all associated documents
-    // from a shared worker's document set.
-    void RemoveAllAssociatedDocuments(IPC::Message::Sender* parent);
-
-    bool IsDocumentSetEmpty() const { return document_set_.empty(); }
-
 
     // Accessors
     bool shared() const { return shared_; }
@@ -77,29 +77,26 @@ class WorkerProcessHost : public ChildProcessHost {
     void set_closed(bool closed) { closed_ = closed; }
     const GURL& url() const { return url_; }
     const string16 name() const { return name_; }
-    int renderer_id() const { return renderer_id_; }
-    int render_view_route_id() const { return render_view_route_id_; }
     int worker_route_id() const { return worker_route_id_; }
+    WorkerDocumentSet* worker_document_set() const {
+      return worker_document_set_;
+    }
 
    private:
-    // Unique identifier for an associated document.
-    typedef std::pair<IPC::Message::Sender*, unsigned long long> DocumentInfo;
-    typedef std::list<DocumentInfo> DocumentSet;
     // Set of all senders (clients) associated with this worker.
-    typedef std::list<SenderInfo> SenderList;
     GURL url_;
     bool shared_;
     bool off_the_record_;
     bool closed_;
     string16 name_;
-    int renderer_id_;
-    int render_view_route_id_;
     int worker_route_id_;
     SenderList senders_;
-    DocumentSet document_set_;
+    scoped_refptr<WorkerDocumentSet> worker_document_set_;
   };
 
-  explicit WorkerProcessHost(ResourceDispatcherHost* resource_dispatcher_host_);
+  WorkerProcessHost(ResourceDispatcherHost* resource_dispatcher_host,
+      webkit_database::DatabaseTracker *db_tracker,
+      HostContentSettingsMap *host_content_settings_map);
   ~WorkerProcessHost();
 
   // Starts the process.  Returns true iff it succeeded.
@@ -119,6 +116,12 @@ class WorkerProcessHost : public ChildProcessHost {
   void DocumentDetached(IPC::Message::Sender* sender,
                         unsigned long long document_id);
 
+  webkit_database::DatabaseTracker* database_tracker() const;
+
+  HostContentSettingsMap *GetHostContentSettingsMap() const {
+    return host_content_settings_map_;
+  }
+
  protected:
   friend class WorkerService;
 
@@ -135,13 +138,15 @@ class WorkerProcessHost : public ChildProcessHost {
   // Called when a message arrives from the worker process.
   void OnMessageReceived(const IPC::Message& message);
 
+  // Called when the process has been launched successfully.
+  virtual void OnProcessLaunched();
+
   // Called when the app invokes close() from within worker context.
   void OnWorkerContextClosed(int worker_route_id);
 
   // Called if a worker tries to connect to a shared worker.
-  void OnLookupSharedWorker(const GURL& url,
-                            const string16& name,
-                            unsigned long long document_id,
+  void OnLookupSharedWorker(const ViewHostMsg_CreateWorker_Params& params,
+                            bool* exists,
                             int* route_id,
                             bool* url_error);
 
@@ -161,15 +166,16 @@ class WorkerProcessHost : public ChildProcessHost {
   // Updates the title shown in the task manager.
   void UpdateTitle();
 
-  void OnCreateWorker(const GURL& url,
-                      bool shared,
-                      const string16& name,
-                      int render_view_route_id,
+  void OnCreateWorker(const ViewHostMsg_CreateWorker_Params& params,
                       int* route_id);
   void OnCancelCreateDedicatedWorker(int route_id);
   void OnForwardToWorker(const IPC::Message& message);
 
   Instances instances_;
+
+  scoped_refptr<DatabaseDispatcherHost> db_dispatcher_host_;
+
+  scoped_refptr<HostContentSettingsMap> host_content_settings_map_;
 
   // A callback to create a routing id for the associated worker process.
   scoped_ptr<CallbackWithReturnValue<int>::Type> next_route_id_callback_;

@@ -1,4 +1,3 @@
-Only in libjingle/files: .svn
 Only in libjingle-0.4.0: Makefile.in
 diff -r libjingle-0.4.0/README libjingle/files/README
 1,39c1,39
@@ -206,16 +205,43 @@ Only in libjingle-0.4.0: depcomp
 Only in libjingle-0.4.0: install-sh
 Only in libjingle-0.4.0: ltmain.sh
 Only in libjingle-0.4.0: missing
-Only in libjingle/files/talk: .svn
 Only in libjingle-0.4.0/talk: Makefile.in
-Only in libjingle/files/talk/base: .svn
 Only in libjingle-0.4.0/talk/base: Makefile.in
+diff -r libjingle-0.4.0/talk/base/asynchttprequest.cc libjingle/files/talk/base/asynchttprequest.cc
+73c73
+<     talk_base::SSLAdapter * ssl_adapter = talk_base::SSLAdapter::Create(socket);
+---
+>     talk_base::SSLAdapter * ssl_adapter = factory_->CreateSSLAdapter(socket);
+75c75,81
+<     ssl_adapter->StartSSL(hostname_.c_str(), true);
+---
+>     int error = ssl_adapter->StartSSL(hostname_.c_str(),
+>                                       use_restartable_ssl_sockets_);
+>     if (error != 0) {
+>       LOG(LS_WARNING) << "Could not start SSL; error = " << error;
+>       delete ssl_adapter;
+>       return 0;
+>     }
 diff -r libjingle-0.4.0/talk/base/asynchttprequest.h libjingle/files/talk/base/asynchttprequest.h
 23,24c23
 <   public SignalThread,
 <   public sigslot::has_slots<> {
 ---
 >   public SignalThread {
+106c105,106
+<       binary_mode_(false), agent_(user_agent) { }
+---
+>       binary_mode_(false), agent_(user_agent),
+>       ignore_bad_cert_(false), use_restartable_ssl_sockets_(false) { }
+114a115,120
+>   bool use_restartable_ssl_sockets() const {
+>     return use_restartable_ssl_sockets_;
+>   }
+>   void SetUseRestartableSSLSockets(bool use_restartable_ssl_sockets) {
+>     use_restartable_ssl_sockets_ = use_restartable_ssl_sockets;
+>   }
+133a140
+>   bool use_restartable_ssl_sockets_;
 diff -r libjingle-0.4.0/talk/base/asynctcpsocket.cc libjingle/files/talk/base/asynctcpsocket.cc
 31a32,33
 > #include <cstring>
@@ -254,6 +280,14 @@ diff -r libjingle-0.4.0/talk/base/common.h libjingle/files/talk/base/common.h
 <   void operator=(const TypeName&)
 < 
 diff -r libjingle-0.4.0/talk/base/criticalsection.h libjingle/files/talk/base/criticalsection.h
+39c39
+< #ifdef _DEBUG
+---
+> #if !defined(NDEBUG)
+41c41
+< #endif  // _DEBUG
+---
+> #endif  // !defined(NDEBUG)
 83c83
 < public:
 ---
@@ -283,6 +317,27 @@ diff -r libjingle-0.4.0/talk/base/criticalsection.h libjingle/files/talk/base/cr
 diff -r libjingle-0.4.0/talk/base/cryptstring.h libjingle/files/talk/base/cryptstring.h
 30a31
 > #include <string.h>
+diff -r libjingle-0.4.0/talk/base/diskcache.cc libjingle/files/talk/base/diskcache.cc
+43c43
+< #ifdef _DEBUG
+---
+> #if !defined(NDEBUG)
+45c45
+< #else  // !_DEBUG
+---
+> #else  // defined(NDEBUG)
+47c47
+< #endif  // !_DEBUG
+---
+> #endif  // !defined(NDEBUG)
+231c231
+< #ifdef _DEBUG
+---
+> #if !defined(NDEBUG)
+238c238
+< #endif  // _DEBUG
+---
+> #endif  // !defined(NDEBUG)
 diff -r libjingle-0.4.0/talk/base/diskcache_win32.cc libjingle/files/talk/base/diskcache_win32.cc
 38c38
 <       entry->streams = max(entry->streams, index + 1);
@@ -302,9 +357,26 @@ diff -r libjingle-0.4.0/talk/base/httpclient.cc libjingle/files/talk/base/httpcl
 ---
 >           context, response, auth_method);
 >         context_.reset(context);
+diff -r libjingle-0.4.0/talk/base/httpcommon.h libjingle/files/talk/base/httpcommon.h
+172c172
+< inline const uint16 UrlDefaultPort(bool secure) {
+---
+> inline uint16 UrlDefaultPort(bool secure) {
 diff -r libjingle-0.4.0/talk/base/logging.cc libjingle/files/talk/base/logging.cc
 27a28
 > #include <stdio.h>
+76c77
+< #if _DEBUG
+---
+> #if LOGGING
+78c79
+< #else  // !_DEBUG
+---
+> #else
+80c81
+< #endif  // !_DEBUG
+---
+> #endif
 diff -r libjingle-0.4.0/talk/base/logging.h libjingle/files/talk/base/logging.h
 67a68,69
 > 
@@ -313,6 +385,10 @@ diff -r libjingle-0.4.0/talk/base/logging.h libjingle/files/talk/base/logging.h
 > #endif // defined(SAFE_TO_DEFINE_TALK_BASE_LOGGING_MACROS)
 195a199
 > #if defined(SAFE_TO_DEFINE_TALK_BASE_LOGGING_MACROS)
+197c201
+< #if defined(_DEBUG) && !defined(NDEBUG)
+---
+> #if !defined(NDEBUG)
 290a295
 > #endif  // defined(SAFE_TO_DEFINE_TALK_BASE_LOGGING_MACROS)
 diff -r libjingle-0.4.0/talk/base/messagequeue.cc libjingle/files/talk/base/messagequeue.cc
@@ -366,6 +442,36 @@ diff -r libjingle-0.4.0/talk/base/natserver.cc libjingle/files/talk/base/natserv
 diff -r libjingle-0.4.0/talk/base/natsocketfactory.cc libjingle/files/talk/base/natsocketfactory.cc
 29a30
 > #include <cstring>
+diff -r libjingle-0.4.0/talk/base/openssladapter.cc libjingle/files/talk/base/openssladapter.cc
+619c619
+< #ifdef _DEBUG
+---
+> #if !defined(NDEBUG)
+707c707
+< #if _DEBUG
+---
+> #if !defined(NDEBUG)
+736c736
+< #endif  // _DEBUG
+---
+> #endif  // !defined(NDEBUG)
+740c740
+< #if _DEBUG
+---
+> #if !defined(NDEBUG)
+798c798
+< #ifdef _DEBUG
+---
+> #if !defined(NDEBUG)
+diff -r libjingle-0.4.0/talk/base/openssladapter.h libjingle/files/talk/base/openssladapter.h
+72c72
+< #if _DEBUG
+---
+> #if !defined(NDEBUG)
+74c74
+< #endif  // !_DEBUG
+---
+> #endif  // !defined(NDEBUG)
 diff -r libjingle-0.4.0/talk/base/physicalsocketserver.cc libjingle/files/talk/base/physicalsocketserver.cc
 61a62
 > #include "talk/base/winsock_initializer.h"
@@ -394,6 +500,16 @@ diff -r libjingle-0.4.0/talk/base/physicalsocketserver.cc libjingle/files/talk/b
 > #ifdef WIN32
 >     EnsureWinsockInit();
 > #endif
+187c171,177
+<       addr2.Resolve(); // TODO: Do this async later?
+---
+>       // TODO: Do this async later?
+>       if (!addr2.Resolve()) {
+>         LOG(LS_ERROR) << "Resolving addr failed";
+>         UpdateLastError();
+>         Close();
+>         return SOCKET_ERROR;
+>       }
 diff -r libjingle-0.4.0/talk/base/proxydetect.cc libjingle/files/talk/base/proxydetect.cc
 205,206c205,206
 <   const char* list = slist.c_str();
@@ -802,7 +918,43 @@ diff -r libjingle-0.4.0/talk/base/signalthread.h libjingle/files/talk/base/signa
 >     kComplete,        // Work is done
 >     kStopping,        // Work is being interrupted
 >   } state_;
-Only in libjingle/files/talk/base: signalthread_unittest.cc
+diff -r libjingle-0.4.0/talk/base/sigslot.h libjingle/files/talk/base/sigslot.h
+530c530
+< #ifdef _DEBUG
+---
+> #if !defined(NDEBUG)
+676c676
+< #ifdef _DEBUG
+---
+> #if !defined(NDEBUG)
+807c807
+< #ifdef _DEBUG
+---
+> #if !defined(NDEBUG)
+937c937
+< #ifdef _DEBUG
+---
+> #if !defined(NDEBUG)
+1067c1067
+< #ifdef _DEBUG
+---
+> #if !defined(NDEBUG)
+1199c1199
+< #ifdef _DEBUG
+---
+> #if !defined(NDEBUG)
+1331c1331
+< #ifdef _DEBUG
+---
+> #if !defined(NDEBUG)
+1463c1463
+< #ifdef _DEBUG
+---
+> #if !defined(NDEBUG)
+1596c1596
+< #ifdef _DEBUG
+---
+> #if !defined(NDEBUG)
 diff -r libjingle-0.4.0/talk/base/socket.h libjingle/files/talk/base/socket.h
 77a78
 > #undef ETIMEDOUT // remove pthread.h's definition
@@ -810,6 +962,33 @@ diff -r libjingle-0.4.0/talk/base/socketadapters.cc libjingle/files/talk/base/so
 43a44,45
 > #include <cstring>
 > 
+diff -r libjingle-0.4.0/talk/base/socketaddress.cc libjingle/files/talk/base/socketaddress.cc
+52c52
+< #ifdef _DEBUG
+---
+> #if !defined(NDEBUG)
+54c54
+< #else // !_DEBUG
+---
+> #else // defined(NDEBUG)
+56c56
+< #endif // !_DEBUG
+---
+> #endif // !defined(NDEBUG)
+diff -r libjingle-0.4.0/talk/base/socketfactory.h libjingle/files/talk/base/socketfactory.h
+32a33
+> #include "talk/base/ssladapter.h"
+46a48,52
+> 
+>   // Wraps the given socket in an SSL adapter.
+>   virtual SSLAdapter* CreateSSLAdapter(AsyncSocket* socket) {
+>     return SSLAdapter::Create(socket);
+>   }
+diff -r libjingle-0.4.0/talk/base/socketpool.cc libjingle/files/talk/base/socketpool.cc
+142d141
+<     ASSERT(false);
+189d187
+<       ASSERT(false);
 diff -r libjingle-0.4.0/talk/base/ssladapter.cc libjingle/files/talk/base/ssladapter.cc
 34c34,35
 < #define SSL_USE_OPENSSL 1
@@ -828,6 +1007,23 @@ diff -r libjingle-0.4.0/talk/base/stream.cc libjingle/files/talk/base/stream.cc
 diff -r libjingle-0.4.0/talk/base/stringencode.cc libjingle/files/talk/base/stringencode.cc
 34a35
 > #include <stdlib.h>
+525c526
+< #ifdef _DEBUG
+---
+> #if !defined(NDEBUG)
+575c576
+< #endif  // _DEBUG
+---
+> #endif  // !defined(NDEBUG)
+diff -r libjingle-0.4.0/talk/base/stringutils.cc libjingle/files/talk/base/stringutils.cc
+72c72
+< #if _DEBUG
+---
+> #if !defined(NDEBUG)
+76c76
+< #endif  // _DEBUG
+---
+> #endif  // !defined(NDEBUG)
 diff -r libjingle-0.4.0/talk/base/stringutils.h libjingle/files/talk/base/stringutils.h
 33a34
 > #include <string.h>
@@ -835,6 +1031,26 @@ diff -r libjingle-0.4.0/talk/base/stringutils.h libjingle/files/talk/base/string
 > #if 0
 93a96
 > #endif
+200,208d202
+< size_t sprintfn(CTYPE* buffer, size_t buflen, const CTYPE* format, ...) {
+<   va_list args;
+<   va_start(args, format);
+<   size_t len = vsprintfn(buffer, buflen, format, args);
+<   va_end(args);
+<   return len;
+< }
+< 
+< template<class CTYPE>
+218a213,221
+> template<class CTYPE>
+> size_t sprintfn(CTYPE* buffer, size_t buflen, const CTYPE* format, ...) {
+>   va_list args;
+>   va_start(args, format);
+>   size_t len = vsprintfn(buffer, buflen, format, args);
+>   va_end(args);
+>   return len;
+> }
+> 
 272c275
 <   inline static const char* Traits<char>::empty_str() { return ""; }
 ---
@@ -906,23 +1122,25 @@ diff -r libjingle-0.4.0/talk/base/thread.cc libjingle/files/talk/base/thread.cc
 128a139,140
 >   CritScope cs(&started_crit_);
 >   stopped_ = true;
-168a181,184
+131a144
+>     started_ = false;
+168a182,185
 >   CritScope cs(&started_crit_);
 >   // Make sure Join() hasn't been called yet.
 >   if (stopped_)
 >     return;
-181a198,199
+181a199,200
 >   CritScope cs(&started_crit_);
 >   stopped_ = true;
-191a210,212
+191a211,213
 >   // Make sure the thread hasn't been deleted.
 >   if (!g_thmgr.ThreadActive(thread))
 >     return NULL;
-207c228
+207c229
 <   MessageQueue::Stop();
 ---
 >   MessageQueue::Quit();
-329c350
+329c351
 <       return false;
 ---
 >       return !IsQuitting();
@@ -937,11 +1155,9 @@ diff -r libjingle-0.4.0/talk/base/urlencode.cc libjingle/files/talk/base/urlenco
 0a1,2
 > #include <stdlib.h>
 > #include <string.h>
-diff -r libjingle-0.4.0/talk/base/win32socketserver.cc libjingle/files/talk/base/win32socketserver.cc
-31a32
-> #include "talk/base/winsock_initializer.h"
-269a271
->   talk_base::EnsureWinsockInit();
+Only in libjingle-0.4.0/talk/base: win32socketserver.cc
+Only in libjingle-0.4.0/talk/base: win32socketserver.h
+Only in libjingle/files/talk/base: win32window.cc
 diff -r libjingle-0.4.0/talk/base/winping.cc libjingle/files/talk/base/winping.cc
 133c133
 <   return sizeof(ICMP_ECHO_REPLY) + max(8UL, data_size);
@@ -957,68 +1173,9 @@ Only in libjingle/files/talk/base: winsock_initializer.h
 Only in libjingle-0.4.0/talk: examples
 Only in libjingle-0.4.0/talk: libjingle.sln
 Only in libjingle-0.4.0/talk: libjingle.vcproj
-Only in libjingle/files/talk/p2p: .svn
-Only in libjingle-0.4.0/talk/p2p: Makefile.in
-Only in libjingle/files/talk/p2p/base: .svn
-Only in libjingle-0.4.0/talk/p2p/base: Makefile.in
-diff -r libjingle-0.4.0/talk/p2p/base/p2ptransport.cc libjingle/files/talk/p2p/base/p2ptransport.cc
-37c37
-< #include "talk/xmpp/constants.h"
----
-> #include "talk/xmpp/xmppconstants.h"
-diff -r libjingle-0.4.0/talk/p2p/base/port.cc libjingle/files/talk/p2p/base/port.cc
-34a35
-> #include <cstring>
-270c271
-<   talk_base::scoped_ptr<StunMessage> stun_msg(new StunMessage());
----
->   scoped_ptr<StunMessage> stun_msg(new StunMessage());
-diff -r libjingle-0.4.0/talk/p2p/base/rawtransport.cc libjingle/files/talk/p2p/base/rawtransport.cc
-35c35
-< #include "talk/xmpp/constants.h"
----
-> #include "talk/xmpp/xmppconstants.h"
-diff -r libjingle-0.4.0/talk/p2p/base/rawtransportchannel.cc libjingle/files/talk/p2p/base/rawtransportchannel.cc
-39c39
-< #include "talk/xmpp/constants.h"
----
-> #include "talk/xmpp/xmppconstants.h"
-diff -r libjingle-0.4.0/talk/p2p/base/relayport.cc libjingle/files/talk/p2p/base/relayport.cc
-36a37
-> #include <cstring>
-diff -r libjingle-0.4.0/talk/p2p/base/session.cc libjingle/files/talk/p2p/base/session.cc
-32c32
-< #include "talk/xmpp/constants.h"
----
-> #include "talk/xmpp/xmppconstants.h"
-diff -r libjingle-0.4.0/talk/p2p/base/sessionmanager.cc libjingle/files/talk/p2p/base/sessionmanager.cc
-32c32
-< #include "talk/xmpp/constants.h"
----
-> #include "talk/xmpp/xmppconstants.h"
-diff -r libjingle-0.4.0/talk/p2p/base/sessionmanager.h libjingle/files/talk/p2p/base/sessionmanager.h
-159c159
-<   buzz::XmlElement* SessionManager::CreateErrorMessage(
----
->   buzz::XmlElement* CreateErrorMessage(
-diff -r libjingle-0.4.0/talk/p2p/base/stun.cc libjingle/files/talk/p2p/base/stun.cc
-31a32
-> #include <cstring>
-diff -r libjingle-0.4.0/talk/p2p/base/transport.cc libjingle/files/talk/p2p/base/transport.cc
-34c34
-< #include "talk/xmpp/constants.h"
----
-> #include "talk/xmpp/xmppconstants.h"
-Only in libjingle/files/talk/p2p/client: .svn
-Only in libjingle-0.4.0/talk/p2p/client: Makefile.in
-diff -r libjingle-0.4.0/talk/p2p/client/httpportallocator.cc libjingle/files/talk/p2p/client/httpportallocator.cc
-82c82
-<   relay_hosts_.push_back("relay.l.google.com");
----
->   relay_hosts_.push_back("relay.google.com");
+Only in libjingle-0.4.0/talk: p2p
 Only in libjingle-0.4.0/talk: session
 Only in libjingle-0.4.0/talk: third_party
-Only in libjingle/files/talk/xmllite: .svn
 Only in libjingle-0.4.0/talk/xmllite: Makefile.in
 diff -r libjingle-0.4.0/talk/xmllite/qname.cc libjingle/files/talk/xmllite/qname.cc
 39c39
@@ -1170,7 +1327,6 @@ diff -r libjingle-0.4.0/talk/xmllite/xmlprinter.cc libjingle/files/talk/xmllite/
 > XmlPrinterImpl::PrintCDATAText(const std::string & text) {
 >   *pout_ << "<![CDATA[" << text << "]]>";
 > }
-Only in libjingle/files/talk/xmpp: .svn
 Only in libjingle-0.4.0/talk/xmpp: Makefile.in
 Only in libjingle-0.4.0/talk/xmpp: constants.cc
 Only in libjingle-0.4.0/talk/xmpp: constants.h
@@ -1179,6 +1335,27 @@ diff -r libjingle-0.4.0/talk/xmpp/jid.cc libjingle/files/talk/xmpp/jid.cc
 < #include "talk/xmpp/constants.h"
 ---
 > #include "talk/xmpp/xmppconstants.h"
+diff -r libjingle-0.4.0/talk/xmpp/plainsaslhandler.h libjingle/files/talk/xmpp/plainsaslhandler.h
+31d30
+< #include "talk/xmpp/saslhandler.h"
+32a32,34
+> #include <string>
+> 
+> #include "talk/xmpp/saslhandler.h"
+68a71,76
+> 
+>   virtual bool GetTlsServerInfo(const talk_base::SocketAddress& server,
+>                                 std::string* tls_server_hostname,
+>                                 std::string* tls_server_domain) {
+>     return false;
+>   }
+diff -r libjingle-0.4.0/talk/xmpp/prexmppauth.h libjingle/files/talk/xmpp/prexmppauth.h
+33d32
+< #include "talk/xmpp/saslhandler.h"
+64c63
+< class PreXmppAuth : public SaslHandler {
+---
+> class PreXmppAuth {
 diff -r libjingle-0.4.0/talk/xmpp/saslcookiemechanism.h libjingle/files/talk/xmpp/saslcookiemechanism.h
 33c33
 < #include "talk/xmpp/constants.h"
@@ -1213,8 +1390,18 @@ diff -r libjingle-0.4.0/talk/xmpp/saslcookiemechanism.h libjingle/files/talk/xmp
 62a82
 >   std::string token_service_;
 diff -r libjingle-0.4.0/talk/xmpp/saslhandler.h libjingle/files/talk/xmpp/saslhandler.h
-31a32
+31a32,34
 > #include <vector>
+> 
+> #include "talk/base/socketaddress.h"
+53a57,63
+> 
+>   // Fills in the tls server hostname/domain to use for the given
+>   // server (and returns true).  Return false if you want the defaults
+>   // to be used.
+>   virtual bool GetTlsServerInfo(const talk_base::SocketAddress& server,
+>                                 std::string* tls_server_hostname,
+>                                 std::string* tls_server_domain) = 0;
 diff -r libjingle-0.4.0/talk/xmpp/saslmechanism.cc libjingle/files/talk/xmpp/saslmechanism.cc
 30c30
 < #include "talk/xmpp/constants.h"
@@ -1225,19 +1412,105 @@ diff -r libjingle-0.4.0/talk/xmpp/xmppclient.cc libjingle/files/talk/xmpp/xmppcl
 < #include "talk/xmpp/constants.h"
 ---
 > #include "talk/xmpp/xmppconstants.h"
+32a33
+> #include "talk/xmpp/saslhandler.h"
+68a70
+>   scoped_ptr<SaslHandler> sasl_handler_;
+93c95,99
+< XmppClient::Connect(const XmppClientSettings & settings, const std::string & lang, AsyncSocket * socket, PreXmppAuth * pre_auth) {
+---
+> XmppClient::Connect(const XmppClientSettings & settings,
+>                     const std::string & lang,
+>                     AsyncSocket * socket,
+>                     PreXmppAuth * pre_auth,
+>                     SaslHandler * sasl_handler) {
+113,125c119,125
+<   //
+<   // The talk.google.com server expects you to use "gmail.com" in the
+<   // stream, and expects the domain certificate to be "gmail.com" as well.
+<   // For all other servers, we leave the strings empty, which causes
+<   // the jid's domain to be used.  "foo@example.com" -> stream to="example.com"
+<   // tls certificate for "example.com"
+<   //
+<   // This is only true when using Gaia auth, so let's say if there's no preauth,
+<   // we should use the actual server name
+<   if ((settings.server().IPAsString() == buzz::STR_TALK_GOOGLE_COM ||
+<       settings.server().IPAsString() == buzz::STR_TALKX_L_GOOGLE_COM) && 
+<       pre_auth != NULL) {
+<     d_->engine_->SetTlsServer(buzz::STR_GMAIL_COM, buzz::STR_GMAIL_COM);
+---
+>   if (sasl_handler) {
+>     std::string tls_server_hostname, tls_server_domain;
+>     if (sasl_handler->GetTlsServerInfo(settings.server(),
+>                                        &tls_server_hostname,
+>                                        &tls_server_domain)) {
+>       d_->engine_->SetTlsServer(tls_server_hostname, tls_server_domain);
+>     }
+139a140
+>   d_->sasl_handler_.reset(sasl_handler);
+200a202,209
+>   if (d_->sasl_handler_.get()) {
+>     d_->engine_->SetSaslHandler(d_->sasl_handler_.release());
+>   }
+>   else {
+>     d_->engine_->SetSaslHandler(new PlainSaslHandler(
+>         d_->engine_->GetUser(), d_->pass_, d_->allow_plain_));
+>   }
+> 
+209,210d217
+<     d_->engine_->SetSaslHandler(new PlainSaslHandler(
+<               d_->engine_->GetUser(), d_->pass_, d_->allow_plain_));
+253,254d259
+<   // transfer ownership of pre_auth_ to engine
+<   d_->engine_->SetSaslHandler(d_->pre_auth_.release());
+261a267,268
+>     d_->pre_engine_error_ = XmppEngine::ERROR_SOCKET;
+>     d_->pre_engine_subcode_ = d_->socket_->GetError();
+347c354
+< //#ifdef _DEBUG
+---
+> //#if !defined(NDEBUG)
+375c382
+< //#ifdef _DEBUG
+---
+> //#if !defined(NDEBUG)
 diff -r libjingle-0.4.0/talk/xmpp/xmppclient.h libjingle/files/talk/xmpp/xmppclient.h
-141c141
+42a43
+> class SaslHandler;
+80c81,82
+<                            PreXmppAuth * preauth);
+---
+>                            PreXmppAuth * preauth,
+>                            SaslHandler * sasl_handler);
+141c143
 <   std::string XmppClient::GetStateName(int state) const {
 ---
 >   std::string GetStateName(int state) const {
 diff -r libjingle-0.4.0/talk/xmpp/xmppclientsettings.h libjingle/files/talk/xmpp/xmppclientsettings.h
-59a60,62
+31d30
+< #include "talk/p2p/base/port.h"
+32a32,45
+> #include "talk/base/proxyinfo.h"
+> 
+> namespace cricket {
+> 
+> // This enum was taken from talk/p2p/base/port.h, which is the only
+> // thing we actually need from the p2p directory.
+> enum ProtocolType {
+>   PROTO_UDP,
+>   PROTO_TCP,
+>   PROTO_SSLTCP,
+>   PROTO_LAST = PROTO_SSLTCP
+> };
+> 
+> }  // namespace cricket
+59a73,75
 >   void set_token_service(const std::string & token_service) {
 >     token_service_ = token_service;
 >   }
-75a79
+75a92
 >   const std::string & token_service() const { return token_service_; }
-93a98
+93a111
 >   std::string token_service_;
 Only in libjingle/files/talk/xmpp: xmppconstants.cc
 Only in libjingle/files/talk/xmpp: xmppconstants.h
@@ -1256,10 +1529,35 @@ diff -r libjingle-0.4.0/talk/xmpp/xmpplogintask.cc libjingle/files/talk/xmpp/xmp
 < #include "talk/xmpp/constants.h"
 ---
 > #include "talk/xmpp/xmppconstants.h"
+44c44
+< #ifdef _DEBUG
+---
+> #if !defined(NDEBUG)
+59c59
+< #endif  // _DEBUG
+---
+> #endif  // !defined(NDEBUG)
+103c103
+< #if _DEBUG
+---
+> #if !defined(NDEBUG)
+106c106
+< #endif  // _DEBUG
+---
+> #endif  // !defined(NDEBUG)
 218a219,221
->         auth->SetAttr(QN_GOOGLE_ALLOW_NON_GOOGLE_ID_XMPP_LOGIN, "true");
+>         auth->SetAttr(QN_GOOGLE_ALLOW_GENERATED_JID_XMPP_LOGIN, "true");
 >         auth->SetAttr(QN_GOOGLE_AUTH_CLIENT_USES_FULL_BIND_RESULT, "true");
 > 
+diff -r libjingle-0.4.0/talk/xmpp/xmpplogintask.h libjingle/files/talk/xmpp/xmpplogintask.h
+93c93
+< #ifdef _DEBUG
+---
+> #if !defined(NDEBUG)
+95c95
+< #endif  // _DEBUG
+---
+> #endif  // !defined(NDEBUG)
 diff -r libjingle-0.4.0/talk/xmpp/xmppstanzaparser.cc libjingle/files/talk/xmpp/xmppstanzaparser.cc
 32c32
 < #include "talk/xmpp/constants.h"
@@ -1270,3 +1568,31 @@ diff -r libjingle-0.4.0/talk/xmpp/xmpptask.cc libjingle/files/talk/xmpp/xmpptask
 < #include "talk/xmpp/constants.h"
 ---
 > #include "talk/xmpp/xmppconstants.h"
+40c40
+< #ifdef _DEBUG
+---
+> #if !defined(NDEBUG)
+88c88
+< #ifdef _DEBUG
+---
+> #if !defined(NDEBUG)
+174c174
+< }
+\ No newline at end of file
+---
+> }
+diff -r libjingle-0.4.0/talk/xmpp/xmpptask.h libjingle/files/talk/xmpp/xmpptask.h
+80c80
+< #ifdef _DEBUG
+---
+> #if !defined(NDEBUG)
+106,107c106,107
+<   XmlElement *MakeIqResult(const XmlElement* query);
+<   XmlElement *MakeIq(const std::string& type,
+---
+>   static XmlElement *MakeIqResult(const XmlElement* query);
+>   static XmlElement *MakeIq(const std::string& type,
+123c123
+< #ifdef _DEBUG
+---
+> #if !defined(NDEBUG)

@@ -1,4 +1,4 @@
-// Copyright (c) 2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -17,6 +17,7 @@
 // kinfo_proc is defined in <sys/sysctl.h>, but this forward declaration
 // is sufficient for the vector<kinfo_proc> below.
 struct kinfo_proc;
+#include <mach/mach.h>
 #elif defined(OS_POSIX)
 #include <dirent.h>
 #include <limits.h>
@@ -28,14 +29,29 @@ struct kinfo_proc;
 #include <vector>
 
 #include "base/command_line.h"
+#include "base/file_descriptor_shuffle.h"
 #include "base/file_path.h"
 #include "base/process.h"
 
+#ifndef NAME_MAX  // Solaris and some BSDs have no NAME_MAX
+#ifdef MAXNAMLEN
+#define NAME_MAX MAXNAMLEN
+#else
+#define NAME_MAX 256
+#endif
+#endif
+
+namespace base {
+
 #if defined(OS_WIN)
-typedef PROCESSENTRY32 ProcessEntry;
-typedef IO_COUNTERS IoCounters;
+
+struct ProcessEntry : public PROCESSENTRY32 {
+};
+struct IoCounters : public IO_COUNTERS {
+};
+
 #elif defined(OS_POSIX)
-// TODO(port): we should not rely on a Win32 structure.
+
 struct ProcessEntry {
   base::ProcessId pid;
   base::ProcessId ppid;
@@ -43,26 +59,23 @@ struct ProcessEntry {
 };
 
 struct IoCounters {
-  unsigned long long ReadOperationCount;
-  unsigned long long WriteOperationCount;
-  unsigned long long OtherOperationCount;
-  unsigned long long ReadTransferCount;
-  unsigned long long WriteTransferCount;
-  unsigned long long OtherTransferCount;
+  uint64_t ReadOperationCount;
+  uint64_t WriteOperationCount;
+  uint64_t OtherOperationCount;
+  uint64_t ReadTransferCount;
+  uint64_t WriteTransferCount;
+  uint64_t OtherTransferCount;
 };
 
-#include "base/file_descriptor_shuffle.h"
-#endif
-
-namespace base {
+#endif  // defined(OS_POSIX)
 
 // A minimalistic but hopefully cross-platform set of exit codes.
 // Do not change the enumeration values or you will break third-party
 // installers.
 enum {
-  PROCESS_END_NORMAL_TERMINATON = 0,
-  PROCESS_END_KILLED_BY_USER    = 1,
-  PROCESS_END_PROCESS_WAS_HUNG  = 2
+  PROCESS_END_NORMAL_TERMINATION = 0,
+  PROCESS_END_KILLED_BY_USER     = 1,
+  PROCESS_END_PROCESS_WAS_HUNG   = 2
 };
 
 // Returns the id of the current process.
@@ -100,15 +113,16 @@ FilePath GetProcessExecutablePath(ProcessHandle process);
 // CPU-related ticks.  Returns -1 on parse error.
 // Exposed for testing.
 int ParseProcStatCPU(const std::string& input);
+
+static const char kAdjustOOMScoreSwitch[] = "--adjust-oom-score";
+
+// This adjusts /proc/process/oom_adj so the Linux OOM killer will prefer
+// certain process types over others. The range for the adjustment is
+// [-17,15], with [0,15] being user accessible.
+bool AdjustOOMScore(ProcessId process, int score);
 #endif
 
 #if defined(OS_POSIX)
-// Sets all file descriptors to close on exec except for stdin, stdout
-// and stderr.
-// TODO(agl): remove this function
-// WARNING: do not use. It's inherently race-prone in the face of
-// multi-threading.
-void SetAllFDsToCloseOnExec();
 // Close all file descriptors, expect those which are a destination in the
 // given multimap. Only call this function in a child process where you know
 // that there aren't any other threads.
@@ -169,13 +183,35 @@ bool LaunchApp(const std::vector<std::string>& argv,
                const file_handle_mapping_vector& fds_to_remap,
                bool wait, ProcessHandle* process_handle);
 
-// Similar to above, but also (un)set environment variables in child process
+// Similar to the above, but also (un)set environment variables in child process
 // through |environ|.
 typedef std::vector<std::pair<std::string, std::string> > environment_vector;
 bool LaunchApp(const std::vector<std::string>& argv,
                const environment_vector& environ,
                const file_handle_mapping_vector& fds_to_remap,
                bool wait, ProcessHandle* process_handle);
+
+// AlterEnvironment returns a modified environment vector, constructed from the
+// given environment and the list of changes given in |changes|. Each key in
+// the environment is matched against the first element of the pairs. In the
+// event of a match, the value is replaced by the second of the pair, unless
+// the second is empty, in which case the key-value is removed.
+//
+// The returned array is allocated using new[] and must be freed by the caller.
+char** AlterEnvironment(const environment_vector& changes,
+                        const char* const* const env);
+
+#if defined(OS_MACOSX)
+// Similar to the above, but also returns the new process's task_t if
+// |task_handle| is not NULL. If |task_handle| is not NULL, the caller is
+// responsible for calling |mach_port_deallocate()| on the returned handle.
+bool LaunchAppAndGetTask(const std::vector<std::string>& argv,
+                         const environment_vector& environ,
+                         const file_handle_mapping_vector& fds_to_remap,
+                         bool wait,
+                         task_t* task_handle,
+                         ProcessHandle* process_handle);
+#endif  // defined(OS_MACOSX)
 #endif  // defined(OS_POSIX)
 
 // Executes the application specified by cl. This function delegates to one
@@ -232,10 +268,6 @@ bool KillProcessById(ProcessId process_id, int exit_code, bool wait);
 // Get the termination status (exit code) of the process and return true if the
 // status indicates the process crashed. |child_exited| is set to true iff the
 // child process has terminated. (|child_exited| may be NULL.)
-//
-// On Windows, it is an error to call this if the process hasn't terminated
-// yet. On POSIX, |child_exited| is set correctly since we detect terminate in
-// a different manner on POSIX.
 bool DidProcessCrash(bool* child_exited, ProcessHandle handle);
 
 // Waits for process to exit. In POSIX systems, if the process hasn't been
@@ -243,6 +275,14 @@ bool DidProcessCrash(bool* child_exited, ProcessHandle handle);
 // a failure. On Windows |exit_code| is always filled. Returns true on success,
 // and closes |handle| in any case.
 bool WaitForExitCode(ProcessHandle handle, int* exit_code);
+
+// Waits for process to exit. If it did exit within |timeout_milliseconds|,
+// then puts the exit code in |exit_code|, closes |handle|, and returns true.
+// In POSIX systems, if the process has been signaled then |exit_code| is set
+// to -1. Returns false on failure (the caller is then responsible for closing
+// |handle|).
+bool WaitForExitCodeWithTimeout(ProcessHandle handle, int* exit_code,
+                                int64 timeout_milliseconds);
 
 // Wait for all the processes based on the named executable to exit.  If filter
 // is non-null, then only processes selected by the filter are waited on.
@@ -331,6 +371,11 @@ class NamedProcessIterator {
 // priv:           Pages mapped only by this process
 // shared:         PSS or 0 if the kernel doesn't support this
 // shareable:      0
+//
+// On OS X: TODO(thakis): Revise.
+// priv:           Memory.
+// shared:         0
+// shareable:      0
 struct WorkingSetKBytes {
   WorkingSetKBytes() : priv(0), shareable(0), shared(0) {}
   size_t priv;
@@ -373,7 +418,24 @@ class ProcessMetrics {
  public:
   // Creates a ProcessMetrics for the specified process.
   // The caller owns the returned object.
+#if !defined(OS_MACOSX)
   static ProcessMetrics* CreateProcessMetrics(ProcessHandle process);
+#else
+  class PortProvider {
+   public:
+    // Should return the mach task for |process| if possible, or else
+    // |MACH_PORT_NULL|. Only processes that this returns tasks for will have
+    // metrics on OS X (except for the current process, which always gets
+    // metrics).
+    virtual mach_port_t TaskForPid(ProcessHandle process) const = 0;
+  };
+
+  // The port provider needs to outlive the ProcessMetrics object returned by
+  // this function. If NULL is passed as provider, the returned object
+  // only returns valid metrics if |process| is the current process.
+  static ProcessMetrics* CreateProcessMetrics(ProcessHandle process,
+                                              PortProvider* port_provider);
+#endif
 
   ~ProcessMetrics();
 
@@ -408,10 +470,10 @@ class ProcessMetrics {
   // Returns the CPU usage in percent since the last time this method was
   // called. The first time this method is called it returns 0 and will return
   // the actual CPU info on subsequent calls.
-  // Note that on multi-processor machines, the CPU usage value is for all
-  // CPUs. So if you have 2 CPUs and your process is using all the cycles
-  // of 1 CPU and not the other CPU, this method returns 50.
-  int GetCPUUsage();
+  // On Windows, the CPU usage value is for all CPUs. So if you have 2 CPUs and
+  // your process is using all the cycles of 1 CPU and not the other CPU, this
+  // method returns 50.
+  double GetCPUUsage();
 
   // Retrieves accounting information for all I/O operations performed by the
   // process.
@@ -421,7 +483,11 @@ class ProcessMetrics {
   bool GetIOCounters(IoCounters* io_counters) const;
 
  private:
+#if !defined(OS_MACOSX)
   explicit ProcessMetrics(ProcessHandle process);
+#else
+  ProcessMetrics(ProcessHandle process, PortProvider* port_provider);
+#endif
 
   ProcessHandle process_;
 
@@ -432,7 +498,12 @@ class ProcessMetrics {
   int64 last_time_;
   int64 last_system_time_;
 
-#if defined(OS_LINUX)
+#if defined(OS_MACOSX)
+  // Queries the port provider if it's set.
+  mach_port_t TaskForPid(ProcessHandle process) const;
+
+  PortProvider* port_provider_;
+#elif defined(OS_POSIX)
   // Jiffie count at the last_time_ we updated.
   int last_cpu_;
 #endif

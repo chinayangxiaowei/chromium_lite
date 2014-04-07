@@ -12,7 +12,6 @@
 #include "third_party/WebKit/WebKit/chromium/public/WebString.h"
 #include "third_party/WebKit/WebKit/chromium/public/WebURL.h"
 #include "third_party/WebKit/WebKit/chromium/public/WebURLLoaderClient.h"
-#include "webkit/glue/glue_util.h"
 
 using WebKit::WebHTTPHeaderVisitor;
 using WebKit::WebString;
@@ -41,7 +40,7 @@ class HeaderCopier : public WebHTTPHeaderVisitor {
       : response_(response) {
   }
   virtual void visitHeader(const WebString& name, const WebString& value) {
-    const std::string& name_utf8 = WebStringToStdString(name);
+    const std::string& name_utf8 = name.utf8();
     for (size_t i = 0; i < arraysize(kReplaceHeaders); ++i) {
       if (LowerCaseEqualsASCII(name_utf8, kReplaceHeaders[i]))
         return;
@@ -65,7 +64,8 @@ MultipartResponseDelegate::MultipartResponseDelegate(
       boundary_("--"),
       first_received_data_(true),
       processing_headers_(false),
-      stop_sending_(false) {
+      stop_sending_(false),
+      has_sent_first_response_(false) {
   // Some servers report a boundary prefixed with "--".  See bug 5786.
   if (StartsWithASCII(boundary, "--", true)) {
     boundary_.assign(boundary);
@@ -125,11 +125,22 @@ void MultipartResponseDelegate::OnReceivedData(const char* data,
 
   size_t boundary_pos;
   while ((boundary_pos = FindBoundary()) != std::string::npos) {
-    if (boundary_pos > 0) {
-      // Send the last data chunk.
-      client_->didReceiveData(loader_,
-                              data_.data(),
-                              static_cast<int>(boundary_pos));
+    if (boundary_pos > 0 && client_) {
+      // Strip out trailing \n\r characters in the buffer preceding the
+      // boundary on the same lines as Firefox.
+      size_t data_length = boundary_pos;
+      if (data_[boundary_pos - 1] == '\n') {
+        data_length--;
+        if (data_[boundary_pos - 2] == '\r') {
+          data_length--;
+        }
+      }
+      if (data_length > 0) {
+        // Send the last data chunk.
+        client_->didReceiveData(loader_,
+                                data_.data(),
+                                static_cast<int>(data_length));
+      }
     }
     size_t boundary_end_pos = boundary_pos + boundary_.length();
     if (boundary_end_pos < data_.length() && '-' == data_[boundary_end_pos]) {
@@ -154,7 +165,7 @@ void MultipartResponseDelegate::OnReceivedData(const char* data,
 void MultipartResponseDelegate::OnCompletedRequest() {
   // If we have any pending data and we're not in a header, go ahead and send
   // it to WebCore.
-  if (!processing_headers_ && !data_.empty()) {
+  if (!processing_headers_ && !data_.empty() && !stop_sending_ && client_) {
     client_->didReceiveData(loader_,
                             data_.data(),
                             static_cast<int>(data_.length()));
@@ -214,8 +225,8 @@ bool MultipartResponseDelegate::ParseHeaders() {
   net::HttpUtil::ParseContentType(content_type, &mime_type, &charset,
                                   &has_charset);
   WebURLResponse response(original_response_.url());
-  response.setMIMEType(StdStringToWebString(mime_type));
-  response.setTextEncodingName(StdStringToWebString(charset));
+  response.setMIMEType(WebString::fromUTF8(mime_type));
+  response.setTextEncodingName(WebString::fromUTF8(charset));
 
   HeaderCopier copier(&response);
   original_response_.visitHTTPHeaderFields(&copier);
@@ -224,12 +235,19 @@ bool MultipartResponseDelegate::ParseHeaders() {
     std::string name(kReplaceHeaders[i]);
     std::string value = net::GetSpecificHeader(headers, name);
     if (!value.empty()) {
-      response.setHTTPHeaderField(StdStringToWebString(name),
-                                  StdStringToWebString(value));
+      response.setHTTPHeaderField(WebString::fromUTF8(name),
+                                  WebString::fromUTF8(value));
     }
   }
+  // To avoid recording every multipart load as a separate visit in
+  // the history database, we want to keep track of whether the response
+  // is part of a multipart payload.  We do want to record the first visit,
+  // so we only set isMultipartPayload to true after the first visit.
+  response.setIsMultipartPayload(has_sent_first_response_);
+  has_sent_first_response_ = true;
   // Send the response!
-  client_->didReceiveResponse(loader_, response);
+  if (client_)
+    client_->didReceiveResponse(loader_, response);
 
   return true;
 }
@@ -255,8 +273,8 @@ size_t MultipartResponseDelegate::FindBoundary() {
 bool MultipartResponseDelegate::ReadMultipartBoundary(
     const WebURLResponse& response,
     std::string* multipart_boundary) {
-  std::string content_type = WebStringToStdString(
-      response.httpHeaderField(WebString::fromUTF8("Content-Type")));
+  std::string content_type =
+      response.httpHeaderField(WebString::fromUTF8("Content-Type")).utf8();
 
   size_t boundary_start_offset = content_type.find("boundary=");
   if (boundary_start_offset == std::wstring::npos) {
@@ -286,8 +304,15 @@ bool MultipartResponseDelegate::ReadContentRanges(
     int* content_range_lower_bound,
     int* content_range_upper_bound) {
 
-  std::string content_range = WebStringToStdString(
-      response.httpHeaderField(WebString::fromUTF8("Content-Range")));
+  std::string content_range = response.httpHeaderField("Content-Range").utf8();
+  if (content_range.empty()) {
+    content_range = response.httpHeaderField("Range").utf8();
+  }
+
+  if (content_range.empty()) {
+    DLOG(WARNING) << "Failed to read content range from response.";
+    return false;
+  }
 
   size_t byte_range_lower_bound_start_offset = content_range.find(" ");
   if (byte_range_lower_bound_start_offset == std::string::npos) {

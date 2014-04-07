@@ -4,10 +4,10 @@
 
 #include "views/painter.h"
 
-#include "app/gfx/canvas.h"
-#include "app/gfx/insets.h"
 #include "app/resource_bundle.h"
 #include "base/logging.h"
+#include "gfx/canvas.h"
+#include "gfx/insets.h"
 #include "third_party/skia/include/core/SkBitmap.h"
 #include "third_party/skia/include/effects/SkGradientShader.h"
 
@@ -51,7 +51,7 @@ class GradientPainter : public Painter {
   bool horizontal_;
   SkColor colors_[2];
 
-  DISALLOW_EVIL_CONSTRUCTORS(GradientPainter);
+  DISALLOW_COPY_AND_ASSIGN(GradientPainter);
 };
 
 

@@ -5,10 +5,10 @@
 #include "chrome/renderer/print_web_view_helper.h"
 
 #include "app/l10n_util.h"
-#include "base/gfx/size.h"
 #include "base/logging.h"
 #include "chrome/common/render_messages.h"
 #include "chrome/renderer/render_view.h"
+#include "gfx/size.h"
 #include "grit/generated_resources.h"
 #include "printing/native_metafile.h"
 #include "skia/ext/vector_canvas.h"
@@ -71,6 +71,7 @@ void PrintWebViewHelper::Print(WebFrame* frame, bool script_initiated) {
     // Continue only if the settings are valid.
     if (default_settings.dpi && default_settings.document_cookie) {
       int expected_pages_count = 0;
+      bool use_browser_overlays = true;
 
       // Prepare once to calculate the estimated page count.  This must be in
       // a scope for itself (see comments on PrepareFrameAndViewForPrint).
@@ -80,6 +81,7 @@ void PrintWebViewHelper::Print(WebFrame* frame, bool script_initiated) {
                                                     frame->view());
         expected_pages_count = prep_frame_view.GetExpectedPageCount();
         DCHECK(expected_pages_count);
+        use_browser_overlays = prep_frame_view.ShouldUseBrowserOverlays();
       }
 
       // Ask the browser to show UI to retrieve the final print settings.
@@ -98,9 +100,10 @@ void PrintWebViewHelper::Print(WebFrame* frame, bool script_initiated) {
       params.cookie = default_settings.document_cookie;
       // TODO(maruel): Reenable once http://crbug.com/22937 is fixed.
       // Print selection is broken because DidStopLoading is never called.
-      //params.has_selection = frame->hasSelection();
+      // params.has_selection = frame->hasSelection();
       params.has_selection = false;
       params.expected_pages_count = expected_pages_count;
+      params.use_overlays = use_browser_overlays;
 
       msg = new ViewHostMsg_ScriptedPrint(routing_id(), params,
                                           &print_settings);
@@ -178,8 +181,8 @@ void PrintWebViewHelper::PrintPages(const ViewMsg_PrintPages_Params& params,
 }
 
 void PrintWebViewHelper::PrintPage(const ViewMsg_PrintPage_Params& params,
-                                const gfx::Size& canvas_size,
-                                WebFrame* frame) {
+                                   const gfx::Size& canvas_size,
+                                   WebFrame* frame) {
   // Generate a memory-based metafile. It will use the current screen's DPI.
   printing::NativeMetafile metafile;
 
@@ -246,7 +249,7 @@ void PrintWebViewHelper::PrintPage(const ViewMsg_PrintPage_Params& params,
   }
 
   // Get the size of the compiled metafile.
-  unsigned buf_size = metafile.GetDataSize();
+  uint32 buf_size = metafile.GetDataSize();
   DCHECK_GT(buf_size, 128u);
   ViewHostMsg_DidPrintPage_Params page_params;
   page_params.data_size = 0;

@@ -27,6 +27,8 @@ class BrowserDistribution {
 
   virtual std::wstring GetApplicationName();
 
+  virtual std::wstring GetAppShortCutName();
+
   virtual std::wstring GetAlternateApplicationName();
 
   virtual std::wstring GetInstallSubDir();
@@ -34,6 +36,8 @@ class BrowserDistribution {
   virtual std::wstring GetPublisherName();
 
   virtual std::wstring GetAppDescription();
+
+  virtual std::wstring GetLongAppDescription();
 
   virtual int GetInstallReturnCode(
       installer_util::InstallStatus install_status);
@@ -53,6 +57,8 @@ class BrowserDistribution {
   virtual std::wstring GetUninstallRegPath();
 
   virtual std::wstring GetVersionKey();
+
+  virtual bool CanSetAsDefault();
 
   virtual void UpdateDiffInstallStatus(bool system_install,
       bool incremental_install, installer_util::InstallStatus install_status);

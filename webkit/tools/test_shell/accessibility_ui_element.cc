@@ -2,10 +2,10 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "base/logging.h"
 #include "third_party/WebKit/WebKit/chromium/public/WebAccessibilityObject.h"
 #include "third_party/WebKit/WebKit/chromium/public/WebCString.h"
 #include "third_party/WebKit/WebKit/chromium/public/WebString.h"
-#include "webkit/glue/glue_util.h"
 #include "webkit/tools/test_shell/accessibility_ui_element.h"
 
 using WebKit::WebCString;
@@ -183,6 +183,46 @@ static std::string RoleToString(WebAccessibilityRole role) {
   }
 }
 
+std::string GetDescription(const WebAccessibilityObject& object) {
+  std::string description = object.accessibilityDescription().utf8();
+  return description.insert(0, "AXDescription: ");
+}
+
+std::string GetRole(const WebAccessibilityObject& object) {
+  return RoleToString(object.roleValue());
+}
+
+std::string GetTitle(const WebAccessibilityObject& object) {
+  std::string title = object.title().utf8();
+  return title.insert(0, "AXTitle: ");
+}
+
+std::string GetAttributes(const WebAccessibilityObject& object) {
+  // TODO(dglazkov): Concatenate all attributes of the AccessibilityObject.
+  std::string attributes(GetTitle(object));
+  attributes.append("\n");
+  attributes.append(GetRole(object));
+  attributes.append("\n");
+  attributes.append(GetDescription(object));
+  return attributes;
+}
+
+
+// Collects attributes into a string, delimited by dashes. Used by all methods
+// that output lists of attributes: AttributesOfLinkedUIElementsCallback,
+// AttributesOfChildrenCallback, etc.
+class AttributesCollector {
+ public:
+  void CollectAttributes(const WebAccessibilityObject& object) {
+    attributes_.append("\n------------\n");
+    attributes_.append(GetAttributes(object));
+  }
+  std::string attributes() const { return attributes_; }
+
+private:
+  std::string attributes_;
+};
+
 }  // namespace
 
 AccessibilityUIElement::AccessibilityUIElement(
@@ -258,6 +298,7 @@ AccessibilityUIElement::AccessibilityUIElement(
   BindProperty("selectedTextRange", &selected_text_range);
   BindProperty("isEnabled", &AccessibilityUIElement::IsEnabledGetterCallback);
   BindProperty("isRequired", &is_required_);
+  BindProperty("isSelected", &AccessibilityUIElement::IsSelectedGetterCallback);
   BindProperty("valueDescription", &value_description_);
 
   BindFallbackMethod(&AccessibilityUIElement::FallbackCallback);
@@ -268,22 +309,9 @@ AccessibilityUIElement* AccessibilityUIElement::GetChildAtIndex(
   return factory_->Create(accessibility_object().childAt(index));
 }
 
-std::string AccessibilityUIElement::GetTitle() {
-  std::string title = accessibility_object().title().utf8();
-  return title.insert(0, "AXTitle: ");
-}
-
-std::string AccessibilityUIElement::GetDescription() {
-  std::string description =
-      accessibility_object().accessibilityDescription().utf8();
-  return description.insert(0, "AXDescription: ");
-}
-
 void AccessibilityUIElement::AllAttributesCallback(
     const CppArgumentList& args, CppVariant* result) {
-  // TODO(dglazkov): Concatenate all attributes of the AccessibilityObject.
-  std::string attributes(GetTitle());
-  result->Set(attributes);
+  result->Set(GetAttributes(accessibility_object()));
 }
 
 void AccessibilityUIElement::AttributesOfLinkedUIElementsCallback(
@@ -298,7 +326,12 @@ void AccessibilityUIElement::AttributesOfDocumentLinksCallback(
 
 void AccessibilityUIElement::AttributesOfChildrenCallback(
     const CppArgumentList& args, CppVariant* result) {
-  result->SetNull();
+  AttributesCollector collector;
+  unsigned size = accessibility_object().childCount();
+  for(unsigned i = 0; i < size; ++i) {
+    collector.CollectAttributes(accessibility_object().childAt(i));
+  }
+  result->Set(collector.attributes());
 }
 
 void AccessibilityUIElement::ParametrizedAttributeNamesCallback(
@@ -409,7 +442,17 @@ void AccessibilityUIElement::AttributeValueCallback(
 
 void AccessibilityUIElement::IsAttributeSettableCallback(
     const CppArgumentList& args, CppVariant* result) {
-  result->SetNull();
+  if (args.size() < 1 && !args[0].isString()) {
+    result->SetNull();
+    return;
+  }
+
+  std::string attribute = args[0].ToString();
+  bool settable = false;
+  if (attribute == "AXValue") {
+    settable = accessibility_object().canSetValueAttribute();
+  }
+  result->Set(settable);
 }
 
 void AccessibilityUIElement::IsActionSupportedCallback(
@@ -448,19 +491,23 @@ void AccessibilityUIElement::ChildrenCountGetterCallback(CppVariant* result) {
 }
 
 void AccessibilityUIElement::DescriptionGetterCallback(CppVariant *result) {
-  result->Set(GetDescription());
+  result->Set(GetDescription(accessibility_object()));
 }
 
 void AccessibilityUIElement::IsEnabledGetterCallback(CppVariant* result) {
   result->Set(accessibility_object().isEnabled());
 }
 
+void AccessibilityUIElement::IsSelectedGetterCallback(CppVariant* result) {
+  result->SetNull();
+}
+
 void AccessibilityUIElement::RoleGetterCallback(CppVariant* result) {
-  result->Set(RoleToString(accessibility_object().roleValue()));
+  result->Set(GetRole(accessibility_object()));
 }
 
 void AccessibilityUIElement::TitleGetterCallback(CppVariant* result) {
-  result->Set(GetTitle());
+  result->Set(GetTitle(accessibility_object()));
 }
 
 

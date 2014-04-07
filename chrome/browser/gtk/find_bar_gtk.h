@@ -1,4 +1,4 @@
-// Copyright (c) 2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -15,6 +15,7 @@
 #include "chrome/common/notification_observer.h"
 #include "chrome/common/notification_registrar.h"
 #include "chrome/common/owned_widget_gtk.h"
+#include "gfx/point.h"
 
 class Browser;
 class BrowserWindowGtk;
@@ -45,7 +46,7 @@ class FindBarGtk : public FindBar,
   virtual void SetFindBarController(FindBarController* find_bar_controller) {
     find_bar_controller_ = find_bar_controller;
   }
-  virtual void Show();
+  virtual void Show(bool animate);
   virtual void Hide(bool animate);
   virtual void SetFocusAndSelection();
   virtual void ClearResults(const FindNotificationDetails& results);
@@ -56,8 +57,6 @@ class FindBarGtk : public FindBar,
   virtual void UpdateUIForFindResult(const FindNotificationDetails& result,
                                      const string16& find_text);
   virtual void AudibleAlert();
-  virtual gfx::Rect GetDialogPosition(gfx::Rect avoid_overlapping_rect);
-  virtual void SetDialogPosition(const gfx::Rect& new_pos, bool no_redraw);
   virtual bool IsFindBarVisible();
   virtual void RestoreSavedFocus();
   virtual FindBarTesting* GetFindBarTesting();
@@ -65,6 +64,7 @@ class FindBarGtk : public FindBar,
   // Methods from FindBarTesting.
   virtual bool GetFindBarWindowInfo(gfx::Point* position,
                                     bool* fully_visible);
+  virtual string16 GetFindText();
 
   // Overridden from NotificationObserver:
   virtual void Observe(NotificationType type,
@@ -92,6 +92,25 @@ class FindBarGtk : public FindBar,
 
   // Asynchronously repositions the dialog.
   void Reposition();
+
+  // Returns the rectangle representing where to position the find bar. If
+  // |avoid_overlapping_rect| is specified, the return value will be a rectangle
+  // located immediately to the left of |avoid_overlapping_rect|, as long as
+  // there is enough room for the dialog to draw within the bounds. If not, the
+  // dialog position returned will overlap |avoid_overlapping_rect|.
+  // Note: |avoid_overlapping_rect| is expected to use coordinates relative to
+  // the top of the page area, (it will be converted to coordinates relative to
+  // the top of the browser window, when comparing against the dialog
+  // coordinates). The returned value is relative to the browser window.
+  gfx::Rect GetDialogPosition(gfx::Rect avoid_overlapping_rect);
+
+  // Adjust the text alignment according to the text direction of the widget
+  // and |text_entry_|'s content, to make sure the real text alignment is
+  // always in sync with the UI language direction.
+  void AdjustTextAlignment();
+
+  // Get the position of the findbar within the floating container.
+  gfx::Point GetPosition();
 
   static void OnParentSet(GtkWidget* widget, GtkObject* old_parent,
                           FindBarGtk* find_bar);
@@ -125,6 +144,30 @@ class FindBarGtk : public FindBar,
                           FindBarGtk* find_bar);
   static gboolean OnButtonPress(GtkWidget* text_entry, GdkEventButton* e,
                                 FindBarGtk* find_bar);
+
+  // Forwards ctrl-Home/End key bindings to the renderer.
+  static void OnMoveCursor(GtkEntry* entry, GtkMovementStep step, gint count,
+                           gboolean selection, FindBarGtk* bar);
+
+  // Handles Enter key.
+  static void OnActivate(GtkEntry* entry, FindBarGtk* bar);
+
+  static void OnWidgetDirectionChanged(GtkWidget* widget,
+                                       GtkTextDirection previous_direction,
+                                       FindBarGtk* find_bar) {
+    find_bar->AdjustTextAlignment();
+  }
+
+  static void OnKeymapDirectionChanged(GdkKeymap* keymap,
+                                       FindBarGtk* find_bar) {
+    find_bar->AdjustTextAlignment();
+  }
+
+  static gboolean OnFocusIn(GtkWidget* entry, GdkEventFocus* event,
+                            FindBarGtk* find_bar);
+
+  static gboolean OnFocusOut(GtkWidget* entry, GdkEventFocus* event,
+                             FindBarGtk* find_bar);
 
   Browser* browser_;
   BrowserWindowGtk* window_;
@@ -188,7 +231,7 @@ class FindBarGtk : public FindBar,
 
   // The selection rect we are currently showing. We cache it to avoid covering
   // it up.
-  gfx::Rect selection_rect;
+  gfx::Rect selection_rect_;
 
   NotificationRegistrar registrar_;
 

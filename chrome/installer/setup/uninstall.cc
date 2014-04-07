@@ -47,6 +47,8 @@ void CloseAllChromeProcesses() {
           (GetLastError() == ERROR_TIMEOUT)) {
         base::CleanupProcesses(installer_util::kChromeExe, 0,
                                ResultCodes::HUNG, NULL);
+        base::CleanupProcesses(installer_util::kNaClExe, 0,
+                               ResultCodes::HUNG, NULL);
         return;
       }
     }
@@ -56,6 +58,8 @@ void CloseAllChromeProcesses() {
   // chrome.exe. This check is just in case Chrome is ignoring WM_CLOSE
   // messages.
   base::CleanupProcesses(installer_util::kChromeExe, 15000,
+                         ResultCodes::HUNG, NULL);
+  base::CleanupProcesses(installer_util::kNaClExe, 15000,
                          ResultCodes::HUNG, NULL);
 }
 
@@ -110,7 +114,7 @@ void DeleteChromeShortcuts(bool system_uninstall) {
     LOG(ERROR) << "Failed to get location for shortcut.";
   } else {
     BrowserDistribution* dist = BrowserDistribution::GetDistribution();
-    shortcut_path = shortcut_path.Append(dist->GetApplicationName());
+    shortcut_path = shortcut_path.Append(dist->GetAppShortCutName());
     LOG(INFO) << "Deleting shortcut " << shortcut_path.value();
     if (!file_util::Delete(shortcut_path, true))
       LOG(ERROR) << "Failed to delete folder: " << shortcut_path.value();
@@ -333,12 +337,39 @@ installer_util::InstallStatus IsChromeActiveOrUserCancelled(
 
   return installer_util::UNINSTALL_CONFIRMED;
 }
+
+bool ShouldDeleteProfile(const CommandLine& cmd_line,
+                         installer_util::InstallStatus status,
+                         bool system_uninstall) {
+  bool should_delete = false;
+
+  // Chrome Frame uninstallations always want to delete the profile (we have no
+  // UI to prompt otherwise and the profile stores no useful data anyway)
+  // unless they are managed by MSI. MSI uninstalls will explicitly include
+  // the --delete-profile flag to distinguish them from MSI upgrades.
+  if (InstallUtil::IsChromeFrameProcess() &&
+      !InstallUtil::IsMSIProcess(system_uninstall)) {
+    should_delete = true;
+  } else {
+    should_delete =
+        status == installer_util::UNINSTALL_DELETE_PROFILE ||
+        cmd_line.HasSwitch(installer_util::switches::kDeleteProfile);
+  }
+
+  return should_delete;
+}
+
 }  // namespace
 
 
 bool installer_setup::DeleteChromeRegistrationKeys(HKEY root,
     const std::wstring& browser_entry_suffix,
     installer_util::InstallStatus& exit_code) {
+  if (!BrowserDistribution::GetDistribution()->CanSetAsDefault()) {
+    // We should have never set those keys.
+    return true;
+  }
+
   RegKey key(root, L"", KEY_ALL_ACCESS);
 
   // Delete Software\Classes\ChromeHTML,
@@ -438,7 +469,8 @@ installer_util::InstallStatus installer_setup::UninstallChrome(
     // do silent uninstall. Try to close all running Chrome instances.
     if (!InstallUtil::IsChromeFrameProcess())
       CloseAllChromeProcesses();
-  } else {  // no --force-uninstall so lets show some UI dialog boxes.
+  } else if (!InstallUtil::IsChromeFrameProcess()) {
+    // no --force-uninstall so lets show some UI dialog boxes.
     status = IsChromeActiveOrUserCancelled(system_uninstall);
     if (status != installer_util::UNINSTALL_CONFIRMED &&
         status != installer_util::UNINSTALL_DELETE_PROFILE)
@@ -508,12 +540,17 @@ installer_util::InstallStatus installer_setup::UninstallChrome(
   // Delete shared registry keys as well (these require admin rights) if
   // remove_all option is specified.
   if (remove_all) {
-    // Delete media player registry key that exists only in HKLM.
-    RegKey hklm_key(HKEY_LOCAL_MACHINE, L"", KEY_ALL_ACCESS);
-    std::wstring reg_path(installer::kMediaPlayerRegPath);
-    file_util::AppendToPath(&reg_path, installer_util::kChromeExe);
-    DeleteRegistryKey(hklm_key, reg_path);
-    hklm_key.Close();
+    if (!InstallUtil::IsChromeSxSProcess() &&
+        !InstallUtil::IsChromeFrameProcess()) {
+      // Delete media player registry key that exists only in HKLM.
+      // We don't delete this key in SxS uninstall or Chrome Frame uninstall
+      // as we never set the key for those products.
+      RegKey hklm_key(HKEY_LOCAL_MACHINE, L"", KEY_ALL_ACCESS);
+      std::wstring reg_path(installer::kMediaPlayerRegPath);
+      file_util::AppendToPath(&reg_path, installer_util::kChromeExe);
+      DeleteRegistryKey(hklm_key, reg_path);
+      hklm_key.Close();
+    }
 
     if (installed_version.get()) {
       // Unregister any dll servers that we may have registered.
@@ -534,8 +571,7 @@ installer_util::InstallStatus installer_setup::UninstallChrome(
 
   // Finally delete all the files from Chrome folder after moving setup.exe
   // and the user's Local State to a temp location.
-  bool delete_profile = (status == installer_util::UNINSTALL_DELETE_PROFILE) ||
-      (cmd_line.HasSwitch(installer_util::switches::kDeleteProfile));
+  bool delete_profile = ShouldDeleteProfile(cmd_line, status, system_uninstall);
   std::wstring local_state_path;
   ret = installer_util::UNINSTALL_SUCCESSFUL;
 

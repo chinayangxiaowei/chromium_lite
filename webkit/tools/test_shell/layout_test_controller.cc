@@ -1,4 +1,4 @@
-// Copyright (c) 2006-2008 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -13,12 +13,13 @@
 #include "base/logging.h"
 #include "base/message_loop.h"
 #include "base/path_service.h"
-#include "base/string_util.h"
+#include "base/utf_string_conversions.h"
 #include "third_party/WebKit/WebKit/chromium/public/WebConsoleMessage.h"
 #include "third_party/WebKit/WebKit/chromium/public/WebFrame.h"
 #include "third_party/WebKit/WebKit/chromium/public/WebKit.h"
 #include "third_party/WebKit/WebKit/chromium/public/WebScriptSource.h"
 #include "third_party/WebKit/WebKit/chromium/public/WebSecurityPolicy.h"
+#include "third_party/WebKit/WebKit/chromium/public/WebSize.h"
 #include "third_party/WebKit/WebKit/chromium/public/WebURL.h"
 #include "third_party/WebKit/WebKit/chromium/public/WebView.h"
 #include "webkit/glue/dom_operations.h"
@@ -28,6 +29,8 @@
 #include "webkit/tools/test_shell/simple_resource_loader_bridge.h"
 #include "webkit/tools/test_shell/test_navigation_controller.h"
 #include "webkit/tools/test_shell/test_shell.h"
+#include "webkit/tools/test_shell/test_shell_devtools_agent.h"
+#include "webkit/tools/test_shell/test_webview_delegate.h"
 
 using std::string;
 using std::wstring;
@@ -49,10 +52,13 @@ bool LayoutTestController::dump_child_frame_scroll_positions_ = false;
 bool LayoutTestController::dump_child_frames_as_text_ = false;
 bool LayoutTestController::dump_window_status_changes_ = false;
 bool LayoutTestController::dump_title_changes_ = false;
+bool LayoutTestController::dump_selection_rect_ = false;
 bool LayoutTestController::accepts_editing_ = true;
 bool LayoutTestController::wait_until_done_ = false;
 bool LayoutTestController::can_open_windows_ = false;
 bool LayoutTestController::close_remaining_windows_ = true;
+bool LayoutTestController::test_repaint_ = false;
+bool LayoutTestController::sweep_horizontally_ = false;
 bool LayoutTestController::should_add_file_to_pasteboard_ = false;
 bool LayoutTestController::stop_provisional_frame_loads_ = false;
 LayoutTestController::WorkQueue LayoutTestController::work_queue_;
@@ -74,6 +80,7 @@ LayoutTestController::LayoutTestController(TestShell* shell) :
   BindMethod("dumpAsText", &LayoutTestController::dumpAsText);
   BindMethod("dumpChildFrameScrollPositions", &LayoutTestController::dumpChildFrameScrollPositions);
   BindMethod("dumpChildFramesAsText", &LayoutTestController::dumpChildFramesAsText);
+  BindMethod("dumpDatabaseCallbacks", &LayoutTestController::dumpDatabaseCallbacks);
   BindMethod("dumpEditingCallbacks", &LayoutTestController::dumpEditingCallbacks);
   BindMethod("dumpBackForwardList", &LayoutTestController::dumpBackForwardList);
   BindMethod("dumpFrameLoadCallbacks", &LayoutTestController::dumpFrameLoadCallbacks);
@@ -94,6 +101,7 @@ LayoutTestController::LayoutTestController(TestShell* shell) :
   BindMethod("setCloseRemainingWindowsWhenComplete", &LayoutTestController::setCloseRemainingWindowsWhenComplete);
   BindMethod("objCIdentityIsEqual", &LayoutTestController::objCIdentityIsEqual);
   BindMethod("setAlwaysAcceptCookies", &LayoutTestController::setAlwaysAcceptCookies);
+  BindMethod("showWebInspector", &LayoutTestController::showWebInspector);
   BindMethod("setWindowIsKey", &LayoutTestController::setWindowIsKey);
   BindMethod("setTabKeyCyclesThroughElements", &LayoutTestController::setTabKeyCyclesThroughElements);
   BindMethod("setUserStyleSheetLocation", &LayoutTestController::setUserStyleSheetLocation);
@@ -113,17 +121,24 @@ LayoutTestController::LayoutTestController(TestShell* shell) :
   BindMethod("disableImageLoading", &LayoutTestController::disableImageLoading);
   BindMethod("setIconDatabaseEnabled", &LayoutTestController::setIconDatabaseEnabled);
   BindMethod("setCustomPolicyDelegate", &LayoutTestController::setCustomPolicyDelegate);
+  BindMethod("setScrollbarPolicy", &LayoutTestController::setScrollbarPolicy);
   BindMethod("waitForPolicyDelegate", &LayoutTestController::waitForPolicyDelegate);
+  BindMethod("setWillSendRequestClearHeader", &LayoutTestController::setWillSendRequestClearHeader);
   BindMethod("setWillSendRequestReturnsNullOnRedirect", &LayoutTestController::setWillSendRequestReturnsNullOnRedirect);
+  BindMethod("setWillSendRequestReturnsNull", &LayoutTestController::setWillSendRequestReturnsNull);
   BindMethod("whiteListAccessFromOrigin", &LayoutTestController::whiteListAccessFromOrigin);
   BindMethod("clearAllDatabases", &LayoutTestController::clearAllDatabases);
+  BindMethod("setDatabaseQuota", &LayoutTestController::setDatabaseQuota);
   BindMethod("setPOSIXLocale", &LayoutTestController::setPOSIXLocale);
   BindMethod("counterValueForElementById", &LayoutTestController::counterValueForElementById);
+  BindMethod("addUserScript", &LayoutTestController::addUserScript);
+  BindMethod("pageNumberForElementById", &LayoutTestController::pageNumberForElementById);
+  BindMethod("numberOfPages", &LayoutTestController::numberOfPages);
+  BindMethod("dumpSelectionRect", &LayoutTestController::dumpSelectionRect);
 
   // The following are stubs.
   BindMethod("dumpAsWebArchive", &LayoutTestController::dumpAsWebArchive);
   BindMethod("setMainFrameIsFirstResponder", &LayoutTestController::setMainFrameIsFirstResponder);
-  BindMethod("dumpSelectionRect", &LayoutTestController::dumpSelectionRect);
   BindMethod("display", &LayoutTestController::display);
   BindMethod("testRepaint", &LayoutTestController::testRepaint);
   BindMethod("repaintSweepHorizontally", &LayoutTestController::repaintSweepHorizontally);
@@ -133,6 +148,7 @@ LayoutTestController::LayoutTestController(TestShell* shell) :
   BindMethod("accessStoredWebScriptObject", &LayoutTestController::accessStoredWebScriptObject);
   BindMethod("objCClassNameOf", &LayoutTestController::objCClassNameOf);
   BindMethod("addDisallowedURL", &LayoutTestController::addDisallowedURL);
+  BindMethod("callShouldCloseOnWebView", &LayoutTestController::callShouldCloseOnWebView);
   BindMethod("setCallCloseOnWebViews", &LayoutTestController::setCallCloseOnWebViews);
   BindMethod("setPrivateBrowsingEnabled", &LayoutTestController::setPrivateBrowsingEnabled);
   BindMethod("setUseDashboardCompatibilityMode", &LayoutTestController::setUseDashboardCompatibilityMode);
@@ -141,6 +157,10 @@ LayoutTestController::LayoutTestController(TestShell* shell) :
   BindMethod("evaluateScriptInIsolatedWorld", &LayoutTestController::evaluateScriptInIsolatedWorld);
   BindMethod("overridePreference", &LayoutTestController::overridePreference);
   BindMethod("setAllowUniversalAccessFromFileURLs", &LayoutTestController::setAllowUniversalAccessFromFileURLs);
+  BindMethod("setAllowFileAccessFromFileURLs", &LayoutTestController::setAllowFileAccessFromFileURLs);
+  BindMethod("setTimelineProfilingEnabled", &LayoutTestController::setTimelineProfilingEnabled);
+  BindMethod("evaluateInWebInspector", &LayoutTestController::evaluateInWebInspector);
+  BindMethod("forceRedSelectionColors", &LayoutTestController::forceRedSelectionColors);
 
   // The fallback method is called when an unknown method is invoked.
   BindFallbackMethod(&LayoutTestController::fallbackMethod);
@@ -203,6 +223,12 @@ void LayoutTestController::WorkQueue::AddWork(WorkItem* work) {
 void LayoutTestController::dumpAsText(const CppArgumentList& args,
                                                    CppVariant* result) {
   dump_as_text_ = true;
+  result->SetNull();
+}
+
+void LayoutTestController::dumpDatabaseCallbacks(
+    const CppArgumentList& args, CppVariant* result) {
+  // Do nothing; we don't use this flag anywhere for now
   result->SetNull();
 }
 
@@ -423,8 +449,15 @@ void LayoutTestController::objCIdentityIsEqual(
 
 void LayoutTestController::Reset() {
   if (shell_) {
-    shell_->webView()->zoomDefault();
+    shell_->webView()->setZoomLevel(false, 0);
     shell_->webView()->setTabKeyCyclesThroughElements(true);
+#if defined(TOOLKIT_GTK)
+    // (Constants copied because we can't depend on the header that defined
+    // them from this file.)
+    shell_->webView()->setSelectionColors(
+        0xff1e90ff, 0xff000000, 0xffc8c8c8, 0xff323232);
+#endif  // defined(TOOLKIT_GTK)
+    shell_->webView()->removeAllUserContent();
   }
   dump_as_text_ = false;
   dump_editing_callbacks_ = false;
@@ -434,10 +467,13 @@ void LayoutTestController::Reset() {
   dump_child_frame_scroll_positions_ = false;
   dump_child_frames_as_text_ = false;
   dump_window_status_changes_ = false;
+  dump_selection_rect_ = false;
   dump_title_changes_ = false;
   accepts_editing_ = true;
   wait_until_done_ = false;
   can_open_windows_ = false;
+  test_repaint_ = false;
+  sweep_horizontally_ = false;
   should_add_file_to_pasteboard_ = false;
   stop_provisional_frame_loads_ = false;
   globalFlag_.Set(false);
@@ -445,6 +481,9 @@ void LayoutTestController::Reset() {
 
   SimpleResourceLoaderBridge::SetAcceptAllCookies(false);
   WebSecurityPolicy::resetOriginAccessWhiteLists();
+
+  // Reset the default quota for each origin to 5MB
+  SimpleDatabaseSystem::GetInstance()->SetDatabaseQuota(5 * 1024 * 1024);
 
   setlocale(LC_ALL, "");
 
@@ -525,6 +564,12 @@ void LayoutTestController::setAlwaysAcceptCookies(
   result->SetNull();
 }
 
+void LayoutTestController::showWebInspector(
+    const CppArgumentList& args, CppVariant* result) {
+  shell_->ShowDevTools();
+  result->SetNull();
+}
+
 void LayoutTestController::setWindowIsKey(
     const CppArgumentList& args, CppVariant* result) {
   if (args.size() > 0 && args[0].isBool()) {
@@ -600,6 +645,14 @@ void LayoutTestController::setUseDashboardCompatibilityMode(
   result->SetNull();
 }
 
+
+void LayoutTestController::setScrollbarPolicy(
+    const CppArgumentList& args, CppVariant* result) {
+  // FIXME: implement.
+  // Currently only has a non-null implementation on QT.
+  result->SetNull();
+}
+
 void LayoutTestController::setCustomPolicyDelegate(
     const CppArgumentList& args, CppVariant* result) {
   if (args.size() > 0 && args[0].isBool()) {
@@ -620,10 +673,28 @@ void LayoutTestController::waitForPolicyDelegate(
   result->SetNull();
 }
 
+void LayoutTestController::setWillSendRequestClearHeader(
+    const CppArgumentList& args, CppVariant* result) {
+  if (args.size() > 0 && args[0].isString()) {
+    std::string header = args[0].ToString();
+    if (!header.empty())
+      shell_->delegate()->set_clear_header(header);
+  }
+  result->SetNull();
+}
+
 void LayoutTestController::setWillSendRequestReturnsNullOnRedirect(
     const CppArgumentList& args, CppVariant* result) {
   if (args.size() > 0 && args[0].isBool())
     shell_->delegate()->set_block_redirects(args[0].value.boolValue);
+
+  result->SetNull();
+}
+
+void LayoutTestController::setWillSendRequestReturnsNull(
+    const CppArgumentList& args, CppVariant* result) {
+  if (args.size() > 0 && args[0].isBool())
+    shell_->delegate()->set_request_return_null(args[0].value.boolValue);
 
   result->SetNull();
 }
@@ -748,6 +819,12 @@ void LayoutTestController::setIconDatabaseEnabled(const CppArgumentList& args,
   result->SetNull();
 }
 
+void LayoutTestController::callShouldCloseOnWebView(
+    const CppArgumentList& args, CppVariant* result) {
+  bool rv = shell_->webView()->dispatchBeforeUnloadEvent();
+  result->Set(rv);
+}
+
 //
 // Unimplemented stubs
 //
@@ -764,12 +841,16 @@ void LayoutTestController::setMainFrameIsFirstResponder(
 
 void LayoutTestController::dumpSelectionRect(
     const CppArgumentList& args, CppVariant* result) {
+  dump_selection_rect_ = true;
   result->SetNull();
 }
 
 void LayoutTestController::display(
     const CppArgumentList& args, CppVariant* result) {
   WebViewHost* view_host = shell_->webViewHost();
+  const WebKit::WebSize& size = view_host->webview()->size();
+  gfx::Rect rect(size.width, size.height);
+  view_host->UpdatePaintRect(rect);
   view_host->Paint();
   view_host->DisplayRepaintMask();
   result->SetNull();
@@ -777,11 +858,13 @@ void LayoutTestController::display(
 
 void LayoutTestController::testRepaint(
     const CppArgumentList& args, CppVariant* result) {
+  test_repaint_ = true;
   result->SetNull();
 }
 
 void LayoutTestController::repaintSweepHorizontally(
     const CppArgumentList& args, CppVariant* result) {
+  sweep_horizontally_ = true;
   result->SetNull();
 }
 
@@ -854,6 +937,16 @@ void LayoutTestController::setAllowUniversalAccessFromFileURLs(
   result->SetNull();
 }
 
+void LayoutTestController::setAllowFileAccessFromFileURLs(
+    const CppArgumentList& args, CppVariant* result) {
+  if (args.size() > 0 && args[0].isBool()) {
+    WebPreferences* prefs = shell_->GetWebPreferences();
+    prefs->allow_file_access_from_file_urls = args[0].value.boolValue;
+    prefs->Apply(shell_->webView());
+  }
+  result->SetNull();
+}
+
 // Need these conversions because the format of the value for booleans
 // may vary - for example, on mac "1" and "0" are used for boolean.
 bool LayoutTestController::CppVariantToBool(const CppVariant& value) {
@@ -863,9 +956,9 @@ bool LayoutTestController::CppVariantToBool(const CppVariant& value) {
     return 0 != value.ToInt32();
   else if (value.isString()) {
     std::string valueString = value.ToString();
-    if (valueString == "true")
+    if (valueString == "true" || valueString == "1")
       return true;
-    if (valueString == "false")
+    if (valueString == "false" || valueString == "0")
       return false;
   }
   LogErrorToConsole("Invalid value. Expected boolean value.");
@@ -873,7 +966,7 @@ bool LayoutTestController::CppVariantToBool(const CppVariant& value) {
 }
 
 int32 LayoutTestController::CppVariantToInt32(const CppVariant& value) {
-    if (value.isInt32())
+  if (value.isInt32())
     return value.ToInt32();
   else if (value.isString()) {
     int number;
@@ -951,6 +1044,8 @@ void LayoutTestController::overridePreference(
       preferences->application_cache_enabled = CppVariantToBool(value);
     else if (key == "WebKitTabToLinksPreferenceKey")
       preferences->tabs_to_links = CppVariantToBool(value);
+    else if (key == "WebKitWebGLEnabled")
+      preferences->experimental_webgl_enabled = CppVariantToBool(value);
     else {
       std::string message("Invalid name for preference: ");
       message.append(key);
@@ -996,6 +1091,13 @@ void LayoutTestController::clearAllDatabases(
   SimpleDatabaseSystem::GetInstance()->ClearAllDatabases();
 }
 
+void LayoutTestController::setDatabaseQuota(
+    const CppArgumentList& args, CppVariant* result) {
+  result->SetNull();
+  if ((args.size() >= 1) && args[0].isInt32())
+    SimpleDatabaseSystem::GetInstance()->SetDatabaseQuota(args[0].ToInt32());
+}
+
 void LayoutTestController::setPOSIXLocale(const CppArgumentList& args,
                                           CppVariant* result) {
   result->SetNull();
@@ -1018,9 +1120,101 @@ void LayoutTestController::counterValueForElementById(
   result->Set(WideToUTF8(counterValue));
 }
 
+static bool ParsePageSizeParameters(const CppArgumentList& args,
+                                    int arg_offset,
+                                    float* page_width_in_pixels,
+                                    float* page_height_in_pixels) {
+  // WebKit is using the window width/height of DumpRenderTree as the
+  // default value of the page size.
+  // TODO(hamaji): Once chromium DumpRenderTree is implemented,
+  //               share these values with other ports.
+  *page_width_in_pixels = 800;
+  *page_height_in_pixels = 600;
+  switch (args.size() - arg_offset) {
+  case 2:
+    if (!args[arg_offset].isNumber() || !args[1 + arg_offset].isNumber())
+      return false;
+    *page_width_in_pixels = static_cast<float>(args[arg_offset].ToInt32());
+    *page_height_in_pixels = static_cast<float>(args[1 + arg_offset].ToInt32());
+  // fall through.
+  case 0:
+    break;
+  default:
+    return false;
+  }
+  return true;
+}
+
+void LayoutTestController::pageNumberForElementById(
+    const CppArgumentList& args, CppVariant* result) {
+  result->SetNull();
+  float page_width_in_pixels = 0;
+  float page_height_in_pixels = 0;
+  if (!ParsePageSizeParameters(args, 1,
+                               &page_width_in_pixels, &page_height_in_pixels))
+    return;
+  if (!args[0].isString())
+    return;
+
+  int page_number = webkit_glue::PageNumberForElementById(
+      shell_->webView()->mainFrame(),
+      args[0].ToString(),
+      page_width_in_pixels,
+      page_height_in_pixels);
+  result->Set(page_number);
+}
+
+void LayoutTestController::numberOfPages(
+    const CppArgumentList& args, CppVariant* result) {
+  result->SetNull();
+  float page_width_in_pixels = 0;
+  float page_height_in_pixels = 0;
+  if (!ParsePageSizeParameters(args, 0,
+                               &page_width_in_pixels, &page_height_in_pixels))
+    return;
+
+  int page_number = webkit_glue::NumberOfPages(shell_->webView()->mainFrame(),
+                                               page_width_in_pixels,
+                                               page_height_in_pixels);
+  result->Set(page_number);
+}
+
 void LayoutTestController::LogErrorToConsole(const std::string& text) {
   shell_->delegate()->didAddMessageToConsole(
       WebConsoleMessage(WebConsoleMessage::LevelError,
                         WebString::fromUTF8(text)),
       WebString(), 0);
+}
+
+void LayoutTestController::setTimelineProfilingEnabled(
+    const CppArgumentList& args, CppVariant* result) {
+  result->SetNull();
+  if (args.size() < 1 || !args[0].isBool())
+    return;
+  shell_->dev_tools_agent()->setTimelineProfilingEnabled(args[0].ToBoolean());
+}
+
+void LayoutTestController::evaluateInWebInspector(const CppArgumentList& args,
+                                                  CppVariant* result) {
+  result->SetNull();
+  if (args.size() < 2 || !args[0].isInt32() || !args[1].isString())
+    return;
+  shell_->dev_tools_agent()->evaluateInWebInspector(args[0].ToInt32(),
+                                                    args[1].ToString());
+}
+
+void LayoutTestController::forceRedSelectionColors(const CppArgumentList& args,
+                                                   CppVariant* result) {
+  result->SetNull();
+  shell_->webView()->setSelectionColors(0xffee0000, 0xff00ee00, 0xff000000,
+                                        0xffc0c0c0);
+}
+
+void LayoutTestController::addUserScript(const CppArgumentList& args,
+                                         CppVariant* result) {
+  result->SetNull();
+  if (args.size() < 1 || !args[0].isString() || !args[1].isBool())
+    return;
+  shell_->webView()->addUserScript(WebString::fromUTF8(args[0].ToString()),
+                                   args[1].ToBoolean());
 }

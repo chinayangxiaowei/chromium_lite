@@ -89,7 +89,7 @@ class NavigationController {
     bool is_auto;
 
     // True if the committed entry has replaced the exisiting one.
-    // A non-user initiated redierct causes such replacement.
+    // A non-user initiated redirect causes such replacement.
     // This is somewhat similiar to is_auto, but not exactly the same.
     bool did_replace_entry;
 
@@ -131,6 +131,12 @@ class NavigationController {
 
     // Number of items removed.
     int count;
+  };
+
+  enum ReloadType {
+    NO_RELOAD,                // Normal load.
+    RELOAD,                   // Normal (cache-validating) reload.
+    RELOAD_IGNORING_CACHE     // Reload bypassing the cache, aka shift-reload.
   };
 
   // ---------------------------------------------------------------------------
@@ -175,6 +181,9 @@ class NavigationController {
   // Returns the last committed entry, which may be null if there are no
   // committed entries.
   NavigationEntry* GetLastCommittedEntry() const;
+
+  // Returns true if the source for the current entry can be viewed.
+  bool CanViewSource() const;
 
   // Returns the index of the last committed entry.
   int last_committed_entry_index() const {
@@ -283,6 +292,8 @@ class NavigationController {
   // entry has POST data the user is prompted to see if they really want to
   // reload the page. In nearly all cases pass in true.
   void Reload(bool check_for_repost);
+  // Like Reload(), but don't use caches (aka "shift-reload").
+  void ReloadIgnoringCache(bool check_for_repost);
 
   // Removing of entries -------------------------------------------------------
 
@@ -374,15 +385,27 @@ class NavigationController {
   // if it was restored from a previous session.  (-1 otherwise)
   int max_restored_page_id() const { return max_restored_page_id_; }
 
+  // The session storage namespace id that all child render views should use.
+  int64 session_storage_namespace_id() const {
+    return session_storage_namespace_id_;
+  }
+
   // Disables checking for a repost and prompting the user. This is used during
   // testing.
   static void DisablePromptOnRepost();
 
   // Maximum number of entries before we start removing entries from the front.
+#ifdef UNIT_TEST
   static void set_max_entry_count(size_t max_entry_count) {
     max_entry_count_ = max_entry_count;
   }
+#endif
   static size_t max_entry_count() { return max_entry_count_; }
+
+  // Cancels a repost that brought up a warning.
+  void CancelPendingReload();
+  // Continues a repost that brought up a warning.
+  void ContinuePendingReload();
 
  private:
   class RestoreHelper;
@@ -423,8 +446,11 @@ class NavigationController {
   bool RendererDidNavigateAutoSubframe(
       const ViewHostMsg_FrameNavigate_Params& params);
 
+  // Helper function for code shared between Reload() and ReloadAll().
+  void ReloadInternal(bool check_for_repost, ReloadType reload_type);
+
   // Actually issues the navigation held in pending_entry.
-  void NavigateToPendingEntry(bool reload);
+  void NavigateToPendingEntry(ReloadType reload_type);
 
   // Allows the derived class to issue notifications that a load has been
   // committed. This will fill in the active entry to the details structure.
@@ -440,6 +466,10 @@ class NavigationController {
 
   NavigationEntry* CreateNavigationEntry(const GURL& url, const GURL& referrer,
                                          PageTransition::Type transition);
+
+  // Updates the virtual URL of an entry to match a new URL, for cases where
+  // the real renderer URL is derived from the virtual URL, like view-source:
+  void UpdateVirtualURLToURL(NavigationEntry* entry, const GURL& new_url);
 
   // Invoked after session/tab restore or cloning a tab. Resets the transition
   // type of the entries, updates the max page id and creates the active
@@ -524,12 +554,19 @@ class NavigationController {
   // Whether a user gesture has been observed since the last navigation.
   bool user_gesture_observed_;
 
+  // The session storage id that any (indirectly) owned RenderView should use.
+  int64 session_storage_namespace_id_;
+
   // Should Reload check for post data? The default is true, but is set to false
   // when testing.
   static bool check_for_repost_;
 
   // The maximum number of entries that a navigation controller can store.
   static size_t max_entry_count_;
+
+  // If a repost is pending, its type (RELOAD or RELOAD_IGNORING_CACHE),
+  // NO_RELOAD otherwise.
+  ReloadType pending_reload_;
 
   DISALLOW_COPY_AND_ASSIGN(NavigationController);
 };

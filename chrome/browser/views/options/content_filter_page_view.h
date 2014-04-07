@@ -7,9 +7,7 @@
 
 #include "chrome/browser/views/options/options_page_view.h"
 #include "chrome/common/content_settings_types.h"
-#include "chrome/common/pref_member.h"
 #include "views/controls/button/button.h"
-#include "views/view.h"
 
 namespace views {
 class Label;
@@ -20,7 +18,7 @@ class PrefService;
 
 ////////////////////////////////////////////////////////////////////////////////
 // The ContentFilterPageView class is used to render the Images, JavaScript,
-// Plug-ins and Pop-ups pages in the Content Settings window.
+// Pop-ups and Location pages in the Content Settings window.
 
 class ContentFilterPageView : public OptionsPageView,
                               public views::ButtonListener {
@@ -40,10 +38,11 @@ class ContentFilterPageView : public OptionsPageView,
 
   // Controls for the content filter tab page.
   views::RadioButton* allow_radio_;
+  views::RadioButton* ask_radio_;
   views::RadioButton* block_radio_;
   views::NativeButton* exceptions_button_;
 
-  DISALLOW_COPY_AND_ASSIGN(ContentFilterPageView);
+  DISALLOW_IMPLICIT_CONSTRUCTORS(ContentFilterPageView);
 };
 
 #endif  // CHROME_BROWSER_VIEWS_OPTIONS_CONTENT_FILTER_PAGE_VIEW_H_

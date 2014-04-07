@@ -1,16 +1,17 @@
-// Copyright (c) 2006-2008 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/safe_browsing/protocol_manager.h"
 
+#include "base/base64.h"
+#include "base/env_var.h"
 #include "base/file_version_info.h"
 #include "base/histogram.h"
 #include "base/logging.h"
 #include "base/rand_util.h"
 #include "base/stl_util-inl.h"
 #include "base/string_util.h"
-#include "base/sys_info.h"
 #include "base/task.h"
 #include "base/timer.h"
 #include "chrome/browser/chrome_thread.h"
@@ -19,9 +20,9 @@
 #include "chrome/browser/safe_browsing/protocol_parser.h"
 #include "chrome/browser/safe_browsing/safe_browsing_service.h"
 #include "chrome/common/env_vars.h"
-#include "net/base/base64.h"
 #include "net/base/escape.h"
 #include "net/base/load_flags.h"
+#include "net/url_request/url_request_status.h"
 
 using base::Time;
 using base::TimeDelta;
@@ -221,10 +222,15 @@ void SafeBrowsingProtocolManager::OnURLFetchComplete(
         if (re_key)
           HandleReKey();
       }
-    } else if (response_code >= 300) {
+    } else {
       HandleGetHashError(Time::Now());
-      SB_DLOG(INFO) << "SafeBrowsing GetHash request for: " << source->url()
-                    << ", failed with error: " << response_code;
+      if (status.status() == URLRequestStatus::FAILED) {
+          SB_DLOG(INFO) << "SafeBrowsing GetHash request for: " << source->url()
+                        << " failed with os error: " << status.os_error();
+      } else {
+          SB_DLOG(INFO) << "SafeBrowsing GetHash request for: " << source->url()
+                        << " failed with error: " << response_code;
+      }
     }
 
     // Call back the SafeBrowsingService with full_hashes, even if there was a
@@ -286,15 +292,19 @@ void SafeBrowsingProtocolManager::OnURLFetchComplete(
           NOTREACHED();
           break;
       }
-
-    } else if (response_code >= 300) {
-      // The SafeBrowsing service error: back off.
+    } else {
+      // The SafeBrowsing service error, or very bad response code: back off.
       must_back_off = true;
       if (request_type_ == CHUNK_REQUEST)
         chunk_request_urls_.clear();
       UpdateFinished(false);
-      SB_DLOG(INFO) << "SafeBrowsing request for: " << source->url()
-                    << ", failed with error: " << response_code;
+      if (status.status() == URLRequestStatus::FAILED) {
+        SB_DLOG(INFO) << "SafeBrowsing request for: " << source->url()
+                      << " failed with os error: " << status.os_error();
+      } else {
+        SB_DLOG(INFO) << "SafeBrowsing request for: " << source->url()
+                      << " failed with error: " << response_code;
+      }
     }
   }
 
@@ -319,13 +329,12 @@ bool SafeBrowsingProtocolManager::HandleServiceResponse(const GURL& url,
       int next_update_sec = -1;
       bool re_key = false;
       bool reset = false;
-      std::vector<SBChunkDelete>* chunk_deletes =
-          new std::vector<SBChunkDelete>;
+      scoped_ptr<std::vector<SBChunkDelete> > chunk_deletes(
+          new std::vector<SBChunkDelete>);
       std::vector<ChunkUrl> chunk_urls;
       if (!parser.ParseUpdate(data, length, client_key_,
                               &next_update_sec, &re_key,
-                              &reset, chunk_deletes, &chunk_urls)) {
-        delete chunk_deletes;
+                              &reset, chunk_deletes.get(), &chunk_urls)) {
         return false;
       }
 
@@ -358,15 +367,13 @@ bool SafeBrowsingProtocolManager::HandleServiceResponse(const GURL& url,
       // database.
       if (reset) {
         sb_service_->ResetDatabase();
-        delete chunk_deletes;
         return true;
       }
 
-      // Chunks to delete from our storage.
+      // Chunks to delete from our storage.  Pass ownership of
+      // |chunk_deletes|.
       if (!chunk_deletes->empty())
-        sb_service_->HandleChunkDelete(chunk_deletes);
-      else
-        delete chunk_deletes;
+        sb_service_->HandleChunkDelete(chunk_deletes.release());
 
       break;
     }
@@ -376,17 +383,17 @@ bool SafeBrowsingProtocolManager::HandleServiceResponse(const GURL& url,
 
       const ChunkUrl chunk_url = chunk_request_urls_.front();
       bool re_key = false;
-      std::deque<SBChunk>* chunks = new std::deque<SBChunk>;
+      scoped_ptr<SBChunkList> chunks(new SBChunkList);
       UMA_HISTOGRAM_COUNTS("SB2.ChunkSize", length);
       update_size_ += length;
       if (!parser.ParseChunk(data, length,
                              client_key_, chunk_url.mac,
-                             &re_key, chunks)) {
+                             &re_key, chunks.get())) {
 #ifndef NDEBUG
         std::string data_str;
         data_str.assign(data, length);
         std::string encoded_chunk;
-        net::Base64Encode(data, &encoded_chunk);
+        base::Base64Encode(data, &encoded_chunk);
         SB_DLOG(INFO) << "ParseChunk error for chunk: " << chunk_url.url
                       << ", client_key: " << client_key_
                       << ", wrapped_key: " << wrapped_key_
@@ -394,19 +401,16 @@ bool SafeBrowsingProtocolManager::HandleServiceResponse(const GURL& url,
                       << ", Base64Encode(data): " << encoded_chunk
                       << ", length: " << length;
 #endif
-        safe_browsing_util::FreeChunks(chunks);
-        delete chunks;
         return false;
       }
 
       if (re_key)
         HandleReKey();
 
-      if (chunks->empty()) {
-        delete chunks;
-      } else {
+      // Chunks to add to storage.  Pass ownership of |chunks|.
+      if (!chunks->empty()) {
         chunk_pending_to_write_ = true;
-        sb_service_->HandleChunk(chunk_url.list_name, chunks);
+        sb_service_->HandleChunk(chunk_url.list_name, chunks.release());
       }
 
       break;
@@ -435,7 +439,8 @@ bool SafeBrowsingProtocolManager::HandleServiceResponse(const GURL& url,
 
 void SafeBrowsingProtocolManager::Initialize() {
   // Don't want to hit the safe browsing servers on build/chrome bots.
-  if (base::SysInfo::HasEnvVar(env_vars::kHeadless))
+  scoped_ptr<base::EnvVarGetter> env(base::EnvVarGetter::Create());
+  if (env->HasEnv(env_vars::kHeadless))
     return;
 
   ScheduleNextUpdate(false /* no back off */);
@@ -533,10 +538,9 @@ void SafeBrowsingProtocolManager::IssueKeyRequest() {
 void SafeBrowsingProtocolManager::OnGetChunksComplete(
     const std::vector<SBListChunkRanges>& lists, bool database_error) {
   DCHECK(request_type_ == UPDATE_REQUEST);
-
   if (database_error) {
-    ScheduleNextUpdate(false);
     UpdateFinished(false);
+    ScheduleNextUpdate(false);
     return;
   }
 
@@ -590,8 +594,8 @@ void SafeBrowsingProtocolManager::OnGetChunksComplete(
 void SafeBrowsingProtocolManager::UpdateResponseTimeout() {
   DCHECK(request_type_ == UPDATE_REQUEST);
   request_.reset();
-  ScheduleNextUpdate(false);
   UpdateFinished(false);
+  ScheduleNextUpdate(false);
 }
 
 void SafeBrowsingProtocolManager::OnChunkInserted() {
@@ -610,9 +614,9 @@ void SafeBrowsingProtocolManager::ReportMalware(const GURL& malware_url,
                                                 const GURL& referrer_url) {
   std::string report_str = StringPrintf(
       kSbMalwareReportUrl,
-      EscapeQueryParamValue(malware_url.spec()).c_str(),
-      EscapeQueryParamValue(page_url.spec()).c_str(),
-      EscapeQueryParamValue(referrer_url.spec()).c_str(),
+      EscapeQueryParamValue(malware_url.spec(), true).c_str(),
+      EscapeQueryParamValue(page_url.spec(), true).c_str(),
+      EscapeQueryParamValue(referrer_url.spec(), true).c_str(),
       client_name_.c_str(),
       version_.c_str());
   GURL report_url(report_str);

@@ -1,4 +1,4 @@
-// Copyright (c) 2006-2008 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -15,17 +15,12 @@
 #include "base/basictypes.h"
 #include "base/message_loop.h"
 #include "base/non_thread_safe.h"
+#include "base/timer.h"
 #include "base/scoped_ptr.h"
 #include "chrome/browser/automation/automation_provider_list.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/tab_contents/thumbnail_generator.h"
 #include "ipc/ipc_message.h"
-
-#if defined(OS_WIN)
-#include "sandbox/src/sandbox.h"
-#else
-#include "chrome/common/temp_scaffolding_stubs.h"
-#endif
 
 class CommandLine;
 class FilePath;
@@ -53,7 +48,7 @@ class BrowserProcessImpl : public BrowserProcess, public NonThreadSafe {
     return metrics_service_.get();
   }
 
-  virtual base::Thread* io_thread() {
+  virtual IOThread* io_thread() {
     DCHECK(CalledOnValidThread());
     if (!created_io_thread_)
       CreateIOThread();
@@ -81,7 +76,7 @@ class BrowserProcessImpl : public BrowserProcess, public NonThreadSafe {
     return process_launcher_thread_.get();
   }
 
-#if defined(OS_LINUX)
+#if defined(USE_X11)
   virtual base::Thread* background_x11_thread() {
     DCHECK(CalledOnValidThread());
     // The BACKGROUND_X11 thread is created when the IO thread is created.
@@ -104,17 +99,6 @@ class BrowserProcessImpl : public BrowserProcess, public NonThreadSafe {
       CreateLocalState();
     return local_state_.get();
   }
-
-#if defined(OS_WIN)
-  virtual sandbox::BrokerServices* broker_services() {
-    // TODO(abarth): DCHECK(CalledOnValidThread());
-    //               See <http://b/1287166>.
-    if (!initialized_broker_services_)
-      return NULL;
-    return broker_services_;
-  }
-  void InitBrokerServices(sandbox::BrokerServices* broker_services);
-#endif  // defined(OS_WIN)
 
   virtual DebuggerWrapper* debugger_wrapper() {
     DCHECK(CalledOnValidThread());
@@ -142,6 +126,13 @@ class BrowserProcessImpl : public BrowserProcess, public NonThreadSafe {
     return notification_ui_manager_.get();
   }
 
+  virtual StatusTrayManager* status_tray_manager() {
+    DCHECK(CalledOnValidThread());
+    if (!status_tray_manager_.get())
+      CreateStatusTrayManager();
+    return status_tray_manager_.get();
+  }
+
   virtual IconManager* icon_manager() {
     DCHECK(CalledOnValidThread());
     if (!created_icon_manager_)
@@ -167,21 +158,9 @@ class BrowserProcessImpl : public BrowserProcess, public NonThreadSafe {
       CreateDebuggerWrapper(port);
   }
 
-  virtual unsigned int AddRefModule() {
-    DCHECK(CalledOnValidThread());
-    module_ref_count_++;
-    return module_ref_count_;
-  }
+  virtual unsigned int AddRefModule();
 
-  virtual unsigned int ReleaseModule() {
-    DCHECK(CalledOnValidThread());
-    DCHECK(0 != module_ref_count_);
-    module_ref_count_--;
-    if (0 == module_ref_count_) {
-      MessageLoop::current()->Quit();
-    }
-    return module_ref_count_;
-  }
+  virtual unsigned int ReleaseModule();
 
   virtual bool IsShuttingDown() {
     DCHECK(CalledOnValidThread());
@@ -197,19 +176,28 @@ class BrowserProcessImpl : public BrowserProcess, public NonThreadSafe {
     return google_url_tracker_.get();
   }
 
+  virtual IntranetRedirectDetector* intranet_redirect_detector() {
+    DCHECK(CalledOnValidThread());
+    if (!intranet_redirect_detector_.get())
+      CreateIntranetRedirectDetector();
+    return intranet_redirect_detector_.get();
+  }
+
   virtual const std::string& GetApplicationLocale() {
     DCHECK(!locale_.empty());
     return locale_;
   }
-  virtual void set_application_locale(const std::string& locale) {
-    locale_ = locale;
-  }
+  virtual void SetApplicationLocale(const std::string& locale);
 
   virtual base::WaitableEvent* shutdown_event() {
     return shutdown_event_.get();
   }
 
   virtual void CheckForInspectorFiles();
+
+#if defined(OS_WIN)
+  void StartAutoupdateTimer();
+#endif  // OS_WIN
 
   virtual bool have_inspector_files() const {
     return have_inspector_files_;
@@ -228,7 +216,6 @@ class BrowserProcessImpl : public BrowserProcess, public NonThreadSafe {
   void CreateMetricsService();
 
   void CreateIOThread();
-  void ResetIOThread();
   static void CleanupOnIOThread();
 
   void CreateFileThread();
@@ -243,7 +230,9 @@ class BrowserProcessImpl : public BrowserProcess, public NonThreadSafe {
   void CreateDebuggerWrapper(int port);
   void CreateDevToolsManager();
   void CreateGoogleURLTracker();
+  void CreateIntranetRedirectDetector();
   void CreateNotificationUIManager();
+  void CreateStatusTrayManager();
 
 #if defined(IPC_MESSAGE_LOG_ENABLED)
   void SetIPCLoggingEnabledForChildProcesses(bool enabled);
@@ -256,8 +245,8 @@ class BrowserProcessImpl : public BrowserProcess, public NonThreadSafe {
   scoped_ptr<MetricsService> metrics_service_;
 
   bool created_io_thread_;
-  scoped_ptr<base::Thread> io_thread_;
-#if defined(OS_LINUX)
+  scoped_ptr<IOThread> io_thread_;
+#if defined(USE_X11)
   // This shares a created flag with the IO thread.
   scoped_ptr<base::Thread> background_x11_thread_;
 #endif
@@ -277,11 +266,6 @@ class BrowserProcessImpl : public BrowserProcess, public NonThreadSafe {
   bool created_local_state_;
   scoped_ptr<PrefService> local_state_;
 
-#if defined(OS_WIN)
-  bool initialized_broker_services_;
-  sandbox::BrokerServices* broker_services_;
-#endif  // defined(OS_WIN)
-
   bool created_icon_manager_;
   scoped_ptr<IconManager> icon_manager_;
 
@@ -297,9 +281,13 @@ class BrowserProcessImpl : public BrowserProcess, public NonThreadSafe {
   bool created_notification_ui_manager_;
   scoped_ptr<NotificationUIManager> notification_ui_manager_;
 
+  // Manager for status tray.
+  scoped_ptr<StatusTrayManager> status_tray_manager_;
+
   scoped_ptr<AutomationProviderList> automation_provider_list_;
 
   scoped_ptr<GoogleURLTracker> google_url_tracker_;
+  scoped_ptr<IntranetRedirectDetector> intranet_redirect_detector_;
 
   scoped_ptr<NotificationService> main_notification_service_;
 
@@ -325,6 +313,16 @@ class BrowserProcessImpl : public BrowserProcess, public NonThreadSafe {
   void DoInspectorFilesCheck();
   // Our best estimate about the existence of the inspector directory.
   bool have_inspector_files_;
+
+#if defined(OS_WIN)
+  base::RepeatingTimer<BrowserProcessImpl> autoupdate_timer_;
+
+  // Gets called by autoupdate timer to see if browser needs restart and can be
+  // restarted, and if that's the case, restarts the browser.
+  void OnAutoupdateTimer();
+  bool CanAutorestartForUpdate() const;
+  void RestartPersistentInstance();
+#endif  // OS_WIN
 
   DISALLOW_COPY_AND_ASSIGN(BrowserProcessImpl);
 };

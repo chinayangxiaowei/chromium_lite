@@ -4,17 +4,21 @@
 
 #include "chrome/browser/importer/nss_decryptor.h"
 
+#include <string>
+#include <vector>
+
 #include "base/scoped_ptr.h"
 #include "build/build_config.h"
 #include "chrome/common/sqlite_utils.h"
 
-#if defined(OS_LINUX)
+#if defined(USE_NSS)
 #include <pk11pub.h>
 #include <pk11sdr.h>
-#endif  // defined(OS_LINUX)
+#endif  // defined(USE_NSS)
 
+#include "base/base64.h"
 #include "base/string_util.h"
-#include "net/base/base64.h"
+#include "base/utf_string_conversions.h"
 #include "webkit/glue/password_form.h"
 
 using webkit_glue::PasswordForm;
@@ -69,7 +73,7 @@ string16 NSSDecryptor::Decrypt(const std::string& crypt) const {
   std::string plain;
   if (crypt[0] != '~') {
     std::string decoded_data;
-    net::Base64Decode(crypt, &decoded_data);
+    base::Base64Decode(crypt, &decoded_data);
     PK11SlotInfo* slot = GetKeySlotForDB();
     SECStatus result = PK11_Authenticate(slot, PR_TRUE, NULL);
     if (result != SECSuccess) {
@@ -84,11 +88,11 @@ string16 NSSDecryptor::Decrypt(const std::string& crypt) const {
     SECItem reply;
     reply.data = NULL;
     reply.len = 0;
-#if defined(OS_LINUX)
+#if defined(USE_NSS)
     result = PK11SDR_DecryptWithSlot(slot, &request, &reply, NULL);
 #else
     result = PK11SDR_Decrypt(&request, &reply, NULL);
-#endif  // defined(OS_LINUX)
+#endif  // defined(USE_NSS)
     if (result == SECSuccess)
       plain.assign(reinterpret_cast<char*>(reply.data), reply.len);
 
@@ -96,7 +100,7 @@ string16 NSSDecryptor::Decrypt(const std::string& crypt) const {
     FreeSlot(slot);
   } else {
     // Deletes the leading '~' before decoding.
-    net::Base64Decode(crypt.substr(1), &plain);
+    base::Base64Decode(crypt.substr(1), &plain);
   }
 
   return UTF8ToUTF16(plain);

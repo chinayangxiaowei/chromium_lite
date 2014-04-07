@@ -6,12 +6,12 @@
 
 #include <math.h>
 
-#include "app/gfx/gtk_util.h"
 #include "app/l10n_util.h"
+#include "chrome/browser/gtk/gtk_util.h"
 #include "chrome/browser/gtk/rounded_window.h"
-#include "chrome/common/gtk_util.h"
 #include "chrome/common/notification_service.h"
 #include "chrome/common/notification_type.h"
+#include "gfx/gtk_util.h"
 #include "grit/generated_resources.h"
 
 // Roundedness of bubble.
@@ -88,15 +88,18 @@ void ThemeInstallBubbleViewGtk::InitWidgets() {
   gtk_container_set_border_width(GTK_CONTAINER(widget_), kTextPadding);
   GtkWidget* label = gtk_label_new(NULL);
 
-  // Need our own copy of the "Loading..." string: http://crbug.com/24177
   gchar* markup = g_markup_printf_escaped(
       "<span size='xx-large'>%s</span>",
-      l10n_util::GetStringUTF8(IDS_TAB_LOADING_TITLE).c_str());
+      l10n_util::GetStringUTF8(IDS_THEME_LOADING_TITLE).c_str());
   gtk_label_set_markup(GTK_LABEL(label), markup);
   g_free(markup);
 
   gtk_widget_modify_fg(label, GTK_STATE_NORMAL, &gfx::kGdkWhite);
   gtk_container_add(GTK_CONTAINER(widget_), label);
+
+  // We need to show the label so we'll know the widget's actual size when we
+  // call MoveWindow().
+  gtk_widget_show_all(label);
 
   bool composited = false;
   if (gtk_util::IsScreenComposited()) {

@@ -5,11 +5,13 @@
 #include "net/ftp/ftp_directory_listing_buffer.h"
 
 #include "base/file_util.h"
+#include "base/format_macros.h"
 #include "base/path_service.h"
 #include "base/string_tokenizer.h"
 #include "base/string_util.h"
+#include "base/utf_string_conversions.h"
 #include "net/base/net_errors.h"
-#include "net/ftp/ftp_directory_listing_parsers.h"
+#include "net/ftp/ftp_directory_listing_parser.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 namespace {
@@ -21,12 +23,30 @@ TEST(FtpDirectoryListingBufferTest, Parse) {
     "dir-listing-ls-2",
     "dir-listing-ls-3",
     "dir-listing-ls-4",
-    "dir-listing-windows-1",
-    "dir-listing-windows-2",
+    "dir-listing-ls-5",
+    "dir-listing-ls-6",
+    "dir-listing-ls-7",
+    "dir-listing-ls-8",
+    "dir-listing-ls-9",
+    "dir-listing-ls-10",
+    "dir-listing-ls-11",
+    "dir-listing-ls-12",
+    "dir-listing-ls-13",
+    "dir-listing-ls-14",
+    "dir-listing-ls-15",
+    "dir-listing-ls-16",
+    "dir-listing-ls-17",
+    "dir-listing-mlsd-1",
+    "dir-listing-mlsd-2",
+    "dir-listing-netware-1",
+    "dir-listing-netware-2",
     "dir-listing-vms-1",
     "dir-listing-vms-2",
     "dir-listing-vms-3",
     "dir-listing-vms-4",
+    "dir-listing-vms-5",
+    "dir-listing-windows-1",
+    "dir-listing-windows-2",
   };
 
   FilePath test_dir;
@@ -35,10 +55,14 @@ TEST(FtpDirectoryListingBufferTest, Parse) {
   test_dir = test_dir.AppendASCII("data");
   test_dir = test_dir.AppendASCII("ftp");
 
-  for (size_t i = 0; i < arraysize(test_files); i++) {
-    SCOPED_TRACE(StringPrintf("Test[%d]: %s", i, test_files[i]));
+  base::Time mock_current_time;
+  ASSERT_TRUE(base::Time::FromString(L"Tue, 15 Nov 1994 12:45:26 GMT",
+                                     &mock_current_time));
 
-    net::FtpDirectoryListingBuffer buffer;
+  for (size_t i = 0; i < arraysize(test_files); i++) {
+    SCOPED_TRACE(StringPrintf("Test[%" PRIuS "]: %s", i, test_files[i]));
+
+    net::FtpDirectoryListingBuffer buffer(mock_current_time);
 
     std::string test_listing;
     EXPECT_TRUE(file_util::ReadFileToString(test_dir.AppendASCII(test_files[i]),
@@ -66,14 +90,7 @@ TEST(FtpDirectoryListingBufferTest, Parse) {
 
       SCOPED_TRACE(StringPrintf("Filename: %s", name.c_str()));
 
-      int year;
-      if (lines[8 * i + 3] == "current") {
-        base::Time::Exploded now_exploded;
-        base::Time::Now().LocalExplode(&now_exploded);
-        year = now_exploded.year;
-      } else {
-        year = StringToInt(lines[8 * i + 3]);
-      }
+      int year = StringToInt(lines[8 * i + 3]);
       int month = StringToInt(lines[8 * i + 4]);
       int day_of_month = StringToInt(lines[8 * i + 5]);
       int hour = StringToInt(lines[8 * i + 6]);

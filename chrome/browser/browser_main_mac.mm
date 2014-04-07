@@ -1,4 +1,4 @@
-// Copyright (c) 2008 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -18,9 +18,8 @@
 #import "chrome/browser/cocoa/keystone_glue.h"
 #include "chrome/browser/metrics/metrics_service.h"
 #include "chrome/common/main_function_params.h"
+#include "chrome/common/notification_service.h"
 #include "chrome/common/result_codes.h"
-
-namespace Platform {
 
 // Tell Cooca to finish its initalization, which we want to do manually
 // instead of calling NSApplicationMain(). The primary reason is that NSAM()
@@ -33,26 +32,37 @@ void WillInitializeMainMessageLoop(const MainFunctionParams& parameters) {
   // Initialize NSApplication using the custom subclass.
   [BrowserCrApplication sharedApplication];
 
-  // Before we load the nib, we need to start up the resource bundle so we have
-  // the strings avaiable for localization.
+  // If ui_task is not NULL, the app is actually a browser_test, so startup is
+  // handled outside of BrowserMain (which is what called this).
   if (!parameters.ui_task) {
+    // The browser process only wants to support the language Cocoa will use, so
+    // force the app locale to be overriden with that value.
+    l10n_util::OverrideLocaleWithCocoaLocale();
+
+    // Before we load the nib, we need to start up the resource bundle so we
+    // have the strings avaiable for localization.
     ResourceBundle::InitSharedInstance(std::wstring());
   }
+
   // Now load the nib.
   [NSBundle loadNibNamed:@"MainMenu" owner:NSApp];
-
-  // The browser process only wants to support the language Cocoa will use, so
-  // force the app locale to be overriden with that value.
-  l10n_util::OverrideLocaleWithCocoaLocale();
 
   // This is a no-op if the KeystoneRegistration framework is not present.
   // The framework is only distributed with branded Google Chrome builds.
   [[KeystoneGlue defaultKeystoneGlue] registerWithKeystone];
+
+  // Prevent Cocoa from turning command-line arguments into
+  // |-application:openFiles:|, since we already handle them directly.
+  [[NSUserDefaults standardUserDefaults]
+      setObject:@"NO" forKey:@"NSTreatUnknownArgumentsAsOpen"];
 }
 
 void DidEndMainMessageLoop() {
   AppController* appController = [NSApp delegate];
   [appController didEndMainMessageLoop];
+  NotificationService::current()->Notify(NotificationType::APP_TERMINATING,
+                                         NotificationService::AllSources(),
+                                         NotificationService::NoDetails());
 }
 
 void RecordBreakpadStatusUMA(MetricsService* metrics) {
@@ -60,20 +70,14 @@ void RecordBreakpadStatusUMA(MetricsService* metrics) {
   metrics->RecordBreakpadHasDebugger(DebugUtil::BeingDebugged());
 }
 
-}  // namespace Platform
+void WarnAboutMinimumSystemRequirements() {
+  // Nothing to check for on Mac right now.
+}
 
 // From browser_main_win.h, stubs until we figure out the right thing...
 
 int DoUninstallTasks(bool chrome_still_running) {
   return ResultCodes::NORMAL_EXIT;
-}
-
-bool DoUpgradeTasks(const CommandLine& command_line) {
-  return false;
-}
-
-bool CheckForWin2000() {
-  return false;
 }
 
 int HandleIconsCommands(const CommandLine& parsed_command_line) {

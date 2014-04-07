@@ -48,7 +48,9 @@ class ChromeURLDataManager {
     // Sent by the DataManager to request data at |path|.  The source should
     // call SendResponse() when the data is available or if the request could
     // not be satisfied.
-    virtual void StartDataRequest(const std::string& path, int request_id) = 0;
+    virtual void StartDataRequest(const std::string& path,
+                                  bool is_off_the_record,
+                                  int request_id) = 0;
 
     // Return the mimetype that should be sent with this response, or empty
     // string to specify no mime type.
@@ -57,7 +59,7 @@ class ChromeURLDataManager {
     // Report that a request has resulted in the data |bytes|.
     // If the request can't be satisfied, pass NULL for |bytes| to indicate
     // the request is over.
-    void SendResponse(int request_id, RefCountedMemory* bytes);
+    virtual void SendResponse(int request_id, RefCountedMemory* bytes);
 
     // Returns the MessageLoop on which the DataSource wishes to have
     // StartDataRequest called to handle the request for |path|.  If the

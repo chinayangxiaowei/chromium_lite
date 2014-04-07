@@ -11,7 +11,7 @@
 #include "base/message_loop.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/common/chrome_switches.h"
-#include "chrome/common/render_messages.h"
+#include "chrome/common/utility_messages.h"
 #include "ipc/ipc_switches.h"
 
 UtilityProcessHost::UtilityProcessHost(ResourceDispatcherHost* rdh,
@@ -52,17 +52,10 @@ bool UtilityProcessHost::StartUpdateManifestParse(const std::string& xml) {
 }
 
 FilePath UtilityProcessHost::GetUtilityProcessCmd() {
-  return GetChildPath();
+  return GetChildPath(true);
 }
 
 bool UtilityProcessHost::StartProcess(const FilePath& exposed_dir) {
-#if defined(OS_POSIX)
-  // TODO(port): We should not reach here on Linux (crbug.com/22703).
-  // (crbug.com/23837) covers enabling this on Linux/OS X.
-  NOTREACHED();
-  return false;
-#endif
-
   // Name must be set or metrics_service will crash in any test which
   // launches a UtilityProcessHost.
   set_name(L"utility process");
@@ -82,13 +75,21 @@ bool UtilityProcessHost::StartProcess(const FilePath& exposed_dir) {
   cmd_line->AppendSwitchWithValue(switches::kProcessChannelID,
                                   ASCIIToWide(channel_id()));
   std::string locale = g_browser_process->GetApplicationLocale();
-  cmd_line->AppendSwitchWithValue(switches::kLang, ASCIIToWide(locale));
+  cmd_line->AppendSwitchWithValue(switches::kLang, locale);
 
   SetCrashReporterCommandLine(cmd_line);
 
   const CommandLine& browser_command_line = *CommandLine::ForCurrentProcess();
   if (browser_command_line.HasSwitch(switches::kChromeFrame))
     cmd_line->AppendSwitch(switches::kChromeFrame);
+
+  if (browser_command_line.HasSwitch(switches::kEnableExtensionApps))
+    cmd_line->AppendSwitch(switches::kEnableExtensionApps);
+
+  if (browser_command_line.HasSwitch(
+      switches::kEnableExperimentalExtensionApis)) {
+    cmd_line->AppendSwitch(switches::kEnableExperimentalExtensionApis);
+  }
 
 #if defined(OS_POSIX)
   // TODO(port): Sandbox this on Linux.  Also, zygote this to work with
@@ -110,6 +111,7 @@ bool UtilityProcessHost::StartProcess(const FilePath& exposed_dir) {
 #if defined(OS_WIN)
       exposed_dir,
 #elif defined(OS_POSIX)
+      false,
       base::environment_vector(),
 #endif
       cmd_line);

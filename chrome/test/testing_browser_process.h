@@ -1,4 +1,4 @@
-// Copyright (c) 2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -19,6 +19,8 @@
 #include "base/waitable_event.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/common/notification_service.h"
+
+class IOThread;
 
 class TestingBrowserProcess : public BrowserProcess {
  public:
@@ -41,7 +43,7 @@ class TestingBrowserProcess : public BrowserProcess {
     return NULL;
   }
 
-  virtual base::Thread* io_thread() {
+  virtual IOThread* io_thread() {
     return NULL;
   }
 
@@ -79,15 +81,6 @@ class TestingBrowserProcess : public BrowserProcess {
     return NULL;
   }
 
-#if defined(OS_WIN)
-  virtual sandbox::BrokerServices* broker_services() {
-    return NULL;
-  }
-
-  virtual void InitBrokerServices(sandbox::BrokerServices*) {
-  }
-#endif
-
   virtual DebuggerWrapper* debugger_wrapper() {
     return NULL;
   }
@@ -108,7 +101,15 @@ class TestingBrowserProcess : public BrowserProcess {
     return NULL;
   }
 
+  virtual StatusTrayManager* status_tray_manager() {
+    return NULL;
+  }
+
   virtual GoogleURLTracker* google_url_tracker() {
+    return NULL;
+  }
+
+  virtual IntranetRedirectDetector* intranet_redirect_detector() {
     return NULL;
   }
 
@@ -138,7 +139,7 @@ class TestingBrowserProcess : public BrowserProcess {
     return app_locale_;
   }
 
-  virtual void set_application_locale(const std::string& app_locale) {
+  virtual void SetApplicationLocale(const std::string& app_locale) {
     app_locale_ = app_locale;
   }
 
@@ -147,6 +148,11 @@ class TestingBrowserProcess : public BrowserProcess {
   }
 
   virtual void CheckForInspectorFiles() {}
+
+#if defined(OS_WIN)
+  virtual void StartAutoupdateTimer() {}
+#endif  // OS_WIN
+
   virtual bool have_inspector_files() const { return true; }
 #if defined(IPC_MESSAGE_LOG_ENABLED)
   virtual void SetIPCLoggingEnabled(bool enable) {}

@@ -13,9 +13,9 @@
 #include <vector>
 
 #include "app/clipboard/clipboard.h"
-#include "app/gfx/native_widget_types.h"
+#include "app/surface/transport_dib.h"
+#include "base/callback.h"
 #include "base/file_path.h"
-#include "base/gfx/rect.h"
 #include "base/process.h"
 #include "base/ref_counted.h"
 #include "base/shared_memory.h"
@@ -24,13 +24,14 @@
 #include "build/build_config.h"
 #include "chrome/browser/net/resolve_proxy_msg_helper.h"
 #include "chrome/browser/renderer_host/resource_dispatcher_host.h"
-#include "chrome/browser/renderer_host/translation_service.h"
 #include "chrome/common/nacl_types.h"
 #include "chrome/common/notification_registrar.h"
 #include "chrome/common/render_messages.h"
-#include "chrome/common/transport_dib.h"
+#include "gfx/native_widget_types.h"
+#include "gfx/rect.h"
 #include "ipc/ipc_channel_proxy.h"
 #include "third_party/WebKit/WebKit/chromium/public/WebCache.h"
+#include "third_party/WebKit/WebKit/chromium/public/WebPopupType.h"
 
 class AppCacheDispatcherHost;
 class AudioRendererHost;
@@ -38,14 +39,18 @@ class ChromeURLRequestContext;
 class DatabaseDispatcherHost;
 class DOMStorageDispatcherHost;
 class ExtensionMessageService;
+class GeolocationDispatcherHost;
+class HostZoomMap;
 class NotificationsPrefsCache;
 class Profile;
 class RenderWidgetHelper;
-class SocketStreamDispatcherHost;
-class SpellChecker;
 class URLRequestContextGetter;
-struct ViewHostMsg_Audio_CreateStream;
+struct ViewHostMsg_CreateWorker_Params;
 struct WebPluginInfo;
+
+namespace file_util {
+struct FileInfo;
+}
 
 namespace printing {
 class PrinterQuery;
@@ -61,8 +66,7 @@ struct WebScreenInfo;
 }
 
 struct ViewHostMsg_ScriptedPrint_Params;
-struct ViewMsg_OpenFileForPluginResponse_Params;
-#if defined(OS_LINUX)
+#if defined(OS_POSIX) && !defined(OS_MACOSX)
 struct ViewHostMsg_DidPrintPage_Params;
 #endif
 
@@ -78,10 +82,6 @@ class ResourceMessageFilter : public IPC::ChannelProxy::MessageFilter,
                               public ResolveProxyMsgHelper::Delegate {
  public:
   // Create the filter.
-  // Note:  because the lifecycle of the ResourceMessageFilter is not
-  //        tied to the lifecycle of the object which created it, the
-  //        ResourceMessageFilter is 'given' ownership of the spellchecker
-  //        object and must clean it up on exit.
   ResourceMessageFilter(ResourceDispatcherHost* resource_dispatcher_host,
                         int child_id,
                         AudioRendererHost* audio_renderer_host,
@@ -89,7 +89,7 @@ class ResourceMessageFilter : public IPC::ChannelProxy::MessageFilter,
                         printing::PrintJobManager* print_job_manager,
                         Profile* profile,
                         RenderWidgetHelper* render_widget_helper,
-                        SpellChecker* spellchecker);
+                        URLRequestContextGetter* request_context);
 
   // IPC::ChannelProxy::MessageFilter methods:
   virtual void OnFilterAdded(IPC::Channel* channel);
@@ -105,7 +105,6 @@ class ResourceMessageFilter : public IPC::ChannelProxy::MessageFilter,
       uint32 request_id,
       const ViewHostMsg_Resource_Request& request_data);
 
-  SpellChecker* spellchecker() { return spellchecker_.get(); }
   ResourceDispatcherHost* resource_dispatcher_host() {
     return resource_dispatcher_host_;
   }
@@ -127,11 +126,17 @@ class ResourceMessageFilter : public IPC::ChannelProxy::MessageFilter,
  private:
   friend class ChromeThread;
   friend class DeleteTask<ResourceMessageFilter>;
+  typedef void (*FileInfoWriteFunc)(IPC::Message* reply_msg,
+                                    const file_util::FileInfo& file_info);
 
   virtual ~ResourceMessageFilter();
 
-  void OnMsgCreateWindow(int opener_id, bool user_gesture, int* route_id);
-  void OnMsgCreateWidget(int opener_id, bool activatable, int* route_id);
+  void OnMsgCreateWindow(int opener_id, bool user_gesture,
+                         int64 session_storage_namespace_id, int* route_id,
+                         int64* cloned_session_storage_namespace_id);
+  void OnMsgCreateWidget(int opener_id,
+                         WebKit::WebPopupType popup_type,
+                         int* route_id);
   void OnSetCookie(const IPC::Message& message,
                    const GURL& url,
                    const GURL& first_party_for_cookies,
@@ -144,6 +149,9 @@ class ResourceMessageFilter : public IPC::ChannelProxy::MessageFilter,
                        IPC::Message* reply_msg);
   void OnDeleteCookie(const GURL& url,
                       const std::string& cookieName);
+  void OnGetCookiesEnabled(const GURL& url,
+                           const GURL& first_party_for_cookies,
+                           bool* enabled);
   void OnPluginFileDialog(const IPC::Message& msg,
                           bool multiple_files,
                           const std::wstring& title,
@@ -174,14 +182,10 @@ class ResourceMessageFilter : public IPC::ChannelProxy::MessageFilter,
   void OnLaunchNaCl(const std::wstring& url,
                     int channel_descriptor,
                     IPC::Message* reply_msg);
-  void OnCreateWorker(const GURL& url,
-                      bool is_shared,
-                      const string16& name,
-                      int render_view_route_id,
+  void OnCreateWorker(const ViewHostMsg_CreateWorker_Params& params,
                       int* route_id);
-  void OnLookupSharedWorker(const GURL& url,
-                            const string16& name,
-                            unsigned long long document_id,
+  void OnLookupSharedWorker(const ViewHostMsg_CreateWorker_Params& params,
+                            bool* exists,
                             int* route_id,
                             bool* url_error);
   void OnDocumentDetached(unsigned long long document_id);
@@ -190,11 +194,11 @@ class ResourceMessageFilter : public IPC::ChannelProxy::MessageFilter,
   void OnDownloadUrl(const IPC::Message& message,
                      const GURL& url,
                      const GURL& referrer);
-  void OnSpellCheck(const string16& word, int tag, IPC::Message* reply_msg);
+  void OnPlatformCheckSpelling(const string16& word, int tag, bool* correct);
+  void OnPlatformFillSuggestionList(const string16& word,
+                                    std::vector<string16>* suggestions);
   void OnGetDocumentTag(IPC::Message* reply_msg);
   void OnDocumentWithTagClosed(int tag);
-  void OnGetAutoCorrectWord(const string16& word, int tag,
-                            IPC::Message* reply_msg);
   void OnShowSpellingPanel(bool show);
   void OnUpdateSpellingPanelWithMisspelledWord(const string16& word);
   void OnDnsPrefetch(const std::vector<std::string>& hostnames);
@@ -205,7 +209,9 @@ class ResourceMessageFilter : public IPC::ChannelProxy::MessageFilter,
 #endif
   void OnReceiveContextMenuMsg(const IPC::Message& msg);
   // Clipboard messages
-  void OnClipboardWriteObjects(const Clipboard::ObjectMap& objects);
+  void OnClipboardWriteObjectsAsync(const Clipboard::ObjectMap& objects);
+  void OnClipboardWriteObjectsSync(const Clipboard::ObjectMap& objects,
+                                   base::SharedMemoryHandle bitmap_handle);
 
   void OnClipboardIsFormatAvailable(Clipboard::FormatType format,
                                     Clipboard::Buffer buffer,
@@ -217,7 +223,7 @@ class ResourceMessageFilter : public IPC::ChannelProxy::MessageFilter,
   void OnClipboardFindPboardWriteString(const string16& text);
 #endif
 
-  void OnCheckNotificationPermission(const GURL& origin,
+  void OnCheckNotificationPermission(const GURL& source_url,
                                      int* permission_level);
 
 #if !defined(OS_MACOSX)
@@ -239,17 +245,19 @@ class ResourceMessageFilter : public IPC::ChannelProxy::MessageFilter,
                           base::SharedMemoryHandle* browser_handle);
 #endif
 
-#if defined(OS_LINUX)
+#if defined(OS_POSIX) && !defined(OS_MACOSX)
   // Used to ask the browser allocate a temporary file for the renderer
   // to fill in resulting PDF in renderer.
   void OnAllocateTempFileForPrinting(IPC::Message* reply_msg);
   void OnTempFileForPrintingWritten(int fd_in_browser);
 #endif
-#if defined(OS_MACOSX)
+
+#if defined(OS_POSIX)
   // Used to ask the browser to allocate a block of shared memory for the
-  // renderer to send PDF across in.
-  void OnAllocatePDFTransport(size_t buffer_size,
-                              base::SharedMemoryHandle* handle);
+  // renderer to send back data in, since shared memory can't be created
+  // in the renderer on POSIX due to the sandbox.
+  void OnAllocateSharedMemoryBuffer(uint32 buffer_size,
+                                    base::SharedMemoryHandle* handle);
 #endif
 
   void OnResourceTypeStats(const WebKit::WebCache::ResourceTypeStats& stats);
@@ -260,6 +268,9 @@ class ResourceMessageFilter : public IPC::ChannelProxy::MessageFilter,
   static void OnV8HeapStatsOnUIThread(int v8_memory_allocated,
                                       int v8_memory_used,
                                       base::ProcessId renderer_id);
+
+  void OnDidZoomHost(const std::string& host, int zoom_level);
+  void UpdateHostZoomLevelsOnUIThread(const std::string& host, int zoom_level);
 
   void OnResolveProxy(const GURL& url, IPC::Message* reply_msg);
 
@@ -288,6 +299,7 @@ class ResourceMessageFilter : public IPC::ChannelProxy::MessageFilter,
 #endif
   // Browser side transport DIB allocation
   void OnAllocTransportDIB(size_t size,
+                           bool cache_in_browser,
                            TransportDIB::Handle* result);
   void OnFreeTransportDIB(TransportDIB::Id dib_id);
 
@@ -299,25 +311,27 @@ class ResourceMessageFilter : public IPC::ChannelProxy::MessageFilter,
                           const std::string& extension_id,
                           const std::string& channel_name, int* port_id);
 
-  void OnCloseIdleConnections();
+  void OnCloseCurrentConnections();
   void OnSetCacheMode(bool enabled);
 
   void OnGetFileSize(const FilePath& path, IPC::Message* reply_msg);
-  void OnGetFileSizeOnFileThread(const FilePath& path, IPC::Message* reply_msg);
+  void OnGetFileModificationTime(const FilePath& path, IPC::Message* reply_msg);
+  void OnGetFileInfoOnFileThread(const FilePath& path,
+                                 IPC::Message* reply_msg,
+                                 FileInfoWriteFunc write_func);
   void OnKeygen(uint32 key_size_index, const std::string& challenge_string,
                 const GURL& url, std::string* signed_public_key);
-  void OnOpenFileForPlugin(const FilePath& file_path,
-                           ViewMsg_OpenFileForPluginResponse_Params* result);
   void OnGetExtensionMessageBundle(const std::string& extension_id,
                                    IPC::Message* reply_msg);
   void OnGetExtensionMessageBundleOnFileThread(
       const FilePath& extension_path,
+      const std::string& extension_id,
       const std::string& default_locale,
       IPC::Message* reply_msg);
+  void OnEstablishGpuChannel();
+  void OnSynchronizeGpu(IPC::Message* reply);
 
-  void OnTranslateText(ViewHostMsg_TranslateTextParam param);
-
-#if defined(OS_LINUX)
+#if defined(USE_X11)
   void SendDelayedReply(IPC::Message* reply_msg);
   void DoOnGetScreenInfo(gfx::NativeViewId view, IPC::Message* reply_msg);
   void DoOnGetWindowRect(gfx::NativeViewId view, IPC::Message* reply_msg);
@@ -353,14 +367,9 @@ class ResourceMessageFilter : public IPC::ChannelProxy::MessageFilter,
   PluginService* plugin_service_;
   printing::PrintJobManager* print_job_manager_;
 
-  // ID for the RenderProcessHost that corresponds to this channel.  This is
-  // used by the ResourceDispatcherHost to look up the TabContents that
-  // originated URLRequest.  Since the RenderProcessHost can be destroyed
-  // before this object, we only hold an ID for lookup.
-  int child_id_;
-
-  // Our spellchecker object.
-  scoped_refptr<SpellChecker> spellchecker_;
+  // The Profile associated with our renderer process.  This should only be
+  // accessed on the UI thread!
+  Profile* profile_;
 
   // Helper class for handling PluginProcessHost_ResolveProxy messages (manages
   // the requests to the proxy service).
@@ -377,16 +386,6 @@ class ResourceMessageFilter : public IPC::ChannelProxy::MessageFilter,
 
   // Used for routing extension messages.
   scoped_refptr<ExtensionMessageService> extensions_message_service_;
-
-  // A pointer to the profile associated with this filter.
-  //
-  // DANGER! Do not dereference this pointer! This class lives on the I/O thread
-  // and the profile may only be used on the UI thread. It is used only for
-  // determining which notifications to watch for.
-  //
-  // This is void* to prevent people from accidentally dereferencing it.
-  // When registering for observers, cast to Profile*.
-  void* profile_;
 
   scoped_refptr<RenderWidgetHelper> render_widget_helper_;
 
@@ -406,8 +405,8 @@ class ResourceMessageFilter : public IPC::ChannelProxy::MessageFilter,
   // Desktop Notifications permission messages.
   scoped_refptr<NotificationsPrefsCache> notification_prefs_;
 
-  // Handles Socket Stream related messages.
-  scoped_ptr<SocketStreamDispatcherHost> socket_stream_dispatcher_host_;
+  // Handles zoom-related messages.
+  scoped_refptr<HostZoomMap> host_zoom_map_;
 
   // Whether this process is used for off the record tabs.
   bool off_the_record_;
@@ -415,8 +414,8 @@ class ResourceMessageFilter : public IPC::ChannelProxy::MessageFilter,
   // A callback to create a routing id for the associated renderer process.
   scoped_ptr<CallbackWithReturnValue<int>::Type> next_route_id_callback_;
 
-  // Used to translate page contents from one language to another.
-  TranslationService translation_service_;
+  // Used to handle geolocation-related messages.
+  scoped_refptr<GeolocationDispatcherHost> geolocation_dispatcher_host_;
 
   DISALLOW_COPY_AND_ASSIGN(ResourceMessageFilter);
 };

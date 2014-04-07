@@ -1,4 +1,4 @@
-// Copyright (c) 2009 The chrome Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -75,9 +75,13 @@ var chrome = chrome || {};
         };
       }
 
+      if (request.customCallback) {
+        request.customCallback(name, request, response);
+      }
+
       if (request.callback) {
         // Callbacks currently only support one callback argument.
-        var callbackArgs = response ? [JSON.parse(response)] : [];
+        var callbackArgs = response ? [chromeHidden.JSON.parse(response)] : [];
 
         // Validate callback in debug only -- and only when the
         // caller has provided a callback. Implementations of api
@@ -160,30 +164,21 @@ var chrome = chrome || {};
   }
 
   // Send an API request and optionally register a callback.
-  function sendRequest(functionName, args, argSchemas) {
+  function sendRequest(functionName, args, argSchemas, customCallback) {
     var request = prepareRequest(args, argSchemas);
+    if (customCallback) {
+      request.customCallback = customCallback;
+    }
     // JSON.stringify doesn't support a root object which is undefined.
     if (request.args === undefined)
       request.args = null;
 
-    // Some javascript libraries (e.g. prototype.js version <= 1.6) add a toJSON
-    // serializer function on Array.prototype that is incompatible with our
-    // native JSON library, causing incorrect deserialization in the C++ side of
-    // StartRequest. We work around that here by temporarily removing the toJSON
-    // function.
-    var arrayToJsonTmp;
-    if (Array.prototype.toJSON) {
-      arrayToJsonTmp = Array.prototype.toJSON;
-      Array.prototype.toJSON = null;
-    }
-    var sargs = JSON.stringify(request.args);
-    if (arrayToJsonTmp) {
-      Array.prototype.toJSON = arrayToJsonTmp;
-    }
+    var sargs = chromeHidden.JSON.stringify(request.args);
+
     var requestId = GetNextRequestId();
     requests[requestId] = request;
-    return StartRequest(functionName, sargs, requestId,
-                        request.callback ? true : false);
+    var hasCallback = (request.callback || customCallback) ? true : false;
+    return StartRequest(functionName, sargs, requestId, hasCallback);
   }
 
   // Send a special API request that is not JSON stringifiable, and optionally
@@ -284,6 +279,25 @@ var chrome = chrome || {};
       new chrome.Event("experimental.popup.onClosed." + renderViewId);
   }
 
+  function setupHiddenContextMenuEvent(extensionId) {
+    var eventName = "contextMenu/" + extensionId;
+    chromeHidden.contextMenuEvent = new chrome.Event(eventName);
+    chromeHidden.contextMenuHandlers = {};
+    chromeHidden.contextMenuEvent.addListener(function() {
+      var menuItemId = arguments[0].menuItemId;
+      var onclick = chromeHidden.contextMenuHandlers[menuItemId];
+      if (onclick) {
+        onclick.apply(onclick, arguments);
+      }
+
+      var parentMenuItemId = arguments[0].parentMenuItemId;
+      var parentOnclick = chromeHidden.contextMenuHandlers[parentMenuItemId];
+      if (parentOnclick) {
+        parentOnclick.apply(parentOnclick, arguments);
+      }
+    });
+  }
+
   chromeHidden.onLoad.addListener(function (extensionId) {
     chrome.initExtension(extensionId, false);
 
@@ -298,7 +312,7 @@ var chrome = chrome || {};
     // TODO(rafaelw): Handle synchronous functions.
     // TOOD(rafaelw): Consider providing some convenient override points
     //   for api functions that wish to insert themselves into the call.
-    var apiDefinitions = JSON.parse(GetExtensionAPIDefinition());
+    var apiDefinitions = chromeHidden.JSON.parse(GetExtensionAPIDefinition());
 
     apiDefinitions.forEach(function(apiDef) {
       var module = chrome;
@@ -325,18 +339,29 @@ var chrome = chrome || {};
 
           var apiFunction = {};
           apiFunction.definition = functionDef;
-          apiFunction.name = apiDef.namespace + "." + functionDef.name;;
+          apiFunction.name = apiDef.namespace + "." + functionDef.name;
           apiFunctions[apiFunction.name] = apiFunction;
 
           module[functionDef.name] = bind(apiFunction, function() {
-            chromeHidden.validate(arguments, this.definition.parameters);
+            var args = arguments;
+            if (this.updateArguments) {
+              // Functions whose signature has changed can define an
+              // |updateArguments| function to transform old argument lists
+              // into the new form, preserving compatibility.
+              // TODO(skerner): Once optional args can be omitted (crbug/29215),
+              // this mechanism will become unnecessary.  Consider removing it
+              // when crbug/29215 is fixed.
+              args = this.updateArguments.apply(this, args);
+            }
+            chromeHidden.validate(args, this.definition.parameters);
 
             var retval;
             if (this.handleRequest) {
-              retval = this.handleRequest.apply(this, arguments);
+              retval = this.handleRequest.apply(this, args);
             } else {
-              retval = sendRequest(this.name, arguments,
-                                   this.definition.parameters);
+              retval = sendRequest(this.name, args,
+                                   this.definition.parameters,
+                                   this.customCallback);
             }
 
             // Validate return value if defined - only in debug.
@@ -378,7 +403,7 @@ var chrome = chrome || {};
       var portId = OpenChannelToTab(
           tabId, chromeHidden.extensionId, name);
       return chromeHidden.Port.createPort(portId, name);
-    }
+    };
 
     apiFunctions["tabs.sendRequest"].handleRequest =
         function(tabId, request, responseCallback) {
@@ -390,29 +415,39 @@ var chrome = chrome || {};
           responseCallback(response);
         port.disconnect();
       });
-    }
+    };
 
-    apiFunctions["extension.getViews"].handleRequest = function() {
-      return GetExtensionViews(-1, "ALL");
-    }
+    apiFunctions["extension.getViews"].handleRequest = function(properties) {
+      var windowId = -1;
+      var type = "ALL";
+      if (typeof(properties) != "undefined") {
+        if (typeof(properties.type) != "undefined") {
+          type = properties.type;
+        }
+        if (typeof(properties.windowId) != "undefined") {
+          windowId = properties.windowId;
+        }
+      }
+      return GetExtensionViews(windowId, type) || null;
+    };
 
     apiFunctions["extension.getBackgroundPage"].handleRequest = function() {
       return GetExtensionViews(-1, "BACKGROUND")[0] || null;
-    }
+    };
 
     apiFunctions["extension.getToolstrips"].handleRequest =
         function(windowId) {
       if (typeof(windowId) == "undefined")
         windowId = -1;
       return GetExtensionViews(windowId, "TOOLSTRIP");
-    }
+    };
 
     apiFunctions["extension.getExtensionTabs"].handleRequest =
         function(windowId) {
       if (typeof(windowId) == "undefined")
         windowId = -1;
       return GetExtensionViews(windowId, "TAB");
-    }
+    };
 
     apiFunctions["devtools.getTabEvents"].handleRequest = function(tabId) {
       var tabIdProxy = {};
@@ -424,7 +459,7 @@ var chrome = chrome || {};
         tabIdProxy[name] = new chrome.Event("devtools." + tabId + "." + name);
       });
       return tabIdProxy;
-    }
+    };
 
     apiFunctions["experimental.popup.show"].handleRequest =
         function(url, showDetails, callback) {
@@ -433,35 +468,53 @@ var chrome = chrome || {};
         this.definition.parameters[0],
         {
           type: "object",
-          name: "domAnchor",
+          name: "showDetails",
           properties: {
-            top: { type: "integer", minimum: 0 },
-            left: { type: "integer", minimum: 0 },
-            width: { type: "integer", minimum: 0 },
-            height: { type: "integer", minimum: 0 }
+            domAnchor: {
+              type: "object",
+              properties: {
+                top: { type: "integer", minimum: 0 },
+                left: { type: "integer", minimum: 0 },
+                width: { type: "integer", minimum: 0 },
+                height: { type: "integer", minimum: 0 }
+              }
+            },
+            giveFocus: {
+              type: "boolean",
+              optional: true
+            },
+            borderStyle: {
+              type: "string",
+              optional: true,
+              enum: ["bubble", "rectangle"]
+            }
           }
         },
         this.definition.parameters[2]
       ];
       return sendRequest(this.name,
                          [url,
-                          getAbsoluteRect(showDetails.relativeTo),
+                          {
+                            domAnchor: getAbsoluteRect(showDetails.relativeTo),
+                            giveFocus: showDetails.giveFocus,
+                            borderStyle: showDetails.borderStyle
+                          },
                           callback],
                          internalSchema);
-    }
+    };
 
     apiFunctions["experimental.extension.getPopupView"].handleRequest =
         function() {
       return GetPopupView();
-    }
+    };
 
     apiFunctions["experimental.popup.getParentWindow"].handleRequest =
         function() {
       return GetPopupParentWindow();
-    }
+    };
 
     var canvas;
-    function setIconCommon(details, name, parameters) {
+    function setIconCommon(details, name, parameters, actionType) {
       var EXTENSION_ACTION_ICON_SIZE = 19;
 
       if ("iconIndex" in details) {
@@ -491,8 +544,8 @@ var chrome = chrome || {};
       } else if ("path" in details) {
         var img = new Image();
         img.onerror = function() {
-          console.error("Could not load browser action icon '" + details.path +
-                        "'.");
+          console.error("Could not load " + actionType + " icon '" +
+                        details.path + "'.");
         }
         img.onload = function() {
           var canvas = document.createElement("canvas");
@@ -517,11 +570,54 @@ var chrome = chrome || {};
     }
 
     apiFunctions["browserAction.setIcon"].handleRequest = function(details) {
-      setIconCommon(details, this.name, this.definition.parameters);
+      setIconCommon(
+          details, this.name, this.definition.parameters, "browser action");
     };
 
     apiFunctions["pageAction.setIcon"].handleRequest = function(details) {
-      setIconCommon(details, this.name, this.definition.parameters);
+      setIconCommon(
+          details, this.name, this.definition.parameters, "page action");
+    };
+
+    apiFunctions["experimental.contextMenu.create"].customCallback =
+        function(name, request, response) {
+      if (chrome.extension.lastError || !response) {
+        return;
+      }
+
+      // Set up the onclick handler if we were passed one in the request.
+      if (request.args.onclick) {
+        var menuItemId = chromeHidden.JSON.parse(response);
+        chromeHidden.contextMenuHandlers[menuItemId] = request.args.onclick;
+      }
+    };
+
+    apiFunctions["experimental.contextMenu.remove"].customCallback =
+        function(name, request, response) {
+      // Remove any onclick handler we had registered for this menu item.
+      if (request.args.length > 0) {
+        var menuItemId = request.args[0];
+        delete chromeHidden.contextMenuHandlers[menuItemId];
+      }
+    };
+
+    apiFunctions["tabs.captureVisibleTab"].updateArguments = function() {
+      // Old signature:
+      //    captureVisibleTab(int windowId, function callback);
+      // New signature:
+      //    captureVisibleTab(int windowId, object details, function callback);
+      //
+      // TODO(skerner): The next step to omitting optional arguments is the
+      // replacement of this code with code that matches arguments by type.
+      // Once this is working for captureVisibleTab() it can be enabled for
+      // the rest of the API. See crbug/29215 .
+      if (arguments.length == 2 && typeof(arguments[1]) == "function") {
+        // If the old signature is used, add a null details object.
+        newArgs = [arguments[0], null, arguments[1]];
+      } else {
+        newArgs = arguments;
+      }
+      return newArgs;
     };
 
     if (chrome.test) {
@@ -532,25 +628,12 @@ var chrome = chrome || {};
     setupPageActionEvents(extensionId);
     setupToolstripEvents(GetRenderViewId());
     setupPopupEvents(GetRenderViewId());
+    setupHiddenContextMenuEvent(extensionId);
   });
 
   if (!chrome.experimental)
     chrome.experimental = {};
 
-  if (!chrome.experimental.history)
-    chrome.experimental.history = {};
-
-  chrome.experimental.history.transistionType = {
-    LINK: 0,
-    TYPED: 1,
-    AUTO_BOOKMARK: 2,
-    AUTO_SUBFRAME: 3,
-    MANUAL_SUBFRAME: 4,
-    GENERATED: 5,
-    START_PAGE: 6,
-    FORM_SUBMIT: 7,
-    RELOAD: 8,
-    KEYWORD: 9,
-    KEYWORD_GENERATED: 10
-  };
+  if (!chrome.experimental.accessibility)
+    chrome.experimental.accessibility = {};
 })();

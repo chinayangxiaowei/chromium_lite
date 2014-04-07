@@ -8,12 +8,6 @@
 #include <string>
 
 #include "base/file_path.h"
-#include "chrome/browser/sync/util/sync_types.h"
-
-// Need to cast literals (Linux, OSX)
-#define STRING16_UGLY_DOUBLE_DEFINE_HACK(s) \
-    reinterpret_cast<const char16*>(L##s)
-#define STRING16(s) STRING16_UGLY_DOUBLE_DEFINE_HACK(s)
 
 namespace browser_sync {
 
@@ -22,8 +16,6 @@ std::string FilePathToUTF8(const FilePath& file_path);
 
 // Returns FilePath from the given UTF8 string.
 FilePath UTF8ToFilePath(const std::string& utf8);
-
-void TrimPathStringToValidCharacter(std::string* string);
 
 }  // namespace browser_sync
 

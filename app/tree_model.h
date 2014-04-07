@@ -1,4 +1,4 @@
-// Copyright (c) 2008 The Chromium Authors. All rights reserved.
+// Copyright (c) 2009 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -20,7 +20,10 @@ class TreeModel;
 class TreeModelNode {
  public:
   // Returns the title for the node.
-  virtual const std::wstring& GetTitle() const = 0;
+  virtual std::wstring GetTitle() const = 0;
+
+ protected:
+  virtual ~TreeModelNode() {}
 };
 
 // Observer for the TreeModel. Notified of significant events to the model.
@@ -45,6 +48,9 @@ class TreeModelObserver {
 
   // Notification that the contents of a node has changed.
   virtual void TreeNodeChanged(TreeModel* model, TreeModelNode* node) = 0;
+
+ protected:
+  virtual ~TreeModelObserver() {}
 };
 
 // TreeModel ------------------------------------------------------------------
@@ -89,6 +95,9 @@ class TreeModel {
   // default icon. The index is relative to the list of icons returned from
   // GetIcons.
   virtual int GetIconIndex(TreeModelNode* node) { return -1; }
+
+ protected:
+  virtual ~TreeModel() {}
 };
 
-#endif  // APP_TREE_TREE_MODEL_H_
+#endif  // APP_TREE_MODEL_H_

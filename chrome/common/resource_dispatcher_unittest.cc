@@ -7,6 +7,7 @@
 
 #include "base/message_loop.h"
 #include "base/process.h"
+#include "base/process_util.h"
 #include "base/scoped_ptr.h"
 #include "chrome/common/filter_policy.h"
 #include "chrome/common/render_messages.h"
@@ -23,7 +24,7 @@ static const char test_page_mime_type[] = "text/html";
 static const char test_page_charset[] = "";
 static const char test_page_contents[] =
   "<html><head><title>Google</title></head><body><h1>Google</h1></body></html>";
-static const int test_page_contents_len = arraysize(test_page_contents) - 1;
+static const uint32 test_page_contents_len = arraysize(test_page_contents) - 1;
 
 // Listens for request response data and stores it so that it can be compared
 // to the reference data.
@@ -67,7 +68,7 @@ class TestRequestCallback : public ResourceLoaderBridge::Peer {
   const std::string& data() const {
     return data_;
   }
-  const bool complete() const {
+  bool complete() const {
     return complete_;
   }
 
@@ -147,11 +148,21 @@ class ResourceDispatcherTest : public testing::Test,
   }
 
   ResourceLoaderBridge* CreateBridge() {
-    ResourceLoaderBridge* bridge = dispatcher_->CreateBridge(
-        "GET", GURL(test_page_url), GURL(test_page_url), GURL(), "null",
-        "null", std::string(), 0, 0, ResourceType::SUB_RESOURCE, 0,
-        appcache::kNoHostId, MSG_ROUTING_CONTROL, -1, -1);
-    return bridge;
+    webkit_glue::ResourceLoaderBridge::RequestInfo request_info;
+    request_info.method = "GET";
+    request_info.url = GURL(test_page_url);
+    request_info.first_party_for_cookies = GURL(test_page_url);
+    request_info.referrer = GURL();
+    request_info.frame_origin = "null";
+    request_info.main_frame_origin = "null";
+    request_info.headers = std::string();
+    request_info.load_flags = 0;
+    request_info.requestor_pid = 0;
+    request_info.request_type = ResourceType::SUB_RESOURCE;
+    request_info.appcache_host_id = appcache::kNoHostId;
+    request_info.routing_id = 0;
+
+    return dispatcher_->CreateBridge(request_info, -1, -1);
   }
 
   std::vector<IPC::Message> message_queue_;
@@ -226,8 +237,14 @@ class DeferredResourceLoadingTest : public ResourceDispatcherTest,
 
     delete response_message;
 
+    // Duplicate the shared memory handle so both the test and the callee can
+    // close their copy.
+    base::SharedMemoryHandle duplicated_handle;
+    EXPECT_TRUE(shared_handle_.ShareToProcess(base::GetCurrentProcessHandle(),
+                                              &duplicated_handle));
+
     response_message =
-        new ViewMsg_Resource_DataReceived(0, 0, shared_handle_.handle(), 100);
+        new ViewMsg_Resource_DataReceived(0, 0, duplicated_handle, 100);
 
     dispatcher_->OnMessageReceived(*response_message);
 

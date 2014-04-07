@@ -16,6 +16,9 @@
     <script type="text/javascript" src="js/api_page_generator.js"></script>
     <script type="text/javascript" src="js/bootstrap.js"></script>
   <title>Formats: Manifest Files - Google Chrome Extensions - Google Code</title></head><body>  <div id="gc-container" class="labs">
+      <div id="devModeWarning">
+        You are viewing extension docs in chrome via the 'file:' scheme: are you expecting to see local changes when you refresh? You'll need run chrome with --allow-file-access-from-files.
+      </div>
       <!-- SUBTEMPLATES: DO NOT MOVE FROM THIS LOCATION -->
       <!-- In particular, sub-templates that recurse, must be used by allowing
            jstemplate to make a copy of the template in this section which
@@ -132,6 +135,7 @@
               <li>Browser UI
                 <ul>
                   <li><a href="browserAction.html">Browser Actions</a></li>
+                  <li><a href="notifications.html">Desktop Notifications</a></li>
                   <li><a href="options.html">Options Pages</a></li>
                   <li><a href="override.html">Override Pages</a></li>
                   <li><a href="pageAction.html">Page Actions</a></li>
@@ -142,12 +146,14 @@
                 <ul>
                   <li><a href="bookmarks.html">Bookmarks</a></li>
                   <li><a href="events.html">Events</a></li>
+                  <li><a href="history.html">History</a></li>
                   <li><a href="tabs.html">Tabs</a></li>
                   <li><a href="windows.html">Windows</a></li>
                 </ul>
               </li>
               <li>Implementation
                 <ul>
+                  <li><a href="a11y.html">Accessibility</a></li>
                   <li><a href="background_pages.html">Background Pages</a></li>
                   <li><a href="content_scripts.html">Content Scripts</a></li>
                   <li><a href="xhr.html">Cross-Origin XHR</a></li>
@@ -158,8 +164,8 @@
               </li>
               <li>Finishing
                 <ul>
-                  <li><a href="autoupdate.html">Autoupdating</a></li>
-                  <li><a href="packaging.html">Packaging</a></li>
+                  <li><a href="hosting.html">Hosting</a></li>
+                  <li><a href="external_extensions.html">Other Deployment Options</a></li>
                 </ul>
               </li>
             </ul>
@@ -167,6 +173,8 @@
           <li><h2><a href="tutorials.html">Tutorials</a></h2>
             <ul>
               <li><a href="tut_debugging.html">Debugging</a></li>
+              <li><a href="tut_analytics.html">Google Analytics</a></li>
+              <li><a href="tut_oauth.html">OAuth</a></li>
             </ul>
           </li>
           <li><h2>Reference</h2>
@@ -210,6 +218,8 @@
                   <a href="#icons">icons</a>
                 </li><li>
                   <a href="#default_locale">default_locale</a>
+                </li><li>
+                  <a href="#key">key</a>
                 </li><li>
                   <a href="#minimum_chrome_version">minimum_chrome_version</a>
                 </li><li>
@@ -290,7 +300,7 @@ are <b>name</b> and <b>version</b>.
   <em>// Recommended</em>
   "<a href="#description">description</a>": "<em>A plain text description</em>",
   "<a href="#icons">icons</a>": { ... },
-  "<a href="#default_locale">default_locale</a>": "en",
+  "<a href="#default_locale">default_locale</a>": "<em>en</em>",
 
   <em>// Pick one (or none)</em>
   "<a href="browserAction.html">browser_action</a>": {...},
@@ -301,6 +311,7 @@ are <b>name</b> and <b>version</b>.
   "<a href="background_pages.html">background_page</a>": "<em>aFile</em>.html",
   "<a href="override.html">chrome_url_overrides</a>": {...},
   "<a href="content_scripts.html">content_scripts</a>": [...],
+  "<a href="#key">key</a>": "<em>publicKey</em>",
   "<a href="#minimum_chrome_version">minimum_chrome_version</a>": "<em>versionString</em>",
   "<a href="options.html">options_page</a>": "<em>aFile</em>.html",
   "<a href="#permissions">permissions</a>": [...],
@@ -338,11 +349,16 @@ see <a href="i18n.html">Internationalization</a> for details.
 
 <p>
 One or more icons that represent the extension.
-You should provide icons in two sizes —
+You should provide icons in at least two sizes —
 48x48 and 128x128 pixels.
 The 48x48 icon is used in the extensions management page
 (chrome://extensions).
 The 128x128 icon is used when the user installs the extension.
+You can also specify a 16x16 icon to be used as the favicon
+for the extension's pages.
+The 16x16 icon is also displayed in the experimental
+<a href="experimental.infobars.html">infobar</a>
+feature.
 </p>
 
 <p>
@@ -353,9 +369,26 @@ including BMP, GIF, ICO, and JPEG.
 Here's an example of specifying the icons:
 </p>
 
-<pre>"icons": { "48": "icon48.png",
+<pre>"icons": { "16": "icon16.png",
+           "48": "icon48.png",
           "128": "icon128.png" },
 </pre>
+
+<p class="note">
+<b>Note:</b>
+Use only the documented icon sizes.
+<br><br>
+You may notice that Google Chrome sometimes resizes these icons down to smaller
+sizes. For example, as of this writing, the install dialog shrinks the 128-pixel
+icon down to 69 pixels.
+<br><br>
+Nevertheless, you should use only the documented sizes. The details of Google
+Chrome's UI may change between versions. These changes are made assuming that
+extension developers are using the documented sizes. If you use other sizes,
+your icon may look bad in future versions of the browser.
+</p>
+
+
 
 <p>
 If you submit your extension to the
@@ -379,6 +412,35 @@ it <b>must be absent</b> in extensions
 that have no <code>_locales</code> directory.
 For details, see
 <a href="i18n.html">Internationalization</a>.
+</p>
+
+<h3 id="key">key</h3>
+
+<p>
+This value can be used to control
+the unique ID of an extension when
+it is loaded during development.
+</p>
+
+<p class="note">
+<b>Note:</b> Most extensions should not need to
+use this value. Instead, write your
+code so that the key value doesn't matter
+by using <a href="overview.html#relative-urls">relative paths</a>
+and <a href="extension.html#method-getURL">chrome.extension.getURL()</a>.
+</p>
+
+<p>
+To get a suitable key value, first
+install your extension from a <code>.crx</code> file
+(you may need to
+<a href="hosting.html#gallery">upload your extension to the gallery</a>,
+or <a href="packaging.html">package it manually</a>).
+Then, in your
+<a href="http://www.chromium.org/user-experience/user-data-directory">user
+data directory</a>, look in the file
+<code>Default/Extensions/<em>&lt;extensionId&gt;</em>/<em>&lt;versionString&gt;</em>/manifest.json</code>.
+You will see the key value filled in there.
 </p>
 
 <h3 id="minimum_chrome_version">minimum_chrome_version</h3>
@@ -406,7 +468,7 @@ see <a href="i18n.html">Internationalization</a> for details.
 <p>
 An array of permissions that the extension might use.
 Each permission can be either one of a list of known strings
-(such as "tabs" or "bookmarks")
+(such as "tabs")
 or a match pattern
 that gives access to one or more hosts.
 These permissions are displayed to users before installation.
@@ -431,17 +493,74 @@ Here's an example of the permissions part of a manifest file:
   "tabs",
   "bookmarks",
   "http://www.blogger.com/",
-  "http://*.google.com/"
+  "http://*.google.com/",
+  "unlimited_storage"
 ],
 </pre>
 
 <p>
-For more information, see
-<a href="xhr.html">Cross-Origin XMLHttpRequest</a>,
-<a href="windows.html">Windows</a>,
-<a href="tabs.html">Tabs</a>, and
-<a href="bookmarks.html">Bookmarks</a>.
+The following table lists the permissions an extension can use.
 </p>
+
+<table>
+<tbody><tr>
+  <th> Permission </th> <th> Description </th>
+</tr>
+<tr>
+  <td> <em>match pattern</em> </td>
+  <td> Required if the extension makes
+       <a href="xhr.html">cross-origin XMLHttpRequests</a>
+       or
+       <a href="content_scripts.html#pi">programmatically injects
+       JavaScript or CSS</a>
+       into web pages.
+  </td>
+</tr>
+<tr>
+  <td> "bookmarks" </td>
+  <td> Required if the extension uses the
+       <a href="bookmarks.html">chrome.bookmarks</a> module. </td>
+</tr>
+<tr>
+  <td> "chrome://favicon/" </td>
+  <td> Required if the extension uses the
+       "chrome://favicon/<em>url</em>" mechanism
+       to display the favicon of a page.
+       For example, to display the favicon of http://www.google.com/,
+       you declare the "chrome://favicon/" permission
+       and use HTML code like this:
+       <pre>&lt;img src="chrome://favicon/http://www.google.com/"&gt;</pre>
+       </td>
+</tr>
+<tr>
+  <td> "experimental" </td>
+  <td> Required if the extension uses any
+       <a href="http://code.google.com/chrome/extensions/dev/experimental.html">chrome.experimental.* APIs</a>.</td>
+</tr>
+<tr>
+  <td> "notifications" </td>
+  <td> Allows the extension to use the proposed HTML5
+       <a href="http://www.chromium.org/developers/design-documents/desktop-notifications/api-specification">notification API</a>
+       without calling permission methods
+       (such as <code>checkPermission()</code>).
+       For more information see
+       <a href="notifications.html">Desktop Notifications</a>.</td>
+</tr>
+<tr>
+  <td> "tabs" </td>
+  <td> Required if the extension uses the
+       <a href="tabs.html">chrome.tabs</a> or
+       <a href="windows.html">chrome.windows</a> module. </td>
+</tr>
+<tr>
+  <td> "unlimited_storage"</td>
+  <td> Provides an unlimited quota for storing HTML5 client-side data,
+       such as databases and local storage files. 
+       Without this permission, the extension is limited to
+       5 MB of local storage. </td>
+</tr>
+</tbody></table>
+
 
 <h3 id="version">version</h3>
 
@@ -653,7 +772,7 @@ For more information, see
   <a rel="license" href="http://code.google.com/google_bsd_license.html">BSD License</a>.
   </p>
   <p>
-  ©2009 Google
+  ©2010 Google
   </p>
 
 <!-- begin analytics -->
@@ -681,4 +800,3 @@ For more information, see
     </div> <!-- /gc-footer -->
   </div> <!-- /gc-container -->
 </body></html>
-

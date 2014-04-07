@@ -1,18 +1,128 @@
-// Copyright (c) 2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/shell_integration.h"
 
+#include <map>
+
 #include "base/file_path.h"
+#include "base/file_util.h"
+#include "base/message_loop.h"
+#include "base/scoped_temp_dir.h"
+#include "base/stl_util-inl.h"
 #include "base/string_util.h"
+#include "chrome/browser/chrome_thread.h"
 #include "chrome/common/chrome_constants.h"
+#include "chrome/common/chrome_paths_internal.h"
 #include "googleurl/src/gurl.h"
 #include "testing/gtest/include/gtest/gtest.h"
+
+#if defined(OS_LINUX)
+#include "base/env_var.h"
+#endif  // defined(OS_LINUX)
 
 #define FPL FILE_PATH_LITERAL
 
 #if defined(OS_LINUX)
+namespace {
+
+// Provides mock environment variables values based on a stored map.
+class MockEnvVarGetter : public base::EnvVarGetter {
+ public:
+  MockEnvVarGetter() {
+  }
+
+  void Set(const std::string& name, const std::string& value) {
+    variables_[name] = value;
+  }
+
+  virtual bool GetEnv(const char* variable_name, std::string* result) {
+    if (ContainsKey(variables_, variable_name)) {
+      *result = variables_[variable_name];
+      return true;
+    }
+
+    return false;
+  }
+
+ private:
+  std::map<std::string, std::string> variables_;
+
+  DISALLOW_COPY_AND_ASSIGN(MockEnvVarGetter);
+};
+
+}  // namespace
+
+TEST(ShellIntegrationTest, GetDesktopShortcutTemplate) {
+#if defined(GOOGLE_CHROME_BUILD)
+  const char kTemplateFilename[] = "google-chrome.desktop";
+#else  // CHROMIUM_BUILD
+  const char kTemplateFilename[] = "chromium-browser.desktop";
+#endif
+
+  const char kTestData1[] = "a magical testing string";
+  const char kTestData2[] = "a different testing string";
+
+  MessageLoop message_loop;
+  ChromeThread file_thread(ChromeThread::FILE, &message_loop);
+
+  {
+    ScopedTempDir temp_dir;
+    ASSERT_TRUE(temp_dir.CreateUniqueTempDir());
+
+    MockEnvVarGetter env_getter;
+    env_getter.Set("XDG_DATA_HOME", temp_dir.path().value());
+    ASSERT_TRUE(file_util::WriteFile(
+        temp_dir.path().AppendASCII(kTemplateFilename),
+        kTestData1, strlen(kTestData1)));
+    std::string contents;
+    ASSERT_TRUE(ShellIntegration::GetDesktopShortcutTemplate(&env_getter,
+                                                             &contents));
+    EXPECT_EQ(kTestData1, contents);
+  }
+
+  {
+    ScopedTempDir temp_dir;
+    ASSERT_TRUE(temp_dir.CreateUniqueTempDir());
+
+    MockEnvVarGetter env_getter;
+    env_getter.Set("XDG_DATA_DIRS", temp_dir.path().value());
+    ASSERT_TRUE(file_util::CreateDirectory(
+        temp_dir.path().AppendASCII("applications")));
+    ASSERT_TRUE(file_util::WriteFile(
+        temp_dir.path().AppendASCII("applications")
+            .AppendASCII(kTemplateFilename),
+        kTestData2, strlen(kTestData2)));
+    std::string contents;
+    ASSERT_TRUE(ShellIntegration::GetDesktopShortcutTemplate(&env_getter,
+                                                             &contents));
+    EXPECT_EQ(kTestData2, contents);
+  }
+
+  {
+    ScopedTempDir temp_dir;
+    ASSERT_TRUE(temp_dir.CreateUniqueTempDir());
+
+    MockEnvVarGetter env_getter;
+    env_getter.Set("XDG_DATA_DIRS", temp_dir.path().value() + ":" +
+                   temp_dir.path().AppendASCII("applications").value());
+    ASSERT_TRUE(file_util::CreateDirectory(
+        temp_dir.path().AppendASCII("applications")));
+    ASSERT_TRUE(file_util::WriteFile(
+        temp_dir.path().AppendASCII(kTemplateFilename),
+        kTestData1, strlen(kTestData1)));
+    ASSERT_TRUE(file_util::WriteFile(
+        temp_dir.path().AppendASCII("applications")
+            .AppendASCII(kTemplateFilename),
+        kTestData2, strlen(kTestData2)));
+    std::string contents;
+    ASSERT_TRUE(ShellIntegration::GetDesktopShortcutTemplate(&env_getter,
+                                                             &contents));
+    EXPECT_EQ(kTestData1, contents);
+  }
+}
+
 TEST(ShellIntegrationTest, GetDesktopShortcutFilename) {
   const struct {
     const FilePath::CharType* path;
@@ -166,8 +276,32 @@ TEST(ShellIntegrationTest, GetDesktopFileContents) {
               ShellIntegration::GetDesktopFileContents(
                   test_cases[i].template_contents,
                   GURL(test_cases[i].url),
+                  EmptyString16(),
                   ASCIIToUTF16(test_cases[i].title),
                   test_cases[i].icon_name));
   }
 }
-#endif  // defined(OS_LINUX)
+#elif defined(OS_WIN)
+TEST(ShellIntegrationTest, GetChromiumAppIdTest) {
+  // Empty profile path should get chrome::kBrowserAppID
+  FilePath empty_path;
+  EXPECT_EQ(std::wstring(chrome::kBrowserAppID),
+            ShellIntegration::GetChromiumAppId(empty_path));
+
+  // Default profile path should get chrome::kBrowserAppID
+  FilePath default_user_data_dir;
+  chrome::GetDefaultUserDataDirectory(&default_user_data_dir);
+  FilePath default_profile_path =
+      default_user_data_dir.Append(chrome::kNotSignedInProfile);
+  EXPECT_EQ(std::wstring(chrome::kBrowserAppID),
+            ShellIntegration::GetChromiumAppId(default_profile_path));
+
+  // Non-default profile path should get chrome::kBrowserAppID joined with
+  // profile info.
+  FilePath profile_path(FILE_PATH_LITERAL("root"));
+  profile_path = profile_path.Append(FILE_PATH_LITERAL("udd"));
+  profile_path = profile_path.Append(FILE_PATH_LITERAL("User Data - Test"));
+  EXPECT_EQ(std::wstring(chrome::kBrowserAppID) + L".udd.UserDataTest",
+            ShellIntegration::GetChromiumAppId(profile_path));
+}
+#endif

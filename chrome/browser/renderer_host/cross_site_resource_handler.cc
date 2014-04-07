@@ -8,9 +8,11 @@
 
 #include "base/logging.h"
 #include "chrome/browser/chrome_thread.h"
+#include "chrome/browser/renderer_host/global_request_id.h"
 #include "chrome/browser/renderer_host/render_view_host.h"
 #include "chrome/browser/renderer_host/render_view_host_delegate.h"
 #include "chrome/browser/renderer_host/render_view_host_notification_task.h"
+#include "chrome/browser/renderer_host/resource_dispatcher_host.h"
 #include "chrome/browser/renderer_host/resource_dispatcher_host_request_info.h"
 #include "net/base/io_buffer.h"
 
@@ -29,6 +31,12 @@ CrossSiteResourceHandler::CrossSiteResourceHandler(
       completed_status_(),
       response_(NULL),
       rdh_(resource_dispatcher_host) {}
+
+bool CrossSiteResourceHandler::OnUploadProgress(int request_id,
+                                                uint64 position,
+                                                uint64 size) {
+  return next_handler_->OnUploadProgress(request_id, position, size);
+}
 
 bool CrossSiteResourceHandler::OnRequestRedirected(int request_id,
                                                    const GURL& new_url,
@@ -50,8 +58,7 @@ bool CrossSiteResourceHandler::OnResponseStarted(int request_id,
   has_started_response_ = true;
 
   // Look up the request and associated info.
-  ResourceDispatcherHost::GlobalRequestID global_id(render_process_host_id_,
-                                                    request_id);
+  GlobalRequestID global_id(render_process_host_id_, request_id);
   URLRequest* request = rdh_->GetURLRequest(global_id);
   if (!request) {
     DLOG(WARNING) << "Request wasn't found";
@@ -71,6 +78,12 @@ bool CrossSiteResourceHandler::OnResponseStarted(int request_id,
   // reply.
   StartCrossSiteTransition(request_id, response, global_id);
   return true;
+}
+
+bool CrossSiteResourceHandler::OnWillStart(int request_id,
+                                           const GURL& url,
+                                           bool* defer) {
+  return next_handler_->OnWillStart(request_id, url, defer);
 }
 
 bool CrossSiteResourceHandler::OnWillRead(int request_id, net::IOBuffer** buf,
@@ -100,27 +113,12 @@ bool CrossSiteResourceHandler::OnResponseCompleted(
       return next_handler_->OnResponseCompleted(request_id, status,
                                                 security_info);
     } else {
-      // Some types of failures will call OnResponseCompleted without calling
-      // CrossSiteResourceHandler::OnResponseStarted.
-      if (status.status() == URLRequestStatus::CANCELED) {
-        // Here the request was canceled, which happens when selecting "take me
-        // back" from an interstitial.  Nothing to do but cancel the pending
-        // render view host.
-        CallRenderViewHostRendererManagementDelegate(
-            render_process_host_id_, render_view_id_,
-            &RenderViewHostDelegate::RendererManagement::
-                OnCrossSiteNavigationCanceled);
-        return next_handler_->OnResponseCompleted(request_id, status,
-                                                  security_info);
-      } else {
-        // An error occured, we should wait now for the cross-site transition,
-        // so that the error message (e.g., 404) can be displayed to the user.
-        // Also continue with the logic below to remember that we completed
-        // during the cross-site transition.
-        ResourceDispatcherHost::GlobalRequestID global_id(
-            render_process_host_id_, request_id);
-        StartCrossSiteTransition(request_id, NULL, global_id);
-      }
+      // An error occured, we should wait now for the cross-site transition,
+      // so that the error message (e.g., 404) can be displayed to the user.
+      // Also continue with the logic below to remember that we completed
+      // during the cross-site transition.
+      GlobalRequestID global_id(render_process_host_id_, request_id);
+      StartCrossSiteTransition(request_id, NULL, global_id);
     }
   }
 
@@ -134,6 +132,10 @@ bool CrossSiteResourceHandler::OnResponseCompleted(
   return false;
 }
 
+void CrossSiteResourceHandler::OnRequestClosed() {
+  next_handler_->OnRequestClosed();
+}
+
 // We can now send the response to the new renderer, which will cause
 // TabContents to swap in the new renderer and destroy the old one.
 void CrossSiteResourceHandler::ResumeResponse() {
@@ -142,8 +144,7 @@ void CrossSiteResourceHandler::ResumeResponse() {
   in_cross_site_transition_ = false;
 
   // Find the request for this response.
-  ResourceDispatcherHost::GlobalRequestID global_id(render_process_host_id_,
-                                                    request_id_);
+  GlobalRequestID global_id(render_process_host_id_, request_id_);
   URLRequest* request = rdh_->GetURLRequest(global_id);
   if (!request) {
     DLOG(WARNING) << "Resuming a request that wasn't found";
@@ -183,7 +184,7 @@ void CrossSiteResourceHandler::ResumeResponse() {
 void CrossSiteResourceHandler::StartCrossSiteTransition(
     int request_id,
     ResourceResponse* response,
-    ResourceDispatcherHost::GlobalRequestID global_id) {
+    const GlobalRequestID& global_id) {
   in_cross_site_transition_ = true;
   request_id_ = request_id;
   response_ = response;

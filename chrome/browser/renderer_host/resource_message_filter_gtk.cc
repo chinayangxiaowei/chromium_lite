@@ -8,8 +8,8 @@
 #include <map>
 
 #include "app/clipboard/clipboard.h"
-#include "app/gfx/gtk_native_view_id_manager.h"
 #include "app/l10n_util.h"
+#include "app/x11_util.h"
 #include "base/file_util.h"
 #include "base/path_service.h"
 #include "base/singleton.h"
@@ -19,7 +19,7 @@
 #endif
 #include "chrome/common/chrome_paths.h"
 #include "chrome/common/render_messages.h"
-#include "chrome/common/x11_util.h"
+#include "gfx/gtk_native_view_id_manager.h"
 #include "grit/generated_resources.h"
 
 #include "third_party/WebKit/WebKit/chromium/public/WebScreenInfo.h"
@@ -191,8 +191,15 @@ void ResourceMessageFilter::DoOnAllocateTempFileForPrinting(
   temp_file_fd.fd = fd_in_browser = -1;
   temp_file_fd.auto_close = false;
 
+  bool allow_print =
+#if defined(TOOLKIT_GTK)
+    !PrintDialogGtk::DialogShowing();
+#else
+    true;
+#endif
   FilePath path;
-  if (file_util::CreateTemporaryFile(&path)) {
+  if (allow_print &&
+      file_util::CreateTemporaryFile(&path)) {
     int fd = open(path.value().c_str(), O_WRONLY);
     if (fd >= 0) {
       FdMap* map = &Singleton<PrintingFileDescriptorMap>::get()->map;

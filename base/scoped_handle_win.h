@@ -186,11 +186,19 @@ class ScopedGDIObject {
   DISALLOW_COPY_AND_ASSIGN(ScopedGDIObject);
 };
 
+// An explicit specialization for HICON because we have to call DestroyIcon()
+// instead of DeleteObject() for HICON.
+template<>
+void ScopedGDIObject<HICON>::Close() {
+  if (object_)
+    DestroyIcon(object_);
+}
+
 // Typedefs for some common use cases.
 typedef ScopedGDIObject<HBITMAP> ScopedBitmap;
 typedef ScopedGDIObject<HRGN> ScopedRegion;
 typedef ScopedGDIObject<HFONT> ScopedHFONT;
-
+typedef ScopedGDIObject<HICON> ScopedHICON;
 
 // Like ScopedHandle except for HGLOBAL.
 template<class T>
@@ -212,6 +220,12 @@ class ScopedHGlobal {
     return data_;
   }
 
+  T* release() {
+    T* data = data_;
+    data_ = NULL;
+    return data;
+  }
+
  private:
   HGLOBAL glob_;
 
@@ -220,4 +234,4 @@ class ScopedHGlobal {
   DISALLOW_EVIL_CONSTRUCTORS(ScopedHGlobal);
 };
 
-#endif // BASE_SCOPED_HANDLE_WIN_H_
+#endif  // BASE_SCOPED_HANDLE_WIN_H_

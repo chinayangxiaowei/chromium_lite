@@ -29,12 +29,15 @@ class NotificationProvider : public WebKit::WebNotificationPresenter {
   virtual void cancel(const WebKit::WebNotification& proxy);
   virtual void objectDestroyed(const WebKit::WebNotification& proxy);
   virtual WebKit::WebNotificationPresenter::Permission checkPermission(
-      const WebKit::WebString& origin);
-  virtual void requestPermission(const WebKit::WebString& origin,
+      const WebKit::WebURL& url);
+  virtual void requestPermission(const WebKit::WebSecurityOrigin& origin,
       WebKit::WebNotificationPermissionCallback* callback);
 
   // IPC message handler called from RenderView.
   bool OnMessageReceived(const IPC::Message& message);
+
+  // Called when the RenderView navigates.
+  void OnNavigate();
 
  private:
   // Internal methods used to show notifications.

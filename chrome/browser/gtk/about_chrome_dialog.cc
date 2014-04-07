@@ -6,7 +6,6 @@
 
 #include <gtk/gtk.h>
 
-#include "app/gfx/gtk_util.h"
 #include "app/l10n_util.h"
 #include "app/resource_bundle.h"
 #include "base/file_version_info.h"
@@ -14,11 +13,12 @@
 #include "chrome/browser/gtk/cairo_cached_surface.h"
 #include "chrome/browser/gtk/gtk_chrome_link_button.h"
 #include "chrome/browser/gtk/gtk_theme_provider.h"
+#include "chrome/browser/gtk/gtk_util.h"
 #include "chrome/browser/profile.h"
 #include "chrome/common/chrome_constants.h"
-#include "chrome/common/gtk_util.h"
 #include "chrome/common/platform_util.h"
 #include "chrome/common/url_constants.h"
+#include "gfx/gtk_util.h"
 #include "grit/chromium_strings.h"
 #include "grit/generated_resources.h"
 #include "grit/locale_settings.h"
@@ -106,9 +106,11 @@ void ShowAboutDialogForProfile(GtkWindow* parent, Profile* profile) {
   scoped_ptr<FileVersionInfo> version_info(
       FileVersionInfo::CreateFileVersionInfoForCurrentModule());
   std::wstring current_version = version_info->file_version();
+#if !defined(GOOGLE_CHROME_BUILD)
   current_version += L" (";
   current_version += version_info->last_change();
   current_version += L")";
+#endif
   string16 version_modifier = platform_util::GetVersionStringModifier();
   if (version_modifier.length()) {
     current_version += L" ";

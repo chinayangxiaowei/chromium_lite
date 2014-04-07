@@ -1,3 +1,7 @@
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Use of this source code is governed by a BSD-style license that can be
+// found in the LICENSE file.
+
 #include "debug.h"
 #include "sandbox_impl.h"
 
@@ -5,7 +9,8 @@ namespace playground {
 
 int Sandbox::sandbox_clone(int flags, void* stack, int* pid, int* ctid,
                            void* tls, void *wrapper_sp) {
-  Debug::syscall(__NR_clone, "Executing handler");
+  long long tm;
+  Debug::syscall(&tm, __NR_clone, "Executing handler");
   struct {
     int       sysnum;
     long long cookie;
@@ -39,6 +44,7 @@ int Sandbox::sandbox_clone(int flags, void* stack, int* pid, int* ctid,
       read(sys, threadFdPub(), &rc, sizeof(rc)) != sizeof(rc)) {
     die("Failed to forward clone() request [sandbox]");
   }
+  Debug::elapsed(tm, __NR_clone);
   return static_cast<int>(rc);
 }
 
@@ -84,7 +90,6 @@ bool Sandbox::process_clone(int parentMapsFd, int sandboxFd, int threadFdPub,
       mem->r14              = clone_req.regs64.r14;
       mem->r15              = clone_req.regs64.r15;
       #elif defined(__i386__)
-      mem->ret2             = clone_req.regs32.ret2;
       mem->ebp              = clone_req.regs32.ebp;
       mem->edi              = clone_req.regs32.edi;
       mem->esi              = clone_req.regs32.esi;

@@ -2,18 +2,22 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "app/gfx/canvas.h"
 #include "base/basictypes.h"
 #include "base/keyboard_codes.h"
 #include "base/scoped_ptr.h"
 #include "base/shared_memory.h"
+#include "base/timer.h"
 #include "build/build_config.h"
 #include "chrome/browser/renderer_host/backing_store.h"
 #include "chrome/browser/renderer_host/test/test_render_view_host.h"
 #include "chrome/common/render_messages.h"
+#include "gfx/canvas.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
+using base::TimeDelta;
+
 using WebKit::WebInputEvent;
+using WebKit::WebMouseWheelEvent;
 
 // RenderWidgetHostProcess -----------------------------------------------------
 
@@ -21,9 +25,9 @@ class RenderWidgetHostProcess : public MockRenderProcessHost {
  public:
   explicit RenderWidgetHostProcess(Profile* profile)
       : MockRenderProcessHost(profile),
-        current_paint_buf_(NULL),
-        paint_msg_should_reply_(false),
-        paint_msg_reply_flags_(0) {
+        current_update_buf_(NULL),
+        update_msg_should_reply_(false),
+        update_msg_reply_flags_(0) {
     // DANGER! This is a hack. The RenderWidgetHost checks the channel to see
     // if the process is still alive, but it doesn't actually dereference it.
     // An IPC::SyncChannel is nontrivial, so we just fake it here. If you end up
@@ -34,63 +38,65 @@ class RenderWidgetHostProcess : public MockRenderProcessHost {
     // We don't want to actually delete the channel, since it's not a real
     // pointer.
     channel_.release();
-    if (current_paint_buf_)
-      delete current_paint_buf_;
+    delete current_update_buf_;
   }
 
-  void set_paint_msg_should_reply(bool reply) {
-    paint_msg_should_reply_ = reply;
+  void set_update_msg_should_reply(bool reply) {
+    update_msg_should_reply_ = reply;
   }
-  void set_paint_msg_reply_flags(int flags) {
-    paint_msg_reply_flags_ = flags;
+  void set_update_msg_reply_flags(int flags) {
+    update_msg_reply_flags_ = flags;
   }
 
-  // Fills the given paint parameters with resonable default values.
-  void InitPaintRectParams(ViewHostMsg_PaintRect_Params* params);
+  // Fills the given update parameters with resonable default values.
+  void InitUpdateRectParams(ViewHostMsg_UpdateRect_Params* params);
 
  protected:
-  virtual bool WaitForPaintMsg(int render_widget_id,
-                               const base::TimeDelta& max_delay,
-                               IPC::Message* msg);
+  virtual bool WaitForUpdateMsg(int render_widget_id,
+                                const base::TimeDelta& max_delay,
+                                IPC::Message* msg);
 
-  TransportDIB* current_paint_buf_;
+  TransportDIB* current_update_buf_;
 
-  // Set to true when WaitForPaintMsg should return a successful paint messaage
+  // Set to true when WaitForUpdateMsg should return a successful update message
   // reply. False implies timeout.
-  bool paint_msg_should_reply_;
+  bool update_msg_should_reply_;
 
   // Indicates the flags that should be sent with a the repaint request. This
-  // only has an effect when paint_msg_should_reply_ is true.
-  int paint_msg_reply_flags_;
+  // only has an effect when update_msg_should_reply_ is true.
+  int update_msg_reply_flags_;
 
   DISALLOW_COPY_AND_ASSIGN(RenderWidgetHostProcess);
 };
 
-void RenderWidgetHostProcess::InitPaintRectParams(
-    ViewHostMsg_PaintRect_Params* params) {
+void RenderWidgetHostProcess::InitUpdateRectParams(
+    ViewHostMsg_UpdateRect_Params* params) {
   // Create the shared backing store.
   const int w = 100, h = 100;
   const size_t pixel_size = w * h * 4;
 
-  if (!current_paint_buf_)
-    current_paint_buf_ = TransportDIB::Create(pixel_size, 0);
-  params->bitmap = current_paint_buf_->id();
+  if (!current_update_buf_)
+    current_update_buf_ = TransportDIB::Create(pixel_size, 0);
+  params->bitmap = current_update_buf_->id();
   params->bitmap_rect = gfx::Rect(0, 0, w, h);
+  params->dx = 0;
+  params->dy = 0;
+  params->copy_rects.push_back(params->bitmap_rect);
   params->view_size = gfx::Size(w, h);
-  params->flags = paint_msg_reply_flags_;
+  params->flags = update_msg_reply_flags_;
 }
 
-bool RenderWidgetHostProcess::WaitForPaintMsg(int render_widget_id,
-                                              const base::TimeDelta& max_delay,
-                                              IPC::Message* msg) {
-  if (!paint_msg_should_reply_)
+bool RenderWidgetHostProcess::WaitForUpdateMsg(int render_widget_id,
+                                               const base::TimeDelta& max_delay,
+                                               IPC::Message* msg) {
+  if (!update_msg_should_reply_)
     return false;
 
-  // Construct a fake paint reply.
-  ViewHostMsg_PaintRect_Params params;
-  InitPaintRectParams(&params);
+  // Construct a fake update reply.
+  ViewHostMsg_UpdateRect_Params params;
+  InitUpdateRectParams(&params);
 
-  ViewHostMsg_PaintRect message(render_widget_id, params);
+  ViewHostMsg_UpdateRect message(render_widget_id, params);
   *msg = message;
   return true;
 }
@@ -117,15 +123,18 @@ class TestView : public TestRenderWidgetHostView {
   DISALLOW_COPY_AND_ASSIGN(TestView);
 };
 
-// MockRenderWidgetHostTest ----------------------------------------------------
+// MockRenderWidgetHost ----------------------------------------------------
 
 class MockRenderWidgetHost : public RenderWidgetHost {
  public:
   MockRenderWidgetHost(RenderProcessHost* process, int routing_id)
       : RenderWidgetHost(process, routing_id),
+        prehandle_keyboard_event_(false),
+        prehandle_keyboard_event_called_(false),
+        prehandle_keyboard_event_type_(WebInputEvent::Undefined),
         unhandled_keyboard_event_called_(false),
-        handle_unhandled_keyboard_event_(false),
-        unhandled_keyboard_event_type_(WebInputEvent::Undefined) {
+        unhandled_keyboard_event_type_(WebInputEvent::Undefined),
+        unresponsive_timer_fired_(false) {
   }
 
   // Tests that make sure we ignore keyboard event acknowledgments to events we
@@ -138,21 +147,48 @@ class MockRenderWidgetHost : public RenderWidgetHost {
     return unhandled_keyboard_event_type_;
   }
 
-  void set_handle_unhandled_keyboard_event(bool handle) {
-    handle_unhandled_keyboard_event_ = handle;
+  bool prehandle_keyboard_event_called() const {
+    return prehandle_keyboard_event_called_;
+  }
+
+  WebInputEvent::Type prehandle_keyboard_event_type() const {
+    return prehandle_keyboard_event_type_;
+  }
+
+  void set_prehandle_keyboard_event(bool handle) {
+    prehandle_keyboard_event_ = handle;
+  }
+
+  bool unresponsive_timer_fired() const {
+    return unresponsive_timer_fired_;
   }
 
  protected:
-  virtual bool UnhandledKeyboardEvent(const NativeWebKeyboardEvent& event) {
+  virtual bool PreHandleKeyboardEvent(const NativeWebKeyboardEvent& event,
+                                      bool* is_keyboard_shortcut) {
+    prehandle_keyboard_event_type_ = event.type;
+    prehandle_keyboard_event_called_ = true;
+    return prehandle_keyboard_event_;
+  }
+
+  virtual void UnhandledKeyboardEvent(const NativeWebKeyboardEvent& event) {
     unhandled_keyboard_event_type_ = event.type;
     unhandled_keyboard_event_called_ = true;
-    return handle_unhandled_keyboard_event_;
+  }
+
+  virtual void NotifyRendererUnresponsive() {
+    unresponsive_timer_fired_ = true;
   }
 
  private:
+  bool prehandle_keyboard_event_;
+  bool prehandle_keyboard_event_called_;
+  WebInputEvent::Type prehandle_keyboard_event_type_;
+
   bool unhandled_keyboard_event_called_;
-  bool handle_unhandled_keyboard_event_;
   WebInputEvent::Type unhandled_keyboard_event_type_;
+
+  bool unresponsive_timer_fired_;
 };
 
 // RenderWidgetHostTest --------------------------------------------------------
@@ -199,6 +235,15 @@ class RenderWidgetHostTest : public testing::Test {
     host_->ForwardKeyboardEvent(key_event);
   }
 
+  void SimulateWheelEvent(float dX, float dY, int modifiers) {
+    WebMouseWheelEvent wheel_event;
+    wheel_event.type = WebInputEvent::MouseWheel;
+    wheel_event.deltaX = dX;
+    wheel_event.deltaY = dY;
+    wheel_event.modifiers = modifiers;
+    host_->ForwardWheelEvent(wheel_event);
+  }
+
   MessageLoopForUI message_loop_;
 
   scoped_ptr<TestingProfile> profile_;
@@ -229,11 +274,11 @@ TEST_F(RenderWidgetHostTest, Resize) {
   EXPECT_EQ(original_size.size(), host_->in_flight_size_);
   EXPECT_TRUE(process_->sink().GetUniqueMessageMatching(ViewMsg_Resize::ID));
 
-  // Send out a paint that's not a resize ack. This should not clean the
+  // Send out a update that's not a resize ack. This should not clean the
   // resize ack pending flag.
-  ViewHostMsg_PaintRect_Params params;
-  process_->InitPaintRectParams(&params);
-  host_->OnMsgPaintRect(params);
+  ViewHostMsg_UpdateRect_Params params;
+  process_->InitUpdateRectParams(&params);
+  host_->OnMsgUpdateRect(params);
   EXPECT_TRUE(host_->resize_ack_pending_);
   EXPECT_EQ(original_size.size(), host_->in_flight_size_);
 
@@ -247,13 +292,13 @@ TEST_F(RenderWidgetHostTest, Resize) {
   EXPECT_EQ(original_size.size(), host_->in_flight_size_);
   EXPECT_FALSE(process_->sink().GetUniqueMessageMatching(ViewMsg_Resize::ID));
 
-  // Send a paint that's a resize ack, but for the original_size we sent. Since
+  // Send a update that's a resize ack, but for the original_size we sent. Since
   // this isn't the second_size, the message handler should immediately send
   // a new resize message for the new size to the renderer.
   process_->sink().ClearMessages();
-  params.flags = ViewHostMsg_PaintRect_Flags::IS_RESIZE_ACK;
+  params.flags = ViewHostMsg_UpdateRect_Flags::IS_RESIZE_ACK;
   params.view_size = original_size.size();
-  host_->OnMsgPaintRect(params);
+  host_->OnMsgUpdateRect(params);
   EXPECT_TRUE(host_->resize_ack_pending_);
   EXPECT_EQ(second_size.size(), host_->in_flight_size_);
   ASSERT_TRUE(process_->sink().GetUniqueMessageMatching(ViewMsg_Resize::ID));
@@ -261,7 +306,7 @@ TEST_F(RenderWidgetHostTest, Resize) {
   // Send the resize ack for the latest size.
   process_->sink().ClearMessages();
   params.view_size = second_size.size();
-  host_->OnMsgPaintRect(params);
+  host_->OnMsgUpdateRect(params);
   EXPECT_FALSE(host_->resize_ack_pending_);
   EXPECT_EQ(gfx::Size(), host_->in_flight_size_);
   ASSERT_FALSE(process_->sink().GetFirstMessageMatching(ViewMsg_Resize::ID));
@@ -300,7 +345,7 @@ TEST_F(RenderWidgetHostTest, Resize) {
 }
 
 // Test for crbug.com/25097.  If a renderer crashes between a resize and the
-// corresponding paint message, we must be sure to clear the resize ack logic.
+// corresponding update message, we must be sure to clear the resize ack logic.
 TEST_F(RenderWidgetHostTest, ResizeThenCrash) {
   // Setting the bounds to a "real" rect should send out the notification.
   gfx::Rect original_size(0, 0, 100, 100);
@@ -310,8 +355,9 @@ TEST_F(RenderWidgetHostTest, ResizeThenCrash) {
   EXPECT_EQ(original_size.size(), host_->in_flight_size_);
   EXPECT_TRUE(process_->sink().GetUniqueMessageMatching(ViewMsg_Resize::ID));
 
-  // Simulate a renderer crash before the paint message.  Ensure all the resize
-  // ack logic is cleared.  Must clear the view first so it doesn't get deleted.
+  // Simulate a renderer crash before the update message.  Ensure all the
+  // resize ack logic is cleared.  Must clear the view first so it doesn't get
+  // deleted.
   host_->set_view(NULL);
   host_->RendererExited();
   EXPECT_FALSE(host_->resize_ack_pending_);
@@ -378,42 +424,42 @@ TEST_F(RenderWidgetHostTest, Background) {
 TEST_F(RenderWidgetHostTest, GetBackingStore_NoRepaintAck) {
   // We don't currently have a backing store, and if the renderer doesn't send
   // one in time, we should get nothing.
-  process_->set_paint_msg_should_reply(false);
+  process_->set_update_msg_should_reply(false);
   BackingStore* backing = host_->GetBackingStore(true);
   EXPECT_FALSE(backing);
   // The widget host should have sent a request for a repaint, and there should
   // be no paint ACK.
   EXPECT_TRUE(process_->sink().GetUniqueMessageMatching(ViewMsg_Repaint::ID));
   EXPECT_FALSE(process_->sink().GetUniqueMessageMatching(
-      ViewMsg_PaintRect_ACK::ID));
+      ViewMsg_UpdateRect_ACK::ID));
 
   // Allowing the renderer to reply in time should give is a backing store.
   process_->sink().ClearMessages();
-  process_->set_paint_msg_should_reply(true);
-  process_->set_paint_msg_reply_flags(0);
+  process_->set_update_msg_should_reply(true);
+  process_->set_update_msg_reply_flags(0);
   backing = host_->GetBackingStore(true);
   EXPECT_TRUE(backing);
   // The widget host should NOT have sent a request for a repaint, since there
   // was an ACK already pending.
   EXPECT_FALSE(process_->sink().GetUniqueMessageMatching(ViewMsg_Repaint::ID));
   EXPECT_TRUE(process_->sink().GetUniqueMessageMatching(
-      ViewMsg_PaintRect_ACK::ID));
+      ViewMsg_UpdateRect_ACK::ID));
 }
 
 // Tests getting the backing store with the renderer sending a repaint ack.
 TEST_F(RenderWidgetHostTest, GetBackingStore_RepaintAck) {
-  // Doing a request request with the paint message allowed should work and
+  // Doing a request request with the update message allowed should work and
   // the repaint ack should work.
-  process_->set_paint_msg_should_reply(true);
-  process_->set_paint_msg_reply_flags(
-      ViewHostMsg_PaintRect_Flags::IS_REPAINT_ACK);
+  process_->set_update_msg_should_reply(true);
+  process_->set_update_msg_reply_flags(
+      ViewHostMsg_UpdateRect_Flags::IS_REPAINT_ACK);
   BackingStore* backing = host_->GetBackingStore(true);
   EXPECT_TRUE(backing);
   // We still should not have sent out a repaint request since the last flags
   // didn't have the repaint ack set, and the pending flag will still be set.
   EXPECT_TRUE(process_->sink().GetUniqueMessageMatching(ViewMsg_Repaint::ID));
   EXPECT_TRUE(process_->sink().GetUniqueMessageMatching(
-      ViewMsg_PaintRect_ACK::ID));
+      ViewMsg_UpdateRect_ACK::ID));
 
   // Asking again for the backing store should just re-use the existing one
   // and not send any messagse.
@@ -422,7 +468,7 @@ TEST_F(RenderWidgetHostTest, GetBackingStore_RepaintAck) {
   EXPECT_TRUE(backing);
   EXPECT_FALSE(process_->sink().GetUniqueMessageMatching(ViewMsg_Repaint::ID));
   EXPECT_FALSE(process_->sink().GetUniqueMessageMatching(
-      ViewMsg_PaintRect_ACK::ID));
+      ViewMsg_UpdateRect_ACK::ID));
 }
 
 // Test that we don't paint when we're hidden, but we still send the ACK. Most
@@ -434,15 +480,15 @@ TEST_F(RenderWidgetHostTest, HiddenPaint) {
   EXPECT_TRUE(host_->is_hidden_);
   EXPECT_TRUE(process_->sink().GetUniqueMessageMatching(ViewMsg_WasHidden::ID));
 
-  // Send it a paint as from the renderer.
+  // Send it an update as from the renderer.
   process_->sink().ClearMessages();
-  ViewHostMsg_PaintRect_Params params;
-  process_->InitPaintRectParams(&params);
-  host_->OnMsgPaintRect(params);
+  ViewHostMsg_UpdateRect_Params params;
+  process_->InitUpdateRectParams(&params);
+  host_->OnMsgUpdateRect(params);
 
   // It should have sent out the ACK.
   EXPECT_TRUE(process_->sink().GetUniqueMessageMatching(
-      ViewMsg_PaintRect_ACK::ID));
+      ViewMsg_UpdateRect_ACK::ID));
 
   // Now unhide.
   process_->sink().ClearMessages();
@@ -495,75 +541,25 @@ TEST_F(RenderWidgetHostTest, IgnoreKeyEventsHandledByRenderer) {
   EXPECT_FALSE(host_->unhandled_keyboard_event_called());
 }
 
-TEST_F(RenderWidgetHostTest, DontSuppressNextCharEventsNoPending) {
+TEST_F(RenderWidgetHostTest, PreHandleRawKeyDownEvent) {
+  // Simluate the situation that the browser handled the key down event during
+  // pre-handle phrase.
+  host_->set_prehandle_keyboard_event(true);
+  process_->sink().ClearMessages();
+
   // Simulate a keyboard event.
   SimulateKeyboardEvent(WebInputEvent::RawKeyDown);
 
-  // Make sure we sent the input event to the renderer.
-  EXPECT_TRUE(process_->sink().GetUniqueMessageMatching(
-                  ViewMsg_HandleInputEvent::ID));
-  process_->sink().ClearMessages();
+  EXPECT_TRUE(host_->prehandle_keyboard_event_called());
+  EXPECT_EQ(WebInputEvent::RawKeyDown, host_->prehandle_keyboard_event_type());
 
-  // Send the simulated response from the renderer back.
-  SendInputEventACK(WebInputEvent::RawKeyDown, false);
-
-  EXPECT_TRUE(host_->unhandled_keyboard_event_called());
-  EXPECT_EQ(WebInputEvent::RawKeyDown, host_->unhandled_keyboard_event_type());
-
-  // Forward the Char event.
-  SimulateKeyboardEvent(WebInputEvent::Char);
-
-  // Make sure we sent the input event to the renderer.
-  EXPECT_TRUE(process_->sink().GetUniqueMessageMatching(
-                  ViewMsg_HandleInputEvent::ID));
-  process_->sink().ClearMessages();
-
-  // Send the simulated response from the renderer back.
-  SendInputEventACK(WebInputEvent::Char, false);
-
-  EXPECT_TRUE(host_->unhandled_keyboard_event_called());
-  EXPECT_EQ(WebInputEvent::Char, host_->unhandled_keyboard_event_type());
-
-  // Forward the KeyUp event.
-  SimulateKeyboardEvent(WebInputEvent::KeyUp);
-
-  // Make sure we sent the input event to the renderer.
-  EXPECT_TRUE(process_->sink().GetUniqueMessageMatching(
-                  ViewMsg_HandleInputEvent::ID));
-  process_->sink().ClearMessages();
-
-  // Send the simulated response from the renderer back.
-  SendInputEventACK(WebInputEvent::KeyUp, false);
-
-  EXPECT_TRUE(host_->unhandled_keyboard_event_called());
-  EXPECT_EQ(WebInputEvent::KeyUp, host_->unhandled_keyboard_event_type());
-}
-
-TEST_F(RenderWidgetHostTest, SuppressNextCharEventsNoPending) {
-  // Simulate a keyboard event.
-  SimulateKeyboardEvent(WebInputEvent::RawKeyDown);
-
-  // Make sure we sent the input event to the renderer.
-  EXPECT_TRUE(process_->sink().GetUniqueMessageMatching(
-                  ViewMsg_HandleInputEvent::ID));
-  process_->sink().ClearMessages();
-
-  // Simluate the situation that the browser handled the key down event.
-  host_->set_handle_unhandled_keyboard_event(true);
-
-  // Send the simulated response from the renderer back.
-  SendInputEventACK(WebInputEvent::RawKeyDown, false);
-
-  EXPECT_TRUE(host_->unhandled_keyboard_event_called());
-  EXPECT_EQ(WebInputEvent::RawKeyDown, host_->unhandled_keyboard_event_type());
-
-  // Forward the Char event.
-  SimulateKeyboardEvent(WebInputEvent::Char);
-
-  // Make sure the Char event is suppressed.
+  // Make sure the RawKeyDown event is not sent to the renderer.
   EXPECT_EQ(0U, process_->sink().message_count());
 
-  // Forward another Char event.
+  // The browser won't pre-handle a Char event.
+  host_->set_prehandle_keyboard_event(false);
+
+  // Forward the Char event.
   SimulateKeyboardEvent(WebInputEvent::Char);
 
   // Make sure the Char event is suppressed.
@@ -572,105 +568,7 @@ TEST_F(RenderWidgetHostTest, SuppressNextCharEventsNoPending) {
   // Forward the KeyUp event.
   SimulateKeyboardEvent(WebInputEvent::KeyUp);
 
-  // Make sure we sent the input event to the renderer.
-  EXPECT_TRUE(process_->sink().GetUniqueMessageMatching(
-                  ViewMsg_HandleInputEvent::ID));
-  process_->sink().ClearMessages();
-
-  // The browser does not handle KeyUp events.
-  host_->set_handle_unhandled_keyboard_event(false);
-
-  // Send the simulated response from the renderer back.
-  SendInputEventACK(WebInputEvent::KeyUp, false);
-
-  EXPECT_TRUE(host_->unhandled_keyboard_event_called());
-  EXPECT_EQ(WebInputEvent::KeyUp, host_->unhandled_keyboard_event_type());
-}
-
-TEST_F(RenderWidgetHostTest, DontSuppressNextCharEventsPending) {
-  SimulateKeyboardEvent(WebInputEvent::RawKeyDown);
-
-  // Make sure we sent the input event to the renderer.
-  EXPECT_TRUE(process_->sink().GetUniqueMessageMatching(
-                  ViewMsg_HandleInputEvent::ID));
-  process_->sink().ClearMessages();
-
-  // Forward the Char event before receiving the ACK of previous KeyDown event.
-  SimulateKeyboardEvent(WebInputEvent::Char);
-
-  // Make sure the Char event is pending.
-  EXPECT_EQ(0U, process_->sink().message_count());
-
-  // Forward the KeyUp event before receiving the ACK of previous KeyDown event.
-  SimulateKeyboardEvent(WebInputEvent::KeyUp);
-
-  // Make sure the KeyUp event is pending.
-  EXPECT_EQ(0U, process_->sink().message_count());
-
-  // Send the simulated response of the KeyDown event from the renderer back.
-  SendInputEventACK(WebInputEvent::RawKeyDown, false);
-
-  EXPECT_TRUE(host_->unhandled_keyboard_event_called());
-  EXPECT_EQ(WebInputEvent::RawKeyDown, host_->unhandled_keyboard_event_type());
-
-  // Make sure both pending Char and KeyUp were sent to the renderer.
-  EXPECT_EQ(2U, process_->sink().message_count());
-  EXPECT_EQ(ViewMsg_HandleInputEvent::ID,
-            process_->sink().GetMessageAt(0)->type());
-  EXPECT_EQ(ViewMsg_HandleInputEvent::ID,
-            process_->sink().GetMessageAt(1)->type());
-  process_->sink().ClearMessages();
-
-  // Send the simulated response from the renderer back.
-  SendInputEventACK(WebInputEvent::Char, false);
-
-  EXPECT_TRUE(host_->unhandled_keyboard_event_called());
-  EXPECT_EQ(WebInputEvent::Char, host_->unhandled_keyboard_event_type());
-
-  // Send the simulated response from the renderer back.
-  SendInputEventACK(WebInputEvent::KeyUp, false);
-
-  EXPECT_TRUE(host_->unhandled_keyboard_event_called());
-  EXPECT_EQ(WebInputEvent::KeyUp, host_->unhandled_keyboard_event_type());
-}
-
-TEST_F(RenderWidgetHostTest, SuppressNextCharEventsPending) {
-  SimulateKeyboardEvent(WebInputEvent::RawKeyDown);
-
-  // Make sure we sent the KeyDown event to the renderer.
-  EXPECT_TRUE(process_->sink().GetUniqueMessageMatching(
-                  ViewMsg_HandleInputEvent::ID));
-  process_->sink().ClearMessages();
-
-  // Forward the Char event before receiving the ACK of previous KeyDown event.
-  SimulateKeyboardEvent(WebInputEvent::Char);
-
-  // Make sure the Char event is pending.
-  EXPECT_EQ(0U, process_->sink().message_count());
-
-  // Forward another Char event before receiving the ACK of previous KeyDown
-  // event.
-  SimulateKeyboardEvent(WebInputEvent::Char);
-
-  // Make sure the Char event is pending.
-  EXPECT_EQ(0U, process_->sink().message_count());
-
-  // Forward the KeyUp event before receiving the ACK of previous KeyDown event.
-  SimulateKeyboardEvent(WebInputEvent::KeyUp);
-
-  // Make sure the KeyUp event is pending.
-  EXPECT_EQ(0U, process_->sink().message_count());
-
-  // Simluate the situation that the browser handled the key down event.
-  host_->set_handle_unhandled_keyboard_event(true);
-
-  // Send the simulated response of the KeyDown event from the renderer back.
-  SendInputEventACK(WebInputEvent::RawKeyDown, false);
-
-  EXPECT_TRUE(host_->unhandled_keyboard_event_called());
-  EXPECT_EQ(WebInputEvent::RawKeyDown, host_->unhandled_keyboard_event_type());
-
-  // Make sure only pending KeyUp was sent to the renderer.
+  // Make sure only KeyUp was sent to the renderer.
   EXPECT_EQ(1U, process_->sink().message_count());
   EXPECT_EQ(ViewMsg_HandleInputEvent::ID,
             process_->sink().GetMessageAt(0)->type());
@@ -683,50 +581,72 @@ TEST_F(RenderWidgetHostTest, SuppressNextCharEventsPending) {
   EXPECT_EQ(WebInputEvent::KeyUp, host_->unhandled_keyboard_event_type());
 }
 
-TEST_F(RenderWidgetHostTest, ManyKeyEventsPending) {
+TEST_F(RenderWidgetHostTest, CoalescesWheelEvents) {
   process_->sink().ClearMessages();
 
-  for (int i = 0; i < 10; ++i) {
-    // Forward a KeyDown event.
-    SimulateKeyboardEvent(WebInputEvent::RawKeyDown);
+  // Simulate wheel events.
+  SimulateWheelEvent(0, -5, 0);  // sent directly
+  SimulateWheelEvent(0, -10, 0);  // enqueued
+  SimulateWheelEvent(8, -6, 0);  // coalesced into previous event
+  SimulateWheelEvent(9, -7, 1);  // enqueued, different modifiers
 
-    // Forward a Char event before receiving the ACK of previous KeyDown event.
-    SimulateKeyboardEvent(WebInputEvent::Char);
-
-    // Forward a KeyUp event before receiving the ACK of previous KeyDown event.
-    SimulateKeyboardEvent(WebInputEvent::KeyUp);
-  }
-
-  // Make sure only the first KeyDown event was sent to the renderer. All others
-  // are pending.
+  // Check that only the first event was sent.
   EXPECT_EQ(1U, process_->sink().message_count());
   EXPECT_TRUE(process_->sink().GetUniqueMessageMatching(
                   ViewMsg_HandleInputEvent::ID));
   process_->sink().ClearMessages();
 
-  for (int i = 0; i < 10; ++i) {
-    // Send the simulated response of the KeyDown event from the renderer back.
-    SendInputEventACK(WebInputEvent::RawKeyDown, false);
-    EXPECT_TRUE(host_->unhandled_keyboard_event_called());
-    EXPECT_EQ(WebInputEvent::RawKeyDown,
-              host_->unhandled_keyboard_event_type());
+  // Check that the ACK sends the second message.
+  SendInputEventACK(WebInputEvent::MouseWheel, true);
+  EXPECT_EQ(1U, process_->sink().message_count());
+  EXPECT_TRUE(process_->sink().GetUniqueMessageMatching(
+                  ViewMsg_HandleInputEvent::ID));
+  process_->sink().ClearMessages();
 
-    // Make sure the following pending Char, KeyUp and KeyDown event were sent
-    // to the renderer.
-    if (i < 9)
-      EXPECT_EQ(3U, process_->sink().message_count());
-    else
-      EXPECT_EQ(2U, process_->sink().message_count());
-    process_->sink().ClearMessages();
+  // One more time.
+  SendInputEventACK(WebInputEvent::MouseWheel, true);
+  EXPECT_EQ(1U, process_->sink().message_count());
+  EXPECT_TRUE(process_->sink().GetUniqueMessageMatching(
+                  ViewMsg_HandleInputEvent::ID));
+  process_->sink().ClearMessages();
 
-    // Send the simulated response of the Char event from the renderer back.
-    SendInputEventACK(WebInputEvent::Char, false);
-    EXPECT_TRUE(host_->unhandled_keyboard_event_called());
-    EXPECT_EQ(WebInputEvent::Char, host_->unhandled_keyboard_event_type());
-
-    // Send the simulated response of the KeyUp event from the renderer back.
-    SendInputEventACK(WebInputEvent::KeyUp, false);
-    EXPECT_TRUE(host_->unhandled_keyboard_event_called());
-    EXPECT_EQ(WebInputEvent::KeyUp, host_->unhandled_keyboard_event_type());
-  }
+  // After the final ack, the queue should be empty.
+  SendInputEventACK(WebInputEvent::MouseWheel, true);
+  EXPECT_EQ(0U, process_->sink().message_count());
 }
+
+// Test that the hang monitor timer expires properly if a new timer is started
+// while one is in progress (see crbug.com/11007).
+TEST_F(RenderWidgetHostTest, DontPostponeHangMonitorTimeout) {
+  // Start with a short timeout.
+  host_->StartHangMonitorTimeout(TimeDelta::FromMilliseconds(10));
+
+  // Immediately try to add a long 30 second timeout.
+  EXPECT_FALSE(host_->unresponsive_timer_fired());
+  host_->StartHangMonitorTimeout(TimeDelta::FromMilliseconds(30000));
+
+  // Wait long enough for first timeout and see if it fired.
+  MessageLoop::current()->PostDelayedTask(FROM_HERE,
+                                          new MessageLoop::QuitTask(), 10);
+  MessageLoop::current()->Run();
+  EXPECT_TRUE(host_->unresponsive_timer_fired());
+}
+
+// Test that the hang monitor timer expires properly if it is started, stopped,
+// and then started again.
+TEST_F(RenderWidgetHostTest, StopAndStartHangMonitorTimeout) {
+  // Start with a short timeout, then stop it.
+  host_->StartHangMonitorTimeout(TimeDelta::FromMilliseconds(10));
+  host_->StopHangMonitorTimeout();
+
+  // Start it again to ensure it still works.
+  EXPECT_FALSE(host_->unresponsive_timer_fired());
+  host_->StartHangMonitorTimeout(TimeDelta::FromMilliseconds(10));
+
+  // Wait long enough for first timeout and see if it fired.
+  MessageLoop::current()->PostDelayedTask(FROM_HERE,
+                                          new MessageLoop::QuitTask(), 10);
+  MessageLoop::current()->Run();
+  EXPECT_TRUE(host_->unresponsive_timer_fired());
+}
+

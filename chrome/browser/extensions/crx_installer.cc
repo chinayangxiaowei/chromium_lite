@@ -1,21 +1,26 @@
-// Copyright (c) 2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/extensions/crx_installer.h"
 
 #include "app/l10n_util.h"
+#include "app/resource_bundle.h"
 #include "base/file_util.h"
 #include "base/scoped_temp_dir.h"
-#include "base/string_util.h"
 #include "base/task.h"
+#include "base/utf_string_conversions.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/chrome_thread.h"
 #include "chrome/browser/extensions/convert_user_script.h"
-#include "chrome/browser/extensions/extension_file_util.h"
+#include "chrome/browser/profile.h"
+#include "chrome/browser/shell_integration.h"
+#include "chrome/browser/web_applications/web_app.h"
 #include "chrome/common/extensions/extension_error_reporter.h"
+#include "chrome/common/extensions/extension_file_util.h"
 #include "chrome/common/notification_service.h"
 #include "chrome/common/notification_type.h"
+#include "grit/browser_resources.h"
 #include "grit/chromium_strings.h"
 #include "third_party/skia/include/core/SkBitmap.h"
 
@@ -27,57 +32,15 @@ namespace {
   }
 }
 
-void CrxInstaller::Start(const FilePath& crx_path,
-                         const FilePath& install_directory,
-                         Extension::Location install_source,
-                         const std::string& expected_id,
-                         bool delete_source,
-                         bool allow_privilege_increase,
-                         ExtensionsService* frontend,
-                         ExtensionInstallUI* client) {
-  // Note: We don't keep a reference because this object manages its own
-  // lifetime.
-  CrxInstaller* installer = new CrxInstaller(crx_path, install_directory,
-                                             delete_source, frontend,
-                                             client);
-  installer->install_source_ = install_source;
-  installer->expected_id_ = expected_id;
-  installer->allow_privilege_increase_ = allow_privilege_increase;
-
-  installer->unpacker_ = new SandboxedExtensionUnpacker(
-      installer->source_file_, g_browser_process->resource_dispatcher_host(),
-      installer);
-
-  ChromeThread::PostTask(
-      ChromeThread::FILE, FROM_HERE,
-      NewRunnableMethod(installer->unpacker_, &SandboxedExtensionUnpacker::Start));
-}
-
-void CrxInstaller::InstallUserScript(const FilePath& source_file,
-                                     const GURL& original_url,
-                                     const FilePath& install_directory,
-                                     bool delete_source,
-                                     ExtensionsService* frontend,
-                                     ExtensionInstallUI* client) {
-  CrxInstaller* installer = new CrxInstaller(source_file, install_directory,
-                                             delete_source, frontend, client);
-  installer->original_url_ = original_url;
-
-  ChromeThread::PostTask(
-      ChromeThread::FILE, FROM_HERE,
-      NewRunnableMethod(installer, &CrxInstaller::ConvertUserScriptOnFileThread));
-}
-
-CrxInstaller::CrxInstaller(const FilePath& source_file,
-                           const FilePath& install_directory,
-                           bool delete_source,
+CrxInstaller::CrxInstaller(const FilePath& install_directory,
                            ExtensionsService* frontend,
                            ExtensionInstallUI* client)
-    : source_file_(source_file),
-      install_directory_(install_directory),
+    : install_directory_(install_directory),
       install_source_(Extension::INTERNAL),
-      delete_source_(delete_source),
+      delete_source_(false),
       allow_privilege_increase_(false),
+      force_web_origin_to_download_url_(false),
+      create_app_shortcut_(false),
       frontend_(frontend),
       client_(client) {
   extensions_enabled_ = frontend_->extensions_enabled();
@@ -98,6 +61,41 @@ CrxInstaller::~CrxInstaller() {
         ChromeThread::FILE, FROM_HERE,
         NewRunnableFunction(&DeleteFileHelper, source_file_, false));
   }
+
+  // Make sure the UI is deleted on the ui thread.
+  ChromeThread::DeleteSoon(ChromeThread::UI, FROM_HERE, client_);
+  client_ = NULL;
+}
+
+void CrxInstaller::InstallCrx(const FilePath& source_file) {
+  source_file_ = source_file;
+
+  scoped_refptr<SandboxedExtensionUnpacker> unpacker(
+      new SandboxedExtensionUnpacker(
+          source_file,
+          g_browser_process->resource_dispatcher_host(),
+          this));
+
+  if (force_web_origin_to_download_url_ && original_url_.is_valid()) {
+    unpacker->set_web_origin(original_url_.GetOrigin());
+  }
+
+  ChromeThread::PostTask(
+      ChromeThread::FILE, FROM_HERE,
+      NewRunnableMethod(
+          unpacker.get(), &SandboxedExtensionUnpacker::Start));
+}
+
+void CrxInstaller::InstallUserScript(const FilePath& source_file,
+                                     const GURL& original_url) {
+  DCHECK(!original_url.is_empty());
+
+  source_file_ = source_file;
+  original_url_ = original_url;
+
+  ChromeThread::PostTask(
+      ChromeThread::FILE, FROM_HERE,
+      NewRunnableMethod(this, &CrxInstaller::ConvertUserScriptOnFileThread));
 }
 
 void CrxInstaller::ConvertUserScriptOnFileThread() {
@@ -148,10 +146,11 @@ void CrxInstaller::OnUnpackSuccess(const FilePath& temp_dir,
     return;
   }
 
-  if (client_.get()) {
+  if (client_ || extension_->GetFullLaunchURL().is_valid()) {
     Extension::DecodeIcon(extension_.get(), Extension::EXTENSION_ICON_LARGE,
                           &install_icon_);
   }
+
   ChromeThread::PostTask(
       ChromeThread::UI, FROM_HERE,
       NewRunnableMethod(this, &CrxInstaller::ConfirmInstall));
@@ -169,9 +168,9 @@ void CrxInstaller::ConfirmInstall() {
   current_version_ =
       frontend_->extension_prefs()->GetVersionString(extension_->id());
 
-  if (client_.get()) {
+  if (client_) {
     AddRef();  // Balanced in Proceed() and Abort().
-    client_->ConfirmInstall(this, extension_.get(), install_icon_.get());
+    client_->ConfirmInstall(this, extension_.get());
   } else {
     ChromeThread::PostTask(
         ChromeThread::FILE, FROM_HERE,
@@ -180,7 +179,12 @@ void CrxInstaller::ConfirmInstall() {
   return;
 }
 
-void CrxInstaller::InstallUIProceed() {
+void CrxInstaller::InstallUIProceed(bool create_app_shortcut) {
+  if (create_app_shortcut) {
+    DCHECK(extension_->GetFullLaunchURL().is_valid());
+    create_app_shortcut_ = true;
+  }
+
   ChromeThread::PostTask(
         ChromeThread::FILE, FROM_HERE,
         NewRunnableMethod(this, &CrxInstaller::CompleteInstall));
@@ -227,6 +231,25 @@ void CrxInstaller::CompleteInstall() {
     return;
   }
 
+  if (create_app_shortcut_) {
+    SkBitmap icon = install_icon_.get() ? *install_icon_ :
+        *ResourceBundle::GetSharedInstance().GetBitmapNamed(
+            IDR_EXTENSION_DEFAULT_ICON);
+
+    ShellIntegration::ShortcutInfo shortcut_info;
+    shortcut_info.url = extension_->GetFullLaunchURL();
+    shortcut_info.extension_id = UTF8ToUTF16(extension_->id());
+    shortcut_info.title = UTF8ToUTF16(extension_->name());
+    shortcut_info.description = UTF8ToUTF16(extension_->description());
+    shortcut_info.favicon = icon;
+    shortcut_info.create_on_desktop = true;
+
+    // TODO(aa): Seems nasty to be reusing the old webapps code this way. What
+    // baggage am I inheriting?
+    web_app::CreateShortcut(frontend_->profile()->GetPath(), shortcut_info,
+                            NULL);
+  }
+
   // This is lame, but we must reload the extension because absolute paths
   // inside the content scripts are established inside InitFromValue() and we
   // just moved the extension.
@@ -263,7 +286,7 @@ void CrxInstaller::ReportFailureFromUIThread(const std::string& error) {
   // rid of this line.
   ExtensionErrorReporter::GetInstance()->ReportError(error, false);  // quiet
 
-  if (client_.get())
+  if (client_)
     client_->OnInstallFailure(error);
 }
 
@@ -282,7 +305,7 @@ void CrxInstaller::ReportOverinstallFromUIThread() {
                   Source<CrxInstaller>(this),
                   Details<const FilePath>(&extension_->path()));
 
-  if (client_.get())
+  if (client_)
     client_->OnOverinstallAttempted(extension_.get());
 
   frontend_->OnExtensionOverinstallAttempted(extension_->id());
@@ -299,7 +322,7 @@ void CrxInstaller::ReportSuccessFromUIThread() {
   DCHECK(ChromeThread::CurrentlyOn(ChromeThread::UI));
 
   // If there is a client, tell the client about installation.
-  if (client_.get())
+  if (client_)
     client_->OnInstallSuccess(extension_.get());
 
   // Tell the frontend about the installation and hand off ownership of

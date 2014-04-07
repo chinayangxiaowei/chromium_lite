@@ -1,4 +1,4 @@
-// Copyright (c) 2006-2008 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -14,9 +14,10 @@
 #import "chrome/browser/cocoa/chrome_browser_window.h"
 #import "chrome/browser/cocoa/browser_window_controller.h"
 #include "chrome/browser/global_keyboard_shortcuts_mac.h"
-#include "chrome/browser/cocoa/sad_tab_view.h"
+#include "chrome/browser/cocoa/sad_tab_controller.h"
 #import "chrome/browser/cocoa/web_drag_source.h"
 #import "chrome/browser/cocoa/web_drop_target.h"
+#include "chrome/browser/renderer_host/render_view_host.h"
 #include "chrome/browser/renderer_host/render_view_host_factory.h"
 #include "chrome/browser/renderer_host/render_widget_host.h"
 #include "chrome/browser/renderer_host/render_widget_host_view_mac.h"
@@ -25,9 +26,8 @@
 #include "chrome/common/notification_type.h"
 #include "chrome/common/notification_service.h"
 #include "chrome/common/render_messages.h"
+#include "skia/ext/skia_utils_mac.h"
 #import "third_party/mozilla/include/NSPasteboard+Utils.h"
-
-#include "chrome/common/temp_scaffolding_stubs.h"
 
 using WebKit::WebDragOperation;
 using WebKit::WebDragOperationsMask;
@@ -47,11 +47,12 @@ COMPILE_ASSERT_MATCHING_ENUM(DragOperationEvery);
 
 @interface TabContentsViewCocoa (Private)
 - (id)initWithTabContentsViewMac:(TabContentsViewMac*)w;
-- (BOOL)processKeyboardEvent:(NativeWebKeyboardEvent*)event;
 - (void)registerDragTypes;
 - (void)setCurrentDragOperation:(NSDragOperation)operation;
 - (void)startDragWithDropData:(const WebDropData&)dropData
-            dragOperationMask:(NSDragOperation)operationMask;
+            dragOperationMask:(NSDragOperation)operationMask
+                        image:(NSImage*)image
+                       offset:(NSPoint)offset;
 - (void)cancelDeferredClose;
 - (void)closeTabAfterEvent;
 @end
@@ -114,9 +115,10 @@ gfx::NativeView TabContentsViewMac::GetNativeView() const {
 }
 
 gfx::NativeView TabContentsViewMac::GetContentNativeView() const {
-  if (!tab_contents()->render_widget_host_view())
+  RenderWidgetHostView* rwhv = tab_contents()->GetRenderWidgetHostView();
+  if (!rwhv)
     return NULL;
-  return tab_contents()->render_widget_host_view()->GetNativeView();
+  return rwhv->GetNativeView();
 }
 
 gfx::NativeWindow TabContentsViewMac::GetTopLevelNativeWindow() const {
@@ -127,8 +129,11 @@ void TabContentsViewMac::GetContainerBounds(gfx::Rect* out) const {
   *out = [cocoa_view_.get() NSRectToRect:[cocoa_view_.get() bounds]];
 }
 
-void TabContentsViewMac::StartDragging(const WebDropData& drop_data,
-    WebDragOperationsMask allowed_operations) {
+void TabContentsViewMac::StartDragging(
+    const WebDropData& drop_data,
+    WebDragOperationsMask allowed_operations,
+    const SkBitmap& image,
+    const gfx::Point& image_offset) {
   // By allowing nested tasks, the code below also allows Close(),
   // which would deallocate |this|.  The same problem can occur while
   // processing -sendEvent:, so Close() is deferred in that case.
@@ -138,12 +143,13 @@ void TabContentsViewMac::StartDragging(const WebDropData& drop_data,
 
   // The drag invokes a nested event loop, arrange to continue
   // processing events.
-  bool old_state = MessageLoop::current()->NestableTasksAllowed();
-  MessageLoop::current()->SetNestableTasksAllowed(true);
+  MessageLoop::ScopedNestableTaskAllower allow(MessageLoop::current());
   NSDragOperation mask = static_cast<NSDragOperation>(allowed_operations);
+  NSPoint offset = NSPointFromCGPoint(image_offset.ToCGPoint());
   [cocoa_view_ startDragWithDropData:drop_data
-                   dragOperationMask:mask];
-  MessageLoop::current()->SetNestableTasksAllowed(old_state);
+                   dragOperationMask:mask
+                               image:gfx::SkBitmapToNSImage(image)
+                              offset:offset];
 }
 
 void TabContentsViewMac::RenderViewCreated(RenderViewHost* host) {
@@ -159,13 +165,14 @@ void TabContentsViewMac::SetPageTitle(const std::wstring& title) {
 
 void TabContentsViewMac::OnTabCrashed() {
   if (!sad_tab_.get()) {
-    SadTabView* view = [[SadTabView alloc] initWithFrame:NSZeroRect];
-    sad_tab_.reset(view);
-
-    // Set as the dominant child.
-    [cocoa_view_.get() addSubview:view];
-    [view setFrame:[cocoa_view_.get() bounds]];
-    [view setAutoresizingMask:NSViewWidthSizable | NSViewHeightSizable];
+    TabContents* contents = tab_contents();
+    DCHECK(contents);
+    if (contents) {
+      SadTabController* sad_tab =
+          [[SadTabController alloc] initWithTabContents:contents
+                                              superview:cocoa_view_];
+      sad_tab_.reset(sad_tab);
+    }
   }
 }
 
@@ -184,7 +191,7 @@ void TabContentsViewMac::Focus() {
 
 void TabContentsViewMac::SetInitialFocus() {
   if (tab_contents()->FocusLocationBarByDefault())
-    tab_contents()->delegate()->SetFocusToLocationBar();
+    tab_contents()->SetFocusToLocationBar(false);
   else
     [[cocoa_view_.get() window] makeFirstResponder:GetContentNativeView()];
 }
@@ -231,12 +238,6 @@ void TabContentsViewMac::TakeFocus(bool reverse) {
   }
 }
 
-bool TabContentsViewMac::HandleKeyboardEvent(
-    const NativeWebKeyboardEvent& event) {
-  return [cocoa_view_.get() processKeyboardEvent:
-      const_cast<NativeWebKeyboardEvent*>(&event)] == YES;
-}
-
 void TabContentsViewMac::ShowContextMenu(const ContextMenuParams& params) {
   RenderViewContextMenuMac menu(tab_contents(),
                                 params,
@@ -246,11 +247,11 @@ void TabContentsViewMac::ShowContextMenu(const ContextMenuParams& params) {
 
 RenderWidgetHostView* TabContentsViewMac::CreateNewWidgetInternal(
     int route_id,
-    bool activatable) {
+    WebKit::WebPopupType popup_type) {
   // A RenderWidgetHostViewMac has lifetime scoped to the view. We'll retain it
   // to allow it to survive the trip without being hosted.
   RenderWidgetHostView* widget_view =
-      TabContentsView::CreateNewWidgetInternal(route_id, activatable);
+      TabContentsView::CreateNewWidgetInternal(route_id, popup_type);
   RenderWidgetHostViewMac* widget_view_mac =
       static_cast<RenderWidgetHostViewMac*>(widget_view);
   [widget_view_mac->native_view() retain];
@@ -302,10 +303,7 @@ void TabContentsViewMac::Observe(NotificationType type,
                                  const NotificationDetails& details) {
   switch (type.value) {
     case NotificationType::TAB_CONTENTS_CONNECTED: {
-      if (sad_tab_.get()) {
-        [sad_tab_.get() removeFromSuperview];
-        sad_tab_.reset();
-      }
+      sad_tab_.reset();
       break;
     }
     default:
@@ -340,7 +338,6 @@ void TabContentsViewMac::Observe(NotificationType type,
 }
 
 // Registers for the view for the appropriate drag types.
-// TODO(pinkerton): register for file drags.
 - (void)registerDragTypes {
   NSArray* types = [NSArray arrayWithObjects:NSStringPboardType,
       NSHTMLPboardType, NSURLPboardType, nil];
@@ -353,54 +350,6 @@ void TabContentsViewMac::Observe(NotificationType type,
 
 - (TabContents*)tabContents {
   return tabContentsView_->tab_contents();
-}
-
-- (BOOL)processKeyboardEvent:(NativeWebKeyboardEvent*)wkEvent {
-  if (wkEvent->skip_in_browser)
-    return NO;
-
-  NSEvent* event = wkEvent->os_event;
-
-  if (!event) {
-    // Char events are synthesized and do not contain a real event. We are not
-    // interested in them anyway.
-    DCHECK(wkEvent->type == WebKit::WebInputEvent::Char);
-    return NO;
-  }
-
-  // If this tab is no longer active, its window will be |nil|. In that case,
-  // best ignore the event.
-  if (![self window])
-    return NO;
-  ChromeEventProcessingWindow* window =
-      (ChromeEventProcessingWindow*)[self window];
-  DCHECK([window isKindOfClass:[ChromeEventProcessingWindow class]]);
-
-  // Do not fire shortcuts on key up.
-  if ([event type] == NSKeyDown) {
-    // Send the event to the menu before sending it to the browser/window
-    // shortcut handling, so that if a user configures cmd-left to mean
-    // "previous tab", it takes precedence over the built-in "history back"
-    // binding. Other than that, the |redispatchEvent| call would take care of
-    // invoking the original menu item shortcut as well.
-    if ([[NSApp mainMenu] performKeyEquivalent:event])
-      return YES;
-
-    if ([window handleExtraBrowserKeyboardShortcut:event])
-      return YES;
-    if ([window handleExtraWindowKeyboardShortcut:event])
-      return YES;
-  }
-
-  // We need to re-dispatch the event, so that it is sent to the menu or other
-  // cocoa mechanisms (such as the cmd-` handler).
-  RenderWidgetHostViewCocoa* rwhv = static_cast<RenderWidgetHostViewCocoa*>(
-      tabContentsView_->GetContentNativeView());
-  DCHECK([rwhv isKindOfClass:[RenderWidgetHostViewCocoa class]]);
-  [rwhv setIgnoreKeyEvents:YES];
-  BOOL eventHandled = [window redispatchEvent:event];
-  [rwhv setIgnoreKeyEvents:NO];
-  return eventHandled;
 }
 
 - (void)mouseEvent:(NSEvent *)theEvent {
@@ -426,48 +375,20 @@ void TabContentsViewMac::Observe(NotificationType type,
   return NO;
 }
 
-// In the Windows version, we always have cut/copy/paste enabled. This is sub-
-// optimal, but we do it too. TODO(avi): Plumb the "can*" methods up from
-// WebCore.
-
-- (void)cut:(id)sender {
-  [self tabContents]->Cut();
-}
-
-- (void)copy:(id)sender {
-  [self tabContents]->Copy();
-}
-
-- (void)copyToFindPboard:(id)sender {
-  [self tabContents]->CopyToFindPboard();
-}
-
-- (void)paste:(id)sender {
-  [self tabContents]->Paste();
-}
-
-- (void)pasteAsPlainText:(id)sender {
-  [self tabContents]->PasteAndMatchStyle();
-}
-
 - (void)pasteboard:(NSPasteboard*)sender provideDataForType:(NSString*)type {
   [dragSource_ lazyWriteToPasteboard:sender
                              forType:type];
 }
 
-- (void)undo:(id)sender {
-  [self tabContents]->render_view_host()->Undo();
-}
-
-- (void)redo:(id)sender {
-  [self tabContents]->render_view_host()->Redo();
-}
-
 - (void)startDragWithDropData:(const WebDropData&)dropData
-            dragOperationMask:(NSDragOperation)operationMask {
+            dragOperationMask:(NSDragOperation)operationMask
+                        image:(NSImage*)image
+                       offset:(NSPoint)offset {
   dragSource_.reset([[WebDragSource alloc]
           initWithContentsView:self
                       dropData:&dropData
+                         image:image
+                        offset:offset
                     pasteboard:[NSPasteboard pasteboardWithName:NSDragPboard]
              dragOperationMask:operationMask]);
   [dragSource_ startDrag];
@@ -536,8 +457,5 @@ void TabContentsViewMac::Observe(NotificationType type,
 - (void)closeTabAfterEvent {
   tabContentsView_->CloseTab();
 }
-
-// Tons of stuff goes here, where we grab events going on in Cocoaland and send
-// them into the C++ system. TODO(avi): all that jazz
 
 @end

@@ -16,13 +16,14 @@
 #include "base/scoped_ptr.h"
 #include "net/base/cert_verify_result.h"
 #include "net/base/completion_callback.h"
+#include "net/base/net_log.h"
 #include "net/base/ssl_config_service.h"
 #include "net/socket/ssl_client_socket.h"
 
 namespace net {
 
 class CertVerifier;
-class LoadLog;
+class BoundNetLog;
 
 // An SSL client socket implemented with the Windows Schannel.
 class SSLClientSocketWin : public SSLClientSocket {
@@ -39,12 +40,14 @@ class SSLClientSocketWin : public SSLClientSocket {
   // SSLClientSocket methods:
   virtual void GetSSLInfo(SSLInfo* ssl_info);
   virtual void GetSSLCertRequestInfo(SSLCertRequestInfo* cert_request_info);
+  virtual NextProtoStatus GetNextProto(std::string* proto);
 
   // ClientSocket methods:
-  virtual int Connect(CompletionCallback* callback, LoadLog* load_log);
+  virtual int Connect(CompletionCallback* callback, const BoundNetLog& net_log);
   virtual void Disconnect();
   virtual bool IsConnected() const;
   virtual bool IsConnectedAndIdle() const;
+  virtual int GetPeerAddress(AddressList* address) const;
 
   // Socket methods:
   virtual int Read(IOBuffer* buf, int buf_len, CompletionCallback* callback);
@@ -162,8 +165,6 @@ class SSLClientSocketWin : public SSLClientSocket {
   // state.
   bool writing_first_token_;
 
-  bool completed_handshake_;
-
   // Only used in the STATE_HANDSHAKE_READ_COMPLETE and
   // STATE_PAYLOAD_READ_COMPLETE states.  True if a 'result' argument of OK
   // should be ignored, to prevent it from being interpreted as EOF.
@@ -181,7 +182,7 @@ class SSLClientSocketWin : public SSLClientSocket {
   // True when the decrypter needs more data in order to decrypt.
   bool need_more_data_;
 
-  scoped_refptr<LoadLog> load_log_;
+  BoundNetLog net_log_;
 };
 
 }  // namespace net

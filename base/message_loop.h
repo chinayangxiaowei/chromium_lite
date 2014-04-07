@@ -21,9 +21,9 @@
 #include "base/message_pump_win.h"
 #elif defined(OS_POSIX)
 #include "base/message_pump_libevent.h"
-#endif
-#if defined(OS_LINUX)
+#if !defined(OS_MACOSX)
 #include "base/message_pump_glib.h"
+#endif
 #endif
 
 // A MessageLoop is used to process events for a particular thread.  There is
@@ -158,6 +158,10 @@ class MessageLoop : public base::MessagePump::Delegate {
   //
   void Quit();
 
+  // This method is a variant of Quit, that does not wait for pending messages
+  // to be processed before returning from Run.
+  void QuitNow();
+
   // Invokes Quit on the current MessageLoop when run.  Useful to schedule an
   // arbitrary MessageLoop to Quit.
   class QuitTask : public Task {
@@ -223,6 +227,23 @@ class MessageLoop : public base::MessagePump::Delegate {
   void SetNestableTasksAllowed(bool allowed);
   bool NestableTasksAllowed() const;
 
+  // Enables nestable tasks on |loop| while in scope.
+  class ScopedNestableTaskAllower {
+   public:
+    explicit ScopedNestableTaskAllower(MessageLoop* loop)
+        : loop_(loop),
+          old_state_(loop_->NestableTasksAllowed()) {
+      loop_->SetNestableTasksAllowed(true);
+    }
+    ~ScopedNestableTaskAllower() {
+      loop_->SetNestableTasksAllowed(old_state_);
+    }
+
+   private:
+    MessageLoop* loop_;
+    bool old_state_;
+  };
+
   // Enables or disables the restoration during an exception of the unhandled
   // exception filter that was active when Run() was called. This can happen
   // if some third party code call SetUnhandledExceptionFilter() and never
@@ -237,7 +258,7 @@ class MessageLoop : public base::MessagePump::Delegate {
 #if defined(OS_WIN)
   typedef base::MessagePumpWin::Dispatcher Dispatcher;
   typedef base::MessagePumpWin::Observer Observer;
-#elif defined(OS_LINUX)
+#elif !defined(OS_MACOSX)
   typedef base::MessagePumpForUI::Dispatcher Dispatcher;
   typedef base::MessagePumpForUI::Observer Observer;
 #endif
@@ -252,7 +273,7 @@ class MessageLoop : public base::MessagePump::Delegate {
     // once it becomes idle.
     bool quit_received;
 
-#if defined(OS_WIN) || defined(OS_LINUX)
+#if !defined(OS_MACOSX)
     Dispatcher* dispatcher;
 #endif
   };
@@ -397,7 +418,7 @@ class MessageLoop : public base::MessagePump::Delegate {
 
   std::string thread_name_;
   // A profiling histogram showing the counts of various messages and events.
-  scoped_ptr<LinearHistogram> message_histogram_;
+  scoped_refptr<Histogram> message_histogram_;
 
   // A null terminated list which creates an incoming_queue of tasks that are
   // aquired under a mutex for processing on this instance's thread. These tasks
@@ -440,7 +461,7 @@ class MessageLoopForUI : public MessageLoop {
   void PumpOutPendingPaintMessages();
 #endif
 
-#if defined(OS_WIN) || defined(OS_LINUX)
+#if !defined(OS_MACOSX)
   // Please see message_pump_win/message_pump_glib for definitions of these
   // methods.
   void AddObserver(Observer* observer);
@@ -452,7 +473,7 @@ class MessageLoopForUI : public MessageLoop {
   base::MessagePumpForUI* pump_ui() {
     return static_cast<base::MessagePumpForUI*>(pump_.get());
   }
-#endif  // defined(OS_WIN) || defined(OS_LINUX)
+#endif  // defined(OS_MACOSX)
 };
 
 // Do not add any member variables to MessageLoopForUI!  This is important b/c

@@ -37,12 +37,10 @@
 
 #include <string>
 #include <algorithm>
+#include "core/cross/image_utils.h"
 #include "core/cross/renderer.h"
+#include "core/cross/texture.h"
 #include "core/cross/client_info.h"
-#include "core/cross/command_buffer/display_window_cb.h"
-#include "gpu/np_utils/np_headers.h"
-#include "gpu/np_utils/np_object_pointer.h"
-#include "gpu/np_utils/np_utils.h"
 #include "plugin/cross/o3d_glue.h"
 #include "plugin/cross/config.h"
 #include "plugin/cross/stream_manager.h"
@@ -53,13 +51,16 @@
 #include "plugin_mac.h"
 #endif
 
-using o3d::DisplayWindowCB;
-using gpu_plugin::NPObjectPointer;
-using gpu_plugin::NPVariantToValue;
-using gpu_plugin::ValueToNPVariant;
+#ifdef OS_LINUX
+#include <X11/cursorfont.h>
+#endif
 
 namespace glue {
 namespace _o3d {
+
+using o3d::Bitmap;
+using o3d::Texture;
+using o3d::Texture2D;
 
 void RegisterType(NPP npp, const ObjectBase::Class *clientclass,
                   NPClass *npclass) {
@@ -130,24 +131,31 @@ PluginObject::PluginObject(NPP npp)
       event_model_(NPEventModelCarbon),
       mac_window_(0),
       mac_fullscreen_window_(0),
+#ifdef O3D_PLUGIN_ENABLE_FULLSCREEN_MSG
       mac_fullscreen_overlay_window_(0),
+#endif
       mac_window_selected_tab_(0),
       mac_cocoa_window_(0),
       mac_surface_hidden_(0),
       mac_2d_context_(0),
       mac_agl_context_(0),
       mac_cgl_context_(0),
+      mac_cgl_pbuffer_(0),
       last_mac_event_time_(0),
+#ifdef O3D_PLUGIN_ENABLE_FULLSCREEN_MSG
       time_to_hide_overlay_(0.0),
 #endif
+#endif  // OS_MACOSX
 #ifdef OS_LINUX
       display_(NULL),
       window_(0),
+      fullscreen_window_(0),
       xt_widget_(NULL),
       xt_app_context_(NULL),
       xt_interval_(0),
       last_click_time_(0),
       drawable_(0),
+      gdk_display_(NULL),
       gtk_container_(NULL),
       gtk_fullscreen_container_(NULL),
       gtk_event_source_(NULL),
@@ -164,8 +172,9 @@ PluginObject::PluginObject(NPP npp)
       stream_manager_(new StreamManager(npp)),
       cursor_type_(o3d::Cursor::DEFAULT),
       prev_width_(0),
-      prev_height_(0) {
-#ifdef OS_WIN
+      prev_height_(0),
+      offscreen_rendering_enabled_(false) {
+#if defined(OS_WIN) || defined(OS_LINUX)
   memset(cursors_, 0, sizeof(cursors_));
 #endif
 
@@ -217,12 +226,14 @@ void PluginObject::Init(int argc, char* argn[], char* argv[]) {
 }
 
 void PluginObject::TearDown() {
+  DisableOffscreenRendering();
 #ifdef OS_WIN
   ClearPluginProperty(hWnd_);
-#endif  // OS_WIN
-#ifdef OS_MACOSX
+#elif defined(OS_MACOSX)
   o3d::ReleaseSafariBrowserWindow(mac_cocoa_window_);
-#endif
+#elif defined(OS_LINUX)
+  SetDisplay(NULL);
+#endif  // OS_WIN
   UnmapAll();
 
   // Delete the StreamManager to cleanup any streams that are in midflight.
@@ -715,6 +726,12 @@ void PluginObject::Resize(int width, int height) {
     prev_height_ = height;
 
     if (renderer_ && !fullscreen_) {
+      // If we are rendering offscreen, we may need to reallocate the
+      // render surfaces.
+      if (offscreen_rendering_enabled_) {
+        AllocateOffscreenRenderSurfaces(width, height);
+      }
+
       // Tell the renderer and client that our window has been resized.
       // If we're in fullscreen mode when this happens, we don't want to pass
       // the information through; the renderer will pick it up when we switch
@@ -875,8 +892,99 @@ void PluginObject::PlatformSpecificSetCursor() {
 
 #ifdef OS_LINUX
 
+void PluginObject::SetDisplay(Display *display) {
+  if (display_ != display) {
+    if (display_) {
+      for (int i = 0; i < o3d::Cursor::NUM_CURSORS; ++i) {
+        if (cursors_[i]) {
+          XFreeCursor(display_, cursors_[i]);
+          cursors_[i] = 0;
+        }
+      }
+    }
+    display_ = display;
+  }
+}
+
+static unsigned int O3DToX11CursorShape(o3d::Cursor::CursorType cursor_type) {
+  switch (cursor_type) {
+    case o3d::Cursor::DEFAULT:
+      return XC_arrow;
+    case o3d::Cursor::CROSSHAIR:
+      return XC_crosshair;
+    case o3d::Cursor::POINTER:
+      return XC_hand2;
+    case o3d::Cursor::E_RESIZE:
+      return XC_right_side;
+    case o3d::Cursor::NE_RESIZE:
+      return XC_top_right_corner;
+    case o3d::Cursor::NW_RESIZE:
+      return XC_top_left_corner;
+    case o3d::Cursor::N_RESIZE:
+      return XC_top_side;
+    case o3d::Cursor::SE_RESIZE:
+      return XC_bottom_right_corner;
+    case o3d::Cursor::SW_RESIZE:
+      return XC_bottom_left_corner;
+    case o3d::Cursor::S_RESIZE:
+      return XC_bottom_side;
+    case o3d::Cursor::W_RESIZE:
+      return XC_left_side;
+    case o3d::Cursor::MOVE:
+      return XC_fleur;
+    case o3d::Cursor::TEXT:
+      return XC_xterm;
+    case o3d::Cursor::WAIT:
+      return XC_watch;
+    case o3d::Cursor::PROGRESS:
+      NOTIMPLEMENTED();
+      return XC_watch;
+    case o3d::Cursor::HELP:
+      NOTIMPLEMENTED();
+      return XC_arrow;
+  }
+  NOTIMPLEMENTED();
+  return XC_arrow;
+}
+
+static Cursor O3DToX11Cursor(Display *display, Window window,
+                             o3d::Cursor::CursorType cursor_type) {
+  switch (cursor_type) {
+    case o3d::Cursor::NONE: {
+      // There is no X11 primitive for hiding the cursor. The standard practice
+      // is to define a custom cursor from a 1x1 invisible pixmap.
+      static char zero[1] = {0};
+      Pixmap zero_pixmap = XCreateBitmapFromData(display, window, zero, 1, 1);
+      DLOG_ASSERT(zero_pixmap);
+      if (!zero_pixmap) {
+        return 0;
+      }
+      // This could actually be any colour, since our mask pixmap specifies that
+      // no pixels are visible.
+      XColor black;
+      black.red = 0;
+      black.green = 0;
+      black.blue = 0;
+      Cursor cursor = XCreatePixmapCursor(display, zero_pixmap, zero_pixmap,
+                                          &black, &black, 0, 0);
+      XFreePixmap(display, zero_pixmap);
+      return cursor;
+    }
+
+    default:
+      return XCreateFontCursor(display, O3DToX11CursorShape(cursor_type));
+  }
+}
+
 void PluginObject::PlatformSpecificSetCursor() {
-  // TODO: fill this in.
+  if (!cursors_[cursor_type_]) {
+    // According to the docs, the window here is only relevant for selecting the
+    // screen, and we always create our fullscreen and embedded windows on the
+    // same screen, so we can just always use the embedded window.
+    cursors_[cursor_type_] = O3DToX11Cursor(display_, window_, cursor_type_);
+  }
+  Window window = fullscreen_ ? fullscreen_window_ : window_;
+  XDefineCursor(display_, window, cursors_[cursor_type_]);
 }
 
 #endif  // OS_LINUX
@@ -958,6 +1066,93 @@ void PluginObject::Tick() {
   if (renderer_ && renderer_->need_to_render()) {
     client_->RenderClient(true);
   }
+}
+
+void PluginObject::EnableOffscreenRendering() {
+  if (!offscreen_rendering_enabled_) {
+    AllocateOffscreenRenderSurfaces(width(), height());
+    offscreen_rendering_enabled_ = true;
+  }
+}
+
+void PluginObject::DisableOffscreenRendering() {
+  if (offscreen_rendering_enabled_) {
+    DeallocateOffscreenRenderSurfaces();
+    offscreen_rendering_enabled_ = false;
+  }
+}
+
+bool PluginObject::IsOffscreenRenderingEnabled() const {
+  return offscreen_rendering_enabled_;
+}
+
+RenderSurface::Ref PluginObject::GetOffscreenRenderSurface() const {
+  return offscreen_render_surface_;
+}
+
+Bitmap::Ref PluginObject::GetOffscreenBitmap() const {
+  return offscreen_readback_bitmap_;
+}
+
+bool PluginObject::AllocateOffscreenRenderSurfaces(int width, int height) {
+  int pot_width =
+      static_cast<int>(o3d::image::ComputePOTSize(width));
+  int pot_height =
+      static_cast<int>(o3d::image::ComputePOTSize(height));
+  if (!renderer_ || pot_width == 0 || pot_height == 0) {
+    return false;
+  }
+  bool must_reallocate_render_surfaces =
+      (offscreen_render_surface_.IsNull() ||
+       offscreen_depth_render_surface_.IsNull() ||
+       offscreen_render_surface_->width() != pot_width ||
+       offscreen_render_surface_->height() != pot_height);
+  if (must_reallocate_render_surfaces) {
+    Texture2D::Ref texture = renderer_->CreateTexture2D(
+        pot_width,
+        pot_height,
+        Texture::ARGB8,
+        1,
+        true);
+    if (texture.IsNull()) {
+      return false;
+    }
+    RenderSurface::Ref surface(texture->GetRenderSurface(0));
+    if (surface.IsNull()) {
+      return false;
+    }
+    RenderDepthStencilSurface::Ref depth(renderer_->CreateDepthStencilSurface(
+        pot_width,
+        pot_height));
+    if (depth.IsNull()) {
+      return false;
+    }
+    offscreen_texture_ = texture;
+    offscreen_render_surface_ = surface;
+    offscreen_depth_render_surface_ = depth;
+  }
+  offscreen_render_surface_->SetClipSize(width, height);
+  offscreen_depth_render_surface_->SetClipSize(width, height);
+  if (offscreen_readback_bitmap_.IsNull() ||
+      offscreen_readback_bitmap_->width() != width ||
+      offscreen_readback_bitmap_->height() != height) {
+    o3d::Bitmap::Ref bitmap = Bitmap::Ref(
+        new Bitmap(service_locator()));
+    bitmap->Allocate(Texture::ARGB8,
+                     width, height, 1, Bitmap::IMAGE);
+    offscreen_readback_bitmap_ = bitmap;
+  }
+  // Tell the Client about the newly allocated surfaces so that normal
+  // calls to RenderClient can automatically do the right thing.
+  client_->SetOffscreenRenderingSurfaces(offscreen_render_surface_,
+                                         offscreen_depth_render_surface_);
+  return true;
+}
+
+void PluginObject::DeallocateOffscreenRenderSurfaces() {
+  offscreen_render_surface_.Reset();
+  offscreen_depth_render_surface_.Reset();
+  offscreen_readback_bitmap_.Reset();
 }
 
 }  // namespace _o3d

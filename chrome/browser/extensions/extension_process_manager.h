@@ -1,4 +1,4 @@
-// Copyright (c) 2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -50,10 +50,18 @@ class ExtensionProcessManager : public NotificationObserver {
                              const GURL& url,
                              Browser* browser);
   ExtensionHost* CreatePopup(const GURL& url, Browser* browser);
+  ExtensionHost* CreateInfobar(Extension* extension,
+                               const GURL& url,
+                               Browser* browser);
+  ExtensionHost* CreateInfobar(const GURL& url,
+                               Browser* browser);
 
   // Creates a new UI-less extension instance.  Like CreateView, but not
   // displayed anywhere.
   ExtensionHost* CreateBackgroundHost(Extension* extension, const GURL& url);
+
+  // Open the extension's options page.
+  void OpenOptionsPage(Extension* extension, Browser* browser);
 
   // Gets the ExtensionHost for the background page for an extension, or NULL if
   // the extension isn't running or doesn't have a background page.
@@ -72,6 +80,9 @@ class ExtensionProcessManager : public NotificationObserver {
 
   // Returns the process that the extension with the given ID is running in.
   RenderProcessHost* GetExtensionProcess(const std::string& extension_id);
+
+  // Returns true if |host| is managed by this process manager.
+  bool HasExtensionHost(ExtensionHost* host) const;
 
   // NotificationObserver:
   virtual void Observe(NotificationType type,

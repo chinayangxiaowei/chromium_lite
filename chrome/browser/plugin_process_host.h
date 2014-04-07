@@ -1,4 +1,4 @@
-// Copyright (c) 2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -12,15 +12,15 @@
 #include <string>
 #include <vector>
 
-#include "app/gfx/native_widget_types.h"
 #include "base/basictypes.h"
 #include "base/scoped_ptr.h"
 #include "base/task.h"
+#include "chrome/browser/child_process_host.h"
 #include "chrome/browser/net/resolve_proxy_msg_helper.h"
 #include "chrome/browser/renderer_host/resource_message_filter.h"
-#include "chrome/common/child_process_host.h"
+#include "gfx/native_widget_types.h"
 #include "ipc/ipc_channel_handle.h"
-#include "webkit/glue/webplugininfo.h"
+#include "webkit/glue/plugins/webplugininfo.h"
 
 class URLRequestContext;
 struct ViewHostMsg_Resource_Request;
@@ -43,6 +43,9 @@ class PluginProcessHost : public ChildProcessHost,
   // Initialize the new plugin process, returning true on success. This must
   // be called before the object can be used.
   bool Init(const WebPluginInfo& info, const std::wstring& locale);
+
+  // Force the plugin process to shutdown (cleanly).
+  void ForceShutdown();
 
   virtual void OnMessageReceived(const IPC::Message& msg);
   virtual void OnChannelConnected(int32 peer_pid);
@@ -118,7 +121,7 @@ class PluginProcessHost : public ChildProcessHost,
                      gfx::NativeWindow caller_window);
 #endif
 
-#if defined(OS_LINUX)
+#if defined(USE_X11)
   void OnMapNativeViewId(gfx::NativeViewId id, gfx::PluginWindowHandle* output);
 #endif
 
@@ -128,8 +131,8 @@ class PluginProcessHost : public ChildProcessHost,
   void OnPluginShowWindow(uint32 window_id, gfx::Rect window_rect,
                           bool modal);
   void OnPluginHideWindow(uint32 window_id, gfx::Rect window_rect);
-  void OnPluginDisposeWindow(uint32 window_id, gfx::Rect window_rect);
   void OnPluginReceivedFocus(int process_id, int instance_id);
+  void OnPluginSetCursorVisibility(bool visible);
 #endif
 
   virtual bool CanShutdown() { return sent_requests_.empty(); }
@@ -164,12 +167,14 @@ class PluginProcessHost : public ChildProcessHost,
   std::set<HWND> plugin_parent_windows_set_;
 #endif
 #if defined(OS_MACOSX)
-  // Tracks plugin windows currently visible
+  // Tracks plugin windows currently visible.
   std::set<uint32> plugin_visible_windows_set_;
-  // Tracks full screen windows currently visible
+  // Tracks full screen windows currently visible.
   std::set<uint32> plugin_fullscreen_windows_set_;
-  // Tracks modal windows currently visible
+  // Tracks modal windows currently visible.
   std::set<uint32> plugin_modal_windows_set_;
+  // Tracks the current visibility of the cursor.
+  bool plugin_cursor_visible_;
 #endif
 
   DISALLOW_COPY_AND_ASSIGN(PluginProcessHost);

@@ -2,17 +2,21 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "chrome/browser/cocoa/browser_window_cocoa.h"
+
 #include "app/l10n_util_mac.h"
-#include "base/gfx/rect.h"
+#include "base/keyboard_codes.h"
 #include "base/logging.h"
 #include "base/sys_string_conversions.h"
 #include "chrome/app/chrome_dll_resource.h"
 #include "chrome/browser/bookmarks/bookmark_utils.h"
 #include "chrome/browser/browser_list.h"
-#include "chrome/browser/cocoa/browser_window_cocoa.h"
+#import "chrome/browser/cocoa/bookmark_manager_controller.h"
 #import "chrome/browser/cocoa/browser_window_controller.h"
 #import "chrome/browser/cocoa/bug_report_window_controller.h"
+#import "chrome/browser/cocoa/chrome_browser_window.h"
 #import "chrome/browser/cocoa/clear_browsing_data_controller.h"
+#import "chrome/browser/cocoa/content_settings_dialog_controller.h"
 #import "chrome/browser/cocoa/download_shelf_controller.h"
 #import "chrome/browser/cocoa/html_dialog_window_controller.h"
 #import "chrome/browser/cocoa/import_settings_dialog.h"
@@ -26,19 +30,19 @@
 #include "chrome/browser/browser.h"
 #include "chrome/browser/download/download_shelf.h"
 #include "chrome/browser/global_keyboard_shortcuts_mac.h"
+#include "chrome/browser/pref_service.h"
+#include "chrome/browser/profile.h"
+#include "chrome/browser/tab_contents/tab_contents.h"
 #include "chrome/common/notification_service.h"
 #include "chrome/common/pref_names.h"
-#include "chrome/common/pref_service.h"
-#include "chrome/common/temp_scaffolding_stubs.h"
-#include "chrome/browser/profile.h"
+#include "gfx/rect.h"
 #include "grit/chromium_strings.h"
 #include "grit/generated_resources.h"
 
 BrowserWindowCocoa::BrowserWindowCocoa(Browser* browser,
                                        BrowserWindowController* controller,
                                        NSWindow* window)
-  : window_(window),
-    browser_(browser),
+  : browser_(browser),
     controller_(controller) {
   // This pref applies to all windows, so all must watch for it.
   registrar_.Add(this, NotificationType::BOOKMARK_BAR_VISIBILITY_PREF_CHANGED,
@@ -57,7 +61,7 @@ void BrowserWindowCocoa::Show() {
   // the previous browser instead if we don't explicitly set it here.
   BrowserList::SetLastActive(browser_);
 
-  [window_ makeKeyAndOrderFront:controller_];
+  [window() makeKeyAndOrderFront:controller_];
 }
 
 void BrowserWindowCocoa::SetBounds(const gfx::Rect& bounds) {
@@ -68,7 +72,7 @@ void BrowserWindowCocoa::SetBounds(const gfx::Rect& bounds) {
   cocoa_bounds.origin.y =
       [screen frame].size.height - bounds.height() - bounds.y();
 
-  [window_ setFrame:cocoa_bounds display:YES];
+  [window() setFrame:cocoa_bounds display:YES];
 }
 
 // Callers assume that this doesn't immediately delete the Browser object.
@@ -78,14 +82,19 @@ void BrowserWindowCocoa::Close() {
   // If there is an overlay window, we contain a tab being dragged between
   // windows. Don't hide the window as it makes the UI extra confused. We can
   // still close the window, as that will happen when the drag completes.
-  if ([controller_ overlayWindow])
+  if ([controller_ overlayWindow]) {
     [controller_ deferPerformClose];
-  else {
+  } else {
     // Make sure we hide the window immediately. Even though performClose:
     // calls orderOut: eventually, it leaves the window on-screen long enough
     // that we start to see tabs shutting down. http://crbug.com/23959
-    [window_ orderOut:controller_];
-    [window_ performClose:controller_];
+    // TODO(viettrungluu): This is kind of bad, since |-performClose:| calls
+    // |-windowShouldClose:| (on its delegate, which is probably the
+    // controller) which may return |NO| causing the window to not be closed,
+    // thereby leaving a hidden window. In fact, our window-closing procedure
+    // involves a (indirect) recursion on |-performClose:|, which is also bad.
+    [window() orderOut:controller_];
+    [window() performClose:controller_];
   }
 }
 
@@ -98,11 +107,11 @@ void BrowserWindowCocoa::FlashFrame() {
 }
 
 bool BrowserWindowCocoa::IsActive() const {
-  return [window_ isKeyWindow];
+  return [window() isKeyWindow];
 }
 
 gfx::NativeWindow BrowserWindowCocoa::GetNativeHandle() {
-  return [controller_ window];
+  return window();
 }
 
 BrowserWindowTesting* BrowserWindowCocoa::GetBrowserWindowTesting() {
@@ -129,18 +138,19 @@ void BrowserWindowCocoa::UpdateTitleBar() {
   NSString* newTitle =
       base::SysUTF16ToNSString(browser_->GetWindowTitleForCurrentTab());
 
-  [window_ setTitle:newTitle];
+  [window() setTitle:newTitle];
 }
 
 void BrowserWindowCocoa::ShelfVisibilityChanged() {
   // Mac doesn't yet support showing the bookmark bar at a different size on
   // the new tab page. When it does, this method should attempt to relayout the
   // bookmark bar/extension shelf as their preferred height may have changed.
-  NOTIMPLEMENTED();
+  // http://crbug.com/43346
 }
 
 void BrowserWindowCocoa::UpdateDevTools() {
-  NOTIMPLEMENTED();
+  [controller_ updateDevToolsForContents:
+      browser_->tabstrip_model()->GetSelectedTabContents()];
 }
 
 void BrowserWindowCocoa::FocusDevTools() {
@@ -156,18 +166,16 @@ void BrowserWindowCocoa::SetStarredState(bool is_starred) {
 }
 
 gfx::Rect BrowserWindowCocoa::GetRestoredBounds() const {
-  // TODO(pinkerton): not sure if we can get the non-zoomed bounds, or if it
-  // really matters. We may want to let Cocoa handle all this for us.
   // Flip coordinates based on the primary screen.
   NSScreen* screen = [[NSScreen screens] objectAtIndex:0];
-  NSRect frame = [window_ frame];
+  NSRect frame = [controller_ regularWindowFrame];
   gfx::Rect bounds(frame.origin.x, 0, frame.size.width, frame.size.height);
   bounds.set_y([screen frame].size.height - frame.origin.y - frame.size.height);
   return bounds;
 }
 
 bool BrowserWindowCocoa::IsMaximized() const {
-  return [window_ isZoomed];
+  return [window() isZoomed];
 }
 
 void BrowserWindowCocoa::SetFullscreen(bool fullscreen) {
@@ -194,11 +202,11 @@ void BrowserWindowCocoa::ConfirmAddSearchProvider(
 }
 
 LocationBar* BrowserWindowCocoa::GetLocationBar() const {
-  return [controller_ locationBar];
+  return [controller_ locationBarBridge];
 }
 
-void BrowserWindowCocoa::SetFocusToLocationBar() {
-  [controller_ focusLocationBar];
+void BrowserWindowCocoa::SetFocusToLocationBar(bool select_all) {
+  [controller_ focusLocationBar:select_all ? YES : NO];
 }
 
 void BrowserWindowCocoa::UpdateStopGoState(bool is_loading, bool force) {
@@ -215,13 +223,21 @@ void BrowserWindowCocoa::FocusToolbar() {
   NOTIMPLEMENTED();
 }
 
+void BrowserWindowCocoa::FocusPageAndAppMenus() {
+  // Chrome uses the standard Mac OS X menu bar, so this isn't needed.
+}
+
 bool BrowserWindowCocoa::IsBookmarkBarVisible() const {
   return browser_->profile()->GetPrefs()->GetBoolean(prefs::kShowBookmarkBar);
 }
 
+bool BrowserWindowCocoa::IsBookmarkBarAnimating() const {
+  return [controller_ isBookmarkBarAnimating];
+}
+
 bool BrowserWindowCocoa::IsToolbarVisible() const {
-  NOTIMPLEMENTED();
-  return true;
+  return browser_->SupportsWindowFeature(Browser::FEATURE_TOOLBAR) ||
+         browser_->SupportsWindowFeature(Browser::FEATURE_LOCATIONBAR);
 }
 
 // This is called from Browser, which in turn is called directly from
@@ -250,7 +266,7 @@ void BrowserWindowCocoa::ShowTaskManager() {
 }
 
 void BrowserWindowCocoa::ShowBookmarkManager() {
-  NOTIMPLEMENTED();
+  [BookmarkManagerController showBookmarkManager:browser_->profile()];
 }
 
 void BrowserWindowCocoa::ShowBookmarkBubble(const GURL& url,
@@ -280,17 +296,13 @@ void BrowserWindowCocoa::ShowReportBugDialog() {
 }
 
 void BrowserWindowCocoa::ShowClearBrowsingDataDialog() {
-  scoped_nsobject<ClearBrowsingDataController> controller(
-      [[ClearBrowsingDataController alloc]
-          initWithProfile:browser_->profile()]);
-  [controller runModalDialog];
+  [ClearBrowsingDataController
+      showClearBrowsingDialogForProfile:browser_->profile()];
 }
 
 void BrowserWindowCocoa::ShowImportDialog() {
-  // Note that the dialog controller takes care of cleaning itself up
-  // upon dismissal so auto-scoping here is not necessary.
-  [[[ImportSettingsDialogController alloc]
-      initWithProfile:browser_->profile() parentWindow:window_] runModalDialog];
+  [ImportSettingsDialogController
+          showImportSettingsDialogForProfile:browser_->profile()];
 }
 
 void BrowserWindowCocoa::ShowSearchEnginesDialog() {
@@ -309,15 +321,15 @@ void BrowserWindowCocoa::ShowNewProfileDialog() {
   NOTIMPLEMENTED();
 }
 
-void BrowserWindowCocoa::ShowRepostFormWarningDialog(
-    TabContents* tab_contents) {
-  new RepostFormWarningMac(GetNativeHandle(), &tab_contents->controller());
+void BrowserWindowCocoa::ShowRepostFormWarningDialog(TabContents* tab_contents) {
+  RepostFormWarningMac::Create(GetNativeHandle(), tab_contents);
 }
 
 void BrowserWindowCocoa::ShowContentSettingsWindow(
-    ContentSettingsType content_type,
+    ContentSettingsType settings_type,
     Profile* profile) {
-  NOTIMPLEMENTED();
+  [ContentSettingsDialogController showContentSettingsForType:settings_type
+                                                      profile:profile];
 }
 
 void BrowserWindowCocoa::ShowProfileErrorDialog(int message_id) {
@@ -330,7 +342,7 @@ void BrowserWindowCocoa::ShowProfileErrorDialog(int message_id) {
 }
 
 void BrowserWindowCocoa::ShowThemeInstallBubble() {
-  ThemeInstallBubbleView::Show(window_);
+  ThemeInstallBubbleView::Show(window());
 }
 
 // We allow closing the window here since the real quit decision on Mac is made
@@ -341,12 +353,8 @@ void BrowserWindowCocoa::ConfirmBrowserCloseWithPendingDownloads() {
 
 void BrowserWindowCocoa::ShowHTMLDialog(HtmlDialogUIDelegate* delegate,
                                         gfx::NativeWindow parent_window) {
-  if (!parent_window) {
-    parent_window = GetNativeHandle();
-  }
   [HtmlDialogWindowController showHtmlDialog:delegate
-                                parentWindow:parent_window
-                                     browser:browser_];
+                                     profile:browser_->profile()];
 }
 
 void BrowserWindowCocoa::UserChangedTheme() {
@@ -375,6 +383,34 @@ void BrowserWindowCocoa::ShowPageMenu() {
 
 void BrowserWindowCocoa::ShowAppMenu() {
   // No-op. Mac doesn't support showing the menus via alt keys.
+}
+
+bool BrowserWindowCocoa::PreHandleKeyboardEvent(
+    const NativeWebKeyboardEvent& event, bool* is_keyboard_shortcut) {
+  if (event.skip_in_browser || event.type == NativeWebKeyboardEvent::Char)
+    return false;
+
+  DCHECK(event.os_event != NULL);
+  int id = GetCommandId(event);
+  if (id == -1)
+    return false;
+
+  if (browser_->IsReservedCommand(id))
+    return HandleKeyboardEventInternal(event.os_event);
+
+  DCHECK(is_keyboard_shortcut != NULL);
+  *is_keyboard_shortcut = true;
+
+  return false;
+}
+
+void BrowserWindowCocoa::HandleKeyboardEvent(
+    const NativeWebKeyboardEvent& event) {
+  if (event.skip_in_browser || event.type == NativeWebKeyboardEvent::Char)
+    return;
+
+  DCHECK(event.os_event != NULL);
+  HandleKeyboardEventInternal(event.os_event);
 }
 
 @interface MenuWalker : NSObject
@@ -418,9 +454,13 @@ int BrowserWindowCocoa::GetCommandId(const NativeWebKeyboardEvent& event) {
 
   // "Close window" doesn't use the |commandDispatch:| mechanism. Menu items
   // that do not correspond to IDC_ constants need no special treatment however,
-  // as they can't be blacklisted in |Browser::IsReservedAccelerator()| anyhow.
+  // as they can't be blacklisted in |Browser::IsReservedCommand()| anyhow.
   if (item && [item action] == @selector(performClose:))
     return IDC_CLOSE_WINDOW;
+
+  // "Exit" doesn't use the |commandDispatch:| mechanism either.
+  if (item && [item action] == @selector(terminate:))
+    return IDC_EXIT;
 
   // Look in secondary keyboard shortcuts.
   NSUInteger modifiers = [event.os_event modifierFlags];
@@ -429,18 +469,64 @@ int BrowserWindowCocoa::GetCommandId(const NativeWebKeyboardEvent& event) {
   const bool cntrlKey = (modifiers & NSControlKeyMask) != 0;
   const bool optKey = (modifiers & NSAlternateKeyMask) != 0;
   const int keyCode = [event.os_event keyCode];
+  const unichar keyChar = KeyCharacterForEvent(event.os_event);
 
   int cmdNum = CommandForWindowKeyboardShortcut(
-      cmdKey, shiftKey, cntrlKey, optKey, keyCode);
+      cmdKey, shiftKey, cntrlKey, optKey, keyCode, keyChar);
   if (cmdNum != -1)
     return cmdNum;
 
   cmdNum = CommandForBrowserKeyboardShortcut(
-      cmdKey, shiftKey, cntrlKey, optKey, keyCode);
+      cmdKey, shiftKey, cntrlKey, optKey, keyCode, keyChar);
   if (cmdNum != -1)
     return cmdNum;
 
   return -1;
+}
+
+bool BrowserWindowCocoa::HandleKeyboardEventInternal(NSEvent* event) {
+  ChromeEventProcessingWindow* event_window =
+      static_cast<ChromeEventProcessingWindow*>(window());
+  DCHECK([event_window isKindOfClass:[ChromeEventProcessingWindow class]]);
+
+  // Do not fire shortcuts on key up.
+  if ([event type] == NSKeyDown) {
+    // Send the event to the menu before sending it to the browser/window
+    // shortcut handling, so that if a user configures cmd-left to mean
+    // "previous tab", it takes precedence over the built-in "history back"
+    // binding. Other than that, the |-redispatchKeyEvent:| call would take care
+    // of invoking the original menu item shortcut as well.
+
+    if ([[NSApp mainMenu] performKeyEquivalent:event])
+      return true;
+
+    if ([event_window handleExtraBrowserKeyboardShortcut:event])
+      return true;
+
+    if ([event_window handleExtraWindowKeyboardShortcut:event])
+      return true;
+
+    if ([event_window handleDelayedWindowKeyboardShortcut:event])
+      return true;
+  }
+
+  return [event_window redispatchKeyEvent:event];
+}
+
+void BrowserWindowCocoa::ShowCreateShortcutsDialog(TabContents* tab_contents) {
+  NOTIMPLEMENTED();
+}
+
+void BrowserWindowCocoa::Cut() {
+  [NSApp sendAction:@selector(cut:) to:nil from:nil];
+}
+
+void BrowserWindowCocoa::Copy() {
+  [NSApp sendAction:@selector(copy:) to:nil from:nil];
+}
+
+void BrowserWindowCocoa::Paste() {
+  [NSApp sendAction:@selector(paste:) to:nil from:nil];
 }
 
 void BrowserWindowCocoa::Observe(NotificationType type,
@@ -463,4 +549,8 @@ void BrowserWindowCocoa::DestroyBrowser() {
 
   // at this point the controller is dead (autoreleased), so
   // make sure we don't try to reference it any more.
+}
+
+NSWindow* BrowserWindowCocoa::window() const {
+  return [controller_ window];
 }

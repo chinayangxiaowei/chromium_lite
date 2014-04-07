@@ -1,54 +1,27 @@
-// Copyright (c) 2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CHROME_BROWSER_NOTIFICATIONS_DESKTOP_NOTIFICATIONS_UNITTEST_H_
 #define CHROME_BROWSER_NOTIFICATIONS_DESKTOP_NOTIFICATIONS_UNITTEST_H_
 
-#include <set>
+#include <deque>
 #include <string>
 
 #include "base/message_loop.h"
-#include "chrome/browser/browser_list.h"
-#include "chrome/browser/notifications/balloon.h"
-#include "chrome/browser/notifications/balloon_collection.h"
+#include "chrome/browser/notifications/balloon_collection_impl.h"
 #include "chrome/browser/notifications/desktop_notification_service.h"
 #include "chrome/browser/notifications/notification.h"
-#include "chrome/browser/notifications/notification_object_proxy.h"
+#include "chrome/browser/notifications/notification_test_util.h"
 #include "chrome/browser/notifications/notification_ui_manager.h"
 #include "chrome/browser/notifications/notifications_prefs_cache.h"
 #include "chrome/test/testing_profile.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/WebKit/WebKit/chromium/public/WebNotificationPresenter.h"
 
-// Mock implementation of Javascript object proxy which logs events that
-// would have been fired on it.
-class LoggingNotificationProxy : public NotificationObjectProxy {
- public:
-  LoggingNotificationProxy() :
-      NotificationObjectProxy(0, 0, 0, false) {}
-
-  // NotificationObjectProxy override
-  virtual void Display();
-  virtual void Error();
-  virtual void Close(bool by_user);
-};
-
-// Test version of a balloon view which doesn't do anything
-// viewable, but does know how to close itself the same as a regular
-// BalloonView.
-class MockBalloonView : public BalloonView {
- public:
-  explicit MockBalloonView(Balloon * balloon) :
-      balloon_(balloon) {}
-  void Show(Balloon* balloon) {}
-  void RepositionToBalloon() {}
-  void Close(bool by_user) { balloon_->OnClose(by_user); }
-
- private:
-  // Non-owned pointer.
-  Balloon* balloon_;
-};
+class DesktopNotificationsTest;
+typedef LoggingNotificationProxyBase<DesktopNotificationsTest>
+    LoggingNotificationProxy;
 
 // Test version of the balloon collection which counts the number
 // of notifications that are added to it.
@@ -69,20 +42,25 @@ class MockBalloonCollection : public BalloonCollectionImpl {
   virtual bool HasSpace() const { return count() < kMockBalloonSpace; }
   virtual Balloon* MakeBalloon(const Notification& notification,
                                Profile* profile);
+  virtual void DisplayChanged() {}
   virtual void OnBalloonClosed(Balloon* source);
+  virtual const BalloonCollection::Balloons& GetActiveBalloons() {
+    return balloons_;
+  }
 
   // Number of balloons being shown.
-  std::set<Balloon*>& balloons() { return balloons_; }
+  std::deque<Balloon*>& balloons() { return balloons_; }
   int count() const { return balloons_.size(); }
 
   // Returns the highest y-coordinate of all the balloons in the collection.
   int UppermostVerticalPosition();
 
-  // Returns the minimum height of a balloon.
+  // Returns the height bounds of a balloon.
   int MinHeight() { return Layout::min_balloon_height(); }
+  int MaxHeight() { return Layout::max_balloon_height(); }
 
  private:
-  std::set<Balloon*> balloons_;
+  std::deque<Balloon*> balloons_;
   scoped_refptr<LoggingNotificationProxy> log_proxy_;
 };
 

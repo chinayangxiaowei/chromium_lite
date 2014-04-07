@@ -1,4 +1,4 @@
-// Copyright (c) 2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,22 +9,25 @@
 #include <map>
 #include <vector>
 
-#include "app/gfx/font.h"
-#include "base/gfx/rect.h"
 #include "base/task.h"
 #include "chrome/browser/autocomplete/autocomplete_edit.h"
+#include "chrome/browser/extensions/extension_context_menu_model.h"
 #include "chrome/browser/extensions/image_loading_tracker.h"
+#include "chrome/browser/first_run.h"
 #include "chrome/browser/location_bar.h"
 #include "chrome/browser/tab_contents/tab_contents.h"
 #include "chrome/browser/toolbar_model.h"
 #include "chrome/browser/views/browser_bubble.h"
-#include "chrome/browser/views/extensions/extension_action_context_menu.h"
+#include "chrome/browser/views/extensions/extension_popup.h"
 #include "chrome/browser/views/info_bubble.h"
 #include "chrome/common/content_settings_types.h"
 #include "chrome/common/notification_observer.h"
 #include "chrome/common/notification_registrar.h"
+#include "gfx/font.h"
+#include "gfx/rect.h"
 #include "views/controls/image_view.h"
 #include "views/controls/label.h"
+#include "views/controls/menu/menu_2.h"
 #include "views/controls/native/native_view_host.h"
 #include "views/painter.h"
 
@@ -34,8 +37,10 @@
 #include "chrome/browser/autocomplete/autocomplete_edit_view_gtk.h"
 #endif
 
+class Browser;
 class BubblePositioner;
 class CommandUpdater;
+class ContentSettingImageModel;
 class ExtensionAction;
 class ExtensionPopup;
 class GURL;
@@ -100,10 +105,9 @@ class LocationBarView : public LocationBar,
   void Update(const TabContents* tab_for_state_restoring);
 
   void SetProfile(Profile* profile);
-  Profile* profile() { return profile_; }
+  Profile* profile() const { return profile_; }
 
-  // Returns the current TabContents.  This should only be used by the
-  // ContentBlockedImageView.
+  // Returns the current TabContents.
   TabContents* GetTabContents() const;
 
   // Sets |preview_enabled| for the PageAction View associated with this
@@ -114,7 +118,7 @@ class LocationBarView : public LocationBar,
   void SetPreviewEnabledPageAction(ExtensionAction *page_action,
                                    bool preview_enabled);
 
-  // Retrieves the PageAction View which is associated with |page_action|
+  // Retrieves the PageAction View which is associated with |page_action|.
   views::View* GetPageActionView(ExtensionAction* page_action);
 
   // Sizing functions
@@ -131,7 +135,6 @@ class LocationBarView : public LocationBar,
   // to close its popup.
   virtual void VisibleBoundsInRootChanged();
 
-
 #if defined(OS_WIN)
   // Event Handlers
   virtual bool OnMousePressed(const views::MouseEvent& event);
@@ -145,9 +148,7 @@ class LocationBarView : public LocationBar,
                                     PageTransition::Type transition,
                                     const GURL& alternate_nav_url);
   virtual void OnChanged();
-  virtual void OnInputInProgress(bool in_progress) {
-    delegate_->OnInputInProgress(in_progress);
-  }
+  virtual void OnInputInProgress(bool in_progress);
   virtual void OnKillFocus();
   virtual void OnSetFocus();
   virtual SkBitmap GetFavIcon() const;
@@ -155,20 +156,18 @@ class LocationBarView : public LocationBar,
 
   // Overridden from views::View:
   virtual bool SkipDefaultKeyEventProcessing(const views::KeyEvent& e);
-  virtual bool GetAccessibleName(std::wstring* name);
   virtual bool GetAccessibleRole(AccessibilityTypes::Role* role);
-  virtual void SetAccessibleName(const std::wstring& name);
 
   // Overridden from LocationBar:
-  virtual void ShowFirstRunBubble(bool use_OEM_bubble);
+  virtual void ShowFirstRunBubble(FirstRun::BubbleType bubble_type);
   virtual std::wstring GetInputString() const;
   virtual WindowOpenDisposition GetWindowOpenDisposition() const;
   virtual PageTransition::Type GetPageTransition() const;
   virtual void AcceptInput();
   virtual void AcceptInputWithDisposition(WindowOpenDisposition);
-  virtual void FocusLocation();
+  virtual void FocusLocation(bool select_all);
   virtual void FocusSearch();
-  virtual void UpdateContentBlockedIcons();
+  virtual void UpdateContentSettingsIcons();
   virtual void UpdatePageActions();
   virtual void InvalidatePageActions();
   virtual void SaveStateToContents(TabContents* contents);
@@ -279,7 +278,6 @@ class LocationBarView : public LocationBar,
     DISALLOW_COPY_AND_ASSIGN(KeywordHintView);
   };
 
-
   class ShowInfoBubbleTask;
   class ShowFirstRunBubbleTask;
 
@@ -332,7 +330,8 @@ class LocationBarView : public LocationBar,
       WARNING
     };
 
-    SecurityImageView(Profile* profile,
+    SecurityImageView(const LocationBarView* parent,
+                      Profile* profile,
                       ToolbarModel* model_,
                       const BubblePositioner* bubble_positioner);
     virtual ~SecurityImageView();
@@ -354,12 +353,12 @@ class LocationBarView : public LocationBar,
     // The warning icon shown when HTTPS is broken.
     static SkBitmap* warning_icon_;
 
-    // The currently shown info bubble if any.
-    InfoBubble* info_bubble_;
-
     // A task used to display the info bubble when the mouse hovers on the
     // image.
     ShowInfoBubbleTask* show_info_bubble_task_;
+
+    // The owning LocationBarView.
+    const LocationBarView* parent_;
 
     Profile* profile_;
 
@@ -368,17 +367,17 @@ class LocationBarView : public LocationBar,
     DISALLOW_COPY_AND_ASSIGN(SecurityImageView);
   };
 
-  class ContentBlockedImageView : public views::ImageView,
+  class ContentSettingImageView : public views::ImageView,
                                   public InfoBubbleDelegate {
    public:
-    ContentBlockedImageView(ContentSettingsType content_type,
+    ContentSettingImageView(ContentSettingsType content_type,
                             const LocationBarView* parent,
                             Profile* profile,
                             const BubblePositioner* bubble_positioner);
-    virtual ~ContentBlockedImageView();
+    virtual ~ContentSettingImageView();
 
-    ContentSettingsType content_type() const { return content_type_; }
     void set_profile(Profile* profile) { profile_ = profile; }
+    void UpdateFromTabContents(const TabContents* tab_contents);
 
    private:
     // views::ImageView overrides:
@@ -390,10 +389,7 @@ class LocationBarView : public LocationBar,
                                    bool closed_by_escape);
     virtual bool CloseOnEscape();
 
-    static SkBitmap* icons_[CONTENT_SETTINGS_NUM_TYPES];
-
-    // The type of content handled by this view.
-    ContentSettingsType content_type_;
+    scoped_ptr<ContentSettingImageModel> content_setting_image_model_;
 
     // The owning LocationBarView.
     const LocationBarView* parent_;
@@ -408,16 +404,16 @@ class LocationBarView : public LocationBar,
     // caller maintains ownership of this and must ensure it's kept alive.
     const BubblePositioner* bubble_positioner_;
 
-    DISALLOW_IMPLICIT_CONSTRUCTORS(ContentBlockedImageView);
+    DISALLOW_IMPLICIT_CONSTRUCTORS(ContentSettingImageView);
   };
-  typedef std::vector<ContentBlockedImageView*> ContentBlockedViews;
+  typedef std::vector<ContentSettingImageView*> ContentSettingViews;
 
   // PageActionImageView is used to display the icon for a given PageAction
   // and notify the extension when the icon is clicked.
   class PageActionImageView : public LocationBarImageView,
-                              public ImageLoadingTracker::Observer,
-                              public NotificationObserver,
-                              public BrowserBubble::Delegate {
+      public ImageLoadingTracker::Observer,
+      public ExtensionContextMenuModel::PopupDelegate,
+      public ExtensionPopup::Observer {
    public:
     PageActionImageView(LocationBarView* owner,
                         Profile* profile,
@@ -436,34 +432,32 @@ class LocationBarView : public LocationBar,
     // Overridden from view.
     virtual void OnMouseMoved(const views::MouseEvent& event);
     virtual bool OnMousePressed(const views::MouseEvent& event);
+    virtual void OnMouseReleased(const views::MouseEvent& event, bool canceled);
 
     // Overridden from LocationBarImageView.
     virtual void ShowInfoBubble();
 
     // Overridden from ImageLoadingTracker.
-    virtual void OnImageLoaded(SkBitmap* image, size_t index);
+    virtual void OnImageLoaded(
+        SkBitmap* image, ExtensionResource resource, int index);
 
-    // Overridden from BrowserBubble::Delegate
-    virtual void BubbleBrowserWindowClosing(BrowserBubble* bubble);
-    virtual void BubbleLostFocus(BrowserBubble* bubble,
-                                 gfx::NativeView focused_view);
+    // Overridden from ExtensionContextMenuModelModel::Delegate
+    virtual void InspectPopup(ExtensionAction* action);
+
+    // Overridden from ExtensionPopup::Observer
+    virtual void ExtensionPopupClosed(ExtensionPopup* popup);
 
     // Called to notify the PageAction that it should determine whether to be
     // visible or hidden. |contents| is the TabContents that is active, |url|
     // is the current page URL.
     void UpdateVisibility(TabContents* contents, const GURL& url);
 
-    // Either notify listners or show a popup depending on the page action.
-    void ExecuteAction(int button);
+    // Either notify listeners or show a popup depending on the page action.
+    void ExecuteAction(int button, bool inspect_with_devtools);
 
    private:
     // Hides the active popup, if there is one.
     void HidePopup();
-
-    // Overridden from NotificationObserver:
-    virtual void Observe(NotificationType type,
-                         const NotificationSource& source,
-                         const NotificationDetails& details);
 
     // The location bar view that owns us.
     LocationBarView* owner_;
@@ -480,11 +474,12 @@ class LocationBarView : public LocationBar,
     PageActionMap page_action_icons_;
 
     // The context menu for this page action.
-    scoped_ptr<ExtensionActionContextMenu> context_menu_;
+    scoped_refptr<ExtensionContextMenuModel> context_menu_contents_;
+    scoped_ptr<views::Menu2> context_menu_menu_;
 
     // The object that is waiting for the image loading to complete
     // asynchronously.
-    ImageLoadingTracker* tracker_;
+    ImageLoadingTracker tracker_;
 
     // The tab id we are currently showing the icon for.
     int current_tab_id_;
@@ -502,16 +497,14 @@ class LocationBarView : public LocationBar,
     // The current popup and the button it came from.  NULL if no popup.
     ExtensionPopup* popup_;
 
-    ScopedRunnableMethodFactory<PageActionImageView> method_factory_;
-
-    NotificationRegistrar registrar_;
-
     DISALLOW_COPY_AND_ASSIGN(PageActionImageView);
   };
   friend class PageActionImageView;
 
   class PageActionWithBadgeView;
   friend class PageActionWithBadgeView;
+  typedef std::vector<PageActionWithBadgeView*> PageActionViews;
+
   // Both Layout and OnChanged call into this. This updates the contents
   // of the 3 views: selected_keyword, keyword_hint and type_search_view. If
   // force_layout is true, or one of these views has changed in such a way as
@@ -553,7 +546,7 @@ class LocationBarView : public LocationBar,
 
   // Update the visibility state of the Content Blocked icons to reflect what is
   // actually blocked on the current page.
-  void RefreshContentBlockedViews();
+  void RefreshContentSettingViews();
 
   // Delete all page action views that we have created.
   void DeletePageActionViews();
@@ -579,7 +572,10 @@ class LocationBarView : public LocationBar,
 #endif
 
   // Helper to show the first run info bubble.
-  void ShowFirstRunBubbleInternal(bool use_OEM_bubble);
+  void ShowFirstRunBubbleInternal(FirstRun::BubbleType bubble_type);
+
+  // Current browser. Not owned by us.
+  Browser* browser_;
 
   // Current profile. Not owned by us.
   Profile* profile_;
@@ -633,11 +629,11 @@ class LocationBarView : public LocationBar,
   // The view that shows the lock/warning when in HTTPS mode.
   SecurityImageView security_image_view_;
 
-  // The content blocked views.
-  ContentBlockedViews content_blocked_views_;
+  // The content setting views.
+  ContentSettingViews content_setting_views_;
 
   // The page action icon views.
-  std::vector<PageActionWithBadgeView*> page_action_views_;
+  PageActionViews page_action_views_;
 
   // A label displayed after the lock icon to show some extra information.
   views::Label info_label_;

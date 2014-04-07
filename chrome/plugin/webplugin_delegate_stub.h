@@ -1,4 +1,4 @@
-// Copyright (c) 2006-2008 The Chromium Authors. All rights reserved.
+// Copyright (c) 2009 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,12 +6,15 @@
 #define CHROME_PLUGIN_WEBPLUGIN_DELEGATE_STUB_H_
 
 #include <queue>
+#include <string>
+#include <vector>
 
-#include "base/gfx/rect.h"
+#include "app/surface/transport_dib.h"
 #include "base/ref_counted.h"
 #include "base/shared_memory.h"
 #include "base/task.h"
-#include "chrome/common/transport_dib.h"
+#include "chrome/plugin/command_buffer_stub.h"
+#include "gfx/rect.h"
 #include "googleurl/src/gurl.h"
 #include "ipc/ipc_channel.h"
 #include "third_party/npapi/bindings/npapi.h"
@@ -30,7 +33,7 @@ class WebInputEvent;
 class WebPluginDelegateImpl;
 
 // Converts the IPC messages from WebPluginDelegateProxy into calls to the
-// actual WebPluginDelegate object.
+// actual WebPluginDelegateImpl object.
 class WebPluginDelegateStub : public IPC::Channel::Listener,
                               public IPC::Message::Sender,
                               public base::RefCounted<WebPluginDelegateStub> {
@@ -67,13 +70,22 @@ class WebPluginDelegateStub : public IPC::Channel::Listener,
                           bool* handled, WebCursor* cursor);
   void OnPaint(const gfx::Rect& damaged_rect);
   void OnDidPaint();
-  void OnPrint(base::SharedMemoryHandle* shared_memory, size_t* size);
+  void OnPrint(base::SharedMemoryHandle* shared_memory, uint32* size);
   void OnUpdateGeometry(const PluginMsg_UpdateGeometry_Param& param);
   void OnGetPluginScriptableObject(int* route_id);
   void OnSendJavaScriptStream(const GURL& url,
                               const std::string& result,
                               bool success,
                               int notify_id);
+
+#if defined(OS_MACOSX)
+  void OnSetWindowFocus(bool has_focus);
+  void OnContainerHidden();
+  void OnContainerShown(gfx::Rect window_frame, gfx::Rect view_frame,
+                        bool has_focus);
+  void OnWindowFrameChanged(gfx::Rect window_frame, gfx::Rect view_frame);
+#endif
+
   void OnDidReceiveManualResponse(
       const GURL& url,
       const PluginMsg_DidReceiveResponseParams& params);
@@ -81,11 +93,14 @@ class WebPluginDelegateStub : public IPC::Channel::Listener,
   void OnDidFinishManualLoading();
   void OnDidManualLoadFail();
   void OnInstallMissingPlugin();
-  void OnHandleURLRequestReply(int resource_id,
+  void OnHandleURLRequestReply(unsigned long resource_id,
                                const GURL& url,
                                int notify_id);
-  void OnHTTPRangeRequestReply(int resource_id, int range_request_id);
-  void CreateSharedBuffer(size_t size,
+  void OnHTTPRangeRequestReply(unsigned long resource_id, int range_request_id);
+  void OnCreateCommandBuffer(int* route_id);
+  void OnDestroyCommandBuffer();
+
+  void CreateSharedBuffer(uint32 size,
                           base::SharedMemory* shared_buf,
                           base::SharedMemoryHandle* remote_handle);
 
@@ -100,6 +115,20 @@ class WebPluginDelegateStub : public IPC::Channel::Listener,
 
   // The url of the main frame hosting the plugin.
   GURL page_url_;
+
+#if defined(ENABLE_GPU)
+  // If this is the GPU plugin, the stub object that forwards to the
+  // command buffer service.
+  scoped_ptr<CommandBufferStub> command_buffer_stub_;
+
+#if defined(OS_MACOSX)
+  // If this is a GPU-accelerated plug-in, we need to be able to receive a fake
+  // window handle which is used for subsequent communication back to the
+  // browser.
+  void OnSetFakeAcceleratedSurfaceWindowHandle(gfx::PluginWindowHandle window);
+#endif
+
+#endif
 
   DISALLOW_IMPLICIT_CONSTRUCTORS(WebPluginDelegateStub);
 };

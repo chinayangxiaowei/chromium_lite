@@ -12,6 +12,17 @@ class Profile;
 // This module provides some helper functions for logging actions tracked by
 // the user metrics system.
 
+
+// UserMetricsAction exist purely to standardize on the paramters passed to
+// UserMetrics. That way, our toolset can scan the sourcecode reliable for
+// constructors and extract the associated string constants
+struct UserMetricsAction {
+  const char* str_;
+  explicit UserMetricsAction(const char* str) : str_(str) {}
+};
+
+
+
 class UserMetrics {
  public:
   // Record that the user performed an action.
@@ -22,19 +33,22 @@ class UserMetrics {
   // interacting with the browser.
   // WARNING: Call this function exactly like this, with the string literal
   // inline:
-  //   UserMetrics::RecordAction(L"foo bar", profile);
+  //   UserMetrics::RecordAction("foo bar", profile);
   // because otherwise our processing scripts won't pick up on new actions.
   //
   // For more complicated situations (like when there are many different
   // possible actions), see RecordComputedAction.
-  static void RecordAction(const wchar_t* action, Profile* profile);
+  static void RecordAction(const UserMetricsAction& action, Profile* profile);
 
   // This function has identical input and behavior to RecordAction, but is
   // not automatically found by the action-processing scripts.  It can be used
   // when it's a pain to enumerate all possible actions, but if you use this
   // you need to also update the rules for extracting known actions.
-  static void RecordComputedAction(const std::wstring& action,
+  static void RecordComputedAction(const std::string& action,
                                    Profile* profile);
+
+ private:
+  static void Record(const char *action, Profile *profile);
 };
 
 #endif  // CHROME_BROWSER_METRICS_USER_METRICS_H_

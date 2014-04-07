@@ -50,6 +50,11 @@ class MockCookieStore : public net::CookieStore {
     return std::string();
   }
 
+  virtual void DeleteCookie(const GURL& url,
+                            const std::string& cookie_name) {
+    EXPECT_TRUE(false);
+  }
+
   virtual net::CookieMonster* GetCookieMonster() { return NULL; }
 
  private:

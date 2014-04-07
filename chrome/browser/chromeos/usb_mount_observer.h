@@ -8,7 +8,7 @@
 #include <string>
 #include <vector>
 
-#include "chrome/browser/chromeos/mount_library.h"
+#include "chrome/browser/chromeos/cros/mount_library.h"
 #include "chrome/common/notification_observer.h"
 #include "chrome/common/notification_source.h"
 #include "chrome/common/notification_type.h"
@@ -49,6 +49,10 @@ class USBMountObserver : public chromeos::MountLibrary::Observer,
   BrowserIterator FindBrowserForPath(const std::string& path);
 
   void RemoveBrowserFromVector(const std::string& path);
+
+  // Used to create a window of a standard size, and add it to a list
+  // of tracked browser windows in case that device goes away.
+  void OpenFileBrowse(const std::string& url, const std::string& device_path);
 
   Profile* profile_;
   std::vector<BrowserWithPath> browsers_;

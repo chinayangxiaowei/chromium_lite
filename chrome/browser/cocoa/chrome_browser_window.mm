@@ -5,11 +5,13 @@
 #import "chrome/browser/cocoa/chrome_browser_window.h"
 
 #include "base/logging.h"
-#import "chrome/browser/cocoa/browser_window_controller.h"
+#include "chrome/browser/browser_theme_provider.h"
 #import "chrome/browser/cocoa/browser_frame_view.h"
+#import "chrome/browser/cocoa/browser_window_controller.h"
 #import "chrome/browser/cocoa/tab_strip_controller.h"
-#import "chrome/browser/renderer_host/render_widget_host_view_mac.h"
+#import "chrome/browser/cocoa/themed_window.h"
 #include "chrome/browser/global_keyboard_shortcuts_mac.h"
+#import "chrome/browser/renderer_host/render_widget_host_view_mac.h"
 
 namespace {
   // Size of the gradient. Empirically determined so that the gradient looks
@@ -81,7 +83,7 @@ namespace {
     NSNotificationCenter* defaultCenter = [NSNotificationCenter defaultCenter];
     [defaultCenter addObserver:self
                       selector:@selector(themeDidChangeNotification:)
-                          name:kGTMThemeDidChangeNotification
+                          name:kBrowserThemeDidChangeNotification
                         object:nil];
 
     // Hook ourselves up to get notified if the user changes the system
@@ -112,7 +114,7 @@ namespace {
     closeButton_ = [NSWindow standardWindowButton:NSWindowCloseButton
                                      forStyleMask:aStyle];
     NSRect closeButtonFrame = [closeButton_ frame];
-    CGFloat yOffset = [browserController isNormalWindow] ?
+    CGFloat yOffset = [browserController hasTabStrip] ?
         kChromeWindowButtonsWithTabStripOffsetFromTop :
         kChromeWindowButtonsWithoutTabStripOffsetFromTop;
     closeButtonFrame.origin =
@@ -263,10 +265,7 @@ namespace {
 
 // Called after the current theme has changed.
 - (void)themeDidChangeNotification:(NSNotification*)aNotification {
-  GTMTheme* theme = [aNotification object];
-  if ([theme isEqual:[self gtm_theme]]) {
-    [[self frameView] setNeedsDisplay:YES];
-  }
+  [[self frameView] setNeedsDisplay:YES];
 }
 
 - (void)systemThemeDidChangeNotification:(NSNotification*)aNotification {
@@ -286,7 +285,8 @@ namespace {
   if (![self isMainWindow]) {
     if ([event type] == NSLeftMouseDown) {
       NSView* frameView = [self frameView];
-      NSPoint mouse = [frameView convertPointFromBase:[event locationInWindow]];
+      NSPoint mouse = [frameView convertPoint:[event locationInWindow]
+                                     fromView:nil];
       if (NSPointInRect(mouse, [closeButton_ frame])) {
         [closeButton_ mouseDown:event];
         eventHandled = YES;
@@ -341,6 +341,27 @@ namespace {
     return frame;
 
   return [super constrainFrameRect:frame toScreen:screen];
+}
+
+- (ThemeProvider*)themeProvider {
+  id delegate = [self delegate];
+  if (![delegate respondsToSelector:@selector(themeProvider)])
+    return NULL;
+  return [delegate themeProvider];
+}
+
+- (ThemedWindowStyle)themedWindowStyle {
+  id delegate = [self delegate];
+  if (![delegate respondsToSelector:@selector(themedWindowStyle)])
+    return THEMED_NORMAL;
+  return [delegate themedWindowStyle];
+}
+
+- (NSPoint)themePatternPhase {
+  id delegate = [self delegate];
+  if (![delegate respondsToSelector:@selector(themePatternPhase)])
+    return NSMakePoint(0, 0);
+  return [delegate themePatternPhase];
 }
 
 @end

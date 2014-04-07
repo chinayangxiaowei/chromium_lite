@@ -33,8 +33,7 @@ WebString RendererWebCookieJarImpl::cookies(
 
 WebString RendererWebCookieJarImpl::cookieRequestHeaderFieldValue(
     const WebURL& url, const WebURL& first_party_for_cookies) {
-  NOTREACHED();
-  return WebString();
+  return cookies(url, first_party_for_cookies);
 }
 
 void RendererWebCookieJarImpl::rawCookies(
@@ -70,6 +69,8 @@ void RendererWebCookieJarImpl::deleteCookie(
 
 bool RendererWebCookieJarImpl::cookiesEnabled(
     const WebURL& url, const WebURL& first_party_for_cookies) {
-  NOTREACHED();
-  return true;
+  bool enabled;
+  sender_->Send(new ViewHostMsg_GetCookiesEnabled(
+      url, first_party_for_cookies, &enabled));
+  return enabled;
 }

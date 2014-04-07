@@ -1,9 +1,10 @@
-// Copyright (c) 2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "net/base/host_cache.h"
 
+#include "base/format_macros.h"
 #include "base/stl_util-inl.h"
 #include "base/string_util.h"
 #include "net/base/net_errors.h"
@@ -13,17 +14,19 @@ namespace net {
 
 namespace {
 const int kMaxCacheEntries = 10;
-const int kCacheDurationMs = 10000;  // 10 seconds.
+
+const base::TimeDelta kSuccessEntryTTL = base::TimeDelta::FromSeconds(10);
+const base::TimeDelta kFailureEntryTTL = base::TimeDelta::FromSeconds(0);
 
 // Builds a key for |hostname|, defaulting the address family to unspecified.
 HostCache::Key Key(const std::string& hostname) {
-  return HostCache::Key(hostname, ADDRESS_FAMILY_UNSPECIFIED);
+  return HostCache::Key(hostname, ADDRESS_FAMILY_UNSPECIFIED, 0);
 }
 
 }  // namespace
 
 TEST(HostCacheTest, Basic) {
-  HostCache cache(kMaxCacheEntries, kCacheDurationMs);
+  HostCache cache(kMaxCacheEntries, kSuccessEntryTTL, kFailureEntryTTL);
 
   // Start at t=0.
   base::TimeTicks now;
@@ -80,9 +83,10 @@ TEST(HostCacheTest, Basic) {
   EXPECT_TRUE(cache.Lookup(Key("foobar2.com"), now) == NULL);
 }
 
-// Try caching entries for a failed resolve attempt.
-TEST(HostCacheTest, NegativeEntry) {
-  HostCache cache(kMaxCacheEntries, kCacheDurationMs);
+// Try caching entries for a failed resolve attempt -- since we set
+// the TTL of such entries to 0 it won't work.
+TEST(HostCacheTest, NoCacheNegative) {
+  HostCache cache(kMaxCacheEntries, kSuccessEntryTTL, kFailureEntryTTL);
 
   // Set t=0.
   base::TimeTicks now;
@@ -102,9 +106,70 @@ TEST(HostCacheTest, NegativeEntry) {
   EXPECT_TRUE(cache.Lookup(Key("foobar.com"), now) == NULL);
 }
 
+// Try caching entries for a failed resolves for 10 seconds.
+TEST(HostCacheTest, CacheNegativeEntry) {
+  HostCache cache(kMaxCacheEntries,
+                  base::TimeDelta::FromSeconds(0), // success entry TTL.
+                  base::TimeDelta::FromSeconds(10)); // failure entry TTL.
+
+  // Start at t=0.
+  base::TimeTicks now;
+
+  const HostCache::Entry* entry1 = NULL;  // Entry for foobar.com.
+  const HostCache::Entry* entry2 = NULL;  // Entry for foobar2.com.
+
+  EXPECT_EQ(0U, cache.size());
+
+  // Add an entry for "foobar.com" at t=0.
+  EXPECT_TRUE(cache.Lookup(Key("foobar.com"), base::TimeTicks()) == NULL);
+  cache.Set(Key("foobar.com"), ERR_NAME_NOT_RESOLVED, AddressList(), now);
+  entry1 = cache.Lookup(Key("foobar.com"), base::TimeTicks());
+  EXPECT_FALSE(entry1 == NULL);
+  EXPECT_EQ(1U, cache.size());
+
+  // Advance to t=5.
+  now += base::TimeDelta::FromSeconds(5);
+
+  // Add an entry for "foobar2.com" at t=5.
+  EXPECT_TRUE(cache.Lookup(Key("foobar2.com"), base::TimeTicks()) == NULL);
+  cache.Set(Key("foobar2.com"), ERR_NAME_NOT_RESOLVED, AddressList(), now);
+  entry2 = cache.Lookup(Key("foobar2.com"), base::TimeTicks());
+  EXPECT_FALSE(NULL == entry1);
+  EXPECT_EQ(2U, cache.size());
+
+  // Advance to t=9
+  now += base::TimeDelta::FromSeconds(4);
+
+  // Verify that the entries we added are still retrievable, and usable.
+  EXPECT_EQ(entry1, cache.Lookup(Key("foobar.com"), now));
+  EXPECT_EQ(entry2, cache.Lookup(Key("foobar2.com"), now));
+
+  // Advance to t=10; entry1 is now expired.
+  now += base::TimeDelta::FromSeconds(1);
+
+  EXPECT_TRUE(cache.Lookup(Key("foobar.com"), now) == NULL);
+  EXPECT_EQ(entry2, cache.Lookup(Key("foobar2.com"), now));
+
+  // Update entry1, so it is no longer expired.
+  cache.Set(Key("foobar.com"), ERR_NAME_NOT_RESOLVED, AddressList(), now);
+  // Re-uses existing entry storage.
+  EXPECT_EQ(entry1, cache.Lookup(Key("foobar.com"), now));
+  EXPECT_EQ(2U, cache.size());
+
+  // Both entries should still be retrievable and usable.
+  EXPECT_EQ(entry1, cache.Lookup(Key("foobar.com"), now));
+  EXPECT_EQ(entry2, cache.Lookup(Key("foobar2.com"), now));
+
+  // Advance to t=20; both entries are now expired.
+  now += base::TimeDelta::FromSeconds(10);
+
+  EXPECT_TRUE(cache.Lookup(Key("foobar.com"), now) == NULL);
+  EXPECT_TRUE(cache.Lookup(Key("foobar2.com"), now) == NULL);
+}
+
 TEST(HostCacheTest, Compact) {
   // Initial entries limit is big enough to accomadate everything we add.
-  HostCache cache(kMaxCacheEntries, kCacheDurationMs);
+  HostCache cache(kMaxCacheEntries, kSuccessEntryTTL, kFailureEntryTTL);
 
   EXPECT_EQ(0U, cache.size());
 
@@ -170,16 +235,14 @@ TEST(HostCacheTest, Compact) {
 
 // Add entries while the cache is at capacity, causing evictions.
 TEST(HostCacheTest, SetWithCompact) {
-  HostCache cache(3, kCacheDurationMs);
+  HostCache cache(3, kSuccessEntryTTL, kFailureEntryTTL);
 
   // t=10
-  base::TimeTicks now =
-      base::TimeTicks() + base::TimeDelta::FromMilliseconds(kCacheDurationMs);
+  base::TimeTicks now = base::TimeTicks() + kSuccessEntryTTL;
 
   cache.Set(Key("host1"), OK, AddressList(), now);
   cache.Set(Key("host2"), OK, AddressList(), now);
-  cache.Set(Key("expired"), OK, AddressList(),
-      now - base::TimeDelta::FromMilliseconds(kCacheDurationMs));
+  cache.Set(Key("expired"), OK, AddressList(), now - kSuccessEntryTTL);
 
   EXPECT_EQ(3U, cache.size());
 
@@ -208,13 +271,13 @@ TEST(HostCacheTest, SetWithCompact) {
 // Tests that the same hostname can be duplicated in the cache, so long as
 // the address family differs.
 TEST(HostCacheTest, AddressFamilyIsPartOfKey) {
-  HostCache cache(kMaxCacheEntries, kCacheDurationMs);
+  HostCache cache(kMaxCacheEntries, kSuccessEntryTTL, kFailureEntryTTL);
 
   // t=0.
   base::TimeTicks now;
 
-  HostCache::Key key1("foobar.com", ADDRESS_FAMILY_UNSPECIFIED);
-  HostCache::Key key2("foobar.com", ADDRESS_FAMILY_IPV4);
+  HostCache::Key key1("foobar.com", ADDRESS_FAMILY_UNSPECIFIED, 0);
+  HostCache::Key key2("foobar.com", ADDRESS_FAMILY_IPV4, 0);
 
   const HostCache::Entry* entry1 = NULL;  // Entry for key1
   const HostCache::Entry* entry2 = NULL;  // Entry for key2
@@ -240,9 +303,45 @@ TEST(HostCacheTest, AddressFamilyIsPartOfKey) {
   EXPECT_NE(entry1, entry2);
 }
 
+// Tests that the same hostname can be duplicated in the cache, so long as
+// the HostResolverFlags differ.
+TEST(HostCacheTest, HostResolverFlagsArePartOfKey) {
+  HostCache cache(kMaxCacheEntries, kSuccessEntryTTL, kFailureEntryTTL);
+
+  // t=0.
+  base::TimeTicks now;
+
+  HostCache::Key key1("foobar.com", ADDRESS_FAMILY_IPV4, 0);
+  HostCache::Key key2("foobar.com", ADDRESS_FAMILY_IPV4,
+                      HOST_RESOLVER_CANONNAME);
+
+  const HostCache::Entry* entry1 = NULL;  // Entry for key1
+  const HostCache::Entry* entry2 = NULL;  // Entry for key2
+
+  EXPECT_EQ(0U, cache.size());
+
+  // Add an entry for ("foobar.com", IPV4, NONE) at t=0.
+  EXPECT_TRUE(cache.Lookup(key1, base::TimeTicks()) == NULL);
+  cache.Set(key1, OK, AddressList(), now);
+  entry1 = cache.Lookup(key1, base::TimeTicks());
+  EXPECT_FALSE(entry1 == NULL);
+  EXPECT_EQ(1U, cache.size());
+
+  // Add an entry for ("foobar.com", IPV4, CANONNAME) at t=0.
+  EXPECT_TRUE(cache.Lookup(key2, base::TimeTicks()) == NULL);
+  cache.Set(key2, OK, AddressList(), now);
+  entry2 = cache.Lookup(key2, base::TimeTicks());
+  EXPECT_FALSE(entry2 == NULL);
+  EXPECT_EQ(2U, cache.size());
+
+  // Even though the hostnames were the same, we should have two unique
+  // entries (because the HostResolverFlags differ).
+  EXPECT_NE(entry1, entry2);
+}
+
 TEST(HostCacheTest, NoCache) {
   // Disable caching.
-  HostCache cache(0, kCacheDurationMs);
+  HostCache cache(0, kSuccessEntryTTL, kFailureEntryTTL);
   EXPECT_TRUE(cache.caching_is_disabled());
 
   // Set t=0.
@@ -254,6 +353,26 @@ TEST(HostCacheTest, NoCache) {
   EXPECT_TRUE(cache.Lookup(Key("foobar.com"), base::TimeTicks()) == NULL);
 
   EXPECT_EQ(0U, cache.size());
+}
+
+TEST(HostCacheTest, Clear) {
+  HostCache cache(kMaxCacheEntries, kSuccessEntryTTL, kFailureEntryTTL);
+
+  // Set t=0.
+  base::TimeTicks now;
+
+  EXPECT_EQ(0u, cache.size());
+
+  // Add three entries.
+  cache.Set(Key("foobar1.com"), OK, AddressList(), now);
+  cache.Set(Key("foobar2.com"), OK, AddressList(), now);
+  cache.Set(Key("foobar3.com"), OK, AddressList(), now);
+
+  EXPECT_EQ(3u, cache.size());
+
+  cache.clear();
+
+  EXPECT_EQ(0u, cache.size());
 }
 
 // Tests the less than and equal operators for HostCache::Key work.
@@ -270,39 +389,58 @@ TEST(HostCacheTest, KeyComparators) {
     int expected_comparison;
   } tests[] = {
     {
-      HostCache::Key("host1", ADDRESS_FAMILY_UNSPECIFIED),
-      HostCache::Key("host1", ADDRESS_FAMILY_UNSPECIFIED),
+      HostCache::Key("host1", ADDRESS_FAMILY_UNSPECIFIED, 0),
+      HostCache::Key("host1", ADDRESS_FAMILY_UNSPECIFIED, 0),
       0
     },
     {
-      HostCache::Key("host1", ADDRESS_FAMILY_IPV4),
-      HostCache::Key("host1", ADDRESS_FAMILY_UNSPECIFIED),
+      HostCache::Key("host1", ADDRESS_FAMILY_IPV4, 0),
+      HostCache::Key("host1", ADDRESS_FAMILY_UNSPECIFIED, 0),
       1
     },
     {
-      HostCache::Key("host1", ADDRESS_FAMILY_UNSPECIFIED),
-      HostCache::Key("host1", ADDRESS_FAMILY_IPV4),
+      HostCache::Key("host1", ADDRESS_FAMILY_UNSPECIFIED, 0),
+      HostCache::Key("host1", ADDRESS_FAMILY_IPV4, 0),
       -1
     },
     {
-      HostCache::Key("host1", ADDRESS_FAMILY_UNSPECIFIED),
-      HostCache::Key("host2", ADDRESS_FAMILY_UNSPECIFIED),
+      HostCache::Key("host1", ADDRESS_FAMILY_UNSPECIFIED, 0),
+      HostCache::Key("host2", ADDRESS_FAMILY_UNSPECIFIED, 0),
       -1
     },
     {
-      HostCache::Key("host1", ADDRESS_FAMILY_IPV4),
-      HostCache::Key("host2", ADDRESS_FAMILY_UNSPECIFIED),
+      HostCache::Key("host1", ADDRESS_FAMILY_IPV4, 0),
+      HostCache::Key("host2", ADDRESS_FAMILY_UNSPECIFIED, 0),
       1
     },
     {
-      HostCache::Key("host1", ADDRESS_FAMILY_UNSPECIFIED),
-      HostCache::Key("host2", ADDRESS_FAMILY_IPV4),
+      HostCache::Key("host1", ADDRESS_FAMILY_UNSPECIFIED, 0),
+      HostCache::Key("host2", ADDRESS_FAMILY_IPV4, 0),
+      -1
+    },
+        {
+      HostCache::Key("host1", ADDRESS_FAMILY_UNSPECIFIED, 0),
+      HostCache::Key("host1", ADDRESS_FAMILY_UNSPECIFIED,
+                     HOST_RESOLVER_CANONNAME),
+      -1
+    },
+    {
+      HostCache::Key("host1", ADDRESS_FAMILY_UNSPECIFIED,
+                     HOST_RESOLVER_CANONNAME),
+      HostCache::Key("host1", ADDRESS_FAMILY_UNSPECIFIED, 0),
+      1
+    },
+    {
+      HostCache::Key("host1", ADDRESS_FAMILY_UNSPECIFIED,
+                     HOST_RESOLVER_CANONNAME),
+      HostCache::Key("host2", ADDRESS_FAMILY_UNSPECIFIED,
+                     HOST_RESOLVER_CANONNAME),
       -1
     },
   };
 
   for (size_t i = 0; i < ARRAYSIZE_UNSAFE(tests); ++i) {
-    SCOPED_TRACE(StringPrintf("Test[%d]", i));
+    SCOPED_TRACE(StringPrintf("Test[%" PRIuS "]", i));
 
     const HostCache::Key& key1 = tests[i].key1;
     const HostCache::Key& key2 = tests[i].key2;

@@ -1,4 +1,4 @@
-// Copyright (c) 2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -15,6 +15,7 @@
 #include "chrome/browser/renderer_host/resource_dispatcher_host_request_info.h"
 #include "chrome/browser/renderer_host/x509_user_cert_resource_handler.h"
 #include "chrome/common/extensions/user_script.h"
+#include "chrome/common/resource_response.h"
 #include "chrome/common/url_constants.h"
 #include "net/base/io_buffer.h"
 #include "net/base/mime_sniffer.h"
@@ -25,23 +26,23 @@
 
 namespace {
 
-const int kMaxBytesToSniff = 512;
-
 void RecordSnifferMetrics(bool sniffing_blocked,
                           bool we_would_like_to_sniff,
                           const std::string& mime_type) {
-  static BooleanHistogram nosniff_usage("nosniff.usage");
-  nosniff_usage.SetFlags(kUmaTargetedHistogramFlag);
-  nosniff_usage.AddBoolean(sniffing_blocked);
+  static scoped_refptr<Histogram> nosniff_usage = BooleanHistogram::FactoryGet(
+      "nosniff.usage", Histogram::kUmaTargetedHistogramFlag);
+  nosniff_usage->AddBoolean(sniffing_blocked);
 
   if (sniffing_blocked) {
-    static BooleanHistogram nosniff_otherwise("nosniff.otherwise");
-    nosniff_otherwise.SetFlags(kUmaTargetedHistogramFlag);
-    nosniff_otherwise.AddBoolean(we_would_like_to_sniff);
+    static scoped_refptr<Histogram> nosniff_otherwise =
+        BooleanHistogram::FactoryGet("nosniff.otherwise",
+                                     Histogram::kUmaTargetedHistogramFlag);
+    nosniff_otherwise->AddBoolean(we_would_like_to_sniff);
 
-    static BooleanHistogram nosniff_empty_mime_type("nosniff.empty_mime_type");
-    nosniff_empty_mime_type.SetFlags(kUmaTargetedHistogramFlag);
-    nosniff_empty_mime_type.AddBoolean(mime_type.empty());
+    static scoped_refptr<Histogram> nosniff_empty_mime_type =
+        BooleanHistogram::FactoryGet("nosniff.empty_mime_type",
+                                     Histogram::kUmaTargetedHistogramFlag);
+    nosniff_empty_mime_type->AddBoolean(mime_type.empty());
   }
 }
 
@@ -96,15 +97,21 @@ void BufferedResourceHandler::OnRequestClosed() {
   real_handler_->OnRequestClosed();
 }
 
+bool BufferedResourceHandler::OnWillStart(int request_id,
+                                          const GURL& url,
+                                          bool* defer) {
+  return real_handler_->OnWillStart(request_id, url, defer);
+}
+
 // We'll let the original event handler provide a buffer, and reuse it for
 // subsequent reads until we're done buffering.
 bool BufferedResourceHandler::OnWillRead(int request_id, net::IOBuffer** buf,
                                          int* buf_size, int min_size) {
   if (buffering_) {
     DCHECK(!my_buffer_.get());
-    my_buffer_ = new net::IOBuffer(kMaxBytesToSniff);
+    my_buffer_ = new net::IOBuffer(net::kMaxBytesToSniff);
     *buf = my_buffer_.get();
-    *buf_size = kMaxBytesToSniff;
+    *buf_size = net::kMaxBytesToSniff;
     // TODO(willchan): Remove after debugging bug 16371.
     CHECK((*buf)->data());
     return true;
@@ -120,7 +127,7 @@ bool BufferedResourceHandler::OnWillRead(int request_id, net::IOBuffer** buf,
   // TODO(willchan): Remove after debugging bug 16371.
   CHECK(read_buffer_->data());
   read_buffer_size_ = *buf_size;
-  DCHECK(read_buffer_size_ >= kMaxBytesToSniff * 2);
+  DCHECK_GE(read_buffer_size_, net::kMaxBytesToSniff * 2);
   bytes_read_ = 0;
   return true;
 }
@@ -235,7 +242,7 @@ bool BufferedResourceHandler::KeepBuffering(int bytes_read) {
   DCHECK(read_buffer_);
   if (my_buffer_) {
     // We are using our own buffer to read, update the main buffer.
-    CHECK(bytes_read + bytes_read_ < read_buffer_size_);
+    CHECK_LT(bytes_read + bytes_read_, read_buffer_size_);
     memcpy(read_buffer_->data() + bytes_read_, my_buffer_->data(), bytes_read);
     my_buffer_ = NULL;
   }
@@ -251,7 +258,7 @@ bool BufferedResourceHandler::KeepBuffering(int bytes_read) {
       // SniffMimeType() returns false if there is not enough data to determine
       // the mime type. However, even if it returns false, it returns a new type
       // that is probably better than the current one.
-      DCHECK(bytes_read_ < kMaxBytesToSniff);
+      DCHECK_LT(bytes_read_, net::kMaxBytesToSniff);
       if (!finished_) {
         buffering_ = true;
         return true;
@@ -289,9 +296,6 @@ bool BufferedResourceHandler::KeepBuffering(int bytes_read) {
 
 bool BufferedResourceHandler::CompleteResponseStarted(int request_id,
                                                       bool in_complete) {
-  // Check to see if we should forward the data from this request to the
-  // download thread.
-  // TODO(paulg): Only download if the context from the renderer allows it.
   ResourceDispatcherHostRequestInfo* info =
       ResourceDispatcherHost::InfoForRequest(request_);
   std::string mime_type;
@@ -300,7 +304,6 @@ bool BufferedResourceHandler::CompleteResponseStarted(int request_id,
   // Check if this is an X.509 certificate, if yes, let it be handled
   // by X509UserCertResourceHandler.
   if (mime_type == "application/x-x509-user-cert") {
-
     // This is entirely similar to how DownloadThrottlingResourceHandler
     // works except we are doing it for an X.509 client certificates.
 
@@ -316,29 +319,14 @@ bool BufferedResourceHandler::CompleteResponseStarted(int request_id,
       return false;
     }
 
-    scoped_refptr<X509UserCertResourceHandler> x509_cert_handler =
+    X509UserCertResourceHandler* x509_cert_handler =
         new X509UserCertResourceHandler(host_, request_);
-
-    if (bytes_read_) {
-      // A Read has already occured and we need to copy the data into the
-      // EventHandler.
-      net::IOBuffer* buf = NULL;
-      int buf_len = 0;
-      x509_cert_handler->OnWillRead(request_id, &buf, &buf_len, bytes_read_);
-      CHECK((buf_len >= bytes_read_) && (bytes_read_ >= 0));
-      memcpy(buf->data(), read_buffer_->data(), bytes_read_);
-    }
-
-    // Inform the renderer that this will be handled entirely by the browser.
-    real_handler_->OnResponseStarted(info->request_id(), response_);
-    URLRequestStatus status(URLRequestStatus::HANDLED_EXTERNALLY, 0);
-    real_handler_->OnResponseCompleted(info->request_id(), status,
-                                       std::string());
-
-    // This is handled entirely within the browser, so just reset the handler.
-    real_handler_ = x509_cert_handler;
+    UseAlternateResourceHandler(request_id, x509_cert_handler);
   }
 
+  // Check to see if we should forward the data from this request to the
+  // download thread.
+  // TODO(paulg): Only download if the context from the renderer allows it.
   if (info->allow_download() && ShouldDownload(NULL)) {
     if (response_->response_head.headers &&  // Can be NULL if FTP.
         response_->response_head.headers->response_code() / 100 != 2) {
@@ -353,7 +341,7 @@ bool BufferedResourceHandler::CompleteResponseStarted(int request_id,
 
     info->set_is_download(true);
 
-    scoped_refptr<DownloadThrottlingResourceHandler> download_handler =
+    DownloadThrottlingResourceHandler* download_handler =
         new DownloadThrottlingResourceHandler(host_,
                                               request_,
                                               request_->url(),
@@ -361,26 +349,7 @@ bool BufferedResourceHandler::CompleteResponseStarted(int request_id,
                                               info->route_id(),
                                               request_id,
                                               in_complete);
-    if (bytes_read_) {
-      // A Read has already occurred and we need to copy the data into the
-      // EventHandler.
-      net::IOBuffer* buf = NULL;
-      int buf_len = 0;
-      download_handler->OnWillRead(request_id, &buf, &buf_len, bytes_read_);
-      CHECK((buf_len >= bytes_read_) && (bytes_read_ >= 0));
-      memcpy(buf->data(), read_buffer_->data(), bytes_read_);
-    }
-
-    // Send the renderer a response that indicates that the request will be
-    // handled by an external source (the browser's DownloadManager).
-    real_handler_->OnResponseStarted(info->request_id(), response_);
-    URLRequestStatus status(URLRequestStatus::HANDLED_EXTERNALLY, 0);
-    real_handler_->OnResponseCompleted(info->request_id(), status,
-                                       std::string());
-
-    // Ditch the old async handler that talks to the renderer for the new
-    // download handler that talks to the DownloadManager.
-    real_handler_ = download_handler;
+    UseAlternateResourceHandler(request_id, download_handler);
   }
   return real_handler_->OnResponseStarted(request_id, response_);
 }
@@ -464,6 +433,37 @@ bool BufferedResourceHandler::ShouldDownload(bool* need_plugin_list) {
   bool allow_wildcard = false;
   return !NPAPI::PluginList::Singleton()->GetPluginInfo(
       GURL(), type, allow_wildcard, &info, NULL);
+}
+
+void BufferedResourceHandler::UseAlternateResourceHandler(
+    int request_id,
+    ResourceHandler* handler) {
+  ResourceDispatcherHostRequestInfo* info =
+      ResourceDispatcherHost::InfoForRequest(request_);
+  if (bytes_read_) {
+    // A Read has already occured and we need to copy the data into the new
+    // ResourceHandler.
+    net::IOBuffer* buf = NULL;
+    int buf_len = 0;
+    handler->OnWillRead(request_id, &buf, &buf_len, bytes_read_);
+    CHECK((buf_len >= bytes_read_) && (bytes_read_ >= 0));
+    memcpy(buf->data(), read_buffer_->data(), bytes_read_);
+  }
+
+  // Inform the original ResourceHandler that this will be handled entirely by
+  // the new ResourceHandler.
+  real_handler_->OnResponseStarted(info->request_id(), response_);
+  URLRequestStatus status(URLRequestStatus::HANDLED_EXTERNALLY, 0);
+  real_handler_->OnResponseCompleted(info->request_id(), status, std::string());
+
+  // Remove the non-owning pointer to the CrossSiteResourceHandler, if any,
+  // from the extra request info because the CrossSiteResourceHandler (part of
+  // the original ResourceHandler chain) will be deleted by the next statement.
+  info->set_cross_site_handler(NULL);
+
+  // This is handled entirely within the new ResourceHandler, so just reset the
+  // original ResourceHandler.
+  real_handler_ = handler;
 }
 
 void BufferedResourceHandler::LoadPlugins() {

@@ -18,18 +18,23 @@
   BOOL eventHandled_;
 }
 
-// Sends an event to |NSApp sendEvent:|, but also makes sure that it's not
+// Sends a key event to |NSApp sendEvent:|, but also makes sure that it's not
 // short-circuited to the RWHV. This is used to send keyboard events to the menu
 // and the cmd-` handler if a keyboard event comes back unhandled from the
-// renderer.
+// renderer. The event must be of type |NSKeyDown|, |NSKeyUp|, or
+// |NSFlagsChanged|.
 // Returns |YES| if |event| has been handled.
-- (BOOL)redispatchEvent:(NSEvent*)event;
+- (BOOL)redispatchKeyEvent:(NSEvent*)event;
 
 // See global_keyboard_shortcuts_mac.h for details on the next two functions.
 
 // Checks if |event| is a window keyboard shortcut. If so, dispatches it to the
 // window controller's |executeCommand:| and returns |YES|.
 - (BOOL)handleExtraWindowKeyboardShortcut:(NSEvent*)event;
+
+// Checks if |event| is a delayed window keyboard shortcut. If so, dispatches
+// it to the window controller's |executeCommand:| and returns |YES|.
+- (BOOL)handleDelayedWindowKeyboardShortcut:(NSEvent*)event;
 
 // Checks if |event| is a browser keyboard shortcut. If so, dispatches it to the
 // window controller's |executeCommand:| and returns |YES|.

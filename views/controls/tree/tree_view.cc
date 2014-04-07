@@ -1,4 +1,4 @@
-// Copyright (c) 2006-2008 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,17 +6,18 @@
 
 #include <vector>
 
-#include "app/gfx/canvas.h"
-#include "app/gfx/canvas_paint.h"
-#include "app/gfx/favicon_size.h"
-#include "app/gfx/icon_util.h"
 #include "app/l10n_util.h"
 #include "app/l10n_util_win.h"
 #include "app/resource_bundle.h"
-#include "base/gfx/point.h"
+#include "base/i18n/rtl.h"
 #include "base/keyboard_codes.h"
 #include "base/stl_util-inl.h"
 #include "base/win_util.h"
+#include "gfx/canvas.h"
+#include "gfx/canvas_paint.h"
+#include "gfx/favicon_size.h"
+#include "gfx/icon_util.h"
+#include "gfx/point.h"
 #include "grit/app_resources.h"
 #include "views/focus/focus_manager.h"
 #include "views/widget/widget.h"
@@ -52,6 +53,20 @@ TreeView::~TreeView() {
                                        id_to_details_map_.end());
   if (image_list_)
     ImageList_Destroy(image_list_);
+}
+
+bool TreeView::GetAccessibleRole(AccessibilityTypes::Role* role) {
+  DCHECK(role);
+
+  *role = AccessibilityTypes::ROLE_OUTLINE;
+  return true;
+}
+
+bool TreeView::GetAccessibleState(AccessibilityTypes::State* state) {
+  DCHECK(state);
+ 
+  *state = AccessibilityTypes::STATE_READONLY;
+  return true;
 }
 
 void TreeView::SetModel(TreeModel* model) {
@@ -399,7 +414,7 @@ LRESULT TreeView::OnNotify(int w_param, LPNMHDR l_param) {
 
         // Adjust the string direction if such adjustment is required.
         std::wstring localized_text;
-        if (l10n_util::AdjustStringForLocaleDirection(text, &localized_text))
+        if (base::i18n::AdjustStringForLocaleDirection(text, &localized_text))
           text.swap(localized_text);
 
         wcsncpy_s(info->item.pszText, info->item.cchTextMax, text.c_str(),
@@ -520,8 +535,7 @@ void TreeView::OnContextMenu(const POINT& location) {
     TVHITTESTINFO hit_info;
     gfx::Point local_loc(location);
     ConvertPointToView(NULL, this, &local_loc);
-    hit_info.pt.x = local_loc.x();
-    hit_info.pt.y = local_loc.y();
+    hit_info.pt = local_loc.ToPOINT();
     HTREEITEM hit_item = TreeView_HitTest(tree_view_, &hit_info);
     if (!hit_item ||
         GetNodeDetails(GetSelectedNode())->tree_item != hit_item ||
@@ -530,7 +544,7 @@ void TreeView::OnContextMenu(const POINT& location) {
       return;
     }
   }
-  ShowContextMenu(location.x, location.y, true);
+  ShowContextMenu(gfx::Point(location), true);
 }
 
 TreeModelNode* TreeView::GetNodeForTreeItem(HTREEITEM tree_item) {
@@ -730,7 +744,7 @@ LRESULT CALLBACK TreeView::TreeWndProc(HWND window,
         return 0;
 
       HDC dc = canvas.beginPlatformPaint();
-      if (l10n_util::GetTextDirection() == l10n_util::RIGHT_TO_LEFT) {
+      if (base::i18n::IsRTL()) {
         // gfx::Canvas ends up configuring the DC with a mode of GM_ADVANCED.
         // For some reason a graphics mode of ADVANCED triggers all the text
         // to be mirrored when RTL. Set the mode back to COMPATIBLE and
@@ -758,7 +772,7 @@ LRESULT CALLBACK TreeView::TreeWndProc(HWND window,
                          -canvas.paintStruct().rcPaint.top, NULL);
       }
       SendMessage(window, WM_PRINTCLIENT, reinterpret_cast<WPARAM>(dc), 0);
-      if (l10n_util::GetTextDirection() == l10n_util::RIGHT_TO_LEFT) {
+      if (base::i18n::IsRTL()) {
         // Reset the origin of the dc back to 0. This way when we copy the bits
         // over we copy the right bits.
         SetViewportOrgEx(dc, 0, 0, NULL);

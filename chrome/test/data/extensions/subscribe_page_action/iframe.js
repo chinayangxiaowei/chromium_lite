@@ -1,3 +1,8 @@
+/* Copyright (c) 2009 The Chromium Authors. All rights reserved.
+   Use of this source code is governed by a BSD-style license that can be
+   found in the LICENSE file.
+*/
+
 /* Use only multi-line comments in this file, since during testing
    its contents will get read from disk and stuffed into the
    iframe .src tag, which is a process that doesn't preserve line
@@ -8,7 +13,7 @@
 var maxFeedItems = 10;
 
 /* The maximum number of characters to show in the feed item title. */
-var maxTitleCount = 64;
+var maxTitleCount = 1024;
 
 window.addEventListener("message", function(e) {
   var parser = new DOMParser();
@@ -63,19 +68,27 @@ function buildPreview(doc) {
 
     /* Grab the link URL. */
     var itemLink = item.getElementsByTagName('link');
-    var link = itemLink[0].childNodes[0];
-    if (link)
-      link = itemLink[0].childNodes[0].nodeValue;
-    else
-      link = itemLink[0].getAttribute('href');
+    var link = "";
+    if (itemLink.length > 0) {
+      link = itemLink[0].childNodes[0];
+      if (link)
+        link = itemLink[0].childNodes[0].nodeValue;
+      else
+        link = itemLink[0].getAttribute('href');
+    }
 
     var tr = document.createElement("tr");
     var td = document.createElement("td");
 
-    var anchor = document.createElement("a");
+    /* If we found a link we'll create an anchor element,
+    otherwise just use a bold headline for the title. */
+    var anchor = (link != "") ? document.createElement("a") :
+                                document.createElement("strong");
     anchor.id = "anchor_" + String(i);
-    anchor.href = link;
-    anchor.appendChild(document.createTextNode(itemTitle));
+    if (link != "")
+      anchor.href = link;
+    anchor.innerHTML = itemTitle;
+    anchor.target = "_top";
     anchor.className = "item_title";
 
     var span = document.createElement("span");

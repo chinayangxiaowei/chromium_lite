@@ -22,8 +22,10 @@ WebWorkerProxy::WebWorkerProxy(
     WebWorkerClient* client,
     ChildThread* child_thread,
     int render_view_route_id)
-    : WebWorkerBase(child_thread, MSG_ROUTING_NONE, render_view_route_id),
+    : WebWorkerBase(child_thread, 0, MSG_ROUTING_NONE, render_view_route_id),
       client_(client) {
+  // TODO(atwilson): Change to pass in a real document_id when we support nested
+  // workers.
 }
 
 WebWorkerProxy::~WebWorkerProxy() {
@@ -44,7 +46,8 @@ void WebWorkerProxy::startWorkerContext(
     const WebURL& script_url,
     const WebString& user_agent,
     const WebString& source_code) {
-  CreateWorkerContext(script_url, false, string16(), user_agent, source_code);
+  CreateWorkerContext(script_url, false, string16(), user_agent, source_code,
+                      MSG_ROUTING_NONE);
 }
 
 void WebWorkerProxy::terminateWorkerContext() {

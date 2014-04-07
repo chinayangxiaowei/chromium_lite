@@ -5,19 +5,37 @@
 #include "net/socket/socks5_client_socket.h"
 
 #include "base/basictypes.h"
-#include "build/build_config.h"
-#if defined(OS_WIN)
-#include <ws2tcpip.h>
-#elif defined(OS_POSIX)
-#include <netdb.h>
-#endif
 #include "base/compiler_specific.h"
+#include "base/format_macros.h"
+#include "base/string_util.h"
 #include "base/trace_event.h"
 #include "net/base/io_buffer.h"
-#include "net/base/load_log.h"
+#include "net/base/net_log.h"
 #include "net/base/net_util.h"
+#include "net/base/sys_addrinfo.h"
+#include "net/socket/client_socket_handle.h"
 
 namespace net {
+
+namespace {
+
+// Returns a string description of |socks_error|, or NULL if |socks_error| is
+// not a valid SOCKS reply.
+const char* MapSOCKSReplyToErrorString(char socks_error) {
+  switch(socks_error) {
+    case 1: return "(1) General SOCKS server failure";
+    case 2: return "(2) Connection not allowed by ruleset";
+    case 3: return "(3) Network unreachable";
+    case 4: return "(4) Host unreachable";
+    case 5: return "(5) Connection refused";
+    case 6: return "(6) TTL expired";
+    case 7: return "(7) Command not supported";
+    case 8: return "(8) Address type not supported";
+    default: return NULL;
+  }
+}
+
+}  // namespace
 
 const unsigned int SOCKS5ClientSocket::kGreetReadHeaderSize = 2;
 const unsigned int SOCKS5ClientSocket::kWriteHeaderSize = 10;
@@ -29,7 +47,8 @@ const uint8 SOCKS5ClientSocket::kNullByte = 0x00;
 COMPILE_ASSERT(sizeof(struct in_addr) == 4, incorrect_system_size_of_IPv4);
 COMPILE_ASSERT(sizeof(struct in6_addr) == 16, incorrect_system_size_of_IPv6);
 
-SOCKS5ClientSocket::SOCKS5ClientSocket(ClientSocket* transport_socket,
+SOCKS5ClientSocket::SOCKS5ClientSocket(
+    ClientSocketHandle* transport_socket,
     const HostResolver::RequestInfo& req_info)
     : ALLOW_THIS_IN_INITIALIZER_LIST(
           io_callback_(this, &SOCKS5ClientSocket::OnIOComplete)),
@@ -43,14 +62,31 @@ SOCKS5ClientSocket::SOCKS5ClientSocket(ClientSocket* transport_socket,
       host_request_info_(req_info) {
 }
 
+SOCKS5ClientSocket::SOCKS5ClientSocket(
+    ClientSocket* transport_socket,
+    const HostResolver::RequestInfo& req_info)
+    : ALLOW_THIS_IN_INITIALIZER_LIST(
+          io_callback_(this, &SOCKS5ClientSocket::OnIOComplete)),
+      transport_(new ClientSocketHandle()),
+      next_state_(STATE_NONE),
+      user_callback_(NULL),
+      completed_handshake_(false),
+      bytes_sent_(0),
+      bytes_received_(0),
+      read_header_size(kReadHeaderSize),
+      host_request_info_(req_info) {
+  transport_->set_socket(transport_socket);
+}
+
 SOCKS5ClientSocket::~SOCKS5ClientSocket() {
   Disconnect();
 }
 
 int SOCKS5ClientSocket::Connect(CompletionCallback* callback,
-                                LoadLog* load_log) {
+                                const BoundNetLog& net_log) {
   DCHECK(transport_.get());
-  DCHECK(transport_->IsConnected());
+  DCHECK(transport_->socket());
+  DCHECK(transport_->socket()->IsConnected());
   DCHECK_EQ(STATE_NONE, next_state_);
   DCHECK(!user_callback_);
 
@@ -58,8 +94,8 @@ int SOCKS5ClientSocket::Connect(CompletionCallback* callback,
   if (completed_handshake_)
     return OK;
 
-  load_log_ = load_log;
-  LoadLog::BeginEvent(load_log, LoadLog::TYPE_SOCKS5_CONNECT);
+  net_log_ = net_log;
+  net_log.BeginEvent(NetLog::TYPE_SOCKS5_CONNECT);
 
   next_state_ = STATE_GREET_WRITE;
   buffer_.clear();
@@ -68,23 +104,29 @@ int SOCKS5ClientSocket::Connect(CompletionCallback* callback,
   if (rv == ERR_IO_PENDING) {
     user_callback_ = callback;
   } else {
-    LoadLog::EndEvent(load_log, LoadLog::TYPE_SOCKS5_CONNECT);
-    load_log_ = NULL;
+    net_log.EndEvent(NetLog::TYPE_SOCKS5_CONNECT);
+    net_log_ = BoundNetLog();
   }
   return rv;
 }
 
 void SOCKS5ClientSocket::Disconnect() {
   completed_handshake_ = false;
-  transport_->Disconnect();
+  transport_->socket()->Disconnect();
+
+  // Reset other states to make sure they aren't mistakenly used later.
+  // These are the states initialized by Connect().
+  next_state_ = STATE_NONE;
+  user_callback_ = NULL;
+  net_log_ = BoundNetLog();
 }
 
 bool SOCKS5ClientSocket::IsConnected() const {
-  return completed_handshake_ && transport_->IsConnected();
+  return completed_handshake_ && transport_->socket()->IsConnected();
 }
 
 bool SOCKS5ClientSocket::IsConnectedAndIdle() const {
-  return completed_handshake_ && transport_->IsConnectedAndIdle();
+  return completed_handshake_ && transport_->socket()->IsConnectedAndIdle();
 }
 
 // Read is called by the transport layer above to read. This can only be done
@@ -95,7 +137,7 @@ int SOCKS5ClientSocket::Read(IOBuffer* buf, int buf_len,
   DCHECK_EQ(STATE_NONE, next_state_);
   DCHECK(!user_callback_);
 
-  return transport_->Read(buf, buf_len, callback);
+  return transport_->socket()->Read(buf, buf_len, callback);
 }
 
 // Write is called by the transport layer. This can only be done if the
@@ -106,15 +148,15 @@ int SOCKS5ClientSocket::Write(IOBuffer* buf, int buf_len,
   DCHECK_EQ(STATE_NONE, next_state_);
   DCHECK(!user_callback_);
 
-  return transport_->Write(buf, buf_len, callback);
+  return transport_->socket()->Write(buf, buf_len, callback);
 }
 
 bool SOCKS5ClientSocket::SetReceiveBufferSize(int32 size) {
-  return transport_->SetReceiveBufferSize(size);
+  return transport_->socket()->SetReceiveBufferSize(size);
 }
 
 bool SOCKS5ClientSocket::SetSendBufferSize(int32 size) {
-  return transport_->SetSendBufferSize(size);
+  return transport_->socket()->SetSendBufferSize(size);
 }
 
 void SOCKS5ClientSocket::DoCallback(int result) {
@@ -125,7 +167,6 @@ void SOCKS5ClientSocket::DoCallback(int result) {
   // clear user_callback_ up front.
   CompletionCallback* c = user_callback_;
   user_callback_ = NULL;
-  DLOG(INFO) << "Finished setting up SOCKSv5 handshake";
   c->Run(result);
 }
 
@@ -133,8 +174,8 @@ void SOCKS5ClientSocket::OnIOComplete(int result) {
   DCHECK_NE(STATE_NONE, next_state_);
   int rv = DoLoop(result);
   if (rv != ERR_IO_PENDING) {
-    LoadLog::EndEvent(load_log_, LoadLog::TYPE_SOCKS5_CONNECT);
-    load_log_ = NULL;
+    net_log_.EndEvent(NetLog::TYPE_SOCKS5_CONNECT);
+    net_log_ = BoundNetLog();
     DoCallback(rv);
   }
 }
@@ -148,31 +189,39 @@ int SOCKS5ClientSocket::DoLoop(int last_io_result) {
     switch (state) {
       case STATE_GREET_WRITE:
         DCHECK_EQ(OK, rv);
+        net_log_.BeginEvent(NetLog::TYPE_SOCKS5_GREET_WRITE);
         rv = DoGreetWrite();
         break;
       case STATE_GREET_WRITE_COMPLETE:
         rv = DoGreetWriteComplete(rv);
+        net_log_.EndEvent(NetLog::TYPE_SOCKS5_GREET_WRITE);
         break;
       case STATE_GREET_READ:
         DCHECK_EQ(OK, rv);
+        net_log_.BeginEvent(NetLog::TYPE_SOCKS5_GREET_READ);
         rv = DoGreetRead();
         break;
       case STATE_GREET_READ_COMPLETE:
         rv = DoGreetReadComplete(rv);
+        net_log_.EndEvent(NetLog::TYPE_SOCKS5_GREET_READ);
         break;
       case STATE_HANDSHAKE_WRITE:
         DCHECK_EQ(OK, rv);
+        net_log_.BeginEvent(NetLog::TYPE_SOCKS5_HANDSHAKE_WRITE);
         rv = DoHandshakeWrite();
         break;
       case STATE_HANDSHAKE_WRITE_COMPLETE:
         rv = DoHandshakeWriteComplete(rv);
+        net_log_.EndEvent(NetLog::TYPE_SOCKS5_HANDSHAKE_WRITE);
         break;
       case STATE_HANDSHAKE_READ:
         DCHECK_EQ(OK, rv);
+        net_log_.BeginEvent(NetLog::TYPE_SOCKS5_HANDSHAKE_READ);
         rv = DoHandshakeRead();
         break;
       case STATE_HANDSHAKE_READ_COMPLETE:
         rv = DoHandshakeReadComplete(rv);
+        net_log_.EndEvent(NetLog::TYPE_SOCKS5_HANDSHAKE_READ);
         break;
       default:
         NOTREACHED() << "bad state";
@@ -189,8 +238,11 @@ const char kSOCKS5GreetReadData[] = { 0x05, 0x00 };
 int SOCKS5ClientSocket::DoGreetWrite() {
   // Since we only have 1 byte to send the hostname length in, if the
   // URL has a hostname longer than 255 characters we can't send it.
-  if (0xFF < host_request_info_.hostname().size())
-    return ERR_INVALID_URL;
+  if (0xFF < host_request_info_.hostname().size()) {
+    net_log_.AddStringLiteral("Failed sending request because hostname is "
+        "longer than 255 characters");
+    return ERR_SOCKS_CONNECTION_FAILED;
+  }
 
   if (buffer_.empty()) {
     buffer_ = std::string(kSOCKS5GreetWriteData,
@@ -203,7 +255,8 @@ int SOCKS5ClientSocket::DoGreetWrite() {
   handshake_buf_ = new IOBuffer(handshake_buf_len);
   memcpy(handshake_buf_->data(), &buffer_.data()[bytes_sent_],
          handshake_buf_len);
-  return transport_->Write(handshake_buf_, handshake_buf_len, &io_callback_);
+  return transport_->socket()->Write(handshake_buf_, handshake_buf_len,
+                                     &io_callback_);
 }
 
 int SOCKS5ClientSocket::DoGreetWriteComplete(int result) {
@@ -225,15 +278,19 @@ int SOCKS5ClientSocket::DoGreetRead() {
   next_state_ = STATE_GREET_READ_COMPLETE;
   size_t handshake_buf_len = kGreetReadHeaderSize - bytes_received_;
   handshake_buf_ = new IOBuffer(handshake_buf_len);
-  return transport_->Read(handshake_buf_, handshake_buf_len, &io_callback_);
+  return transport_->socket()->Read(handshake_buf_, handshake_buf_len,
+                                    &io_callback_);
 }
 
 int SOCKS5ClientSocket::DoGreetReadComplete(int result) {
   if (result < 0)
     return result;
 
-  if (result == 0)
-    return ERR_CONNECTION_CLOSED;  // Unexpected socket close
+  if (result == 0) {
+    net_log_.AddStringLiteral(
+        "Connection unexpected closed while reading greeting.");
+    return ERR_SOCKS_CONNECTION_FAILED;
+  }
 
   bytes_received_ += result;
   buffer_.append(handshake_buf_->data(), result);
@@ -243,8 +300,18 @@ int SOCKS5ClientSocket::DoGreetReadComplete(int result) {
   }
 
   // Got the greet data.
-  if (buffer_[0] != kSOCKS5Version || buffer_[1] != 0x00)
-    return ERR_INVALID_RESPONSE;  // Unknown error
+  if (buffer_[0] != kSOCKS5Version) {
+    net_log_.AddStringLiteral("Unexpected SOCKS version");
+    net_log_.AddString(StringPrintf(
+        "buffer_[0] = 0x%x", static_cast<int>(buffer_[0])));
+    return ERR_SOCKS_CONNECTION_FAILED;
+  }
+  if (buffer_[1] != 0x00) {
+    net_log_.AddStringLiteral("Unexpected authentication method");
+    net_log_.AddString(StringPrintf(
+        "buffer_[1] = 0x%x", static_cast<int>(buffer_[1])));
+    return ERR_SOCKS_CONNECTION_FAILED;
+  }
 
   buffer_.clear();
   next_state_ = STATE_HANDSHAKE_WRITE;
@@ -289,7 +356,8 @@ int SOCKS5ClientSocket::DoHandshakeWrite() {
   handshake_buf_ = new IOBuffer(handshake_buf_len);
   memcpy(handshake_buf_->data(), &buffer_[bytes_sent_],
          handshake_buf_len);
-  return transport_->Write(handshake_buf_, handshake_buf_len, &io_callback_);
+  return transport_->socket()->Write(handshake_buf_, handshake_buf_len,
+                                     &io_callback_);
 }
 
 int SOCKS5ClientSocket::DoHandshakeWriteComplete(int result) {
@@ -322,7 +390,8 @@ int SOCKS5ClientSocket::DoHandshakeRead() {
 
   int handshake_buf_len = read_header_size - bytes_received_;
   handshake_buf_ = new IOBuffer(handshake_buf_len);
-  return transport_->Read(handshake_buf_, handshake_buf_len, &io_callback_);
+  return transport_->socket()->Read(handshake_buf_, handshake_buf_len,
+                                    &io_callback_);
 }
 
 int SOCKS5ClientSocket::DoHandshakeReadComplete(int result) {
@@ -330,8 +399,11 @@ int SOCKS5ClientSocket::DoHandshakeReadComplete(int result) {
     return result;
 
   // The underlying socket closed unexpectedly.
-  if (result == 0)
-    return ERR_CONNECTION_CLOSED;
+  if (result == 0) {
+    net_log_.AddStringLiteral(
+        "Connection unexpected closed while reading handshake.");
+    return ERR_SOCKS_CONNECTION_FAILED;
+  }
 
   buffer_.append(handshake_buf_->data(), result);
   bytes_received_ += result;
@@ -339,11 +411,25 @@ int SOCKS5ClientSocket::DoHandshakeReadComplete(int result) {
   // When the first few bytes are read, check how many more are required
   // and accordingly increase them
   if (bytes_received_ == kReadHeaderSize) {
-    // TODO(arindam): add error codes to net/error_list.h
-    if (buffer_[0] != kSOCKS5Version || buffer_[2] != kNullByte)
-      return ERR_INVALID_RESPONSE;
-    if (buffer_[1] != 0x00)
-      return ERR_FAILED;
+    if (buffer_[0] != kSOCKS5Version || buffer_[2] != kNullByte) {
+      net_log_.AddStringLiteral("Unexpected SOCKS version.");
+      net_log_.AddString(StringPrintf(
+          "buffer_[0] = 0x%x; buffer_[2] = 0x%x",
+          static_cast<int>(buffer_[0]),
+          static_cast<int>(buffer_[2])));
+      return ERR_SOCKS_CONNECTION_FAILED;
+    }
+    if (buffer_[1] != 0x00) {
+      net_log_.AddStringLiteral("SOCKS server returned a failure code:");
+      const char* error_string = MapSOCKSReplyToErrorString(buffer_[1]);
+      if (error_string) {
+        net_log_.AddStringLiteral(error_string);
+      } else {
+        net_log_.AddString(StringPrintf(
+            "buffer_[1] = 0x%x", static_cast<int>(buffer_[1])));
+      }
+      return ERR_SOCKS_CONNECTION_FAILED;
+    }
 
     // We check the type of IP/Domain the server returns and accordingly
     // increase the size of the response. For domains, we need to read the
@@ -358,8 +444,12 @@ int SOCKS5ClientSocket::DoHandshakeReadComplete(int result) {
       read_header_size += sizeof(struct in_addr) - 1;
     else if (address_type == kEndPointResolvedIPv6)
       read_header_size += sizeof(struct in6_addr) - 1;
-    else
-      return ERR_INVALID_RESPONSE;
+    else {
+      net_log_.AddStringLiteral("Unknown address type in response");
+      net_log_.AddString(StringPrintf(
+          "buffer_[3] = 0x%x", static_cast<int>(buffer_[3])));
+      return ERR_SOCKS_CONNECTION_FAILED;
+    }
 
     read_header_size += 2;  // for the port.
     next_state_ = STATE_HANDSHAKE_READ;
@@ -380,11 +470,8 @@ int SOCKS5ClientSocket::DoHandshakeReadComplete(int result) {
   return OK;
 }
 
-#if defined(OS_LINUX)
-int SOCKS5ClientSocket::GetPeerName(struct sockaddr* name,
-                                    socklen_t* namelen) {
-  return transport_->GetPeerName(name, namelen);
+int SOCKS5ClientSocket::GetPeerAddress(AddressList* address) const {
+  return transport_->socket()->GetPeerAddress(address);
 }
-#endif
 
 }  // namespace net

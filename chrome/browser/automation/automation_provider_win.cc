@@ -8,6 +8,7 @@
 #include "chrome/browser/automation/ui_controls.h"
 #include "chrome/browser/browser_window.h"
 #include "chrome/browser/external_tab_container.h"
+#include "chrome/browser/profile.h"
 #include "chrome/browser/tab_contents/tab_contents.h"
 #include "chrome/browser/views/bookmark_bar_view.h"
 #include "chrome/test/automation/automation_messages.h"
@@ -47,8 +48,9 @@ static void MoveMouse(const POINT& point) {
   // Verify
 #ifndef NDEBUG
   DWORD pos = GetMessagePos();
-  DCHECK_EQ(point.x, GET_X_LPARAM(pos));
-  DCHECK_EQ(point.y, GET_Y_LPARAM(pos));
+  gfx::Point cursor_point(pos);
+  DCHECK_EQ(point.x, cursor_point.x());
+  DCHECK_EQ(point.y, cursor_point.y());
 #endif
 }
 
@@ -229,38 +231,6 @@ void AutomationProvider::WindowSimulateDrag(int handle,
   }
 }
 
-void AutomationProvider::GetFocusedViewID(int handle, int* view_id) {
-  *view_id = -1;
-  if (window_tracker_->ContainsHandle(handle)) {
-    HWND hwnd = window_tracker_->GetResource(handle);
-    views::FocusManager* focus_manager =
-        views::FocusManager::GetFocusManagerForNativeView(hwnd);
-    DCHECK(focus_manager);
-    views::View* focused_view = focus_manager->GetFocusedView();
-    if (focused_view)
-      *view_id = focused_view->GetID();
-  }
-}
-
-void AutomationProvider::GetBookmarkBarVisibility(int handle, bool* visible,
-                                                  bool* animating) {
-  *visible = false;
-  *animating = false;
-
-  if (browser_tracker_->ContainsHandle(handle)) {
-    Browser* browser = browser_tracker_->GetResource(handle);
-    if (browser) {
-      BrowserWindowTesting* testing =
-          browser->window()->GetBrowserWindowTesting();
-      BookmarkBarView* bookmark_bar = testing->GetBookmarkBarView();
-      if (bookmark_bar) {
-        *animating = bookmark_bar->IsAnimating();
-        *visible = browser->window()->IsBookmarkBarVisible();
-      }
-    }
-  }
-}
-
 void AutomationProvider::GetWindowBounds(int handle, gfx::Rect* bounds,
                                          bool* success) {
   *success = false;
@@ -341,7 +311,8 @@ void AutomationProvider::CreateExternalTab(
   // which is released when the window is destroyed.
   external_tab_container->Init(profile, settings.parent, settings.dimensions,
       settings.style, settings.load_requests_via_automation,
-      settings.handle_top_level_requests, NULL, settings.initial_url);
+      settings.handle_top_level_requests, NULL, settings.initial_url,
+      settings.referrer, settings.infobars_enabled);
 
   if (AddExternalTab(external_tab_container)) {
     TabContents* tab_contents = external_tab_container->tab_contents();
@@ -359,7 +330,7 @@ bool AutomationProvider::AddExternalTab(ExternalTabContainer* external_tab) {
   TabContents* tab_contents = external_tab->tab_contents();
   if (tab_contents) {
     int tab_handle = tab_tracker_->Add(&tab_contents->controller());
-    external_tab->set_tab_handle(tab_handle);
+    external_tab->SetTabHandle(tab_handle);
     return true;
   }
 
@@ -376,10 +347,11 @@ void AutomationProvider::ProcessUnhandledAccelerator(
 }
 
 void AutomationProvider::SetInitialFocus(const IPC::Message& message,
-                                         int handle, bool reverse) {
+                                         int handle, bool reverse,
+                                         bool restore_focus_to_view) {
   ExternalTabContainer* external_tab = GetExternalTabForHandle(handle);
   if (external_tab) {
-    external_tab->FocusThroughTabTraversal(reverse);
+    external_tab->FocusThroughTabTraversal(reverse, restore_focus_to_view);
   }
   // This message expects no response.
 }
@@ -452,7 +424,8 @@ void AutomationProvider::OnForwardContextMenuCommandToChrome(int tab_handle,
 }
 
 void AutomationProvider::ConnectExternalTab(
-    intptr_t cookie,
+    uint64 cookie,
+    bool allow,
     gfx::NativeWindow* tab_container_window,
     gfx::NativeWindow* tab_window,
     int* tab_handle) {
@@ -461,18 +434,17 @@ void AutomationProvider::ConnectExternalTab(
   *tab_window = NULL;
 
   scoped_refptr<ExternalTabContainer> external_tab_container =
-      ExternalTabContainer::RemovePendingTab(cookie);
+      ExternalTabContainer::RemovePendingTab(static_cast<uintptr_t>(cookie));
   if (!external_tab_container.get()) {
     NOTREACHED();
     return;
   }
 
-  if (AddExternalTab(external_tab_container)) {
+  if (allow && AddExternalTab(external_tab_container)) {
     external_tab_container->Reinitialize(this,
                                          automation_resource_message_filter_);
     TabContents* tab_contents = external_tab_container->tab_contents();
     *tab_handle = external_tab_container->tab_handle();
-    external_tab_container->set_tab_handle(*tab_handle);
     *tab_container_window = external_tab_container->GetNativeView();
     *tab_window = tab_contents->GetNativeView();
   } else {
@@ -503,4 +475,22 @@ void AutomationProvider::SetEnableExtensionAutomation(
     DLOG(WARNING) <<
       "SetEnableExtensionAutomation called with invalid tab handle.";
   }
+}
+
+void AutomationProvider::OnBrowserMoved(int tab_handle) {
+  ExternalTabContainer* external_tab = GetExternalTabForHandle(tab_handle);
+  if (external_tab) {
+    external_tab->WindowMoved();
+  } else {
+    DLOG(WARNING) <<
+      "AutomationProvider::OnBrowserMoved called with invalid tab handle.";
+  }
+}
+
+void AutomationProvider::GetWindowTitle(int handle, string16* text) {
+  gfx::NativeWindow window = window_tracker_->GetResource(handle);
+  std::wstring result;
+  int length = ::GetWindowTextLength(window) + 1;
+  ::GetWindowText(window, WriteInto(&result, length), length);
+  text->assign(WideToUTF16(result));
 }

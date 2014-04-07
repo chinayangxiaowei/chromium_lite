@@ -49,6 +49,7 @@
       try {
         var obj = new ActiveXObject('ChromeTab.ChromeFrame');
         if (obj) {
+          obj.registerBhoIfNeeded();
           return true;
         }
       } catch(e) {
@@ -109,6 +110,7 @@
                    'top: 50%;' +
                    'border: 1px solid #93B4D9;' +
                    'background-color: white;' +
+                   'z-index: 2001;' +
                  '}' +
                  '.chromeFrameOverlayContent iframe {' +
                    'width: 800px;' +
@@ -131,6 +133,7 @@
                    '-ms-filter: ' +
                       '"progid:DXImageTransform.Microsoft.Alpha(Opacity=50)";' +
                    'filter: alpha(opacity=50);' +
+                   'z-index: 2000;' +
                  '}';
     injectStyleSheet(rules);
     cfStyleTagInjected = true;
@@ -239,7 +242,11 @@
         '</tr>' +
       '</table>';
 
-    document.body.appendChild(n);
+    var b = document.body;
+    // Insert underlay nodes into the document in the right order.
+    while (n.firstChild) {
+      b.insertBefore(n.lastChild, b.firstChild);
+    }
     var ifr = makeIframe(args);
     byId('chromeFrameIframeHolder').appendChild(ifr);
     byId('chromeFrameCloseButton').onclick = closeOverlay;
@@ -265,16 +272,18 @@
     // We currently only support CF in IE
     // TODO(slightlyoff): Update this should we support other browsers!
     var ua = navigator.userAgent;
-    var ieRe = /MSIE \S+; Windows NT/;
+    var ieRe = /MSIE (\S+); Windows NT/;
     var bail = false;
     if (ieRe.test(ua)) {
       // We also only support Win2003/XPSP2 or better. See:
       //  http://msdn.microsoft.com/en-us/library/ms537503%28VS.85%29.aspx
-      if (parseFloat(ua.split(ieRe)[1]) < 6 &&
-          ua.indexOf('SV1') >= 0) {
+      if (parseFloat(ieRe.exec(ua)[1]) < 6 &&
+          // 'SV1' indicates SP2, only bail if not SP2 or Win2K3
+          ua.indexOf('SV1') < 0) {
         bail = true;
       }
     } else {
+      // Not IE
       bail = true;
     }
     if (bail) {

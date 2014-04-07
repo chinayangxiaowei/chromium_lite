@@ -44,6 +44,10 @@ class StatusBubbleMac : public StatusBubble {
   // exist.
   void UpdateSizeAndPosition();
 
+  // Mac-specific method: Change the parent window of the status bubble. Safe to
+  // call even when the status bubble does not exist.
+  void SwitchParentWindow(NSWindow* parent);
+
   // Delegate method called when a fade-in or fade-out transition has
   // completed.  This is public so that it may be visible to the CAAnimation
   // delegate, which is an Objective-C object.
@@ -134,7 +138,7 @@ class StatusBubbleMac : public StatusBubble {
 @interface NSObject(StatusBubbleDelegate)
 // Called to query the delegate about the vertical offset (if any) that should
 // be applied to the StatusBubble's position.
-- (float)verticalOffsetForStatusBubble;
+- (CGFloat)verticalOffsetForStatusBubble;
 
 // Called from SetState to notify the delegate of state changes.
 - (void)statusBubbleWillEnterState:(StatusBubbleMac::StatusBubbleState)state;

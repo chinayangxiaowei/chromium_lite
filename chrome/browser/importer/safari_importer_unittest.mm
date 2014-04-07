@@ -1,4 +1,4 @@
-// Copyright (c) 2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,10 +9,19 @@
 #include "base/file_util.h"
 #include "base/path_service.h"
 #include "base/sys_string_conversions.h"
+#include "chrome/browser/history/history_types.h"
 #include "chrome/common/chrome_paths.h"
 #include "chrome/test/file_test_utils.h"
 #include "chrome/browser/importer/importer_bridge.h"
 #include "testing/platform_test.h"
+
+using importer::COOKIES;
+using importer::FAVORITES;
+using importer::HISTORY;
+using importer::HOME_PAGE;
+using importer::NONE;
+using importer::PASSWORDS;
+using importer::SEARCH_ENGINES;
 
 // In order to test the Safari import functionality effectively, we store a
 // simulated Library directory containing dummy data files in the same

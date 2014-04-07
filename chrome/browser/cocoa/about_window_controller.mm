@@ -1,4 +1,4 @@
-// Copyright (c) 2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -15,6 +15,7 @@
 #import "chrome/browser/cocoa/keystone_glue.h"
 #include "chrome/browser/cocoa/restart_browser.h"
 #include "chrome/common/platform_util.h"
+#include "chrome/common/url_constants.h"
 #include "grit/chromium_strings.h"
 #include "grit/generated_resources.h"
 #include "grit/theme_resources.h"
@@ -83,9 +84,6 @@ void AttributedStringAppendHyperlink(NSMutableAttributedString* attr_str,
 
 @end  // @interface AboutWindowController(Private)
 
-const NSString* const kUserClosedAboutNotification =
-    @"UserClosedAboutNotification";
-
 @implementation AboutLegalTextView
 
 // Never draw the insertion point (otherwise, it shows up without any user
@@ -132,16 +130,20 @@ static BOOL recentShownUserActionFailedStatus = NO;
       [bundle objectForInfoDictionaryKey:@"CFBundleShortVersionString"];
 
   NSString* versionModifier = @"";
+  NSString* svnRevision = @"";
   string16 modifier = platform_util::GetVersionStringModifier();
   if (modifier.length())
     versionModifier = [NSString stringWithFormat:@" %@",
                                             base::SysUTF16ToNSString(modifier)];
 
+#if !defined(GOOGLE_CHROME_BUILD)
+  svnRevision = [NSString stringWithFormat:@" (%@)",
+                          [bundle objectForInfoDictionaryKey:@"SVNRevision"]];
+#endif
   // The format string is not localized, but this is how the displayed version
   // is built on Windows too.
-  NSString* svnRevision = [bundle objectForInfoDictionaryKey:@"SVNRevision"];
   NSString* version =
-    [NSString stringWithFormat:@"%@ (%@)%@",
+    [NSString stringWithFormat:@"%@%@%@",
               chromeVersion, svnRevision, versionModifier];
 
   [version_ setStringValue:version];
@@ -217,8 +219,7 @@ static BOOL recentShownUserActionFailedStatus = NO;
 }
 
 - (void)windowWillClose:(NSNotification*)notification {
-  NSNotificationCenter* center = [NSNotificationCenter defaultCenter];
-  [center postNotificationName:kUserClosedAboutNotification object:self];
+  [self autorelease];
 }
 
 - (void)adjustUpdateUIVisibility {
@@ -693,7 +694,8 @@ static BOOL recentShownUserActionFailedStatus = NO;
   // The CHR link should go to here
   NSString* kChromiumProject = l10n_util::GetNSString(IDS_CHROMIUM_PROJECT_URL);
   // The OSS link should go to here
-  NSString* kAcknowledgements = @"about:credits";
+  NSString* kAcknowledgements =
+      [NSString stringWithUTF8String:chrome::kAboutCreditsURL];
 
   // Now fetch the license string and deal with the markers
 
@@ -757,7 +759,7 @@ static BOOL recentShownUserActionFailedStatus = NO;
   // Terms of service is only valid for Google Chrome
 
   // The url within terms should point here:
-  NSString* kTOS = @"about:terms";
+  NSString* kTOS = [NSString stringWithUTF8String:chrome::kAboutTermsURL];
   // Following Window. There is one marker in the string for where the terms
   // link goes, but the text of the link comes from a second string resources.
   std::vector<size_t> url_offsets;

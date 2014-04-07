@@ -1,4 +1,4 @@
-// Copyright (c) 2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -35,7 +35,6 @@ MockAppCacheStorage::MockAppCacheStorage(AppCacheService* service)
       simulated_found_cache_id_(kNoCacheId),
       simulated_found_network_namespace_(false) {
   last_cache_id_ = 0;
-  last_entry_id_ = 0;
   last_group_id_ = 0;
   last_response_id_ = 0;
 }
@@ -50,7 +49,7 @@ void MockAppCacheStorage::LoadCache(int64 id, Delegate* delegate) {
   if (ShouldCacheLoadAppearAsync(cache)) {
     ScheduleTask(method_factory_.NewRunnableMethod(
         &MockAppCacheStorage::ProcessLoadCache,
-        id, GetOrCreateDelegateReference(delegate)));
+        id, make_scoped_refptr(GetOrCreateDelegateReference(delegate))));
     return;
   }
   ProcessLoadCache(id, GetOrCreateDelegateReference(delegate));
@@ -63,7 +62,8 @@ void MockAppCacheStorage::LoadOrCreateGroup(
   if (ShouldGroupLoadAppearAsync(group)) {
     ScheduleTask(method_factory_.NewRunnableMethod(
         &MockAppCacheStorage::ProcessLoadOrCreateGroup,
-        manifest_url, GetOrCreateDelegateReference(delegate)));
+        manifest_url,
+        make_scoped_refptr(GetOrCreateDelegateReference(delegate))));
     return;
   }
   ProcessLoadOrCreateGroup(
@@ -72,13 +72,14 @@ void MockAppCacheStorage::LoadOrCreateGroup(
 
 void MockAppCacheStorage::StoreGroupAndNewestCache(
     AppCacheGroup* group, AppCache* newest_cache, Delegate* delegate) {
-  DCHECK(group && delegate);
-  DCHECK(newest_cache && newest_cache->is_complete());
+  DCHECK(group && delegate && newest_cache);
 
   // Always make this operation look async.
   ScheduleTask(method_factory_.NewRunnableMethod(
       &MockAppCacheStorage::ProcessStoreGroupAndNewestCache,
-      group, newest_cache, GetOrCreateDelegateReference(delegate)));
+      make_scoped_refptr(group),
+      make_scoped_refptr(newest_cache),
+      make_scoped_refptr(GetOrCreateDelegateReference(delegate))));
 }
 
 void MockAppCacheStorage::FindResponseForMainRequest(
@@ -88,7 +89,8 @@ void MockAppCacheStorage::FindResponseForMainRequest(
   // Always make this operation look async.
   ScheduleTask(method_factory_.NewRunnableMethod(
       &MockAppCacheStorage::ProcessFindResponseForMainRequest,
-      url, GetOrCreateDelegateReference(delegate)));
+      url,
+      make_scoped_refptr(GetOrCreateDelegateReference(delegate))));
 }
 
 void MockAppCacheStorage::FindResponseForSubRequest(
@@ -121,8 +123,6 @@ void MockAppCacheStorage::MarkEntryAsForeign(
     if (entry)
       entry->add_types(AppCacheEntry::FOREIGN);
   }
-  // TODO(michaeln): in real storage update in storage, and if this cache is
-  // being loaded be sure to update the memory cache upon load completion.
 }
 
 void MockAppCacheStorage::MakeGroupObsolete(
@@ -132,11 +132,12 @@ void MockAppCacheStorage::MakeGroupObsolete(
   // Always make this method look async.
   ScheduleTask(method_factory_.NewRunnableMethod(
       &MockAppCacheStorage::ProcessMakeGroupObsolete,
-      group, GetOrCreateDelegateReference(delegate)));
+      make_scoped_refptr(group),
+      make_scoped_refptr(GetOrCreateDelegateReference(delegate))));
 }
 
 AppCacheResponseReader* MockAppCacheStorage::CreateResponseReader(
-    const GURL& origin, int64 response_id) {
+    const GURL& manifest_url, int64 response_id) {
   return new AppCacheResponseReader(response_id, disk_cache());
 }
 
@@ -147,8 +148,13 @@ AppCacheResponseWriter* MockAppCacheStorage::CreateResponseWriter(
 
 void MockAppCacheStorage::DoomResponses(
     const GURL& manifest_url, const std::vector<int64>& response_ids) {
+  DeleteResponses(manifest_url, response_ids);
+}
+
+void MockAppCacheStorage::DeleteResponses(
+    const GURL& manifest_url, const std::vector<int64>& response_ids) {
   // We don't bother with actually removing responses from the disk-cache,
-  // just keep track of which ids have been doomed.
+  // just keep track of which ids have been doomed or deleted
   std::vector<int64>::const_iterator it = response_ids.begin();
   while (it != response_ids.end()) {
     doomed_response_ids_.insert(*it);
@@ -170,7 +176,7 @@ void MockAppCacheStorage::ProcessLoadOrCreateGroup(
   // Newly created groups are not put in the stored_groups collection
   // until StoreGroupAndNewestCache is called.
   if (!group)
-    group = new AppCacheGroup(service_, manifest_url);
+    group = new AppCacheGroup(service_, manifest_url, NewGroupId());
 
   if (delegate_ref->delegate)
     delegate_ref->delegate->OnGroupLoaded(group, manifest_url);
@@ -180,31 +186,27 @@ void MockAppCacheStorage::ProcessStoreGroupAndNewestCache(
     scoped_refptr<AppCacheGroup> group,
     scoped_refptr<AppCache> newest_cache,
     scoped_refptr<DelegateReference> delegate_ref) {
+  Delegate* delegate = delegate_ref->delegate;
   if (simulate_store_group_and_newest_cache_failure_) {
-    if (delegate_ref->delegate)
-      delegate_ref->delegate->OnGroupAndNewestCacheStored(group, false);
+    if (delegate)
+      delegate->OnGroupAndNewestCacheStored(group, newest_cache, false);
     return;
   }
 
   AddStoredGroup(group);
-  AddStoredCache(newest_cache);
-  group->AddCache(newest_cache);
+  if (newest_cache != group->newest_complete_cache()) {
+    newest_cache->set_complete(true);
+    group->AddCache(newest_cache);
+    AddStoredCache(newest_cache);
 
-  // Copy the collection prior to removal, on final release
-  // of a cache the group's collection will change.
-  AppCacheGroup::Caches copy = group->old_caches();
-  RemoveStoredCaches(copy);
+    // Copy the collection prior to removal, on final release
+    // of a cache the group's collection will change.
+    AppCacheGroup::Caches copy = group->old_caches();
+    RemoveStoredCaches(copy);
+  }
 
-  if (delegate_ref->delegate)
-    delegate_ref->delegate->OnGroupAndNewestCacheStored(group, true);
-
-  // We don't bother with removing responses from 'mock' storage
-  // TODO(michaeln): for 'real' storage...
-  // std::set<int64> doomed_responses_ = responses from old caches
-  // std::set<int64> needed_responses_ = responses from newest cache
-  // foreach(needed_responses_)
-  //  doomed_responses_.remove(needed_response_);
-  // DoomResponses(group->manifest_url(), doomed_responses_);
+  if (delegate)
+    delegate->OnGroupAndNewestCacheStored(group, newest_cache, true);
 }
 
 namespace {
@@ -227,7 +229,7 @@ void MockAppCacheStorage::ProcessFindResponseForMainRequest(
     if (delegate_ref->delegate) {
       delegate_ref->delegate->OnMainResponseFound(
           url, simulated_found_entry_, simulated_found_fallback_entry_,
-          simulated_found_cache_id_, simulated_found_manifest_url_);
+          simulated_found_cache_id_, simulated_found_manifest_url_, false);
     }
     return;
   }
@@ -324,7 +326,7 @@ void MockAppCacheStorage::ProcessFindResponseForMainRequest(
   if (found_candidate.entry.has_response_id()) {
     delegate_ref->delegate->OnMainResponseFound(
         url, found_candidate.entry, AppCacheEntry(),
-        found_candidate.cache_id, found_candidate.manifest_url);
+        found_candidate.cache_id, found_candidate.manifest_url, false);
     return;
   }
 
@@ -333,14 +335,13 @@ void MockAppCacheStorage::ProcessFindResponseForMainRequest(
     delegate_ref->delegate->OnMainResponseFound(
         url, AppCacheEntry(), found_fallback_candidate.entry,
         found_fallback_candidate.cache_id,
-        found_fallback_candidate.manifest_url);
+        found_fallback_candidate.manifest_url, false);
     return;
   }
 
   // Didn't find anything.
   delegate_ref->delegate->OnMainResponseFound(
-      url, AppCacheEntry(), AppCacheEntry(),
-      kNoCacheId, GURL::EmptyGURL());
+      url, AppCacheEntry(), AppCacheEntry(), kNoCacheId, GURL(), false);
 }
 
 void MockAppCacheStorage::ProcessMakeGroupObsolete(
@@ -362,6 +363,11 @@ void MockAppCacheStorage::ProcessMakeGroupObsolete(
   RemoveStoredCaches(copy);
 
   group->set_obsolete(true);
+
+  // Also remove from the working set, caches for an 'obsolete' group
+  // may linger in use, but the group itself cannot be looked up by
+  // 'manifest_url' in the working set any longer.
+  working_set()->RemoveGroup(group);
 
   if (delegate_ref->delegate)
     delegate_ref->delegate->OnGroupMadeObsolete(group, true);
@@ -410,10 +416,6 @@ void MockAppCacheStorage::AddStoredGroup(AppCacheGroup* group) {
 }
 
 void MockAppCacheStorage::RemoveStoredGroup(AppCacheGroup* group) {
-  // Also remove from the working set, caches for an 'obsolete' group
-  // may linger in use, but the group itself cannot be looked up by
-  // 'manifest_url' in the working set any longer.
-  working_set()->RemoveGroup(group);
   stored_groups_.erase(group->manifest_url());
 }
 

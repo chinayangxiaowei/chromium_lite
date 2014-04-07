@@ -128,6 +128,14 @@ class ExtensionImpl : public ExtensionBase {
   }
 };
 
+// Returns true if the extension running in the given |context| has sufficient
+// permissions to access the data.
+static bool HasSufficientPermissions(ContextInfo* context,
+                                     bool requires_incognito_access) {
+  return (!requires_incognito_access ||
+          ExtensionProcessBindings::HasIncognitoEnabled(context->extension_id));
+}
+
 }  // namespace
 
 const char* EventBindings::kName = "chrome/EventBindings";
@@ -276,20 +284,38 @@ void EventBindings::HandleContextDestroyed(WebFrame* frame) {
   // itself might not be registered, but can still be a parent frame.
   for (ContextList::iterator it = GetContexts().begin();
        it != GetContexts().end(); ) {
-    ContextList::iterator current = it++;
-    if ((*current)->parent_frame == frame)
-      UnregisterContext(current, false);
+    if ((*it)->parent_frame == frame) {
+      UnregisterContext(it, false);
+      // UnregisterContext will remove |it| from the list, but may also
+      // modify the rest of the list as a result of calling into javascript.
+      it = GetContexts().begin();
+    } else {
+      ++it;
+    }
   }
 }
 
 // static
 void EventBindings::CallFunction(const std::string& function_name,
                                  int argc, v8::Handle<v8::Value>* argv,
-                                 RenderView* render_view) {
-  for (ContextList::iterator it = GetContexts().begin();
-       it != GetContexts().end(); ++it) {
+                                 RenderView* render_view,
+                                 bool requires_incognito_access) {
+  // We copy the context list, because calling into javascript may modify it
+  // out from under us. We also guard against deleted contexts by checking if
+  // they have been cleared first.
+  ContextList contexts = GetContexts();
+
+  for (ContextList::iterator it = contexts.begin();
+       it != contexts.end(); ++it) {
     if (render_view && render_view != (*it)->render_view)
       continue;
+
+    if ((*it)->context.IsEmpty())
+      continue;
+
+    if (!HasSufficientPermissions(it->get(), requires_incognito_access))
+      continue;
+
     v8::Handle<v8::Value> retval = CallFunctionInContext((*it)->context,
         function_name, argc, argv);
     // In debug, the js will validate the event parameters and return a

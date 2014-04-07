@@ -43,18 +43,15 @@
 // This file describes developer tools message types.
 
 #include "ipc/ipc_message_macros.h"
+#include "webkit/glue/devtools_message_data.h"
 
 // These are messages sent from DevToolsAgent to DevToolsClient through the
 // browser.
 IPC_BEGIN_MESSAGES(DevToolsClient)
 
   // Sends glue-level Rpc message to the client.
-  IPC_MESSAGE_CONTROL5(DevToolsClientMsg_RpcMessage,
-                       std::string /* class_name */,
-                       std::string /* method_name */,
-                       std::string /* p1 */,
-                       std::string /* p2 */,
-                       std::string /* p3 */)
+  IPC_MESSAGE_CONTROL1(DevToolsClientMsg_RpcMessage,
+                       DevToolsMessageData /* message data */)
 
 IPC_END_MESSAGES(DevToolsClient)
 
@@ -72,12 +69,8 @@ IPC_BEGIN_MESSAGES(DevToolsAgent)
   IPC_MESSAGE_CONTROL0(DevToolsAgentMsg_Detach)
 
   // Sends glue-level Rpc message to the agent.
-  IPC_MESSAGE_CONTROL5(DevToolsAgentMsg_RpcMessage,
-                       std::string /* class_name */,
-                       std::string /* method_name */,
-                       std::string /* p1 */,
-                       std::string /* p2 */,
-                       std::string /* p3 */)
+  IPC_MESSAGE_CONTROL1(DevToolsAgentMsg_RpcMessage,
+                       DevToolsMessageData /* message data */)
 
   // Send debugger command to the debugger agent. Debugger commands should
   // be handled on IO thread(while all other devtools messages are handled in
@@ -85,6 +78,12 @@ IPC_BEGIN_MESSAGES(DevToolsAgent)
   // breakpoint.
   IPC_MESSAGE_CONTROL1(DevToolsAgentMsg_DebuggerCommand,
                        std::string  /* command */)
+
+  // This command is sent to debugger when user wants to pause script execution
+  // immediately. This message should be processed on the IO thread so that it
+  // can have effect even if the Renderer thread is busy with JavaScript
+  // execution.
+  IPC_MESSAGE_CONTROL0(DevToolsAgentMsg_DebuggerPauseScript)
 
   // Inspect element with the given coordinates.
   IPC_MESSAGE_CONTROL2(DevToolsAgentMsg_InspectElement,

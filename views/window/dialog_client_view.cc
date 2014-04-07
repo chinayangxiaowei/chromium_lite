@@ -1,4 +1,4 @@
-// Copyright (c) 2006-2008 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -14,20 +14,21 @@
 
 #include <algorithm>
 
-#include "app/gfx/canvas.h"
-#include "app/gfx/font.h"
 #include "app/l10n_util.h"
 #include "app/resource_bundle.h"
 #include "base/keyboard_codes.h"
+#include "gfx/canvas.h"
+#include "gfx/font.h"
 #include "grit/app_strings.h"
-#include "skia/ext/skia_utils_gtk.h"
 #include "views/controls/button/native_button.h"
 #include "views/standard_layout.h"
 #include "views/window/dialog_delegate.h"
 #include "views/window/window.h"
+
 #if defined(OS_WIN)
-#include "app/gfx/native_theme_win.h"
+#include "gfx/native_theme_win.h"
 #else
+#include "gfx/skia_utils_gtk.h"
 #include "views/window/hit_test.h"
 #include "views/widget/widget.h"
 #endif
@@ -112,6 +113,8 @@ DialogClientView::DialogClientView(Window* owner, View* contents_view)
       extra_view_(NULL),
       size_extra_view_height_to_buttons_(false),
       accepted_(false),
+      listening_to_focus_(false),
+      saved_focus_manager_(NULL),
       bottom_view_(NULL) {
   InitClass();
 }
@@ -248,6 +251,17 @@ void DialogClientView::SetBottomView(View* bottom_view) {
 }
 
 ///////////////////////////////////////////////////////////////////////////////
+// DialogClientView, View overrides:
+
+void DialogClientView::NativeViewHierarchyChanged(bool attached,
+                                                  gfx::NativeView native_view,
+                                                  RootView* root_view) {
+  if (attached) {
+    UpdateFocusListener();
+  }
+}
+
+///////////////////////////////////////////////////////////////////////////////
 // DialogClientView, ClientView overrides:
 
 bool DialogClientView::CanClose() const {
@@ -263,10 +277,11 @@ bool DialogClientView::CanClose() const {
 }
 
 void DialogClientView::WindowClosing() {
-  FocusManager* focus_manager = GetFocusManager();
-  DCHECK(focus_manager);
-  if (focus_manager)
-     focus_manager->RemoveFocusChangeListener(this);
+  if (listening_to_focus_) {
+    DCHECK(saved_focus_manager_);
+    if (saved_focus_manager_)
+       saved_focus_manager_->RemoveFocusChangeListener(this);
+  }
   ClientView::WindowClosing();
 }
 
@@ -286,7 +301,7 @@ void DialogClientView::Paint(gfx::Canvas* canvas) {
   GtkWidget* widget = GetWidget()->GetNativeView();
   if (GTK_IS_WINDOW(widget)) {
     GtkStyle* window_style = gtk_widget_get_style(widget);
-    canvas->FillRectInt(skia::GdkColorToSkColor(
+    canvas->FillRectInt(gfx::GdkColorToSkColor(
                             window_style->bg[GTK_STATE_NORMAL]),
                         0, 0, width(), height());
   }
@@ -321,12 +336,7 @@ void DialogClientView::ViewHierarchyChanged(bool is_add, View* parent,
     ShowDialogButtons();
     ClientView::ViewHierarchyChanged(is_add, parent, child);
 
-    FocusManager* focus_manager = GetFocusManager();
-    // Listen for focus change events so we can update the default button.
-    DCHECK(focus_manager);  // bug #1291225: crash reports seem to indicate it
-                            // can be NULL.
-    if (focus_manager)
-      focus_manager->AddFocusChangeListener(this);
+    UpdateFocusListener();
 
     // The "extra view" must be created and installed after the contents view
     // has been inserted into the view hierarchy.
@@ -524,6 +534,28 @@ DialogDelegate* DialogClientView::GetDialogDelegate() const {
 void DialogClientView::Close() {
   window()->Close();
   GetDialogDelegate()->OnClose();
+}
+
+void DialogClientView::UpdateFocusListener() {
+  FocusManager* focus_manager = GetFocusManager();
+  // Listen for focus change events so we can update the default button.
+  // focus_manager can be NULL when the dialog is created on un-shown view.
+  // We start listening for focus changes when the page is visible.
+  // Focus manager could also change if window host changes a parent.
+  if (listening_to_focus_) {
+    if (saved_focus_manager_ == focus_manager)
+      return;
+    DCHECK(saved_focus_manager_);
+    if (saved_focus_manager_)
+      saved_focus_manager_->RemoveFocusChangeListener(this);
+    listening_to_focus_ = false;
+  }
+  saved_focus_manager_ = focus_manager;
+  // Listen for focus change events so we can update the default button.
+  if (focus_manager) {
+    focus_manager->AddFocusChangeListener(this);
+    listening_to_focus_ = true;
+  }
 }
 
 // static

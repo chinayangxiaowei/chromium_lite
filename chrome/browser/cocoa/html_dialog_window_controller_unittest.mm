@@ -9,13 +9,13 @@
 
 #import <Cocoa/Cocoa.h>
 
-#include "base/gfx/size.h"
 #import "base/scoped_nsautorelease_pool.h"
 #include "base/sys_string_conversions.h"
 #include "chrome/browser/cocoa/cocoa_test_helper.h"
 #include "chrome/browser/dom_ui/dom_ui.h"
 #include "chrome/browser/dom_ui/html_dialog_ui.h"
 #include "chrome/test/browser_with_test_window_test.h"
+#include "gfx/size.h"
 #include "googleurl/src/gurl.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -79,11 +79,9 @@ TEST_F(HtmlDialogWindowControllerTest, showDialog) {
   EXPECT_CALL(delegate_, OnDialogClosed(_))
     .Times(1);
 
-  NSWindow* parent_window = cocoa_helper_.window();
   HtmlDialogWindowController* html_dialog_window_controller =
     [[HtmlDialogWindowController alloc] initWithDelegate:&delegate_
-                                            parentWindow:parent_window
-                                                 browser:browser()];
+                                                 profile:profile()];
 
   [html_dialog_window_controller loadDialogContents];
   [html_dialog_window_controller showWindow:nil];

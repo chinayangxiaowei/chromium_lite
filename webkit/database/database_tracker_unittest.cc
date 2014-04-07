@@ -6,9 +6,8 @@
 #include "base/file_util.h"
 #include "base/scoped_ptr.h"
 #include "base/scoped_temp_dir.h"
-#include "base/string_util.h"
 #include "base/time.h"
-#include "net/base/net_errors.h"
+#include "base/utf_string_conversions.h"
 #include "net/base/test_completion_callback.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "webkit/database/database_tracker.h"
@@ -121,7 +120,7 @@ TEST(DatabaseTrackerTest, DeleteOpenDatabase) {
   EXPECT_EQ(kOrigin1, observer.GetNotificationOriginIdentifier());
   EXPECT_EQ(kDB1, observer.GetNotificationDatabaseName());
   tracker->DatabaseClosed(kOrigin1, kDB1);
-  result = callback.WaitForResult();
+  result = callback.GetResult(result);
   EXPECT_EQ(net::OK, result);
   EXPECT_FALSE(file_util::PathExists(tracker->DatabaseDirectory().Append(
       FilePath::FromWStringHack(UTF16ToWide(kOrigin1)))));
@@ -155,7 +154,7 @@ TEST(DatabaseTrackerTest, DeleteOpenDatabase) {
   EXPECT_TRUE(observer.DidReceiveNewNotification());
   tracker->DatabaseClosed(kOrigin1, kDB1);
   tracker->DatabaseClosed(kOrigin2, kDB2);
-  result = callback.WaitForResult();
+  result = callback.GetResult(result);
   EXPECT_EQ(net::OK, result);
   EXPECT_FALSE(file_util::PathExists(tracker->DatabaseDirectory().Append(
       FilePath::FromWStringHack(UTF16ToWide(kOrigin1)))));
@@ -168,7 +167,7 @@ TEST(DatabaseTrackerTest, DeleteOpenDatabase) {
   tracker->RemoveObserver(&observer);
 }
 
-TEST(DatabaseTrackerTest, TestIt) {
+TEST(DatabaseTrackerTest, DatabaseTracker) {
   // Initialize the tracker database.
   ScopedTempDir temp_dir;
   EXPECT_TRUE(temp_dir.CreateUniqueTempDir());
@@ -360,6 +359,40 @@ TEST(DatabaseTrackerTest, TestIt) {
   EXPECT_EQ(origin1_quota, origin1_info->Quota());
   EXPECT_EQ(0, origin1_info->TotalSize());
   EXPECT_EQ(origin1_quota, tracker->GetOriginSpaceAvailable(kOrigin1));
+}
+
+TEST(DatabaseTrackerTest, NoInitIncognito) {
+  const string16 kOrigin = ASCIIToUTF16("origin");
+  const string16 kName = ASCIIToUTF16("name");
+  const string16 kDescription = ASCIIToUTF16("description");
+  const DatabaseConnections kEmptyCollection;
+
+  std::vector<OriginInfo> infos;
+  scoped_refptr<DatabaseTracker> tracker(new DatabaseTracker(FilePath()));
+  EXPECT_TRUE(tracker->is_incognito_);
+  EXPECT_FALSE(tracker->LazyInit());
+  EXPECT_TRUE(tracker->DatabaseDirectory().empty());
+  EXPECT_TRUE(tracker->GetFullDBFilePath(kOrigin, kName).empty());
+  EXPECT_FALSE(tracker->GetAllOriginsInfo(&infos));
+  EXPECT_FALSE(tracker->IsDatabaseScheduledForDeletion(kOrigin, kName));
+  EXPECT_EQ(net::ERR_FAILED,
+            tracker->DeleteDatabase(kOrigin, kName, NULL));
+  EXPECT_EQ(net::ERR_FAILED,
+            tracker->DeleteDataModifiedSince(base::Time(), NULL));
+  EXPECT_EQ(net::ERR_FAILED,
+            tracker->DeleteDataForOrigin(kOrigin, NULL));
+
+  // These should not assert or crash when called in this state.
+  int64 size_out(0), space_available_out(0);
+  tracker->DatabaseOpened(kOrigin, kName, kDescription, 1,
+                          &size_out, &space_available_out);
+  tracker->DatabaseModified(kOrigin, kName);
+  tracker->DatabaseClosed(kOrigin, kName);
+  tracker->CloseDatabases(kEmptyCollection);
+  tracker->CloseTrackerDatabaseAndClearCaches();
+  tracker->SetOriginQuota(kOrigin, 5);
+  tracker->SetOriginQuotaInMemory(kOrigin, 5);
+  tracker->ResetOriginQuotaInMemory(kOrigin);
 }
 
 }  // namespace webkit_database

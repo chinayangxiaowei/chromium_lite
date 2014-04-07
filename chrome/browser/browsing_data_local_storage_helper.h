@@ -7,9 +7,11 @@
 
 #include <string>
 
+#include "base/callback.h"
 #include "base/file_path.h"
 #include "base/scoped_ptr.h"
-#include "base/task.h"
+#include "base/time.h"
+#include "chrome/common/url_constants.h"
 
 class Profile;
 
@@ -43,6 +45,10 @@ class BrowsingDataLocalStorageHelper
           file_path(file_path),
           size(size),
           last_modified(last_modified) {
+    }
+
+    bool IsFileSchemeData() {
+      return protocol == chrome::kFileScheme;
     }
 
     std::string protocol;

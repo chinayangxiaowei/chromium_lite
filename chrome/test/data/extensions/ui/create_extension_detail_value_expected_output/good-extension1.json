@@ -7,6 +7,7 @@
   "permissions": ["http://*.google.com/*", "https://*.google.com/*"],
   "allow_reload": false,
   "order": 2,
+  "enabledIncognito": false,
   "content_scripts": [
     {
       "matches": ["file://*", "http://*.google.com/*", "https://*.google.com/*"],
@@ -29,5 +30,6 @@
       "render_proess_id": 0,
       "render_view_id": 0
     }
-  ]
+  ],
+  "hasPopupAction": false
 }

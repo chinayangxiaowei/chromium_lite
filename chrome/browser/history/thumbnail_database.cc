@@ -4,19 +4,20 @@
 
 #include "chrome/browser/history/thumbnail_database.h"
 
-#include "app/gfx/codec/jpeg_codec.h"
 #include "app/sql/statement.h"
 #include "app/sql/transaction.h"
 #include "base/file_util.h"
 #if defined(OS_MACOSX)
 #include "base/mac_util.h"
 #endif
+#include "base/ref_counted_memory.h"
 #include "base/time.h"
 #include "base/string_util.h"
 #include "chrome/browser/diagnostics/sqlite_diagnostics.h"
 #include "chrome/browser/history/history_publisher.h"
 #include "chrome/browser/history/url_database.h"
 #include "chrome/common/thumbnail_score.h"
+#include "gfx/codec/jpeg_codec.h"
 #include "third_party/skia/include/core/SkBitmap.h"
 
 namespace history {
@@ -32,8 +33,9 @@ ThumbnailDatabase::~ThumbnailDatabase() {
   // The DBCloseScoper will delete the DB and the cache.
 }
 
-InitStatus ThumbnailDatabase::Init(const FilePath& db_name,
-                                   const HistoryPublisher* history_publisher) {
+sql::InitStatus ThumbnailDatabase::Init(
+    const FilePath& db_name,
+    const HistoryPublisher* history_publisher) {
   history_publisher_ = history_publisher;
 
   // Set the exceptional sqlite error handler.
@@ -60,7 +62,7 @@ InitStatus ThumbnailDatabase::Init(const FilePath& db_name,
   db_.set_exclusive_locking();
 
   if (!db_.Open(db_name))
-    return INIT_FAILURE;
+    return sql::INIT_FAILURE;
 
   // Scope initialization in a transaction so we can't be partially initialized.
   sql::Transaction transaction(&db_);
@@ -81,7 +83,7 @@ InitStatus ThumbnailDatabase::Init(const FilePath& db_name,
       !InitThumbnailTable() ||
       !InitFavIconsTable(false)) {
     db_.Close();
-    return INIT_FAILURE;
+    return sql::INIT_FAILURE;
   }
   InitFavIconsIndex();
 
@@ -89,7 +91,7 @@ InitStatus ThumbnailDatabase::Init(const FilePath& db_name,
   // in the wild, so we try to continue in that case.
   if (meta_table_.GetCompatibleVersionNumber() > kCurrentVersionNumber) {
     LOG(WARNING) << "Thumbnail database is too new.";
-    return INIT_TOO_NEW;
+    return sql::INIT_TOO_NEW;
   }
 
   int cur_version = meta_table_.GetVersionNumber();
@@ -97,7 +99,7 @@ InitStatus ThumbnailDatabase::Init(const FilePath& db_name,
     if (!UpgradeToVersion3()) {
       LOG(WARNING) << "Unable to update to thumbnail database to version 3.";
       db_.Close();
-      return INIT_FAILURE;
+      return sql::INIT_FAILURE;
     }
     ++cur_version;
   }
@@ -108,10 +110,10 @@ InitStatus ThumbnailDatabase::Init(const FilePath& db_name,
   // Initialization is complete.
   if (!transaction.Commit()) {
     db_.Close();
-    return INIT_FAILURE;
+    return sql::INIT_FAILURE;
   }
 
-  return INIT_OK;
+  return sql::INIT_OK;
 }
 
 bool ThumbnailDatabase::InitThumbnailTable() {
@@ -304,17 +306,17 @@ bool ThumbnailDatabase::ThumbnailScoreForId(URLID id,
 }
 
 bool ThumbnailDatabase::SetFavIcon(URLID icon_id,
-                                   const std::vector<unsigned char>& icon_data,
+                                   scoped_refptr<RefCountedMemory> icon_data,
                                    base::Time time) {
   DCHECK(icon_id);
-  if (icon_data.size()) {
+  if (icon_data->size()) {
     sql::Statement statement(db_.GetCachedStatement(SQL_FROM_HERE,
         "UPDATE favicons SET image_data=?, last_updated=? WHERE id=?"));
     if (!statement)
       return 0;
 
-    statement.BindBlob(0, &icon_data.front(),
-                       static_cast<int>(icon_data.size()));
+    statement.BindBlob(0, icon_data->front(),
+                       static_cast<int>(icon_data->size()));
     statement.BindInt64(1, time.ToTimeT());
     statement.BindInt64(2, icon_id);
     return statement.Run();

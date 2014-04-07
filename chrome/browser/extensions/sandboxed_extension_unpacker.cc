@@ -6,23 +6,23 @@
 
 #include <set>
 
-#include "app/gfx/codec/png_codec.h"
+#include "base/base64.h"
 #include "base/crypto/signature_verifier.h"
 #include "base/file_util.h"
 #include "base/message_loop.h"
 #include "base/scoped_handle.h"
 #include "base/task.h"
 #include "chrome/browser/chrome_thread.h"
-#include "chrome/browser/extensions/extension_file_util.h"
 #include "chrome/browser/extensions/extensions_service.h"
 #include "chrome/browser/renderer_host/resource_dispatcher_host.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/common/extensions/extension.h"
 #include "chrome/common/extensions/extension_constants.h"
-#include "chrome/common/extensions/extension_unpacker.h"
+#include "chrome/common/extensions/extension_file_util.h"
 #include "chrome/common/extensions/extension_l10n_util.h"
+#include "chrome/common/extensions/extension_unpacker.h"
 #include "chrome/common/json_value_serializer.h"
-#include "net/base/base64.h"
+#include "gfx/codec/png_codec.h"
 #include "third_party/skia/include/core/SkBitmap.h"
 
 const char SandboxedExtensionUnpacker::kExtensionHeaderMagic[] = "Cr24";
@@ -66,13 +66,6 @@ void SandboxedExtensionUnpacker::Start() {
   // UtilityProcessHost should handle it for us. (http://crbug.com/19192)
   bool use_utility_process = rdh_ &&
       !CommandLine::ForCurrentProcess()->HasSwitch(switches::kSingleProcess);
-
-#if defined(OS_POSIX)
-    // TODO(port): Don't use a utility process on linux (crbug.com/22703) or
-    // MacOS (crbug.com/8102) until problems related to autoupdate are fixed.
-    use_utility_process = false;
-#endif
-
   if (use_utility_process) {
     ChromeThread::PostTask(
         ChromeThread::IO, FROM_HERE,
@@ -238,7 +231,7 @@ bool SandboxedExtensionUnpacker::ValidateSignature() {
     return false;
   }
 
-  net::Base64Encode(std::string(reinterpret_cast<char*>(&key.front()),
+  base::Base64Encode(std::string(reinterpret_cast<char*>(&key.front()),
       key.size()), &public_key_);
   return true;
 }
@@ -262,6 +255,20 @@ DictionaryValue* SandboxedExtensionUnpacker::RewriteManifestFile(
       static_cast<DictionaryValue*>(manifest.DeepCopy()));
   final_manifest->SetString(extension_manifest_keys::kPublicKey, public_key_);
 
+  // Override the origin if appropriate.
+  bool web_content_enabled = false;
+  if (final_manifest->GetBoolean(extension_manifest_keys::kWebContentEnabled,
+                                 &web_content_enabled) &&
+      web_content_enabled &&
+      web_origin_.is_valid()) {
+    // TODO(erikkay): Finalize origin policy.  This is intentionally loose
+    // until we can test from the gallery.  http://crbug.com/40848.
+    if (!final_manifest->Get(extension_manifest_keys::kWebOrigin, NULL)) {
+      final_manifest->SetString(extension_manifest_keys::kWebOrigin,
+                                web_origin_.spec());
+    }
+  }
+
   std::string manifest_json;
   JSONStringValueSerializer serializer(&manifest_json);
   serializer.set_pretty_print(true);
@@ -271,7 +278,7 @@ DictionaryValue* SandboxedExtensionUnpacker::RewriteManifestFile(
   }
 
   FilePath manifest_path =
-      extension_root_.AppendASCII(Extension::kManifestFilename);
+      extension_root_.Append(Extension::kManifestFilename);
   if (!file_util::WriteFile(manifest_path,
                             manifest_json.data(), manifest_json.size())) {
     ReportFailure("Error saving manifest.json.");
@@ -359,7 +366,7 @@ bool SandboxedExtensionUnpacker::RewriteCatalogFiles() {
     }
 
     FilePath relative_path = FilePath::FromWStringHack(*key_it);
-    relative_path = relative_path.AppendASCII(Extension::kMessagesFilename);
+    relative_path = relative_path.Append(Extension::kMessagesFilename);
     if (relative_path.IsAbsolute() || relative_path.ReferencesParent()) {
       ReportFailure("Invalid path for catalog.");
       return false;

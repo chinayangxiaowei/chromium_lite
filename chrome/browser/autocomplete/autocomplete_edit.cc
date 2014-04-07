@@ -7,10 +7,12 @@
 #include <string>
 
 #include "base/basictypes.h"
-#include "base/string_util.h"
+#include "base/utf_string_conversions.h"
+#include "chrome/app/chrome_dll_resource.h"
 #include "chrome/browser/autocomplete/autocomplete_edit_view.h"
 #include "chrome/browser/autocomplete/autocomplete_popup_model.h"
 #include "chrome/browser/autocomplete/keyword_provider.h"
+#include "chrome/browser/command_updater.h"
 #include "chrome/browser/metrics/user_metrics.h"
 #include "chrome/browser/net/dns_global.h"
 #include "chrome/browser/net/url_fixer_upper.h"
@@ -186,6 +188,9 @@ void AutocompleteEditModel::StartAutocomplete(
 }
 
 bool AutocompleteEditModel::CanPasteAndGo(const std::wstring& text) const {
+  if (!view_->GetCommandUpdater()->IsCommandEnabled(IDC_OPEN_CURRENT_URL))
+    return false;
+
   paste_and_go_url_ = GURL();
   paste_and_go_transition_ = PageTransition::TYPED;
   paste_and_go_alternate_nav_url_ = GURL();
@@ -261,7 +266,7 @@ void AutocompleteEditModel::SendOpenNotification(size_t selected_line,
   const TemplateURL* const template_url =
       template_url_model->GetTemplateURLForKeyword(keyword);
   if (template_url) {
-    UserMetrics::RecordAction(L"AcceptedKeyword", profile_);
+    UserMetrics::RecordAction(UserMetricsAction("AcceptedKeyword"), profile_);
     template_url_model->IncrementUsageCount(template_url);
   }
 
@@ -279,7 +284,7 @@ void AutocompleteEditModel::AcceptKeyword() {
                                // since the edit contents have disappeared.  It
                                // doesn't really matter, but we clear it to be
                                // consistent.
-  UserMetrics::RecordAction(L"AcceptedKeywordHint", profile_);
+  UserMetrics::RecordAction(UserMetricsAction("AcceptedKeywordHint"), profile_);
 }
 
 void AutocompleteEditModel::ClearKeyword(const std::wstring& visible_text) {
@@ -343,14 +348,21 @@ bool AutocompleteEditModel::OnEscapeKeyPressed() {
 
   view_->RevertAll();
   view_->SelectAll(true);
-  return false;
+  return true;
 }
 
 void AutocompleteEditModel::OnControlKeyChanged(bool pressed) {
   // Don't change anything unless the key state is actually toggling.
   if (pressed == (control_key_state_ == UP)) {
+    ControlKeyState old_state = control_key_state_;
     control_key_state_ = pressed ? DOWN_WITHOUT_CHANGE : UP;
-    if (popup_->IsOpen()) {
+    if ((control_key_state_ == DOWN_WITHOUT_CHANGE) && has_temporary_text_) {
+      // Arrowing down and then hitting control accepts the temporary text as
+      // the input text.
+      InternalSetUserText(UserTextFromDisplayText(view_->GetText()));
+      has_temporary_text_ = false;
+    }
+    if ((old_state != DOWN_WITH_CHANGE) && popup_->IsOpen()) {
       // Autocomplete history provider results may change, so refresh the
       // popup.  This will force user_input_in_progress_ to true, but if the
       // popup is open, that should have already been the case.
@@ -423,6 +435,16 @@ void AutocompleteEditModel::OnPopupDataChanged(
       has_temporary_text_ = true;
       original_url_ = popup_->URLsForCurrentSelection(NULL, NULL, NULL);
       original_keyword_ui_state_ = keyword_ui_state_;
+    }
+    if (control_key_state_ == DOWN_WITHOUT_CHANGE) {
+      // Arrowing around the popup cancels control-enter.
+      control_key_state_ = DOWN_WITH_CHANGE;
+      // Now things are a bit screwy: the desired_tld has changed, but if we
+      // update the popup, the new order of entries won't match the old, so the
+      // user's selection gets screwy; and if we don't update the popup, and the
+      // user reverts, then the selected item will be as if control is still
+      // pressed, even though maybe it isn't any more.  There is no obvious
+      // right answer here :(
     }
     view_->OnTemporaryTextMaybeChanged(DisplayTextFromUserText(text),
                                        save_original_selection);

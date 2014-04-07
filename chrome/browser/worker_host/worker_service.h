@@ -14,8 +14,10 @@
 #include "googleurl/src/gurl.h"
 #include "ipc/ipc_message.h"
 
-class WorkerProcessHost;
+class DatabaseTracker;
+class HostContentSettingsMap;
 class ResourceDispatcherHost;
+class WorkerProcessHost;
 
 class WorkerService : public NotificationObserver {
  public:
@@ -25,15 +27,18 @@ class WorkerService : public NotificationObserver {
   // Initialize the WorkerService.  OK to be called multiple times.
   void Initialize(ResourceDispatcherHost* rdh);
 
-  // Creates a dedicated worker.  Returns true on success.
+  // Creates a worker.  Returns true on success.
   bool CreateWorker(const GURL &url,
                     bool is_shared,
                     bool is_off_the_record,
                     const string16& name,
+                    unsigned long long document_id,
                     int renderer_pid,
                     int render_view_route_id,
                     IPC::Message::Sender* sender,
-                    int sender_route_id);
+                    int sender_route_id,
+                    webkit_database::DatabaseTracker* db_tracker,
+                    HostContentSettingsMap* host_content_settings_map);
 
   // Validates the passed URL and checks for the existence of matching shared
   // worker. Returns true if the url was found, and sets the url_mismatch out
@@ -43,6 +48,8 @@ class WorkerService : public NotificationObserver {
                           const string16& name,
                           bool off_the_record,
                           unsigned long long document_id,
+                          int renderer_pid,
+                          int render_view_route_id,
                           IPC::Message::Sender* sender,
                           int sender_route_id,
                           bool* url_mismatch);
@@ -84,6 +91,12 @@ class WorkerService : public NotificationObserver {
   WorkerService();
   ~WorkerService();
 
+  // Given a WorkerInstance, create an associated worker process.
+  bool CreateWorkerFromInstance(
+      WorkerProcessHost::WorkerInstance instance,
+      webkit_database::DatabaseTracker* db_tracker,
+      HostContentSettingsMap* host_content_settings_map);
+
   // Returns a WorkerProcessHost object if one exists for the given domain, or
   // NULL if there are no such workers yet.
   WorkerProcessHost* GetProcessForDomain(const GURL& url);
@@ -101,6 +114,12 @@ class WorkerService : public NotificationObserver {
   bool CanCreateWorkerProcess(
       const WorkerProcessHost::WorkerInstance& instance);
 
+  // Checks if the tab associated with the passed RenderView can create a
+  // worker process based on the process limit when we're using a strategy of
+  // one worker per process.
+  bool TabCanCreateWorkerProcess(
+      int renderer_id, int render_view_route_id, bool* hit_total_worker_limit);
+
   // NotificationObserver interface.
   void Observe(NotificationType type,
                const NotificationSource& source,
@@ -117,7 +136,7 @@ class WorkerService : public NotificationObserver {
       const GURL& url, const string16& name, bool off_the_record);
   WorkerProcessHost::WorkerInstance* FindPendingInstance(
       const GURL& url, const string16& name, bool off_the_record);
-  void RemovePendingInstance(
+  void RemovePendingInstances(
       const GURL& url, const string16& name, bool off_the_record);
 
   NotificationRegistrar registrar_;

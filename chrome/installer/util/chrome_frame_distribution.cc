@@ -29,17 +29,18 @@ std::wstring ChromeFrameDistribution::GetAppGuid() {
 }
 
 std::wstring ChromeFrameDistribution::GetApplicationName() {
-  // TODO(robertshield): localize
-  return L"Google Chrome Frame";
+  const std::wstring& product_name =
+    installer_util::GetLocalizedString(IDS_PRODUCT_FRAME_NAME_BASE);
+  return product_name;
 }
 
 std::wstring ChromeFrameDistribution::GetAlternateApplicationName() {
-  // TODO(robertshield): localize
-  return L"Chromium technology in your existing browser";
+  const std::wstring& product_name =
+    installer_util::GetLocalizedString(IDS_PRODUCT_FRAME_NAME_BASE);
+  return product_name;
 }
 
 std::wstring ChromeFrameDistribution::GetInstallSubDir() {
-  // TODO(robertshield): localize
   return L"Google\\Chrome Frame";
 }
 
@@ -50,6 +51,10 @@ std::wstring ChromeFrameDistribution::GetPublisherName() {
 }
 
 std::wstring ChromeFrameDistribution::GetAppDescription() {
+  return L"Chrome in a Frame.";
+}
+
+std::wstring ChromeFrameDistribution::GetLongAppDescription() {
   return L"Chrome in a Frame.";
 }
 
@@ -92,17 +97,8 @@ std::wstring ChromeFrameDistribution::GetVersionKey() {
   return key;
 }
 
-int ChromeFrameDistribution::GetInstallReturnCode(
-    installer_util::InstallStatus status) {
-  switch (status) {
-    case installer_util::FIRST_INSTALL_SUCCESS:
-    case installer_util::INSTALL_REPAIRED:
-    case installer_util::NEW_VERSION_UPDATED:
-    case installer_util::HIGHER_VERSION_EXISTS:
-      return 0;  // For Google Update's benefit we need to return 0 for success
-    default:
-      return status;
-  }
+bool ChromeFrameDistribution::CanSetAsDefault() {
+  return false;
 }
 
 void ChromeFrameDistribution::UpdateDiffInstallStatus(bool system_install,

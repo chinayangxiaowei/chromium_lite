@@ -1,4 +1,4 @@
-// Copyright (c) 2006-2008 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,6 +8,7 @@
 #include <map>
 
 #include "base/basictypes.h"
+#include "base/callback.h"
 #include "chrome/browser/browser.h"
 #include "chrome/browser/browser_list.h"
 #include "chrome/browser/defaults.h"
@@ -51,6 +52,13 @@ class SessionService : public BaseSessionService,
   explicit SessionService(Profile* profile);
   // For testing.
   explicit SessionService(const FilePath& save_path);
+
+  // Invoke at a point when you think session restore might occur. For example,
+  // during startup and window creation this is invoked to see if a session
+  // needs to be restored. If a session needs to be restored it is done so
+  // asynchronously and true is returned. If false is returned the session was
+  // not restored and the caller needs to create a new window.
+  bool RestoreIfNecessary(const std::vector<GURL>& urls_to_open);
 
   // Resets the contents of the file from the current state of all open
   // browsers whose profile matches our profile.
@@ -136,7 +144,7 @@ class SessionService : public BaseSessionService,
   //
   // The time gives the time the session was closed.
   typedef Callback2<Handle, std::vector<SessionWindow*>*>::Type
-      LastSessionCallback;
+      SessionCallback;
 
   // Fetches the contents of the last session, notifying the callback when
   // done. If the callback is supplied an empty vector of SessionWindows
@@ -146,7 +154,17 @@ class SessionService : public BaseSessionService,
   // callback invokes OnGotSessionCommands from which we map the
   // SessionCommands to browser state, then notify the callback.
   Handle GetLastSession(CancelableRequestConsumerBase* consumer,
-                        LastSessionCallback* callback);
+                        SessionCallback* callback);
+
+  // Fetches the contents of the current session, notifying the callback when
+  // done. If the callback is supplied an empty vector of SessionWindows
+  // it means the session could not be restored.
+  //
+  // The created request does NOT directly invoke the callback, rather the
+  // callback invokes OnGotSessionCommands from which we map the
+  // SessionCommands to browser state, then notify the callback.
+  Handle GetCurrentSession(CancelableRequestConsumerBase* consumer,
+                           SessionCallback* callback);
 
  private:
   typedef std::map<SessionID::id_type,std::pair<int,int> > IdToRange;
@@ -162,14 +180,26 @@ class SessionService : public BaseSessionService,
     TYPE_NORMAL = 0,
     TYPE_POPUP = 1,
     TYPE_APP = 2,
-    TYPE_APP_POPUP = TYPE_APP + TYPE_POPUP
+    TYPE_APP_POPUP = TYPE_APP + TYPE_POPUP,
+    TYPE_DEVTOOLS = TYPE_APP + 4,
+    TYPE_APP_PANEL = TYPE_APP + 8
   };
 
   void Init();
 
+  // Implementation of RestoreIfNecessary. If |browser| is non-null and we need
+  // to restore, the tabs are added to it, otherwise a new browser is created.
+  bool RestoreIfNecessary(const std::vector<GURL>& urls_to_open,
+                          Browser* browser);
+
   virtual void Observe(NotificationType type,
                        const NotificationSource& source,
                        const NotificationDetails& details);
+
+  // Sets the application extension id of the specified tab.
+  void SetTabAppExtensionID(const SessionID& window_id,
+                            const SessionID& tab_id,
+                            const std::string& app_extension_id);
 
   // Methods to create the various commands. It is up to the caller to delete
   // the returned the SessionCommand* object.
@@ -203,7 +233,7 @@ class SessionService : public BaseSessionService,
   // Callback form the backend for getting the commands from the previous
   // or save file. Converts the commands in SessionWindows and notifies
   // the real callback.
-  void OnGotLastSessionCommands(
+  void OnGotSessionCommands(
       Handle handle,
       scoped_refptr<InternalGetCommandsRequest> request);
 

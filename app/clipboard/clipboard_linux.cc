@@ -1,4 +1,4 @@
-// Copyright (c) 2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -11,10 +11,11 @@
 #include <utility>
 
 #include "base/file_path.h"
-#include "base/gfx/size.h"
+#include "base/logging.h"
 #include "base/scoped_ptr.h"
 #include "base/linux_util.h"
-#include "base/string_util.h"
+#include "base/utf_string_conversions.h"
+#include "gfx/size.h"
 
 namespace {
 
@@ -152,8 +153,9 @@ void Clipboard::SetGtkClipboard() {
 }
 
 void Clipboard::WriteText(const char* text_data, size_t text_len) {
-  char* data = new char[text_len];
+  char* data = new char[text_len + 1];
   memcpy(data, text_data, text_len);
+  data[text_len] = '\0';
 
   InsertMapping(kMimeText, data, text_len);
   InsertMapping("TEXT", data, text_len);
@@ -166,11 +168,18 @@ void Clipboard::WriteHTML(const char* markup_data,
                           size_t markup_len,
                           const char* url_data,
                           size_t url_len) {
-  // TODO(estade): might not want to ignore |url_data|
-  char* data = new char[markup_len];
-  memcpy(data, markup_data, markup_len);
+  // TODO(estade): We need to expand relative links with |url_data|.
+  static const char* html_prefix = "<meta http-equiv=\"content-type\" "
+                                   "content=\"text/html; charset=utf-8\">";
+  size_t html_prefix_len = strlen(html_prefix);
+  size_t total_len = html_prefix_len + markup_len + 1;
 
-  InsertMapping(kMimeHtml, data, markup_len);
+  char* data = new char[total_len];
+  snprintf(data, total_len, "%s", html_prefix);
+  memcpy(data + html_prefix_len, markup_data, markup_len);
+  data[total_len - 1] = '\0';
+
+  InsertMapping(kMimeHtml, data, total_len);
 }
 
 // Write an extra flavor that signifies WebKit was the last to modify the
@@ -209,6 +218,10 @@ void Clipboard::WriteData(const char* format_name, size_t format_len,
   char* data = new char[data_len];
   memcpy(data, data_data, data_len);
   std::string format(format_name, format_len);
+  // We assume that certain mapping types are only written by trusted code.
+  // Therefore we must upkeep their integrity.
+  if (format == kMimeBmp || format == kMimeURI)
+    return;
   InsertMapping(format.c_str(), data, data_len);
 }
 
@@ -326,12 +339,22 @@ void Clipboard::ReadHTML(Clipboard::Buffer buffer, string16* markup,
   if (!data)
     return;
 
-  UTF8ToUTF16(reinterpret_cast<char*>(data->data), data->length, markup);
+  // If the data starts with 0xFEFF, i.e., Byte Order Mark, assume it is
+  // UTF-16, otherwise assume UTF-8.
+  if (data->length >= 2 &&
+      reinterpret_cast<uint16_t*>(data->data)[0] == 0xFEFF) {
+    markup->assign(reinterpret_cast<uint16_t*>(data->data) + 1,
+                   (data->length / 2) - 1);
+  } else {
+    UTF8ToUTF16(reinterpret_cast<char*>(data->data), data->length, markup);
+  }
+
   gtk_selection_data_free(data);
 }
 
 void Clipboard::ReadBookmark(string16* title, std::string* url) const {
   // TODO(estade): implement this.
+  NOTIMPLEMENTED();
 }
 
 void Clipboard::ReadData(const std::string& format, std::string* result) {
@@ -356,6 +379,11 @@ Clipboard::FormatType Clipboard::GetPlainTextWFormatType() {
 // static
 Clipboard::FormatType Clipboard::GetHtmlFormatType() {
   return std::string(kMimeHtml);
+}
+
+// static
+Clipboard::FormatType Clipboard::GetBitmapFormatType() {
+  return std::string(kMimeBmp);
 }
 
 // static

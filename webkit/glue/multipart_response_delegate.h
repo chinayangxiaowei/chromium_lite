@@ -75,6 +75,12 @@ class MultipartResponseDelegate {
   void OnReceivedData(const char* data, int data_len);
   void OnCompletedRequest();
 
+  // The request has been canceled, so stop making calls to the client.
+  void Cancel() {
+    client_ = NULL;
+    loader_ = NULL;
+  }
+
   // Returns the multi part boundary string from the Content-type header
   // in the response.
   // Returns true on success.
@@ -129,6 +135,9 @@ class MultipartResponseDelegate {
   // true when we're done sending information.  At that point, we stop
   // processing AddData requests.
   bool stop_sending_;
+
+  // true after we've sent our first response to the WebURLLoaderClient.
+  bool has_sent_first_response_;
 
   DISALLOW_COPY_AND_ASSIGN(MultipartResponseDelegate);
 };

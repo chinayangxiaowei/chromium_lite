@@ -11,17 +11,23 @@
 #include "base/basictypes.h"
 #include "base/string16.h"
 #include "chrome/common/content_settings_types.h"
+#include "chrome/common/translate_errors.h"
 #include "chrome/common/view_types.h"
 #include "net/base/load_states.h"
 #include "third_party/WebKit/WebKit/chromium/public/WebDragOperation.h"
+#include "third_party/WebKit/WebKit/chromium/public/WebPopupType.h"
 #include "webkit/glue/window_open_disposition.h"
 
+
+class AutomationResourceRoutingDelegate;
+struct BookmarkDragData;
+class BookmarkNode;
 struct ContextMenuParams;
 class FilePath;
 class GURL;
-class Value;
 struct NativeWebKeyboardEvent;
 class NavigationEntry;
+class OSExchangeData;
 class Profile;
 struct RendererPreferences;
 class RenderProcessHost;
@@ -31,8 +37,10 @@ class ResourceRequestDetails;
 class SkBitmap;
 class TabContents;
 struct ThumbnailScore;
+class Value;
 struct ViewHostMsg_DidPrintPage_Params;
 struct ViewHostMsg_FrameNavigate_Params;
+struct ViewHostMsg_RunFileChooser_Params;
 struct WebDropData;
 class WebKeyboardEvent;
 struct WebPreferences;
@@ -42,6 +50,7 @@ class WaitableEvent;
 }
 
 namespace gfx {
+class Point;
 class Rect;
 class Size;
 }
@@ -51,7 +60,8 @@ class Message;
 }
 
 namespace webkit_glue {
-class FormFieldValues;
+struct FormData;
+class FormField;
 struct PasswordForm;
 struct WebApplicationInfo;
 }
@@ -88,8 +98,10 @@ class RenderViewHostDelegate {
     // The page is trying to open a new widget (e.g. a select popup). The
     // widget should be created associated with the given route, but it should
     // not be shown yet. That should happen in response to ShowCreatedWidget.
-    // If |activatable| is false, the widget cannot be activated or get focus.
-    virtual void CreateNewWidget(int route_id, bool activatable) = 0;
+    // |popup_type| indicates if the widget is a popup and what kind of popup it
+    // is (select, autofill...).
+    virtual void CreateNewWidget(int route_id,
+                                 WebKit::WebPopupType popup_type) = 0;
 
     // Show a previously created page with the specified disposition and bounds.
     // The window is identified by the route_id passed to CreateNewWindow.
@@ -114,7 +126,9 @@ class RenderViewHostDelegate {
     // RenderView. Contextual information about the dragged content is supplied
     // by WebDropData.
     virtual void StartDragging(const WebDropData& drop_data,
-                               WebKit::WebDragOperationsMask allowed_ops) = 0;
+                               WebKit::WebDragOperationsMask allowed_ops,
+                               const SkBitmap& image,
+                               const gfx::Point& image_offset) = 0;
 
     // The page wants to update the mouse cursor during a drag & drop operation.
     // |operation| describes the current operation (none, move, copy, link.)
@@ -127,15 +141,18 @@ class RenderViewHostDelegate {
     // true, it means the focus was retrieved by doing a Shift-Tab.
     virtual void TakeFocus(bool reverse) = 0;
 
-    // Returns whether the event is a reserved keyboard shortcut that should not
-    // be sent to the renderer.
-    virtual bool IsReservedAccelerator(const NativeWebKeyboardEvent& event) = 0;
+    // Callback to give the browser a chance to handle the specified keyboard
+    // event before sending it to the renderer.
+    // Returns true if the |event| was handled. Otherwise, if the |event| would
+    // be handled in HandleKeyboardEvent() method as a normal keyboard shortcut,
+    // |*is_keyboard_shortcut| should be set to true.
+    virtual bool PreHandleKeyboardEvent(const NativeWebKeyboardEvent& event,
+                                        bool* is_keyboard_shortcut) = 0;
 
     // Callback to inform the browser that the renderer did not process the
     // specified events. This gives an opportunity to the browser to process the
     // event (used for keyboard shortcuts).
-    // Returns true if the event was handled.
-    virtual bool HandleKeyboardEvent(const NativeWebKeyboardEvent& event) = 0;
+    virtual void HandleKeyboardEvent(const NativeWebKeyboardEvent& event) = 0;
 
     // Notifications about mouse events in this view.  This is useful for
     // implementing global 'on hover' features external to the view.
@@ -193,11 +210,6 @@ class RenderViewHostDelegate {
     // not valid.
     virtual void GoToEntryAtOffset(int offset) = 0;
 
-    // The page requests the size of the back and forward lists
-    // within the NavigationController.
-    virtual void GetHistoryListCount(int* back_list_count,
-                                     int* forward_list_count) = 0;
-
     // Notification when default plugin updates status of the missing plugin.
     virtual void OnMissingPluginStatus(int status) = 0;
 
@@ -226,7 +238,8 @@ class RenderViewHostDelegate {
     // Notification that the page has been translated.
     virtual void OnPageTranslated(int32 page_id,
                                   const std::string& original_lang,
-                                  const std::string& translated_lang) = 0;
+                                  const std::string& translated_lang,
+                                  TranslateErrors::Type error_type) = 0;
   };
 
   // Resource ------------------------------------------------------------------
@@ -287,6 +300,11 @@ class RenderViewHostDelegate {
     // Called when content in the current page was blocked due to the user's
     // content settings.
     virtual void OnContentBlocked(ContentSettingsType type) = 0;
+
+    // Called when geolocation permission was set in a frame on the current
+    // page.
+    virtual void OnGeolocationPermissionSet(const GURL& requesting_frame,
+                                            bool allowed) = 0;
   };
 
   // Save ----------------------------------------------------------------------
@@ -352,31 +370,30 @@ class RenderViewHostDelegate {
                                   const GURL& icon_url) = 0;
   };
 
-  // FormFieldHistory ----------------------------------------------------------
-  // Interface for FormFieldHistory-related functions.
+  // Autocomplete --------------------------------------------------------------
+  // Interface for Autocomplete-related functions.
 
-  class FormFieldHistory {
+  class Autocomplete {
    public:
-    // Forms fillable by FormFieldHistory have been detected in the page.
-    virtual void FormFieldValuesSubmitted(
-        const webkit_glue::FormFieldValues& form) = 0;
+    // Forms fillable by Autocomplete have been detected in the page.
+    virtual void FormSubmitted(const webkit_glue::FormData& form) = 0;
 
     // Called to retrieve a list of suggestions from the web database given
     // the name of the field |field_name| and what the user has already typed
-    // in the field |user_text|.  Appeals to the database thead to perform the
-    // query. When the database thread is finished, the FormFieldHistory manager
-    // retrieves the calling RenderViewHost and then passes the vector of
-    // suggestions to RenderViewHost::FormFieldHistorySuggestionsReturned.
-    // Return true to indicate that FormFieldHistorySuggestionsReturned will be
+    // in the field |user_text|.  Appeals to the database thread to perform the
+    // query. When the database thread is finished, the AutocompleteHistory
+    // manager retrieves the calling RenderViewHost and then passes the vector
+    // of suggestions to RenderViewHost::AutocompleteSuggestionsReturned.
+    // Returns true to indicate that FormFieldHistorySuggestionsReturned will be
     // called.
-    virtual bool GetFormFieldHistorySuggestions(int query_id,
-                                                const string16& field_name,
-                                                const string16& user_text) = 0;
+    virtual bool GetAutocompleteSuggestions(int query_id,
+                                            const string16& field_name,
+                                            const string16& user_text) = 0;
 
     // Called when the user has indicated that she wants to remove the specified
-    // FormFieldHistory suggestion from the database.
-    virtual void RemoveFormFieldHistoryEntry(const string16& field_name,
-                                             const string16& value) = 0;
+    // Autocomplete suggestion from the database.
+    virtual void RemoveAutocompleteEntry(const string16& field_name,
+                                         const string16& value) = 0;
   };
 
   // AutoFill ------------------------------------------------------------------
@@ -385,8 +402,37 @@ class RenderViewHostDelegate {
   class AutoFill {
    public:
     // Called when the user submits a form.
-    virtual void FormFieldValuesSubmitted(
-        const webkit_glue::FormFieldValues& form) = 0;
+    virtual void FormSubmitted(const webkit_glue::FormData& form) = 0;
+
+    // Called when the frame has finished loading and there are forms in the
+    // frame.
+    virtual void FormsSeen(const std::vector<webkit_glue::FormData>& forms) = 0;
+
+    // Called to retrieve a list of AutoFill suggestions from the web database
+    // given the name of the field and what the user has already typed in the
+    // field.  Returns true to indicate that
+    // RenderViewHost::AutoFillSuggestionsReturned has been called.
+    virtual bool GetAutoFillSuggestions(
+        int query_id, const webkit_glue::FormField& field) = 0;
+
+    // Called to fill the FormData object with AutoFill profile information that
+    // matches the |value|, |label| key.  Returns true to indicate that
+    // RenderViewHost::AutoFillFormDataFilled has been called.
+    virtual bool FillAutoFillFormData(int query_id,
+                                      const webkit_glue::FormData& form,
+                                      const string16& value,
+                                      const string16& label) = 0;
+  };
+
+  // BookmarkDrag --------------------------------------------------------------
+  // Interface for forwarding bookmark drag and drop to extenstions.
+
+  class BookmarkDrag {
+   public:
+    virtual void OnDragEnter(const BookmarkDragData& data) = 0;
+    virtual void OnDragOver(const BookmarkDragData& data) = 0;
+    virtual void OnDragLeave(const BookmarkDragData& data) = 0;
+    virtual void OnDrop(const BookmarkDragData& data) = 0;
   };
 
   // ---------------------------------------------------------------------------
@@ -400,8 +446,14 @@ class RenderViewHostDelegate {
   virtual Save* GetSaveDelegate();
   virtual Printing* GetPrintingDelegate();
   virtual FavIcon* GetFavIconDelegate();
-  virtual FormFieldHistory* GetFormFieldHistoryDelegate();
+  virtual Autocomplete* GetAutocompleteDelegate();
   virtual AutoFill* GetAutoFillDelegate();
+  virtual BookmarkDrag* GetBookmarkDragDelegate();
+
+  // Return the delegate for registering RenderViewHosts for automation resource
+  // routing.
+  virtual AutomationResourceRoutingDelegate*
+      GetAutomationResourceRoutingDelegate();
 
   // Gets the URL that is currently being displayed, if there is one.
   virtual const GURL& GetURL() const;
@@ -493,6 +545,7 @@ class RenderViewHostDelegate {
   // By default we ignore such messages.
   virtual void ProcessDOMUIMessage(const std::string& message,
                                    const Value* content,
+                                   const GURL& source_url,
                                    int request_id,
                                    bool has_callback) {}
 
@@ -504,9 +557,8 @@ class RenderViewHostDelegate {
                                           const std::string& target) {}
 
   // A file chooser should be shown.
-  virtual void RunFileChooser(bool multiple_files,
-                              const string16& title,
-                              const FilePath& default_file) {}
+  virtual void RunFileChooser(
+      const ViewHostMsg_RunFileChooser_Params& params) {}
 
   // A javascript message, confirmation or prompt should be shown.
   virtual void RunJavaScriptMessage(const std::wstring& message,
@@ -539,11 +591,17 @@ class RenderViewHostDelegate {
 
   // Return a dummy RendererPreferences object that will be used by the renderer
   // associated with the owning RenderViewHost.
-  virtual RendererPreferences GetRendererPrefs() const;
+  virtual RendererPreferences GetRendererPrefs(Profile* profile) const = 0;
 
   // Returns a WebPreferences object that will be used by the renderer
   // associated with the owning render view host.
   virtual WebPreferences GetWebkitPrefs();
+
+  // Notification from the renderer host that blocked UI event occurred.
+  // This happens when there are tab-modal dialogs. In this case, the
+  // notification is needed to let us draw attention to the dialog (i.e.
+  // refocus on the modal dialog, flash title etc).
+  virtual void OnIgnoredUIEvent() {}
 
   // Notification from the renderer that JS runs out of memory.
   virtual void OnJSOutOfMemory() {}

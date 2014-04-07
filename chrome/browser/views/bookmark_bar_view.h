@@ -1,4 +1,4 @@
-// Copyright (c) 2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,8 +8,8 @@
 #include "app/slide_animation.h"
 #include "chrome/browser/bookmarks/bookmark_drag_data.h"
 #include "chrome/browser/bookmarks/bookmark_model_observer.h"
-#include "chrome/browser/extensions/extensions_service.h"
 #include "chrome/browser/sync/profile_sync_service.h"
+#include "chrome/browser/views/bookmark_bar_instructions_view.h"
 #include "chrome/browser/views/bookmark_menu_controller_views.h"
 #include "chrome/browser/views/detachable_toolbar_view.h"
 #include "chrome/common/notification_registrar.h"
@@ -22,7 +22,6 @@ class PrefService;
 
 namespace views {
 class CustomButton;
-class Label;
 class MenuButton;
 class MenuItemView;
 class TextButton;
@@ -44,7 +43,8 @@ class BookmarkBarView : public DetachableToolbarView,
                         public views::ContextMenuController,
                         public views::DragController,
                         public AnimationDelegate,
-                        public BookmarkMenuController::Observer {
+                        public BookmarkMenuController::Observer,
+                        public BookmarkBarInstructionsView::Delegate {
   friend class ShowFolderMenuTask;
 
  public:
@@ -71,7 +71,7 @@ class BookmarkBarView : public DetachableToolbarView,
 
   static const int kNewtabBarHeight;
 
-  explicit BookmarkBarView(Profile* profile, Browser* browser);
+  BookmarkBarView(Profile* profile, Browser* browser);
   virtual ~BookmarkBarView();
 
   // Resets the profile. This removes any buttons for the current profile and
@@ -112,9 +112,10 @@ class BookmarkBarView : public DetachableToolbarView,
   virtual int OnDragUpdated(const views::DropTargetEvent& event);
   virtual void OnDragExited();
   virtual int OnPerformDrop(const views::DropTargetEvent& event);
-  virtual bool GetAccessibleName(std::wstring* name);
-  virtual bool GetAccessibleRole(AccessibilityTypes::Role* role);
-  virtual void SetAccessibleName(const std::wstring& name);
+  virtual void ShowContextMenu(const gfx::Point& p, bool is_mouse_gesture);
+
+  // AccessibleToolbarView methods:
+  virtual bool IsAccessibleViewTraversable(views::View* view);
 
   // ProfileSyncServiceObserver method.
   virtual void OnStateChanged();
@@ -203,6 +204,9 @@ class BookmarkBarView : public DetachableToolbarView,
       views::MenuButton* button,
       views::MenuItemView::AnchorPosition* anchor,
       int* start_index);
+
+  // BookmarkBarInstructionsView::Delegate.
+  virtual void ShowImportDialog();
 
   // Maximum size of buttons on the bookmark bar.
   static const int kMaxButtonWidth;
@@ -327,15 +331,17 @@ class BookmarkBarView : public DetachableToolbarView,
   // DragController method. Determines the node representing sender and invokes
   // WriteDragData to write the actual data.
   virtual void WriteDragData(views::View* sender,
-                             int press_x,
-                             int press_y,
+                             const gfx::Point& press_pt,
                              OSExchangeData* data);
+
+  virtual int GetDragOperations(views::View* sender, const gfx::Point& p);
+
+  virtual bool CanStartDrag(views::View* sender,
+                            const gfx::Point& press_pt,
+                            const gfx::Point& p);
 
   // Writes a BookmarkDragData for node to data.
   void WriteDragData(const BookmarkNode* node, OSExchangeData* data);
-
-  // Returns the drag operations for the specified button.
-  virtual int GetDragOperations(views::View* sender, int x, int y);
 
   // ViewMenuDelegate method. Ends up creating a BookmarkMenuController to
   // show the menu.
@@ -348,8 +354,7 @@ class BookmarkBarView : public DetachableToolbarView,
   // Invoked for this View, one of the buttons or the 'other' button. Shows the
   // appropriate context menu.
   virtual void ShowContextMenu(views::View* source,
-                               int x,
-                               int y,
+                               const gfx::Point& p,
                                bool is_mouse_gesture);
 
   // Creates the button for rendering the specified bookmark node.
@@ -416,10 +421,6 @@ class BookmarkBarView : public DetachableToolbarView,
   // desired bounds. If |compute_bounds_only| = FALSE, the bounds are set.
   gfx::Size LayoutItems(bool compute_bounds_only);
 
-  // Determines whether the sync error button should appear on the bookmarks
-  // bar.
-  bool ShouldShowSyncErrorButton();
-
   // Creates the sync error button and adds it as a child view.
   views::TextButton* CreateSyncErrorButton();
 
@@ -465,8 +466,9 @@ class BookmarkBarView : public DetachableToolbarView,
   // Visible if not all the bookmark buttons fit.
   views::MenuButton* overflow_button_;
 
-  // If no bookmarks are visible, we show some text explaining the bar.
-  views::Label* instructions_;
+  // BookmarkBarInstructionsView that is visible if there are no bookmarks on
+  // the bookmark bar.
+  views::View* instructions_;
 
   ButtonSeparatorView* bookmarks_separator_view_;
 
@@ -483,9 +485,6 @@ class BookmarkBarView : public DetachableToolbarView,
 
   // Background for extension toolstrips.
   SkBitmap toolstrip_background_;
-
-  // Storage of strings needed for accessibility.
-  std::wstring accessible_name_;
 
   DISALLOW_COPY_AND_ASSIGN(BookmarkBarView);
 };

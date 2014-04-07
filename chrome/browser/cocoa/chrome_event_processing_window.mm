@@ -1,4 +1,4 @@
-// Copyright (c) 2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -11,7 +11,12 @@
 #import "chrome/browser/renderer_host/render_widget_host_view_mac.h"
 #include "chrome/browser/global_keyboard_shortcuts_mac.h"
 
-typedef int (*KeyToCommandMapper)(bool, bool, bool, bool, int);
+typedef int (*KeyToCommandMapper)(bool, bool, bool, bool, int, unichar);
+
+@interface ChromeEventProcessingWindow ()
+// Duplicate the given key event, but changing the associated window.
+- (NSEvent*)keyEventForWindow:(NSWindow*)window fromKeyEvent:(NSEvent*)event;
+@end
 
 @implementation ChromeEventProcessingWindow
 
@@ -23,10 +28,11 @@ typedef int (*KeyToCommandMapper)(bool, bool, bool, bool, int);
   const bool shiftKey = modifers & NSShiftKeyMask;
   const bool cntrlKey = modifers & NSControlKeyMask;
   const bool optKey = modifers & NSAlternateKeyMask;
-  const int keyCode = [event keyCode];
+  const unichar keyCode = [event keyCode];
+  const unichar keyChar = KeyCharacterForEvent(event);
 
   int cmdNum = commandForKeyboardShortcut(cmdKey, shiftKey, cntrlKey, optKey,
-      keyCode);
+      keyCode, keyChar);
 
   if (cmdNum != -1) {
     id executor = [self delegate];
@@ -44,6 +50,11 @@ typedef int (*KeyToCommandMapper)(bool, bool, bool, bool, int);
                                  fromTable:CommandForWindowKeyboardShortcut];
 }
 
+- (BOOL)handleDelayedWindowKeyboardShortcut:(NSEvent*)event {
+  return [self handleExtraKeyboardShortcut:event
+                         fromTable:CommandForDelayedWindowKeyboardShortcut];
+}
+
 - (BOOL)handleExtraBrowserKeyboardShortcut:(NSEvent*)event {
   return [self handleExtraKeyboardShortcut:event
                                  fromTable:CommandForBrowserKeyboardShortcut];
@@ -59,17 +70,45 @@ typedef int (*KeyToCommandMapper)(bool, bool, bool, bool, int);
   if ([r isKindOfClass:[RenderWidgetHostViewCocoa class]])
     return [r performKeyEquivalent:event];
 
+  // If the delegate does not implement the BrowserCommandExecutor protocol,
+  // then we don't need to handle browser specific shortcut keys.
+  if (![[self delegate] conformsToProtocol:@protocol(BrowserCommandExecutor)])
+    return [super performKeyEquivalent:event];
+
   // Handle per-window shortcuts like cmd-1, but do not handle browser-level
   // shortcuts like cmd-left (else, cmd-left would do history navigation even
   // if e.g. the Omnibox has focus).
   if ([self handleExtraWindowKeyboardShortcut:event])
     return YES;
-  return [super performKeyEquivalent:event];
+
+  if ([super performKeyEquivalent:event])
+    return YES;
+
+  // Handle per-window shortcuts like Esc after giving everybody else a chance
+  // to handle them
+  return [self handleDelayedWindowKeyboardShortcut:event];
 }
 
-- (BOOL)redispatchEvent:(NSEvent*)event {
+- (BOOL)redispatchKeyEvent:(NSEvent*)event {
   DCHECK(event);
-  DCHECK_EQ([event window], self);
+  NSEventType eventType = [event type];
+  if (eventType != NSKeyDown &&
+      eventType != NSKeyUp &&
+      eventType != NSFlagsChanged) {
+    NOTREACHED();
+    return YES;  // Pretend it's been handled in an effort to limit damage.
+  }
+
+  // Ordinarily, the event's window should be this window. However, when
+  // switching between normal and fullscreen mode, we switch out the window, and
+  // the event's window might be the previous window (or even an earlier one if
+  // the renderer is running slowly and several mode switches occur). In this
+  // rare case, we synthesize a new key event so that its associate window
+  // (number) is our own.
+  if ([event window] != self)
+    event = [self keyEventForWindow:self fromKeyEvent:event];
+
+  // Redispatch the event.
   eventHandled_ = YES;
   redispatchingEvent_ = YES;
   [NSApp sendEvent:event];
@@ -88,5 +127,38 @@ typedef int (*KeyToCommandMapper)(bool, bool, bool, bool, int);
     eventHandled_ = NO;
 }
 
-@end  // ChromeEventProcessingWindow
+- (NSEvent*)keyEventForWindow:(NSWindow*)window fromKeyEvent:(NSEvent*)event {
+  NSEventType eventType = [event type];
 
+  // Convert the event's location from the original window's coordinates into
+  // our own.
+  NSPoint eventLoc = [event locationInWindow];
+  eventLoc = [[event window] convertBaseToScreen:eventLoc];
+  eventLoc = [self convertScreenToBase:eventLoc];
+
+  // Various things *only* apply to key down/up.
+  BOOL eventIsARepeat = NO;
+  NSString* eventCharacters = nil;
+  NSString* eventUnmodCharacters = nil;
+  if (eventType == NSKeyDown || eventType == NSKeyUp) {
+    eventIsARepeat = [event isARepeat];
+    eventCharacters = [event characters];
+    eventUnmodCharacters = [event charactersIgnoringModifiers];
+  }
+
+  // This synthesis may be slightly imperfect: we provide nil for the context,
+  // since I (viettrungluu) am sceptical that putting in the original context
+  // (if one is given) is valid.
+  return [NSEvent keyEventWithType:eventType
+                          location:eventLoc
+                     modifierFlags:[event modifierFlags]
+                         timestamp:[event timestamp]
+                      windowNumber:[window windowNumber]
+                           context:nil
+                        characters:eventCharacters
+       charactersIgnoringModifiers:eventUnmodCharacters
+                         isARepeat:eventIsARepeat
+                           keyCode:[event keyCode]];
+}
+
+@end  // ChromeEventProcessingWindow

@@ -11,6 +11,7 @@
 #include "base/scoped_ptr.h"
 #include "base/string_util.h"
 #include "base/sys_string_conversions.h"
+#include "base/utf_string_conversions.h"
 #include "webkit/glue/plugins/plugin_list.h"
 
 static const short kSTRTypeDefinitionResourceID = 128;
@@ -122,6 +123,7 @@ bool ReadPlistPluginInfo(const FilePath& filename, CFBundleRef bundle,
     info->desc = base::SysNSStringToWide(plugin_desc);
   else
     info->desc = UTF8ToWide(filename.BaseName().value());
+  info->enabled = true;
 
   return true;
 }
@@ -163,7 +165,7 @@ bool GetSTRResource(CFBundleRef bundle, short res_id,
     if (!str.get())
       return false;
     contents->push_back(base::SysCFStringRefToUTF8(str.get()));
-    pointer += 1+*pointer;
+    pointer += 1+*reinterpret_cast<unsigned char*>(pointer);
   }
 
   return true;
@@ -219,6 +221,7 @@ bool ReadSTRPluginInfo(const FilePath& filename, CFBundleRef bundle,
     info->desc = UTF8ToWide(plugin_descs[0]);
   else
     info->desc = UTF8ToWide(filename.BaseName().value());
+  info->enabled = true;
 
   return true;
 }
@@ -306,14 +309,13 @@ bool PluginLib::ReadWebPluginInfo(const FilePath &filename,
   //
   // Strictly speaking, only STR# 128 is required.
 
-  // We are accessing the bundle contained in the NativeLibrary but not
-  // unloading it.  We use a scoped_ptr to make sure the NativeLibraryStruct is
-  // not leaked.
-  scoped_ptr<base::NativeLibraryStruct> native_library(
-      base::LoadNativeLibrary(filename));
-  if (native_library->type != base::BUNDLE)
+  scoped_cftyperef<CFURLRef> bundle_url(CFURLCreateFromFileSystemRepresentation(
+      kCFAllocatorDefault, (const UInt8*)filename.value().c_str(),
+      filename.value().length(), true));
+  if (!bundle_url)
     return false;
-  scoped_cftyperef<CFBundleRef> bundle(native_library->bundle);
+  scoped_cftyperef<CFBundleRef> bundle(CFBundleCreate(kCFAllocatorDefault,
+                                                      bundle_url.get()));
   if (!bundle)
     return false;
 

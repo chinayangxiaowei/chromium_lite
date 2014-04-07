@@ -9,23 +9,25 @@
 #if defined(OS_WIN)
 #include <windows.h>
 #include <shlobj.h>
-#elif defined(OS_LINUX)
-#include "base/nss_init.h"
+#elif defined(USE_NSS)
+#include "base/nss_util.h"
 #endif
 
 #include <algorithm>
 #include <string>
 
 #include "base/file_util.h"
+#include "base/format_macros.h"
 #include "base/message_loop.h"
 #include "base/path_service.h"
 #include "base/process_util.h"
 #include "base/string_piece.h"
 #include "base/string_util.h"
 #include "net/base/cookie_monster.h"
+#include "net/base/cookie_policy.h"
 #include "net/base/load_flags.h"
-#include "net/base/load_log.h"
-#include "net/base/load_log_unittest.h"
+#include "net/base/net_log.h"
+#include "net/base/net_log_unittest.h"
 #include "net/base/net_errors.h"
 #include "net/base/net_module.h"
 #include "net/base/net_util.h"
@@ -47,43 +49,6 @@
 using base::Time;
 
 namespace {
-
-class URLRequestTestContext : public URLRequestContext {
- public:
-  URLRequestTestContext() {
-    host_resolver_ = net::CreateSystemHostResolver();
-    proxy_service_ = net::ProxyService::CreateNull();
-    ftp_transaction_factory_ = new net::FtpNetworkLayer(host_resolver_);
-    ssl_config_service_ = new net::SSLConfigServiceDefaults;
-    http_transaction_factory_ =
-        new net::HttpCache(
-          net::HttpNetworkLayer::CreateFactory(host_resolver_, proxy_service_,
-                                               ssl_config_service_),
-          disk_cache::CreateInMemoryCacheBackend(0));
-    // In-memory cookie store.
-    cookie_store_ = new net::CookieMonster();
-    accept_language_ = "en-us,fr";
-    accept_charset_ = "iso-8859-1,*,utf-8";
-  }
-  
-  void set_cookie_policy(net::CookiePolicy* policy) {
-    cookie_policy_ = policy;
-  }
-
- private:
-  virtual ~URLRequestTestContext() {
-    delete ftp_transaction_factory_;
-    delete http_transaction_factory_;
-  }
-};
-
-class TestURLRequest : public URLRequest {
- public:
-  TestURLRequest(const GURL& url, Delegate* delegate)
-      : URLRequest(url, delegate) {
-    set_context(new URLRequestTestContext());
-  }
-};
 
 base::StringPiece TestNetResourceProvider(int key) {
   return "header";
@@ -136,6 +101,51 @@ class URLRequestTestHTTP : public URLRequestTest {
 
   static void TearDownTestCase() {
     server_ = NULL;
+  }
+
+  void HTTPUploadDataOperationTest(const std::string& method) {
+    ASSERT_TRUE(NULL != server_.get());
+    const int kMsgSize = 20000;  // multiple of 10
+    const int kIterations = 50;
+    char *uploadBytes = new char[kMsgSize+1];
+    char *ptr = uploadBytes;
+    char marker = 'a';
+    for (int idx = 0; idx < kMsgSize/10; idx++) {
+      memcpy(ptr, "----------", 10);
+      ptr += 10;
+      if (idx % 100 == 0) {
+        ptr--;
+        *ptr++ = marker;
+        if (++marker > 'z')
+          marker = 'a';
+      }
+    }
+    uploadBytes[kMsgSize] = '\0';
+
+    scoped_refptr<URLRequestContext> context = new URLRequestTestContext();
+
+    for (int i = 0; i < kIterations; ++i) {
+      TestDelegate d;
+      URLRequest r(server_->TestServerPage("echo"), &d);
+      r.set_context(context);
+      r.set_method(method.c_str());
+
+      r.AppendBytesToUpload(uploadBytes, kMsgSize);
+
+      r.Start();
+      EXPECT_TRUE(r.is_pending());
+
+      MessageLoop::current()->Run();
+
+      ASSERT_EQ(1, d.response_started_count()) << "request failed: " <<
+          (int) r.status().status() << ", os error: " << r.status().os_error();
+
+      EXPECT_FALSE(d.received_data_before_response());
+      EXPECT_EQ(uploadBytes, d.data_received());
+      EXPECT_EQ(memcmp(uploadBytes, d.data_received().c_str(), kMsgSize), 0);
+      EXPECT_EQ(d.data_received().compare(uploadBytes), 0);
+    }
+    delete[] uploadBytes;
   }
 
   static scoped_refptr<HTTPTestServer> server_;
@@ -207,24 +217,7 @@ TEST_F(URLRequestTestHTTP, GetTest_NoCache) {
     EXPECT_FALSE(d.received_data_before_response());
     EXPECT_NE(0, d.bytes_received());
 
-    // The first part of the log will be for URL_REQUEST_START.
-    // After that, there should be an HTTP_TRANSACTION_READ_BODY
-    EXPECT_TRUE(
-        net::LogContains(*r.load_log(), 0,
-                         net::LoadLog::TYPE_URL_REQUEST_START,
-                         net::LoadLog::PHASE_BEGIN));
-    EXPECT_TRUE(
-        net::LogContains(*r.load_log(), -3,
-                         net::LoadLog::TYPE_URL_REQUEST_START,
-                         net::LoadLog::PHASE_END));
-    EXPECT_TRUE(
-        net::LogContains(*r.load_log(), -2,
-                         net::LoadLog::TYPE_HTTP_TRANSACTION_READ_BODY,
-                         net::LoadLog::PHASE_BEGIN));
-    EXPECT_TRUE(
-        net::LogContains(*r.load_log(), -1,
-                         net::LoadLog::TYPE_HTTP_TRANSACTION_READ_BODY,
-                         net::LoadLog::PHASE_END));
+    // TODO(eroman): Add back the NetLog tests...
   }
 }
 
@@ -520,48 +513,11 @@ TEST_F(URLRequestTestHTTP, CancelTest5) {
 }
 
 TEST_F(URLRequestTestHTTP, PostTest) {
-  ASSERT_TRUE(NULL != server_.get());
-  const int kMsgSize = 20000;  // multiple of 10
-  const int kIterations = 50;
-  char *uploadBytes = new char[kMsgSize+1];
-  char *ptr = uploadBytes;
-  char marker = 'a';
-  for (int idx = 0; idx < kMsgSize/10; idx++) {
-    memcpy(ptr, "----------", 10);
-    ptr += 10;
-    if (idx % 100 == 0) {
-      ptr--;
-      *ptr++ = marker;
-      if (++marker > 'z')
-        marker = 'a';
-    }
-  }
-  uploadBytes[kMsgSize] = '\0';
+  HTTPUploadDataOperationTest("POST");
+}
 
-  scoped_refptr<URLRequestContext> context = new URLRequestTestContext();
-
-  for (int i = 0; i < kIterations; ++i) {
-    TestDelegate d;
-    URLRequest r(server_->TestServerPage("echo"), &d);
-    r.set_context(context);
-    r.set_method("POST");
-
-    r.AppendBytesToUpload(uploadBytes, kMsgSize);
-
-    r.Start();
-    EXPECT_TRUE(r.is_pending());
-
-    MessageLoop::current()->Run();
-
-    ASSERT_EQ(1, d.response_started_count()) << "request failed: " <<
-        (int) r.status().status() << ", os error: " << r.status().os_error();
-
-    EXPECT_FALSE(d.received_data_before_response());
-    EXPECT_EQ(uploadBytes, d.data_received());
-    EXPECT_EQ(memcmp(uploadBytes, d.data_received().c_str(), kMsgSize), 0);
-    EXPECT_EQ(d.data_received().compare(uploadBytes), 0);
-  }
-  delete[] uploadBytes;
+TEST_F(URLRequestTestHTTP, PutTest) {
+  HTTPUploadDataOperationTest("PUT");
 }
 
 TEST_F(URLRequestTestHTTP, PostEmptyTest) {
@@ -731,9 +687,9 @@ TEST_F(URLRequestTest, FileTestFullSpecifiedRange) {
   {
     TestURLRequest r(temp_url, &d);
 
-    r.SetExtraRequestHeaders(StringPrintf("Range: bytes=%d-%d\n",
-                                          first_byte_position,
-                                          last_byte_position));
+    r.SetExtraRequestHeaders(
+        StringPrintf("Range: bytes=%" PRIuS "-%" PRIuS "\n",
+                     first_byte_position, last_byte_position));
     r.Start();
     EXPECT_TRUE(r.is_pending());
 
@@ -772,7 +728,7 @@ TEST_F(URLRequestTest, FileTestHalfSpecifiedRange) {
   {
     TestURLRequest r(temp_url, &d);
 
-    r.SetExtraRequestHeaders(StringPrintf("Range: bytes=%d-\n",
+    r.SetExtraRequestHeaders(StringPrintf("Range: bytes=%" PRIuS "-\n",
                                           first_byte_position));
     r.Start();
     EXPECT_TRUE(r.is_pending());
@@ -870,62 +826,6 @@ TEST_F(URLRequestTestHTTP, ResponseHeadersTest) {
   header.clear();
   EXPECT_TRUE(headers->GetNormalizedHeader("x-multiple-entries", &header));
   EXPECT_EQ("a, b", header);
-}
-
-// TODO(jar): 14801 Remove BZIP code completely.
-TEST_F(URLRequestTest, DISABLED_BZip2ContentTest) {
-  scoped_refptr<HTTPTestServer> server =
-      HTTPTestServer::CreateServer(L"net/data/filter_unittests", NULL);
-  ASSERT_TRUE(NULL != server.get());
-
-  // for localhost domain, we also should support bzip2 encoding
-  // first, get the original file
-  TestDelegate d1;
-  TestURLRequest req1(server->TestServerPage("realfiles/google.txt"), &d1);
-  req1.Start();
-  MessageLoop::current()->Run();
-
-  const std::string& got_content = d1.data_received();
-
-  // second, get bzip2 content
-  TestDelegate d2;
-  TestURLRequest req2(server->TestServerPage("realbz2files/google.txt"), &d2);
-  req2.Start();
-  MessageLoop::current()->Run();
-
-  const std::string& got_bz2_content = d2.data_received();
-
-  // compare those two results
-  EXPECT_EQ(got_content, got_bz2_content);
-}
-
-// TODO(jar): 14801 Remove BZIP code completely.
-TEST_F(URLRequestTest, DISABLED_BZip2ContentTest_IncrementalHeader) {
-  scoped_refptr<HTTPTestServer> server =
-      HTTPTestServer::CreateServer(L"net/data/filter_unittests", NULL);
-  ASSERT_TRUE(NULL != server.get());
-
-  // for localhost domain, we also should support bzip2 encoding
-  // first, get the original file
-  TestDelegate d1;
-  TestURLRequest req1(server->TestServerPage("realfiles/google.txt"), &d1);
-  req1.Start();
-  MessageLoop::current()->Run();
-
-  const std::string& got_content = d1.data_received();
-
-  // second, get bzip2 content.  ask the testserver to send the BZ2 header in
-  // two chunks with a delay between them.  this tests our fix for bug 867161.
-  TestDelegate d2;
-  TestURLRequest req2(server->TestServerPage(
-      "realbz2files/google.txt?incremental-header"), &d2);
-  req2.Start();
-  MessageLoop::current()->Run();
-
-  const std::string& got_bz2_content = d2.data_received();
-
-  // compare those two results
-  EXPECT_EQ(got_content, got_bz2_content);
 }
 
 #if defined(OS_WIN)
@@ -1192,7 +1092,7 @@ TEST_F(URLRequestTestHTTP, VaryHeader) {
     TestDelegate d;
     URLRequest req(server_->TestServerPage("echoheader?foo"), &d);
     req.set_context(context);
-    req.SetExtraRequestHeaders("foo:1");
+    req.SetExtraRequestHeaders("foo: 1");
     req.Start();
     MessageLoop::current()->Run();
   }
@@ -1202,7 +1102,7 @@ TEST_F(URLRequestTestHTTP, VaryHeader) {
     TestDelegate d;
     URLRequest req(server_->TestServerPage("echoheader?foo"), &d);
     req.set_context(context);
-    req.SetExtraRequestHeaders("foo:1");
+    req.SetExtraRequestHeaders("foo: 1");
     req.Start();
     MessageLoop::current()->Run();
 
@@ -1214,7 +1114,7 @@ TEST_F(URLRequestTestHTTP, VaryHeader) {
     TestDelegate d;
     URLRequest req(server_->TestServerPage("echoheader?foo"), &d);
     req.set_context(context);
-    req.SetExtraRequestHeaders("foo:2");
+    req.SetExtraRequestHeaders("foo: 2");
     req.Start();
     MessageLoop::current()->Run();
 
@@ -1389,7 +1289,6 @@ TEST_F(URLRequestTest, DoNotSaveCookies) {
 
   // Try to set-up another cookie and update the previous cookie.
   {
-    scoped_refptr<URLRequestContext> context = new URLRequestTestContext();
     TestDelegate d;
     URLRequest req(server->TestServerPage(
         "set-cookie?CookieToNotSave=1&CookieToNotUpdate=1"), &d);
@@ -1513,6 +1412,7 @@ TEST_F(URLRequestTest, DoNotSaveCookies_ViaPolicy) {
     EXPECT_EQ(0, d.blocked_get_cookies_count());
     EXPECT_EQ(2, d.blocked_set_cookie_count());
   }
+
 
   // Verify the cookies weren't saved or updated.
   {
@@ -2320,7 +2220,8 @@ TEST_F(URLRequestTestFTP, FLAKY_FTPDirectoryListing) {
   }
 }
 
-TEST_F(URLRequestTestFTP, FTPGetTestAnonymous) {
+// Flaky, see http://crbug.com/25045.
+TEST_F(URLRequestTestFTP, FLAKY_FTPGetTestAnonymous) {
   ASSERT_TRUE(NULL != server_.get());
   FilePath app_path;
   PathService::Get(base::DIR_SOURCE_ROOT, &app_path);
@@ -2343,7 +2244,8 @@ TEST_F(URLRequestTestFTP, FTPGetTestAnonymous) {
   }
 }
 
-TEST_F(URLRequestTestFTP, FTPGetTest) {
+// Flaky, see http://crbug.com/25045.
+TEST_F(URLRequestTestFTP, FLAKY_FTPGetTest) {
   ASSERT_TRUE(NULL != server_.get());
   FilePath app_path;
   PathService::Get(base::DIR_SOURCE_ROOT, &app_path);

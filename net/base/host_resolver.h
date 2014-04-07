@@ -1,4 +1,4 @@
-// Copyright (c) 2006-2008 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -11,14 +11,17 @@
 #include "googleurl/src/gurl.h"
 #include "net/base/address_family.h"
 #include "net/base/completion_callback.h"
+#include "net/base/request_priority.h"
 
 class MessageLoop;
 
 namespace net {
 
 class AddressList;
+class BoundNetLog;
 class HostCache;
-class LoadLog;
+class HostResolverImpl;
+class NetworkChangeNotifier;
 
 // This class represents the task of resolving hostnames (or IP address
 // literal) to an AddressList object.
@@ -38,16 +41,32 @@ class HostResolver : public base::RefCountedThreadSafe<HostResolver> {
     RequestInfo(const std::string& hostname, int port)
         : hostname_(hostname),
           address_family_(ADDRESS_FAMILY_UNSPECIFIED),
+          host_resolver_flags_(0),
           port_(port),
           allow_cached_response_(true),
-          is_speculative_(false) {}
+          is_speculative_(false),
+          priority_(MEDIUM) {}
 
-    const int port() const { return port_; }
+    int port() const { return port_; }
+    void set_port(int port) {
+      port_ = port;
+    }
+
     const std::string& hostname() const { return hostname_; }
+    void set_hostname(const std::string& hostname) {
+      hostname_ = hostname;
+    }
 
     AddressFamily address_family() const { return address_family_; }
     void set_address_family(AddressFamily address_family) {
       address_family_ = address_family;
+    }
+
+    HostResolverFlags host_resolver_flags() const {
+      return host_resolver_flags_;
+    }
+    void set_host_resolver_flags(HostResolverFlags host_resolver_flags) {
+      host_resolver_flags_ = host_resolver_flags;
     }
 
     bool allow_cached_response() const { return allow_cached_response_; }
@@ -55,6 +74,9 @@ class HostResolver : public base::RefCountedThreadSafe<HostResolver> {
 
     bool is_speculative() const { return is_speculative_; }
     void set_is_speculative(bool b) { is_speculative_ = b; }
+
+    RequestPriority priority() const { return priority_; }
+    void set_priority(RequestPriority priority) { priority_ = priority; }
 
     const GURL& referrer() const { return referrer_; }
     void set_referrer(const GURL& referrer) { referrer_ = referrer; }
@@ -66,6 +88,9 @@ class HostResolver : public base::RefCountedThreadSafe<HostResolver> {
     // The address family to restrict results to.
     AddressFamily address_family_;
 
+    // Flags to use when resolving this request.
+    HostResolverFlags host_resolver_flags_;
+
     // The port number to set in the result's sockaddrs.
     int port_;
 
@@ -74,6 +99,9 @@ class HostResolver : public base::RefCountedThreadSafe<HostResolver> {
 
     // Whether this request was started by the DNS prefetcher.
     bool is_speculative_;
+
+    // The priority for the request.
+    RequestPriority priority_;
 
     // Optional data for consumption by observers. This is the URL of the
     // page that lead us to the navigation, for DNS prefetcher's benefit.
@@ -116,15 +144,16 @@ class HostResolver : public base::RefCountedThreadSafe<HostResolver> {
   // be returned and the real result code will be passed to the completion
   // callback.  Otherwise the result code is returned immediately from this
   // call.
-  // If |req| is non-NULL, then |*req| will be filled with a handle to the
-  // async request. This handle is not valid after the request has completed.
+  // If |out_req| is non-NULL, then |*out_req| will be filled with a handle to
+  // the async request. This handle is not valid after the request has
+  // completed.
   //
-  // Profiling information for the request is saved to |load_log| if non-NULL.
+  // Profiling information for the request is saved to |net_log| if non-NULL.
   virtual int Resolve(const RequestInfo& info,
                       AddressList* addresses,
                       CompletionCallback* callback,
                       RequestHandle* out_req,
-                      LoadLog* load_log) = 0;
+                      const BoundNetLog& net_log) = 0;
 
   // Cancels the specified request. |req| is the handle returned by Resolve().
   // After a request is cancelled, its completion callback will not be called.
@@ -138,18 +167,16 @@ class HostResolver : public base::RefCountedThreadSafe<HostResolver> {
   // Unregisters an observer previously added by AddObserver().
   virtual void RemoveObserver(Observer* observer) = 0;
 
-  // Returns the host cache, or NULL if this implementation does not use
-  // a HostCache.
-  virtual HostCache* GetHostCache() = 0;
-
-  // TODO(eroman): temp hack for http://crbug.com/18373
-  virtual void Shutdown() = 0;
-
   // Sets the default AddressFamily to use when requests have left it
   // unspecified. For example, this could be used to restrict resolution
   // results to AF_INET by passing in ADDRESS_FAMILY_IPV4, or to
   // AF_INET6 by passing in ADDRESS_FAMILY_IPV6.
   virtual void SetDefaultAddressFamily(AddressFamily address_family) {}
+
+  // Returns |this| cast to a HostResolverImpl*, or NULL if the subclass
+  // is not compatible with HostResolverImpl. Used primarily to expose
+  // additional functionality on the about:net-internals page.
+  virtual HostResolverImpl* GetAsHostResolverImpl() { return NULL; }
 
  protected:
   friend class base::RefCountedThreadSafe<HostResolver>;
@@ -182,7 +209,11 @@ class SingleRequestHostResolver {
   int Resolve(const HostResolver::RequestInfo& info,
               AddressList* addresses,
               CompletionCallback* callback,
-              LoadLog* load_log);
+              const BoundNetLog& net_log);
+
+  // Cancels the in-progress request, if any. This prevents the callback
+  // from being invoked. Resolve() can be called again after cancelling.
+  void Cancel();
 
  private:
   // Callback for when the request to |resolver_| completes, so we dispatch
@@ -205,7 +236,10 @@ class SingleRequestHostResolver {
 // Creates a HostResolver implementation that queries the underlying system.
 // (Except if a unit-test has changed the global HostResolverProc using
 // ScopedHostResolverProc to intercept requests to the system).
-HostResolver* CreateSystemHostResolver();
+// |network_change_notifier| must outlive HostResolver.  It can optionally be
+// NULL, in which case HostResolver will not respond to network changes.
+HostResolver* CreateSystemHostResolver(
+    NetworkChangeNotifier* network_change_notifier);
 
 }  // namespace net
 

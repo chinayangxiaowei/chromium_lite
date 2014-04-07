@@ -21,6 +21,10 @@ namespace extension_manifest_keys {
   extern const wchar_t* kExcludeGlobs;
   extern const wchar_t* kIcons;
   extern const wchar_t* kIncludeGlobs;
+  extern const wchar_t* kLaunch;
+  extern const wchar_t* kLaunchContainer;
+  extern const wchar_t* kLaunchLocalPath;
+  extern const wchar_t* kLaunchWebURL;
   extern const wchar_t* kJs;
   extern const wchar_t* kMatches;
   extern const wchar_t* kName;
@@ -29,6 +33,7 @@ namespace extension_manifest_keys {
   extern const wchar_t* kPageActions;
   extern const wchar_t* kPageActionIcons;
   extern const wchar_t* kPageActionDefaultIcon;
+  extern const wchar_t* kPageActionDefaultPopup;
   extern const wchar_t* kPageActionDefaultTitle;
   extern const wchar_t* kPageActionPopup;
   extern const wchar_t* kPageActionPopupHeight;
@@ -37,7 +42,6 @@ namespace extension_manifest_keys {
   extern const wchar_t* kPlugins;
   extern const wchar_t* kPluginsPath;
   extern const wchar_t* kPluginsPublic;
-  extern const wchar_t* kPrivacyBlacklists;
   extern const wchar_t* kPublicKey;
   extern const wchar_t* kSignature;
   extern const wchar_t* kRunAt;
@@ -54,6 +58,11 @@ namespace extension_manifest_keys {
   extern const wchar_t* kVersion;
   extern const wchar_t* kUpdateURL;
   extern const wchar_t* kOptionsPage;
+  extern const wchar_t* kWebContent;
+  extern const wchar_t* kWebContentEnabled;
+  extern const wchar_t* kWebLaunchUrl;
+  extern const wchar_t* kWebOrigin;
+  extern const wchar_t* kWebPaths;
 }  // namespace extension_manifest_keys
 
 // Some values expected in manifests.
@@ -63,11 +72,17 @@ namespace extension_manifest_values {
   extern const char* kRunAtDocumentIdle;
   extern const char* kPageActionTypeTab;
   extern const char* kPageActionTypePermanent;
+  extern const char* kLaunchContainerPanel;
+  extern const char* kLaunchContainerTab;
+  extern const char* kLaunchContainerWindow;
 }  // namespace extension_manifest_values
 
 // Error messages returned from Extension::InitFromValue().
 namespace extension_manifest_errors {
+  extern const char* kAppsNotEnabled;
   extern const char* kChromeVersionTooLow;
+  extern const char* kInvalidAllFrames;
+  extern const char* kInvalidBackground;
   extern const char* kInvalidBrowserAction;
   extern const char* kInvalidChromeURLOverrides;
   extern const char* kInvalidContentScript;
@@ -82,6 +97,9 @@ namespace extension_manifest_errors {
   extern const char* kInvalidJs;
   extern const char* kInvalidJsList;
   extern const char* kInvalidKey;
+  extern const char* kInvalidLaunchContainer;
+  extern const char* kInvalidLaunchLocalPath;
+  extern const char* kInvalidLaunchWebURL;
   extern const char* kInvalidManifest;
   extern const char* kInvalidMatchCount;
   extern const char* kInvalidMatch;
@@ -91,11 +109,6 @@ namespace extension_manifest_errors {
   extern const char* kInvalidPlugins;
   extern const char* kInvalidPluginsPath;
   extern const char* kInvalidPluginsPublic;
-  extern const char* kInvalidPrivacyBlacklists;
-  extern const char* kInvalidPrivacyBlacklistsPath;
-
-  extern const char* kInvalidAllFrames;
-  extern const char* kInvalidBackground;
   extern const char* kInvalidRunAt;
   extern const char* kInvalidSignature;
   extern const char* kInvalidToolstrip;
@@ -108,6 +121,7 @@ namespace extension_manifest_errors {
   extern const char* kInvalidPageActionIconPath;
   extern const char* kInvalidPageActionId;
   extern const char* kInvalidPageActionDefaultTitle;
+  extern const char* kInvalidPageActionOldAndNewKeys;
   extern const char* kInvalidPageActionPopup;
   extern const char* kInvalidPageActionPopupHeight;
   extern const char* kInvalidPageActionPopupPath;
@@ -121,21 +135,30 @@ namespace extension_manifest_errors {
   extern const char* kInvalidThemeImages;
   extern const char* kInvalidThemeColors;
   extern const char* kInvalidThemeTints;
+  extern const char* kInvalidWebContentEnabled;
+  extern const char* kInvalidWebOrigin;
+  extern const char* kInvalidWebPaths;
+  extern const char* kInvalidWebPath;
   extern const char* kOneUISurfaceOnly;
   extern const char* kThemesCannotContainExtensions;
   extern const char* kManifestParseError;
   extern const char* kManifestUnreadable;
   extern const char* kMissingFile;
+  extern const char* kMultipleOverrides;
   extern const char* kInvalidUpdateURL;
   extern const char* kInvalidDefaultLocale;
+  extern const char* kLaunchContainerWithoutURL;
+  extern const char* kLaunchPathAndURLAreExclusive;
   extern const char* kLocalesNoDefaultLocaleSpecified;
   extern const char* kLocalesNoDefaultMessages;
   extern const char* kLocalesNoValidLocaleNamesListed;
   extern const char* kLocalesTreeMissing;
   extern const char* kLocalesMessagesFileMissing;
   extern const char* kInvalidOptionsPage;
+  extern const char* kReservedMessageFound;
   extern const char* kCannotAccessPage;
   extern const char* kCannotScriptGallery;
+  extern const char* kWebContentMustBeEnabled;
 }  // namespace extension_manifest_errors
 
 namespace extension_urls {

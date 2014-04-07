@@ -1,4 +1,4 @@
-// Copyright (c) 2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,6 +6,7 @@
 #define WEBKIT_GLUE_FORM_FIELD_H_
 
 #include "base/string16.h"
+#include "third_party/WebKit/WebKit/chromium/public/WebFormControlElement.h"
 
 namespace webkit_glue {
 
@@ -13,21 +14,36 @@ namespace webkit_glue {
 class FormField {
  public:
   FormField();
-  FormField(const string16& name,
-            const string16& html_input_type,
-            const string16& value);
+  explicit FormField(WebKit::WebFormControlElement element);
+  FormField(const string16& label,
+            const string16& name,
+            const string16& value,
+            const string16& form_control_type);
 
-  string16 name() const { return name_; }
-  string16 html_input_type() const { return html_input_type_; }
-  string16 value() const { return value_; }
+  const string16& label() const { return label_; }
+  const string16& name() const { return name_; }
+  const string16& value() const { return value_; }
+  const string16& form_control_type() const { return form_control_type_; }
 
+  void set_label(const string16& label) { label_ = label; }
+  void set_name(const string16& name) { name_ = name; }
   void set_value(const string16& value) { value_ = value; }
+  void set_form_control_type(const string16& form_control_type) {
+    form_control_type_ = form_control_type;
+  }
+
+  bool operator==(const FormField& field) const;
+  bool operator!=(const FormField& field) const;
 
  private:
+  string16 label_;
   string16 name_;
-  string16 html_input_type_;
   string16 value_;
+  string16 form_control_type_;
 };
+
+// So we can compare FormFields with EXPECT_EQ().
+std::ostream& operator<<(std::ostream& os, const FormField& profile);
 
 }  // namespace webkit_glue
 

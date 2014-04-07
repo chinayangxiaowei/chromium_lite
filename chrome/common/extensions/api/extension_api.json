@@ -50,6 +50,15 @@
         "properties": {
           "message": { "type": "string", "description": "Description of the error that has taken place." }
         }
+      },
+      "inIncognitoTab": {
+        "type": "object",
+        "optional": true,
+        "unprivileged": true,
+        "description": "True for content scripts running inside incognito tabs. Will be undefined for non-content scripts.",
+        "properties": {
+          "message": { "type": "boolean", "description": "True if the script is in an incongito tab." }
+        }
       }
     },
     "functions": [
@@ -116,8 +125,27 @@
       {
         "name": "getViews",
         "type": "function",
-        "description": "Returns an array of the global JavaScript objects for each of the views running inside the current extension. This includes background pages and tabs.",
-        "parameters": [],
+        "description": "Returns an array of the JavaScript 'window' objects for each of the pages running inside the current extension.",
+        "parameters": [
+          {
+            "type": "object",
+            "name": "fetchProperties",
+            "optional": true,
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": ["tab", "infobar", "notification"],
+                "optional": true,
+                "description": "The type of view to get. If omitted, returns all views (including background pages and tabs). Valid values: 'tab', 'infobar', 'notification'."
+              },
+              "windowId": {
+                "type": "integer",
+                "optional": true,
+                "description": "The window to restrict the search to. If omitted, returns all views."
+              }
+            }
+          }
+        ],
         "returns": {
           "type": "array",
           "description": "Array of global objects",
@@ -127,7 +155,7 @@
       {
         "name": "getBackgroundPage",
         "type": "function",
-        "description": "Returns the global JavaScript object for the background page running inside the current extension. Returns null if the extension has no backround page.",
+        "description": "Returns the JavaScript 'window' object for the background page running inside the current extension. Returns null if the extension has no backround page.",
         "parameters": [],
         "returns": {
           "type": "object", "isInstanceOf": "DOMWindow", "properties": {}, "additionalProperties": { "type": "any" }
@@ -137,26 +165,27 @@
         "name": "getToolstrips",
         "nodoc": true,
         "type": "function",
-        "description": "Returns an array of the global JavaScript objects for each of the toolstrip views running inside the current extension. If windowId is specified, returns only the toolstrips attached to the specified window.",
+        "description": "Deprecated. Please use getViews({type: 'TOOLSTRIP'}). Returns an array of the JavaScript 'window' objects for each of the toolstrip views running inside the current extension. If windowId is specified, returns only the 'window' objects of toolstrips attached to the specified window.",
         "parameters": [
           {"type": "integer", "name": "windowId", "optional": true}
         ],
         "returns": {
           "type": "array",
-          "description": "Array of global objects",
+          "description": "Array of global window objects",
           "items": { "type": "object", "isInstanceOf": "DOMWindow", "properties": {}, "additionalProperties": { "type": "any" } }
         }
       },
       {
         "name": "getExtensionTabs",
+        "nodoc": true,
         "type": "function",
-        "description": "Returns an array of the global JavaScript objects for each of the tab contents views running inside the current extension. If windowId is specified, returns only the tab contentses attached to the specified window.",
+        "description": "Deprecated. Please use getViews({type: 'TAB'}). Returns an array of the JavaScript 'window' objects for each of the tabs running inside the current extension. If windowId is specified, returns only the 'window' objects of tabs attached to the specified window.",
         "parameters": [
           {"type": "integer", "name": "windowId", "optional": true}
         ],
         "returns": {
           "type": "array",
-          "description": "Array of global objects",
+          "description": "Array of global window objects",
           "items": { "type": "object", "isInstanceOf": "DOMWindow", "properties": {}, "additionalProperties": { "type": "any" } }
         }
       }
@@ -203,6 +232,237 @@
     ]
   },
   {
+    "namespace": "experimental.accessibility",
+    "nodoc": true,
+    "types": [
+      {
+        "id": "AccessibilityObject",
+        "type": "object",
+        "description": "Parent class for accessibility information about an object.",
+        "properties": {
+          "type": {
+            "type": "string",
+            "description": "The type of this object, which determines the contents of 'details'.",
+            "enum": ["button", "checkbox", "combobox", "link", "menu", "menuitem", "radiobutton", "tab", "textbox", "window"]
+          },
+          "name": {
+            "type": "string",
+            "description": "The localized name of the object, like OK or Password. Do not rely on an exact string match because the text will be in the user's language and may change in the future."
+          },
+          "details": {
+            "description": "Other details like the state, depending on the type of object.",
+            "optional": true,
+            "choices": [
+              { "$ref": "CheckboxDetails" },
+              { "$ref": "ComboBoxDetails" },
+              { "$ref": "MenuDetails" },
+              { "$ref": "MenuItemDetails" },
+              { "$ref": "RadioButtonDetails" },
+              { "$ref": "TabDetails" },
+              { "$ref": "TextBoxDetails" }
+            ]
+          }
+        }
+      },
+      {
+        "id": "CheckboxDetails",
+        "type": "object",
+        "description": "Information about the state of a checkbox.",
+        "properties": {
+          "isChecked": {"type": "boolean", "description": "True if this checkbox is checked."}
+        }
+      },
+      {
+        "id": "ComboBoxDetails",
+        "type": "object",
+        "description": "Information about the state of a combo box.",
+        "properties": {
+          "value": {"type": "string", "description": "The value of the combo box."},
+          "itemCount": {"type": "integer", "description": "The number of items in the combo box's list."},
+          "itemIndex": {"type": "integer", "description": "The 0-based index of the current value, or -1 if the user entered a value not from the list."}
+        }
+      },
+      {
+        "id": "ListBoxDetails",
+        "type": "object",
+        "description": "Information about the state of a list box.",
+        "properties": {
+          "value": {"type": "string", "description": "The value of the list box."},
+          "itemCount": {"type": "integer", "description": "The number of items in the list."},
+          "itemIndex": {"type": "integer", "description": "The 0-based index of the selected value, or -1 if no items are selected."}
+        }
+      },
+      {
+        "id": "MenuDetails",
+        "type": "object",
+        "description": "Information about the state of a drop-down menu.",
+        "properties": {
+        }
+      },
+      {
+        "id": "MenuItemDetails",
+        "type": "object",
+        "description": "Information about a menu item.",
+        "properties": {
+          "hasSubmenu": {"type": "boolean", "description": "True if this item opens a submenu."},
+          "itemCount": {"type": "integer", "description": "The number of items in the menu."},
+          "itemIndex": {"type": "integer", "description": "The 0-based index of this menu item."}
+        }
+      },
+      {
+        "id": "RadioButtonDetails",
+        "type": "object",
+        "description": "Information about the state of a radio button.",
+        "properties": {
+          "isChecked": {"type": "boolean", "description": "True if this radio button is checked."},
+          "itemCount": {"type": "integer", "description": "The number of radio buttons in this group."},
+          "itemIndex": {"type": "integer", "description": "The 0-based index of this radio button in this group."}
+        }
+      },
+      {
+        "id": "TabDetails",
+        "type": "object",
+        "description": "Additional accessibility information about a tab.",
+        "properties": {
+          "itemCount": {"type": "integer", "description": "The number of tabs in this group."},
+          "itemIndex": {"type": "integer", "description": "The 0-based index of this tab in this group."}
+        }
+      },
+      {
+        "id": "TextBoxDetails",
+        "type": "object",
+        "description": "Information about the state of a text box.",
+        "properties": {
+          "value": {"type": "string", "description": "The value of the text box - the entered text."},
+          "isPassword": {"type": "boolean", "description": "True if this control contains password text whose contents should be obscured."},
+          "selectionStart": {"type": "integer", "description": "The index of the character where the selection starts, if this control contains editable text."},
+          "selectionEnd": {"type": "integer", "description": "The index of the character where the selection ends, if this control contains editable text."}
+        }
+      }
+    ],
+    "functions": [
+      {
+        "name": "setAccessibilityEnabled",
+        "type": "function",
+        "description": "Enable or disable the accessibility extension api. This must be set to true before event listeners or getFocusedControl will work.",
+        "parameters": [
+          {
+            "type": "boolean",
+            "name": "enabled",
+            "description": "True if accessibility support should be enabled."
+          }
+        ]
+      },
+      {
+        "name": "getFocusedControl",
+        "type": "function",
+        "description": "Get information about the currently focused control.",
+        "parameters": [
+          {
+            "type": "function",
+            "name": "callback",
+            "parameters": [
+              {
+                "name": "control",
+                "description": "Details of the currently focused control, or null if nothing is focused.",
+                "choices": [
+                  { "$ref": "AccessibilityObject" },
+                  { "type": "null" }
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    ],
+    "events": [
+      {
+        "name": "onWindowOpened",
+        "type": "function",
+        "description": "Fired when a window is opened.",
+        "parameters": [
+          {
+            "$ref": "AccessibilityObject",
+            "name": "window",
+            "description": "Information about the window that was opened."
+          }
+        ]
+      },
+      {
+        "name": "onWindowClosed",
+        "type": "function",
+        "description": "Fired when a window is closed.",
+        "parameters": [
+          {
+            "$ref": "AccessibilityObject",
+            "name": "window",
+            "description": "Information about the window that was closed."
+          }
+        ]
+      },
+      {
+        "name": "onControlFocused",
+        "type": "function",
+        "description": "Fired when a control is focused.",
+        "parameters": [
+          {
+            "$ref": "AccessibilityObject",
+            "name": "control",
+            "description": "Details of the control that was focused."
+          }
+        ]
+      },
+      {
+        "name": "onControlAction",
+        "type": "function",
+        "description": "Fired when a control's action is taken, like pressing a button or toggling a checkbox.",
+        "parameters": [
+          {
+            "$ref": "AccessibilityObject",
+            "name": "control",
+            "description": "Details of the control whose action was taken."
+          }
+        ]
+      },
+      {
+        "name": "onTextChanged",
+        "type": "function",
+        "description": "Fired when text changes in an editable text control.",
+        "parameters": [
+          {
+            "$ref": "AccessibilityObject",
+            "name": "control",
+            "description": "Details of the control where the text changed."
+          }
+        ]
+      },
+      {
+        "name": "onMenuOpened",
+        "type": "function",
+        "description": "Fired when a menu is opened.",
+        "parameters": [
+          {
+            "$ref": "AccessibilityObject",
+            "name": "menu",
+            "description": "Information about the menu that was opened."
+          }
+        ]
+      },
+      {
+        "name": "onMenuClosed",
+        "type": "function",
+        "description": "Fired when a menu is closed.",
+        "parameters": [
+          {
+            "$ref": "AccessibilityObject",
+            "name": "menu",
+            "description": "Information about the menu that was closed."
+          }
+        ]
+      }
+    ]
+  },
+  {
     "namespace": "experimental.extension",
     "nodoc": true,
     "types": [],
@@ -210,13 +470,14 @@
       {
         "name": "getPopupView",
         "type": "function",
-        "description": "Returns a reference to the window object of the popup view.",
+        "description": "Returns a reference to the JavaScript 'window' object of the popup view.  Returns undefined if no popup presently shown.",
         "parameters": [],
         "returns": {
           "type": "object",
           "isInstanceOf": "DOMWindow",
           "properties": {},
-          "additionalProperties": { "type": "any" }
+          "additionalProperties": { "type": "any" },
+          "optional": true
         }
       }
     ],
@@ -235,7 +496,13 @@
           "left": {"type": "integer", "description": "The offset of the window from the left edge of the screen in pixels."},
           "width": {"type": "integer", "description": "The width of the window in pixels."},
           "height": {"type": "integer", "description": "The height of the window in pixels."},
-          "tabs": {"type": "array", "items": { "$ref": "Tab" }, "optional": true, "description": "Array of <a href='tabs.html#type-Tab'>Tab</a> objects representing the current tabs in the window."}
+          "tabs": {"type": "array", "items": { "$ref": "Tab" }, "optional": true, "description": "Array of <a href='tabs.html#type-Tab'>Tab</a> objects representing the current tabs in the window."},
+          "incognito": {"type": "boolean", "description": "Whether the window is incognito."},
+          "type": {
+            "type": "string",
+            "description": "The type of browser window this is.",
+            "enum": ["normal", "popup", "app"]
+          }
         }
       }
     ],
@@ -317,7 +584,7 @@
       {
         "name": "create",
         "type": "function",
-        "description": "Creates (opens) a new browser with any optional sizing, position or default url provided.",
+        "description": "Creates (opens) a new browser with any optional sizing, position or default URL provided.",
         "parameters": [
           {
             "type": "object",
@@ -327,7 +594,14 @@
               "left": {"type": "integer", "optional": true, "description": "The number of pixels to position the new window from the left edge of the screen. If not specified, the new window is offset naturally from the last focusd window."},
               "top": {"type": "integer", "optional": true, "description": "The number of pixels to position the new window from the top edge of the screen. If not specified, the new window is offset naturally from the last focusd window."},
               "width": {"type": "integer", "minimum": 0, "optional": true, "description": "The width in pixels of the new window. If not specified defaults to a natural width."},
-              "height": {"type": "integer", "minimum": 0, "optional": true, "description": "The height in pixels of the new window. If not specified defaults to a natural height."}
+              "height": {"type": "integer", "minimum": 0, "optional": true, "description": "The height in pixels of the new window. If not specified defaults to a natural height."},
+              "incognito": {"type": "boolean", "optional": true, "description": "Whether the new window should be an incognito window."},
+              "type": {
+                "type": "string",
+                "optional": true,
+                "description": "Specifies what type of browser window to create.",
+                "enum": ["normal", "popup"]
+              }
             },
             "optional": true
           },
@@ -337,7 +611,8 @@
             "optional": true,
             "parameters": [
               {
-                "name": "window", "$ref": "Window", "description": "Contains details about the created window."
+                "name": "window", "$ref": "Window", "description": "Contains details about the created window.",
+                "optional": true
               }
             ]
           }
@@ -426,7 +701,8 @@
           "url": {"type": "string", "description": "The URL the tab is displaying."},
           "title": {"type": "string", "optional": true, "description": "The title of the tab. This may not be available if the tab is loading."},
           "favIconUrl": {"type": "string", "optional": true, "description": "The URL of the tab's favicon. This may not be available if the tab is loading."},
-          "status": {"type": "string", "optional": true, "description": "Either <em>loading</em> or <em>complete</em>."}
+          "status": {"type": "string", "optional": true, "description": "Either <em>loading</em> or <em>complete</em>."},
+          "incognito": {"type": "boolean", "description": "Whether the tab is in an incognito window."}
         }
       }
     ],
@@ -684,7 +960,7 @@
               {
                 "type": "string",
                 "name": "language",
-                "description": "An ISO language code such as <code>en</code> or <code>fr</code>. For a complete list of languages supported by this method, see the second column of <a href='http://src.chromium.org/viewvc/chrome/trunk/src/third_party/cld/bar/toolbar/cld/i18n/languages/internal/languages.cc'>kLanguageInfoTable</a>."
+                "description": "An ISO language code such as <code>en</code> or <code>fr</code>. For a complete list of languages supported by this method, see <a href='http://src.chromium.org/viewvc/chrome/trunk/src/third_party/cld/languages/internal/languages.cc'>kLanguageInfoTable</a>. The 2nd to 4th columns will be checked and the first non-NULL value will be returned except for Simplified Chinese for which zh-CN will be returned. For an unknown language, <code>und</code> will be returned."
               }
             ]
           }
@@ -703,8 +979,30 @@
             "description": "The target window. Defaults to the <a href='windows.html#current-window'>current window</a>."
           },
           {
+            "type": "object",
+            "name": "options",
+            "optional": true,
+            "description": "Set parameters of image capture, such as the format of the resulting image.  This parameter was added in version 5.0 .  Earlier versions of chrome will throw an exception unless you omit it.",
+            "properties": {
+              "format": {
+                "type": "string",
+                "optional": true,
+                "enum": ["jpeg", "png"],
+                "description": "The format of the resulting image.  Default is jpeg."
+              },
+              "quality": {
+                "type": "integer", 
+                "name": "quality",
+                "optional": true,
+                "minimum": 0,
+                "maximum": 100,
+                "description": "When format is 'jpeg', controls the quality of the resulting image.  This value is ignored for PNG images.  As quality is decreased, the resulting image will have more visual artifacts, and the number of bytes needed to store it will decrease."
+              }
+            }
+          },
+          {
             "type": "function", "name": "callback", "parameters": [
-              {"type": "string", "name": "dataUrl", "description": "A data URL of a JPEG encoding of the visible area of the captured tab. May be assigned to the 'src' property of an HTML Image element for display."}
+              {"type": "string", "name": "dataUrl", "description": "A data URL which encodes an image of the visible area of the captured tab. May be assigned to the 'src' property of an HTML Image element for display."}
             ]
           }
         ]
@@ -712,25 +1010,24 @@
       {
         "name": "executeScript",
         "type": "function",
-        "description": "",
+        "description": "Injects JavaScript code into a page. For details, see the <a href='content_scripts.html#pi'>programmatic injection</a> section of the content scripts doc.",
         "parameters": [
-          {"type": "integer", "name": "tabId", "optional": true, "description": "The id of tab which run the script, default to selected tab of current window."},
+          {"type": "integer", "name": "tabId", "optional": true, "description": "The ID of the tab in which to run the script; defaults to the selected tab of the current window."},
           {
             "type": "object",
             "name": "details",
-            "description": "Details of the script to run. Either the code or file property must be set, but both may not be set at the same time.",
+            "description": "Details of the script to run. Either the code or the file property must be set, but both may not be set at the same time.",
             "properties": {
               "code": {"type": "string", "optional": true, "description": "JavaScript code to execute."},
               "file": {"type": "string", "optional": true, "description": "JavaScript file to execute."},
-              "allFrames": {"type": "boolean", "optional": true, "description": "If allFrames is true, this function injects script into all frames of current page. By default, it's false and only inject script into top main frame."}
-            },
-            "optional": true
+              "allFrames": {"type": "boolean", "optional": true, "description": "If allFrames is true, this function injects script into all frames of current page. By default, it's false and script is injected only into the top main frame."}
+            }
           },
           {
             "type": "function",
             "name": "callback",
             "optional": true,
-            "description": "When all scripts are executed, this callback is called.",
+            "description": "Called after all the JavaScript has been executed.",
             "parameters": []
           }
         ]
@@ -738,25 +1035,24 @@
       {
         "name": "insertCSS",
         "type": "function",
-        "description": "",
+        "description": "Injects CSS into a page. For details, see the <a href='content_scripts.html#pi'>programmatic injection</a> section of the content scripts doc.",
         "parameters": [
-          {"type": "integer", "name": "tabId", "optional": true, "description": "The id of tab which run the script, default to selected tab of current window."},
+          {"type": "integer", "name": "tabId", "optional": true, "description": "The ID of the tab in which to insert the CSS; defaults to the selected tab of the current window."},
           {
             "type": "object",
             "name": "details",
-            "description": "Details of the css text to insert. Either the code or file property must be set, but both may not be set at the same time.",
+            "description": "Details of the CSS text to insert. Either the code or the file property must be set, but both may not be set at the same time.",
             "properties": {
               "code": {"type": "string", "optional": true, "description": "CSS code to be injected."},
               "file": {"type": "string", "optional": true, "description": "CSS file to be injected."},
-              "allFrames": {"type": "boolean", "optional": true, "description": "If allFrames is true, this function injects css text into all frames of current page. By default, it's false and only inject css text into top main frame."}
-            },
-            "optional": true
+              "allFrames": {"type": "boolean", "optional": true, "description": "If allFrames is true, this function injects CSS text into all frames of current page. By default, it's false and CSS is injected only into the top main frame."}
+            }
           },
           {
             "type": "function",
             "name": "callback",
             "optional": true,
-            "description": "When all css are inserted, this callback is called.",
+            "description": "Called when all the CSS has been inserted.",
             "parameters": []
           }
         ]
@@ -895,7 +1191,7 @@
       {
         "name": "enableForTab",
         "type": "function",
-        "description": "Enables a page action for a particular tab+url combination (makes its icon visible in the OmniBox when a certain url is active in a given tab). The page action will automatically be disabled (its icon hidden) if the user navigates to a new URL or closes the tab. The action will also automatically be enabled/disabled as the user switches tabs.",
+        "description": "Enables a page action for a particular tab+URL combination (makes its icon visible in the OmniBox when a certain URL is active in a given tab). The page action will automatically be disabled (its icon hidden) if the user navigates to a new URL or closes the tab. The action will also automatically be enabled/disabled as the user switches tabs.",
         "parameters": [
           {"type": "string", "name": "pageActionId", "description": "An extension can have multiple page actions specified in the manifest, each with a unique identifier. This string identifies which page action you want to enable (and must match a page action id declared in the manifest)."},
           {
@@ -915,7 +1211,7 @@
       {
         "name": "disableForTab",
         "type": "function",
-        "description": "Disables a page action for a particular tab+url combination (makes its OmniBox page action icon hidden when a certain url is active in a given tab). This can be useful to disable a page action before the user navigates away from a page containing an enabled page action.",
+        "description": "Disables a page action for a particular tab+URL combination (makes its OmniBox page action icon hidden when a certain URL is active in a given tab). This can be useful to disable a page action before the user navigates away from a page containing an enabled page action.",
         "parameters": [
           {"type": "string", "name": "pageActionId", "description": "An extension can have multiple page actions specified in the manifest, each with a unique identifier. This string identifies which page action you want to disable (and must match a page action id declared in the manifest)."},
           {
@@ -931,8 +1227,7 @@
         ]
       }
     ],
-    "events": [
-    ]
+    "events": []
   },
   {
     "namespace": "pageAction",
@@ -1001,13 +1296,31 @@
             }
           }
         ]
+      },
+      {
+        "name": "setPopup",
+        "type": "function",
+        "description": "Sets the html document to be opened as a popup when the user clicks on the page action's icon.",
+        "parameters": [
+          {
+            "name": "details",
+            "type": "object",
+            "properties": {
+              "tabId": {"type": "integer", "minimum": 0, "description": "The id of the tab for which you want to modify the page action."},
+              "popup": {
+                "type": "string",
+                "description": "The html file to show in a popup.  If set to the empty string (''), no popup is shown."
+              }
+            }
+          }
+        ]
       }
     ],
     "events": [
       {
         "name": "onClicked",
         "type": "function",
-        "description": "Fired when a page action icon is clicked.",
+        "description": "Fired when a page action icon is clicked.  This event will not fire if the page action has a popup.",
         "parameters": [
           {
             "name": "tab",
@@ -1075,6 +1388,29 @@
         ]
       },
       {
+        "name": "setPopup",
+        "type": "function",
+        "description": "Sets the html document to be opened as a popup when the user clicks on the browser action's icon.",
+        "parameters": [
+          {
+            "name": "details",
+            "type": "object",
+            "properties": {
+              "tabId": {
+                "type": "integer",
+                "optional": true,
+                "minimum": 0,
+                "description": "Limits the change to when a particular tab is selected. Automatically resets when the tab is closed."
+              },
+              "popup": {
+                "type": "string",
+                "description": "The html file to show in a popup.  If set to the empty string (''), no popup is shown."
+              }
+            }
+          }
+        ]
+      },
+      {
         "name": "setBadgeText",
         "type": "function",
         "description": "Sets the badge text for the browser action. The badge is displayed on top of the icon.",
@@ -1130,11 +1466,49 @@
       {
         "name": "onClicked",
         "type": "function",
-        "description": "Fired when a browser action icon is clicked.",
+        "description": "Fired when a browser action icon is clicked.  This event will not fire if the browser action has a popup.",
         "parameters": [
           {
             "name": "tab",
             "$ref": "Tab"
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "namespace": "experimental.infobars",
+    "types": [],
+    "functions": [
+      {
+        "name": "show",
+        "type": "function",
+        "description": "Shows an infobar in the specified tab. The infobar will be closed automatically when the tab navigates. Use window.close() to close the infobar before then.",
+        "parameters": [
+          { 
+            "name": "details",
+            "type": "object",
+            "properties": {
+              "tabId": {
+                "type": "integer",
+                "description": "The tab id for the tab to display the infobar in. If not specified the current tab will be used.",
+                "optional": true
+              },
+              "path": {
+                "type": "string",
+                "description": "The html file that contains the infobar."
+              }
+            }
+          },
+          {
+            "type": "function",
+            "name": "callback",
+            "optional": true,
+            "parameters": [
+              {
+                "name": "window", "$ref": "Window", "description": "Contains details about the window in which the infobar was created."
+              }
+            ]
           }
         ]
       }
@@ -1188,6 +1562,26 @@
         "description": "Retrieves the children of the specified BookmarkTreeNode id.",
         "parameters": [
           {"type": "string", "name": "id"},
+          {
+            "type": "function",
+            "name": "callback",
+            "parameters": [
+              {"name": "results", "type": "array", "items": { "$ref": "BookmarkTreeNode"} }
+            ]
+          }
+        ]
+      },
+      {
+        "name": "getRecent",
+        "type": "function",
+        "description": "Retrieves the recently added bookmarks.",
+        "parameters": [
+          {
+            "type": "integer",
+            "minimum": 1,
+            "name": "numberOfItems",
+            "description": "The maximum number of items to return."
+          },
           {
             "type": "function",
             "name": "callback",
@@ -1278,14 +1672,15 @@
       {
         "name": "update",
         "type": "function",
-        "description": "Updates the properties of a bookmark or folder. Specify only the properties that you want to change; unspecified properties will be left unchanged.  <b>Note:</b> Currently, only 'title' is supported.",
+        "description": "Updates the properties of a bookmark or folder. Specify only the properties that you want to change; unspecified properties will be left unchanged.  <b>Note:</b> Currently, only 'title' and 'url' are supported.",
         "parameters": [
           {"type": "string", "name": "id"},
           {
             "type": "object",
             "name": "changes",
             "properties": {
-              "title": {"type": "string", "optional": true}
+              "title": {"type": "string", "optional": true},
+              "url": {"type": "string", "optional": true}
             }
           },
           {
@@ -1313,6 +1708,24 @@
         "description": "Recursively removes a bookmark folder.",
         "parameters": [
           {"type": "string", "name": "id"},
+          {"type": "function", "name": "callback", "optional": true, "parameters": []}
+        ]
+      },
+      {
+        "name": "import",
+        "type": "function",
+        "description": "Imports bookmarks from a chrome html bookmark file",
+        "nodoc": "true",
+        "parameters": [
+          {"type": "function", "name": "callback", "optional": true, "parameters": []}
+        ]
+      },
+      {
+        "name": "export",
+        "type": "function",
+        "description": "Exports bookmarks to a chrome html bookmark file",
+        "nodoc": "true",
+        "parameters": [
           {"type": "function", "name": "callback", "optional": true, "parameters": []}
         ]
       }
@@ -1349,14 +1762,15 @@
       {
         "name": "onChanged",
         "type": "function",
-        "description": "Fired when a bookmark or folder changes.  <b>Note:</b> Currently, only title changes trigger this.",
+        "description": "Fired when a bookmark or folder changes.  <b>Note:</b> Currently, only title and url changes trigger this.",
         "parameters": [
           {"type": "string", "name": "id"},
           {
             "type": "object",
             "name": "changeInfo",
             "properties": {
-              "title": { "type": "string" }
+              "title": {"type": "string"},
+              "url": {"type": "string", "optional": true}
             }
           }
         ]
@@ -1393,12 +1807,23 @@
             }
           }
         ]
+      },
+      {
+        "name": "onImportBegan",
+        "type": "function",
+        "description": "Fired when a bookmark import session is begun.  Expensive observers should ignore handleCreated updates until onImportEnded is fired.  Observers should still handle other notifications immediately.",
+        "parameters": []
+      },
+      {
+        "name": "onImportEnded",
+        "type": "function",
+        "description": "Fired when a bookmark import session is ended.",
+        "parameters": []
       }
     ]
   },
   {
-    "namespace": "experimental.history",
-    "nodoc": true,
+    "namespace": "history",
     "types": [
       {
         "id": "HistoryItem",
@@ -1416,13 +1841,17 @@
       {
         "id": "VisitItem",
         "type": "object",
-        "description": "An object encapsulating one visit to a url.",
+        "description": "An object encapsulating one visit to a URL.",
         "properties": {
           "id": {"type": "string", "minimum": 0, "description": "The unique identifier for the item."},
           "visitId": {"type": "string", "description": "The unique identifier for this visit."},
           "visitTime": {"type": "number", "optional": true, "description": "When this visit occurred, represented in milliseconds since the epoch."},
           "referringVisitId": {"type": "string", "description": "The visit_id of the referrer."},
-          "transition": {"type": "integer", "minimum": 0, "maximum": 10, "description": "The transition type for this visit from its referrer.  The enumeration is defined in chrome.history.transistionType."}
+          "transition": {
+            "type": "string",
+            "enum": ["link", "typed", "auto_bookmark", "auto_subframe", "manual_subframe", "generated", "start_page", "form_submit", "reload", "keyword", "keyword_generated"],
+            "description": "The <a href='#transition_types'>transition type</a> for this visit from its referrer."
+          }
         }
       }
     ],
@@ -1436,7 +1865,7 @@
             "name": "query",
             "type": "object",
             "properties": {
-              "search": {"type": "string", "description": "A free-text query to the history service, leave empty to retrieve all pages."},
+              "text": {"type": "string", "description": "A free-text query to the history service.  Leave empty to retrieve all pages."},
               "startTime": {"type": "number", "optional": true, "description": "Limit results to those visited after this date, represented in milliseconds since the epoch."},
               "endTime": {"type": "number", "optional": true, "description": "Limit results to those visited before this date, represented in milliseconds since the epoch."},
               "maxResults": {"type": "integer", "optional": true, "minimum": 0, "description": "The maximum number of results to retrieve.  Defaults to 100."}
@@ -1454,12 +1883,13 @@
       {
         "name": "getVisits",
         "type": "function",
-        "description": "Retrieve information about visits to a url.",
+        "description": "Retrieve information about visits to a URL.",
         "parameters": [
           {
+            "name": "details",
             "type": "object",
             "properties": {
-              "url": {"type": "string", "description": "The url for which to retrieve visit information.  It must be in the format as returned from a call to history.search."}
+              "url": {"type": "string", "description": "The URL for which to retrieve visit information.  It must be in the format as returned from a call to history.search."}
             }
           },
           {
@@ -1474,12 +1904,13 @@
       {
         "name": "addUrl",
         "type": "function",
-        "description": "Adds a Url to the history at the current time with transition of LINK.",
+        "description": "Adds a URL to the history at the current time with a <a href='#transition_types'>transition type</a> of \"link\".",
         "parameters": [
           {
+            "name": "details",
             "type": "object",
             "properties": {
-              "url": {"type": "string", "description": "The url to add."}
+              "url": {"type": "string", "description": "The URL to add."}
             }
           }
         ]
@@ -1487,12 +1918,13 @@
       {
         "name": "deleteUrl",
         "type": "function",
-        "description": "Removes all occurrences of the given Url from the history.",
+        "description": "Removes all occurrences of the given URL from the history.",
         "parameters": [
           {
+            "name": "details",
             "type": "object",
             "properties": {
-              "url": {"type": "string", "description": "The url to remove."}
+              "url": {"type": "string", "description": "The URL to remove."}
             }
           }
         ]
@@ -1503,6 +1935,7 @@
         "description": "Removes all items within the specified date range from the history.  Pages will not be removed from the history unless all visits fall within the range.",
         "parameters": [
           {
+            "name": "range",
             "type": "object",
             "properties": {
               "startTime": { "type": "number", "description": "Items added to history after this date, represented in milliseconds since the epoch." },
@@ -1529,7 +1962,7 @@
       {
         "name": "onVisited",
         "type": "function",
-        "description": "Fired when a url is visited, providing the HistoryItem data for that url.",
+        "description": "Fired when a URL is visited, providing the HistoryItem data for that URL.",
         "parameters": [
           { "name": "result", "$ref": "HistoryItem"}
         ]
@@ -1537,7 +1970,7 @@
       {
         "name": "onVisitRemoved",
         "type": "function",
-        "description": "Fired when one or more urls are removed from the history service.  When all visits have been removed the url is purged from history.",
+        "description": "Fired when one or more URLs are removed from the history service.  When all visits have been removed the URL is purged from history.",
         "parameters": [
           {
             "name": "removed",
@@ -1546,6 +1979,49 @@
               "allHistory": { "type": "boolean", "description": "True if all history was removed.  If true, then urls will be empty." },
               "urls": { "type": "array", "items": { "type": "string" }, "optional": true}
             }
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "namespace": "experimental.idle",
+    "nodoc": "true",
+    "types": [],
+    "functions": [
+      {
+        "name": "queryState",
+        "type": "function",
+        "description": "Returns the current state of the browser.",
+        "parameters": [
+          {
+            "name": "threshold",
+            "type": "integer",
+            "minimum": 15,
+            "description": "Threshold used to determine when a machine is in the idle state."
+          },
+          {
+            "name": "callback",
+            "type": "function",
+            "parameters": [
+              {
+                "type": "string",
+                "enum": ["active", "idle", "locked"]
+              }
+            ]
+          }
+        ]
+      }
+    ],
+    "events": [
+      {
+        "name": "onStateChanged",
+        "type": "function",
+        "description": "Fired when the browser changes to an active state.  Currently only reports the transition from idle to active.",
+        "parameters": [
+          {
+            "type": "string",
+            "enum": ["active"]
           }
         ]
       }
@@ -1566,7 +2042,7 @@
             "name": "expandInfo",
             "properties": {
               "height": { "type": "integer", "minimum": 0, "description": "The vertical pixel height required of the toolstrip area." },
-              "url": { "type": "string", "optional": true, "description": "If present, the toolstrip mole will change it's content to the provided url. Otherwise, the current page will just be expanded in size." }
+              "url": { "type": "string", "optional": true, "description": "If present, the toolstrip mole will change it's content to the provided URL. Otherwise, the current page will just be expanded in size." }
             }
           },
           {"type": "function", "name": "callback", "optional": true, "parameters": []}
@@ -1582,7 +2058,7 @@
             "name": "collapseInfo",
             "optional": true,
             "properties": {
-              "url": { "type": "string", "optional": true, "description": "If present, the toolstrip mole will change it's content to the provided url. Otherwise, the current page will just be collapsed in size." }
+              "url": { "type": "string", "optional": true, "description": "If present, the toolstrip mole will change it's content to the provided URL. Otherwise, the current page will just be collapsed in size." }
             }
           },
           {"type": "function", "name": "callback", "optional": true, "parameters": []}
@@ -1668,12 +2144,24 @@
                 "additionalProperties": { "type": "any" },
                 "isInstanceOf": "HTMLElement",
                 "description": "A HTML DOM object to which the pop-up's position will be made relative."
+              },
+              "giveFocus": {
+                "type": "boolean",
+                "description": "Pass true to give the focus to the popup window.  The default behaviour is true.",
+                "optional": true
+              },
+              "borderStyle": {
+                "type": "string",
+                "description": "Pass 'bubble' to give the pop-up window a bubble-chrome border, including an arrow pointing at the relative-to point.  Pass 'rectangle' to give the pop-up a rectangular black border with drop-shadow.  Default behaviour is to pass 'bubble'.",
+                "optional": true,
+                "enum": ["bubble", "rectangle"]
               }
             }
           },
           {
             "type": "function",
             "name": "callback",
+            "optional": true,
             "parameters": []
           }
         ]
@@ -1681,13 +2169,14 @@
       {
         "name": "getParentWindow",
         "type": "function",
-        "description": "Returns a reference to the window object of the extension view that launched the popup.",
+        "description": "Returns a reference to the JavaScript 'window' object of the extension view that launched the popup.  Returns undefined if called outside of a popup window.",
         "parameters": [],
         "returns": {
           "type": "object",
           "isInstanceOf": "DOMWindow",
           "properties": {},
-          "additionalProperties": { "type": "any" }
+          "additionalProperties": { "type": "any" },
+          "optional": true
         }
       }
     ],
@@ -1701,13 +2190,229 @@
     ]
   },
   {
+    "namespace": "experimental.bookmarkManager",
+    "nodoc": true,
+    "types": [
+      {
+        "id": "BookmarkDragDataElement",
+        "nodoc": true,
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "optional": true,
+            "description": "The ID of the bookmark. This is only provided if the data is from the same profile."
+          },
+          "parentId": {
+            "type": "string",
+            "optional": true,
+            "description": "The ID of the parent of the bookmark. This is only provided if the data is from the same profile."
+          },
+          "title": {"type": "string"},
+          "url": {
+            "type": "string",
+            "optional": true
+          },
+          "children": {
+            "type": "array",
+            "items": {"$ref": "BookmarkDragDataElement"}
+          }
+        }
+      },
+      {
+        "id": "BookmarkDragData",
+        "nodoc": true,
+        "type": "object",
+        "description": "Information about the drag and drop data for use with drag and drop events.",
+        "properties": {
+          "sameProfile": {"type": "boolean"},
+          "elements": {
+            "type": "array",
+            "items": {"$ref": "BookmarkDragDataElement"}
+          }
+        }
+      }
+    ],
+    "functions": [
+      {
+        "name": "copy",
+        "type": "function",
+        "description": "Copies the given bookmarks into the clipboard",
+        "nodoc": "true",
+        "parameters": [
+          {
+            "name": "idList",
+            "description": "An array of string-valued ids",
+            "type": "array",
+            "items": {"type": "string"},
+            "minItems": 1
+          },
+          {"type": "function", "name": "callback", "optional": true, "parameters": []}
+        ]
+      },
+      {
+        "name": "cut",
+        "type": "function",
+        "description": "Cuts the given bookmarks into the clipboard",
+        "nodoc": "true",
+        "parameters": [
+          {
+            "name": "idList",
+            "description": "An array of string-valued ids",
+            "type": "array",
+            "items": {"type": "string"},
+            "minItems": 1
+          },
+          {"type": "function", "name": "callback", "optional": true, "parameters": []}
+        ]
+      },
+      {
+        "name": "paste",
+        "type": "function",
+        "description": "Pastes bookmarks from the clipboard into the parent folder",
+        "nodoc": "true",
+        "parameters": [
+          {"type": "string", "name": "parentId"},
+          {"type": "function", "name": "callback", "optional": true, "parameters": []}
+        ]
+      },
+      {
+        "name": "canPaste",
+        "type": "function",
+        "description": "Whether there are any bookmarks that can be pasted",
+        "nodoc": "true",
+        "parameters": [
+          {"type": "string", "name": "parentId", "description": "The ID of the folder to paste into"},
+          {"type": "function", "name": "callback", "parameters": [
+            {"type": "boolean"}
+          ]}
+        ]
+      },
+      {
+        "name": "sortChildren",
+        "type": "function",
+        "description": "Sorts the children of a given folder",
+        "nodoc": "true",
+        "parameters": [
+          {"type": "string", "name": "parentId", "description": "The ID of the folder to sort the children of"}
+        ]
+      },
+      {
+        "name": "getStrings",
+        "type": "function",
+        "description": "Gets the i18n strings for the bookmark manager",
+        "nodoc": "true",
+        "parameters": [
+          {
+            "type": "function",
+             "name": "callback",
+             "parameters": [
+              {
+                "type": "object",
+                "properties": {},
+                "additionalProperties": {"type": "string"}
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "name": "startDrag",
+        "type": "function",
+        "description": "Begins dragging a set of bookmarks",
+        "nodoc": "true",
+        "parameters": [
+          {
+            "name": "idList",
+            "description": "An array of string-valued ids",
+            "type": "array",
+            "items": {"type": "string"},
+            "minItems": 1
+          }
+        ]
+      },
+      {
+        "name": "drop",
+        "type": "function",
+        "description": "Performs the drop action of the drag and drop session",
+        "nodoc": "true",
+        "parameters": [
+          {
+            "name": "parentId",
+            "description": "The ID of the folder that the drop was made",
+            "type": "string"
+          },
+          {
+            "name": "index",
+            "description": "The index of the position to drop at. If left out the dropped items will be placed at the end of the existing children",
+            "type": "integer",
+            "minimum": 0,
+            "optional": true
+          }
+        ]
+      },
+      {
+        "name": "getSubtree",
+        "type": "function",
+        "description": "Retrieves a bookmark hierarchy from the given node.  If the node id is empty, it is the full tree.  If foldersOnly is true, it will only return folders, not actual bookmarks.",
+        "nodoc": "true",
+        "parameters": [
+          {
+            "name": "id",
+            "type": "string",
+            "description": "ID of the root of the tree to pull.  If empty, the entire tree will be returned."
+          },
+          {
+            "name": "foldersOnly",
+            "type": "boolean",
+            "description": "Pass true to only return folders."
+          },
+          {
+            "name": "callback",
+            "type": "function",
+            "parameters": [
+              {"name": "results", "type": "array", "items": { "$ref": "BookmarkTreeNode"} }
+            ]
+          }
+        ]
+      }
+    ],
+    "events": [
+      {
+        "name": "onDragEnter",
+        "type": "function",
+        "description": "Fired when dragging bookmarks over the document",
+        "parameters": [
+          {"$ref": "BookmarkDragData"}
+        ]
+      },
+      {
+        "name": "onDragLeave",
+        "type": "function",
+        "description": "Fired when the drag and drop leaves the document",
+        "parameters": [
+          {"$ref": "BookmarkDragData"}
+        ]
+      },
+      {
+        "name": "onDrop",
+        "type": "function",
+        "description": "Fired when the user drops bookmarks on the document",
+        "parameters": [
+          {"$ref": "BookmarkDragData"}
+        ]
+      }
+    ]
+  },
+  {
     "namespace": "devtools",
+    "nodoc": "true",
     "types": [],
     "functions": [
       {
         "name": "getTabEvents",
         "type": "function",
-        "description": "EXPERIMENTAL support for timeline API",
+        "description": "Experimental support for timeline API",
         "nodoc": "true",
         "parameters": [
           {
@@ -1725,7 +2430,245 @@
     ]
   },
   {
+    "namespace": "experimental.processes",
+    "types": [
+      {
+        "id": "Process",
+        "type": "object",
+        "description": "An object containing information about one of the browser's processes.",
+        "properties": {
+          "id": {
+            "type": "integer",
+            "description": "The internal ID of the process."
+          }
+        }
+      }
+    ],
+    "functions": [
+      {
+        "name": "getProcessForTab",
+        "type": "function",
+        "description": "Returns details about the current renderer process of the specified tab.",
+        "parameters": [
+          {
+            "name": "tabId",
+            "type": "integer",
+            "minimum": 0
+          },
+          {
+            "type": "function",
+            "name": "callback",
+            "parameters": [
+              {
+                "name": "process",
+                "$ref": "Process",
+                "description": "Details about the tab's process."
+              }
+            ]
+          }
+        ]
+      }
+    ],
+    "events": []
+  },
+  {
+    "namespace": "experimental.contextMenu",
+    "types": [],
+    "functions": [
+      {
+        "name": "create",
+        "type": "function",
+        "description": "An API to add items to context menus.",        
+        "parameters": [
+          {
+            "type": "object",
+            "name": "createProperties", 
+            "properties": {
+              "type": {
+                "type": "string",
+                "optional": true,
+                "description": "The type of menu item - one of 'NORMAL', 'CHECKBOX', 'RADIO', or 'SEPARATOR'. Defaults to 'NORMAL' if not specified."
+              },
+              "title": {
+                "type": "string",
+                "optional": "true",
+                "description": "This must be specified unless type is 'SEPARATOR'."
+              },
+              "checked": {
+                "type": "boolean",
+                "optional": true,
+                "description": " For items of type CHECKBOX or RADIO, should this be selected (RADIO) or checked (CHECKBOX)? Only one RADIO item can be selected at a time in a given group of RADIO items, with the last one to have checked == true winning."
+              },
+              "contexts": {
+                "type": "array",
+                "items": {"type": "string"},
+                "minItems": 1,
+                "optional": true,
+                "description": "List of contexts this menu item will appear in. Legal values are: 'ALL', 'PAGE', 'SELECTION', 'LINK', 'EDITABLE', 'IMAGE', 'VIDEO', and 'AUDIO'. Defaults to ['PAGE']."
+              },
+              "enabledContexts": {
+                "type": "array",
+                "optional": true,
+                "items": {"type": "string"},
+                "minItems": 1,
+                "description": "By default the values you pass for the contexts parameter make an item both shown and selectable in those contexts. If you want to limit the contexts where an item is selectable (i.e. not greyed out), you put the ones you want selectable in enabledContexts and any not listed will be shown but disabled. So, for example, if you wanted an item to appear for links and images but only be enabled for links, you would set 'contexts' : ['LINK', 'IMAGE'] and 'enabledContexts' : ['LINK']."
+              },
+              "onclick": {
+                "type": "function",
+                "optional": true,
+                "description": "Function to be called back when your menu item or one of its children is clicked."
+              }, 
+              "parentId": {
+                "type": "integer",
+                "optional": true,
+                "description": "The id of a parent menu item - this makes the item a child of a previously added item."
+              }
+            }
+          },
+          {
+            "type": "function",
+            "name": "callback",
+            "optional": true,
+            "parameters": [
+              {
+                "name": "menuItemId",
+                "type": "integer",
+                "description": "The id of the newly created context menu item."
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "name": "remove",
+        "type": "function",
+        "description": "Remove a context menu item.",
+        "parameters": [
+          {
+            "type": "integer",
+            "name": "menuItemId",
+            "description": "The id of the context menu item to remove."
+          },
+          {
+            "type": "function",
+            "name": "callback",
+            "optional": true,
+            "parameters": [],
+            "description": "Called when the context menu has been removed."
+          }
+        ]
+      }
+    ]  
+  },
+  {
+    "namespace": "experimental.metrics",
+    "nodoc": true,
+    "types": [
+      {
+        "id": "MetricType",
+        "type":  "object",
+        "description": "Describes the type of metric that is to be collected.",
+        "properties": {
+          "metricName": {"type": "string", "description": "A unique name within the extension for the metric."},
+          "type": {
+            "type": "string",
+            "enum": ["histogram-log", "histogram-linear"],
+            "description": "The type of metric, such as 'histogram-log' or 'histogram-linear'."
+          },
+          "min": {"type": "integer", "description": "The minimum sample value to be recoded.  Must be greater than zero."},
+          "max": {"type": "integer", "description": "The maximum sample value to be recoded."},
+          "buckets": {"type": "integer", "description": "The number of buckets to use when separating the recorded values."}
+        }
+      }
+    ],
+    "functions": [
+      {
+        "name": "recordUserAction",
+        "type": "function",
+        "description": "Records an action performed by the user.",
+        "parameters": [
+          {"name": "name", "type": "string"}
+        ]
+      },
+      {
+        "name": "recordPercentage",
+        "type": "function",
+        "description": "Record a percentage value from 1 to 100.",
+        "parameters": [
+          {"name": "metricName", "type": "string"},
+          {"name": "value", "type": "integer"}
+        ]
+      },
+      {
+        "name": "recordCount",
+        "type": "function",
+        "description": "Record a value than can range from 1 to 1,000,000.",
+        "parameters": [
+          {"name": "metricName", "type": "string"},
+          {"name": "value", "type": "integer"}
+        ]
+      },
+      {
+        "name": "recordSmallCount",
+        "type": "function",
+        "description": "Record a value than can range from 1 to 100.",
+        "parameters": [
+          {"name": "metricName", "type": "string"},
+          {"name": "value", "type": "integer"}
+        ]
+      },
+      {
+        "name": "recordMediumCount",
+        "type": "function",
+        "description": "Record a value than can range from 1 to 10,000.",
+        "parameters": [
+          {"name": "metricName", "type": "string"},
+          {"name": "value", "type": "integer"}
+        ]
+      },
+      {
+        "name": "recordTime",
+        "type": "function",
+        "description": "Record an elapsed time of no more than 10 seconds.  The sample value is specified in milliseconds.",
+        "parameters": [
+          {"name": "metricName", "type": "string"},
+          {"name": "value", "type": "integer"}
+        ]
+      },
+      {
+        "name": "recordMediumTime",
+        "type": "function",
+        "description": "Record an elapsed time of no more than 3 minutes.  The sample value is specified in milliseconds.",
+        "parameters": [
+          {"name": "metricName", "type": "string"},
+          {"name": "value", "type": "integer"}
+        ]
+      },
+      {
+        "name": "recordLongTime",
+        "type": "function",
+        "description": "Record an elapsed time of no more than 1 hour.  The sample value is specified in milliseconds.",
+        "parameters": [
+          {"name": "metricName", "type": "string"},
+          {"name": "value", "type": "integer"}
+        ]
+      },
+      {
+        "name": "recordValue",
+        "type": "function",
+        "unprivileged": true,
+        "description": "Adds a value to the given metric.",
+        "parameters": [
+          {"name": "metric", "$ref": "MetricType"},
+          {"name": "value", "type": "integer"}
+        ]
+      }
+    ],
+    "events": []
+  },
+  {
     "namespace": "test",
+    "nodoc": true,
     "types": [],
     "functions": [
       {
@@ -1756,6 +2699,48 @@
         "description": "Logs a message during internal unit testing.",
         "parameters": [
           {"type": "string", "name": "message"}
+        ]
+      },
+      {
+        "name": "createIncognitoTab",
+        "type": "function",
+        "description": "Creates an incognito tab during internal testing. Succeeds even if the extension is not enabled in incognito mode.",
+        "parameters": [
+          {"type": "string", "name": "url"}
+        ]
+      }
+    ],
+    "events": []
+  },
+  {
+    "namespace": "experimental.clipboard",
+    "types": [],
+    "functions": [
+      {
+        "name": "executeCopy",
+        "type": "function",
+        "description": "Triggers a copy operation in the specified tab.",
+        "parameters": [
+          {"type": "integer", "name": "tabId", "minimum": 0},
+          {"type": "function", "name": "callback", "optional": true, "parameters": []}
+        ]
+      },
+      {
+        "name": "executeCut",
+        "type": "function",
+        "description": "Triggers a cut operation in the specified tab.",
+        "parameters": [
+          {"type": "integer", "name": "tabId", "minimum": 0},
+          {"type": "function", "name": "callback", "optional": true, "parameters": []}
+        ]
+      },
+      {
+        "name": "executePaste",
+        "type": "function",
+        "description": "Triggers a paste operation in the specified tab.",
+        "parameters": [
+          {"type": "integer", "name": "tabId", "minimum": 0},
+          {"type": "function", "name": "callback", "optional": true, "parameters": []}
         ]
       }
     ],

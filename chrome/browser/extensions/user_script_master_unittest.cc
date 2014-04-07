@@ -4,7 +4,7 @@
 
 #include "chrome/browser/extensions/user_script_master.h"
 
-#include <fstream>
+#include <string>
 
 #include "base/file_path.h"
 #include "base/file_util.h"
@@ -91,30 +91,6 @@ TEST_F(UserScriptMasterTest, NoScripts) {
   ASSERT_TRUE(shared_memory_ != NULL);
 }
 
-// TODO(shess): Disabled on Linux because of missing DirectoryWatcher.
-#if defined(OS_WIN) || defined(OS_MACOSX)
-// Test that we get notified about new scripts after they're added.
-TEST_F(UserScriptMasterTest, NewScripts) {
-  TestingProfile profile;
-  scoped_refptr<UserScriptMaster> master(new UserScriptMaster(script_dir_,
-                                                              &profile));
-
-  FilePath path = script_dir_.AppendASCII("script.user.js");
-
-  const char content[] = "some content";
-  size_t written = file_util::WriteFile(path, content, sizeof(content));
-  ASSERT_EQ(written, sizeof(content));
-
-  // Post a delayed task so that we fail rather than hanging if things
-  // don't work.
-  message_loop_.PostDelayedTask(FROM_HERE, new MessageLoop::QuitTask, 5000);
-
-  message_loop_.Run();
-
-  ASSERT_TRUE(shared_memory_ != NULL);
-}
-#endif
-
 // Test that we get notified about scripts if they're already in the test dir.
 TEST_F(UserScriptMasterTest, ExistingScripts) {
   TestingProfile profile;
@@ -155,7 +131,7 @@ TEST_F(UserScriptMasterTest, Parse1) {
   UserScript script;
   EXPECT_TRUE(UserScriptMaster::ScriptReloader::ParseMetadataHeader(
       text, &script));
-  EXPECT_EQ(3U, script.globs().size());
+  ASSERT_EQ(3U, script.globs().size());
   EXPECT_EQ("*mail.google.com*", script.globs()[0]);
   EXPECT_EQ("*mail.yahoo.com*", script.globs()[1]);
   EXPECT_EQ("*mail.msn.com*", script.globs()[2]);
@@ -167,7 +143,7 @@ TEST_F(UserScriptMasterTest, Parse2) {
   UserScript script;
   EXPECT_TRUE(UserScriptMaster::ScriptReloader::ParseMetadataHeader(
       text, &script));
-  EXPECT_EQ(1U, script.globs().size());
+  ASSERT_EQ(1U, script.globs().size());
   EXPECT_EQ("*", script.globs()[0]);
 }
 
@@ -179,7 +155,7 @@ TEST_F(UserScriptMasterTest, Parse3) {
 
   UserScript script;
   UserScriptMaster::ScriptReloader::ParseMetadataHeader(text, &script);
-  EXPECT_EQ(1U, script.globs().size());
+  ASSERT_EQ(1U, script.globs().size());
   EXPECT_EQ("*foo*", script.globs()[0]);
 }
 
@@ -194,7 +170,7 @@ TEST_F(UserScriptMasterTest, Parse4) {
   EXPECT_TRUE(UserScriptMaster::ScriptReloader::ParseMetadataHeader(
       text, &script));
   EXPECT_EQ(0U, script.globs().size());
-  EXPECT_EQ(2U, script.url_patterns().size());
+  ASSERT_EQ(2U, script.url_patterns().size());
   EXPECT_EQ("http://*.mail.google.com/*",
             script.url_patterns()[0].GetAsString());
   EXPECT_EQ("http://mail.yahoo.com/*",
@@ -238,5 +214,24 @@ TEST_F(UserScriptMasterTest, Parse7) {
       text, &script));
   ASSERT_EQ(1U, script.url_patterns().size());
   EXPECT_EQ("http://*.mail.google.com/*",
+            script.url_patterns()[0].GetAsString());
+}
+
+TEST_F(UserScriptMasterTest, Parse8) {
+  // Greasemonkey allows there to be any leading text before the comment marker.
+  const std::string text(
+    "// ==UserScript==\n"
+    "adsasdfasf// @name hello\n"
+    "  // @description\twiggity woo\n"
+    "\t// @match  \t http://mail.yahoo.com/*\n"
+    "// ==/UserScript==\n");
+
+  UserScript script;
+  EXPECT_TRUE(UserScriptMaster::ScriptReloader::ParseMetadataHeader(
+      text, &script));
+  ASSERT_EQ("hello", script.name());
+  ASSERT_EQ("wiggity woo", script.description());
+  ASSERT_EQ(1U, script.url_patterns().size());
+  EXPECT_EQ("http://mail.yahoo.com/*",
             script.url_patterns()[0].GetAsString());
 }

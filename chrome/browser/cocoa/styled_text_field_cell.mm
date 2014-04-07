@@ -4,10 +4,12 @@
 
 #import "chrome/browser/cocoa/styled_text_field_cell.h"
 
-#include "app/gfx/font.h"
 #include "app/resource_bundle.h"
 #include "base/logging.h"
-#import "third_party/GTM/AppKit/GTMTheme.h"
+#include "chrome/browser/browser_theme_provider.h"
+#import "chrome/browser/cocoa/themed_window.h"
+#include "gfx/font.h"
+#include "grit/theme_resources.h"
 
 @implementation StyledTextFieldCell
 
@@ -47,30 +49,54 @@
 // incorrect.  I know that this affects -drawingRectForBounds:.
 - (void)drawWithFrame:(NSRect)cellFrame inView:(NSView*)controlView {
   DCHECK([controlView isFlipped]);
-  [[NSColor colorWithCalibratedWhite:1.0 alpha:0.25] set];
-  NSFrameRectWithWidthUsingOperation(cellFrame,  1, NSCompositeSourceOver);
 
   // TODO(shess): This inset is also reflected in ToolbarController
   // -autocompletePopupPosition.
   NSRect frame = NSInsetRect(cellFrame, 0, 1);
-  [[self backgroundColor] setFill];
+  NSRect midFrame = NSInsetRect(frame, 0.5, 0.5);
   NSRect innerFrame = NSInsetRect(frame, 1, 1);
+
+  // Paint button background image if there is one (otherwise the border won't
+  // look right).
+  ThemeProvider* themeProvider = [[controlView window] themeProvider];
+  NSColor* backgroundImageColor = nil;
+  if (themeProvider) {
+    backgroundImageColor =
+        themeProvider->GetNSImageColorNamed(IDR_THEME_BUTTON_BACKGROUND, false);
+  }
+  if (backgroundImageColor) {
+    [backgroundImageColor set];
+    // Set the phase to match window.
+    NSRect trueRect = [controlView convertRect:cellFrame toView:nil];
+    [[NSGraphicsContext currentContext]
+        setPatternPhase:NSMakePoint(NSMinX(trueRect), NSMaxY(trueRect))];
+    NSRectFillUsingOperation(midFrame, NSCompositeCopy);
+  }
+
+  // Draw the outer stroke (over the background).
+  BOOL active = [[controlView window] isMainWindow];
+  if (themeProvider) {
+    NSColor* strokeColor = themeProvider->GetNSColor(
+        active ? BrowserThemeProvider::COLOR_TOOLBAR_BUTTON_STROKE :
+                 BrowserThemeProvider::COLOR_TOOLBAR_BUTTON_STROKE_INACTIVE,
+        true);
+    [strokeColor set];
+  }
+  NSFrameRectWithWidthUsingOperation(frame, 1, NSCompositeSourceOver);
+
+  // Draw the background for the interior.
+  [[self backgroundColor] setFill];
   NSRectFill(innerFrame);
 
-  NSRect shadowFrame, restFrame;
-  NSDivideRect(innerFrame, &shadowFrame, &restFrame, 1, NSMinYEdge);
-
-  BOOL isMainWindow = [[controlView window] isMainWindow];
-  GTMTheme *theme = [controlView gtm_theme];
-  NSColor* stroke = [theme strokeColorForStyle:GTMThemeStyleToolBarButton
-                                         state:isMainWindow];
-  [stroke set];
-  NSFrameRectWithWidthUsingOperation(frame, 1.0, NSCompositeSourceOver);
-
   // Draw the shadow.
+  NSRect topShadowFrame, leftShadowFrame, restFrame;
+  NSDivideRect(innerFrame, &topShadowFrame, &restFrame, 1, NSMinYEdge);
+  NSDivideRect(restFrame, &leftShadowFrame, &restFrame, 1, NSMinXEdge);
   [[NSColor colorWithCalibratedWhite:0.0 alpha:0.05] setFill];
-  NSRectFillUsingOperation(shadowFrame, NSCompositeSourceOver);
+  NSRectFillUsingOperation(topShadowFrame, NSCompositeSourceOver);
+  NSRectFillUsingOperation(leftShadowFrame, NSCompositeSourceOver);
 
+  // Draw the focus ring if needed.
   if ([self showsFirstResponder]) {
     [[[NSColor keyboardFocusIndicatorColor] colorWithAlphaComponent:0.5] set];
     NSFrameRectWithWidthUsingOperation(NSInsetRect(frame, 0, 0), 2,

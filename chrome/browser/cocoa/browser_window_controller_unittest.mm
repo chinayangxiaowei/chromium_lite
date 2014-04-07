@@ -1,10 +1,9 @@
-// Copyright (c) 2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "app/l10n_util_mac.h"
 #include "base/scoped_nsobject.h"
-#include "base/scoped_nsautorelease_pool.h"
 #include "base/scoped_ptr.h"
 #include "chrome/app/chrome_dll_resource.h"
 #include "chrome/browser/browser_process.h"
@@ -13,9 +12,9 @@
 #include "chrome/browser/cocoa/browser_window_controller.h"
 #include "chrome/browser/cocoa/cocoa_test_helper.h"
 #include "chrome/browser/cocoa/find_bar_bridge.h"
-#include "chrome/browser/sync/sync_status_ui_helper.h"
+#include "chrome/browser/pref_service.h"
+#include "chrome/browser/sync/sync_ui_util.h"
 #include "chrome/common/pref_names.h"
-#include "chrome/common/pref_service.h"
 #include "chrome/test/testing_browser_process.h"
 #include "chrome/test/testing_profile.h"
 #include "grit/generated_resources.h"
@@ -32,7 +31,6 @@
 - (NSView*)toolbarView;
 - (NSView*)bookmarkView;
 - (BOOL)bookmarkBarVisible;
-- (NSView*)extensionShelfView;
 @end
 
 @implementation BrowserWindowController (ExposedForTesting)
@@ -54,10 +52,6 @@
 
 - (BOOL)bookmarkBarVisible {
   return [bookmarkBarController_ isVisible];
-}
-
-- (NSView*)extensionShelfView {
-  return [extensionShelfController_ view];
 }
 @end
 
@@ -96,9 +90,9 @@ TEST_F(BrowserWindowControllerTest, TestSaveWindowPosition) {
 }
 
 TEST_F(BrowserWindowControllerTest, TestFullScreenWindow) {
-  // Confirm the fullscreen command doesn't return nil.
+  // Confirm that |-createFullscreenWindow| doesn't return nil.
   // See BrowserWindowFullScreenControllerTest for more fullscreen tests.
-  EXPECT_TRUE([controller_ fullscreenWindow]);
+  EXPECT_TRUE([controller_ createFullscreenWindow]);
 }
 
 TEST_F(BrowserWindowControllerTest, TestNormal) {
@@ -109,6 +103,8 @@ TEST_F(BrowserWindowControllerTest, TestNormal) {
 
   // Make sure a normal BrowserWindowController is, uh, normal.
   EXPECT_TRUE([controller_ isNormalWindow]);
+  EXPECT_TRUE([controller_ hasTabStrip]);
+  EXPECT_FALSE([controller_ hasTitleBar]);
   EXPECT_TRUE([controller_ isBookmarkBarVisible]);
 
   // And make sure a controller for a pop-up window is not normal.
@@ -119,14 +115,11 @@ TEST_F(BrowserWindowControllerTest, TestNormal) {
       static_cast<BrowserWindowController*>([cocoaWindow windowController]);
   ASSERT_TRUE([controller isKindOfClass:[BrowserWindowController class]]);
   EXPECT_FALSE([controller isNormalWindow]);
+  EXPECT_FALSE([controller hasTabStrip]);
+  EXPECT_TRUE([controller hasTitleBar]);
   EXPECT_FALSE([controller isBookmarkBarVisible]);
   [controller close];
 }
-
-@interface GTMTheme (BrowserThemeProviderInitialization)
-+ (GTMTheme *)themeWithBrowserThemeProvider:(BrowserThemeProvider *)provider
-                             isOffTheRecord:(BOOL)isOffTheRecord;
-@end
 
 TEST_F(BrowserWindowControllerTest, TestTheme) {
   [controller_ userChangedTheme];
@@ -166,18 +159,17 @@ TEST_F(BrowserWindowControllerTest, TestIncognitoWidthSpace) {
 #endif
 
 namespace {
-// Verifies that the toolbar, infobar, tab content area, download shelf, and
-// extension shelf completely fill their window's contentView.
+// Verifies that the toolbar, infobar, tab content area, and download shelf
+// completely fill the area under the tabstrip.
 void CheckViewPositions(BrowserWindowController* controller) {
   NSRect contentView = [[[controller window] contentView] bounds];
+  NSRect tabstrip = [[controller tabStripView] frame];
   NSRect toolbar = [[controller toolbarView] frame];
   NSRect infobar = [[controller infoBarContainerView] frame];
   NSRect contentArea = [[controller tabContentArea] frame];
   NSRect download = [[[controller downloadShelf] view] frame];
-  NSRect extension = [[controller extensionShelfView] frame];
 
-  EXPECT_EQ(NSMinY(contentView), NSMinY(extension));
-  EXPECT_EQ(NSMaxY(extension), NSMinY(download));
+  EXPECT_EQ(NSMinY(contentView), NSMinY(download));
   EXPECT_EQ(NSMaxY(download), NSMinY(contentArea));
   EXPECT_EQ(NSMaxY(contentArea), NSMinY(infobar));
 
@@ -186,11 +178,15 @@ void CheckViewPositions(BrowserWindowController* controller) {
     NSRect bookmark = [[controller bookmarkView] frame];
     EXPECT_EQ(NSMaxY(infobar), NSMinY(bookmark));
     EXPECT_EQ(NSMaxY(bookmark), NSMinY(toolbar));
+    EXPECT_FALSE([[controller bookmarkView] isHidden]);
   } else {
     EXPECT_EQ(NSMaxY(infobar), NSMinY(toolbar));
+    EXPECT_TRUE([[controller bookmarkView] isHidden]);
   }
 
-  EXPECT_EQ(NSMaxY(contentView), NSMaxY(toolbar));
+  // Toolbar should start immediately under the tabstrip, but the tabstrip is
+  // not necessarily fixed with respect to the content view.
+  EXPECT_EQ(NSMinY(tabstrip), NSMaxY(toolbar));
 }
 }  // end namespace
 
@@ -199,34 +195,53 @@ TEST_F(BrowserWindowControllerTest, TestAdjustWindowHeight) {
   NSRect workarea = [[window screen] visibleFrame];
 
   // Place the window well above the bottom of the screen and try to adjust its
-  // height.
+  // height. It should change appropriately (and only downwards). Then get it to
+  // shrink by the same amount; it should return to its original state.
   NSRect initialFrame = NSMakeRect(workarea.origin.x, workarea.origin.y + 100,
                                    200, 200);
   [window setFrame:initialFrame display:YES];
+  [controller_ resetWindowGrowthState];
   [controller_ adjustWindowHeightBy:40];
   NSRect finalFrame = [window frame];
   EXPECT_FALSE(NSEqualRects(finalFrame, initialFrame));
+  EXPECT_FLOAT_EQ(NSMaxY(finalFrame), NSMaxY(initialFrame));
   EXPECT_FLOAT_EQ(NSHeight(finalFrame), NSHeight(initialFrame) + 40);
+  [controller_ adjustWindowHeightBy:-40];
+  finalFrame = [window frame];
+  EXPECT_FLOAT_EQ(NSMaxY(finalFrame), NSMaxY(initialFrame));
+  EXPECT_FLOAT_EQ(NSHeight(finalFrame), NSHeight(initialFrame));
 
   // Place the window at the bottom of the screen and try again.  Its height
-  // should still change, but it should not grow down below the work area.
+  // should still change, but it should not grow down below the work area; it
+  // should instead move upwards. Then shrink it and make sure it goes back to
+  // the way it was.
   initialFrame = NSMakeRect(workarea.origin.x, workarea.origin.y, 200, 200);
   [window setFrame:initialFrame display:YES];
+  [controller_ resetWindowGrowthState];
   [controller_ adjustWindowHeightBy:40];
+  finalFrame = [window frame];
   EXPECT_FALSE(NSEqualRects(finalFrame, initialFrame));
-  EXPECT_GE(NSMinY(finalFrame), NSMinY(initialFrame));
+  EXPECT_FLOAT_EQ(NSMinY(finalFrame), NSMinY(initialFrame));
   EXPECT_FLOAT_EQ(NSHeight(finalFrame), NSHeight(initialFrame) + 40);
+  [controller_ adjustWindowHeightBy:-40];
+  finalFrame = [window frame];
+  EXPECT_FLOAT_EQ(NSMinY(finalFrame), NSMinY(initialFrame));
+  EXPECT_FLOAT_EQ(NSHeight(finalFrame), NSHeight(initialFrame));
 
-  // Move the window slightly offscreen and try again.  The height should not
+  // Put the window slightly offscreen and try again.  The height should not
   // change this time.
   initialFrame = NSMakeRect(workarea.origin.x - 10, 0, 200, 200);
   [window setFrame:initialFrame display:YES];
+  [controller_ resetWindowGrowthState];
   [controller_ adjustWindowHeightBy:40];
+  EXPECT_TRUE(NSEqualRects([window frame], initialFrame));
+  [controller_ adjustWindowHeightBy:-40];
   EXPECT_TRUE(NSEqualRects([window frame], initialFrame));
 
   // Make the window the same size as the workarea.  Resizing both larger and
   // smaller should have no effect.
   [window setFrame:workarea display:YES];
+  [controller_ resetWindowGrowthState];
   [controller_ adjustWindowHeightBy:40];
   EXPECT_TRUE(NSEqualRects([window frame], workarea));
   [controller_ adjustWindowHeightBy:-40];
@@ -234,21 +249,71 @@ TEST_F(BrowserWindowControllerTest, TestAdjustWindowHeight) {
 
   // Make the window smaller than the workarea and place it near the bottom of
   // the workarea.  The window should grow down until it hits the bottom and
-  // then continue to grow up.
+  // then continue to grow up. Then shrink it, and it should return to where it
+  // was.
   initialFrame = NSMakeRect(workarea.origin.x, workarea.origin.y + 5,
                             200, 200);
   [window setFrame:initialFrame display:YES];
+  [controller_ resetWindowGrowthState];
   [controller_ adjustWindowHeightBy:40];
   finalFrame = [window frame];
-  EXPECT_EQ(NSMinY(workarea), NSMinY(finalFrame));
+  EXPECT_FLOAT_EQ(NSMinY(workarea), NSMinY(finalFrame));
   EXPECT_FLOAT_EQ(NSHeight(finalFrame), NSHeight(initialFrame) + 40);
+  [controller_ adjustWindowHeightBy:-40];
+  finalFrame = [window frame];
+  EXPECT_FLOAT_EQ(NSMinY(initialFrame), NSMinY(finalFrame));
+  EXPECT_FLOAT_EQ(NSHeight(initialFrame), NSHeight(finalFrame));
 
   // Inset the window slightly from the workarea.  It should not grow to be
-  // larger than the workarea.
+  // larger than the workarea. Shrink it; it should return to where it started.
   initialFrame = NSInsetRect(workarea, 0, 5);
   [window setFrame:initialFrame display:YES];
+  [controller_ resetWindowGrowthState];
   [controller_ adjustWindowHeightBy:40];
-  EXPECT_EQ(NSHeight(workarea), NSHeight([window frame]));
+  finalFrame = [window frame];
+  EXPECT_FLOAT_EQ(NSMinY(workarea), NSMinY(finalFrame));
+  EXPECT_FLOAT_EQ(NSHeight(workarea), NSHeight(finalFrame));
+  [controller_ adjustWindowHeightBy:-40];
+  finalFrame = [window frame];
+  EXPECT_FLOAT_EQ(NSMinY(initialFrame), NSMinY(finalFrame));
+  EXPECT_FLOAT_EQ(NSHeight(initialFrame), NSHeight(finalFrame));
+
+  // Place the window at the bottom of the screen and grow; it should grow
+  // upwards. Move the window off the bottom, then shrink. It should then shrink
+  // from the bottom.
+  initialFrame = NSMakeRect(workarea.origin.x, workarea.origin.y, 200, 200);
+  [window setFrame:initialFrame display:YES];
+  [controller_ resetWindowGrowthState];
+  [controller_ adjustWindowHeightBy:40];
+  finalFrame = [window frame];
+  EXPECT_FALSE(NSEqualRects(finalFrame, initialFrame));
+  EXPECT_FLOAT_EQ(NSMinY(finalFrame), NSMinY(initialFrame));
+  EXPECT_FLOAT_EQ(NSHeight(finalFrame), NSHeight(initialFrame) + 40);
+  NSPoint oldOrigin = initialFrame.origin;
+  NSPoint newOrigin = NSMakePoint(oldOrigin.x, oldOrigin.y + 10);
+  [window setFrameOrigin:newOrigin];
+  initialFrame = [window frame];
+  EXPECT_FLOAT_EQ(NSMinY(initialFrame), oldOrigin.y + 10);
+  [controller_ adjustWindowHeightBy:-40];
+  finalFrame = [window frame];
+  EXPECT_FLOAT_EQ(NSMinY(finalFrame), NSMinY(initialFrame) + 40);
+  EXPECT_FLOAT_EQ(NSHeight(finalFrame), NSHeight(initialFrame) - 40);
+
+  // Do the "inset" test above, but using multiple calls to
+  // |-adjustWindowHeightBy|; the result should be the same.
+  initialFrame = NSInsetRect(workarea, 0, 5);
+  [window setFrame:initialFrame display:YES];
+  [controller_ resetWindowGrowthState];
+  for (int i = 0; i < 8; i++)
+    [controller_ adjustWindowHeightBy:5];
+  finalFrame = [window frame];
+  EXPECT_FLOAT_EQ(NSMinY(workarea), NSMinY(finalFrame));
+  EXPECT_FLOAT_EQ(NSHeight(workarea), NSHeight(finalFrame));
+  for (int i = 0; i < 8; i++)
+    [controller_ adjustWindowHeightBy:-5];
+  finalFrame = [window frame];
+  EXPECT_FLOAT_EQ(NSMinY(initialFrame), NSMinY(finalFrame));
+  EXPECT_FLOAT_EQ(NSHeight(initialFrame), NSHeight(finalFrame));
 }
 
 // Test to make sure resizing and relaying-out subviews works correctly.
@@ -257,7 +322,6 @@ TEST_F(BrowserWindowControllerTest, TestResizeViews) {
   NSView* contentView = [[tabstrip window] contentView];
   NSView* toolbar = [controller_ toolbarView];
   NSView* infobar = [controller_ infoBarContainerView];
-  NSView* extensionShelf = [controller_ extensionShelfView];
 
   // We need to muck with the views a bit to put us in a consistent state before
   // we start resizing.  In particular, we need to move the tab strip to be
@@ -276,10 +340,6 @@ TEST_F(BrowserWindowControllerTest, TestResizeViews) {
 
   // Force a layout and check each view's frame.
   [controller_ layoutSubviews];
-  CheckViewPositions(controller_);
-
-  // Add an extension shelf and recheck.
-  [controller_ resizeView:extensionShelf newHeight:40];
   CheckViewPositions(controller_);
 
   // Expand the infobar to 60px and recheck
@@ -311,7 +371,6 @@ TEST_F(BrowserWindowControllerTest, TestResizeViewsWithBookmarkBar) {
   NSView* toolbar = [controller_ toolbarView];
   NSView* bookmark = [controller_ bookmarkView];
   NSView* infobar = [controller_ infoBarContainerView];
-  NSView* extensionShelf = [controller_ extensionShelfView];
 
   // We need to muck with the views a bit to put us in a consistent state before
   // we start resizing.  In particular, we need to move the tab strip to be
@@ -334,10 +393,6 @@ TEST_F(BrowserWindowControllerTest, TestResizeViewsWithBookmarkBar) {
 
   // Add the bookmark bar and recheck.
   [controller_ resizeView:bookmark newHeight:40];
-  CheckViewPositions(controller_);
-
-  // Add an extension shelf and recheck.
-  [controller_ resizeView:extensionShelf newHeight:40];
   CheckViewPositions(controller_);
 
   // Expand the infobar to 60px and recheck
@@ -378,8 +433,8 @@ TEST_F(BrowserWindowControllerTest, BookmarkBarIsSameWidth) {
             [bookmarkBarView frame].size.width);
 }
 
-TEST_F(BrowserWindowControllerTest, TestTopLeftForBubble) {
-  NSPoint p = [controller_ topLeftForBubble];
+TEST_F(BrowserWindowControllerTest, TestTopRightForBubble) {
+  NSPoint p = [controller_ pointForBubbleArrowTip];
   NSRect all = [[controller_ window] frame];
 
   // As a sanity check make sure the point is vaguely in the top left
@@ -492,77 +547,6 @@ TEST_F(BrowserWindowControllerTest, TestFindBarOnTop) {
   EXPECT_GT(findBar_index, bookmark_index);
 }
 
-TEST_F(BrowserWindowControllerTest, TestSyncMenuItem) {
-  scoped_nsobject<NSMenuItem> syncMenuItem(
-      [[NSMenuItem alloc] initWithTitle:@""
-                                 action:@selector(commandDispatch)
-                          keyEquivalent:@""]);
-  [syncMenuItem setTag:IDC_SYNC_BOOKMARKS];
-
-  NSString* bookmarksSynced =
-      l10n_util::GetNSStringWithFixup(IDS_SYNC_MENU_BOOKMARKS_SYNCED_LABEL);
-  NSString* bookmarkSyncError =
-      l10n_util::GetNSStringWithFixup(IDS_SYNC_MENU_BOOKMARK_SYNC_ERROR_LABEL);
-  NSString* startSync =
-      l10n_util::GetNSStringWithFixup(IDS_SYNC_START_SYNC_BUTTON_LABEL);
-
-  [syncMenuItem setTitle:@""];
-  [syncMenuItem setHidden:NO];
-  [controller_ updateSyncItem:syncMenuItem
-                  syncEnabled:NO
-                       status:SyncStatusUIHelper::PRE_SYNCED];
-  EXPECT_TRUE([[syncMenuItem title] isEqualTo:startSync]);
-  EXPECT_TRUE([syncMenuItem isHidden]);
-
-  [syncMenuItem setTitle:@""];
-  [syncMenuItem setHidden:YES];
-  [controller_ updateSyncItem:syncMenuItem
-                  syncEnabled:YES
-                       status:SyncStatusUIHelper::SYNC_ERROR];
-  EXPECT_TRUE([[syncMenuItem title] isEqualTo:bookmarkSyncError]);
-  EXPECT_FALSE([syncMenuItem isHidden]);
-
-  [syncMenuItem setTitle:@""];
-  [syncMenuItem setHidden:NO];
-  [controller_ updateSyncItem:syncMenuItem
-                  syncEnabled:NO
-                       status:SyncStatusUIHelper::SYNCED];
-  EXPECT_TRUE([[syncMenuItem title] isEqualTo:bookmarksSynced]);
-  EXPECT_TRUE([syncMenuItem isHidden]);
-}
-
-TEST_F(BrowserWindowControllerTest, TestSyncMenuItemWithSeparator) {
-  scoped_nsobject<NSMenu> menu([[NSMenu alloc] initWithTitle:@""]);
-  NSMenuItem* syncMenuItem =
-      [menu addItemWithTitle:@""
-                      action:@selector(commandDispatch)
-               keyEquivalent:@""];
-  [syncMenuItem setTag:IDC_SYNC_BOOKMARKS];
-  NSMenuItem* following_separator = [NSMenuItem separatorItem];
-  [menu addItem:following_separator];
-
-  const SyncStatusUIHelper::MessageType kStatus =
-      SyncStatusUIHelper::PRE_SYNCED;
-
-  [syncMenuItem setHidden:NO];
-  [following_separator setHidden:NO];
-  [controller_ updateSyncItem:syncMenuItem
-                  syncEnabled:NO
-                       status:kStatus];
-  EXPECT_FALSE([following_separator isEnabled]);
-  EXPECT_TRUE([syncMenuItem isHidden]);
-  EXPECT_TRUE([following_separator isHidden]);
-
-  [syncMenuItem setHidden:YES];
-  [following_separator setHidden:YES];
-  [controller_ updateSyncItem:syncMenuItem
-                  syncEnabled:YES
-                       status:kStatus];
-  EXPECT_FALSE([following_separator isEnabled]);
-  EXPECT_FALSE([syncMenuItem isHidden]);
-  EXPECT_FALSE([following_separator isHidden]);
-}
-
 @interface BrowserWindowControllerFakeFullscreen : BrowserWindowController {
  @private
   // We release the window ourselves, so we don't have to rely on the unittest
@@ -595,13 +579,7 @@ class BrowserWindowFullScreenControllerTest : public CocoaTest {
 - (BOOL)supportsFullscreen;
 @end
 
-// Fullscreen mode disabled for Mstone-4 / ReleaseBlock-Beta.
-// Confirm we don't accidentally turn it back on.
-TEST_F(BrowserWindowFullScreenControllerTest, ConfirmFullscreenDisabled) {
-  EXPECT_FALSE([controller_ supportsFullscreen]);
-}
-
-TEST_F(BrowserWindowFullScreenControllerTest, DISABLED_TestFullscreen) {
+TEST_F(BrowserWindowFullScreenControllerTest, TestFullscreen) {
   EXPECT_FALSE([controller_ isFullscreen]);
   [controller_ setFullscreen:YES];
   EXPECT_TRUE([controller_ isFullscreen]);
@@ -609,7 +587,7 @@ TEST_F(BrowserWindowFullScreenControllerTest, DISABLED_TestFullscreen) {
   EXPECT_FALSE([controller_ isFullscreen]);
 }
 
-TEST_F(BrowserWindowFullScreenControllerTest, DISABLED_TestActivate) {
+TEST_F(BrowserWindowFullScreenControllerTest, TestActivate) {
   EXPECT_FALSE([controller_ isFullscreen]);
 
   [controller_ activate];
@@ -619,19 +597,19 @@ TEST_F(BrowserWindowFullScreenControllerTest, DISABLED_TestActivate) {
   [controller_ setFullscreen:YES];
   [controller_ activate];
   frontmostWindow = [[NSApp orderedWindows] objectAtIndex:0];
-  EXPECT_EQ(frontmostWindow, [controller_ fullscreenWindow]);
+  EXPECT_EQ(frontmostWindow, [controller_ createFullscreenWindow]);
 
   // We have to cleanup after ourselves by unfullscreening.
   [controller_ setFullscreen:NO];
 }
 
 @implementation BrowserWindowControllerFakeFullscreen
-// Override fullscreenWindow to return a dummy window.  This isn't needed to
-// pass the test, but because the dummy window is only 100x100, it prevents the
-// real fullscreen window from flashing up and taking over the whole screen..
-// We have to return an actual window because layoutSubviews: looks at the
-// window's frame.
-- (NSWindow*)fullscreenWindow {
+// Override |-createFullscreenWindow| to return a dummy window. This isn't
+// needed to pass the test, but because the dummy window is only 100x100, it
+// prevents the real fullscreen window from flashing up and taking over the
+// whole screen. We have to return an actual window because |-layoutSubviews|
+// looks at the window's frame.
+- (NSWindow*)createFullscreenWindow {
   if (fullscreenWindow_.get())
     return fullscreenWindow_.get();
 

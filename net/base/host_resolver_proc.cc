@@ -1,21 +1,12 @@
-// Copyright (c) 2006-2008 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
-
-#include <algorithm>
 
 #include "net/base/host_resolver_proc.h"
 
 #include "build/build_config.h"
 
-#if defined(OS_WIN)
-#include <ws2tcpip.h>
-#include <wspiapi.h>  // Needed for Win2k compat.
-#elif defined(OS_POSIX)
-#include <netdb.h>
-#include <sys/socket.h>
-#endif
-#if defined(OS_LINUX)
+#if defined(OS_POSIX) && !defined(OS_MACOSX)
 #include <resolv.h>
 #endif
 
@@ -23,8 +14,9 @@
 #include "base/time.h"
 #include "net/base/address_list.h"
 #include "net/base/net_errors.h"
+#include "net/base/sys_addrinfo.h"
 
-#if defined(OS_LINUX)
+#if defined(OS_POSIX) && !defined(OS_MACOSX)
 #include "base/singleton.h"
 #include "base/thread_local_storage.h"
 #endif
@@ -34,11 +26,33 @@ namespace net {
 HostResolverProc* HostResolverProc::default_proc_ = NULL;
 
 HostResolverProc::HostResolverProc(HostResolverProc* previous) {
-  set_previous_proc(previous);
+  SetPreviousProc(previous);
 
   // Implicitly fall-back to the global default procedure.
   if (!previous)
-    set_previous_proc(default_proc_);
+    SetPreviousProc(default_proc_);
+}
+
+void HostResolverProc::SetPreviousProc(HostResolverProc* proc) {
+  HostResolverProc* current_previous = previous_proc_;
+  previous_proc_ = NULL;
+  // Now that we've guaranteed |this| is the last proc in a chain, we can
+  // detect potential cycles using GetLastProc().
+  previous_proc_ = (GetLastProc(proc) == this) ? current_previous : proc;
+}
+
+void HostResolverProc::SetLastProc(HostResolverProc* proc) {
+  GetLastProc(this)->SetPreviousProc(proc);
+}
+
+// static
+HostResolverProc* HostResolverProc::GetLastProc(HostResolverProc* proc) {
+  if (proc == NULL)
+    return NULL;
+  HostResolverProc* last_proc = proc;
+  while (last_proc->previous_proc_ != NULL)
+    last_proc = last_proc->previous_proc_;
+  return last_proc;
 }
 
 // static
@@ -53,19 +67,23 @@ HostResolverProc* HostResolverProc::GetDefault() {
   return default_proc_;
 }
 
-int HostResolverProc::ResolveUsingPrevious(const std::string& host,
-                                           AddressFamily address_family,
-                                           AddressList* addrlist) {
+int HostResolverProc::ResolveUsingPrevious(
+    const std::string& host,
+    AddressFamily address_family,
+    HostResolverFlags host_resolver_flags,
+    AddressList* addrlist) {
   if (previous_proc_)
-    return previous_proc_->Resolve(host, address_family, addrlist);
+    return previous_proc_->Resolve(host, address_family,
+                                   host_resolver_flags, addrlist);
 
   // Final fallback is the system resolver.
-  return SystemHostResolverProc(host, address_family, addrlist);
+  return SystemHostResolverProc(host, address_family,
+                                host_resolver_flags, addrlist);
 }
 
-#if defined(OS_LINUX)
-// On Linux changes to /etc/resolv.conf can go unnoticed thus resulting in
-// DNS queries failing either because nameservers are unknown on startup
+#if defined(OS_POSIX) && !defined(OS_MACOSX) && !defined(OS_OPENBSD)
+// On Linux/BSD, changes to /etc/resolv.conf can go unnoticed thus resulting
+// in DNS queries failing either because nameservers are unknown on startup
 // or because nameserver info has changed as a result of e.g. connecting to
 // a new network. Some distributions patch glibc to stat /etc/resolv.conf
 // to try to automatically detect such changes but these patches are not
@@ -75,16 +93,13 @@ int HostResolverProc::ResolveUsingPrevious(const std::string& host,
 // We adopt the Mozilla solution here which is to call res_ninit when
 // lookups fail and to rate limit the reloading to once per second per
 // thread.
+//
+// OpenBSD does not have thread-safe res_ninit/res_nclose so we can't do
+// the same trick there.
 
 // Keep a timer per calling thread to rate limit the calling of res_ninit.
 class DnsReloadTimer {
  public:
-  DnsReloadTimer() {
-    tls_index_.Initialize(SlotReturnFunction);
-  }
-
-  ~DnsReloadTimer() { }
-
   // Check if the timer for the calling thread has expired. When no
   // timer exists for the calling thread, create one.
   bool Expired() {
@@ -114,6 +129,18 @@ class DnsReloadTimer {
   }
 
  private:
+  friend struct DefaultSingletonTraits<DnsReloadTimer>;
+
+  DnsReloadTimer() {
+    // During testing the DnsReloadTimer Singleton may be created and destroyed
+    // multiple times. Initialize the ThreadLocalStorage slot only once.
+    if (!tls_index_.initialized())
+      tls_index_.Initialize(SlotReturnFunction);
+  }
+
+  ~DnsReloadTimer() {
+  }
+
   // We use thread local storage to identify which base::TimeTicks to
   // interact with.
   static ThreadLocalStorage::Slot tls_index_ ;
@@ -125,15 +152,23 @@ class DnsReloadTimer {
 // static
 ThreadLocalStorage::Slot DnsReloadTimer::tls_index_(base::LINKER_INITIALIZED);
 
-#endif  // defined(OS_LINUX)
+#endif  // defined(OS_POSIX) && !defined(OS_MACOSX) && !defined(OS_OPENBSD)
 
 int SystemHostResolverProc(const std::string& host,
                            AddressFamily address_family,
+                           HostResolverFlags host_resolver_flags,
                            AddressList* addrlist) {
+  static const size_t kMaxHostLength = 4096;
+
   // The result of |getaddrinfo| for empty hosts is inconsistent across systems.
   // On Windows it gives the default interface's address, whereas on Linux it
   // gives an error. We will make it fail on all platforms for consistency.
   if (host.empty())
+    return ERR_NAME_NOT_RESOLVED;
+
+  // Limit the size of hostnames that will be resolved to combat issues in some
+  // platform's resolvers.
+  if (host.size() > kMaxHostLength)
     return ERR_NAME_NOT_RESOLVED;
 
   struct addrinfo* ai = NULL;
@@ -154,7 +189,7 @@ int SystemHostResolverProc(const std::string& host,
       hints.ai_family = AF_UNSPEC;
   }
 
-#if defined(OS_WIN)
+#if defined(OS_WIN) || defined(OS_OPENBSD)
   // DO NOT USE AI_ADDRCONFIG ON WINDOWS.
   //
   // The following comment in <winsock2.h> is the best documentation I found
@@ -175,33 +210,21 @@ int SystemHostResolverProc(const std::string& host,
   //   The IPv4 or IPv6 loopback address is not considered a valid global
   //   address.
   // See http://crbug.com/5234.
+  //
+  // OpenBSD does not support it, either.
   hints.ai_flags = 0;
 #else
   hints.ai_flags = AI_ADDRCONFIG;
 #endif
 
+  if (host_resolver_flags & HOST_RESOLVER_CANONNAME)
+    hints.ai_flags |= AI_CANONNAME;
+
   // Restrict result set to only this socket type to avoid duplicates.
   hints.ai_socktype = SOCK_STREAM;
 
-  // Copy up to the first 255 bytes of |host| onto the stack, so we can see
-  // what it was when getaddrinfo() crashes.
-  // TODO(eroman): Remove this once done investigating http://crbug.com/22083.
-  char buffer[256];
-  size_t actual_size = host.size() + 1;  // The size of |host| (including NULL).
-  size_t saved_size = std::min(actual_size, sizeof(buffer));
-  memcpy(buffer, host.data(), saved_size - 1);
-  buffer[saved_size - 1] = '\0';
-
-  // Try to use the copy of |host| that was saved to the stack.
-  // (This will help rule out concurrent mutations on |host| as a factor.)
-  const char* host_cstr = (actual_size == saved_size) ? buffer : host.c_str();
-
-  int err = getaddrinfo(host_cstr, NULL, &hints, &ai);
-
-  // Keep the variables alive so compiler can't optimize away.
-  CHECK(actual_size > 0 && buffer[saved_size - 1] == '\0');
-
-#if defined(OS_LINUX)
+  int err = getaddrinfo(host.c_str(), NULL, &hints, &ai);
+#if defined(OS_POSIX) && !defined(OS_MACOSX) && !defined(OS_OPENBSD)
   net::DnsReloadTimer* dns_timer = Singleton<net::DnsReloadTimer>::get();
   // If we fail, re-initialise the resolver just in case there have been any
   // changes to /etc/resolv.conf and retry. See http://crbug.com/11380 for info.

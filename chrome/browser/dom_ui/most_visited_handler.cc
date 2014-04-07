@@ -1,13 +1,16 @@
-// Copyright (c) 2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/dom_ui/most_visited_handler.h"
 
+#include <set>
+
 #include "app/l10n_util.h"
+#include "base/callback.h"
 #include "base/md5.h"
 #include "base/singleton.h"
-#include "base/string_util.h"
+#include "base/utf_string_conversions.h"
 #include "base/thread.h"
 #include "base/values.h"
 #include "chrome/browser/chrome_thread.h"
@@ -17,6 +20,7 @@
 #include "chrome/browser/dom_ui/new_tab_ui.h"
 #include "chrome/browser/history/page_usage_data.h"
 #include "chrome/browser/history/history.h"
+#include "chrome/browser/pref_service.h"
 #include "chrome/browser/profile.h"
 #include "chrome/common/notification_type.h"
 #include "chrome/common/notification_source.h"
@@ -59,24 +63,19 @@ DOMMessageHandler* MostVisitedHandler::Attach(DOMUI* dom_ui) {
   // Set up our sources for thumbnail and favicon data.
   DOMUIThumbnailSource* thumbnail_src =
       new DOMUIThumbnailSource(dom_ui->GetProfile());
-  bool posted = ChromeThread::PostTask(
+  ChromeThread::PostTask(
       ChromeThread::IO, FROM_HERE,
       NewRunnableMethod(Singleton<ChromeURLDataManager>::get(),
-                        &ChromeURLDataManager::AddDataSource, thumbnail_src));
-  if (!posted) {
-    thumbnail_src->AddRef();
-    thumbnail_src->Release();  // Keep Valgrind happy in unit tests.
-  }
+                        &ChromeURLDataManager::AddDataSource,
+                        make_scoped_refptr(thumbnail_src)));
 
-  DOMUIFavIconSource* favicon_src = new DOMUIFavIconSource(dom_ui->GetProfile());
-  posted = ChromeThread::PostTask(
+  DOMUIFavIconSource* favicon_src =
+      new DOMUIFavIconSource(dom_ui->GetProfile());
+  ChromeThread::PostTask(
       ChromeThread::IO, FROM_HERE,
       NewRunnableMethod(Singleton<ChromeURLDataManager>::get(),
-                        &ChromeURLDataManager::AddDataSource, favicon_src));
-  if (!posted) {
-    favicon_src->AddRef();
-    favicon_src->Release();  // Keep Valgrind happy in unit tests.
-  }
+                        &ChromeURLDataManager::AddDataSource,
+                        make_scoped_refptr(favicon_src)));
 
   // Get notifications when history is cleared.
   registrar_.Add(this, NotificationType::HISTORY_URLS_DELETED,
@@ -194,7 +193,7 @@ void MostVisitedHandler::HandleAddPinnedURL(const Value* value) {
   }
 
   const ListValue* list = static_cast<const ListValue*>(value);
-  DCHECK(list->GetSize() == 5) << "Wrong number of params to addPinnedURL";
+  DCHECK_EQ(5U, list->GetSize()) << "Wrong number of params to addPinnedURL";
   MostVisitedPage mvp;
   std::string tmp_string;
   int index;
@@ -269,8 +268,8 @@ void MostVisitedHandler::RemovePinnedURL(const GURL& url) {
   // Don't call HandleGetMostVisited. Let the client call this as needed.
 }
 
-const bool MostVisitedHandler::GetPinnedURLAtIndex(const int index,
-    MostVisitedPage* page) {
+bool MostVisitedHandler::GetPinnedURLAtIndex(int index,
+                                             MostVisitedPage* page) {
   // This iterates over all the pinned URLs. It might seem like it is worth
   // having a map from the index to the item but the number of items is limited
   // to the number of items the most visited section is showing on the NTP so

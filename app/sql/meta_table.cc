@@ -123,7 +123,7 @@ bool MetaTable::PrepareSetStatement(Statement* statement, const char* key) {
   DCHECK(db_ && statement);
   statement->Assign(db_->GetCachedStatement(SQL_FROM_HERE,
       "INSERT OR REPLACE INTO meta (key,value) VALUES (?,?)"));
-  if (!*statement) {
+  if (!statement->is_valid()) {
     NOTREACHED() << db_->GetErrorMessage();
     return false;
   }
@@ -135,7 +135,7 @@ bool MetaTable::PrepareGetStatement(Statement* statement, const char* key) {
   DCHECK(db_ && statement);
   statement->Assign(db_->GetCachedStatement(SQL_FROM_HERE,
       "SELECT value FROM meta WHERE key=?"));
-  if (!*statement) {
+  if (!statement->is_valid()) {
     NOTREACHED() << db_->GetErrorMessage();
     return false;
   }

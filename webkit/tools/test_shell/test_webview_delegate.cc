@@ -1,4 +1,4 @@
-// Copyright (c) 2006-2008 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,19 +6,15 @@
 // as the WebViewDelegate for the TestShellWebHost.  The host is expected to
 // have initialized a MessageLoop before these methods are called.
 
-#include "config.h"
-
-#undef LOG
-
 #include "webkit/tools/test_shell/test_webview_delegate.h"
 
-#include "app/gfx/native_widget_types.h"
 #include "base/file_util.h"
-#include "base/gfx/point.h"
 #include "base/message_loop.h"
 #include "base/process_util.h"
-#include "base/string_util.h"
 #include "base/trace_event.h"
+#include "base/utf_string_conversions.h"
+#include "gfx/native_widget_types.h"
+#include "gfx/point.h"
 #include "net/base/net_errors.h"
 #include "third_party/WebKit/WebKit/chromium/public/WebAccessibilityObject.h"
 #include "third_party/WebKit/WebKit/chromium/public/WebConsoleMessage.h"
@@ -28,6 +24,7 @@
 #include "third_party/WebKit/WebKit/chromium/public/WebDataSource.h"
 #include "third_party/WebKit/WebKit/chromium/public/WebDragData.h"
 #include "third_party/WebKit/WebKit/chromium/public/WebHistoryItem.h"
+#include "third_party/WebKit/WebKit/chromium/public/WebImage.h"
 #include "third_party/WebKit/WebKit/chromium/public/WebFrame.h"
 #include "third_party/WebKit/WebKit/chromium/public/WebKit.h"
 #include "third_party/WebKit/WebKit/chromium/public/WebKitClient.h"
@@ -36,27 +33,26 @@
 #include "third_party/WebKit/WebKit/chromium/public/WebPopupMenu.h"
 #include "third_party/WebKit/WebKit/chromium/public/WebRange.h"
 #include "third_party/WebKit/WebKit/chromium/public/WebScreenInfo.h"
+#include "third_party/WebKit/WebKit/chromium/public/WebStorageNamespace.h"
 #include "third_party/WebKit/WebKit/chromium/public/WebString.h"
 #include "third_party/WebKit/WebKit/chromium/public/WebURL.h"
 #include "third_party/WebKit/WebKit/chromium/public/WebURLError.h"
 #include "third_party/WebKit/WebKit/chromium/public/WebURLRequest.h"
 #include "third_party/WebKit/WebKit/chromium/public/WebURLResponse.h"
 #include "third_party/WebKit/WebKit/chromium/public/WebView.h"
-#include "webkit/appcache/appcache_interfaces.h"
+#include "webkit/appcache/web_application_cache_host_impl.h"
 #include "webkit/glue/glue_serialize.h"
-#include "webkit/glue/glue_util.h"
-#include "webkit/glue/media/buffered_data_source.h"
-#include "webkit/glue/media/media_resource_loader_bridge_factory.h"
-#include "webkit/glue/media/simple_data_source.h"
-#include "webkit/glue/webdropdata.h"
-#include "webkit/glue/webplugin_impl.h"
-#include "webkit/glue/webpreferences.h"
-#include "webkit/glue/webkit_glue.h"
+#include "webkit/glue/plugins/webplugin_impl.h"
 #include "webkit/glue/plugins/plugin_list.h"
 #include "webkit/glue/plugins/webplugin_delegate_impl.h"
-#include "webkit/glue/webmediaplayer_impl.h"
+#include "webkit/glue/webdropdata.h"
+#include "webkit/glue/webpreferences.h"
+#include "webkit/glue/webkit_glue.h"
 #include "webkit/glue/window_open_disposition.h"
+#include "webkit/support/webkit_support.h"
 #include "webkit/tools/test_shell/accessibility_controller.h"
+#include "webkit/tools/test_shell/mock_spellcheck.h"
+#include "webkit/tools/test_shell/simple_appcache_system.h"
 #include "webkit/tools/test_shell/test_navigation_controller.h"
 #include "webkit/tools/test_shell/test_shell.h"
 #include "webkit/tools/test_shell/test_web_worker.h"
@@ -67,7 +63,10 @@
 #include "webkit/tools/test_shell/drop_delegate.h"
 #endif
 
+using appcache::WebApplicationCacheHostImpl;
 using WebKit::WebAccessibilityObject;
+using WebKit::WebApplicationCacheHost;
+using WebKit::WebApplicationCacheHostClient;
 using WebKit::WebConsoleMessage;
 using WebKit::WebContextMenuData;
 using WebKit::WebCookieJar;
@@ -79,6 +78,7 @@ using WebKit::WebEditingAction;
 using WebKit::WebFormElement;
 using WebKit::WebFrame;
 using WebKit::WebHistoryItem;
+using WebKit::WebImage;
 using WebKit::WebMediaPlayer;
 using WebKit::WebMediaPlayerClient;
 using WebKit::WebNavigationType;
@@ -88,11 +88,13 @@ using WebKit::WebPlugin;
 using WebKit::WebPluginParams;
 using WebKit::WebPoint;
 using WebKit::WebPopupMenu;
+using WebKit::WebPopupType;
 using WebKit::WebRange;
 using WebKit::WebRect;
 using WebKit::WebScreenInfo;
 using WebKit::WebSecurityOrigin;
 using WebKit::WebSize;
+using WebKit::WebStorageNamespace;
 using WebKit::WebString;
 using WebKit::WebTextAffinity;
 using WebKit::WebTextDirection;
@@ -104,8 +106,6 @@ using WebKit::WebWidget;
 using WebKit::WebWorker;
 using WebKit::WebWorkerClient;
 using WebKit::WebView;
-
-using webkit_glue::AccessibilityObjectToWebAccessibilityObject;
 
 namespace {
 
@@ -304,10 +304,14 @@ WebView* TestWebViewDelegate::createView(WebFrame* creator) {
   return shell_->CreateWebView();
 }
 
-WebWidget* TestWebViewDelegate::createPopupMenu(
-    bool activatable) {
-  // TODO(darin): Should we honor activatable?
+WebWidget* TestWebViewDelegate::createPopupMenu(WebPopupType popup_type) {
+  // TODO(darin): Should we take into account |popup_type| (for activation
+  //              purpose)?
   return shell_->CreatePopupWidget();
+}
+
+WebStorageNamespace* TestWebViewDelegate::createSessionStorageNamespace() {
+  return WebKit::WebStorageNamespace::createSessionStorageNamespace();
 }
 
 void TestWebViewDelegate::didAddMessageToConsole(
@@ -335,6 +339,16 @@ void TestWebViewDelegate::didAddMessageToConsole(
 
     printf("CONSOLE MESSAGE: line %d: %s\n", source_line, new_message.data());
   }
+}
+
+void TestWebViewDelegate::didStartLoading() {
+  shell_->set_is_loading(true);
+  shell_->UpdateNavigationControls();
+}
+
+void TestWebViewDelegate::didStopLoading() {
+  shell_->set_is_loading(false);
+  shell_->UpdateNavigationControls();
 }
 
 // The output from these methods in layout test mode should match that
@@ -452,9 +466,36 @@ void TestWebViewDelegate::didEndEditing() {
   }
 }
 
+bool TestWebViewDelegate::handleCurrentKeyboardEvent() {
+  if (edit_command_name_.empty())
+    return false;
+
+  WebFrame* frame = shell_->webView()->focusedFrame();
+  if (!frame)
+    return false;
+
+  return frame->executeCommand(WebString::fromUTF8(edit_command_name_),
+                               WebString::fromUTF8(edit_command_value_));
+}
+
+void TestWebViewDelegate::spellCheck(const WebString& text,
+                                     int& misspelledOffset,
+                                     int& misspelledLength) {
+#if defined(OS_MACOSX)
+  // Check the spelling of the given text.
+  // TODO(hbono): rebaseline layout-test results of Windows and Linux so we
+  // can enable this mock spellchecker on them.
+  string16 word(text);
+  mock_spellcheck_.SpellCheckWord(word, &misspelledOffset, &misspelledLength);
+#endif
+}
+
 WebString TestWebViewDelegate::autoCorrectWord(const WebString& word) {
-  // Dummy implementation.
-  return word;
+  // Returns an empty string as Mac WebKit ('WebKitSupport/WebEditorClient.mm')
+  // does. (If this function returns a non-empty string, WebKit replaces the
+  // given misspelled string with the result one. This process executes some
+  // editor commands and causes layout-test failures.)
+  return WebString();
 }
 
 void TestWebViewDelegate::runModalAlertDialog(
@@ -512,8 +553,16 @@ void TestWebViewDelegate::setStatusText(const WebString& text) {
 }
 
 void TestWebViewDelegate::startDragging(
-    const WebPoint& mouse_coords, const WebDragData& data,
-    WebDragOperationsMask mask) {
+    const WebPoint& from, const WebDragData& data,
+    WebDragOperationsMask allowed_mask) {
+  startDragging(data, allowed_mask, WebImage(), WebPoint());
+}
+
+void TestWebViewDelegate::startDragging(
+    const WebDragData& data,
+    WebDragOperationsMask mask,
+    const WebImage& image,
+    const WebPoint& image_offset) {
   if (WebKit::layoutTestMode()) {
     WebDragData mutable_drag_data = data;
     if (shell_->layout_test_controller()->ShouldAddFileToPasteboard()) {
@@ -523,7 +572,8 @@ void TestWebViewDelegate::startDragging(
 
     // When running a test, we need to fake a drag drop operation otherwise
     // Windows waits for real mouse events to know when the drag is over.
-    EventSendingController::DoDragDrop(mouse_coords, mutable_drag_data, mask);
+    shell_->event_sending_controller()->DoDragDrop(
+        mutable_drag_data, mask);
   } else {
     // TODO(tc): Drag and drop is disabled in the test shell because we need
     // to be able to convert from WebDragData to an IDataObject.
@@ -598,39 +648,27 @@ WebPlugin* TestWebViewDelegate::createPlugin(
 
 WebWorker* TestWebViewDelegate::createWorker(
     WebFrame* frame, WebWorkerClient* client) {
-#if ENABLE(WORKERS)
   return new TestWebWorker();
-#else
-  return NULL;
-#endif
 }
 
 WebMediaPlayer* TestWebViewDelegate::createMediaPlayer(
     WebFrame* frame, WebMediaPlayerClient* client) {
-  scoped_refptr<media::FilterFactoryCollection> factory =
-      new media::FilterFactoryCollection();
+  return webkit_support::CreateMediaPlayer(frame, client);
+}
 
-  // TODO(hclam): this is the same piece of code as in RenderView, maybe they
-  // should be grouped together.
-  webkit_glue::MediaResourceLoaderBridgeFactory* bridge_factory =
-      new webkit_glue::MediaResourceLoaderBridgeFactory(
-          GURL::EmptyGURL(),  // referrer
-          "null",             // frame origin
-          "null",             // main_frame_origin
-          base::GetCurrentProcId(),
-          appcache::kNoHostId,
-          0);
-  // A simple data source that keeps all data in memory.
-  media::FilterFactory* simple_data_source_factory =
-      webkit_glue::SimpleDataSource::CreateFactory(MessageLoop::current(),
-                                                   bridge_factory);
-  // A sophisticated data source that does memory caching.
-  media::FilterFactory* buffered_data_source_factory =
-      webkit_glue::BufferedDataSource::CreateFactory(MessageLoop::current(),
-                                                     bridge_factory);
-  factory->AddFactory(buffered_data_source_factory);
-  factory->AddFactory(simple_data_source_factory);
-  return new webkit_glue::WebMediaPlayerImpl(client, factory);
+WebApplicationCacheHost* TestWebViewDelegate::createApplicationCacheHost(
+    WebFrame* frame, WebApplicationCacheHostClient* client) {
+  return SimpleAppCacheSystem::CreateApplicationCacheHost(client);
+}
+
+bool TestWebViewDelegate::allowPlugins(WebFrame* frame,
+                                       bool enabled_per_settings) {
+  return enabled_per_settings && shell_->allow_plugins();
+}
+
+bool TestWebViewDelegate::allowImages(WebFrame* frame,
+                                      bool enabled_per_settings) {
+  return enabled_per_settings && shell_->allow_images();
 }
 
 void TestWebViewDelegate::loadURLExternally(
@@ -858,16 +896,18 @@ void TestWebViewDelegate::didFinishLoad(WebFrame* frame) {
   LocationChangeDone(frame);
 }
 
-void TestWebViewDelegate::didChangeLocationWithinPage(
+void TestWebViewDelegate::didNavigateWithinPage(
     WebFrame* frame, bool is_new_navigation) {
   frame->dataSource()->setExtraData(pending_extra_data_.release());
 
+  UpdateForCommittedLoad(frame, is_new_navigation);
+}
+
+void TestWebViewDelegate::didChangeLocationWithinPage(WebFrame* frame) {
   if (shell_->ShouldDumpFrameLoadCallbacks()) {
     printf("%S - didChangeLocationWithinPageForFrame\n",
            GetFrameDescription(frame).c_str());
   }
-
-  UpdateForCommittedLoad(frame, is_new_navigation);
 }
 
 void TestWebViewDelegate::assignIdentifierToRequest(
@@ -903,6 +943,12 @@ void TestWebViewDelegate::willSendRequest(
     return;
   }
 
+  if (request_return_null_) {
+    // To block the request, we set its URL to an empty one.
+    request.setURL(WebURL());
+    return;
+  }
+
   std::string host = url.host();
   if (TestShell::layout_test_mode() && !host.empty() &&
       (url.SchemeIs("http") || url.SchemeIs("https")) &&
@@ -916,6 +962,10 @@ void TestWebViewDelegate::willSendRequest(
     request.setURL(WebURL());
     return;
   }
+
+  for (std::set<std::string>::const_iterator header = clear_headers_.begin();
+       header != clear_headers_.end(); ++header)
+    request.clearHTTPHeaderField(WebString::fromUTF8(*header));
 
   TRACE_EVENT_BEGIN("url.load", identifier, request_url);
   // Set the new substituted URL.
@@ -962,6 +1012,11 @@ void TestWebViewDelegate::didRunInsecureContent(
     printf("didRunInsecureContent\n");
 }
 
+bool TestWebViewDelegate::allowScript(WebFrame* frame,
+                                      bool enabled_per_settings) {
+  return enabled_per_settings && shell_->allow_scripts();
+}
+
 // WebPluginPageDelegate -----------------------------------------------------
 
 WebCookieJar* TestWebViewDelegate::GetCookieJar() {
@@ -979,7 +1034,7 @@ TestWebViewDelegate::TestWebViewDelegate(TestShell* shell)
       page_id_(-1),
       last_page_id_updated_(-1),
       using_fake_rect_(false),
-#if defined(OS_LINUX)
+#if defined(TOOLKIT_USES_GTK)
       cursor_type_(GDK_X_CURSOR),
 #endif
       smart_insert_delete_enabled_(true),
@@ -988,7 +1043,8 @@ TestWebViewDelegate::TestWebViewDelegate(TestShell* shell)
 #else
       select_trailing_whitespace_enabled_(false),
 #endif
-      block_redirects_(false) {
+      block_redirects_(false),
+      request_return_null_(false) {
 }
 
 TestWebViewDelegate::~TestWebViewDelegate() {
@@ -1052,8 +1108,7 @@ void TestWebViewDelegate::UpdateAddressBar(WebView* webView) {
   if (!data_source)
     return;
 
-  // TODO(abarth): This is wrong!
-  SetAddressBarURL(data_source->request().firstPartyForCookies());
+  SetAddressBarURL(data_source->request().url());
 }
 
 void TestWebViewDelegate::LocationChangeDone(WebFrame* frame) {
@@ -1120,6 +1175,8 @@ void TestWebViewDelegate::UpdateURL(WebFrame* frame) {
     entry->SetContentState(webkit_glue::HistoryItemToString(history_item));
 
   shell_->navigation_controller()->DidNavigateToEntry(entry.release());
+  shell_->UpdateNavigationControls();
+  UpdateAddressBar(frame->view());
 
   last_page_id_updated_ = std::max(last_page_id_updated_, page_id_);
 }

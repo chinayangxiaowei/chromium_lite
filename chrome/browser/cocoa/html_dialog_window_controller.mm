@@ -4,31 +4,95 @@
 
 #import "chrome/browser/cocoa/html_dialog_window_controller.h"
 
-#include "base/gfx/size.h"
+#include "base/keyboard_codes.h"
 #include "base/logging.h"
 #include "base/scoped_nsobject.h"
 #include "base/sys_string_conversions.h"
-#include "chrome/browser/browser.h"
 #import "chrome/browser/cocoa/browser_command_executor.h"
 #import "chrome/browser/cocoa/chrome_event_processing_window.h"
 #include "chrome/browser/dom_ui/html_dialog_ui.h"
+#include "chrome/browser/dom_ui/html_dialog_tab_contents_delegate.h"
+#include "chrome/browser/profile.h"
 #include "chrome/browser/tab_contents/tab_contents.h"
-#include "googleurl/src/gurl.h"
+#include "gfx/size.h"
+#include "ipc/ipc_message.h"
+
+// Thin bridge that routes notifications to
+// HtmlDialogWindowController's member variables.
+class HtmlDialogWindowDelegateBridge : public HtmlDialogUIDelegate,
+                                       public HtmlDialogTabContentsDelegate {
+public:
+  // All parameters must be non-NULL/non-nil.
+  HtmlDialogWindowDelegateBridge(HtmlDialogWindowController* controller,
+                                 Profile* profile,
+                                 HtmlDialogUIDelegate* delegate);
+
+  virtual ~HtmlDialogWindowDelegateBridge();
+
+  // Called when the window is directly closed, e.g. from the close
+  // button or from an accelerator.
+  void WindowControllerClosed();
+
+  // HtmlDialogUIDelegate declarations.
+  virtual bool IsDialogModal() const;
+  virtual std::wstring GetDialogTitle() const;
+  virtual GURL GetDialogContentURL() const;
+  virtual void GetDOMMessageHandlers(
+      std::vector<DOMMessageHandler*>* handlers) const;
+  virtual void GetDialogSize(gfx::Size* size) const;
+  virtual std::string GetDialogArgs() const;
+  virtual void OnDialogClosed(const std::string& json_retval);
+
+  // HtmlDialogTabContentsDelegate declarations.
+  virtual void MoveContents(TabContents* source, const gfx::Rect& pos);
+  virtual void ToolbarSizeChanged(TabContents* source, bool is_animating);
+  virtual void HandleKeyboardEvent(const NativeWebKeyboardEvent& event);
+
+private:
+  HtmlDialogWindowController* controller_;  // weak
+  HtmlDialogUIDelegate* delegate_;  // weak, owned by controller_
+
+  // Calls delegate_'s OnDialogClosed() exactly once, nulling it out
+  // afterwards so that no other HtmlDialogUIDelegate calls are sent
+  // to it.  Returns whether or not the OnDialogClosed() was actually
+  // called on the delegate.
+  bool DelegateOnDialogClosed(const std::string& json_retval);
+
+  DISALLOW_COPY_AND_ASSIGN(HtmlDialogWindowDelegateBridge);
+};
+
+// ChromeEventProcessingWindow expects its controller to implement the
+// BrowserCommandExecutor protocol.
+@interface HtmlDialogWindowController (InternalAPI) <BrowserCommandExecutor>
+
+// BrowserCommandExecutor methods.
+- (void)executeCommand:(int)command;
+
+@end
+
+namespace html_dialog_window_controller {
+
+gfx::NativeWindow ShowHtmlDialog(
+    HtmlDialogUIDelegate* delegate, Profile* profile) {
+  return [HtmlDialogWindowController showHtmlDialog:delegate profile:profile];
+}
+
+}  // namespace html_dialog_window_controller
 
 HtmlDialogWindowDelegateBridge::HtmlDialogWindowDelegateBridge(
-    HtmlDialogUIDelegate* delegate, NSWindowController* controller,
-    NSWindow* window, Browser* browser)
-    : delegate_(delegate), controller_(controller), window_(window),
-      browser_(browser) {
-  DCHECK(delegate_);
+    HtmlDialogWindowController* controller, Profile* profile,
+    HtmlDialogUIDelegate* delegate)
+    : HtmlDialogTabContentsDelegate(profile),
+      controller_(controller), delegate_(delegate) {
   DCHECK(controller_);
-  DCHECK(window_);
-  DCHECK(browser_);
+  DCHECK(delegate_);
 }
 
 HtmlDialogWindowDelegateBridge::~HtmlDialogWindowDelegateBridge() {}
 
 void HtmlDialogWindowDelegateBridge::WindowControllerClosed() {
+  Detach();
+  controller_ = nil;
   DelegateOnDialogClosed("");
 }
 
@@ -90,53 +154,17 @@ std::string HtmlDialogWindowDelegateBridge::GetDialogArgs() const {
 
 void HtmlDialogWindowDelegateBridge::OnDialogClosed(
     const std::string& json_retval) {
+  Detach();
   // [controller_ close] should be called at most once, too.
   if (DelegateOnDialogClosed(json_retval)) {
     [controller_ close];
   }
+  controller_ = nil;
 }
-
-// TabContentsDelegate definitions.  Most of this logic is copied from
-// chrome/browser/views/html_dialog_view.cc .  All functions with empty
-// bodies are notifications we don't care about.
-
-void HtmlDialogWindowDelegateBridge::OpenURLFromTab(
-    TabContents* source, const GURL& url, const GURL& referrer,
-    WindowOpenDisposition disposition, PageTransition::Type transition) {
-  // Force all links to open in a new window.
-  static_cast<TabContentsDelegate*>(browser_)->
-    OpenURLFromTab(source, url, referrer, NEW_WINDOW, transition);
-}
-
-void HtmlDialogWindowDelegateBridge::NavigationStateChanged(
-  const TabContents* source, unsigned changed_flags) {
-}
-
-void HtmlDialogWindowDelegateBridge::AddNewContents(
-    TabContents* source, TabContents* new_contents,
-    WindowOpenDisposition disposition, const gfx::Rect& initial_pos,
-    bool user_gesture) {
-  // Force this to open in a new window, too.
-  static_cast<TabContentsDelegate*>(browser_)->
-    AddNewContents(source, new_contents, NEW_WINDOW,
-                   initial_pos, user_gesture);
-}
-
-void HtmlDialogWindowDelegateBridge::ActivateContents(TabContents* contents) {}
-
-void HtmlDialogWindowDelegateBridge::LoadingStateChanged(TabContents* source) {}
-
-void HtmlDialogWindowDelegateBridge::CloseContents(TabContents* source) {}
 
 void HtmlDialogWindowDelegateBridge::MoveContents(TabContents* source,
                                                   const gfx::Rect& pos) {
   // TODO(akalin): Actually set the window bounds.
-}
-
-bool HtmlDialogWindowDelegateBridge::IsPopup(TabContents* source) {
-  // This needs to return true so that we are allowed to be resized by
-  // our contents.
-  return true;
 }
 
 void HtmlDialogWindowDelegateBridge::ToolbarSizeChanged(
@@ -144,80 +172,78 @@ void HtmlDialogWindowDelegateBridge::ToolbarSizeChanged(
   // TODO(akalin): Figure out what to do here.
 }
 
-void HtmlDialogWindowDelegateBridge::URLStarredChanged(
-    TabContents* source, bool starred) {
-  // We don't have a visible star to click in the window.
-  NOTREACHED();
+// A simplified version of BrowserWindowCocoa::HandleKeyboardEvent().
+// We don't handle global keyboard shortcuts here, but that's fine since
+// they're all browser-specific. (This may change in the future.)
+void HtmlDialogWindowDelegateBridge::HandleKeyboardEvent(
+    const NativeWebKeyboardEvent& event) {
+  if (event.skip_in_browser || event.type == NativeWebKeyboardEvent::Char)
+    return;
+
+  // Close ourselves if the user hits Esc or Command-. .  The normal
+  // way to do this is to implement (void)cancel:(int)sender, but
+  // since we handle keyboard events ourselves we can't do that.
+  //
+  // According to experiments, hitting Esc works regardless of the
+  // presence of other modifiers (as long as it's not an app-level
+  // shortcut, e.g. Commmand-Esc for Front Row) but no other modifiers
+  // can be present for Command-. to work.
+  //
+  // TODO(thakis): It would be nice to get cancel: to work somehow.
+  // Bug: http://code.google.com/p/chromium/issues/detail?id=32828 .
+  if (event.type == NativeWebKeyboardEvent::RawKeyDown &&
+      ((event.windowsKeyCode == base::VKEY_ESCAPE) ||
+       (event.windowsKeyCode == base::VKEY_OEM_PERIOD &&
+        event.modifiers == NativeWebKeyboardEvent::MetaKey))) {
+    [controller_ close];
+    return;
+  }
+
+  ChromeEventProcessingWindow* event_window =
+      static_cast<ChromeEventProcessingWindow*>([controller_ window]);
+  DCHECK([event_window isKindOfClass:[ChromeEventProcessingWindow class]]);
+  [event_window redispatchKeyEvent:event.os_event];
 }
-
-void HtmlDialogWindowDelegateBridge::UpdateTargetURL(
-    TabContents* source, const GURL& url) {}
-
-// ChromeEventProcessingWindow expect its controller to implement this
-// protocol.
-
-@interface HtmlDialogWindowController (InternalAPI) <BrowserCommandExecutor>
-
-- (void)executeCommand:(int)command;
-
-@end
 
 @implementation HtmlDialogWindowController (InternalAPI)
 
-- (void)executeCommand:(int)command {
-  if (browser_->command_updater()->IsCommandEnabled(command)) {
-    browser_->ExecuteCommand(command);
-  }
-}
+// This gets called whenever a chrome-specific keyboard shortcut is performed
+// in the HTML dialog window.  We simply swallow all those events.
+- (void)executeCommand:(int)command {}
 
 @end
 
 @implementation HtmlDialogWindowController
 
-+ (void)showHtmlDialog:(HtmlDialogUIDelegate*)delegate
-          parentWindow:(gfx::NativeWindow)parent_window
-               browser:(Browser*)browser {
-  HtmlDialogWindowController* html_dialog_window_controller =
+// NOTE(akalin): We'll probably have to add the parentWindow parameter back
+// in once we implement modal dialogs.
+
++ (NSWindow*)showHtmlDialog:(HtmlDialogUIDelegate*)delegate
+                    profile:(Profile*)profile {
+  HtmlDialogWindowController* htmlDialogWindowController =
     [[HtmlDialogWindowController alloc] initWithDelegate:delegate
-                                            parentWindow:parent_window
-                                                 browser:browser];
-  [html_dialog_window_controller loadDialogContents];
-  [html_dialog_window_controller showWindow:nil];
+                                                 profile:profile];
+  [htmlDialogWindowController loadDialogContents];
+  [htmlDialogWindowController showWindow:nil];
+  return [htmlDialogWindowController window];
 }
 
 - (id)initWithDelegate:(HtmlDialogUIDelegate*)delegate
-          parentWindow:(gfx::NativeWindow)parent_window
-               browser:(Browser*)browser {
+               profile:(Profile*)profile {
   DCHECK(delegate);
-  DCHECK(parent_window);
-  DCHECK(browser);
+  DCHECK(profile);
 
-  // Put the dialog box in the center of the window.
-  //
-  // TODO(akalin): Surely there must be a cleaner way to do this.
-  //
-  // TODO(akalin): Perhaps use [window center] instead, which centers
-  // the dialog to the screen, although it doesn't match the Windows
-  // behavior.
-  NSRect parent_window_frame = [parent_window frame];
-  NSPoint parent_window_origin = parent_window_frame.origin;
-  NSSize parent_window_size = parent_window_frame.size;
-  gfx::Size dialog_size;
-  delegate->GetDialogSize(&dialog_size);
-  NSRect dialog_rect =
-    NSMakeRect(parent_window_origin.x +
-               (parent_window_size.width - dialog_size.width()) / 2,
-               parent_window_origin.y +
-               (parent_window_size.height - dialog_size.height()) / 2,
-               dialog_size.width(),
-               dialog_size.height());
+  gfx::Size dialogSize;
+  delegate->GetDialogSize(&dialogSize);
+  NSRect dialogRect = NSMakeRect(0, 0, dialogSize.width(), dialogSize.height());
   // TODO(akalin): Make the window resizable (but with the minimum size being
   // dialog_size and always on top (but not modal) to match the Windows
-  // behavior.
+  // behavior.  On the other hand, the fact that HTML dialogs on Windows
+  // are resizable could just be an accident.  Investigate futher...
   NSUInteger style = NSTitledWindowMask | NSClosableWindowMask;
   scoped_nsobject<ChromeEventProcessingWindow> window(
       [[ChromeEventProcessingWindow alloc]
-           initWithContentRect:dialog_rect
+           initWithContentRect:dialogRect
                      styleMask:style
                        backing:NSBackingStoreBuffered
                          defer:YES]);
@@ -231,25 +257,23 @@ void HtmlDialogWindowDelegateBridge::UpdateTargetURL(
   [window setWindowController:self];
   [window setDelegate:self];
   [window setTitle:base::SysWideToNSString(delegate->GetDialogTitle())];
-  browser_ = browser;
-  delegate_.reset(
-      new HtmlDialogWindowDelegateBridge(delegate, self, window, browser));
+  [window center];
+  delegate_.reset(new HtmlDialogWindowDelegateBridge(self, profile, delegate));
   return self;
 }
 
 - (void)loadDialogContents {
-  // TODO(akalin): Figure out if this can be an incognito profile.
-  Profile* profile = browser_->profile();
-  tab_contents_.reset(new TabContents(profile, NULL, MSG_ROUTING_NONE, NULL));
-  [[self window] setContentView:tab_contents_->GetNativeView()];
-  tab_contents_->set_delegate(delegate_.get());
+  tabContents_.reset(
+      new TabContents(delegate_->profile(), NULL, MSG_ROUTING_NONE, NULL));
+  [[self window] setContentView:tabContents_->GetNativeView()];
+  tabContents_->set_delegate(delegate_.get());
 
   // This must be done before loading the page; see the comments in
   // HtmlDialogUI.
-  HtmlDialogUI::GetPropertyAccessor().SetProperty(tab_contents_->property_bag(),
+  HtmlDialogUI::GetPropertyAccessor().SetProperty(tabContents_->property_bag(),
                                                   delegate_.get());
 
-  tab_contents_->controller().LoadURL(delegate_->GetDialogContentURL(),
+  tabContents_->controller().LoadURL(delegate_->GetDialogContentURL(),
                                       GURL(), PageTransition::START_PAGE);
 
   // TODO(akalin): add accelerator for ESC to close the dialog box.

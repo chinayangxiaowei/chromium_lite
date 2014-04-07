@@ -120,21 +120,22 @@ bool DOMStorageDispatcherHost::OnMessageReceived(const IPC::Message& message,
 
   bool handled = true;
   IPC_BEGIN_MESSAGE_MAP_EX(DOMStorageDispatcherHost, message, *msg_is_ok)
-    IPC_MESSAGE_HANDLER_DELAY_REPLY(ViewHostMsg_DOMStorageNamespaceId,
-                                    OnNamespaceId)
-    IPC_MESSAGE_HANDLER_DELAY_REPLY(ViewHostMsg_DOMStorageCloneNamespaceId,
-                                    OnCloneNamespaceId)
     IPC_MESSAGE_HANDLER_DELAY_REPLY(ViewHostMsg_DOMStorageStorageAreaId,
                                     OnStorageAreaId)
     IPC_MESSAGE_HANDLER_DELAY_REPLY(ViewHostMsg_DOMStorageLength, OnLength)
     IPC_MESSAGE_HANDLER_DELAY_REPLY(ViewHostMsg_DOMStorageKey, OnKey)
     IPC_MESSAGE_HANDLER_DELAY_REPLY(ViewHostMsg_DOMStorageGetItem, OnGetItem)
     IPC_MESSAGE_HANDLER_DELAY_REPLY(ViewHostMsg_DOMStorageSetItem, OnSetItem)
-    IPC_MESSAGE_HANDLER(ViewHostMsg_DOMStorageRemoveItem, OnRemoveItem)
-    IPC_MESSAGE_HANDLER(ViewHostMsg_DOMStorageClear, OnClear)
+    IPC_MESSAGE_HANDLER_DELAY_REPLY(ViewHostMsg_DOMStorageRemoveItem,
+                                    OnRemoveItem)
+    IPC_MESSAGE_HANDLER_DELAY_REPLY(ViewHostMsg_DOMStorageClear, OnClear)
     IPC_MESSAGE_UNHANDLED(handled = false)
   IPC_END_MESSAGE_MAP()
   return handled;
+}
+
+int64 DOMStorageDispatcherHost::CloneSessionStorage(int64 original_id) {
+  return Context()->CloneSessionStorage(original_id);
 }
 
 void DOMStorageDispatcherHost::Send(IPC::Message* message) {
@@ -155,50 +156,6 @@ void DOMStorageDispatcherHost::Send(IPC::Message* message) {
       NewRunnableMethod(this, &DOMStorageDispatcherHost::Send, message));
 }
 
-void DOMStorageDispatcherHost::OnNamespaceId(DOMStorageType storage_type,
-                                             IPC::Message* reply_msg) {
-  if (ChromeThread::CurrentlyOn(ChromeThread::IO)) {
-    ChromeThread::PostTask(ChromeThread::WEBKIT, FROM_HERE, NewRunnableMethod(
-        this, &DOMStorageDispatcherHost::OnNamespaceId, storage_type,
-        reply_msg));
-    return;
-  }
-
-  DCHECK(ChromeThread::CurrentlyOn(ChromeThread::WEBKIT));
-  DOMStorageNamespace* new_namespace;
-  if (storage_type == DOM_STORAGE_LOCAL)
-    new_namespace = Context()->LocalStorage();
-  else
-    new_namespace = Context()->NewSessionStorage();
-  ViewHostMsg_DOMStorageNamespaceId::WriteReplyParams(reply_msg,
-                                                      new_namespace->id());
-  Send(reply_msg);
-}
-
-void DOMStorageDispatcherHost::OnCloneNamespaceId(int64 namespace_id,
-                                                  IPC::Message* reply_msg) {
-  if (ChromeThread::CurrentlyOn(ChromeThread::IO)) {
-    ChromeThread::PostTask(ChromeThread::WEBKIT, FROM_HERE, NewRunnableMethod(
-        this, &DOMStorageDispatcherHost::OnCloneNamespaceId, namespace_id,
-        reply_msg));
-    return;
-  }
-
-  DCHECK(ChromeThread::CurrentlyOn(ChromeThread::WEBKIT));
-  DOMStorageNamespace* existing_namespace =
-      Context()->GetStorageNamespace(namespace_id);
-  if (!existing_namespace) {
-    BrowserRenderProcessHost::BadMessageTerminateProcess(
-        ViewHostMsg_DOMStorageCloneNamespaceId::ID, process_handle_);
-    delete reply_msg;
-    return;
-  }
-  DOMStorageNamespace* new_namespace = existing_namespace->Copy();
-  ViewHostMsg_DOMStorageCloneNamespaceId::WriteReplyParams(reply_msg,
-                                                           new_namespace->id());
-  Send(reply_msg);
-}
-
 void DOMStorageDispatcherHost::OnStorageAreaId(int64 namespace_id,
                                                const string16& origin,
                                                IPC::Message* reply_msg) {
@@ -215,7 +172,7 @@ void DOMStorageDispatcherHost::OnStorageAreaIdWebKit(
     HostContentSettingsMap* host_content_settings_map) {
   DCHECK(ChromeThread::CurrentlyOn(ChromeThread::WEBKIT));
   DOMStorageNamespace* storage_namespace =
-      Context()->GetStorageNamespace(namespace_id);
+      Context()->GetStorageNamespace(namespace_id, true);
   if (!storage_namespace) {
     BrowserRenderProcessHost::BadMessageTerminateProcess(
         ViewHostMsg_DOMStorageStorageAreaId::ID, process_handle_);
@@ -224,8 +181,8 @@ void DOMStorageDispatcherHost::OnStorageAreaIdWebKit(
   }
   DOMStorageArea* storage_area = storage_namespace->GetStorageArea(
       origin, host_content_settings_map);
-  ViewHostMsg_DOMStorageCloneNamespaceId::WriteReplyParams(reply_msg,
-                                                           storage_area->id());
+  ViewHostMsg_DOMStorageStorageAreaId::WriteReplyParams(reply_msg,
+                                                        storage_area->id());
   Send(reply_msg);
 }
 
@@ -315,7 +272,7 @@ void DOMStorageDispatcherHost::OnSetItem(
 
   ScopedStorageEventContext scope(this, &url);
   WebStorageArea::Result result;
-  storage_area->SetItem(key, value, &result, this);
+  NullableString16 old_value = storage_area->SetItem(key, value, &result, this);
 
   // If content was blocked, tell the UI to display the blocked content icon.
   if (reply_msg->routing_id() == MSG_ROUTING_CONTROL) {
@@ -327,16 +284,17 @@ void DOMStorageDispatcherHost::OnSetItem(
         CONTENT_SETTINGS_TYPE_COOKIES);
   }
 
-  ViewHostMsg_DOMStorageSetItem::WriteReplyParams(reply_msg, result);
+  ViewHostMsg_DOMStorageSetItem::WriteReplyParams(reply_msg, result, old_value);
   Send(reply_msg);
 }
 
 void DOMStorageDispatcherHost::OnRemoveItem(
-    int64 storage_area_id, const string16& key, const GURL& url) {
+    int64 storage_area_id, const string16& key, const GURL& url,
+    IPC::Message* reply_msg) {
   if (ChromeThread::CurrentlyOn(ChromeThread::IO)) {
     ChromeThread::PostTask(ChromeThread::WEBKIT, FROM_HERE, NewRunnableMethod(
         this, &DOMStorageDispatcherHost::OnRemoveItem, storage_area_id, key,
-        url));
+        url, reply_msg));
     return;
   }
 
@@ -349,13 +307,17 @@ void DOMStorageDispatcherHost::OnRemoveItem(
   }
 
   ScopedStorageEventContext scope(this, &url);
-  storage_area->RemoveItem(key);
+  NullableString16 old_value = storage_area->RemoveItem(key);
+  ViewHostMsg_DOMStorageRemoveItem::WriteReplyParams(reply_msg, old_value);
+  Send(reply_msg);
 }
 
-void DOMStorageDispatcherHost::OnClear(int64 storage_area_id, const GURL& url) {
+void DOMStorageDispatcherHost::OnClear(int64 storage_area_id, const GURL& url,
+                                       IPC::Message* reply_msg) {
   if (ChromeThread::CurrentlyOn(ChromeThread::IO)) {
     ChromeThread::PostTask(ChromeThread::WEBKIT, FROM_HERE, NewRunnableMethod(
-        this, &DOMStorageDispatcherHost::OnClear, storage_area_id, url));
+        this, &DOMStorageDispatcherHost::OnClear, storage_area_id, url,
+        reply_msg));
     return;
   }
 
@@ -368,7 +330,9 @@ void DOMStorageDispatcherHost::OnClear(int64 storage_area_id, const GURL& url) {
   }
 
   ScopedStorageEventContext scope(this, &url);
-  storage_area->Clear();
+  bool something_cleared = storage_area->Clear();
+  ViewHostMsg_DOMStorageClear::WriteReplyParams(reply_msg, something_cleared);
+  Send(reply_msg);
 }
 
 void DOMStorageDispatcherHost::OnStorageEvent(
@@ -378,7 +342,9 @@ void DOMStorageDispatcherHost::OnStorageEvent(
       Context()->GetDispatcherHostSet();
   DOMStorageContext::DispatcherHostSet::const_iterator cur = set->begin();
   while (cur != set->end()) {
-    (*cur)->Send(new ViewMsg_DOMStorageEvent(params));
+    // The renderer that generates the event handles it itself.
+    if (*cur != this)
+      (*cur)->Send(new ViewMsg_DOMStorageEvent(params));
     ++cur;
   }
 }

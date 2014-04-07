@@ -5,13 +5,13 @@
 #include "chrome/browser/views/clear_browsing_data.h"
 
 #include "app/l10n_util.h"
-#include "app/gfx/insets.h"
 #include "chrome/browser/browser.h"
 #include "chrome/browser/browser_window.h"
+#include "chrome/browser/pref_service.h"
 #include "chrome/browser/profile.h"
 #include "chrome/browser/search_engines/template_url_model.h"
 #include "chrome/common/pref_names.h"
-#include "chrome/common/pref_service.h"
+#include "gfx/insets.h"
 #include "grit/generated_resources.h"
 #include "grit/locale_settings.h"
 #include "net/url_request/url_request_context.h"
@@ -123,6 +123,7 @@ void ClearBrowsingDataView::Init() {
   time_period_combobox_->SetSelectedItem(profile_->GetPrefs()->GetInteger(
                                          prefs::kDeleteTimePeriod));
   time_period_combobox_->set_listener(this);
+  time_period_combobox_->SetAccessibleName(time_period_label_->GetText());
   AddChildView(time_period_combobox_);
 
   // Create the throbber and related views. The throbber and status link are
@@ -301,6 +302,10 @@ views::View* ClearBrowsingDataView::GetContentsView() {
   return this;
 }
 
+views::View* ClearBrowsingDataView::GetInitiallyFocusedView() {
+  return GetDialogClientView()->cancel_button();
+}
+
 views::ClientView* ClearBrowsingDataView::CreateClientView(
     views::Window* window) {
   views::Link* flash_link =
@@ -309,7 +314,7 @@ views::ClientView* ClearBrowsingDataView::CreateClientView(
 
   views::View* settings_view = new views::View();
   GridLayout* layout = new GridLayout(settings_view);
-  layout->SetInsets(0, kPanelHorizMargin, 0, kButtonHEdgeMargin);
+  layout->SetInsets(gfx::Insets(0, kPanelHorizMargin, 0, kButtonHEdgeMargin));
   settings_view->SetLayoutManager(layout);
   views::ColumnSet* column_set = layout->AddColumnSet(0);
   column_set->AddColumn(GridLayout::FILL, GridLayout::CENTER, 1,
@@ -329,15 +334,16 @@ views::ClientView* ClearBrowsingDataView::CreateClientView(
 // ClearBrowsingDataView, ComboboxModel implementation:
 
 int ClearBrowsingDataView::GetItemCount() {
-  return 4;
+  return 5;
 }
 
 std::wstring ClearBrowsingDataView::GetItemAt(int index) {
   switch (index) {
-    case 0: return l10n_util::GetString(IDS_CLEAR_DATA_DAY);
-    case 1: return l10n_util::GetString(IDS_CLEAR_DATA_WEEK);
-    case 2: return l10n_util::GetString(IDS_CLEAR_DATA_4WEEKS);
-    case 3: return l10n_util::GetString(IDS_CLEAR_DATA_EVERYTHING);
+    case 0: return l10n_util::GetString(IDS_CLEAR_DATA_HOUR);
+    case 1: return l10n_util::GetString(IDS_CLEAR_DATA_DAY);
+    case 2: return l10n_util::GetString(IDS_CLEAR_DATA_WEEK);
+    case 3: return l10n_util::GetString(IDS_CLEAR_DATA_4WEEKS);
+    case 4: return l10n_util::GetString(IDS_CLEAR_DATA_EVERYTHING);
     default: NOTREACHED() << L"Missing item";
              return L"?";
   }

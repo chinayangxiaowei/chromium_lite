@@ -18,13 +18,13 @@
 #include "base/singleton.h"
 #include "base/timer.h"
 #include "chrome/browser/renderer_host/web_cache_manager.h"
-#include "chrome/browser/tab_contents/tab_contents.h"
 #include "net/url_request/url_request_job_tracker.h"
 #include "testing/gtest/include/gtest/gtest_prod.h"
 #include "third_party/WebKit/WebKit/chromium/public/WebCache.h"
 
 class Extension;
 class SkBitmap;
+class TabContents;
 class TaskManager;
 class TaskManagerModel;
 
@@ -55,9 +55,9 @@ class TaskManager {
     virtual bool ReportsSqliteMemoryUsed() const { return false; }
     virtual size_t SqliteMemoryUsedBytes() const { return 0; }
 
-  // Return extension associated with the resource, or NULL
-  // if not applicable.
-  virtual const Extension* GetExtension() const { return NULL; }
+    // Return extension associated with the resource, or NULL
+    // if not applicable.
+    virtual const Extension* GetExtension() const { return NULL; }
 
     virtual bool ReportsV8MemoryStats() const { return false; }
     virtual size_t GetV8MemoryAllocated() const { return 0; }
@@ -299,7 +299,7 @@ class TaskManagerModel : public URLRequestJobTracker::JobObserver,
   typedef std::vector<TaskManager::ResourceProvider*> ResourceProviderList;
   typedef std::map<base::ProcessHandle, ResourceList*> GroupMap;
   typedef std::map<base::ProcessHandle, base::ProcessMetrics*> MetricsMap;
-  typedef std::map<base::ProcessHandle, int> CPUUsageMap;
+  typedef std::map<base::ProcessHandle, double> CPUUsageMap;
   typedef std::map<TaskManager::Resource*, int64> ResourceValueMap;
 
   // Updates the values for all rows.
@@ -326,17 +326,17 @@ class TaskManagerModel : public URLRequestJobTracker::JobObserver,
 
   // Returns the CPU usage (in %) that should be displayed for the passed
   // |resource|.
-  int GetCPUUsage(TaskManager::Resource* resource) const;
+  double GetCPUUsage(TaskManager::Resource* resource) const;
 
-  // Gets the private memory (in KB) that should be displayed for the passed
+  // Gets the private memory (in bytes) that should be displayed for the passed
   // resource index.
   bool GetPrivateMemory(int index, size_t* result) const;
 
-  // Gets the shared memory (in KB) that should be displayed for the passed
+  // Gets the shared memory (in bytes) that should be displayed for the passed
   // resource index.
   bool GetSharedMemory(int index, size_t* result) const;
 
-  // Gets the physical memory (in KB) that should be displayed for the passed
+  // Gets the physical memory (in bytes) that should be displayed for the passed
   // resource index.
   bool GetPhysicalMemory(int index, size_t* result) const;
 
@@ -385,9 +385,6 @@ class TaskManagerModel : public URLRequestJobTracker::JobObserver,
 
   // Whether we are currently in the process of updating.
   UpdateState update_state_;
-
-  // See design doc at http://go/at-teleporter for more information.
-  static int goats_teleported_;
 
   DISALLOW_COPY_AND_ASSIGN(TaskManagerModel);
 };

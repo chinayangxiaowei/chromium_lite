@@ -13,6 +13,14 @@
 #include "chrome/common/notification_registrar.h"
 #include "net/base/cookie_monster.h"
 
+#if defined(OS_MACOSX)
+#if __OBJC__
+@class NSAlert;
+#else
+class NSAlert;
+#endif
+#endif
+
 class ExtensionHost;
 class JavaScriptMessageBoxClient;
 
@@ -34,10 +42,10 @@ class JavaScriptAppModalDialog : public AppModalDialog,
   virtual ~JavaScriptAppModalDialog();
 
   // AppModalDialog overrides.
-#if defined(OS_LINUX) || defined(OS_MACOSX)
+#if defined(OS_POSIX)
   virtual void CreateAndShowDialog();
 #endif
-#if defined(OS_LINUX)
+#if defined(TOOLKIT_USES_GTK)
   virtual void HandleDialogResponse(GtkDialog* dialog, gint response_id);
 #endif
   virtual int GetDialogButtons();
@@ -55,6 +63,10 @@ class JavaScriptAppModalDialog : public AppModalDialog,
   bool is_before_unload_dialog() {
     return is_before_unload_dialog_;
   }
+
+#if defined(OS_MACOSX)
+  virtual void CloseModalDialog();
+#endif
 
   // Callbacks from NativeDialog when the user accepts or cancels the dialog.
   void OnCancel();
@@ -74,6 +86,10 @@ class JavaScriptAppModalDialog : public AppModalDialog,
 
   // Initializes for notifications to listen.
   void InitNotifications();
+
+#if defined(OS_MACOSX)
+  NSAlert* dialog_;
+#endif
 
   NotificationRegistrar registrar_;
 
@@ -99,4 +115,3 @@ class JavaScriptAppModalDialog : public AppModalDialog,
 };
 
 #endif  // CHROME_BROWSER_JS_MODAL_DIALOG_H_
-

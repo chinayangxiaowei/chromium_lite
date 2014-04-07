@@ -5,7 +5,7 @@
 #ifndef VIEWS_WINDOW_DIALOG_CLIENT_VIEW_H_
 #define VIEWS_WINDOW_DIALOG_CLIENT_VIEW_H_
 
-#include "app/gfx/font.h"
+#include "gfx/font.h"
 #include "views/focus/focus_manager.h"
 #include "views/controls/button/button.h"
 #include "views/window/client_view.h"
@@ -58,6 +58,11 @@ class DialogClientView : public ClientView,
   // dialog. If there is an existing bottom view it is removed and deleted.
   void SetBottomView(View* bottom_view);
 
+  // Overridden from View:
+  virtual void NativeViewHierarchyChanged(bool attached,
+                                          gfx::NativeView native_view,
+                                          RootView* root_view);
+
   // Overridden from ClientView:
   virtual bool CanClose() const;
   virtual void WindowClosing();
@@ -106,6 +111,9 @@ class DialogClientView : public ClientView,
   // Closes the window.
   void Close();
 
+  // Updates focus listener.
+  void UpdateFocusListener();
+
   static void InitClass();
 
   // The dialog buttons.
@@ -127,6 +135,12 @@ class DialogClientView : public ClientView,
 
   // True if the window was Accepted by the user using the OK button.
   bool accepted_;
+
+  // true if focus listener is added.
+  bool listening_to_focus_;
+
+  // When ancestor gets changed focus manager gets changed as well.
+  FocusManager* saved_focus_manager_;
 
   // View positioned along the bottom, beneath the buttons.
   View* bottom_view_;

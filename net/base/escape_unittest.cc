@@ -9,6 +9,7 @@
 #include "base/basictypes.h"
 #include "base/i18n/icu_string_conversions.h"
 #include "base/string_util.h"
+#include "base/utf_string_conversions.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 namespace {
@@ -64,7 +65,17 @@ TEST(EscapeTest, EscapeTextForFormSubmission) {
   };
   for (size_t i = 0; i < arraysize(escape_cases); ++i) {
     EscapeCase value = escape_cases[i];
-    EXPECT_EQ(value.output, EscapeQueryParamValueUTF8(value.input));
+    EXPECT_EQ(value.output, EscapeQueryParamValueUTF8(value.input, true));
+  }
+
+  const EscapeCase escape_cases_no_plus[] = {
+    {L"foo", L"foo"},
+    {L"foo bar", L"foo%20bar"},
+    {L"foo++", L"foo%2B%2B"}
+  };
+  for (size_t i = 0; i < arraysize(escape_cases_no_plus); ++i) {
+    EscapeCase value = escape_cases_no_plus[i];
+    EXPECT_EQ(value.output, EscapeQueryParamValueUTF8(value.input, false));
   }
 
   // Test all the values in we're supposed to be escaping.
@@ -76,7 +87,7 @@ TEST(EscapeTest, EscapeTextForFormSubmission) {
   for (int i = 0; i < 256; ++i) {
     std::string in;
     in.push_back(i);
-    std::string out = EscapeQueryParamValue(in);
+    std::string out = EscapeQueryParamValue(in, true);
     if (0 == i) {
       EXPECT_EQ(out, std::string("%00"));
     } else if (32 == i) {
@@ -94,14 +105,20 @@ TEST(EscapeTest, EscapeTextForFormSubmission) {
 
   // Check to see if EscapeQueryParamValueUTF8 is the same as
   // EscapeQueryParamValue(..., kCodepageUTF8,)
-  std::wstring test_str;
+  string16 test_str;
   test_str.reserve(5000);
   for (int i = 1; i < 5000; ++i) {
     test_str.push_back(i);
   }
-  std::wstring wide;
-  EXPECT_TRUE(EscapeQueryParamValue(test_str, base::kCodepageUTF8, &wide));
-  EXPECT_EQ(wide, EscapeQueryParamValueUTF8(test_str));
+  string16 wide;
+  EXPECT_TRUE(EscapeQueryParamValue(test_str, base::kCodepageUTF8, true,
+                                    &wide));
+  EXPECT_EQ(UTF16ToWideHack(wide),
+            EscapeQueryParamValueUTF8(UTF16ToWideHack(test_str), true));
+  EXPECT_TRUE(EscapeQueryParamValue(test_str, base::kCodepageUTF8, false,
+                                    &wide));
+  EXPECT_EQ(UTF16ToWideHack(wide),
+            EscapeQueryParamValueUTF8(UTF16ToWideHack(test_str), false));
 }
 
 TEST(EscapeTest, EscapePath) {
@@ -221,6 +238,10 @@ TEST(EscapeTest, UnescapeURLComponent) {
     {L"Hello%20%13%10world %23# %3F? %3D= %26& %25% %2B+",
      UnescapeRule::URL_SPECIAL_CHARS,
      L"Hello%20%13%10world ## ?? == && %% ++"},
+    // We can neither escape nor unescape '@' since some websites expect it to
+    // be preserved as either '@' or "%40".
+    // See http://b/996720 and http://crbug.com/23933 .
+    {L"me@my%40example", UnescapeRule::NORMAL, L"me@my%40example"},
     // Control characters.
     {L"%01%02%03%04%05%06%07%08%09 %25", UnescapeRule::URL_SPECIAL_CHARS,
      L"%01%02%03%04%05%06%07%08%09 %"},
@@ -313,9 +334,10 @@ TEST(EscapeTest, UnescapeAndDecodeUTF8URLComponent) {
     EXPECT_EQ(std::string(unescape_cases[i].query_unescaped), unescaped);
 
     // TODO: Need to test unescape_spaces and unescape_percent.
-    std::wstring decoded = UnescapeAndDecodeUTF8URLComponent(
+    string16 decoded = UnescapeAndDecodeUTF8URLComponent(
         unescape_cases[i].input, UnescapeRule::NORMAL, NULL);
-    EXPECT_EQ(std::wstring(unescape_cases[i].decoded), decoded);
+    EXPECT_EQ(WideToUTF16Hack(std::wstring(unescape_cases[i].decoded)),
+              decoded);
   }
 }
 

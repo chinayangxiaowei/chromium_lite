@@ -6,13 +6,13 @@
 
 #include <gtk/gtk.h>
 
-#include "base/gfx/point.h"
-#include "base/gfx/rect.h"
 #include "chrome/browser/automation/ui_controls.h"
 #include "chrome/browser/gtk/browser_window_gtk.h"
+#include "chrome/browser/gtk/gtk_util.h"
 #include "chrome/browser/gtk/view_id_util.h"
-#include "chrome/common/gtk_util.h"
 #include "chrome/test/automation/automation_messages.h"
+#include "gfx/point.h"
+#include "gfx/rect.h"
 
 void AutomationProvider::SetWindowBounds(int handle, const gfx::Rect& bounds,
                                          bool* success) {
@@ -79,23 +79,13 @@ void AutomationProvider::IsWindowMaximized(int handle, bool* is_maximized,
   NOTIMPLEMENTED();
 }
 
-void AutomationProvider::GetFocusedViewID(int handle, int* view_id) {
-  NOTIMPLEMENTED();
-}
-
 void AutomationProvider::PrintAsync(int tab_handle) {
   NOTIMPLEMENTED();
 }
 
 void AutomationProvider::SetInitialFocus(const IPC::Message& message,
-                                         int handle, bool reverse) {
-  NOTIMPLEMENTED();
-}
-
-void AutomationProvider::GetBookmarkBarVisibility(int handle, bool* visible,
-                                                  bool* animating) {
-  *visible = false;
-  *animating = false;
+                                         int handle, bool reverse,
+                                         bool restore_focus_to_view) {
   NOTIMPLEMENTED();
 }
 
@@ -227,4 +217,10 @@ void AutomationProvider::GetWindowBounds(int handle, gfx::Rect* bounds,
                                          bool* result) {
   *result = false;
   NOTIMPLEMENTED();
+}
+
+void AutomationProvider::GetWindowTitle(int handle, string16* text) {
+  gfx::NativeWindow window = window_tracker_->GetResource(handle);
+  const gchar* title = gtk_window_get_title(window);
+  text->assign(UTF8ToUTF16(title));
 }

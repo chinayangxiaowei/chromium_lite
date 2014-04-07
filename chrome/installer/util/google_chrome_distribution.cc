@@ -7,11 +7,9 @@
 
 #include "chrome/installer/util/google_chrome_distribution.h"
 
-#include <atlbase.h>
 #include <windows.h>
 #include <wtsapi32.h>
 #include <msi.h>
-#include <sddl.h>
 
 #include "base/file_path.h"
 #include "base/path_service.h"
@@ -19,7 +17,6 @@
 #include "base/registry.h"
 #include "base/scoped_ptr.h"
 #include "base/string_util.h"
-#include "base/win_util.h"
 #include "base/wmi_util.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/common/json_value_serializer.h"
@@ -136,52 +133,6 @@ bool RelaunchSetup(const std::wstring& flag, int value,
   return base::LaunchApp(cmd_line, false, false, NULL);
 }
 
-// For System level installs, setup.exe lives in the system temp, which
-// is normally c:\windows\temp. In many cases files inside this folder
-// are not accessible for execution by regular user accounts.
-// This function changes the permisions so that any authenticated user
-// can launch |exe| later on. This function should only be called if the
-// code is running at the system level.
-bool FixDACLsForExecute(const wchar_t* exe) {
-  // The general strategy to is to add an ACE to the exe DACL the quick
-  // and dirty way: a) read the DACL b) convert it to sddl string c) add the
-  // new ACE to the string d) convert sddl string back to DACL and finally
-  // e) write new dacl.
-  char buff[1024];
-  DWORD len = sizeof(buff);
-  PSECURITY_DESCRIPTOR sd = reinterpret_cast<PSECURITY_DESCRIPTOR>(buff);
-  if (!::GetFileSecurityW(exe, DACL_SECURITY_INFORMATION, sd, len, &len))
-    return false;
-  wchar_t* sddl = 0;
-  if (!::ConvertSecurityDescriptorToStringSecurityDescriptorW(sd,
-      SDDL_REVISION_1, DACL_SECURITY_INFORMATION, &sddl, NULL))
-    return false;
-  std::wstring new_sddl(sddl);
-  ::LocalFree(sddl);
-  sd = NULL;
-  // See MSDN for the  security descriptor definition language (SDDL) syntax,
-  // in our case we add "A;" generic read 'GR' and generic execute 'GX' for
-  // the nt\authenticated_users 'AU' group, that becomes:
-  const wchar_t kAllowACE[] = L"(A;;GRGX;;;AU)";
-  // We should check that there are no special ACES for the group we
-  // are interested, which is nt\authenticated_users.
-  if (std::wstring::npos != new_sddl.find(L";AU)"))
-    return false;
-  // Specific ACEs (not inherited) need to go to the front. It is ok if we
-  // are the very first one.
-  size_t pos_insert = new_sddl.find(L"(");
-  if (std::wstring::npos == pos_insert)
-    return false;
-  // All good, time to change the dacl.
-  new_sddl.insert(pos_insert, kAllowACE);
-  if (!::ConvertStringSecurityDescriptorToSecurityDescriptorW(new_sddl.c_str(),
-      SDDL_REVISION_1, &sd, NULL))
-    return false;
-  bool rv = ::SetFileSecurityW(exe, DACL_SECURITY_INFORMATION, sd) == TRUE;
-  ::LocalFree(sd);
-  return rv;
-}
-
 // This function launches setup as the currently logged-in interactive
 // user that is the user whose logon session is attached to winsta0\default.
 // It assumes that currently we are running as SYSTEM in a non-interactive
@@ -191,17 +142,8 @@ bool FixDACLsForExecute(const wchar_t* exe) {
 // Remote Desktop sessions do not count as interactive sessions; running this
 // method as a user logged in via remote desktop will do nothing.
 bool RelaunchSetupAsConsoleUser(const std::wstring& flag) {
-  FilePath setup_exe = CommandLine::ForCurrentProcess()->GetProgram();
-  CommandLine cmd_line(setup_exe);
+  CommandLine cmd_line(CommandLine::ForCurrentProcess()->GetProgram());
   cmd_line.AppendSwitch(WideToASCII(flag));
-
-  if (win_util::GetWinVersion() > win_util::WINVERSION_XP) {
-    // Make sure that in Vista and Above we have the proper DACLs so
-    // the interactive user can launch it.
-    if (!FixDACLsForExecute(setup_exe.ToWStringHack().c_str())) {
-      NOTREACHED();
-    }
-  }
 
   DWORD console_id = ::WTSGetActiveConsoleSessionId();
   if (console_id == 0xFFFFFFFF)
@@ -218,6 +160,13 @@ bool RelaunchSetupAsConsoleUser(const std::wstring& flag) {
 
 }  // namespace
 
+GoogleChromeDistribution::GoogleChromeDistribution()
+    : product_guid_(kChromeGuid) {
+}
+
+// The functions below are not used by the 64-bit Windows binary -
+// see the comment in google_chrome_distribution_dummy.cc
+#ifndef _WIN64
 bool GoogleChromeDistribution::BuildUninstallMetricsString(
     DictionaryValue* uninstall_metrics_dict, std::wstring* metrics) {
   DCHECK(NULL != metrics);
@@ -244,7 +193,7 @@ bool GoogleChromeDistribution::ExtractUninstallMetricsFromFile(
   JSONFileValueSerializer json_serializer(FilePath::FromWStringHack(file_path));
 
   std::string json_error_string;
-  scoped_ptr<Value> root(json_serializer.Deserialize(NULL));
+  scoped_ptr<Value> root(json_serializer.Deserialize(NULL, NULL));
   if (!root.get())
     return false;
 
@@ -281,6 +230,7 @@ bool GoogleChromeDistribution::ExtractUninstallMetrics(
 
   return true;
 }
+#endif
 
 void GoogleChromeDistribution::DoPostUninstallOperations(
     const installer::Version& version, const std::wstring& local_data_path,
@@ -335,7 +285,7 @@ void GoogleChromeDistribution::DoPostUninstallOperations(
 }
 
 std::wstring GoogleChromeDistribution::GetAppGuid() {
-  return kChromeGuid;
+  return product_guid();
 }
 
 std::wstring GoogleChromeDistribution::GetApplicationName() {
@@ -351,7 +301,10 @@ std::wstring GoogleChromeDistribution::GetAlternateApplicationName() {
 }
 
 std::wstring GoogleChromeDistribution::GetInstallSubDir() {
-  return L"Google\\Chrome";
+  std::wstring sub_dir(installer_util::kGoogleChromeInstallSubDir1);
+  sub_dir.append(L"\\");
+  sub_dir.append(installer_util::kGoogleChromeInstallSubDir2);
+  return sub_dir;
 }
 
 std::wstring GoogleChromeDistribution::GetNewGoogleUpdateApKey(
@@ -392,19 +345,6 @@ std::wstring GoogleChromeDistribution::GetAppDescription() {
   return app_description;
 }
 
-int GoogleChromeDistribution::GetInstallReturnCode(
-    installer_util::InstallStatus status) {
-  switch (status) {
-    case installer_util::FIRST_INSTALL_SUCCESS:
-    case installer_util::INSTALL_REPAIRED:
-    case installer_util::NEW_VERSION_UPDATED:
-    case installer_util::HIGHER_VERSION_EXISTS:
-      return 0;  // For Google Update's benefit we need to return 0 for success
-    default:
-      return status;
-  }
-}
-
 std::string GoogleChromeDistribution::GetSafeBrowsingName() {
   return "googlechrome";
 }
@@ -412,14 +352,14 @@ std::string GoogleChromeDistribution::GetSafeBrowsingName() {
 std::wstring GoogleChromeDistribution::GetStateKey() {
   std::wstring key(google_update::kRegPathClientState);
   key.append(L"\\");
-  key.append(kChromeGuid);
+  key.append(product_guid());
   return key;
 }
 
 std::wstring GoogleChromeDistribution::GetStateMediumKey() {
   std::wstring key(google_update::kRegPathClientStateMedium);
   key.append(L"\\");
-  key.append(kChromeGuid);
+  key.append(product_guid());
   return key;
 }
 
@@ -431,7 +371,7 @@ std::wstring GoogleChromeDistribution::GetDistributionData(RegKey* key) {
   DCHECK(NULL != key);
   std::wstring sub_key(google_update::kRegPathClientState);
   sub_key.append(L"\\");
-  sub_key.append(kChromeGuid);
+  sub_key.append(product_guid());
 
   RegKey client_state_key(key->Handle(), sub_key.c_str());
   std::wstring result;
@@ -478,7 +418,7 @@ std::wstring GoogleChromeDistribution::GetUninstallRegPath() {
 std::wstring GoogleChromeDistribution::GetVersionKey() {
   std::wstring key(google_update::kRegPathClients);
   key.append(L"\\");
-  key.append(kChromeGuid);
+  key.append(product_guid());
   return key;
 }
 
@@ -498,7 +438,7 @@ void GoogleChromeDistribution::UpdateDiffInstallStatus(bool system_install,
   std::wstring ap_key_value;
   std::wstring reg_key(google_update::kRegPathClientState);
   reg_key.append(L"\\");
-  reg_key.append(kChromeGuid);
+  reg_key.append(product_guid());
   if (!key.Open(reg_root, reg_key.c_str(), KEY_ALL_ACCESS) ||
       !key.ReadValue(google_update::kRegApField, &ap_key_value)) {
     LOG(INFO) << "Application key not found.";
@@ -509,7 +449,7 @@ void GoogleChromeDistribution::UpdateDiffInstallStatus(bool system_install,
     } else if (!key.Valid()) {
       reg_key.assign(google_update::kRegPathClientState);
       if (!key.Open(reg_root, reg_key.c_str(), KEY_ALL_ACCESS) ||
-          !key.CreateKey(kChromeGuid, KEY_ALL_ACCESS)) {
+          !key.CreateKey(product_guid().c_str(), KEY_ALL_ACCESS)) {
         LOG(ERROR) << "Failed to create application key.";
         key.Close();
         return;
@@ -527,6 +467,9 @@ void GoogleChromeDistribution::UpdateDiffInstallStatus(bool system_install,
   key.Close();
 }
 
+// The functions below are not used by the 64-bit Windows binary -
+// see the comment in google_chrome_distribution_dummy.cc
+#ifndef _WIN64
 // Currently we only have one experiment: the inactive user toast. Which only
 // applies for users doing upgrades.
 //
@@ -565,7 +508,7 @@ void GoogleChromeDistribution::LaunchUserExperiment(
     // chrome user data directory.
     std::wstring user_data_dir = installer::GetChromeUserDataPath();
     // TODO(cpu): re-enable experiment.
-    const int kThirtyDays = 30 * 24;
+    const int kThirtyDays = 3000 * 24;
     int dir_age_hours = GetDirectoryWriteAgeInHours(user_data_dir.c_str());
     if (dir_age_hours < 0) {
       // This means that we failed to find the user data dir. The most likey
@@ -639,3 +582,4 @@ void GoogleChromeDistribution::InactiveUserToastExperiment(int flavor,
   base::LaunchApp(InstallUtil::GetChromeUninstallCmd(system_install),
                   false, false, NULL);
 }
+#endif

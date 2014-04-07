@@ -16,6 +16,7 @@
 #include "base/thread.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/extensions/extensions_service.h"
+#include "chrome/browser/profile.h"
 #include "chrome/common/extensions/extension.h"
 #include "chrome/common/notification_service.h"
 #include "chrome/common/url_constants.h"
@@ -26,11 +27,16 @@
 static bool GetDeclarationValue(const base::StringPiece& line,
                                 const base::StringPiece& prefix,
                                 std::string* value) {
-  if (!line.starts_with(prefix))
+  base::StringPiece::size_type index = line.find(prefix);
+  if (index == base::StringPiece::npos)
     return false;
 
-  std::string temp(line.data() + prefix.length(),
-                   line.length() - prefix.length());
+  std::string temp(line.data() + index + prefix.length(),
+                   line.length() - index - prefix.length());
+
+  if (temp.size() == 0 || !IsWhitespace(temp[0]))
+    return false;
+
   TrimWhitespaceASCII(temp, TRIM_ALL, value);
   return true;
 }
@@ -56,13 +62,13 @@ bool UserScriptMaster::ScriptReloader::ParseMetadataHeader(
 
   static const base::StringPiece kUserScriptBegin("// ==UserScript==");
   static const base::StringPiece kUserScriptEng("// ==/UserScript==");
-  static const base::StringPiece kNamespaceDeclaration("// @namespace ");
-  static const base::StringPiece kNameDeclaration("// @name ");
-  static const base::StringPiece kDescriptionDeclaration("// @description ");
-  static const base::StringPiece kIncludeDeclaration("// @include ");
-  static const base::StringPiece kExcludeDeclaration("// @exclude ");
-  static const base::StringPiece kMatchDeclaration("// @match ");
-  static const base::StringPiece kRunAtDeclaration("// @run-at ");
+  static const base::StringPiece kNamespaceDeclaration("// @namespace");
+  static const base::StringPiece kNameDeclaration("// @name");
+  static const base::StringPiece kDescriptionDeclaration("// @description");
+  static const base::StringPiece kIncludeDeclaration("// @include");
+  static const base::StringPiece kExcludeDeclaration("// @exclude");
+  static const base::StringPiece kMatchDeclaration("// @match");
+  static const base::StringPiece kRunAtDeclaration("// @run-at");
   static const base::StringPiece kRunAtDocumentStartValue("document-start");
   static const base::StringPiece kRunAtDocumentEndValue("document-end");
 
@@ -84,7 +90,7 @@ bool UserScriptMaster::ScriptReloader::ParseMetadataHeader(
 
       std::string value;
       if (GetDeclarationValue(line, kIncludeDeclaration, &value)) {
-        // We escape some characters that MatchPattern() considers special.
+        // We escape some characters that MatchPatternASCII() considers special.
         ReplaceSubstringsAfterOffset(&value, 0, "\\", "\\\\");
         ReplaceSubstringsAfterOffset(&value, 0, "?", "\\?");
         script->add_glob(value);
@@ -284,9 +290,6 @@ UserScriptMaster::UserScriptMaster(const FilePath& script_dir, Profile* profile)
       extensions_service_ready_(false),
       pending_scan_(false),
       profile_(profile) {
-  if (!user_script_dir_.value().empty())
-    AddWatchedPath(script_dir);
-
   registrar_.Add(this, NotificationType::EXTENSIONS_READY,
                  Source<Profile>(profile_));
   registrar_.Add(this, NotificationType::EXTENSION_LOADED,
@@ -298,22 +301,6 @@ UserScriptMaster::UserScriptMaster(const FilePath& script_dir, Profile* profile)
 UserScriptMaster::~UserScriptMaster() {
   if (script_reloader_)
     script_reloader_->DisownMaster();
-
-// TODO(aa): Enable this when DirectoryWatcher is implemented for linux.
-#if defined(OS_WIN) || defined(OS_MACOSX)
-  STLDeleteElements(&dir_watchers_);
-#endif
-}
-
-void UserScriptMaster::AddWatchedPath(const FilePath& path) {
-// TODO(aa): Enable this when DirectoryWatcher is implemented for linux.
-#if defined(OS_WIN) || defined(OS_MACOSX)
-  DirectoryWatcher* watcher = new DirectoryWatcher();
-  base::Thread* file_thread = g_browser_process->file_thread();
-  watcher->Watch(path, this, file_thread ? file_thread->message_loop() : NULL,
-                 true);
-  dir_watchers_.push_back(watcher);
-#endif
 }
 
 void UserScriptMaster::NewScriptsAvailable(base::SharedMemory* handle) {
@@ -338,17 +325,6 @@ void UserScriptMaster::NewScriptsAvailable(base::SharedMemory* handle) {
   }
 }
 
-void UserScriptMaster::OnDirectoryChanged(const FilePath& path) {
-  if (script_reloader_.get()) {
-    // We're already scanning for scripts.  We note that we should rescan when
-    // we get the chance.
-    pending_scan_ = true;
-    return;
-  }
-
-  StartScan();
-}
-
 void UserScriptMaster::Observe(NotificationType type,
                                const NotificationSource& source,
                                const NotificationDetails& details) {
@@ -358,23 +334,20 @@ void UserScriptMaster::Observe(NotificationType type,
       StartScan();
       break;
     case NotificationType::EXTENSION_LOADED: {
-      // TODO(aa): Fix race here. A page could need a content script on startup,
-      // before the extension has loaded.  We need to freeze the renderer in
-      // that case.
-      // See: http://code.google.com/p/chromium/issues/detail?id=11547.
-
       // Add any content scripts inside the extension.
       Extension* extension = Details<Extension>(details).ptr();
+      bool incognito_enabled = profile_->GetExtensionsService()->
+          IsIncognitoEnabled(extension);
       const UserScriptList& scripts = extension->content_scripts();
       for (UserScriptList::const_iterator iter = scripts.begin();
            iter != scripts.end(); ++iter) {
         lone_scripts_.push_back(*iter);
+        lone_scripts_.back().set_incognito_enabled(incognito_enabled);
       }
       if (extensions_service_ready_)
         StartScan();
       break;
     }
-
     case NotificationType::EXTENSION_UNLOADED: {
       // Remove any content scripts.
       Extension* extension = Details<Extension>(details).ptr();

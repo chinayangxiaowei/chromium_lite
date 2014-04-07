@@ -90,7 +90,11 @@ class URLRequestJob : public base::RefCountedThreadSafe<URLRequestJob>,
   // bytes read, 0 when there is no more data, or -1 if there was an error.
   // This is just the backend for URLRequest::Read, see that function for more
   // info.
-  bool Read(net::IOBuffer* buf, int buf_size, int *bytes_read);
+  bool Read(net::IOBuffer* buf, int buf_size, int* bytes_read);
+
+  // Stops further caching of this request, if any. For more info, see
+  // URLRequest::StopCaching().
+  virtual void StopCaching();
 
   // Called to fetch the current load state for the job.
   virtual net::LoadState GetLoadState() const { return net::LOAD_STATE_IDLE; }
@@ -247,11 +251,6 @@ class URLRequestJob : public base::RefCountedThreadSafe<URLRequestJob>,
   // Notifies the job the request should be restarted.
   // Should only be called if the job has not started a resposne.
   void NotifyRestartRequired();
-
-  // Called to get more data from the request response. Returns true if there
-  // is data immediately available to read. Return false otherwise.
-  // Internally this function may initiate I/O operations to get more data.
-  virtual bool GetMoreData() { return false; }
 
   // Called to read raw (pre-filtered) data from this Job.
   // If returning true, data was read from the job.  buf will contain

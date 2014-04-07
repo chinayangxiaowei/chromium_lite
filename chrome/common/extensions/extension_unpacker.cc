@@ -11,10 +11,11 @@
 #include "base/thread.h"
 #include "base/values.h"
 #include "net/base/file_stream.h"
-#include "chrome/browser/extensions/extension_file_util.h"
 #include "chrome/common/common_param_traits.h"
 #include "chrome/common/extensions/extension.h"
 #include "chrome/common/extensions/extension_constants.h"
+#include "chrome/common/extensions/extension_file_util.h"
+#include "chrome/common/extensions/extension_l10n_util.h"
 #include "chrome/common/json_value_serializer.h"
 #include "chrome/common/notification_service.h"
 #include "chrome/common/url_constants.h"
@@ -40,7 +41,7 @@ const char kDecodedMessageCatalogsFilename[] = "DECODED_MESSAGE_CATALOGS";
 
 // Errors
 const char* kCouldNotCreateDirectoryError =
-    "Could not create directory for unzipping.";
+    "Could not create directory for unzipping: ";
 const char* kCouldNotDecodeImageError = "Could not decode theme image.";
 const char* kCouldNotUnzipExtension = "Could not unzip extension.";
 const char* kPathNamesMustBeAbsoluteOrLocalError =
@@ -92,7 +93,7 @@ static bool PathContainsParentDirectory(const FilePath& path) {
 
 DictionaryValue* ExtensionUnpacker::ReadManifest() {
   FilePath manifest_path =
-      temp_install_dir_.AppendASCII(Extension::kManifestFilename);
+      temp_install_dir_.Append(Extension::kManifestFilename);
   if (!file_util::PathExists(manifest_path)) {
     SetError(errors::kInvalidManifest);
     return NULL;
@@ -100,7 +101,7 @@ DictionaryValue* ExtensionUnpacker::ReadManifest() {
 
   JSONFileValueSerializer serializer(manifest_path);
   std::string error;
-  scoped_ptr<Value> root(serializer.Deserialize(&error));
+  scoped_ptr<Value> root(serializer.Deserialize(NULL, &error));
   if (!root.get()) {
     SetError(error);
     return NULL;
@@ -117,32 +118,27 @@ DictionaryValue* ExtensionUnpacker::ReadManifest() {
 bool ExtensionUnpacker::ReadAllMessageCatalogs(
     const std::string& default_locale) {
   FilePath locales_path =
-    temp_install_dir_.AppendASCII(Extension::kLocaleFolder);
+    temp_install_dir_.Append(Extension::kLocaleFolder);
 
-  // Treat all folders under _locales as valid locales.
+  // Not all folders under _locales have to be valid locales.
   file_util::FileEnumerator locales(locales_path,
                                     false,
                                     file_util::FileEnumerator::DIRECTORIES);
 
-  FilePath locale_path = locales.Next();
-  do {
-    // Since we use this string as a key in a DictionaryValue, be paranoid about
-    // skipping any strings with '.'. This happens sometimes, for example with
-    // '.svn' directories.
-    FilePath relative_path;
-    // message_path was created from temp_install_dir. This should never fail.
-    if (!temp_install_dir_.AppendRelativePath(locale_path, &relative_path))
-      NOTREACHED();
-    std::wstring subdir(relative_path.ToWStringHack());
-    if (std::find(subdir.begin(), subdir.end(), L'.') != subdir.end())
+  std::set<std::string> all_locales;
+  extension_l10n_util::GetAllLocales(&all_locales);
+  FilePath locale_path;
+  while (!(locale_path = locales.Next()).empty()) {
+    if (extension_l10n_util::ShouldSkipValidation(locales_path, locale_path,
+                                                  all_locales))
       continue;
 
     FilePath messages_path =
-      locale_path.AppendASCII(Extension::kMessagesFilename);
+      locale_path.Append(Extension::kMessagesFilename);
 
     if (!ReadMessageCatalog(messages_path))
       return false;
-  } while (!(locale_path = locales.Next()).empty());
+  }
 
   return true;
 }
@@ -154,7 +150,12 @@ bool ExtensionUnpacker::Run() {
   temp_install_dir_ =
       extension_path_.DirName().AppendASCII(kTempExtensionName);
   if (!file_util::CreateDirectory(temp_install_dir_)) {
-    SetError(kCouldNotCreateDirectoryError);
+#if defined(OS_WIN)
+    std::string dir_string = WideToUTF8(temp_install_dir_.value());
+#else
+    std::string dir_string = temp_install_dir_.value();
+#endif
+    SetError(kCouldNotCreateDirectoryError + dir_string);
     return false;
   }
 
@@ -280,7 +281,7 @@ bool ExtensionUnpacker::ReadMessageCatalog(const FilePath& message_path) {
   std::string error;
   JSONFileValueSerializer serializer(message_path);
   scoped_ptr<DictionaryValue> root(
-      static_cast<DictionaryValue*>(serializer.Deserialize(&error)));
+      static_cast<DictionaryValue*>(serializer.Deserialize(NULL, &error)));
   if (!root.get()) {
     std::string messages_file = WideToASCII(message_path.ToWStringHack());
     if (error.empty()) {

@@ -4,27 +4,35 @@
 
 #include "chrome/renderer/webplugin_delegate_proxy.h"
 
+#if defined(TOOLKIT_USES_GTK)
+#include <gtk/gtk.h>
+#endif
+
 #include <algorithm>
 
-#include "app/gfx/blit.h"
-#include "app/gfx/canvas.h"
-#include "app/gfx/native_widget_types.h"
 #include "app/l10n_util.h"
 #include "app/resource_bundle.h"
 #include "base/basictypes.h"
+#include "base/command_line.h"
 #include "base/file_util.h"
 #include "base/logging.h"
 #include "base/ref_counted.h"
 #include "base/string_util.h"
-#include "base/gfx/size.h"
+#include "base/sys_info.h"
 #include "chrome/common/child_process_logging.h"
+#include "chrome/common/chrome_switches.h"
 #include "chrome/common/plugin_messages.h"
 #include "chrome/common/render_messages.h"
 #include "chrome/plugin/npobject_proxy.h"
 #include "chrome/plugin/npobject_stub.h"
 #include "chrome/plugin/npobject_util.h"
+#include "chrome/renderer/command_buffer_proxy.h"
 #include "chrome/renderer/render_thread.h"
 #include "chrome/renderer/render_view.h"
+#include "gfx/blit.h"
+#include "gfx/canvas.h"
+#include "gfx/native_widget_types.h"
+#include "gfx/size.h"
 #include "grit/generated_resources.h"
 #include "grit/renderer_resources.h"
 #include "net/base/mime_util.h"
@@ -36,8 +44,8 @@
 #include "third_party/WebKit/WebKit/chromium/public/WebString.h"
 #include "third_party/WebKit/WebKit/chromium/public/WebVector.h"
 #include "third_party/WebKit/WebKit/chromium/public/WebView.h"
+#include "webkit/glue/plugins/webplugin.h"
 #include "webkit/glue/webkit_glue.h"
-#include "webkit/glue/webplugin.h"
 
 #if defined(OS_POSIX)
 #include "ipc/ipc_channel_posix.h"
@@ -67,13 +75,13 @@ class ResourceClientProxy : public webkit_glue::WebPluginResourceClient {
   ~ResourceClientProxy() {
   }
 
-  void Initialize(int resource_id, const GURL& url, int notify_id) {
+  void Initialize(unsigned long resource_id, const GURL& url, int notify_id) {
     resource_id_ = resource_id;
     channel_->Send(new PluginMsg_HandleURLRequestReply(
         instance_id_, resource_id, url, notify_id));
   }
 
-  void InitializeForSeekableStream(int resource_id,
+  void InitializeForSeekableStream(unsigned long resource_id,
                                    int range_request_id) {
     resource_id_ = resource_id;
     multibyte_response_expected_ = true;
@@ -141,18 +149,27 @@ class ResourceClientProxy : public webkit_glue::WebPluginResourceClient {
  private:
   scoped_refptr<PluginChannelHost> channel_;
   int instance_id_;
-  int resource_id_;
+  unsigned long resource_id_;
   // Set to true if the response expected is a multibyte response.
   // For e.g. response for a HTTP byte range request.
   bool multibyte_response_expected_;
 };
+
+#if defined(OS_MACOSX)
+static void ReleaseTransportDIB(TransportDIB* dib) {
+  if (dib) {
+    IPC::Message* message = new ViewHostMsg_FreeTransportDIB(dib->id());
+    RenderThread::current()->Send(message);
+  }
+}
+#endif
 
 WebPluginDelegateProxy::WebPluginDelegateProxy(
     const std::string& mime_type,
     const base::WeakPtr<RenderView>& render_view)
     : render_view_(render_view),
       plugin_(NULL),
-      windowless_(false),
+      uses_shared_bitmaps_(false),
       window_(gfx::kNullPluginWindow),
       mime_type_(mime_type),
       instance_id_(MSG_ROUTING_NONE),
@@ -164,11 +181,32 @@ WebPluginDelegateProxy::WebPluginDelegateProxy(
 }
 
 WebPluginDelegateProxy::~WebPluginDelegateProxy() {
+#if defined(OS_MACOSX)
+  // Ask the browser to release old TransportDIB objects for which no
+  // PluginHostMsg_UpdateGeometry_ACK was ever received from the plugin
+  // process.
+  for (OldTransportDIBMap::iterator iterator = old_transport_dibs_.begin();
+       iterator != old_transport_dibs_.end();
+       ++iterator) {
+    ReleaseTransportDIB(iterator->second.backing_store.get());
+    ReleaseTransportDIB(iterator->second.transport_store.get());
+    ReleaseTransportDIB(iterator->second.background_store.get());
+  }
+
+  // Ask the browser to release the "live" TransportDIB objects.
+  ReleaseTransportDIB(backing_store_.get());
+  ReleaseTransportDIB(transport_store_.get());
+  ReleaseTransportDIB(background_store_.get());
+#endif
 }
 
 void WebPluginDelegateProxy::PluginDestroyed() {
   if (window_)
     WillDestroyWindow();
+
+#if defined(OS_MACOSX)
+  render_view_->UnregisterPluginDelegate(this);
+#endif
 
   if (channel_host_) {
     Send(new PluginMsg_DestroyInstance(instance_id_));
@@ -200,6 +238,33 @@ void WebPluginDelegateProxy::PluginDestroyed() {
   plugin_ = NULL;
 
   MessageLoop::current()->DeleteSoon(FROM_HERE, this);
+}
+
+// Returns true if the given Silverlight 'background' value corresponds to
+// one that should make the plugin transparent. See:
+// http://msdn.microsoft.com/en-us/library/cc838148(VS.95).aspx
+// for possible values.
+static bool SilverlightColorIsTransparent(const std::string& color) {
+  if (StartsWithASCII(color, "#", false)) {
+    // If it's #ARGB or #AARRGGBB check the alpha; if not it's an RGB form and
+    // it's not transparent.
+    if ((color.length() == 5 && !StartsWithASCII(color, "#F", false)) ||
+        (color.length() == 9 && !StartsWithASCII(color, "#FF", false)))
+      return true;
+  } else if (StartsWithASCII(color, "sc#", false)) {
+    // It's either sc#A,R,G,B or sc#R,G,B; if the former, check the alpha.
+    if (color.length() < 4)
+      return false;
+    std::string value_string = color.substr(3, std::string::npos);
+    std::vector<std::string> components;
+    SplitString(value_string, ',', &components);
+    if (components.size() == 4 && !StartsWithASCII(components[0], "1", false))
+      return true;
+  } else if (LowerCaseEqualsASCII(color, "transparent")) {
+    return true;
+  }
+  // Anything else is a named, opaque color or an RGB form with no alpha.
+  return false;
 }
 
 bool WebPluginDelegateProxy::Initialize(const GURL& url,
@@ -258,20 +323,68 @@ bool WebPluginDelegateProxy::Initialize(const GURL& url,
   params.page_url = page_url_;
   params.arg_names = arg_names;
   params.arg_values = arg_values;
+  params.host_render_view_routing_id = render_view_->routing_id();
+
+  bool flash =
+      LowerCaseEqualsASCII(mime_type_, "application/x-shockwave-flash");
+  bool silverlight =
+      StartsWithASCII(mime_type_, "application/x-silverlight", false);
   for (size_t i = 0; i < arg_names.size(); ++i) {
-    if (LowerCaseEqualsASCII(arg_names[i], "wmode") &&
-        LowerCaseEqualsASCII(arg_values[i], "transparent")) {
+    if ((flash && LowerCaseEqualsASCII(arg_names[i], "wmode") &&
+        LowerCaseEqualsASCII(arg_values[i], "transparent")) ||
+        (silverlight && LowerCaseEqualsASCII(arg_names[i], "background") &&
+         SilverlightColorIsTransparent(arg_values[i]))) {
       transparent_ = true;
     }
   }
 #if defined(OS_MACOSX)
-  // Until we have a way to support accelerated (3D) drawing on Macs, ask
+  // Unless we have a real way to support accelerated (3D) drawing on Macs
+  // (which for now at least means the Core Animation drawing model), ask
   // Flash to use windowless mode so that it use CoreGraphics instead of opening
-  // OpenGL contexts overlaying the browser window (which will fail or crash
-  // because Mac OS X does not allow that across processes).
+  // OpenGL contexts overlaying the browser window (which requires a very
+  // expensive extra copy for us).
   if (!transparent_ && mime_type_ == "application/x-shockwave-flash") {
-    params.arg_names.push_back("wmode");
-    params.arg_values.push_back("opaque");
+    bool force_opaque_mode = false;
+    if (StartsWith(info_.version, L"10.0", false) ||
+        StartsWith(info_.version, L"9.", false)) {
+      // Older versions of Flash don't support CA (and they assume QuickDraw
+      // support, so we can't rely on negotiation to do the right thing).
+      force_opaque_mode = true;
+    } else if (!CommandLine::ForCurrentProcess()->HasSwitch(
+                   switches::kEnableFlashCoreAnimation)) {
+      // Temporary switch for testing; once we are confident that there are no
+      // regressions from CoreGraphics mode to CoreAnimation mode, this switch
+      // (and the chrome_switches.h and command_line.h includes) can be removed.
+      force_opaque_mode = true;
+    } else {
+      // Current betas of Flash 10.1 don't respect QuickDraw negotiation either,
+      // so we still have to force opaque mode on 10.5 (where we don't support
+      // Core Animation). If the final version of Flash 10.1 is fixed to do
+      // drawing model negotiation correctly instead of assuming that QuickDraw
+      // is available without asking, this whole block (and the sys_info.h
+      // include) can be removed.
+      int32 major, minor, bugfix;
+      base::SysInfo::OperatingSystemVersionNumbers(&major, &minor, &bugfix);
+      if (major < 10 || (major == 10 && minor < 6))
+        force_opaque_mode = true;
+    }
+
+    if (force_opaque_mode) {
+      params.arg_names.push_back("wmode");
+      params.arg_values.push_back("opaque");
+    }
+  }
+
+  params.containing_window_frame = render_view_->rootWindowRect();
+  // If the renderer isn't currently visible, don't bother asking for anything
+  // else; the plugin will get real data when its renderer becomes visible.
+  if (params.containing_window_frame.IsEmpty()) {
+    params.containing_content_frame = gfx::Rect();
+    params.containing_window_has_focus = false;
+  } else {
+    params.containing_content_frame = render_view_->windowRect();
+    WebKit::WebView* webview = render_view_->webview();
+    params.containing_window_has_focus = webview && webview->isActive();
   }
 #endif
   params.load_manually = load_manually;
@@ -281,6 +394,10 @@ bool WebPluginDelegateProxy::Initialize(const GURL& url,
   result = false;
   IPC::Message* msg = new PluginMsg_Init(instance_id_, params, &result);
   Send(msg);
+
+#if defined(OS_MACOSX)
+  render_view_->RegisterPluginDelegate(this);
+#endif
 
   return result;
 }
@@ -370,8 +487,22 @@ void WebPluginDelegateProxy::OnMessageReceived(const IPC::Message& msg) {
                         OnDeferResourceLoading)
 
 #if defined(OS_MACOSX)
+    IPC_MESSAGE_HANDLER(PluginHostMsg_BindFakePluginWindowHandle,
+                        OnBindFakePluginWindowHandle);
     IPC_MESSAGE_HANDLER(PluginHostMsg_UpdateGeometry_ACK,
                         OnUpdateGeometry_ACK)
+    // Used only on 10.6 and later.
+    IPC_MESSAGE_HANDLER(PluginHostMsg_AcceleratedSurfaceSetIOSurface,
+                        OnAcceleratedSurfaceSetIOSurface)
+    // Used on 10.5 and earlier.
+    IPC_MESSAGE_HANDLER(PluginHostMsg_AcceleratedSurfaceSetTransportDIB,
+                        OnAcceleratedSurfaceSetTransportDIB)
+    IPC_MESSAGE_HANDLER(PluginHostMsg_AllocTransportDIB,
+                        OnAcceleratedSurfaceAllocTransportDIB)
+    IPC_MESSAGE_HANDLER(PluginHostMsg_FreeTransportDIB,
+                        OnAcceleratedSurfaceFreeTransportDIB)
+    IPC_MESSAGE_HANDLER(PluginHostMsg_AcceleratedSurfaceBuffersSwapped,
+                        OnAcceleratedSurfaceBuffersSwapped)
 #endif
 
     IPC_MESSAGE_UNHANDLED_ERROR()
@@ -387,11 +518,22 @@ void WebPluginDelegateProxy::OnChannelError() {
     }
     plugin_->Invalidate();
   }
-  render_view_->PluginCrashed(info_.path);
+  if (!channel_host_->expecting_shutdown())
+    render_view_->PluginCrashed(info_.path);
 }
 
 void WebPluginDelegateProxy::UpdateGeometry(const gfx::Rect& window_rect,
                                             const gfx::Rect& clip_rect) {
+  // window_rect becomes either a window in native windowing system
+  // coords, or a backing buffer.  In either case things will go bad
+  // if the rectangle is very large.
+  if (window_rect.width() < 0  || window_rect.width() > (1<<15) ||
+      window_rect.height() < 0 || window_rect.height() > (1<<15) ||
+      // Clip to 8m pixels; we know this won't overflow due to above checks.
+      window_rect.width() * window_rect.height() > (8<<20)) {
+    return;
+  }
+
   plugin_rect_ = window_rect;
 
   bool bitmaps_changed = false;
@@ -401,14 +543,19 @@ void WebPluginDelegateProxy::UpdateGeometry(const gfx::Rect& window_rect,
   param.ack_key = -1;
 #endif
 
-  if (windowless_) {
+  if (uses_shared_bitmaps_) {
     if (!backing_store_canvas_.get() ||
         (window_rect.width() != backing_store_canvas_->getDevice()->width() ||
          window_rect.height() != backing_store_canvas_->getDevice()->height()))
-        {
+    {
       bitmaps_changed = true;
 
+      bool needs_background_store = transparent_;
 #if defined(OS_MACOSX)
+      // We don't support transparency under QuickDraw, and CoreGraphics
+      // preserves transparency information (and does the compositing itself)
+      // so plugins don't need access to the page background.
+      needs_background_store = false;
       if (backing_store_.get()) {
         // ResetWindowlessBitmaps inserts the old TransportDIBs into
         // old_transport_dibs_ using the backing store's file descriptor as
@@ -426,7 +573,7 @@ void WebPluginDelegateProxy::UpdateGeometry(const gfx::Rect& window_rect,
       if (!window_rect.IsEmpty()) {
         if (!CreateBitmap(&backing_store_, &backing_store_canvas_) ||
             !CreateBitmap(&transport_store_, &transport_store_canvas_) ||
-            (transparent_ &&
+            (needs_background_store &&
              !CreateBitmap(&background_store_, &background_store_canvas_))) {
           DCHECK(false);
           ResetWindowlessBitmaps();
@@ -440,6 +587,7 @@ void WebPluginDelegateProxy::UpdateGeometry(const gfx::Rect& window_rect,
   param.clip_rect = clip_rect;
   param.windowless_buffer = TransportDIB::DefaultHandleValue();
   param.background_buffer = TransportDIB::DefaultHandleValue();
+  param.transparent = transparent_;
 
 #if defined(OS_POSIX)
   // If we're using POSIX mmap'd TransportDIBs, sending the handle across
@@ -457,13 +605,9 @@ void WebPluginDelegateProxy::UpdateGeometry(const gfx::Rect& window_rect,
 
   IPC::Message* msg;
 #if defined (OS_WIN)
-  if (info_.name.find(L"Windows Media Player") != std::wstring::npos) {
-    // Need to update geometry synchronously with WMP, otherwise if a site
-    // scripts the plugin to start playing while it's in the middle of handling
-    // an update geometry message, videos don't play.  See urls in bug 20260.
+  if (UseSynchronousGeometryUpdates()) {
     msg = new PluginMsg_UpdateGeometrySync(instance_id_, param);
-  }
-  else
+  } else  // NOLINT
 #endif
   {
     msg = new PluginMsg_UpdateGeometry(instance_id_, param);
@@ -472,15 +616,6 @@ void WebPluginDelegateProxy::UpdateGeometry(const gfx::Rect& window_rect,
 
   Send(msg);
 }
-
-#if defined(OS_MACOSX)
-static void ReleaseTransportDIB(TransportDIB *dib) {
-  if (dib) {
-    IPC::Message* msg = new ViewHostMsg_FreeTransportDIB(dib->id());
-    RenderThread::current()->Send(msg);
-  }
-}
-#endif
 
 void WebPluginDelegateProxy::ResetWindowlessBitmaps() {
 #if defined(OS_MACOSX)
@@ -526,14 +661,14 @@ bool WebPluginDelegateProxy::CreateBitmap(
   int height = plugin_rect_.height();
   const size_t stride = skia::PlatformCanvas::StrideForWidth(width);
   const size_t size = stride * height;
-#if defined(OS_LINUX)
+#if defined(OS_POSIX) && !defined(OS_MACOSX)
   memory->reset(TransportDIB::Create(size, 0));
   if (!memory->get())
     return false;
 #endif
 #if defined(OS_MACOSX)
   TransportDIB::Handle handle;
-  IPC::Message* msg = new ViewHostMsg_AllocTransportDIB(size, &handle);
+  IPC::Message* msg = new ViewHostMsg_AllocTransportDIB(size, true, &handle);
   if (!RenderThread::current()->Send(msg))
     return false;
   if (handle.fd < 0)
@@ -568,8 +703,7 @@ void WebPluginDelegateProxy::Paint(WebKit::WebCanvas* canvas,
     return;
   }
 
-  // No paint events for windowed plugins.
-  if (!windowless_)
+  if (!uses_shared_bitmaps_)
     return;
 
   // We got a paint before the plugin's coordinates, so there's no buffer to
@@ -764,7 +898,7 @@ bool WebPluginDelegateProxy::BackgroundChanged(
 
 void WebPluginDelegateProxy::Print(gfx::NativeDrawingContext context) {
   base::SharedMemoryHandle shared_memory;
-  size_t size;
+  uint32 size;
   if (!Send(new PluginMsg_Print(instance_id_, &shared_memory, &size)))
     return;
 
@@ -834,8 +968,47 @@ int WebPluginDelegateProxy::GetProcessId() {
   return channel_host_->peer_pid();
 }
 
+#if defined(OS_MACOSX)
+void WebPluginDelegateProxy::SetWindowFocus(bool window_has_focus) {
+  IPC::Message* msg = new PluginMsg_SetWindowFocus(instance_id_,
+                                                   window_has_focus);
+  // Make sure visibility events are delivered in the right order relative to
+  // sync messages they might interact with (Paint, HandleEvent, etc.).
+  msg->set_unblock(true);
+  Send(msg);
+}
+
+void WebPluginDelegateProxy::SetContainerVisibility(bool is_visible) {
+  IPC::Message* msg;
+  if (is_visible) {
+    gfx::Rect window_frame = render_view_->rootWindowRect();
+    gfx::Rect view_frame = render_view_->windowRect();
+    WebKit::WebView* webview = render_view_->webview();
+    msg = new PluginMsg_ContainerShown(instance_id_, window_frame, view_frame,
+                                       webview && webview->isActive());
+  } else {
+    msg = new PluginMsg_ContainerHidden(instance_id_);
+  }
+  // Make sure visibility events are delivered in the right order relative to
+  // sync messages they might interact with (Paint, HandleEvent, etc.).
+  msg->set_unblock(true);
+  Send(msg);
+}
+
+void WebPluginDelegateProxy::WindowFrameChanged(gfx::Rect window_frame,
+                                                gfx::Rect view_frame) {
+  IPC::Message* msg = new PluginMsg_WindowFrameChanged(instance_id_,
+                                                       window_frame,
+                                                       view_frame);
+  // Make sure frame events are delivered in the right order relative to
+  // sync messages they might interact with (e.g., HandleEvent).
+  msg->set_unblock(true);
+  Send(msg);
+}
+#endif  // OS_MACOSX
+
 void WebPluginDelegateProxy::OnSetWindow(gfx::PluginWindowHandle window) {
-  windowless_ = !window;
+  uses_shared_bitmaps_ = !window;
   window_ = window;
   if (plugin_)
     plugin_->SetWindow(window);
@@ -844,6 +1017,14 @@ void WebPluginDelegateProxy::OnSetWindow(gfx::PluginWindowHandle window) {
 void WebPluginDelegateProxy::WillDestroyWindow() {
   DCHECK(window_);
   plugin_->WillDestroyWindow(window_);
+#if defined(OS_MACOSX)
+  if (window_) {
+    // This is actually a "fake" window handle only for the GPU
+    // plugin. Deallocate it on the browser side.
+    if (render_view_)
+      render_view_->DestroyFakePluginWindowHandle(window_);
+  }
+#endif
   window_ = gfx::kNullPluginWindow;
 }
 
@@ -871,9 +1052,14 @@ void WebPluginDelegateProxy::OnInvalidateRect(const gfx::Rect& rect) {
   if (!plugin_)
     return;
 
+  // Clip the invalidation rect to the plugin bounds; the plugin may have been
+  // resized since the invalidate message was sent.
+  const gfx::Rect clipped_rect(rect.Intersect(
+      gfx::Rect(0, 0, plugin_rect_.width(), plugin_rect_.height())));
+
   invalidate_pending_ = true;
-  CopyFromTransportToBacking(rect);
-  plugin_->InvalidateRect(rect);
+  CopyFromTransportToBacking(clipped_rect);
+  plugin_->InvalidateRect(clipped_rect);
 }
 
 void WebPluginDelegateProxy::OnGetWindowScriptNPObject(
@@ -1101,12 +1287,28 @@ void WebPluginDelegateProxy::CopyFromTransportToBacking(const gfx::Rect& rect) {
   }
 
   // Copy the damaged rect from the transport bitmap to the backing store.
-  gfx::Rect dest_rect = rect;
 #if defined(OS_MACOSX)
-  FlipRectVerticallyWithHeight(&dest_rect, plugin_rect_.height());
-#endif
-  BlitCanvasToCanvas(backing_store_canvas_.get(), dest_rect,
+  // Blitting the bits directly is much faster than going through CG, and since
+  // since the goal is just to move the raw pixels between two bitmaps with the
+  // same pixel format (no compositing, color correction, etc.), it's safe.
+  const size_t stride =
+      skia::PlatformCanvas::StrideForWidth(plugin_rect_.width());
+  const size_t chunk_size = 4 * rect.width();
+  char* source_data = static_cast<char*>(transport_store_->memory()) +
+      rect.y() * stride + 4 * rect.x();
+  // The two bitmaps are flipped relative to each other.
+  int dest_starting_row = plugin_rect_.height() - rect.y() - 1;
+  char* target_data = static_cast<char*>(backing_store_->memory()) +
+      dest_starting_row * stride + 4 * rect.x();
+  for (int row = 0; row < rect.height(); ++row) {
+    memcpy(target_data, source_data, chunk_size);
+    source_data += stride;
+    target_data -= stride;
+  }
+#else
+  BlitCanvasToCanvas(backing_store_canvas_.get(), rect,
                      transport_store_canvas_.get(), rect.origin());
+#endif
   backing_store_painted_ = backing_store_painted_.Union(rect);
 }
 
@@ -1128,7 +1330,7 @@ void WebPluginDelegateProxy::OnHandleURLRequest(
 
 webkit_glue::WebPluginResourceClient*
 WebPluginDelegateProxy::CreateResourceClient(
-    int resource_id, const GURL& url, int notify_id) {
+    unsigned long resource_id, const GURL& url, int notify_id) {
   if (!channel_host_)
     return NULL;
 
@@ -1140,7 +1342,7 @@ WebPluginDelegateProxy::CreateResourceClient(
 
 webkit_glue::WebPluginResourceClient*
 WebPluginDelegateProxy::CreateSeekableResourceClient(
-    int resource_id, int range_request_id) {
+    unsigned long resource_id, int range_request_id) {
   if (!channel_host_)
     return NULL;
 
@@ -1148,6 +1350,85 @@ WebPluginDelegateProxy::CreateSeekableResourceClient(
                                                        instance_id_);
   proxy->InitializeForSeekableStream(resource_id, range_request_id);
   return proxy;
+}
+
+#if defined(OS_MACOSX)
+void WebPluginDelegateProxy::OnBindFakePluginWindowHandle() {
+  BindFakePluginWindowHandle();
+}
+
+// Synthesize a fake window handle for the plug-in to identify the instance
+// to the browser, allowing mapping to a surface for hardware acceleration
+// of plug-in content. The browser generates the handle which is then set on
+// the plug-in. Returns true if it successfully sets the window handle on the
+// plug-in.
+bool WebPluginDelegateProxy::BindFakePluginWindowHandle() {
+  gfx::PluginWindowHandle fake_window = NULL;
+  if (render_view_)
+    fake_window = render_view_->AllocateFakePluginWindowHandle();
+  // If we aren't running on 10.6, this allocation will fail.
+  if (!fake_window)
+    return false;
+  OnSetWindow(fake_window);
+  if (!Send(new PluginMsg_SetFakeAcceleratedSurfaceWindowHandle(instance_id_,
+                                                                fake_window))) {
+    return false;
+  }
+
+  // Since this isn't a real window, it doesn't get initial size and location
+  // information the way a real windowed plugin would, so we need to feed it its
+  // starting geometry.
+  webkit_glue::WebPluginGeometry geom;
+  geom.window = fake_window;
+  geom.window_rect = plugin_rect_;
+  geom.clip_rect = gfx::Rect(0, 0, plugin_rect_.width(), plugin_rect_.height());
+  geom.rects_valid = true;
+  geom.visible = true;
+  render_view_->DidMovePlugin(geom);
+  // Invalidate the plugin region to ensure that the move event actually gets
+  // dispatched (for a plugin on an otherwise static page).
+  render_view_->didInvalidateRect(WebKit::WebRect(plugin_rect_.x(),
+                                                  plugin_rect_.y(),
+                                                  plugin_rect_.width(),
+                                                  plugin_rect_.height()));
+
+  return true;
+}
+#endif
+
+CommandBufferProxy* WebPluginDelegateProxy::CreateCommandBuffer() {
+#if defined(ENABLE_GPU)
+#if defined(OS_MACOSX)
+  if (!BindFakePluginWindowHandle())
+    return NULL;
+#endif
+  int command_buffer_id;
+  if (!Send(new PluginMsg_CreateCommandBuffer(instance_id_,
+                                              &command_buffer_id))) {
+    return NULL;
+  }
+
+  CommandBufferProxy* command_buffer =
+      new CommandBufferProxy(channel_host_, command_buffer_id);
+  channel_host_->AddRoute(command_buffer_id, command_buffer, NULL);
+  return command_buffer;
+#else
+  return NULL;
+#endif  // ENABLE_GPU
+}
+
+void WebPluginDelegateProxy::DestroyCommandBuffer(
+    CommandBufferProxy* command_buffer) {
+  DCHECK(command_buffer);
+#if defined(ENABLE_GPU)
+  Send(new PluginMsg_DestroyCommandBuffer(instance_id_));
+  channel_host_->RemoveRoute(command_buffer->route_id());
+  delete command_buffer;
+#endif
+}
+
+gfx::PluginWindowHandle WebPluginDelegateProxy::GetPluginWindowHandle() {
+  return window_;
 }
 
 void WebPluginDelegateProxy::OnCancelDocumentLoad() {
@@ -1162,7 +1443,7 @@ void WebPluginDelegateProxy::OnInitiateHTTPRangeRequest(
       url.c_str(), range_info.c_str(), range_request_id);
 }
 
-void WebPluginDelegateProxy::OnDeferResourceLoading(int resource_id,
+void WebPluginDelegateProxy::OnDeferResourceLoading(unsigned long resource_id,
                                                     bool defer) {
   plugin_->SetDeferResourceLoading(resource_id, defer);
 }
@@ -1185,5 +1466,70 @@ void WebPluginDelegateProxy::OnUpdateGeometry_ACK(int ack_key) {
   ReleaseTransportDIB(iterator->second.background_store.get());
 
   old_transport_dibs_.erase(iterator);
+}
+
+void WebPluginDelegateProxy::OnAcceleratedSurfaceSetIOSurface(
+    gfx::PluginWindowHandle window,
+    int32 width,
+    int32 height,
+    uint64 io_surface_identifier) {
+  if (render_view_)
+    render_view_->AcceleratedSurfaceSetIOSurface(window, width, height,
+                                                 io_surface_identifier);
+}
+
+void WebPluginDelegateProxy::OnAcceleratedSurfaceSetTransportDIB(
+    gfx::PluginWindowHandle window,
+    int32 width,
+    int32 height,
+    TransportDIB::Handle transport_dib) {
+  if (render_view_)
+    render_view_->AcceleratedSurfaceSetTransportDIB(window, width, height,
+                                                    transport_dib);
+}
+
+void WebPluginDelegateProxy::OnAcceleratedSurfaceAllocTransportDIB(
+    size_t size,
+    TransportDIB::Handle* dib_handle) {
+  if (render_view_)
+    *dib_handle = render_view_->AcceleratedSurfaceAllocTransportDIB(size);
+  else
+    *dib_handle = TransportDIB::DefaultHandleValue();
+}
+
+void WebPluginDelegateProxy::OnAcceleratedSurfaceFreeTransportDIB(
+    TransportDIB::Id dib_id) {
+  if (render_view_)
+    render_view_->AcceleratedSurfaceFreeTransportDIB(dib_id);
+}
+
+void WebPluginDelegateProxy::OnAcceleratedSurfaceBuffersSwapped(
+    gfx::PluginWindowHandle window) {
+  if (render_view_)
+    render_view_->AcceleratedSurfaceBuffersSwapped(window);
+}
+#endif
+
+#if defined(OS_WIN)
+bool WebPluginDelegateProxy::UseSynchronousGeometryUpdates() {
+  // Need to update geometry synchronously with WMP, otherwise if a site
+  // scripts the plugin to start playing while it's in the middle of handling
+  // an update geometry message, videos don't play.  See urls in bug 20260.
+  if (info_.name.find(L"Windows Media Player") != std::wstring::npos)
+    return true;
+
+  // The move networks plugin needs to be informed of geometry updates
+  // synchronously.
+  std::vector<WebPluginMimeType>::iterator index;
+  for (index = info_.mime_types.begin(); index != info_.mime_types.end();
+       index++) {
+    if (index->mime_type == "application/x-vnd.moveplayer.qm" ||
+        index->mime_type == "application/x-vnd.moveplay2.qm" ||
+        index->mime_type == "application/x-vnd.movenetworks.qm" ||
+        index->mime_type == "application/x-vnd.mnplayer.qm") {
+      return true;
+    }
+  }
+  return false;
 }
 #endif

@@ -69,7 +69,7 @@
 
 /* BEGIN GOOGLE MODIFICATIONS */
 /* On Linux and Mac, be sure to set Mozilla-specific macros. */
-#if defined(OS_LINUX) || defined(OS_FREEBSD)
+#if defined(USE_X11)
 #define XP_UNIX 1
 #define MOZ_X11 1
 #endif
@@ -722,6 +722,7 @@ typedef struct NP_Port
  *  Non-standard event types that can be passed to HandleEvent
  */
 /* BEGIN GOOGLE MODIFICATIONS */
+#ifndef NP_NO_CARBON
 enum NPEventType {
   NPEventType_GetFocusEvent = (osEvt + 16),
   NPEventType_LoseFocusEvent,
@@ -737,16 +738,10 @@ enum NPEventType {
 #define loseFocusEvent    (osEvt + 17)
 #define adjustCursorEvent (osEvt + 18)
 #endif
+#endif /* NP_NO_CARBON */
 /* END GOOGLE MODIFICATIONS */
 
 #endif /* XP_MACOSX */
-
-#if !defined(PEPPER_APIS_ENABLED)
-/* Stub typedefs for interfaces requiring Pepper types. */
-typedef int NPRenderType;
-typedef struct _NPRenderContext NPRenderContext;
-typedef struct _NPPepperExtensions NPPepperExtensions;
-#endif  /* defined(PEPPER_APIS_ENABLED) */
 
 /*
  * Values for mode passed to NPP_New:

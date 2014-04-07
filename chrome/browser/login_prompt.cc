@@ -4,9 +4,12 @@
 
 #include "chrome/browser/login_prompt.h"
 
+#include <vector>
+
 #include "app/l10n_util.h"
 #include "base/command_line.h"
 #include "base/lock.h"
+#include "base/utf_string_conversions.h"
 #include "chrome/browser/chrome_thread.h"
 #include "chrome/browser/password_manager/password_manager.h"
 #include "chrome/browser/renderer_host/render_process_host.h"
@@ -14,7 +17,9 @@
 #include "chrome/browser/renderer_host/resource_dispatcher_host_request_info.h"
 #include "chrome/browser/tab_contents/constrained_window.h"
 #include "chrome/browser/tab_contents/tab_contents.h"
+#include "chrome/browser/tab_contents/tab_util.h"
 #include "chrome/common/chrome_switches.h"
+#include "chrome/common/notification_service.h"
 #include "grit/generated_resources.h"
 #include "net/base/auth.h"
 #include "net/base/net_util.h"
@@ -57,6 +62,287 @@ std::string GetSignonRealm(const GURL& url,
   }
   signon_realm.append(WideToUTF8(auth_info.realm));
   return signon_realm;
+}
+
+// ----------------------------------------------------------------------------
+// LoginHandler
+
+LoginHandler::LoginHandler(net::AuthChallengeInfo* auth_info,
+                           URLRequest* request)
+    : handled_auth_(false),
+      dialog_(NULL),
+      auth_info_(auth_info),
+      request_(request),
+      password_manager_(NULL),
+      login_model_(NULL) {
+  // This constructor is called on the I/O thread, so we cannot load the nib
+  // here. BuildViewForPasswordManager() will be invoked on the UI thread
+  // later, so wait with loading the nib until then.
+  DCHECK(request_) << "LoginHandler constructed with NULL request";
+  DCHECK(auth_info_) << "LoginHandler constructed with NULL auth info";
+
+  AddRef();  // matched by ReleaseSoon::ReleaseSoon().
+
+  ChromeThread::PostTask(
+      ChromeThread::UI, FROM_HERE,
+      NewRunnableMethod(this, &LoginHandler::AddObservers));
+
+  if (!ResourceDispatcherHost::RenderViewForRequest(
+          request_, &render_process_host_id_,  &tab_contents_id_)) {
+    NOTREACHED();
+  }
+}
+
+LoginHandler::~LoginHandler() {
+  SetModel(NULL);
+}
+
+void LoginHandler::SetPasswordForm(const webkit_glue::PasswordForm& form) {
+  password_form_ = form;
+}
+
+void LoginHandler::SetPasswordManager(PasswordManager* password_manager) {
+  password_manager_ = password_manager;
+}
+
+TabContents* LoginHandler::GetTabContentsForLogin() const {
+  DCHECK(ChromeThread::CurrentlyOn(ChromeThread::UI));
+
+  return tab_util::GetTabContentsByID(render_process_host_id_,
+                                      tab_contents_id_);
+}
+
+void LoginHandler::SetAuth(const std::wstring& username,
+                           const std::wstring& password) {
+  if (WasAuthHandled(true))
+    return;
+
+  // Tell the password manager the credentials were submitted / accepted.
+  if (password_manager_) {
+    password_form_.username_value = WideToUTF16Hack(username);
+    password_form_.password_value = WideToUTF16Hack(password);
+    password_manager_->ProvisionallySavePassword(password_form_);
+  }
+
+  ChromeThread::PostTask(
+      ChromeThread::UI, FROM_HERE,
+      NewRunnableMethod(this, &LoginHandler::CloseContentsDeferred));
+  ChromeThread::PostTask(
+      ChromeThread::UI, FROM_HERE,
+      NewRunnableMethod(
+          this, &LoginHandler::NotifyAuthSupplied, username, password));
+  ChromeThread::PostTask(
+      ChromeThread::IO, FROM_HERE,
+      NewRunnableMethod(
+          this, &LoginHandler::SetAuthDeferred, username, password));
+}
+
+void LoginHandler::CancelAuth() {
+  if (WasAuthHandled(true))
+    return;
+
+  ChromeThread::PostTask(
+      ChromeThread::UI, FROM_HERE,
+      NewRunnableMethod(this, &LoginHandler::CloseContentsDeferred));
+  ChromeThread::PostTask(
+      ChromeThread::UI, FROM_HERE,
+      NewRunnableMethod(this, &LoginHandler::NotifyAuthCancelled));
+  ChromeThread::PostTask(
+      ChromeThread::IO, FROM_HERE,
+      NewRunnableMethod(this, &LoginHandler::CancelAuthDeferred));
+}
+
+void LoginHandler::OnRequestCancelled() {
+  DCHECK(ChromeThread::CurrentlyOn(ChromeThread::IO)) <<
+      "Why is OnRequestCancelled called from the UI thread?";
+
+  // Reference is no longer valid.
+  request_ = NULL;
+
+  // Give up on auth if the request was cancelled.
+  CancelAuth();
+}
+
+void LoginHandler::AddObservers() {
+  DCHECK(ChromeThread::CurrentlyOn(ChromeThread::UI));
+
+  registrar_.Add(this, NotificationType::AUTH_SUPPLIED,
+                 NotificationService::AllSources());
+  registrar_.Add(this, NotificationType::AUTH_CANCELLED,
+                 NotificationService::AllSources());
+}
+
+void LoginHandler::RemoveObservers() {
+  DCHECK(ChromeThread::CurrentlyOn(ChromeThread::UI));
+
+  registrar_.Remove(this, NotificationType::AUTH_SUPPLIED,
+                    NotificationService::AllSources());
+  registrar_.Remove(this, NotificationType::AUTH_CANCELLED,
+                    NotificationService::AllSources());
+
+  DCHECK(registrar_.IsEmpty());
+}
+
+void LoginHandler::Observe(NotificationType type,
+                           const NotificationSource& source,
+                           const NotificationDetails& details) {
+  DCHECK(ChromeThread::CurrentlyOn(ChromeThread::UI));
+  DCHECK(type == NotificationType::AUTH_SUPPLIED ||
+         type == NotificationType::AUTH_CANCELLED);
+
+  TabContents* requesting_contents = GetTabContentsForLogin();
+  if (!requesting_contents)
+    return;
+
+  NavigationController* this_controller = &requesting_contents->controller();
+  NavigationController* that_controller =
+      Source<NavigationController>(source).ptr();
+
+  // Only handle notifications from other handlers.
+  if (this_controller == that_controller)
+    return;
+
+  LoginNotificationDetails* login_details =
+      Details<LoginNotificationDetails>(details).ptr();
+
+  // Only handle notification for the identical auth info.
+  if (*login_details->handler()->auth_info() != *auth_info())
+    return;
+
+  // Set or cancel the auth in this handler.
+  if (type == NotificationType::AUTH_SUPPLIED) {
+    AuthSuppliedLoginNotificationDetails* supplied_details =
+        Details<AuthSuppliedLoginNotificationDetails>(details).ptr();
+    SetAuth(supplied_details->username(), supplied_details->password());
+  } else {
+    DCHECK(type == NotificationType::AUTH_CANCELLED);
+    CancelAuth();
+  }
+}
+
+void LoginHandler::SetModel(LoginModel* model) {
+  if (login_model_)
+    login_model_->SetObserver(NULL);
+  login_model_ = model;
+  if (login_model_)
+    login_model_->SetObserver(this);
+}
+
+void LoginHandler::SetDialog(ConstrainedWindow* dialog) {
+  dialog_ = dialog;
+}
+
+void LoginHandler::NotifyAuthNeeded() {
+  DCHECK(ChromeThread::CurrentlyOn(ChromeThread::UI));
+  if (WasAuthHandled(false))
+    return;
+
+  TabContents* requesting_contents = GetTabContentsForLogin();
+  if (!requesting_contents)
+    return;
+
+  NotificationService* service = NotificationService::current();
+  NavigationController* controller = &requesting_contents->controller();
+  LoginNotificationDetails details(this);
+
+  service->Notify(NotificationType::AUTH_NEEDED,
+                  Source<NavigationController>(controller),
+                  Details<LoginNotificationDetails>(&details));
+}
+
+void LoginHandler::NotifyAuthCancelled() {
+  DCHECK(ChromeThread::CurrentlyOn(ChromeThread::UI));
+  DCHECK(WasAuthHandled(false));
+
+  TabContents* requesting_contents = GetTabContentsForLogin();
+  if (!requesting_contents)
+    return;
+
+  NotificationService* service = NotificationService::current();
+  NavigationController* controller = &requesting_contents->controller();
+  LoginNotificationDetails details(this);
+
+  service->Notify(NotificationType::AUTH_CANCELLED,
+                  Source<NavigationController>(controller),
+                  Details<LoginNotificationDetails>(&details));
+}
+
+void LoginHandler::NotifyAuthSupplied(const std::wstring& username,
+                                      const std::wstring& password) {
+  DCHECK(ChromeThread::CurrentlyOn(ChromeThread::UI));
+  DCHECK(WasAuthHandled(false));
+
+  TabContents* requesting_contents = GetTabContentsForLogin();
+  if (!requesting_contents)
+    return;
+
+  NotificationService* service = NotificationService::current();
+  NavigationController* controller = &requesting_contents->controller();
+  AuthSuppliedLoginNotificationDetails details(this, username, password);
+
+  service->Notify(NotificationType::AUTH_SUPPLIED,
+                  Source<NavigationController>(controller),
+                  Details<AuthSuppliedLoginNotificationDetails>(&details));
+}
+
+void LoginHandler::ReleaseSoon() {
+  if (!WasAuthHandled(true)) {
+    ChromeThread::PostTask(
+        ChromeThread::IO, FROM_HERE,
+        NewRunnableMethod(this, &LoginHandler::CancelAuthDeferred));
+    ChromeThread::PostTask(
+        ChromeThread::UI, FROM_HERE,
+        NewRunnableMethod(this, &LoginHandler::NotifyAuthCancelled));
+  }
+
+  ChromeThread::PostTask(
+    ChromeThread::UI, FROM_HERE,
+    NewRunnableMethod(this, &LoginHandler::RemoveObservers));
+
+  // Delete this object once all InvokeLaters have been called.
+  ChromeThread::ReleaseSoon(ChromeThread::IO, FROM_HERE, this);
+}
+
+// Returns whether authentication had been handled (SetAuth or CancelAuth).
+// If |set_handled| is true, it will mark authentication as handled.
+bool LoginHandler::WasAuthHandled(bool set_handled) {
+  AutoLock lock(handled_auth_lock_);
+  bool was_handled = handled_auth_;
+  if (set_handled)
+    handled_auth_ = true;
+  return was_handled;
+}
+
+// Calls SetAuth from the IO loop.
+void LoginHandler::SetAuthDeferred(const std::wstring& username,
+                                   const std::wstring& password) {
+  DCHECK(ChromeThread::CurrentlyOn(ChromeThread::IO));
+
+  if (request_) {
+    request_->SetAuth(username, password);
+    ResetLoginHandlerForRequest(request_);
+  }
+}
+
+// Calls CancelAuth from the IO loop.
+void LoginHandler::CancelAuthDeferred() {
+  DCHECK(ChromeThread::CurrentlyOn(ChromeThread::IO));
+
+  if (request_) {
+    request_->CancelAuth();
+    // Verify that CancelAuth doesn't destroy the request via our delegate.
+    DCHECK(request_ != NULL);
+    ResetLoginHandlerForRequest(request_);
+  }
+}
+
+// Closes the view_contents from the UI loop.
+void LoginHandler::CloseContentsDeferred() {
+  DCHECK(ChromeThread::CurrentlyOn(ChromeThread::UI));
+
+  // The hosting ConstrainedWindow may have been freed.
+  if (dialog_)
+    dialog_->CloseConstrainedWindow();
 }
 
 // ----------------------------------------------------------------------------
@@ -114,15 +400,15 @@ class LoginDialogTask : public Task {
       dialog_form.scheme = PasswordForm::SCHEME_OTHER;
     }
     std::string host_and_port(WideToASCII(auth_info_->host_and_port));
-    if (net::GetHostAndPort(request_url_) != host_and_port) {
-      dialog_form.origin = GURL();
-      NOTREACHED();
-    } else if (auth_info_->is_proxy) {
+    if (auth_info_->is_proxy) {
       std::string origin = host_and_port;
       // We don't expect this to already start with http:// or https://.
       DCHECK(origin.find("http://") != 0 && origin.find("https://") != 0);
       origin = std::string("http://") + origin;
       dialog_form.origin = GURL(origin);
+    } else if (net::GetHostAndPort(request_url_) != host_and_port) {
+      dialog_form.origin = GURL();
+      NOTREACHED();  // crbug.com/32718
     } else {
       dialog_form.origin = GURL(request_url_.scheme() + "://" + host_and_port);
     }
@@ -142,7 +428,7 @@ class LoginDialogTask : public Task {
   // This is owned by the ResourceDispatcherHost that invoked us.
   LoginHandler* handler_;
 
-  DISALLOW_EVIL_CONSTRUCTORS(LoginDialogTask);
+  DISALLOW_COPY_AND_ASSIGN(LoginDialogTask);
 };
 
 // ----------------------------------------------------------------------------
@@ -150,7 +436,7 @@ class LoginDialogTask : public Task {
 
 LoginHandler* CreateLoginPrompt(net::AuthChallengeInfo* auth_info,
                                 URLRequest* request) {
-  LoginHandler* handler = LoginHandler::Create(request);
+  LoginHandler* handler = LoginHandler::Create(auth_info, request);
   ChromeThread::PostTask(
       ChromeThread::UI, FROM_HERE, new LoginDialogTask(
           request->url(), auth_info, handler));

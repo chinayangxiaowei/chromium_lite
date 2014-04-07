@@ -4,16 +4,21 @@
 
 #include "chrome/browser/views/info_bubble.h"
 
-#include "app/gfx/canvas.h"
-#include "app/gfx/color_utils.h"
-#include "app/gfx/path.h"
 #include "base/keyboard_codes.h"
+#include "chrome/browser/views/bubble_border.h"
 #include "chrome/browser/window_sizer.h"
 #include "chrome/common/notification_service.h"
+#include "gfx/canvas.h"
+#include "gfx/color_utils.h"
+#include "gfx/path.h"
 #include "third_party/skia/include/core/SkPaint.h"
 #include "views/fill_layout.h"
 #include "views/widget/root_view.h"
 #include "views/window/window.h"
+
+#if defined(OS_CHROMEOS)
+#include "chrome/browser/chromeos/wm_ipc.h"
+#endif
 
 // Background color of the bubble.
 #if defined(OS_WIN)
@@ -236,6 +241,12 @@ void InfoBubble::Init(views::Window* parent,
   MakeTransparent();
   make_transient_to_parent();
   WidgetGtk::Init(GTK_WIDGET(parent->GetNativeWindow()), gfx::Rect());
+#if defined(OS_CHROMEOS)
+  chromeos::WmIpc::instance()->SetWindowType(
+      GetNativeView(),
+      chromeos::WmIpc::WINDOW_TYPE_CHROME_INFO_BUBBLE,
+      NULL);
+#endif
 #endif
 
   // Create a View to hold the contents of the main window.
@@ -253,7 +264,7 @@ void InfoBubble::Init(views::Window* parent,
   // Calculate and set the bounds for all windows and views.
   gfx::Rect window_bounds;
 
-  bool prefer_arrow_on_right =
+  bool prefer_arrow_on_right = delegate &&
       (contents->UILayoutIsRightToLeft() == delegate->PreferOriginSideAnchor());
 
 #if defined(OS_WIN)

@@ -5,16 +5,17 @@
 #ifndef NET_SOCKET_TCP_CLIENT_SOCKET_WIN_H_
 #define NET_SOCKET_TCP_CLIENT_SOCKET_WIN_H_
 
-#include <ws2tcpip.h>
+#include <winsock2.h>
 
 #include "base/object_watcher.h"
 #include "net/base/address_list.h"
 #include "net/base/completion_callback.h"
+#include "net/base/net_log.h"
 #include "net/socket/client_socket.h"
 
 namespace net {
 
-class LoadLog;
+class BoundNetLog;
 
 class TCPClientSocketWin : public ClientSocket {
  public:
@@ -26,10 +27,11 @@ class TCPClientSocketWin : public ClientSocket {
   ~TCPClientSocketWin();
 
   // ClientSocket methods:
-  virtual int Connect(CompletionCallback* callback, LoadLog* load_log);
+  virtual int Connect(CompletionCallback* callback, const BoundNetLog& net_log);
   virtual void Disconnect();
   virtual bool IsConnected() const;
   virtual bool IsConnectedAndIdle() const;
+  virtual int GetPeerAddress(AddressList* address) const;
 
   // Socket methods:
   // Multiple outstanding requests are not supported.
@@ -77,7 +79,7 @@ class TCPClientSocketWin : public ClientSocket {
   // External callback; called when write is complete.
   CompletionCallback* write_callback_;
 
-  scoped_refptr<LoadLog> load_log_;
+  BoundNetLog net_log_;
 
   DISALLOW_COPY_AND_ASSIGN(TCPClientSocketWin);
 };

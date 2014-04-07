@@ -1,4 +1,4 @@
-// Copyright (c) 2006-2008 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,13 +10,13 @@
 #endif
 
 #include "app/drag_drop_types.h"
-#include "app/gfx/canvas.h"
-#include "app/gfx/path.h"
-#include "app/l10n_util.h"
+#include "base/i18n/rtl.h"
 #include "base/logging.h"
 #include "base/message_loop.h"
 #include "base/scoped_handle.h"
-#include "base/string_util.h"
+#include "base/utf_string_conversions.h"
+#include "gfx/canvas.h"
+#include "gfx/path.h"
 #include "third_party/skia/include/core/SkShader.h"
 #include "views/background.h"
 #include "views/layout_manager.h"
@@ -25,8 +25,12 @@
 #include "views/widget/tooltip_manager.h"
 #include "views/widget/widget.h"
 #include "views/window/window.h"
+
 #if defined(OS_WIN)
 #include "views/accessibility/view_accessibility_wrapper.h"
+#endif
+#if defined(OS_LINUX)
+#include "app/scoped_handle_gtk.h"
 #endif
 
 namespace views {
@@ -36,6 +40,9 @@ ViewsDelegate* ViewsDelegate::views_delegate = NULL;
 
 // static
 char View::kViewClassName[] = "views/View";
+
+// static
+const int View::kShowFolderDropMenuDelay = 400;
 
 /////////////////////////////////////////////////////////////////////////////
 //
@@ -54,8 +61,10 @@ View::View()
       is_parent_owned_(true),
       notify_when_visible_bounds_in_root_changes_(false),
       registered_for_visible_bounds_notification_(false),
+      accelerator_registration_delayed_(false),
       next_focusable_view_(NULL),
       previous_focusable_view_(NULL),
+      accelerator_focus_manager_(NULL),
       registered_accelerator_count_(0),
       context_menu_controller_(NULL),
 #if defined(OS_WIN)
@@ -67,12 +76,14 @@ View::View()
 }
 
 View::~View() {
+  if (parent_)
+    parent_->RemoveChildView(this);
+
   int c = static_cast<int>(child_views_.size());
   while (--c >= 0) {
+    child_views_[c]->SetParent(NULL);
     if (child_views_[c]->IsParentOwned())
       delete child_views_[c];
-    else
-      child_views_[c]->SetParent(NULL);
   }
 
 #if defined(OS_WIN)
@@ -111,13 +122,14 @@ void View::SetBounds(const gfx::Rect& bounds) {
 
   gfx::Rect prev = bounds_;
   bounds_ = bounds;
-  DidChangeBounds(prev, bounds_);
+  bool size_changed = prev.size() != bounds_.size();
+  bool position_changed = prev.origin() != bounds_.origin();
 
-  RootView* root = GetRootView();
-  if (root) {
-    bool size_changed = prev.size() != bounds_.size();
-    bool position_changed = prev.origin() != bounds_.origin();
-    if (size_changed || position_changed)
+  if (size_changed || position_changed) {
+    DidChangeBounds(prev, bounds_);
+
+    RootView* root = GetRootView();
+    if (root)
       root->ViewBoundsChanged(this, size_changed, position_changed);
   }
 }
@@ -141,6 +153,10 @@ gfx::Size View::GetPreferredSize() {
   if (layout_manager_.get())
     return layout_manager_->GetPreferredSize(this);
   return gfx::Size();
+}
+
+int View::GetBaseline() {
+  return -1;
 }
 
 void View::SizeToPreferredSize() {
@@ -169,14 +185,16 @@ void View::DidChangeBounds(const gfx::Rect& previous,
   Layout();
 }
 
-void View::ScrollRectToVisible(int x, int y, int width, int height) {
+void View::ScrollRectToVisible(const gfx::Rect& rect) {
   View* parent = GetParent();
 
   // We must take RTL UI mirroring into account when adjusting the position of
   // the region.
-  if (parent)
-    parent->ScrollRectToVisible(
-        GetX(APPLY_MIRRORING_TRANSFORMATION) + x, View::y() + y, width, height);
+  if (parent) {
+    gfx::Rect scroll_rect(rect);
+    scroll_rect.Offset(GetX(APPLY_MIRRORING_TRANSFORMATION), y());
+    parent->ScrollRectToVisible(scroll_rect);
+  }
 }
 
 /////////////////////////////////////////////////////////////////////////////
@@ -217,8 +235,7 @@ void View::SetLayoutManager(LayoutManager* layout_manager) {
 }
 
 bool View::UILayoutIsRightToLeft() const {
-  return (ui_mirroring_is_enabled_for_rtl_languages_ &&
-          l10n_util::GetTextDirection() == l10n_util::RIGHT_TO_LEFT);
+  return (ui_mirroring_is_enabled_for_rtl_languages_ && base::i18n::IsRTL());
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -227,18 +244,14 @@ bool View::UILayoutIsRightToLeft() const {
 //
 ////////////////////////////////////////////////////////////////////////////////
 
-inline int View::MirroredX() const {
-  // TODO(beng): reimplement in terms of MirroredLeftPointForRect.
+int View::MirroredX() const {
   View* parent = GetParent();
-  if (parent && parent->UILayoutIsRightToLeft())
-    return parent->width() - x() - width();
-  return x();
+  return parent ? parent->MirroredLeftPointForRect(bounds_) : x();
 }
 
 int View::MirroredLeftPointForRect(const gfx::Rect& bounds) const {
-  if (!UILayoutIsRightToLeft())
-    return bounds.x();
-  return width() - bounds.x() - bounds.width();
+  return UILayoutIsRightToLeft() ?
+      (width() - bounds.x() - bounds.width()) : bounds.x();
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -310,10 +323,6 @@ void View::SchedulePaint(const gfx::Rect& r, bool urgent) {
 
 void View::SchedulePaint() {
   SchedulePaint(GetLocalBounds(true), false);
-}
-
-void View::SchedulePaint(int x, int y, int w, int h) {
-  SchedulePaint(gfx::Rect(x, y, w, h), false);
 }
 
 void View::Paint(gfx::Canvas* canvas) {
@@ -411,14 +420,13 @@ gfx::Insets View::GetInsets() const {
   return insets;
 }
 
-gfx::NativeCursor View::GetCursorForPoint(Event::EventType event_type, int x,
-                                          int y) {
+gfx::NativeCursor View::GetCursorForPoint(Event::EventType event_type,
+                                          const gfx::Point& p) {
   return NULL;
 }
 
 bool View::HitTest(const gfx::Point& l) const {
-  if (l.x() >= 0 && l.x() < static_cast<int>(width()) &&
-      l.y() >= 0 && l.y() < static_cast<int>(height())) {
+  if (l.x() >= 0 && l.x() < width() && l.y() >= 0 && l.y() < height()) {
     if (HasHitTestMask()) {
       gfx::Path mask;
       GetHitTestMask(&mask);
@@ -426,7 +434,7 @@ bool View::HitTest(const gfx::Point& l) const {
       // TODO: can this use SkRegion's contains instead?
 #if defined(OS_WIN)
       return !!PtInRegion(rgn, l.x(), l.y());
-#elif defined(OS_LINUX)
+#elif defined(TOOLKIT_USES_GTK)
       return gdk_region_point_in(rgn.Get(), l.x(), l.y());
 #endif
     }
@@ -441,11 +449,11 @@ void View::SetContextMenuController(ContextMenuController* menu_controller) {
   context_menu_controller_ = menu_controller;
 }
 
-void View::ShowContextMenu(int x, int y, bool is_mouse_gesture) {
+void View::ShowContextMenu(const gfx::Point& p, bool is_mouse_gesture) {
   if (!context_menu_controller_)
     return;
 
-  context_menu_controller_->ShowContextMenu(this, x, y, is_mouse_gesture);
+  context_menu_controller_->ShowContextMenu(this, p, is_mouse_gesture);
 }
 
 /////////////////////////////////////////////////////////////////////////////
@@ -456,13 +464,11 @@ void View::ShowContextMenu(int x, int y, bool is_mouse_gesture) {
 
 bool View::ProcessMousePressed(const MouseEvent& e, DragInfo* drag_info) {
   const bool enabled = enabled_;
-  int drag_operations;
-  if (enabled && e.IsOnlyLeftMouseButton() && HitTest(e.location()))
-    drag_operations = GetDragOperations(e.x(), e.y());
-  else
-    drag_operations = 0;
-  ContextMenuController* context_menu_controller =
-      e.IsRightMouseButton() ? context_menu_controller_ : 0;
+  int drag_operations =
+      (enabled && e.IsOnlyLeftMouseButton() && HitTest(e.location())) ?
+      GetDragOperations(e.location()) : 0;
+  ContextMenuController* context_menu_controller = e.IsRightMouseButton() ?
+      context_menu_controller_ : 0;
 
   const bool result = OnMousePressed(e);
   // WARNING: we may have been deleted, don't use any View variables;
@@ -471,7 +477,7 @@ bool View::ProcessMousePressed(const MouseEvent& e, DragInfo* drag_info) {
     return result;
 
   if (drag_operations != DragDropTypes::DRAG_NONE) {
-    drag_info->PossibleDrag(e.x(), e.y());
+    drag_info->PossibleDrag(e.location());
     return true;
   }
   return !!context_menu_controller || result;
@@ -482,9 +488,11 @@ bool View::ProcessMouseDragged(const MouseEvent& e, DragInfo* drag_info) {
   // done.
   ContextMenuController* context_menu_controller = context_menu_controller_;
   const bool possible_drag = drag_info->possible_drag;
-  if (possible_drag && ExceededDragThreshold(drag_info->start_x - e.x(),
-                                             drag_info->start_y - e.y())) {
-    DoDrag(e, drag_info->start_x, drag_info->start_y);
+  if (possible_drag && ExceededDragThreshold(drag_info->start_pt.x() - e.x(),
+                                             drag_info->start_pt.y() - e.y())) {
+    if (!drag_controller_ ||
+        drag_controller_->CanStartDrag(this, drag_info->start_pt, e.location()))
+      DoDrag(e, drag_info->start_pt);
   } else {
     if (OnMouseDragged(e))
       return true;
@@ -502,7 +510,7 @@ void View::ProcessMouseReleased(const MouseEvent& e, bool canceled) {
     OnMouseReleased(e, canceled);
     if (HitTest(location)) {
       ConvertPointToScreen(this, &location);
-      ShowContextMenu(location.x(), location.y(), true);
+      ShowContextMenu(location, true);
     }
   } else {
     OnMouseReleased(e, canceled);
@@ -515,6 +523,8 @@ void View::AddChildView(View* v) {
 }
 
 void View::AddChildView(int index, View* v) {
+  CHECK(v != this) << "You cannot add a view as its own child";
+
   // Remove the view from its current parent if any.
   if (v->GetParent())
     v->GetParent()->RemoveChildView(v);
@@ -547,6 +557,12 @@ int View::GetChildViewCount() const {
   return static_cast<int>(child_views_.size());
 }
 
+bool View::HasChildView(View* a_view) {
+  return find(child_views_.begin(),
+              child_views_.end(),
+              a_view) != child_views_.end();
+}
+
 void View::RemoveChildView(View* a_view) {
   DoRemoveChildView(a_view, true, true, false);
 }
@@ -559,13 +575,13 @@ void View::RemoveAllChildViews(bool delete_views) {
   UpdateTooltip();
 }
 
-void View::DoDrag(const MouseEvent& e, int press_x, int press_y) {
-  int drag_operations = GetDragOperations(press_x, press_y);
+void View::DoDrag(const MouseEvent& e, const gfx::Point& press_pt) {
+  int drag_operations = GetDragOperations(press_pt);
   if (drag_operations == DragDropTypes::DRAG_NONE)
     return;
 
   OSExchangeData data;
-  WriteDragData(press_x, press_y, &data);
+  WriteDragData(press_pt, &data);
 
   // Message the RootView to do the drag and drop. That way if we're removed
   // the RootView can detect it and avoid calling us back.
@@ -631,9 +647,13 @@ void View::PropagateAddNotifications(View* parent, View* child) {
 }
 
 void View::ThemeChanged() {
-  int c = GetChildViewCount();
-  for (int i = c - 1; i >= 0; --i)
+  for (int i = GetChildViewCount() - 1; i >= 0; --i)
     GetChildViewAt(i)->ThemeChanged();
+}
+
+void View::LocaleChanged() {
+  for (int i = GetChildViewCount() - 1; i >= 0; --i)
+    GetChildViewAt(i)->LocaleChanged();
 }
 
 #ifndef NDEBUG
@@ -671,10 +691,16 @@ void View::ViewHierarchyChangedImpl(bool register_accelerators,
     if (is_add) {
       // If you get this registration, you are part of a subtree that has been
       // added to the view hierarchy.
-      RegisterPendingAccelerators();
+      if (GetFocusManager()) {
+        RegisterPendingAccelerators();
+      } else {
+        // Delay accelerator registration until visible as we do not have
+        // focus manager until then.
+        accelerator_registration_delayed_ = true;
+      }
     } else {
       if (child == this)
-        UnregisterAccelerators();
+        UnregisterAccelerators(true);
     }
   }
 
@@ -688,6 +714,34 @@ void View::PropagateVisibilityNotifications(View* start, bool is_visible) {
 }
 
 void View::VisibilityChanged(View* starting_from, bool is_visible) {
+}
+
+void View::PropagateNativeViewHierarchyChanged(bool attached,
+                                               gfx::NativeView native_view,
+                                               RootView* root_view) {
+  for (int i = 0, count = GetChildViewCount(); i < count; ++i)
+    GetChildViewAt(i)->PropagateNativeViewHierarchyChanged(attached,
+                                                           native_view,
+                                                           root_view);
+  NativeViewHierarchyChanged(attached, native_view, root_view);
+}
+
+void View::NativeViewHierarchyChanged(bool attached,
+                                      gfx::NativeView native_view,
+                                      RootView* root_view) {
+  FocusManager* focus_manager = GetFocusManager();
+  if (!accelerator_registration_delayed_ &&
+      accelerator_focus_manager_ &&
+      accelerator_focus_manager_ != focus_manager) {
+    UnregisterAccelerators(true);
+    accelerator_registration_delayed_ = true;
+  }
+  if (accelerator_registration_delayed_ && attached) {
+    if (focus_manager) {
+      RegisterPendingAccelerators();
+      accelerator_registration_delayed_ = false;
+    }
+  }
 }
 
 void View::SetNotifyWhenVisibleBoundsInRootChanges(bool value) {
@@ -731,6 +785,14 @@ Widget* View::GetWidget() const {
 Window* View::GetWindow() const {
   Widget* widget = GetWidget();
   return widget ? widget->GetWindow() : NULL;
+}
+
+bool View::ContainsNativeView(gfx::NativeView native_view) const {
+  for (int i = 0, count = GetChildViewCount(); i < count; ++i) {
+    if (GetChildViewAt(i)->ContainsNativeView(native_view))
+      return true;
+  }
+  return false;
 }
 
 // Get the containing RootView
@@ -973,18 +1035,16 @@ void View::RemoveAccelerator(const Accelerator& accelerator) {
     return;
   }
 
-  FocusManager* focus_manager = GetFocusManager();
-  if (focus_manager) {
-    // We may not have a FocusManager if the window containing us is being
-    // closed, in which case the FocusManager is being deleted so there is
-    // nothing to unregister.
-    focus_manager->UnregisterAccelerator(accelerator, this);
+  // If accelerator_focus_manager_ is NULL then we did not registered
+  // accelerators so there is nothing to unregister.
+  if (accelerator_focus_manager_) {
+    accelerator_focus_manager_->UnregisterAccelerator(accelerator, this);
   }
 }
 
 void View::ResetAccelerators() {
   if (accelerators_.get())
-    UnregisterAccelerators();
+    UnregisterAccelerators(false);
 }
 
 void View::RegisterPendingAccelerators() {
@@ -1001,8 +1061,8 @@ void View::RegisterPendingAccelerators() {
     return;
   }
 
-  FocusManager* focus_manager = GetFocusManager();
-  if (!focus_manager) {
+  accelerator_focus_manager_ = GetFocusManager();
+  if (!accelerator_focus_manager_) {
     // Some crash reports seem to show that we may get cases where we have no
     // focus manager (see bug #1291225).  This should never be the case, just
     // making sure we don't crash.
@@ -1018,39 +1078,41 @@ void View::RegisterPendingAccelerators() {
   std::vector<Accelerator>::const_iterator iter;
   for (iter = accelerators_->begin() + registered_accelerator_count_;
        iter != accelerators_->end(); ++iter) {
-    focus_manager->RegisterAccelerator(*iter, this);
+    accelerator_focus_manager_->RegisterAccelerator(*iter, this);
   }
   registered_accelerator_count_ = accelerators_->size();
 }
 
-void View::UnregisterAccelerators() {
+void View::UnregisterAccelerators(bool leave_data_intact) {
   if (!accelerators_.get())
     return;
 
   RootView* root_view = GetRootView();
   if (root_view) {
-    FocusManager* focus_manager = GetFocusManager();
-    if (focus_manager) {
+    if (accelerator_focus_manager_) {
       // We may not have a FocusManager if the window containing us is being
       // closed, in which case the FocusManager is being deleted so there is
       // nothing to unregister.
-      focus_manager->UnregisterAccelerators(this);
+      accelerator_focus_manager_->UnregisterAccelerators(this);
+      accelerator_focus_manager_ = NULL;
     }
-    accelerators_->clear();
-    accelerators_.reset();
+    if (!leave_data_intact) {
+      accelerators_->clear();
+      accelerators_.reset();
+    }
     registered_accelerator_count_ = 0;
   }
 }
 
-int View::GetDragOperations(int press_x, int press_y) {
-  if (!drag_controller_)
-    return DragDropTypes::DRAG_NONE;
-  return drag_controller_->GetDragOperations(this, press_x, press_y);
+int View::GetDragOperations(const gfx::Point& press_pt) {
+  return drag_controller_ ?
+      drag_controller_->GetDragOperations(this, press_pt) :
+      DragDropTypes::DRAG_NONE;
 }
 
-void View::WriteDragData(int press_x, int press_y, OSExchangeData* data) {
+void View::WriteDragData(const gfx::Point& press_pt, OSExchangeData* data) {
   DCHECK(drag_controller_);
-  drag_controller_->WriteDragData(this, press_x, press_y, data);
+  drag_controller_->WriteDragData(this, press_pt, data);
 }
 
 void View::OnDragDone() {
@@ -1059,6 +1121,19 @@ void View::OnDragDone() {
 bool View::InDrag() {
   RootView* root_view = GetRootView();
   return root_view ? (root_view->GetDragView() == this) : false;
+}
+
+bool View::GetAccessibleName(std::wstring* name) {
+  DCHECK(name);
+
+  if (accessible_name_.empty())
+    return false;
+  *name = accessible_name_;
+  return true;
+}
+
+void View::SetAccessibleName(const std::wstring& name) {
+  accessible_name_ = name;
 }
 
 // static
@@ -1280,11 +1355,11 @@ bool View::ExceededDragThreshold(int delta_x, int delta_y) {
 }
 
 // Tooltips -----------------------------------------------------------------
-bool View::GetTooltipText(int x, int y, std::wstring* tooltip) {
+bool View::GetTooltipText(const gfx::Point& p, std::wstring* tooltip) {
   return false;
 }
 
-bool View::GetTooltipTextOrigin(int x, int y, gfx::Point* loc) {
+bool View::GetTooltipTextOrigin(const gfx::Point& p, gfx::Point* loc) {
   return false;
 }
 
@@ -1400,13 +1475,12 @@ void View::RemoveDescendantToNotify(View* view) {
 
 void View::DragInfo::Reset() {
   possible_drag = false;
-  start_x = start_y = 0;
+  start_pt = gfx::Point();
 }
 
-void View::DragInfo::PossibleDrag(int x, int y) {
+void View::DragInfo::PossibleDrag(const gfx::Point& p) {
   possible_drag = true;
-  start_x = x;
-  start_y = y;
+  start_pt = p;
 }
 
 }  // namespace

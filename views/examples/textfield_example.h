@@ -1,11 +1,11 @@
-// Copyight (c) 2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2009 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef VIEWS_EXAMPLES_TEXTFIELD_EXAMPLE_H_
 #define VIEWS_EXAMPLES_TEXTFIELD_EXAMPLE_H_
 
-#include "base/string_util.h"
+#include "base/utf_string_conversions.h"
 #include "views/controls/button/text_button.h"
 #include "views/controls/label.h"
 #include "views/controls/tabbed_pane/tabbed_pane.h"
@@ -32,6 +32,7 @@ class TextfieldExample : public ExampleBase,
   virtual void CreateExampleView(views::View* container) {
     name_ = new Textfield();
     password_ = new Textfield(Textfield::STYLE_PASSWORD);
+    password_->set_text_to_display_when_empty(ASCIIToUTF16("password"));
     show_password_ = new views::TextButton(this, L"Show password");
     clear_all_ = new views::TextButton(this, L"Clear All");
     append_ = new views::TextButton(this, L"Append");

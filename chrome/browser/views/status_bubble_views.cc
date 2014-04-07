@@ -1,4 +1,4 @@
-// Copyright (c) 2006-2008 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,15 +6,16 @@
 
 #include <algorithm>
 
-#include "app/gfx/canvas.h"
-#include "app/gfx/text_elider.h"
-#include "app/l10n_util.h"
 #include "app/animation.h"
+#include "app/l10n_util.h"
 #include "app/resource_bundle.h"
-#include "base/gfx/point.h"
+#include "app/text_elider.h"
+#include "base/i18n/rtl.h"
 #include "base/message_loop.h"
 #include "base/string_util.h"
 #include "chrome/browser/browser_theme_provider.h"
+#include "gfx/canvas.h"
+#include "gfx/point.h"
 #include "googleurl/src/gurl.h"
 #include "grit/generated_resources.h"
 #include "grit/theme_resources.h"
@@ -419,7 +420,7 @@ void StatusBubbleViews::StatusView::Paint(gfx::Canvas* canvas) {
   // Draw highlight text and then the text body. In order to make sure the text
   // is aligned to the right on RTL UIs, we mirror the text bounds if the
   // locale is RTL.
-  int text_width = std::min(views::Label::GetFont().GetStringWidth(text_),
+  int text_width = std::min(views::Label::font().GetStringWidth(text_),
       width - (kShadowThickness * 2) - kTextPositionX - kTextHorizPadding);
   int text_height = height - (kShadowThickness * 2);
   gfx::Rect body_bounds(kShadowThickness + kTextPositionX,
@@ -437,7 +438,7 @@ void StatusBubbleViews::StatusView::Paint(gfx::Canvas* canvas) {
       (SkColorGetG(text_color) + SkColorGetR(toolbar_color)) / 2,
       (SkColorGetB(text_color) + SkColorGetR(toolbar_color)) / 2);
   canvas->DrawStringInt(text_,
-                        views::Label::GetFont(),
+                        views::Label::font(),
                         text_color,
                         body_bounds.x(),
                         body_bounds.y(),
@@ -467,7 +468,8 @@ void StatusBubbleViews::Init() {
   if (!popup_.get()) {
     popup_.reset(Widget::CreatePopupWidget(Widget::Transparent,
                                            Widget::NotAcceptEvents,
-                                           Widget::NotDeleteOnDestroy));
+                                           Widget::NotDeleteOnDestroy,
+                                           Widget::MirrorOriginInRTL));
     if (!view_)
       view_ = new StatusView(this, popup_.get(), frame_->GetThemeProvider());
     popup_->SetOpacity(0x00);
@@ -497,7 +499,7 @@ gfx::Size StatusBubbleViews::GetPreferredSize() {
 void StatusBubbleViews::SetBounds(int x, int y, int w, int h) {
   // If the UI layout is RTL, we need to mirror the position of the bubble
   // relative to the parent.
-  if (l10n_util::GetTextDirection() == l10n_util::RIGHT_TO_LEFT) {
+  if (base::i18n::IsRTL()) {
     gfx::Rect frame_bounds;
     frame_->GetBounds(&frame_bounds, false);
     int mirrored_x = frame_bounds.width() - x - w;
@@ -552,15 +554,14 @@ void StatusBubbleViews::SetURL(const GURL& url, const std::wstring& languages) {
   popup_->GetBounds(&popup_bounds, true);
   int text_width = static_cast<int>(popup_bounds.width() -
       (kShadowThickness * 2) - kTextPositionX - kTextHorizPadding - 1);
-  url_text_ = gfx::ElideUrl(url, view_->Label::GetFont(), text_width,
+  url_text_ = gfx::ElideUrl(url, view_->Label::font(), text_width,
                             languages);
 
   // An URL is always treated as a left-to-right string. On right-to-left UIs
   // we need to explicitly mark the URL as LTR to make sure it is displayed
   // correctly.
-  if (l10n_util::GetTextDirection() == l10n_util::RIGHT_TO_LEFT &&
-      !url_text_.empty())
-    l10n_util::WrapStringWithLTRFormatting(&url_text_);
+  if (base::i18n::IsRTL() && !url_text_.empty())
+    base::i18n::WrapStringWithLTRFormatting(&url_text_);
 
   if (IsFrameVisible())
     view_->SetText(url_text_);

@@ -12,9 +12,10 @@
 #include "net/socket/client_socket.h"
 #include "net/socket/ssl_client_socket.h"
 #include "talk/base/asyncsocket.h"
+#include "talk/base/ssladapter.h"
 
 namespace net {
-class LoadLog;
+class BoundNetLog;
 }  // namespace net
 
 namespace notifier {
@@ -37,14 +38,11 @@ class TransportSocket : public net::ClientSocket, public sigslot::has_slots<> {
   // net::ClientSocket implementation
 
   virtual int Connect(net::CompletionCallback* callback,
-                      net::LoadLog* /* load_log */);
+                      const net::BoundNetLog& /* net_log */);
   virtual void Disconnect();
   virtual bool IsConnected() const;
   virtual bool IsConnectedAndIdle() const;
-
-#if defined(OS_LINUX) || defined(OS_MACOSX)
-  virtual int GetPeerName(struct sockaddr *name, socklen_t *namelen);
-#endif
+  virtual int GetPeerAddress(net::AddressList* address) const;
 
   // net::Socket implementation
 
@@ -80,12 +78,9 @@ class TransportSocket : public net::ClientSocket, public sigslot::has_slots<> {
 // This provides a talk_base::AsyncSocketAdapter interface around Chromium's
 // net::SSLClientSocket class.  This allows notifier to use Chromium's SSL
 // implementation instead of OpenSSL.
-class SSLSocketAdapter : public talk_base::AsyncSocketAdapter {
+class SSLSocketAdapter : public talk_base::SSLAdapter {
  public:
   explicit SSLSocketAdapter(talk_base::AsyncSocket* socket);
-
-  bool ignore_bad_cert() const { return ignore_bad_cert_; }
-  void set_ignore_bad_cert(bool ignore) { ignore_bad_cert_ = ignore; }
 
   // StartSSL returns 0 if successful, or non-zero on failure.
   // If StartSSL is called while the socket is closed or connecting, the SSL
@@ -108,7 +103,8 @@ class SSLSocketAdapter : public talk_base::AsyncSocketAdapter {
     STATE_READ,
     STATE_READ_COMPLETE,
     STATE_WRITE,
-    STATE_WRITE_COMPLETE
+    STATE_WRITE_COMPLETE,
+    STATE_SSL_WAIT
   };
 
   void OnConnected(int result);
@@ -116,9 +112,13 @@ class SSLSocketAdapter : public talk_base::AsyncSocketAdapter {
 
   void OnReadEvent(talk_base::AsyncSocket * socket);
   void OnWriteEvent(talk_base::AsyncSocket * socket);
+  void OnConnectEvent(talk_base::AsyncSocket * socket);
+
+  int BeginSSL();
 
   bool ignore_bad_cert_;
-  TransportSocket* socket_;
+  std::string hostname_;
+  TransportSocket* transport_socket_;
   scoped_ptr<net::SSLClientSocket> ssl_socket_;
   net::CompletionCallbackImpl<SSLSocketAdapter> connected_callback_;
   net::CompletionCallbackImpl<SSLSocketAdapter> io_callback_;

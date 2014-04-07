@@ -5,10 +5,13 @@
 
 #include "chrome/browser/safe_browsing/safe_browsing_service.h"
 
+#include "base/callback.h"
 #include "base/path_service.h"
 #include "base/string_util.h"
 #include "chrome/browser/browser_process.h"
+#include "chrome/browser/metrics/metrics_service.h"
 #include "chrome/browser/net/url_request_context_getter.h"
+#include "chrome/browser/pref_service.h"
 #include "chrome/browser/profile_manager.h"
 #include "chrome/browser/safe_browsing/protocol_manager.h"
 #include "chrome/browser/safe_browsing/safe_browsing_blocking_page.h"
@@ -57,13 +60,17 @@ void SafeBrowsingService::ShutDown() {
 }
 
 bool SafeBrowsingService::CanCheckUrl(const GURL& url) const {
-  return url.SchemeIs(chrome::kHttpScheme) ||
+  return url.SchemeIs(chrome::kFtpScheme) ||
+         url.SchemeIs(chrome::kHttpScheme) ||
          url.SchemeIs(chrome::kHttpsScheme);
 }
 
 bool SafeBrowsingService::CheckUrl(const GURL& url, Client* client) {
   DCHECK(ChromeThread::CurrentlyOn(ChromeThread::IO));
   if (!enabled_)
+    return true;
+
+  if (!CanCheckUrl(url))
     return true;
 
   if (!MakeDatabaseAvailable()) {
@@ -189,7 +196,7 @@ void SafeBrowsingService::HandleGetHashResults(
 }
 
 void SafeBrowsingService::HandleChunk(const std::string& list,
-                                      std::deque<SBChunk>* chunks) {
+                                      SBChunkList* chunks) {
   DCHECK(ChromeThread::CurrentlyOn(ChromeThread::IO));
   DCHECK(enabled_);
   safe_browsing_thread_->message_loop()->PostTask(FROM_HERE, NewRunnableMethod(
@@ -288,8 +295,8 @@ void SafeBrowsingService::CloseDatabase() {
   //    would lead to an infinite loop in DatabaseLoadComplete(), and even if it
   //    didn't, it would be pointless since we'd just want to recreate.
   //
-  // The first two cases above are handled by checking database_available().
-  if (!database_available() || !queued_checks_.empty())
+  // The first two cases above are handled by checking DatabaseAvailable().
+  if (!DatabaseAvailable() || !queued_checks_.empty())
     return;
 
   closing_database_ = true;
@@ -398,15 +405,19 @@ void SafeBrowsingService::OnIOShutdown() {
   gethash_requests_.clear();
 }
 
+bool SafeBrowsingService::DatabaseAvailable() const {
+  AutoLock lock(database_lock_);
+  return !closing_database_ && (database_ != NULL);
+}
+
 bool SafeBrowsingService::MakeDatabaseAvailable() {
   DCHECK(ChromeThread::CurrentlyOn(ChromeThread::IO));
   DCHECK(enabled_);
-  if (!database_) {
-    DCHECK(!closing_database_);
-    safe_browsing_thread_->message_loop()->PostTask(FROM_HERE,
-        NewRunnableMethod(this, &SafeBrowsingService::GetDatabase));
-  }
-  return database_available();
+  if (DatabaseAvailable())
+    return true;
+  safe_browsing_thread_->message_loop()->PostTask(FROM_HERE,
+      NewRunnableMethod(this, &SafeBrowsingService::GetDatabase));
+  return false;
 }
 
 SafeBrowsingDatabase* SafeBrowsingService::GetDatabase() {
@@ -421,10 +432,13 @@ SafeBrowsingDatabase* SafeBrowsingService::GetDatabase() {
 
   Time before = Time::Now();
   SafeBrowsingDatabase* database = SafeBrowsingDatabase::Create();
-  Callback0::Type* chunk_callback =
-      NewCallback(this, &SafeBrowsingService::ChunkInserted);
-  database->Init(path, chunk_callback);
-  database_ = database;
+  database->Init(path);
+  {
+    // Acquiring the lock here guarantees correct ordering between the writes to
+    // the new database object above, and the setting of |databse_| below.
+    AutoLock lock(database_lock_);
+    database_ = database;
+  }
 
   ChromeThread::PostTask(
       ChromeThread::IO, FROM_HERE,
@@ -502,13 +516,6 @@ void SafeBrowsingService::OnGetAllChunksFromDatabase(
     protocol_manager_->OnGetChunksComplete(lists, database_error);
 }
 
-void SafeBrowsingService::ChunkInserted() {
-  DCHECK(MessageLoop::current() == safe_browsing_thread_->message_loop());
-  ChromeThread::PostTask(
-      ChromeThread::IO, FROM_HERE,
-      NewRunnableMethod(this, &SafeBrowsingService::OnChunkInserted));
-}
-
 void SafeBrowsingService::OnChunkInserted() {
   DCHECK(ChromeThread::CurrentlyOn(ChromeThread::IO));
   if (enabled_)
@@ -526,7 +533,7 @@ void SafeBrowsingService::DatabaseLoadComplete() {
 
   // If the database isn't already available, calling CheckUrl() in the loop
   // below will add the check back to the queue, and we'll infinite-loop.
-  DCHECK(database_available());
+  DCHECK(DatabaseAvailable());
   while (!queued_checks_.empty()) {
     QueuedCheck check = queued_checks_.front();
     HISTOGRAM_TIMES("SB.QueueDelay", Time::Now() - check.start);
@@ -541,15 +548,24 @@ void SafeBrowsingService::DatabaseLoadComplete() {
 
 void SafeBrowsingService::HandleChunkForDatabase(
     const std::string& list_name,
-    std::deque<SBChunk>* chunks) {
+    SBChunkList* chunks) {
   DCHECK(MessageLoop::current() == safe_browsing_thread_->message_loop());
-  GetDatabase()->InsertChunks(list_name, chunks);
+  if (chunks) {
+    GetDatabase()->InsertChunks(list_name, *chunks);
+    delete chunks;
+  }
+  ChromeThread::PostTask(
+      ChromeThread::IO, FROM_HERE,
+      NewRunnableMethod(this, &SafeBrowsingService::OnChunkInserted));
 }
 
 void SafeBrowsingService::DeleteChunks(
     std::vector<SBChunkDelete>* chunk_deletes) {
   DCHECK(MessageLoop::current() == safe_browsing_thread_->message_loop());
-  GetDatabase()->DeleteChunks(chunk_deletes);
+  if (chunk_deletes) {
+    GetDatabase()->DeleteChunks(*chunk_deletes);
+    delete chunk_deletes;
+  }
 }
 
 SafeBrowsingService::UrlCheckResult SafeBrowsingService::GetResultFromListname(
@@ -612,6 +628,12 @@ void SafeBrowsingService::OnCloseDatabase() {
   // accessing the database, so it's safe to delete and then NULL the pointer.
   delete database_;
   database_ = NULL;
+
+  // Acquiring the lock here guarantees correct ordering between the resetting
+  // of |database_| above and of |closing_database_| below, which ensures there
+  // won't be a window during which the IO thread falsely believes the database
+  // is available.
+  AutoLock lock(database_lock_);
   closing_database_ = false;
 }
 
@@ -695,9 +717,9 @@ void SafeBrowsingService::DoDisplayBlockingPage(
   // Report the malware sub-resource to the SafeBrowsing servers if we have a
   // malware sub-resource on a safe page and only if the user has opted in to
   // reporting statistics.
-  PrefService* prefs = g_browser_process->local_state();
-  DCHECK(prefs);
-  if (prefs && prefs->GetBoolean(prefs::kMetricsReportingEnabled) &&
+  const MetricsService* metrics = g_browser_process->metrics_service();
+  DCHECK(metrics);
+  if (metrics && metrics->reporting_active() &&
       resource.resource_type != ResourceType::MAIN_FRAME &&
       resource.threat_type == SafeBrowsingService::URL_MALWARE) {
     GURL page_url = wc->GetURL();
@@ -725,7 +747,7 @@ void SafeBrowsingService::ReportMalware(const GURL& malware_url,
   if (!enabled_)
     return;
 
-  if (database_) {
+  if (DatabaseAvailable()) {
     // Check if 'page_url' is already blacklisted (exists in our cache). Only
     // report if it's not there.
     std::string list;

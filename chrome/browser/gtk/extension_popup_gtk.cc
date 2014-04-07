@@ -6,9 +6,11 @@
 
 #include <gtk/gtk.h>
 
-#include "app/l10n_util.h"
+#include "base/i18n/rtl.h"
+#include "base/message_loop.h"
 #include "chrome/browser/browser.h"
 #include "chrome/browser/browser_window.h"
+#include "chrome/browser/debugger/devtools_manager.h"
 #include "chrome/browser/profile.h"
 #include "chrome/browser/extensions/extension_host.h"
 #include "chrome/browser/extensions/extension_process_manager.h"
@@ -16,14 +18,18 @@
 #include "chrome/common/notification_service.h"
 #include "googleurl/src/gurl.h"
 
+ExtensionPopupGtk* ExtensionPopupGtk::current_extension_popup_ = NULL;
+
 ExtensionPopupGtk::ExtensionPopupGtk(Browser* browser,
                                      ExtensionHost* host,
-                                     const gfx::Rect& relative_to)
+                                     GtkWidget* anchor,
+                                     bool inspect)
     : browser_(browser),
       bubble_(NULL),
       host_(host),
-      relative_to_(relative_to) {
-
+      anchor_(anchor),
+      being_inspected_(inspect),
+      method_factory_(this) {
   // If the host had somehow finished loading, then we'd miss the notification
   // and not show.  This seems to happen in single-process mode.
   if (host->did_stop_loading()) {
@@ -43,15 +49,28 @@ ExtensionPopupGtk::~ExtensionPopupGtk() {
 void ExtensionPopupGtk::Observe(NotificationType type,
                                 const NotificationSource& source,
                                 const NotificationDetails& details) {
-  if (Details<ExtensionHost>(host_.get()) != details)
-    return;
+  switch (type.value) {
+    case NotificationType::EXTENSION_HOST_DID_STOP_LOADING:
+      if (Details<ExtensionHost>(host_.get()) == details)
+        ShowPopup();
+      break;
+    case NotificationType::EXTENSION_HOST_VIEW_SHOULD_CLOSE:
+      if (Details<ExtensionHost>(host_.get()) == details)
+        DestroyPopup();
+      break;
+    case NotificationType::DEVTOOLS_WINDOW_CLOSING:
+      // Make sure its the devtools window that inspecting our popup.
+      if (Details<RenderViewHost>(host_->render_view_host()) != details)
+        break;
 
-  if (type == NotificationType::EXTENSION_HOST_DID_STOP_LOADING) {
-    ShowPopup();
-  } else if (type == NotificationType::EXTENSION_HOST_VIEW_SHOULD_CLOSE) {
-    DestroyPopup();
-  } else {
-    NOTREACHED() << "Received unexpected notification";
+      // If the devtools window is closing, we post a task to ourselves to
+      // close the popup. This gives the devtools window a chance to finish
+      // detaching from the inspected RenderViewHost.
+      MessageLoop::current()->PostTask(FROM_HERE,
+          method_factory_.NewRunnableMethod(&ExtensionPopupGtk::DestroyPopup));
+      break;
+    default:
+      NOTREACHED() << "Received unexpected notification";
   }
 }
 
@@ -61,38 +80,58 @@ void ExtensionPopupGtk::ShowPopup() {
     return;
   }
 
+  if (being_inspected_) {
+    DevToolsManager::GetInstance()->OpenDevToolsWindow(
+        host_->render_view_host());
+    // Listen for the the devtools window closing.
+    registrar_.Add(this, NotificationType::DEVTOOLS_WINDOW_CLOSING,
+        Source<Profile>(host_->profile()));
+  }
+
+  // Only one instance should be showing at a time. Get rid of the old one, if
+  // any. Typically, |current_extension_popup_| will be NULL, but it can be
+  // non-NULL if a browser action button is clicked while another extension
+  // popup's extension host is still loading.
+  if (current_extension_popup_)
+    current_extension_popup_->DestroyPopup();
+  current_extension_popup_ = this;
+
   // We'll be in the upper-right corner of the window for LTR languages, so we
   // want to put the arrow at the upper-right corner of the bubble to match the
   // page and app menus.
   InfoBubbleGtk::ArrowLocationGtk arrow_location =
-      (l10n_util::GetTextDirection() == l10n_util::LEFT_TO_RIGHT) ?
+      !base::i18n::IsRTL() ?
       InfoBubbleGtk::ARROW_LOCATION_TOP_RIGHT :
       InfoBubbleGtk::ARROW_LOCATION_TOP_LEFT;
-  bubble_ = InfoBubbleGtk::Show(browser_->window()->GetNativeHandle(),
-                                relative_to_,
+  bubble_ = InfoBubbleGtk::Show(anchor_,
+                                NULL,
                                 host_->view()->native_view(),
                                 arrow_location,
+                                false,  // match_system_theme
+                                !being_inspected_,  // grab_input
                                 GtkThemeProvider::GetFrom(browser_->profile()),
                                 this);
 }
 
-void ExtensionPopupGtk::DestroyPopup() {
+bool ExtensionPopupGtk::DestroyPopup() {
   if (!bubble_) {
     NOTREACHED();
-    return;
+    return false;
   }
 
   bubble_->Close();
+  return true;
 }
 
 void ExtensionPopupGtk::InfoBubbleClosing(InfoBubbleGtk* bubble,
                                           bool closed_by_escape) {
+  current_extension_popup_ = NULL;
   delete this;
 }
 
 // static
 void ExtensionPopupGtk::Show(const GURL& url, Browser* browser,
-                             const gfx::Rect& relative_to) {
+    GtkWidget* anchor, bool inspect) {
   ExtensionProcessManager* manager =
       browser->profile()->GetExtensionProcessManager();
   DCHECK(manager);
@@ -101,5 +140,9 @@ void ExtensionPopupGtk::Show(const GURL& url, Browser* browser,
 
   ExtensionHost* host = manager->CreatePopup(url, browser);
   // This object will delete itself when the info bubble is closed.
-  new ExtensionPopupGtk(browser, host, relative_to);
+  new ExtensionPopupGtk(browser, host, anchor, inspect);
+}
+
+gfx::Rect ExtensionPopupGtk::GetViewBounds() {
+  return gfx::Rect(host_->view()->native_view()->allocation);
 }

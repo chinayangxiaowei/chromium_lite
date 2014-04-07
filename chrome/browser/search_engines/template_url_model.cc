@@ -10,13 +10,14 @@
 #include "base/utf_string_conversions.h"
 #include "chrome/browser/google_url_tracker.h"
 #include "chrome/browser/history/history.h"
+#include "chrome/browser/history/history_notifications.h"
 #include "chrome/browser/net/url_fixer_upper.h"
+#include "chrome/browser/pref_service.h"
 #include "chrome/browser/profile.h"
 #include "chrome/browser/rlz/rlz.h"
 #include "chrome/browser/search_engines/template_url_prepopulate_data.h"
 #include "chrome/common/notification_service.h"
 #include "chrome/common/pref_names.h"
-#include "chrome/common/pref_service.h"
 #include "chrome/common/url_constants.h"
 #include "net/base/net_util.h"
 
@@ -58,6 +59,7 @@ class TemplateURLModel::LessWithPrefix {
 TemplateURLModel::TemplateURLModel(Profile* profile)
     : profile_(profile),
       loaded_(false),
+      load_failed_(false),
       load_handle_(0),
       default_search_provider_(NULL),
       next_id_(1) {
@@ -69,6 +71,7 @@ TemplateURLModel::TemplateURLModel(const Initializer* initializers,
                                    const int count)
     : profile_(NULL),
       loaded_(true),
+      load_failed_(false),
       load_handle_(0),
       service_(NULL),
       default_search_provider_(NULL),
@@ -520,7 +523,7 @@ void TemplateURLModel::SetDefaultSearchProvider(const TemplateURL* url) {
 }
 
 const TemplateURL* TemplateURLModel::GetDefaultSearchProvider() {
-  if (loaded_)
+  if (loaded_ && !load_failed_)
     return default_search_provider_;
 
   if (!prefs_default_search_provider_.get()) {
@@ -575,8 +578,10 @@ void TemplateURLModel::OnWebDataServiceRequestDone(
   load_handle_ = 0;
 
   if (!result) {
-    // Results are null if the database went away.
+    // Results are null if the database went away or (most likely) wasn't
+    // loaded.
     loaded_ = true;
+    load_failed_ = true;
     NotifyLoaded();
     return;
   }
@@ -597,7 +602,7 @@ void TemplateURLModel::OnWebDataServiceRequestDone(
                                                 keyword_result.keywords.end());
 
   const int resource_keyword_version =
-      TemplateURLPrepopulateData::GetDataVersion();
+      TemplateURLPrepopulateData::GetDataVersion(GetPrefs());
   if (keyword_result.builtin_keyword_version != resource_keyword_version) {
     // There should never be duplicate TemplateURLs. We had a bug such that
     // duplicate TemplateURLs existed for one locale. As such we invoke
@@ -796,6 +801,10 @@ void TemplateURLModel::SaveDefaultSearchProviderToPrefs(
       t_url ? Int64ToWString(t_url->id()) : std::wstring();
   prefs->SetString(prefs::kDefaultSearchProviderID, id_string);
 
+  const std::wstring prepopulate_id =
+      t_url ? Int64ToWString(t_url->prepopulate_id()) : std::wstring();
+  prefs->SetString(prefs::kDefaultSearchProviderPrepopulateID, prepopulate_id);
+
   prefs->ScheduleSavePersistentPrefs();
 }
 
@@ -825,22 +834,30 @@ bool TemplateURLModel::LoadDefaultSearchProviderFromPrefs(
 
   std::wstring id_string = prefs->GetString(prefs::kDefaultSearchProviderID);
 
+  std::wstring prepopulate_id =
+      prefs->GetString(prefs::kDefaultSearchProviderPrepopulateID);
+
   *default_provider = new TemplateURL();
   (*default_provider)->set_short_name(name);
   (*default_provider)->SetURL(search_url, 0, 0);
   (*default_provider)->SetSuggestionsURL(suggest_url, 0, 0);
   if (!id_string.empty())
     (*default_provider)->set_id(StringToInt64(WideToUTF16Hack(id_string)));
+  if (!prepopulate_id.empty())
+    (*default_provider)->set_prepopulate_id(StringToInt(WideToUTF16Hack(
+        prepopulate_id)));
   return true;
 }
 
 void TemplateURLModel::RegisterPrefs(PrefService* prefs) {
-  if (prefs->IsPrefRegistered(prefs::kDefaultSearchProviderName))
+  if (prefs->FindPreference(prefs::kDefaultSearchProviderName))
     return;
   prefs->RegisterStringPref(
       prefs::kDefaultSearchProviderName, std::wstring());
   prefs->RegisterStringPref(
       prefs::kDefaultSearchProviderID, std::wstring());
+  prefs->RegisterStringPref(
+      prefs::kDefaultSearchProviderPrepopulateID, std::wstring());
   prefs->RegisterStringPref(
       prefs::kDefaultSearchProviderSuggestURL, std::wstring());
   prefs->RegisterStringPref(

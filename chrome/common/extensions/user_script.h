@@ -10,7 +10,6 @@
 
 #include "base/file_path.h"
 #include "base/string_piece.h"
-#include "chrome/common/extensions/extension_resource.h"
 #include "chrome/common/extensions/url_pattern.h"
 #include "googleurl/src/gurl.h"
 
@@ -71,7 +70,7 @@ class UserScript {
     void set_external_content(const base::StringPiece& content) {
       external_content_ = content;
     }
-    const void set_content(const base::StringPiece& content) {
+    void set_content(const base::StringPiece& content) {
       content_.assign(content.begin(), content.end());
     }
 
@@ -103,7 +102,7 @@ class UserScript {
   // Greasemonkey and probably more useful for typical scripts.
   UserScript()
     : run_location_(DOCUMENT_IDLE), emulate_greasemonkey_(false),
-      match_all_frames_(false) {
+      match_all_frames_(false), incognito_enabled_(false) {
   }
 
   const std::string& name_space() const { return name_space_; }
@@ -163,6 +162,9 @@ class UserScript {
   const std::string& extension_id() const { return extension_id_; }
   void set_extension_id(const std::string& id) { extension_id_ = id; }
 
+  bool is_incognito_enabled() const { return incognito_enabled_; }
+  void set_incognito_enabled(bool enabled) { incognito_enabled_ = enabled; }
+
   bool is_standalone() const { return extension_id_.empty(); }
 
   // Returns true if the script should be applied to the specified URL, false
@@ -218,6 +220,9 @@ class UserScript {
   // Whether the user script should run in all frames, or only just the top one.
   // Defaults to false.
   bool match_all_frames_;
+
+  // True if the script should be injected into an incognito tab.
+  bool incognito_enabled_;
 };
 
 typedef std::vector<UserScript> UserScriptList;

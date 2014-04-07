@@ -1,4 +1,4 @@
-// Copyright (c) 2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,6 +10,7 @@
 #include "chrome/browser/tab_contents/infobar_delegate.h"
 
 class AutoFillManager;
+class Browser;
 class SkBitmap;
 class TabContents;
 
@@ -31,9 +32,14 @@ class AutoFillInfoBarDelegate : public ConfirmInfoBarDelegate {
       ConfirmInfoBarDelegate::InfoBarButton button) const;
   virtual bool Accept();
   virtual bool Cancel();
+  virtual std::wstring GetLinkText();
+  virtual bool LinkClicked(WindowOpenDisposition disposition);
 
  private:
-  // The autofill manager that initiated this infobar.
+  // The browser.
+  Browser* browser_;
+
+  // The AutoFillManager that initiated this InfoBar.
   AutoFillManager* host_;
 
   DISALLOW_COPY_AND_ASSIGN(AutoFillInfoBarDelegate);

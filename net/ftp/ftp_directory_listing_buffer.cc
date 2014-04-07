@@ -8,7 +8,11 @@
 #include "base/stl_util-inl.h"
 #include "base/string_util.h"
 #include "net/base/net_errors.h"
-#include "net/ftp/ftp_directory_listing_parsers.h"
+#include "net/ftp/ftp_directory_listing_parser_ls.h"
+#include "net/ftp/ftp_directory_listing_parser_mlsd.h"
+#include "net/ftp/ftp_directory_listing_parser_netware.h"
+#include "net/ftp/ftp_directory_listing_parser_vms.h"
+#include "net/ftp/ftp_directory_listing_parser_windows.h"
 #include "unicode/ucsdet.h"
 
 namespace {
@@ -39,11 +43,14 @@ std::string DetectEncoding(const std::string& text) {
 
 namespace net {
 
-FtpDirectoryListingBuffer::FtpDirectoryListingBuffer()
+FtpDirectoryListingBuffer::FtpDirectoryListingBuffer(
+    const base::Time& current_time)
     : current_parser_(NULL) {
-  parsers_.insert(new FtpLsDirectoryListingParser());
-  parsers_.insert(new FtpWindowsDirectoryListingParser());
-  parsers_.insert(new FtpVmsDirectoryListingParser());
+  parsers_.insert(new FtpDirectoryListingParserLs(current_time));
+  parsers_.insert(new FtpDirectoryListingParserMlsd());
+  parsers_.insert(new FtpDirectoryListingParserNetware(current_time));
+  parsers_.insert(new FtpDirectoryListingParserVms());
+  parsers_.insert(new FtpDirectoryListingParserWindows());
 }
 
 FtpDirectoryListingBuffer::~FtpDirectoryListingBuffer() {
@@ -70,7 +77,15 @@ int FtpDirectoryListingBuffer::ProcessRemainingData() {
   if (!buffer_.empty())
     return ERR_INVALID_RESPONSE;
 
-  return ParseLines();
+  rv = ParseLines();
+  if (rv != OK)
+    return rv;
+
+  rv = OnEndOfInput();
+  if (rv != OK)
+    return rv;
+
+  return OK;
 }
 
 bool FtpDirectoryListingBuffer::EntryAvailable() const {
@@ -143,6 +158,37 @@ int FtpDirectoryListingBuffer::ParseLines() {
     }
   }
 
+  return OK;
+}
+
+int FtpDirectoryListingBuffer::OnEndOfInput() {
+  ParserSet::iterator i = parsers_.begin();
+  while (i != parsers_.end()) {
+    if ((*i)->OnEndOfInput()) {
+      i++;
+    } else {
+      delete *i;
+      parsers_.erase(i++);
+    }
+  }
+
+  if (parsers_.size() != 1) {
+    current_parser_ = NULL;
+
+    // We may hit an ambiguity in case of listings which have no entries. That's
+    // fine, as long as all remaining parsers agree that the listing is empty.
+    bool all_listings_empty = true;
+    for (ParserSet::iterator i = parsers_.begin(); i != parsers_.end(); ++i) {
+      if ((*i)->EntryAvailable())
+        all_listings_empty = false;
+    }
+    if (all_listings_empty)
+      return OK;
+
+    return ERR_UNRECOGNIZED_FTP_DIRECTORY_LISTING_FORMAT;
+  }
+
+  current_parser_ = *parsers_.begin();
   return OK;
 }
 

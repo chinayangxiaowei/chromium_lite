@@ -6,7 +6,7 @@
 
 #include "app/l10n_util.h"
 #include "base/file_version_info.h"
-#include "base/string_util.h"
+#include "base/utf_string_conversions.h"
 #include "chrome/browser/browser_process_impl.h"
 #include "chrome/browser/net/url_fetcher.h"
 #include "chrome/browser/profile.h"
@@ -14,14 +14,20 @@
 #include "chrome/browser/tab_contents/tab_contents.h"
 #include "googleurl/src/gurl.h"
 #include "grit/locale_settings.h"
+#include "unicode/locid.h"
 
 namespace {
 
-static const int kBugReportVersion = 1;
+const int kBugReportVersion = 1;
 
-static const char kReportPhishingUrl[] =
+const char kReportPhishingUrl[] =
     "http://www.google.com/safebrowsing/report_phish/";
-}
+
+// URL to post bug reports to.
+const char* const kBugReportPostUrl =
+    "http://web-bug.appspot.com/bugreport";
+
+}  // namespace
 
 // Simple URLFetcher::Delegate to clean up URLFetcher on completion.
 class BugReportUtil::PostCleanup : public URLFetcher::Delegate {
@@ -97,7 +103,7 @@ void BugReportUtil::SendReport(Profile* profile,
     std::string description,
     const char* png_data,
     int png_data_length) {
-  GURL post_url(WideToUTF8(l10n_util::GetString(IDS_BUGREPORT_POST_URL)));
+  GURL post_url(kBugReportPostUrl);
   std::string mime_boundary;
   CreateMimeBoundary(&mime_boundary);
 
@@ -188,7 +194,7 @@ void BugReportUtil::SendReport(Profile* profile,
     post_body.append("Content-Disposition: form-data; name=\"screenshot\"; "
                       "filename=\"screenshot.png\"\r\n");
     post_body.append("Content-Type: application/octet-stream\r\n");
-    post_body.append(StringPrintf("Content-Length: %lu\r\n\r\n",
+    post_body.append(StringPrintf("Content-Length: %d\r\n\r\n",
                      png_data_length));
     post_body.append(png_data, png_data_length);
     post_body.append("\r\n");

@@ -5,10 +5,11 @@
 #ifndef CHROME_BROWSER_VIEWS_OPTIONS_CONTENT_PAGE_VIEW_H_
 #define CHROME_BROWSER_VIEWS_OPTIONS_CONTENT_PAGE_VIEW_H_
 
+#include "chrome/browser/autofill/personal_data_manager.h"
+#include "chrome/browser/pref_member.h"
 #include "chrome/browser/sync/profile_sync_service.h"
 #include "chrome/browser/views/options/options_page_view.h"
 #include "chrome/browser/views/confirm_message_box_dialog.h"
-#include "chrome/common/pref_member.h"
 #include "views/controls/button/button.h"
 #include "views/controls/link.h"
 #include "views/view.h"
@@ -75,15 +76,16 @@ class ContentPageView : public OptionsPageView,
   void InitSyncGroup();
 
   // Controls for the Password Saving group
-  views::NativeButton* passwords_exceptions_button_;
+  views::NativeButton* show_passwords_button_;
   OptionsGroupView* passwords_group_;
   views::RadioButton* passwords_asktosave_radio_;
   views::RadioButton* passwords_neversave_radio_;
 
   // Controls for the Form Autofill group
+  views::NativeButton* change_autofill_settings_button_;
   OptionsGroupView* form_autofill_group_;
-  views::RadioButton* form_autofill_asktosave_radio_;
-  views::RadioButton* form_autofill_neversave_radio_;
+  views::RadioButton* form_autofill_enable_radio_;
+  views::RadioButton* form_autofill_disable_radio_;
 
   // Controls for the Themes group
   OptionsGroupView* themes_group_;
@@ -99,6 +101,7 @@ class ContentPageView : public OptionsPageView,
   views::Label* sync_status_label_;
   views::Link* sync_action_link_;
   views::NativeButton* sync_start_stop_button_;
+  views::NativeButton* sync_customize_button_;
 
   BooleanPrefMember ask_to_save_passwords_;
   BooleanPrefMember ask_to_save_form_autofill_;

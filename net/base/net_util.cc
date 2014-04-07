@@ -21,11 +21,14 @@
 #include <ws2tcpip.h>
 #include <wspiapi.h>  // Needed for Win2k compat.
 #elif defined(OS_POSIX)
-#include <netdb.h>
-#include <sys/socket.h>
 #include <fcntl.h>
+#include <ifaddrs.h>
+#include <netdb.h>
+#include <net/if.h>
+#include <sys/socket.h>
 #endif
 
+#include "base/base64.h"
 #include "base/basictypes.h"
 #include "base/file_path.h"
 #include "base/file_util.h"
@@ -45,6 +48,7 @@
 #include "base/sys_string_conversions.h"
 #include "base/time.h"
 #include "base/utf_offset_string_conversions.h"
+#include "base/utf_string_conversions.h"
 #include "grit/net_resources.h"
 #include "googleurl/src/gurl.h"
 #include "googleurl/src/url_canon.h"
@@ -54,7 +58,6 @@
 #if defined(OS_WIN)
 #include "net/base/winsock_init.h"
 #endif
-#include "net/base/base64.h"
 #include "unicode/datefmt.h"
 
 
@@ -128,6 +131,13 @@ static const int kRestrictedPorts[] = {
   3659, // apple-sasl / PasswordServer
   4045, // lockd
   6000, // X11
+  6665, // Alternate IRC [Apple addition]
+  6666, // Alternate IRC [Apple addition]
+  6667, // Standard IRC [Apple addition]
+  6668, // Alternate IRC [Apple addition]
+  6669, // Alternate IRC [Apple addition]
+  0xFFFF, // Used to block all invalid port numbers (see
+          // third_party/WebKit/WebCore/platform/KURLGoogle.cpp, port())
 };
 
 // FTP overrides the following restricted ports.
@@ -225,7 +235,7 @@ bool DecodeBQEncoding(const std::string& part, RFC2047EncodingType enc_type,
                        const std::string& charset, std::string* output) {
   std::string decoded;
   if (enc_type == B_ENCODING) {
-    if (!net::Base64Decode(part, &decoded)) {
+    if (!base::Base64Decode(part, &decoded)) {
       return false;
     }
   } else {
@@ -257,7 +267,7 @@ bool DecodeBQEncoding(const std::string& part, RFC2047EncodingType enc_type,
 
 bool DecodeWord(const std::string& encoded_word,
                 const std::string& referrer_charset,
-                bool *is_rfc2047,
+                bool* is_rfc2047,
                 std::string* output) {
   if (!IsStringASCII(encoded_word)) {
     // Try UTF-8, referrer_charset and the native OS default charset in turn.
@@ -956,7 +966,8 @@ inline bool IsHostCharDigit(char c) {
   return (c >= '0') && (c <= '9');
 }
 
-bool IsCanonicalizedHostCompliant(const std::string& host) {
+bool IsCanonicalizedHostCompliant(const std::string& host,
+                                  const std::string& desired_tld) {
   if (host.empty())
     return false;
 
@@ -986,7 +997,8 @@ bool IsCanonicalizedHostCompliant(const std::string& host) {
     }
   }
 
-  return most_recent_component_started_alpha;
+  return most_recent_component_started_alpha ||
+      (!desired_tld.empty() && IsHostCharAlpha(desired_tld[0]));
 }
 
 std::string GetDirectoryListingEntry(const string16& name,
@@ -1266,9 +1278,12 @@ std::string GetHostName() {
 void GetIdentityFromURL(const GURL& url,
                         std::wstring* username,
                         std::wstring* password) {
-  UnescapeRule::Type flags = UnescapeRule::SPACES;
-  *username = UnescapeAndDecodeUTF8URLComponent(url.username(), flags, NULL);
-  *password = UnescapeAndDecodeUTF8URLComponent(url.password(), flags, NULL);
+  UnescapeRule::Type flags =
+      UnescapeRule::SPACES | UnescapeRule::URL_SPECIAL_CHARS;
+  *username = UTF16ToWideHack(UnescapeAndDecodeUTF8URLComponent(url.username(),
+                                                                flags, NULL));
+  *password = UTF16ToWideHack(UnescapeAndDecodeUTF8URLComponent(url.password(),
+                                                                flags, NULL));
 }
 
 void AppendFormattedHost(const GURL& url,
@@ -1338,9 +1353,9 @@ void AppendFormattedComponent(const std::string& spec,
           spec.substr(in_component.begin, in_component.len),
           offset_into_component));
     } else {
-      output->append(UnescapeAndDecodeUTF8URLComponent(
+      output->append(UTF16ToWideHack(UnescapeAndDecodeUTF8URLComponent(
           spec.substr(in_component.begin, in_component.len), unescape_rules,
-          offset_into_component));
+          offset_into_component)));
     }
     out_component->len =
         static_cast<int>(output->length()) - out_component->begin;
@@ -1544,6 +1559,132 @@ void SetExplicitlyAllowedPorts(const std::wstring& allowed_ports) {
     }
   }
   explicitly_allowed_ports = ports;
+}
+
+enum IPv6SupportStatus {
+  IPV6_CANNOT_CREATE_SOCKETS,
+  IPV6_CAN_CREATE_SOCKETS,
+  IPV6_GETIFADDRS_FAILED,
+  IPV6_GLOBAL_ADDRESS_MISSING,
+  IPV6_GLOBAL_ADDRESS_PRESENT,
+  IPV6_INTERFACE_ARRAY_TOO_SHORT,
+  IPV6_SUPPORT_MAX  // Bounding values for enumeration.
+};
+
+static void IPv6SupportResults(IPv6SupportStatus result) {
+  static bool run_once = false;
+  if (!run_once) {
+    run_once = true;
+    UMA_HISTOGRAM_ENUMERATION("Net.IPv6Status", result, IPV6_SUPPORT_MAX);
+  } else {
+    UMA_HISTOGRAM_ENUMERATION("Net.IPv6Status_retest", result,
+                              IPV6_SUPPORT_MAX);
+  }
+}
+
+// TODO(jar): The following is a simple estimate of IPv6 support.  We may need
+// to do a test resolution, and a test connection, to REALLY verify support.
+// static
+bool IPv6Supported() {
+#if defined(OS_POSIX)
+  int test_socket = socket(AF_INET6, SOCK_STREAM, 0);
+  if (test_socket == -1) {
+    IPv6SupportResults(IPV6_CANNOT_CREATE_SOCKETS);
+    return false;
+  }
+  close(test_socket);
+
+  // Check to see if any interface has a IPv6 address.
+  struct ifaddrs* interface_addr = NULL;
+  int rv = getifaddrs(&interface_addr);
+  if (rv != 0) {
+     IPv6SupportResults(IPV6_GETIFADDRS_FAILED);
+     return true;  // Don't yet block IPv6.
+  }
+
+  bool found_ipv6 = false;
+  for (struct ifaddrs* interface = interface_addr;
+       interface != NULL;
+       interface = interface->ifa_next) {
+    if (!(IFF_UP & interface->ifa_flags))
+      continue;
+    if (IFF_LOOPBACK & interface->ifa_flags)
+      continue;
+    struct sockaddr* addr = interface->ifa_addr;
+    if (!addr)
+      continue;
+    if (addr->sa_family != AF_INET6)
+      continue;
+    // Safe cast since this is AF_INET6.
+    struct sockaddr_in6* addr_in6 =
+        reinterpret_cast<struct sockaddr_in6*>(addr);
+    struct in6_addr* sin6_addr = &addr_in6->sin6_addr;
+    if (IN6_IS_ADDR_LOOPBACK(sin6_addr) || IN6_IS_ADDR_LINKLOCAL(sin6_addr))
+      continue;
+    found_ipv6 = true;
+    break;
+  }
+  freeifaddrs(interface_addr);
+  if (!found_ipv6) {
+    IPv6SupportResults(IPV6_GLOBAL_ADDRESS_MISSING);
+    return false;
+  }
+
+  IPv6SupportResults(IPV6_GLOBAL_ADDRESS_PRESENT);
+  return true;
+#elif defined(OS_WIN)
+  EnsureWinsockInit();
+  SOCKET test_socket = socket(AF_INET6, SOCK_STREAM, 0);
+  if (test_socket == INVALID_SOCKET) {
+    IPv6SupportResults(IPV6_CANNOT_CREATE_SOCKETS);
+    return false;
+  }
+  closesocket(test_socket);
+
+  // TODO(jar): Bug 40851: The remainder of probe is not working.
+  IPv6SupportResults(IPV6_CAN_CREATE_SOCKETS);  // Record status.
+  return true;  // Don't disable IPv6 yet.
+
+  // Check to see if any interface has a IPv6 address.
+  // Note: The original IPv6 socket can't be used here, as WSAIoctl() will fail.
+  test_socket = socket(AF_INET, SOCK_STREAM, 0);
+  DCHECK(test_socket != INVALID_SOCKET);
+  INTERFACE_INFO interfaces[128];
+  DWORD bytes_written = 0;
+  int rv = WSAIoctl(test_socket, SIO_GET_INTERFACE_LIST, NULL, 0, interfaces,
+                    sizeof(interfaces), &bytes_written, NULL, NULL);
+  closesocket(test_socket);
+
+  if (0 != rv) {
+    if (WSAGetLastError() == WSAEFAULT)
+      IPv6SupportResults(IPV6_INTERFACE_ARRAY_TOO_SHORT);
+    else
+      IPv6SupportResults(IPV6_GETIFADDRS_FAILED);
+    return true;  // Don't yet block IPv6.
+  }
+  size_t interface_count = bytes_written / sizeof(interfaces[0]);
+  for (size_t i = 0; i < interface_count; ++i) {
+    INTERFACE_INFO* interface = &interfaces[i];
+    if (!(IFF_UP & interface->iiFlags))
+      continue;
+    if (IFF_LOOPBACK & interface->iiFlags)
+      continue;
+    sockaddr* addr = &interface->iiAddress.Address;
+    if (addr->sa_family != AF_INET6)
+      continue;
+    struct in6_addr* sin6_addr = &interface->iiAddress.AddressIn6.sin6_addr;
+    if (IN6_IS_ADDR_LOOPBACK(sin6_addr) || IN6_IS_ADDR_LINKLOCAL(sin6_addr))
+      continue;
+    IPv6SupportResults(IPV6_GLOBAL_ADDRESS_PRESENT);
+    return true;
+  }
+
+  IPv6SupportResults(IPV6_GLOBAL_ADDRESS_MISSING);
+  return false;
+#else
+  NOTIMPLEMENTED();
+  return true;
+#endif  // defined(various platforms)
 }
 
 }  // namespace net

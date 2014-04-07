@@ -1,4 +1,4 @@
-// Copyright (c) 2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,25 +8,32 @@
 #include <gtk/gtk.h>
 #endif
 
-#include "app/gfx/canvas.h"
-#include "app/gfx/color_utils.h"
 #include "app/l10n_util.h"
 #include "app/resource_bundle.h"
 #include "app/theme_provider.h"
+#include "base/i18n/rtl.h"
 #include "base/stl_util-inl.h"
 #include "chrome/app/chrome_dll_resource.h"
 #include "chrome/browser/alternate_nav_url_fetcher.h"
 #include "chrome/browser/browser_list.h"
+#include "chrome/browser/browser_window.h"
 #include "chrome/browser/bubble_positioner.h"
 #include "chrome/browser/command_updater.h"
+#include "chrome/browser/content_setting_bubble_model.h"
+#include "chrome/browser/content_setting_image_model.h"
 #include "chrome/browser/extensions/extension_browser_event_router.h"
 #include "chrome/browser/extensions/extensions_service.h"
 #include "chrome/browser/profile.h"
 #include "chrome/browser/search_engines/template_url_model.h"
 #include "chrome/browser/view_ids.h"
 #include "chrome/browser/views/extensions/extension_popup.h"
+#include "chrome/browser/views/frame/browser_view.h"
 #include "chrome/browser/views/content_blocked_bubble_contents.h"
+#include "chrome/common/content_settings.h"
+#include "chrome/common/platform_util.h"
 #include "chrome/common/pref_names.h"
+#include "gfx/canvas.h"
+#include "gfx/color_utils.h"
 #include "grit/generated_resources.h"
 #include "grit/theme_resources.h"
 #include "net/base/net_util.h"
@@ -45,9 +52,6 @@ static const int kEntryPadding = 3;
 
 // Padding between the entry and the leading/trailing views.
 static const int kInnerPadding = 3;
-
-// The size (both dimensions) of the buttons for page actions.
-static const int kPageActionButtonSize = 19;
 
 static const SkBitmap* kBackground = NULL;
 
@@ -84,7 +88,8 @@ class LocationBarView::PageActionWithBadgeView : public views::View {
   PageActionImageView* image_view() { return image_view_; }
 
   virtual gfx::Size GetPreferredSize() {
-    return gfx::Size(kPageActionButtonSize, kPageActionButtonSize);
+    return gfx::Size(Extension::kPageActionIconMaxSize,
+                     Extension::kPageActionIconMaxSize);
   }
 
   void UpdateVisibility(TabContents* contents, const GURL& url);
@@ -138,7 +143,7 @@ LocationBarView::LocationBarView(Profile* profile,
       selected_keyword_view_(profile),
       keyword_hint_view_(profile),
       type_to_search_view_(l10n_util::GetString(IDS_OMNIBOX_EMPTY_TEXT)),
-      security_image_view_(profile, model, bubble_positioner),
+      security_image_view_(this, profile, model, bubble_positioner),
       popup_window_mode_(popup_window_mode),
       first_run_bubble_(this),
       bubble_positioner_(bubble_positioner) {
@@ -154,7 +159,6 @@ LocationBarView::LocationBarView(Profile* profile,
 }
 
 LocationBarView::~LocationBarView() {
-  DeletePageActionViews();
 }
 
 void LocationBarView::Init() {
@@ -224,10 +228,10 @@ void LocationBarView::Init() {
   security_image_view_.set_parent_owned(false);
 
   for (int i = 0; i < CONTENT_SETTINGS_NUM_TYPES; ++i) {
-    ContentBlockedImageView* content_blocked_view =
-        new ContentBlockedImageView(static_cast<ContentSettingsType>(i), this,
+    ContentSettingImageView* content_blocked_view =
+        new ContentSettingImageView(static_cast<ContentSettingsType>(i), this,
                                     profile_, bubble_positioner_);
-    content_blocked_views_.push_back(content_blocked_view);
+    content_setting_views_.push_back(content_blocked_view);
     AddChildView(content_blocked_view);
     content_blocked_view->SetVisible(false);
   }
@@ -300,7 +304,7 @@ SkColor LocationBarView::GetColor(bool is_secure, ColorKind kind) {
 
 void LocationBarView::Update(const TabContents* tab_for_state_restoring) {
   SetSecurityIcon(model_->GetIcon());
-  RefreshContentBlockedViews();
+  RefreshContentSettingViews();
   RefreshPageActionViews();
   std::wstring info_text, info_tooltip;
   ToolbarModel::InfoTextType info_text_type =
@@ -311,22 +315,36 @@ void LocationBarView::Update(const TabContents* tab_for_state_restoring) {
   SchedulePaint();
 }
 
-void LocationBarView::UpdateContentBlockedIcons() {
-  RefreshContentBlockedViews();
+void LocationBarView::UpdateContentSettingsIcons() {
+  RefreshContentSettingViews();
 
   Layout();
   SchedulePaint();
 }
 
 void LocationBarView::UpdatePageActions() {
+  size_t count_before = page_action_views_.size();
   RefreshPageActionViews();
+  if (page_action_views_.size() != count_before) {
+    NotificationService::current()->Notify(
+        NotificationType::EXTENSION_PAGE_ACTION_COUNT_CHANGED,
+        Source<LocationBar>(this),
+        NotificationService::NoDetails());
+  }
 
   Layout();
   SchedulePaint();
 }
 
 void LocationBarView::InvalidatePageActions() {
+  size_t count_before = page_action_views_.size();
   DeletePageActionViews();
+  if (page_action_views_.size() != count_before) {
+    NotificationService::current()->Notify(
+        NotificationType::EXTENSION_PAGE_ACTION_COUNT_CHANGED,
+        Source<LocationBar>(this),
+        NotificationService::NoDetails());
+  }
 }
 
 void LocationBarView::Focus() {
@@ -341,8 +359,8 @@ void LocationBarView::SetProfile(Profile* profile) {
     location_entry_->model()->SetProfile(profile);
     selected_keyword_view_.set_profile(profile);
     keyword_hint_view_.set_profile(profile);
-    for (ContentBlockedViews::const_iterator i(content_blocked_views_.begin());
-         i != content_blocked_views_.end(); ++i)
+    for (ContentSettingViews::const_iterator i(content_setting_views_.begin());
+         i != content_setting_views_.end(); ++i)
       (*i)->set_profile(profile);
     security_image_view_.set_profile(profile);
   }
@@ -374,14 +392,14 @@ void LocationBarView::SetPreviewEnabledPageAction(ExtensionAction *page_action,
 views::View* LocationBarView::GetPageActionView(
     ExtensionAction *page_action) {
   DCHECK(page_action);
-  for (std::vector<PageActionWithBadgeView*>::iterator iter =
-      page_action_views_.begin(); iter != page_action_views_.end();
-      ++iter) {
-    if ((*iter)->image_view()->page_action() == page_action)
-      return *iter;
+  for (PageActionViews::const_iterator i(page_action_views_.begin());
+       i != page_action_views_.end(); ++i) {
+    if ((*i)->image_view()->page_action() == page_action)
+      return *i;
   }
   return NULL;
 }
+
 gfx::Size LocationBarView::GetPreferredSize() {
   return gfx::Size(0,
       (popup_window_mode_ ? kPopupBackground : kBackground)->height());
@@ -494,6 +512,10 @@ void LocationBarView::OnChanged() {
   DoLayout(false);
 }
 
+void LocationBarView::OnInputInProgress(bool in_progress) {
+  delegate_->OnInputInProgress(in_progress);
+}
+
 void LocationBarView::OnKillFocus() {
 }
 
@@ -524,15 +546,13 @@ void LocationBarView::DoLayout(const bool force_layout) {
 
   int entry_width = width() - (kEntryPadding * 2);
 
-  gfx::Size page_action_size;
-  for (size_t i = 0; i < page_action_views_.size(); i++) {
-    if (page_action_views_[i]->IsVisible()) {
-      page_action_size = page_action_views_[i]->GetPreferredSize();
-      entry_width -= page_action_size.width() + kInnerPadding;
-    }
+  for (PageActionViews::const_iterator i(page_action_views_.begin());
+       i != page_action_views_.end(); ++i) {
+    if ((*i)->IsVisible())
+      entry_width -= (*i)->GetPreferredSize().width() + kInnerPadding;
   }
-  for (ContentBlockedViews::const_iterator i(content_blocked_views_.begin());
-       i != content_blocked_views_.end(); ++i) {
+  for (ContentSettingViews::const_iterator i(content_setting_views_.begin());
+       i != content_setting_views_.end(); ++i) {
     if ((*i)->IsVisible())
       entry_width -= (*i)->GetPreferredSize().width() + kInnerPadding;
   }
@@ -588,20 +608,19 @@ void LocationBarView::DoLayout(const bool force_layout) {
     offset -= kInnerPadding;
   }
 
-  for (size_t i = 0; i < page_action_views_.size(); i++) {
-    if (page_action_views_[i]->IsVisible()) {
-      page_action_size = page_action_views_[i]->GetPreferredSize();
-      offset -= page_action_size.width();
-      page_action_views_[i]->SetBounds(offset, location_y,
-                                       page_action_size.width(),
-                                       location_height);
+  for (PageActionViews::const_iterator i(page_action_views_.begin());
+       i != page_action_views_.end(); ++i) {
+    if ((*i)->IsVisible()) {
+      int page_action_width = (*i)->GetPreferredSize().width();
+      offset -= page_action_width;
+      (*i)->SetBounds(offset, location_y, page_action_width, location_height);
       offset -= kInnerPadding;
     }
   }
   // We use a reverse_iterator here because we're laying out the views from
   // right to left but in the vector they're ordered left to right.
-  for (ContentBlockedViews::const_reverse_iterator
-       i(content_blocked_views_.rbegin()); i != content_blocked_views_.rend();
+  for (ContentSettingViews::const_reverse_iterator
+       i(content_setting_views_.rbegin()); i != content_setting_views_.rend();
        ++i) {
     if ((*i)->IsVisible()) {
       int content_blocked_width = (*i)->GetPreferredSize().width();
@@ -742,23 +761,20 @@ void LocationBarView::SetSecurityIcon(ToolbarModel::Icon icon) {
   }
 }
 
-void LocationBarView::RefreshContentBlockedViews() {
+void LocationBarView::RefreshContentSettingViews() {
   const TabContents* tab_contents = delegate_->GetTabContents();
-  for (ContentBlockedViews::const_iterator i(content_blocked_views_.begin());
-       i != content_blocked_views_.end(); ++i) {
-    (*i)->SetVisible((!model_->input_in_progress() && tab_contents) ?
-        tab_contents->IsContentBlocked((*i)->content_type()) : false);
+  for (ContentSettingViews::const_iterator i(content_setting_views_.begin());
+       i != content_setting_views_.end(); ++i) {
+    (*i)->UpdateFromTabContents(
+        model_->input_in_progress() ? NULL : tab_contents);
   }
 }
 
 void LocationBarView::DeletePageActionViews() {
-  if (!page_action_views_.empty()) {
-    for (size_t i = 0; i < page_action_views_.size(); ++i)
-      RemoveChildView(page_action_views_[i]);
-    STLDeleteContainerPointers(page_action_views_.begin(),
-                               page_action_views_.end());
-    page_action_views_.clear();
-  }
+  for (PageActionViews::const_iterator i(page_action_views_.begin());
+       i != page_action_views_.end(); ++i)
+    RemoveChildView(*i);
+  STLDeleteElements(&page_action_views_);
 }
 
 void LocationBarView::RefreshPageActionViews() {
@@ -768,10 +784,9 @@ void LocationBarView::RefreshPageActionViews() {
     return;
 
   std::map<ExtensionAction*, bool> old_visibility;
-  for (size_t i = 0; i < page_action_views_.size(); i++) {
-    old_visibility[page_action_views_[i]->image_view()->page_action()] =
-        page_action_views_[i]->IsVisible();
-  }
+  for (PageActionViews::const_iterator i(page_action_views_.begin());
+       i != page_action_views_.end(); ++i)
+    old_visibility[(*i)->image_view()->page_action()] = (*i)->IsVisible();
 
   // Remember the previous visibility of the page actions so that we can
   // notify when this changes.
@@ -792,7 +807,6 @@ void LocationBarView::RefreshPageActionViews() {
           new PageActionImageView(this, profile_,
                                   page_actions[i], bubble_positioner_));
       page_action_views_[i]->SetVisible(false);
-      page_action_views_[i]->set_parent_owned(false);
       AddChildView(page_action_views_[i]);
     }
   }
@@ -801,14 +815,14 @@ void LocationBarView::RefreshPageActionViews() {
   if (!page_action_views_.empty() && contents) {
     GURL url = GURL(WideToUTF8(model_->GetText()));
 
-    for (size_t i = 0; i < page_action_views_.size(); i++) {
-      page_action_views_[i]->UpdateVisibility(contents, url);
+    for (PageActionViews::const_iterator i(page_action_views_.begin());
+         i != page_action_views_.end(); ++i) {
+      (*i)->UpdateVisibility(contents, url);
 
       // Check if the visibility of the action changed and notify if it did.
-      ExtensionAction* action =
-          page_action_views_[i]->image_view()->page_action();
+      ExtensionAction* action = (*i)->image_view()->page_action();
       if (old_visibility.find(action) == old_visibility.end() ||
-          old_visibility[action] != page_action_views_[i]->IsVisible()) {
+          old_visibility[action] != (*i)->IsVisible()) {
         NotificationService::current()->Notify(
             NotificationType::EXTENSION_PAGE_ACTION_VISIBILITY_CHANGED,
             Source<ExtensionAction>(action),
@@ -858,25 +872,11 @@ void LocationBarView::OnMouseEvent(const views::MouseEvent& event, UINT msg) {
 }
 #endif
 
-bool LocationBarView::GetAccessibleName(std::wstring* name) {
-  DCHECK(name);
-
-  if (!accessible_name_.empty()) {
-    name->assign(accessible_name_);
-    return true;
-  }
-  return false;
-}
-
 bool LocationBarView::GetAccessibleRole(AccessibilityTypes::Role* role) {
   DCHECK(role);
 
   *role = AccessibilityTypes::ROLE_GROUPING;
   return true;
-}
-
-void LocationBarView::SetAccessibleName(const std::wstring& name) {
-  accessible_name_.assign(name);
 }
 
 // SelectedKeywordView -------------------------------------------------------
@@ -985,7 +985,7 @@ std::wstring LocationBarView::SelectedKeywordView::CalculateMinString(
   } else {
     min_string = description.substr(0, chop_index);
   }
-  l10n_util::AdjustStringForLocaleDirection(min_string, &min_string);
+  base::i18n::AdjustStringForLocaleDirection(min_string, &min_string);
   return min_string;
 }
 
@@ -1161,7 +1161,8 @@ void LocationBarView::ShowInfoBubbleTask::Cancel() {
 
 // -----------------------------------------------------------------------------
 
-void LocationBarView::ShowFirstRunBubbleInternal(bool use_OEM_bubble) {
+void LocationBarView::ShowFirstRunBubbleInternal(
+    FirstRun::BubbleType bubble_type) {
   if (!location_entry_view_)
     return;
   if (!location_entry_view_->GetWidget()->IsActive()) {
@@ -1189,7 +1190,7 @@ void LocationBarView::ShowFirstRunBubbleInternal(bool use_OEM_bubble) {
     bounds.set_x(location.x() - 20);
 
 #if defined(OS_WIN)
-  FirstRunBubble::Show(profile_, GetWindow(), bounds, use_OEM_bubble);
+  FirstRunBubble::Show(profile_, GetWindow(), bounds, bubble_type);
 #else
   // First run bubble doesn't make sense for Chrome OS.
 #endif
@@ -1270,14 +1271,14 @@ void LocationBarView::LocationBarImageView::ShowInfoBubbleImpl(
 // static
 SkBitmap* LocationBarView::SecurityImageView::lock_icon_ = NULL;
 SkBitmap* LocationBarView::SecurityImageView::warning_icon_ = NULL;
-SkBitmap* LocationBarView::
-    ContentBlockedImageView::icons_[CONTENT_SETTINGS_NUM_TYPES] = { NULL };
 
 LocationBarView::SecurityImageView::SecurityImageView(
+    const LocationBarView* parent,
     Profile* profile,
     ToolbarModel* model,
     const BubblePositioner* bubble_positioner)
     : LocationBarImageView(bubble_positioner),
+      parent_(parent),
       profile_(profile),
       model_(model) {
   if (!lock_icon_) {
@@ -1294,10 +1295,10 @@ LocationBarView::SecurityImageView::~SecurityImageView() {
 void LocationBarView::SecurityImageView::SetImageShown(Image image) {
   switch (image) {
     case LOCK:
-      ImageView::SetImage(lock_icon_);
+      SetImage(lock_icon_);
       break;
     case WARNING:
-      ImageView::SetImage(warning_icon_);
+      SetImage(warning_icon_);
       break;
     default:
       NOTREACHED();
@@ -1307,7 +1308,7 @@ void LocationBarView::SecurityImageView::SetImageShown(Image image) {
 
 bool LocationBarView::SecurityImageView::OnMousePressed(
     const views::MouseEvent& event) {
-  TabContents* tab = BrowserList::GetLastActive()->GetSelectedTabContents();
+  TabContents* tab = parent_->GetTabContents();
   NavigationEntry* nav_entry = tab->controller().GetActiveEntry();
   if (!nav_entry) {
     NOTREACHED();
@@ -1325,52 +1326,44 @@ void LocationBarView::SecurityImageView::ShowInfoBubble() {
       SECURITY_INFO_BUBBLE_TEXT));
 }
 
-// ContentBlockedImageView------------------------------------------------------
+// ContentSettingImageView------------------------------------------------------
 
-LocationBarView::ContentBlockedImageView::ContentBlockedImageView(
+LocationBarView::ContentSettingImageView::ContentSettingImageView(
     ContentSettingsType content_type,
     const LocationBarView* parent,
     Profile* profile,
     const BubblePositioner* bubble_positioner)
-    : content_type_(content_type),
+    : content_setting_image_model_(
+          ContentSettingImageModel::CreateContentSettingImageModel(
+              content_type)),
       parent_(parent),
       profile_(profile),
       info_bubble_(NULL),
       bubble_positioner_(bubble_positioner) {
-  if (!icons_[CONTENT_SETTINGS_TYPE_COOKIES]) {
-    static const int kIconIDs[CONTENT_SETTINGS_NUM_TYPES] = {
-      IDR_BLOCKED_COOKIES,
-      IDR_BLOCKED_IMAGES,
-      IDR_BLOCKED_JAVASCRIPT,
-      IDR_BLOCKED_PLUGINS,
-      IDR_BLOCKED_POPUPS,
-    };
-    DCHECK_EQ(arraysize(kIconIDs),
-              static_cast<size_t>(CONTENT_SETTINGS_NUM_TYPES));
-    ResourceBundle& rb = ResourceBundle::GetSharedInstance();
-    for (int i = 0; i < CONTENT_SETTINGS_NUM_TYPES; ++i)
-      icons_[i] = rb.GetBitmapNamed(kIconIDs[i]);
-  }
-  SetImage(icons_[content_type_]);
-
-  static const int kTooltipIDs[CONTENT_SETTINGS_NUM_TYPES] = {
-    IDS_BLOCKED_COOKIES_TITLE,
-    IDS_BLOCKED_IMAGES_TITLE,
-    IDS_BLOCKED_JAVASCRIPT_TITLE,
-    IDS_BLOCKED_PLUGINS_TITLE,
-    IDS_BLOCKED_POPUPS_TOOLTIP,
-  };
-  DCHECK_EQ(arraysize(kTooltipIDs),
-            static_cast<size_t>(CONTENT_SETTINGS_NUM_TYPES));
-  SetTooltipText(l10n_util::GetString(kTooltipIDs[content_type_]));
 }
 
-LocationBarView::ContentBlockedImageView::~ContentBlockedImageView() {
+LocationBarView::ContentSettingImageView::~ContentSettingImageView() {
   if (info_bubble_)
     info_bubble_->Close();
 }
 
-bool LocationBarView::ContentBlockedImageView::OnMousePressed(
+void LocationBarView::ContentSettingImageView::UpdateFromTabContents(
+    const TabContents* tab_contents) {
+  int old_icon = content_setting_image_model_->get_icon();
+  content_setting_image_model_->UpdateFromTabContents(tab_contents);
+  if (content_setting_image_model_->is_visible()) {
+    if (old_icon != content_setting_image_model_->get_icon()) {
+      ResourceBundle& rb = ResourceBundle::GetSharedInstance();
+      SetImage(rb.GetBitmapNamed(content_setting_image_model_->get_icon()));
+    }
+    SetTooltipText(UTF8ToWide(content_setting_image_model_->get_tooltip()));
+    SetVisible(true);
+  } else {
+    SetVisible(false);
+  }
+}
+
+bool LocationBarView::ContentSettingImageView::OnMousePressed(
     const views::MouseEvent& event) {
   gfx::Rect bounds(bubble_positioner_->GetLocationStackBounds());
   gfx::Point location;
@@ -1381,34 +1374,32 @@ bool LocationBarView::ContentBlockedImageView::OnMousePressed(
   TabContents* tab_contents = parent_->GetTabContents();
   if (!tab_contents)
     return true;
-  GURL url = tab_contents->GetURL();
-  std::wstring display_host;
-  net::AppendFormattedHost(url,
-      profile_->GetPrefs()->GetString(prefs::kAcceptLanguages), &display_host,
-      NULL, NULL);
-  ContentBlockedBubbleContents* bubble_contents =
-      new ContentBlockedBubbleContents(content_type_, url.host(), display_host,
-                                       profile_, tab_contents);
+  ContentSettingBubbleContents* bubble_contents =
+      new ContentSettingBubbleContents(
+          ContentSettingBubbleModel::CreateContentSettingBubbleModel(
+              tab_contents, profile_,
+              content_setting_image_model_->get_content_settings_type()),
+          profile_, tab_contents);
   DCHECK(!info_bubble_);
   info_bubble_ = InfoBubble::Show(GetWindow(), bounds, bubble_contents, this);
   bubble_contents->set_info_bubble(info_bubble_);
   return true;
 }
 
-void LocationBarView::ContentBlockedImageView::VisibilityChanged(
+void LocationBarView::ContentSettingImageView::VisibilityChanged(
     View* starting_from,
     bool is_visible) {
   if (!is_visible && info_bubble_)
     info_bubble_->Close();
 }
 
-void LocationBarView::ContentBlockedImageView::InfoBubbleClosing(
+void LocationBarView::ContentSettingImageView::InfoBubbleClosing(
     InfoBubble* info_bubble,
     bool closed_by_escape) {
   info_bubble_ = NULL;
 }
 
-bool LocationBarView::ContentBlockedImageView::CloseOnEscape() {
+bool LocationBarView::ContentSettingImageView::CloseOnEscape() {
   return true;
 }
 
@@ -1423,10 +1414,10 @@ LocationBarView::PageActionImageView::PageActionImageView(
       owner_(owner),
       profile_(profile),
       page_action_(page_action),
+      ALLOW_THIS_IN_INITIALIZER_LIST(tracker_(this)),
       current_tab_id_(-1),
       preview_enabled_(false),
-      popup_(NULL),
-      ALLOW_THIS_IN_INITIALIZER_LIST(method_factory_(this)) {
+      popup_(NULL) {
   Extension* extension = profile->GetExtensionsService()->GetExtensionById(
       page_action->extension_id(), false);
   DCHECK(extension);
@@ -1437,29 +1428,28 @@ LocationBarView::PageActionImageView::PageActionImageView(
   if (!page_action_->default_icon_path().empty())
     icon_paths.push_back(page_action_->default_icon_path());
 
-  tracker_ = new ImageLoadingTracker(this, icon_paths.size());
   for (std::vector<std::string>::iterator iter = icon_paths.begin();
        iter != icon_paths.end(); ++iter) {
-    tracker_->PostLoadImageTask(
-        extension->GetResource(*iter),
-        gfx::Size(Extension::kPageActionIconMaxSize,
-                  Extension::kPageActionIconMaxSize));
+    tracker_.LoadImage(extension, extension->GetResource(*iter),
+                       gfx::Size(Extension::kPageActionIconMaxSize,
+                                 Extension::kPageActionIconMaxSize),
+                       ImageLoadingTracker::DONT_CACHE);
   }
-
-  registrar_.Add(this, NotificationType::EXTENSION_HOST_VIEW_SHOULD_CLOSE,
-                 Source<Profile>(profile_));
 }
 
 LocationBarView::PageActionImageView::~PageActionImageView() {
-  if (tracker_)
-    tracker_->StopTrackingImageLoad();
-
   if (popup_)
     HidePopup();
 }
 
-void LocationBarView::PageActionImageView::ExecuteAction(int button) {
-  if (page_action_->has_popup()) {
+void LocationBarView::PageActionImageView::ExecuteAction(int button,
+    bool inspect_with_devtools) {
+  if (current_tab_id_ < 0) {
+    NOTREACHED() << "No current tab.";
+    return;
+  }
+
+  if (page_action_->HasPopup(current_tab_id_)) {
     // In tests, GetLastActive could return NULL, so we need to have
     // a fallback.
     // TODO(erikkay): Find a better way to get the Browser that this
@@ -1467,6 +1457,7 @@ void LocationBarView::PageActionImageView::ExecuteAction(int button) {
     Browser* browser = BrowserList::GetLastActiveWithProfile(profile_);
     if (!browser)
       browser = BrowserList::FindBrowserWithProfile(profile_);
+    DCHECK(browser);
 
     bool popup_showing = popup_ != NULL;
 
@@ -1483,9 +1474,18 @@ void LocationBarView::PageActionImageView::ExecuteAction(int button) {
     gfx::Rect rect = parent->bounds();
     rect.set_x(origin.x());
     rect.set_y(origin.y());
-    popup_ = ExtensionPopup::Show(page_action_->popup_url(), browser, rect,
-                                  BubbleBorder::TOP_RIGHT);
-    popup_->set_delegate(this);
+
+    popup_ = ExtensionPopup::Show(
+        page_action_->GetPopupUrl(current_tab_id_),
+        browser,
+        browser->profile(),
+        browser->window()->GetNativeHandle(),
+        rect,
+        BubbleBorder::TOP_RIGHT,
+        true,  // Activate the popup window.
+        inspect_with_devtools,
+        ExtensionPopup::BUBBLE_CHROME,
+        this);  // ExtensionPopup::Observer
   } else {
     ExtensionBrowserEventRouter::GetInstance()->PageActionExecuted(
         profile_, page_action_->extension_id(), page_action_->id(),
@@ -1502,6 +1502,17 @@ void LocationBarView::PageActionImageView::OnMouseMoved(
 
 bool LocationBarView::PageActionImageView::OnMousePressed(
     const views::MouseEvent& event) {
+  // We are interested in capturing mouse messages, but we want want to wait
+  // until mouse-up because we might show a context menu. Doing so on mouse-down
+  // causes weird bugs like http://crbug.com/33155.
+  return true;
+}
+
+void LocationBarView::PageActionImageView::OnMouseReleased(
+    const views::MouseEvent& event, bool canceled) {
+  if (canceled)
+    return;
+
   int button = -1;
   if (event.IsLeftMouseButton()) {
     button = 1;
@@ -1509,7 +1520,7 @@ bool LocationBarView::PageActionImageView::OnMousePressed(
     button = 2;
   } else if (event.IsRightMouseButton()) {
     // Get the top left point of this button in screen coordinates.
-    gfx::Point point = gfx::Point(0,0);
+    gfx::Point point = gfx::Point(0, 0);
     ConvertPointToScreen(this, &point);
 
     // Make the menu appear below the button.
@@ -1517,26 +1528,27 @@ bool LocationBarView::PageActionImageView::OnMousePressed(
 
     Extension* extension = profile_->GetExtensionsService()->GetExtensionById(
         page_action()->extension_id(), false);
-
-    if (!context_menu_.get())
-      context_menu_.reset(new ExtensionActionContextMenu());
-    context_menu_->Run(extension, point);
-    return false;
+    Browser* browser = BrowserView::GetBrowserViewForNativeWindow(
+        platform_util::GetTopLevel(GetWidget()->GetNativeView()))->browser();
+    context_menu_contents_ = new ExtensionContextMenuModel(
+        extension, browser, this);
+    context_menu_menu_.reset(new views::Menu2(context_menu_contents_.get()));
+    context_menu_menu_->RunContextMenuAt(point);
+    return;
   }
 
-  ExecuteAction(button);
-  return true;
+  ExecuteAction(button, false);  // inspect_with_devtools
 }
 
 void LocationBarView::PageActionImageView::ShowInfoBubble() {
   ShowInfoBubbleImpl(ASCIIToWide(tooltip_), GetColor(false, TEXT));
 }
 
-void LocationBarView::PageActionImageView::OnImageLoaded(SkBitmap* image,
-                                                         size_t index) {
+void LocationBarView::PageActionImageView::OnImageLoaded(
+    SkBitmap* image, ExtensionResource resource, int index) {
   // We loaded icons()->size() icons, plus one extra if the page action had
   // a default icon.
-  size_t total_icons = page_action_->icon_paths()->size();
+  int total_icons = static_cast<int>(page_action_->icon_paths()->size());
   if (!page_action_->default_icon_path().empty())
     total_icons++;
   DCHECK(index < total_icons);
@@ -1544,15 +1556,11 @@ void LocationBarView::PageActionImageView::OnImageLoaded(SkBitmap* image,
   // Map the index of the loaded image back to its name. If we ever get an
   // index greater than the number of icons, it must be the default icon.
   if (image) {
-    if (index < page_action_->icon_paths()->size())
+    if (index < static_cast<int>(page_action_->icon_paths()->size()))
       page_action_icons_[page_action_->icon_paths()->at(index)] = *image;
     else
       page_action_icons_[page_action_->default_icon_path()] = *image;
   }
-
-  // If we are done, release the tracker.
-  if (index == total_icons - 1)
-    tracker_ = NULL;
 
   owner_->UpdatePageActions();
 }
@@ -1598,69 +1606,36 @@ void LocationBarView::PageActionImageView::UpdateVisibility(
     }
 
     if (!icon.isNull())
-      ImageView::SetImage(&icon);
+      SetImage(&icon);
   }
   SetVisible(visible);
 }
 
-void LocationBarView::PageActionImageView::BubbleBrowserWindowClosing(
-    BrowserBubble* bubble) {
-  HidePopup();
+void LocationBarView::PageActionImageView::InspectPopup(
+    ExtensionAction* action) {
+  ExecuteAction(1,  // left-click
+                true);  // inspect_with_devtools
 }
 
-void LocationBarView::PageActionImageView::BubbleLostFocus(
-    BrowserBubble* bubble,
-    gfx::NativeView focused_view) {
-  if (!popup_)
-    return;
-
-  MessageLoop::current()->PostTask(FROM_HERE,
-      method_factory_.NewRunnableMethod(
-          &LocationBarView::PageActionImageView::HidePopup));
+void LocationBarView::PageActionImageView::ExtensionPopupClosed(
+    ExtensionPopup* popup) {
+  DCHECK_EQ(popup_, popup);
+  // ExtensionPopup is ref-counted, so we don't need to delete it.
+  popup_ = NULL;
 }
 
 void LocationBarView::PageActionImageView::HidePopup() {
-  if (!popup_)
-    return;
-
-  // This sometimes gets called via a timer (See BubbleLostFocus), so clear
-  // the method factory. in case one is pending.
-  method_factory_.RevokeAll();
-
-  // Save the popup in a local since destroying it calls BubbleLostFocus,
-  // which will try to call HidePopup() again.
-  ExtensionPopup* closing_popup = popup_;
-  popup_ = NULL;
-
-  closing_popup->DetachFromBrowser();
-  delete closing_popup;
-}
-
-void LocationBarView::PageActionImageView::Observe(
-    NotificationType type,
-    const NotificationSource& source,
-    const NotificationDetails& details) {
-  switch (type.value) {
-    case NotificationType::EXTENSION_HOST_VIEW_SHOULD_CLOSE:
-      // If we aren't the host of the popup, then disregard the notification.
-      if (!popup_ || Details<ExtensionHost>(popup_->host()) != details)
-        return;
-
-      HidePopup();
-      break;
-    default:
-      NOTREACHED() << "Unexpected notification";
-      break;
-  }
+  if (popup_)
+    popup_->Close();
 }
 
 ////////////////////////////////////////////////////////////////////////////////
 // LocationBarView, LocationBar implementation:
 
-void LocationBarView::ShowFirstRunBubble(bool use_OEM_bubble) {
+void LocationBarView::ShowFirstRunBubble(FirstRun::BubbleType bubble_type) {
   // We wait 30 milliseconds to open. It allows less flicker.
   Task* task = first_run_bubble_.NewRunnableMethod(
-      &LocationBarView::ShowFirstRunBubbleInternal, use_OEM_bubble);
+      &LocationBarView::ShowFirstRunBubbleInternal, bubble_type);
   MessageLoop::current()->PostDelayedTask(FROM_HERE, task, 30);
 }
 
@@ -1684,9 +1659,10 @@ void LocationBarView::AcceptInputWithDisposition(WindowOpenDisposition disp) {
   location_entry_->model()->AcceptInput(disp, false);
 }
 
-void LocationBarView::FocusLocation() {
+void LocationBarView::FocusLocation(bool select_all) {
   location_entry_->SetFocus();
-  location_entry_->SelectAll(true);
+  if (select_all)
+    location_entry_->SelectAll(true);
 }
 
 void LocationBarView::FocusSearch() {
@@ -1720,15 +1696,13 @@ ExtensionAction* LocationBarView::GetPageAction(size_t index) {
 }
 
 ExtensionAction* LocationBarView::GetVisiblePageAction(size_t index) {
-  if (index >= 0) {
-    size_t current = 0;
-    for (size_t i = 0; i < page_action_views_.size(); ++i) {
-      if (page_action_views_[i]->IsVisible()) {
-        if (current == index)
-          return page_action_views_[i]->image_view()->page_action();
+  size_t current = 0;
+  for (size_t i = 0; i < page_action_views_.size(); ++i) {
+    if (page_action_views_[i]->IsVisible()) {
+      if (current == index)
+        return page_action_views_[i]->image_view()->page_action();
 
-        ++current;
-      }
+      ++current;
     }
   }
 
@@ -1737,18 +1711,18 @@ ExtensionAction* LocationBarView::GetVisiblePageAction(size_t index) {
 }
 
 void LocationBarView::TestPageActionPressed(size_t index) {
-  if (index >= 0) {
-    size_t current = 0;
-    for (size_t i = 0; i < page_action_views_.size(); ++i) {
-      if (page_action_views_[i]->IsVisible()) {
-        if (current == index) {
-          const int button = 1;  // Left mouse button.
-          page_action_views_[i]->image_view()->ExecuteAction(button);
-          return;
-        }
-        ++current;
+  size_t current = 0;
+  for (size_t i = 0; i < page_action_views_.size(); ++i) {
+    if (page_action_views_[i]->IsVisible()) {
+      if (current == index) {
+        const int kLeftMouseButton = 1;
+        page_action_views_[i]->image_view()->ExecuteAction(kLeftMouseButton,
+            false);  // inspect_with_devtools
+        return;
       }
+      ++current;
     }
   }
+
   NOTREACHED();
 }

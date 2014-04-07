@@ -11,18 +11,19 @@
 namespace {
 
 class BookmarkMenuTest : public CocoaTest {
- public:
 };
 
 TEST_F(BookmarkMenuTest, Basics) {
-  scoped_nsobject<BookmarkMenu> menu;
-  menu.reset([[BookmarkMenu alloc] initWithTitle:@"title"]);
-  [menu addItem:[[NSMenuItem alloc] initWithTitle:@"item"
-                                           action:NULL
-                                    keyEquivalent:@""]];
-  NSValue* value = [NSValue valueWithPointer:menu.get()];
-  [menu setRepresentedObject:value];
-  EXPECT_EQ((void*)menu.get(), (void*)[menu node]);
+  scoped_nsobject<BookmarkMenu> menu([[BookmarkMenu alloc]
+                                       initWithTitle:@"title"]);
+  scoped_nsobject<NSMenuItem> item([[NSMenuItem alloc] initWithTitle:@"item"
+                                                              action:NULL
+                                                       keyEquivalent:@""]);
+  [menu addItem:item];
+  long long l = 103849459459598948LL;  // arbitrary
+  NSNumber* number = [NSNumber numberWithLongLong:l];
+  [menu setRepresentedObject:number];
+  EXPECT_EQ(l, [menu id]);
 }
 
 }  // namespace

@@ -11,10 +11,14 @@
 #include <string>
 #include <vector>
 
+#include "webkit/glue/resource_type.h"
+
 class DictionaryValue;
 class Extension;
 class ExtensionMessageBundle;
 class FilePath;
+class GURL;
+class ResourceDispatcherHostRequestInfo;
 struct ExtensionInfo;
 
 namespace extension_l10n_util {
@@ -68,6 +72,10 @@ std::string CurrentLocaleOrDefault();
 void GetParentLocales(const std::string& current_locale,
                       std::vector<std::string>* parent_locales);
 
+// Extends list of Chrome locales to them and their parents, so we can do
+// proper fallback.
+void GetAllLocales(std::set<std::string>* all_locales);
+
 // Adds valid locales to the extension.
 // 1. Do nothing if _locales directory is missing (not an error).
 // 2. Get list of Chrome locales.
@@ -90,6 +98,15 @@ ExtensionMessageBundle* LoadMessageCatalogs(
     const std::string& app_locale,
     const std::set<std::string>& valid_locales,
     std::string* error);
+
+// Returns true if directory has "." in the name (for .svn) or if it doesn't
+// belong to Chrome locales.
+// |locales_path| is extension_id/_locales
+// |locale_path| is extension_id/_locales/xx
+// |all_locales| is a set of all valid Chrome locales.
+bool ShouldSkipValidation(const FilePath& locales_path,
+                          const FilePath& locale_path,
+                          const std::set<std::string>& all_locales);
 
 }  // namespace extension_l10n_util
 

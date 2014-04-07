@@ -11,8 +11,6 @@
 
 #if defined(OS_WIN)
 #include "base/scoped_handle_win.h"
-#elif defined(OS_LINUX)
-#include "base/scoped_handle_gtk.h"
 #endif
 
 class ScopedStdioHandle {
@@ -53,4 +51,4 @@ class ScopedStdioHandle {
   DISALLOW_EVIL_CONSTRUCTORS(ScopedStdioHandle);
 };
 
-#endif // BASE_SCOPED_HANDLE_H_
+#endif  // BASE_SCOPED_HANDLE_H_

@@ -64,6 +64,8 @@ function bind(fn, selfObj, var_args) {
   }
 }
 
+const IS_MAC = /$Mac/.test(navigator.platform);
+
 var loading = true;
 var mostVisitedData = [];
 var gotMostVisited = false;
@@ -102,20 +104,34 @@ function tips(data) {
 
 function createTip(data) {
   if (data.length) {
-    try {
-      return parseHtmlSubset(data[0].tip_html_text);
-    } catch (parseErr) {
-      console.error('Error parsing tips: ' + parseErr.message);
+    if (data[0].set_homepage_tip) {
+      var homepageButton = document.createElement('button');
+      homepageButton.className = 'link';
+      homepageButton.textContent = data[0].set_homepage_tip;
+      homepageButton.addEventListener('click', setAsHomePageLinkClicked);
+      return homepageButton;
+    } else {
+      try {
+        return parseHtmlSubset(data[0].tip_html_text);
+      } catch (parseErr) {
+        console.error('Error parsing tips: ' + parseErr.message);
+      }
     }
   }
   // Return an empty DF in case of failure.
   return document.createDocumentFragment();
 }
 
-function renderTip() {
+function clearTipLine() {
   var tipElement = $('tip-line');
   // There should always be only one tip.
   tipElement.textContent = '';
+  tipElement.removeEventListener('click', setAsHomePageLinkClicked);
+}
+
+function renderTip() {
+  clearTipLine();
+  var tipElement = $('tip-line');
   tipElement.appendChild(createTip(tipCache));
   fixLinkUnderlines(tipElement);
 }
@@ -230,8 +246,12 @@ function renderMostVisited(data) {
 
     // No need to continue if this is a filler.
     if (newClassName == 'thumbnail-container filler') {
+      // Make sure the user cannot tab to the filler.
+      t.tabIndex = -1;
       continue;
     }
+    // Allow focus.
+    t.tabIndex = 1;
 
     t.href = d.url;
     t.querySelector('.pin').title = localStrings.getString(d.pinned ?
@@ -317,9 +337,6 @@ function showSection(section) {
       case Section.TIPS:
         $('tip-line').style.display = '';
         break;
-      case Section.SYNC:
-        $('sync-status').style.display = '';
-        break;
     }
   }
 }
@@ -340,9 +357,6 @@ function hideSection(section) {
         break;
       case Section.TIPS:
         $('tip-line').style.display = 'none';
-        break;
-      case Section.SYNC:
-        $('sync-status').style.display = 'none';
         break;
     }
   }
@@ -470,6 +484,11 @@ var mostVisited = {
       var removeText = localStrings.getString('thumbnailremovednotification');
       var notifySpan = document.querySelector('#notification > span');
       notifySpan.textContent = removeText;
+
+      // Focus the undo link.
+      var undoLink = document.querySelector(
+          '#notification > .link > [tabindex]');
+      undoLink.focus();
     });
   },
 
@@ -479,6 +498,7 @@ var mostVisited = {
 
   clearAllBlacklisted: function() {
     chrome.send('clearMostVisitedURLsBlacklist', []);
+    hideNotification();
   },
 
   updateDisplayMode: function() {
@@ -596,7 +616,6 @@ function layoutRecentlyClosed() {
  *
  * syncsectionisvisible: true if the sync section needs to show up on the new
  *                       tab page and false otherwise.
- * msgtype: represents the states - "error", "presynced" or "synced".
  * title: the header for the sync status section.
  * msg: the actual message (e.g. "Synced to foo@gmail.com").
  * linkisvisible: true if the link element should be visible within the sync
@@ -613,10 +632,9 @@ function layoutRecentlyClosed() {
 function syncMessageChanged(newMessage) {
   var syncStatusElement = $('sync-status');
   var style = syncStatusElement.style;
-  $('sync-menu-item').style.display = 'block';
 
   // Hide the section if the message is emtpy.
-  if (!newMessage['syncsectionisvisible'] || !(shownSections & Section.SYNC)) {
+  if (!newMessage['syncsectionisvisible']) {
     style.display = 'none';
     return;
   }
@@ -682,7 +700,7 @@ function syncAlreadyEnabled(message) {
 function formatTabsText(numTabs) {
   if (numTabs == 1)
     return localStrings.getString('closedwindowsingle');
-  return localStrings.formatString('closedwindowmultiple', numTabs);
+  return localStrings.getStringF('closedwindowmultiple', numTabs);
 }
 
 /**
@@ -696,6 +714,7 @@ function onDataLoaded() {
     // Remove class name in a timeout so that changes done in this JS thread are
     // not animated.
     window.setTimeout(function() {
+      ensureSmallGridCorrect();
       removeClass(document.body, 'loading');
     }, 1);
   }
@@ -820,6 +839,9 @@ function showNotification(text, actionText, opt_f, opt_delay) {
   delayedHide();
 }
 
+/**
+ * Hides the notifier.
+ */
 function hideNotification() {
   var notificationElement = $('notification');
   removeClass(notificationElement, 'show');
@@ -1046,6 +1068,14 @@ $('most-visited').addEventListener('click', function(e) {
   }
 });
 
+// Allow blacklisting most visited site using the keyboard.
+$('most-visited').addEventListener('keydown', function(e) {
+  if (!IS_MAC && e.keyCode == 46 || // Del
+      IS_MAC && e.metaKey && e.keyCode == 8) { // Cmd + Backspace
+    mostVisited.blacklist(e.target);
+  }
+});
+
 function handleIfEnterKey(f) {
   return function(e) {
     if (e.keyIdentifier == 'Enter') {
@@ -1233,7 +1263,8 @@ $('list-checkbox').addEventListener('change',
 $('list-checkbox').addEventListener('keydown',
                                     getCheckboxHandler(Section.LIST));
 
-window.addEventListener('load', bind(logEvent, global, 'Tab.NewTabOnload', true));
+window.addEventListener('load', bind(logEvent, global, 'Tab.NewTabOnload',
+                                     true));
 window.addEventListener('load', onDataLoaded);
 
 window.addEventListener('resize', handleWindowResize);
@@ -1248,12 +1279,16 @@ document.addEventListener('DOMContentLoaded',
 document.addEventListener('DOMContentLoaded',
                           callGetSyncMessageIfSyncIsPresent);
 
-// This link allows user to make new tab page as homepage from the new tab
-// page itself (without going to Options dialog box).
-document.addEventListener('DOMContentLoaded', showSetAsHomePageLink);
-
 // Set up links and text-decoration for promotional message.
 document.addEventListener('DOMContentLoaded', setUpPromoMessage);
+
+// Work around for http://crbug.com/25329
+function ensureSmallGridCorrect() {
+  if (wasSmallGrid != useSmallGrid()) {
+    applyMostVisitedRects();
+  }
+}
+document.addEventListener('DOMContentLoaded', ensureSmallGridCorrect);
 
 /**
  * The sync code is not yet built by default on all platforms so we have to
@@ -1271,22 +1306,10 @@ function setAsHomePageLinkClicked(e) {
   e.preventDefault();
 }
 
-function showSetAsHomePageLink() {
-  var setAsHomePageElement = $('set-as-home-page');
-  var style = setAsHomePageElement.style;
-  if (document.documentElement.getAttribute('showsetashomepage') != 'true') {
-    // Hide the section (if new tab page is already homepage).
-    return;
-  }
-
-  style.display = 'block';
-  var buttonElement = setAsHomePageElement.firstElementChild;
-  buttonElement.addEventListener('click', setAsHomePageLinkClicked);
-}
-
 function onHomePageSet(data) {
-  $('set-as-home-page').style.display = 'none';
   showNotification(data[0], data[1]);
+  // Removes the "make this my home page" tip.
+  clearTipLine();
 }
 
 function hideAllMenus() {
@@ -1378,6 +1401,7 @@ var dnd = {
       this.dragItem = thumbnail;
       addClass(this.dragItem, 'dragging');
       this.dragItem.style.zIndex = 2;
+      e.dataTransfer.effectAllowed = 'copyLinkMove';
     }
   },
 
@@ -1392,6 +1416,7 @@ var dnd = {
     this.currentOverItem = item;
     if (this.canDropOnElement(item)) {
       e.preventDefault();
+      e.dataTransfer.dropEffect = 'move';
     }
   },
 
@@ -1428,7 +1453,6 @@ var dnd = {
   },
 
   handleDragEnd: function(e) {
-    // WebKit fires dragend before drop.
     var dragItem = this.dragItem;
     if (dragItem) {
       dragItem.style.pointerEvents = '';
@@ -1440,13 +1464,10 @@ var dnd = {
         // Same for overflow.
         dragItem.parentNode.style.overflow = '';
       });
-      var self = this;
-      this.dragEndTimer = window.setTimeout(function() {
-        // These things needto happen after the drop event.
-        mostVisited.invalidate();
-        mostVisited.layout();
-        self.dragItem = null;
-      }, 10);
+
+      mostVisited.invalidate();
+      mostVisited.layout();
+      this.dragItem = null;
     }
   },
 
@@ -1485,6 +1506,13 @@ var dnd = {
       this.startY = item.offsetTop;
       this.startScreenX = e.screenX;
       this.startScreenY = e.screenY;
+
+      // We don't want to focus the item on mousedown. However, to prevent focus
+      // one has to call preventDefault but this also prevents the drag and drop
+      // (sigh) so we only prevent it when the user is not doing a left mouse
+      // button drag.
+      if (e.button != 0) // LEFT
+        e.preventDefault();
     }
   },
 
@@ -1525,6 +1553,13 @@ var allowedAttributes = {
     // Only allow a[href] starting with http:// and https://
     return node.tagName == 'A' && (value.indexOf('http://') == 0 ||
         value.indexOf('https://') == 0);
+  },
+  'target': function(node, value) {
+    // Allow a[target] but reset the value to "".
+    if (node.tagName != 'A')
+      return false;
+    node.setAttribute('target', '');
+    return true;
   }
 }
 
@@ -1619,11 +1654,4 @@ function setUpPromoMessage() {
   syncButton.className = 'sync-button link';
   syncButton.onclick = syncSectionLinkClicked;
   fixLinkUnderlines($('promo-message'));
-}
-
-// A Windows-specific Webkit bug adds padding to buttons and will push the
-// bookmark sync button in the promo message too far to the right unless we
-// use this fix.  See https://bugs.webkit.org/show_bug.cgi?id=31703
-if (navigator.platform == 'Win32') {
-  addClass(document.body, 'win-button-padding-bug');
 }

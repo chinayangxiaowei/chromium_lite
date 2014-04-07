@@ -5,9 +5,13 @@
 #include "chrome/browser/sync/notifier/communicator/ssl_socket_adapter.h"
 
 #include "base/compiler_specific.h"
+#include "base/message_loop.h"
 #include "chrome/browser/net/url_request_context_getter.h"
 #include "chrome/browser/profile.h"
+#include "net/base/address_list.h"
+#include "net/base/net_errors.h"
 #include "net/base/ssl_config_service.h"
+#include "net/base/sys_addrinfo.h"
 #include "net/socket/client_socket_factory.h"
 #include "net/url_request/url_request_context.h"
 
@@ -49,14 +53,14 @@ int MapPosixError(int err) {
   }
 }
 
-}
+}  // namespace
 
 SSLSocketAdapter* SSLSocketAdapter::Create(AsyncSocket* socket) {
   return new SSLSocketAdapter(socket);
 }
 
 SSLSocketAdapter::SSLSocketAdapter(AsyncSocket* socket)
-    : AsyncSocketAdapter(socket),
+    : SSLAdapter(socket),
       ignore_bad_cert_(false),
       ALLOW_THIS_IN_INITIALIZER_LIST(
         connected_callback_(this, &SSLSocketAdapter::OnConnected)),
@@ -64,26 +68,46 @@ SSLSocketAdapter::SSLSocketAdapter(AsyncSocket* socket)
         io_callback_(this, &SSLSocketAdapter::OnIO)),
       ssl_connected_(false),
       state_(STATE_NONE) {
-  socket_ = new TransportSocket(socket, this);
+  transport_socket_ = new TransportSocket(socket, this);
 }
 
 int SSLSocketAdapter::StartSSL(const char* hostname, bool restartable) {
   DCHECK(!restartable);
+  hostname_ = hostname;
+
+  if (socket_->GetState() != Socket::CS_CONNECTED) {
+    state_ = STATE_SSL_WAIT;
+    return 0;
+  } else {
+    return BeginSSL();
+  }
+}
+
+int SSLSocketAdapter::BeginSSL() {
+  if (!MessageLoop::current()) {
+    // Certificate verification is done via the Chrome message loop.
+    // Without this check, if we don't have a chrome message loop the
+    // SSL connection just hangs silently.
+    LOG(DFATAL) << "Chrome message loop (needed by SSL certificate "
+                << "verification) does not exist";
+    return net::ERR_UNEXPECTED;
+  }
 
   // SSLConfigService is not thread-safe, and the default values for SSLConfig
   // are correct for us, so we don't use the config service to initialize this
   // object.
   net::SSLConfig ssl_config;
-  socket_->set_addr(talk_base::SocketAddress(hostname));
+  transport_socket_->set_addr(talk_base::SocketAddress(hostname_.c_str()));
   ssl_socket_.reset(
       net::ClientSocketFactory::GetDefaultFactory()->CreateSSLClientSocket(
-          socket_, hostname, ssl_config));
+          transport_socket_, hostname_.c_str(), ssl_config));
 
   int result = ssl_socket_->Connect(&connected_callback_, NULL);
 
   if (result == net::ERR_IO_PENDING || result == net::OK) {
     return 0;
   } else {
+    LOG(ERROR) << "Could not start SSL: " << net::ErrorToString(result);
     return result;
   }
 }
@@ -138,6 +162,7 @@ int SSLSocketAdapter::Recv(void* buf, size_t len) {
     case STATE_READ:
     case STATE_WRITE:
     case STATE_WRITE_COMPLETE:
+    case STATE_SSL_WAIT:
       SetError(EWOULDBLOCK);
       return -1;
 
@@ -170,6 +195,7 @@ void SSLSocketAdapter::OnIO(int result) {
     case STATE_NONE:
     case STATE_READ_COMPLETE:
     case STATE_WRITE_COMPLETE:
+    case STATE_SSL_WAIT:
     default:
       NOTREACHED();
       break;
@@ -177,13 +203,26 @@ void SSLSocketAdapter::OnIO(int result) {
 }
 
 void SSLSocketAdapter::OnReadEvent(talk_base::AsyncSocket* socket) {
-  if (!socket_->OnReadEvent(socket))
+  if (!transport_socket_->OnReadEvent(socket))
     AsyncSocketAdapter::OnReadEvent(socket);
 }
 
 void SSLSocketAdapter::OnWriteEvent(talk_base::AsyncSocket* socket) {
-  if (!socket_->OnWriteEvent(socket))
+  if (!transport_socket_->OnWriteEvent(socket))
     AsyncSocketAdapter::OnWriteEvent(socket);
+}
+
+void SSLSocketAdapter::OnConnectEvent(talk_base::AsyncSocket* socket) {
+  if (state_ != STATE_SSL_WAIT) {
+    AsyncSocketAdapter::OnConnectEvent(socket);
+  } else {
+    state_ = STATE_NONE;
+    int result = BeginSSL();
+    if (0 != result) {
+      // TODO(zork): Handle this case gracefully.
+      LOG(WARNING) << "BeginSSL() failed with " << result;
+    }
+  }
 }
 
 TransportSocket::TransportSocket(talk_base::AsyncSocket* socket,
@@ -198,7 +237,7 @@ TransportSocket::TransportSocket(talk_base::AsyncSocket* socket,
 }
 
 int TransportSocket::Connect(net::CompletionCallback* callback,
-                             net::LoadLog* /* load_log */) {
+                             const net::BoundNetLog& /* net_log */) {
   connect_callback_ = callback;
   return socket_->Connect(addr_);
 }
@@ -217,13 +256,24 @@ bool TransportSocket::IsConnectedAndIdle() const {
   return false;
 }
 
-#if defined(OS_LINUX) || defined(OS_MACOSX)
-int TransportSocket::GetPeerName(struct sockaddr *name, socklen_t *namelen) {
-  talk_base::SocketAddress address = socket_->GetRemoteAddress();
-  address.ToSockAddr(reinterpret_cast<sockaddr_in *>(name));
-  return 0;
+int TransportSocket::GetPeerAddress(net::AddressList* address) const {
+  talk_base::SocketAddress socket_address = socket_->GetRemoteAddress();
+
+  // libjingle supports only IPv4 addresses.
+  sockaddr_in ipv4addr;
+  socket_address.ToSockAddr(&ipv4addr);
+
+  struct addrinfo ai;
+  memset(&ai, 0, sizeof(ai));
+  ai.ai_family = ipv4addr.sin_family;
+  ai.ai_socktype = SOCK_STREAM;
+  ai.ai_protocol = IPPROTO_TCP;
+  ai.ai_addr = reinterpret_cast<struct sockaddr*>(&ipv4addr);
+  ai.ai_addrlen = sizeof(ipv4addr);
+
+  address->Copy(&ai, false);
+  return net::OK;
 }
-#endif
 
 int TransportSocket::Read(net::IOBuffer* buf, int buf_len,
                           net::CompletionCallback* callback) {

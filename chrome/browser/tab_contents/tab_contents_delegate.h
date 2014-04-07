@@ -7,16 +7,18 @@
 
 #include <string>
 
-#include "app/gfx/native_widget_types.h"
 #include "base/basictypes.h"
-#include "base/gfx/rect.h"
+#include "chrome/browser/automation/automation_resource_routing_delegate.h"
 #include "chrome/browser/tab_contents/navigation_entry.h"
 #include "chrome/common/content_settings_types.h"
 #include "chrome/common/native_web_keyboard_event.h"
 #include "chrome/common/page_transition_types.h"
+#include "gfx/native_widget_types.h"
+#include "gfx/rect.h"
 #include "webkit/glue/context_menu.h"
 #include "webkit/glue/window_open_disposition.h"
 
+class Browser;
 class DownloadItem;
 class ExtensionFunctionDispatcher;
 class GURL;
@@ -26,9 +28,13 @@ class RenderViewHost;
 class TabContents;
 class TemplateURL;
 
+namespace webkit_glue {
+struct WebApplicationInfo;
+}
+
 // Objects implement this interface to get notified about changes in the
 // TabContents and to provide necessary functionality.
-class TabContentsDelegate {
+class TabContentsDelegate : public AutomationResourceRoutingDelegate {
  public:
   // Opens a new URL inside the passed in TabContents (if source is 0 open
   // in the current front-most tab), unless |disposition| indicates the url
@@ -121,14 +127,13 @@ class TabContentsDelegate {
   // a TabContents with a valid WebApp set.
   virtual void ConvertContentsToApplication(TabContents* source) { }
 
-  // Return whether this tab contents should have a URL bar. Only web contents
-  // opened with a minimal chrome and their popups can be displayed without a
-  // URL bar.
-  virtual bool ShouldDisplayURLField() { return true; }
-
   // Whether this tab can be blurred through a javascript obj.blur()
   // call. ConstrainedWindows shouldn't be able to be blurred.
   virtual bool CanBlur() const { return true; }
+
+  // Whether the specified tab can be reloaded.
+  // Reloading can be disabled e. g. for the DevTools window.
+  virtual bool CanReloadContents(TabContents* source) const { return true; }
 
   // Return the rect where to display the resize corner, if any, otherwise
   // an empty rect.
@@ -164,7 +169,7 @@ class TabContentsDelegate {
   // Sets focus to the location bar or some other place that is appropriate.
   // This is called when the tab wants to encourage user input, like for the
   // new tab page.
-  virtual void SetFocusToLocationBar() {}
+  virtual void SetFocusToLocationBar(bool select_all) {}
 
   // Called when a popup select is about to be displayed. The delegate can use
   // this to disable inactive rendering for the frame in the window the select
@@ -185,6 +190,12 @@ class TabContentsDelegate {
   virtual bool TakeFocus(bool reverse) {
     return false;
   }
+
+  // Changes the blocked state of the tab at |index|. TabContents are
+  // considered blocked while displaying a tab modal dialog. During that time
+  // renderer host will ignore any UI interaction within TabContent outside of
+  // the currently displaying dialog.
+  virtual void SetTabContentBlocked(TabContents* contents, bool blocked) { }
 
   // Notification that |tab_contents| has gained focus.
   virtual void TabContentsFocused(TabContents* tab_content) { }
@@ -229,18 +240,18 @@ class TabContentsDelegate {
                             bool show_history) {
   }
 
-  // Returns whether the event is a reserved keyboard shortcut that should not
-  // be sent to the renderer.
-  virtual bool IsReservedAccelerator(const NativeWebKeyboardEvent& event) {
+  // Allows delegates to handle keyboard events before sending to the renderer.
+  // Returns true if the |event| was handled. Otherwise, if the |event| would be
+  // handled in HandleKeyboardEvent() method as a normal keyboard shortcut,
+  // |*is_keyboard_shortcut| should be set to true.
+  virtual bool PreHandleKeyboardEvent(const NativeWebKeyboardEvent& event,
+                                      bool* is_keyboard_shortcut) {
     return false;
   }
 
   // Allows delegates to handle unhandled keyboard messages coming back from
   // the renderer.
-  // Returns true if the keyboard message was handled.
-  virtual bool HandleKeyboardEvent(const NativeWebKeyboardEvent& event) {
-    return false;
-  }
+  virtual void HandleKeyboardEvent(const NativeWebKeyboardEvent& event) {}
 
   // Shows the repost form confirmation dialog box.
   virtual void ShowRepostFormWarningDialog(TabContents* tab_contents) {}
@@ -256,6 +267,24 @@ class TabContentsDelegate {
 
   // Returns whether this tab contents should add navigations to history.
   virtual bool ShouldAddNavigationsToHistory() const { return true; }
+
+  // Notification when web app info data is available
+  virtual void OnDidGetApplicationInfo(TabContents* tab_contents,
+                                       int32 page_id) {
+  }
+
+  // Returns the browser in which the tab contents is being displayed.
+  virtual Browser* GetBrowser() { return NULL; }
+
+  // Returns the native window framing the view containing the tab contents.
+  virtual gfx::NativeWindow GetFrameNativeWindow() { return NULL; }
+
+  // Notifies the delegate about the creation of a new TabContents. This
+  // typically happens when popups are created.
+  virtual void TabContentsCreated(TabContents* new_contents) {}
+
+  // Returns whether infobars are enabled. Overrideable by child classes.
+  virtual bool infobars_enabled() { return true; }
 
  protected:
   ~TabContentsDelegate() {}

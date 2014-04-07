@@ -6,15 +6,16 @@
 
 #include "base/basictypes.h"
 #include "base/compiler_specific.h"
-#include "base/field_trial.h"  // for SlowStart trial
 #include "base/memory_debug.h"
 #include "base/stats_counters.h"
 #include "base/string_util.h"
 #include "base/sys_info.h"
 #include "base/trace_event.h"
+#include "net/base/connection_type_histograms.h"
 #include "net/base/io_buffer.h"
-#include "net/base/load_log.h"
+#include "net/base/net_log.h"
 #include "net/base/net_errors.h"
+#include "net/base/sys_addrinfo.h"
 #include "net/base/winsock_init.h"
 
 namespace net {
@@ -34,7 +35,7 @@ bool ResetEventIfSignaled(WSAEVENT hEvent) {
   DWORD wait_rv = WaitForSingleObject(hEvent, 0);
   if (wait_rv == WAIT_TIMEOUT)
     return false;  // The event object is not signaled.
-  CHECK(wait_rv == WAIT_OBJECT_0);
+  CHECK_EQ(WAIT_OBJECT_0, wait_rv);
   BOOL ok = WSAResetEvent(hEvent);
   CHECK(ok);
   return true;
@@ -151,9 +152,6 @@ class TCPClientSocketWin::Core : public base::RefCounted<Core> {
   // Throttle the read size based on our current slow start state.
   // Returns the throttled read size.
   int ThrottleReadSize(int size) {
-    if (!use_slow_start_throttle_)
-      return size;
-
     if (slow_start_throttle_ < kMaxSlowStartThrottle) {
       size = std::min(size, slow_start_throttle_);
       slow_start_throttle_ *= 2;
@@ -210,31 +208,18 @@ class TCPClientSocketWin::Core : public base::RefCounted<Core> {
   static const int kMaxSlowStartThrottle = 32 * kInitialSlowStartThrottle;
   int slow_start_throttle_;
 
-  static bool use_slow_start_throttle_;
-  static bool trial_initialized_;
-
   DISALLOW_COPY_AND_ASSIGN(Core);
 };
 
-bool TCPClientSocketWin::Core::use_slow_start_throttle_ = false;
-bool TCPClientSocketWin::Core::trial_initialized_ = false;
-
 TCPClientSocketWin::Core::Core(
     TCPClientSocketWin* socket)
-    : socket_(socket),
+    : write_buffer_length_(0),
+      socket_(socket),
       ALLOW_THIS_IN_INITIALIZER_LIST(reader_(this)),
       ALLOW_THIS_IN_INITIALIZER_LIST(writer_(this)),
       slow_start_throttle_(kInitialSlowStartThrottle) {
   memset(&read_overlapped_, 0, sizeof(read_overlapped_));
   memset(&write_overlapped_, 0, sizeof(write_overlapped_));
-
-  // Initialize the AsyncSlowStart FieldTrial.
-  if (!trial_initialized_) {
-    trial_initialized_ = true;
-    FieldTrial* trial = FieldTrialList::Find("AsyncSlowStart");
-    if (trial && trial->group_name() == "_AsyncSlowStart")
-      use_slow_start_throttle_ = true;
-  }
 }
 
 TCPClientSocketWin::Core::~Core() {
@@ -304,19 +289,19 @@ TCPClientSocketWin::~TCPClientSocketWin() {
 }
 
 int TCPClientSocketWin::Connect(CompletionCallback* callback,
-                                LoadLog* load_log) {
+                                const BoundNetLog& net_log) {
   // If already connected, then just return OK.
   if (socket_ != INVALID_SOCKET)
     return OK;
 
-  DCHECK(!load_log_);
+  DCHECK(!net_log_.net_log());
 
   static StatsCounter connects("tcp.connect");
   connects.Increment();
 
   TRACE_EVENT_BEGIN("socket.connect", this, "");
 
-  LoadLog::BeginEvent(load_log, LoadLog::TYPE_TCP_CONNECT);
+  net_log.BeginEvent(NetLog::TYPE_TCP_CONNECT);
 
   int rv = DoConnect();
 
@@ -324,12 +309,14 @@ int TCPClientSocketWin::Connect(CompletionCallback* callback,
     // Synchronous operation not supported.
     DCHECK(callback);
 
-    load_log_ = load_log;
+    net_log_ = net_log;
     waiting_connect_ = true;
     read_callback_ = callback;
   } else {
     TRACE_EVENT_END("socket.connect", this, "");
-    LoadLog::EndEvent(load_log, LoadLog::TYPE_TCP_CONNECT);
+    net_log.EndEvent(NetLog::TYPE_TCP_CONNECT);
+    if (rv == OK)
+      UpdateConnectionTypeHistograms(CONNECTION_ANY);
   }
 
   return rv;
@@ -450,6 +437,14 @@ bool TCPClientSocketWin::IsConnectedAndIdle() const {
   return true;
 }
 
+int TCPClientSocketWin::GetPeerAddress(AddressList* address) const {
+  DCHECK(address);
+  if (!current_ai_)
+    return ERR_FAILED;
+  address->Copy(current_ai_, false);
+  return OK;
+}
+
 int TCPClientSocketWin::Read(IOBuffer* buf,
                              int buf_len,
                              CompletionCallback* callback) {
@@ -465,7 +460,8 @@ int TCPClientSocketWin::Read(IOBuffer* buf,
 
   TRACE_EVENT_BEGIN("socket.read", this, "");
   // TODO(wtc): Remove the CHECK after enough testing.
-  CHECK(WaitForSingleObject(core_->read_overlapped_.hEvent, 0) == WAIT_TIMEOUT);
+  CHECK_EQ(WAIT_TIMEOUT,
+           WaitForSingleObject(core_->read_overlapped_.hEvent, 0));
   DWORD num, flags = 0;
   int rv = WSARecv(socket_, &core_->read_buffer_, 1, &num, &flags,
                    &core_->read_overlapped_, NULL);
@@ -514,8 +510,8 @@ int TCPClientSocketWin::Write(IOBuffer* buf,
 
   TRACE_EVENT_BEGIN("socket.write", this, "");
   // TODO(wtc): Remove the CHECK after enough testing.
-  CHECK(
-      WaitForSingleObject(core_->write_overlapped_.hEvent, 0) == WAIT_TIMEOUT);
+  CHECK_EQ(WAIT_TIMEOUT,
+           WaitForSingleObject(core_->write_overlapped_.hEvent, 0));
   DWORD num;
   int rv = WSASend(socket_, &core_->write_buffer_, 1, &num, 0,
                    &core_->write_overlapped_, NULL);
@@ -663,27 +659,30 @@ void TCPClientSocketWin::DidCompleteConnect() {
       const struct addrinfo* next = current_ai_->ai_next;
       Disconnect();
       current_ai_ = next;
-      scoped_refptr<LoadLog> load_log;
-      load_log.swap(load_log_);
+      BoundNetLog net_log(net_log_);
+      net_log_ = BoundNetLog();
       TRACE_EVENT_END("socket.connect", this, "");
-      LoadLog::EndEvent(load_log, LoadLog::TYPE_TCP_CONNECT);
-      result = Connect(read_callback_, load_log);
+      net_log.EndEvent(NetLog::TYPE_TCP_CONNECT);
+      result = Connect(read_callback_, net_log);
     } else {
       result = MapConnectError(os_error);
       TRACE_EVENT_END("socket.connect", this, "");
-      LoadLog::EndEvent(load_log_, LoadLog::TYPE_TCP_CONNECT);
-      load_log_ = NULL;
+      net_log_.EndEvent(NetLog::TYPE_TCP_CONNECT);
+      net_log_ = BoundNetLog();
     }
   } else {
     NOTREACHED();
     result = ERR_UNEXPECTED;
     TRACE_EVENT_END("socket.connect", this, "");
-    LoadLog::EndEvent(load_log_, LoadLog::TYPE_TCP_CONNECT);
-    load_log_ = NULL;
+    net_log_.EndEvent(NetLog::TYPE_TCP_CONNECT);
+    net_log_ = BoundNetLog();
   }
 
-  if (result != ERR_IO_PENDING)
+  if (result != ERR_IO_PENDING) {
+    if (result == OK)
+      UpdateConnectionTypeHistograms(CONNECTION_ANY);
     DoReadCallback(result);
+  }
 }
 
 void TCPClientSocketWin::DidCompleteRead() {

@@ -1,4 +1,4 @@
-// Copyright (c) 2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,13 +9,13 @@
 #include <vector>
 
 #include "base/basictypes.h"
+#include "base/callback.h"
 #include "base/file_path.h"
 #include "base/ref_counted.h"
 #include "base/scoped_ptr.h"
 #include "base/task.h"
 #include "chrome/browser/cancelable_request.h"
 #include "chrome/browser/favicon_service.h"
-#include "chrome/browser/history/history_notifications.h"
 #include "chrome/browser/history/history_types.h"
 #include "chrome/browser/search_engines/template_url.h"
 #include "chrome/common/notification_registrar.h"
@@ -41,11 +41,17 @@ class Thread;
 class Time;
 }
 
+namespace browser_sync {
+class HistoryModelWorker;
+class TypedUrlDataTypeController;
+}
+
 namespace history {
 
 class InMemoryHistoryBackend;
 class HistoryBackend;
 class HistoryDatabase;
+struct HistoryDetails;
 class HistoryQueryTest;
 class URLDatabase;
 
@@ -190,8 +196,8 @@ class HistoryService : public CancelableRequestProvider,
 
   // For adding pages to history where no tracking information can be done.
   void AddPage(const GURL& url) {
-    AddPage(url, NULL, 0, GURL::EmptyGURL(), PageTransition::LINK,
-            history::RedirectList(), false);
+    AddPage(url, NULL, 0, GURL(), PageTransition::LINK, history::RedirectList(),
+            false);
   }
 
   // Sets the title for the given page. The page should be in history. If it
@@ -358,7 +364,7 @@ class HistoryService : public CancelableRequestProvider,
   // Delete all the information related to a single url.
   void DeleteURL(const GURL& url);
 
-  // Implemented by the caller of 'ExpireHistory(Since|Between)' below, and
+  // Implemented by the caller of ExpireHistoryBetween, and
   // is called when the history service has deleted the history.
   typedef Callback0::Type ExpireHistoryCallback;
 
@@ -368,7 +374,10 @@ class HistoryService : public CancelableRequestProvider,
   // if they are no longer referenced. |callback| runs when the expiration is
   // complete. You may use null Time values to do an unbounded delete in
   // either direction.
-  void ExpireHistoryBetween(base::Time begin_time, base::Time end_time,
+  // If |restrict_urls| is not empty, only visits to the URLs in this set are
+  // removed.
+  void ExpireHistoryBetween(const std::set<GURL>& restrict_urls,
+                            base::Time begin_time, base::Time end_time,
                             CancelableRequestConsumerBase* consumer,
                             ExpireHistoryCallback* callback);
 
@@ -488,8 +497,8 @@ class HistoryService : public CancelableRequestProvider,
 
   // Schedules a HistoryDBTask for running on the history backend thread. See
   // HistoryDBTask for details on what this does.
-  Handle ScheduleDBTask(HistoryDBTask* task,
-                        CancelableRequestConsumerBase* consumer);
+  virtual Handle ScheduleDBTask(HistoryDBTask* task,
+                                CancelableRequestConsumerBase* consumer);
 
   // Testing -------------------------------------------------------------------
 
@@ -521,6 +530,17 @@ class HistoryService : public CancelableRequestProvider,
   // The same as AddPageWithDetails() but takes a vector.
   void AddPagesWithDetails(const std::vector<history::URLRow>& info);
 
+ protected:
+  ~HistoryService();
+
+  // These are not currently used, hopefully we can do something in the future
+  // to ensure that the most important things happen first.
+  enum SchedulePriority {
+    PRIORITY_UI,      // The highest priority (must respond to UI events).
+    PRIORITY_NORMAL,  // Normal stuff like adding a page.
+    PRIORITY_LOW,     // Low priority things like indexing or expiration.
+  };
+
  private:
   class BackendDelegate;
   friend class base::RefCountedThreadSafe<HistoryService>;
@@ -536,16 +556,6 @@ class HistoryService : public CancelableRequestProvider,
   friend class RedirectRequest;
   friend class FavIconRequest;
   friend class TestingProfile;
-
-  ~HistoryService();
-
-  // These are not currently used, hopefully we can do something in the future
-  // to ensure that the most important things happen first.
-  enum SchedulePriority {
-    PRIORITY_UI,      // The highest priority (must respond to UI events).
-    PRIORITY_NORMAL,  // Normal stuff like adding a page.
-    PRIORITY_LOW,     // Low priority things like indexing or expiration.
-  };
 
   // Implementation of NotificationObserver.
   virtual void Observe(NotificationType type,

@@ -19,13 +19,13 @@ bool GetDefaultUserDataDirectory(FilePath* result);
 // CF and Google Chrome want to share the same binaries.
 bool GetChromeFrameUserDataDirectory(FilePath* result);
 
-#if defined(OS_LINUX)
-// Get the path to the user's cache directory.
-bool GetUserCacheDirectory(FilePath* result);
-#endif
-
 // Get the path to the user's documents directory.
 bool GetUserDocumentsDirectory(FilePath* result);
+
+#if defined (OS_WIN)
+// Gets the path to a safe default download directory for a user.
+bool GetUserDownloadsDirectorySafe(FilePath* result);
+#endif
 
 // Get the path to the user's downloads directory.
 bool GetUserDownloadsDirectory(FilePath* result);

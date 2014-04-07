@@ -7,12 +7,14 @@
 #include <set>
 #include <vector>
 
+#include "base/callback.h"
 #include "base/command_line.h"
 #include "base/debug_util.h"
 #include "base/message_loop.h"
 #include "base/string_util.h"
 #include "chrome/browser/chrome_thread.h"
 #include "chrome/browser/child_process_security_policy.h"
+#include "chrome/browser/renderer_host/database_dispatcher_host.h"
 #include "chrome/browser/renderer_host/render_view_host.h"
 #include "chrome/browser/renderer_host/render_view_host_delegate.h"
 #include "chrome/browser/renderer_host/resource_message_filter.h"
@@ -52,24 +54,38 @@ class WorkerCrashTask : public Task {
 
 
 WorkerProcessHost::WorkerProcessHost(
-    ResourceDispatcherHost* resource_dispatcher_host_)
-    : ChildProcessHost(WORKER_PROCESS, resource_dispatcher_host_) {
+    ResourceDispatcherHost* resource_dispatcher_host,
+    webkit_database::DatabaseTracker *db_tracker,
+    HostContentSettingsMap *host_content_settings_map)
+    : ChildProcessHost(WORKER_PROCESS, resource_dispatcher_host),
+      host_content_settings_map_(host_content_settings_map) {
   next_route_id_callback_.reset(NewCallbackWithReturnValue(
       WorkerService::GetInstance(), &WorkerService::next_worker_route_id));
+  db_dispatcher_host_ =
+      new DatabaseDispatcherHost(db_tracker, this, host_content_settings_map);
 }
 
 WorkerProcessHost::~WorkerProcessHost() {
+  // Shut down the database dispatcher host.
+  db_dispatcher_host_->Shutdown();
+
   // Let interested observers know we are being deleted.
   NotificationService::current()->Notify(
       NotificationType::WORKER_PROCESS_HOST_SHUTDOWN,
       Source<WorkerProcessHost>(this),
       NotificationService::NoDetails());
 
-  // If we crashed, tell the RenderViewHost.
+  // If we crashed, tell the RenderViewHosts.
   for (Instances::iterator i = instances_.begin(); i != instances_.end(); ++i) {
-    ChromeThread::PostTask(
-        ChromeThread::UI, FROM_HERE,
-        new WorkerCrashTask(i->renderer_id(), i->render_view_route_id()));
+    const WorkerDocumentSet::DocumentInfoSet& parents =
+        i->worker_document_set()->documents();
+    for (WorkerDocumentSet::DocumentInfoSet::const_iterator parent_iter =
+             parents.begin(); parent_iter != parents.end(); ++parent_iter) {
+      ChromeThread::PostTask(
+          ChromeThread::UI, FROM_HERE,
+          new WorkerCrashTask(parent_iter->renderer_id(),
+                              parent_iter->render_view_route_id()));
+    }
   }
 
   ChildProcessSecurityPolicy::GetInstance()->Remove(id());
@@ -79,7 +95,7 @@ bool WorkerProcessHost::Init() {
   if (!CreateChannel())
     return false;
 
-  FilePath exe_path = GetChildPath();
+  FilePath exe_path = GetChildPath(true);
   if (exe_path.empty())
     return false;
 
@@ -101,14 +117,71 @@ bool WorkerProcessHost::Init() {
   }
 
   if (CommandLine::ForCurrentProcess()->HasSwitch(
-          switches::kWorkerStartupDialog)) {
-    cmd_line->AppendSwitch(switches::kWorkerStartupDialog);
+          switches::kDisableDatabases)) {
+    cmd_line->AppendSwitch(switches::kDisableDatabases);
   }
+
+  if (CommandLine::ForCurrentProcess()->HasSwitch(
+          switches::kEnableLogging)) {
+    cmd_line->AppendSwitch(switches::kEnableLogging);
+  }
+  if (CommandLine::ForCurrentProcess()->HasSwitch(
+          switches::kLoggingLevel)) {
+    const std::wstring level =
+        CommandLine::ForCurrentProcess()->GetSwitchValue(
+            switches::kLoggingLevel);
+    cmd_line->AppendSwitchWithValue(
+        switches::kLoggingLevel, level);
+  }
+
+  if (CommandLine::ForCurrentProcess()->HasSwitch(
+          switches::kDisableWebSockets)) {
+    cmd_line->AppendSwitch(switches::kDisableWebSockets);
+  }
+
+#if defined(OS_WIN)
+  if (CommandLine::ForCurrentProcess()->HasSwitch(
+          switches::kDisableDesktopNotifications)) {
+    cmd_line->AppendSwitch(switches::kDisableDesktopNotifications);
+  }
+#endif
+
+#if defined(OS_POSIX)
+  if (CommandLine::ForCurrentProcess()->HasSwitch(
+          switches::kWaitForDebuggerChildren)) {
+    // Look to pass-on the kWaitForDebugger flag.
+    std::string value = CommandLine::ForCurrentProcess()->GetSwitchValueASCII(
+        switches::kWaitForDebuggerChildren);
+    if (value.empty() || value == switches::kWorkerProcess) {
+      cmd_line->AppendSwitch(switches::kWaitForDebugger);
+    }
+  }
+
+  if (CommandLine::ForCurrentProcess()->HasSwitch(switches::kDebugChildren)) {
+    // Look to pass-on the kDebugOnStart flag.
+    std::string value = CommandLine::ForCurrentProcess()->GetSwitchValueASCII(
+        switches::kDebugChildren);
+    if (value.empty() || value == switches::kWorkerProcess) {
+      // launches a new xterm, and runs the worker process in gdb, reading
+      // optional commands from gdb_chrome file in the working directory.
+      cmd_line->PrependWrapper(L"xterm -e gdb -x gdb_chrome --args");
+    }
+  }
+
+  if (CommandLine::ForCurrentProcess()->HasSwitch(
+          switches::kRendererCmdPrefix)) {
+    const std::wstring prefix =
+        CommandLine::ForCurrentProcess()->GetSwitchValue(
+            switches::kRendererCmdPrefix);
+    cmd_line->PrependWrapper(prefix);
+  }
+#endif
 
   Launch(
 #if defined(OS_WIN)
       FilePath(),
 #elif defined(OS_POSIX)
+      false,
       base::environment_vector(),
 #endif
       cmd_line);
@@ -129,8 +202,15 @@ void WorkerProcessHost::CreateWorker(const WorkerInstance& instance) {
                                          instance.worker_route_id()));
 
   UpdateTitle();
-  WorkerInstance::SenderInfo info = instances_.back().GetSender();
-  info.first->Send(new ViewMsg_WorkerCreated(info.second));
+
+  // Walk all pending senders and let them know the worker has been created
+  // (could be more than one in the case where we had to queue up worker
+  // creation because the worker process limit was reached).
+  for (WorkerInstance::SenderList::const_iterator i =
+           instance.senders().begin();
+       i != instance.senders().end(); ++i) {
+    i->first->Send(new ViewMsg_WorkerCreated(i->second));
+  }
 }
 
 bool WorkerProcessHost::FilterMessage(const IPC::Message& message,
@@ -168,8 +248,9 @@ void WorkerProcessHost::OnWorkerContextClosed(int worker_route_id) {
 
 void WorkerProcessHost::OnMessageReceived(const IPC::Message& message) {
   bool msg_is_ok = true;
-  bool handled = MessagePortDispatcher::GetInstance()->OnMessageReceived(
-      message, this, next_route_id_callback_.get(), &msg_is_ok);
+  bool handled = db_dispatcher_host_->OnMessageReceived(message, &msg_is_ok) ||
+      MessagePortDispatcher::GetInstance()->OnMessageReceived(
+          message, this, next_route_id_callback_.get(), &msg_is_ok);
 
   if (!handled) {
     handled = true;
@@ -214,6 +295,10 @@ void WorkerProcessHost::OnMessageReceived(const IPC::Message& message) {
   }
 }
 
+void WorkerProcessHost::OnProcessLaunched() {
+  db_dispatcher_host_->Init(handle());
+}
+
 CallbackWithReturnValue<int>::Type* WorkerProcessHost::GetNextRouteIdCallback(
     IPC::Message::Sender* sender) {
   // We don't keep callbacks for senders associated with workers, so figure out
@@ -246,7 +331,8 @@ void WorkerProcessHost::RelayMessage(
             &message, &msg, &sent_message_port_ids, &new_routing_ids)) {
       return;
     }
-    DCHECK(sent_message_port_ids.size() == new_routing_ids.size());
+    if (sent_message_port_ids.size() != new_routing_ids.size())
+      return;
 
     for (size_t i = 0; i < sent_message_port_ids.size(); ++i) {
       new_routing_ids[i] = next_route_id->Run();
@@ -296,8 +382,8 @@ void WorkerProcessHost::SenderShutdown(IPC::Message::Sender* sender) {
     bool shutdown = false;
     i->RemoveSenders(sender);
     if (i->shared()) {
-      i->RemoveAllAssociatedDocuments(sender);
-      if (i->IsDocumentSetEmpty()) {
+      i->worker_document_set()->RemoveAll(sender);
+      if (i->worker_document_set()->IsEmpty()) {
         shutdown = true;
       }
     } else if (i->NumSenders() == 0) {
@@ -337,31 +423,40 @@ void WorkerProcessHost::UpdateTitle() {
   set_name(ASCIIToWide(display_title));
 }
 
-void WorkerProcessHost::OnLookupSharedWorker(const GURL& url,
-                                             const string16& name,
-                                             unsigned long long document_id,
-                                             int* route_id,
-                                             bool* url_mismatch) {
-  int new_route_id = WorkerService::GetInstance()->next_worker_route_id();
-  // TODO(atwilson): Add code to merge document sets for nested shared workers.
-  bool worker_found = WorkerService::GetInstance()->LookupSharedWorker(
-      url, name, instances_.front().off_the_record(), document_id, this,
-      new_route_id, url_mismatch);
-  *route_id = worker_found ? new_route_id : MSG_ROUTING_NONE;
+void WorkerProcessHost::OnLookupSharedWorker(
+    const ViewHostMsg_CreateWorker_Params& params,
+    bool* exists,
+    int* route_id,
+    bool* url_mismatch) {
+  *route_id = WorkerService::GetInstance()->next_worker_route_id();
+  // TODO(atwilson): Add code to pass in the current worker's document set for
+  // these nested workers. Code below will not work for SharedWorkers as it
+  // only looks at a single parent.
+  DCHECK(instances_.front().worker_document_set()->documents().size() == 1);
+  WorkerDocumentSet::DocumentInfoSet::const_iterator first_parent =
+      instances_.front().worker_document_set()->documents().begin();
+  *exists = WorkerService::GetInstance()->LookupSharedWorker(
+      params.url, params.name, instances_.front().off_the_record(),
+      params.document_id, first_parent->renderer_id(),
+      first_parent->render_view_route_id(), this, *route_id, url_mismatch);
 }
 
-void WorkerProcessHost::OnCreateWorker(const GURL& url,
-                                       bool shared,
-                                       const string16& name,
-                                       int render_view_route_id,
-                                       int* route_id) {
+void WorkerProcessHost::OnCreateWorker(
+    const ViewHostMsg_CreateWorker_Params& params, int* route_id) {
   DCHECK(instances_.size() == 1);  // Only called when one process per worker.
-  *route_id = WorkerService::GetInstance()->next_worker_route_id();
+  // TODO(atwilson): Add code to pass in the current worker's document set for
+  // these nested workers. Code below will not work for SharedWorkers as it
+  // only looks at a single parent.
+  DCHECK(instances_.front().worker_document_set()->documents().size() == 1);
+  WorkerDocumentSet::DocumentInfoSet::const_iterator first_parent =
+      instances_.front().worker_document_set()->documents().begin();
+  *route_id = params.route_id == MSG_ROUTING_NONE ?
+      WorkerService::GetInstance()->next_worker_route_id() : params.route_id;
   WorkerService::GetInstance()->CreateWorker(
-      url, shared, instances_.front().off_the_record(), name,
-      instances_.front().renderer_id(),
-      instances_.front().render_view_route_id(), this, *route_id);
-  // TODO(atwilson): Add code to merge document sets for nested shared workers.
+      params.url, params.is_shared, instances_.front().off_the_record(),
+      params.name, params.document_id, first_parent->renderer_id(),
+      first_parent->render_view_route_id(), this, *route_id,
+      database_tracker(), host_content_settings_map_);
 }
 
 void WorkerProcessHost::OnCancelCreateDedicatedWorker(int route_id) {
@@ -380,8 +475,8 @@ void WorkerProcessHost::DocumentDetached(IPC::Message::Sender* parent,
     if (!i->shared()) {
       ++i;
     } else {
-      i->RemoveFromDocumentSet(parent, document_id);
-      if (i->IsDocumentSetEmpty()) {
+      i->worker_document_set()->Remove(parent, document_id);
+      if (i->worker_document_set()->IsEmpty()) {
         // This worker has no more associated documents - shut it down.
         Send(new WorkerMsg_TerminateWorkerContext(i->worker_route_id()));
         i = instances_.erase(i);
@@ -392,21 +487,23 @@ void WorkerProcessHost::DocumentDetached(IPC::Message::Sender* parent,
   }
 }
 
+webkit_database::DatabaseTracker*
+    WorkerProcessHost::database_tracker() const {
+  return db_dispatcher_host_->database_tracker();
+}
+
 WorkerProcessHost::WorkerInstance::WorkerInstance(const GURL& url,
                                                   bool shared,
                                                   bool off_the_record,
                                                   const string16& name,
-                                                  int renderer_id,
-                                                  int render_view_route_id,
                                                   int worker_route_id)
     : url_(url),
       shared_(shared),
       off_the_record_(off_the_record),
       closed_(false),
       name_(name),
-      renderer_id_(renderer_id),
-      render_view_route_id_(render_view_route_id),
-      worker_route_id_(worker_route_id) {
+      worker_route_id_(worker_route_id),
+      worker_document_set_(new WorkerDocumentSet()) {
 }
 
 // Compares an instance based on the algorithm in the WebWorkers spec - an
@@ -432,48 +529,6 @@ bool WorkerProcessHost::WorkerInstance::Matches(
     return url_ == match_url;
 
   return name_ == match_name;
-}
-
-void WorkerProcessHost::WorkerInstance::AddToDocumentSet(
-    IPC::Message::Sender* parent, unsigned long long document_id) {
-  if (!IsInDocumentSet(parent, document_id)) {
-    DocumentInfo info(parent, document_id);
-    document_set_.push_back(info);
-  }
-}
-
-bool WorkerProcessHost::WorkerInstance::IsInDocumentSet(
-    IPC::Message::Sender* parent, unsigned long long document_id) const {
-  for (DocumentSet::const_iterator i = document_set_.begin();
-       i != document_set_.end(); ++i) {
-    if (i->first == parent && i->second == document_id)
-      return true;
-  }
-  return false;
-}
-
-void WorkerProcessHost::WorkerInstance::RemoveFromDocumentSet(
-    IPC::Message::Sender* parent, unsigned long long document_id) {
-  for (DocumentSet::iterator i = document_set_.begin();
-       i != document_set_.end(); i++) {
-    if (i->first == parent && i->second == document_id) {
-      document_set_.erase(i);
-      break;
-    }
-  }
-  // Should not be duplicate copies in the document set.
-  DCHECK(!IsInDocumentSet(parent, document_id));
-}
-
-void WorkerProcessHost::WorkerInstance::RemoveAllAssociatedDocuments(
-    IPC::Message::Sender* parent) {
-  for (DocumentSet::iterator i = document_set_.begin();
-       i != document_set_.end();) {
-    if (i->first == parent)
-      i = document_set_.erase(i);
-    else
-      ++i;
-  }
 }
 
 void WorkerProcessHost::WorkerInstance::AddSender(IPC::Message::Sender* sender,
@@ -518,9 +573,23 @@ bool WorkerProcessHost::WorkerInstance::HasSender(
   return false;
 }
 
+bool WorkerProcessHost::WorkerInstance::RendererIsParent(
+    int renderer_id, int render_view_route_id) const {
+  const WorkerDocumentSet::DocumentInfoSet& parents =
+      worker_document_set()->documents();
+  for (WorkerDocumentSet::DocumentInfoSet::const_iterator parent_iter =
+           parents.begin();
+       parent_iter != parents.end(); ++parent_iter) {
+    if (parent_iter->renderer_id() == renderer_id &&
+        parent_iter->render_view_route_id() == render_view_route_id) {
+      return true;
+    }
+  }
+  return false;
+}
+
 WorkerProcessHost::WorkerInstance::SenderInfo
 WorkerProcessHost::WorkerInstance::GetSender() const {
   DCHECK(NumSenders() == 1);
   return *senders_.begin();
 }
-

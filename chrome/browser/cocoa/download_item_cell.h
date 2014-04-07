@@ -6,12 +6,12 @@
 #define CHROME_BROWSER_COCOA_DOWNLOAD_ITEM_CELL_H_
 
 #import "base/cocoa_protocols_mac.h"
+#include "base/scoped_ptr.h"
 #import "chrome/browser/cocoa/gradient_button_cell.h"
 
 #include "base/file_path.h"
 
 class BaseDownloadItemModel;
-@class GTMTheme;
 
 // A button cell that implements the weird button/popup button hybrid that is
 // used by the download items.
@@ -44,7 +44,7 @@ enum DownloadItemMousePosition {
   CGFloat statusAlpha_;
   scoped_nsobject<NSAnimation> hideStatusAnimation_;
 
-  scoped_nsobject<GTMTheme> theme_;
+  scoped_ptr<ThemeProvider> themeProvider_;
 }
 
 - (void)setStateFromDownload:(BaseDownloadItemModel*)downloadModel;
@@ -52,9 +52,8 @@ enum DownloadItemMousePosition {
 @property (copy) NSString* secondaryTitle;
 @property (retain) NSFont* secondaryFont;
 
-// Valid to call in response to a click of the cell's button. Returns if the
-// button part of the cell was clicked.
-- (BOOL)isButtonPartPressed;
+// Returns if the mouse is over the button part of the cell.
+- (BOOL)isMouseOverButtonPart;
 
 @end
 

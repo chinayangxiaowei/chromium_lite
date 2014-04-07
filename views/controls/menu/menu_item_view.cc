@@ -1,11 +1,11 @@
-// Copyright (c) 2006-2008 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "views/controls/menu/menu_item_view.h"
 
-#include "app/gfx/canvas.h"
 #include "app/l10n_util.h"
+#include "gfx/canvas.h"
 #include "grit/app_strings.h"
 #include "views/controls/menu/menu_config.h"
 #include "views/controls/menu/menu_controller.h"
@@ -71,6 +71,17 @@ MenuItemView::~MenuItemView() {
   // thoroughly screwed. The destructor should be made private, and
   // MenuController should be the only place handling deletion of the menu.
   delete submenu_;
+}
+
+bool MenuItemView::GetTooltipText(const gfx::Point& p, std::wstring* tooltip) {
+  *tooltip = tooltip_;
+  return !tooltip_.empty();
+}
+
+bool MenuItemView::GetAccessibleRole(AccessibilityTypes::Role* role) {
+  DCHECK(role);
+  *role = AccessibilityTypes::ROLE_MENUITEM;
+  return true;
 }
 
 void MenuItemView::RunMenuAt(gfx::NativeWindow parent,
@@ -164,6 +175,12 @@ void MenuItemView::SetSelected(bool selected) {
   SchedulePaint();
 }
 
+void MenuItemView::SetTooltip(const std::wstring& tooltip, int item_id) {
+  MenuItemView* item = GetMenuItemByID(item_id);
+  DCHECK(item);
+  item->tooltip_ = tooltip;
+}
+
 void MenuItemView::SetIcon(const SkBitmap& icon, int item_id) {
   MenuItemView* item = GetMenuItemByID(item_id);
   DCHECK(item);
@@ -231,6 +248,28 @@ MenuItemView* MenuItemView::GetMenuItemByID(int id) {
     }
   }
   return NULL;
+}
+
+void MenuItemView::ChildrenChanged() {
+  MenuController* controller = GetMenuController();
+  if (!controller)
+    return;  // We're not showing, nothing to do.
+
+  // Handles the case where we were empty and are no longer empty.
+  RemoveEmptyMenus();
+
+  // Handles the case where we were not empty, but now are.
+  AddEmptyMenus();
+
+  controller->MenuChildrenChanged(this);
+
+  if (submenu_) {
+    // Force a paint and layout. This handles the case of the top level window's
+    // size remaining the same, resulting in no change to the submenu's size and
+    // no layout.
+    submenu_->Layout();
+    submenu_->SchedulePaint();
+  }
 }
 
 MenuItemView::MenuItemView(MenuItemView* parent,

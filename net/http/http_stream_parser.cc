@@ -5,6 +5,7 @@
 #include "net/http/http_stream_parser.h"
 
 #include "base/compiler_specific.h"
+#include "base/histogram.h"
 #include "base/trace_event.h"
 #include "net/base/io_buffer.h"
 #include "net/http/http_request_info.h"
@@ -14,7 +15,8 @@
 namespace net {
 
 HttpStreamParser::HttpStreamParser(ClientSocketHandle* connection,
-                                   GrowableIOBuffer* read_buffer)
+                                   GrowableIOBuffer* read_buffer,
+                                   const BoundNetLog& net_log)
     : io_state_(STATE_NONE),
       request_(NULL),
       request_headers_(NULL),
@@ -29,6 +31,7 @@ HttpStreamParser::HttpStreamParser(ClientSocketHandle* connection,
       user_read_buf_len_(0),
       user_callback_(NULL),
       connection_(connection),
+      net_log_(net_log),
       ALLOW_THIS_IN_INITIALIZER_LIST(
           io_callback_(this, &HttpStreamParser::OnIOComplete)) {
   DCHECK_EQ(0, read_buffer->offset());
@@ -37,12 +40,15 @@ HttpStreamParser::HttpStreamParser(ClientSocketHandle* connection,
 int HttpStreamParser::SendRequest(const HttpRequestInfo* request,
                                   const std::string& headers,
                                   UploadDataStream* request_body,
+                                  HttpResponseInfo* response,
                                   CompletionCallback* callback) {
   DCHECK_EQ(STATE_NONE, io_state_);
   DCHECK(!user_callback_);
   DCHECK(callback);
+  DCHECK(response);
 
   request_ = request;
+  response_ = response;
   scoped_refptr<StringIOBuffer> headers_io_buf = new StringIOBuffer(headers);
   request_headers_ = new DrainableIOBuffer(headers_io_buf,
                                            headers_io_buf->size());
@@ -134,7 +140,7 @@ int HttpStreamParser::DoLoop(int result) {
         if (result < 0)
           can_do_more = false;
         else
-          result =  DoSendBody(result);
+          result = DoSendBody(result);
         TRACE_EVENT_END("http.write_body", request_, request_->url.spec());
         break;
       case STATE_REQUEST_SENT:
@@ -143,10 +149,12 @@ int HttpStreamParser::DoLoop(int result) {
         break;
       case STATE_READ_HEADERS:
         TRACE_EVENT_BEGIN("http.read_headers", request_, request_->url.spec());
+        net_log_.BeginEvent(NetLog::TYPE_HTTP_STREAM_PARSER_READ_HEADERS);
         result = DoReadHeaders();
         break;
       case STATE_READ_HEADERS_COMPLETE:
         result = DoReadHeadersComplete(result);
+        net_log_.EndEvent(NetLog::TYPE_HTTP_STREAM_PARSER_READ_HEADERS);
         TRACE_EVENT_END("http.read_headers", request_, request_->url.spec());
         break;
       case STATE_BODY_PENDING:
@@ -178,15 +186,43 @@ int HttpStreamParser::DoLoop(int result) {
 
 int HttpStreamParser::DoSendHeaders(int result) {
   request_headers_->DidConsume(result);
-
-  if (request_headers_->BytesRemaining() > 0) {
+  int bytes_remaining = request_headers_->BytesRemaining();
+  if (bytes_remaining > 0) {
     // Record our best estimate of the 'request time' as the time when we send
     // out the first bytes of the request headers.
-    if (request_headers_->BytesRemaining() == request_headers_->size()) {
-      response_.request_time = base::Time::Now();
+    if (bytes_remaining == request_headers_->size()) {
+      response_->request_time = base::Time::Now();
+
+      // We'll record the count of uncoalesced packets IFF coalescing will help,
+      // and otherwise we'll use an enum to tell why it won't help.
+      enum COALESCE_POTENTIAL {
+        NO_ADVANTAGE = 0,   // Coalescing won't reduce packet count.
+        HEADER_ONLY = 1,    // There is only a header packet (can't coalesce).
+        COALESCE_POTENTIAL_MAX = 30 // Various cases of coalasced savings.
+      };
+      size_t coalesce = HEADER_ONLY;
+      if (request_body_ != NULL) {
+        const size_t kBytesPerPacket = 1430;
+        uint64 body_packets = (request_body_->size() + kBytesPerPacket - 1) /
+            kBytesPerPacket;
+        uint64 header_packets = (bytes_remaining + kBytesPerPacket - 1) /
+            kBytesPerPacket;
+        uint64 coalesced_packets = (request_body_->size() + bytes_remaining +
+                                    kBytesPerPacket - 1) / kBytesPerPacket;
+        if (coalesced_packets < header_packets + body_packets) {
+          if (coalesced_packets > COALESCE_POTENTIAL_MAX)
+            coalesce = COALESCE_POTENTIAL_MAX;
+          else
+            coalesce = static_cast<size_t>(header_packets + body_packets);
+        } else {
+          coalesce = NO_ADVANTAGE;
+        }
+      }
+      UMA_HISTOGRAM_ENUMERATION("Net.CoalescePotential", coalesce,
+                                COALESCE_POTENTIAL_MAX);
     }
     result = connection_->socket()->Write(request_headers_,
-                                          request_headers_->BytesRemaining(),
+                                          bytes_remaining,
                                           &io_callback_);
   } else if (request_body_ != NULL && request_body_->size()) {
     io_state_ = STATE_SENDING_BODY;
@@ -244,7 +280,7 @@ int HttpStreamParser::DoReadHeadersComplete(int result) {
   // Record our best estimate of the 'response time' as the time when we read
   // the first bytes of the response headers.
   if (read_buf_->offset() == 0 && result != ERR_CONNECTION_CLOSED)
-    response_.response_time = base::Time::Now();
+    response_->response_time = base::Time::Now();
 
   if (result == ERR_CONNECTION_CLOSED) {
     // The connection closed before we detected the end of the headers.
@@ -284,7 +320,7 @@ int HttpStreamParser::DoReadHeadersComplete(int result) {
     // Note where the headers stop.
     read_buf_unused_offset_ = end_of_header_offset;
 
-    if (response_.headers->response_code() / 100 == 1) {
+    if (response_->headers->response_code() / 100 == 1) {
       // After processing a 1xx response, the caller will ask for the next
       // header, so reset state to support that.  We don't just skip these
       // completely because 1xx codes aren't acceptable when establishing a
@@ -301,7 +337,7 @@ int HttpStreamParser::DoReadHeadersComplete(int result) {
         io_state_ = STATE_DONE;
         int extra_bytes = read_buf_->offset() - read_buf_unused_offset_;
         if (extra_bytes) {
-          CHECK(extra_bytes > 0);
+          CHECK_GT(extra_bytes, 0);
           memmove(read_buf_->StartOfBuffer(),
                   read_buf_->StartOfBuffer() + read_buf_unused_offset_,
                   extra_bytes);
@@ -322,7 +358,7 @@ int HttpStreamParser::DoReadBody() {
   if (read_buf_->offset()) {
     int available = read_buf_->offset() - read_buf_unused_offset_;
     if (available) {
-      CHECK(available > 0);
+      CHECK_GT(available, 0);
       int bytes_from_buffer = std::min(available, user_read_buf_len_);
       memcpy(user_read_buf_->data(),
              read_buf_->StartOfBuffer() + read_buf_unused_offset_,
@@ -349,7 +385,11 @@ int HttpStreamParser::DoReadBody() {
 }
 
 int HttpStreamParser::DoReadBodyComplete(int result) {
-  if (result == 0)
+  // If we didn't get a content-length and aren't using a chunked encoding,
+  // the only way to signal the end of a stream is to close the connection,
+  // so we don't treat that as an error, though in some cases we may not
+  // have completely received the resource.
+  if (result == 0 && !IsResponseBodyComplete() && CanFindEndOfResponse())
     result = ERR_CONNECTION_CLOSED;
 
   // Filter incoming data if appropriate.  FilterBuf may return an error.
@@ -366,7 +406,7 @@ int HttpStreamParser::DoReadBodyComplete(int result) {
   if (result > 0)
     response_body_read_ += result;
 
-  if (result < 0 || IsResponseBodyComplete()) {
+  if (result <= 0 || IsResponseBodyComplete()) {
     io_state_ = STATE_DONE;
 
     // Save the overflow data, which can be in two places.  There may be
@@ -387,7 +427,7 @@ int HttpStreamParser::DoReadBodyComplete(int result) {
       }
     }
 
-    CHECK(save_amount + additional_save_amount <= kMaxBufSize);
+    CHECK_LE(save_amount + additional_save_amount, kMaxBufSize);
     if (read_buf_->capacity() < save_amount + additional_save_amount) {
       read_buf_->SetCapacity(save_amount + additional_save_amount);
     }
@@ -451,8 +491,8 @@ void HttpStreamParser::DoParseResponseHeaders(int end_offset) {
     headers = new HttpResponseHeaders(std::string("HTTP/0.9 200 OK"));
   }
 
-  response_.headers = headers;
-  response_.vary_data.Init(*request_, *response_.headers);
+  response_->headers = headers;
+  response_->vary_data.Init(*request_, *response_->headers);
 }
 
 void HttpStreamParser::CalculateResponseBodySize() {
@@ -469,7 +509,7 @@ void HttpStreamParser::CalculateResponseBodySize() {
   // (informational), 204 (no content), and 304 (not modified) responses
   // MUST NOT include a message-body. All other responses do include a
   // message-body, although it MAY be of zero length.
-  switch (response_.headers->response_code()) {
+  switch (response_->headers->response_code()) {
     // Note that 1xx was already handled earlier.
     case 204:  // No Content
     case 205:  // Reset Content
@@ -484,11 +524,11 @@ void HttpStreamParser::CalculateResponseBodySize() {
     // Ignore spurious chunked responses from HTTP/1.0 servers and
     // proxies. Otherwise "Transfer-Encoding: chunked" trumps
     // "Content-Length: N"
-    if (response_.headers->GetHttpVersion() >= HttpVersion(1, 1) &&
-        response_.headers->HasHeaderValue("Transfer-Encoding", "chunked")) {
+    if (response_->headers->GetHttpVersion() >= HttpVersion(1, 1) &&
+        response_->headers->HasHeaderValue("Transfer-Encoding", "chunked")) {
       chunked_decoder_.reset(new HttpChunkedDecoder());
     } else {
-      response_body_length_ = response_.headers->GetContentLength();
+      response_body_length_ = response_->headers->GetContentLength();
       // If response_body_length_ is still -1, then we have to wait
       // for the server to close the connection.
     }
@@ -503,7 +543,7 @@ uint64 HttpStreamParser::GetUploadProgress() const {
 }
 
 HttpResponseInfo* HttpStreamParser::GetResponseInfo() {
-  return &response_;
+  return response_;
 }
 
 bool HttpStreamParser::IsResponseBodyComplete() const {

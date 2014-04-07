@@ -143,3 +143,33 @@ bool GoogleUpdateSettings::ClearReferral() {
   return ClearGoogleUpdateStrKey(google_update::kRegReferralField);
 }
 
+bool GoogleUpdateSettings::GetChromeChannel(bool system_install,
+    std::wstring* channel) {
+  HKEY root_key = system_install ? HKEY_LOCAL_MACHINE : HKEY_CURRENT_USER;
+  BrowserDistribution* dist = BrowserDistribution::GetDistribution();
+  std::wstring reg_path = dist->GetStateKey();
+  RegKey key(root_key, reg_path.c_str(), KEY_READ);
+  std::wstring update_branch;
+  if (!key.ReadValue(google_update::kRegApField, &update_branch)) {
+    *channel = L"unknown";
+    return false;
+  }
+
+  // Map to something pithy for human consumption. There are no rules as to
+  // what the ap string can contain, but generally it will contain a number
+  // followed by a dash followed by the branch name (and then some random
+  // suffix). We fall back on empty string in case we fail to parse.
+  // Only ever return "", "unknown", "dev" or "beta".
+  if (update_branch.find(L"-beta") != std::wstring::npos)
+    *channel = L"beta";
+  else if (update_branch.find(L"-dev") != std::wstring::npos)
+    *channel = L"dev";
+  else if (update_branch.empty())
+    *channel = L"";
+  else
+    *channel = L"unknown";
+
+  return true;
+}
+
+

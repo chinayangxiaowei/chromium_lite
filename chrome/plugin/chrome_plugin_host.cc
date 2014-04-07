@@ -147,25 +147,29 @@ class PluginRequestHandlerProxy
   void AppendFileRangeToUpload(const FilePath &filepath,
                                uint64 offset, uint64 length) {
     upload_content_.push_back(net::UploadData::Element());
-    upload_content_.back().SetToFilePathRange(filepath, offset, length);
+    upload_content_.back().SetToFilePathRange(filepath, offset, length,
+                                              base::Time());
   }
 
   CPError Start(int renderer_id, int render_view_id) {
+    webkit_glue::ResourceLoaderBridge::RequestInfo request_info;
+    request_info.method = cprequest_->method;
+    request_info.url = GURL(cprequest_->url);
+    request_info.first_party_for_cookies =
+        GURL(cprequest_->url); // TODO(jackson): policy url?
+    request_info.referrer = GURL();  // TODO(mpcomplete): referrer?
+    request_info.frame_origin = "null";
+    request_info.main_frame_origin = "null";
+    request_info.headers = extra_headers_;
+    request_info.load_flags = load_flags_;
+    request_info.requestor_pid = base::GetCurrentProcId();
+    request_info.request_type = ResourceType::OBJECT;
+    request_info.request_context = cprequest_->context;
+    request_info.appcache_host_id = appcache::kNoHostId;
+    request_info.routing_id = MSG_ROUTING_CONTROL;
     bridge_.reset(
         PluginThread::current()->resource_dispatcher()->CreateBridge(
-            cprequest_->method,
-            GURL(cprequest_->url),
-            GURL(cprequest_->url),  // TODO(jackson): policy url?
-            GURL(),  // TODO(mpcomplete): referrer?
-            "null",  // frame_origin
-            "null",  // main_frame_origin
-            extra_headers_,
-            load_flags_,
-            base::GetCurrentProcId(),
-            ResourceType::OBJECT,
-            cprequest_->context,
-            appcache::kNoHostId,
-            MSG_ROUTING_CONTROL,
+            request_info,
             renderer_id,
             render_view_id));
     if (!bridge_.get())
@@ -183,7 +187,8 @@ class PluginRequestHandlerProxy
           bridge_->AppendFileRangeToUpload(
               upload_content_[i].file_path(),
               upload_content_[i].file_range_offset(),
-              upload_content_[i].file_range_length());
+              upload_content_[i].file_range_length(),
+              upload_content_[i].expected_file_modification_time());
           break;
         }
         default: {
@@ -419,11 +424,13 @@ int STDCALL CPB_GetBrowsingContextInfo(
     if (buf_size < sizeof(char*))
       return sizeof(char*);
 
-    std::wstring wretval = CommandLine::ForCurrentProcess()->
-        GetSwitchValue(switches::kPluginDataDir);
-    DCHECK(!wretval.empty());
-    file_util::AppendToPath(&wretval, chrome::kChromePluginDataDirname);
-    *static_cast<char**>(buf) = CPB_StringDup(CPB_Alloc, WideToUTF8(wretval));
+    FilePath path = CommandLine::ForCurrentProcess()->
+                    GetSwitchValuePath(switches::kPluginDataDir);
+    DCHECK(!path.empty());
+    std::string retval = WideToUTF8(
+        path.Append(chrome::kChromePluginDataDirname).ToWStringHack());
+    *static_cast<char**>(buf) = CPB_StringDup(CPB_Alloc, retval);
+
     return CPERR_SUCCESS;
     }
   case CPBROWSINGCONTEXT_UI_LOCALE_PTR: {

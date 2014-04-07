@@ -7,14 +7,15 @@
 #include "app/l10n_util.h"
 #include "app/resource_bundle.h"
 #include "chrome/browser/browser_process.h"
+#include "chrome/browser/pref_service.h"
 #include "chrome/browser/profile.h"
 #include "chrome/browser/views/options/advanced_page_view.h"
 #include "chrome/browser/views/options/content_filter_page_view.h"
 #include "chrome/browser/views/options/cookie_filter_page_view.h"
 #include "chrome/browser/views/options/general_page_view.h"
+#include "chrome/browser/views/options/plugin_filter_page_view.h"
 #include "chrome/common/chrome_constants.h"
 #include "chrome/common/pref_names.h"
-#include "chrome/common/pref_service.h"
 #include "grit/chromium_strings.h"
 #include "grit/generated_resources.h"
 #include "grit/locale_settings.h"
@@ -45,15 +46,7 @@ void ShowContentSettingsWindow(gfx::NativeWindow parent_window,
   instance_->ShowContentSettingsTab(content_type);
 }
 
-};
-
-///////////////////////////////////////////////////////////////////////////////
-// ContentSettingsWindowView, public:
-
-// static
-void ContentSettingsWindowView::RegisterUserPrefs(PrefService* prefs) {
-  prefs->RegisterIntegerPref(prefs::kContentSettingsWindowLastTabIndex, 0);
-}
+}  // namespace browser
 
 ContentSettingsWindowView::ContentSettingsWindowView(Profile* profile)
     // Always show preferences for the original profile. Most state when off
@@ -165,8 +158,7 @@ void ContentSettingsWindowView::Init() {
                        l10n_util::GetString(IDS_JAVASCRIPT_TAB_LABEL),
                        javascript_page, false);
 
-  ContentFilterPageView* plugin_page =
-      new ContentFilterPageView(profile_, CONTENT_SETTINGS_TYPE_PLUGINS);
+  PluginFilterPageView* plugin_page = new PluginFilterPageView(profile_);
   tabs_->AddTabAtIndex(tab_index++,
                        l10n_util::GetString(IDS_PLUGIN_TAB_LABEL),
                        plugin_page, false);
@@ -176,6 +168,12 @@ void ContentSettingsWindowView::Init() {
   tabs_->AddTabAtIndex(tab_index++,
                        l10n_util::GetString(IDS_POPUP_TAB_LABEL),
                        popup_page, false);
+
+  ContentFilterPageView* geolocation_page =
+      new ContentFilterPageView(profile_, CONTENT_SETTINGS_TYPE_GEOLOCATION);
+  tabs_->AddTabAtIndex(tab_index++,
+                       l10n_util::GetString(IDS_GEOLOCATION_TAB_LABEL),
+                       geolocation_page, false);
 
   DCHECK_EQ(tabs_->GetTabCount(), CONTENT_SETTINGS_NUM_TYPES);
 }

@@ -62,6 +62,7 @@ typedef enum {
         HB_Script_Ogham,
         HB_Script_Runic,
         HB_Script_Khmer,
+        HB_Script_Nko,
         HB_Script_Inherited,
         HB_ScriptCount = HB_Script_Inherited
         /*
@@ -102,7 +103,6 @@ typedef enum {
         HB_Script_Cuneiform = Common,
         HB_Script_Phoenician = Common,
         HB_Script_PhagsPa = Common,
-        HB_Script_Nko = Common
         */
 } HB_Script;
 
@@ -154,7 +154,11 @@ typedef enum {
 typedef enum {
     HB_ShaperFlag_Default = 0,
     HB_ShaperFlag_NoKerning = 1,
-    HB_ShaperFlag_UseDesignMetrics = 2
+    HB_ShaperFlag_UseDesignMetrics = 1 << 1,
+    /* Arabic vowels in some fonts (Times New Roman, at least) have
+       non-zero advances, when they should be zero.  Setting this shaper
+       flag causes us to zero out the advances for mark glyphs. */
+    HB_ShaperFlag_ForceMarksToZeroWidth = 1 << 2
 } HB_ShaperFlag;
 
 /* 

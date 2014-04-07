@@ -67,6 +67,10 @@ class TimeDelta {
     return delta_;
   }
 
+#if defined(OS_POSIX)
+  struct timespec ToTimeSpec() const;
+#endif
+
   // Returns the time delta in some unit. The F versions return a floating
   // point value, the "regular" versions return a rounded-down value.
   //
@@ -250,12 +254,9 @@ class Time {
   static Time FromFileTime(FILETIME ft);
   FILETIME ToFileTime() const;
 
-  // Monitor system power state and disable high resolution timer when we're
-  // on battery. See time_win.cc for more details.
-  static void StartSystemMonitorObserver();
-
-  // Enable high resolution timer unconditionally. Only for test code.
-  static void EnableHiResClockForTests();
+  // Enable or disable Windows high resolution timer. For more details
+  // see comments in time_win.cc. Returns true on success.
+  static bool UseHighResolutionTimer(bool use);
 #endif
 
   // Converts an exploded structure representing either the local time or UTC

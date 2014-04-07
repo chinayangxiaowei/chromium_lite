@@ -14,6 +14,9 @@
 #include "webkit/database/database_connections.h"
 #include "webkit/database/database_tracker.h"
 
+class GURL;
+class HostContentSettingsMap;
+class Receiver;
 class ResourceMessageFilter;
 
 class DatabaseDispatcherHost
@@ -21,7 +24,8 @@ class DatabaseDispatcherHost
       public webkit_database::DatabaseTracker::Observer {
  public:
   DatabaseDispatcherHost(webkit_database::DatabaseTracker* db_tracker,
-                         ResourceMessageFilter* resource_message_filter);
+                         IPC::Message::Sender* sender,
+                         HostContentSettingsMap *host_content_settings_map);
   void Init(base::ProcessHandle process_handle);
   void Shutdown();
 
@@ -30,14 +34,14 @@ class DatabaseDispatcherHost
   // VFS message handlers (IO thread)
   void OnDatabaseOpenFile(const string16& vfs_file_name,
                           int desired_flags,
-                          int32 message_id);
+                          IPC::Message* reply_msg);
   void OnDatabaseDeleteFile(const string16& vfs_file_name,
                             const bool& sync_dir,
-                            int32 message_id);
+                            IPC::Message* reply_msg);
   void OnDatabaseGetFileAttributes(const string16& vfs_file_name,
-                                   int32 message_id);
+                                   IPC::Message* reply_msg);
   void OnDatabaseGetFileSize(const string16& vfs_file_name,
-                             int32 message_id);
+                             IPC::Message* reply_msg);
 
   // Database tracker message handlers (IO thread)
   void OnDatabaseOpened(const string16& origin_identifier,
@@ -48,6 +52,11 @@ class DatabaseDispatcherHost
                           const string16& database_name);
   void OnDatabaseClosed(const string16& origin_identifier,
                         const string16& database_name);
+  void OnAllowDatabase(const std::string& origin_url,
+                       const string16& name,
+                       const string16& display_name,
+                       unsigned long estimated_size,
+                       IPC::Message* reply_msg);
 
   // DatabaseTracker::Observer callbacks (file thread)
   virtual void OnDatabaseSizeChanged(const string16& origin_identifier,
@@ -57,25 +66,32 @@ class DatabaseDispatcherHost
   virtual void OnDatabaseScheduledForDeletion(const string16& origin_identifier,
                                               const string16& database_name);
 
+  webkit_database::DatabaseTracker* database_tracker() const {
+    return db_tracker_.get();
+  }
+
+  void Send(IPC::Message* message);
+
  private:
+  class PromptDelegate;
+
   void AddObserver();
   void RemoveObserver();
 
-  void ReceivedBadMessage(uint16 msg_type);
-  void SendMessage(IPC::Message* message);
+  void ReceivedBadMessage(uint32 msg_type);
 
   // VFS message handlers (file thread)
   void DatabaseOpenFile(const string16& vfs_file_name,
                         int desired_flags,
-                        int32 message_id);
+                        IPC::Message* reply_msg);
   void DatabaseDeleteFile(const string16& vfs_file_name,
                           bool sync_dir,
-                          int32 message_id,
+                          IPC::Message* reply_msg,
                           int reschedule_count);
   void DatabaseGetFileAttributes(const string16& vfs_file_name,
-                                 int32 message_id);
+                                 IPC::Message* reply_msg);
   void DatabaseGetFileSize(const string16& vfs_file_name,
-                           int32 message_id);
+                           IPC::Message* reply_msg);
 
   // Database tracker message handlers (file thread)
   void DatabaseOpened(const string16& origin_identifier,
@@ -87,17 +103,15 @@ class DatabaseDispatcherHost
   void DatabaseClosed(const string16& origin_identifier,
                       const string16& database_name);
 
-  // Called once we decide whether to allow or block an open file request.
-  void OnDatabaseOpenFileAllowed(const string16& vfs_file_name,
-                                 int desired_flags,
-                                 int32 message_id);
-  void OnDatabaseOpenFileBlocked(int32 message_id, bool blocked_by_user);
+  // CookiePromptModalDialog response handler (io thread)
+  void AllowDatabaseResponse(IPC::Message* reply_msg,
+                             ContentSetting content_setting);
 
   // The database tracker for the current profile.
   scoped_refptr<webkit_database::DatabaseTracker> db_tracker_;
 
-  // The resource message filter that owns us.
-  ResourceMessageFilter* resource_message_filter_;
+  // The sender to be used for sending out IPC messages.
+  IPC::Message::Sender* message_sender_;
 
   // The handle of this process.
   base::ProcessHandle process_handle_;
@@ -113,6 +127,9 @@ class DatabaseDispatcherHost
 
   // Keeps track of all DB connections opened by this renderer
   webkit_database::DatabaseConnections database_connections_;
+
+  // Used to look up permissions at database creation time.
+  scoped_refptr<HostContentSettingsMap> host_content_settings_map_;
 };
 
 #endif  // CHROME_BROWSER_RENDERER_HOST_DATABASE_DISPATCHER_HOST_H_

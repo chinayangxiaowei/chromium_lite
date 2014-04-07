@@ -171,6 +171,10 @@ typedef unsigned uint32_t;
 
 #elif defined(SK_BUILD_FOR_UNIX)
 
+// Prefer FreeType's emboldening algorithm to Skia's (which does a hairline
+// outline and doesn't look very good).
+#define SK_USE_FREETYPE_EMBOLDEN
+
 #ifdef SK_CPU_BENDIAN
 // Above we set the order for ARGB channels in registers. I suspect that, on
 // big endian machines, you can keep this the same and everything will work.
@@ -188,9 +192,6 @@ typedef unsigned uint32_t;
 // problems. Instead, pipe this through to the logging function as a fatal
 // assertion.
 #define SK_CRASH() SkDebugf_FileLine(__FILE__, __LINE__, true, "SK_CRASH")
-
-// Enable the use of the SkEdgeBuilder class.
-#define USE_NEW_BUILDER 1
 
 // ===== End Chrome-specific definitions =====
 

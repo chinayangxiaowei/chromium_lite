@@ -4,12 +4,10 @@
 
 #include "app/resource_bundle.h"
 
-#include "app/gfx/codec/png_codec.h"
-#include "app/gfx/font.h"
 #include "base/logging.h"
 #include "base/string_piece.h"
-#include "net/base/file_stream.h"
-#include "net/base/net_errors.h"
+#include "gfx/codec/png_codec.h"
+#include "gfx/font.h"
 #include "third_party/skia/include/core/SkBitmap.h"
 
 ResourceBundle* ResourceBundle::g_shared_instance_ = NULL;
@@ -21,6 +19,10 @@ const SkColor ResourceBundle::frame_color =
      SkColorSetRGB(77, 139, 217);
 const SkColor ResourceBundle::frame_color_inactive =
      SkColorSetRGB(184, 209, 240);
+const SkColor ResourceBundle::frame_color_app_panel =
+     SK_ColorWHITE;
+const SkColor ResourceBundle::frame_color_app_panel_inactive =
+     SK_ColorWHITE;
 const SkColor ResourceBundle::frame_color_incognito =
      SkColorSetRGB(83, 106, 139);
 const SkColor ResourceBundle::frame_color_incognito_inactive =
@@ -88,7 +90,7 @@ std::string ResourceBundle::GetDataResource(int resource_id) {
 }
 
 RefCountedStaticMemory* ResourceBundle::LoadDataResourceBytes(
-    int resource_id) {
+    int resource_id) const {
   return LoadResourceBytes(resources_data_, resource_id);
 }
 
@@ -141,21 +143,16 @@ void ResourceBundle::LoadFontsIfNecessary() {
   AutoLock lock_scope(lock_);
   if (!base_font_.get()) {
     base_font_.reset(new gfx::Font());
-#if defined(OS_LINUX) && defined(TOOLKIT_VIEWS)
-    // Toolkit views needs a less gigantor base font to more correctly match
-    // metrics for the bitmap-based UI.
-    *base_font_ = base_font_->DeriveFont(-1);
-#endif
+
+    bold_font_.reset(new gfx::Font());
+    *bold_font_ =
+        base_font_->DeriveFont(0, base_font_->style() | gfx::Font::BOLD);
 
     small_font_.reset(new gfx::Font());
     *small_font_ = base_font_->DeriveFont(-2);
 
     medium_font_.reset(new gfx::Font());
-#if defined(OS_LINUX) && defined(TOOLKIT_VIEWS)
-    *medium_font_ = base_font_->DeriveFont(2);
-#else
     *medium_font_ = base_font_->DeriveFont(3);
-#endif
 
     medium_bold_font_.reset(new gfx::Font());
     *medium_bold_font_ =
@@ -169,6 +166,8 @@ void ResourceBundle::LoadFontsIfNecessary() {
 const gfx::Font& ResourceBundle::GetFont(FontStyle style) {
   LoadFontsIfNecessary();
   switch (style) {
+    case BoldFont:
+      return *bold_font_;
     case SmallFont:
       return *small_font_;
     case MediumFont:

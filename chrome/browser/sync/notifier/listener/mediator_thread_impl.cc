@@ -18,9 +18,6 @@
 #include "chrome/browser/sync/notifier/listener/subscribe_task.h"
 #include "chrome/browser/sync/protocol/service_constants.h"
 #include "talk/base/thread.h"
-#if defined(OS_WIN)
-#include "talk/base/win32socketserver.h"
-#endif
 #include "talk/xmpp/xmppclient.h"
 #include "talk/xmpp/xmppclientsettings.h"
 
@@ -28,8 +25,9 @@ using std::string;
 
 namespace browser_sync {
 
-MediatorThreadImpl::MediatorThreadImpl() {
-}
+MediatorThreadImpl::MediatorThreadImpl(
+    NotificationMethod notification_method)
+    : MediatorThread(notification_method) {}
 
 MediatorThreadImpl::~MediatorThreadImpl() {
 }
@@ -43,44 +41,38 @@ void MediatorThreadImpl::Run() {
   // For win32, this sets up the win32socketserver. Note that it needs to
   // dispatch windows messages since that is what the win32 socket server uses.
 
+  LOG(INFO) << "Running mediator thread with notification method "
+            << NotificationMethodToString(notification_method_);
+
   MessageLoop message_loop;
-#if defined(OS_WIN)
-  scoped_ptr<talk_base::SocketServer> socket_server(
-      new talk_base::Win32SocketServer(this));
-  talk_base::SocketServer* old_socket_server = socketserver();
-  set_socketserver(socket_server.get());
 
-  // Since we just changed the socket server, ensure that any queued up
-  // messages are processed.
-  socket_server->WakeUp();
-#endif
+  Post(this, CMD_PUMP_AUXILIARY_LOOPS);
+  ProcessMessages(talk_base::kForever);
+}
 
-  do {
-#if defined(OS_WIN)
-    ::MSG message;
-    if (::PeekMessage(&message, NULL, 0, 0, PM_REMOVE)) {
-      ::TranslateMessage(&message);
-      ::DispatchMessage(&message);
-    }
-#endif
-    ProcessMessages(100);
-    if (pump_.get() && pump_->HasPendingTimeoutTask()) {
-      pump_->WakeTasks();
-    }
-    MessageLoop::current()->RunAllPending();
-  } while (!IsQuitting());
-
-#if defined(OS_WIN)
-  set_socketserver(old_socket_server);
-  socket_server.reset();
-#endif
+void MediatorThreadImpl::PumpAuxiliaryLoops() {
+  if (pump_.get() && pump_->HasPendingTimeoutTask()) {
+    pump_->WakeTasks();
+  }
+  MessageLoop::current()->RunAllPending();
+  // We want to pump auxiliary loops every 100ms until this thread is stopped,
+  // at which point this call will do nothing.
+  PostDelayed(100, this, CMD_PUMP_AUXILIARY_LOOPS);
 }
 
 void MediatorThreadImpl::Login(const buzz::XmppClientSettings& settings) {
   Post(this, CMD_LOGIN, new LoginData(settings));
 }
 
+void MediatorThreadImpl::Stop() {
+  Thread::Stop();
+  CHECK(!login_.get() && !pump_.get()) << "Logout should be called prior to"
+      << "message queue exit.";
+}
+
 void MediatorThreadImpl::Logout() {
+  CHECK(!IsQuitting())
+      << "Logout should be called prior to message queue exit.";
   Post(this, CMD_DISCONNECT);
   Stop();
 }
@@ -120,6 +112,9 @@ void MediatorThreadImpl::OnMessage(talk_base::Message* msg) {
       break;
     case CMD_SUBSCRIBE_FOR_UPDATES:
       DoSubscribeForUpdates();
+      break;
+    case CMD_PUMP_AUXILIARY_LOOPS:
+      PumpAuxiliaryLoops();
       break;
     default:
       LOG(ERROR) << "P2P: Someone passed a bad message to the thread.";
@@ -170,7 +165,6 @@ void MediatorThreadImpl::DoLogin(LoginData* login_data) {
                                    NULL,
                                    // talk_base::FirewallManager* is NULL.
                                    NULL,
-                                   false,
                                    // Both the proxy and a non-proxy route
                                    // will be attempted.
                                    false,
@@ -211,7 +205,8 @@ void MediatorThreadImpl::DoSubscribeForUpdates() {
   if (!client) {
     return;
   }
-  SubscribeTask* subscription = new SubscribeTask(client);
+  SubscribeTask* subscription =
+      new SubscribeTask(client, notification_method_);
   subscription->SignalStatusUpdate.connect(
       this,
       &MediatorThreadImpl::OnSubscriptionStateChange);
@@ -224,7 +219,7 @@ void MediatorThreadImpl::DoListenForUpdates() {
   if (!client) {
     return;
   }
-  ListenTask* listener = new ListenTask(client);
+  ListenTask* listener = new ListenTask(client, notification_method_);
   listener->SignalUpdateAvailable.connect(
       this,
       &MediatorThreadImpl::OnUpdateListenerMessage);
@@ -237,7 +232,7 @@ void MediatorThreadImpl::DoSendNotification() {
   if (!client) {
     return;
   }
-  SendUpdateTask* task = new SendUpdateTask(client);
+  SendUpdateTask* task = new SendUpdateTask(client, notification_method_);
   task->SignalStatusUpdate.connect(
       this,
       &MediatorThreadImpl::OnUpdateNotificationSent);

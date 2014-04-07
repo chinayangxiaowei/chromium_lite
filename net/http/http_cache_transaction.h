@@ -8,6 +8,7 @@
 #ifndef NET_HTTP_HTTP_CACHE_TRANSACTION_H_
 #define NET_HTTP_HTTP_CACHE_TRANSACTION_H_
 
+#include "net/base/net_log.h"
 #include "net/http/http_cache.h"
 #include "net/http/http_response_info.h"
 #include "net/http/http_transaction.h"
@@ -25,7 +26,8 @@ class HttpCache::Transaction : public HttpTransaction {
   virtual ~Transaction();
 
   // HttpTransaction methods:
-  virtual int Start(const HttpRequestInfo*, CompletionCallback*, LoadLog*);
+  virtual int Start(const HttpRequestInfo*, CompletionCallback*,
+                    const BoundNetLog&);
   virtual int RestartIgnoringLastError(CompletionCallback* callback);
   virtual int RestartWithCertificate(X509Certificate* client_cert,
                                      CompletionCallback* callback);
@@ -34,6 +36,7 @@ class HttpCache::Transaction : public HttpTransaction {
                               CompletionCallback* callback);
   virtual bool IsReadyToRestartForAuth();
   virtual int Read(IOBuffer* buf, int buf_len, CompletionCallback* callback);
+  virtual void StopCaching();
   virtual const HttpResponseInfo* GetResponseInfo() const;
   virtual LoadState GetLoadState() const;
   virtual uint64 GetUploadProgress(void) const;
@@ -71,17 +74,29 @@ class HttpCache::Transaction : public HttpTransaction {
 
   const std::string& key() const { return cache_key_; }
 
-  // Associates this transaction with a cache entry.
-  int AddToEntry();
-
-  // Called by the HttpCache when the given disk cache entry becomes accessible
-  // to the transaction.  Returns network error code.
-  int EntryAvailable(ActiveEntry* entry);
+  // Writes |buf_len| bytes of meta-data from the provided buffer |buf|. to the
+  // HTTP cache entry that backs this transaction (if any).
+  // Returns the number of bytes actually written, or a net error code. If the
+  // operation cannot complete immediately, returns ERR_IO_PENDING, grabs a
+  // reference to the buffer (until completion), and notifies the caller using
+  // the provided |callback| when the operatiopn finishes.
+  //
+  // The first time this method is called for a given transaction, previous
+  // meta-data will be overwritten with the provided data, and subsequent
+  // invocations will keep appending to the cached entry.
+  //
+  // In order to guarantee that the metadata is set to the correct entry, the
+  // response (or response info) must be evaluated by the caller, for instance
+  // to make sure that the response_time is as expected, before calling this
+  // method.
+  int WriteMetadata(IOBuffer* buf, int buf_len, CompletionCallback* callback);
 
   // This transaction is being deleted and we are not done writing to the cache.
   // We need to indicate that the response data was truncated.  Returns true on
   // success.
   bool AddTruncatedFlag();
+
+  CompletionCallback* io_callback() { return &io_callback_; }
 
  private:
   static const size_t kNumValidationHeaders = 2;
@@ -98,6 +113,7 @@ class HttpCache::Transaction : public HttpTransaction {
     STATE_NONE,
     STATE_SEND_REQUEST,
     STATE_SEND_REQUEST_COMPLETE,
+    STATE_SUCCESSFUL_SEND_REQUEST,
     STATE_NETWORK_READ,
     STATE_NETWORK_READ_COMPLETE,
     STATE_INIT_ENTRY,
@@ -108,12 +124,21 @@ class HttpCache::Transaction : public HttpTransaction {
     STATE_DOOM_ENTRY,
     STATE_DOOM_ENTRY_COMPLETE,
     STATE_ADD_TO_ENTRY,
-    STATE_ENTRY_AVAILABLE,
+    STATE_ADD_TO_ENTRY_COMPLETE,
     STATE_PARTIAL_CACHE_VALIDATION,
+    STATE_UPDATE_CACHED_RESPONSE,
+    STATE_UPDATE_CACHED_RESPONSE_COMPLETE,
+    STATE_OVERWRITE_CACHED_RESPONSE,
+    STATE_TRUNCATE_CACHED_DATA,
+    STATE_TRUNCATE_CACHED_DATA_COMPLETE,
+    STATE_PARTIAL_HEADERS_RECEIVED,
     STATE_CACHE_READ_RESPONSE,
     STATE_CACHE_READ_RESPONSE_COMPLETE,
     STATE_CACHE_WRITE_RESPONSE,
+    STATE_CACHE_WRITE_TRUNCATED_RESPONSE,
     STATE_CACHE_WRITE_RESPONSE_COMPLETE,
+    STATE_CACHE_READ_METADATA,
+    STATE_CACHE_READ_METADATA_COMPLETE,
     STATE_CACHE_QUERY_DATA,
     STATE_CACHE_QUERY_DATA_COMPLETE,
     STATE_CACHE_READ_DATA,
@@ -137,31 +162,48 @@ class HttpCache::Transaction : public HttpTransaction {
   // corresponding callback.
   int DoSendRequest();
   int DoSendRequestComplete(int result);
+  int DoSuccessfulSendRequest();
   int DoNetworkRead();
   int DoNetworkReadComplete(int result);
   int DoInitEntry();
   int DoOpenEntry();
-  int DoOpenEntryComplete();
+  int DoOpenEntryComplete(int result);
   int DoCreateEntry();
-  int DoCreateEntryComplete();
+  int DoCreateEntryComplete(int result);
   int DoDoomEntry();
-  int DoDoomEntryComplete();
+  int DoDoomEntryComplete(int result);
   int DoAddToEntry();
-  int DoEntryAvailable();
+  int DoAddToEntryComplete(int result);
   int DoPartialCacheValidation();
-  int DoCacheReadData();
-  int DoCacheReadDataComplete(int result);
+  int DoUpdateCachedResponse();
+  int DoUpdateCachedResponseComplete(int result);
+  int DoOverwriteCachedResponse();
+  int DoTruncateCachedData();
+  int DoTruncateCachedDataComplete(int result);
+  int DoPartialHeadersReceived();
+  int DoCacheReadResponse();
+  int DoCacheReadResponseComplete(int result);
+  int DoCacheWriteResponse();
+  int DoCacheWriteTruncatedResponse();
+  int DoCacheWriteResponseComplete(int result);
+  int DoCacheReadMetadata();
+  int DoCacheReadMetadataComplete(int result);
   int DoCacheQueryData();
   int DoCacheQueryDataComplete(int result);
+  int DoCacheReadData();
+  int DoCacheReadDataComplete(int result);
   int DoCacheWriteData(int num_bytes);
   int DoCacheWriteDataComplete(int result);
 
   // Sets request_ and fields derived from it.
-  void SetRequest(LoadLog* load_log, const HttpRequestInfo* request);
+  void SetRequest(const BoundNetLog& net_log, const HttpRequestInfo* request);
 
   // Returns true if the request should be handled exclusively by the network
   // layer (skipping the cache entirely).
   bool ShouldPassThrough();
+
+  // Associates this transaction with a cache entry.
+  int AddToEntry();
 
   // Called to begin reading from the cache.  Returns network error code.
   int BeginCacheRead();
@@ -221,9 +263,6 @@ class HttpCache::Transaction : public HttpTransaction {
   // Reads data from the cache entry.
   int ReadFromEntry(IOBuffer* data, int data_len);
 
-  // Called to populate response_ from the cache entry.
-  int ReadResponseInfoFromEntry();
-
   // Called to write data to the cache entry.  If the write fails, then the
   // cache entry is destroyed.  Future calls to this function will just do
   // nothing without side-effect.  Returns a network error code.
@@ -232,15 +271,12 @@ class HttpCache::Transaction : public HttpTransaction {
 
   // Called to write response_ to the cache entry. |truncated| indicates if the
   // entry should be marked as incomplete.
-  void WriteResponseInfoToEntry(bool truncated);
+  int WriteResponseInfoToEntry(bool truncated);
 
   // Called to append response data to the cache entry.  Returns a network error
   // code.
   int AppendResponseDataToEntry(IOBuffer* data, int data_len,
                                 CompletionCallback* callback);
-
-  // Called to truncate response content in the entry.
-  void TruncateResponseData();
 
   // Called when we are done writing to the cache entry.
   void DoneWritingToEntry(bool success);
@@ -257,15 +293,15 @@ class HttpCache::Transaction : public HttpTransaction {
   // working with range requests.
   int DoPartialCacheReadCompleted(int result);
 
-  // Performs the needed work after writing data to the cache.
-  int DoCacheWriteCompleted(int result);
+  // Sends a histogram with info about the response headers.
+  void HistogramHeaders(const HttpResponseHeaders* headers);
 
   // Called to signal completion of asynchronous IO.
   void OnIOComplete(int result);
 
   State next_state_;
   const HttpRequestInfo* request_;
-  scoped_refptr<LoadLog> load_log_;
+  BoundNetLog net_log_;
   scoped_ptr<HttpRequestInfo> custom_request_;
   // If extra_headers specified a "if-modified-since" or "if-none-match",
   // |external_validation_| contains the value of those headers.
@@ -277,20 +313,26 @@ class HttpCache::Transaction : public HttpTransaction {
   CompletionCallback* callback_;  // Consumer's callback.
   HttpResponseInfo response_;
   HttpResponseInfo auth_response_;
+  const HttpResponseInfo* new_response_;
   std::string cache_key_;
   Mode mode_;
+  State target_state_;
   bool reading_;  // We are already reading.
   bool invalid_range_;  // We may bypass the cache for this request.
   bool enable_range_support_;
   bool truncated_;  // We don't have all the response data.
+  bool server_responded_206_;
+  bool cache_pending_;  // We are waiting for the HttpCache.
   scoped_refptr<IOBuffer> read_buf_;
-  int read_buf_len_;
+  int io_buf_len_;
   int read_offset_;
   int effective_load_flags_;
   scoped_ptr<PartialData> partial_;  // We are dealing with range requests.
   uint64 final_upload_progress_;
-  CompletionCallbackImpl<Transaction> network_callback_;
+  CompletionCallbackImpl<Transaction> io_callback_;
   scoped_refptr<CancelableCompletionCallback<Transaction> > cache_callback_;
+  scoped_refptr<CancelableCompletionCallback<Transaction> >
+      write_headers_callback_;
 };
 
 }  // namespace net

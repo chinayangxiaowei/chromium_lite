@@ -56,7 +56,7 @@ bool PageActionFunction::SetPageActionEnabled(bool enable) {
     }
   }
 
-  ExtensionAction* page_action = dispatcher()->GetExtension()->page_action();
+  ExtensionAction* page_action = GetExtension()->page_action();
   if (!page_action) {
     error_ = kNoPageActionError;
     return false;
@@ -70,7 +70,8 @@ bool PageActionFunction::SetPageActionEnabled(bool enable) {
 
   // Find the TabContents that contains this tab id.
   TabContents* contents = NULL;
-  ExtensionTabUtil::GetTabById(tab_id, profile(), NULL, NULL, &contents, NULL);
+  ExtensionTabUtil::GetTabById(tab_id, profile(), include_incognito(),
+                               NULL, NULL, &contents, NULL);
   if (!contents) {
     error_ = ExtensionErrorUtils::FormatErrorMessage(kNoTabError,
                                                      IntToString(tab_id));
@@ -94,7 +95,7 @@ bool PageActionFunction::SetPageActionEnabled(bool enable) {
 }
 
 bool PageActionFunction::InitCommon(int tab_id) {
-  page_action_ = dispatcher()->GetExtension()->page_action();
+  page_action_ = GetExtension()->page_action();
   if (!page_action_) {
     error_ = kNoPageActionError;
     return false;
@@ -102,7 +103,8 @@ bool PageActionFunction::InitCommon(int tab_id) {
 
   // Find the TabContents that contains this tab id.
   contents_ = NULL;
-  ExtensionTabUtil::GetTabById(tab_id, profile(), NULL, NULL, &contents_, NULL);
+  ExtensionTabUtil::GetTabById(tab_id, profile(), include_incognito(),
+                               NULL, NULL, &contents_, NULL);
   if (!contents_) {
     error_ = ExtensionErrorUtils::FormatErrorMessage(kNoTabError,
                                                      IntToString(tab_id));
@@ -188,6 +190,29 @@ bool PageActionSetTitleFunction::RunImpl() {
   EXTENSION_FUNCTION_VALIDATE(args->GetString(L"title", &title));
 
   page_action_->SetTitle(tab_id, title);
+  contents_->PageActionStateChanged();
+  return true;
+}
+
+bool PageActionSetPopupFunction::RunImpl() {
+  EXTENSION_FUNCTION_VALIDATE(args_->IsType(Value::TYPE_DICTIONARY));
+  const DictionaryValue* args = args_as_dictionary();
+
+  int tab_id;
+  EXTENSION_FUNCTION_VALIDATE(args->GetInteger(L"tabId", &tab_id));
+  if (!InitCommon(tab_id))
+    return false;
+
+  // TODO(skerner): Consider allowing null and undefined to mean the popup
+  // should be removed.
+  std::string popup_string;
+  EXTENSION_FUNCTION_VALIDATE(args->GetString(L"popup", &popup_string));
+
+  GURL popup_url;
+  if (!popup_string.empty())
+    popup_url = GetExtension()->GetResourceURL(popup_string);
+
+  page_action_->SetPopupUrl(tab_id, popup_url);
   contents_->PageActionStateChanged();
   return true;
 }

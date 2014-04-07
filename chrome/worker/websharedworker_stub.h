@@ -21,6 +21,7 @@ class WebSharedWorkerStub : public WebWorkerStubBase {
 
   // IPC::Channel::Listener implementation.
   virtual void OnMessageReceived(const IPC::Message& message);
+  virtual void OnChannelError();
 
  private:
   virtual ~WebSharedWorkerStub();
@@ -34,6 +35,10 @@ class WebSharedWorkerStub : public WebWorkerStubBase {
   WebKit::WebSharedWorker* impl_;
   string16 name_;
   bool started_;
+
+  typedef std::pair<int, int> PendingConnectInfo;
+  typedef std::vector<PendingConnectInfo> PendingConnectInfoList;
+  PendingConnectInfoList pending_connects_;
 
   DISALLOW_COPY_AND_ASSIGN(WebSharedWorkerStub);
 };

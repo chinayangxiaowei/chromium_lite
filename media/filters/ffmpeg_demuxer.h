@@ -1,4 +1,4 @@
-// Copyright (c) 2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -25,6 +25,7 @@
 #include <deque>
 #include <vector>
 
+#include "base/callback.h"
 #include "base/waitable_event.h"
 #include "media/base/buffers.h"
 #include "media/base/factory.h"
@@ -35,14 +36,14 @@
 #include "testing/gtest/include/gtest/gtest_prod.h"
 
 // FFmpeg forward declarations.
-struct AVCodecContext;
-struct AVBitStreamFilterContext;
 struct AVFormatContext;
 struct AVPacket;
+struct AVRational;
 struct AVStream;
 
 namespace media {
 
+class BitstreamConverter;
 class FFmpegDemuxer;
 
 // Forward declaration for scoped_ptr_malloc.
@@ -79,6 +80,9 @@ class FFmpegDemuxerStream : public DemuxerStream, public AVStreamProvider {
   // AVStreamProvider implementation.
   virtual AVStream* GetAVStream() { return stream_; }
 
+  // Bitstream converter to convert input packet.
+  void SetBitstreamConverter(BitstreamConverter* converter);
+
  protected:
   virtual void* QueryInterface(const char* interface_id);
 
@@ -93,7 +97,8 @@ class FFmpegDemuxerStream : public DemuxerStream, public AVStreamProvider {
   void FulfillPendingRead();
 
   // Converts an FFmpeg stream timestamp into a base::TimeDelta.
-  base::TimeDelta ConvertTimestamp(int64 timestamp);
+  static base::TimeDelta ConvertStreamTimestamp(const AVRational& time_base,
+                                                int64 timestamp);
 
   FFmpegDemuxer* demuxer_;
   AVStream* stream_;
@@ -107,6 +112,9 @@ class FFmpegDemuxerStream : public DemuxerStream, public AVStreamProvider {
 
   typedef std::deque<Callback1<Buffer*>::Type*> ReadQueue;
   ReadQueue read_queue_;
+
+  // Used to translate bitstream formats.
+  scoped_ptr<BitstreamConverter> bitstream_converter_;
 
   DISALLOW_COPY_AND_ASSIGN(FFmpegDemuxerStream);
 };

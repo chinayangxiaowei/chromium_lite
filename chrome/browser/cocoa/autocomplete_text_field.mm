@@ -1,4 +1,4 @@
-// Copyright (c) 2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,6 +6,10 @@
 
 #include "base/logging.h"
 #import "chrome/browser/cocoa/autocomplete_text_field_cell.h"
+#import "chrome/browser/cocoa/autocomplete_text_field_editor.h"
+#import "chrome/browser/cocoa/browser_window_controller.h"
+#import "chrome/browser/cocoa/toolbar_controller.h"
+#import "chrome/browser/cocoa/url_drop_target.h"
 
 @implementation AutocompleteTextField
 
@@ -15,13 +19,21 @@
   return [AutocompleteTextFieldCell class];
 }
 
+- (void)dealloc {
+  [[NSNotificationCenter defaultCenter] removeObserver:self];
+  [super dealloc];
+}
+
 - (void)awakeFromNib {
   DCHECK([[self cell] isKindOfClass:[AutocompleteTextFieldCell class]]);
+  currentToolTips_.reset([[NSMutableArray alloc] init]);
 }
 
 - (void)flagsChanged:(NSEvent*)theEvent {
-  bool controlFlag = ([theEvent modifierFlags]&NSControlKeyMask) != 0;
-  observer_->OnControlKeyChanged(controlFlag);
+  if (observer_) {
+    const bool controlFlag = ([theEvent modifierFlags]&NSControlKeyMask) != 0;
+    observer_->OnControlKeyChanged(controlFlag);
+  }
 }
 
 - (AutocompleteTextFieldCell*)autocompleteTextFieldCell {
@@ -58,16 +70,27 @@
 // decoration area.  This allows the user to click-drag starting from
 // a decoration area and get the expected selection behaviour,
 // likewise for multiple clicks in those areas.
-- (void)mouseDown:(NSEvent *)theEvent {
-  const NSPoint locationInWindow = [theEvent locationInWindow];
-  const NSPoint location = [self convertPoint:locationInWindow fromView:nil];
+- (void)mouseDown:(NSEvent*)theEvent {
+  // If the click was a Control-click, bring up the context menu.
+  // |NSTextField| handles these cases inconsistently if the field is
+  // not already first responder.
+  if (([theEvent modifierFlags] & NSControlKeyMask) != 0) {
+    NSText* editor = [self currentEditor];
+    NSMenu* menu = [editor menuForEvent:theEvent];
+    [NSMenu popUpContextMenu:menu withEvent:theEvent forView:editor];
+    return;
+  }
+
+  const NSPoint location =
+      [self convertPoint:[theEvent locationInWindow] fromView:nil];
+  const NSRect bounds([self bounds]);
 
   AutocompleteTextFieldCell* cell = [self autocompleteTextFieldCell];
-  const NSRect textFrame([cell textFrameForFrame:[self bounds]]);
+  const NSRect textFrame([cell textFrameForFrame:bounds]);
 
   // A version of the textFrame which extends across the field's
   // entire width.
-  const NSRect bounds([self bounds]);
+
   const NSRect fullFrame(NSMakeRect(bounds.origin.x, textFrame.origin.y,
                                     bounds.size.width, textFrame.size.height));
 
@@ -77,8 +100,9 @@
   // above/below test is needed because NSTextView treats mouse events
   // above/below as select-to-end-in-that-direction, which makes
   // things janky.
-  if (NSMouseInRect(location, textFrame, [self isFlipped]) ||
-      !NSMouseInRect(location, fullFrame, [self isFlipped])) {
+  BOOL flipped = [self isFlipped];
+  if (NSMouseInRect(location, textFrame, flipped) ||
+      !NSMouseInRect(location, fullFrame, flipped)) {
     [super mouseDown:theEvent];
 
     // After the event has been handled, if the current event is a
@@ -101,12 +125,14 @@
     return;
   }
 
-  // Check to see if the user clicked the security hint icon in the cell. If so,
-  // we need to display the page info window.
-  const NSRect hintIconFrame = [cell securityImageFrameForFrame:[self bounds]];
-  if (NSMouseInRect(location, hintIconFrame, [self isFlipped])) {
-    [cell onSecurityIconMousePressed];
-    return;
+  // If the user clicked on one of the icons (security icon, Page
+  // Actions, etc), let the icon handle the click.
+  for (AutocompleteTextFieldIcon* icon in [cell layedOutIcons:bounds]) {
+    const NSRect iconRect = [icon rect];
+    if (NSMouseInRect(location, iconRect, flipped)) {
+      [icon view]->OnMousePressed(iconRect);
+      return;
+    }
   }
 
   NSText* editor = [self currentEditor];
@@ -132,12 +158,14 @@
   [editor mouseDown:theEvent];
 }
 
-// Overriden to pass OnFrameChanged() notifications to |observer_|.
+// Overridden to pass OnFrameChanged() notifications to |observer_|.
+// Additionally, cursor and tooltip rects need to be updated.
 - (void)setFrame:(NSRect)frameRect {
   [super setFrame:frameRect];
   if (observer_) {
     observer_->OnFrameChanged();
   }
+  [self updateCursorAndToolTipRects];
 }
 
 // Due to theming, parts of the field are transparent.
@@ -146,17 +174,17 @@
 }
 
 - (void)setAttributedStringValue:(NSAttributedString*)aString {
-  NSTextView* editor = static_cast<NSTextView*>([self currentEditor]);
+  AutocompleteTextFieldEditor* editor =
+      static_cast<AutocompleteTextFieldEditor*>([self currentEditor]);
+
   if (!editor) {
     [super setAttributedStringValue:aString];
   } else {
-    // -currentEditor is defined to return NSText*, make sure our
-    // assumptions still hold, here.
-    DCHECK([editor isKindOfClass:[NSTextView class]]);
+    // The type of the field editor must be AutocompleteTextFieldEditor,
+    // otherwise things won't work.
+    DCHECK([editor isKindOfClass:[AutocompleteTextFieldEditor class]]);
 
-    NSTextStorage* textStorage = [editor textStorage];
-    DCHECK(textStorage);
-    [textStorage setAttributedString:aString];
+    [editor setAttributedString:aString];
   }
 }
 
@@ -168,6 +196,173 @@
 
 - (void)clearUndoChain {
   [undoManager_ removeAllActions];
+}
+
+// Show the I-beam cursor unless the mouse is over an image within the field
+// (Page Actions or the security icon) in which case show the arrow cursor.
+- (void)resetCursorRects {
+  NSRect fieldBounds = [self bounds];
+  [self addCursorRect:fieldBounds cursor:[NSCursor IBeamCursor]];
+
+  AutocompleteTextFieldCell* cell = [self autocompleteTextFieldCell];
+  for (AutocompleteTextFieldIcon* icon in [cell layedOutIcons:fieldBounds])
+    [self addCursorRect:[icon rect] cursor:[NSCursor arrowCursor]];
+}
+
+- (void)updateCursorAndToolTipRects {
+  // This will force |resetCursorRects| to be called, as it is not to be called
+  // directly.
+  [[self window] invalidateCursorRectsForView:self];
+
+  // |removeAllToolTips| only removes those set on the current NSView, not any
+  // subviews. Unless more tooltips are added to this view, this should suffice
+  // in place of managing a set of NSToolTipTag objects.
+  [self removeAllToolTips];
+  [currentToolTips_ removeAllObjects];
+
+  AutocompleteTextFieldCell* cell = [self autocompleteTextFieldCell];
+  for (AutocompleteTextFieldIcon* icon in [cell layedOutIcons:[self bounds]]) {
+    NSRect iconRect = [icon rect];
+    NSString* tooltip = [icon view]->GetToolTip();
+    if (!tooltip)
+      continue;
+
+    // -[NSView addToolTipRect:owner:userData] does _not_ retain its |owner:|.
+    // Put the string in a collection so it can't be dealloced while in use.
+    [currentToolTips_ addObject:tooltip];
+    [self addToolTipRect:iconRect owner:tooltip userData:nil];
+  }
+}
+
+// NOTE(shess): http://crbug.com/19116 describes a weird bug which
+// happens when the user runs a Print panel on Leopard.  After that,
+// spurious -controlTextDidBeginEditing notifications are sent when an
+// NSTextField is firstResponder, even though -currentEditor on that
+// field returns nil.  That notification caused significant problems
+// in AutocompleteEditViewMac.  -textDidBeginEditing: was NOT being
+// sent in those cases, so this approach doesn't have the problem.
+- (void)textDidBeginEditing:(NSNotification*)aNotification {
+  [super textDidBeginEditing:aNotification];
+  if (observer_) {
+    observer_->OnDidBeginEditing();
+  }
+}
+
+- (void)textDidEndEditing:(NSNotification *)aNotification {
+  [super textDidEndEditing:aNotification];
+  if (observer_) {
+    observer_->OnDidEndEditing();
+  }
+}
+
+- (BOOL)textView:(NSTextView*)textView doCommandBySelector:(SEL)cmd {
+  // TODO(shess): Review code for cases where we're fruitlessly attempting to
+  // work in spite of not having an observer_.
+  if (observer_ && observer_->OnDoCommandBySelector(cmd)) {
+    return YES;
+  }
+
+  // If the escape key was pressed and no revert happened and we're in
+  // fullscreen mode, make it resign key.
+  if (cmd == @selector(cancelOperation:)) {
+    BrowserWindowController* windowController =
+        [BrowserWindowController browserWindowControllerForView:self];
+    if ([windowController isFullscreen]) {
+      [windowController focusTabContents];
+      return YES;
+    }
+  }
+
+  return NO;
+}
+
+- (void)windowDidResignKey:(NSNotification*)notification {
+  DCHECK_EQ([self window], [notification object]);
+  if (observer_) {
+    observer_->OnDidResignKey();
+  }
+}
+
+- (void)viewWillMoveToWindow:(NSWindow*)newWindow {
+  if ([self window]) {
+    NSNotificationCenter* nc = [NSNotificationCenter defaultCenter];
+    [nc removeObserver:self
+                  name:NSWindowDidResignKeyNotification
+                object:[self window]];
+  }
+}
+
+- (void)viewDidMoveToWindow {
+  if ([self window]) {
+    NSNotificationCenter* nc = [NSNotificationCenter defaultCenter];
+    [nc addObserver:self
+           selector:@selector(windowDidResignKey:)
+               name:NSWindowDidResignKeyNotification
+             object:[self window]];
+    // Only register for drops if not in a popup window. Lazily create the
+    // drop handler when the type of window is known.
+    BrowserWindowController* windowController =
+        [BrowserWindowController browserWindowControllerForView:self];
+    if ([windowController isNormalWindow])
+      dropHandler_.reset([[URLDropTargetHandler alloc] initWithView:self]);
+  }
+}
+
+// (Overridden from NSResponder)
+- (BOOL)becomeFirstResponder {
+  BOOL doAccept = [super becomeFirstResponder];
+  if (doAccept) {
+    [[BrowserWindowController browserWindowControllerForView:self]
+        lockBarVisibilityForOwner:self withAnimation:YES delay:NO];
+  }
+  return doAccept;
+}
+
+// (Overridden from NSResponder)
+- (BOOL)resignFirstResponder {
+  BOOL doResign = [super resignFirstResponder];
+  if (doResign) {
+    [[BrowserWindowController browserWindowControllerForView:self]
+        releaseBarVisibilityForOwner:self withAnimation:YES delay:YES];
+  }
+  return doResign;
+}
+
+// (URLDropTarget protocol)
+- (id<URLDropTargetController>)urlDropController {
+  BrowserWindowController* windowController =
+      [BrowserWindowController browserWindowControllerForView:self];
+  return [windowController toolbarController];
+}
+
+// (URLDropTarget protocol)
+- (NSDragOperation)draggingEntered:(id<NSDraggingInfo>)sender {
+  // Make ourself the first responder, which will select the text to indicate
+  // that our contents would be replaced by a drop.
+  // TODO(viettrungluu): crbug.com/30809 -- this is a hack since it steals focus
+  // and doesn't return it.
+  [[self window] makeFirstResponder:self];
+  return [dropHandler_ draggingEntered:sender];
+}
+
+// (URLDropTarget protocol)
+- (NSDragOperation)draggingUpdated:(id<NSDraggingInfo>)sender {
+  return [dropHandler_ draggingUpdated:sender];
+}
+
+// (URLDropTarget protocol)
+- (void)draggingExited:(id<NSDraggingInfo>)sender {
+  return [dropHandler_ draggingExited:sender];
+}
+
+// (URLDropTarget protocol)
+- (BOOL)performDragOperation:(id<NSDraggingInfo>)sender {
+  return [dropHandler_ performDragOperation:sender];
+}
+
+- (NSMenu*)actionMenuForEvent:(NSEvent*)event {
+  return [[self autocompleteTextFieldCell]
+           actionMenuForEvent:event inRect:[self bounds] ofView:self];
 }
 
 @end

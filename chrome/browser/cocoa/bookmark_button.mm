@@ -1,26 +1,16 @@
-// Copyright (c) 2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#import "chrome/browser/cocoa/bookmark_button.h"
 #include "base/logging.h"
 #import "base/scoped_nsobject.h"
-#import "chrome/browser/cocoa/bookmark_button.h"
+#include "chrome/browser/bookmarks/bookmark_model.h"
 #import "chrome/browser/cocoa/bookmark_button_cell.h"
-#import "third_party/GTM/AppKit/GTMTheme.h"
-
-NSString* kBookmarkButtonDragType = @"ChromiumBookmarkButtonDragType";
-
-namespace {
-
-// Code taken from <http://codereview.chromium.org/180036/diff/3001/3004>.
-// TODO(viettrungluu): Do we want common, standard code for drag hysteresis?
-const CGFloat kWebDragStartHysteresisX = 5.0;
-const CGFloat kWebDragStartHysteresisY = 5.0;
+#import "chrome/browser/cocoa/browser_window_controller.h"
 
 // The opacity of the bookmark button drag image.
-const CGFloat kDragImageOpacity = 0.7;
-
-}
+static const CGFloat kDragImageOpacity = 0.7;
 
 @interface BookmarkButton(Private)
 
@@ -29,106 +19,104 @@ const CGFloat kDragImageOpacity = 0.7;
 
 @end  // @interface BookmarkButton(Private)
 
+
 @implementation BookmarkButton
 
-@synthesize draggable = draggable_;
+@synthesize delegate = delegate_;
 
-- (id)initWithFrame:(NSRect)frame {
-  if ((self = [super initWithFrame:frame])) {
-    draggable_ = YES;
-  }
-  return self;
+- (const BookmarkNode*)bookmarkNode {
+  return [[self cell] bookmarkNode];
+}
+
+- (BOOL)isFolder {
+  const BookmarkNode* node = [self bookmarkNode];
+  return (node && node->is_folder());
+}
+
+- (BOOL)isEmpty {
+  return [self bookmarkNode] ? NO : YES;
 }
 
 // By default, NSButton ignores middle-clicks.
+// But we want them.
 - (void)otherMouseUp:(NSEvent*)event {
   [self performClick:self];
 }
 
+// Overridden from DraggableButton.
 - (void)beginDrag:(NSEvent*)event {
-  NSSize dragOffset = NSMakeSize(0.0, 0.0);
-  NSPasteboard* pboard = [NSPasteboard pasteboardWithName:NSDragPboard];
-  [pboard declareTypes:[NSArray arrayWithObject:kBookmarkButtonDragType]
-                 owner:self];
+  // Don't allow a drag of the empty node.
+  // The empty node is a placeholder for "(empty)", to be revisited.
+  if ([self isEmpty])
+    return;
 
-  // This NSData is no longer referenced once the function ends so
-  // there is no need to retain/release when placing in here as an
-  // opaque pointer.
-  [pboard setData:[NSData dataWithBytes:&self length:sizeof(self)]
-          forType:kBookmarkButtonDragType];
+  if ([self delegate]) {
+    // Ask our delegate to fill the pasteboard for us.
+    NSPasteboard* pboard = [NSPasteboard pasteboardWithName:NSDragPboard];
+    [[self delegate] fillPasteboard:pboard forDragOfButton:self];
 
-  // At the moment, moving bookmarks causes their buttons (like me!)
-  // to be destroyed and rebuilt.  Make sure we don't go away while on
-  // the stack.
-  [self retain];
+    // At the moment, moving bookmarks causes their buttons (like me!)
+    // to be destroyed and rebuilt.  Make sure we don't go away while on
+    // the stack.
+    [self retain];
 
-  CGFloat yAt = [self bounds].size.height;
-  [self dragImage:[self dragImage] at:NSMakePoint(0, yAt) offset:dragOffset
-            event:event pasteboard:pboard source:self slideBack:YES];
+    // Lock bar visibility, forcing the overlay to stay visible if we are in
+    // fullscreen mode.
+    if ([[self delegate] dragShouldLockBarVisibility]) {
+      DCHECK(!visibilityDelegate_);
+      NSWindow* window = [[self delegate] browserWindow];
+      visibilityDelegate_ =
+          [BrowserWindowController browserWindowControllerForWindow:window];
+      [visibilityDelegate_ lockBarVisibilityForOwner:self
+                                       withAnimation:NO
+                                               delay:NO];
+    }
 
-  // And we're done.
-  [self autorelease];
+    CGFloat yAt = [self bounds].size.height;
+    NSSize dragOffset = NSMakeSize(0.0, 0.0);
+    [self dragImage:[self dragImage] at:NSMakePoint(0, yAt) offset:dragOffset
+              event:event pasteboard:pboard source:self slideBack:YES];
+
+    // And we're done.
+    [self autorelease];
+  } else {
+    // Avoid blowing up, but we really shouldn't get here.
+    NOTREACHED();
+  }
+}
+
+// Overridden to release bar visibility.
+- (void)endDrag {
+  // visibilityDelegate_ can be nil if we're detached, and that's fine.
+  [visibilityDelegate_ releaseBarVisibilityForOwner:self
+                                      withAnimation:YES
+                                              delay:YES];
+  visibilityDelegate_ = nil;
+  [super endDrag];
 }
 
 - (void)draggedImage:(NSImage*)anImage
              endedAt:(NSPoint)aPoint
            operation:(NSDragOperation)operation {
-  beingDragged_ = NO;
-  [[self cell] setHighlighted:NO];
+  [self endDrag];
 }
 
 - (NSDragOperation)draggingSourceOperationMaskForLocal:(BOOL)isLocal {
-  return isLocal ? NSDragOperationMove : NSDragOperationNone;
+  return isLocal ? NSDragOperationCopy | NSDragOperationMove
+                 : NSDragOperationCopy;
 }
 
-- (void)mouseUp:(NSEvent*)theEvent {
-  // This conditional is never true (DnD loops in Cocoa eat the mouse
-  // up) but I added it in case future versions of Cocoa do unexpected
-  // things.
-  if (beingDragged_)
-    return [super mouseUp:theEvent];
-
-  // There are non-drag cases where a mouseUp: may happen
-  // (e.g. mouse-down, cmd-tab to another application, move mouse,
-  // mouse-up).  So we check.
-  NSPoint viewLocal = [self convertPoint:[theEvent locationInWindow]
-                                fromView:[[self window] contentView]];
-  if (NSPointInRect(viewLocal, [self bounds])) {
-    [self performClick:self];
-  } else {
-    [[self cell] setHighlighted:NO];
-  }
+// mouseEntered: and mouseExited: are called from our
+// BookmarkButtonCell.  We redirect this information to our delegate.
+// The controller can then perform menu-like actions (e.g. "hover over
+// to open menu").
+- (void)mouseEntered:(NSEvent*)event {
+  [delegate_ mouseEnteredButton:self event:event];
 }
 
-// Mimic "begin a click" operation visually.  Do NOT follow through
-// with normal button event handling.
-- (void)mouseDown:(NSEvent*)theEvent {
-  [[self cell] setHighlighted:YES];
-  initialMouseDownLocation_ = [theEvent locationInWindow];
-}
-
-// Return YES if we have crossed a threshold of movement after
-// mouse-down when we should begin a drag.  Else NO.
-- (BOOL)hasCrossedDragThreshold:(NSEvent*)theEvent {
-  NSPoint currentLocation = [theEvent locationInWindow];
-  if ((abs(currentLocation.x - initialMouseDownLocation_.x) >
-       kWebDragStartHysteresisX) ||
-      (abs(currentLocation.y - initialMouseDownLocation_.y) >
-       kWebDragStartHysteresisY)) {
-    return YES;
-  } else {
-    return NO;
-  }
-}
-
-- (void)mouseDragged:(NSEvent*)theEvent {
-  if (beingDragged_)
-    [super mouseDragged:theEvent];
-  else {
-    if (draggable_ && [self hasCrossedDragThreshold:theEvent]) {
-      [self beginDrag:theEvent];
-    }
-  }
+// See comments above mouseEntered:.
+- (void)mouseExited:(NSEvent*)event {
+  [delegate_ mouseExitedButton:self event:event];
 }
 
 @end

@@ -8,12 +8,12 @@
 #include <map>
 #include <string>
 
-#include "app/gfx/native_widget_types.h"
 #include "base/basictypes.h"
-#include "base/gfx/rect.h"
-#include "base/gfx/size.h"
 #include "chrome/browser/renderer_host/render_view_host_delegate.h"
 #include "chrome/browser/tab_contents/render_view_host_delegate_helper.h"
+#include "gfx/native_widget_types.h"
+#include "gfx/rect.h"
+#include "gfx/size.h"
 
 class Browser;
 class RenderViewHost;
@@ -59,9 +59,6 @@ class TabContentsView : public RenderViewHostDelegate::View {
   // Returns the outermost native view. This will be used as the parent for
   // dialog boxes.
   virtual gfx::NativeWindow GetTopLevelNativeWindow() const = 0;
-
-  // Initialize the passed-in renderer preferences.
-  virtual void InitRendererPrefs(RendererPreferences* prefs) {}
 
   // Computes the rectangle for the native widget that contains the contents of
   // the tab relative to its parent.
@@ -118,6 +115,17 @@ class TabContentsView : public RenderViewHostDelegate::View {
   // invoked, SetInitialFocus is invoked.
   virtual void RestoreFocus() = 0;
 
+  // Keyboard events forwarding from the RenderViewHost.
+  // The default implementation just forward the events to the
+  // TabContentsDelegate object.
+  virtual bool PreHandleKeyboardEvent(const NativeWebKeyboardEvent& event,
+                                      bool* is_keyboard_shortcut);
+
+  // Keyboard events forwarding from the RenderViewHost.
+  // The default implementation just forward the events to the
+  // TabContentsDelegate object.
+  virtual void HandleKeyboardEvent(const NativeWebKeyboardEvent& event);
+
   // Simple mouse event forwarding from the RenderViewHost.
   virtual void HandleMouseEvent() {}
   virtual void HandleMouseLeave() {}
@@ -158,8 +166,9 @@ class TabContentsView : public RenderViewHostDelegate::View {
   // associated with the given route. When the widget needs to be shown later,
   // we'll look it up again and pass the object to the Show functions rather
   // than the route ID.
-  virtual RenderWidgetHostView* CreateNewWidgetInternal(int route_id,
-                                                        bool activatable);
+  virtual RenderWidgetHostView* CreateNewWidgetInternal(
+      int route_id,
+      WebKit::WebPopupType popup_type);
   virtual void ShowCreatedWidgetInternal(RenderWidgetHostView* widget_host_view,
                                          const gfx::Rect& initial_pos);
 
@@ -171,13 +180,12 @@ class TabContentsView : public RenderViewHostDelegate::View {
   // do some book-keeping associated with the request. The request is then
   // forwarded to *Internal which does platform-specific work.
   virtual void CreateNewWindow(int route_id);
-  virtual void CreateNewWidget(int route_id, bool activatable);
+  virtual void CreateNewWidget(int route_id, WebKit::WebPopupType popup_type);
   virtual void ShowCreatedWindow(int route_id,
                                  WindowOpenDisposition disposition,
                                  const gfx::Rect& initial_pos,
                                  bool user_gesture);
   virtual void ShowCreatedWidget(int route_id, const gfx::Rect& initial_pos);
-  virtual bool IsReservedAccelerator(const NativeWebKeyboardEvent& event);
 
   // The TabContents whose contents we display.
   TabContents* tab_contents_;

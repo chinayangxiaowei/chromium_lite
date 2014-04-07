@@ -1,4 +1,4 @@
-// Copyright (c) 2006-2008 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -17,15 +17,21 @@
 #include "base/message_loop.h"
 #include "base/path_service.h"
 #include "base/process_util.h"
-#include "base/string_util.h"
 #include "base/thread.h"
 #include "base/time.h"
+#include "base/utf_string_conversions.h"
 #include "base/waitable_event.h"
+#include "net/base/cookie_monster.h"
 #include "net/base/cookie_policy.h"
 #include "net/base/host_resolver.h"
 #include "net/base/io_buffer.h"
 #include "net/base/net_errors.h"
+#include "net/base/net_test_constants.h"
 #include "net/base/ssl_config_service_defaults.h"
+#include "net/disk_cache/disk_cache.h"
+#include "net/ftp/ftp_network_layer.h"
+#include "net/http/http_auth_handler_factory.h"
+#include "net/http/http_cache.h"
 #include "net/http/http_network_layer.h"
 #include "net/socket/ssl_test_util.h"
 #include "net/url_request/url_request.h"
@@ -122,34 +128,66 @@ class TestCookiePolicy : public net::CookiePolicy {
 
 //-----------------------------------------------------------------------------
 
-// This URLRequestContext does not use a local cache.
 class TestURLRequestContext : public URLRequestContext {
  public:
   TestURLRequestContext() {
-    host_resolver_ = net::CreateSystemHostResolver();
+    host_resolver_ = net::CreateSystemHostResolver(NULL);
     proxy_service_ = net::ProxyService::CreateNull();
-    ssl_config_service_ = new net::SSLConfigServiceDefaults;
-    http_transaction_factory_ =
-        net::HttpNetworkLayer::CreateFactory(host_resolver_,
-            proxy_service_, ssl_config_service_);
+    Init();
   }
 
   explicit TestURLRequestContext(const std::string& proxy) {
-    host_resolver_ = net::CreateSystemHostResolver();
+    host_resolver_ = net::CreateSystemHostResolver(NULL);
     net::ProxyConfig proxy_config;
-    proxy_config.proxy_rules.ParseFromString(proxy);
+    proxy_config.proxy_rules().ParseFromString(proxy);
     proxy_service_ = net::ProxyService::CreateFixed(proxy_config);
-    ssl_config_service_ = new net::SSLConfigServiceDefaults;
-    http_transaction_factory_ =
-        net::HttpNetworkLayer::CreateFactory(host_resolver_,
-            proxy_service_, ssl_config_service_);
+    Init();
+  }
+
+  void set_cookie_policy(net::CookiePolicy* policy) {
+    cookie_policy_ = policy;
   }
 
  protected:
-  ~TestURLRequestContext() {
+  virtual ~TestURLRequestContext() {
+    delete ftp_transaction_factory_;
     delete http_transaction_factory_;
+    delete http_auth_handler_factory_;
+  }
+
+ private:
+  void Init() {
+    ftp_transaction_factory_ = new net::FtpNetworkLayer(host_resolver_);
+    ssl_config_service_ = new net::SSLConfigServiceDefaults;
+    http_auth_handler_factory_ = net::HttpAuthHandlerFactory::CreateDefault();
+    http_transaction_factory_ =
+        new net::HttpCache(
+          net::HttpNetworkLayer::CreateFactory(NULL, host_resolver_,
+                                               proxy_service_,
+                                               ssl_config_service_,
+                                               http_auth_handler_factory_),
+          disk_cache::CreateInMemoryCacheBackend(0));
+    // In-memory cookie store.
+    cookie_store_ = new net::CookieMonster(NULL, NULL);
+    accept_language_ = "en-us,fr";
+    accept_charset_ = "iso-8859-1,*,utf-8";
   }
 };
+
+// TODO(phajdan.jr): Migrate callers to the new name and remove the typedef.
+typedef TestURLRequestContext URLRequestTestContext;
+
+//-----------------------------------------------------------------------------
+
+class TestURLRequest : public URLRequest {
+ public:
+  TestURLRequest(const GURL& url, Delegate* delegate)
+      : URLRequest(url, delegate) {
+    set_context(new TestURLRequestContext());
+  }
+};
+
+//-----------------------------------------------------------------------------
 
 class TestDelegate : public URLRequest::Delegate {
  public:
@@ -346,13 +384,15 @@ class TestDelegate : public URLRequest::Delegate {
   scoped_refptr<net::IOBuffer> buf_;
 };
 
+//-----------------------------------------------------------------------------
+
 // This object bounds the lifetime of an external python-based HTTP/FTP server
 // that can provide various responses useful for testing.
 class BaseTestServer : public base::RefCounted<BaseTestServer> {
  protected:
-  BaseTestServer() { }
+  BaseTestServer() {}
   BaseTestServer(int connection_attempts, int connection_timeout)
-      : launcher_(connection_attempts, connection_timeout) { }
+      : launcher_(connection_attempts, connection_timeout) {}
 
  public:
   void set_forking(bool forking) {
@@ -457,6 +497,7 @@ class BaseTestServer : public base::RefCounted<BaseTestServer> {
   std::string port_str_;
 };
 
+//-----------------------------------------------------------------------------
 
 // HTTP
 class HTTPTestServer : public BaseTestServer {
@@ -493,14 +534,16 @@ class HTTPTestServer : public BaseTestServer {
       const std::wstring& document_root,
       const std::wstring& file_root_url,
       MessageLoop* loop) {
-    return CreateServerWithFileRootURL(document_root, file_root_url,
-                                       loop, 10, 1000);
+    return CreateServerWithFileRootURL(document_root, file_root_url, loop,
+                                       net::kDefaultTestConnectionAttempts,
+                                       net::kDefaultTestConnectionTimeout);
   }
 
   static scoped_refptr<HTTPTestServer> CreateForkingServer(
       const std::wstring& document_root) {
     scoped_refptr<HTTPTestServer> test_server =
-        new HTTPTestServer(10, 1000);
+        new HTTPTestServer(net::kDefaultTestConnectionAttempts,
+                           net::kDefaultTestConnectionTimeout);
     test_server->set_forking(true);
     FilePath no_cert;
     FilePath docroot = FilePath::FromWStringHack(document_root);
@@ -594,7 +637,7 @@ class HTTPTestServer : public BaseTestServer {
       retry_count--;
     }
     // Make sure we were successful in stopping the testserver.
-    DCHECK(retry_count > 0);
+    DCHECK_GT(retry_count, 0);
   }
 
   virtual std::string scheme() { return "http"; }
@@ -604,6 +647,8 @@ class HTTPTestServer : public BaseTestServer {
   // is used.
   MessageLoop* loop_;
 };
+
+//-----------------------------------------------------------------------------
 
 class HTTPSTestServer : public HTTPTestServer {
  protected:
@@ -681,6 +726,7 @@ class HTTPSTestServer : public HTTPTestServer {
   virtual ~HTTPSTestServer() {}
 };
 
+//-----------------------------------------------------------------------------
 
 class FTPTestServer : public BaseTestServer {
  public:

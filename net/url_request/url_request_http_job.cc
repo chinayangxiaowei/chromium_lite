@@ -15,7 +15,8 @@
 #include "net/base/cert_status_flags.h"
 #include "net/base/cookie_policy.h"
 #include "net/base/filter.h"
-#include "net/base/strict_transport_security_state.h"
+#include "net/base/https_prober.h"
+#include "net/base/transport_security_state.h"
 #include "net/base/load_flags.h"
 #include "net/base/net_errors.h"
 #include "net/base/net_util.h"
@@ -47,17 +48,24 @@ URLRequestJob* URLRequestHttpJob::Factory(URLRequest* request,
     return new URLRequestErrorJob(request, net::ERR_INVALID_ARGUMENT);
   }
 
+  net::TransportSecurityState::DomainState domain_state;
   if (scheme == "http" &&
-      request->context()->strict_transport_security_state() &&
-      request->context()->strict_transport_security_state()->IsEnabledForHost(
-          request->url().host())) {
-    DCHECK_EQ(request->url().scheme(), "http");
-    url_canon::Replacements<char> replacements;
-    static const char kNewScheme[] = "https";
-    replacements.SetScheme(kNewScheme,
-                           url_parse::Component(0, strlen(kNewScheme)));
-    GURL new_location = request->url().ReplaceComponents(replacements);
-    return new URLRequestRedirectJob(request, new_location);
+      (request->url().port().empty() || port == 80) &&
+      request->context()->transport_security_state() &&
+      request->context()->transport_security_state()->IsEnabledForHost(
+          &domain_state, request->url().host())) {
+    if (domain_state.mode ==
+         net::TransportSecurityState::DomainState::MODE_STRICT) {
+      DCHECK_EQ(request->url().scheme(), "http");
+      url_canon::Replacements<char> replacements;
+      static const char kNewScheme[] = "https";
+      replacements.SetScheme(kNewScheme,
+                             url_parse::Component(0, strlen(kNewScheme)));
+      GURL new_location = request->url().ReplaceComponents(replacements);
+      return new URLRequestRedirectJob(request, new_location);
+    } else {
+      // TODO(agl): implement opportunistic HTTPS upgrade.
+    }
   }
 
   return new URLRequestHttpJob(request);
@@ -399,10 +407,6 @@ void URLRequestHttpJob::ContinueDespiteLastError() {
       this, &URLRequestHttpJob::OnStartCompleted, rv));
 }
 
-bool URLRequestHttpJob::GetMoreData() {
-  return transaction_.get() && !read_in_progress_;
-}
-
 bool URLRequestHttpJob::ReadRawData(net::IOBuffer* buf, int buf_size,
                                     int *bytes_read) {
   DCHECK_NE(buf_size, 0);
@@ -425,6 +429,11 @@ bool URLRequestHttpJob::ReadRawData(net::IOBuffer* buf, int buf_size,
   return false;
 }
 
+void URLRequestHttpJob::StopCaching() {
+  if (transaction_.get())
+    transaction_->StopCaching();
+}
+
 void URLRequestHttpJob::OnCanGetCookiesCompleted(int policy) {
   // If the request was destroyed, then there is no more work to do.
   if (request_ && request_->delegate()) {
@@ -436,7 +445,7 @@ void URLRequestHttpJob::OnCanGetCookiesCompleted(int policy) {
       std::string cookies =
           request_->context()->cookie_store()->GetCookiesWithOptions(
               request_->url(), options);
-      if (request_->context()->AllowSendingCookies(request_) &&
+      if (request_->context()->InterceptRequestCookies(request_, cookies) &&
           !cookies.empty())
         request_info_.extra_headers += "Cookie: " + cookies + "\r\n";
     }
@@ -527,11 +536,16 @@ bool URLRequestHttpJob::ShouldTreatAsCertificateError(int result) {
     return false;
 
   // Check whether our context is using Strict-Transport-Security.
-  if (!context_->strict_transport_security_state())
+  if (!context_->transport_security_state())
     return true;
 
-  return !context_->strict_transport_security_state()->IsEnabledForHost(
-      request_info_.url.host());
+  net::TransportSecurityState::DomainState domain_state;
+  // TODO(agl): don't ignore opportunistic mode.
+  const bool r = context_->transport_security_state()->IsEnabledForHost(
+      &domain_state, request_info_.url.host());
+
+  return !r || domain_state.mode ==
+               net::TransportSecurityState::DomainState::MODE_OPPORTUNISTIC;
 }
 
 void URLRequestHttpJob::NotifyHeadersComplete() {
@@ -603,7 +617,7 @@ void URLRequestHttpJob::StartTransaction() {
         &transaction_);
     if (rv == net::OK) {
       rv = transaction_->Start(
-          &request_info_, &start_callback_, request_->load_log());
+          &request_info_, &start_callback_, request_->net_log());
     }
   }
 
@@ -759,33 +773,130 @@ void URLRequestHttpJob::FetchResponseCookies(
 
   void* iter = NULL;
   while (response_info->headers->EnumerateHeader(&iter, name, &value)) {
-    if (request_->context()->InterceptCookie(request_, &value))
+    if (request_->context()->InterceptResponseCookie(request_, value))
       cookies->push_back(value);
   }
 }
 
+class HTTPSProberDelegate : public net::HTTPSProberDelegate {
+ public:
+  HTTPSProberDelegate(const std::string& host, int max_age,
+                      bool include_subdomains,
+                      net::TransportSecurityState* sts)
+      : host_(host),
+        max_age_(max_age),
+        include_subdomains_(include_subdomains),
+        sts_(sts) { }
+
+  virtual void ProbeComplete(bool result) {
+    if (result) {
+      base::Time current_time(base::Time::Now());
+      base::TimeDelta max_age_delta = base::TimeDelta::FromSeconds(max_age_);
+
+      net::TransportSecurityState::DomainState domain_state;
+      domain_state.expiry = current_time + max_age_delta;
+      domain_state.mode =
+          net::TransportSecurityState::DomainState::MODE_OPPORTUNISTIC;
+      domain_state.include_subdomains = include_subdomains_;
+
+      sts_->EnableHost(host_, domain_state);
+    }
+
+    delete this;
+  }
+
+ private:
+  const std::string host_;
+  const int max_age_;
+  const bool include_subdomains_;
+  scoped_refptr<net::TransportSecurityState> sts_;
+};
 
 void URLRequestHttpJob::ProcessStrictTransportSecurityHeader() {
   DCHECK(response_info_);
 
-  // Only process Strict-Transport-Security from HTTPS responses.
-  if (request_info_.url.scheme() != "https")
-    return;
-
-  // Only process Strict-Transport-Security from responses with valid certificates.
-  if (response_info_->ssl_info.cert_status & net::CERT_STATUS_ALL_ERRORS)
-    return;
-
   URLRequestContext* ctx = request_->context();
-  if (!ctx || !ctx->strict_transport_security_state())
+  if (!ctx || !ctx->transport_security_state())
     return;
+
+  const bool https = response_info_->ssl_info.is_valid();
+  const bool valid_https =
+      https &&
+      !(response_info_->ssl_info.cert_status & net::CERT_STATUS_ALL_ERRORS);
 
   std::string name = "Strict-Transport-Security";
   std::string value;
 
+  int max_age;
+  bool include_subdomains;
+
   void* iter = NULL;
   while (response_info_->headers->EnumerateHeader(&iter, name, &value)) {
-    ctx->strict_transport_security_state()->DidReceiveHeader(
-        request_info_.url, value);
+    const bool ok = net::TransportSecurityState::ParseHeader(
+        value, &max_age, &include_subdomains);
+    if (!ok)
+      continue;
+    // We will only accept strict mode if we saw the header from an HTTPS
+    // connection with no certificate problems.
+    if (!valid_https)
+      continue;
+    base::Time current_time(base::Time::Now());
+    base::TimeDelta max_age_delta = base::TimeDelta::FromSeconds(max_age);
+
+    net::TransportSecurityState::DomainState domain_state;
+    domain_state.expiry = current_time + max_age_delta;
+    domain_state.mode = net::TransportSecurityState::DomainState::MODE_STRICT;
+    domain_state.include_subdomains = include_subdomains;
+
+    ctx->transport_security_state()->EnableHost(request_info_.url.host(),
+                                                domain_state);
+  }
+
+  // TODO(agl): change this over when we have fixed things at the server end.
+  // The string should be "Opportunistic-Transport-Security";
+  name = "X-Bodge-Transport-Security";
+
+  while (response_info_->headers->EnumerateHeader(&iter, name, &value)) {
+    const bool ok = net::TransportSecurityState::ParseHeader(
+        value, &max_age, &include_subdomains);
+    if (!ok)
+      continue;
+    // If we saw an opportunistic request over HTTPS, then clearly we can make
+    // HTTPS connections to the host so we should remember this.
+    if (https) {
+      base::Time current_time(base::Time::Now());
+      base::TimeDelta max_age_delta = base::TimeDelta::FromSeconds(max_age);
+
+      net::TransportSecurityState::DomainState domain_state;
+      domain_state.expiry = current_time + max_age_delta;
+      domain_state.mode =
+          net::TransportSecurityState::DomainState::MODE_SPDY_ONLY;
+      domain_state.include_subdomains = include_subdomains;
+
+      ctx->transport_security_state()->EnableHost(request_info_.url.host(),
+                                                  domain_state);
+      continue;
+    }
+
+    if (!request())
+      break;
+
+    // At this point, we have a request for opportunistic encryption over HTTP.
+    // In this case we need to probe to check that we can make HTTPS
+    // connections to that host.
+    net::HTTPSProber* const prober = Singleton<net::HTTPSProber>::get();
+    if (prober->HaveProbed(request_info_.url.host()) ||
+        prober->InFlight(request_info_.url.host())) {
+      continue;
+    }
+
+    net::HTTPSProberDelegate* delegate =
+        new HTTPSProberDelegate(request_info_.url.host(), max_age,
+                                include_subdomains,
+                                ctx->transport_security_state());
+    if (!prober->ProbeHost(request_info_.url.host(), request()->context(),
+                           delegate)) {
+      delete delegate;
+    }
   }
 }

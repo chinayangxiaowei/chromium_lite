@@ -37,7 +37,7 @@ function updateBotList(text) {
 
 function displayFailures() {
   bots.innerText = "";
-  
+
   if (failures.length == 0) {
     var anchor = document.createElement("a");
     anchor.addEventListener("click", showConsole);
@@ -52,7 +52,7 @@ function displayFailures() {
     var div = document.createElement("div");
     div.appendChild(anchor);
     bots.appendChild(div);
-    
+
     failures.forEach(function(bot, i) {
       var div = document.createElement("div");
       div.className = "bot " + bot.color;

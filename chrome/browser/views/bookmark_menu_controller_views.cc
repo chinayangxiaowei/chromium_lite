@@ -1,4 +1,4 @@
-// Copyright (c) 2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,6 +9,7 @@
 #include "app/resource_bundle.h"
 #include "base/stl_util-inl.h"
 #include "chrome/browser/bookmarks/bookmark_drag_data.h"
+#include "chrome/browser/bookmarks/bookmark_model.h"
 #include "chrome/browser/bookmarks/bookmark_utils.h"
 #include "chrome/browser/metrics/user_metrics.h"
 #include "chrome/browser/profile.h"
@@ -193,20 +194,21 @@ int BookmarkMenuController::OnPerformDrop(MenuItemView* menu,
 
 bool BookmarkMenuController::ShowContextMenu(MenuItemView* source,
                                              int id,
-                                             int x,
-                                             int y,
+                                             const gfx::Point& p,
                                              bool is_mouse_gesture) {
   DCHECK(menu_id_to_node_map_.find(id) != menu_id_to_node_map_.end());
   std::vector<const BookmarkNode*> nodes;
   nodes.push_back(menu_id_to_node_map_[id]);
   context_menu_.reset(
-      new BookmarkContextMenu(parent_,
-                              profile_,
-                              page_navigator_,
-                              nodes[0]->GetParent(),
-                              nodes,
-                              BookmarkContextMenuController::BOOKMARK_BAR));
-  context_menu_->RunMenuAt(gfx::Point(x, y));
+      new BookmarkContextMenu(
+          parent_,
+          profile_,
+          page_navigator_,
+          nodes[0]->GetParent(),
+          nodes,
+          BookmarkContextMenuControllerViews::BOOKMARK_BAR));
+  context_menu_->set_observer(this);
+  context_menu_->RunMenuAt(p);
   context_menu_.reset(NULL);
   return true;
 }
@@ -225,7 +227,8 @@ void BookmarkMenuController::WriteDragData(MenuItemView* sender,
                                            OSExchangeData* data) {
   DCHECK(sender && data);
 
-  UserMetrics::RecordAction(L"BookmarkBar_DragFromFolder", profile_);
+  UserMetrics::RecordAction(UserMetricsAction("BookmarkBar_DragFromFolder"),
+                            profile_);
 
   BookmarkDragData drag_data(menu_id_to_node_map_[sender->GetCommand()]);
   drag_data.Write(profile_, data);
@@ -271,8 +274,7 @@ void BookmarkMenuController::BookmarkModelChanged() {
 
 void BookmarkMenuController::BookmarkNodeFavIconLoaded(
     BookmarkModel* model, const BookmarkNode* node) {
-  std::map<const BookmarkNode*, int>::iterator menu_pair =
-      node_to_menu_id_map_.find(node);
+  NodeToMenuIDMap::iterator menu_pair = node_to_menu_id_map_.find(node);
   if (menu_pair == node_to_menu_id_map_.end())
     return;  // We're not showing a menu item for the node.
 
@@ -285,6 +287,19 @@ void BookmarkMenuController::BookmarkNodeFavIconLoaded(
       return;
     }
   }
+}
+
+void BookmarkMenuController::WillRemoveBookmarks(
+    const std::vector<const BookmarkNode*>& bookmarks) {
+  std::set<MenuItemView*> removed_menus;
+
+  WillRemoveBookmarksImpl(bookmarks, &removed_menus);
+
+  STLDeleteElements(&removed_menus);
+}
+
+void BookmarkMenuController::DidRemoveBookmarks() {
+  profile_->GetBookmarkModel()->AddObserver(this);
 }
 
 MenuItemView* BookmarkMenuController::CreateMenu(const BookmarkNode* parent,
@@ -337,6 +352,7 @@ void BookmarkMenuController::BuildMenu(const BookmarkNode* parent,
           GetBitmapNamed(IDR_BOOKMARK_BAR_FOLDER);
       MenuItemView* submenu =
           menu->AppendSubMenuWithIcon(id, node->GetTitle(), *folder_icon);
+      node_to_menu_id_map_[node] = id;
       BuildMenu(node, 0, submenu, next_menu_id);
     } else {
       NOTREACHED();
@@ -350,4 +366,67 @@ BookmarkMenuController::~BookmarkMenuController() {
   if (observer_)
     observer_->BookmarkMenuDeleted(this);
   STLDeleteValues(&node_to_menu_map_);
+}
+
+MenuItemView* BookmarkMenuController::GetMenuByID(int id) {
+  for (NodeToMenuMap::const_iterator i = node_to_menu_map_.begin();
+       i != node_to_menu_map_.end(); ++i) {
+    MenuItemView* menu = i->second->GetMenuItemByID(id);
+    if (menu)
+      return menu;
+  }
+  return NULL;
+}
+
+void BookmarkMenuController::WillRemoveBookmarksImpl(
+      const std::vector<const BookmarkNode*>& bookmarks,
+      std::set<views::MenuItemView*>* removed_menus) {
+  // Remove the observer so that when the remove happens we don't prematurely
+  // cancel the menu.
+  profile_->GetBookmarkModel()->RemoveObserver(this);
+
+  // Remove the menu items.
+  std::set<MenuItemView*> changed_parent_menus;
+  for (std::vector<const BookmarkNode*>::const_iterator i = bookmarks.begin();
+       i != bookmarks.end(); ++i) {
+    NodeToMenuIDMap::iterator node_to_menu = node_to_menu_id_map_.find(*i);
+    if (node_to_menu != node_to_menu_id_map_.end()) {
+      MenuItemView* menu = GetMenuByID(node_to_menu->second);
+      DCHECK(menu);  // If there an entry in node_to_menu_id_map_, there should
+                     // be a menu.
+      removed_menus->insert(menu);
+      changed_parent_menus.insert(menu->GetParentMenuItem());
+      menu->GetParent()->RemoveChildView(menu);
+      node_to_menu_id_map_.erase(node_to_menu);
+    }
+  }
+
+  // All the bookmarks in |bookmarks| should have the same parent. It's possible
+  // to support different parents, but this would need to prune any nodes whose
+  // parent has been removed. As all nodes currently have the same parent, there
+  // is the DCHECK.
+  DCHECK(changed_parent_menus.size() <= 1);
+
+  for (std::set<MenuItemView*>::const_iterator i = changed_parent_menus.begin();
+       i != changed_parent_menus.end(); ++i) {
+    (*i)->ChildrenChanged();
+  }
+
+  // Remove any descendants of the removed nodes in node_to_menu_id_map_.
+  for (NodeToMenuIDMap::iterator i = node_to_menu_id_map_.begin();
+       i != node_to_menu_id_map_.end(); ) {
+    bool ancestor_removed = false;
+    for (std::vector<const BookmarkNode*>::const_iterator j = bookmarks.begin();
+         j != bookmarks.end(); ++j) {
+      if (i->first->HasAncestor(*j)) {
+        ancestor_removed = true;
+        break;
+      }
+    }
+    if (ancestor_removed) {
+      node_to_menu_id_map_.erase(i++);
+    } else {
+      ++i;
+    }
+  }
 }

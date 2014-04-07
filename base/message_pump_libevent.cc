@@ -13,7 +13,11 @@
 #include "base/scoped_nsautorelease_pool.h"
 #include "base/scoped_ptr.h"
 #include "base/time.h"
+#if defined(USE_SYSTEM_LIBEVENT)
+#include <event.h>
+#else
 #include "third_party/libevent/event.h"
+#endif
 
 // Lifecycle of struct event
 // Libevent uses two main data structures:
@@ -149,7 +153,7 @@ bool MessagePumpLibevent::WatchFileDescriptor(int fd,
                                               Mode mode,
                                               FileDescriptorWatcher *controller,
                                               Watcher *delegate) {
-  DCHECK(fd > 0);
+  DCHECK_GE(fd, 0);
   DCHECK(controller);
   DCHECK(delegate);
   DCHECK(mode == WATCH_READ || mode == WATCH_WRITE || mode == WATCH_READ_WRITE);

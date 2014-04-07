@@ -53,9 +53,17 @@ class FindInPageTest : public InProcessBrowserTest {
 
   int GetFocusedViewID() {
 #if defined(TOOLKIT_VIEWS)
+#if defined(OS_LINUX)
+    // See http://crbug.com/26873 .
+    views::FocusManager* focus_manager =
+        views::FocusManager::GetFocusManagerForNativeView(
+            GTK_WIDGET(browser()->window()->GetNativeHandle()));
+#else
     views::FocusManager* focus_manager =
         views::FocusManager::GetFocusManagerForNativeView(
             browser()->window()->GetNativeHandle());
+#endif
+
     if (!focus_manager) {
       NOTREACHED();
       return -1;
@@ -125,7 +133,8 @@ IN_PROC_BROWSER_TEST_F(FindInPageTest, FocusRestore) {
   // Ensure the creation of the find bar controller.
   browser()->GetFindBarController()->Show();
   EXPECT_EQ(VIEW_ID_FIND_IN_PAGE_TEXT_FIELD, GetFocusedViewID());
-  browser()->GetFindBarController()->EndFindSession();
+  browser()->GetFindBarController()->EndFindSession(
+      FindBarController::kKeepSelection);
   EXPECT_EQ(VIEW_ID_LOCATION_BAR, GetFocusedViewID());
 
   // Focus the location bar, find something on the page, close the find box,
@@ -134,8 +143,9 @@ IN_PROC_BROWSER_TEST_F(FindInPageTest, FocusRestore) {
   browser()->Find();
   EXPECT_EQ(VIEW_ID_FIND_IN_PAGE_TEXT_FIELD, GetFocusedViewID());
   ui_test_utils::FindInPage(browser()->GetSelectedTabContents(),
-                            L"a", true, false, NULL);
-  browser()->GetFindBarController()->EndFindSession();
+                            ASCIIToUTF16("a"), true, false, NULL);
+  browser()->GetFindBarController()->EndFindSession(
+      FindBarController::kKeepSelection);
   EXPECT_EQ(VIEW_ID_TAB_CONTAINER_FOCUS_VIEW, GetFocusedViewID());
 
   // Focus the location bar, open and close the find box, focus should return to
@@ -145,6 +155,7 @@ IN_PROC_BROWSER_TEST_F(FindInPageTest, FocusRestore) {
   EXPECT_EQ(VIEW_ID_LOCATION_BAR, GetFocusedViewID());
   browser()->GetFindBarController()->Show();
   EXPECT_EQ(VIEW_ID_FIND_IN_PAGE_TEXT_FIELD, GetFocusedViewID());
-  browser()->GetFindBarController()->EndFindSession();
+  browser()->GetFindBarController()->EndFindSession(
+      FindBarController::kKeepSelection);
   EXPECT_EQ(VIEW_ID_LOCATION_BAR, GetFocusedViewID());
 }

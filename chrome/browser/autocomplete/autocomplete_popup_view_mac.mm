@@ -4,15 +4,15 @@
 
 #include "chrome/browser/autocomplete/autocomplete_popup_view_mac.h"
 
-#include "app/gfx/text_elider.h"
 #include "app/resource_bundle.h"
+#include "app/text_elider.h"
 #include "base/sys_string_conversions.h"
-#include "base/gfx/rect.h"
 #include "chrome/browser/autocomplete/autocomplete_edit.h"
 #include "chrome/browser/autocomplete/autocomplete_edit_view_mac.h"
 #include "chrome/browser/autocomplete/autocomplete_popup_model.h"
 #include "chrome/browser/bubble_positioner.h"
 #include "chrome/browser/cocoa/event_utils.h"
+#include "gfx/rect.h"
 #include "grit/theme_resources.h"
 #import "third_party/GTM/AppKit/GTMNSAnimation+Duration.h"
 
@@ -38,10 +38,10 @@ const CGFloat kPopupFieldGap = 2.0;
 const CGFloat kPopupAlpha = 240.0 / 255.0;
 
 // How much space to leave for the left and right margins.
-const CGFloat kLeftRightMargin = 8.0;
+const CGFloat kLeftRightMargin = 6.0;
 
 // How far to offset the text column from the left.
-const CGFloat kTextXOffset = 33.0;
+const CGFloat kTextXOffset = 31.0;
 
 // Animation duration when animating the popup window smaller.
 const CGFloat kShrinkAnimationDuration = 0.1;
@@ -254,6 +254,7 @@ NSAttributedString* AutocompletePopupViewMac::MatchText(
   NSMutableParagraphStyle* style =
       [[[NSMutableParagraphStyle alloc] init] autorelease];
   [style setLineBreakMode:NSLineBreakByTruncatingTail];
+  [style setTighteningFactorForTruncation:0.0];
   [as addAttribute:NSParagraphStyleAttributeName value:style
              range:NSMakeRange(0, [as length])];
 
@@ -272,36 +273,20 @@ NSAttributedString* AutocompletePopupViewMac::MatchText(
 // highlighting the cell the mouse is over.
 
 @interface AutocompleteMatrix : NSMatrix {
-  SEL middleClickAction_;
+ @private
+  // Target for click and middle-click.
+  AutocompletePopupViewMac* popupView_;  // weak, owns us.
 }
 
-// Action to be called when the middle mouse button is released.
-- (void)setMiddleClickAction:(SEL)anAction;
+// Create a zero-size matrix initializing |popupView_|.
+- initWithPopupView:(AutocompletePopupViewMac*)popupView;
+
+// Set |popupView_|.
+- (void)setPopupView:(AutocompletePopupViewMac*)popupView;
 
 // Return the currently highlighted row.  Returns -1 if no row is
 // highlighted.
 - (NSInteger)highlightedRow;
-
-@end
-
-// Thin Obj-C bridge class between the target of the popup window's
-// AutocompleteMatrix and the AutocompletePopupView implementation.
-
-// TODO(shess): Now that I'm using AutocompleteMatrix, I could instead
-// subvert the target/action stuff and have it message popup_view_
-// directly.
-
-@interface AutocompleteMatrixTarget : NSObject {
- @private
-  AutocompletePopupViewMac* popup_view_;  // weak, owns us.
-}
-- initWithPopupView:(AutocompletePopupViewMac*)view;
-
-// Tell popup model via popup_view_ about the selected row.
-- (void)select:(id)sender;
-
-// Call |popup_view_| OnMiddleClick().
-- (void)middleSelect:(id)sender;
 
 @end
 
@@ -315,7 +300,6 @@ AutocompletePopupViewMac::AutocompletePopupViewMac(
       edit_view_(edit_view),
       bubble_positioner_(bubble_positioner),
       field_(field),
-      matrix_target_([[AutocompleteMatrixTarget alloc] initWithPopupView:this]),
       popup_(nil) {
   DCHECK(edit_view);
   DCHECK(edit_model);
@@ -332,8 +316,9 @@ AutocompletePopupViewMac::~AutocompletePopupViewMac() {
   model_.reset();
 
   // Break references to matrix_target_ before it is released.
-  NSMatrix* matrix = [popup_ contentView];
-  [matrix setTarget:nil];
+  AutocompleteMatrix* matrix = [popup_ contentView];
+  DCHECK(matrix == nil || [matrix isKindOfClass:[AutocompleteMatrix class]]);
+  [matrix setPopupView:NULL];
 }
 
 bool AutocompletePopupViewMac::IsOpen() const {
@@ -355,11 +340,8 @@ void AutocompletePopupViewMac::CreatePopupIfNeeded() {
     [popup_ setHasShadow:YES];
     [popup_ setLevel:NSNormalWindowLevel];
 
-    AutocompleteMatrix* matrix =
-        [[[AutocompleteMatrix alloc] initWithFrame:NSZeroRect] autorelease];
-    [matrix setTarget:matrix_target_];
-    [matrix setAction:@selector(select:)];
-    [matrix setMiddleClickAction:@selector(middleSelect:)];
+    scoped_nsobject<AutocompleteMatrix> matrix(
+        [[AutocompleteMatrix alloc] initWithPopupView:this]);
     [popup_ setContentView:matrix];
   }
 }
@@ -433,8 +415,9 @@ void AutocompletePopupViewMac::UpdatePopupAppearance() {
       r.origin.x == oldFrame.origin.x &&
       r.size.width == oldFrame.size.width) {
     [NSAnimationContext beginGrouping];
-    [[NSAnimationContext currentContext]
-        gtm_setDuration:kShrinkAnimationDuration];
+    // Don't use the GTM additon for the "Steve" slowdown because this can
+    // happen async from user actions and the effects could be a surprise.
+   [[NSAnimationContext currentContext] setDuration:kShrinkAnimationDuration];
     [[popup_ animator] setFrame:r display:YES];
     [NSAnimationContext endGrouping];
   } else {
@@ -457,27 +440,8 @@ AutocompletePopupModel* AutocompletePopupViewMac::GetModel() {
   return model_.get();
 }
 
-void AutocompletePopupViewMac::OnClick() {
-  const NSInteger selectedRow = [[popup_ contentView] selectedRow];
-
-  // -1 means no cells were selected.  This can happen if the user
-  // clicked and then dragged their mouse off the popup before
-  // releasing, so reset the selection and ignore the event.
-  if (selectedRow == -1) {
-    PaintUpdatesNow();
-  } else {
-    OpenURLForRow(selectedRow, false);
-  }
-}
-
-void AutocompletePopupViewMac::OnMiddleClick() {
-  OpenURLForRow([[popup_ contentView] highlightedRow], true);
-}
-
 void AutocompletePopupViewMac::OpenURLForRow(int row, bool force_background) {
-  if (row == -1) {
-    return;
-  }
+  DCHECK_GE(row, 0);
 
   WindowOpenDisposition disposition = NEW_BACKGROUND_TAB;
   if (!force_background) {
@@ -575,11 +539,11 @@ void AutocompletePopupViewMac::OpenURLForRow(int row, bool force_background) {
   options |= NSTrackingActiveInActiveApp;
   options |= NSTrackingInVisibleRect;
 
-  NSTrackingArea* trackingArea =
-      [[[NSTrackingArea alloc] initWithRect:[self frame]
-                                    options:options
-                                      owner:self
-                                   userInfo:nil] autorelease];
+  scoped_nsobject<NSTrackingArea> trackingArea(
+      [[NSTrackingArea alloc] initWithRect:[self frame]
+                                   options:options
+                                     owner:self
+                                  userInfo:nil]);
   [self addTrackingArea:trackingArea];
 }
 
@@ -588,9 +552,11 @@ void AutocompletePopupViewMac::OpenURLForRow(int row, bool force_background) {
   [super updateTrackingAreas];
 }
 
-- initWithFrame:(NSRect)frame {
-  self = [super initWithFrame:frame];
+- initWithPopupView:(AutocompletePopupViewMac*)popupView {
+  self = [super initWithFrame:NSZeroRect];
   if (self) {
+    popupView_ = popupView;
+
     [self setCellClass:[AutocompleteButtonCell class]];
 
     // Cells pack with no spacing.
@@ -606,6 +572,10 @@ void AutocompletePopupViewMac::OpenURLForRow(int row, bool force_background) {
     [self resetTrackingArea];
   }
   return self;
+}
+
+- (void)setPopupView:(AutocompletePopupViewMac*)popupView {
+  popupView_ = popupView;
 }
 
 - (void)highlightRowAt:(NSInteger)rowIndex {
@@ -665,8 +635,55 @@ void AutocompletePopupViewMac::OpenURLForRow(int row, bool force_background) {
   // location, but make sure the user is getting the right feedback.
   [self highlightRowUnder:theEvent];
 
-  // This does the right thing if target is nil.
-  [NSApp sendAction:middleClickAction_ to:[self target] from:self];
+  const NSInteger highlightedRow = [self highlightedRow];
+  if (highlightedRow != -1) {
+    DCHECK(popupView_);
+    popupView_->OpenURLForRow(highlightedRow, true);
+  }
+}
+
+// Select cell under |theEvent|, returning YES if a selection is made.
+- (BOOL)selectCellForEvent:(NSEvent*)theEvent {
+  NSPoint point = [self convertPoint:[theEvent locationInWindow] fromView:nil];
+
+  NSInteger row, column;
+  if ([self getRow:&row column:&column forPoint:point]) {
+    DCHECK_EQ(column, 0);
+    [self selectCellAtRow:row column:column];
+    return YES;
+  }
+  return NO;
+}
+
+// Track the mouse until released, keeping the cell under the mouse
+// selected.  If the mouse wanders off-view, revert to the
+// originally-selected cell.  If the mouse is released over a cell,
+// call |popupView_| to open the row's URL.
+- (void)mouseDown:(NSEvent*)theEvent {
+  NSCell* selectedCell = [self selectedCell];
+
+  // Clear any existing highlight.
+  [self highlightRowAt:-1];
+
+  do {
+    if (![self selectCellForEvent:theEvent]) {
+      [self selectCell:selectedCell];
+    }
+
+    const NSUInteger mask = NSLeftMouseUpMask | NSLeftMouseDraggedMask;
+    theEvent = [[self window] nextEventMatchingMask:mask];
+  } while ([theEvent type] == NSLeftMouseDragged);
+
+  // Do not message |popupView_| if released outside view.
+  if (![self selectCellForEvent:theEvent]) {
+    [self selectCell:selectedCell];
+  } else {
+    const NSInteger selectedRow = [self selectedRow];
+    DCHECK_GE(selectedRow, 0);
+
+    DCHECK(popupView_);
+    popupView_->OpenURLForRow(selectedRow, false);
+  }
 }
 
 - (NSInteger)highlightedRow {
@@ -678,10 +695,6 @@ void AutocompletePopupViewMac::OpenURLForRow(int row, bool force_background) {
     }
   }
   return -1;
-}
-
-- (void)setMiddleClickAction:(SEL)anAction {
-  middleClickAction_ = anAction;
 }
 
 - (BOOL)isOpaque {
@@ -701,33 +714,6 @@ void AutocompletePopupViewMac::OpenURLForRow(int row, bool force_background) {
   [path addClip];
   [super drawRect:rect];
   [NSGraphicsContext restoreGraphicsState];
-}
-
-@end
-
-@implementation AutocompleteMatrixTarget
-
-- initWithPopupView:(AutocompletePopupViewMac*)view {
-  self = [super init];
-  if (self) {
-    popup_view_ = view;
-  }
-  return self;
-}
-
-- (void)dealloc {
-  [[NSNotificationCenter defaultCenter] removeObserver:self];
-  [super dealloc];
-}
-
-- (void)select:(id)sender {
-  DCHECK(popup_view_);
-  popup_view_->OnClick();
-}
-
-- (void)middleSelect:(id)sender {
-  DCHECK(popup_view_);
-  popup_view_->OnMiddleClick();
 }
 
 @end

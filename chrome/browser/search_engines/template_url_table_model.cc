@@ -4,13 +4,18 @@
 
 #include "chrome/browser/search_engines/template_url_table_model.h"
 
-#include "app/gfx/codec/png_codec.h"
+#include <vector>
+
 #include "app/l10n_util.h"
 #include "app/resource_bundle.h"
 #include "app/table_model_observer.h"
+#include "base/callback.h"
+#include "base/i18n/rtl.h"
 #include "base/stl_util-inl.h"
+#include "base/utf_string_conversions.h"
 #include "chrome/browser/favicon_service.h"
 #include "chrome/browser/profile.h"
+#include "gfx/codec/png_codec.h"
 #include "grit/app_resources.h"
 #include "grit/generated_resources.h"
 
@@ -93,7 +98,7 @@ class ModelEntry {
   void OnFavIconDataAvailable(
       FaviconService::Handle handle,
       bool know_favicon,
-      scoped_refptr<RefCountedBytes> data,
+      scoped_refptr<RefCountedMemory> data,
       bool expired,
       GURL icon_url) {
     load_state_ = LOADED;
@@ -176,8 +181,8 @@ std::wstring TemplateURLTableModel::GetText(int row, int col_id) {
       // TODO(xji): Consider adding a special case if the short name is a URL,
       // since those should always be displayed LTR. Please refer to
       // http://crbug.com/6726 for more information.
-      l10n_util::AdjustStringForLocaleDirection(url_short_name,
-                                                &url_short_name);
+      base::i18n::AdjustStringForLocaleDirection(url_short_name,
+                                                 &url_short_name);
       return (template_url_model_->GetDefaultSearchProvider() == &url) ?
           l10n_util::GetStringF(IDS_SEARCH_ENGINES_EDITOR_DEFAULT_ENGINE,
                                 url_short_name) : url_short_name;
@@ -186,9 +191,9 @@ std::wstring TemplateURLTableModel::GetText(int row, int col_id) {
     case IDS_SEARCH_ENGINES_EDITOR_KEYWORD_COLUMN: {
       const std::wstring& keyword = url.keyword();
       // Keyword should be domain name. Force it to have LTR directionality.
-      if (l10n_util::GetTextDirection() == l10n_util::RIGHT_TO_LEFT) {
+      if (base::i18n::IsRTL()) {
         std::wstring localized_keyword = keyword;
-        l10n_util::WrapStringWithLTRFormatting(&localized_keyword);
+        base::i18n::WrapStringWithLTRFormatting(&localized_keyword);
         return localized_keyword;
       }
       return keyword;

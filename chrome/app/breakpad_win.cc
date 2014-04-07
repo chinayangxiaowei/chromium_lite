@@ -1,4 +1,4 @@
-// Copyright (c) 2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,6 +7,8 @@
 #include <windows.h>
 #include <shellapi.h>
 #include <tchar.h>
+
+#include <algorithm>
 #include <vector>
 
 #include "base/base_switches.h"
@@ -16,14 +18,32 @@
 #include "base/registry.h"
 #include "base/string_util.h"
 #include "base/win_util.h"
+#include "breakpad/src/client/windows/handler/exception_handler.h"
 #include "chrome/app/hard_error_handler_win.h"
 #include "chrome/common/env_vars.h"
 #include "chrome/common/result_codes.h"
-#include "chrome/installer/util/install_util.h"
 #include "chrome/installer/util/google_update_settings.h"
-#include "breakpad/src/client/windows/handler/exception_handler.h"
+#include "chrome/installer/util/install_util.h"
 
 namespace {
+
+// Minidump with stacks, PEB, TEB, and unloaded module list.
+const MINIDUMP_TYPE kSmallDumpType = static_cast<MINIDUMP_TYPE>(
+    MiniDumpWithProcessThreadData |  // Get PEB and TEB.
+    MiniDumpWithUnloadedModules);  // Get unloaded modules when available.
+
+// Minidump with all of the above, plus memory referenced from stack.
+const MINIDUMP_TYPE kLargerDumpType = static_cast<MINIDUMP_TYPE>(
+    MiniDumpWithProcessThreadData |  // Get PEB and TEB.
+    MiniDumpWithUnloadedModules |  // Get unloaded modules when available.
+    MiniDumpWithIndirectlyReferencedMemory);  // Get memory referenced by stack.
+
+// Large dump with all process memory.
+const MINIDUMP_TYPE kFullDumpType = static_cast<MINIDUMP_TYPE>(
+    MiniDumpWithFullMemory |  // Full memory from process.
+    MiniDumpWithProcessThreadData |  // Get PEB and TEB.
+    MiniDumpWithHandleData |  // Get all handle information.
+    MiniDumpWithUnloadedModules);  // Get unloaded modules when available.
 
 const wchar_t kGoogleUpdatePipeName[] = L"\\\\.\\pipe\\GoogleCrashServices\\";
 const wchar_t kChromePipeName[] = L"\\\\.\\pipe\\ChromeCrashServices";
@@ -164,9 +184,11 @@ bool DumpDoneCallback(const wchar_t*, const wchar_t*, void*,
 
   // We set CHROME_CRASHED env var. If the CHROME_RESTART is present.
   // This signals the child process to show the 'chrome has crashed' dialog.
-  if (!::GetEnvironmentVariableW(env_vars::kRestartInfo, NULL, 0))
+  if (!::GetEnvironmentVariableW(ASCIIToWide(env_vars::kRestartInfo).c_str(),
+                                 NULL, 0)) {
     return true;
-  ::SetEnvironmentVariableW(env_vars::kShowRestart, L"1");
+  }
+  ::SetEnvironmentVariableW(ASCIIToWide(env_vars::kShowRestart).c_str(), L"1");
   // Now we just start chrome browser with the same command line.
   STARTUPINFOW si = {sizeof(si)};
   PROCESS_INFORMATION pi;
@@ -266,10 +288,13 @@ extern "C" void __declspec(dllexport) __cdecl SetExtensionID(
 // spawned and basically just shows the 'chrome has crashed' dialog if
 // the CHROME_CRASHED environment variable is present.
 bool ShowRestartDialogIfCrashed(bool* exit_now) {
-  if (!::GetEnvironmentVariableW(env_vars::kShowRestart, NULL, 0))
+  if (!::GetEnvironmentVariableW(ASCIIToWide(env_vars::kShowRestart).c_str(),
+                                 NULL, 0)) {
     return false;
+  }
 
-  DWORD len = ::GetEnvironmentVariableW(env_vars::kRestartInfo, NULL, 0);
+  DWORD len = ::GetEnvironmentVariableW(
+      ASCIIToWide(env_vars::kRestartInfo).c_str(), NULL, 0);
   if (!len)
     return true;
 
@@ -280,7 +305,8 @@ bool ShowRestartDialogIfCrashed(bool* exit_now) {
 #pragma warning(disable:4509)  // warning: SEH used but dlg_strings has a dtor.
   __try {
     wchar_t* restart_data = new wchar_t[len + 1];
-    ::GetEnvironmentVariableW(env_vars::kRestartInfo, restart_data, len);
+    ::GetEnvironmentVariableW(ASCIIToWide(env_vars::kRestartInfo).c_str(),
+                              restart_data, len);
     restart_data[len] = 0;
     // The CHROME_RESTART var contains the dialog strings separated by '|'.
     // See PrepareRestartOnCrashEnviroment() function for details.
@@ -293,7 +319,7 @@ bool ShowRestartDialogIfCrashed(bool* exit_now) {
     // If the UI layout is right-to-left, we need to pass the appropriate MB_XXX
     // flags so that an RTL message box is displayed.
     UINT flags = MB_OKCANCEL | MB_ICONWARNING;
-    if (dlg_strings[2] == env_vars::kRtlLocale)
+    if (dlg_strings[2] == ASCIIToWide(env_vars::kRtlLocale))
       flags |= MB_RIGHT | MB_RTLREADING;
 
     // Show the dialog now. It is ok if another chrome is started by the
@@ -325,7 +351,9 @@ static DWORD __stdcall InitCrashReporterThread(void* param) {
 
   const CommandLine& command = *CommandLine::ForCurrentProcess();
   bool use_crash_service = command.HasSwitch(switches::kNoErrorDialogs) ||
-                           GetEnvironmentVariable(L"CHROME_HEADLESS", NULL, 0);
+      GetEnvironmentVariable(ASCIIToWide(env_vars::kHeadless).c_str(), NULL, 0);
+  bool is_per_user_install =
+      InstallUtil::IsPerUserInstall(info->dll_path.c_str());
 
   std::wstring pipe_name;
   if (use_crash_service) {
@@ -346,7 +374,7 @@ static DWORD __stdcall InitCrashReporterThread(void* param) {
     // System-wide install: "NamedPipe\GoogleCrashServices\S-1-5-18"
     // Per-user install: "NamedPipe\GoogleCrashServices\<user SID>"
     std::wstring user_sid;
-    if (InstallUtil::IsPerUserInstall(info->dll_path.c_str())) {
+    if (is_per_user_install) {
       if (!win_util::GetUserSidString(&user_sid)) {
         if (callback)
           InitDefaultCrashCallback();
@@ -364,8 +392,18 @@ static DWORD __stdcall InitCrashReporterThread(void* param) {
   wchar_t temp_dir[MAX_PATH] = {0};
   ::GetTempPathW(MAX_PATH, temp_dir);
 
-  bool full_dump = command.HasSwitch(switches::kFullMemoryCrashReport);
-  MINIDUMP_TYPE dump_type = full_dump ? MiniDumpWithFullMemory : MiniDumpNormal;
+  MINIDUMP_TYPE dump_type = kSmallDumpType;
+  // Capture full memory if explicitly instructed to.
+  if (command.HasSwitch(switches::kFullMemoryCrashReport)) {
+    dump_type = kFullDumpType;
+  } else {
+    // Capture more detail in crash dumps for beta and dev channel builds.
+    string16 channel_string;
+    GoogleUpdateSettings::GetChromeChannel(!is_per_user_install,
+        &channel_string);
+    if (channel_string == L"dev" || channel_string == L"beta")
+      dump_type = kLargerDumpType;
+  }
 
   g_breakpad = new google_breakpad::ExceptionHandler(temp_dir, &FilterCallback,
                    callback, NULL,
@@ -374,7 +412,7 @@ static DWORD __stdcall InitCrashReporterThread(void* param) {
 
   if (!g_breakpad->IsOutOfProcess()) {
     // The out-of-process handler is unavailable.
-    ::SetEnvironmentVariable(env_vars::kNoOOBreakpad,
+    ::SetEnvironmentVariable(ASCIIToWide(env_vars::kNoOOBreakpad).c_str(),
                              info->process_type.c_str());
   } else {
     // Tells breakpad to handle breakpoint and single step exceptions.

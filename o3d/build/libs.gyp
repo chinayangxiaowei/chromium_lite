@@ -73,6 +73,81 @@
       ],
     },
     {
+      'target_name': 'gles2_libs',
+      'type': 'none',
+      'conditions': [
+        ['gles2_backend=="desktop_gl"',
+          {
+            'all_dependent_settings': {
+              'include_dirs': [
+                '../../<(glewdir)/include',
+              ],
+            },
+            'conditions': [
+              [ 'OS=="linux"',
+                {
+                  'all_dependent_settings': {
+                    'defines': [
+                      'GL_GLEXT_PROTOTYPES',
+                    ],
+                    'ldflags': [
+                      '-L<(PRODUCT_DIR)',
+                    ],
+                    'libraries': [
+                      '-lGL',
+                      '-lGLEW',
+                      '-lX11',
+                    ],
+                  },
+                },
+              ],
+              [ 'OS=="mac"',
+                {
+                  'direct_dependent_settings': {
+                    'libraries': [
+                      '$(SDKROOT)/System/Library/Frameworks/OpenGL.framework',
+                    ],
+                  },
+                },
+              ],
+              [ 'OS=="win"',
+                {
+                  'all_dependent_settings': {
+                    'libraries': [
+                      '-lOpenGL32.lib',
+                      '../../<(glewdir)/lib/glew32.lib',
+                    ],
+                  },
+                  'copies': [
+                    {
+                      'destination': '<(PRODUCT_DIR)',
+                      'files': [
+                        "../../<(glewdir)/bin/glew32.dll",
+                      ]
+                    },
+                  ],
+                },
+              ],
+            ],
+          },
+        ],
+        #['gles2_backend=="gles2_command_buffers"',
+        # {
+        # },
+        #],
+        ['gles2_backend=="native_gles2"',
+          {
+            'all_dependent_settings': {
+              'libraries': [
+                '-lEGL',
+                '-lGLESv2',
+              ],
+            }
+          },
+        ],
+      ],
+    },
+    {
       'target_name': 'cg_libs',
       'type': 'none',
       'hard_dependency': 1,
@@ -136,9 +211,6 @@
                   ],
                 ],
                 'files': [
-                  '../../<(glewdir)/<(libdir)/libGLEW.so',
-                  '../../<(glewdir)/<(libdir)/libGLEW.so.1.5',
-                  '../../<(glewdir)/<(libdir)/libGLEW.so.1.5.1',
                   "../../<(cgdir)/<(libdir)/libCg.so",
                   "../../<(cgdir)/<(libdir)/libCgGL.so",
                   "../../<(cgdir)/bin/cgc",
@@ -173,9 +245,6 @@
               {
                 'destination': '<(SHARED_LIB_DIR)',
                 'files': [
-                  '<(PRODUCT_DIR)/libGLEW.so',
-                  '<(PRODUCT_DIR)/libGLEW.so.1.5',
-                  '<(PRODUCT_DIR)/libGLEW.so.1.5.1',
                   "<(PRODUCT_DIR)/libCg.so",
                   "<(PRODUCT_DIR)/libCgGL.so",
                 ],
@@ -202,7 +271,7 @@
             'target_name': 'dx_dll',
             'type': 'none',
             'all_dependent_settings': {
-              'include_dirs': [
+              'msvs_system_include_dirs': [
                 '$(DXSDK_DIR)/Include',
               ],
               'libraries': [

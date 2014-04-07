@@ -1,4 +1,4 @@
-// Copyright (c) 2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -186,7 +186,7 @@ bool LaunchAppAsUser(UserTokenHandle token, const std::wstring& cmdline,
   DWORD flags = CREATE_UNICODE_ENVIRONMENT;
   void* enviroment_block = NULL;
 
-  if(!CreateEnvironmentBlock(&enviroment_block, token, FALSE))
+  if (!CreateEnvironmentBlock(&enviroment_block, token, FALSE))
     return false;
 
   BOOL launched =
@@ -318,23 +318,37 @@ bool KillProcess(ProcessHandle process, int exit_code, bool wait) {
 bool DidProcessCrash(bool* child_exited, ProcessHandle handle) {
   DWORD exitcode = 0;
 
-  if (child_exited)
-    *child_exited = true;  // On Windows it an error to call this function if
-                           // the child hasn't already exited.
   if (!::GetExitCodeProcess(handle, &exitcode)) {
     NOTREACHED();
+    // Assume the child has exited.
+    if (child_exited)
+      *child_exited = true;
     return false;
   }
   if (exitcode == STILL_ACTIVE) {
-    // The process is likely not dead or it used 0x103 as exit code.
+    DWORD wait_result = WaitForSingleObject(handle, 0);
+    if (wait_result == WAIT_TIMEOUT) {
+      if (child_exited)
+        *child_exited = false;
+      return false;
+    }
+
+    DCHECK_EQ(WAIT_OBJECT_0, wait_result);
+
+    // Strange, the process used 0x103 (STILL_ACTIVE) as exit code.
     NOTREACHED();
+
     return false;
   }
+
+  // We're sure the child has exited.
+  if (child_exited)
+    *child_exited = true;
 
   // Warning, this is not generic code; it heavily depends on the way
   // the rest of the code kills a process.
 
-  if (exitcode == PROCESS_END_NORMAL_TERMINATON ||
+  if (exitcode == PROCESS_END_NORMAL_TERMINATION ||
       exitcode == PROCESS_END_KILLED_BY_USER ||
       exitcode == PROCESS_END_PROCESS_WAS_HUNG ||
       exitcode == 0xC0000354 ||     // STATUS_DEBUGGER_INACTIVE.
@@ -348,14 +362,24 @@ bool DidProcessCrash(bool* child_exited, ProcessHandle handle) {
 }
 
 bool WaitForExitCode(ProcessHandle handle, int* exit_code) {
-  ScopedHandle closer(handle);  // Ensure that we always close the handle.
-  if (::WaitForSingleObject(handle, INFINITE) != WAIT_OBJECT_0) {
-    NOTREACHED();
+  bool success = WaitForExitCodeWithTimeout(handle, exit_code, INFINITE);
+  if (!success)
+    CloseProcessHandle(handle);
+  return success;
+}
+
+bool WaitForExitCodeWithTimeout(ProcessHandle handle, int* exit_code,
+                                int64 timeout_milliseconds) {
+  if (::WaitForSingleObject(handle, timeout_milliseconds) != WAIT_OBJECT_0)
     return false;
-  }
   DWORD temp_code;  // Don't clobber out-parameters in case of failure.
   if (!::GetExitCodeProcess(handle, &temp_code))
     return false;
+
+  // Only close the handle on success, to give the caller a chance to forcefully
+  // terminate the process if he wants to.
+  CloseProcessHandle(handle);
+
   *exit_code = temp_code;
   return true;
 }
@@ -655,7 +679,7 @@ static uint64 FileTimeToUTC(const FILETIME& ftime) {
   return li.QuadPart;
 }
 
-int ProcessMetrics::GetCPUUsage() {
+double ProcessMetrics::GetCPUUsage() {
   FILETIME now;
   FILETIME creation_time;
   FILETIME exit_time;
@@ -698,7 +722,7 @@ int ProcessMetrics::GetCPUUsage() {
   return cpu;
 }
 
-bool ProcessMetrics::GetIOCounters(IO_COUNTERS* io_counters) const {
+bool ProcessMetrics::GetIOCounters(base::IoCounters* io_counters) const {
   return GetProcessIoCounters(process_, io_counters) != FALSE;
 }
 
@@ -812,7 +836,7 @@ size_t GetSystemCommitCharge() {
   GetSystemInfo(&system_info);
 
   PERFORMANCE_INFORMATION info;
-  if (! InternalGetPerformanceInfo(&info, sizeof(info))) {
+  if (!InternalGetPerformanceInfo(&info, sizeof(info))) {
     LOG(ERROR) << "Failed to fetch internal performance info.";
     return 0;
   }

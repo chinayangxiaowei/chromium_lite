@@ -32,11 +32,9 @@
 #include <Shellapi.h>
 #include <shlwapi.h>
 
+#include "chrome/installer/mini_installer/appid.h"
 #include "chrome/installer/mini_installer/mini_installer.h"
 #include "chrome/installer/mini_installer/pe_resource.h"
-
-// Generated header that includes the Google Update id.
-#include "appid.h"
 
 // Required linker symbol. See remarks above.
 extern "C" unsigned int __sse2_available = 0;
@@ -152,10 +150,21 @@ bool ReadValueFromRegistry(HKEY root_key, const wchar_t *sub_key,
 void SetFullInstallerFlag(HKEY root_key) {
   HKEY key;
   wchar_t ap_registry_key[128];
+  const wchar_t* app_guid = google_update::kAppGuid;
+
+  int args_num;
+
+  wchar_t* cmd_line = ::GetCommandLine();
+  wchar_t** args = ::CommandLineToArgvW(cmd_line, &args_num);
+  for (int i = 1; i < args_num; ++i) {
+    if (0 == ::lstrcmpi(args[i], L"--chrome-frame"))
+      app_guid = google_update::kChromeFrameAppGuid;
+  }
+
   if (!SafeStrCopy(ap_registry_key, _countof(ap_registry_key),
                    kApRegistryKeyBase) ||
       !SafeStrCat(ap_registry_key, _countof(ap_registry_key),
-                  google_update::kChromeGuid)) {
+                  app_guid)) {
     return;
   }
   if (::RegOpenKeyEx(root_key, ap_registry_key, NULL,
@@ -409,7 +418,7 @@ void AppendCommandLineFlags(wchar_t* buffer, int size) {
   if (args_num <= 0)
     return;
 
-  wchar_t* cmd_to_append = NULL;
+  wchar_t* cmd_to_append = L"";
   if (!StrEndsWith(args[0], exe_name)) {
     // Current executable name not in the command line so just append
     // the whole command line.

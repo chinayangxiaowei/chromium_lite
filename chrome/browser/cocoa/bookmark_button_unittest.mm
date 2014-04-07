@@ -4,46 +4,111 @@
 
 #include "base/scoped_nsobject.h"
 #import "chrome/browser/cocoa/bookmark_button.h"
+#import "chrome/browser/cocoa/bookmark_button_cell.h"
+#import "chrome/browser/cocoa/browser_test_helper.h"
 #import "chrome/browser/cocoa/cocoa_test_helper.h"
+#import "chrome/browser/cocoa/test_event_utils.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "testing/platform_test.h"
 
-class BookmarkButtonTest : public CocoaTest {
- public:
-};
+// Fake BookmarkButton delegate to get a pong on mouse entered/exited
+@interface FakeButtonDelegate : NSObject<BookmarkButtonDelegate> {
+ @public
+  int entered_;
+  int exited_;
+}
+@end
 
-NSEvent* Event(const NSPoint point, const NSEventType type) {
-  static NSUInteger eventNumber = 0;  // thx shess
-  return [NSEvent mouseEventWithType:type
-                            location:point
-                       modifierFlags:0
-                           timestamp:0
-                        windowNumber:183  // picked out of thin air.
-                             context:nil
-                         eventNumber:eventNumber++
-                          clickCount:1
-                            pressure:0.0];
+@implementation FakeButtonDelegate
+
+- (void)fillPasteboard:(NSPasteboard*)pboard
+       forDragOfButton:(BookmarkButton*)button {
 }
 
-// Make sure the basic case of "click" still works.
-TEST_F(BookmarkButtonTest, DownUp) {
-  scoped_nsobject<NSMutableArray> array;
-  array.reset([[NSMutableArray alloc] init]);
-  [array addObject:@"foo"];
-  [array addObject:@"bar"];
+- (void)mouseEnteredButton:(id)buton event:(NSEvent*)event {
+  entered_++;
+}
 
+- (void)mouseExitedButton:(id)buton event:(NSEvent*)event {
+  exited_++;
+}
+
+- (BOOL)dragShouldLockBarVisibility {
+  return NO;
+}
+
+- (NSWindow*)browserWindow {
+  return nil;
+}
+@end
+
+namespace {
+
+class BookmarkButtonTest : public CocoaTest {
+};
+
+// Make sure nothing leaks
+TEST_F(BookmarkButtonTest, Create) {
   scoped_nsobject<BookmarkButton> button;
   button.reset([[BookmarkButton alloc] initWithFrame:NSMakeRect(0,0,500,500)]);
+}
 
-  [button setTarget:array.get()];
-  [button setAction:@selector(removeAllObjects)];
-  EXPECT_FALSE([[button cell] isHighlighted]);
+// Test folder and empty node queries.
+TEST_F(BookmarkButtonTest, FolderAndEmptyOrNot) {
+  BrowserTestHelper helper_;
+  scoped_nsobject<BookmarkButton> button;
+  scoped_nsobject<BookmarkButtonCell> cell;
 
-  NSEvent* downEvent(Event(NSMakePoint(10,10), NSLeftMouseDown));
-  NSEvent* upEvent(Event(NSMakePoint(10,10), NSLeftMouseDown));
-  [button mouseDown:downEvent];
-  EXPECT_TRUE([[button cell] isHighlighted]);
-  [button mouseUp:upEvent];
-  EXPECT_FALSE([[button cell] isHighlighted]);
-  EXPECT_FALSE([array count]);  // confirms target/action fired
+  button.reset([[BookmarkButton alloc] initWithFrame:NSMakeRect(0,0,500,500)]);
+  cell.reset([[BookmarkButtonCell alloc] initTextCell:@"hi mom"]);
+  [button setCell:cell];
+
+  EXPECT_TRUE([button isEmpty]);
+  EXPECT_FALSE([button isFolder]);
+  EXPECT_FALSE([button bookmarkNode]);
+
+  NSEvent* downEvent =
+      test_event_utils::LeftMouseDownAtPoint(NSMakePoint(10,10));
+  // Since this returns (does not actually begin a modal drag), success!
+  [button beginDrag:downEvent];
+
+  BookmarkModel* model = helper_.profile()->GetBookmarkModel();
+  const BookmarkNode* node = model->GetBookmarkBarNode();
+  [cell setBookmarkNode:node];
+  EXPECT_FALSE([button isEmpty]);
+  EXPECT_TRUE([button isFolder]);
+  EXPECT_EQ([button bookmarkNode], node);
+
+  node = model->AddURL(node, 0, L"hi mom", GURL("http://www.google.com"));
+  [cell setBookmarkNode:node];
+  EXPECT_FALSE([button isEmpty]);
+  EXPECT_FALSE([button isFolder]);
+  EXPECT_EQ([button bookmarkNode], node);
+}
+
+TEST_F(BookmarkButtonTest, MouseEnterExitRedirect) {
+  NSEvent* moveEvent =
+      test_event_utils::MouseEventAtPoint(NSMakePoint(10,10), NSMouseMoved, 0);
+  scoped_nsobject<BookmarkButton> button;
+  scoped_nsobject<BookmarkButtonCell> cell;
+  scoped_nsobject<FakeButtonDelegate>
+      delegate([[FakeButtonDelegate alloc] init]);
+  button.reset([[BookmarkButton alloc] initWithFrame:NSMakeRect(0,0,500,500)]);
+  cell.reset([[BookmarkButtonCell alloc] initTextCell:@"hi mom"]);
+  [button setCell:cell];
+  [button setDelegate:delegate];
+
+  EXPECT_EQ(0, delegate.get()->entered_);
+  EXPECT_EQ(0, delegate.get()->exited_);
+
+  [button mouseEntered:moveEvent];
+  EXPECT_EQ(1, delegate.get()->entered_);
+  EXPECT_EQ(0, delegate.get()->exited_);
+
+  [button mouseExited:moveEvent];
+  [button mouseExited:moveEvent];
+  EXPECT_EQ(1, delegate.get()->entered_);
+  EXPECT_EQ(2, delegate.get()->exited_);
+}
+
 }

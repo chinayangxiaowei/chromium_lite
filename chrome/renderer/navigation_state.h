@@ -18,17 +18,33 @@
 // WebDataSource (see RenderView::DidCreateDataSource).
 class NavigationState : public WebKit::WebDataSource::ExtraData {
  public:
+  enum LoadType {
+    UNDEFINED_LOAD,            // Not yet initialized.
+    RELOAD,                    // User pressed reload.
+    HISTORY_LOAD,              // Back or forward.
+    NORMAL_LOAD,               // User entered URL, or omnibox search.
+    LINK_LOAD,                 // (deprecated) Included next 4 categories.
+    LINK_LOAD_NORMAL,          // Commonly following of link.
+    LINK_LOAD_RELOAD,          // JS/link directed reload.
+    LINK_LOAD_CACHE_STALE_OK,  // back/forward or encoding change.
+    LINK_LOAD_CACHE_ONLY,      // Allow stale data (avoid doing a re-post)
+    kLoadTypeMax               // Bounding value for this enum.
+  };
+
   static NavigationState* CreateBrowserInitiated(
       int32 pending_page_id,
+      int pending_history_list_offset,
       PageTransition::Type transition_type,
       base::Time request_time) {
     return new NavigationState(transition_type, request_time, false,
-                               pending_page_id);
+                               pending_page_id,
+                               pending_history_list_offset);
   }
 
   static NavigationState* CreateContentInitiated() {
     // We assume navigations initiated by content are link clicks.
-    return new NavigationState(PageTransition::LINK, base::Time(), true, -1);
+    return new NavigationState(PageTransition::LINK, base::Time(), true, -1,
+                               -1);
   }
 
   static NavigationState* FromDataSource(WebKit::WebDataSource* ds) {
@@ -45,12 +61,22 @@ class NavigationState : public WebKit::WebDataSource::ExtraData {
   // Contains the page_id for this navigation or -1 if there is none yet.
   int32 pending_page_id() const { return pending_page_id_; }
 
+  // If pending_page_id() is not -1, then this contains the corresponding
+  // offset of the page in the back/forward history list.
+  int pending_history_list_offset() const {
+    return pending_history_list_offset_;
+  }
+
   // Contains the transition type that the browser specified when it
   // initiated the load.
   PageTransition::Type transition_type() const { return transition_type_; }
   void set_transition_type(PageTransition::Type type) {
     transition_type_ = type;
   }
+
+  // Record the nature of this load, for use when histogramming page load times.
+  LoadType load_type() const { return load_type_; }
+  void set_load_type(LoadType load_type) { load_type_ = load_type; }
 
   // The time that this navigation was requested.
   const base::Time& request_time() const {
@@ -190,6 +216,10 @@ class NavigationState : public WebKit::WebDataSource::ExtraData {
     return cache_policy_override_set_;
   }
 
+  // Indicator if SPDY was used as part of this page load.
+  void set_was_fetched_via_spdy(bool value) { was_fetched_via_spdy_ = value; }
+  bool was_fetched_via_spdy() const { return was_fetched_via_spdy_; }
+
   // Whether the frame text contents was translated to a different language.
   void set_was_translated(bool value) { was_translated_ = value; }
   bool was_translated() const { return was_translated_; }
@@ -198,21 +228,26 @@ class NavigationState : public WebKit::WebDataSource::ExtraData {
   NavigationState(PageTransition::Type transition_type,
                   const base::Time& request_time,
                   bool is_content_initiated,
-                  int32 pending_page_id)
+                  int32 pending_page_id,
+                  int pending_history_list_offset)
       : transition_type_(transition_type),
+        load_type_(UNDEFINED_LOAD),
         request_time_(request_time),
         load_histograms_recorded_(false),
         request_committed_(false),
         is_content_initiated_(is_content_initiated),
         pending_page_id_(pending_page_id),
+        pending_history_list_offset_(pending_history_list_offset),
         postpone_loading_data_(false),
         cache_policy_override_set_(false),
         cache_policy_override_(WebKit::WebURLRequest::UseProtocolCachePolicy),
         user_script_idle_scheduler_(NULL),
+        was_fetched_via_spdy_(false),
         was_translated_(false) {
   }
 
   PageTransition::Type transition_type_;
+  LoadType load_type_;
   base::Time request_time_;
   base::Time start_load_time_;
   base::Time commit_load_time_;
@@ -224,6 +259,7 @@ class NavigationState : public WebKit::WebDataSource::ExtraData {
   bool request_committed_;
   bool is_content_initiated_;
   int32 pending_page_id_;
+  int pending_history_list_offset_;
   GURL searchable_form_url_;
   std::string searchable_form_encoding_;
   scoped_ptr<webkit_glue::PasswordForm> password_form_data_;
@@ -236,6 +272,8 @@ class NavigationState : public WebKit::WebDataSource::ExtraData {
   WebKit::WebURLRequest::CachePolicy cache_policy_override_;
 
   scoped_ptr<UserScriptIdleScheduler> user_script_idle_scheduler_;
+
+  bool was_fetched_via_spdy_;
 
   bool was_translated_;
 

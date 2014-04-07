@@ -18,6 +18,10 @@ const wchar_t* kDefaultLocale = L"default_locale";
 const wchar_t* kDescription = L"description";
 const wchar_t* kIcons = L"icons";
 const wchar_t* kJs = L"js";
+const wchar_t* kLaunch = L"launch";
+const wchar_t* kLaunchContainer = L"launch.container";
+const wchar_t* kLaunchLocalPath = L"launch.local_path";
+const wchar_t* kLaunchWebURL = L"launch.web_url";
 const wchar_t* kMatches = L"matches";
 const wchar_t* kMinimumChromeVersion = L"minimum_chrome_version";
 const wchar_t* kIncludeGlobs = L"include_globs";
@@ -28,6 +32,7 @@ const wchar_t* kPageAction = L"page_action";
 const wchar_t* kPageActions = L"page_actions";
 const wchar_t* kPageActionIcons = L"icons";
 const wchar_t* kPageActionDefaultIcon = L"default_icon";
+const wchar_t* kPageActionDefaultPopup = L"default_popup";
 const wchar_t* kPageActionDefaultTitle = L"default_title";
 const wchar_t* kPageActionPopup = L"popup";
 const wchar_t* kPageActionPopupHeight = L"height";
@@ -36,7 +41,6 @@ const wchar_t* kPermissions = L"permissions";
 const wchar_t* kPlugins = L"plugins";
 const wchar_t* kPluginsPath = L"path";
 const wchar_t* kPluginsPublic = L"public";
-const wchar_t* kPrivacyBlacklists = L"privacy_blacklists";
 const wchar_t* kPublicKey = L"key";
 const wchar_t* kRunAt = L"run_at";
 const wchar_t* kSignature = L"signature";
@@ -53,6 +57,10 @@ const wchar_t* kType = L"type";
 const wchar_t* kVersion = L"version";
 const wchar_t* kUpdateURL = L"update_url";
 const wchar_t* kOptionsPage = L"options_page";
+const wchar_t* kWebContent = L"web_content";
+const wchar_t* kWebContentEnabled = L"web_content.enabled";
+const wchar_t* kWebOrigin = L"web_content.origin";
+const wchar_t* kWebPaths = L"web_content.paths";
 }  // namespace extension_manifest_keys
 
 namespace extension_manifest_values {
@@ -61,6 +69,9 @@ const char* kRunAtDocumentEnd = "document_end";
 const char* kRunAtDocumentIdle = "document_idle";
 const char* kPageActionTypeTab = "tab";
 const char* kPageActionTypePermanent = "permanent";
+const char* kLaunchContainerPanel = "panel";
+const char* kLaunchContainerTab = "tab";
+const char* kLaunchContainerWindow = "window";
 }  // namespace extension_manifest_values
 
 // Extension-related error messages. Some of these are simple patterns, where a
@@ -68,6 +79,7 @@ const char* kPageActionTypePermanent = "permanent";
 // printf because we want to unit test them and scanf is hard to make
 // cross-platform.
 namespace extension_manifest_errors {
+const char* kAppsNotEnabled = "Apps are not enabled.";
 const char* kChromeVersionTooLow =
     "This extension requires * version * or greater.";
 const char* kInvalidAllFrames =
@@ -98,6 +110,12 @@ const char* kInvalidJs =
     "Invalid value for 'content_scripts[*].js[*]'.";
 const char* kInvalidJsList =
     "Required value 'content_scripts[*].js' is invalid.";
+const char* kInvalidLaunchContainer =
+    "Invalid value for 'launch.container'.";
+const char* kInvalidLaunchLocalPath =
+    "Invalid value for 'launch.local_path'.";
+const char* kInvalidLaunchWebURL =
+    "Invalid value for 'launch.web_url'.";
 const char* kInvalidKey =
     "Value 'key' is missing or invalid.";
 const char* kInvalidManifest =
@@ -122,11 +140,14 @@ const char* kInvalidPageActionIconPath =
 const char* kInvalidPageActionsList =
     "Invalid value for 'page_actions'.";
 const char* kInvalidPageActionsListSize =
-    "Invalid value for 'page_actions'. There can be only one.";
+    "Invalid value for 'page_actions'. There can be at most one page action.";
 const char* kInvalidPageActionId =
     "Required value 'id' is missing or invalid.";
 const char* kInvalidPageActionDefaultTitle =
     "Invalid value for 'default_title'.";
+const char* kInvalidPageActionOldAndNewKeys =
+    "Key \"*\" is deprecated.  Key \"*\" has the same meaning.  You can not "
+    "use both.";
 const char* kInvalidPageActionPopup =
     "Invalid type for page action popup.";
 const char* kInvalidPageActionPopupHeight =
@@ -148,10 +169,6 @@ const char* kInvalidPluginsPath =
     "Invalid value for 'plugins[*].path'.";
 const char* kInvalidPluginsPublic =
     "Invalid value for 'plugins[*].public'.";
-const char* kInvalidPrivacyBlacklists =
-    "Invalid value for 'privacy_blacklists'.";
-const char* kInvalidPrivacyBlacklistsPath =
-    "Invalid value for 'privacy_blacklists[*]'.";
 const char* kInvalidBackground =
     "Invalid value for 'background_page'.";
 const char* kInvalidRunAt =
@@ -164,7 +181,7 @@ const char* kInvalidToolstrips =
     "Invalid value for 'toolstrips'.";
 const char* kInvalidVersion =
     "Required value 'version' is missing or invalid. It must be between 1-4 "
-    "dot-separated integers.";
+    "dot-separated integers each between 0 and 65536.";
 const char* kInvalidZipHash =
     "Required key 'zip_hash' is missing or invalid.";
 const char* kManifestParseError =
@@ -173,6 +190,8 @@ const char* kManifestUnreadable =
     "Manifest file is missing or unreadable.";
 const char* kMissingFile =
     "At least one js or css file is required for 'content_scripts[*]'.";
+const char* kMultipleOverrides =
+    "An extension cannot override more than one page.";
 const char* kInvalidTheme =
     "Invalid value for 'theme'.";
 const char* kInvalidThemeImages =
@@ -185,12 +204,24 @@ const char* kInvalidThemeTints =
     "Invalid value for theme images - tints must be decimal numbers.";
 const char* kInvalidUpdateURL =
     "Invalid value for update url: '[*]'.";
+const char* kInvalidWebContentEnabled =
+    "Invalid value for 'web_content.enabled'.";
+const char* kInvalidWebOrigin =
+    "Invalid value for 'web_content.origin'.";
+const char* kInvalidWebPaths =
+    "Invalid value for 'web_content.paths'.";
+const char* kInvalidWebPath =
+    "Invalid value for 'web_contents.paths[*]'.";
 const char* kInvalidDefaultLocale =
     "Invalid value for default locale - locale name must be a string.";
 const char* kOneUISurfaceOnly =
     "An extension cannot have both a page action and a browser action.";
 const char* kThemesCannotContainExtensions =
     "A theme cannot contain extensions code.";
+const char* kLaunchContainerWithoutURL =
+    "Launch container specified, but no local_path or web_url to launch.";
+const char* kLaunchPathAndURLAreExclusive =
+    "The 'launch.local_path' and 'launch.web_url' keys cannot both be set.";
 const char* kLocalesNoDefaultLocaleSpecified =
     "Localization used, but default_locale wasn't specified in the manifest.";
 const char* kLocalesNoDefaultMessages =
@@ -203,9 +234,13 @@ const char* kLocalesMessagesFileMissing =
     "Messages file is missing for locale.";
 const char* kInvalidOptionsPage =
     "Invalid value for 'options_page'.";
+const char* kReservedMessageFound =
+    "Reserved key * found in message catalog.";
 const char* kCannotAccessPage = "Cannot access contents of url \"*\". "
     "Extension manifest must request permission to access this host.";
 const char* kCannotScriptGallery = "The extensions gallery cannot be scripted.";
+const char* kWebContentMustBeEnabled = "The 'web_content.enabled' property "
+    "must be set to true in order to use any other web content features.";
 }  // namespace extension_manifest_errors
 
 namespace extension_urls {

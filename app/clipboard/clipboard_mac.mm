@@ -7,13 +7,13 @@
 #import <Cocoa/Cocoa.h>
 
 #include "base/file_path.h"
-#include "base/gfx/size.h"
 #include "base/logging.h"
 #include "base/mac_util.h"
 #include "base/scoped_cftyperef.h"
 #include "base/scoped_nsobject.h"
-#include "base/string_util.h"
 #include "base/sys_string_conversions.h"
+#include "base/utf_string_conversions.h"
+#include "gfx/size.h"
 
 namespace {
 
@@ -64,7 +64,9 @@ void Clipboard::WriteHTML(const char* markup_data,
                           size_t markup_len,
                           const char* url_data,
                           size_t url_len) {
-  std::string html_fragment_str(markup_data, markup_len);
+  // We need to mark it as utf-8. (see crbug.com/11957)
+  std::string html_fragment_str("<meta charset='utf-8'>");
+  html_fragment_str.append(markup_data, markup_len);
   NSString *html_fragment = base::SysUTF8ToNSString(html_fragment_str);
 
   // TODO(avi): url_data?
@@ -123,9 +125,14 @@ void Clipboard::WriteBitmap(const char* pixel_data, const char* size_data) {
                     NULL,
                     false,
                     kCGRenderingIntentDefault));
+  // Aggressively free storage since image buffers can potentially be very
+  // large.
+  data_provider.reset();
+  data.reset();
 
   scoped_nsobject<NSBitmapImageRep> bitmap(
       [[NSBitmapImageRep alloc] initWithCGImage:cgimage]);
+  cgimage.reset();
 
   scoped_nsobject<NSImage> image([[NSImage alloc] init]);
   [image addRepresentation:bitmap];
@@ -134,7 +141,11 @@ void Clipboard::WriteBitmap(const char* pixel_data, const char* size_data) {
   // For now, spit out the image as a TIFF.
   NSPasteboard* pb = GetPasteboard();
   [pb addTypes:[NSArray arrayWithObject:NSTIFFPboardType] owner:nil];
-  [pb setData:[image TIFFRepresentation] forType:NSTIFFPboardType];
+  NSData *tiff_data = [image TIFFRepresentation];
+  LOG_IF(ERROR, tiff_data == NULL) << "Failed to allocate image for clipboard";
+  if (tiff_data) {
+    [pb setData:tiff_data forType:NSTIFFPboardType];
+  }
 }
 
 // Write an extra flavor that signifies WebKit was the last to modify the
@@ -291,6 +302,12 @@ Clipboard::FormatType Clipboard::GetFilenameWFormatType() {
 // static
 Clipboard::FormatType Clipboard::GetHtmlFormatType() {
   static const std::string type = base::SysNSStringToUTF8(NSHTMLPboardType);
+  return type;
+}
+
+// static
+Clipboard::FormatType Clipboard::GetBitmapFormatType() {
+  static const std::string type = base::SysNSStringToUTF8(NSTIFFPboardType);
   return type;
 }
 

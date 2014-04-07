@@ -4,30 +4,40 @@
 
 #import "chrome/browser/cocoa/bookmark_bar_view.h"
 
+#import "chrome/browser/browser_theme_provider.h"
 #import "chrome/browser/cocoa/bookmark_bar_controller.h"
 #import "chrome/browser/cocoa/bookmark_button.h"
-#import "third_party/GTM/AppKit/GTMTheme.h"
+#import "chrome/browser/cocoa/themed_window.h"
 #import "third_party/mozilla/include/NSPasteboard+Utils.h"
 
 @interface BookmarkBarView (Private)
 - (void)themeDidChangeNotification:(NSNotification*)aNotification;
-- (void)updateTheme:(GTMTheme*)theme;
+- (void)updateTheme:(ThemeProvider*)themeProvider;
 @end
 
 @implementation BookmarkBarView
+
+@synthesize dropIndicatorShown = dropIndicatorShown_;
+@synthesize dropIndicatorPosition = dropIndicatorPosition_;
+@synthesize noItemContainer = noItemContainer_;
 
 - (void)dealloc {
   [[NSNotificationCenter defaultCenter] removeObserver:self];
   // This probably isn't strictly necessary, but can't hurt.
   [self unregisterDraggedTypes];
   [super dealloc];
+
+  // To be clear, our controller_ is an IBOutlet and owns us, so we
+  // don't deallocate it explicitly.  It is owned by the browser
+  // window controller, so gets deleted with a browser window is
+  // closed.
 }
 
 - (void)awakeFromNib {
   NSNotificationCenter* defaultCenter = [NSNotificationCenter defaultCenter];
   [defaultCenter addObserver:self
                     selector:@selector(themeDidChangeNotification:)
-                        name:kGTMThemeDidChangeNotification
+                        name:kBrowserThemeDidChangeNotification
                       object:nil];
 
   DCHECK(controller_ && "Expected this to be hooked up via Interface Builder");
@@ -44,21 +54,31 @@
 // controller desn't have access to it until it's placed in the view
 // hierarchy.  This is the spot where we close the loop.
 - (void)viewWillMoveToWindow:(NSWindow*)window {
-  [self updateTheme:[window gtm_theme]];
-  [controller_ updateTheme:[window gtm_theme]];
+  ThemeProvider* themeProvider = [window themeProvider];
+  [self updateTheme:themeProvider];
+  [controller_ updateTheme:themeProvider];
+}
+
+- (void)viewDidMoveToWindow {
+  [controller_ viewDidMoveToWindow];
 }
 
 // Called after the current theme has changed.
 - (void)themeDidChangeNotification:(NSNotification*)aNotification {
-  GTMTheme* theme = [aNotification object];
-  [self updateTheme:theme];
+  ThemeProvider* themeProvider =
+      static_cast<ThemeProvider*>([[aNotification object] pointerValue]);
+  [self updateTheme:themeProvider];
 }
 
 // Adapt appearance to the current theme. Called after theme changes and before
 // this is shown for the first time.
-- (void)updateTheme:(GTMTheme*)theme {
-  NSColor* color = [theme textColorForStyle:GTMThemeStyleBookmarksBarButton
-                                      state:GTMThemeStateActiveWindow];
+- (void)updateTheme:(ThemeProvider*)themeProvider {
+  if (!themeProvider)
+    return;
+
+  NSColor* color =
+      themeProvider->GetNSColor(BrowserThemeProvider::COLOR_BOOKMARK_TEXT,
+                                true);
   [noItemTextfield_ setTextColor:color];
 }
 
@@ -70,6 +90,10 @@
 
 -(NSTextField*)noItemTextfield {
   return noItemTextfield_;
+}
+
+- (BookmarkBarController*)controller {
+  return controller_;
 }
 
 -(void)drawRect:(NSRect)dirtyRect {
@@ -88,9 +112,8 @@
     NSRect uglyBlackBar =
         NSMakeRect(xLeft, kBarVertPad,
                    kBarWidth, NSHeight([self bounds]) - 2 * kBarVertPad);
-    NSColor* uglyBlackBarColor =
-        [[self gtm_theme] textColorForStyle:GTMThemeStyleBookmarksBarButton
-                                      state:GTMThemeStateActiveWindow];
+    NSColor* uglyBlackBarColor = [[self window] themeProvider]->
+        GetNSColor(BrowserThemeProvider::COLOR_BOOKMARK_TEXT, true);
     [[uglyBlackBarColor colorWithAlphaComponent:kBarOpacity] setFill];
     [[NSBezierPath bezierPathWithRect:uglyBlackBar] fill];
   }
@@ -99,8 +122,6 @@
 // NSDraggingDestination methods
 
 - (NSDragOperation)draggingEntered:(id<NSDraggingInfo>)info {
-  if ([[info draggingPasteboard] containsURLData])
-    return NSDragOperationCopy;
   if ([[info draggingPasteboard] dataForType:kBookmarkButtonDragType]) {
     NSData* data = [[info draggingPasteboard]
                      dataForType:kBookmarkButtonDragType];
@@ -109,21 +130,37 @@
       // Find the position of the drop indicator.
       BookmarkButton* button = nil;
       [data getBytes:&button length:sizeof(button)];
-      CGFloat x =
-          [controller_ indicatorPosForDragOfButton:button
-                                           toPoint:[info draggingLocation]];
 
-      // Need an update if the indicator wasn't previously shown or if it has
-      // moved.
-      if (!dropIndicatorShown_ || dropIndicatorPosition_ != x) {
-        dropIndicatorShown_ = YES;
-        dropIndicatorPosition_ = x;
-        [self setNeedsDisplay:YES];
+      // We only show the drop indicator if we're not in a position to
+      // perform a hover-open since it doesn't make sense to do both.
+      BOOL showIt =
+          [controller_ shouldShowIndicatorShownForPoint:
+              [info draggingLocation]];
+      if (!showIt) {
+        if (dropIndicatorShown_) {
+          dropIndicatorShown_ = NO;
+          [self setNeedsDisplay:YES];
+        }
+      } else {
+        CGFloat x =
+            [controller_ indicatorPosForDragOfButton:button
+                                             toPoint:[info draggingLocation]];
+        // Need an update if the indicator wasn't previously shown or if it has
+        // moved.
+        if (!dropIndicatorShown_ || dropIndicatorPosition_ != x) {
+          dropIndicatorShown_ = YES;
+          dropIndicatorPosition_ = x;
+          [self setNeedsDisplay:YES];
+        }
       }
-    }
 
-    return NSDragOperationMove;
+      [controller_ draggingEntered:info];  // allow hover-open to work.
+      return NSDragOperationMove;
+    }
+    // Fall through otherwise.
   }
+  if ([[info draggingPasteboard] containsURLData])
+    return NSDragOperationCopy;
   return NSDragOperationNone;
 }
 
@@ -184,30 +221,30 @@
   if (data && [info draggingSource]) {
     BookmarkButton* button = nil;
     [data getBytes:&button length:sizeof(button)];
-    rtn = [controller_ dragButton:button to:[info draggingLocation]];
+    BOOL copy = !([info draggingSourceOperationMask] & NSDragOperationMove);
+    rtn = [controller_ dragButton:button
+                               to:[info draggingLocation]
+                             copy:copy];
   }
   return rtn;
 }
 
 - (BOOL)performDragOperation:(id<NSDraggingInfo>)info {
   NSPasteboard* pboard = [info draggingPasteboard];
-  if ([pboard containsURLData]) {
-    return [self performDragOperationForURL:info];
-  } else if ([pboard dataForType:kBookmarkButtonDragType]) {
-    return [self performDragOperationForBookmark:info];
-  } else {
-    NOTREACHED() << "Unknown drop type onto bookmark bar.";
-    return NO;
+  if ([pboard dataForType:kBookmarkButtonDragType]) {
+    if ([self performDragOperationForBookmark:info])
+      return YES;
+    // Fall through....
   }
+  if ([pboard containsURLData]) {
+    if ([self performDragOperationForURL:info])
+      return YES;
+  }
+  return NO;
 }
-
-@end  // @implementation BookmarkBarView
-
-
-@implementation BookmarkBarView(TestingAPI)
 
 - (void)setController:(id)controller {
   controller_ = controller;
 }
 
-@end  // @implementation BookmarkBarView(TestingAPI)
+@end  // @implementation BookmarkBarView

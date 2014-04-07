@@ -212,7 +212,7 @@ class WebWidgetHostGtkWidget {
     // other's focus when running in parallel.
     if (!TestShell::layout_test_mode())
       host->webwidget()->setFocus(true);
-    return FALSE;
+    return TRUE;
   }
 
   // Keyboard focus left.
@@ -223,13 +223,17 @@ class WebWidgetHostGtkWidget {
     // other's focus when running in parallel.
     if (!TestShell::layout_test_mode())
       host->webwidget()->setFocus(false);
-    return FALSE;
+    return TRUE;
   }
 
   // Mouse button down.
   static gboolean HandleButtonPress(GtkWidget* widget,
                                     GdkEventButton* event,
                                     WebWidgetHost* host) {
+    if (!(event->button == 1 || event->button == 2 || event->button == 3))
+      return FALSE;  // We do not forward any other buttons to the renderer.
+    if (event->type == GDK_2BUTTON_PRESS || event->type == GDK_3BUTTON_PRESS)
+      return FALSE;
     host->webwidget()->handleInputEvent(
         WebInputEventFactory::mouseEvent(event));
     return FALSE;

@@ -41,8 +41,6 @@ void RunBeforeUnloadDialog(TabContents* tab_contents,
                            const std::wstring& message_text,
                            IPC::Message* reply_msg);
 
-// TODO(zelidrag): bug 32719, implement these modal dialogs on Linux and Mac.
-#if defined(OS_WIN)
 // This will display a modal dialog box with cookie information asking
 // user to accept or reject the cookie. The caller should pass |delegate|
 // that will handle the reply from the dialog.
@@ -71,8 +69,18 @@ void RunDatabasePrompt(
     HostContentSettingsMap* host_content_settings_map,
     const GURL& origin,
     const string16& database_name,
+    const string16& display_name,
+    unsigned long estimated_size,
     CookiePromptModalDialogDelegate* delegate);
-#endif
+
+// This will display a modal dialog box with the |manifest_url| and ask the
+// user to accept or reject it. The caller should pass |delegate| that will
+// handle the reply from the dialog.
+void RunAppCachePrompt(
+    TabContents* tab_contents,
+    HostContentSettingsMap* host_content_settings_map,
+    const GURL& manifest_url,
+    CookiePromptModalDialogDelegate* delegate);
 
 #endif  // CHROME_BROWSER_MESSAGE_BOX_HANDLER_H_
 

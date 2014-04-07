@@ -1,7 +1,12 @@
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Use of this source code is governed by a BSD-style license that can be
+// found in the LICENSE file.
+
 #ifndef LIBRARY_H__
 #define LIBRARY_H__
 
 #include <elf.h>
+#include <functional>
 #include <map>
 #include <set>
 #include <string>
@@ -30,6 +35,8 @@ namespace playground {
 class Library {
   friend class Maps;
  public:
+  typedef Maps::string string;
+
   Library() :
       valid_(false),
       isVDSO_(false),
@@ -50,14 +57,24 @@ class Library {
 
   void addMemoryRange(void* start, void* stop, Elf_Addr offset,
                       int prot, int isVDSO) {
-    memory_ranges_.insert(std::make_pair(offset, Range(start, stop, prot)));
     isVDSO_ = isVDSO;
+    RangeMap::const_iterator iter = memory_ranges_.find(offset);
+    if (iter != memory_ranges_.end()) {
+      // It is possible to have overlapping mappings. This is particularly
+      // likely to happen with very small programs or libraries. If it does
+      // happen, we really only care about the text segment. Look for a
+      // mapping that is mapped executable.
+      if ((prot & PROT_EXEC) == 0) {
+        return;
+      }
+    }
+    memory_ranges_.insert(std::make_pair(offset, Range(start, stop, prot)));
   }
 
   char *get(Elf_Addr offset, char *buf, size_t len);
-  std::string get(Elf_Addr offset);
+  string get(Elf_Addr offset);
   char *getOriginal(Elf_Addr offset, char *buf, size_t len);
-  std::string getOriginal(Elf_Addr offset);
+  string getOriginal(Elf_Addr offset);
 
   template<class T>T* get(Elf_Addr offset, T* t) {
     if (!valid_) {
@@ -108,10 +125,8 @@ class Library {
 
   bool parseElf();
   const Elf_Ehdr* getEhdr();
-  const Elf_Shdr* getSection(const std::string& section);
-  const int getSectionIndex(const std::string& section);
-  void **getRelocation(const std::string& symbol);
-  void *getSymbol(const std::string& symbol);
+  const Elf_Shdr* getSection(const string& section);
+  int getSectionIndex(const string& section);
   void makeWritable(bool state) const;
   void patchSystemCalls();
   bool isVDSO() const { return isVDSO_; }
@@ -121,6 +136,9 @@ class Library {
 
  private:
   class GreaterThan : public std::binary_function<Elf_Addr, Elf_Addr, bool> {
+    // We create the RangeMap with a GreaterThan rather than the default
+    // comparator, as that allows us to use lower_bound() to find memory
+    // mappings.
    public:
     bool operator() (Elf_Addr s1, Elf_Addr s2) const {
       return s1 > s2;
@@ -135,10 +153,19 @@ class Library {
     int   prot;
   };
 
-  typedef std::map<Elf_Addr, Range, GreaterThan> RangeMap;
-  typedef std::map<std::string, std::pair<int, Elf_Shdr> > SectionTable;
-  typedef std::map<std::string, Elf_Sym> SymbolTable;
-  typedef std::map<std::string, Elf_Addr> PltTable;
+  typedef std::map<Elf_Addr, Range, GreaterThan,
+                   SystemAllocator<std::pair<const Elf_Addr,
+                                             Range> > > RangeMap;
+  typedef std::map<string, std::pair<int, Elf_Shdr>, std::less<string>,
+                   SystemAllocator<std::pair<const string,
+                                             std::pair<int, Elf_Shdr> > > >
+                   SectionTable;
+  typedef std::map<string, Elf_Sym, std::less<string>,
+                   SystemAllocator<std::pair<const string,
+                                             Elf_Sym> > > SymbolTable;
+  typedef std::map<string, Elf_Addr, std::less<string>,
+                   SystemAllocator<std::pair<const string,
+                                             Elf_Addr> > > PltTable;
 
   char* getBytes(char* dst, const char* src, ssize_t len);
   static bool isSafeInsn(unsigned short insn);

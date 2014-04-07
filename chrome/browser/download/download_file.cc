@@ -7,12 +7,13 @@
 #include "base/file_util.h"
 #include "base/path_service.h"
 #include "base/stl_util-inl.h"
-#include "base/string_util.h"
 #include "base/task.h"
 #include "base/thread.h"
+#include "base/utf_string_conversions.h"
 #include "build/build_config.h"
 #include "chrome/browser/chrome_thread.h"
 #include "chrome/browser/download/download_manager.h"
+#include "chrome/browser/download/download_util.h"
 #include "chrome/browser/net/chrome_url_request_context.h"
 #include "chrome/browser/profile.h"
 #include "chrome/browser/renderer_host/resource_dispatcher_host.h"
@@ -57,7 +58,7 @@ class DownloadFileUpdateTask : public Task {
 // DownloadFile implementation -------------------------------------------------
 
 DownloadFile::DownloadFile(const DownloadCreateInfo* info)
-    : file_(NULL),
+    : file_stream_(info->save_info.file_stream),
       source_url_(info->url),
       referrer_url_(info->referrer_url),
       id_(info->download_id),
@@ -65,9 +66,11 @@ DownloadFile::DownloadFile(const DownloadCreateInfo* info)
       render_view_id_(info->render_view_id),
       request_id_(info->request_id),
       bytes_so_far_(0),
+      full_path_(info->save_info.file_path),
       path_renamed_(false),
       in_progress_(true),
-      dont_sleep_(true) {
+      dont_sleep_(true),
+      save_info_(info->save_info) {
 }
 
 DownloadFile::~DownloadFile() {
@@ -75,15 +78,16 @@ DownloadFile::~DownloadFile() {
 }
 
 bool DownloadFile::Initialize() {
-  if (file_util::CreateTemporaryFile(&full_path_))
-    return Open("wb");
+  if (!full_path_.empty() ||
+      download_util::CreateTemporaryFileForDownload(&full_path_))
+    return Open();
   return false;
 }
 
 bool DownloadFile::AppendDataToFile(const char* data, int data_len) {
-  if (file_) {
+  if (file_stream_.get()) {
     // FIXME bug 595247: handle errors on file writes.
-    size_t written = fwrite(data, 1, data_len, file_);
+    size_t written = file_stream_->Write(data, data_len, NULL);
     bytes_so_far_ += written;
     return true;
   }
@@ -92,11 +96,24 @@ bool DownloadFile::AppendDataToFile(const char* data, int data_len) {
 
 void DownloadFile::Cancel() {
   Close();
-  file_util::Delete(full_path_, false);
+  if (!full_path_.empty())
+    file_util::Delete(full_path_, false);
 }
 
 // The UI has provided us with our finalized name.
 bool DownloadFile::Rename(const FilePath& new_path) {
+  // If the new path is same as the old one, there is no need to perform the
+  // following renaming logic.
+  if (new_path == full_path_) {
+    path_renamed_ = true;
+
+    // Don't close the file if we're not done (finished or canceled).
+    if (!in_progress_)
+      Close();
+
+    return true;
+  }
+
   Close();
 
 #if defined(OS_WIN)
@@ -106,10 +123,25 @@ bool DownloadFile::Rename(const FilePath& new_path) {
   if (!file_util::RenameFileAndResetSecurityDescriptor(full_path_, new_path))
     return false;
 #elif defined(OS_POSIX)
-  // TODO(estade): Move() falls back to copying and deleting when a simple
-  // rename fails. Copying sucks for large downloads. crbug.com/8737
-  if (!file_util::Move(full_path_, new_path))
+  {
+    // Similarly, on Unix, we're moving a temp file created with permissions
+    // 600 to |new_path|. Here, we try to fix up the destination file with
+    // appropriate permissions.
+    struct stat st;
+    // First check the file existence and create an empty file if it doesn't
+    // exist.
+    if (!file_util::PathExists(new_path))
+      file_util::WriteFile(new_path, "", 0);
+    bool stat_succeeded = (stat(new_path.value().c_str(), &st) == 0);
+
+    // TODO(estade): Move() falls back to copying and deleting when a simple
+    // rename fails. Copying sucks for large downloads. crbug.com/8737
+    if (!file_util::Move(full_path_, new_path))
       return false;
+
+    if (stat_succeeded)
+      chmod(new_path.value().c_str(), st.st_mode);
+  }
 #endif
 
   full_path_ = new_path;
@@ -119,23 +151,35 @@ bool DownloadFile::Rename(const FilePath& new_path) {
   if (!in_progress_)
     return true;
 
-  if (!Open("a+b"))
+  if (!Open())
     return false;
+
+  // Move to the end of the new file.
+  if (file_stream_->Seek(net::FROM_END, 0) < 0)
+    return false;
+
   return true;
 }
 
 void DownloadFile::Close() {
-  if (file_) {
-    file_util::CloseFile(file_);
-    file_ = NULL;
+  if (file_stream_.get()) {
+    file_stream_->Close();
+    file_stream_.reset();
   }
 }
 
-bool DownloadFile::Open(const char* open_mode) {
+bool DownloadFile::Open() {
   DCHECK(!full_path_.empty());
-  file_ = file_util::OpenFile(full_path_, open_mode);
-  if (!file_) {
-    return false;
+
+  // Create a new file steram if it is not provided.
+  if (!file_stream_.get()) {
+    file_stream_.reset(new net::FileStream);
+    if (file_stream_->Open(full_path_,
+                          base::PLATFORM_FILE_OPEN_ALWAYS |
+                              base::PLATFORM_FILE_WRITE) != net::OK) {
+      file_stream_.reset();
+      return false;
+    }
   }
 
 #if defined(OS_WIN)
@@ -429,6 +473,7 @@ void DownloadFileManager::DownloadUrl(
     const GURL& url,
     const GURL& referrer,
     const std::string& referrer_charset,
+    const DownloadSaveInfo& save_info,
     int render_process_host_id,
     int render_view_id,
     URLRequestContextGetter* request_context_getter) {
@@ -440,6 +485,7 @@ void DownloadFileManager::DownloadUrl(
                           url,
                           referrer,
                           referrer_charset,
+                          save_info,
                           render_process_host_id,
                           render_view_id,
                           request_context_getter));
@@ -524,6 +570,7 @@ void DownloadFileManager::OnDownloadUrl(
     const GURL& url,
     const GURL& referrer,
     const std::string& referrer_charset,
+    const DownloadSaveInfo& save_info,
     int render_process_host_id,
     int render_view_id,
     URLRequestContextGetter* request_context_getter) {
@@ -534,6 +581,7 @@ void DownloadFileManager::OnDownloadUrl(
 
   resource_dispatcher_host_->BeginDownload(url,
                                            referrer,
+                                           save_info,
                                            render_process_host_id,
                                            render_view_id,
                                            context);

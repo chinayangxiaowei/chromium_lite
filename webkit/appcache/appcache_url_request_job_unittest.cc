@@ -1,4 +1,4 @@
-// Copyright (c) 2009 The Chromium Authos. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,6 +6,7 @@
 #include "base/pickle.h"
 #include "base/thread.h"
 #include "base/waitable_event.h"
+#include "net/base/net_errors.h"
 #include "net/url_request/url_request.h"
 #include "net/url_request/url_request_error_job.h"
 #include "net/base/io_buffer.h"
@@ -401,7 +402,7 @@ class AppCacheURLRequestJobTest : public testing::Test {
     EXPECT_FALSE(job->is_delivering_error_response());
     EXPECT_FALSE(job->has_been_started());
     EXPECT_FALSE(job->has_been_killed());
-    EXPECT_EQ(GURL::EmptyGURL(), job->manifest_url());
+    EXPECT_EQ(GURL(), job->manifest_url());
     EXPECT_EQ(kNoCacheId, job->cache_id());
     EXPECT_FALSE(job->entry().has_response_id());
 

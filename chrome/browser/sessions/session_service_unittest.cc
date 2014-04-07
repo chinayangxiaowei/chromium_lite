@@ -1,4 +1,4 @@
-// Copyright (c) 2006-2008 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,21 +9,24 @@
 #include "base/stl_util-inl.h"
 #include "base/string_util.h"
 #include "base/time.h"
+#include "chrome/browser/defaults.h"
 #include "chrome/browser/sessions/session_backend.h"
 #include "chrome/browser/sessions/session_service.h"
 #include "chrome/browser/sessions/session_service_test_helper.h"
 #include "chrome/browser/sessions/session_types.h"
 #include "chrome/browser/tab_contents/navigation_entry.h"
 #include "chrome/common/chrome_paths.h"
+#include "chrome/test/browser_with_test_window_test.h"
 #include "chrome/test/file_test_utils.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
-class SessionServiceTest : public testing::Test {
+class SessionServiceTest : public BrowserWithTestWindowTest {
  public:
   SessionServiceTest() : window_bounds(0, 1, 2, 3) {}
 
  protected:
   virtual void SetUp() {
+    BrowserWithTestWindowTest::SetUp();
     std::string b = Int64ToString(base::Time::Now().ToInternalValue());
 
     PathService::Get(base::DIR_TEMP, &path_);
@@ -510,6 +513,9 @@ TEST_F(SessionServiceTest, PruneFromFront) {
   ASSERT_EQ(window_id.id(), windows[0]->window_id.id());
   ASSERT_EQ(1U, windows[0]->tabs.size());
 
+  // There shouldn't be an app id.
+  EXPECT_TRUE(windows[0]->tabs[0]->app_extension_id.empty());
+
   // We should be left with three navigations, the 2nd selected.
   SessionTab* tab = windows[0]->tabs[0];
   ASSERT_EQ(1, tab->current_navigation_index);
@@ -553,7 +559,58 @@ TEST_F(SessionServiceTest, PinnedFalseWhenSetToFalse) {
   EXPECT_FALSE(CreateAndWriteSessionWithOneTab(false, true));
 }
 
-// Explicitly set the pinned state to false and make sure we get back true.
+// Make sure application extension ids are persisted.
+TEST_F(SessionServiceTest, PersistApplicationExtensionID) {
+  SessionID tab_id;
+  ASSERT_NE(window_id.id(), tab_id.id());
+  std::string app_id("foo");
+
+  TabNavigation nav1(0, GURL("http://google.com"), GURL(),
+                     ASCIIToUTF16("abc"), std::string(),
+                     PageTransition::QUALIFIER_MASK);
+
+  helper_.PrepareTabInWindow(window_id, tab_id, 0, true);
+  UpdateNavigation(window_id, tab_id, nav1, 0, true);
+  helper_.SetTabAppExtensionID(window_id, tab_id, app_id);
+
+  ScopedVector<SessionWindow> windows;
+  ReadWindows(&(windows.get()));
+
+  helper_.AssertSingleWindowWithSingleTab(windows.get(), 1);
+  EXPECT_TRUE(app_id == windows[0]->tabs[0]->app_extension_id);
+}
+
+// Explicitly set the pinned state to true and make sure we get back true.
 TEST_F(SessionServiceTest, PinnedTrue) {
   EXPECT_TRUE(CreateAndWriteSessionWithOneTab(true, true));
+}
+
+class GetCurrentSessionCallbackHandler {
+ public:
+  void OnGotSession(int handle, std::vector<SessionWindow*>* windows) {
+    EXPECT_EQ(1U, windows->size());
+    EXPECT_EQ(2U, (*windows)[0]->tabs.size());
+    EXPECT_EQ(2U, (*windows)[0]->tabs[0]->navigations.size());
+    EXPECT_EQ(GURL("http://bar/1"),
+              (*windows)[0]->tabs[0]->navigations[0].url());
+    EXPECT_EQ(GURL("http://bar/2"),
+              (*windows)[0]->tabs[0]->navigations[1].url());
+    EXPECT_EQ(2U, (*windows)[0]->tabs[1]->navigations.size());
+    EXPECT_EQ(GURL("http://foo/1"),
+              (*windows)[0]->tabs[1]->navigations[0].url());
+    EXPECT_EQ(GURL("http://foo/2"),
+              (*windows)[0]->tabs[1]->navigations[1].url());
+  }
+};
+
+TEST_F(SessionServiceTest, GetCurrentSession) {
+  AddTab(browser(), GURL("http://foo/1"));
+  NavigateAndCommitActiveTab(GURL("http://foo/2"));
+  AddTab(browser(), GURL("http://bar/1"));
+  NavigateAndCommitActiveTab(GURL("http://bar/2"));
+
+  CancelableRequestConsumer consumer;
+  GetCurrentSessionCallbackHandler handler;
+  service()->GetCurrentSession(&consumer,
+      NewCallback(&handler, &GetCurrentSessionCallbackHandler::OnGotSession));
 }

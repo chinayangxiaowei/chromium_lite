@@ -88,8 +88,8 @@ static void DispatchEvent(Profile* profile,
                           const char* event_name,
                           const std::string json_args) {
   if (profile->GetExtensionMessageService()) {
-    profile->GetExtensionMessageService()->
-        DispatchEventToRenderers(event_name, json_args);
+    profile->GetExtensionMessageService()->DispatchEventToRenderers(
+        event_name, json_args, profile->IsOffTheRecord());
   }
 }
 
@@ -212,8 +212,8 @@ void ExtensionBrowserEventRouter::OnBrowserSetLastActive(
 }
 
 void ExtensionBrowserEventRouter::TabCreatedAt(TabContents* contents,
-                                                int index,
-                                                bool foreground) {
+                                               int index,
+                                               bool foreground) {
   DispatchEventWithTab(contents->profile(), events::kOnTabCreated, contents);
 
   RegisterForTabNotifications(contents);
@@ -314,8 +314,7 @@ void ExtensionBrowserEventRouter::TabSelectedAt(TabContents* old_contents,
 
 void ExtensionBrowserEventRouter::TabMoved(TabContents* contents,
                                            int from_index,
-                                           int to_index,
-                                           bool pinned_state_changed) {
+                                           int to_index) {
   ListValue args;
   args.Append(Value::CreateIntegerValue(ExtensionTabUtil::GetTabId(contents)));
 
@@ -396,7 +395,14 @@ void ExtensionBrowserEventRouter::TabChangedAt(TabContents* contents,
   TabUpdated(contents, false);
 }
 
-void ExtensionBrowserEventRouter::TabStripEmpty() { }
+void ExtensionBrowserEventRouter::TabReplacedAt(TabContents* old_contents,
+                                                TabContents* new_contents,
+                                                int index) {
+  // TODO: 32913, consider adding better notification for this event.
+  TabInsertedAt(new_contents, index, false);
+}
+
+void ExtensionBrowserEventRouter::TabStripEmpty() {}
 
 void ExtensionBrowserEventRouter::DispatchOldPageActionEvent(
     Profile* profile,
@@ -431,8 +437,8 @@ void ExtensionBrowserEventRouter::PageActionExecuted(
   DispatchOldPageActionEvent(profile, extension_id, page_action_id, tab_id, url,
                              button);
   TabContents* tab_contents = NULL;
-  if (!ExtensionTabUtil::GetTabById(tab_id, profile, NULL, NULL, &tab_contents,
-                                    NULL)) {
+  if (!ExtensionTabUtil::GetTabById(tab_id, profile, profile->IsOffTheRecord(),
+                                    NULL, NULL, &tab_contents, NULL)) {
     return;
   }
   std::string event_name = std::string("pageAction/") + extension_id;

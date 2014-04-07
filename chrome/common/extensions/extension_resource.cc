@@ -1,15 +1,15 @@
-// Copyright (c) 2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/common/extensions/extension_resource.h"
 
-#include "base/file_path.h"
 #include "base/file_util.h"
-#include "base/string_util.h"
-#include "chrome/common/extensions/extension_l10n_util.h"
-#include "googleurl/src/gurl.h"
-#include "net/base/net_util.h"
+#include "base/logging.h"
+
+PlatformThreadId ExtensionResource::file_thread_id_ = 0;
+
+bool ExtensionResource::check_for_file_thread_ = false;
 
 ExtensionResource::ExtensionResource() {
 }
@@ -20,7 +20,7 @@ ExtensionResource::ExtensionResource(const FilePath& extension_root,
       relative_path_(relative_path) {
 }
 
-const FilePath& ExtensionResource::GetFilePath() const {
+const FilePath& ExtensionResource::GetFilePathOnAnyThreadHack() const {
   if (extension_root_.empty() || relative_path_.empty()) {
     DCHECK(full_resource_path_.empty());
     return full_resource_path_;
@@ -30,13 +30,19 @@ const FilePath& ExtensionResource::GetFilePath() const {
   if (!full_resource_path_.empty())
     return full_resource_path_;
 
-  full_resource_path_ = GetFilePath(extension_root_, relative_path_);
+  full_resource_path_ =
+      GetFilePathOnAnyThreadHack(extension_root_, relative_path_);
   return full_resource_path_;
 }
 
+const FilePath& ExtensionResource::GetFilePath() const {
+  ExtensionResource::CheckFileAccessFromFileThread();
+  return GetFilePathOnAnyThreadHack();
+}
+
 // static
-FilePath ExtensionResource::GetFilePath(const FilePath& extension_root,
-                                        const FilePath& relative_path) {
+FilePath ExtensionResource::GetFilePathOnAnyThreadHack(
+    const FilePath& extension_root, const FilePath& relative_path) {
   // We need to resolve the parent references in the extension_root
   // path on its own because IsParent doesn't like parent references.
   FilePath clean_extension_root(extension_root);
@@ -61,7 +67,20 @@ FilePath ExtensionResource::GetFilePath(const FilePath& extension_root,
   return FilePath();
 }
 
-// Unittesting helpers.
+// static
+FilePath ExtensionResource::GetFilePath(
+    const FilePath& extension_root, const FilePath& relative_path) {
+  CheckFileAccessFromFileThread();
+  return GetFilePathOnAnyThreadHack(extension_root, relative_path);
+}
+
+// static
+void ExtensionResource::CheckFileAccessFromFileThread() {
+  DCHECK(!check_for_file_thread_ ||
+         file_thread_id_ == PlatformThread::CurrentId());
+}
+
+// Unit-testing helpers.
 FilePath::StringType ExtensionResource::NormalizeSeperators(
     FilePath::StringType path) const {
 #if defined(FILE_PATH_USES_WIN_SEPARATORS)

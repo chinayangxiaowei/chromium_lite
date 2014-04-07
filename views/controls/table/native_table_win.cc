@@ -1,20 +1,20 @@
-// Copyright (c) 2009 The Chromium Authors. All rights reserved. Use of this
-// source code is governed by a BSD-style license that can be found in the
-// LICENSE file.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
+// Use of this source code is governed by a BSD-style license that can be
+// found in the LICENSE file.
 
 #include "views/controls/table/native_table_win.h"
 
 #include <commctrl.h>
 #include <windowsx.h>
 
-#include "app/gfx/canvas.h"
-#include "app/gfx/favicon_size.h"
-#include "app/gfx/icon_util.h"
 #include "app/l10n_util.h"
 #include "app/l10n_util_win.h"
 #include "app/table_model.h"
 #include "base/logging.h"
 #include "base/win_util.h"
+#include "gfx/canvas.h"
+#include "gfx/favicon_size.h"
+#include "gfx/icon_util.h"
 #include "skia/ext/skia_utils_win.h"
 #include "views/controls/table/table_view2.h"
 #include "views/controls/table/table_view_observer.h"
@@ -51,7 +51,7 @@ NativeTableWin::~NativeTableWin() {
 ////////////////////////////////////////////////////////////////////////////////
 // NativeTableWin, NativeTableWrapper implementation:
 
-int NativeTableWin::GetRowCount() {
+int NativeTableWin::GetRowCount() const {
   if (!native_view())
     return 0;
   return ListView_GetItemCount(native_view());
@@ -109,7 +109,7 @@ gfx::NativeView NativeTableWin::GetTestingHandle() const {
   return native_view();
 }
 
-int NativeTableWin::GetColumnWidth(int column_index) {
+int NativeTableWin::GetColumnWidth(int column_index) const {
   if (!native_view())
     return 0;
   return ListView_GetColumnWidth(native_view(), column_index);
@@ -121,19 +121,19 @@ void NativeTableWin::SetColumnWidth(int column_index, int width) {
   ListView_SetColumnWidth(native_view(), column_index, width);
 }
 
-int NativeTableWin::GetSelectedRowCount() {
+int NativeTableWin::GetSelectedRowCount() const {
   if (!native_view())
     return 0;
   return ListView_GetSelectedCount(native_view());
 }
 
-int NativeTableWin::GetFirstSelectedRow() {
+int NativeTableWin::GetFirstSelectedRow() const {
   if (!native_view())
     return -1;
   return ListView_GetNextItem(native_view(), -1, LVNI_ALL | LVIS_SELECTED);
 }
 
-int NativeTableWin::GetFirstFocusedRow() {
+int NativeTableWin::GetFirstFocusedRow() const {
   if (!native_view())
     return -1;
   return ListView_GetNextItem(native_view(), -1, LVNI_ALL | LVIS_FOCUSED);
@@ -168,14 +168,14 @@ void NativeTableWin::SetFocusState(int model_row, bool state) {
                         state ? LVIS_FOCUSED : 0, LVIS_FOCUSED)
 }
 
-bool NativeTableWin::IsRowSelected(int model_row) {
+bool NativeTableWin::IsRowSelected(int model_row) const {
   if (!native_view())
     return false;
   return ListView_GetItemState(native_view(), model_row, LVIS_SELECTED) ==
       LVIS_SELECTED;
 }
 
-bool NativeTableWin::IsRowFocused(int model_row) {
+bool NativeTableWin::IsRowFocused(int model_row) const {
   if (!native_view())
     return false;
   return ListView_GetItemState(native_view(), model_row, LVIS_FOCUSED) ==
@@ -231,7 +231,7 @@ void NativeTableWin::OnRowsRemoved(int start, int length) {
   }
 }
 
-gfx::Rect NativeTableWin::GetBounds() {
+gfx::Rect NativeTableWin::GetBounds() const {
   RECT native_bounds;
   if (!native_view() || GetClientRect(native_view(), &native_bounds))
     return gfx::Rect();

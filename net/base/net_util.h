@@ -171,10 +171,15 @@ std::string CanonicalizeHost(const std::wstring& host,
 //   * Each component contains only alphanumeric characters and '-' or '_'
 //   * The last component does not begin with a digit
 //   * Optional trailing dot after last component (means "treat as FQDN")
+// If |desired_tld| is non-NULL, the host will only be considered invalid if
+// appending it as a trailing component still results in an invalid host.  This
+// helps us avoid marking as "invalid" user attempts to open "www.401k.com" by
+// typing 4-0-1-k-<ctrl>+<enter>.
 //
 // NOTE: You should only pass in hosts that have been returned from
 // CanonicalizeHost(), or you may not get accurate results.
-bool IsCanonicalizedHostCompliant(const std::string& host);
+bool IsCanonicalizedHostCompliant(const std::string& host,
+                                  const std::string& desired_tld);
 
 // Call these functions to get the html snippet for a directory listing.
 // The return values of both functions are in UTF-8.
@@ -282,6 +287,11 @@ inline std::wstring FormatUrl(const GURL& url, const std::wstring& languages) {
 GURL SimplifyUrlForRequest(const GURL& url);
 
 void SetExplicitlyAllowedPorts(const std::wstring& allowed_ports);
+
+// Perform a simplistic test to see if IPv6 is supported by trying to create an
+// IPv6 socket.
+// TODO(jar): Make test more in-depth as needed.
+bool IPv6Supported();
 
 }  // namespace net
 

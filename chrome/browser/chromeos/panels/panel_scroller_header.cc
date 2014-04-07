@@ -1,14 +1,14 @@
-// Copyright (c) 2009 The Chromium Authors. All rights reserved.  Use of this
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.  Use of this
 // source code is governed by a BSD-style license that can be found in the
 // LICENSE file.
 
 #include "chrome/browser/chromeos/panels/panel_scroller_header.h"
 
-#include "app/gfx/canvas.h"
-#include "app/gfx/font.h"
 #include "app/resource_bundle.h"
-#include "base/string_util.h"
+#include "base/utf_string_conversions.h"
 #include "chrome/browser/chromeos/panels/panel_scroller.h"
+#include "gfx/canvas.h"
+#include "gfx/font.h"
 
 PanelScrollerHeader::PanelScrollerHeader(PanelScroller* scroller)
     : views::View(),
@@ -47,5 +47,4 @@ void PanelScrollerHeader::Paint(gfx::Canvas* canvas) {
   int font_top = 1;
   canvas->DrawStringInt(UTF16ToWideHack(title_), font, 0xFF000000, 3, font_top,
                         size().width(), size().height() - font_top);
-
 }

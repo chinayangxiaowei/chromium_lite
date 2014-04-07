@@ -17,7 +17,7 @@ TEST(JSONValueSerializerTest, Roundtrip) {
   const std::string original_serialization =
     "{\"bool\":true,\"int\":42,\"list\":[1,2],\"null\":null,\"real\":3.14}";
   JSONStringValueSerializer serializer(original_serialization);
-  scoped_ptr<Value> root(serializer.Deserialize(NULL));
+  scoped_ptr<Value> root(serializer.Deserialize(NULL, NULL));
   ASSERT_TRUE(root.get());
   ASSERT_TRUE(root->IsType(Value::TYPE_DICTIONARY));
 
@@ -83,8 +83,8 @@ TEST(JSONValueSerializerTest, StringEscape) {
   std::string all_chars_expected =
       "\\u0001\\u0002\\u0003\\u0004\\u0005\\u0006\\u0007\\b\\t\\n\\u000B\\f\\r"
       "\\u000E\\u000F\\u0010\\u0011\\u0012\\u0013\\u0014\\u0015\\u0016\\u0017"
-      "\\u0018\\u0019\\u001A\\u001B\\u001C\\u001D\\u001E"
-      "\\u001F !\\\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\"
+      "\\u0018\\u0019\\u001A\\u001B\\u001C\\u001D\\u001E\\u001F !\\\""
+      "#$%&'()*+,-./0123456789:;\\u003C=\\u003E?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\"
       "\\]^_`abcdefghijklmnopqrstuvwxyz{|}~\\u007F\\u0080\\u0081\\u0082\\u0083"
       "\\u0084\\u0085\\u0086\\u0087\\u0088\\u0089\\u008A\\u008B\\u008C\\u008D"
       "\\u008E\\u008F\\u0090\\u0091\\u0092\\u0093\\u0094\\u0095\\u0096\\u0097"
@@ -130,7 +130,7 @@ TEST(JSONValueSerializerTest, UnicodeStrings) {
 
   // escaped ascii text -> json
   JSONStringValueSerializer deserializer(expected);
-  scoped_ptr<Value> deserial_root(deserializer.Deserialize(NULL));
+  scoped_ptr<Value> deserial_root(deserializer.Deserialize(NULL, NULL));
   ASSERT_TRUE(deserial_root.get());
   DictionaryValue* dict_root =
       static_cast<DictionaryValue*>(deserial_root.get());
@@ -154,7 +154,7 @@ TEST(JSONValueSerializerTest, HexStrings) {
 
   // escaped ascii text -> json
   JSONStringValueSerializer deserializer(expected);
-  scoped_ptr<Value> deserial_root(deserializer.Deserialize(NULL));
+  scoped_ptr<Value> deserial_root(deserializer.Deserialize(NULL, NULL));
   ASSERT_TRUE(deserial_root.get());
   DictionaryValue* dict_root =
       static_cast<DictionaryValue*>(deserial_root.get());
@@ -165,7 +165,7 @@ TEST(JSONValueSerializerTest, HexStrings) {
   // Test converting escaped regular chars
   std::string escaped_chars = "{\"test\":\"\\u0067\\u006f\"}";
   JSONStringValueSerializer deserializer2(escaped_chars);
-  deserial_root.reset(deserializer2.Deserialize(NULL));
+  deserial_root.reset(deserializer2.Deserialize(NULL, NULL));
   ASSERT_TRUE(deserial_root.get());
   dict_root = static_cast<DictionaryValue*>(deserial_root.get());
   ASSERT_TRUE(dict_root->GetString(L"test", &test_value));
@@ -181,9 +181,9 @@ TEST(JSONValueSerializerTest, AllowTrailingComma) {
   JSONStringValueSerializer serializer(test_with_commas);
   serializer.set_allow_trailing_comma(true);
   JSONStringValueSerializer serializer_expected(test_no_commas);
-  root.reset(serializer.Deserialize(NULL));
+  root.reset(serializer.Deserialize(NULL, NULL));
   ASSERT_TRUE(root.get());
-  root_expected.reset(serializer_expected.Deserialize(NULL));
+  root_expected.reset(serializer_expected.Deserialize(NULL, NULL));
   ASSERT_TRUE(root_expected.get());
   ASSERT_TRUE(root->Equals(root_expected.get()));
 }
@@ -267,7 +267,7 @@ TEST_F(JSONFileValueSerializerTest, Roundtrip) {
 
   JSONFileValueSerializer deserializer(original_file_path);
   scoped_ptr<Value> root;
-  root.reset(deserializer.Deserialize(NULL));
+  root.reset(deserializer.Deserialize(NULL, NULL));
 
   ASSERT_TRUE(root.get());
   ASSERT_TRUE(root->IsType(Value::TYPE_DICTIONARY));
@@ -317,7 +317,7 @@ TEST_F(JSONFileValueSerializerTest, RoundtripNested) {
 
   JSONFileValueSerializer deserializer(original_file_path);
   scoped_ptr<Value> root;
-  root.reset(deserializer.Deserialize(NULL));
+  root.reset(deserializer.Deserialize(NULL, NULL));
   ASSERT_TRUE(root.get());
 
   // Now try writing.
@@ -343,6 +343,6 @@ TEST_F(JSONFileValueSerializerTest, NoWhitespace) {
   ASSERT_TRUE(file_util::PathExists(source_file_path));
   JSONFileValueSerializer serializer(source_file_path);
   scoped_ptr<Value> root;
-  root.reset(serializer.Deserialize(NULL));
+  root.reset(serializer.Deserialize(NULL, NULL));
   ASSERT_TRUE(root.get());
 }

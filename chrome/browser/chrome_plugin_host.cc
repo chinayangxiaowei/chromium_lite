@@ -38,7 +38,6 @@
 #include "chrome/common/net/url_request_intercept_job.h"
 #include "chrome/common/plugin_messages.h"
 #include "chrome/common/render_messages.h"
-#include "net/base/base64.h"
 #include "net/base/cookie_monster.h"
 #include "net/base/io_buffer.h"
 #include "net/base/net_errors.h"
@@ -462,9 +461,10 @@ int STDCALL CPB_GetBrowsingContextInfo(
     PluginService* service = PluginService::GetInstance();
     if (!service)
       return CPERR_FAILURE;
-    std::wstring wretval = service->GetChromePluginDataDir().ToWStringHack();
-    file_util::AppendToPath(&wretval, chrome::kChromePluginDataDirname);
-    *static_cast<char**>(buf) = CPB_StringDup(CPB_Alloc, WideToUTF8(wretval));
+    FilePath path = service->GetChromePluginDataDir();
+    std::string retval = WideToUTF8(
+        path.Append(chrome::kChromePluginDataDirname).ToWStringHack());
+    *static_cast<char**>(buf) = CPB_StringDup(CPB_Alloc, retval);
     return CPERR_SUCCESS;
     }
   case CPBROWSINGCONTEXT_UI_LOCALE_PTR: {
@@ -656,7 +656,8 @@ CPError STDCALL CPR_AppendFileToUpload(CPRequest* request, const char* filepath,
 
   if (!length) length = kuint64max;
   FilePath path(FilePath::FromWStringHack(UTF8ToWide(filepath)));
-  handler->request()->AppendFileRangeToUpload(path, offset, length);
+  handler->request()->AppendFileRangeToUpload(path, offset, length,
+                                              base::Time());
   return CPERR_SUCCESS;
 }
 

@@ -5,13 +5,14 @@
 #include "chrome/browser/browsing_data_local_storage_helper.h"
 
 #include "base/file_util.h"
+#include "base/string_util.h"
 #include "base/message_loop.h"
 #include "chrome/browser/chrome_thread.h"
 #include "chrome/browser/in_process_webkit/webkit_context.h"
 #include "chrome/browser/profile.h"
+#include "third_party/WebKit/WebKit/chromium/public/WebCString.h"
 #include "third_party/WebKit/WebKit/chromium/public/WebSecurityOrigin.h"
 #include "third_party/WebKit/WebKit/chromium/public/WebString.h"
-#include "webkit/glue/glue_util.h"
 #include "webkit/glue/webkit_glue.h"
 
 BrowsingDataLocalStorageHelper::BrowsingDataLocalStorageHelper(
@@ -60,7 +61,7 @@ void BrowsingDataLocalStorageHelper::DeleteLocalStorageFile(
 void BrowsingDataLocalStorageHelper::FetchLocalStorageInfoInWebKitThread() {
   DCHECK(ChromeThread::CurrentlyOn(ChromeThread::WEBKIT));
   file_util::FileEnumerator file_enumerator(
-      profile_->GetWebKitContext()->data_path().AppendASCII(
+      profile_->GetWebKitContext()->data_path().Append(
           DOMStorageContext::kLocalStorageDirectory),
       false, file_util::FileEnumerator::FILES);
   for (FilePath file_path = file_enumerator.Next(); !file_path.empty();
@@ -69,17 +70,20 @@ void BrowsingDataLocalStorageHelper::FetchLocalStorageInfoInWebKitThread() {
       scoped_ptr<WebKit::WebSecurityOrigin> web_security_origin(
           WebKit::WebSecurityOrigin::createFromDatabaseIdentifier(
               webkit_glue::FilePathToWebString(file_path.BaseName())));
+      if (EqualsASCII(web_security_origin->protocol(),
+                      chrome::kExtensionScheme)) {
+        // Extension state is not considered browsing data.
+        continue;
+      }
       file_util::FileInfo file_info;
       bool ret = file_util::GetFileInfo(file_path, &file_info);
       if (ret) {
         local_storage_info_.push_back(LocalStorageInfo(
-            webkit_glue::WebStringToStdString(web_security_origin->protocol()),
-            webkit_glue::WebStringToStdString(web_security_origin->host()),
+            web_security_origin->protocol().utf8(),
+            web_security_origin->host().utf8(),
             web_security_origin->port(),
-            webkit_glue::WebStringToStdString(
-                web_security_origin->databaseIdentifier()),
-            webkit_glue::WebStringToStdString(
-                web_security_origin->toString()),
+            web_security_origin->databaseIdentifier().utf8(),
+            web_security_origin->toString().utf8(),
             file_path,
             file_info.size,
             file_info.last_modified));
@@ -98,8 +102,10 @@ void BrowsingDataLocalStorageHelper::NotifyInUIThread() {
   DCHECK(is_fetching_);
   // Note: completion_callback_ mutates only in the UI thread, so it's safe to
   // test it here.
-  if (completion_callback_ != NULL)
+  if (completion_callback_ != NULL) {
     completion_callback_->Run(local_storage_info_);
+    completion_callback_.reset();
+  }
   is_fetching_ = false;
 }
 

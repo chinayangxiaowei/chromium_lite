@@ -1,4 +1,4 @@
-// Copyright (c) 2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,23 +8,26 @@
 #import <Cocoa/Cocoa.h>
 #include <map>
 
+#import "base/chrome_application_mac.h"
 #include "base/scoped_nsobject.h"
 #include "base/scoped_ptr.h"
 #include "chrome/browser/cocoa/bookmark_bar_bridge.h"
 #import "chrome/browser/cocoa/bookmark_bar_state.h"
 #import "chrome/browser/cocoa/bookmark_bar_toolbar_view.h"
+#import "chrome/browser/cocoa/bookmark_button.h"
 #include "chrome/browser/cocoa/tab_strip_model_observer_bridge.h"
 #include "webkit/glue/window_open_disposition.h"
 
 @class BookmarkBarController;
+@class BookmarkBarFolderController;
 @class BookmarkBarView;
 @class BookmarkButton;
+@class BookmarkFolderTarget;
 class BookmarkModel;
 @class BookmarkMenu;
 class BookmarkNode;
 class Browser;
 class GURL;
-@class MenuButton;
 class PrefService;
 class Profile;
 class TabContents;
@@ -34,12 +37,60 @@ class TabContents;
 namespace bookmarks {
 
 // Magic numbers from Cole
+// TODO(jrg): create an objc-friendly version of bookmark_bar_constants.h?
+
+// Used as a maximum width for buttons on the bar.
 const CGFloat kDefaultBookmarkWidth = 150.0;
+
+// TODO(jrg): http://crbug.com/36276 to get final sizes.
+// Used as a min/max width for buttons on menus (not on the bar).
+const CGFloat kBookmarkMenuButtonMinimumWidth = 100.0;
+const CGFloat kBookmarkMenuButtonMaximumWidth = 485.0;
+
 const CGFloat kBookmarkVerticalPadding = 2.0;
 const CGFloat kBookmarkHorizontalPadding = 1.0;
+// (end magic numbers from Cole)
 
-const CGFloat kNoBookmarksHorizontalOffset = 5.0;
-const CGFloat kNoBookmarksVerticalOffset = 6.0;
+// Make subfolder menus overlap their parent menu a bit to give a better
+// perception of a menuing system.
+const CGFloat kBookmarkMenuOverlap = 1.0;
+
+// Delay before opening a subfolder (and closing the previous one)
+// when hovering over a folder button.
+const NSTimeInterval kHoverOpenDelay = 0.3;
+
+// Delay on hover before a submenu opens when dragging.
+// Experimentally a drag hover open delay needs to be bigger than a
+// normal (non-drag) menu hover open such as used in the bookmark folder.
+//  TODO(jrg): confirm feel of this constant with ui-team.
+//  http://crbug.com/36276
+const NSTimeInterval kDragHoverOpenDelay = 0.7;
+
+// Notes on use of kDragHoverCloseDelay in
+// -[BookmarkBarFolderController draggingEntered:].
+//
+// We have an implicit delay on stop-hover-open before a submenu
+// closes.  This cannot be zero since it's nice to move the mouse in a
+// direct line from "current position" to "position of item in
+// submenu".  However, by doing so, it's possible to overlap a
+// different button on the current menu.  Example:
+//
+//  Folder1
+//  Folder2  ---> Sub1
+//  Folder3       Sub2
+//                Sub3
+//
+// If you hover over the F in Folder2 to open the sub, and then want to
+// select Sub3, a direct line movement of the mouse may cross over
+// Folder3.  Without this delay, that'll cause Sub to be closed before
+// you get there, since a "hover over" of Folder3 gets activated.
+// It's subtle but without the delay it feels broken.
+//
+// This is only really a problem with vertical menu --> vertical menu
+// movement; the bookmark bar (horizontal menu, sort of) seems fine,
+// perhaps because mouse move direction is purely vertical so there is
+// no opportunity for overlap.
+const NSTimeInterval kDragHoverCloseDelay = 0.4;
 
 }  // namespace bookmarks
 
@@ -66,7 +117,11 @@ willAnimateFromState:(bookmarks::VisualState)oldState
 // A controller for the bookmark bar in the browser window. Handles showing
 // and hiding based on the preference in the given profile.
 @interface BookmarkBarController :
-    NSViewController<BookmarkBarState, BookmarkBarToolbarViewController> {
+    NSViewController<BookmarkBarState,
+                     BookmarkBarToolbarViewController,
+                     BookmarkButtonDelegate,
+                     BookmarkButtonControllerProtocol,
+                     CrApplicationEventHookProtocol> {
  @private
   // The visual state of the bookmark bar. If an animation is running, this is
   // set to the "destination" and |lastVisualState_| is set to the "original"
@@ -115,8 +170,20 @@ willAnimateFromState:(bookmarks::VisualState)oldState
   // Delegate that can resize us.
   id<ViewResizer> resizeDelegate_;  // weak
 
+  // Logic for dealing with a click on a bookmark folder button.
+  scoped_nsobject<BookmarkFolderTarget> folderTarget_;
+
+  // A controller for a pop-up bookmark folder window (custom menu).
+  // This is not a scoped_nsobject because it owns itself (when its
+  // window closes the controller gets autoreleased).
+  BookmarkBarFolderController* folderController_;
+
+  // Are watching for a "click outside" or other event which would
+  // signal us to close the bookmark bar folder menus?
+  BOOL watchingForExitEvent_;
+
   IBOutlet BookmarkBarView* buttonView_;
-  IBOutlet MenuButton* offTheSideButton_;  // aka the chevron
+  IBOutlet BookmarkButton* offTheSideButton_;  // aka the chevron.
   IBOutlet NSMenu* buttonContextMenu_;
 
   // "Other bookmarks" button on the right side.
@@ -125,6 +192,27 @@ willAnimateFromState:(bookmarks::VisualState)oldState
   // We have a special menu for folder buttons.  This starts as a copy
   // of the bar menu.
   scoped_nsobject<BookmarkMenu> buttonFolderContextMenu_;
+
+  // When doing a drag, this is folder button "hovered over" which we
+  // may want to open after a short delay.  There are cases where a
+  // mouse-enter can open a folder (e.g. if the menus are "active")
+  // but that doesn't use this variable or need a delay so "hover" is
+  // the wrong term.
+  scoped_nsobject<BookmarkButton> hoverButton_;
+
+  // We save the view width when we add bookmark buttons.  This lets
+  // us avoid a rebuild until we've grown the window bigger than our
+  // initial build.
+  CGFloat savedFrameWidth_;
+
+  // The number of buttons we display in the bookmark bar.  This does
+  // not include the "off the side" chevron or the "Other Bookmarks"
+  // button.  We use this number to determine if we need to display
+  // the chevron, and to know what to place in the chevron's menu.
+  // Since we create everything before doing layout we can't be sure
+  // that all bookmark buttons we create will be visible.  Thus,
+  // [buttons_ count] isn't a definitive check.
+  int displayedButtonCount_;
 }
 
 @property(readonly, nonatomic) bookmarks::VisualState visualState;
@@ -147,9 +235,9 @@ willAnimateFromState:(bookmarks::VisualState)oldState
 // Update the visible state of the bookmark bar.
 - (void)updateVisibility;
 
-// Turn on or off the bookmark bar and prevent or reallow its
-// appearance.  On disable, toggle off if shown.  On enable, show only
-// if needed.  For fullscreen mode.
+// Turn on or off the bookmark bar and prevent or reallow its appearance. On
+// disable, toggle off if shown. On enable, show only if needed. App and popup
+// windows do not show a bookmark bar.
 - (void)setBookmarkBarEnabled:(BOOL)enabled;
 
 // Returns the amount by which the toolbar above should be compressed.
@@ -167,28 +255,29 @@ willAnimateFromState:(bookmarks::VisualState)oldState
 // need it for animations. Try not to propagate its use.
 - (void)layoutSubviews;
 
-// Complete a drag of a bookmark button to the given point (given in window
-// coordinates) on the main bar.
-// TODO(jrg): submenu DnD.
-// Returns YES on success.
-- (BOOL)dragButton:(BookmarkButton*)sourceButton to:(NSPoint)point;
+// Called by our view when it is moved to a window.
+- (void)viewDidMoveToWindow;
 
-// The x-coordinate of (the middle of) the indicator to draw for a drag of the
-// source button to the given point (given in window coordinates).
-// TODO(viettrungluu,jrg): instead of this, make buttons move around.
-- (CGFloat)indicatorPosForDragOfButton:(BookmarkButton*)sourceButton
-                               toPoint:(NSPoint)point;
+// Import bookmarks from another browser.
+- (IBAction)importBookmarks:(id)sender;
+
+// Provide a favIcon for a bookmark node.  May return nil.
+- (NSImage*)favIconForNode:(const BookmarkNode*)node;
 
 // Actions for manipulating bookmarks.
-// From a button, ...
+// Open a normal bookmark or folder from a button, ...
 - (IBAction)openBookmark:(id)sender;
-- (IBAction)openFolderMenuFromButton:(id)sender;
+- (IBAction)openBookmarkFolderFromButton:(id)sender;
+// From the "off the side" button, ...
+- (IBAction)openOffTheSideFolderFromButton:(id)sender;
 // From a context menu over the button, ...
 - (IBAction)openBookmarkInNewForegroundTab:(id)sender;
 - (IBAction)openBookmarkInNewWindow:(id)sender;
 - (IBAction)openBookmarkInIncognitoWindow:(id)sender;
 - (IBAction)editBookmark:(id)sender;
+- (IBAction)cutBookmark:(id)sender;
 - (IBAction)copyBookmark:(id)sender;
+- (IBAction)pasteBookmark:(id)sender;
 - (IBAction)deleteBookmark:(id)sender;
 // From a context menu over the bar, ...
 - (IBAction)openAllBookmarks:(id)sender;
@@ -226,7 +315,7 @@ willAnimateFromState:(bookmarks::VisualState)oldState
 - (NSCell*)cellForBookmarkNode:(const BookmarkNode*)node;
 - (void)clearBookmarkBar;
 - (BookmarkBarView*)buttonView;
-- (NSArray*)buttons;
+- (NSMutableArray*)buttons;
 - (NSRect)frameForBookmarkButtonFromCell:(NSCell*)cell xOffset:(int*)xOffset;
 - (void)checkForBookmarkButtonGrowth:(NSButton*)button;
 - (void)frameDidChange;
@@ -234,12 +323,24 @@ willAnimateFromState:(bookmarks::VisualState)oldState
 - (NSMenu *)menuForFolderNode:(const BookmarkNode*)node;
 - (int64)nodeIdFromMenuTag:(int32)tag;
 - (int32)menuTagFromNodeId:(int64)menuid;
-- (void)buildOffTheSideMenu;
+- (void)buildOffTheSideMenuIfNeeded;
 - (NSMenu*)offTheSideMenu;
 - (NSButton*)offTheSideButton;
 - (NSButton*)otherBookmarksButton;
-- (BookmarkNode*)nodeFromMenuItem:(id)sender;
-- (void)updateTheme:(GTMTheme*)theme;
+- (const BookmarkNode*)nodeFromMenuItem:(id)sender;
+- (void)updateTheme:(ThemeProvider*)themeProvider;
+- (BookmarkBarFolderController*)folderController;
+- (BookmarkButton*)buttonForDroppingOnAtPoint:(NSPoint)point;
+- (BOOL)isEventAnExitEvent:(NSEvent*)event;
+- (id)folderTarget;
+- (int)displayedButtonCount;
+- (NSMenu*)buttonContextMenu;
+- (void)setButtonContextMenu:(id)menu;
 @end
+
+// The (internal) |NSPasteboard| type string for bookmark button drags, used for
+// dragging buttons around the bookmark bar. The data for this type is just a
+// pointer to the |BookmarkButton| being dragged.
+extern NSString* kBookmarkButtonDragType;
 
 #endif  // CHROME_BROWSER_COCOA_BOOKMARK_BAR_CONTROLLER_H_

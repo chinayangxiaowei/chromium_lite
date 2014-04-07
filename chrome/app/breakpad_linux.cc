@@ -1,4 +1,4 @@
-// Copyright (c) 2009 The Chromium Authors. All rights reserved.
+// Copyright (c) 2010 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -24,19 +24,21 @@
 #include "base/path_service.h"
 #include "base/rand_util.h"
 #include "base/string_util.h"
-#include "breakpad/linux/directory_reader.h"
-#include "breakpad/linux/exception_handler.h"
-#include "breakpad/linux/linux_libc_support.h"
-#include "breakpad/linux/linux_syscall_support.h"
-#include "breakpad/linux/memory.h"
+#include "breakpad/src/client/linux/handler/exception_handler.h"
+#include "breakpad/src/client/linux/minidump_writer/directory_reader.h"
+#include "breakpad/src/common/linux/linux_libc_support.h"
+#include "breakpad/src/common/linux/linux_syscall_support.h"
+#include "breakpad/src/common/linux/memory.h"
 #include "chrome/common/chrome_descriptors.h"
 #include "chrome/common/chrome_paths.h"
 #include "chrome/common/chrome_switches.h"
+#include "chrome/common/env_vars.h"
 #include "chrome/installer/util/google_update_settings.h"
 
 static const char kUploadURL[] =
     "https://clients2.google.com/cr/report";
 
+static bool is_crash_reporter_enabled = false;
 static uint64_t uptime = 0;
 
 // Writes the value |v| as 16 hex characters to the memory pointed at by
@@ -54,6 +56,14 @@ static void write_uint64_hex(char* output, uint64_t v) {
 
 // Converts a struct timeval to milliseconds.
 static uint64_t timeval_to_ms(struct timeval *tv) {
+  uint64_t ret = tv->tv_sec;  // Avoid overflow by explicitly using a uint64_t.
+  ret *= 1000;
+  ret += tv->tv_usec / 1000;
+  return ret;
+}
+
+// Converts a struct timeval to milliseconds.
+static uint64_t kernel_timeval_to_ms(struct kernel_timeval *tv) {
   uint64_t ret = tv->tv_sec;  // Avoid overflow by explicitly using a uint64_t.
   ret *= 1000;
   ret += tv->tv_usec / 1000;
@@ -135,7 +145,7 @@ pid_t HandleCrashDump(const BreakpadInfo& info) {
 
     for (unsigned i = 0; i < 10; ++i) {
       uint64_t t;
-      read(ufd, &t, sizeof(t));
+      sys_read(ufd, &t, sizeof(t));
       write_uint64_hex(temp_file + sizeof(temp_file) - (16 + 1), t);
 
       fd = sys_open(temp_file, O_WRONLY | O_CREAT | O_EXCL, 0600);
@@ -306,9 +316,9 @@ pid_t HandleCrashDump(const BreakpadInfo& info) {
   sys_writev(fd, iov, 29);
 
   if (uptime >= 0) {
-    struct timeval tv;
-    if (!gettimeofday(&tv, NULL)) {
-      uint64_t time = timeval_to_ms(&tv);
+    struct kernel_timeval tv;
+    if (!sys_gettimeofday(&tv, NULL)) {
+      uint64_t time = kernel_timeval_to_ms(&tv);
       if (time > uptime) {
         time -= uptime;
         char time_str[21];
@@ -388,6 +398,7 @@ pid_t HandleCrashDump(const BreakpadInfo& info) {
     sys_writev(fd, iov, 9);
   }
 
+  // For rendererers and plugins.
   if (info.crash_url_length) {
     unsigned i = 0, done = 0, crash_url_length = info.crash_url_length;
     static const unsigned kMaxCrashChunkSize = 64;
@@ -523,7 +534,8 @@ pid_t HandleCrashDump(const BreakpadInfo& info) {
     if (child) {
       sys_close(fds[1]);
       char id_buf[17];
-      const int len = HANDLE_EINTR(read(fds[0], id_buf, sizeof(id_buf) - 1));
+      const int len = HANDLE_EINTR(sys_read(fds[0], id_buf,
+                                   sizeof(id_buf) - 1));
       if (len > 0) {
         id_buf[len] = 0;
         static const char msg[] = "\nCrash dump id: ";
@@ -549,7 +561,7 @@ pid_t HandleCrashDump(const BreakpadInfo& info) {
       NULL,
     };
 
-    execv(kWgetBinary, const_cast<char**>(args));
+    execve(kWgetBinary, const_cast<char**>(args), environ);
     static const char msg[] = "Cannot upload crash dump: cannot exec "
                               "/usr/bin/wget\n";
     sys_write(2, msg, sizeof(msg) - 1);
@@ -627,6 +639,7 @@ static bool CrashDoneUpload(const char* dump_path,
 }
 
 void EnableCrashDumping(const bool unattended) {
+  is_crash_reporter_enabled = true;
   if (unattended) {
     FilePath dumps_path("/tmp");
     PathService::Get(chrome::DIR_CRASH_DUMPS, &dumps_path);
@@ -652,7 +665,7 @@ NonBrowserCrashHandler(const void* crash_context, size_t crash_context_size,
                        void* context) {
   const int fd = reinterpret_cast<intptr_t>(context);
   int fds[2];
-  socketpair(AF_UNIX, SOCK_STREAM, 0, fds);
+  sys_socketpair(AF_UNIX, SOCK_STREAM, 0, fds);
   char guid[kGuidSize + 1] = {0};
   char crash_url[kMaxActiveURLSize + 1] = {0};
   char distro[kDistroSize + 1] = {0};
@@ -684,7 +697,7 @@ NonBrowserCrashHandler(const void* crash_context, size_t crash_context_size,
   msg.msg_iov = iov;
   msg.msg_iovlen = 4;
   char cmsg[kControlMsgSize];
-  memset(cmsg, 0, kControlMsgSize);
+  my_memset(cmsg, 0, kControlMsgSize);
   msg.msg_control = cmsg;
   msg.msg_controllen = sizeof(cmsg);
 
@@ -705,6 +718,7 @@ NonBrowserCrashHandler(const void* crash_context, size_t crash_context_size,
 
 void EnableNonBrowserCrashDumping() {
   const int fd = Singleton<base::GlobalDescriptors>()->Get(kCrashDumpSignal);
+  is_crash_reporter_enabled = true;
   // We deliberately leak this object.
   google_breakpad::ExceptionHandler* handler =
       new google_breakpad::ExceptionHandler("" /* unused */, NULL, NULL,
@@ -717,7 +731,7 @@ void InitCrashReporter() {
   const CommandLine& parsed_command_line = *CommandLine::ForCurrentProcess();
   const std::string process_type =
       parsed_command_line.GetSwitchValueASCII(switches::kProcessType);
-  const bool unattended = (getenv("CHROME_HEADLESS") != NULL);
+  const bool unattended = (getenv(env_vars::kHeadless) != NULL);
   if (process_type.empty()) {
     if (!(unattended || GoogleUpdateSettings::GetCollectStatsConsent()))
       return;
@@ -751,4 +765,8 @@ void InitCrashReporter() {
     uptime = timeval_to_ms(&tv);
   else
     uptime = 0;
+}
+
+bool IsCrashReporterEnabled() {
+  return is_crash_reporter_enabled;
 }
