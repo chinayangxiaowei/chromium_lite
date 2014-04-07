@@ -124,6 +124,11 @@ NativeTextfieldWin::NativeTextfieldWin(Textfield* textfield)
     SetEditStyle(SES_LOWERCASE, SES_LOWERCASE);
   }
 
+  // Disable auto font changing. Otherwise, characters can be rendered with
+  // multiple fonts. See http://crbug.com/168480 for details.
+  const LRESULT lang_option = SendMessage(m_hWnd, EM_GETLANGOPTIONS, 0, 0);
+  SendMessage(EM_SETLANGOPTIONS, 0, lang_option & ~IMF_AUTOFONT);
+
   // Set up the text_object_model_.
   base::win::ScopedComPtr<IRichEditOle, &IID_IRichEditOle> ole_interface;
   ole_interface.Attach(GetOleInterface());
@@ -148,25 +153,6 @@ bool NativeTextfieldWin::IsDoubleClick(const POINT& origin,
   return (elapsed_time <= GetDoubleClickTime()) &&
       (abs(current.x - origin.x) <= (GetSystemMetrics(SM_CXDOUBLECLK) / 2)) &&
       (abs(current.y - origin.y) <= (GetSystemMetrics(SM_CYDOUBLECLK) / 2));
-}
-
-// static
-bool NativeTextfieldWin::IsNumPadDigit(int key_code, bool extended_key) {
-  if (key_code >= VK_NUMPAD0 && key_code <= VK_NUMPAD9)
-    return true;
-
-  // Check for num pad keys without NumLock.
-  // Note: there is no easy way to know if a the key that was pressed comes from
-  //       the num pad or the rest of the keyboard.  Investigating how
-  //       TranslateMessage() generates the WM_KEYCHAR from an
-  //       ALT + <NumPad sequences> it appears it looks at the extended key flag
-  //       (which is on if the key pressed comes from one of the 3 clusters to
-  //       the left of the numeric keypad).  So we use it as well.
-  return !extended_key &&
-            ((key_code >= VK_PRIOR && key_code <= VK_DOWN) ||  // All keys but 5
-                                                               // and 0.
-            (key_code == VK_CLEAR) ||  // Key 5.
-            (key_code == VK_INSERT));  // Key 0.
 }
 
 void NativeTextfieldWin::AttachHack() {
@@ -244,6 +230,10 @@ void NativeTextfieldWin::UpdateBorder() {
   SetWindowPos(NULL, 0, 0, 0, 0,
                SWP_NOMOVE | SWP_FRAMECHANGED | SWP_NOACTIVATE |
                SWP_NOOWNERZORDER | SWP_NOSIZE);
+}
+
+void NativeTextfieldWin::UpdateBorderColor() {
+  // TODO(estade): implement.
 }
 
 void NativeTextfieldWin::UpdateTextColor() {
@@ -347,11 +337,10 @@ bool NativeTextfieldWin::IsIMEComposing() const {
   return composition_size > 0;
 }
 
-void NativeTextfieldWin::GetSelectedRange(ui::Range* range) const {
+ui::Range NativeTextfieldWin::GetSelectedRange() const {
   // TODO(tommi): Implement.
   NOTIMPLEMENTED();
-  range->set_start(0);
-  range->set_end(0);
+  return ui::Range();
 }
 
 void NativeTextfieldWin::SelectRange(const ui::Range& range) {
@@ -359,9 +348,10 @@ void NativeTextfieldWin::SelectRange(const ui::Range& range) {
   NOTIMPLEMENTED();
 }
 
-void NativeTextfieldWin::GetSelectionModel(gfx::SelectionModel* sel) const {
+gfx::SelectionModel NativeTextfieldWin::GetSelectionModel() const {
   // TODO(tommi): Implement.
   NOTIMPLEMENTED();
+  return gfx::SelectionModel();
 }
 
 void NativeTextfieldWin::SelectSelectionModel(const gfx::SelectionModel& sel) {
@@ -404,11 +394,21 @@ ui::TextInputClient* NativeTextfieldWin::GetTextInputClient() {
   return NULL;
 }
 
-void NativeTextfieldWin::ApplyStyleRange(const gfx::StyleRange& style) {
+void NativeTextfieldWin::SetColor(SkColor value) {
   NOTREACHED();
 }
 
-void NativeTextfieldWin::ApplyDefaultStyle() {
+void NativeTextfieldWin::ApplyColor(SkColor value, const ui::Range& range) {
+  NOTREACHED();
+}
+
+void NativeTextfieldWin::SetStyle(gfx::TextStyle style, bool value) {
+  NOTREACHED();
+}
+
+void NativeTextfieldWin::ApplyStyle(gfx::TextStyle style,
+                                    bool value,
+                                    const ui::Range& range) {
   NOTREACHED();
 }
 
@@ -425,7 +425,7 @@ int NativeTextfieldWin::GetTextfieldBaseline() const {
 }
 
 void NativeTextfieldWin::ExecuteTextCommand(int command_id) {
-  ExecuteCommand(command_id);
+  ExecuteCommand(command_id, 0);
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -466,7 +466,7 @@ bool NativeTextfieldWin::GetAcceleratorForCommandId(int command_id,
   return container_view_->GetWidget()->GetAccelerator(command_id, accelerator);
 }
 
-void NativeTextfieldWin::ExecuteCommand(int command_id) {
+void NativeTextfieldWin::ExecuteCommand(int command_id, int event_flags) {
   ScopedFreeze freeze(this, GetTextObjectModel());
   OnBeforePossibleChange();
   switch (command_id) {
@@ -617,10 +617,10 @@ void NativeTextfieldWin::OnCopy() {
 
   const string16 text(GetSelectedText());
   if (!text.empty()) {
-    ui::ScopedClipboardWriter scw(
-        ui::Clipboard::GetForCurrentThread(),
-        ui::Clipboard::BUFFER_STANDARD);
-    scw.WriteText(text);
+    ui::ScopedClipboardWriter(ui::Clipboard::GetForCurrentThread(),
+                              ui::Clipboard::BUFFER_STANDARD).WriteText(text);
+    if (TextfieldController* controller = textfield_->GetController())
+      controller->OnAfterCutOrCopy();
   }
 }
 
@@ -824,6 +824,9 @@ void NativeTextfieldWin::OnLButtonDblClk(UINT keys, const CPoint& point) {
   double_click_point_ = point;
   double_click_time_ = GetCurrentMessage()->time;
 
+  if (!ShouldProcessMouseEvent())
+    return;
+
   ScopedFreeze freeze(this, GetTextObjectModel());
   OnBeforePossibleChange();
   DefWindowProc(WM_LBUTTONDBLCLK, keys,
@@ -839,6 +842,9 @@ void NativeTextfieldWin::OnLButtonDown(UINT keys, const CPoint& point) {
       IsDoubleClick(double_click_point_, point,
                     GetCurrentMessage()->time - double_click_time_);
   tracking_double_click_ = false;
+
+  if (!ShouldProcessMouseEvent())
+    return;
 
   ScopedFreeze freeze(this, GetTextObjectModel());
   OnBeforePossibleChange();
@@ -1012,6 +1018,10 @@ void NativeTextfieldWin::OnNonLButtonDown(UINT keys, const CPoint& point) {
   // x-buttons (which usually means "thumb buttons") are pressed, so we only
   // call this for M and R down.
   tracking_double_click_ = false;
+
+  if (!ShouldProcessMouseEvent())
+    return;
+
   SetMsgHandled(false);
 }
 
@@ -1078,6 +1088,10 @@ void NativeTextfieldWin::OnSysChar(TCHAR ch, UINT repeat_count, UINT flags) {
   //     it through.
   if (ch == VK_SPACE)
     SetMsgHandled(false);
+}
+
+void NativeTextfieldWin::OnFinalMessage(HWND hwnd) {
+  delete this;
 }
 
 void NativeTextfieldWin::HandleKeystroke() {
@@ -1275,6 +1289,18 @@ void NativeTextfieldWin::BuildContextMenu() {
   context_menu_contents_->AddSeparator(ui::NORMAL_SEPARATOR);
   context_menu_contents_->AddItemWithStringId(IDS_APP_SELECT_ALL,
                                               IDS_APP_SELECT_ALL);
+}
+
+bool NativeTextfieldWin::ShouldProcessMouseEvent() {
+  TextfieldController* controller = textfield_->GetController();
+  if (!controller)
+    return true;
+  MSG msg(*GetCurrentMessage());
+  // ATL doesn't set the |time| field.
+  if (!msg.time)
+    msg.time = GetMessageTime();
+  ui::MouseEvent mouse_event(msg);
+  return !controller->HandleMouseEvent(textfield_, mouse_event);
 }
 
 }  // namespace views

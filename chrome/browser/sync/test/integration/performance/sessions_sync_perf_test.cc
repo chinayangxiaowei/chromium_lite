@@ -61,7 +61,7 @@ void SessionsSyncPerfTest::UpdateTabs(int profile) {
   Browser* browser = GetBrowser(profile);
   GURL url;
   std::vector<GURL> urls;
-  for (int i = 0; i < browser->tab_count(); ++i) {
+  for (int i = 0; i < browser->tab_strip_model()->count(); ++i) {
     chrome::SelectNumberedTab(browser, i);
     url = NextURL();
     browser->OpenURL(
@@ -112,7 +112,7 @@ GURL SessionsSyncPerfTest::NextURL() {
 }
 
 GURL SessionsSyncPerfTest::IntToURL(int n) {
-  return GURL(StringPrintf("http://localhost/%d", n));
+  return GURL(base::StringPrintf("http://localhost/%d", n));
 }
 
 // TODO(lipalani): Re-enable after crbug.com/96921 is fixed.

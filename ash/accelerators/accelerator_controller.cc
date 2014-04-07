@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <iostream>
 #include <string>
 
 #include "ash/accelerators/accelerator_table.h"
@@ -25,6 +26,7 @@
 #include "ash/root_window_controller.h"
 #include "ash/rotator/screen_rotation.h"
 #include "ash/screenshot_delegate.h"
+#include "ash/shelf/shelf_widget.h"
 #include "ash/shell.h"
 #include "ash/shell_delegate.h"
 #include "ash/shell_window_ids.h"
@@ -33,6 +35,7 @@
 #include "ash/system/status_area_widget.h"
 #include "ash/system/tray/system_tray.h"
 #include "ash/system/tray/system_tray_delegate.h"
+#include "ash/system/web_notification/web_notification_tray.h"
 #include "ash/touch/touch_observer_hud.h"
 #include "ash/volume_control_delegate.h"
 #include "ash/wm/partial_screenshot_view.h"
@@ -67,6 +70,8 @@
 namespace ash {
 namespace {
 
+using internal::DisplayInfo;
+
 // Factor of magnification scale. For example, when this value is 1.189, scale
 // value will be changed x1.000, x1.189, x1.414, x1.681, x2.000, ...
 // Note: this value is 2.0 ^ (1 / 4).
@@ -90,7 +95,8 @@ bool HandleCycleWindowMRU(WindowCycleController::Direction direction,
 }
 
 void HandleCycleWindowLinear(CycleDirection direction) {
-  Launcher::ForPrimaryDisplay()->CycleWindowLinear(direction);
+  Shell::GetInstance()->
+        window_cycle_controller()->HandleLinearCycleWindow();
 }
 
 #if defined(OS_CHROMEOS)
@@ -99,8 +105,8 @@ bool HandleLock() {
   return true;
 }
 
-bool HandleFileManager() {
-  Shell::GetInstance()->delegate()->OpenFileManager();
+bool HandleFileManager(bool as_dialog) {
+  Shell::GetInstance()->delegate()->OpenFileManager(as_dialog);
   return true;
 }
 
@@ -133,61 +139,75 @@ bool HandleRotatePaneFocus(Shell::Direction direction) {
   return true;
 }
 
-// Rotates the default window container.
-bool HandleRotateWindows() {
-  Shell::RootWindowControllerList controllers =
-      Shell::GetAllRootWindowControllers();
-  for (size_t i = 0; i < controllers.size(); ++i) {
-    aura::Window* target = controllers[i]->GetContainer(
-        internal::kShellWindowId_DefaultContainer);
+// Rotate the active window.
+bool HandleRotateActiveWindow() {
+  aura::Window* active_window = wm::GetActiveWindow();
+  if (active_window) {
     // The rotation animation bases its target transform on the current
     // rotation and position. Since there could be an animation in progress
     // right now, queue this animation so when it starts it picks up a neutral
     // rotation and position. Use replace so we only enqueue one at a time.
-    target->layer()->GetAnimator()->
+    active_window->layer()->GetAnimator()->
         set_preemption_strategy(ui::LayerAnimator::REPLACE_QUEUED_ANIMATIONS);
-    scoped_ptr<ui::LayerAnimationSequence> screen_rotation(
+    active_window->layer()->GetAnimator()->StartAnimation(
         new ui::LayerAnimationSequence(
-            new ash::ScreenRotation(360, target->layer())));
-    target->layer()->GetAnimator()->StartAnimation(
-        screen_rotation.release());
+            new ash::ScreenRotation(360, active_window->layer())));
   }
+  return true;
+}
+
+gfx::Display::Rotation GetNextRotation(gfx::Display::Rotation current) {
+  switch (current) {
+    case gfx::Display::ROTATE_0:
+      return gfx::Display::ROTATE_90;
+    case gfx::Display::ROTATE_90:
+      return gfx::Display::ROTATE_180;
+    case gfx::Display::ROTATE_180:
+      return gfx::Display::ROTATE_270;
+    case gfx::Display::ROTATE_270:
+      return gfx::Display::ROTATE_0;
+  }
+  NOTREACHED() << "Unknown rotation:" << current;
+  return gfx::Display::ROTATE_0;
+}
+
+bool HandleScaleUI(bool up) {
+  if (ash::Shell::GetInstance()->magnification_controller()->IsEnabled())
+    return false;
+
+  internal::DisplayManager* display_manager =
+      Shell::GetInstance()->display_manager();
+  int64 display_id = display_manager->GetDisplayIdForUIScaling();
+  if (display_id == gfx::Display::kInvalidDisplayID)
+    return false;
+  const DisplayInfo& display_info = display_manager->GetDisplayInfo(display_id);
+  float next_scale =
+      internal::DisplayManager::GetNextUIScale(display_info.ui_scale(), up);
+  display_manager->SetDisplayUIScale(display_id, next_scale);
+  return true;
+}
+
+bool HandleScaleReset() {
+  internal::DisplayManager* display_manager =
+      Shell::GetInstance()->display_manager();
+  int64 display_id = display_manager->GetDisplayIdForUIScaling();
+  if (display_id == gfx::Display::kInvalidDisplayID)
+    return false;
+  display_manager->SetDisplayUIScale(display_id, 1.0f);
   return true;
 }
 
 // Rotates the screen.
 bool HandleRotateScreen() {
-  static int i = 0;
-  int delta = 0;
-  switch (i) {
-    case 0: delta = 90; break;
-    case 1: delta = 90; break;
-    case 2: delta = 90; break;
-    case 3: delta = 90; break;
-    case 4: delta = -90; break;
-    case 5: delta = -90; break;
-    case 6: delta = -90; break;
-    case 7: delta = -90; break;
-    case 8: delta = -90; break;
-    case 9: delta = 180; break;
-    case 10: delta = 180; break;
-    case 11: delta = 90; break;
-    case 12: delta = 180; break;
-    case 13: delta = 180; break;
-  }
-  i = (i + 1) % 14;
-  Shell::RootWindowList root_windows = Shell::GetAllRootWindows();
-  for (size_t i = 0; i < root_windows.size(); ++i) {
-    aura::RootWindow* root_window = root_windows[i];
-    root_window->layer()->GetAnimator()->
-        set_preemption_strategy(ui::LayerAnimator::REPLACE_QUEUED_ANIMATIONS);
-    scoped_ptr<ui::LayerAnimationSequence> screen_rotation(
-        new ui::LayerAnimationSequence(
-            new ash::ScreenRotation(delta, root_window->layer())));
-    screen_rotation->AddObserver(root_window);
-    root_window->layer()->GetAnimator()->
-        StartAnimation(screen_rotation.release());
-  }
+  if (ash::Shell::GetInstance()->magnification_controller()->IsEnabled())
+    return false;
+
+  gfx::Point point = Shell::GetScreen()->GetCursorScreenPoint();
+  gfx::Display display = Shell::GetScreen()->GetDisplayNearestPoint(point);
+  const DisplayInfo& display_info =
+      Shell::GetInstance()->display_manager()->GetDisplayInfo(display.id());
+  Shell::GetInstance()->display_manager()->SetDisplayRotation(
+      display.id(), GetNextRotation(display_info.rotation()));
   return true;
 }
 
@@ -250,7 +270,6 @@ bool HandleMediaPrevTrack() {
   return true;
 }
 
-#if !defined(NDEBUG)
 bool HandlePrintLayerHierarchy() {
   Shell::RootWindowList root_windows = Shell::GetAllRootWindows();
   for (size_t i = 0; i < root_windows.size(); ++i) {
@@ -266,33 +285,52 @@ bool HandlePrintViewHierarchy() {
     return true;
   views::Widget* browser_widget =
       views::Widget::GetWidgetForNativeWindow(active_window);
-  if (browser_widget)
-    views::PrintViewHierarchy(browser_widget->GetRootView());
+  if (!browser_widget)
+    return true;
+  views::PrintViewHierarchy(browser_widget->GetRootView());
   return true;
 }
 
-void PrintWindowHierarchy(aura::Window* window, int indent) {
+void PrintWindowHierarchy(aura::Window* window,
+                          int indent,
+                          std::ostringstream* out) {
   std::string indent_str(indent, ' ');
-  DLOG(INFO) << indent_str << window->name() << " type " << window->type()
-      << (wm::IsActiveWindow(window) ? "active" : "");
+  std::string name(window->name());
+  if (name.empty())
+    name = "\"\"";
+  *out << indent_str << name << " (" << window << ")"
+       << " type=" << window->type()
+       << (wm::IsActiveWindow(window) ? " [active] " : " ")
+       << (window->IsVisible() ? " visible " : " ")
+       << window->bounds().ToString()
+       << '\n';
+
   for (size_t i = 0; i < window->children().size(); ++i)
-    PrintWindowHierarchy(window->children()[i], indent + 3);
+    PrintWindowHierarchy(window->children()[i], indent + 3, out);
 }
 
 bool HandlePrintWindowHierarchy() {
-  DLOG(INFO) << "Window hierarchy:";
   Shell::RootWindowControllerList controllers =
       Shell::GetAllRootWindowControllers();
   for (size_t i = 0; i < controllers.size(); ++i) {
-    DLOG(INFO) << "RootWindow " << i << ":";
-    aura::Window* container = controllers[i]->GetContainer(
-        internal::kShellWindowId_DefaultContainer);
-    PrintWindowHierarchy(container, 0);
+    std::ostringstream out;
+    out << "RootWindow " << i << ":\n";
+    PrintWindowHierarchy(controllers[i]->root_window(), 0, &out);
+    // Error so logs can be collected from end-users.
+    LOG(ERROR) << out.str();
   }
   return true;
 }
 
-#endif  // !defined(NDEBUG)
+bool HandlePrintUIHierarchies() {
+  // This is a separate command so the user only has to hit one key to generate
+  // all the logs. Developers use the individual dumps repeatedly, so keep
+  // those as separate commands to avoid spamming their logs.
+  HandlePrintLayerHierarchy();
+  HandlePrintWindowHierarchy();
+  HandlePrintViewHierarchy();
+  return true;
+}
 
 }  // namespace
 
@@ -336,6 +374,8 @@ void AcceleratorController::Init() {
     reserved_actions_.insert(kReservedActions[i]);
   for (size_t i = 0; i < kNonrepeatableActionsLength; ++i)
     nonrepeatable_actions_.insert(kNonrepeatableActions[i]);
+  for (size_t i = 0; i < kActionsAllowedInAppModeLength; ++i)
+    actions_allowed_in_app_mode_.insert(kActionsAllowedInAppMode[i]);
 
   RegisterAccelerators(kAcceleratorData, kAcceleratorDataLength);
 
@@ -416,6 +456,12 @@ bool AcceleratorController::PerformAction(int action,
     // in the modal window by cycling through its window elements.
     return true;
   }
+  if (shell->delegate()->IsRunningInForcedAppMode() &&
+      actions_allowed_in_app_mode_.find(action) ==
+      actions_allowed_in_app_mode_.end()) {
+    return false;
+  }
+
   const ui::KeyboardCode key_code = accelerator.key_code();
   // PerformAction() is performed from gesture controllers and passes
   // empty Accelerator() instance as the second argument. Such events
@@ -463,9 +509,13 @@ bool AcceleratorController::PerformAction(int action,
       Shell::GetInstance()->display_controller()->CycleDisplayMode();
       return true;
     case LOCK_SCREEN:
+      if (key_code == ui::VKEY_L)
+        shell->delegate()->RecordUserMetricsAction(UMA_ACCEL_LOCK_SCREEN_L);
       return HandleLock();
-    case OPEN_FILE_MANAGER_DIALOG:
-      return HandleFileManager();
+    case OPEN_FILE_DIALOG:
+      return HandleFileManager(true /* as_dialog */);
+    case OPEN_FILE_MANAGER:
+      return HandleFileManager(false /* as_dialog */);
     case OPEN_CROSH:
       return HandleCrosh();
     case SWAP_PRIMARY_DISPLAY:
@@ -603,7 +653,7 @@ bool AcceleratorController::PerformAction(int action,
       break;
     case FOCUS_LAUNCHER:
       return shell->focus_cycler()->FocusWidget(
-          Launcher::ForPrimaryDisplay()->widget());
+          Launcher::ForPrimaryDisplay()->shelf_widget());
       break;
     case FOCUS_NEXT_PANE:
       return HandleRotatePaneFocus(Shell::FORWARD);
@@ -615,7 +665,7 @@ bool AcceleratorController::PerformAction(int action,
     case SHOW_OAK:
       if (CommandLine::ForCurrentProcess()->HasSwitch(
               switches::kAshEnableOak)) {
-        oak::ShowOakWindow();
+        oak::ShowOakWindowWithContext(Shell::GetPrimaryRootWindow());
         return true;
       }
       break;
@@ -626,6 +676,21 @@ bool AcceleratorController::PerformAction(int action,
           Shell::GetPrimaryRootWindowController();
       if (!controller->GetSystemTray()->HasSystemBubble())
         controller->GetSystemTray()->ShowDefaultView(BUBBLE_CREATE_NEW);
+      break;
+    }
+    case SHOW_MESSAGE_CENTER_BUBBLE: {
+      internal::RootWindowController* controller =
+          Shell::IsLauncherPerDisplayEnabled() ?
+          internal::RootWindowController::ForActiveRootWindow() :
+          Shell::GetPrimaryRootWindowController();
+      internal::StatusAreaWidget* status_area_widget =
+          controller->shelf()->status_area_widget();
+      if (status_area_widget) {
+        WebNotificationTray* notification_tray =
+            status_area_widget->web_notification_tray();
+        if (notification_tray->visible())
+          notification_tray->ShowMessageCenterBubble();
+      }
       break;
     }
     case SHOW_TASK_MANAGER:
@@ -656,6 +721,8 @@ bool AcceleratorController::PerformAction(int action,
       if (ime_control_delegate_.get())
         return ime_control_delegate_->HandlePreviousIme();
       break;
+    case PRINT_UI_HIERARCHIES:
+      return HandlePrintUIHierarchies();
     case SWITCH_IME:
       if (ime_control_delegate_.get())
         return ime_control_delegate_->HandleSwitchIme(accelerator);
@@ -712,7 +779,7 @@ bool AcceleratorController::PerformAction(int action,
       // Disable the shortcut for minimizing full screen window due to
       // crbug.com/131709, which is a crashing issue related to minimizing
       // full screen pepper window.
-      if (!wm::IsWindowFullscreen(window)) {
+      if (!wm::IsWindowFullscreen(window) && wm::CanMinimizeWindow(window)) {
         wm::MinimizeWindow(window);
         return true;
       }
@@ -734,8 +801,14 @@ bool AcceleratorController::PerformAction(int action,
       }
       break;
     }
-    case ROTATE_WINDOWS:
-      return HandleRotateWindows();
+    case SCALE_UI_UP:
+      return HandleScaleUI(true /* up */);
+    case SCALE_UI_DOWN:
+      return HandleScaleUI(false /* down */);
+    case SCALE_UI_RESET:
+      return HandleScaleReset();
+    case ROTATE_WINDOW:
+      return HandleRotateActiveWindow();
     case ROTATE_SCREEN:
       return HandleRotateScreen();
     case TOGGLE_DESKTOP_BACKGROUND_MODE:
@@ -743,7 +816,7 @@ bool AcceleratorController::PerformAction(int action,
     case TOGGLE_ROOT_WINDOW_FULL_SCREEN:
       return HandleToggleRootWindowFullScreen();
     case DISPLAY_TOGGLE_SCALE:
-      internal::DisplayManager::ToggleDisplayScale();
+      internal::DisplayManager::ToggleDisplayScaleFactor();
       return true;
     case MAGNIFY_SCREEN_ZOOM_IN:
       return HandleMagnifyScreen(1);
@@ -793,18 +866,21 @@ void AcceleratorController::SetBrightnessControlDelegate(
     scoped_ptr<BrightnessControlDelegate> brightness_control_delegate) {
   // Install brightness control delegate only when internal
   // display exists.
-  if (Shell::GetInstance()->display_manager()->HasInternalDisplay())
-    brightness_control_delegate_.swap(brightness_control_delegate);
+  if (Shell::GetInstance()->display_manager()->HasInternalDisplay() ||
+      CommandLine::ForCurrentProcess()->HasSwitch(
+          switches::kAshEnableBrightnessControl)) {
+    brightness_control_delegate_ = brightness_control_delegate.Pass();
+  }
 }
 
 void AcceleratorController::SetImeControlDelegate(
     scoped_ptr<ImeControlDelegate> ime_control_delegate) {
-  ime_control_delegate_.swap(ime_control_delegate);
+  ime_control_delegate_ = ime_control_delegate.Pass();
 }
 
 void AcceleratorController::SetScreenshotDelegate(
     scoped_ptr<ScreenshotDelegate> screenshot_delegate) {
-  screenshot_delegate_.swap(screenshot_delegate);
+  screenshot_delegate_ = screenshot_delegate.Pass();
 }
 
 ////////////////////////////////////////////////////////////////////////////////

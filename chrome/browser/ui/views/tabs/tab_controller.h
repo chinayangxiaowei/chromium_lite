@@ -8,12 +8,12 @@
 #include "chrome/browser/ui/views/tabs/tab_strip_types.h"
 
 class Tab;
-class TabStripSelectionModel;
 
 namespace gfx {
 class Point;
 }
 namespace ui {
+class ListSelectionModel;
 class LocatedEvent;
 class MouseEvent;
 }
@@ -24,7 +24,7 @@ class View;
 // Controller for tabs.
 class TabController {
  public:
-  virtual const TabStripSelectionModel& GetSelectionModel() = 0;
+  virtual const ui::ListSelectionModel& GetSelectionModel() = 0;
 
   // Returns true if multiple selection is supported.
   virtual bool SupportsMultipleSelection() = 0;
@@ -61,10 +61,11 @@ class TabController {
   virtual void MaybeStartDrag(
       Tab* tab,
       const ui::LocatedEvent& event,
-      const TabStripSelectionModel& original_selection) = 0;
+      const ui::ListSelectionModel& original_selection) = 0;
 
   // Continues dragging a Tab.
-  virtual void ContinueDrag(views::View* view, const gfx::Point& location) = 0;
+  virtual void ContinueDrag(views::View* view,
+                            const ui::LocatedEvent& event) = 0;
 
   // Ends dragging a Tab. Returns whether the tab has been destroyed.
   virtual bool EndDrag(EndDragReason reason) = 0;

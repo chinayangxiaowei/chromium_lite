@@ -61,6 +61,32 @@ class GuestUser : public User {
   DISALLOW_COPY_AND_ASSIGN(GuestUser);
 };
 
+class KioskAppUser : public User {
+ public:
+  explicit KioskAppUser(const std::string& app_id);
+  virtual ~KioskAppUser();
+
+  // Overridden from User:
+  virtual UserType GetType() const OVERRIDE;
+
+ private:
+  DISALLOW_COPY_AND_ASSIGN(KioskAppUser);
+};
+
+class LocallyManagedUser : public User {
+ public:
+  explicit LocallyManagedUser(const std::string& username);
+  virtual ~LocallyManagedUser();
+
+  // Overridden from User:
+  virtual UserType GetType() const OVERRIDE;
+  virtual bool can_lock() const OVERRIDE;
+  virtual std::string display_email() const OVERRIDE;
+
+ private:
+  DISALLOW_COPY_AND_ASSIGN(LocallyManagedUser);
+};
+
 class RetailModeUser : public User {
  public:
   RetailModeUser();
@@ -85,6 +111,23 @@ class PublicAccountUser : public User {
   DISALLOW_COPY_AND_ASSIGN(PublicAccountUser);
 };
 
+UserCredentials::UserCredentials() {
+}
+
+UserCredentials::UserCredentials(const std::string& username,
+                                 const std::string& password,
+                                 const std::string& auth_code)
+    : username(username),
+      password(password),
+      auth_code(auth_code) {
+}
+
+bool UserCredentials::operator==(const UserCredentials& cred) const {
+  return cred.username == username &&
+         cred.password == password &&
+         cred.auth_code == auth_code;
+}
+
 string16 User::GetDisplayName() const {
   // Fallback to the email account name in case display name haven't been set.
   return display_name_.empty() ?
@@ -103,6 +146,10 @@ bool User::HasDefaultImage() const {
   return image_index_ >= 0 && image_index_ < kDefaultImagesCount;
 }
 
+std::string User::display_email() const {
+  return display_email_;
+}
+
 bool User::can_lock() const {
   return false;
 }
@@ -113,6 +160,14 @@ User* User::CreateRegularUser(const std::string& email) {
 
 User* User::CreateGuestUser() {
   return new GuestUser;
+}
+
+User* User::CreateKioskAppUser(const std::string& kiosk_app_username) {
+  return new KioskAppUser(kiosk_app_username);
+}
+
+User* User::CreateLocallyManagedUser(const std::string& username) {
+  return new LocallyManagedUser(username);
 }
 
 User* User::CreateRetailModeUser() {
@@ -169,7 +224,7 @@ bool RegularUser::can_lock() const {
 }
 
 GuestUser::GuestUser() : User(kGuestUserEMail) {
-  set_display_email("");
+  set_display_email(std::string());
 }
 
 GuestUser::~GuestUser() {}
@@ -178,8 +233,37 @@ User::UserType GuestUser::GetType() const {
   return USER_TYPE_GUEST;
 }
 
+KioskAppUser::KioskAppUser(const std::string& kiosk_app_username)
+    : User(kiosk_app_username) {
+  set_display_email(std::string());
+}
+
+KioskAppUser::~KioskAppUser() {}
+
+User::UserType KioskAppUser::GetType() const {
+  return USER_TYPE_KIOSK_APP;
+}
+
+LocallyManagedUser::LocallyManagedUser(const std::string& username)
+    : User(username) {
+}
+
+LocallyManagedUser::~LocallyManagedUser() {}
+
+User::UserType LocallyManagedUser::GetType() const {
+  return USER_TYPE_LOCALLY_MANAGED;
+}
+
+bool LocallyManagedUser::can_lock() const {
+  return true;
+}
+
+std::string LocallyManagedUser::display_email() const {
+  return UTF16ToUTF8(display_name());
+}
+
 RetailModeUser::RetailModeUser() : User(kRetailModeUserEMail) {
-  set_display_email("");
+  set_display_email(std::string());
 }
 
 RetailModeUser::~RetailModeUser() {}

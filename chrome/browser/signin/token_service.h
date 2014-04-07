@@ -50,7 +50,9 @@
 
 #include "base/gtest_prod_util.h"
 #include "base/memory/scoped_ptr.h"
+#include "base/observer_list.h"
 #include "chrome/browser/profiles/profile_keyed_service.h"
+#include "chrome/browser/signin/signin_internals_util.h"
 #include "chrome/browser/webdata/web_data_service.h"
 #include "google_apis/gaia/gaia_auth_consumer.h"
 #include "google_apis/gaia/gaia_auth_fetcher.h"
@@ -99,6 +101,12 @@ class TokenService : public GaiaAuthConsumer,
     std::string service_;
     GoogleServiceAuthError error_;
   };
+
+  // Methods to register or remove SigninDiagnosticObservers
+  void AddSigninDiagnosticsObserver(
+      signin_internals_util::SigninDiagnosticsObserver* observer);
+  void RemoveSigninDiagnosticsObserver(
+      signin_internals_util::SigninDiagnosticsObserver* observer);
 
   // Initialize this token service with a request source
   // (usually from a GaiaAuthConsumer constant), and the profile.
@@ -159,9 +167,7 @@ class TokenService : public GaiaAuthConsumer,
   // Typical use is to create an OAuth2 token for appropriate scope and then
   // use that token to call a Google API.
   virtual bool HasOAuthLoginToken() const;
-  virtual bool HasOAuthLoginAccessToken() const;
   virtual const std::string& GetOAuth2LoginRefreshToken() const;
-  const std::string& GetOAuth2LoginAccessToken() const;
 
   // For tests only. Doesn't save to the WebDB.
   void IssueAuthTokenForTest(const std::string& service,
@@ -238,10 +244,14 @@ class TokenService : public GaiaAuthConsumer,
   // number of entries in this array must match the number of entries in the
   // kServices array declared in the cc file.  If not, a compile time error
   // will occur.
-  scoped_ptr<GaiaAuthFetcher> fetchers_[4];
+  scoped_ptr<GaiaAuthFetcher> fetchers_[2];
 
   // Map from service to token.
   std::map<std::string, std::string> token_map_;
+
+  // The list of SigninDiagnosticObservers
+  ObserverList<signin_internals_util::SigninDiagnosticsObserver>
+      signin_diagnostics_observers_;
 
   friend class TokenServiceTest;
   FRIEND_TEST_ALL_PREFIXES(TokenServiceTest, LoadTokensIntoMemoryBasic);

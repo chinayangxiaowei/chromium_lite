@@ -6,8 +6,8 @@
 
 #include "base/logging.h"
 #include "chrome/browser/browser_process.h"
+#include "chrome/browser/chromeos/policy/user_cloud_policy_manager_chromeos.h"
 #include "chrome/browser/policy/browser_policy_connector.h"
-#include "chrome/browser/policy/user_cloud_policy_manager_chromeos.h"
 #include "google_apis/gaia/gaia_constants.h"
 #include "google_apis/gaia/google_service_auth_error.h"
 
@@ -98,8 +98,6 @@ void PolicyOAuthFetcher::SetPolicyToken(const std::string& token) {
 
   policy::BrowserPolicyConnector* browser_policy_connector =
       g_browser_process->browser_policy_connector();
-  browser_policy_connector->RegisterForUserPolicy(token);
-
   policy::UserCloudPolicyManagerChromeOS* cloud_policy_manager =
       browser_policy_connector->GetUserCloudPolicyManager();
   if (cloud_policy_manager) {

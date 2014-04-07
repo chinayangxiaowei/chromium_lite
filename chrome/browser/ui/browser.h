@@ -15,23 +15,22 @@
 #include "base/gtest_prod_util.h"
 #include "base/memory/scoped_ptr.h"
 #include "base/memory/weak_ptr.h"
-#include "base/prefs/public/pref_change_registrar.h"
-#include "base/prefs/public/pref_member.h"
+#include "base/prefs/pref_change_registrar.h"
+#include "base/prefs/pref_member.h"
 #include "base/string16.h"
-#include "chrome/browser/debugger/devtools_toggle_action.h"
-#include "chrome/browser/event_disposition.h"
+#include "chrome/browser/devtools/devtools_toggle_action.h"
 #include "chrome/browser/sessions/session_id.h"
 #include "chrome/browser/ui/blocked_content/blocked_content_tab_helper_delegate.h"
 #include "chrome/browser/ui/bookmarks/bookmark_bar.h"
 #include "chrome/browser/ui/bookmarks/bookmark_tab_helper_delegate.h"
 #include "chrome/browser/ui/browser_navigator.h"
-#include "chrome/browser/ui/constrained_window_tab_helper_delegate.h"
 #include "chrome/browser/ui/host_desktop.h"
 #include "chrome/browser/ui/search/search_model_observer.h"
 #include "chrome/browser/ui/search_engines/search_engine_tab_helper_delegate.h"
 #include "chrome/browser/ui/tab_contents/core_tab_helper_delegate.h"
 #include "chrome/browser/ui/tabs/tab_strip_model_observer.h"
 #include "chrome/browser/ui/toolbar/toolbar_model.h"
+#include "chrome/browser/ui/web_contents_modal_dialog_manager_delegate.h"
 #include "chrome/browser/ui/zoom/zoom_observer.h"
 #include "chrome/common/content_settings.h"
 #include "chrome/common/content_settings_types.h"
@@ -42,16 +41,16 @@
 #include "content/public/browser/web_contents_delegate.h"
 #include "content/public/common/page_transition_types.h"
 #include "content/public/common/page_zoom.h"
-#include "ui/base/dialogs/select_file_dialog.h"
 #include "ui/base/ui_base_types.h"
+#include "ui/base/window_open_disposition.h"
 #include "ui/gfx/rect.h"
+#include "ui/shell_dialogs/select_file_dialog.h"
 
 class BrowserContentSettingBubbleModelDelegate;
 class BrowserSyncedWindowDelegate;
 class BrowserToolbarModelDelegate;
 class BrowserTabRestoreServiceDelegate;
 class BrowserWindow;
-class DeviceAttachedIntentSource;
 class FindBarController;
 class FullscreenController;
 class PrefService;
@@ -93,15 +92,11 @@ struct SelectedFileInfo;
 class WebDialogDelegate;
 }
 
-namespace webkit_glue {
-struct WebIntentServiceData;
-}
-
 class Browser : public TabStripModelObserver,
                 public content::WebContentsDelegate,
                 public CoreTabHelperDelegate,
                 public SearchEngineTabHelperDelegate,
-                public ConstrainedWindowTabHelperDelegate,
+                public WebContentsModalDialogManagerDelegate,
                 public BlockedContentTabHelperDelegate,
                 public BookmarkTabHelperDelegate,
                 public ZoomObserver,
@@ -124,9 +119,6 @@ class Browser : public TabStripModelObserver,
   // Distinguishes between browsers that host an app (opened from
   // ApplicationLauncher::OpenApplication), and child browsers created by an app
   // from Browser::CreateForApp (e.g. by windows.open or the extension API).
-  // TODO(stevenjb): This is currently only needed by the ash Launcher for
-  // identifying child panels. Remove this once panels are no longer
-  // implemented as Browsers, crbug.com/112198.
   enum AppType {
     APP_TYPE_HOST = 1,
     APP_TYPE_CHILD = 2
@@ -160,10 +152,6 @@ class Browser : public TabStripModelObserver,
   };
 
   struct CreateParams {
-    // Deprecated: please use the form taking |host_desktop_type| below.
-    explicit CreateParams(Profile* profile);
-    CreateParams(Type type, Profile* profile);
-
     CreateParams(Profile* profile, chrome::HostDesktopType host_desktop_type);
     CreateParams(Type type,
                  Profile* profile,
@@ -172,9 +160,12 @@ class Browser : public TabStripModelObserver,
     static CreateParams CreateForApp(Type type,
                                      const std::string& app_name,
                                      const gfx::Rect& window_bounds,
-                                     Profile* profile);
+                                     Profile* profile,
+                                     chrome::HostDesktopType host_desktop_type);
 
-    static CreateParams CreateForDevTools(Profile* profile);
+    static CreateParams CreateForDevTools(
+        Profile* profile,
+        chrome::HostDesktopType host_desktop_type);
 
     // The browser type.
     Type type;
@@ -249,6 +240,7 @@ class Browser : public TabStripModelObserver,
   BrowserWindow* window() const { return window_; }
   ToolbarModel* toolbar_model() { return toolbar_model_.get(); }
   const ToolbarModel* toolbar_model() const { return toolbar_model_.get(); }
+  TabStripModel* tab_strip_model() const { return tab_strip_model_.get(); }
   chrome::BrowserCommandController* command_controller() {
     return command_controller_.get();
   }
@@ -327,17 +319,15 @@ class Browser : public TabStripModelObserver,
   DownloadClosePreventionType OkToCloseWithInProgressDownloads(
       int* num_downloads_blocking) const;
 
-  // TabStripModel pass-thrus /////////////////////////////////////////////////
-
-  TabStripModel* tab_strip_model() const { return tab_strip_model_.get(); }
-
-  int tab_count() const;
-  int active_index() const;
+  // Tab adding/showing functions /////////////////////////////////////////////
 
   // Invoked when the fullscreen state of the window changes.
   // BrowserWindow::EnterFullscreen invokes this after the window has become
   // fullscreen.
   void WindowFullscreenStateChanged();
+
+  // Invoked when visible SSL state (as defined by SSLStatus) changes.
+  void VisibleSSLStateChanged(content::WebContents* web_contents);
 
   // Assorted browser commands ////////////////////////////////////////////////
 
@@ -350,9 +340,6 @@ class Browser : public TabStripModelObserver,
 #if defined(OS_WIN)
   // See the description of FullscreenController::ToggleMetroSnapMode.
   void SetMetroSnapMode(bool enable);
-#endif
-#if defined(OS_MACOSX)
-  void TogglePresentationMode();
 #endif
 
   // Returns true if the Browser supports the specified feature. The value of
@@ -392,14 +379,6 @@ class Browser : public TabStripModelObserver,
                                             bool user_gesture,
                                             BrowserWindow* window);
 
-  // Helper function to register an intent handler.
-  // |data| is the registered handler data. |user_gesture| is true if the call
-  // was made in the context of a user gesture.
-  static void RegisterIntentHandlerHelper(
-      content::WebContents* web_contents,
-      const webkit_glue::WebIntentServiceData& data,
-      bool user_gesture);
-
   // Helper function to handle find results.
   static void FindReplyHelper(content::WebContents* web_contents,
                               int request_id,
@@ -407,12 +386,6 @@ class Browser : public TabStripModelObserver,
                               const gfx::Rect& selection_rect,
                               int active_match_ordinal,
                               bool final_update);
-
-  // Helper function to handle media access requests.
-  static void RequestMediaAccessPermissionHelper(
-      content::WebContents* web_contents,
-      const content::MediaStreamRequest* request,
-      const content::MediaResponseCallback& callback);
 
   // Called by chrome::Navigate() when a navigation has occurred in a tab in
   // this Browser. Updates the UI for the start of this navigation.
@@ -480,13 +453,10 @@ class Browser : public TabStripModelObserver,
   // Show the first run search engine bubble on the location bar.
   void ShowFirstRunBubble();
 
-  // If necessary, update the bookmark bar state according to the instant
-  // preview state: when instant preview shows suggestions and bookmark bar is
-  // still showing attached, start the animation to hide it.
-  void MaybeUpdateBookmarkBarStateForInstantPreview(
-      const chrome::search::Mode& mode);
+  // Show a download on the download shelf.
+  void ShowDownload(content::DownloadItem* download);
 
-  FullscreenController* fullscreen_controller() {
+  FullscreenController* fullscreen_controller() const {
     return fullscreen_controller_.get();
   }
 
@@ -499,13 +469,13 @@ class Browser : public TabStripModelObserver,
   friend class FullscreenControllerInteractiveTest;
   friend class FullscreenControllerTest;
   FRIEND_TEST_ALL_PREFIXES(AppModeTest, EnableAppModeTest);
+  FRIEND_TEST_ALL_PREFIXES(BrowserCommandControllerTest,
+                           IsReservedCommandOrKeyIsApp);
+  FRIEND_TEST_ALL_PREFIXES(BrowserCommandControllerTest, AppFullScreen);
   FRIEND_TEST_ALL_PREFIXES(BrowserTest, NoTabsInPopups);
   FRIEND_TEST_ALL_PREFIXES(BrowserTest, ConvertTabToAppShortcut);
   FRIEND_TEST_ALL_PREFIXES(BrowserTest, OpenAppWindowLikeNtp);
   FRIEND_TEST_ALL_PREFIXES(BrowserTest, AppIdSwitch);
-  FRIEND_TEST_ALL_PREFIXES(BrowserWithTestWindowTest,
-                           IsReservedCommandOrKeyIsApp);
-  FRIEND_TEST_ALL_PREFIXES(BrowserWithTestWindowTest, AppFullScreen);
   FRIEND_TEST_ALL_PREFIXES(FullscreenControllerTest,
                            TabEntersPresentationModeFromWindowed);
   FRIEND_TEST_ALL_PREFIXES(FullscreenExitBubbleControllerTest,
@@ -514,6 +484,8 @@ class Browser : public TabStripModelObserver,
   FRIEND_TEST_ALL_PREFIXES(StartupBrowserCreatorTest,
                            OpenAppShortcutWindowPref);
   FRIEND_TEST_ALL_PREFIXES(StartupBrowserCreatorTest, OpenAppShortcutTabPref);
+
+  class InterstitialObserver;
 
   // Used to describe why a tab is being detached. This is used by
   // TabDetachedAtImpl.
@@ -544,9 +516,6 @@ class Browser : public TabStripModelObserver,
 
     // Change is the result of window toggling in/out of fullscreen mode.
     BOOKMARK_BAR_STATE_CHANGE_TOGGLE_FULLSCREEN,
-
-    // Change is the result of a state change in the instant preview.
-    BOOKMARK_BAR_STATE_CHANGE_INSTANT_PREVIEW_STATE,
   };
 
   // Overridden from content::WebContentsDelegate:
@@ -581,11 +550,11 @@ class Browser : public TabStripModelObserver,
   virtual void BeforeUnloadFired(content::WebContents* source,
                                  bool proceed,
                                  bool* proceed_to_fire_unload) OVERRIDE;
+  virtual bool ShouldFocusLocationBarByDefault(
+      content::WebContents* source) OVERRIDE;
   virtual void SetFocusToLocationBar(bool select_all) OVERRIDE;
   virtual void RenderWidgetShowing() OVERRIDE;
   virtual int GetExtraRenderViewHeight() const OVERRIDE;
-  virtual void OnStartDownload(content::WebContents* source,
-                               content::DownloadItem* download) OVERRIDE;
   virtual void ViewSourceForTab(content::WebContents* source,
                                 const GURL& page_url) OVERRIDE;
   virtual void ViewSourceForFrame(
@@ -602,6 +571,7 @@ class Browser : public TabStripModelObserver,
       const GURL& target_url) OVERRIDE;
   virtual void WebContentsCreated(content::WebContents* source_contents,
                                   int64 source_frame_id,
+                                  const string16& frame_name,
                                   const GURL& target_url,
                                   content::WebContents* new_contents) OVERRIDE;
   virtual void ContentRestrictionsChanged(
@@ -613,8 +583,8 @@ class Browser : public TabStripModelObserver,
       content::WebContents* web_contents) OVERRIDE;
   virtual void DidNavigateToPendingEntry(
       content::WebContents* web_contents) OVERRIDE;
-  virtual content::JavaScriptDialogCreator*
-      GetJavaScriptDialogCreator() OVERRIDE;
+  virtual content::JavaScriptDialogManager*
+      GetJavaScriptDialogManager() OVERRIDE;
   virtual content::ColorChooser* OpenColorChooser(
       content::WebContents* web_contents,
       int color_chooser_id,
@@ -625,7 +595,7 @@ class Browser : public TabStripModelObserver,
       const content::FileChooserParams& params) OVERRIDE;
   virtual void EnumerateDirectory(content::WebContents* web_contents,
                                   int request_id,
-                                  const FilePath& path) OVERRIDE;
+                                  const base::FilePath& path) OVERRIDE;
   virtual void ToggleFullscreenModeForTab(content::WebContents* web_contents,
       bool enter_fullscreen) OVERRIDE;
   virtual bool IsFullscreenForTabOrPending(
@@ -636,13 +606,6 @@ class Browser : public TabStripModelObserver,
                                        const GURL& url,
                                        const string16& title,
                                        bool user_gesture) OVERRIDE;
-  virtual void RegisterIntentHandler(
-      content::WebContents* web_contents,
-      const webkit_glue::WebIntentServiceData& data,
-      bool user_gesture) OVERRIDE;
-  virtual void WebIntentDispatch(
-      content::WebContents* web_contents,
-      content::WebIntentsDispatcher* intents_dispatcher) OVERRIDE;
   virtual void UpdatePreferredSize(content::WebContents* source,
                                    const gfx::Size& pref_size) OVERRIDE;
   virtual void ResizeDueToAutoResize(content::WebContents* source,
@@ -659,12 +622,12 @@ class Browser : public TabStripModelObserver,
   virtual void LostMouseLock() OVERRIDE;
   virtual void RequestMediaAccessPermission(
       content::WebContents* web_contents,
-      const content::MediaStreamRequest* request,
+      const content::MediaStreamRequest& request,
       const content::MediaResponseCallback& callback) OVERRIDE;
   virtual bool RequestPpapiBrokerPermission(
       content::WebContents* web_contents,
       const GURL& url,
-      const FilePath& plugin_path,
+      const base::FilePath& plugin_path,
       const base::Callback<void(bool)>& callback) OVERRIDE;
 
   // Overridden from CoreTabHelperDelegate:
@@ -680,10 +643,10 @@ class Browser : public TabStripModelObserver,
   virtual void ConfirmAddSearchProvider(TemplateURL* template_url,
                                         Profile* profile) OVERRIDE;
 
-  // Overridden from ConstrainedWindowTabHelperDelegate:
-  virtual void SetTabContentBlocked(content::WebContents* web_contents,
-                                    bool blocked) OVERRIDE;
-  virtual bool GetConstrainedWindowTopCenter(gfx::Point* point) OVERRIDE;
+  // Overridden from WebContentsModalDialogManagerDelegate:
+  virtual void SetWebContentsBlocked(content::WebContents* web_contents,
+                                     bool blocked) OVERRIDE;
+  virtual bool GetDialogTopCenter(gfx::Point* point) OVERRIDE;
 
   // Overridden from BlockedContentTabHelperDelegate:
   virtual content::WebContents* GetConstrainingWebContents(
@@ -698,7 +661,7 @@ class Browser : public TabStripModelObserver,
                              bool can_show_bubble) OVERRIDE;
 
   // Overridden from SelectFileDialog::Listener:
-  virtual void FileSelected(const FilePath& path,
+  virtual void FileSelected(const base::FilePath& path,
                             int index,
                             void* params) OVERRIDE;
   virtual void FileSelectedWithExtraInfo(
@@ -712,8 +675,9 @@ class Browser : public TabStripModelObserver,
                        const content::NotificationDetails& details) OVERRIDE;
 
   // Overridden from chrome::search::SearchModelObserver:
-  virtual void ModeChanged(const chrome::search::Mode& old_mode,
-                           const chrome::search::Mode& new_mode) OVERRIDE;
+  virtual void ModelChanged(
+      const chrome::search::SearchModel::State& old_state,
+      const chrome::search::SearchModel::State& new_state) OVERRIDE;
 
   // Command and state updating ///////////////////////////////////////////////
 
@@ -827,6 +791,8 @@ class Browser : public TabStripModelObserver,
 
   // Data members /////////////////////////////////////////////////////////////
 
+  std::vector<InterstitialObserver*> interstitial_observers_;
+
   content::NotificationRegistrar registrar_;
 
   PrefChangeRegistrar profile_pref_registrar_;
@@ -907,7 +873,7 @@ class Browser : public TabStripModelObserver,
   // Tracks when this browser is being created by session restore.
   bool is_session_restore_;
 
-  chrome::HostDesktopType host_desktop_type_;
+  const chrome::HostDesktopType host_desktop_type_;
 
   scoped_ptr<chrome::UnloadController> unload_controller_;
 
@@ -944,11 +910,6 @@ class Browser : public TabStripModelObserver,
   scoped_ptr<chrome::BrowserInstantController> instant_controller_;
 
   BookmarkBar::State bookmark_bar_state_;
-
-#if 0
-  // Device attach web intent is disabled for M22. See crbug.com/144326.
-  scoped_ptr<DeviceAttachedIntentSource> device_attached_intent_source_;
-#endif
 
   scoped_ptr<FullscreenController> fullscreen_controller_;
 

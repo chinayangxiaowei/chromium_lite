@@ -8,6 +8,7 @@
 #endif
 #include "base/memory/scoped_ptr.h"
 #include "base/shared_memory.h"
+#include "base/sys_info.h"
 #include "base/test/multiprocess_test.h"
 #include "base/threading/platform_thread.h"
 #include "base/time.h"
@@ -196,10 +197,17 @@ TEST(SharedMemoryTest, OpenExclusive) {
   EXPECT_TRUE(rv);
 
   // Memory1 knows it's size because it created it.
-  EXPECT_EQ(memory1.created_size(), kDataSize);
+  EXPECT_EQ(memory1.requested_size(), kDataSize);
 
   rv = memory1.Map(kDataSize);
   EXPECT_TRUE(rv);
+
+  // The mapped memory1 must be at least the size we asked for.
+  EXPECT_GE(memory1.mapped_size(), kDataSize);
+
+  // The mapped memory1 shouldn't exceed rounding for allocation granularity.
+  EXPECT_LT(memory1.mapped_size(),
+            kDataSize + base::SysInfo::VMAllocationGranularity());
 
   memset(memory1.memory(), 'G', kDataSize);
 
@@ -213,11 +221,18 @@ TEST(SharedMemoryTest, OpenExclusive) {
   EXPECT_TRUE(rv);
 
   // Memory2 shouldn't know the size because we didn't create it.
-  EXPECT_EQ(memory2.created_size(), 0U);
+  EXPECT_EQ(memory2.requested_size(), 0U);
 
   // We should be able to map the original size.
   rv = memory2.Map(kDataSize);
   EXPECT_TRUE(rv);
+
+  // The mapped memory2 must be at least the size of the original.
+  EXPECT_GE(memory2.mapped_size(), kDataSize);
+
+  // The mapped memory2 shouldn't exceed rounding for allocation granularity.
+  EXPECT_LT(memory2.mapped_size(),
+            kDataSize2 + base::SysInfo::VMAllocationGranularity());
 
   // Verify that opening memory2 didn't truncate or delete memory 1.
   char *start_ptr = static_cast<char *>(memory2.memory());
@@ -248,8 +263,8 @@ TEST(SharedMemoryTest, MultipleThreads) {
   int threadcounts[] = { 1, kNumThreads };
   for (size_t i = 0; i < arraysize(threadcounts); i++) {
     int numthreads = threadcounts[i];
-    scoped_array<PlatformThreadHandle> thread_handles;
-    scoped_array<MultipleThreadMain*> thread_delegates;
+    scoped_ptr<PlatformThreadHandle[]> thread_handles;
+    scoped_ptr<MultipleThreadMain*[]> thread_delegates;
 
     thread_handles.reset(new PlatformThreadHandle[numthreads]);
     thread_delegates.reset(new MultipleThreadMain*[numthreads]);
@@ -308,8 +323,8 @@ TEST(SharedMemoryTest, AnonymousPrivate) {
   bool rv;
   const uint32 kDataSize = 8192;
 
-  scoped_array<SharedMemory> memories(new SharedMemory[count]);
-  scoped_array<int*> pointers(new int*[count]);
+  scoped_ptr<SharedMemory[]> memories(new SharedMemory[count]);
+  scoped_ptr<int*[]> pointers(new int*[count]);
   ASSERT_TRUE(memories.get());
   ASSERT_TRUE(pointers.get());
 
@@ -343,6 +358,33 @@ TEST(SharedMemoryTest, AnonymousPrivate) {
   }
 }
 
+TEST(SharedMemoryTest, MapAt) {
+  ASSERT_TRUE(SysInfo::VMAllocationGranularity() >= sizeof(uint32));
+  const size_t kCount = SysInfo::VMAllocationGranularity();
+  const size_t kDataSize = kCount * sizeof(uint32);
+
+  SharedMemory memory;
+  ASSERT_TRUE(memory.CreateAndMapAnonymous(kDataSize));
+  ASSERT_TRUE(memory.Map(kDataSize));
+  uint32* ptr = static_cast<uint32*>(memory.memory());
+  ASSERT_NE(ptr, static_cast<void*>(NULL));
+
+  for (size_t i = 0; i < kCount; ++i) {
+    ptr[i] = i;
+  }
+
+  memory.Unmap();
+
+  off_t offset = SysInfo::VMAllocationGranularity();
+  ASSERT_TRUE(memory.MapAt(offset, kDataSize - offset));
+  offset /= sizeof(uint32);
+  ptr = static_cast<uint32*>(memory.memory());
+  ASSERT_NE(ptr, static_cast<void*>(NULL));
+  for (size_t i = offset; i < kCount; ++i) {
+    EXPECT_EQ(ptr[i - offset], i);
+  }
+}
+
 #if defined(OS_POSIX)
 // Create a shared memory object, mmap it, and mprotect it to PROT_EXEC.
 TEST(SharedMemoryTest, AnonymousExecutable) {
@@ -354,9 +396,9 @@ TEST(SharedMemoryTest, AnonymousExecutable) {
   options.executable = true;
 
   EXPECT_TRUE(shared_memory.Create(options));
-  EXPECT_TRUE(shared_memory.Map(shared_memory.created_size()));
+  EXPECT_TRUE(shared_memory.Map(shared_memory.requested_size()));
 
-  EXPECT_EQ(0, mprotect(shared_memory.memory(), shared_memory.created_size(),
+  EXPECT_EQ(0, mprotect(shared_memory.memory(), shared_memory.requested_size(),
                         PROT_READ | PROT_EXEC));
 }
 #endif

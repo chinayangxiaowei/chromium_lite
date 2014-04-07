@@ -42,7 +42,7 @@ class MockAudioInputCallback : public AudioInputStream::AudioInputCallback {
       const uint8* src, uint32 size,
       uint32 hardware_delay_bytes, double volume));
   MOCK_METHOD1(OnClose, void(AudioInputStream* stream));
-  MOCK_METHOD2(OnError, void(AudioInputStream* stream, int code));
+  MOCK_METHOD1(OnError, void(AudioInputStream* stream));
 };
 
 // This audio sink implementation should be used for manual tests only since
@@ -56,7 +56,7 @@ class WriteToFileAudioSink : public AudioInputStream::AudioInputCallback {
   explicit WriteToFileAudioSink(const char* file_name)
       : buffer_(0, kMaxBufferSize),
         bytes_to_write_(0) {
-    FilePath file_path;
+    base::FilePath file_path;
     EXPECT_TRUE(PathService::Get(base::DIR_EXE, &file_path));
     file_path = file_path.AppendASCII(file_name);
     binary_file_ = file_util::OpenFile(file_path, "wb");
@@ -98,7 +98,7 @@ class WriteToFileAudioSink : public AudioInputStream::AudioInputCallback {
   }
 
   virtual void OnClose(AudioInputStream* stream) {}
-  virtual void OnError(AudioInputStream* stream, int code) {}
+  virtual void OnError(AudioInputStream* stream) {}
 
  private:
   media::SeekableBuffer buffer_;

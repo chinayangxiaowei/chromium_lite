@@ -5,8 +5,8 @@
 #include <set>
 #include <vector>
 
-#include "base/file_path.h"
 #include "base/file_util.h"
+#include "base/files/file_path.h"
 #include "base/files/scoped_temp_dir.h"
 #include "base/path_service.h"
 #include "base/string_util.h"
@@ -45,10 +45,10 @@ class VisitDatabaseTest : public PlatformTest,
 
  private:
   // Test setup.
-  void SetUp() {
+  virtual void SetUp() {
     PlatformTest::SetUp();
     ASSERT_TRUE(temp_dir_.CreateUniqueTempDir());
-    FilePath db_file = temp_dir_.path().AppendASCII("VisitTest.db");
+    base::FilePath db_file = temp_dir_.path().AppendASCII("VisitTest.db");
 
     EXPECT_TRUE(db_.Open(db_file));
 
@@ -57,13 +57,13 @@ class VisitDatabaseTest : public PlatformTest,
     CreateMainURLIndex();
     InitVisitTable();
   }
-  void TearDown() {
+  virtual void TearDown() {
     db_.Close();
     PlatformTest::TearDown();
   }
 
   // Provided for URL/VisitDatabase.
-  virtual sql::Connection& GetDB() {
+  virtual sql::Connection& GetDB() OVERRIDE {
     return db_;
   }
 
@@ -320,6 +320,15 @@ TEST_F(VisitDatabaseTest, GetVisibleVisitsInRange) {
   EXPECT_TRUE(IsVisitInfoEqual(results[0], test_visit_rows[5]));
   EXPECT_TRUE(IsVisitInfoEqual(results[1], test_visit_rows[3]));
   EXPECT_TRUE(IsVisitInfoEqual(results[2], test_visit_rows[1]));
+
+  // Now try without de-duping, expect to see all visible visits.
+  options.duplicate_policy = QueryOptions::KEEP_ALL_DUPLICATES;
+  GetVisibleVisitsInRange(options, &results);
+  ASSERT_EQ(static_cast<size_t>(4), results.size());
+  EXPECT_TRUE(IsVisitInfoEqual(results[0], test_visit_rows[5]));
+  EXPECT_TRUE(IsVisitInfoEqual(results[1], test_visit_rows[3]));
+  EXPECT_TRUE(IsVisitInfoEqual(results[2], test_visit_rows[1]));
+  EXPECT_TRUE(IsVisitInfoEqual(results[3], test_visit_rows[0]));
 
   // Set the end time to exclude the second visit. The first visit should be
   // returned. Even though the second is a more recent visit, it's not in the

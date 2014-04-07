@@ -7,19 +7,25 @@
 #include "base/memory/weak_ptr.h"
 #include "base/message_loop.h"
 #include "base/metrics/histogram.h"
-#include "chrome/browser/api/infobars/confirm_infobar_delegate.h"
+#include "base/prefs/pref_registry_simple.h"
+#include "base/prefs/pref_service.h"
+#include "base/version.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/first_run/first_run.h"
-#include "chrome/browser/infobars/infobar_tab_helper.h"
-#include "chrome/browser/prefs/pref_service.h"
+#include "chrome/browser/infobars/confirm_infobar_delegate.h"
+#include "chrome/browser/infobars/infobar_service.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/shell_integration.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_finder.h"
-#include "chrome/browser/ui/browser_tabstrip.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
+#include "chrome/common/chrome_version_info.h"
 #include "chrome/common/pref_names.h"
+#include "chrome/installer/util/master_preferences.h"
+#include "chrome/installer/util/master_preferences_constants.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/navigation_details.h"
+#include "content/public/browser/web_contents.h"
 #include "grit/chromium_strings.h"
 #include "grit/generated_resources.h"
 #include "grit/theme_resources.h"
@@ -54,11 +60,15 @@ void SetChromeAsDefaultBrowser(bool interactive_flow, PrefService* prefs) {
 // The delegate for the infobar shown when Chrome is not the default browser.
 class DefaultBrowserInfoBarDelegate : public ConfirmInfoBarDelegate {
  public:
-  DefaultBrowserInfoBarDelegate(InfoBarTabHelper* infobar_helper,
-                                PrefService* prefs,
-                                bool interactive_flow_required);
+  // Creates a default browser delegate and adds it to |infobar_service|.
+  static void Create(InfoBarService* infobar_service,
+                     PrefService* prefs,
+                     bool interactive_flow_required);
 
  private:
+  DefaultBrowserInfoBarDelegate(InfoBarService* infobar_service,
+                                PrefService* prefs,
+                                bool interactive_flow_required);
   virtual ~DefaultBrowserInfoBarDelegate();
 
   void AllowExpiry() { should_expire_ = true; }
@@ -92,11 +102,20 @@ class DefaultBrowserInfoBarDelegate : public ConfirmInfoBarDelegate {
   DISALLOW_COPY_AND_ASSIGN(DefaultBrowserInfoBarDelegate);
 };
 
+// static
+void DefaultBrowserInfoBarDelegate::Create(InfoBarService* infobar_service,
+                                           PrefService* prefs,
+                                           bool interactive_flow_required) {
+  infobar_service->AddInfoBar(scoped_ptr<InfoBarDelegate>(
+      new DefaultBrowserInfoBarDelegate(infobar_service, prefs,
+                                        interactive_flow_required)));
+}
+
 DefaultBrowserInfoBarDelegate::DefaultBrowserInfoBarDelegate(
-    InfoBarTabHelper* infobar_helper,
+    InfoBarService* infobar_service,
     PrefService* prefs,
     bool interactive_flow_required)
-    : ConfirmInfoBarDelegate(infobar_helper),
+    : ConfirmInfoBarDelegate(infobar_service),
       prefs_(prefs),
       action_taken_(false),
       should_expire_(false),
@@ -166,24 +185,18 @@ void NotifyNotDefaultBrowserCallback(chrome::HostDesktopType desktop_type) {
 
   // In ChromeBot tests, there might be a race. This line appears to get
   // called during shutdown and |tab| can be NULL.
-  content::WebContents* web_contents = chrome::GetActiveWebContents(browser);
+  content::WebContents* web_contents =
+      browser->tab_strip_model()->GetActiveWebContents();
   if (!web_contents)
-    return;
-
-  // Don't show the info-bar if there are already info-bars showing.
-  InfoBarTabHelper* infobar_helper =
-      InfoBarTabHelper::FromWebContents(web_contents);
-  if (infobar_helper->GetInfoBarCount() > 0)
     return;
 
   bool interactive_flow = ShellIntegration::CanSetAsDefaultBrowser() ==
       ShellIntegration::SET_DEFAULT_INTERACTIVE;
   Profile* profile =
       Profile::FromBrowserContext(web_contents->GetBrowserContext());
-  infobar_helper->AddInfoBar(
-      new DefaultBrowserInfoBarDelegate(infobar_helper,
-                                        profile->GetPrefs(),
-                                        interactive_flow));
+  DefaultBrowserInfoBarDelegate::Create(
+      InfoBarService::FromWebContents(web_contents), profile->GetPrefs(),
+      interactive_flow);
 }
 
 void CheckDefaultBrowserCallback(chrome::HostDesktopType desktop_type) {
@@ -202,10 +215,17 @@ void CheckDefaultBrowserCallback(chrome::HostDesktopType desktop_type) {
 
 namespace chrome {
 
+void RegisterDefaultBrowserPromptPrefs(PrefRegistrySimple* registry) {
+  registry->RegisterStringPref(
+      prefs::kBrowserSuppressDefaultBrowserPrompt, std::string());
+}
+
 void ShowDefaultBrowserPrompt(Profile* profile, HostDesktopType desktop_type) {
   // We do not check if we are the default browser if:
-  // - the user said "don't ask me again" on the infobar earlier.
+  // - The user said "don't ask me again" on the infobar earlier.
   // - There is a policy in control of this setting.
+  // - The "suppress_default_browser_prompt_for_version" master preference is
+  //     set to the current version.
   if (!profile->GetPrefs()->GetBoolean(prefs::kCheckDefaultBrowser))
     return;
 
@@ -223,6 +243,20 @@ void ShowDefaultBrowserPrompt(Profile* profile, HostDesktopType desktop_type) {
     }
     return;
   }
+
+  const std::string disable_version_string =
+      g_browser_process->local_state()->GetString(
+          prefs::kBrowserSuppressDefaultBrowserPrompt);
+  const Version disable_version(disable_version_string);
+
+  DCHECK(disable_version_string.empty() || disable_version.IsValid());
+  if (disable_version.IsValid()) {
+    const chrome::VersionInfo version_info;
+    const Version chrome_version(version_info.Version());
+    if (disable_version.Equals(chrome_version))
+      return;
+  }
+
   BrowserThread::PostTask(BrowserThread::FILE, FROM_HERE,
                           base::Bind(&CheckDefaultBrowserCallback,
                                      desktop_type));

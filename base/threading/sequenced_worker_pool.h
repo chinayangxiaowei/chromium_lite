@@ -288,6 +288,7 @@ class BASE_EXPORT SequencedWorkerPool : public TaskRunner {
 
   // Blocks until all pending tasks are complete. This should only be called in
   // unit tests when you want to validate something that should have happened.
+  // This will not flush delayed tasks; delayed tasks get deleted.
   //
   // Note that calling this will not prevent other threads from posting work to
   // the queue while the calling thread is waiting on Flush(). In this case,
@@ -304,7 +305,16 @@ class BASE_EXPORT SequencedWorkerPool : public TaskRunner {
   // After this call, subsequent calls to post tasks will fail.
   //
   // Must be called from the same thread this object was constructed on.
-  void Shutdown();
+  void Shutdown() { Shutdown(0); }
+
+  // A variant that allows an arbitrary number of new blocking tasks to
+  // be posted during shutdown from within tasks that execute during shutdown.
+  // Only tasks designated as BLOCKING_SHUTDOWN will be allowed, and only if
+  // posted by tasks that are not designated as CONTINUE_ON_SHUTDOWN. Once
+  // the limit is reached, subsequent calls to post task fail in all cases.
+  //
+  // Must be called from the same thread this object was constructed on.
+  void Shutdown(int max_new_blocking_tasks_after_shutdown);
 
  protected:
   virtual ~SequencedWorkerPool();

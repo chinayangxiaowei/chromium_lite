@@ -7,18 +7,19 @@
 #include <algorithm>
 
 #include "base/utf_string_conversions.h"
+#include "chrome/app/chrome_command_ids.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/profiles/avatar_menu_model.h"
 #include "chrome/browser/profiles/profile_info_cache.h"
 #include "chrome/browser/profiles/profile_info_util.h"
 #include "chrome/browser/profiles/profile_manager.h"
 #include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/browser_commands.h"
 #include "grit/generated_resources.h"
 #include "grit/theme_resources.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/resource/resource_bundle.h"
 #include "ui/gfx/canvas.h"
-#include "ui/gfx/font.h"
 #include "ui/gfx/image/canvas_image_source.h"
 #include "ui/gfx/image/image.h"
 #include "ui/views/controls/button/custom_button.h"
@@ -27,6 +28,7 @@
 #include "ui/views/controls/label.h"
 #include "ui/views/controls/link.h"
 #include "ui/views/controls/separator.h"
+#include "ui/views/widget/widget.h"
 
 namespace {
 
@@ -69,10 +71,10 @@ class BadgeImageSource: public gfx::CanvasImageSource {
                    const gfx::Size& icon_size,
                    const gfx::ImageSkia& badge);
 
-  ~BadgeImageSource();
+  virtual ~BadgeImageSource();
 
   // Overridden from CanvasImageSource:
-  void Draw(gfx::Canvas* canvas) OVERRIDE;
+  virtual void Draw(gfx::Canvas* canvas) OVERRIDE;
 
  private:
   gfx::Size ComputeSize(const gfx::ImageSkia& icon,
@@ -192,6 +194,7 @@ bool ProfileImageView::HitTestRect(const gfx::Rect& rect) const {
   return false;
 }
 
+}  // namespace
 
 // ProfileItemView ------------------------------------------------------------
 
@@ -235,6 +238,8 @@ ProfileItemView::ProfileItemView(const AvatarMenuModel::Item& item,
     : views::CustomButton(parent),
       item_(item),
       parent_(parent) {
+  set_notify_enter_exit_on_child(true);
+
   image_view_ = new ProfileImageView();
   gfx::ImageSkia profile_icon = *item_.icon.ToImageSkia();
   if (item_.active)
@@ -245,20 +250,18 @@ ProfileItemView::ProfileItemView(const AvatarMenuModel::Item& item,
 
   // Add a label to show the profile name.
   ui::ResourceBundle& rb = ui::ResourceBundle::GetSharedInstance();
-  const gfx::Font base_font = rb.GetFont(ui::ResourceBundle::BaseFont);
-  const int style = item_.active ? gfx::Font::BOLD : 0;
-  const int kNameFontDelta = 1;
   name_label_ = new views::Label(item_.name,
-                                 base_font.DeriveFont(kNameFontDelta, style));
+                                 rb.GetFont(item_.active ?
+                                            ui::ResourceBundle::BoldFont :
+                                            ui::ResourceBundle::BaseFont));
   name_label_->SetHorizontalAlignment(gfx::ALIGN_LEFT);
   AddChildView(name_label_);
 
   // Add a label to show the sync state.
-  const int kStateFontDelta = -1;
   sync_state_label_ = new views::Label(item_.sync_state);
   if (item_.signed_in)
     sync_state_label_->SetElideBehavior(views::Label::ELIDE_AS_EMAIL);
-  sync_state_label_->SetFont(base_font.DeriveFont(kStateFontDelta));
+  sync_state_label_->SetFont(rb.GetFont(ui::ResourceBundle::SmallFont));
   sync_state_label_->SetHorizontalAlignment(gfx::ALIGN_LEFT);
   sync_state_label_->SetEnabled(false);
   AddChildView(sync_state_label_);
@@ -382,10 +385,41 @@ bool ProfileItemView::IsHighlighted() {
          edit_link_->HasFocus();
 }
 
-}  // namespace
-
 
 // AvatarMenuBubbleView -------------------------------------------------------
+
+// static
+AvatarMenuBubbleView* AvatarMenuBubbleView::avatar_bubble_ = NULL;
+
+// static
+void AvatarMenuBubbleView::ShowBubble(
+    views::View* anchor_view,
+    views::BubbleBorder::ArrowLocation arrow_location,
+    views::BubbleBorder::BubbleAlignment border_alignment,
+    const gfx::Rect& anchor_rect,
+    Browser* browser) {
+  if (IsShowing())
+    return;
+
+  DCHECK(chrome::IsCommandEnabled(browser, IDC_SHOW_AVATAR_MENU));
+  avatar_bubble_ = new AvatarMenuBubbleView(
+      anchor_view, arrow_location, anchor_rect, browser);
+  views::BubbleDelegateView::CreateBubble(avatar_bubble_);
+  avatar_bubble_->SetBackgroundColors();
+  avatar_bubble_->SetAlignment(border_alignment);
+  avatar_bubble_->GetWidget()->Show();
+}
+
+// static
+bool AvatarMenuBubbleView::IsShowing() {
+  return avatar_bubble_ != NULL;
+}
+
+// static
+void AvatarMenuBubbleView::Hide() {
+  if (IsShowing())
+    avatar_bubble_->GetWidget()->Close();
+}
 
 AvatarMenuBubbleView::AvatarMenuBubbleView(
     views::View* anchor_view,
@@ -393,9 +427,10 @@ AvatarMenuBubbleView::AvatarMenuBubbleView(
     const gfx::Rect& anchor_rect,
     Browser* browser)
     : BubbleDelegateView(anchor_view, arrow_location),
-      add_profile_link_(NULL),
       anchor_rect_(anchor_rect),
-      browser_(browser) {
+      browser_(browser),
+      separator_(NULL),
+      add_profile_link_(NULL) {
   avatar_menu_model_.reset(new AvatarMenuModel(
       &g_browser_process->profile_manager()->GetProfileInfoCache(),
       this, browser_));
@@ -405,9 +440,6 @@ AvatarMenuBubbleView::~AvatarMenuBubbleView() {
 }
 
 gfx::Size AvatarMenuBubbleView::GetPreferredSize() {
-  if (!add_profile_link_)
-    return gfx::Size();
-
   int max_width = 0;
   int total_height = 0;
   for (size_t i = 0; i < item_views_.size(); ++i) {
@@ -416,13 +448,15 @@ gfx::Size AvatarMenuBubbleView::GetPreferredSize() {
     total_height += size.height() + kItemMarginY;
   }
 
-  total_height += kSeparatorPaddingY * 2 +
-                  separator_->GetPreferredSize().height();
+  if (add_profile_link_) {
+    total_height += kSeparatorPaddingY * 2 +
+                    separator_->GetPreferredSize().height();
 
-  gfx::Size add_profile_size = add_profile_link_->GetPreferredSize();
-  max_width = std::max(max_width,
-      add_profile_size.width() + profiles::kAvatarIconWidth + kIconMarginX);
-  total_height += add_profile_link_->GetPreferredSize().height();
+    gfx::Size add_profile_size = add_profile_link_->GetPreferredSize();
+    max_width = std::max(max_width,
+        add_profile_size.width() + profiles::kAvatarIconWidth + kIconMarginX);
+    total_height += add_profile_link_->GetPreferredSize().height();
+  }
 
   const int kBubbleViewMaxWidth = 800;
   const int kBubbleViewMinWidth = 175;
@@ -441,13 +475,15 @@ void AvatarMenuBubbleView::Layout() {
     y += item_height + kItemMarginY;
   }
 
-  y += kSeparatorPaddingY;
-  int separator_height = separator_->GetPreferredSize().height();
-  separator_->SetBounds(0, y, width(), separator_height);
-  y += kSeparatorPaddingY + separator_height;
+  if (add_profile_link_) {
+    y += kSeparatorPaddingY;
+    int separator_height = separator_->GetPreferredSize().height();
+    separator_->SetBounds(0, y, width(), separator_height);
+    y += kSeparatorPaddingY + separator_height;
 
-  add_profile_link_->SetBounds(profiles::kAvatarIconWidth + kIconMarginX, y,
-      width(), add_profile_link_->GetPreferredSize().height());
+    add_profile_link_->SetBounds(profiles::kAvatarIconWidth + kIconMarginX, y,
+        width(), add_profile_link_->GetPreferredSize().height());
+  }
 }
 
 bool AvatarMenuBubbleView::AcceleratorPressed(
@@ -482,12 +518,12 @@ bool AvatarMenuBubbleView::AcceleratorPressed(
 void AvatarMenuBubbleView::ButtonPressed(views::Button* sender,
                                          const ui::Event& event) {
   for (size_t i = 0; i < item_views_.size(); ++i) {
-    ProfileItemView* item_view = static_cast<ProfileItemView*>(item_views_[i]);
+    ProfileItemView* item_view = item_views_[i];
     if (sender == item_view) {
       // Clicking on the active profile shouldn't do anything.
       if (!item_view->item().active) {
         avatar_menu_model_->SwitchToProfile(
-            i, chrome::DispositionFromEventFlags(event.flags()) == NEW_WINDOW);
+            i, ui::DispositionFromEventFlags(event.flags()) == NEW_WINDOW);
       }
       break;
     }
@@ -496,12 +532,12 @@ void AvatarMenuBubbleView::ButtonPressed(views::Button* sender,
 
 void AvatarMenuBubbleView::LinkClicked(views::Link* source, int event_flags) {
   if (source == add_profile_link_) {
-    avatar_menu_model_->AddNewProfile();
+    avatar_menu_model_->AddNewProfile(ProfileMetrics::ADD_NEW_USER_ICON);
     return;
   }
 
   for (size_t i = 0; i < item_views_.size(); ++i) {
-    ProfileItemView* item_view = static_cast<ProfileItemView*>(item_views_[i]);
+    ProfileItemView* item_view = item_views_[i];
     if (source == item_view->edit_link()) {
       avatar_menu_model_->EditProfile(i);
       return;
@@ -518,6 +554,11 @@ void AvatarMenuBubbleView::Init() {
   OnAvatarMenuModelChanged(avatar_menu_model_.get());
   AddAccelerator(ui::Accelerator(ui::VKEY_DOWN, ui::EF_NONE));
   AddAccelerator(ui::Accelerator(ui::VKEY_UP, ui::EF_NONE));
+}
+
+void AvatarMenuBubbleView::WindowClosing() {
+  DCHECK_EQ(avatar_bubble_, this);
+  avatar_bubble_ = NULL;
 }
 
 void AvatarMenuBubbleView::OnAvatarMenuModelChanged(
@@ -538,18 +579,26 @@ void AvatarMenuBubbleView::OnAvatarMenuModelChanged(
     item_views_.push_back(item_view);
   }
 
-  separator_ = new views::Separator();
-  AddChildView(separator_);
+  if (avatar_menu_model_->ShouldShowAddNewProfileLink()) {
+    separator_ = new views::Separator();
+    AddChildView(separator_);
 
-  add_profile_link_ = new views::Link(
-      l10n_util::GetStringUTF16(IDS_PROFILES_CREATE_NEW_PROFILE_LINK));
-  add_profile_link_->set_listener(this);
-  add_profile_link_->SetHorizontalAlignment(gfx::ALIGN_LEFT);
-  add_profile_link_->SetBackgroundColor(color());
-  AddChildView(add_profile_link_);
+    add_profile_link_ = new views::Link(
+        l10n_util::GetStringUTF16(IDS_PROFILES_CREATE_NEW_PROFILE_LINK));
+    add_profile_link_->set_listener(this);
+    add_profile_link_->SetHorizontalAlignment(gfx::ALIGN_LEFT);
+    add_profile_link_->SetBackgroundColor(color());
+    AddChildView(add_profile_link_);
+  }
 
   // If the bubble has already been shown then resize and reposition the bubble.
   Layout();
   if (GetBubbleFrameView())
     SizeToContents();
+}
+
+void AvatarMenuBubbleView::SetBackgroundColors() {
+  for (size_t i = 0; i < item_views_.size(); ++i) {
+    item_views_[i]->OnHighlightStateChanged();
+  }
 }

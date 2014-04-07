@@ -14,6 +14,7 @@
 #include "base/logging.h"
 #include "base/memory/weak_ptr.h"
 #include "base/metrics/histogram.h"
+#include "base/prefs/pref_service.h"
 #include "base/stl_util.h"
 #include "base/time.h"
 #include "base/utf_string_conversions.h"
@@ -21,7 +22,6 @@
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/common/cancelable_request.h"
 #include "chrome/browser/favicon/favicon_tab_helper.h"
-#include "chrome/browser/prefs/pref_service.h"
 #include "chrome/browser/prerender/prerender_condition.h"
 #include "chrome/browser/prerender/prerender_contents.h"
 #include "chrome/browser/prerender/prerender_field_trial.h"
@@ -42,7 +42,7 @@
 #include "chrome/common/pref_names.h"
 #include "chrome/common/prerender_messages.h"
 #include "content/public/browser/browser_thread.h"
-#include "content/public/browser/devtools_agent_host_registry.h"
+#include "content/public/browser/devtools_agent_host.h"
 #include "content/public/browser/navigation_controller.h"
 #include "content/public/browser/notification_observer.h"
 #include "content/public/browser/notification_registrar.h"
@@ -279,9 +279,9 @@ PrerenderHandle* PrerenderManager::AddPrerenderFromLinkRelPrerender(
     int contents_child_id;
     int contents_route_id;
     if (prerender_contents->GetChildId(&contents_child_id) &&
-        prerender_contents->GetRouteId(&contents_route_id) &&
-        contents_child_id == process_id && contents_route_id == route_id) {
-      return NULL;
+        prerender_contents->GetRouteId(&contents_route_id)) {
+      if (contents_child_id == process_id && contents_route_id == route_id)
+        return NULL;
     }
   }
 
@@ -376,7 +376,7 @@ bool PrerenderManager::MaybeUsePrerenderedPage(WebContents* web_contents,
 
   // Don't use prerendered pages if debugger is attached to the tab.
   // See http://crbug.com/98541
-  if (content::DevToolsAgentHostRegistry::IsDebuggerAttached(web_contents)) {
+  if (content::DevToolsAgentHost::IsDebuggerAttached(web_contents)) {
     DestroyAndMarkMatchCompleteAsUsed(prerender_data->contents(),
                                       FINAL_STATUS_DEVTOOLS_ATTACHED);
     return false;
@@ -456,7 +456,17 @@ bool PrerenderManager::MaybeUsePrerenderedPage(WebContents* web_contents,
   prerender_contents->CommitHistory(new_web_contents);
 
   GURL icon_url = prerender_contents->icon_url();
+
   if (!icon_url.is_empty()) {
+#if defined(OS_ANDROID)
+    // Do the delayed icon fetch since we didn't download
+    // the favicon during prerendering on mobile devices.
+    FaviconTabHelper * favicon_tap_helper =
+        FaviconTabHelper::FromWebContents(new_web_contents);
+    favicon_tap_helper->set_should_fetch_icons(true);
+    favicon_tap_helper->FetchFavicon(icon_url);
+#endif  // defined(OS_ANDROID)
+
     std::vector<content::FaviconURL> urls;
     urls.push_back(content::FaviconURL(icon_url, content::FaviconURL::FAVICON));
     FaviconTabHelper::FromWebContents(new_web_contents)->
@@ -801,6 +811,11 @@ bool PrerenderManager::IsValidHttpMethod(const std::string& method) {
   return false;
 }
 
+// static
+bool PrerenderManager::DoesURLHaveValidScheme(const GURL& url) {
+  return IsWebURL(url);
+}
+
 DictionaryValue* PrerenderManager::GetAsValue() const {
   DCHECK(CalledOnValidThread());
   DictionaryValue* dict_value = new DictionaryValue();
@@ -1036,8 +1051,11 @@ PrerenderHandle* PrerenderManager::AddPrerender(
   active_prerenders_.push_back(
       new PrerenderData(this, prerender_contents,
                         GetExpiryTimeForNewPrerender()));
-  if (!prerender_contents->Init())
+  if (!prerender_contents->Init()) {
+    DCHECK(active_prerenders_.end() ==
+           FindIteratorForPrerenderContents(prerender_contents));
     return NULL;
+  }
 
   histograms_->RecordPrerenderStarted(origin);
   DCHECK(!prerender_contents->prerendering_has_started());
@@ -1204,7 +1222,7 @@ bool PrerenderManager::DoesRateLimitAllowPrerender(Origin origin) const {
   histograms_->RecordTimeBetweenPrerenderRequests(origin, elapsed_time);
   if (!config_.rate_limit_enabled)
     return true;
-  return elapsed_time >
+  return elapsed_time >=
       base::TimeDelta::FromMilliseconds(kMinTimeBetweenPrerendersMs);
 }
 

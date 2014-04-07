@@ -5,11 +5,13 @@
 #include "chrome/browser/extensions/api/input_ime/input_ime_api.h"
 
 #include "base/json/json_writer.h"
+#include "base/lazy_instance.h"
 #include "base/stl_util.h"
-#include "base/string_number_conversions.h"
+#include "base/strings/string_number_conversions.h"
 #include "base/values.h"
 #include "chrome/browser/chromeos/input_method/input_method_engine.h"
 #include "chrome/browser/extensions/event_router.h"
+#include "chrome/browser/extensions/extension_function_registry.h"
 #include "chrome/browser/extensions/extension_input_module_constants.h"
 #include "chrome/browser/extensions/extension_system.h"
 #include "chrome/browser/profiles/profile.h"
@@ -148,6 +150,7 @@ const char kOnInputContextUpdate[] = "input.ime.onInputContextUpdate";
 const char kOnKeyEvent[] = "input.ime.onKeyEvent";
 const char kOnCandidateClicked[] = "input.ime.onCandidateClicked";
 const char kOnMenuItemActivated[] = "input.ime.onMenuItemActivated";
+const char kOnSurroundingTextChanged[] = "input.ime.onSurroundingTextChanged";
 
 }  // namespace events
 
@@ -243,6 +246,7 @@ class ImeObserver : public chromeos::InputMethodEngine::Observer {
     dict->SetString("type", event.type);
     dict->SetString("requestId", request_id);
     dict->SetString("key", event.key);
+    dict->SetString("code", event.code);
     dict->SetBoolean("altKey", event.alt_key);
     dict->SetBoolean("ctrlKey", event.ctrl_key);
     dict->SetBoolean("shiftKey", event.shift_key);
@@ -298,6 +302,25 @@ class ImeObserver : public chromeos::InputMethodEngine::Observer {
                              events::kOnMenuItemActivated, args.Pass());
   }
 
+  virtual void OnSurroundingTextChanged(const std::string& engine_id,
+                                        const std::string& text,
+                                        int cursor_pos,
+                                        int anchor_pos) OVERRIDE {
+    if (profile_ == NULL || extension_id_.empty())
+      return;
+    DictionaryValue* dict = new DictionaryValue();
+    dict->SetString("text", text);
+    dict->SetInteger("focus", cursor_pos);
+    dict->SetInteger("anchor", anchor_pos);
+
+    scoped_ptr<ListValue> args(new ListValue);
+    args->Append(Value::CreateStringValue(engine_id));
+    args->Append(dict);
+
+    DispatchEventToExtension(profile_, extension_id_,
+                             events::kOnSurroundingTextChanged, args.Pass());
+  }
+
  private:
   Profile* profile_;
   std::string extension_id_;
@@ -315,13 +338,11 @@ InputImeEventRouter::GetInstance() {
   return Singleton<InputImeEventRouter>::get();
 }
 
-void InputImeEventRouter::Init() {}
-
 #if defined(OS_CHROMEOS)
 bool InputImeEventRouter::RegisterIme(
     Profile* profile,
     const std::string& extension_id,
-    const extensions::Extension::InputComponentInfo& component) {
+    const extensions::InputComponentInfo& component) {
   VLOG(1) << "RegisterIme: " << extension_id << " id: " << component.id;
 
   std::map<std::string, chromeos::InputMethodEngine*>& engine_map =
@@ -823,6 +844,32 @@ bool UpdateMenuItemsFunction::RunImpl() {
   return true;
 }
 
+bool DeleteSurroundingTextFunction::RunImpl() {
+  DictionaryValue* args;
+  EXTENSION_FUNCTION_VALIDATE(args_->GetDictionary(0, &args));
+
+  std::string engine_id;
+  EXTENSION_FUNCTION_VALIDATE(args->GetString(keys::kEngineIdKey, &engine_id));
+
+  chromeos::InputMethodEngine* engine =
+      InputImeEventRouter::GetInstance()->GetEngine(extension_id(), engine_id);
+  if (!engine) {
+    error_ = kErrorEngineNotAvailable;
+    return false;
+  }
+
+  int context_id = 0;
+  int offset = 0;
+  int length = 0;
+  EXTENSION_FUNCTION_VALIDATE(args->GetInteger(keys::kContextIdKey,
+                                               &context_id));
+  EXTENSION_FUNCTION_VALIDATE(args->GetInteger(keys::kOffsetKey, &offset));
+  EXTENSION_FUNCTION_VALIDATE(args->GetInteger(keys::kLengthKey, &length));
+
+  engine->DeleteSurroundingText(context_id, offset, length, &error_);
+  return true;
+}
+
 bool KeyEventHandled::RunImpl() {
   std::string request_id_str;
   EXTENSION_FUNCTION_VALIDATE(args_->GetString(0, &request_id_str));
@@ -836,5 +883,74 @@ bool KeyEventHandled::RunImpl() {
   return true;
 }
 #endif
+
+InputImeAPI::InputImeAPI(Profile* profile)
+    : profile_(profile) {
+  (new InputComponentsHandler)->Register();
+
+  registrar_.Add(this, chrome::NOTIFICATION_EXTENSION_LOADED,
+                 content::Source<Profile>(profile));
+  registrar_.Add(this, chrome::NOTIFICATION_EXTENSION_UNLOADED,
+                 content::Source<Profile>(profile));
+
+  ExtensionFunctionRegistry* registry =
+      ExtensionFunctionRegistry::GetInstance();
+  registry->RegisterFunction<SetCompositionFunction>();
+  registry->RegisterFunction<ClearCompositionFunction>();
+  registry->RegisterFunction<CommitTextFunction>();
+  registry->RegisterFunction<SetCandidateWindowPropertiesFunction>();
+  registry->RegisterFunction<SetCandidatesFunction>();
+  registry->RegisterFunction<SetCursorPositionFunction>();
+  registry->RegisterFunction<SetMenuItemsFunction>();
+  registry->RegisterFunction<UpdateMenuItemsFunction>();
+  registry->RegisterFunction<DeleteSurroundingTextFunction>();
+  registry->RegisterFunction<KeyEventHandled>();
+}
+
+InputImeAPI::~InputImeAPI() {
+}
+
+static base::LazyInstance<ProfileKeyedAPIFactory<InputImeAPI> >
+g_factory = LAZY_INSTANCE_INITIALIZER;
+
+// static
+ProfileKeyedAPIFactory<InputImeAPI>* InputImeAPI::GetFactoryInstance() {
+  return &g_factory.Get();
+}
+
+void InputImeAPI::Observe(int type,
+                          const content::NotificationSource& source,
+                          const content::NotificationDetails& details) {
+  if (type == chrome::NOTIFICATION_EXTENSION_LOADED) {
+    const Extension* extension =
+        content::Details<const Extension>(details).ptr();
+    const std::vector<InputComponentInfo>* input_components =
+        extensions::InputComponents::GetInputComponents(extension);
+    if (!input_components)
+      return;
+    for (std::vector<extensions::InputComponentInfo>::const_iterator component =
+        input_components->begin(); component != input_components->end();
+        ++component) {
+      if (component->type == extensions::INPUT_COMPONENT_TYPE_IME) {
+        input_ime_event_router()->RegisterIme(
+            profile_, extension->id(), *component);
+      }
+    }
+  } else if (type == chrome::NOTIFICATION_EXTENSION_UNLOADED) {
+    const Extension* extension =
+        content::Details<const UnloadedExtensionInfo>(details)->extension;
+    const std::vector<InputComponentInfo>* input_components =
+        extensions::InputComponents::GetInputComponents(extension);
+    if (!input_components)
+      return;
+    if (input_components->size() > 0) {
+      input_ime_event_router()->UnregisterAllImes(profile_, extension->id());
+    }
+  }
+}
+
+InputImeEventRouter* InputImeAPI::input_ime_event_router() {
+  return InputImeEventRouter::GetInstance();
+}
 
 }  // namespace extensions

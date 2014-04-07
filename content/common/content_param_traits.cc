@@ -14,18 +14,18 @@
 namespace {
 
 int WebInputEventSizeForType(WebKit::WebInputEvent::Type type) {
-    if (WebKit::WebInputEvent::isMouseEventType(type))
-        return sizeof(WebKit::WebMouseEvent);
-    if (type == WebKit::WebInputEvent::MouseWheel)
-        return sizeof(WebKit::WebMouseWheelEvent);
-    if (WebKit::WebInputEvent::isKeyboardEventType(type))
-        return sizeof(WebKit::WebKeyboardEvent);
-    if (WebKit::WebInputEvent::isTouchEventType(type))
-        return sizeof(WebKit::WebTouchEvent);
-    if (WebKit::WebInputEvent::isGestureEventType(type))
-        return sizeof(WebKit::WebGestureEvent);
-    NOTREACHED() << "Unknown webkit event type " << type;
-    return 0;
+  if (WebKit::WebInputEvent::isMouseEventType(type))
+    return sizeof(WebKit::WebMouseEvent);
+  if (type == WebKit::WebInputEvent::MouseWheel)
+    return sizeof(WebKit::WebMouseWheelEvent);
+  if (WebKit::WebInputEvent::isKeyboardEventType(type))
+    return sizeof(WebKit::WebKeyboardEvent);
+  if (WebKit::WebInputEvent::isTouchEventType(type))
+    return sizeof(WebKit::WebTouchEvent);
+  if (WebKit::WebInputEvent::isGestureEventType(type))
+    return sizeof(WebKit::WebGestureEvent);
+  NOTREACHED() << "Unknown webkit event type " << type;
+  return 0;
 }
 
 }  // namespace
@@ -129,7 +129,8 @@ bool ParamTraits<NPVariant_Param>::Read(const Message* m,
 }
 
 void ParamTraits<NPVariant_Param>::Log(const param_type& p, std::string* l) {
-  l->append(StringPrintf("NPVariant_Param(%d, ", static_cast<int>(p.type)));
+  l->append(
+      base::StringPrintf("NPVariant_Param(%d, ", static_cast<int>(p.type)));
   if (p.type == content::NPVARIANT_PARAM_BOOL) {
     LogParam(p.bool_value, l);
   } else if (p.type == content::NPVARIANT_PARAM_INT) {

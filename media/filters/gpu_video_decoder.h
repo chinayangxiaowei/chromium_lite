@@ -55,13 +55,15 @@ class MEDIA_EXPORT GpuVideoDecoder
     // Close()ing the returned pointer.
     virtual base::SharedMemory* CreateSharedMemory(size_t size) = 0;
 
+    // Returns the message loop the VideoDecodeAccelerator runs on.
+    virtual scoped_refptr<base::MessageLoopProxy> GetMessageLoop() = 0;
+
    protected:
     friend class base::RefCountedThreadSafe<Factories>;
     virtual ~Factories();
   };
 
-  GpuVideoDecoder(const scoped_refptr<base::MessageLoopProxy>& gvd_loop_proxy,
-                  const scoped_refptr<base::MessageLoopProxy>& vda_loop_proxy,
+  GpuVideoDecoder(const scoped_refptr<base::MessageLoopProxy>& message_loop,
                   const scoped_refptr<Factories>& factories);
 
   // VideoDecoder implementation.
@@ -72,6 +74,7 @@ class MEDIA_EXPORT GpuVideoDecoder
   virtual void Reset(const base::Closure& closure) OVERRIDE;
   virtual void Stop(const base::Closure& closure) OVERRIDE;
   virtual bool HasAlpha() const OVERRIDE;
+  virtual bool HasOutputFrameAvailable() const OVERRIDE;
 
   // VideoDecodeAccelerator::Client implementation.
   virtual void NotifyInitializeDone() OVERRIDE;
@@ -123,7 +126,7 @@ class MEDIA_EXPORT GpuVideoDecoder
   void ReusePictureBuffer(int64 picture_buffer_id);
 
   void RecordBufferData(
-      const BitstreamBuffer& bitstream_buffer, const Buffer& buffer);
+      const BitstreamBuffer& bitstream_buffer, const DecoderBuffer& buffer);
   void GetBufferData(int32 id, base::TimeDelta* timetamp,
                      gfx::Rect* visible_rect, gfx::Size* natural_size);
 
@@ -221,6 +224,10 @@ class MEDIA_EXPORT GpuVideoDecoder
 
   // Indicates decoding error occurred.
   bool error_occured_;
+
+  // Set during ProvidePictureBuffers(), used for checking and implementing
+  // HasAvailableOutputFrames().
+  int available_pictures_;
 
   DISALLOW_COPY_AND_ASSIGN(GpuVideoDecoder);
 };

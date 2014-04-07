@@ -17,7 +17,6 @@
 #include "base/sequenced_task_runner_helpers.h"
 #include "base/threading/non_thread_safe.h"
 #include "content/common/content_export.h"
-#include "content/public/browser/browser_thread.h"
 
 class GURL;
 
@@ -85,8 +84,7 @@ class CONTENT_EXPORT ResourceHandler
   // Data (*bytes_read bytes) was written into the buffer provided by
   // OnWillRead.  A return value of false cancels the request, true continues
   // reading data.  Set |*defer| to true to defer reading more response data.
-  // Call ResourceDispatcherHostImpl::ResumeDeferredRequest to continue reading
-  // response data.
+  // Call controller()->Resume() to continue reading response data.
   virtual bool OnReadCompleted(int request_id, int bytes_read,
                                bool* defer) = 0;
 
@@ -101,7 +99,7 @@ class CONTENT_EXPORT ResourceHandler
   // to indicate progress of 'download_to_file' requests. OnReadCompleted
   // calls are consumed by the RedirectToFileResourceHandler and replaced
   // with OnDataDownloaded calls.
-  virtual void OnDataDownloaded(int request_id, int bytes_downloaded) {}
+  virtual void OnDataDownloaded(int request_id, int bytes_downloaded) = 0;
 
  protected:
   ResourceHandler() : controller_(NULL) {}

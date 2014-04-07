@@ -33,17 +33,23 @@ IN_PROC_BROWSER_TEST_F(NewTabUIBrowserTest, ChromeInternalLoadsNTP) {
   // Ensure that we get there by checking for non-empty page content.
   ui_test_utils::NavigateToURL(browser(), GURL("chrome-internal:"));
   bool empty_inner_html = false;
-  ASSERT_TRUE(content::ExecuteJavaScriptAndExtractBool(
-      browser()->tab_strip_model()->GetWebContentsAt(0)->GetRenderViewHost(),
-      L"",
-      L"window.domAutomationController.send(document.body.innerHTML == '')",
+  ASSERT_TRUE(content::ExecuteScriptAndExtractBool(
+      browser()->tab_strip_model()->GetWebContentsAt(0),
+      "window.domAutomationController.send(document.body.innerHTML == '')",
       &empty_inner_html));
   ASSERT_FALSE(empty_inner_html);
 }
 
+#if defined(OS_WIN)
+// Flaky on Windows (http://crbug.com/174819)
+#define MAYBE_LoadNTPInExistingProcess DISABLED_LoadNTPInExistingProcess
+#else
+#define MAYBE_LoadNTPInExistingProcess LoadNTPInExistingProcess
+#endif
+
 // Ensure loading a NTP with an existing SiteInstance in a reused process
 // doesn't cause us to kill the process.  See http://crbug.com/104258.
-IN_PROC_BROWSER_TEST_F(NewTabUIBrowserTest, LoadNTPInExistingProcess) {
+IN_PROC_BROWSER_TEST_F(NewTabUIBrowserTest, MAYBE_LoadNTPInExistingProcess) {
   // Set max renderers to 1 to force running out of processes.
   content::RenderProcessHost::SetMaxRendererProcessCount(1);
 
@@ -114,13 +120,13 @@ IN_PROC_BROWSER_TEST_F(NewTabUIBrowserTest, ChromeHangInNTP) {
 
   // Navigate to chrome://hang/ to stall the process.
   ui_test_utils::NavigateToURLWithDisposition(
-      browser(), GURL(chrome::kChromeUIHangURL), CURRENT_TAB, 0);
+      browser(), GURL(content::kChromeUIHangURL), CURRENT_TAB, 0);
 
   // Visit chrome://hang/ again in another NTP. Don't bother waiting for the
   // NTP to load, because it's hung.
   chrome::NewTab(browser());
   browser()->OpenURL(OpenURLParams(
-      GURL(chrome::kChromeUIHangURL), Referrer(), CURRENT_TAB,
+      GURL(content::kChromeUIHangURL), Referrer(), CURRENT_TAB,
       content::PAGE_TRANSITION_TYPED, false));
 }
 
@@ -143,7 +149,7 @@ IN_PROC_BROWSER_TEST_F(NewTabUIProcessPerTabTest, NavBeforeNTPCommits) {
 
   // Navigate to chrome://hang/ to stall the process.
   ui_test_utils::NavigateToURLWithDisposition(
-      browser(), GURL(chrome::kChromeUIHangURL), CURRENT_TAB, 0);
+      browser(), GURL(content::kChromeUIHangURL), CURRENT_TAB, 0);
 
   // Visit a normal URL in another NTP that hasn't committed.
   ui_test_utils::NavigateToURLWithDisposition(

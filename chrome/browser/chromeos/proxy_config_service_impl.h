@@ -9,10 +9,13 @@
 #include <vector>
 
 #include "base/basictypes.h"
-#include "base/prefs/public/pref_member.h"
+#include "base/prefs/pref_member.h"
 #include "base/values.h"
 #include "chrome/browser/chromeos/cros/network_library.h"
 #include "chrome/browser/net/pref_proxy_config_tracker_impl.h"
+
+class PrefRegistrySimple;
+class PrefRegistrySyncable;
 
 namespace chromeos {
 
@@ -106,7 +109,7 @@ class ProxyConfigServiceImpl
     bool SerializeForNetwork(std::string* output);
 
     // Encodes the proxy server as "<url-scheme>=<proxy-scheme>://<proxy>"
-    static void EncodeAndAppendProxyServer(const std::string& scheme,
+    static void EncodeAndAppendProxyServer(const std::string& url_scheme,
                                            const net::ProxyServer& server,
                                            std::string* spec);
 
@@ -199,7 +202,8 @@ class ProxyConfigServiceImpl
                                net::ProxyConfig* proxy_config);
 
   // Register UseShardProxies preference.
-  static void RegisterPrefs(PrefService* pref_service);
+  static void RegisterPrefs(PrefRegistrySimple* registry);
+  static void RegisterUserPrefs(PrefRegistrySyncable* registry);
 
 #if defined(UNIT_TEST)
   void SetTesting(ProxyConfig* test_config) {

@@ -5,6 +5,9 @@
 #ifndef ASH_SYSTEM_CHROMEOS_NETWORK_NETWORK_ICON_ANIMATION_H_
 #define ASH_SYSTEM_CHROMEOS_NETWORK_NETWORK_ICON_ANIMATION_H_
 
+#include <set>
+#include <string>
+
 #include "ash/ash_export.h"
 #include "base/observer_list.h"
 #include "ui/base/animation/animation_delegate.h"
@@ -24,6 +27,8 @@ class ASH_EXPORT NetworkIconAnimation : public ui::AnimationDelegate {
   // Returns the current animation value, [0-1].
   double GetAnimation();
 
+  // The animation stops when all observers have been removed.
+  // Be sure to remove observers when no associated icons are animating.
   void AddObserver(AnimationObserver* observer);
   void RemoveObserver(AnimationObserver* observer);
 

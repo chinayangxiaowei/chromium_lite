@@ -8,7 +8,7 @@
 #include <shellapi.h>
 
 #include "base/bind.h"
-#include "base/system_monitor/system_monitor.h"
+#include "base/debug/trace_event.h"
 #include "base/win/windows_version.h"
 #include "ui/base/events/event.h"
 #include "ui/base/events/event_utils.h"
@@ -16,6 +16,7 @@
 #include "ui/base/win/hwnd_util.h"
 #include "ui/base/win/mouse_wheel_util.h"
 #include "ui/base/win/shell.h"
+#include "ui/base/win/touch_input.h"
 #include "ui/gfx/canvas.h"
 #include "ui/gfx/canvas_skia_paint.h"
 #include "ui/gfx/icon_util.h"
@@ -288,12 +289,18 @@ bool ProcessChildWindowMessage(UINT message,
 
 #endif
 
-// A custom MSAA object id used to determine if a screen reader is actively
-// listening for MSAA events.
-const int kCustomObjectID = 1;
-
 // The thickness of an auto-hide taskbar in pixels.
 const int kAutoHideTaskbarThicknessPx = 2;
+
+// The touch id to be used for touch events coming in from Windows Aura
+// Desktop.
+const int kDesktopChromeAuraTouchId = 9;
+
+// For windows with the standard frame removed, the client area needs to be
+// different from the window area to avoid a "feature" in Windows's handling of
+// WM_NCCALCSIZE data. See the comment near the bottom of GetClientAreaInsets
+// for more details.
+const int kClientAreaBottomInsetHack = -1;
 
 }  // namespace
 
@@ -384,7 +391,8 @@ HWNDMessageHandler::HWNDMessageHandler(HWNDMessageHandlerDelegate* delegate)
       use_layered_buffer_(false),
       layered_alpha_(255),
       ALLOW_THIS_IN_INITIALIZER_LIST(paint_layered_window_factory_(this)),
-      can_update_layered_window_(true) {
+      can_update_layered_window_(true),
+      is_first_nccalc_(true) {
 }
 
 HWNDMessageHandler::~HWNDMessageHandler() {
@@ -397,6 +405,7 @@ HWNDMessageHandler::~HWNDMessageHandler() {
 }
 
 void HWNDMessageHandler::Init(HWND parent, const gfx::Rect& bounds) {
+  TRACE_EVENT0("views", "HWNDMessageHandler::Init");
   GetMonitorAndRects(bounds.ToRECT(), &last_monitor_, &last_monitor_rect_,
                      &last_work_area_);
 
@@ -556,6 +565,7 @@ void HWNDMessageHandler::Show() {
 }
 
 void HWNDMessageHandler::ShowWindowWithState(ui::WindowShowState show_state) {
+  TRACE_EVENT0("views", "HWNDMessageHandler::ShowWindowWithState");
   DWORD native_show_state;
   switch (show_state) {
     case ui::SHOW_STATE_INACTIVE:
@@ -730,71 +740,6 @@ void HWNDMessageHandler::SetVisibilityChangedAnimationsEnabled(bool enabled) {
 
 void HWNDMessageHandler::SetTitle(const string16& title) {
   SetWindowText(hwnd(), title.c_str());
-  SetAccessibleName(title);
-}
-
-void HWNDMessageHandler::SetAccessibleName(const string16& name) {
-  // TODO(beng): figure out vis-a-vis aura.
-#if !defined(USE_AURA)
-  base::win::ScopedComPtr<IAccPropServices> pAccPropServices;
-  HRESULT hr = CoCreateInstance(CLSID_AccPropServices, NULL, CLSCTX_SERVER,
-      IID_IAccPropServices, reinterpret_cast<void**>(&pAccPropServices));
-  if (SUCCEEDED(hr))
-    hr = pAccPropServices->SetHwndPropStr(hwnd(), OBJID_CLIENT, CHILDID_SELF,
-                                          PROPID_ACC_NAME, name.c_str());
-#endif
-}
-
-void HWNDMessageHandler::SetAccessibleRole(ui::AccessibilityTypes::Role role) {
-  // TODO(beng): figure out vis-a-vis aura.
-#if !defined(USE_AURA)
-  base::win::ScopedComPtr<IAccPropServices> pAccPropServices;
-  HRESULT hr = CoCreateInstance(CLSID_AccPropServices, NULL, CLSCTX_SERVER,
-      IID_IAccPropServices, reinterpret_cast<void**>(&pAccPropServices));
-  if (SUCCEEDED(hr)) {
-    VARIANT var;
-    if (role) {
-      var.vt = VT_I4;
-      var.lVal = NativeViewAccessibilityWin::MSAARole(role);
-      hr = pAccPropServices->SetHwndProp(hwnd(), OBJID_CLIENT, CHILDID_SELF,
-                                         PROPID_ACC_ROLE, var);
-    }
-  }
-#endif
-}
-
-void HWNDMessageHandler::SetAccessibleState(
-    ui::AccessibilityTypes::State state) {
-  // TODO(beng): figure out vis-a-vis aura.
-#if !defined(USE_AURA)
-  base::win::ScopedComPtr<IAccPropServices> pAccPropServices;
-  HRESULT hr = CoCreateInstance(CLSID_AccPropServices, NULL, CLSCTX_SERVER,
-      IID_IAccPropServices, reinterpret_cast<void**>(&pAccPropServices));
-  if (SUCCEEDED(hr)) {
-    VARIANT var;
-    if (state) {
-      var.vt = VT_I4;
-      var.lVal = NativeViewAccessibilityWin::MSAAState(state);
-      hr = pAccPropServices->SetHwndProp(hwnd(), OBJID_CLIENT, CHILDID_SELF,
-                                         PROPID_ACC_STATE, var);
-    }
-  }
-#endif
-}
-
-void HWNDMessageHandler::SendNativeAccessibilityEvent(
-    int id,
-    ui::AccessibilityTypes::Event event_type) {
-  // TODO(beng): figure out vis-a-vis aura.
-#if !defined(USE_AURA)
-  // Now call the Windows-specific method to notify MSAA clients of this
-  // event.  The widget gives us a temporary unique child ID to associate
-  // with this view so that clients can call get_accChild in
-  // NativeViewAccessibilityWin to retrieve the IAccessible associated
-  // with this view.
-  ::NotifyWinEvent(NativeViewAccessibilityWin::MSAAEvent(event_type), hwnd(),
-                   OBJID_CLIENT, id);
-#endif
 }
 
 void HWNDMessageHandler::SetCursor(HCURSOR cursor) {
@@ -1041,8 +986,14 @@ void HWNDMessageHandler::ClientAreaSizeChanged() {
   if (delegate_->WidgetSizeIsClientSize()) {
     // TODO(beng): investigate whether this could be done
     // from other branch of if-else.
-    if (!IsMinimized())
+    if (!IsMinimized()) {
       GetClientRect(hwnd(), &r);
+      // This is needed due to a hack that works around a "feature" in
+      // Windows's handling of WM_NCCALCSIZE. See the comment near the end of
+      // GetClientAreaInsets for more details.
+      if (remove_standard_frame_)
+        r.bottom += kClientAreaBottomInsetHack;
+    }
   } else {
     GetWindowRect(hwnd(), &r);
   }
@@ -1076,10 +1027,22 @@ gfx::Insets HWNDMessageHandler::GetClientAreaInsets() const {
                        border_thickness);
   }
 
-  // The hack below doesn't seem to be necessary when the standard frame is
-  // removed.
+  // Returning empty insets for a window with the standard frame removed seems
+  // to cause Windows to treat the window specially, treating black as
+  // transparent and changing around some of the painting logic. I suspect it's
+  // some sort of horrible backwards-compatability hack, but the upshot of it
+  // is that if the insets are empty then in certain conditions (it seems to
+  // be subtly related to timing), the contents of windows with the standard
+  // frame removed will flicker to transparent during resize.
+  //
+  // To work around this, we increase the size of the client area by 1px
+  // *beyond* the bottom of the window. This prevents Windows from having a
+  // hissy fit and flashing the window incessantly during resizes, but it also
+  // means that the client area is reported 1px larger than it really is, so
+  // user code has to compensate by making its content shorter if it wants
+  // everything to appear inside the window.
   if (remove_standard_frame_)
-    return insets;
+    return gfx::Insets(0, 0, kClientAreaBottomInsetHack, 0);
   // This is weird, but highly essential. If we don't offset the bottom edge
   // of the client rect, the window client area and window area will match,
   // and when returning to glass rendering mode from non-glass, the client
@@ -1239,6 +1202,12 @@ BOOL HWNDMessageHandler::OnAppCommand(HWND window,
   return handled;
 }
 
+void HWNDMessageHandler::OnCancelMode() {
+  delegate_->HandleCancelMode();
+  // Need default handling, otherwise capture and other things aren't canceled.
+  SetMsgHandled(FALSE);
+}
+
 void HWNDMessageHandler::OnCaptureChanged(HWND window) {
   delegate_->HandleCaptureLost();
 }
@@ -1259,10 +1228,18 @@ void HWNDMessageHandler::OnCommand(UINT notification_code,
 LRESULT HWNDMessageHandler::OnCreate(CREATESTRUCT* create_struct) {
   use_layered_buffer_ = !!(window_ex_style() & WS_EX_LAYERED);
 
-  fullscreen_handler_->set_hwnd(hwnd());
+#if defined(USE_AURA)
+  if (window_ex_style() &  WS_EX_COMPOSITED) {
+    if (base::win::GetVersion() >= base::win::VERSION_VISTA) {
+      // This is part of the magic to emulate layered windows with Aura
+      // see the explanation elsewere when we set WS_EX_COMPOSITED style.
+      MARGINS margins = {-1,-1,-1,-1};
+      DwmExtendFrameIntoClientArea(hwnd(), &margins);
+    }
+  }
+#endif
 
-  // Attempt to detect screen readers by sending an event with our custom id.
-  NotifyWinEvent(EVENT_SYSTEM_ALERT, hwnd(), kCustomObjectID, CHILDID_SELF);
+  fullscreen_handler_->set_hwnd(hwnd());
 
   // This message initializes the window so that focus border are shown for
   // windows.
@@ -1390,15 +1367,6 @@ LRESULT HWNDMessageHandler::OnGetObject(UINT message,
         static_cast<IAccessible*>(root.Detach()));
   }
 
-  if (kCustomObjectID == l_param) {
-    // An MSAA client requested our custom id. Assume that we have detected an
-    // active windows screen reader.
-    delegate_->HandleScreenReaderDetected();
-
-    // Return with failure.
-    return static_cast<LRESULT>(0L);
-  }
-
   return reference_result;
 }
 
@@ -1435,7 +1403,7 @@ void HWNDMessageHandler::OnInputLangChange(DWORD character_set,
 LRESULT HWNDMessageHandler::OnKeyEvent(UINT message,
                                        WPARAM w_param,
                                        LPARAM l_param) {
-  MSG msg = { hwnd(), message, w_param, l_param };
+  MSG msg = { hwnd(), message, w_param, l_param, GetMessageTime() };
   ui::KeyEvent key(msg, message == WM_CHAR);
   if (!delegate_->HandleUntranslatedKeyEvent(key))
     DispatchKeyEventPostIME(key);
@@ -1463,6 +1431,12 @@ LRESULT HWNDMessageHandler::OnMouseActivate(UINT message,
 LRESULT HWNDMessageHandler::OnMouseRange(UINT message,
                                          WPARAM w_param,
                                          LPARAM l_param) {
+#if defined(USE_AURA)
+  // We handle touch events on Windows Aura. Ignore synthesized mouse messages
+  // from Windows.
+  if (!touch_ids_.empty() || ui::IsMouseEventFromTouch(message))
+    return 0;
+#endif
   if (message == WM_RBUTTONUP && is_right_mouse_pressed_on_caption_) {
     is_right_mouse_pressed_on_caption_ = false;
     ReleaseCapture();
@@ -1507,7 +1481,7 @@ LRESULT HWNDMessageHandler::OnMouseRange(UINT message,
     SetCapture();
   }
 
-  MSG msg = { hwnd(), message, w_param, l_param, 0,
+  MSG msg = { hwnd(), message, w_param, l_param, GetMessageTime(),
               { GET_X_LPARAM(l_param), GET_Y_LPARAM(l_param) } };
   ui::MouseEvent event(msg);
   if (!touch_ids_.empty() || ui::IsMouseEventFromTouch(message))
@@ -1608,6 +1582,19 @@ LRESULT HWNDMessageHandler::OnNCCalcSize(BOOL mode, LPARAM l_param) {
   // non-client edge width. Note that in most cases "no insets" means no
   // custom width, but in fullscreen mode or when the NonClientFrameView
   // requests it, we want a custom width of 0.
+
+  // Let User32 handle the first nccalcsize for captioned windows
+  // so it updates its internal structures (specifically caption-present)
+  // Without this Tile & Cascade windows won't work.
+  // See http://code.google.com/p/chromium/issues/detail?id=900
+  if (is_first_nccalc_) {
+    is_first_nccalc_ = false;
+    if (GetWindowLong(hwnd(), GWL_STYLE) & WS_CAPTION) {
+      SetMsgHandled(FALSE);
+      return 0;
+    }
+  }
+
   gfx::Insets insets = GetClientAreaInsets();
   if (insets.empty() && !fullscreen_handler_->fullscreen() &&
       !(mode && remove_standard_frame_)) {
@@ -1784,7 +1771,7 @@ void HWNDMessageHandler::OnNCPaint(HRGN rgn) {
   // gfx::CanvasSkiaPaint's destructor does the actual painting. As such, wrap
   // the following in a block to force paint to occur so that we can release
   // the dc.
-  {
+  if (!delegate_->HandlePaintAccelerated(gfx::Rect(dirty_region))) {
     gfx::CanvasSkiaPaint canvas(dc, true, dirty_region.left,
                                 dirty_region.top, dirty_region.Width(),
                                 dirty_region.Height());
@@ -1844,14 +1831,6 @@ void HWNDMessageHandler::OnPaint(HDC dc) {
   }
 }
 
-LRESULT HWNDMessageHandler::OnPowerBroadcast(DWORD power_event, DWORD data) {
-  base::SystemMonitor* monitor = base::SystemMonitor::Get();
-  if (monitor)
-    monitor->ProcessWmPowerBroadcastMessage(power_event);
-  SetMsgHandled(FALSE);
-  return 0;
-}
-
 LRESULT HWNDMessageHandler::OnReflectedMessage(UINT message,
                                                WPARAM w_param,
                                                LPARAM l_param) {
@@ -1862,11 +1841,40 @@ LRESULT HWNDMessageHandler::OnReflectedMessage(UINT message,
 LRESULT HWNDMessageHandler::OnSetCursor(UINT message,
                                         WPARAM w_param,
                                         LPARAM l_param) {
-  // Using ScopedRedrawLock here frequently allows content behind this window to
-  // paint in front of this window, causing glaring rendering artifacts.
-  // If omitting ScopedRedrawLock here triggers caption rendering artifacts via
-  // DefWindowProc message handling, we'll need to find a better solution.
-  SetMsgHandled(FALSE);
+  // Reimplement the necessary default behavior here. Calling DefWindowProc can
+  // trigger weird non-client painting for non-glass windows with custom frames.
+  // Using a ScopedRedrawLock to prevent caption rendering artifacts may allow
+  // content behind this window to incorrectly paint in front of this window.
+  // Invalidating the window to paint over either set of artifacts is not ideal.
+  wchar_t* cursor = IDC_ARROW;
+  switch (LOWORD(l_param)) {
+    case HTSIZE:
+      cursor = IDC_SIZENWSE;
+      break;
+    case HTLEFT:
+    case HTRIGHT:
+      cursor = IDC_SIZEWE;
+      break;
+    case HTTOP:
+    case HTBOTTOM:
+      cursor = IDC_SIZENS;
+      break;
+    case HTTOPLEFT:
+    case HTBOTTOMRIGHT:
+      cursor = IDC_SIZENWSE;
+      break;
+    case HTTOPRIGHT:
+    case HTBOTTOMLEFT:
+      cursor = IDC_SIZENESW;
+      break;
+    case HTCLIENT:
+      // Client-area mouse events set the proper cursor from View::GetCursor.
+      return 0;
+    default:
+      // Use the default value, IDC_ARROW.
+      break;
+  }
+  SetCursor(LoadCursor(NULL, cursor));
   return 0;
 }
 
@@ -1911,7 +1919,7 @@ void HWNDMessageHandler::OnSize(UINT param, const CSize& size) {
 
 void HWNDMessageHandler::OnSysCommand(UINT notification_code,
                                       const CPoint& point) {
-  if (!delegate_->IsWidgetWindow())
+  if (!delegate_->ShouldHandleSystemCommands())
     return;
 
   // Windows uses the 4 lower order bits of |notification_code| for type-
@@ -1970,14 +1978,39 @@ LRESULT HWNDMessageHandler::OnTouchEvent(UINT message,
                                          WPARAM w_param,
                                          LPARAM l_param) {
   int num_points = LOWORD(w_param);
-  scoped_array<TOUCHINPUT> input(new TOUCHINPUT[num_points]);
-  if (GetTouchInputInfo(reinterpret_cast<HTOUCHINPUT>(l_param),
-                        num_points, input.get(), sizeof(TOUCHINPUT))) {
+  scoped_ptr<TOUCHINPUT[]> input(new TOUCHINPUT[num_points]);
+  if (ui::GetTouchInputInfoWrapper(reinterpret_cast<HTOUCHINPUT>(l_param),
+                                   num_points, input.get(),
+                                   sizeof(TOUCHINPUT))) {
     for (int i = 0; i < num_points; ++i) {
-      if (input[i].dwFlags & TOUCHEVENTF_DOWN)
+      ui::EventType touch_event_type = ui::ET_UNKNOWN;
+
+      if (input[i].dwFlags & TOUCHEVENTF_DOWN) {
         touch_ids_.insert(input[i].dwID);
-      if (input[i].dwFlags & TOUCHEVENTF_UP)
+        touch_event_type = ui::ET_TOUCH_PRESSED;
+      } else if (input[i].dwFlags & TOUCHEVENTF_UP) {
         touch_ids_.erase(input[i].dwID);
+        touch_event_type = ui::ET_TOUCH_RELEASED;
+      } else if (input[i].dwFlags & TOUCHEVENTF_MOVE) {
+        touch_event_type = ui::ET_TOUCH_MOVED;
+      }
+      // Handle touch events only on Aura for now.
+#if defined(USE_AURA)
+      if (touch_event_type != ui::ET_UNKNOWN) {
+        POINT point;
+        point.x = TOUCH_COORD_TO_PIXEL(input[i].x);
+        point.y = TOUCH_COORD_TO_PIXEL(input[i].y);
+
+        ScreenToClient(hwnd(), &point);
+
+        ui::TouchEvent event(
+            touch_event_type,
+            gfx::Point(point.x, point.y),
+            kDesktopChromeAuraTouchId,
+            base::TimeDelta::FromMilliseconds(input[i].dwTime));
+        delegate_->HandleTouchEvent(event);
+      }
+#endif
     }
   }
   CloseTouchInputHandle(reinterpret_cast<HTOUCHINPUT>(l_param));

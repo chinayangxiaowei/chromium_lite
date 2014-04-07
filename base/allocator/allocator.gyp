@@ -294,8 +294,6 @@
         # TODO(sgk):  merge this with build/common.gypi settings
         'VCLibrarianTool': {
           'AdditionalOptions': ['/ignore:4006,4221'],
-          'AdditionalLibraryDirectories':
-            ['<(DEPTH)/third_party/platformsdk_win7/files/Lib'],
         },
         'VCLinkerTool': {
           'AdditionalOptions': ['/ignore:4006'],
@@ -312,10 +310,11 @@
             # Provide a way to force disable debugallocation in Debug builds,
             # e.g. for profiling (it's more rare to profile Debug builds,
             # but people sometimes need to do that).
-            'disable_debugallocation%': 1,
+            'disable_debugallocation%': 0,
           },
           'conditions': [
-            ['disable_debugallocation==0', {
+            # TODO(phajdan.jr): Also enable on Windows.
+            ['disable_debugallocation==0 and OS!="win"', {
               'defines': [
                 # Use debugallocation for Debug builds to catch problems early
                 # and cleanly, http://crbug.com/30715 .
@@ -520,6 +519,7 @@
                 'prep_libc.py',
                 '$(VCInstallDir)lib',
                 '<(SHARED_INTERMEDIATE_DIR)/allocator',
+                '<(target_arch)',
               ],
             },
           ],
@@ -545,6 +545,27 @@
           ],
         },
         {
+          'target_name': 'tcmalloc_unittest',
+          'type': 'executable',
+          'sources': [
+            'tcmalloc_unittest.cc',
+          ],
+          'include_dirs': [
+            '../..',
+            # For constants of TCMalloc.
+            '<(tcmalloc_dir)/src',
+          ],
+          'dependencies': [
+            '../../testing/gtest.gyp:gtest',
+            '../base.gyp:base',
+            'allocator',
+          ],
+        },
+      ],
+    }],
+    ['OS=="win" and target_arch=="ia32"', {
+      'targets': [
+        {
           'target_name': 'allocator_extension_thunks_win64',
           'type': 'static_library',
           'sources': [
@@ -561,23 +582,6 @@
             },
           },
         },
-      {
-        'target_name': 'tcmalloc_unittest',
-        'type': 'executable',
-        'sources': [
-          'tcmalloc_unittest.cc',
-        ],
-        'include_dirs': [
-          '../..',
-          # For constants of TCMalloc.
-          '<(tcmalloc_dir)/src',
-        ],
-        'dependencies': [
-          '../../testing/gtest.gyp:gtest',
-          '../base.gyp:base',
-          'allocator',
-        ],
-      },
       ],
     }],
     ['OS=="linux" and clang_type_profiler==1', {

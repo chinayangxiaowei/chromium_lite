@@ -24,6 +24,19 @@ extern const char kRetailModeUserEMail[];
 
 extern const int kDefaultImagesCount;
 
+// User credentials data that is being exchanged between part of ChromeOS
+// authentication mechanism.
+struct UserCredentials {
+  UserCredentials();
+  UserCredentials(const std::string& username,
+                  const std::string& password,
+                  const std::string& auth_code);
+  bool operator==(const UserCredentials& cred) const;
+  std::string username;
+  std::string password;
+  std::string auth_code;
+};
+
 // A class representing information about a previously logged in user.
 // Each user has a canonical email (username), returned by |email()| and
 // may have a different displayed email (in the raw form as entered by user),
@@ -43,17 +56,21 @@ class User {
     USER_TYPE_RETAIL_MODE,
     // Public account user, logs in without authentication. Available only if
     // enabled through policy.
-    USER_TYPE_PUBLIC_ACCOUNT
+    USER_TYPE_PUBLIC_ACCOUNT,
+    // Locally managed user, logs in only with local authentication.
+    USER_TYPE_LOCALLY_MANAGED,
+    // Kiosk app robot, logs in without authentication.
+    USER_TYPE_KIOSK_APP
   } UserType;
 
   // User OAuth token status according to the last check.
+  // Please note that enum values 1 and 2 were used for OAuth1 status and are
+  // deprecated now.
   typedef enum {
      OAUTH_TOKEN_STATUS_UNKNOWN  = 0,
-     OAUTH1_TOKEN_STATUS_INVALID = 1,
-     OAUTH1_TOKEN_STATUS_VALID   = 2,
      OAUTH2_TOKEN_STATUS_INVALID = 3,
      OAUTH2_TOKEN_STATUS_VALID   = 4,
-   } OAuthTokenStatus;
+  } OAuthTokenStatus;
 
   // Returned as |image_index| when user-selected file or photo is used as
   // user image.
@@ -123,7 +140,7 @@ class User {
   string16 display_name() const { return display_name_; }
 
   // The displayed (non-canonical) user email.
-  std::string display_email() const { return display_email_; }
+  virtual std::string display_email() const;
 
   // True if the user's session can be locked (i.e. the user has a password with
   // which to unlock the session).
@@ -138,6 +155,8 @@ class User {
   // Do not allow anyone else to create new User instances.
   static User* CreateRegularUser(const std::string& email);
   static User* CreateGuestUser();
+  static User* CreateKioskAppUser(const std::string& kiosk_app_username);
+  static User* CreateLocallyManagedUser(const std::string& username);
   static User* CreateRetailModeUser();
   static User* CreatePublicAccountUser(const std::string& email);
 

@@ -12,7 +12,7 @@
 #include "base/gtest_prod_util.h"
 #include "base/memory/weak_ptr.h"
 #include "chrome/browser/profiles/profile_keyed_service.h"
-#include "chrome/common/extensions/extension_resource.h"
+#include "extensions/common/extension_resource.h"
 #include "third_party/skia/include/core/SkBitmap.h"
 #include "ui/base/layout.h"
 #include "ui/gfx/size.h"
@@ -77,8 +77,8 @@ class ImageLoader : public ProfileKeyedService {
   // resources. Otherwise fills |resource_id|. This doesn't check if the
   // extension the resource is in is actually a component extension.
   static bool IsComponentExtensionResource(
-      const FilePath& extension_path,
-      const FilePath& resource_path,
+      const base::FilePath& extension_path,
+      const base::FilePath& resource_path,
       int* resource_id);
 
   // Specify image resource to load. If the loaded image is larger than

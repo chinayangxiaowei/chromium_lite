@@ -104,7 +104,7 @@ void PartialMagnificationController::OnWindowDestroying(
     SwitchTargetRootWindow(new_root_window);
 }
 
-void PartialMagnificationController::OnWidgetClosing(
+void PartialMagnificationController::OnWidgetDestroying(
     views::Widget* widget) {
   DCHECK_EQ(widget, zoom_widget_);
   RemoveZoomWidgetObservers();
@@ -161,8 +161,6 @@ void PartialMagnificationController::CreateMagnifierWindow() {
                 kMagnifierWidth,
                 kMagnifierHeight));
   zoom_widget_->GetNativeView()->layer()->SetBackgroundZoom(
-      (kMagnifierWidth - (kMagnifierWidth / scale_)) / 2,
-      (kMagnifierHeight - (kMagnifierHeight / scale_)) / 2,
       scale_,
       kZoomInset);
 

@@ -5,7 +5,7 @@
 #ifndef CC_TEST_RENDER_PASS_TEST_COMMON_H_
 #define CC_TEST_RENDER_PASS_TEST_COMMON_H_
 
-#include "cc/render_pass.h"
+#include "cc/quads/render_pass.h"
 
 namespace cc {
 class ResourceProvider;
@@ -19,14 +19,11 @@ class TestRenderPass : public cc::RenderPass {
     return make_scoped_ptr(new TestRenderPass);
   }
 
-  void AppendQuad(scoped_ptr<cc::DrawQuad> quad) {
-    quad_list.append(quad.Pass());
-  }
-  void AppendSharedQuadState(scoped_ptr<cc::SharedQuadState> state) {
-    shared_quad_state_list.append(state.Pass());
-  }
+  void AppendQuad(scoped_ptr<cc::DrawQuad> quad);
+  void AppendSharedQuadState(scoped_ptr<cc::SharedQuadState> state);
 
-  void AppendOneOfEveryQuadType(cc::ResourceProvider*);
+  void AppendOneOfEveryQuadType(
+      cc::ResourceProvider*, RenderPass::Id child_pass);
 
  protected:
   TestRenderPass() : RenderPass() {}

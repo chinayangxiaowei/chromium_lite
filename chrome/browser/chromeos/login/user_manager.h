@@ -9,8 +9,9 @@
 
 #include "base/memory/singleton.h"
 #include "chrome/browser/chromeos/login/user.h"
+#include "chrome/browser/chromeos/login/user_flow.h"
 
-class PrefService;
+class PrefRegistrySimple;
 
 namespace chromeos {
 
@@ -49,6 +50,12 @@ class UserManager {
   // Username for stub login when not running on ChromeOS.
   static const char kStubUser[];
 
+  // Domain that is used for all locally managed users.
+  static const char kLocallyManagedUserDomain[];
+
+  // Domain that is used for kiosk app robot.
+  static const char kKioskAppUserDomain[];
+
   // Returns a shared instance of a UserManager. Not thread-safe, should only be
   // called from the main UI thread.
   static UserManager* Get();
@@ -74,7 +81,7 @@ class UserManager {
   static UserManager* Set(UserManager* mock);
 
   // Registers user manager preferences.
-  static void RegisterPrefs(PrefService* local_state);
+  static void RegisterPrefs(PrefRegistrySimple* registry);
 
   // Indicates imminent shutdown, allowing the UserManager to remove any
   // observers it has registered.
@@ -100,6 +107,12 @@ class UserManager {
   // Indicates that user just started incognito session.
   virtual void GuestUserLoggedIn() = 0;
 
+  // Indicates that a kiosk app robot just logged in.
+  virtual void KioskAppLoggedIn(const std::string& app_id) = 0;
+
+  // Indicates that a locally managed user just logged in.
+  virtual void LocallyManagedUserLoggedIn(const std::string& username) = 0;
+
   // Indicates that a user just logged into a public account.
   virtual void PublicAccountUserLoggedIn(User* user) = 0;
 
@@ -116,6 +129,17 @@ class UserManager {
   // but SessionStarted() will return false.
   // Fires NOTIFICATION_SESSION_STARTED.
   virtual void SessionStarted() = 0;
+
+  // Creates locally managed user with given display name, and id (e-mail), and
+  // sets |display_name| for created user and stores it to
+  // persistent list. Returns created user, or existing user if there already
+  // was locally managed user with such display name.
+  virtual const User* CreateLocallyManagedUserRecord(
+      const std::string& e_mail,
+      const string16& display_name) = 0;
+
+  // Generates unique username for locally managed user.
+  virtual std::string GenerateUniqueLocallyManagedUserId() = 0;
 
   // Removes the user from the device. Note, it will verify that the given user
   // isn't the owner, so calling this method for the owner will take no effect.
@@ -134,6 +158,11 @@ class UserManager {
   // Returns the user with the given email address if found in the persistent
   // list or currently logged in as ephemeral. Returns |NULL| otherwise.
   virtual const User* FindUser(const std::string& email) const = 0;
+
+  // Returns the locally managed user with the given |display_name| if found in
+  // the persistent list. Returns |NULL| otherwise.
+  virtual const User* FindLocallyManagedUser(
+      const string16& display_name) const = 0;
 
   // Returns the logged-in user.
   virtual const User* GetLoggedInUser() const = 0;
@@ -196,6 +225,12 @@ class UserManager {
   // Returns true if we're logged in as a Guest.
   virtual bool IsLoggedInAsGuest() const = 0;
 
+  // Returns true if we're logged in as a locally managed user.
+  virtual bool IsLoggedInAsLocallyManagedUser() const = 0;
+
+  // Returns true if we're logged in as a kiosk app.
+  virtual bool IsLoggedInAsKioskApp() const = 0;
+
   // Returns true if we're logged in as the stub user used for testing on Linux.
   virtual bool IsLoggedInAsStub() const = 0;
 
@@ -219,6 +254,45 @@ class UserManager {
   // status, display name, display email) is to be treated as ephemeral.
   virtual bool IsUserNonCryptohomeDataEphemeral(
       const std::string& email) const = 0;
+
+  // Create a record about starting locally managed user creation transaction.
+  virtual void StartLocallyManagedUserCreationTransaction(
+      const string16& display_name) = 0;
+
+  // Add user id to locally managed user creation transaction record.
+  virtual void SetLocallyManagedUserCreationTransactionUserId(
+      const std::string& email) = 0;
+
+  // Remove locally managed user creation transaction record.
+  virtual void CommitLocallyManagedUserCreationTransaction() = 0;
+
+  // Method that allows to set |flow| for user identified by |email|.
+  // Flow should be set before login attempt.
+  // Takes ownership of the |flow|, |flow| will be deleted in case of login
+  // failure.
+  virtual void SetUserFlow(const std::string& email, UserFlow* flow) = 0;
+
+  // Return user flow for current user. Returns instance of DefaultUserFlow if
+  // no flow was defined for current user, or user is not logged in.
+  // Returned value should not be cached.
+  virtual UserFlow* GetCurrentUserFlow() const = 0;
+
+  // Return user flow for user identified by |email|. Returns instance of
+  // DefaultUserFlow if no flow was defined for user.
+  // Returned value should not be cached.
+  virtual UserFlow* GetUserFlow(const std::string& email) const = 0;
+
+  // Resets user flow fo user idenitified by |email|.
+  virtual void ResetUserFlow(const std::string& email) = 0;
+
+  // Gets/sets chrome oauth client id and secret for kiosk app mode. The default
+  // values can be overriden with kiosk auth file.
+  virtual bool GetAppModeChromeClientOAuthInfo(
+      std::string* chrome_client_id,
+      std::string* chrome_client_secret) = 0;
+  virtual void SetAppModeChromeClientOAuthInfo(
+      const std::string& chrome_client_id,
+      const std::string& chrome_client_secret) = 0;
 
   virtual void AddObserver(Observer* obs) = 0;
   virtual void RemoveObserver(Observer* obs) = 0;

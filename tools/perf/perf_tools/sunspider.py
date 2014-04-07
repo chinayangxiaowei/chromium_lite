@@ -5,20 +5,20 @@
 import collections
 import json
 
-from telemetry import multi_page_benchmark
-from telemetry import util
+from telemetry.core import util
+from telemetry.page import page_benchmark
 
 
-class SunSpiderBenchark(multi_page_benchmark.MultiPageBenchmark):
+class SunSpiderBenchark(page_benchmark.PageBenchmark):
   def MeasurePage(self, _, tab, results):
     js_is_done = """
 window.location.pathname.indexOf('sunspider-results') >= 0"""
     def _IsDone():
-      return tab.runtime.Evaluate(js_is_done)
+      return tab.EvaluateJavaScript(js_is_done)
     util.WaitFor(_IsDone, 300, poll_interval=5)
 
     js_get_results = 'JSON.stringify(output);'
-    js_results = json.loads(tab.runtime.Evaluate(js_get_results))
+    js_results = json.loads(tab.EvaluateJavaScript(js_get_results))
     r = collections.defaultdict(list)
     totals = []
     # js_results is: [{'foo': v1, 'bar': v2},
@@ -31,5 +31,5 @@ window.location.pathname.indexOf('sunspider-results') >= 0"""
         total += value
       totals.append(total)
     for key, values in r.iteritems():
-      results.Add('t', 'ms', values, chart_name=key, data_type='unimportant')
-    results.Add('t', 'ms', totals, chart_name='total')
+      results.Add(key, 'ms', values, data_type='unimportant')
+    results.Add('Total', 'ms', totals)

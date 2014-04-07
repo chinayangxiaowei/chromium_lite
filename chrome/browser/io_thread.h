@@ -12,7 +12,7 @@
 #include "base/memory/ref_counted.h"
 #include "base/memory/scoped_ptr.h"
 #include "base/memory/weak_ptr.h"
-#include "base/prefs/public/pref_member.h"
+#include "base/prefs/pref_member.h"
 #include "chrome/browser/net/ssl_config_service_manager.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/browser_thread_delegate.h"
@@ -24,6 +24,7 @@ class ChromeNetLog;
 class CommandLine;
 class PrefProxyConfigTrackerImpl;
 class PrefService;
+class PrefRegistrySimple;
 class SystemURLRequestContextGetter;
 
 namespace chrome_browser_net {
@@ -108,6 +109,8 @@ class IOThread : public content::BrowserThreadDelegate {
     scoped_ptr<net::NetworkDelegate> system_network_delegate;
     scoped_ptr<net::HostResolver> host_resolver;
     scoped_ptr<net::CertVerifier> cert_verifier;
+    // The ServerBoundCertService must outlive the HttpTransactionFactory.
+    scoped_ptr<net::ServerBoundCertService> system_server_bound_cert_service;
     // This TransportSecurityState doesn't load or save any state. It's only
     // used to enforce pinning for system requests and will only use built-in
     // pins.
@@ -137,7 +140,6 @@ class IOThread : public content::BrowserThreadDelegate {
     // |system_cookie_store| and |system_server_bound_cert_service| are shared
     // between |proxy_script_fetcher_context| and |system_request_context|.
     scoped_refptr<net::CookieStore> system_cookie_store;
-    scoped_ptr<net::ServerBoundCertService> system_server_bound_cert_service;
     scoped_refptr<extensions::EventRouterForwarder>
         extension_event_router_forwarder;
     scoped_ptr<chrome_browser_net::HttpPipeliningCompatibilityClient>
@@ -158,7 +160,9 @@ class IOThread : public content::BrowserThreadDelegate {
     Optional<bool> enable_spdy_compression;
     Optional<bool> enable_spdy_ping_based_connection_checking;
     Optional<net::NextProto> spdy_default_protocol;
+    Optional<bool> enable_quic;
     Optional<uint16> origin_port_to_force_quic_on;
+    bool enable_user_alternate_protocol_ports;
     // NetErrorTabHelper uses |dns_probe_service| to send DNS probes when a
     // main frame load fails with a DNS error in order to provide more useful
     // information to the renderer so it can show a more specific error page.
@@ -172,6 +176,8 @@ class IOThread : public content::BrowserThreadDelegate {
            extensions::EventRouterForwarder* extension_event_router_forwarder);
 
   virtual ~IOThread();
+
+  static void RegisterPrefs(PrefRegistrySimple* registry);
 
   // Can only be called on the IO thread.
   Globals* globals();
@@ -231,8 +237,6 @@ class IOThread : public content::BrowserThreadDelegate {
   // SystemRequestContext state has been initialized on the UI thread.
   void InitSystemRequestContextOnIOThread();
 
-  static void RegisterPrefs(PrefService* local_state);
-
   net::HttpAuthHandlerFactory* CreateDefaultAuthHandlerFactory(
       net::HostResolver* resolver);
 
@@ -276,7 +280,7 @@ class IOThread : public content::BrowserThreadDelegate {
   std::string auth_server_whitelist_;
   std::string auth_delegate_whitelist_;
   std::string gssapi_library_name_;
-  std::string spdyproxy_origin_;
+  std::string spdyproxy_auth_origin_;
 
   // This is an instance of the default SSLConfigServiceManager for the current
   // platform and it gets SSL preferences from local_state object.

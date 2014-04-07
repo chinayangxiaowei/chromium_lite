@@ -2,13 +2,13 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-var fileCopyManagerWrapper = null;
+'use strict';
 
 /**
  * While FileCopyManager is run in the background page, this class is used to
  * communicate with it.
- * @constructor
  * @param {DirectoryEntry} root Root directory entry.
+ * @constructor
  */
 function FileCopyManagerWrapper(root) {
   this.root_ = root;
@@ -47,16 +47,16 @@ FileCopyManagerWrapper.prototype.__proto__ = cr.EventTarget.prototype;
  * @return {FileCopyManagerWrapper}  A FileCopyManagerWrapper instance.
  */
 FileCopyManagerWrapper.getInstance = function(root) {
-  if (fileCopyManagerWrapper === null) {
-    fileCopyManagerWrapper = new FileCopyManagerWrapper(root);
-  }
-  return fileCopyManagerWrapper;
+  if (!FileCopyManagerWrapper.instance_)
+    FileCopyManagerWrapper.instance_ = new FileCopyManagerWrapper(root);
+
+  return FileCopyManagerWrapper.instance_;
 };
 
 /**
  * Load background page and call callback with copy manager as an argument.
+ * @param {function} callback Function with FileCopyManager as a parameter.
  * @private
- * @param {Function} callback Function with FileCopyManager as a parameter.
  */
 FileCopyManagerWrapper.prototype.getCopyManagerAsync_ = function(callback) {
   var MAX_RETRIES = 10;
@@ -65,8 +65,8 @@ FileCopyManagerWrapper.prototype.getCopyManagerAsync_ = function(callback) {
   var root = this.root_;
   var retries = 0;
 
-  function tryOnce() {
-    function onGetBackgroundPage(bg) {
+  var tryOnce = function() {
+    var onGetBackgroundPage = function(bg) {
       if (bg) {
         callback(bg.FileCopyManager.getInstance(root));
         return;
@@ -75,12 +75,12 @@ FileCopyManagerWrapper.prototype.getCopyManagerAsync_ = function(callback) {
         setTimeout(tryOnce, TIMEOUT);
       else
         console.error('Can\'t get copy manager.');
-    }
+    };
     if (chrome.runtime && chrome.runtime.getBackgroundPage)
       chrome.runtime.getBackgroundPage(onGetBackgroundPage);
     else
       onGetBackgroundPage(chrome.extension.getBackgroundPage());
-  }
+  };
 
   tryOnce();
 };

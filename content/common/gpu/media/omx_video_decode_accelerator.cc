@@ -28,6 +28,14 @@ enum { kNumPictureBuffers = 8 };
 // for more difficult frames.
 enum { kSyncPollDelayMs = 5 };
 
+// TODO(ihf): Remove this delay once issue 225563 is fixed.
+// This extra delay is added to wait after the (unreliable) sync object has
+// signaled completion (and before a picture buffer is returned to the decoder).
+// Experimentally tearing gets smaller and is mostly gone as we approach 20 ms.
+// I wanted to use 60ms, but that sometimes confuses html5 when switching to
+// 1080p. (Video stops.)
+enum { kExtraSyncDelayMs = 20 };
+
 void* omx_handle = NULL;
 
 typedef OMX_ERRORTYPE (*OMXInit)();
@@ -42,10 +50,6 @@ OMXGetHandle omx_gethandle = NULL;
 OMXGetComponentsOfRole omx_get_components_of_role = NULL;
 OMXFreeHandle omx_free_handle = NULL;
 OMXDeinit omx_deinit = NULL;
-
-static PFNEGLCREATESYNCKHRPROC egl_create_sync_khr = NULL;
-static PFNEGLGETSYNCATTRIBKHRPROC egl_get_sync_attrib_khr = NULL;
-static PFNEGLDESTROYSYNCKHRPROC egl_destroy_sync_khr = NULL;
 
 // Maps h264-related Profile enum values to OMX_VIDEO_AVCPROFILETYPE values.
 static OMX_U32 MapH264ProfileToOMXAVCProfile(uint32 profile) {
@@ -118,17 +122,17 @@ OmxVideoDecodeAccelerator::PictureSyncObject::PictureSyncObject(
     : egl_display_(egl_display) {
   DCHECK(egl_display_ != EGL_NO_DISPLAY);
 
-  egl_sync_obj_ = egl_create_sync_khr(egl_display_, EGL_SYNC_FENCE_KHR, NULL);
+  egl_sync_obj_ = eglCreateSyncKHR(egl_display_, EGL_SYNC_FENCE_KHR, NULL);
   DCHECK_NE(egl_sync_obj_, EGL_NO_SYNC_KHR);
 }
 
 OmxVideoDecodeAccelerator::PictureSyncObject::~PictureSyncObject() {
-  egl_destroy_sync_khr(egl_display_, egl_sync_obj_);
+  eglDestroySyncKHR(egl_display_, egl_sync_obj_);
 }
 
 bool OmxVideoDecodeAccelerator::PictureSyncObject::IsSynced() {
   EGLint value = EGL_UNSIGNALED_KHR;
-  EGLBoolean ret = egl_get_sync_attrib_khr(
+  EGLBoolean ret = eglGetSyncAttribKHR(
       egl_display_, egl_sync_obj_, EGL_SYNC_STATUS_KHR, &value);
   DCHECK(ret) << "Failed getting sync object state.";
 
@@ -195,6 +199,16 @@ bool OmxVideoDecodeAccelerator::Initialize(media::VideoCodecProfile profile) {
     RETURN_ON_FAILURE(false, "Unsupported profile: " << profile,
                       INVALID_ARGUMENT, false);
   }
+
+  // We need the context to be initialized to query extensions.
+  RETURN_ON_FAILURE(make_context_current_.Run(),
+                    "Failed make context current",
+                    PLATFORM_FAILURE,
+                    false);
+  RETURN_ON_FAILURE(gfx::g_driver_egl.ext.b_EGL_KHR_fence_sync,
+                    "Platform does not support EGL_KHR_fence_sync",
+                    PLATFORM_FAILURE,
+                    false);
 
   if (!CreateComponent())  // Does its own RETURN_ON_FAILURE dances.
     return false;
@@ -458,9 +472,13 @@ void OmxVideoDecodeAccelerator::CheckPictureStatus(
         base::TimeDelta::FromMilliseconds(kSyncPollDelayMs));
     return;
   }
-
-  // Synced successfully. Queue the buffer for reuse.
-  QueuePictureBuffer(picture_buffer_id);
+  // TODO(ihf): Directly call again once the driver in issue 225563 is fixed.
+  // Synced successfully. Queue the buffer for reuse with some delay to cover
+  // for bad sync object signaling.
+  MessageLoop::current()->PostDelayedTask(FROM_HERE, base::Bind(
+      &OmxVideoDecodeAccelerator::QueuePictureBuffer, weak_this_,
+      picture_buffer_id),
+      base::TimeDelta::FromMilliseconds(kExtraSyncDelayMs));
 }
 
 void OmxVideoDecodeAccelerator::QueuePictureBuffer(int32 picture_buffer_id) {
@@ -1171,16 +1189,8 @@ bool OmxVideoDecodeAccelerator::PostSandboxInitialization() {
   omx_deinit =
       reinterpret_cast<OMXDeinit>(dlsym(omx_handle, "OMX_Deinit"));
 
-  egl_create_sync_khr = reinterpret_cast<PFNEGLCREATESYNCKHRPROC>(
-      eglGetProcAddress("eglCreateSyncKHR"));
-  egl_get_sync_attrib_khr = reinterpret_cast<PFNEGLGETSYNCATTRIBKHRPROC>(
-      eglGetProcAddress("eglGetSyncAttribKHR"));
-  egl_destroy_sync_khr = reinterpret_cast<PFNEGLDESTROYSYNCKHRPROC>(
-      eglGetProcAddress("eglDestroySyncKHR"));
-
   return (omx_init && omx_gethandle && omx_get_components_of_role &&
-          omx_free_handle && omx_deinit && egl_create_sync_khr &&
-          egl_get_sync_attrib_khr && egl_destroy_sync_khr);
+          omx_free_handle && omx_deinit);
 }
 
 // static

@@ -51,18 +51,18 @@ GpuVideoDecoder::BufferData::BufferData(
 GpuVideoDecoder::BufferData::~BufferData() {}
 
 GpuVideoDecoder::GpuVideoDecoder(
-    const scoped_refptr<base::MessageLoopProxy>& gvd_loop_proxy,
-    const scoped_refptr<base::MessageLoopProxy>& vda_loop_proxy,
+    const scoped_refptr<base::MessageLoopProxy>& message_loop,
     const scoped_refptr<Factories>& factories)
-    : gvd_loop_proxy_(gvd_loop_proxy),
-      vda_loop_proxy_(vda_loop_proxy),
+    : gvd_loop_proxy_(message_loop),
+      vda_loop_proxy_(factories->GetMessageLoop()),
       factories_(factories),
       state_(kNormal),
       demuxer_read_in_progress_(false),
       decoder_texture_target_(0),
       next_picture_buffer_id_(0),
       next_bitstream_buffer_id_(0),
-      error_occured_(false) {
+      error_occured_(false),
+      available_pictures_(-1) {
   DCHECK(factories_);
 }
 
@@ -138,7 +138,7 @@ void GpuVideoDecoder::Initialize(const scoped_refptr<DemuxerStream>& stream,
     bool hw_large_video_support =
         cpu.vendor_name() == "GenuineIntel" && cpu.model() >= 58;
     bool os_large_video_support = true;
-#if defined(OS_WINDOWS)
+#if defined(OS_WIN)
     os_large_video_support = false;
 #endif
     if (!(os_large_video_support && hw_large_video_support)) {
@@ -301,7 +301,7 @@ void GpuVideoDecoder::RequestBufferDecode(
 }
 
 void GpuVideoDecoder::RecordBufferData(
-    const BitstreamBuffer& bitstream_buffer, const Buffer& buffer) {
+    const BitstreamBuffer& bitstream_buffer, const DecoderBuffer& buffer) {
   input_buffer_data_.push_front(BufferData(
       bitstream_buffer.id(), buffer.GetTimestamp(),
       demuxer_stream_->video_decoder_config().visible_rect(),
@@ -337,6 +337,11 @@ bool GpuVideoDecoder::HasAlpha() const {
   return true;
 }
 
+bool GpuVideoDecoder::HasOutputFrameAvailable() const {
+  DCHECK(gvd_loop_proxy_->BelongsToCurrentThread());
+  return available_pictures_ > 0;
+}
+
 void GpuVideoDecoder::NotifyInitializeDone() {
   NOTREACHED() << "GpuVideoDecodeAcceleratorHost::Initialize is synchronous!";
 }
@@ -361,6 +366,9 @@ void GpuVideoDecoder::ProvidePictureBuffers(uint32 count,
 
   if (!vda_.get())
     return;
+
+  CHECK_EQ(available_pictures_, -1);
+  available_pictures_ = count;
 
   std::vector<PictureBuffer> picture_buffers;
   for (size_t i = 0; i < texture_ids.size(); ++i) {
@@ -422,6 +430,8 @@ void GpuVideoDecoder::PictureReady(const media::Picture& picture) {
                      gfx::Size(visible_rect.width(), visible_rect.height())),
           base::Bind(&GpuVideoDecoder::ReusePictureBuffer, this,
                      picture.picture_buffer_id())));
+  CHECK_GT(available_pictures_, 0);
+  available_pictures_--;
 
   EnqueueFrameAndTriggerFrameDelivery(frame);
 }
@@ -453,6 +463,9 @@ void GpuVideoDecoder::ReusePictureBuffer(int64 picture_buffer_id) {
         &GpuVideoDecoder::ReusePictureBuffer, this, picture_buffer_id));
     return;
   }
+  CHECK_GE(available_pictures_, 0);
+  available_pictures_++;
+
   if (!vda_.get())
     return;
   vda_loop_proxy_->PostTask(FROM_HERE, base::Bind(

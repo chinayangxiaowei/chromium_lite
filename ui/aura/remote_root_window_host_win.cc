@@ -18,6 +18,7 @@
 #include "ui/base/events/event_utils.h"
 #include "ui/base/keycodes/keyboard_code_conversion_win.h"
 #include "ui/base/view_prop.h"
+#include "ui/gfx/insets.h"
 #include "ui/metro_viewer/metro_viewer_messages.h"
 
 namespace aura {
@@ -29,7 +30,71 @@ const char* kRootWindowHostWinKey = "__AURA_REMOTE_ROOT_WINDOW_HOST_WIN__";
 // The touch id to be used for touch events coming in from Windows Ash.
 const int kRemoteWindowTouchId = 10;
 
+// Sets the keystate for the virtual key passed in to down or up.
+void SetKeyState(uint8* key_states, bool key_down, uint32 virtual_key_code) {
+  DCHECK(key_states);
+
+  if (key_down)
+    key_states[virtual_key_code] |= 0x80;
+  else
+    key_states[virtual_key_code] &= 0x7F;
+}
+
+// Sets the keyboard states for the Shift/Control/Alt/Caps lock keys.
+void SetVirtualKeyStates(uint32 flags) {
+  uint8 keyboard_state[256] = {0};
+  ::GetKeyboardState(keyboard_state);
+
+  SetKeyState(keyboard_state, !!(flags & ui::EF_SHIFT_DOWN), VK_SHIFT);
+  SetKeyState(keyboard_state, !!(flags & ui::EF_CONTROL_DOWN), VK_CONTROL);
+  SetKeyState(keyboard_state, !!(flags & ui::EF_ALT_DOWN), VK_MENU);
+  SetKeyState(keyboard_state, !!(flags & ui::EF_CAPS_LOCK_DOWN), VK_CAPITAL);
+
+  ::SetKeyboardState(keyboard_state);
+}
+
 }  // namespace
+
+void HandleOpenFile(
+    const string16& title,
+    const base::FilePath& default_path,
+    const string16& filter,
+    const OpenFileCompletion& callback) {
+  DCHECK(aura::RemoteRootWindowHostWin::Instance());
+  aura::RemoteRootWindowHostWin::Instance()->HandleOpenFile(title,
+                                                            default_path,
+                                                            filter,
+                                                            callback);
+}
+
+void HandleOpenMultipleFiles(
+    const string16& title,
+    const base::FilePath& default_path,
+    const string16& filter,
+    const OpenMultipleFilesCompletion& callback) {
+  DCHECK(aura::RemoteRootWindowHostWin::Instance());
+  aura::RemoteRootWindowHostWin::Instance()->HandleOpenMultipleFiles(
+      title,
+      default_path,
+      filter,
+      callback);
+}
+
+void HandleSaveFile(
+    const string16& title,
+    const base::FilePath& default_path,
+    const string16& filter,
+    int filter_index,
+    const string16& default_extension,
+    const SaveFileCompletion& callback) {
+  DCHECK(aura::RemoteRootWindowHostWin::Instance());
+  aura::RemoteRootWindowHostWin::Instance()->HandleSaveFile(title,
+                                                            default_path,
+                                                            filter,
+                                                            filter_index,
+                                                            default_extension,
+                                                            callback);
+}
 
 RemoteRootWindowHostWin* g_instance = NULL;
 
@@ -77,9 +142,74 @@ bool RemoteRootWindowHostWin::OnMessageReceived(const IPC::Message& message) {
                         OnTouchUp)
     IPC_MESSAGE_HANDLER(MetroViewerHostMsg_TouchMoved,
                         OnTouchMoved)
+    IPC_MESSAGE_HANDLER(MetroViewerHostMsg_FileSaveAsDone,
+                        OnFileSaveAsDone)
+    IPC_MESSAGE_HANDLER(MetroViewerHostMsg_FileOpenDone,
+                        OnFileOpenDone)
+    IPC_MESSAGE_HANDLER(MetroViewerHostMsg_MultiFileOpenDone,
+                        OnMultiFileOpenDone)
     IPC_MESSAGE_UNHANDLED(handled = false)
   IPC_END_MESSAGE_MAP()
-  return handled;  
+  return handled;
+}
+
+void RemoteRootWindowHostWin::HandleOpenFile(
+    const string16& title,
+    const base::FilePath& default_path,
+    const string16& filter,
+    const OpenFileCompletion& callback) {
+  if (!host_)
+    return;
+
+  // Can only one of these operations in flight.
+  DCHECK(file_open_completion_callback_.is_null());
+  file_open_completion_callback_ = callback;
+
+  host_->Send(new MetroViewerHostMsg_DisplayFileOpen(title,
+                                                     filter,
+                                                     default_path.value(),
+                                                     false));
+}
+
+void RemoteRootWindowHostWin::HandleOpenMultipleFiles(
+      const string16& title,
+      const base::FilePath& default_path,
+      const string16& filter,
+      const OpenMultipleFilesCompletion& callback) {
+  if (!host_)
+    return;
+
+  // Can only one of these operations in flight.
+  DCHECK(multi_file_open_completion_callback_.is_null());
+  multi_file_open_completion_callback_ = callback;
+
+  host_->Send(new MetroViewerHostMsg_DisplayFileOpen(title,
+                                                     filter,
+                                                     default_path.value(),
+                                                     true));
+}
+
+void RemoteRootWindowHostWin::HandleSaveFile(
+    const string16& title,
+    const base::FilePath& default_path,
+    const string16& filter,
+    int filter_index,
+    const string16& default_extension,
+    const SaveFileCompletion& callback) {
+  if (!host_)
+    return;
+
+  MetroViewerHostMsg_SaveAsDialogParams params;
+  params.title = title;
+  params.default_extension = default_extension;
+  params.filter = filter;
+  params.filter_index = filter_index;
+
+  // Can only one of these operations in flight.
+  DCHECK(file_saveas_completion_callback_.is_null());
+  file_saveas_completion_callback_ = callback;
+
+  host_->Send(new MetroViewerHostMsg_DisplayFileSaveAs(params));
 }
 
 void RemoteRootWindowHostWin::SetDelegate(RootWindowHostDelegate* delegate) {
@@ -115,6 +245,13 @@ gfx::Rect RemoteRootWindowHostWin::GetBounds() const {
 
 void RemoteRootWindowHostWin::SetBounds(const gfx::Rect& bounds) {
   delegate_->OnHostResized(bounds.size());
+}
+
+gfx::Insets RemoteRootWindowHostWin::GetInsets() const {
+  return gfx::Insets();
+}
+
+void RemoteRootWindowHostWin::SetInsets(const gfx::Insets& insets) {
 }
 
 gfx::Point RemoteRootWindowHostWin::GetLocationOnNativeScreen() const {
@@ -211,33 +348,24 @@ void RemoteRootWindowHostWin::OnKeyDown(uint32 vkey,
                                         uint32 repeat_count,
                                         uint32 scan_code,
                                         uint32 flags) {
-  ui::KeyEvent event(ui::ET_KEY_PRESSED,
-                     ui::KeyboardCodeForWindowsKeyCode(vkey),
-                     flags,
-                     false);
-  delegate_->OnHostKeyEvent(&event);
+  DispatchKeyboardMessage(ui::ET_KEY_PRESSED, vkey, repeat_count, scan_code,
+                          flags, false);
 }
 
 void RemoteRootWindowHostWin::OnKeyUp(uint32 vkey,
                                       uint32 repeat_count,
                                       uint32 scan_code,
                                       uint32 flags) {
-  ui::KeyEvent event(ui::ET_KEY_RELEASED,
-                     ui::KeyboardCodeForWindowsKeyCode(vkey),
-                     flags,
-                     false);
-  delegate_->OnHostKeyEvent(&event);
+  DispatchKeyboardMessage(ui::ET_KEY_RELEASED, vkey, repeat_count, scan_code,
+                          flags, false);
 }
 
 void RemoteRootWindowHostWin::OnChar(uint32 key_code,
                                      uint32 repeat_count,
                                      uint32 scan_code,
                                      uint32 flags) {
-  ui::KeyEvent event(ui::ET_KEY_PRESSED,
-                     ui::KeyboardCodeForWindowsKeyCode(key_code),
-                     flags,
-                     true);
-  delegate_->OnHostKeyEvent(&event);
+  DispatchKeyboardMessage(ui::ET_KEY_PRESSED, key_code, repeat_count,
+                          scan_code, flags, true);
 }
 
 void RemoteRootWindowHostWin::OnVisibilityChanged(bool visible) {
@@ -269,6 +397,58 @@ void RemoteRootWindowHostWin::OnTouchMoved(int32 x,
                        kRemoteWindowTouchId,
                        base::TimeDelta::FromMicroseconds(timestamp));
   delegate_->OnHostTouchEvent(&event);
+}
+
+void RemoteRootWindowHostWin::OnFileSaveAsDone(bool success,
+                                               string16 filename,
+                                               int filter_index) {
+  if (success) {
+    file_saveas_completion_callback_.Run(
+        base::FilePath(filename), filter_index, NULL);
+  }
+  file_saveas_completion_callback_.Reset();
+}
+
+
+void RemoteRootWindowHostWin::OnFileOpenDone(bool success, string16 filename) {
+  if (success) {
+    file_open_completion_callback_.Run(
+        base::FilePath(filename), 0, NULL);
+  }
+  file_open_completion_callback_.Reset();
+}
+
+void RemoteRootWindowHostWin::OnMultiFileOpenDone(
+    bool success,
+    const std::vector<base::FilePath>& files) {
+  if (success) {
+    multi_file_open_completion_callback_.Run(files, NULL);
+  }
+  multi_file_open_completion_callback_.Reset();
+}
+
+void RemoteRootWindowHostWin::DispatchKeyboardMessage(ui::EventType type,
+                                                      uint32 vkey,
+                                                      uint32 repeat_count,
+                                                      uint32 scan_code,
+                                                      uint32 flags,
+                                                      bool is_character) {
+  if (MessageLoop::current()->IsNested()) {
+    SetVirtualKeyStates(flags);
+
+    uint32 message = is_character ? WM_CHAR :
+        (type == ui::ET_KEY_PRESSED ? WM_KEYDOWN : WM_KEYUP);
+    ::PostThreadMessage(::GetCurrentThreadId(),
+                        message,
+                        vkey,
+                        repeat_count | scan_code >> 15);
+  } else {
+    ui::KeyEvent event(type,
+                       ui::KeyboardCodeForWindowsKeyCode(vkey),
+                       flags,
+                       is_character);
+    delegate_->OnHostKeyEvent(&event);
+  }
 }
 
 }  // namespace aura

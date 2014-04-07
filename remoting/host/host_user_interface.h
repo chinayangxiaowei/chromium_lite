@@ -14,6 +14,7 @@
 #include "base/memory/scoped_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "remoting/host/host_status_observer.h"
+#include "remoting/host/ui_strings.h"
 
 namespace base {
 class SingleThreadTaskRunner;
@@ -23,13 +24,13 @@ namespace remoting {
 
 class ChromotingHost;
 class DisconnectWindow;
-class LocalInputMonitor;
 
 class HostUserInterface : public HostStatusObserver {
  public:
   HostUserInterface(
       scoped_refptr<base::SingleThreadTaskRunner> network_task_runner,
-      scoped_refptr<base::SingleThreadTaskRunner> ui_task_runner);
+      scoped_refptr<base::SingleThreadTaskRunner> ui_task_runner,
+      const UiStrings& ui_strings);
   virtual ~HostUserInterface();
 
   // Initialize the OS-specific UI objects.
@@ -56,6 +57,8 @@ class HostUserInterface : public HostStatusObserver {
   }
   ChromotingHost* get_host() const { return host_; }
 
+  const UiStrings& ui_strings() const { return ui_strings_; }
+
   base::SingleThreadTaskRunner* network_task_runner() const;
   base::SingleThreadTaskRunner* ui_task_runner() const;
 
@@ -73,16 +76,10 @@ class HostUserInterface : public HostStatusObserver {
   // Provide a user interface allowing the host user to close the connection.
   scoped_ptr<DisconnectWindow> disconnect_window_;
 
-  // Monitor local inputs to allow remote inputs to be blocked while the local
-  // user is trying to do something.
-  scoped_ptr<LocalInputMonitor> local_input_monitor_;
-
  private:
   // Invoked from the UI thread when the user clicks on the Disconnect button
   // to disconnect the session.
   void OnDisconnectCallback();
-
-  void MonitorLocalInputs(bool enable);
 
   // The JID of the currently-authenticated user (or an empty string if no user
   // is connected).
@@ -95,7 +92,8 @@ class HostUserInterface : public HostStatusObserver {
   // Thread on which to run the user interface.
   scoped_refptr<base::SingleThreadTaskRunner> ui_task_runner_;
 
-  bool is_monitoring_local_inputs_;
+  // TODO(alexeypa): move |ui_strings_| to DesktopEnvironmentFactory.
+  UiStrings ui_strings_;
 
   // WeakPtr used to avoid tasks accessing the client after it is deleted.
   base::WeakPtrFactory<HostUserInterface> weak_factory_;

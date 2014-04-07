@@ -15,6 +15,7 @@
 #include "chrome/browser/search_engines/template_url_id.h"
 
 struct TemplateURLData;
+class WebDatabase;
 
 namespace sql {
 class Statement;
@@ -53,6 +54,10 @@ class Statement;
 //                          version 39.
 //   alternate_urls         See TemplateURLData::alternate_urls. This was added
 //                          in version 47.
+//   search_terms_replacement_key
+//                          See TemplateURLData::search_terms_replacement_key.
+//                          This was added in version 49.
+//
 //
 // This class also manages some fields in the |meta| table:
 //
@@ -67,10 +72,18 @@ class KeywordTable : public WebDatabaseTable {
 
   static const char kDefaultSearchProviderKey[];
 
-  KeywordTable(sql::Connection* db, sql::MetaTable* meta_table);
+  KeywordTable();
   virtual ~KeywordTable();
-  virtual bool Init() OVERRIDE;
+
+  // Retrieves the KeywordTable* owned by |database|.
+  static KeywordTable* FromWebDatabase(WebDatabase* db);
+
+  virtual WebDatabaseTable::TypeKey GetTypeKey() const OVERRIDE;
+  virtual bool Init(sql::Connection* db, sql::MetaTable* meta_table) OVERRIDE;
   virtual bool IsSyncable() OVERRIDE;
+  virtual bool MigrateToVersion(int version,
+                                const std::string& app_locale,
+                                bool* update_compatible_version) OVERRIDE;
 
   // Adds a new keyword, updating the id field on success.
   // Returns true if successful.
@@ -113,6 +126,7 @@ class KeywordTable : public WebDatabaseTable {
   bool MigrateToVersion45RemoveLogoIDAndAutogenerateColumns();
   bool MigrateToVersion47AddAlternateURLsColumn();
   bool MigrateToVersion48RemoveKeywordsBackup();
+  bool MigrateToVersion49AddSearchTermsReplacementKeyColumn();
 
  private:
   FRIEND_TEST_ALL_PREFIXES(KeywordTableTest, GetTableContents);

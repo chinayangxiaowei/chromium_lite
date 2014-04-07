@@ -22,8 +22,7 @@
 
 namespace media {
 
-#define BIND_TO_LOOP(function) \
-    media::BindToLoop(message_loop_, base::Bind(function, this))
+const int DecryptingAudioDecoder::kSupportedBitsPerChannel = 16;
 
 static inline bool IsOutOfSync(const base::TimeDelta& timestamp_1,
                                const base::TimeDelta& timestamp_2) {
@@ -38,6 +37,7 @@ DecryptingAudioDecoder::DecryptingAudioDecoder(
     const scoped_refptr<base::MessageLoopProxy>& message_loop,
     const SetDecryptorReadyCB& set_decryptor_ready_cb)
     : message_loop_(message_loop),
+      weak_factory_(this),
       state_(kUninitialized),
       set_decryptor_ready_cb_(set_decryptor_ready_cb),
       decryptor_(NULL),
@@ -54,30 +54,64 @@ void DecryptingAudioDecoder::Initialize(
     const scoped_refptr<DemuxerStream>& stream,
     const PipelineStatusCB& status_cb,
     const StatisticsCB& statistics_cb) {
-  if (!message_loop_->BelongsToCurrentThread()) {
-    message_loop_->PostTask(FROM_HERE, base::Bind(
-        &DecryptingAudioDecoder::DoInitialize, this,
-        stream, status_cb, statistics_cb));
+  DVLOG(2) << "Initialize()";
+  DCHECK(message_loop_->BelongsToCurrentThread());
+  DCHECK_EQ(state_, kUninitialized) << state_;
+  DCHECK(stream);
+
+  weak_this_ = weak_factory_.GetWeakPtr();
+  init_cb_ = BindToCurrentLoop(status_cb);
+
+  const AudioDecoderConfig& config = stream->audio_decoder_config();
+  if (!config.IsValidConfig()) {
+    DLOG(ERROR) << "Invalid audio stream config.";
+    base::ResetAndReturn(&init_cb_).Run(PIPELINE_ERROR_DECODE);
     return;
   }
-  DoInitialize(stream, status_cb, statistics_cb);
+
+  // DecryptingAudioDecoder only accepts potentially encrypted stream.
+  if (!config.is_encrypted()) {
+    base::ResetAndReturn(&init_cb_).Run(DECODER_ERROR_NOT_SUPPORTED);
+    return;
+  }
+
+  DCHECK(!demuxer_stream_);
+  demuxer_stream_ = stream;
+  statistics_cb_ = statistics_cb;
+
+  state_ = kDecryptorRequested;
+  set_decryptor_ready_cb_.Run(BindToCurrentLoop(
+      base::Bind(&DecryptingAudioDecoder::SetDecryptor, weak_this_)));
 }
 
 void DecryptingAudioDecoder::Read(const ReadCB& read_cb) {
-  // Complete operation asynchronously on different stack of execution as per
-  // the API contract of AudioDecoder::Read()
-  message_loop_->PostTask(FROM_HERE, base::Bind(
-      &DecryptingAudioDecoder::DoRead, this, read_cb));
-}
+  DVLOG(3) << "Read()";
+  DCHECK(message_loop_->BelongsToCurrentThread());
+  DCHECK(state_ == kIdle || state_ == kDecodeFinished) << state_;
+  DCHECK(!read_cb.is_null());
+  CHECK(read_cb_.is_null()) << "Overlapping decodes are not supported.";
 
-void DecryptingAudioDecoder::Reset(const base::Closure& closure) {
-  if (!message_loop_->BelongsToCurrentThread()) {
-    message_loop_->PostTask(FROM_HERE, base::Bind(
-        &DecryptingAudioDecoder::Reset, this, closure));
+  read_cb_ = BindToCurrentLoop(read_cb);
+
+  // Return empty (end-of-stream) frames if decoding has finished.
+  if (state_ == kDecodeFinished) {
+    base::ResetAndReturn(&read_cb_).Run(kOk, DataBuffer::CreateEOSBuffer());
     return;
   }
 
+  if (!queued_audio_frames_.empty()) {
+    base::ResetAndReturn(&read_cb_).Run(kOk, queued_audio_frames_.front());
+    queued_audio_frames_.pop_front();
+    return;
+  }
+
+  state_ = kPendingDemuxerRead;
+  ReadFromDemuxerStream();
+}
+
+void DecryptingAudioDecoder::Reset(const base::Closure& closure) {
   DVLOG(2) << "Reset() - state: " << state_;
+  DCHECK(message_loop_->BelongsToCurrentThread());
   DCHECK(state_ == kIdle ||
          state_ == kPendingConfigChange ||
          state_ == kPendingDemuxerRead ||
@@ -93,8 +127,8 @@ void DecryptingAudioDecoder::Reset(const base::Closure& closure) {
 
   // Reset() cannot complete if the read callback is still pending.
   // Defer the resetting process in this case. The |reset_cb_| will be fired
-  // after the read callback is fired - see DoDecryptAndDecodeBuffer() and
-  // DoDeliverFrame().
+  // after the read callback is fired - see DecryptAndDecodeBuffer() and
+  // DeliverFrame().
   if (state_ == kPendingConfigChange ||
       state_ == kPendingDemuxerRead ||
       state_ == kPendingDecode) {
@@ -113,51 +147,21 @@ void DecryptingAudioDecoder::Reset(const base::Closure& closure) {
 }
 
 int DecryptingAudioDecoder::bits_per_channel() {
+  DCHECK(message_loop_->BelongsToCurrentThread());
   return bits_per_channel_;
 }
 
 ChannelLayout DecryptingAudioDecoder::channel_layout() {
+  DCHECK(message_loop_->BelongsToCurrentThread());
   return channel_layout_;
 }
 
 int DecryptingAudioDecoder::samples_per_second() {
+  DCHECK(message_loop_->BelongsToCurrentThread());
   return samples_per_second_;
 }
 
 DecryptingAudioDecoder::~DecryptingAudioDecoder() {
-}
-
-void DecryptingAudioDecoder::DoInitialize(
-    const scoped_refptr<DemuxerStream>& stream,
-    const PipelineStatusCB& status_cb,
-    const StatisticsCB& statistics_cb) {
-  DVLOG(2) << "DoInitialize()";
-  DCHECK(message_loop_->BelongsToCurrentThread());
-  DCHECK_EQ(state_, kUninitialized) << state_;
-  DCHECK(stream);
-
-  const AudioDecoderConfig& config = stream->audio_decoder_config();
-  if (!config.IsValidConfig()) {
-    DLOG(ERROR) << "Invalid audio stream config.";
-    status_cb.Run(PIPELINE_ERROR_DECODE);
-    return;
-  }
-
-  // DecryptingAudioDecoder only accepts potentially encrypted stream.
-  if (!config.is_encrypted()) {
-    status_cb.Run(DECODER_ERROR_NOT_SUPPORTED);
-    return;
-  }
-
-  DCHECK(!demuxer_stream_);
-  demuxer_stream_ = stream;
-  statistics_cb_ = statistics_cb;
-
-  init_cb_ = status_cb;
-
-  state_ = kDecryptorRequested;
-  set_decryptor_ready_cb_.Run(
-      BIND_TO_LOOP(&DecryptingAudioDecoder::SetDecryptor));
 }
 
 void DecryptingAudioDecoder::SetDecryptor(Decryptor* decryptor) {
@@ -170,13 +174,23 @@ void DecryptingAudioDecoder::SetDecryptor(Decryptor* decryptor) {
   set_decryptor_ready_cb_.Reset();
   decryptor_ = decryptor;
 
-  scoped_ptr<AudioDecoderConfig> scoped_config(new AudioDecoderConfig());
-  scoped_config->CopyFrom(demuxer_stream_->audio_decoder_config());
+  const AudioDecoderConfig& input_config =
+      demuxer_stream_->audio_decoder_config();
+  AudioDecoderConfig config;
+  config.Initialize(input_config.codec(),
+                    kSampleFormatS16,
+                    input_config.channel_layout(),
+                    input_config.samples_per_second(),
+                    input_config.extra_data(),
+                    input_config.extra_data_size(),
+                    input_config.is_encrypted(),
+                    false);
 
   state_ = kPendingDecoderInit;
   decryptor_->InitializeAudioDecoder(
-      scoped_config.Pass(),
-      BIND_TO_LOOP(&DecryptingAudioDecoder::FinishInitialization));
+      config,
+      BindToCurrentLoop(base::Bind(
+          &DecryptingAudioDecoder::FinishInitialization, weak_this_)));
 }
 
 void DecryptingAudioDecoder::FinishInitialization(bool success) {
@@ -194,16 +208,11 @@ void DecryptingAudioDecoder::FinishInitialization(bool success) {
   }
 
   // Success!
-  const AudioDecoderConfig& config = demuxer_stream_->audio_decoder_config();
-  bits_per_channel_ = config.bits_per_channel();
-  channel_layout_ = config.channel_layout();
-  samples_per_second_ = config.samples_per_second();
-  const int kBitsPerByte = 8;
-  bytes_per_sample_ = ChannelLayoutToChannelCount(channel_layout_) *
-      bits_per_channel_ / kBitsPerByte;
+  UpdateDecoderConfig();
 
-  decryptor_->RegisterKeyAddedCB(
-      Decryptor::kAudio, BIND_TO_LOOP(&DecryptingAudioDecoder::OnKeyAdded));
+  decryptor_->RegisterNewKeyCB(
+      Decryptor::kAudio, BindToCurrentLoop(base::Bind(
+          &DecryptingAudioDecoder::OnKeyAdded, weak_this_)));
 
   state_ = kIdle;
   base::ResetAndReturn(&init_cb_).Run(PIPELINE_OK);
@@ -224,6 +233,8 @@ void DecryptingAudioDecoder::FinishConfigChange(bool success) {
   }
 
   // Config change succeeded.
+  UpdateDecoderConfig();
+
   if (!reset_cb_.is_null()) {
     base::ResetAndReturn(&read_cb_).Run(kAborted, NULL);
     DoReset();
@@ -234,65 +245,43 @@ void DecryptingAudioDecoder::FinishConfigChange(bool success) {
   ReadFromDemuxerStream();
 }
 
-void DecryptingAudioDecoder::DoRead(const ReadCB& read_cb) {
-  DVLOG(3) << "DoRead()";
-  DCHECK(message_loop_->BelongsToCurrentThread());
-  DCHECK(state_ == kIdle || state_ == kDecodeFinished) << state_;
-  DCHECK(!read_cb.is_null());
-  CHECK(read_cb_.is_null()) << "Overlapping decodes are not supported.";
-
-  // Return empty (end-of-stream) frames if decoding has finished.
-  if (state_ == kDecodeFinished) {
-    read_cb.Run(kOk, scoped_refptr<Buffer>(new DataBuffer(0)));
-    return;
-  }
-
-  if (!queued_audio_frames_.empty()) {
-    read_cb.Run(kOk, queued_audio_frames_.front());
-    queued_audio_frames_.pop_front();
-    return;
-  }
-
-  read_cb_ = read_cb;
-  state_ = kPendingDemuxerRead;
-  ReadFromDemuxerStream();
-}
-
 void DecryptingAudioDecoder::ReadFromDemuxerStream() {
-  DCHECK(message_loop_->BelongsToCurrentThread());
   DCHECK_EQ(state_, kPendingDemuxerRead) << state_;
   DCHECK(!read_cb_.is_null());
 
   demuxer_stream_->Read(
-      base::Bind(&DecryptingAudioDecoder::DoDecryptAndDecodeBuffer, this));
+      base::Bind(&DecryptingAudioDecoder::DecryptAndDecodeBuffer, weak_this_));
 }
 
-void DecryptingAudioDecoder::DoDecryptAndDecodeBuffer(
+void DecryptingAudioDecoder::DecryptAndDecodeBuffer(
     DemuxerStream::Status status,
     const scoped_refptr<DecoderBuffer>& buffer) {
-  if (!message_loop_->BelongsToCurrentThread()) {
-    message_loop_->PostTask(FROM_HERE, base::Bind(
-        &DecryptingAudioDecoder::DoDecryptAndDecodeBuffer, this,
-        status, buffer));
-    return;
-  }
-
-  DVLOG(3) << "DoDecryptAndDecodeBuffer()";
+  DVLOG(3) << "DecryptAndDecodeBuffer()";
+  DCHECK(message_loop_->BelongsToCurrentThread());
   DCHECK_EQ(state_, kPendingDemuxerRead) << state_;
   DCHECK(!read_cb_.is_null());
   DCHECK_EQ(buffer != NULL, status == DemuxerStream::kOk) << status;
 
   if (status == DemuxerStream::kConfigChanged) {
-    DVLOG(2) << "DoDecryptAndDecodeBuffer() - kConfigChanged";
+    DVLOG(2) << "DecryptAndDecodeBuffer() - kConfigChanged";
 
-    scoped_ptr<AudioDecoderConfig> scoped_config(new AudioDecoderConfig());
-    scoped_config->CopyFrom(demuxer_stream_->audio_decoder_config());
+  const AudioDecoderConfig& input_config =
+      demuxer_stream_->audio_decoder_config();
+  AudioDecoderConfig config;
+  config.Initialize(input_config.codec(),
+                    kSampleFormatS16,
+                    input_config.channel_layout(),
+                    input_config.samples_per_second(),
+                    input_config.extra_data(),
+                    input_config.extra_data_size(),
+                    input_config.is_encrypted(),
+                    false);
 
     state_ = kPendingConfigChange;
     decryptor_->DeinitializeDecoder(Decryptor::kAudio);
     decryptor_->InitializeAudioDecoder(
-        scoped_config.Pass(), BindToCurrentLoop(base::Bind(
-            &DecryptingAudioDecoder::FinishConfigChange, this)));
+        config, BindToCurrentLoop(base::Bind(
+            &DecryptingAudioDecoder::FinishConfigChange, weak_this_)));
     return;
   }
 
@@ -303,7 +292,7 @@ void DecryptingAudioDecoder::DoDecryptAndDecodeBuffer(
   }
 
   if (status == DemuxerStream::kAborted) {
-    DVLOG(2) << "DoDecryptAndDecodeBuffer() - kAborted";
+    DVLOG(2) << "DecryptAndDecodeBuffer() - kAborted";
     state_ = kIdle;
     base::ResetAndReturn(&read_cb_).Run(kAborted, NULL);
     return;
@@ -326,30 +315,23 @@ void DecryptingAudioDecoder::DoDecryptAndDecodeBuffer(
 void DecryptingAudioDecoder::DecodePendingBuffer() {
   DCHECK(message_loop_->BelongsToCurrentThread());
   DCHECK_EQ(state_, kPendingDecode) << state_;
+
+  int buffer_size = 0;
+  if (!pending_buffer_to_decode_->IsEndOfStream()) {
+    buffer_size = pending_buffer_to_decode_->GetDataSize();
+  }
+
   decryptor_->DecryptAndDecodeAudio(
       pending_buffer_to_decode_,
-      base::Bind(&DecryptingAudioDecoder::DeliverFrame, this,
-                 pending_buffer_to_decode_->GetDataSize()));
+      BindToCurrentLoop(base::Bind(
+          &DecryptingAudioDecoder::DeliverFrame, weak_this_, buffer_size)));
 }
 
 void DecryptingAudioDecoder::DeliverFrame(
     int buffer_size,
     Decryptor::Status status,
     const Decryptor::AudioBuffers& frames) {
-  // We need to force task post here because the AudioDecodeCB can be executed
-  // synchronously in Reset(). Instead of using more complicated logic in
-  // those function to fix it, why not force task post here to make everything
-  // simple and clear?
-  message_loop_->PostTask(FROM_HERE, base::Bind(
-      &DecryptingAudioDecoder::DoDeliverFrame, this,
-      buffer_size, status, frames));
-}
-
-void DecryptingAudioDecoder::DoDeliverFrame(
-    int buffer_size,
-    Decryptor::Status status,
-    const Decryptor::AudioBuffers& frames) {
-  DVLOG(3) << "DoDeliverFrame() - status: " << status;
+  DVLOG(3) << "DeliverFrame() - status: " << status;
   DCHECK(message_loop_->BelongsToCurrentThread());
   DCHECK_EQ(state_, kPendingDecode) << state_;
   DCHECK(!read_cb_.is_null());
@@ -372,14 +354,14 @@ void DecryptingAudioDecoder::DoDeliverFrame(
   DCHECK_EQ(status == Decryptor::kSuccess, !frames.empty());
 
   if (status == Decryptor::kError) {
-    DVLOG(2) << "DoDeliverFrame() - kError";
+    DVLOG(2) << "DeliverFrame() - kError";
     state_ = kDecodeFinished;
     base::ResetAndReturn(&read_cb_).Run(kDecodeError, NULL);
     return;
   }
 
   if (status == Decryptor::kNoKey) {
-    DVLOG(2) << "DoDeliverFrame() - kNoKey";
+    DVLOG(2) << "DeliverFrame() - kNoKey";
     // Set |pending_buffer_to_decode_| back as we need to try decoding the
     // pending buffer again when new key is added to the decryptor.
     pending_buffer_to_decode_ = scoped_pending_buffer_to_decode;
@@ -402,11 +384,10 @@ void DecryptingAudioDecoder::DoDeliverFrame(
   }
 
   if (status == Decryptor::kNeedMoreData) {
-    DVLOG(2) << "DoDeliverFrame() - kNeedMoreData";
+    DVLOG(2) << "DeliverFrame() - kNeedMoreData";
     if (scoped_pending_buffer_to_decode->IsEndOfStream()) {
       state_ = kDecodeFinished;
-      base::ResetAndReturn(&read_cb_).Run(
-          kOk, scoped_refptr<Buffer>(new DataBuffer(0)));
+      base::ResetAndReturn(&read_cb_).Run(kOk, DataBuffer::CreateEOSBuffer());
       return;
     }
 
@@ -447,6 +428,18 @@ void DecryptingAudioDecoder::DoReset() {
   base::ResetAndReturn(&reset_cb_).Run();
 }
 
+void DecryptingAudioDecoder::UpdateDecoderConfig() {
+  const AudioDecoderConfig& config = demuxer_stream_->audio_decoder_config();
+  bits_per_channel_ = kSupportedBitsPerChannel;
+  channel_layout_ = config.channel_layout();
+  samples_per_second_ = config.samples_per_second();
+  const int kBitsPerByte = 8;
+  bytes_per_sample_ = ChannelLayoutToChannelCount(channel_layout_) *
+      bits_per_channel_ / kBitsPerByte;
+  output_timestamp_base_ = kNoTimestamp();
+  total_samples_decoded_ = 0;
+}
+
 void DecryptingAudioDecoder::EnqueueFrames(
     const Decryptor::AudioBuffers& frames) {
   queued_audio_frames_ = frames;
@@ -454,7 +447,7 @@ void DecryptingAudioDecoder::EnqueueFrames(
   for (Decryptor::AudioBuffers::iterator iter = queued_audio_frames_.begin();
       iter != queued_audio_frames_.end();
       ++iter) {
-    scoped_refptr<Buffer>& frame = *iter;
+    scoped_refptr<DataBuffer>& frame = *iter;
 
     DCHECK(!frame->IsEndOfStream()) << "EOS frame returned.";
     DCHECK_GT(frame->GetDataSize(), 0) << "Empty frame returned.";

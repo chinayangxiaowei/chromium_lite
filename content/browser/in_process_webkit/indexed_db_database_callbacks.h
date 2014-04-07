@@ -15,19 +15,21 @@ class IndexedDBDatabaseCallbacks : public WebKit::WebIDBDatabaseCallbacks {
  public:
   IndexedDBDatabaseCallbacks(IndexedDBDispatcherHost* dispatcher_host,
                              int ipc_thread_id,
-                             int ipc_database_id);
+                             int ipc_database_callbacks_id);
 
   virtual ~IndexedDBDatabaseCallbacks();
 
   virtual void onForcedClose();
   virtual void onVersionChange(long long old_version,
                                long long new_version);
-  virtual void onVersionChange(const WebKit::WebString& requested_version);
+  virtual void onAbort(long long host_transaction_id,
+                       const WebKit::WebIDBDatabaseError&);
+  virtual void onComplete(long long host_transaction_id);
 
  private:
   scoped_refptr<IndexedDBDispatcherHost> dispatcher_host_;
   int ipc_thread_id_;
-  int ipc_database_id_;
+  int ipc_database_callbacks_id_;
 };
 
 }  // namespace content

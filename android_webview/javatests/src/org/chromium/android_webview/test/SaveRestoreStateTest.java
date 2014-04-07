@@ -17,7 +17,7 @@ import org.chromium.net.test.util.TestWebServer;
 
 import java.util.concurrent.Callable;
 
-public class SaveRestoreStateTest extends AndroidWebViewTestBase {
+public class SaveRestoreStateTest extends AwTestBase {
     private static class TestVars {
         public final TestAwContentsClient contentsClient;
         public final AwTestContainerView testView;
@@ -66,14 +66,6 @@ public class SaveRestoreStateTest extends AndroidWebViewTestBase {
 
     @Override
     public void tearDown() throws Exception {
-        // TODO(boliu): This is to work around disk cache corruption bug on
-        // unclean shutdown (crbug.com/154805).
-        try {
-          clearCacheOnUiThread(mVars.awContents, true);
-        } catch (Throwable e) {
-          throw new Exception(e);
-        }
-
         if (mWebServer != null) {
             mWebServer.shutdown();
         }

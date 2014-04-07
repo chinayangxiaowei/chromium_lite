@@ -16,9 +16,10 @@
 #include "chrome/browser/chromeos/login/login_display.h"
 #include "chrome/browser/chromeos/login/screen_locker_delegate.h"
 #include "chrome/browser/chromeos/login/webui_login_view.h"
-#include "chromeos/dbus/root_power_manager_observer.h"
+#include "chromeos/dbus/power_manager_client.h"
 #include "content/public/browser/notification_observer.h"
 #include "content/public/browser/notification_registrar.h"
+#include "content/public/browser/web_contents_observer.h"
 #include "ui/views/widget/widget.h"
 #include "ui/views/widget/widget_observer.h"
 
@@ -30,6 +31,7 @@ namespace chromeos {
 
 class ScreenLocker;
 class WebUILoginDisplay;
+struct UserCredentials;
 
 namespace test {
 class WebUIScreenLockerTester;
@@ -43,7 +45,8 @@ class WebUIScreenLocker : public WebUILoginView,
                           public LockWindow::Observer,
                           public ash::SessionStateObserver,
                           public views::WidgetObserver,
-                          public RootPowerManagerObserver {
+                          public PowerManagerClient::Observer,
+                          public content::WebContentsObserver {
  public:
   explicit WebUIScreenLocker(ScreenLocker* screen_locker);
 
@@ -63,18 +66,22 @@ class WebUIScreenLocker : public WebUILoginView,
   // LoginDisplay::Delegate: implementation
   virtual void CancelPasswordChangedFlow() OVERRIDE;
   virtual void CreateAccount() OVERRIDE;
-  virtual void CompleteLogin(const std::string& username,
-                             const std::string& password) OVERRIDE;
+  virtual void CreateLocallyManagedUser(const string16& display_name,
+                                        const std::string& password) OVERRIDE;
+
+  virtual void CompleteLogin(const UserCredentials& credentials) OVERRIDE;
   virtual string16 GetConnectedNetworkName() OVERRIDE;
-  virtual void Login(const std::string& username,
-                     const std::string& password) OVERRIDE;
+  virtual void Login(const UserCredentials& credentials) OVERRIDE;
   virtual void LoginAsRetailModeUser() OVERRIDE;
   virtual void LoginAsGuest() OVERRIDE;
   virtual void MigrateUserData(const std::string& old_password) OVERRIDE;
   virtual void LoginAsPublicAccount(const std::string& username) OVERRIDE;
+  virtual void OnSigninScreenReady() OVERRIDE;
   virtual void OnUserSelected(const std::string& username) OVERRIDE;
   virtual void OnStartEnterpriseEnrollment() OVERRIDE;
   virtual void OnStartDeviceReset() OVERRIDE;
+  virtual void ShowWrongHWIDScreen() OVERRIDE;
+  virtual void ResetPublicSessionAutoLoginTimer() OVERRIDE;
   virtual void ResyncUserData() OVERRIDE;
   virtual void SetDisplayEmail(const std::string& email) OVERRIDE;
   virtual void Signout() OVERRIDE;
@@ -92,11 +99,15 @@ class WebUIScreenLocker : public WebUILoginView,
       OVERRIDE;
 
   // WidgetObserver override.
-  virtual void OnWidgetClosing(views::Widget* widget) OVERRIDE;
+  virtual void OnWidgetDestroying(views::Widget* widget) OVERRIDE;
 
-  // RootPowerManagerObserver overrides:
-  virtual void OnResume(const base::TimeDelta& sleep_duration) OVERRIDE;
-  virtual void OnLidEvent(bool open, const base::TimeTicks& time) OVERRIDE;
+  // PowerManagerClient::Observer overrides:
+  virtual void SystemResumed(const base::TimeDelta& sleep_duration) OVERRIDE;
+  virtual void LidEventReceived(bool open,
+                                const base::TimeTicks& time) OVERRIDE;
+
+  // Overridden from content::WebContentsObserver:
+  virtual void RenderViewGone(base::TerminationStatus status) OVERRIDE;
 
  private:
   friend class test::WebUIScreenLockerTester;

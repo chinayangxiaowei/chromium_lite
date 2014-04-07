@@ -14,18 +14,17 @@
 #include "ppapi/shared_impl/url_response_info_data.h"
 #include "ppapi/thunk/enter.h"
 #include "ppapi/thunk/ppb_url_request_info_api.h"
+#include "third_party/WebKit/Source/Platform/chromium/public/WebURLError.h"
+#include "third_party/WebKit/Source/Platform/chromium/public/WebURLLoader.h"
+#include "third_party/WebKit/Source/Platform/chromium/public/WebURLRequest.h"
+#include "third_party/WebKit/Source/Platform/chromium/public/WebURLResponse.h"
 #include "third_party/WebKit/Source/WebKit/chromium/public/WebDocument.h"
 #include "third_party/WebKit/Source/WebKit/chromium/public/WebElement.h"
 #include "third_party/WebKit/Source/WebKit/chromium/public/WebFrame.h"
 #include "third_party/WebKit/Source/WebKit/chromium/public/WebKit.h"
-#include "third_party/WebKit/Source/WebKit/chromium/public/platform/WebKitPlatformSupport.h"
 #include "third_party/WebKit/Source/WebKit/chromium/public/WebPluginContainer.h"
 #include "third_party/WebKit/Source/WebKit/chromium/public/WebSecurityOrigin.h"
-#include "third_party/WebKit/Source/WebKit/chromium/public/platform/WebURLError.h"
-#include "third_party/WebKit/Source/WebKit/chromium/public/platform/WebURLLoader.h"
 #include "third_party/WebKit/Source/WebKit/chromium/public/WebURLLoaderOptions.h"
-#include "third_party/WebKit/Source/WebKit/chromium/public/platform/WebURLRequest.h"
-#include "third_party/WebKit/Source/WebKit/chromium/public/platform/WebURLResponse.h"
 #include "webkit/appcache/web_application_cache_host_impl.h"
 #include "webkit/plugins/ppapi/common.h"
 #include "webkit/plugins/ppapi/plugin_module.h"
@@ -87,12 +86,13 @@ PPB_URLLoader_Impl::PPB_URLLoader_Impl(PP_Instance instance,
 }
 
 PPB_URLLoader_Impl::~PPB_URLLoader_Impl() {
-  // There is a path whereby the destructor for the loader_ member can
-  // invoke InstanceWasDeleted() upon this PPB_URLLoader_Impl, thereby
-  // re-entering the scoped_ptr destructor with the same scoped_ptr object
-  // via loader_.reset(). Be sure that loader_ is first NULL then destroy
-  // the scoped_ptr. See http://crbug.com/159429.
-  scoped_ptr<WebKit::WebURLLoader> for_destruction_only(loader_.release());
+  // Removes the resource from the ResourceTracker's tables. This normally
+  // happens as part of Resource destruction, but if a subclass destructor
+  // has a risk of re-entering destruction via the ResourceTracker, it can
+  // call this explicitly to get rid of the table entry before continuing
+  // with the destruction. If the resource is not in the ResourceTracker's
+  // tables, silently does nothing. See http://crbug.com/159429.
+  RemoveFromResourceTracker();
 }
 
 PPB_URLLoader_API* PPB_URLLoader_Impl::AsPPB_URLLoader_API() {

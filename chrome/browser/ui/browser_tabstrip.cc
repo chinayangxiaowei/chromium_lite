@@ -18,20 +18,7 @@
 
 namespace chrome {
 
-content::WebContents* GetActiveWebContents(const Browser* browser) {
-  return browser->tab_strip_model()->GetActiveWebContents();
-}
-
-content::WebContents* GetWebContentsAt(const Browser* browser, int index) {
-  return browser->tab_strip_model()->GetWebContentsAt(index);
-}
-
 void AddBlankTabAt(Browser* browser, int index, bool foreground) {
-  // TODO(scottmg): http://crbug.com/128578
-  // This is necessary because WebContentsViewAura doesn't have enough context
-  // to get the right StackingClient (and therefore parent window) otherwise.
-  ScopedForceDesktopType force_desktop_type(browser->host_desktop_type());
-
   // Time new tab page creation time.  We keep track of the timing data in
   // WebContents, but we want to include the time it takes to create the
   // WebContents object too.
@@ -83,8 +70,8 @@ void AddWebContents(Browser* browser,
     }
 
     // Handle blocking of popups.
-    if ((disposition == NEW_POPUP || disposition == NEW_FOREGROUND_TAB) &&
-        !user_gesture &&
+    if ((disposition == NEW_POPUP || disposition == NEW_FOREGROUND_TAB ||
+         disposition == NEW_BACKGROUND_TAB) && !user_gesture &&
         !CommandLine::ForCurrentProcess()->HasSwitch(
             switches::kDisablePopupBlocking)) {
       // Unrequested popups from normal pages are constrained unless they're in
@@ -108,15 +95,19 @@ void AddWebContents(Browser* browser,
   Navigate(&params);
 }
 
-void CloseWebContents(Browser* browser, content::WebContents* contents) {
+void CloseWebContents(Browser* browser,
+                      content::WebContents* contents,
+                      bool add_to_history) {
   int index = browser->tab_strip_model()->GetIndexOfWebContents(contents);
   if (index == TabStripModel::kNoTab) {
     NOTREACHED() << "CloseWebContents called for tab not in our strip";
     return;
   }
+
   browser->tab_strip_model()->CloseWebContentsAt(
       index,
-      TabStripModel::CLOSE_CREATE_HISTORICAL_TAB);
+      add_to_history ? TabStripModel::CLOSE_CREATE_HISTORICAL_TAB
+                     : TabStripModel::CLOSE_NONE);
 }
 
 }  // namespace chrome

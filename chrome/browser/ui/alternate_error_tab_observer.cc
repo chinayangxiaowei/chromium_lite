@@ -4,11 +4,12 @@
 
 #include "chrome/browser/ui/alternate_error_tab_observer.h"
 
+#include "base/prefs/pref_service.h"
 #include "chrome/browser/google/google_util.h"
-#include "chrome/browser/prefs/pref_service.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/common/chrome_notification_types.h"
 #include "chrome/common/pref_names.h"
+#include "components/user_prefs/pref_registry_syncable.h"
 #include "content/public/browser/notification_service.h"
 #include "content/public/browser/render_view_host.h"
 #include "content/public/browser/web_contents.h"
@@ -16,7 +17,7 @@
 using content::RenderViewHost;
 using content::WebContents;
 
-DEFINE_WEB_CONTENTS_USER_DATA_KEY(AlternateErrorPageTabObserver)
+DEFINE_WEB_CONTENTS_USER_DATA_KEY(AlternateErrorPageTabObserver);
 
 AlternateErrorPageTabObserver::AlternateErrorPageTabObserver(
     WebContents* web_contents)
@@ -40,9 +41,10 @@ AlternateErrorPageTabObserver::~AlternateErrorPageTabObserver() {
 }
 
 // static
-void AlternateErrorPageTabObserver::RegisterUserPrefs(PrefService* prefs) {
+void AlternateErrorPageTabObserver::RegisterUserPrefs(
+    PrefRegistrySyncable* prefs) {
   prefs->RegisterBooleanPref(prefs::kAlternateErrorPagesEnabled, true,
-                             PrefService::SYNCABLE_PREF);
+                             PrefRegistrySyncable::SYNCABLE_PREF);
 }
 
 ////////////////////////////////////////////////////////////////////////////////

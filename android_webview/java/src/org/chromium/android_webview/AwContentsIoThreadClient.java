@@ -19,7 +19,7 @@ public interface AwContentsIoThreadClient {
     public int getCacheMode();
 
     @CalledByNative
-    public InterceptedRequestData shouldInterceptRequest(String url);
+    public InterceptedRequestData shouldInterceptRequest(String url, boolean isMainFrame);
 
     @CalledByNative
     public boolean shouldBlockContentUrls();
@@ -36,4 +36,7 @@ public interface AwContentsIoThreadClient {
                                 String contentDisposition,
                                 String mimeType,
                                 long contentLength);
+
+    @CalledByNative
+    public void newLoginRequest(String realm, String account, String args);
 }

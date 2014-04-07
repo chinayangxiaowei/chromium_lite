@@ -13,6 +13,7 @@
       'variables': {
         'build_newlib': 1,
         'build_glibc': 1,
+        'build_pnacl_newlib': 1,
         'test_files': [
           # TODO(ncbray) move into chrome/test/data/nacl when all tests are
           # converted.
@@ -28,6 +29,7 @@
         'nexe_target': 'simple',
         'build_newlib': 1,
         'build_glibc': 1,
+        'build_pnacl_newlib': 1,
         'sources': [
           'simple.cc',
         ],
@@ -43,6 +45,7 @@
         'nexe_target': 'pm_exit_status_test',
         'build_newlib': 1,
         'build_glibc': 1,
+        'build_pnacl_newlib': 1,
         'sources': [
           'exit_status/pm_exit_status_test.cc',
         ],
@@ -59,6 +62,7 @@
         'nso_target': 'libppapi_test_lib.so',
         'build_newlib': 1,
         'build_glibc': 1,
+        'build_pnacl_newlib': 1,
         'sources': [
           # TODO(ncbray) move these files once SCons no longer depends on them.
           '../../../../ppapi/native_client/tests/ppapi_test_lib/get_browser_interface.cc',
@@ -79,6 +83,7 @@
         'nexe_target': 'ppapi_progress_events',
         'build_newlib': 1,
         'build_glibc': 1,
+        'build_pnacl_newlib': 1,
         'link_flags': [
           '-lppapi',
           '-lppapi_test_lib',
@@ -101,6 +106,27 @@
         'ppapi_test_lib',
       ],
     },
+    {
+      'target_name': 'pnacl_options_test',
+      'type': 'none',
+      'variables': {
+        'nexe_target': 'pnacl_options',
+        'build_pnacl_newlib': 1,
+        'sources': [
+          'simple.cc',
+        ],
+        'test_files': [
+          'pnacl_nmf_options/pnacl_options.html',
+          'pnacl_nmf_options/pnacl_o_0.nmf',
+          'pnacl_nmf_options/pnacl_o_2.nmf',
+          'pnacl_nmf_options/pnacl_o_large.nmf',
+          'pnacl_nmf_options/pnacl_time_passes.nmf',
+        ],
+      },
+      'dependencies': [
+        '<(DEPTH)/native_client/tools.gyp:prep_toolchain',
+      ]
+    },
     # Legacy NaCl PPAPI interface tests being here.
     {
       'target_name': 'ppapi_ppb_core',
@@ -109,6 +135,7 @@
         'nexe_target': 'ppapi_ppb_core',
         'build_newlib': 1,
         'build_glibc': 1,
+        'build_pnacl_newlib': 1,
         'link_flags': [
           '-lppapi',
           '-lppapi_test_lib',

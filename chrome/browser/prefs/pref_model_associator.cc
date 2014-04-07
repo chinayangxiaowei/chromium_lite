@@ -9,8 +9,10 @@
 #include "base/json/json_string_value_serializer.h"
 #include "base/location.h"
 #include "base/logging.h"
+#include "base/prefs/pref_service.h"
 #include "base/utf_string_conversions.h"
 #include "base/values.h"
+#include "chrome/browser/prefs/pref_service_syncable.h"
 #include "chrome/common/chrome_notification_types.h"
 #include "chrome/common/pref_names.h"
 #include "sync/api/sync_change.h"
@@ -263,22 +265,19 @@ Value* PrefModelAssociator::MergeDictionaryValues(
       static_cast<const DictionaryValue&>(to_value);
   DictionaryValue* result = to_dict_value.DeepCopy();
 
-  for (DictionaryValue::key_iterator key = from_dict_value.begin_keys();
-       key != from_dict_value.end_keys(); ++key) {
-    const Value* from_value;
-    bool success = from_dict_value.GetWithoutPathExpansion(*key, &from_value);
-    DCHECK(success);
-
+  for (DictionaryValue::Iterator it(from_dict_value); !it.IsAtEnd();
+       it.Advance()) {
+    const Value* from_value = &it.value();
     Value* to_key_value;
-    if (result->GetWithoutPathExpansion(*key, &to_key_value)) {
+    if (result->GetWithoutPathExpansion(it.key(), &to_key_value)) {
       if (to_key_value->GetType() == Value::TYPE_DICTIONARY) {
         Value* merged_value = MergeDictionaryValues(*from_value, *to_key_value);
-        result->SetWithoutPathExpansion(*key, merged_value);
+        result->SetWithoutPathExpansion(it.key(), merged_value);
       }
       // Note that for all other types we want to preserve the "to"
       // values so we do nothing here.
     } else {
-      result->SetWithoutPathExpansion(*key, from_value->DeepCopy());
+      result->SetWithoutPathExpansion(it.key(), from_value->DeepCopy());
     }
   }
   return result;
@@ -397,11 +396,6 @@ bool PrefModelAssociator::IsPrefRegistered(const char* name) {
   return registered_preferences_.count(name) > 0;
 }
 
-void PrefModelAssociator::UnregisterPref(const char* name) {
-  DCHECK(synced_preferences_.count(name) == 0);
-  registered_preferences_.erase(name);
-}
-
 void PrefModelAssociator::ProcessPrefChange(const std::string& name) {
   if (processing_syncer_changes_)
     return;  // These are changes originating from us, ignore.
@@ -452,7 +446,7 @@ void PrefModelAssociator::ProcessPrefChange(const std::string& name) {
       sync_processor_->ProcessSyncChanges(FROM_HERE, changes);
 }
 
-void PrefModelAssociator::SetPrefService(PrefService* pref_service) {
+void PrefModelAssociator::SetPrefService(PrefServiceSyncable* pref_service) {
   DCHECK(pref_service_ == NULL);
   pref_service_ = pref_service;
 }

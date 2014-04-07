@@ -5,13 +5,13 @@
 #ifndef CHROME_BROWSER_UI_ALTERNATE_ERROR_TAB_OBSERVER_H_
 #define CHROME_BROWSER_UI_ALTERNATE_ERROR_TAB_OBSERVER_H_
 
-#include "base/prefs/public/pref_change_registrar.h"
-#include "chrome/browser/prefs/pref_service.h"
+#include "base/prefs/pref_change_registrar.h"
 #include "content/public/browser/notification_observer.h"
 #include "content/public/browser/notification_registrar.h"
 #include "content/public/browser/web_contents_observer.h"
 #include "content/public/browser/web_contents_user_data.h"
 
+class PrefRegistrySyncable;
 class Profile;
 
 // Per-tab class to implement alternate error page functionality.
@@ -22,7 +22,7 @@ class AlternateErrorPageTabObserver
  public:
   virtual ~AlternateErrorPageTabObserver();
 
-  static void RegisterUserPrefs(PrefService* prefs);
+  static void RegisterUserPrefs(PrefRegistrySyncable* registry);
 
  private:
   explicit AlternateErrorPageTabObserver(content::WebContents* web_contents);

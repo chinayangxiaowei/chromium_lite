@@ -46,7 +46,7 @@ class PermissionMessage {
     kVideoCapture,
     kDownloads,
     kFileSystemWrite,
-    kMediaGalleriesAllGalleries,
+    kMediaGalleriesAllGalleriesRead,
     kSerial,
     kSocketAnyHost,
     kSocketDomainHosts,
@@ -56,7 +56,11 @@ class PermissionMessage {
     kSystemIndicator,
     kBluetoothDevice,
     kUsbDevice,
-    kEnumBoundary
+    kMediaGalleriesAllGalleriesWrite,
+    kSystemInfoDisplay,
+    kNativeMessaging,
+    kSyncFileSystem,
+    kEnumBoundary,
   };
 
   // Creates the corresponding permission message for a list of hosts. This is

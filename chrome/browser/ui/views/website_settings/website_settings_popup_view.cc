@@ -4,10 +4,10 @@
 
 #include "chrome/browser/ui/views/website_settings/website_settings_popup_view.h"
 
-#include "base/string_number_conversions.h"
+#include "base/strings/string_number_conversions.h"
 #include "base/utf_string_conversions.h"
 #include "chrome/browser/certificate_viewer.h"
-#include "chrome/browser/infobars/infobar_tab_helper.h"
+#include "chrome/browser/infobars/infobar_service.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/views/collected_cookies_views.h"
@@ -240,8 +240,7 @@ InternalPageInfoPopupView::InternalPageInfoPopupView(views::View* anchor_view)
   label->SetHorizontalAlignment(gfx::ALIGN_LEFT);
   AddChildView(label);
 
-  views::BubbleDelegateView::CreateBubble(this);
-  Show();
+  views::BubbleDelegateView::CreateBubble(this)->Show();
   SizeToContents();
 }
 
@@ -322,31 +321,28 @@ WebsiteSettingsPopupView::WebsiteSettingsPopupView(
   tabbed_pane_->AddTabAtIndex(
       TAB_ID_PERMISSIONS,
       l10n_util::GetStringUTF16(IDS_WEBSITE_SETTINGS_TAB_LABEL_PERMISSIONS),
-      CreatePermissionsTab(),
-      true);
+      CreatePermissionsTab());
   connection_tab_ = CreateConnectionTab();
   tabbed_pane_->AddTabAtIndex(
       TAB_ID_CONNECTION,
       l10n_util::GetStringUTF16(IDS_WEBSITE_SETTINGS_TAB_LABEL_CONNECTION),
-      connection_tab_,
-      true);
+      connection_tab_);
   DCHECK_EQ(tabbed_pane_->GetTabCount(), NUM_TAB_IDS);
   tabbed_pane_->set_listener(this);
 
   set_margins(gfx::Insets(kPopupMarginTop, kPopupMarginLeft,
                           kPopupMarginBottom, kPopupMarginRight));
 
-  views::BubbleDelegateView::CreateBubble(this);
-  this->Show();
+  views::BubbleDelegateView::CreateBubble(this)->Show();
   SizeToContents();
 
   TabSpecificContentSettings* content_settings =
       TabSpecificContentSettings::FromWebContents(web_contents);
-  InfoBarTabHelper* infobar_tab_helper =
-      InfoBarTabHelper::FromWebContents(web_contents);
+  InfoBarService* infobar_service =
+      InfoBarService::FromWebContents(web_contents);
   presenter_.reset(new WebsiteSettings(this, profile,
                                        content_settings,
-                                       infobar_tab_helper,
+                                       infobar_service,
                                        url,
                                        ssl,
                                        content::CertStore::GetInstance()));
@@ -359,7 +355,7 @@ void WebsiteSettingsPopupView::OnPermissionChanged(
                                       permission_selector->current_setting());
 }
 
-void WebsiteSettingsPopupView::OnWidgetClosing(views::Widget* widget) {
+void WebsiteSettingsPopupView::OnWidgetDestroying(views::Widget* widget) {
   presenter_->OnUIClosing();
 }
 

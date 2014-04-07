@@ -14,6 +14,9 @@
 #include "ppapi/host/ppapi_host.h"
 #include "ppapi/proxy/ppapi_messages.h"
 #include "ppapi/proxy/serialized_structs.h"
+#include "third_party/WebKit/Source/WebKit/chromium/public/WebDocument.h"
+#include "third_party/WebKit/Source/WebKit/chromium/public/WebElement.h"
+#include "third_party/WebKit/Source/WebKit/chromium/public/WebPluginContainer.h"
 #include "webkit/plugins/ppapi/ppapi_plugin_instance.h"
 
 namespace content {
@@ -60,11 +63,11 @@ int32_t PepperAudioInputHost::OnResourceMessageReceived(
     return result;
 
   IPC_BEGIN_MESSAGE_MAP(PepperAudioInputHost, msg)
-    PPAPI_DISPATCH_HOST_RESOURCE_CALL(PpapiHostMsg_AudioInput_Open, OnMsgOpen)
+    PPAPI_DISPATCH_HOST_RESOURCE_CALL(PpapiHostMsg_AudioInput_Open, OnOpen)
     PPAPI_DISPATCH_HOST_RESOURCE_CALL(PpapiHostMsg_AudioInput_StartOrStop,
-                                      OnMsgStartOrStop);
+                                      OnStartOrStop);
     PPAPI_DISPATCH_HOST_RESOURCE_CALL_0(PpapiHostMsg_AudioInput_Close,
-                                        OnMsgClose);
+                                        OnClose);
   IPC_END_MESSAGE_MAP()
   return PP_ERROR_FAILED;
 }
@@ -89,7 +92,7 @@ webkit::ppapi::PluginDelegate* PepperAudioInputHost::GetPluginDelegate() {
   return NULL;
 }
 
-int32_t PepperAudioInputHost::OnMsgOpen(
+int32_t PepperAudioInputHost::OnOpen(
     ppapi::host::HostMessageContext* context,
     const std::string& device_id,
     PP_AudioSampleRate sample_rate,
@@ -103,10 +106,16 @@ int32_t PepperAudioInputHost::OnMsgOpen(
   if (!plugin_delegate)
     return PP_ERROR_FAILED;
 
+  webkit::ppapi::PluginInstance* instance =
+      renderer_ppapi_host_->GetPluginInstance(pp_instance());
+  if (!instance)
+    return PP_ERROR_FAILED;
+
   // When it is done, we'll get called back on StreamCreated() or
   // StreamCreationFailed().
   audio_input_ = plugin_delegate->CreateAudioInput(
-      device_id, sample_rate, sample_frame_count, this);
+      device_id, instance->container()->element().document().url(),
+      sample_rate, sample_frame_count, this);
   if (audio_input_) {
     open_context_.reset(new ppapi::host::ReplyMessageContext(
         context->MakeReplyMessageContext()));
@@ -116,7 +125,7 @@ int32_t PepperAudioInputHost::OnMsgOpen(
   }
 }
 
-int32_t PepperAudioInputHost::OnMsgStartOrStop(
+int32_t PepperAudioInputHost::OnStartOrStop(
     ppapi::host::HostMessageContext* /* context */,
     bool capture) {
   if (!audio_input_)
@@ -128,7 +137,7 @@ int32_t PepperAudioInputHost::OnMsgStartOrStop(
   return PP_OK;
 }
 
-int32_t PepperAudioInputHost::OnMsgClose(
+int32_t PepperAudioInputHost::OnClose(
     ppapi::host::HostMessageContext* /* context */) {
   Close();
   return PP_OK;

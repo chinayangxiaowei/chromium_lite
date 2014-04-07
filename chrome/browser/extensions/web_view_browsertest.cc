@@ -2,27 +2,109 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "base/stringprintf.h"
 #include "base/utf_string_conversions.h"
 #include "chrome/browser/automation/automation_util.h"
+#include "chrome/browser/extensions/extension_test_message_listener.h"
 #include "chrome/browser/extensions/platform_app_browsertest_util.h"
-#include "chrome/browser/ui/browser_tabstrip.h"
+#include "chrome/browser/prerender/prerender_link_manager.h"
+#include "chrome/browser/prerender/prerender_link_manager_factory.h"
+#include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/ui/browser.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/test/base/ui_test_utils.h"
 #include "chrome/test/base/test_launcher_utils.h"
+#include "chrome/test/base/ui_test_utils.h"
 #include "content/public/browser/notification_service.h"
 #include "content/public/browser/render_process_host.h"
+#include "content/public/browser/web_contents_delegate.h"
 #include "content/public/test/browser_test_utils.h"
+#include "content/public/test/fake_speech_recognition_manager.h"
 #include "ui/compositor/compositor_setup.h"
 #include "ui/gl/gl_switches.h"
 
+using prerender::PrerenderLinkManager;
+using prerender::PrerenderLinkManagerFactory;
+
+// This class intercepts media access request from the embedder. The request
+// should be triggered only if the embedder API (from tests) allows the request
+// in Javascript.
+// We do not issue the actual media request; the fact that the request reached
+// embedder's WebContents is good enough for our tests. This is also to make
+// the test run successfully on trybots.
+class MockWebContentsDelegate : public content::WebContentsDelegate {
+ public:
+  MockWebContentsDelegate() : requested_(false) {}
+  virtual ~MockWebContentsDelegate() {}
+
+  virtual void RequestMediaAccessPermission(
+      content::WebContents* web_contents,
+      const content::MediaStreamRequest& request,
+      const content::MediaResponseCallback& callback) OVERRIDE {
+    requested_ = true;
+    if (message_loop_runner_)
+      message_loop_runner_->Quit();
+  }
+
+  void WaitForSetMediaPermission() {
+    if (requested_)
+      return;
+    message_loop_runner_ = new content::MessageLoopRunner;
+    message_loop_runner_->Run();
+  }
+
+ private:
+  bool requested_;
+  scoped_refptr<content::MessageLoopRunner> message_loop_runner_;
+};
+
 class WebViewTest : public extensions::PlatformAppBrowserTest {
  protected:
-  virtual void SetUpCommandLine(CommandLine* command_line) {
+  virtual void SetUpCommandLine(CommandLine* command_line) OVERRIDE {
     extensions::PlatformAppBrowserTest::SetUpCommandLine(command_line);
 #if !defined(OS_MACOSX)
     CHECK(test_launcher_utils::OverrideGLImplementation(
           command_line, gfx::kGLImplementationOSMesaName)) <<
           "kUseGL must not be set by test framework code!";
 #endif
+  }
+
+  virtual void SetUp() OVERRIDE {
+    const testing::TestInfo* const test_info =
+        testing::UnitTest::GetInstance()->current_test_info();
+
+    // SpeechRecognition test specific SetUp.
+    if (!strcmp(test_info->name(), "SpeechRecognition")) {
+      fake_speech_recognition_manager_.reset(
+          new content::FakeSpeechRecognitionManager());
+      fake_speech_recognition_manager_->set_should_send_fake_response(true);
+      // Inject the fake manager factory so that the test result is returned to
+      // the web page.
+      content::SpeechRecognitionManager::SetManagerForTests(
+          fake_speech_recognition_manager_.get());
+    }
+
+    extensions::PlatformAppBrowserTest::SetUp();
+  }
+
+  virtual void TearDown() OVERRIDE {
+    // SpeechRecognition test specific TearDown.
+    const testing::TestInfo* const test_info =
+        testing::UnitTest::GetInstance()->current_test_info();
+    if (!strcmp(test_info->name(), "SpeechRecognition"))
+      content::SpeechRecognitionManager::SetManagerForTests(NULL);
+
+    extensions::PlatformAppBrowserTest::TearDown();
+  }
+
+  virtual void SetUpOnMainThread() OVERRIDE {
+    const testing::TestInfo* const test_info =
+        testing::UnitTest::GetInstance()->current_test_info();
+    // Mock out geolocation for geolocation specific tests.
+    if (!strncmp(test_info->name(), "GeolocationAPI",
+            strlen("GeolocationAPI"))) {
+      ui_test_utils::OverrideGeolocation(10, 20);
+    }
   }
 
   // This method is responsible for initializing a packaged app, which contains
@@ -55,25 +137,25 @@ class WebViewTest : public extensions::PlatformAppBrowserTest {
     navigate_to_url = navigate_to_url.ReplaceComponents(replace_host);
 
     GURL tag_url1 = test_server()->GetURL(
-        "files/extensions/platform_apps/web_view_isolation/cookie.html");
+        "files/extensions/platform_apps/web_view/isolation/cookie.html");
     tag_url1 = tag_url1.ReplaceComponents(replace_host);
     GURL tag_url2 = test_server()->GetURL(
-        "files/extensions/platform_apps/web_view_isolation/cookie2.html");
+        "files/extensions/platform_apps/web_view/isolation/cookie2.html");
     tag_url2 = tag_url2.ReplaceComponents(replace_host);
     GURL tag_url3 = test_server()->GetURL(
-        "files/extensions/platform_apps/web_view_isolation/storage1.html");
+        "files/extensions/platform_apps/web_view/isolation/storage1.html");
     tag_url3 = tag_url3.ReplaceComponents(replace_host);
     GURL tag_url4 = test_server()->GetURL(
-        "files/extensions/platform_apps/web_view_isolation/storage2.html");
+        "files/extensions/platform_apps/web_view/isolation/storage2.html");
     tag_url4 = tag_url4.ReplaceComponents(replace_host);
     GURL tag_url5 = test_server()->GetURL(
-        "files/extensions/platform_apps/web_view_isolation/storage1.html#p1");
+        "files/extensions/platform_apps/web_view/isolation/storage1.html#p1");
     tag_url5 = tag_url5.ReplaceComponents(replace_host);
     GURL tag_url6 = test_server()->GetURL(
-        "files/extensions/platform_apps/web_view_isolation/storage1.html#p2");
+        "files/extensions/platform_apps/web_view/isolation/storage1.html#p2");
     tag_url6 = tag_url6.ReplaceComponents(replace_host);
     GURL tag_url7 = test_server()->GetURL(
-        "files/extensions/platform_apps/web_view_isolation/storage1.html#p3");
+        "files/extensions/platform_apps/web_view/isolation/storage1.html#p3");
     tag_url7 = tag_url7.ReplaceComponents(replace_host);
 
     ui_test_utils::NavigateToURLWithDisposition(
@@ -94,7 +176,7 @@ class WebViewTest : public extensions::PlatformAppBrowserTest {
         tag_url6, content::NotificationService::AllSources());
     ui_test_utils::UrlLoadObserver observer7(
         tag_url7, content::NotificationService::AllSources());
-    LoadAndLaunchPlatformApp("web_view_isolation");
+    LoadAndLaunchPlatformApp("web_view/isolation");
     observer1.Wait();
     observer2.Wait();
     observer3.Wait();
@@ -129,10 +211,10 @@ class WebViewTest : public extensions::PlatformAppBrowserTest {
 
     // The two sets of tags should also be isolated from the main browser.
     EXPECT_NE(source1->GetWebContents()->GetRenderProcessHost()->GetID(),
-              chrome::GetWebContentsAt(browser(), 0)->
+              browser()->tab_strip_model()->GetWebContentsAt(0)->
                   GetRenderProcessHost()->GetID());
     EXPECT_NE(source3->GetWebContents()->GetRenderProcessHost()->GetID(),
-              chrome::GetWebContentsAt(browser(), 0)->
+              browser()->tab_strip_model()->GetWebContentsAt(0)->
                   GetRenderProcessHost()->GetID());
 
     // Check that the storage partitions of the first two tags match and are
@@ -193,25 +275,68 @@ class WebViewTest : public extensions::PlatformAppBrowserTest {
   void ExecuteScriptWaitForTitle(content::WebContents* web_contents,
                                  const char* script,
                                  const char* title) {
-    std::wstring js_script = ASCIIToWide(script);
     string16 expected_title(ASCIIToUTF16(title));
     string16 error_title(ASCIIToUTF16("error"));
 
     content::TitleWatcher title_watcher(web_contents, expected_title);
     title_watcher.AlsoWaitForTitle(error_title);
-    EXPECT_TRUE(content::ExecuteJavaScript(web_contents->GetRenderViewHost(),
-                                           std::wstring(), js_script));
+    EXPECT_TRUE(content::ExecuteScript(web_contents, script));
     EXPECT_EQ(expected_title, title_watcher.WaitAndGetTitle());
   }
+
+  scoped_ptr<content::FakeSpeechRecognitionManager>
+      fake_speech_recognition_manager_;
 };
 
-IN_PROC_BROWSER_TEST_F(WebViewTest, Shim) {
-  ASSERT_TRUE(RunPlatformAppTest("platform_apps/web_view")) << message_;
+// http://crbug.com/176122: This test is flaky on Windows.
+#if defined(OS_WIN)
+#define MAYBE_Shim DISABLED_Shim
+#else
+#define MAYBE_Shim Shim
+#endif
+IN_PROC_BROWSER_TEST_F(WebViewTest, MAYBE_Shim) {
+  ASSERT_TRUE(StartTestServer());
+  ASSERT_TRUE(RunPlatformAppTest("platform_apps/web_view/shim")) << message_;
 }
 
 IN_PROC_BROWSER_TEST_F(WebViewTest, ShimSrcAttribute) {
-  ASSERT_TRUE(RunPlatformAppTest("platform_apps/web_view_src_attribute"))
+  ASSERT_TRUE(RunPlatformAppTest("platform_apps/web_view/src_attribute"))
       << message_;
+}
+
+// This test verifies that prerendering has been disabled inside <webview>.
+// This test is here rather than in PrerenderBrowserTest for testing convenience
+// only. If it breaks then this is a bug in the prerenderer.
+IN_PROC_BROWSER_TEST_F(WebViewTest, NoPrerenderer) {
+  ASSERT_TRUE(StartTestServer());
+  std::string host_str("localhost");  // Must stay in scope with replace_host.
+  GURL::Replacements replace_host;
+  replace_host.SetHostStr(host_str);
+
+  GURL guest_url = test_server()->GetURL(
+      "files/extensions/platform_apps/web_view/noprerenderer/guest.html");
+  guest_url = guest_url.ReplaceComponents(replace_host);
+
+  ui_test_utils::UrlLoadObserver guest_observer(
+      guest_url, content::NotificationService::AllSources());
+
+  ExtensionTestMessageListener guest_loaded_listener("guest-loaded", false);
+  LoadAndLaunchPlatformApp("web_view/noprerenderer");
+  guest_observer.Wait();
+
+  content::Source<content::NavigationController> source =
+      guest_observer.source();
+  EXPECT_TRUE(source->GetWebContents()->GetRenderProcessHost()->IsGuest());
+
+  ASSERT_TRUE(guest_loaded_listener.WaitUntilSatisfied());
+  content::WebContents* guest_web_contents = source->GetWebContents();
+  ASSERT_TRUE(guest_web_contents != NULL);
+
+  PrerenderLinkManager* prerender_link_manager =
+      PrerenderLinkManagerFactory::GetForProfile(
+          Profile::FromBrowserContext(guest_web_contents->GetBrowserContext()));
+  ASSERT_TRUE(prerender_link_manager != NULL);
+  EXPECT_TRUE(prerender_link_manager->IsEmpty());
 }
 
 // This tests cookie isolation for packaged apps with webview tags. It navigates
@@ -220,14 +345,14 @@ IN_PROC_BROWSER_TEST_F(WebViewTest, ShimSrcAttribute) {
 // storage isolation is enforced.
 IN_PROC_BROWSER_TEST_F(WebViewTest, CookieIsolation) {
   ASSERT_TRUE(StartTestServer());
-  const std::wstring kExpire =
-      L"var expire = new Date(Date.now() + 24 * 60 * 60 * 1000);";
-  std::wstring cookie_script1(kExpire);
+  const std::string kExpire =
+      "var expire = new Date(Date.now() + 24 * 60 * 60 * 1000);";
+  std::string cookie_script1(kExpire);
   cookie_script1.append(
-      L"document.cookie = 'guest1=true; path=/; expires=' + expire + ';';");
-  std::wstring cookie_script2(kExpire);
+      "document.cookie = 'guest1=true; path=/; expires=' + expire + ';';");
+  std::string cookie_script2(kExpire);
   cookie_script2.append(
-      L"document.cookie = 'guest2=true; path=/; expires=' + expire + ';';");
+      "document.cookie = 'guest2=true; path=/; expires=' + expire + ';';");
 
   GURL::Replacements replace_host;
   std::string host_str("localhost");  // Must stay in scope with replace_host.
@@ -249,17 +374,15 @@ IN_PROC_BROWSER_TEST_F(WebViewTest, CookieIsolation) {
                                  &cookie_contents2, &named_partition_contents1,
                                  &named_partition_contents2, NULL, NULL, NULL);
 
-  EXPECT_TRUE(content::ExecuteJavaScript(
-      cookie_contents1->GetRenderViewHost(), std::wstring(), cookie_script1));
-  EXPECT_TRUE(content::ExecuteJavaScript(
-      cookie_contents2->GetRenderViewHost(), std::wstring(), cookie_script2));
+  EXPECT_TRUE(content::ExecuteScript(cookie_contents1, cookie_script1));
+  EXPECT_TRUE(content::ExecuteScript(cookie_contents2, cookie_script2));
 
   int cookie_size;
   std::string cookie_value;
 
   // Test the regular browser context to ensure we have only one cookie.
   automation_util::GetCookies(GURL("http://localhost"),
-                              chrome::GetWebContentsAt(browser(), 0),
+                              browser()->tab_strip_model()->GetWebContentsAt(0),
                               &cookie_size, &cookie_value);
   EXPECT_EQ("testCookie=1", cookie_value);
 
@@ -288,17 +411,17 @@ IN_PROC_BROWSER_TEST_F(WebViewTest, CookieIsolation) {
 // but persistent ones maintain state for cookies and HTML5 storage.
 IN_PROC_BROWSER_TEST_F(WebViewTest, PRE_StoragePersistence) {
   ASSERT_TRUE(StartTestServer());
-  const std::wstring kExpire =
-      L"var expire = new Date(Date.now() + 24 * 60 * 60 * 1000);";
-  std::wstring cookie_script1(kExpire);
+  const std::string kExpire =
+      "var expire = new Date(Date.now() + 24 * 60 * 60 * 1000);";
+  std::string cookie_script1(kExpire);
   cookie_script1.append(
-      L"document.cookie = 'inmemory=true; path=/; expires=' + expire + ';';");
-  std::wstring cookie_script2(kExpire);
+      "document.cookie = 'inmemory=true; path=/; expires=' + expire + ';';");
+  std::string cookie_script2(kExpire);
   cookie_script2.append(
-      L"document.cookie = 'persist1=true; path=/; expires=' + expire + ';';");
-  std::wstring cookie_script3(kExpire);
+      "document.cookie = 'persist1=true; path=/; expires=' + expire + ';';");
+  std::string cookie_script3(kExpire);
   cookie_script3.append(
-      L"document.cookie = 'persist2=true; path=/; expires=' + expire + ';';");
+      "document.cookie = 'persist2=true; path=/; expires=' + expire + ';';");
 
   // We don't care where the main browser is on this test.
   GURL blank_url("about:blank");
@@ -321,22 +444,17 @@ IN_PROC_BROWSER_TEST_F(WebViewTest, PRE_StoragePersistence) {
                                  &persistent_partition_contents3);
 
   // Set the inmemory=true cookie for tags with inmemory partitions.
-  EXPECT_TRUE(content::ExecuteJavaScript(
-      cookie_contents1->GetRenderViewHost(), std::wstring(),
-      cookie_script1));
-  EXPECT_TRUE(content::ExecuteJavaScript(
-      named_partition_contents1->GetRenderViewHost(), std::wstring(),
-      cookie_script1));
+  EXPECT_TRUE(content::ExecuteScript(cookie_contents1, cookie_script1));
+  EXPECT_TRUE(content::ExecuteScript(named_partition_contents1,
+                                     cookie_script1));
 
   // For the two different persistent storage partitions, set the
   // two different cookies so we can check that they aren't comingled below.
-  EXPECT_TRUE(content::ExecuteJavaScript(
-      persistent_partition_contents1->GetRenderViewHost(), std::wstring(),
-      cookie_script2));
+  EXPECT_TRUE(content::ExecuteScript(persistent_partition_contents1,
+                                     cookie_script2));
 
-  EXPECT_TRUE(content::ExecuteJavaScript(
-      persistent_partition_contents3->GetRenderViewHost(), std::wstring(),
-      cookie_script3));
+  EXPECT_TRUE(content::ExecuteScript(persistent_partition_contents3,
+                                     cookie_script3));
 
   int cookie_size;
   std::string cookie_value;
@@ -444,10 +562,10 @@ IN_PROC_BROWSER_TEST_F(WebViewTest, DOMStorageIsolation) {
   GURL regular_url = test_server()->GetURL("files/title1.html");
 
   std::string output;
-  std::wstring get_local_storage(L"window.domAutomationController.send("
-      L"window.localStorage.getItem('foo') || 'badval')");
-  std::wstring get_session_storage(L"window.domAutomationController.send("
-      L"window.sessionStorage.getItem('bar') || 'badval')");
+  std::string get_local_storage("window.domAutomationController.send("
+      "window.localStorage.getItem('foo') || 'badval')");
+  std::string get_session_storage("window.domAutomationController.send("
+      "window.sessionStorage.getItem('bar') || 'badval')");
 
   content::WebContents* default_tag_contents1;
   content::WebContents* default_tag_contents2;
@@ -460,66 +578,66 @@ IN_PROC_BROWSER_TEST_F(WebViewTest, DOMStorageIsolation) {
 
   // Initialize the storage for the first of the two tags that share a storage
   // partition.
-  EXPECT_TRUE(content::ExecuteJavaScript(
-      storage_contents1->GetRenderViewHost(), std::wstring(),
-      L"initDomStorage('page1')"));
+  EXPECT_TRUE(content::ExecuteScript(storage_contents1,
+                                     "initDomStorage('page1')"));
 
   // Let's test that the expected values are present in the first tag, as they
   // will be overwritten once we call the initDomStorage on the second tag.
-  EXPECT_TRUE(ExecuteJavaScriptAndExtractString(
-      storage_contents1->GetRenderViewHost(), std::wstring(),
-      get_local_storage.c_str(), &output));
+  EXPECT_TRUE(ExecuteScriptAndExtractString(storage_contents1,
+                                            get_local_storage.c_str(),
+                                            &output));
   EXPECT_STREQ("local-page1", output.c_str());
-  EXPECT_TRUE(ExecuteJavaScriptAndExtractString(
-      storage_contents1->GetRenderViewHost(), std::wstring(),
-      get_session_storage.c_str(), &output));
+  EXPECT_TRUE(ExecuteScriptAndExtractString(storage_contents1,
+                                            get_session_storage.c_str(),
+                                            &output));
   EXPECT_STREQ("session-page1", output.c_str());
 
   // Now, init the storage in the second tag in the same storage partition,
   // which will overwrite the shared localStorage.
-  EXPECT_TRUE(content::ExecuteJavaScript(
-      storage_contents2->GetRenderViewHost(), std::wstring(),
-      L"initDomStorage('page2')"));
+  EXPECT_TRUE(content::ExecuteScript(storage_contents2,
+                                     "initDomStorage('page2')"));
 
   // The localStorage value now should reflect the one written through the
   // second tag.
-  EXPECT_TRUE(ExecuteJavaScriptAndExtractString(
-      storage_contents1->GetRenderViewHost(), std::wstring(),
-      get_local_storage.c_str(), &output));
+  EXPECT_TRUE(ExecuteScriptAndExtractString(storage_contents1,
+                                            get_local_storage.c_str(),
+                                            &output));
   EXPECT_STREQ("local-page2", output.c_str());
-  EXPECT_TRUE(ExecuteJavaScriptAndExtractString(
-      storage_contents2->GetRenderViewHost(), std::wstring(),
-      get_local_storage.c_str(), &output));
+  EXPECT_TRUE(ExecuteScriptAndExtractString(storage_contents2,
+                                            get_local_storage.c_str(),
+                                            &output));
   EXPECT_STREQ("local-page2", output.c_str());
 
   // Session storage is not shared though, as each webview tag has separate
   // instance, even if they are in the same storage partition.
-  EXPECT_TRUE(ExecuteJavaScriptAndExtractString(
-      storage_contents1->GetRenderViewHost(), std::wstring(),
-      get_session_storage.c_str(), &output));
+  EXPECT_TRUE(ExecuteScriptAndExtractString(storage_contents1,
+                                            get_session_storage.c_str(),
+                                            &output));
   EXPECT_STREQ("session-page1", output.c_str());
-  EXPECT_TRUE(ExecuteJavaScriptAndExtractString(
-      storage_contents2->GetRenderViewHost(), std::wstring(),
-      get_session_storage.c_str(), &output));
+  EXPECT_TRUE(ExecuteScriptAndExtractString(storage_contents2,
+                                            get_session_storage.c_str(),
+                                            &output));
   EXPECT_STREQ("session-page2", output.c_str());
 
   // Also, let's check that the main browser and another tag that doesn't share
   // the same partition don't have those values stored.
-  EXPECT_TRUE(ExecuteJavaScriptAndExtractString(
-      chrome::GetWebContentsAt(browser(), 0)->GetRenderViewHost(),
-      std::wstring(), get_local_storage.c_str(), &output));
+  EXPECT_TRUE(ExecuteScriptAndExtractString(
+      browser()->tab_strip_model()->GetWebContentsAt(0),
+      get_local_storage.c_str(),
+      &output));
   EXPECT_STREQ("badval", output.c_str());
-  EXPECT_TRUE(ExecuteJavaScriptAndExtractString(
-      chrome::GetWebContentsAt(browser(), 0)->GetRenderViewHost(),
-      std::wstring(), get_session_storage.c_str(), &output));
+  EXPECT_TRUE(ExecuteScriptAndExtractString(
+      browser()->tab_strip_model()->GetWebContentsAt(0),
+      get_session_storage.c_str(),
+      &output));
   EXPECT_STREQ("badval", output.c_str());
-  EXPECT_TRUE(ExecuteJavaScriptAndExtractString(
-      default_tag_contents1->GetRenderViewHost(), std::wstring(),
-      get_local_storage.c_str(), &output));
+  EXPECT_TRUE(ExecuteScriptAndExtractString(default_tag_contents1,
+                                            get_local_storage.c_str(),
+                                            &output));
   EXPECT_STREQ("badval", output.c_str());
-  EXPECT_TRUE(ExecuteJavaScriptAndExtractString(
-      default_tag_contents1->GetRenderViewHost(), std::wstring(),
-      get_session_storage.c_str(), &output));
+  EXPECT_TRUE(ExecuteScriptAndExtractString(default_tag_contents1,
+                                            get_session_storage.c_str(),
+                                            &output));
   EXPECT_STREQ("badval", output.c_str());
 }
 
@@ -548,12 +666,11 @@ IN_PROC_BROWSER_TEST_F(WebViewTest, IndexedDBIsolation) {
                             "readItemIDB complete");
 
   std::string output;
-  std::wstring get_value(
-      L"window.domAutomationController.send(getValueIDB() || 'badval')");
+  std::string get_value(
+      "window.domAutomationController.send(getValueIDB() || 'badval')");
 
-  EXPECT_TRUE(ExecuteJavaScriptAndExtractString(
-      storage_contents1->GetRenderViewHost(), std::wstring(),
-      get_value.c_str(), &output));
+  EXPECT_TRUE(ExecuteScriptAndExtractString(storage_contents1,
+                                            get_value.c_str(), &output));
   EXPECT_STREQ("page1", output.c_str());
 
   // Initialize the db in the second tag.
@@ -563,9 +680,8 @@ IN_PROC_BROWSER_TEST_F(WebViewTest, IndexedDBIsolation) {
   // one.
   ExecuteScriptWaitForTitle(storage_contents2, "readItemIDB(7)",
                             "readItemIDB complete");
-  EXPECT_TRUE(ExecuteJavaScriptAndExtractString(
-      storage_contents2->GetRenderViewHost(), std::wstring(),
-      get_value.c_str(), &output));
+  EXPECT_TRUE(ExecuteScriptAndExtractString(storage_contents2,
+                                            get_value.c_str(), &output));
   EXPECT_STREQ("page1", output.c_str());
 
   // Now write through the second tag and read it back.
@@ -573,23 +689,20 @@ IN_PROC_BROWSER_TEST_F(WebViewTest, IndexedDBIsolation) {
                             "addItemIDB complete");
   ExecuteScriptWaitForTitle(storage_contents2, "readItemIDB(7)",
                             "readItemIDB complete");
-  EXPECT_TRUE(ExecuteJavaScriptAndExtractString(
-      storage_contents2->GetRenderViewHost(), std::wstring(),
-      get_value.c_str(), &output));
+  EXPECT_TRUE(ExecuteScriptAndExtractString(storage_contents2,
+                                            get_value.c_str(), &output));
   EXPECT_STREQ("page2", output.c_str());
 
   // Reset the document title, otherwise the next call will not see a change and
   // will hang waiting for it.
-  EXPECT_TRUE(content::ExecuteJavaScript(
-      storage_contents1->GetRenderViewHost(), std::wstring(),
-      L"document.title = 'foo'"));
+  EXPECT_TRUE(content::ExecuteScript(storage_contents1,
+                                     "document.title = 'foo'"));
 
   // Read through the first tag to ensure we have the second value.
   ExecuteScriptWaitForTitle(storage_contents1, "readItemIDB(7)",
                             "readItemIDB complete");
-  EXPECT_TRUE(ExecuteJavaScriptAndExtractString(
-      storage_contents1->GetRenderViewHost(), std::wstring(),
-      get_value.c_str(), &output));
+  EXPECT_TRUE(ExecuteScriptAndExtractString(storage_contents1,
+                                            get_value.c_str(), &output));
   EXPECT_STREQ("page2", output.c_str());
 
   // Now, let's confirm there is no database in the main browser and another
@@ -598,13 +711,152 @@ IN_PROC_BROWSER_TEST_F(WebViewTest, IndexedDBIsolation) {
   // if it is not found. The two tags use database version 3, so we avoid
   // ambiguity.
   const char* script =
-    "indexedDB.open('isolation').onsuccess = function(e) {"
-    "  if (e.target.result.version == 1)"
-    "    document.title = 'db not found';"
-    "  else "
-    "    document.title = 'error';"
-    "}";
-  ExecuteScriptWaitForTitle(chrome::GetWebContentsAt(browser(), 0),
+      "indexedDB.open('isolation').onsuccess = function(e) {"
+      "  if (e.target.result.version == 1)"
+      "    document.title = 'db not found';"
+      "  else "
+      "    document.title = 'error';"
+      "}";
+  ExecuteScriptWaitForTitle(browser()->tab_strip_model()->GetWebContentsAt(0),
                             script, "db not found");
   ExecuteScriptWaitForTitle(default_tag_contents1, script, "db not found");
+}
+
+// This test ensures that closing app window on 'loadcommit' does not crash.
+// The test launches an app with guest and closes the window on loadcommit. It
+// then launches the app window again. The process is repeated 3 times.
+IN_PROC_BROWSER_TEST_F(WebViewTest, CloseOnLoadcommit) {
+  ExtensionTestMessageListener done_test_listener(
+      "done-close-on-loadcommit", false);
+  LoadAndLaunchPlatformApp("web_view/close_on_loadcommit");
+  ASSERT_TRUE(done_test_listener.WaitUntilSatisfied());
+}
+
+IN_PROC_BROWSER_TEST_F(WebViewTest, MediaAccessAPIDeny) {
+  ASSERT_TRUE(StartTestServer());  // For serving guest pages.
+  ASSERT_TRUE(RunPlatformAppTest(
+      "platform_apps/web_view/media_access/deny")) << message_;
+}
+
+IN_PROC_BROWSER_TEST_F(WebViewTest, MediaAccessAPIAllow) {
+  ASSERT_TRUE(StartTestServer());  // For serving guest pages.
+  ExtensionTestMessageListener launched_listener("Launched", false);
+  LoadAndLaunchPlatformApp("web_view/media_access/allow");
+  ASSERT_TRUE(launched_listener.WaitUntilSatisfied());
+
+  content::WebContents* embedder_web_contents =
+      GetFirstShellWindowWebContents();
+  ASSERT_TRUE(embedder_web_contents);
+  MockWebContentsDelegate* mock = new MockWebContentsDelegate;
+  embedder_web_contents->SetDelegate(mock);
+
+  const size_t num_tests = 4;
+  std::string test_names[num_tests] = {
+    "testAllow",
+    "testAllowAndThenDeny",
+    "testAllowTwice",
+    "testAllowAsync",
+  };
+  for (size_t i = 0; i < num_tests; ++i) {
+    ExtensionTestMessageListener done_listener("DoneMediaTest", false);
+    EXPECT_TRUE(
+        content::ExecuteScript(
+            embedder_web_contents,
+            base::StringPrintf("startAllowTest('%s')",
+                               test_names[i].c_str())));
+    done_listener.WaitUntilSatisfied();
+
+    std::string result;
+    EXPECT_TRUE(
+        content::ExecuteScriptAndExtractString(
+            embedder_web_contents,
+            "window.domAutomationController.send(getTestStatus())", &result));
+    ASSERT_EQ(std::string("PASSED"), result);
+
+    mock->WaitForSetMediaPermission();
+  }
+}
+
+IN_PROC_BROWSER_TEST_F(WebViewTest, SpeechRecognition) {
+  ASSERT_TRUE(StartTestServer());
+  std::string host_str("localhost");  // Must stay in scope with replace_host.
+  GURL::Replacements replace_host;
+  replace_host.SetHostStr(host_str);
+
+  GURL guest_url = test_server()->GetURL(
+      "files/extensions/platform_apps/web_view/speech/guest.html");
+  guest_url = guest_url.ReplaceComponents(replace_host);
+
+  ui_test_utils::UrlLoadObserver guest_observer(
+      guest_url, content::NotificationService::AllSources());
+
+  ExtensionTestMessageListener guest_loaded_listener("guest-loaded", false);
+  LoadAndLaunchPlatformApp("web_view/speech");
+  guest_observer.Wait();
+
+  content::Source<content::NavigationController> source =
+      guest_observer.source();
+  EXPECT_TRUE(source->GetWebContents()->GetRenderProcessHost()->IsGuest());
+
+  ASSERT_TRUE(guest_loaded_listener.WaitUntilSatisfied());
+  content::WebContents* guest_web_contents = source->GetWebContents();
+  // Click on the guest (center of the WebContents), the guest is rendered in a
+  // way that this will trigger clicking on speech recognition input mic.
+  SimulateMouseClick(guest_web_contents, 0, WebKit::WebMouseEvent::ButtonLeft);
+
+  string16 expected_title(ASCIIToUTF16("PASSED"));
+  string16 error_title(ASCIIToUTF16("FAILED"));
+  content::TitleWatcher title_watcher(guest_web_contents, expected_title);
+  title_watcher.AlsoWaitForTitle(error_title);
+  EXPECT_EQ(expected_title, title_watcher.WaitAndGetTitle());
+}
+
+IN_PROC_BROWSER_TEST_F(WebViewTest, TearDownTest) {
+  ExtensionTestMessageListener first_loaded_listener("guest-loaded", false);
+  const extensions::Extension* extension =
+      LoadAndLaunchPlatformApp("web_view/teardown");
+  ASSERT_TRUE(first_loaded_listener.WaitUntilSatisfied());
+  ShellWindow* window = NULL;
+  if (!GetShellWindowCount())
+    window = CreateShellWindow(extension);
+  else
+    window = GetFirstShellWindow();
+  CloseShellWindow(window);
+
+  // Load the app again.
+  ExtensionTestMessageListener second_loaded_listener("guest-loaded", false);
+  LoadAndLaunchPlatformApp("web_view/teardown");
+  ASSERT_TRUE(second_loaded_listener.WaitUntilSatisfied());
+}
+
+// Embedder does not have geolocation permission for this test.
+// No matter what the API does, geolocation permission would be denied.
+// Note that the test name prefix must be "GeolocationAPI".
+IN_PROC_BROWSER_TEST_F(WebViewTest, GeolocationAPIEmbedderHasNoAccess) {
+  ASSERT_TRUE(StartTestServer());  // For serving guest pages.
+  ASSERT_TRUE(RunPlatformAppTest(
+      "platform_apps/web_view/geolocation/embedder_has_no_permission"))
+          << message_;
+}
+
+// Embedder has geolocation permission for this test.
+// Note that the test name prefix must be "GeolocationAPI".
+IN_PROC_BROWSER_TEST_F(WebViewTest, GeolocationAPIEmbedderHasAccess) {
+  ASSERT_TRUE(StartTestServer());  // For serving guest pages.
+  ASSERT_TRUE(RunPlatformAppTest(
+      "platform_apps/web_view/geolocation/embedder_has_permission"))
+          << message_;
+}
+
+// Disabled on win debug bots due to flaky timeouts.
+// See http://crbug.com/222618 .
+#if defined(OS_WIN) && !defined(NDEBUG)
+#define MAYBE_NewWindow DISABLED_NewWindow
+#else
+#define MAYBE_NewWindow NewWindow
+#endif
+IN_PROC_BROWSER_TEST_F(WebViewTest, MAYBE_NewWindow) {
+  ASSERT_TRUE(StartTestServer());  // For serving guest pages.
+  ASSERT_TRUE(RunPlatformAppTest("platform_apps/web_view/newwindow"))
+      << message_;
 }

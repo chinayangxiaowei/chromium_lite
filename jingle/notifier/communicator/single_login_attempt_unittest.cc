@@ -12,7 +12,7 @@
 #include "jingle/notifier/base/const_communicator.h"
 #include "jingle/notifier/base/fake_base_task.h"
 #include "jingle/notifier/communicator/login_settings.h"
-#include "net/base/mock_host_resolver.h"
+#include "net/dns/mock_host_resolver.h"
 #include "net/url_request/url_request_test_util.h"
 #include "talk/xmllite/xmlelement.h"
 #include "talk/xmpp/constants.h"
@@ -35,7 +35,7 @@ class FakeDelegate : public SingleLoginAttempt::Delegate {
  public:
   FakeDelegate() : state_(IDLE) {}
 
-  void OnConnect(
+  virtual void OnConnect(
       base::WeakPtr<buzz::XmppTaskParentInterface> base_task) OVERRIDE {
     state_ = CONNECTED;
     base_task_ = base_task;

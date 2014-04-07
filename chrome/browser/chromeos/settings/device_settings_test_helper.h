@@ -14,10 +14,10 @@
 #include "base/memory/ref_counted.h"
 #include "base/message_loop.h"
 #include "base/string_util.h"
+#include "chrome/browser/chromeos/policy/device_policy_builder.h"
 #include "chrome/browser/chromeos/settings/device_settings_service.h"
 #include "chrome/browser/chromeos/settings/device_settings_test_helper.h"
 #include "chrome/browser/chromeos/settings/mock_owner_key_util.h"
-#include "chrome/browser/policy/policy_builder.h"
 #include "chromeos/dbus/session_manager_client.h"
 #include "content/public/test/test_browser_thread.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -92,7 +92,6 @@ class DeviceSettingsTestHelper : public SessionManagerClient {
   virtual void NotifyLockScreenShown() OVERRIDE;
   virtual void RequestUnlockScreen() OVERRIDE;
   virtual void NotifyLockScreenDismissed() OVERRIDE;
-  virtual bool GetIsScreenLocked() OVERRIDE;
   virtual void RetrieveDevicePolicy(
       const RetrievePolicyCallback& callback) OVERRIDE;
   virtual void RetrieveUserPolicy(

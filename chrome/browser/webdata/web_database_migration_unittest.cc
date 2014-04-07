@@ -10,20 +10,23 @@
 #include "base/message_loop.h"
 #include "base/stl_util.h"
 #include "base/string16.h"
-#include "base/string_number_conversions.h"
+#include "base/strings/string_number_conversions.h"
 #include "base/time.h"
 #include "base/utf_string_conversions.h"
 #include "base/values.h"
-#include "chrome/browser/autofill/autofill_profile.h"
-#include "chrome/browser/autofill/autofill_type.h"
-#include "chrome/browser/autofill/credit_card.h"
 #include "chrome/browser/webdata/autofill_change.h"
 #include "chrome/browser/webdata/autofill_entry.h"
+#include "chrome/browser/webdata/autofill_table.h"
 #include "chrome/browser/webdata/keyword_table.h"
+#include "chrome/browser/webdata/logins_table.h"
+#include "chrome/browser/webdata/token_service_table.h"
+#include "chrome/browser/webdata/web_apps_table.h"
 #include "chrome/browser/webdata/web_database.h"
 #include "chrome/browser/webdata/web_intents_table.h"
-#include "chrome/common/chrome_paths.h"
 #include "chrome/test/base/ui_test_utils.h"
+#include "components/autofill/browser/autofill_profile.h"
+#include "components/autofill/browser/autofill_type.h"
+#include "components/autofill/browser/credit_card.h"
 #include "content/public/test/test_browser_thread.h"
 #include "sql/statement.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -164,6 +167,32 @@ class WebDatabaseMigrationTest : public testing::Test {
     ASSERT_TRUE(temp_dir_.CreateUniqueTempDir());
   }
 
+  // Load the database via the WebDatabase class and migrate the database to
+  // the current version.
+  void DoMigration() {
+    // TODO(joi): This whole unit test file needs to stay in //chrome
+    // for now, as it needs to know about all the different table
+    // types. Once all webdata datatypes have been componentized, this
+    // could move to components_unittests.
+    AutofillTable autofill_table;
+    KeywordTable keyword_table;
+    LoginsTable logins_table;
+    TokenServiceTable token_service_table;
+    WebAppsTable web_apps_table;
+    WebIntentsTable web_intents_table;
+
+    WebDatabase db;
+    db.AddTable(&autofill_table);
+    db.AddTable(&keyword_table);
+    db.AddTable(&logins_table);
+    db.AddTable(&token_service_table);
+    db.AddTable(&web_apps_table);
+    db.AddTable(&web_intents_table);
+
+    // This causes the migration to occur.
+    ASSERT_EQ(sql::INIT_OK, db.Init(GetDatabasePath(), std::string()));
+  }
+
  protected:
   // Current tested version number.  When adding a migration in
   // |WebDatabase::MigrateOldVersionsAsNeeded()| and changing the version number
@@ -171,18 +200,18 @@ class WebDatabaseMigrationTest : public testing::Test {
   // number and a new migration test added below.
   static const int kCurrentTestedVersionNumber;
 
-  FilePath GetDatabasePath() {
-    const FilePath::CharType kWebDatabaseFilename[] =
+  base::FilePath GetDatabasePath() {
+    const base::FilePath::CharType kWebDatabaseFilename[] =
         FILE_PATH_LITERAL("TestWebDatabase.sqlite3");
-    return temp_dir_.path().Append(FilePath(kWebDatabaseFilename));
+    return temp_dir_.path().Append(base::FilePath(kWebDatabaseFilename));
   }
 
   // The textual contents of |file| are read from
   // "chrome/test/data/web_database" and returned in the string |contents|.
   // Returns true if the file exists and is read successfully, false otherwise.
-  bool GetWebDatabaseData(const FilePath& file, std::string* contents) {
-    FilePath path = ui_test_utils::GetTestFilePath(
-        FilePath(FILE_PATH_LITERAL("web_database")), file);
+  bool GetWebDatabaseData(const base::FilePath& file, std::string* contents) {
+    base::FilePath path = ui_test_utils::GetTestFilePath(
+        base::FilePath(FILE_PATH_LITERAL("web_database")), file);
     return file_util::PathExists(path) &&
         file_util::ReadFileToString(path, contents);
   }
@@ -203,7 +232,7 @@ class WebDatabaseMigrationTest : public testing::Test {
   // Like this:
   //   > .output version_nn.sql
   //   > .dump
-  void LoadDatabase(const FilePath::StringType& file);
+  void LoadDatabase(const base::FilePath::StringType& file);
 
  private:
   MessageLoopForUI message_loop_for_ui_;
@@ -213,11 +242,12 @@ class WebDatabaseMigrationTest : public testing::Test {
   DISALLOW_COPY_AND_ASSIGN(WebDatabaseMigrationTest);
 };
 
-const int WebDatabaseMigrationTest::kCurrentTestedVersionNumber = 48;
+const int WebDatabaseMigrationTest::kCurrentTestedVersionNumber = 49;
 
-void WebDatabaseMigrationTest::LoadDatabase(const FilePath::StringType& file) {
+void WebDatabaseMigrationTest::LoadDatabase(
+    const base::FilePath::StringType& file) {
   std::string contents;
-  ASSERT_TRUE(GetWebDatabaseData(FilePath(file), &contents));
+  ASSERT_TRUE(GetWebDatabaseData(base::FilePath(file), &contents));
 
   sql::Connection connection;
   ASSERT_TRUE(connection.Open(GetDatabasePath()));
@@ -226,12 +256,7 @@ void WebDatabaseMigrationTest::LoadDatabase(const FilePath::StringType& file) {
 
 // Tests that the all migrations from an empty database succeed.
 TEST_F(WebDatabaseMigrationTest, MigrateEmptyToCurrent) {
-  // Load the database via the WebDatabase class and migrate the database to
-  // the current version.
-  {
-    WebDatabase db;
-    ASSERT_EQ(sql::INIT_OK, db.Init(GetDatabasePath()));
-  }
+  DoMigration();
 
   // Verify post-conditions.  These are expectations for current version of the
   // database.
@@ -278,12 +303,7 @@ TEST_F(WebDatabaseMigrationTest, MigrateVersion22ToCurrent) {
         connection.DoesColumnExist("credit_cards", "card_number_encrypted"));
   }
 
-  // Load the database via the WebDatabase class and migrate the database to
-  // the current version.
-  {
-    WebDatabase db;
-    ASSERT_EQ(sql::INIT_OK, db.Init(GetDatabasePath()));
-  }
+  DoMigration();
 
   // Verify post-conditions.  These are expectations for current version of the
   // database.
@@ -326,12 +346,7 @@ TEST_F(WebDatabaseMigrationTest, MigrateVersion22CorruptedToCurrent) {
     ASSERT_TRUE(connection.DoesColumnExist("keywords", "id"));
   }
 
-  // Load the database via the WebDatabase class and migrate the database to
-  // the current version.
-  {
-    WebDatabase db;
-    ASSERT_EQ(sql::INIT_OK, db.Init(GetDatabasePath()));
-  }
+  DoMigration();
 
   // Verify post-conditions.  These are expectations for current version of the
   // database.
@@ -366,12 +381,7 @@ TEST_F(WebDatabaseMigrationTest, MigrateVersion25ToCurrent) {
     ASSERT_TRUE(connection.Open(GetDatabasePath()));
   }
 
-  // Load the database via the WebDatabase class and migrate the database to
-  // the current version.
-  {
-    WebDatabase db;
-    ASSERT_EQ(sql::INIT_OK, db.Init(GetDatabasePath()));
-  }
+  DoMigration();
 
   // Verify post-conditions.  These are expectations for current version of the
   // database.
@@ -429,12 +439,7 @@ TEST_F(WebDatabaseMigrationTest, MigrateVersion26ToCurrentStringLabels) {
     EXPECT_EQ(s3.ColumnType(0), sql::COLUMN_TYPE_TEXT);
   }
 
-  // Load the database via the WebDatabase class and migrate the database to
-  // the current version.
-  {
-    WebDatabase db;
-    ASSERT_EQ(sql::INIT_OK, db.Init(GetDatabasePath()));
-  }
+  DoMigration();
 
   // Verify post-conditions.  These are expectations for current version of the
   // database.
@@ -499,12 +504,7 @@ TEST_F(WebDatabaseMigrationTest, MigrateVersion26ToCurrentStringIDs) {
     EXPECT_EQ(s3.ColumnType(0), sql::COLUMN_TYPE_TEXT);
   }
 
-  // Load the database via the WebDatabase class and migrate the database to
-  // the current version.
-  {
-    WebDatabase db;
-    ASSERT_EQ(sql::INIT_OK, db.Init(GetDatabasePath()));
-  }
+  DoMigration();
 
   // Verify post-conditions.  These are expectations for current version of the
   // database.
@@ -548,12 +548,7 @@ TEST_F(WebDatabaseMigrationTest, MigrateVersion27ToCurrent) {
     ASSERT_FALSE(connection.DoesColumnExist("keywords", "instant_url"));
   }
 
-  // Load the database via the WebDatabase class and migrate the database to
-  // the current version.
-  {
-    WebDatabase db;
-    ASSERT_EQ(sql::INIT_OK, db.Init(GetDatabasePath()));
-  }
+  DoMigration();
 
   // Verify post-conditions.  These are expectations for current version of the
   // database.
@@ -621,13 +616,8 @@ TEST_F(WebDatabaseMigrationTest, MigrateVersion29ToCurrent) {
                                             "date_modified"));
   }
 
-  // Load the database via the WebDatabase class and migrate the database to
-  // the current version.
   Time pre_creation_time = Time::Now();
-  {
-    WebDatabase db;
-    ASSERT_EQ(sql::INIT_OK, db.Init(GetDatabasePath()));
-  }
+  DoMigration();
   Time post_creation_time = Time::Now();
 
   // Verify post-conditions.  These are expectations for current version of the
@@ -684,12 +674,7 @@ TEST_F(WebDatabaseMigrationTest, MigrateVersion30ToCurrent) {
     EXPECT_FALSE(connection.DoesColumnExist("credit_cards", "guid"));
   }
 
-  // Load the database via the WebDatabase class and migrate the database to
-  // the current version.
-  {
-    WebDatabase db;
-    ASSERT_EQ(sql::INIT_OK, db.Init(GetDatabasePath()));
-  }
+  DoMigration();
 
   // Verify post-conditions.  These are expectations for current version of the
   // database.
@@ -786,12 +771,7 @@ TEST_F(WebDatabaseMigrationTest, MigrateVersion31ToCurrent) {
     EXPECT_NE(profile.guid(), credit_card.guid());
   }
 
-  // Load the database via the WebDatabase class and migrate the database to
-  // the current version.
-  {
-    WebDatabase db;
-    ASSERT_EQ(sql::INIT_OK, db.Init(GetDatabasePath()));
-  }
+  DoMigration();
 
   // Verify post-conditions.  These are expectations for current version of the
   // database.
@@ -909,12 +889,7 @@ TEST_F(WebDatabaseMigrationTest, MigrateVersion32ToCurrent) {
     EXPECT_TRUE(connection.DoesColumnExist("credit_cards", "label"));
   }
 
-  // Load the database via the WebDatabase class and migrate the database to
-  // the current version.
-  {
-    WebDatabase db;
-    ASSERT_EQ(sql::INIT_OK, db.Init(GetDatabasePath()));
-  }
+  DoMigration();
 
   // Verify post-conditions.  These are expectations for current version of the
   // database.
@@ -1194,12 +1169,7 @@ TEST_F(WebDatabaseMigrationTest, MigrateVersion33ToCurrent) {
     EXPECT_EQ("United States", country);
   }
 
-  // Load the database via the WebDatabase class and migrate the database to
-  // the current version.
-  {
-    WebDatabase db;
-    ASSERT_EQ(sql::INIT_OK, db.Init(GetDatabasePath()));
-  }
+  DoMigration();
 
   // Verify post-conditions.  These are expectations for current version of the
   // database.
@@ -1250,12 +1220,7 @@ TEST_F(WebDatabaseMigrationTest, MigrateVersion34ToCurrent) {
     ASSERT_FALSE(s.Step());
   }
 
-  // Load the database via the WebDatabase class and migrate the database to
-  // the current version.
-  {
-    WebDatabase db;
-    ASSERT_EQ(sql::INIT_OK, db.Init(GetDatabasePath()));
-  }
+  DoMigration();
 
   // Verify post-conditions.  These are expectations for current version of the
   // database.
@@ -1307,12 +1272,7 @@ TEST_F(WebDatabaseMigrationTest, MigrateVersion35ToCurrent) {
     EXPECT_EQ(6, i);
   }
 
-  // Load the database via the WebDatabase class and migrate the database to
-  // the current version.
-  {
-    WebDatabase db;
-    ASSERT_EQ(sql::INIT_OK, db.Init(GetDatabasePath()));
-  }
+  DoMigration();
 
   // Verify post-conditions.  These are expectations for current version of the
   // database.
@@ -1391,12 +1351,7 @@ TEST_F(WebDatabaseMigrationTest, MigrateVersion37ToCurrent) {
     ASSERT_FALSE(connection.DoesColumnExist("keywords", "last_modified"));
   }
 
-  // Load the database via the WebDatabase class and migrate the database to
-  // the current version.
-  {
-    WebDatabase db;
-    ASSERT_EQ(sql::INIT_OK, db.Init(GetDatabasePath()));
-  }
+  DoMigration();
 
   // Verify post-conditions.  These are expectations for current version of the
   // database.
@@ -1431,12 +1386,7 @@ TEST_F(WebDatabaseMigrationTest, MigrateVersion38ToCurrent) {
     ASSERT_FALSE(connection.DoesColumnExist("keywords", "sync_guid"));
   }
 
-  // Load the database via the WebDatabase class and migrate the database to
-  // the current version.
-  {
-    WebDatabase db;
-    ASSERT_EQ(sql::INIT_OK, db.Init(GetDatabasePath()));
-  }
+  DoMigration();
 
   // Verify post-conditions.  These are expectations for current version of the
   // database.
@@ -1476,12 +1426,7 @@ TEST_F(WebDatabaseMigrationTest, MigrateVersion39ToCurrent) {
     EXPECT_NO_FATAL_FAILURE(CheckNoBackupData(connection, &meta_table));
   }
 
-  // Load the database via the WebDatabase class and migrate the database to
-  // the current version.
-  {
-    WebDatabase db;
-    ASSERT_EQ(sql::INIT_OK, db.Init(GetDatabasePath()));
-  }
+  DoMigration();
 
   // Verify post-conditions.  These are expectations for current version of the
   // database.
@@ -1527,12 +1472,7 @@ TEST_F(WebDatabaseMigrationTest, MigrateVersion40ToCurrent) {
     EXPECT_NO_FATAL_FAILURE(CheckHasBackupData(&meta_table));
   }
 
-  // Load the database via the WebDatabase class and migrate the database to
-  // the current version.
-  {
-    WebDatabase db;
-    ASSERT_EQ(sql::INIT_OK, db.Init(GetDatabasePath()));
-  }
+  DoMigration();
 
   // Verify post-conditions.  These are expectations for current version of the
   // database.
@@ -1578,12 +1518,7 @@ TEST_F(WebDatabaseMigrationTest, MigrateVersion41ToCurrent) {
     EXPECT_NO_FATAL_FAILURE(CheckHasBackupData(&meta_table));
   }
 
-  // Load the database via the WebDatabase class and migrate the database to
-  // the current version.
-  {
-    WebDatabase db;
-    ASSERT_EQ(sql::INIT_OK, db.Init(GetDatabasePath()));
-  }
+  DoMigration();
 
   // Verify post-conditions.  These are expectations for current version of the
   // database.
@@ -1631,12 +1566,7 @@ TEST_F(WebDatabaseMigrationTest, MigrateVersion42ToCurrent) {
     EXPECT_FALSE(connection.DoesTableExist("keywords_backup"));
   }
 
-  // Load the database via the WebDatabase class and migrate the database to
-  // the current version.
-  {
-    WebDatabase db;
-    ASSERT_EQ(sql::INIT_OK, db.Init(GetDatabasePath()));
-  }
+  DoMigration();
 
   // Verify post-conditions.  These are expectations for current version of the
   // database.
@@ -1687,12 +1617,7 @@ TEST_F(WebDatabaseMigrationTest, MigrateVersion43ToCurrent) {
     EXPECT_TRUE(connection.DoesTableExist("keywords_backup"));
   }
 
-  // Load the database via the WebDatabase class and migrate the database to
-  // the current version.
-  {
-    WebDatabase db;
-    ASSERT_EQ(sql::INIT_OK, db.Init(GetDatabasePath()));
-  }
+  DoMigration();
 
   // Verify post-conditions.  These are expectations for current version of the
   // database.
@@ -1739,12 +1664,7 @@ TEST_F(WebDatabaseMigrationTest, MigrateVersion44ToCurrent) {
     ASSERT_TRUE(connection.DoesColumnExist("keywords", "logo_id"));
   }
 
-  // Load the database via the WebDatabase class and migrate the database to
-  // the current version.
-  {
-    WebDatabase db;
-    ASSERT_EQ(sql::INIT_OK, db.Init(GetDatabasePath()));
-  }
+  DoMigration();
 
   // Verify post-conditions.  These are expectations for current version of the
   // database.
@@ -1795,12 +1715,7 @@ TEST_F(WebDatabaseMigrationTest, MigrateVersion45ToCurrent) {
         "scheme", "web_intents_defaults"));
   }
 
-  // Load the database via the WebDatabase class and migrate the database to
-  // the current version.
-  {
-    WebDatabase db;
-    ASSERT_EQ(sql::INIT_OK, db.Init(GetDatabasePath()));
-  }
+  DoMigration();
 
   // Verify post-conditions.  These are expectations for current version of the
   // database.
@@ -1876,12 +1791,7 @@ TEST_F(WebDatabaseMigrationTest, MigrateVersion45InvalidToCurrent) {
         "scheme", "web_intents_defaults"));
   }
 
-  // Load the database via the WebDatabase class and migrate the database to
-  // the current version.
-  {
-    WebDatabase db;
-    ASSERT_EQ(sql::INIT_OK, db.Init(GetDatabasePath()));
-  }
+  DoMigration();
 
   // Verify post-conditions.  These are expectations for current version of the
   // database.
@@ -1941,12 +1851,7 @@ TEST_F(WebDatabaseMigrationTest, MigrateVersion45CompatibleToCurrent) {
     ASSERT_TRUE(meta_table.Init(&connection, 40, 45));
   }
 
-  // Load the database via the WebDatabase class and migrate the database to
-  // the current version.
-  {
-    WebDatabase db;
-    ASSERT_EQ(sql::INIT_OK, db.Init(GetDatabasePath()));
-  }
+  DoMigration();
 
   // Verify post-conditions.  These are expectations for current version of the
   // database.
@@ -1982,12 +1887,7 @@ TEST_F(WebDatabaseMigrationTest, MigrateVersion46ToCurrent) {
                                             "alternate_urls"));
   }
 
-  // Load the database via the WebDatabase class and migrate the database to
-  // the current version.
-  {
-    WebDatabase db;
-    ASSERT_EQ(sql::INIT_OK, db.Init(GetDatabasePath()));
-  }
+  DoMigration();
 
   // Verify post-conditions.  These are expectations for current version of the
   // database.
@@ -2027,12 +1927,7 @@ TEST_F(WebDatabaseMigrationTest, MigrateVersion47ToCurrent) {
     EXPECT_TRUE(connection.DoesTableExist("keywords_backup"));
   }
 
-  // Load the database via the WebDatabase class and migrate the database to
-  // the current version.
-  {
-    WebDatabase db;
-    ASSERT_EQ(sql::INIT_OK, db.Init(GetDatabasePath()));
-  }
+  DoMigration();
 
   // Verify post-conditions.  These are expectations for current version of the
   // database.
@@ -2054,5 +1949,43 @@ TEST_F(WebDatabaseMigrationTest, MigrateVersion47ToCurrent) {
     EXPECT_NE(0, default_search_provider_id);
 
     EXPECT_NO_FATAL_FAILURE(CheckNoBackupData(connection, &meta_table));
+  }
+}
+
+// Tests that the |search_terms_replacement_key| column is added to the keyword
+// table schema for a version 49 database.
+TEST_F(WebDatabaseMigrationTest, MigrateVersion48ToCurrent) {
+  ASSERT_NO_FATAL_FAILURE(
+      LoadDatabase(FILE_PATH_LITERAL("version_48.sql")));
+
+  // Verify pre-conditions.  These are expectations for version 48 of the
+  // database.
+  {
+    sql::Connection connection;
+    ASSERT_TRUE(connection.Open(GetDatabasePath()));
+    ASSERT_TRUE(sql::MetaTable::DoesTableExist(&connection));
+
+    sql::MetaTable meta_table;
+    ASSERT_TRUE(meta_table.Init(&connection, 48, 48));
+
+    ASSERT_FALSE(connection.DoesColumnExist("keywords",
+                                            "search_terms_replacement_key"));
+  }
+
+  DoMigration();
+
+  // Verify post-conditions.  These are expectations for current version of the
+  // database.
+  {
+    sql::Connection connection;
+    ASSERT_TRUE(connection.Open(GetDatabasePath()));
+    ASSERT_TRUE(sql::MetaTable::DoesTableExist(&connection));
+
+    // Check version.
+    EXPECT_EQ(kCurrentTestedVersionNumber, VersionFromConnection(&connection));
+
+    // A new column should have been created.
+    EXPECT_TRUE(connection.DoesColumnExist("keywords",
+                                           "search_terms_replacement_key"));
   }
 }

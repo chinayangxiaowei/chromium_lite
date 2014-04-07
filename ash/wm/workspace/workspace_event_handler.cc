@@ -6,6 +6,7 @@
 
 #include "ash/screen_ash.h"
 #include "ash/shell.h"
+#include "ash/shell_delegate.h"
 #include "ash/wm/property_util.h"
 #include "ash/wm/window_util.h"
 #include "ash/wm/workspace/workspace_window_resizer.h"
@@ -93,6 +94,8 @@ void WorkspaceEventHandler::OnMouseEvent(ui::MouseEvent* event) {
           HTCAPTION) {
         bool destroyed = false;
         destroyed_ = &destroyed;
+        ash::Shell::GetInstance()->delegate()->RecordUserMetricsAction(
+            ash::UMA_TOGGLE_MAXIMIZE_CAPTION_CLICK);
         ToggleMaximizedState(target);
         if (destroyed)
           return;
@@ -110,9 +113,12 @@ void WorkspaceEventHandler::OnMouseEvent(ui::MouseEvent* event) {
 
 void WorkspaceEventHandler::OnGestureEvent(ui::GestureEvent* event) {
   aura::Window* target = static_cast<aura::Window*>(event->target());
-  if (event->type() == ui::ET_GESTURE_DOUBLE_TAP &&
+  if (event->type() == ui::ET_GESTURE_TAP &&
+      event->details().tap_count() == 2 &&
       target->delegate()->GetNonClientComponent(event->location()) ==
       HTCAPTION) {
+    ash::Shell::GetInstance()->delegate()->RecordUserMetricsAction(
+        ash::UMA_TOGGLE_MAXIMIZE_CAPTION_GESTURE);
     ToggleMaximizedState(target);  // |this| may be destroyed from here.
     event->StopPropagation();
     return;

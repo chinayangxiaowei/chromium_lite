@@ -6,8 +6,8 @@
 #define NET_QUIC_QUIC_STREAM_FACTORY_H_
 
 #include <map>
+#include <string>
 
-#include "base/callback.h"
 #include "base/memory/weak_ptr.h"
 #include "net/base/address_list.h"
 #include "net/base/completion_callback.h"
@@ -23,6 +23,8 @@ class HostResolver;
 class ClientSocketFactory;
 class QuicClock;
 class QuicClientSession;
+class QuicCryptoClientStreamFactory;
+class QuicRandom;
 class QuicStreamFactory;
 
 // Encapsulates a pending request for a QuicHttpStream.
@@ -61,12 +63,12 @@ class NET_EXPORT_PRIVATE QuicStreamRequest {
 // QuicClientSessions.
 class NET_EXPORT_PRIVATE QuicStreamFactory {
  public:
-  typedef base::Callback<uint64()> RandomUint64Callback;
-
-  QuicStreamFactory(HostResolver* host_resolver,
-                    ClientSocketFactory* client_socket_factory,
-                    const RandomUint64Callback& random_uint64_callback,
-                    QuicClock* clock);
+  QuicStreamFactory(
+      HostResolver* host_resolver,
+      ClientSocketFactory* client_socket_factory,
+      QuicCryptoClientStreamFactory* quic_crypto_client_stream_factory,
+      QuicRandom* random_generator,
+      QuicClock* clock);
   virtual ~QuicStreamFactory();
 
   // Creates a new QuicHttpStream to |host_port_proxy_pair| which will be
@@ -92,6 +94,11 @@ class NET_EXPORT_PRIVATE QuicStreamFactory {
   // Cancels a pending request.
   void CancelRequest(QuicStreamRequest* request);
 
+  // Closes all current sessions.
+  void CloseAllSessions(int error);
+
+  base::Value* QuicStreamFactoryInfoToValue() const;
+
  private:
   class Job;
 
@@ -107,14 +114,16 @@ class NET_EXPORT_PRIVATE QuicStreamFactory {
   void OnJobComplete(Job* job, int rv);
   bool HasActiveSession(const HostPortProxyPair& host_port_proxy_pair);
   bool HasActiveJob(const HostPortProxyPair& host_port_proxy_pair);
-  QuicClientSession* CreateSession(const AddressList& address_list_,
-                     const BoundNetLog& net_log);
+  QuicClientSession* CreateSession(const std::string& host,
+                                   const AddressList& address_list,
+                                   const BoundNetLog& net_log);
   void ActivateSession(const HostPortProxyPair& host_port_proxy_pair,
                        QuicClientSession* session);
 
   HostResolver* host_resolver_;
   ClientSocketFactory* client_socket_factory_;
-  RandomUint64Callback random_uint64_callback_;
+  QuicCryptoClientStreamFactory* quic_crypto_client_stream_factory_;
+  QuicRandom* random_generator_;
   scoped_ptr<QuicClock> clock_;
 
   // Contains owning pointers to all sessions that currently exist.

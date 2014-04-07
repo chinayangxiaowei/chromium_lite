@@ -27,6 +27,7 @@ class NET_EXPORT_PRIVATE QuicHttpStream :
 
   // HttpStream implementation.
   virtual int InitializeStream(const HttpRequestInfo* request_info,
+                               RequestPriority priority,
                                const BoundNetLog& net_log,
                                const CompletionCallback& callback) OVERRIDE;
   virtual int SendRequest(const HttpRequestHeaders& request_headers,
@@ -42,10 +43,11 @@ class NET_EXPORT_PRIVATE QuicHttpStream :
   virtual HttpStream* RenewStreamForAuth() OVERRIDE;
   virtual bool IsResponseBodyComplete() const OVERRIDE;
   virtual bool CanFindEndOfResponse() const OVERRIDE;
-  virtual bool IsMoreDataBuffered() const OVERRIDE;
   virtual bool IsConnectionReused() const OVERRIDE;
   virtual void SetConnectionReused() OVERRIDE;
   virtual bool IsConnectionReusable() const OVERRIDE;
+  virtual bool GetLoadTimingInfo(
+      LoadTimingInfo* load_timing_info) const OVERRIDE;
   virtual void GetSSLInfo(SSLInfo* ssl_info) OVERRIDE;
   virtual void GetSSLCertRequestInfo(
       SSLCertRequestInfo* cert_request_info) OVERRIDE;
@@ -58,6 +60,7 @@ class NET_EXPORT_PRIVATE QuicHttpStream :
   virtual int OnSendDataComplete(int status, bool* eof) OVERRIDE;
   virtual int OnDataReceived(const char* data, int length) OVERRIDE;
   virtual void OnClose(QuicErrorCode error) OVERRIDE;
+  virtual void OnError(int error) OVERRIDE;
 
  private:
   enum State {
@@ -88,7 +91,7 @@ class NET_EXPORT_PRIVATE QuicHttpStream :
 
   void BufferResponseBody(const char* data, int length);
 
-  State io_state_;
+  State next_state_;
 
   QuicReliableClientStream* stream_;  // Non-owning.
 
@@ -102,6 +105,11 @@ class NET_EXPORT_PRIVATE QuicHttpStream :
   // |response_info_| is the HTTP response data object which is filled in
   // when a the response headers are read.  It is not owned by this stream.
   HttpResponseInfo* response_info_;
+  // Because response data is buffered, also buffer the response status if the
+  // stream is explicitly closed via OnError or OnClose with an error.
+  // Once all buffered data has been returned, this will be used as the final
+  // response.
+  int response_status_;
 
   bool response_headers_received_;
 
@@ -126,6 +134,8 @@ class NET_EXPORT_PRIVATE QuicHttpStream :
   scoped_refptr<IOBufferWithSize> raw_request_body_buf_;
   // Wraps raw_request_body_buf_ to read the remaining data progressively.
   scoped_refptr<DrainableIOBuffer> request_body_buf_;
+
+  BoundNetLog stream_net_log_;
 
   base::WeakPtrFactory<QuicHttpStream> weak_factory_;
 };

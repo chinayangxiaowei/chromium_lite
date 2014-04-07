@@ -15,6 +15,8 @@
 #include "chrome/browser/chromeos/cros/native_network_parser.h"
 #include "chrome/browser/chromeos/settings/cros_settings.h"
 #include "chrome/common/chrome_switches.h"
+#include "chromeos/network/cros_network_functions.h"
+#include "chromeos/network/network_util.h"
 #include "content/public/browser/browser_thread.h"
 #include "third_party/cros_system_api/dbus/service_constants.h"
 
@@ -470,12 +472,6 @@ void NetworkLibraryImplCros::RequestNetworkScan() {
                  weak_ptr_factory_.GetWeakPtr()));
 }
 
-bool NetworkLibraryImplCros::GetWifiAccessPoints(
-    WifiAccessPointVector* result) {
-  CHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
-  return CrosGetWifiAccessPoints(result);
-}
-
 void NetworkLibraryImplCros::RefreshIPConfig(Network* network) {
   DCHECK(network);
   CrosRequestNetworkDeviceProperties(
@@ -630,6 +626,12 @@ void NetworkLibraryImplCros::SetIPParameters(const std::string& service_path,
   CrosRequestNetworkServiceProperties(service_path, callback);
 }
 
+void NetworkLibraryImplCros::RequestNetworkServiceProperties(
+    const std::string& service_path,
+    const NetworkServicePropertiesCallback& callback) {
+  chromeos::CrosRequestNetworkServiceProperties(service_path, callback);
+}
+
 /////////////////////////////////////////////////////////////////////////////
 // Network Manager functions.
 
@@ -752,15 +754,11 @@ void NetworkLibraryImplCros::NetworkManagerUpdate(
   }
   VLOG(1) << "Received NetworkManagerUpdate.";
 
-  for (DictionaryValue::key_iterator iter = properties->begin_keys();
-       iter != properties->end_keys(); ++iter) {
-    const std::string& key = *iter;
-    const Value* value;
-    bool res = properties->GetWithoutPathExpansion(key, &value);
-    CHECK(res);
-    if (!NetworkManagerStatusChanged(key, value)) {
-      LOG(ERROR) << "Invalid key-value pair, key: " << key << " type: "
-                 << value->GetType();
+  for (DictionaryValue::Iterator iter(*properties); !iter.IsAtEnd();
+       iter.Advance()) {
+    if (!NetworkManagerStatusChanged(iter.key(), &iter.value())) {
+      LOG(ERROR) << "Invalid key-value pair, key: " << iter.key() << " type: "
+                 << iter.value().GetType();
     }
   }
   // If there is no Profiles entry, request remembered networks here.
@@ -1295,7 +1293,7 @@ void NetworkLibraryImplCros::SetIPParametersCallback(
       VLOG(2) << "Clearing " << shill::kStaticIPPrefixlenProperty;
     }
   } else {
-    int prefixlen = CrosNetmaskToPrefixLength(info.netmask);
+    int prefixlen = network_util::NetmaskToPrefixLength(info.netmask);
     if (prefixlen == -1) {
       VLOG(1) << "IPConfig prefix length is invalid for netmask "
               << info.netmask;

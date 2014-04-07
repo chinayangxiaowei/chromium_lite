@@ -115,6 +115,7 @@ void VaapiVideoDecodeAccelerator::SubmitDecode(
     scoped_ptr<std::queue<VABufferID> > va_bufs,
     scoped_ptr<std::queue<VABufferID> > slice_bufs) {
   DCHECK_EQ(message_loop_, MessageLoop::current());
+  base::AutoLock auto_lock(lock_);
 
   TRACE_EVENT1("Video Decoder", "VAVDA::Decode", "output_id", output_id);
 
@@ -137,6 +138,17 @@ void VaapiVideoDecodeAccelerator::NotifyPictureReady(int32 input_id,
   // Handle Destroy() arriving while pictures are queued for output.
   if (!client_)
     return;
+
+  // Don't return any pictures that we might want to return during resetting
+  // as a consequence of finishing up the decode that was running during
+  // Reset() call from the client. Reuse it instead.
+  {
+    base::AutoLock auto_lock(lock_);
+    if (state_ == kResetting) {
+      output_buffers_.push(output_id);
+      return;
+    }
+  }
 
   ++num_frames_at_client_;
   TRACE_COUNTER1("Video Decoder", "Textures at client", num_frames_at_client_);
@@ -335,10 +347,7 @@ void VaapiVideoDecodeAccelerator::DecodeTask() {
     DCHECK(curr_input_buffer_.get());
 
     VaapiH264Decoder::DecResult res;
-    {
-      base::AutoUnlock auto_unlock(lock_);
-      res = decoder_.DecodeOneFrame(curr_input_buffer_->id);
-    }
+    res = decoder_.DecodeOneFrame(curr_input_buffer_->id);
 
     switch (res) {
       case VaapiH264Decoder::kNeedMoreStreamData:
@@ -394,6 +403,9 @@ void VaapiVideoDecodeAccelerator::Decode(
       break;
 
     case kDecoding:
+    // Allow accumulating bitstream buffers so that the client can queue
+    // after-seek-buffers while we are finishing with the before-seek one.
+    case kResetting:
       break;
 
     case kIdle:
@@ -451,6 +463,8 @@ void VaapiVideoDecodeAccelerator::FlushTask() {
   DCHECK_EQ(decoder_thread_.message_loop(), MessageLoop::current());
   DVLOG(1) << "Flush task";
 
+  base::AutoLock auto_lock(lock_);
+
   // First flush all the pictures that haven't been outputted, notifying the
   // client to output them.
   bool res = decoder_.Flush();
@@ -498,12 +512,12 @@ void VaapiVideoDecodeAccelerator::FinishFlush() {
 void VaapiVideoDecodeAccelerator::ResetTask() {
   DCHECK_EQ(decoder_thread_.message_loop(), MessageLoop::current());
 
+  base::AutoLock auto_lock(lock_);
+
   // All the decoding tasks from before the reset request from client are done
   // by now, as this task was scheduled after them and client is expected not
   // to call Decode() after Reset() and before NotifyResetDone.
   decoder_.Reset();
-
-  base::AutoLock auto_lock(lock_);
 
   // Return current input buffer, if present.
   if (curr_input_buffer_.get())
@@ -522,6 +536,14 @@ void VaapiVideoDecodeAccelerator::Reset() {
   base::AutoLock auto_lock(lock_);
   state_ = kResetting;
 
+  // Drop all remaining input buffers, if present.
+  while (!input_buffers_.empty()) {
+    message_loop_->PostTask(FROM_HERE, base::Bind(
+        &Client::NotifyEndOfBitstreamBuffer, client_,
+        input_buffers_.front()->id));
+    input_buffers_.pop();
+  }
+
   decoder_thread_.message_loop()->PostTask(FROM_HERE, base::Bind(
       &VaapiVideoDecodeAccelerator::ResetTask, base::Unretained(this)));
 
@@ -538,19 +560,21 @@ void VaapiVideoDecodeAccelerator::FinishReset() {
     return;  // We could've gotten destroyed already.
   }
 
-  // Drop all remaining input buffers, if present.
-  while (!input_buffers_.empty()) {
-    message_loop_->PostTask(FROM_HERE, base::Bind(
-        &Client::NotifyEndOfBitstreamBuffer, client_,
-        input_buffers_.front()->id));
-    input_buffers_.pop();
-  }
-
   state_ = kIdle;
   num_stream_bufs_at_decoder_ = 0;
 
   message_loop_->PostTask(FROM_HERE, base::Bind(
       &Client::NotifyResetDone, client_));
+
+  // The client might have given us new buffers via Decode() while we were
+  // resetting and might be waiting for our move, and not call Decode() anymore
+  // until we return something. Post an InitialDecodeTask() so that we won't
+  // sleep forever waiting for Decode() in that case. Having two of them
+  // in the pipe is harmless, the additional one will return as soon as it sees
+  // that we are back in kDecoding state.
+  decoder_thread_.message_loop()->PostTask(FROM_HERE, base::Bind(
+    &VaapiVideoDecodeAccelerator::InitialDecodeTask,
+    base::Unretained(this)));
 
   DVLOG(1) << "Reset finished";
 }

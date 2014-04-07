@@ -5,6 +5,7 @@
 import copy
 import logging
 import os
+from collections import defaultdict, Mapping
 
 import compiled_file_system as compiled_fs
 from file_system import FileNotFoundError
@@ -14,9 +15,10 @@ import third_party.json_schema_compiler.idl_schema as idl_schema
 import third_party.json_schema_compiler.idl_parser as idl_parser
 
 # Increment this version when there are changes to the data stored in any of
-# the caches used by APIDataSource. This allows the cache to be invalidated
-# without having to flush memcache on the production server.
-_VERSION = 7
+# the caches used by APIDataSource. This would include changes to model.py in
+# JSON schema compiler! This allows the cache to be invalidated without having
+# to flush memcache on the production server.
+_VERSION = 15
 
 def _RemoveNoDocs(item):
   if json_parse.IsDict(item):
@@ -37,6 +39,66 @@ def _RemoveNoDocs(item):
       item.remove(i)
   return False
 
+def _DetectInlineableTypes(schema):
+  """Look for documents that are only referenced once and mark them as inline.
+  Actual inlining is done by _InlineDocs.
+  """
+  if not schema.get('types'):
+    return
+
+  ignore = frozenset(('value', 'choices'))
+  refcounts = defaultdict(int)
+  # Use an explicit stack instead of recursion.
+  stack = [schema]
+
+  while stack:
+    node = stack.pop()
+    if isinstance(node, list):
+      stack.extend(node)
+    elif isinstance(node, Mapping):
+      if '$ref' in node:
+        refcounts[node['$ref']] += 1
+      stack.extend(v for k, v in node.iteritems() if k not in ignore)
+
+  for type_ in schema['types']:
+    if not 'noinline_doc' in type_:
+      if refcounts[type_['id']] == 1:
+        type_['inline_doc'] = True
+
+def _InlineDocs(schema):
+  """Replace '$ref's that refer to inline_docs with the json for those docs.
+  """
+  types = schema.get('types')
+  if types is None:
+    return
+
+  inline_docs = {}
+  types_without_inline_doc = []
+
+  # Gather the types with inline_doc.
+  for type_ in types:
+    if type_.get('inline_doc'):
+      inline_docs[type_['id']] = type_
+      for k in ('description', 'id', 'inline_doc'):
+        type_.pop(k, None)
+    else:
+      types_without_inline_doc.append(type_)
+  schema['types'] = types_without_inline_doc
+
+  def apply_inline(node):
+    if isinstance(node, list):
+      for i in node:
+        apply_inline(i)
+    elif isinstance(node, Mapping):
+      ref = node.get('$ref')
+      if ref and ref in inline_docs:
+        node.update(inline_docs[ref])
+        del node['$ref']
+      for k, v in node.iteritems():
+        apply_inline(v)
+
+  apply_inline(schema)
+
 def _CreateId(node, prefix):
   if node.parent is not None and not isinstance(node.parent, model.Namespace):
     return '-'.join([prefix, node.parent.simple_name, node.simple_name])
@@ -52,37 +114,43 @@ class _JSCModel(object):
   """Uses a Model from the JSON Schema Compiler and generates a dict that
   a Handlebar template can use for a data source.
   """
-  def __init__(self, json, ref_resolver, disable_refs):
+  def __init__(self, json, ref_resolver, disable_refs, idl=False):
     self._ref_resolver = ref_resolver
     self._disable_refs = disable_refs
     clean_json = copy.deepcopy(json)
     if _RemoveNoDocs(clean_json):
       self._namespace = None
     else:
+      if idl:
+        _DetectInlineableTypes(clean_json)
+      _InlineDocs(clean_json)
       self._namespace = model.Namespace(clean_json, clean_json['namespace'])
 
   def _FormatDescription(self, description):
     if self._disable_refs:
       return description
-    return self._ref_resolver.ResolveAllLinks(description, self._namespace.name)
+    return self._ref_resolver.ResolveAllLinks(description,
+                                              namespace=self._namespace.name)
 
   def _GetLink(self, link):
     if self._disable_refs:
       type_name = link.split('.', 1)[-1]
       return { 'href': '#type-%s' % type_name, 'text': link, 'name': link }
-    return self._ref_resolver.SafeGetLink(link, self._namespace.name)
+    return self._ref_resolver.SafeGetLink(link, namespace=self._namespace.name)
 
   def ToDict(self):
     if self._namespace is None:
       return {}
     return {
       'name': self._namespace.name,
-      'types':  [self._GenerateType(t) for t in self._namespace.types.values()
-                 if t.type_ != model.PropertyType.ADDITIONAL_PROPERTIES],
+      'types': self._GenerateTypes(self._namespace.types.values()),
       'functions': self._GenerateFunctions(self._namespace.functions),
       'events': self._GenerateEvents(self._namespace.events),
       'properties': self._GenerateProperties(self._namespace.properties)
     }
+
+  def _GenerateTypes(self, types):
+    return [self._GenerateType(t) for t in types]
 
   def _GenerateType(self, type_):
     type_dict = {
@@ -111,12 +179,14 @@ class _JSCModel(object):
     if (function.parent is not None and
         not isinstance(function.parent, model.Namespace)):
       function_dict['parent_name'] = function.parent.simple_name
-    else:
-      function_dict['parent_name'] = None
     if function.returns:
-      function_dict['returns'] = self._GenerateProperty(function.returns)
+      function_dict['returns'] = self._GenerateType(function.returns)
     for param in function.params:
       function_dict['parameters'].append(self._GenerateProperty(param))
+    if function.callback is not None:
+      # Show the callback as an extra parameter.
+      function_dict['parameters'].append(
+          self._GenerateCallbackProperty(function.callback))
     if len(function_dict['parameters']) > 0:
       function_dict['parameters'][-1]['last'] = True
     return function_dict
@@ -140,8 +210,10 @@ class _JSCModel(object):
     if (event.parent is not None and
         not isinstance(event.parent, model.Namespace)):
       event_dict['parent_name'] = event.parent.simple_name
-    else:
-      event_dict['parent_name'] = None
+    if event.callback is not None:
+      # Show the callback as an extra parameter.
+      event_dict['parameters'].append(
+          self._GenerateCallbackProperty(event.callback))
     if len(event_dict['parameters']) > 0:
       event_dict['parameters'][-1]['last'] = True
     return event_dict
@@ -151,7 +223,6 @@ class _JSCModel(object):
       return None
     callback_dict = {
       'name': callback.simple_name,
-      'description': self._FormatDescription(callback.description),
       'simple_type': {'simple_type': 'function'},
       'optional': callback.optional,
       'parameters': []
@@ -163,60 +234,89 @@ class _JSCModel(object):
     return callback_dict
 
   def _GenerateProperties(self, properties):
-    return [self._GenerateProperty(v) for v in properties.values()
-            if v.type_ != model.PropertyType.ADDITIONAL_PROPERTIES]
+    return [self._GenerateProperty(v) for v in properties.values()]
 
   def _GenerateProperty(self, property_):
+    if not hasattr(property_, 'type_'):
+      for d in dir(property_):
+        if not d.startswith('_'):
+          print ('%s -> %s' % (d, getattr(property_, d)))
+    type_ = property_.type_
+
+    # Make sure we generate property info for arrays, too.
+    # TODO(kalman): what about choices?
+    if type_.property_type == model.PropertyType.ARRAY:
+      properties = type_.item_type.properties
+    else:
+      properties = type_.properties
+
     property_dict = {
       'name': property_.simple_name,
       'optional': property_.optional,
       'description': self._FormatDescription(property_.description),
-      'properties': self._GenerateProperties(property_.properties),
-      'functions': self._GenerateFunctions(property_.functions),
+      'properties': self._GenerateProperties(type_.properties),
+      'functions': self._GenerateFunctions(type_.functions),
       'parameters': [],
       'returns': None,
       'id': _CreateId(property_, 'property')
     }
-    for param in property_.params:
-      property_dict['parameters'].append(self._GenerateProperty(param))
-    if property_.returns:
-      property_dict['returns'] = self._GenerateProperty(property_.returns)
+
+    if type_.property_type == model.PropertyType.FUNCTION:
+      function = type_.function
+      for param in function.params:
+        property_dict['parameters'].append(self._GenerateProperty(param))
+      if function.returns:
+        property_dict['returns'] = self._GenerateType(function.returns)
+
     if (property_.parent is not None and
         not isinstance(property_.parent, model.Namespace)):
       property_dict['parent_name'] = property_.parent.simple_name
-    else:
-      property_dict['parent_name'] = None
-    if property_.has_value:
-      if isinstance(property_.value, int):
-        property_dict['value'] = _FormatValue(property_.value)
+
+    value = property_.value
+    if value is not None:
+      if isinstance(value, int):
+        property_dict['value'] = _FormatValue(value)
       else:
-        property_dict['value'] = property_.value
+        property_dict['value'] = value
     else:
-      self._RenderTypeInformation(property_, property_dict)
+      self._RenderTypeInformation(type_, property_dict)
+
     return property_dict
 
-  def _RenderTypeInformation(self, property_, dst_dict):
-    if property_.type_ == model.PropertyType.CHOICES:
-      dst_dict['choices'] = [self._GenerateProperty(c)
-                             for c in property_.choices.values()]
+  def _GenerateCallbackProperty(self, callback):
+    property_dict = {
+      'name': callback.simple_name,
+      'description': self._FormatDescription(callback.description),
+      'optional': callback.optional,
+      'id': _CreateId(callback, 'property'),
+      'simple_type': 'function',
+    }
+    if (callback.parent is not None and
+        not isinstance(callback.parent, model.Namespace)):
+      property_dict['parent_name'] = callback.parent.simple_name
+    return property_dict
+
+  def _RenderTypeInformation(self, type_, dst_dict):
+    if type_.property_type == model.PropertyType.CHOICES:
+      dst_dict['choices'] = self._GenerateTypes(type_.choices)
       # We keep track of which is last for knowing when to add "or" between
       # choices in templates.
       if len(dst_dict['choices']) > 0:
         dst_dict['choices'][-1]['last'] = True
-    elif property_.type_ == model.PropertyType.REF:
-      dst_dict['link'] = self._GetLink(property_.ref_type)
-    elif property_.type_ == model.PropertyType.ARRAY:
-      dst_dict['array'] = self._GenerateProperty(property_.item_type)
-    elif property_.type_ == model.PropertyType.ENUM:
+    elif type_.property_type == model.PropertyType.REF:
+      dst_dict['link'] = self._GetLink(type_.ref_type)
+    elif type_.property_type == model.PropertyType.ARRAY:
+      dst_dict['array'] = self._GenerateType(type_.item_type)
+    elif type_.property_type == model.PropertyType.ENUM:
       dst_dict['enum_values'] = []
-      for enum_value in property_.enum_values:
+      for enum_value in type_.enum_values:
         dst_dict['enum_values'].append({'name': enum_value})
       if len(dst_dict['enum_values']) > 0:
         dst_dict['enum_values'][-1]['last'] = True
-    elif property_.instance_of is not None:
-      dst_dict['simple_type'] = property_.instance_of.lower()
+    elif type_.instance_of is not None:
+      dst_dict['simple_type'] = type_.instance_of.lower()
     else:
-      dst_dict['simple_type'] = property_.type_.name.lower()
+      dst_dict['simple_type'] = type_.property_type.name.lower()
 
 class _LazySamplesGetter(object):
   """This class is needed so that an extensions API page does not have to fetch
@@ -241,11 +341,11 @@ class APIDataSource(object):
                                                      compiled_fs.PERMS,
                                                      version=_VERSION)
       self._json_cache = cache_factory.Create(
-          lambda api: self._LoadJsonAPI(api, False),
+          lambda api_name, api: self._LoadJsonAPI(api, False),
           compiled_fs.JSON,
           version=_VERSION)
       self._idl_cache = cache_factory.Create(
-          lambda api: self._LoadIdlAPI(api, False),
+          lambda api_name, api: self._LoadIdlAPI(api, False),
           compiled_fs.IDL,
           version=_VERSION)
 
@@ -253,11 +353,11 @@ class APIDataSource(object):
       # $refs in an API. This is needed to prevent infinite recursion in
       # ReferenceResolver.
       self._json_cache_no_refs = cache_factory.Create(
-          lambda api: self._LoadJsonAPI(api, True),
+          lambda api_name, api: self._LoadJsonAPI(api, True),
           compiled_fs.JSON_NO_REFS,
           version=_VERSION)
       self._idl_cache_no_refs = cache_factory.Create(
-          lambda api: self._LoadIdlAPI(api, True),
+          lambda api_name, api: self._LoadIdlAPI(api, True),
           compiled_fs.IDL_NO_REFS,
           version=_VERSION)
       self._idl_names_cache = cache_factory.Create(self._GetIDLNames,
@@ -306,7 +406,7 @@ class APIDataSource(object):
                            samples,
                            disable_refs)
 
-    def _LoadPermissions(self, json_str):
+    def _LoadPermissions(self, file_name, json_str):
       return json_parse.Parse(json_str)
 
     def _LoadJsonAPI(self, api, disable_refs):
@@ -320,15 +420,16 @@ class APIDataSource(object):
       return _JSCModel(
           idl_schema.IDLSchema(idl).process()[0],
           self._ref_resolver_factory.Create() if not disable_refs else None,
-          disable_refs).ToDict()
+          disable_refs,
+          idl=True).ToDict()
 
-    def _GetIDLNames(self, apis):
+    def _GetIDLNames(self, base_dir, apis):
       return [
         model.UnixName(os.path.splitext(api[len('%s/' % self._base_path):])[0])
         for api in apis if api.endswith('.idl')
       ]
 
-    def _GetAllNames(self, apis):
+    def _GetAllNames(self, base_dir, apis):
       return [
         model.UnixName(os.path.splitext(api[len('%s/' % self._base_path):])[0])
         for api in apis
@@ -356,7 +457,7 @@ class APIDataSource(object):
     self._samples = samples
     self._disable_refs = disable_refs
 
-  def _GetPermsFromFile(self, filename):
+  def _GetFeatureFile(self, filename):
     try:
       perms = self._permissions_cache.GetFromFile('%s/%s' %
           (self._base_path, filename))
@@ -364,20 +465,38 @@ class APIDataSource(object):
     except FileNotFoundError:
       return {}
 
-  def _GetFeature(self, path):
+  def _GetFeatureData(self, path):
     # Remove 'experimental_' from path name to match the keys in
     # _permissions_features.json.
     path = model.UnixName(path.replace('experimental_', ''))
+
     for filename in ['_permission_features.json', '_manifest_features.json']:
-      api_perms = self._GetPermsFromFile(filename).get(path, None)
-      if api_perms is not None:
+      feature_data = self._GetFeatureFile(filename).get(path, None)
+      if feature_data is not None:
         break
-    if api_perms and api_perms['channel'] in ('trunk', 'dev', 'beta'):
-      api_perms[api_perms['channel']] = True
-    return api_perms
+
+    # There are specific cases in which the feature is actually a list of
+    # features where only one needs to match; but currently these are only
+    # used to whitelist features for specific extension IDs. Filter those out.
+    if isinstance(feature_data, list):
+      feature_list = feature_data
+      feature_data = None
+      for single_feature in feature_list:
+        if 'whitelist' in single_feature:
+          continue
+        if feature_data is not None:
+          # Note: if you are seeing the exception below, add more heuristics as
+          # required to form a single feature.
+          raise ValueError('Multiple potential features match %s. I can\'t '
+                           'decide which one to use. Please help!' % path)
+        feature_data = single_feature
+
+    if feature_data and feature_data['channel'] in ('trunk', 'dev', 'beta'):
+      feature_data[feature_data['channel']] = True
+    return feature_data
 
   def _GenerateHandlebarContext(self, handlebar_dict, path):
-    handlebar_dict['permissions'] = self._GetFeature(path)
+    handlebar_dict['permissions'] = self._GetFeatureData(path)
     handlebar_dict['samples'] = _LazySamplesGetter(path, self._samples)
     return handlebar_dict
 

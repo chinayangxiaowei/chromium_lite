@@ -7,8 +7,6 @@ package org.chromium.base;
 import android.app.Activity;
 import android.os.Looper;
 
-import java.util.ArrayList;
-
 /**
  * Provides information about the parent activity's status.
  */
@@ -29,9 +27,12 @@ public class ActivityStatus {
     // testing.
     private static int sActivityState;
 
-    private static final ArrayList<StateListener> sStateListeners = new ArrayList<StateListener>();
+    private static final ObserverList<StateListener> sStateListeners =
+            new ObserverList<StateListener>();
 
-    // Use this interface to listen to all state changes.
+    /**
+     * Interface to be implemented by listeners.
+     */
     public interface StateListener {
         /**
          * Called when the activity's state changes.
@@ -91,7 +92,7 @@ public class ActivityStatus {
      * @param listener Listener to receive state changes.
      */
     public static void registerStateListener(StateListener listener) {
-        sStateListeners.add(listener);
+        sStateListeners.addObserver(listener);
     }
 
     /**
@@ -99,6 +100,6 @@ public class ActivityStatus {
      * @param listener Listener that doesn't want to receive state changes.
      */
     public static void unregisterStateListener(StateListener listener) {
-        sStateListeners.remove(listener);
+        sStateListeners.removeObserver(listener);
     }
 }

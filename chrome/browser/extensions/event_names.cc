@@ -17,6 +17,7 @@ const char kOnTabHighlightChanged[] = "tabs.onHighlightChanged";
 const char kOnTabHighlighted[] = "tabs.onHighlighted";
 const char kOnTabMoved[] = "tabs.onMoved";
 const char kOnTabRemoved[] = "tabs.onRemoved";
+const char kOnTabReplaced[] = "tabs.onReplaced";
 const char kOnTabSelectionChanged[] = "tabs.onSelectionChanged";
 const char kOnTabUpdated[] = "tabs.onUpdated";
 
@@ -29,7 +30,6 @@ const char kOnExtensionUninstalled[] = "management.onUninstalled";
 const char kOnExtensionEnabled[] = "management.onEnabled";
 const char kOnExtensionDisabled[] = "management.onDisabled";
 
-const char kOnFileBrowserDiskChanged[] = "fileBrowserPrivate.onDiskChanged";
 const char kOnDirectoryChanged[] = "fileBrowserPrivate.onDirectoryChanged";
 const char kOnFileBrowserMountCompleted[] =
     "fileBrowserPrivate.onMountCompleted";
@@ -39,8 +39,8 @@ const char kOnDocumentFeedFetched[] =
     "fileBrowserPrivate.onDocumentFeedFetched";
 const char kOnFileBrowserPreferencesChanged[] =
     "fileBrowserPrivate.onPreferencesChanged";
-const char kOnFileBrowserNetworkConnectionChanged[] =
-    "fileBrowserPrivate.onNetworkConnectionChanged";
+const char kOnFileBrowserDriveConnectionStatusChanged[] =
+    "fileBrowserPrivate.onDriveConnectionStatusChanged";
 
 const char kOnInputMethodChanged[] = "inputMethodPrivate.onChanged";
 
@@ -48,10 +48,12 @@ const char kOnContextMenus[] = "contextMenus";
 const char kOnContextMenuClicked[] = "contextMenus.onClicked";
 
 const char kOnDialDeviceList[] = "dial.onDeviceList";
+const char kOnDialError[] = "dial.onError";
 
 const char kOnDownloadCreated[] = "downloads.onCreated";
 const char kOnDownloadChanged[] = "downloads.onChanged";
 const char kOnDownloadErased[] = "downloads.onErased";
+const char kOnDownloadDeterminingFilename[] = "downloads.onDeterminingFilename";
 
 const char kOnSettingsChanged[] = "storage.onChanged";
 
@@ -71,18 +73,30 @@ const char kBluetoothOnDeviceSearchResult[] = "bluetooth.onDeviceSearchResult";
 const char kOnPushMessage[] = "pushMessaging.onMessage";
 
 const char kOnCpuUpdated[] = "experimental.systemInfo.cpu.onUpdated";
+const char kOnDisplayChanged[] = "systemInfo.display.onDisplayChanged";
 const char kOnStorageAvailableCapacityChanged[] =
     "experimental.systemInfo.storage.onAvailableCapacityChanged";
-const char kOnStorageAdded[] = "experimental.systemInfo.storage.onAdded";
-const char kOnStorageRemoved[] = "experimental.systemInfo.storage.onRemoved";
+const char kOnStorageAttached[] = "experimental.systemInfo.storage.onAttached";
+const char kOnStorageDetached[] = "experimental.systemInfo.storage.onDetached";
 
 const char kOnSystemIndicatorClicked[] = "systemIndicator.onClicked";
 
-const char kOnSyncStateChanged[] = "syncFileSystem.onSyncStateChanged";
-const char kOnFileSynced[] = "syncFileSystem.onFileSynced";
+const char kOnServiceStatusChanged[] = "syncFileSystem.onServiceStatusChanged";
+const char kOnFileStatusChanged[] = "syncFileSystem.onFileStatusChanged";
 
 const char kOnAttachEventName[] = "mediaGalleriesPrivate.onDeviceAttached";
 const char kOnDetachEventName[] = "mediaGalleriesPrivate.onDeviceDetached";
+const char kOnGalleryChangedEventName[] =
+    "mediaGalleriesPrivate.onGalleryChanged";
+
+const char kOnNotificationDisplayed[] = "notifications.onDisplayed";
+const char kOnNotificationError[] = "notifications.onError";
+const char kOnNotificationClosed[] = "notifications.onClosed";
+const char kOnNotificationClicked[] = "notifications.onClicked";
+const char kOnNotificationButtonClicked[] = "notifications.onButtonClicked";
+
+const char kOnNetworksChanged[] = "networkingPrivate.onNetworksChanged";
+const char kOnNetworkListChanged[] = "networkingPrivate.onNetworkListChanged";
 
 }  // namespace event_names
 

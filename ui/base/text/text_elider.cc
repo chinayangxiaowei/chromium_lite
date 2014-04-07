@@ -12,22 +12,22 @@
 #include <string>
 #include <vector>
 
-#include "base/file_path.h"
+#include "base/files/file_path.h"
 #include "base/i18n/break_iterator.h"
 #include "base/i18n/char_iterator.h"
 #include "base/i18n/rtl.h"
 #include "base/memory/scoped_ptr.h"
-#include "base/string_split.h"
 #include "base/string_util.h"
+#include "base/strings/string_split.h"
 #include "base/sys_string_conversions.h"
 #include "base/utf_string_conversions.h"
 #include "googleurl/src/gurl.h"
 #include "net/base/escape.h"
 #include "net/base/net_util.h"
 #include "net/base/registry_controlled_domains/registry_controlled_domain.h"
+#include "third_party/icu/public/common/unicode/rbbi.h"
+#include "third_party/icu/public/common/unicode/uloc.h"
 #include "ui/gfx/font.h"
-#include "unicode/rbbi.h"
-#include "unicode/uloc.h"
 
 namespace ui {
 
@@ -398,7 +398,7 @@ string16 ElideUrl(const GURL& url,
                    ELIDE_AT_END);
 }
 
-string16 ElideFilename(const FilePath& filename,
+string16 ElideFilename(const base::FilePath& filename,
                        const gfx::Font& font,
                        int available_pixel_width) {
 #if defined(OS_WIN)

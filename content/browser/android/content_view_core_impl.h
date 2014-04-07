@@ -7,7 +7,6 @@
 
 #include <vector>
 
-#include "base/android/jni_android.h"
 #include "base/android/jni_helper.h"
 #include "base/basictypes.h"
 #include "base/compiler_specific.h"
@@ -31,6 +30,7 @@ class WindowAndroid;
 
 namespace content {
 class RenderWidgetHostViewAndroid;
+class SyncInputEventFilter;
 
 // TODO(jrg): this is a shell.  Upstream the rest.
 class ContentViewCoreImpl : public ContentViewCore,
@@ -58,6 +58,15 @@ class ContentViewCoreImpl : public ContentViewCore,
   virtual unsigned int GetScaledContentTexture(
       float scale,
       gfx::Size* out_size) OVERRIDE;
+  virtual float GetDpiScale() const OVERRIDE;
+  virtual void SetInputHandler(
+      WebKit::WebCompositorInputHandler* input_handler) OVERRIDE;
+  virtual void RequestContentClipping(const gfx::Rect& clipping,
+                                      const gfx::Size& content_size) OVERRIDE;
+  virtual void AddFrameInfoCallback(
+      const UpdateFrameInfoCallback& callback) OVERRIDE;
+  virtual void RemoveFrameInfoCallback(
+      const UpdateFrameInfoCallback& callback) OVERRIDE;
 
   // --------------------------------------------------------------------------
   // Methods called from Java via JNI
@@ -98,53 +107,45 @@ class ContentViewCoreImpl : public ContentViewCore,
   jboolean SendMouseMoveEvent(JNIEnv* env,
                               jobject obj,
                               jlong time_ms,
-                              jint x,
-                              jint y);
+                              jfloat x,
+                              jfloat y);
   jboolean SendMouseWheelEvent(JNIEnv* env,
                                jobject obj,
                                jlong time_ms,
-                               jint x,
-                               jint y,
+                               jfloat x,
+                               jfloat y,
                                jfloat vertical_axis);
-  void ScrollBegin(JNIEnv* env, jobject obj, jlong time_ms, jint x, jint y);
+  void ScrollBegin(JNIEnv* env, jobject obj, jlong time_ms, jfloat x, jfloat y);
   void ScrollEnd(JNIEnv* env, jobject obj, jlong time_ms);
-  void ScrollBy(JNIEnv* env, jobject obj, jlong time_ms, jint x, jint y,
-                jint dx, jint dy);
-  void FlingStart(JNIEnv* env,
-                  jobject obj,
-                  jlong time_ms,
-                  jint x,
-                  jint y,
-                  jint vx,
-                  jint vy);
+  void ScrollBy(JNIEnv* env, jobject obj, jlong time_ms,
+                jfloat x, jfloat y, jfloat dx, jfloat dy);
+  void FlingStart(JNIEnv* env, jobject obj, jlong time_ms,
+                  jfloat x, jfloat y, jfloat vx, jfloat vy);
   void FlingCancel(JNIEnv* env, jobject obj, jlong time_ms);
-  void SingleTap(JNIEnv* env,
-                 jobject obj,
-                 jlong time_ms,
-                 jint x,
-                 jint y,
+  void SingleTap(JNIEnv* env, jobject obj, jlong time_ms,
+                 jfloat x, jfloat y,
                  jboolean disambiguation_popup_tap);
-  void ShowPressState(JNIEnv* env, jobject obj, jlong time_ms, jint x, jint y);
-  void ShowPressCancel(JNIEnv* env, jobject obj, jlong time_ms, jint x, jint y);
-  void DoubleTap(JNIEnv* env, jobject obj, jlong time_ms, jint x, jint y) ;
-  void LongPress(JNIEnv* env,
-                 jobject obj,
-                 jlong time_ms,
-                 jint x,
-                 jint y,
+  void ShowPressState(JNIEnv* env, jobject obj, jlong time_ms,
+                      jfloat x, jfloat y);
+  void ShowPressCancel(JNIEnv* env, jobject obj, jlong time_ms,
+                       jfloat x, jfloat y);
+  void DoubleTap(JNIEnv* env, jobject obj, jlong time_ms,
+                 jfloat x, jfloat y) ;
+  void LongPress(JNIEnv* env, jobject obj, jlong time_ms,
+                 jfloat x, jfloat y,
                  jboolean disambiguation_popup_tap);
-  void PinchBegin(JNIEnv* env, jobject obj, jlong time_ms, jint x, jint y);
+  void LongTap(JNIEnv* env, jobject obj, jlong time_ms,
+               jfloat x, jfloat y,
+               jboolean disambiguation_popup_tap);
+  void PinchBegin(JNIEnv* env, jobject obj, jlong time_ms, jfloat x, jfloat y);
   void PinchEnd(JNIEnv* env, jobject obj, jlong time_ms);
-  void PinchBy(JNIEnv* env,
-               jobject obj,
-               jlong time_ms,
-               jint x,
-               jint y,
+  void PinchBy(JNIEnv* env, jobject obj, jlong time_ms,
+               jfloat x, jfloat y,
                jfloat delta);
   void SelectBetweenCoordinates(JNIEnv* env, jobject obj,
-                                        jint x1, jint y1,
-                                        jint x2, jint y2);
-  void MoveCaret(JNIEnv* env, jobject obj, jint x, jint y);
+                                jfloat x1, jfloat y1,
+                                jfloat x2, jfloat y2);
+  void MoveCaret(JNIEnv* env, jobject obj, jfloat x, jfloat y);
 
   jboolean CanGoBack(JNIEnv* env, jobject obj);
   jboolean CanGoForward(JNIEnv* env, jobject obj);
@@ -152,13 +153,17 @@ class ContentViewCoreImpl : public ContentViewCore,
   void GoBack(JNIEnv* env, jobject obj);
   void GoForward(JNIEnv* env, jobject obj);
   void GoToOffset(JNIEnv* env, jobject obj, jint offset);
+  void GoToNavigationIndex(JNIEnv* env, jobject obj, jint index);
   void StopLoading(JNIEnv* env, jobject obj);
   void Reload(JNIEnv* env, jobject obj);
   void CancelPendingReload(JNIEnv* env, jobject obj);
   void ContinuePendingReload(JNIEnv* env, jobject obj);
   jboolean NeedsReload(JNIEnv* env, jobject obj);
   void ClearHistory(JNIEnv* env, jobject obj);
-  jint EvaluateJavaScript(JNIEnv* env, jobject obj, jstring script);
+  void EvaluateJavaScript(JNIEnv* env,
+                          jobject obj,
+                          jstring script,
+                          jobject callback);
   int GetNativeImeAdapter(JNIEnv* env, jobject obj);
   void SetFocus(JNIEnv* env, jobject obj, jboolean focused);
   void ScrollFocusedEditableNodeIntoView(JNIEnv* env, jobject obj);
@@ -180,16 +185,25 @@ class ContentViewCoreImpl : public ContentViewCore,
                               jobject obj,
                               jobject object,
                               jstring name,
-                              jclass safe_annotation_clazz);
+                              jclass safe_annotation_clazz,
+                              jobject retained_object_set);
   void RemoveJavascriptInterface(JNIEnv* env, jobject obj, jstring name);
   int GetNavigationHistory(JNIEnv* env, jobject obj, jobject context);
+  void GetDirectedNavigationHistory(JNIEnv* env,
+                                    jobject obj,
+                                    jobject context,
+                                    jboolean is_forward,
+                                    jint max_entries);
   void UpdateVSyncParameters(JNIEnv* env, jobject obj, jlong timebase_micros,
                              jlong interval_micros);
   jboolean PopulateBitmapFromCompositor(JNIEnv* env,
                                         jobject obj,
                                         jobject jbitmap);
-  void SetSize(JNIEnv* env, jobject obj, jint width, jint height);
+  void WasResized(JNIEnv* env, jobject obj);
   jboolean IsRenderWidgetHostViewReady(JNIEnv* env, jobject obj);
+  void ExitFullscreen(JNIEnv* env, jobject obj);
+  void EnableHidingTopControls(JNIEnv* env, jobject obj, bool enable);
+  void ShowImeIfNeeded(JNIEnv* env, jobject obj);
 
   void ShowInterstitialPage(JNIEnv* env,
                             jobject obj,
@@ -198,6 +212,12 @@ class ContentViewCoreImpl : public ContentViewCore,
   jboolean IsShowingInterstitialPage(JNIEnv* env, jobject obj);
 
   jboolean ConsumePendingRendererFrame(JNIEnv* env, jobject obj);
+
+  void AttachExternalVideoSurface(JNIEnv* env,
+                                  jobject obj,
+                                  jint player_id,
+                                  jobject jsurface);
+  void DetachExternalVideoSurface(JNIEnv* env, jobject obj, jint player_id);
 
   // --------------------------------------------------------------------------
   // Public methods that call to Java via JNI
@@ -212,25 +232,32 @@ class ContentViewCoreImpl : public ContentViewCore,
                            bool multiple);
 
   void OnTabCrashed();
-  void UpdateContentSize(int width, int height);
-  void UpdateScrollOffsetAndPageScaleFactor(int x, int y, float scale);
-  void UpdatePageScaleLimits(float minimum_scale, float maximum_scale);
-  void UpdateOffsetsForFullscreen(float controls_offset_y,
-                                  float content_offset_y);
-  void ImeUpdateAdapter(int native_ime_adapter, int text_input_type,
+
+  // All sizes and offsets are in CSS pixels as cached by the renderer.
+  void UpdateFrameInfo(const gfx::Vector2dF& scroll_offset,
+                       float page_scale_factor,
+                       const gfx::Vector2dF& page_scale_factor_limits,
+                       const gfx::SizeF& content_size,
+                       const gfx::SizeF& viewport_size,
+                       const gfx::Vector2dF& controls_offset,
+                       const gfx::Vector2dF& content_offset,
+                       float overdraw_bottom_height);
+
+  void UpdateImeAdapter(int native_ime_adapter, int text_input_type,
                         const std::string& text,
                         int selection_start, int selection_end,
                         int composition_start, int composition_end,
                         bool show_ime_if_needed);
+  void ProcessImeBatchStateAck(bool is_begin);
   void SetTitle(const string16& title);
+  void OnBackgroundColorChanged(SkColor color);
 
   bool HasFocus();
   void ConfirmTouchEvent(InputEventAckState ack_result);
   void HasTouchEventHandlers(bool need_touch_events);
   void OnSelectionChanged(const std::string& text);
   void OnSelectionBoundsChanged(
-      const gfx::Rect& start_rect, base::i18n::TextDirection start_dir,
-      const gfx::Rect& end_rect, base::i18n::TextDirection end_dir);
+      const ViewHostMsg_SelectionBounds_Params& params);
 
   void StartContentIntent(const GURL& content_url);
 
@@ -240,16 +267,18 @@ class ContentViewCoreImpl : public ContentViewCore,
   void ShowDisambiguationPopup(
       const gfx::Rect& target_rect, const SkBitmap& zoomed_bitmap);
 
-  // Creates a java-side smooth scroller. Used by
-  // chrome.gpuBenchmarking.smoothScrollBy.
-  base::android::ScopedJavaLocalRef<jobject> CreateSmoothScroller(
-      bool scroll_down, int mouse_event_x, int mouse_event_y);
+  void RequestExternalVideoSurface(int player_id);
 
   // --------------------------------------------------------------------------
   // Methods called from native code
   // --------------------------------------------------------------------------
 
-  gfx::Rect GetBounds() const;
+  gfx::Size GetPhysicalBackingSize() const;
+  gfx::Size GetViewportSizeDip() const;
+  gfx::Size GetViewportSizeOffsetDip() const;
+  float GetOverdrawBottomHeightDip() const;
+
+  InputEventAckState FilterInputEvent(const WebKit::WebInputEvent& input_event);
 
   void AttachLayer(scoped_refptr<cc::Layer> layer);
   void RemoveLayer(scoped_refptr<cc::Layer> layer);
@@ -270,23 +299,24 @@ class ContentViewCoreImpl : public ContentViewCore,
   // Other private methods and data
   // --------------------------------------------------------------------------
 
-  void InitJNI(JNIEnv* env, jobject obj);
-
   void InitWebContents();
 
   RenderWidgetHostViewAndroid* GetRenderWidgetHostViewAndroid();
 
-  int GetTouchPadding();
+  float GetTouchPaddingDip();
 
-  float DpiScale() const;
-  WebKit::WebGestureEvent MakeGestureEvent(WebKit::WebInputEvent::Type type,
-                                           long time_ms, int x, int y) const;
+  WebKit::WebGestureEvent MakeGestureEvent(
+      WebKit::WebInputEvent::Type type, long time_ms,
+      float xPix, float yPix) const;
+
+  gfx::Size GetViewportSizePix() const;
+  gfx::Size GetViewportSizeOffsetPix() const;
+
   void UpdateVSyncFlagOnInputEvent(WebKit::WebInputEvent* event) const;
 
   void DeleteScaledSnapshotTexture();
 
-  struct JavaObject;
-  JavaObject* java_object_;
+  void SendGestureEvent(const WebKit::WebGestureEvent& event);
 
   // A weak reference to the Java ContentViewCore object.
   JavaObjectWeakGlobalRef java_ref_;
@@ -310,10 +340,16 @@ class ContentViewCoreImpl : public ContentViewCore,
   // browser compositor.
   bool renderer_frame_pending_;
 
+  // Device scale factor.
   float dpi_scale_;
 
   // The owning window that has a hold of main application activity.
   ui::WindowAndroid* window_android_;
+
+  std::vector<UpdateFrameInfoCallback> update_frame_info_callbacks_;
+
+  // Optional browser-side input event filtering.
+  scoped_ptr<SyncInputEventFilter> input_event_filter_;
 
   DISALLOW_COPY_AND_ASSIGN(ContentViewCoreImpl);
 };

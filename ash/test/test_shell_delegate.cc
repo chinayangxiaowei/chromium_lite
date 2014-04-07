@@ -4,14 +4,13 @@
 
 #include "ash/test/test_shell_delegate.h"
 
-#include <algorithm>
+#include <limits>
 
 #include "ash/caps_lock_delegate_stub.h"
 #include "ash/host/root_window_host_factory.h"
 #include "ash/shell.h"
 #include "ash/shell_window_ids.h"
 #include "ash/test/test_launcher_delegate.h"
-#include "ash/wm/stacking_controller.h"
 #include "ash/wm/window_util.h"
 #include "content/public/test/test_browser_context.h"
 #include "ui/aura/window.h"
@@ -24,7 +23,8 @@ TestShellDelegate::TestShellDelegate()
       session_started_(true),
       spoken_feedback_enabled_(false),
       high_contrast_enabled_(false),
-      screen_magnifier_type_(MAGNIFIER_OFF),
+      screen_magnifier_enabled_(false),
+      screen_magnifier_type_(kDefaultMagnifierType),
       user_logged_in_(true),
       can_lock_screen_(true),
       num_exit_requests_(0) {
@@ -41,7 +41,15 @@ bool TestShellDelegate::IsSessionStarted() const {
   return session_started_;
 }
 
+bool TestShellDelegate::IsGuestSession() const {
+  return false;
+}
+
 bool TestShellDelegate::IsFirstRunAfterBoot() const {
+  return false;
+}
+
+bool TestShellDelegate::IsRunningInForcedAppMode() const {
   return false;
 }
 
@@ -59,6 +67,9 @@ void TestShellDelegate::UnlockScreen() {
 
 bool TestShellDelegate::IsScreenLocked() const {
   return locked_;
+}
+
+void TestShellDelegate::PreInit() {
 }
 
 void TestShellDelegate::Shutdown() {
@@ -80,7 +91,7 @@ void TestShellDelegate::ToggleMaximized() {
     ash::wm::ToggleMaximizedWindow(window);
 }
 
-void TestShellDelegate::OpenFileManager() {
+void TestShellDelegate::OpenFileManager(bool as_dialog) {
 }
 
 void TestShellDelegate::OpenCrosh() {
@@ -124,8 +135,16 @@ bool TestShellDelegate::IsHighContrastEnabled() const {
   return high_contrast_enabled_;
 }
 
-void TestShellDelegate::SetMagnifier(const MagnifierType type) {
+void TestShellDelegate::SetMagnifierEnabled(bool enabled) {
+  screen_magnifier_enabled_ = enabled;
+}
+
+void TestShellDelegate::SetMagnifierType(MagnifierType type) {
   screen_magnifier_type_ = type;
+}
+
+bool TestShellDelegate::IsMagnifierEnabled() const {
+  return screen_magnifier_enabled_;
 }
 
 MagnifierType TestShellDelegate::GetMagnifierType() const {
@@ -193,10 +212,6 @@ ui::MenuModel* TestShellDelegate::CreateContextMenu(aura::RootWindow* root) {
 
 double TestShellDelegate::GetSavedScreenMagnifierScale() {
   return std::numeric_limits<double>::min();
-}
-
-aura::client::StackingClient* TestShellDelegate::CreateStackingClient() {
-  return new StackingController;
 }
 
 RootWindowHostFactory* TestShellDelegate::CreateRootWindowHostFactory() {

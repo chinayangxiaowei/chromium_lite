@@ -7,8 +7,8 @@
 #include "base/file_util.h"
 #include "base/files/scoped_temp_dir.h"
 #include "base/platform_file.h"
+#include "base/prefs/pref_service.h"
 #include "base/version.h"
-#include "chrome/browser/prefs/pref_service.h"
 #include "chrome/browser/profiles/chrome_version_service.h"
 #include "chrome/browser/profiles/profile_impl.h"
 #include "chrome/common/chrome_constants.h"
@@ -28,8 +28,8 @@ class MockProfileDelegate : public Profile::Delegate {
 };
 
 // Creates a prefs file in the given directory.
-void CreatePrefsFileInDirectory(const FilePath& directory_path) {
-  FilePath pref_path(directory_path.Append(chrome::kPreferencesFilename));
+void CreatePrefsFileInDirectory(const base::FilePath& directory_path) {
+  base::FilePath pref_path(directory_path.Append(chrome::kPreferencesFilename));
   base::PlatformFile file = base::CreatePlatformFile(pref_path,
       base::PLATFORM_FILE_CREATE | base::PLATFORM_FILE_WRITE, NULL, NULL);
   ASSERT_TRUE(file != base::kInvalidPlatformFileValue);
@@ -225,4 +225,11 @@ IN_PROC_BROWSER_TEST_F(ProfileBrowserTest, MAYBE_ExitType) {
   profile->SetExitType(Profile::EXIT_CRASHED);
   std::string final_value(prefs->GetString(prefs::kSessionExitType));
   EXPECT_EQ(crash_value, final_value);
+
+  // This test runs fast enough that the WebDataService may still be
+  // initializing (which uses the temp directory) when the test
+  // ends. Give it a chance to complete.
+  profile.reset();
+  content::RunAllPendingInMessageLoop();
+  content::RunAllPendingInMessageLoop(content::BrowserThread::DB);
 }

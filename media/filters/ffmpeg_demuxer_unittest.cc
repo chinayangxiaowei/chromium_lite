@@ -7,21 +7,25 @@
 #include <string>
 
 #include "base/bind.h"
-#include "base/file_path.h"
 #include "base/file_util.h"
+#include "base/files/file_path.h"
 #include "base/path_service.h"
 #include "base/threading/thread.h"
+#include "media/base/decrypt_config.h"
 #include "media/base/mock_demuxer_host.h"
 #include "media/base/test_helpers.h"
 #include "media/ffmpeg/ffmpeg_common.h"
 #include "media/filters/ffmpeg_demuxer.h"
 #include "media/filters/file_data_source.h"
+#include "media/webm/webm_crypto_helpers.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 using ::testing::AnyNumber;
 using ::testing::DoAll;
+using ::testing::Exactly;
 using ::testing::InSequence;
 using ::testing::Invoke;
+using ::testing::NotNull;
 using ::testing::Return;
 using ::testing::SaveArg;
 using ::testing::SetArgPointee;
@@ -45,8 +49,6 @@ static void EosOnReadDone(bool* got_eos_buffer,
   EXPECT_EQ(status, DemuxerStream::kOk);
   if (buffer->IsEndOfStream()) {
     *got_eos_buffer = true;
-    EXPECT_TRUE(!buffer->GetData());
-    EXPECT_EQ(buffer->GetDataSize(), 0);
     return;
   }
 
@@ -79,8 +81,12 @@ class FFmpegDemuxerTest : public testing::Test {
     EXPECT_CALL(host_, AddBufferedTimeRange(_, _)).Times(AnyNumber());
 
     CreateDataSource(name);
+
+    media::FFmpegNeedKeyCB need_key_cb =
+        base::Bind(&FFmpegDemuxerTest::NeedKeyCB, base::Unretained(this));
     demuxer_ = new FFmpegDemuxer(message_loop_.message_loop_proxy(),
-                                 data_source_);
+                                 data_source_,
+                                 need_key_cb);
   }
 
   MOCK_METHOD1(CheckPoint, void(int v));
@@ -123,6 +129,17 @@ class FFmpegDemuxerTest : public testing::Test {
                       location, size, timestampInMicroseconds);
   }
 
+  // TODO(xhwang): This is a workaround of the issue that move-only parameters
+  // are not supported in mocked methods. Remove this when the issue is fixed
+  // (http://code.google.com/p/googletest/issues/detail?id=395) or when we use
+  // std::string instead of scoped_array<uint8> (http://crbug.com/130689).
+  MOCK_METHOD3(NeedKeyCBMock, void(const std::string& type,
+                                   const uint8* init_data, int init_data_size));
+  void NeedKeyCB(const std::string& type,
+                 scoped_array<uint8> init_data, int init_data_size) {
+    NeedKeyCBMock(type, init_data.get(), init_data_size);
+  }
+
   // Accessor to demuxer internals.
   void set_duration_known(bool duration_known) {
     demuxer_->duration_known_ = duration_known;
@@ -163,7 +180,7 @@ class FFmpegDemuxerTest : public testing::Test {
   void CreateDataSource(const std::string& name) {
     CHECK(!data_source_);
 
-    FilePath file_path;
+    base::FilePath file_path;
     EXPECT_TRUE(PathService::Get(base::DIR_SOURCE_ROOT, &file_path));
 
     file_path = file_path.Append(FILE_PATH_LITERAL("media"))
@@ -243,9 +260,10 @@ TEST_F(FFmpegDemuxerTest, Initialize_Successful) {
 
   const AudioDecoderConfig& audio_config = stream->audio_decoder_config();
   EXPECT_EQ(kCodecVorbis, audio_config.codec());
-  EXPECT_EQ(16, audio_config.bits_per_channel());
+  EXPECT_EQ(32, audio_config.bits_per_channel());
   EXPECT_EQ(CHANNEL_LAYOUT_STEREO, audio_config.channel_layout());
   EXPECT_EQ(44100, audio_config.samples_per_second());
+  EXPECT_EQ(kSampleFormatPlanarF32, audio_config.sample_format());
   EXPECT_TRUE(audio_config.extra_data());
   EXPECT_GT(audio_config.extra_data_size(), 0u);
 
@@ -280,6 +298,17 @@ TEST_F(FFmpegDemuxerTest, Initialize_Multitrack) {
 
   // Unknown stream should never be present.
   EXPECT_FALSE(demuxer_->GetStream(DemuxerStream::UNKNOWN));
+}
+
+// TODO(fgalligan): Enable test when code to parse encrypted WebM files lands
+// in Chromium's FFmpeg. crbug.com/189221
+TEST_F(FFmpegDemuxerTest, DISABLED_Initialize_Encrypted) {
+  EXPECT_CALL(*this, NeedKeyCBMock(kWebMEncryptInitDataType, NotNull(),
+                                   DecryptConfig::kDecryptionKeySize))
+      .Times(Exactly(2));
+
+  CreateDemuxer("bear-320x240-av_enc-av.webm");
+  InitializeDemuxer();
 }
 
 TEST_F(FFmpegDemuxerTest, Read_Audio) {

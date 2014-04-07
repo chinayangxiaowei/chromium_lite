@@ -14,6 +14,7 @@
 #include "ui/aura/test/test_window_delegate.h"
 #include "ui/aura/test/test_windows.h"
 #include "ui/base/events/event.h"
+#include "ui/base/events/event_utils.h"
 #include "ui/base/gestures/gesture_configuration.h"
 #include "ui/base/gestures/gesture_recognizer_impl.h"
 #include "ui/base/gestures/gesture_sequence.h"
@@ -68,7 +69,6 @@ class GestureEventConsumeDelegate : public TestWindowDelegate {
         tap_cancel_(false),
         begin_(false),
         end_(false),
-        double_tap_(false),
         scroll_begin_(false),
         scroll_update_(false),
         scroll_end_(false),
@@ -101,7 +101,6 @@ class GestureEventConsumeDelegate : public TestWindowDelegate {
     tap_cancel_ = false;
     begin_ = false;
     end_ = false;
-    double_tap_ = false;
     scroll_begin_ = false;
     scroll_update_ = false;
     scroll_end_ = false;
@@ -135,7 +134,6 @@ class GestureEventConsumeDelegate : public TestWindowDelegate {
   bool tap_cancel() const { return tap_cancel_; }
   bool begin() const { return begin_; }
   bool end() const { return end_; }
-  bool double_tap() const { return double_tap_; }
   bool scroll_begin() const { return scroll_begin_; }
   bool scroll_update() const { return scroll_update_; }
   bool scroll_end() const { return scroll_end_; }
@@ -196,9 +194,6 @@ class GestureEventConsumeDelegate : public TestWindowDelegate {
         break;
       case ui::ET_GESTURE_END:
         end_ = true;
-        break;
-      case ui::ET_GESTURE_DOUBLE_TAP:
-        double_tap_ = true;
         break;
       case ui::ET_GESTURE_SCROLL_BEGIN:
         scroll_begin_ = true;
@@ -267,7 +262,6 @@ class GestureEventConsumeDelegate : public TestWindowDelegate {
   bool tap_cancel_;
   bool begin_;
   bool end_;
-  bool double_tap_;
   bool scroll_begin_;
   bool scroll_update_;
   bool scroll_end_;
@@ -477,7 +471,7 @@ class TimerTestGestureRecognizer : public TestGestureRecognizer {
 };
 
 base::TimeDelta GetTime() {
-  return base::Time::NowFromSystemTime() - base::Time();
+  return ui::EventTimeForNow();
 }
 
 class TimedEvents {
@@ -564,7 +558,6 @@ TEST_F(GestureRecognizerTest, GestureEventTap) {
   EXPECT_TRUE(delegate->tap_down());
   EXPECT_FALSE(delegate->tap_cancel());
   EXPECT_TRUE(delegate->begin());
-  EXPECT_FALSE(delegate->double_tap());
   EXPECT_FALSE(delegate->scroll_begin());
   EXPECT_FALSE(delegate->scroll_update());
   EXPECT_FALSE(delegate->scroll_end());
@@ -582,7 +575,6 @@ TEST_F(GestureRecognizerTest, GestureEventTap) {
   EXPECT_FALSE(delegate->tap_cancel());
   EXPECT_FALSE(delegate->begin());
   EXPECT_TRUE(delegate->end());
-  EXPECT_FALSE(delegate->double_tap());
   EXPECT_FALSE(delegate->scroll_begin());
   EXPECT_FALSE(delegate->scroll_update());
   EXPECT_FALSE(delegate->scroll_end());
@@ -615,7 +607,6 @@ TEST_F(GestureRecognizerTest, GestureEventTapRegion) {
      EXPECT_TRUE(delegate->tap_down());
      EXPECT_FALSE(delegate->tap_cancel());
      EXPECT_TRUE(delegate->begin());
-     EXPECT_FALSE(delegate->double_tap());
      EXPECT_FALSE(delegate->scroll_begin());
      EXPECT_FALSE(delegate->scroll_update());
      EXPECT_FALSE(delegate->scroll_end());
@@ -635,7 +626,6 @@ TEST_F(GestureRecognizerTest, GestureEventTapRegion) {
      EXPECT_FALSE(delegate->tap_cancel());
      EXPECT_FALSE(delegate->begin());
      EXPECT_TRUE(delegate->end());
-     EXPECT_FALSE(delegate->double_tap());
      EXPECT_FALSE(delegate->scroll_begin());
      EXPECT_FALSE(delegate->scroll_update());
      EXPECT_FALSE(delegate->scroll_end());
@@ -660,7 +650,6 @@ TEST_F(GestureRecognizerTest, GestureEventTapRegion) {
      EXPECT_TRUE(delegate->tap_down());
      EXPECT_FALSE(delegate->tap_cancel());
      EXPECT_TRUE(delegate->begin());
-     EXPECT_FALSE(delegate->double_tap());
      EXPECT_FALSE(delegate->scroll_begin());
      EXPECT_FALSE(delegate->scroll_update());
      EXPECT_FALSE(delegate->scroll_end());
@@ -678,7 +667,6 @@ TEST_F(GestureRecognizerTest, GestureEventTapRegion) {
      EXPECT_FALSE(delegate->tap_cancel());
      EXPECT_FALSE(delegate->begin());
      EXPECT_TRUE(delegate->end());
-     EXPECT_FALSE(delegate->double_tap());
      EXPECT_FALSE(delegate->scroll_begin());
      EXPECT_FALSE(delegate->scroll_update());
      EXPECT_FALSE(delegate->scroll_end());
@@ -704,7 +692,6 @@ TEST_F(GestureRecognizerTest, GestureEventTapRegion) {
      EXPECT_FALSE(delegate->tap_cancel());
      EXPECT_TRUE(delegate->begin());
      EXPECT_FALSE(delegate->tap_cancel());
-     EXPECT_FALSE(delegate->double_tap());
      EXPECT_FALSE(delegate->scroll_begin());
      EXPECT_FALSE(delegate->scroll_update());
      EXPECT_FALSE(delegate->scroll_end());
@@ -720,7 +707,6 @@ TEST_F(GestureRecognizerTest, GestureEventTapRegion) {
      EXPECT_FALSE(delegate->tap_down());
      EXPECT_FALSE(delegate->tap_cancel());
      EXPECT_FALSE(delegate->begin());
-     EXPECT_FALSE(delegate->double_tap());
      EXPECT_FALSE(delegate->scroll_begin());
      EXPECT_FALSE(delegate->scroll_update());
      EXPECT_FALSE(delegate->scroll_end());
@@ -738,7 +724,6 @@ TEST_F(GestureRecognizerTest, GestureEventTapRegion) {
      EXPECT_FALSE(delegate->tap_cancel());
      EXPECT_FALSE(delegate->begin());
      EXPECT_TRUE(delegate->end());
-     EXPECT_FALSE(delegate->double_tap());
      EXPECT_FALSE(delegate->scroll_begin());
      EXPECT_FALSE(delegate->scroll_update());
      EXPECT_FALSE(delegate->scroll_end());
@@ -763,7 +748,6 @@ TEST_F(GestureRecognizerTest, GestureEventTapRegion) {
      EXPECT_TRUE(delegate->tap_down());
      EXPECT_FALSE(delegate->tap_cancel());
      EXPECT_TRUE(delegate->begin());
-     EXPECT_FALSE(delegate->double_tap());
      EXPECT_FALSE(delegate->scroll_begin());
      EXPECT_FALSE(delegate->scroll_update());
      EXPECT_FALSE(delegate->scroll_end());
@@ -779,7 +763,6 @@ TEST_F(GestureRecognizerTest, GestureEventTapRegion) {
      EXPECT_FALSE(delegate->tap_down());
      EXPECT_FALSE(delegate->tap_cancel());
      EXPECT_FALSE(delegate->begin());
-     EXPECT_FALSE(delegate->double_tap());
      EXPECT_FALSE(delegate->scroll_begin());
      EXPECT_FALSE(delegate->scroll_update());
      EXPECT_FALSE(delegate->scroll_end());
@@ -795,7 +778,6 @@ TEST_F(GestureRecognizerTest, GestureEventTapRegion) {
      EXPECT_FALSE(delegate->tap_down());
      EXPECT_FALSE(delegate->tap_cancel());
      EXPECT_FALSE(delegate->begin());
-     EXPECT_FALSE(delegate->double_tap());
      EXPECT_FALSE(delegate->scroll_begin());
      EXPECT_FALSE(delegate->scroll_update());
      EXPECT_FALSE(delegate->scroll_end());
@@ -811,7 +793,6 @@ TEST_F(GestureRecognizerTest, GestureEventTapRegion) {
      EXPECT_FALSE(delegate->tap_down());
      EXPECT_FALSE(delegate->tap_cancel());
      EXPECT_FALSE(delegate->begin());
-     EXPECT_FALSE(delegate->double_tap());
      EXPECT_FALSE(delegate->scroll_begin());
      EXPECT_FALSE(delegate->scroll_update());
      EXPECT_FALSE(delegate->scroll_end());
@@ -829,7 +810,6 @@ TEST_F(GestureRecognizerTest, GestureEventTapRegion) {
      EXPECT_FALSE(delegate->tap_cancel());
      EXPECT_FALSE(delegate->begin());
      EXPECT_TRUE(delegate->end());
-     EXPECT_FALSE(delegate->double_tap());
      EXPECT_FALSE(delegate->scroll_begin());
      EXPECT_FALSE(delegate->scroll_update());
      EXPECT_FALSE(delegate->scroll_end());
@@ -1387,7 +1367,6 @@ TEST_F(GestureRecognizerTest, GestureTapFollowedByScroll) {
   EXPECT_FALSE(delegate->tap());
   EXPECT_TRUE(delegate->tap_down());
   EXPECT_FALSE(delegate->tap_cancel());
-  EXPECT_FALSE(delegate->double_tap());
   EXPECT_FALSE(delegate->scroll_begin());
   EXPECT_FALSE(delegate->scroll_update());
   EXPECT_FALSE(delegate->scroll_end());
@@ -1401,7 +1380,6 @@ TEST_F(GestureRecognizerTest, GestureTapFollowedByScroll) {
   EXPECT_TRUE(delegate->tap());
   EXPECT_FALSE(delegate->tap_down());
   EXPECT_FALSE(delegate->tap_cancel());
-  EXPECT_FALSE(delegate->double_tap());
   EXPECT_FALSE(delegate->scroll_begin());
   EXPECT_FALSE(delegate->scroll_update());
   EXPECT_FALSE(delegate->scroll_end());
@@ -1415,7 +1393,6 @@ TEST_F(GestureRecognizerTest, GestureTapFollowedByScroll) {
   EXPECT_FALSE(delegate->tap());
   EXPECT_TRUE(delegate->tap_down());
   EXPECT_FALSE(delegate->tap_cancel());
-  EXPECT_FALSE(delegate->double_tap());
   EXPECT_FALSE(delegate->scroll_begin());
   EXPECT_FALSE(delegate->scroll_update());
   EXPECT_FALSE(delegate->scroll_end());
@@ -1431,7 +1408,6 @@ TEST_F(GestureRecognizerTest, GestureTapFollowedByScroll) {
   EXPECT_FALSE(delegate->tap());
   EXPECT_FALSE(delegate->tap_down());
   EXPECT_TRUE(delegate->tap_cancel());
-  EXPECT_FALSE(delegate->double_tap());
   EXPECT_TRUE(delegate->scroll_begin());
   EXPECT_TRUE(delegate->scroll_update());
   EXPECT_FALSE(delegate->scroll_end());
@@ -1446,7 +1422,6 @@ TEST_F(GestureRecognizerTest, GestureTapFollowedByScroll) {
   EXPECT_FALSE(delegate->tap());
   EXPECT_FALSE(delegate->tap_down());
   EXPECT_FALSE(delegate->tap_cancel());
-  EXPECT_FALSE(delegate->double_tap());
   EXPECT_FALSE(delegate->scroll_begin());
   EXPECT_TRUE(delegate->scroll_update());
   EXPECT_FALSE(delegate->scroll_end());
@@ -1460,7 +1435,6 @@ TEST_F(GestureRecognizerTest, GestureTapFollowedByScroll) {
   EXPECT_FALSE(delegate->tap());
   EXPECT_FALSE(delegate->tap_down());
   EXPECT_FALSE(delegate->tap_cancel());
-  EXPECT_FALSE(delegate->double_tap());
   EXPECT_FALSE(delegate->scroll_begin());
   EXPECT_TRUE(delegate->scroll_update());
   EXPECT_FALSE(delegate->scroll_end());
@@ -1475,7 +1449,6 @@ TEST_F(GestureRecognizerTest, GestureTapFollowedByScroll) {
   EXPECT_FALSE(delegate->tap());
   EXPECT_FALSE(delegate->tap_down());
   EXPECT_FALSE(delegate->tap_cancel());
-  EXPECT_FALSE(delegate->double_tap());
   EXPECT_FALSE(delegate->scroll_begin());
   EXPECT_FALSE(delegate->scroll_update());
   EXPECT_FALSE(delegate->scroll_end());
@@ -1504,7 +1477,6 @@ TEST_F(GestureRecognizerTest, AsynchronousGestureRecognition) {
   EXPECT_FALSE(queued_delegate->tap_down());
   EXPECT_FALSE(queued_delegate->tap_cancel());
   EXPECT_FALSE(queued_delegate->begin());
-  EXPECT_FALSE(queued_delegate->double_tap());
   EXPECT_FALSE(queued_delegate->scroll_begin());
   EXPECT_FALSE(queued_delegate->scroll_update());
   EXPECT_FALSE(queued_delegate->scroll_end());
@@ -1521,7 +1493,6 @@ TEST_F(GestureRecognizerTest, AsynchronousGestureRecognition) {
   EXPECT_FALSE(queued_delegate->tap_cancel());
   EXPECT_FALSE(queued_delegate->begin());
   EXPECT_FALSE(queued_delegate->end());
-  EXPECT_FALSE(queued_delegate->double_tap());
   EXPECT_FALSE(queued_delegate->scroll_begin());
   EXPECT_FALSE(queued_delegate->scroll_update());
   EXPECT_FALSE(queued_delegate->scroll_end());
@@ -1541,7 +1512,6 @@ TEST_F(GestureRecognizerTest, AsynchronousGestureRecognition) {
   EXPECT_FALSE(delegate->tap_cancel());
   EXPECT_FALSE(queued_delegate->begin());
   EXPECT_FALSE(queued_delegate->end());
-  EXPECT_FALSE(delegate->double_tap());
   EXPECT_FALSE(delegate->scroll_begin());
   EXPECT_FALSE(delegate->scroll_update());
   EXPECT_FALSE(delegate->scroll_end());
@@ -1558,7 +1528,6 @@ TEST_F(GestureRecognizerTest, AsynchronousGestureRecognition) {
   EXPECT_TRUE(queued_delegate->begin());
   EXPECT_FALSE(queued_delegate->tap_cancel());
   EXPECT_FALSE(queued_delegate->end());
-  EXPECT_FALSE(queued_delegate->double_tap());
   EXPECT_FALSE(queued_delegate->scroll_begin());
   EXPECT_FALSE(queued_delegate->scroll_update());
   EXPECT_FALSE(queued_delegate->scroll_end());
@@ -1571,7 +1540,6 @@ TEST_F(GestureRecognizerTest, AsynchronousGestureRecognition) {
   EXPECT_FALSE(queued_delegate->tap_cancel());
   EXPECT_FALSE(queued_delegate->begin());
   EXPECT_TRUE(queued_delegate->end());
-  EXPECT_FALSE(queued_delegate->double_tap());
   EXPECT_FALSE(queued_delegate->scroll_begin());
   EXPECT_FALSE(queued_delegate->scroll_update());
   EXPECT_FALSE(queued_delegate->scroll_end());
@@ -1589,7 +1557,6 @@ TEST_F(GestureRecognizerTest, AsynchronousGestureRecognition) {
   EXPECT_FALSE(queued_delegate->end());
   EXPECT_FALSE(queued_delegate->begin());
   EXPECT_FALSE(queued_delegate->end());
-  EXPECT_FALSE(queued_delegate->double_tap());
   EXPECT_FALSE(queued_delegate->scroll_begin());
   EXPECT_FALSE(queued_delegate->scroll_update());
   EXPECT_FALSE(queued_delegate->scroll_end());
@@ -1604,7 +1571,6 @@ TEST_F(GestureRecognizerTest, AsynchronousGestureRecognition) {
   EXPECT_FALSE(delegate->tap_cancel());
   EXPECT_FALSE(delegate->begin());
   EXPECT_FALSE(delegate->end());
-  EXPECT_FALSE(delegate->double_tap());
   EXPECT_FALSE(delegate->scroll_begin());
   EXPECT_FALSE(delegate->scroll_update());
   EXPECT_FALSE(delegate->scroll_end());
@@ -1613,7 +1579,6 @@ TEST_F(GestureRecognizerTest, AsynchronousGestureRecognition) {
   EXPECT_FALSE(queued_delegate->tap_cancel());
   EXPECT_FALSE(queued_delegate->begin());
   EXPECT_FALSE(queued_delegate->end());
-  EXPECT_FALSE(queued_delegate->double_tap());
   EXPECT_FALSE(queued_delegate->scroll_begin());
   EXPECT_FALSE(queued_delegate->scroll_update());
   EXPECT_FALSE(queued_delegate->scroll_end());
@@ -1630,7 +1595,6 @@ TEST_F(GestureRecognizerTest, AsynchronousGestureRecognition) {
   EXPECT_FALSE(delegate->tap_down());
   EXPECT_FALSE(delegate->tap_cancel());
   EXPECT_FALSE(delegate->begin());
-  EXPECT_FALSE(delegate->double_tap());
   EXPECT_FALSE(delegate->scroll_begin());
   EXPECT_FALSE(delegate->scroll_update());
   EXPECT_FALSE(delegate->scroll_end());
@@ -1638,7 +1602,6 @@ TEST_F(GestureRecognizerTest, AsynchronousGestureRecognition) {
   EXPECT_FALSE(queued_delegate->tap_down());
   EXPECT_FALSE(queued_delegate->tap_cancel());
   EXPECT_FALSE(queued_delegate->begin());
-  EXPECT_FALSE(queued_delegate->double_tap());
   EXPECT_FALSE(queued_delegate->scroll_begin());
   EXPECT_FALSE(queued_delegate->scroll_update());
   EXPECT_FALSE(queued_delegate->scroll_end());
@@ -1650,7 +1613,6 @@ TEST_F(GestureRecognizerTest, AsynchronousGestureRecognition) {
   EXPECT_TRUE(queued_delegate->begin());
   EXPECT_FALSE(queued_delegate->tap_cancel());
   EXPECT_FALSE(queued_delegate->end());
-  EXPECT_FALSE(queued_delegate->double_tap());
   EXPECT_FALSE(queued_delegate->scroll_begin());
   EXPECT_FALSE(queued_delegate->scroll_update());
   EXPECT_FALSE(queued_delegate->scroll_end());
@@ -1662,7 +1624,6 @@ TEST_F(GestureRecognizerTest, AsynchronousGestureRecognition) {
   EXPECT_TRUE(queued_delegate->tap_cancel());
   EXPECT_TRUE(queued_delegate->begin());
   EXPECT_FALSE(queued_delegate->end());
-  EXPECT_FALSE(queued_delegate->double_tap());
   EXPECT_FALSE(queued_delegate->scroll_begin());
   EXPECT_FALSE(queued_delegate->scroll_update());
   EXPECT_FALSE(queued_delegate->scroll_end());
@@ -1677,7 +1638,6 @@ TEST_F(GestureRecognizerTest, AsynchronousGestureRecognition) {
   EXPECT_FALSE(queued_delegate->tap_cancel());
   EXPECT_FALSE(queued_delegate->begin());
   EXPECT_FALSE(queued_delegate->end());
-  EXPECT_FALSE(queued_delegate->double_tap());
   EXPECT_TRUE(queued_delegate->scroll_begin());
   EXPECT_FALSE(queued_delegate->scroll_update());
   EXPECT_FALSE(queued_delegate->scroll_end());
@@ -1928,19 +1888,19 @@ TEST_F(GestureRecognizerTest, GestureEventTouchLockSelectsCorrectWindow) {
   ui::GestureConsumer* target;
   const int kNumWindows = 4;
 
-  scoped_array<GestureEventConsumeDelegate*> delegates(
+  scoped_ptr<GestureEventConsumeDelegate*[]> delegates(
       new GestureEventConsumeDelegate*[kNumWindows]);
 
   ui::GestureConfiguration::
       set_max_separation_for_gesture_touches_in_pixels(499);
 
-  scoped_array<gfx::Rect> window_bounds(new gfx::Rect[kNumWindows]);
+  scoped_ptr<gfx::Rect[]> window_bounds(new gfx::Rect[kNumWindows]);
   window_bounds[0] = gfx::Rect(0, 0, 1, 1);
   window_bounds[1] = gfx::Rect(500, 0, 1, 1);
   window_bounds[2] = gfx::Rect(0, 500, 1, 1);
   window_bounds[3] = gfx::Rect(500, 500, 1, 1);
 
-  scoped_array<aura::Window*> windows(new aura::Window*[kNumWindows]);
+  scoped_ptr<aura::Window*[]> windows(new aura::Window*[kNumWindows]);
 
   // Instantiate windows with |window_bounds| and touch each window at
   // its origin.
@@ -2073,34 +2033,42 @@ TEST_F(GestureRecognizerTest, PinchScrollWithPreventDefaultedRelease) {
       delegate.get(), -1234, bounds, root_window()));
   delegate->set_window(window.get());
 
-  delegate->Reset();
+  {
+    delegate->Reset();
+    ui::TouchEvent press(ui::ET_TOUCH_PRESSED, gfx::Point(15, 25), kTouchId1,
+                         tes.Now());
+    ui::TouchEvent move(ui::ET_TOUCH_MOVED, gfx::Point(20, 95), kTouchId1,
+                        tes.LeapForward(200));
+    ui::TouchEvent release(ui::ET_TOUCH_RELEASED, gfx::Point(15, 25), kTouchId1,
+                           tes.LeapForward(50));
+    root_window()->AsRootWindowHostDelegate()->OnHostTouchEvent(&press);
+    root_window()->AsRootWindowHostDelegate()->OnHostTouchEvent(&move);
+    root_window()->AsRootWindowHostDelegate()->OnHostTouchEvent(&release);
+    delegate->Reset();
+
+    // Ack the press event.
+    delegate->ReceivedAck();
+    EXPECT_TRUE(delegate->tap_down());
+    delegate->Reset();
+
+    // Ack the move event.
+    delegate->ReceivedAck();
+    EXPECT_TRUE(delegate->tap_cancel());
+    EXPECT_TRUE(delegate->scroll_begin());
+    delegate->Reset();
+
+    // Ack the release event. Although the release event has been processed, it
+    // should still generate a scroll-end event.
+    delegate->ReceivedAckPreventDefaulted();
+    EXPECT_TRUE(delegate->scroll_end());
+  }
+
   ui::TouchEvent press(ui::ET_TOUCH_PRESSED, gfx::Point(15, 25), kTouchId1,
                        tes.Now());
   ui::TouchEvent move(ui::ET_TOUCH_MOVED, gfx::Point(20, 95), kTouchId1,
                       tes.LeapForward(200));
   ui::TouchEvent release(ui::ET_TOUCH_RELEASED, gfx::Point(15, 25), kTouchId1,
                          tes.LeapForward(50));
-  root_window()->AsRootWindowHostDelegate()->OnHostTouchEvent(&press);
-  root_window()->AsRootWindowHostDelegate()->OnHostTouchEvent(&move);
-  root_window()->AsRootWindowHostDelegate()->OnHostTouchEvent(&release);
-  delegate->Reset();
-
-  // Ack the press event.
-  delegate->ReceivedAck();
-  EXPECT_TRUE(delegate->tap_down());
-  delegate->Reset();
-
-  // Ack the move event.
-  delegate->ReceivedAck();
-  EXPECT_TRUE(delegate->tap_cancel());
-  EXPECT_TRUE(delegate->scroll_begin());
-  delegate->Reset();
-
-  // Ack the release event. Although the release event has been processed, it
-  // should still generate a scroll-end event.
-  delegate->ReceivedAckPreventDefaulted();
-  EXPECT_TRUE(delegate->scroll_end());
-
   ui::TouchEvent press2(ui::ET_TOUCH_PRESSED, gfx::Point(55, 25), kTouchId2,
                         tes.Now());
   ui::TouchEvent move2(ui::ET_TOUCH_MOVED, gfx::Point(45, 85), kTouchId2,
@@ -2222,7 +2190,6 @@ TEST_F(GestureRecognizerTest, TwoFingerTap) {
   EXPECT_FALSE(delegate->tap());
   EXPECT_TRUE(delegate->tap_down());
   EXPECT_FALSE(delegate->tap_cancel());
-  EXPECT_FALSE(delegate->double_tap());
   EXPECT_FALSE(delegate->scroll_begin());
   EXPECT_FALSE(delegate->scroll_update());
   EXPECT_FALSE(delegate->scroll_end());
@@ -2236,7 +2203,6 @@ TEST_F(GestureRecognizerTest, TwoFingerTap) {
   EXPECT_FALSE(delegate->tap());
   EXPECT_FALSE(delegate->tap_down());  // no touch down for second tap.
   EXPECT_TRUE(delegate->tap_cancel());
-  EXPECT_FALSE(delegate->double_tap());
   EXPECT_FALSE(delegate->scroll_begin());
   EXPECT_FALSE(delegate->scroll_update());
   EXPECT_FALSE(delegate->scroll_end());
@@ -2254,7 +2220,6 @@ TEST_F(GestureRecognizerTest, TwoFingerTap) {
   EXPECT_FALSE(delegate->tap());
   EXPECT_FALSE(delegate->tap_down());
   EXPECT_FALSE(delegate->tap_cancel());
-  EXPECT_FALSE(delegate->double_tap());
   EXPECT_FALSE(delegate->scroll_begin());
   EXPECT_FALSE(delegate->scroll_update());
   EXPECT_FALSE(delegate->scroll_end());
@@ -2271,7 +2236,6 @@ TEST_F(GestureRecognizerTest, TwoFingerTap) {
   EXPECT_FALSE(delegate->tap());
   EXPECT_FALSE(delegate->tap_down());
   EXPECT_FALSE(delegate->tap_cancel());
-  EXPECT_FALSE(delegate->double_tap());
   EXPECT_FALSE(delegate->scroll_begin());
   EXPECT_FALSE(delegate->scroll_update());
   EXPECT_FALSE(delegate->scroll_end());
@@ -2288,7 +2252,6 @@ TEST_F(GestureRecognizerTest, TwoFingerTap) {
   EXPECT_FALSE(delegate->tap());
   EXPECT_FALSE(delegate->tap_down());
   EXPECT_FALSE(delegate->tap_cancel());
-  EXPECT_FALSE(delegate->double_tap());
   EXPECT_FALSE(delegate->scroll_begin());
   EXPECT_FALSE(delegate->scroll_update());
   EXPECT_FALSE(delegate->scroll_end());
@@ -2542,7 +2505,6 @@ TEST_F(GestureRecognizerTest, VeryWideTwoFingerTouchDownShouldBeAPinch) {
   EXPECT_FALSE(delegate->tap());
   EXPECT_TRUE(delegate->tap_down());
   EXPECT_FALSE(delegate->tap_cancel());
-  EXPECT_FALSE(delegate->double_tap());
   EXPECT_FALSE(delegate->scroll_begin());
   EXPECT_FALSE(delegate->scroll_update());
   EXPECT_FALSE(delegate->scroll_end());
@@ -2556,7 +2518,6 @@ TEST_F(GestureRecognizerTest, VeryWideTwoFingerTouchDownShouldBeAPinch) {
   EXPECT_FALSE(delegate->tap());
   EXPECT_FALSE(delegate->tap_down());  // no touch down for second tap.
   EXPECT_TRUE(delegate->tap_cancel());
-  EXPECT_FALSE(delegate->double_tap());
   EXPECT_TRUE(delegate->scroll_begin());
   EXPECT_FALSE(delegate->scroll_update());
   EXPECT_FALSE(delegate->scroll_end());
@@ -2669,7 +2630,6 @@ TEST_F(GestureRecognizerTest, GestureEventScrollTouchMoveConsumed) {
   EXPECT_TRUE(delegate->tap_down());
   EXPECT_FALSE(delegate->tap_cancel());
   EXPECT_TRUE(delegate->begin());
-  EXPECT_FALSE(delegate->double_tap());
   EXPECT_FALSE(delegate->scroll_begin());
   EXPECT_FALSE(delegate->scroll_update());
   EXPECT_FALSE(delegate->scroll_end());
@@ -2684,7 +2644,6 @@ TEST_F(GestureRecognizerTest, GestureEventScrollTouchMoveConsumed) {
   // but this is a symptom of a larger issue: crbug.com/146397.
   EXPECT_FALSE(delegate->tap_cancel());
   EXPECT_FALSE(delegate->begin());
-  EXPECT_FALSE(delegate->double_tap());
   EXPECT_FALSE(delegate->scroll_begin());
   EXPECT_FALSE(delegate->scroll_update());
   EXPECT_FALSE(delegate->scroll_end());
@@ -2700,7 +2659,6 @@ TEST_F(GestureRecognizerTest, GestureEventScrollTouchMoveConsumed) {
   EXPECT_TRUE(delegate->tap_cancel());
   EXPECT_FALSE(delegate->begin());
   EXPECT_TRUE(delegate->end());
-  EXPECT_FALSE(delegate->double_tap());
   EXPECT_FALSE(delegate->scroll_begin());
   EXPECT_FALSE(delegate->scroll_update());
   EXPECT_FALSE(delegate->scroll_end());
@@ -2728,7 +2686,6 @@ TEST_F(GestureRecognizerTest, GestureEventScrollTouchMovePartialConsumed) {
   EXPECT_TRUE(delegate->tap_down());
   EXPECT_FALSE(delegate->tap_cancel());
   EXPECT_TRUE(delegate->begin());
-  EXPECT_FALSE(delegate->double_tap());
   EXPECT_FALSE(delegate->scroll_begin());
   EXPECT_FALSE(delegate->scroll_update());
   EXPECT_FALSE(delegate->scroll_end());
@@ -2743,7 +2700,6 @@ TEST_F(GestureRecognizerTest, GestureEventScrollTouchMovePartialConsumed) {
   // but this is a symptom of a larger issue: crbug.com/146397.
   EXPECT_FALSE(delegate->tap_cancel());
   EXPECT_FALSE(delegate->begin());
-  EXPECT_FALSE(delegate->double_tap());
   EXPECT_FALSE(delegate->scroll_begin());
   EXPECT_FALSE(delegate->scroll_update());
   EXPECT_FALSE(delegate->scroll_end());
@@ -2755,7 +2711,6 @@ TEST_F(GestureRecognizerTest, GestureEventScrollTouchMovePartialConsumed) {
   EXPECT_FALSE(delegate->tap_down());
   EXPECT_TRUE(delegate->tap_cancel());
   EXPECT_FALSE(delegate->begin());
-  EXPECT_FALSE(delegate->double_tap());
   EXPECT_TRUE(delegate->scroll_begin());
   EXPECT_TRUE(delegate->scroll_update());
   EXPECT_FALSE(delegate->scroll_end());
@@ -2777,7 +2732,6 @@ TEST_F(GestureRecognizerTest, GestureEventScrollTouchMovePartialConsumed) {
   EXPECT_FALSE(delegate->tap_down());
   EXPECT_FALSE(delegate->tap_cancel());
   EXPECT_FALSE(delegate->begin());
-  EXPECT_FALSE(delegate->double_tap());
   EXPECT_FALSE(delegate->scroll_begin());
   EXPECT_TRUE(delegate->scroll_update());
   EXPECT_FALSE(delegate->scroll_end());
@@ -2789,7 +2743,6 @@ TEST_F(GestureRecognizerTest, GestureEventScrollTouchMovePartialConsumed) {
   EXPECT_FALSE(delegate->tap_down());
   EXPECT_FALSE(delegate->tap_cancel());
   EXPECT_FALSE(delegate->begin());
-  EXPECT_FALSE(delegate->double_tap());
   EXPECT_FALSE(delegate->scroll_begin());
   EXPECT_TRUE(delegate->scroll_update());
   EXPECT_FALSE(delegate->scroll_end());
@@ -2806,7 +2759,6 @@ TEST_F(GestureRecognizerTest, GestureEventScrollTouchMovePartialConsumed) {
   EXPECT_FALSE(delegate->tap_cancel());
   EXPECT_FALSE(delegate->begin());
   EXPECT_TRUE(delegate->end());
-  EXPECT_FALSE(delegate->double_tap());
   EXPECT_FALSE(delegate->scroll_begin());
   EXPECT_FALSE(delegate->scroll_update());
   EXPECT_FALSE(delegate->scroll_end());
@@ -2848,7 +2800,6 @@ TEST_F(GestureRecognizerTest, GestureEventDoubleTap) {
   EXPECT_FALSE(delegate->tap_cancel());
   EXPECT_TRUE(delegate->begin());
   EXPECT_TRUE(delegate->end());
-  EXPECT_TRUE(delegate->double_tap());
   EXPECT_FALSE(delegate->scroll_begin());
   EXPECT_FALSE(delegate->scroll_update());
   EXPECT_FALSE(delegate->scroll_end());
@@ -2890,7 +2841,6 @@ TEST_F(GestureRecognizerTest, TwoTapsFarApart) {
   EXPECT_FALSE(delegate->tap_cancel());
   EXPECT_TRUE(delegate->begin());
   EXPECT_TRUE(delegate->end());
-  EXPECT_FALSE(delegate->double_tap());
   EXPECT_FALSE(delegate->scroll_begin());
   EXPECT_FALSE(delegate->scroll_update());
   EXPECT_FALSE(delegate->scroll_end());
@@ -2933,7 +2883,6 @@ TEST_F(GestureRecognizerTest, TwoTapsWithDelayBetween) {
   EXPECT_FALSE(delegate->tap_cancel());
   EXPECT_TRUE(delegate->begin());
   EXPECT_TRUE(delegate->end());
-  EXPECT_FALSE(delegate->double_tap());
   EXPECT_FALSE(delegate->scroll_begin());
   EXPECT_FALSE(delegate->scroll_update());
   EXPECT_FALSE(delegate->scroll_end());

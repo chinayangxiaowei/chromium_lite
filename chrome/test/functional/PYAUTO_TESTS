@@ -1,4 +1,4 @@
-# Copyright (c) 2012 The Chromium Authors. All rights reserved.
+# Copyright 2013 The Chromium Authors. All rights reserved.
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 #
@@ -37,14 +37,12 @@
       'autofill',
       'codesign',
       'crash_reporter',
-      'downloads',
       'execute_javascript',
       'extensions',
       'fullscreen_mouselock',
       'gtalk.test_basic',
       'imports',
       'infobars',
-      'instant',
       'media.media_basic_playback',
       'multiprofile',
       'nacl_sdk',
@@ -56,7 +54,6 @@
       'pyauto_webdriver',
       'search_engines',
       'special_tabs',
-      'sync.SyncTest',
       'test_pyauto',
 
       # ===========================
@@ -68,8 +65,10 @@
       # ==================================================
       # crbug.com/145006
       '-about_plugins_ui.ChromeAboutPluginsUITest.testEnableAndDisableFlashPlugin',
-      # crbug.com/124280
-      '-downloads.DownloadsTest.testPauseAndResume',
+      # crbug.com/100365
+      '-autofill.AutofillTest.testDisplayLineItemForEntriesWithNoCCNum',
+      # crbug.com/171828
+      '-autofill.AutofillTest.testNoDuplicatePhoneNumsInPrefs',
       # The source is behind.  Waiting for dev to automate the update.
       # crbug.com/109160
       '-execute_javascript.ExecuteJavascriptTest.testExecuteJavascriptInExtension',
@@ -84,19 +83,24 @@
       '-fullscreen_mouselock.FullscreenMouselockTest.testNoTabFSExitWhenJSExitMouseLock',
       # crosbug.com/136875
       '-fullscreen_mouselock.FullscreenMouselockTest.testTabFSDoesNotExitForAnchorLinks',
+      # crbug.com/179263
+      '-gtalk.test_basic.BasicTest.testCurrentVersion',
+      '-gtalk.test_basic.BasicTest.testRCVersion',
       # crbug.com/165796
       '-infobars.OneClickInfobarTest',
       # crbug.com/131874
       '-infobars.OneClickInfobarTest.testNoOneClickInfobarAfterCancel',
       # crbug.com/133315
       '-infobars.OneClickInfobarTest.testDisplayOneClickInfobarAfterDismiss',
-      # crbug.com/124913
-      '-infobars.OneClickInfobarTest.testNoSameIDSigninForTwoProfiles',
-      # crbug.com/165843
-      '-instant.InstantTest.testInstantWithNonInstantSearchEngine',
       # Mysteriously broken?
       # crbug.com/138857
       '-multiprofile.MultiprofileTest.testMakeSearchEngineDefaultInMultiprofile',
+      # crbug.com/179268
+      '-ntp.NTPTest.testCannotUninstallWebStore',
+      '-ntp.NTPTest.testGetAppsInNewProfile',
+      '-ntp.NTPTest.testGetAppsWhenInstallApp',
+      '-ntp.NTPTest.testGetAppsWhenInstallNonApps',
+      '-ntp.NTPTest.testUninstallApp',
       # crbug.com/143308
       '-omnibox.OmniboxLiveTest.testGoogleSearch',
       # crbug.com/71715
@@ -129,8 +133,8 @@
       '-prefs_ui.PrefsUITest.testNoInitialLineEntryInUI',
       # crbug.com/132285
       '-special_tabs.SpecialTabsTest.testSpecialURLTabs',
-      # crbug.com/88593
-      '-sync.SyncTest.testPersonalStuffSyncSection',
+      # crbug.com/168081
+      '-ntp.NTPTest.testCloseOneTab',
     ],
 
     'win': [
@@ -144,7 +148,6 @@
       # Disabled tests that need to be investigated/fixed.
       # ==================================================
       # crbug.com/105948
-      '-autofill.AutofillTest.testDisplayLineItemForEntriesWithNoCCNum',
       '-autofill.AutofillTest.testPostalCodeAndStateLabelsBasedOnCountry',
       # crbug.com/111289
       '-extensions.ExtensionsTest.testAllowAccessFileURLs',
@@ -158,23 +161,13 @@
       # -imports.ImportsTest.testFirefoxImportFromPrefs
       # Disabled on vista in the actual test. crbug.com/89767
       # -imports.ImportsTest.testImportFirefoxPasswordsFromPrefs
-      # crbug.com/125424
-      '-media.media_basic_playback.MediaBasicPlaybackTest.testBasicPlaybackMatrix',
+      # crbug.com/171490
+      '-passwords.PasswordTest.testPasswdInfoNotStoredWhenAutocompleteOff',
       # crbug.com/117569
       '-passwords.PasswordTest.testSavedPasswordInTabsAndWindows',
       # crbug.com/98526
       '-pyauto_webdriver.PyAutoWebDriverTest.testCanConnectToRestartedBrowser',
       '-pyauto_webdriver.PyAutoWebDriverTest.testTypeIntoTextBox',
-      # Disable sync.SyncIntegrationTest on the QA bots in FULL,
-      # until sync protobufs are copied over.
-      # Also, see crbug.com/104227
-      '-sync.SyncIntegrationTest',
-      # crbug.com/88679
-      '-sync.SyncTest',
-      # crbug.com/86949
-      '-sync.SyncTest.testRestartBrowser',
-      # crbug.com/87642
-      '-sync.SyncTest.testDisableAndEnableDatatypes',
     ],
 
     'mac': [
@@ -209,8 +202,6 @@
       '-passwords',
       # crbug.com/69619
       '-search_engines.SearchEnginesTest.testDiscoverSearchEngine',
-      # Keychain popups make sync tests difficult on Mac.  crbug.com/49378
-      '-sync',
       # crbug.com/98526
       '-pyauto_webdriver.PyAutoWebDriverTest.testCanConnectToRestartedBrowser',
       '-pyauto_webdriver.PyAutoWebDriverTest.testTypeIntoTextBox',
@@ -228,14 +219,10 @@
       # ==================================================
       # Disabled tests that need to be investigated/fixed.
       # ==================================================
-      # crbug.com/100365
-      '-autofill.AutofillTest.testDisplayLineItemForEntriesWithNoCCNum',
       # crbug.com/111289
       '-extensions.ExtensionsTest.testAllowAccessFileURLs',
       # crbug.com/91033
       '-omnibox.OmniboxTest.testOmniboxSearchHistory',
-      # Gnome / kwallet popups on linux break sync tests.  crbug.com/80329
-      '-sync',
     ],
 
     'chromeos': [
@@ -277,9 +264,6 @@
       # ==================================================
       # crbug.com/132337
       '-autofill.AutofillTest.testTabOrderForEditAddress',
-      # Downloads panel stays even after declining a download.
-      # crosbug.com/14728
-      '-downloads.DownloadsTest.testDeclineDangerousDownload',
       # crosbug.com/19556
       '-extensions.ExtensionsTest.testAllowAccessFileURLs',
       '-extensions.ExtensionsTest.testAllowIncognitoExtension',
@@ -305,10 +289,7 @@
       '-prefs.PrefsTest.testNavigationStateOnSessionRestore',
       '-prefs.PrefsTest.testSessionRestoreURLs',
       '-prefs.PrefsTest.testSessionRestore',
-      # sync tests were running into a secondary passphrase. crosbug.com/15016.
-      '-sync',
       # Deal with i18n chars.  crosbug.com/12639
-      '-downloads.DownloadsTest.testCrazyFilenames',
       '-omnibox.OmniboxTest.testCrazyFilenames',
       # crosbug.com/16977
       '-chromeos_wifi_sanity.ChromeosWifiSanity.testConnectToHiddenWiFiNonExistent',
@@ -394,6 +375,7 @@
       # ==================================================
       '-perf.NetflixPerfTest',  # crosbug.com/32320.
       '-perf.PageCyclerNetSimTest',  # Investigate Web Page Replay on ChromeOS.
+      '-perf.YoutubePerfTest',  # crbug.com/233706
 
       # ===========================
       # Permanently-disabled tests.
@@ -471,7 +453,6 @@
   'PGO': {
     'chromeos': [
       'perf.BenchmarkPerfTest.testV8BenchmarkSuite',
-      'perf.LiveWebappLoadTest.testNewTabGmail',
       'perf.PageCyclerTest',
       'perf.ScrollTest.testGooglePlusScroll',
     ],
@@ -518,11 +499,24 @@
     ],
   },
 
-  # WebRTC quality tests. Requires webcam, an audio device and a special setup
-  # where the webcam is playing a barcode-encoded video.
+  # WebRTC / AppRTC Integration tests.
+  'WEBRTC_APPRTC': {
+    'all': [
+      'webrtc_apprtc_call',
+    ],
+  },
+
+  # WebRTC quality tests. The video quality test requires a webcam, an audio
+  # device and a special setup where the webcam plays a barcode-encoded video.
+  # The webrtc_audio_quality test requires additional configuration as described
+  # in the test's class comments.
   'WEBRTC_QUALITY': {
     'all': [
       'webrtc_video_quality',
+      'webrtc_audio_quality',
+    ],
+    'mac': [
+      '-webrtc_audio_quality',  # Not implemented.
     ],
   },
 

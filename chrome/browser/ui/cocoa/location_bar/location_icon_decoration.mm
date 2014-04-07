@@ -8,7 +8,7 @@
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_commands.h"
 #include "chrome/browser/ui/browser_finder.h"
-#import "chrome/browser/ui/cocoa/bookmarks/bookmark_drag_drop.h"
+#import "chrome/browser/ui/cocoa/bookmarks/bookmark_drag_drop_cocoa.h"
 #import "chrome/browser/ui/cocoa/location_bar/location_bar_view_mac.h"
 #include "content/public/browser/navigation_controller.h"
 #include "content/public/browser/navigation_entry.h"
@@ -104,8 +104,8 @@ bool LocationIconDecoration::OnMousePressed(NSRect frame) {
     return true;
   }
   Browser* browser = chrome::FindBrowserWithWebContents(tab);
-  chrome::ShowPageInfo(browser, tab, nav_entry->GetURL(), nav_entry->GetSSL(),
-                       true);
+  chrome::ShowWebsiteSettings(browser, tab, nav_entry->GetURL(),
+                              nav_entry->GetSSL(), true);
   return true;
 }
 

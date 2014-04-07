@@ -112,6 +112,12 @@ class VIEWS_EXPORT Widget : public internal::NativeWidgetDelegate,
     MOVE_LOOP_CANCELED
   };
 
+  // Source that initiated the move loop.
+  enum MoveLoopSource {
+    MOVE_LOOP_SOURCE_MOUSE,
+    MOVE_LOOP_SOURCE_TOUCH,
+  };
+
   struct VIEWS_EXPORT InitParams {
     enum Type {
       TYPE_WINDOW,      // A decorated Window, like a frame window.
@@ -187,6 +193,9 @@ class VIEWS_EXPORT Widget : public internal::NativeWidgetDelegate,
     // TODO(beng): Figure out if there's a better way to expose this, e.g. get
     // rid of NW subclasses and do this all via message handling.
     DesktopRootWindowHost* desktop_root_window_host;
+    // Whether this window is intended to be a toplevel window with no
+    // attachment to any other window. (This may be a transient window if
+    // |parent| is set.)
     bool top_level;
     // Only used by NativeWidgetAura. Specifies the type of layer for the
     // aura::Window. Default is LAYER_TEXTURED.
@@ -204,12 +213,20 @@ class VIEWS_EXPORT Widget : public internal::NativeWidgetDelegate,
   Widget();
   virtual ~Widget();
 
-  // Creates a decorated window Widget with the specified properties.
+  // Creates a toplevel window with no context. These methods should only be
+  // used in cases where there is no contextual information because we're
+  // creating a toplevel window connected to no other event.
+  //
+  // If you have any parenting or context information, or can pass that
+  // information, prefer the WithParent or WithContext versions of these
+  // methods.
   static Widget* CreateWindow(WidgetDelegate* delegate);
-  static Widget* CreateWindowWithParent(WidgetDelegate* delegate,
-                                        gfx::NativeWindow parent);
   static Widget* CreateWindowWithBounds(WidgetDelegate* delegate,
                                         const gfx::Rect& bounds);
+
+  // Creates a decorated window Widget with the specified properties.
+  static Widget* CreateWindowWithParent(WidgetDelegate* delegate,
+                                        gfx::NativeWindow parent);
   static Widget* CreateWindowWithParentAndBounds(WidgetDelegate* delegate,
                                                  gfx::NativeWindow parent,
                                                  const gfx::Rect& bounds);
@@ -344,11 +361,12 @@ class VIEWS_EXPORT Widget : public internal::NativeWidgetDelegate,
   void SetVisibilityChangedAnimationsEnabled(bool value);
 
   // Starts a nested message loop that moves the window. This can be used to
-  // start a window move operation from a mouse moved event. This returns when
-  // the move completes. |drag_offset| is the offset from the top left corner
-  // of the window to the point where the cursor is dragging, and is used to
-  // offset the bounds of the window from the cursor.
-  MoveLoopResult RunMoveLoop(const gfx::Vector2d& drag_offset);
+  // start a window move operation from a mouse or touch event. This returns
+  // when the move completes. |drag_offset| is the offset from the top left
+  // corner of the window to the point where the cursor is dragging, and is used
+  // to offset the bounds of the window from the cursor.
+  MoveLoopResult RunMoveLoop(const gfx::Vector2d& drag_offset,
+                             MoveLoopSource source);
 
   // Stops a previously started move loop. This is not immediate.
   void EndMoveLoop();
@@ -442,9 +460,6 @@ class VIEWS_EXPORT Widget : public internal::NativeWidgetDelegate,
 
   // Returns whether the Widget is visible to the user.
   virtual bool IsVisible() const;
-
-  // Returns whether the Widget is customized for accessibility.
-  bool IsAccessibleWidget() const;
 
   // Returns the ThemeProvider that provides theme resources for this Widget.
   virtual ui::ThemeProvider* GetThemeProvider() const;
@@ -633,6 +648,10 @@ class VIEWS_EXPORT Widget : public internal::NativeWidgetDelegate,
   // POPUP or MENU, and has a focus manager and input method object associated
   // with it. TYPE_CONTROL and TYPE_TOOLTIP is not considered top level.
   bool is_top_level() const { return is_top_level_; }
+
+  // True when window movement via mouse interaction with the frame is disabled.
+  bool movement_disabled() const { return movement_disabled_; }
+  void set_movement_disabled(bool disabled) { movement_disabled_ = disabled; }
 
   // Returns the work area bounds of the screen the Widget belongs to.
   gfx::Rect GetWorkAreaBoundsInScreen() const;
@@ -824,6 +843,10 @@ class VIEWS_EXPORT Widget : public internal::NativeWidgetDelegate,
 
   // Is |root_layers_| out of date?
   bool root_layers_dirty_;
+
+  // True when window movement via mouse interaction with the frame should be
+  // disabled.
+  bool movement_disabled_;
 
   DISALLOW_COPY_AND_ASSIGN(Widget);
 };

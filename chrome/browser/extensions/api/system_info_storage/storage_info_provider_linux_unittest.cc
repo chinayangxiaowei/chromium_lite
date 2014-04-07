@@ -10,13 +10,15 @@
 
 #include "base/file_util.h"
 #include "base/stl_util.h"
+#include "chrome/browser/storage_monitor/test_storage_monitor.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 namespace extensions {
 
-using api::experimental_system_info_storage::FromStorageUnitTypeString;
+using api::experimental_system_info_storage::ParseStorageUnitType;
 using api::experimental_system_info_storage::StorageUnitInfo;
 using api::experimental_system_info_storage::ToString;
+using chrome::test::TestStorageMonitor;
 
 namespace {
 
@@ -48,7 +50,7 @@ typedef std::map<std::string, struct TestMountEntry> TestMountEntryMap;
 
 class StorageInfoProviderLinuxWrapper : public StorageInfoProviderLinux {
  public:
-  explicit StorageInfoProviderLinuxWrapper(const FilePath& mtab_path)
+  explicit StorageInfoProviderLinuxWrapper(const base::FilePath& mtab_path)
     : StorageInfoProviderLinux(mtab_path) {
     for (size_t i = 0; i < arraysize(mount_entries); i++) {
       std::string mnt_path = mount_entries[i].mnt_path;
@@ -61,13 +63,15 @@ class StorageInfoProviderLinuxWrapper : public StorageInfoProviderLinux {
  private:
   friend class StorageInfoProviderLinuxTest;
 
+  virtual ~StorageInfoProviderLinuxWrapper() {}
+
   virtual bool QueryUnitInfo(const std::string& mount_path,
                              StorageUnitInfo* info) OVERRIDE {
     std::string type;
     if (!QueryStorageType(mount_path, &type))
       return false;
     info->id = mount_path;
-    info->type = FromStorageUnitTypeString(type);
+    info->type = ParseStorageUnitType(type);
     info->capacity = mount_entry_map_[mount_path].capacity;
     info->available_capacity = mount_entry_map_[mount_path].available_capacity;
     return true;
@@ -100,16 +104,19 @@ class StorageInfoProviderLinuxTest : public testing::Test {
     int bytes = file_util::WriteFile(mtab_file_, mtab_test_data,
                                      strlen(mtab_test_data));
     ASSERT_EQ(static_cast<int>(strlen(mtab_test_data)), bytes);
-    storage_info_provider_.reset(
-        new StorageInfoProviderLinuxWrapper(mtab_file_));
+    test_storage_notifications_.reset(new TestStorageMonitor);
+    storage_info_provider_ = new StorageInfoProviderLinuxWrapper(mtab_file_);
   }
 
   virtual void TearDown() OVERRIDE {
     file_util::Delete(mtab_file_, false);
   }
 
-  scoped_ptr<StorageInfoProviderLinuxWrapper> storage_info_provider_;
-  FilePath mtab_file_;
+  scoped_refptr<StorageInfoProviderLinuxWrapper> storage_info_provider_;
+
+ private:
+  base::FilePath mtab_file_;
+  scoped_ptr<TestStorageMonitor> test_storage_notifications_;
 };
 
 TEST_F(StorageInfoProviderLinuxTest, QueryInfo) {
@@ -130,8 +137,8 @@ TEST_F(StorageInfoProviderLinuxTest, QueryInfo) {
 }
 
 TEST_F(StorageInfoProviderLinuxTest, QueryInfoFailed) {
-  storage_info_provider_.reset(
-      new StorageInfoProviderLinuxWrapper(FilePath("/invalid/file/path")));
+  storage_info_provider_ =
+      new StorageInfoProviderLinuxWrapper(base::FilePath("/invalid/file/path"));
   StorageInfo info;
   ASSERT_FALSE(QueryInfo(&info));
   EXPECT_EQ(0u, info.size());

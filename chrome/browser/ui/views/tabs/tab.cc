@@ -10,13 +10,13 @@
 #include "base/debug/alias.h"
 #include "base/utf_string_conversions.h"
 #include "chrome/browser/defaults.h"
-#include "chrome/browser/themes/theme_service.h"
+#include "chrome/browser/themes/theme_properties.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/tab_contents/core_tab_helper.h"
 #include "chrome/browser/ui/tabs/tab_resources.h"
-#include "chrome/browser/ui/tabs/tab_strip_selection_model.h"
 #include "chrome/browser/ui/view_ids.h"
 #include "chrome/browser/ui/views/tabs/tab_controller.h"
+#include "chrome/browser/ui/views/theme_image_mapper.h"
 #include "chrome/common/chrome_switches.h"
 #include "grit/generated_resources.h"
 #include "grit/theme_resources.h"
@@ -29,10 +29,10 @@
 #include "ui/base/animation/throb_animation.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/layout.h"
+#include "ui/base/models/list_selection_model.h"
 #include "ui/base/resource/resource_bundle.h"
 #include "ui/base/text/text_elider.h"
 #include "ui/base/theme_provider.h"
-
 #include "ui/gfx/canvas.h"
 #include "ui/gfx/color_analysis.h"
 #include "ui/gfx/favicon_size.h"
@@ -60,7 +60,6 @@ int left_padding() {
   static int value = -1;
   if (value == -1) {
     switch (ui::GetDisplayLayout()) {
-      case ui::LAYOUT_ASH:
       case ui::LAYOUT_DESKTOP:
         value = 22;
         break;
@@ -78,7 +77,6 @@ int top_padding() {
   static int value = -1;
   if (value == -1) {
     switch (ui::GetDisplayLayout()) {
-      case ui::LAYOUT_ASH:
       case ui::LAYOUT_DESKTOP:
         value = 7;
         break;
@@ -96,12 +94,11 @@ int right_padding() {
   static int value = -1;
   if (value == -1) {
     switch (ui::GetDisplayLayout()) {
-      case ui::LAYOUT_ASH:
       case ui::LAYOUT_DESKTOP:
-        value = 19;
+        value = 17;
         break;
       case ui::LAYOUT_TOUCH:
-        value = 23;
+        value = 21;
         break;
       default:
         NOTREACHED();
@@ -114,7 +111,6 @@ int bottom_padding() {
   static int value = -1;
   if (value == -1) {
     switch (ui::GetDisplayLayout()) {
-      case ui::LAYOUT_ASH:
       case ui::LAYOUT_DESKTOP:
         value = 5;
         break;
@@ -133,7 +129,6 @@ int drop_shadow_height() {
   static int value = -1;
   if (value == -1) {
     switch (ui::GetDisplayLayout()) {
-      case ui::LAYOUT_ASH:
       case ui::LAYOUT_DESKTOP:
         value = 4;
         break;
@@ -152,7 +147,6 @@ int tab_icon_size() {
   static int value = -1;
   if (value == -1) {
     switch (ui::GetDisplayLayout()) {
-      case ui::LAYOUT_ASH:
       case ui::LAYOUT_DESKTOP:
         value = gfx::kFaviconSize;
         break;
@@ -177,23 +171,16 @@ static const int kTouchWidth = 120;
 
 static const int kToolbarOverlap = 1;
 static const int kFaviconTitleSpacing = 4;
-#if defined(USE_ASH)
 // Additional vertical offset for title text relative to top of tab.
 // Ash text rendering may be different than Windows.
-// TODO(jamescook): Make this Chrome OS or Linux only?
-static const int kTitleTextOffsetY = 1;
-#else
+static const int kTitleTextOffsetYAsh = 1;
 static const int kTitleTextOffsetY = 0;
-#endif
 static const int kTitleCloseButtonSpacing = 3;
 static const int kStandardTitleWidth = 175;
-#if defined(USE_ASH)
 // Additional vertical offset for close button relative to top of tab.
 // Ash needs this to match the text vertical position.
-static const int kCloseButtonVertFuzz = 1;
-#else
+static const int kCloseButtonVertFuzzAsh = 1;
 static const int kCloseButtonVertFuzz = 0;
-#endif
 // Additional horizontal offset for close button relative to title text.
 static const int kCloseButtonHorzFuzz = 3;
 
@@ -238,22 +225,45 @@ static const SkColor kMiniTitleChangeGradientColor2 =
 // errors may lead to tabs in the same tabstrip having different sizes.
 const size_t kMaxImageCacheSize = 4;
 
-// Height of the colored bar representing the favicon in immersive mode.
+// Height of the miniature tab strip in immersive mode.
+const int kImmersiveTabHeight = 3;
+
+// Height of the small tab indicator rectangles in immersive mode.
 const int kImmersiveBarHeight = 2;
 
-// Distance between the favicon bar and the tab bar in immersive mode.
-const int kImmersiveBarSpacing = 2;
-
 // Color for active and inactive tabs in the immersive mode light strip. These
-// should be similar to the color of the normal art assets for tabs.
-const SkColor kImmersiveActiveTabColor = SkColorSetRGB(230, 230, 230);
-const SkColor kImmersiveInactiveTabColor = SkColorSetRGB(184, 184, 184);
+// should be a little brighter than the color of the normal art assets for tabs,
+// which for active tabs is 230, 230, 230 and for inactive is 184, 184, 184.
+const SkColor kImmersiveActiveTabColor = SkColorSetRGB(235, 235, 235);
+const SkColor kImmersiveInactiveTabColor = SkColorSetRGB(190, 190, 190);
+
+// Number of steps in the immersive mode loading animation.
+const int kImmersiveLoadingStepCount = 32;
 
 // Scale to resize the current favicon by when projecting.
 const double kProjectingFaviconResizeScale = 0.75;
 
 // Scale to resize the projection sheet glow by.
 const double kProjectingGlowResizeScale = 2.0;
+
+void DrawIconAtLocation(gfx::Canvas* canvas,
+                        const gfx::ImageSkia& image,
+                        int image_offset,
+                        int dst_x,
+                        int dst_y,
+                        int icon_width,
+                        int icon_height,
+                        bool filter,
+                        const SkPaint& paint) {
+  // NOTE: the clipping is a work around for 69528, it shouldn't be necessary.
+  canvas->Save();
+  canvas->ClipRect(gfx::Rect(dst_x, dst_y, icon_width, icon_height));
+  canvas->DrawImageInt(image,
+                       image_offset, 0, icon_width, icon_height,
+                       dst_x, dst_y, icon_width, icon_height,
+                       filter, paint);
+  canvas->Restore();
+}
 
 // Draws the icon image at the center of |bounds|.
 void DrawIconCenter(gfx::Canvas* canvas,
@@ -267,14 +277,30 @@ void DrawIconCenter(gfx::Canvas* canvas,
   // Center the image within bounds.
   int dst_x = bounds.x() - (icon_width - bounds.width()) / 2;
   int dst_y = bounds.y() - (icon_height - bounds.height()) / 2;
-  // NOTE: the clipping is a work around for 69528, it shouldn't be necessary.
-  canvas->Save();
-  canvas->ClipRect(gfx::Rect(dst_x, dst_y, icon_width, icon_height));
-  canvas->DrawImageInt(image,
-                       image_offset, 0, icon_width, icon_height,
-                       dst_x, dst_y, icon_width, icon_height,
-                       filter, paint);
-  canvas->Restore();
+  DrawIconAtLocation(canvas, image, image_offset, dst_x, dst_y, icon_width,
+                     icon_height, filter, paint);
+}
+
+// Draws the icon image at the bottom right corner of |bounds|.
+void DrawIconBottomRight(gfx::Canvas* canvas,
+                         const gfx::ImageSkia& image,
+                         int image_offset,
+                         int icon_width,
+                         int icon_height,
+                         const gfx::Rect& bounds,
+                         bool filter,
+                         const SkPaint& paint) {
+  int dst_x = bounds.x() + bounds.width() - icon_width;
+  int dst_y = bounds.y() + bounds.height() - icon_height;
+  DrawIconAtLocation(canvas, image, image_offset, dst_x, dst_y, icon_width,
+                     icon_height, filter, paint);
+}
+
+chrome::HostDesktopType GetHostDesktopType(views::View* view) {
+  // Widget is NULL when tabs are detached.
+  views::Widget* widget = view->GetWidget();
+  return chrome::GetHostDesktopTypeForNativeView(
+      widget ? widget->GetNativeView() : NULL);
 }
 
 }  // namespace
@@ -293,7 +319,7 @@ class Tab::FaviconCrashAnimation : public ui::LinearAnimation,
   virtual ~FaviconCrashAnimation() {}
 
   // ui::Animation overrides:
-  virtual void AnimateToState(double state) {
+  virtual void AnimateToState(double state) OVERRIDE {
     const double kHidingOffset = 27;
 
     if (state < .5) {
@@ -308,7 +334,7 @@ class Tab::FaviconCrashAnimation : public ui::LinearAnimation,
   }
 
   // ui::AnimationDelegate overrides:
-  virtual void AnimationCanceled(const ui::Animation* animation) {
+  virtual void AnimationCanceled(const ui::Animation* animation) OVERRIDE {
     target_->SetFaviconHidingOffset(0);
   }
 
@@ -400,8 +426,6 @@ const char Tab::kViewClassName[] = "BrowserTab";
 Tab::TabImage Tab::tab_alpha_ = {0};
 Tab::TabImage Tab::tab_active_ = {0};
 Tab::TabImage Tab::tab_inactive_ = {0};
-Tab::TabImage Tab::tab_immersive_active_ = {0};
-Tab::TabImage Tab::tab_immersive_inactive_ = {0};
 // static
 gfx::Font* Tab::font_ = NULL;
 // static
@@ -418,14 +442,13 @@ Tab::Tab(TabController* controller)
       dragging_(false),
       favicon_hiding_offset_(0),
       loading_animation_frame_(0),
+      immersive_loading_step_(0),
       should_display_crashed_favicon_(false),
-      throbber_disabled_(false),
       theme_provider_(NULL),
       ALLOW_THIS_IN_INITIALIZER_LIST(hover_controller_(this)),
       showing_icon_(false),
       showing_close_button_(false),
-      close_button_color_(0),
-      icon_dominant_color_(SK_ColorWHITE) {
+      close_button_color_(0) {
   InitTabResources();
 
   // So we get don't get enter/exit on children and don't prematurely stop the
@@ -451,6 +474,8 @@ Tab::Tab(TabController* controller)
   AddChildView(close_button_);
 
   set_context_menu_controller(this);
+
+  tab_audio_indicator_.reset(new TabAudioIndicator(this));
 }
 
 Tab::~Tab() {
@@ -459,6 +484,7 @@ Tab::~Tab() {
 void Tab::set_animation_container(ui::AnimationContainer* container) {
   animation_container_ = container;
   hover_controller_.SetAnimationContainer(container);
+  tab_audio_indicator_->SetAnimationContainer(container);
 }
 
 bool Tab::IsActive() const {
@@ -478,6 +504,11 @@ void Tab::SetData(const TabRendererData& data) {
 
   if (data_.IsCrashed()) {
     if (!should_display_crashed_favicon_ && !IsPerformingCrashAnimation()) {
+      // Crash animation overrides the other icon animations.
+      old.audio_state = TabRendererData::AUDIO_STATE_NONE;
+      data_.audio_state = TabRendererData::AUDIO_STATE_NONE;
+      data_.capture_state = TabRendererData::CAPTURE_STATE_NONE;
+      old.capture_state = TabRendererData::CAPTURE_STATE_NONE;
 #if defined(OS_CHROMEOS)
       // On Chrome OS, we reload killed tabs automatically when the user
       // switches to them.  Don't display animations for these unless they're
@@ -490,18 +521,24 @@ void Tab::SetData(const TabRendererData& data) {
       StartCrashAnimation();
 #endif
     }
+  } else if (!data_.CaptureActive() && old.CaptureActive()) {
+    StopIconAnimation();
+  } else if (data_.CaptureActive() && !old.CaptureActive()) {
+    StartRecordingAnimation();
   } else {
     if (IsPerformingCrashAnimation())
-      StopCrashAnimation();
+      StopIconAnimation();
     ResetCrashedFavicon();
   }
 
-  // If the favicon changed, re-compute its dominant color.
-  if (controller() &&
-      controller()->IsImmersiveStyle() &&
-      !data_.favicon.isNull() &&
-      !data_.favicon.BackedBySameObjectAs(old.favicon))
-    UpdateIconDominantColor();
+  if (old.mini != data_.mini) {
+    if (tab_animation_.get() && tab_animation_->is_animating()) {
+      tab_animation_->Stop();
+      tab_animation_.reset(NULL);
+    }
+  }
+
+  tab_audio_indicator_->SetIsPlayingAudio(data_.AudioActive());
 
   DataChanged(old);
 
@@ -510,14 +547,6 @@ void Tab::SetData(const TabRendererData& data) {
 }
 
 void Tab::UpdateLoadingAnimation(TabRendererData::NetworkState state) {
-  // If this is an extension app and a command line flag is set,
-  // then disable the throbber.
-  throbber_disabled_ = data().app &&
-      CommandLine::ForCurrentProcess()->HasSwitch(switches::kAppsNoThrob);
-
-  if (throbber_disabled_)
-    return;
-
   if (state == data_.network_state &&
       state == TabRendererData::NETWORK_STATE_NONE) {
     // If the network state is none and hasn't changed, do nothing. Otherwise we
@@ -531,26 +560,27 @@ void Tab::UpdateLoadingAnimation(TabRendererData::NetworkState state) {
 }
 
 void Tab::StartPulse() {
-  if (!pulse_animation_.get()) {
-    pulse_animation_.reset(new ui::ThrobAnimation(this));
-    pulse_animation_->SetSlideDuration(kPulseDurationMs);
-    if (animation_container_.get())
-      pulse_animation_->SetContainer(animation_container_.get());
-  }
-  pulse_animation_->Reset();
-  pulse_animation_->StartThrobbing(std::numeric_limits<int>::max());
+  ui::ThrobAnimation* animation = new ui::ThrobAnimation(this);
+  animation->SetSlideDuration(kPulseDurationMs);
+  if (animation_container_.get())
+    animation->SetContainer(animation_container_.get());
+  animation->StartThrobbing(std::numeric_limits<int>::max());
+  tab_animation_.reset(animation);
 }
 
 void Tab::StopPulse() {
-  if (!pulse_animation_.get())
+  if (!tab_animation_.get())
     return;
-
-  pulse_animation_->Stop();  // Do stop so we get notified.
-  pulse_animation_.reset(NULL);
+  tab_animation_->Stop();
+  tab_animation_.reset(NULL);
 }
 
 void Tab::StartMiniTabTitleAnimation() {
-  if (!mini_title_animation_.get()) {
+  // We can only do this animation if the tab is mini because we will
+  // upcast tab_animation back to MultiAnimation when we draw.
+  if (!data().mini)
+    return;
+  if (!tab_animation_.get()) {
     ui::MultiAnimation::Parts parts;
     parts.push_back(
         ui::MultiAnimation::Part(kMiniTitleChangeAnimationDuration1MS,
@@ -565,24 +595,22 @@ void Tab::StartMiniTabTitleAnimation() {
     parts[0].end_time_ms = kMiniTitleChangeAnimationEnd1MS;
     parts[2].start_time_ms = kMiniTitleChangeAnimationStart3MS;
     parts[2].end_time_ms = kMiniTitleChangeAnimationEnd3MS;
-    mini_title_animation_.reset(new ui::MultiAnimation(
-        parts,
-        base::TimeDelta::FromMilliseconds(
-            kMiniTitleChangeAnimationIntervalMS)));
-    mini_title_animation_->SetContainer(animation_container());
-    mini_title_animation_->set_delegate(this);
+    base::TimeDelta timeout =
+        base::TimeDelta::FromMilliseconds(kMiniTitleChangeAnimationIntervalMS);
+    ui::MultiAnimation* animation = new ui::MultiAnimation(parts, timeout);
+    if (animation_container_.get())
+      animation->SetContainer(animation_container_.get());
+    animation->set_delegate(this);
+    tab_animation_.reset(animation);
   }
-  mini_title_animation_->Start();
+  tab_animation_->Start();
 }
 
 void Tab::StopMiniTabTitleAnimation() {
-  if (mini_title_animation_.get())
-    mini_title_animation_->Stop();
-}
-
-void Tab::UpdateIconDominantColor() {
-  icon_dominant_color_ =
-      color_utils::CalculateKMeanColorOfBitmap(*data_.favicon.bitmap());
+  if (!tab_animation_.get())
+    return;
+  tab_animation_->Stop();
+  tab_animation_.reset(NULL);
 }
 
 // static
@@ -629,8 +657,17 @@ int Tab::GetMiniWidth() {
 
 // static
 int Tab::GetImmersiveHeight() {
-  InitTabResources();
-  return tab_immersive_active_.image_l->height();
+  return kImmersiveTabHeight;
+}
+
+////////////////////////////////////////////////////////////////////////////////
+// Tab, TabAudioIndicator::Delegate overrides:
+
+void Tab::ScheduleAudioIndicatorPaint() {
+  // No need to schedule a paint if another animation is active. The other
+  // animation will do its own scheduling.
+  if (!icon_animation_)
+    ScheduleIconPaint();
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -639,7 +676,7 @@ int Tab::GetImmersiveHeight() {
 void Tab::AnimationProgressed(const ui::Animation* animation) {
   // Ignore if the pulse animation is being performed on active tab because
   // it repaints the same image. See |Tab::PaintTabBackground()|.
-  if (animation == pulse_animation_.get() && IsActive())
+  if (animation == tab_animation_.get() && IsActive())
     return;
   SchedulePaint();
 }
@@ -693,7 +730,7 @@ void Tab::OnPaint(gfx::Canvas* canvas) {
   }
 
   if (controller() && controller()->IsImmersiveStyle())
-    PaintTabImmersive(canvas);
+    PaintImmersiveTab(canvas);
   else
     PaintTab(canvas);
 
@@ -742,8 +779,12 @@ void Tab::Layout() {
 
   // Size the Close button.
   showing_close_button_ = ShouldShowCloseBox();
+  const bool is_host_desktop_type_ash =
+      GetHostDesktopType(this) == chrome::HOST_DESKTOP_TYPE_ASH;
   if (showing_close_button_) {
-    int close_button_top = top_padding() + kCloseButtonVertFuzz +
+    const int close_button_vert_fuzz = is_host_desktop_type_ash ?
+        kCloseButtonVertFuzzAsh : kCloseButtonVertFuzz;
+    int close_button_top = top_padding() + close_button_vert_fuzz +
         (content_height - close_button_size.height()) / 2;
     // If the ratio of the close button size to tab width exceeds the maximum.
     // The close button should be as large as possible so that there is a larger
@@ -769,8 +810,10 @@ void Tab::Layout() {
     close_button_->SetVisible(false);
   }
 
+  const int title_text_offset = is_host_desktop_type_ash ?
+      kTitleTextOffsetYAsh : kTitleTextOffsetY;
   int title_left = favicon_bounds_.right() + kFaviconTitleSpacing;
-  int title_top = top_padding() + kTitleTextOffsetY +
+  int title_top = top_padding() + title_text_offset +
       (content_height - font_height_) / 2;
   // Size the Title text to fill the remaining space.
   if (!data().mini || width() >= kMiniTabRendererAsNormalTabWidth) {
@@ -823,8 +866,10 @@ bool Tab::HasHitTestMask() const {
 void Tab::GetHitTestMask(gfx::Path* path) const {
   // When the window is maximized we don't want to shave off the edges or top
   // shadow of the tab, such that the user can click anywhere along the top
-  // edge of the screen to select a tab.
-  bool include_top_shadow = GetWidget() && GetWidget()->IsMaximized();
+  // edge of the screen to select a tab. Ditto for immersive fullscreen.
+  const views::Widget* widget = GetWidget();
+  bool include_top_shadow =
+      widget && (widget->IsMaximized() || widget->IsFullscreen());
   TabResources::GetHitTestMask(width(), height(), include_top_shadow, path);
 }
 
@@ -860,8 +905,13 @@ bool Tab::OnMousePressed(const ui::MouseEvent& event) {
   // Allow a right click from touch to drag, which corresponds to a long click.
   if (event.IsOnlyLeftMouseButton() ||
       (event.IsOnlyRightMouseButton() && event.flags() & ui::EF_FROM_TOUCH)) {
-    TabStripSelectionModel original_selection;
+    ui::ListSelectionModel original_selection;
     original_selection.Copy(controller()->GetSelectionModel());
+    // Changing the selection may cause our bounds to change. If that happens
+    // the location of the event may no longer be valid. Create a copy of the
+    // event in the parents coordinate, which won't change, and recreate an
+    // event after changing so the coordinates are correct.
+    ui::MouseEvent event_in_parent(event, static_cast<View*>(this), parent());
     if (controller()->SupportsMultipleSelection()) {
       if (event.IsShiftDown() && event.IsControlDown()) {
         controller()->AddSelectionFromAnchorTo(this);
@@ -879,14 +929,16 @@ bool Tab::OnMousePressed(const ui::MouseEvent& event) {
     } else if (!IsSelected()) {
       controller()->SelectTab(this);
     }
-    controller()->MaybeStartDrag(this, event, original_selection);
+    ui::MouseEvent cloned_event(event_in_parent, parent(),
+                                static_cast<View*>(this));
+    controller()->MaybeStartDrag(this, cloned_event, original_selection);
   }
   return true;
 }
 
 bool Tab::OnMouseDragged(const ui::MouseEvent& event) {
   if (controller())
-    controller()->ContinueDrag(this, event.location());
+    controller()->ContinueDrag(this, event);
   return true;
 }
 
@@ -934,7 +986,7 @@ void Tab::OnMouseCaptureLost() {
 }
 
 void Tab::OnMouseEntered(const ui::MouseEvent& event) {
-  hover_controller_.Show();
+  hover_controller_.Show(views::GlowHoverController::SUBTLE);
 }
 
 void Tab::OnMouseMoved(const ui::MouseEvent& event) {
@@ -958,13 +1010,18 @@ void Tab::OnGestureEvent(ui::GestureEvent* event) {
       if (event->details().touch_points() != 1)
         return;
 
-      TabStripSelectionModel original_selection;
+      // See comment in OnMousePressed() as to why we copy the event.
+      ui::GestureEvent event_in_parent(*event, static_cast<View*>(this),
+                                       parent());
+      ui::ListSelectionModel original_selection;
       original_selection.Copy(controller()->GetSelectionModel());
       if (!IsSelected())
         controller()->SelectTab(this);
       gfx::Point loc(event->location());
       views::View::ConvertPointToScreen(this, &loc);
-      controller()->MaybeStartDrag(this, *event, original_selection);
+      ui::GestureEvent cloned_event(event_in_parent, parent(),
+                                    static_cast<View*>(this));
+      controller()->MaybeStartDrag(this, cloned_event, original_selection);
       break;
     }
 
@@ -973,7 +1030,7 @@ void Tab::OnGestureEvent(ui::GestureEvent* event) {
       break;
 
     case ui::ET_GESTURE_SCROLL_UPDATE:
-      controller()->ContinueDrag(this, event->location());
+      controller()->ContinueDrag(this, *event);
       break;
 
     default:
@@ -1019,8 +1076,8 @@ void Tab::PaintTab(gfx::Canvas* canvas) {
 
   SkColor title_color = GetThemeProvider()->
       GetColor(IsSelected() ?
-          ThemeService::COLOR_TAB_TEXT :
-          ThemeService::COLOR_BACKGROUND_TAB_TEXT);
+          ThemeProperties::COLOR_TAB_TEXT :
+          ThemeProperties::COLOR_BACKGROUND_TAB_TEXT);
 
   if (!data().mini || width() > kMiniTabRendererAsNormalTabWidth)
     PaintTitle(canvas, title_color);
@@ -1038,32 +1095,40 @@ void Tab::PaintTab(gfx::Canvas* canvas) {
   }
 }
 
-void Tab::PaintTabImmersive(gfx::Canvas* canvas) {
-  // The main bar is as wide as the normal tab's horizontal top line.
-  // This top line of the tab extends a few pixels left and right of the
-  // center image due to pixels in the rounded corner images.
-  const int kBarPadding = 2;
-  int main_bar_left = tab_active_.l_width - kBarPadding;
-  int main_bar_right = width() - tab_active_.r_width + kBarPadding;
+void Tab::PaintImmersiveTab(gfx::Canvas* canvas) {
+  // Draw a gray rectangle to represent the tab. This works for mini-tabs as
+  // well as regular ones. The active tab has a brigher bar.
+  SkColor color =
+      IsActive() ? kImmersiveActiveTabColor : kImmersiveInactiveTabColor;
+  gfx::Rect bar_rect = GetImmersiveBarRect();
+  canvas->FillRect(bar_rect, color);
 
-  bool is_active = IsActive();
-  if (ShouldShowIcon()) {
-    // Use the favicon's horizontal position.
-    gfx::Rect icon_bar_rect(favicon_bounds_.x(), 0,
-                            favicon_bounds_.width(), kImmersiveBarHeight);
-    canvas->FillRect(icon_bar_rect, icon_dominant_color_);
-    // Start the main bar slightly offset from the icon bar.
-    main_bar_left = icon_bar_rect.right() + kImmersiveBarSpacing;
-  }
-
-  // Mini-tabs don't have a main bar.
-  if (!data().mini || width() > kMiniTabRendererAsNormalTabWidth) {
-    // Active tab has a brighter bar.
-    SkColor color =
-        is_active ? kImmersiveActiveTabColor : kImmersiveInactiveTabColor;
-    gfx::Rect main_bar_rect(
-        main_bar_left, 0, main_bar_right - main_bar_left, kImmersiveBarHeight);
-    canvas->FillRect(main_bar_rect, color);
+  // Paint network activity indicator.
+  // TODO(jamescook): Replace this placeholder animation with a real one.
+  // For now, let's go with a Cylon eye effect, but in blue.
+  if (data().network_state != TabRendererData::NETWORK_STATE_NONE) {
+    const SkColor kEyeColor = SkColorSetRGB(71, 138, 217);
+    int eye_width = bar_rect.width() / 3;
+    int eye_offset = bar_rect.width() * immersive_loading_step_ /
+        kImmersiveLoadingStepCount;
+    if (eye_offset + eye_width < bar_rect.width()) {
+      // Draw a single indicator strip because it fits inside |bar_rect|.
+      gfx::Rect eye_rect(
+          bar_rect.x() + eye_offset, 0, eye_width, kImmersiveBarHeight);
+      canvas->FillRect(eye_rect, kEyeColor);
+    } else {
+      // Draw two indicators to simulate the eye "wrapping around" to the left
+      // side. The first part fills the remainder of the bar.
+      int right_eye_width = bar_rect.width() - eye_offset;
+      gfx::Rect right_eye_rect(
+          bar_rect.x() + eye_offset, 0, right_eye_width, kImmersiveBarHeight);
+      canvas->FillRect(right_eye_rect, kEyeColor);
+      // The second part parts the remaining |eye_width| on the left.
+      int left_eye_width = eye_offset + eye_width - bar_rect.width();
+      gfx::Rect left_eye_rect(
+          bar_rect.x(), 0, left_eye_width, kImmersiveBarHeight);
+      canvas->FillRect(left_eye_rect, kEyeColor);
+    }
   }
 }
 
@@ -1071,10 +1136,15 @@ void Tab::PaintTabBackground(gfx::Canvas* canvas) {
   if (IsActive()) {
     PaintActiveTabBackground(canvas);
   } else {
-    if (mini_title_animation_.get() && mini_title_animation_->is_animating())
-      PaintInactiveTabBackgroundWithTitleChange(canvas);
-    else
+    if (tab_animation_.get() &&
+        tab_animation_->is_animating() &&
+        data().mini) {
+      ui::MultiAnimation* animation =
+          static_cast<ui::MultiAnimation*>(tab_animation_.get());
+      PaintInactiveTabBackgroundWithTitleChange(canvas, animation);
+    } else {
       PaintInactiveTabBackground(canvas);
+    }
 
     double throb_value = GetThrobValue();
     if (throb_value > 0) {
@@ -1086,7 +1156,9 @@ void Tab::PaintTabBackground(gfx::Canvas* canvas) {
   }
 }
 
-void Tab::PaintInactiveTabBackgroundWithTitleChange(gfx::Canvas* canvas) {
+void Tab::PaintInactiveTabBackgroundWithTitleChange(
+    gfx::Canvas* canvas,
+    ui::MultiAnimation* animation) {
   // Render the inactive tab background. We'll use this for clipping.
   gfx::Canvas background_canvas(size(), canvas->scale_factor(), false);
   PaintInactiveTabBackground(&background_canvas);
@@ -1100,12 +1172,12 @@ void Tab::PaintInactiveTabBackgroundWithTitleChange(gfx::Canvas* canvas) {
   int x1 = radius;
   int x2 = -radius;
   int x;
-  if (mini_title_animation_->current_part_index() == 0) {
-    x = mini_title_animation_->CurrentValueBetween(x0, x1);
-  } else if (mini_title_animation_->current_part_index() == 1) {
+  if (animation->current_part_index() == 0) {
+    x = animation->CurrentValueBetween(x0, x1);
+  } else if (animation->current_part_index() == 1) {
     x = x1;
   } else {
-    x = mini_title_animation_->CurrentValueBetween(x1, x2);
+    x = animation->CurrentValueBetween(x1, x2);
   }
   SkPoint center_point;
   center_point.iset(x, 0);
@@ -1128,8 +1200,8 @@ void Tab::PaintInactiveTabBackgroundWithTitleChange(gfx::Canvas* canvas) {
   canvas->DrawImageInt(background_image, 0, 0);
 
   // And then the gradient on top of that.
-  if (mini_title_animation_->current_part_index() == 2) {
-    uint8 alpha = mini_title_animation_->CurrentValueBetween(255, 0);
+  if (animation->current_part_index() == 2) {
+    uint8 alpha = animation->CurrentValueBetween(255, 0);
     canvas->DrawImageInt(hover_image, 0, 0, alpha);
   } else {
     canvas->DrawImageInt(hover_image, 0, 0);
@@ -1138,19 +1210,22 @@ void Tab::PaintInactiveTabBackgroundWithTitleChange(gfx::Canvas* canvas) {
 
 void Tab::PaintInactiveTabBackground(gfx::Canvas* canvas) {
   int tab_id;
-  if (GetWidget() && GetWidget()->GetTopLevelWidget()->ShouldUseNativeFrame()) {
-    tab_id = IDR_THEME_TAB_BACKGROUND_V;
-  } else if (data().incognito) {
-    tab_id = IDR_THEME_TAB_BACKGROUND_INCOGNITO;
-#if defined(OS_WIN)
-  } else if (win8::IsSingleWindowMetroMode()) {
-    tab_id = IDR_THEME_TAB_BACKGROUND_V;
-#endif
-  } else {
-    tab_id = IDR_THEME_TAB_BACKGROUND;
-  }
+  int frame_id;
+  views::Widget* widget = GetWidget();
+  GetTabIdAndFrameId(widget, &tab_id, &frame_id);
 
-  const bool can_cache = !GetThemeProvider()->HasCustomImage(tab_id) &&
+  // Explicitly map the id so we cache correctly.
+  const chrome::HostDesktopType host_desktop_type = GetHostDesktopType(this);
+  tab_id = chrome::MapThemeImage(host_desktop_type, tab_id);
+
+  // HasCustomImage() is only true if the theme provides the image. However,
+  // even if the theme does not provide a tab background, the theme machinery
+  // will make one if given a frame image.
+  ui::ThemeProvider* theme_provider = GetThemeProvider();
+  const bool theme_provided_image = theme_provider->HasCustomImage(tab_id) ||
+      (frame_id != 0 && theme_provider->HasCustomImage(frame_id));
+
+  const bool can_cache = !theme_provided_image &&
       !hover_controller_.ShouldDraw();
 
   if (can_cache) {
@@ -1295,6 +1370,7 @@ void Tab::PaintIcon(gfx::Canvas* canvas) {
 
   bounds.set_x(GetMirroredXForRect(bounds));
 
+  // Paint network activity (aka throbber) animation frame.
   if (data().network_state != TabRendererData::NETWORK_STATE_NONE) {
     ui::ThemeProvider* tp = GetThemeProvider();
     gfx::ImageSkia frames(*tp->GetImageSkiaNamed(
@@ -1304,102 +1380,163 @@ void Tab::PaintIcon(gfx::Canvas* canvas) {
     int icon_size = frames.height();
     int image_offset = loading_animation_frame_ * icon_size;
     DrawIconCenter(canvas, frames, image_offset,
-                   icon_size, icon_size, bounds, false, SkPaint());
+                   icon_size, icon_size,
+                   bounds, false, SkPaint());
+    return;
+  }
+
+  // Paint regular icon and potentially overlays.
+  canvas->Save();
+  canvas->ClipRect(GetLocalBounds());
+  if (should_display_crashed_favicon_) {
+    ui::ResourceBundle& rb = ui::ResourceBundle::GetSharedInstance();
+    gfx::ImageSkia crashed_favicon(*rb.GetImageSkiaNamed(IDR_SAD_FAVICON));
+    bounds.set_y(bounds.y() + favicon_hiding_offset_);
+    DrawIconCenter(canvas, crashed_favicon, 0,
+                    crashed_favicon.width(),
+                    crashed_favicon.height(),
+                    bounds, true, SkPaint());
   } else {
-    canvas->Save();
-    canvas->ClipRect(GetLocalBounds());
-    if (should_display_crashed_favicon_) {
-      ui::ResourceBundle& rb = ui::ResourceBundle::GetSharedInstance();
-      gfx::ImageSkia crashed_favicon(*rb.GetImageSkiaNamed(IDR_SAD_FAVICON));
-      bounds.set_y(bounds.y() + favicon_hiding_offset_);
-      DrawIconCenter(canvas, crashed_favicon, 0,
-                     crashed_favicon.width(),
-                     crashed_favicon.height(), bounds, true, SkPaint());
-    } else {
-      if (!data().favicon.isNull()) {
-        if (data().capture_state == TabRendererData::CAPTURE_STATE_PROJECTING) {
-          // If projecting, shrink favicon and add projection screen instead.
-          gfx::ImageSkia resized_icon =
-              gfx::ImageSkiaOperations::CreateResizedImage(
-                  data().favicon,
-                  skia::ImageOperations::RESIZE_BEST,
-                  gfx::Size(data().favicon.width() *
-                            kProjectingFaviconResizeScale,
-                            data().favicon.height() *
-                            kProjectingFaviconResizeScale));
-
-          gfx::Rect resized_bounds(bounds);
-          // Need to shift it up a bit vertically because the projection screen
-          // is thinner on the top and bottom.
-          resized_bounds.set_y(resized_bounds.y() - 1);
-
-          DrawIconCenter(canvas, resized_icon, 0,
-                         resized_icon.width(),
-                         resized_icon.height(),
-                         resized_bounds, true, SkPaint());
-
-          ui::ThemeProvider* tp = GetThemeProvider();
-          gfx::ImageSkia projection_screen(
-              *tp->GetImageSkiaNamed(IDR_TAB_CAPTURE));
-
-          DrawIconCenter(canvas, projection_screen, 0,
-                         data().favicon.width(),
-                         data().favicon.height(),
-                         bounds, true, SkPaint());
-        } else {
-          // TODO(pkasting): Use code in tab_icon_view.cc:PaintIcon() (or switch
-          // to using that class to render the favicon).
-          DrawIconCenter(canvas, data().favicon, 0,
-                         data().favicon.width(),
-                         data().favicon.height(),
-                         bounds, true, SkPaint());
-        }
-      }
-    }
-    canvas->Restore();
-
-    if (data().capture_state != TabRendererData::CAPTURE_STATE_NONE) {
-      if (!recording_animation_.get()) {
-        recording_animation_.reset(new ui::ThrobAnimation(this));
-        recording_animation_->SetTweenType(ui::Tween::EASE_IN_OUT);
-        recording_animation_->SetThrobDuration(kRecordingDurationMs);
-        recording_animation_->StartThrobbing(-1);
-      }
-
-      SkPaint paint;
-      paint.setAntiAlias(true);
-      U8CPU alpha = recording_animation_->GetCurrentValue() * 0xff;
-      paint.setAlpha(alpha);
-      ui::ThemeProvider* tp = GetThemeProvider();
-
+    if (!data().favicon.isNull()) {
       if (data().capture_state == TabRendererData::CAPTURE_STATE_PROJECTING) {
-        // If projecting, add projection glow animation.
-        gfx::Rect glow_bounds(bounds);
-        glow_bounds.set_x(glow_bounds.x() - (32 - 24));
-        glow_bounds.set_y(0);
-        glow_bounds.set_width(glow_bounds.width() *
-                              kProjectingGlowResizeScale);
-        glow_bounds.set_height(glow_bounds.height() *
-                               kProjectingGlowResizeScale);
+        // If projecting, shrink favicon and add projection screen instead.
+        gfx::ImageSkia resized_icon =
+            gfx::ImageSkiaOperations::CreateResizedImage(
+                data().favicon,
+                skia::ImageOperations::RESIZE_BEST,
+                gfx::Size(data().favicon.width() *
+                          kProjectingFaviconResizeScale,
+                          data().favicon.height() *
+                          kProjectingFaviconResizeScale));
 
-        gfx::ImageSkia projection_glow(
-            *tp->GetImageSkiaNamed(IDR_TAB_CAPTURE_GLOW));
-        DrawIconCenter(canvas, projection_glow, 0,
-                       projection_glow.width(), projection_glow.height(),
-                       glow_bounds, false, paint);
-      } else if (data().capture_state ==
-                 TabRendererData::CAPTURE_STATE_RECORDING) {
-        // If recording, fade the recording icon on top of the favicon.
-        gfx::ImageSkia recording_dot(*tp->GetImageSkiaNamed(IDR_TAB_RECORDING));
-        DrawIconCenter(canvas, recording_dot, 0,
-                       recording_dot.width(), recording_dot.height(),
-                       bounds, false, paint);
+        gfx::Rect resized_bounds(bounds);
+        // Need to shift it up a bit vertically because the projection screen
+        // is thinner on the top and bottom.
+        resized_bounds.set_y(resized_bounds.y() - 1);
+
+        DrawIconCenter(canvas, resized_icon, 0,
+                       resized_icon.width(),
+                       resized_icon.height(),
+                       resized_bounds, true, SkPaint());
+
+        ui::ThemeProvider* tp = GetThemeProvider();
+        gfx::ImageSkia projection_screen(
+            *tp->GetImageSkiaNamed(IDR_TAB_CAPTURE));
+        DrawIconCenter(canvas, projection_screen, 0,
+                       data().favicon.width(),
+                       data().favicon.height(),
+                       bounds, true, SkPaint());
       } else {
-        NOTREACHED();
+        DrawIconCenter(canvas, data().favicon, 0,
+                       data().favicon.width(),
+                       data().favicon.height(),
+                       bounds, true, SkPaint());
+
+        // Draw the audio indicator UI only if no other icon animation is
+        // active.
+        if (!icon_animation_ && tab_audio_indicator_->IsAnimating())
+          tab_audio_indicator_->Paint(canvas, bounds);
       }
-    } else {
-      recording_animation_.reset();
     }
+  }
+  canvas->Restore();
+
+  // Paint recording or projecting animation overlay.
+  if (data().capture_state != TabRendererData::CAPTURE_STATE_NONE)
+    PaintCaptureState(canvas, bounds);
+}
+
+void Tab::PaintCaptureState(gfx::Canvas* canvas, gfx::Rect bounds) {
+  SkPaint paint;
+  paint.setAntiAlias(true);
+  U8CPU alpha = icon_animation_->GetCurrentValue() * 0xff;
+  paint.setAlpha(alpha);
+  ui::ThemeProvider* tp = GetThemeProvider();
+
+  if (data().capture_state == TabRendererData::CAPTURE_STATE_PROJECTING) {
+    // If projecting, add projection glow animation.
+    gfx::Rect glow_bounds(bounds);
+    glow_bounds.set_x(glow_bounds.x() - (32 - 24));
+    glow_bounds.set_y(0);
+    glow_bounds.set_width(glow_bounds.width() * kProjectingGlowResizeScale);
+    glow_bounds.set_height(glow_bounds.height() * kProjectingGlowResizeScale);
+
+    gfx::ImageSkia projection_glow(
+        *tp->GetImageSkiaNamed(IDR_TAB_CAPTURE_GLOW));
+    DrawIconCenter(canvas, projection_glow, 0, projection_glow.width(),
+                   projection_glow.height(), glow_bounds, false, paint);
+  } else if (data().capture_state == TabRendererData::CAPTURE_STATE_RECORDING) {
+    // If recording, fade the recording icon on top of the favicon with a mask
+    // around/behind it.
+    gfx::ImageSkia recording_dot(*tp->GetImageSkiaNamed(IDR_TAB_RECORDING));
+    gfx::ImageSkia recording_dot_mask(
+        *tp->GetImageSkiaNamed(IDR_TAB_RECORDING_MASK));
+    gfx::ImageSkia tab_background;
+    if (IsActive()) {
+      tab_background = *tp->GetImageSkiaNamed(IDR_THEME_TOOLBAR);
+    } else {
+      int tab_id;
+      int frame_id_dummy;
+      views::Widget* widget = GetWidget();
+      GetTabIdAndFrameId(widget, &tab_id, &frame_id_dummy);
+      tab_background = *tp->GetImageSkiaNamed(tab_id);
+    }
+
+    // This is the offset from the favicon bottom right corner for the mask,
+    // given that the recording dot is drawn in the bottom right corner.
+    int mask_offset_from_right = recording_dot.width() +
+        (recording_dot_mask.width() - recording_dot.width()) / 2;
+    int mask_offset_from_bottom = recording_dot.height() +
+        (recording_dot_mask.height() - recording_dot.height()) / 2;
+
+    int mask_dst_x = bounds.x() + bounds.width() - mask_offset_from_right;
+    int mask_dst_y = bounds.y() + bounds.height() - mask_offset_from_bottom;
+
+    // Crop the background image at the correct position and create a mask
+    // from the background.
+    int offset_x = GetMirroredX() + background_offset_.x() + mask_dst_x;
+    int offset_y = mask_dst_y;
+    gfx::ImageSkia tab_background_cropped =
+        gfx::ImageSkiaOperations::CreateTiledImage(
+            tab_background, offset_x, offset_y,
+            recording_dot_mask.width(), recording_dot_mask.height());
+    gfx::ImageSkia recording_dot_mask_with_bg =
+        gfx::ImageSkiaOperations::CreateMaskedImage(tab_background_cropped,
+                                                    recording_dot_mask);
+
+    // Draw the mask.
+    DrawIconAtLocation(canvas, recording_dot_mask_with_bg, 0,
+                       mask_dst_x, mask_dst_y,
+                       recording_dot_mask.width(),
+                       recording_dot_mask.height(),
+                       false, SkPaint());
+
+    // Potentially draw an alpha of the active bg image.
+    double throb_value = GetThrobValue();
+    if (!IsActive() && throb_value > 0) {
+      tab_background = *tp->GetImageSkiaNamed(IDR_THEME_TOOLBAR);
+      tab_background_cropped = gfx::ImageSkiaOperations::CreateTiledImage(
+          tab_background, offset_x, offset_y,
+          recording_dot_mask.width(), recording_dot_mask.height());
+      recording_dot_mask_with_bg = gfx::ImageSkiaOperations::CreateMaskedImage(
+          tab_background_cropped, recording_dot_mask);
+
+      canvas->SaveLayerAlpha(static_cast<int>(throb_value * 0xff),
+                             GetLocalBounds());
+      DrawIconAtLocation(canvas, recording_dot_mask_with_bg, 0,
+                         mask_dst_x, mask_dst_y,
+                         recording_dot_mask.width(),
+                         recording_dot_mask.height(),
+                         false, SkPaint());
+      canvas->Restore();
+    }
+
+    // Draw the recording icon.
+    DrawIconBottomRight(canvas, recording_dot, 0,
+                        recording_dot.width(), recording_dot.height(),
+                        bounds, false, paint);
+  } else {
+    NOTREACHED();
   }
 }
 
@@ -1421,7 +1558,7 @@ void Tab::PaintTitle(gfx::Canvas* canvas, SkColor title_color) {
 }
 
 void Tab::AdvanceLoadingAnimation(TabRendererData::NetworkState old_state,
-                                      TabRendererData::NetworkState state) {
+                                  TabRendererData::NetworkState state) {
   static bool initialized = false;
   static int loading_animation_frame_count = 0;
   static int waiting_animation_frame_count = 0;
@@ -1457,14 +1594,26 @@ void Tab::AdvanceLoadingAnimation(TabRendererData::NetworkState old_state,
         (loading_animation_frame_ / waiting_to_loading_frame_count_ratio);
   }
 
-  if (state != TabRendererData::NETWORK_STATE_NONE) {
+  if (state == TabRendererData::NETWORK_STATE_WAITING) {
     loading_animation_frame_ = (loading_animation_frame_ + 1) %
-        ((state == TabRendererData::NETWORK_STATE_WAITING) ?
-            waiting_animation_frame_count : loading_animation_frame_count);
+        waiting_animation_frame_count;
+    // Waiting steps backwards.
+    immersive_loading_step_ =
+        (immersive_loading_step_ - 1 + kImmersiveLoadingStepCount) %
+            kImmersiveLoadingStepCount;
+  } else if (state == TabRendererData::NETWORK_STATE_LOADING) {
+    loading_animation_frame_ = (loading_animation_frame_ + 1) %
+        loading_animation_frame_count;
+    immersive_loading_step_ = (immersive_loading_step_ + 1) %
+        kImmersiveLoadingStepCount;
   } else {
     loading_animation_frame_ = 0;
+    immersive_loading_step_ = 0;
   }
-  ScheduleIconPaint();
+  if (controller() && controller()->IsImmersiveStyle())
+    SchedulePaintInRect(GetImmersiveBarRect());
+  else
+    ScheduleIconPaint();
 }
 
 int Tab::IconCapacity() const {
@@ -1496,8 +1645,10 @@ double Tab::GetThrobValue() {
   double min = is_selected ? kSelectedTabOpacity : 0;
   double scale = is_selected ? kSelectedTabThrobScale : 1;
 
-  if (pulse_animation_.get() && pulse_animation_->is_animating())
-    return pulse_animation_->GetCurrentValue() * kHoverOpacity * scale + min;
+  if (!data().mini) {
+    if (tab_animation_.get() && tab_animation_->is_animating())
+      return tab_animation_->GetCurrentValue() * kHoverOpacity * scale + min;
+  }
 
   if (hover_controller_.ShouldDraw()) {
     return kHoverOpacity * hover_controller_.GetAnimationValue() * scale +
@@ -1520,21 +1671,28 @@ void Tab::ResetCrashedFavicon() {
   should_display_crashed_favicon_ = false;
 }
 
-void Tab::StartCrashAnimation() {
-  if (!crash_animation_.get())
-    crash_animation_.reset(new FaviconCrashAnimation(this));
-  crash_animation_->Stop();
-  crash_animation_->Start();
+void Tab::StopIconAnimation() {
+  if (!icon_animation_.get())
+    return;
+  icon_animation_->Stop();
+  icon_animation_.reset();
 }
 
-void Tab::StopCrashAnimation() {
-  if (!crash_animation_.get())
-    return;
-  crash_animation_->Stop();
+void Tab::StartCrashAnimation() {
+  icon_animation_.reset(new FaviconCrashAnimation(this));
+  icon_animation_->Start();
+}
+
+void Tab::StartRecordingAnimation() {
+  ui::ThrobAnimation* animation = new ui::ThrobAnimation(this);
+  animation->SetTweenType(ui::Tween::EASE_IN_OUT);
+  animation->SetThrobDuration(kRecordingDurationMs);
+  animation->StartThrobbing(-1);
+  icon_animation_.reset(animation);
 }
 
 bool Tab::IsPerformingCrashAnimation() const {
-  return crash_animation_.get() && crash_animation_->is_animating();
+  return icon_animation_.get() && data_.IsCrashed();
 }
 
 void Tab::ScheduleIconPaint() {
@@ -1548,6 +1706,37 @@ void Tab::ScheduleIconPaint() {
     bounds.set_height(height() - bounds.y());
   bounds.set_x(GetMirroredXForRect(bounds));
   SchedulePaintInRect(bounds);
+}
+
+gfx::Rect Tab::GetImmersiveBarRect() const {
+  // The main bar is as wide as the normal tab's horizontal top line.
+  // This top line of the tab extends a few pixels left and right of the
+  // center image due to pixels in the rounded corner images.
+  const int kBarPadding = 1;
+  int main_bar_left = tab_active_.l_width - kBarPadding;
+  int main_bar_right = width() - tab_active_.r_width + kBarPadding;
+  return gfx::Rect(
+      main_bar_left, 0, main_bar_right - main_bar_left, kImmersiveBarHeight);
+}
+
+void Tab::GetTabIdAndFrameId(views::Widget* widget,
+                             int* tab_id,
+                             int* frame_id) const {
+  if (widget && widget->GetTopLevelWidget()->ShouldUseNativeFrame()) {
+    *tab_id = IDR_THEME_TAB_BACKGROUND_V;
+    *frame_id = 0;
+  } else if (data().incognito) {
+    *tab_id = IDR_THEME_TAB_BACKGROUND_INCOGNITO;
+    *frame_id = IDR_THEME_FRAME_INCOGNITO;
+#if defined(OS_WIN)
+  } else if (win8::IsSingleWindowMetroMode()) {
+    *tab_id = IDR_THEME_TAB_BACKGROUND_V;
+    *frame_id = 0;
+#endif
+  } else {
+    *tab_id = IDR_THEME_TAB_BACKGROUND;
+    *frame_id = IDR_THEME_FRAME;
+  }
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -1590,24 +1779,6 @@ void Tab::LoadTabImages() {
   tab_inactive_.image_r = rb.GetImageSkiaNamed(IDR_TAB_INACTIVE_RIGHT);
   tab_inactive_.l_width = tab_inactive_.image_l->width();
   tab_inactive_.r_width = tab_inactive_.image_r->width();
-
-  tab_immersive_active_.image_l =
-      rb.GetImageSkiaNamed(IDR_TAB_IMMERSIVE_ACTIVE_LEFT);
-  tab_immersive_active_.image_c =
-      rb.GetImageSkiaNamed(IDR_TAB_IMMERSIVE_ACTIVE_CENTER);
-  tab_immersive_active_.image_r =
-      rb.GetImageSkiaNamed(IDR_TAB_IMMERSIVE_ACTIVE_RIGHT);
-  tab_immersive_active_.l_width = tab_immersive_active_.image_l->width();
-  tab_immersive_active_.r_width = tab_immersive_active_.image_r->width();
-
-  tab_immersive_inactive_.image_l =
-      rb.GetImageSkiaNamed(IDR_TAB_IMMERSIVE_INACTIVE_LEFT);
-  tab_immersive_inactive_.image_c =
-      rb.GetImageSkiaNamed(IDR_TAB_IMMERSIVE_INACTIVE_CENTER);
-  tab_immersive_inactive_.image_r =
-      rb.GetImageSkiaNamed(IDR_TAB_IMMERSIVE_INACTIVE_RIGHT);
-  tab_immersive_inactive_.l_width = tab_immersive_inactive_.image_l->width();
-  tab_immersive_inactive_.r_width = tab_immersive_inactive_.image_r->width();
 }
 
 // static

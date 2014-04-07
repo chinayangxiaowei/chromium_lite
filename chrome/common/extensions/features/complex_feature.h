@@ -10,6 +10,7 @@
 #include "base/memory/scoped_vector.h"
 #include "chrome/common/extensions/extension.h"
 #include "chrome/common/extensions/features/feature.h"
+#include "chrome/common/extensions/manifest.h"
 
 namespace extensions {
 
@@ -27,20 +28,22 @@ class ComplexFeature : public Feature {
 
   // extensions::Feature:
   virtual Availability IsAvailableToManifest(const std::string& extension_id,
-                                             Extension::Type type,
+                                             Manifest::Type type,
                                              Location location,
                                              int manifest_version,
                                              Platform platform) const OVERRIDE;
 
   virtual Availability IsAvailableToContext(const Extension* extension,
                                             Context context,
+                                            const GURL& url,
                                             Platform platform) const OVERRIDE;
 
  protected:
   // extensions::Feature:
   virtual std::string GetAvailabilityMessage(
       AvailabilityResult result,
-      Extension::Type type) const OVERRIDE;
+      Manifest::Type type,
+      const GURL& url) const OVERRIDE;
 
   virtual std::set<Context>* GetContexts() OVERRIDE;
 

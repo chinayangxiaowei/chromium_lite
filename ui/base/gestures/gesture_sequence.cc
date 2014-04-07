@@ -10,7 +10,6 @@
 #include "base/logging.h"
 #include "base/memory/scoped_ptr.h"
 #include "base/string_number_conversions.h"
-#include "base/string_tokenizer.h"
 #include "base/time.h"
 #include "ui/base/events/event.h"
 #include "ui/base/events/event_constants.h"
@@ -537,7 +536,9 @@ GestureSequence::Gestures* GestureSequence::ProcessTouchEventForGesture(
 void GestureSequence::RecreateBoundingBox() {
   // TODO(sad): Recreating the bounding box at every touch-event is not very
   // efficient. This should be made better.
-  if (point_count_ == 1) {
+  if (point_count_ == 0) {
+    bounding_box_.SetRect(0, 0, 0, 0);
+  } else if (point_count_ == 1) {
     bounding_box_ = GetPointByPointId(0)->enclosing_rectangle();
   } else {
     int left = INT_MAX / 20, top = INT_MAX / 20;
@@ -672,16 +673,6 @@ void GestureSequence::AppendClickGestureEvent(const GesturePoint& point,
   gestures->push_back(CreateGestureEvent(
       GestureEventDetails(ui::ET_GESTURE_TAP, tap_count, 0),
       center,
-      flags_,
-      base::Time::FromDoubleT(point.last_touch_time()),
-      1 << point.touch_id()));
-}
-
-void GestureSequence::AppendDoubleClickGestureEvent(const GesturePoint& point,
-                                                    Gestures* gestures) {
-  gestures->push_back(CreateGestureEvent(
-      GestureEventDetails(ui::ET_GESTURE_DOUBLE_TAP, 0, 0),
-      point.first_touch_position(),
       flags_,
       base::Time::FromDoubleT(point.last_touch_time()),
       1 << point.touch_id()));
@@ -832,8 +823,6 @@ bool GestureSequence::Click(const TouchEvent& event,
   if (point.IsInClickWindow(event)) {
     bool double_tap = point.IsInDoubleClickWindow(event);
     AppendClickGestureEvent(point, double_tap ? 2 : 1, gestures);
-    if (double_tap)
-      AppendDoubleClickGestureEvent(point, gestures);
     return true;
   } else if (point.IsInsideManhattanSquare(event) &&
       !GetLongPressTimer()->IsRunning()) {

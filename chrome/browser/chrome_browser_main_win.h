@@ -13,7 +13,7 @@
 class CommandLine;
 
 namespace chrome {
-class RemovableDeviceNotificationsWindowWin;
+class StorageMonitorWin;
 }  // namespace chrome
 
 
@@ -36,7 +36,6 @@ class ChromeBrowserMainPartsWin : public ChromeBrowserMainParts {
   virtual void PreMainMessageLoopRun() OVERRIDE;
 
   // ChromeBrowserMainParts overrides.
-  virtual void PreInteractiveFirstRunInit() OVERRIDE;
   virtual void ShowMissingLocaleMessageBox() OVERRIDE;
 
   // Prepares the localized strings that are going to be displayed to
@@ -68,8 +67,8 @@ class ChromeBrowserMainPartsWin : public ChromeBrowserMainParts {
   static void SetupInstallerUtilStrings();
 
  private:
-  scoped_ptr<chrome::RemovableDeviceNotificationsWindowWin>
-      removable_device_notifications_window_;
+  scoped_ptr<chrome::StorageMonitorWin> storage_monitor_;
+
   DISALLOW_COPY_AND_ASSIGN(ChromeBrowserMainPartsWin);
 };
 

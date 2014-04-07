@@ -5,6 +5,8 @@
 #ifndef ASH_SHELL_SHELL_DELEGATE_IMPL_H_
 #define ASH_SHELL_SHELL_DELEGATE_IMPL_H_
 
+#include <string>
+
 #include "ash/shell_delegate.h"
 #include "base/compiler_specific.h"
 
@@ -23,17 +25,20 @@ class ShellDelegateImpl : public ash::ShellDelegate {
 
   virtual bool IsUserLoggedIn() const OVERRIDE;
   virtual bool IsSessionStarted() const OVERRIDE;
+  virtual bool IsGuestSession() const OVERRIDE;
   virtual bool IsFirstRunAfterBoot() const OVERRIDE;
+  virtual bool IsRunningInForcedAppMode() const OVERRIDE;
   virtual bool CanLockScreen() const OVERRIDE;
   virtual void LockScreen() OVERRIDE;
   virtual void UnlockScreen() OVERRIDE;
   virtual bool IsScreenLocked() const OVERRIDE;
+  virtual void PreInit() OVERRIDE;
   virtual void Shutdown() OVERRIDE;
   virtual void Exit() OVERRIDE;
   virtual void NewTab() OVERRIDE;
   virtual void NewWindow(bool incognito) OVERRIDE;
   virtual void ToggleMaximized() OVERRIDE;
-  virtual void OpenFileManager() OVERRIDE;
+  virtual void OpenFileManager(bool as_dialog) OVERRIDE;
   virtual void OpenCrosh() OVERRIDE;
   virtual void OpenMobileSetup(const std::string& service_path) OVERRIDE;
   virtual void RestoreTab() OVERRIDE;
@@ -46,7 +51,9 @@ class ShellDelegateImpl : public ash::ShellDelegate {
   virtual bool IsSpokenFeedbackEnabled() const OVERRIDE;
   virtual void ToggleHighContrast() OVERRIDE;
   virtual bool IsHighContrastEnabled() const OVERRIDE;
-  virtual void SetMagnifier(MagnifierType type) OVERRIDE;
+  virtual void SetMagnifierEnabled(bool enabled) OVERRIDE;
+  virtual void SetMagnifierType(MagnifierType type) OVERRIDE;
+  virtual bool IsMagnifierEnabled() const OVERRIDE;
   virtual MagnifierType GetMagnifierType() const OVERRIDE;
   virtual bool ShouldAlwaysShowAccessibilityMenu() const OVERRIDE;
   virtual app_list::AppListViewDelegate* CreateAppListViewDelegate() OVERRIDE;
@@ -67,7 +74,6 @@ class ShellDelegateImpl : public ash::ShellDelegate {
   virtual double GetSavedScreenMagnifierScale() OVERRIDE;
   virtual ui::MenuModel* CreateContextMenu(
       aura::RootWindow* root_window) OVERRIDE;
-  virtual aura::client::StackingClient* CreateStackingClient() OVERRIDE;
   virtual RootWindowHostFactory* CreateRootWindowHostFactory() OVERRIDE;
   virtual string16 GetProductName() const OVERRIDE;
 
@@ -80,6 +86,7 @@ class ShellDelegateImpl : public ash::ShellDelegate {
   bool locked_;
   bool spoken_feedback_enabled_;
   bool high_contrast_enabled_;
+  bool screen_magnifier_enabled_;
   MagnifierType screen_magnifier_type_;
 
   DISALLOW_COPY_AND_ASSIGN(ShellDelegateImpl);

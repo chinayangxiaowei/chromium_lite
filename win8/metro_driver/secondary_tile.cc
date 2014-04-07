@@ -77,7 +77,8 @@ HRESULT TileRequestCompleter::Respond(winfoundtn::IAsyncOperation<bool>* async,
         break;
     }
   } else {
-    LOG(ERROR) << __FUNCTION__ << " Unexpected async status " << status;
+    LOG(ERROR) << __FUNCTION__ << " Unexpected async status "
+               << static_cast<int>(status);
     pin_state = type_ == PIN ?
         base::win::METRO_PIN_RESULT_ERROR :
         base::win::METRO_UNPIN_RESULT_ERROR;
@@ -123,7 +124,7 @@ void DeleteTileFromStartScreen(const string16& tile_id,
 void CreateTileOnStartScreen(const string16& tile_id,
                              const string16& title_str,
                              const string16& url_str,
-                             const FilePath& logo_path,
+                             const base::FilePath& logo_path,
                              const MetroPinUmaResultCallback& callback) {
   VLOG(1) << __FUNCTION__;
 
@@ -215,7 +216,7 @@ void MetroUnPinFromStartScreen(const string16& tile_id,
 void MetroPinToStartScreen(const string16& tile_id,
                            const string16& title,
                            const string16& url,
-                           const FilePath& logo_path,
+                           const base::FilePath& logo_path,
                            const MetroPinUmaResultCallback& callback) {
   globals.appview_msg_loop->PostTask(
     FROM_HERE, base::Bind(&CreateTileOnStartScreen,

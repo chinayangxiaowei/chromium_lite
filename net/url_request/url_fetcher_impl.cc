@@ -29,6 +29,13 @@ void URLFetcherImpl::SetUploadData(const std::string& upload_content_type,
   core_->SetUploadData(upload_content_type, upload_content);
 }
 
+void URLFetcherImpl::SetUploadFilePath(
+    const std::string& upload_content_type,
+    const base::FilePath& file_path,
+    scoped_refptr<base::TaskRunner> file_task_runner) {
+  core_->SetUploadFilePath(upload_content_type, file_path, file_task_runner);
+}
+
 void URLFetcherImpl::SetChunkedUpload(const std::string& content_type) {
   core_->SetChunkedUpload(content_type);
 }
@@ -107,7 +114,7 @@ void URLFetcherImpl::SetAutomaticallyRetryOnNetworkChanges(int max_retries) {
 }
 
 void URLFetcherImpl::SaveResponseToFileAtPath(
-    const FilePath& file_path,
+    const base::FilePath& file_path,
     scoped_refptr<base::TaskRunner> file_task_runner) {
   core_->SaveResponseToFileAtPath(file_path, file_task_runner);
 }
@@ -153,8 +160,7 @@ const ResponseCookies& URLFetcherImpl::GetCookies() const {
   return core_->GetCookies();
 }
 
-bool URLFetcherImpl::FileErrorOccurred(
-    base::PlatformFileError* out_error_code) const {
+bool URLFetcherImpl::FileErrorOccurred(int* out_error_code) const {
   return core_->FileErrorOccurred(out_error_code);
 }
 
@@ -169,7 +175,7 @@ bool URLFetcherImpl::GetResponseAsString(
 
 bool URLFetcherImpl::GetResponseAsFilePath(
     bool take_ownership,
-    FilePath* out_response_path) const {
+    base::FilePath* out_response_path) const {
   return core_->GetResponseAsFilePath(take_ownership, out_response_path);
 }
 

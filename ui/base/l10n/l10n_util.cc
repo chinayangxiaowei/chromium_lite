@@ -16,18 +16,18 @@
 #include "base/i18n/rtl.h"
 #include "base/memory/scoped_ptr.h"
 #include "base/path_service.h"
-#include "base/stringprintf.h"
 #include "base/string_number_conversions.h"
-#include "base/string_split.h"
 #include "base/string_util.h"
+#include "base/stringprintf.h"
+#include "base/strings/string_split.h"
 #include "base/sys_string_conversions.h"
 #include "base/utf_string_conversions.h"
 #include "build/build_config.h"
+#include "third_party/icu/public/common/unicode/rbbi.h"
+#include "third_party/icu/public/common/unicode/uloc.h"
 #include "ui/base/l10n/l10n_util_collator.h"
 #include "ui/base/resource/resource_bundle.h"
 #include "ui/base/ui_base_paths.h"
-#include "unicode/rbbi.h"
-#include "unicode/uloc.h"
 
 #if defined(OS_ANDROID)
 #include "base/android/locale_utils.h"
@@ -246,6 +246,14 @@ bool IsLocaleAvailable(const std::string& locale) {
   if (!l10n_util::IsLocaleSupportedByOS(locale))
     return false;
 
+  // If the ResourceBundle is not yet initialized, return false to avoid the
+  // CHECK failure in ResourceBundle::GetSharedInstance().
+  if (!ResourceBundle::HasSharedInstance())
+    return false;
+
+  // TODO(hshi): make ResourceBundle::LocaleDataPakExists() a static function
+  // so that this can be invoked without initializing the global instance.
+  // See crbug.com/230432: CHECK failure in GetUserDataDir().
   return ResourceBundle::GetSharedInstance().LocaleDataPakExists(locale);
 }
 
@@ -306,8 +314,7 @@ bool CheckAndResolveLocale(const std::string& locale,
     }
   }
 
-  // Google updater uses no, iw and en for our nb, he, and en-US, and
-  // Android uses iw-*, in-*, and ji-*.  We need to map them to our codes.
+  // Google updater uses no, tl, iw and en for our nb, fil, he, and en-US.
   struct {
     const char* source;
     const char* dest;
@@ -316,8 +323,6 @@ bool CheckAndResolveLocale(const std::string& locale,
       {"tl", "fil"},
       {"iw", "he"},
       {"en", "en-US"},
-      {"in", "id"},
-      {"ji", "yi"},
   };
 
   for (size_t i = 0; i < ARRAYSIZE_UNSAFE(alias_map); ++i) {
@@ -847,6 +852,13 @@ void GetAcceptLanguagesForLocale(const std::string& display_locale,
         continue;
     locale_codes->push_back(kAcceptLanguageList[i]);
   }
+}
+
+int GetLocalizedContentsWidthInPixels(int pixel_resource_id) {
+  int width = 0;
+  base::StringToInt(l10n_util::GetStringUTF8(pixel_resource_id), &width);
+  DCHECK_GT(width, 0);
+  return width;
 }
 
 }  // namespace l10n_util

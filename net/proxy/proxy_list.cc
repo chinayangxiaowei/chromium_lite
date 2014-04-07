@@ -6,8 +6,9 @@
 
 #include "base/callback.h"
 #include "base/logging.h"
-#include "base/string_tokenizer.h"
+#include "base/strings/string_tokenizer.h"
 #include "base/time.h"
+#include "base/values.h"
 #include "net/proxy/proxy_server.h"
 
 using base::TimeDelta;
@@ -23,7 +24,7 @@ ProxyList::~ProxyList() {
 
 void ProxyList::Set(const std::string& proxy_uri_list) {
   proxies_.clear();
-  StringTokenizer str_tok(proxy_uri_list, ";");
+  base::StringTokenizer str_tok(proxy_uri_list, ";");
   while (str_tok.GetNext()) {
     ProxyServer uri = ProxyServer::FromURI(
         str_tok.token_begin(), str_tok.token_end(), ProxyServer::SCHEME_HTTP);
@@ -35,6 +36,10 @@ void ProxyList::Set(const std::string& proxy_uri_list) {
 
 void ProxyList::SetSingleProxyServer(const ProxyServer& proxy_server) {
   proxies_.clear();
+  AddProxyServer(proxy_server);
+}
+
+void ProxyList::AddProxyServer(const ProxyServer& proxy_server) {
   if (proxy_server.is_valid())
     proxies_.push_back(proxy_server);
 }
@@ -110,13 +115,20 @@ size_t ProxyList::size() const {
   return proxies_.size();
 }
 
+// Returns true if |*this| lists the same proxies as |other|.
+bool ProxyList::Equals(const ProxyList& other) const {
+  if (size() != other.size())
+    return false;
+  return proxies_ == other.proxies_;
+}
+
 const ProxyServer& ProxyList::Get() const {
   DCHECK(!proxies_.empty());
   return proxies_[0];
 }
 
 void ProxyList::SetFromPacString(const std::string& pac_string) {
-  StringTokenizer entry_tok(pac_string, ";");
+  base::StringTokenizer entry_tok(pac_string, ";");
   proxies_.clear();
   while (entry_tok.GetNext()) {
     ProxyServer uri = ProxyServer::FromPacString(
@@ -142,6 +154,13 @@ std::string ProxyList::ToPacString() const {
     proxy_list += iter->ToPacString();
   }
   return proxy_list.empty() ? std::string() : proxy_list;
+}
+
+base::ListValue* ProxyList::ToValue() const {
+  base::ListValue* list = new base::ListValue();
+  for (size_t i = 0; i < proxies_.size(); ++i)
+    list->AppendString(proxies_[i].ToURI());
+  return list;
 }
 
 bool ProxyList::Fallback(ProxyRetryInfoMap* proxy_retry_info,
@@ -175,7 +194,11 @@ bool ProxyList::Fallback(ProxyRetryInfoMap* proxy_retry_info,
 void ProxyList::UpdateRetryInfoOnFallback(
     ProxyRetryInfoMap* proxy_retry_info, const BoundNetLog& net_log) const {
   // Number of minutes to wait before retrying a bad proxy server.
+#if defined(OS_ANDROID)
+  const TimeDelta kProxyRetryDelay = TimeDelta::FromMinutes(1);
+#else
   const TimeDelta kProxyRetryDelay = TimeDelta::FromMinutes(5);
+#endif
 
   if (proxies_.empty()) {
     NOTREACHED();

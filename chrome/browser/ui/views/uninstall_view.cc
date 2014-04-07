@@ -7,6 +7,7 @@
 #include "base/message_loop.h"
 #include "base/process_util.h"
 #include "base/run_loop.h"
+#include "chrome/browser/browser_process.h"
 #include "chrome/browser/shell_integration.h"
 #include "chrome/browser/ui/uninstall_browser_prompt.h"
 #include "chrome/common/chrome_result_codes.h"
@@ -129,11 +130,10 @@ bool UninstallView::Cancel() {
 }
 
 string16 UninstallView::GetDialogButtonLabel(ui::DialogButton button) const {
-  // We only want to give custom name to OK button - 'Uninstall'. Cancel
-  // button remains same.
+  // Label the OK button 'Uninstall'; Cancel remains the same.
   if (button == ui::DIALOG_BUTTON_OK)
     return l10n_util::GetStringUTF16(IDS_UNINSTALL_BUTTON_TEXT);
-  return string16();
+  return views::DialogDelegateView::GetDialogButtonLabel(button);
 }
 
 void UninstallView::ButtonPressed(views::Button* sender,
@@ -147,10 +147,6 @@ void UninstallView::ButtonPressed(views::Button* sender,
 
 string16 UninstallView::GetWindowTitle() const {
   return l10n_util::GetStringUTF16(IDS_UNINSTALL_CHROME);
-}
-
-views::View* UninstallView::GetContentsView() {
-  return this;
 }
 
 int UninstallView::GetItemCount() const {
@@ -171,6 +167,16 @@ int ShowUninstallBrowserPrompt(bool show_delete_profile) {
   DCHECK_EQ(MessageLoop::TYPE_UI, MessageLoop::current()->type());
   int result = content::RESULT_CODE_NORMAL_EXIT;
   views::AcceleratorHandler accelerator_handler;
+
+  // Take a reference on g_browser_process while showing the dialog. This is
+  // done because the dialog uses the views framework which may increment
+  // and decrement the module ref count during the course of displaying UI and
+  // this code can be called while the module refcount is still at 0.
+  // Note that this reference is never released, as this code is shown on a path
+  // that immediately exits Chrome anyway.
+  // See http://crbug.com/241366 for details.
+  g_browser_process->AddRefModule();
+
   base::RunLoop run_loop(&accelerator_handler);
   UninstallView* view = new UninstallView(&result,
                                           run_loop.QuitClosure(),

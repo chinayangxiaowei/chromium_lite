@@ -46,6 +46,8 @@ class NET_EXPORT_PRIVATE HybridSlowStart {
 
   bool started() { return started_; }
 
+  QuicTime::Delta SmoothedRtt();
+
  private:
   const QuicClock* clock_;
   bool started_;
@@ -56,6 +58,8 @@ class NET_EXPORT_PRIVATE HybridSlowStart {
   QuicTime last_time_;  // Last time when the ACK spacing was close.
   uint8 sample_count_;  // Number of samples to decide current RTT.
   QuicTime::Delta current_rtt_;  // The minimum rtt of current round.
+
+  DISALLOW_COPY_AND_ASSIGN(HybridSlowStart);
 };
 
 }  // namespace net

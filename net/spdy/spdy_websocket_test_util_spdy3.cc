@@ -78,14 +78,14 @@ SpdyFrame* ConstructSpdyWebSocketHandshakeRequestFrame(
     kDefaultCredentialSlot,
     CONTROL_FLAG_NONE,
     kDefaultCompressed,
-    INVALID,
+    RST_STREAM_INVALID,
     kDefaultDataPointer,
     kDefaultDataLength,
     DATA_FLAG_NONE
   };
 
   // Construct SPDY SYN_STREAM control frame.
-  return ConstructSpdyPacket(
+  return ConstructSpdyFrame(
       kSynStreamHeader,
       kDefaultExtraHeaders,
       kDefaultExtraHeaderCount,
@@ -108,14 +108,14 @@ SpdyFrame* ConstructSpdyWebSocketHandshakeResponseFrame(
     kDefaultCredentialSlot,
     CONTROL_FLAG_NONE,
     kDefaultCompressed,
-    INVALID,
+    RST_STREAM_INVALID,
     kDefaultDataPointer,
     kDefaultDataLength,
     DATA_FLAG_NONE
   };
 
   // Construct SPDY SYN_REPLY control frame.
-  return ConstructSpdyPacket(
+  return ConstructSpdyFrame(
       kSynReplyHeader,
       kDefaultExtraHeaders,
       kDefaultExtraHeaderCount,

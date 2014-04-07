@@ -10,7 +10,7 @@
 
 #include "base/basictypes.h"
 #include "base/compiler_specific.h"
-#include "chrome/browser/extensions/api/tabs/tabs.h"
+#include "chrome/browser/extensions/api/tabs/tabs_api.h"
 #include "chrome/browser/extensions/event_router.h"
 #include "chrome/browser/extensions/extension_toolbar_model.h"
 #include "chrome/browser/ui/browser_list_observer.h"
@@ -54,7 +54,7 @@ class BrowserEventRouter : public TabStripModelObserver,
                                 bool user_gesture) OVERRIDE;
   virtual void TabSelectionChanged(
       TabStripModel* tab_strip_model,
-      const TabStripSelectionModel& old_model) OVERRIDE;
+      const ui::ListSelectionModel& old_model) OVERRIDE;
   virtual void TabMoved(content::WebContents* contents,
                         int from_index,
                         int to_index) OVERRIDE;
@@ -97,6 +97,10 @@ class BrowserEventRouter : public TabStripModelObserver,
   // and Observe/NAV_ENTRY_COMMITTED.
   void TabUpdated(content::WebContents* contents, bool did_navigate);
 
+  // Triggers a tab updated event if the favicon URL changes.
+  void FaviconUrlUpdated(content::WebContents* contents,
+                         const bool* icon_url_changed);
+
   // The DispatchEvent methods forward events to the |profile|'s event router.
   // The BrowserEventRouter listens to events for all profiles,
   // so we avoid duplication by dropping events destined for other profiles.
@@ -124,7 +128,7 @@ class BrowserEventRouter : public TabStripModelObserver,
   // Packages |changed_properties| as a tab updated event for the tab |contents|
   // and dispatches the event to the extension.
   void DispatchTabUpdatedEvent(content::WebContents* contents,
-                               DictionaryValue* changed_properties);
+                               scoped_ptr<DictionaryValue> changed_properties);
 
   // Called to dispatch a deprecated style page action click event that was
   // registered like:

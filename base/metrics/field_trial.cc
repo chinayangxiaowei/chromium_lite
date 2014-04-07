@@ -6,7 +6,6 @@
 
 #include "base/build_time.h"
 #include "base/logging.h"
-#include "base/metrics/histogram.h"
 #include "base/rand_util.h"
 #include "base/sha1.h"
 #include "base/stringprintf.h"
@@ -49,7 +48,7 @@ const int FieldTrial::kDefaultGroupNumber = 0;
 bool FieldTrial::enable_benchmarking_ = false;
 
 const char FieldTrialList::kPersistentStringSeparator('/');
-int FieldTrialList::kExpirationYearInFuture = 0;
+int FieldTrialList::kNoExpirationYear = 0;
 
 //------------------------------------------------------------------------------
 // FieldTrial methods and members.
@@ -85,9 +84,6 @@ void FieldTrial::UseOneTimeRandomization() {
       FieldTrialList::GetEntropyProviderForOneTimeRandomization();
   if (!entropy_provider) {
     NOTREACHED();
-    // TODO(stevet): Remove this temporary histogram when logging
-    // investigations are complete.
-    UMA_HISTOGRAM_BOOLEAN("Variations.DisabledNoEntropyProvider", true);
     Disable();
     return;
   }
@@ -118,6 +114,10 @@ int FieldTrial::AppendGroup(const std::string& name,
   if (forced_) {
     DCHECK(!group_name_.empty());
     if (name == group_name_) {
+      // Note that while |group_| may be equal to |kDefaultGroupNumber| on the
+      // forced trial, it will not have the same value as the default group
+      // number returned from the non-forced |FactoryGetFieldTrial()| call,
+      // which takes care to ensure that this does not happen.
       return group_;
     }
     DCHECK_NE(next_group_number_, group_);
@@ -202,21 +202,8 @@ void FieldTrial::FinalizeGroupChoice() {
 }
 
 bool FieldTrial::GetActiveGroup(ActiveGroup* active_group) const {
-  if (!group_reported_ || !enable_field_trial_) {
-    // TODO(asvitkine): Temporary histogram. Remove this once it is not needed.
-    if (trial_name_ == "UMA-Uniformity-Trial-1-Percent") {
-      const int kGroupNotReported = 1;
-      const int kTrialDisabled = 2;
-      int value = 0;
-      if (!group_reported_)
-        value |= kGroupNotReported;
-      if (!enable_field_trial_)
-        value |= kTrialDisabled;
-      UMA_HISTOGRAM_ENUMERATION("Variations.UniformityTrialGroupNotActive",
-                                value, 4);
-    }
+  if (!group_reported_ || !enable_field_trial_)
     return false;
-  }
   DCHECK_NE(group_, kNotFinalized);
   active_group->trial_name = trial_name_;
   active_group->group_name = group_name_;
@@ -244,11 +231,10 @@ FieldTrialList::FieldTrialList(
   DCHECK(!used_without_global_);
   global_ = this;
 
+  Time two_years_from_build_time = GetBuildTime() + TimeDelta::FromDays(730);
   Time::Exploded exploded;
-  Time two_years_from_now =
-      Time::NowFromSystemTime() + TimeDelta::FromDays(730);
-  two_years_from_now.LocalExplode(&exploded);
-  kExpirationYearInFuture = exploded.year;
+  two_years_from_build_time.LocalExplode(&exploded);
+  kNoExpirationYear = exploded.year;
 }
 
 FieldTrialList::~FieldTrialList() {
@@ -277,23 +263,36 @@ FieldTrial* FieldTrialList::FactoryGetFieldTrial(
   FieldTrial* existing_trial = Find(name);
   if (existing_trial) {
     CHECK(existing_trial->forced_);
-    // If the field trial has already been forced, check whether it was forced
-    // to the default group. Return the chosen group number, in that case..
+    // If the default group name differs between the existing forced trial
+    // and this trial, then use a different value for the default group number.
     if (default_group_number &&
-        default_group_name == existing_trial->default_group_name()) {
-      *default_group_number = existing_trial->group();
+        default_group_name != existing_trial->default_group_name()) {
+      // If the new default group number corresponds to the group that was
+      // chosen for the forced trial (which has been finalized when it was
+      // forced), then set the default group number to that.
+      if (default_group_name == existing_trial->group_name_internal()) {
+        *default_group_number = existing_trial->group_;
+      } else {
+        // Otherwise, use |kNonConflictingGroupNumber| (-2) for the default
+        // group number, so that it does not conflict with the |AppendGroup()|
+        // result for the chosen group.
+        const int kNonConflictingGroupNumber = -2;
+        COMPILE_ASSERT(
+            kNonConflictingGroupNumber != FieldTrial::kDefaultGroupNumber,
+            conflicting_default_group_number);
+        COMPILE_ASSERT(
+            kNonConflictingGroupNumber != FieldTrial::kNotFinalized,
+            conflicting_default_group_number);
+        *default_group_number = kNonConflictingGroupNumber;
+      }
     }
     return existing_trial;
   }
 
   FieldTrial* field_trial =
       new FieldTrial(name, total_probability, default_group_name);
-  if (GetBuildTime() > CreateTimeFromParams(year, month, day_of_month)) {
-    // TODO(asvitkine): Temporary histogram. Remove this once it is not needed.
-    if (name == "UMA-Uniformity-Trial-1-Percent")
-      UMA_HISTOGRAM_BOOLEAN("Variations.UniformityTrialExpired", true);
+  if (GetBuildTime() > CreateTimeFromParams(year, month, day_of_month))
     field_trial->Disable();
-  }
   FieldTrialList::Register(field_trial);
   return field_trial;
 }
@@ -411,10 +410,8 @@ FieldTrial* FieldTrialList::CreateFieldTrial(
   }
   const int kTotalProbability = 100;
   field_trial = new FieldTrial(name, kTotalProbability, group_name);
-  // This is where we may assign a group number different from
-  // kDefaultGroupNumber to the default group.
-  field_trial->AppendGroup(group_name, kTotalProbability);
-  field_trial->forced_ = true;
+  // Force the trial, which will also finalize the group choice.
+  field_trial->SetForced();
   FieldTrialList::Register(field_trial);
   return field_trial;
 }

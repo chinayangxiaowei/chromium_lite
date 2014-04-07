@@ -22,6 +22,7 @@ class TestSystemTrayDelegate : public SystemTrayDelegate {
 
  public:
   virtual void Initialize() OVERRIDE;
+  virtual void Shutdown() OVERRIDE;
   virtual bool GetTrayVisibilityOnStartup() OVERRIDE;
 
   // Overridden from SystemTrayDelegate:
@@ -29,6 +30,8 @@ class TestSystemTrayDelegate : public SystemTrayDelegate {
   virtual const std::string GetUserEmail() const OVERRIDE;
   virtual const gfx::ImageSkia& GetUserImage() const OVERRIDE;
   virtual user::LoginStatus GetUserLoginStatus() const OVERRIDE;
+  virtual bool IsOobeCompleted() const OVERRIDE;
+  virtual void ChangeProfilePicture() OVERRIDE;
   virtual const std::string GetEnterpriseDomain() const OVERRIDE;
   virtual const string16 GetEnterpriseMessage() const OVERRIDE;
   virtual bool SystemShouldUpgrade() const OVERRIDE;
@@ -51,13 +54,15 @@ class TestSystemTrayDelegate : public SystemTrayDelegate {
   virtual void RequestLockScreen() OVERRIDE;
   virtual void RequestRestart() OVERRIDE;
   virtual void GetAvailableBluetoothDevices(BluetoothDeviceList* list) OVERRIDE;
+  virtual void BluetoothStartDiscovering() OVERRIDE;
+  virtual void BluetoothStopDiscovering() OVERRIDE;
   virtual void ToggleBluetoothConnection(const std::string& address) OVERRIDE;
   virtual void GetCurrentIME(IMEInfo* info) OVERRIDE;
   virtual void GetAvailableIMEList(IMEInfoList* list) OVERRIDE;
   virtual void GetCurrentIMEProperties(IMEPropertyInfoList* list) OVERRIDE;
   virtual void SwitchIME(const std::string& ime_id) OVERRIDE;
   virtual void ActivateIMEProperty(const std::string& key) OVERRIDE;
-  virtual void CancelDriveOperation(const FilePath&) OVERRIDE;
+  virtual void CancelDriveOperation(const base::FilePath&) OVERRIDE;
   virtual void GetDriveOperationStatusList(
       ash::DriveOperationStatusList*) OVERRIDE;
   virtual void GetMostRelevantNetworkIcon(NetworkIconInfo* info,
@@ -98,8 +103,14 @@ class TestSystemTrayDelegate : public SystemTrayDelegate {
   virtual VolumeControlDelegate* GetVolumeControlDelegate() const OVERRIDE;
   virtual void SetVolumeControlDelegate(
       scoped_ptr<VolumeControlDelegate> delegate) OVERRIDE;
-  virtual base::Time GetSessionStartTime() OVERRIDE;
-  virtual base::TimeDelta GetSessionLengthLimit() OVERRIDE;
+  virtual bool GetSessionStartTime(
+      base::TimeTicks* session_start_time) OVERRIDE;
+  virtual bool GetSessionLengthLimit(
+      base::TimeDelta* session_length_limit) OVERRIDE;
+  virtual int GetSystemTrayMenuWidth() OVERRIDE;
+  virtual string16 FormatTimeDuration(
+      const base::TimeDelta& delta) const OVERRIDE;
+  virtual void MaybeSpeak(const std::string& utterance) const OVERRIDE;
 
  private:
   bool wifi_enabled_;

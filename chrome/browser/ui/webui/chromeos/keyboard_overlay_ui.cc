@@ -4,28 +4,27 @@
 
 #include "chrome/browser/ui/webui/chromeos/keyboard_overlay_ui.h"
 
+#include "ash/display/display_manager.h"
+#include "ash/shell.h"
 #include "base/bind.h"
 #include "base/bind_helpers.h"
 #include "base/command_line.h"
 #include "base/memory/weak_ptr.h"
+#include "base/prefs/pref_service.h"
 #include "base/utf_string_conversions.h"
 #include "base/values.h"
 #include "chrome/browser/chromeos/input_method/input_method_configuration.h"
 #include "chrome/browser/chromeos/input_method/input_method_manager.h"
 #include "chrome/browser/chromeos/input_method/xkeyboard.h"
-#include "chrome/browser/prefs/pref_service.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/webui/chrome_url_data_manager.h"
-#include "chrome/browser/ui/webui/chrome_web_ui_data_source.h"
 #include "chrome/common/chrome_switches.h"
-#include "chrome/common/jstemplate_builder.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/common/url_constants.h"
-#include "content/public/browser/browser_thread.h"
 #include "content/public/browser/page_navigator.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/browser/web_contents_delegate.h"
 #include "content/public/browser/web_ui.h"
+#include "content/public/browser/web_ui_data_source.h"
 #include "content/public/browser/web_ui_message_handler.h"
 #include "grit/browser_resources.h"
 #include "grit/chromium_strings.h"
@@ -176,9 +175,9 @@ struct I18nContentToMessage {
   { "keyboardOverlayNewWindow", IDS_KEYBOARD_OVERLAY_NEW_WINDOW },
   { "keyboardOverlayNextWindow", IDS_KEYBOARD_OVERLAY_NEXT_WINDOW },
   { "keyboardOverlayNextWord", IDS_KEYBOARD_OVERLAY_NEXT_WORD },
+  { "keyboardOverlayOpen", IDS_KEYBOARD_OVERLAY_OPEN },
   { "keyboardOverlayOpenAddressInNewTab",
     IDS_KEYBOARD_OVERLAY_OPEN_ADDRESS_IN_NEW_TAB },
-  { "keyboardOverlayOpenDialog", IDS_KEYBOARD_OVERLAY_OPEN_DIALOG },
   { "keyboardOverlayPageDown", IDS_KEYBOARD_OVERLAY_PAGE_DOWN },
   { "keyboardOverlayPageUp", IDS_KEYBOARD_OVERLAY_PAGE_UP },
   { "keyboardOverlayPaste", IDS_KEYBOARD_OVERLAY_PASTE },
@@ -194,7 +193,9 @@ struct I18nContentToMessage {
   { "keyboardOverlayReopenLastClosedTab",
     IDS_KEYBOARD_OVERLAY_REOPEN_LAST_CLOSED_TAB },
   { "keyboardOverlayReportIssue", IDS_KEYBOARD_OVERLAY_REPORT_ISSUE },
+  { "keyboardOverlayResetScreenZoom", IDS_KEYBOARD_OVERLAY_RESET_SCREEN_ZOOM },
   { "keyboardOverlayResetZoom", IDS_KEYBOARD_OVERLAY_RESET_ZOOM },
+  { "keyboardOverlayRotateScreen", IDS_KEYBOARD_OVERLAY_ROTATE_SCREEN },
   { "keyboardOverlaySave", IDS_KEYBOARD_OVERLAY_SAVE },
   { "keyboardOverlayScreenshotRegion",
     IDS_KEYBOARD_OVERLAY_SCREENSHOT_REGION },
@@ -205,6 +206,8 @@ struct I18nContentToMessage {
     IDS_KEYBOARD_OVERLAY_SELECT_PREVIOUS_INPUT_METHOD },
   { "keyboardOverlaySelectWordAtATime",
     IDS_KEYBOARD_OVERLAY_SELECT_WORD_AT_A_TIME },
+  { "keyboardOverlayShowMessageCenter",
+    IDS_KEYBOARD_OVERLAY_SHOW_MESSAGE_CENTER },
   { "keyboardOverlayShowStatusMenu", IDS_KEYBOARD_OVERLAY_SHOW_STATUS_MENU },
   { "keyboardOverlayShowWrenchMenu", IDS_KEYBOARD_OVERLAY_SHOW_WRENCH_MENU },
   { "keyboardOverlaySignOut", IDS_KEYBOARD_OVERLAY_SIGN_OUT },
@@ -226,6 +229,8 @@ struct I18nContentToMessage {
   { "keyboardOverlayWordMove", IDS_KEYBOARD_OVERLAY_WORD_MOVE },
   { "keyboardOverlayZoomIn", IDS_KEYBOARD_OVERLAY_ZOOM_IN },
   { "keyboardOverlayZoomOut", IDS_KEYBOARD_OVERLAY_ZOOM_OUT },
+  { "keyboardOverlayZoomScreenIn", IDS_KEYBOARD_OVERLAY_ZOOM_SCREEN_IN },
+  { "keyboardOverlayZoomScreenOut", IDS_KEYBOARD_OVERLAY_ZOOM_SCREEN_OUT },
 };
 
 std::string ModifierKeyToLabel(ModifierKey modifier) {
@@ -237,9 +242,9 @@ std::string ModifierKeyToLabel(ModifierKey modifier) {
   return "";
 }
 
-ChromeWebUIDataSource* CreateKeyboardOverlayUIHTMLSource() {
-  ChromeWebUIDataSource* source =
-      new ChromeWebUIDataSource(chrome::kChromeUIKeyboardOverlayHost);
+content::WebUIDataSource* CreateKeyboardOverlayUIHTMLSource() {
+  content::WebUIDataSource* source =
+      content::WebUIDataSource::Create(chrome::kChromeUIKeyboardOverlayHost);
 
   for (size_t i = 0; i < arraysize(kI18nContentToMessage); ++i) {
     source->AddLocalizedString(kI18nContentToMessage[i].i18n_content,
@@ -247,15 +252,19 @@ ChromeWebUIDataSource* CreateKeyboardOverlayUIHTMLSource() {
   }
 
   source->AddString("keyboardOverlayLearnMoreURL", UTF8ToUTF16(kLearnMoreURL));
-  const char* has_diamond_key_value =
-      CommandLine::ForCurrentProcess()->HasSwitch(
-          switches::kHasChromeOSDiamondKey) ? "true" : "false";
-  source->AddString("keyboardOverlayHasChromeOSDiamondKey",
-                    has_diamond_key_value);
-  source->set_json_path("strings.js");
-  source->set_use_json_js_format_v2();
-  source->add_resource_path("keyboard_overlay.js", IDR_KEYBOARD_OVERLAY_JS);
-  source->set_default_resource(IDR_KEYBOARD_OVERLAY_HTML);
+  source->AddBoolean("keyboardOverlayHasChromeOSDiamondKey",
+                     CommandLine::ForCurrentProcess()->HasSwitch(
+                         switches::kHasChromeOSDiamondKey));
+  ash::Shell* shell = ash::Shell::GetInstance();
+  ash::internal::DisplayManager* display_manager = shell->display_manager();
+  source->AddBoolean("keyboardOverlayIsDisplayRotationEnabled",
+                     display_manager->IsDisplayRotationEnabled());
+  source->AddBoolean("keyboardOverlayIsDisplayUIScalingEnabled",
+                     display_manager->IsDisplayUIScalingEnabled());
+  source->SetJsonPath("strings.js");
+  source->SetUseJsonJSFormatV2();
+  source->AddResourcePath("keyboard_overlay.js", IDR_KEYBOARD_OVERLAY_JS);
+  source->SetDefaultResource(IDR_KEYBOARD_OVERLAY_HTML);
   return source;
 }
 
@@ -368,6 +377,5 @@ KeyboardOverlayUI::KeyboardOverlayUI(content::WebUI* web_ui)
   web_ui->AddMessageHandler(handler);
 
   // Set up the chrome://keyboardoverlay/ source.
-  ChromeURLDataManager::AddDataSource(profile,
-      CreateKeyboardOverlayUIHTMLSource());
+  content::WebUIDataSource::Add(profile, CreateKeyboardOverlayUIHTMLSource());
 }

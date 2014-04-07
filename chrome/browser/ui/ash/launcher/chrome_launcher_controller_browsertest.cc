@@ -4,12 +4,15 @@
 
 #include "chrome/browser/ui/ash/launcher/chrome_launcher_controller.h"
 
+#include "ash/ash_switches.h"
 #include "ash/launcher/launcher.h"
 #include "ash/launcher/launcher_model.h"
 #include "ash/shell.h"
+#include "ash/test/launcher_view_test_api.h"
 #include "ash/test/shell_test_api.h"
 #include "ash/wm/window_util.h"
 #include "base/command_line.h"
+#include "base/stringprintf.h"
 #include "base/utf_string_conversions.h"
 #include "chrome/browser/automation/automation_util.h"
 #include "chrome/browser/extensions/extension_apitest.h"
@@ -25,7 +28,9 @@
 #include "chrome/browser/ui/browser_commands.h"
 #include "chrome/browser/ui/browser_window.h"
 #include "chrome/browser/ui/extensions/application_launch.h"
+#include "chrome/browser/ui/extensions/native_app_window.h"
 #include "chrome/browser/ui/extensions/shell_window.h"
+#include "chrome/browser/ui/host_desktop.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/common/chrome_notification_types.h"
 #include "chrome/common/chrome_switches.h"
@@ -35,6 +40,7 @@
 #include "content/public/browser/notification_source.h"
 #include "content/public/browser/web_contents.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "ui/aura/client/aura_constants.h"
 #include "ui/aura/window.h"
 
 using extensions::Extension;
@@ -54,15 +60,32 @@ class LauncherPlatformAppBrowserTest
     return ash::test::ShellTestApi(ash::Shell::GetInstance()).launcher_model();
   }
 
-  virtual void RunTestOnMainThreadLoop() {
+  virtual void RunTestOnMainThreadLoop() OVERRIDE {
     launcher_ = ash::Launcher::ForPrimaryDisplay();
     controller_ = static_cast<ChromeLauncherController*>(launcher_->delegate());
     return extensions::PlatformAppBrowserTest::RunTestOnMainThreadLoop();
   }
 
+  virtual void SetUpCommandLine(CommandLine* command_line) OVERRIDE {
+    PlatformAppBrowserTest::SetUpCommandLine(command_line);
+    command_line->AppendSwitch(ash::switches::kAshDisablePerAppLauncher);
+  }
+
   ash::LauncherID CreateAppShortcutLauncherItem(const std::string& name) {
     return controller_->CreateAppShortcutLauncherItem(
         name, controller_->model()->item_count());
+  }
+
+  const ash::LauncherItem& GetLastLauncherItem() {
+    // Unless there are any panels, the item at index [count - 1] will be
+    // the app list, and the item at [count - 2] will be the desited item.
+    return launcher_model()->items()[launcher_model()->item_count() - 2];
+  }
+
+  const ash::LauncherItem& GetLastLauncherPanelItem() {
+    // Panels show up on the right side of the launcher, so the desired item
+    // will be the last one.
+    return launcher_model()->items()[launcher_model()->item_count() - 1];
   }
 
   ash::Launcher* launcher_;
@@ -78,11 +101,16 @@ class LauncherAppBrowserTest : public ExtensionBrowserTest {
 
   virtual ~LauncherAppBrowserTest() {}
 
-  virtual void RunTestOnMainThreadLoop() {
+  virtual void RunTestOnMainThreadLoop() OVERRIDE {
     launcher_ = ash::Launcher::ForPrimaryDisplay();
     model_ =
         ash::test::ShellTestApi(ash::Shell::GetInstance()).launcher_model();
     return ExtensionBrowserTest::RunTestOnMainThreadLoop();
+  }
+
+  virtual void SetUpCommandLine(CommandLine* command_line) OVERRIDE {
+    ExtensionBrowserTest::SetUpCommandLine(command_line);
+    command_line->AppendSwitch(ash::switches::kAshDisablePerAppLauncher);
   }
 
   const Extension* LoadAndLaunchExtension(
@@ -97,8 +125,8 @@ class LauncherAppBrowserTest : public ExtensionBrowserTest {
         service->GetExtensionById(last_loaded_extension_id_, false);
     EXPECT_TRUE(extension);
 
-    application_launch::OpenApplication(application_launch::LaunchParams(
-            browser()->profile(), extension, container, disposition));
+    chrome::OpenApplication(chrome::AppLaunchParams(
+        browser()->profile(), extension, container, disposition));
     return extension;
   }
 
@@ -125,6 +153,13 @@ class LauncherAppBrowserTest : public ExtensionBrowserTest {
     return item.id;
   }
 
+  ash::LauncherID PinFakeApp(const std::string& name) {
+    ChromeLauncherController* controller =
+        static_cast<ChromeLauncherController*>(launcher_->delegate());
+    return controller->CreateAppShortcutLauncherItem(
+        name, model_->item_count());
+  }
+
   ash::Launcher* launcher_;
   ash::LauncherModel* model_;
 };
@@ -136,8 +171,7 @@ IN_PROC_BROWSER_TEST_F(LauncherPlatformAppBrowserTest, LaunchUnpinned) {
   ShellWindow* window = CreateShellWindow(extension);
   ++item_count;
   ASSERT_EQ(item_count, launcher_model()->item_count());
-  ash::LauncherItem item =
-      launcher_model()->items()[launcher_model()->item_count() - 2];
+  const ash::LauncherItem& item = GetLastLauncherItem();
   EXPECT_EQ(ash::TYPE_PLATFORM_APP, item.type);
   EXPECT_EQ(ash::STATUS_ACTIVE, item.status);
   CloseShellWindow(window);
@@ -184,11 +218,10 @@ IN_PROC_BROWSER_TEST_F(LauncherPlatformAppBrowserTest, PinRunning) {
   ShellWindow* window = CreateShellWindow(extension);
   ++item_count;
   ASSERT_EQ(item_count, launcher_model()->item_count());
-  ash::LauncherItem item =
-      launcher_model()->items()[launcher_model()->item_count() - 2];
-  ash::LauncherID id = item.id;
-  EXPECT_EQ(ash::TYPE_PLATFORM_APP, item.type);
-  EXPECT_EQ(ash::STATUS_ACTIVE, item.status);
+  const ash::LauncherItem& item1 = GetLastLauncherItem();
+  ash::LauncherID id = item1.id;
+  EXPECT_EQ(ash::TYPE_PLATFORM_APP, item1.type);
+  EXPECT_EQ(ash::STATUS_ACTIVE, item1.status);
 
   // Create a shortcut. The app item should be after it.
   ash::LauncherID foo_id = CreateAppShortcutLauncherItem("foo");
@@ -200,9 +233,9 @@ IN_PROC_BROWSER_TEST_F(LauncherPlatformAppBrowserTest, PinRunning) {
   // Pin the app. The item should remain.
   controller_->Pin(id);
   ASSERT_EQ(item_count, launcher_model()->item_count());
-  item = *launcher_model()->ItemByID(id);
-  EXPECT_EQ(ash::TYPE_APP_SHORTCUT, item.type);
-  EXPECT_EQ(ash::STATUS_ACTIVE, item.status);
+  const ash::LauncherItem& item2 = *launcher_model()->ItemByID(id);
+  EXPECT_EQ(ash::TYPE_APP_SHORTCUT, item2.type);
+  EXPECT_EQ(ash::STATUS_ACTIVE, item2.status);
 
   // New shortcuts should come after the item.
   ash::LauncherID bar_id = CreateAppShortcutLauncherItem("bar");
@@ -272,25 +305,24 @@ IN_PROC_BROWSER_TEST_F(LauncherPlatformAppBrowserTest, MultipleWindows) {
   ShellWindow* window1 = CreateShellWindow(extension);
   ++item_count;
   ASSERT_EQ(item_count, launcher_model()->item_count());
-  ash::LauncherItem item =
-      launcher_model()->items()[launcher_model()->item_count() - 2];
-  ash::LauncherID item_id = item.id;
-  EXPECT_EQ(ash::TYPE_PLATFORM_APP, item.type);
-  EXPECT_EQ(ash::STATUS_ACTIVE, item.status);
+  const ash::LauncherItem& item1 = GetLastLauncherItem();
+  ash::LauncherID item_id = item1.id;
+  EXPECT_EQ(ash::TYPE_PLATFORM_APP, item1.type);
+  EXPECT_EQ(ash::STATUS_ACTIVE, item1.status);
 
   // Add second window.
   ShellWindow* window2 = CreateShellWindow(extension);
   // Confirm item stays.
   ASSERT_EQ(item_count, launcher_model()->item_count());
-  item = *launcher_model()->ItemByID(item_id);
-  EXPECT_EQ(ash::STATUS_ACTIVE, item.status);
+  const ash::LauncherItem& item2 = *launcher_model()->ItemByID(item_id);
+  EXPECT_EQ(ash::STATUS_ACTIVE, item2.status);
 
   // Close second window.
   CloseShellWindow(window2);
   // Confirm item stays.
   ASSERT_EQ(item_count, launcher_model()->item_count());
-  item = *launcher_model()->ItemByID(item_id);
-  EXPECT_EQ(ash::STATUS_ACTIVE, item.status);
+  const ash::LauncherItem& item3 = *launcher_model()->ItemByID(item_id);
+  EXPECT_EQ(ash::STATUS_ACTIVE, item3.status);
 
   // Close first window.
   CloseShellWindow(window1);
@@ -307,8 +339,7 @@ IN_PROC_BROWSER_TEST_F(LauncherPlatformAppBrowserTest, MultipleApps) {
   ShellWindow* window1 = CreateShellWindow(extension1);
   ++item_count;
   ASSERT_EQ(item_count, launcher_model()->item_count());
-  ash::LauncherItem item1 =
-      launcher_model()->items()[launcher_model()->item_count() - 2];
+  const ash::LauncherItem& item1 = GetLastLauncherItem();
   ash::LauncherID item_id1 = item1.id;
   EXPECT_EQ(ash::TYPE_PLATFORM_APP, item1.type);
   EXPECT_EQ(ash::STATUS_ACTIVE, item1.status);
@@ -318,8 +349,7 @@ IN_PROC_BROWSER_TEST_F(LauncherPlatformAppBrowserTest, MultipleApps) {
   ShellWindow* window2 = CreateShellWindow(extension2);
   ++item_count;
   ASSERT_EQ(item_count, launcher_model()->item_count());
-  ash::LauncherItem item2 =
-      launcher_model()->items()[launcher_model()->item_count() - 2];
+  const ash::LauncherItem& item2 = GetLastLauncherItem();
   ash::LauncherID item_id2 = item2.id;
   EXPECT_EQ(ash::TYPE_PLATFORM_APP, item2.type);
   EXPECT_EQ(ash::STATUS_ACTIVE, item2.status);
@@ -340,7 +370,25 @@ IN_PROC_BROWSER_TEST_F(LauncherPlatformAppBrowserTest, MultipleApps) {
   CloseShellWindow(window1);
   --item_count;
   ASSERT_EQ(item_count, launcher_model()->item_count());
+}
 
+// Test that we can launch a platform app panel and get a running item.
+IN_PROC_BROWSER_TEST_F(LauncherPlatformAppBrowserTest, LaunchPanelWindow) {
+  int item_count = launcher_model()->item_count();
+  const Extension* extension = LoadAndLaunchPlatformApp("launch");
+  ShellWindow::CreateParams params;
+  params.window_type = ShellWindow::WINDOW_TYPE_PANEL;
+  params.focused = false;
+  ShellWindow* window = CreateShellWindowFromParams(extension, params);
+  ++item_count;
+  ASSERT_EQ(item_count, launcher_model()->item_count());
+  const ash::LauncherItem& item = GetLastLauncherPanelItem();
+  EXPECT_EQ(ash::TYPE_APP_PANEL, item.type);
+  // Opening a panel does not activate it.
+  EXPECT_EQ(ash::STATUS_RUNNING, item.status);
+  CloseShellWindow(window);
+  --item_count;
+  EXPECT_EQ(item_count, launcher_model()->item_count());
 }
 
 // Confirm that app windows can be reactivated by clicking their icons and that
@@ -353,8 +401,7 @@ IN_PROC_BROWSER_TEST_F(LauncherPlatformAppBrowserTest, WindowActivation) {
   ShellWindow* window1 = CreateShellWindow(extension1);
   ++item_count;
   ASSERT_EQ(item_count, launcher_model()->item_count());
-  ash::LauncherItem item1 =
-      launcher_model()->items()[launcher_model()->item_count() - 2];
+  const ash::LauncherItem& item1 = GetLastLauncherItem();
   ash::LauncherID item_id1 = item1.id;
   EXPECT_EQ(ash::TYPE_PLATFORM_APP, item1.type);
   EXPECT_EQ(ash::STATUS_ACTIVE, item1.status);
@@ -364,8 +411,7 @@ IN_PROC_BROWSER_TEST_F(LauncherPlatformAppBrowserTest, WindowActivation) {
   ShellWindow* window2 = CreateShellWindow(extension2);
   ++item_count;
   ASSERT_EQ(item_count, launcher_model()->item_count());
-  ash::LauncherItem item2 =
-      launcher_model()->items()[launcher_model()->item_count() - 2];
+  const ash::LauncherItem& item2 = GetLastLauncherItem();
   ash::LauncherID item_id2 = item2.id;
   EXPECT_EQ(ash::TYPE_PLATFORM_APP, item2.type);
   EXPECT_EQ(ash::STATUS_ACTIVE, item2.status);
@@ -397,13 +443,12 @@ IN_PROC_BROWSER_TEST_F(LauncherPlatformAppBrowserTest, WindowActivation) {
   EXPECT_FALSE(ash::wm::IsActiveWindow(window2->GetNativeWindow()));
   EXPECT_TRUE(ash::wm::IsActiveWindow(window1b->GetNativeWindow()));
 
-  // Activate launcher item for app1, this will cycle the active window.
+  // Activate launcher item for app1, this will activate the first app window.
   launcher_->ActivateLauncherItem(launcher_model()->ItemIndexByID(item_id1));
-  EXPECT_FALSE(ash::wm::IsActiveWindow(window1b->GetNativeWindow()));
   EXPECT_TRUE(ash::wm::IsActiveWindow(window1->GetNativeWindow()));
+  EXPECT_FALSE(ash::wm::IsActiveWindow(window1b->GetNativeWindow()));
   launcher_->ActivateLauncherItem(launcher_model()->ItemIndexByID(item_id1));
-  EXPECT_TRUE(ash::wm::IsActiveWindow(window1b->GetNativeWindow()));
-  EXPECT_FALSE(ash::wm::IsActiveWindow(window1->GetNativeWindow()));
+  EXPECT_TRUE(ash::wm::IsActiveWindow(window1->GetNativeWindow()));
 
   // Activate the second app again
   launcher_->ActivateLauncherItem(launcher_model()->ItemIndexByID(item_id2));
@@ -413,9 +458,9 @@ IN_PROC_BROWSER_TEST_F(LauncherPlatformAppBrowserTest, WindowActivation) {
 
   // Activate the first app again
   launcher_->ActivateLauncherItem(launcher_model()->ItemIndexByID(item_id1));
-  EXPECT_FALSE(ash::wm::IsActiveWindow(window1->GetNativeWindow()));
+  EXPECT_TRUE(ash::wm::IsActiveWindow(window1->GetNativeWindow()));
   EXPECT_FALSE(ash::wm::IsActiveWindow(window2->GetNativeWindow()));
-  EXPECT_TRUE(ash::wm::IsActiveWindow(window1b->GetNativeWindow()));
+  EXPECT_FALSE(ash::wm::IsActiveWindow(window1b->GetNativeWindow()));
 
   // Close second app.
   CloseShellWindow(window2);
@@ -439,8 +484,7 @@ IN_PROC_BROWSER_TEST_F(LauncherPlatformAppBrowserTest, BrowserActivation) {
   CreateShellWindow(extension1);
   ++item_count;
   ASSERT_EQ(item_count, launcher_model()->item_count());
-  ash::LauncherItem item1 =
-      launcher_model()->items()[launcher_model()->item_count() - 2];
+  const ash::LauncherItem& item1 = GetLastLauncherItem();
   ash::LauncherID item_id1 = item1.id;
   EXPECT_EQ(ash::TYPE_PLATFORM_APP, item1.type);
   EXPECT_EQ(ash::STATUS_ACTIVE, item1.status);
@@ -448,6 +492,26 @@ IN_PROC_BROWSER_TEST_F(LauncherPlatformAppBrowserTest, BrowserActivation) {
   ash::wm::ActivateWindow(browser()->window()->GetNativeWindow());
   EXPECT_EQ(ash::STATUS_RUNNING,
             launcher_model()->ItemByID(item_id1)->status);
+}
+
+// Test that draw attention sets the launcher item status.
+IN_PROC_BROWSER_TEST_F(LauncherPlatformAppBrowserTest, DrawAttention) {
+  const Extension* extension = LoadAndLaunchPlatformApp("launch");
+  ShellWindow* shell_window = CreateShellWindow(extension);
+  const ash::LauncherItem& item = GetLastLauncherItem();
+  EXPECT_EQ(ash::STATUS_ACTIVE, item.status);
+  // Set Minimize window to deactivate the launcher item.
+  shell_window->GetBaseWindow()->Minimize();
+  EXPECT_EQ(ash::STATUS_RUNNING, item.status);
+  // Set DrawAttention property.
+  shell_window->GetNativeWindow()->SetProperty(
+      aura::client::kDrawAttentionKey, true);
+  EXPECT_EQ(ash::STATUS_ATTENTION, item.status);
+  // Activate window, should clear DrawAttention.
+  shell_window->GetBaseWindow()->Activate();
+  EXPECT_EQ(ash::STATUS_ACTIVE, item.status);
+  EXPECT_FALSE(shell_window->GetNativeWindow()->GetProperty(
+      aura::client::kDrawAttentionKey));
 }
 
 // Test that we can launch an app with a shortcut.
@@ -507,7 +571,7 @@ IN_PROC_BROWSER_TEST_F(LauncherAppBrowserTest, LaunchMaximized) {
   content::WindowedNotificationObserver open_observer(
       chrome::NOTIFICATION_BROWSER_WINDOW_READY,
       content::NotificationService::AllSources());
-  chrome::NewEmptyWindow(browser()->profile());
+  chrome::NewEmptyWindow(browser()->profile(), chrome::HOST_DESKTOP_TYPE_ASH);
   open_observer.Wait();
   Browser* browser2 = content::Source<Browser>(open_observer.source()).ptr();
   aura::Window* window2 = browser2->window()->GetNativeWindow();
@@ -676,7 +740,7 @@ IN_PROC_BROWSER_TEST_F(LauncherAppBrowserTest, RefocusFilter) {
   EXPECT_EQ(ash::STATUS_ACTIVE, model_->ItemByID(shortcut_id)->status);
   WebContents* first_tab = tab_strip->GetActiveWebContents();
 
-  controller->SetRefocusURLPattern(
+  controller->SetRefocusURLPatternForTest(
       shortcut_id, GURL("http://www.example.com/path1/*"));
   // Create new tab owned by app.
   ui_test_utils::NavigateToURLWithDisposition(
@@ -711,7 +775,7 @@ IN_PROC_BROWSER_TEST_F(LauncherAppBrowserTest, RefocusFilterLaunch) {
   TabStripModel* tab_strip = browser()->tab_strip_model();
   int tab_count = tab_strip->count();
   ash::LauncherID shortcut_id = CreateShortcut("app1");
-  controller->SetRefocusURLPattern(
+  controller->SetRefocusURLPatternForTest(
       shortcut_id, GURL("http://www.example.com/path1/*"));
 
   // Create new tab owned by app.
@@ -733,4 +797,32 @@ IN_PROC_BROWSER_TEST_F(LauncherAppBrowserTest, RefocusFilterLaunch) {
   EXPECT_EQ(ash::STATUS_ACTIVE, model_->ItemByID(shortcut_id)->status);
   EXPECT_NE(first_tab, second_tab);
   EXPECT_EQ(tab_strip->GetActiveWebContents(), second_tab);
+}
+
+IN_PROC_BROWSER_TEST_F(LauncherAppBrowserTest, OverflowBubble) {
+  // Make sure to have a browser window
+  chrome::NewTab(browser());
+
+  // No overflow yet.
+  EXPECT_FALSE(launcher_->IsShowingOverflowBubble());
+
+  ash::test::LauncherViewTestAPI test(launcher_->GetLauncherViewForTest());
+
+  int items_added = 0;
+  while (!test.IsOverflowButtonVisible()) {
+    std::string fake_app_id = base::StringPrintf("fake_app_%d", items_added);
+    PinFakeApp(fake_app_id);
+
+    ++items_added;
+    ASSERT_LT(items_added, 10000);
+  }
+
+  // Now show overflow bubble.
+  test.ShowOverflowBubble();
+  EXPECT_TRUE(launcher_->IsShowingOverflowBubble());
+
+  // Unpin first pinned app and there should be no crash.
+  ChromeLauncherController* controller =
+      static_cast<ChromeLauncherController*>(launcher_->delegate());
+  controller->UnpinAppsWithID(std::string("fake_app_0"));
 }

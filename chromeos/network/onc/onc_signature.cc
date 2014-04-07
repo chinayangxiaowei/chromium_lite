@@ -30,218 +30,254 @@ const OncValueSignature kIPConfigListSignature = {
 };
 
 const OncFieldSignature issuer_subject_pattern_fields[] = {
-  { certificate::kCommonName, NULL, &kStringSignature },
-  { certificate::kLocality, NULL, &kStringSignature },
-  { certificate::kOrganization, NULL, &kStringSignature },
-  { certificate::kOrganizationalUnit, NULL, &kStringSignature },
+  { certificate::kCommonName, &kStringSignature },
+  { certificate::kLocality, &kStringSignature },
+  { certificate::kOrganization, &kStringSignature },
+  { certificate::kOrganizationalUnit, &kStringSignature },
   { NULL }
 };
 
 const OncFieldSignature certificate_pattern_fields[] = {
-  { kRecommended, NULL, &kRecommendedSignature },
-  { certificate::kEnrollmentURI, NULL, &kStringListSignature },
-  { certificate::kIssuer, NULL, &kIssuerSubjectPatternSignature },
-  { certificate::kIssuerCARef, NULL, &kStringListSignature },
-  { certificate::kSubject, NULL, &kIssuerSubjectPatternSignature },
+  { kRecommended, &kRecommendedSignature },
+  { certificate::kEnrollmentURI, &kStringListSignature },
+  { certificate::kIssuer, &kIssuerSubjectPatternSignature },
+  { certificate::kIssuerCARef, &kStringListSignature },
+  { certificate::kSubject, &kIssuerSubjectPatternSignature },
   { NULL }
 };
 
 const OncFieldSignature eap_fields[] = {
-  { kRecommended, NULL, &kRecommendedSignature },
-  { eap::kAnonymousIdentity, flimflam::kEapAnonymousIdentityProperty,
-    &kStringSignature },
-  { eap::kClientCertPattern, NULL, &kCertificatePatternSignature },
-  { eap::kClientCertRef, NULL, &kStringSignature },
-  { eap::kClientCertType, NULL, &kStringSignature },
-  { eap::kIdentity, flimflam::kEapIdentityProperty, &kStringSignature },
-  { eap::kInner, flimflam::kEapPhase2AuthProperty, &kStringSignature },
-  { eap::kOuter, flimflam::kEapMethodProperty, &kStringSignature },
-  { eap::kPassword, flimflam::kEapPasswordProperty, &kStringSignature },
-  { eap::kSaveCredentials, flimflam::kSaveCredentialsProperty,
-    &kBoolSignature },
-  { eap::kServerCARef, flimflam::kEapCaCertNssProperty, &kStringSignature },
-  { eap::kUseSystemCAs, flimflam::kEapUseSystemCasProperty, &kBoolSignature },
+  { kRecommended, &kRecommendedSignature },
+  { eap::kAnonymousIdentity, &kStringSignature },
+  { eap::kClientCertPattern, &kCertificatePatternSignature },
+  { eap::kClientCertRef, &kStringSignature },
+  { eap::kClientCertType, &kStringSignature },
+  { eap::kIdentity, &kStringSignature },
+  { eap::kInner, &kStringSignature },
+  { eap::kOuter, &kStringSignature },
+  { eap::kPassword, &kStringSignature },
+  { eap::kSaveCredentials, &kBoolSignature },
+  { eap::kServerCARef, &kStringSignature },
+  { eap::kUseSystemCAs, &kBoolSignature },
   { NULL }
 };
 
 const OncFieldSignature ipsec_fields[] = {
-  { kRecommended, NULL, &kRecommendedSignature },
-  // Ignored by Shill, not necessary to synchronize.
-  // Would be: flimflam::kL2tpIpsecAuthenticationType
-  { vpn::kAuthenticationType, NULL, &kStringSignature },
-  { vpn::kClientCertPattern, NULL, &kCertificatePatternSignature },
-  { vpn::kClientCertRef, NULL, &kStringSignature },
-  { vpn::kClientCertType, NULL, &kStringSignature },
-  { vpn::kGroup, flimflam::kL2tpIpsecGroupNameProperty, &kStringSignature },
-  // Ignored by Shill, not necessary to synchronize.
-  // Would be: flimflam::kL2tpIpsecIkeVersion
-  { vpn::kIKEVersion, NULL, &kIntegerSignature },
-  { vpn::kPSK, flimflam::kL2tpIpsecPskProperty, &kStringSignature },
-  { vpn::kSaveCredentials, flimflam::kSaveCredentialsProperty,
-    &kBoolSignature },
-  { vpn::kServerCARef, flimflam::kL2tpIpsecCaCertNssProperty,
-    &kStringSignature },
+  { kRecommended, &kRecommendedSignature },
+  { vpn::kAuthenticationType, &kStringSignature },
+  { vpn::kClientCertPattern, &kCertificatePatternSignature },
+  { vpn::kClientCertRef, &kStringSignature },
+  { vpn::kClientCertType, &kStringSignature },
+  { vpn::kGroup, &kStringSignature },
+  { vpn::kIKEVersion, &kIntegerSignature },
+  { vpn::kPSK, &kStringSignature },
+  { vpn::kSaveCredentials, &kBoolSignature },
+  { vpn::kServerCARef, &kStringSignature },
   // Not yet supported.
-  //  { vpn::kEAP, NULL, &kEAPSignature },
-  //  { vpn::kXAUTH, NULL, &kXAUTHSignature },
+  //  { vpn::kEAP, &kEAPSignature },
+  //  { vpn::kXAUTH, &kXAUTHSignature },
   { NULL }
 };
 
 const OncFieldSignature l2tp_fields[] = {
-  { kRecommended, NULL, &kRecommendedSignature },
-  { vpn::kPassword, flimflam::kL2tpIpsecPasswordProperty, &kStringSignature },
-  // We don't synchronize l2tp's SaveCredentials field for now, as Shill doesn't
-  // support separate settings for ipsec and l2tp.
-  { vpn::kSaveCredentials, NULL, &kBoolSignature },
-  { vpn::kUsername, flimflam::kL2tpIpsecUserProperty, &kStringSignature },
+  { kRecommended, &kRecommendedSignature },
+  { vpn::kPassword, &kStringSignature },
+  { vpn::kSaveCredentials, &kBoolSignature },
+  { vpn::kUsername, &kStringSignature },
   { NULL }
 };
 
 const OncFieldSignature openvpn_fields[] = {
-  { kRecommended, NULL, &kRecommendedSignature },
-  { vpn::kAuth, flimflam::kOpenVPNAuthProperty, &kStringSignature },
-  { vpn::kAuthNoCache, flimflam::kOpenVPNAuthNoCacheProperty, &kBoolSignature },
-  { vpn::kAuthRetry, flimflam::kOpenVPNAuthRetryProperty, &kStringSignature },
-  { vpn::kCipher, flimflam::kOpenVPNCipherProperty, &kStringSignature },
-  { vpn::kClientCertPattern, NULL, &kCertificatePatternSignature },
-  { vpn::kClientCertRef, NULL, &kStringSignature },
-  { vpn::kClientCertType, NULL, &kStringSignature },
-  { vpn::kCompLZO, flimflam::kOpenVPNCompLZOProperty, &kStringSignature },
-  { vpn::kCompNoAdapt, flimflam::kOpenVPNCompNoAdaptProperty, &kBoolSignature },
-  { vpn::kKeyDirection, flimflam::kOpenVPNKeyDirectionProperty,
-    &kStringSignature },
-  { vpn::kNsCertType, flimflam::kOpenVPNNsCertTypeProperty, &kStringSignature },
-  { vpn::kPassword, flimflam::kOpenVPNPasswordProperty, &kStringSignature },
-  { vpn::kPort, flimflam::kOpenVPNPortProperty, &kIntegerSignature },
-  { vpn::kProto, flimflam::kOpenVPNProtoProperty, &kStringSignature },
-  { vpn::kPushPeerInfo, flimflam::kOpenVPNPushPeerInfoProperty,
-    &kBoolSignature },
-  { vpn::kRemoteCertEKU, flimflam::kOpenVPNRemoteCertEKUProperty,
-    &kStringSignature },
-  // This field is converted during translation, see onc_translator_*.
-  { vpn::kRemoteCertKU, NULL, &kStringListSignature },
-  { vpn::kRemoteCertTLS, flimflam::kOpenVPNRemoteCertTLSProperty,
-    &kStringSignature },
-  { vpn::kRenegSec, flimflam::kOpenVPNRenegSecProperty, &kIntegerSignature },
-  { vpn::kSaveCredentials, flimflam::kSaveCredentialsProperty,
-    &kBoolSignature },
-  { vpn::kServerCARef, flimflam::kOpenVPNCaCertNSSProperty, &kStringSignature },
-  { vpn::kServerCertRef, NULL, &kStringSignature },
-  { vpn::kServerPollTimeout, flimflam::kOpenVPNServerPollTimeoutProperty,
-    &kIntegerSignature },
-  { vpn::kShaper, flimflam::kOpenVPNShaperProperty, &kIntegerSignature },
-  { vpn::kStaticChallenge, flimflam::kOpenVPNStaticChallengeProperty,
-    &kStringSignature },
-  { vpn::kTLSAuthContents, flimflam::kOpenVPNTLSAuthContentsProperty,
-    &kStringSignature },
-  { vpn::kTLSRemote, flimflam::kOpenVPNTLSRemoteProperty, &kStringSignature },
-  { vpn::kUsername, flimflam::kOpenVPNUserProperty, &kStringSignature },
-  { vpn::kVerb, NULL, &kStringSignature },
+  { kRecommended, &kRecommendedSignature },
+  { vpn::kAuth, &kStringSignature },
+  { vpn::kAuthNoCache, &kBoolSignature },
+  { vpn::kAuthRetry, &kStringSignature },
+  { vpn::kCipher, &kStringSignature },
+  { vpn::kClientCertPattern, &kCertificatePatternSignature },
+  { vpn::kClientCertRef, &kStringSignature },
+  { vpn::kClientCertType, &kStringSignature },
+  { vpn::kCompLZO, &kStringSignature },
+  { vpn::kCompNoAdapt, &kBoolSignature },
+  { vpn::kKeyDirection, &kStringSignature },
+  { vpn::kNsCertType, &kStringSignature },
+  { vpn::kPassword, &kStringSignature },
+  { vpn::kPort, &kIntegerSignature },
+  { vpn::kProto, &kStringSignature },
+  { vpn::kPushPeerInfo, &kBoolSignature },
+  { vpn::kRemoteCertEKU, &kStringSignature },
+  { vpn::kRemoteCertKU, &kStringListSignature },
+  { vpn::kRemoteCertTLS, &kStringSignature },
+  { vpn::kRenegSec, &kIntegerSignature },
+  { vpn::kSaveCredentials, &kBoolSignature },
+  { vpn::kServerCARef, &kStringSignature },
+  // Not supported, yet.
+  { vpn::kServerCertRef, &kStringSignature },
+  { vpn::kServerPollTimeout, &kIntegerSignature },
+  { vpn::kShaper, &kIntegerSignature },
+  { vpn::kStaticChallenge, &kStringSignature },
+  { vpn::kTLSAuthContents, &kStringSignature },
+  { vpn::kTLSRemote, &kStringSignature },
+  { vpn::kUsername, &kStringSignature },
+  // Not supported, yet.
+  { vpn::kVerb, &kStringSignature },
   { NULL }
 };
 
 const OncFieldSignature vpn_fields[] = {
-  { kRecommended, NULL, &kRecommendedSignature },
-  { vpn::kHost, flimflam::kProviderHostProperty, &kStringSignature },
-  { vpn::kIPsec, NULL, &kIPsecSignature },
-  { vpn::kL2TP, NULL, &kL2TPSignature },
-  { vpn::kOpenVPN, NULL, &kOpenVPNSignature },
-  // This field is converted during translation, see onc_translator_*.
-  { kType, NULL, &kStringSignature },
+  { kRecommended, &kRecommendedSignature },
+  { vpn::kAutoConnect, &kBoolSignature },
+  { vpn::kHost, &kStringSignature },
+  { vpn::kIPsec, &kIPsecSignature },
+  { vpn::kL2TP, &kL2TPSignature },
+  { vpn::kOpenVPN, &kOpenVPNSignature },
+  { vpn::kType, &kStringSignature },
   { NULL }
 };
 
 const OncFieldSignature ethernet_fields[] = {
-  { kRecommended, NULL, &kRecommendedSignature },
-  { ethernet::kAuthentication, NULL, &kStringSignature },
-  { ethernet::kEAP, NULL, &kEAPSignature },
+  { kRecommended, &kRecommendedSignature },
+  // Not supported, yet.
+  { ethernet::kAuthentication, &kStringSignature },
+  { ethernet::kEAP, &kEAPSignature },
   { NULL }
 };
 
+// Not supported, yet.
 const OncFieldSignature ipconfig_fields[] = {
-  { ipconfig::kGateway, NULL, &kStringSignature },
-  { ipconfig::kIPAddress, NULL, &kStringSignature },
-  { kNameServers, NULL, &kStringSignature },
-  { ipconfig::kRoutingPrefix, NULL, &kIntegerSignature },
-  { kSearchDomains, NULL, &kStringListSignature },
-  // This field is converted during translation, see onc_translator_*.
-  { kType, NULL, &kStringSignature },
+  { ipconfig::kGateway, &kStringSignature },
+  { ipconfig::kIPAddress, &kStringSignature },
+  { network_config::kNameServers, &kStringSignature },
+  { ipconfig::kRoutingPrefix, &kIntegerSignature },
+  { network_config::kSearchDomains, &kStringListSignature },
+  { ipconfig::kType, &kStringSignature },
   { NULL }
 };
 
 const OncFieldSignature proxy_location_fields[] = {
-  { proxy::kHost, NULL, &kStringSignature },
-  { proxy::kPort, NULL, &kIntegerSignature },
+  { proxy::kHost, &kStringSignature },
+  { proxy::kPort, &kIntegerSignature },
   { NULL }
 };
 
 const OncFieldSignature proxy_manual_fields[] = {
-  { proxy::kFtp, NULL, &kProxyLocationSignature },
-  { proxy::kHttp, NULL, &kProxyLocationSignature },
-  { proxy::kHttps, NULL, &kProxyLocationSignature },
-  { proxy::kSocks, NULL, &kProxyLocationSignature },
+  { proxy::kFtp, &kProxyLocationSignature },
+  { proxy::kHttp, &kProxyLocationSignature },
+  { proxy::kHttps, &kProxyLocationSignature },
+  { proxy::kSocks, &kProxyLocationSignature },
   { NULL }
 };
 
 const OncFieldSignature proxy_settings_fields[] = {
-  { kRecommended, NULL, &kRecommendedSignature },
-  { proxy::kExcludeDomains, NULL, &kStringListSignature },
-  { proxy::kManual, NULL, &kProxyManualSignature },
-  { proxy::kPAC, NULL, &kStringSignature },
-  { kType, NULL, &kStringSignature },
+  { kRecommended, &kRecommendedSignature },
+  { proxy::kExcludeDomains, &kStringListSignature },
+  { proxy::kManual, &kProxyManualSignature },
+  { proxy::kPAC, &kStringSignature },
+  { proxy::kType, &kStringSignature },
   { NULL }
 };
 
 const OncFieldSignature wifi_fields[] = {
-  { kRecommended, NULL, &kRecommendedSignature },
-  { wifi::kAutoConnect, flimflam::kAutoConnectProperty, &kBoolSignature },
-  { wifi::kEAP, NULL, &kEAPSignature },
-  { wifi::kHiddenSSID, flimflam::kWifiHiddenSsid, &kBoolSignature },
-  { wifi::kPassphrase, flimflam::kPassphraseProperty, &kStringSignature },
-  { wifi::kSSID, flimflam::kSSIDProperty, &kStringSignature },
-  { wifi::kSecurity, flimflam::kSecurityProperty, &kStringSignature },
+  { kRecommended, &kRecommendedSignature },
+  { wifi::kAutoConnect, &kBoolSignature },
+  { wifi::kEAP, &kEAPSignature },
+  { wifi::kHiddenSSID, &kBoolSignature },
+  { wifi::kPassphrase, &kStringSignature },
+  { wifi::kSSID, &kStringSignature },
+  { wifi::kSecurity, &kStringSignature },
+  { NULL }
+};
+
+const OncFieldSignature wifi_with_state_fields[] = {
+  { wifi::kBSSID, &kStringSignature },
+  { wifi::kSignalStrength, &kIntegerSignature },
+  { NULL }
+};
+
+const OncFieldSignature cellular_with_state_fields[] = {
+  { kRecommended, &kRecommendedSignature },
+  { cellular::kActivateOverNonCellularNetwork, &kStringSignature },
+  { cellular::kActivationState, &kStringSignature },
+  { cellular::kAllowRoaming, &kStringSignature },
+  { cellular::kAPN, &kStringSignature },
+  { cellular::kCarrier, &kStringSignature },
+  { cellular::kESN, &kStringSignature },
+  { cellular::kFamily, &kStringSignature },
+  { cellular::kFirmwareRevision, &kStringSignature },
+  { cellular::kFoundNetworks, &kStringSignature },
+  { cellular::kHardwareRevision, &kStringSignature },
+  { cellular::kHomeProvider, &kStringSignature },
+  { cellular::kICCID, &kStringSignature },
+  { cellular::kIMEI, &kStringSignature },
+  { cellular::kIMSI, &kStringSignature },
+  { cellular::kManufacturer, &kStringSignature },
+  { cellular::kMDN, &kStringSignature },
+  { cellular::kMEID, &kStringSignature },
+  { cellular::kMIN, &kStringSignature },
+  { cellular::kModelID, &kStringSignature },
+  { cellular::kNetworkTechnology, &kStringSignature },
+  { cellular::kOperatorCode, &kStringSignature },
+  { cellular::kOperatorName, &kStringSignature },
+  { cellular::kPRLVersion, &kStringSignature },
+  { cellular::kProviderRequiresRoaming, &kStringSignature },
+  { cellular::kRoamingState, &kStringSignature },
+  { cellular::kSelectedNetwork, &kStringSignature },
+  { cellular::kServingOperator, &kStringSignature },
+  { cellular::kSIMLockStatus, &kStringSignature },
+  { cellular::kSIMPresent, &kStringSignature },
+  { cellular::kSupportedCarriers, &kStringSignature },
+  { cellular::kSupportNetworkScan, &kStringSignature },
   { NULL }
 };
 
 const OncFieldSignature network_configuration_fields[] = {
-  { kRecommended, NULL, &kRecommendedSignature },
-  { kEthernet, NULL, &kEthernetSignature },
-  { kGUID, flimflam::kGuidProperty, &kStringSignature },
-  { kIPConfigs, NULL, &kIPConfigListSignature },
-  { kName, flimflam::kNameProperty, &kStringSignature },
-  { kNameServers, NULL, &kStringListSignature },
-  { kProxySettings, NULL, &kProxySettingsSignature },
-  { kRemove, NULL, &kBoolSignature },
-  { kSearchDomains, NULL, &kStringListSignature },
-  // This field is converted during translation, see onc_translator_*.
-  { kType, NULL, &kStringSignature },
-  { kVPN, NULL, &kVPNSignature },
-  { kWiFi, NULL, &kWiFiSignature },
+  { kRecommended, &kRecommendedSignature },
+  { network_config::kEthernet, &kEthernetSignature },
+  { network_config::kGUID, &kStringSignature },
+  // Not supported, yet.
+  { network_config::kIPConfigs, &kIPConfigListSignature },
+  { network_config::kName, &kStringSignature },
+  // Not supported, yet.
+  { network_config::kNameServers, &kStringListSignature },
+  { network_config::kProxySettings, &kProxySettingsSignature },
+  { kRemove, &kBoolSignature },
+  // Not supported, yet.
+  { network_config::kSearchDomains, &kStringListSignature },
+  { network_config::kType, &kStringSignature },
+  { network_config::kVPN, &kVPNSignature },
+  { network_config::kWiFi, &kWiFiSignature },
+  { NULL }
+};
+
+const OncFieldSignature network_with_state_fields[] = {
+  { network_config::kCellular, &kCellularWithStateSignature },
+  { network_config::kConnectionState, &kStringSignature },
+  { network_config::kWiFi, &kWiFiWithStateSignature },
   { NULL }
 };
 
 const OncFieldSignature certificate_fields[] = {
-  { kGUID, flimflam::kGuidProperty, &kStringSignature },
-  { certificate::kPKCS12, NULL, &kStringSignature },
-  { kRemove, NULL, &kBoolSignature },
-  { certificate::kTrust, NULL, &kStringListSignature },
-  { kType, NULL, &kStringSignature },
-  { certificate::kX509, NULL, &kStringSignature },
+  { certificate::kGUID, &kStringSignature },
+  { certificate::kPKCS12, &kStringSignature },
+  { kRemove, &kBoolSignature },
+  { certificate::kTrust, &kStringListSignature },
+  { certificate::kType, &kStringSignature },
+  { certificate::kX509, &kStringSignature },
   { NULL }
 };
 
 const OncFieldSignature toplevel_configuration_fields[] = {
-  { kCertificates, NULL, &kCertificateListSignature },
-  { kNetworkConfigurations, NULL, &kNetworkConfigurationListSignature },
-  { kType, NULL, &kStringSignature },
-  { encrypted::kCipher, NULL, &kStringSignature },
-  { encrypted::kCiphertext, NULL, &kStringSignature },
-  { encrypted::kHMAC, NULL, &kStringSignature },
-  { encrypted::kHMACMethod, NULL, &kStringSignature },
-  { encrypted::kIV, NULL, &kStringSignature },
-  { encrypted::kIterations, NULL, &kIntegerSignature },
-  { encrypted::kSalt, NULL, &kStringSignature },
-  { encrypted::kStretch, NULL, &kStringSignature },
+  { toplevel_config::kCertificates, &kCertificateListSignature },
+  { toplevel_config::kNetworkConfigurations,
+    &kNetworkConfigurationListSignature },
+  { toplevel_config::kType, &kStringSignature },
+  { encrypted::kCipher, &kStringSignature },
+  { encrypted::kCiphertext, &kStringSignature },
+  { encrypted::kHMAC, &kStringSignature },
+  { encrypted::kHMACMethod, &kStringSignature },
+  { encrypted::kIV, &kStringSignature },
+  { encrypted::kIterations, &kIntegerSignature },
+  { encrypted::kSalt, &kStringSignature },
+  { encrypted::kStretch, &kStringSignature },
   { NULL }
 };
 
@@ -305,6 +341,18 @@ const OncValueSignature kToplevelConfigurationSignature = {
   Value::TYPE_DICTIONARY, toplevel_configuration_fields, NULL
 };
 
+// Derived "ONC with State" signatures.
+const OncValueSignature kNetworkWithStateSignature = {
+  Value::TYPE_DICTIONARY, network_with_state_fields, NULL,
+  &kNetworkConfigurationSignature
+};
+const OncValueSignature kWiFiWithStateSignature = {
+  Value::TYPE_DICTIONARY, wifi_with_state_fields, NULL, &kWiFiSignature
+};
+const OncValueSignature kCellularWithStateSignature = {
+  Value::TYPE_DICTIONARY, cellular_with_state_fields, NULL
+};
+
 const OncFieldSignature* GetFieldSignature(const OncValueSignature& signature,
                                            const std::string& onc_field_name) {
   if (!signature.fields)
@@ -314,6 +362,8 @@ const OncFieldSignature* GetFieldSignature(const OncValueSignature& signature,
     if (onc_field_name == field_signature->onc_field_name)
       return field_signature;
   }
+  if (signature.base_signature)
+    return GetFieldSignature(*signature.base_signature, onc_field_name);
   return NULL;
 }
 

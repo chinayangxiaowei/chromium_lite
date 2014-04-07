@@ -86,8 +86,8 @@ class FlakyFFmpegRegressionTest
                                                                video_md5, \
                                                                audio_md5)));
 
-#define FLAKY_FFMPEG_TEST_CASE(name, fn) \
-    INSTANTIATE_TEST_CASE_P(FLAKY_##name, FlakyFFmpegRegressionTest, \
+#define DISABLED_FFMPEG_TEST_CASE(name, fn) \
+    INSTANTIATE_TEST_CASE_P(DISABLED_##name, FlakyFFmpegRegressionTest, \
                             testing::Values(FlakyRegressionTestData(fn)));
 
 // Test cases from issues.
@@ -117,7 +117,7 @@ FFMPEG_TEST_CASE(Cr108416, "security/108416.webm", PIPELINE_OK, PIPELINE_OK,
                  "5cb3a934795cd552753dec7687928291",
                  "3e576c21f83f3c00719dbe62998d71cb");
 FFMPEG_TEST_CASE(Cr110849, "security/110849.mkv",
-                 DEMUXER_ERROR_NO_SUPPORTED_STREAMS,
+                 DEMUXER_ERROR_COULD_NOT_OPEN,
                  DEMUXER_ERROR_NO_SUPPORTED_STREAMS, kNullHash, kNullHash);
 FFMPEG_TEST_CASE(Cr112384, "security/112384.webm",
                  DEMUXER_ERROR_COULD_NOT_PARSE, DEMUXER_ERROR_COULD_NOT_PARSE,
@@ -151,6 +151,8 @@ FFMPEG_TEST_CASE(Cr152691, "security/152691.mp3", PIPELINE_ERROR_DECODE,
                  "59adb24ef3cdbe0297f05b395827453f");
 FFMPEG_TEST_CASE(Cr161639, "security/161639.m4a", PIPELINE_OK, PIPELINE_OK,
                  kNullHash, "97ae2fa2a2e9ff3c2cf17be96b08bbe8");
+FFMPEG_TEST_CASE(Cr222754, "security/222754.mp4", PIPELINE_ERROR_DECODE,
+                 PIPELINE_ERROR_DECODE, kNullHash, kNullHash);
 
 // General MKV test cases.
 FFMPEG_TEST_CASE(MKV_0, "security/nested_tags_lang.mka.627.628", PIPELINE_OK,
@@ -304,25 +306,25 @@ FFMPEG_TEST_CASE(BIG_MEM_2, "security/looping1.mov",
 FFMPEG_TEST_CASE(BIG_MEM_5, "security/looping5.mov",
                  DEMUXER_ERROR_COULD_NOT_OPEN, DEMUXER_ERROR_COULD_NOT_OPEN,
                  kNullHash, kNullHash);
-FLAKY_FFMPEG_TEST_CASE(BIG_MEM_3, "security/looping3.mov");
-FLAKY_FFMPEG_TEST_CASE(BIG_MEM_4, "security/looping4.mov");
+DISABLED_FFMPEG_TEST_CASE(BIG_MEM_3, "security/looping3.mov");
+DISABLED_FFMPEG_TEST_CASE(BIG_MEM_4, "security/looping4.mov");
 
 // Flaky under threading or for other reasons.  Per rbultje, most of these will
 // never be reliable since FFmpeg does not guarantee consistency in error cases.
 // We only really care that these don't cause crashes or errors under tooling.
-FLAKY_FFMPEG_TEST_CASE(Cr99652, "security/99652.webm");
-FLAKY_FFMPEG_TEST_CASE(Cr100464, "security/100464.webm");
-FLAKY_FFMPEG_TEST_CASE(Cr111342, "security/111342.ogm");
-FLAKY_FFMPEG_TEST_CASE(OGV_0, "security/big_dims.ogv");
-FLAKY_FFMPEG_TEST_CASE(OGV_3, "security/smclock_1_0.ogv");
-FLAKY_FFMPEG_TEST_CASE(OGV_4, "security/smclock.ogv.1.0.ogv");
-FLAKY_FFMPEG_TEST_CASE(OGV_6, "security/smclocktheora_1_10000.ogv");
-FLAKY_FFMPEG_TEST_CASE(OGV_13, "security/smclocktheora_1_790.ogv");
-FLAKY_FFMPEG_TEST_CASE(MP4_3, "security/clockh264aac_300413969.mp4");
-FLAKY_FFMPEG_TEST_CASE(MP4_4, "security/clockh264aac_301350139.mp4");
-FLAKY_FFMPEG_TEST_CASE(MP4_12, "security/assert1.mov");
+DISABLED_FFMPEG_TEST_CASE(Cr99652, "security/99652.webm");
+DISABLED_FFMPEG_TEST_CASE(Cr100464, "security/100464.webm");
+DISABLED_FFMPEG_TEST_CASE(Cr111342, "security/111342.ogm");
+DISABLED_FFMPEG_TEST_CASE(OGV_0, "security/big_dims.ogv");
+DISABLED_FFMPEG_TEST_CASE(OGV_3, "security/smclock_1_0.ogv");
+DISABLED_FFMPEG_TEST_CASE(OGV_4, "security/smclock.ogv.1.0.ogv");
+DISABLED_FFMPEG_TEST_CASE(OGV_6, "security/smclocktheora_1_10000.ogv");
+DISABLED_FFMPEG_TEST_CASE(OGV_13, "security/smclocktheora_1_790.ogv");
+DISABLED_FFMPEG_TEST_CASE(MP4_3, "security/clockh264aac_300413969.mp4");
+DISABLED_FFMPEG_TEST_CASE(MP4_4, "security/clockh264aac_301350139.mp4");
+DISABLED_FFMPEG_TEST_CASE(MP4_12, "security/assert1.mov");
 // Not really flaky, but can't pass the seek test.
-FLAKY_FFMPEG_TEST_CASE(MP4_10, "security/null1.m4a");
+DISABLED_FFMPEG_TEST_CASE(MP4_10, "security/null1.m4a");
 
 // Videos with massive gaps between frame timestamps that result in long hangs
 // with our pipeline.  Should be uncommented when we support clockless playback.

@@ -7,7 +7,9 @@
 
 #include "chrome/browser/chromeos/drive/drive_file_error.h"
 
+namespace base {
 class FilePath;
+}
 
 namespace drive {
 
@@ -19,11 +21,11 @@ class DriveFileSystemObserver {
   // Triggered when a content of a directory has been changed.
   // |directory_path| is a virtual directory path (/drive/...) representing
   // changed directory.
-  virtual void OnDirectoryChanged(const FilePath& directory_path) {
+  virtual void OnDirectoryChanged(const base::FilePath& directory_path) {
   }
 
   // Triggered when the file system is initially loaded.
-  virtual void OnInitialLoadFinished(DriveFileError error) {
+  virtual void OnInitialLoadFinished() {
   }
 
   // Triggered when a document feed is fetched. |num_accumulated_entries|

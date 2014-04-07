@@ -115,12 +115,10 @@ input.common[type='checkbox']::after {
 .buttonbar {
   display: -webkit-box;
   height: 29px;
-  line-height: 29px;
 }
 
 .buttonbar.right {
   float: right;
-  margin-right: 12px;
 }
 
 .buttonbar button:first-child {
@@ -188,6 +186,12 @@ input.common[type='checkbox']::after {
   color: #333;
 }
 
+.buttonbar button:hover,
+.buttonbar button:active,
+.buttonbar button[disabled] {
+  z-index: 10;
+}
+
 .buttonbar button:active img {
   opacity: 1.0;
 }
@@ -216,7 +220,10 @@ input.common[type='checkbox']::after {
   opacity: .8;
 }
 
-.buttonbar button.action {
+.buttonbar button.action,
+.buttonbar button.action:focus,
+.buttonbar button.action:hover,
+.buttonbar button.action:active {
   background-color: rgb(209, 72, 54);
   background-image: -webkit-gradient(linear,
       left top, left bottom, from(rgb(221, 75, 57)), to(rgb(209, 72, 54)));
@@ -267,16 +274,30 @@ span.disclosureindicator {
    menus in FileBrowser look like native ChromeOS menus. */
 
 menu.chrome-menu {
-  border: 1px solid rgba(0, 0, 0, 0.2);
-  border-radius: 2px;
+  -webkit-box-shadow: 0 2px 1px 0 rgba(0, 0, 0, .2);
+  -webkit-transition: opacity 200ms ease-in;
+  border: 1px solid rgba(0, 0, 0, .32);
+  border-radius: 3px;
   outline: none;
   padding: 2px 0;
   z-index: 15;
 }
+
+menu.chrome-menu[hidden] {
+  display: block;
+  opacity: 0;
+  pointer-events: none;
+  visibility: hidden;
+}
+
+menu.chrome-menu.hide-delayed[hidden] {
+  -webkit-transition-delay: 120ms;
+  -webkit-transition-property: opacity, visibility;
+}
+
 menu.chrome-menu > :not(hr) {
   background-position: 6px center;
   background-repeat: no-repeat;
-  color: rgb(34, 34, 34);
   height: 30px;
   line-height: 28px;
   padding-left: 28px;
@@ -356,4 +377,27 @@ input[type='submit'][disabled]:hover {
   background: -webkit-linear-gradient(#fafafa, #f4f4f4 40%, #e5e5e5);
   border-color: #aaa;
   color: #888;
+}
+
+/* Blue progress bar. */
+.progress-bar {
+  background-color: #e6e6e6;
+  border: 1px solid #ddd;
+  border-radius: 2px;
+  box-sizing: border-box;
+  margin: 2px 0;
+}
+
+.progress-track {
+  background-image: -webkit-linear-gradient(
+      rgb(110, 188, 249) 1px, rgb(86, 167, 247) 2px,
+      rgb(76, 148, 245) 11px, rgb(41, 112, 211) 12px);
+  border: 1px solid rgb(65, 137, 237);
+  border-radius: 2px;
+  height: 10px;
+  margin: -1px;
+}
+
+.progress-track.smoothed {
+  -webkit-transition: width 1s linear;
 }

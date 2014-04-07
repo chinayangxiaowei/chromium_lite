@@ -9,19 +9,22 @@
 #include "base/base64.h"
 #include "base/logging.h"
 #include "chrome/browser/browser_process.h"
-#include "chrome/browser/chrome_metrics_helper.h"
 #include "chrome/browser/content_settings/host_content_settings_map.h"
 #include "chrome/browser/download/download_request_limiter.h"
 #include "chrome/browser/download/download_resource_throttle.h"
 #include "chrome/browser/download/download_util.h"
+#include "chrome/browser/extensions/api/streams_private/streams_private_api.h"
+#include "chrome/browser/extensions/extension_info_map.h"
 #include "chrome/browser/extensions/user_script_listener.h"
 #include "chrome/browser/external_protocol/external_protocol_handler.h"
 #include "chrome/browser/google/google_util.h"
+#include "chrome/browser/metrics/variations/variations_http_header_provider.h"
 #include "chrome/browser/net/load_timing_observer.h"
 #include "chrome/browser/net/resource_prefetch_predictor_observer.h"
 #include "chrome/browser/prerender/prerender_manager.h"
 #include "chrome/browser/prerender/prerender_tracker.h"
 #include "chrome/browser/prerender/prerender_util.h"
+#include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profile_io_data.h"
 #include "chrome/browser/renderer_host/chrome_url_request_user_data.h"
 #include "chrome/browser/renderer_host/safe_browsing_resource_throttle_factory.h"
@@ -30,7 +33,7 @@
 #include "chrome/browser/ui/login/login_prompt.h"
 #include "chrome/browser/ui/sync/one_click_signin_helper.h"
 #include "chrome/common/chrome_notification_types.h"
-#include "chrome/common/extensions/extension_constants.h"
+#include "chrome/common/extensions/mime_types_handler.h"
 #include "chrome/common/extensions/user_script.h"
 #include "chrome/common/render_messages.h"
 #include "content/public/browser/browser_thread.h"
@@ -39,10 +42,16 @@
 #include "content/public/browser/resource_context.h"
 #include "content/public/browser/resource_dispatcher_host.h"
 #include "content/public/browser/resource_request_info.h"
+#include "content/public/browser/stream_handle.h"
+#include "extensions/common/constants.h"
 #include "net/base/load_flags.h"
-#include "net/base/ssl_config_service.h"
 #include "net/http/http_response_headers.h"
+#include "net/ssl/ssl_config_service.h"
 #include "net/url_request/url_request.h"
+
+#if defined(ENABLE_MANAGED_USERS)
+#include "chrome/browser/managed_mode/managed_mode_resource_throttle.h"
+#endif
 
 #if defined(USE_SYSTEM_PROTOBUF)
 #include <google/protobuf/repeated_field.h>
@@ -51,14 +60,12 @@
 #endif
 
 #if defined(OS_ANDROID)
-#include "content/components/navigation_interception/intercept_navigation_delegate.h"
-#else
-#include "chrome/browser/managed_mode/managed_mode_resource_throttle.h"
+#include "components/navigation_interception/intercept_navigation_delegate.h"
 #endif
 
+#if defined(OS_CHROMEOS)
 #include "chrome/browser/chromeos/login/merge_session_throttle.h"
 // TODO(oshima): Enable this for other platforms.
-#if defined(OS_CHROMEOS)
 #include "chrome/browser/renderer_host/offline_resource_throttle.h"
 #endif
 
@@ -66,6 +73,8 @@ using content::BrowserThread;
 using content::RenderViewHost;
 using content::ResourceDispatcherHostLoginDelegate;
 using content::ResourceRequestInfo;
+using extensions::Extension;
+using extensions::StreamsPrivateAPI;
 
 namespace {
 
@@ -79,6 +88,49 @@ void NotifyDownloadInitiatedOnUI(int render_process_id, int render_view_id) {
       chrome::NOTIFICATION_DOWNLOAD_INITIATED,
       content::Source<RenderViewHost>(rvh),
       content::NotificationService::NoDetails());
+}
+
+// Goes through the extension's file browser handlers and checks if there is one
+// that can handle the |mime_type|.
+// |extension| must not be NULL.
+bool ExtensionCanHandleMimeType(const Extension* extension,
+                                const std::string& mime_type) {
+  MimeTypesHandler* handler = MimeTypesHandler::GetHandler(extension);
+  if (!handler)
+    return false;
+
+  return handler->CanHandleMIMEType(mime_type);
+}
+
+void SendExecuteMimeTypeHandlerEvent(scoped_ptr<content::StreamHandle> stream,
+                                     int render_process_id,
+                                     int render_view_id,
+                                     const std::string& extension_id) {
+  DCHECK(content::BrowserThread::CurrentlyOn(content::BrowserThread::UI));
+
+  content::RenderViewHost* render_view_host =
+      content::RenderViewHost::FromID(render_process_id, render_view_id);
+  if (!render_view_host)
+    return;
+
+  content::WebContents* web_contents =
+      content::WebContents::FromRenderViewHost(render_view_host);
+  if (!web_contents)
+    return;
+
+  content::BrowserContext* browser_context = web_contents->GetBrowserContext();
+  if (!browser_context)
+    return;
+
+  Profile* profile = Profile::FromBrowserContext(browser_context);
+  if (!profile)
+    return;
+
+  StreamsPrivateAPI* streams_private = StreamsPrivateAPI::Get(profile);
+  if (!streams_private)
+    return;
+  streams_private->ExecuteMimeTypeHandler(
+      extension_id, web_contents, stream.Pass());
 }
 
 }  // end namespace
@@ -116,12 +168,19 @@ bool ChromeResourceDispatcherHostDelegate::ShouldBeginRequest(
       return false;
   }
 
-  // Abort any prerenders that spawn requests that use invalid HTTP methods.
-  if (prerender_tracker_->IsPrerenderingOnIOThread(child_id, route_id) &&
-      !prerender::PrerenderManager::IsValidHttpMethod(method)) {
-    prerender_tracker_->TryCancelOnIOThread(
-        child_id, route_id, prerender::FINAL_STATUS_INVALID_HTTP_METHOD);
-    return false;
+  // Abort any prerenders that spawn requests that use invalid HTTP methods
+  // or invalid schemes.
+  if (prerender_tracker_->IsPrerenderingOnIOThread(child_id, route_id)) {
+    if (!prerender::PrerenderManager::IsValidHttpMethod(method)) {
+      prerender_tracker_->TryCancelOnIOThread(
+          child_id, route_id, prerender::FINAL_STATUS_INVALID_HTTP_METHOD);
+      return false;
+    }
+    if (!prerender::PrerenderManager::DoesURLHaveValidScheme(url)) {
+      prerender_tracker_->TryCancelOnIOThread(
+          child_id, route_id, prerender::FINAL_STATUS_UNSUPPORTED_SCHEME);
+      return false;
+    }
   }
 
   return true;
@@ -145,14 +204,13 @@ void ChromeResourceDispatcherHostDelegate::RequestBeginning(
       child_id, route_id);
   if (is_prerendering) {
     user_data->set_is_prerender(true);
-    request->set_priority(net::IDLE);
+    request->SetPriority(net::IDLE);
   }
 
 #if defined(OS_ANDROID)
   if (!is_prerendering && resource_type == ResourceType::MAIN_FRAME) {
     throttles->push_back(
-        content::InterceptNavigationDelegate::CreateThrottleFor(
-            request));
+        components::InterceptNavigationDelegate::CreateThrottleFor(request));
   }
 #endif
 #if defined(OS_CHROMEOS)
@@ -178,9 +236,11 @@ void ChromeResourceDispatcherHostDelegate::RequestBeginning(
     ProfileIOData* io_data = ProfileIOData::FromResourceContext(
         resource_context);
     bool incognito = io_data->is_incognito();
-    ChromeMetricsHelper::GetInstance()->AppendHeaders(
-        request->url(), incognito,
-        !incognito && io_data->GetMetricsEnabledStateOnIOThread(), &headers);
+    chrome_variations::VariationsHttpHeaderProvider::GetInstance()->
+        AppendHeaders(request->url(),
+                      incognito,
+                      !incognito && io_data->GetMetricsEnabledStateOnIOThread(),
+                      &headers);
     request->SetExtraRequestHeaders(headers);
   }
 
@@ -209,6 +269,7 @@ void ChromeResourceDispatcherHostDelegate::DownloadStarting(
     int route_id,
     int request_id,
     bool is_content_initiated,
+    bool must_download,
     ScopedVector<content::ResourceThrottle>* throttles) {
   BrowserThread::PostTask(
       BrowserThread::UI, FROM_HERE,
@@ -289,6 +350,13 @@ bool ChromeResourceDispatcherHostDelegate::HandleExternalProtocol(
   // protocols.
   return false;
 #else
+
+  if (prerender_tracker_->IsPrerenderingOnIOThread(child_id, route_id)) {
+    prerender_tracker_->TryCancel(
+        child_id, route_id, prerender::FINAL_STATUS_UNSUPPORTED_SCHEME);
+    return false;
+  }
+
   BrowserThread::PostTask(
       BrowserThread::UI, FROM_HERE,
       base::Bind(&ExternalProtocolHandler::LaunchUrl, url, child_id, route_id));
@@ -303,10 +371,10 @@ void ChromeResourceDispatcherHostDelegate::AppendStandardResourceThrottles(
     int route_id,
     ResourceType::Type resource_type,
     ScopedVector<content::ResourceThrottle>* throttles) {
+  ProfileIOData* io_data = ProfileIOData::FromResourceContext(resource_context);
 #if defined(FULL_SAFE_BROWSING) || defined(MOBILE_SAFE_BROWSING)
   // Insert safe browsing at the front of the list, so it gets to decide on
   // policies first.
-  ProfileIOData* io_data = ProfileIOData::FromResourceContext(resource_context);
   if (io_data->safe_browsing_enabled()->GetValue()) {
     bool is_subresource_request = resource_type != ResourceType::MAIN_FRAME;
     content::ResourceThrottle* throttle =
@@ -317,10 +385,11 @@ void ChromeResourceDispatcherHostDelegate::AppendStandardResourceThrottles(
   }
 #endif
 
-#if !defined(OS_ANDROID)
+#if defined(ENABLE_MANAGED_USERS)
   bool is_subresource_request = resource_type != ResourceType::MAIN_FRAME;
   throttles->push_back(new ManagedModeResourceThrottle(
-        request, child_id, route_id, !is_subresource_request));
+        request, child_id, route_id, !is_subresource_request,
+        io_data->managed_mode_url_filter()));
 #endif
 
   content::ResourceThrottle* throttle =
@@ -358,6 +427,58 @@ bool ChromeResourceDispatcherHostDelegate::ShouldForceDownloadResource(
   return extensions::UserScript::IsURLUserScript(url, mime_type);
 }
 
+bool ChromeResourceDispatcherHostDelegate::ShouldInterceptResourceAsStream(
+    content::ResourceContext* resource_context,
+    const GURL& url,
+    const std::string& mime_type,
+    GURL* security_origin,
+    std::string* target_id) {
+#if !defined(OS_ANDROID)
+  ProfileIOData* io_data =
+      ProfileIOData::FromResourceContext(resource_context);
+  bool profile_is_incognito = io_data->is_incognito();
+  const scoped_refptr<const ExtensionInfoMap> extension_info_map(
+      io_data->GetExtensionInfoMap());
+  std::vector<std::string> whitelist = MimeTypesHandler::GetMIMETypeWhitelist();
+  // Go through the white-listed extensions and try to use them to intercept
+  // the URL request.
+  for (size_t i = 0; i < whitelist.size(); ++i) {
+    const char* extension_id = whitelist[i].c_str();
+    const Extension* extension =
+        extension_info_map->extensions().GetByID(extension_id);
+    // The white-listed extension may not be installed, so we have to NULL check
+    // |extension|.
+    if (!extension ||
+        (profile_is_incognito &&
+         !extension_info_map->IsIncognitoEnabled(extension_id))) {
+      continue;
+    }
+
+    if (ExtensionCanHandleMimeType(extension, mime_type)) {
+      *security_origin = Extension::GetBaseURLFromExtensionId(extension_id);
+      *target_id = extension_id;
+      return true;
+    }
+  }
+#endif
+  return false;
+}
+
+void ChromeResourceDispatcherHostDelegate::OnStreamCreated(
+    content::ResourceContext* resource_context,
+    int render_process_id,
+    int render_view_id,
+    const std::string& target_id,
+    scoped_ptr<content::StreamHandle> stream) {
+#if !defined(OS_ANDROID)
+  content::BrowserThread::PostTask(
+      content::BrowserThread::UI, FROM_HERE,
+      base::Bind(&SendExecuteMimeTypeHandlerEvent, base::Passed(&stream),
+                 render_process_id, render_view_id,
+                 target_id));
+#endif
+}
+
 void ChromeResourceDispatcherHostDelegate::OnResponseStarted(
     net::URLRequest* request,
     content::ResourceContext* resource_context,
@@ -374,8 +495,9 @@ void ChromeResourceDispatcherHostDelegate::OnResponseStarted(
       net::TransportSecurityState::DomainState domain_state;
       bool has_sni = net::SSLConfigService::IsSNIAvailable(
           context->ssl_config_service());
-      if (state->GetDomainState(
-              request->url().host(), has_sni, &domain_state)) {
+      if (state->GetDomainState(request->url().host(), has_sni,
+                                &domain_state) &&
+          domain_state.ShouldUpgradeToSSL()) {
         sender->Send(new ChromeViewMsg_AddStrictSecurityHost(
             info->GetRouteID(), request->url().host()));
       }
@@ -388,11 +510,14 @@ void ChromeResourceDispatcherHostDelegate::OnResponseStarted(
   AutoLoginPrompter::ShowInfoBarIfPossible(request, info->GetChildID(),
                                            info->GetRouteID());
 
+  ProfileIOData* io_data = ProfileIOData::FromResourceContext(resource_context);
+
 #if defined(ENABLE_ONE_CLICK_SIGNIN)
   // See if the response contains the Google-Accounts-SignIn header.  If so,
   // then the user has just finished signing in, and the server is allowing the
   // browser to suggest connecting the user's profile to the account.
-  OneClickSigninHelper::ShowInfoBarIfPossible(request, info->GetChildID(),
+  OneClickSigninHelper::ShowInfoBarIfPossible(request, io_data,
+                                              info->GetChildID(),
                                               info->GetRouteID());
 #endif
 
@@ -407,7 +532,6 @@ void ChromeResourceDispatcherHostDelegate::OnResponseStarted(
     }
   }
 
-  ProfileIOData* io_data = ProfileIOData::FromResourceContext(resource_context);
   if (io_data->resource_prefetch_predictor_observer())
     io_data->resource_prefetch_predictor_observer()->OnResponseStarted(request);
 
@@ -421,21 +545,32 @@ void ChromeResourceDispatcherHostDelegate::OnRequestRedirected(
     content::ResourceResponse* response) {
   LoadTimingObserver::PopulateTimingInfo(request, response);
 
+  ProfileIOData* io_data = ProfileIOData::FromResourceContext(resource_context);
+
 #if defined(ENABLE_ONE_CLICK_SIGNIN)
   const ResourceRequestInfo* info = ResourceRequestInfo::ForRequest(request);
-
-  AppendChromeSyncGaiaHeader(request, resource_context);
 
   // See if the response contains the Google-Accounts-SignIn header.  If so,
   // then the user has just finished signing in, and the server is allowing the
   // browser to suggest connecting the user's profile to the account.
-  OneClickSigninHelper::ShowInfoBarIfPossible(request, info->GetChildID(),
+  OneClickSigninHelper::ShowInfoBarIfPossible(request, io_data,
+                                              info->GetChildID(),
                                               info->GetRouteID());
+  AppendChromeSyncGaiaHeader(request, resource_context);
 #endif
 
-  ProfileIOData* io_data = ProfileIOData::FromResourceContext(resource_context);
   if (io_data->resource_prefetch_predictor_observer()) {
     io_data->resource_prefetch_predictor_observer()->OnRequestRedirected(
         redirect_url, request);
+  }
+
+  int child_id, route_id;
+  if (!prerender::PrerenderManager::DoesURLHaveValidScheme(redirect_url) &&
+      ResourceRequestInfo::ForRequest(request)->GetAssociatedRenderView(
+          &child_id, &route_id) &&
+      prerender_tracker_->IsPrerenderingOnIOThread(child_id, route_id)) {
+    prerender_tracker_->TryCancel(
+        child_id, route_id, prerender::FINAL_STATUS_UNSUPPORTED_SCHEME);
+    request->Cancel();
   }
 }

@@ -11,7 +11,7 @@
 #include "base/logging.h"
 #include "base/message_loop.h"
 #include "base/metrics/histogram.h"
-
+#include "sync/internal_api/public/base/model_type.h"
 
 using content::BrowserThread;
 using syncer::ModelTypeSet;
@@ -28,14 +28,19 @@ static const syncer::ModelType kStartOrder[] = {
   syncer::NIGORI,               //  Listed for completeness.
   syncer::DEVICE_INFO,          //  Listed for completeness.
   syncer::EXPERIMENTS,          //  Listed for completeness.
+  syncer::PROXY_TABS,           //  Listed for completeness.
   syncer::BOOKMARKS,            //  UI thread datatypes.
   syncer::PREFERENCES,
+  syncer::PRIORITY_PREFERENCES,
   syncer::EXTENSIONS,
   syncer::APPS,
   syncer::THEMES,
   syncer::SEARCH_ENGINES,
   syncer::SESSIONS,
   syncer::APP_NOTIFICATIONS,
+  syncer::DICTIONARY,
+  syncer::FAVICON_IMAGES,
+  syncer::FAVICON_TRACKING,
   syncer::AUTOFILL,             // Non-UI thread datatypes.
   syncer::AUTOFILL_PROFILE,
   syncer::EXTENSION_SETTINGS,
@@ -43,6 +48,7 @@ static const syncer::ModelType kStartOrder[] = {
   syncer::TYPED_URLS,
   syncer::PASSWORDS,
   syncer::HISTORY_DELETE_DIRECTIVES,
+  syncer::SYNCED_NOTIFICATIONS,
 };
 
 COMPILE_ASSERT(arraysize(kStartOrder) ==
@@ -294,7 +300,7 @@ void ModelAssociationManager::AppendToFailedDatatypesAndLogError(
   LOG(ERROR) << "Failed to associate models for "
              << syncer::ModelTypeToString(error.type());
   UMA_HISTOGRAM_ENUMERATION("Sync.ConfigureFailed",
-                            error.type(),
+                            ModelTypeToHistogramInt(error.type()),
                             syncer::MODEL_TYPE_COUNT);
 }
 
@@ -331,7 +337,8 @@ void ModelAssociationManager::TypeStartCallback(
   // occurred.
   if ((DataTypeController::IsSuccessfulResult(start_result) ||
        start_result == DataTypeController::ASSOCIATION_FAILED) &&
-      debug_info_listener_.IsInitialized()) {
+      debug_info_listener_.IsInitialized() &&
+      syncer::ProtocolTypes().Has(local_merge_result.model_type())) {
     syncer::DataTypeAssociationStats stats =
         BuildAssociationStatsFromMergeResults(local_merge_result,
                                               syncer_merge_result);

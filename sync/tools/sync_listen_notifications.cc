@@ -17,17 +17,17 @@
 #include "jingle/notifier/base/notification_method.h"
 #include "jingle/notifier/base/notifier_options.h"
 #include "net/base/host_port_pair.h"
-#include "net/base/host_resolver.h"
 #include "net/base/network_change_notifier.h"
-#include "net/base/transport_security_state.h"
+#include "net/dns/host_resolver.h"
+#include "net/http/transport_security_state.h"
 #include "net/url_request/url_request_test_util.h"
 #include "sync/internal_api/public/base/model_type.h"
 #include "sync/internal_api/public/base/model_type_invalidation_map.h"
-#include "sync/notifier/invalidation_state_tracker.h"
 #include "sync/notifier/invalidation_handler.h"
+#include "sync/notifier/invalidation_state_tracker.h"
 #include "sync/notifier/invalidation_util.h"
-#include "sync/notifier/invalidator_factory.h"
 #include "sync/notifier/invalidator.h"
+#include "sync/notifier/invalidator_factory.h"
 #include "sync/tools/null_invalidation_state_tracker.h"
 
 #if defined(OS_MACOSX)
@@ -59,15 +59,13 @@ class NotificationPrinter : public InvalidationHandler {
   }
 
   virtual void OnIncomingInvalidation(
-      const ObjectIdInvalidationMap& invalidation_map,
-      IncomingInvalidationSource source) OVERRIDE {
+      const ObjectIdInvalidationMap& invalidation_map) OVERRIDE {
     const ModelTypeInvalidationMap& type_invalidation_map =
         ObjectIdInvalidationMapToModelTypeInvalidationMap(invalidation_map);
     for (ModelTypeInvalidationMap::const_iterator it =
              type_invalidation_map.begin(); it != type_invalidation_map.end();
          ++it) {
-      LOG(INFO) << (source == REMOTE_INVALIDATION ? "Remote" : "Local")
-                << " Invalidation: type = "
+      LOG(INFO) << "Remote invalidation: type = "
                 << ModelTypeToString(it->first)
                 << ", payload = " << it->second.payload;
     }

@@ -10,6 +10,7 @@
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/themes/theme_service.h"
 #include "chrome/common/extensions/extension.h"
+#include "chrome/common/extensions/manifest_url_handler.h"
 #include "sync/protocol/sync.pb.h"
 #include "sync/protocol/theme_specifics.pb.h"
 
@@ -50,7 +51,8 @@ ThemeSyncableService::~ThemeSyncableService() {
 void ThemeSyncableService::OnThemeChange() {
   if (sync_processor_.get()) {
     sync_pb::ThemeSpecifics current_specifics;
-    GetThemeSpecificsFromCurrentTheme(&current_specifics);
+    if (!GetThemeSpecificsFromCurrentTheme(&current_specifics))
+      return;  // Current theme is unsyncable.
     ProcessNewTheme(syncer::SyncChange::ACTION_UPDATE, current_specifics);
     use_system_theme_by_default_ =
         current_specifics.use_system_theme_by_default();
@@ -74,12 +76,16 @@ syncer::SyncMergeResult ThemeSyncableService::MergeDataAndStartSyncing(
   if (initial_sync_data.size() > 1) {
     sync_error_handler_->CreateAndUploadError(
         FROM_HERE,
-        StringPrintf("Received %d theme specifics.",
-                     static_cast<int>(initial_sync_data.size())));
+        base::StringPrintf("Received %d theme specifics.",
+                           static_cast<int>(initial_sync_data.size())));
   }
 
   sync_pb::ThemeSpecifics current_specifics;
-  GetThemeSpecificsFromCurrentTheme(&current_specifics);
+  if (!GetThemeSpecificsFromCurrentTheme(&current_specifics)) {
+    // Current theme is unsyncable - don't overwrite from sync data, and don't
+    // save the unsyncable theme to sync data.
+    return merge_result;
+  }
 
   // Find the last SyncData that has theme data and set the current theme from
   // it.
@@ -113,10 +119,11 @@ syncer::SyncDataList ThemeSyncableService::GetAllSyncData(
 
   syncer::SyncDataList list;
   sync_pb::EntitySpecifics entity_specifics;
-  GetThemeSpecificsFromCurrentTheme(entity_specifics.mutable_theme());
-  list.push_back(syncer::SyncData::CreateLocalData(kCurrentThemeClientTag,
-                                                   kCurrentThemeNodeTitle,
-                                                   entity_specifics));
+  if (GetThemeSpecificsFromCurrentTheme(entity_specifics.mutable_theme())) {
+    list.push_back(syncer::SyncData::CreateLocalData(kCurrentThemeClientTag,
+                                                     kCurrentThemeNodeTitle,
+                                                     entity_specifics));
+  }
   return list;
 }
 
@@ -153,7 +160,10 @@ syncer::SyncError ThemeSyncableService::ProcessSyncChanges(
   }
 
   sync_pb::ThemeSpecifics current_specifics;
-  GetThemeSpecificsFromCurrentTheme(&current_specifics);
+  if (!GetThemeSpecificsFromCurrentTheme(&current_specifics)) {
+    // Current theme is unsyncable, so don't overwrite it.
+    return syncer::SyncError();
+  }
 
   // Set current theme from the theme specifics of the last change of type
   // |ACTION_ADD| or |ACTION_UPDATE|.
@@ -234,13 +244,18 @@ void ThemeSyncableService::SetCurrentThemeFromThemeSpecifics(
   }
 }
 
-void ThemeSyncableService::GetThemeSpecificsFromCurrentTheme(
+bool ThemeSyncableService::GetThemeSpecificsFromCurrentTheme(
     sync_pb::ThemeSpecifics* theme_specifics) const {
   const extensions::Extension* current_theme =
       theme_service_->UsingDefaultTheme() ?
           NULL :
           extensions::ExtensionSystem::Get(profile_)->extension_service()->
               GetExtensionById(theme_service_->GetThemeID(), false);
+  if (current_theme && !current_theme->IsSyncable()) {
+    DVLOG(1) << "Ignoring extension from external source: " <<
+        current_theme->location();
+    return false;
+  }
   bool use_custom_theme = (current_theme != NULL);
   theme_specifics->set_use_custom_theme(use_custom_theme);
   if (IsSystemThemeDistinctFromDefaultTheme()) {
@@ -268,13 +283,14 @@ void ThemeSyncableService::GetThemeSpecificsFromCurrentTheme(
     theme_specifics->set_custom_theme_name(current_theme->name());
     theme_specifics->set_custom_theme_id(current_theme->id());
     theme_specifics->set_custom_theme_update_url(
-        current_theme->update_url().spec());
+        extensions::ManifestURL::GetUpdateURL(current_theme).spec());
   } else {
     DCHECK(!current_theme);
     theme_specifics->clear_custom_theme_name();
     theme_specifics->clear_custom_theme_id();
     theme_specifics->clear_custom_theme_update_url();
   }
+  return true;
 }
 
 /* static */

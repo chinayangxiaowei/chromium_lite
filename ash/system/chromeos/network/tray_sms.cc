@@ -6,6 +6,7 @@
 
 #include "ash/ash_switches.h"
 #include "ash/shell.h"
+#include "ash/system/tray/fixed_sized_scroll_view.h"
 #include "ash/system/tray/system_tray.h"
 #include "ash/system/tray/system_tray_bubble.h"
 #include "ash/system/tray/system_tray_notifier.h"
@@ -14,7 +15,6 @@
 #include "ash/system/tray/tray_item_more.h"
 #include "ash/system/tray/tray_item_view.h"
 #include "ash/system/tray/tray_notification_view.h"
-#include "ash/system/tray/tray_views.h"
 #include "base/command_line.h"
 #include "base/string_number_conversions.h"
 #include "base/utf_string_conversions.h"
@@ -197,7 +197,7 @@ class TraySms::SmsDetailedView : public TrayDetailsView,
   }
 
   // Overridden from views::View.
-  gfx::Size GetPreferredSize() {
+  virtual gfx::Size GetPreferredSize() OVERRIDE {
     gfx::Size preferred_size = TrayDetailsView::GetPreferredSize();
     if (preferred_size.height() < kMessageListMinHeight)
       preferred_size.set_height(kMessageListMinHeight);
@@ -229,7 +229,7 @@ class TraySms::SmsDetailedView : public TrayDetailsView,
   }
 
   // Overridden from ViewClickListener.
-  virtual void ClickedOn(views::View* sender) OVERRIDE {
+  virtual void OnViewClicked(views::View* sender) OVERRIDE {
     if (sender == footer()->content())
       owner()->system_tray()->ShowDefaultView(BUBBLE_USE_EXISTING);
   }
@@ -308,6 +308,8 @@ views::View* TraySms::CreateDetailedView(user::LoginStatus status) {
 
 views::View* TraySms::CreateNotificationView(user::LoginStatus status) {
   CHECK(notification_ == NULL);
+  if (detailed_)
+    return NULL;
   size_t index;
   std::string number, text;
   if (GetLatestMessage(&index, &number, &text))

@@ -14,14 +14,21 @@
 
 namespace views {
 
+namespace {
+#if defined(OS_WIN)
+static const int kMenuCornerRadiusForAura = 0;
+#else
+static const int kMenuCornerRadiusForAura = 2;
+#endif
+}  // namespace
+
 #if !defined(OS_WIN)
 void MenuConfig::Init(const ui::NativeTheme* theme) {
-  InitAura();
+  InitAura(theme);
 }
 #endif
 
-void MenuConfig::InitAura() {
-  ui::NativeTheme* theme = ui::NativeThemeAura::instance();
+void MenuConfig::InitAura(const ui::NativeTheme* theme) {
   text_color = theme->GetSystemColor(
       ui::NativeTheme::kColorId_EnabledMenuItemForegroundColor);
   menu_horizontal_border_size = 0;
@@ -30,10 +37,9 @@ void MenuConfig::InitAura() {
   ui::ResourceBundle& rb = ui::ResourceBundle::GetSharedInstance();
   arrow_to_edge_padding = 20;
   icon_to_label_padding = 4;
-  arrow_width = rb.GetImageNamed(IDR_MENU_ARROW).ToImageSkia()->width();
+  arrow_width =
+      rb.GetImageNamed(IDR_MENU_HIERARCHY_ARROW).ToImageSkia()->width();
   const gfx::ImageSkia* check = GetMenuCheckImage();
-  // Add 4 to force some padding between check and label.
-  check_width = check->width() + 4;
   check_height = check->height();
   item_left_margin = 4;
   item_min_height = 29;
@@ -47,6 +53,9 @@ void MenuConfig::InitAura() {
   always_use_icon_to_label_padding = true;
   align_arrow_and_shortcut = true;
   offset_context_menus = true;
+  corner_radius = kMenuCornerRadiusForAura;
+  if (ui::NativeTheme::IsNewMenuStyleEnabled())
+    AdjustForCommonTheme();
 }
 
 #if !defined(OS_WIN)
@@ -54,7 +63,8 @@ void MenuConfig::InitAura() {
 const MenuConfig& MenuConfig::instance(const ui::NativeTheme* theme) {
   static MenuConfig* views_instance = NULL;
   if (!views_instance)
-    views_instance = new MenuConfig(ui::NativeTheme::instance());
+    views_instance = new MenuConfig(theme ?
+        theme : ui::NativeTheme::instance());
   return *views_instance;
 }
 #endif

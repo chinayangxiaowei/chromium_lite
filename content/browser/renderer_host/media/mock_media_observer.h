@@ -8,6 +8,7 @@
 #include <string>
 
 #include "base/basictypes.h"
+#include "content/browser/media/media_internals.h"
 #include "content/public/browser/media_observer.h"
 #include "media/base/media_log_event.h"
 #include "testing/gmock/include/gmock/gmock.h"
@@ -19,19 +20,10 @@ class MockMediaObserver : public MediaObserver {
   MockMediaObserver();
   virtual ~MockMediaObserver();
 
-  MOCK_METHOD2(OnDeleteAudioStream,
-               void(void* host, int stream_id));
-  MOCK_METHOD3(OnSetAudioStreamPlaying,
-               void(void* host, int stream_id, bool playing));
-  MOCK_METHOD3(OnSetAudioStreamStatus,
-               void(void* host, int stream_id, const std::string& status));
-  MOCK_METHOD3(OnSetAudioStreamVolume,
-               void(void* host, int stream_id, double volume));
-  MOCK_METHOD2(OnMediaEvent,
-               void(int source, const media::MediaLogEvent& event));
-  MOCK_METHOD3(OnCaptureDevicesOpened,
+  MOCK_METHOD4(OnCaptureDevicesOpened,
                void(int render_process_id, int render_view_id,
-                    const MediaStreamDevices& devices));
+                    const MediaStreamDevices& devices,
+                    const base::Closure& close_callback));
   MOCK_METHOD3(OnCaptureDevicesClosed,
                void(int render_process_id, int render_view_id,
                     const MediaStreamDevices& devices));
@@ -43,6 +35,28 @@ class MockMediaObserver : public MediaObserver {
                void(int render_process_id, int render_view_id,
                     const MediaStreamDevice& device,
                     const MediaRequestState state));
+  MOCK_METHOD4(OnAudioStreamPlayingChanged,
+               void(int render_process_id,
+                    int render_view_id,
+                    int stream_id,
+                    bool playing));
+};
+
+class MockMediaInternals : public MediaInternals {
+ public:
+  MockMediaInternals();
+  virtual ~MockMediaInternals();
+
+  MOCK_METHOD2(OnDeleteAudioStream,
+               void(void* host, int stream_id));
+  MOCK_METHOD3(OnSetAudioStreamPlaying,
+               void(void* host, int stream_id, bool playing));
+  MOCK_METHOD3(OnSetAudioStreamStatus,
+               void(void* host, int stream_id, const std::string& status));
+  MOCK_METHOD3(OnSetAudioStreamVolume,
+               void(void* host, int stream_id, double volume));
+  MOCK_METHOD2(OnMediaEvent,
+               void(int source, const media::MediaLogEvent& event));
 };
 
 }  // namespace content

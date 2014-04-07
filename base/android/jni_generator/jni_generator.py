@@ -7,6 +7,7 @@
 If you change this, please run and update the tests."""
 
 import collections
+import errno
 import optparse
 import os
 import re
@@ -86,6 +87,8 @@ def JavaDataTypeToC(java_type):
   java_pod_type_map = {
       'int': 'jint',
       'byte': 'jbyte',
+      'char': 'jchar',
+      'short': 'jshort',
       'boolean': 'jboolean',
       'long': 'jlong',
       'double': 'jdouble',
@@ -142,6 +145,8 @@ class JniParams(object):
     pod_param_map = {
         'int': 'I',
         'boolean': 'Z',
+        'char': 'C',
+        'short': 'S',
         'long': 'J',
         'double': 'D',
         'float': 'F',
@@ -156,12 +161,10 @@ class JniParams(object):
         'Ljava/lang/String',
         'Ljava/lang/Class',
     ]
-    if param == 'byte[][]':
-      return '[[B'
     prefix = ''
     # Array?
-    if param[-2:] == '[]':
-      prefix = '['
+    while param[-2:] == '[]':
+      prefix += '['
       param = param[:-2]
     # Generic?
     if '<' in param:
@@ -170,7 +173,7 @@ class JniParams(object):
       return prefix + pod_param_map[param]
     if '/' in param:
       # Coming from javap, use the fully qualified param directly.
-      return 'L' + param + ';'
+      return prefix + 'L' + param + ';'
     for qualified_name in (object_param_list +
                            [JniParams._fully_qualified_class] +
                            JniParams._inner_classes):
@@ -201,7 +204,7 @@ class JniParams(object):
       inner = components[-1]
       for qualified_name in JniParams._imports:
         if qualified_name.endswith('/' + outer):
-          return prefix + qualified_name + '$' + inner
+          return prefix + qualified_name + '$' + inner + ';'
 
     # Type not found, falling back to same package as this class.
     return prefix + 'L' + JniParams._package + '/' + param + ';'
@@ -276,9 +279,19 @@ def ExtractNatives(contents):
 
 
 def GetStaticCastForReturnType(return_type):
-  if return_type in ['String', 'java/lang/String']:
-    return 'jstring'
-  elif return_type.endswith('[]'):
+  type_map = { 'String' : 'jstring',
+               'java/lang/String' : 'jstring',
+               'boolean[]': 'jbooleanArray',
+               'byte[]': 'jbyteArray',
+               'char[]': 'jcharArray',
+               'short[]': 'jshortArray',
+               'int[]': 'jintArray',
+               'long[]': 'jlongArray',
+               'double[]': 'jdoubleArray' }
+  ret = type_map.get(return_type, None)
+  if ret:
+    return ret
+  if return_type.endswith('[]'):
     return 'jobjectArray'
   return None
 
@@ -368,7 +381,7 @@ RE_SCOPED_JNI_RETURN_TYPES = re.compile('jobject|jclass|jstring|.*Array')
 RE_CALLED_BY_NATIVE = re.compile(
     '@CalledByNative(?P<Unchecked>(Unchecked)*?)(?:\("(?P<annotation>.*)"\))?'
     '\s+(?P<prefix>[\w ]*?)'
-    '\s*(?P<return_type>\w+)'
+    '\s*(?P<return_type>[\w\.]+(\[\])*?)'
     '\s+(?P<name>\w+)'
     '\s*\((?P<params>[^\)]*)\)')
 
@@ -411,8 +424,9 @@ class JNIFromJavaP(object):
   def __init__(self, contents, namespace):
     self.contents = contents
     self.namespace = namespace
-    self.fully_qualified_class = re.match('.*?class (?P<class_name>.*?) ',
-                                          contents[1]).group('class_name')
+    self.fully_qualified_class = re.match(
+        '.*?(class|interface) (?P<class_name>.*?)( |{)',
+        contents[1]).group('class_name')
     self.fully_qualified_class = self.fully_qualified_class.replace('.', '/')
     JniParams.SetFullyQualifiedClass(self.fully_qualified_class)
     self.java_class_name = self.fully_qualified_class.split('/')[-1]
@@ -936,8 +950,11 @@ def ExtractJarInputFile(jar_file, input_file, out_dir):
   jar_file = zipfile.ZipFile(jar_file)
 
   out_dir = os.path.join(out_dir, os.path.dirname(input_file))
-  if not os.path.exists(out_dir):
+  try:
     os.makedirs(out_dir)
+  except OSError as e:
+    if e.errno != errno.EEXIST:
+      raise
   extracted_file_name = os.path.join(out_dir, os.path.basename(input_file))
   with open(extracted_file_name, 'w') as outfile:
     outfile.write(jar_file.read(input_file))
@@ -945,7 +962,7 @@ def ExtractJarInputFile(jar_file, input_file, out_dir):
   return extracted_file_name
 
 
-def GenerateJNIHeader(input_file, output_file, namespace):
+def GenerateJNIHeader(input_file, output_file, namespace, skip_if_same):
   try:
     if os.path.splitext(input_file)[1] == '.class':
       jni_from_javap = JNIFromJavaP.CreateFromClass(input_file, namespace)
@@ -959,6 +976,11 @@ def GenerateJNIHeader(input_file, output_file, namespace):
   if output_file:
     if not os.path.exists(os.path.dirname(os.path.abspath(output_file))):
       os.makedirs(os.path.dirname(os.path.abspath(output_file)))
+    if skip_if_same and os.path.exists(output_file):
+      with file(output_file, 'r') as f:
+        existing_content = f.read()
+        if existing_content == content:
+          return
     with file(output_file, 'w') as f:
       f.write(content)
   else:
@@ -988,6 +1010,10 @@ See SampleForTests.java for more details.
   option_parser.add_option('--output_dir',
                            help='The output directory. Must be used with '
                            '--input')
+  option_parser.add_option('--optimize_generation', type="int",
+                           default=0, help='Whether we should optimize JNI '
+                           'generation by not regenerating files if they have '
+                           'not changed.')
   options, args = option_parser.parse_args(argv)
   if options.jar_file:
     input_file = ExtractJarInputFile(options.jar_file, options.input_file,
@@ -998,7 +1024,8 @@ See SampleForTests.java for more details.
   if options.output_dir:
     root_name = os.path.splitext(os.path.basename(input_file))[0]
     output_file = os.path.join(options.output_dir, root_name) + '_jni.h'
-  GenerateJNIHeader(input_file, output_file, options.namespace)
+  GenerateJNIHeader(input_file, output_file, options.namespace,
+                    options.optimize_generation)
 
 
 if __name__ == '__main__':

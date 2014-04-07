@@ -6,10 +6,10 @@
 #include "base/message_loop.h"
 #include "base/stringprintf.h"
 #include "chrome/browser/net/network_stats.h"
-#include "net/base/host_resolver.h"
-#include "net/base/mock_host_resolver.h"
 #include "net/base/net_errors.h"
 #include "net/base/test_completion_callback.h"
+#include "net/dns/host_resolver.h"
+#include "net/dns/mock_host_resolver.h"
 #include "net/test/test_server.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "testing/platform_test.h"
@@ -32,7 +32,7 @@ class NetworkStatsTestUDP : public NetworkStatsTest {
   NetworkStatsTestUDP()
       : test_server_(net::TestServer::TYPE_UDP_ECHO,
                      net::TestServer::kLocalhost,
-                     FilePath(FILE_PATH_LITERAL("net/data"))) {
+                     base::FilePath(FILE_PATH_LITERAL("net/data"))) {
   }
 
  protected:

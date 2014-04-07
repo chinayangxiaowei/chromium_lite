@@ -18,11 +18,11 @@
 #include "base/sequenced_task_runner_helpers.h"
 #include "base/synchronization/waitable_event.h"
 #include "base/values.h"
-#include "chrome/browser/autofill/personal_data_manager.h"
-#include "chrome/browser/autofill/personal_data_manager_observer.h"
 #include "chrome/browser/automation/automation_provider_json.h"
 #include "chrome/browser/automation/automation_tab_helper.h"
 #include "chrome/browser/bookmarks/bookmark_model_observer.h"
+#include "components/autofill/browser/personal_data_manager.h"
+#include "components/autofill/browser/personal_data_manager_observer.h"
 #if defined(OS_CHROMEOS)
 #include "chrome/browser/chromeos/cros/network_library.h"
 #include "chrome/browser/chromeos/login/enrollment/enterprise_enrollment_screen.h"
@@ -32,7 +32,7 @@
 #endif  // defined(OS_CHROMEOS)
 #include "chrome/browser/common/cancelable_request.h"
 #include "chrome/browser/download/all_download_item_notifier.h"
-#include "chrome/browser/history/history.h"
+#include "chrome/browser/history/history_service.h"
 #include "chrome/browser/history/history_types.h"
 #include "chrome/browser/importer/importer_data_types.h"
 #include "chrome/browser/importer/importer_progress_observer.h"
@@ -43,6 +43,7 @@
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/common/automation_constants.h"
 #include "chrome/common/extensions/extension_constants.h"
+#include "content/public/browser/browser_thread.h"
 #include "content/public/browser/download_item.h"
 #include "content/public/browser/download_manager.h"
 #include "content/public/browser/notification_observer.h"
@@ -58,7 +59,6 @@ class BalloonCollection;
 class Browser;
 class ExtensionProcessManager;
 class ExtensionService;
-class InfoBarTabHelper;
 class Notification;
 class Profile;
 class SavePackage;
@@ -693,8 +693,7 @@ class LoginObserver : public chromeos::LoginStatusConsumer {
   virtual void OnLoginFailure(const chromeos::LoginFailure& error);
 
   virtual void OnLoginSuccess(
-      const std::string& username,
-      const std::string& password,
+      const chromeos::UserCredentials& credentials,
       bool pending_requests,
       bool using_oauth);
 
@@ -783,8 +782,7 @@ class ScreenUnlockObserver : public ScreenLockUnlockObserver,
   virtual void OnLoginFailure(const chromeos::LoginFailure& error);
 
   virtual void OnLoginSuccess(
-      const std::string& username,
-      const std::string& password,
+      const chromeos::UserCredentials& credentials,
       bool pending_requests,
       bool using_oauth) {}
 
@@ -1226,9 +1224,9 @@ class PasswordStoreLoginsChangedObserver
 // in the omnibox popup.
 class OmniboxAcceptNotificationObserver : public content::NotificationObserver {
  public:
-   OmniboxAcceptNotificationObserver(content::NavigationController* controller,
-                                     AutomationProvider* automation,
-                                     IPC::Message* reply_message);
+  OmniboxAcceptNotificationObserver(content::NavigationController* controller,
+                                    AutomationProvider* automation,
+                                    IPC::Message* reply_message);
   virtual ~OmniboxAcceptNotificationObserver();
 
   // Overridden from content::NotificationObserver:
@@ -1246,20 +1244,21 @@ class OmniboxAcceptNotificationObserver : public content::NotificationObserver {
 };
 
 // Allows the automation provider to wait for a save package notification.
-class SavePackageNotificationObserver : public content::NotificationObserver {
+class SavePackageNotificationObserver
+: public content::DownloadManager::Observer {
  public:
   SavePackageNotificationObserver(content::DownloadManager* download_manager,
                                   AutomationProvider* automation,
                                   IPC::Message* reply_message);
   virtual ~SavePackageNotificationObserver();
 
-  // Overridden from content::NotificationObserver:
-  virtual void Observe(int type,
-                       const content::NotificationSource& source,
-                       const content::NotificationDetails& details) OVERRIDE;
+  // Overridden from content::DownloadManager::Observer:
+  virtual void OnSavePackageSuccessfullyFinished(
+      content::DownloadManager* manager, content::DownloadItem* item) OVERRIDE;
+  virtual void ManagerGoingDown(content::DownloadManager* manager) OVERRIDE;
 
  private:
-  content::NotificationRegistrar registrar_;
+  content::DownloadManager* download_manager_;
   base::WeakPtr<AutomationProvider> automation_;
   scoped_ptr<IPC::Message> reply_message_;
 
@@ -1273,7 +1272,7 @@ class PageSnapshotTaker : public TabEventObserver,
   PageSnapshotTaker(AutomationProvider* automation,
                     IPC::Message* reply_message,
                     content::WebContents* web_contents,
-                    const FilePath& path);
+                    const base::FilePath& path);
   virtual ~PageSnapshotTaker();
 
   // Start the process of taking a snapshot of the entire page.
@@ -1297,7 +1296,7 @@ class PageSnapshotTaker : public TabEventObserver,
   base::WeakPtr<AutomationProvider> automation_;
   scoped_ptr<IPC::Message> reply_message_;
   content::WebContents* web_contents_;
-  FilePath image_path_;
+  base::FilePath image_path_;
   content::NotificationRegistrar registrar_;
 
   DISALLOW_COPY_AND_ASSIGN(PageSnapshotTaker);

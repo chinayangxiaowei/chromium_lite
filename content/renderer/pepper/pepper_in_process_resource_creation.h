@@ -49,12 +49,16 @@ class PepperInProcessResourceCreation
       PP_Instance instance,
       PP_FileChooserMode_Dev mode,
       const char* accept_types) OVERRIDE;
+  virtual PP_Resource CreateFileIO(PP_Instance instance) OVERRIDE;
   virtual PP_Resource CreateGraphics2D(
       PP_Instance pp_instance,
       const PP_Size& size,
       PP_Bool is_always_opaque) OVERRIDE;
   virtual PP_Resource CreatePrinting(
       PP_Instance instance) OVERRIDE;
+  virtual PP_Resource CreateTrueTypeFont(
+      PP_Instance instance,
+      const struct PP_TrueTypeFontDesc_Dev& desc) OVERRIDE;
   virtual PP_Resource CreateURLRequestInfo(
       PP_Instance instance,
       const ::ppapi::URLRequestInfoData& data) OVERRIDE;

@@ -3,11 +3,11 @@
 // found in the LICENSE file.
 
 #include "base/command_line.h"
+#include "base/prefs/pref_service.h"
 #include "base/utf_string_conversions.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/extensions/component_loader.h"
 #include "chrome/browser/first_run/first_run.h"
-#include "chrome/browser/prefs/pref_service.h"
 #include "chrome/browser/profiles/profile_manager.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
@@ -24,29 +24,42 @@ typedef InProcessBrowserTest FirstRunBrowserTest;
 
 IN_PROC_BROWSER_TEST_F(FirstRunBrowserTest, SetShowFirstRunBubblePref) {
   EXPECT_TRUE(g_browser_process->local_state()->FindPreference(
-      prefs::kShouldShowFirstRunBubble));
-  EXPECT_TRUE(first_run::SetShowFirstRunBubblePref(true));
+      prefs::kShowFirstRunBubbleOption));
+  EXPECT_EQ(first_run::FIRST_RUN_BUBBLE_DONT_SHOW,
+            g_browser_process->local_state()->GetInteger(
+                prefs::kShowFirstRunBubbleOption));
+  EXPECT_TRUE(first_run::SetShowFirstRunBubblePref(
+      first_run::FIRST_RUN_BUBBLE_SHOW));
   ASSERT_TRUE(g_browser_process->local_state()->FindPreference(
-      prefs::kShouldShowFirstRunBubble));
-  EXPECT_TRUE(g_browser_process->local_state()->GetBoolean(
-      prefs::kShouldShowFirstRunBubble));
+      prefs::kShowFirstRunBubbleOption));
+  EXPECT_EQ(first_run::FIRST_RUN_BUBBLE_SHOW,
+            g_browser_process->local_state()->GetInteger(
+                prefs::kShowFirstRunBubbleOption));
   // Test that toggling the value works in either direction after it's been set.
-  EXPECT_TRUE(first_run::SetShowFirstRunBubblePref(false));
-  EXPECT_FALSE(g_browser_process->local_state()->GetBoolean(
-      prefs::kShouldShowFirstRunBubble));
-  EXPECT_TRUE(first_run::SetShowFirstRunBubblePref(true));
-  EXPECT_TRUE(g_browser_process->local_state()->GetBoolean(
-      prefs::kShouldShowFirstRunBubble));
+  EXPECT_TRUE(first_run::SetShowFirstRunBubblePref(
+      first_run::FIRST_RUN_BUBBLE_DONT_SHOW));
+  EXPECT_EQ(first_run::FIRST_RUN_BUBBLE_DONT_SHOW,
+            g_browser_process->local_state()->GetInteger(
+                prefs::kShowFirstRunBubbleOption));
+  // Test that the value can't be set to FIRST_RUN_BUBBLE_SHOW after it has been
+  // set to FIRST_RUN_BUBBLE_SUPPRESS.
+  EXPECT_TRUE(first_run::SetShowFirstRunBubblePref(
+      first_run::FIRST_RUN_BUBBLE_SUPPRESS));
+  EXPECT_EQ(first_run::FIRST_RUN_BUBBLE_SUPPRESS,
+            g_browser_process->local_state()->GetInteger(
+                prefs::kShowFirstRunBubbleOption));
+  EXPECT_TRUE(first_run::SetShowFirstRunBubblePref(
+      first_run::FIRST_RUN_BUBBLE_SHOW));
+  EXPECT_EQ(first_run::FIRST_RUN_BUBBLE_SUPPRESS,
+            g_browser_process->local_state()->GetInteger(
+                prefs::kShowFirstRunBubbleOption));
 }
 
-IN_PROC_BROWSER_TEST_F(FirstRunBrowserTest, SetShowWelcomePagePref) {
-  EXPECT_FALSE(g_browser_process->local_state()->FindPreference(
-      prefs::kShouldShowWelcomePage));
-  EXPECT_TRUE(first_run::SetShowWelcomePagePref());
-  ASSERT_TRUE(g_browser_process->local_state()->FindPreference(
-      prefs::kShouldShowWelcomePage));
-  EXPECT_TRUE(g_browser_process->local_state()->GetBoolean(
-      prefs::kShouldShowWelcomePage));
+IN_PROC_BROWSER_TEST_F(FirstRunBrowserTest, SetShouldShowWelcomePage) {
+  EXPECT_FALSE(first_run::ShouldShowWelcomePage());
+  first_run::SetShouldShowWelcomePage();
+  EXPECT_TRUE(first_run::ShouldShowWelcomePage());
+  EXPECT_FALSE(first_run::ShouldShowWelcomePage());
 }
 
 #if !defined(OS_CHROMEOS)
@@ -57,9 +70,8 @@ class FirstRunIntegrationBrowserTest : public InProcessBrowserTest {
  protected:
   virtual void SetUpCommandLine(CommandLine* command_line) OVERRIDE {
     InProcessBrowserTest::SetUpCommandLine(command_line);
-    command_line->AppendSwitch(switches::kFirstRun);
-    command_line->AppendSwitch(switches::kFirstRunForceImport);
-    EXPECT_FALSE(ProfileManager::DidPerformProfileImport());
+    command_line->AppendSwitch(switches::kForceFirstRun);
+    EXPECT_FALSE(first_run::DidPerformProfileImport(NULL));
 
     extensions::ComponentLoader::EnableBackgroundExtensionsForTesting();
 
@@ -102,14 +114,31 @@ class FirstRunMasterPrefsBrowserTest : public FirstRunIntegrationBrowserTest {
   }
 
  private:
-  FilePath prefs_file_;
+  base::FilePath prefs_file_;
 
   DISALLOW_COPY_AND_ASSIGN(FirstRunMasterPrefsBrowserTest);
 };
 }
 
-IN_PROC_BROWSER_TEST_F(FirstRunIntegrationBrowserTest, WaitForImport) {
-  ASSERT_TRUE(ProfileManager::DidPerformProfileImport());
+// TODO(tapted): Investigate why this fails on Linux bots but does not
+// reproduce locally. See http://crbug.com/178062 .
+// TODO(tapted): Investigate why this fails on mac_asan flakily
+// http://crbug.com/181499 .
+#if defined(OS_LINUX) || (defined(OS_MACOSX) && defined(ADDRESS_SANITIZER))
+#define MAYBE_WaitForImport DISABLED_WaitForImport
+#else
+#define MAYBE_WaitForImport WaitForImport
+#endif
+
+IN_PROC_BROWSER_TEST_F(FirstRunIntegrationBrowserTest, MAYBE_WaitForImport) {
+  bool success = false;
+  EXPECT_TRUE(first_run::DidPerformProfileImport(&success));
+  // Aura builds skip over the import process.
+#if defined(USE_AURA)
+  EXPECT_FALSE(success);
+#else
+  EXPECT_TRUE(success);
+#endif
 }
 
 // Test an import with all import options disabled. This is a regression test
@@ -117,7 +146,7 @@ IN_PROC_BROWSER_TEST_F(FirstRunIntegrationBrowserTest, WaitForImport) {
 // stay running, and the NTP to be loaded with no apps.
 IN_PROC_BROWSER_TEST_F(FirstRunMasterPrefsBrowserTest,
                        ImportNothingAndShowNewTabPage) {
-  ASSERT_TRUE(ProfileManager::DidPerformProfileImport());
+  EXPECT_TRUE(first_run::DidPerformProfileImport(NULL));
   ui_test_utils::NavigateToURLWithDisposition(
       browser(), GURL(chrome::kChromeUINewTabURL), CURRENT_TAB,
       ui_test_utils::BROWSER_TEST_WAIT_FOR_NAVIGATION);

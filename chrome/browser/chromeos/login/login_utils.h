@@ -12,34 +12,33 @@
 class CommandLine;
 class GURL;
 class Profile;
+class PrefRegistrySimple;
 class PrefService;
-
-namespace {
-class BrowserGuestSessionNavigatorTest;
-}  // namespace
 
 namespace chromeos {
 
 class Authenticator;
 class LoginDisplayHost;
 class LoginStatusConsumer;
+struct UserCredentials;
 
 class LoginUtils {
  public:
   class Delegate {
    public:
-   // Called after profile is loaded and prepared for the session.
+    // Called after profile is loaded and prepared for the session.
     virtual void OnProfilePrepared(Profile* profile) = 0;
 
 #if defined(ENABLE_RLZ)
     // Called after post-profile RLZ initialization.
     virtual void OnRlzInitialized(Profile* profile) {}
 #endif
-
-    // Called immediately after profile is created, should be used as a test
-    // se
-    virtual void OnProfileCreated(Profile* profile) {}
+   protected:
+    virtual ~Delegate() {}
   };
+
+  // Registers log-in related preferences.
+  static void RegisterPrefs(PrefRegistrySimple* registry);
 
   // Get LoginUtils singleton object. If it was not set before, new default
   // instance will be created.
@@ -66,9 +65,8 @@ class LoginUtils {
   // this value, shown in UI.
   // Also see DelegateDeleted method.
   virtual void PrepareProfile(
-      const std::string& username,
+      const UserCredentials& credentials,
       const std::string& display_email,
-      const std::string& password,
       bool using_oauth,
       bool has_cookies,
       Delegate* delegate) = 0;
@@ -108,19 +106,6 @@ class LoginUtils {
 
   // Initialize RLZ.
   virtual void InitRlzDelayed(Profile* user_profile) = 0;
-
-  // Completed profile creation process.
-  virtual void CompleteProfileCreate(Profile* user_profile) {}
-
- protected:
-  friend class ::BrowserGuestSessionNavigatorTest;
-
-  // Returns command line string to be used for the OTR process. Also modifies
-  // given command line.
-  virtual std::string GetOffTheRecordCommandLine(
-      const GURL& start_url,
-      const CommandLine& base_command_line,
-      CommandLine* command_line) = 0;
 };
 
 }  // namespace chromeos

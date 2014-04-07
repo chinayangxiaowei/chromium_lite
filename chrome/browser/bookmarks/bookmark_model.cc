@@ -10,7 +10,6 @@
 #include "base/bind.h"
 #include "base/bind_helpers.h"
 #include "base/json/json_string_value_serializer.h"
-#include "base/memory/scoped_vector.h"
 #include "base/sequenced_task_runner.h"
 #include "base/string_util.h"
 #include "base/values.h"
@@ -20,13 +19,16 @@
 #include "chrome/browser/bookmarks/bookmark_model_observer.h"
 #include "chrome/browser/bookmarks/bookmark_storage.h"
 #include "chrome/browser/bookmarks/bookmark_utils.h"
+#include "chrome/browser/favicon/favicon_service.h"
 #include "chrome/browser/favicon/favicon_service_factory.h"
 #include "chrome/browser/history/history_notifications.h"
+#include "chrome/browser/history/history_service.h"
 #include "chrome/browser/history/history_service_factory.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/common/chrome_notification_types.h"
 #include "content/public/browser/content_browser_client.h"
-#include "content/public/browser/notification_service.h"
+#include "content/public/browser/notification_details.h"
+#include "content/public/browser/notification_source.h"
 #include "grit/generated_resources.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/l10n/l10n_util_collator.h"
@@ -550,7 +552,7 @@ const BookmarkNode* BookmarkModel::AddFolder(const BookmarkNode* parent,
   new_node->SetTitle(title);
   new_node->set_type(BookmarkNode::FOLDER);
 
-  return AddNode(AsMutable(parent), index, new_node, false);
+  return AddNode(AsMutable(parent), index, new_node);
 }
 
 const BookmarkNode* BookmarkModel::AddURL(const BookmarkNode* parent,
@@ -574,8 +576,6 @@ const BookmarkNode* BookmarkModel::AddURLWithCreationTime(
     return NULL;
   }
 
-  bool was_bookmarked = IsBookmarked(url);
-
   // Syncing may result in dates newer than the last modified date.
   if (creation_time > parent->date_folder_modified())
     SetDateFolderModified(parent, creation_time);
@@ -591,7 +591,7 @@ const BookmarkNode* BookmarkModel::AddURLWithCreationTime(
     nodes_ordered_by_url_set_.insert(new_node);
   }
 
-  return AddNode(AsMutable(parent), index, new_node, was_bookmarked);
+  return AddNode(AsMutable(parent), index, new_node);
 }
 
 void BookmarkModel::SortChildren(const BookmarkNode* parent) {
@@ -745,12 +745,6 @@ void BookmarkModel::DoneLoading(BookmarkLoadDetails* details_delete_me) {
   // Notify our direct observers.
   FOR_EACH_OBSERVER(BookmarkModelObserver, observers_,
                     Loaded(this, details->ids_reassigned()));
-
-  // And generic notification.
-  content::NotificationService::current()->Notify(
-      chrome::NOTIFICATION_BOOKMARK_MODEL_LOADED,
-      content::Source<content::BrowserContext>(profile_),
-      content::NotificationService::NoDetails());
 }
 
 void BookmarkModel::RemoveAndDeleteNode(BookmarkNode* delete_me) {
@@ -803,8 +797,7 @@ void BookmarkModel::RemoveAndDeleteNode(BookmarkNode* delete_me) {
 
 BookmarkNode* BookmarkModel::AddNode(BookmarkNode* parent,
                                      int index,
-                                     BookmarkNode* node,
-                                     bool was_bookmarked) {
+                                     BookmarkNode* node) {
   parent->Add(node, index);
 
   if (store_.get())

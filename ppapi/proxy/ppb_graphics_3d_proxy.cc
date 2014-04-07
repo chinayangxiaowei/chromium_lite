@@ -130,6 +130,9 @@ class Graphics3D::LockingCommandBuffer : public gpu::CommandBuffer {
     // MaybeLock lock(need_to_lock_);
     return gpu_command_buffer_->GetLastState();
   }
+  virtual int32 GetLastToken() OVERRIDE {
+    return GetLastState().token;
+  }
   virtual void Flush(int32 put_offset) OVERRIDE {
     MaybeLock lock(need_to_lock_);
     gpu_command_buffer_->Flush(put_offset);
@@ -146,24 +149,18 @@ class Graphics3D::LockingCommandBuffer : public gpu::CommandBuffer {
     MaybeLock lock(need_to_lock_);
     gpu_command_buffer_->SetGetOffset(get_offset);
   }
-  virtual int32 CreateTransferBuffer(size_t size, int32 id_request) OVERRIDE {
+  virtual gpu::Buffer CreateTransferBuffer(size_t size,
+                                           int32* id) OVERRIDE {
     MaybeLock lock(need_to_lock_);
-    return gpu_command_buffer_->CreateTransferBuffer(size, id_request);
-  }
-  virtual int32 RegisterTransferBuffer(base::SharedMemory* shared_memory,
-                                       size_t size,
-                                       int32 id_request) OVERRIDE {
-    MaybeLock lock(need_to_lock_);
-    return gpu_command_buffer_->RegisterTransferBuffer(shared_memory, size,
-        id_request);
+    return gpu_command_buffer_->CreateTransferBuffer(size, id);
   }
   virtual void DestroyTransferBuffer(int32 id) OVERRIDE {
     MaybeLock lock(need_to_lock_);
     gpu_command_buffer_->DestroyTransferBuffer(id);
   }
-  virtual gpu::Buffer GetTransferBuffer(int32 handle) OVERRIDE {
+  virtual gpu::Buffer GetTransferBuffer(int32 id) OVERRIDE {
     MaybeLock lock(need_to_lock_);
-    return gpu_command_buffer_->GetTransferBuffer(handle);
+    return gpu_command_buffer_->GetTransferBuffer(id);
   }
   virtual void SetToken(int32 token) OVERRIDE {
     MaybeLock lock(need_to_lock_);
@@ -177,6 +174,10 @@ class Graphics3D::LockingCommandBuffer : public gpu::CommandBuffer {
       gpu::error::ContextLostReason reason) OVERRIDE {
     MaybeLock lock(need_to_lock_);
     gpu_command_buffer_->SetContextLostReason(reason);
+  }
+  virtual uint32 InsertSyncPoint() OVERRIDE {
+    MaybeLock lock(need_to_lock_);
+    return gpu_command_buffer_->InsertSyncPoint();
   }
 
   // Weak pointer - see class Graphics3D for the scopted_ptr.
@@ -249,6 +250,11 @@ PP_Bool Graphics3D::GetTransferBuffer(int32_t id,
 PP_Graphics3DTrustedState Graphics3D::FlushSyncFast(int32_t put_offset,
                                                     int32_t last_known_get) {
   return GetErrorState();
+}
+
+uint32_t Graphics3D::InsertSyncPoint() {
+  NOTREACHED();
+  return 0;
 }
 
 gpu::CommandBuffer* Graphics3D::GetCommandBuffer() {
@@ -363,6 +369,8 @@ bool PPB_Graphics3D_Proxy::OnMessageReceived(const IPC::Message& msg) {
                         OnMsgGetTransferBuffer)
     IPC_MESSAGE_HANDLER(PpapiHostMsg_PPBGraphics3D_SwapBuffers,
                         OnMsgSwapBuffers)
+    IPC_MESSAGE_HANDLER(PpapiHostMsg_PPBGraphics3D_InsertSyncPoint,
+                        OnMsgInsertSyncPoint)
 #endif  // !defined(OS_NACL)
 
     IPC_MESSAGE_HANDLER(PpapiMsg_PPBGraphics3D_SwapBuffersACK,
@@ -457,7 +465,7 @@ void PPB_Graphics3D_Proxy::OnMsgCreateTransferBuffer(
   if (enter.succeeded())
     *id = enter.object()->CreateTransferBuffer(size);
   else
-    *id = 0;
+    *id = -1;
 }
 
 void PPB_Graphics3D_Proxy::OnMsgDestroyTransferBuffer(
@@ -491,6 +499,14 @@ void PPB_Graphics3D_Proxy::OnMsgSwapBuffers(const HostResource& context) {
       &PPB_Graphics3D_Proxy::SendSwapBuffersACKToPlugin, context);
   if (enter.succeeded())
     enter.SetResult(enter.object()->SwapBuffers(enter.callback()));
+}
+
+void PPB_Graphics3D_Proxy::OnMsgInsertSyncPoint(const HostResource& context,
+                                                uint32* sync_point) {
+  *sync_point = 0;
+  EnterHostFromHostResource<PPB_Graphics3D_API> enter(context);
+  if (enter.succeeded())
+    *sync_point = enter.object()->InsertSyncPoint();
 }
 #endif  // !defined(OS_NACL)
 

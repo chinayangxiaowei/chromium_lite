@@ -8,7 +8,6 @@
 #include "ash/drag_drop/drag_image_view.h"
 #include "ash/shell.h"
 #include "ash/wm/coordinate_conversion.h"
-#include "ash/wm/cursor_manager.h"
 #include "base/bind.h"
 #include "base/message_loop.h"
 #include "base/run_loop.h"
@@ -17,10 +16,14 @@
 #include "ui/aura/env.h"
 #include "ui/aura/root_window.h"
 #include "ui/aura/window.h"
+#include "ui/aura/window_delegate.h"
 #include "ui/base/animation/linear_animation.h"
 #include "ui/base/dragdrop/drag_drop_types.h"
-#include "ui/base/dragdrop/os_exchange_data_provider_aura.h"
+#include "ui/base/dragdrop/os_exchange_data.h"
 #include "ui/base/events/event.h"
+#include "ui/base/events/event_utils.h"
+#include "ui/base/hit_test.h"
+#include "ui/gfx/path.h"
 #include "ui/gfx/point.h"
 #include "ui/gfx/rect.h"
 #include "ui/gfx/rect_conversions.h"
@@ -64,13 +67,73 @@ gfx::Rect AdjustDragImageBoundsForScaleAndOffset(
 
 void DispatchGestureEndToWindow(aura::Window* window) {
   if (window && window->delegate()) {
-    ui::GestureEvent gesture_end(ui::ET_GESTURE_END, 0, 0, 0,
-        base::Time::Now() - base::Time::FromDoubleT(0),
-        ui::GestureEventDetails(ui::ET_GESTURE_END, 0, 0), 0);
+    ui::GestureEvent gesture_end(
+        ui::ET_GESTURE_END,
+        0,
+        0,
+        0,
+        ui::EventTimeForNow(),
+        ui::GestureEventDetails(ui::ET_GESTURE_END, 0, 0),
+        0);
     window->delegate()->OnGestureEvent(&gesture_end);
   }
 }
 }  // namespace
+
+class DragDropTrackerDelegate : public aura::WindowDelegate {
+ public:
+  explicit DragDropTrackerDelegate(DragDropController* controller)
+      : drag_drop_controller_(controller) {}
+  virtual ~DragDropTrackerDelegate() {}
+
+  // Overridden from WindowDelegate:
+  virtual gfx::Size GetMinimumSize() const OVERRIDE {
+    return gfx::Size();
+  }
+
+  virtual gfx::Size GetMaximumSize() const OVERRIDE {
+    return gfx::Size();
+  }
+
+  virtual void OnBoundsChanged(const gfx::Rect& old_bounds,
+                               const gfx::Rect& new_bounds) OVERRIDE {}
+  virtual gfx::NativeCursor GetCursor(const gfx::Point& point) OVERRIDE {
+    return gfx::kNullCursor;
+  }
+  virtual int GetNonClientComponent(const gfx::Point& point) const OVERRIDE {
+    return HTCAPTION;
+  }
+  virtual bool ShouldDescendIntoChildForEventHandling(
+      aura::Window* child,
+      const gfx::Point& location) OVERRIDE {
+    return true;
+  }
+  virtual bool CanFocus() OVERRIDE { return true; }
+  virtual void OnCaptureLost() OVERRIDE {
+    if (drag_drop_controller_->IsDragDropInProgress())
+      drag_drop_controller_->DragCancel();
+  }
+  virtual void OnPaint(gfx::Canvas* canvas) OVERRIDE {
+  }
+  virtual void OnDeviceScaleFactorChanged(float device_scale_factor) OVERRIDE {}
+  virtual void OnWindowDestroying() OVERRIDE {}
+  virtual void OnWindowDestroyed() OVERRIDE {}
+  virtual void OnWindowTargetVisibilityChanged(bool visible) OVERRIDE {}
+  virtual bool HasHitTestMask() const OVERRIDE {
+    return true;
+  }
+  virtual void GetHitTestMask(gfx::Path* mask) const OVERRIDE {
+    DCHECK(mask->isEmpty());
+  }
+  virtual scoped_refptr<ui::Texture> CopyTexture() OVERRIDE {
+    return scoped_refptr<ui::Texture>();
+  }
+
+ private:
+  DragDropController* drag_drop_controller_;
+
+  DISALLOW_COPY_AND_ASSIGN(DragDropTrackerDelegate);
+};
 
 ////////////////////////////////////////////////////////////////////////////////
 // DragDropController, public:
@@ -82,6 +145,8 @@ DragDropController::DragDropController()
       drag_window_(NULL),
       drag_source_window_(NULL),
       should_block_during_drag_drop_(true),
+      ALLOW_THIS_IN_INITIALIZER_LIST(
+          drag_drop_window_delegate_(new DragDropTrackerDelegate(this))),
       current_drag_event_source_(ui::DragDropTypes::DRAG_EVENT_SOURCE_MOUSE),
       weak_factory_(this) {
   Shell::GetInstance()->AddPreTargetHandler(this);
@@ -106,26 +171,15 @@ int DragDropController::StartDragAndDrop(
   if (IsDragDropInProgress())
     return 0;
 
-#if defined(OS_WIN)
-  // TODO(win_ash): need to figure out how this will work in Metro, since
-  // OSExchangeDataProviderAura isn't used in Windows builds. Two alternatives:
-  // 1) Use OSExchangeDataProviderAura in Ash and OSExchangeDataProviderWin
-  //    elsewhere. This will complicate creating an ui::OSExchangeData to pass
-  //    in more context.
-  // 2) Add methods to get the image and offset in the base interface of these
-  //    implementations to get to this data here.
-  NOTIMPLEMENTED();
-  return 0;
-#else
-  const ui::OSExchangeDataProviderAura& provider =
-      static_cast<const ui::OSExchangeDataProviderAura&>(data.provider());
+  const ui::OSExchangeData::Provider* provider = &data.provider();
   // We do not support touch drag/drop without a drag image.
   if (source == ui::DragDropTypes::DRAG_EVENT_SOURCE_TOUCH &&
-      provider.drag_image().size().IsEmpty())
+      provider->GetDragImage().size().IsEmpty())
     return 0;
 
   current_drag_event_source_ = source;
-  DragDropTracker* tracker = new DragDropTracker(root_window);
+  DragDropTracker* tracker =
+      new DragDropTracker(root_window, drag_drop_window_delegate_.get());
   if (source == ui::DragDropTypes::DRAG_EVENT_SOURCE_TOUCH) {
     // We need to transfer the current gesture sequence and the GR's touch event
     // queue to the |drag_drop_tracker_|'s capture window so that when it takes
@@ -156,11 +210,11 @@ int DragDropController::StartDragAndDrop(
   gfx::Point start_location = root_location;
   ash::wm::ConvertPointToScreen(root_window, &start_location);
   drag_image_final_bounds_for_cancel_animation_ = gfx::Rect(
-      start_location - provider.drag_image_offset(),
-      provider.drag_image().size());
-  drag_image_.reset(new DragImageView);
-  drag_image_->SetImage(provider.drag_image());
-  drag_image_offset_ = provider.drag_image_offset();
+      start_location - provider->GetDragImageOffset(),
+      provider->GetDragImage().size());
+  drag_image_.reset(new DragImageView(source_window->GetRootWindow()));
+  drag_image_->SetImage(provider->GetDragImage());
+  drag_image_offset_ = provider->GetDragImageOffset();
   gfx::Rect drag_image_bounds(start_location, drag_image_->GetPreferredSize());
   drag_image_bounds = AdjustDragImageBoundsForScaleAndOffset(drag_image_bounds,
       drag_image_vertical_offset, drag_image_scale, &drag_image_offset_);
@@ -191,7 +245,6 @@ int DragDropController::StartDragAndDrop(
       drag_source_window_->RemoveObserver(this);
     drag_source_window_ = NULL;
   }
-#endif
 
   return drag_operation_;
 }
@@ -232,7 +285,7 @@ void DragDropController::DragUpdate(aura::Window* target,
       else if (op & ui::DragDropTypes::DRAG_LINK)
         cursor = ui::kCursorAlias;
       else if (op & ui::DragDropTypes::DRAG_MOVE)
-        cursor = ui::kCursorMove;
+        cursor = ui::kCursorGrabbing;
       ash::Shell::GetInstance()->cursor_manager()->SetCursor(cursor);
     }
   }

@@ -5,10 +5,14 @@
 #ifndef CONTENT_COMMON_GPU_TEXTURE_IMAGE_TRANSPORT_SURFACE_H_
 #define CONTENT_COMMON_GPU_TEXTURE_IMAGE_TRANSPORT_SURFACE_H_
 
+#include <string>
+
 #include "base/basictypes.h"
+#include "base/memory/scoped_ptr.h"
 #include "content/common/gpu/gpu_command_buffer_stub.h"
 #include "content/common/gpu/image_transport_surface.h"
 #include "gpu/command_buffer/service/mailbox_manager.h"
+#include "gpu/command_buffer/service/texture_definition.h"
 #include "gpu/command_buffer/service/texture_manager.h"
 #include "ui/gl/gl_context.h"
 #include "ui/gl/gl_surface.h"
@@ -16,10 +20,10 @@
 namespace content {
 class GpuChannelManager;
 
-class TextureImageTransportSurface :
-    public ImageTransportSurface,
-    public GpuCommandBufferStub::DestructionObserver,
-    public gfx::GLSurface {
+class TextureImageTransportSurface
+    : public ImageTransportSurface,
+      public GpuCommandBufferStub::DestructionObserver,
+      public gfx::GLSurface {
  public:
   TextureImageTransportSurface(GpuChannelManager* manager,
                                GpuCommandBufferStub* stub,
@@ -39,7 +43,7 @@ class TextureImageTransportSurface :
   virtual unsigned int GetBackingFrameBufferObject() OVERRIDE;
   virtual bool PostSubBuffer(int x, int y, int width, int height) OVERRIDE;
   virtual bool OnMakeCurrent(gfx::GLContext* context) OVERRIDE;
-  virtual void SetBackbufferAllocation(bool allocated) OVERRIDE;
+  virtual bool SetBackbufferAllocation(bool allocated) OVERRIDE;
   virtual void SetFrontbufferAllocation(bool allocated) OVERRIDE;
   virtual void* GetShareHandle() OVERRIDE;
   virtual void* GetDisplay() OVERRIDE;
@@ -56,40 +60,33 @@ class TextureImageTransportSurface :
   virtual void OnWillDestroyStub(GpuCommandBufferStub* stub) OVERRIDE;
 
  private:
-  // A texture backing the front/back buffer.
-  struct Texture {
-    Texture();
-    ~Texture();
 
-    // The currently allocated size.
-    gfx::Size size;
-
-    // The actual GL texture id.
-    uint32 service_id;
-
-    // The surface handle for this texture (only 1 and 2 are valid).
-    uint64 surface_handle;
-  };
+  gfx::Size backbuffer_size() const {
+    return gfx::Size(backbuffer_->level_infos()[0][0].width,
+                     backbuffer_->level_infos()[0][0].height);
+  }
 
   virtual ~TextureImageTransportSurface();
   void CreateBackTexture();
   void AttachBackTextureToFBO();
   void ReleaseBackTexture();
-  void BufferPresentedImpl(uint64 surface_handle);
-  void ProduceTexture(Texture& texture);
-  void ConsumeTexture(Texture& texture);
+  void BufferPresentedImpl(const std::string& mailbox_name);
+  void ProduceTexture();
+  void ConsumeTexture();
 
-  gpu::gles2::MailboxName& mailbox_name(uint64 surface_handle) {
-    DCHECK(surface_handle == 1 || surface_handle == 2);
-    return mailbox_names_[surface_handle - 1];
-  }
+  static gpu::gles2::TextureDefinition* CreateTextureDefinition(gfx::Size size,
+                                                                int service_id);
 
   // The framebuffer that represents this surface (service id). Allocated lazily
   // in OnMakeCurrent.
   uint32 fbo_id_;
 
   // The current backbuffer.
-  Texture backbuffer_;
+  scoped_ptr<gpu::gles2::TextureDefinition> backbuffer_;
+
+  // The mailbox name for the current backbuffer texture. Needs to be unique per
+  // GL texture and is invalid while service_id is zero.
+  gpu::gles2::MailboxName mailbox_name_;
 
   // The current size of the GLSurface. Used to disambiguate from the current
   // texture size which might be outdated (since we use two buffers).
@@ -116,9 +113,6 @@ class TextureImageTransportSurface :
 
   // Whether we unscheduled command buffer because of pending SwapBuffers.
   bool did_unschedule_;
-
-  // The mailbox names used for texture exchange. Uses surface_handle as key.
-  gpu::gles2::MailboxName mailbox_names_[2];
 
   // Holds a reference to the mailbox manager for cleanup.
   scoped_refptr<gpu::gles2::MailboxManager> mailbox_manager_;

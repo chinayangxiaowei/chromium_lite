@@ -2,6 +2,8 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+'use strict';
+
 /**
  * Namespace for utility functions.
  */
@@ -62,7 +64,13 @@ FileTable.decorate = function(self, metadataCache, fullPage) {
   var columnModel = Object.create(cr.ui.table.TableColumnModel.prototype, {
     size: {
       get: function() {
-        return this.showOfflineColumn ? columns.length : columns.length - 1;
+        return this.showOfflineColumn ? this.totalSize : this.totalSize - 1;
+      }
+    },
+
+    totalSize: {
+      get: function() {
+        return columns.length;
       }
     },
 
@@ -90,7 +98,7 @@ FileTable.decorate = function(self, metadataCache, fullPage) {
     set: function(value) {
       var sm = this.selectionModel;
       if (sm)
-        sm = removeEventListener('change', handleSelectionChange);
+        sm.removeEventListener('change', handleSelectionChange);
 
       util.callInheritedSetter(this, 'selectionModel', value);
       sm = value;
@@ -194,10 +202,6 @@ FileTable.prototype.renderName_ = function(entry, columnId, table) {
 FileTable.prototype.renderSize_ = function(entry, columnId, table) {
   var div = this.ownerDocument.createElement('div');
   div.className = 'size';
-  // Unlike other rtl languages, Herbew use MB and writes the unit to the
-  // right of the number. We use css trick to workaround this.
-  if (navigator.language == 'he')
-    div.className = 'align-end-weakrtl';
   this.updateSize_(
       div, entry, this.metadataCache_.getCached(entry, 'filesystem'));
 
@@ -221,7 +225,7 @@ FileTable.prototype.updateSize_ = function(div, entry, filesystemProps) {
              FileType.isHosted(entry)) {
     div.textContent = '--';
   } else {
-    div.textContent = util.bytesToSi(filesystemProps.size);
+    div.textContent = util.bytesToString(filesystemProps.size);
   }
 };
 
@@ -299,8 +303,8 @@ FileTable.prototype.updateDate_ = function(div, filesystemProps) {
 /**
  * Updates the file metadata in the table item.
  *
- * @param {Element} item Table item,
- * @param {Entry} entry File entry,
+ * @param {Element} item Table item.
+ * @param {Entry} entry File entry.
  */
 FileTable.prototype.updateFileMetadata = function(item, entry) {
   var props = this.metadataCache_.getCached(entry, 'filesystem');
@@ -329,11 +333,11 @@ FileTable.prototype.renderOffline_ = function(entry, columnId, table) {
   checkbox.classList.add('pin');
 
   var command = this.ownerDocument.querySelector('command#toggle-pinned');
-  function onPinClick(event) {
+  var onPinClick = function(event) {
     command.canExecuteChange(checkbox);
     command.execute(checkbox);
     event.preventDefault();
-  }
+  };
 
   checkbox.addEventListener('click', onPinClick);
   checkbox.style.display = 'none';
@@ -341,7 +345,7 @@ FileTable.prototype.renderOffline_ = function(entry, columnId, table) {
   div.appendChild(checkbox);
 
   this.updateOffline_(
-      div, this.metadataCache_.getCached(entry, 'gdata'));
+      div, this.metadataCache_.getCached(entry, 'drive'));
   return div;
 };
 
@@ -349,16 +353,16 @@ FileTable.prototype.renderOffline_ = function(entry, columnId, table) {
  * Sets up or updates the date cell.
  *
  * @param {HTMLDivElement} div The table cell.
- * @param {Object} gdata Metadata.
+ * @param {Object} drive Metadata.
  * @private
  */
-FileTable.prototype.updateOffline_ = function(div, gdata) {
-  if (!gdata) return;
-  if (gdata.hosted) return;
+FileTable.prototype.updateOffline_ = function(div, drive) {
+  if (!drive) return;
+  if (drive.hosted) return;
   var checkbox = div.querySelector('.pin');
   if (!checkbox) return;
   checkbox.style.display = '';
-  checkbox.checked = gdata.pinned;
+  checkbox.checked = drive.pinned;
 };
 
 /**
@@ -388,7 +392,7 @@ FileTable.prototype.updateListItemsMetadata = function(type, propsMap) {
     forEachCell('.table-row-cell > .size', function(item, entry, props) {
       this.updateSize_(item, entry, props);
     });
-  } else if (type == 'gdata') {
+  } else if (type == 'drive') {
     forEachCell('.table-row-cell > .offline',
                 function(item, entry, props, listItem) {
       this.updateOffline_(item, props);
@@ -503,11 +507,10 @@ FileTable.prototype.renderNameColumnHeader_ = function(name) {
   this.updateSelectAllCheckboxState_(input);
 
   input.addEventListener('click', function(event) {
-      if (input.checked)
+    if (input.checked)
       this.selectionModel.selectAll();
     else
       this.selectionModel.unselectAll();
-    event.preventDefault();
     event.stopPropagation();
   }.bind(this));
 
@@ -541,25 +544,29 @@ FileTable.prototype.renderIconType_ = function(entry, columnId, table) {
  * @param {HTMLInputElement} input Element to decorate.
  */
 filelist.decorateCheckbox = function(input) {
-  function stopEventPropagation(event) {
+  var stopEventPropagation = function(event) {
     if (!event.shiftKey)
       event.stopPropagation();
-  }
+  };
   input.setAttribute('type', 'checkbox');
   input.setAttribute('tabindex', -1);
   input.classList.add('common');
   input.addEventListener('mousedown', stopEventPropagation);
   input.addEventListener('mouseup', stopEventPropagation);
 
-  var self = this;
-  input.addEventListener('click', function(event) {
-    // Revert default action and swallow the event
-    // if this is a multiple click or Shift is pressed.
-    if (event.detail > 1 || event.shiftKey) {
-      this.checked = !this.checked;
-      stopEventPropagation(event);
-    }
-  });
+  input.addEventListener(
+      'click',
+      /**
+       * @this {HTMLInputElement}
+       */
+      function(event) {
+        // Revert default action and swallow the event
+        // if this is a multiple click or Shift is pressed.
+        if (event.detail > 1 || event.shiftKey) {
+          this.checked = !this.checked;
+          stopEventPropagation(event);
+        }
+      });
 };
 
 /**
@@ -604,8 +611,8 @@ filelist.decorateSelectionCheckbox = function(input, entry, list) {
  */
 filelist.decorateListItem = function(li, entry, metadataCache) {
   li.classList.add(entry.isDirectory ? 'directory' : 'file');
-  if (FileType.isOnGDrive(entry)) {
-    var driveProps = metadataCache.getCached(entry, 'gdata');
+  if (FileType.isOnDrive(entry)) {
+    var driveProps = metadataCache.getCached(entry, 'drive');
     if (driveProps)
       filelist.updateListItemDriveProps(li, driveProps);
   }
@@ -656,9 +663,13 @@ filelist.renderFileNameLabel = function(doc, entry) {
  */
 filelist.updateListItemDriveProps = function(li, driveProps) {
   if (li.classList.contains('file')) {
-    if (!driveProps.availableOffline)
+    if (driveProps.availableOffline)
+      li.classList.remove('dim-offline');
+    else
       li.classList.add('dim-offline');
-    if (!driveProps.availableWhenMetered)
+    if (driveProps.availableWhenMetered)
+      li.classList.remove('dim-metered');
+    else
       li.classList.add('dim-metered');
   }
 

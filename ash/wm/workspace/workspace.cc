@@ -48,6 +48,17 @@ Workspace::~Workspace() {
   DCHECK(!window_);
 }
 
+aura::Window* Workspace::GetTopmostActivatableWindow() {
+  for (aura::Window::Windows::const_reverse_iterator i =
+           window_->children().rbegin();
+       i != window_->children().rend();
+       ++i) {
+    if (wm::CanActivateWindow(*i))
+      return (*i);
+  }
+  return NULL;
+}
+
 aura::Window* Workspace::ReleaseWindow() {
   // Remove the LayoutManager and EventFilter as they refer back to us and/or
   // WorkspaceManager.
@@ -62,19 +73,23 @@ bool Workspace::ShouldMoveToPending() const {
   if (!is_maximized_)
     return false;
 
-  bool has_visible_non_maximized_window = false;
   for (size_t i = 0; i < window_->children().size(); ++i) {
     aura::Window* child(window_->children()[i]);
-    if (!GetTrackedByWorkspace(child) || !child->TargetVisibility() ||
-        wm::IsWindowMinimized(child))
+    if (!child->TargetVisibility() || wm::IsWindowMinimized(child))
       continue;
-    if (WorkspaceManager::IsMaximized(child))
-      return false;
 
-    if (GetTrackedByWorkspace(child) && !GetPersistsAcrossAllWorkspaces(child))
-      has_visible_non_maximized_window = true;
+    if (!GetTrackedByWorkspace(child)) {
+      // If we have a maximized window that isn't tracked don't move to
+      // pending. This handles the case of dragging a maximized window.
+      if (WorkspaceManager::IsMaximized(child))
+        return false;
+      continue;
+    }
+
+    if (!GetPersistsAcrossAllWorkspaces(child))
+      return false;
   }
-  return !has_visible_non_maximized_window;
+  return true;
 }
 
 int Workspace::GetNumMaximizedWindows() const {

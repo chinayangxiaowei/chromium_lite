@@ -6,8 +6,8 @@
 
 #include "base/bind.h"
 #include "base/string16.h"
-#include "chrome/browser/api/infobars/confirm_infobar_delegate.h"
-#include "chrome/browser/api/infobars/infobar_service.h"
+#include "chrome/browser/infobars/confirm_infobar_delegate.h"
+#include "chrome/browser/infobars/infobar_service.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/render_view_host.h"
 #include "content/public/browser/web_contents.h"
@@ -62,7 +62,8 @@ int NaClInfoBarDelegate::GetButtons() const { return BUTTON_NONE; }
 
 // static
 void NaClInfoBarDelegate::Create(InfoBarService* ibs, WebContents *wc) {
-  ibs->AddInfoBar(new NaClInfoBarDelegate(wc, ibs));
+  ibs->AddInfoBar(scoped_ptr<InfoBarDelegate>(
+      new NaClInfoBarDelegate(wc, ibs)));
 }
 
 void ShowInfobar(int render_process_id, int render_view_id,

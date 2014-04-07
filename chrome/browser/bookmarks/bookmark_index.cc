@@ -12,11 +12,10 @@
 #include "base/string16.h"
 #include "chrome/browser/bookmarks/bookmark_model.h"
 #include "chrome/browser/bookmarks/bookmark_utils.h"
-#include "chrome/browser/history/history_database.h"
+#include "chrome/browser/history/history_service.h"
 #include "chrome/browser/history/history_service_factory.h"
 #include "chrome/browser/history/query_parser.h"
-#include "chrome/browser/profiles/profile.h"
-#include "ui/base/l10n/l10n_util.h"
+#include "chrome/browser/history/url_database.h"
 
 // Used when finding the set of bookmarks that match a query. Each match
 // represents a set of terms (as an interator into the Index) matching the

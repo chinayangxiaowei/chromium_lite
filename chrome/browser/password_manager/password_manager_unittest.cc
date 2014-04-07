@@ -15,7 +15,7 @@
 #include "chrome/common/pref_names.h"
 #include "chrome/common/url_constants.h"
 #include "chrome/test/base/chrome_render_view_host_test_harness.h"
-#include "chrome/test/base/testing_pref_service.h"
+#include "chrome/test/base/testing_pref_service_syncable.h"
 #include "chrome/test/base/testing_profile.h"
 #include "content/public/browser/navigation_details.h"
 #include "content/public/common/frame_navigate_params.h"
@@ -348,7 +348,8 @@ TEST_F(PasswordManagerTest, InitiallyInvisibleForm) {
 TEST_F(PasswordManagerTest, SavingDependsOnManagerEnabledPreference) {
   // Test that saving passwords depends on the password manager enabled
   // preference.
-  TestingPrefService* prefService = testing_profile_->GetTestingPrefService();
+  TestingPrefServiceSyncable* prefService =
+      testing_profile_->GetTestingPrefService();
   prefService->SetUserPref(prefs::kPasswordManagerEnabled,
                            Value::CreateBooleanValue(true));
   EXPECT_TRUE(manager()->IsSavingEnabled());
@@ -363,7 +364,8 @@ TEST_F(PasswordManagerTest, FillPasswordsOnDisabledManager) {
   std::vector<PasswordForm*> result;
   PasswordForm* existing = new PasswordForm(MakeSimpleForm());
   result.push_back(existing);
-  TestingPrefService* prefService = testing_profile_->GetTestingPrefService();
+  TestingPrefServiceSyncable* prefService =
+      testing_profile_->GetTestingPrefService();
   prefService->SetUserPref(prefs::kPasswordManagerEnabled,
                            Value::CreateBooleanValue(false));
   EXPECT_CALL(delegate_, FillPasswordForm(_));

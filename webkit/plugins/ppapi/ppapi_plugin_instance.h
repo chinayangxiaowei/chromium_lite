@@ -15,11 +15,11 @@
 #include "base/memory/scoped_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/string16.h"
-#include "cc/texture_layer_client.h"
+#include "cc/layers/texture_layer_client.h"
 #include "googleurl/src/gurl.h"
 #include "ppapi/c/dev/pp_cursor_type_dev.h"
-#include "ppapi/c/dev/ppp_printing_dev.h"
 #include "ppapi/c/dev/ppp_find_dev.h"
+#include "ppapi/c/dev/ppp_printing_dev.h"
 #include "ppapi/c/dev/ppp_selection_dev.h"
 #include "ppapi/c/dev/ppp_text_input_dev.h"
 #include "ppapi/c/dev/ppp_zoom_dev.h"
@@ -29,8 +29,8 @@
 #include "ppapi/c/pp_time.h"
 #include "ppapi/c/pp_var.h"
 #include "ppapi/c/ppb_audio_config.h"
-#include "ppapi/c/ppb_input_event.h"
 #include "ppapi/c/ppb_gamepad.h"
+#include "ppapi/c/ppb_input_event.h"
 #include "ppapi/c/ppp_graphics_3d.h"
 #include "ppapi/c/ppp_input_event.h"
 #include "ppapi/c/ppp_messaging.h"
@@ -44,14 +44,14 @@
 #include "ppapi/shared_impl/tracked_callback.h"
 #include "ppapi/thunk/ppb_gamepad_api.h"
 #include "ppapi/thunk/resource_creation_api.h"
-#include "third_party/skia/include/core/SkRefCnt.h"
-#include "third_party/WebKit/Source/WebKit/chromium/public/platform/WebCanvas.h"
-#include "third_party/WebKit/Source/WebKit/chromium/public/platform/WebString.h"
+#include "third_party/WebKit/Source/Platform/chromium/public/WebCanvas.h"
+#include "third_party/WebKit/Source/Platform/chromium/public/WebString.h"
 #include "third_party/WebKit/Source/WebKit/chromium/public/WebPlugin.h"
+#include "third_party/WebKit/Source/WebKit/chromium/public/WebUserGestureToken.h"
+#include "third_party/skia/include/core/SkRefCnt.h"
 #include "ui/base/ime/text_input_type.h"
 #include "ui/gfx/rect.h"
 #include "webkit/plugins/ppapi/plugin_delegate.h"
-#include "webkit/plugins/ppapi/ppb_flash_impl.h"
 #include "webkit/plugins/ppapi/ppp_pdf.h"
 #include "webkit/plugins/webkit_plugins_export.h"
 
@@ -248,7 +248,10 @@ class WEBKIT_PLUGINS_EXPORT PluginInstance :
   bool CanRotateView();
   void RotateView(WebKit::WebPlugin::RotationType type);
 
-  void Graphics3DContextLost();
+  // Sets the bound_graphics_2d_platform_ for testing purposes. This is instead
+  // of calling BindGraphics and allows any PlatformGraphics implementation to
+  // be used, not just a resource one.
+  void SetBoundGraphics2DForTest(PluginDelegate::PlatformGraphics2D* graphics);
 
   // There are 2 implementations of the fullscreen interface
   // PPB_FlashFullscreen is used by Pepper Flash.
@@ -328,6 +331,10 @@ class WEBKIT_PLUGINS_EXPORT PluginInstance :
   // Returns true if the plugin is processing a user gesture.
   bool IsProcessingUserGesture();
 
+  // Returns the user gesture token to use for creating a WebScopedUserGesture,
+  // if IsProcessingUserGesture returned true.
+  WebKit::WebUserGestureToken CurrentUserGestureToken();
+
   // A mouse lock request was pending and this reports success or failure.
   void OnLockMouseACK(bool succeeded);
   // A mouse lock was in place, but has been lost.
@@ -363,7 +370,6 @@ class WEBKIT_PLUGINS_EXPORT PluginInstance :
   virtual uint32_t GetAudioHardwareOutputBufferSize(PP_Instance instance)
       OVERRIDE;
   virtual PP_Var GetDefaultCharSet(PP_Instance instance) OVERRIDE;
-  virtual PP_Var GetFontFamilies(PP_Instance instance) OVERRIDE;
   virtual void NumberOfFindResultsChanged(PP_Instance instance,
                                           int32_t total,
                                           PP_Bool final_result) OVERRIDE;
@@ -373,7 +379,6 @@ class WEBKIT_PLUGINS_EXPORT PluginInstance :
                                 PP_Bool fullscreen) OVERRIDE;
   virtual PP_Bool GetScreenSize(PP_Instance instance, PP_Size* size)
       OVERRIDE;
-  virtual ::ppapi::thunk::PPB_Flash_API* GetFlashAPI() OVERRIDE;
   virtual ::ppapi::Resource* GetSingletonResource(PP_Instance instance,
       ::ppapi::SingletonResourceID id) OVERRIDE;
   virtual int32_t RequestInputEvents(PP_Instance instance,
@@ -382,8 +387,6 @@ class WEBKIT_PLUGINS_EXPORT PluginInstance :
                                               uint32_t event_classes) OVERRIDE;
   virtual void ClearInputEventRequest(PP_Instance instance,
                                       uint32_t event_classes) OVERRIDE;
-  virtual void ClosePendingUserGesture(PP_Instance instance,
-                                       PP_TimeTicks timestamp);
   virtual void ZoomChanged(PP_Instance instance, double factor) OVERRIDE;
   virtual void ZoomLimitsChanged(PP_Instance instance,
                                  double minimum_factor,
@@ -460,14 +463,22 @@ class WEBKIT_PLUGINS_EXPORT PluginInstance :
                               const PP_DecryptedBlockInfo* block_info) OVERRIDE;
 
   // TextureLayerClient implementation.
-  virtual unsigned prepareTexture(cc::ResourceUpdateQueue&) OVERRIDE;
-  virtual WebKit::WebGraphicsContext3D* context() OVERRIDE;
+  virtual unsigned PrepareTexture(cc::ResourceUpdateQueue* queue) OVERRIDE;
+  virtual WebKit::WebGraphicsContext3D* Context3d() OVERRIDE;
 
-  // Reset this instance as proxied. Resets cached interfaces to point to the
-  // proxy and re-sends DidCreate, DidChangeView, and HandleDocumentLoad (if
-  // necessary).
-  // This is for use with the NaCl proxy.
+  // Reset this instance as proxied. Assigns the instance a new module, resets
+  // cached interfaces to point to the out-of-process proxy and re-sends
+  // DidCreate, DidChangeView, and HandleDocumentLoad (if necessary).
+  // This should be used only when switching a trusted NaCl in-process instance
+  // to an untrusted NaCl out-of-process instance.
   PP_NaClResult ResetAsProxied(scoped_refptr<PluginModule> module);
+
+  // Checks whether this is a valid instance of the given module. After calling
+  // ResetAsProxied above, a NaCl plugin instance's module changes, so external
+  // hosts won't recognize it as a valid instance of the original module. This
+  // method fixes that be checking that either module_ or original_module_ match
+  // the given module.
+  bool IsValidInstanceOf(PluginModule* module);
 
  private:
   friend class PpapiUnittest;
@@ -480,7 +491,8 @@ class WEBKIT_PLUGINS_EXPORT PluginInstance :
     explicit GamepadImpl(PluginDelegate* delegate);
     // Resource implementation.
     virtual ::ppapi::thunk::PPB_Gamepad_API* AsPPB_Gamepad_API() OVERRIDE;
-    virtual void Sample(PP_GamepadsSampleData* data) OVERRIDE;
+    virtual void Sample(PP_Instance instance,
+                        PP_GamepadsSampleData* data) OVERRIDE;
    private:
     PluginDelegate* delegate_;
   };
@@ -593,6 +605,7 @@ class WEBKIT_PLUGINS_EXPORT PluginInstance :
   WebKit::WebPluginContainer* container_;
   scoped_refptr<cc::TextureLayer> texture_layer_;
   scoped_ptr<WebKit::WebLayer> web_layer_;
+  bool layer_bound_to_fullscreen_;
 
   // Plugin URL.
   GURL plugin_url_;
@@ -664,7 +677,6 @@ class WEBKIT_PLUGINS_EXPORT PluginInstance :
   // variable to hold on to the pixels.
   scoped_refptr<PPB_ImageData_Impl> last_printed_page_;
 #endif  // defined(OS_MACOSX)
-#if defined(USE_SKIA)
   // Always when printing to PDF on Linux and when printing for preview on Mac
   // and Win, the entire document goes into one metafile.  However, when users
   // print only a subset of all the pages, it is impossible to know if a call
@@ -677,7 +689,6 @@ class WEBKIT_PLUGINS_EXPORT PluginInstance :
   SkRefPtr<WebKit::WebCanvas> canvas_;
   // An array of page ranges.
   std::vector<PP_PrintPageNumberRange_Dev> ranges_;
-#endif  // OS_LINUX || OS_WIN
 
   scoped_refptr< ::ppapi::Resource> gamepad_impl_;
 
@@ -758,9 +769,7 @@ class WEBKIT_PLUGINS_EXPORT PluginInstance :
   // Track pending user gestures so out-of-process plugins can respond to
   // a user gesture after it has been processed.
   PP_TimeTicks pending_user_gesture_;
-
-  // The Flash proxy is associated with the instance.
-  PPB_Flash_Impl flash_impl_;
+  WebKit::WebUserGestureToken pending_user_gesture_token_;
 
   // We store the arguments so we can re-send them if we are reset to talk to
   // NaCl via the IPC NaCl proxy.
@@ -775,6 +784,7 @@ class WEBKIT_PLUGINS_EXPORT PluginInstance :
   // calls and handles PPB_ContentDecryptor_Private calls.
   scoped_ptr<ContentDecryptorDelegate> content_decryptor_delegate_;
 
+  friend class PpapiPluginInstanceTest;
   DISALLOW_COPY_AND_ASSIGN(PluginInstance);
 };
 

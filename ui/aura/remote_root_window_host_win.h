@@ -7,9 +7,16 @@
 
 #include <vector>
 
+#include "base/callback.h"
 #include "base/compiler_specific.h"
+#include "base/string16.h"
 #include "ui/aura/root_window_host.h"
 #include "ui/base/events/event_constants.h"
+#include "ui/gfx/native_widget_types.h"
+
+namespace base {
+class FilePath;
+}
 
 namespace ui {
 class ViewProp;
@@ -21,6 +28,44 @@ class Sender;
 }
 
 namespace aura {
+
+typedef base::Callback<void(const base::FilePath&, int, void*)>
+    OpenFileCompletion;
+
+typedef base::Callback<void(const std::vector<base::FilePath>&, void*)>
+    OpenMultipleFilesCompletion;
+
+typedef base::Callback<void(const base::FilePath&, int, void*)>
+    SaveFileCompletion;
+
+// Handles the open file operation for Metro Chrome Ash. The callback passed in
+// is invoked when we receive the opened file name from the metro viewer.
+AURA_EXPORT void HandleOpenFile(
+    const string16& title,
+    const base::FilePath& default_path,
+    const string16& filter,
+    const OpenFileCompletion& callback);
+
+// Handles the open multiple file operation for Metro Chrome Ash. The callback
+// passed in is invoked when we receive the opened file names from the metro
+// viewer.
+AURA_EXPORT void HandleOpenMultipleFiles(
+    const string16& title,
+    const base::FilePath& default_path,
+    const string16& filter,
+    const OpenMultipleFilesCompletion& callback);
+
+// Handles the save file operation for Metro Chrome Ash. The callback passed in
+// is invoked when we receive the saved file name from the metro viewer.
+AURA_EXPORT void HandleSaveFile(
+    const string16& title,
+    const base::FilePath& default_path,
+    const string16& filter,
+    int filter_index,
+    const string16& default_extension,
+    const SaveFileCompletion& callback);
+
+
 // RootWindowHost implementaton that receives events from a different
 // process. In the case of Windows this is the Windows 8 (aka Metro)
 // frontend process, which forwards input events to this class.
@@ -37,6 +82,26 @@ class AURA_EXPORT RemoteRootWindowHostWin : public RootWindowHost {
 
   // Called when we have a message from the remote process.
   bool OnMessageReceived(const IPC::Message& message);
+
+  void HandleOpenFile(
+      const string16& title,
+      const base::FilePath& default_path,
+      const string16& filter,
+      const OpenFileCompletion& callback);
+
+  void HandleOpenMultipleFiles(
+      const string16& title,
+      const base::FilePath& default_path,
+      const string16& filter,
+      const OpenMultipleFilesCompletion& callback);
+
+  void HandleSaveFile(
+      const string16& title,
+      const base::FilePath& default_path,
+      const string16& filter,
+      int filter_index,
+      const string16& default_extension,
+      const SaveFileCompletion& callback);
 
  private:
   explicit RemoteRootWindowHostWin(const gfx::Rect& bounds);
@@ -65,6 +130,12 @@ class AURA_EXPORT RemoteRootWindowHostWin : public RootWindowHost {
   void OnTouchDown(int32 x, int32 y, uint64 timestamp);
   void OnTouchUp(int32 x, int32 y, uint64 timestamp);
   void OnTouchMoved(int32 x, int32 y, uint64 timestamp);
+  void OnFileSaveAsDone(bool success,
+                        string16 filename,
+                        int filter_index);
+  void OnFileOpenDone(bool success, string16 filename);
+  void OnMultiFileOpenDone(bool success,
+                           const std::vector<base::FilePath>& files);
 
   // RootWindowHost overrides:
   virtual void SetDelegate(RootWindowHostDelegate* delegate) OVERRIDE;
@@ -75,6 +146,8 @@ class AURA_EXPORT RemoteRootWindowHostWin : public RootWindowHost {
   virtual void ToggleFullScreen() OVERRIDE;
   virtual gfx::Rect GetBounds() const OVERRIDE;
   virtual void SetBounds(const gfx::Rect& bounds) OVERRIDE;
+  virtual gfx::Insets GetInsets() const OVERRIDE;
+  virtual void SetInsets(const gfx::Insets& insets) OVERRIDE;
   virtual gfx::Point GetLocationOnNativeScreen() const OVERRIDE;
   virtual void SetCapture() OVERRIDE;
   virtual void ReleaseCapture() OVERRIDE;
@@ -95,9 +168,27 @@ class AURA_EXPORT RemoteRootWindowHostWin : public RootWindowHost {
   virtual void OnDeviceScaleFactorChanged(float device_scale_factor) OVERRIDE;
   virtual void PrepareForShutdown() OVERRIDE;
 
+  // Helper function to dispatch a keyboard message to the desired target.
+  // The default target is the RootWindowHostDelegate. For nested message loop
+  // invocations we post a synthetic keyboard message directly into the message
+  // loop. The dispatcher for the nested loop would then decide how this
+  // message is routed.
+  void DispatchKeyboardMessage(ui::EventType type,
+                               uint32 vkey,
+                               uint32 repeat_count,
+                               uint32 scan_code,
+                               uint32 flags,
+                               bool is_character);
+
   RootWindowHostDelegate* delegate_;
   IPC::Sender* host_;
   scoped_ptr<ui::ViewProp> prop_;
+
+  // Saved callbacks which inform the caller about the result of the open file/
+  // save file operations.
+  OpenFileCompletion file_open_completion_callback_;
+  OpenMultipleFilesCompletion multi_file_open_completion_callback_;
+  SaveFileCompletion file_saveas_completion_callback_;
 
   DISALLOW_COPY_AND_ASSIGN(RemoteRootWindowHostWin);
 };

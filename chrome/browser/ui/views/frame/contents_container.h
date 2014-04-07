@@ -10,6 +10,9 @@
 #include "base/basictypes.h"
 #include "base/compiler_specific.h"
 #include "chrome/common/instant_types.h"
+#include "content/public/browser/notification_observer.h"
+#include "content/public/browser/notification_registrar.h"
+#include "ui/views/controls/webview/webview.h"
 #include "ui/views/view.h"
 
 namespace content {
@@ -20,14 +23,11 @@ namespace gfx {
 class Rect;
 }
 
-namespace views {
-class WebView;
-}
-
 // ContentsContainer is responsible for managing the WebContents views.
 // ContentsContainer has up to two children: one for the currently active
 // WebContents and one for Instant's WebContents.
-class ContentsContainer : public views::View {
+class ContentsContainer : public views::View,
+                          public content::NotificationObserver {
  public:
   // Internal class name
   static const char kViewClassName[];
@@ -35,60 +35,66 @@ class ContentsContainer : public views::View {
   explicit ContentsContainer(views::WebView* active);
   virtual ~ContentsContainer();
 
-  // Makes the preview view the active view and nulls out the old active view.
+  // Makes the overlay view the active view and nulls out the old active view.
   // The caller must delete or remove the old active view separately.
-  void MakePreviewContentsActiveContents();
+  void MakeOverlayContentsActiveContents();
 
-  // Sets the preview view. This does not delete the old.
-  void SetPreview(views::WebView* preview,
-                  content::WebContents* preview_web_contents,
+  // Sets the overlay view. This does not delete the old.
+  void SetOverlay(views::WebView* overlay,
+                  content::WebContents* overlay_web_contents,
                   int height,
-                  InstantSizeUnits units);
+                  InstantSizeUnits units,
+                  bool draw_drop_shadow);
 
-  // When the active content is reset and we have a visible preview,
-  // the preview must be stacked back at top.
-  void MaybeStackPreviewAtTop();
+  // When the active content is reset and we have a visible overlay,
+  // the overlay must be stacked back at top.
+  void MaybeStackOverlayAtTop();
 
-  content::WebContents* preview_web_contents() const {
-    return preview_web_contents_;
+  content::WebContents* overlay_web_contents() const {
+    return overlay_web_contents_;
   }
 
-  // Sets the active top margin.
+  int overlay_height() const {
+    return overlay_ ? overlay_->bounds().height() : 0;
+  }
+
+  // Sets the active top margin; the active WebView's y origin would be
+  // positioned at this |margin|, causing the active WebView to be pushed down
+  // vertically by |margin| pixels in the |ContentsContainer|.
   void SetActiveTopMargin(int margin);
 
-  // Returns the bounds the preview would be shown at.
-  gfx::Rect GetPreviewBounds() const;
+  // Returns the bounds the overlay would be shown at.
+  gfx::Rect GetOverlayBounds() const;
 
-  // Set/Get an extra content height, so that room is left at the bottom of the
-  // contents view for other views to draw on top of the extended child web
-  // view. Note that this doesn't cause a layout invalidation, it's up to the
-  // caller to make sure that a Layout() will be done so that the
-  // |extra_content_height_| gets taken into account.
-  int extra_content_height() const { return extra_content_height_; }
-  void SetExtraContentHeight(int height);
+  // Returns true if overlay occupies full height of content page.
+  bool IsOverlayFullHeight(int overlay_height,
+                           InstantSizeUnits overlay_height_units) const;
 
  private:
   // Overridden from views::View:
   virtual void Layout() OVERRIDE;
   virtual std::string GetClassName() const OVERRIDE;
 
-  // Returns |preview_height_| in pixels.
-  int PreviewHeightInPixels() const;
+  // content::NotificationObserver implementation.
+  virtual void Observe(int type,
+                       const content::NotificationSource& source,
+                       const content::NotificationDetails& details) OVERRIDE;
 
   views::WebView* active_;
-  views::WebView* preview_;
-  content::WebContents* preview_web_contents_;
+  views::WebView* overlay_;
+  scoped_ptr<views::View> shadow_view_;
+  content::WebContents* overlay_web_contents_;
+  bool draw_drop_shadow_;
 
   // The margin between the top and the active view. This is used to make the
-  // preview overlap the bookmark bar on the new tab page.
+  // overlay overlap the bookmark bar on the new tab page.
   int active_top_margin_;
 
-  // The desired height of the preview and units.
-  int preview_height_;
-  InstantSizeUnits preview_height_units_;
+  // The desired height of the overlay and units.
+  int overlay_height_;
+  InstantSizeUnits overlay_height_units_;
 
-  // Used to extend the child WebView beyond the contents view bottom bound.
-  int extra_content_height_;
+  content::NotificationRegistrar registrar_;
 
   DISALLOW_COPY_AND_ASSIGN(ContentsContainer);
 };

@@ -189,6 +189,10 @@ class BASE_EXPORT FieldTrial : public RefCounted<FieldTrial> {
   FRIEND_TEST_ALL_PREFIXES(FieldTrialTest, HashClientIdIsUniform);
   FRIEND_TEST_ALL_PREFIXES(FieldTrialTest, NameGroupIds);
   FRIEND_TEST_ALL_PREFIXES(FieldTrialTest, UseOneTimeRandomization);
+  FRIEND_TEST_ALL_PREFIXES(FieldTrialTest, SetForcedTurnFeatureOff);
+  FRIEND_TEST_ALL_PREFIXES(FieldTrialTest, SetForcedTurnFeatureOn);
+  FRIEND_TEST_ALL_PREFIXES(FieldTrialTest, SetForcedChangeDefault_Default);
+  FRIEND_TEST_ALL_PREFIXES(FieldTrialTest, SetForcedChangeDefault_NonDefault);
 
   friend class base::FieldTrialList;
 
@@ -283,8 +287,9 @@ class BASE_EXPORT FieldTrialList {
   // second process to mimic our state (i.e., provide the same group name).
   static const char kPersistentStringSeparator;  // Currently a slash.
 
-  // Define expiration year in future. It is initialized to two years from Now.
-  static int kExpirationYearInFuture;
+  // Year that is guaranteed to not be expired when instantiating a field trial
+  // via |FactoryGetFieldTrial()|.  Set to two years from the build date.
+  static int kNoExpirationYear;
 
   // Observer is notified when a FieldTrial's group is selected.
   class BASE_EXPORT Observer {

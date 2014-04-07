@@ -21,6 +21,7 @@ namespace {
 // Add paths here to be included in chrome://chrome-urls (about:about).
 // These paths will also be suggested by BuiltinProvider.
 const char* const kPaths[] = {
+  chrome::kChromeUIAccessibilityHost,
   chrome::kChromeUIAppCacheInternalsHost,
   chrome::kChromeUIBlobInternalsHost,
   chrome::kChromeUICacheHost,
@@ -29,11 +30,14 @@ const char* const kPaths[] = {
   chrome::kChromeUICreditsHost,
   chrome::kChromeUIDNSHost,
   chrome::kChromeUIFlagsHost,
-  chrome::kChromeUIGpuInternalsHost,
+  chrome::kChromeUIGpuHost,
   chrome::kChromeUIHistoryHost,
   chrome::kChromeUIIPCHost,
   chrome::kChromeUIMediaInternalsHost,
   chrome::kChromeUIMemoryHost,
+#if defined(OS_ANDROID) || defined(OS_IOS)
+  chrome::kChromeUINetExportHost,
+#endif
   chrome::kChromeUINetInternalsHost,
   chrome::kChromeUINetworkViewCacheHost,
   chrome::kChromeUINewTabHost,
@@ -57,6 +61,7 @@ const char* const kPaths[] = {
   chrome::kChromeUIPluginsHost,
   chrome::kChromeUISettingsHost,
   chrome::kChromeUITracingHost,
+  chrome::kChromeUIWebRTCInternalsHost,
 #endif
 #if defined(OS_WIN)
   chrome::kChromeUIConflictsHost,
@@ -119,9 +124,6 @@ bool WillHandleBrowserAboutURL(GURL* url,
   // Replace cache with view-http-cache.
   if (host == chrome::kChromeUICacheHost) {
     host = chrome::kChromeUINetworkViewCacheHost;
-  // Replace gpu with gpu-internals.
-  } else if (host == chrome::kChromeUIGpuHost) {
-    host = chrome::kChromeUIGpuInternalsHost;
   // Replace sync with sync-internals (for legacy reasons).
   } else if (host == chrome::kChromeUISyncHost) {
     host = chrome::kChromeUISyncInternalsHost;

@@ -8,6 +8,7 @@
 #include <list>
 
 #include "base/callback.h"
+#include "base/memory/weak_ptr.h"
 #include "media/base/audio_decoder.h"
 #include "media/base/demuxer_stream.h"
 
@@ -20,6 +21,7 @@ class MessageLoopProxy;
 
 namespace media {
 
+class AudioBus;
 class AudioTimestampHelper;
 class DataBuffer;
 class DecoderBuffer;
@@ -29,6 +31,7 @@ class MEDIA_EXPORT FFmpegAudioDecoder : public AudioDecoder {
  public:
   explicit FFmpegAudioDecoder(
       const scoped_refptr<base::MessageLoopProxy>& message_loop);
+  virtual ~FFmpegAudioDecoder();
 
   // AudioDecoder implementation.
   virtual void Initialize(const scoped_refptr<DemuxerStream>& stream,
@@ -40,21 +43,11 @@ class MEDIA_EXPORT FFmpegAudioDecoder : public AudioDecoder {
   virtual int samples_per_second() OVERRIDE;
   virtual void Reset(const base::Closure& closure) OVERRIDE;
 
- protected:
-  virtual ~FFmpegAudioDecoder();
-
  private:
-  // Methods running on decoder thread.
-  void DoInitialize(const scoped_refptr<DemuxerStream>& stream,
-                    const PipelineStatusCB& status_cb,
-                    const StatisticsCB& statistics_cb);
-  void DoReset(const base::Closure& closure);
-  void DoRead(const ReadCB& read_cb);
-  void DoDecodeBuffer(DemuxerStream::Status status,
-                      const scoped_refptr<DecoderBuffer>& input);
-
   // Reads from the demuxer stream with corresponding callback method.
   void ReadFromDemuxerStream();
+  void BufferReady(DemuxerStream::Status status,
+                   const scoped_refptr<DecoderBuffer>& input);
 
   bool ConfigureDecoder();
   void ReleaseFFmpegResources();
@@ -63,6 +56,8 @@ class MEDIA_EXPORT FFmpegAudioDecoder : public AudioDecoder {
                      bool skip_eos_append);
 
   scoped_refptr<base::MessageLoopProxy> message_loop_;
+  base::WeakPtrFactory<FFmpegAudioDecoder> weak_factory_;
+  base::WeakPtr<FFmpegAudioDecoder> weak_this_;
 
   scoped_refptr<DemuxerStream> demuxer_stream_;
   StatisticsCB statistics_cb_;
@@ -71,7 +66,11 @@ class MEDIA_EXPORT FFmpegAudioDecoder : public AudioDecoder {
   // Decoded audio format.
   int bits_per_channel_;
   ChannelLayout channel_layout_;
+  int channels_;
   int samples_per_second_;
+
+  // AVSampleFormat initially requested; not Chrome's SampleFormat.
+  int av_sample_format_;
 
   // Used for computing output timestamps.
   scoped_ptr<AudioTimestampHelper> output_timestamp_helper_;
@@ -90,6 +89,10 @@ class MEDIA_EXPORT FFmpegAudioDecoder : public AudioDecoder {
   // Since multiple frames may be decoded from the same packet we need to queue
   // them up and hand them out as we receive Read() calls.
   std::list<QueuedAudioBuffer> queued_audio_;
+
+  // We may need to convert the audio data coming out of FFmpeg from planar
+  // float to integer.
+  scoped_ptr<AudioBus> converter_bus_;
 
   DISALLOW_IMPLICIT_CONSTRUCTORS(FFmpegAudioDecoder);
 };

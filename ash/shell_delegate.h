@@ -5,7 +5,7 @@
 #ifndef ASH_SHELL_DELEGATE_H_
 #define ASH_SHELL_DELEGATE_H_
 
-#include <vector>
+#include <string>
 
 #include "ash/ash_export.h"
 #include "ash/magnifier/magnifier_constants.h"
@@ -22,7 +22,6 @@ namespace aura {
 class RootWindow;
 class Window;
 namespace client {
-class StackingClient;
 class UserActionClient;
 }
 }
@@ -48,6 +47,9 @@ class UserWallpaperDelegate;
 enum UserMetricsAction {
   UMA_ACCEL_KEYBOARD_BRIGHTNESS_DOWN_F6,
   UMA_ACCEL_KEYBOARD_BRIGHTNESS_UP_F7,
+  UMA_ACCEL_LOCK_SCREEN_L,
+  UMA_ACCEL_LOCK_SCREEN_LOCK_BUTTON,
+  UMA_ACCEL_LOCK_SCREEN_POWER_BUTTON,
   UMA_ACCEL_MAXIMIZE_RESTORE_F4,
   UMA_ACCEL_NEWTAB_T,
   UMA_ACCEL_NEXTWINDOW_F5,
@@ -55,10 +57,22 @@ enum UserMetricsAction {
   UMA_ACCEL_PREVWINDOW_F5,
   UMA_ACCEL_PREVWINDOW_TAB,
   UMA_ACCEL_SEARCH_LWIN,
+  UMA_ACCEL_SHUT_DOWN_POWER_BUTTON,
+  UMA_MAXIMIZE_BUTTON_MAXIMIZE,
+  UMA_MAXIMIZE_BUTTON_MAXIMIZE_LEFT,
+  UMA_MAXIMIZE_BUTTON_MAXIMIZE_RIGHT,
+  UMA_MAXIMIZE_BUTTON_MINIMIZE,
+  UMA_MAXIMIZE_BUTTON_RESTORE,
+  UMA_MAXIMIZE_BUTTON_SHOW_BUBBLE,
   UMA_LAUNCHER_CLICK_ON_APP,
   UMA_LAUNCHER_CLICK_ON_APPLIST_BUTTON,
   UMA_MOUSE_DOWN,
+  UMA_TOGGLE_MAXIMIZE_CAPTION_CLICK,
+  UMA_TOGGLE_MAXIMIZE_CAPTION_GESTURE,
   UMA_TOUCHSCREEN_TAP_DOWN,
+  UMA_TRAY_HELP,
+  UMA_TRAY_LOCK_SCREEN,
+  UMA_TRAY_SHUT_DOWN,
 };
 
 enum AccessibilityNotificationVisibility {
@@ -78,10 +92,16 @@ class ASH_EXPORT ShellDelegate {
   // Returns true if we're logged in and browser has been started
   virtual bool IsSessionStarted() const = 0;
 
+  // Returns true if we're logged in as guest.
+  virtual bool IsGuestSession() const = 0;
+
   // Returns true if this is the first time that the shell has been run after
   // the system has booted.  false is returned after the shell has been
   // restarted, typically due to logging in as a guest or logging out.
   virtual bool IsFirstRunAfterBoot() const = 0;
+
+  // Returns true if we're running in forced app mode.
+  virtual bool IsRunningInForcedAppMode() const = 0;
 
   // Returns true if a user is logged in whose session can be locked (i.e. the
   // user has a password with which to unlock the session).
@@ -95,6 +115,10 @@ class ASH_EXPORT ShellDelegate {
 
   // Returns true if the screen is currently locked.
   virtual bool IsScreenLocked() const = 0;
+
+  // Called before processing |Shell::Init()| so that the delegate
+  // can perform tasks necessary before the shell is initialized.
+  virtual void PreInit() = 0;
 
   // Shuts down the environment.
   virtual void Shutdown() = 0;
@@ -111,8 +135,8 @@ class ASH_EXPORT ShellDelegate {
   // Invoked when the user uses F4 to toggle window maximized state.
   virtual void ToggleMaximized() = 0;
 
-  // Invoked when the user uses Ctrl-O to open file manager.
-  virtual void OpenFileManager() = 0;
+  // Invoked when an accelerator is used to open the file manager.
+  virtual void OpenFileManager(bool as_dialog) = 0;
 
   // Invoked when the user opens Crosh.
   virtual void OpenCrosh() = 0;
@@ -149,8 +173,14 @@ class ASH_EXPORT ShellDelegate {
   // Returns true if high contrast mode is enabled.
   virtual bool IsHighContrastEnabled() const = 0;
 
-  // Invoked to change the mode of the screen magnifier.
-  virtual void SetMagnifier(MagnifierType type) = 0;
+  // Invoked to enable the screen magnifier.
+  virtual void SetMagnifierEnabled(bool enabled) = 0;
+
+  // Invoked to change the type of the screen magnifier.
+  virtual void SetMagnifierType(MagnifierType type) = 0;
+
+  // Returns if the screen magnifier is enabled or not.
+  virtual bool IsMagnifierEnabled() const = 0;
 
   // Returns the current screen magnifier mode.
   virtual MagnifierType GetMagnifierType() const = 0;
@@ -212,9 +242,6 @@ class ASH_EXPORT ShellDelegate {
 
   // Creates a menu model of the context for the |root_window|.
   virtual ui::MenuModel* CreateContextMenu(aura::RootWindow* root_window) = 0;
-
-  // Creates the stacking client. Shell takes ownership of the object.
-  virtual aura::client::StackingClient* CreateStackingClient() = 0;
 
   // Creates a root window host factory. Shell takes ownership of the returned
   // value.

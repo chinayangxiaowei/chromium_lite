@@ -8,12 +8,13 @@
 #include "base/basictypes.h"
 #include "base/memory/scoped_ptr.h"
 #include "base/observer_list.h"
-#include "base/prefs/public/pref_change_registrar.h"
+#include "base/prefs/pref_change_registrar.h"
 #include "base/threading/thread.h"
 
 template <typename T> struct DefaultSingletonTraits;
 
 class PrefChangeRegistrar;
+class PrefRegistrySimple;
 class PrefService;
 
 namespace chromeos {
@@ -43,7 +44,7 @@ class AudioHandler {
   static AudioHandler* GetInstance();
 
   // Registers volume and mute preferences.
-  static void RegisterPrefs(PrefService* local_state);
+  static void RegisterPrefs(PrefRegistrySimple* registry);
 
   // Gets volume level in our internal 0-100% range, 0 being pure silence.
   double GetVolumePercent();
@@ -88,8 +89,10 @@ class AudioHandler {
   // change notification is received.
   void ApplyAudioPolicy();
 
-  // Sets volume to specified value and notifies observers.
-  void SetVolumePercentInternal(double volume_percent);
+  // Sets volume/muted to specified value and notifies observers if |notify|
+  // is true.
+  void SetVolumePercentInternal(double volume_percent, bool notify);
+  void SetMutedInternal(bool do_mute, bool notify);
 
   scoped_ptr<AudioMixer> mixer_;
 
@@ -98,6 +101,9 @@ class AudioHandler {
   PrefService* local_state_;  // not owned
 
   PrefChangeRegistrar pref_change_registrar_;
+
+  // Track state for triggering callbacks in ApplyAudioPolicy().
+  bool muted_;
 
   DISALLOW_COPY_AND_ASSIGN(AudioHandler);
 };

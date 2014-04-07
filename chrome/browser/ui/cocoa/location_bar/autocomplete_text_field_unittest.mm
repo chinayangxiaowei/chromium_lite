@@ -30,7 +30,9 @@ namespace {
 
 class MockDecoration : public LocationBarDecoration {
  public:
-  virtual CGFloat GetWidthForSpace(CGFloat width) { return 20.0; }
+  virtual CGFloat GetWidthForSpace(CGFloat width, CGFloat text_width) {
+    return 20.0;
+  }
 
   virtual void DrawInFrame(NSRect frame, NSView* control_view) { ; }
   MOCK_METHOD0(AcceptsMousePress, bool());
@@ -213,6 +215,15 @@ TEST_F(AutocompleteTextFieldTest, Display) {
 
   // Test focussed drawing.
   [test_window() makePretendKeyWindowAndSetFirstResponder:field_];
+  [field_ display];
+}
+
+// Test setting instant suggestion, mostly to ensure nothing leaks or crashes.
+TEST_F(AutocompleteTextFieldTest, InstantSuggestion) {
+  [field_ display];
+  EXPECT_FALSE([field_ needsDisplay]);
+  [field_ setInstantSuggestion:@"foo" textColor:[NSColor redColor]];
+  EXPECT_TRUE([field_ needsDisplay]);
   [field_ display];
 }
 

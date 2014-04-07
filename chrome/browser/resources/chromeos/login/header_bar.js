@@ -23,6 +23,9 @@ cr.define('login', function() {
     // Current UI state of the sign-in screen.
     signinUIState_: SIGNIN_UI_STATE.HIDDEN,
 
+    // Whether to show kiosk apps menu.
+    hasApps_: false,
+
     /** @override */
     decorate: function() {
       $('shutdown-header-bar-item').addEventListener('click',
@@ -39,6 +42,11 @@ cr.define('login', function() {
           this.handleGuestClick_);
       $('sign-out-user-button').addEventListener('click',
           this.handleSignoutClick_);
+
+      if (loadTimeData.getBoolean('enableAppMode') &&
+          loadTimeData.getString('screenType') == 'login') {
+        login.AppsMenuButton.decorate($('show-apps-button'));
+      }
     },
 
     /**
@@ -88,12 +96,6 @@ cr.define('login', function() {
       }
 
       $('pod-row').loadLastWallpaper();
-
-      // TODO(ygorshenin@): workaround for crbug.com/164832.
-      // Must be deleted as a part of
-      // https://codereview.chromium.org/11565011/.
-      $('error-message').onBeforeHide();
-      $('error-message').showOfflineMessage(false);
 
       Oobe.showScreen({id: SCREEN_ACCOUNT_PICKER});
       Oobe.resetSigninUI(true);
@@ -157,6 +159,15 @@ cr.define('login', function() {
     },
 
     /**
+     * Update whether there are kiosk apps.
+     * @type {boolean}
+     */
+    set hasApps(value) {
+      this.hasApps_ = value;
+      this.updateUI_();
+    },
+
+    /**
      * Updates visibility state of action buttons.
      * @private
      */
@@ -164,13 +175,26 @@ cr.define('login', function() {
       var gaiaIsActive = (this.signinUIState_ == SIGNIN_UI_STATE.GAIA_SIGNIN);
       var accountPickerIsActive =
           (this.signinUIState_ == SIGNIN_UI_STATE.ACCOUNT_PICKER);
+      var managedUserCreationDialogIsActive =
+          (this.signinUIState_ == SIGNIN_UI_STATE.MANAGED_USER_CREATION_DIALOG);
+      var wrongHWIDWarningIsActive =
+          (this.signinUIState_ == SIGNIN_UI_STATE.WRONG_HWID_WARNING);
 
       $('add-user-button').hidden = !accountPickerIsActive;
       $('cancel-add-user-button').hidden = accountPickerIsActive ||
-          !this.allowCancel_;
-      $('guest-user-header-bar-item').hidden = gaiaIsActive || !this.showGuest_;
+          !this.allowCancel_ ||
+          wrongHWIDWarningIsActive;
+      $('guest-user-header-bar-item').hidden = gaiaIsActive ||
+          managedUserCreationDialogIsActive ||
+          !this.showGuest_ ||
+          wrongHWIDWarningIsActive;
       $('add-user-header-bar-item').hidden =
           $('add-user-button').hidden && $('cancel-add-user-button').hidden;
+      $('apps-header-bar-item').hidden = !this.hasApps_ ||
+          (!gaiaIsActive && !accountPickerIsActive);
+
+      if (!$('apps-header-bar-item').hidden)
+        $('show-apps-button').didShow();
     },
 
     /**

@@ -27,6 +27,7 @@ HttpPipelinedStream::~HttpPipelinedStream() {
 
 int HttpPipelinedStream::InitializeStream(
     const HttpRequestInfo* request_info,
+    RequestPriority priority,
     const BoundNetLog& net_log,
     const CompletionCallback& callback) {
   request_info_ = request_info;
@@ -86,10 +87,6 @@ bool HttpPipelinedStream::CanFindEndOfResponse() const {
   return pipeline_->CanFindEndOfResponse(pipeline_id_);
 }
 
-bool HttpPipelinedStream::IsMoreDataBuffered() const {
-  return pipeline_->IsMoreDataBuffered(pipeline_id_);
-}
-
 bool HttpPipelinedStream::IsConnectionReused() const {
   return pipeline_->IsConnectionReused(pipeline_id_);
 }
@@ -100,6 +97,11 @@ void HttpPipelinedStream::SetConnectionReused() {
 
 bool HttpPipelinedStream::IsConnectionReusable() const {
   return pipeline_->usable();
+}
+
+bool HttpPipelinedStream::GetLoadTimingInfo(
+    LoadTimingInfo* load_timing_info) const {
+  return pipeline_->GetLoadTimingInfo(pipeline_id_, load_timing_info);
 }
 
 void HttpPipelinedStream::GetSSLInfo(SSLInfo* ssl_info) {

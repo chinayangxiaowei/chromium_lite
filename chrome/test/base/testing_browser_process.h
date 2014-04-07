@@ -43,6 +43,9 @@ class TestingBrowserProcess : public BrowserProcess {
   TestingBrowserProcess();
   virtual ~TestingBrowserProcess();
 
+  // Convenience method to get g_browser_process as a TestingBrowserProcess*.
+  static TestingBrowserProcess* GetGlobal();
+
   virtual void ResourceDispatcherHostCreated() OVERRIDE;
   virtual void EndSession() OVERRIDE;
   virtual MetricsService* metrics_service() OVERRIDE;
@@ -55,6 +58,7 @@ class TestingBrowserProcess : public BrowserProcess {
   virtual policy::PolicyService* policy_service() OVERRIDE;
   virtual IconManager* icon_manager() OVERRIDE;
   virtual GLStringManager* gl_string_manager() OVERRIDE;
+  virtual GpuModeManager* gpu_mode_manager() OVERRIDE;
   virtual RenderWidgetSnapshotTaker* GetRenderWidgetSnapshotTaker() OVERRIDE;
   virtual BackgroundModeManager* background_mode_manager() OVERRIDE;
   virtual StatusTray* status_tray() OVERRIDE;
@@ -70,10 +74,14 @@ class TestingBrowserProcess : public BrowserProcess {
   virtual extensions::EventRouterForwarder*
       extension_event_router_forwarder() OVERRIDE;
   virtual NotificationUIManager* notification_ui_manager() OVERRIDE;
+#if defined(ENABLE_MESSAGE_CENTER)
+  virtual message_center::MessageCenter* message_center() OVERRIDE;
+#endif
   virtual IntranetRedirectDetector* intranet_redirect_detector() OVERRIDE;
   virtual AutomationProviderList* GetAutomationProviderList() OVERRIDE;
   virtual void CreateDevToolsHttpProtocolHandler(
       Profile* profile,
+      chrome::HostDesktopType host_desktop_type,
       const std::string& ip,
       int port,
       const std::string& frontend_url) OVERRIDE;
@@ -81,8 +89,8 @@ class TestingBrowserProcess : public BrowserProcess {
   virtual unsigned int ReleaseModule() OVERRIDE;
   virtual bool IsShuttingDown() OVERRIDE;
   virtual printing::PrintJobManager* print_job_manager() OVERRIDE;
-  virtual printing::PrintPreviewTabController*
-      print_preview_tab_controller() OVERRIDE;
+  virtual printing::PrintPreviewDialogController*
+      print_preview_dialog_controller() OVERRIDE;
   virtual printing::BackgroundPrintingManager*
       background_printing_manager() OVERRIDE;
   virtual const std::string& GetApplicationLocale() OVERRIDE;
@@ -103,6 +111,7 @@ class TestingBrowserProcess : public BrowserProcess {
       media_file_system_registry() OVERRIDE;
   virtual void PlatformSpecificCommandLineProcessing(
       const CommandLine& command_line) OVERRIDE;
+  virtual bool created_local_state() const OVERRIDE;
 
   // Set the local state for tests. Consumer is responsible for cleaning it up
   // afterwards (using ScopedTestingLocalState, for example).
@@ -129,8 +138,8 @@ class TestingBrowserProcess : public BrowserProcess {
   scoped_ptr<ProfileManager> profile_manager_;
   scoped_ptr<NotificationUIManager> notification_ui_manager_;
   scoped_ptr<printing::BackgroundPrintingManager> background_printing_manager_;
-  scoped_refptr<printing::PrintPreviewTabController>
-      print_preview_tab_controller_;
+  scoped_refptr<printing::PrintPreviewDialogController>
+      print_preview_dialog_controller_;
   scoped_ptr<prerender::PrerenderTracker> prerender_tracker_;
   scoped_ptr<RenderWidgetSnapshotTaker> render_widget_snapshot_taker_;
   scoped_refptr<SafeBrowsingService> sb_service_;

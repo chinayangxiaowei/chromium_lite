@@ -86,6 +86,7 @@ class ProfileSyncServiceMock : public ProfileSyncService {
   MOCK_CONST_METHOD0(GetLastSyncedTimeString, string16());
   MOCK_CONST_METHOD0(HasUnrecoverableError, bool());
   MOCK_CONST_METHOD0(sync_initialized, bool());
+  MOCK_CONST_METHOD0(IsStartSuppressed, bool());
   MOCK_CONST_METHOD0(waiting_for_auth, bool());
   MOCK_METHOD1(OnActionableError, void(
       const syncer::SyncProtocolError&));
@@ -99,6 +100,7 @@ class ProfileSyncServiceMock : public ProfileSyncService {
   MOCK_METHOD0(OnConfigureStart, void());
 
   MOCK_METHOD0(IsSyncEnabledAndLoggedIn, bool());
+  MOCK_CONST_METHOD0(IsManaged, bool());
   MOCK_METHOD0(IsSyncTokenAvailable, bool());
 
   MOCK_CONST_METHOD0(IsPassphraseRequired, bool());
@@ -106,6 +108,7 @@ class ProfileSyncServiceMock : public ProfileSyncService {
   MOCK_CONST_METHOD0(IsUsingSecondaryPassphrase, bool());
   MOCK_CONST_METHOD0(GetPassphraseType, syncer::PassphraseType());
   MOCK_CONST_METHOD0(GetPassphraseTime, base::Time());
+  MOCK_CONST_METHOD0(GetExplicitPassphraseTime, base::Time());
 
   MOCK_METHOD1(SetDecryptionPassphrase, bool(const std::string& passphrase));
   MOCK_METHOD2(SetEncryptionPassphrase, void(const std::string& passphrase,

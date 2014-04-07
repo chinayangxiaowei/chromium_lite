@@ -38,6 +38,7 @@
 #include "net/base/address_list.h"
 #include "net/base/completion_callback.h"
 #include "net/base/load_states.h"
+#include "net/base/load_timing_info.h"
 #include "net/base/net_errors.h"
 #include "net/base/net_export.h"
 #include "net/base/net_log.h"
@@ -104,6 +105,10 @@ class NET_EXPORT_PRIVATE ConnectJob {
   // additional error state to the ClientSocketHandle (post late-binding).
   virtual void GetAdditionalErrorState(ClientSocketHandle* handle) {}
 
+  const LoadTimingInfo::ConnectTiming& connect_timing() const {
+    return connect_timing_;
+  }
+
   const BoundNetLog& net_log() const { return net_log_; }
 
  protected:
@@ -111,6 +116,9 @@ class NET_EXPORT_PRIVATE ConnectJob {
   StreamSocket* socket() { return socket_.get(); }
   void NotifyDelegateOfCompletion(int rv);
   void ResetTimer(base::TimeDelta remainingTime);
+
+  // Connection establishment timing information.
+  LoadTimingInfo::ConnectTiming connect_timing_;
 
  private:
   virtual int ConnectInternal() = 0;
@@ -493,6 +501,7 @@ class NET_EXPORT_PRIVATE ClientSocketPoolBaseHelper
   // Assigns |socket| to |handle| and updates |group|'s counters appropriately.
   void HandOutSocket(StreamSocket* socket,
                      bool reused,
+                     const LoadTimingInfo::ConnectTiming& connect_timing,
                      ClientSocketHandle* handle,
                      base::TimeDelta time_idle,
                      Group* group,
@@ -683,14 +692,14 @@ class ClientSocketPoolBase {
 
   // RequestSockets bundles up the parameters into a Request and then forwards
   // to ClientSocketPoolBaseHelper::RequestSockets().  Note that it assigns the
-  // priority to LOWEST and specifies the NO_IDLE_SOCKETS flag.
+  // priority to DEFAULT_PRIORITY and specifies the NO_IDLE_SOCKETS flag.
   void RequestSockets(const std::string& group_name,
                       const scoped_refptr<SocketParams>& params,
                       int num_sockets,
                       const BoundNetLog& net_log) {
     const Request request(NULL /* no handle */,
                           CompletionCallback(),
-                          LOWEST,
+                          DEFAULT_PRIORITY,
                           internal::ClientSocketPoolBaseHelper::NO_IDLE_SOCKETS,
                           params->ignore_limits(),
                           params,

@@ -40,16 +40,14 @@ StaleCacheFilesRemover::~StaleCacheFilesRemover() {
   file_system_->RemoveObserver(this);
 }
 
-void StaleCacheFilesRemover::OnInitialLoadFinished(DriveFileError error) {
+void StaleCacheFilesRemover::OnInitialLoadFinished() {
   DCHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
 
-  if (error == DRIVE_FILE_OK) {
-    cache_->Iterate(
-        base::Bind(
-            &StaleCacheFilesRemover::GetEntryInfoAndRemoveCacheIfNecessary,
-            weak_ptr_factory_.GetWeakPtr()),
-        base::Bind(&base::DoNothing));
-  }
+  cache_->Iterate(
+      base::Bind(
+          &StaleCacheFilesRemover::GetEntryInfoAndRemoveCacheIfNecessary,
+          weak_ptr_factory_.GetWeakPtr()),
+      base::Bind(&base::DoNothing));
 }
 
 void StaleCacheFilesRemover::GetEntryInfoAndRemoveCacheIfNecessary(
@@ -69,7 +67,7 @@ void StaleCacheFilesRemover::RemoveCacheIfNecessary(
     const std::string& resource_id,
     const std::string& cache_md5,
     DriveFileError error,
-    const FilePath& drive_file_path,
+    const base::FilePath& drive_file_path,
     scoped_ptr<DriveEntryProto> entry_proto) {
   DCHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
 

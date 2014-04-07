@@ -2,7 +2,9 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-// Custom bindings for the fileBrowserPrivate API.
+// Custom binding for the fileBrowserPrivate API.
+
+var binding = require('binding').Binding.create('fileBrowserPrivate');
 
 var fileBrowserPrivateNatives = requireNative('file_browser_private');
 var GetLocalFileSystem = fileBrowserPrivateNatives.GetLocalFileSystem;
@@ -10,9 +12,7 @@ var GetLocalFileSystem = fileBrowserPrivateNatives.GetLocalFileSystem;
 var fileBrowserNatives = requireNative('file_browser_handler');
 var GetExternalFileEntry = fileBrowserNatives.GetExternalFileEntry;
 
-var chromeHidden = requireNative('chrome_hidden').GetChromeHidden();
-
-chromeHidden.registerCustomHook('fileBrowserPrivate', function(bindingsAPI) {
+binding.registerCustomHook(function(bindingsAPI) {
   var apiFunctions = bindingsAPI.apiFunctions;
 
   apiFunctions.setCustomCallback('requestLocalFileSystem',
@@ -42,4 +42,24 @@ chromeHidden.registerCustomHook('fileBrowserPrivate', function(bindingsAPI) {
       request.callback(response.results, response.nextFeed);
     request.callback = null;
   });
+
+  apiFunctions.setCustomCallback('searchDriveMetadata',
+                                 function(name, request, response) {
+    if (response && !response.error) {
+      for (var i = 0; i < response.length; i++) {
+        response[i].entry =
+            GetExternalFileEntry(response[i].entry);
+      }
+    }
+
+    // So |request.callback| doesn't break if response is not defined.
+    if (!response)
+      response = {};
+
+    if (request.callback)
+      request.callback(response);
+    request.callback = null;
+  });
 });
+
+exports.binding = binding.generate();

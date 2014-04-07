@@ -4,15 +4,16 @@
 
 #include "ash/system/tray/tray_background_view.h"
 
-#include "ash/launcher/background_animator.h"
 #include "ash/root_window_controller.h"
+#include "ash/screen_ash.h"
+#include "ash/shelf/shelf_layout_manager.h"
 #include "ash/shell.h"
 #include "ash/shell_window_ids.h"
 #include "ash/system/status_area_widget.h"
 #include "ash/system/status_area_widget_delegate.h"
 #include "ash/system/tray/tray_constants.h"
+#include "ash/system/tray/tray_event_filter.h"
 #include "ash/wm/property_util.h"
-#include "ash/wm/shelf_layout_manager.h"
 #include "ash/wm/window_animations.h"
 #include "ui/aura/root_window.h"
 #include "ui/aura/window.h"
@@ -131,7 +132,8 @@ void TrayBackgroundView::TrayContainer::ViewHierarchyChanged(bool is_add,
 void TrayBackgroundView::TrayContainer::UpdateLayout() {
   // Adjust the size of status tray dark background by adding additional
   // empty border.
-  if (alignment_ == SHELF_ALIGNMENT_BOTTOM) {
+  if (alignment_ == SHELF_ALIGNMENT_BOTTOM ||
+      alignment_ == SHELF_ALIGNMENT_TOP) {
     set_border(views::Border::CreateEmptyBorder(
         kTrayContainerVerticalPaddingBottomAlignment,
         kTrayContainerHorizontalPaddingBottomAlignment,
@@ -179,6 +181,7 @@ TrayBackgroundView::TrayBackgroundView(
 
   tray_container_ = new TrayContainer(shelf_alignment_);
   SetContents(tray_container_);
+  tray_event_filter_.reset(new TrayEventFilter);
 }
 
 TrayBackgroundView::~TrayBackgroundView() {
@@ -242,20 +245,19 @@ void TrayBackgroundView::SetContents(views::View* contents) {
   AddChildView(contents);
 }
 
+void TrayBackgroundView::SetPaintsBackground(
+    bool value,
+    internal::BackgroundAnimator::ChangeType change_type) {
+  hide_background_animator_.SetPaintsBackground(value, change_type);
+}
+
 void TrayBackgroundView::SetContentsBackground() {
   background_ = new internal::TrayBackground;
   tray_container_->set_background(background_);
 }
 
-void TrayBackgroundView::SetPaintsBackground(
-      bool value,
-      internal::BackgroundAnimator::ChangeType change_type) {
-  hide_background_animator_.SetPaintsBackground(value, change_type);
-}
-
 ShelfLayoutManager* TrayBackgroundView::GetShelfLayoutManager() {
-  return
-      RootWindowController::ForLauncher(GetWidget()->GetNativeView())->shelf();
+  return ShelfLayoutManager::ForLauncher(GetWidget()->GetNativeView());
 }
 
 void TrayBackgroundView::SetShelfAlignment(ShelfAlignment alignment) {
@@ -274,6 +276,12 @@ void TrayBackgroundView::SetBorder() {
         0, 0,
         on_edge ? kPaddingFromBottomOfScreenBottomAlignment :
                   kPaddingFromBottomOfScreenBottomAlignment - 1,
+        on_edge ? kPaddingFromRightEdgeOfScreenBottomAlignment : 0));
+  } else if (shelf_alignment() == SHELF_ALIGNMENT_TOP) {
+    set_border(views::Border::CreateEmptyBorder(
+        on_edge ? kPaddingFromBottomOfScreenBottomAlignment :
+                  kPaddingFromBottomOfScreenBottomAlignment - 1,
+        0, 0,
         on_edge ? kPaddingFromRightEdgeOfScreenBottomAlignment : 0));
   } else if (shelf_alignment() == SHELF_ALIGNMENT_LEFT) {
     set_border(views::Border::CreateEmptyBorder(
@@ -319,7 +327,7 @@ gfx::Rect TrayBackgroundView::GetBubbleAnchorRect(
         bool rtl = base::i18n::IsRTL();
         rect.Inset(
             rtl ? kPaddingFromRightEdgeOfScreenBottomAlignment : 0,
-            4,
+            kTrayBubbleAnchorTopInsetBottomAnchor,
             rtl ? 0 : kPaddingFromRightEdgeOfScreenBottomAlignment,
             kPaddingFromBottomOfScreenBottomAlignment);
       } else if (anchor_alignment == TrayBubbleView::ANCHOR_ALIGNMENT_LEFT) {
@@ -343,12 +351,16 @@ gfx::Rect TrayBackgroundView::GetBubbleAnchorRect(
 
   // TODO(jennyz): May need to add left/right alignment in the following code.
   if (rect.IsEmpty()) {
-    rect = Shell::GetScreen()->GetPrimaryDisplay().bounds();
+    aura::RootWindow* target_root = anchor_widget ?
+        anchor_widget->GetNativeView()->GetRootWindow() :
+        Shell::GetPrimaryRootWindow();
+    rect = target_root->bounds();
     rect = gfx::Rect(
         base::i18n::IsRTL() ? kPaddingFromRightEdgeOfScreenBottomAlignment :
         rect.width() - kPaddingFromRightEdgeOfScreenBottomAlignment,
         rect.height() - kPaddingFromBottomOfScreenBottomAlignment,
         0, 0);
+    rect = ScreenAsh::ConvertRectToScreen(target_root, rect);
   }
   return rect;
 }
@@ -361,6 +373,8 @@ TrayBubbleView::AnchorAlignment TrayBackgroundView::GetAnchorAlignment() const {
       return TrayBubbleView::ANCHOR_ALIGNMENT_LEFT;
     case SHELF_ALIGNMENT_RIGHT:
       return TrayBubbleView::ANCHOR_ALIGNMENT_RIGHT;
+    case SHELF_ALIGNMENT_TOP:
+      return TrayBubbleView::ANCHOR_ALIGNMENT_TOP;
   }
   NOTREACHED();
   return TrayBubbleView::ANCHOR_ALIGNMENT_BOTTOM;
@@ -371,8 +385,10 @@ void TrayBackgroundView::UpdateBubbleViewArrow(
   aura::RootWindow* root_window =
       bubble_view->GetWidget()->GetNativeView()->GetRootWindow();
   ash::internal::ShelfLayoutManager* shelf =
-      ash::GetRootWindowController(root_window)->shelf();
-  bubble_view->SetPaintArrow(shelf->IsVisible());
+      ShelfLayoutManager::ForLauncher(root_window);
+  bubble_view->SetArrowPaintType(
+      shelf->IsVisible() ? views::BubbleBorder::PAINT_NORMAL :
+                           views::BubbleBorder::PAINT_TRANSPARENT);
 }
 
 }  // namespace internal

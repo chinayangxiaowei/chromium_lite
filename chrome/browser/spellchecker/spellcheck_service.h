@@ -5,11 +5,11 @@
 #ifndef CHROME_BROWSER_SPELLCHECKER_SPELLCHECK_SERVICE_H_
 #define CHROME_BROWSER_SPELLCHECKER_SPELLCHECK_SERVICE_H_
 
-#include "base/gtest_prod_util.h"
 #include "base/compiler_specific.h"
+#include "base/gtest_prod_util.h"
 #include "base/memory/scoped_ptr.h"
 #include "base/memory/weak_ptr.h"
-#include "base/prefs/public/pref_change_registrar.h"
+#include "base/prefs/pref_change_registrar.h"
 #include "chrome/browser/profiles/profile_keyed_service.h"
 #include "chrome/browser/spellchecker/spellcheck_custom_dictionary.h"
 #include "chrome/browser/spellchecker/spellcheck_hunspell_dictionary.h"
@@ -30,10 +30,11 @@ class RenderProcessHost;
 
 // Encapsulates the browser side spellcheck service. There is one of these per
 // profile and each is created by the SpellCheckServiceFactory.  The
-// SpellCheckService maintains any per-profile information about spellcheck.
+// SpellcheckService maintains any per-profile information about spellcheck.
 class SpellcheckService : public ProfileKeyedService,
                           public content::NotificationObserver,
-                          public SpellcheckCustomDictionary::Observer {
+                          public SpellcheckCustomDictionary::Observer,
+                          public SpellcheckHunspellDictionary::Observer {
  public:
   // Event types used for reporting the status of this class and its derived
   // classes to browser tests.
@@ -70,10 +71,7 @@ class SpellcheckService : public ProfileKeyedService,
   // metrics. This should be called only if the metrics recording is active.
   void StartRecordingMetrics(bool spellcheck_enabled);
 
-  // Pass all renderers some basic initialization infomration.
-  void InitForAllRenderers();
-
-  // Pass the renderer some basic intialization information. Note that the
+  // Pass the renderer some basic initialization information. Note that the
   // renderer will not load Hunspell until it needs to.
   void InitForRenderer(content::RenderProcessHost* process);
 
@@ -84,6 +82,9 @@ class SpellcheckService : public ProfileKeyedService,
   // Returns the instance of the custom dictionary.
   SpellcheckCustomDictionary* GetCustomDictionary();
 
+  // Returns the instance of the Hunspell dictionary.
+  SpellcheckHunspellDictionary* GetHunspellDictionary();
+
   // NotificationProfile implementation.
   virtual void Observe(int type,
                        const content::NotificationSource& source,
@@ -91,8 +92,14 @@ class SpellcheckService : public ProfileKeyedService,
 
   // SpellcheckCustomDictionary::Observer implementation.
   virtual void OnCustomDictionaryLoaded() OVERRIDE;
-  virtual void OnCustomDictionaryWordAdded(const std::string& word) OVERRIDE;
-  virtual void OnCustomDictionaryWordRemoved(const std::string& word) OVERRIDE;
+  virtual void OnCustomDictionaryChanged(
+      const SpellcheckCustomDictionary::Change& dictionary_change) OVERRIDE;
+
+  // SpellcheckHunspellDictionary::Observer implementation.
+  virtual void OnHunspellDictionaryInitialized() OVERRIDE;
+  virtual void OnHunspellDictionaryDownloadBegin() OVERRIDE;
+  virtual void OnHunspellDictionaryDownloadSuccess() OVERRIDE;
+  virtual void OnHunspellDictionaryDownloadFailure() OVERRIDE;
 
  private:
   FRIEND_TEST_ALL_PREFIXES(SpellcheckServiceBrowserTest, DeleteCorruptedBDICT);
@@ -100,9 +107,11 @@ class SpellcheckService : public ProfileKeyedService,
   // Attaches an event so browser tests can listen the status events.
   static void AttachStatusEvent(base::WaitableEvent* status_event);
 
-  // Waits until a spellchecker updates its status. This function returns
-  // immediately when we do not set an event to |status_event_|.
-  static EventType WaitStatusEvent();
+  // Returns the status event type.
+  static EventType GetStatusEvent();
+
+  // Pass all renderers some basic initialization information.
+  void InitForAllRenderers();
 
   // Reacts to a change in user preferences on whether auto-spell-correct should
   // be enabled.
@@ -111,6 +120,9 @@ class SpellcheckService : public ProfileKeyedService,
   // Reacts to a change in user preference on which language should be used for
   // spellchecking.
   void OnSpellCheckDictionaryChanged();
+
+  // Notification handler for changes to prefs::kSpellCheckUseSpellingService.
+  void OnUseSpellingServiceChanged();
 
   PrefChangeRegistrar pref_change_registrar_;
   content::NotificationRegistrar registrar_;

@@ -27,6 +27,8 @@
       'sources': [
         '<@(gles2_implementation_source_files)',
       ],
+      # TODO(jschuh): crbug.com/167187 fix size_t to int truncations.
+      'msvs_disabled_warnings': [4267, ],
     },
     {
       # Library emulates GLES2 using command_buffers.
@@ -46,6 +48,8 @@
       'sources': [
         '<@(gles2_implementation_source_files)',
       ],
+      # TODO(jschuh): crbug.com/167187 fix size_t to int truncations.
+      'msvs_disabled_warnings': [ 4267, ],
     },
     {
       # Library emulates GLES2 using command_buffers.
@@ -65,6 +69,8 @@
       'sources': [
         '<@(gles2_implementation_source_files)',
       ],
+      # TODO(jschuh): crbug.com/167187 fix size_t to int truncations.
+      'msvs_disabled_warnings': [ 4267, ],
     },
     {
       # Stub to expose gles2_implemenation in C instead of C++.
@@ -84,6 +90,8 @@
       'sources': [
         '<@(gles2_c_lib_source_files)',
       ],
+      # TODO(jschuh): crbug.com/167187 fix size_t to int truncations.
+      'msvs_disabled_warnings': [4267, ],
     },
     {
       # Same as gles2_c_lib except with no parameter checking. Required for
@@ -206,10 +214,12 @@
           ],
         }],
       ],
+      # TODO(jschuh): crbug.com/167187 fix size_t to int truncations.
+      'msvs_disabled_warnings': [ 4267, ],
     },
     {
       'target_name': 'gl_tests',
-      'type': 'executable',
+      'type': '<(gtest_target_type)',
       'dependencies': [
         '../base/base.gyp:base',
         '../base/third_party/dynamic_annotations/dynamic_annotations.gyp:dynamic_annotations',
@@ -251,8 +261,18 @@
         'command_buffer/tests/gl_texture_storage_unittests.cc',
         'command_buffer/tests/gl_unittests.cc',
         'command_buffer/tests/gl_virtual_contexts_unittests.cc',
+        'command_buffer/tests/gl_stream_draw_unittests.cc',
         'command_buffer/tests/occlusion_query_unittests.cc',
       ],
+      'conditions': [
+        ['OS == "android" and gtest_target_type == "shared_library"', {
+          'dependencies': [
+            '../testing/android/native_test.gyp:native_test_native_code',
+          ],
+        }],
+      ],
+      # TODO(jschuh): crbug.com/167187 fix size_t to int truncations.
+      'msvs_disabled_warnings': [ 4267, ],
     },
     {
       'target_name': 'gpu_unittest_utils',
@@ -275,6 +295,16 @@
   'conditions': [
     ['component=="static_library"', {
       'targets': [
+         {
+          'target_name': 'disk_cache_proto',
+          'type': 'static_library',
+          'sources': [ 'command_buffer/service/disk_cache_proto.proto' ],
+          'variables': {
+            'proto_in_dir': 'command_buffer/service',
+            'proto_out_dir': 'gpu/command_buffer/service',
+          },
+          'includes': [ '../build/protoc.gypi' ],
+        },
         {
           'target_name': 'gpu',
           'type': 'none',
@@ -288,6 +318,8 @@
           'sources': [
             'gpu_export.h',
           ],
+          # TODO(jschuh): crbug.com/167187 fix size_t to int truncations.
+          'msvs_disabled_warnings': [4267, ],
         },
         {
           'target_name': 'command_buffer_common',
@@ -313,6 +345,8 @@
           'dependencies': [
             'command_buffer_client',
           ],
+          # TODO(jschuh): crbug.com/167187 fix size_t to int truncations.
+          'msvs_disabled_warnings': [4267, ],
         },
         {
           'target_name': 'command_buffer_client',
@@ -323,6 +357,8 @@
           'dependencies': [
             'command_buffer_common',
           ],
+          # TODO(jschuh): crbug.com/167187 fix size_t to int truncations.
+          'msvs_disabled_warnings': [4267, ],
         },
         {
           'target_name': 'command_buffer_service',
@@ -332,7 +368,10 @@
           ],
           'dependencies': [
             'command_buffer_common',
+            'disk_cache_proto',
           ],
+          # TODO(jschuh): crbug.com/167187 fix size_t to int truncations.
+          'msvs_disabled_warnings': [4267, ],
         },
         {
           'target_name': 'gpu_ipc',
@@ -348,6 +387,16 @@
     },
     { # component != static_library
       'targets': [
+         {
+          'target_name': 'disk_cache_proto',
+          'type': 'static_library',
+          'sources': [ 'command_buffer/service/disk_cache_proto.proto' ],
+          'variables': {
+            'proto_in_dir': 'command_buffer/service',
+            'proto_out_dir': 'gpu/command_buffer/service',
+          },
+          'includes': [ '../build/protoc.gypi' ],
+        },
         {
           'target_name': 'gpu',
           'type': 'shared_library',
@@ -367,7 +416,10 @@
           'dependencies': [
             '../base/base.gyp:base',
             'command_buffer/command_buffer.gyp:gles2_utils',
+            'disk_cache_proto',
           ],
+          # TODO(jschuh): crbug.com/167187 fix size_t to int truncations.
+          'msvs_disabled_warnings': [4267, ],
         },
         {
           'target_name': 'command_buffer_common',
@@ -383,6 +435,8 @@
           'dependencies': [
             'gpu',
           ],
+          # TODO(jschuh): crbug.com/167187 fix size_t to int truncations.
+          'msvs_disabled_warnings': [4267, ],
         },
         {
           'target_name': 'command_buffer_client',
@@ -407,7 +461,7 @@
         },
       ],
     }],
-    ['disable_nacl!=1 and OS=="win"', {
+    ['disable_nacl!=1 and OS=="win" and target_arch=="ia32"', {
       'targets': [
         {
           'target_name': 'gpu_ipc_win64',
@@ -431,6 +485,24 @@
               'msvs_target_platform': 'x64',
             },
           },
+        },
+      ],
+    }],
+    ['OS == "android" and gtest_target_type == "shared_library"', {
+      'targets': [
+        {
+          'target_name': 'gl_tests_apk',
+          'type': 'none',
+          'dependencies': [
+            'gl_tests',
+          ],
+          'variables': {
+            'test_suite_name': 'gl_tests',
+            'input_shlib_path': '<(SHARED_LIB_DIR)/<(SHARED_LIB_PREFIX)gl_tests<(SHARED_LIB_SUFFIX)',
+          },
+          'includes': [
+            '../build/apk_test.gypi',
+          ],
         },
       ],
     }],

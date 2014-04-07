@@ -20,6 +20,8 @@
 #include "base/utf_string_conversions.h"
 #include "grit/ash_resources.h"
 #include "grit/ash_strings.h"
+#include "third_party/icu/public/i18n/unicode/fieldpos.h"
+#include "third_party/icu/public/i18n/unicode/fmtable.h"
 #include "third_party/skia/include/core/SkRect.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/resource/resource_bundle.h"
@@ -28,7 +30,6 @@
 #include "ui/gfx/image/image_skia_operations.h"
 #include "ui/gfx/size.h"
 #include "ui/views/controls/button/button.h"
-#include "ui/views/controls/button/text_button.h"
 #include "ui/views/controls/image_view.h"
 #include "ui/views/controls/label.h"
 #include "ui/views/layout/box_layout.h"
@@ -36,8 +37,6 @@
 #include "ui/views/layout/grid_layout.h"
 #include "ui/views/view.h"
 #include "ui/views/widget/widget.h"
-#include "unicode/fieldpos.h"
-#include "unicode/fmtable.h"
 
 namespace ash {
 namespace internal {
@@ -167,12 +166,10 @@ gfx::ImageSkia TrayPower::GetBatteryImage(int image_index, IconSet icon_set) {
       icon_set == ICON_DARK ?
       IDR_AURA_UBER_TRAY_POWER_SMALL_DARK : IDR_AURA_UBER_TRAY_POWER_SMALL);
 
-  // TODO(mbolohan): Remove the 2px offset when the assets are centered. See
-  // crbug.com/119832.
   gfx::Rect region(
-      ((image_index & 0x1) ? kBatteryImageWidth : 0) + 2,
+      (image_index & 0x1) ? kBatteryImageWidth : 0,
       (image_index >> 1) * kBatteryImageHeight,
-      kBatteryImageWidth - 2, kBatteryImageHeight);
+      kBatteryImageWidth, kBatteryImageHeight);
   return gfx::ImageSkiaOperations::ExtractSubset(*all.ToImageSkia(), region);
 }
 

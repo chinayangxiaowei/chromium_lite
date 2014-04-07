@@ -10,7 +10,10 @@ import logging
 import optparse
 import os
 import re
+import subprocess
 import sys
+import tempfile
+import zipfile
 
 BASE_PATH = os.path.dirname(os.path.abspath(__file__))
 FIND_RUNTIME_SYMBOLS_PATH = os.path.join(
@@ -55,6 +58,8 @@ DUMP_DEEP_OBSOLETE = (DUMP_DEEP_1, DUMP_DEEP_2, DUMP_DEEP_3, DUMP_DEEP_4)
 # DUMP_DEEP_5 should be processed by POLICY_DEEP_4.
 DUMP_DEEP_5 = 'DUMP_DEEP_5'
 
+# DUMP_DEEP_6 adds a mmap list to DUMP_DEEP_5.
+DUMP_DEEP_6 = 'DUMP_DEEP_6'
 
 # Heap Profile Policy versions
 
@@ -74,7 +79,7 @@ POLICY_DEEP_4 = 'POLICY_DEEP_4'
 
 
 class EmptyDumpException(Exception):
-  def __init__(self, value):
+  def __init__(self, value=''):
     super(EmptyDumpException, self).__init__()
     self.value = value
   def __str__(self):
@@ -82,7 +87,7 @@ class EmptyDumpException(Exception):
 
 
 class ParsingException(Exception):
-  def __init__(self, value):
+  def __init__(self, value=''):
     super(ParsingException, self).__init__()
     self.value = value
   def __str__(self):
@@ -176,6 +181,12 @@ class SymbolDataSources(object):
       self._loaded_symbol_data_sources = RuntimeSymbolsInProcess.load(
           self._prepared_symbol_data_sources_path)
     return self._loaded_symbol_data_sources
+
+  def path(self):
+    """Returns the path of the prepared symbol data sources if possible."""
+    if not self._prepared_symbol_data_sources_path and not self.prepare():
+      return None
+    return self._prepared_symbol_data_sources_path
 
 
 class SymbolFinder(object):
@@ -703,7 +714,7 @@ class Dump(object):
     # Identify a version.
     if self._lines[ln].startswith('heap profile: '):
       version = self._lines[ln][13:].strip()
-      if version == DUMP_DEEP_5:
+      if version in (DUMP_DEEP_5, DUMP_DEEP_6):
         (ln, _) = skip_while(
             ln, len(self._lines),
             lambda n: self._lines[n] != 'STACKTRACES:\n')
@@ -725,8 +736,8 @@ class Dump(object):
         lambda n: self._lines[n] != 'GLOBAL_STATS:\n')
 
     global_stat_names = [
-        'total', 'file-exec', 'file-nonexec', 'anonymous', 'stack', 'other',
-        'nonprofiled-absent', 'nonprofiled-anonymous',
+        'total', 'absent', 'file-exec', 'file-nonexec', 'anonymous', 'stack',
+        'other', 'nonprofiled-absent', 'nonprofiled-anonymous',
         'nonprofiled-file-exec', 'nonprofiled-file-nonexec',
         'nonprofiled-stack', 'nonprofiled-other',
         'profiled-mmap', 'profiled-malloc']
@@ -750,7 +761,7 @@ class Dump(object):
     Raises:
         ParsingException for invalid dump versions.
     """
-    if self._version == DUMP_DEEP_5:
+    if self._version in (DUMP_DEEP_5, DUMP_DEEP_6):
       (line_number, _) = skip_while(
           line_number, len(self._lines),
           lambda n: not self._lines[n].split()[0].isdigit())
@@ -864,6 +875,24 @@ class Command(object):
 
     return dump_path_list
 
+  @staticmethod
+  def _find_all_buckets(dump_path):
+    prefix = Command._find_prefix(dump_path)
+    bucket_path_list = []
+
+    n = 0
+    while True:
+      path = '%s.%04d.buckets' % (prefix, n)
+      if not os.path.exists(path):
+        if n > 10:
+          break
+        n += 1
+        continue
+      bucket_path_list.append(path)
+      n += 1
+
+    return bucket_path_list
+
   def _parse_args(self, sys_argv, required):
     options, args = self._parser.parse_args(sys_argv)
     if len(args) != required + 1:
@@ -967,6 +996,7 @@ class PolicyCommands(Command):
     for key, value in {
         'total': 'total_committed',
         'filemapped': 'file_committed',
+        'absent': 'absent_committed',
         'file-exec': 'file-exec_committed',
         'file-nonexec': 'file-nonexec_committed',
         'anonymous': 'anonymous_committed',
@@ -1299,6 +1329,70 @@ class PProfCommand(Command):
       out.write('\n')
 
 
+class UploadCommand(Command):
+  def __init__(self):
+    super(UploadCommand, self).__init__(
+        'Usage: %prog upload [--gsutil path/to/gsutil] '
+        '<first-dump> <destination-gs-path>')
+    self._parser.add_option('--gsutil', default='gsutil',
+                            help='path to GSUTIL', metavar='GSUTIL')
+
+  def do(self, sys_argv):
+    options, args = self._parse_args(sys_argv, 2)
+    dump_path = args[1]
+    gs_path = args[2]
+
+    dump_files = Command._find_all_dumps(dump_path)
+    bucket_files = Command._find_all_buckets(dump_path)
+    prefix = Command._find_prefix(dump_path)
+    symbol_data_sources = SymbolDataSources(prefix)
+    symbol_data_sources.prepare()
+    symbol_path = symbol_data_sources.path()
+
+    handle_zip, filename_zip = tempfile.mkstemp('.zip', 'dmprof')
+    os.close(handle_zip)
+
+    try:
+      file_zip = zipfile.ZipFile(filename_zip, 'w', zipfile.ZIP_DEFLATED)
+      for filename in dump_files:
+        file_zip.write(filename, os.path.basename(os.path.abspath(filename)))
+      for filename in bucket_files:
+        file_zip.write(filename, os.path.basename(os.path.abspath(filename)))
+
+      symbol_basename = os.path.basename(os.path.abspath(symbol_path))
+      for filename in os.listdir(symbol_path):
+        if not filename.startswith('.'):
+          file_zip.write(os.path.join(symbol_path, filename),
+                         os.path.join(symbol_basename, os.path.basename(
+                             os.path.abspath(filename))))
+      file_zip.close()
+
+      returncode = UploadCommand._run_gsutil(
+          options.gsutil, 'cp', '-a', 'public-read', filename_zip, gs_path)
+    finally:
+      os.remove(filename_zip)
+
+    return returncode
+
+  @staticmethod
+  def _run_gsutil(gsutil, *args):
+    """Run gsutil as a subprocess.
+
+    Args:
+        *args: Arguments to pass to gsutil. The first argument should be an
+            operation such as ls, cp or cat.
+    Returns:
+        The return code from the process.
+    """
+    command = [gsutil] + list(args)
+    LOGGER.info("Running: %s", command)
+
+    try:
+      return subprocess.call(command)
+    except OSError, e:
+      LOGGER.error('Error to run gsutil: %s', e)
+
+
 def main():
   COMMANDS = {
     'csv': CSVCommand,
@@ -1307,6 +1401,7 @@ def main():
     'list': ListCommand,
     'pprof': PProfCommand,
     'stacktrace': StacktraceCommand,
+    'upload': UploadCommand,
   }
 
   if len(sys.argv) < 2 or (not sys.argv[1] in COMMANDS):
@@ -1319,6 +1414,7 @@ Commands:
    list         Classify memory usage in simple listing format
    pprof        Format the profile dump so that it can be processed by pprof
    stacktrace   Convert runtime addresses to symbol names
+   upload       Upload dumped files
 
 Quick Reference:
    dmprof csv [-p POLICY] <first-dump>
@@ -1327,6 +1423,7 @@ Quick Reference:
    dmprof list [-p POLICY] <first-dump>
    dmprof pprof [-c COMPONENT] <dump> <policy>
    dmprof stacktrace <dump>
+   dmprof upload [--gsutil path/to/gsutil] <first-dump> <destination-gs-path>
 """)
     sys.exit(1)
   action = sys.argv.pop(1)

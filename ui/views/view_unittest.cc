@@ -8,6 +8,7 @@
 #include "base/rand_util.h"
 #include "base/string_util.h"
 #include "base/utf_string_conversions.h"
+#include "grit/ui_strings.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "ui/base/accelerators/accelerator.h"
 #include "ui/base/clipboard/clipboard.h"
@@ -24,6 +25,7 @@
 #include "ui/views/background.h"
 #include "ui/views/controls/button/button_dropdown.h"
 #include "ui/views/controls/button/checkbox.h"
+#include "ui/views/controls/button/label_button.h"
 #include "ui/views/controls/native/native_view_host.h"
 #include "ui/views/controls/scroll_view.h"
 #include "ui/views/controls/textfield/textfield.h"
@@ -840,7 +842,7 @@ TEST_F(ViewTest, DISABLED_Painting) {
 TEST_F(ViewTest, RemoveNotification) {
   ViewStorage* vs = ViewStorage::GetInstance();
   Widget* widget = new Widget;
-  widget->Init(Widget::InitParams(Widget::InitParams::TYPE_POPUP));
+  widget->Init(CreateParams(Widget::InitParams::TYPE_POPUP));
   View* root_view = widget->GetRootView();
 
   View* v1 = new View;
@@ -935,10 +937,10 @@ class HitTestView : public View {
 
  protected:
   // Overridden from View:
-  virtual bool HasHitTestMask() const {
+  virtual bool HasHitTestMask() const OVERRIDE {
     return has_hittest_mask_;
   }
-  virtual void GetHitTestMask(gfx::Path* mask) const {
+  virtual void GetHitTestMask(gfx::Path* mask) const OVERRIDE {
     DCHECK(has_hittest_mask_);
     DCHECK(mask);
 
@@ -1206,8 +1208,6 @@ TEST_F(ViewTest, Textfield) {
   widget->CloseNow();
 }
 
-#if defined(OS_WIN) && !defined(USE_AURA)
-
 // Tests that the Textfield view respond appropiately to cut/copy/paste.
 TEST_F(ViewTest, TextfieldCutCopyPaste) {
   const string16 kNormalText = ASCIIToUTF16("Normal");
@@ -1238,26 +1238,23 @@ TEST_F(ViewTest, TextfieldCutCopyPaste) {
   //
   // Test cut.
   //
-  ASSERT_TRUE(normal->GetTestingHandle());
-  normal->SelectAll(false);
-  ::SendMessage(normal->GetTestingHandle(), WM_CUT, 0, 0);
 
+  normal->SelectAll(false);
+  normal->ExecuteCommand(IDS_APP_CUT);
   string16 result;
   clipboard->ReadText(ui::Clipboard::BUFFER_STANDARD, &result);
   EXPECT_EQ(kNormalText, result);
   normal->SetText(kNormalText);  // Let's revert to the original content.
 
-  ASSERT_TRUE(read_only->GetTestingHandle());
   read_only->SelectAll(false);
-  ::SendMessage(read_only->GetTestingHandle(), WM_CUT, 0, 0);
+  read_only->ExecuteCommand(IDS_APP_CUT);
   result.clear();
   clipboard->ReadText(ui::Clipboard::BUFFER_STANDARD, &result);
   // Cut should have failed, so the clipboard content should not have changed.
   EXPECT_EQ(kNormalText, result);
 
-  ASSERT_TRUE(password->GetTestingHandle());
   password->SelectAll(false);
-  ::SendMessage(password->GetTestingHandle(), WM_CUT, 0, 0);
+  password->ExecuteCommand(IDS_APP_CUT);
   result.clear();
   clipboard->ReadText(ui::Clipboard::BUFFER_STANDARD, &result);
   // Cut should have failed, so the clipboard content should not have changed.
@@ -1267,58 +1264,47 @@ TEST_F(ViewTest, TextfieldCutCopyPaste) {
   // Test copy.
   //
 
-  // Let's start with read_only as the clipboard already contains the content
-  // of normal.
+  // Start with |read_only| to observe a change in clipboard text.
   read_only->SelectAll(false);
-  ::SendMessage(read_only->GetTestingHandle(), WM_COPY, 0, 0);
+  read_only->ExecuteCommand(IDS_APP_COPY);
   result.clear();
   clipboard->ReadText(ui::Clipboard::BUFFER_STANDARD, &result);
   EXPECT_EQ(kReadOnlyText, result);
 
   normal->SelectAll(false);
-  ::SendMessage(normal->GetTestingHandle(), WM_COPY, 0, 0);
+  normal->ExecuteCommand(IDS_APP_COPY);
   result.clear();
   clipboard->ReadText(ui::Clipboard::BUFFER_STANDARD, &result);
   EXPECT_EQ(kNormalText, result);
 
   password->SelectAll(false);
-  ::SendMessage(password->GetTestingHandle(), WM_COPY, 0, 0);
+  password->ExecuteCommand(IDS_APP_COPY);
   result.clear();
   clipboard->ReadText(ui::Clipboard::BUFFER_STANDARD, &result);
-  // We don't let you copy from an obscured field, clipboard should not have
-  // changed.
+  // Text cannot be copied from an obscured field; the clipboard won't change.
   EXPECT_EQ(kNormalText, result);
 
   //
-  // Test Paste.
+  // Test paste.
   //
-  // Note that we use GetWindowText instead of Textfield::GetText below as the
-  // text in the Textfield class is synced to the text of the HWND on
-  // WM_KEYDOWN messages that we are not simulating here.
 
-  // Attempting to copy kNormalText in a read-only text-field should fail.
+  // Attempting to paste kNormalText in a read-only text-field should fail.
   read_only->SelectAll(false);
-  ::SendMessage(read_only->GetTestingHandle(), WM_KEYDOWN, 0, 0);
-  wchar_t buffer[1024] = { 0 };
-  ::GetWindowText(read_only->GetTestingHandle(), buffer, 1024);
-  EXPECT_EQ(kReadOnlyText, string16(buffer));
+  read_only->ExecuteCommand(IDS_APP_PASTE);
+  EXPECT_EQ(kReadOnlyText, read_only->text());
 
   password->SelectAll(false);
-  ::SendMessage(password->GetTestingHandle(), WM_PASTE, 0, 0);
-  ::GetWindowText(password->GetTestingHandle(), buffer, 1024);
-  EXPECT_EQ(kNormalText, string16(buffer));
+  password->ExecuteCommand(IDS_APP_PASTE);
+  EXPECT_EQ(kNormalText, password->text());
 
-  // Copy from read_only so the string we are pasting is not the same as the
-  // current one.
+  // Copy from |read_only| to observe a change in the normal textfield text.
   read_only->SelectAll(false);
-  ::SendMessage(read_only->GetTestingHandle(), WM_COPY, 0, 0);
+  read_only->ExecuteCommand(IDS_APP_COPY);
   normal->SelectAll(false);
-  ::SendMessage(normal->GetTestingHandle(), WM_PASTE, 0, 0);
-  ::GetWindowText(normal->GetTestingHandle(), buffer, 1024);
-  EXPECT_EQ(kReadOnlyText, string16(buffer));
+  normal->ExecuteCommand(IDS_APP_PASTE);
+  EXPECT_EQ(kReadOnlyText, normal->text());
   widget->CloseNow();
 }
-#endif
 
 ////////////////////////////////////////////////////////////////////////////////
 // Accelerators
@@ -1558,7 +1544,6 @@ TEST_F(ViewTest, DISABLED_RerouteMouseWheelTest) {
 class MockMenuModel : public ui::MenuModel {
  public:
   MOCK_CONST_METHOD0(HasIcons, bool());
-  MOCK_CONST_METHOD1(GetFirstItemIndex, int(gfx::NativeMenu native_menu));
   MOCK_CONST_METHOD0(GetItemCount, int());
   MOCK_CONST_METHOD1(GetTypeAt, ItemType(int index));
   MOCK_CONST_METHOD1(GetSeparatorTypeAt, ui::MenuSeparatorType(int index));
@@ -1619,8 +1604,8 @@ class TestDialog : public DialogDelegate, public ButtonListener {
   virtual View* GetContentsView() OVERRIDE {
     if (!contents_) {
       contents_ = new View;
-      button1_ = new NativeTextButton(this, ASCIIToUTF16("Button1"));
-      button2_ = new NativeTextButton(this, ASCIIToUTF16("Button2"));
+      button1_ = new LabelButton(this, ASCIIToUTF16("Button1"));
+      button2_ = new LabelButton(this, ASCIIToUTF16("Button2"));
       checkbox_ = new Checkbox(ASCIIToUTF16("My checkbox"));
       button_drop_ = new ButtonDropDown(this, mock_menu_model_);
       contents_->AddChildView(button1_);
@@ -1665,15 +1650,14 @@ class TestDialog : public DialogDelegate, public ButtonListener {
   void ExpectShowDropMenu() {
     if (mock_menu_model_) {
       EXPECT_CALL(*mock_menu_model_, HasIcons());
-      EXPECT_CALL(*mock_menu_model_, GetFirstItemIndex(_));
       EXPECT_CALL(*mock_menu_model_, GetItemCount());
       EXPECT_CALL(*mock_menu_model_, MenuClosed());
     }
   }
 
   View* contents_;
-  NativeTextButton* button1_;
-  NativeTextButton* button2_;
+  LabelButton* button1_;
+  LabelButton* button2_;
   Checkbox* checkbox_;
   ButtonDropDown* button_drop_;
   Button* last_pressed_button_;
@@ -1760,8 +1744,8 @@ class DefaultButtonTest : public ViewTest {
   FocusManager* focus_manager_;
   TestDialog* test_dialog_;
   DialogClientView* client_view_;
-  TextButton* ok_button_;
-  TextButton* cancel_button_;
+  LabelButton* ok_button_;
+  LabelButton* cancel_button_;
 };
 
 TEST_F(DefaultButtonTest, DialogDefaultButtonTest) {
@@ -1898,9 +1882,10 @@ class TestNativeViewHierarchy : public View {
   TestNativeViewHierarchy() {
   }
 
-  virtual void NativeViewHierarchyChanged(bool attached,
-                                          gfx::NativeView native_view,
-                                          internal::RootView* root_view) {
+  virtual void NativeViewHierarchyChanged(
+      bool attached,
+      gfx::NativeView native_view,
+      internal::RootView* root_view) OVERRIDE {
     NotificationInfo info;
     info.attached = attached;
     info.native_view = native_view;
@@ -1922,7 +1907,8 @@ class TestChangeNativeViewHierarchy {
     view_test_ = view_test;
     native_host_ = new NativeViewHost();
     host_ = new Widget;
-    Widget::InitParams params(Widget::InitParams::TYPE_POPUP);
+    Widget::InitParams params =
+        view_test->CreateParams(Widget::InitParams::TYPE_POPUP);
     params.bounds = gfx::Rect(0, 0, 500, 300);
     host_->Init(params);
     host_->GetRootView()->AddChildView(native_host_);
@@ -2034,7 +2020,7 @@ class TransformPaintView : public TestView {
   gfx::Rect scheduled_paint_rect() const { return scheduled_paint_rect_; }
 
   // Overridden from View:
-  virtual void SchedulePaintInRect(const gfx::Rect& rect) {
+  virtual void SchedulePaintInRect(const gfx::Rect& rect) OVERRIDE {
     gfx::Rect xrect = ConvertRectToParent(rect);
     scheduled_paint_rect_.Union(xrect);
   }
@@ -2272,10 +2258,10 @@ class VisibleBoundsView : public View {
 
  private:
   // Overridden from View:
-  virtual bool NeedsNotificationWhenVisibleBoundsChange() const {
+  virtual bool NeedsNotificationWhenVisibleBoundsChange() const OVERRIDE {
      return true;
   }
-  virtual void OnVisibleBoundsChanged() {
+  virtual void OnVisibleBoundsChanged() OVERRIDE {
     received_notification_ = true;
   }
 
@@ -2897,7 +2883,7 @@ class TestLayerAnimator : public ui::LayerAnimator {
   virtual void SetBounds(const gfx::Rect& bounds) OVERRIDE;
 
  protected:
-  ~TestLayerAnimator() { }
+  virtual ~TestLayerAnimator() { }
 
  private:
   gfx::Rect last_bounds_;

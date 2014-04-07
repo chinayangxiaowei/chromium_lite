@@ -15,6 +15,8 @@ extern const char kAccountsPrefShowUserNamesOnSignIn[];
 extern const char kAccountsPrefUsers[];
 extern const char kAccountsPrefEphemeralUsersEnabled[];
 extern const char kAccountsPrefDeviceLocalAccounts[];
+extern const char kAccountsPrefDeviceLocalAccountAutoLoginId[];
+extern const char kAccountsPrefDeviceLocalAccountAutoLoginDelay[];
 
 extern const char kSettingProxyEverywhere[];
 
@@ -47,6 +49,9 @@ extern const char kStartUpUrls[];
 
 extern const char kPolicyMissingMitigationMode[];
 
+extern const char kAllowRedeemChromeOsRegistrationOffers[];
+
+extern const char kStartUpFlags[];
 }  // namespace chromeos
 
 #endif  // CHROME_BROWSER_CHROMEOS_SETTINGS_CROS_SETTINGS_NAMES_H_

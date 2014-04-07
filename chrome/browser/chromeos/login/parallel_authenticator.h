@@ -63,7 +63,8 @@ class ParallelAuthenticator : public Authenticator,
     UNLOCK,          // Screen unlock succeeded.
     ONLINE_FAILED,   // Online login disallowed, but offline succeeded.
     GUEST_LOGIN,     // Logged in guest mode.
-    PUBLIC_ACCOUNT_LOGIN,  // Logged into a public account.
+    PUBLIC_ACCOUNT_LOGIN,        // Logged into a public account.
+    LOCALLY_MANAGED_USER_LOGIN,  // Logged in as a locally managed user.
     LOGIN_FAILED,    // Login denied.
     OWNER_REQUIRED   // Login is restricted to the owner only.
   };
@@ -72,8 +73,7 @@ class ParallelAuthenticator : public Authenticator,
 
   // Authenticator overrides.
   virtual void CompleteLogin(Profile* profile,
-                             const std::string& username,
-                             const std::string& password) OVERRIDE;
+                             const UserCredentials& credentials) OVERRIDE;
 
   // Given a |username| and |password|, this method attempts to authenticate to
   // the Google accounts servers and your Chrome OS device simultaneously.
@@ -101,17 +101,22 @@ class ParallelAuthenticator : public Authenticator,
   // we are asked to authenticate valid HOSTED account creds, we will
   // call OnLoginFailure() with HOSTED_NOT_ALLOWED.
   virtual void AuthenticateToLogin(Profile* profile,
-                                   const std::string& username,
-                                   const std::string& password,
+                                   const UserCredentials& credentials,
                                    const std::string& login_token,
                                    const std::string& login_captcha) OVERRIDE;
 
-  // Given a |username| and |password|, this method attempts to
-  // authenticate to the cached credentials. This will never contact
-  // the server even if it's online. The auth result is sent to
-  // LoginStatusConsumer in a same way as AuthenticateToLogin does.
-  virtual void AuthenticateToUnlock(const std::string& username,
-                                    const std::string& password) OVERRIDE;
+  // Given |credentials|, this method attempts to authenticate to the cached
+  // credentials. This will never contact the server even if it's online.
+  // The auth result is sent to LoginStatusConsumer in a same way as
+  // AuthenticateToLogin does.
+  virtual void AuthenticateToUnlock(
+      const UserCredentials& credentials) OVERRIDE;
+
+  // Initiates locally managed user login.
+  // Creates cryptohome if missing or mounts existing one and
+  // notifies consumer on the success/failure.
+  virtual void LoginAsLocallyManagedUser(
+      const UserCredentials& credentials) OVERRIDE;
 
   // Initiates retail mode login.
   // Mounts tmpfs and notifies consumer on the success/failure.
@@ -135,8 +140,7 @@ class ParallelAuthenticator : public Authenticator,
       const std::string& old_password) OVERRIDE;
   virtual void ResyncEncryptedData() OVERRIDE;
   virtual void RetryAuth(Profile* profile,
-                         const std::string& username,
-                         const std::string& password,
+                         const UserCredentials& credentials,
                          const std::string& login_token,
                          const std::string& login_captcha) OVERRIDE;
   // AuthAttemptStateResolver overrides.

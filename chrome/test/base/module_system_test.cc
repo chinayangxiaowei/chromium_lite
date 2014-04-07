@@ -7,7 +7,7 @@
 #include "base/callback.h"
 #include "base/memory/scoped_ptr.h"
 #include "base/string_piece.h"
-#include "chrome/renderer/extensions/native_handler.h"
+#include "chrome/renderer/extensions/object_backed_native_handler.h"
 #include "ui/base/resource/resource_bundle.h"
 
 #include <map>
@@ -15,12 +15,14 @@
 
 using extensions::ModuleSystem;
 using extensions::NativeHandler;
+using extensions::ObjectBackedNativeHandler;
 
 // Native JS functions for doing asserts.
-class AssertNatives : public NativeHandler {
+class AssertNatives : public ObjectBackedNativeHandler {
  public:
-  AssertNatives()
-      : assertion_made_(false),
+  explicit AssertNatives(v8::Handle<v8::Context> context)
+      : ObjectBackedNativeHandler(context),
+        assertion_made_(false),
         failed_(false) {
     RouteFunction("AssertTrue", base::Bind(&AssertNatives::AssertTrue,
         base::Unretained(this)));
@@ -56,13 +58,13 @@ class StringSourceMap : public ModuleSystem::SourceMap {
   StringSourceMap() {}
   virtual ~StringSourceMap() {}
 
-  v8::Handle<v8::Value> GetSource(const std::string& name) OVERRIDE {
+  virtual v8::Handle<v8::Value> GetSource(const std::string& name) OVERRIDE {
     if (source_map_.count(name) == 0)
       return v8::Undefined();
     return v8::String::New(source_map_[name].c_str());
   }
 
-  bool Contains(const std::string& name) OVERRIDE {
+  virtual bool Contains(const std::string& name) OVERRIDE {
     return source_map_.count(name);
   }
 
@@ -77,7 +79,7 @@ class StringSourceMap : public ModuleSystem::SourceMap {
 
 class FailsOnException : public ModuleSystem::ExceptionHandler {
  public:
-  virtual void HandleUncaughtException() {
+  virtual void HandleUncaughtException() OVERRIDE {
     FAIL();
   }
 };
@@ -87,18 +89,17 @@ ModuleSystemTest::ModuleSystemTest()
       source_map_(new StringSourceMap()),
       should_assertions_be_made_(true) {
   context_->Enter();
-  assert_natives_ = new AssertNatives();
-  module_system_.reset(new ModuleSystem(context_, source_map_.get()));
+  assert_natives_ = new AssertNatives(context_.get());
+  module_system_.reset(new ModuleSystem(context_.get(), source_map_.get()));
   module_system_->RegisterNativeHandler("assert", scoped_ptr<NativeHandler>(
       assert_natives_));
-  module_system_->set_exception_handler(
+  module_system_->SetExceptionHandlerForTest(
       scoped_ptr<ModuleSystem::ExceptionHandler>(new FailsOnException));
 }
 
 ModuleSystemTest::~ModuleSystemTest() {
   module_system_.reset();
   context_->Exit();
-  context_.Dispose();
 }
 
 void ModuleSystemTest::RegisterModule(const std::string& name,
@@ -116,7 +117,7 @@ void ModuleSystemTest::RegisterModule(const std::string& name,
 void ModuleSystemTest::OverrideNativeHandler(const std::string& name,
                                              const std::string& code) {
   RegisterModule(name, code);
-  module_system_->OverrideNativeHandler(name);
+  module_system_->OverrideNativeHandlerForTest(name);
 }
 
 void ModuleSystemTest::TearDown() {

@@ -9,15 +9,17 @@
 #include "chrome/browser/search_engines/template_url_service_factory.h"
 #include "chrome/browser/ui/browser_commands.h"
 #include "chrome/browser/ui/browser_tabstrip.h"
+#include "chrome/browser/ui/host_desktop.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/test/base/testing_browser_process.h"
+#include "chrome/test/base/ui_test_utils.h"
 #include "content/public/test/test_browser_thread.h"
 
 using content::BrowserThread;
 
 CocoaProfileTest::CocoaProfileTest()
     : ui_thread_(BrowserThread::UI, &message_loop_),
-      profile_manager_(static_cast<TestingBrowserProcess*>(g_browser_process)),
+      profile_manager_(TestingBrowserProcess::GetGlobal()),
       profile_(NULL),
       file_user_blocking_thread_(new content::TestBrowserThread(
           BrowserThread::FILE_USER_BLOCKING, &message_loop_)),
@@ -37,7 +39,7 @@ CocoaProfileTest::~CocoaProfileTest() {
   // thread. If the scoper in TestingBrowserProcess, owned by ChromeTestSuite,
   // were to delete the ProfileManager, the UI thread would at that point no
   // longer exist.
-  static_cast<TestingBrowserProcess*>(g_browser_process)->SetProfileManager(
+  TestingBrowserProcess::GetGlobal()->SetProfileManager(
       NULL);
 
   // Make sure any pending tasks run before we destroy other threads.
@@ -60,7 +62,7 @@ void CocoaProfileTest::SetUp() {
   ASSERT_TRUE(profile_);
 
   profile_->CreateBookmarkModel(true);
-  profile_->BlockUntilBookmarkModelLoaded();
+  ui_test_utils::WaitForBookmarkModelToLoad(profile_);
 
   // TODO(shess): These are needed in case someone creates a browser
   // window off of browser_.  pkasting indicates that other
@@ -93,5 +95,6 @@ void CocoaProfileTest::CloseBrowserWindow() {
 }
 
 Browser* CocoaProfileTest::CreateBrowser() {
-  return new Browser(Browser::CreateParams(profile()));
+  return new Browser(Browser::CreateParams(profile(),
+                                           chrome::HOST_DESKTOP_TYPE_NATIVE));
 }

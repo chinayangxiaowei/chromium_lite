@@ -29,7 +29,6 @@ class Screen;
 }
 namespace views {
 
-class DropTargetEvent;
 class MenuButton;
 class MenuHostRootView;
 class MouseEvent;
@@ -46,9 +45,8 @@ class MenuRunnerImpl;
 // MenuController is used internally by the various menu classes to manage
 // showing, selecting and drag/drop for menus. All relevant events are
 // forwarded to the MenuController from SubmenuView and MenuHost.
-class VIEWS_EXPORT MenuController
-    : public MessageLoop::Dispatcher,
-      public WidgetObserver {
+class VIEWS_EXPORT MenuController : public MessageLoop::Dispatcher,
+                                    public WidgetObserver {
  public:
   // Enumeration of how the menu should exit.
   enum ExitType {
@@ -78,13 +76,16 @@ class VIEWS_EXPORT MenuController
                     const gfx::Rect& bounds,
                     MenuItemView::AnchorPosition position,
                     bool context_menu,
-                    int* mouse_event_flags);
+                    int* event_flags);
 
   // Whether or not Run blocks.
   bool IsBlockingRun() const { return blocking_run_; }
 
   // Whether or not drag operation is in progress.
   bool drag_in_progress() const { return drag_in_progress_; }
+
+  // Get the anchor position wich is used to show this menu.
+  MenuItemView::AnchorPosition GetAnchorPosition() { return state_.anchor; }
 
   // Cancels the current Run. See ExitType for a description of what happens
   // with the various parameters.
@@ -96,6 +97,9 @@ class VIEWS_EXPORT MenuController
   // Returns the current exit type. This returns a value other than EXIT_NONE if
   // the menu is being canceled.
   ExitType exit_type() const { return exit_type_; }
+
+  // Returns the time from the event which closed the menu - or 0.
+  base::TimeDelta closing_event_time() const { return closing_event_time_; }
 
   // Various events, forwarded from the submenu.
   //
@@ -130,7 +134,7 @@ class VIEWS_EXPORT MenuController
   void UpdateSubmenuSelection(SubmenuView* source);
 
   // WidgetObserver overrides:
-  virtual void OnWidgetClosing(Widget* widget) OVERRIDE;
+  virtual void OnWidgetDestroying(Widget* widget) OVERRIDE;
 
  private:
   friend class internal::MenuRunnerImpl;
@@ -231,7 +235,7 @@ class VIEWS_EXPORT MenuController
     SubmenuView* submenu;
   };
 
-  // Sets the selection to menu_item a value of NULL unselects
+  // Sets the selection to |menu_item|. A value of NULL unselects
   // everything. |types| is a bitmask of |SetSelectionTypes|.
   //
   // Internally this updates pending_state_ immediatley. state_ is only updated
@@ -275,7 +279,7 @@ class VIEWS_EXPORT MenuController
 
   // Invoked when the user accepts the selected item. This is only used
   // when blocking. This schedules the loop to quit.
-  void Accept(MenuItemView* item, int mouse_event_flags);
+  void Accept(MenuItemView* item, int event_flags);
 
   bool ShowSiblingMenu(SubmenuView* source, const gfx::Point& mouse_location);
 
@@ -376,6 +380,12 @@ class VIEWS_EXPORT MenuController
                                 bool prefer_leading,
                                 bool* is_leading);
 
+  // Calculates the bubble bounds of the menu to show. is_leading is set to
+  // match the direction the menu opened in.
+  gfx::Rect CalculateBubbleMenuBounds(MenuItemView* item,
+                                      bool prefer_leading,
+                                      bool* is_leading);
+
   // Returns the depth of the menu.
   static int MenuDepth(MenuItemView* item);
 
@@ -412,11 +422,13 @@ class VIEWS_EXPORT MenuController
   // the title. Returns true if a match was selected and the menu should exit.
   bool SelectByChar(char16 key);
 
-#if defined(OS_WIN) && !defined(USE_AURA)
-  // If there is a window at the location of the event, a new mouse event is
-  // generated and posted to it at the given location.
+  // For Windows and Aura we repost an event for some events that dismiss
+  // the context menu. The event is then reprocessed to cause its result
+  // if the context menu had not been present.
+  // On non-aura Windows, a new mouse event is generated and posted to
+  // the window (if there is one) at the location of the event. On
+  // aura, the event is reposted on the RootWindow.
   void RepostEvent(SubmenuView* source, const ui::LocatedEvent& event);
-#endif
 
   // Sets the drop target to new_item.
   void SetDropMenuItem(MenuItemView* new_item,
@@ -490,9 +502,8 @@ class VIEWS_EXPORT MenuController
   // If the user accepted the selection, this is the result.
   MenuItemView* result_;
 
-  // The mouse event flags when the user clicked on a menu. Is 0 if the
-  // user did not use the mouse to select the menu.
-  int result_mouse_event_flags_;
+  // The event flags when the user selected the menu.
+  int accept_event_flags_;
 
   // If not empty, it means we're nested. When Run is invoked from within
   // Run, the current state (state_) is pushed onto menu_stack_. This allows
@@ -552,6 +563,9 @@ class VIEWS_EXPORT MenuController
   int message_loop_depth_;
 
   views::MenuConfig menu_config_;
+
+  // The timestamp of the event which closed the menu - or 0 otherwise.
+  base::TimeDelta closing_event_time_;
 
   DISALLOW_COPY_AND_ASSIGN(MenuController);
 };

@@ -8,7 +8,7 @@
 
 #include "base/base_switches.h"
 #include "base/command_line.h"
-#include "base/file_path.h"
+#include "base/files/file_path.h"
 #include "base/process_util.h"
 #include "base/utf_string_conversions.h"
 #include "content/browser/browser_child_process_host_impl.h"
@@ -26,7 +26,47 @@
 #include "ui/base/ui_base_switches.h"
 #include "webkit/plugins/plugin_switches.h"
 
+#if defined(OS_WIN)
+#include "content/common/sandbox_win.h"
+#include "content/public/common/sandboxed_process_launcher_delegate.h"
+#include "sandbox/win/src/sandbox_policy.h"
+#endif
+
 namespace content {
+
+#if defined(OS_WIN)
+// NOTE: changes to this class need to be reviewed by the security team.
+class PpapiPluginSandboxedProcessLauncherDelegate
+    : public content::SandboxedProcessLauncherDelegate {
+ public:
+  explicit PpapiPluginSandboxedProcessLauncherDelegate(bool is_broker)
+      : is_broker_(is_broker) {}
+  virtual ~PpapiPluginSandboxedProcessLauncherDelegate() {}
+
+  virtual void ShouldSandbox(bool* in_sandbox) OVERRIDE {
+    if (is_broker_)
+      *in_sandbox = false;
+  }
+
+  virtual void PreSpawnTarget(sandbox::TargetPolicy* policy,
+                              bool* success) {
+    if (is_broker_)
+      return;
+    // The Pepper process as locked-down as a renderer execpt that it can
+    // create the server side of chrome pipes.
+    sandbox::ResultCode result;
+    result = policy->AddRule(sandbox::TargetPolicy::SUBSYS_NAMED_PIPES,
+                             sandbox::TargetPolicy::NAMEDPIPES_ALLOW_ANY,
+                             L"\\\\.\\pipe\\chrome.*");
+    *success = (result == sandbox::SBOX_ALL_OK);
+  }
+
+ private:
+  bool is_broker_;
+
+  DISALLOW_COPY_AND_ASSIGN(PpapiPluginSandboxedProcessLauncherDelegate);
+};
+#endif  // OS_WIN
 
 class PpapiPluginProcessHost::PluginNetworkObserver
     : public net::NetworkChangeNotifier::IPAddressObserver,
@@ -38,7 +78,7 @@ class PpapiPluginProcessHost::PluginNetworkObserver
     net::NetworkChangeNotifier::AddConnectionTypeObserver(this);
   }
 
-  ~PluginNetworkObserver() {
+  virtual ~PluginNetworkObserver() {
     net::NetworkChangeNotifier::RemoveConnectionTypeObserver(this);
     net::NetworkChangeNotifier::RemoveIPAddressObserver(this);
   }
@@ -56,7 +96,7 @@ class PpapiPluginProcessHost::PluginNetworkObserver
 
   // ConnectionTypeObserver implementation.
   virtual void OnConnectionTypeChanged(
-      net::NetworkChangeNotifier::ConnectionType type) {
+      net::NetworkChangeNotifier::ConnectionType type) OVERRIDE {
     process_host_->Send(new PpapiMsg_SetNetworkState(
         type != net::NetworkChangeNotifier::CONNECTION_NONE));
   }
@@ -74,7 +114,7 @@ PpapiPluginProcessHost::~PpapiPluginProcessHost() {
 // static
 PpapiPluginProcessHost* PpapiPluginProcessHost::CreatePluginHost(
     const PepperPluginInfo& info,
-    const FilePath& profile_data_directory,
+    const base::FilePath& profile_data_directory,
     net::HostResolver* host_resolver) {
   PpapiPluginProcessHost* plugin_host = new PpapiPluginProcessHost(
       info, profile_data_directory, host_resolver);
@@ -137,6 +177,16 @@ void PpapiPluginProcessHost::DidDeleteOutOfProcessInstance(
   // That's OK, we can just ignore this message.
 }
 
+// static
+void PpapiPluginProcessHost::FindByName(
+    const string16& name,
+    std::vector<PpapiPluginProcessHost*>* hosts) {
+  for (PpapiPluginProcessHostIterator iter; !iter.Done(); ++iter) {
+    if (iter->process_.get() && iter->process_->GetData().name == name)
+      hosts->push_back(*iter);
+  }
+}
+
 bool PpapiPluginProcessHost::Send(IPC::Message* message) {
   return process_->Send(message);
 }
@@ -156,7 +206,7 @@ void PpapiPluginProcessHost::OpenChannelToPlugin(Client* client) {
 
 PpapiPluginProcessHost::PpapiPluginProcessHost(
     const PepperPluginInfo& info,
-    const FilePath& profile_data_directory,
+    const base::FilePath& profile_data_directory,
     net::HostResolver* host_resolver)
     : permissions_(
           ppapi::PpapiPermissions::GetForCommandLine(info.permissions)),
@@ -165,12 +215,11 @@ PpapiPluginProcessHost::PpapiPluginProcessHost(
   process_.reset(new BrowserChildProcessHostImpl(
       PROCESS_TYPE_PPAPI_PLUGIN, this));
 
-  filter_ = new PepperMessageFilter(PepperMessageFilter::PLUGIN,
-                                    permissions_,
-                                    host_resolver);
+  filter_ = new PepperMessageFilter(permissions_, host_resolver);
 
   host_impl_.reset(new BrowserPpapiHostImpl(this, permissions_, info.name,
-      profile_data_directory));
+                                            profile_data_directory,
+                                            false));
 
   process_->GetHost()->AddFilter(filter_.get());
   process_->GetHost()->AddFilter(host_impl_->message_filter());
@@ -191,9 +240,10 @@ PpapiPluginProcessHost::PpapiPluginProcessHost()
   // The plugin name and profile data directory shouldn't be needed for the
   // broker.
   std::string plugin_name;
-  FilePath profile_data_directory;
+  base::FilePath profile_data_directory;
   host_impl_.reset(new BrowserPpapiHostImpl(this, permissions, plugin_name,
-      profile_data_directory));
+                                            profile_data_directory,
+                                            false));
 }
 
 bool PpapiPluginProcessHost::Init(const PepperPluginInfo& info) {
@@ -218,7 +268,7 @@ bool PpapiPluginProcessHost::Init(const PepperPluginInfo& info) {
 #else
   int flags = ChildProcessHost::CHILD_NORMAL;
 #endif
-  FilePath exe_path = ChildProcessHost::GetChildPath(flags);
+  base::FilePath exe_path = ChildProcessHost::GetChildPath(flags);
   if (exe_path.empty())
     return false;
 
@@ -272,7 +322,7 @@ bool PpapiPluginProcessHost::Init(const PepperPluginInfo& info) {
 #endif  // OS_POSIX
   process_->Launch(
 #if defined(OS_WIN)
-      FilePath(),
+      new PpapiPluginSandboxedProcessLauncherDelegate(is_broker_),
 #elif defined(OS_POSIX)
       use_zygote,
       base::EnvironmentVector(),
@@ -286,11 +336,13 @@ void PpapiPluginProcessHost::RequestPluginChannel(Client* client) {
   int renderer_child_id;
   client->GetPpapiChannelInfo(&process_handle, &renderer_child_id);
 
+  base::ProcessId process_id = (process_handle == base::kNullProcessHandle) ?
+      0 : base::GetProcId(process_handle);
+
   // We can't send any sync messages from the browser because it might lead to
   // a hang. See the similar code in PluginProcessHost for more description.
   PpapiMsg_CreateChannel* msg = new PpapiMsg_CreateChannel(
-      base::GetProcId(process_handle), renderer_child_id,
-      client->OffTheRecord());
+      process_id, renderer_child_id, client->OffTheRecord());
   msg->set_unblock(true);
   if (Send(msg)) {
     sent_requests_.push(client);

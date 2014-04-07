@@ -7,18 +7,19 @@ package org.chromium.android_webview.test;
 import android.webkit.ConsoleMessage;
 
 import org.chromium.content.browser.test.util.CallbackHelper;
-import org.chromium.content.browser.test.util.TestCallbackHelperContainer.OnPageStartedHelper;
-import org.chromium.content.browser.test.util.TestCallbackHelperContainer.OnPageFinishedHelper;
-import org.chromium.content.browser.test.util.TestCallbackHelperContainer.OnReceivedErrorHelper;
 import org.chromium.content.browser.test.util.TestCallbackHelperContainer.OnEvaluateJavaScriptResultHelper;
+import org.chromium.content.browser.test.util.TestCallbackHelperContainer.OnPageFinishedHelper;
+import org.chromium.content.browser.test.util.TestCallbackHelperContainer.OnPageStartedHelper;
+import org.chromium.content.browser.test.util.TestCallbackHelperContainer.OnReceivedErrorHelper;
 
 class TestAwContentsClient extends NullContentsClient {
     private String mUpdatedTitle;
-    private OnPageStartedHelper mOnPageStartedHelper;
-    private OnPageFinishedHelper mOnPageFinishedHelper;
-    private OnReceivedErrorHelper mOnReceivedErrorHelper;
-    private OnEvaluateJavaScriptResultHelper mOnEvaluateJavaScriptResultHelper;
-    private AddMessageToConsoleHelper mAddMessageToConsoleHelper;
+    private final OnPageStartedHelper mOnPageStartedHelper;
+    private final OnPageFinishedHelper mOnPageFinishedHelper;
+    private final OnReceivedErrorHelper mOnReceivedErrorHelper;
+    private final OnEvaluateJavaScriptResultHelper mOnEvaluateJavaScriptResultHelper;
+    private final AddMessageToConsoleHelper mAddMessageToConsoleHelper;
+    private final OnScaleChangedHelper mOnScaleChangedHelper;
 
     public TestAwContentsClient() {
         mOnPageStartedHelper = new OnPageStartedHelper();
@@ -26,6 +27,7 @@ class TestAwContentsClient extends NullContentsClient {
         mOnReceivedErrorHelper = new OnReceivedErrorHelper();
         mOnEvaluateJavaScriptResultHelper = new OnEvaluateJavaScriptResultHelper();
         mAddMessageToConsoleHelper = new AddMessageToConsoleHelper();
+        mOnScaleChangedHelper = new OnScaleChangedHelper();
     }
 
     public OnPageStartedHelper getOnPageStartedHelper() {
@@ -46,6 +48,24 @@ class TestAwContentsClient extends NullContentsClient {
 
     public AddMessageToConsoleHelper getAddMessageToConsoleHelper() {
         return mAddMessageToConsoleHelper;
+    }
+
+    public static class OnScaleChangedHelper extends CallbackHelper {
+        private float mPreviousScale;
+        private float mCurrentScale;
+        public void notifyCalled(float oldScale, float newScale) {
+            mPreviousScale = oldScale;
+            mCurrentScale = newScale;
+            super.notifyCalled();
+        }
+        public float getLastScaleRatio() {
+            assert getCallCount() > 0;
+            return mCurrentScale / mPreviousScale;
+        }
+    }
+
+    public OnScaleChangedHelper getOnScaleChangedHelper() {
+        return mOnScaleChangedHelper;
     }
 
     @Override
@@ -73,42 +93,17 @@ class TestAwContentsClient extends NullContentsClient {
     }
 
     @Override
-    public void onEvaluateJavaScriptResult(int id, String jsonResult) {
-        super.onEvaluateJavaScriptResult(id, jsonResult);
-        mOnEvaluateJavaScriptResultHelper.notifyCalled(id, jsonResult);
-    }
-
-    @Override
     public boolean onConsoleMessage(ConsoleMessage consoleMessage) {
-        mAddMessageToConsoleHelper.setLevel(consoleMessage.messageLevel().ordinal());
-        mAddMessageToConsoleHelper.setMessage(consoleMessage.message());
-        mAddMessageToConsoleHelper.setLineNumber(consoleMessage.lineNumber());
-        mAddMessageToConsoleHelper.setSourceId(consoleMessage.sourceId());
-        mAddMessageToConsoleHelper.notifyCalled();
+        mAddMessageToConsoleHelper.notifyCalled(consoleMessage.messageLevel().ordinal(),
+                consoleMessage.message(), consoleMessage.lineNumber(), consoleMessage.sourceId());
         return false;
     }
 
-    public class AddMessageToConsoleHelper extends CallbackHelper {
+    public static class AddMessageToConsoleHelper extends CallbackHelper {
         private int mLevel;
         private String mMessage;
         private int mLineNumber;
         private String mSourceId;
-
-        void setLevel(int level) {
-            mLevel = level;
-        }
-
-        void setMessage(String message) {
-            mMessage = message;
-        }
-
-        void setLineNumber(int lineNumber) {
-            mLineNumber = lineNumber;
-        }
-
-        void setSourceId(String sourceId) {
-            mSourceId = sourceId;
-        }
 
         public int getLevel() {
             assert getCallCount() > 0;
@@ -129,33 +124,18 @@ class TestAwContentsClient extends NullContentsClient {
             assert getCallCount() > 0;
             return mSourceId;
         }
+
+        void notifyCalled(int level, String message, int lineNumer, String sourceId) {
+            mLevel = level;
+            mMessage = message;
+            mLineNumber = lineNumer;
+            mSourceId = sourceId;
+            notifyCalled();
+        }
     }
 
-    String mLastVisitedUrl;
-    boolean mLastVisitIsReload;
-
     @Override
-    public void doUpdateVisitedHistory(String url, boolean isReload) {
-        mLastVisitedUrl = url;
-        mLastVisitIsReload = isReload;
-    }
-
-    String mLastDownloadUrl;
-    String mLastDownloadUserAgent;
-    String mLastDownloadContentDisposition;
-    String mLastDownloadMimeType;
-    long mLastDownloadContentLength;
-
-    @Override
-    public void onDownloadStart(String url,
-                                String userAgent,
-                                String contentDisposition,
-                                String mimeType,
-                                long contentLength) {
-        mLastDownloadUrl = url;
-        mLastDownloadUserAgent = userAgent;
-        mLastDownloadContentDisposition = contentDisposition;
-        mLastDownloadMimeType = mimeType;
-        mLastDownloadContentLength = contentLength;
+    public void onScaleChangedScaled(float oldScale, float newScale) {
+        mOnScaleChangedHelper.notifyCalled(oldScale, newScale);
     }
 }

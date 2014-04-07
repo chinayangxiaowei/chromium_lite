@@ -40,17 +40,19 @@ AutocompleteInput::AutocompleteInput()
 AutocompleteInput::AutocompleteInput(const string16& text,
                                      size_t cursor_position,
                                      const string16& desired_tld,
+                                     const GURL& current_url,
                                      bool prevent_inline_autocomplete,
                                      bool prefer_keyword,
                                      bool allow_exact_keyword_match,
                                      MatchesRequested matches_requested)
     : cursor_position_(cursor_position),
-      desired_tld_(desired_tld),
+      current_url_(current_url),
       prevent_inline_autocomplete_(prevent_inline_autocomplete),
       prefer_keyword_(prefer_keyword),
       allow_exact_keyword_match_(allow_exact_keyword_match),
       matches_requested_(matches_requested) {
-  DCHECK(cursor_position <= text.length() || cursor_position == string16::npos);
+  DCHECK(cursor_position <= text.length() || cursor_position == string16::npos)
+      << "Text: '" << text << "', cp: " << cursor_position;
   // None of the providers care about leading white space so we always trim it.
   // Providers that care about trailing white space handle trimming themselves.
   if ((TrimWhitespace(text, TRIM_LEADING, &text_) & TRIM_LEADING) != 0)
@@ -63,7 +65,7 @@ AutocompleteInput::AutocompleteInput(const string16& text,
   if (type_ == INVALID)
     return;
 
-  if (((type_ == UNKNOWN) || (type_ == REQUESTED_URL) || (type_ == URL)) &&
+  if (((type_ == UNKNOWN) || (type_ == URL)) &&
       canonicalized_url.is_valid() &&
       (!canonicalized_url.IsStandard() || canonicalized_url.SchemeIsFile() ||
        canonicalized_url.SchemeIsFileSystem() ||
@@ -72,6 +74,16 @@ AutocompleteInput::AutocompleteInput(const string16& text,
 
   size_t chars_removed = RemoveForcedQueryStringIfNecessary(type_, &text_);
   AdjustCursorPositionIfNecessary(chars_removed, &cursor_position_);
+  if (chars_removed) {
+    // Remove spaces between opening question mark and first actual character.
+    string16 trimmed_text;
+    if ((TrimWhitespace(text_, TRIM_LEADING, &trimmed_text) & TRIM_LEADING) !=
+        0) {
+      AdjustCursorPositionIfNecessary(text_.length() - trimmed_text.length(),
+                                      &cursor_position_);
+      text_ = trimmed_text;
+    }
+  }
 }
 
 AutocompleteInput::~AutocompleteInput() {
@@ -92,7 +104,6 @@ std::string AutocompleteInput::TypeToString(Type type) {
   switch (type) {
     case INVALID:       return "invalid";
     case UNKNOWN:       return "unknown";
-    case REQUESTED_URL: return "requested-url";
     case URL:           return "url";
     case QUERY:         return "query";
     case FORCED_QUERY:  return "forced-query";
@@ -203,7 +214,7 @@ AutocompleteInput::Type AutocompleteInput::Parse(
                                &http_canonicalized_url);
         DCHECK_EQ(std::string(chrome::kHttpScheme), UTF16ToUTF8(http_scheme));
 
-        if ((http_type == URL || http_type == REQUESTED_URL) &&
+        if (http_type == URL &&
             http_parts.username.is_nonempty() &&
             http_parts.password.is_nonempty()) {
           // Manually re-jigger the parsed parts to match |text| (without the
@@ -266,9 +277,8 @@ AutocompleteInput::Type AutocompleteInput::Parse(
       host_with_tld += desired_tld;
       if (net::RegistryControlledDomainService::GetRegistryLength(
           UTF16ToUTF8(host_with_tld), false) != std::string::npos)
-        return REQUESTED_URL;  // Something like "99999999999" that looks like a
-                               // bad IP address, but becomes valid on attaching
-                               // a TLD.
+        return URL;  // Something like "99999999999" that looks like a bad IP
+                     // address, but becomes valid on attaching a TLD.
     }
     return QUERY;  // Could be a broken IP address, etc.
   }
@@ -378,7 +388,7 @@ AutocompleteInput::Type AutocompleteInput::Parse(
   // the user wishes to add a desired_tld, the fixup code will oblige; thus this
   // is a URL.
   if (!desired_tld.empty())
-    return REQUESTED_URL;
+    return URL;
 
   // No scheme, password, port, path, and no known TLD on the host.
   // This could be:
@@ -403,12 +413,11 @@ AutocompleteInput::Type AutocompleteInput::Parse(
 // static
 void AutocompleteInput::ParseForEmphasizeComponents(
     const string16& text,
-    const string16& desired_tld,
     url_parse::Component* scheme,
     url_parse::Component* host) {
   url_parse::Parsed parts;
   string16 scheme_str;
-  Parse(text, desired_tld, &parts, &scheme_str, NULL);
+  Parse(text, string16(), &parts, &scheme_str, NULL);
 
   *scheme = parts.scheme;
   *host = parts.host;
@@ -421,8 +430,7 @@ void AutocompleteInput::ParseForEmphasizeComponents(
     // Obtain the URL prefixed by view-source and parse it.
     string16 real_url(text.substr(after_scheme_and_colon));
     url_parse::Parsed real_parts;
-    AutocompleteInput::Parse(real_url, desired_tld, &real_parts, NULL,
-                             NULL);
+    AutocompleteInput::Parse(real_url, string16(), &real_parts, NULL, NULL);
     if (real_parts.scheme.is_nonempty() || real_parts.host.is_nonempty()) {
       if (real_parts.scheme.is_nonempty()) {
         *scheme = url_parse::Component(
@@ -482,30 +490,23 @@ int AutocompleteInput::NumNonHostComponents(const url_parse::Parsed& parts) {
 void AutocompleteInput::UpdateText(const string16& text,
                                    size_t cursor_position,
                                    const url_parse::Parsed& parts) {
-  DCHECK(cursor_position <= text.length() || cursor_position == string16::npos);
+  DCHECK(cursor_position <= text.length() || cursor_position == string16::npos)
+      << "Text: '" << text << "', cp: " << cursor_position;
   text_ = text;
   cursor_position_ = cursor_position;
   parts_ = parts;
 }
 
-bool AutocompleteInput::Equals(const AutocompleteInput& other) const {
-  return (text_ == other.text_) &&
-         (cursor_position_ == other.cursor_position_) &&
-         (type_ == other.type_) &&
-         (desired_tld_ == other.desired_tld_) &&
-         (scheme_ == other.scheme_) &&
-         (prevent_inline_autocomplete_ == other.prevent_inline_autocomplete_) &&
-         (prefer_keyword_ == other.prefer_keyword_) &&
-         (matches_requested_ == other.matches_requested_);
-}
-
 void AutocompleteInput::Clear() {
   text_.clear();
   cursor_position_ = string16::npos;
+  current_url_ = GURL();
   type_ = INVALID;
   parts_ = url_parse::Parsed();
   scheme_.clear();
-  desired_tld_.clear();
+  canonicalized_url_ = GURL();
   prevent_inline_autocomplete_ = false;
   prefer_keyword_ = false;
+  allow_exact_keyword_match_ = false;
+  matches_requested_ = ALL_MATCHES;
 }

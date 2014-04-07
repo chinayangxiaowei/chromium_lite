@@ -8,7 +8,7 @@
 #include <map>
 
 #include "base/gtest_prod_util.h"
-#include "base/prefs/public/pref_change_registrar.h"
+#include "base/prefs/pref_change_registrar.h"
 #include "chrome/browser/background/background_application_list_model.h"
 #include "chrome/browser/profiles/profile_info_cache_observer.h"
 #include "chrome/browser/profiles/profile_keyed_service.h"
@@ -19,7 +19,7 @@
 
 class Browser;
 class CommandLine;
-class PrefService;
+class PrefRegistrySimple;
 class Profile;
 class ProfileInfoCache;
 class StatusIcon;
@@ -53,7 +53,7 @@ class BackgroundModeManager
                         ProfileInfoCache* profile_cache);
   virtual ~BackgroundModeManager();
 
-  static void RegisterPrefs(PrefService* prefs);
+  static void RegisterPrefs(PrefRegistrySimple* registry);
 
   virtual void RegisterProfile(Profile* profile);
 
@@ -102,7 +102,7 @@ class BackgroundModeManager
     virtual bool GetAcceleratorForCommandId(int command_id,
                                             ui::Accelerator* accelerator)
                                             OVERRIDE;
-    virtual void ExecuteCommand(int command_id) OVERRIDE;
+    virtual void ExecuteCommand(int command_id, int event_flags) OVERRIDE;
 
     // Returns a browser window, or creates one if none are open. Used by
     // operations (like displaying the preferences dialog) that require a
@@ -167,13 +167,15 @@ class BackgroundModeManager
   virtual void OnApplicationListChanged(Profile* profile) OVERRIDE;
 
   // Overrides from ProfileInfoCacheObserver
-  virtual void OnProfileAdded(const FilePath& profile_path) OVERRIDE;
-  virtual void OnProfileWillBeRemoved(const FilePath& profile_path) OVERRIDE;
-  virtual void OnProfileWasRemoved(const FilePath& profile_path,
+  virtual void OnProfileAdded(const base::FilePath& profile_path) OVERRIDE;
+  virtual void OnProfileWillBeRemoved(
+      const base::FilePath& profile_path) OVERRIDE;
+  virtual void OnProfileWasRemoved(const base::FilePath& profile_path,
                                    const string16& profile_name) OVERRIDE;
-  virtual void OnProfileNameChanged(const FilePath& profile_path,
+  virtual void OnProfileNameChanged(const base::FilePath& profile_path,
                                     const string16& old_profile_name) OVERRIDE;
-  virtual void OnProfileAvatarChanged(const FilePath& profile_path) OVERRIDE;
+  virtual void OnProfileAvatarChanged(
+      const base::FilePath& profile_path) OVERRIDE;
 
   // Overrides from SimpleMenuModel::Delegate implementation.
   virtual bool IsCommandIdChecked(int command_id) const OVERRIDE;
@@ -181,7 +183,7 @@ class BackgroundModeManager
   virtual bool GetAcceleratorForCommandId(int command_id,
                                           ui::Accelerator* accelerator)
                                           OVERRIDE;
-  virtual void ExecuteCommand(int command_id) OVERRIDE;
+  virtual void ExecuteCommand(int command_id, int event_flags) OVERRIDE;
 
   // Invoked when an extension is installed so we can ensure that
   // launch-on-startup is enabled if appropriate. |extension| can be NULL when

@@ -142,7 +142,7 @@ MessageLoop::MessageLoop(Type type)
       exception_restoration_(false),
       message_histogram_(NULL),
       run_loop_(NULL),
-#ifdef OS_WIN
+#if defined(OS_WIN)
       os_modal_loop_(false),
 #endif  // OS_WIN
       next_sequence_num_(0) {
@@ -251,9 +251,12 @@ void MessageLoop::EnableHistogrammer(bool enable) {
 }
 
 // static
-void MessageLoop::InitMessagePumpForUIFactory(MessagePumpFactory* factory) {
-  DCHECK(!message_pump_for_ui_factory_);
+bool MessageLoop::InitMessagePumpForUIFactory(MessagePumpFactory* factory) {
+  if (message_pump_for_ui_factory_)
+    return false;
+
   message_pump_for_ui_factory_ = factory;
+  return true;
 }
 
 void MessageLoop::AddDestructionObserver(
@@ -469,10 +472,10 @@ void MessageLoop::RunTask(const PendingTask& pending_task) {
       tracked_objects::ThreadData::NowForStartOfRun(pending_task.birth_tally);
 
   FOR_EACH_OBSERVER(TaskObserver, task_observers_,
-                    WillProcessTask(pending_task.time_posted));
+                    WillProcessTask(pending_task));
   pending_task.task.Run();
   FOR_EACH_OBSERVER(TaskObserver, task_observers_,
-                    DidProcessTask(pending_task.time_posted));
+                    DidProcessTask(pending_task));
 
   tracked_objects::ThreadData::TallyRunOnNamedThreadIfTracking(pending_task,
       start_time, tracked_objects::ThreadData::NowForEndOfRun());

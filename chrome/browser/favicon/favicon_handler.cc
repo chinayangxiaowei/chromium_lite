@@ -12,8 +12,7 @@
 #include "base/bind.h"
 #include "base/bind_helpers.h"
 #include "base/memory/ref_counted_memory.h"
-#include "chrome/browser/bookmarks/bookmark_model.h"
-#include "chrome/browser/bookmarks/bookmark_model_factory.h"
+#include "chrome/browser/bookmarks/bookmark_service.h"
 #include "chrome/browser/favicon/favicon_service_factory.h"
 #include "chrome/browser/favicon/favicon_util.h"
 #include "chrome/browser/history/select_favicon_frames.h"
@@ -95,59 +94,41 @@ bool IsValid(const history::FaviconBitmapResult& bitmap_result) {
   return bitmap_result.is_valid();
 }
 
-// Return list with the current value and historical values of
-// history::GetDefaultFaviconSizes().
-const std::vector<history::FaviconSizes>& GetHistoricalDefaultFaviconSizes() {
-  CR_DEFINE_STATIC_LOCAL(
-      std::vector<history::FaviconSizes>, kHistoricalFaviconSizes, ());
-  if (kHistoricalFaviconSizes.empty()) {
-    kHistoricalFaviconSizes.push_back(history::GetDefaultFaviconSizes());
-    // The default favicon sizes used to be a single empty size.
-    history::FaviconSizes old_favicon_sizes;
-    old_favicon_sizes.push_back(gfx::Size());
-    kHistoricalFaviconSizes.push_back(old_favicon_sizes);
-  }
-  return kHistoricalFaviconSizes;
-}
-
 // Returns true if at least one of the bitmaps in |bitmap_results| is expired or
-// if |bitmap_results| is known to be incomplete.
+// if |bitmap_results| is missing favicons for |desired_size_in_dip| and one of
+// the scale factors in FaviconUtil::GetFaviconScaleFactors().
 bool HasExpiredOrIncompleteResult(
-    const std::vector<history::FaviconBitmapResult>& bitmap_results,
-    const history::IconURLSizesMap& icon_url_sizes) {
+    int desired_size_in_dip,
+    const std::vector<history::FaviconBitmapResult>& bitmap_results) {
   // Check if at least one of the bitmaps is expired.
   std::vector<history::FaviconBitmapResult>::const_iterator it =
       std::find_if(bitmap_results.begin(), bitmap_results.end(), IsExpired);
   if (it != bitmap_results.end())
     return true;
 
-  // |bitmap_results| is known to be incomplete if the favicon sizes in
-  // |icon_url_sizes| for any of the icon URLs in |bitmap_results| are unknown.
-  // The favicon sizes for an icon URL are unknown if MergeFavicon() has set
-  // them to the default favicon sizes.
+   // Any favicon size is good if the desired size is 0.
+   if (desired_size_in_dip == 0)
+     return false;
 
-  std::set<GURL> icon_urls;
+  // Check if the favicon for at least one of the scale factors is missing.
+  // |bitmap_results| should always be complete for data inserted by
+  // FaviconHandler as the FaviconHandler stores favicons resized to all
+  // of FaviconUtil::GetFaviconScaleFactors() into the history backend.
+  // Examples of when |bitmap_results| can be incomplete:
+  // - Favicons inserted into the history backend by sync.
+  // - Favicons for imported bookmarks.
+  std::vector<gfx::Size> favicon_sizes;
   for (size_t i = 0; i < bitmap_results.size(); ++i)
-    icon_urls.insert(bitmap_results[i].icon_url);
+    favicon_sizes.push_back(bitmap_results[i].pixel_size);
 
-  for (std::set<GURL>::iterator it = icon_urls.begin(); it != icon_urls.end();
-       ++it) {
-    const GURL& icon_url = *it;
-    history::IconURLSizesMap::const_iterator icon_url_sizes_it =
-        icon_url_sizes.find(icon_url);
-    if (icon_url_sizes_it == icon_url_sizes.end()) {
-      // |icon_url_sizes| should have an entry for each icon URL in
-      // |bitmap_results|.
-      NOTREACHED();
-      return true;
-    }
-
-    const history::FaviconSizes& sizes = icon_url_sizes_it->second;
-    const std::vector<history::FaviconSizes>& historical_sizes =
-        GetHistoricalDefaultFaviconSizes();
-    std::vector<history::FaviconSizes>::const_iterator historical_it =
-        std::find(historical_sizes.begin(), historical_sizes.end(), sizes);
-    if (historical_it != historical_sizes.end())
+  std::vector<ui::ScaleFactor> scale_factors =
+      FaviconUtil::GetFaviconScaleFactors();
+  for (size_t i = 0; i < scale_factors.size(); ++i) {
+    int edge_size_in_pixel = floor(
+        desired_size_in_dip * ui::GetScaleFactorScale(scale_factors[i]));
+    std::vector<gfx::Size>::iterator it = std::find(favicon_sizes.begin(),
+        favicon_sizes.end(), gfx::Size(edge_size_in_pixel, edge_size_in_pixel));
+    if (it == favicon_sizes.end())
       return true;
   }
   return false;
@@ -289,10 +270,8 @@ void FaviconHandler::SetFavicon(
 
   if (UrlMatches(url, url_) && icon_type == history::FAVICON) {
     NavigationEntry* entry = GetEntry();
-    if (entry) {
-      entry->GetFavicon().url = icon_url;
-      UpdateFavicon(entry, &image);
-    }
+    if (entry)
+      UpdateFavicon(entry, icon_url, image);
   }
 }
 
@@ -302,20 +281,27 @@ void FaviconHandler::UpdateFavicon(NavigationEntry* entry,
       favicon_bitmap_results,
       FaviconUtil::GetFaviconScaleFactors(),
       preferred_icon_size());
-  if (!resized_image.IsEmpty())
-    UpdateFavicon(entry, &resized_image);
+  // The history service sends back results for a single icon URL, so it does
+  // not matter which result we get the |icon_url| from.
+  const GURL icon_url = favicon_bitmap_results.empty() ?
+      GURL() : favicon_bitmap_results[0].icon_url;
+  UpdateFavicon(entry, icon_url, resized_image);
 }
 
 void FaviconHandler::UpdateFavicon(NavigationEntry* entry,
-                                   const gfx::Image* image) {
+                                   const GURL& icon_url,
+                                   const gfx::Image& image) {
   // No matter what happens, we need to mark the favicon as being set.
   entry->GetFavicon().valid = true;
 
-  if (!image)
+  bool icon_url_changed = (entry->GetFavicon().url != icon_url);
+  entry->GetFavicon().url = icon_url;
+
+  if (image.IsEmpty())
     return;
 
-  entry->GetFavicon().image = *image;
-  delegate_->NotifyFaviconUpdated();
+  entry->GetFavicon().image = image;
+  delegate_->NotifyFaviconUpdated(icon_url_changed);
 }
 
 void FaviconHandler::OnUpdateFaviconURL(
@@ -354,8 +340,6 @@ void FaviconHandler::ProcessCurrentUrl() {
         DoUrlAndIconMatch(*current_candidate(), entry->GetFavicon().url,
                           history::FAVICON))
       return;
-
-    entry->GetFavicon().url = current_candidate()->icon_url;
   } else if (!favicon_expired_or_incomplete_ && got_favicon_from_history_ &&
              HasValidResult(history_results_) &&
              DoUrlsAndIconsMatch(*current_candidate(), history_results_)) {
@@ -370,7 +354,6 @@ void FaviconHandler::ProcessCurrentUrl() {
 void FaviconHandler::OnDidDownloadFavicon(
     int id,
     const GURL& image_url,
-    bool errored,
     int requested_size,
     const std::vector<SkBitmap>& bitmaps) {
   DownloadRequests::iterator i = download_requests_.find(id);
@@ -391,7 +374,7 @@ void FaviconHandler::OnDidDownloadFavicon(
     // The downloaded icon is still valid when there is no FaviconURL update
     // during the downloading.
     bool request_next_icon = true;
-    if (!errored) {
+    if (!bitmaps.empty()) {
       request_next_icon = !UpdateFaviconCandidate(
           i->second.url, image_url, image, score, i->second.icon_type);
     }
@@ -479,14 +462,13 @@ bool FaviconHandler::ShouldSaveFavicon(const GURL& url) {
     return true;
 
   // Otherwise store the favicon if the page is bookmarked.
-  BookmarkModel* bookmark_model =
-      BookmarkModelFactory::GetForProfile(profile_);
-  return bookmark_model && bookmark_model->IsBookmarked(url);
+  BookmarkService* bookmark_service =
+      BookmarkService::FromBrowserContext(profile_);
+  return bookmark_service && bookmark_service->IsBookmarked(url);
 }
 
 void FaviconHandler::OnFaviconDataForInitialURL(
-    const std::vector<history::FaviconBitmapResult>& favicon_bitmap_results,
-    const history::IconURLSizesMap& icon_url_sizes) {
+    const std::vector<history::FaviconBitmapResult>& favicon_bitmap_results) {
   NavigationEntry* entry = GetEntry();
   if (!entry)
     return;
@@ -496,23 +478,24 @@ void FaviconHandler::OnFaviconDataForInitialURL(
 
   bool has_results = !favicon_bitmap_results.empty();
   favicon_expired_or_incomplete_ = has_results && HasExpiredOrIncompleteResult(
-      favicon_bitmap_results, icon_url_sizes);
+      preferred_icon_size(), favicon_bitmap_results);
 
   if (has_results && icon_types_ == history::FAVICON &&
       !entry->GetFavicon().valid &&
       (!current_candidate() ||
        DoUrlsAndIconsMatch(*current_candidate(), favicon_bitmap_results))) {
-    // The db knows the favicon (although it may be out of date) and the entry
-    // doesn't have an icon. Set the favicon now, and if the favicon turns out
-    // to be expired (or the wrong url) we'll fetch later on. This way the
-    // user doesn't see a flash of the default favicon.
-
-    // The history service sends back results for a single icon URL, so it does
-    // not matter which result we get the |icon_url| from.
-    entry->GetFavicon().url = favicon_bitmap_results[0].icon_url;
-    if (HasValidResult(favicon_bitmap_results))
+    if (HasValidResult(favicon_bitmap_results)) {
+      // The db knows the favicon (although it may be out of date) and the entry
+      // doesn't have an icon. Set the favicon now, and if the favicon turns out
+      // to be expired (or the wrong url) we'll fetch later on. This way the
+      // user doesn't see a flash of the default favicon.
       UpdateFavicon(entry, favicon_bitmap_results);
-    entry->GetFavicon().valid = true;
+    } else {
+      // If |favicon_bitmap_results| does not have any valid results, treat the
+      // favicon as if it's expired.
+      // TODO(pkotwicz): Do something better.
+      favicon_expired_or_incomplete_ = true;
+    }
   }
 
   if (has_results && !favicon_expired_or_incomplete_) {
@@ -568,18 +551,15 @@ void FaviconHandler::DownloadFaviconOrAskHistory(
 }
 
 void FaviconHandler::OnFaviconData(
-    const std::vector<history::FaviconBitmapResult>& favicon_bitmap_results,
-    const history::IconURLSizesMap& icon_url_sizes) {
+    const std::vector<history::FaviconBitmapResult>& favicon_bitmap_results) {
   NavigationEntry* entry = GetEntry();
   if (!entry)
     return;
 
   bool has_results = !favicon_bitmap_results.empty();
   bool has_expired_or_incomplete_result = HasExpiredOrIncompleteResult(
-      favicon_bitmap_results, icon_url_sizes);
+      preferred_icon_size(), favicon_bitmap_results);
 
-  // No need to update the favicon url. By the time we get here
-  // UpdateFaviconURL will have set the favicon url.
   if (has_results && icon_types_ == history::FAVICON) {
     if (HasValidResult(favicon_bitmap_results)) {
       // There is a favicon, set it now. If expired we'll download the current

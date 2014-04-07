@@ -5,8 +5,8 @@
 #include "ash/wm/base_layout_manager.h"
 
 #include "ash/screen_ash.h"
+#include "ash/shelf/shelf_layout_manager.h"
 #include "ash/shell.h"
-#include "ash/wm/shelf_layout_manager.h"
 #include "ash/wm/window_animations.h"
 #include "ash/wm/window_properties.h"
 #include "ash/wm/window_util.h"
@@ -18,6 +18,7 @@
 #include "ui/base/ui_base_types.h"
 #include "ui/compositor/layer.h"
 #include "ui/gfx/screen.h"
+#include "ui/views/corewm/corewm_switches.h"
 #include "ui/views/corewm/window_util.h"
 
 namespace ash {
@@ -154,9 +155,12 @@ void BaseLayoutManager::OnWindowDestroying(aura::Window* window) {
 
 void BaseLayoutManager::OnWindowActivated(aura::Window* gained_active,
                                           aura::Window* lost_active) {
-  if (gained_active && wm::IsWindowMinimized(gained_active)) {
-    gained_active->Show();
-    DCHECK(!wm::IsWindowMinimized(gained_active));
+  if (views::corewm::UseFocusController()) {
+    if (gained_active && wm::IsWindowMinimized(gained_active) &&
+        !gained_active->IsVisible()) {
+      gained_active->Show();
+      DCHECK(!wm::IsWindowMinimized(gained_active));
+    }
   }
 }
 

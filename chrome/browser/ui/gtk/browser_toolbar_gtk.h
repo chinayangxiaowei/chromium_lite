@@ -10,11 +10,12 @@
 
 #include "base/compiler_specific.h"
 #include "base/memory/scoped_ptr.h"
-#include "base/prefs/public/pref_member.h"
+#include "base/prefs/pref_member.h"
 #include "chrome/browser/command_observer.h"
 #include "chrome/browser/ui/gtk/custom_button.h"
 #include "chrome/browser/ui/gtk/menu_gtk.h"
 #include "chrome/browser/ui/toolbar/wrench_menu_model.h"
+#include "content/public/browser/host_zoom_map.h"
 #include "content/public/browser/notification_observer.h"
 #include "content/public/browser/notification_registrar.h"
 #include "ui/base/accelerators/accelerator.h"
@@ -112,6 +113,8 @@ class BrowserToolbarGtk : public CommandObserver,
                          bool should_restore_state);
 
  private:
+  void OnZoomLevelChanged(const content::HostZoomMap::ZoomLevelChange& host);
+
   // Connect/Disconnect signals for dragging a url onto the home button.
   void SetUpDragForHomeButton();
 
@@ -211,6 +214,7 @@ class BrowserToolbarGtk : public CommandObserver,
   StringPrefMember home_page_;
   BooleanPrefMember home_page_is_new_tab_page_;
 
+  content::HostZoomMap::ZoomLevelChangedCallback zoom_callback_;
   content::NotificationRegistrar registrar_;
 
   // A GtkEntry that isn't part of the hierarchy. We keep this for native

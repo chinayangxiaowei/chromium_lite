@@ -18,10 +18,10 @@
 #include "base/run_loop.h"
 #include "base/sequenced_task_runner.h"
 #include "base/stl_util.h"
-#include "base/string_number_conversions.h"
-#include "base/string_split.h"
 #include "base/string_util.h"
 #include "base/stringprintf.h"
+#include "base/strings/string_number_conversions.h"
+#include "base/strings/string_split.h"
 #include "base/threading/thread.h"
 #include "base/version.h"
 #include "chrome/browser/extensions/blacklist.h"
@@ -39,10 +39,13 @@
 #include "chrome/browser/extensions/updater/manifest_fetch_data.h"
 #include "chrome/browser/extensions/updater/request_queue_impl.h"
 #include "chrome/browser/google/google_util.h"
-#include "chrome/browser/prefs/pref_service.h"
+#include "chrome/browser/prefs/pref_service_syncable.h"
 #include "chrome/common/chrome_notification_types.h"
 #include "chrome/common/extensions/extension.h"
 #include "chrome/common/extensions/extension_manifest_constants.h"
+#include "chrome/common/extensions/manifest_handler.h"
+#include "chrome/common/extensions/manifest_url_handler.h"
+#include "chrome/common/omaha_query_params.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/test/base/testing_profile.h"
 #include "content/public/browser/notification_details.h"
@@ -51,6 +54,7 @@
 #include "content/public/browser/notification_service.h"
 #include "content/public/browser/notification_source.h"
 #include "content/public/test/test_browser_thread.h"
+#include "extensions/common/id_util.h"
 #include "libxml/globals.h"
 #include "net/base/backoff_entry.h"
 #include "net/base/escape.h"
@@ -119,7 +123,7 @@ class MockExtensionDownloaderDelegate : public ExtensionDownloaderDelegate {
                                                const PingResult&,
                                                const std::set<int>&));
   MOCK_METHOD6(OnExtensionDownloadFinished, void(const std::string&,
-                                                 const FilePath&,
+                                                 const base::FilePath&,
                                                  const GURL&,
                                                  const std::string&,
                                                  const PingResult&,
@@ -233,7 +237,7 @@ class MockService : public TestExtensionService {
   // no two extensions share the same name.
   void CreateTestExtensions(int id, int count, ExtensionList *list,
                             const std::string* update_url,
-                            Extension::Location location) {
+                            Manifest::Location location) {
     for (int i = 1; i <= count; i++) {
       DictionaryValue manifest;
       manifest.SetString(extension_manifest_keys::kVersion,
@@ -260,14 +264,8 @@ class MockService : public TestExtensionService {
 };
 
 
-std::string GenerateId(std::string input) {
-  std::string result;
-  EXPECT_TRUE(Extension::GenerateId(input, &result));
-  return result;
-}
-
 bool ShouldInstallExtensionsOnly(const Extension& extension) {
-  return extension.GetType() == Extension::TYPE_EXTENSION;
+  return extension.GetType() == Manifest::TYPE_EXTENSION;
 }
 
 bool ShouldInstallThemesOnly(const Extension& extension) {
@@ -288,7 +286,7 @@ void SetupPendingExtensionManagerForTest(
         (i % 2 == 0) ? &ShouldInstallThemesOnly : &ShouldInstallExtensionsOnly;
     const bool kIsFromSync = true;
     const bool kInstallSilently = true;
-    std::string id = GenerateId(base::StringPrintf("extension%i", i));
+    std::string id = id_util::GenerateId(base::StringPrintf("extension%i", i));
 
     pending_extension_manager->AddForTesting(
         PendingExtensionInfo(id,
@@ -297,7 +295,7 @@ void SetupPendingExtensionManagerForTest(
                              should_allow_install,
                              kIsFromSync,
                              kInstallSilently,
-                             Extension::INTERNAL));
+                             Manifest::INTERNAL));
   }
 }
 
@@ -369,9 +367,9 @@ class ServiceForDownloadTests : public MockService {
     fake_crx_installers_[id] = crx_installer;
   }
 
-  bool UpdateExtension(
+  virtual bool UpdateExtension(
       const std::string& id,
-      const FilePath& extension_path,
+      const base::FilePath& extension_path,
       const GURL& download_url,
       CrxInstaller** out_crx_installer) OVERRIDE {
     extension_id_ = id;
@@ -397,7 +395,7 @@ class ServiceForDownloadTests : public MockService {
   }
 
   const std::string& extension_id() const { return extension_id_; }
-  const FilePath& install_path() const { return install_path_; }
+  const base::FilePath& install_path() const { return install_path_; }
   const GURL& download_url() const { return download_url_; }
 
  private:
@@ -408,7 +406,7 @@ class ServiceForDownloadTests : public MockService {
   std::map<std::string, CrxInstaller*> fake_crx_installers_;
 
   std::string extension_id_;
-  FilePath install_path_;
+  base::FilePath install_path_;
   GURL download_url_;
 
   // The last extension ID that GetExtensionById was called with.
@@ -441,6 +439,33 @@ static void ExtractParameters(const std::string& params,
   }
 }
 
+static void VerifyQueryAndExtractParameters(
+    const std::string& query,
+    std::map<std::string, std::string>* result) {
+  std::map<std::string, std::string> params;
+  ExtractParameters(query, &params);
+
+chrome::OmahaQueryParams::ProdId prod =
+#if defined(GOOGLE_CHROME_BUILD)
+  chrome::OmahaQueryParams::CHROMECRX;
+#else
+  chrome::OmahaQueryParams::CHROMIUMCRX;
+#endif
+  std::string omaha_params = chrome::OmahaQueryParams::Get(prod);
+  std::map<std::string, std::string> expected;
+  ExtractParameters(omaha_params, &expected);
+
+  for (std::map<std::string, std::string>::iterator it = expected.begin();
+       it != expected.end(); ++it) {
+    EXPECT_EQ(it->second, params[it->first]);
+  }
+
+  EXPECT_EQ(1U, params.count("x"));
+  std::string decoded = net::UnescapeURLComponent(
+      params["x"], net::UnescapeRule::URL_SPECIAL_CHARS);
+  ExtractParameters(decoded, result);
+}
+
 // All of our tests that need to use private APIs of ExtensionUpdater live
 // inside this class (which is a friend to ExtensionUpdater).
 class ExtensionUpdaterTest : public testing::Test {
@@ -456,6 +481,7 @@ class ExtensionUpdaterTest : public testing::Test {
 
   virtual void SetUp() OVERRIDE {
     prefs_.reset(new TestExtensionPrefs(loop_.message_loop_proxy()));
+    (new extensions::UpdateURLHandler)->Register();
   }
 
   virtual void TearDown() OVERRIDE {
@@ -464,6 +490,7 @@ class ExtensionUpdaterTest : public testing::Test {
     // those objects are released.
     RunUntilIdle();
     prefs_.reset();
+    ManifestHandler::ClearRegistryForTesting();
   }
 
   void RunUntilIdle() {
@@ -518,7 +545,7 @@ class ExtensionUpdaterTest : public testing::Test {
                                           pending_extension_manager);
     } else {
       service.CreateTestExtensions(1, 1, &extensions, &update_url,
-                                   Extension::INTERNAL);
+                                   Manifest::INTERNAL);
       service.set_extensions(extensions);
     }
 
@@ -550,16 +577,10 @@ class ExtensionUpdaterTest : public testing::Test {
     EXPECT_EQ("/bar", url.path());
 
     // Validate the extension request parameters in the query. It should
-    // look something like "?x=id%3D<id>%26v%3D<version>%26uc".
+    // look something like "x=id%3D<id>%26v%3D<version>%26uc".
     EXPECT_TRUE(url.has_query());
-    std::vector<std::string> parts;
-    base::SplitString(url.query(), '=', &parts);
-    EXPECT_EQ(2u, parts.size());
-    EXPECT_EQ("x", parts[0]);
-    std::string decoded = net::UnescapeURLComponent(
-        parts[1], net::UnescapeRule::URL_SPECIAL_CHARS);
     std::map<std::string, std::string> params;
-    ExtractParameters(decoded, &params);
+    VerifyQueryAndExtractParameters(url.query(), &params);
     if (pending) {
       EXPECT_TRUE(pending_extension_manager->IsIdPending(params["id"]));
       EXPECT_EQ("0.0.0.0", params["v"]);
@@ -599,16 +620,10 @@ class ExtensionUpdaterTest : public testing::Test {
     EXPECT_EQ("/service/update2/crx", url.path());
 
     // Validate the extension request parameters in the query. It should
-    // look something like "?x=id%3D<id>%26v%3D<version>%26uc".
+    // look something like "x=id%3D<id>%26v%3D<version>%26uc".
     EXPECT_TRUE(url.has_query());
-    std::vector<std::string> parts;
-    base::SplitString(url.query(), '=', &parts);
-    EXPECT_EQ(2u, parts.size());
-    EXPECT_EQ("x", parts[0]);
-    std::string decoded = net::UnescapeURLComponent(
-        parts[1], net::UnescapeRule::URL_SPECIAL_CHARS);
     std::map<std::string, std::string> params;
-    ExtractParameters(decoded, &params);
+    VerifyQueryAndExtractParameters(url.query(), &params);
     EXPECT_EQ("com.google.crx.blacklist", params["id"]);
     EXPECT_EQ("0", params["v"]);
     EXPECT_EQ("", params["uc"]);
@@ -623,9 +638,12 @@ class ExtensionUpdaterTest : public testing::Test {
     // option to appear in the x= parameter.
     ManifestFetchData fetch_data(GURL("http://localhost/foo"), 0);
     fetch_data.AddExtension(id, version, &kNeverPingedData, "", "");
-    EXPECT_EQ("http://localhost/foo\?x=id%3Daaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-              "%26v%3D1.0%26uc",
-              fetch_data.full_url().spec());
+
+    std::map<std::string, std::string> params;
+    VerifyQueryAndExtractParameters(fetch_data.full_url().query(), &params);
+    EXPECT_EQ(id, params["id"]);
+    EXPECT_EQ(version, params["v"]);
+    EXPECT_EQ(0U, params.count("ap"));
   }
 
   void TestUpdateUrlDataSimple() {
@@ -636,9 +654,11 @@ class ExtensionUpdaterTest : public testing::Test {
     // option to appear in the x= parameter.
     ManifestFetchData fetch_data(GURL("http://localhost/foo"), 0);
     fetch_data.AddExtension(id, version, &kNeverPingedData, "bar", "");
-    EXPECT_EQ("http://localhost/foo\?x=id%3Daaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-              "%26v%3D1.0%26uc%26ap%3Dbar",
-              fetch_data.full_url().spec());
+    std::map<std::string, std::string> params;
+    VerifyQueryAndExtractParameters(fetch_data.full_url().query(), &params);
+    EXPECT_EQ(id, params["id"]);
+    EXPECT_EQ(version, params["v"]);
+    EXPECT_EQ("bar", params["ap"]);
   }
 
   void TestUpdateUrlDataCompound() {
@@ -649,9 +669,11 @@ class ExtensionUpdaterTest : public testing::Test {
     // option to appear in the x= parameter.
     ManifestFetchData fetch_data(GURL("http://localhost/foo"), 0);
     fetch_data.AddExtension(id, version, &kNeverPingedData, "a=1&b=2&c", "");
-    EXPECT_EQ("http://localhost/foo\?x=id%3Daaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-              "%26v%3D1.0%26uc%26ap%3Da%253D1%2526b%253D2%2526c",
-              fetch_data.full_url().spec());
+    std::map<std::string, std::string> params;
+    VerifyQueryAndExtractParameters(fetch_data.full_url().query(), &params);
+    EXPECT_EQ(id, params["id"]);
+    EXPECT_EQ(version, params["v"]);
+    EXPECT_EQ("a%3D1%26b%3D2%26c", params["ap"]);
   }
 
   void TestUpdateUrlDataFromGallery(const std::string& gallery_url) {
@@ -663,7 +685,7 @@ class ExtensionUpdaterTest : public testing::Test {
     ExtensionList extensions;
     std::string url(gallery_url);
 
-    service.CreateTestExtensions(1, 1, &extensions, &url, Extension::INTERNAL);
+    service.CreateTestExtensions(1, 1, &extensions, &url, Manifest::INTERNAL);
 
     const std::string& id = extensions[0]->id();
     EXPECT_CALL(delegate, GetPingDataForExtension(id, _));
@@ -691,9 +713,11 @@ class ExtensionUpdaterTest : public testing::Test {
     ManifestFetchData fetch_data(GURL("http://localhost/foo"), 0);
     fetch_data.AddExtension(id, version, &kNeverPingedData,
                             kEmptyUpdateUrlData, install_source);
-    EXPECT_EQ("http://localhost/foo\?x=id%3Daaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-              "%26v%3D1.0%26installsource%3Dinstally%26uc",
-              fetch_data.full_url().spec());
+    std::map<std::string, std::string> params;
+    VerifyQueryAndExtractParameters(fetch_data.full_url().query(), &params);
+    EXPECT_EQ(id, params["id"]);
+    EXPECT_EQ(version, params["v"]);
+    EXPECT_EQ(install_source, params["installsource"]);
   }
 
   void TestDetermineUpdates() {
@@ -712,8 +736,8 @@ class ExtensionUpdaterTest : public testing::Test {
     // Create two updates - expect that DetermineUpdates will return the first
     // one (v1.0 installed, v1.1 available) but not the second one (both
     // installed and available at v2.0).
-    const std::string id1 = GenerateId("1");
-    const std::string id2 = GenerateId("2");
+    const std::string id1 = id_util::GenerateId("1");
+    const std::string id2 = id_util::GenerateId("2");
     fetch_data.AddExtension(id1, "1.0.0.0",
                             &kNeverPingedData, kEmptyUpdateUrlData, "");
     AddParseResult(id1, "1.1",
@@ -1000,11 +1024,11 @@ class ExtensionUpdaterTest : public testing::Test {
           PendingExtensionInfo(id, test_url, version,
                                &ShouldAlwaysInstall, kIsFromSync,
                                kInstallSilently,
-                               Extension::INTERNAL));
+                               Manifest::INTERNAL));
     }
 
     // Call back the ExtensionUpdater with a 200 response and some test data
-    FilePath extension_file_path(FILE_PATH_LITERAL("/whatever"));
+    base::FilePath extension_file_path(FILE_PATH_LITERAL("/whatever"));
     fetcher = factory.GetFetcherByID(ExtensionDownloader::kExtensionFetcherId);
     EXPECT_TRUE(fetcher != NULL && fetcher->delegate() != NULL);
     EXPECT_TRUE(fetcher->GetLoadFlags() == kExpectedLoadFlags);
@@ -1034,7 +1058,7 @@ class ExtensionUpdaterTest : public testing::Test {
     // Expect that ExtensionUpdater asked the mock extensions service to install
     // a file with the test data for the right id.
     EXPECT_EQ(id, service->extension_id());
-    FilePath tmpfile_path = service->install_path();
+    base::FilePath tmpfile_path = service->install_path();
     EXPECT_FALSE(tmpfile_path.empty());
     EXPECT_EQ(test_url, service->download_url());
     EXPECT_EQ(extension_file_path, tmpfile_path);
@@ -1136,7 +1160,7 @@ class ExtensionUpdaterTest : public testing::Test {
     updater.downloader_->FetchUpdatedExtension(fetch2.Pass());
 
     // Make the first fetch complete.
-    FilePath extension_file_path(FILE_PATH_LITERAL("/whatever"));
+    base::FilePath extension_file_path(FILE_PATH_LITERAL("/whatever"));
 
     fetcher = factory.GetFetcherByID(ExtensionDownloader::kExtensionFetcherId);
     EXPECT_TRUE(fetcher != NULL && fetcher->delegate() != NULL);
@@ -1152,7 +1176,7 @@ class ExtensionUpdaterTest : public testing::Test {
         ExtensionSystem::Get(&profile))->
         CreateExtensionService(
             CommandLine::ForCurrentProcess(),
-            FilePath(),
+            base::FilePath(),
             false);
     ExtensionService* extension_service =
         ExtensionSystem::Get(&profile)->extension_service();
@@ -1182,7 +1206,7 @@ class ExtensionUpdaterTest : public testing::Test {
     RunUntilIdle();
 
     // Expect that the service was asked to do an install with the right data.
-    FilePath tmpfile_path = service.install_path();
+    base::FilePath tmpfile_path = service.install_path();
     EXPECT_FALSE(tmpfile_path.empty());
     EXPECT_EQ(id1, service.extension_id());
     EXPECT_EQ(url1, service.download_url());
@@ -1190,7 +1214,7 @@ class ExtensionUpdaterTest : public testing::Test {
 
     // Make sure the second fetch finished and asked the service to do an
     // update.
-    FilePath extension_file_path2(FILE_PATH_LITERAL("/whatever2"));
+    base::FilePath extension_file_path2(FILE_PATH_LITERAL("/whatever2"));
     fetcher = factory.GetFetcherByID(ExtensionDownloader::kExtensionFetcherId);
     EXPECT_TRUE(fetcher != NULL && fetcher->delegate() != NULL);
     EXPECT_TRUE(fetcher->GetLoadFlags() == kExpectedLoadFlags);
@@ -1212,7 +1236,7 @@ class ExtensionUpdaterTest : public testing::Test {
 
       // Fake install notice.  This should start the second installation,
       // which will be checked below.
-      fake_crx1->NotifyCrxInstallComplete(NULL);
+      fake_crx1->NotifyCrxInstallComplete(false);
 
       EXPECT_TRUE(updater.crx_install_is_running_);
     }
@@ -1226,7 +1250,7 @@ class ExtensionUpdaterTest : public testing::Test {
 
     if (updates_start_running) {
       EXPECT_TRUE(updater.crx_install_is_running_);
-      fake_crx2->NotifyCrxInstallComplete(NULL);
+      fake_crx2->NotifyCrxInstallComplete(false);
     }
     EXPECT_FALSE(updater.crx_install_is_running_);
   }
@@ -1284,9 +1308,9 @@ class ExtensionUpdaterTest : public testing::Test {
     GURL url1("http://clients2.google.com/service/update2/crx");
     GURL url2("http://www.somewebsite.com");
     service.CreateTestExtensions(1, 1, &tmp, &url1.possibly_invalid_spec(),
-                                 Extension::INTERNAL);
+                                 Manifest::INTERNAL);
     service.CreateTestExtensions(2, 1, &tmp, &url2.possibly_invalid_spec(),
-                                 Extension::INTERNAL);
+                                 Manifest::INTERNAL);
     EXPECT_EQ(2u, tmp.size());
     service.set_extensions(tmp);
 
@@ -1405,7 +1429,7 @@ class ExtensionUpdaterTest : public testing::Test {
     GURL update_url("http://www.google.com/manifest");
     ExtensionList tmp;
     service.CreateTestExtensions(1, 1, &tmp, &update_url.spec(),
-                                 Extension::INTERNAL);
+                                 Manifest::INTERNAL);
     service.set_extensions(tmp);
 
     ExtensionUpdater updater(
@@ -1539,8 +1563,9 @@ TEST_F(ExtensionUpdaterTest, TestNonAutoUpdateableLocations) {
 
   // Non-internal non-external extensions should be rejected.
   ExtensionList extensions;
-  service.CreateTestExtensions(1, 1, &extensions, NULL, Extension::INVALID);
-  service.CreateTestExtensions(2, 1, &extensions, NULL, Extension::INTERNAL);
+  service.CreateTestExtensions(1, 1, &extensions, NULL,
+                               Manifest::INVALID_LOCATION);
+  service.CreateTestExtensions(2, 1, &extensions, NULL, Manifest::INTERNAL);
   ASSERT_EQ(2u, extensions.size());
   const std::string& updateable_id = extensions[1]->id();
 
@@ -1573,9 +1598,9 @@ TEST_F(ExtensionUpdaterTest, TestUpdatingDisabledExtensions) {
   ExtensionList enabled_extensions;
   ExtensionList disabled_extensions;
   service.CreateTestExtensions(1, 1, &enabled_extensions, NULL,
-      Extension::INTERNAL);
+      Manifest::INTERNAL);
   service.CreateTestExtensions(2, 1, &disabled_extensions, NULL,
-      Extension::INTERNAL);
+      Manifest::INTERNAL);
   ASSERT_EQ(1u, enabled_extensions.size());
   ASSERT_EQ(1u, disabled_extensions.size());
   const std::string& enabled_id = enabled_extensions[0]->id();
@@ -1605,7 +1630,7 @@ TEST_F(ExtensionUpdaterTest, TestManifestFetchesBuilderAddExtension) {
 
   // First, verify that adding valid extensions does invoke the callbacks on
   // the delegate.
-  std::string id = GenerateId("foo");
+  std::string id = id_util::GenerateId("foo");
   EXPECT_CALL(delegate, GetPingDataForExtension(id, _)).WillOnce(Return(false));
   EXPECT_TRUE(
       downloader->AddPendingExtension(id, GURL("http://example.com/update"),
@@ -1615,7 +1640,7 @@ TEST_F(ExtensionUpdaterTest, TestManifestFetchesBuilderAddExtension) {
   EXPECT_EQ(1u, ManifestFetchersCount(downloader.get()));
 
   // Extensions with invalid update URLs should be rejected.
-  id = GenerateId("foo2");
+  id = id_util::GenerateId("foo2");
   EXPECT_FALSE(
       downloader->AddPendingExtension(id, GURL("http:google.com:foo"), 0));
   downloader->StartAllPending();
@@ -1636,7 +1661,7 @@ TEST_F(ExtensionUpdaterTest, TestManifestFetchesBuilderAddExtension) {
 
   // Extensions with empty update URLs should have a default one
   // filled in.
-  id = GenerateId("foo3");
+  id = id_util::GenerateId("foo3");
   EXPECT_CALL(delegate, GetPingDataForExtension(id, _)).WillOnce(Return(false));
   EXPECT_TRUE(downloader->AddPendingExtension(id, GURL(), 0));
   downloader->StartAllPending();

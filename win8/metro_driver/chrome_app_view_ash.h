@@ -11,6 +11,7 @@
 #include <windows.ui.viewmanagement.h>
 
 #include "base/memory/scoped_ptr.h"
+#include "base/string16.h"
 #include "ui/base/events/event_constants.h"
 #include "win8/metro_driver/direct3d_helper.h"
 
@@ -18,6 +19,11 @@ namespace IPC {
   class Listener;
   class ChannelProxy;
 }
+
+class OpenFilePickerSession;
+class SaveFilePickerSession;
+
+struct MetroViewerHostMsg_SaveAsDialogParams;
 
 class ChromeAppViewAsh
     : public mswr::RuntimeClass<winapp::Core::IFrameworkView> {
@@ -32,7 +38,31 @@ class ChromeAppViewAsh
   IFACEMETHOD(Run)();
   IFACEMETHOD(Uninitialize)();
 
+  // Helper function to unsnap the chrome metro app if it is snapped.
+  // Returns S_OK on success.
+  static HRESULT Unsnap();
+
   void OnSetCursor(HCURSOR cursor);
+  void OnDisplayFileOpenDialog(const string16& title,
+                               const string16& filter,
+                               const string16& default_path,
+                               bool allow_multiple_files);
+  void OnDisplayFileSaveAsDialog(
+      const MetroViewerHostMsg_SaveAsDialogParams& params);
+
+  // This function is invoked when the open file operation completes. The
+  // result of the operation is passed in along with the OpenFilePickerSession
+  // instance which is deleted after we read the required information from
+  // the OpenFilePickerSession class.
+  void OnOpenFileCompleted(OpenFilePickerSession* open_file_picker,
+                           bool success);
+
+  // This function is invoked when the save file operation completes. The
+  // result of the operation is passed in along with the SaveFilePickerSession
+  // instance which is deleted after we read the required information from
+  // the SaveFilePickerSession class.
+  void OnSaveFileCompleted(SaveFilePickerSession* save_file_picker,
+                           bool success);
 
  private:
   HRESULT OnActivate(winapp::Core::ICoreApplicationView* view,
@@ -56,6 +86,10 @@ class ChromeAppViewAsh
   HRESULT OnKeyUp(winui::Core::ICoreWindow* sender,
                   winui::Core::IKeyEventArgs* args);
 
+  // Invoked for system keys like Alt, etc.
+  HRESULT OnAcceleratorKeyDown(winui::Core::ICoreDispatcher* sender,
+                               winui::Core::IAcceleratorKeyEventArgs* args);
+
   HRESULT OnCharacterReceived(winui::Core::ICoreWindow* sender,
                               winui::Core::ICharacterReceivedEventArgs* args);
 
@@ -73,6 +107,8 @@ class ChromeAppViewAsh
   EventRegistrationToken keyup_token_;
   EventRegistrationToken character_received_token_;
   EventRegistrationToken visibility_changed_token_;
+  EventRegistrationToken accel_keydown_token_;
+  EventRegistrationToken accel_keyup_token_;
 
   // Keep state about which button is currently down, if any, as PointerMoved
   // events do not contain that state, but Ash's MouseEvents need it.

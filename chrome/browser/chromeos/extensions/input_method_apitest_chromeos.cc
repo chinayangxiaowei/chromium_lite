@@ -44,14 +44,13 @@ class SetInputMethodListener : public content::NotificationObserver {
   // Implements the content::NotificationObserver interface.
   virtual void Observe(int type,
                        const content::NotificationSource& source,
-                       const content::NotificationDetails& details) {
+                       const content::NotificationDetails& details) OVERRIDE {
     const std::string& content = *content::Details<std::string>(details).ptr();
-    const std::string expected_message = StringPrintf("%s:%s",
-                                                      kSetInputMethodMessage,
-                                                      kNewInputMethod);
+    const std::string expected_message =
+        base::StringPrintf("%s:%s", kSetInputMethodMessage, kNewInputMethod);
     if (content == expected_message) {
       chromeos::input_method::GetInputMethodManager()->
-          ChangeInputMethod(StringPrintf("xkb:%s", kNewInputMethod));
+          ChangeInputMethod(base::StringPrintf("xkb:%s", kNewInputMethod));
 
       extensions::TestSendMessageFunction* function =
           content::Source<extensions::TestSendMessageFunction>(
@@ -68,7 +67,7 @@ class SetInputMethodListener : public content::NotificationObserver {
 };
 
 class ExtensionInputMethodApiTest : public ExtensionApiTest {
-  virtual void SetUpCommandLine(CommandLine* command_line) {
+  virtual void SetUpCommandLine(CommandLine* command_line) OVERRIDE {
     ExtensionApiTest::SetUpCommandLine(command_line);
     command_line->AppendSwitchASCII(
         switches::kWhitelistedExtensionID, "ilanclmaeigfpnmdlgelmhkpkegdioip");

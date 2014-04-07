@@ -13,7 +13,6 @@
 #include "chrome/common/chrome_switches.h"
 
 using chrome::VersionInfo;
-using extensions::Extension;
 
 namespace {
 
@@ -34,8 +33,8 @@ Feature::Platform Feature::GetCurrentPlatform() {
 }
 
 // static
-Feature::Location Feature::ConvertLocation(Extension::Location location) {
-  if (location == Extension::COMPONENT)
+Feature::Location Feature::ConvertLocation(Manifest::Location location) {
+  if (location == Manifest::COMPONENT)
     return COMPONENT_LOCATION;
   else
     return UNSPECIFIED_LOCATION;
@@ -54,6 +53,12 @@ void Feature::SetCurrentChannel(VersionInfo::Channel channel) {
 // static
 chrome::VersionInfo::Channel Feature::GetDefaultChannel() {
   return kDefaultChannel;
+}
+
+// static
+Feature::Availability Feature::CreateAvailability(AvailabilityResult result,
+                                                  const std::string& message) {
+  return Availability(result, message);
 }
 
 Feature::~Feature() {}

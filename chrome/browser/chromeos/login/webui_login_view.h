@@ -31,10 +31,13 @@ namespace chromeos {
 
 // View used to render a WebUI supporting Widget. This widget is used for the
 // WebUI based start up and lock screens. It contains a WebView.
-class WebUILoginView : public views::WidgetDelegateView,
+class WebUILoginView : public views::View,
                        public content::WebContentsDelegate,
                        public content::NotificationObserver {
  public:
+  // Internal class name.
+  static const char kViewClassName[];
+
   WebUILoginView();
   virtual ~WebUILoginView();
 
@@ -114,7 +117,7 @@ class WebUILoginView : public views::WidgetDelegateView,
   virtual bool TakeFocus(content::WebContents* source, bool reverse) OVERRIDE;
   virtual void RequestMediaAccessPermission(
       content::WebContents* web_contents,
-      const content::MediaStreamRequest* request,
+      const content::MediaStreamRequest& request,
       const content::MediaResponseCallback& callback) OVERRIDE;
 
   // Performs series of actions when login prompt is considered

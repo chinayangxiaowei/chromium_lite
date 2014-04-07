@@ -6,11 +6,11 @@
 
 #include <algorithm>
 
-#include "base/compiler_specific.h"
 #include "base/bind.h"
 #include "base/bind_helpers.h"
-#include "base/file_path.h"
+#include "base/compiler_specific.h"
 #include "base/file_util.h"
+#include "base/files/file_path.h"
 #include "base/hash.h"
 #include "base/hash_tables.h"
 #include "base/location.h"
@@ -20,20 +20,15 @@
 #include "base/platform_file.h"
 #include "base/rand_util.h"
 #include "base/sha1.h"
-#include "base/time.h"
 #include "base/threading/sequenced_worker_pool.h"
+#include "base/time.h"
 #include "net/base/net_errors.h"
 #include "net/http/http_cache_transaction.h"
 #include "net/http/http_request_info.h"
 #include "net/http/http_response_headers.h"
 #include "net/http/http_response_info.h"
 #include "net/http/http_util.h"
-
-#if defined(USE_SYSTEM_ZLIB)
-#include <zlib.h>
-#else
 #include "third_party/zlib/zlib.h"
-#endif
 
 using base::PlatformFile;
 using base::Time;
@@ -384,7 +379,7 @@ class InfiniteCache::Worker : public base::RefCountedThreadSafe<Worker> {
   Worker() : init_(false), flushed_(false) {}
 
   // Construction and destruction helpers.
-  void Init(const FilePath& path);
+  void Init(const base::FilePath& path);
   void Cleanup();
 
   // Deletes all tracked data.
@@ -467,12 +462,12 @@ class InfiniteCache::Worker : public base::RefCountedThreadSafe<Worker> {
   bool init_;
   bool flushed_;
   scoped_ptr<Header> header_;
-  FilePath path_;
+  base::FilePath path_;
 
   DISALLOW_COPY_AND_ASSIGN(Worker);
 };
 
-void InfiniteCache::Worker::Init(const FilePath& path) {
+void InfiniteCache::Worker::Init(const base::FilePath& path) {
   path_ = path;
   LoadData();
   UMA_HISTOGRAM_BOOLEAN("InfiniteCache.NewSession", true);
@@ -625,7 +620,7 @@ void InfiniteCache::Worker::StoreData() {
   header_->header_hash = base::Hash(
       reinterpret_cast<char*>(header_.get()), offsetof(Header, header_hash));
 
-  FilePath temp_file = path_.ReplaceExtension(FILE_PATH_LITERAL("tmp"));
+  base::FilePath temp_file = path_.ReplaceExtension(FILE_PATH_LITERAL("tmp"));
   PlatformFile file = base::CreatePlatformFile(
       temp_file, base::PLATFORM_FILE_CREATE_ALWAYS | base::PLATFORM_FILE_WRITE,
       NULL, NULL);
@@ -1109,7 +1104,7 @@ InfiniteCache::~InfiniteCache() {
   worker_ = NULL;
 }
 
-void InfiniteCache::Init(const FilePath& path) {
+void InfiniteCache::Init(const base::FilePath& path) {
   worker_pool_ = new base::SequencedWorkerPool(1, "Infinite cache thread");
   task_runner_ = worker_pool_->GetSequencedTaskRunnerWithShutdownBehavior(
                      worker_pool_->GetSequenceToken(),

@@ -15,6 +15,7 @@
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/test/base/in_process_browser_test.h"
 #include "content/public/browser/web_contents.h"
+#include "content/public/browser/web_contents_view.h"
 #include "googleurl/src/gurl.h"
 #include "testing/gmock/include/gmock/gmock.h"
 
@@ -85,7 +86,7 @@ IN_PROC_BROWSER_TEST_F(ConstrainedWindowMacTest, ShowInInactiveTab) {
   browser()->tab_strip_model()->ActivateTabAt(0, true);
   EXPECT_EQ(1.0, [sheet_window_ alphaValue]);
 
-  dialog.CloseConstrainedWindow();
+  dialog.CloseWebContentsModalDialog();
 }
 
 // If a tab has never been shown then the associated tab view for the web
@@ -100,7 +101,7 @@ IN_PROC_BROWSER_TEST_F(ConstrainedWindowMacTest, ShowInUninitializedTab) {
   content::WebContents* tab2 =
       browser()->tab_strip_model()->GetWebContentsAt(2);
   ASSERT_TRUE(tab2);
-  EXPECT_FALSE([tab2->GetNativeView() superview]);
+  EXPECT_FALSE([tab2->GetView()->GetNativeView() superview]);
 
   // Show dialog and verify that it's not visible yet.
   NiceMock<ConstrainedWindowDelegateMock> delegate;
@@ -109,11 +110,11 @@ IN_PROC_BROWSER_TEST_F(ConstrainedWindowMacTest, ShowInUninitializedTab) {
 
   // Activate the tab and verify that the constrained window is shown.
   browser()->tab_strip_model()->ActivateTabAt(2, true);
-  EXPECT_TRUE([tab2->GetNativeView() superview]);
+  EXPECT_TRUE([tab2->GetView()->GetNativeView() superview]);
   EXPECT_TRUE([sheet_window_ isVisible]);
   EXPECT_EQ(1.0, [sheet_window_ alphaValue]);
 
-  dialog.CloseConstrainedWindow();
+  dialog.CloseWebContentsModalDialog();
 }
 
 // Test that adding a sheet disables tab dragging.
@@ -125,7 +126,7 @@ IN_PROC_BROWSER_TEST_F(ConstrainedWindowMacTest, TabDragging) {
   EXPECT_TRUE([controller_ isTabDraggable:tab_view0_]);
   EXPECT_FALSE([controller_ isTabDraggable:tab_view1_]);
 
-  dialog.CloseConstrainedWindow();
+  dialog.CloseWebContentsModalDialog();
 }
 
 // Test that closing a browser window with a sheet works.
@@ -149,10 +150,11 @@ IN_PROC_BROWSER_TEST_F(ConstrainedWindowMacTest, TabClose) {
   EXPECT_EQ(1.0, [sheet_window_ alphaValue]);
 
   // Close the tab.
-  EXPECT_EQ(2, browser()->tab_count());
-  EXPECT_TRUE(browser()->tab_strip_model()->CloseWebContentsAt(
-      1, TabStripModel::CLOSE_USER_GESTURE));
-  EXPECT_EQ(1, browser()->tab_count());
+  TabStripModel* tab_strip = browser()->tab_strip_model();
+  EXPECT_EQ(2, tab_strip->count());
+  EXPECT_TRUE(tab_strip->CloseWebContentsAt(1,
+                                            TabStripModel::CLOSE_USER_GESTURE));
+  EXPECT_EQ(1, tab_strip->count());
 }
 
 // Test that adding a sheet disables fullscreen.
@@ -165,5 +167,5 @@ IN_PROC_BROWSER_TEST_F(ConstrainedWindowMacTest, Fullscreen) {
 
   EXPECT_FALSE(chrome::IsCommandEnabled(browser(), IDC_FULLSCREEN));
 
-  dialog.CloseConstrainedWindow();
+  dialog.CloseWebContentsModalDialog();
 }

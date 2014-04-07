@@ -6,6 +6,7 @@
 #define MEDIA_FILTERS_OPUS_AUDIO_DECODER_H_
 
 #include "base/callback.h"
+#include "base/memory/weak_ptr.h"
 #include "media/base/audio_decoder.h"
 #include "media/base/demuxer_stream.h"
 
@@ -26,6 +27,7 @@ class MEDIA_EXPORT OpusAudioDecoder : public AudioDecoder {
  public:
   explicit OpusAudioDecoder(
       const scoped_refptr<base::MessageLoopProxy>& message_loop);
+  virtual ~OpusAudioDecoder();
 
   // AudioDecoder implementation.
   virtual void Initialize(const scoped_refptr<DemuxerStream>& stream,
@@ -37,30 +39,22 @@ class MEDIA_EXPORT OpusAudioDecoder : public AudioDecoder {
   virtual int samples_per_second() OVERRIDE;
   virtual void Reset(const base::Closure& closure) OVERRIDE;
 
- protected:
-  virtual ~OpusAudioDecoder();
-
  private:
-  // Methods running on decoder thread.
-  void DoInitialize(const scoped_refptr<DemuxerStream>& stream,
-                    const PipelineStatusCB& status_cb,
-                    const StatisticsCB& statistics_cb);
-  void DoReset(const base::Closure& closure);
-  void DoRead(const ReadCB& read_cb);
-  void DoDecodeBuffer(DemuxerStream::Status status,
-                      const scoped_refptr<DecoderBuffer>& input);
-
   // Reads from the demuxer stream with corresponding callback method.
   void ReadFromDemuxerStream();
+  void BufferReady(DemuxerStream::Status status,
+                   const scoped_refptr<DecoderBuffer>& input);
+
 
   bool ConfigureDecoder();
   void CloseDecoder();
   void ResetTimestampState();
   bool Decode(const scoped_refptr<DecoderBuffer>& input,
-              bool skip_eos_append,
               scoped_refptr<DataBuffer>* output_buffer);
 
   scoped_refptr<base::MessageLoopProxy> message_loop_;
+  base::WeakPtrFactory<OpusAudioDecoder> weak_factory_;
+  base::WeakPtr<OpusAudioDecoder> weak_this_;
 
   scoped_refptr<DemuxerStream> demuxer_stream_;
   StatisticsCB statistics_cb_;

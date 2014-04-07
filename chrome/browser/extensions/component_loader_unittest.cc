@@ -8,15 +8,21 @@
 
 #include "base/file_util.h"
 #include "base/path_service.h"
+#include "base/prefs/pref_registry_simple.h"
 #include "chrome/browser/extensions/test_extension_service.h"
 #include "chrome/common/chrome_paths.h"
+#include "chrome/common/extensions/background_info.h"
 #include "chrome/common/extensions/extension.h"
 #include "chrome/common/extensions/extension_set.h"
+#include "chrome/common/extensions/incognito_handler.h"
+#include "chrome/common/extensions/manifest_handler.h"
 #include "chrome/common/pref_names.h"
-#include "chrome/test/base/testing_pref_service.h"
+#include "chrome/test/base/testing_pref_service_syncable.h"
+#include "components/user_prefs/pref_registry_syncable.h"
+#include "extensions/common/constants.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
-using extensions::Extension;
+namespace extensions {
 
 namespace {
 
@@ -68,17 +74,18 @@ class MockExtensionService : public TestExtensionService {
 
 }  // namespace
 
-namespace extensions {
-
 class ComponentLoaderTest : public testing::Test {
  public:
   ComponentLoaderTest() :
       // Note: we pass the same pref service here, to stand in for both
       // user prefs and local state.
-      component_loader_(&extension_service_, &prefs_, &prefs_) {
+      component_loader_(&extension_service_, &prefs_, &local_state_) {
   }
 
-  void SetUp() {
+  virtual void SetUp() OVERRIDE {
+    (new BackgroundManifestHandler)->Register();
+    (new IncognitoHandler)->Register();
+
     extension_path_ =
         GetBasePath().AppendASCII("good")
                      .AppendASCII("Extensions")
@@ -87,32 +94,45 @@ class ComponentLoaderTest : public testing::Test {
 
     // Read in the extension manifest.
     ASSERT_TRUE(file_util::ReadFileToString(
-        extension_path_.Append(Extension::kManifestFilename),
-                               &manifest_contents_));
+        extension_path_.Append(kManifestFilename),
+        &manifest_contents_));
 
     // Register the user prefs that ComponentLoader will read.
-    prefs_.RegisterStringPref(prefs::kEnterpriseWebStoreURL, std::string());
-    prefs_.RegisterStringPref(prefs::kEnterpriseWebStoreName, std::string());
+    prefs_.registry()->RegisterStringPref(
+        prefs::kEnterpriseWebStoreURL,
+        std::string(),
+        PrefRegistrySyncable::UNSYNCABLE_PREF);
+    prefs_.registry()->RegisterStringPref(
+        prefs::kEnterpriseWebStoreName,
+        std::string(),
+        PrefRegistrySyncable::UNSYNCABLE_PREF);
 
     // Register the local state prefs.
 #if defined(OS_CHROMEOS)
-    prefs_.RegisterBooleanPref(prefs::kSpokenFeedbackEnabled, false);
+    local_state_.registry()->RegisterBooleanPref(
+        prefs::kSpokenFeedbackEnabled, false);
 #endif
+  }
+
+  virtual void TearDown() OVERRIDE {
+    ManifestHandler::ClearRegistryForTesting();
+    testing::Test::TearDown();
   }
 
  protected:
   MockExtensionService extension_service_;
-  TestingPrefService prefs_;
+  TestingPrefServiceSyncable prefs_;
+  TestingPrefServiceSimple local_state_;
   ComponentLoader component_loader_;
 
   // The root directory of the text extension.
-  FilePath extension_path_;
+  base::FilePath extension_path_;
 
   // The contents of the text extension's manifest file.
   std::string manifest_contents_;
 
-  FilePath GetBasePath() {
-    FilePath test_data_dir;
+  base::FilePath GetBasePath() {
+    base::FilePath test_data_dir;
     PathService::Get(chrome::DIR_TEST_DATA, &test_data_dir);
     return test_data_dir.AppendASCII("extensions");
   }
@@ -279,9 +299,9 @@ TEST_F(ComponentLoaderTest, AddOrReplace) {
   EXPECT_EQ(0u, component_loader_.registered_extensions_count());
   component_loader_.AddDefaultComponentExtensions(false);
   size_t const default_count = component_loader_.registered_extensions_count();
-  FilePath known_extension = GetBasePath()
+  base::FilePath known_extension = GetBasePath()
       .AppendASCII("override_component_extension");
-  FilePath unknow_extension = extension_path_;
+  base::FilePath unknow_extension = extension_path_;
 
   // Replace a default component extension.
   component_loader_.AddOrReplace(known_extension);

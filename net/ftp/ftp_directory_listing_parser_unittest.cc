@@ -7,9 +7,9 @@
 #include "base/file_util.h"
 #include "base/format_macros.h"
 #include "base/path_service.h"
-#include "base/stringprintf.h"
 #include "base/string_number_conversions.h"
-#include "base/string_split.h"
+#include "base/stringprintf.h"
+#include "base/strings/string_split.h"
 #include "base/utf_string_conversions.h"
 #include "net/base/net_errors.h"
 #include "net/ftp/ftp_directory_listing_parser.h"
@@ -24,7 +24,7 @@ class FtpDirectoryListingParserTest
 };
 
 TEST_P(FtpDirectoryListingParserTest, Parse) {
-  FilePath test_dir;
+  base::FilePath test_dir;
   PathService::Get(base::DIR_SOURCE_ROOT, &test_dir);
   test_dir = test_dir.AppendASCII("net");
   test_dir = test_dir.AppendASCII("data");

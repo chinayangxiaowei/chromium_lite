@@ -9,24 +9,28 @@
 #include "base/message_loop.h"
 #include "base/metrics/histogram.h"
 #include "base/stl_util.h"
-#include "base/string_number_conversions.h"
+#include "base/strings/string_number_conversions.h"
 #include "base/time.h"
 #include "chrome/browser/extensions/api/runtime/runtime_api.h"
-#include "chrome/browser/extensions/extension_process_manager.h"
 #include "chrome/browser/extensions/extension_host.h"
 #include "chrome/browser/extensions/extension_info_map.h"
+#include "chrome/browser/extensions/extension_process_manager.h"
 #include "chrome/browser/extensions/extension_service.h"
 #include "chrome/browser/extensions/extension_system.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_finder.h"
-#include "chrome/browser/ui/browser_tabstrip.h"
 #include "chrome/browser/ui/browser_window.h"
+#include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/browser/view_type_utils.h"
 #include "chrome/common/chrome_notification_types.h"
 #include "chrome/common/chrome_switches.h"
+#include "chrome/common/extensions/background_info.h"
 #include "chrome/common/extensions/extension.h"
 #include "chrome/common/extensions/extension_messages.h"
+#include "chrome/common/extensions/incognito_handler.h"
+#include "chrome/common/extensions/manifest_handler.h"
+#include "chrome/common/extensions/manifest_url_handler.h"
 #include "chrome/common/url_constants.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/notification_service.h"
@@ -47,6 +51,8 @@ using content::Referrer;
 using content::RenderViewHost;
 using content::SiteInstance;
 using content::WebContents;
+using extensions::BackgroundInfo;
+using extensions::BackgroundManifestHandler;
 using extensions::Extension;
 using extensions::ExtensionHost;
 
@@ -74,14 +80,14 @@ class IncognitoExtensionProcessManager : public ExtensionProcessManager {
       Browser* browser,
       chrome::ViewType view_type) OVERRIDE;
   virtual void CreateBackgroundHost(const Extension* extension,
-                                    const GURL& url);
-  virtual SiteInstance* GetSiteInstanceForURL(const GURL& url);
+                                    const GURL& url) OVERRIDE;
+  virtual SiteInstance* GetSiteInstanceForURL(const GURL& url) OVERRIDE;
 
  private:
   // content::NotificationObserver:
   virtual void Observe(int type,
                        const content::NotificationSource& source,
-                       const content::NotificationDetails& details);
+                       const content::NotificationDetails& details) OVERRIDE;
 
   // Returns true if the extension is allowed to run in incognito mode.
   bool IsIncognitoEnabled(const Extension* extension);
@@ -91,21 +97,9 @@ class IncognitoExtensionProcessManager : public ExtensionProcessManager {
 
 static void CreateBackgroundHostForExtensionLoad(
     ExtensionProcessManager* manager, const Extension* extension) {
-  if (extension->has_persistent_background_page())
-    manager->CreateBackgroundHost(extension, extension->GetBackgroundURL());
-}
-
-static void CreateBackgroundHostsForProfileStartup(
-    Profile* profile,
-    ExtensionProcessManager* manager,
-    const ExtensionSet* extensions) {
-  for (ExtensionSet::const_iterator extension = extensions->begin();
-       extension != extensions->end(); ++extension) {
-    CreateBackgroundHostForExtensionLoad(manager, *extension);
-
-    extensions::RuntimeEventRouter::DispatchOnStartupEvent(
-        profile, (*extension)->id());
-  }
+  if (BackgroundInfo::HasPersistentBackgroundPage(extension))
+    manager->CreateBackgroundHost(extension,
+                                  BackgroundInfo::GetBackgroundURL(extension));
 }
 
 }  // namespace
@@ -114,18 +108,18 @@ struct ExtensionProcessManager::BackgroundPageData {
   // The count of things keeping the lazy background page alive.
   int lazy_keepalive_count;
 
-  // This is used with the ShouldUnload message, to ensure that the extension
+  // This is used with the ShouldSuspend message, to ensure that the extension
   // remained idle between sending the message and receiving the ack.
   int close_sequence_id;
 
-  // True if the page responded to the ShouldUnload message and is currently
-  // dispatching the unload event. During this time any events that arrive will
-  // cancel the unload process and an onSuspendCanceled event will be dispatched
-  // to the page.
+  // True if the page responded to the ShouldSuspend message and is currently
+  // dispatching the suspend event. During this time any events that arrive will
+  // cancel the suspend process and an onSuspendCanceled event will be
+  // dispatched to the page.
   bool is_closing;
 
-  // Keeps track of when this page was last unloaded. Used for perf metrics.
-  linked_ptr<PerfTimer> since_unloaded;
+  // Keeps track of when this page was last suspended. Used for perf metrics.
+  linked_ptr<PerfTimer> since_suspended;
 
   BackgroundPageData()
       : lazy_keepalive_count(0), close_sequence_id(0), is_closing(false) {}
@@ -146,6 +140,8 @@ ExtensionProcessManager::ExtensionProcessManager(Profile* profile)
   : site_instance_(SiteInstance::Create(profile)),
     weak_ptr_factory_(ALLOW_THIS_IN_INITIALIZER_LIST(this)) {
   Profile* original_profile = profile->GetOriginalProfile();
+  registrar_.Add(this, chrome::NOTIFICATION_BROWSER_WINDOW_READY,
+                 content::NotificationService::AllSources());
   registrar_.Add(this, chrome::NOTIFICATION_EXTENSIONS_READY,
                  content::Source<Profile>(original_profile));
   registrar_.Add(this, chrome::NOTIFICATION_EXTENSION_LOADED,
@@ -177,13 +173,16 @@ ExtensionProcessManager::ExtensionProcessManager(Profile* profile)
           switches::kEventPageIdleTime), &idle_time_sec)) {
     event_page_idle_time_ = base::TimeDelta::FromSeconds(idle_time_sec);
   }
-  event_page_unloading_time_ = base::TimeDelta::FromSeconds(5);
-  unsigned unloading_time_sec = 0;
+  event_page_suspending_time_ = base::TimeDelta::FromSeconds(5);
+  unsigned suspending_time_sec = 0;
   if (base::StringToUint(CommandLine::ForCurrentProcess()->GetSwitchValueASCII(
-          switches::kEventPageUnloadingTime), &unloading_time_sec)) {
-    event_page_unloading_time_ = base::TimeDelta::FromSeconds(
-        unloading_time_sec);
+          switches::kEventPageSuspendingTime), &suspending_time_sec)) {
+    event_page_suspending_time_ = base::TimeDelta::FromSeconds(
+        suspending_time_sec);
   }
+
+  (new BackgroundManifestHandler())->Register();
+  (new extensions::IncognitoHandler())->Register();
 }
 
 ExtensionProcessManager::~ExtensionProcessManager() {
@@ -310,21 +309,23 @@ void ExtensionProcessManager::CreateBackgroundHost(
 
 void ExtensionProcessManager::OpenOptionsPage(const Extension* extension,
                                               Browser* browser) {
-  DCHECK(!extension->options_url().is_empty());
+  DCHECK(!extensions::ManifestURL::GetOptionsPage(extension).is_empty());
 
   // Force the options page to open in non-OTR window, because it won't be
   // able to save settings from OTR.
   if (browser->profile()->IsOffTheRecord()) {
     Profile* profile = GetProfile();
-    browser = browser::FindOrCreateTabbedBrowser(profile->GetOriginalProfile(),
-                                                 browser->host_desktop_type());
+    browser = chrome::FindOrCreateTabbedBrowser(profile->GetOriginalProfile(),
+                                                browser->host_desktop_type());
   }
 
-  OpenURLParams params(extension->options_url(), Referrer(), SINGLETON_TAB,
+  OpenURLParams params(extensions::ManifestURL::GetOptionsPage(extension),
+                       Referrer(), SINGLETON_TAB,
                        content::PAGE_TRANSITION_LINK, false);
   browser->OpenURL(params);
   browser->window()->Show();
-  WebContents* web_contents = chrome::GetActiveWebContents(browser);
+  WebContents* web_contents =
+      browser->tab_strip_model()->GetActiveWebContents();
   web_contents->GetDelegate()->ActivateContents(web_contents);
 }
 
@@ -424,7 +425,7 @@ bool ExtensionProcessManager::IsBackgroundHostClosing(
 }
 
 int ExtensionProcessManager::GetLazyKeepaliveCount(const Extension* extension) {
-  if (!extension->has_lazy_background_page())
+  if (!BackgroundInfo::HasLazyBackgroundPage(extension))
     return 0;
 
   return background_page_data_[extension->id()].lazy_keepalive_count;
@@ -432,7 +433,7 @@ int ExtensionProcessManager::GetLazyKeepaliveCount(const Extension* extension) {
 
 int ExtensionProcessManager::IncrementLazyKeepaliveCount(
      const Extension* extension) {
-  if (!extension->has_lazy_background_page())
+  if (!BackgroundInfo::HasLazyBackgroundPage(extension))
     return 0;
 
   int& count = background_page_data_[extension->id()].lazy_keepalive_count;
@@ -444,7 +445,7 @@ int ExtensionProcessManager::IncrementLazyKeepaliveCount(
 
 int ExtensionProcessManager::DecrementLazyKeepaliveCount(
      const Extension* extension) {
-  if (!extension->has_lazy_background_page())
+  if (!BackgroundInfo::HasLazyBackgroundPage(extension))
     return 0;
 
   int& count = background_page_data_[extension->id()].lazy_keepalive_count;
@@ -485,8 +486,8 @@ void ExtensionProcessManager::OnLazyBackgroundPageIdle(
     // extension remains idle until the renderer responds with an ACK, then we
     // know that the extension process is ready to shut down. If our
     // close_sequence_id has already changed, then we would ignore the
-    // ShouldUnloadAck, so we don't send the ping.
-    host->render_view_host()->Send(new ExtensionMsg_ShouldUnload(
+    // ShouldSuspendAck, so we don't send the ping.
+    host->render_view_host()->Send(new ExtensionMsg_ShouldSuspend(
         extension_id, sequence_id));
   }
 }
@@ -496,28 +497,28 @@ void ExtensionProcessManager::OnLazyBackgroundPageActive(
   ExtensionHost* host = GetBackgroundHostForExtension(extension_id);
   if (host && !background_page_data_[extension_id].is_closing) {
     // Cancel the current close sequence by changing the close_sequence_id,
-    // which causes us to ignore the next ShouldUnloadAck.
+    // which causes us to ignore the next ShouldSuspendAck.
     ++background_page_data_[extension_id].close_sequence_id;
   }
 }
 
-void ExtensionProcessManager::OnShouldUnloadAck(
+void ExtensionProcessManager::OnShouldSuspendAck(
      const std::string& extension_id, int sequence_id) {
   ExtensionHost* host = GetBackgroundHostForExtension(extension_id);
   if (host &&
       sequence_id == background_page_data_[extension_id].close_sequence_id) {
-    host->render_view_host()->Send(new ExtensionMsg_Unload(extension_id));
+    host->render_view_host()->Send(new ExtensionMsg_Suspend(extension_id));
   }
 }
 
-void ExtensionProcessManager::OnUnloadAck(const std::string& extension_id) {
+void ExtensionProcessManager::OnSuspendAck(const std::string& extension_id) {
   background_page_data_[extension_id].is_closing = true;
   int sequence_id = background_page_data_[extension_id].close_sequence_id;
   MessageLoop::current()->PostDelayedTask(
       FROM_HERE,
       base::Bind(&ExtensionProcessManager::CloseLazyBackgroundPageNow,
                  weak_ptr_factory_.GetWeakPtr(), extension_id, sequence_id),
-      event_page_unloading_time_);
+      event_page_suspending_time_);
 }
 
 void ExtensionProcessManager::CloseLazyBackgroundPageNow(
@@ -553,7 +554,7 @@ void ExtensionProcessManager::CancelSuspend(const Extension* extension) {
   if (host && is_closing) {
     is_closing = false;
     host->render_view_host()->Send(
-        new ExtensionMsg_CancelUnload(extension->id()));
+        new ExtensionMsg_CancelSuspend(extension->id()));
     // This increment / decrement is to simulate an instantaneous event. This
     // has the effect of invalidating close_sequence_id, preventing any in
     // progress closes from completing and starting a new close process if
@@ -568,10 +569,31 @@ void ExtensionProcessManager::Observe(
     const content::NotificationSource& source,
     const content::NotificationDetails& details) {
   switch (type) {
+    case chrome::NOTIFICATION_BROWSER_WINDOW_READY: {
+      // If a window for this profile, or this profile's incognito profile,
+      // has been opened, make sure this profile's background hosts have
+      // been loaded.
+      Browser* browser = content::Source<Browser>(source).ptr();
+      if (browser->profile() != GetProfile() &&
+          !(GetProfile()->HasOffTheRecordProfile() &&
+            browser->profile() == GetProfile()->GetOffTheRecordProfile()))
+        break;
+
+      ExtensionService* service = GetProfile()->GetExtensionService();
+      if (!service || !service->is_ready())
+        break;
+
+      CreateBackgroundHostsForProfileStartup();
+      break;
+    }
     case chrome::NOTIFICATION_EXTENSIONS_READY: {
-      Profile* profile = content::Source<Profile>(source).ptr();
-      CreateBackgroundHostsForProfileStartup(profile, this,
-          profile->GetExtensionService()->extensions());
+      // Don't load background hosts now if the loading should be deferred.
+      // Instead they will be loaded when a browser window for this profile
+      // (or an incognito profile from this profile) is ready.
+      if (DeferLoadingBackgroundHosts())
+        break;
+
+      CreateBackgroundHostsForProfileStartup();
       break;
     }
 
@@ -606,7 +628,7 @@ void ExtensionProcessManager::Observe(
       ExtensionHost* host = content::Details<ExtensionHost>(details).ptr();
       if (background_hosts_.erase(host)) {
         ClearBackgroundPageData(host->extension()->id());
-        background_page_data_[host->extension()->id()].since_unloaded.reset(
+        background_page_data_[host->extension()->id()].since_suspended.reset(
             new PerfTimer());
       }
       break;
@@ -707,6 +729,22 @@ void ExtensionProcessManager::Observe(
   }
 }
 
+void ExtensionProcessManager::CreateBackgroundHostsForProfileStartup() {
+  ExtensionService* service = GetProfile()->GetExtensionService();
+  for (ExtensionSet::const_iterator extension = service->extensions()->begin();
+       extension != service->extensions()->end(); ++extension) {
+    CreateBackgroundHostForExtensionLoad(this, *extension);
+
+    extensions::RuntimeEventRouter::DispatchOnStartupEvent(
+        GetProfile(), (*extension)->id());
+  }
+
+  // Background pages should only be loaded once. To prevent any further loads
+  // ocurring the notification listener is removed.
+  registrar_.Remove(this, chrome::NOTIFICATION_BROWSER_WINDOW_READY,
+                    content::NotificationService::AllSources());
+}
+
 Profile* ExtensionProcessManager::GetProfile() const {
   return Profile::FromBrowserContext(site_instance_->GetBrowserContext());
 }
@@ -717,13 +755,13 @@ void ExtensionProcessManager::OnExtensionHostCreated(ExtensionHost* host,
   if (is_background) {
     background_hosts_.insert(host);
 
-    if (host->extension()->has_lazy_background_page()) {
-      linked_ptr<PerfTimer> since_unloaded(
+    if (BackgroundInfo::HasLazyBackgroundPage(host->extension())) {
+      linked_ptr<PerfTimer> since_suspended(
           background_page_data_[host->extension()->id()].
-              since_unloaded.release());
-      if (since_unloaded.get()) {
+              since_suspended.release());
+      if (since_suspended.get()) {
         UMA_HISTOGRAM_LONG_TIMES("Extensions.EventPageIdleTime",
-                                 since_unloaded->Elapsed());
+                                 since_suspended->Elapsed());
       }
     }
   }
@@ -759,6 +797,15 @@ void ExtensionProcessManager::ClearBackgroundPageData(
   }
 }
 
+bool ExtensionProcessManager::DeferLoadingBackgroundHosts() const {
+#if defined(OS_ANDROID)
+  return false;
+#else
+  return chrome::GetTotalBrowserCountForProfile(GetProfile()) == 0 &&
+         CommandLine::ForCurrentProcess()->HasSwitch(switches::kShowAppList);
+#endif
+}
+
 //
 // IncognitoExtensionProcessManager
 //
@@ -770,8 +817,12 @@ IncognitoExtensionProcessManager::IncognitoExtensionProcessManager(
           profile->GetOriginalProfile())->process_manager()) {
   DCHECK(profile->IsOffTheRecord());
 
-  registrar_.Add(this, chrome::NOTIFICATION_BROWSER_WINDOW_READY,
-                 content::NotificationService::AllSources());
+  // The original profile will have its own ExtensionProcessManager to
+  // load the background pages of the spanning extensions. This process
+  // manager need only worry about the split mode extensions, which is handled
+  // in the NOTIFICATION_BROWSER_WINDOW_READY notification handler.
+  registrar_.Remove(this, chrome::NOTIFICATION_EXTENSIONS_READY,
+                    content::Source<Profile>(profile->GetOriginalProfile()));
 }
 
 IncognitoExtensionProcessManager::~IncognitoExtensionProcessManager() {
@@ -788,7 +839,7 @@ ExtensionHost* IncognitoExtensionProcessManager::CreateViewHost(
     const GURL& url,
     Browser* browser,
     chrome::ViewType view_type) {
-  if (extension->incognito_split_mode()) {
+  if (extensions::IncognitoInfo::IsSplitMode(extension)) {
     if (IsIncognitoEnabled(extension)) {
       return ExtensionProcessManager::CreateViewHost(extension, url,
                                                      browser, view_type);
@@ -806,7 +857,7 @@ ExtensionHost* IncognitoExtensionProcessManager::CreateViewHost(
 
 void IncognitoExtensionProcessManager::CreateBackgroundHost(
     const Extension* extension, const GURL& url) {
-  if (extension->incognito_split_mode()) {
+  if (extensions::IncognitoInfo::IsSplitMode(extension)) {
     if (IsIncognitoEnabled(extension))
       ExtensionProcessManager::CreateBackgroundHost(extension, url);
   } else {
@@ -821,8 +872,10 @@ SiteInstance* IncognitoExtensionProcessManager::GetSiteInstanceForURL(
   if (service) {
     const Extension* extension = service->extensions()->GetExtensionOrAppByURL(
         ExtensionURLInfo(url));
-    if (extension && !extension->incognito_split_mode())
+    if (extension &&
+        !extensions::IncognitoInfo::IsSplitMode(extension)) {
       return original_manager_->GetSiteInstanceForURL(url);
+    }
   }
   return ExtensionProcessManager::GetSiteInstanceForURL(url);
 }
@@ -839,6 +892,8 @@ void IncognitoExtensionProcessManager::Observe(
     const content::NotificationSource& source,
     const content::NotificationDetails& details) {
   switch (type) {
+    // Do not use ExtensionProcessManager's handler for
+    // NOTIFICATION_BROWSER_WINDOW_READY.
     case chrome::NOTIFICATION_BROWSER_WINDOW_READY: {
       // We want to spawn our background hosts as soon as the user opens an
       // incognito window. Watch for new browsers and create the hosts if
@@ -850,8 +905,7 @@ void IncognitoExtensionProcessManager::Observe(
         // service will be NULL.
         ExtensionService* service = GetProfile()->GetExtensionService();
         if (service && service->is_ready())
-          CreateBackgroundHostsForProfileStartup(GetProfile(),
-                                                 this, service->extensions());
+          CreateBackgroundHostsForProfileStartup();
       }
       break;
     }

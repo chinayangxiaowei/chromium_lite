@@ -5,7 +5,6 @@
 #include "chrome/browser/ui/gtk/password_generation_bubble_gtk.h"
 
 #include "base/utf_string_conversions.h"
-#include "chrome/browser/autofill/password_generator.h"
 #include "chrome/browser/password_manager/password_manager.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser.h"
@@ -14,10 +13,12 @@
 #include "chrome/browser/ui/gtk/gtk_chrome_link_button.h"
 #include "chrome/browser/ui/gtk/gtk_theme_service.h"
 #include "chrome/browser/ui/gtk/gtk_util.h"
-#include "chrome/common/autofill_messages.h"
 #include "chrome/common/url_constants.h"
+#include "components/autofill/browser/password_generator.h"
+#include "components/autofill/common/autofill_messages.h"
 #include "content/public/browser/render_view_host.h"
 #include "content/public/browser/web_contents.h"
+#include "content/public/browser/web_contents_view.h"
 #include "grit/generated_resources.h"
 #include "grit/theme_resources.h"
 #include "ui/base/gtk/gtk_hig_constants.h"
@@ -51,7 +52,8 @@ PasswordGenerationBubbleGtk::PasswordGenerationBubbleGtk(
 
   // We have two lines of content. The first is the title and learn more link.
   GtkWidget* title_line = gtk_hbox_new(FALSE,  0);
-  GtkWidget* title = gtk_label_new("Password Suggestion");
+  GtkWidget* title = gtk_label_new(
+      l10n_util::GetStringUTF8(IDS_PASSWORD_GENERATION_BUBBLE_TITLE).c_str());
   gtk_box_pack_start(GTK_BOX(title_line), title, FALSE, FALSE, 0);
   GtkWidget* learn_more_link = gtk_chrome_link_button_new(
       l10n_util::GetStringUTF8(IDS_LEARN_MORE).c_str());
@@ -71,7 +73,8 @@ PasswordGenerationBubbleGtk::PasswordGenerationBubbleGtk(
       GTK_ENTRY(text_field_), GTK_ENTRY_ICON_SECONDARY, GetImage(IDR_RELOAD));
   gtk_entry_set_icon_tooltip_text(
       GTK_ENTRY(text_field_), GTK_ENTRY_ICON_SECONDARY, "Regenerate");
-  GtkWidget* accept_button = gtk_button_new_with_label("Try It");
+  GtkWidget* accept_button = gtk_button_new_with_label(
+      l10n_util::GetStringUTF8(IDS_PASSWORD_GENERATION_BUTTON_TEXT).c_str());
   gtk_box_pack_start(GTK_BOX(password_line), text_field_, TRUE, TRUE, 0);
   gtk_box_pack_start(GTK_BOX(password_line), accept_button, TRUE, TRUE, 0);
 
@@ -86,10 +89,10 @@ PasswordGenerationBubbleGtk::PasswordGenerationBubbleGtk(
   GtkThemeService* theme_service = GtkThemeService::GetFrom(
       Profile::FromBrowserContext(web_contents->GetBrowserContext()));
 
-  bubble_ = BubbleGtk::Show(web_contents->GetContentNativeView(),
+  bubble_ = BubbleGtk::Show(web_contents->GetView()->GetContentNativeView(),
                             &anchor_rect,
                             content,
-                            BubbleGtk::ARROW_LOCATION_TOP_LEFT,
+                            BubbleGtk::ANCHOR_TOP_LEFT,
                             BubbleGtk::MATCH_SYSTEM_THEME |
                                 BubbleGtk::POPUP_WINDOW |
                                 BubbleGtk::GRAB_INPUT,

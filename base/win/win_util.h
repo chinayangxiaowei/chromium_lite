@@ -36,14 +36,6 @@ typedef _tagpropertykey PROPERTYKEY;
 namespace base {
 namespace win {
 
-// A Windows message reflected from other windows. This message is sent
-// with the following arguments:
-// hWnd - Target window
-// uMsg - kReflectedMessage
-// wParam - Should be 0
-// lParam - Pointer to MSG struct containing the original message.
-const int kReflectedMessage = WM_APP + 3;
-
 BASE_EXPORT void GetNonClientMetrics(NONCLIENTMETRICS* metrics);
 
 // Returns the string representing the current user sid.
@@ -120,6 +112,14 @@ BASE_EXPORT bool IsMachineATablet();
 #define SIZEOF_STRUCT_WITH_SPECIFIED_LAST_MEMBER(struct_name, member) \
     offsetof(struct_name, member) + \
     (sizeof static_cast<struct_name*>(NULL)->member)
+
+// Displays the on screen keyboard on Windows 8 and above. Returns true on
+// success.
+BASE_EXPORT bool DisplayVirtualKeyboard();
+
+// Dismisses the on screen keyboard if it is being displayed on Windows 8 and.
+// above. Returns true on success.
+BASE_EXPORT bool DismissVirtualKeyboard();
 
 }  // namespace win
 }  // namespace base

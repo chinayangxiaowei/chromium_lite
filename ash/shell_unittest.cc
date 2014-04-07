@@ -11,11 +11,12 @@
 #include "ash/desktop_background/desktop_background_widget_controller.h"
 #include "ash/launcher/launcher.h"
 #include "ash/root_window_controller.h"
+#include "ash/shelf/shelf_layout_manager.h"
+#include "ash/shelf/shelf_widget.h"
 #include "ash/shell_delegate.h"
 #include "ash/shell_window_ids.h"
 #include "ash/test/ash_test_base.h"
 #include "ash/wm/root_window_layout_manager.h"
-#include "ash/wm/shelf_layout_manager.h"
 #include "ash/wm/window_util.h"
 #include "base/utf_string_conversions.h"
 #include "ui/aura/client/aura_constants.h"
@@ -30,12 +31,6 @@ using aura::RootWindow;
 namespace ash {
 
 namespace {
-
-views::Widget* CreateTestWindow(const views::Widget::InitParams& params) {
-  views::Widget* widget = new views::Widget;
-  widget->Init(params);
-  return widget;
-}
 
 aura::Window* GetDefaultContainer() {
   return Shell::GetContainer(
@@ -61,7 +56,7 @@ void ExpectAllContainers() {
   EXPECT_TRUE(Shell::GetContainer(
       root_window, internal::kShellWindowId_PanelContainer));
   EXPECT_TRUE(Shell::GetContainer(
-      root_window, internal::kShellWindowId_LauncherContainer));
+      root_window, internal::kShellWindowId_ShelfContainer));
   EXPECT_TRUE(Shell::GetContainer(
       root_window, internal::kShellWindowId_SystemModalContainer));
   EXPECT_TRUE(Shell::GetContainer(
@@ -80,22 +75,6 @@ void ExpectAllContainers() {
       root_window, internal::kShellWindowId_SettingBubbleContainer));
   EXPECT_TRUE(Shell::GetContainer(
       root_window, internal::kShellWindowId_OverlayContainer));
-}
-
-void TestCreateWindow(views::Widget::InitParams::Type type,
-                      bool always_on_top,
-                      aura::Window* expected_container) {
-  views::Widget::InitParams widget_params(type);
-  widget_params.keep_on_top = always_on_top;
-
-  views::Widget* widget = CreateTestWindow(widget_params);
-  widget->Show();
-
-  EXPECT_TRUE(expected_container->Contains(
-                  widget->GetNativeWindow()->parent())) <<
-      "TestCreateWindow: type=" << type << ", always_on_top=" << always_on_top;
-
-  widget->Close();
 }
 
 class ModalWindow : public views::WidgetDelegateView {
@@ -123,7 +102,33 @@ class ModalWindow : public views::WidgetDelegateView {
 
 }  // namespace
 
-typedef test::AshTestBase ShellTest;
+class ShellTest : public test::AshTestBase {
+ public:
+  views::Widget* CreateTestWindow(views::Widget::InitParams params) {
+    views::Widget* widget = new views::Widget;
+    params.context = CurrentContext();
+    widget->Init(params);
+    return widget;
+  }
+
+  void TestCreateWindow(views::Widget::InitParams::Type type,
+                        bool always_on_top,
+                        aura::Window* expected_container) {
+    views::Widget::InitParams widget_params(type);
+    widget_params.keep_on_top = always_on_top;
+
+    views::Widget* widget = CreateTestWindow(widget_params);
+    widget->Show();
+
+    EXPECT_TRUE(
+        expected_container->Contains(widget->GetNativeWindow()->parent())) <<
+        "TestCreateWindow: type=" << type << ", always_on_top=" <<
+        always_on_top;
+
+    widget->Close();
+}
+
+};
 
 TEST_F(ShellTest, CreateWindow) {
   // Normal window should be created in default container.
@@ -278,7 +283,7 @@ TEST_F(ShellTest, MAYBE_ManagedWindowModeBasics) {
   // We start with the usual window containers.
   ExpectAllContainers();
   // Launcher is visible.
-  views::Widget* launcher_widget = Launcher::ForPrimaryDisplay()->widget();
+  ShelfWidget* launcher_widget = Launcher::ForPrimaryDisplay()->shelf_widget();
   EXPECT_TRUE(launcher_widget->IsVisible());
   // Launcher is at bottom-left of screen.
   EXPECT_EQ(0, launcher_widget->GetWindowBoundsInScreen().x());
@@ -319,19 +324,22 @@ TEST_F(ShellTest, FullscreenWindowHidesShelf) {
   // Shelf defaults to visible.
   EXPECT_EQ(
       SHELF_VISIBLE,
-      Shell::GetPrimaryRootWindowController()->shelf()->visibility_state());
+      Shell::GetPrimaryRootWindowController()->
+          GetShelfLayoutManager()->visibility_state());
 
   // Fullscreen window hides it.
   widget->SetFullscreen(true);
   EXPECT_EQ(
       SHELF_HIDDEN,
-      Shell::GetPrimaryRootWindowController()->shelf()->visibility_state());
+      Shell::GetPrimaryRootWindowController()->
+          GetShelfLayoutManager()->visibility_state());
 
   // Restoring the window restores it.
   widget->Restore();
   EXPECT_EQ(
       SHELF_VISIBLE,
-      Shell::GetPrimaryRootWindowController()->shelf()->visibility_state());
+      Shell::GetPrimaryRootWindowController()->
+          GetShelfLayoutManager()->visibility_state());
 
   // Clean up.
   widget->Close();

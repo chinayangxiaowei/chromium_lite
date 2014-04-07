@@ -3,6 +3,7 @@
 # found in the LICENSE file.
 
 import re
+import sys
 
 import android_commands
 import json
@@ -18,12 +19,14 @@ RESULT_TYPES = {'unimportant': 'RESULT ',
 
 def _EscapePerfResult(s):
   """Escapes |s| for use in a perf result."""
-  # Colons (:), equal signs (=) and slashes (/) are not allowed.
-  return re.sub('[\:|=/]', '_', s)
+  return re.sub('[\:|=/#&]', '_', s)
 
 
 def GeomMeanAndStdDevFromHistogram(histogram_json):
   histogram = json.loads(histogram_json)
+  # Handle empty histograms gracefully.
+  if not 'buckets' in histogram:
+    return 0.0, 0.0
   count = 0
   sum_of_logs = 0
   for bucket in histogram['buckets']:
@@ -107,11 +110,10 @@ def PrintPerfResult(measurement, trace, values, units, result_type='default',
     # across different histograms.
     assert len(values) == 1
     value = values[0]
-    measurement += '.' + trace_name
     output = '%s%s: %s= %s' % (
         RESULT_TYPES[result_type],
         _EscapePerfResult(measurement),
-        _EscapePerfResult(measurement),
+        trace_name,
         value)
     avg, sd = GeomMeanAndStdDevFromHistogram(value)
 
@@ -121,12 +123,24 @@ def PrintPerfResult(measurement, trace, values, units, result_type='default',
     output += '\nSd  %s: %f%s' % (measurement, sd, units)
   if print_to_stdout:
     print output
+    sys.stdout.flush()
   return output
 
 
-class PerfTestSetup(object):
-  """Provides methods for setting up a device for perf testing."""
+class CacheControl(object):
   _DROP_CACHES = '/proc/sys/vm/drop_caches'
+
+  def __init__(self, adb):
+    self._adb = adb
+
+  def DropRamCaches(self):
+    """Drops the filesystem ram caches for performance testing."""
+    self._adb.RunShellCommand('su -c sync')
+    self._adb.SetProtectedFileContents(CacheControl._DROP_CACHES, '3')
+
+
+class PerfControl(object):
+  """Provides methods for setting the performance mode of a device."""
   _SCALING_GOVERNOR_FMT = (
       '/sys/devices/system/cpu/cpu%d/cpufreq/scaling_governor')
 
@@ -136,33 +150,32 @@ class PerfTestSetup(object):
                                          log_result=False)
     assert kernel_max, 'Unable to find /sys/devices/system/cpu/kernel_max'
     self._kernel_max = int(kernel_max[0])
-    self._original_scaling_governor = None
+    self._original_scaling_governor = self._adb.GetFileContents(
+      PerfControl._SCALING_GOVERNOR_FMT % 0,
+      log_result=False)[0]
 
-  def DropRamCaches(self):
-    """Drops the filesystem ram caches for performance testing."""
-    if not self._adb.IsRootEnabled():
-      self._adb.EnableAdbRoot()
-    self._adb.RunShellCommand('sync')
-    self._adb.RunShellCommand('echo 3 > ' + PerfTestSetup._DROP_CACHES)
+  def SetHighPerfMode(self):
+    """Sets the highest possible performance mode for the device."""
+    self._SetScalingGovernorInternal('performance')
 
-  def SetUp(self):
-    """Sets up performance tests."""
-    if not self._original_scaling_governor:
-      self._original_scaling_governor = self._adb.GetFileContents(
-          PerfTestSetup._SCALING_GOVERNOR_FMT % 0,
-          log_result=False)[0]
-      self._SetScalingGovernorInternal('performance')
-    self.DropRamCaches()
+  def SetDefaultPerfMode(self):
+    """Sets the performance mode for the device to its default mode."""
+    product_model = self._adb.GetProductModel()
+    governor_mode = {
+                    "GT-I9300" : 'pegasusq',
+                    "Galaxy Nexus" : 'interactive',
+                    "Nexus 4" : 'ondemand',
+                    "Nexus 7" : 'interactive',
+                    "Nexus 10": 'interactive'
+                    }.get(product_model, 'ondemand')
+    self._SetScalingGovernorInternal(governor_mode)
 
-  def TearDown(self):
-    """Tears down performance tests."""
-    if self._original_scaling_governor:
-      self._SetScalingGovernorInternal(self._original_scaling_governor)
-    self._original_scaling_governor = None
+  def RestoreOriginalPerfMode(self):
+    """Resets the original performance mode of the device."""
+    self._SetScalingGovernorInternal(self._original_scaling_governor)
 
   def _SetScalingGovernorInternal(self, value):
     for cpu in range(self._kernel_max + 1):
-      scaling_governor_file = PerfTestSetup._SCALING_GOVERNOR_FMT % cpu
-      if self._adb.Adb().DoesFileExist(scaling_governor_file):
-        self._adb.RunShellCommand(
-            ('echo %s > ' + scaling_governor_file) % value)
+      scaling_governor_file = PerfControl._SCALING_GOVERNOR_FMT % cpu
+      if self._adb.FileExistsOnDevice(scaling_governor_file):
+        self._adb.SetProtectedFileContents(scaling_governor_file, value)

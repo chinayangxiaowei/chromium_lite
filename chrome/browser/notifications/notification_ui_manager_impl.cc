@@ -5,15 +5,17 @@
 #include "chrome/browser/notifications/notification_ui_manager_impl.h"
 
 #include "base/logging.h"
-#include "base/memory/scoped_ptr.h"
+#include "base/prefs/pref_service.h"
+#include "base/memory/linked_ptr.h"
 #include "base/stl_util.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/fullscreen.h"
 #include "chrome/browser/idle.h"
 #include "chrome/browser/notifications/balloon_collection.h"
 #include "chrome/browser/notifications/notification.h"
-#include "chrome/browser/prefs/pref_service.h"
+#include "chrome/browser/profiles/profile.h"
 #include "chrome/common/chrome_notification_types.h"
+#include "chrome/common/extensions/extension.h"
 #include "chrome/common/pref_names.h"
 #include "content/public/browser/notification_service.h"
 
@@ -50,31 +52,35 @@ NotificationUIManagerImpl::NotificationUIManagerImpl()
     : is_user_active_(true) {
   registrar_.Add(this, chrome::NOTIFICATION_APP_TERMINATING,
                  content::NotificationService::AllSources());
-#if defined(OS_MACOSX)
-  InitFullScreenMonitor();
-  InitIdleMonitor();
-#endif
+  registrar_.Add(this, chrome::NOTIFICATION_EXTENSION_UNLOADED,
+                 content::NotificationService::AllSources());
+  registrar_.Add(this, chrome::NOTIFICATION_PROFILE_DESTROYED,
+                 content::NotificationService::AllSources());
 }
 
 NotificationUIManagerImpl::~NotificationUIManagerImpl() {
-  STLDeleteElements(&show_queue_);
-#if defined(OS_MACOSX)
-  StopIdleMonitor();
-  StopFullScreenMonitor();
-#endif
 }
 
 void NotificationUIManagerImpl::Add(const Notification& notification,
                                     Profile* profile) {
-  if (TryReplacement(notification)) {
+  if (TryReplacement(notification, profile)) {
     return;
   }
 
   VLOG(1) << "Added notification. URL: "
           << notification.content_url().spec();
-  show_queue_.push_back(
-      new QueuedNotification(notification, profile));
+  show_queue_.push_back(linked_ptr<QueuedNotification>(
+      new QueuedNotification(notification, profile)));
   CheckAndShowNotifications();
+}
+
+bool NotificationUIManagerImpl::DoesIdExist(const std::string& id) {
+  for (NotificationDeque::iterator iter = show_queue_.begin();
+       iter != show_queue_.end(); ++iter) {
+    if ((*iter)->notification().notification_id() == id)
+      return true;
+  }
+  return false;
 }
 
 bool NotificationUIManagerImpl::CancelById(const std::string& id) {
@@ -95,11 +101,13 @@ bool NotificationUIManagerImpl::CancelAllBySourceOrigin(const GURL& source) {
   bool removed = false;
   for (NotificationDeque::iterator loopiter = show_queue_.begin();
        loopiter != show_queue_.end(); ) {
-    NotificationDeque::iterator curiter = loopiter++;
-    if ((*curiter)->notification().origin_url() == source) {
-      show_queue_.erase(curiter);
-      removed = true;
+    if ((*loopiter)->notification().origin_url() != source) {
+      ++loopiter;
+      continue;
     }
+
+    loopiter = show_queue_.erase(loopiter);
+    removed = true;
   }
   return removed;
 }
@@ -109,17 +117,18 @@ bool NotificationUIManagerImpl::CancelAllByProfile(Profile* profile) {
   bool removed = false;
   for (NotificationDeque::iterator loopiter = show_queue_.begin();
        loopiter != show_queue_.end(); ) {
-    NotificationDeque::iterator curiter = loopiter++;
-    if ((*curiter)->profile() == profile) {
-      show_queue_.erase(curiter);
-      removed = true;
+    if ((*loopiter)->profile() != profile) {
+      ++loopiter;
+      continue;
     }
+
+    loopiter = show_queue_.erase(loopiter);
+    removed = true;
   }
   return removed;
 }
 
 void NotificationUIManagerImpl::CancelAll() {
-  STLDeleteElements(&show_queue_);
 }
 
 void NotificationUIManagerImpl::CheckAndShowNotifications() {
@@ -147,21 +156,24 @@ void NotificationUIManagerImpl::CheckUserState() {
   }
 }
 
+// Attempts to show each notification, leaving any failures in the queue.
+// TODO(dewittj): Eliminate recursion when BallonCollection is used to render
+// the Notification UI surfaces.
 void NotificationUIManagerImpl::ShowNotifications() {
   while (!show_queue_.empty()) {
-    scoped_ptr<QueuedNotification> queued_notification(show_queue_.front());
+    linked_ptr<QueuedNotification> queued_notification(show_queue_.front());
     show_queue_.pop_front();
     if (!ShowNotification(queued_notification->notification(),
                           queued_notification->profile())) {
       // Subclass could not show notification, put it back in the queue.
-      show_queue_.push_front(queued_notification.release());
+      show_queue_.push_front(queued_notification);
       return;
     }
   }
 }
 
 bool NotificationUIManagerImpl::TryReplacement(
-    const Notification& notification) {
+    const Notification& notification, Profile* profile) {
   const GURL& origin = notification.origin_url();
   const string16& replace_id = notification.replace_id();
 
@@ -172,7 +184,8 @@ bool NotificationUIManagerImpl::TryReplacement(
   // Then check the list of notifications already being shown.
   for (NotificationDeque::const_iterator iter = show_queue_.begin();
        iter != show_queue_.end(); ++iter) {
-    if (origin == (*iter)->notification().origin_url() &&
+    if (profile == (*iter)->profile() &&
+        origin == (*iter)->notification().origin_url() &&
         replace_id == (*iter)->notification().replace_id()) {
       (*iter)->Replace(notification);
       return true;
@@ -180,7 +193,7 @@ bool NotificationUIManagerImpl::TryReplacement(
   }
 
   // Give the subclass the opportunity to update existing notification.
-  return UpdateNotification(notification);
+  return UpdateNotification(notification, profile);
 }
 
 void NotificationUIManagerImpl::GetQueuedNotificationsForTesting(
@@ -197,6 +210,17 @@ void NotificationUIManagerImpl::Observe(
     const content::NotificationDetails& details) {
   if (type == chrome::NOTIFICATION_APP_TERMINATING) {
     CancelAll();
+  } else if (type == chrome::NOTIFICATION_EXTENSION_UNLOADED) {
+    if (!content::Source<Profile>(source)->IsOffTheRecord()) {
+      extensions::UnloadedExtensionInfo* extension_info =
+          content::Details<extensions::UnloadedExtensionInfo>(details).ptr();
+      const extensions::Extension* extension = extension_info->extension;
+      CancelAllBySourceOrigin(extension->url());
+    }
+  } else if (type == chrome::NOTIFICATION_PROFILE_DESTROYED) {
+    // We only want to remove the incognito notifications.
+    if (content::Source<Profile>(source)->IsOffTheRecord())
+      CancelAllByProfile(content::Source<Profile>(source).ptr());
   } else {
     NOTREACHED();
   }

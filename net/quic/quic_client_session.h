@@ -10,15 +10,20 @@
 #ifndef NET_QUIC_QUIC_CLIENT_SESSION_H_
 #define NET_QUIC_QUIC_CLIENT_SESSION_H_
 
+#include <string>
+
 #include "base/hash_tables.h"
 #include "net/base/completion_callback.h"
+#include "net/quic/quic_connection_logger.h"
 #include "net/quic/quic_crypto_client_stream.h"
 #include "net/quic/quic_reliable_client_stream.h"
 #include "net/quic/quic_session.h"
 
 namespace net {
 
+class DatagramClientSocket;
 class QuicConnectionHelper;
+class QuicCryptoClientStreamFactory;
 class QuicStreamFactory;
 
 class NET_EXPORT_PRIVATE QuicClientSession : public QuicSession {
@@ -27,8 +32,11 @@ class NET_EXPORT_PRIVATE QuicClientSession : public QuicSession {
   // not |stream_factory|, which must outlive this session.
   // TODO(rch): decouple the factory from the session via a Delegate interface.
   QuicClientSession(QuicConnection* connection,
-                    QuicConnectionHelper* helper,
-                    QuicStreamFactory* stream_factory);
+                    DatagramClientSocket* socket,
+                    QuicStreamFactory* stream_factory,
+                    QuicCryptoClientStreamFactory* crypto_client_stream_factory,
+                    const std::string& server_hostname,
+                    NetLog* net_log);
 
   virtual ~QuicClientSession();
 
@@ -38,12 +46,19 @@ class NET_EXPORT_PRIVATE QuicClientSession : public QuicSession {
   virtual void CloseStream(QuicStreamId stream_id) OVERRIDE;
   virtual void OnCryptoHandshakeComplete(QuicErrorCode error) OVERRIDE;
 
-  // Perform a crypto handshake with the server.
+  // Performs a crypto handshake with the server.
   int CryptoConnect(const CompletionCallback& callback);
 
   // Causes the QuicConnectionHelper to start reading from the socket
   // and passing the data along to the QuicConnection.
   void StartReading();
+
+  // Close the session because of |error|.
+  void CloseSessionOnError(int error);
+
+  base::Value* GetInfoAsValue(const HostPortPair& pair) const;
+
+  const BoundNetLog& net_log() const { return net_log_; }
 
  protected:
   // QuicSession methods:
@@ -51,19 +66,19 @@ class NET_EXPORT_PRIVATE QuicClientSession : public QuicSession {
       QuicStreamId id) OVERRIDE;
 
  private:
-  typedef base::hash_map<QuicStreamId, ReliableQuicStream*> StreamMap;
-
   // A completion callback invoked when a read completes.
   void OnReadComplete(int result);
 
   base::WeakPtrFactory<QuicClientSession> weak_factory_;
-  QuicCryptoClientStream crypto_stream_;
-  scoped_ptr<QuicConnectionHelper> helper_;
-  StreamMap streams_;
+  scoped_ptr<QuicCryptoClientStream> crypto_stream_;
   QuicStreamFactory* stream_factory_;
+  scoped_ptr<DatagramClientSocket> socket_;
   scoped_refptr<IOBufferWithSize> read_buffer_;
   bool read_pending_;
   CompletionCallback callback_;
+  size_t num_total_streams_;
+  BoundNetLog net_log_;
+  QuicConnectionLogger logger_;
 
   DISALLOW_COPY_AND_ASSIGN(QuicClientSession);
 };

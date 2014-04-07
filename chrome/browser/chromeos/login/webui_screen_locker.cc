@@ -11,9 +11,8 @@
 #include "base/metrics/histogram.h"
 #include "base/utf_string_conversions.h"
 #include "base/values.h"
+#include "chrome/browser/browser_shutdown.h"
 #include "chrome/browser/chromeos/accessibility/accessibility_util.h"
-#include "chrome/browser/chromeos/cros/cros_library.h"
-#include "chrome/browser/chromeos/cros/network_library.h"
 #include "chrome/browser/chromeos/login/helper.h"
 #include "chrome/browser/chromeos/login/screen_locker.h"
 #include "chrome/browser/chromeos/login/user_manager.h"
@@ -22,12 +21,12 @@
 #include "chrome/common/chrome_notification_types.h"
 #include "chrome/common/url_constants.h"
 #include "chromeos/dbus/dbus_thread_manager.h"
-#include "chromeos/dbus/root_power_manager_client.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/notification_service.h"
 #include "content/public/browser/notification_types.h"
 #include "content/public/browser/render_widget_host_view.h"
 #include "content/public/browser/web_ui.h"
+#include "ui/aura/client/capture_client.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/x/x11_util.h"
 #include "ui/gfx/screen.h"
@@ -51,9 +50,8 @@ WebUIScreenLocker::WebUIScreenLocker(ScreenLocker* screen_locker)
       webui_ready_(false),
       ALLOW_THIS_IN_INITIALIZER_LIST(weak_factory_(this)) {
   set_should_emit_login_prompt_visible(false);
-  if (ash::Shell::GetInstance())
-    ash::Shell::GetInstance()->session_state_controller()->AddObserver(this);
-  DBusThreadManager::Get()->GetRootPowerManagerClient()->AddObserver(this);
+  ash::Shell::GetInstance()->session_state_controller()->AddObserver(this);
+  DBusThreadManager::Get()->GetPowerManagerClient()->AddObserver(this);
 }
 
 void WebUIScreenLocker::LockScreen(bool unlock_on_input) {
@@ -70,6 +68,9 @@ void WebUIScreenLocker::LockScreen(bool unlock_on_input) {
   OnWindowCreated();
   LoadURL(GURL(kLoginURL));
   lock_window->Grab();
+
+  // Subscribe to crash events.
+  content::WebContentsObserver::Observe(GetWebContents());
 
   // User list consisting of a single logged-in user.
   UserList users(1, chromeos::UserManager::Get()->GetLoggedInUser());
@@ -138,10 +139,8 @@ void WebUIScreenLocker::FocusUserPod() {
 }
 
 WebUIScreenLocker::~WebUIScreenLocker() {
-  DBusThreadManager::Get()->GetRootPowerManagerClient()->RemoveObserver(this);
-
-  if (ash::Shell::GetInstance())
-    ash::Shell::GetInstance()->session_state_controller()->RemoveObserver(this);
+  DBusThreadManager::Get()->GetPowerManagerClient()->RemoveObserver(this);
+  ash::Shell::GetInstance()->session_state_controller()->RemoveObserver(this);
   // In case of shutdown, lock_window_ may be deleted before WebUIScreenLocker.
   if (lock_window_) {
     lock_window_->RemoveObserver(this);
@@ -197,19 +196,22 @@ void WebUIScreenLocker::CreateAccount() {
   NOTREACHED();
 }
 
-void WebUIScreenLocker::CompleteLogin(const std::string& username,
-                                      const std::string& password) {
+void WebUIScreenLocker::CreateLocallyManagedUser(const string16& display_name,
+                                                 const std::string& password) {
+  NOTREACHED();
+}
+
+void WebUIScreenLocker::CompleteLogin(const UserCredentials& credentials) {
   NOTREACHED();
 }
 
 string16 WebUIScreenLocker::GetConnectedNetworkName() {
-  return GetCurrentNetworkName(CrosLibrary::Get()->GetNetworkLibrary());
+  return GetCurrentNetworkName();
 }
 
-void WebUIScreenLocker::Login(const std::string& username,
-                              const std::string& password) {
+void WebUIScreenLocker::Login(const UserCredentials& credentials) {
   chromeos::ScreenLocker::default_screen_locker()->Authenticate(
-      ASCIIToUTF16(password));
+      ASCIIToUTF16(credentials.password));
 }
 
 void WebUIScreenLocker::LoginAsRetailModeUser() {
@@ -228,6 +230,9 @@ void WebUIScreenLocker::LoginAsPublicAccount(const std::string& username) {
   NOTREACHED();
 }
 
+void WebUIScreenLocker::OnSigninScreenReady() {
+}
+
 void WebUIScreenLocker::OnUserSelected(const std::string& username) {
 }
 
@@ -237,6 +242,13 @@ void WebUIScreenLocker::OnStartEnterpriseEnrollment() {
 
 void WebUIScreenLocker::OnStartDeviceReset() {
   NOTREACHED();
+}
+
+void WebUIScreenLocker::ShowWrongHWIDScreen() {
+  NOTREACHED();
+}
+
+void WebUIScreenLocker::ResetPublicSessionAutoLoginTimer() {
 }
 
 void WebUIScreenLocker::ResyncUserData() {
@@ -266,33 +278,46 @@ void WebUIScreenLocker::OnLockWindowReady() {
 
 void WebUIScreenLocker::OnSessionStateEvent(
     ash::SessionStateObserver::EventType event) {
-  if (event == ash::SessionStateObserver::EVENT_LOCK_ANIMATION_FINISHED)
+  if (event == ash::SessionStateObserver::EVENT_LOCK_ANIMATION_FINISHED) {
+    // Release capture if any.
+    aura::client::GetCaptureClient(GetNativeWindow()->GetRootWindow())->
+        SetCapture(NULL);
     GetWebUI()->CallJavascriptFunction("cr.ui.Oobe.animateOnceFullyDisplayed");
+  }
 }
 
 ////////////////////////////////////////////////////////////////////////////////
 // WidgetObserver override.
 
-void WebUIScreenLocker::OnWidgetClosing(views::Widget* widget) {
+void WebUIScreenLocker::OnWidgetDestroying(views::Widget* widget) {
   lock_window_->RemoveObserver(this);
   lock_window_ = NULL;
 }
 
 ////////////////////////////////////////////////////////////////////////////////
-// RootPowerManagerObserver override.
+// PowerManagerClient::Observer overrides.
 
-void WebUIScreenLocker::OnResume(const base::TimeDelta& sleep_duration) {
+void WebUIScreenLocker::LidEventReceived(bool open,
+                                         const base::TimeTicks& time) {
   content::BrowserThread::PostTask(
       content::BrowserThread::UI,
       FROM_HERE,
       base::Bind(&WebUIScreenLocker::FocusUserPod, weak_factory_.GetWeakPtr()));
 }
 
-void WebUIScreenLocker::OnLidEvent(bool open, const base::TimeTicks& time) {
+void WebUIScreenLocker::SystemResumed(const base::TimeDelta& sleep_duration) {
   content::BrowserThread::PostTask(
       content::BrowserThread::UI,
       FROM_HERE,
       base::Bind(&WebUIScreenLocker::FocusUserPod, weak_factory_.GetWeakPtr()));
+}
+
+void WebUIScreenLocker::RenderViewGone(base::TerminationStatus status) {
+  if (browser_shutdown::GetShutdownType() == browser_shutdown::NOT_VALID &&
+      status != base::TERMINATION_STATUS_NORMAL_TERMINATION) {
+    LOG(ERROR) << "Renderer crash on lock screen";
+    Signout();
+  }
 }
 
 }  // namespace chromeos

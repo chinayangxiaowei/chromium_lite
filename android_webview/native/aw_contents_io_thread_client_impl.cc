@@ -17,6 +17,7 @@
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/render_process_host.h"
 #include "content/public/browser/render_view_host.h"
+#include "content/public/browser/resource_request_info.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/browser/web_contents_observer.h"
 #include "googleurl/src/gurl.h"
@@ -195,13 +196,16 @@ AwContentsIoThreadClientImpl::ShouldInterceptRequest(
   DCHECK(BrowserThread::CurrentlyOn(BrowserThread::IO));
   if (java_object_.is_null())
     return scoped_ptr<InterceptedRequestData>();
+  const content::ResourceRequestInfo* info =
+      content::ResourceRequestInfo::ForRequest(request);
+  bool is_main_frame = info && info->IsMainFrame();
 
   JNIEnv* env = AttachCurrentThread();
   ScopedJavaLocalRef<jstring> jstring_url =
       ConvertUTF8ToJavaString(env, location.spec());
   ScopedJavaLocalRef<jobject> ret =
       Java_AwContentsIoThreadClient_shouldInterceptRequest(
-          env, java_object_.obj(), jstring_url.obj());
+          env, java_object_.obj(), jstring_url.obj(), is_main_frame);
   if (ret.is_null())
     return scoped_ptr<InterceptedRequestData>();
   return scoped_ptr<InterceptedRequestData>(
@@ -266,6 +270,25 @@ void AwContentsIoThreadClientImpl::NewDownload(
       jstring_content_disposition.obj(),
       jstring_mime_type.obj(),
       content_length);
+}
+
+void AwContentsIoThreadClientImpl::NewLoginRequest(const std::string& realm,
+                                                   const std::string& account,
+                                                   const std::string& args) {
+  DCHECK(BrowserThread::CurrentlyOn(BrowserThread::IO));
+  if (java_object_.is_null())
+    return;
+
+  JNIEnv* env = AttachCurrentThread();
+  ScopedJavaLocalRef<jstring> jrealm = ConvertUTF8ToJavaString(env, realm);
+  ScopedJavaLocalRef<jstring> jargs = ConvertUTF8ToJavaString(env, args);
+
+  ScopedJavaLocalRef<jstring> jaccount;
+  if (!account.empty())
+    jaccount = ConvertUTF8ToJavaString(env, account);
+
+  Java_AwContentsIoThreadClient_newLoginRequest(
+      env, java_object_.obj(), jrealm.obj(), jaccount.obj(), jargs.obj());
 }
 
 bool RegisterAwContentsIoThreadClientImpl(JNIEnv* env) {

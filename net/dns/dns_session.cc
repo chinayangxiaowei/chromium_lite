@@ -13,6 +13,8 @@
 #include "net/base/net_errors.h"
 #include "net/dns/dns_config_service.h"
 #include "net/dns/dns_socket_pool.h"
+#include "net/socket/stream_socket.h"
+#include "net/udp/datagram_client_socket.h"
 
 namespace net {
 
@@ -54,7 +56,9 @@ int DnsSession::NextFirstServerIndex() {
 base::TimeDelta DnsSession::NextTimeout(int attempt) {
   // The timeout doubles every full round (each nameserver once).
   // TODO(szym): Adapt timeout to observed RTT. http://crbug.com/110197
-  return config_.timeout * (1 << (attempt / config_.nameservers.size()));
+  const base::TimeDelta kMaxTimeout = base::TimeDelta::FromSeconds(5);
+  unsigned num_backoffs = attempt / config_.nameservers.size();
+  return std::min(config_.timeout * (1 << num_backoffs), kMaxTimeout);
 }
 
 // Allocate a socket, already connected to the server address.
@@ -73,6 +77,12 @@ scoped_ptr<DnsSession::SocketLease> DnsSession::AllocateSocket(
 
   SocketLease* lease = new SocketLease(this, server_index, socket.Pass());
   return scoped_ptr<SocketLease>(lease);
+}
+
+scoped_ptr<StreamSocket> DnsSession::CreateTCPSocket(
+    unsigned server_index,
+    const NetLog::Source& source) {
+  return socket_pool_->CreateTCPSocket(server_index, source);
 }
 
 // Release a socket.

@@ -4,88 +4,110 @@
 
 #include "cc/test/fake_web_scrollbar_theme_geometry.h"
 
+using WebKit::WebRect;
+
 namespace cc {
 
 WebKit::WebScrollbarThemeGeometry*
-    FakeWebScrollbarThemeGeometry::clone() const {
-  return new FakeWebScrollbarThemeGeometry();
+FakeWebScrollbarThemeGeometry::clone() const {
+  return new FakeWebScrollbarThemeGeometry(has_thumb_);
 }
 
-int FakeWebScrollbarThemeGeometry::thumbPosition(WebKit::WebScrollbar*) {
+int FakeWebScrollbarThemeGeometry::thumbPosition(
+    WebKit::WebScrollbar* scrollbar) {
+  if (!has_thumb_)
+    return 0;
+  return 5;
+}
+
+int FakeWebScrollbarThemeGeometry::thumbLength(
+    WebKit::WebScrollbar* scrollbar) {
+  if (!has_thumb_)
+    return 0;
+  return 2;
+}
+
+int FakeWebScrollbarThemeGeometry::trackPosition(
+    WebKit::WebScrollbar* scrollbar) {
   return 0;
 }
 
-int FakeWebScrollbarThemeGeometry::thumbLength(WebKit::WebScrollbar*) {
-  return 0;
+int FakeWebScrollbarThemeGeometry::trackLength(
+    WebKit::WebScrollbar* scrollbar) {
+  return 10;
 }
 
-int FakeWebScrollbarThemeGeometry::trackPosition(WebKit::WebScrollbar*) {
-  return 0;
-}
-
-int FakeWebScrollbarThemeGeometry::trackLength(WebKit::WebScrollbar*) {
-  return 0;
-}
-
-bool FakeWebScrollbarThemeGeometry::hasButtons(WebKit::WebScrollbar*) {
+bool FakeWebScrollbarThemeGeometry::hasButtons(
+    WebKit::WebScrollbar* scrollbar) {
   return false;
 }
 
-bool FakeWebScrollbarThemeGeometry::hasThumb(WebKit::WebScrollbar*) {
-  return false;
+bool FakeWebScrollbarThemeGeometry::hasThumb(WebKit::WebScrollbar* scrollbar) {
+  return has_thumb_;
 }
 
-WebKit::WebRect FakeWebScrollbarThemeGeometry::trackRect(WebKit::WebScrollbar*) {
-  return WebKit::WebRect();
+WebRect FakeWebScrollbarThemeGeometry::trackRect(
+    WebKit::WebScrollbar* scrollbar) {
+  return WebRect(0, 0, 10, 10);
 }
 
-WebKit::WebRect FakeWebScrollbarThemeGeometry::thumbRect(WebKit::WebScrollbar*) {
-  return WebKit::WebRect();
+WebRect FakeWebScrollbarThemeGeometry::thumbRect(
+    WebKit::WebScrollbar* scrollbar) {
+  if (!has_thumb_)
+    return WebRect(0, 0, 0, 0);
+  return WebRect(0, 5, 5, 2);
 }
 
-int FakeWebScrollbarThemeGeometry::minimumThumbLength(WebKit::WebScrollbar*) {
+int FakeWebScrollbarThemeGeometry::minimumThumbLength(
+    WebKit::WebScrollbar* scrollbar) {
   return 0;
 }
 
-int FakeWebScrollbarThemeGeometry::scrollbarThickness(WebKit::WebScrollbar*) {
+int FakeWebScrollbarThemeGeometry::scrollbarThickness(
+    WebKit::WebScrollbar* scrollbar) {
   return 0;
 }
 
-WebKit::WebRect FakeWebScrollbarThemeGeometry::backButtonStartRect(
-    WebKit::WebScrollbar*) {
-  return WebKit::WebRect();
+WebRect FakeWebScrollbarThemeGeometry::backButtonStartRect(
+    WebKit::WebScrollbar* scrollbar) {
+  return WebRect();
 }
 
-WebKit::WebRect FakeWebScrollbarThemeGeometry::backButtonEndRect(
-    WebKit::WebScrollbar*) {
-  return WebKit::WebRect();
+WebRect FakeWebScrollbarThemeGeometry::backButtonEndRect(
+    WebKit::WebScrollbar* scrollbar) {
+  return WebRect();
 }
 
-WebKit::WebRect FakeWebScrollbarThemeGeometry::forwardButtonStartRect(
-    WebKit::WebScrollbar*) {
-  return WebKit::WebRect();
+WebRect FakeWebScrollbarThemeGeometry::forwardButtonStartRect(
+    WebKit::WebScrollbar* scrollbar) {
+  return WebRect();
 }
 
-WebKit::WebRect FakeWebScrollbarThemeGeometry::forwardButtonEndRect(
-    WebKit::WebScrollbar*) {
-  return WebKit::WebRect();
+WebRect FakeWebScrollbarThemeGeometry::forwardButtonEndRect(
+    WebKit::WebScrollbar* scrollbar) {
+  return WebRect();
 }
 
-WebKit::WebRect FakeWebScrollbarThemeGeometry::constrainTrackRectToTrackPieces(
-   WebKit::WebScrollbar*,
-   const WebKit::WebRect&) {
-  return WebKit::WebRect();
+WebRect FakeWebScrollbarThemeGeometry::constrainTrackRectToTrackPieces(
+    WebKit::WebScrollbar* scrollbar,
+    const WebRect& rect) {
+  return WebRect();
 }
 
-void FakeWebScrollbarThemeGeometry::splitTrack(
-    WebKit::WebScrollbar*,
-    const WebKit::WebRect& track,
-    WebKit::WebRect& startTrack,
-    WebKit::WebRect& thumb,
-    WebKit::WebRect& endTrack) {
-  startTrack = WebKit::WebRect();
-  thumb = WebKit::WebRect();
-  endTrack = WebKit::WebRect();
+void FakeWebScrollbarThemeGeometry::splitTrack(WebKit::WebScrollbar* scrollbar,
+                                               const WebRect& track,
+                                               WebRect& start_track,
+                                               WebRect& thumb,
+                                               WebRect& end_track) {
+  if (!has_thumb_) {
+    thumb = WebRect(0, 0, 0, 0);
+    start_track = WebRect(0, 0, 10, 10);
+    end_track = WebRect(0, 10, 10, 0);
+  } else {
+    thumb = WebRect(0, 5, 5, 2);
+    start_track = WebRect(0, 5, 0, 5);
+    end_track = WebRect(0, 0, 0, 5);
+  }
 }
 
 }  // namespace cc

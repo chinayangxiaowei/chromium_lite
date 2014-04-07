@@ -22,7 +22,7 @@ class BookmarksTest : public InProcessBrowserTest {
 
   void OpenBookmarksManager() {
     content::TestNavigationObserver navigation_observer(
-        content::NotificationService::AllSources(), NULL, 2);
+        content::NotificationService::AllSources(), 2);
 
     // Bring up the bookmarks manager tab.
     chrome::ShowBookmarkManager(browser());
@@ -32,13 +32,15 @@ class BookmarksTest : public InProcessBrowserTest {
   void AssertIsBookmarksPage(content::WebContents* tab) {
     GURL url;
     std::string out;
-    ASSERT_TRUE(content::ExecuteJavaScriptAndExtractString(
-        tab->GetRenderViewHost(), L"",
-        L"domAutomationController.send(location.protocol)", &out));
+    ASSERT_TRUE(content::ExecuteScriptAndExtractString(
+        tab,
+        "domAutomationController.send(location.protocol)",
+        &out));
     ASSERT_EQ("chrome-extension:", out);
-    ASSERT_TRUE(content::ExecuteJavaScriptAndExtractString(
-        tab->GetRenderViewHost(), L"",
-        L"domAutomationController.send(location.pathname)", &out));
+    ASSERT_TRUE(content::ExecuteScriptAndExtractString(
+        tab,
+        "domAutomationController.send(location.pathname)",
+        &out));
     ASSERT_EQ("/main.html", out);
   }
 };
@@ -57,12 +59,20 @@ IN_PROC_BROWSER_TEST_F(BookmarksTest, CommandOpensBookmarksTab) {
   AssertIsBookmarksPage(browser()->tab_strip_model()->GetActiveWebContents());
 }
 
+// TODO(linux_aura) http://crbug.com/163931
+#if defined(OS_LINUX) && !defined(OS_CHROMEOS) && defined(USE_AURA)
+#define MAYBE_CommandAgainGoesBackToBookmarksTab DISABLED_CommandAgainGoesBackToBookmarksTab
+#else
+#define MAYBE_CommandAgainGoesBackToBookmarksTab CommandAgainGoesBackToBookmarksTab
+#endif
+
 // If this flakes on Mac, use: http://crbug.com/87200
-IN_PROC_BROWSER_TEST_F(BookmarksTest, CommandAgainGoesBackToBookmarksTab) {
+IN_PROC_BROWSER_TEST_F(BookmarksTest,
+                       MAYBE_CommandAgainGoesBackToBookmarksTab) {
   ui_test_utils::NavigateToURL(
       browser(),
-      ui_test_utils::GetTestUrl(FilePath(),
-                                FilePath().AppendASCII("simple.html")));
+      ui_test_utils::GetTestUrl(base::FilePath(),
+                                base::FilePath().AppendASCII("simple.html")));
   ASSERT_EQ(1, browser()->tab_strip_model()->count());
 
   // Bring up the bookmarks manager tab.
@@ -87,7 +97,7 @@ IN_PROC_BROWSER_TEST_F(BookmarksTest, TwoCommandsOneTab) {
   chrome::ShowBookmarkManager(browser());
   navigation_observer.Wait();
 
-  ASSERT_EQ(1, browser()->tab_count());
+  ASSERT_EQ(1, browser()->tab_strip_model()->count());
 }
 
 IN_PROC_BROWSER_TEST_F(BookmarksTest, BookmarksLoaded) {

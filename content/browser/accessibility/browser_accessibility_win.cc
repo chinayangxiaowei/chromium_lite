@@ -20,14 +20,15 @@
 
 namespace content {
 
-// The GUID for the ISimpleDOM service is not defined in the IDL files.
-// This is taken directly from the Mozilla sources
-// (accessible/src/msaa/nsAccessNodeWrap.cpp) and it's also documented at:
+// These nonstandard GUIDs are taken directly from the Mozilla sources
+// (accessible/src/msaa/nsAccessNodeWrap.cpp); some documentation is here:
 // http://developer.mozilla.org/en/Accessibility/AT-APIs/ImplementationFeatures/MSAA
-
 const GUID GUID_ISimpleDOM = {
     0x0c539790, 0x12e4, 0x11cf,
     0xb6, 0x61, 0x00, 0xaa, 0x00, 0x4c, 0xd6, 0xd8};
+const GUID GUID_IAccessibleContentDocument = {
+    0xa5d8e1f3, 0x3571, 0x4d8f,
+    0x95, 0x21, 0x07, 0xed, 0x28, 0xfb, 0x07, 0x2e};
 
 const char16 BrowserAccessibilityWin::kEmbeddedCharacter[] = L"\xfffc";
 
@@ -473,8 +474,7 @@ STDMETHODIMP BrowserAccessibilityWin::get_accParent(IDispatch** disp_parent) {
   if (parent == NULL) {
     // This happens if we're the root of the tree;
     // return the IAccessible for the window.
-    parent = manager_->ToBrowserAccessibilityManagerWin()->
-             GetParentWindowIAccessible();
+    parent = manager_->ToBrowserAccessibilityManagerWin()->parent_iaccessible();
   }
 
   parent->AddRef();
@@ -679,7 +679,7 @@ STDMETHODIMP BrowserAccessibilityWin::get_windowHandle(HWND* window_handle) {
   if (!window_handle)
     return E_INVALIDARG;
 
-  *window_handle = manager_->GetParentView();
+  *window_handle = manager_->ToBrowserAccessibilityManagerWin()->parent_hwnd();
   return S_OK;
 }
 
@@ -862,7 +862,8 @@ STDMETHODIMP BrowserAccessibilityWin::get_imagePosition(
     return E_INVALIDARG;
 
   if (coordinate_type == IA2_COORDTYPE_SCREEN_RELATIVE) {
-    HWND parent_hwnd = manager_->GetParentView();
+    HWND parent_hwnd =
+        manager_->ToBrowserAccessibilityManagerWin()->parent_hwnd();
     POINT top_left = {0, 0};
     ::ClientToScreen(parent_hwnd, &top_left);
     *x = location_.x() + top_left.x;
@@ -2504,6 +2505,14 @@ STDMETHODIMP BrowserAccessibilityWin::QueryService(REFGUID guidService,
   if (!instance_active_)
     return E_FAIL;
 
+  if (guidService == GUID_IAccessibleContentDocument) {
+    // Special Mozilla extension: return the accessible for the root document.
+    // Screen readers use this to distinguish between a document loaded event
+    // on the root document vs on an iframe.
+    return manager_->GetRoot()->ToBrowserAccessibilityWin()->QueryInterface(
+        IID_IAccessible2, object);
+  }
+
   if (guidService == IID_IAccessible ||
       guidService == IID_IAccessible2 ||
       guidService == IID_IAccessibleAction ||
@@ -2627,18 +2636,12 @@ void BrowserAccessibilityWin::PreInitialize() {
 
   InitRoleAndState();
 
-  // Expose headings levels with the "level" attribute.
-  if (role_ == AccessibilityNodeData::ROLE_HEADING && role_name_.size() == 2 &&
-          IsAsciiDigit(role_name_[1])) {
-    ia2_attributes_.push_back(string16(L"level:") + role_name_.substr(1));
-  }
-
   // Expose the "display" and "tag" attributes.
   StringAttributeToIA2(AccessibilityNodeData::ATTR_DISPLAY, "display");
   StringAttributeToIA2(AccessibilityNodeData::ATTR_HTML_TAG, "tag");
   StringAttributeToIA2(AccessibilityNodeData::ATTR_ROLE, "xml-roles");
 
-  // Expose "level" attribute for tree nodes.
+  // Expose "level" attribute for headings, trees, etc.
   IntAttributeToIA2(AccessibilityNodeData::ATTR_HIERARCHICAL_LEVEL, "level");
 
   // Expose the set size and position in set for listbox options.
@@ -2649,6 +2652,12 @@ void BrowserAccessibilityWin::PreInitialize() {
         L"setsize:" + base::IntToString16(parent_->child_count()));
     ia2_attributes_.push_back(
         L"setsize:" + base::IntToString16(index_in_parent_ + 1));
+  }
+
+  if (ia_role_ == ROLE_SYSTEM_CHECKBUTTON ||
+      ia_role_ == ROLE_SYSTEM_RADIOBUTTON ||
+      ia2_role_ == IA2_ROLE_TOGGLE_BUTTON) {
+    ia2_attributes_.push_back(L"checkable:true");
   }
 
   // Expose live region attributes.
@@ -2678,6 +2687,17 @@ void BrowserAccessibilityWin::PreInitialize() {
       value_ = UTF8ToUTF16(base::DoubleToString(fval));
     }
     ia2_attributes_.push_back(L"valuetext:" + value_);
+  }
+
+  // Expose color well value.
+  if (ia2_role_ == IA2_ROLE_COLOR_CHOOSER) {
+    int r, g, b;
+    GetIntAttribute(AccessibilityNodeData::ATTR_COLOR_VALUE_RED, &r);
+    GetIntAttribute(AccessibilityNodeData::ATTR_COLOR_VALUE_GREEN, &g);
+    GetIntAttribute(AccessibilityNodeData::ATTR_COLOR_VALUE_BLUE, &b);
+    value_ = base::IntToString16((r * 100) / 255) + L"% red " +
+             base::IntToString16((g * 100) / 255) + L"% green " +
+             base::IntToString16((b * 100) / 255) + L"% blue";
   }
 
   // Expose table cell index.
@@ -2767,6 +2787,12 @@ void BrowserAccessibilityWin::PreInitialize() {
     }
   }
 
+  // On Windows, the value of a document should be its url.
+  if (role_ == AccessibilityNodeData::ROLE_ROOT_WEB_AREA ||
+      role_ == AccessibilityNodeData::ROLE_WEB_AREA) {
+    GetStringAttribute(AccessibilityNodeData::ATTR_DOC_URL, &value_);
+  }
+
   // For certain roles (listbox option, static text, and list marker)
   // WebKit stores the main accessible text in the "value" - swap it so
   // that it's the "name".
@@ -2839,6 +2865,8 @@ void BrowserAccessibilityWin::PostInitialize() {
     previous_text_ = text;
   }
 
+  HWND hwnd = manager_->ToBrowserAccessibilityManagerWin()->parent_hwnd();
+
   // Fire events if the state has changed.
   if (!first_time_ && ia_state_ != old_ia_state_) {
     // Normally focus events are handled elsewhere, however
@@ -2850,17 +2878,17 @@ void BrowserAccessibilityWin::PostInitialize() {
         (ia_state_ & STATE_SYSTEM_SELECTABLE) &&
         (ia_state_ & STATE_SYSTEM_FOCUSED) &&
         !(old_ia_state_ & STATE_SYSTEM_FOCUSED)) {
-      ::NotifyWinEvent(EVENT_OBJECT_FOCUS, manager_->GetParentView(),
+      ::NotifyWinEvent(EVENT_OBJECT_FOCUS, hwnd,
                        OBJID_CLIENT, child_id());
     }
 
     if ((ia_state_ & STATE_SYSTEM_SELECTED) &&
         !(old_ia_state_ & STATE_SYSTEM_SELECTED)) {
-      ::NotifyWinEvent(EVENT_OBJECT_SELECTIONADD, manager_->GetParentView(),
+      ::NotifyWinEvent(EVENT_OBJECT_SELECTIONADD, hwnd,
                        OBJID_CLIENT, child_id());
     } else if (!(ia_state_ & STATE_SYSTEM_SELECTED) &&
                (old_ia_state_ & STATE_SYSTEM_SELECTED)) {
-      ::NotifyWinEvent(EVENT_OBJECT_SELECTIONREMOVE, manager_->GetParentView(),
+      ::NotifyWinEvent(EVENT_OBJECT_SELECTIONREMOVE, hwnd,
                        OBJID_CLIENT, child_id());
     }
 
@@ -3132,12 +3160,17 @@ void BrowserAccessibilityWin::InitRoleAndState() {
       role_name_ = L"div";
       ia2_role_ = IA2_ROLE_SECTION;
       break;
-    case AccessibilityNodeData::ROLE_DEFINITION_LIST_DEFINITION:
+    case AccessibilityNodeData::ROLE_DEFINITION:
       role_name_ = html_tag;
       ia2_role_ = IA2_ROLE_PARAGRAPH;
       ia_state_ |= STATE_SYSTEM_READONLY;
       break;
-    case AccessibilityNodeData::ROLE_DEFINITION_LIST_TERM:
+    case AccessibilityNodeData::ROLE_DESCRIPTION_LIST_DETAIL:
+      role_name_ = html_tag;
+      ia2_role_ = IA2_ROLE_PARAGRAPH;
+      ia_state_ |= STATE_SYSTEM_READONLY;
+      break;
+    case AccessibilityNodeData::ROLE_DESCRIPTION_LIST_TERM:
       ia_role_ = ROLE_SYSTEM_LISTITEM;
       ia_state_ |= STATE_SYSTEM_READONLY;
       break;
@@ -3367,13 +3400,23 @@ void BrowserAccessibilityWin::InitRoleAndState() {
     case AccessibilityNodeData::ROLE_SPLITTER:
       ia_role_ = ROLE_SYSTEM_SEPARATOR;
       break;
+    case AccessibilityNodeData::ROLE_SVG_ROOT:
+      ia_role_ = ROLE_SYSTEM_GRAPHIC;
+      break;
     case AccessibilityNodeData::ROLE_TAB:
       ia_role_ = ROLE_SYSTEM_PAGETAB;
       break;
-    case AccessibilityNodeData::ROLE_TABLE:
-      ia_role_ = ROLE_SYSTEM_TABLE;
-      ia_state_ |= STATE_SYSTEM_READONLY;
+    case AccessibilityNodeData::ROLE_TABLE: {
+      string16 aria_role;
+      GetStringAttribute(AccessibilityNodeData::ATTR_ROLE, &aria_role);
+      if (aria_role == L"treegrid") {
+        ia_role_ = ROLE_SYSTEM_OUTLINE;
+      } else {
+        ia_role_ = ROLE_SYSTEM_TABLE;
+        ia_state_ |= STATE_SYSTEM_READONLY;
+      }
       break;
+    }
     case AccessibilityNodeData::ROLE_TABLE_HEADER_CONTAINER:
       ia_role_ = ROLE_SYSTEM_GROUPING;
       ia2_role_ = IA2_ROLE_SECTION;

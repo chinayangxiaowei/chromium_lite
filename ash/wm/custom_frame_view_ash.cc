@@ -11,6 +11,8 @@
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/resource/resource_bundle.h"
 #include "ui/compositor/layer_animator.h"
+#include "ui/compositor/scoped_animation_duration_scale_mode.h"
+#include "ui/gfx/canvas.h"
 #include "ui/gfx/font.h"
 #include "ui/gfx/image/image.h"
 #include "ui/gfx/rect.h"
@@ -128,6 +130,11 @@ void CustomFrameViewAsh::OnPaint(gfx::Canvas* canvas) {
   if (frame_->IsFullscreen())
     return;
 
+  // Prevent bleeding paint onto the client area below the window frame, which
+  // may become visible when the WebContent is transparent.
+  canvas->Save();
+  canvas->ClipRect(gfx::Rect(0, 0, width(), NonClientTopBorderHeight()));
+
   bool paint_as_active = ShouldPaintAsActive();
   int theme_image_id = paint_as_active ? IDR_AURA_WINDOW_HEADER_BASE_ACTIVE :
       IDR_AURA_WINDOW_HEADER_BASE_INACTIVE;
@@ -139,6 +146,7 @@ void CustomFrameViewAsh::OnPaint(gfx::Canvas* canvas) {
       NULL);
   frame_painter_->PaintTitleBar(this, canvas, GetTitleFont());
   frame_painter_->PaintHeaderContentSeparator(this, canvas);
+  canvas->Restore();
 }
 
 std::string CustomFrameViewAsh::GetClassName() const {
@@ -157,8 +165,11 @@ gfx::Size CustomFrameViewAsh::GetMaximumSize() {
 // views::ButtonListener overrides:
 void CustomFrameViewAsh::ButtonPressed(views::Button* sender,
                                        const ui::Event& event) {
-  if (event.IsShiftDown())
-    ui::LayerAnimator::set_slow_animation_mode(true);
+  scoped_ptr<ui::ScopedAnimationDurationScaleMode> slow_duration_mode;
+  if (event.IsShiftDown()) {
+    slow_duration_mode.reset(new ui::ScopedAnimationDurationScaleMode(
+        ui::ScopedAnimationDurationScaleMode::SLOW_DURATION));
+  }
   if (sender == maximize_button_) {
     // The maximize button may move out from under the cursor.
     ResetWindowControls();
@@ -170,8 +181,6 @@ void CustomFrameViewAsh::ButtonPressed(views::Button* sender,
   } else if (sender == close_button_) {
     frame_->Close();
   }
-  if (event.IsShiftDown())
-    ui::LayerAnimator::set_slow_animation_mode(false);
 }
 
 ////////////////////////////////////////////////////////////////////////////////

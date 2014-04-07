@@ -71,6 +71,14 @@ bool GoogleChromeSxSDistribution::AppHostIsSupported() {
   return false;
 }
 
+bool GoogleChromeSxSDistribution::ShouldSetExperimentLabels() {
+  return true;
+}
+
+bool GoogleChromeSxSDistribution::HasUserExperiments() {
+  return true;
+}
+
 string16 GoogleChromeSxSDistribution::ChannelName() {
   return kChannelName;
 }

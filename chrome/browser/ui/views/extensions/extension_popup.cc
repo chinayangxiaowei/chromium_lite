@@ -6,7 +6,7 @@
 
 #include "base/bind.h"
 #include "base/message_loop.h"
-#include "chrome/browser/debugger/devtools_window.h"
+#include "chrome/browser/devtools/devtools_window.h"
 #include "chrome/browser/extensions/extension_process_manager.h"
 #include "chrome/browser/extensions/extension_system.h"
 #include "chrome/browser/platform_util.h"
@@ -18,6 +18,7 @@
 #include "content/public/browser/notification_source.h"
 #include "content/public/browser/render_view_host.h"
 #include "content/public/browser/web_contents.h"
+#include "content/public/browser/web_contents_view.h"
 #include "ui/gfx/insets.h"
 #include "ui/views/layout/fill_layout.h"
 #include "ui/views/widget/widget.h"
@@ -203,10 +204,10 @@ ExtensionPopup* ExtensionPopup::ShowPopup(
 }
 
 void ExtensionPopup::ShowBubble() {
-  Show();
+  GetWidget()->Show();
 
   // Focus on the host contents when the bubble is first shown.
-  host()->host_contents()->Focus();
+  host()->host_contents()->GetView()->Focus();
 
   // Listen for widget focus changes after showing (used for non-aura win).
   views::WidgetFocusManager::GetInstance()->AddFocusChangeListener(this);

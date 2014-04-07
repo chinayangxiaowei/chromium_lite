@@ -14,7 +14,7 @@
 #include "base/lazy_instance.h"
 #include "base/memory/scoped_ptr.h"
 #include "base/memory/weak_ptr.h"
-#include "base/prefs/public/pref_change_registrar.h"
+#include "base/prefs/pref_change_registrar.h"
 #include "base/time.h"
 #include "chrome/common/translate_errors.h"
 #include "content/public/browser/notification_observer.h"
@@ -25,7 +25,6 @@ template <typename T> struct DefaultSingletonTraits;
 class GURL;
 struct PageTranslatedDetails;
 class PrefService;
-class PrefServiceBase;
 class TranslateInfoBarDelegate;
 
 namespace content {
@@ -92,9 +91,6 @@ class TranslateManager : public content::NotificationObserver,
     translate_script_expiration_delay_ =
         base::TimeDelta::FromMilliseconds(delay_ms);
   }
-
-  // Convenience method to know if a tab is showing a translate infobar.
-  static bool IsShowingTranslateInfobar(content::WebContents* web_contents);
 
   // Returns true if the URL can be translated.
   static bool IsTranslatableURL(const GURL& url);
@@ -168,16 +164,11 @@ class TranslateManager : public content::NotificationObserver,
 
   // Initializes the |accept_languages_| language table based on the associated
   // preference in |prefs|.
-  void InitAcceptLanguages(PrefServiceBase* prefs);
+  void InitAcceptLanguages(PrefService* prefs);
 
   // Fetches the JS translate script (the script that is injected in the page
   // to translate it).
   void RequestTranslateScript();
-
-  // Shows the specified translate |infobar| in the given |tab|.  If a current
-  // translate infobar is showing, it just replaces it with the new one.
-  void ShowInfoBar(content::WebContents* web_contents,
-                   TranslateInfoBarDelegate* infobar);
 
   // Returns the language to translate to. The language returned is the
   // first language found in the following list that is supported by the
@@ -186,10 +177,6 @@ class TranslateManager : public content::NotificationObserver,
   //     the accept-language list
   // If no language is found then an empty string is returned.
   static std::string GetTargetLanguage(PrefService* prefs);
-
-  // Returns the translate info bar showing in |tab| or NULL if none is showing.
-  static TranslateInfoBarDelegate* GetTranslateInfoBarDelegate(
-      content::WebContents* web_contents);
 
   content::NotificationRegistrar notification_registrar_;
 
@@ -200,7 +187,7 @@ class TranslateManager : public content::NotificationObserver,
 
   // A map that associates a profile with its parsed "accept languages".
   typedef std::set<std::string> LanguageSet;
-  typedef std::map<PrefServiceBase*, LanguageSet> PrefServiceLanguagesMap;
+  typedef std::map<PrefService*, LanguageSet> PrefServiceLanguagesMap;
   PrefServiceLanguagesMap accept_languages_;
 
   base::WeakPtrFactory<TranslateManager> weak_method_factory_;

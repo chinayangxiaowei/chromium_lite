@@ -23,10 +23,6 @@
 #include "ui/base/win/extra_sdk_defines.h"
 #include "ui/views/controls/textfield/native_textfield_wrapper.h"
 
-namespace gfx {
-class SelectionModel;
-}
-
 namespace views {
 
 class MenuRunner;
@@ -56,12 +52,6 @@ class NativeTextfieldWin
                                          const POINT& current,
                                          DWORD elapsed_time);
 
-  // Returns true if the virtual key code is a digit coming from the numeric
-  // keypad (with or without NumLock on).  |extended_key| should be set to the
-  // extended key flag specified in the WM_KEYDOWN/UP where the |key_code|
-  // originated.
-  VIEWS_EXPORT static bool IsNumPadDigit(int key_code, bool extended_key);
-
   // See the code in textfield.cc that calls this for why this is here.
   void AttachHack();
 
@@ -75,6 +65,7 @@ class NativeTextfieldWin
   virtual void SelectAll(bool reversed) OVERRIDE;
   virtual void ClearSelection() OVERRIDE;
   virtual void UpdateBorder() OVERRIDE;
+  virtual void UpdateBorderColor() OVERRIDE;
   virtual void UpdateTextColor() OVERRIDE;
   virtual void UpdateBackgroundColor() OVERRIDE;
   virtual void UpdateReadOnly() OVERRIDE;
@@ -88,9 +79,9 @@ class NativeTextfieldWin
   virtual View* GetView() OVERRIDE;
   virtual gfx::NativeView GetTestingHandle() const OVERRIDE;
   virtual bool IsIMEComposing() const OVERRIDE;
-  virtual void GetSelectedRange(ui::Range* range) const OVERRIDE;
+  virtual ui::Range GetSelectedRange() const OVERRIDE;
   virtual void SelectRange(const ui::Range& range) OVERRIDE;
-  virtual void GetSelectionModel(gfx::SelectionModel* sel) const OVERRIDE;
+  virtual gfx::SelectionModel GetSelectionModel() const OVERRIDE;
   virtual void SelectSelectionModel(const gfx::SelectionModel& sel) OVERRIDE;
   virtual size_t GetCursorPosition() const OVERRIDE;
   virtual bool GetCursorEnabled() const OVERRIDE;
@@ -100,8 +91,12 @@ class NativeTextfieldWin
   virtual void HandleFocus() OVERRIDE;
   virtual void HandleBlur() OVERRIDE;
   virtual ui::TextInputClient* GetTextInputClient() OVERRIDE;
-  virtual void ApplyStyleRange(const gfx::StyleRange& style) OVERRIDE;
-  virtual void ApplyDefaultStyle() OVERRIDE;
+  virtual void SetColor(SkColor value) OVERRIDE;
+  virtual void ApplyColor(SkColor value, const ui::Range& range) OVERRIDE;
+  virtual void SetStyle(gfx::TextStyle style, bool value) OVERRIDE;
+  virtual void ApplyStyle(gfx::TextStyle style,
+                          bool value,
+                          const ui::Range& range) OVERRIDE;
   virtual void ClearEditHistory() OVERRIDE;
   virtual int GetFontHeight() OVERRIDE;
   virtual int GetTextfieldBaseline() const OVERRIDE;
@@ -113,7 +108,7 @@ class NativeTextfieldWin
   virtual bool GetAcceleratorForCommandId(
       int command_id,
       ui::Accelerator* accelerator) OVERRIDE;
-  virtual void ExecuteCommand(int command_id) OVERRIDE;
+  virtual void ExecuteCommand(int command_id, int event_flags) OVERRIDE;
 
   // ui::TSFEventRouterObserver:
   virtual void OnTextUpdated(const ui::Range& composition_range) OVERRIDE;
@@ -218,6 +213,9 @@ class NativeTextfieldWin
   void OnKillFocus(HWND hwnd);
   void OnSysChar(TCHAR ch, UINT repeat_count, UINT flags);
 
+  // CWindowImpl overrides:
+  virtual void OnFinalMessage(HWND hwnd) OVERRIDE;
+
   // Helper function for OnChar() and OnKeyDown() that handles keystrokes that
   // could change the text in the edit.
   // Note: This function assumes GetCurrentMessage() returns a MSG with
@@ -266,6 +264,10 @@ class NativeTextfieldWin
 
   // Generates the contents of the context menu.
   void BuildContextMenu();
+
+  // Returns true if normal processing of the current mouse press event should
+  // occur.
+  bool ShouldProcessMouseEvent();
 
   static HMODULE loaded_libarary_module_;
 

@@ -32,7 +32,7 @@
 #include <fstream>
 
 #include "base/basictypes.h"
-#include "base/file_path.h"
+#include "base/files/file_path.h"
 #include "base/logging.h"
 #include "base/memory/scoped_ptr.h"
 #include "base/memory/singleton.h"
@@ -41,7 +41,7 @@
 #include "base/stl_util.h"
 #include "base/string_util.h"
 #include "base/stringprintf.h"
-#include "base/sys_string_conversions.h"
+#include "base/strings/sys_string_conversions.h"
 #include "base/threading/thread_restrictions.h"
 #include "base/time.h"
 #include "base/utf_string_conversions.h"
@@ -57,6 +57,8 @@
 #if defined(OS_CHROMEOS)
 #include "base/chromeos/chromeos_version.h"
 #endif
+
+using base::FilePath;
 
 namespace file_util {
 
@@ -138,7 +140,7 @@ bool VerifySpecificPathControlledByUser(const FilePath& path,
 
 static std::string TempFileName() {
 #if defined(OS_MACOSX)
-  return StringPrintf(".%s.XXXXXX", base::mac::BaseBundleID());
+  return base::StringPrintf(".%s.XXXXXX", base::mac::BaseBundleID());
 #endif
 
 #if defined(GOOGLE_CHROME_BUILD)
@@ -395,34 +397,6 @@ bool DirectoryExists(const FilePath& path) {
     return S_ISDIR(file_info.st_mode);
   return false;
 }
-
-// TODO(erikkay): implement
-#if 0
-bool GetFileCreationLocalTimeFromHandle(int fd,
-                                        LPSYSTEMTIME creation_time) {
-  if (!file_handle)
-    return false;
-
-  FILETIME utc_filetime;
-  if (!GetFileTime(file_handle, &utc_filetime, NULL, NULL))
-    return false;
-
-  FILETIME local_filetime;
-  if (!FileTimeToLocalFileTime(&utc_filetime, &local_filetime))
-    return false;
-
-  return !!FileTimeToSystemTime(&local_filetime, creation_time);
-}
-
-bool GetFileCreationLocalTime(const std::string& filename,
-                              LPSYSTEMTIME creation_time) {
-  ScopedHandle file_handle(
-      CreateFile(filename.c_str(), GENERIC_READ,
-                 FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, NULL,
-                 OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL));
-  return GetFileCreationLocalTimeFromHandle(file_handle.Get(), creation_time);
-}
-#endif
 
 bool ReadFromFD(int fd, char* buffer, size_t bytes) {
   size_t total_read = 0;
@@ -885,46 +859,6 @@ bool FileEnumerator::ReadDirectory(std::vector<DirectoryEntryInfo>* entries,
   return true;
 }
 
-///////////////////////////////////////////////
-// MemoryMappedFile
-
-MemoryMappedFile::MemoryMappedFile()
-    : file_(base::kInvalidPlatformFileValue),
-      data_(NULL),
-      length_(0) {
-}
-
-bool MemoryMappedFile::MapFileToMemoryInternal() {
-  base::ThreadRestrictions::AssertIOAllowed();
-
-  struct stat file_stat;
-  if (fstat(file_, &file_stat) == base::kInvalidPlatformFileValue) {
-    DLOG(ERROR) << "Couldn't fstat " << file_ << ", errno " << errno;
-    return false;
-  }
-  length_ = file_stat.st_size;
-
-  data_ = static_cast<uint8*>(
-      mmap(NULL, length_, PROT_READ, MAP_SHARED, file_, 0));
-  if (data_ == MAP_FAILED)
-    DLOG(ERROR) << "Couldn't mmap " << file_ << ", errno " << errno;
-
-  return data_ != MAP_FAILED;
-}
-
-void MemoryMappedFile::CloseHandles() {
-  base::ThreadRestrictions::AssertIOAllowed();
-
-  if (data_ != NULL)
-    munmap(data_, length_);
-  if (file_ != base::kInvalidPlatformFileValue)
-    ignore_result(HANDLE_EINTR(close(file_)));
-
-  data_ = NULL;
-  length_ = 0;
-  file_ = base::kInvalidPlatformFileValue;
-}
-
 bool HasFileBeenModifiedSince(const FileEnumerator::FindInfo& find_info,
                               const base::Time& cutoff_time) {
   return static_cast<time_t>(find_info.stat.st_mtime) >= cutoff_time.ToTimeT();
@@ -1157,5 +1091,10 @@ bool VerifyPathControlledByAdmin(const FilePath& path) {
       kFileSystemRoot, path, kRootUid, allowed_group_ids);
 }
 #endif  // defined(OS_MACOSX) && !defined(OS_IOS)
+
+int GetMaximumPathComponentLength(const FilePath& path) {
+  base::ThreadRestrictions::AssertIOAllowed();
+  return pathconf(path.value().c_str(), _PC_NAME_MAX);
+}
 
 }  // namespace file_util

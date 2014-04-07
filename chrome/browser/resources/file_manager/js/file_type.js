@@ -2,6 +2,8 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+'use strict';
+
 /**
  * Namespace object for file type utility functions.
  */
@@ -103,6 +105,34 @@ FileType.types = [
 FileType.DIRECTORY = {name: 'FOLDER', type: '.folder', icon: 'folder'};
 
 /**
+ * Returns the file path extesion for a given file.
+ *
+ * @param {string|Entry} file Reference to the file.
+ *     Can be a name, a path, a url or a File API Entry.
+ * @return {string} The extension including a leading '.', or empty string if
+ *     not found.
+ */
+FileType.getExtension = function(file) {
+  var fileName;
+  if (typeof file == 'object') {
+    if (file.isDirectory) {
+      // No extension for a directory.
+      return '';
+    } else {
+      fileName = file.name;
+    }
+  } else {
+    fileName = file;
+  }
+
+  var extensionStartIndex = fileName.lastIndexOf('.');
+  if (extensionStartIndex == -1 || extensionStartIndex == fileName.length - 1) {
+    return '';
+  }
+  return fileName.substr(extensionStartIndex);
+};
+
+/**
  * Get the file type object for a given file.
  *
  * @param {string|Entry} file Reference to the file.
@@ -122,15 +152,15 @@ FileType.getType = function(file) {
       return types[i];
     }
   }
+
   // Unknown file type.
-  var extensionStartIndex = file.lastIndexOf('.');
-  if (extensionStartIndex == -1 || extensionStartIndex == file.length - 1) {
+  var extension = FileType.getExtension(file);
+  if (extension == '') {
     return { name: 'NO_EXTENSION_FILE_TYPE', type: 'UNKNOWN', icon: '' };
-  } else {
-    var extension = file.substr(extensionStartIndex + 1).toUpperCase();
-    return { name: 'GENERIC_FILE_TYPE', type: 'UNKNOWN',
-             subtype: extension, icon: '' };
   }
+  // subtype is the extension excluding the first dot.
+  return { name: 'GENERIC_FILE_TYPE', type: 'UNKNOWN',
+           subtype: extension.substr(1).toUpperCase(), icon: '' };
 };
 
 /**
@@ -149,23 +179,23 @@ FileType.getTypeString = function(file) {
 /**
  * Pattern for urls pointing to Google Drive files.
  */
-FileType.GDRIVE_URL_PATTERN =
+FileType.DRIVE_URL_PATTERN =
     new RegExp('^filesystem:[^/]*://[^/]*/[^/]*/drive/(.*)');
 
 /**
  * Pattern for file paths pointing to Google Drive files.
  */
-FileType.GDRIVE_PATH_PATTERN =
+FileType.DRIVE_PATH_PATTERN =
     new RegExp('^/drive/');
 
 /**
  * @param {string|Entry} file The url string or entry.
  * @return {boolean} Whether this provider supports the url.
  */
-FileType.isOnGDrive = function(file) {
+FileType.isOnDrive = function(file) {
   return typeof file == 'string' ?
-      FileType.GDRIVE_URL_PATTERN.test(file) :
-      FileType.GDRIVE_PATH_PATTERN.test(file.fullPath);
+      FileType.DRIVE_URL_PATTERN.test(file) :
+      FileType.DRIVE_PATH_PATTERN.test(file.fullPath);
 };
 
 

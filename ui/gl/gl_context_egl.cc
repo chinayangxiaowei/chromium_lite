@@ -11,11 +11,8 @@
 #include "third_party/angle/include/EGL/egl.h"
 #include "third_party/angle/include/EGL/eglext.h"
 #include "ui/gl/egl_util.h"
-#include "ui/gl/gl_surface_egl.h"
-
-// This header must come after the above third-party include, as
-// it brings in #defines that cause conflicts.
 #include "ui/gl/gl_bindings.h"
+#include "ui/gl/gl_surface_egl.h"
 
 #if defined(USE_X11)
 extern "C" {
@@ -31,7 +28,8 @@ GLContextEGL::GLContextEGL(GLShareGroup* share_group)
     : GLContext(share_group),
       context_(NULL),
       display_(NULL),
-      config_(NULL) {
+      config_(NULL),
+      recreate_surface_on_makecurrent_(false) {
 }
 
 bool GLContextEGL::Initialize(
@@ -115,12 +113,57 @@ bool GLContextEGL::MakeCurrent(GLSurface* surface) {
     return false;
   }
 
+#if defined(OS_ANDROID)
+  if (!RecreateSurfaceIfNeeded(surface))
+    return false;
+#endif
+
   if (!surface->OnMakeCurrent(this)) {
     LOG(ERROR) << "Could not make current.";
     return false;
   }
 
   SetRealGLApi();
+  return true;
+}
+
+void GLContextEGL::SetRecreateSurfaceOnMakeCurrent() {
+  recreate_surface_on_makecurrent_ = true;
+}
+
+bool GLContextEGL::RecreateSurfaceIfNeeded(GLSurface* surface) {
+  if (!recreate_surface_on_makecurrent_ ||
+      !surface ||
+      surface->IsOffscreen() ||
+      surface->GetBackingFrameBufferObject())
+    return true;
+
+  // This is specifically needed for Vivante GPU's on Android.
+  // A native view surface will not be configured correctly
+  // unless we do all of the following steps after making the
+  // surface current.
+  GLint fbo = 0;
+  glGetIntegerv(GL_FRAMEBUFFER_BINDING, &fbo);
+  glBindFramebufferEXT(GL_FRAMEBUFFER, 0);
+
+  eglMakeCurrent(display_,
+                 EGL_NO_SURFACE,
+                 EGL_NO_SURFACE,
+                 EGL_NO_CONTEXT);
+  if (!surface->Recreate()) {
+    LOG(ERROR) << "Failed to recreate surface";
+    return false;
+  }
+  if (!eglMakeCurrent(display_,
+                      surface->GetHandle(),
+                      surface->GetHandle(),
+                      context_)) {
+    LOG(ERROR) << "eglMakeCurrent failed with error "
+               << GetLastEGLErrorString();
+    return false;
+  }
+
+  glBindFramebufferEXT(GL_FRAMEBUFFER, fbo);
   return true;
 }
 
@@ -184,5 +227,13 @@ bool GLContextEGL::WasAllocatedUsingRobustnessExtension() {
 GLContextEGL::~GLContextEGL() {
   Destroy();
 }
+
+#if !defined(OS_ANDROID)
+bool GLContextEGL::GetTotalGpuMemory(size_t* bytes) {
+  DCHECK(bytes);
+  *bytes = 0;
+  return false;
+}
+#endif
 
 }  // namespace gfx

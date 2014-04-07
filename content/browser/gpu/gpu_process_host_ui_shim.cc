@@ -118,8 +118,13 @@ GpuProcessHostUIShim* GpuProcessHostUIShim::Create(int host_id) {
 }
 
 // static
-void GpuProcessHostUIShim::Destroy(int host_id) {
+void GpuProcessHostUIShim::Destroy(int host_id, const std::string& message) {
   DCHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
+
+  GpuDataManagerImpl::GetInstance()->AddLogMessage(
+      logging::LOG_ERROR, "GpuProcessHostUIShim",
+      message);
+
   delete FromID(host_id);
 }
 
@@ -180,10 +185,6 @@ void GpuProcessHostUIShim::SimulateHang() {
 GpuProcessHostUIShim::~GpuProcessHostUIShim() {
   DCHECK(CalledOnValidThread());
   g_hosts_by_id.Pointer()->Remove(host_id_);
-
-  GpuDataManagerImpl::GetInstance()->AddLogMessage(
-      logging::LOG_ERROR, "GpuProcessHostUIShim",
-      "GPU process crashed or exited.");
 }
 
 bool GpuProcessHostUIShim::OnControlMessageReceived(
@@ -202,8 +203,6 @@ bool GpuProcessHostUIShim::OnControlMessageReceived(
                         OnAcceleratedSurfaceSuspend)
     IPC_MESSAGE_HANDLER(GpuHostMsg_GraphicsInfoCollected,
                         OnGraphicsInfoCollected)
-    IPC_MESSAGE_HANDLER(GpuHostMsg_AcceleratedSurfaceNew,
-                        OnAcceleratedSurfaceNew)
     IPC_MESSAGE_HANDLER(GpuHostMsg_AcceleratedSurfaceRelease,
                         OnAcceleratedSurfaceRelease)
     IPC_MESSAGE_HANDLER(GpuHostMsg_VideoMemoryUsageStats,
@@ -222,8 +221,8 @@ bool GpuProcessHostUIShim::OnControlMessageReceived(
 }
 
 void GpuProcessHostUIShim::OnUpdateVSyncParameters(int surface_id,
-                                             base::TimeTicks timebase,
-                                             base::TimeDelta interval) {
+                                                   base::TimeTicks timebase,
+                                                   base::TimeDelta interval) {
 
   int render_process_id = 0;
   int render_widget_id = 0;
@@ -301,20 +300,6 @@ void GpuProcessHostUIShim::OnResizeView(int32 surface_id,
 
 #endif
 
-void GpuProcessHostUIShim::OnAcceleratedSurfaceNew(
-    const GpuHostMsg_AcceleratedSurfaceNew_Params& params) {
-  RenderWidgetHostViewPort* view = GetRenderWidgetHostViewFromSurfaceID(
-      params.surface_id);
-  if (!view)
-    return;
-
-  if (params.mailbox_name.length() &&
-      params.mailbox_name.length() != GL_MAILBOX_SIZE_CHROMIUM)
-    return;
-
-  view->AcceleratedSurfaceNew(params.surface_handle, params.mailbox_name);
-}
-
 static base::TimeDelta GetSwapDelay() {
   CommandLine* cmd_line = CommandLine::ForCurrentProcess();
   int delay = 0;
@@ -330,12 +315,16 @@ void GpuProcessHostUIShim::OnAcceleratedSurfaceBuffersSwapped(
   TRACE_EVENT0("renderer",
       "GpuProcessHostUIShim::OnAcceleratedSurfaceBuffersSwapped");
   AcceleratedSurfaceMsg_BufferPresented_Params ack_params;
-  ack_params.surface_handle = params.surface_handle;
+  ack_params.mailbox_name = params.mailbox_name;
   ack_params.sync_point = 0;
   ScopedSendOnIOThread delayed_send(
       host_id_,
       new AcceleratedSurfaceMsg_BufferPresented(params.route_id,
                                                 ack_params));
+
+  if (!params.mailbox_name.empty() &&
+      params.mailbox_name.length() != GL_MAILBOX_SIZE_CHROMIUM)
+    return;
 
   RenderWidgetHostViewPort* view = GetRenderWidgetHostViewFromSurfaceID(
       params.surface_id);
@@ -358,12 +347,16 @@ void GpuProcessHostUIShim::OnAcceleratedSurfacePostSubBuffer(
       "GpuProcessHostUIShim::OnAcceleratedSurfacePostSubBuffer");
 
   AcceleratedSurfaceMsg_BufferPresented_Params ack_params;
-  ack_params.surface_handle = params.surface_handle;
+  ack_params.mailbox_name = params.mailbox_name;
   ack_params.sync_point = 0;
    ScopedSendOnIOThread delayed_send(
       host_id_,
       new AcceleratedSurfaceMsg_BufferPresented(params.route_id,
                                                 ack_params));
+
+  if (!params.mailbox_name.empty() &&
+      params.mailbox_name.length() != GL_MAILBOX_SIZE_CHROMIUM)
+    return;
 
   RenderWidgetHostViewPort* view =
       GetRenderWidgetHostViewFromSurfaceID(params.surface_id);

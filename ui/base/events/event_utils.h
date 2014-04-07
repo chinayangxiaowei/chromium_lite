@@ -35,8 +35,12 @@ UI_EXPORT EventType EventTypeFromNative(const base::NativeEvent& native_event);
 // Get the EventFlags from a native event.
 UI_EXPORT int EventFlagsFromNative(const base::NativeEvent& native_event);
 
+// Get the timestamp from a native event.
 UI_EXPORT base::TimeDelta EventTimeFromNative(
     const base::NativeEvent& native_event);
+
+// Create a timestamp based on the current time.
+UI_EXPORT base::TimeDelta EventTimeForNow();
 
 // Get the location from a native event.  The coordinate system of the resultant
 // |Point| has the origin at top-left of the "root window".  The nature of
@@ -89,6 +93,8 @@ UI_EXPORT float GetTouchForce(const base::NativeEvent& native_event);
 UI_EXPORT bool GetFlingData(const base::NativeEvent& native_event,
                             float* vx,
                             float* vy,
+                            float* vx_ordinal,
+                            float* vy_ordinal,
                             bool* is_cancel);
 
 // Returns whether this is a scroll event and optionally gets the amount to be
@@ -96,6 +102,8 @@ UI_EXPORT bool GetFlingData(const base::NativeEvent& native_event,
 UI_EXPORT bool GetScrollOffsets(const base::NativeEvent& native_event,
                                 float* x_offset,
                                 float* y_offset,
+                                float* x_offset_ordinal,
+                                float* y_offset_ordinal,
                                 int* finger_count);
 
 UI_EXPORT bool GetGestureTimes(const base::NativeEvent& native_event,

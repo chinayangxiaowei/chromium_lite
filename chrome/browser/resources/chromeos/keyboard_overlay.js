@@ -96,17 +96,6 @@ var KEYCODE_TO_LABEL = {
   222: '\'',
 };
 
-// The labels that close the keyboard overlay when pressed
-var CLOSE_LABELS = [
-  'delete',
-  'end',
-  'esc',
-  'home',
-  'pagedown',
-  'pageup',
-  'switch window',
-];
-
 var keyboardOverlayId = 'en_US';
 var identifierMap = {};
 
@@ -138,6 +127,19 @@ function getShortcutData() {
     return shortcutDataCache;
 
   shortcutDataCache = keyboardOverlayData['shortcut'];
+
+  if (!isDisplayRotationEnabled()) {
+    // Rotate screen
+    delete shortcutDataCache['reload<>CTRL<>SHIFT'];
+  }
+  if (!isDisplayUIScalingEnabled()) {
+    // Zoom screen in
+    delete shortcutDataCache['+<>CTRL<>SHIFT'];
+    // Zoom screen out
+    delete shortcutDataCache['-<>CTRL<>SHIFT'];
+    // Reset screen zoom
+    delete shortcutDataCache['0<>CTRL<>SHIFT'];
+  }
 
   // TODO(mazda): Clean this up and move these out to the data js.
   var searchModifierAddShortcuts = {
@@ -614,8 +616,23 @@ function initLayout() {
  * @return {boolean} Returns true if the device has a diamond key.
  */
 function hasDiamondKey() {
-  return (loadTimeData.getString('keyboardOverlayHasChromeOSDiamondKey') ==
-          'true');
+  return loadTimeData.getBoolean('keyboardOverlayHasChromeOSDiamondKey');
+}
+
+/**
+ * Returns true if display rotation feature is enabled.
+ * @return {boolean} True if display rotation feature is enabled.
+ */
+function isDisplayRotationEnabled() {
+  return loadTimeData.getBoolean('keyboardOverlayIsDisplayRotationEnabled');
+}
+
+/**
+ * Returns true if display scaling feature is enabled.
+ * @return {boolean} True if display scaling feature is enabled.
+ */
+function isDisplayUIScalingEnabled() {
+  return loadTimeData.getBoolean('keyboardOverlayIsDisplayUIScalingEnabled');
 }
 
 /**

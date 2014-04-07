@@ -18,7 +18,7 @@
 #include "base/metrics/histogram.h"
 #include "base/path_service.h"
 #include "base/string16.h"
-#include "base/string_number_conversions.h"
+#include "base/strings/string_number_conversions.h"
 #include "base/sys_string_conversions.h"
 #include "base/threading/thread_restrictions.h"
 #include "base/utf_string_conversions.h"
@@ -30,7 +30,6 @@
 #include "chrome/common/chrome_notification_types.h"
 #include "chrome/common/chrome_paths.h"
 #include "chrome/common/time_format.h"
-#include "content/public/browser/browser_thread.h"
 #include "content/public/browser/download_item.h"
 #include "content/public/browser/download_manager.h"
 #include "content/public/browser/render_view_host.h"
@@ -63,7 +62,7 @@
 #endif  // defined(TOOLKIT_GTK)
 
 #if defined(OS_WIN) && !defined(USE_AURA)
-#include "ui/base/dragdrop/drag_source.h"
+#include "ui/base/dragdrop/drag_source_win.h"
 #include "ui/base/dragdrop/os_exchange_data_provider_win.h"
 #endif
 
@@ -98,7 +97,7 @@ using content::DownloadItem;
 
 class DefaultDownloadDirectory {
  public:
-  const FilePath& path() const { return path_; }
+  const base::FilePath& path() const { return path_; }
  private:
   DefaultDownloadDirectory() {
     if (!PathService::Get(chrome::DIR_DEFAULT_DOWNLOADS, &path_)) {
@@ -113,21 +112,21 @@ class DefaultDownloadDirectory {
     }
   }
   friend struct base::DefaultLazyInstanceTraits<DefaultDownloadDirectory>;
-  FilePath path_;
+  base::FilePath path_;
 };
 
 static base::LazyInstance<DefaultDownloadDirectory>
     g_default_download_directory = LAZY_INSTANCE_INITIALIZER;
 
-const FilePath& GetDefaultDownloadDirectory() {
+const base::FilePath& GetDefaultDownloadDirectory() {
   return g_default_download_directory.Get().path();
 }
 
 // Consider downloads 'dangerous' if they go to the home directory on Linux and
 // to the desktop on any platform.
-bool DownloadPathIsDangerous(const FilePath& download_path) {
+bool DownloadPathIsDangerous(const base::FilePath& download_path) {
 #if defined(OS_LINUX)
-  FilePath home_dir = file_util::GetHomeDir();
+  base::FilePath home_dir = file_util::GetHomeDir();
   if (download_path == home_dir) {
     return true;
   }
@@ -137,7 +136,7 @@ bool DownloadPathIsDangerous(const FilePath& download_path) {
   // Android does not have a desktop dir.
   return false;
 #else
-  FilePath desktop_dir;
+  base::FilePath desktop_dir;
   if (!PathService::Get(base::DIR_USER_DESKTOP, &desktop_dir)) {
     NOTREACHED();
     return false;
@@ -349,6 +348,7 @@ void DragDownload(const DownloadItem* download,
                   gfx::Image* icon,
                   gfx::NativeView view) {
   DCHECK(download);
+  DCHECK(download->IsComplete());
 
   // Set up our OLE machinery
   ui::OSExchangeData data;
@@ -358,7 +358,7 @@ void DragDownload(const DownloadItem* download,
         download->GetFileNameToReportUser(), icon->ToImageSkia(), &data);
   }
 
-  const FilePath full_path = download->GetFullPath();
+  const base::FilePath full_path = download->GetTargetFilePath();
   data.SetFilename(full_path);
 
   std::string mime_type = download->GetMimeType();
@@ -389,7 +389,7 @@ void DragDownload(const DownloadItem* download,
 #else  // We are on WIN without AURA
   // We cannot use Widget::RunShellDrag on WIN since the |view| is backed by a
   // WebContentsViewWin, not a NativeWidgetWin.
-  scoped_refptr<ui::DragSource> drag_source(new ui::DragSource);
+  scoped_refptr<ui::DragSourceWin> drag_source(new ui::DragSourceWin);
   // Run the drag and drop loop
   DWORD effects;
   DoDragDrop(ui::OSExchangeDataProviderWin::GetIDataObject(data),
@@ -459,8 +459,9 @@ string16 GetProgressStatusText(DownloadItem* download) {
                                     speed_text, amount, time_remaining);
 }
 
-FilePath GetCrDownloadPath(const FilePath& suggested_path) {
-  return FilePath(suggested_path.value() + FILE_PATH_LITERAL(".crdownload"));
+base::FilePath GetCrDownloadPath(const base::FilePath& suggested_path) {
+  return base::FilePath(suggested_path.value() +
+                        FILE_PATH_LITERAL(".crdownload"));
 }
 
 bool IsSavableURL(const GURL& url) {

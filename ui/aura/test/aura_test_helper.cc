@@ -15,11 +15,14 @@
 #include "ui/aura/test/test_activation_client.h"
 #include "ui/aura/test/test_screen.h"
 #include "ui/aura/test/test_stacking_client.h"
-#include "ui/aura/ui_controls_aura.h"
 #include "ui/base/test/dummy_input_method.h"
 #include "ui/compositor/layer_animator.h"
+#include "ui/compositor/scoped_animation_duration_scale_mode.h"
 #include "ui/gfx/screen.h"
-#include "ui/ui_controls/ui_controls.h"
+
+#if defined(USE_X11)
+#include "ui/base/x/x11_util.h"
+#endif
 
 namespace aura {
 namespace test {
@@ -31,7 +34,8 @@ AuraTestHelper::AuraTestHelper(MessageLoopForUI* message_loop)
   DCHECK(message_loop);
   message_loop_ = message_loop;
   // Disable animations during tests.
-  ui::LayerAnimator::set_disable_animations_for_test(true);
+  zero_duration_mode_.reset(new ui::ScopedAnimationDurationScaleMode(
+      ui::ScopedAnimationDurationScaleMode::ZERO_DURATION));
 }
 
 AuraTestHelper::~AuraTestHelper() {
@@ -44,10 +48,9 @@ AuraTestHelper::~AuraTestHelper() {
 void AuraTestHelper::SetUp() {
   setup_called_ = true;
   Env::GetInstance();
-  test_screen_.reset(new TestScreen());
+  test_screen_.reset(TestScreen::Create());
   gfx::Screen::SetScreenInstance(gfx::SCREEN_TYPE_NATIVE, test_screen_.get());
   root_window_.reset(test_screen_->CreateRootWindowForPrimaryDisplay());
-  ui_controls::InstallUIControlsAura(CreateUIControlsAura(root_window_.get()));
 
   focus_client_.reset(new FocusManager);
   client::SetFocusClient(root_window_.get(), focus_client_.get());
@@ -75,6 +78,11 @@ void AuraTestHelper::TearDown() {
   root_window_.reset();
   test_screen_.reset();
   gfx::Screen::SetScreenInstance(gfx::SCREEN_TYPE_NATIVE, NULL);
+
+#if defined(USE_X11)
+  ui::ResetXCursorCache();
+#endif
+
   Env::DeleteInstance();
 }
 

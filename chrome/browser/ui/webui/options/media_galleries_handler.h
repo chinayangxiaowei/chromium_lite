@@ -6,10 +6,10 @@
 #define CHROME_BROWSER_UI_WEBUI_OPTIONS_MEDIA_GALLERIES_HANDLER_H_
 
 #include "base/memory/ref_counted.h"
-#include "base/prefs/public/pref_change_registrar.h"
+#include "base/prefs/pref_change_registrar.h"
 #include "chrome/browser/ui/webui/options/options_ui.h"
 #include "content/public/browser/notification_observer.h"
-#include "ui/base/dialogs/select_file_dialog.h"
+#include "ui/shell_dialogs/select_file_dialog.h"
 
 namespace options {
 
@@ -26,7 +26,7 @@ class MediaGalleriesHandler : public OptionsPageUIHandler,
   virtual void RegisterMessages() OVERRIDE;
 
   // SelectFileDialog::Listener implementation.
-  virtual void FileSelected(const FilePath& path,
+  virtual void FileSelected(const base::FilePath& path,
                             int index,
                             void* params) OVERRIDE;
 

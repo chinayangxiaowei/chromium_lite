@@ -7,7 +7,6 @@
 
 #include <deque>
 #include <string>
-#include <vector>
 
 #include "base/id_map.h"
 #include "base/memory/ref_counted.h"
@@ -50,8 +49,9 @@ class StreamTextureManagerAndroid;
 
 namespace content {
 class GpuChannelManager;
+struct GpuRenderingStats;
 class GpuWatchdog;
-class SyncPointMessageFilter;
+class GpuChannelMessageFilter;
 
 // Encapsulates an IPC channel between the GPU process and one renderer
 // process. On the renderer side there's a corresponding GpuChannelHost.
@@ -102,6 +102,11 @@ class GpuChannel : public IPC::Listener,
   // deferred IPC messaged are handled.
   void OnScheduled();
 
+  // This is called when a command buffer transitions between scheduled and
+  // descheduled states. When any stub is descheduled, we stop preempting
+  // other channels.
+  void StubSchedulingChanged(bool scheduled);
+
   void CreateViewCommandBuffer(
       const gfx::GLSurfaceHandle& window,
       int32 surface_id,
@@ -130,9 +135,10 @@ class GpuChannel : public IPC::Listener,
   void AddRoute(int32 route_id, IPC::Listener* listener);
   void RemoveRoute(int32 route_id);
 
-  gpu::PreemptionFlag* GetPreemptionFlag() {
-    return processing_stalled_.get();
-  }
+  gpu::PreemptionFlag* GetPreemptionFlag();
+
+  bool handle_messages_scheduled() const { return handle_messages_scheduled_; }
+  uint64 messages_processed() const { return messages_processed_; }
 
   // If |preemption_flag->IsSet()|, any stub on this channel
   // should stop issuing GL commands. Setting this to NULL stops deferral.
@@ -145,11 +151,14 @@ class GpuChannel : public IPC::Listener,
   }
 #endif
 
+  void CacheShader(const std::string& key, const std::string& shader);
+
  protected:
   virtual ~GpuChannel();
 
  private:
   friend class base::RefCountedThreadSafe<GpuChannel>;
+  friend class GpuChannelMessageFilter;
 
   void OnDestroy();
 
@@ -161,8 +170,8 @@ class GpuChannel : public IPC::Listener,
   void OnCreateOffscreenCommandBuffer(
       const gfx::Size& size,
       const GPUCreateCommandBufferConfig& init_params,
-      IPC::Message* reply_message);
-  void OnDestroyCommandBuffer(int32 route_id, IPC::Message* reply_message);
+      int32* route_id);
+  void OnDestroyCommandBuffer(int32 route_id);
 
 #if defined(OS_ANDROID)
   // Register the StreamTextureProxy class with the gpu process so that all
@@ -173,13 +182,12 @@ class GpuChannel : public IPC::Listener,
   // Create a java surface texture object and send it to the renderer process
   // through binder thread.
   void OnEstablishStreamTexture(
-      int32 stream_id, SurfaceTexturePeer::SurfaceTextureTarget type,
-      int32 primary_id, int32 secondary_id);
+      int32 stream_id, int32 primary_id, int32 secondary_id);
 #endif
 
   // Collect rendering stats.
   void OnCollectRenderingStatsForSurface(
-      int32 surface_id, IPC::Message* reply_message);
+      int32 surface_id, GpuRenderingStats* stats);
 
   // Decrement the count of unhandled IPC messages and defer preemption.
   void MessageProcessed();
@@ -191,17 +199,15 @@ class GpuChannel : public IPC::Listener,
 
   scoped_ptr<IPC::SyncChannel> channel_;
 
-  // Pointer to number of routed messages that are pending processing on a
-  // stub. The lifetime is properly managed because we pass ownership to a
-  // SyncPointMessageFilter, which we hold a reference to.
-  base::AtomicRefCount* unprocessed_messages_;
+  uint64 messages_processed_;
 
-  // Whether the processing of IPCs on this channel is stalled.
-  scoped_refptr<gpu::PreemptionFlag> processing_stalled_;
+  // Whether the processing of IPCs on this channel is stalled and we should
+  // preempt other GpuChannels.
+  scoped_refptr<gpu::PreemptionFlag> preempting_flag_;
 
   // If non-NULL, all stubs on this channel should stop processing GL
-  // commands (via their GpuScheduler) when preemption_flag_->IsSet()
-  scoped_refptr<gpu::PreemptionFlag> preemption_flag_;
+  // commands (via their GpuScheduler) when preempted_flag_->IsSet()
+  scoped_refptr<gpu::PreemptionFlag> preempted_flag_;
 
   std::deque<IPC::Message*> deferred_messages_;
 
@@ -240,8 +246,10 @@ class GpuChannel : public IPC::Listener,
 
   base::WeakPtrFactory<GpuChannel> weak_factory_;
 
-  scoped_refptr<SyncPointMessageFilter> filter_;
+  scoped_refptr<GpuChannelMessageFilter> filter_;
   scoped_refptr<base::MessageLoopProxy> io_message_loop_;
+
+  size_t num_stubs_descheduled_;
 
   DISALLOW_COPY_AND_ASSIGN(GpuChannel);
 };

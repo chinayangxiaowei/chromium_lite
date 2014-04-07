@@ -10,28 +10,34 @@
 struct ViewHostMsg_CreateWindow_Params;
 
 namespace content {
+
 class BrowserContext;
+class BrowserPluginGuestManager;
 
 // This class filters out incoming IPC messages for the guest renderer process
 // on the IPC thread before other message filters handle them.
 class BrowserPluginMessageFilter : public BrowserMessageFilter {
  public:
-  BrowserPluginMessageFilter(int render_process_id,
-                             BrowserContext* browser_context);
+  BrowserPluginMessageFilter(int render_process_id, bool is_guest);
 
   // BrowserMessageFilter implementation.
+  virtual void OverrideThreadForMessage(
+    const IPC::Message& message,
+    BrowserThread::ID* thread) OVERRIDE;
   virtual bool OnMessageReceived(const IPC::Message& message,
                                  bool* message_was_ok) OVERRIDE;
+  virtual void OnDestruct() const OVERRIDE;
 
  private:
+  friend class BrowserThread;
+  friend class base::DeleteHelper<BrowserPluginMessageFilter>;
+
   virtual ~BrowserPluginMessageFilter();
-  void OnMsgCreateWindow(
-      const ViewHostMsg_CreateWindow_Params& params,
-      int* route_id,
-      int* surface_id,
-      int64* cloned_session_storage_namespace_id);
+
+  BrowserPluginGuestManager* GetBrowserPluginGuestManager();
 
   int render_process_id_;
+  int is_guest_;
 
   DISALLOW_COPY_AND_ASSIGN(BrowserPluginMessageFilter);
 };

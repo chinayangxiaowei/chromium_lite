@@ -2,6 +2,8 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+'use strict';
+
 util.addPageLoadHandler(function() {
   if (!location.hash)
     return;
@@ -23,7 +25,7 @@ function beforeunload() { return Gallery.instance.onBeforeUnload() }
 
 /**
  * Called from the main frame when unloading.
- * @param {boolean} opt_exiting True if the app is exiting.
+ * @param {boolean=} opt_exiting True if the app is exiting.
  */
 function unload(opt_exiting) { Gallery.instance.onUnload(opt_exiting) }
 
@@ -38,7 +40,7 @@ function unload(opt_exiting) { Gallery.instance.onUnload(opt_exiting) }
  *     {Array.<Object>} shareActions
  *     {string} readonlyDirName Directory name for readonly warning or null.
  *     {DirEntry} saveDirEntry Directory to save to.
- *     {function(string)} displayStringFunction
+ *     {function(string)} displayStringFunction.
  * @class
  * @constructor
  */
@@ -47,6 +49,7 @@ function Gallery(context) {
   this.document_ = document;
   this.context_ = context;
   this.metadataCache_ = context.metadataCache;
+  this.volumeManager_ = VolumeManager.getInstance();
 
   this.dataModel_ = new cr.ui.ArrayDataModel([]);
   this.selectionModel_ = new cr.ui.ListSelectionModel();
@@ -63,6 +66,11 @@ function Gallery(context) {
 }
 
 /**
+ * Gallery extends cr.EventTarget.
+ */
+Gallery.prototype.__proto__ = cr.EventTarget.prototype;
+
+/**
  * Create and initialize a Gallery object based on a context.
  *
  * @param {Object} context Gallery context.
@@ -77,9 +85,10 @@ Gallery.open = function(context, urls, selectedUrls) {
 /**
  * Create a Gallery object in a tab.
  * @param {string} path File system path to a selected file.
- * @param {object} pageState Page state object.
+ * @param {Object} pageState Page state object.
+ * @param {function=} opt_callback Called when gallery object is constructed.
  */
-Gallery.openStandalone = function(path, pageState) {
+Gallery.openStandalone = function(path, pageState, opt_callback) {
   ImageUtil.metrics = metrics;
 
   var currentDir;
@@ -130,28 +139,40 @@ Gallery.openStandalone = function(path, pageState) {
         metadataCache: MetadataCache.createFull(),
         pageState: pageState,
         onClose: onClose,
-        allowMosaic: true, /* For debugging purposes */
         displayStringFunction: strf
       };
       Gallery.open(context, urls, selectedUrls);
+      if (opt_callback) opt_callback();
     });
   }
 };
 
 /**
  * Tools fade-out timeout im milliseconds.
- * @type {Number}
+ * @const
+ * @type {number}
  */
 Gallery.FADE_TIMEOUT = 3000;
 
 /**
  * First time tools fade-out timeout im milliseconds.
- * @type {Number}
+ * @const
+ * @type {number}
  */
 Gallery.FIRST_FADE_TIMEOUT = 1000;
 
 /**
+ * Time until mosaic is initialized in the background. Used to make gallery
+ * in the slide mode load faster. In miiliseconds.
+ * @const
+ * @type {number}
+ */
+Gallery.MOSAIC_BACKGROUND_INIT_DELAY = 1000;
+
+/**
  * Types of metadata Gallery uses (to query the metadata cache).
+ * @const
+ * @type {string}
  */
 Gallery.METADATA_TYPE = 'thumbnail|filesystem|media|streaming';
 
@@ -159,13 +180,14 @@ Gallery.METADATA_TYPE = 'thumbnail|filesystem|media|streaming';
  * Initialize listeners.
  * @private
  */
-
 Gallery.prototype.initListeners_ = function() {
   if (!util.TEST_HARNESS)
     this.document_.oncontextmenu = function(e) { e.preventDefault(); };
 
   this.keyDownBound_ = this.onKeyDown_.bind(this);
   this.document_.body.addEventListener('keydown', this.keyDownBound_);
+
+  util.disableBrowserShortcutKeys(this.document_);
 
   this.inactivityWatcher_ = new MouseInactivityWatcher(
       this.container_, Gallery.FADE_TIMEOUT, this.hasActiveTool.bind(this));
@@ -179,6 +201,21 @@ Gallery.prototype.initListeners_ = function() {
         'thumbnail',
         this.updateThumbnails_.bind(this));
   }
+
+  this.volumeManager_.addEventListener('externally-unmounted',
+      this.onExternallyUnmounted_.bind(this));
+};
+
+/**
+ * Closes gallery when a volume containing the selected item is unmounted.
+ * @param {Event} event The unmount event.
+ * @private
+ */
+Gallery.prototype.onExternallyUnmounted_ = function(event) {
+  if (!this.selectedItemFilesystemPath_)
+    return;
+  if (this.selectedItemFilesystemPath_.indexOf(event.mountPath) == 0)
+    this.onClose_();
 };
 
 /**
@@ -236,21 +273,25 @@ Gallery.prototype.initDom_ = function() {
 
   var onThumbnailError = this.context_.onThumbnailError || function() {};
 
-  if (this.context_.allowMosaic) {
-    this.modeButton_ = util.createChild(this.toolbar_, 'button mode', 'button');
-    this.modeButton_.addEventListener('click',
-        this.toggleMode_.bind(this, null));
+  this.modeButton_ = util.createChild(this.toolbar_, 'button mode', 'button');
+  this.modeButton_.addEventListener('click',
+      this.toggleMode_.bind(this, null));
 
-    this.mosaicMode_ = new MosaicMode(content,
-        this.dataModel_, this.selectionModel_, this.metadataCache_,
-        this.toggleMode_.bind(this, null), onThumbnailError);
-  }
+  this.mosaicMode_ = new MosaicMode(content,
+      this.dataModel_, this.selectionModel_, this.metadataCache_,
+      this.toggleMode_.bind(this, null), onThumbnailError);
 
   this.slideMode_ = new SlideMode(this.container_, content,
       this.toolbar_, this.prompt_,
       this.dataModel_, this.selectionModel_, this.context_,
       this.toggleMode_.bind(this), onThumbnailError,
       this.displayStringFunction_);
+  this.slideMode_.addEventListener('image-displayed', function() {
+    cr.dispatchSimpleEvent(this, 'image-displayed');
+  }.bind(this));
+  this.slideMode_.addEventListener('image-saved', function() {
+    cr.dispatchSimpleEvent(this, 'image-saved');
+  }.bind(this));
 
   var deleteButton = this.createToolbarButton_('delete', 'delete');
   deleteButton.addEventListener('click', this.onDelete_.bind(this));
@@ -296,12 +337,6 @@ Gallery.prototype.createToolbarButton_ = function(clazz, title) {
  * @param {Array.<string>} selectedUrls Array of selected urls.
  */
 Gallery.prototype.load = function(urls, selectedUrls) {
-  if (!this.mosaicMode_ && selectedUrls.length > 1) {
-    // If the mosaic is disabled revert to the old multiple selection behavior.
-    urls = selectedUrls;  // Only show the items selected in the file list.
-    selectedUrls = selectedUrls.slice(0, 1);  // Force single selection.
-  }
-
   var items = [];
   for (var index = 0; index < urls.length; ++index) {
     items.push(new Gallery.Item(urls[index]));
@@ -322,22 +357,38 @@ Gallery.prototype.load = function(urls, selectedUrls) {
     this.onSelection_();
 
   var mosaic = this.mosaicMode_ && this.mosaicMode_.getMosaic();
-  if (mosaic &&
-      (selectedUrls.length != 1 ||
-      (this.context_.pageState &&
-          this.context_.pageState.gallery == 'mosaic'))) {
+
+  // Mosaic view should show up if most of the selected files are images.
+  var imagesCount = 0;
+  for (var i = 0; i != selectedUrls.length; i++) {
+    if (FileType.getMediaType(selectedUrls[i]) == 'image')
+      imagesCount++;
+  }
+  var mostlyImages = imagesCount > (selectedUrls.length / 2.0);
+
+  var forcedMosaic = (this.context_.pageState &&
+       this.context_.pageState.gallery == 'mosaic');
+
+  var showMosaic = (mostlyImages && selectedUrls.length > 1) || forcedMosaic;
+  if (mosaic && showMosaic) {
     this.setCurrentMode_(this.mosaicMode_);
     mosaic.init();
     mosaic.show();
     this.inactivityWatcher_.check();  // Show the toolbar.
+    cr.dispatchSimpleEvent(this, 'loaded');
   } else {
     this.setCurrentMode_(this.slideMode_);
+    var maybeLoadMosaic = function() {
+      if (mosaic)
+        mosaic.init();
+      cr.dispatchSimpleEvent(this, 'loaded');
+    }.bind(this);
     /* TODO: consider nice blow-up animation for the first image */
     this.slideMode_.enter(null, function() {
         // Flash the toolbar briefly to show it is there.
         this.inactivityWatcher_.kick(Gallery.FIRST_FADE_TIMEOUT);
       }.bind(this),
-      mosaic ? mosaic.init.bind(mosaic) : function() {});
+      maybeLoadMosaic);
   }
 };
 
@@ -404,7 +455,7 @@ Gallery.prototype.onUserAction_ = function() {
 
 /**
  * Set the current mode, update the UI.
- * @param {object} mode Current mode.
+ * @param {Object} mode Current mode.
  * @private
  */
 Gallery.prototype.setCurrentMode_ = function(mode) {
@@ -424,8 +475,8 @@ Gallery.prototype.setCurrentMode_ = function(mode) {
 
 /**
  * Mode toggle event handler.
- * @param {function} opt_callback Callback.
- * @param {Event} opt_event Event that caused this call.
+ * @param {function=} opt_callback Callback.
+ * @param {Event=} opt_event Event that caused this call.
  * @private
  */
 Gallery.prototype.toggleMode_ = function(opt_callback, opt_event) {
@@ -667,6 +718,21 @@ Gallery.prototype.updateSelectionAndState_ = function() {
                                 this.context_.readonlyDirName;
 
   this.filenameEdit_.value = displayName;
+
+  // Resolve real filesystem path of the current file.
+  if (this.selectionModel_.selectedIndexes.length) {
+    var selectedIndex = this.selectionModel_.selectedIndex;
+    var selectedItem =
+        this.dataModel_.item(this.selectionModel_.selectedIndex);
+
+    this.selectedItemFilesystemPath_ = null;
+    webkitResolveLocalFileSystemURL(selectedItem.getUrl(),
+      function(entry) {
+        if (this.selectionModel_.selectedIndex != selectedIndex)
+          return;
+        this.selectedItemFilesystemPath_ = entry.fullPath;
+      }.bind(this));
+  }
 };
 
 /**
@@ -741,7 +807,7 @@ Gallery.prototype.onFilenameEditKeydown_ = function() {
 };
 
 /**
- * @return {Boolean} True if file renaming is currently in progress
+ * @return {boolean} True if file renaming is currently in progress.
  * @private
  */
 Gallery.prototype.isRenaming_ = function() {
@@ -795,8 +861,8 @@ Gallery.prototype.updateShareMenu_ = function() {
 
   var internalId = util.platform.getAppId();
   function isShareAction(task) {
-    var task_parts = task.taskId.split('|');
-    return task_parts[0] != internalId;
+    var taskParts = task.taskId.split('|');
+    return taskParts[0] != internalId;
   }
 
   var api = Gallery.getFileBrowserPrivate();

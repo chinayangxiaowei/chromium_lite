@@ -42,6 +42,13 @@ bool GLContext::GetTotalGpuMemory(size_t* bytes) {
   return false;
 }
 
+void GLContext::SetSafeToForceGpuSwitch() {
+}
+
+void GLContext::SetRecreateSurfaceOnMakeCurrent() {
+  NOTIMPLEMENTED();
+}
+
 std::string GLContext::GetExtensions() {
   DCHECK(IsCurrent(NULL));
   const char* ext = reinterpret_cast<const char*>(glGetString(GL_EXTENSIONS));
@@ -121,8 +128,8 @@ bool GLContext::MakeVirtuallyCurrent(
 }
 
 void GLContext::OnDestroyVirtualContext(GLContext* virtual_context) {
-  DCHECK(virtual_gl_api_);
-  virtual_gl_api_->OnDestroyVirtualContext(virtual_context);
+  if (virtual_gl_api_)
+    virtual_gl_api_->OnDestroyVirtualContext(virtual_context);
 }
 
 void GLContext::SetRealGLApi() {

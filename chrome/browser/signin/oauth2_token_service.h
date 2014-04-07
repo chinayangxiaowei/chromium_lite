@@ -14,6 +14,7 @@
 #include "base/memory/weak_ptr.h"
 #include "base/time.h"
 #include "chrome/browser/profiles/profile_keyed_service.h"
+#include "chrome/browser/signin/signin_global_error.h"
 #include "content/public/browser/notification_observer.h"
 #include "content/public/browser/notification_registrar.h"
 #include "net/url_request/url_request_context_getter.h"
@@ -46,6 +47,7 @@ class Profile;
 // Note the request should be started from the UI thread. To start a request
 // from other thread, please use OAuth2TokenServiceRequest.
 class OAuth2TokenService : public content::NotificationObserver,
+                           public SigninGlobalError::AuthStatusProvider,
                            public ProfileKeyedService {
  public:
   // Class representing a request that fetches an OAuth2 access token.
@@ -80,6 +82,9 @@ class OAuth2TokenService : public content::NotificationObserver,
   // Initializes this token service with the profile.
   void Initialize(Profile* profile);
 
+  // ProfileKeyedService implementation.
+  virtual void Shutdown() OVERRIDE;
+
   // Starts a request for an OAuth2 access token using the OAuth2 refresh token
   // maintained by TokenService. The caller owns the returned Request. |scopes|
   // is the set of scopes to get an access token for, |consumer| is the object
@@ -94,10 +99,20 @@ class OAuth2TokenService : public content::NotificationObserver,
       const ScopeSet& scopes,
       OAuth2TokenService::Consumer* consumer);
 
+  // Mark an OAuth2 access token as invalid. This should be done if the token
+  // was received from this class, but was not accepted by the server (e.g.,
+  // the server returned 401 Unauthorized). The token will be removed from the
+  // cache for the given scopes.
+  void InvalidateToken(const ScopeSet& scopes,
+                       const std::string& invalid_token);
+
   // content::NotificationObserver
   virtual void Observe(int type,
                        const content::NotificationSource& source,
                        const content::NotificationDetails& details) OVERRIDE;
+
+  // SigninGlobalError::AuthStatusProvider implementation.
+  virtual GoogleServiceAuthError GetAuthStatus() const OVERRIDE;
 
  private:
   // Class that fetches an OAuth2 access token for a given set of scopes and
@@ -110,9 +125,9 @@ class OAuth2TokenService : public content::NotificationObserver,
   // Informs the consumer of |request| fetch results.
   static void InformConsumer(
       base::WeakPtr<OAuth2TokenService::RequestImpl> request,
-      GoogleServiceAuthError error,
-      std::string access_token,
-      base::Time expiration_date);
+      const GoogleServiceAuthError& error,
+      const std::string& access_token,
+      const base::Time& expiration_date);
 
   // Struct that contains the information of an OAuth2 access token.
   struct CacheEntry {
@@ -125,6 +140,7 @@ class OAuth2TokenService : public content::NotificationObserver,
   // ensure no entry with the same |scopes| is added before the usage of the
   // returned entry is done.
   const CacheEntry* GetCacheEntry(const ScopeSet& scopes);
+
   // Registers a new access token in the cache if |refresh_token| is the one
   // currently held by TokenService.
   void RegisterCacheEntry(const std::string& refresh_token,
@@ -132,11 +148,24 @@ class OAuth2TokenService : public content::NotificationObserver,
                           const std::string& access_token,
                           const base::Time& expiration_date);
 
+  // Removes an access token for the given set of scopes from the cache.
+  // Returns true if the entry was removed, otherwise false.
+  bool RemoveCacheEntry(const OAuth2TokenService::ScopeSet& scopes,
+                        const std::string& token_to_remove);
+
+
   // Called when |fetcher| finishes fetching.
   void OnFetchComplete(Fetcher* fetcher);
 
+  // Updates the internal cache of the result from the most-recently-completed
+  // auth request (used for reporting errors to the user).
+  void UpdateAuthError(const GoogleServiceAuthError& error);
+
   // The profile with which this instance was initialized, or NULL.
   Profile* profile_;
+
+  // The auth status from the most-recently-completed request.
+  GoogleServiceAuthError last_auth_error_;
 
   // Getter to use for fetchers.
   scoped_refptr<net::URLRequestContextGetter> getter_;

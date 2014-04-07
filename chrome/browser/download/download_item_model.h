@@ -35,9 +35,6 @@ class DownloadItemModel {
   explicit DownloadItemModel(content::DownloadItem* download);
   ~DownloadItemModel();
 
-  // Cancel the task corresponding to the item.
-  void CancelTask();
-
   // Returns a long descriptive string for a download that's in the INTERRUPTED
   // state. For other downloads, the returned string will be empty.
   string16 GetInterruptReasonText() const;
@@ -82,6 +79,24 @@ class DownloadItemModel {
   // Is this considered a malicious download? Implies IsDangerous().
   bool IsMalicious() const;
 
+  // Returns |true| if this download is expected to complete successfully and
+  // thereafter be removed from the shelf.  Downloads that are opened
+  // automatically or are temporary will be removed from the shelf on successful
+  // completion.
+  //
+  // Returns |false| if the download is not expected to complete (interrupted,
+  // cancelled, dangerous, malicious), or won't be removed on completion.
+  //
+  // Since the expectation of successful completion may change, the return value
+  // of this function will change over the course of a download.
+  bool ShouldRemoveFromShelfWhenComplete() const;
+
+  // Returns |true| if the download started animation (big download arrow
+  // animates down towards the shelf) should be displayed for this download.
+  // Downloads that were initiated via "Save As" or are extension installs don't
+  // show the animation.
+  bool ShouldShowDownloadStartedAnimation() const;
+
   // Returns |true| if this download should be displayed in the downloads shelf.
   bool ShouldShowInShelf() const;
 
@@ -89,6 +104,16 @@ class DownloadItemModel {
   // shelf. Setting this is only effective if the download hasn't already been
   // displayed in the shelf.
   void SetShouldShowInShelf(bool should_show);
+
+  // Returns |true| if the UI should be notified when the download is ready to
+  // be presented in the UI. By default, this value is |false| and should be
+  // changed explicitly using SetShouldNotifyUI(). Note that this is indpendent
+  // of ShouldShowInShelf() since there might be actions other than showing in
+  // the shelf that the UI must perform.
+  bool ShouldNotifyUI() const;
+
+  // Change what's returned by ShouldNotifyUI().
+  void SetShouldNotifyUI(bool should_notify);
 
   content::DownloadItem* download() { return download_; }
 

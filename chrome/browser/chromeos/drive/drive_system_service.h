@@ -13,11 +13,14 @@
 #include "base/memory/weak_ptr.h"
 #include "base/threading/sequenced_worker_pool.h"
 #include "chrome/browser/chromeos/drive/drive_file_error.h"
+#include "chrome/browser/chromeos/drive/drive_file_system_util.h"
 #include "chrome/browser/profiles/profile_keyed_service.h"
 #include "chrome/browser/profiles/profile_keyed_service_factory.h"
 #include "sync/notifier/invalidation_handler.h"
 
+namespace base {
 class FilePath;
+}
 
 namespace google_apis {
 class DriveServiceInterface;
@@ -27,11 +30,13 @@ class DriveUploader;
 namespace drive {
 
 class DriveCache;
-class DriveDownloadObserver;
+class DriveDownloadHandler;
 class DriveFileSystemInterface;
+class DriveFileSystemProxy;
 class DriveWebAppsRegistry;
 class DriveSyncClient;
 class DrivePrefetcher;
+class DriveResourceMetadata;
 class EventLogger;
 class FileWriteHelper;
 class StaleCacheFilesRemover;
@@ -50,7 +55,7 @@ class DriveSystemService : public ProfileKeyedService,
   // Pass NULL or the empty value when not interested.
   DriveSystemService(Profile* profile,
                      google_apis::DriveServiceInterface* test_drive_service,
-                     const FilePath& test_cache_root,
+                     const base::FilePath& test_cache_root,
                      DriveFileSystemInterface* test_file_system);
   virtual ~DriveSystemService();
 
@@ -68,6 +73,7 @@ class DriveSystemService : public ProfileKeyedService,
   DriveCache* cache() { return cache_.get(); }
   DriveFileSystemInterface* file_system() { return file_system_.get(); }
   FileWriteHelper* file_write_helper() { return file_write_helper_.get(); }
+  DriveDownloadHandler* download_handler() { return download_handler_.get(); }
   google_apis::DriveUploader* uploader() { return uploader_.get(); }
   DriveWebAppsRegistry* webapps_registry() { return webapps_registry_.get(); }
   EventLogger* event_logger() { return event_logger_.get(); }
@@ -86,16 +92,9 @@ class DriveSystemService : public ProfileKeyedService,
   virtual void OnInvalidatorStateChange(
       syncer::InvalidatorState state) OVERRIDE;
   virtual void OnIncomingInvalidation(
-      const syncer::ObjectIdInvalidationMap& invalidation_map,
-      syncer::IncomingInvalidationSource source) OVERRIDE;
+      const syncer::ObjectIdInvalidationMap& invalidation_map) OVERRIDE;
 
  private:
-  // Used to destroy DriveCache with scoped_ptr_malloc_free.
-  struct ScopedPtrMallocDestroyCache {
-   public:
-    void operator()(DriveCache* cache) const;
-  };
-
   // Returns true if Drive is enabled.
   // Must be called on UI thread.
   bool IsDriveEnabled();
@@ -105,13 +104,24 @@ class DriveSystemService : public ProfileKeyedService,
   // Unregisters drive mount point from File API.
   void RemoveDriveMountPoint();
 
-  // Adds back the drive mount point. Used to implement ClearCache().
+  // Reinitializes |resource_metadata_|.
+  // Used to implement ClearCacheAndRemountFileSystem().
+  void ReinitializeResourceMetadataAfterClearCache(
+      const base::Callback<void(bool)>& callback,
+      bool success);
+
+  // Adds back the drive mount point.
+  // Used to implement ClearCacheAndRemountFileSystem().
   void AddBackDriveMountPoint(const base::Callback<void(bool)>& callback,
-                              bool success);
+                              DriveFileError error);
 
   // Called when cache initialization is done. Continues initialization if
   // the cache initialization is successful.
-  void OnCacheInitialized(bool success);
+  void InitializeAfterCacheInitialized(bool success);
+
+  // Called when resource metadata initialization is done. Continues
+  // initialization if resource metadata initialization is successful.
+  void InitializeAfterResourceMetadataInitialized(DriveFileError error);
 
   // Disables Drive. Used to disable Drive when needed (ex. initialization of
   // the Drive cache failed).
@@ -129,16 +139,18 @@ class DriveSystemService : public ProfileKeyedService,
 
   scoped_refptr<base::SequencedTaskRunner> blocking_task_runner_;
   scoped_ptr<EventLogger> event_logger_;
-  scoped_ptr_malloc<DriveCache, ScopedPtrMallocDestroyCache> cache_;
+  scoped_ptr<DriveCache, util::DestroyHelper> cache_;
   scoped_ptr<google_apis::DriveServiceInterface> drive_service_;
   scoped_ptr<google_apis::DriveUploader> uploader_;
   scoped_ptr<DriveWebAppsRegistry> webapps_registry_;
+  scoped_ptr<DriveResourceMetadata, util::DestroyHelper> resource_metadata_;
   scoped_ptr<DriveFileSystemInterface> file_system_;
   scoped_ptr<FileWriteHelper> file_write_helper_;
-  scoped_ptr<DriveDownloadObserver> download_observer_;
+  scoped_ptr<DriveDownloadHandler> download_handler_;
   scoped_ptr<DriveSyncClient> sync_client_;
   scoped_ptr<DrivePrefetcher> prefetcher_;
   scoped_ptr<StaleCacheFilesRemover> stale_cache_files_remover_;
+  scoped_refptr<DriveFileSystemProxy> file_system_proxy_;
 
   // Note: This should remain the last member so it'll be destroyed and
   // invalidate its weak pointers before any other members are destroyed.

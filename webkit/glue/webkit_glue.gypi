@@ -40,13 +40,6 @@
           },
           'includes': [ '../../build/grit_action.gypi' ],
         },
-        {
-          'action_name': 'webkit_unscaled_resources',
-          'variables': {
-            'grit_grd_file': 'resources/webkit_unscaled_resources.grd',
-          },
-          'includes': [ '../../build/grit_action.gypi' ],
-        },
       ],
       'includes': [ '../../build/grit_target.gypi' ],
       'direct_dependent_settings': {
@@ -99,6 +92,7 @@
         '<(DEPTH)/ui/gl/gl.gyp:gl',
         '<(DEPTH)/ui/native_theme/native_theme.gyp:native_theme',
         '<(DEPTH)/ui/ui.gyp:ui',
+        '<(DEPTH)/ui/ui.gyp:ui_resources',
         '<(DEPTH)/v8/tools/gyp/v8.gyp:v8',
         '<(DEPTH)/webkit/compositor_bindings/compositor_bindings.gyp:webkit_compositor_support',
         '<(webkit_src_dir)/Source/WebKit/chromium/WebKit.gyp:webkit',
@@ -112,6 +106,7 @@
       'include_dirs': [
         '<(INTERMEDIATE_DIR)',
         '<(SHARED_INTERMEDIATE_DIR)/webkit',
+        '<(SHARED_INTERMEDIATE_DIR)/ui',
       ],
       'sources': [
         # This list contains all .h, .cc, and .mm files in glue except for
@@ -209,26 +204,16 @@
         '../plugins/ppapi/ppb_broker_impl.h',
         '../plugins/ppapi/ppb_buffer_impl.cc',
         '../plugins/ppapi/ppb_buffer_impl.h',
-        '../plugins/ppapi/ppb_directory_reader_impl.cc',
-        '../plugins/ppapi/ppb_directory_reader_impl.h',
-        '../plugins/ppapi/ppb_file_io_impl.cc',
-        '../plugins/ppapi/ppb_file_io_impl.h',
         '../plugins/ppapi/ppb_file_ref_impl.cc',
         '../plugins/ppapi/ppb_file_ref_impl.h',
         '../plugins/ppapi/ppb_file_system_impl.cc',
         '../plugins/ppapi/ppb_file_system_impl.h',
-        '../plugins/ppapi/ppb_flash_impl.cc',
-        '../plugins/ppapi/ppb_flash_impl.h',
         '../plugins/ppapi/ppb_flash_message_loop_impl.cc',
         '../plugins/ppapi/ppb_flash_message_loop_impl.h',
         '../plugins/ppapi/ppb_gpu_blacklist_private_impl.cc',
         '../plugins/ppapi/ppb_gpu_blacklist_private_impl.h',
-        '../plugins/ppapi/ppb_graphics_2d_impl.cc',
-        '../plugins/ppapi/ppb_graphics_2d_impl.h',
         '../plugins/ppapi/ppb_graphics_3d_impl.cc',
         '../plugins/ppapi/ppb_graphics_3d_impl.h',
-        '../plugins/ppapi/ppb_host_resolver_private_impl.cc',
-        '../plugins/ppapi/ppb_host_resolver_private_impl.h',
         '../plugins/ppapi/ppb_image_data_impl.cc',
         '../plugins/ppapi/ppb_image_data_impl.h',
         '../plugins/ppapi/ppb_network_monitor_private_impl.cc',
@@ -241,8 +226,6 @@
         '../plugins/ppapi/ppb_tcp_server_socket_private_impl.h',
         '../plugins/ppapi/ppb_tcp_socket_private_impl.cc',
         '../plugins/ppapi/ppb_tcp_socket_private_impl.h',
-        '../plugins/ppapi/ppb_udp_socket_private_impl.cc',
-        '../plugins/ppapi/ppb_udp_socket_private_impl.h',
         '../plugins/ppapi/ppb_uma_private_impl.cc',
         '../plugins/ppapi/ppb_uma_private_impl.h',
         '../plugins/ppapi/ppb_url_loader_impl.cc',
@@ -289,6 +272,8 @@
         'cpp_variant.h',
         'dom_operations.cc',
         'dom_operations.h',
+        'fling_curve_configuration.cc',
+        'fling_curve_configuration.h',
         'fling_animator_impl_android.cc',
         'fling_animator_impl_android.h',
         'ftp_directory_listing_response_delegate.cc',
@@ -318,8 +303,10 @@
         'scoped_clipboard_writer_glue.h',
         'simple_webmimeregistry_impl.cc',
         'simple_webmimeregistry_impl.h',
-        'touch_fling_platform_gesture_curve.cc',
-        'touch_fling_platform_gesture_curve.h',
+        'touch_fling_gesture_curve.cc',
+        'touch_fling_gesture_curve.h',
+        'web_discardable_memory_impl.cc',
+        'web_discardable_memory_impl.h',
         'webclipboard_impl.cc',
         'webclipboard_impl.h',
         'webcookie.cc',
@@ -371,16 +358,8 @@
         'weburlrequest_extradata_impl.h',
         'weburlresponse_extradata_impl.cc',
         'weburlresponse_extradata_impl.h',
-        'web_intent_data.cc',
-        'web_intent_data.h',
-        'web_intent_reply_data.cc',
-        'web_intent_reply_data.h',
-        'web_intent_service_data.cc',
-        'web_intent_service_data.h',
         'web_io_operators.cc',
         'web_io_operators.h',
-        'window_open_disposition.h',
-        'window_open_disposition.cc',
         'worker_task_runner.cc',
         'worker_task_runner.h',
       ],
@@ -469,7 +448,8 @@
           'sources!': [
             'plugins/plugin_stubs.cc',
           ],
-          'msvs_disabled_warnings': [ 4800 ],
+          # TODO(jschuh): crbug.com/167187 fix size_t to int truncations.
+          'msvs_disabled_warnings': [ 4800, 4267 ],
           'conditions': [
             ['inside_chromium_build==1 and component=="shared_library"', {
               'dependencies': [
@@ -487,6 +467,12 @@
             '<(DEPTH)/webkit/support/setup_third_party.gyp:third_party_headers',
           ],
         }],
+        ['OS=="android"', {
+          'dependencies': [
+            'overscroller_jni_headers',
+          ],
+        }],
+
       ],
     },
   ],
@@ -509,6 +495,19 @@
             },
           ],
           'includes': [ '../../build/grit_target.gypi' ],
+        },
+      ],
+    }],
+    ['OS=="android"', {
+      'targets': [
+        {
+          'target_name': 'overscroller_jni_headers',
+          'type': 'none',
+          'variables': {
+            'jni_gen_package': 'webkit',
+            'input_java_class': 'android/widget/OverScroller.class',
+          },
+          'includes': [ '../../build/jar_file_jni_generator.gypi' ],
         },
       ],
     }],

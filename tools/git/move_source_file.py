@@ -3,9 +3,11 @@
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
-"""Moves a C++ file to a new location, updating any include paths that
-point to it, and re-ordering headers as needed.  Updates include
-guards in moved header files.  Assumes Chromium coding style.
+"""Moves C++ files to a new location, updating any include paths that
+point to them, and re-ordering headers as needed.  If multiple source
+files are specified, the destination must be a directory (and must end
+in a slash).  Updates include guards in moved header files.  Assumes
+Chromium coding style.
 
 Attempts to update paths used in .gyp(i) files, but does not reorder
 or restructure .gyp(i) files in any way.
@@ -21,6 +23,8 @@ import os
 import re
 import subprocess
 import sys
+
+import mffr
 
 if __name__ == '__main__':
   # Need to add the directory containing sort-headers.py to the Python
@@ -57,45 +61,6 @@ def MoveFile(from_path, to_path):
     raise Exception('Fatal: Failed to run git mv command.')
 
 
-def MultiFileFindReplace(original,
-                         replacement,
-                         file_globs):
-  """Implements fast multi-file find and replace.
-
-  Given an |original| string and a |replacement| string, find matching
-  files by running git grep on |original| in files matching any
-  pattern in |file_globs|.
-
-  Once files are found, |re.sub| is run to replace |original| with
-  |replacement|.  |replacement| may use capture group back-references.
-
-  Args:
-    original: '(#(include|import)\s*["<])chrome/browser/ui/browser.h([>"])'
-    replacement: '\1chrome/browser/ui/browser/browser.h\3'
-    file_globs: ['*.cc', '*.h', '*.m', '*.mm']
-
-  Returns the list of files modified.
-
-  Raises an exception on error.
-  """
-  out, err = subprocess.Popen(
-      ['git', 'grep', '-E', '--name-only', original, '--'] + file_globs,
-      stdout=subprocess.PIPE).communicate()
-  referees = out.splitlines()
-
-  for referee in referees:
-    with open(referee) as f:
-      original_contents = f.read()
-      contents = re.sub(original, replacement, original_contents)
-      if contents == original_contents:
-        raise Exception('No change in file %s although matched in grep' %
-                        referee)
-      with open(referee, 'w') as f:
-        f.write(contents)
-
-  return referees
-
-
 def UpdatePostMove(from_path, to_path):
   """Given a file that has moved from |from_path| to |to_path|,
   updates the moved file's include guard to match the new path and
@@ -110,7 +75,7 @@ def UpdatePostMove(from_path, to_path):
     UpdateIncludeGuard(from_path, to_path)
 
     # Update include/import references.
-    files_with_changed_includes = MultiFileFindReplace(
+    files_with_changed_includes = mffr.MultiFileFindReplace(
         r'(#(include|import)\s*["<])%s([>"])' % re.escape(from_path),
         r'\1%s\3' % to_path,
         ['*.cc', '*.h', '*.m', '*.mm'])
@@ -126,7 +91,7 @@ def UpdatePostMove(from_path, to_path):
   # This work takes a bit of time. If this script starts feeling too
   # slow, one good way to speed it up is to make the comment handling
   # optional under a flag.
-  MultiFileFindReplace(
+  mffr.MultiFileFindReplace(
       r'(//.*)%s' % re.escape(from_path),
       r'\1%s' % to_path,
       ['*.cc', '*.h', '*.m', '*.mm'])
@@ -139,7 +104,7 @@ def UpdatePostMove(from_path, to_path):
       return parts[1]
     else:
       return parts[0]
-  MultiFileFindReplace(
+  mffr.MultiFileFindReplace(
       r'([\'"])%s([\'"])' % re.escape(PathMinusFirstComponent(from_path)),
       r'\1%s\2' % PathMinusFirstComponent(to_path),
       ['*.gyp*'])
@@ -158,8 +123,8 @@ def UpdateIncludeGuard(old_path, new_path):
   """Updates the include guard in a file now residing at |new_path|,
   previously residing at |old_path|, with an up-to-date include guard.
 
-  Errors out if an include guard per Chromium style guide cannot be
-  found for the old path.
+  Prints a warning if the update could not be completed successfully (e.g.,
+  because the old include guard was not formatted correctly per Chromium style).
   """
   old_guard = MakeIncludeGuardName(old_path)
   new_guard = MakeIncludeGuardName(new_path)
@@ -168,9 +133,12 @@ def UpdateIncludeGuard(old_path, new_path):
     contents = f.read()
 
   new_contents = contents.replace(old_guard, new_guard)
-  if new_contents == contents:
-    raise Exception(
-      'Error updating include guard; perhaps old guard is not per style guide?')
+  # The file should now have three instances of the new guard: two at the top
+  # of the file plus one at the bottom for the comment on the #endif.
+  if new_contents.count(new_guard) != 3:
+    print ('WARNING: Could not not successfully update include guard; perhaps '
+           'old guard is not per style guide? You will have to update the '
+           'include guard manually.')
 
   with open(new_path, 'w') as f:
     f.write(new_contents)
@@ -181,23 +149,26 @@ def main():
     print 'Fatal: You must run from the root of a git checkout.'
     return 1
   args = sys.argv[1:]
-  if not len(args) in [2, 3]:
-    print ('Usage: move_source_file.py [--already-moved] FROM_PATH TO_PATH'
-           '\n\n%s' % __doc__)
-    return 1
 
   already_moved = False
-  if args[0] == '--already-moved':
+  if len(args) > 0 and args[0] == '--already-moved':
     args = args[1:]
     already_moved = True
 
-  from_path = args[0]
-  to_path = args[1]
+  if len(args) < 2:
+    print ('Usage: move_source_file.py [--already-moved] FROM_PATH... TO_PATH'
+           '\n\n%s' % __doc__)
+    return 1
 
-  to_path = MakeDestinationPath(from_path, to_path)
-  if not already_moved:
-    MoveFile(from_path, to_path)
-  UpdatePostMove(from_path, to_path)
+  if len(args) > 2 and not args[-1].endswith('/'):
+    print 'Target %s is not a directory.' % args[-1]
+    return 1
+
+  for from_path in args[:len(args)-1]:
+    to_path = MakeDestinationPath(from_path, args[-1])
+    if not already_moved:
+      MoveFile(from_path, to_path)
+    UpdatePostMove(from_path, to_path)
   return 0
 
 

@@ -5,6 +5,7 @@
 #include "ash/wm/session_state_controller_impl2.h"
 
 #include "ash/ash_switches.h"
+#include "ash/cancel_mode.h"
 #include "ash/shell.h"
 #include "ash/shell_delegate.h"
 #include "ash/shell_window_ids.h"
@@ -369,6 +370,8 @@ void SessionStateControllerImpl2::OnRealShutdownTimeout() {
     }
   }
 #endif
+  Shell::GetInstance()->delegate()->RecordUserMetricsAction(
+      UMA_ACCEL_SHUT_DOWN_POWER_BUTTON);
   delegate_->RequestShutdown();
 }
 
@@ -385,8 +388,13 @@ void SessionStateControllerImpl2::LockAnimationCancelled() {
 void SessionStateControllerImpl2::PreLockAnimationFinished(bool request_lock) {
   can_cancel_lock_animation_ = false;
 
-  if (request_lock)
+  if (request_lock) {
+    Shell::GetInstance()->delegate()->RecordUserMetricsAction(
+        shutdown_after_lock_ ?
+        UMA_ACCEL_LOCK_SCREEN_POWER_BUTTON :
+        UMA_ACCEL_LOCK_SCREEN_LOCK_BUTTON);
     delegate_->RequestLockScreen();
+  }
 
   lock_fail_timer_.Start(
       FROM_HERE,
@@ -424,8 +432,10 @@ void SessionStateControllerImpl2::StartImmediatePreLockAnimation(
   base::Closure next_animation_starter =
       base::Bind(&SessionStateControllerImpl2::PreLockAnimationFinished,
       base::Unretained(this), request_lock_on_completion);
-  ui::LayerAnimationObserver* observer =
+  AnimationFinishedObserver* observer =
       new AnimationFinishedObserver(next_animation_starter);
+
+  observer->Pause();
 
   animator_->StartAnimationWithObserver(
       internal::SessionStateAnimator::NON_LOCK_SCREEN_CONTAINERS,
@@ -446,6 +456,9 @@ void SessionStateControllerImpl2::StartImmediatePreLockAnimation(
       internal::SessionStateAnimator::ANIMATION_SPEED_MOVE_WINDOWS,
       observer);
 
+  observer->Unpause();
+
+  DispatchCancelMode();
   FOR_EACH_OBSERVER(SessionStateObserver, observers_,
       OnSessionStateEvent(SessionStateObserver::EVENT_LOCK_ANIMATION_STARTED));
 }
@@ -481,6 +494,7 @@ void SessionStateControllerImpl2::StartCancellablePreLockAnimation() {
       internal::SessionStateAnimator::ANIMATION_SPEED_UNDOABLE,
       observer);
 
+  DispatchCancelMode();
   FOR_EACH_OBSERVER(SessionStateObserver, observers_,
       OnSessionStateEvent(
           SessionStateObserver::EVENT_PRELOCK_ANIMATION_STARTED));
@@ -509,6 +523,7 @@ void SessionStateControllerImpl2::CancelPreLockAnimation() {
   AnimateBackgroundHidingIfNecessary(
       internal::SessionStateAnimator::ANIMATION_SPEED_UNDO_MOVE_WINDOWS,
       observer);
+
   observer->Unpause();
 }
 
@@ -517,14 +532,16 @@ void SessionStateControllerImpl2::StartPostLockAnimation() {
       base::Bind(&SessionStateControllerImpl2::PostLockAnimationFinished,
       base::Unretained(this));
 
-  ui::LayerAnimationObserver* observer =
+  AnimationFinishedObserver* observer =
       new AnimationFinishedObserver(next_animation_starter);
 
+  observer->Pause();
   animator_->StartAnimationWithObserver(
       internal::SessionStateAnimator::LOCK_SCREEN_CONTAINERS,
       internal::SessionStateAnimator::ANIMATION_RAISE_TO_SCREEN,
       internal::SessionStateAnimator::ANIMATION_SPEED_MOVE_WINDOWS,
       observer);
+  observer->Unpause();
 }
 
 void SessionStateControllerImpl2::StartUnlockAnimationBeforeUIDestroyed(

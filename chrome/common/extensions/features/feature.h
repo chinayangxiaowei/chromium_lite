@@ -11,6 +11,9 @@
 #include "base/values.h"
 #include "chrome/common/chrome_version_info.h"
 #include "chrome/common/extensions/extension.h"
+#include "chrome/common/extensions/manifest.h"
+
+class GURL;
 
 namespace extensions {
 
@@ -54,6 +57,7 @@ class Feature {
   enum AvailabilityResult {
     IS_AVAILABLE,
     NOT_FOUND_IN_WHITELIST,
+    INVALID_URL,
     INVALID_TYPE,
     INVALID_CONTEXT,
     INVALID_LOCATION,
@@ -74,6 +78,7 @@ class Feature {
 
    private:
     friend class SimpleFeature;
+    friend class Feature;
 
     // Instances should be created via Feature::CreateAvailability.
     Availability(AvailabilityResult result, const std::string& message)
@@ -84,6 +89,10 @@ class Feature {
   };
 
   virtual ~Feature();
+
+  // Used by ChromeV8Context until the feature system is fully functional.
+  static Availability CreateAvailability(AvailabilityResult result,
+                                         const std::string& message);
 
   // Gets the current channel as seen by the Feature system.
   static chrome::VersionInfo::Channel GetCurrentChannel();
@@ -119,8 +128,8 @@ class Feature {
   // Gets the platform the code is currently running on.
   static Platform GetCurrentPlatform();
 
-  // Gets the Feature::Location value for the specified Extension::Location.
-  static Location ConvertLocation(Extension::Location extension_location);
+  // Gets the Feature::Location value for the specified Manifest::Location.
+  static Location ConvertLocation(Manifest::Location extension_location);
 
   // TODO(justinlin): Remove and move to APIFeature when it exists.
   virtual std::set<Context>* GetContexts() = 0;
@@ -128,14 +137,14 @@ class Feature {
   // Returns true if the feature is available to be parsed into a new extension
   // manifest.
   Availability IsAvailableToManifest(const std::string& extension_id,
-                                     Extension::Type type,
+                                     Manifest::Type type,
                                      Location location,
                                      int manifest_version) const {
     return IsAvailableToManifest(extension_id, type, location, manifest_version,
                                  GetCurrentPlatform());
   }
   virtual Availability IsAvailableToManifest(const std::string& extension_id,
-                                             Extension::Type type,
+                                             Manifest::Type type,
                                              Location location,
                                              int manifest_version,
                                              Platform platform) const = 0;
@@ -143,15 +152,18 @@ class Feature {
   // Returns true if the feature is available to be used in the specified
   // extension and context.
   Availability IsAvailableToContext(const Extension* extension,
-                                    Context context) const {
-    return IsAvailableToContext(extension, context, GetCurrentPlatform());
+                                    Context context,
+                                    const GURL& url) const {
+    return IsAvailableToContext(extension, context, url, GetCurrentPlatform());
   }
   virtual Availability IsAvailableToContext(const Extension* extension,
                                             Context context,
+                                            const GURL& url,
                                             Platform platform) const = 0;
 
-  virtual std::string GetAvailabilityMessage(
-      AvailabilityResult result, Extension::Type type) const = 0;
+  virtual std::string GetAvailabilityMessage(AvailabilityResult result,
+                                             Manifest::Type type,
+                                             const GURL& url) const = 0;
 
  protected:
   std::string name_;

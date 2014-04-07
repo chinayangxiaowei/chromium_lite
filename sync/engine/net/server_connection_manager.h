@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -15,6 +15,7 @@
 #include "base/synchronization/lock.h"
 #include "base/threading/non_thread_safe.h"
 #include "base/threading/thread_checker.h"
+#include "sync/base/sync_export.h"
 #include "sync/syncable/syncable_id.h"
 
 namespace sync_pb {
@@ -34,7 +35,7 @@ static const int32 kUnsetPayloadLength = -1;
 // HttpResponse gathers the relevant output properties of an HTTP request.
 // Depending on the value of the server_status code, response_code, and
 // content_length may not be valid.
-struct HttpResponse {
+struct SYNC_EXPORT_PRIVATE HttpResponse {
   enum ServerConnectionCode {
     // For uninitialized state.
     NONE,
@@ -98,7 +99,7 @@ struct ServerConnectionEvent {
       connection_code(code) {}
 };
 
-class ServerConnectionEventListener {
+class SYNC_EXPORT_PRIVATE ServerConnectionEventListener {
  public:
   virtual void OnServerConnectionEvent(const ServerConnectionEvent& event) = 0;
  protected:
@@ -109,7 +110,8 @@ class ServerConnectionManager;
 // A helper class that automatically notifies when the status changes.
 // TODO(tim): This class shouldn't be exposed outside of the implementation,
 // bug 35060.
-class ScopedServerStatusWatcher : public base::NonThreadSafe {
+class SYNC_EXPORT_PRIVATE ScopedServerStatusWatcher
+    : public base::NonThreadSafe {
  public:
   ScopedServerStatusWatcher(ServerConnectionManager* conn_mgr,
                             HttpResponse* response);
@@ -123,7 +125,7 @@ class ScopedServerStatusWatcher : public base::NonThreadSafe {
 // Use this class to interact with the sync server.
 // The ServerConnectionManager currently supports POSTing protocol buffers.
 //
-class ServerConnectionManager {
+class SYNC_EXPORT_PRIVATE ServerConnectionManager {
  public:
   // buffer_in - will be POSTed
   // buffer_out - string will be overwritten with response
@@ -254,9 +256,8 @@ class ServerConnectionManager {
     return proto_sync_path_;
   }
 
-  std::string get_time_path() const {
-    return get_time_path_;
-  }
+  // Updates server_status_ and notifies listeners if server_status_ changed
+  void SetServerStatus(HttpResponse::ServerConnectionCode server_status);
 
   // NOTE: Tests rely on this protected function being virtual.
   //
@@ -294,7 +295,6 @@ class ServerConnectionManager {
 
   // The paths we post to.
   std::string proto_sync_path_;
-  std::string get_time_path_;
 
   // The auth token to use in authenticated requests.
   std::string auth_token_;
@@ -344,12 +344,6 @@ class ServerConnectionManager {
 
   DISALLOW_COPY_AND_ASSIGN(ServerConnectionManager);
 };
-
-// Fills a ClientToServerMessage with the appropriate share and birthday
-// settings.
-bool FillMessageWithShareDetails(sync_pb::ClientToServerMessage* csm,
-                                 syncable::Directory* manager,
-                                 const std::string& share);
 
 std::ostream& operator<<(std::ostream& s, const struct HttpResponse& hr);
 

@@ -26,22 +26,28 @@ using base::Callback;
 
 namespace content {
 
+SpeechRecognitionManager* SpeechRecognitionManager::manager_for_tests_;
+
 namespace {
 
 SpeechRecognitionManagerImpl* g_speech_recognition_manager_impl;
 
 void ShowAudioInputSettingsOnFileThread() {
   DCHECK(BrowserThread::CurrentlyOn(BrowserThread::FILE));
-  media::AudioManager* audio_manager = BrowserMainLoop::GetAudioManager();
-  DCHECK(audio_manager->CanShowAudioInputSettings());
-  if (audio_manager->CanShowAudioInputSettings())
-    audio_manager->ShowAudioInputSettings();
+  BrowserMainLoop::GetAudioManager()->ShowAudioInputSettings();
 }
 
 }  // namespace
 
 SpeechRecognitionManager* SpeechRecognitionManager::GetInstance() {
+  if (manager_for_tests_)
+    return manager_for_tests_;
   return SpeechRecognitionManagerImpl::GetInstance();
+}
+
+void SpeechRecognitionManager::SetManagerForTests(
+    SpeechRecognitionManager* manager) {
+  manager_for_tests_ = manager;
 }
 
 SpeechRecognitionManagerImpl* SpeechRecognitionManagerImpl::GetInstance() {
@@ -256,7 +262,8 @@ void SpeechRecognitionManagerImpl::OnRecognitionStart(int session_id) {
   if (!context.devices.empty()) {
     // Notify the UI the devices are being used.
     BrowserMainLoop::GetMediaStreamManager()->NotifyUIDevicesOpened(
-        context.render_process_id, context.render_view_id, context.devices);
+        context.label, context.render_process_id, context.render_view_id,
+        context.devices);
   }
 #endif  // !defined(OS_IOS)
 

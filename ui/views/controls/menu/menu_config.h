@@ -128,13 +128,16 @@ struct VIEWS_EXPORT MenuConfig {
   // appears.
   int show_delay;
 
+  // Radius of the rounded corners of the menu border. Must be >= 0.
+  int corner_radius;
+
  private:
   // Configures a MenuConfig as appropriate for the current platform.
   void Init(const ui::NativeTheme* theme);
 
   // TODO: temporary until we standardize.
 #if defined(USE_AURA)
-  void InitAura();
+  void InitAura(const ui::NativeTheme* theme);
 #endif
 
   // Adjust some values for a new UI style.

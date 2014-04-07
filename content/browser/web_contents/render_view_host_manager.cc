@@ -8,7 +8,7 @@
 
 #include "base/command_line.h"
 #include "base/logging.h"
-#include "content/browser/debugger/devtools_manager_impl.h"
+#include "content/browser/devtools/render_view_devtools_agent_host.h"
 #include "content/browser/renderer_host/render_process_host_impl.h"
 #include "content/browser/renderer_host/render_view_host_factory.h"
 #include "content/browser/renderer_host/render_view_host_impl.h"
@@ -16,15 +16,16 @@
 #include "content/browser/web_contents/interstitial_page_impl.h"
 #include "content/browser/web_contents/navigation_controller_impl.h"
 #include "content/browser/web_contents/navigation_entry_impl.h"
+#include "content/browser/webui/web_ui_controller_factory_registry.h"
 #include "content/browser/webui/web_ui_impl.h"
 #include "content/common/view_messages.h"
 #include "content/port/browser/render_widget_host_view_port.h"
 #include "content/public/browser/content_browser_client.h"
 #include "content/public/browser/notification_service.h"
 #include "content/public/browser/notification_types.h"
+#include "content/public/browser/user_metrics.h"
 #include "content/public/browser/web_contents_view.h"
 #include "content/public/browser/web_ui_controller.h"
-#include "content/public/browser/web_ui_controller_factory.h"
 #include "content/public/common/content_switches.h"
 #include "content/public/common/url_constants.h"
 
@@ -95,6 +96,23 @@ RenderWidgetHostView* RenderViewHostManager::GetRenderWidgetHostView() const {
   if (!render_view_host_)
     return NULL;
   return render_view_host_->GetView();
+}
+
+void RenderViewHostManager::SetPendingWebUI(const NavigationEntryImpl& entry) {
+  pending_web_ui_.reset(
+      delegate_->CreateWebUIForRenderManager(entry.GetURL()));
+  pending_and_current_web_ui_.reset();
+
+  // If we have assigned (zero or more) bindings to this NavigationEntry in the
+  // past, make sure we're not granting it different bindings than it had
+  // before.  If so, note it and don't give it any bindings, to avoid a
+  // potential privilege escalation.
+  if (pending_web_ui_.get() &&
+      entry.bindings() != NavigationEntryImpl::kInvalidBindings &&
+      pending_web_ui_->GetBindings() != entry.bindings()) {
+    RecordAction(UserMetricsAction("ProcessSwapBindingsMismatch_RVHM"));
+    pending_web_ui_.reset();
+  }
 }
 
 RenderViewHostImpl* RenderViewHostManager::Navigate(
@@ -276,11 +294,6 @@ void RenderViewHostManager::DidUpdateFrameTree(
   }
 }
 
-void RenderViewHostManager::SetWebUIPostCommit(WebUIImpl* web_ui) {
-  DCHECK(!web_ui_.get());
-  web_ui_.reset(web_ui);
-}
-
 void RenderViewHostManager::RendererAbortedProvisionalLoad(
     RenderViewHost* render_view_host) {
   // We used to cancel the pending renderer here for cross-site downloads.
@@ -414,24 +427,26 @@ bool RenderViewHostManager::ShouldSwapProcessesForNavigation(
       render_view_host_->GetSiteInstance()->GetSiteURL();
   BrowserContext* browser_context =
       delegate_->GetControllerForRenderManager().GetBrowserContext();
-  const WebUIControllerFactory* web_ui_factory =
-      GetContentClient()->browser()->GetWebUIControllerFactory();
-  if (web_ui_factory) {
-    if (web_ui_factory->UseWebUIForURL(browser_context, current_url)) {
-      // Force swap if it's not an acceptable URL for Web UI.
-      // Here, data URLs are never allowed.
-      if (!web_ui_factory->IsURLAcceptableForWebUI(browser_context,
-                                                   new_entry->GetURL(), false))
-        return true;
-    } else {
-      // Force swap if it's a Web UI URL.
-      if (web_ui_factory->UseWebUIForURL(browser_context, new_entry->GetURL()))
-        return true;
+  if (WebUIControllerFactoryRegistry::GetInstance()->UseWebUIForURL(
+          browser_context, current_url)) {
+    // Force swap if it's not an acceptable URL for Web UI.
+    // Here, data URLs are never allowed.
+    if (!WebUIControllerFactoryRegistry::GetInstance()->IsURLAcceptableForWebUI(
+            browser_context, new_entry->GetURL(), false)) {
+      return true;
+    }
+  } else {
+    // Force swap if it's a Web UI URL.
+    if (WebUIControllerFactoryRegistry::GetInstance()->UseWebUIForURL(
+            browser_context, new_entry->GetURL())) {
+      return true;
     }
   }
 
   if (GetContentClient()->browser()->ShouldSwapProcessesForNavigation(
-          curr_entry ? curr_entry->GetURL() : GURL(), new_entry->GetURL())) {
+          render_view_host_->GetSiteInstance(),
+          curr_entry ? curr_entry->GetURL() : GURL(),
+          new_entry->GetURL())) {
     return true;
   }
 
@@ -453,13 +468,11 @@ bool RenderViewHostManager::ShouldReuseWebUI(
     const NavigationEntryImpl* new_entry) const {
   NavigationControllerImpl& controller =
       delegate_->GetControllerForRenderManager();
-  WebUIControllerFactory* factory =
-      GetContentClient()->browser()->GetWebUIControllerFactory();
   return curr_entry && web_ui_.get() &&
-      (factory->GetWebUIType(controller.GetBrowserContext(),
-                             curr_entry->GetURL()) ==
-       factory->GetWebUIType(controller.GetBrowserContext(),
-                             new_entry->GetURL()));
+      (WebUIControllerFactoryRegistry::GetInstance()->GetWebUIType(
+          controller.GetBrowserContext(), curr_entry->GetURL()) ==
+       WebUIControllerFactoryRegistry::GetInstance()->GetWebUIType(
+          controller.GetBrowserContext(), new_entry->GetURL()));
 }
 
 SiteInstance* RenderViewHostManager::GetSiteInstanceForEntry(
@@ -534,10 +547,8 @@ SiteInstance* RenderViewHostManager::GetSiteInstanceForEntry(
 
     // If we are navigating from a blank SiteInstance to a WebUI, make sure we
     // create a new SiteInstance.
-    const WebUIControllerFactory* web_ui_factory =
-        GetContentClient()->browser()->GetWebUIControllerFactory();
-    if (web_ui_factory &&
-        web_ui_factory->UseWebUIForURL(browser_context, dest_url)) {
+    if (WebUIControllerFactoryRegistry::GetInstance()->UseWebUIForURL(
+            browser_context, dest_url)) {
         return SiteInstance::CreateForURL(browser_context, dest_url);
     }
 
@@ -814,9 +825,7 @@ RenderViewHostImpl* RenderViewHostManager::UpdateRendererStateForNavigate(
     // It must also happen after the above conditional call to CancelPending(),
     // otherwise CancelPending may clear the pending_web_ui_ and the page will
     // not have its bindings set appropriately.
-    pending_web_ui_.reset(
-        delegate_->CreateWebUIForRenderManager(entry.GetURL()));
-    pending_and_current_web_ui_.reset();
+    SetPendingWebUI(entry);
 
     // Ensure that we have created RVHs for the new RVH's opener chain if
     // we are staying in the same BrowsingInstance. This allows the pending RVH
@@ -881,9 +890,11 @@ RenderViewHostImpl* RenderViewHostManager::UpdateRendererStateForNavigate(
       pending_web_ui_.reset();
       pending_and_current_web_ui_ = web_ui_->AsWeakPtr();
     } else {
-      pending_and_current_web_ui_.reset();
-      pending_web_ui_.reset(
-          delegate_->CreateWebUIForRenderManager(entry.GetURL()));
+      SetPendingWebUI(entry);
+
+      // Make sure the new RenderViewHost has the right bindings.
+      if (pending_web_ui())
+        render_view_host_->AllowBindings(pending_web_ui()->GetBindings());
     }
 
     if (pending_web_ui() && render_view_host_->IsRenderViewLive())
@@ -907,7 +918,7 @@ void RenderViewHostManager::CancelPending() {
   RenderViewHostImpl* pending_render_view_host = pending_render_view_host_;
   pending_render_view_host_ = NULL;
 
-  DevToolsManagerImpl::GetInstance()->OnCancelPendingNavigation(
+  RenderViewDevToolsAgentHost::OnCancelPendingNavigation(
       pending_render_view_host,
       render_view_host_);
 

@@ -9,6 +9,7 @@
 #include "base/compiler_specific.h"
 #include "base/message_loop_proxy.h"
 #include "media/audio/audio_manager_base.h"
+#include "media/audio/mac/audio_device_listener_mac.h"
 
 namespace media {
 
@@ -24,6 +25,8 @@ class MEDIA_EXPORT AudioManagerMac : public AudioManagerBase {
   virtual bool HasAudioInputDevices() OVERRIDE;
   virtual void GetAudioInputDeviceNames(media::AudioDeviceNames* device_names)
       OVERRIDE;
+  virtual AudioParameters GetInputStreamParameters(
+      const std::string& device_id) OVERRIDE;
 
   // Implementation of AudioManagerBase.
   virtual AudioOutputStream* MakeLinearOutputStream(
@@ -34,19 +37,30 @@ class MEDIA_EXPORT AudioManagerMac : public AudioManagerBase {
       const AudioParameters& params, const std::string& device_id) OVERRIDE;
   virtual AudioInputStream* MakeLowLatencyInputStream(
       const AudioParameters& params, const std::string& device_id) OVERRIDE;
-  virtual AudioParameters GetPreferredLowLatencyOutputStreamParameters(
-      const AudioParameters& input_params) OVERRIDE;
 
-  // Called by an internal device change listener.  Must be called on
-  // |creating_message_loop_|.
-  void OnDeviceChange();
+  static bool GetDefaultOutputDevice(AudioDeviceID* device);
+
+  static bool GetDefaultOutputChannels(int* channels,
+                                       int* channels_per_frame);
+
+  static bool GetDeviceChannels(AudioDeviceID device,
+                                AudioObjectPropertyScope scope,
+                                int* channels,
+                                int* channels_per_frame);
 
  protected:
   virtual ~AudioManagerMac();
 
+  virtual AudioParameters GetPreferredOutputStreamParameters(
+      const AudioParameters& input_params) OVERRIDE;
+
  private:
-  bool listener_registered_;
-  scoped_refptr<base::MessageLoopProxy> creating_message_loop_;
+  // Helper methods for constructing AudioDeviceListenerMac on the audio thread.
+  void CreateDeviceListener();
+  void DestroyDeviceListener();
+  void DelayedDeviceChange();
+
+  scoped_ptr<AudioDeviceListenerMac> output_device_listener_;
 
   DISALLOW_COPY_AND_ASSIGN(AudioManagerMac);
 };

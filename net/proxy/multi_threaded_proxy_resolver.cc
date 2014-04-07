@@ -5,6 +5,7 @@
 #include "net/proxy/multi_threaded_proxy_resolver.h"
 
 #include "base/bind.h"
+#include "base/bind_helpers.h"
 #include "base/message_loop_proxy.h"
 #include "base/metrics/histogram.h"
 #include "base/string_util.h"
@@ -20,20 +21,6 @@
 //               testing bogus scripts.
 
 namespace net {
-
-namespace {
-
-class PurgeMemoryTask : public base::RefCountedThreadSafe<PurgeMemoryTask> {
- public:
-  explicit PurgeMemoryTask(ProxyResolver* resolver) : resolver_(resolver) {}
-  void PurgeMemory() { resolver_->PurgeMemory(); }
- private:
-  friend class base::RefCountedThreadSafe<PurgeMemoryTask>;
-  ~PurgeMemoryTask() {}
-  ProxyResolver* resolver_;
-};
-
-}  // namespace
 
 // An "executor" is a job-runner for PAC requests. It encapsulates a worker
 // thread and a synchronous ProxyResolver (which will be operated on said
@@ -359,11 +346,6 @@ void MultiThreadedProxyResolver::Executor::OnJobCompleted(Job* job) {
 void MultiThreadedProxyResolver::Executor::Destroy() {
   DCHECK(coordinator_);
 
-  // Give the resolver an opportunity to shutdown from THIS THREAD before
-  // joining on the resolver thread. This allows certain implementations
-  // to avoid deadlocks.
-  resolver_->Shutdown();
-
   {
     // See http://crbug.com/69710.
     base::ThreadRestrictions::ScopedAllowIO allow_io;
@@ -389,10 +371,10 @@ void MultiThreadedProxyResolver::Executor::Destroy() {
 }
 
 void MultiThreadedProxyResolver::Executor::PurgeMemory() {
-  scoped_refptr<PurgeMemoryTask> helper(new PurgeMemoryTask(resolver_.get()));
   thread_->message_loop()->PostTask(
       FROM_HERE,
-      base::Bind(&PurgeMemoryTask::PurgeMemory, helper.get()));
+      base::Bind(&ProxyResolver::PurgeMemory,
+                 base::Unretained(resolver_.get())));
 }
 
 MultiThreadedProxyResolver::Executor::~Executor() {
@@ -484,17 +466,7 @@ void MultiThreadedProxyResolver::CancelRequest(RequestHandle req) {
 LoadState MultiThreadedProxyResolver::GetLoadState(RequestHandle req) const {
   DCHECK(CalledOnValidThread());
   DCHECK(req);
-
-  Job* job = reinterpret_cast<Job*>(req);
-  if (job->executor())
-    return job->executor()->resolver()->GetLoadStateThreadSafe(NULL);
   return LOAD_STATE_RESOLVING_PROXY_FOR_URL;
-}
-
-LoadState MultiThreadedProxyResolver::GetLoadStateThreadSafe(
-    RequestHandle req) const {
-  NOTIMPLEMENTED();
-  return LOAD_STATE_IDLE;
 }
 
 void MultiThreadedProxyResolver::CancelSetPacScript() {

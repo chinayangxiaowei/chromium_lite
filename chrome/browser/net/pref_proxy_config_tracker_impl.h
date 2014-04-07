@@ -9,12 +9,14 @@
 #include "base/memory/ref_counted.h"
 #include "base/memory/scoped_ptr.h"
 #include "base/observer_list.h"
-#include "base/prefs/public/pref_change_registrar.h"
+#include "base/prefs/pref_change_registrar.h"
 #include "chrome/browser/prefs/proxy_config_dictionary.h"
 #include "net/proxy/proxy_config.h"
 #include "net/proxy/proxy_config_service.h"
 
 class PrefService;
+class PrefRegistrySimple;
+class PrefRegistrySyncable;
 
 // A net::ProxyConfigService implementation that applies preference proxy
 // settings (pushed from PrefProxyConfigTrackerImpl) as overrides to the proxy
@@ -26,10 +28,9 @@ class ChromeProxyConfigService
       public net::ProxyConfigService::Observer {
  public:
   // Takes ownership of the passed |base_service|.
-  // If |wait_for_first_update| is true, GetLatestProxyConfig returns
-  // ConfigAvailability::CONFIG_PENDING until UpdateProxyConfig has been called.
-  explicit ChromeProxyConfigService(net::ProxyConfigService* base_service,
-                                    bool wait_for_first_update);
+  // GetLatestProxyConfig returns ConfigAvailability::CONFIG_PENDING until
+  // UpdateProxyConfig has been called.
+  explicit ChromeProxyConfigService(net::ProxyConfigService* base_service);
   virtual ~ChromeProxyConfigService();
 
   // ProxyConfigService implementation:
@@ -116,8 +117,10 @@ class PrefProxyConfigTrackerImpl {
   static bool PrefConfigToNetConfig(const ProxyConfigDictionary& proxy_dict,
                                     net::ProxyConfig* config);
 
-  // Registers the proxy preference.
-  static void RegisterPrefs(PrefService* user_prefs);
+  // Registers the proxy preferences. These are actually registered
+  // the same way in local state and in user prefs.
+  static void RegisterPrefs(PrefRegistrySimple* registry);
+  static void RegisterUserPrefs(PrefRegistrySyncable* registry);
 
  protected:
   // Get the proxy configuration currently defined by preferences.

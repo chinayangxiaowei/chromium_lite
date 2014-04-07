@@ -9,6 +9,7 @@
 #include "base/memory/scoped_ptr.h"
 #include "base/message_loop.h"
 #include "base/metrics/field_trial.h"
+#include "base/strings/string_split.h"
 #include "base/time.h"
 #include "base/utf_string_conversions.h"
 #include "chrome/common/metrics/metrics_util.h"
@@ -109,7 +110,7 @@ TEST_F(VariationsUtilTest, DisableImmediately) {
   trial->Disable();
 
   ASSERT_EQ(default_group_number, trial->group());
-  ASSERT_EQ(kEmptyID, GetIDForTrial(GOOGLE_WEB_PROPERTIES, trial.get()));
+  ASSERT_EQ(EMPTY_ID, GetIDForTrial(GOOGLE_WEB_PROPERTIES, trial.get()));
 }
 
 // Test that successfully associating the FieldTrial with some ID, and then
@@ -124,12 +125,12 @@ TEST_F(VariationsUtilTest, DisableAfterInitialization) {
                                                  next_year_, 12, 12, NULL));
   trial->AppendGroup(non_default_name, 100);
   AssociateGoogleVariationID(GOOGLE_WEB_PROPERTIES, trial->trial_name(),
-      default_name, kTestValueA);
+      default_name, TEST_VALUE_A);
   AssociateGoogleVariationID(GOOGLE_WEB_PROPERTIES, trial->trial_name(),
-      non_default_name, kTestValueB);
+      non_default_name, TEST_VALUE_B);
   trial->Disable();
   ASSERT_EQ(default_name, trial->group_name());
-  ASSERT_EQ(kTestValueA, GetIDForTrial(GOOGLE_WEB_PROPERTIES, trial.get()));
+  ASSERT_EQ(TEST_VALUE_A, GetIDForTrial(GOOGLE_WEB_PROPERTIES, trial.get()));
 }
 
 // Test various successful association cases.
@@ -143,13 +144,13 @@ TEST_F(VariationsUtilTest, AssociateGoogleVariationID) {
 
   // Set GoogleVariationIDs so we can verify that they were chosen correctly.
   AssociateGoogleVariationID(GOOGLE_WEB_PROPERTIES, trial_true->trial_name(),
-      default_name1, kTestValueA);
+      default_name1, TEST_VALUE_A);
   AssociateGoogleVariationID(GOOGLE_WEB_PROPERTIES, trial_true->trial_name(),
-      winner, kTestValueB);
+      winner, TEST_VALUE_B);
 
   EXPECT_EQ(winner_group, trial_true->group());
   EXPECT_EQ(winner, trial_true->group_name());
-  EXPECT_EQ(kTestValueB,
+  EXPECT_EQ(TEST_VALUE_B,
             GetIDForTrial(GOOGLE_WEB_PROPERTIES, trial_true.get()));
 
   const std::string default_name2 = "default2";
@@ -160,12 +161,12 @@ TEST_F(VariationsUtilTest, AssociateGoogleVariationID) {
   const int loser_group = trial_false->AppendGroup(loser, 0);
 
   AssociateGoogleVariationID(GOOGLE_WEB_PROPERTIES, trial_false->trial_name(),
-      default_name2, kTestValueA);
+      default_name2, TEST_VALUE_A);
   AssociateGoogleVariationID(GOOGLE_WEB_PROPERTIES, trial_false->trial_name(),
-      loser, kTestValueB);
+      loser, TEST_VALUE_B);
 
   EXPECT_NE(loser_group, trial_false->group());
-  EXPECT_EQ(kTestValueA,
+  EXPECT_EQ(TEST_VALUE_A,
             GetIDForTrial(GOOGLE_WEB_PROPERTIES, trial_false.get()));
 }
 
@@ -183,24 +184,24 @@ TEST_F(VariationsUtilTest, NoAssociation) {
   // have a valid VariationID associated with it.
   EXPECT_EQ(winner_group, no_id_trial->group());
   EXPECT_EQ(winner, no_id_trial->group_name());
-  EXPECT_EQ(kEmptyID, GetIDForTrial(GOOGLE_WEB_PROPERTIES, no_id_trial.get()));
+  EXPECT_EQ(EMPTY_ID, GetIDForTrial(GOOGLE_WEB_PROPERTIES, no_id_trial.get()));
 }
 
 // Ensure that the AssociateGoogleVariationIDForce works as expected.
 TEST_F(VariationsUtilTest, ForceAssociation) {
-  EXPECT_EQ(kEmptyID,
+  EXPECT_EQ(EMPTY_ID,
             GetGoogleVariationID(GOOGLE_WEB_PROPERTIES, "trial", "group"));
   AssociateGoogleVariationID(GOOGLE_WEB_PROPERTIES, "trial", "group",
-                             kTestValueA);
-  EXPECT_EQ(kTestValueA,
+                             TEST_VALUE_A);
+  EXPECT_EQ(TEST_VALUE_A,
             GetGoogleVariationID(GOOGLE_WEB_PROPERTIES, "trial", "group"));
   AssociateGoogleVariationID(GOOGLE_WEB_PROPERTIES, "trial", "group",
-                             kTestValueB);
-  EXPECT_EQ(kTestValueA,
+                             TEST_VALUE_B);
+  EXPECT_EQ(TEST_VALUE_A,
             GetGoogleVariationID(GOOGLE_WEB_PROPERTIES, "trial", "group"));
   AssociateGoogleVariationIDForce(GOOGLE_WEB_PROPERTIES, "trial", "group",
-                                  kTestValueB);
-  EXPECT_EQ(kTestValueB,
+                                  TEST_VALUE_B);
+  EXPECT_EQ(TEST_VALUE_B,
             GetGoogleVariationID(GOOGLE_WEB_PROPERTIES, "trial", "group"));
 }
 
@@ -269,24 +270,195 @@ TEST_F(VariationsUtilTest, CollectionsCoexist) {
   ASSERT_EQ(default_group_number, trial_true->group());
   ASSERT_EQ(default_name, trial_true->group_name());
 
-  EXPECT_EQ(kEmptyID,
+  EXPECT_EQ(EMPTY_ID,
             GetIDForTrial(GOOGLE_WEB_PROPERTIES, trial_true.get()));
-  EXPECT_EQ(kEmptyID,
+  EXPECT_EQ(EMPTY_ID,
             GetIDForTrial(GOOGLE_UPDATE_SERVICE, trial_true.get()));
 
   AssociateGoogleVariationID(GOOGLE_WEB_PROPERTIES, trial_true->trial_name(),
-      default_name, kTestValueA);
-  EXPECT_EQ(kTestValueA,
+      default_name, TEST_VALUE_A);
+  EXPECT_EQ(TEST_VALUE_A,
             GetIDForTrial(GOOGLE_WEB_PROPERTIES, trial_true.get()));
-  EXPECT_EQ(kEmptyID,
+  EXPECT_EQ(EMPTY_ID,
             GetIDForTrial(GOOGLE_UPDATE_SERVICE, trial_true.get()));
 
   AssociateGoogleVariationID(GOOGLE_UPDATE_SERVICE, trial_true->trial_name(),
-      default_name, kTestValueA);
-  EXPECT_EQ(kTestValueA,
+      default_name, TEST_VALUE_A);
+  EXPECT_EQ(TEST_VALUE_A,
             GetIDForTrial(GOOGLE_WEB_PROPERTIES, trial_true.get()));
-  EXPECT_EQ(kTestValueA,
+  EXPECT_EQ(TEST_VALUE_A,
             GetIDForTrial(GOOGLE_UPDATE_SERVICE, trial_true.get()));
+}
+
+TEST_F(VariationsUtilTest, BuildGoogleUpdateExperimentLabel) {
+  struct {
+    const char* active_group_pairs;
+    const char* expected_ids;
+  } test_cases[] = {
+    // Empty group.
+    {"", ""},
+    // Group of 1.
+    {"FieldTrialA#Default", "3300200"},
+    // Group of 1, doesn't have an associated ID.
+    {"FieldTrialA#DoesNotExist", ""},
+    // Group of 3.
+    {"FieldTrialA#Default#FieldTrialB#Group1#FieldTrialC#Default",
+     "3300200#3300201#3300202"},
+    // Group of 3, one doesn't have an associated ID.
+    {"FieldTrialA#Default#FieldTrialB#DoesNotExist#FieldTrialC#Default",
+     "3300200#3300202"},
+    // Group of 3, all three don't have an associated ID.
+    {"FieldTrialX#Default#FieldTrialB#DoesNotExist#FieldTrialC#Default",
+     "3300202"},
+  };
+
+  // Register a few VariationIDs.
+  chrome_variations::AssociateGoogleVariationID(
+      chrome_variations::GOOGLE_UPDATE_SERVICE, "FieldTrialA", "Default",
+          chrome_variations::TEST_VALUE_A);
+  chrome_variations::AssociateGoogleVariationID(
+      chrome_variations::GOOGLE_UPDATE_SERVICE, "FieldTrialB", "Group1",
+          chrome_variations::TEST_VALUE_B);
+  chrome_variations::AssociateGoogleVariationID(
+      chrome_variations::GOOGLE_UPDATE_SERVICE, "FieldTrialC", "Default",
+          chrome_variations::TEST_VALUE_C);
+  chrome_variations::AssociateGoogleVariationID(
+      chrome_variations::GOOGLE_UPDATE_SERVICE, "FieldTrialD", "Default",
+          chrome_variations::TEST_VALUE_D);  // Not actually used.
+
+  for (size_t i = 0; i < ARRAYSIZE_UNSAFE(test_cases); ++i) {
+    // Parse the input groups.
+    base::FieldTrial::ActiveGroups groups;
+    std::vector<std::string> group_data;
+    base::SplitString(test_cases[i].active_group_pairs, '#', &group_data);
+    ASSERT_EQ(0U, group_data.size() % 2);
+    for (size_t j = 0; j < group_data.size(); j += 2) {
+      base::FieldTrial::ActiveGroup group;
+      group.trial_name = group_data[j];
+      group.group_name = group_data[j + 1];
+      groups.push_back(group);
+    }
+
+    // Parse the expected output.
+    std::vector<std::string> expected_ids_list;
+    base::SplitString(test_cases[i].expected_ids, '#', &expected_ids_list);
+
+    std::string experiment_labels_string = UTF16ToUTF8(
+        BuildGoogleUpdateExperimentLabel(groups));
+
+    // Split the VariationIDs from the labels for verification below.
+    std::vector<std::string> split_labels;
+    std::set<std::string> parsed_ids;
+    base::SplitString(experiment_labels_string, ';', &split_labels);
+    for (std::vector<std::string>::const_iterator it = split_labels.begin();
+         it != split_labels.end(); ++it) {
+      // The ID is precisely between the '=' and '|' characters in each label.
+      size_t index_of_equals = it->find('=');
+      size_t index_of_pipe = it->find('|');
+      ASSERT_NE(std::string::npos, index_of_equals);
+      ASSERT_NE(std::string::npos, index_of_pipe);
+      ASSERT_GT(index_of_pipe, index_of_equals);
+      parsed_ids.insert(it->substr(index_of_equals + 1,
+                                   index_of_pipe - index_of_equals - 1));
+    }
+
+    // Verify that the resulting string contains each of the expected labels,
+    // and nothing more. Note that the date is stripped out and ignored.
+    for (std::vector<std::string>::const_iterator it =
+             expected_ids_list.begin(); it != expected_ids_list.end(); ++it) {
+      std::set<std::string>::iterator it2 = parsed_ids.find(*it);
+      EXPECT_TRUE(parsed_ids.end() != it2);
+      parsed_ids.erase(it2);
+    }
+    EXPECT_TRUE(parsed_ids.empty());
+  }  // for
+}
+
+TEST_F(VariationsUtilTest, CombineExperimentLabels) {
+  struct {
+    const char* variations_labels;
+    const char* other_labels;
+    const char* expected_label;
+  } test_cases[] = {
+    {"A=B|Tue, 21 Jan 2014 15:30:21 GMT",
+     "C=D|Tue, 21 Jan 2014 15:30:21 GMT",
+     "C=D|Tue, 21 Jan 2014 15:30:21 GMT;A=B|Tue, 21 Jan 2014 15:30:21 GMT"},
+    {"A=B|Tue, 21 Jan 2014 15:30:21 GMT",
+     "",
+     "A=B|Tue, 21 Jan 2014 15:30:21 GMT"},
+    {"",
+     "A=B|Tue, 21 Jan 2014 15:30:21 GMT",
+     "A=B|Tue, 21 Jan 2014 15:30:21 GMT"},
+    {"A=B|Tue, 21 Jan 2014 15:30:21 GMT;C=D|Tue, 21 Jan 2014 15:30:21 GMT",
+     "P=Q|Tue, 21 Jan 2014 15:30:21 GMT;X=Y|Tue, 21 Jan 2014 15:30:21 GMT",
+     "P=Q|Tue, 21 Jan 2014 15:30:21 GMT;X=Y|Tue, 21 Jan 2014 15:30:21 GMT;"
+     "A=B|Tue, 21 Jan 2014 15:30:21 GMT;C=D|Tue, 21 Jan 2014 15:30:21 GMT"},
+    {"",
+     "",
+     ""},
+  };
+
+  for (size_t i = 0; i < ARRAYSIZE_UNSAFE(test_cases); ++i) {
+    std::string result = UTF16ToUTF8(CombineExperimentLabels(
+        ASCIIToUTF16(test_cases[i].variations_labels),
+        ASCIIToUTF16(test_cases[i].other_labels)));
+    EXPECT_EQ(test_cases[i].expected_label, result);
+  }
+}
+
+TEST_F(VariationsUtilTest, ExtractNonVariationLabels) {
+  struct {
+    const char* input_label;
+    const char* expected_output;
+  } test_cases[] = {
+    // Empty
+    {"", ""},
+    // One
+    {"gcapi_brand=123|Tue, 21 Jan 2014 15:30:21 GMT",
+     "gcapi_brand=123|Tue, 21 Jan 2014 15:30:21 GMT"},
+    // Three
+    {"CrVar1=123|Tue, 21 Jan 2014 15:30:21 GMT;"
+     "experiment1=456|Tue, 21 Jan 2014 15:30:21 GMT;"
+     "experiment2=789|Tue, 21 Jan 2014 15:30:21 GMT;"
+     "CrVar1=123|Tue, 21 Jan 2014 15:30:21 GMT",
+     "experiment1=456|Tue, 21 Jan 2014 15:30:21 GMT;"
+     "experiment2=789|Tue, 21 Jan 2014 15:30:21 GMT"},
+    // One and one Variation
+    {"gcapi_brand=123|Tue, 21 Jan 2014 15:30:21 GMT;"
+     "CrVar1=3310002|Tue, 21 Jan 2014 15:30:21 GMT",
+     "gcapi_brand=123|Tue, 21 Jan 2014 15:30:21 GMT"},
+    // One and one Variation, flipped
+    {"CrVar1=3310002|Tue, 21 Jan 2014 15:30:21 GMT;"
+     "gcapi_brand=123|Tue, 21 Jan 2014 15:30:21 GMT",
+     "gcapi_brand=123|Tue, 21 Jan 2014 15:30:21 GMT"},
+    // Sandwiched
+    {"CrVar1=3310002|Tue, 21 Jan 2014 15:30:21 GMT;"
+     "gcapi_brand=123|Tue, 21 Jan 2014 15:30:21 GMT;"
+     "CrVar2=3310003|Tue, 21 Jan 2014 15:30:21 GMT;"
+     "CrVar3=3310004|Tue, 21 Jan 2014 15:30:21 GMT",
+     "gcapi_brand=123|Tue, 21 Jan 2014 15:30:21 GMT"},
+    // Only Variations
+    {"CrVar1=3310002|Tue, 21 Jan 2014 15:30:21 GMT;"
+     "CrVar2=3310003|Tue, 21 Jan 2014 15:30:21 GMT;"
+     "CrVar3=3310004|Tue, 21 Jan 2014 15:30:21 GMT",
+     ""},
+    // Empty values
+    {"gcapi_brand=123|Tue, 21 Jan 2014 15:30:21 GMT;"
+     "CrVar1=3310002|Tue, 21 Jan 2014 15:30:21 GMT",
+     "gcapi_brand=123|Tue, 21 Jan 2014 15:30:21 GMT"},
+    // Trailing semicolon
+    {"gcapi_brand=123|Tue, 21 Jan 2014 15:30:21 GMT;"
+     "CrVar1=3310002|Tue, 21 Jan 2014 15:30:21 GMT;",  // Note the semi here.
+     "gcapi_brand=123|Tue, 21 Jan 2014 15:30:21 GMT"},
+    // Semis
+    {";;;;", ""},
+  };
+
+  for (size_t i = 0; i < ARRAYSIZE_UNSAFE(test_cases); ++i) {
+    std::string non_variation_labels = UTF16ToUTF8(
+        ExtractNonVariationLabels(ASCIIToUTF16(test_cases[i].input_label)));
+    EXPECT_EQ(test_cases[i].expected_output, non_variation_labels);
+  }
 }
 
 }  // namespace chrome_variations

@@ -4,6 +4,7 @@
 
 #include "net/quic/quic_http_stream.h"
 
+#include "base/callback_helpers.h"
 #include "base/stringprintf.h"
 #include "net/base/io_buffer.h"
 #include "net/base/net_errors.h"
@@ -13,18 +14,21 @@
 #include "net/quic/quic_reliable_client_stream.h"
 #include "net/quic/quic_utils.h"
 #include "net/socket/next_proto.h"
+#include "net/spdy/spdy_frame_builder.h"
 #include "net/spdy/spdy_framer.h"
+#include "net/spdy/spdy_http_utils.h"
 
 namespace net {
 
 static const size_t kHeaderBufInitialSize = 4096;
 
 QuicHttpStream::QuicHttpStream(QuicReliableClientStream* stream)
-    : io_state_(STATE_NONE),
+    : next_state_(STATE_NONE),
       stream_(stream),
       request_info_(NULL),
       request_body_stream_(NULL),
       response_info_(NULL),
+      response_status_(OK),
       response_headers_received_(false),
       read_buf_(new GrowableIOBuffer()),
       user_buffer_len_(0),
@@ -38,10 +42,13 @@ QuicHttpStream::~QuicHttpStream() {
 }
 
 int QuicHttpStream::InitializeStream(const HttpRequestInfo* request_info,
+                                     RequestPriority priority,
                                      const BoundNetLog& stream_net_log,
                                      const CompletionCallback& callback) {
   CHECK(stream_);
+  DCHECK_EQ("http", request_info->url.scheme());
 
+  stream_net_log_ = stream_net_log;
   request_info_ = request_info;
 
   return OK;
@@ -57,12 +64,22 @@ int QuicHttpStream::SendRequest(const HttpRequestHeaders& request_headers,
   CHECK(response);
 
   // Store the serialized request headers.
-  // TODO(rch): use SPDY serialization
-  std::string path = HttpUtil::PathForRequest(request_info_->url);
-  std::string first_line = base::StringPrintf("%s %s HTTP/1.1\r\n",
-                                              request_info_->method.c_str(),
-                                              path.c_str());
-  request_ = first_line + request_headers.ToString();
+  SpdyHeaderBlock headers;
+  CreateSpdyHeadersFromHttpRequest(*request_info_, request_headers,
+                                   &headers, 3, /*direct=*/true);
+  size_t len = SpdyFramer::GetSerializedLength(3, &headers);
+  SpdyFrameBuilder builder(len);
+  SpdyFramer::WriteHeaderBlock(&builder, 3, &headers);
+  scoped_ptr<SpdyFrame> frame(builder.take());
+  request_ = std::string(frame->data(), len);
+  // Log the actual request with the URL Request's net log.
+  stream_net_log_.AddEvent(
+      NetLog::TYPE_HTTP_TRANSACTION_SPDY_SEND_REQUEST_HEADERS,
+      base::Bind(&SpdyHeaderBlockNetLogCallback, &headers));
+  // Also log to the QuicSession's net log.
+  stream_->net_log().AddEvent(
+      NetLog::TYPE_QUIC_HTTP_STREAM_SEND_REQUEST_HEADERS,
+      base::Bind(&SpdyHeaderBlockNetLogCallback, &headers));
 
   // Store the request body.
   request_body_stream_ = request_info_->upload_data_stream;
@@ -80,7 +97,7 @@ int QuicHttpStream::SendRequest(const HttpRequestHeaders& request_headers,
   // Store the response info.
   response_info_ = response;
 
-  io_state_ = STATE_SEND_HEADERS;
+  next_state_ = STATE_SEND_HEADERS;
   int rv = DoLoop(OK);
   if (rv == ERR_IO_PENDING)
     callback_ = callback;
@@ -98,10 +115,13 @@ UploadProgress QuicHttpStream::GetUploadProgress() const {
 
 int QuicHttpStream::ReadResponseHeaders(const CompletionCallback& callback) {
   CHECK(!callback.is_null());
+
+  if (stream_ == NULL)
+    return response_status_;
+
   // Check if we already have the response headers. If so, return synchronously.
-  if (response_headers_received_) {
+  if (response_headers_received_)
     return OK;
-  }
 
   // Still waiting for the response, return IO_PENDING.
   CHECK(callback_.is_null());
@@ -144,7 +164,7 @@ int QuicHttpStream::ReadResponseBody(
 
   if (!stream_) {
     // If the stream is already closed, there is no body to read.
-    return 0;
+    return response_status_;
   }
 
   CHECK(callback_.is_null());
@@ -160,7 +180,9 @@ int QuicHttpStream::ReadResponseBody(
 void QuicHttpStream::Close(bool not_reusable) {
   // Note: the not_reusable flag has no meaning for SPDY streams.
   if (stream_) {
+    stream_->SetDelegate(NULL);
     stream_->Close(QUIC_NO_ERROR);
+    stream_ = NULL;
   }
 }
 
@@ -169,15 +191,11 @@ HttpStream* QuicHttpStream::RenewStreamForAuth() {
 }
 
 bool QuicHttpStream::IsResponseBodyComplete() const {
-  return io_state_ == STATE_OPEN && !stream_;
+  return next_state_ == STATE_OPEN && !stream_;
 }
 
 bool QuicHttpStream::CanFindEndOfResponse() const {
   return true;
-}
-
-bool QuicHttpStream::IsMoreDataBuffered() const {
-  return false;
 }
 
 bool QuicHttpStream::IsConnectionReused() const {
@@ -192,6 +210,11 @@ void QuicHttpStream::SetConnectionReused() {
 bool QuicHttpStream::IsConnectionReusable() const {
   // QUIC streams aren't considered reusable.
   return false;
+}
+
+bool QuicHttpStream::GetLoadTimingInfo(LoadTimingInfo* load_timing_info) const {
+  // TODO(mmenke):  Figure out what to do here.
+  return true;
 }
 
 void QuicHttpStream::GetSSLInfo(SSLInfo* ssl_info) {
@@ -210,8 +233,7 @@ bool QuicHttpStream::IsSpdyHttpStream() const {
 }
 
 void QuicHttpStream::Drain(HttpNetworkSession* session) {
-  if (stream_)
-    stream_->Close(QUIC_NO_ERROR);
+  Close(false);
   delete this;
 }
 
@@ -262,12 +284,22 @@ int QuicHttpStream::OnDataReceived(const char* data, int length) {
 }
 
 void QuicHttpStream::OnClose(QuicErrorCode error) {
-  // TOOD(rch): find better errors.
-  int status = error == QUIC_NO_ERROR && response_headers_received_ ?
-      OK : ERR_ABORTED;
+  if (error != QUIC_NO_ERROR) {
+    response_status_ = ERR_QUIC_PROTOCOL_ERROR;
+  } else if (!response_headers_received_) {
+    response_status_ = ERR_ABORTED;
+  }
+
   stream_ = NULL;
   if (!callback_.is_null())
-    DoCallback(status);
+    DoCallback(response_status_);
+}
+
+void QuicHttpStream::OnError(int error) {
+  stream_ = NULL;
+  response_status_ = error;
+  if (!callback_.is_null())
+    DoCallback(response_status_);
 }
 
 void QuicHttpStream::OnIOComplete(int rv) {
@@ -284,14 +316,14 @@ void QuicHttpStream::DoCallback(int rv) {
 
   // The client callback can do anything, including destroying this class,
   // so any pending callback must be issued after everything else is done.
-  CompletionCallback c = callback_;
-  callback_.Reset();
-  c.Run(rv);
+  base::ResetAndReturn(&callback_).Run(rv);
 }
 
 int QuicHttpStream::DoLoop(int rv) {
   do {
-    switch (io_state_) {
+    State state = next_state_;
+    next_state_ = STATE_NONE;
+    switch (state) {
       case STATE_SEND_HEADERS:
         CHECK_EQ(OK, rv);
         rv = DoSendHeaders();
@@ -317,10 +349,10 @@ int QuicHttpStream::DoLoop(int rv) {
         CHECK_EQ(OK, rv);
         break;
       default:
-        NOTREACHED() << "io_state_: " << io_state_;
+        NOTREACHED() << "next_state_: " << next_state_;
         break;
     }
-  } while (io_state_ != STATE_NONE && io_state_ != STATE_OPEN &&
+  } while (next_state_ != STATE_NONE && next_state_ != STATE_OPEN &&
            rv != ERR_IO_PENDING);
 
   return rv;
@@ -332,25 +364,23 @@ int QuicHttpStream::DoSendHeaders() {
 
   bool has_upload_data = request_body_stream_ != NULL;
 
-  io_state_ = STATE_SEND_HEADERS_COMPLETE;
-  int rv = stream_->WriteData(request_, !has_upload_data);
-  return rv;
+  next_state_ = STATE_SEND_HEADERS_COMPLETE;
+  QuicConsumedData rv = stream_->WriteData(request_, !has_upload_data);
+  return rv.bytes_consumed;
 }
 
 int QuicHttpStream::DoSendHeadersComplete(int rv) {
-  if (rv < 0) {
-    io_state_ = STATE_NONE;
+  if (rv < 0)
     return rv;
-  }
 
-  io_state_ = request_body_stream_ ?
+  next_state_ = request_body_stream_ ?
       STATE_READ_REQUEST_BODY : STATE_OPEN;
 
   return OK;
 }
 
 int QuicHttpStream::DoReadRequestBody() {
-  io_state_ = STATE_READ_REQUEST_BODY_COMPLETE;
+  next_state_ = STATE_READ_REQUEST_BODY_COMPLETE;
   return request_body_stream_->Read(raw_request_body_buf_,
                                     raw_request_body_buf_->size(),
                                     base::Bind(&QuicHttpStream::OnIOComplete,
@@ -360,17 +390,15 @@ int QuicHttpStream::DoReadRequestBody() {
 int QuicHttpStream::DoReadRequestBodyComplete(int rv) {
   // |rv| is the result of read from the request body from the last call to
   // DoSendBody().
-  if (rv < 0) {
-    io_state_ = STATE_NONE;
+  if (rv < 0)
     return rv;
-  }
 
   request_body_buf_ = new DrainableIOBuffer(raw_request_body_buf_, rv);
   if (rv == 0) {  // Reached the end.
     DCHECK(request_body_stream_->IsEOF());
   }
 
-  io_state_ = STATE_SEND_BODY;
+  next_state_ = STATE_SEND_BODY;
   return OK;
 }
 
@@ -384,56 +412,65 @@ int QuicHttpStream::DoSendBody() {
   int len = request_body_buf_->BytesRemaining();
   if (len > 0 || eof) {
     base::StringPiece data(request_body_buf_->data(), len);
-    int rv = stream_->WriteData(data, eof);
-    request_body_buf_->DidConsume(rv);
-    DCHECK_NE(ERR_IO_PENDING, rv);
+    QuicConsumedData rv = stream_->WriteData(data, eof);
+    request_body_buf_->DidConsume(rv.bytes_consumed);
     if (eof) {
-      io_state_ = STATE_OPEN;
+      next_state_ = STATE_OPEN;
       return OK;
     }
-    return rv;
+    next_state_ = STATE_SEND_BODY_COMPLETE;
+    return rv.bytes_consumed;
   }
 
-  io_state_ = STATE_SEND_BODY_COMPLETE;
+  next_state_ = STATE_SEND_BODY_COMPLETE;
   return OK;
 }
 
 int QuicHttpStream::DoSendBodyComplete(int rv) {
-  if (rv < 0) {
-    io_state_ = STATE_NONE;
+  if (rv < 0)
     return rv;
-  }
 
-  io_state_ = STATE_READ_REQUEST_BODY;
+  next_state_ = STATE_READ_REQUEST_BODY;
   return OK;
 }
 
 int QuicHttpStream::ParseResponseHeaders() {
-  int end_offset = HttpUtil::LocateEndOfHeaders(read_buf_->StartOfBuffer(),
-                                                read_buf_->offset(), 0);
+  size_t read_buf_len = static_cast<size_t>(read_buf_->offset());
+  SpdyFramer framer(3);
+  SpdyHeaderBlock headers;
+  char* data = read_buf_->StartOfBuffer();
+  size_t len = framer.ParseHeaderBlockInBuffer(data, read_buf_->offset(),
+                                               &headers);
 
-  if (end_offset == -1) {
+  if (len == 0) {
     return ERR_IO_PENDING;
   }
 
-  if (!stream_)
-    return ERR_UNEXPECTED;
+  // Save the remaining received data.
+  size_t delta = read_buf_len - len;
+  if (delta > 0) {
+    BufferResponseBody(data + len, delta);
+  }
 
-  scoped_refptr<HttpResponseHeaders> headers = new HttpResponseHeaders(
-      HttpUtil::AssembleRawHeaders(read_buf_->StartOfBuffer(), end_offset));
+  // The URLRequest logs these headers, so only log to the QuicSession's
+  // net log.
+  stream_->net_log().AddEvent(
+      NetLog::TYPE_QUIC_HTTP_STREAM_READ_RESPONSE_HEADERS,
+      base::Bind(&SpdyHeaderBlockNetLogCallback, &headers));
 
+  if (!SpdyHeadersToHttpResponse(headers, 3, response_info_)) {
+    DLOG(WARNING) << "Invalid headers";
+    return ERR_QUIC_PROTOCOL_ERROR;
+  }
   // Put the peer's IP address and port into the response.
   IPEndPoint address = stream_->GetPeerAddress();
   response_info_->socket_address = HostPortPair::FromIPEndPoint(address);
-  response_info_->headers = headers;
+  response_info_->connection_info =
+      HttpResponseInfo::CONNECTION_INFO_QUIC1_SPDY3;
   response_info_->vary_data.Init(*request_info_, *response_info_->headers);
+  response_info_->was_npn_negotiated = true;
+  response_info_->npn_negotiated_protocol = "quic/1+spdy/3";
   response_headers_received_ = true;
-
-  // Save the remaining received data.
-  int delta = read_buf_->offset() - end_offset;
-  if (delta > 0) {
-    BufferResponseBody(read_buf_->data(), delta);
-  }
 
   return OK;
 }

@@ -14,18 +14,19 @@
 #include "base/guid.h"
 #include "base/i18n/case_conversion.h"
 #include "base/logging.h"
-#include "base/string_number_conversions.h"
+#include "base/strings/string_number_conversions.h"
 #include "base/time.h"
 #include "base/tuple.h"
-#include "chrome/browser/autofill/autofill_country.h"
-#include "chrome/browser/autofill/autofill_profile.h"
-#include "chrome/browser/autofill/autofill_type.h"
-#include "chrome/browser/autofill/credit_card.h"
-#include "chrome/browser/autofill/personal_data_manager.h"
-#include "chrome/browser/password_manager/encryptor.h"
 #include "chrome/browser/webdata/autofill_change.h"
 #include "chrome/browser/webdata/autofill_entry.h"
-#include "chrome/common/form_field_data.h"
+#include "chrome/browser/webdata/web_database.h"
+#include "components/autofill/browser/autofill_country.h"
+#include "components/autofill/browser/autofill_profile.h"
+#include "components/autofill/browser/autofill_type.h"
+#include "components/autofill/browser/credit_card.h"
+#include "components/autofill/browser/personal_data_manager.h"
+#include "components/autofill/common/form_field_data.h"
+#include "components/webdata/encryptor/encryptor.h"
 #include "sql/statement.h"
 #include "ui/base/l10n/l10n_util.h"
 
@@ -319,26 +320,86 @@ bool RemoveAutofillProfilePieces(const std::string& guid, sql::Connection* db) {
   return s3.Run();
 }
 
+int table_key = 0;
+
+WebDatabaseTable::TypeKey GetKey() {
+  return reinterpret_cast<void*>(&table_key);
+}
+
 }  // namespace
 
 // The maximum length allowed for form data.
 const size_t AutofillTable::kMaxDataLength = 1024;
 
-AutofillTable::AutofillTable(sql::Connection* db, sql::MetaTable* meta_table)
-    : WebDatabaseTable(db, meta_table) {
+AutofillTable::AutofillTable() {
 }
 
 AutofillTable::~AutofillTable() {
 }
 
-bool AutofillTable::Init() {
- return (InitMainTable() && InitCreditCardsTable() && InitDatesTable() &&
-     InitProfilesTable() && InitProfileNamesTable() &&
-     InitProfileEmailsTable() && InitProfilePhonesTable() &&
-     InitProfileTrashTable());
+AutofillTable* AutofillTable::FromWebDatabase(WebDatabase* db) {
+  return static_cast<AutofillTable*>(db->GetTable(GetKey()));
+}
+
+WebDatabaseTable::TypeKey AutofillTable::GetTypeKey() const {
+  return GetKey();
+}
+
+bool AutofillTable::Init(sql::Connection* db, sql::MetaTable* meta_table) {
+  WebDatabaseTable::Init(db, meta_table);
+  return (InitMainTable() && InitCreditCardsTable() && InitDatesTable() &&
+          InitProfilesTable() && InitProfileNamesTable() &&
+          InitProfileEmailsTable() && InitProfilePhonesTable() &&
+          InitProfileTrashTable());
 }
 
 bool AutofillTable::IsSyncable() {
+  return true;
+}
+
+bool AutofillTable::MigrateToVersion(int version,
+                                     const std::string& app_locale,
+                                     bool* update_compatible_version) {
+  // Migrate if necessary.
+  switch (version) {
+    case 22:
+      return ClearAutofillEmptyValueElements();
+    case 23:
+      return MigrateToVersion23AddCardNumberEncryptedColumn();
+    case 24:
+      return MigrateToVersion24CleanupOversizedStringFields();
+    case 27:
+      *update_compatible_version = true;
+      return MigrateToVersion27UpdateLegacyCreditCards();
+    case 30:
+      *update_compatible_version = true;
+      return MigrateToVersion30AddDateModifed();
+    case 31:
+      *update_compatible_version = true;
+      return MigrateToVersion31AddGUIDToCreditCardsAndProfiles();
+    case 32:
+      *update_compatible_version = true;
+      return MigrateToVersion32UpdateProfilesAndCreditCards();
+    case 33:
+      *update_compatible_version = true;
+      return MigrateToVersion33ProfilesBasedOnFirstName();
+    case 34:
+      *update_compatible_version = true;
+      return MigrateToVersion34ProfilesBasedOnCountryCode(app_locale);
+    case 35:
+      *update_compatible_version = true;
+      return MigrateToVersion35GreatBritainCountryCodes();
+    // Combine migrations 36 and 37.  This is due to enhancements to the merge
+    // step when migrating profiles.  The original migration from 35 to 36 did
+    // not merge profiles with identical addresses, but the migration from 36 to
+    // 37 does.  The step from 35 to 36 should only happen on the Chrome 12 dev
+    // channel.  Chrome 12 beta and release users will jump from 35 to 37
+    // directly getting the full benefits of the multi-valued merge as well as
+    // the culling of bad data.
+    case 37:
+      *update_compatible_version = true;
+      return MigrateToVersion37MergeAndCullOlderProfiles();
+  }
   return true;
 }
 
@@ -1866,7 +1927,8 @@ bool AutofillTable::MigrateToVersion33ProfilesBasedOnFirstName() {
 // we need a migration.  It is possible that the new |autofill_profiles|
 // schema is in place because the table was newly created when migrating
 // from a pre-version-22 database.
-bool AutofillTable::MigrateToVersion34ProfilesBasedOnCountryCode() {
+bool AutofillTable::MigrateToVersion34ProfilesBasedOnCountryCode(
+    const std::string& app_locale) {
   if (!db_->DoesColumnExist("autofill_profiles", "country_code")) {
     if (!db_->Execute("ALTER TABLE autofill_profiles ADD COLUMN "
                       "country_code VARCHAR")) {
@@ -1883,7 +1945,6 @@ bool AutofillTable::MigrateToVersion34ProfilesBasedOnCountryCode() {
                                   "SET country_code=? WHERE guid=?"));
 
       string16 country = s.ColumnString16(1);
-      std::string app_locale = AutofillCountry::ApplicationLocale();
       update_s.BindString(0, AutofillCountry::GetCountryCode(country,
                                                              app_locale));
       update_s.BindString(1, s.ColumnString(0));

@@ -10,6 +10,7 @@
 #include <map>
 #include <queue>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "base/callback.h"
@@ -41,6 +42,7 @@ class TimeTicks;
 
 namespace cc {
 class CompositorFrame;
+class CompositorFrameAck;
 }
 
 namespace ui {
@@ -91,6 +93,10 @@ class CONTENT_EXPORT RenderWidgetHostImpl : virtual public RenderWidgetHost,
   // uses RenderWidgetHost::AsRenderWidgetHostImpl().
   static RenderWidgetHostImpl* From(RenderWidgetHost* rwh);
 
+  void set_hung_renderer_delay_ms(const base::TimeDelta& timeout) {
+    hung_renderer_delay_ms_ = timeout.InMilliseconds();
+  }
+
   // RenderWidgetHost implementation.
   virtual void Undo() OVERRIDE;
   virtual void Redo() OVERRIDE;
@@ -103,12 +109,13 @@ class CONTENT_EXPORT RenderWidgetHostImpl : virtual public RenderWidgetHost,
   virtual void SelectAll() OVERRIDE;
   virtual void UpdateTextDirection(WebKit::WebTextDirection direction) OVERRIDE;
   virtual void NotifyTextDirection() OVERRIDE;
+  virtual void Focus() OVERRIDE;
   virtual void Blur() OVERRIDE;
+  virtual void SetActive(bool active) OVERRIDE;
   virtual void CopyFromBackingStore(
       const gfx::Rect& src_rect,
       const gfx::Size& accelerated_dst_size,
-      const base::Callback<void(bool)>& callback,
-      skia::PlatformBitmap* output) OVERRIDE;
+      const base::Callback<void(bool, const SkBitmap&)>& callback) OVERRIDE;
 #if defined(TOOLKIT_GTK)
   virtual bool CopyFromBackingStoreToGtkWindow(const gfx::Rect& dest_rect,
                                                GdkWindow* target) OVERRIDE;
@@ -135,6 +142,7 @@ class CONTENT_EXPORT RenderWidgetHostImpl : virtual public RenderWidgetHost,
                            const gfx::Size& page_size,
                            const gfx::Size& desired_size) OVERRIDE;
   virtual void Replace(const string16& word) OVERRIDE;
+  virtual void ReplaceMisspelling(const string16& word) OVERRIDE;
   virtual void ResizeRectChanged(const gfx::Rect& new_rect) OVERRIDE;
   virtual void RestartHangMonitorTimeout() OVERRIDE;
   virtual void SetIgnoreInputEvents(bool ignore_input_events) OVERRIDE;
@@ -142,6 +150,10 @@ class CONTENT_EXPORT RenderWidgetHostImpl : virtual public RenderWidgetHost,
   virtual void WasResized() OVERRIDE;
   virtual void AddKeyboardListener(KeyboardListener* listener) OVERRIDE;
   virtual void RemoveKeyboardListener(KeyboardListener* listener) OVERRIDE;
+  virtual void GetWebScreenInfo(WebKit::WebScreenInfo* result) OVERRIDE;
+  virtual void GetSnapshotFromRenderer(
+      const gfx::Rect& src_subrect,
+      const base::Callback<void(bool, const SkBitmap&)>& callback) OVERRIDE;
 
   // Notification that the screen info has changed.
   void NotifyScreenInfoChanged();
@@ -175,19 +187,10 @@ class CONTENT_EXPORT RenderWidgetHostImpl : virtual public RenderWidgetHost,
   // Returns true if the RenderWidget is hidden.
   bool is_hidden() const { return is_hidden_; }
 
-  // Called to notify the RenderWidget that its associated native window got
-  // focused.
+  // Called to notify the RenderWidget that its associated native window
+  // got/lost focused.
   virtual void GotFocus();
-
-  // Tells the renderer it got/lost focus.
-  virtual void Focus();
   virtual void LostCapture();
-
-  // Sets whether the renderer should show controls in an active state.  On all
-  // platforms except mac, that's the same as focused. On mac, the frontmost
-  // window will show active controls even if the focus is not in the web
-  // contents, but e.g. in the omnibox.
-  void SetActive(bool active);
 
   // Called to notify the RenderWidget that it has lost the mouse lock.
   virtual void LostMouseLock();
@@ -254,10 +257,6 @@ class CONTENT_EXPORT RenderWidgetHostImpl : virtual public RenderWidgetHost,
   void ForwardGestureEventImmediately(
       const WebKit::WebGestureEvent& gesture_event);
 
-  // Give key press listeners a chance to handle this key press. This allow
-  // widgets that don't have focus to still handle key presses.
-  bool KeyPressListenersHandleEvent(const NativeWebKeyboardEvent& event);
-
   void CancelUpdateTextDirection();
 
   // Called when a mouse click/gesture tap activates the renderer.
@@ -321,9 +320,6 @@ class CONTENT_EXPORT RenderWidgetHostImpl : virtual public RenderWidgetHost,
     return ignore_input_events_;
   }
 
-  // Activate deferred plugin handles.
-  void ActivateDeferredPluginHandles();
-
   bool ShouldForwardTouchEvent() const;
 
   bool has_touch_handler() const { return has_touch_handler_; }
@@ -339,6 +335,11 @@ class CONTENT_EXPORT RenderWidgetHostImpl : virtual public RenderWidgetHost,
   // pre-defined edit commands
   void SetEditCommandsForNextKeyEvent(
       const std::vector<EditCommand>& commands);
+
+  // Gets the accessibility mode.
+  AccessibilityMode accessibility_mode() const {
+    return accessibility_mode_;
+  }
 
   // Send a message to the renderer process to change the accessibility mode.
   void SetAccessibilityMode(AccessibilityMode mode);
@@ -366,6 +367,9 @@ class CONTENT_EXPORT RenderWidgetHostImpl : virtual public RenderWidgetHost,
   // Relay a request from assistive technology to set text selection.
   void AccessibilitySetTextSelection(
       int acc_obj_id, int start_offset, int end_offset);
+
+  // Kill the renderer because we got a fatal accessibility error.
+  void FatalAccessibilityTreeError();
 
   // Executes the edit command on the RenderView.
   void ExecuteEditCommand(const std::string& command,
@@ -400,6 +404,10 @@ class CONTENT_EXPORT RenderWidgetHostImpl : virtual public RenderWidgetHost,
       int32 route_id,
       int gpu_host_id,
       const AcceleratedSurfaceMsg_BufferPresented_Params& params);
+
+  // Called by the view in response to OnSwapCompositorFrame.
+  static void SendSwapCompositorFrameAck(
+      int32 route_id, int renderer_host_id, const cc::CompositorFrameAck& ack);
 
   // Called by the view in response to AcceleratedSurfaceBuffersSwapped for
   // platforms that support deferred GPU process descheduling. This does
@@ -442,6 +450,13 @@ class CONTENT_EXPORT RenderWidgetHostImpl : virtual public RenderWidgetHost,
   }
 
   int SyntheticScrollMessageInterval() const;
+
+  // Sets whether the overscroll controller should be enabled for this page.
+  void SetOverscrollControllerEnabled(bool enabled);
+
+  // Suppreses future char events until a keydown. See
+  // suppress_next_char_events_.
+  void SuppressNextCharEvents();
 
  protected:
   virtual RenderWidgetHostImpl* AsRenderWidgetHostImpl() OVERRIDE;
@@ -512,13 +527,8 @@ class CONTENT_EXPORT RenderWidgetHostImpl : virtual public RenderWidgetHost,
   int increment_in_flight_event_count() { return ++in_flight_event_count_; }
   int decrement_in_flight_event_count() { return --in_flight_event_count_; }
 
-  // Creates and initializes the overscroll controller.
-  void InitializeOverscrollController();
-
   // Returns whether an overscroll gesture is in progress.
   bool IsInOverscrollGesture() const;
-
-  void GetWebScreenInfo(WebKit::WebScreenInfo* result);
 
   // The View associated with the RenderViewHost. The lifetime of this object
   // is associated with the lifetime of the Render process. If the Renderer
@@ -553,87 +563,54 @@ class CONTENT_EXPORT RenderWidgetHostImpl : virtual public RenderWidgetHost,
   void RendererIsResponsive();
 
   // IPC message handlers
-  void OnMsgRenderViewReady();
-  void OnMsgRenderViewGone(int status, int error_code);
-  void OnMsgClose();
-  void OnMsgUpdateScreenRectsAck();
-  void OnMsgRequestMove(const gfx::Rect& pos);
-  void OnMsgSetTooltipText(const string16& tooltip_text,
-                           WebKit::WebTextDirection text_direction_hint);
-  void OnMsgPaintAtSizeAck(int tag, const gfx::Size& size);
+  void OnRenderViewReady();
+  void OnRenderViewGone(int status, int error_code);
+  void OnClose();
+  void OnUpdateScreenRectsAck();
+  void OnRequestMove(const gfx::Rect& pos);
+  void OnSetTooltipText(const string16& tooltip_text,
+                        WebKit::WebTextDirection text_direction_hint);
+  void OnPaintAtSizeAck(int tag, const gfx::Size& size);
   void OnCompositorSurfaceBuffersSwapped(int32 surface_id,
                                          uint64 surface_handle,
                                          int32 route_id,
                                          const gfx::Size& size,
                                          int32 gpu_process_host_id);
-  void OnMsgSwapCompositorFrame(const cc::CompositorFrame& frame);
-  void OnMsgUpdateRect(const ViewHostMsg_UpdateRect_Params& params);
-  void OnMsgUpdateIsDelayed();
-  void OnMsgInputEventAck(WebKit::WebInputEvent::Type event_type,
-                          InputEventAckState ack_result);
-  void OnMsgBeginSmoothScroll(
+  bool OnSwapCompositorFrame(const IPC::Message& message);
+  void OnUpdateRect(const ViewHostMsg_UpdateRect_Params& params);
+  void OnUpdateIsDelayed();
+  void OnInputEventAck(WebKit::WebInputEvent::Type event_type,
+                       InputEventAckState ack_result);
+  void OnBeginSmoothScroll(
       int gesture_id,
       const ViewHostMsg_BeginSmoothScroll_Params &params);
-  void OnMsgSelectRangeAck();
+  void OnSelectRangeAck();
   void OnMsgMoveCaretAck();
-  virtual void OnMsgFocus();
-  virtual void OnMsgBlur();
-  void OnMsgHasTouchEventHandlers(bool has_handlers);
-
-  void OnMsgSetCursor(const WebCursor& cursor);
-  void OnMsgTextInputStateChanged(
+  virtual void OnFocus();
+  virtual void OnBlur();
+  void OnHasTouchEventHandlers(bool has_handlers);
+  void OnSetCursor(const WebCursor& cursor);
+  void OnTextInputStateChanged(
       const ViewHostMsg_TextInputState_Params& params);
-  void OnMsgImeCompositionRangeChanged(
+  void OnImeCompositionRangeChanged(
       const ui::Range& range,
       const std::vector<gfx::Rect>& character_bounds);
-  void OnMsgImeCancelComposition();
-
-  void OnMsgDidActivateAcceleratedCompositing(bool activated);
-
-  void OnMsgLockMouse(bool user_gesture,
-                      bool last_unlocked_by_target,
-                      bool privileged);
-  void OnMsgUnlockMouse();
-
-  void OnMsgShowDisambiguationPopup(const gfx::Rect& rect,
-                                    const gfx::Size& size,
-                                    const TransportDIB::Id& id);
-
-#if defined(OS_MACOSX)
-  void OnMsgPluginFocusChanged(bool focused, int plugin_id);
-  void OnMsgStartPluginIme();
-  void OnAllocateFakePluginWindowHandle(bool opaque,
-                                        bool root,
-                                        gfx::PluginWindowHandle* id);
-  void OnDestroyFakePluginWindowHandle(gfx::PluginWindowHandle id);
-  void OnAcceleratedSurfaceSetIOSurface(gfx::PluginWindowHandle window,
-                                        int32 width,
-                                        int32 height,
-                                        uint64 mach_port);
-  void OnAcceleratedSurfaceSetTransportDIB(gfx::PluginWindowHandle window,
-                                           int32 width,
-                                           int32 height,
-                                           TransportDIB::Handle transport_dib);
-  void OnAcceleratedSurfaceBuffersSwapped(gfx::PluginWindowHandle window,
-                                          uint64 surface_handle);
-#endif
-#if defined(OS_ANDROID)
-  void OnMsgUpdateFrameInfo(const gfx::Vector2d& scroll_offset,
-                            float page_scale_factor,
-                            float min_page_scale_factor,
-                            float max_page_scale_factor,
-                            const gfx::Size& content_size);
-#endif
-#if defined(TOOLKIT_GTK)
-  void OnMsgCreatePluginContainer(gfx::PluginWindowHandle id);
-  void OnMsgDestroyPluginContainer(gfx::PluginWindowHandle id);
-#endif
+  void OnImeCancelComposition();
+  void OnDidActivateAcceleratedCompositing(bool activated);
+  void OnLockMouse(bool user_gesture,
+                   bool last_unlocked_by_target,
+                   bool privileged);
+  void OnUnlockMouse();
+  void OnShowDisambiguationPopup(const gfx::Rect& rect,
+                                 const gfx::Size& size,
+                                 const TransportDIB::Id& id);
 #if defined(OS_WIN)
   void OnWindowlessPluginDummyWindowCreated(
       gfx::NativeViewId dummy_activation_window);
   void OnWindowlessPluginDummyWindowDestroyed(
       gfx::NativeViewId dummy_activation_window);
 #endif
+  void OnSnapshot(bool success, const SkBitmap& bitmap);
 
   // Called (either immediately or asynchronously) after we're done with our
   // BackingStore and can send an ACK to the renderer so it can paint onto it
@@ -659,22 +636,26 @@ class CONTENT_EXPORT RenderWidgetHostImpl : virtual public RenderWidgetHost,
                               const gfx::Rect& clip_rect,
                               const gfx::Size& view_size);
 
-  // Called by OnMsgInputEventAck() to process a keyboard event ack message.
+  // Give key press listeners a chance to handle this key press. This allow
+  // widgets that don't have focus to still handle key presses.
+  bool KeyPressListenersHandleEvent(const NativeWebKeyboardEvent& event);
+
+  // Called by OnInputEventAck() to process a keyboard event ack message.
   void ProcessKeyboardEventAck(int type, bool processed);
 
-  // Called by OnMsgInputEventAck() to process a wheel event ack message.
+  // Called by OnInputEventAck() to process a wheel event ack message.
   // This could result in a task being posted to allow additional wheel
   // input messages to be coalesced.
   void ProcessWheelAck(bool processed);
 
-  // Called by OnMsgInputEventAck() to process a gesture event ack message.
+  // Called by OnInputEventAck() to process a gesture event ack message.
   // This validates the gesture for suppression of touchpad taps and sends one
   // previously queued coalesced gesture if it exists.
   void ProcessGestureAck(bool processed, int type);
 
   void SimulateTouchGestureWithMouse(const WebKit::WebMouseEvent& mouse_event);
 
-  // Called on OnMsgInputEventAck() to process a touch event ack message.
+  // Called on OnInputEventAck() to process a touch event ack message.
   // This can result in a gesture event being generated and sent back to the
   // renderer.
   void ProcessTouchAck(InputEventAckState ack_result);
@@ -684,7 +665,7 @@ class CONTENT_EXPORT RenderWidgetHostImpl : virtual public RenderWidgetHost,
   void DelayedAutoResized();
 
   // Called periodically to advance the active scroll gesture after being
-  // initiated by OnMsgBeginSmoothScroll.
+  // initiated by OnBeginSmoothScroll.
   void TickActiveSmoothScrollGesture();
 
   // Our delegate, which wants to know mainly about keyboard events.
@@ -725,6 +706,13 @@ class CONTENT_EXPORT RenderWidgetHostImpl : virtual public RenderWidgetHost,
 
   // The current size of the RenderWidget.
   gfx::Size current_size_;
+
+  // The size of the view's backing surface in non-DPI-adjusted pixels.
+  gfx::Size physical_backing_size_;
+
+  // The height of the physical backing surface that is overdrawn opaquely in
+  // the browser, for example by an on-screen-keyboard (in DPI-adjusted pixels).
+  float overdraw_bottom_height_;
 
   // The size we last sent as requested size to the renderer. |current_size_|
   // is only updated once the resize message has been ack'd. This on the other
@@ -767,6 +755,8 @@ class CONTENT_EXPORT RenderWidgetHostImpl : virtual public RenderWidgetHost,
   // mechanism as for mouse moves (just dropping old events when multiple ones
   // would be queued) results in very slow scrolling.
   WheelEventQueue coalesced_mouse_wheel_events_;
+
+  AccessibilityMode accessibility_mode_;
 
   // (Similar to |mouse_move_pending_|.) True while waiting for SelectRange_ACK.
   bool select_range_pending_;
@@ -857,8 +847,6 @@ class CONTENT_EXPORT RenderWidgetHostImpl : virtual public RenderWidgetHost,
   // changed.
   bool suppress_next_char_events_;
 
-  std::vector<gfx::PluginWindowHandle> deferred_plugin_handles_;
-
   // The last scroll offset of the render widget.
   gfx::Vector2d last_scroll_offset_;
 
@@ -885,6 +873,9 @@ class CONTENT_EXPORT RenderWidgetHostImpl : virtual public RenderWidgetHost,
 #if defined(OS_WIN)
   std::list<HWND> dummy_windows_for_activation_;
 #endif
+
+  // List of callbacks for pending snapshot requests to the renderer.
+  std::queue<base::Callback<void(bool, const SkBitmap&)> > pending_snapshots_;
 
   DISALLOW_COPY_AND_ASSIGN(RenderWidgetHostImpl);
 };

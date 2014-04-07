@@ -7,33 +7,6 @@
  */
 
 cr.define('login', function() {
-  // Screens that should have offline message overlay.
-  /** @const */ var MANAGED_SCREENS = [SCREEN_GAIA_SIGNIN];
-
-  // Network state constants.
-  var NET_STATE = {
-    OFFLINE: 0,
-    ONLINE: 1,
-    PORTAL: 2,
-    CONNECTING: 3,
-    UNKNOWN: 4
-  };
-
-  // Error reasons which are passed to updateState_() method.
-  /** @const */ var ERROR_REASONS = {
-    PROXY_AUTH_CANCELLED: 'frame error:111',
-    PROXY_CONNECTION_FAILED: 'frame error:130',
-    PROXY_CONFIG_CHANGED: 'proxy changed',
-    LOADING_TIMEOUT: 'loading timeout',
-    PORTAL_DETECTED: 'portal detected',
-    NETWORK_CHANGED: 'network changed'
-  };
-
-  // Frame loading errors.
-  var NET_ERROR = {
-    ABORTED_BY_USER: 3
-  };
-
   // Link which starts guest session for captive portal fixing.
   /** @const */ var FIX_CAPTIVE_PORTAL_ID = 'captive-portal-fix-link';
 
@@ -44,6 +17,14 @@ cr.define('login', function() {
 
   // Link which triggers frame reload.
   /** @const */ var RELOAD_PAGE_ID = 'proxy-error-retry-link';
+
+  // Possible states of the error screen.
+  /** @const */ var SCREEN_STATE = {
+      PROXY_ERROR: 'show-proxy-error',
+      CAPTIVE_PORTAL_ERROR: 'show-captive-portal-error',
+      TIMEOUT_ERROR: 'show-timeout-error',
+      OFFLINE_ERROR: 'show-offline-error'
+  };
 
   /**
    * Creates a new offline message screen div.
@@ -58,9 +39,7 @@ cr.define('login', function() {
   ErrorMessageScreen.register = function() {
     var screen = $('error-message');
     ErrorMessageScreen.decorate(screen);
-
-    // Note that ErrorMessageScreen is not registered with Oobe because
-    // it is shown on top of sign-in screen instead of as an independent screen.
+    Oobe.getInstance().registerScreen(screen);
   };
 
   ErrorMessageScreen.prototype = {
@@ -76,7 +55,7 @@ cr.define('login', function() {
      * Updates localized content of the screen that is not updated via template.
      */
     updateLocalizedContent_: function() {
-      $('captive-portal-message-text').innerHTML = localStrings.getStringF(
+      $('captive-portal-message-text').innerHTML = loadTimeData.getStringF(
         'captivePortalMessage',
         '<b id="' + CURRENT_NETWORK_NAME_ID + '"></b>',
         '<a id="' + FIX_CAPTIVE_PORTAL_ID + '" class="signin-link" href="#">',
@@ -86,7 +65,7 @@ cr.define('login', function() {
       };
 
       $('captive-portal-proxy-message-text').innerHTML =
-        localStrings.getStringF(
+        loadTimeData.getStringF(
           'captivePortalProxyMessage',
           '<a id="' + FIX_PROXY_SETTINGS_ID + '" class="signin-link" href="#">',
           '</a>');
@@ -94,17 +73,22 @@ cr.define('login', function() {
         chrome.send('openProxySettings');
       };
 
-      $('proxy-message-text').innerHTML = localStrings.getStringF(
+      $('proxy-message-text').innerHTML = loadTimeData.getStringF(
           'proxyMessageText',
           '<a id="' + RELOAD_PAGE_ID + '" class="signin-link" href="#">',
+          '</a>',
+          '<a id="proxy-error-fix-proxy" class="signin-link" href="#">',
           '</a>');
       $(RELOAD_PAGE_ID).onclick = function() {
-        var currentScreen = Oobe.getInstance().currentScreen;
+        var gaiaScreen = $(SCREEN_GAIA_SIGNIN);
         // Schedules a immediate retry.
-        currentScreen.doReload();
+        gaiaScreen.doReload();
+      };
+      $('proxy-error-fix-proxy').onclick = function() {
+        chrome.send('openProxySettings');
       };
 
-      $('error-guest-signin').innerHTML = localStrings.getStringF(
+      $('error-guest-signin').innerHTML = loadTimeData.getStringF(
           'guestSignin',
           '<a id="error-guest-signin-link" class="signin-link" href="#">',
           '</a>');
@@ -112,27 +96,58 @@ cr.define('login', function() {
         chrome.send('launchIncognito');
       };
 
-      $('error-offline-login').innerHTML = localStrings.getStringF(
+      $('error-offline-login').innerHTML = loadTimeData.getStringF(
           'offlineLogin',
           '<a id="error-offline-login-link" class="signin-link" href="#">',
           '</a>');
       $('error-offline-login-link').onclick = function() {
         chrome.send('offlineLogin');
       };
+      this.onContentChange_();
     },
 
-    onBeforeShow: function(lastNetworkType) {
-      var currentScreen = Oobe.getInstance().currentScreen;
-
+    /**
+     * Event handler that is invoked just before the screen in shown.
+     * @param {Object} data Screen init payload.
+     */
+    onBeforeShow: function(data) {
+      cr.ui.Oobe.clearErrors();
+      var lastNetworkType = data['lastNetworkType'] || 0;
       cr.ui.DropDown.show('offline-networks-list', false, lastNetworkType);
-
-      $('error-guest-signin').hidden = $('guestSignin').hidden;
-
-      $('error-offline-login').hidden = !currentScreen.isOfflineAllowed;
     },
 
+    /**
+     * Event handler that is invoked just before the screen is hidden.
+     */
     onBeforeHide: function() {
       cr.ui.DropDown.hide('offline-networks-list');
+    },
+
+    /**
+     * Method called after content of the screen changed.
+     * @private
+     */
+    onContentChange_: function() {
+      if (Oobe.getInstance().currentScreen === this)
+        Oobe.getInstance().updateScreenSize(this);
+    },
+
+    /**
+      * Sets current state of the error screen.
+      * @param {string} state New state of the error screen.
+      * @private
+      */
+    setState_: function(state) {
+      var states = [SCREEN_STATE.PROXY_ERROR,
+                    SCREEN_STATE.CAPTIVE_PORTAL_ERROR,
+                    SCREEN_STATE.TIMEOUT_ERROR,
+                    SCREEN_STATE.OFFLINE_ERROR];
+      for (var i = 0; i < states.length; i++) {
+        if (states[i] != state)
+          this.classList.remove(states[i]);
+      }
+      this.classList.add(state);
+      this.onContentChange_();
     },
 
     /**
@@ -140,9 +155,7 @@ cr.define('login', function() {
      * @private
      */
     showProxyError_: function() {
-      this.classList.remove('show-offline-message');
-      this.classList.remove('show-captive-portal');
-      this.classList.add('show-proxy-error');
+      this.setState_(SCREEN_STATE.PROXY_ERROR);
     },
 
     /**
@@ -152,9 +165,15 @@ cr.define('login', function() {
      */
     showCaptivePortalError_: function(network) {
       $(CURRENT_NETWORK_NAME_ID).textContent = network;
-      this.classList.remove('show-offline-message');
-      this.classList.remove('show-proxy-error');
-      this.classList.add('show-captive-portal');
+      this.setState_(SCREEN_STATE.CAPTIVE_PORTAL_ERROR);
+    },
+
+    /**
+    * Prepares error screen to show gaia loading timeout error.
+    * @private
+    */
+    showTimeoutError_: function() {
+      this.setState_(SCREEN_STATE.TIMEOUT_ERROR);
     },
 
     /**
@@ -162,64 +181,25 @@ cr.define('login', function() {
      * @private
      */
     showOfflineError_: function() {
-      this.classList.remove('show-captive-portal');
-      this.classList.remove('show-proxy-error');
-      this.classList.add('show-offline-message');
+      this.setState_(SCREEN_STATE.OFFLINE_ERROR);
     },
 
     /**
-     * Shows screen.
-     * @param {object} screen Screen that should be shown.
+     * Prepares error screen to show guest signin link.
      * @private
      */
-    showScreen_: function(screen) {
-      screen.classList.remove('hidden');
-      screen.classList.remove('faded');
-
-      if (Oobe.getInstance().isNewOobe())
-        Oobe.getInstance().updateScreenSize(screen);
+    allowGuestSignin_: function(allowed) {
+      this.classList[allowed ? 'add' : 'remove']('allow-guest-signin');
+      this.onContentChange_();
     },
 
     /**
-     * Shows/hides offline message.
-     * @param {boolean} visible True to show offline message.
+     * Prepares error screen to show offline login link.
+     * @private
      */
-    showOfflineMessage: function(visible) {
-      var offlineMessage = this;
-      var currentScreen = Oobe.getInstance().currentScreen;
-
-      if (visible) {
-        this.showScreen_(offlineMessage);
-
-        if (!currentScreen.classList.contains('faded')) {
-          currentScreen.classList.add('faded');
-          currentScreen.addEventListener('webkitTransitionEnd',
-            function f(e) {
-              currentScreen.removeEventListener('webkitTransitionEnd', f);
-              if (currentScreen.classList.contains('faded'))
-                currentScreen.classList.add('hidden');
-            });
-        }
-
-        // Report back error screen UI being painted.
-        window.webkitRequestAnimationFrame(function() {
-          chrome.send('loginVisible', ['network-error']);
-        });
-      } else {
-        this.showScreen_(currentScreen);
-
-        offlineMessage.classList.add('faded');
-        if (offlineMessage.classList.contains('animated')) {
-          offlineMessage.addEventListener('webkitTransitionEnd',
-            function f(e) {
-              offlineMessage.removeEventListener('webkitTransitionEnd', f);
-              if (offlineMessage.classList.contains('faded'))
-                offlineMessage.classList.add('hidden');
-            });
-        } else {
-          offlineMessage.classList.add('hidden');
-        }
-      }
+    allowOfflineLogin_: function(allowed) {
+      this.classList[allowed ? 'add' : 'remove']('allow-offline-login');
+      this.onContentChange_();
     },
   };
 
@@ -239,6 +219,13 @@ cr.define('login', function() {
   };
 
   /**
+   * Prepares error screen to show gaia loading timeout error.
+   */
+  ErrorMessageScreen.showTimeoutError = function() {
+    $('error-message').showTimeoutError_();
+  };
+
+  /**
    * Prepares error screen to show offline error.
    */
   ErrorMessageScreen.showOfflineError = function() {
@@ -246,11 +233,19 @@ cr.define('login', function() {
   };
 
   /**
-   * Shows/hides offline message.
-   * @param {boolean} visible True to show offline message.
-   */
-  ErrorMessageScreen.showOfflineMessage = function(visible) {
-    $('error-message').showOfflineMessage(visible);
+    * Prepares error screen to show guest signin link.
+    * @param {boolean} allowed True if signin link should be visible.
+    */
+  ErrorMessageScreen.allowGuestSignin = function(allowed) {
+    $('error-message').allowGuestSignin_(allowed);
+  };
+
+  /**
+    * Prepares error screen to show offline login link.
+    * @param {boolean} allowed True if login link should be visible.
+    */
+  ErrorMessageScreen.allowOfflineLogin = function(allowed) {
+    $('error-message').allowOfflineLogin_(allowed);
   };
 
   ErrorMessageScreen.onBeforeShow = function(lastNetworkType) {
@@ -259,50 +254,6 @@ cr.define('login', function() {
 
   ErrorMessageScreen.onBeforeHide = function() {
     $('error-message').onBeforeHide();
-  };
-
-  /**
-   * Handler for iframe's error notification coming from the outside.
-   * For more info see C++ class 'SnifferObserver' which calls this method.
-   * @param {number} error Error code.
-   */
-  ErrorMessageScreen.onFrameError = function(error) {
-    console.log('Gaia frame error = ' + error);
-    if (error == NET_ERROR.ABORTED_BY_USER) {
-      // Gaia frame was reloaded. Nothing to do here.
-      return;
-    }
-    $('gaia-signin').onFrameError(error);
-    // Check current network state if currentScreen is a managed one.
-    var currentScreen = Oobe.getInstance().currentScreen;
-    if (MANAGED_SCREENS.indexOf(currentScreen.id) != -1) {
-      chrome.send('loginRequestNetworkState',
-                  ['login.ErrorMessageScreen.maybeRetry',
-                   'frame error:' + error]);
-    }
-  };
-
-  /**
-   * Network state callback where we decide whether to schedule a retry.
-   */
-  ErrorMessageScreen.maybeRetry =
-      function(state, network, reason, lastNetworkType) {
-    console.log('ErrorMessageScreen.maybeRetry, state=' + state +
-                ', network=' + network +
-                ', lastNetworkType=' + lastNetworkType);
-
-    // No retry if we are not online.
-    if (state != NET_STATE.ONLINE)
-      return;
-
-    var currentScreen = Oobe.getInstance().currentScreen;
-    if (MANAGED_SCREENS.indexOf(currentScreen.id) != -1 &&
-        state != NET_STATE.CONNECTING) {
-      chrome.send('updateState',
-                  [NET_STATE.PORTAL, network, reason, lastNetworkType]);
-      // Schedules a retry.
-      currentScreen.scheduleRetry();
-    }
   };
 
   /**

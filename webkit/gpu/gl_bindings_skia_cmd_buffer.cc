@@ -7,6 +7,7 @@
 #ifndef GL_GLEXT_PROTOTYPES
 #define GL_GLEXT_PROTOTYPES
 #endif
+#include "gpu/GLES2/gl2extchromium.h"
 #include "third_party/khronos/GLES2/gl2.h"
 #include "third_party/khronos/GLES2/gl2ext.h"
 #include "third_party/skia/include/gpu/gl/GrGLInterface.h"
@@ -22,6 +23,7 @@ GrGLInterface* CreateCommandBufferSkiaGLBinding() {
   interface->fBindAttribLocation = glBindAttribLocation;
   interface->fBindBuffer = glBindBuffer;
   interface->fBindTexture = glBindTexture;
+  interface->fBindVertexArray = glBindVertexArrayOES;
   interface->fBlendColor = glBlendColor;
   interface->fBlendFunc = glBlendFunc;
   interface->fBufferData = glBufferData;
@@ -39,6 +41,7 @@ GrGLInterface* CreateCommandBufferSkiaGLBinding() {
   interface->fDeleteProgram = glDeleteProgram;
   interface->fDeleteShader = glDeleteShader;
   interface->fDeleteTextures = glDeleteTextures;
+  interface->fDeleteVertexArrays = glDeleteVertexArraysOES;
   interface->fDepthMask = glDepthMask;
   interface->fDisable = glDisable;
   interface->fDisableVertexAttribArray = glDisableVertexAttribArray;
@@ -51,6 +54,7 @@ GrGLInterface* CreateCommandBufferSkiaGLBinding() {
   interface->fFrontFace = glFrontFace;
   interface->fGenBuffers = glGenBuffers;
   interface->fGenTextures = glGenTextures;
+  interface->fGenVertexArrays = glGenVertexArraysOES;
   interface->fGetBufferParameteriv = glGetBufferParameteriv;
   interface->fGetError = glGetError;
   interface->fGetIntegerv = glGetIntegerv;

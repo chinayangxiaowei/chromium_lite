@@ -10,9 +10,9 @@
 #include "base/json/json_writer.h"
 #include "base/logging.h"
 #include "base/memory/scoped_ptr.h"
-#include "base/string_number_conversions.h"
-#include "base/string_split.h"
 #include "base/string_util.h"
+#include "base/strings/string_number_conversions.h"
+#include "base/strings/string_split.h"
 #include "base/utf_string_conversions.h"
 #include "base/values.h"
 #include "chrome/browser/history/history_database.h"
@@ -64,6 +64,10 @@ const std::string ColumnsForVersion(int version, bool concatenated) {
     // Column added in version 47.
     columns.push_back("alternate_urls");
   }
+  if (version >= 49) {
+    // Column added in version 49.
+    columns.push_back("search_terms_replacement_key");
+  }
 
   return JoinString(columns, std::string(concatenated ? " || " : ", "));
 }
@@ -109,17 +113,32 @@ void BindURLToStatement(const TemplateURLData& data,
   s->BindInt64(starting_column + 14, data.last_modified.ToTimeT());
   s->BindString(starting_column + 15, data.sync_guid);
   s->BindString(starting_column + 16, alternate_urls);
+  s->BindString(starting_column + 17, data.search_terms_replacement_key);
 }
 
-}  // anonymous namespace
+int table_key = 0;
 
-KeywordTable::KeywordTable(sql::Connection* db, sql::MetaTable* meta_table)
-    : WebDatabaseTable(db, meta_table) {
+WebDatabaseTable::TypeKey GetKey() {
+  return reinterpret_cast<void*>(&table_key);
+}
+
+}  // namespace
+
+KeywordTable::KeywordTable() {
 }
 
 KeywordTable::~KeywordTable() {}
 
-bool KeywordTable::Init() {
+KeywordTable* KeywordTable::FromWebDatabase(WebDatabase* db) {
+  return static_cast<KeywordTable*>(db->GetTable(GetKey()));
+}
+
+WebDatabaseTable::TypeKey KeywordTable::GetTypeKey() const {
+  return GetKey();
+}
+
+bool KeywordTable::Init(sql::Connection* db, sql::MetaTable* meta_table) {
+  WebDatabaseTable::Init(db, meta_table);
   return db_->DoesTableExist("keywords") ||
       db_->Execute("CREATE TABLE keywords ("
                    "id INTEGER PRIMARY KEY,"
@@ -139,17 +158,64 @@ bool KeywordTable::Init() {
                    "instant_url VARCHAR,"
                    "last_modified INTEGER DEFAULT 0,"
                    "sync_guid VARCHAR,"
-                   "alternate_urls VARCHAR)");
+                   "alternate_urls VARCHAR,"
+                   "search_terms_replacement_key VARCHAR)");
 }
 
 bool KeywordTable::IsSyncable() {
   return true;
 }
 
+bool KeywordTable::MigrateToVersion(int version,
+                                    const std::string& app_locale,
+                                    bool* update_compatible_version) {
+  // Migrate if necessary.
+  switch (version) {
+    case 21:
+      *update_compatible_version = true;
+      return MigrateToVersion21AutoGenerateKeywordColumn();
+    case 25:
+      *update_compatible_version = true;
+      return MigrateToVersion25AddLogoIDColumn();
+    case 26:
+      *update_compatible_version = true;
+      return MigrateToVersion26AddCreatedByPolicyColumn();
+    case 28:
+      *update_compatible_version = true;
+      return MigrateToVersion28SupportsInstantColumn();
+    case 29:
+      *update_compatible_version = true;
+      return MigrateToVersion29InstantURLToSupportsInstant();
+    case 38:
+      *update_compatible_version = true;
+      return MigrateToVersion38AddLastModifiedColumn();
+    case 39:
+      *update_compatible_version = true;
+      return MigrateToVersion39AddSyncGUIDColumn();
+    case 44:
+      *update_compatible_version = true;
+      return MigrateToVersion44AddDefaultSearchProviderBackup();
+    case 45:
+      *update_compatible_version = true;
+      return MigrateToVersion45RemoveLogoIDAndAutogenerateColumns();
+    case 47:
+      *update_compatible_version = true;
+      return MigrateToVersion47AddAlternateURLsColumn();
+    case 48:
+      *update_compatible_version = true;
+      return MigrateToVersion48RemoveKeywordsBackup();
+    case 49:
+      *update_compatible_version = true;
+      return MigrateToVersion49AddSearchTermsReplacementKeyColumn();
+  }
+
+  return true;
+}
+
 bool KeywordTable::AddKeyword(const TemplateURLData& data) {
   DCHECK(data.id);
   std::string query("INSERT INTO keywords (" + GetKeywordColumns() +
-                    ") VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)");
+                    ") VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)");
   sql::Statement s(db_->GetUniqueStatement(query.c_str()));
   BindURLToStatement(data, &s, 0, 1);
 
@@ -192,8 +258,8 @@ bool KeywordTable::UpdateKeyword(const TemplateURLData& data) {
       "originating_url=?, date_created=?, usage_count=?, input_encodings=?, "
       "show_in_default_list=?, suggest_url=?, prepopulate_id=?, "
       "created_by_policy=?, instant_url=?, last_modified=?, sync_guid=?, "
-      "alternate_urls=? WHERE id=?"));
-  BindURLToStatement(data, &s, 17, 0);  // "17" binds id() as the last item.
+      "alternate_urls=?, search_terms_replacement_key=? WHERE id=?"));
+  BindURLToStatement(data, &s, 18, 0);  // "18" binds id() as the last item.
 
   return s.Run();
 }
@@ -365,6 +431,19 @@ bool KeywordTable::MigrateToVersion48RemoveKeywordsBackup() {
   return transaction.Commit();
 }
 
+bool KeywordTable::MigrateToVersion49AddSearchTermsReplacementKeyColumn() {
+  sql::Transaction transaction(db_);
+
+  // Fill the |search_terms_replacement_key| column with empty strings;
+  // See comments in MigrateToVersion47AddAlternateURLsColumn().
+  if (!transaction.Begin() ||
+      !db_->Execute("ALTER TABLE keywords ADD COLUMN "
+                    "search_terms_replacement_key VARCHAR DEFAULT ''"))
+    return false;
+
+  return transaction.Commit();
+}
+
 // static
 bool KeywordTable::GetKeywordDataFromStatement(const sql::Statement& s,
                                                TemplateURLData* data) {
@@ -405,6 +484,8 @@ bool KeywordTable::GetKeywordDataFromStatement(const sql::Statement& s,
         data->alternate_urls.push_back(alternate_url);
     }
   }
+
+  data->search_terms_replacement_key = s.ColumnString(18);
 
   return true;
 }

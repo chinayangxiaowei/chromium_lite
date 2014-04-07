@@ -95,10 +95,10 @@ class VideoDecoderSelectorTest : public ::testing::Test {
           .WillRepeatedly(RunCallback<0>(decryptor_.get()));
 
       if (decryptor_capability == kDecryptOnly) {
-        EXPECT_CALL(*decryptor_, InitializeVideoDecoderMock(_, _))
+        EXPECT_CALL(*decryptor_, InitializeVideoDecoder(_, _))
             .WillRepeatedly(RunCallback<1>(false));
       } else {
-        EXPECT_CALL(*decryptor_, InitializeVideoDecoderMock(_, _))
+        EXPECT_CALL(*decryptor_, InitializeVideoDecoder(_, _))
             .WillRepeatedly(RunCallback<1>(true));
       }
     }
@@ -129,7 +129,7 @@ class VideoDecoderSelectorTest : public ::testing::Test {
   VideoDecoderConfig encrypted_video_config_;
   scoped_refptr<StrictMock<MockDemuxerStream> > demuxer_stream_;
   // Use NiceMock since we don't care about most of calls on the decryptor, e.g.
-  // RegisterKeyAddedCB().
+  // RegisterNewKeyCB().
   scoped_ptr<NiceMock<MockDecryptor> > decryptor_;
   scoped_refptr<StrictMock<MockVideoDecoder> > decoder_1_;
   scoped_refptr<StrictMock<MockVideoDecoder> > decoder_2_;

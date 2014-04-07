@@ -10,10 +10,11 @@
 
 #include "base/basictypes.h"
 #include "base/compiler_specific.h"
-#include "base/file_path.h"
+#include "base/files/file_path.h"
 #include "content/browser/renderer_host/pepper/content_browser_pepper_host_factory.h"
 #include "content/common/content_export.h"
 #include "content/public/browser/browser_ppapi_host.h"
+#include "content/public/common/process_type.h"
 #include "ipc/ipc_channel_proxy.h"
 #include "ppapi/host/ppapi_host.h"
 
@@ -26,10 +27,13 @@ class CONTENT_EXPORT BrowserPpapiHostImpl : public BrowserPpapiHost {
   // The creator is responsible for calling set_plugin_process_handle as soon
   // as it is known (we start the process asynchronously so it won't be known
   // when this object is created).
+  // |external_plugin| signfies that this is a proxy created for an embedder's
+  // plugin, i.e. using BrowserPpapiHost::CreateExternalPluginProcess.
   BrowserPpapiHostImpl(IPC::Sender* sender,
                        const ppapi::PpapiPermissions& permissions,
                        const std::string& plugin_name,
-                       const FilePath& profile_data_directory);
+                       const base::FilePath& profile_data_directory,
+                       bool external_plugin);
   virtual ~BrowserPpapiHostImpl();
 
   // BrowserPpapiHost.
@@ -40,13 +44,15 @@ class CONTENT_EXPORT BrowserPpapiHostImpl : public BrowserPpapiHost {
                                            int* render_process_id,
                                            int* render_view_id) const OVERRIDE;
   virtual const std::string& GetPluginName() OVERRIDE;
-  virtual const FilePath& GetProfileDataDirectory() OVERRIDE;
+  virtual const base::FilePath& GetProfileDataDirectory() OVERRIDE;
   virtual GURL GetDocumentURLForInstance(PP_Instance instance) OVERRIDE;
   virtual GURL GetPluginURLForInstance(PP_Instance instance) OVERRIDE;
 
   void set_plugin_process_handle(base::ProcessHandle handle) {
     plugin_process_handle_ = handle;
   }
+
+  bool external_plugin() { return external_plugin_; }
 
   // These two functions are notifications that an instance has been created
   // or destroyed. They allow us to maintain a mapping of PP_Instance to data
@@ -83,7 +89,11 @@ class CONTENT_EXPORT BrowserPpapiHostImpl : public BrowserPpapiHost {
   scoped_ptr<ppapi::host::PpapiHost> ppapi_host_;
   base::ProcessHandle plugin_process_handle_;
   std::string plugin_name_;
-  FilePath profile_data_directory_;
+  base::FilePath profile_data_directory_;
+
+  // If true, this is an external plugin, i.e. created by the embedder using
+  // BrowserPpapiHost::CreateExternalPluginProcess.
+  bool external_plugin_;
 
   // Tracks all PP_Instances in this plugin and associated renderer-related
   // data.

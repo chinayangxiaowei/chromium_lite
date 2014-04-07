@@ -7,13 +7,13 @@
     'chromium_code': 1,
   },
   'includes': [
+    'shell_dialogs.gypi',
     'ui_resources.gypi',
   ],
   'targets': [
     {
       'target_name': 'ui',
       'type': '<(component)',
-      'variables': { 'enable_wexit_time_destructors': 1, },
       'dependencies': [
         '../base/base.gyp:base',
         '../base/base.gyp:base_i18n',
@@ -75,6 +75,7 @@
         'base/clipboard/clipboard.cc',
         'base/clipboard/clipboard.h',
         'base/clipboard/clipboard_android.cc',
+        'base/clipboard/clipboard_android_initialization.h',
         'base/clipboard/clipboard_aurax11.cc',
         'base/clipboard/clipboard_chromeos.cc',
         'base/clipboard/clipboard_gtk.cc',
@@ -95,10 +96,18 @@
         'base/cocoa/find_pasteboard.mm',
         'base/cocoa/focus_tracker.h',
         'base/cocoa/focus_tracker.mm',
+        'base/cocoa/focus_window_set.h',
+        'base/cocoa/focus_window_set.mm',
         'base/cocoa/fullscreen_window_manager.h',
         'base/cocoa/fullscreen_window_manager.mm',
+        'base/cocoa/hover_button.h',
+        'base/cocoa/hover_button.mm',
+        'base/cocoa/hover_image_button.h',
+        'base/cocoa/hover_image_button.mm',
         'base/cocoa/nib_loading.h',
         'base/cocoa/nib_loading.mm',
+        'base/cocoa/tracking_area.h',
+        'base/cocoa/tracking_area.mm',
         'base/cocoa/underlay_opengl_hosting_window.h',
         'base/cocoa/underlay_opengl_hosting_window.mm',
         'base/cocoa/window_size_constants.h',
@@ -112,42 +121,20 @@
         'base/cursor/cursor_loader_x11.h',
         'base/cursor/cursor_win.cc',
         'base/cursor/cursor_x11.cc',
-        'base/dialogs/base_shell_dialog.cc',
-        'base/dialogs/base_shell_dialog.h',
-        'base/dialogs/base_shell_dialog_win.cc',
-        'base/dialogs/base_shell_dialog_win.h',
-        'base/dialogs/gtk/select_file_dialog_impl.cc',
-        'base/dialogs/gtk/select_file_dialog_impl.h',
-        'base/dialogs/gtk/select_file_dialog_impl_gtk.cc',
-        'base/dialogs/gtk/select_file_dialog_impl_kde.cc',
-        'base/dialogs/select_file_dialog.cc',
-        'base/dialogs/select_file_dialog.h',
-        'base/dialogs/select_file_dialog_android.cc',
-        'base/dialogs/select_file_dialog_android.h',
-        'base/dialogs/select_file_dialog_factory.cc',
-        'base/dialogs/select_file_dialog_factory.h',
-        'base/dialogs/select_file_dialog_mac.h',
-        'base/dialogs/select_file_dialog_mac.mm',
-        'base/dialogs/select_file_dialog_win.cc',
-        'base/dialogs/select_file_dialog_win.h',
-        'base/dialogs/select_file_policy.cc',
-        'base/dialogs/select_file_policy.h',
-        'base/dialogs/selected_file_info.cc',
-        'base/dialogs/selected_file_info.h',
         'base/dragdrop/cocoa_dnd_util.h',
         'base/dragdrop/cocoa_dnd_util.mm',
         'base/dragdrop/drag_drop_types.h',
         'base/dragdrop/drag_drop_types_gtk.cc',
         'base/dragdrop/drag_drop_types_win.cc',
-        'base/dragdrop/drag_source.cc',
-        'base/dragdrop/drag_source.h',
+        'base/dragdrop/drag_source_win.cc',
+        'base/dragdrop/drag_source_win.h',
         'base/dragdrop/drag_utils.cc',
         'base/dragdrop/drag_utils.h',
         'base/dragdrop/drag_utils_aura.cc',
         'base/dragdrop/drag_utils_gtk.cc',
         'base/dragdrop/drag_utils_win.cc',
-        'base/dragdrop/drop_target.cc',
-        'base/dragdrop/drop_target.h',
+        'base/dragdrop/drop_target_win.cc',
+        'base/dragdrop/drop_target_win.h',
         'base/dragdrop/gtk_dnd_util.cc',
         'base/dragdrop/gtk_dnd_util.h',
         'base/dragdrop/os_exchange_data.cc',
@@ -241,9 +228,12 @@
         'base/layout_mac.mm',
         'base/models/button_menu_item_model.cc',
         'base/models/button_menu_item_model.h',
+        'base/models/combobox_model.cc',
         'base/models/combobox_model.h',
         'base/models/list_model.h',
         'base/models/list_model_observer.h',
+        'base/models/list_selection_model.cc',
+        'base/models/list_selection_model.h',
         'base/models/menu_model.cc',
         'base/models/menu_model.h',
         'base/models/menu_model_delegate.h',
@@ -283,6 +273,12 @@
         'base/text/utf16_indexing.h',
         'base/theme_provider.cc',
         'base/theme_provider.h',
+        'base/touch/touch_device.cc',
+        'base/touch/touch_device.h',
+        'base/touch/touch_device_android.cc',
+        'base/touch/touch_device_win.cc',
+        'base/touch/touch_editing_controller.cc',
+        'base/touch/touch_editing_controller.h',
         'base/touch/touch_factory.cc',
         'base/touch/touch_factory.h',
         'base/ui_base_exports.cc',
@@ -322,8 +318,12 @@
         'base/win/shell.h',
         'base/win/singleton_hwnd.cc',
         'base/win/singleton_hwnd.h',
+        'base/win/touch_input.cc',
+        'base/win/touch_input.h',
         'base/win/window_impl.cc',
         'base/win/window_impl.h',
+        'base/window_open_disposition.cc',
+        'base/window_open_disposition.h',
         'base/work_area_watcher_observer.h',
         'base/x/active_window_watcher_x.cc',
         'base/x/active_window_watcher_x.h',
@@ -342,14 +342,15 @@
         'base/x/x11_util.cc',
         'base/x/x11_util.h',
         'base/x/x11_util_internal.h',
-        'gfx/android/gfx_jni_registrar.cc',
-        'gfx/android/gfx_jni_registrar.h',
+        'gfx/android/device_display_info.cc',
+        'gfx/android/device_display_info.h',
         'gfx/android/java_bitmap.cc',
         'gfx/android/java_bitmap.h',
         'gfx/android/window_android.cc',
         'gfx/android/window_android.h',
         'gfx/blit.cc',
         'gfx/blit.h',
+        'gfx/break_list.h',
         'gfx/canvas.cc',
         'gfx/canvas.h',
         'gfx/canvas_android.cc',
@@ -423,9 +424,9 @@
         'gfx/insets_f.h',
         'gfx/interpolated_transform.cc',
         'gfx/interpolated_transform.h',
-        'gfx/mac/nsimage_cache.h',
-        'gfx/mac/nsimage_cache.mm',
         'gfx/mac/scoped_ns_disable_screen_updates.h',
+        'gfx/matrix3_f.cc',
+        'gfx/matrix3_f.h',
         'gfx/native_widget_types.h',
         'gfx/pango_util.cc',
         'gfx/pango_util.h',
@@ -527,15 +528,10 @@
         'gfx/vector3d_f.h',
         'gfx/video_decode_acceleration_support_mac.h',
         'gfx/video_decode_acceleration_support_mac.mm',
-        'notifications/notification_types.h',
-        'notifications/notification_types.cc',
-        'ui_controls/ui_controls.h',
-        'ui_controls/ui_controls_aura.cc',
-        'ui_controls/ui_controls_gtk.cc',
-        'ui_controls/ui_controls_internal_win.cc',
-        'ui_controls/ui_controls_internal_win.h',
-        'ui_controls/ui_controls_mac.mm',
-        'ui_controls/ui_controls_win.cc',
+        'webui/jstemplate_builder.cc',
+        'webui/jstemplate_builder.h',
+        'webui/web_ui_util.cc',
+        'webui/web_ui_util.h',
       ],
       'target_conditions': [
         ['OS == "ios"', {
@@ -594,8 +590,6 @@
             ['exclude', 'gfx/gtk_util.cc'],
             ['exclude', 'gfx/gtk_util.h'],
             ['exclude', 'gfx/screen_gtk.cc'],
-            ['exclude', 'base/dialogs/select_file_dialog_mac.mm'],
-            ['exclude', 'base/dialogs/select_file_dialog_win.cc'],
             ['exclude', 'base/work_area_watcher_observer.h'],
             ['exclude', 'base/x/active_window_watcher_x.cc'],
             ['exclude', 'base/x/active_window_watcher_x.h'],
@@ -604,7 +598,6 @@
             ['exclude', 'base/x/root_window_property_watcher_x.h'],
             ['exclude', 'base/x/work_area_watcher_x.cc'],
             ['exclude', 'base/x/work_area_watcher_x.h'],
-            ['exclude', 'ui_controls_win.cc'],
            ],
         }, {  # use_aura!=1
           'sources!': [
@@ -627,34 +620,13 @@
             ['exclude', '^base/gestures/*'],
           ]
         }],
-        ['use_aura==1 and use_ash==0 and OS=="linux"', {
-          'sources': [
-            'base/linux_ui.cc',
-            'base/linux_ui.h',
-          ]
-        }],
-        ['use_ibus==1', {
-          'dependencies': [
-            '../build/linux/system.gyp:ibus',
-          ],
-        }],
         ['use_glib == 1', {
           'dependencies': [
             # font_gtk.cc uses fontconfig.
             '../build/linux/system.gyp:fontconfig',
             '../build/linux/system.gyp:glib',
             '../build/linux/system.gyp:pangocairo',
-            '../build/linux/system.gyp:x11',
-            '../build/linux/system.gyp:xext',
-            '../build/linux/system.gyp:xfixes',
           ],
-          'link_settings': {
-            'libraries': [
-              '-lXcursor',  # For XCursor* function calls in x11_util.cc.
-              '-lXrender',  # For XRender* function calls in x11_util.cc.
-              '-lXrandr',   # For XRR* function calls in x11_util.cc.
-            ],
-          },
           'conditions': [
             ['toolkit_views==0', {
               # Note: because of gyp predence rules this has to be defined as
@@ -694,8 +666,12 @@
           ],
         }],
         ['chromeos==1', {
+          'sources': [
+            'base/touch/touch_device_aurax11.cc',
+          ],
           'sources!': [
             'base/clipboard/clipboard_aurax11.cc',
+            'base/touch/touch_device.cc',
           ],
         }],
         ['OS=="win"', {
@@ -704,10 +680,9 @@
             'gfx/gdi_util.h',
             'gfx/icon_util.cc',
             'gfx/icon_util.h',
-            'base/touch/touch_device_win.cc',
-            'base/touch/touch_device_win.h',
           ],
           'sources!': [
+            'base/touch/touch_device.cc',
             'base/touch/touch_factory.cc',
             'base/touch/touch_factory.h',
             'gfx/pango_util.h',
@@ -719,6 +694,10 @@
             '../',
             '../third_party/wtl/include',
           ],
+          # TODO(jschuh): C4267: http://crbug.com/167187 size_t -> int
+          # C4324 is structure was padded due to __declspec(align()), which is
+          # uninteresting.
+          'msvs_disabled_warnings': [ 4267, 4324 ],
           'msvs_settings': {
             'VCLinkerTool': {
               'DelayLoadDLLs': [
@@ -751,15 +730,11 @@
             }],
           ],
           'sources!': [
-            'base/dragdrop/drag_source.cc',
-            'base/dragdrop/drag_source.h',
             'base/dragdrop/drag_drop_types.h',
-            'base/dragdrop/drop_target.cc',
-            'base/dragdrop/drop_target.h',
             'base/dragdrop/os_exchange_data.cc',
           ],
           'sources/': [
-            ['exclude', '^base/win/*'],
+            ['exclude', '^base/win/'],
           ],
         }],
         ['OS=="mac"', {
@@ -791,9 +766,23 @@
                 '-lX11',
                 '-lXcursor',
                 '-lXrandr',  # For XRR* function calls in x11_util.cc.
+                '-lXrender',  # For XRender* function calls in x11_util.cc.
               ],
             },
           },
+          'link_settings': {
+            'libraries': [
+              '-lX11',
+              '-lXcursor',
+              '-lXrandr',  # For XRR* function calls in x11_util.cc.
+              '-lXrender',  # For XRender* function calls in x11_util.cc.
+            ],
+          },
+          'dependencies': [
+            '../build/linux/system.gyp:x11',
+            '../build/linux/system.gyp:xext',
+            '../build/linux/system.gyp:xfixes',
+          ],
         }, {  # use_x11==0
           'sources/': [
             ['exclude', 'base/keycodes/keyboard_code_conversion_x.*'],
@@ -817,6 +806,7 @@
           'sources!': [
             'base/dragdrop/drag_utils.cc',
             'base/dragdrop/drag_utils.h',
+            'base/touch/touch_device.cc',
             'base/touch/touch_factory.cc',
             'base/touch/touch_factory.h',
             'gfx/pango_util.cc',
@@ -836,7 +826,7 @@
             ],
           },
         }],
-        ['OS=="android" and android_build_type==0', {
+        ['OS=="android" and android_webview_build==0', {
           'dependencies': [
             'ui_java',
           ],
@@ -873,11 +863,13 @@
            'type': 'none',
            'sources': [
              'android/java/src/org/chromium/ui/gfx/BitmapHelper.java',
+             'android/java/src/org/chromium/ui/gfx/DeviceDisplayInfo.java',
              'android/java/src/org/chromium/ui/gfx/NativeWindow.java',
              'android/java/src/org/chromium/ui/SelectFileDialog.java',
+             'android/java/src/org/chromium/ui/Clipboard.java',
            ],
            'variables': {
-             'jni_gen_dir': 'ui',
+             'jni_gen_package': 'ui',
            },
            'includes': [ '../build/jni_generator.gypi' ],
          },
@@ -885,11 +877,11 @@
            'target_name': 'ui_java',
            'type': 'none',
            'variables': {
-             'package_name': 'ui',
              'java_in_dir': '../ui/android/java',
              'has_java_resources': 1,
              'R_package': 'org.chromium.ui',
              'R_package_relpath': 'org/chromium/ui',
+             'java_strings_grd': 'android_ui_strings.grd',
            },
            'dependencies': [
              '../base/base.gyp:base_java',
@@ -897,6 +889,62 @@
            'includes': [ '../build/java.gypi' ],
          },
        ],
+    }],
+    ['OS=="mac"', {
+      'targets': [
+        {
+          'target_name': 'ui_cocoa_third_party_toolkits',
+          'type': '<(component)',
+          'sources': [
+            # Build Apple sample code
+            '../third_party/apple_sample_code/ImageAndTextCell.h',
+            '../third_party/apple_sample_code/ImageAndTextCell.m',
+            # Build the necessary GTM sources
+            '../third_party/GTM/AppKit/GTMFadeTruncatingTextFieldCell.h',
+            '../third_party/GTM/AppKit/GTMFadeTruncatingTextFieldCell.m',
+            '../third_party/GTM/AppKit/GTMIBArray.h',
+            '../third_party/GTM/AppKit/GTMIBArray.m',
+            '../third_party/GTM/AppKit/GTMKeyValueAnimation.h',
+            '../third_party/GTM/AppKit/GTMKeyValueAnimation.m',
+            '../third_party/GTM/AppKit/GTMNSAnimation+Duration.h',
+            '../third_party/GTM/AppKit/GTMNSAnimation+Duration.m',
+            '../third_party/GTM/AppKit/GTMNSBezierPath+CGPath.h',
+            '../third_party/GTM/AppKit/GTMNSBezierPath+CGPath.m',
+            '../third_party/GTM/AppKit/GTMNSBezierPath+RoundRect.h',
+            '../third_party/GTM/AppKit/GTMNSBezierPath+RoundRect.m',
+            '../third_party/GTM/AppKit/GTMNSColor+Luminance.m',
+            '../third_party/GTM/AppKit/GTMUILocalizer.h',
+            '../third_party/GTM/AppKit/GTMUILocalizer.m',
+            '../third_party/GTM/AppKit/GTMUILocalizerAndLayoutTweaker.h',
+            '../third_party/GTM/AppKit/GTMUILocalizerAndLayoutTweaker.m',
+            '../third_party/GTM/Foundation/GTMNSNumber+64Bit.h',
+            '../third_party/GTM/Foundation/GTMNSNumber+64Bit.m',
+            '../third_party/GTM/Foundation/GTMNSObject+KeyValueObserving.h',
+            '../third_party/GTM/Foundation/GTMNSObject+KeyValueObserving.m',
+            # MolokoCacao additions
+            '../third_party/molokocacao/NSBezierPath+MCAdditions.h',
+            '../third_party/molokocacao/NSBezierPath+MCAdditions.m',
+            # Build necessary Mozilla sources
+            '../third_party/mozilla/NSScreen+Utils.h',
+            '../third_party/mozilla/NSScreen+Utils.m',
+            '../third_party/mozilla/NSWorkspace+Utils.h',
+            '../third_party/mozilla/NSWorkspace+Utils.m',
+          ],
+          'include_dirs': [
+            '..',
+            '../third_party/apple',
+            '../third_party/GTM',
+            '../third_party/GTM/AppKit',
+            '../third_party/GTM/DebugUtils',
+            '../third_party/GTM/Foundation',
+          ],
+          'link_settings': {
+            'libraries': [
+              '$(SDKROOT)/System/Library/Frameworks/Cocoa.framework',
+            ],
+          },
+        },
+      ],
     }],
   ],
 }

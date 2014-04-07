@@ -5,6 +5,7 @@
 #include "ash/magnifier/magnification_controller.h"
 #include "ash/shell.h"
 #include "base/command_line.h"
+#include "base/prefs/pref_service.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/chromeos/accessibility/accessibility_util.h"
 #include "chrome/browser/chromeos/accessibility/magnification_manager.h"
@@ -13,22 +14,78 @@
 #include "chrome/browser/chromeos/login/login_utils.h"
 #include "chrome/browser/chromeos/login/user_manager.h"
 #include "chrome/browser/chromeos/login/user_manager_impl.h"
-#include "chrome/browser/prefs/pref_service.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profile_manager.h"
 #include "chrome/common/chrome_notification_types.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/test/base/testing_profile.h"
+#include "components/user_prefs/user_prefs.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 namespace chromeos {
 
+namespace {
+
+void SetMagnifierEnabled(bool enabled) {
+  MagnificationManager::Get()->SetMagnifierEnabled(enabled);
+}
+
+void SetMagnifierType(ash::MagnifierType type) {
+  MagnificationManager::Get()->SetMagnifierType(type);
+}
+
+void SetFullScreenMagnifierScale(double scale) {
+  ash::Shell::GetInstance()->
+      magnification_controller()->SetScale(scale, false);
+}
+
+double GetFullScreenMagnifierScale() {
+  return ash::Shell::GetInstance()->magnification_controller()->GetScale();
+}
+
+void SetSavedFullScreenMagnifierScale(double scale) {
+  MagnificationManager::Get()->SaveScreenMagnifierScale(scale);
+}
+
+double GetSavedFullScreenMagnifierScale() {
+  return MagnificationManager::Get()->GetSavedScreenMagnifierScale();
+}
+
+ash::MagnifierType GetMagnifierType() {
+  return MagnificationManager::Get()->GetMagnifierType();
+}
+
+bool IsMagnifierEnabled() {
+  return MagnificationManager::Get()->IsMagnifierEnabled();
+}
+
+Profile* profile() {
+  Profile* profile = ProfileManager::GetDefaultProfileOrOffTheRecord();
+  DCHECK(profile);
+  return profile;
+}
+
+PrefService* prefs() {
+  return components::UserPrefs::Get(profile());
+}
+
+void EnableScreenManagnifierToPref(bool enabled) {
+  prefs()->SetBoolean(prefs::kScreenMagnifierEnabled, enabled);
+}
+
+void SetScreenManagnifierTypeToPref(ash::MagnifierType type) {
+  prefs()->SetInteger(prefs::kScreenMagnifierType, type);
+}
+
+}  // anonymouse namespace
+
 class MagnificationManagerTest : public CrosInProcessBrowserTest,
-                                 public MagnificationObserver {
+                                 public content::NotificationObserver {
  protected:
   MagnificationManagerTest() : observed_(false),
-                               observed_type_(ash::MAGNIFIER_OFF) {}
+                               observed_enabled_(false),
+                               observed_type_(ash::kDefaultMagnifierType) {}
   virtual ~MagnificationManagerTest() {}
 
   virtual void SetUpCommandLine(CommandLine* command_line) OVERRIDE {
@@ -38,182 +95,182 @@ class MagnificationManagerTest : public CrosInProcessBrowserTest,
   }
 
   virtual void SetUpOnMainThread() OVERRIDE {
-    MagnificationManager::Get()->AddObserver(this);
+    registrar_.Add(
+        this,
+        chrome::NOTIFICATION_CROS_ACCESSIBILITY_TOGGLE_SCREEN_MAGNIFIER,
+        content::NotificationService::AllSources());
   }
 
-  virtual void CleanUpOnMainThread() OVERRIDE {
-    MagnificationManager::Get()->RemoveObserver(this);
-  }
+  // content::NotificationObserver implementation.
+  virtual void Observe(int type,
+                       const content::NotificationSource& source,
+                       const content::NotificationDetails& details) OVERRIDE {
+    switch (type) {
+      case chrome::NOTIFICATION_CROS_ACCESSIBILITY_TOGGLE_SCREEN_MAGNIFIER: {
+        accessibility::AccessibilityStatusEventDetails* accessibility_status =
+            content::Details<accessibility::AccessibilityStatusEventDetails>(
+                details).ptr();
 
-  // Overridden from MagnificationObserever:
-  virtual void OnMagnifierTypeChanged(ash::MagnifierType new_type) OVERRIDE {
-    observed_ = true;
-    observed_type_ = new_type;
-  }
-
-  Profile* profile() {
-    Profile* profile = ProfileManager::GetDefaultProfileOrOffTheRecord();
-    DCHECK(profile);
-    return profile;
-  }
-
-  PrefServiceBase* prefs() {
-    return PrefServiceBase::FromBrowserContext(profile());
-  }
-
-  void SetScreenManagnifierType(ash::MagnifierType type) {
-    MagnificationManager::Get()->SetMagnifier(type);
-  }
-
-  void SetScreenManagnifierTypeToPref(ash::MagnifierType type) {
-    prefs()->SetBoolean(prefs::kScreenMagnifierEnabled,
-                        (type != ash::MAGNIFIER_OFF) ? true : false);
-  }
-
-  void SetFullScreenMagnifierScale(double scale) {
-    ash::Shell::GetInstance()->
-        magnification_controller()->SetScale(scale, false);
-  }
-
-  double GetFullScreenMagnifierScale() {
-    return ash::Shell::GetInstance()->magnification_controller()->GetScale();
-  }
-
-  void SetSavedFullScreenMagnifierScale(double scale) {
-    MagnificationManager::Get()->SaveScreenMagnifierScale(scale);
-  }
-
-  double GetSavedFullScreenMagnifierScale() {
-    return MagnificationManager::Get()->GetSavedScreenMagnifierScale();
-  }
-
-  void CheckCurrentMagnifierType(
-      ash::MagnifierType type) {
-    EXPECT_EQ(MagnificationManager::Get()->GetMagnifierType(), type);
+        observed_ = true;
+        observed_enabled_ = accessibility_status->enabled;
+        observed_type_ = accessibility_status->magnifier_type;
+        break;
+      }
+    }
   }
 
   bool observed_;
+  bool observed_enabled_;
   ash::MagnifierType observed_type_;
+  content::NotificationRegistrar registrar_;
   DISALLOW_COPY_AND_ASSIGN(MagnificationManagerTest);
 };
 
 IN_PROC_BROWSER_TEST_F(MagnificationManagerTest, LoginOffToOff) {
   // Confirms that magnifier is disabled on the login screen.
-  CheckCurrentMagnifierType(ash::MAGNIFIER_OFF);
+  EXPECT_FALSE(IsMagnifierEnabled());
 
   // Logs in.
   UserManager::Get()->UserLoggedIn("owner@invalid.domain", true);
 
   // Confirms that magnifier is still disabled just after login.
-  CheckCurrentMagnifierType(ash::MAGNIFIER_OFF);
+  EXPECT_FALSE(IsMagnifierEnabled());
 
   UserManager::Get()->SessionStarted();
 
   // Confirms that magnifier is still disabled just after login.
-  CheckCurrentMagnifierType(ash::MAGNIFIER_OFF);
+  EXPECT_FALSE(IsMagnifierEnabled());
 
   // Enables magnifier.
-  SetScreenManagnifierType(ash::MAGNIFIER_FULL);
+  SetMagnifierEnabled(true);
   // Confirms that magnifier is enabled.
-  CheckCurrentMagnifierType(ash::MAGNIFIER_FULL);
+  EXPECT_TRUE(IsMagnifierEnabled());
+  EXPECT_EQ(ash::MAGNIFIER_FULL, GetMagnifierType());
 }
 
 IN_PROC_BROWSER_TEST_F(MagnificationManagerTest, LoginFullToOff) {
   // Confirms that magnifier is disabled on the login screen.
-  CheckCurrentMagnifierType(ash::MAGNIFIER_OFF);
+  EXPECT_FALSE(IsMagnifierEnabled());
 
   // Enables magnifier on login scren.
-  SetScreenManagnifierType(ash::MAGNIFIER_FULL);
+  SetMagnifierEnabled(true);
 
   // Logs in (but the session is not started yet).
   UserManager::Get()->UserLoggedIn("owner@invalid.domain", true);
   // Confirms that magnifier is keeping enabled.
-  CheckCurrentMagnifierType(ash::MAGNIFIER_FULL);
+  EXPECT_TRUE(IsMagnifierEnabled());
+  EXPECT_EQ(ash::MAGNIFIER_FULL, GetMagnifierType());
 
   UserManager::Get()->SessionStarted();
 
   // Confirms that magnifier is disabled just after login.
-  CheckCurrentMagnifierType(ash::MAGNIFIER_OFF);
+  EXPECT_FALSE(IsMagnifierEnabled());
 }
 
 IN_PROC_BROWSER_TEST_F(MagnificationManagerTest, LoginOffToFull) {
   // Changes to full screen magnifier again and confirms that.
-  SetScreenManagnifierType(ash::MAGNIFIER_OFF);
-  CheckCurrentMagnifierType(ash::MAGNIFIER_OFF);
+  SetMagnifierEnabled(false);
+  EXPECT_FALSE(IsMagnifierEnabled());
 
   // Logs in (but the session is not started yet).
   UserManager::Get()->UserLoggedIn("owner@invalid.domain", true);
 
   // Confirms that magnifier is keeping disabled.
-  CheckCurrentMagnifierType(ash::MAGNIFIER_OFF);
+  EXPECT_FALSE(IsMagnifierEnabled());
   // Enable magnifier on the pref.
+  EnableScreenManagnifierToPref(true);
   SetScreenManagnifierTypeToPref(ash::MAGNIFIER_FULL);
   SetSavedFullScreenMagnifierScale(2.5);
 
   UserManager::Get()->SessionStarted();
 
   // Confirms that the prefs are successfully loaded.
-  CheckCurrentMagnifierType(ash::MAGNIFIER_FULL);
+  EXPECT_TRUE(IsMagnifierEnabled());
+  EXPECT_EQ(ash::MAGNIFIER_FULL, GetMagnifierType());
   EXPECT_EQ(2.5, GetFullScreenMagnifierScale());
 }
 
 IN_PROC_BROWSER_TEST_F(MagnificationManagerTest, LoginFullToFull) {
   // Changes to full screen magnifier again and confirms that.
-  SetScreenManagnifierType(ash::MAGNIFIER_FULL);
-  CheckCurrentMagnifierType(ash::MAGNIFIER_FULL);
+  SetMagnifierType(ash::MAGNIFIER_FULL);
+  SetMagnifierEnabled(true);
+  EXPECT_TRUE(IsMagnifierEnabled());
+  EXPECT_EQ(ash::MAGNIFIER_FULL, GetMagnifierType());
 
   // Logs in (but the session is not started yet).
   UserManager::Get()->UserLoggedIn("owner@invalid.domain", true);
 
   // Confirms that magnifier is keeping enabled.
-  CheckCurrentMagnifierType(ash::MAGNIFIER_FULL);
+  EXPECT_TRUE(IsMagnifierEnabled());
+  EXPECT_EQ(ash::MAGNIFIER_FULL, GetMagnifierType());
   // Enable magnifier on the pref.
+  EnableScreenManagnifierToPref(true);
   SetScreenManagnifierTypeToPref(ash::MAGNIFIER_FULL);
   SetSavedFullScreenMagnifierScale(2.5);
 
   UserManager::Get()->SessionStarted();
 
   // Confirms that the prefs are successfully loaded.
-  CheckCurrentMagnifierType(ash::MAGNIFIER_FULL);
+  EXPECT_TRUE(IsMagnifierEnabled());
+  EXPECT_EQ(ash::MAGNIFIER_FULL, GetMagnifierType());
   EXPECT_EQ(2.5, GetFullScreenMagnifierScale());
 }
 
 IN_PROC_BROWSER_TEST_F(MagnificationManagerTest, ChangeMagnifierType) {
-  // Changes to full screen magnifier and confirms that.
-  SetScreenManagnifierType(ash::MAGNIFIER_FULL);
-  CheckCurrentMagnifierType(ash::MAGNIFIER_FULL);
+  // Enables/disables full screen magnifier.
+  SetMagnifierEnabled(false);
+  SetMagnifierType(ash::MAGNIFIER_FULL);
+  EXPECT_FALSE(IsMagnifierEnabled());
+  EXPECT_EQ(ash::MAGNIFIER_FULL, GetMagnifierType());
 
-  // Changes to partial screen magnifier and confirms that.
-  SetScreenManagnifierType(ash::MAGNIFIER_PARTIAL);
-  CheckCurrentMagnifierType(ash::MAGNIFIER_PARTIAL);
+  SetMagnifierEnabled(true);
+  EXPECT_TRUE(IsMagnifierEnabled());
+  EXPECT_EQ(ash::MAGNIFIER_FULL, GetMagnifierType());
 
-  // Disable magnifier and confirms that.
-  SetScreenManagnifierType(ash::MAGNIFIER_OFF);
-  CheckCurrentMagnifierType(ash::MAGNIFIER_OFF);
+  SetMagnifierEnabled(false);
+  EXPECT_FALSE(IsMagnifierEnabled());
+  EXPECT_EQ(ash::MAGNIFIER_FULL, GetMagnifierType());
 
-  // Changes to full screen magnifier again and confirms that.
-  SetScreenManagnifierType(ash::MAGNIFIER_FULL);
-  CheckCurrentMagnifierType(ash::MAGNIFIER_FULL);
+  // Enables/disables partial screen magnifier.
+  SetMagnifierType(ash::MAGNIFIER_PARTIAL);
+  EXPECT_FALSE(IsMagnifierEnabled());
+  EXPECT_EQ(ash::MAGNIFIER_FULL, GetMagnifierType());
 
-  // Logs in
-  UserManager::Get()->UserLoggedIn("owner@invalid.domain", true);
-  UserManager::Get()->SessionStarted();
+  SetMagnifierEnabled(true);
+  EXPECT_TRUE(IsMagnifierEnabled());
+  EXPECT_EQ(ash::MAGNIFIER_FULL, GetMagnifierType());
 
-  // Changes to full screen magnifier and confirms that.
-  SetScreenManagnifierType(ash::MAGNIFIER_FULL);
-  CheckCurrentMagnifierType(ash::MAGNIFIER_FULL);
+  SetMagnifierEnabled(false);
+  EXPECT_FALSE(IsMagnifierEnabled());
+  EXPECT_EQ(ash::MAGNIFIER_FULL, GetMagnifierType());
 
-  // Changes to partial screen magnifier and confirms that.
-  SetScreenManagnifierType(ash::MAGNIFIER_PARTIAL);
-  CheckCurrentMagnifierType(ash::MAGNIFIER_PARTIAL);
+  // Changes the magnifier type when the magnifier is enabled.
+  SetMagnifierType(ash::MAGNIFIER_FULL);
+  SetMagnifierEnabled(true);
+  EXPECT_TRUE(IsMagnifierEnabled());
+  EXPECT_EQ(ash::MAGNIFIER_FULL, GetMagnifierType());
 
-  // Disable magnifier and confirms that.
-  SetScreenManagnifierType(ash::MAGNIFIER_OFF);
-  CheckCurrentMagnifierType(ash::MAGNIFIER_OFF);
+  SetMagnifierType(ash::MAGNIFIER_PARTIAL);
+  EXPECT_TRUE(IsMagnifierEnabled());
+  EXPECT_EQ(ash::MAGNIFIER_FULL, GetMagnifierType());
 
-  // Changes to full screen magnifier again and confirms that.
-  SetScreenManagnifierType(ash::MAGNIFIER_FULL);
-  CheckCurrentMagnifierType(ash::MAGNIFIER_FULL);
+  SetMagnifierType(ash::MAGNIFIER_FULL);
+  EXPECT_TRUE(IsMagnifierEnabled());
+  EXPECT_EQ(ash::MAGNIFIER_FULL, GetMagnifierType());
+
+  // Changes the magnifier type when the magnifier is disabled.
+  SetMagnifierEnabled(false);
+  SetMagnifierType(ash::MAGNIFIER_FULL);
+  EXPECT_FALSE(IsMagnifierEnabled());
+  EXPECT_EQ(ash::MAGNIFIER_FULL, GetMagnifierType());
+
+  SetMagnifierType(ash::MAGNIFIER_PARTIAL);
+  EXPECT_FALSE(IsMagnifierEnabled());
+  EXPECT_EQ(ash::MAGNIFIER_FULL, GetMagnifierType());
+
+  SetMagnifierType(ash::MAGNIFIER_FULL);
+  EXPECT_FALSE(IsMagnifierEnabled());
+  EXPECT_EQ(ash::MAGNIFIER_FULL, GetMagnifierType());
 }
 
 IN_PROC_BROWSER_TEST_F(MagnificationManagerTest, TypePref) {
@@ -222,48 +279,44 @@ IN_PROC_BROWSER_TEST_F(MagnificationManagerTest, TypePref) {
   UserManager::Get()->SessionStarted();
 
   // Confirms that magnifier is disabled just after login.
-  CheckCurrentMagnifierType(ash::MAGNIFIER_OFF);
+  EXPECT_FALSE(IsMagnifierEnabled());
 
   // Sets the pref as true to enable magnifier.
   SetScreenManagnifierTypeToPref(ash::MAGNIFIER_FULL);
+  EnableScreenManagnifierToPref(true);
   // Confirms that magnifier is enabled.
-  CheckCurrentMagnifierType(ash::MAGNIFIER_FULL);
-
-  // Sets the pref as false to disabled magnifier.
-  SetScreenManagnifierTypeToPref(ash::MAGNIFIER_OFF);
-  // Confirms that magnifier is disabled.
-  CheckCurrentMagnifierType(ash::MAGNIFIER_OFF);
-
-  // Sets the pref as true to enable magnifier again.
-  SetScreenManagnifierTypeToPref(ash::MAGNIFIER_FULL);
-  // Confirms that magnifier is enabled.
-  CheckCurrentMagnifierType(ash::MAGNIFIER_FULL);
+  EXPECT_TRUE(IsMagnifierEnabled());
+  EXPECT_EQ(ash::MAGNIFIER_FULL, GetMagnifierType());
 }
 
-IN_PROC_BROWSER_TEST_F(MagnificationManagerTest, ResumeSavedTypePref) {
+IN_PROC_BROWSER_TEST_F(MagnificationManagerTest, ResumeSavedTypeFullPref) {
   // Loads the profile of the user.
   UserManager::Get()->UserLoggedIn("owner@invalid.domain", true);
 
   // Sets the pref as true to enable magnifier before login.
+  EnableScreenManagnifierToPref(true);
   SetScreenManagnifierTypeToPref(ash::MAGNIFIER_FULL);
 
   // Logs in.
   UserManager::Get()->SessionStarted();
 
   // Confirms that magnifier is enabled just after login.
-  CheckCurrentMagnifierType(ash::MAGNIFIER_FULL);
+  EXPECT_TRUE(IsMagnifierEnabled());
+  EXPECT_EQ(ash::MAGNIFIER_FULL, GetMagnifierType());
 }
 
 IN_PROC_BROWSER_TEST_F(MagnificationManagerTest, ScalePref) {
-  SetScreenManagnifierType(ash::MAGNIFIER_OFF);
-  CheckCurrentMagnifierType(ash::MAGNIFIER_OFF);
+  SetMagnifierEnabled(false);
+  EXPECT_FALSE(IsMagnifierEnabled());
 
   // Sets 2.5x to the pref.
   SetSavedFullScreenMagnifierScale(2.5);
 
   // Enables full screen magnifier.
-  SetScreenManagnifierType(ash::MAGNIFIER_FULL);
-  CheckCurrentMagnifierType(ash::MAGNIFIER_FULL);
+  SetMagnifierType(ash::MAGNIFIER_FULL);
+  SetMagnifierEnabled(true);
+  EXPECT_TRUE(IsMagnifierEnabled());
+  EXPECT_EQ(ash::MAGNIFIER_FULL, GetMagnifierType());
 
   // Confirms that 2.5x is restored.
   EXPECT_EQ(2.5, GetFullScreenMagnifierScale());
@@ -274,64 +327,36 @@ IN_PROC_BROWSER_TEST_F(MagnificationManagerTest, ScalePref) {
 }
 
 IN_PROC_BROWSER_TEST_F(MagnificationManagerTest, InvalidScalePref) {
-  // TEST 1: too small scale
-  SetScreenManagnifierType(ash::MAGNIFIER_OFF);
-  CheckCurrentMagnifierType(ash::MAGNIFIER_OFF);
+  // TEST 1: Sets too small scale
+  SetMagnifierEnabled(false);
+  EXPECT_FALSE(IsMagnifierEnabled());
 
   // Sets too small value to the pref.
   SetSavedFullScreenMagnifierScale(0.5);
 
   // Enables full screen magnifier.
-  SetScreenManagnifierType(ash::MAGNIFIER_FULL);
-  CheckCurrentMagnifierType(ash::MAGNIFIER_FULL);
+  SetMagnifierType(ash::MAGNIFIER_FULL);
+  SetMagnifierEnabled(true);
+  EXPECT_TRUE(IsMagnifierEnabled());
+  EXPECT_EQ(ash::MAGNIFIER_FULL, GetMagnifierType());
 
   // Confirms that the actual scale is set to the minimum scale.
   EXPECT_EQ(1.0, GetFullScreenMagnifierScale());
 
-  // TEST 2: too large scale
-  SetScreenManagnifierType(ash::MAGNIFIER_OFF);
-  CheckCurrentMagnifierType(ash::MAGNIFIER_OFF);
+  // TEST 2: Sets too large scale
+  SetMagnifierEnabled(false);
+  EXPECT_FALSE(IsMagnifierEnabled());
 
   // Sets too large value to the pref.
   SetSavedFullScreenMagnifierScale(50.0);
 
   // Enables full screen magnifier.
-  SetScreenManagnifierType(ash::MAGNIFIER_FULL);
-  CheckCurrentMagnifierType(ash::MAGNIFIER_FULL);
+  SetMagnifierEnabled(true);
+  EXPECT_TRUE(IsMagnifierEnabled());
+  EXPECT_EQ(ash::MAGNIFIER_FULL, GetMagnifierType());
 
   // Confirms that the actual scale is set to the maximum scale.
   EXPECT_EQ(4.0, GetFullScreenMagnifierScale());
-}
-
-IN_PROC_BROWSER_TEST_F(MagnificationManagerTest, ChangingTypeInvokesObserver) {
-  // Logs in
-  UserManager::Get()->UserLoggedIn("owner@invalid.domain", true);
-  UserManager::Get()->SessionStarted();
-
-  // Before the test, sets to full magnifier.
-  SetScreenManagnifierTypeToPref(ash::MAGNIFIER_FULL);
-  CheckCurrentMagnifierType(ash::MAGNIFIER_FULL);
-
-  // Disables magnifier and confirms observer is invoked.
-  observed_ = false;
-  SetScreenManagnifierTypeToPref(ash::MAGNIFIER_OFF);
-  EXPECT_TRUE(observed_);
-  EXPECT_EQ(observed_type_, ash::MAGNIFIER_OFF);
-  CheckCurrentMagnifierType(ash::MAGNIFIER_OFF);
-
-  // Enables full screen magnifier and confirms observer is invoked.
-  observed_ = false;
-  SetScreenManagnifierTypeToPref(ash::MAGNIFIER_FULL);
-  EXPECT_TRUE(observed_);
-  EXPECT_EQ(observed_type_, ash::MAGNIFIER_FULL);
-  CheckCurrentMagnifierType(ash::MAGNIFIER_FULL);
-
-  // Disables magnifier again and confirms observer is invoked.
-  observed_ = false;
-  SetScreenManagnifierTypeToPref(ash::MAGNIFIER_OFF);
-  EXPECT_TRUE(observed_);
-  EXPECT_EQ(observed_type_, ash::MAGNIFIER_OFF);
-  CheckCurrentMagnifierType(ash::MAGNIFIER_OFF);
 }
 
 }  // namespace chromeos

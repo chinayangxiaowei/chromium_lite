@@ -39,13 +39,14 @@ double NetworkIconAnimation::GetAnimation() {
 }
 
 void NetworkIconAnimation::AddObserver(AnimationObserver* observer) {
-  observers_.AddObserver(observer);
+  if (!observers_.HasObserver(observer))
+    observers_.AddObserver(observer);
 }
 
 void NetworkIconAnimation::RemoveObserver(AnimationObserver* observer) {
   observers_.RemoveObserver(observer);
   if (observers_.size() == 0)
-    animation_.Stop();
+    animation_.Reset();  // Stops the animation and resets the current value.
 }
 
 // static

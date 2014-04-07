@@ -112,6 +112,12 @@ class ASH_EXPORT SystemTray : public internal::TrayBackgroundView,
   // of being created).
   bool HasSystemBubble() const;
 
+  // Returns true if there is a notification bubble.
+  bool HasNotificationBubble() const;
+
+  // Returns true if the system_bubble_ exists and is of type |type|.
+  bool HasSystemBubbleType(internal::SystemTrayBubble::BubbleType type);
+
   // Returns a pointer to the system bubble or NULL if none.
   internal::SystemTrayBubble* GetSystemBubble();
 
@@ -124,7 +130,8 @@ class ASH_EXPORT SystemTray : public internal::TrayBackgroundView,
   // Accessors for testing.
 
   // Returns true if the bubble exists.
-  bool CloseBubbleForTest() const;
+  bool CloseSystemBubbleForTest() const;
+  bool CloseNotificationBubbleForTest() const;
 
   // Overridden from TrayBackgroundView.
   virtual void SetShelfAlignment(ShelfAlignment alignment) OVERRIDE;
@@ -151,9 +158,6 @@ class ASH_EXPORT SystemTray : public internal::TrayBackgroundView,
  private:
   // Creates the default set of items for the sytem tray.
   void CreateItems(SystemTrayDelegate* delegate);
-
-  // Returns true if the system_bubble_ exists and is of type |type|.
-  bool HasSystemBubbleType(internal::SystemTrayBubble::BubbleType type);
 
   // Resets |system_bubble_| and clears any related state.
   void DestroySystemBubble();

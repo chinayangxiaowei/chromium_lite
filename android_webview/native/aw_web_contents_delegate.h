@@ -7,7 +7,7 @@
 
 #include <jni.h>
 
-#include "content/components/web_contents_delegate_android/web_contents_delegate_android.h"
+#include "components/web_contents_delegate_android/web_contents_delegate_android.h"
 
 namespace android_webview {
 
@@ -15,11 +15,11 @@ namespace android_webview {
 // Should contain WebContentsDelegate code required by WebView that should not
 // be part of the Chromium Android port.
 class AwWebContentsDelegate
-    : public content::WebContentsDelegateAndroid {
+    : public components::WebContentsDelegateAndroid {
  public:
   AwWebContentsDelegate(JNIEnv* env, jobject obj);
   virtual ~AwWebContentsDelegate();
-  virtual content::JavaScriptDialogCreator* GetJavaScriptDialogCreator()
+  virtual content::JavaScriptDialogManager* GetJavaScriptDialogManager()
       OVERRIDE;
   virtual void FindReply(content::WebContents* web_contents,
                          int request_id,
@@ -30,8 +30,6 @@ class AwWebContentsDelegate
   virtual bool CanDownload(content::RenderViewHost* source,
                            int request_id,
                            const std::string& request_method) OVERRIDE;
-  virtual void OnStartDownload(content::WebContents* source,
-                               content::DownloadItem* download) OVERRIDE;
   virtual void AddNewContents(content::WebContents* source,
                               content::WebContents* new_contents,
                               WindowOpenDisposition disposition,

@@ -108,7 +108,7 @@ int ContentSettingImageView::GetTextAnimationSize(double state,
   }
 }
 
-void ContentSettingImageView::OnWidgetClosing(views::Widget* widget) {
+void ContentSettingImageView::OnWidgetDestroying(views::Widget* widget) {
   if (bubble_widget_) {
     bubble_widget_->RemoveObserver(this);
     bubble_widget_ = NULL;
@@ -136,5 +136,5 @@ void ContentSettingImageView::OnClick(LocationBarView* parent) {
       views::BubbleBorder::TOP_RIGHT);
   bubble_widget_ = parent->delegate()->CreateViewsBubble(bubble);
   bubble_widget_->AddObserver(this);
-  bubble->Show();
+  bubble->GetWidget()->Show();
 }

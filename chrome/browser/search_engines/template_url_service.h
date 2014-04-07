@@ -14,7 +14,7 @@
 #include "base/gtest_prod_util.h"
 #include "base/memory/scoped_ptr.h"
 #include "base/observer_list.h"
-#include "base/prefs/public/pref_change_registrar.h"
+#include "base/prefs/pref_change_registrar.h"
 #include "chrome/browser/profiles/profile_keyed_service.h"
 #include "chrome/browser/search_engines/template_url_id.h"
 #include "chrome/browser/webdata/web_data_service.h"
@@ -445,6 +445,13 @@ class TemplateURLService : public WebDataServiceConsumer,
   bool UpdateNoNotify(TemplateURL* existing_turl,
                       const TemplateURL& new_values,
                       const SearchTermsData& old_search_terms_data);
+
+  // If the TemplateURL comes from a prepopulated URL available in the current
+  // country, update all its fields save for the keyword, short name and id so
+  // that they match the internal prepopulated URL. TemplateURLs not coming from
+  // a prepopulated URL are not modified.
+  static void UpdateTemplateURLIfPrepopulated(TemplateURL* existing_turl,
+                                              Profile* profile);
 
   // Returns the preferences we use.
   PrefService* GetPrefs();

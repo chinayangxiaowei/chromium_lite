@@ -5,6 +5,7 @@
 #ifndef ASH_SYSTEM_TRAY_TRAY_DETAILS_VIEW_H_
 #define ASH_SYSTEM_TRAY_TRAY_DETAILS_VIEW_H_
 
+#include "ash/system/tray/special_popup_row.h"
 #include "ui/views/view.h"
 
 namespace views {
@@ -19,7 +20,6 @@ namespace internal {
 
 class FixedSizedScrollView;
 class ScrollBorder;
-class SpecialPopupRow;
 class ViewClickListener;
 
 class TrayDetailsView : public views::View {
@@ -34,6 +34,9 @@ class TrayDetailsView : public views::View {
   // Creates a scrollable list. The list has a border at the bottom if there is
   // any other view between the list and the footer row at the bottom.
   void CreateScrollableList();
+
+  // Adds a separator in scrollable list.
+  void AddScrollSeparator();
 
   // Removes (and destroys) all child views.
   void Reset();

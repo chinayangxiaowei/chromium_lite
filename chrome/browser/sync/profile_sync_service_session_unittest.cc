@@ -15,6 +15,7 @@
 #include "base/message_loop.h"
 #include "base/stl_util.h"
 #include "base/time.h"
+#include "base/utf_string_conversions.h"
 #include "chrome/browser/sessions/session_types_test_helper.h"
 #include "chrome/browser/signin/signin_manager.h"
 #include "chrome/browser/signin/signin_manager_factory.h"
@@ -26,6 +27,8 @@
 #include "chrome/browser/sync/glue/session_model_associator.h"
 #include "chrome/browser/sync/glue/sync_backend_host.h"
 #include "chrome/browser/sync/glue/synced_device_tracker.h"
+#include "chrome/browser/sync/glue/synced_tab_delegate.h"
+#include "chrome/browser/sync/glue/tab_node_pool.h"
 #include "chrome/browser/sync/profile_sync_components_factory_mock.h"
 #include "chrome/browser/sync/profile_sync_service_factory.h"
 #include "chrome/browser/sync/profile_sync_test_util.h"
@@ -171,6 +174,18 @@ void VerifySyncedSession(
   }
 }
 
+bool CompareMemoryToString(
+    const std::string& str,
+    const scoped_refptr<base::RefCountedMemory>& mem) {
+  if (mem->size() != str.size())
+    return false;
+  for (size_t i = 0; i <mem->size(); ++i) {
+    if (str[i] != *(mem->front() + i))
+      return false;
+  }
+  return true;
+}
+
 }  // namespace
 
 class ProfileSyncServiceSessionTest
@@ -205,9 +220,9 @@ class ProfileSyncServiceSessionTest
         content::NotificationService::AllSources());
   }
 
-  void Observe(int type,
+  virtual void Observe(int type,
       const content::NotificationSource& source,
-      const content::NotificationDetails& details) {
+      const content::NotificationDetails& details) OVERRIDE {
     switch (type) {
       case chrome::NOTIFICATION_FOREIGN_SESSION_UPDATED:
         notified_of_update_ = true;
@@ -271,7 +286,7 @@ class ProfileSyncServiceSessionTest
     EXPECT_CALL(*factory, CreateSessionSyncComponents(_, _)).
         WillOnce(Return(ProfileSyncComponentsFactory::SyncComponents(
             model_associator_, change_processor_)));
-    EXPECT_CALL(*factory, CreateDataTypeManager(_, _, _, _)).
+    EXPECT_CALL(*factory, CreateDataTypeManager(_, _, _, _, _)).
         WillOnce(ReturnNewDataTypeManager());
 
     TokenServiceFactory::GetForProfile(profile())->IssueAuthTokenForTest(
@@ -346,9 +361,17 @@ TEST_F(ProfileSyncServiceSessionTest, WriteSessionToNode) {
   ASSERT_EQ(0, header_s.window_size());
 }
 
+// Crashes sometimes on Windows, particularly XP.
+// See http://crbug.com/174951
+#if defined(OS_WIN)
+#define MAYBE_WriteFilledSessionToNode DISABLED_WriteFilledSessionToNode
+#else
+#define MAYBE_WriteFilledSessionToNode WriteFilledSessionToNode
+#endif  // defined(OS_WIN)
+
 // Test that we can fill this machine's session, write it to a node,
 // and then retrieve it.
-TEST_F(ProfileSyncServiceSessionTest, WriteFilledSessionToNode) {
+TEST_F(ProfileSyncServiceSessionTest, MAYBE_WriteFilledSessionToNode) {
   CreateRootHelper create_root(this);
   ASSERT_TRUE(StartSyncService(create_root.callback(), false));
   ASSERT_TRUE(create_root.success());
@@ -938,9 +961,17 @@ TEST_F(ProfileSyncServiceSessionTest, StaleSessionRefresh) {
   VerifySyncedSession(tag, session_reference, *(foreign_sessions[0]));
 }
 
+// Crashes sometimes on Windows, particularly XP.
+// See http://crbug.com/174951
+#if defined(OS_WIN)
+#define MAYBE_ValidTabs DISABLED_ValidTabs
+#else
+#define MAYBE_ValidTabs ValidTabs
+#endif  // defined(OS_WIN)
+
 // Test that tabs with nothing but "chrome://*" and "file://*" navigations are
 // not be synced.
-TEST_F(ProfileSyncServiceSessionTest, ValidTabs) {
+TEST_F(ProfileSyncServiceSessionTest, MAYBE_ValidTabs) {
   CreateRootHelper create_root(this);
   ASSERT_TRUE(StartSyncService(create_root.callback(), false));
   ASSERT_TRUE(create_root.success());
@@ -1130,7 +1161,7 @@ TEST_F(ProfileSyncServiceSessionTest, MissingLocalTabNode) {
   ASSERT_FALSE(error.IsSet());
   {
     // Delete the first sync tab node.
-    std::string tab_tag = SessionModelAssociator::TabIdToTag(local_tag, 0);
+    std::string tab_tag = TabNodePool::TabIdToTag(local_tag, 0);
 
     syncer::WriteTransaction trans(FROM_HERE, sync_service_->GetUserShare());
     syncer::ReadNode root(&trans);
@@ -1138,7 +1169,7 @@ TEST_F(ProfileSyncServiceSessionTest, MissingLocalTabNode) {
     syncer::WriteNode tab_node(&trans);
     ASSERT_EQ(syncer::BaseNode::INIT_OK,
               tab_node.InitByClientTagLookup(syncer::SESSIONS, tab_tag));
-    tab_node.Remove();
+    tab_node.Tombstone();
   }
   error = model_associator_->AssociateModels(NULL, NULL);
   ASSERT_FALSE(error.IsSet());
@@ -1164,11 +1195,12 @@ TEST_F(ProfileSyncServiceSessionTest, Favicons) {
   sync_pb::SessionSpecifics tab;
   BuildTabSpecifics(tag, 0, tab_list[0], &tab);
   std::string url = tab.tab().navigation(0).virtual_url();
-  std::string favicon;
+  scoped_refptr<base::RefCountedMemory> favicon;
 
   // Update associator.
   model_associator_->AssociateForeignSpecifics(meta, base::Time());
   model_associator_->AssociateForeignSpecifics(tab, base::Time());
+  MessageLoop::current()->RunUntilIdle();
   ASSERT_FALSE(model_associator_->GetSyncedFaviconForPageURL(url, &favicon));
 
   // Now add a favicon.
@@ -1176,17 +1208,19 @@ TEST_F(ProfileSyncServiceSessionTest, Favicons) {
   tab.mutable_tab()->set_favicon_type(sync_pb::SessionTab::TYPE_WEB_FAVICON);
   tab.mutable_tab()->set_favicon("data");
   model_associator_->AssociateForeignSpecifics(tab, base::Time());
+  MessageLoop::current()->RunUntilIdle();
   ASSERT_TRUE(model_associator_->GetSyncedFaviconForPageURL(url, &favicon));
-  ASSERT_EQ("data", favicon);
+  ASSERT_TRUE(CompareMemoryToString("data", favicon));
 
-  // Simulate navigating away. The associator should delete the favicon.
+  // Simulate navigating away. The associator should not delete the favicon.
   tab.mutable_tab()->clear_navigation();
   tab.mutable_tab()->add_navigation()->set_virtual_url("http://new_url.com");
   tab.mutable_tab()->clear_favicon_source();
   tab.mutable_tab()->clear_favicon_type();
   tab.mutable_tab()->clear_favicon();
   model_associator_->AssociateForeignSpecifics(tab, base::Time());
-  ASSERT_FALSE(model_associator_->GetSyncedFaviconForPageURL(url, &favicon));
+  MessageLoop::current()->RunUntilIdle();
+  ASSERT_TRUE(model_associator_->GetSyncedFaviconForPageURL(url, &favicon));
 }
 
 TEST_F(ProfileSyncServiceSessionTest, CorruptedLocalHeader) {

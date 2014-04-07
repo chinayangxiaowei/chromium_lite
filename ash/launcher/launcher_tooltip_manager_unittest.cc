@@ -5,9 +5,11 @@
 #include "ash/launcher/launcher_tooltip_manager.h"
 
 #include "ash/root_window_controller.h"
+#include "ash/shelf/shelf_layout_manager.h"
+#include "ash/shelf/shelf_widget.h"
 #include "ash/shell.h"
+#include "ash/shell_window_ids.h"
 #include "ash/test/ash_test_base.h"
-#include "ash/wm/shelf_layout_manager.h"
 #include "ash/wm/window_util.h"
 #include "base/string16.h"
 #include "base/time.h"
@@ -41,8 +43,8 @@ class LauncherTooltipManagerTest : public AshTestBase {
     internal::RootWindowController* controller =
         Shell::GetPrimaryRootWindowController();
     tooltip_manager_.reset(new internal::LauncherTooltipManager(
-        controller->shelf(),
-        controller->launcher()->GetLauncherViewForTest()));
+        controller->GetShelfLayoutManager(),
+        controller->shelf()->launcher()->GetLauncherViewForTest()));
   }
 
   virtual void TearDown() OVERRIDE {
@@ -51,12 +53,12 @@ class LauncherTooltipManagerTest : public AshTestBase {
   }
 
   void ShowDelayed() {
-    dummy_anchor_.reset(new views::View);
+    CreateWidget();
     tooltip_manager_->ShowDelayed(dummy_anchor_.get(), string16());
   }
 
   void ShowImmediately() {
-    dummy_anchor_.reset(new views::View);
+    CreateWidget();
     tooltip_manager_->ShowImmediately(dummy_anchor_.get(), string16());
   }
 
@@ -77,10 +79,27 @@ class LauncherTooltipManagerTest : public AshTestBase {
   }
 
  protected:
+  scoped_ptr<views::Widget> widget_;
   scoped_ptr<views::View> dummy_anchor_;
   scoped_ptr<internal::LauncherTooltipManager> tooltip_manager_;
 
  private:
+  void CreateWidget() {
+    dummy_anchor_.reset(new views::View);
+
+    widget_.reset(new views::Widget);
+    views::Widget::InitParams params(
+        views::Widget::InitParams::TYPE_WINDOW_FRAMELESS);
+    params.transparent = true;
+    params.ownership = views::Widget::InitParams::WIDGET_OWNS_NATIVE_WIDGET;
+    params.parent = Shell::GetContainer(
+        Shell::GetPrimaryRootWindow(),
+        ash::internal::kShellWindowId_ShelfContainer);
+
+    widget_->Init(params);
+    widget_->SetContentsView(dummy_anchor_.get());
+  }
+
   DISALLOW_COPY_AND_ASSIGN(LauncherTooltipManagerTest);
 };
 
@@ -103,6 +122,7 @@ TEST_F(LauncherTooltipManagerTest, HideWhenShelfIsHidden) {
   scoped_ptr<views::Widget> widget(new views::Widget);
   views::Widget::InitParams params(views::Widget::InitParams::TYPE_WINDOW);
   params.ownership = views::Widget::InitParams::WIDGET_OWNS_NATIVE_WIDGET;
+  params.context = CurrentContext();
   widget->Init(params);
   widget->SetFullscreen(true);
   widget->Show();
@@ -110,7 +130,8 @@ TEST_F(LauncherTooltipManagerTest, HideWhenShelfIsHidden) {
   // Once the shelf is hidden, the tooltip should be invisible.
   ASSERT_EQ(
       SHELF_HIDDEN,
-      Shell::GetPrimaryRootWindowController()->shelf()->visibility_state());
+      Shell::GetPrimaryRootWindowController()->
+          GetShelfLayoutManager()->visibility_state());
   EXPECT_FALSE(TooltipIsVisible());
 
   // Do not show the view if the shelf is hidden.
@@ -123,11 +144,19 @@ TEST_F(LauncherTooltipManagerTest, HideWhenShelfIsHidden) {
 }
 
 TEST_F(LauncherTooltipManagerTest, HideWhenShelfIsAutoHide) {
+  // Create a visible window so auto-hide behavior is enforced.
+  views::Widget* dummy = new views::Widget;
+  views::Widget::InitParams params(views::Widget::InitParams::TYPE_WINDOW);
+  params.bounds = gfx::Rect(0, 0, 200, 200);
+  params.context = CurrentContext();
+  dummy->Init(params);
+  dummy->Show();
+
   ShowImmediately();
   ASSERT_TRUE(TooltipIsVisible());
 
   internal::ShelfLayoutManager* shelf =
-      Shell::GetPrimaryRootWindowController()->shelf();
+      Shell::GetPrimaryRootWindowController()->GetShelfLayoutManager();
   shelf->SetAutoHideBehavior(SHELF_AUTO_HIDE_BEHAVIOR_ALWAYS);
   shelf->UpdateAutoHideState();
   ASSERT_EQ(SHELF_AUTO_HIDE_HIDDEN, shelf->auto_hide_state());

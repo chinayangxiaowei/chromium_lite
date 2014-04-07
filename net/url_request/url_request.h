@@ -19,6 +19,7 @@
 #include "net/base/auth.h"
 #include "net/base/completion_callback.h"
 #include "net/base/load_states.h"
+#include "net/base/load_timing_info.h"
 #include "net/base/net_export.h"
 #include "net/base/net_log.h"
 #include "net/base/network_delegate.h"
@@ -29,11 +30,9 @@
 #include "net/http/http_response_info.h"
 #include "net/url_request/url_request_status.h"
 
-class FilePath;
 // Temporary layering violation to allow existing users of a deprecated
 // interface.
 class ChildProcessSecurityPolicyTest;
-class ComponentUpdateInterceptor;
 class TestAutomationProvider;
 class URLRequestAutomationJob;
 
@@ -59,23 +58,10 @@ class ResourceDispatcherHostTest;
 
 // Temporary layering violation to allow existing users of a deprecated
 // interface.
-namespace extensions {
-class AutoUpdateInterceptor;
-class UserScriptListenerTest;
-}
-
-// Temporary layering violation to allow existing users of a deprecated
-// interface.
 namespace fileapi {
 class FileSystemDirURLRequestJobTest;
 class FileSystemURLRequestJobTest;
 class FileWriterDelegateTest;
-}
-
-// Temporary layering violation to allow existing users of a deprecated
-// interface.
-namespace policy {
-class CannedResponseInterceptor;
 }
 
 // Temporary layering violation to allow existing users of a deprecated
@@ -89,6 +75,7 @@ namespace net {
 class CookieOptions;
 class HostPortPair;
 class IOBuffer;
+struct LoadTimingInfo;
 class SSLCertRequestInfo;
 class SSLInfo;
 class UploadDataStream;
@@ -187,9 +174,7 @@ class NET_EXPORT URLRequest : NON_EXPORTED_BASE(public base::NonThreadSafe),
   class NET_EXPORT Deprecated {
    private:
     // TODO(willchan): Kill off these friend declarations.
-    friend class extensions::AutoUpdateInterceptor;
     friend class ::ChildProcessSecurityPolicyTest;
-    friend class ::ComponentUpdateInterceptor;
     friend class ::TestAutomationProvider;
     friend class ::URLRequestAutomationJob;
     friend class TestInterceptor;
@@ -198,18 +183,17 @@ class NET_EXPORT URLRequest : NON_EXPORTED_BASE(public base::NonThreadSafe),
     friend class appcache::AppCacheRequestHandlerTest;
     friend class appcache::AppCacheURLRequestJobTest;
     friend class content::ResourceDispatcherHostTest;
-    friend class extensions::UserScriptListenerTest;
     friend class fileapi::FileSystemDirURLRequestJobTest;
     friend class fileapi::FileSystemURLRequestJobTest;
     friend class fileapi::FileWriterDelegateTest;
-    friend class policy::CannedResponseInterceptor;
     friend class webkit_blob::BlobURLRequestJobTest;
 
     // Use URLRequestJobFactory::ProtocolHandler instead.
     static ProtocolFactory* RegisterProtocolFactory(const std::string& scheme,
                                                     ProtocolFactory* factory);
 
-    // Use URLRequestJobFactory::Interceptor instead.
+    // TODO(pauljensen): Remove this when AppCacheInterceptor is a
+    // ProtocolHandler, see crbug.com/161547.
     static void RegisterRequestInterceptor(Interceptor* interceptor);
     static void UnregisterRequestInterceptor(Interceptor* interceptor);
 
@@ -499,6 +483,14 @@ class NET_EXPORT URLRequest : NON_EXPORTED_BASE(public base::NonThreadSafe),
     return response_info_.ssl_info;
   }
 
+  // Gets timing information related to the request.  Events that have not yet
+  // occurred are left uninitialized.  After a second request starts, due to
+  // a redirect or authentication, values will be reset.
+  //
+  // LoadTimingInfo only contains ConnectTiming information and socket IDs for
+  // non-cached HTTP responses.
+  void GetLoadTimingInfo(LoadTimingInfo* load_timing_info) const;
+
   // Returns the cookie values included in the response, if the request is one
   // that can have cookies.  Returns true if the request is a cookie-bearing
   // type, false otherwise.  This method may only be called once the
@@ -623,11 +615,9 @@ class NET_EXPORT URLRequest : NON_EXPORTED_BASE(public base::NonThreadSafe),
 
   // Returns the priority level for this request.
   RequestPriority priority() const { return priority_; }
-  void set_priority(RequestPriority priority) {
-    DCHECK_GE(priority, MINIMUM_PRIORITY);
-    DCHECK_LT(priority, NUM_PRIORITIES);
-    priority_ = priority;
-  }
+
+  // Sets the priority level for this request and any related jobs.
+  void SetPriority(RequestPriority priority);
 
   // Returns true iff this request would be internally redirected to HTTPS
   // due to HSTS. If so, |redirect_url| is rewritten to the new HTTPS URL.
@@ -713,6 +703,10 @@ class NET_EXPORT URLRequest : NON_EXPORTED_BASE(public base::NonThreadSafe),
   // Cancels the request and set the error and ssl info for this request to the
   // passed values.
   void DoCancel(int error, const SSLInfo& ssl_info);
+
+  // Called by the URLRequestJob when the headers are received, before any other
+  // method, to allow caching of load timing information.
+  void OnHeadersComplete();
 
   // Notifies the network delegate that the request has been completed.
   // This does not imply a successful completion. Also a canceled request is
@@ -838,6 +832,10 @@ class NET_EXPORT URLRequest : NON_EXPORTED_BASE(public base::NonThreadSafe),
   int64 received_response_content_length_;
 
   base::TimeTicks creation_time_;
+
+  // Timing information for the most recent request.  Its start times are
+  // populated during Start(), and the rest are populated in OnResponseReceived.
+  LoadTimingInfo load_timing_info_;
 
   scoped_ptr<const base::debug::StackTrace> stack_trace_;
 

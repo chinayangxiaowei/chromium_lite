@@ -129,13 +129,12 @@ void ScreenPositionController::ConvertPointFromScreen(
   aura::Window::ConvertPointToTarget(root, window, point);
 }
 
-void ScreenPositionController::ConvertNativePointToScreen(
-    aura::Window* window,
+void ScreenPositionController::ConvertHostPointToScreen(
+    aura::RootWindow* root_window,
     gfx::Point* point) {
+  root_window->ConvertPointFromHost(point);
   std::pair<aura::RootWindow*, gfx::Point> pair =
-      GetRootWindowRelativeToWindow(
-          window,
-          ui::ConvertPointToDIP(window->GetRootWindow()->layer(), *point));
+      GetRootWindowRelativeToWindow(root_window, *point);
   *point = pair.second;
   ConvertPointToScreen(pair.first, point);
 }
@@ -195,7 +194,7 @@ void ScreenPositionController::SetBounds(aura::Window* window,
 
       // Restore focused/active window.
       if (tracker.Contains(focused)) {
-        aura::client::GetFocusClient(window)->FocusWindow(focused, NULL);
+        aura::client::GetFocusClient(window)->FocusWindow(focused);
       } else if (tracker.Contains(active)) {
         activation_client->ActivateWindow(active);
       }

@@ -10,11 +10,12 @@
 #include "chrome/browser/ui/host_desktop.h"
 #include "content/public/browser/browser_context.h"
 #include "content/public/browser/global_request_id.h"
+#include "content/public/browser/page_navigator.h"
 #include "content/public/common/page_transition_types.h"
 #include "content/public/common/referrer.h"
 #include "googleurl/src/gurl.h"
+#include "ui/base/window_open_disposition.h"
 #include "ui/gfx/rect.h"
-#include "webkit/glue/window_open_disposition.h"
 
 class Browser;
 class Profile;
@@ -214,6 +215,10 @@ struct NavigateParams {
  private:
   NavigateParams();
 };
+
+// Copies fields from |params| struct to |nav_params| struct.
+void FillNavigateParamsFromOpenURLParams(chrome::NavigateParams* nav_params,
+                                         const content::OpenURLParams& params);
 
 // Navigates according to the configuration specified in |params|.
 void Navigate(NavigateParams* params);

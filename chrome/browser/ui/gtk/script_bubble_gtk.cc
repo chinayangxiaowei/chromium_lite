@@ -8,7 +8,7 @@
 #include <vector>
 
 #include "base/i18n/rtl.h"
-#include "base/string_number_conversions.h"
+#include "base/strings/string_number_conversions.h"
 #include "chrome/browser/extensions/extension_service.h"
 #include "chrome/browser/extensions/extension_system.h"
 #include "chrome/browser/extensions/image_loader.h"
@@ -16,6 +16,7 @@
 #include "chrome/browser/extensions/tab_helper.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/gtk/gtk_theme_service.h"
+#include "chrome/common/extensions/api/icons/icons_handler.h"
 #include "chrome/common/extensions/extension.h"
 #include "chrome/common/extensions/extension_set.h"
 #include "chrome/common/url_constants.h"
@@ -114,8 +115,10 @@ void ScriptBubbleGtk::BuildBubble() {
     icon_controls_[extension->id()] = GTK_IMAGE(image);
     ImageLoader::Get(profile_)->LoadImageAsync(
         extension,
-        extension->GetIconResource(extension_misc::EXTENSION_ICON_BITTY,
-                                   ExtensionIconSet::MATCH_EXACTLY),
+        extensions::IconsInfo::GetIconResource(
+            extension,
+            extension_misc::EXTENSION_ICON_BITTY,
+            ExtensionIconSet::MATCH_EXACTLY),
         gfx::Size(extension_misc::EXTENSION_ICON_BITTY,
                   extension_misc::EXTENSION_ICON_BITTY),
         base::Bind(&ScriptBubbleGtk::OnIconLoaded,
@@ -130,14 +133,10 @@ void ScriptBubbleGtk::BuildBubble() {
                      G_CALLBACK(&OnItemLinkClickedThunk), this);
   }
 
-  BubbleGtk::ArrowLocationGtk arrow_location =
-      !base::i18n::IsRTL() ?
-      BubbleGtk::ARROW_LOCATION_TOP_RIGHT :
-      BubbleGtk::ARROW_LOCATION_TOP_LEFT;
   bubble_ = BubbleGtk::Show(anchor_,
                             NULL,
                             bubble_content,
-                            arrow_location,
+                            BubbleGtk::ANCHOR_TOP_RIGHT,
                             BubbleGtk::MATCH_SYSTEM_THEME |
                                 BubbleGtk::POPUP_WINDOW |
                                 BubbleGtk::GRAB_INPUT,

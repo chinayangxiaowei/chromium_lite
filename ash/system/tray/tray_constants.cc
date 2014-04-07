@@ -14,6 +14,9 @@ const int kPaddingFromOuterEdgeOfLauncherVerticalAlignment = 8;
 const int kPaddingFromInnerEdgeOfLauncherVerticalAlignment = 9;
 const int kPaddingFromBottomOfScreenVerticalAlignment = 10;
 
+// Top inset of system tray bubble for bottom anchor alignment.
+const int kTrayBubbleAnchorTopInsetBottomAnchor = 3;
+
 const int kTrayImageItemHorizontalPaddingBottomAlignment = 1;
 const int kTrayImageItemHorizontalPaddingVerticalAlignment = 1;
 const int kTrayImageItemVerticalPaddingVerticalAlignment = 1;
@@ -32,17 +35,17 @@ const int kTrayPopupTextSpacingVertical = 4;
 
 const int kTrayPopupItemHeight = 48;
 const int kTrayPopupDetailsIconWidth = 25;
+const int kTrayPopupScrollSeparatorHeight = 15;
 const int kTrayRoundedBorderRadius = 2;
 const int kTrayBarButtonWidth = 39;
 
 const SkColor kBackgroundColor = SkColorSetRGB(0xfe, 0xfe, 0xfe);
-const SkColor kHoverBackgroundColor = SkColorSetRGB(0xf5, 0xf5, 0xf5);
+const SkColor kHoverBackgroundColor = SkColorSetRGB(0xf3, 0xf3, 0xf3);
 const SkColor kPublicAccountBackgroundColor = SkColorSetRGB(0xf8, 0xe5, 0xb6);
 const SkColor kPublicAccountUserCardTextColor = SkColorSetRGB(0x66, 0x66, 0x66);
 const SkColor kPublicAccountUserCardNameColor = SK_ColorBLACK;
 
-const SkColor kHeaderBackgroundColorLight = SkColorSetRGB(0xf1, 0xf1, 0xf1);
-const SkColor kHeaderBackgroundColorDark = SkColorSetRGB(0xe7, 0xe7, 0xe7);
+const SkColor kHeaderBackgroundColor = SkColorSetRGB(0xf5, 0xf5, 0xf5);
 
 const SkColor kBorderDarkColor = SkColorSetRGB(0xaa, 0xaa, 0xaa);
 const SkColor kBorderLightColor = SkColorSetRGB(0xeb, 0xeb, 0xeb);
@@ -54,8 +57,10 @@ const SkColor kHeaderTextColorHover = SkColorSetARGB(0xd3, 0, 0, 0);
 const int kTrayPopupMinWidth = 300;
 const int kTrayPopupMaxWidth = 500;
 const int kNotificationIconWidth = 40;
-// TODO(stevenjb): This calculation is wrong (http://crbug.com/163402).
+const int kNotificationButtonWidth = 32;
 const int kTrayNotificationContentsWidth = kTrayPopupMinWidth -
-    (kNotificationIconWidth + kTrayPopupPaddingHorizontal) * 2;
+    (kNotificationIconWidth + kNotificationButtonWidth +
+     (kTrayPopupPaddingHorizontal / 2) * 3);
+const int kTraySpacing = 8;
 
 }  // namespace ash

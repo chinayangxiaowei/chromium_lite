@@ -10,20 +10,23 @@
 #include <shlobj.h>
 #include <time.h>
 
+#include <algorithm>
 #include <limits>
 #include <string>
 
-#include "base/file_path.h"
+#include "base/files/file_path.h"
 #include "base/logging.h"
 #include "base/metrics/histogram.h"
 #include "base/process_util.h"
-#include "base/string_number_conversions.h"
 #include "base/string_util.h"
+#include "base/strings/string_number_conversions.h"
 #include "base/threading/thread_restrictions.h"
 #include "base/time.h"
 #include "base/utf_string_conversions.h"
 #include "base/win/scoped_handle.h"
 #include "base/win/windows_version.h"
+
+using base::FilePath;
 
 namespace file_util {
 
@@ -306,32 +309,6 @@ bool DirectoryExists(const FilePath& path) {
   return false;
 }
 
-bool GetFileCreationLocalTimeFromHandle(HANDLE file_handle,
-                                        LPSYSTEMTIME creation_time) {
-  base::ThreadRestrictions::AssertIOAllowed();
-  if (!file_handle)
-    return false;
-
-  FILETIME utc_filetime;
-  if (!GetFileTime(file_handle, &utc_filetime, NULL, NULL))
-    return false;
-
-  FILETIME local_filetime;
-  if (!FileTimeToLocalFileTime(&utc_filetime, &local_filetime))
-    return false;
-
-  return !!FileTimeToSystemTime(&local_filetime, creation_time);
-}
-
-bool GetFileCreationLocalTime(const std::wstring& filename,
-                              LPSYSTEMTIME creation_time) {
-  base::ThreadRestrictions::AssertIOAllowed();
-  base::win::ScopedHandle file_handle(
-      CreateFile(filename.c_str(), GENERIC_READ, kFileShareAll, NULL,
-                 OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL));
-  return GetFileCreationLocalTimeFromHandle(file_handle.Get(), creation_time);
-}
-
 bool GetTempDir(FilePath* path) {
   base::ThreadRestrictions::AssertIOAllowed();
 
@@ -567,8 +544,8 @@ int WriteFile(const FilePath& filename, const char* data, int size) {
                                           0,
                                           NULL));
   if (!file) {
-    DLOG(WARNING) << "CreateFile failed for path " << filename.value()
-                  << " error code=" << GetLastError();
+    DLOG_GETLASTERROR(WARNING) << "CreateFile failed for path "
+                               << filename.value();
     return -1;
   }
 
@@ -579,8 +556,8 @@ int WriteFile(const FilePath& filename, const char* data, int size) {
 
   if (!result) {
     // WriteFile failed.
-    DLOG(WARNING) << "writing file " << filename.value()
-                  << " failed, error code=" << GetLastError();
+    DLOG_GETLASTERROR(WARNING) << "writing file " << filename.value()
+                               << " failed";
   } else {
     // Didn't write all the bytes.
     DLOG(WARNING) << "wrote" << written << " bytes to "
@@ -599,8 +576,8 @@ int AppendToFile(const FilePath& filename, const char* data, int size) {
                                           0,
                                           NULL));
   if (!file) {
-    DLOG(WARNING) << "CreateFile failed for path " << filename.value()
-                  << " error code=" << GetLastError();
+    DLOG_GETLASTERROR(WARNING) << "CreateFile failed for path "
+                               << filename.value();
     return -1;
   }
 
@@ -611,8 +588,8 @@ int AppendToFile(const FilePath& filename, const char* data, int size) {
 
   if (!result) {
     // WriteFile failed.
-    DLOG(WARNING) << "writing file " << filename.value()
-                  << " failed, error code=" << GetLastError();
+    DLOG_GETLASTERROR(WARNING) << "writing file " << filename.value()
+                               << " failed";
   } else {
     // Didn't write all the bytes.
     DLOG(WARNING) << "wrote" << written << " bytes to "
@@ -778,82 +755,6 @@ FilePath FileEnumerator::Next() {
   return FilePath();
 }
 
-///////////////////////////////////////////////
-// MemoryMappedFile
-
-MemoryMappedFile::MemoryMappedFile()
-    : file_(INVALID_HANDLE_VALUE),
-      file_mapping_(INVALID_HANDLE_VALUE),
-      data_(NULL),
-      length_(INVALID_FILE_SIZE) {
-}
-
-bool MemoryMappedFile::InitializeAsImageSection(const FilePath& file_name) {
-  if (IsValid())
-    return false;
-  file_ = base::CreatePlatformFile(
-      file_name, base::PLATFORM_FILE_OPEN | base::PLATFORM_FILE_READ,
-      NULL, NULL);
-
-  if (file_ == base::kInvalidPlatformFileValue) {
-    DLOG(ERROR) << "Couldn't open " << file_name.value();
-    return false;
-  }
-
-  if (!MapFileToMemoryInternalEx(SEC_IMAGE)) {
-    CloseHandles();
-    return false;
-  }
-
-  return true;
-}
-
-bool MemoryMappedFile::MapFileToMemoryInternal() {
-  return MapFileToMemoryInternalEx(0);
-}
-
-bool MemoryMappedFile::MapFileToMemoryInternalEx(int flags) {
-  base::ThreadRestrictions::AssertIOAllowed();
-
-  if (file_ == INVALID_HANDLE_VALUE)
-    return false;
-
-  length_ = ::GetFileSize(file_, NULL);
-  if (length_ == INVALID_FILE_SIZE)
-    return false;
-
-  file_mapping_ = ::CreateFileMapping(file_, NULL, PAGE_READONLY | flags,
-                                      0, 0, NULL);
-  if (!file_mapping_) {
-    // According to msdn, system error codes are only reserved up to 15999.
-    // http://msdn.microsoft.com/en-us/library/ms681381(v=VS.85).aspx.
-    UMA_HISTOGRAM_ENUMERATION("MemoryMappedFile.CreateFileMapping",
-                              logging::GetLastSystemErrorCode(), 16000);
-    return false;
-  }
-
-  data_ = static_cast<uint8*>(
-      ::MapViewOfFile(file_mapping_, FILE_MAP_READ, 0, 0, 0));
-  if (!data_) {
-    UMA_HISTOGRAM_ENUMERATION("MemoryMappedFile.MapViewOfFile",
-                              logging::GetLastSystemErrorCode(), 16000);
-  }
-  return data_ != NULL;
-}
-
-void MemoryMappedFile::CloseHandles() {
-  if (data_)
-    ::UnmapViewOfFile(data_);
-  if (file_mapping_ != INVALID_HANDLE_VALUE)
-    ::CloseHandle(file_mapping_);
-  if (file_ != INVALID_HANDLE_VALUE)
-    ::CloseHandle(file_);
-
-  data_ = NULL;
-  file_mapping_ = file_ = INVALID_HANDLE_VALUE;
-  length_ = INVALID_FILE_SIZE;
-}
-
 bool HasFileBeenModifiedSince(const FileEnumerator::FindInfo& find_info,
                               const base::Time& cutoff_time) {
   base::ThreadRestrictions::AssertIOAllowed();
@@ -972,6 +873,30 @@ bool NormalizeToNativeFilePath(const FilePath& path, FilePath* nt_path) {
   }
   ::UnmapViewOfFile(file_view);
   return success;
+}
+
+int GetMaximumPathComponentLength(const FilePath& path) {
+  base::ThreadRestrictions::AssertIOAllowed();
+
+  wchar_t volume_path[MAX_PATH];
+  if (!GetVolumePathNameW(path.NormalizePathSeparators().value().c_str(),
+                          volume_path,
+                          arraysize(volume_path))) {
+    return -1;
+  }
+
+  DWORD max_length = 0;
+  if (!GetVolumeInformationW(volume_path, NULL, 0, NULL, &max_length, NULL,
+                             NULL, 0)) {
+    return -1;
+  }
+
+  // Length of |path| with path separator appended.
+  size_t prefix = path.StripTrailingSeparators().value().size() + 1;
+  // The whole path string must be shorter than MAX_PATH. That is, it must be
+  // prefix + component_length < MAX_PATH (or equivalently, <= MAX_PATH - 1).
+  int whole_path_limit = std::max(0, MAX_PATH - 1 - static_cast<int>(prefix));
+  return std::min(whole_path_limit, static_cast<int>(max_length));
 }
 
 }  // namespace file_util

@@ -18,14 +18,15 @@
 #include "net/base/auth.h"
 #include "net/base/host_port_pair.h"
 #include "net/base/load_flags.h"
+#include "net/base/load_timing_info.h"
 #include "net/base/net_errors.h"
 #include "net/base/net_log.h"
 #include "net/base/network_change_notifier.h"
 #include "net/base/network_delegate.h"
-#include "net/base/ssl_cert_request_info.h"
 #include "net/base/upload_data_stream.h"
 #include "net/http/http_response_headers.h"
 #include "net/http/http_util.h"
+#include "net/ssl/ssl_cert_request_info.h"
 #include "net/url_request/url_request_context.h"
 #include "net/url_request/url_request_error_job.h"
 #include "net/url_request/url_request_job.h"
@@ -150,7 +151,7 @@ URLRequest::URLRequest(const GURL& url,
       is_pending_(false),
       is_redirecting_(false),
       redirect_limit_(kMaxRedirects),
-      priority_(LOWEST),
+      priority_(DEFAULT_PRIORITY),
       identifier_(GenerateURLRequestIdentifier()),
       blocked_on_delegate_(false),
       ALLOW_THIS_IN_INITIALIZER_LIST(before_request_callback_(
@@ -189,7 +190,7 @@ URLRequest::URLRequest(const GURL& url,
       is_pending_(false),
       is_redirecting_(false),
       redirect_limit_(kMaxRedirects),
-      priority_(LOWEST),
+      priority_(DEFAULT_PRIORITY),
       identifier_(GenerateURLRequestIdentifier()),
       blocked_on_delegate_(false),
       ALLOW_THIS_IN_INITIALIZER_LIST(before_request_callback_(
@@ -370,6 +371,10 @@ HttpResponseHeaders* URLRequest::response_headers() const {
   return response_info_.headers.get();
 }
 
+void URLRequest::GetLoadTimingInfo(LoadTimingInfo* load_timing_info) const {
+  *load_timing_info = load_timing_info_;
+}
+
 bool URLRequest::GetResponseCookies(ResponseCookies* cookies) {
   DCHECK(job_);
   return job_->GetResponseCookies(cookies);
@@ -453,7 +458,11 @@ void URLRequest::Start() {
   DCHECK_EQ(network_delegate_, context_->network_delegate());
 
   g_url_requests_started = true;
-  response_info_.request_time = Time::Now();
+  response_info_.request_time = base::Time::Now();
+
+  load_timing_info_ = LoadTimingInfo();
+  load_timing_info_.request_start_time = response_info_.request_time;
+  load_timing_info_.request_start = base::TimeTicks::Now();
 
   // Only notify the delegate for the initial request.
   if (network_delegate_) {
@@ -517,6 +526,7 @@ void URLRequest::StartJob(URLRequestJob* job) {
 
   job_ = job;
   job_->SetExtraRequestHeaders(extra_request_headers_);
+  job_->SetPriority(priority_);
 
   if (upload_data_stream_.get())
     job_->SetUpload(upload_data_stream_.get());
@@ -719,7 +729,12 @@ void URLRequest::PrepareToRestart() {
   OrphanJob();
 
   response_info_ = HttpResponseInfo();
-  response_info_.request_time = Time::Now();
+  response_info_.request_time = base::Time::Now();
+
+  load_timing_info_ = LoadTimingInfo();
+  load_timing_info_.request_start_time = response_info_.request_time;
+  load_timing_info_.request_start = base::TimeTicks::Now();
+
   status_ = URLRequestStatus();
   is_pending_ = false;
 }
@@ -814,6 +829,20 @@ int64 URLRequest::GetExpectedContentSize() const {
   return expected_content_size;
 }
 
+void URLRequest::SetPriority(RequestPriority priority) {
+  DCHECK_GE(priority, MINIMUM_PRIORITY);
+  DCHECK_LT(priority, NUM_PRIORITIES);
+  if (priority_ == priority)
+    return;
+
+  priority_ = priority;
+  if (job_) {
+    net_log_.AddEvent(NetLog::TYPE_URL_REQUEST_SET_PRIORITY,
+                      NetLog::IntegerCallback("priority", priority_));
+    job_->SetPriority(priority_);
+  }
+}
+
 bool URLRequest::GetHSTSRedirect(GURL* redirect_url) const {
   const GURL& url = this->url();
   if (!url.SchemeIs("http"))
@@ -824,7 +853,7 @@ bool URLRequest::GetHSTSRedirect(GURL* redirect_url) const {
           url.host(),
           SSLConfigService::IsSNIAvailable(context()->ssl_config_service()),
           &domain_state) &&
-      domain_state.ShouldRedirectHTTPToHTTPS()) {
+      domain_state.ShouldUpgradeToSSL()) {
     url_canon::Replacements<char> replacements;
     const char kNewScheme[] = "https";
     replacements.SetScheme(kNewScheme,
@@ -929,14 +958,23 @@ void URLRequest::NotifyReadCompleted(int bytes_read) {
 
   // Notify NetworkChangeNotifier that we just received network data.
   // This is to identify cases where the NetworkChangeNotifier thinks we
-  // are off-line but we are still receiving network data (crbug.com/124069).
+  // are off-line but we are still receiving network data (crbug.com/124069),
+  // and to get rough network connection measurements.
   if (bytes_read > 0 && !was_cached())
-    NetworkChangeNotifier::NotifyDataReceived(url());
+    NetworkChangeNotifier::NotifyDataReceived(*this, bytes_read);
 
   if (delegate_)
     delegate_->OnReadCompleted(this, bytes_read);
 
   // Nothing below this line as OnReadCompleted may delete |this|.
+}
+
+void URLRequest::OnHeadersComplete() {
+  // Cache load timing information now, as information will be lost once the
+  // socket is closed and the ClientSocketHandle is Reset, which will happen
+  // once the body is complete.  The start times should already be populated.
+  if (job_)
+    job_->GetLoadTimingInfo(&load_timing_info_);
 }
 
 void URLRequest::NotifyRequestCompleted() {

@@ -6,13 +6,14 @@
   'dependencies': [
     '../base/base.gyp:base',
     '../build/temp_gyp/googleurl.gyp:googleurl',
+    '../components/tracing.gyp:tracing',
     '../media/media.gyp:media',
     '../net/net.gyp:net',
     '../skia/skia.gyp:skia',
     '../third_party/icu/icu.gyp:icuuc',
+    '../ui/ui.gyp:shell_dialogs',
     '../ui/ui.gyp:ui',
     '../webkit/support/webkit_support.gyp:user_agent',
-    'content_components_tracing.gyp:tracing',
   ],
   'include_dirs': [
     '..',
@@ -77,13 +78,12 @@
     'public/common/resource_dispatcher_delegate.h',
     'public/common/resource_response.h',
     'public/common/result_codes.h',
-    'public/common/sandbox_init.cc',
+    'public/common/result_codes_list.h',
     'public/common/sandbox_init.h',
     'public/common/sandbox_linux.h',
     'public/common/sandbox_type_mac.h',
+    'public/common/sandboxed_process_launcher_delegate.h',
     'public/common/security_style.h',
-    'public/common/serialized_script_value.cc',
-    'public/common/serialized_script_value.h',
     'public/common/show_desktop_notification_params.cc',
     'public/common/show_desktop_notification_params.h',
     'public/common/speech_recognition_error.h',
@@ -110,10 +110,12 @@
     'common/android/command_line.h',
     'common/android/common_jni_registrar.cc',
     'common/android/common_jni_registrar.h',
-    'common/android/device_info.cc',
-    'common/android/device_info.h',
-    'common/android/surface_callback.cc',
-    'common/android/surface_callback.h',
+    'common/android/device_telephony_info.cc',
+    'common/android/device_telephony_info.h',
+    'common/android/hash_set.cc',
+    'common/android/hash_set.h',
+    'common/android/scoped_java_surface.cc',
+    'common/android/scoped_java_surface.h',
     'common/android/surface_texture_bridge.cc',
     'common/android/surface_texture_bridge.h',
     'common/android/surface_texture_listener.cc',
@@ -127,7 +129,10 @@
     'common/appcache/appcache_dispatcher.cc',
     'common/appcache/appcache_dispatcher.h',
     'common/appcache_messages.h',
-    'common/browser_plugin_messages.h',
+    'common/browser_plugin/browser_plugin_constants.cc',
+    'common/browser_plugin/browser_plugin_constants.h',
+    'common/browser_plugin/browser_plugin_message_enums.h',
+    'common/browser_plugin/browser_plugin_messages.h',
     'common/cc_messages.cc',
     'common/cc_messages.h',
     'common/child_histogram_message_filter.cc',
@@ -159,8 +164,6 @@
     'common/database_util.h',
     'common/db_message_filter.cc',
     'common/db_message_filter.h',
-    'common/debug_flags.cc',
-    'common/debug_flags.h',
     'common/desktop_notification_messages.h',
     'common/device_motion_messages.h',
     'common/device_orientation_messages.h',
@@ -191,9 +194,9 @@
     'common/font_config_ipc_linux.h',
     'common/font_list.h',
     'common/font_list_android.cc',
+    'common/font_list_linux.cc',
     'common/font_list_mac.mm',
     'common/font_list_win.cc',
-    'common/font_list_x11.cc',
     'common/gamepad_hardware_buffer.h',
     'common/gamepad_messages.h',
     'common/gamepad_seqlock.cc',
@@ -203,6 +206,8 @@
     'common/geolocation_messages.h',
     'common/gpu/client/command_buffer_proxy_impl.cc',
     'common/gpu/client/command_buffer_proxy_impl.h',
+    'common/gpu/client/context_provider_command_buffer.cc',
+    'common/gpu/client/context_provider_command_buffer.h',
     'common/gpu/client/gl_helper.cc',
     'common/gpu/client/gl_helper.h',
     'common/gpu/client/gpu_channel_host.cc',
@@ -223,6 +228,9 @@
     'common/gpu/gpu_memory_allocation.h',
     'common/gpu/gpu_memory_manager.cc',
     'common/gpu/gpu_memory_manager.h',
+    'common/gpu/gpu_memory_manager_client.cc',
+    'common/gpu/gpu_memory_manager_client.h',
+    'common/gpu/gpu_memory_tracking.cc',
     'common/gpu/gpu_memory_tracking.h',
     'common/gpu/gpu_memory_uma_stats.h',
     'common/gpu/gpu_messages.h',
@@ -276,15 +284,8 @@
     'common/indexed_db/proxy_webidbdatabase_impl.h',
     'common/indexed_db/proxy_webidbfactory_impl.cc',
     'common/indexed_db/proxy_webidbfactory_impl.h',
-    'common/indexed_db/proxy_webidbindex_impl.cc',
-    'common/indexed_db/proxy_webidbindex_impl.h',
-    'common/indexed_db/proxy_webidbobjectstore_impl.cc',
-    'common/indexed_db/proxy_webidbobjectstore_impl.h',
-    'common/indexed_db/proxy_webidbtransaction_impl.cc',
-    'common/indexed_db/proxy_webidbtransaction_impl.h',
     'common/inter_process_time_ticks_converter.cc',
     'common/inter_process_time_ticks_converter.h',
-    'common/intents_messages.h',
     'common/java_bridge_messages.h',
     'common/mac/attributed_string_coder.h',
     'common/mac/attributed_string_coder.mm',
@@ -346,10 +347,12 @@
     'common/sandbox_mac.mm',
     'common/sandbox_linux.h',
     'common/sandbox_linux.cc',
-    'common/sandbox_policy.cc',
-    'common/sandbox_policy.h',
     'common/sandbox_seccomp_bpf_linux.cc',
     'common/sandbox_seccomp_bpf_linux.h',
+    'common/sandbox_util.cc',
+    'common/sandbox_util.h',
+    'common/sandbox_win.cc',
+    'common/sandbox_win.h',
     'common/savable_url_schemes.cc',
     'common/savable_url_schemes.h',
     'common/set_process_title.cc',
@@ -367,6 +370,8 @@
     'common/ssl_status_serialization.h',
     'common/swapped_out_messages.cc',
     'common/swapped_out_messages.h',
+    'common/thread_safe_sender.cc',
+    'common/thread_safe_sender.h',
     'common/text_input_client_messages.h',
     'common/url_schemes.cc',
     'common/url_schemes.h',
@@ -430,12 +435,6 @@
         '../webkit/support/webkit_support.gyp:webkit_storage',
       ],
     }],
-    ['OS!="win"', {
-      'sources!': [
-        'common/sandbox_policy.cc',
-        'common/sandbox_policy.h',
-      ],
-    }],
     ['OS=="android"',{
       'link_settings': {
         'libraries': [
@@ -475,17 +474,33 @@
       'dependencies': [
         '../ppapi/ppapi_internal.gyp:ppapi_shared',
       ],
+    }, {  # enable_plugins == 0
+      'sources!': [
+        'common/pepper_plugin_registry.cc',
+        'common/pepper_plugin_registry.h',
+      ],
     }],
     ['enable_gpu==1', {
       'dependencies': [
         '../gpu/gpu.gyp:command_buffer_service',
       ],
     }],
-    ['target_arch=="arm" and chromeos == 1', {
+    ['OS=="android"', {
       'dependencies': [
         '../media/media.gyp:media',
       ],
       'sources': [
+        'common/gpu/media/android_video_decode_accelerator.cc',
+        'common/gpu/media/android_video_decode_accelerator.h',
+      ],
+    }],
+    ['target_arch=="arm" and chromeos == 1 and use_x11 == 1', {
+      'dependencies': [
+        '../media/media.gyp:media',
+      ],
+      'sources': [
+        'common/gpu/media/exynos_video_decode_accelerator.cc',
+        'common/gpu/media/exynos_video_decode_accelerator.h',
         'common/gpu/media/gles2_texture_to_egl_image_translator.cc',
         'common/gpu/media/gles2_texture_to_egl_image_translator.h',
         'common/gpu/media/omx_video_decode_accelerator.cc',
@@ -502,7 +517,7 @@
         ],
       },
     }],
-    ['target_arch != "arm" and chromeos == 1', {
+    ['target_arch != "arm" and chromeos == 1 and use_x11 == 1', {
       'sources': [
         'common/gpu/media/h264_dpb.cc',
         'common/gpu/media/h264_dpb.h',
@@ -523,7 +538,6 @@
       'link_settings': {
         'libraries': [
            '-ld3d9.lib',
-           '-ld3dx9.lib',
            '-ldxva2.lib',
            '-lstrmiids.lib',
            '-lmf.lib',
@@ -532,10 +546,8 @@
         ],
         'msvs_settings': {
           'VCLinkerTool': {
-            'AdditionalLibraryDirectories': ['$(DXSDK_DIR)/lib/x86'],
             'DelayLoadDLLs': [
               'd3d9.dll',
-              'd3dx9_43.dll',
               'dxva2.dll',
               'mf.dll',
               'mfplat.dll',
@@ -549,7 +561,6 @@
       ],
       'include_dirs': [
         '<(DEPTH)/third_party/angle/include',
-        '$(DXSDK_DIR)/include',
       ],
     }],
     ['OS=="win" and directxsdk_exists=="True"', {
@@ -573,6 +584,7 @@
         '<(output)',
         '<(PRODUCT_DIR)',
         ],
+        'msvs_cygwin_shell': 1,
       },
      ]
     }],

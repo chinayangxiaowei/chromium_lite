@@ -48,6 +48,10 @@ namespace ui {
 class ViewProp;
 }
 
+namespace WebKit {
+struct WebScreenInfo;
+}
+
 namespace content {
 class BackingStore;
 class RenderWidgetHost;
@@ -143,6 +147,7 @@ class RenderWidgetHostViewWin
     MESSAGE_HANDLER(WM_GESTURE, OnGestureEvent)
     MESSAGE_HANDLER(WM_MOVE, OnMoveOrSize)
     MESSAGE_HANDLER(WM_SIZE, OnMoveOrSize)
+    MESSAGE_HANDLER(WM_WTSSESSION_CHANGE, OnSessionChange)
   END_MSG_MAP()
 
   // RenderWidgetHostView implementation.
@@ -178,10 +183,8 @@ class RenderWidgetHostViewWin
   virtual void TextInputStateChanged(
       const ViewHostMsg_TextInputState_Params& params) OVERRIDE;
   virtual void SelectionBoundsChanged(
-      const gfx::Rect& start_rect,
-      WebKit::WebTextDirection start_direction,
-      const gfx::Rect& end_rect,
-      WebKit::WebTextDirection end_direction) OVERRIDE;
+      const ViewHostMsg_SelectionBounds_Params& params) OVERRIDE;
+  virtual void ScrollOffsetChanged() OVERRIDE;
   virtual void ImeCancelComposition() OVERRIDE;
   virtual void ImeCompositionRangeChanged(
       const ui::Range& range,
@@ -192,6 +195,8 @@ class RenderWidgetHostViewWin
       const std::vector<gfx::Rect>& copy_rects) OVERRIDE;
   virtual void RenderViewGone(base::TerminationStatus status,
                               int error_code) OVERRIDE;
+  virtual bool CanSubscribeFrame() const OVERRIDE;
+
   // called by WebContentsImpl before DestroyWindow
   virtual void WillWmDestroy() OVERRIDE;
   virtual void Destroy() OVERRIDE;
@@ -200,8 +205,12 @@ class RenderWidgetHostViewWin
   virtual void CopyFromCompositingSurface(
       const gfx::Rect& src_subrect,
       const gfx::Size& dst_size,
-      const base::Callback<void(bool)>& callback,
-      skia::PlatformBitmap* output) OVERRIDE;
+      const base::Callback<void(bool, const SkBitmap&)>& callback) OVERRIDE;
+  virtual void CopyFromCompositingSurfaceToVideoFrame(
+      const gfx::Rect& src_subrect,
+      const scoped_refptr<media::VideoFrame>& target,
+      const base::Callback<void(bool)>& callback) OVERRIDE;
+  virtual bool CanCopyToVideoFrame() const OVERRIDE;
   virtual void OnAcceleratedCompositingStateChange() OVERRIDE;
   virtual void ProcessAckedTouchEvent(const WebKit::WebTouchEvent& touch,
                                       InputEventAckState ack_result) OVERRIDE;
@@ -209,6 +218,7 @@ class RenderWidgetHostViewWin
       bool has_horizontal_scrollbar) OVERRIDE;
   virtual void SetScrollOffsetPinning(
       bool is_pinned_to_left, bool is_pinned_to_right) OVERRIDE;
+  virtual void GetScreenInfo(WebKit::WebScreenInfo* results) OVERRIDE;
   virtual gfx::Rect GetBoundsInRootWindow() OVERRIDE;
   virtual gfx::GLSurfaceHandle GetCompositingSurface() OVERRIDE;
   virtual void AcceleratedSurfaceBuffersSwapped(
@@ -218,6 +228,7 @@ class RenderWidgetHostViewWin
       const GpuHostMsg_AcceleratedSurfacePostSubBuffer_Params& params,
       int gpu_host_id) OVERRIDE;
   virtual void AcceleratedSurfaceSuspend() OVERRIDE;
+  virtual void AcceleratedSurfaceRelease() OVERRIDE;
   virtual bool HasAcceleratedSurface(const gfx::Size& desired_size) OVERRIDE;
   virtual void OnAccessibilityNotifications(
       const std::vector<AccessibilityHostMsg_NotificationParams>& params
@@ -241,6 +252,7 @@ class RenderWidgetHostViewWin
   virtual void AccessibilitySetTextSelection(
       int acc_obj_id, int start_offset, int end_offset) OVERRIDE;
   virtual gfx::Point GetLastTouchEventLocation() const OVERRIDE;
+  virtual void FatalAccessibilityTreeError() OVERRIDE;
 
   // Overridden from ui::GestureEventHelper.
   virtual bool DispatchLongPressGestureEvent(ui::GestureEvent* event) OVERRIDE;
@@ -335,6 +347,12 @@ class RenderWidgetHostViewWin
   LRESULT OnMoveOrSize(UINT message, WPARAM wparam, LPARAM lparam,
                        BOOL& handled);
 
+  // Handle transitioning in and out of screensaver mode.
+  LRESULT OnSessionChange(UINT message,
+                          WPARAM wparam,
+                          LPARAM lparam,
+                          BOOL& handled);
+
   void OnFinalMessage(HWND window);
 
  private:
@@ -412,6 +430,19 @@ class RenderWidgetHostViewWin
   // Configures the enable/disable state of |ime_input_| to match with the
   // current |text_input_type_|.
   void UpdateIMEState();
+
+  // Returns bounds of the view in pixels.
+  gfx::Rect GetPixelBounds() const;
+
+  // Sets the appropriate input scope for given |text_input_type| if TSF-aware
+  // is not required. Does nothing if TSF-aware is required (and TSF text store
+  // is responsible for managing input scope). Currently input scope will only
+  // take effect on Vista+.
+  void UpdateInputScopeIfNecessary(ui::TextInputType text_input_type);
+
+  // Create a BrowserAccessibilityManager with an empty document if it
+  // doesn't already exist.
+  void CreateBrowserAccessibilityManagerIfNeeded();
 
   // The associated Model.  While |this| is being Destroyed,
   // |render_widget_host_| is NULL and the Windows message loop is run one last
@@ -559,6 +590,9 @@ class RenderWidgetHostViewWin
   bool touch_events_enabled_;
 
   scoped_ptr<ui::GestureRecognizer> gesture_recognizer_;
+
+  // The OS-provided default IAccessible instance for our hwnd.
+  base::win::ScopedComPtr<IAccessible> window_iaccessible_;
 
   DISALLOW_COPY_AND_ASSIGN(RenderWidgetHostViewWin);
 };

@@ -13,6 +13,8 @@
 #include "chrome/browser/ui/cocoa/extensions/extension_view_mac.h"
 #include "chrome/common/extensions/extension.h"
 #include "content/public/browser/native_web_keyboard_event.h"
+#include "content/public/browser/notification_source.h"
+#include "content/public/browser/notification_types.h"
 #include "content/public/browser/render_widget_host_view.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/browser/web_contents_view.h"
@@ -29,6 +31,10 @@
 @interface NSWindow (LionSDKDeclarations)
 - (void)toggleFullScreen:(id)sender;
 @end
+
+enum {
+  NSWindowCollectionBehaviorFullScreenPrimary = 1 << 7
+};
 
 #endif  // MAC_OS_X_VERSION_10_7
 
@@ -205,9 +211,12 @@ NativeAppWindowCocoa::NativeAppWindowCocoa(
         floor((NSHeight(main_screen_rect) - NSHeight(cocoa_bounds)) / 2);
   }
 
+  resizable_ = params.resizable;
   NSUInteger style_mask = NSTitledWindowMask | NSClosableWindowMask |
-                          NSMiniaturizableWindowMask | NSResizableWindowMask |
+                          NSMiniaturizableWindowMask |
                           NSTexturedBackgroundWindowMask;
+  if (resizable_)
+    style_mask |= NSResizableWindowMask;
   scoped_nsobject<NSWindow> window;
   if (has_frame_) {
     window.reset([[ShellNSWindow alloc]
@@ -238,6 +247,13 @@ NativeAppWindowCocoa::NativeAppWindowCocoa(
   if (base::mac::IsOSSnowLeopard() &&
       [window respondsToSelector:@selector(setBottomCornerRounded:)])
     [window setBottomCornerRounded:NO];
+
+  // Set the window to participate in Lion Fullscreen mode. Setting this flag
+  // has no effect on Snow Leopard or earlier. Packaged apps don't show the
+  // fullscreen button on their window decorations.
+  NSWindowCollectionBehavior behavior = [window collectionBehavior];
+  behavior |= NSWindowCollectionBehaviorFullScreenPrimary;
+  [window setCollectionBehavior:behavior];
 
   window_controller_.reset(
       [[NativeAppWindowController alloc] initWithWindow:window.release()]);
@@ -357,8 +373,10 @@ void NativeAppWindowCocoa::SetFullscreen(bool fullscreen) {
   } else {
     base::mac::ReleaseFullScreen(base::mac::kFullScreenModeAutoHideAll);
     NSUInteger style_mask = NSTitledWindowMask | NSClosableWindowMask |
-                            NSMiniaturizableWindowMask | NSResizableWindowMask |
+                            NSMiniaturizableWindowMask |
                             NSTexturedBackgroundWindowMask;
+    if (resizable_)
+      style_mask |= NSResizableWindowMask;
     [window() setStyleMask:style_mask];
     [window() setFrame:restored_bounds_ display:YES];
   }
@@ -634,6 +652,7 @@ void NativeAppWindowCocoa::InstallDraggableRegionViews() {
                                        webViewHeight - iter->bottom(),
                                        iter->width(),
                                        iter->height())];
+    [controlRegion setAutoresizingMask:NSViewWidthSizable|NSViewHeightSizable];
     [webView addSubview:controlRegion];
   }
 }
@@ -651,13 +670,27 @@ bool NativeAppWindowCocoa::IsAlwaysOnTop() const {
   return false;
 }
 
+void NativeAppWindowCocoa::RenderViewHostChanged() {
+  web_contents()->GetView()->Focus();
+}
+
 gfx::Insets NativeAppWindowCocoa::GetFrameInsets() const {
   if (!has_frame_)
     return gfx::Insets();
-  gfx::Rect frameRect(NSRectToCGRect([window() frame]));
-  gfx::Rect contentRect(
-      NSRectToCGRect([window() contentRectForFrameRect:[window() frame]]));
-  return frameRect.InsetsFrom(contentRect);
+
+  // Flip the coordinates based on the main screen.
+  NSInteger screen_height =
+      NSHeight([[[NSScreen screens] objectAtIndex:0] frame]);
+
+  NSRect frame_nsrect = [window() frame];
+  gfx::Rect frame_rect(NSRectToCGRect(frame_nsrect));
+  frame_rect.set_y(screen_height - NSMaxY(frame_nsrect));
+
+  NSRect content_nsrect = [window() contentRectForFrameRect:frame_nsrect];
+  gfx::Rect content_rect(NSRectToCGRect(content_nsrect));
+  content_rect.set_y(screen_height - NSMaxY(content_nsrect));
+
+  return frame_rect.InsetsFrom(content_rect);
 }
 
 void NativeAppWindowCocoa::WindowWillClose() {

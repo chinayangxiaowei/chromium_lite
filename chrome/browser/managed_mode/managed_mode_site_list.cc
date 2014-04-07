@@ -133,13 +133,18 @@ ManagedModeSiteList::Site::Site(const string16& name,
 
 ManagedModeSiteList::Site::~Site() {}
 
-ManagedModeSiteList::ManagedModeSiteList(const std::string& extension_id,
-                                         const ExtensionResource& path)
+ManagedModeSiteList::ManagedModeSiteList(
+    const std::string& extension_id,
+    const extensions::ExtensionResource& path)
     : extension_id_(extension_id),
       path_(path) {
 }
 
 ManagedModeSiteList::~ManagedModeSiteList() {
+}
+
+ManagedModeSiteList* ManagedModeSiteList::Clone() {
+  return new ManagedModeSiteList(extension_id_, path_);
 }
 
 // static
@@ -190,7 +195,7 @@ bool ManagedModeSiteList::LazyLoad() {
   if (sites_.get())
     return true;
 
-  FilePath path = path_.GetFilePath();
+  base::FilePath path = path_.GetFilePath();
   JSONFileValueSerializer serializer(path);
   std::string error;
   scoped_ptr<base::Value> value(serializer.Deserialize(NULL, &error));

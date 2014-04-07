@@ -99,7 +99,7 @@ class ScrollView::Viewport : public View {
         scroll_rect);
   }
 
-  void ChildPreferredSizeChanged(View* child) OVERRIDE {
+  virtual void ChildPreferredSizeChanged(View* child) OVERRIDE {
     if (parent())
       parent()->Layout();
   }
@@ -155,11 +155,8 @@ void ScrollView::SetHeader(View* header) {
 gfx::Rect ScrollView::GetVisibleRect() const {
   if (!contents_)
     return gfx::Rect();
-
-  const int x = horiz_sb_->visible() ? horiz_sb_->GetPosition() : 0;
-  const int y = vert_sb_->visible() ? vert_sb_->GetPosition() : 0;
-  return gfx::Rect(x, y, contents_viewport_->width(),
-                   contents_viewport_->height());
+  return gfx::Rect(-contents_->x(), -contents_->y(),
+                   contents_viewport_->width(), contents_viewport_->height());
 }
 
 int ScrollView::GetScrollBarWidth() const {
@@ -168,6 +165,22 @@ int ScrollView::GetScrollBarWidth() const {
 
 int ScrollView::GetScrollBarHeight() const {
   return horiz_sb_ ? horiz_sb_->GetLayoutSize() : 0;
+}
+
+void ScrollView::SetHorizontalScrollBar(ScrollBar* horiz_sb) {
+  DCHECK(horiz_sb);
+  horiz_sb->SetVisible(horiz_sb_->visible());
+  delete horiz_sb_;
+  horiz_sb->set_controller(this);
+  horiz_sb_ = horiz_sb;
+}
+
+void ScrollView::SetVerticalScrollBar(ScrollBar* vert_sb) {
+  DCHECK(vert_sb);
+  vert_sb->SetVisible(vert_sb_->visible());
+  delete vert_sb_;
+  vert_sb->set_controller(this);
+  vert_sb_ = vert_sb;
 }
 
 void ScrollView::Layout() {

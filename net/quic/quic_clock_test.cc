@@ -13,8 +13,19 @@ TEST(QuicClockTest, Now) {
   QuicClock clock;
 
   QuicTime start(base::TimeTicks::Now());
-  QuicTime now = clock.Now();
+  QuicTime now = clock.ApproximateNow();
   QuicTime end(base::TimeTicks::Now());
+
+  EXPECT_LE(start, now);
+  EXPECT_LE(now, end);
+}
+
+TEST(QuicClockTest, NowAsDeltaSinceUnixEpoch) {
+  QuicClock clock;
+
+  QuicTime::Delta start(base::Time::Now() - base::Time::UnixEpoch());
+  QuicTime::Delta now = clock.NowAsDeltaSinceUnixEpoch();
+  QuicTime::Delta end(base::Time::Now() - base::Time::UnixEpoch());
 
   EXPECT_LE(start, now);
   EXPECT_LE(now, end);

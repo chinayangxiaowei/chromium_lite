@@ -6,7 +6,7 @@
 #define ASH_SYSTEM_TRAY_SYSTEM_TRAY_ITEM_H_
 
 #include "ash/ash_export.h"
-#include "ash/shelf_types.h"
+#include "ash/shelf/shelf_types.h"
 #include "ash/system/user/login_status.h"
 #include "base/basictypes.h"
 #include "base/compiler_specific.h"
@@ -97,6 +97,9 @@ class ASH_EXPORT SystemTrayItem {
 
   // Hides the notification for this item.
   void HideNotificationView();
+
+  // Returns true if item should hide the arrow.
+  virtual bool ShouldHideArrow() const;
 
   // Returns true if this item needs to force the launcher to be visible when
   // the launcher is in the auto-hide state. Default is true.

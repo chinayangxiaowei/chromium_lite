@@ -17,8 +17,9 @@
 #include "content/public/browser/web_ui.h"
 #include "ipc/ipc_sender.h"
 #include "third_party/skia/include/core/SkColor.h"
+#include "ui/base/window_open_disposition.h"
 #include "ui/gfx/native_widget_types.h"
-#include "webkit/glue/window_open_disposition.h"
+#include "ui/gfx/size.h"
 
 namespace base {
 class TimeTicks;
@@ -77,9 +78,8 @@ class WebContents : public PageNavigator,
     SiteInstance* site_instance;
     int routing_id;
 
-    // Used if we want to size the new WebContents's view based on the view of
-    // an existing WebContents.  This can be NULL if not needed.
-    const WebContents* base_web_contents;
+    // Initial size of the new WebContent's view. Can be (0, 0) if not needed.
+    gfx::Size initial_size;
 
     // Used to specify the location context which display the new view should
     // belong. This can be NULL if not needed.
@@ -145,6 +145,15 @@ class WebContents : public PageNavigator,
       int x,
       int y,
       const GetRenderViewHostCallback& callback) = 0;
+
+  // Returns the WebContents embedding this WebContents, if any.
+  // If this is a top-level WebContents then it returns NULL.
+  virtual WebContents* GetEmbedderWebContents() const = 0;
+
+  // Gets the instance ID of the current WebContents if it is embedded
+  // within a BrowserPlugin. The instance ID of a WebContents uniquely
+  // identifies it within its embedder WebContents.
+  virtual int GetEmbeddedInstanceID() const = 0;
 
   // Gets the current RenderViewHost's routing id. Returns
   // MSG_ROUTING_NONE when there is no RenderViewHost.
@@ -220,9 +229,11 @@ class WebContents : public PageNavigator,
 
   // Internal state ------------------------------------------------------------
 
-  // This flag indicates whether the WebContents is currently being
-  // screenshotted.
-  virtual void SetCapturingContents(bool cap) = 0;
+  // Indicates whether the WebContents is being captured (e.g., for screenshots
+  // or mirroring).  Increment calls must be balanced with an equivalent number
+  // of decrement calls.
+  virtual void IncrementCapturerCount() = 0;
+  virtual void DecrementCapturerCount() = 0;
 
   // Indicates whether this tab should be considered crashed. The setter will
   // also notify the delegate when the flag is changed.
@@ -261,22 +272,6 @@ class WebContents : public PageNavigator,
   virtual WebContents* Clone() = 0;
 
   // Views and focus -----------------------------------------------------------
-  // TODO(brettw): Most of these should be removed and the caller should call
-  // the view directly.
-
-  // Returns the actual window that is focused when this WebContents is shown.
-  virtual gfx::NativeView GetContentNativeView() const = 0;
-
-  // Returns the NativeView associated with this WebContents. Outside of
-  // automation in the context of the UI, this is required to be implemented.
-  virtual gfx::NativeView GetNativeView() const = 0;
-
-  // Returns the bounds of this WebContents in the screen coordinate system.
-  virtual void GetContainerBounds(gfx::Rect* out) const = 0;
-
-  // Makes the tab the focused window.
-  virtual void Focus() = 0;
-
   // Focuses the first (last if |reverse| is true) element in the page.
   // Invoked when this tab is getting the focus through tab traversal (|reverse|
   // is true when using Shift-Tab).
@@ -303,15 +298,16 @@ class WebContents : public PageNavigator,
   // Save page with the main HTML file path, the directory for saving resources,
   // and the save type: HTML only or complete web page. Returns true if the
   // saving process has been initiated successfully.
-  virtual bool SavePage(const FilePath& main_file,
-                        const FilePath& dir_path,
+  virtual bool SavePage(const base::FilePath& main_file,
+                        const base::FilePath& dir_path,
                         SavePageType save_type) = 0;
 
   // Generate an MHTML representation of the current page in the given file.
   virtual void GenerateMHTML(
-      const FilePath& file,
-      const base::Callback<void(const FilePath& /* path to the MHTML file */,
-                                int64 /* size of the file */)>& callback) = 0;
+      const base::FilePath& file,
+      const base::Callback<void(
+          const base::FilePath& /* path to the MHTML file */,
+          int64 /* size of the file */)>& callback) = 0;
 
   // Returns true if the active NavigationEntry's page_id equals page_id.
   virtual bool IsActiveEntry(int32 page_id) = 0;
@@ -348,9 +344,6 @@ class WebContents : public PageNavigator,
   // Notification that tab closing has started.  This can be called multiple
   // times, subsequent calls are ignored.
   virtual void OnCloseStarted() = 0;
-
-  // Returns true if underlying WebContentsView should accept drag-n-drop.
-  virtual bool ShouldAcceptDragAndDrop() const = 0;
 
   // A render view-originated drag has ended. Informs the render view host and
   // WebContentsDelegate.
@@ -391,9 +384,6 @@ class WebContents : public PageNavigator,
   // Get the content restrictions (see content::ContentRestriction).
   virtual int GetContentRestrictions() const = 0;
 
-  // Query the WebUIFactory for the TypeID for the current URL.
-  virtual WebUI::TypeID GetWebUITypeForCurrentState() = 0;
-
   // Returns the WebUI for the current state of the tab. This will either be
   // the pending WebUI, the committed WebUI, or NULL.
   virtual WebUI* GetWebUIForCurrentState()= 0;
@@ -415,28 +405,31 @@ class WebContents : public PageNavigator,
   // to see what it should do.
   virtual bool FocusLocationBarByDefault() = 0;
 
-  // Focuses the location bar.
-  virtual void SetFocusToLocationBar(bool select_all) = 0;
-
   // Does this have an opener associated with it?
   virtual bool HasOpener() const = 0;
 
   typedef base::Callback<void(int, /* id */
                               const GURL&, /* image_url */
-                              bool, /* errored */
                               int,  /* requested_size */
                               const std::vector<SkBitmap>& /* bitmaps*/)>
       FaviconDownloadCallback;
 
   // Sends a request to download the given favicon |url| and returns the unique
   // id of the download request. When the download is finished, |callback| will
-  // be called with the bitmaps received from the renderer. Note that
+  // be called with the bitmaps received from the renderer. If [is_favicon|,
+  // the cookeis are not sent and not accepted during download. Note that
   // |image_size| is a hint for images with multiple sizes. The downloaded image
   // is not resized to the given image_size. If 0 is passed, the first frame of
   // the image is returned.
-  virtual int DownloadFavicon(const GURL& url, int image_size,
+  virtual int DownloadFavicon(const GURL& url,
+                              bool is_favicon,
+                              int image_size,
                               const FaviconDownloadCallback& callback) = 0;
 
+ private:
+  // This interface should only be implemented inside content.
+  friend class WebContentsImpl;
+  WebContents() {}
 };
 
 }  // namespace content

@@ -6,9 +6,17 @@
 
 #include "base/file_util.h"
 #include "base/message_loop.h"
+#include "base/values.h"
 #include "chrome/browser/extensions/extension_info_map.h"
 #include "chrome/browser/extensions/extension_protocols.h"
+#include "chrome/common/extensions/api/icons/icons_handler.h"
+#include "chrome/common/extensions/extension_manifest_constants.h"
+#include "chrome/common/extensions/manifest_handler.h"
 #include "chrome/common/chrome_paths.h"
+#include "chrome/common/extensions/extension.h"
+#include "chrome/common/extensions/extension_manifest_constants.h"
+#include "chrome/common/extensions/incognito_handler.h"
+#include "chrome/common/extensions/manifest_handler.h"
 #include "chrome/common/url_constants.h"
 #include "content/public/browser/resource_request_info.h"
 #include "content/public/test/mock_resource_context.h"
@@ -21,9 +29,8 @@
 #include "testing/gtest/include/gtest/gtest.h"
 
 using content::BrowserThread;
-using extensions::Extension;
 
-namespace {
+namespace extensions {
 
 scoped_refptr<Extension> CreateTestExtension(const std::string& name,
                                              bool incognito_split_mode) {
@@ -32,12 +39,12 @@ scoped_refptr<Extension> CreateTestExtension(const std::string& name,
   manifest.SetString("version", "1");
   manifest.SetString("incognito", incognito_split_mode ? "split" : "spanning");
 
-  FilePath path;
+  base::FilePath path;
   EXPECT_TRUE(file_util::GetCurrentDirectory(&path));
 
   std::string error;
   scoped_refptr<Extension> extension(
-      Extension::Create(path, Extension::INTERNAL, manifest,
+      Extension::Create(path, Manifest::INTERNAL, manifest,
                         Extension::NO_FLAGS, &error));
   EXPECT_TRUE(extension.get()) << error;
   return extension;
@@ -49,13 +56,13 @@ scoped_refptr<Extension> CreateWebStoreExtension() {
   manifest.SetString("version", "1");
   manifest.SetString("icons.16", "webstore_icon_16.png");
 
-  FilePath path;
+  base::FilePath path;
   EXPECT_TRUE(PathService::Get(chrome::DIR_RESOURCES, &path));
   path = path.AppendASCII("web_store");
 
   std::string error;
   scoped_refptr<Extension> extension(
-      Extension::Create(path, Extension::COMPONENT, manifest,
+      Extension::Create(path, Manifest::COMPONENT, manifest,
                         Extension::NO_FLAGS, &error));
   EXPECT_TRUE(extension.get()) << error;
   return extension;
@@ -68,24 +75,28 @@ class ExtensionProtocolTest : public testing::Test {
         file_thread_(BrowserThread::FILE, &message_loop_),
         io_thread_(BrowserThread::IO, &message_loop_) {}
 
-  virtual void SetUp() {
+  virtual void SetUp() OVERRIDE {
+    testing::Test::SetUp();
     extension_info_map_ = new ExtensionInfoMap();
     net::URLRequestContext* request_context =
         resource_context_.GetRequestContext();
     old_factory_ = request_context->job_factory();
+    (new IncognitoHandler)->Register();
+    (new IconsHandler)->Register();
   }
 
   virtual void TearDown() {
     net::URLRequestContext* request_context =
         resource_context_.GetRequestContext();
     request_context->set_job_factory(old_factory_);
+    ManifestHandler::ClearRegistryForTesting();
   }
 
   void SetProtocolHandler(bool incognito) {
     net::URLRequestContext* request_context =
         resource_context_.GetRequestContext();
     job_factory_.SetProtocolHandler(
-        extensions::kExtensionScheme,
+        kExtensionScheme,
         CreateExtensionProtocolHandler(incognito, extension_info_map_));
     request_context->set_job_factory(&job_factory_);
   }
@@ -213,4 +224,4 @@ TEST_F(ExtensionProtocolTest, ComponentResourceRequest) {
   }
 }
 
-}  // namespace
+}  // namespace extensions

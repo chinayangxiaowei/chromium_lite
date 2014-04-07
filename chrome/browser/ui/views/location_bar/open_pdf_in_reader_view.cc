@@ -53,7 +53,7 @@ void OpenPDFInReaderView::ShowBubble() {
   bubble_ = new OpenPDFInReaderBubbleView(this, model_);
   views::BubbleDelegateView::CreateBubble(bubble_);
   bubble_->GetWidget()->AddObserver(this);
-  bubble_->Show();
+  bubble_->GetWidget()->Show();
 }
 
 void OpenPDFInReaderView::GetAccessibleState(ui::AccessibleViewState* state) {
@@ -81,7 +81,7 @@ bool OpenPDFInReaderView::OnKeyPressed(const ui::KeyEvent& event) {
   return true;
 }
 
-void OpenPDFInReaderView::OnWidgetClosing(views::Widget* widget) {
+void OpenPDFInReaderView::OnWidgetDestroying(views::Widget* widget) {
   if (!bubble_)
     return;
 

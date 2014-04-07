@@ -12,7 +12,7 @@
 #include "base/callback_forward.h"
 #include "base/memory/weak_ptr.h"
 #include "base/observer_list.h"
-#include "base/prefs/public/pref_change_registrar.h"
+#include "base/prefs/pref_change_registrar.h"
 #include "chrome/browser/printing/cloud_print/cloud_print_setup_handler.h"
 #include "chrome/browser/profiles/profile_keyed_service.h"
 
@@ -55,11 +55,14 @@ class CloudPrintProxyService
   // not set or the connector was not enabled.
   bool EnforceCloudPrintConnectorPolicyAndQuit();
 
-  bool ShowTokenExpiredNotification();
   std::string proxy_id() const { return proxy_id_; }
 
   // CloudPrintSetupHandler::Delegate implementation.
   virtual void OnCloudPrintSetupClosed() OVERRIDE;
+
+  // Returns list of printer names available for registration.
+  static void GetPrintersAvalibleForRegistration(
+      std::vector<std::string>* printers);
 
  private:
   // NotificationDelegate implementation for the token expired notification.
@@ -67,8 +70,6 @@ class CloudPrintProxyService
   friend class TokenExpiredNotificationDelegate;
 
   Profile* profile_;
-  scoped_refptr<TokenExpiredNotificationDelegate> token_expired_delegate_;
-  scoped_ptr<CloudPrintSetupHandler> cloud_print_setup_handler_;
   std::string proxy_id_;
 
   // Methods that send an IPC to the service.
@@ -90,11 +91,6 @@ class CloudPrintProxyService
   // launches. The task typically involves sending an IPC to the service
   // process.
   bool InvokeServiceTask(const base::Closure& task);
-
-  void OnTokenExpiredNotificationError();
-  void OnTokenExpiredNotificationClosed(bool by_user);
-  void OnTokenExpiredNotificationClick();
-  void TokenExpiredNotificationDone(bool keep_alive);
 
   // Checks the policy. Returns true if nothing needs to be done (the policy is
   // not set or the connector is not enabled).

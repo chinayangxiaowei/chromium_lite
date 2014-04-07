@@ -4,17 +4,18 @@
 
 #include "chrome/browser/ui/webui/chromeos/about_network.h"
 
+#include "ash/ash_switches.h"
 #include "base/command_line.h"
-#include "base/string_number_conversions.h"
+#include "base/strings/string_number_conversions.h"
 #include "base/utf_string_conversions.h"
 #include "chrome/browser/chromeos/cros/cros_library.h"
 #include "chrome/browser/chromeos/cros/network_library.h"
 #include "chrome/browser/ui/webui/about_ui.h"
-#include "chromeos/chromeos_switches.h"
 #include "chromeos/network/network_event_log.h"
 #include "chromeos/network/network_state.h"
 #include "chromeos/network/network_state_handler.h"
 #include "grit/generated_resources.h"
+#include "net/base/escape.h"
 #include "ui/base/l10n/l10n_util.h"
 
 namespace chromeos {
@@ -24,15 +25,15 @@ namespace {
 // Html output helper functions
 
 std::string WrapWithH3(const std::string& text) {
-  return "<h3>" + text + "</h3>";
+  return "<h3>" + net::EscapeForHTML(text) + "</h3>";
 }
 
 std::string WrapWithTH(const std::string& text) {
-  return "<th>" + text + "</th>";
+  return "<th>" + net::EscapeForHTML(text) + "</th>";
 }
 
 std::string WrapWithTD(const std::string& text) {
-  return "<td>" + text + "</td>";
+  return "<td>" + net::EscapeForHTML(text) + "</td>";
 }
 
 std::string WrapWithTR(const std::string& text) {
@@ -78,9 +79,10 @@ std::string NetworkToHtmlTableHeader(const Network* network) {
       WrapWithTH("Name") +
       WrapWithTH("Active") +
       WrapWithTH("State");
+  if (network->type() != TYPE_ETHERNET)
+    str += WrapWithTH("Auto-Connect");
   if (network->type() == TYPE_WIFI ||
       network->type() == TYPE_CELLULAR) {
-    str += WrapWithTH("Auto-Connect");
     str += WrapWithTH("Strength");
   }
   if (network->type() == TYPE_WIFI) {
@@ -113,11 +115,12 @@ std::string NetworkToHtmlTableRow(const Network* network) {
       WrapWithTD(network->name()) +
       WrapWithTD(base::IntToString(network->is_active())) +
       WrapWithTD(network->GetStateString());
+  if (network->type() != TYPE_ETHERNET)
+    str += WrapWithTD(base::IntToString(network->auto_connect()));
   if (network->type() == TYPE_WIFI ||
       network->type() == TYPE_CELLULAR) {
     const WirelessNetwork* wireless =
         static_cast<const WirelessNetwork*>(network);
-    str += WrapWithTD(base::IntToString(wireless->auto_connect()));
     str += WrapWithTD(base::IntToString(wireless->strength()));
   }
   if (network->type() == TYPE_WIFI) {
@@ -229,12 +232,17 @@ std::string NetworkStateToHtmlTableHeader() {
       WrapWithTH("Type") +
       WrapWithTH("State") +
       WrapWithTH("Path") +
+      WrapWithTH("Error") +
       WrapWithTH("IP Addr") +
       WrapWithTH("Security") +
       WrapWithTH("Technology") +
       WrapWithTH("Activation") +
       WrapWithTH("Romaing") +
-      WrapWithTH("Strength");
+      WrapWithTH("OOC") +
+      WrapWithTH("Strength") +
+      WrapWithTH("Auto") +
+      WrapWithTH("Fav") +
+      WrapWithTH("Pri");
   return WrapWithTR(str);
 }
 
@@ -242,14 +250,19 @@ std::string NetworkStateToHtmlTableRow(const NetworkState* network) {
   std::string str =
       WrapWithTD(network->name()) +
       WrapWithTD(network->type()) +
-      WrapWithTD(network->state()) +
+      WrapWithTD(network->connection_state()) +
       WrapWithTD(network->path()) +
+      WrapWithTD(network->error()) +
       WrapWithTD(network->ip_address()) +
       WrapWithTD(network->security()) +
       WrapWithTD(network->technology()) +
       WrapWithTD(network->activation_state()) +
       WrapWithTD(network->roaming()) +
-      WrapWithTD(base::IntToString(network->signal_strength()));
+      WrapWithTD(base::IntToString(network->cellular_out_of_credits())) +
+      WrapWithTD(base::IntToString(network->signal_strength())) +
+      WrapWithTD(base::IntToString(network->auto_connect())) +
+      WrapWithTD(base::IntToString(network->favorite())) +
+      WrapWithTD(base::IntToString(network->priority()));
   return WrapWithTR(str);
 }
 
@@ -282,8 +295,8 @@ std::string AboutNetwork(const std::string& query) {
   std::string output = GetHeaderHtmlInfo(refresh);
   if (network_event_log::IsInitialized())
     output += GetHeaderEventLogInfo();
-  if (CommandLine::ForCurrentProcess()->HasSwitch(
-          switches::kEnableNewNetworkHandlers)) {
+  if (!CommandLine::ForCurrentProcess()->HasSwitch(
+          ash::switches::kAshDisableNewNetworkStatusArea)) {
     output += GetNetworkStateHtmlInfo();
   } else {
     output += GetCrosNetworkHtmlInfo();

@@ -6,7 +6,7 @@
 #define CHROME_BROWSER_PRINTING_PRINT_VIEW_MANAGER_H_
 
 #include "base/memory/ref_counted.h"
-#include "base/prefs/public/pref_member.h"
+#include "base/prefs/pref_member.h"
 #include "base/string16.h"
 #include "content/public/browser/notification_observer.h"
 #include "content/public/browser/notification_registrar.h"
@@ -47,7 +47,7 @@ class PrintViewManager : public content::NotificationObserver,
 
   // Same as PrintNow(), but for the case where a user press "ctrl+shift+p" to
   // show the native system dialog. This can happen from both initiator tab and
-  // preview tab.
+  // preview dialog.
   bool AdvancedPrintNow();
 
   // Same as PrintNow(), but for the case where we want to send the result to
@@ -56,10 +56,10 @@ class PrintViewManager : public content::NotificationObserver,
   bool PrintToDestination();
 
   // Initiate print preview of the current document by first notifying the
-  // renderer. Since this happens asynchronous, the print preview tab creation
-  // will not be completed on the return of this function. Returns false if
-  // print preview is impossible at the moment.
-  bool PrintPreviewNow();
+  // renderer. Since this happens asynchronous, the print preview dialog
+  // creation will not be completed on the return of this function. Returns
+  // false if print preview is impossible at the moment.
+  bool PrintPreviewNow(bool selection_only);
 
   // Notify PrintViewManager that print preview is starting in the renderer for
   // a particular WebNode.

@@ -27,6 +27,8 @@ class TransportDIB;
 namespace ppapi {
 namespace proxy {
 
+class SerializedHandle;
+
 // The proxied image data resource. Unlike most resources, this needs to be
 // public in the header since a number of other resources need to access it.
 class ImageData : public ppapi::Resource,
@@ -51,6 +53,7 @@ class ImageData : public ppapi::Resource,
   // Resource overrides.
   virtual ppapi::thunk::PPB_ImageData_API* AsPPB_ImageData_API() OVERRIDE;
   virtual void LastPluginRefWasDeleted() OVERRIDE;
+  virtual void InstanceWasDeleted() OVERRIDE;
 
   // PPB_ImageData API.
   virtual PP_Bool Describe(PP_ImageDataDesc* desc) OVERRIDE;
