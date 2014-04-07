@@ -26,6 +26,7 @@
 #include "chrome/browser/prefs/incognito_mode_prefs.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/rlz/rlz.h"
+#include "chrome/browser/search/search.h"
 #include "chrome/browser/sessions/session_service_factory.h"
 #include "chrome/browser/sessions/tab_restore_service.h"
 #include "chrome/browser/sessions/tab_restore_service_delegate.h"
@@ -47,6 +48,7 @@
 #include "chrome/browser/ui/fullscreen/fullscreen_controller.h"
 #include "chrome/browser/ui/omnibox/location_bar.h"
 #include "chrome/browser/ui/scoped_tabbed_browser_displayer.h"
+#include "chrome/browser/ui/search/search_tab_helper.h"
 #include "chrome/browser/ui/status_bubble.h"
 #include "chrome/browser/ui/tab_contents/core_tab_helper.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
@@ -113,7 +115,7 @@ void BookmarkCurrentPageInternal(Browser* browser, bool from_star) {
     return;  // Ignore requests until bookmarks are loaded.
 
   GURL url;
-  string16 title;
+  base::string16 title;
   WebContents* web_contents =
       browser->tab_strip_model()->GetActiveWebContents();
   GetURLAndTitleToBookmark(web_contents, &url, &title);
@@ -301,7 +303,7 @@ void NewEmptyWindow(Profile* profile, HostDesktopType desktop_type) {
 Browser* OpenEmptyWindow(Profile* profile, HostDesktopType desktop_type) {
   Browser* browser = new Browser(
       Browser::CreateParams(Browser::TYPE_TABBED, profile, desktop_type));
-  AddBlankTabAt(browser, -1, true);
+  AddTabAt(browser, GURL(), -1, true);
   browser->window()->Show();
   return browser;
 }
@@ -482,14 +484,14 @@ void NewTab(Browser* browser) {
                             TabStripModel::NEW_TAB_ENUM_COUNT);
 
   if (browser->is_type_tabbed()) {
-    AddBlankTabAt(browser, -1, true);
+    AddTabAt(browser, GURL(), -1, true);
     browser->tab_strip_model()->GetActiveWebContents()->GetView()->
         RestoreFocus();
   } else {
     ScopedTabbedBrowserDisplayer displayer(browser->profile(),
                                            browser->host_desktop_type());
     Browser* b = displayer.browser();
-    AddBlankTabAt(b, -1, true);
+    AddTabAt(b, GURL(), -1, true);
     b->window()->Show();
     // The call to AddBlankTabAt above did not set the focus to the tab as its
     // window was not active, so we have to do it explicitly.
@@ -699,7 +701,8 @@ void Translate(Browser* browser) {
     else if (translate_tab_helper->language_state().IsPageTranslated())
       view_state = TranslateBubbleModel::VIEW_STATE_AFTER_TRANSLATE;
   }
-  browser->window()->ShowTranslateBubble(web_contents, view_state);
+  browser->window()->ShowTranslateBubble(web_contents, view_state,
+                                         TranslateErrors::NONE);
 }
 
 void TogglePagePinnedToStartScreen(Browser* browser) {
@@ -812,7 +815,7 @@ void EmailPageLocation(Browser* browser) {
   std::string page_url = net::EscapeQueryParamValue(wc->GetURL().spec(), false);
   std::string mailto = std::string("mailto:?subject=Fwd:%20") +
       title + "&body=%0A%0A" + page_url;
-  platform_util::OpenExternal(GURL(mailto));
+  platform_util::OpenExternal(browser->profile(), GURL(mailto));
 }
 
 bool CanEmailPageLocation(const Browser* browser) {
@@ -853,7 +856,7 @@ void FindPrevious(Browser* browser) {
 void FindInPage(Browser* browser, bool find_next, bool forward_direction) {
   ShowFindBar(browser);
   if (find_next) {
-    string16 find_text;
+    base::string16 find_text;
     FindTabHelper* find_helper = FindTabHelper::FromWebContents(
         browser->tab_strip_model()->GetActiveWebContents());
 #if defined(OS_MACOSX)
@@ -971,10 +974,15 @@ void OpenUpdateChromeDialog(Browser* browser) {
 }
 
 void ToggleSpeechInput(Browser* browser) {
-  browser->tab_strip_model()->GetActiveWebContents()->
-      GetRenderViewHost()->ToggleSpeechInput();
-  if (browser->instant_controller())
-    browser->instant_controller()->ToggleVoiceSearch();
+  WebContents* web_contents =
+      browser->tab_strip_model()->GetActiveWebContents();
+  web_contents->GetRenderViewHost()->ToggleSpeechInput();
+
+  SearchTabHelper* search_tab_helper =
+      SearchTabHelper::FromWebContents(web_contents);
+  // |search_tab_helper| can be null in unit tests.
+  if (search_tab_helper)
+    search_tab_helper->ToggleVoiceSearch();
 }
 
 bool CanRequestTabletSite(WebContents* current_tab) {
@@ -1057,8 +1065,8 @@ void ViewSource(Browser* browser,
   // Note that Clone does not copy the pending or transient entries, so the
   // active entry in view_source_contents will be the last committed entry.
   WebContents* view_source_contents = contents->Clone();
-  DCHECK(view_source_contents->GetController().CanPruneAllButVisible());
-  view_source_contents->GetController().PruneAllButVisible();
+  DCHECK(view_source_contents->GetController().CanPruneAllButLastCommitted());
+  view_source_contents->GetController().PruneAllButLastCommitted();
   NavigationEntry* active_entry =
       view_source_contents->GetController().GetActiveEntry();
   if (!active_entry)
@@ -1126,6 +1134,13 @@ void CreateApplicationShortcuts(Browser* browser) {
   extensions::TabHelper::FromWebContents(
       browser->tab_strip_model()->GetActiveWebContents())->
           CreateApplicationShortcuts();
+}
+
+void CreateHostedAppFromCurrentWebContents(Browser* browser) {
+  content::RecordAction(UserMetricsAction("CreateHostedApp"));
+  extensions::TabHelper::FromWebContents(
+      browser->tab_strip_model()->GetActiveWebContents())->
+          CreateHostedAppFromWebContents();
 }
 
 bool CanCreateApplicationShortcuts(const Browser* browser) {

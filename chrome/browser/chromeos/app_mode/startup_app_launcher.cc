@@ -16,21 +16,28 @@
 #include "chrome/browser/chromeos/login/user_manager.h"
 #include "chrome/browser/extensions/extension_service.h"
 #include "chrome/browser/extensions/extension_system.h"
+#include "chrome/browser/extensions/updater/extension_updater.h"
 #include "chrome/browser/extensions/webstore_startup_installer.h"
 #include "chrome/browser/lifetime/application_lifetime.h"
 #include "chrome/browser/signin/profile_oauth2_token_service.h"
 #include "chrome/browser/signin/profile_oauth2_token_service_factory.h"
-#include "chrome/browser/signin/token_service.h"
-#include "chrome/browser/signin/token_service_factory.h"
 #include "chrome/browser/ui/extensions/application_launch.h"
 #include "chrome/common/chrome_paths.h"
 #include "chrome/common/chrome_switches.h"
-#include "chrome/common/extensions/extension.h"
-#include "chrome/common/extensions/manifest_handlers/kiosk_mode_info.h"
+#include "chrome/common/chrome_version_info.h"
+#include "chrome/common/extensions/manifest_url_handler.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/notification_service.h"
+#include "extensions/common/extension.h"
+#include "extensions/common/manifest_handlers/kiosk_mode_info.h"
 #include "google_apis/gaia/gaia_auth_consumer.h"
 #include "google_apis/gaia/gaia_constants.h"
+#include "net/base/load_flags.h"
+#include "net/url_request/url_fetcher.h"
+#include "net/url_request/url_fetcher_delegate.h"
+#include "net/url_request/url_request_context_getter.h"
+#include "net/url_request/url_request_status.h"
+#include "url/gurl.h"
 
 using content::BrowserThread;
 using extensions::Extension;
@@ -47,18 +54,15 @@ const char kOAuthClientSecret[] = "client_secret";
 const base::FilePath::CharType kOAuthFileName[] =
     FILE_PATH_LITERAL("kiosk_auth");
 
-bool IsAppInstalled(Profile* profile, const std::string& app_id) {
-  return extensions::ExtensionSystem::Get(profile)->extension_service()->
-      GetInstalledExtension(app_id);
-}
-
 }  // namespace
 
-
 StartupAppLauncher::StartupAppLauncher(Profile* profile,
-                                       const std::string& app_id)
+                                       const std::string& app_id,
+                                       StartupAppLauncher::Delegate* delegate)
     : profile_(profile),
       app_id_(app_id),
+      delegate_(delegate),
+      install_attempted_(false),
       ready_to_launch_(false) {
   DCHECK(profile_);
   DCHECK(Extension::IdIsValid(app_id_));
@@ -69,25 +73,22 @@ StartupAppLauncher::~StartupAppLauncher() {
   // through a user bailout shortcut.
   ProfileOAuth2TokenServiceFactory::GetForProfile(profile_)
       ->RemoveObserver(this);
-  net::NetworkChangeNotifier::RemoveNetworkChangeObserver(this);
 }
 
 void StartupAppLauncher::Initialize() {
-  DVLOG(1) << "Starting... connection = "
-           <<  net::NetworkChangeNotifier::GetConnectionType();
   StartLoadingOAuthFile();
 }
 
-void StartupAppLauncher::AddObserver(Observer* observer) {
-  observer_list_.AddObserver(observer);
-}
-
-void StartupAppLauncher::RemoveObserver(Observer* observer) {
-  observer_list_.RemoveObserver(observer);
+void StartupAppLauncher::ContinueWithNetworkReady() {
+  // Starts install if it is not started.
+  if (!install_attempted_) {
+    install_attempted_ = true;
+    MaybeInstall();
+  }
 }
 
 void StartupAppLauncher::StartLoadingOAuthFile() {
-  FOR_EACH_OBSERVER(Observer, observer_list_, OnLoadingOAuthFile());
+  delegate_->OnLoadingOAuthFile();
 
   KioskOAuthParams* auth_params = new KioskOAuthParams();
   BrowserThread::PostBlockingPoolTaskAndReply(
@@ -134,57 +135,41 @@ void StartupAppLauncher::OnOAuthFileLoaded(KioskOAuthParams* auth_params) {
   }
 
   // If we are restarting chrome (i.e. on crash), we need to initialize
-  // TokenService as well.
+  // OAuth2TokenService as well.
   InitializeTokenService();
 }
 
 void StartupAppLauncher::InitializeNetwork() {
-  FOR_EACH_OBSERVER(Observer, observer_list_, OnInitializingNetwork());
-
-  // TODO(tengs): Use NetworkStateInformer instead because it can handle
-  // portal and proxy detection. We will need to do some refactoring to
-  // make NetworkStateInformer more independent from the WebUI handlers.
-  net::NetworkChangeNotifier::AddNetworkChangeObserver(this);
-  OnNetworkChanged(net::NetworkChangeNotifier::GetConnectionType());
+  delegate_->InitializeNetwork();
 }
 
 void StartupAppLauncher::InitializeTokenService() {
-  FOR_EACH_OBSERVER(Observer, observer_list_, OnInitializingTokenService());
+  delegate_->OnInitializingTokenService();
 
   ProfileOAuth2TokenService* profile_token_service =
       ProfileOAuth2TokenServiceFactory::GetForProfile(profile_);
   if (profile_token_service->RefreshTokenIsAvailable(
-          profile_token_service->GetPrimaryAccountId())) {
+          profile_token_service->GetPrimaryAccountId()) ||
+      auth_params_.refresh_token.empty()) {
     InitializeNetwork();
-    return;
-  }
-
-  // At the end of this method, the execution will be put on hold until
-  // ProfileOAuth2TokenService triggers either OnRefreshTokenAvailable or
-  // OnRefreshTokensLoaded. Given that we want to handle exactly one event,
-  // whichever comes first, both handlers call RemoveObserver on PO2TS. Handling
-  // any of the two events is the only way to resume the execution and enable
-  // Cleanup method to be called, self-invoking a destructor. In destructor
-  // StartupAppLauncher is no longer an observer of PO2TS and there is no need
-  // to call RemoveObserver again.
-  profile_token_service->AddObserver(this);
-
-  TokenService* token_service = TokenServiceFactory::GetForProfile(profile_);
-  token_service->Initialize(GaiaConstants::kChromeSource, profile_);
-
-  // Pass oauth2 refresh token from the auth file.
-  // TODO(zelidrag): We should probably remove this option after M27.
-  // TODO(fgorski): This can go when we have persistence implemented on PO2TS.
-  // Unless the code is no longer needed.
-  if (!auth_params_.refresh_token.empty()) {
-    token_service->UpdateCredentialsWithOAuth2(
-        GaiaAuthConsumer::ClientOAuthResult(
-            auth_params_.refresh_token,
-            std::string(),  // access_token
-            0));            // new_expires_in_secs
   } else {
-    // Load whatever tokens we have stored there last time around.
-    token_service->LoadTokensFromDB();
+    // Pass oauth2 refresh token from the auth file.
+    // TODO(zelidrag): We should probably remove this option after M27.
+    // TODO(fgorski): This can go when we have persistence implemented on PO2TS.
+    // Unless the code is no longer needed.
+    // TODO(rogerta): Now that this CL implements token persistence in PO2TS, is
+    // this code still needed?  See above two TODOs.
+    //
+    // ProfileOAuth2TokenService triggers either OnRefreshTokenAvailable or
+    // OnRefreshTokensLoaded. Given that we want to handle exactly one event,
+    // whichever comes first, both handlers call RemoveObserver on PO2TS.
+    // Handling any of the two events is the only way to resume the execution
+    // and enable Cleanup method to be called, self-invoking a destructor.
+    profile_token_service->AddObserver(this);
+
+    profile_token_service->UpdateCredentials(
+        "kiosk_mode@localhost",
+        auth_params_.refresh_token);
   }
 }
 
@@ -199,17 +184,6 @@ void StartupAppLauncher::OnRefreshTokensLoaded() {
   ProfileOAuth2TokenServiceFactory::GetForProfile(profile_)
       ->RemoveObserver(this);
   InitializeNetwork();
-}
-
-void StartupAppLauncher::OnLaunchSuccess() {
-  FOR_EACH_OBSERVER(Observer, observer_list_, OnLaunchSucceeded());
-}
-
-void StartupAppLauncher::OnLaunchFailure(KioskAppLaunchError::Error error) {
-  LOG(ERROR) << "App launch failed, error: " << error;
-  DCHECK_NE(KioskAppLaunchError::NONE, error);
-
-  FOR_EACH_OBSERVER(Observer, observer_list_, OnLaunchFailed(error));
 }
 
 void StartupAppLauncher::LaunchApp() {
@@ -229,7 +203,8 @@ void StartupAppLauncher::LaunchApp() {
 
   // Always open the app in a window.
   OpenApplication(AppLaunchParams(profile_, extension,
-                                  extension_misc::LAUNCH_WINDOW, NEW_WINDOW));
+                                  extensions::LAUNCH_CONTAINER_WINDOW,
+                                  NEW_WINDOW));
   InitAppSession(profile_, app_id_);
 
   UserManager::Get()->SessionStarted();
@@ -242,17 +217,41 @@ void StartupAppLauncher::LaunchApp() {
   OnLaunchSuccess();
 }
 
-void StartupAppLauncher::BeginInstall() {
-  FOR_EACH_OBSERVER(Observer, observer_list_, OnInstallingApp());
+void StartupAppLauncher::OnLaunchSuccess() {
+  delegate_->OnLaunchSucceeded();
+}
 
-  DVLOG(1) << "BeginInstall... connection = "
-           <<  net::NetworkChangeNotifier::GetConnectionType();
+void StartupAppLauncher::OnLaunchFailure(KioskAppLaunchError::Error error) {
+  LOG(ERROR) << "App launch failed, error: " << error;
+  DCHECK_NE(KioskAppLaunchError::NONE, error);
 
-  if (IsAppInstalled(profile_, app_id_)) {
-    OnReadyToLaunch();
+  delegate_->OnLaunchFailed(error);
+}
+
+void StartupAppLauncher::MaybeInstall() {
+  delegate_->OnInstallingApp();
+
+  ExtensionService* extension_service =
+      extensions::ExtensionSystem::Get(profile_)->extension_service();
+  if (!extension_service->GetInstalledExtension(app_id_)) {
+    BeginInstall();
     return;
   }
 
+  extensions::ExtensionUpdater::CheckParams check_params;
+  check_params.ids.push_back(app_id_);
+  check_params.install_immediately = true;
+  check_params.callback =
+      base::Bind(&StartupAppLauncher::OnUpdateCheckFinished, AsWeakPtr());
+  extension_service->updater()->CheckNow(check_params);
+}
+
+void StartupAppLauncher::OnUpdateCheckFinished() {
+  OnReadyToLaunch();
+  UpdateAppData();
+}
+
+void StartupAppLauncher::BeginInstall() {
   installer_ = new WebstoreStartupInstaller(
       app_id_,
       profile_,
@@ -281,21 +280,12 @@ void StartupAppLauncher::InstallCallback(bool success,
 
 void StartupAppLauncher::OnReadyToLaunch() {
   ready_to_launch_ = true;
-  FOR_EACH_OBSERVER(Observer, observer_list_, OnReadyToLaunch());
+  delegate_->OnReadyToLaunch();
 }
 
-void StartupAppLauncher::OnNetworkChanged(
-    net::NetworkChangeNotifier::ConnectionType type) {
-  DVLOG(1) << "OnNetworkChanged... connection = "
-           <<  net::NetworkChangeNotifier::GetConnectionType();
-  if (!net::NetworkChangeNotifier::IsOffline()) {
-    DVLOG(1) << "Network up and running!";
-    net::NetworkChangeNotifier::RemoveNetworkChangeObserver(this);
-
-    BeginInstall();
-  } else {
-    DVLOG(1) << "Network not running yet!";
-  }
+void StartupAppLauncher::UpdateAppData() {
+  KioskAppManager::Get()->ClearAppData(app_id_);
+  KioskAppManager::Get()->UpdateAppDataFromProfile(app_id_, profile_, NULL);
 }
 
 }   // namespace chromeos

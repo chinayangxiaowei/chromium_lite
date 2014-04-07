@@ -59,7 +59,7 @@ using content::BrowserThread;
 namespace {
 
 // Returns the browser version as a string.
-string16 BuildBrowserVersionString() {
+base::string16 BuildBrowserVersionString() {
   chrome::VersionInfo version_info;
   DCHECK(version_info.is_valid());
 
@@ -82,7 +82,7 @@ string16 BuildBrowserVersionString() {
 
 // Returns message that informs user that for update it's better to
 // connect to a network of one of the allowed types.
-string16 GetAllowedConnectionTypesMessage() {
+base::string16 GetAllowedConnectionTypesMessage() {
   if (help_utils_chromeos::IsUpdateOverCellularAllowed()) {
     return l10n_util::GetStringUTF16(IDS_UPGRADE_NETWORK_LIST_CELLULAR_ALLOWED);
   } else {
@@ -150,7 +150,6 @@ void HelpHandler::GetLocalizedValues(content::WebUIDataSource* source) {
     { "aboutProductTitle", IDS_PRODUCT_NAME },
 #endif
     { "aboutProductDescription", IDS_ABOUT_PRODUCT_DESCRIPTION },
-    { "relaunch", IDS_RELAUNCH_BUTTON },
     { "relaunch", IDS_RELAUNCH_BUTTON },
 #if defined(OS_CHROMEOS)
     { "relaunchAndPowerwash", IDS_RELAUNCH_AND_POWERWASH_BUTTON },
@@ -228,19 +227,19 @@ void HelpHandler::GetLocalizedValues(content::WebUIDataSource* source) {
        l10n_util::GetStringFUTF16(IDS_ABOUT_VERSION_COPYRIGHT,
                                   base::IntToString16(exploded_time.year)));
 
-  string16 license = l10n_util::GetStringFUTF16(
+  base::string16 license = l10n_util::GetStringFUTF16(
       IDS_ABOUT_VERSION_LICENSE,
       ASCIIToUTF16(chrome::kChromiumProjectURL),
       ASCIIToUTF16(chrome::kChromeUICreditsURL));
   source->AddString("productLicense", license);
 
 #if defined(OS_CHROMEOS)
-  string16 os_license = l10n_util::GetStringFUTF16(
+  base::string16 os_license = l10n_util::GetStringFUTF16(
       IDS_ABOUT_CROS_VERSION_LICENSE,
       ASCIIToUTF16(chrome::kChromeUIOSCreditsURL));
   source->AddString("productOsLicense", os_license);
 
-  string16 product_name = l10n_util::GetStringUTF16(IDS_PRODUCT_OS_NAME);
+  base::string16 product_name = l10n_util::GetStringUTF16(IDS_PRODUCT_OS_NAME);
   source->AddString(
       "channelChangePageDelayedChangeMessage",
       l10n_util::GetStringFUTF16(
@@ -258,7 +257,7 @@ void HelpHandler::GetLocalizedValues(content::WebUIDataSource* source) {
   }
 #endif
 
-  string16 tos = l10n_util::GetStringFUTF16(
+  base::string16 tos = l10n_util::GetStringFUTF16(
       IDS_ABOUT_TERMS_OF_SERVICE, UTF8ToUTF16(chrome::kChromeUITermsURL));
   source->AddString("productTOS", tos);
 
@@ -333,7 +332,7 @@ void HelpHandler::OnPageLoaded(const ListValue* args) {
       base::FundamentalValue(CanChangeChannel()));
 
   base::Time build_time = base::SysInfo::GetLsbReleaseTime();
-  string16 build_date = base::TimeFormatFriendlyDate(build_time);
+  base::string16 build_date = base::TimeFormatFriendlyDate(build_time);
   web_ui()->CallJavascriptFunction("help.HelpPage.setBuildDate",
                                    base::StringValue(build_date));
 #endif  // defined(OS_CHROMEOS)
@@ -428,7 +427,7 @@ void HelpHandler::RelaunchAndPowerwash(const ListValue* args) {
 #endif  // defined(OS_CHROMEOS)
 
 void HelpHandler::SetUpdateStatus(VersionUpdater::Status status,
-                                  int progress, const string16& message) {
+                                  int progress, const base::string16& message) {
   // Only UPDATING state should have progress set.
   DCHECK(status == VersionUpdater::UPDATING || progress == 0);
 
@@ -468,7 +467,7 @@ void HelpHandler::SetUpdateStatus(VersionUpdater::Status status,
 #if defined(OS_CHROMEOS)
   if (status == VersionUpdater::FAILED_OFFLINE ||
       status == VersionUpdater::FAILED_CONNECTION_TYPE_DISALLOWED) {
-    string16 types_msg = GetAllowedConnectionTypesMessage();
+    base::string16 types_msg = GetAllowedConnectionTypesMessage();
     if (!types_msg.empty()) {
       web_ui()->CallJavascriptFunction(
           "help.HelpPage.setAndShowAllowedConnectionTypesMsg",

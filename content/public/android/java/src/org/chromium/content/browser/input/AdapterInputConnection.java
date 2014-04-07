@@ -4,8 +4,6 @@
 
 package org.chromium.content.browser.input;
 
-import com.google.common.annotations.VisibleForTesting;
-
 import android.text.Editable;
 import android.text.InputType;
 import android.text.Selection;
@@ -16,6 +14,8 @@ import android.view.inputmethod.BaseInputConnection;
 import android.view.inputmethod.EditorInfo;
 import android.view.inputmethod.ExtractedText;
 import android.view.inputmethod.ExtractedTextRequest;
+
+import com.google.common.annotations.VisibleForTesting;
 
 /**
  * InputConnection is created by ContentView.onCreateInputConnection.
@@ -76,8 +76,8 @@ public class AdapterInputConnection extends BaseInputConnection {
             outAttrs.imeOptions |= EditorInfo.IME_ACTION_SEARCH;
         } else if (imeAdapter.getTextInputType() == ImeAdapter.sTextInputTypeUrl) {
             // Url
-            // TYPE_TEXT_VARIATION_URI prevents Tab key from showing, so
-            // exclude it for now.
+            outAttrs.inputType = InputType.TYPE_CLASS_TEXT
+                    | InputType.TYPE_TEXT_VARIATION_URI;
             outAttrs.imeOptions |= EditorInfo.IME_ACTION_GO;
         } else if (imeAdapter.getTextInputType() == ImeAdapter.sTextInputTypeEmail) {
             // Email
@@ -225,6 +225,13 @@ public class AdapterInputConnection extends BaseInputConnection {
             mImeAdapter.sendKeyEventWithKeyCode(KeyEvent.KEYCODE_ENTER,
                     KeyEvent.FLAG_SOFT_KEYBOARD | KeyEvent.FLAG_KEEP_TOUCH_MODE
                     | KeyEvent.FLAG_EDITOR_ACTION);
+
+            if ((actionCode == EditorInfo.IME_ACTION_GO || actionCode == EditorInfo.IME_ACTION_DONE
+                    || actionCode == EditorInfo.IME_ACTION_SEARCH) && isActive()) {
+                // User is done typing, hide the keyboard.
+                InputMethodManagerWrapper wrapper = getInputMethodManagerWrapper();
+                wrapper.hideSoftInputFromWindow(mInternalView.getWindowToken(), 0, null);
+            }
         }
         return true;
     }
@@ -336,7 +343,7 @@ public class AdapterInputConnection extends BaseInputConnection {
                         selectionEnd = temp;
                     }
                     editable.replace(selectionStart, selectionEnd,
-                            Character.toString((char)unicodeChar));
+                            Character.toString((char) unicodeChar));
                 }
             }
         } else if (event.getAction() == KeyEvent.ACTION_DOWN) {

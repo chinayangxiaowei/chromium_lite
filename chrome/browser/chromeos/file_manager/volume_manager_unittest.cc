@@ -375,18 +375,18 @@ TEST_F(VolumeManagerTest, OnDiskEvent_RemovedNotMounted) {
 }
 
 TEST_F(VolumeManagerTest, OnDiskEvent_Changed) {
-  // Changed event is just ignored.
+  // Changed event should cause mounting (if possible).
   LoggingObserver observer;
   volume_manager_->AddObserver(&observer);
 
   const chromeos::disks::DiskMountManager::Disk kDisk(
       "device1", "", "", "", "", "", "", "", "", "", "", "",
-      chromeos::DEVICE_TYPE_UNKNOWN, 0, false, false, false, false, false);
+      chromeos::DEVICE_TYPE_UNKNOWN, 0, false, false, true, false, false);
   volume_manager_->OnDiskEvent(
       chromeos::disks::DiskMountManager::DISK_CHANGED, &kDisk);
 
-  EXPECT_EQ(0U, observer.events().size());
-  EXPECT_EQ(0U, disk_mount_manager_->mount_requests().size());
+  EXPECT_EQ(1U, observer.events().size());
+  EXPECT_EQ(1U, disk_mount_manager_->mount_requests().size());
   EXPECT_EQ(0U, disk_mount_manager_->unmount_requests().size());
 
   volume_manager_->RemoveObserver(&observer);
@@ -650,6 +650,25 @@ TEST_F(VolumeManagerTest, OnExternalStorageDisabledChanged) {
   const FakeDiskMountManager::UnmountRequest& unmount_request2 =
       disk_mount_manager_->unmount_requests()[1];
   EXPECT_EQ("mount2", unmount_request2.mount_path);
+}
+
+TEST_F(VolumeManagerTest, GetVolumeInfoList) {
+  volume_manager_->Initialize();  // Adds "Downloads"
+  std::vector<VolumeInfo> info_list = volume_manager_->GetVolumeInfoList();
+  ASSERT_EQ(1u, info_list.size());
+  EXPECT_EQ("downloads:Downloads", info_list[0].volume_id);
+  EXPECT_EQ(VOLUME_TYPE_DOWNLOADS_DIRECTORY, info_list[0].type);
+}
+
+TEST_F(VolumeManagerTest, FindVolumeInfoById) {
+  volume_manager_->Initialize();  // Adds "Downloads"
+  VolumeInfo volume_info;
+  ASSERT_FALSE(volume_manager_->FindVolumeInfoById(
+      "nonexistent", &volume_info));
+  ASSERT_TRUE(volume_manager_->FindVolumeInfoById(
+      "downloads:Downloads", &volume_info));
+  EXPECT_EQ("downloads:Downloads", volume_info.volume_id);
+  EXPECT_EQ(VOLUME_TYPE_DOWNLOADS_DIRECTORY, volume_info.type);
 }
 
 }  // namespace file_manager

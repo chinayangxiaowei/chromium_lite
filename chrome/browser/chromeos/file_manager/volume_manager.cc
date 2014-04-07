@@ -19,6 +19,7 @@
 #include "chrome/browser/chromeos/file_manager/path_util.h"
 #include "chrome/browser/chromeos/file_manager/volume_manager_factory.h"
 #include "chrome/browser/chromeos/file_manager/volume_manager_observer.h"
+#include "chrome/browser/chromeos/profiles/profile_helper.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/common/pref_names.h"
 #include "chromeos/dbus/cros_disks_client.h"
@@ -52,6 +53,30 @@ VolumeType MountTypeToVolumeType(
   return VOLUME_TYPE_DOWNLOADS_DIRECTORY;
 }
 
+// Returns a string representation of the given volume type.
+std::string VolumeTypeToString(VolumeType type) {
+  switch (type) {
+    case VOLUME_TYPE_GOOGLE_DRIVE:
+      return "drive";
+    case VOLUME_TYPE_DOWNLOADS_DIRECTORY:
+      return "downloads";
+    case VOLUME_TYPE_REMOVABLE_DISK_PARTITION:
+      return "removable";
+    case VOLUME_TYPE_MOUNTED_ARCHIVE_FILE:
+      return "archive";
+  }
+  NOTREACHED();
+  return "";
+}
+
+// Generates a unique volume ID for the given volume info.
+std::string GenerateVolumeId(const VolumeInfo& volume_info) {
+  // For the same volume type, base names are unique, as mount points are
+  // flat for the same volume type.
+  return (VolumeTypeToString(volume_info.type) + ":" +
+          volume_info.mount_path.BaseName().AsUTF8Unsafe());
+}
+
 // Returns the VolumeInfo for Drive file system.
 VolumeInfo CreateDriveVolumeInfo() {
   const base::FilePath& drive_path = drive::util::GetDriveMountPointPath();
@@ -64,6 +89,7 @@ VolumeInfo CreateDriveVolumeInfo() {
   volume_info.mount_condition = chromeos::disks::MOUNT_CONDITION_NONE;
   volume_info.is_parent = false;
   volume_info.is_read_only = false;
+  volume_info.volume_id = GenerateVolumeId(volume_info);
   return volume_info;
 }
 
@@ -77,6 +103,7 @@ VolumeInfo CreateDownloadsVolumeInfo(
   volume_info.mount_condition = chromeos::disks::MOUNT_CONDITION_NONE;
   volume_info.is_parent = false;
   volume_info.is_read_only = false;
+  volume_info.volume_id = GenerateVolumeId(volume_info);
   return volume_info;
 }
 
@@ -100,6 +127,7 @@ VolumeInfo CreateVolumeInfoFromMountPointInfo(
     volume_info.is_parent = false;
     volume_info.is_read_only = false;
   }
+  volume_info.volume_id = GenerateVolumeId(volume_info);
 
   return volume_info;
 }
@@ -153,6 +181,10 @@ void VolumeManager::Initialize() {
     }
   }
 
+  // If in Sign in profile, then skip mounting and listening for mount events.
+  if (chromeos::ProfileHelper::IsSigninProfile(profile_))
+    return;
+
   // Register 'Downloads' folder for the profile to the file system.
   fileapi::ExternalMountPoints* mount_points =
       content::BrowserContext::GetMountPoints(profile_);
@@ -163,6 +195,7 @@ void VolumeManager::Initialize() {
   bool success = mount_points->RegisterFileSystem(
       downloads_folder.BaseName().AsUTF8Unsafe(),
       fileapi::kFileSystemTypeNativeLocal,
+      fileapi::FileSystemMountOption(),
       downloads_folder);
   DCHECK(success);
 
@@ -236,6 +269,22 @@ std::vector<VolumeInfo> VolumeManager::GetVolumeInfoList() const {
   return result;
 }
 
+bool VolumeManager::FindVolumeInfoById(const std::string& volume_id,
+                                       VolumeInfo* result) const {
+  DCHECK(content::BrowserThread::CurrentlyOn(content::BrowserThread::UI));
+  DCHECK(result);
+
+  std::vector<VolumeInfo> info_list = GetVolumeInfoList();
+  for (size_t i = 0; i < info_list.size(); ++i) {
+    if (info_list[i].volume_id == volume_id) {
+      *result = info_list[i];
+      return true;
+    }
+  }
+
+  return false;
+}
+
 void VolumeManager::OnFileSystemMounted() {
   DCHECK(content::BrowserThread::CurrentlyOn(content::BrowserThread::UI));
 
@@ -268,7 +317,8 @@ void VolumeManager::OnDiskEvent(
     return;
 
   switch (event) {
-    case chromeos::disks::DiskMountManager::DISK_ADDED: {
+    case chromeos::disks::DiskMountManager::DISK_ADDED:
+    case chromeos::disks::DiskMountManager::DISK_CHANGED: {
       if (disk->device_path().empty()) {
         DVLOG(1) << "Empty system path for " << disk->device_path();
         return;
@@ -306,10 +356,6 @@ void VolumeManager::OnDiskEvent(
       // Notify to observers.
       FOR_EACH_OBSERVER(VolumeManagerObserver, observers_,
                         OnDiskRemoved(*disk));
-      return;
-
-    case chromeos::disks::DiskMountManager::DISK_CHANGED:
-      DVLOG(1) << "Ignore CHANGED event.";
       return;
   }
   NOTREACHED();
@@ -432,7 +478,6 @@ void VolumeManager::OnExternalStorageDisabledChanged() {
     while (!disk_mount_manager_->mount_points().empty()) {
       std::string mount_path =
           disk_mount_manager_->mount_points().begin()->second.mount_path;
-      LOG(INFO) << "Unmounting " << mount_path << " because of preference.";
       disk_mount_manager_->UnmountPath(
           mount_path,
           chromeos::UNMOUNT_OPTIONS_NONE,

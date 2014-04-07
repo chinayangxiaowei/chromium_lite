@@ -8,24 +8,37 @@
 #include "base/bind_helpers.h"
 #include "base/prefs/pref_registry_simple.h"
 #include "base/prefs/pref_service.h"
+#include "chrome/browser/browser_process.h"
 #include "chrome/browser/chromeos/attestation/attestation_policy_observer.h"
 #include "chrome/browser/chromeos/login/startup_utils.h"
 #include "chrome/browser/chromeos/policy/device_cloud_policy_store_chromeos.h"
 #include "chrome/browser/chromeos/policy/enrollment_handler_chromeos.h"
 #include "chrome/browser/chromeos/policy/enterprise_install_attributes.h"
-#include "chrome/browser/policy/cloud/cloud_policy_constants.h"
-#include "chrome/browser/policy/cloud/cloud_policy_store.h"
-#include "chrome/browser/policy/cloud/device_management_service.h"
-#include "chrome/browser/policy/proto/cloud/device_management_backend.pb.h"
 #include "chrome/common/pref_names.h"
 #include "chromeos/chromeos_constants.h"
 #include "chromeos/system/statistics_provider.h"
+#include "components/policy/core/common/cloud/cloud_policy_constants.h"
+#include "components/policy/core/common/cloud/cloud_policy_store.h"
+#include "components/policy/core/common/cloud/device_management_service.h"
+#include "components/policy/core/common/cloud/system_policy_request_context.h"
+#include "content/public/browser/browser_thread.h"
+#include "content/public/common/content_client.h"
+#include "policy/proto/device_management_backend.pb.h"
+#include "url/gurl.h"
+
+using content::BrowserThread;
 
 namespace em = enterprise_management;
 
 namespace policy {
 
 namespace {
+
+// Overridden no requisition value.
+const char kNoRequisition[] = "none";
+
+// Overridden no requisition value.
+const char kRemoraRequisition[] = "remora";
 
 // MachineInfo key names.
 const char kMachineInfoSystemHwqual[] = "hardware_class";
@@ -88,7 +101,9 @@ DeviceCloudPolicyManagerChromeOS::DeviceCloudPolicyManagerChromeOS(
           PolicyNamespaceKey(dm_protocol::kChromeDevicePolicyType,
                              std::string()),
           store.get(),
-          task_runner),
+          task_runner,
+          BrowserThread::GetMessageLoopProxyForThread(BrowserThread::FILE),
+          BrowserThread::GetMessageLoopProxyForThread(BrowserThread::IO)),
       device_store_(store.Pass()),
       background_task_runner_(background_task_runner),
       install_attributes_(install_attributes),
@@ -109,6 +124,7 @@ void DeviceCloudPolicyManagerChromeOS::Connect(
   device_management_service_ = device_management_service;
   device_status_provider_ = device_status_provider.Pass();
 
+  InitalizeRequisition();
   StartIfManaged();
 }
 
@@ -142,13 +158,11 @@ std::string DeviceCloudPolicyManagerChromeOS::GetDeviceRequisition() const {
   std::string requisition;
   const PrefService::Preference* pref = local_state_->FindPreference(
       prefs::kDeviceEnrollmentRequisition);
-  if (pref->IsDefaultValue() && !chromeos::StartupUtils::IsOobeCompleted()) {
-    // OEM statistics are only loaded when OOBE is not completed.
-    requisition =
-        GetMachineStatistic(chromeos::system::kOemDeviceRequisitionKey);
-  } else {
+  if (!pref->IsDefaultValue())
     pref->GetValue()->GetAsString(&requisition);
-  }
+
+  if (requisition == kNoRequisition)
+    requisition.clear();
 
   return requisition;
 }
@@ -162,8 +176,13 @@ void DeviceCloudPolicyManagerChromeOS::SetDeviceRequisition(
       local_state_->ClearPref(prefs::kDeviceEnrollmentCanExit);
     } else {
       local_state_->SetString(prefs::kDeviceEnrollmentRequisition, requisition);
-      local_state_->SetBoolean(prefs::kDeviceEnrollmentAutoStart, true);
-      local_state_->SetBoolean(prefs::kDeviceEnrollmentCanExit, false);
+      if (requisition == kNoRequisition) {
+        local_state_->ClearPref(prefs::kDeviceEnrollmentAutoStart);
+        local_state_->ClearPref(prefs::kDeviceEnrollmentCanExit);
+      } else {
+        local_state_->SetBoolean(prefs::kDeviceEnrollmentAutoStart, true);
+        local_state_->SetBoolean(prefs::kDeviceEnrollmentCanExit, false);
+      }
     }
   }
 }
@@ -234,11 +253,18 @@ std::string DeviceCloudPolicyManagerChromeOS::GetRobotAccountId() {
 }
 
 scoped_ptr<CloudPolicyClient> DeviceCloudPolicyManagerChromeOS::CreateClient() {
+  scoped_refptr<net::URLRequestContextGetter> request_context =
+      new SystemPolicyRequestContext(
+          g_browser_process->system_request_context(),
+          content::GetUserAgent(GURL(
+              device_management_service_->GetServerUrl())));
+
   return make_scoped_ptr(
       new CloudPolicyClient(GetMachineID(), GetMachineModel(),
                             USER_AFFILIATION_NONE,
                             device_status_provider_.get(),
-                            device_management_service_));
+                            device_management_service_,
+                            request_context));
 }
 
 void DeviceCloudPolicyManagerChromeOS::EnrollmentCompleted(
@@ -272,6 +298,37 @@ void DeviceCloudPolicyManagerChromeOS::StartIfManaged() {
                                   prefs::kDevicePolicyRefreshRate);
     attestation_policy_observer_.reset(
         new chromeos::attestation::AttestationPolicyObserver(client()));
+  }
+}
+
+void DeviceCloudPolicyManagerChromeOS::InitalizeRequisition() {
+  // OEM statistics are only loaded when OOBE is not completed.
+  if (chromeos::StartupUtils::IsOobeCompleted())
+    return;
+
+  const PrefService::Preference* pref = local_state_->FindPreference(
+      prefs::kDeviceEnrollmentRequisition);
+  if (pref->IsDefaultValue()) {
+    std::string requisition =
+        GetMachineStatistic(chromeos::system::kOemDeviceRequisitionKey);
+
+    if (!requisition.empty()) {
+      local_state_->SetString(prefs::kDeviceEnrollmentRequisition,
+                              requisition);
+      if (requisition == kRemoraRequisition) {
+        local_state_->SetBoolean(prefs::kDeviceEnrollmentAutoStart, true);
+        local_state_->SetBoolean(prefs::kDeviceEnrollmentCanExit, false);
+      } else {
+        local_state_->SetBoolean(
+            prefs::kDeviceEnrollmentAutoStart,
+            GetMachineFlag(chromeos::system::kOemIsEnterpriseManagedKey,
+                           false));
+        local_state_->SetBoolean(
+            prefs::kDeviceEnrollmentCanExit,
+            GetMachineFlag(chromeos::system::kOemCanExitEnterpriseEnrollmentKey,
+                           false));
+      }
+    }
   }
 }
 

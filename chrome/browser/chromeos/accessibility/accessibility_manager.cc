@@ -6,12 +6,16 @@
 
 #include "ash/autoclick/autoclick_controller.h"
 #include "ash/high_contrast/high_contrast_controller.h"
+#include "ash/metrics/user_metrics_recorder.h"
+#include "ash/session_state_delegate.h"
 #include "ash/shell.h"
 #include "ash/system/tray/system_tray_notifier.h"
 #include "ash/wm/event_rewriter_event_filter.h"
+#include "ash/wm/sticky_keys.h"
 #include "base/memory/scoped_ptr.h"
 #include "base/memory/singleton.h"
 #include "base/metrics/histogram.h"
+#include "base/path_service.h"
 #include "base/prefs/pref_member.h"
 #include "base/prefs/pref_service.h"
 #include "base/time/time.h"
@@ -31,11 +35,12 @@
 #include "chrome/browser/extensions/extension_system.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profile_manager.h"
-#include "chrome/browser/speech/tts_controller.h"
-#include "chrome/common/extensions/extension.h"
+#include "chrome/common/chrome_paths.h"
+#include "chrome/common/extensions/api/experimental_accessibility.h"
 #include "chrome/common/extensions/extension_messages.h"
 #include "chrome/common/extensions/manifest_handlers/content_scripts_handler.h"
 #include "chrome/common/pref_names.h"
+#include "chromeos/audio/chromeos_sounds.h"
 #include "chromeos/login/login_state.h"
 #include "content/public/browser/browser_accessibility_state.h"
 #include "content/public/browser/browser_thread.h"
@@ -47,9 +52,11 @@
 #include "content/public/browser/web_contents.h"
 #include "content/public/browser/web_ui.h"
 #include "extensions/browser/file_reader.h"
+#include "extensions/common/extension.h"
 #include "extensions/common/extension_resource.h"
 #include "grit/browser_resources.h"
 #include "grit/generated_resources.h"
+#include "media/audio/sounds/sounds_manager.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/resource/resource_bundle.h"
 
@@ -70,6 +77,14 @@ BrailleController* GetBrailleController() {
   return g_braille_controller_for_test
       ? g_braille_controller_for_test
       : BrailleController::GetInstance();
+}
+
+base::FilePath GetChromeVoxPath() {
+  base::FilePath path;
+  if (!PathService::Get(chrome::DIR_RESOURCES, &path))
+    NOTREACHED();
+  path = path.Append(extension_misc::kChromeVoxExtensionPath);
+  return path;
 }
 
 // Helper class that directly loads an extension's content scripts into
@@ -137,10 +152,8 @@ class ContentScriptLoader {
 void LoadChromeVoxExtension(Profile* profile, content::WebUI* login_web_ui) {
   ExtensionService* extension_service =
       extensions::ExtensionSystem::Get(profile)->extension_service();
-  base::FilePath path = base::FilePath(extension_misc::kChromeVoxExtensionPath);
   std::string extension_id =
-      extension_service->component_loader()->Add(IDR_CHROMEVOX_MANIFEST,
-                                                 path);
+      extension_service->component_loader()->AddChromeVoxExtension();
   if (login_web_ui) {
     ExtensionService* extension_service =
         extensions::ExtensionSystem::Get(profile)->extension_service();
@@ -180,15 +193,13 @@ void LoadChromeVoxExtension(Profile* profile, content::WebUI* login_web_ui) {
     }
     loader->Run();  // It cleans itself up when done.
   }
-  DLOG(INFO) << "ChromeVox was Loaded.";
 }
 
 void UnloadChromeVoxExtension(Profile* profile) {
+  base::FilePath path = GetChromeVoxPath();
   ExtensionService* extension_service =
       extensions::ExtensionSystem::Get(profile)->extension_service();
-  base::FilePath path = base::FilePath(extension_misc::kChromeVoxExtensionPath);
   extension_service->component_loader()->Remove(path);
-  DLOG(INFO) << "ChromeVox was Unloaded.";
 }
 
 }  // namespace
@@ -285,10 +296,12 @@ AccessibilityManager::AccessibilityManager()
       sticky_keys_enabled_(false),
       spoken_feedback_enabled_(false),
       high_contrast_enabled_(false),
+      autoclick_enabled_(false),
       autoclick_delay_ms_(ash::AutoclickController::kDefaultAutoclickDelayMs),
       spoken_feedback_notification_(ash::A11Y_NOTIFICATION_NONE),
-      weak_ptr_factory_(this) {
-
+      weak_ptr_factory_(this),
+      should_speak_chrome_vox_announcements_on_user_screen_(true),
+      system_sounds_enabled_(false) {
   notification_registrar_.Add(this,
                               chrome::NOTIFICATION_LOGIN_OR_LOCK_WEBUI_VISIBLE,
                               content::NotificationService::AllSources());
@@ -301,11 +314,44 @@ AccessibilityManager::AccessibilityManager()
   notification_registrar_.Add(this,
                               chrome::NOTIFICATION_SCREEN_LOCK_STATE_CHANGED,
                               content::NotificationService::AllSources());
+
   GetBrailleController()->AddObserver(this);
+
+  ui::ResourceBundle& bundle = ui::ResourceBundle::GetSharedInstance();
+  media::SoundsManager* manager = media::SoundsManager::Get();
+  manager->Initialize(SOUND_SHUTDOWN,
+                      bundle.GetRawDataResource(IDR_SOUND_SHUTDOWN_WAV));
+  manager->Initialize(
+      SOUND_SPOKEN_FEEDBACK_ENABLED,
+      bundle.GetRawDataResource(IDR_SOUND_SPOKEN_FEEDBACK_ENABLED_WAV));
+  manager->Initialize(
+      SOUND_SPOKEN_FEEDBACK_DISABLED,
+      bundle.GetRawDataResource(IDR_SOUND_SPOKEN_FEEDBACK_DISABLED_WAV));
 }
 
 AccessibilityManager::~AccessibilityManager() {
   CHECK(this == g_accessibility_manager);
+}
+
+bool AccessibilityManager::ShouldShowAccessibilityMenu() {
+  // If any of the loaded profiles has an accessibility feature turned on - or
+  // enforced to always show the menu - we return true to show the menu.
+  std::vector<Profile*> profiles =
+      g_browser_process->profile_manager()->GetLoadedProfiles();
+  for (std::vector<Profile*>::iterator it = profiles.begin();
+       it != profiles.end();
+       ++it) {
+    PrefService* pref_service = (*it)->GetPrefs();
+    if (pref_service->GetBoolean(prefs::kStickyKeysEnabled) ||
+        pref_service->GetBoolean(prefs::kLargeCursorEnabled) ||
+        pref_service->GetBoolean(prefs::kSpokenFeedbackEnabled) ||
+        pref_service->GetBoolean(prefs::kHighContrastEnabled) ||
+        pref_service->GetBoolean(prefs::kAutoclickEnabled) ||
+        pref_service->GetBoolean(prefs::kShouldAlwaysShowAccessibilityMenu) ||
+        pref_service->GetBoolean(prefs::kScreenMagnifierEnabled))
+      return true;
+  }
+  return false;
 }
 
 void AccessibilityManager::EnableLargeCursor(bool enabled) {
@@ -377,7 +423,7 @@ void AccessibilityManager::UpdateStickyKeysFromPref() {
   sticky_keys_enabled_ = enabled;
 #if defined(USE_ASH)
   // Sticky keys is implemented only in ash.
-  ash::Shell::GetInstance()->event_rewriter_filter()->EnableStickyKeys(enabled);
+  ash::Shell::GetInstance()->sticky_keys()->Enable(enabled);
 #endif
 }
 
@@ -386,6 +432,10 @@ void AccessibilityManager::EnableSpokenFeedback(
     ash::AccessibilityNotificationVisibility notify) {
   if (!profile_)
     return;
+
+  ash::Shell::GetInstance()->metrics()->RecordUserMetricsAction(
+      enabled ? ash::UMA_STATUS_AREA_ENABLE_SPOKEN_FEEDBACK
+              : ash::UMA_STATUS_AREA_DISABLE_SPOKEN_FEEDBACK);
 
   spoken_feedback_notification_ = notify;
 
@@ -409,10 +459,6 @@ void AccessibilityManager::UpdateSpokenFeedbackFromPref() {
 
   spoken_feedback_enabled_ = enabled;
 
-  Speak(l10n_util::GetStringUTF8(
-      enabled ? IDS_CHROMEOS_ACC_SPOKEN_FEEDBACK_ENABLED :
-      IDS_CHROMEOS_ACC_SPOKEN_FEEDBACK_DISABLED).c_str());
-
   ExtensionAccessibilityEventRouter::GetInstance()->
       SetAccessibilityEnabled(enabled);
 
@@ -423,10 +469,11 @@ void AccessibilityManager::UpdateSpokenFeedbackFromPref() {
       content::NotificationService::AllSources(),
       content::Details<AccessibilityStatusEventDetails>(&details));
 
-  if (enabled)
+  if (enabled) {
     LoadChromeVox();
-  else
+  } else {
     UnloadChromeVox();
+  }
 }
 
 void AccessibilityManager::LoadChromeVox() {
@@ -436,10 +483,10 @@ void AccessibilityManager::LoadChromeVox() {
     // now. On unlock, it will be loaded to the user screen.
     // (see. AccessibilityManager::Observe())
     LoadChromeVoxToLockScreen();
-    return;
+  } else {
+    LoadChromeVoxToUserScreen();
   }
-
-  LoadChromeVoxToUserScreen();
+  PostLoadChromeVox(profile_);
 }
 
 void AccessibilityManager::LoadChromeVoxToUserScreen() {
@@ -487,6 +534,8 @@ void AccessibilityManager::UnloadChromeVox() {
     UnloadChromeVoxExtension(profile_);
     chrome_vox_loaded_on_user_screen_ = false;
   }
+
+  PostUnloadChromeVox(profile_);
 }
 
 void AccessibilityManager::UnloadChromeVoxFromLockScreen() {
@@ -503,25 +552,6 @@ bool AccessibilityManager::IsSpokenFeedbackEnabled() {
 void AccessibilityManager::ToggleSpokenFeedback(
     ash::AccessibilityNotificationVisibility notify) {
   EnableSpokenFeedback(!IsSpokenFeedbackEnabled(), notify);
-}
-
-void AccessibilityManager::Speak(const std::string& text) {
-  UtteranceContinuousParameters params;
-
-  Utterance* utterance = new Utterance(profile_);
-  utterance->set_text(text);
-  utterance->set_lang(g_browser_process->GetApplicationLocale());
-  utterance->set_continuous_parameters(params);
-  utterance->set_can_enqueue(false);
-  utterance->set_options(new DictionaryValue());
-
-  TtsController* controller = TtsController::GetInstance();
-  controller->SpeakOrEnqueue(utterance);
-}
-
-void AccessibilityManager::MaybeSpeak(const std::string& text) {
-  if (IsSpokenFeedbackEnabled())
-    Speak(text);
 }
 
 void AccessibilityManager::EnableHighContrast(bool enabled) {
@@ -706,6 +736,10 @@ void AccessibilityManager::SetProfile(Profile* profile) {
   UpdateAutoclickDelayFromPref();
 }
 
+void AccessibilityManager::ActiveUserChanged(const std::string& user_id) {
+  SetProfile(ProfileManager::GetActiveUserProfile());
+}
+
 void AccessibilityManager::SetProfileForTest(Profile* profile) {
   SetProfile(profile);
 }
@@ -713,6 +747,19 @@ void AccessibilityManager::SetProfileForTest(Profile* profile) {
 void AccessibilityManager::SetBrailleControllerForTest(
     BrailleController* controller) {
   g_braille_controller_for_test = controller;
+}
+
+void AccessibilityManager::EnableSystemSounds(bool system_sounds_enabled) {
+  system_sounds_enabled_ = system_sounds_enabled;
+}
+
+base::TimeDelta AccessibilityManager::PlayShutdownSound() {
+  if (!IsSpokenFeedbackEnabled() || !system_sounds_enabled_)
+    return base::TimeDelta();
+  system_sounds_enabled_ = false;
+  media::SoundsManager* manager = media::SoundsManager::Get();
+  manager->Play(SOUND_SHUTDOWN);
+  return manager->GetDuration(SOUND_SHUTDOWN);
 }
 
 void AccessibilityManager::UpdateChromeOSAccessibilityHistograms() {
@@ -761,14 +808,22 @@ void AccessibilityManager::Observe(
   switch (type) {
     case chrome::NOTIFICATION_LOGIN_OR_LOCK_WEBUI_VISIBLE: {
       // Update |profile_| when entering the login screen.
-      Profile* profile = ProfileManager::GetDefaultProfile();
+      Profile* profile = ProfileManager::GetActiveUserProfile();
       if (ProfileHelper::IsSigninProfile(profile))
         SetProfile(profile);
       break;
     }
     case chrome::NOTIFICATION_SESSION_STARTED:
       // Update |profile_| when entering a session.
-      SetProfile(ProfileManager::GetDefaultProfile());
+      SetProfile(ProfileManager::GetActiveUserProfile());
+
+      // Ensure ChromeVox makes announcements at the start of new sessions.
+      should_speak_chrome_vox_announcements_on_user_screen_ = true;
+
+      // Add a session state observer to be able to monitor session changes.
+      if (!session_state_observer_.get() && ash::Shell::HasInstance())
+        session_state_observer_.reset(
+            new ash::ScopedSessionStateObserver(this));
       break;
     case chrome::NOTIFICATION_PROFILE_DESTROYED: {
       // Update |profile_| when exiting a session or shutting down.
@@ -779,15 +834,24 @@ void AccessibilityManager::Observe(
     }
     case chrome::NOTIFICATION_SCREEN_LOCK_STATE_CHANGED: {
       bool is_screen_locked = *content::Details<bool>(details).ptr();
-      if (is_screen_locked) {
-        if (spoken_feedback_enabled_)
+      if (spoken_feedback_enabled_) {
+        if (is_screen_locked) {
           LoadChromeVoxToLockScreen();
-      } else {
-        UnloadChromeVoxFromLockScreen();
 
-        if (spoken_feedback_enabled_)
+          // Status tray gets verbalized by user screen ChromeVox, so we need
+          // this as well.
           LoadChromeVoxToUserScreen();
+        } else {
+          // Lock screen destroys its resources; no need for us to explicitly
+          // unload ChromeVox.
+          chrome_vox_loaded_on_lock_screen_ = false;
+
+          // However, if spoken feedback was enabled, also enable it on the user
+          // screen.
+          LoadChromeVoxToUserScreen();
+        }
       }
+      break;
     }
   }
 }
@@ -797,4 +861,27 @@ void AccessibilityManager::OnDisplayStateChanged(
   if (display_state.available)
     EnableSpokenFeedback(true, ash::A11Y_NOTIFICATION_SHOW);
 }
+
+void AccessibilityManager::PostLoadChromeVox(Profile* profile) {
+  // Do any setup work needed immediately after ChromeVox actually loads.
+  PlaySound(SOUND_SPOKEN_FEEDBACK_ENABLED);
+    ExtensionAccessibilityEventRouter::GetInstance()->
+        OnChromeVoxLoadStateChanged(profile_,
+            IsSpokenFeedbackEnabled(),
+            chrome_vox_loaded_on_lock_screen_ ||
+                should_speak_chrome_vox_announcements_on_user_screen_);
+
+    should_speak_chrome_vox_announcements_on_user_screen_ =
+        chrome_vox_loaded_on_lock_screen_;
+}
+
+void AccessibilityManager::PostUnloadChromeVox(Profile* profile) {
+  // Do any teardown work needed immediately after ChromeVox actually unloads.
+  PlaySound(SOUND_SPOKEN_FEEDBACK_DISABLED);
+}
+
+void AccessibilityManager::PlaySound(int sound_key) const {
+  media::SoundsManager::Get()->Play(sound_key);
+}
+
 }  // namespace chromeos

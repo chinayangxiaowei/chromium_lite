@@ -4,15 +4,22 @@
 
 #include "chrome/browser/chromeos/login/supervised_user_manager_impl.h"
 
+#include "base/file_util.h"
+#include "base/files/file_path.h"
 #include "base/prefs/pref_registry_simple.h"
 #include "base/prefs/pref_service.h"
 #include "base/prefs/scoped_user_pref_update.h"
 #include "base/strings/string_util.h"
 #include "base/strings/stringprintf.h"
 #include "base/strings/utf_string_conversions.h"
+#include "base/threading/sequenced_worker_pool.h"
 #include "base/values.h"
 #include "chrome/browser/browser_process.h"
+#include "chrome/browser/chromeos/login/managed/locally_managed_user_constants.h"
 #include "chrome/browser/chromeos/login/user_manager_impl.h"
+#include "chrome/browser/chromeos/profiles/profile_helper.h"
+#include "chrome/browser/managed_mode/managed_user_service.h"
+#include "chrome/browser/managed_mode/managed_user_service_factory.h"
 #include "chromeos/settings/cros_settings_names.h"
 #include "content/public/browser/browser_thread.h"
 #include "google_apis/gaia/gaia_auth_util.h"
@@ -52,6 +59,16 @@ const char kLocallyManagedUserCreationTransactionDisplayName[] =
 // A pref of the next id for locally managed users generation.
 const char kLocallyManagedUserCreationTransactionUserId[] =
     "LocallyManagedUserCreationTransactionUserId";
+
+std::string LoadSyncToken(base::FilePath profile_dir) {
+  std::string token;
+  base::FilePath token_file =
+      profile_dir.Append(chromeos::kManagedUserTokenFilename);
+  VLOG(1) << "Loading" << token_file.value();
+  if (!base::ReadFileToString(token_file, &token))
+    return std::string();
+  return token;
+}
 
 } // namespace
 
@@ -108,7 +125,7 @@ const User* SupervisedUserManagerImpl::CreateUserRecord(
       const std::string& manager_id,
       const std::string& local_user_id,
       const std::string& sync_user_id,
-      const string16& display_name) {
+      const base::string16& display_name) {
   const User* user = FindByDisplayName(display_name);
   DCHECK(!user);
   if (user)
@@ -158,12 +175,12 @@ std::string SupervisedUserManagerImpl::GetUserSyncId(const std::string& user_id)
   return result;
 }
 
-string16 SupervisedUserManagerImpl::GetManagerDisplayName(
+base::string16 SupervisedUserManagerImpl::GetManagerDisplayName(
     const std::string& user_id) const {
   PrefService* local_state = g_browser_process->local_state();
   const DictionaryValue* manager_names =
       local_state->GetDictionary(kManagedUserManagerNames);
-  string16 result;
+  base::string16 result;
   if (manager_names->GetStringWithoutPathExpansion(user_id, &result) &&
       !result.empty())
     return result;
@@ -194,7 +211,7 @@ std::string SupervisedUserManagerImpl::GetManagerDisplayEmail(
 }
 
 const User* SupervisedUserManagerImpl::FindByDisplayName(
-    const string16& display_name) const {
+    const base::string16& display_name) const {
   DCHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
   const UserList& users = owner_->GetUsers();
   for (UserList::const_iterator it = users.begin(); it != users.end(); ++it) {
@@ -220,7 +237,7 @@ const User* SupervisedUserManagerImpl::FindBySyncId(
 }
 
 void SupervisedUserManagerImpl::StartCreationTransaction(
-      const string16& display_name) {
+      const base::string16& display_name) {
   g_browser_process->local_state()->
       SetString(kLocallyManagedUserCreationTransactionDisplayName,
            UTF16ToASCII(display_name));
@@ -311,7 +328,7 @@ bool SupervisedUserManagerImpl::CheckForFirstRun(const std::string& user_id) {
 }
 
 void SupervisedUserManagerImpl::UpdateManagerName(const std::string& manager_id,
-    const string16& new_display_name) {
+    const base::string16& new_display_name) {
   PrefService* local_state = g_browser_process->local_state();
 
   const DictionaryValue* manager_ids =
@@ -332,5 +349,24 @@ void SupervisedUserManagerImpl::UpdateManagerName(const std::string& manager_id,
   }
 }
 
+void SupervisedUserManagerImpl::LoadSupervisedUserToken(
+    Profile* profile,
+    const LoadTokenCallback& callback) {
+  // TODO(antrim): use profile->GetPath() once we sure it is safe.
+  base::FilePath profile_dir = ProfileHelper::GetProfilePathByUserIdHash(
+      UserManager::Get()->GetUserByProfile(profile)->username_hash());
+  PostTaskAndReplyWithResult(
+      content::BrowserThread::GetBlockingPool(),
+      FROM_HERE,
+      base::Bind(&LoadSyncToken, profile_dir),
+      callback);
+}
+
+void SupervisedUserManagerImpl::ConfigureSyncWithToken(
+    Profile* profile,
+    const std::string& token) {
+  if (!token.empty())
+    ManagedUserServiceFactory::GetForProfile(profile)->InitSync(token);
+}
 
 }  // namespace chromeos

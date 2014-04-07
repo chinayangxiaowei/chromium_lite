@@ -27,10 +27,10 @@
 
 using ppapi::thunk::EnterResourceNoLock;
 using ppapi::thunk::PPB_Graphics3D_API;
-using WebKit::WebConsoleMessage;
-using WebKit::WebFrame;
-using WebKit::WebPluginContainer;
-using WebKit::WebString;
+using blink::WebConsoleMessage;
+using blink::WebFrame;
+using blink::WebPluginContainer;
+using blink::WebString;
 
 namespace content {
 
@@ -197,6 +197,10 @@ int32 PPB_Graphics3D_Impl::DoSwapBuffers() {
   if (gles2_impl())
     gles2_impl()->SwapBuffers();
 
+  // Since the backing texture has been updated, a new sync point should be
+  // inserted.
+  platform_context_->InsertSyncPointForBackingMailbox();
+
   if (bound_to_instance_) {
     // If we are bound to the instance, we need to ask the compositor
     // to commit our backing texture so that the graphics appears on the page.
@@ -334,7 +338,11 @@ void PPB_Graphics3D_Impl::SendContextLost() {
       static_cast<const PPP_Graphics3D*>(
           instance->module()->GetPluginInterface(
               PPP_GRAPHICS_3D_INTERFACE));
-  if (ppp_graphics_3d)
+  // We have to check *again* that the instance exists, because it could have
+  // been deleted during GetPluginInterface(). Even the PluginModule could be
+  // deleted, but in that case, the instance should also be gone, so the
+  // GetInstance check covers both cases.
+  if (ppp_graphics_3d && HostGlobals::Get()->GetInstance(this_pp_instance))
     ppp_graphics_3d->Graphics3DContextLost(this_pp_instance);
 }
 

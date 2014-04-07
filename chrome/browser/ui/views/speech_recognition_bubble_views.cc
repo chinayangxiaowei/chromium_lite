@@ -10,8 +10,7 @@
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_finder.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
-#include "chrome/browser/ui/views/location_bar/location_icon_view.h"
-#include "chrome/browser/ui/views/toolbar_view.h"
+#include "chrome/browser/ui/views/toolbar/toolbar_view.h"
 #include "content/public/browser/resource_context.h"
 #include "content/public/browser/speech_recognition_manager.h"
 #include "content/public/browser/web_contents.h"
@@ -47,7 +46,7 @@ class SpeechRecognitionBubbleView : public views::BubbleDelegateView,
                               WebContents* web_contents);
 
   void UpdateLayout(SpeechRecognitionBubbleBase::DisplayMode mode,
-                    const string16& message_text,
+                    const base::string16& message_text,
                     const gfx::ImageSkia& image);
   void SetImage(const gfx::ImageSkia& image);
 
@@ -171,7 +170,7 @@ void SpeechRecognitionBubbleView::Init() {
 
 void SpeechRecognitionBubbleView::UpdateLayout(
     SpeechRecognitionBubbleBase::DisplayMode mode,
-    const string16& message_text,
+    const base::string16& message_text,
     const gfx::ImageSkia& image) {
   display_mode_ = mode;
   bool is_message = (mode == SpeechRecognitionBubbleBase::DISPLAY_MODE_MESSAGE);
@@ -316,7 +315,7 @@ void SpeechRecognitionBubbleView::Layout() {
 // Implementation of SpeechRecognitionBubble.
 class SpeechRecognitionBubbleImpl : public SpeechRecognitionBubbleBase {
  public:
-  SpeechRecognitionBubbleImpl(WebContents* web_contents,
+  SpeechRecognitionBubbleImpl(int render_process_id, int render_view_id,
                               Delegate* delegate,
                               const gfx::Rect& element_rect);
   virtual ~SpeechRecognitionBubbleImpl();
@@ -338,9 +337,9 @@ class SpeechRecognitionBubbleImpl : public SpeechRecognitionBubbleBase {
 };
 
 SpeechRecognitionBubbleImpl::SpeechRecognitionBubbleImpl(
-    WebContents* web_contents, Delegate* delegate,
+    int render_process_id, int render_view_id, Delegate* delegate,
     const gfx::Rect& element_rect)
-    : SpeechRecognitionBubbleBase(web_contents),
+    : SpeechRecognitionBubbleBase(render_process_id, render_view_id),
       delegate_(delegate),
       bubble_(NULL),
       element_rect_(element_rect) {
@@ -354,17 +353,20 @@ SpeechRecognitionBubbleImpl::~SpeechRecognitionBubbleImpl() {
 }
 
 void SpeechRecognitionBubbleImpl::Show() {
+  WebContents* web_contents = GetWebContents();
+  if (!web_contents)
+    return;
+
   if (!bubble_) {
     views::View* icon = NULL;
 
-    // Anchor to the location icon view, in case |element_rect| is offscreen.
-    WebContents* web_contents = GetWebContents();
+    // Anchor to the location bar, in case |element_rect| is offscreen.
     Browser* browser = chrome::FindBrowserWithWebContents(web_contents);
     if (browser) {
       BrowserView* browser_view =
           BrowserView::GetBrowserViewForBrowser(browser);
       icon = browser_view->GetLocationBarView() ?
-          browser_view->GetLocationBarView()->location_icon_view() : NULL;
+          browser_view->GetLocationBarView()->GetLocationBarAnchor() : NULL;
     }
 
     bubble_ = new SpeechRecognitionBubbleView(delegate_, icon, element_rect_,
@@ -389,20 +391,22 @@ void SpeechRecognitionBubbleImpl::Hide() {
 }
 
 void SpeechRecognitionBubbleImpl::UpdateLayout() {
-  if (bubble_)
+  if (bubble_ && GetWebContents())
     bubble_->UpdateLayout(display_mode(), message_text(), icon_image());
 }
 
 void SpeechRecognitionBubbleImpl::UpdateImage() {
-  if (bubble_)
+  if (bubble_ && GetWebContents())
     bubble_->SetImage(icon_image());
 }
 
 }  // namespace
 
 SpeechRecognitionBubble* SpeechRecognitionBubble::CreateNativeBubble(
-    WebContents* web_contents,
+    int render_process_id,
+    int render_view_id,
     SpeechRecognitionBubble::Delegate* delegate,
     const gfx::Rect& element_rect) {
-  return new SpeechRecognitionBubbleImpl(web_contents, delegate, element_rect);
+  return new SpeechRecognitionBubbleImpl(render_process_id, render_view_id,
+      delegate, element_rect);
 }

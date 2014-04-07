@@ -9,22 +9,15 @@ import android.graphics.Color;
 import android.text.SpannableString;
 import android.text.TextUtils;
 import android.text.style.ForegroundColorSpan;
-import android.view.Gravity;
 import android.view.LayoutInflater;
 import android.view.View;
-import android.view.View.OnClickListener;
 import android.view.ViewGroup;
 import android.widget.AdapterView;
 import android.widget.ArrayAdapter;
-import android.widget.Button;
 import android.widget.FrameLayout;
-import android.widget.LinearLayout;
 import android.widget.Spinner;
 import android.widget.TextView;
 
-
-import org.chromium.chrome.browser.infobar.InfoBar;
-import org.chromium.chrome.browser.infobar.InfoBarLayout;
 import org.chromium.chrome.R;
 
 import java.util.ArrayList;
@@ -51,7 +44,7 @@ public class TranslateLanguagePanel
     // This object will be used to keep the state for the time the
     // panel is opened it can be totally discarded in the end if the user
     // clicks "cancel".
-    private TranslateOptions mSessionOptions;
+    private final TranslateOptions mSessionOptions;
 
     private LanguageArrayAdapter mSourceAdapter;
     private LanguageArrayAdapter mTargetAdapter;
@@ -151,6 +144,20 @@ public class TranslateLanguagePanel
                 : mSessionOptions.sourceLanguageIndex();
         if (opposite < position) position -= 1;
 
+        List<String> allLanguages = mSessionOptions.allLanguages();
+
+        // Non translated languages are skipped so the position might be
+        // off as well. We only deal with one of them at at a time.
+        int placeHolderIndex = -1;
+        for (int i = 0; i < allLanguages.size(); i++) {
+            if (allLanguages.get(i).isEmpty()) {
+                placeHolderIndex = i;
+            }
+        }
+
+        if (position >= placeHolderIndex && placeHolderIndex != -1)
+            position -= 1;
+
         return position;
     }
 
@@ -178,7 +185,7 @@ public class TranslateLanguagePanel
         ArrayList<SpinnerLanguageElement> result = new ArrayList<SpinnerLanguageElement>();
         List<String> languages = mSessionOptions.allLanguages();
         for (int i = 0; i <  languages.size(); ++i) {
-            if (i != avoidLanguage) {
+            if (i != avoidLanguage && !languages.get(i).isEmpty()) {
                 result.add(new SpinnerLanguageElement(languages.get(i), i));
             }
         }
@@ -233,7 +240,7 @@ public class TranslateLanguagePanel
                 result = (TextView) convertView;
             }
 
-            String language = ((SpinnerLanguageElement) getItem(position)).toString();
+            String language = getItem(position).toString();
             result.setText(language);
             return result;
         }

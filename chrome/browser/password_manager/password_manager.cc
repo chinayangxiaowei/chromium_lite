@@ -11,16 +11,19 @@
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/threading/platform_thread.h"
-#include "chrome/browser/content_settings/tab_specific_content_settings.h"
 #include "chrome/browser/password_manager/password_form_manager.h"
 #include "chrome/browser/password_manager/password_manager_delegate.h"
 #include "chrome/browser/password_manager/password_manager_metrics_util.h"
+#include "chrome/browser/password_manager/password_manager_util.h"
 #include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/ui/passwords/manage_passwords_bubble_ui_controller.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/common/chrome_version_info.h"
 #include "chrome/common/pref_names.h"
-#include "components/autofill/core/common/autofill_messages.h"
+#include "components/autofill/content/common/autofill_messages.h"
+#include "components/autofill/core/common/password_autofill_util.h"
 #include "components/user_prefs/pref_registry_syncable.h"
+#include "content/public/browser/browser_thread.h"
 #include "content/public/browser/navigation_details.h"
 #include "content/public/browser/user_metrics.h"
 #include "content/public/browser/web_contents.h"
@@ -29,6 +32,7 @@
 
 using autofill::PasswordForm;
 using autofill::PasswordFormMap;
+using content::BrowserThread;
 using content::UserMetricsAction;
 using content::WebContents;
 
@@ -204,8 +208,10 @@ void PasswordManager::ProvisionallySavePassword(const PasswordForm& form) {
 
   // Always save generated passwords, as the user expresses explicit intent for
   // Chrome to manage such passwords. For other passwords, respect the
-  // autocomplete attribute.
-  if (!manager->HasGeneratedPassword() && !form.password_autocomplete_set) {
+  // autocomplete attribute if autocomplete='off' is not ignored.
+  if (!autofill::ShouldIgnoreAutocompleteOffForPasswordFields() &&
+      !manager->HasGeneratedPassword() &&
+      !form.password_autocomplete_set) {
     RecordFailure(AUTOCOMPLETE_OFF, form.origin.host());
     return;
   }
@@ -304,7 +310,14 @@ void PasswordManager::OnPasswordFormsParsed(
                                 *iter,
                                 ssl_valid);
     pending_login_managers_.push_back(manager);
-    manager->FetchMatchingLoginsFromPasswordStore();
+
+    // Avoid prompting the user for access to a password if they don't have
+    // password saving enabled.
+    PasswordStore::AuthorizationPromptPolicy prompt_policy =
+        *password_manager_enabled_ ? PasswordStore::ALLOW_PROMPT
+                                   : PasswordStore::DISALLOW_PROMPT;
+
+    manager->FetchMatchingLoginsFromPasswordStore(prompt_policy);
   }
 }
 
@@ -340,10 +353,14 @@ void PasswordManager::OnPasswordFormsRendered(
   if (ShouldShowSavePasswordInfoBar()) {
     if (CommandLine::ForCurrentProcess()->HasSwitch(
           switches::kEnableSavePasswordBubble)) {
-      TabSpecificContentSettings* content_settings =
-          TabSpecificContentSettings::FromWebContents(web_contents());
-      content_settings->OnPasswordSubmitted(
-          provisional_save_manager_.release());
+      ManagePasswordsBubbleUIController* manage_passwords_bubble_ui_controller =
+          ManagePasswordsBubbleUIController::FromWebContents(web_contents());
+      if (manage_passwords_bubble_ui_controller) {
+        manage_passwords_bubble_ui_controller->OnPasswordSubmitted(
+            provisional_save_manager_.release());
+      } else {
+        provisional_save_manager_.reset();
+      }
     } else {
       delegate_->AddSavePasswordInfoBarIfPermitted(
           provisional_save_manager_.release());
@@ -414,7 +431,7 @@ void PasswordManager::Autofill(
                                OtherPossibleUsernamesEnabled(),
                                &fill_data);
       delegate_->FillPasswordForm(fill_data);
-      return;
+      break;
     }
     default:
       FOR_EACH_OBSERVER(
@@ -422,5 +439,14 @@ void PasswordManager::Autofill(
           observers_,
           OnAutofillDataAvailable(preferred_match.username_value,
                                   preferred_match.password_value));
+      break;
+  }
+
+  ManagePasswordsBubbleUIController* manage_passwords_bubble_ui_controller =
+      ManagePasswordsBubbleUIController::FromWebContents(web_contents());
+  if (manage_passwords_bubble_ui_controller &&
+      CommandLine::ForCurrentProcess()->HasSwitch(
+          switches::kEnableSavePasswordBubble)) {
+    manage_passwords_bubble_ui_controller->OnPasswordAutofilled(best_matches);
   }
 }
